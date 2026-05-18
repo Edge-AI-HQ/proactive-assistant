@@ -274,7 +274,9 @@ public class AmbientModelsPlugin: CAPPlugin, CAPBridgedPlugin {
         /no_think
         Return exactly one minified JSON object. The first character must be { and the last character must be }.
         No markdown, no explanation, no thinking text.
-        Schema: {"decisions":[{"a":"create","w":["window_id"],"t":"title","s":"summary","i":"medium","occurredAt":"iso"}]}
+        Shape: {"decisions":[{"a":"create","w":["actual window id"],"t":"specific title from context","s":"specific summary from context","i":"medium","occurredAt":"window startedAt ISO"}]}
+        Do not copy placeholder words like title, summary, iso, actual window id, or specific title from context.
+        For create, t and s must be based on the transcript context. occurredAt must be the input window start timestamp.
         Use skip only if the window has no useful human activity: {"a":"skip","w":["window_id"],"r":"reason"}
         Cover every input window exactly once. Never update rule context.
         Windows:
@@ -296,7 +298,8 @@ public class AmbientModelsPlugin: CAPPlugin, CAPBridgedPlugin {
         /no_think
         Return exactly one minified JSON object. The first character must be { and the last character must be }.
         No markdown, no explanation, no thinking text.
-        Schema: {"title":"short title","summary":"one sentence","eventType":"conversation","confidence":0.7,"confidenceLabel":"certain","tags":["ambient"],"salientFacts":["fact"]}
+        Shape: {"title":"specific title from context","summary":"specific one-sentence summary from context","eventType":"conversation","confidence":0.7,"confidenceLabel":"certain","tags":["ambient"],"salientFacts":["fact"]}
+        Do not copy placeholder words like title, summary, short title, one sentence, or fact.
         eventType must be one of conversation, meeting, focus, social, other.
         Window startedAt: \(startedAt)
         Window endedAt: \(endedAt)

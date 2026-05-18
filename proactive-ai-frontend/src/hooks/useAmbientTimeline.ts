@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isNative } from "@/lib/platform";
-import { getAmbientRuntime } from "@/services/ambient";
 import {
   getAmbientTimelineStore,
   todayLocalDate,
@@ -29,9 +28,13 @@ export interface UseAmbientTimelineResult {
   dismiss: (id: string) => Promise<void>;
 }
 
+interface AmbientTimelineRuntime {
+  refreshTimeline(localDate: string): Promise<void>;
+}
+
 export function useAmbientTimeline(localDate = todayLocalDate()): UseAmbientTimelineResult {
   const store = useMemo(() => getAmbientTimelineStore(), []);
-  const runtime = useMemo(() => getAmbientRuntime(), []);
+  const runtimeRef = useRef<AmbientTimelineRuntime | null>(null);
   const [events, setEvents] = useState<AmbientTimelineEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +63,7 @@ export function useAmbientTimeline(localDate = todayLocalDate()): UseAmbientTime
     setPendingTranscriptCount(pending.length);
     setPendingTranscriptWindows(pending);
     setLatestRawEvents(latestRaw);
-    setEvents(rows);
+    setEvents(rows.filter(isDisplayableTimelineEvent));
     setStoreStatus(store.status());
     setLoading(false);
   }, [localDate, store]);
@@ -69,6 +72,12 @@ export function useAmbientTimeline(localDate = todayLocalDate()): UseAmbientTime
     if (pendingGenerationRef.current) return pendingGenerationRef.current;
     const promise = (async () => {
       try {
+        let runtime = runtimeRef.current;
+        if (!runtime) {
+          runtime = await loadNativeAmbientTimelineRuntime();
+          if (!runtime) return;
+          runtimeRef.current = runtime;
+        }
         await runtime.refreshTimeline(localDate);
         await loadSnapshot();
       } catch (err) {
@@ -80,7 +89,7 @@ export function useAmbientTimeline(localDate = todayLocalDate()): UseAmbientTime
     })();
     pendingGenerationRef.current = promise;
     return promise;
-  }, [loadSnapshot, localDate, runtime, store]);
+  }, [loadSnapshot, localDate, store]);
 
   const refresh = useCallback(async () => {
     if (refreshInFlightRef.current) return refreshInFlightRef.current;
@@ -156,6 +165,7 @@ async function loadLatestRawEvents(
     "location",
     "motion",
     "sound",
+    "transcript",
     "visit",
     "calendar",
   ];
@@ -171,6 +181,29 @@ async function loadLatestRawEvents(
     }),
   );
   return rows.filter((row): row is AmbientRawEvent => Boolean(row));
+}
+
+async function loadNativeAmbientTimelineRuntime(): Promise<AmbientTimelineRuntime | null> {
+  if (!isNative) return null;
+  const { getAmbientRuntime } = await import("@/services/ambient");
+  return getAmbientRuntime();
+}
+
+function isDisplayableTimelineEvent(event: AmbientTimelineEvent): boolean {
+  if (!event.sourceTypes.includes("transcript")) return true;
+  const isLlmSummary = event.generationSource === "llm_summary"
+    || event.generationMethod === "local_llm";
+  if (!isLlmSummary) return true;
+  const invalidTime = !Number.isFinite(Date.parse(event.occurredAt));
+  const placeholderText = isPlaceholderTimelineText(event.title)
+    || isPlaceholderTimelineText(event.summary);
+  return !invalidTime && !placeholderText;
+}
+
+function isPlaceholderTimelineText(value: string): boolean {
+  return ["title", "short title", "summary", "one sentence", "iso"].includes(
+    value.trim().toLowerCase(),
+  );
 }
 
 function describeError(err: unknown): string {

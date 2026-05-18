@@ -6,6 +6,7 @@ import {
   AMBIENT_TIMELINE_KIND,
   AMBIENT_TIMELINE_SCHEMA_VERSION,
 } from "./types";
+import { stripTranscriptSegmentLabels } from "./utils";
 
 
 export interface AmbientWindowSourcePayload {
@@ -28,16 +29,22 @@ export function candidateWindowToSignal(
   context: CandidateWindowSignalContext,
 ): PersonalSignalInput {
   const availableAt = window.endedAt ?? window.startedAt;
+  const dedupeKey = window.windowType === "transcript_session"
+    ? `ambient:candidate_window:${window.localDate}:transcript_session:${window.id}`
+    : `ambient:candidate_window:${window.localDate}:${window.id}`;
+  const compactContext = window.windowType === "transcript_session"
+    ? stripTranscriptSegmentLabels(window.compactContext)
+    : window.compactContext;
   return {
     id: `ambient_candidate_window_${safeIdPart(window.id)}`,
     kind: AMBIENT_CANDIDATE_WINDOW_KIND,
     title: `Ambient ${window.windowType} window`,
-    summary: window.compactContext,
+    summary: compactContext,
     occurred_at: window.startedAt,
     available_at: availableAt,
     salience: window.salienceHint,
     confidence: window.confidenceHint,
-    dedupe_key: `ambient:candidate_window:${window.localDate}:${window.id}`,
+    dedupe_key: dedupeKey,
     payload: {
       schema_version: AMBIENT_CANDIDATE_WINDOW_SCHEMA_VERSION,
       local_window_id: window.id,
@@ -48,7 +55,7 @@ export function candidateWindowToSignal(
       started_at: window.startedAt,
       ...(window.endedAt ? { ended_at: window.endedAt } : {}),
       timezone: window.timezone,
-      compact_context: window.compactContext,
+      compact_context: compactContext,
       content_hash: context.contextHash,
       confidence_hint: window.confidenceHint,
       salience_hint: window.salienceHint,

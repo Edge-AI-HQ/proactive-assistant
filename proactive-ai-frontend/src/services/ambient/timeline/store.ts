@@ -14,6 +14,7 @@ import type {
 import { jsonCloneRecord } from "./utils";
 
 const DB_NAME = "pin_ambient_timeline";
+const TRANSCRIPT_LABEL_CLEANUP_KEY = "transcript_segment_label_cleanup_v1";
 
 export class MemoryTimelineStore implements AmbientTimelineStore {
   readonly kind = "memory" as const;
@@ -362,6 +363,11 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
         );
         CREATE INDEX IF NOT EXISTS ix_ambient_timeline_events_day_visible
           ON ambient_timeline_events (local_date, generation_status, occurred_at);
+
+        CREATE TABLE IF NOT EXISTS ambient_timeline_meta (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
       `);
       await this.migrateSchema(conn);
       this.ready = true;
@@ -834,7 +840,47 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
       { name: "llm_updated_at", sql: "ALTER TABLE ambient_timeline_events ADD COLUMN llm_updated_at TEXT" },
       { name: "idempotency_key", sql: "ALTER TABLE ambient_timeline_events ADD COLUMN idempotency_key TEXT" },
     ]);
+    await cleanTranscriptSegmentLabels(conn);
   }
+}
+
+async function cleanTranscriptSegmentLabels(conn: SqliteConnection): Promise<void> {
+  const marker = await conn.query(
+    "SELECT value FROM ambient_timeline_meta WHERE key = ?",
+    [TRANSCRIPT_LABEL_CLEANUP_KEY],
+  );
+  if (marker.values?.[0]?.value === "done") return;
+
+  await conn.run(
+    `UPDATE ambient_raw_events
+     SET compact_text = trim(
+           replace(
+             replace(compact_text, 'Transcript segment: ', ''),
+             'Transcript segment:',
+             ''
+           )
+         ),
+         content_hash = ''
+     WHERE source_type = 'transcript'`,
+  );
+
+  await conn.run(
+    `UPDATE ambient_candidate_windows
+     SET compact_context = trim(
+           replace(
+             replace(compact_context, 'Transcript segment: ', ''),
+             'Transcript segment:',
+             ''
+           )
+         ),
+         llm_input_hash = NULL
+     WHERE window_type = 'transcript_session'`,
+  );
+
+  await conn.run(
+    "INSERT OR REPLACE INTO ambient_timeline_meta (key, value) VALUES (?, ?)",
+    [TRANSCRIPT_LABEL_CLEANUP_KEY, "done"],
+  );
 }
 
 export function createDefaultTimelineStore(): AmbientTimelineStore {

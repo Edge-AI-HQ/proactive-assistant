@@ -1,8 +1,33 @@
 import { describe, expect, test } from "vitest";
 
+import type { PersonalSignalInput } from "@/lib/devices";
 import { MemoryOutboxStore } from "./outbox";
+import { stableHash } from "./timeline/utils";
 
 const now = Date.parse("2026-05-11T12:00:00.000Z");
+
+function transcriptCandidate(
+  rawRefCount: number,
+  contentHash: string,
+  summary: string,
+): PersonalSignalInput {
+  return {
+    id: `candidate-${contentHash}`,
+    kind: "ambient.candidate_window",
+    title: "Ambient transcript_session window",
+    summary,
+    dedupe_key: `legacy:${contentHash}`,
+    occurred_at: "2026-05-11T11:00:00.000Z",
+    payload: {
+      window_type: "transcript_session",
+      local_date: "2026-05-11",
+      local_window_id: "win-transcript",
+      raw_ref_count: rawRefCount,
+      content_hash: contentHash,
+      compact_context: summary,
+    },
+  };
+}
 
 describe("MemoryOutboxStore", () => {
   test("dedupes records by dedupe_key", async () => {
@@ -146,5 +171,62 @@ describe("MemoryOutboxStore", () => {
     expect(await outbox.count("user-a", "https://local.example")).toBe(0);
     expect(await outbox.count("user-a", "https://dev.example")).toBe(1);
     expect((await outbox.pending(10, now + 1, "user-a", "https://dev.example"))[0]?.id).toBe("health-2");
+  });
+
+  test("upserts transcript candidate windows to the latest local row", async () => {
+    const outbox = new MemoryOutboxStore();
+
+    expect(await outbox.enqueue([
+      transcriptCandidate(1, "hash-1", "first transcript chunk"),
+    ])).toBe(1);
+    expect(await outbox.enqueue([
+      transcriptCandidate(5, "hash-5", "five transcript chunks"),
+    ])).toBe(1);
+    expect(await outbox.enqueue([
+      transcriptCandidate(3, "hash-3", "stale transcript chunks"),
+    ])).toBe(0);
+
+    const pending = await outbox.pending(10, now);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.dedupeKey).toBe(
+      "ambient:candidate_window:2026-05-11:transcript_session:win-transcript",
+    );
+    expect(pending[0]?.item.dedupe_key).toBe(pending[0]?.dedupeKey);
+    expect(pending[0]?.item.summary).toBe("five transcript chunks");
+    expect(pending[0]?.item.payload?.raw_ref_count).toBe(5);
+  });
+
+  test("fresh transcript candidate content makes a synced row pending again", async () => {
+    const outbox = new MemoryOutboxStore();
+
+    await outbox.enqueue([transcriptCandidate(1, "hash-1", "first")]);
+    const [record] = await outbox.pending(1, now);
+    await outbox.markSynced([record.id], now, "user-a", "https://dev.example");
+
+    expect(await outbox.count("user-a", "https://dev.example")).toBe(0);
+    expect(await outbox.enqueue([transcriptCandidate(2, "hash-2", "fresh")])).toBe(1);
+
+    const pending = await outbox.pending(1, now + 1, "user-a", "https://dev.example");
+    expect(pending[0]?.status).toBe("pending");
+    expect(pending[0]?.syncedAt).toBeNull();
+    expect(pending[0]?.attemptCount).toBe(0);
+    expect(pending[0]?.item.summary).toBe("fresh");
+  });
+
+  test("stores transcript candidate summaries without segment labels", async () => {
+    const outbox = new MemoryOutboxStore();
+
+    await outbox.enqueue([
+      transcriptCandidate(
+        2,
+        "hash-labeled",
+        "Transcript segment: first chunk Transcript segment: second chunk",
+      ),
+    ]);
+
+    const [record] = await outbox.pending(1, now);
+    expect(record.item.summary).toBe("first chunk second chunk");
+    expect(record.item.payload?.compact_context).toBe("first chunk second chunk");
+    expect(record.item.payload?.content_hash).toBe(stableHash("first chunk second chunk"));
   });
 });

@@ -304,11 +304,12 @@ function normalizeDecision(
   if (action === "create") {
     const title = shortText(row.title ?? row.t, 60);
     const summary = shortText(row.summary ?? row.s, 180);
-    if (!title || !summary) return null;
+    if (!title || !summary || isPlaceholderModelText(title) || isPlaceholderModelText(summary)) return null;
     const rawImportance = row.importance ?? row.i;
     const importance: "low" | "medium" | "high" = isImportance(rawImportance) ? rawImportance : "medium";
-    const occurredAt = shortPlainText(row.occurredAt, 64)
-      ?? shortPlainText(primaryWindow?.startedAt, 64);
+    const generatedOccurredAt = shortPlainText(row.occurredAt, 64);
+    const fallbackOccurredAt = shortPlainText(primaryWindow?.startedAt, 64);
+    const occurredAt = validIso(generatedOccurredAt) ? generatedOccurredAt : fallbackOccurredAt;
     if (!occurredAt) return null;
     return { action: "create", title, summary, importance, occurredAt, sourceWindowIds };
   }
@@ -316,7 +317,7 @@ function normalizeDecision(
     const eventId = shortPlainText(row.eventId ?? row.e, 128);
     const summary = shortText(row.summary ?? row.s, 180);
     const title = shortText(row.title ?? row.t, 60) ?? undefined;
-    if (!eventId || !summary) return null;
+    if (!eventId || !summary || isPlaceholderModelText(summary) || (title && isPlaceholderModelText(title))) return null;
     return { action: "update", eventId, title, summary, sourceWindowIds };
   }
   if (action === "skip") {
@@ -389,7 +390,7 @@ function normalizeDraft(value: unknown): AmbientTimelineEventDraft | null {
     : "other";
   const title = shortText(row.title, 80);
   const summary = shortText(row.summary, 220);
-  if (!title || !summary) return null;
+  if (!title || !summary || isPlaceholderModelText(title) || isPlaceholderModelText(summary)) return null;
   const confidence = clamp01(typeof row.confidence === "number" ? row.confidence : 0.5);
   const confidenceLabel = row.confidenceLabel === "certain" || row.confidenceLabel === "uncertain"
     ? row.confidenceLabel
@@ -416,6 +417,22 @@ function shortText(value: unknown, max: number): string | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
   return trimmed.length <= max ? trimmed : trimmed.slice(0, max - 1).trimEnd() + "…";
+}
+
+function isPlaceholderModelText(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return [
+    "title",
+    "short title",
+    "summary",
+    "one sentence",
+    "iso",
+  ].includes(normalized);
+}
+
+function validIso(value: string | null): string | null {
+  if (!value || isPlaceholderModelText(value)) return null;
+  return Number.isFinite(Date.parse(value)) ? value : null;
 }
 
 function stringArray(value: unknown): string[] {

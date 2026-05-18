@@ -45,6 +45,7 @@ class PersonalSignalRow:
     consumed_by_run_id: str | None
     ingested_at: datetime
     reference_count: int
+    updated_at: datetime | None = None
 
     @classmethod
     def from_record(cls, row: dict[str, Any]) -> PersonalSignalRow:
@@ -73,6 +74,7 @@ class PersonalSignalRow:
             consumed_by_run_id=row.get("consumed_by_run_id"),
             ingested_at=row["ingested_at"],
             reference_count=row["reference_count"],
+            updated_at=row.get("updated_at", row["ingested_at"]),
         )
 
 
@@ -94,6 +96,12 @@ class IngestSignalInput:
     subject: str | None = None
     source_raw_table: str | None = None
     source_raw_ids: list[str] | None = None
+
+
+@dataclass(slots=True)
+class PersonalSignalIngestResult:
+    row: PersonalSignalRow
+    changed: bool
 
 
 class PersonalSignalsRepository(UserScopedRepository):
@@ -130,7 +138,8 @@ class PersonalSignalsRepository(UserScopedRepository):
                   available_at = EXCLUDED.available_at,
                   expires_at = EXCLUDED.expires_at,
                   status = 'open',
-                  consumed_by_run_id = NULL
+                  consumed_by_run_id = NULL,
+                  updated_at = NOW()
                 RETURNING *
                 """,
                 (
@@ -148,6 +157,252 @@ class PersonalSignalsRepository(UserScopedRepository):
             msg = f"signal ingest returned no row (id={input.id})"
             raise RuntimeError(msg)
         return PersonalSignalRow.from_record(row)
+
+    async def ingest_transcript_candidate_window_latest(
+        self,
+        input: IngestSignalInput,
+    ) -> PersonalSignalIngestResult:
+        """Upsert transcript candidate windows only when incoming content is newer.
+
+        Freshness is monotonic:
+          * larger payload.raw_ref_count updates the existing row;
+          * same raw_ref_count plus different payload.content_hash updates it;
+          * smaller or exact-same content is a no-op and must not reopen
+            an already-consumed signal.
+        """
+        if not input.dedupe_key:
+            raise ValueError("transcript candidate window requires dedupe_key")
+
+        available_at = input.available_at or input.occurred_at
+        async with self._conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT *
+                FROM pai_personal_signals
+                WHERE user_id = %s
+                  AND (dedupe_key = %s OR id = %s)
+                ORDER BY
+                  CASE WHEN dedupe_key = %s THEN 0 ELSE 1 END,
+                  ingested_at DESC
+                LIMIT 1
+                """,
+                (self._user_id, input.dedupe_key, input.id, input.dedupe_key),
+            )
+            existing = await cur.fetchone()
+            if existing is not None:
+                await cur.execute(
+                    """
+                    UPDATE pai_personal_signals
+                    SET
+                      title = %s,
+                      summary = %s,
+                      payload = %s::jsonb,
+                      salience = %s,
+                      confidence = %s,
+                      dedupe_key = %s,
+                      occurred_at = %s,
+                      available_at = %s,
+                      expires_at = %s,
+                      source = %s,
+                      device_id = %s,
+                      subject = %s,
+                      source_raw_table = %s,
+                      source_raw_ids = %s::jsonb,
+                      status = 'open',
+                      consumed_by_run_id = NULL,
+                      updated_at = NOW()
+                    WHERE user_id = %s
+                      AND id = %s
+                      AND (
+                        (
+                          CASE
+                            WHEN %s::jsonb ->> 'raw_ref_count' ~ '^[0-9]+$'
+                              THEN (%s::jsonb ->> 'raw_ref_count')::integer
+                            ELSE 0
+                          END
+                        ) > (
+                          CASE
+                            WHEN payload ->> 'raw_ref_count' ~ '^[0-9]+$'
+                              THEN (payload ->> 'raw_ref_count')::integer
+                            ELSE 0
+                          END
+                        )
+                        OR (
+                          (
+                            CASE
+                              WHEN %s::jsonb ->> 'raw_ref_count' ~ '^[0-9]+$'
+                                THEN (%s::jsonb ->> 'raw_ref_count')::integer
+                              ELSE 0
+                            END
+                          ) = (
+                            CASE
+                              WHEN payload ->> 'raw_ref_count' ~ '^[0-9]+$'
+                                THEN (payload ->> 'raw_ref_count')::integer
+                              ELSE 0
+                            END
+                          )
+                          AND NULLIF(%s::jsonb ->> 'content_hash', '')
+                            IS DISTINCT FROM NULLIF(payload ->> 'content_hash', '')
+                        )
+                      )
+                    RETURNING *
+                    """,
+                    (
+                        input.title, input.summary, json.dumps(input.payload or {}),
+                        input.salience, input.confidence, input.dedupe_key,
+                        input.occurred_at, available_at, input.expires_at,
+                        input.source, input.device_id, input.subject,
+                        input.source_raw_table,
+                        json.dumps(input.source_raw_ids or []),
+                        self._user_id, existing["id"],
+                        json.dumps(input.payload or {}),
+                        json.dumps(input.payload or {}),
+                        json.dumps(input.payload or {}),
+                        json.dumps(input.payload or {}),
+                        json.dumps(input.payload or {}),
+                    ),
+                )
+                row = await cur.fetchone()
+                if row is not None:
+                    return PersonalSignalIngestResult(
+                        row=PersonalSignalRow.from_record(row),
+                        changed=True,
+                    )
+
+                if existing.get("dedupe_key") != input.dedupe_key:
+                    await cur.execute(
+                        """
+                        UPDATE pai_personal_signals p
+                        SET dedupe_key = %s,
+                            updated_at = NOW()
+                        WHERE p.user_id = %s
+                          AND p.id = %s
+                          AND NOT EXISTS (
+                            SELECT 1
+                            FROM pai_personal_signals other
+                            WHERE other.user_id = p.user_id
+                              AND other.dedupe_key = %s
+                              AND other.id <> p.id
+                          )
+                        RETURNING *
+                        """,
+                        (
+                            input.dedupe_key,
+                            self._user_id,
+                            existing["id"],
+                            input.dedupe_key,
+                        ),
+                    )
+                    normalized = await cur.fetchone()
+                    if normalized is not None:
+                        existing = normalized
+
+                return PersonalSignalIngestResult(
+                    row=PersonalSignalRow.from_record(existing),
+                    changed=False,
+                )
+
+            await cur.execute(
+                """
+                INSERT INTO pai_personal_signals
+                  (user_id, id, kind, title, summary, payload,
+                   salience, confidence, dedupe_key,
+                   occurred_at, available_at, expires_at,
+                   source, device_id, subject,
+                   source_raw_table, source_raw_ids,
+                   status)
+                VALUES
+                  (%s, %s, %s, %s, %s, %s::jsonb,
+                   %s, %s, %s,
+                   %s, %s, %s,
+                   %s, %s, %s,
+                   %s, %s::jsonb,
+                   'open')
+                ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL
+                DO UPDATE SET
+                  title = EXCLUDED.title,
+                  summary = EXCLUDED.summary,
+                  payload = EXCLUDED.payload,
+                  salience = EXCLUDED.salience,
+                  confidence = EXCLUDED.confidence,
+                  occurred_at = EXCLUDED.occurred_at,
+                  available_at = EXCLUDED.available_at,
+                  expires_at = EXCLUDED.expires_at,
+                  source = EXCLUDED.source,
+                  device_id = EXCLUDED.device_id,
+                  subject = EXCLUDED.subject,
+                  source_raw_table = EXCLUDED.source_raw_table,
+                  source_raw_ids = EXCLUDED.source_raw_ids,
+                  status = 'open',
+                  consumed_by_run_id = NULL,
+                  updated_at = NOW()
+                WHERE
+                  (
+                    CASE
+                      WHEN EXCLUDED.payload ->> 'raw_ref_count' ~ '^[0-9]+$'
+                        THEN (EXCLUDED.payload ->> 'raw_ref_count')::integer
+                      ELSE 0
+                    END
+                  ) > (
+                    CASE
+                      WHEN pai_personal_signals.payload ->> 'raw_ref_count' ~ '^[0-9]+$'
+                        THEN (pai_personal_signals.payload ->> 'raw_ref_count')::integer
+                      ELSE 0
+                    END
+                  )
+                  OR (
+                    (
+                      CASE
+                        WHEN EXCLUDED.payload ->> 'raw_ref_count' ~ '^[0-9]+$'
+                          THEN (EXCLUDED.payload ->> 'raw_ref_count')::integer
+                        ELSE 0
+                      END
+                    ) = (
+                      CASE
+                        WHEN pai_personal_signals.payload ->> 'raw_ref_count' ~ '^[0-9]+$'
+                          THEN (pai_personal_signals.payload ->> 'raw_ref_count')::integer
+                        ELSE 0
+                      END
+                    )
+                    AND NULLIF(EXCLUDED.payload ->> 'content_hash', '')
+                      IS DISTINCT FROM NULLIF(pai_personal_signals.payload ->> 'content_hash', '')
+                  )
+                RETURNING *
+                """,
+                (
+                    self._user_id, input.id, input.kind, input.title, input.summary,
+                    json.dumps(input.payload or {}),
+                    input.salience, input.confidence, input.dedupe_key,
+                    input.occurred_at, available_at, input.expires_at,
+                    input.source, input.device_id, input.subject,
+                    input.source_raw_table,
+                    json.dumps(input.source_raw_ids or []),
+                ),
+            )
+            row = await cur.fetchone()
+            if row is not None:
+                return PersonalSignalIngestResult(
+                    row=PersonalSignalRow.from_record(row),
+                    changed=True,
+                )
+
+            await cur.execute(
+                """
+                SELECT *
+                FROM pai_personal_signals
+                WHERE user_id = %s AND dedupe_key = %s
+                """,
+                (self._user_id, input.dedupe_key),
+            )
+            existing = await cur.fetchone()
+
+        if existing is None:
+            msg = f"transcript candidate ingest returned no row (id={input.id})"
+            raise RuntimeError(msg)
+        return PersonalSignalIngestResult(
+            row=PersonalSignalRow.from_record(existing),
+            changed=False,
+        )
 
     async def get_one(self, signal_id: str) -> PersonalSignalRow | None:
         """Fetch one signal by id, or None if not found / not in this user's
@@ -227,7 +482,9 @@ class PersonalSignalsRepository(UserScopedRepository):
             await cur.execute(
                 """
                 UPDATE pai_personal_signals
-                SET status = 'consumed', consumed_by_run_id = %s
+                SET status = 'consumed',
+                    consumed_by_run_id = %s,
+                    updated_at = NOW()
                 WHERE user_id = %s AND id = %s AND status = 'open'
                 """,
                 (run_id, self._user_id, signal_id),
@@ -240,7 +497,8 @@ class PersonalSignalsRepository(UserScopedRepository):
             await cur.execute(
                 """
                 UPDATE pai_personal_signals
-                SET status = 'archived'
+                SET status = 'archived',
+                    updated_at = NOW()
                 WHERE user_id = %s AND id = %s AND status <> 'archived'
                 """,
                 (self._user_id, signal_id),

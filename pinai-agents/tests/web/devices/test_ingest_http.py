@@ -377,6 +377,87 @@ async def test_inserted_then_duplicate_via_dedupe_key(device):
 
 
 @pytest.mark.asyncio
+async def test_transcript_candidate_window_uses_server_canonical_latest_upsert(
+    device,
+    pool,
+):
+    c, device_id, dtoken = device
+    canonical_key = (
+        f"ambient:candidate_window:{device_id}:"
+        "2026-05-15:transcript_session:win-transcript"
+    )
+
+    def item(item_id: str, raw_ref_count: int, content_hash: str, summary: str) -> dict:
+        return {
+            "id": item_id,
+            "kind": "ambient.candidate_window",
+            "title": "Ambient transcript_session window",
+            "summary": summary,
+            "occurred_at": "2026-05-15T10:00:00Z",
+            "dedupe_key": f"old-client-key:{item_id}",
+            "payload": {
+                "schema_version": "ambient_candidate_window_upload.v1",
+                "window_type": "transcript_session",
+                "local_date": "2026-05-15",
+                "local_window_id": "win-transcript",
+                "raw_ref_count": raw_ref_count,
+                "content_hash": content_hash,
+                "compact_context": summary,
+            },
+        }
+
+    first = await c.post(
+        "/api/devices/ingest",
+        headers=_ingest_headers(device_id, dtoken),
+        json=_wrap(device_id, [
+            item("candidate-1", 1, "hash-1", "Transcript segment: first chunk"),
+        ]),
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["results"][0]["status"] == "inserted"
+    assert first.json()["results"][0]["dedupeKey"] == canonical_key
+
+    latest = await c.post(
+        "/api/devices/ingest",
+        headers=_ingest_headers(device_id, dtoken),
+        json=_wrap(device_id, [
+            item(
+                "candidate-2", 5, "hash-5",
+                "Transcript segment: five chunks Transcript segment: latest",
+            ),
+        ]),
+    )
+    assert latest.status_code == 200, latest.text
+    assert latest.json()["results"][0]["status"] == "inserted"
+    assert latest.json()["results"][0]["dedupeKey"] == canonical_key
+
+    stale = await c.post(
+        "/api/devices/ingest",
+        headers=_ingest_headers(device_id, dtoken),
+        json=_wrap(device_id, [item("candidate-3", 3, "hash-3", "stale chunks")]),
+    )
+    assert stale.status_code == 200, stale.text
+    assert stale.json()["inserted"] == 0
+    assert stale.json()["results"][0]["status"] == "duplicate"
+
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            """SELECT id, dedupe_key, summary, payload
+               FROM pai_personal_signals
+               WHERE device_id = %s AND kind = 'ambient.candidate_window'""",
+            (device_id,),
+        )
+        rows = await cur.fetchall()
+
+    assert len(rows) == 1
+    assert rows[0]["dedupe_key"] == canonical_key
+    assert rows[0]["summary"] == "five chunks latest"
+    assert rows[0]["payload"]["compact_context"] == "five chunks latest"
+    assert rows[0]["payload"]["raw_ref_count"] == 5
+    assert "content_hash" not in rows[0]["payload"]
+
+
+@pytest.mark.asyncio
 async def test_parse_failed_for_unparseable_item(device):
     """An item that fails IngestItemIn validation must show up in
     ``results`` with status=parse_failed — not silently dropped."""

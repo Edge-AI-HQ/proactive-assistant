@@ -68,7 +68,7 @@ const candidateWindow: AmbientCandidateWindow = {
   deviceLabels: ["Microphone", "iPhone"],
   rawRefs: [{ sourceType: "transcript", id: "raw_secret" }],
   observationIds: [],
-  compactContext: "Transcript segment near a known POI.",
+  compactContext: "Transcript segment: near a known POI.",
   privacyHint: "private",
   confidenceHint: 0.7,
   salienceHint: 0.65,
@@ -110,12 +110,12 @@ describe("candidateWindowToSignal", () => {
       id: "ambient_candidate_window_win_transcript",
       kind: "ambient.candidate_window",
       title: "Ambient transcript_session window",
-      summary: "Transcript segment near a known POI.",
+      summary: "near a known POI.",
       occurred_at: "2026-05-15T10:00:00.000Z",
       available_at: "2026-05-15T10:05:00.000Z",
       confidence: 0.7,
       salience: 0.65,
-      dedupe_key: "ambient:candidate_window:2026-05-15:win_transcript",
+      dedupe_key: "ambient:candidate_window:2026-05-15:transcript_session:win_transcript",
     });
     expect(signal.payload).toEqual({
       schema_version: "ambient_candidate_window_upload.v1",
@@ -127,7 +127,7 @@ describe("candidateWindowToSignal", () => {
       started_at: "2026-05-15T10:00:00.000Z",
       ended_at: "2026-05-15T10:05:00.000Z",
       timezone: "UTC",
-      compact_context: "Transcript segment near a known POI.",
+      compact_context: "near a known POI.",
       content_hash: "ctx_hash",
       confidence_hint: 0.7,
       salience_hint: 0.65,
@@ -185,8 +185,8 @@ describe("candidateWindowToSignal", () => {
 
     expect(first.id).toBe("ambient_candidate_window_win_transcript");
     expect(second.id).toBe("ambient_candidate_window_win_transcript");
-    expect(first.dedupe_key).toBe("ambient:candidate_window:2026-05-15:win_transcript");
-    expect(second.dedupe_key).toBe("ambient:candidate_window:2026-05-15:win_transcript");
+    expect(first.dedupe_key).toBe("ambient:candidate_window:2026-05-15:transcript_session:win_transcript");
+    expect(second.dedupe_key).toBe("ambient:candidate_window:2026-05-15:transcript_session:win_transcript");
     expect(first.payload?.content_hash).toBe("ctx_first");
     expect(second.payload?.content_hash).toBe("ctx_second");
   });

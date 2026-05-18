@@ -99,12 +99,66 @@ describe("SqliteTimelineStore migrations", () => {
           ],
         };
       }
+      if ((sql ?? "").includes("FROM ambient_timeline_meta")) {
+        return { values: [{ value: "done" }] };
+      }
       return { values: [] };
     });
 
     await new SqliteTimelineStore().init();
 
     expect(sqliteMock.conn.run).not.toHaveBeenCalled();
+  });
+
+  test("cleans transcript segment labels from existing sqlite timeline rows", async () => {
+    sqliteMock.conn.query.mockImplementation(async (sql?: string) => {
+      if ((sql ?? "").startsWith("PRAGMA table_info(ambient_candidate_windows)")) {
+        return {
+          values: [
+            { name: "id" },
+            { name: "last_attempt_at" },
+            { name: "attempt_count" },
+            { name: "last_error_code" },
+            { name: "summary_status" },
+            { name: "summary_run_id" },
+            { name: "summary_processing_expires_at" },
+            { name: "summary_error_code" },
+            { name: "summary_error_message" },
+          ],
+        };
+      }
+      if ((sql ?? "").startsWith("PRAGMA table_info(ambient_timeline_events)")) {
+        return {
+          values: [
+            { name: "id" },
+            { name: "generation_source" },
+            { name: "summary_run_id" },
+            { name: "source_window_ids_json" },
+            { name: "llm_model_id" },
+            { name: "llm_generated_at" },
+            { name: "llm_updated_at" },
+            { name: "idempotency_key" },
+          ],
+        };
+      }
+      if ((sql ?? "").includes("FROM ambient_timeline_meta")) {
+        return { values: [] };
+      }
+      return { values: [] };
+    });
+
+    await new SqliteTimelineStore().init();
+
+    expect(sqliteMock.conn.run).toHaveBeenCalledWith(expect.stringContaining(
+      "UPDATE ambient_raw_events",
+    ));
+    expect(sqliteMock.conn.run).toHaveBeenCalledWith(expect.stringContaining(
+      "UPDATE ambient_candidate_windows",
+    ));
+    expect(sqliteMock.conn.run).toHaveBeenCalledWith(
+      "INSERT OR REPLACE INTO ambient_timeline_meta (key, value) VALUES (?, ?)",
+      ["transcript_segment_label_cleanup_v1", "done"],
+    );
   });
 
   test("queries raw events by refs and time range", async () => {

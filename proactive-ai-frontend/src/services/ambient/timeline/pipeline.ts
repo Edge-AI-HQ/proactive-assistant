@@ -24,6 +24,7 @@ import {
   sourceLabel,
   stableHash,
   stableId,
+  stripTranscriptSegmentLabels,
   uniqueRawRefs,
   uniqueStrings,
 } from "./utils";
@@ -584,16 +585,17 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     const newSoundWindows = soundWindows.filter((window) =>
       window.rawRefs.some((ref) => !existingRawRefIds.has(ref.id)),
     );
+    const transcriptText = stripTranscriptSegmentLabels(raw.compactText);
     const additions = [
-      existingRawRefIds.has(raw.id) ? "" : raw.compactText,
+      existingRawRefIds.has(raw.id) ? "" : transcriptText,
       newSoundWindows.length > 0
         ? `Sound context: ${newSoundWindows.map((window) => window.compactContext).join(" ")}`
         : "",
     ].filter(Boolean);
     const soundContextText = additions.join(" ");
     const compactContext = existing?.compactContext
-      ? [existing.compactContext, soundContextText].filter(Boolean).join(" ")
-      : soundContextText || raw.compactText;
+      ? stripTranscriptSegmentLabels([existing.compactContext, soundContextText].filter(Boolean).join(" "))
+      : soundContextText || transcriptText;
     const soundRawRefs = soundWindows.flatMap((window) => window.rawRefs);
     const nextHash = stableHash(compactContext);
     const inputChanged = existing?.llmInputHash !== undefined
