@@ -994,6 +994,65 @@ describe("LocalAmbientTimelinePipeline", () => {
   });
 
 
+  test("merges overlapping location, motion, and visit evidence into transcript windows", async () => {
+    const { store, pipeline } = makePipeline();
+
+    await pipeline.ingestSignal({
+      kind: "device.location",
+      title: "Location",
+      summary: "Near Office",
+      occurred_at: "2026-05-15T10:03:30.000Z",
+      payload: { latitude: 31.2, longitude: 121.5, accuracy: 18, place: { label: "Office" } },
+      dedupe_key: "location:office:transcript-merge",
+    });
+    await pipeline.ingestSignal({
+      kind: "device.motion_segment",
+      title: "Motion: walking",
+      summary: "walking",
+      occurred_at: "2026-05-15T10:03:00.000Z",
+      payload: {
+        schema_version: "motion_segment.v1",
+        activity: "walking",
+        started_at: "2026-05-15T10:03:00.000Z",
+        ended_at: "2026-05-15T10:04:30.000Z",
+        durationMs: 90_000,
+        sampleCount: 4,
+        maxConfidence: "high",
+        lastConfidence: "medium",
+      },
+      dedupe_key: "motion:walking:transcript-merge",
+    });
+    await pipeline.ingestSignal({
+      kind: "device.visit",
+      title: "Visit",
+      summary: "Stayed at Office",
+      occurred_at: "2026-05-15T10:03:30.000Z",
+      payload: { kind: "departure", place: { label: "Office" }, latitude: 31.2, longitude: 121.5 },
+      dedupe_key: "visit:office:transcript-merge",
+    });
+    await pipeline.ingestSignal({
+      kind: "session_summary",
+      title: "Voice summary",
+      summary: "Discussed product review follow-ups with enough detail for local summarization.",
+      occurred_at: "2026-05-15T10:03:00.000Z",
+      payload: { captureSessionId: "cap-evidence-merge", durationMs: 120_000 },
+      dedupe_key: "audio:burst:evidence-merge:1",
+    });
+
+    const [window] = await store.listCandidateWindows({
+      localDate: "2026-05-15",
+      windowType: "transcript_session",
+    });
+
+    expect(window?.compactContext).toContain("Location context:");
+    expect(window?.compactContext).toContain("Office");
+    expect(window?.compactContext).toContain("Motion context:");
+    expect(window?.compactContext).toContain("Place context:");
+    expect(window?.sourceTypes).toEqual(expect.arrayContaining(["transcript", "location", "motion", "visit"]));
+    expect(window?.generationPolicy).toBe("llm_allowed");
+  });
+
+
   test("marks synced local LLM events pending when generated content changes", async () => {
     const store = new MemoryTimelineStore();
     let summary = "Initial local summary from the transcript session.";

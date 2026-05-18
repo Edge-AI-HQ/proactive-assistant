@@ -580,21 +580,34 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
       limit: 200,
     })).find((window) => window.id === id);
     const existingRawRefIds = new Set((existing?.rawRefs ?? []).map((ref) => ref.id));
-    const soundWindows = await this.overlappingSoundContextWindows(raw.localDate, startedAt, endedAt ?? startedAt);
-    const newSoundWindows = soundWindows.filter((window) =>
-      window.rawRefs.some((ref) => !existingRawRefIds.has(ref.id)),
-    );
+    const windowStartedAt = startedAt;
+    const windowEndedAt = endedAt ?? startedAt;
+    const soundWindows = await this.overlappingSoundContextWindows(raw.localDate, windowStartedAt, windowEndedAt);
+    const locationWindows = await this.overlappingLocationUpdateWindows(raw.localDate, windowStartedAt, windowEndedAt);
+    const motionWindows = await this.overlappingMotionStateRunWindows(raw.localDate, windowStartedAt, windowEndedAt);
+    const visitWindows = await this.overlappingVisitStayWindows(raw.localDate, windowStartedAt, windowEndedAt);
+    const hasNewRefs = (windows: AmbientCandidateWindow[]) =>
+      windows.filter((window) => window.rawRefs.some((ref) => !existingRawRefIds.has(ref.id)));
+    const newSoundWindows = hasNewRefs(soundWindows);
+    const newLocationWindows = hasNewRefs(locationWindows);
+    const newMotionWindows = hasNewRefs(motionWindows);
+    const newVisitWindows = hasNewRefs(visitWindows);
+    const joinContext = (windows: AmbientCandidateWindow[]) =>
+      windows.map((window) => window.compactContext).filter(Boolean).join(" ");
     const additions = [
       existingRawRefIds.has(raw.id) ? "" : raw.compactText,
-      newSoundWindows.length > 0
-        ? `Sound context: ${newSoundWindows.map((window) => window.compactContext).join(" ")}`
-        : "",
+      newSoundWindows.length > 0 ? `Sound context: ${joinContext(newSoundWindows)}` : "",
+      newLocationWindows.length > 0 ? `Location context: ${joinContext(newLocationWindows)}` : "",
+      newMotionWindows.length > 0 ? `Motion context: ${joinContext(newMotionWindows)}` : "",
+      newVisitWindows.length > 0 ? `Place context: ${joinContext(newVisitWindows)}` : "",
     ].filter(Boolean);
-    const soundContextText = additions.join(" ");
+    const additionsText = additions.join(" ");
     const compactContext = existing?.compactContext
-      ? [existing.compactContext, soundContextText].filter(Boolean).join(" ")
-      : soundContextText || raw.compactText;
-    const soundRawRefs = soundWindows.flatMap((window) => window.rawRefs);
+      ? [existing.compactContext, additionsText].filter(Boolean).join(" ")
+      : additionsText || raw.compactText;
+    const evidenceWindows = [...soundWindows, ...locationWindows, ...motionWindows, ...visitWindows];
+    const evidenceRawRefs = evidenceWindows.flatMap((window) => window.rawRefs);
+    const evidenceSourceTypes = evidenceWindows.flatMap((window) => window.sourceTypes);
     const nextHash = stableHash(compactContext);
     const inputChanged = existing?.llmInputHash !== undefined
       && existing.llmInputHash !== null
@@ -605,9 +618,9 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
       windowType: "transcript_session",
       startedAt: earlierIso(existing?.startedAt, startedAt),
       endedAt: laterIso(existing?.endedAt, endedAt),
-      sourceTypes: uniqueSourceTypes(["transcript", ...soundWindows.flatMap((window) => window.sourceTypes)]),
-      deviceLabels: uniqueStrings(["Microphone", ...(soundWindows.length > 0 ? ["iPhone"] : [])]),
-      rawRefs: uniqueRawRefs([...(existing?.rawRefs ?? []), rawRef(raw), ...soundRawRefs]),
+      sourceTypes: uniqueSourceTypes(["transcript", ...evidenceSourceTypes]),
+      deviceLabels: uniqueStrings(["Microphone", ...(evidenceWindows.length > 0 ? ["iPhone"] : [])]),
+      rawRefs: uniqueRawRefs([...(existing?.rawRefs ?? []), rawRef(raw), ...evidenceRawRefs]),
       compactContext,
       privacyHint: "private",
       confidenceHint: 0.55,
@@ -627,13 +640,45 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     start: string,
     end: string,
   ): Promise<AmbientCandidateWindow[]> {
+    return this.overlappingContextWindows(localDate, "sound_context", start, end);
+  }
+
+  private async overlappingLocationUpdateWindows(
+    localDate: string,
+    start: string,
+    end: string,
+  ): Promise<AmbientCandidateWindow[]> {
+    return this.overlappingContextWindows(localDate, "location_update", start, end);
+  }
+
+  private async overlappingMotionStateRunWindows(
+    localDate: string,
+    start: string,
+    end: string,
+  ): Promise<AmbientCandidateWindow[]> {
+    return this.overlappingContextWindows(localDate, "motion_state_run", start, end);
+  }
+
+  private async overlappingVisitStayWindows(
+    localDate: string,
+    start: string,
+    end: string,
+  ): Promise<AmbientCandidateWindow[]> {
+    return this.overlappingContextWindows(localDate, "visit_stay", start, end);
+  }
+
+  private async overlappingContextWindows(
+    localDate: string,
+    windowType: AmbientWindowType,
+    start: string,
+    end: string,
+  ): Promise<AmbientCandidateWindow[]> {
     const startTs = Date.parse(start);
     const endTs = Date.parse(end);
     if (!Number.isFinite(startTs) || !Number.isFinite(endTs)) return [];
     const windows = await this.store.listCandidateWindows({
       localDate,
-      windowType: "sound_context",
-      status: "evidence",
+      windowType,
       limit: 200,
     });
     return windows.filter((window) => {

@@ -288,4 +288,169 @@ describe("Ambient timeline model bridge", () => {
     });
   });
 
+  test("rejects batch decisions that echo prompt placeholder values", async () => {
+    setSelectedAmbientSummaryModelId("qwen3-1_7b-q4");
+    native.models.list.mockResolvedValue({
+      profiles: [{ id: "qwen3-1_7b-q4", kind: "llm" }],
+      statuses: [{ id: "qwen3-1_7b-q4", state: "present", lastVerifyResult: "ok" }],
+    });
+    native.models.generateTimelineBatchDecision.mockResolvedValue({
+      decisions: [{
+        action: "create",
+        title: "title",
+        summary: "summary",
+        importance: "medium",
+        occurredAt: "iso",
+        sourceWindowIds: ["win_1"],
+      }],
+    });
+    const bridge = createAmbientTimelineModelBridge();
+
+    await expect(bridge.generateTimelineBatchDecision?.({ windows: [windowInput] })).resolves.toEqual({
+      ok: false,
+      errorCode: "invalid_shape",
+    });
+  });
+
+  test("falls back to window startedAt when reported occurredAt is the literal placeholder", async () => {
+    setSelectedAmbientSummaryModelId("qwen3-1_7b-q4");
+    native.models.list.mockResolvedValue({
+      profiles: [{ id: "qwen3-1_7b-q4", kind: "llm" }],
+      statuses: [{ id: "qwen3-1_7b-q4", state: "present", lastVerifyResult: "ok" }],
+    });
+    native.models.generateTimelineBatchDecision.mockResolvedValue({
+      decisions: [{
+        action: "create",
+        title: "Product review",
+        summary: "Discussed product review follow-ups.",
+        importance: "medium",
+        occurredAt: "iso",
+        sourceWindowIds: ["win_1"],
+      }],
+    });
+    const bridge = createAmbientTimelineModelBridge();
+
+    const result = await bridge.generateTimelineBatchDecision?.({ windows: [windowInput] });
+
+    expect(result).toMatchObject({
+      ok: true,
+      batch: {
+        decisions: [{
+          action: "create",
+          occurredAt: windowInput.startedAt,
+        }],
+      },
+    });
+  });
+
+  test("falls back to window startedAt when reported occurredAt is not a parseable ISO timestamp", async () => {
+    setSelectedAmbientSummaryModelId("qwen3-1_7b-q4");
+    native.models.list.mockResolvedValue({
+      profiles: [{ id: "qwen3-1_7b-q4", kind: "llm" }],
+      statuses: [{ id: "qwen3-1_7b-q4", state: "present", lastVerifyResult: "ok" }],
+    });
+    native.models.generateTimelineBatchDecision.mockResolvedValue({
+      decisions: [{
+        action: "create",
+        title: "Product review",
+        summary: "Discussed product review follow-ups.",
+        importance: "medium",
+        occurredAt: "yesterday morning",
+        sourceWindowIds: ["win_1"],
+      }],
+    });
+    const bridge = createAmbientTimelineModelBridge();
+
+    const result = await bridge.generateTimelineBatchDecision?.({ windows: [windowInput] });
+
+    expect(result).toMatchObject({
+      ok: true,
+      batch: {
+        decisions: [{
+          action: "create",
+          occurredAt: windowInput.startedAt,
+        }],
+      },
+    });
+  });
+
+  test("rejects batch decisions that echo angle-bracket placeholders", async () => {
+    setSelectedAmbientSummaryModelId("qwen3-1_7b-q4");
+    native.models.list.mockResolvedValue({
+      profiles: [{ id: "qwen3-1_7b-q4", kind: "llm" }],
+      statuses: [{ id: "qwen3-1_7b-q4", state: "present", lastVerifyResult: "ok" }],
+    });
+    native.models.generateTimelineBatchDecision.mockResolvedValue({
+      decisions: [{
+        action: "create",
+        title: "<TITLE_HERE>",
+        summary: "<SUMMARY_HERE>",
+        importance: "medium",
+        occurredAt: windowInput.startedAt,
+        sourceWindowIds: ["win_1"],
+      }],
+    });
+    const bridge = createAmbientTimelineModelBridge();
+
+    await expect(bridge.generateTimelineBatchDecision?.({ windows: [windowInput] })).resolves.toEqual({
+      ok: false,
+      errorCode: "invalid_shape",
+    });
+  });
+
+  test("rewrites title containing 'Motion context:' label using compactContext", async () => {
+    setSelectedAmbientSummaryModelId("qwen3-1_7b-q4");
+    native.models.list.mockResolvedValue({
+      profiles: [{ id: "qwen3-1_7b-q4", kind: "llm" }],
+      statuses: [{ id: "qwen3-1_7b-q4", state: "present", lastVerifyResult: "ok" }],
+    });
+    native.models.generateTimelineBatchDecision.mockResolvedValue({
+      decisions: [{
+        action: "create",
+        title: "Motion context: Motion stationary for 36m 55s",
+        summary: "讨论了端上 AM 智力不足的可能原因。",
+        importance: "medium",
+        occurredAt: windowInput.startedAt,
+        sourceWindowIds: ["win_1"],
+      }],
+    });
+    const bridge = createAmbientTimelineModelBridge();
+
+    const result = await bridge.generateTimelineBatchDecision?.({ windows: [windowInput] });
+
+    expect(result?.ok).toBe(true);
+    if (result?.ok) {
+      const [decision] = result.batch.decisions;
+      expect(decision.action).toBe("create");
+      if (decision.action === "create") {
+        expect(decision.title.toLowerCase()).not.toContain("motion context:");
+        expect(decision.title.length).toBeLessThanOrEqual(31);
+      }
+    }
+  });
+
+  test("rejects batch decisions that echo example-content phrases (Alice/Bob/APNs)", async () => {
+    setSelectedAmbientSummaryModelId("qwen3-1_7b-q4");
+    native.models.list.mockResolvedValue({
+      profiles: [{ id: "qwen3-1_7b-q4", kind: "llm" }],
+      statuses: [{ id: "qwen3-1_7b-q4", state: "present", lastVerifyResult: "ok" }],
+    });
+    native.models.generateTimelineBatchDecision.mockResolvedValue({
+      decisions: [{
+        action: "create",
+        title: "Standup: roll back APNs entitlement change",
+        summary: "Alice flagged a TestFlight 84 push notification regression and Bob owns rolling back the APNs entitlement change today.",
+        importance: "high",
+        occurredAt: windowInput.startedAt,
+        sourceWindowIds: ["win_1"],
+      }],
+    });
+    const bridge = createAmbientTimelineModelBridge();
+
+    await expect(bridge.generateTimelineBatchDecision?.({ windows: [windowInput] })).resolves.toEqual({
+      ok: false,
+      errorCode: "invalid_shape",
+    });
+  });
+
 });

@@ -3,8 +3,8 @@ import Foundation
 
 @objc(AmbientModelsPlugin)
 public class AmbientModelsPlugin: CAPPlugin, CAPBridgedPlugin {
-    private static let timelineBatchMaxTokens = 128
-    private static let timelineSingleMaxTokens = 160
+    private static let timelineBatchMaxTokens = 512
+    private static let timelineSingleMaxTokens = 512
     private static let timelineGenerationTimeout: TimeInterval = 180
 
     public let identifier = "AmbientModelsPlugin"
@@ -175,18 +175,34 @@ public class AmbientModelsPlugin: CAPPlugin, CAPBridgedPlugin {
             }
             let path = await store.fileURL(for: profile)
             do {
-                let prompt = Self.timelineBatchPrompt(batch: batch)
+                let plan = Self.timelineBatchMessages(batch: batch)
                 let text = try await textGenerator.generate(
                     modelURL: path,
-                    options: LlamaTextGenerationOptions(prompt: prompt, maxTokens: Self.timelineBatchMaxTokens, timeout: Self.timelineGenerationTimeout)
+                    messagesOptions: LlamaTextGenerationMessagesOptions(
+                        messages: plan.messages,
+                        assistantPrefill: plan.prefill,
+                        maxTokens: Self.timelineBatchMaxTokens,
+                        timeout: Self.timelineGenerationTimeout
+                    )
                 )
-                let object = try Self.timelineDraftObject(from: text)
+                let combined = plan.prefill + text
+                Self.logModelOutput(stage: "batch", prefill: plan.prefill, text: text)
+                let object: [String: Any]
+                do {
+                    object = try Self.timelineDraftObject(from: combined)
+                } catch {
+                    Self.logModelOutput(stage: "batch.parse_failure", prefill: plan.prefill, text: text)
+                    throw error
+                }
                 guard object["decisions"] is [[String: Any]] else {
+                    Self.logModelOutput(stage: "batch.shape_failure", prefill: plan.prefill, text: text)
                     throw TimelineGenerationParseError.invalidJSON
                 }
                 DispatchQueue.main.async { call.resolve(object) }
             } catch LlamaTextGenerationError.timeout {
                 DispatchQueue.main.async { call.reject("Timeline generation timed out", "generation_timeout") }
+            } catch LlamaTextGenerationError.chatTemplateUnavailable {
+                DispatchQueue.main.async { call.reject("Model has no embedded chat template", "chat_template_unavailable") }
             } catch let error as TimelineGenerationParseError {
                 DispatchQueue.main.async { call.reject(error.localizedDescription, "invalid_json") }
             } catch {
@@ -222,15 +238,30 @@ public class AmbientModelsPlugin: CAPPlugin, CAPBridgedPlugin {
             }
             let path = await store.fileURL(for: profile)
             do {
-                let prompt = Self.timelinePrompt(window: window)
+                let plan = Self.timelineSingleMessages(window: window)
                 let text = try await textGenerator.generate(
                     modelURL: path,
-                    options: LlamaTextGenerationOptions(prompt: prompt, maxTokens: Self.timelineSingleMaxTokens, timeout: Self.timelineGenerationTimeout)
+                    messagesOptions: LlamaTextGenerationMessagesOptions(
+                        messages: plan.messages,
+                        assistantPrefill: plan.prefill,
+                        maxTokens: Self.timelineSingleMaxTokens,
+                        timeout: Self.timelineGenerationTimeout
+                    )
                 )
-                let object = try Self.timelineDraftObject(from: text)
+                let combined = plan.prefill + text
+                Self.logModelOutput(stage: "single", prefill: plan.prefill, text: text)
+                let object: [String: Any]
+                do {
+                    object = try Self.timelineDraftObject(from: combined)
+                } catch {
+                    Self.logModelOutput(stage: "single.parse_failure", prefill: plan.prefill, text: text)
+                    throw error
+                }
                 DispatchQueue.main.async { call.resolve(object) }
             } catch LlamaTextGenerationError.timeout {
                 DispatchQueue.main.async { call.reject("Timeline generation timed out", "generation_timeout") }
+            } catch LlamaTextGenerationError.chatTemplateUnavailable {
+                DispatchQueue.main.async { call.reject("Model has no embedded chat template", "chat_template_unavailable") }
             } catch let error as TimelineGenerationParseError {
                 DispatchQueue.main.async { call.reject(error.localizedDescription, "invalid_json") }
             } catch {
@@ -247,64 +278,132 @@ public class AmbientModelsPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
-    private static func timelineBatchPrompt(batch: [String: Any]) -> String {
-        let windows = batch["windows"] as? [[String: Any]] ?? []
-        let recentCards = batch["recentLlmCards"] as? [[String: Any]] ?? []
-        let ruleContext = batch["ruleContext"] as? [[String: Any]] ?? []
-        let windowsText = windows.prefix(1).map { window in
-            let id = (window["id"] as? String) ?? ""
-            let windowType = (window["windowType"] as? String) ?? ""
-            let startedAt = (window["startedAt"] as? String) ?? ""
-            let endedAt = (window["endedAt"] as? String) ?? ""
-            let context = String(((window["compactContext"] as? String) ?? "").prefix(480))
-            return "- id: \(id) type: \(windowType) start: \(startedAt) end: \(endedAt) context: \(context)"
-        }.joined(separator: "\n")
-        let recentText = recentCards.prefix(2).map { card in
-            let id = (card["id"] as? String) ?? ""
-            let title = (card["title"] as? String) ?? ""
-            let summary = String(((card["summary"] as? String) ?? "").prefix(120))
-            return "- id: \(id) title: \(title) summary: \(summary)"
-        }.joined(separator: "\n")
-        let ruleText = ruleContext.prefix(2).map { card in
-            let title = (card["title"] as? String) ?? ""
-            let summary = String(((card["summary"] as? String) ?? "").prefix(120))
-            return "- \(title): \(summary)"
-        }.joined(separator: "\n")
-        return """
-        /no_think
-        Return exactly one minified JSON object. The first character must be { and the last character must be }.
-        No markdown, no explanation, no thinking text.
-        Schema: {"decisions":[{"a":"create","w":["window_id"],"t":"title","s":"summary","i":"medium","occurredAt":"iso"}]}
-        Use skip only if the window has no useful human activity: {"a":"skip","w":["window_id"],"r":"reason"}
-        Cover every input window exactly once. Never update rule context.
-        Windows:
-        \(windowsText)
-        Recent LLM cards eligible for update:
-        \(recentText)
-        Rule context:
-        \(ruleText)
-        JSON:
-        """
+    struct TimelineGenerationPlan {
+        let messages: [LlamaChatMessage]
+        let prefill: String
     }
 
-    private static func timelinePrompt(window: [String: Any]) -> String {
-        let context = String(((window["compactContext"] as? String) ?? "").prefix(700))
+    private static let timelineBatchSystemPrompt: String = """
+    You are an on-device assistant that summarizes one ambient transcript window into one timeline card.
+    Output a single minified JSON object that matches this exact shape and nothing else:
+    {"decisions":[{"action":"create","sourceWindowIds":["<window_id>"],"title":"<short title>","summary":"<one sentence>","importance":"<low|medium|high>","occurredAt":"<startedAt>"}]}
+
+    Rules:
+    - Output ONLY the JSON object. No markdown, no thinking, no commentary.
+    - Use "create" when the window contains useful human activity (conversation, decision, plan, task, learning).
+    - If the window has no useful activity (silence, ambient noise, empty), output: {"decisions":[{"action":"skip","sourceWindowIds":["<window_id>"],"reason":"<short>"}]}
+    - "sourceWindowIds" MUST contain the exact window_id from the input verbatim.
+    - "title" MUST be a SHORT headline <= 30 characters. Summarize the topic, do NOT copy the input text. NEVER output the literal string "title". NEVER copy the raw context. NEVER include labels like "Motion context:" or "Sound context:" in the title.
+    - "summary" MUST be ONE short sentence <= 100 characters, summarizing what happened. Do NOT copy the input text verbatim. NEVER output the literal string "summary". NEVER include labels like "Motion context:" or "Sound context:" in the summary.
+    - "title" and "summary" MUST be different from each other.
+    - "importance" MUST be exactly one of: "low", "medium", "high".
+    - "occurredAt" MUST be the input's started_at value copied verbatim (ISO-8601). NEVER output the literal string "iso".
+    - The example below uses <PLACEHOLDER> tokens. Tokens like <TITLE_HERE>, <SUMMARY_HERE> are illustrative only and MUST be replaced with content derived from the real input. NEVER output any "<...>" placeholder verbatim and NEVER copy example token wording.
+    - If the real input is in Chinese, write title and summary in Chinese. If the real input is in English, write them in English. Mirror the language of the real input.
+    /no_think
+    """
+
+    private static let timelineSingleSystemPrompt: String = """
+    You are an on-device assistant that summarizes one ambient transcript window into a timeline card draft.
+    Output a single minified JSON object that matches this exact shape and nothing else:
+    {"title":"<short title>","summary":"<one sentence>","eventType":"<conversation|meeting|focus|social|other>","confidence":<float between 0 and 1>,"confidenceLabel":"<certain|probable|uncertain>","tags":["<tag>"],"salientFacts":["<fact>"]}
+
+    Rules:
+    - Output ONLY the JSON object. No markdown, no thinking, no commentary.
+    - "title" MUST be <= 60 characters, written in your own words. NEVER output the literal string "title".
+    - "summary" MUST be one sentence <= 200 characters, written in your own words. NEVER output the literal string "summary".
+    - "eventType" MUST be exactly one of: "conversation", "meeting", "focus", "social", "other".
+    - "confidenceLabel" MUST be exactly one of: "certain", "probable", "uncertain".
+    - The example below uses <PLACEHOLDER> tokens. Tokens like <TITLE_HERE>, <SUMMARY_HERE> are illustrative only and MUST be replaced with content derived from the real input. NEVER output any "<...>" placeholder verbatim and NEVER copy example token wording.
+    - If the real input is in Chinese, write title and summary in Chinese. If the real input is in English, write them in English. Mirror the language of the real input.
+    /no_think
+    """
+
+    private static func timelineBatchMessages(batch: [String: Any]) -> TimelineGenerationPlan {
+        let windows = batch["windows"] as? [[String: Any]] ?? []
+        let primary = windows.first ?? [:]
+        let id = (primary["id"] as? String) ?? ""
+        let windowType = (primary["windowType"] as? String) ?? ""
+        let startedAt = (primary["startedAt"] as? String) ?? ""
+        let endedAt = (primary["endedAt"] as? String) ?? ""
+        let context = String(((primary["compactContext"] as? String) ?? "").prefix(380))
+
+        let exampleInput = """
+        - window_id: <WINDOW_ID_HERE>
+        - started_at: <STARTED_AT_HERE>
+        - ended_at: <ENDED_AT_HERE>
+        - window_type: <WINDOW_TYPE_HERE>
+        - context: <CONTEXT_HERE>
+        """
+        let exampleOutput = #"{"decisions":[{"action":"create","sourceWindowIds":["<WINDOW_ID_HERE>"],"title":"<TITLE_HERE>","summary":"<SUMMARY_HERE>","importance":"<LOW_MEDIUM_OR_HIGH>","occurredAt":"<STARTED_AT_HERE>"}]}"#
+
+        let realInput = """
+        - window_id: \(id)
+        - started_at: \(startedAt)
+        - ended_at: \(endedAt)
+        - window_type: \(windowType)
+        - context: \(context)
+        """
+
+        let userContent = """
+        Example input:
+        \(exampleInput)
+
+        Example output:
+        \(exampleOutput)
+
+        Now process this real input. Use its real window_id and started_at verbatim. Do not copy any value from the example.
+
+        Real input:
+        \(realInput)
+        """
+
+        let messages: [LlamaChatMessage] = [
+            LlamaChatMessage(role: "system", content: timelineBatchSystemPrompt),
+            LlamaChatMessage(role: "user", content: userContent),
+        ]
+        return TimelineGenerationPlan(messages: messages, prefill: "{\"decisions\":[{")
+    }
+
+    private static func timelineSingleMessages(window: [String: Any]) -> TimelineGenerationPlan {
         let startedAt = (window["startedAt"] as? String) ?? ""
         let endedAt = (window["endedAt"] as? String) ?? ""
         let sourceTypes = (window["sourceTypes"] as? [String])?.joined(separator: ", ") ?? ""
-        return """
-        /no_think
-        Return exactly one minified JSON object. The first character must be { and the last character must be }.
-        No markdown, no explanation, no thinking text.
-        Schema: {"title":"short title","summary":"one sentence","eventType":"conversation","confidence":0.7,"confidenceLabel":"certain","tags":["ambient"],"salientFacts":["fact"]}
-        eventType must be one of conversation, meeting, focus, social, other.
-        Window startedAt: \(startedAt)
-        Window endedAt: \(endedAt)
-        Source types: \(sourceTypes)
-        Context:
-        \(context)
-        JSON:
+        let context = String(((window["compactContext"] as? String) ?? "").prefix(600))
+
+        let exampleInput = """
+        - started_at: <STARTED_AT_HERE>
+        - ended_at: <ENDED_AT_HERE>
+        - source_types: <SOURCE_TYPES_HERE>
+        - context: <CONTEXT_HERE>
         """
+        let exampleOutput = #"{"title":"<TITLE_HERE>","summary":"<SUMMARY_HERE>","eventType":"<conversation|meeting|focus|social|other>","confidence":<FLOAT_0_TO_1>,"confidenceLabel":"<certain|probable|uncertain>","tags":["<TAG_HERE>"],"salientFacts":["<FACT_HERE>"]}"#
+
+        let realInput = """
+        - started_at: \(startedAt)
+        - ended_at: \(endedAt)
+        - source_types: \(sourceTypes)
+        - context: \(context)
+        """
+
+        let userContent = """
+        Example input:
+        \(exampleInput)
+
+        Example output:
+        \(exampleOutput)
+
+        Now process this real input. Do not copy any value from the example.
+
+        Real input:
+        \(realInput)
+        """
+
+        let messages: [LlamaChatMessage] = [
+            LlamaChatMessage(role: "system", content: timelineSingleSystemPrompt),
+            LlamaChatMessage(role: "user", content: userContent),
+        ]
+        return TimelineGenerationPlan(messages: messages, prefill: "{")
     }
 
     private static func timelineDraftObject(from text: String) throws -> [String: Any] {
@@ -316,10 +415,16 @@ public class AmbientModelsPlugin: CAPPlugin, CAPBridgedPlugin {
         return object
     }
 
+    private static func logModelOutput(stage: String, prefill: String, text: String) {
+        let prefillEscaped = prefill.replacingOccurrences(of: "\n", with: "\\n")
+        let textEscaped = text.replacingOccurrences(of: "\n", with: "\\n")
+        print("[AmbientModels] timeline.\(stage) prefill_len=\(prefill.count) text_len=\(text.count) prefill=<<<\(prefillEscaped)>>> text=<<<\(textEscaped)>>>")
+    }
+
     private static func extractJSONObjectString(from text: String) -> String? {
         let scalars = Array(text.unicodeScalars)
         guard let start = scalars.firstIndex(of: "{") else { return nil }
-        var depth = 0
+        var stack: [Unicode.Scalar] = []
         var inString = false
         var escaped = false
         for index in start..<scalars.count {
@@ -337,15 +442,31 @@ public class AmbientModelsPlugin: CAPPlugin, CAPBridgedPlugin {
                 continue
             }
             if inString { continue }
-            if scalar == "{" { depth += 1 }
-            if scalar == "}" {
-                depth -= 1
-                if depth == 0 {
-                    return String(String.UnicodeScalarView(scalars[start...index]))
-                }
+            if scalar == "{" || scalar == "[" {
+                stack.append(scalar)
+            } else if scalar == "}" {
+                if stack.last == "{" { stack.removeLast() }
+            } else if scalar == "]" {
+                if stack.last == "[" { stack.removeLast() }
+            }
+            if stack.isEmpty && (scalar == "}" || scalar == "]") {
+                return String(String.UnicodeScalarView(scalars[start...index]))
             }
         }
-        return nil
+        var recovered = Array(scalars[start..<scalars.count])
+        if inString {
+            recovered.append("\"")
+        }
+        while let last = recovered.last, last == "," || last == " " || last == "\n" || last == "\t" || last == "\r" {
+            recovered.removeLast()
+        }
+        if recovered.last == ":" {
+            return nil
+        }
+        while let opener = stack.popLast() {
+            recovered.append(opener == "{" ? "}" : "]")
+        }
+        return String(String.UnicodeScalarView(recovered))
     }
 }
 

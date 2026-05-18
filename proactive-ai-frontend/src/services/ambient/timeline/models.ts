@@ -38,7 +38,105 @@ export type AmbientTimelineGenerationErrorCode =
   | "generation_timeout"
   | "invalid_json"
   | "invalid_shape"
+  | "chat_template_unavailable"
   | "generation_failed";
+
+const PLACEHOLDER_ECHO_TOKENS = new Set([
+  "title",
+  "<title>",
+  "<title_here>",
+  "<short title>",
+  "summary",
+  "<summary>",
+  "<summary_here>",
+  "<one sentence>",
+  "iso",
+  "<iso>",
+  "<startedat>",
+  "<started_at_here>",
+  "<endedat>",
+  "<ended_at_here>",
+  "<occurredat>",
+  "<occurred_at_here>",
+  "eventtype",
+  "<eventtype>",
+  "<window_id>",
+  "<window_id_here>",
+  "window_id",
+  "<window_type_here>",
+  "<source_types_here>",
+  "<context_here>",
+  "<tag_here>",
+  "<fact_here>",
+  "<low_medium_or_high>",
+  "<float_0_to_1>",
+  "<conversation|meeting|focus|social|other>",
+  "<certain|probable|uncertain>",
+]);
+
+const PLACEHOLDER_ANGLE_PATTERN = /^<[^>]{1,80}>$/;
+
+const EXAMPLE_ECHO_PHRASES = [
+  "alice flagged",
+  "bob owns",
+  "bob took the action",
+  "apns entitlement",
+  "testflight 84",
+  "push notification regression",
+  "roll back the apns",
+  "rolling back the apns",
+];
+
+function isPlaceholderEcho(value: string): boolean {
+  const trimmed = value.trim();
+  const lower = trimmed.toLowerCase();
+  if (PLACEHOLDER_ECHO_TOKENS.has(lower)) return true;
+  if (PLACEHOLDER_ANGLE_PATTERN.test(trimmed)) return true;
+  return EXAMPLE_ECHO_PHRASES.some((phrase) => lower.includes(phrase));
+}
+
+const EVIDENCE_LABEL_PATTERN = /\b(transcript segment|sound context|motion context|location context|place context|visit context)\s*:\s*/gi;
+
+function stripEvidenceLabels(value: string): string {
+  return value.replace(EVIDENCE_LABEL_PATTERN, "").replace(/\s+/g, " ").trim();
+}
+
+function titleHasEvidenceLabel(value: string): boolean {
+  EVIDENCE_LABEL_PATTERN.lastIndex = 0;
+  return EVIDENCE_LABEL_PATTERN.test(value);
+}
+
+function deriveTitleFromContext(context: string | undefined, max = 30): string | null {
+  if (!context) return null;
+  const stripped = stripEvidenceLabels(context);
+  if (!stripped) return null;
+  const punctuationSplit = stripped.split(/[。．\.！\!？\?；;\n]/).map((part) => part.trim()).filter(Boolean);
+  const head = punctuationSplit[0] ?? stripped;
+  if (head.length <= max) return head;
+  return head.slice(0, max - 1).trimEnd() + "…";
+}
+
+function sanitizeLlmTitle(
+  rawTitle: string,
+  summary: string,
+  context: string | undefined,
+  max = 30,
+): string {
+  const stripped = stripEvidenceLabels(rawTitle).trim();
+  const looksEqualToSummary = stripped.length > 0 && stripped === summary.trim();
+  const tooLong = stripped.length > max;
+  const empty = stripped.length === 0;
+  const hadLabel = titleHasEvidenceLabel(rawTitle);
+  if (!empty && !looksEqualToSummary && !tooLong && !hadLabel) {
+    return stripped;
+  }
+  const derived = deriveTitleFromContext(context, max);
+  if (derived) return derived;
+  if (!empty && !looksEqualToSummary) {
+    return tooLong ? stripped.slice(0, max - 1).trimEnd() + "…" : stripped;
+  }
+  return "Voice note";
+}
 
 export type AmbientTimelineGenerationResult =
   | { ok: true; draft: AmbientTimelineEventDraft }
@@ -197,7 +295,7 @@ class NativeAmbientTimelineModelBridge implements AmbientTimelineModelBridge {
         modelId,
         window: modelWindowPayload(window),
       });
-      const draft = normalizeDraft(value);
+      const draft = normalizeDraft(value, window);
       return draft
         ? { ok: true, draft }
         : { ok: false, errorCode: "invalid_shape" };
@@ -302,12 +400,19 @@ function normalizeDecision(
   if (sourceWindowIds.length === 0) return null;
   const primaryWindow = input.windows.find((window) => window.id === sourceWindowIds[0]);
   if (action === "create") {
-    const title = shortText(row.title ?? row.t, 60);
+    const rawTitle = shortText(row.title ?? row.t, 120);
     const summary = shortText(row.summary ?? row.s, 180);
-    if (!title || !summary) return null;
+    if (!rawTitle || !summary) return null;
+    if (isPlaceholderEcho(rawTitle) || isPlaceholderEcho(summary)) return null;
+    const title = sanitizeLlmTitle(rawTitle, summary, primaryWindow?.compactContext, 30);
     const rawImportance = row.importance ?? row.i;
     const importance: "low" | "medium" | "high" = isImportance(rawImportance) ? rawImportance : "medium";
-    const occurredAt = shortPlainText(row.occurredAt, 64)
+    const reportedOccurredAt = shortPlainText(row.occurredAt, 64);
+    const occurredAtCandidate = reportedOccurredAt && !isPlaceholderEcho(reportedOccurredAt)
+      && Number.isFinite(Date.parse(reportedOccurredAt))
+      ? reportedOccurredAt
+      : null;
+    const occurredAt = occurredAtCandidate
       ?? shortPlainText(primaryWindow?.startedAt, 64);
     if (!occurredAt) return null;
     return { action: "create", title, summary, importance, occurredAt, sourceWindowIds };
@@ -381,15 +486,17 @@ function modelWindowPayload(
   };
 }
 
-function normalizeDraft(value: unknown): AmbientTimelineEventDraft | null {
+function normalizeDraft(value: unknown, window?: AmbientCandidateWindow): AmbientTimelineEventDraft | null {
   if (!value || typeof value !== "object") return null;
   const row = value as Record<string, unknown>;
   const eventType = EVENT_TYPES.includes(row.eventType as AmbientTimelineEvent["eventType"])
     ? row.eventType as AmbientTimelineEvent["eventType"]
     : "other";
-  const title = shortText(row.title, 80);
+  const rawTitle = shortText(row.title, 120);
   const summary = shortText(row.summary, 220);
-  if (!title || !summary) return null;
+  if (!rawTitle || !summary) return null;
+  if (isPlaceholderEcho(rawTitle) || isPlaceholderEcho(summary)) return null;
+  const title = sanitizeLlmTitle(rawTitle, summary, window?.compactContext, 30);
   const confidence = clamp01(typeof row.confidence === "number" ? row.confidence : 0.5);
   const confidenceLabel = row.confidenceLabel === "certain" || row.confidenceLabel === "uncertain"
     ? row.confidenceLabel
@@ -458,6 +565,7 @@ function isGenerationErrorCode(value: unknown): value is AmbientTimelineGenerati
     "generation_timeout",
     "invalid_json",
     "invalid_shape",
+    "chat_template_unavailable",
     "generation_failed",
   ].includes(value);
 }
