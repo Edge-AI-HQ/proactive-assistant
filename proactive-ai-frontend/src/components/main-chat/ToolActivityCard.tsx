@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import type { ToolCallMessagePartComponent } from "@assistant-ui/react";
 import { cn } from "@/lib/utils";
+import ProposeActionCard from "./ProposeActionCard";
 
 function str(value: unknown): string | undefined {
   return typeof value === "string" && value ? value : undefined;
@@ -107,6 +108,15 @@ const ToolActivityCard: ToolCallMessagePartComponent = ({
   result,
   isError,
 }) => {
+  // `propose_action` is the card-execution agent's structured-pause
+  // channel — it carries chip / draft / plan payload that we render
+  // as a dedicated NEEDS YOUR INPUT panel instead of the generic
+  // "tool ran" activity row. Delegate to ProposeActionCard so the
+  // chat-thread surface stays one-component-per-pause.
+  if (toolName === "propose_action") {
+    return <ProposeActionCard args={args} />;
+  }
+
   const [expanded, setExpanded] = useState(false);
   const record =
     args && typeof args === "object" ? (args as Record<string, unknown>) : {};

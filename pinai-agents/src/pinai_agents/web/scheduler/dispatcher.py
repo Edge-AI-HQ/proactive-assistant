@@ -393,6 +393,29 @@ class DefaultDispatcher:
             matched_patterns=matched_payload or None,
         )
 
+        # Fan out one card-thread bootstrap turn per card so the card-
+        # execution agent runs ahead of the user opening the card. The
+        # agent calls `propose_action` and ends its turn; the FE reads
+        # the resulting chat history later for both the home drawer
+        # pre-review and the chat detail's chip+input panel. Fire-and-
+        # forget — each card's bootstrap runs as its own background
+        # task and a failure on one card doesn't block the others.
+        try:
+            from ..services.card_fanout import (  # noqa: PLC0415
+                dispatch_card_bootstrap,
+            )
+            cards = result.get("cards") or []
+            await dispatch_card_bootstrap(
+                pool=self._pool, user_id=task.user_id,
+                final_cards=cards if isinstance(cards, list) else [],
+            )
+        except Exception:
+            logger.exception(
+                "card fanout dispatch failed user=%d run=%s — cards "
+                "persisted; FE Confirm path will bootstrap on demand",
+                task.user_id, run_id,
+            )
+
         # Dispatch "new cards" push notification. Multi-card collapse:
         # one notification per generator run regardless of how many cards
         # the run produced (push_notifier renders the count into the

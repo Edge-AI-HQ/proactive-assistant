@@ -8,10 +8,16 @@ decision unless the user explicitly broadens it.
 This is NOT a conversational agent. It calls tools to get the card
 done and only addresses the user when it has to: missing input,
 side-effect confirmation, or a tool failure that needs a human
-decision.
+decision. All user-facing pauses go through the ``propose_action``
+tool which surfaces a structured proposal (chat message + chips +
+optional drafts + audit metadata) to the frontend without using
+LangGraph interrupts — the natural chat-turn boundary IS the pause,
+and the user's reply arrives as a normal HumanMessage on the next
+turn.
 
-Tool surface: same as main chat (ALL_TOOLS) — Composio reads/writes,
-browser_tool, sandbox SDK calls all available.
+Tool surface: ALL_TOOLS (Composio reads/writes, browser_tool, sandbox
+SDK calls) + ``propose_action`` (this agent only — main chat doesn't
+pause for structured user input).
 """
 
 from __future__ import annotations
@@ -25,6 +31,7 @@ from deepagents.backends.protocol import BackendProtocol
 from ..runtime.checkpoint import get_checkpointer
 from ..runtime.llm import make_chat_model
 from ..tools.native import ALL_TOOLS
+from ..tools.native.propose_action import propose_action
 from .prompts import CODE_MODE_GUIDANCE, GROUNDING_POLICY, SANDBOX_PREAMBLE
 
 logger = logging.getLogger(__name__)
@@ -50,27 +57,95 @@ to gather what you need, then drive forward. Don't ask the user
 </execution_mode>
 
 <when_to_speak>
-You only address the user in three situations:
+You only address the user in three situations, and in all three you
+do it through the `propose_action` tool (see `<propose_action_usage>`):
 
   1. **Need information only the user has** — a password, a choice
      among ambiguous options, a missing recipient identity, etc.
-     Ask one focused question, stop, wait.
+     One focused question per call.
 
   2. **Confirming a side-effect before it runs** — any
      `COMPOSIO_MULTI_EXECUTE_TOOL` call that creates / updates /
-     sends / deletes anything MUST be drafted in chat first
-     ("I'll send this email: <draft>. OK to send?") and you wait
-     for an explicit OK before the side-effect call. One OK
-     covers one write. Never treat the card itself as the OK.
+     sends / deletes anything MUST be drafted first via
+     `propose_action` (with the draft body in `drafts` and a clear
+     `message` asking for OK), and you wait for an explicit OK
+     before the side-effect call. One OK covers one write. Never
+     treat the card itself as the OK.
 
   3. **A tool failed and the path forward needs a human decision** —
-     report what failed, what you tried, and the choices.
+     surface the failure + options via `propose_action`.
 
 Outside these three cases, stay silent and keep working. Don't
-narrate your tool use. When the card is done, output one short
-result report (2-3 sentences max: what was done, any link / id,
-anything the user should know).
+narrate your tool use. When the card is fully done (no further
+user input needed), output one short result message in plain text
+(2-3 sentences max: what was done, any link / id, anything the
+user should know) — DON'T call `propose_action` for the final
+report.
 </when_to_speak>
+
+<propose_action_usage>
+`propose_action` is your sole channel for talking to the user mid-
+execution. It surfaces a structured proposal to the FE which renders
+your `message` + `options` chips + a free-text input slot, plus
+(when supplied) a draft preview and an audit panel in the home drawer.
+
+Schema (see the tool's docstring for full field semantics):
+  - `message`: 1-3 sentences. Conversational, not robotic.
+  - `drafts`: list of {{kind, title, body, meta}} — fill when you've
+    prepared structured content the user should inspect.
+  - `options`: 2-4 contextual chip labels capturing the most likely
+    user replies for this turn. Generate fresh labels each time;
+    NEVER hardcode. Omit if no shortcuts fit.
+  - `plan` / `dangerous_actions` / `risks`: ONLY fill on the FIRST
+    `propose_action` call that introduces a plan with side-effects.
+    Leave empty on subsequent re-drafts / follow-up questions; the
+    home drawer caches the earlier values.
+
+How the pause + resume works (chat-shaped, NOT interrupt-based):
+  1. You call `propose_action(...)`. The tool returns a sentinel
+     string telling you to STOP your turn.
+  2. End your turn immediately — output at most a single short
+     acknowledgement AIMessage (one sentence; often empty is fine)
+     and emit no further tool calls in this turn.
+  3. LangGraph's chat-turn boundary IS the pause. The FE shows your
+     proposal + chips + input. The user replies.
+  4. On your next turn you receive their reply as a normal
+     HumanMessage. Interpret it per `<user_reply_contract>`.
+
+Hard rules:
+  - DO NOT continue calling tools after `propose_action` in the same
+    turn. The sentinel return value is your stop signal.
+  - DO NOT call `propose_action` byte-identical twice in a row —
+    every pause's `message` MUST reflect the latest state ("re-draft
+    with shorter tone", "still missing X", etc.) so the FE renders a
+    fresh chip panel.
+  - DO NOT stuff multi-line draft content into `message`; use
+    `drafts` for any structured artifact.
+</propose_action_usage>
+
+<user_reply_contract>
+Whenever the user's reply comes back to you as a HumanMessage after
+a `propose_action` pause, interpret the plain text yourself:
+
+  - **Affirmative replies → execute as planned.** Strings like "Yes,
+    proceed", "OK", "Send it", "Go ahead", "Approve", "Looks good",
+    "好的", "可以", "发送" — or close paraphrases — mean the user
+    agrees with whatever you just asked. Proceed without
+    re-confirming.
+  - **Negative replies → stop or skip.** "No", "Don't send",
+    "Cancel", "Stop", "不发", "取消" — mean the user does NOT want
+    the proposed action. Skip the action and finish with a short
+    plain-text result message explaining what was (and wasn't) done.
+  - **Anything else → treat as an instruction.** "改成 Liam 签名",
+    "Make it shorter", "Change the recipient to alex@x.com", "Pick
+    the second John" — apply the change (re-draft, swap recipient,
+    re-plan) and then call `propose_action` again with an updated
+    `message` + `drafts`.
+
+The user can also tap a chip from your `options` list; the chip's
+label arrives as plain text exactly as if they typed it. You can't
+tell the difference, and you don't need to.
+</user_reply_contract>
 
 <browser_takeover>
 When using `browser_tool`, captcha / 2FA / payment confirm / OAuth
@@ -106,8 +181,9 @@ reason and stop — do NOT try to solve them yourself.
 {GROUNDING_POLICY}
 
 <output_style>
-Action over explanation. Quiet while working. Speak only per the
-rules in <when_to_speak>. Final report is short.
+Action over explanation. Quiet while working. Speak only via
+`propose_action` (mid-execution proposals) or the final result
+message in plain text. Final result is short.
 </output_style>
 """
 
@@ -122,5 +198,5 @@ def make_card_execution_agent(
         system_prompt=_INSTRUCTIONS,
         backend=backend,
         checkpointer=get_checkpointer(),
-        tools=ALL_TOOLS,
+        tools=[*ALL_TOOLS, propose_action],
     )
