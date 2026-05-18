@@ -628,53 +628,25 @@ export default function BigBallLayout() {
     return () => clearInterval(t);
   }, []);
 
-  // Sphere lifecycle: new→normal (10s), processing→done (10s), done→remove (10s)
-  useEffect(() => {
-    const ticker = setInterval(() => {
-      const now = Date.now();
-      setSphereCards((prev) => {
-        let changed = false;
-        const next = prev.reduce<Intent[]>((acc, card) => {
-          const elapsed = now - (card.statusTimestamp || 0);
-          if (card.status === "new" && elapsed >= 10000) {
-            changed = true;
-            acc.push({ ...card, status: "normal", statusTimestamp: now });
-          } else if (card.status === "processing" && elapsed >= 10000) {
-            changed = true;
-            acc.push({ ...card, status: "done", statusTimestamp: now });
-          } else if (card.status === "done" && elapsed >= 10000) {
-            changed = true;
-            // removed
-          } else {
-            acc.push(card);
-          }
-          return acc;
-        }, []);
-        return changed ? next : prev;
-      });
-    }, 1000);
-    return () => clearInterval(ticker);
-  }, []);
-
-  // Periodically introduce a new "new" card on the sphere
-  useEffect(() => {
-    const addInterval = setInterval(() => {
-      setSphereCards((prev) => {
-        if (prev.length >= 14) return prev;
-        const shown = new Set(prev.map((c) => c.id));
-        const pool = INTENTS.filter((c) => !shown.has(c.id));
-        if (pool.length === 0) return prev;
-        const base = pool[Math.floor(Math.random() * pool.length)];
-        const newCard: Intent = {
-          ...base,
-          status: "new",
-          statusTimestamp: Date.now(),
-        };
-        return [...prev, newCard];
-      });
-    }, 7000 + Math.random() * 4000);
-    return () => clearInterval(addInterval);
-  }, []);
+  // Sphere card status is driven entirely by the real backend now:
+  //   • `cardsState.cards` (useCards / GET /api/cards, 30s poll)
+  //   • `cardActions.processingIds` / `doneIds` / `dismissedIds`
+  // The sync effect above (line ~466) recomputes sphereCards whenever
+  // any of those change, so we don't keep a local clock here. The
+  // previous Lovable-era `new → normal (10s) → processing → done (10s) →
+  // removed (10s)` ticker was a mock-data lifecycle simulator; on real
+  // cards it surfaced two visible bugs:
+  //   1. A card the user just Approved showed a green "DONE" ring 10s
+  //      later without the user ever confirming Done, because the
+  //      ticker auto-promoted processing → done locally.
+  //   2. The same ticker then dropped the card from sphereCards 10s
+  //      after that, only for the next `cardsState.cards` poll to add
+  //      it back, producing the 5 → 3 → 5 visible-count flicker.
+  // Card transitions to terminal states must come from real user
+  // actions (POST /feedback kind=done / dismiss) — never a local timer.
+  // Old `add new card` interval also lived here; INTENTS is empty for
+  // real users so it was a no-op already, and any real "new card"
+  // arrives via the next /api/cards poll. Both intervals removed.
 
   const handleCardTap = (card: Intent) => {
     setSelectedCard(card);
@@ -837,10 +809,31 @@ export default function BigBallLayout() {
             const card = sphereCards.find((c) => c.id === id);
             if (!card) return;
             if (card.status === "processing" || card.status === "done") {
+              // Real /api/cards path: route through `chatTarget` so
+              // ChatDetailView receives `runId={card.id}` and
+              // `useCardExecutionRun` actually fetches LangGraph history.
+              // The legacy `activeChat` branch (kept for empty-INTENTS
+              // mock parity) leaves runId undefined, the hook bails out
+              // at `if (!runId)`, no /chat-stream/history call ever
+              // fires, and the page hangs at "TASK running · CONTEXT"
+              // forever — which is exactly the empty-card pathology.
+              if (card.originalId) {
+                const real = cardsState.cards.find(
+                  (c) => c.card.id === card.originalId,
+                )?.card;
+                if (real) {
+                  chatEntryView.current = activeView;
+                  // No bootstrap — user re-entering an existing run;
+                  // they want to see what's already there, not kick
+                  // a fresh agent turn.
+                  setChatTarget({ card: real, bootstrap: undefined });
+                  return;
+                }
+              }
+              // Legacy mock fallback (unreachable when INTENTS is empty).
               const chatCard = card as ChatCard;
               setCardChats((prev) => prev.find((c) => c.id === chatCard.id) ? prev : [chatCard, ...prev]);
               chatEntryView.current = activeView;
-              // Processing cards opened from sphere → ask 1–3 input questions first.
               setChatMode(card.status === "done" ? "done" : "modify");
               setActiveChat(chatCard);
             } else {
