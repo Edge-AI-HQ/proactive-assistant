@@ -25,6 +25,7 @@ Once-shot task lifecycle (after migration 031):
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -47,6 +48,49 @@ from ..db.repositories.scheduled_tasks import (
 from ..db.rls import service_tx, user_scoped_tx
 
 logger = logging.getLogger(__name__)
+
+
+def _json_obj(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        return {}
+    raw = value.strip()
+    if raw.startswith("```"):
+        raw = raw.removeprefix("```json").removeprefix("```").strip()
+        raw = raw.removesuffix("```").strip()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _dream_result_fields(result: dict[str, Any]) -> dict[str, Any]:
+    raw_summary = result.get("summary")
+    parsed = _json_obj(raw_summary)
+    if not parsed:
+        parsed = _json_obj(result)
+
+    summary = parsed.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        summary = raw_summary if isinstance(raw_summary, str) else ""
+
+    profile_fields = (
+        parsed.get("profileFieldsUpdated")
+        or parsed.get("profile_fields_updated")
+        or []
+    )
+    if not isinstance(profile_fields, list):
+        profile_fields = []
+    profile_fields = [str(v) for v in profile_fields if str(v).strip()]
+
+    return {
+        "context_summary": summary.strip()[:2000] if summary.strip() else None,
+        "profile_updated": bool(profile_fields),
+        "profile_changed_keys": profile_fields,
+        "agent_report": parsed or result,
+    }
 
 
 class _DispatcherProtocol(Protocol):
@@ -258,7 +302,7 @@ class DefaultDispatcher:
             )
 
         try:
-            await self._call_chat("/agent/run/dream", task, run_id)
+            chat_result = await self._call_chat("/agent/run/dream", task, run_id)
         except Exception as e:
             if evol_id is not None:
                 try:
@@ -276,9 +320,20 @@ class DefaultDispatcher:
         if evol_id is not None:
             try:
                 async with user_scoped_tx(self._pool, task.user_id) as conn:
-                    await EvolutionRepository(task.user_id, conn).complete(
+                    repo = EvolutionRepository(task.user_id, conn)
+                    output_summary = await repo.summarize_outputs(run_id)
+                    result_fields = _dream_result_fields(chat_result)
+                    await repo.complete(
                         evol_id,
+                        **output_summary,
+                        context_summary=result_fields["context_summary"],
+                        profile_updated=result_fields["profile_updated"],
+                        profile_changed_keys=result_fields["profile_changed_keys"],
                         duration_ms=int((time.monotonic() - started) * 1000),
+                        details={
+                            "agentReport": result_fields["agent_report"],
+                            "outputSummary": output_summary,
+                        },
                     )
             except Exception:
                 logger.exception(
@@ -431,7 +486,7 @@ class DefaultDispatcher:
     async def _call_chat(
         self, path: str, task: ScheduledTaskRow, run_id: str,
         *, extra: dict | None = None,
-    ) -> None:
+    ) -> dict[str, Any]:
         # Need user's litellm_virtual_key — fetch from users table.
         async with service_tx(self._pool) as conn:
             cur = await conn.execute(
@@ -445,7 +500,7 @@ class DefaultDispatcher:
                 "skip dispatch: user=%d has no litellm_virtual_key (apis-managed)",
                 task.user_id,
             )
-            return
+            return {}
 
         # JWT carries `vk` so chat-worker can call /api/agent/sandbox/phantom/mint
         # — that endpoint gates on "is this a chat-driving JWT?", which is
@@ -485,3 +540,10 @@ class DefaultDispatcher:
                 f"body={resp.text[:300]}"
             )
             raise RuntimeError(msg)
+        if not resp.content:
+            return {}
+        try:
+            data = resp.json()
+        except ValueError:
+            return {"summary": resp.text[:2000]}
+        return data if isinstance(data, dict) else {"result": data}

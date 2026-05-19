@@ -152,6 +152,18 @@ class EvolutionRepository(UserScopedRepository):
         self,
         run_id: str,
         *,
+        context_summary: str | None = None,
+        memories_written: int | None = None,
+        memories_archived: int | None = None,
+        memories_superseded: int | None = None,
+        profile_updated: bool | None = None,
+        profile_changed_keys: list[str] | None = None,
+        skills_added: int | None = None,
+        skills_updated: int | None = None,
+        skills_disabled: int | None = None,
+        signals_consumed: int | None = None,
+        refs_consumed: dict[str, Any] | None = None,
+        refs_produced: dict[str, Any] | None = None,
         llm_tokens: int | None = None,
         duration_ms: int | None = None,
         details: dict[str, Any] | None = None,
@@ -161,18 +173,118 @@ class EvolutionRepository(UserScopedRepository):
                 """
                 UPDATE pai_evolution_runs
                 SET status = 'completed', completed_at = NOW(),
+                    context_summary = COALESCE(%s, context_summary),
+                    memories_written = COALESCE(%s, memories_written),
+                    memories_archived = COALESCE(%s, memories_archived),
+                    memories_superseded = COALESCE(%s, memories_superseded),
+                    profile_updated = COALESCE(%s, profile_updated),
+                    profile_changed_keys = COALESCE(%s::jsonb, profile_changed_keys),
+                    skills_added = COALESCE(%s, skills_added),
+                    skills_updated = COALESCE(%s, skills_updated),
+                    skills_disabled = COALESCE(%s, skills_disabled),
+                    signals_consumed = COALESCE(%s, signals_consumed),
+                    refs_consumed = COALESCE(%s::jsonb, refs_consumed),
+                    refs_produced = COALESCE(%s::jsonb, refs_produced),
                     llm_tokens = COALESCE(%s, llm_tokens),
                     duration_ms = COALESCE(%s, duration_ms),
                     details = COALESCE(%s::jsonb, details)
                 WHERE user_id = %s AND id = %s AND status = 'running'
                 """,
                 (
+                    context_summary,
+                    memories_written, memories_archived, memories_superseded,
+                    profile_updated,
+                    json.dumps(profile_changed_keys)
+                    if profile_changed_keys is not None else None,
+                    skills_added, skills_updated, skills_disabled,
+                    signals_consumed,
+                    json.dumps(refs_consumed) if refs_consumed is not None else None,
+                    json.dumps(refs_produced) if refs_produced is not None else None,
                     llm_tokens, duration_ms,
                     json.dumps(details) if details is not None else None,
                     self._user_id, run_id,
                 ),
             )
             return (cur.rowcount or 0) > 0
+
+    async def summarize_outputs(self, run_id: str) -> dict[str, Any]:
+        """Aggregate durable side effects written under one agent run id."""
+        async with self._conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT
+                  COUNT(*)::int AS memories_written,
+                  COUNT(*) FILTER (WHERE status = 'archived')::int
+                    AS memories_archived,
+                  COUNT(*) FILTER (WHERE status = 'superseded')::int
+                    AS memories_superseded,
+                  COALESCE(jsonb_agg(id ORDER BY created_at)
+                    FILTER (WHERE id IS NOT NULL), '[]'::jsonb) AS memory_ids
+                FROM pai_memory
+                WHERE user_id = %s AND source_run_id = %s
+                """,
+                (self._user_id, run_id),
+            )
+            memory = await cur.fetchone() or {}
+
+            await cur.execute(
+                """
+                SELECT
+                  COUNT(*) FILTER (WHERE created_run_id = %s)::int AS skills_added,
+                  COUNT(*) FILTER (
+                    WHERE last_updated_run_id = %s AND created_run_id <> %s
+                  )::int AS skills_updated,
+                  COUNT(*) FILTER (
+                    WHERE last_updated_run_id = %s AND status = 'disabled'
+                  )::int AS skills_disabled,
+                  COALESCE(jsonb_agg(id ORDER BY updated_at)
+                    FILTER (WHERE id IS NOT NULL), '[]'::jsonb) AS skill_ids
+                FROM pai_skill_index
+                WHERE user_id = %s
+                  AND (created_run_id = %s OR last_updated_run_id = %s)
+                """,
+                (
+                    run_id, run_id, run_id, run_id,
+                    self._user_id, run_id, run_id,
+                ),
+            )
+            skills = await cur.fetchone() or {}
+
+            await cur.execute(
+                """
+                SELECT
+                  COUNT(*)::int AS signals_consumed,
+                  COALESCE(jsonb_agg(id ORDER BY updated_at)
+                    FILTER (WHERE id IS NOT NULL), '[]'::jsonb) AS signal_ids
+                FROM pai_personal_signals
+                WHERE user_id = %s AND consumed_by_run_id = %s
+                """,
+                (self._user_id, run_id),
+            )
+            signals = await cur.fetchone() or {}
+
+        memory_ids = memory.get("memory_ids") or []
+        skill_ids = skills.get("skill_ids") or []
+        signal_ids = signals.get("signal_ids") or []
+        refs_consumed: dict[str, Any] = {}
+        refs_produced: dict[str, Any] = {}
+        if signal_ids:
+            refs_consumed["pai_personal_signals"] = signal_ids
+        if memory_ids:
+            refs_produced["pai_memory"] = memory_ids
+        if skill_ids:
+            refs_produced["pai_skill_index"] = skill_ids
+        return {
+            "memories_written": int(memory.get("memories_written") or 0),
+            "memories_archived": int(memory.get("memories_archived") or 0),
+            "memories_superseded": int(memory.get("memories_superseded") or 0),
+            "skills_added": int(skills.get("skills_added") or 0),
+            "skills_updated": int(skills.get("skills_updated") or 0),
+            "skills_disabled": int(skills.get("skills_disabled") or 0),
+            "signals_consumed": int(signals.get("signals_consumed") or 0),
+            "refs_consumed": refs_consumed,
+            "refs_produced": refs_produced,
+        }
 
     async def fail(self, run_id: str, *, error_message: str) -> bool:
         async with self._conn.cursor() as cur:
