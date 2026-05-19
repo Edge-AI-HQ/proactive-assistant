@@ -23,6 +23,7 @@ import {
 import { AmbientSyncScheduler } from "./sync-scheduler";
 import {
   getAmbientTimelinePipeline,
+  getAmbientTimelineStore,
   localEventIdsFromSignals,
   type AmbientTimelinePipeline,
 } from "./timeline";
@@ -32,6 +33,8 @@ import { LocationSource } from "./sources/location";
 import { SoundClassifierSource } from "./sources/sound-classifier";
 import type { AmbientSource, SourceContext } from "./sources/types";
 import { VisitSource } from "./sources/visit";
+import { maybeRunScheduledAmbientSummary } from "./timeline/scheduled-summary";
+import { ambientTimelineModels } from "./timeline/models";
 
 export { ALL_SOURCE_KEYS, DEFAULT_AUTO_START_SOURCES };
 export type { SourceKey };
@@ -391,7 +394,20 @@ export class AmbientRuntime {
     if (this.timelineSummaryInFlight) return;
     this.timelineSummaryInFlight = true;
     try {
-      await this.refreshTimeline();
+      const localDate = new Date().toISOString().slice(0, 10);
+      if (!ambientTimelineModels.generateAmbientSummaryEvent) return;
+      const localUserId = await currentDeviceOwnerUserId();
+      const result = await maybeRunScheduledAmbientSummary({
+        store: getAmbientTimelineStore(),
+        bridge: { generateAmbientSummaryEvent: ambientTimelineModels.generateAmbientSummaryEvent.bind(ambientTimelineModels) },
+        now: new Date(),
+        localDate,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+        localUserId: localUserId ?? "local",
+      });
+      if (result.ran && result.status === "success") {
+        await this.refreshTimeline(localDate);
+      }
     } finally {
       this.timelineSummaryInFlight = false;
     }
