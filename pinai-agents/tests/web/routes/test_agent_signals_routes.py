@@ -151,3 +151,44 @@ async def test_recent_hours_excludes_future_signals(client, pool, user_ids):
     ids = [item["id"] for item in r.json()["items"]]
     assert "sig_voice_recent" in ids
     assert "sig_future_home" not in ids
+
+
+@pytest.mark.asyncio
+async def test_recent_accepts_daily_dream_full_context_limit(client, pool, user_ids):
+    user_a, _ = user_ids
+    now = datetime.now(UTC)
+    async with user_scoped_tx(pool, user_a) as conn:
+        repo = PersonalSignalsRepository(user_a, conn)
+        await repo.ingest_one(IngestSignalInput(
+            id="sig_daily_dream_limit",
+            kind="ambient.candidate_window",
+            title="Daily dream context",
+            summary="This row proves the 10000 limit is accepted.",
+            payload={"transcript": "Full transcript text should be available."},
+            occurred_at=now - timedelta(minutes=5),
+            salience=0.7,
+            source="test",
+        ))
+
+    r = await client.get(
+        "/api/agent/signals/recent?status=all&hours=24&limit=10000&includePayload=true",
+        headers=_auth(user_a),
+    )
+    assert r.status_code == 200, r.text
+    items = {item["id"]: item for item in r.json()["items"]}
+    assert "sig_daily_dream_limit" in items
+    assert items["sig_daily_dream_limit"]["payload"]["transcript"] == (
+        "Full transcript text should be available."
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_raw_accepts_daily_dream_full_context_limit(client, user_ids):
+    user_a, _ = user_ids
+
+    r = await client.get(
+        "/api/agent/raw/gmail/messages?limit=10000",
+        headers=_auth(user_a),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["items"] == []

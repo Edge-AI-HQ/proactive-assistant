@@ -208,7 +208,7 @@ LLM 失败:`evolution_runs.status='failed'` + `error_message`,raw + signals 保�
 
 scheduler 派(每日按用户 timezone 06:00 左右一次)→ web 侧 `_dispatch_dream` 先写 `pai_evolution_runs` 行(`status='running'`)→ POST `chat /agent/run/dream` → chat agent 跑长 loop → web 侧根据 HTTP 结果翻 `completed` / `failed`。
 
-输入:近 24–48h personal_signals + recent raw + 当天 chat transcript + 当前 memory / profile / goals。
+输入:过去 24h 的 personal_signals 全量窗口是主输入,`auto.dreaming` 必须用 `status=all, hours=24, limit=10000, includePayload=true` 拉取,避免默认 20–50 条分页漏掉当天 ambient transcript / connector summary,同时保证 transcript payload 正文也进入分析窗口。raw 是同一 24h 窗口的补充证据,通过 `raw.list(..., hours=24, limit=10000)` 按支持的 typed raw source 拉取;再叠加当前 memory / profile / goals。
 
 输出:`memory.add` / `memory.supersede`(整理矛盾)/ `profile.upsert`(每日漂移)/ 偶尔 `goals.upsert`。失败 lifecycle 包在 dispatcher 里,chat OOM 也能翻成 `failed` 不留 ghost row。
 

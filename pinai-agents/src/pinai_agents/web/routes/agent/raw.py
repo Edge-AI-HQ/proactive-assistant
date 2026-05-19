@@ -63,7 +63,7 @@ async def list_raw(
     pool=Depends(get_pool),
     since: datetime | None = Query(None),
     until: datetime | None = Query(None),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int = Query(50, ge=1, le=10_000),
     dedupe_key: str | None = Query(None, alias="dedupeKey"),
 ):
     """Read recent rows from the typed raw table for (toolkit, entity).

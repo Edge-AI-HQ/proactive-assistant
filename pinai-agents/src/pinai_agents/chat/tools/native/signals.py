@@ -53,7 +53,7 @@ class SignalsRecentInput(BaseModel):
     )
     hours: int | None = Field(default=24, ge=1, le=336,
         description="Look-back window in hours. None = no time bound.")
-    limit: int = Field(default=20, ge=1, le=100)
+    limit: int = Field(default=20, ge=1, le=10_000)
 
 
 @tool("signals_recent", args_schema=SignalsRecentInput)

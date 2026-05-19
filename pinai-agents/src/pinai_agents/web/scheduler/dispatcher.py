@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from typing import Any, Protocol
@@ -49,6 +50,8 @@ from ..db.rls import service_tx, user_scoped_tx
 
 logger = logging.getLogger(__name__)
 
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+
 
 def _json_obj(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
@@ -56,14 +59,25 @@ def _json_obj(value: Any) -> dict[str, Any]:
     if not isinstance(value, str):
         return {}
     raw = value.strip()
-    if raw.startswith("```"):
-        raw = raw.removeprefix("```json").removeprefix("```").strip()
-        raw = raw.removesuffix("```").strip()
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+    normalized = raw.replace("\\n", "\n")
+    candidates = [raw, normalized]
+    fenced = _JSON_FENCE_RE.search(normalized)
+    if fenced:
+        candidates.insert(0, fenced.group(1).strip())
+    elif raw.startswith("```"):
+        candidates.insert(
+            0,
+            raw.removeprefix("```json").removeprefix("```")
+            .removesuffix("```").strip(),
+        )
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
 
 
 def _dream_result_fields(result: dict[str, Any]) -> dict[str, Any]:

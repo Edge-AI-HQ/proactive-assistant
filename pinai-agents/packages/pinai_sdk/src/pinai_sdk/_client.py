@@ -173,12 +173,14 @@ class Signals(_Endpoint):
         hours: int | None = 24,
         min_salience: float | None = None,
         limit: int = 30,
+        include_payload: bool = False,
     ) -> list[dict[str, Any]]:
         """status ∈ {open, consumed, archived, all}. hours filters by
         occurred_at window (server-side translation to since)."""
         payload = await self._get(
             "/recent", status=status, kind=kind, hours=hours,
             minSalience=min_salience, limit=limit,
+            includePayload=include_payload,
         )
         return payload.get("items", []) if isinstance(payload, dict) else []
 
@@ -650,7 +652,8 @@ client.signals
   .kinds(*, status="all", hours=None) -> list       # discover what kinds exist
                                                      # → [{kind, count, latestAt, latestTitle, latestSummaryPreview}]
   .recent(*, status="open", kind=None, hours=24,
-          min_salience=None, limit=30) -> list      # status: open|consumed|archived|all
+          min_salience=None, limit=30,
+          include_payload=False) -> list            # status: open|consumed|archived|all
   .get(id) -> dict | None
   .consume(*, id, run_id) -> None
   .add(*, kind, title, summary="", salience=0.0, confidence=0.0,

@@ -36,7 +36,8 @@ client.signals
   .kinds(*, status="all", hours=None) -> list       # discover what kinds exist
                                                      # → [{kind, count, latestAt, latestTitle, latestSummaryPreview}]
   .recent(*, status="open", kind=None, hours=24,
-          min_salience=None, limit=30) -> list      # status: open|consumed|archived|all
+          min_salience=None, limit=30,
+          include_payload=False) -> list            # status: open|consumed|archived|all
   .get(id) -> dict | None
   .consume(*, id, run_id) -> None
   .add(*, kind, title, summary="", salience=0.0, confidence=0.0,

@@ -5,7 +5,7 @@ import pytest
 
 from pinai_agents.web.db.repositories.scheduled_tasks import ScheduledTasksRepository
 from pinai_agents.web.db.rls import service_tx, user_scoped_tx
-from pinai_agents.web.scheduler.dispatcher import DefaultDispatcher
+from pinai_agents.web.scheduler.dispatcher import DefaultDispatcher, _dream_result_fields
 
 
 def test_generator_tasks_use_long_running_lease():
@@ -13,6 +13,22 @@ def test_generator_tasks_use_long_running_lease():
 
     assert dispatcher._lease_for("generator.manual") == 600
     assert dispatcher._lease_for("generator.auto") == 600
+
+
+def test_dream_result_fields_extracts_fenced_json_from_text_block_string():
+    fields = _dream_result_fields({
+        "summary": (
+            "[{'type': 'text', 'text': '```json\\n"
+            '{"memoriesWritten":1,"memoriesSuperseded":0,'
+            '"profileFieldsUpdated":["facts"],'
+            '"summary":"Daily context covered."}'
+            "\\n```'}]"
+        ),
+    })
+
+    assert fields["context_summary"] == "Daily context covered."
+    assert fields["profile_updated"] is True
+    assert fields["profile_changed_keys"] == ["facts"]
 
 
 @pytest.mark.asyncio

@@ -32,7 +32,7 @@ def _since_from_hours(hours: int | None) -> str | None:
 
 class RawListInput(BaseModel):
     hours: int = Field(default=24, ge=1, le=336)
-    limit: int = Field(default=20, ge=1, le=100)
+    limit: int = Field(default=20, ge=1, le=10_000)
 
 
 @tool("raw_gmail_recent", args_schema=RawListInput)
@@ -57,7 +57,7 @@ async def raw_gcal_today(hours: int, limit: int):
 
 class RawGcalWeekInput(BaseModel):
     hours: int = Field(default=168, ge=1, le=336)
-    limit: int = Field(default=50, ge=1, le=200)
+    limit: int = Field(default=50, ge=1, le=10_000)
 
 
 @tool("raw_gcal_week", args_schema=RawGcalWeekInput)
@@ -94,7 +94,7 @@ class RawListGenericInput(BaseModel):
         description="Entity within the toolkit (e.g. 'messages', 'pages', 'issues').",
     )
     hours: int | None = Field(default=72, ge=1, le=336)
-    limit: int = Field(default=20, ge=1, le=200)
+    limit: int = Field(default=20, ge=1, le=10_000)
 
 
 _RAW_LIST_DESCRIPTION = (

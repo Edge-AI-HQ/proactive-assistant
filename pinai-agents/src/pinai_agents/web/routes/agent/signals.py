@@ -26,7 +26,8 @@ async def list_signals(
     kind: str | None = Query(None),
     hours: int | None = Query(None, ge=1, le=24 * 14),
     min_salience: float | None = Query(None, ge=0, le=1, alias="minSalience"),
-    limit: int = Query(30, ge=1, le=200),
+    limit: int = Query(30, ge=1, le=10_000),
+    include_payload: bool = Query(False, alias="includePayload"),
 ):
     actual_status = None if status_filter == "all" else status_filter
     since = None
@@ -45,11 +46,22 @@ async def list_signals(
             status=actual_status, kind=kind,
             min_salience=min_salience, since=since, before=before, limit=limit,
         )
-    return {"items": [{
-        "id": r.id, "kind": r.kind, "title": r.title, "summary": r.summary,
-        "salience": r.salience, "occurredAt": r.occurred_at.isoformat(),
-        "status": r.status, "subject": r.subject,
-    } for r in rows]}
+    items = []
+    for r in rows:
+        item = {
+            "id": r.id, "kind": r.kind, "title": r.title, "summary": r.summary,
+            "salience": r.salience, "occurredAt": r.occurred_at.isoformat(),
+            "status": r.status, "subject": r.subject,
+        }
+        if include_payload:
+            item.update({
+                "payload": r.payload,
+                "confidence": r.confidence,
+                "source": r.source,
+                "deviceId": r.device_id,
+            })
+        items.append(item)
+    return {"items": items}
 
 
 @router.get("/kinds")
