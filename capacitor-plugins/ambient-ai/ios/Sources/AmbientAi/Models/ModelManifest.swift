@@ -110,7 +110,7 @@ enum ModelManifest {
             file: "Qwen3-1.7B-Q4_K_M.gguf",
             approxBytes: 1_100_000_000,
             magic: .gguf,
-            notes: "Strong tradeoff; recommended LLM default for ambient summarization."
+            notes: "Strong Qwen option for ambient summarization."
         ),
         ModelProfile(
             id: "gemma-2-2b-q4",
