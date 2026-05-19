@@ -60,9 +60,18 @@ export function useAmbientTimeline(localDate = todayLocalDate()): UseAmbientTime
       }),
       loadLatestRawEvents(store, localDate),
     ]);
+    const pendingRawTranscriptIds = new Set(
+      pending.flatMap((window) =>
+        window.rawRefs
+          .filter((ref) => ref.sourceType === "transcript")
+          .map((ref) => ref.id),
+      ),
+    );
     setPendingTranscriptCount(pending.length);
     setPendingTranscriptWindows(pending);
-    setLatestRawEvents(latestRaw);
+    setLatestRawEvents(latestRaw.filter((raw) =>
+      raw.sourceType !== "transcript" || !pendingRawTranscriptIds.has(raw.id),
+    ));
     setEvents(rows.filter(isDisplayableTimelineEvent));
     setStoreStatus(store.status());
     setLoading(false);

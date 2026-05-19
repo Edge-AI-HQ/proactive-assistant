@@ -191,4 +191,17 @@ describe("candidateWindowToSignal", () => {
     expect(second.payload?.content_hash).toBe("ctx_second");
   });
 
+  test("keeps nearby motion context out of transcript summary text", () => {
+    const signal = candidateWindowToSignal({
+      ...candidateWindow,
+      compactContext: "这是转录正文。 Motion context: Motion stationary for 7m 56s.",
+    }, {
+      sourcePayloads: [],
+      contextHash: "ctx_motion",
+    });
+
+    expect(signal.summary).toBe("这是转录正文。");
+    expect(signal.payload?.compact_context).toBe("这是转录正文。");
+  });
+
 });

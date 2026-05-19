@@ -13,6 +13,8 @@ struct AudioCaptureConfig {
     static let defaultPostRollMs = 10_000
     static let defaultMaxBurstMs = 30_000
     static let defaultMinBurstMs = 800
+    static let defaultSessionSilenceGapMs = 30_000
+    static let defaultMaxSessionDurationMs = 5 * 60 * 1_000
     static let defaultWavRetentionTtlMs = 60 * 60 * 1_000
     static let defaultWavMaxBytes = 100 * 1024 * 1024
     static let defaultWavMaxFiles = 120
@@ -27,6 +29,8 @@ struct AudioCaptureConfig {
     let postRollMs: Int
     let maxBurstMs: Int
     let minBurstMs: Int
+    let sessionSilenceGapMs: Int
+    let maxSessionDurationMs: Int
     let wavRetentionTtlMs: Int
     let wavMaxBytes: Int
     let wavMaxFiles: Int
@@ -44,6 +48,8 @@ struct AudioCaptureConfig {
         postRollMs: Int = AudioCaptureConfig.defaultPostRollMs,
         maxBurstMs: Int = AudioCaptureConfig.defaultMaxBurstMs,
         minBurstMs: Int = AudioCaptureConfig.defaultMinBurstMs,
+        sessionSilenceGapMs: Int = AudioCaptureConfig.defaultSessionSilenceGapMs,
+        maxSessionDurationMs: Int = AudioCaptureConfig.defaultMaxSessionDurationMs,
         wavRetentionTtlMs: Int = AudioCaptureConfig.defaultWavRetentionTtlMs,
         wavMaxBytes: Int = AudioCaptureConfig.defaultWavMaxBytes,
         wavMaxFiles: Int = AudioCaptureConfig.defaultWavMaxFiles
@@ -90,6 +96,18 @@ struct AudioCaptureConfig {
                 minimum: resolvedMinBurstMs,
                 maximum: 300_000
             )
+        )
+        self.sessionSilenceGapMs = Self.positive(
+            sessionSilenceGapMs,
+            fallback: Self.defaultSessionSilenceGapMs,
+            minimum: self.postRollMs,
+            maximum: 10 * 60 * 1_000
+        )
+        self.maxSessionDurationMs = Self.positive(
+            maxSessionDurationMs,
+            fallback: Self.defaultMaxSessionDurationMs,
+            minimum: 60_000,
+            maximum: 60 * 60 * 1_000
         )
         self.wavRetentionTtlMs = Self.positive(
             wavRetentionTtlMs,

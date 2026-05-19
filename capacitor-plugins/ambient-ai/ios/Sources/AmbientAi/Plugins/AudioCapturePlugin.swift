@@ -403,6 +403,8 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
             postRollMs: call.getInt("postRollMs") ?? AudioCaptureConfig.defaultPostRollMs,
             maxBurstMs: call.getInt("maxBurstMs") ?? AudioCaptureConfig.defaultMaxBurstMs,
             minBurstMs: call.getInt("minBurstMs") ?? AudioCaptureConfig.defaultMinBurstMs,
+            sessionSilenceGapMs: call.getInt("sessionSilenceGapMs") ?? AudioCaptureConfig.defaultSessionSilenceGapMs,
+            maxSessionDurationMs: call.getInt("maxSessionDurationMs") ?? AudioCaptureConfig.defaultMaxSessionDurationMs,
             wavRetentionTtlMs: call.getInt("wavRetentionTtlMs") ?? AudioCaptureConfig.defaultWavRetentionTtlMs,
             wavMaxBytes: call.getInt("wavMaxBytes") ?? AudioCaptureConfig.defaultWavMaxBytes,
             wavMaxFiles: call.getInt("wavMaxFiles") ?? AudioCaptureConfig.defaultWavMaxFiles

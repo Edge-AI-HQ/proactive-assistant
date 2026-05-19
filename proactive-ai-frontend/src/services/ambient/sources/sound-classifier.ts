@@ -33,6 +33,8 @@ const LIVE_AUDIO_CONFIG = {
   postRollMs: 2_500,
   maxBurstMs: 12_000,
   minBurstMs: 600,
+  sessionSilenceGapMs: 30_000,
+  maxSessionDurationMs: 5 * 60_000,
 } as const;
 const INTENTIONAL_SUPPRESSION_REASONS = new Set(["media", "playback"]);
 const UNHEALTHY_ENGINE_STATES = new Set(["failed", "stale", "suspended"]);

@@ -31,6 +31,7 @@ import type {
 } from "@/services/ambient/timeline";
 import type { RuntimeStatus } from "@/services/ambient";
 import type { LiveSession } from "@/services/ambient/live-session";
+import { transcriptTextOnly } from "@/services/ambient/timeline/utils";
 import type { UserDevice, UserDevicePlatform } from "@/lib/api";
 
 /* ──────────────── TIMELINE (today's narrative) ──────────────── */
@@ -304,7 +305,8 @@ function soundBody(text: string): string {
 }
 
 function transcriptWindowPreview(compactContext: string): string {
-  const segments = compactContext
+  const transcriptText = transcriptTextOnly(compactContext);
+  const segments = (transcriptText || "Voice transcript captured.")
     .split(/Transcript segment:\s*/g)
     .map((part) => part.replace(/^Sound context:\s*/i, "").trim())
     .filter(Boolean);

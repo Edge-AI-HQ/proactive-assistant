@@ -6,7 +6,7 @@ import {
   AMBIENT_TIMELINE_KIND,
   AMBIENT_TIMELINE_SCHEMA_VERSION,
 } from "./types";
-import { stripTranscriptSegmentLabels } from "./utils";
+import { transcriptTextOnly } from "./utils";
 
 
 export interface AmbientWindowSourcePayload {
@@ -33,7 +33,7 @@ export function candidateWindowToSignal(
     ? `ambient:candidate_window:${window.localDate}:transcript_session:${window.id}`
     : `ambient:candidate_window:${window.localDate}:${window.id}`;
   const compactContext = window.windowType === "transcript_session"
-    ? stripTranscriptSegmentLabels(window.compactContext)
+    ? transcriptTextOnly(window.compactContext)
     : window.compactContext;
   return {
     id: `ambient_candidate_window_${safeIdPart(window.id)}`,

@@ -110,6 +110,15 @@ export function stripTranscriptSegmentLabels(value: string): string {
     .trim();
 }
 
+const TRANSCRIPT_CONTEXT_LABEL_PATTERN = /\b(?:sound|motion|location|place|visit) context:\s*/i;
+
+export function transcriptTextOnly(value: string): string {
+  const stripped = stripTranscriptSegmentLabels(value);
+  const contextStart = stripped.search(TRANSCRIPT_CONTEXT_LABEL_PATTERN);
+  const transcript = contextStart >= 0 ? stripped.slice(0, contextStart) : stripped;
+  return transcript.replace(/\s+/g, " ").trim();
+}
+
 export function jsonCloneRecord(
   value: Record<string, unknown>,
 ): Record<string, unknown> {

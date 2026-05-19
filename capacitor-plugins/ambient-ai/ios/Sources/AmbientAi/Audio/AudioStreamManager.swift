@@ -19,6 +19,7 @@ actor AudioStreamManager {
 
     private var config = AudioCaptureConfig.default
     private var captureSessionId = UUID().uuidString
+    private var captureSessionFirstCaptureStartedAt: Date?
     private var isCaptureRunning = false
     private var isClassificationRunning = false
     private var isPaused = false
@@ -26,6 +27,7 @@ actor AudioStreamManager {
     private var stopCurrentRecording = false
     private var suppressionReasons: Set<AudioSuppressedReason> = []
     private var lastSpeechAt = Date()
+    private var lastCaptureSpeechEndedAt: Date?
     private var pendingTranscripts: [TranscriptReadyRecord] = []
     private var segmentIndex = 0
     private var stitcher = TranscriptStitcher()
@@ -69,7 +71,7 @@ actor AudioStreamManager {
             return
         }
 
-        captureSessionId = UUID().uuidString
+        rotateCaptureSession(now: Date())
         isCaptureRunning = true
         isPaused = false
         // If iOS delivered an interruption began event but the matching ended
@@ -296,6 +298,7 @@ actor AudioStreamManager {
         isCapturing = true
         stopCurrentRecording = false
         currentCaptureTriggerSource = triggerSource
+        rotateCaptureSessionIfNeeded(now: Date())
         lastSpeechAt = Date()
         emitState()
 
@@ -421,6 +424,7 @@ actor AudioStreamManager {
         }
 
         let capturedAt = Date()
+        lastCaptureSpeechEndedAt = lastSpeechAt
         let metadata: AudioCaptureMetadata
         do {
             metadata = try await fileStore.saveWav(
@@ -503,6 +507,36 @@ actor AudioStreamManager {
             triggerSource: triggerSource,
             transcriptLocale: transcriptLocale
         )
+    }
+
+    private func rotateCaptureSessionIfNeeded(now: Date) {
+        guard let firstCaptureStartedAt = captureSessionFirstCaptureStartedAt else {
+            captureSessionFirstCaptureStartedAt = now
+            return
+        }
+
+        let sessionAgeMs = Int(now.timeIntervalSince(firstCaptureStartedAt) * 1_000)
+        let idleGapMs = lastCaptureSpeechEndedAt.map {
+            Int(now.timeIntervalSince($0) * 1_000)
+        }
+
+        if sessionAgeMs >= config.maxSessionDurationMs {
+            rotateCaptureSession(now: now)
+            captureSessionFirstCaptureStartedAt = now
+            return
+        }
+        if let idleGapMs, idleGapMs >= config.sessionSilenceGapMs {
+            rotateCaptureSession(now: now)
+            captureSessionFirstCaptureStartedAt = now
+        }
+    }
+
+    private func rotateCaptureSession(now: Date) {
+        captureSessionId = UUID().uuidString
+        captureSessionFirstCaptureStartedAt = nil
+        lastCaptureSpeechEndedAt = nil
+        segmentIndex = 0
+        stitcher = TranscriptStitcher()
     }
 
     private func transcribeLocally(wavURL: URL, durationMs: Int) async -> LocalTranscriptionResult? {

@@ -109,4 +109,29 @@ describe("useAmbientTimeline", () => {
     expect(screen.queryByText("specific title from context")).toBeNull();
     expect(screen.queryByText("specific summary from context")).toBeNull();
   });
+
+  test("does not return latest raw transcript when a pending window already represents it", async () => {
+    storeMock.init.mockResolvedValue(undefined);
+    storeMock.listTimelineEvents.mockResolvedValue([]);
+    storeMock.listCandidateWindows.mockResolvedValue([{
+      id: "win-transcript",
+      rawRefs: [{ sourceType: "transcript", id: "raw-transcript" }],
+    }]);
+    storeMock.listRawEvents.mockImplementation(async ({ sourceType }: { sourceType: string }) =>
+      sourceType === "transcript"
+        ? [{
+            id: "raw-transcript",
+            sourceType: "transcript",
+            compactText: "这段已经在 pending window 里。",
+            occurredAt: "2026-05-15T10:00:00.000Z",
+          }]
+        : [],
+    );
+    runtimeMock.refreshTimeline.mockResolvedValue([]);
+
+    render(<AmbientTimelineProbe />);
+
+    expect(await screen.findByText("ready")).toBeTruthy();
+    expect(screen.queryByText("这段已经在 pending window 里。")).toBeNull();
+  });
 });

@@ -633,6 +633,8 @@ describe("SoundClassifierSource transcript ingest", () => {
       postRollMs: 2500,
       maxBurstMs: 12000,
       minBurstMs: 600,
+      sessionSilenceGapMs: 30000,
+      maxSessionDurationMs: 300000,
     });
     expect(ambientAiMock.listenerRemove).toHaveBeenCalledTimes(3);
     expect(ambientAiMock.sound.stopClassification).toHaveBeenCalledTimes(1);

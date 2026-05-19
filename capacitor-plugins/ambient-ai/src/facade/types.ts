@@ -94,6 +94,8 @@ export interface AudioCaptureConfig {
   postRollMs?: number;
   maxBurstMs?: number;
   minBurstMs?: number;
+  sessionSilenceGapMs?: number;
+  maxSessionDurationMs?: number;
   wavRetentionTtlMs?: number;
   wavMaxBytes?: number;
   wavMaxFiles?: number;

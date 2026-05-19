@@ -249,4 +249,21 @@ describe("AmbientView ambient toggle", () => {
     expect(screen.queryByText(/^summary$/)).toBeNull();
   });
 
+  test("does not show motion context inside pending transcript text", async () => {
+    runtimeMock.status.mockReturnValue(makeStatus());
+    ambientTimelineMock.pendingTranscriptCount = 1;
+    ambientTimelineMock.pendingTranscriptWindows = [{
+      id: "win-transcript-1",
+      startedAt: "2026-05-18T10:12:00.000Z",
+      compactContext: "对决每年的世界杯决赛杯，决赛就是美国队大法国队。 Motion context: Motion stationary for 7m 56s.",
+      confidenceHint: 0.55,
+    }];
+
+    render(<AmbientView />);
+
+    expect(await screen.findByText("Voice transcript pending")).toBeTruthy();
+    expect(await screen.findByText("对决每年的世界杯决赛杯，决赛就是美国队大法国队。")).toBeTruthy();
+    expect(screen.queryByText(/Motion context/i)).toBeNull();
+  });
+
 });

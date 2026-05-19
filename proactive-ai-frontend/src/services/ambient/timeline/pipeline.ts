@@ -26,6 +26,7 @@ import {
   stableHash,
   stableId,
   stripTranscriptSegmentLabels,
+  transcriptTextOnly,
   uniqueRawRefs,
   uniqueStrings,
 } from "./utils";
@@ -607,7 +608,7 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     ].filter(Boolean);
     const additionsText = additions.join(" ");
     const compactContext = existing?.compactContext
-      ? stripTranscriptSegmentLabels([existing.compactContext, additionsText].filter(Boolean).join(" "))
+      ? stripTranscriptSegmentLabels([transcriptTextOnly(existing.compactContext), additionsText].filter(Boolean).join(" "))
       : additionsText || transcriptText;
     const evidenceWindows = [...soundWindows, ...locationWindows, ...motionWindows, ...visitWindows];
     const evidenceRawRefs = evidenceWindows.flatMap((window) => window.rawRefs);
