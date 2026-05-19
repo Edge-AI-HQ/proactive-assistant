@@ -9,7 +9,7 @@ enum AudioCloudMode: String {
 struct AudioCaptureConfig {
     static let defaultModelName = "gpt-4o-transcribe"
     static let defaultCloudRefineTimeoutMs = 20_000
-    static let defaultPreRollMs = 500
+    static let defaultPreRollMs = 2_000
     static let defaultPostRollMs = 10_000
     static let defaultMaxBurstMs = 30_000
     static let defaultMinBurstMs = 800

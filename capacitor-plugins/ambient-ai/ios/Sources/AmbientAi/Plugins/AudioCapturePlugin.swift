@@ -1,7 +1,6 @@
 import AVFoundation
 @preconcurrency import Capacitor
 import Foundation
-import Speech
 import UIKit
 
 @objc(AudioCapturePlugin)
@@ -81,20 +80,13 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
     @objc public override func requestPermissions(_ call: CAPPluginCall) {
         switch AVAudioApplication.shared.recordPermission {
         case .granted, .denied:
-            requestSpeechPermissionIfNeeded { speech in
-                call.resolve([
-                    "microphone": self.microphonePermissionState(),
-                    "speechRecognition": speech,
-                ])
-            }
+            resolveAudioPermissions(call)
         case .undetermined:
             AVAudioApplication.requestRecordPermission { granted in
-                self.requestSpeechPermissionIfNeeded { speech in
-                    call.resolve([
-                        "microphone": granted ? "granted" : "denied",
-                        "speechRecognition": speech,
-                    ])
-                }
+                call.resolve([
+                    "microphone": granted ? "granted" : "denied",
+                    "speechRecognition": self.speechPermissionState(),
+                ])
             }
         @unknown default:
             call.resolve([
@@ -332,6 +324,13 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
 
     // MARK: - Private
 
+    private func resolveAudioPermissions(_ call: CAPPluginCall) {
+        call.resolve([
+            "microphone": microphonePermissionState(),
+            "speechRecognition": speechPermissionState(),
+        ])
+    }
+
     private func microphonePermissionState() -> String {
         switch AVAudioApplication.shared.recordPermission {
         case .granted: return "granted"
@@ -342,36 +341,9 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
     }
 
     private func speechPermissionState() -> String {
-        switch SFSpeechRecognizer.authorizationStatus() {
-        case .authorized: return "granted"
-        case .denied, .restricted: return "denied"
-        case .notDetermined: return "prompt"
-        @unknown default: return "prompt"
-        }
-    }
-
-    private func requestSpeechPermissionIfNeeded(_ completion: @escaping (String) -> Void) {
-        switch SFSpeechRecognizer.authorizationStatus() {
-        case .authorized:
-            completion("granted")
-        case .denied, .restricted:
-            completion("denied")
-        case .notDetermined:
-            SFSpeechRecognizer.requestAuthorization { status in
-                switch status {
-                case .authorized:
-                    completion("granted")
-                case .denied, .restricted:
-                    completion("denied")
-                case .notDetermined:
-                    completion("prompt")
-                @unknown default:
-                    completion("prompt")
-                }
-            }
-        @unknown default:
-            completion("prompt")
-        }
+        // Local SFSpeech transcription is dormant; do not touch Speech APIs on
+        // the ambient startup path.
+        return "prompt"
     }
 
     private func notifyAudioError(_ message: String, source: String) {

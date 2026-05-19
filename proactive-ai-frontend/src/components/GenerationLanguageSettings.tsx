@@ -25,7 +25,7 @@ export default function GenerationLanguageSettings() {
     }
   };
 
-  const value = settings?.generationLanguage ?? "zh-Hans";
+  const value = settings?.generationLanguage ?? "en";
 
   return (
     <div>

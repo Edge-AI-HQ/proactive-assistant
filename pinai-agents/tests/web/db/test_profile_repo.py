@@ -164,8 +164,8 @@ async def test_settings_lazy_create_returns_defaults(pool, user_ids):
     async with user_scoped_tx(pool, user_a) as conn:
         repo = ProfileRepository(user_a, conn)
         s = await repo.get_settings()
-    # Column defaults from 010_pai_core_state.sql + 037_*.sql + 038_*.sql
-    assert s.generation_language == "zh-Hans"
+    # Column defaults from 010_pai_core_state.sql + later ALTER-default migrations.
+    assert s.generation_language == "en"
     assert s.auto_generate is True
     assert s.auto_generate_interval_minutes == 720
     assert s.auto_dreaming is False

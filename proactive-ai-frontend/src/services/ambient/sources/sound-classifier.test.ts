@@ -139,7 +139,7 @@ describe("SoundClassifierSource transcript ingest", () => {
 
     expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
       expect.objectContaining({ wavId: "wav-cloud" }),
-      "zh",
+      "en",
     );
     expect(getAmbientLiveTranscriptSnapshot()).toMatchObject({
       captureSessionId: "capture-cloud",
@@ -375,7 +375,7 @@ describe("SoundClassifierSource transcript ingest", () => {
     await flushMicrotasks();
     expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
       expect.objectContaining({ wavId: "wav-stop" }),
-      "zh",
+      "en",
     );
 
     await source.stop();
@@ -445,11 +445,11 @@ describe("SoundClassifierSource transcript ingest", () => {
 
     expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
       expect.objectContaining({ wavId: "wav-first" }),
-      "zh",
+      "en",
     );
     expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
       expect.objectContaining({ wavId: "wav-second" }),
-      "zh",
+      "en",
     );
     expect(pushed).toEqual([
       expect.objectContaining({ dedupe_key: "ios:audio:burst-first" }),
@@ -457,7 +457,7 @@ describe("SoundClassifierSource transcript ingest", () => {
     ]);
   });
 
-  test("drains pending native transcripts on refresh after background", async () => {
+  test("ignores pending local speech transcripts on refresh after background", async () => {
     const pushed: unknown[] = [];
     const ctx: SourceContext = {
       push: (item) => pushed.push(item),
@@ -488,13 +488,9 @@ describe("SoundClassifierSource transcript ingest", () => {
     await source.flushPendingAudioRecoveryForTest();
 
     expect(ambientAiMock.audio.drainPendingTranscripts).toHaveBeenCalledTimes(2);
-    expect(pushed).toEqual([
-      expect.objectContaining({
-        kind: "session_summary",
-        summary: "Background transcript should be recovered when the app returns foreground.",
-        dedupe_key: "ios:audio:burst-background",
-      }),
-    ]);
+    expect(pushed).toEqual([]);
+    expect(ambientAiMock.audio.markCaptureProcessed).not.toHaveBeenCalledWith({ wavId: "wav-background" });
+    expect(ctx.onEvent).toHaveBeenCalledWith("sound_classifier", "Ignored transcript provider: local_speech");
   });
 
   test("transcribes missed recent captures on refresh after background", async () => {
@@ -533,7 +529,7 @@ describe("SoundClassifierSource transcript ingest", () => {
         burstId: "burst-missed",
         triggerSource: "recent_capture_scan",
       }),
-      "zh",
+      "en",
     );
     expect(pushed).toEqual([
       expect.objectContaining({
@@ -542,6 +538,75 @@ describe("SoundClassifierSource transcript ingest", () => {
         dedupe_key: "ios:audio:burst-missed",
       }),
     ]);
+  });
+
+  test("keeps failed cloud captures unprocessed so recovery can retry them", async () => {
+    const pushed: unknown[] = [];
+    const ctx: SourceContext = {
+      push: (item) => pushed.push(item),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+    captureTranscriptionMock.transcribeAmbientCapture
+      .mockRejectedValueOnce(new Error("network offline"))
+      .mockResolvedValueOnce({
+        text: "Recovered cloud transcript after the network came back.",
+        event: {},
+      });
+
+    await source.start();
+    await source.flushPendingAudioRecoveryForTest();
+
+    await source.handleCaptureReadyForTest({
+      platform: "ios",
+      wavId: "wav-retry",
+      burstId: "burst-retry",
+      captureSessionId: "capture-retry",
+      capturedAt: "2026-05-18T02:46:30.000Z",
+      durationMs: 3080,
+      byteSize: 295_616,
+    });
+
+    expect(pushed).toEqual([]);
+    expect(ambientAiMock.audio.markCaptureProcessed).not.toHaveBeenCalledWith({ wavId: "wav-retry" });
+    expect(ctx.onEvent).toHaveBeenCalledWith(
+      "sound_classifier",
+      "Voice transcription failed: network offline",
+    );
+
+    ambientAiMock.audio.listRecentCaptures.mockResolvedValueOnce({
+      captures: [
+        {
+          wavId: "wav-retry",
+          burstId: "burst-retry",
+          captureSessionId: "capture-retry",
+          capturedAt: "2026-05-18T02:46:30.000Z",
+          durationMs: 3080,
+          byteSize: 295_616,
+        },
+      ],
+    });
+
+    await source.refresh();
+    await source.flushPendingAudioRecoveryForTest();
+
+    expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledTimes(2);
+    expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        wavId: "wav-retry",
+        burstId: "burst-retry",
+        triggerSource: "recent_capture_scan",
+      }),
+      "en",
+    );
+    expect(pushed).toEqual([
+      expect.objectContaining({
+        kind: "session_summary",
+        summary: "Recovered cloud transcript after the network came back.",
+        dedupe_key: "ios:audio:burst-retry",
+      }),
+    ]);
+    expect(ambientAiMock.audio.markCaptureProcessed).toHaveBeenCalledWith({ wavId: "wav-retry" });
   });
 
   test("ignores short transcriptReady text", () => {
@@ -560,7 +625,7 @@ describe("SoundClassifierSource transcript ingest", () => {
       text: "too short",
       capturedAt: "2026-05-10T12:00:00.000Z",
       durationMs: 500,
-      provider: "local_speech",
+      provider: "cloud_whisper",
       fallback: true,
     });
 
@@ -629,7 +694,8 @@ describe("SoundClassifierSource transcript ingest", () => {
     await expect(source.start()).rejects.toThrow("engine failed");
 
     expect(ambientAiMock.audio.configure).toHaveBeenCalledWith({
-      recognitionLocale: "zh-CN",
+      recognitionLocale: "en-US",
+      preRollMs: 2000,
       postRollMs: 2500,
       maxBurstMs: 12000,
       minBurstMs: 600,

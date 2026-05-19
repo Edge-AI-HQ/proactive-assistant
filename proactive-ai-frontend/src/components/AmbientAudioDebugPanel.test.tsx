@@ -91,7 +91,7 @@ describe("AmbientAudioDebugPanel", () => {
   test("uses old app-aligned default capture timings", async () => {
     render(<AmbientAudioDebugPanel />);
 
-    expect((screen.getByLabelText("Pre-roll ms") as HTMLInputElement).value).toBe("500");
+    expect((screen.getByLabelText("Pre-roll ms") as HTMLInputElement).value).toBe("2000");
     expect((screen.getByLabelText("Post-roll ms") as HTMLInputElement).value).toBe("10000");
     expect((screen.getByLabelText("Max burst ms") as HTMLInputElement).value).toBe("30000");
 
@@ -100,7 +100,7 @@ describe("AmbientAudioDebugPanel", () => {
     });
 
     expect(AmbientAi.audio.configure).toHaveBeenCalledWith(expect.objectContaining({
-      preRollMs: 500,
+      preRollMs: 2000,
       postRollMs: 10000,
       maxBurstMs: 30000,
     }));
