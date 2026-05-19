@@ -263,7 +263,7 @@ const Sphere3DCards = ({
           // top (rp.y → -yMax) get clipped by overflow-hidden, but those
           // are the back-half / semi-transparent cards so the loss is
           // imperceptible. Tune this if header above the sphere changes.
-          top: "10%",
+          top: "21%",
           transform: "translate(-50%, -50%)",
           transformStyle: "preserve-3d",
           perspective: "1000px",
