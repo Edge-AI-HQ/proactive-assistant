@@ -1,4 +1,5 @@
 import { getSelectedAmbientSummaryModelId } from "../models-selection";
+import type { AmbientSummaryContext } from "./summary-context";
 import type {
   AmbientActionBasket,
   AmbientCandidateWindow,
@@ -253,6 +254,9 @@ export interface AmbientTimelineModelBridge {
   generateTimelineEvent(
     window: AmbientCandidateWindow,
   ): Promise<AmbientTimelineGenerationResult>;
+  generateAmbientSummaryEvent?(
+    context: AmbientSummaryContext,
+  ): Promise<{ ok: true; draft: AmbientTimelineEventDraft; modelId?: string } | { ok: false; errorCode: AmbientTimelineGenerationErrorCode; errorMessage?: string }>;
 }
 
 interface NativeModelProfile {
@@ -276,6 +280,10 @@ interface NativeModelsApi {
   generateTimelineBatchDecision?(options: {
     modelId: string;
     batch: Record<string, unknown>;
+  }): Promise<unknown>;
+  generateAmbientSummaryEvent?(options: {
+    modelId: string;
+    context: Record<string, unknown>;
   }): Promise<unknown>;
 }
 
@@ -344,6 +352,31 @@ class NativeAmbientTimelineModelBridge implements AmbientTimelineModelBridge {
     }
   }
 
+  async generateAmbientSummaryEvent(
+    context: AmbientSummaryContext,
+  ): Promise<{ ok: true; draft: AmbientTimelineEventDraft; modelId?: string } | { ok: false; errorCode: AmbientTimelineGenerationErrorCode; errorMessage?: string }> {
+    const modelId = getSelectedAmbientSummaryModelId();
+    if (!modelId) return { ok: false, errorCode: "no_selected_model" };
+    let api: NativeModelsApi;
+    try {
+      api = await loadNativeModelsApi();
+    } catch {
+      return { ok: false, errorCode: "native_unavailable" };
+    }
+    const ready = await selectedModelReadiness(api, modelId);
+    if (!ready.ok) return ready;
+    if (!api.generateAmbientSummaryEvent) return { ok: false, errorCode: "generation_failed", errorMessage: "Native ambient summary generation unavailable" };
+    try {
+      const value = await api.generateAmbientSummaryEvent({ modelId, context: context as unknown as Record<string, unknown> });
+      const draft = normalizeDraft(value);
+      return draft
+        ? { ok: true, draft, modelId }
+        : { ok: false, errorCode: "invalid_shape" };
+    } catch (err) {
+      return { ok: false, errorCode: normalizeErrorCode(err), errorMessage: normalizeErrorMessage(err) };
+    }
+  }
+
   async generateTimelineEvent(
     window: AmbientCandidateWindow,
   ): Promise<AmbientTimelineGenerationResult> {
@@ -382,6 +415,10 @@ class NoopAmbientTimelineModelBridge implements AmbientTimelineModelBridge {
   }
 
   async generateTimelineEvent(): Promise<AmbientTimelineGenerationResult> {
+    return { ok: false, errorCode: "native_unavailable" };
+  }
+
+  async generateAmbientSummaryEvent(): Promise<{ ok: false; errorCode: AmbientTimelineGenerationErrorCode }> {
     return { ok: false, errorCode: "native_unavailable" };
   }
 }

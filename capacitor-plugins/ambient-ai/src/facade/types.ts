@@ -287,6 +287,19 @@ export interface GenerateTimelineEventOptions {
   window: AmbientCandidateWindowForModel;
 }
 
+export interface AmbientSummaryContextForModel {
+  schemaVersion: 'ambient_summary.v1';
+  localDate: string;
+  generatedAt: string;
+  rawEvents: Array<Record<string, unknown>>;
+  recentSummaries?: Array<Record<string, unknown>>;
+}
+
+export interface GenerateAmbientSummaryEventOptions {
+  modelId: string;
+  context: AmbientSummaryContextForModel;
+}
+
 export interface AmbientTimelineBatchInput {
   schemaVersion: 'ambient_timeline_batch.v1';
   windows: AmbientCandidateWindowForModel[];
@@ -444,6 +457,7 @@ export interface ModelsNamespace {
   verifyModel(options: { id: string }): Promise<ModelVerifyResult>;
   generateTimelineEvent(options: GenerateTimelineEventOptions): Promise<AmbientTimelineEventDraftResult>;
   generateTimelineBatchDecision(options: GenerateTimelineBatchDecisionOptions): Promise<AmbientTimelineBatchDecisionResult>;
+  generateAmbientSummaryEvent(options: GenerateAmbientSummaryEventOptions): Promise<AmbientTimelineEventDraftResult>;
 }
 
 export interface AmbientAiFacade {

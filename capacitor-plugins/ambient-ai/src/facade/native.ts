@@ -7,6 +7,7 @@ import type {
   GenerateTimelineBatchDecisionOptions,
   AmbientTimelineBatchDecisionResult,
   GenerateTimelineEventOptions,
+  GenerateAmbientSummaryEventOptions,
   ModelDownloadOptions,
   ModelDownloadProgressEvent,
   ModelListResult,
@@ -69,6 +70,7 @@ interface AmbientModelsPlugin {
   verifyModel(options: { id: string }): Promise<ModelVerifyResult>;
   generateTimelineEvent(options: GenerateTimelineEventOptions): Promise<AmbientTimelineEventDraftResult>;
   generateTimelineBatchDecision(options: GenerateTimelineBatchDecisionOptions): Promise<AmbientTimelineBatchDecisionResult>;
+  generateAmbientSummaryEvent(options: GenerateAmbientSummaryEventOptions): Promise<AmbientTimelineEventDraftResult>;
   addListener(
     eventName: 'modelDownloadProgress' | 'modelDownloadDone',
     listenerFunc: (event: ModelDownloadProgressEvent) => void,
@@ -103,6 +105,10 @@ class AmbientModelsWeb implements AmbientModelsPlugin {
 
   async generateTimelineBatchDecision(): Promise<AmbientTimelineBatchDecisionResult> {
     throw new Error('AmbientModels.generateTimelineBatchDecision is unavailable on web');
+  }
+
+  async generateAmbientSummaryEvent(): Promise<AmbientTimelineEventDraftResult> {
+    throw new Error('AmbientModels.generateAmbientSummaryEvent is unavailable on web');
   }
 
   async addListener(): Promise<PluginListenerHandle> {
