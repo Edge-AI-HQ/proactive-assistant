@@ -87,3 +87,17 @@ async def list_dismissed(
         repo = FeedbackRepository(user.id, conn)
         ids = await repo.list_dismissed_card_ids()
     return {"ok": True, "dismissedCardIds": ids}
+
+
+@router.get("/completed")
+async def list_completed(
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+):
+    """Frontend useCardActions loads this on mount, parallel to
+    /dismissed. Without it the sphere's doneIds Set is purely in-memory,
+    so completed cards bounce back onto the sphere after refresh."""
+    async with user_scoped_tx(pool, user.id) as conn:
+        repo = FeedbackRepository(user.id, conn)
+        ids = await repo.list_completed_card_ids()
+    return {"ok": True, "completedCardIds": ids}

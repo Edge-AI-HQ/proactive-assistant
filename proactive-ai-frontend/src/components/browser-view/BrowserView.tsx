@@ -85,6 +85,33 @@ export default function BrowserView({
   const [iframeLoaded, setIframeLoaded] = useState(false);
   const [confirmingClose, setConfirmingClose] = useState(false);
 
+  // Synchronize the iframe-content reveal with the appearance of the
+  // floating user-control buttons (Zoom +/- + drag-pad), which are gated
+  // on `controlMode === "user"`. Without this, the iframe HTML loads
+  // (`onLoad` fires `iframeLoaded=true`) some time BEFORE the agent's
+  // follow-up `request_takeover` flips controlMode → "user" — the user
+  // sees the page first, then the buttons pop in a beat later, which
+  // reads as jank. Hiding the iframe behind the loading overlay until
+  // BOTH (a) the HTML has loaded AND (b) the backend has confirmed
+  // user takeover makes both surfaces reveal in the same frame.
+  //
+  // Fallback: if takeover never arrives (e.g. an AI-driven browse with
+  // no user takeover step), we expose the iframe anyway after a short
+  // grace window so the user isn't stuck on "Loading browser..." forever.
+  const [sessionReady, setSessionReady] = useState(false);
+  useEffect(() => {
+    if (!iframeLoaded) {
+      setSessionReady(false);
+      return;
+    }
+    if (controlMode === "user") {
+      setSessionReady(true);
+      return;
+    }
+    const t = window.setTimeout(() => setSessionReady(true), 2500);
+    return () => window.clearTimeout(t);
+  }, [iframeLoaded, controlMode]);
+
   const isMini = sheetStage === "mini";
   const stopDrag = (e: ReactPointerEvent) => e.stopPropagation();
 
@@ -363,7 +390,7 @@ export default function BrowserView({
               : { touchAction: overlayActive ? "none" : "auto" }
           }
         >
-        {!iframeLoaded && !isMini && (
+        {!sessionReady && !isMini && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-[1]">
             <div className="flex items-center gap-2">
               <Loader2 size={14} className="animate-spin text-white/50" />

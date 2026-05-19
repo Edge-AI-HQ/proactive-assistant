@@ -26,6 +26,10 @@ interface ChatTimelineProps {
   // auto-fires it as the user's first turn so the agent starts working
   // on the card. Plain "Chat" path passes nothing → empty thread.
   onOpenChat: (card: IntentCard, bootstrapMessage?: string) => void;
+  // ConstellationLayout passes this so Timeline/Tasks uses the same
+  // rich drawer as NOW. Standalone legacy callers omit it and keep the
+  // local CardDetailBody fallback below.
+  onOpenCardDetail?: (card: IntentCard) => void;
   dismissedIds: Set<string>;
   confirmedIds: Set<string>;
   processingIds: Set<string>;
@@ -54,6 +58,7 @@ function formatDate(iso: string): string {
 
 export default function ChatTimeline({
   onOpenChat,
+  onOpenCardDetail,
   dismissedIds,
   confirmedIds,
   processingIds,
@@ -225,7 +230,13 @@ export default function ChatTimeline({
                 <div
                   key={`${card.runId}-${card.id}`}
                   className="glass-card px-3.5 py-4 w-full text-left cursor-pointer active:scale-[0.98] transition-transform"
-                  onClick={() => setSelectedCard(card)}
+                  onClick={() => {
+                    if (onOpenCardDetail) {
+                      onOpenCardDetail(card);
+                    } else {
+                      setSelectedCard(card);
+                    }
+                  }}
                 >
                   <div className="flex items-center gap-2.5">
                     <span className="text-foreground/50 shrink-0">

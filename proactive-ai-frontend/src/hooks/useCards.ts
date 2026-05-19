@@ -36,11 +36,37 @@ export interface CardScore {
   pass: boolean;
 }
 
+export type CardOutcome = "confirm" | "modify" | "dismiss" | "snooze" | "complete";
+
+const CARD_OUTCOMES = new Set<CardOutcome>([
+  "confirm",
+  "modify",
+  "dismiss",
+  "snooze",
+  "complete",
+]);
+
+function parseCardOutcome(value: unknown): CardOutcome | null {
+  return typeof value === "string" && CARD_OUTCOMES.has(value as CardOutcome)
+    ? value as CardOutcome
+    : null;
+}
+
+export function isCompletedCardOutcome(outcome: CardOutcome | null | undefined): boolean {
+  return outcome === "complete";
+}
+
+export function isHiddenCardOutcome(outcome: CardOutcome | null | undefined): boolean {
+  return outcome === "complete" || outcome === "dismiss" || outcome === "snooze";
+}
+
 export interface VisibleCardEntry {
   card: IntentCard;
   runId: string;
   runCompletedAt: string;
   score: CardScore | null;
+  latestOutcome: CardOutcome | null;
+  outcomeAt: string | null;
 }
 
 export interface UseCardsState {
@@ -54,6 +80,8 @@ interface CardsResponseEntry {
   runId?: unknown;
   runCompletedAt?: unknown;
   score?: unknown;
+  latestOutcome?: unknown;
+  outcomeAt?: unknown;
 }
 
 function parseScore(value: unknown): CardScore | null {
@@ -76,6 +104,8 @@ function parseEntries(payload: unknown): VisibleCardEntry[] {
       runId: raw.runId,
       runCompletedAt: raw.runCompletedAt,
       score: parseScore(raw.score),
+      latestOutcome: parseCardOutcome(raw.latestOutcome),
+      outcomeAt: typeof raw.outcomeAt === "string" ? raw.outcomeAt : null,
     });
   }
   return out;

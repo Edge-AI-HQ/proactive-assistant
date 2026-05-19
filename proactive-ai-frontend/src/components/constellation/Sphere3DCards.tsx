@@ -36,15 +36,15 @@ interface RotState {
   velPitch: number;
 }
 
+// Sphere-back cards stay visible (translucent) instead of being clipped at
+// a hard threshold. Hiding the back half with opacity=0 made a 5-card feed
+// look like it kept losing cards (2–5 visible as the user dragged the
+// sphere). Front-most readability is handled by `surfaceAlpha` in the
+// caller (0.55 → 0.95 boost for depth ≥ 0.6), so a linear opacity ramp
+// is enough here.
 export function getSphereCardPresentation(depth: number) {
-  const readableThreshold = 0.48;
-  if (depth < readableThreshold) {
-    return { opacity: 0, visible: false };
-  }
-
-  const readableDepth = (depth - readableThreshold) / (1 - readableThreshold);
   return {
-    opacity: 0.46 + readableDepth * 0.54,
+    opacity: 0.32 + depth * 0.68,
     visible: true,
   };
 }
@@ -257,7 +257,13 @@ const Sphere3DCards = ({
       <div
         className="absolute left-1/2"
         style={{
-          top: "35%",
+          // Sphere center sits high in the container so the front cards
+          // (which `pitch=-10°` tilts toward the lower hemisphere) land in
+          // the visual middle of the available space. Cards at the sphere
+          // top (rp.y → -yMax) get clipped by overflow-hidden, but those
+          // are the back-half / semi-transparent cards so the loss is
+          // imperceptible. Tune this if header above the sphere changes.
+          top: "21%",
           transform: "translate(-50%, -50%)",
           transformStyle: "preserve-3d",
           perspective: "1000px",
@@ -315,7 +321,7 @@ const Sphere3DCards = ({
                 transform: `translate3d(${(x - 80).toFixed(2)}px, ${(y - 34).toFixed(2)}px, 0) scale(${scale.toFixed(3)})`,
                 opacity: Math.round(presentation.opacity * 100) / 100,
                 zIndex: Math.round(1000 + z),
-                pointerEvents: presentation.visible && depth >= 0.55 ? "auto" : "none",
+                pointerEvents: depth < 0.25 ? "none" : "auto",
                 borderRadius: 14,
                 boxShadow: isFront ? "0 4px 18px rgba(0,0,0,0.12)" : "none",
                 transition: draggingRef.current ? "none" : "box-shadow 0.2s, opacity 0.2s",

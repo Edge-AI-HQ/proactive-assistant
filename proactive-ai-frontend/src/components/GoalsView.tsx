@@ -1425,7 +1425,19 @@ function RawPanelContent({
             <select
               value={activeSource?.id ?? ""}
               disabled={sources.length === 0}
-              onChange={(event) => onChangeRawPanel(event.target.value as RawPanel)}
+              onChange={(event) => {
+                const value = event.target.value as RawPanel;
+                // iOS WKWebView keeps focus on the select after the native
+                // picker is dismissed. Combined with the parent's
+                // overflow-y-auto + -webkit-overflow-scrolling:touch and the
+                // Capacitor Keyboard `resize: "none"` config, that residual
+                // focus leaves the viewport in a "scroll-to-focused-element"
+                // state and the whole page becomes unscrollable until the
+                // view is re-mounted. Blurring synchronously releases focus
+                // before React re-renders.
+                event.currentTarget.blur();
+                onChangeRawPanel(value);
+              }}
               className="h-11 w-full appearance-none rounded-xl bg-white/65 px-3 pr-10 text-sm font-medium text-foreground ring-1 ring-white/70 outline-none transition-colors hover:bg-white/85 disabled:text-foreground/35"
             >
               {sources.length === 0 ? (

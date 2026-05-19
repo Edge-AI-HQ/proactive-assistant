@@ -26,6 +26,33 @@ export default defineConfig(({ mode }) => {
     }
   }
 
+  // Native-only Capacitor packages have no web runtime. On the
+  // Capacitor build (`VITE_CAPACITOR=1`) they resolve to their real
+  // implementations from node_modules + the local capacitor-plugins
+  // workspace; on the web build they would either fail to resolve at
+  // bundle time OR (when marked Rollup-external) leave bare specifiers
+  // in the output that the browser rejects at runtime. We alias each
+  // one to a single Proxy-based stub (`src/lib/native-plugin-stub.ts`)
+  // so Rollup substitutes a real module and the bundle ships without
+  // unresolvable specifiers. Call sites are already isNative-gated, so
+  // the stub's "loud throw on invoke" branch never fires on web.
+  const nativePluginAliases = isCapacitor
+    ? {}
+    : Object.fromEntries(
+        [
+          "@pin/capacitor-ambient-ai",
+          "@capacitor-community/contacts",
+          "@capacitor-community/sqlite",
+          "@capacitor/geolocation",
+          "@capacitor/push-notifications",
+          "@capgo/capacitor-barometer",
+          "@capgo/capacitor-health",
+        ].map((pkg) => [
+          pkg,
+          path.resolve(__dirname, "src/lib/native-plugin-stub.ts"),
+        ]),
+      );
+
   return {
     plugins: [react()],
     // Single base path "/" everywhere. Frontend is served at the root
@@ -35,6 +62,7 @@ export default defineConfig(({ mode }) => {
       dedupe: ["react", "react-dom"],
       alias: {
         "@": path.resolve(__dirname, "src"),
+        ...nativePluginAliases,
       },
     },
     server: {
@@ -55,24 +83,10 @@ export default defineConfig(({ mode }) => {
       emptyOutDir: true,
       rollupOptions: {
         input: path.resolve(__dirname, "index.html"),
-        // Native-only modules: marked external for the web build so
-        // Rollup doesn't try to resolve them at bundle time. They live
-        // in the chunks that App.tsx / DebugPanel load via dynamic
-        // import inside `isNative` guards — never executed in the
-        // browser. For the Capacitor build (`VITE_CAPACITOR=1`) they're
-        // real deps and get bundled normally. Mirrors V2 commit
-        // `893df821 fix(frontend): resolve web build failure caused by
-        // capacitor native plugin imports`.
-        external: isCapacitor
-          ? []
-          : [
-              "@pin/capacitor-ambient-ai",
-              "@capacitor-community/contacts",
-              "@capacitor-community/sqlite",
-              "@capacitor/geolocation",
-              "@capgo/capacitor-barometer",
-              "@capgo/capacitor-health",
-            ],
+        // Native plugin handling moved to `resolve.alias` above so
+        // Rollup substitutes the real packages with a JS stub rather
+        // than leaving bare specifiers (which the browser cannot
+        // resolve). Keep this slot for future bundle-shaping needs.
       },
     },
     test: {

@@ -171,3 +171,22 @@ class FeedbackRepository(UserScopedRepository):
             )
             rows = await cur.fetchall()
         return [r["intent_card_id"] for r in rows]
+
+    async def list_completed_card_ids(self) -> list[str]:
+        """Returns intent_card_ids the user has marked complete.
+        Mirrors list_dismissed_card_ids — without it, the sphere's
+        doneIds Set resets to empty on refresh and completed cards
+        reappear on the sphere until the user re-clicks Done."""
+        async with self._conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT DISTINCT intent_card_id
+                FROM pai_feedback_events
+                WHERE user_id = %s
+                  AND action = 'complete'
+                  AND intent_card_id IS NOT NULL
+                """,
+                (self._user_id,),
+            )
+            rows = await cur.fetchall()
+        return [r["intent_card_id"] for r in rows]

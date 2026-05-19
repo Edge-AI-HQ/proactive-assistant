@@ -6,7 +6,7 @@ proactive-ai-frontend (`hooks/usePipeline.ts`, `useCards.ts`,
 
 - /runs/active → { ok, run } where run is the row in camelCase or null
 - /runs/{id}   → { ok, run } where run carries finalCards / batchFeedback
-- /cards       → { cards: [{ card, runId, runCompletedAt, score }] }
+- /cards       → { cards: [{ card, runId, runCompletedAt, score, latestOutcome, outcomeAt }] }
 - /status      → { pipelineRunning, latestRun, lastResult, asOf }
 
 Direct SQL (no Repository) intentionally — the table's other readers /
@@ -222,12 +222,44 @@ async def list_cards(
       score: { overall: number, pass: boolean } | null
 
     Per-card score comes from pai_card_evaluations (1:1 with card_id).
-    A LEFT JOIN aggregates evaluations per run into a JSONB map keyed
-    by card_id, so each row needs only one in-Python lookup.
+    Latest user outcome comes from pai_feedback_events, so cold-started
+    clients do not need to race /feedback/{dismissed,completed} against
+    /cards before deciding whether a card is still actionable.
     """
     async with user_scoped_tx(pool, user.id) as conn:
         cur = await conn.execute(
             """
+            WITH latest_feedback AS (
+              SELECT DISTINCT ON (intent_card_id)
+                intent_card_id,
+                CASE
+                  WHEN action IS NOT NULL THEN action
+                  WHEN kind IN ('dismiss', 'snooze') THEN kind
+                  ELSE NULL
+                END AS latest_outcome,
+                created_at
+              FROM pai_feedback_events
+              WHERE user_id = %s
+                AND intent_card_id IS NOT NULL
+                AND (
+                  action IN ('confirm', 'modify', 'dismiss', 'snooze', 'complete')
+                  OR kind IN ('dismiss', 'snooze')
+                )
+              ORDER BY intent_card_id, created_at DESC
+            ),
+            feedback_map AS (
+              SELECT COALESCE(
+                jsonb_object_agg(
+                  intent_card_id,
+                  jsonb_build_object(
+                    'latestOutcome', latest_outcome,
+                    'outcomeAt', created_at
+                  )
+                ) FILTER (WHERE latest_outcome IS NOT NULL),
+                '{}'::jsonb
+              ) AS outcomes
+              FROM latest_feedback
+            )
             SELECT
               r.id,
               r.run_id,
@@ -239,19 +271,21 @@ async def list_cards(
                   jsonb_build_object('overall', e.overall, 'pass', e.pass)
                 ) FILTER (WHERE e.card_id IS NOT NULL),
                 '{}'::jsonb
-              ) AS evals
+              ) AS evals,
+              fm.outcomes
             FROM pai_pipeline_runs r
             LEFT JOIN pai_card_evaluations e
               ON e.user_id = r.user_id AND e.run_id = r.run_id
+            CROSS JOIN feedback_map fm
             WHERE r.user_id = %s
               AND r.status = 'completed'
               AND r.final_cards IS NOT NULL
               AND r.completed_at IS NOT NULL
-            GROUP BY r.id, r.run_id, r.completed_at, r.final_cards
+            GROUP BY r.id, r.run_id, r.completed_at, r.final_cards, fm.outcomes
             ORDER BY r.completed_at DESC
             LIMIT %s
             """,
-            (user.id, limit),
+            (user.id, user.id, limit),
         )
         rows = await cur.fetchall()
 
@@ -261,21 +295,37 @@ async def list_cards(
         # whenever the row reached the loop.
         run_completed_at = r["completed_at"].isoformat()
         evals = r.get("evals") or {}
+        outcomes = r.get("outcomes") or {}
         for c in r.get("final_cards") or []:
             if not isinstance(c, dict):
                 continue
-            score_raw = evals.get(c.get("id")) if isinstance(evals, dict) else None
+            card_id = c.get("id")
+            score_raw = evals.get(card_id) if isinstance(evals, dict) else None
+            outcome_raw = (
+                outcomes.get(card_id)
+                if isinstance(card_id, str) and isinstance(outcomes, dict)
+                else None
+            )
             score: dict[str, Any] | None = None
             if isinstance(score_raw, dict) and "overall" in score_raw and "pass" in score_raw:
                 score = {
                     "overall": float(score_raw["overall"]) if score_raw["overall"] is not None else 0.0,
                     "pass": bool(score_raw["pass"]),
                 }
+            latest_outcome: str | None = None
+            outcome_at: str | None = None
+            if isinstance(outcome_raw, dict):
+                raw_outcome = outcome_raw.get("latestOutcome")
+                raw_at = outcome_raw.get("outcomeAt")
+                latest_outcome = raw_outcome if isinstance(raw_outcome, str) else None
+                outcome_at = raw_at if isinstance(raw_at, str) else None
             out.append({
                 "card": c,
                 "runId": r["run_id"],
                 "runCompletedAt": run_completed_at,
                 "score": score,
+                "latestOutcome": latest_outcome,
+                "outcomeAt": outcome_at,
             })
             if len(out) >= limit:
                 break

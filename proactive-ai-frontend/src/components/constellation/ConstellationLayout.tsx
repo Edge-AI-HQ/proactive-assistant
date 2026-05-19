@@ -20,6 +20,7 @@ import AmbientView, { LiveFullscreen, type TimelineEntry as AmbientTimelineEntry
 import { createPortal } from "react-dom";
 import ChatDetailView, { type ChatCard, brandSvg, detectToolIcon } from "./ChatDetailView";
 import { DrawerDetailBody } from "./CardDrawerDetail";
+import { useCardExecutionRun } from "@/hooks/useCardExecutionRun";
 import { PlanPaymentForm, isPayValid, PLANS, type PlanId, type PayMethod, type CardInfo } from "./PlanPaymentForm";
 import {
   Drawer,
@@ -38,7 +39,11 @@ import RealControlPanel from "@/components/ControlPanel";
 import RealChatTimeline from "@/components/ChatTimeline";
 import { useAuth } from "@/hooks/useAuth";
 import { useCardActions } from "@/hooks/useCardActions";
-import { useCards } from "@/hooks/useCards";
+import {
+  isCompletedCardOutcome,
+  isHiddenCardOutcome,
+  useCards,
+} from "@/hooks/useCards";
 import { useComposio } from "@/hooks/useComposio";
 import { usePipeline } from "@/hooks/usePipeline";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
@@ -78,6 +83,40 @@ function basketToLovableCategory(basket: GoalBasket): string {
 
 /** Real IntentCard (from /api/cards) → Lovable Intent (visual). Carries
  *  originalId so handleExecute can recover the IntentCard for the chat runtime. */
+/** IntentCard → ChatDetailView's ChatCard shape (Lovable-era visual
+ *  contract used numeric ids + the same `detail` envelope). Only the
+ *  fields ChatDetailView actually reads are populated; the real
+ *  EXECUTION PLAN / drafts / dangerous_actions / risks come from the
+ *  cached propose_action args via the hook, not from this static
+ *  projection. The original string id rides separately via the `runId`
+ *  prop so the hook can derive the chat-stream session_key. */
+function realIntentToChatCard(card: IntentCard): ChatCard {
+  return {
+    id: djb2(card.id),
+    category: basketToLovableCategory(card.goalBasket),
+    tag: card.urgency >= 0.85 ? "Urgent" : undefined,
+    title: card.title,
+    line1: card.whyNow || card.summary,
+    line2: card.sources.length > 0 ? `Sources: ${card.sources.join(" · ")}` : "",
+    whyNow:
+      card.whyNow && card.whyNow.trim() && card.whyNow !== card.summary
+        ? card.whyNow
+        : undefined,
+    detail: {
+      scores: [
+        { label: "Confidence", value: Math.round(card.confidence * 100) },
+        { label: "Importance", value: Math.round(card.importance * 100) },
+        { label: "Urgency", value: Math.round(card.urgency * 100) },
+      ],
+      willExecute: card.primaryAction?.label ?? "",
+      executionPlan: [],
+      dataSources: card.sources,
+      impact: "",
+      permissions: "",
+    },
+  };
+}
+
 function realCardToLovableIntent(card: IntentCard, status: CardStatus): Intent {
   return {
     id: djb2(card.id),
@@ -87,6 +126,14 @@ function realCardToLovableIntent(card: IntentCard, status: CardStatus): Intent {
     title: card.title,
     line1: card.whyNow || card.summary,
     line2: card.sources.length > 0 ? `Sources: ${card.sources.join(" · ")}` : "",
+    // Preserved separately from line1 (which collapses whyNow / summary
+    // into a single headline) so the drawer can render a dedicated
+    // "WHY NOW" block — only fill when both fields exist AND differ, so
+    // we don't duplicate the headline below it.
+    whyNow:
+      card.whyNow && card.whyNow.trim() && card.whyNow !== card.summary
+        ? card.whyNow
+        : undefined,
     detail: {
       scores: [
         { label: "Confidence", value: Math.round(card.confidence * 100) },
@@ -185,6 +232,10 @@ interface Intent {
   title: string;
   line1: string;
   line2: string;
+  /** Generator-side rationale; rendered as a dedicated "WHY NOW" block
+   *  in CardDrawerContent → DrawerDetailBody. Optional because legacy
+   *  Lovable mock entries don't carry it. */
+  whyNow?: string;
   detail?: DetailData;
   status: CardStatus;
   statusTimestamp?: number; // when status was set
@@ -437,7 +488,8 @@ export default function BigBallLayout() {
       .filter(
         (c) =>
           !cardActions.dismissedIds.has(c.card.id) &&
-          !cardActions.doneIds.has(c.card.id),
+          !cardActions.doneIds.has(c.card.id) &&
+          !isHiddenCardOutcome(c.latestOutcome),
       )
       .slice(0, 14)
       .map((c) => {
@@ -597,53 +649,25 @@ export default function BigBallLayout() {
     return () => clearInterval(t);
   }, []);
 
-  // Sphere lifecycle: new→normal (10s), processing→done (10s), done→remove (10s)
-  useEffect(() => {
-    const ticker = setInterval(() => {
-      const now = Date.now();
-      setSphereCards((prev) => {
-        let changed = false;
-        const next = prev.reduce<Intent[]>((acc, card) => {
-          const elapsed = now - (card.statusTimestamp || 0);
-          if (card.status === "new" && elapsed >= 10000) {
-            changed = true;
-            acc.push({ ...card, status: "normal", statusTimestamp: now });
-          } else if (card.status === "processing" && elapsed >= 10000) {
-            changed = true;
-            acc.push({ ...card, status: "done", statusTimestamp: now });
-          } else if (card.status === "done" && elapsed >= 10000) {
-            changed = true;
-            // removed
-          } else {
-            acc.push(card);
-          }
-          return acc;
-        }, []);
-        return changed ? next : prev;
-      });
-    }, 1000);
-    return () => clearInterval(ticker);
-  }, []);
-
-  // Periodically introduce a new "new" card on the sphere
-  useEffect(() => {
-    const addInterval = setInterval(() => {
-      setSphereCards((prev) => {
-        if (prev.length >= 14) return prev;
-        const shown = new Set(prev.map((c) => c.id));
-        const pool = INTENTS.filter((c) => !shown.has(c.id));
-        if (pool.length === 0) return prev;
-        const base = pool[Math.floor(Math.random() * pool.length)];
-        const newCard: Intent = {
-          ...base,
-          status: "new",
-          statusTimestamp: Date.now(),
-        };
-        return [...prev, newCard];
-      });
-    }, 7000 + Math.random() * 4000);
-    return () => clearInterval(addInterval);
-  }, []);
+  // Sphere card status is driven entirely by the real backend now:
+  //   • `cardsState.cards` (useCards / GET /api/cards, 30s poll)
+  //   • `cardActions.processingIds` / `doneIds` / `dismissedIds`
+  // The sync effect above (line ~466) recomputes sphereCards whenever
+  // any of those change, so we don't keep a local clock here. The
+  // previous Lovable-era `new → normal (10s) → processing → done (10s) →
+  // removed (10s)` ticker was a mock-data lifecycle simulator; on real
+  // cards it surfaced two visible bugs:
+  //   1. A card the user just Approved showed a green "DONE" ring 10s
+  //      later without the user ever confirming Done, because the
+  //      ticker auto-promoted processing → done locally.
+  //   2. The same ticker then dropped the card from sphereCards 10s
+  //      after that, only for the next `cardsState.cards` poll to add
+  //      it back, producing the 5 → 3 → 5 visible-count flicker.
+  // Card transitions to terminal states must come from real user
+  // actions (POST /feedback kind=done / dismiss) — never a local timer.
+  // Old `add new card` interval also lived here; INTENTS is empty for
+  // real users so it was a no-op already, and any real "new card"
+  // arrives via the next /api/cards poll. Both intervals removed.
 
   const handleCardTap = (card: Intent) => {
     setSelectedCard(card);
@@ -737,6 +761,12 @@ export default function BigBallLayout() {
   const handleMenuNav = (id: MenuId) => {
     setActiveView(id);
     setActiveChat(null);
+    // Without this, opening the side menu from inside ChatDetailView
+    // (which is rendered iff `chatTarget` is set) leaves chatTarget
+    // populated, and the main-content branch `chatTarget ? ChatDetailView
+    // : activeChat ? ... : activeView` keeps rendering ChatDetailView —
+    // the user sees the menu close but no navigation.
+    setChatTarget(null);
     setMenuOpen(false);
   };
 
@@ -806,10 +836,31 @@ export default function BigBallLayout() {
             const card = sphereCards.find((c) => c.id === id);
             if (!card) return;
             if (card.status === "processing" || card.status === "done") {
+              // Real /api/cards path: route through `chatTarget` so
+              // ChatDetailView receives `runId={card.id}` and
+              // `useCardExecutionRun` actually fetches LangGraph history.
+              // The legacy `activeChat` branch (kept for empty-INTENTS
+              // mock parity) leaves runId undefined, the hook bails out
+              // at `if (!runId)`, no /chat-stream/history call ever
+              // fires, and the page hangs at "TASK running · CONTEXT"
+              // forever — which is exactly the empty-card pathology.
+              if (card.originalId) {
+                const real = cardsState.cards.find(
+                  (c) => c.card.id === card.originalId,
+                )?.card;
+                if (real) {
+                  chatEntryView.current = activeView;
+                  // No bootstrap — user re-entering an existing run;
+                  // they want to see what's already there, not kick
+                  // a fresh agent turn.
+                  setChatTarget({ card: real, bootstrap: undefined });
+                  return;
+                }
+              }
+              // Legacy mock fallback (unreachable when INTENTS is empty).
               const chatCard = card as ChatCard;
               setCardChats((prev) => prev.find((c) => c.id === chatCard.id) ? prev : [chatCard, ...prev]);
               chatEntryView.current = activeView;
-              // Processing cards opened from sphere → ask 1–3 input questions first.
               setChatMode(card.status === "done" ? "done" : "modify");
               setActiveChat(chatCard);
             } else {
@@ -879,24 +930,42 @@ export default function BigBallLayout() {
             className="flex-1 overflow-hidden"
           >
             {chatTarget ? (
-              /* Real card execution: existing CardChat → MainChatView path
-                 (SSE chat-stream, real agent runtime). */
-              <CardChat
-                card={chatTarget.card}
-                bootstrapMessage={chatTarget.bootstrap}
+              /* Real card execution: the rich ChatDetailView (EXECUTION
+                 timeline + Generated draft card + NEEDS YOUR INPUT pink
+                 panel + Dismiss/Pause toolbar). Backed by the
+                 chat-stream-adapter `useCardExecutionRun` hook —
+                 session_key = `card-thread-<cardId>` so the propose_action
+                 history persists on LangGraph's checkpointer. `bootstrap`
+                 is the Confirm-path's primaryAction text; the hook auto-
+                 fires it if the thread is empty (fanout missed it). */
+              <ChatDetailView
+                card={realIntentToChatCard(chatTarget.card)}
+                runId={chatTarget.card.id}
+                bootstrap={chatTarget.bootstrap}
                 onBack={() => {
                   const returnTo = chatEntryView.current;
                   setChatTarget(null);
                   if (returnTo) setActiveView(returnTo);
+                }}
+                // Sphere → TASKS lifecycle: Dismiss / Done in the
+                // chat toolbar must POST /feedback so the card moves
+                // off the sphere (dismissedIds / doneIds filter) and
+                // shows as Dismissed / Completed in the TASKS view.
+                // Without these the hook's cancel/confirmDone are
+                // purely local UI flips.
+                onDismissBackend={() => {
+                  return cardActions.dismiss(chatTarget.card);
+                }}
+                onDoneBackend={() => {
+                  return cardActions.complete(chatTarget.card);
                 }}
               />
             ) : activeChat ? (
               /* Legacy mock-card path (Lovable's INTENTS). Unused now that
                  the mock array is empty, but kept so type-checking stays
                  honest if mock data is reintroduced for demos. */
-              <CardChat
-                card={lovableIntentToIntentCard(activeChat)}
-                bootstrapMessage={activeChat.detail?.willExecute || activeChat.title}
+              <ChatDetailView
+                card={activeChat as ChatCard}
                 onBack={() => {
                   const returnTo = chatEntryView.current;
                   setActiveChat(null);
@@ -925,6 +994,13 @@ export default function BigBallLayout() {
                           ? bootstrap
                           : undefined,
                     });
+                  }}
+                  onOpenCardDetail={(card) => {
+                    const status: CardStatus = cardActions.processingIds.has(card.id)
+                      ? "processing"
+                      : "normal";
+                    setSelectedCard(realCardToLovableIntent(card, status));
+                    setDrawerOpen(true);
                   }}
                   onConfirmId={cardActions.markConfirmed}
                   onDismissId={cardActions.markDismissed}
@@ -1112,6 +1188,16 @@ export default function BigBallLayout() {
           {selectedCard && (
             <CardDrawerContent
               card={selectedCard}
+              completed={
+                selectedCard.originalId
+                  ? cardActions.doneIds.has(selectedCard.originalId) ||
+                    isCompletedCardOutcome(
+                      cardsState.cards.find(
+                        (c) => c.card.id === selectedCard.originalId,
+                      )?.latestOutcome,
+                    )
+                  : false
+              }
               onExecute={handleExecute}
               onClose={() => { setDrawerOpen(false); setSelectedCard(null); }}
               onDismiss={(card) => {
@@ -1246,15 +1332,27 @@ export default function BigBallLayout() {
   );
 }
 
-/* ── Drawer card detail ── */
+/* ── Drawer card detail ──
+ *
+ * Subscribes to the same `useCardExecutionRun` hook the chat detail
+ * view uses, keyed by the card's original string id (which the hook
+ * maps to chat-stream session_key `card-thread-<id>`). That lets the
+ * drawer pre-render plan / Generated draft / Approving will let agent
+ * / Risks pulled from the latest propose_action's structured args,
+ * cached via `lastMessagePayload`. Without this, DrawerDetailBody
+ * falls back to `card.detail.executionPlan` (always empty for real
+ * cards) and the drawer looks like a thin summary card.
+ */
 function CardDrawerContent({
   card,
+  completed,
   onExecute,
   onClose,
   onModify,
   onDismiss,
 }: {
   card: Intent;
+  completed: boolean;
   onExecute: (card: Intent) => void;
   onClose: () => void;
   onModify: (card: Intent) => void;
@@ -1262,6 +1360,13 @@ function CardDrawerContent({
 }) {
   const cat = CATEGORIES[card.category];
   const Icon = cat.icon;
+  // The hook accepts the card's original string id (gen.*_card_NN) and
+  // internally maps it to session_key. We never set bootstrap here —
+  // the drawer is read-only pre-review; firing a bootstrap turn from
+  // a tap would surprise the user. The chat detail view fires it on
+  // Approve when the thread is empty.
+  const run = useCardExecutionRun(card.originalId ?? null);
+  const showCompletedView = completed || run.snapshot?.status === "done";
 
   return (
     <div className="px-5 pb-5 pt-1.5 overflow-y-auto max-h-[88vh]">
@@ -1294,39 +1399,57 @@ function CardDrawerContent({
         {card.detail?.willExecute || card.line1}
       </p>
 
-      {/* Detail sections */}
+      {/* Detail sections — DrawerDetailBody reads the latest
+          propose_action's structured args from `lastMessagePayload`
+          (plan / drafts / dangerous_actions / risks), falling back
+          to the card's static detail when the agent hasn't paused
+          yet. */}
       {card.detail && (
-        <>
-          <DrawerDetailBody card={card} />
-        </>
+        <DrawerDetailBody
+          card={card}
+          runSnapshot={run.snapshot}
+          lastMessagePayload={showCompletedView ? null : run.lastMessagePayload}
+          sideEffects={run.snapshot?.result?.side_effects ?? []}
+        />
       )}
 
-      {/* Actions — Dismiss / Steer / Approve */}
+      {/* Actions */}
       <div className="flex items-center gap-2 mt-5">
-        <button
-          onClick={() => onDismiss(card)}
-          className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[13px] font-medium text-foreground/55"
-        >
-          <X size={13} strokeWidth={2} /> Dismiss
-        </button>
-        {!card.locked && (
+        {showCompletedView ? (
           <button
-            onClick={() => onModify(card)}
-            className="flex items-center justify-center gap-1 px-3 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[12px] font-medium text-foreground/55"
+            onClick={onClose}
+            className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[13px] font-medium text-foreground/55"
           >
-            <Pencil size={11} strokeWidth={2} /> Steer
+            Close
           </button>
+        ) : (
+          <>
+            <button
+              onClick={() => onDismiss(card)}
+              className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[13px] font-medium text-foreground/55"
+            >
+              <X size={13} strokeWidth={2} /> Dismiss
+            </button>
+            {!card.locked && (
+              <button
+                onClick={() => onModify(card)}
+                className="flex items-center justify-center gap-1 px-3 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[12px] font-medium text-foreground/55"
+              >
+                <Pencil size={11} strokeWidth={2} /> Steer
+              </button>
+            )}
+            <button
+              onClick={() => onExecute(card)}
+              className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground text-background text-[13px] font-semibold hover:bg-foreground/85 transition-colors"
+            >
+              {card.locked ? (
+                <><LockIcon size={13} strokeWidth={2.5} /> Approve</>
+              ) : (
+                <><Check size={13} strokeWidth={2.5} /> Approve</>
+              )}
+            </button>
+          </>
         )}
-        <button
-          onClick={() => onExecute(card)}
-          className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground text-background text-[13px] font-semibold hover:bg-foreground/85 transition-colors"
-        >
-          {card.locked ? (
-            <><LockIcon size={13} strokeWidth={2.5} /> Approve</>
-          ) : (
-            <><Check size={13} strokeWidth={2.5} /> Approve</>
-          )}
-        </button>
       </div>
     </div>
   );

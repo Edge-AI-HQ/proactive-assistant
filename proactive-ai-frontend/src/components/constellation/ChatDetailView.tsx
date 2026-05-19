@@ -1,8 +1,19 @@
-import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, memo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, ArrowRight, Check, Send, Loader2, ChevronUp, Zap, Sprout, Briefcase, TrendingUp, Heart, BookOpen, Sparkles, X, Pause, Play, Pencil, MessageSquarePlus, ThumbsUp, ThumbsDown, Mail, Calendar, Globe, FileSearch, Settings, Hand, Database, FileText, Bell, DollarSign, Users, MessageSquare, Search, Brain, Lock, type LucideIcon } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Loader2, ChevronUp, Zap, Sprout, Briefcase, TrendingUp, Heart, BookOpen, Sparkles, X, Pause, Play, MessageSquarePlus, Mail, Calendar, Globe, FileSearch, Settings, Hand, Database, FileText, Bell, DollarSign, Users, MessageSquare, Search, Brain, Lock, type LucideIcon } from "lucide-react";
 import { VoiceButton } from "@/components/voice";
-import { DrawerDetailBody } from "./CardDrawerDetail";
+import { DrawerDetailBody, executeArtifactToLovable } from "./CardDrawerDetail";
+import BrowserPanel from "../browser-view/BrowserPanel";
+import type { SheetStage } from "../browser-view/BrowserView";
+import { useBrowserSession } from "@/hooks/useBrowserSession";
+import {
+  useCardExecutionRun,
+  type LastMessagePayload,
+  type PendingInput,
+  type RunSnapshot,
+  type SideEffect,
+  type SSEEvent,
+} from "@/hooks/useCardExecutionRun";
 
 /* --------- Tool icon registry: brand logos when available, else mono icons --------- */
 export type ToolIcon =
@@ -156,6 +167,9 @@ export interface ChatCard {
   title: string;
   line1: string;
   line2: string;
+  /** Generator-side rationale; rendered as a dedicated "WHY NOW" block
+   *  in the chat-side drawer mirror (ChatCardDrawerBody). */
+  whyNow?: string;
   detail?: {
     scores: { label: string; value: number }[];
     willExecute: string;
@@ -170,8 +184,50 @@ export interface ChatCard {
 
 interface ChatDetailViewProps {
   card: ChatCard;
+  /**
+   * Card-execute run id. Optional only to keep alternate Lovable demo
+   * layouts (AppLayout / BigBallLayout) type-checking; production
+   * always passes a real run id from ConstellationLayout.
+   */
+  runId?: string;
   onBack: () => void;
+  /**
+   * Called when the user starts a /retry. Parent should swap runId to the
+   * returned new run id. If omitted, retry is hidden.
+   */
+  onRetry?: (newRunId: string) => void;
+  /**
+   * Bootstrap HumanMessage to fire automatically if the card's
+   * chat-thread is empty on mount. Mirrors upstream's CardChat
+   * `bootstrapMessage` semantic: the home Drawer's Confirm button
+   * passes the card's `primaryAction.label` here so opening a freshly
+   * generated card (whose fan-out missed) still kicks the agent off
+   * the same way the user clicking Confirm always has.
+   */
+  bootstrap?: string;
+  /**
+   * Legacy: the prior mock-driven implementation accepted "confirm" /
+   * "modify" / "done" / "steer" to seed different initial UI. The new
+   * SSE-driven flow derives all of that from `runId` snapshot so this
+   * prop is accepted (for backward compat with alternate-layout entry
+   * points) and ignored.
+   */
   mode?: "confirm" | "modify" | "done" | "steer";
+  /**
+   * Backend feedback hook for the top-toolbar Dismiss button. The hook's
+   * `run.cancel()` is local-only (just flips UI state); this callback
+   * mirrors the home drawer's Dismiss path so the card POSTs
+   * /feedback kind=dismiss, drops out of the sphere, and shows as
+   * Dismissed in the TASKS view. Parent wires this to
+   * `cardActions.dismiss(realIntentCard)`.
+   */
+  onDismissBackend?: () => void | Promise<void>;
+  /**
+   * Backend feedback hook for the top-toolbar Done button. Same shape
+   * as `onDismissBackend` — POSTs /feedback kind=card_action
+   * action=complete so the card moves from sphere → TASKS as Completed.
+   */
+  onDoneBackend?: () => boolean | void | Promise<boolean | void>;
 }
 
 interface ChatMessage {
@@ -181,37 +237,6 @@ interface ChatMessage {
   content: string;
   status?: "done" | "running";
   timestamp: string;
-}
-
-/* User replies per card id */
-const USER_REPLIES: Record<number, string[]> = {
-  7: ["Got it, please send the payment confirmation to Alex ASAP", "Also CC Sarah on the reply"],
-  1: ["Interesting, can you summarize the key capability differences?", "Share this with the product team too"],
-  2: ["Thanks, remind me 30 min before", "Pull up last meeting notes with Rai"],
-  3: ["Looks correct, same as last month", "Log it and move on"],
-  4: ["Let me review the numbers first before approving", "What's the current total allocation?"],
-  5: ["Add the new hire update to the agenda", "Make sure everyone has the Notion link"],
-  6: ["Should I adjust my workout schedule?", "Show me the weekly trend comparison"],
-  8: ["Confirm the appointment", "What's the best route from the office?"],
-  9: ["This is a big deal for our positioning", "Set up a strategy discussion for Thursday"],
-  10: ["Approve the Claude access for the team", "How much does that add to our monthly cost?"],
-  11: ["Pull the latest action items from last meeting", "I'll draft the update now"],
-  12: ["How does this affect our token timeline?", "Flag this for the next board meeting"],
-};
-
-/* Generate fake timestamps based on card id */
-function getTimestamps(cardId: number) {
-  const baseHour = 9 + (cardId % 8);
-  const baseMin = (cardId * 7) % 60;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const times: string[] = [];
-  let h = baseHour, m = baseMin;
-  for (let i = 0; i < 10; i++) {
-    times.push(`${pad(h)}:${pad(m)}`);
-    m += 1 + (i % 3);
-    if (m >= 60) { m -= 60; h += 1; }
-  }
-  return times;
 }
 
 /* Split a step content into a short title + descriptive sentence */
@@ -284,25 +309,84 @@ const ActionRow = memo(function ActionRow({ msg, isPaused, isLast }: { msg: Chat
   );
 });
 
-const ActionPanel = memo(function ActionPanel({ items, label, isPaused }: { items: ChatMessage[]; label: string; isPaused: boolean }) {
+/* Collapsible wrapper around ActionPanel.
+ *
+ * Owns its own `expanded` state so the user can toggle freely, but
+ * auto-resyncs whenever `defaultCollapsed` flips — typically when the
+ * run transitions between running ↔ paused ↔ done. The header shows
+ * a compact summary (N steps + state badge) so the user can scan
+ * progress without expanding. */
+function CollapsibleActionGroup({
+  items, label, isPaused, defaultCollapsed,
+}: {
+  items: ChatMessage[];
+  label: string;
+  isPaused: boolean;
+  defaultCollapsed: boolean;
+}) {
+  const [expanded, setExpanded] = useState(!defaultCollapsed);
+  useEffect(() => {
+    setExpanded(!defaultCollapsed);
+  }, [defaultCollapsed]);
+
   if (items.length === 0) return null;
-  const doneCount = items.filter(m => m.status === "done").length;
+  const doneCount = items.filter((m) => m.status === "done").length;
+  const runningCount = items.filter((m) => m.status === "running").length;
+  const stateLabel =
+    runningCount > 0
+      ? `${doneCount}/${items.length} · running`
+      : `${doneCount}/${items.length} · done`;
+
+  return (
+    <div
+      className="rounded-2xl border border-foreground/8 overflow-hidden"
+      style={{
+        background: "rgba(255,255,255,0.45)",
+        backdropFilter: "blur(16px)",
+        WebkitBackdropFilter: "blur(16px)",
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-foreground/[0.02] transition-colors text-left"
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-foreground/45">
+            {label}
+          </span>
+          <span className="text-[11px] text-foreground/40">· {stateLabel}</span>
+        </div>
+        <ChevronUp
+          size={14}
+          strokeWidth={2}
+          className={`text-foreground/35 transition-transform ${expanded ? "" : "rotate-180"}`}
+        />
+      </button>
+      {expanded && (
+        <div className="border-t border-foreground/[0.06]">
+          <ActionPanel items={items} label={label} isPaused={isPaused} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ActionPanel renders just the timeline rows. The outer surface
+ * (rounded background + collapsible header) lives in
+ * `CollapsibleActionGroup` — this stays a thin body so it works as a
+ * standalone block in tests / storybook scenarios. */
+const ActionPanel = memo(function ActionPanel({ items, isPaused }: { items: ChatMessage[]; label: string; isPaused: boolean }) {
+  if (items.length === 0) return null;
   return (
     <motion.div
       layout
       transition={{ layout: { duration: 0.32, ease: [0.32, 0.72, 0, 1] } }}
-      className="rounded-2xl border border-foreground/8 overflow-hidden"
-      style={{ background: "rgba(255,255,255,0.45)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)" }}
+      className="px-3 pb-2 pt-1"
     >
-      <div className="px-4 pt-3 pb-2 flex items-center justify-between">
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground/40">{label}</p>
-        <p className="text-[11px] text-foreground/40">{doneCount} / {items.length}</p>
-      </div>
-      <div className="px-3 pb-2 pt-1">
-        {items.map((msg, i) => (
-          <ActionRow key={msg.id} msg={msg} isPaused={isPaused} isLast={i === items.length - 1} />
-        ))}
-      </div>
+      {items.map((msg, i) => (
+        <ActionRow key={msg.id} msg={msg} isPaused={isPaused} isLast={i === items.length - 1} />
+      ))}
     </motion.div>
   );
 });
@@ -315,7 +399,62 @@ const ARTIFACT_KIND_LABEL: Record<Artifact["kind"], string> = {
   doc: "Document",
 };
 
-export function ArtifactItem({ artifact, index, locked = false }: { artifact: Artifact; index: number; locked?: boolean }) {
+/* Heuristic match: artifact.kind → side_effect.slug prefix. Used in the
+ * Result panel to upgrade "Email draft" to "Email · Sent" when the
+ * corresponding dangerous_write actually fired. v1 limitation: if an
+ * agent emits multiple artifacts of the same kind, all match the first
+ * matching side_effect — acceptable since multi-artifact-same-kind is
+ * rare for current card patterns. */
+export function matchSideEffect(
+  artifact: Artifact,
+  sideEffects: SideEffect[],
+): SideEffect | null {
+  if (artifact.kind === "email") {
+    return sideEffects.find((s) => s.slug.startsWith("GMAIL_")) ?? null;
+  }
+  if (artifact.kind === "message") {
+    return sideEffects.find((s) => s.slug.startsWith("SLACK_")) ?? null;
+  }
+  if (artifact.kind === "doc") {
+    return (
+      sideEffects.find((s) =>
+        s.slug.startsWith("NOTION_") ||
+        s.slug.startsWith("GDOCS_") ||
+        s.slug.startsWith("GDRIVE_"),
+      ) ?? null
+    );
+  }
+  return null;
+}
+
+/* Verb mapping for the upgraded label (e.g. "Email · Sent"). */
+const SIDE_EFFECT_VERB: Record<Artifact["app"], string> = {
+  gmail: "Sent",
+  slack: "Posted",
+  notion: "Created",
+  gdocs: "Created",
+};
+
+/* Extract a generic URL from opaque output_meta. Returns the first of
+ * url / permalink / web_link found as a string; null otherwise. */
+function urlFromMeta(meta: unknown): string | null {
+  if (!meta || typeof meta !== "object") return null;
+  const m = meta as Record<string, unknown>;
+  for (const key of ["url", "permalink", "web_link"] as const) {
+    const v = m[key];
+    if (typeof v === "string" && v.length > 0) return v;
+  }
+  return null;
+}
+
+export function ArtifactItem({
+  artifact, index, locked = false, sideEffect = null,
+}: {
+  artifact: Artifact;
+  index: number;
+  locked?: boolean;
+  sideEffect?: SideEffect | null;
+}) {
   const [expanded, setExpanded] = useState(index === 0);
   const brand = artifact.app === "gmail" ? "gmail"
     : artifact.app === "slack" ? "slack"
@@ -336,9 +475,29 @@ export function ArtifactItem({ artifact, index, locked = false }: { artifact: Ar
           <div className="w-5 h-5">{brandSvg(brand)}</div>
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-foreground/40 leading-none mb-1">
-            {ARTIFACT_KIND_LABEL[artifact.kind]}
-          </p>
+          {(() => {
+            // Label upgrade: "Email draft" → "Email · Sent" / "Email · Failed"
+            // when a matching side_effect proves the action fired.
+            if (!sideEffect) {
+              return (
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-foreground/40 leading-none mb-1">
+                  {ARTIFACT_KIND_LABEL[artifact.kind]}
+                </p>
+              );
+            }
+            if (sideEffect.is_error) {
+              return (
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-red-600 leading-none mb-1">
+                  {ARTIFACT_KIND_LABEL[artifact.kind]} · Failed
+                </p>
+              );
+            }
+            return (
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-green-700 leading-none mb-1">
+                {ARTIFACT_KIND_LABEL[artifact.kind]} · {SIDE_EFFECT_VERB[artifact.app]}
+              </p>
+            );
+          })()}
           <p className="text-[13px] font-semibold text-foreground/85 truncate leading-tight">{artifact.title}</p>
           {artifact.meta && (
             <p className="text-[11px] text-foreground/45 mt-0.5 truncate">{artifact.meta}</p>
@@ -386,6 +545,20 @@ export function ArtifactItem({ artifact, index, locked = false }: { artifact: Ar
                   {artifact.body}
                 </p>
               )}
+              {sideEffect && !sideEffect.is_error && (() => {
+                const url = urlFromMeta(sideEffect.output_meta);
+                if (!url) return null;
+                return (
+                  <a
+                    href={url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 mt-2 text-[12px] font-medium text-foreground/70 hover:text-foreground transition-colors"
+                  >
+                    Open ↗
+                  </a>
+                );
+              })()}
             </div>
           </motion.div>
         )}
@@ -394,8 +567,174 @@ export function ArtifactItem({ artifact, index, locked = false }: { artifact: Ar
   );
 }
 
-const ArtifactPanel = memo(function ArtifactPanel({ artifacts }: { artifacts: Artifact[] }) {
+/* StaticPauseCard — read-only chat exchange for a past
+ * `input_required` event. The active pause (with chips + input +
+ * Continue) is rendered separately by the main component; this is
+ * for historical pauses the user has already replied to, so they
+ * stay visible in the chat scrollback the same way past messages
+ * stay visible in any chat app.
+ *
+ * Visually: agent's outgoing `message` text at top + the chip options
+ * the agent offered at that turn (read-only pills) + the user's
+ * actual reply (right-aligned bubble) at the bottom. Everything
+ * structured-payload-y (plan, drafts, dangerous_actions, risks) is
+ * intentionally NOT replayed in the scrollback — those were shown
+ * live during the active pause and the most current drafts always
+ * sit in the top-pinned drafts card. The scrollback is just
+ * conversation: "agent said X, offered these shortcuts, user replied
+ * Y".
+ */
+function StaticPauseCard({
+  index, total, data, userReply,
+}: {
+  index: number;
+  total: number;
+  data: PendingInput | undefined;
+  userReply: string | null;
+}) {
+  const agentText = data?.kind === "message" ? (data.message ?? "") : "";
+  const options: string[] = data?.kind === "message" ? (data.options ?? []) : [];
+  if (!agentText && !userReply && options.length === 0) return null;
+
+  return (
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.24, ease: [0.32, 0.72, 0, 1] }}
+      className="rounded-2xl px-4 py-3 border border-foreground/10 bg-background/40"
+    >
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <p className="text-[10.5px] font-semibold uppercase tracking-wider text-foreground/40">
+          Agent
+        </p>
+        {total > 1 && (
+          <span className="text-[10px] font-semibold text-foreground/35 tabular-nums">
+            {index} / {total}
+          </span>
+        )}
+      </div>
+      {agentText && (
+        <p className="text-[13px] text-foreground/75 leading-snug whitespace-pre-line">
+          {agentText}
+        </p>
+      )}
+      {options.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {options.map((label, i) => (
+            <span
+              key={i}
+              className="text-[11.5px] px-2.5 py-1 rounded-full border border-foreground/10 text-foreground/55"
+              style={{ background: "rgba(255,255,255,0.4)" }}
+            >
+              {label}
+            </span>
+          ))}
+        </div>
+      )}
+      {userReply && (
+        <div className="mt-2.5 flex justify-end">
+          <div className="max-w-[82%] px-3 py-1.5 rounded-[14px] rounded-br-[4px] bg-foreground text-background text-[12.5px] leading-relaxed shadow-sm">
+            {userReply}
+          </div>
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
+/* ContinueReplyBox — the persistent input slot shown beneath the Result
+ * card while the run is in pending_done. Lets the user keep talking to
+ * the agent (`continueWith` spawns a fresh run carrying the typed text
+ * as continuation context). The task ends only when the user clicks
+ * Done in the top toolbar — exactly like a chat where the conversation
+ * stays open until the user closes it. */
+function ContinueReplyBox({
+  busy, value, onChange, onSubmit,
+}: {
+  busy: boolean;
+  value: string;
+  onChange: (v: string) => void;
+  onSubmit: () => void | Promise<void>;
+}) {
+  return (
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.24, ease: [0.32, 0.72, 0, 1] }}
+      className="rounded-2xl px-4 py-3 border border-foreground/10 bg-background/50"
+    >
+      <p className="text-[10.5px] font-semibold uppercase tracking-wider text-foreground/40 mb-2">
+        Keep going
+      </p>
+      <div
+        className="px-3 py-2 rounded-xl border border-foreground/10 flex items-center gap-2"
+        style={{ background: "rgba(255,255,255,0.55)" }}
+      >
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              void onSubmit();
+            }
+          }}
+          placeholder="Reply to keep the conversation going..."
+          className="flex-1 bg-transparent text-[13px] text-foreground placeholder:text-foreground/35 outline-none"
+        />
+        <VoiceButton onUpdate={onChange} />
+      </div>
+      <button
+        type="button"
+        onClick={() => void onSubmit()}
+        disabled={busy || !value.trim()}
+        className="mt-3 w-full px-4 py-2.5 rounded-xl bg-foreground text-background text-[13px] font-semibold hover:bg-foreground/85 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+      >
+        {busy ? (
+          <><Loader2 size={13} className="animate-spin" /> Sending…</>
+        ) : (
+          <>Continue <ArrowRight size={13} strokeWidth={2.5} /></>
+        )}
+      </button>
+    </motion.div>
+  );
+}
+
+/* ArtifactPanel — the draft / generated-content card.
+ *
+ * Collapsible: the user can fold it once they've reviewed the content.
+ * When `version` increments (e.g. the agent re-called `send_message`
+ * with a new draft), the card automatically re-expands and the header
+ * label flips to "Updated draft" so the change is visible at a glance.
+ *
+ * `version` is the FE's view of `messageCount` from the hook: 0 before
+ * any pause, 1 on the initial plan introduction, 2+ on each subsequent
+ * re-call.
+ * Auto-re-expand is keyed off `version` changes via a useEffect so user
+ * folds are respected between updates. */
+const ArtifactPanel = memo(function ArtifactPanel({
+  artifacts, sideEffects = [], version = 1,
+}: {
+  artifacts: Artifact[];
+  sideEffects?: SideEffect[];
+  version?: number;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  // When a new approval version lands, re-open the card so the user
+  // sees the change. Manual folds in between are preserved.
+  useEffect(() => {
+    setExpanded(true);
+  }, [version]);
+
   if (!artifacts || artifacts.length === 0) return null;
+  const isUpdate = version >= 2;
+  const headerLabel = isUpdate
+    ? artifacts.length === 1 ? "Updated draft" : "Updated drafts"
+    : artifacts.length === 1 ? "Generated draft" : "Generated drafts";
+
   return (
     <motion.div
       layout
@@ -405,79 +744,344 @@ const ArtifactPanel = memo(function ArtifactPanel({ artifacts }: { artifacts: Ar
       className="rounded-2xl border border-foreground/8 overflow-hidden"
       style={{ background: "rgba(255,255,255,0.45)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)" }}
     >
-      <div className="px-4 pt-3 pb-2 flex items-center justify-between">
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground/40">
-          {artifacts.length === 1 ? "Generated draft" : "Generated drafts"}
-        </p>
-        <p className="text-[11px] text-foreground/40">{artifacts.length}</p>
-      </div>
-      <div className="px-3 pb-3 pt-1 flex flex-col gap-2">
-        {artifacts.map((a, i) => (
-          <ArtifactItem key={i} artifact={a} index={i} />
-        ))}
-      </div>
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full px-4 pt-3 pb-2 flex items-center justify-between hover:bg-foreground/[0.02] transition-colors text-left"
+      >
+        <div className="flex items-center gap-2">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground/40">
+            {headerLabel}
+          </p>
+          {isUpdate && (
+            <span
+              className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+              style={{
+                color: "hsl(292 78% 45%)",
+                background: "hsl(292 78% 63% / 0.12)",
+              }}
+            >
+              v{version}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5">
+          <p className="text-[11px] text-foreground/40">{artifacts.length}</p>
+          <ChevronUp
+            size={14}
+            strokeWidth={2}
+            className={`text-foreground/35 transition-transform ${expanded ? "" : "rotate-180"}`}
+          />
+        </div>
+      </button>
+      {expanded && (
+        <div className="px-3 pb-3 pt-1 flex flex-col gap-2 border-t border-foreground/[0.06]">
+          {artifacts.map((a, i) => (
+            <ArtifactItem
+              key={i}
+              artifact={a}
+              index={i}
+              sideEffect={matchSideEffect(a, sideEffects)}
+            />
+          ))}
+        </div>
+      )}
     </motion.div>
   );
 });
 
-/* Build the structured "Needs your input" questions. The number of questions
-   (1–3) is deterministic per card and matches the pink action-count badge.
-   First option in each question is the implicit default (auto-selected),
-   but no "Default" label is shown to the user. */
+/* "Needs your input" question shape. Used to be a mock list derived from
+ * card id; now built from the live backend `pendingInput` when kind is
+ * a `send_message` pause. The Lovable visual layer (option chips +
+ * Continue) reads from a 1-item array of this shape — see the main
+ * component. */
 interface InputOption { label: string }
 interface InputQuestion { id: string; question: string; options: InputOption[] }
 
-// Mirror of getActionCount in ChatTimeline — keeps the question count in sync
-// with the pink badge number on the chat list.
-function getQuestionCount(cardId: number): number {
-  return ((cardId * 7 + 2) % 3) + 1;
+
+/* ── SSE event → ChatMessage projection ──
+ *
+ * The Lovable visual layer reads `messages: ChatMessage[]`. We derive that
+ * shape from the SSE stream so the existing JSX (ActionPanel / ToolIconBadge
+ * / ArtifactPanel / etc.) stays untouched.
+ *
+ *   chat:tool:start  → action message, status='running'
+ *   chat:tool:result → flip the matched id to status='done'
+ *   result           → summary message
+ *   chat:error       → summary message tagged as failure
+ *
+ * `input_required` does NOT add a message — it surfaces as the
+ * "Needs your input" panel below the action list, driven separately.
+ */
+function actionContentFromEvent(data: Record<string, unknown> | undefined): string {
+  if (!data) return "Working";
+  const name = String(data.name || "tool");
+  const preview = String(data.argsPreview || "");
+  if (!preview) return name;
+  // Use the same "title · desc" splitter pattern Lovable's ActionRow expects.
+  return `${name} · ${preview.length > 60 ? preview.slice(0, 58) + "…" : preview}`;
 }
 
-function buildInputQuestions(card: ChatCard): InputQuestion[] {
-  const firstStep = card.detail?.executionPlan[0]?.text || card.title;
-  const pool: InputQuestion[] = [
+function formatTs(ts?: number): string {
+  if (!ts) return "";
+  try {
+    const d = new Date(ts);
+    const h = String(d.getHours()).padStart(2, "0");
+    const m = String(d.getMinutes()).padStart(2, "0");
+    return `${h}:${m}`;
+  } catch {
+    return "";
+  }
+}
+
+function eventsToMessages(events: SSEEvent[], cardTitle: string): ChatMessage[] {
+  const msgs: ChatMessage[] = [
     {
-      id: "scope",
-      question: `Confirm the scope — proceed with "${firstStep}"?`,
-      options: [
-        { label: "Yes, proceed as planned" },
-        { label: "Run a quick dry-run first" },
-        { label: "Narrow to the essentials only" },
-      ],
-    },
-    {
-      id: "timing",
-      question: "When should I run this?",
-      options: [
-        { label: "Right now" },
-        { label: "In 15 minutes" },
-        { label: "Schedule for tomorrow 9am" },
-      ],
-    },
-    {
-      id: "extras",
-      question: "Anything to skip or add before I run?",
-      options: [
-        { label: "Nothing — keep as is" },
-        { label: "Also notify the team channel" },
-        { label: "Skip notifications, just draft" },
-      ],
+      id: "card-ref",
+      sender: "ai",
+      type: "card-ref",
+      content: cardTitle,
+      timestamp: "",
     },
   ];
-  const count = Math.max(1, Math.min(3, getQuestionCount(card.id)));
-  return pool.slice(0, count);
+  // Map toolCallId → msg index so chat:tool:result can flip the matching row.
+  const toolCalls = new Map<string, number>();
+  for (const ev of events) {
+    if (ev.type === "chat:tool:start") {
+      const data = ev.data ?? {};
+      const toolCallId = String(data.toolCallId || `tc-${msgs.length}`);
+      // Skip the send_message tool — it's the pause point itself,
+      // not a step the user needs to see as a "running" action.
+      const name = String(data.name || "");
+      if (name === "send_message") continue;
+      const content = actionContentFromEvent(data);
+      msgs.push({
+        id: `action-${toolCallId}`,
+        sender: "ai",
+        type: "action",
+        content,
+        status: "running",
+        timestamp: formatTs(ev.ts),
+      });
+      toolCalls.set(toolCallId, msgs.length - 1);
+    } else if (ev.type === "chat:tool:result") {
+      const data = ev.data ?? {};
+      const toolCallId = String(data.toolCallId || "");
+      const idx = toolCalls.get(toolCallId);
+      if (idx !== undefined) {
+        msgs[idx] = { ...msgs[idx], status: "done" };
+      }
+    } else if (ev.type === "input_required") {
+      // Agent paused at send_message. Any tool row still "running" by
+      // this point is an unmatched chat:tool:start that never received
+      // its chat:tool:result
+      // — most often happens when LangGraph swallows on_tool_end after a
+      // Pydantic args-validation failure (we still got chat:tool:start
+      // because the tool was named in the model's tool_calls array, but
+      // the validator rejected the args before invocation). The agent
+      // has clearly moved past these, so visually mark them done so the
+      // user doesn't see a hung spinner on a tool the agent retried.
+      for (let i = 0; i < msgs.length; i++) {
+        if (msgs[i].status === "running") {
+          msgs[i] = { ...msgs[i], status: "done" };
+        }
+      }
+    } else if (ev.type === "result") {
+      const summary = String(
+        (ev.data as Record<string, unknown>)?.summary || "Done.",
+      );
+      // Make sure every preceding action is marked done — agent message
+      // arrived after the last tool completed.
+      for (let i = 0; i < msgs.length; i++) {
+        if (msgs[i].status === "running") {
+          msgs[i] = { ...msgs[i], status: "done" };
+        }
+      }
+      msgs.push({
+        id: "summary",
+        sender: "ai",
+        type: "text",
+        content: summary,
+        timestamp: formatTs(ev.ts),
+      });
+    } else if (ev.type === "chat:error") {
+      const err = String(
+        (ev.data as Record<string, unknown>)?.error || "Run failed.",
+      );
+      for (let i = 0; i < msgs.length; i++) {
+        if (msgs[i].status === "running") {
+          msgs[i] = { ...msgs[i], status: "done" };
+        }
+      }
+      msgs.push({
+        id: "summary",
+        sender: "ai",
+        type: "text",
+        content: `Failed: ${err}`,
+        timestamp: formatTs(ev.ts),
+      });
+    }
+  }
+  return msgs;
 }
 
+/* Map snapshot.status → Lovable's local taskState shape. */
+type LocalTaskState =
+  | "running"
+  | "needs-input"
+  | "pending-done"
+  | "done"
+  | "dismissed";
 
-export default function ChatDetailView({ card, onBack, mode = "confirm" }: ChatDetailViewProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+function statusToTaskState(
+  status: string | undefined,
+  pending: PendingInput | null,
+): LocalTaskState {
+  if (!status) return "running";
+  if (status === "needs_input" && pending) return "needs-input";
+  if (status === "pending_done") return "pending-done";
+  if (status === "done") return "done";
+  if (status === "error") return "done"; // surface as terminal so the toolbar shows the retry row
+  if (status === "cancelled") return "dismissed";
+  return "running";
+}
+
+export default function ChatDetailView({
+  card,
+  runId,
+  onBack,
+  onRetry,
+  bootstrap,
+  onDismissBackend,
+  onDoneBackend,
+}: ChatDetailViewProps) {
+  // Pass `null` when runId is absent so the hook idles. Production callers
+  // always supply runId; the optional shape is just so the dead Lovable
+  // demo layouts still type-check.
+  // `bootstrap` (when set) gets fired as the first HumanMessage if the
+  // card-thread has no persisted turns yet — see the hook's
+  // empty-thread bootstrap path for the rationale.
+  const run = useCardExecutionRun(runId ?? null, { bootstrap });
+
+  // Browser-tool surface: the card-execution agent shares the same
+  // browser_tool that main chat uses. Mirror MainChatView's hookup so
+  // when the agent calls `open` / `request_takeover` the Live View
+  // iframe + takeover banner render here, not just inside Main Chat.
+  // SSE keys off the card-thread session_key the agent runs under;
+  // useBrowserSession bails when the string is empty (idle Lovable
+  // demo path passes runId=null).
+  const browserSessionKey = runId ? `card-thread-${runId}` : "";
+  const {
+    session: browserSession,
+    setControl: setBrowserControl,
+    sendInput: sendBrowserInput,
+    refreshLiveView,
+    close: closeBrowserSession,
+  } = useBrowserSession(browserSessionKey);
+  const [browserStage, setBrowserStage] = useState<SheetStage | "closed">(
+    "closed",
+  );
+  // Re-mount the Browserbase iframe when iOS resumes the app — same
+  // rationale as MainChatView: the WebSocket may have been paused
+  // while bg and the signed iframe URL may have expired.
+  const [iframeReloadKey, setIframeReloadKey] = useState(0);
+  const lastReloadAtRef = useRef(0);
+  useEffect(() => {
+    const bump = () => {
+      const now = Date.now();
+      if (now - lastReloadAtRef.current < 1500) return;
+      lastReloadAtRef.current = now;
+      void (async () => {
+        await refreshLiveView();
+        setIframeReloadKey((k) => k + 1);
+      })();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") bump();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [refreshLiveView]);
+  const handleBrowserInputText = useCallback(
+    (text: string) => sendBrowserInput({ type: "text", text }),
+    [sendBrowserInput],
+  );
+  const handleBrowserInputKey = useCallback(
+    (key: string) => sendBrowserInput({ type: "key", key }),
+    [sendBrowserInput],
+  );
+  const handleBrowserInputClick = useCallback(
+    (x: number, y: number) => sendBrowserInput({ type: "click", x, y }),
+    [sendBrowserInput],
+  );
+  const handleBrowserInputScroll = useCallback(
+    (dx: number, dy: number) => sendBrowserInput({ type: "scroll", dx, dy }),
+    [sendBrowserInput],
+  );
+  const handleBrowserControlChange = useCallback(
+    (mode: "ai" | "user") => {
+      void setBrowserControl(mode);
+    },
+    [setBrowserControl],
+  );
+  const handleBrowserClose = useCallback(() => {
+    void closeBrowserSession();
+  }, [closeBrowserSession]);
+
+  // Derive Lovable-shaped messages from the live SSE event stream.
+  // Stable identity per event so memo'd ActionRow / ActionPanel don't flicker.
+  const sseMessages = useMemo(
+    () => eventsToMessages(run.events, card.title),
+    [run.events, card.title],
+  );
+
+  // User bubbles for replies typed / chip-picked into the panel. Each carries the
+  // number of SSE events that had been seen at the moment of submit, so
+  // the renderer can interleave the bubble chronologically with later
+  // streamed actions (matches Lovable's segmented "user bubble → Continued
+  // panel" layout that splits on the `user-input-*` id prefix).
+  interface BubbleEntry {
+    bubble: ChatMessage;
+    afterEventCount: number;
+  }
+  const [userBubbles, setUserBubbles] = useState<BubbleEntry[]>([]);
+
+  // Combined messages array consumed by the JSX render block below.
+  // Interleave bubbles at their captured event-count position so steer
+  // reasons stay above the events the agent produced in response.
+  const messages = useMemo<ChatMessage[]>(() => {
+    if (userBubbles.length === 0) return sseMessages;
+    const out: ChatMessage[] = [];
+    let bubbleIdx = 0;
+    const sorted = [...userBubbles].sort(
+      (a, b) => a.afterEventCount - b.afterEventCount,
+    );
+    // Emit sseMessages, splicing bubbles in at their captured indices.
+    // The base offset (1) accounts for the leading card-ref message that
+    // eventsToMessages always prepends regardless of event count.
+    for (let i = 0; i < sseMessages.length; i++) {
+      out.push(sseMessages[i]);
+      while (
+        bubbleIdx < sorted.length &&
+        sorted[bubbleIdx].afterEventCount <= i
+      ) {
+        out.push(sorted[bubbleIdx].bubble);
+        bubbleIdx++;
+      }
+    }
+    // Trailing bubbles (submitted before any new events arrived).
+    while (bubbleIdx < sorted.length) {
+      out.push(sorted[bubbleIdx].bubble);
+      bubbleIdx++;
+    }
+    return out;
+  }, [sseMessages, userBubbles]);
+
   const [inputValue, setInputValue] = useState("");
   const [cardDrawerOpen, setCardDrawerOpen] = useState(false);
+  // Pause/Resume is a local UI freeze only — there's no server-side pause
+  // (agent already pauses at interrupts), so this just hides the spinner.
   const [isPaused, setIsPaused] = useState(false);
-  const pausedRef = useRef(false);
-  useEffect(() => { pausedRef.current = isPaused; }, [isPaused]);
-  // Set true when the user takes over (Steer-send) so the initial tick() stops emitting.
-  const initialCancelledRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -486,196 +1090,57 @@ export default function ChatDetailView({ card, onBack, mode = "confirm" }: ChatD
     }
   }, [messages]);
 
-  // Task lifecycle: running → needs-input (pause for question) → running → done
-  const [taskState, setTaskState] = useState<"running" | "needs-input" | "done" | "dismissed">("running");
-  const [showInput, setShowInput] = useState(false);
-  const [feedback, setFeedback] = useState<"up" | "down" | null>(null);
+  // Task lifecycle — strictly derived from the run snapshot so we never
+  // diverge from the backend's authoritative state machine.
+  const taskState: LocalTaskState = useMemo(
+    () => statusToTaskState(run.snapshot?.status, run.snapshot?.pendingInput ?? null),
+    [run.snapshot?.status, run.snapshot?.pendingInput],
+  );
+
+  // The needs-input panel below is the ONLY user-reply surface in
+  // this iteration. While the agent is paused on a `send_message`
+  // interrupt, the panel renders the option chips + a permanent
+  // free-text input slot + a Continue (=Reply) button. There is no
+  // global bottom input bar and no separate Steer affordance — every
+  // reply, whether by chip or by typing, flows through the panel.
+  //
+  // `isPaused` (above, the run-display Pause/Resume button) is a
+  // separate manual UI toggle that just freezes the visual timeline;
+  // `awaitingInput` here is the backend-driven "agent is paused
+  // waiting for user" condition.
+  const pendingKind = run.snapshot?.pendingInput?.kind;
+  const awaitingInput = pendingKind === "message";
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Structured "Needs your input" Q&A — questions are interleaved into execution.
-  const inputQuestions = useMemo(() => buildInputQuestions(card), [card]);
-  const inputQuestionsRef = useRef(inputQuestions);
-  useEffect(() => { inputQuestionsRef.current = inputQuestions; }, [inputQuestions]);
-  // Index of the question currently being asked (null when none active).
-  const [activeQuestionIndex, setActiveQuestionIndex] = useState<number | null>(null);
+  // The "Needs your input" panel below the action list — a SINGLE
+  // unified surface for every pause. The agent's `send_message` tool
+  // carries the chat text in `message` and optional quick-reply chip
+  // labels in `options`. The FE never synthesises chips itself — if
+  // the agent didn't supply any, the panel renders only the message +
+  // free-text input slot.
+  const inputQuestions = useMemo<InputQuestion[]>(() => {
+    const p = run.snapshot?.pendingInput;
+    if (!p || p.kind !== "message") return [];
+    const agentOptions = (p.options ?? []).map((label) => ({ label }));
+    return [
+      {
+        id: "message",
+        question: p.message || "",
+        options: agentOptions,
+      },
+    ];
+  }, [run.snapshot?.pendingInput]);
+
+  const activeQuestionIndex: number | null = inputQuestions.length > 0 ? 0 : null;
   const [selectedOption, setSelectedOption] = useState<number>(0);
-  const [committedAnswers, setCommittedAnswers] = useState<{ q: string; a: string }[]>([]);
-
-  // Refs to drive the interleaved execution + question queue
-  const queueRef = useRef<Array<
-    | { kind: "action"; content: string; final: boolean }
-    | { kind: "question"; questionIndex: number }
-  >>([]);
-  const idxRef = useRef(0);
-  const tickRef = useRef<() => void>(() => {});
-  const cancelledRef = useRef(false);
-
+  // Reset selection whenever a new question arrives. Keyed off the
+  // first question's text since `inputQuestions` is always 0 or 1 long.
+  const currentQuestionText = inputQuestions[0]?.question ?? null;
   useEffect(() => {
-    cancelledRef.current = false;
-    const timers: NodeJS.Timeout[] = [];
-    const ts = getTimestamps(card.id);
-    let ti = 0;
-    initialCancelledRef.current = false;
+    setSelectedOption(0);
+  }, [currentQuestionText]);
 
-    // 1. Card reference (clickable)
-    setMessages([{
-      id: "card-ref",
-      sender: "ai",
-      type: "card-ref",
-      content: card.title,
-      timestamp: ts[ti++],
-    }]);
-
-    if (!card.detail) return;
-    const plan = card.detail.executionPlan;
-
-    if (mode === "steer") {
-      // Steer mode: don't auto-execute. Just show context (card-ref) and open
-      // the input bar so the user can type guidance before anything runs.
-      // Sending input will trigger handleSendInput → AI follow-up flow.
-      initialCancelledRef.current = true;
-      setShowInput(true);
-      setTimeout(() => inputRef.current?.focus(), 80);
-      return;
-    }
-
-    if (mode === "done") {
-      // Done flow: show all messages instantly (pure execution log)
-      const allMessages: ChatMessage[] = [{
-        id: "card-ref", sender: "ai", type: "card-ref",
-        content: card.title, timestamp: ts[ti++],
-      }];
-      plan.forEach((step, i) => {
-        allMessages.push({
-          id: `action-${i}`, sender: "ai", type: "action",
-          content: step.text, status: "done",
-          timestamp: ts[ti++] || ts[ts.length - 1],
-        });
-      });
-      allMessages.push({
-        id: "summary", sender: "ai", type: "text",
-        content: `${card.detail!.result || `${card.detail!.willExecute}.`}\n\nLet me know if anything needs adjusting, or close to return home.`,
-        timestamp: ts[ti++] || ts[ts.length - 1],
-      });
-      setMessages(allMessages);
-      return;
-    }
-
-    // ── Build interleaved queue: actions + questions inserted between steps ──
-    type Step =
-      | { kind: "action"; content: string; final: boolean }
-      | { kind: "question"; questionIndex: number };
-
-    const numQuestions = inputQuestionsRef.current.length;
-    const SUB_PREFIXES = ["Preparing", "Querying", "Validating", "Cross-checking", "Drafting", "Finalizing"];
-
-    // Compute, for each question, which plan-step index it should appear AFTER.
-    // Distribute questions evenly across the plan. Never after the very last step
-    // (questions belong mid-execution, not after everything finishes).
-    const insertAfter = new Set<number>();
-    if (plan.length > 0 && numQuestions > 0) {
-      // Slots: positions 1..plan.length-1 (insert after these step indices)
-      // If plan has only 1 step, fall back to inserting after step 0.
-      const maxSlot = Math.max(0, plan.length - 1);
-      const slots: number[] = [];
-      if (maxSlot === 0) {
-        for (let i = 0; i < numQuestions; i++) slots.push(0);
-      } else {
-        for (let q = 0; q < numQuestions; q++) {
-          // Even distribution across [0..maxSlot-1] → after step idx in [0..maxSlot-1]
-          const idx = Math.floor(((q + 1) * maxSlot) / (numQuestions + 1));
-          slots.push(Math.max(0, Math.min(maxSlot - 1, idx)));
-        }
-      }
-      slots.forEach((s) => insertAfter.add(s));
-    }
-
-    const queue: Step[] = [];
-    let qCounter = 0;
-    plan.forEach((step, i) => {
-      const subA = SUB_PREFIXES[(i * 2) % SUB_PREFIXES.length];
-      const subB = SUB_PREFIXES[(i * 2 + 1) % SUB_PREFIXES.length];
-      const shortLabel = step.text.length > 60 ? step.text.slice(0, 58) + "…" : step.text;
-      queue.push({ kind: "action", content: `${subA} · ${step.tool}`, final: false });
-      queue.push({ kind: "action", content: `${subB} context for "${shortLabel}"`, final: false });
-      queue.push({ kind: "action", content: step.text, final: i === plan.length - 1 });
-      if (insertAfter.has(i) && qCounter < numQuestions) {
-        queue.push({ kind: "question", questionIndex: qCounter });
-        qCounter++;
-      }
-    });
-    // Safety: any remaining questions append before summary
-    while (qCounter < numQuestions) {
-      queue.push({ kind: "question", questionIndex: qCounter });
-      qCounter++;
-    }
-
-    queueRef.current = queue;
-    idxRef.current = 0;
-
-    let timer: NodeJS.Timeout | null = null;
-
-    const tick = () => {
-      if (cancelledRef.current) return;
-      if (initialCancelledRef.current) {
-        setMessages(prev => prev.map(m => m.status === "running" ? { ...m, status: "done" as const } : m));
-        return;
-      }
-      if (pausedRef.current) {
-        timer = setTimeout(tick, 250);
-        return;
-      }
-      if (idxRef.current >= queueRef.current.length) {
-        // All actions + questions consumed → emit summary
-        setMessages(prev => {
-          const cleared = prev.map(m => m.status === "running" ? { ...m, status: "done" as const } : m);
-          return [...cleared, {
-            id: "summary", sender: "ai", type: "text",
-            content: `${card.detail!.result || `${card.detail!.willExecute}.`}\n\nLet me know if anything needs adjusting, or close to return home.`,
-            timestamp: ts[ti++] || ts[ts.length - 1],
-          }];
-        });
-        return;
-      }
-      const step = queueRef.current[idxRef.current++];
-
-      if (step.kind === "question") {
-        // Pause execution: surface the question, wait for Approve.
-        setMessages(prev => prev.map(m => m.status === "running" ? { ...m, status: "done" as const } : m));
-        setActiveQuestionIndex(step.questionIndex);
-        setSelectedOption(0);
-        setTaskState("needs-input");
-        return;
-      }
-
-      // action
-      setMessages(prev => {
-        const updated = prev.map(m => m.status === "running" ? { ...m, status: "done" as const } : m);
-        return [...updated, {
-          id: `action-${idxRef.current}`, sender: "ai", type: "action",
-          content: step.content,
-          status: "running",
-          timestamp: ts[ti++] || ts[ts.length - 1],
-        }];
-      });
-      const isFinal = step.final;
-      timer = setTimeout(() => {
-        if (cancelledRef.current) return;
-        setMessages(prev => prev.map(m => m.status === "running" ? { ...m, status: "done" as const } : m));
-        tick();
-      }, isFinal ? 700 : 600);
-    };
-
-    tickRef.current = tick;
-    timer = setTimeout(tick, 600);
-
-    return () => {
-      cancelledRef.current = true;
-      if (timer) clearTimeout(timer);
-      timers.forEach(clearTimeout);
-    };
-  }, [card, mode]);
-
+  // Sources for the optional drawer body.
   const sources = card.line2
     .replace("Sources:", "")
     .replace("Sources: ", "")
@@ -683,154 +1148,126 @@ export default function ChatDetailView({ card, onBack, mode = "confirm" }: ChatD
     .map((s) => s.trim())
     .filter(Boolean);
 
-  // Derive task state from messages
-  const actionMessages = useMemo(() => messages.filter(m => m.type === "action"), [messages]);
-  const totalSteps = card.detail?.executionPlan.length || 0;
-  const completedSteps = actionMessages.filter(m => m.status === "done").length;
-  const isRunning = actionMessages.some(m => m.status === "running");
-  const summaryMsg = messages.find(m => m.id === "summary");
-  const askMsg = messages.find(m => m.id === "ai-ask");
-  const isDone = !!summaryMsg && !isRunning;
-  useEffect(() => {
-    if (taskState === "dismissed") return;
-    if (taskState === "needs-input") return;
-    if (isDone) {
-      if (taskState !== "done") setTaskState("done");
-      return;
+  // Derive action progress for the header chip.
+  const actionMessages = useMemo(
+    () => messages.filter((m) => m.type === "action"),
+    [messages],
+  );
+  const totalSteps = (() => {
+    const p = run.snapshot?.pendingInput;
+    // While paused with a known plan, prefer that count; otherwise
+    // fall back to how many tool actions we've actually streamed.
+    if (p?.kind === "message" && (p.plan?.length ?? 0) > 0) {
+      return p.plan!.length;
     }
-    if (taskState === "done") return;
-    if (isRunning && taskState !== "running") setTaskState("running");
-  }, [isRunning, isDone, taskState]);
+    return actionMessages.length;
+  })();
+  const completedSteps = actionMessages.filter((m) => m.status === "done").length;
+  const summaryMsg = messages.find((m) => m.id === "summary");
+  const askMsg = messages.find((m) => m.id === "ai-ask");
+  const isDone = taskState === "done";
+  const isRunning = taskState === "running";
 
-  // Approve handler: commits the active question's selection, then resumes execution.
-  const handleApprove = () => {
-    if (taskState !== "needs-input" || activeQuestionIndex === null) {
-      // Fallback: nothing to approve, just resume.
-      tickRef.current();
-      return;
-    }
-    const currentQ = inputQuestionsRef.current[activeQuestionIndex];
-    if (!currentQ) {
-      setActiveQuestionIndex(null);
-      setTaskState("running");
-      tickRef.current();
-      return;
-    }
-    const chosen = currentQ.options[selectedOption] || currentQ.options[0];
-    setCommittedAnswers(prev => [...prev, { q: currentQ.question, a: chosen.label }]);
-    setActiveQuestionIndex(null);
-    setSelectedOption(0);
-    setTaskState("running");
-    // Resume the queue
-    setTimeout(() => tickRef.current(), 250);
-  };
-  const handleDismiss = () => { setTaskState("dismissed"); setTimeout(onBack, 250); };
-  const handlePauseToggle = () => setIsPaused(p => !p);
-  const handleSteer = () => {
-    setShowInput(true);
-    setTimeout(() => inputRef.current?.focus(), 50);
-  };
+  // The Continue button (+ Enter in the input box) is THE single
+  // "reply" surface. Whatever the user sends — chip label OR typed
+  // text — is a plain string delivered to the paused agent. The
+  // agent interprets it (affirmative → execute the plan; anything
+  // else → treat as an instruction). There is no separate Approve /
+  // Steer / Send / SubmitInput in the UI; there isn't one in the
+  // backend either (single `/reply` endpoint).
+  //
+  // Routing:
+  //   - typed text non-empty → that's the reply (wins over any chip)
+  //   - typed text empty     → reply is the selected chip's label
+  const [busy, setBusy] = useState(false);
+  const handleApprove = async () => {
+    if (busy) return;
+    const pending = run.snapshot?.pendingInput;
+    if (!pending) return;
 
-  // User send: post their message, then have AI auto-continue with new steps
-  const followUpSeq = useRef(0);
-  const handleSendInput = () => {
-    const text = inputValue.trim();
-    if (!text) return;
-    setInputValue("");
-    const seq = ++followUpSeq.current;
-    const ts = getTimestamps(card.id);
-    const baseTi = (ts.length - 1 + seq * 4) % ts.length;
-    const stamp = (off: number) => ts[(baseTi + off) % ts.length];
+    const typed = inputValue.trim();
+    const replyText = typed
+      || inputQuestions[0]?.options[selectedOption]?.label
+      || "";
+    // Don't fire on an empty intent (no chip selected, no text typed).
+    if (!replyText) return;
 
-    // Comment mode: when the task is already done, the input was opened via the
-    // "Comment" button — treat the message as feedback only. No re-execution.
-    // Use a distinct id prefix so the bubble is NOT picked up by the user-input
-    // chronological renderer (which would place it above the Result panel).
-    if (taskState === "done") {
-      setMessages(prev => [
-        ...prev.filter(m => m.id !== "comment-ack" && !m.id.startsWith("comment-")),
-        { id: `comment-${seq}`, sender: "user", type: "text", content: text, timestamp: stamp(0) },
-      ]);
-      setShowInput(false);
-      setTimeout(() => {
-        setMessages(prev => [
-          ...prev,
-          {
-            id: "comment-ack",
-            sender: "ai",
-            type: "text",
-            content: "Got your comment — I'll use it to improve next time. Thanks for the feedback.",
-            timestamp: stamp(1),
-          },
-        ]);
-      }, 350);
-      return;
-    }
-
-    // Stop the initial execution queue & freeze any in-flight running rows
-    initialCancelledRef.current = true;
-
-    // 1. Show user bubble, freeze any running initial rows, and drop any existing summary
-    setMessages(prev => [
-      ...prev
-        .filter(m => m.id !== "summary")
-        .map(m => (m.status === "running" && !m.id.startsWith("followup-")) ? { ...m, status: "done" as const } : m),
-      { id: `user-input-${seq}`, sender: "user", type: "text", content: text, timestamp: stamp(0) },
+    setBusy(true);
+    // Optimistic user bubble so the user sees their reply land
+    // immediately, regardless of backend round-trip latency.
+    setUserBubbles((prev) => [
+      ...prev,
+      {
+        bubble: {
+          id: `user-input-${prev.length + 1}`,
+          sender: "user",
+          type: "text",
+          content: replyText,
+          timestamp: "",
+        },
+        afterEventCount: run.events.length,
+      },
     ]);
+    setInputValue("");
 
-    // Resume / kick into running so toolbar shows Pause and state-sync stays correct
-    if (isPaused) setIsPaused(false);
-    setTaskState("running");
+    try {
+      await run.reply(replyText);
+    } catch (e) {
+      console.warn("reply failed:", e);
+    } finally {
+      setBusy(false);
+    }
+  };
 
-    // Pause-aware scheduler
-    const runWhenLive = (fn: () => void, ms: number) => {
-      const tryRun = () => {
-        if (pausedRef.current) setTimeout(tryRun, 250);
-        else fn();
-      };
-      setTimeout(tryRun, ms);
-    };
+  const handleDismiss = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await run.cancel();
+      // Persist the user's intent: POST /feedback kind=dismiss so the
+      // card drops out of the sphere and shows as Dismissed in TASKS.
+      // Mirrors the home Drawer's Dismiss path. The hook's `cancel`
+      // alone is local UI state only.
+      if (onDismissBackend) await onDismissBackend();
+    } catch (e) {
+      console.warn("cancel failed:", e);
+    } finally {
+      setBusy(false);
+      setTimeout(onBack, 200);
+    }
+  };
 
-    // 2. Generate fresh execution steps under the user's message
-    const SUB_PREFIXES = ["Re-planning", "Querying", "Validating", "Drafting", "Finalizing"];
-    const shortText = text.length > 38 ? text.slice(0, 38) + "…" : text;
-    const newSteps: string[] = [
-      `${SUB_PREFIXES[0]} based on your input`,
-      `Incorporating "${shortText}"`,
-      `${SUB_PREFIXES[2]} updated context`,
-      `${SUB_PREFIXES[3]} revised output`,
-    ];
+  const handlePauseToggle = () => setIsPaused((p) => !p);
 
-    const stepGap = 750;
-    let delay = 450;
+  // pending_done → done. User confirmed the run is finished.
+  const handleConfirmDone = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      // Persist the user's intent: POST /feedback kind=card_action
+      // action=complete so the card moves from the sphere into TASKS as
+      // Completed. The hook's `confirmDone` alone is local UI state.
+      const persisted = onDoneBackend ? await onDoneBackend() : true;
+      if (persisted === false) return;
+      await run.confirmDone();
+    } catch (e) {
+      console.warn("confirmDone failed:", e);
+    } finally {
+      setBusy(false);
+    }
+  };
 
-    newSteps.forEach((content, i) => {
-      const id = `followup-${seq}-${i}`;
-      const off = i + 1;
-      runWhenLive(() => {
-        setMessages(prev => {
-          const cleared = prev.map(m => m.status === "running" ? { ...m, status: "done" as const } : m);
-          return [...cleared, {
-            id, sender: "ai", type: "action",
-            content, status: "running", timestamp: stamp(off),
-          }];
-        });
-      }, delay);
-      delay += stepGap;
-    });
-
-    // 3. Append summary → triggers state-sync to flip taskState to "done"
-    runWhenLive(() => {
-      setMessages(prev => {
-        const cleared = prev.map(m => m.status === "running" ? { ...m, status: "done" as const } : m);
-        const planSummary = card.detail?.willExecute || card.line1;
-        return [...cleared.filter(m => m.id !== "summary"), {
-          id: "summary", sender: "ai", type: "text",
-          content: `Done — incorporated your input "${text.length > 60 ? text.slice(0, 60) + "…" : text}".\n\n${planSummary}`,
-          timestamp: stamp(newSteps.length + 1),
-        }];
-      });
-    }, delay + 250);
+  const handleRetry = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const newId = await run.retry();
+      if (onRetry) onRetry(newId);
+    } catch (e) {
+      console.warn("retry failed:", e);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -872,8 +1309,48 @@ export default function ChatDetailView({ card, onBack, mode = "confirm" }: ChatD
         </div>
       </div>
 
+      {/* Chat region wrapper — `relative flex-1 min-h-0` so the top-sheet
+          BrowserPanel can be `absolute top-0` to this region (mirrors
+          MainChatView's structure). Without this wrapper the panel would
+          either anchor to the root and cover the header, or have no
+          ResizeObserver target for its fit-to-height math. */}
+      <div className="relative flex-1 min-h-0 flex flex-col">
+        <BrowserPanel
+          session={
+            browserSession
+              ? {
+                  browserSessionId: browserSession.sessionKey,
+                  liveViewUrl: browserSession.liveViewUrl,
+                  viewport: browserSession.viewport,
+                  deviceKind: browserSession.deviceKind,
+                  currentUrl: browserSession.currentUrl,
+                  controlMode: browserSession.controlMode,
+                  takeoverReason: browserSession.takeoverReason,
+                }
+              : null
+          }
+          iframeReloadKey={iframeReloadKey}
+          onControlChange={handleBrowserControlChange}
+          onUserInputText={handleBrowserInputText}
+          onUserInputKey={handleBrowserInputKey}
+          onUserInputClick={handleBrowserInputClick}
+          onUserInputScroll={handleBrowserInputScroll}
+          onClose={handleBrowserClose}
+          onStageChange={setBrowserStage}
+          composerFocused={false}
+        />
+
       {/* Task body */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto px-4 py-4 space-y-3"
+        style={{
+          // Leave room for the BrowserPanel's mini drag bar when it's
+          // peeked. medium / full deliberately cover the chat — that's
+          // the whole point of expanding — so no offset there.
+          paddingTop: browserStage === "mini" ? 32 : undefined,
+        }}
+      >
         {/* Card reference summary — opens drawer. Shows brief task summary + simplified plan */}
         <button
           onClick={() => setCardDrawerOpen(true)}
@@ -922,52 +1399,248 @@ export default function ChatDetailView({ card, onBack, mode = "confirm" }: ChatD
           </div>
         </button>
 
-        {/* Chronological render: initial actions → (user bubble + followup actions)* → needs-input → summary */}
+        {/* ── Unified timeline rendering ──
+         *
+         * Layout (top → bottom):
+         *
+         *   1. ONE consolidated tool group (all action messages across
+         *      the run's lifetime, collapsible). Stays pinned near the
+         *      top — we no longer interleave tool sub-groups between
+         *      user replies, so the user sees one "what the agent did"
+         *      surface instead of N scattered chunks.
+         *
+         *   2. The latest drafts card (when present) — sits just below
+         *      the tool group so the user always has the freshest
+         *      content one scroll away.
+         *
+         *   3. Chat history — every past `input_required` event renders
+         *      as a static pause card (question + read-only chip
+         *      labels) followed by the user's reply bubble. The LAST
+         *      pause, if the agent is still waiting on it, renders as
+         *      the live interactive panel (chips clickable, free-text
+         *      input visible, Continue button). All prior pauses are
+         *      preserved so the user can scroll up and see the full
+         *      back-and-forth, exactly like a chat transcript.
+         *
+         *   4. Result card (when pending_done / done / error).
+         *
+         *   5. Persistent reply box (pending_done only) — lets the user
+         *      keep talking (`continueWith` spawns a new run) until they
+         *      explicitly click Done in the top toolbar.
+         */}
+
+        {/* 1. Consolidated tool group. */}
         {(() => {
-          const userBubbles = messages.filter(m => m.id.startsWith("user-input-"));
-          // Once a follow-up exists, freeze the initial Execution panel as fully done.
-          const hasFollowup = userBubbles.length > 0;
-          const initialActionsRaw = actionMessages.filter(m => !m.id.startsWith("followup-"));
-          const initialActions = hasFollowup
-            ? initialActionsRaw.map(m => m.status === "running" ? { ...m, status: "done" as const } : m)
-            : initialActionsRaw;
+          const allActions = messages.filter((m) => m.type === "action");
+          if (allActions.length === 0) return null;
+          return (
+            <CollapsibleActionGroup
+              items={allActions}
+              label="Execution"
+              isPaused={isPaused}
+              defaultCollapsed={awaitingInput || isDone || taskState === "pending-done"}
+            />
+          );
+        })()}
+
+        {/* 2. Drafts card — latest version, collapsible, auto-re-expands on
+         *    each new `send_message` payload (driven by `messageCount`). */}
+        {(() => {
+          const liveDrafts = run.lastMessagePayload?.drafts ?? [];
+          const artifacts = liveDrafts.map(executeArtifactToLovable);
+          if (artifacts.length === 0) return null;
+          // When the run is pending_done / done, the drafts may have a
+          // matching side_effect (e.g. "Email · Sent"); pass them so the
+          // ArtifactItem badge upgrades.
+          const sideEffects = run.snapshot?.result?.side_effects ?? [];
+          return (
+            <ArtifactPanel
+              artifacts={artifacts}
+              sideEffects={sideEffects}
+              version={run.messageCount}
+            />
+          );
+        })()}
+
+        {/* 3. Chat history — pause cards + user reply bubbles in
+         *    chronological order. The latest pause is interactive when
+         *    the run is currently `needs_input`. */}
+        {(() => {
+          // Index every input_required event so we can pair each with
+          // the user reply that came after it (and before the next
+          // pause).
+          const pauseEvents = run.events
+            .map((ev, idx) => ({ ev, idx }))
+            .filter(({ ev }) => ev.type === "input_required");
+          if (pauseEvents.length === 0) return null;
+
+          // Past user replies are persisted in metadata_json.plan_revisions
+          // (the backend appends one entry per `/reply` POST). The Nth
+          // entry pairs with the Nth pause event. This is the durable
+          // source so historical replies survive page refresh / SSE
+          // reconnect; `userBubbles` is only the optimistic local
+          // state for the most-recently-sent reply (visible immediately
+          // before the server round-trip completes).
+          const mdRaw = run.snapshot?.metadata as Record<string, unknown> | undefined;
+          const planRevisions: Array<{ reply?: string }> = Array.isArray(mdRaw?.plan_revisions)
+            ? (mdRaw.plan_revisions as Array<{ reply?: string }>)
+            : [];
+
+          // The agent is still paused on the LAST input_required iff
+          // BOTH conditions hold:
+          //   (a) backend status is `needs_input` (waiting for reply)
+          //   (b) snapshot.pendingInput is non-null (payload present)
+          //
+          // Checking only (b) used to glitch during the brief resuming
+          // window: `run.reply()` patches local status → "resuming"
+          // but leaves the stale `pendingInput` on the snapshot
+          // (backend cleared it remotely; our reducer's `patch_status`
+          // touches status only). That caused the latest pause card
+          // to be classified as "active" → skipped in the static loop
+          // AND not rendered by the interactive AnimatePresence below
+          // (which gates on `taskState === "needs-input"`), so the
+          // card vanished until the next pause arrived. Anchoring on
+          // status fixes that — the moment the user replies, status
+          // flips to "resuming" and the pause renders as static.
+          const lastPauseIsActive =
+            run.snapshot?.status === "needs_input"
+            && !!run.snapshot?.pendingInput;
 
           return (
             <>
-              <ActionPanel items={initialActions} label="Execution" isPaused={isPaused} />
-              {userBubbles.map((bubble, bi) => {
-                const seq = bubble.id.replace("user-input-", "");
-                const followupsRaw = actionMessages.filter(m => m.id.startsWith(`followup-${seq}-`));
-                // Freeze earlier follow-up panels too once a newer user bubble exists
-                const isLast = bi === userBubbles.length - 1;
-                const followups = isLast
-                  ? followupsRaw
-                  : followupsRaw.map(m => m.status === "running" ? { ...m, status: "done" as const } : m);
+              {pauseEvents.map(({ ev, idx }, i) => {
+                const nextEventIdx = pauseEvents[i + 1]?.idx ?? run.events.length;
+                // Prefer the persisted reply from plan_revisions (durable
+                // across refresh / SSE reconnect). Fall back to the local
+                // optimistic bubble if the persisted entry hasn't shown
+                // up yet (the moment after Continue + before the next
+                // snapshot fetch syncs).
+                const persistedReply = planRevisions[i]?.reply?.trim() || null;
+                const optimisticReply = userBubbles.find(
+                  (b) => b.afterEventCount > idx && b.afterEventCount <= nextEventIdx,
+                )?.bubble.content ?? null;
+                const userReply = persistedReply ?? optimisticReply;
+                const isActiveInteractive =
+                  i === pauseEvents.length - 1 && lastPauseIsActive;
+                // Active pause renders separately below (interactive
+                // panel). Past pauses render as one merged exchange
+                // card carrying both the agent's outgoing message and
+                // the user's actual reply.
+                if (isActiveInteractive) return null;
                 return (
-                  <div key={bubble.id} className="space-y-3">
-                    <motion.div
-                      initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
-                      className="flex justify-end"
-                    >
-                      <div className="max-w-[82%] px-3.5 py-2 rounded-[16px] rounded-br-[4px] bg-foreground text-background text-[13px] leading-relaxed shadow-sm">
-                        {bubble.content}
-                      </div>
-                    </motion.div>
-                    <ActionPanel items={followups} label="Continued" isPaused={isPaused} />
-                  </div>
+                  <StaticPauseCard
+                    key={`pause-${idx}`}
+                    index={i + 1}
+                    total={pauseEvents.length}
+                    data={ev.data as PendingInput | undefined}
+                    userReply={userReply}
+                  />
                 );
               })}
             </>
           );
         })()}
 
-        {/* Generated drafts — appears below execution once the task finishes */}
-        {isDone && card.detail?.artifacts && card.detail.artifacts.length > 0 && (
-          <ArtifactPanel artifacts={card.detail.artifacts} />
+        {/* 4. Result panel — pending_done / done / error.
+         *    Sits BELOW the pause history so the user reads the
+         *    conversation top-to-bottom and the result lands as the
+         *    natural end-of-thread message. */}
+        {(taskState === "pending-done" || isDone) && (() => {
+          const status = run.snapshot?.status;
+          const result = run.snapshot?.result;
+          const summary = result?.summary?.trim() ?? "";
+          const errorMsg = status === "error" ? (run.snapshot?.errorMessage ?? "") : "";
+
+          // Error path — red banner with the underlying message.
+          if (errorMsg) {
+            return (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+                className="rounded-2xl px-4 py-3 border border-red-500/30 bg-red-500/[0.04]"
+              >
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <Zap size={12} className="text-red-600" strokeWidth={2.2} />
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-red-700">Failed</p>
+                </div>
+                <p className="text-[12.5px] text-foreground/75 leading-snug whitespace-pre-line">
+                  {errorMsg.slice(0, 240)}{errorMsg.length > 240 ? "…" : ""}
+                </p>
+              </motion.div>
+            );
+          }
+
+          // No summary — nothing to show (rare: cancelled status that
+          // somehow reached this branch).
+          if (!summary) return null;
+
+          return (
+            <motion.div
+              layout
+              initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.32, ease: [0.32, 0.72, 0, 1] }}
+              className="rounded-2xl border border-pink-200/40 overflow-hidden"
+              style={{ background: "linear-gradient(135deg, rgba(225,92,230,0.08) 0%, rgba(225,92,230,0.03) 100%)" }}
+            >
+              <div className="px-4 pt-3 pb-3">
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <Zap size={12} className="text-[hsl(292,78%,63%)]" strokeWidth={2.2} />
+                  <p className="text-[11px] font-bold uppercase tracking-wider bg-gradient-to-r from-[hsl(292,78%,63%)] to-[hsl(330,80%,65%)] bg-clip-text text-transparent">
+                    Result
+                  </p>
+                </div>
+                <p className="text-[13px] text-foreground/80 leading-relaxed whitespace-pre-line">
+                  {summary}
+                </p>
+              </div>
+            </motion.div>
+          );
+        })()}
+
+        {/* 5. Persistent reply box for pending_done — lets the user keep
+         *    talking after the agent thinks it's done. Typing here +
+         *    Continue triggers `continueWith` (cancels the old run +
+         *    spawns a new one carrying the typed text as continuation
+         *    context). The task isn't truly over until the user clicks
+         *    Done in the top toolbar. */}
+        {taskState === "pending-done" && (
+          <ContinueReplyBox
+            busy={busy}
+            value={inputValue}
+            onChange={setInputValue}
+            onSubmit={async () => {
+              const text = inputValue.trim();
+              if (!text || busy) return;
+              setBusy(true);
+              setUserBubbles((prev) => [
+                ...prev,
+                {
+                  bubble: {
+                    id: `user-input-${prev.length + 1}`,
+                    sender: "user",
+                    type: "text",
+                    content: text,
+                    timestamp: "",
+                  },
+                  afterEventCount: run.events.length,
+                },
+              ]);
+              setInputValue("");
+              try {
+                const newId = await run.continueWith(text);
+                if (onRetry) onRetry(newId);
+              } catch (e) {
+                console.warn("continue failed:", e);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          />
         )}
 
-        {/* Needs-input prompt — appears beneath the execution panel when a question is queued */}
+        {/* Live interactive needs-input panel — renders only when the
+         *    agent is currently paused on the latest input_required.
+         *    Positioned here so it always appears at the bottom of the
+         *    pause history list (last item in the chat thread). */}
         <AnimatePresence initial={false}>
           {taskState === "needs-input" && activeQuestionIndex !== null && (() => {
             const currentQ = inputQuestions[activeQuestionIndex];
@@ -999,68 +1672,117 @@ export default function ChatDetailView({ card, onBack, mode = "confirm" }: ChatD
                   </span>
                 </div>
 
-                {/* Current question */}
-                <p className="text-[13.5px] text-foreground/85 font-semibold leading-snug mb-2.5">
+                {/* Current question. `whitespace-pre-line` preserves
+                    whatever newlines the agent put in (safety net for
+                    when agent slips and includes multi-line content
+                    here despite the prompt's hard rule — structured
+                    content should go through `send_message`'s `drafts`
+                    field, not the `message` text).
+                    Weight is `medium` instead of `semibold` so longer
+                    questions stay readable. */}
+                <p className="text-[13.5px] text-foreground/85 font-medium leading-snug mb-2.5 whitespace-pre-line">
                   {currentQ.question}
                 </p>
 
                 {/* Options as selectable chips */}
-                <div className="space-y-1.5">
-                  {currentQ.options.map((opt, i) => {
-                    const isSelected = i === selectedOption;
-                    return (
-                      <button
-                        key={i}
-                        onClick={() => setSelectedOption(i)}
-                        className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-left text-[13px] border"
-                        style={{
-                          background: isSelected ? "hsl(0 0% 0% / 0.04)" : "rgba(255,255,255,0.5)",
-                          borderColor: isSelected ? "hsl(0 0% 0% / 0.55)" : "hsl(0 0% 0% / 0.08)",
-                          transition: "background 240ms ease, border-color 240ms ease",
-                        }}
-                      >
-                        <span className={`flex-1 transition-colors duration-200 ${isSelected ? "text-foreground font-medium" : "text-foreground/70"}`}>
-                          {opt.label}
-                        </span>
-                        <span className="flex items-center gap-1.5 shrink-0">
-                          <span
-                            className="w-4 h-4 rounded-full border flex items-center justify-center"
-                            style={{
-                              borderColor: isSelected ? "hsl(0 0% 0%)" : "hsl(0 0% 0% / 0.18)",
-                              background: isSelected ? "hsl(0 0% 0%)" : "transparent",
-                              transition: "background 240ms ease, border-color 240ms ease",
-                            }}
-                          >
-                            {isSelected && <Check size={10} strokeWidth={3} className="text-white" />}
+                {currentQ.options.length > 0 && (
+                  <div className="space-y-1.5">
+                    {currentQ.options.map((opt, i) => {
+                      const isSelected = i === selectedOption;
+                      return (
+                        <button
+                          key={i}
+                          onClick={() => {
+                            setSelectedOption(i);
+                            // Typed text always wins over a chip pick —
+                            // clear it so the user's intent is unambiguous.
+                            if (inputValue) setInputValue("");
+                          }}
+                          className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-left text-[13px] border"
+                          style={{
+                            background: isSelected && !inputValue.trim()
+                              ? "hsl(0 0% 0% / 0.04)"
+                              : "rgba(255,255,255,0.5)",
+                            borderColor: isSelected && !inputValue.trim()
+                              ? "hsl(0 0% 0% / 0.55)"
+                              : "hsl(0 0% 0% / 0.08)",
+                            transition: "background 240ms ease, border-color 240ms ease",
+                          }}
+                        >
+                          <span className={`flex-1 transition-colors duration-200 ${isSelected && !inputValue.trim() ? "text-foreground font-medium" : "text-foreground/70"}`}>
+                            {opt.label}
                           </span>
-                        </span>
-                      </button>
-                    );
-                  })}
+                          <span className="flex items-center gap-1.5 shrink-0">
+                            <span
+                              className="w-4 h-4 rounded-full border flex items-center justify-center"
+                              style={{
+                                borderColor: isSelected && !inputValue.trim() ? "hsl(0 0% 0%)" : "hsl(0 0% 0% / 0.18)",
+                                background: isSelected && !inputValue.trim() ? "hsl(0 0% 0%)" : "transparent",
+                                transition: "background 240ms ease, border-color 240ms ease",
+                              }}
+                            >
+                              {isSelected && !inputValue.trim() && (
+                                <Check size={10} strokeWidth={3} className="text-white" />
+                              )}
+                            </span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Fixed free-text input row, ALWAYS visible — the
+                    "type your own answer" slot. Typed text overrides
+                    chip selection at submit time. */}
+                <div
+                  className="mt-2.5 px-3 py-2 rounded-xl border border-foreground/10 flex items-center gap-2"
+                  style={{ background: "rgba(255,255,255,0.55)" }}
+                >
+                  <input
+                    ref={inputRef}
+                    type="text"
+                    value={inputValue}
+                    onChange={(e) => setInputValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void handleApprove();
+                      }
+                    }}
+                    placeholder={
+                      currentQ.options.length > 0
+                        ? "Or type your own reply..."
+                        : "Type your reply..."
+                    }
+                    className="flex-1 bg-transparent text-[13px] text-foreground placeholder:text-foreground/35 outline-none"
+                  />
+                  <VoiceButton onUpdate={setInputValue} />
                 </div>
 
-                <p className="mt-3 text-[11px] text-foreground/45 leading-relaxed">
-                  Tap Continue to apply your choice and resume execution.
-                </p>
+                <button
+                  type="button"
+                  onClick={() => void handleApprove()}
+                  // When the agent provided no chips, there's nothing to
+                  // submit until the user types something. With chips
+                  // available, the default-selected chip (index 0)
+                  // covers the empty-text case.
+                  disabled={
+                    busy ||
+                    (currentQ.options.length === 0 && !inputValue.trim())
+                  }
+                  className="mt-3 w-full px-4 py-2.5 rounded-xl bg-foreground text-background text-[13px] font-semibold hover:bg-foreground/85 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+                >
+                  {busy ? (
+                    <><Loader2 size={13} className="animate-spin" /> Sending…</>
+                  ) : (
+                    <>Continue <ArrowRight size={13} strokeWidth={2.5} /></>
+                  )}
+                </button>
               </motion.div>
             );
           })()}
         </AnimatePresence>
-
-        {/* Summary */}
-        {summaryMsg && (
-          <motion.div
-            initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-            className="rounded-2xl px-4 py-3 border border-pink-200/40"
-            style={{ background: "linear-gradient(135deg, rgba(225,92,230,0.08) 0%, rgba(225,92,230,0.03) 100%)" }}
-          >
-            <div className="flex items-center gap-1.5 mb-1.5">
-              <Zap size={12} className="text-[hsl(292,78%,63%)]" strokeWidth={2.2} />
-              <p className="text-[11px] font-bold uppercase tracking-wider bg-gradient-to-r from-[hsl(292,78%,63%)] to-[hsl(330,80%,65%)] bg-clip-text text-transparent">Result</p>
-            </div>
-            <p className="text-[13px] text-foreground/80 leading-relaxed whitespace-pre-line">{summaryMsg.content}</p>
-          </motion.div>
-        )}
 
         {/* Comment thread — user feedback after task is done. Always rendered
             below the Result so the order is: Result → user comment → ack. */}
@@ -1101,127 +1823,109 @@ export default function ChatDetailView({ card, onBack, mode = "confirm" }: ChatD
       {taskState !== "dismissed" && (actionMessages.length > 0 || summaryMsg || askMsg) && (
         <div className="px-4 pt-2">
           {taskState === "done" ? (
-            // Done: feedback only
-            <div
-              className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-2xl border border-foreground/8"
-              style={{ background: "rgba(255,255,255,0.5)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)" }}
-            >
-              <span className="text-[12px] text-foreground/55 font-medium">Was this helpful?</span>
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={() => setFeedback("up")}
-                  className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${feedback === "up" ? "bg-green-500/20 text-green-600" : "bg-foreground/5 text-foreground/55 hover:bg-foreground/10"}`}
-                  aria-label="Helpful"
-                >
-                  <ThumbsUp size={13} strokeWidth={2} />
-                </button>
-                <button
-                  onClick={() => setFeedback("down")}
-                  className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${feedback === "down" ? "bg-red-500/20 text-red-600" : "bg-foreground/5 text-foreground/55 hover:bg-foreground/10"}`}
-                  aria-label="Not helpful"
-                >
-                  <ThumbsDown size={13} strokeWidth={2} />
-                </button>
-                <button
-                  onClick={handleSteer}
-                  className="ml-1 flex items-center gap-1.5 px-3 h-8 rounded-full bg-foreground/5 hover:bg-foreground/10 transition-colors text-[12px] font-medium text-foreground/65"
-                >
-                  <MessageSquarePlus size={12} strokeWidth={2} /> Comment
-                </button>
+            run.snapshot?.status === "error" ? (
+              // Error is the one terminal state that still needs Retry.
+              <div
+                className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-2xl border border-foreground/8"
+                style={{ background: "rgba(255,255,255,0.5)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)" }}
+              >
+                <span className="text-[12px] text-foreground/55 font-medium">
+                  Run failed.
+                </span>
+                <div className="flex items-center gap-1.5">
+                  {onRetry && (
+                    <button
+                      onClick={handleRetry}
+                      disabled={busy}
+                      className="flex items-center gap-1.5 px-3 h-8 rounded-full bg-foreground text-background hover:bg-foreground/85 transition-colors text-[12px] font-semibold disabled:opacity-50"
+                    >
+                      <Check size={12} strokeWidth={2.5} /> Retry
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-          ) : (
-            // Running or needs-input: Dismiss / Steer / (Pause | Approve)
+            ) : (
+              <button
+                onClick={onBack}
+                disabled={busy}
+                className="w-full flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[13px] font-medium text-foreground/55 disabled:opacity-50"
+              >
+                <X size={13} strokeWidth={2} /> Close
+              </button>
+            )
+          ) : taskState === "pending-done" ? (
+            // Agent finished, user hasn't confirmed yet.
+            // Toolbar: Dismiss | Done. No standalone Steer/Continue —
+            // "reply with more instructions" is intentionally not
+            // exposed in this iteration; user must Dismiss + start
+            // fresh if they want to redirect post-completion.
             <div className="flex items-center gap-2">
               <button
                 onClick={handleDismiss}
-                className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[13px] font-medium text-foreground/55"
+                disabled={busy}
+                className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[13px] font-medium text-foreground/55 disabled:opacity-50"
               >
                 <X size={13} strokeWidth={2} /> Dismiss
               </button>
               <button
-                onClick={handleSteer}
-                className="flex items-center justify-center gap-1 px-3 py-2 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[12px] font-medium text-foreground/55"
-                title="Steer this task"
+                onClick={handleConfirmDone}
+                disabled={busy}
+                className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-foreground text-background text-[13px] font-semibold hover:bg-foreground/85 transition-colors disabled:opacity-50"
               >
-                <Pencil size={11} strokeWidth={2} /> Steer
+                <Check size={13} strokeWidth={2.5} /> Done
               </button>
-              {taskState === "running" ? (
-                <button
-                  onClick={handlePauseToggle}
-                  className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-[13px] font-semibold text-background transition-colors"
-                  style={{ background: isPaused ? "hsl(var(--foreground))" : "linear-gradient(135deg, hsl(292 78% 63%), hsl(330 80% 65%))" }}
-                >
-                  {isPaused ? (<><Play size={13} strokeWidth={2.2} fill="currentColor" /> Resume</>) : (<><Pause size={13} strokeWidth={2.2} /> Pause</>)}
-                </button>
-              ) : (
-                <button
-                  onClick={handleApprove}
-                  className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-foreground text-background text-[13px] font-semibold hover:bg-foreground/85 transition-colors"
-                >
-                  {taskState === "needs-input" ? (
-                    <><Check size={13} strokeWidth={2.5} /> Continue</>
-                  ) : (
-                    <><Check size={13} strokeWidth={2.5} /> Approve</>
-                  )}
-                </button>
-              )}
+            </div>
+          ) : awaitingInput ? (
+            // Awaiting user reply — the needs-input panel above carries
+            // chips + free-text input + Continue (=Reply) button. The
+            // top toolbar reduces to just Dismiss to keep the reply
+            // surface single-sourced.
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleDismiss}
+                disabled={busy}
+                className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[13px] font-medium text-foreground/55 disabled:opacity-50"
+              >
+                <X size={13} strokeWidth={2} /> Dismiss
+              </button>
+            </div>
+          ) : (
+            // Running (agent working, not paused for input): toolbar is
+            // just Dismiss + Pause/Resume. No Steer — the user reaches
+            // the agent ONLY through the needs-input panel's Reply
+            // affordance when the agent pauses, by design (no chat-
+            // injection mid-flight in this iteration).
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleDismiss}
+                disabled={busy}
+                className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[13px] font-medium text-foreground/55 disabled:opacity-50"
+              >
+                <X size={13} strokeWidth={2} /> Dismiss
+              </button>
+              <button
+                onClick={handlePauseToggle}
+                className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-[13px] font-semibold text-background transition-colors"
+                style={{ background: isPaused ? "hsl(var(--foreground))" : "linear-gradient(135deg, hsl(292 78% 63%), hsl(330 80% 65%))" }}
+              >
+                {isPaused ? (<><Play size={13} strokeWidth={2.2} fill="currentColor" /> Resume</>) : (<><Pause size={13} strokeWidth={2.2} /> Pause</>)}
+              </button>
             </div>
           )}
         </div>
       )}
 
-      {/* Input bar — hidden by default, shown when Steer is clicked */}
-      <AnimatePresence initial={false}>
-        {showInput && (
-          <motion.div
-            key="input-bar"
-            initial={{ opacity: 0, y: 16, height: 0 }}
-            animate={{ opacity: 1, y: 0, height: "auto" }}
-            exit={{ opacity: 0, y: 16, height: 0 }}
-            transition={{ duration: 0.22, ease: [0.32, 0.72, 0, 1] }}
-            className="px-4 pb-6 pt-2.5 overflow-hidden"
-          >
-            <div
-              className="px-4 py-3 flex items-center gap-3 rounded-2xl border border-foreground/10"
-              style={{
-                background: "rgba(255,255,255,0.6)",
-                backdropFilter: "blur(16px)",
-                WebkitBackdropFilter: "blur(16px)",
-              }}
-            >
-              <input
-                ref={inputRef}
-                type="text"
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSendInput(); } }}
-                placeholder="Steer the task — type your guidance..."
-                className="flex-1 bg-transparent text-[15px] text-foreground placeholder:text-foreground/35 outline-none"
-              />
-              <VoiceButton prefill={inputValue} onUpdate={setInputValue} />
-              <button
-                onClick={handleSendInput}
-                disabled={!inputValue.trim()}
-                className="w-8 h-8 rounded-full bg-foreground flex items-center justify-center text-background hover:bg-foreground/80 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                aria-label="Send"
-              >
-                <Send size={15} strokeWidth={2} />
-              </button>
-              <button
-                onClick={() => setShowInput(false)}
-                className="w-8 h-8 rounded-full bg-foreground/5 flex items-center justify-center text-foreground/45 hover:bg-foreground/10 transition-colors"
-                aria-label="Hide input"
-              >
-                <X size={14} strokeWidth={2} />
-              </button>
-            </div>
-          </motion.div>
-        )}
-        {!showInput && (
-          <div key="bottom-spacer" className="pb-5" />
-        )}
-      </AnimatePresence>
+      {/* Bottom global input bar — only when NOT awaiting a panel-level
+          answer. The needs-input panel above has its own permanent
+          input slot; surfacing this bar at the same time would create
+          two competing send paths. */}
+      {/* Bottom spacer where the global input bar used to live. The
+          reply surface is now exclusively inside the needs-input panel
+          (chips + free-text + Continue). When the agent isn't paused
+          there is no UI for typing — by design in this iteration. */}
+      <div className="pb-5" />
+      </div>
+      {/* /chat region wrapper */}
 
 
       {/* Card content drawer — same layout as home card detail, no buttons */}
@@ -1242,7 +1946,13 @@ export default function ChatDetailView({ card, onBack, mode = "confirm" }: ChatD
             <DrawerTitle>{card.title}</DrawerTitle>
             <DrawerDescription>Card detail view</DrawerDescription>
           </DrawerHeader>
-          <ChatCardDrawerBody card={card} sources={sources} />
+          <ChatCardDrawerBody
+            card={card}
+            sources={sources}
+            runSnapshot={run.snapshot}
+            lastMessagePayload={run.lastMessagePayload}
+            sideEffects={run.snapshot?.result?.side_effects ?? []}
+          />
         </DrawerContent>
       </Drawer>
     </div>
@@ -1258,8 +1968,26 @@ const CATEGORIES: Record<string, { icon: LucideIcon; label: string }> = {
   life: { icon: Sparkles, label: "Life" },
 };
 
-/* Drawer body — mirrors home CardDrawerContent (no action buttons) */
-function ChatCardDrawerBody({ card }: { card: ChatCard; sources: string[] }) {
+/* Drawer body — mirrors home CardDrawerContent (no action buttons). The
+ * optional `runSnapshot` + `lastMessagePayload` + `sideEffects` let
+ * DrawerDetailBody render the LIVE plan + drafts + dangerous_actions +
+ * post-execution side-effect badges pulled from the agent's pending_input
+ * (and the cached send_message snapshot) rather than the card's static
+ * mock. This is the same data the home drawer uses; the chat-side
+ * drawer must mirror it so opening the drawer from inside a card never
+ * shows a stale view. */
+function ChatCardDrawerBody({
+  card,
+  runSnapshot,
+  lastMessagePayload,
+  sideEffects = [],
+}: {
+  card: ChatCard;
+  sources: string[];
+  runSnapshot?: RunSnapshot | null;
+  lastMessagePayload?: LastMessagePayload | null;
+  sideEffects?: SideEffect[];
+}) {
   const cat = CATEGORIES[card.category];
   const Icon = cat?.icon || Briefcase;
 
@@ -1294,7 +2022,14 @@ function ChatCardDrawerBody({ card }: { card: ChatCard; sources: string[] }) {
         {card.detail?.willExecute || card.line1}
       </p>
 
-      {card.detail && <DrawerDetailBody card={card} />}
+      {card.detail && (
+        <DrawerDetailBody
+          card={card}
+          runSnapshot={runSnapshot}
+          lastMessagePayload={lastMessagePayload}
+          sideEffects={sideEffects}
+        />
+      )}
     </div>
   );
 }

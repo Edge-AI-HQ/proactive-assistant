@@ -54,6 +54,10 @@ export interface Intent {
   title: string;
   line1: string;
   line2: string;
+  /** Generator-side rationale for why this card surfaced now.
+   *  Shown as a dedicated block in the home drawer, separate from
+   *  the headline (which collapses whyNow + summary). */
+  whyNow?: string;
   detail?: DetailData;
   status: CardStatus;
   statusTimestamp?: number;

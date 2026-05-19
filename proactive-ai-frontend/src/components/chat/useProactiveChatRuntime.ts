@@ -33,7 +33,7 @@ import {
   buildChatRequestBody,
   shouldBootstrapCardChat,
 } from "./card-chat-session";
-import { LiveContentBuilder } from "./tool-steps";
+import { LiveContentBuilder, type JsonValue } from "./tool-steps";
 import { parseTodosFromArgs, setTodos } from "./todos-store";
 import { useClientHints, type ClientHints } from "@/hooks/useClientHints";
 
@@ -204,6 +204,13 @@ function createAdapter({
                 meta: typeof payload.meta === "string" ? payload.meta : undefined,
                 argsPreview: typeof payload.argsPreview === "string" ? payload.argsPreview : undefined,
                 pinCommand: typeof payload.pinCommand === "string" ? payload.pinCommand : undefined,
+                // Full structured input — present when the tool's args
+                // fit under streaming.py's 8 KB cap. Threaded into
+                // ProposeActionCard / TodoPanel which render specialized
+                // UI from the raw payload instead of parsing the
+                // truncated argsPreview string. The SSE wire already
+                // sends JSON, so the cast is safe.
+                input: payload.args as JsonValue | undefined,
               });
               // write_todos: feed structured plan to the side-panel store.
               // The agent re-emits the whole list on every state change
@@ -295,6 +302,12 @@ interface HistoryToolCallPart {
   meta?: string;
   argsPreview?: string;
   pinCommand?: string;
+  /** Full structured tool input, when JSON-serializable and under the
+   *  backend's 8 KB cap (see chat/routes/history.py `_safe_args_full`).
+   *  Threaded into the runtime tool-call part's `args.input` so
+   *  specialized renderers (ProposeActionCard) can read the typed
+   *  payload during history replay just like they do off live SSE. */
+  args?: unknown;
 }
 
 type HistoryPart = HistoryTextPart | HistoryReasoningPart | HistoryToolCallPart;
@@ -313,10 +326,11 @@ function toRuntimePart(part: HistoryPart) {
   if (part.type === "reasoning") {
     return { type: "reasoning" as const, text: part.text };
   }
-  const args: Record<string, string> = { status: part.status };
+  const args: Record<string, JsonValue> = { status: part.status };
   if (part.meta) args.meta = part.meta;
   if (part.argsPreview) args.argsPreview = part.argsPreview;
   if (part.pinCommand) args.pinCommand = part.pinCommand;
+  if (part.args !== undefined) args.input = part.args as JsonValue;
   return {
     type: "tool-call" as const,
     toolCallId: part.toolCallId,
