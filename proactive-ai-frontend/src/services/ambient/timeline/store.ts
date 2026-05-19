@@ -14,8 +14,13 @@ import type {
   TimelineStoreStatus,
 } from "./types";
 import { jsonCloneRecord } from "./utils";
+import {
+  DEFAULT_AMBIENT_SUMMARY_SCHEDULER_STATE,
+  type AmbientSummarySchedulerState,
+} from "./summary-scheduler";
 
 const DB_NAME = "pin_ambient_timeline";
+const SUMMARY_SCHEDULER_STATE_KEY = "ambient_summary_scheduler_state_v1";
 const TRANSCRIPT_LABEL_CLEANUP_KEY = "transcript_segment_label_cleanup_v1";
 
 export class MemoryTimelineStore implements AmbientTimelineStore {
@@ -25,6 +30,7 @@ export class MemoryTimelineStore implements AmbientTimelineStore {
   private events = new Map<string, AmbientTimelineEvent>();
   private ready = false;
   private lastError: string | null = null;
+  private summarySchedulerState: AmbientSummarySchedulerState | null = null;
 
   async init(): Promise<void> {
     this.ready = true;
@@ -219,6 +225,16 @@ export class MemoryTimelineStore implements AmbientTimelineStore {
       if (!idSet.has(id)) continue;
       this.events.set(id, { ...event, syncStatus: "synced", updatedAt: at });
     }
+  }
+
+  async getSummarySchedulerState(): Promise<AmbientSummarySchedulerState> {
+    await this.initIfNeeded();
+    return cloneSummarySchedulerState(this.summarySchedulerState ?? DEFAULT_AMBIENT_SUMMARY_SCHEDULER_STATE);
+  }
+
+  async setSummarySchedulerState(state: AmbientSummarySchedulerState): Promise<void> {
+    await this.initIfNeeded();
+    this.summarySchedulerState = cloneSummarySchedulerState(state);
   }
 
   private async initIfNeeded(): Promise<void> {
@@ -807,6 +823,23 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
     );
   }
 
+  async getSummarySchedulerState(): Promise<AmbientSummarySchedulerState> {
+    await this.init();
+    const rows = await (await this.db()).query(
+      "SELECT value FROM ambient_timeline_meta WHERE key = ? LIMIT 1",
+      [SUMMARY_SCHEDULER_STATE_KEY],
+    );
+    return parseSummarySchedulerState(rows.values?.[0]?.value);
+  }
+
+  async setSummarySchedulerState(state: AmbientSummarySchedulerState): Promise<void> {
+    await this.init();
+    await (await this.db()).run(
+      "INSERT OR REPLACE INTO ambient_timeline_meta (key, value) VALUES (?, ?)",
+      [SUMMARY_SCHEDULER_STATE_KEY, JSON.stringify(state)],
+    );
+  }
+
   private async db(): Promise<SqliteConnection> {
     if (this.conn) return this.conn;
     const mod = await import("@capacitor-community/sqlite") as SqliteModule;
@@ -1234,5 +1267,29 @@ async function ensureColumns(
   for (const column of columns) {
     if (existing.has(column.name)) continue;
     await conn.run(column.sql);
+  }
+}
+
+function cloneSummarySchedulerState(state: AmbientSummarySchedulerState): AmbientSummarySchedulerState {
+  return { ...state };
+}
+
+function parseSummarySchedulerState(value: unknown): AmbientSummarySchedulerState {
+  if (typeof value !== "string" || value.length === 0) {
+    return DEFAULT_AMBIENT_SUMMARY_SCHEDULER_STATE;
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return DEFAULT_AMBIENT_SUMMARY_SCHEDULER_STATE;
+    }
+    const row = parsed as Partial<AmbientSummarySchedulerState>;
+    return {
+      ...DEFAULT_AMBIENT_SUMMARY_SCHEDULER_STATE,
+      ...row,
+      retryCount: typeof row.retryCount === "number" ? row.retryCount : 0,
+    };
+  } catch {
+    return DEFAULT_AMBIENT_SUMMARY_SCHEDULER_STATE;
   }
 }
