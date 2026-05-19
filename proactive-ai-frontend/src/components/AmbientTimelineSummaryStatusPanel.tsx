@@ -116,7 +116,7 @@ export default function AmbientTimelineSummaryStatusPanel() {
     return () => clearInterval(timer);
   }, [refresh]);
 
-  const latestEvent = snapshot.llmEvents.at(-1) ?? null;
+  const latestEvent = snapshot.llmEvents[snapshot.llmEvents.length - 1] ?? null;
   const latestFailure = [...snapshot.failed]
     .sort((a, b) => Date.parse(b.lastAttemptAt ?? b.updatedAt) - Date.parse(a.lastAttemptAt ?? a.updatedAt))[0] ?? null;
   const status = snapshot.error
