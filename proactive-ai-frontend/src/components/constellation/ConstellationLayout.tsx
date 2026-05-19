@@ -39,7 +39,11 @@ import RealControlPanel from "@/components/ControlPanel";
 import RealChatTimeline from "@/components/ChatTimeline";
 import { useAuth } from "@/hooks/useAuth";
 import { useCardActions } from "@/hooks/useCardActions";
-import { useCards } from "@/hooks/useCards";
+import {
+  isCompletedCardOutcome,
+  isHiddenCardOutcome,
+  useCards,
+} from "@/hooks/useCards";
 import { useComposio } from "@/hooks/useComposio";
 import { usePipeline } from "@/hooks/usePipeline";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
@@ -484,7 +488,8 @@ export default function BigBallLayout() {
       .filter(
         (c) =>
           !cardActions.dismissedIds.has(c.card.id) &&
-          !cardActions.doneIds.has(c.card.id),
+          !cardActions.doneIds.has(c.card.id) &&
+          !isHiddenCardOutcome(c.latestOutcome),
       )
       .slice(0, 14)
       .map((c) => {
@@ -949,10 +954,10 @@ export default function BigBallLayout() {
                 // Without these the hook's cancel/confirmDone are
                 // purely local UI flips.
                 onDismissBackend={() => {
-                  void cardActions.dismiss(chatTarget.card);
+                  return cardActions.dismiss(chatTarget.card);
                 }}
                 onDoneBackend={() => {
-                  void cardActions.complete(chatTarget.card);
+                  return cardActions.complete(chatTarget.card);
                 }}
               />
             ) : activeChat ? (
@@ -989,6 +994,13 @@ export default function BigBallLayout() {
                           ? bootstrap
                           : undefined,
                     });
+                  }}
+                  onOpenCardDetail={(card) => {
+                    const status: CardStatus = cardActions.processingIds.has(card.id)
+                      ? "processing"
+                      : "normal";
+                    setSelectedCard(realCardToLovableIntent(card, status));
+                    setDrawerOpen(true);
                   }}
                   onConfirmId={cardActions.markConfirmed}
                   onDismissId={cardActions.markDismissed}
@@ -1176,6 +1188,16 @@ export default function BigBallLayout() {
           {selectedCard && (
             <CardDrawerContent
               card={selectedCard}
+              completed={
+                selectedCard.originalId
+                  ? cardActions.doneIds.has(selectedCard.originalId) ||
+                    isCompletedCardOutcome(
+                      cardsState.cards.find(
+                        (c) => c.card.id === selectedCard.originalId,
+                      )?.latestOutcome,
+                    )
+                  : false
+              }
               onExecute={handleExecute}
               onClose={() => { setDrawerOpen(false); setSelectedCard(null); }}
               onDismiss={(card) => {
@@ -1323,12 +1345,14 @@ export default function BigBallLayout() {
  */
 function CardDrawerContent({
   card,
+  completed,
   onExecute,
   onClose,
   onModify,
   onDismiss,
 }: {
   card: Intent;
+  completed: boolean;
   onExecute: (card: Intent) => void;
   onClose: () => void;
   onModify: (card: Intent) => void;
@@ -1342,6 +1366,7 @@ function CardDrawerContent({
   // a tap would surprise the user. The chat detail view fires it on
   // Approve when the thread is empty.
   const run = useCardExecutionRun(card.originalId ?? null);
+  const showCompletedView = completed || run.snapshot?.status === "done";
 
   return (
     <div className="px-5 pb-5 pt-1.5 overflow-y-auto max-h-[88vh]">
@@ -1383,37 +1408,48 @@ function CardDrawerContent({
         <DrawerDetailBody
           card={card}
           runSnapshot={run.snapshot}
-          lastMessagePayload={run.lastMessagePayload}
+          lastMessagePayload={showCompletedView ? null : run.lastMessagePayload}
           sideEffects={run.snapshot?.result?.side_effects ?? []}
         />
       )}
 
-      {/* Actions — Dismiss / Steer / Approve */}
+      {/* Actions */}
       <div className="flex items-center gap-2 mt-5">
-        <button
-          onClick={() => onDismiss(card)}
-          className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[13px] font-medium text-foreground/55"
-        >
-          <X size={13} strokeWidth={2} /> Dismiss
-        </button>
-        {!card.locked && (
+        {showCompletedView ? (
           <button
-            onClick={() => onModify(card)}
-            className="flex items-center justify-center gap-1 px-3 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[12px] font-medium text-foreground/55"
+            onClick={onClose}
+            className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[13px] font-medium text-foreground/55"
           >
-            <Pencil size={11} strokeWidth={2} /> Steer
+            Close
           </button>
+        ) : (
+          <>
+            <button
+              onClick={() => onDismiss(card)}
+              className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[13px] font-medium text-foreground/55"
+            >
+              <X size={13} strokeWidth={2} /> Dismiss
+            </button>
+            {!card.locked && (
+              <button
+                onClick={() => onModify(card)}
+                className="flex items-center justify-center gap-1 px-3 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[12px] font-medium text-foreground/55"
+              >
+                <Pencil size={11} strokeWidth={2} /> Steer
+              </button>
+            )}
+            <button
+              onClick={() => onExecute(card)}
+              className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground text-background text-[13px] font-semibold hover:bg-foreground/85 transition-colors"
+            >
+              {card.locked ? (
+                <><LockIcon size={13} strokeWidth={2.5} /> Approve</>
+              ) : (
+                <><Check size={13} strokeWidth={2.5} /> Approve</>
+              )}
+            </button>
+          </>
         )}
-        <button
-          onClick={() => onExecute(card)}
-          className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground text-background text-[13px] font-semibold hover:bg-foreground/85 transition-colors"
-        >
-          {card.locked ? (
-            <><LockIcon size={13} strokeWidth={2.5} /> Approve</>
-          ) : (
-            <><Check size={13} strokeWidth={2.5} /> Approve</>
-          )}
-        </button>
       </div>
     </div>
   );

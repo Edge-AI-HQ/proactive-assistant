@@ -204,23 +204,25 @@ export function useCardActions({ onOpenChat }: UseCardActionsOptions) {
   );
 
   const complete = useCallback(async (card: IntentCard) => {
-    setDoneIds((s) => new Set(s).add(card.id));
-    setProcessingIds((s) => {
-      const n = new Set(s);
-      n.delete(card.id);
-      return n;
-    });
     try {
-      await proxyPost("/feedback", {
+      const res = await proxyPost("/feedback", {
         kind: "card_action",
         action: "complete",
         intentCardId: card.id,
         basket: card.goalBasket,
         channel: "web",
       });
+      if (!res.ok) return false;
     } catch {
-      /* swallow */
+      return false;
     }
+    setDoneIds((s) => new Set(s).add(card.id));
+    setProcessingIds((s) => {
+      const n = new Set(s);
+      n.delete(card.id);
+      return n;
+    });
+    return true;
   }, []);
 
   const openChat = useCallback(

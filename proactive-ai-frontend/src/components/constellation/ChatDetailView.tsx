@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback, memo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, ArrowRight, Check, Loader2, ChevronUp, Zap, Sprout, Briefcase, TrendingUp, Heart, BookOpen, Sparkles, X, Pause, Play, MessageSquarePlus, ThumbsUp, ThumbsDown, Mail, Calendar, Globe, FileSearch, Settings, Hand, Database, FileText, Bell, DollarSign, Users, MessageSquare, Search, Brain, Lock, type LucideIcon } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Loader2, ChevronUp, Zap, Sprout, Briefcase, TrendingUp, Heart, BookOpen, Sparkles, X, Pause, Play, MessageSquarePlus, Mail, Calendar, Globe, FileSearch, Settings, Hand, Database, FileText, Bell, DollarSign, Users, MessageSquare, Search, Brain, Lock, type LucideIcon } from "lucide-react";
 import { VoiceButton } from "@/components/voice";
 import { DrawerDetailBody, executeArtifactToLovable } from "./CardDrawerDetail";
 import BrowserPanel from "../browser-view/BrowserPanel";
@@ -221,13 +221,13 @@ interface ChatDetailViewProps {
    * Dismissed in the TASKS view. Parent wires this to
    * `cardActions.dismiss(realIntentCard)`.
    */
-  onDismissBackend?: () => void;
+  onDismissBackend?: () => void | Promise<void>;
   /**
    * Backend feedback hook for the top-toolbar Done button. Same shape
    * as `onDismissBackend` — POSTs /feedback kind=card_action
    * action=complete so the card moves from sphere → TASKS as Completed.
    */
-  onDoneBackend?: () => void;
+  onDoneBackend?: () => boolean | void | Promise<boolean | void>;
 }
 
 interface ChatMessage {
@@ -941,7 +941,7 @@ function statusToTaskState(
   if (status === "needs_input" && pending) return "needs-input";
   if (status === "pending_done") return "pending-done";
   if (status === "done") return "done";
-  if (status === "error") return "done"; // surface as terminal so the toolbar shows the feedback row
+  if (status === "error") return "done"; // surface as terminal so the toolbar shows the retry row
   if (status === "cancelled") return "dismissed";
   return "running";
 }
@@ -1110,7 +1110,6 @@ export default function ChatDetailView({
   // waiting for user" condition.
   const pendingKind = run.snapshot?.pendingInput?.kind;
   const awaitingInput = pendingKind === "message";
-  const [feedback, setFeedback] = useState<"up" | "down" | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // The "Needs your input" panel below the action list — a SINGLE
@@ -1229,7 +1228,7 @@ export default function ChatDetailView({
       // card drops out of the sphere and shows as Dismissed in TASKS.
       // Mirrors the home Drawer's Dismiss path. The hook's `cancel`
       // alone is local UI state only.
-      if (onDismissBackend) onDismissBackend();
+      if (onDismissBackend) await onDismissBackend();
     } catch (e) {
       console.warn("cancel failed:", e);
     } finally {
@@ -1245,11 +1244,12 @@ export default function ChatDetailView({
     if (busy) return;
     setBusy(true);
     try {
-      await run.confirmDone();
       // Persist the user's intent: POST /feedback kind=card_action
       // action=complete so the card moves from the sphere into TASKS as
       // Completed. The hook's `confirmDone` alone is local UI state.
-      if (onDoneBackend) onDoneBackend();
+      const persisted = onDoneBackend ? await onDoneBackend() : true;
+      if (persisted === false) return;
+      await run.confirmDone();
     } catch (e) {
       console.warn("confirmDone failed:", e);
     } finally {
@@ -1823,42 +1823,36 @@ export default function ChatDetailView({
       {taskState !== "dismissed" && (actionMessages.length > 0 || summaryMsg || askMsg) && (
         <div className="px-4 pt-2">
           {taskState === "done" ? (
-            // Done: feedback + optional Retry (shown only when the run
-            // ended in error so the user can re-attempt without going
-            // back to the home Drawer).
-            <div
-              className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-2xl border border-foreground/8"
-              style={{ background: "rgba(255,255,255,0.5)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)" }}
-            >
-              <span className="text-[12px] text-foreground/55 font-medium">
-                {run.snapshot?.status === "error" ? "Run failed." : "Was this helpful?"}
-              </span>
-              <div className="flex items-center gap-1.5">
-                {run.snapshot?.status === "error" && onRetry && (
-                  <button
-                    onClick={handleRetry}
-                    disabled={busy}
-                    className="flex items-center gap-1.5 px-3 h-8 rounded-full bg-foreground text-background hover:bg-foreground/85 transition-colors text-[12px] font-semibold disabled:opacity-50"
-                  >
-                    <Check size={12} strokeWidth={2.5} /> Retry
-                  </button>
-                )}
-                <button
-                  onClick={() => setFeedback("up")}
-                  className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${feedback === "up" ? "bg-green-500/20 text-green-600" : "bg-foreground/5 text-foreground/55 hover:bg-foreground/10"}`}
-                  aria-label="Helpful"
-                >
-                  <ThumbsUp size={13} strokeWidth={2} />
-                </button>
-                <button
-                  onClick={() => setFeedback("down")}
-                  className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${feedback === "down" ? "bg-red-500/20 text-red-600" : "bg-foreground/5 text-foreground/55 hover:bg-foreground/10"}`}
-                  aria-label="Not helpful"
-                >
-                  <ThumbsDown size={13} strokeWidth={2} />
-                </button>
+            run.snapshot?.status === "error" ? (
+              // Error is the one terminal state that still needs Retry.
+              <div
+                className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-2xl border border-foreground/8"
+                style={{ background: "rgba(255,255,255,0.5)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)" }}
+              >
+                <span className="text-[12px] text-foreground/55 font-medium">
+                  Run failed.
+                </span>
+                <div className="flex items-center gap-1.5">
+                  {onRetry && (
+                    <button
+                      onClick={handleRetry}
+                      disabled={busy}
+                      className="flex items-center gap-1.5 px-3 h-8 rounded-full bg-foreground text-background hover:bg-foreground/85 transition-colors text-[12px] font-semibold disabled:opacity-50"
+                    >
+                      <Check size={12} strokeWidth={2.5} /> Retry
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
+            ) : (
+              <button
+                onClick={onBack}
+                disabled={busy}
+                className="w-full flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[13px] font-medium text-foreground/55 disabled:opacity-50"
+              >
+                <X size={13} strokeWidth={2} /> Close
+              </button>
+            )
           ) : taskState === "pending-done" ? (
             // Agent finished, user hasn't confirmed yet.
             // Toolbar: Dismiss | Done. No standalone Steer/Continue —
@@ -2039,4 +2033,3 @@ function ChatCardDrawerBody({
     </div>
   );
 }
-

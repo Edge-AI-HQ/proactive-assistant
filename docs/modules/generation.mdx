@@ -93,7 +93,7 @@ sequenceDiagram
 | 持久化 | `persist_generator_run`:`pai_pipeline_runs` 一行(`id=run_id`,`run_id=run_id` 两列同值,`status='completed'`,`final_cards JSONB`,`iterations JSONB`,`trigger`,`started_at`,`completed_at`);`_persist_evaluations`:每张 pass 卡 + 评价写一行 `pai_card_evaluations`(ON CONFLICT (user_id, card_id) DO UPDATE)。 |
 | Reward review | 内部 review 不改 generation 主链路。`/api/reward-dashboard/*` 只读 `pai_pipeline_runs.final_cards` + `pai_card_evaluations`,把用户 open / score 和 reviewer score 追加到 `pai_card_reward_events`,案例库写 `pai_card_casebook`,trace artifact 写 `pai_trace_artifacts`。 |
 | LangSmith metadata | generator root invocation 带 `metadata={pinai_run_id, pinai_user_id, pinai_agent:'generator'}` 和 `tags=['pinai','generator',...]`,reward dashboard 用这个稳定绑定 trace,不靠时间窗口猜。 |
-| 前端轮询 | `usePipeline.ts` 用 sessionStorage 恢复 run state;`useActiveAgentRuns.ts` 轮询 `/api/agent-runs/active`;`useGenerationStatus.ts` 取 `pai_scheduled_task_runs` 状态;成功后 `useCards.ts` 拉 `/api/cards`。 |
+| 前端轮询 | `usePipeline.ts` 用 sessionStorage 恢复 run state;`useActiveAgentRuns.ts` 轮询 `/api/agent-runs/active`;`useGenerationStatus.ts` 取 `pai_scheduled_task_runs` 状态;成功后 `useCards.ts` 拉 `/api/cards`。`/api/cards` 除了 `card/runId/score` 还带 `latestOutcome/outcomeAt`,让 cold-start 后的 sphere/drawer 直接按用户已完成或已隐藏状态恢复。 |
 
 ## chat 端 generator agent
 

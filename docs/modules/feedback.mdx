@@ -9,7 +9,7 @@ description: "反馈事件和学习回流的当前事实。"
 
 Feedback 模块把用户对卡片和卡片聊天的反应转成下一轮生成可用的偏置信号。两类输入:
 
-- **用户直接操作**:confirm / modify / dismiss / snooze / text feedback。前端 `POST /api/feedback` 写 `pai_feedback_events` 并更新 `pai_intent_card_state.latest_outcome`。
+- **用户直接操作**:confirm / modify / dismiss / snooze / complete / text feedback。前端 `POST /api/feedback` 写 `pai_feedback_events`；`/api/cards` 会带回每张卡从 feedback 事件推导出的 `latestOutcome` / `outcomeAt`，用于 iOS/web 冷启动恢复 sphere 和 drawer 状态。
 - **agent 分析**:card chat session 满阈值后,sub-agent 汇总成 `card_chat_interest` 类型 feedback,`source='agent_analysis'`,跟 `pai_intent_card_state.latest_chat_decision` / `pai_intent_thread_state` 联动。
 
 下一轮 generation 跑 `data-collector` subagent 时通过 `feedback_list` 工具拉最近反馈,planner subagent 按反馈做 dedupe + cold-basket 抑制。
@@ -91,10 +91,11 @@ flowchart LR
 
 | 输入 | 写入 |
 |---|---|
-| `card_action: confirm` | `pai_feedback_events`(`kind=card_action`,`action=confirm`)+ `pai_intent_card_state.latest_outcome=confirm` |
-| `card_action: modify` | 同上,`latest_outcome=modify` |
-| `dismiss` | 同上,`latest_outcome=dismiss` |
-| `snooze` | 同上,`latest_outcome=snooze` |
+| `card_action: confirm` | `pai_feedback_events`(`kind=card_action`,`action=confirm`),`/api/cards.latestOutcome=confirm` |
+| `card_action: modify` | 同上,`latestOutcome=modify` |
+| `dismiss` | `pai_feedback_events`(`kind=dismiss`),`/api/cards.latestOutcome=dismiss` |
+| `snooze` | `pai_feedback_events`(`kind=snooze`),`/api/cards.latestOutcome=snooze` |
+| `card_action: complete` | `pai_feedback_events`(`kind=card_action`,`action=complete`),`/api/cards.latestOutcome=complete` |
 | 自由文本反馈 | `kind=text_feedback`,`text` 写正文 |
 | card chat summary(sub-agent)| `kind=card_chat_interest`,`source=agent_analysis`,同步更新 `pai_intent_card_state.latest_chat_decision` + `pai_intent_thread_state` |
 
@@ -105,6 +106,8 @@ sequenceDiagram
   participant UI as Frontend
   participant R as POST /api/feedback
   participant Repo as FeedbackRepository
+  participant Events as pai_feedback_events
+  participant Cards as GET /api/cards
   participant CS as pai_intent_card_state
   participant TS as pai_intent_thread_state
   participant CFA as chat-feedback sub-agent
@@ -112,9 +115,11 @@ sequenceDiagram
 
   UI->>R: POST { kind, action, intentCardId, intentKey, basket, ... }
   R->>Repo: log()
-  Repo->>R: pai_feedback_events row id
-  R->>CS: applyCardOutcome (latest_outcome / outcome_at)
+  Repo->>Events: INSERT row
+  Repo-->>R: pai_feedback_events row id
   R-->>UI: { ok, id }
+  Events->>Cards: latest event per intent_card_id
+  Cards-->>UI: latestOutcome / outcomeAt for UI cold-start
 
   Note over CFA: card chat session 满阈值时 chat 端 inline 触发 chat-feedback / crystallize(当前不走 scheduler 队列)
   CFA->>Repo: log(kind=card_chat_interest, source=agent_analysis)
@@ -130,9 +135,9 @@ sequenceDiagram
 
 | 维度 | 当前事实 |
 |---|---|
-| 路由 | `pinai-agents/src/pinai_agents/web/routes/ui/feedback.py`:`POST /api/feedback`、`GET /api/feedback`(可按 kind / action / since 查)、`GET /api/feedback/dismissed`(返回 `intent_card_id` 列表,前端用来过滤 NowFeed)。 |
+| 路由 | `pinai-agents/src/pinai_agents/web/routes/ui/feedback.py`:`POST /api/feedback`、`GET /api/feedback`(可按 kind / action / since 查)、`GET /api/feedback/dismissed`、`GET /api/feedback/completed`。`/api/cards` 也会随卡片返回 `latestOutcome` / `outcomeAt`,这是 cold-start 时 sphere/drawer 的优先状态来源。 |
 | 鉴权 | Supabase JWT(`current_user`)。 |
-| Repository | `web/db/repositories/feedback.py:FeedbackRepository.log()` 写 `pai_feedback_events`;`applyCardOutcome` upsert `pai_intent_card_state`。 |
+| Repository | `web/db/repositories/feedback.py:FeedbackRepository.log()` 写 `pai_feedback_events`;当前 UI 卡片 outcome 冷启动恢复由 `web/routes/ui/runs_and_cards.py:/api/cards` 从最新 feedback 事件推导。 |
 | Agent 路由 | `web/routes/agent/feedback.py` 暴露 `list` / `log`,给 chat 端 native tool `feedback_list` / `feedback_log` 用。`source='agent_analysis'` 走这条。 |
 | chat-feedback 触发 | 当前由 chat 进程**内联**触发(scheduler 的 `crystallize` kind 路由已就位但未接 enqueue producer),`chat/agents/crystallize.py` 处理 transcript;失败只 warn,不阻断 generation。crystallize 写 memory / skill **跟** chat-feedback 写 feedback events 是两条不同链路,但都用同一份 `normalizeCardChatMessages`。 |
 | Generation 使用 | `chat/agents/generator.py:_DATA_COLLECTOR_PROMPT` 让 data-collector 调 `feedback_list` 拉最近 feedback,写进 `/state/phase1.json`;planner 据此 dedupe(`skipped_duplicates`)+ cold-basket 抑制(`cold_baskets`)。 |
@@ -173,7 +178,7 @@ cd proactive-ai-frontend && npm test
 手工验证:
 
 - 对一张卡 dismiss → `GET /api/feedback/dismissed` 返回该 `intentCardId`,前端 NowFeed 该卡不再出现。
-- 对一张卡 confirm / modify → `pai_intent_card_state.latest_outcome` 应被改写,`outcome_at` 是当前时间。
+- 对一张卡 Done / complete → `/api/cards` 该卡条目应返回 `latestOutcome='complete'`,前端冷启动后 sphere 不应再显示该卡;如果仍打开 drawer,底部只显示灰色 `Close`。
 - card chat 跑过阈值后,下次 generate 前应该看到 `data-collector` 在 trace 里调 `feedback_list`;planner 输出的 `PlanOutput.skipped_duplicates` / `cold_baskets` 应该体现新反馈。失败只 warn(不阻断 generation)。
 - 下一轮 `pai_pipeline_runs.iterations` JSON 里(audit dump)应能看到 feedback summary 段。
 

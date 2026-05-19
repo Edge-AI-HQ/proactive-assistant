@@ -188,6 +188,63 @@ describe("useCardActions", () => {
     expect(result.current.processingIds.has("c1")).toBe(false);
   });
 
+  test("complete: waits for feedback persistence before moving processing → done", async () => {
+    let resolveComplete: ((value: Response) => void) | null = null;
+    const completePosted = new Promise<Response>((resolve) => {
+      resolveComplete = resolve;
+    });
+    (proxyPost as ReturnType<typeof vi.fn>).mockImplementation(
+      async (_path: string, body: { action?: string }) => {
+        if (body.action === "complete") return completePosted;
+        return new Response("{}", { status: 200 });
+      },
+    );
+
+    const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn() }));
+    await act(async () => {
+      await result.current.confirm(baseCard);
+    });
+
+    let completePromise!: Promise<boolean>;
+    act(() => {
+      completePromise = result.current.complete(baseCard);
+    });
+
+    expect(result.current.doneIds.has("c1")).toBe(false);
+    expect(result.current.processingIds.has("c1")).toBe(true);
+
+    await act(async () => {
+      resolveComplete?.(new Response("{}", { status: 200 }));
+      await completePromise;
+    });
+
+    expect(result.current.doneIds.has("c1")).toBe(true);
+    expect(result.current.processingIds.has("c1")).toBe(false);
+  });
+
+  test("complete: keeps card processing when feedback persistence fails", async () => {
+    (proxyPost as ReturnType<typeof vi.fn>).mockImplementation(
+      async (_path: string, body: { action?: string }) => {
+        if (body.action === "complete") return new Response("{}", { status: 500 });
+        return new Response("{}", { status: 200 });
+      },
+    );
+
+    const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn() }));
+    await act(async () => {
+      await result.current.confirm(baseCard);
+    });
+
+    let persisted: boolean | undefined;
+    await act(async () => {
+      persisted = await result.current.complete(baseCard);
+    });
+
+    expect(persisted).toBe(false);
+    expect(result.current.doneIds.has("c1")).toBe(false);
+    expect(result.current.processingIds.has("c1")).toBe(true);
+  });
+
   test("textFeedback: posts trimmed text; ignores empty/whitespace", async () => {
     const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn() }));
     await act(async () => {
