@@ -49,36 +49,117 @@ def _produced_memory_ids(row: EvolutionRunRow) -> list[str]:
 def _memory_title(memory: dict[str, Any], index: int) -> str:
     subject = memory.get("subject")
     if isinstance(subject, str) and subject.strip():
-        return f"{subject.strip()} memory"
-    return f"Memory {index + 1}"
+        label = subject.strip().replace("_", " ").title()
+        return f"{label} thread"
+    return f"Theme {index + 1}"
+
+
+def _assistant_voice(text: str) -> str:
+    replacements = (
+        ("Xing Hu is", "You are"),
+        ("Xing is", "You are"),
+        ("Xing has", "You have"),
+        ("Xing watches", "You watch"),
+        ("Xing watched", "You watched"),
+        ("Xing engages", "You engage"),
+        ("Xing commented", "You commented"),
+        ("Xing said", "You said"),
+        ("Xing explicitly stated", "You explicitly stated"),
+        ("Xing", "you"),
+        ("Regularly watches", "You regularly watch"),
+    )
+    out = text
+    for before, after in replacements:
+        out = out.replace(before, after)
+    return out
+
+
+def _clip_text(text: str, *, limit: int = 520) -> str:
+    cleaned = " ".join(text.split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: limit - 1].rstrip() + "…"
+
+
+def _first_sentence(text: str) -> str:
+    clipped = _assistant_voice(_clip_text(text, limit=360))
+    stops = [". ", "。", "! ", "? "]
+    positions = [clipped.find(stop) for stop in stops if clipped.find(stop) > 0]
+    if not positions:
+        return clipped
+    return clipped[: min(positions) + 1].strip()
+
+
+def _looks_like_run_log(text: str) -> bool:
+    lower = text.lower()
+    return (
+        ("signals" in lower and "processed" in lower)
+        or "raw rows" in lower
+        or "memories written" in lower
+        or "profile facts refreshed" in lower
+    )
+
+
+def _journal_summary(row: EvolutionRunRow, memories: list[dict[str, Any]]) -> str:
+    report = _agent_report(row)
+    summary = report.get("summary") or row.context_summary
+    if isinstance(summary, str) and summary.strip() and not _looks_like_run_log(summary):
+        return _clip_text(summary, limit=900)
+    if memories:
+        observations = [
+            _first_sentence(str(memory.get("text") or ""))
+            for memory in memories
+            if str(memory.get("text") or "").strip()
+        ]
+        if observations:
+            return (
+                "A few patterns stood out from your day. "
+                + " ".join(observations[:3])
+            )
+    return (
+        "I looked back over your day and found a few signals worth "
+        "carrying forward."
+    )
+
+
+def _profile_change_sentence(row: EvolutionRunRow) -> str | None:
+    if not row.profile_updated:
+        return None
+    keys = [k for k in row.profile_changed_keys if k.strip()]
+    if not keys:
+        return (
+            "I also updated my profile of you, but this run did not record "
+            "which fields changed."
+        )
+    readable = ", ".join(k.replace("facts.", "").replace("preferences.", "") for k in keys[:6])
+    suffix = "" if len(keys) <= 6 else f", and {len(keys) - 6} more"
+    return f"I updated my model of you around {readable}{suffix}."
 
 
 def _dream_markdown(
     row: EvolutionRunRow,
     memories: list[dict[str, Any]],
 ) -> str:
-    report = _agent_report(row)
     lines = [
-        "## Summary",
-        row.context_summary or "No summary recorded.",
+        "## Dream Journal",
+        (
+            "I looked back over your day as your personal assistant. "
+            "What matters here is the shape of your attention, the themes "
+            "that repeated, and what I should remember for next time."
+        ),
         "",
-        "## Output",
-        f"- Memories written: {row.memories_written}",
-        f"- Memories superseded: {row.memories_superseded}",
-        f"- Profile updated: {'yes' if row.profile_updated else 'no'}",
+        _journal_summary(row, memories),
     ]
-    if row.profile_changed_keys:
-        lines.append(f"- Profile fields: {', '.join(row.profile_changed_keys)}")
-    if "totalSignals" in report:
-        lines.append(f"- Signals processed: {report.get('totalSignals')}")
-    if "totalRawRows" in report:
-        lines.append(f"- Raw rows processed: {report.get('totalRawRows')}")
 
     if memories:
-        lines.extend(["", "## Produced Memories"])
+        lines.extend(["", "## What I noticed"])
         for index, memory in enumerate(memories):
-            text = str(memory.get("text") or "").strip()
-            lines.append(f"- **{_memory_title(memory, index)}**: {text}")
+            text = _assistant_voice(str(memory.get("text") or "").strip())
+            if text:
+                lines.append(f"- **{_memory_title(memory, index)}**: {_clip_text(text)}")
+    profile_sentence = _profile_change_sentence(row)
+    if profile_sentence:
+        lines.extend(["", "## What changed in my understanding of you", profile_sentence])
     return "\n".join(lines).strip()
 
 

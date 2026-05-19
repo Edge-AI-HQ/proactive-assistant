@@ -42,14 +42,17 @@ async def test_dreaming_detail_surfaces_run_outputs(pool, user_ids):
         )
         await repo.complete(
             run_id,
-            context_summary="Processed 112 signals and wrote memory.",
+            context_summary="You kept returning to one important work thread.",
             memories_written=1,
             profile_updated=True,
             profile_changed_keys=["facts.work"],
             refs_produced={"pai_memory": ["mem_dream_ui_one"]},
             details={
                 "agentReport": {
-                    "summary": "Processed 112 signals and wrote memory.",
+                    "summary": (
+                        "24h window: 112 signals and 8 raw rows processed. "
+                        "Profile facts refreshed."
+                    ),
                     "totalSignals": 112,
                     "totalRawRows": 8,
                 },
@@ -69,11 +72,19 @@ async def test_dreaming_detail_surfaces_run_outputs(pool, user_ids):
 
     assert list_res.status_code == 200, list_res.text
     run = next(r for r in list_res.json()["runs"] if r["id"] == run_id)
-    assert run["summary"]["text"] == "Processed 112 signals and wrote memory."
+    assert run["summary"]["text"] == "You kept returning to one important work thread."
 
     assert detail_res.status_code == 200, detail_res.text
     detail = detail_res.json()["detail"]
-    assert "Processed 112 signals" in detail["dreamMarkdown"]
+    assert "## Dream Journal" in detail["dreamMarkdown"]
+    assert "personal assistant" in detail["dreamMarkdown"]
+    assert "## What I noticed" in detail["dreamMarkdown"]
+    assert "Useful dream output" in detail["dreamMarkdown"]
+    assert "Work thread" in detail["dreamMarkdown"]
+    assert "112 signals" not in detail["dreamMarkdown"]
+    assert "memory**" not in detail["dreamMarkdown"]
+    assert "Memories written" not in detail["dreamMarkdown"]
+    assert "processed" not in detail["dreamMarkdown"].lower()
     assert detail["profileDelta"] == {
         "updated": True,
         "changedKeys": ["facts.work"],
