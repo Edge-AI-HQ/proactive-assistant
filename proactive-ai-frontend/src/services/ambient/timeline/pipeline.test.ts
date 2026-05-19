@@ -281,7 +281,20 @@ describe("LocalAmbientTimelinePipeline", () => {
         latitude: 31.2,
         longitude: 121.5,
         accuracy: 18,
-        place: { label: "Office" },
+        place: {
+          label: "Office",
+          place_name: "PIN Office",
+          address: "100 Century Ave, Shanghai",
+          poi_name: "PIN HQ",
+          poi_category: "office",
+          poi_distance_m: 12.5,
+          areas_of_interest: ["Lujiazui", "Tower A"],
+          locality: "Shanghai",
+          country: "China",
+          country_code: "CN",
+          resolved_at: 1_779_000_000_000,
+          raw_debug: { provider: "internal" },
+        },
         heading: 90,
         speed: 1.2,
         localFilePath: "/private/tmp/location.json",
@@ -315,13 +328,27 @@ describe("LocalAmbientTimelinePipeline", () => {
           latitude: 31.2,
           longitude: 121.5,
           accuracy: 18,
-          place: { label: "Office" },
+          place: expect.objectContaining({ label: "Office" }),
+          poi: {
+            label: "Office",
+            place_name: "PIN Office",
+            address: "100 Century Ave, Shanghai",
+            poi_name: "PIN HQ",
+            poi_category: "office",
+            poi_distance_m: 12.5,
+            areas_of_interest: ["Lujiazui", "Tower A"],
+            locality: "Shanghai",
+            country: "China",
+            country_code: "CN",
+          },
         }),
       })],
     });
     expect(JSON.stringify(first[0]?.payload)).not.toContain("localFilePath");
     expect(JSON.stringify(first[0]?.payload)).not.toContain("heading");
     expect(JSON.stringify(first[0]?.payload)).not.toContain("speed");
+    expect(JSON.stringify(first[0]?.payload)).not.toContain("raw_debug");
+    expect(JSON.stringify(first[0]?.payload)).not.toContain("resolved_at");
     expect(duplicate).toEqual([]);
     expect(nextPlace.map((signal) => signal.payload?.window_type)).toEqual(["location_update"]);
     expect(await store.listTimelineEvents("2026-05-15", { visibleOnly: true })).toEqual([]);
@@ -335,7 +362,18 @@ describe("LocalAmbientTimelinePipeline", () => {
       title: "Departed Office",
       summary: "Departed Office",
       occurred_at: "2026-05-15T08:05:00.000Z",
-      payload: { kind: "departure", place: { label: "Office" }, latitude: 31.2, longitude: 121.5 },
+      payload: {
+        kind: "departure",
+        place: {
+          label: "Office",
+          place_name: "PIN Office",
+          address: "100 Century Ave, Shanghai",
+          locality: "Shanghai",
+          source: "mapkit+clgeocoder",
+        },
+        latitude: 31.2,
+        longitude: 121.5,
+      },
       dedupe_key: "visit:office:departure:upload",
     });
     await pipeline.ingestSignal({
@@ -358,7 +396,18 @@ describe("LocalAmbientTimelinePipeline", () => {
       title: "Arrived Gym",
       summary: "Arrived Gym",
       occurred_at: "2026-05-15T08:24:00.000Z",
-      payload: { kind: "arrival", place: { label: "Gym" }, latitude: 31.25, longitude: 121.55 },
+      payload: {
+        kind: "arrival",
+        place: {
+          label: "Gym",
+          place_name: "Fitness Center",
+          poi_category: "fitnessCenter",
+          administrative_area: "Shanghai",
+          unexpected_blob: { debug: true },
+        },
+        latitude: 31.25,
+        longitude: 121.55,
+      },
       dedupe_key: "visit:gym:arrival:upload",
     });
 
@@ -367,13 +416,44 @@ describe("LocalAmbientTimelinePipeline", () => {
       "visit_stay",
       "transition",
     ]);
+    const visitStay = candidateSignals.find((signal) => signal.payload?.window_type === "visit_stay");
+    expect(visitStay?.payload?.source_payloads).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source_type: "visit",
+        payload: expect.objectContaining({
+          kind: "arrival",
+          poi: expect.objectContaining({
+            label: "Gym",
+            place_name: "Fitness Center",
+            poi_category: "fitnessCenter",
+            administrative_area: "Shanghai",
+          }),
+        }),
+      }),
+    ]));
     const transition = candidateSignals.find((signal) => signal.payload?.window_type === "transition");
     expect(transition?.payload?.source_payloads).toEqual(expect.arrayContaining([
-      expect.objectContaining({ source_type: "visit", payload: expect.objectContaining({ kind: "departure" }) }),
-      expect.objectContaining({ source_type: "motion", payload: expect.objectContaining({ activity: "automotive" }) }),
-      expect.objectContaining({ source_type: "visit", payload: expect.objectContaining({ kind: "arrival" }) }),
+      expect.objectContaining({
+        source_type: "visit",
+        payload: expect.objectContaining({
+          kind: "departure",
+          poi: expect.objectContaining({ label: "Office", place_name: "PIN Office" }),
+        }),
+      }),
+      expect.objectContaining({
+        source_type: "motion",
+        payload: expect.not.objectContaining({ poi: expect.anything() }),
+      }),
+      expect.objectContaining({
+        source_type: "visit",
+        payload: expect.objectContaining({
+          kind: "arrival",
+          poi: expect.objectContaining({ label: "Gym", place_name: "Fitness Center" }),
+        }),
+      }),
     ]));
     expect(JSON.stringify(transition?.payload)).not.toContain("localFilePath");
+    expect(JSON.stringify(transition?.payload)).not.toContain("unexpected_blob");
   });
 
   test("keeps transcript sessions as pending windows in milestone A", async () => {
@@ -1141,7 +1221,18 @@ describe("LocalAmbientTimelinePipeline", () => {
       title: "Visit",
       summary: "Stayed at Office",
       occurred_at: "2026-05-15T10:03:30.000Z",
-      payload: { kind: "departure", place: { label: "Office" }, latitude: 31.2, longitude: 121.5 },
+      payload: {
+        kind: "departure",
+        place: {
+          label: "Office",
+          place_name: "PIN Office",
+          address: "100 Century Ave, Shanghai",
+          locality: "Shanghai",
+          source: "mapkit+clgeocoder",
+        },
+        latitude: 31.2,
+        longitude: 121.5,
+      },
       dedupe_key: "visit:office:transcript-merge",
     });
     await pipeline.ingestSignal({

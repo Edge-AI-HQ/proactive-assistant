@@ -1145,14 +1145,54 @@ function sanitizeTranscriptPayload(raw: AmbientRawEvent): Record<string, unknown
 }
 
 function sanitizeLocationPayload(raw: AmbientRawEvent): Record<string, unknown> {
-  return pick(raw.payload, ["latitude", "longitude", "accuracy", "place"]);
+  return withPoi(raw.payload, pick(raw.payload, ["latitude", "longitude", "accuracy"]));
 }
 
 function sanitizeVisitPayload(raw: AmbientRawEvent): Record<string, unknown> {
-  return pick(raw.payload, [
-    "kind", "place", "latitude", "longitude", "accuracy",
+  return withPoi(raw.payload, pick(raw.payload, [
+    "kind", "latitude", "longitude", "accuracy",
     "arrival_at", "departure_at",
+  ]));
+}
+
+function withPoi(
+  rawPayload: Record<string, unknown>,
+  sanitized: Record<string, unknown>,
+): Record<string, unknown> {
+  const poi = normalizePoi(rawPayload);
+  return poi ? { ...sanitized, place: poi, poi } : sanitized;
+}
+
+function normalizePoi(payload: Record<string, unknown>): Record<string, unknown> | null {
+  const place = payload.place;
+  if (!place || typeof place !== "object") return null;
+  const row = place as Record<string, unknown>;
+  const poi = pickText(row, [
+    "label", "place_name", "address", "poi_name", "poi_category",
+    "area_of_interest", "thoroughfare", "sub_thoroughfare",
+    "locality", "sub_locality", "administrative_area",
+    "postal_code", "country", "country_code", "source",
   ]);
+  const distance = numberValue(row.poi_distance_m);
+  if (distance !== null) poi.poi_distance_m = distance;
+  const areas = stringArray(row.areas_of_interest).slice(0, 5);
+  if (areas.length > 0) poi.areas_of_interest = areas;
+  return Object.keys(poi).length > 0 ? poi : null;
+}
+
+function pickText(payload: Record<string, unknown>, keys: string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of keys) {
+    const value = stringValue(payload[key]);
+    if (value) out[key] = value.slice(0, 512);
+  }
+  return out;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map(stringValue).filter((item): item is string => Boolean(item))
+    : [];
 }
 
 function pick(payload: Record<string, unknown>, keys: string[]): Record<string, unknown> {
