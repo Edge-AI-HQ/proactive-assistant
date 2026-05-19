@@ -28,8 +28,10 @@ const MIN_TRANSCRIPT_LENGTH = 24;
 const TRANSCRIPT_SALIENCE = 0.7;
 const TRANSCRIPT_CONFIDENCE = 0.75;
 const SPEECH_LABEL = "speech";
-const DEFAULT_TRANSCRIPTION_LANGUAGE = "zh";
+const DISABLED_TRANSCRIPT_PROVIDERS = new Set(["local_speech"]);
+const DEFAULT_TRANSCRIPTION_LANGUAGE = "en";
 const LIVE_AUDIO_CONFIG = {
+  preRollMs: 2_000,
   postRollMs: 2_500,
   maxBurstMs: 12_000,
   minBurstMs: 600,
@@ -277,6 +279,10 @@ export class SoundClassifierSource implements AmbientSource {
 
   private handleTranscriptReady(event: TranscriptReadyEvent, runId?: number): void {
     if (runId !== undefined && !this.isRunActive(runId)) return;
+    if (DISABLED_TRANSCRIPT_PROVIDERS.has(event.provider)) {
+      this.ctx.onEvent(this.key, `Ignored transcript provider: ${event.provider}`);
+      return;
+    }
     const text = event.text.trim();
     if (text.length < MIN_TRANSCRIPT_LENGTH) return;
     if (this.storedTranscriptBurstIds.has(event.burstId)) return;

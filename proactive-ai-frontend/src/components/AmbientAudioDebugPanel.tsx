@@ -130,7 +130,7 @@ const INITIAL_CONFIG: AudioConfigForm = {
   cloudApiKey: "",
   modelName: "",
   cloudRefineTimeoutMs: "15000",
-  preRollMs: "500",
+  preRollMs: "2000",
   postRollMs: "10000",
   maxBurstMs: "30000",
   wavRetentionTtlMs: "3600000",

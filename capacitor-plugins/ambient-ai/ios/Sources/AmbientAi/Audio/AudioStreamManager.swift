@@ -11,6 +11,10 @@ actor AudioStreamManager {
     private static let maxTranscriptChars = 6_000
     private static let classificationDebugEmitIntervalMs = 2_000
     private static let classificationStaleTimeoutMs = 15_000
+    // Keep SFSpeech code dormant for now; cloud transcription is the active path.
+    private static let localSpeechTranscriptionEnabled = false
+    // Frontend /voice/transcribe owns cloud transcription and retry semantics.
+    private static let nativeCloudRefinementEnabled = false
 
     private let callbacks: Callbacks
     private let classifier = SoundClassificationService()
@@ -446,6 +450,10 @@ actor AudioStreamManager {
             triggerSource: triggerSource
         )
 
+        guard Self.localSpeechTranscriptionEnabled else {
+            return
+        }
+
         let localResult = await transcribeLocally(wavURL: metadata.url, durationMs: snapshot.durationMs)
         let localText = localResult?.text ?? ""
         let transcriptLocale = localResult?.localeId
@@ -466,23 +474,37 @@ actor AudioStreamManager {
             transcriptLocale: transcriptLocale
         )
 
-        if activeConfig.canRefineDirectly {
-            let refineURL = metadata.url
-            let refineMetadata = metadata
-            let refineTrigger = triggerSource
-            let refineLocale = transcriptLocale
-            let refineConfig = activeConfig
-            Task { [weak self] in
-                guard let self else { return }
-                if let cloudText = await self.cloudWorker.refine(wavURL: refineURL, config: refineConfig),
-                   !cloudText.isEmpty {
-                    await self.emitCloudRefinement(
-                        text: cloudText,
-                        metadata: refineMetadata,
-                        triggerSource: refineTrigger,
-                        transcriptLocale: refineLocale
-                    )
-                }
+        scheduleCloudRefinement(
+            metadata: metadata,
+            triggerSource: triggerSource,
+            transcriptLocale: transcriptLocale,
+            config: activeConfig
+        )
+    }
+
+    private func scheduleCloudRefinement(
+        metadata: AudioCaptureMetadata,
+        triggerSource: String,
+        transcriptLocale: String?,
+        config: AudioCaptureConfig
+    ) {
+        guard Self.nativeCloudRefinementEnabled else { return }
+        guard config.canRefineDirectly else { return }
+        let refineURL = metadata.url
+        let refineMetadata = metadata
+        let refineTrigger = triggerSource
+        let refineLocale = transcriptLocale
+        let refineConfig = config
+        Task { [weak self] in
+            guard let self else { return }
+            if let cloudText = await self.cloudWorker.refine(wavURL: refineURL, config: refineConfig),
+               !cloudText.isEmpty {
+                await self.emitCloudRefinement(
+                    text: cloudText,
+                    metadata: refineMetadata,
+                    triggerSource: refineTrigger,
+                    transcriptLocale: refineLocale
+                )
             }
         }
     }
@@ -540,6 +562,7 @@ actor AudioStreamManager {
     }
 
     private func transcribeLocally(wavURL: URL, durationMs: Int) async -> LocalTranscriptionResult? {
+        guard Self.localSpeechTranscriptionEnabled else { return nil }
         guard await Self.ensureSpeechAuthorization() else {
             emitError("Speech recognition permission not granted", source: "transcription")
             return nil
