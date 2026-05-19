@@ -16,6 +16,8 @@ import { useUserDevices } from "@/hooks/useUserDevices";
 import { useAmbientTimeline } from "@/hooks/useAmbientTimeline";
 import { useAmbientLiveSession } from "@/hooks/useAmbientLiveSession";
 import LiveSessionCard from "./LiveSessionCard";
+import AmbientModelRequiredCard from "@/components/ambient/AmbientModelRequiredCard";
+import AmbientModelSetupStep from "@/components/onboarding/AmbientModelSetupStep";
 import { ALL_SOURCE_KEYS, type SourceKey } from "@/services/ambient/keys";
 import {
   getPersistedAmbientEnabled,
@@ -386,6 +388,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
   );
   const [togglePending, setTogglePending] = useState(false);
   const [timelineVisibleCount, setTimelineVisibleCount] = useState(INITIAL_TIMELINE_VISIBLE_COUNT);
+  const [modelSetupOpen, setModelSetupOpen] = useState(false);
   const connectedDevices = useMemo(
     () => devices.filter((d) => d.status === "active" && d.platform !== "web"),
     [devices],
@@ -724,12 +727,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
       )}
 
       {isNative && ambientTimeline.pendingTranscriptCount > 0 && timelineEntries.length === 0 && (
-        <div className="mb-3 rounded-2xl border border-foreground/10 bg-foreground/[0.03] p-4">
-          <p className="text-[12px] font-semibold text-foreground/80">Local summaries are waiting for a verified LLM.</p>
-          <p className="mt-1 text-[11px] text-foreground/50 leading-snug">
-            {ambientTimeline.pendingTranscriptCount} transcript window{ambientTimeline.pendingTranscriptCount === 1 ? "" : "s"} pending. Open Ambient Models and choose Use for local summaries after verification.
-          </p>
-        </div>
+        <AmbientModelRequiredCard onOpenSetup={() => setModelSetupOpen(true)} />
       )}
 
       {useWebPreviewTimeline && (
@@ -936,6 +934,39 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
             : "Turn ambient on to enable real-time assist during meetings, visits, conversations"}
         </span>
       </div>
+
+      <AnimatePresence>
+        {modelSetupOpen && (
+          <motion.div
+            className="fixed inset-0 z-[90] flex items-end bg-black/30 px-3 pb-3"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Ambient model setup"
+          >
+            <motion.div
+              className="w-full rounded-3xl bg-background p-3 shadow-2xl"
+              initial={{ y: 40 }}
+              animate={{ y: 0 }}
+              exit={{ y: 40 }}
+            >
+              <div className="mb-2 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setModelSetupOpen(false)}
+                  className="flex h-8 w-8 items-center justify-center rounded-full bg-foreground/[0.06] text-foreground/60"
+                  aria-label="Close model setup"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+              <AmbientModelSetupStep compact />
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Fullscreen overlay is owned by parent (ConstellationLayout) so it survives view changes. */}
     </div>

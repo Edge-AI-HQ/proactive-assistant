@@ -1,17 +1,18 @@
 import { useCallback, useState } from "react";
 import { ChevronRight, Loader2 } from "lucide-react";
 import AmbientSourceControlsPanel from "@/components/AmbientSourceControlsPanel";
+import AmbientModelSetupStep from "./AmbientModelSetupStep";
 import DataConnections from "@/components/DataConnections";
 import { useComposio } from "@/hooks/useComposio";
 import { isNative } from "@/lib/platform";
 
 /**
- * First-run onboarding — two-step flow shown the first time a user lands
+ * First-run onboarding — three-step flow shown the first time a user lands
  * in the SPA. Gated by `settings.onboardingCompletedAt == null` in
  * App.tsx; the final action stamps that field server-side so subsequent
  * loads go straight to ConstellationLayout.
  *
- * Both steps allow Skip; we stamp completion only at the end of step 2,
+ * All steps allow Skip; we stamp completion only at the end of step 3,
  * so a mid-flow page reload restarts from step 1 (matches user intuition
  * for a wizard).
  *
@@ -25,7 +26,7 @@ interface OnboardingFlowProps {
   onComplete: () => Promise<void> | void;
 }
 
-type Step = 1 | 2;
+type Step = 1 | 2 | 3;
 
 interface StepHeaderProps {
   step: Step;
@@ -38,13 +39,13 @@ function StepHeader({ step, title, subtitle }: StepHeaderProps) {
     <div className="mb-5">
       <div className="mb-3 flex items-center gap-2">
         <span className="text-[11px] font-semibold uppercase tracking-wider text-foreground/40">
-          Step {step} of 2
+          Step {step} of 3
         </span>
         <div className="flex flex-1 items-center gap-1.5">
           <span className="h-1 flex-1 rounded-full bg-foreground/15">
             <span
               className="block h-full rounded-full bg-foreground transition-all"
-              style={{ width: step === 1 ? "50%" : "100%" }}
+              style={{ width: `${(step / 3) * 100}%` }}
             />
           </span>
         </div>
@@ -100,10 +101,31 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
                 <AmbientSourceControlsPanel />
               </div>
             </>
-          ) : (
+          ) : step === 2 ? (
             <>
               <StepHeader
                 step={2}
+                title="On-device AI model"
+                subtitle={
+                  isNative
+                    ? "Download Gemma 2B so Ambient can summarize your local context privately on this device."
+                    : "Local Ambient summaries run on the iOS app. You can skip this step here and download the model from your phone."
+                }
+              />
+              <div className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto">
+                {isNative ? (
+                  <AmbientModelSetupStep />
+                ) : (
+                  <section className="glass-card-strong p-4 text-[13px] leading-relaxed text-foreground/55">
+                    Gemma 2B setup is available in the native app. Continue here and finish setup later from Ambient on your phone.
+                  </section>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              <StepHeader
+                step={3}
                 title="Connect your data"
                 subtitle="Pick the apps PIN AI can read from. You can connect more (or disconnect) any time from Control Center."
               />
@@ -123,18 +145,18 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
             </p>
           )}
           <div className="flex items-center justify-end gap-2">
-            {step === 1 ? (
+            {step < 3 ? (
               <>
                 <button
                   type="button"
-                  onClick={() => setStep(2)}
+                  onClick={() => setStep((step + 1) as Step)}
                   className="min-h-11 rounded-full px-4 text-[13px] font-medium text-foreground/55 transition-colors hover:bg-foreground/[0.06]"
                 >
                   Skip
                 </button>
                 <button
                   type="button"
-                  onClick={() => setStep(2)}
+                  onClick={() => setStep((step + 1) as Step)}
                   className="inline-flex min-h-11 items-center gap-1.5 rounded-full bg-foreground px-5 text-[13px] font-semibold text-background transition-opacity hover:opacity-90"
                 >
                   Next
@@ -145,7 +167,7 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
               <>
                 <button
                   type="button"
-                  onClick={() => setStep(1)}
+                  onClick={() => setStep(2)}
                   disabled={finishing}
                   className="min-h-11 rounded-full px-4 text-[13px] font-medium text-foreground/55 transition-colors hover:bg-foreground/[0.06] disabled:opacity-40"
                 >
