@@ -95,8 +95,8 @@ export function VoiceProvider({ children, engine, transcriptionLanguage }: Voice
       const seq = captureSeqRef.current + 1;
       captureSeqRef.current = seq;
       optsRef.current = opts ?? null;
-      transcriptRef.current = opts?.prefill ?? "";
-      setTranscript(transcriptRef.current);
+      transcriptRef.current = "";
+      setTranscript("");
       setPulseColorIndex(Math.floor(Math.random() * PULSE_PALETTES.length));
       setIsCapturing(true);
       setIsFinalizing(false);

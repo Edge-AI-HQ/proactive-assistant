@@ -13,7 +13,7 @@ export interface VoiceButtonProps extends StartCaptureOptions {
 
 // Small mic-icon button that opens the global voice capture overlay.
 // Drop in next to any text input:
-//   <VoiceButton onUpdate={setInputValue} />
+//   <VoiceButton prefill={inputValue} onUpdate={setInputValue} />
 // For a "voice-only" entry (no text input mirroring), pass onResult instead.
 export function VoiceButton({
   className,
@@ -24,10 +24,18 @@ export function VoiceButton({
   "aria-label": ariaLabel,
 }: VoiceButtonProps) {
   const { startCapture, isCapturing } = useVoiceInput();
+  const initialText = prefill ?? "";
+  const withInitialText = (text: string) => appendVoiceTranscript(initialText, text);
   return (
     <button
       type="button"
-      onClick={() => startCapture({ prefill, onUpdate, onResult })}
+      onClick={() => {
+        startCapture({
+          prefill: initialText,
+          onUpdate: onUpdate ? (text) => onUpdate(withInitialText(text)) : undefined,
+          onResult: onResult ? (text) => onResult(withInitialText(text)) : undefined,
+        });
+      }}
       disabled={isCapturing}
       className={cn(
         "w-8 h-8 rounded-full bg-foreground/10 flex items-center justify-center text-foreground/60 hover:bg-foreground/15 hover:text-foreground transition-colors disabled:opacity-40",
@@ -38,4 +46,12 @@ export function VoiceButton({
       <Mic size={size} strokeWidth={2} />
     </button>
   );
+}
+
+function appendVoiceTranscript(base: string, transcript: string): string {
+  const text = transcript.trim();
+  if (!text) return base;
+  if (!base.trim()) return text;
+  const needsSpace = !/\s$/.test(base) && !/^[,.;!?，。！？、；：）)\]}]/.test(text);
+  return `${base}${needsSpace ? " " : ""}${text}`;
 }

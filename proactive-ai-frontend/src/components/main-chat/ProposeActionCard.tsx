@@ -315,7 +315,7 @@ export default function ProposeActionCard({ args }: ProposeActionCardProps) {
             disabled={isRunning}
             className="flex-1 bg-transparent text-[13px] text-foreground placeholder:text-foreground/35 outline-none disabled:opacity-50"
           />
-          <VoiceButton onUpdate={setInputValue} />
+          <VoiceButton prefill={inputValue} onUpdate={setInputValue} />
         </div>
 
         <button

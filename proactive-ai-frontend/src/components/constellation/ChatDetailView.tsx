@@ -685,7 +685,7 @@ function ContinueReplyBox({
           placeholder="Reply to keep the conversation going..."
           className="flex-1 bg-transparent text-[13px] text-foreground placeholder:text-foreground/35 outline-none"
         />
-        <VoiceButton onUpdate={onChange} />
+        <VoiceButton prefill={value} onUpdate={onChange} />
       </div>
       <button
         type="button"
@@ -1757,7 +1757,7 @@ export default function ChatDetailView({
                     }
                     className="flex-1 bg-transparent text-[13px] text-foreground placeholder:text-foreground/35 outline-none"
                   />
-                  <VoiceButton onUpdate={setInputValue} />
+                  <VoiceButton prefill={inputValue} onUpdate={setInputValue} />
                 </div>
 
                 <button

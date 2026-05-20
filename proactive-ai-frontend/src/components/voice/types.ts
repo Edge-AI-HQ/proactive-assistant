@@ -19,8 +19,8 @@ export interface VoiceEngine {
 }
 
 export interface StartCaptureOptions {
-  // Initial display text in the overlay before any speech arrives.
-  // Useful for "AI wants to know: …" prompts.
+  // Text already present in the target input when capture starts. The overlay
+  // stays empty until new speech arrives; callers can use this as an append base.
   prefill?: string;
   // Fires on every transcript update (partial or final). Bind to input state for live transcription.
   onUpdate?(text: string): void;
