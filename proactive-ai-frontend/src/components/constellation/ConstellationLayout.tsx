@@ -253,56 +253,6 @@ const CATEGORIES: Record<string, { icon: LucideIcon; label: string }> = {
   life:    { icon: Sparkles,    label: "Life" },
 };
 
-const INTENTS: Omit<Intent, 'status' | 'statusTimestamp'>[] = [];
-// Real cards are sourced from useCards() and synced into sphereCards via
-// effect below; this mock array is intentionally empty.
-
-/* ── Multiple slot layouts (left%, top offset from center%) ── */
-const SLOT_LAYOUTS = [
-  // Layout 0 — original organic scatter
-  [
-    { left: 3, y: -42 }, { left: 48, y: -34 }, { left: 20, y: -18 },
-    { left: 55, y: -8 }, { left: 2, y: 6 }, { left: 40, y: 14 },
-    { left: 15, y: 30 }, { left: 52, y: 36 }, { left: 5, y: 52 }, { left: 36, y: 56 },
-  ],
-  // Layout 1 — diagonal cascade
-  [
-    { left: 8, y: -40 }, { left: 52, y: -30 }, { left: 5, y: -14 },
-    { left: 48, y: -4 }, { left: 12, y: 10 }, { left: 55, y: 20 },
-    { left: 2, y: 32 }, { left: 44, y: 40 }, { left: 18, y: 50 }, { left: 50, y: 58 },
-  ],
-  // Layout 2 — clustered sides
-  [
-    { left: 2, y: -38 }, { left: 3, y: -20 }, { left: 50, y: -36 },
-    { left: 52, y: -12 }, { left: 8, y: 4 }, { left: 48, y: 8 },
-    { left: 4, y: 28 }, { left: 50, y: 30 }, { left: 20, y: 46 }, { left: 38, y: 54 },
-  ],
-  // Layout 3 — zigzag
-  [
-    { left: 45, y: -44 }, { left: 6, y: -30 }, { left: 50, y: -16 },
-    { left: 3, y: -2 }, { left: 46, y: 12 }, { left: 8, y: 22 },
-    { left: 48, y: 34 }, { left: 5, y: 42 }, { left: 42, y: 52 }, { left: 15, y: 58 },
-  ],
-  // Layout 4 — centered vertical spread
-  [
-    { left: 18, y: -44 }, { left: 42, y: -38 }, { left: 8, y: -20 },
-    { left: 52, y: -14 }, { left: 25, y: 0 }, { left: 48, y: 10 },
-    { left: 4, y: 24 }, { left: 38, y: 32 }, { left: 12, y: 48 }, { left: 50, y: 54 },
-  ],
-];
-
-// Helper to get slot positions for a layout index
-const getSlotPositions = (layoutIdx: number) => SLOT_LAYOUTS[layoutIdx % SLOT_LAYOUTS.length];
-
-/* Initial processing card IDs */
-const INITIAL_PROCESSING_IDS = new Set([2, 3, 7]);
-
-const AI_GREETINGS = [
-  "Your 2pm meeting has been moved to 4pm",
-  "A follow-up draft has been prepared for Alex",
-  "Two threads are waiting for your input",
-];
-
 /* ── Hamburger side menu items ── */
 const MENU_ITEMS = [
   { id: "now", label: "NOW", icon: Zap },
@@ -455,29 +405,8 @@ export default function BigBallLayout() {
     setIsScrolled(false);
   }, [activeView]);
 
-  // Layout rotation state
-  const [currentLayoutIdx, setCurrentLayoutIdx] = useState(0);
-  const [scatterKey, setScatterKey] = useState(0); // bump to trigger scatter-out
-  const [globalExitDirection, setGlobalExitDirection] = useState<"left" | "scatter">("scatter");
-  const touchStartY = useRef<number | null>(null);
-  const touchStartX = useRef<number | null>(null);
-  const isScattering = useRef(false);
-
-  // Each card carries its assigned slot index
-  type SlottedIntent = Intent & { slotIndex: number; exitDirection?: "left" | "scatter" };
-  const [visibleCards, setVisibleCards] = useState<SlottedIntent[]>(() =>
-    INTENTS.slice(0, 6).map((c, i) => ({
-      ...c,
-      status: "normal" as CardStatus,
-      statusTimestamp: Date.now(),
-      slotIndex: i,
-    }))
-  );
-  const nextIdRef = useRef(100);
-
-  // Sphere cards (for /big-ball-design-2 "now" 3D sphere) — separate state
-  // so the sphere can show a growing/shrinking set of cards with new/processing/done
-  // lifecycle, independent of the legacy floating-cards system.
+  // Sphere cards are a pure projection of real backend cards. No local
+  // mock timers run on the home screen.
   const [sphereCards, setSphereCards] = useState<Intent[]>([]);
 
   // Mirror real /api/cards into sphereCards (one-way sync). Replaces the
@@ -506,154 +435,17 @@ export default function BigBallLayout() {
     cardActions.processingIds,
   ]);
 
-  // Dismiss a single card (swipe left) — mark direction then remove after a tick
-  const dismissCard = useCallback((id: number) => {
-    setVisibleCards((prev) =>
-      prev.map((c) => c.id === id ? { ...c, exitDirection: "left" as const } : c)
-    );
-    // Remove after a frame so AnimatePresence picks up the exitDirection
-    requestAnimationFrame(() => {
-      setVisibleCards((prev) => prev.filter((c) => c.id !== id));
-    });
-  }, []);
-
-  // Helper: find first free slot using current layout
-  const findFreeSlot = (cards: SlottedIntent[], layoutIdx?: number): number | null => {
-    const positions = getSlotPositions(layoutIdx ?? currentLayoutIdx);
-    const usedSlots = new Set(cards.map((c) => c.slotIndex));
-    for (let i = 0; i < positions.length; i++) {
-      if (!usedSlots.has(i)) return i;
-    }
-    return null;
-  };
-
-  // Swipe handler: scatter or fly-left cards and reload with new layout
-  const handleSwipeRefresh = useCallback((direction: "left" | "scatter" = "scatter") => {
-    if (isScattering.current) return;
-    isScattering.current = true;
-    // Set global exit direction so all cards use the right exit animation
-    setGlobalExitDirection(direction);
-    // Clear all cards to trigger exit animations
-    setScatterKey((k) => k + 1);
-    setVisibleCards([]);
-
-    // After animation, load new batch with new layout
-    setTimeout(() => {
-      setGlobalExitDirection("scatter"); // reset for next time
-      setCurrentLayoutIdx((prev) => {
-        const candidates = Array.from({ length: SLOT_LAYOUTS.length }, (_, i) => i).filter(i => i !== prev);
-        return candidates[Math.floor(Math.random() * candidates.length)];
-      });
-
-      const shuffled = [...INTENTS].sort(() => Math.random() - 0.5);
-      const batch = shuffled.slice(0, 6);
-      setCurrentLayoutIdx((newIdx) => {
-        const newCards: SlottedIntent[] = batch.map((c, i) => ({
-          ...c,
-          status: "normal" as CardStatus,
-          statusTimestamp: Date.now(),
-          slotIndex: i,
-        }));
-        setVisibleCards(newCards);
-        return newIdx;
-      });
-
-      isScattering.current = false;
-    }, 600);
-  }, []);
-
-  // Touch handlers for swipe detection (up, down, left)
-  const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    touchStartY.current = e.touches[0].clientY;
-    touchStartX.current = e.touches[0].clientX;
-  }, []);
-
-  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
-    if (touchStartY.current === null || touchStartX.current === null) return;
-    const deltaY = touchStartY.current - e.changedTouches[0].clientY;
-    const deltaX = touchStartX.current - e.changedTouches[0].clientX;
-    touchStartY.current = null;
-    touchStartX.current = null;
-    if (activeView !== "now") return;
-    // Left swipe: cards fly left
-    if (deltaX > 80 && Math.abs(deltaX) > Math.abs(deltaY)) {
-      handleSwipeRefresh("left");
-    } else if (Math.abs(deltaY) > 80) {
-      // Up or down swipe: scatter outward
-      handleSwipeRefresh("scatter");
-    }
-  }, [activeView, handleSwipeRefresh]);
-
-  // Status transitions: new→normal (10s), processing→done (10s), done→remove (10s)
-  useEffect(() => {
-    const ticker = setInterval(() => {
-      const now = Date.now();
-      setVisibleCards((prev) => {
-        let changed = false;
-        const next = prev.reduce<SlottedIntent[]>((acc, card) => {
-          const elapsed = now - (card.statusTimestamp || 0);
-          if (card.status === "new" && elapsed >= 10000) {
-            changed = true;
-            acc.push({ ...card, status: "normal", statusTimestamp: now });
-          } else if (card.status === "processing" && elapsed >= 10000) {
-            changed = true;
-            acc.push({ ...card, status: "done", statusTimestamp: now });
-          } else if (card.status === "done" && elapsed >= 10000) {
-            changed = true;
-            // card removed — slot freed
-          } else {
-            acc.push(card);
-          }
-          return acc;
-        }, []);
-        return changed ? next : prev;
-      });
-    }, 1000);
-    return () => clearInterval(ticker);
-  }, []);
-
-  // Add new cards periodically
-  useEffect(() => {
-    const addInterval = setInterval(() => {
-      setVisibleCards((prev) => {
-        if (prev.length >= 8) return prev;
-        const freeSlot = findFreeSlot(prev);
-        if (freeSlot === null) return prev; // no free slot
-        const shown = new Set(prev.map((c) => c.id));
-        const pool = INTENTS.filter((c) => !shown.has(c.id));
-        if (pool.length === 0) return prev; // no new cards to add
-        const base = pool[Math.floor(Math.random() * pool.length)];
-        const newCard: SlottedIntent = {
-          ...base,
-          status: "new",
-          statusTimestamp: Date.now(),
-          slotIndex: freeSlot,
-        };
-        return [...prev, newCard];
-      });
-    }, 7000 + Math.random() * 4000);
-    return () => clearInterval(addInterval);
-  }, []);
-
   // Chat state
   const [cardChats, setCardChats] = useState<ChatCard[]>([]);
   const [activeChat, setActiveChat] = useState<ChatCard | null>(null);
   const [chatMode, setChatMode] = useState<"confirm" | "modify" | "done" | "steer">("confirm");
   const chatEntryView = useRef<MenuId | null>(null);
-  
-
-  // Greeting rotation
-  const [greetIdx, setGreetIdx] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setGreetIdx((p) => (p + 1) % AI_GREETINGS.length), 5000);
-    return () => clearInterval(t);
-  }, []);
 
   // Sphere card status is driven entirely by the real backend now:
   //   • `cardsState.cards` (useCards / GET /api/cards, 30s poll)
   //   • `cardActions.processingIds` / `doneIds` / `dismissedIds`
-  // The sync effect above (line ~466) recomputes sphereCards whenever
-  // any of those change, so we don't keep a local clock here. The
+  // The sync effect above recomputes sphereCards whenever any of those
+  // change, so we don't keep a local clock here. The
   // previous Lovable-era `new → normal (10s) → processing → done (10s) →
   // removed (10s)` ticker was a mock-data lifecycle simulator; on real
   // cards it surfaced two visible bugs:
@@ -665,9 +457,8 @@ export default function BigBallLayout() {
   //      it back, producing the 5 → 3 → 5 visible-count flicker.
   // Card transitions to terminal states must come from real user
   // actions (POST /feedback kind=done / dismiss) — never a local timer.
-  // Old `add new card` interval also lived here; INTENTS is empty for
-  // real users so it was a no-op already, and any real "new card"
-  // arrives via the next /api/cards poll. Both intervals removed.
+  // Old `add new card` and greeting intervals also lived here. They were
+  // pure presentation timers, so the native home screen no longer runs them.
 
   const handleCardTap = (card: Intent) => {
     setSelectedCard(card);
@@ -692,14 +483,9 @@ export default function BigBallLayout() {
         return;
       }
     }
-    // Legacy mock path (INTENTS is empty now; kept for type completeness).
+    // Legacy mock path; real cards use originalId above.
     setDrawerOpen(false);
     setSelectedCard(null);
-    setVisibleCards((prev) =>
-      prev.map((c) =>
-        c.id === card.id ? { ...c, status: "processing" as CardStatus, statusTimestamp: Date.now() } : c
-      )
-    );
     setSphereCards((prev) =>
       prev.map((c) =>
         c.id === card.id ? { ...c, status: "processing" as CardStatus, statusTimestamp: Date.now() } : c
@@ -839,8 +625,8 @@ export default function BigBallLayout() {
               // Real /api/cards path: route through `chatTarget` so
               // ChatDetailView receives `runId={card.id}` and
               // `useCardExecutionRun` actually fetches LangGraph history.
-              // The legacy `activeChat` branch (kept for empty-INTENTS
-              // mock parity) leaves runId undefined, the hook bails out
+              // The legacy `activeChat` branch leaves runId undefined,
+              // the hook bails out
               // at `if (!runId)`, no /chat-stream/history call ever
               // fires, and the page hangs at "TASK running · CONTEXT"
               // forever — which is exactly the empty-card pathology.
@@ -857,7 +643,7 @@ export default function BigBallLayout() {
                   return;
                 }
               }
-              // Legacy mock fallback (unreachable when INTENTS is empty).
+              // Legacy mock fallback.
               const chatCard = card as ChatCard;
               setCardChats((prev) => prev.find((c) => c.id === chatCard.id) ? prev : [chatCard, ...prev]);
               chatEntryView.current = activeView;
@@ -961,9 +747,8 @@ export default function BigBallLayout() {
                 }}
               />
             ) : activeChat ? (
-              /* Legacy mock-card path (Lovable's INTENTS). Unused now that
-                 the mock array is empty, but kept so type-checking stays
-                 honest if mock data is reintroduced for demos. */
+              /* Legacy mock-card path. Kept so type-checking stays honest
+                 if mock data is reintroduced for demos. */
               <ChatDetailView
                 card={activeChat as ChatCard}
                 onBack={() => {
@@ -1213,7 +998,6 @@ export default function BigBallLayout() {
                     return;
                   }
                 }
-                dismissCard(card.id);
               }}
               onModify={(card) => {
                 setDrawerOpen(false);

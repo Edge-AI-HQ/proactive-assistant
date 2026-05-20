@@ -33,6 +33,25 @@ vi.mock("@/services/ambient/enabled-state", () => ({
   getPersistedAmbientEnabled: () => true,
   setPersistedAmbientEnabled: vi.fn(),
 }));
+vi.mock("@/services/ambient", () => ({
+  getAmbientRuntime: () => ({
+    status: () => ({
+      sources: [],
+      bufferSize: 0,
+      outboxMode: "memory",
+      outboxPendingCount: 0,
+      totalIngested: 0,
+      totalIngestErrors: 0,
+      lastFlushTs: null,
+      lastDrainTs: null,
+      lastSuccessfulDrainTs: null,
+      lastIngestError: null,
+      uploadsLocked: false,
+    }),
+    subscribe: () => () => {},
+  }),
+  getExistingAmbientRuntime: () => null,
+}));
 vi.mock("@/services/ambient/models-recommendation", () => ({
   RECOMMENDED_AMBIENT_LLM_LABEL: "Gemma 2B",
   RECOMMENDED_AMBIENT_LLM_MODEL_ID: "gemma-2-2b-q4",

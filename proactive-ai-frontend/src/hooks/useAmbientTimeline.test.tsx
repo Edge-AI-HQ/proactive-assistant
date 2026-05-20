@@ -1,10 +1,10 @@
 import type { ReactNode } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { useAmbientTimeline } from "./useAmbientTimeline";
 
-const { storeMock, runtimeMock } = vi.hoisted(() => ({
+const { storeMock, runtimeMock, getExistingAmbientRuntimeMock } = vi.hoisted(() => ({
   storeMock: {
     init: vi.fn(),
     status: vi.fn(() => ({ mode: "sqlite", ready: true, lastError: null })),
@@ -16,6 +16,7 @@ const { storeMock, runtimeMock } = vi.hoisted(() => ({
   runtimeMock: {
     refreshTimeline: vi.fn(),
   },
+  getExistingAmbientRuntimeMock: vi.fn(),
 }));
 
 vi.mock("@/lib/platform", () => ({ isNative: true }));
@@ -28,7 +29,7 @@ vi.mock("@/services/ambient/timeline", () => ({
   groupAmbientTimelineEvents: () => [],
 }));
 vi.mock("@/services/ambient", () => ({
-  getAmbientRuntime: () => runtimeMock,
+  getExistingAmbientRuntime: getExistingAmbientRuntimeMock,
 }));
 
 function AmbientTimelineProbe({ children }: { children?: ReactNode }) {
@@ -53,6 +54,10 @@ function AmbientTimelineProbe({ children }: { children?: ReactNode }) {
 }
 
 describe("useAmbientTimeline", () => {
+  beforeEach(() => {
+    getExistingAmbientRuntimeMock.mockReturnValue(runtimeMock);
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -133,5 +138,18 @@ describe("useAmbientTimeline", () => {
 
     expect(await screen.findByText("ready")).toBeTruthy();
     expect(screen.queryByText("这段已经在 pending window 里。")).toBeNull();
+  });
+
+  test("does not create or run timeline generation when native ambient runtime is off", async () => {
+    getExistingAmbientRuntimeMock.mockReturnValue(null);
+    storeMock.init.mockResolvedValue(undefined);
+    storeMock.listTimelineEvents.mockResolvedValue([]);
+    storeMock.listCandidateWindows.mockResolvedValue([]);
+    storeMock.listRawEvents.mockResolvedValue([]);
+
+    render(<AmbientTimelineProbe />);
+
+    expect(await screen.findByText("ready")).toBeTruthy();
+    expect(runtimeMock.refreshTimeline).not.toHaveBeenCalled();
   });
 });

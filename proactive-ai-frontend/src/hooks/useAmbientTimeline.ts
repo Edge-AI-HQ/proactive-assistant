@@ -32,6 +32,8 @@ interface AmbientTimelineRuntime {
   refreshTimeline(localDate: string): Promise<void>;
 }
 
+const POWER_LOG_PREFIX = "[ambient-power]";
+
 export function useAmbientTimeline(localDate = todayLocalDate()): UseAmbientTimelineResult {
   const store = useMemo(() => getAmbientTimelineStore(), []);
   const runtimeRef = useRef<AmbientTimelineRuntime | null>(null);
@@ -84,7 +86,10 @@ export function useAmbientTimeline(localDate = todayLocalDate()): UseAmbientTime
         let runtime = runtimeRef.current;
         if (!runtime) {
           runtime = await loadNativeAmbientTimelineRuntime();
-          if (!runtime) return;
+          if (!runtime) {
+            console.info(`${POWER_LOG_PREFIX} timeline generation skipped; no ambient runtime`);
+            return;
+          }
           runtimeRef.current = runtime;
         }
         await runtime.refreshTimeline(localDate);
@@ -130,16 +135,24 @@ export function useAmbientTimeline(localDate = todayLocalDate()): UseAmbientTime
 
   useEffect(() => {
     let cancelled = false;
+    let interval: ReturnType<typeof setInterval> | null = null;
     setLoading(true);
     void (async () => {
       await refresh();
       if (cancelled) return;
-    })();
-    const interval = isNative
-      ? setInterval(() => {
+      if (isNative) {
+        const runtime = await loadNativeAmbientTimelineRuntime();
+        if (cancelled) return;
+        if (!runtime) {
+          console.info(`${POWER_LOG_PREFIX} timeline polling paused; no ambient runtime`);
+          return;
+        }
+        runtimeRef.current = runtime;
+      }
+      interval = setInterval(() => {
         void refresh();
-      }, 5_000)
-      : null;
+      }, 5_000);
+    })();
     return () => {
       cancelled = true;
       if (interval) clearInterval(interval);
@@ -194,8 +207,8 @@ async function loadLatestRawEvents(
 
 async function loadNativeAmbientTimelineRuntime(): Promise<AmbientTimelineRuntime | null> {
   if (!isNative) return null;
-  const { getAmbientRuntime } = await import("@/services/ambient");
-  return getAmbientRuntime();
+  const { getExistingAmbientRuntime } = await import("@/services/ambient");
+  return getExistingAmbientRuntime();
 }
 
 function isDisplayableTimelineEvent(event: AmbientTimelineEvent): boolean {

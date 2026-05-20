@@ -1,8 +1,14 @@
 import { App } from "@capacitor/app";
 import { isNative } from "@/lib/platform";
-import { getAmbientRuntime, type SourceKey } from "./index";
+import {
+  getAmbientRuntime,
+  getExistingAmbientRuntime,
+  shutdownAmbientRuntime,
+  type SourceKey,
+} from "./index";
 
 let bound = false;
+const POWER_LOG_PREFIX = "[ambient-power]";
 
 /**
  * Bind the outbox drain to Capacitor's appStateChange. Drain is always
@@ -14,7 +20,11 @@ export function bindAmbientLifecycle(): void {
   bound = true;
 
   App.addListener("appStateChange", ({ isActive }) => {
-    const rt = getAmbientRuntime();
+    const rt = getExistingAmbientRuntime();
+    if (!rt) {
+      console.info(`${POWER_LOG_PREFIX} appStateChange skipped; no ambient runtime`, { isActive });
+      return;
+    }
     if (isActive) {
       void (async () => {
         await rt.refreshActiveSources();
@@ -42,17 +52,23 @@ export function bindAmbientLifecycle(): void {
  * runtime source state; ``AmbientSourcesPanel`` uses the same runtime
  * reconciliation after a per-source settings PATCH.
  *
- * Empty list → stop everything and only drain.
+ * Empty list → shut down sources and runtime timers; no drain is scheduled.
  */
 export function startAmbientUpload(opts: {
   enabledSources?: SourceKey[];
   transcriptionLanguage?: string | null;
 } = {}): void {
   if (!isNative) return;
+  const enabledSources = opts.enabledSources ?? [];
+  if (enabledSources.length === 0) {
+    console.info(`${POWER_LOG_PREFIX} ambient disabled; shutting down runtime`);
+    void shutdownAmbientRuntime("empty-enabled-sources");
+    return;
+  }
   const runtime = getAmbientRuntime();
   runtime.setTranscriptionLanguage(opts.transcriptionLanguage ?? null);
   void (async () => {
-    await runtime.reconcileEnabledSources(opts.enabledSources ?? []);
+    await runtime.reconcileEnabledSources(enabledSources);
     await runtime.drain();
   })();
 }
@@ -64,6 +80,5 @@ export function startAmbientUpload(opts: {
  */
 export async function stopAmbientUpload(): Promise<void> {
   if (!isNative) return;
-  const runtime = getAmbientRuntime();
-  await runtime.stopAll();
+  await shutdownAmbientRuntime("stopAmbientUpload");
 }

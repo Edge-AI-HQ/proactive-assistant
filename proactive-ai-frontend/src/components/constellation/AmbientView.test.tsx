@@ -112,6 +112,7 @@ vi.mock("@/hooks/useAmbientTimeline", () => ({
 }));
 vi.mock("@/services/ambient", () => ({
   getAmbientRuntime: () => runtimeMock,
+  getExistingAmbientRuntime: () => runtimeMock,
 }));
 vi.mock("@/services/ambient/lifecycle", () => ({
   startAmbientUpload: startAmbientUploadMock,

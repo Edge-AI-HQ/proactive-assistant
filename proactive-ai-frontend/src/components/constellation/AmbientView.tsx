@@ -426,9 +426,14 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
     let unsubscribe: (() => void) | null = null;
     void (async () => {
       try {
-        const { getAmbientRuntime } = await import("@/services/ambient");
+        const { getAmbientRuntime, getExistingAmbientRuntime } = await import("@/services/ambient");
         if (cancelled) return;
-        const rt = getAmbientRuntime();
+        const rt = ambientOn ? getAmbientRuntime() : getExistingAmbientRuntime();
+        if (!rt) {
+          console.info("[ambient-power] AmbientView runtime subscription skipped; ambient is off");
+          setRuntimeStatus(null);
+          return;
+        }
         setRuntimeStatus(rt.status());
         unsubscribe = rt.subscribe(() => setRuntimeStatus(rt.status()));
       } catch {
@@ -439,7 +444,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
       cancelled = true;
       unsubscribe?.();
     };
-  }, []);
+  }, [ambientOn]);
 
   const handleAmbientToggle = useCallback(async () => {
     if (togglePending) return;

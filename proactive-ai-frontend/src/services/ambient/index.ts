@@ -74,6 +74,7 @@ export interface AmbientRuntimeOptions {
 
 const SOURCE_WATCHDOG_INTERVAL_MS = 60_000;
 const TIMELINE_SUMMARY_INTERVAL_MS = 15 * 60_000;
+const POWER_LOG_PREFIX = "[ambient-power]";
 
 export class AmbientRuntime {
   private buffer: SignalBuffer;
@@ -148,6 +149,11 @@ export class AmbientRuntime {
       this.startTimelineSummaryTimer(options.timelineSummaryIntervalMs);
       this.startSourceWatchdog(options.sourceWatchdogIntervalMs);
     }
+    console.info(`${POWER_LOG_PREFIX} runtime created`, {
+      native: isNative,
+      timersEnabled: options.enableTimers !== false,
+      sources: Array.from(this.sources.keys()),
+    });
   }
 
   async start(key: SourceKey): Promise<void> {
@@ -214,6 +220,7 @@ export class AmbientRuntime {
   }
 
   async stopAll(): Promise<void> {
+    console.info(`${POWER_LOG_PREFIX} stopAll ambient sources`);
     this.desiredSourceKeys.clear();
     for (const k of this.sources.keys()) {
       const st = this.statusBySource.get(k);
@@ -225,6 +232,14 @@ export class AmbientRuntime {
         }
       }
     }
+  }
+
+  async shutdown(reason = "manual"): Promise<void> {
+    console.info(`${POWER_LOG_PREFIX} runtime shutdown requested`, { reason });
+    this.stopTimers(reason);
+    await this.stopAll();
+    await this.drain();
+    this.listeners.clear();
   }
 
   async reconcileEnabledSources(keys: SourceKey[]): Promise<void> {
@@ -381,6 +396,9 @@ export class AmbientRuntime {
     this.drainTimer = setInterval(() => {
       void this.drain();
     }, this.scheduler.intervalMs());
+    console.info(`${POWER_LOG_PREFIX} drain timer started`, {
+      intervalMs: this.scheduler.intervalMs(),
+    });
   }
 
   private startTimelineSummaryTimer(intervalMs = TIMELINE_SUMMARY_INTERVAL_MS): void {
@@ -388,6 +406,7 @@ export class AmbientRuntime {
     this.timelineSummaryTimer = setInterval(() => {
       void this.runScheduledTimelineSummary();
     }, intervalMs);
+    console.info(`${POWER_LOG_PREFIX} timeline summary timer started`, { intervalMs });
   }
 
   private async runScheduledTimelineSummary(): Promise<void> {
@@ -418,6 +437,27 @@ export class AmbientRuntime {
     this.sourceWatchdogTimer = setInterval(() => {
       void this.refreshActiveSources();
     }, intervalMs);
+    console.info(`${POWER_LOG_PREFIX} source watchdog started`, { intervalMs });
+  }
+
+  private stopTimers(reason: string): void {
+    let stopped = 0;
+    if (this.drainTimer) {
+      clearInterval(this.drainTimer);
+      this.drainTimer = null;
+      stopped += 1;
+    }
+    if (this.timelineSummaryTimer) {
+      clearInterval(this.timelineSummaryTimer);
+      this.timelineSummaryTimer = null;
+      stopped += 1;
+    }
+    if (this.sourceWatchdogTimer) {
+      clearInterval(this.sourceWatchdogTimer);
+      this.sourceWatchdogTimer = null;
+      stopped += 1;
+    }
+    console.info(`${POWER_LOG_PREFIX} runtime timers stopped`, { reason, stopped });
   }
 
   private async reconcileDesiredSources(): Promise<void> {
@@ -551,4 +591,18 @@ let singleton: AmbientRuntime | null = null;
 export function getAmbientRuntime(): AmbientRuntime {
   if (!singleton) singleton = new AmbientRuntime();
   return singleton;
+}
+
+export function getExistingAmbientRuntime(): AmbientRuntime | null {
+  return singleton;
+}
+
+export async function shutdownAmbientRuntime(reason = "manual"): Promise<void> {
+  const runtime = singleton;
+  if (!runtime) {
+    console.info(`${POWER_LOG_PREFIX} runtime shutdown skipped`, { reason, runtime: "none" });
+    return;
+  }
+  singleton = null;
+  await runtime.shutdown(reason);
 }

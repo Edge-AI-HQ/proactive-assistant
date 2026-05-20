@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { LucideIcon } from "lucide-react";
+import { isNative } from "@/lib/platform";
 
 export type SphereCardStatus = "normal" | "new" | "processing" | "done";
 
@@ -135,6 +136,7 @@ const Sphere3DCards = ({
   const draggingRef = useRef(false);
   const lastPointer = useRef({ x: 0, y: 0, t: 0 });
   const [, force] = useState(0);
+  const idleAnimationPaused = isNative;
 
   // Map id -> stable point index so adding/removing cards doesn't reshuffle
   // the whole sphere. Points are assigned in id order on first sight.
@@ -164,8 +166,22 @@ const Sphere3DCards = ({
     }
   });
 
-  // Animation loop — persist rotation to cache on every frame
+  const persistRotation = useCallback(() => {
+    if (!cacheKey) return;
+    rotationCache.set(cacheKey, {
+      yaw: rotRef.current.yaw,
+      pitch: rotRef.current.pitch,
+      velYaw: velRef.current.yaw,
+      velPitch: velRef.current.pitch,
+    });
+  }, [cacheKey]);
+
+  // Animation loop — paused on native to avoid continuous WebKit/GPU work.
   useEffect(() => {
+    if (idleAnimationPaused) {
+      persistRotation();
+      return;
+    }
     let raf = 0;
     const tick = () => {
       if (!draggingRef.current) {
@@ -177,21 +193,13 @@ const Sphere3DCards = ({
       if (rotRef.current.pitch > 55) rotRef.current.pitch = 55;
       if (rotRef.current.pitch < -55) rotRef.current.pitch = -55;
 
-      if (cacheKey) {
-        rotationCache.set(cacheKey, {
-          yaw: rotRef.current.yaw,
-          pitch: rotRef.current.pitch,
-          velYaw: velRef.current.yaw,
-          velPitch: velRef.current.pitch,
-        });
-      }
-
+      persistRotation();
       force((n) => (n + 1) % 1000000);
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [cacheKey]);
+  }, [idleAnimationPaused, persistRotation]);
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     draggingRef.current = true;
@@ -210,12 +218,20 @@ const Sphere3DCards = ({
     rotRef.current.yaw += dx * 0.3;
     velRef.current.yaw = velRef.current.yaw * 0.7 + dx * 0.3 * 0.3;
     lastPointer.current = { x: e.clientX, y: e.clientY, t: performance.now() };
-  }, []);
+    if (idleAnimationPaused) {
+      persistRotation();
+      force((n) => (n + 1) % 1000000);
+    }
+  }, [idleAnimationPaused, persistRotation]);
 
   const onPointerUp = useCallback((e: React.PointerEvent) => {
     draggingRef.current = false;
+    if (idleAnimationPaused) {
+      persistRotation();
+      force((n) => (n + 1) % 1000000);
+    }
     (e.target as Element).releasePointerCapture?.(e.pointerId);
-  }, []);
+  }, [idleAnimationPaused, persistRotation]);
 
   // Apply yaw/pitch rotation to a unit vector
   const rotate = (p: { x: number; y: number; z: number }) => {
@@ -325,7 +341,7 @@ const Sphere3DCards = ({
                 borderRadius: 14,
                 boxShadow: isFront ? "0 4px 18px rgba(0,0,0,0.12)" : "none",
                 transition: draggingRef.current ? "none" : "box-shadow 0.2s, opacity 0.2s",
-                willChange: "transform",
+                willChange: idleAnimationPaused ? "auto" : "transform",
                 backfaceVisibility: "hidden",
                 WebkitBackfaceVisibility: "hidden",
                 transformStyle: "preserve-3d",
