@@ -139,7 +139,7 @@ describe("SoundClassifierSource transcript ingest", () => {
 
     expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
       expect.objectContaining({ wavId: "wav-cloud" }),
-      "en",
+      undefined,
     );
     expect(getAmbientLiveTranscriptSnapshot()).toMatchObject({
       captureSessionId: "capture-cloud",
@@ -375,7 +375,7 @@ describe("SoundClassifierSource transcript ingest", () => {
     await flushMicrotasks();
     expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
       expect.objectContaining({ wavId: "wav-stop" }),
-      "en",
+      undefined,
     );
 
     await source.stop();
@@ -445,11 +445,11 @@ describe("SoundClassifierSource transcript ingest", () => {
 
     expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
       expect.objectContaining({ wavId: "wav-first" }),
-      "en",
+      undefined,
     );
     expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
       expect.objectContaining({ wavId: "wav-second" }),
-      "en",
+      undefined,
     );
     expect(pushed).toEqual([
       expect.objectContaining({ dedupe_key: "ios:audio:burst-first" }),
@@ -529,7 +529,7 @@ describe("SoundClassifierSource transcript ingest", () => {
         burstId: "burst-missed",
         triggerSource: "recent_capture_scan",
       }),
-      "en",
+      undefined,
     );
     expect(pushed).toEqual([
       expect.objectContaining({
@@ -597,7 +597,7 @@ describe("SoundClassifierSource transcript ingest", () => {
         burstId: "burst-retry",
         triggerSource: "recent_capture_scan",
       }),
-      "en",
+      undefined,
     );
     expect(pushed).toEqual([
       expect.objectContaining({
@@ -694,7 +694,7 @@ describe("SoundClassifierSource transcript ingest", () => {
     await expect(source.start()).rejects.toThrow("engine failed");
 
     expect(ambientAiMock.audio.configure).toHaveBeenCalledWith({
-      recognitionLocale: "en-US",
+      recognitionLocale: "zh-CN",
       preRollMs: 2000,
       postRollMs: 2500,
       maxBurstMs: 12000,

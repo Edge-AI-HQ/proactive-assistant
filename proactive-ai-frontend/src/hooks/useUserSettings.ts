@@ -73,6 +73,14 @@ export interface UseUserSettingsResult {
   refetch: () => Promise<void>;
 }
 
+let settingsCache: UserSettings | null = null;
+const settingsListeners = new Set<(settings: UserSettings) => void>();
+
+function publishSettings(settings: UserSettings): void {
+  settingsCache = settings;
+  settingsListeners.forEach((listener) => listener(settings));
+}
+
 /**
  * Read + patch the unified `/api/settings` resource.
  *
@@ -81,13 +89,13 @@ export interface UseUserSettingsResult {
  * field omitted from the body via COALESCE, so concurrent components
  * editing different fields don't clobber each other.
  *
- * No global cache: each component using this hook fetches once on mount.
- * The data is tiny and rarely-edited; SWR / React Query would be
- * over-engineering for one row of settings per user.
+ * The module cache keeps independent settings controls in sync. In
+ * particular, Control Panel language edits must update App.tsx so Ambient
+ * transcription uses the new language immediately.
  */
 export function useUserSettings(): UseUserSettingsResult {
-  const [settings, setSettings] = useState<UserSettings | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [settings, setSettings] = useState<UserSettings | null>(() => settingsCache);
+  const [loading, setLoading] = useState(settingsCache === null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
@@ -99,7 +107,7 @@ export function useUserSettings(): UseUserSettingsResult {
       if (!res.ok) throw new Error(`/settings ${res.status}`);
       const data = await res.json() as UserSettings;
       if (!mountedRef.current) return;
-      setSettings(data);
+      publishSettings(data);
       setError(null);
     } catch (err) {
       if (!mountedRef.current) return;
@@ -111,8 +119,22 @@ export function useUserSettings(): UseUserSettingsResult {
 
   useEffect(() => {
     mountedRef.current = true;
-    void refetch();
-    return () => { mountedRef.current = false; };
+    const listener = (next: UserSettings) => {
+      if (!mountedRef.current) return;
+      setSettings(next);
+      setLoading(false);
+      setError(null);
+    };
+    settingsListeners.add(listener);
+    if (settingsCache) {
+      listener(settingsCache);
+    } else {
+      void refetch();
+    }
+    return () => {
+      mountedRef.current = false;
+      settingsListeners.delete(listener);
+    };
   }, [refetch]);
 
   const patch = useCallback(async (next: UserSettingsPatch): Promise<UserSettings | null> => {
@@ -125,7 +147,7 @@ export function useUserSettings(): UseUserSettingsResult {
         throw new Error(`/settings ${res.status} ${detail}`);
       }
       const data = await res.json() as UserSettings;
-      if (mountedRef.current) setSettings(data);
+      publishSettings(data);
       return data;
     } catch (err) {
       if (mountedRef.current) {

@@ -11,7 +11,7 @@ export interface CaptureTranscriptionResult {
 
 export async function transcribeAmbientCapture(
   event: CaptureReadyEvent,
-  language = "zh-CN",
+  language?: string,
 ): Promise<CaptureTranscriptionResult> {
   const capture = await AmbientAi.audio.readCapture({ wavId: event.wavId });
   const audio = base64ToBlob(capture.base64, capture.contentType);

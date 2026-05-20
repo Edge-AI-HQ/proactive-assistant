@@ -49,9 +49,9 @@ export default function App() {
   // opt-in" (""): the empty string still needs to fire so a user who
   // just turned everything off has the runtime stop matching sources.
   const enabledKey: string | null = useMemo(() => {
+    if (!userSettings) return null;
     if (getPersistedAmbientEnabled()) return ALL_SOURCE_KEYS.join(",");
-    const c = userSettings?.ambientSources;
-    if (c === undefined) return null;
+    const c = userSettings.ambientSources;
     return Object.entries(c ?? {})
       .filter(([, v]) => v?.enabled === true)
       .map(([k]) => k)

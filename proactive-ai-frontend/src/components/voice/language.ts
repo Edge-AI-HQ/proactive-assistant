@@ -4,8 +4,7 @@ export interface VoiceLanguageHint {
 }
 
 const MIXED_LANGUAGE: VoiceLanguageHint = {
-  openai: "en",
-  browser: "en-US",
+  browser: "zh-CN",
 };
 
 const CHINESE_LANGUAGE: VoiceLanguageHint = {

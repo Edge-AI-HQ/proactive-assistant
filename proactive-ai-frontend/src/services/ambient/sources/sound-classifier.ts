@@ -29,7 +29,6 @@ const TRANSCRIPT_SALIENCE = 0.7;
 const TRANSCRIPT_CONFIDENCE = 0.75;
 const SPEECH_LABEL = "speech";
 const DISABLED_TRANSCRIPT_PROVIDERS = new Set(["local_speech"]);
-const DEFAULT_TRANSCRIPTION_LANGUAGE = "en";
 const LIVE_AUDIO_CONFIG = {
   preRollMs: 2_000,
   postRollMs: 2_500,
@@ -438,8 +437,8 @@ export class SoundClassifierSource implements AmbientSource {
     return normalizeVoiceLanguage(this.ctx.getTranscriptionLanguage?.());
   }
 
-  private transcriptionLanguage(): string {
-    return this.voiceLanguage().openai ?? DEFAULT_TRANSCRIPTION_LANGUAGE;
+  private transcriptionLanguage(): string | undefined {
+    return this.voiceLanguage().openai;
   }
 
   private async cleanupNativeStartFailure(): Promise<void> {
