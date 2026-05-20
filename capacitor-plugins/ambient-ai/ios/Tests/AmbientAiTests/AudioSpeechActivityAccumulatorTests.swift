@@ -4,15 +4,15 @@ import XCTest
 
 final class AudioSpeechActivityAccumulatorTests: XCTestCase {
     func testLowRmsSpeechFrameUsesSameThresholdAsChunkFilter() {
-        XCTAssertTrue(AudioSpeechActivityHeuristics.isSpeechLikeFrame(rms: 0.013, peak: 0.02))
+        XCTAssertTrue(AudioSpeechActivityHeuristics.isSpeechLikeFrame(rms: 0.004, peak: 0.01))
     }
 
     func testHighPeakSpeechFrameCanExtendRecordingEvenWithLowRms() {
-        XCTAssertTrue(AudioSpeechActivityHeuristics.isSpeechLikeFrame(rms: 0.004, peak: 0.09))
+        XCTAssertTrue(AudioSpeechActivityHeuristics.isSpeechLikeFrame(rms: 0.001, peak: 0.03))
     }
 
     func testQuietFrameDoesNotExtendRecording() {
-        XCTAssertFalse(AudioSpeechActivityHeuristics.isSpeechLikeFrame(rms: 0.004, peak: 0.02))
+        XCTAssertFalse(AudioSpeechActivityHeuristics.isSpeechLikeFrame(rms: 0.001, peak: 0.01))
     }
 
     func testBackgroundContinuousStopsAfterPostRollSilence() {
@@ -73,15 +73,15 @@ final class AudioSpeechActivityAccumulatorTests: XCTestCase {
         XCTAssertEqual(snapshot.peak, 0, accuracy: 0.001)
     }
 
-    func testShortTransientIsNotEnoughSpeech() {
+    func testShortBurstIsEnoughForTestingGate() {
         var accumulator = AudioSpeechActivityAccumulator()
 
-        accumulator.append(pcm: makePCM(durationMs: 100, amplitude: 0.18), durationMs: 100)
+        accumulator.append(pcm: makePCM(durationMs: 100, amplitude: 0.02), durationMs: 100)
 
         let snapshot = accumulator.snapshot()
-        XCTAssertFalse(snapshot.isSpeechLike)
+        XCTAssertTrue(snapshot.isSpeechLike)
         XCTAssertGreaterThanOrEqual(snapshot.speechLikeFrameCount, 1)
-        XCTAssertLessThan(snapshot.speechLikeDurationMs, AudioSpeechActivityAccumulator.minSpeechLikeDurationMs)
+        XCTAssertGreaterThanOrEqual(snapshot.speechLikeDurationMs, AudioSpeechActivityAccumulator.minSpeechLikeDurationMs)
     }
 
     func testSustainedAudioIsSpeechLike() {

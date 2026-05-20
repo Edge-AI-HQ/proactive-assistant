@@ -1304,8 +1304,8 @@ struct AudioSpeechActivitySnapshot {
 }
 
 struct AudioSpeechActivityHeuristics {
-    static let speechRmsThreshold: Float = 0.012
-    static let speechPeakThreshold: Float = 0.08
+    static let speechRmsThreshold: Float = 0.003
+    static let speechPeakThreshold: Float = 0.02
 
     static func isSpeechLikeFrame(rms: Float, peak: Float) -> Bool {
         rms >= speechRmsThreshold || peak >= speechPeakThreshold
@@ -1314,8 +1314,8 @@ struct AudioSpeechActivityHeuristics {
 
 struct AudioSpeechActivityAccumulator {
     static let windowDurationMs = 100
-    static let minSpeechLikeFrameCount = 2
-    static let minSpeechLikeDurationMs = 300
+    static let minSpeechLikeFrameCount = 1
+    static let minSpeechLikeDurationMs = 100
     static let speechRmsThreshold = AudioSpeechActivityHeuristics.speechRmsThreshold
     static let speechPeakThreshold = AudioSpeechActivityHeuristics.speechPeakThreshold
 
