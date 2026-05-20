@@ -3,6 +3,63 @@ import XCTest
 @testable import AmbientAi
 
 final class AudioSpeechActivityAccumulatorTests: XCTestCase {
+    func testLowRmsSpeechFrameUsesSameThresholdAsChunkFilter() {
+        XCTAssertTrue(AudioSpeechActivityHeuristics.isSpeechLikeFrame(rms: 0.013, peak: 0.02))
+    }
+
+    func testHighPeakSpeechFrameCanExtendRecordingEvenWithLowRms() {
+        XCTAssertTrue(AudioSpeechActivityHeuristics.isSpeechLikeFrame(rms: 0.004, peak: 0.09))
+    }
+
+    func testQuietFrameDoesNotExtendRecording() {
+        XCTAssertFalse(AudioSpeechActivityHeuristics.isSpeechLikeFrame(rms: 0.004, peak: 0.02))
+    }
+
+    func testBackgroundContinuousStopsAfterPostRollSilence() {
+        let config = AudioCaptureConfig(
+            postRollMs: 2_500,
+            maxBurstMs: 12_000,
+            minBurstMs: 600
+        )
+
+        XCTAssertTrue(AudioCaptureCyclePolicy.shouldStopForSilence(
+            triggerSource: "background_continuous",
+            elapsedMs: 3_100,
+            silenceMs: 2_500,
+            config: config
+        ))
+    }
+
+    func testCaptureDoesNotStopBeforeMinBurstEvenIfSilent() {
+        let config = AudioCaptureConfig(
+            postRollMs: 2_500,
+            maxBurstMs: 12_000,
+            minBurstMs: 600
+        )
+
+        XCTAssertFalse(AudioCaptureCyclePolicy.shouldStopForSilence(
+            triggerSource: "background_continuous",
+            elapsedMs: 500,
+            silenceMs: 2_500,
+            config: config
+        ))
+    }
+
+    func testCaptureDoesNotStopBeforePostRollSilence() {
+        let config = AudioCaptureConfig(
+            postRollMs: 2_500,
+            maxBurstMs: 12_000,
+            minBurstMs: 600
+        )
+
+        XCTAssertFalse(AudioCaptureCyclePolicy.shouldStopForSilence(
+            triggerSource: "sound_analysis",
+            elapsedMs: 3_100,
+            silenceMs: 2_499,
+            config: config
+        ))
+    }
+
     func testSilenceIsNotSpeechLike() {
         var accumulator = AudioSpeechActivityAccumulator()
 

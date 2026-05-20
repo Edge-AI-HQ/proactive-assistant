@@ -473,7 +473,7 @@ final class SoundClassificationService {
 
         if active, let currentSink {
             currentSink.recordingDidReceive(buffer: buffer)
-            if isFallbackSpeech(buffer) {
+            if isRecordingSpeechFrame(buffer) {
                 onSpeechFrame?()
             }
         } else {
@@ -504,6 +504,15 @@ final class SoundClassificationService {
     private func isFallbackSpeech(_ buffer: AVAudioPCMBuffer) -> Bool {
         guard let rms = Self.rms(buffer: buffer) else { return false }
         return rms >= fallbackRmsThreshold
+    }
+
+    private func isRecordingSpeechFrame(_ buffer: AVAudioPCMBuffer) -> Bool {
+        guard let rms = Self.rms(buffer: buffer) else { return false }
+        if AudioSpeechActivityHeuristics.isSpeechLikeFrame(rms: rms, peak: 0) {
+            return true
+        }
+        guard let peak = Self.peak(buffer: buffer) else { return false }
+        return AudioSpeechActivityHeuristics.isSpeechLikeFrame(rms: rms, peak: peak)
     }
 
     private func handleClassification(_ frame: SoundClassificationFrame) {
@@ -651,6 +660,37 @@ final class SoundClassificationService {
                 }
             }
             return sqrt(sumSquares / Float(frameLength * channelCount))
+        }
+
+        return nil
+    }
+
+    private static func peak(buffer: AVAudioPCMBuffer) -> Float? {
+        let frameLength = Int(buffer.frameLength)
+        let channelCount = Int(buffer.format.channelCount)
+        guard frameLength > 0, channelCount > 0 else { return nil }
+
+        if let channels = buffer.floatChannelData {
+            var peak: Float = 0
+            for channel in 0..<channelCount {
+                let samples = channels[channel]
+                for index in 0..<frameLength {
+                    peak = max(peak, abs(samples[index]))
+                }
+            }
+            return peak
+        }
+
+        if let channels = buffer.int16ChannelData {
+            var peak: Float = 0
+            for channel in 0..<channelCount {
+                let samples = channels[channel]
+                for index in 0..<frameLength {
+                    let sample = Float(samples[index]) / Float(Int16.max)
+                    peak = max(peak, abs(sample))
+                }
+            }
+            return peak
         }
 
         return nil

@@ -401,7 +401,6 @@ actor AudioStreamManager {
         }
 
         let activeConfig = config
-        let recordsUntilMaxBurst = triggerSource == "background_continuous"
         let recorder = RecordingState()
         classifier.attachRecordingSink(recorder)
 
@@ -412,11 +411,14 @@ actor AudioStreamManager {
               !stopCurrentRecording,
               !Task.isCancelled {
             let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1_000)
-            if !recordsUntilMaxBurst && elapsedMs >= activeConfig.minBurstMs {
-                let silenceMs = Int(Date().timeIntervalSince(lastSpeechAt) * 1_000)
-                if silenceMs >= activeConfig.postRollMs {
-                    break
-                }
+            let silenceMs = Int(Date().timeIntervalSince(lastSpeechAt) * 1_000)
+            if AudioCaptureCyclePolicy.shouldStopForSilence(
+                triggerSource: triggerSource,
+                elapsedMs: elapsedMs,
+                silenceMs: silenceMs,
+                config: activeConfig
+            ) {
+                break
             }
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
@@ -1301,12 +1303,21 @@ struct AudioSpeechActivitySnapshot {
     }
 }
 
+struct AudioSpeechActivityHeuristics {
+    static let speechRmsThreshold: Float = 0.012
+    static let speechPeakThreshold: Float = 0.08
+
+    static func isSpeechLikeFrame(rms: Float, peak: Float) -> Bool {
+        rms >= speechRmsThreshold || peak >= speechPeakThreshold
+    }
+}
+
 struct AudioSpeechActivityAccumulator {
     static let windowDurationMs = 100
     static let minSpeechLikeFrameCount = 2
     static let minSpeechLikeDurationMs = 300
-    static let speechRmsThreshold: Float = 0.012
-    static let speechPeakThreshold: Float = 0.08
+    static let speechRmsThreshold = AudioSpeechActivityHeuristics.speechRmsThreshold
+    static let speechPeakThreshold = AudioSpeechActivityHeuristics.speechPeakThreshold
 
     private var sumSquares: Double = 0
     private var sampleCount = 0
@@ -1389,12 +1400,23 @@ struct AudioSpeechActivityAccumulator {
     ) {
         guard sampleCount > 0, totalSamples > 0 else { return }
         let rms = Float(sqrt(sumSquares / Double(sampleCount)))
-        guard rms >= Self.speechRmsThreshold || peak >= Self.speechPeakThreshold else {
+        guard AudioSpeechActivityHeuristics.isSpeechLikeFrame(rms: rms, peak: peak) else {
             return
         }
         speechLikeFrameCount += 1
         let windowDurationMs = max(1, Int((Double(sampleCount) / Double(totalSamples) * Double(totalDurationMs)).rounded()))
         speechLikeDurationMs += windowDurationMs
+    }
+}
+
+struct AudioCaptureCyclePolicy {
+    static func shouldStopForSilence(
+        triggerSource _: String,
+        elapsedMs: Int,
+        silenceMs: Int,
+        config: AudioCaptureConfig
+    ) -> Bool {
+        elapsedMs >= config.minBurstMs && silenceMs >= config.postRollMs
     }
 }
 
