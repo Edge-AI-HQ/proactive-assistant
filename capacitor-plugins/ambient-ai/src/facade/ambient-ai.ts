@@ -191,6 +191,8 @@ function addListener<K extends AmbientEventName>(
       return native.contacts.addListener('contacts', listenerFunc as (event: ContactsSnapshot) => void);
     case 'captureReady':
       return native.audio.addListener('captureReady', listenerFunc as (event: CaptureReadyEvent) => void);
+    case 'captureDiscarded':
+      return native.audio.addListener('captureDiscarded', listenerFunc as (event: AmbientEventMap['captureDiscarded']) => void);
     case 'deviceState':
       return native.device.addListener('deviceState', listenerFunc as (event: DeviceStateSnapshot) => void);
     case 'focus':

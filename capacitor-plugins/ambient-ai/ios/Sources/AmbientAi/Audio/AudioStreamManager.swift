@@ -7,6 +7,7 @@ actor AudioStreamManager {
         let emitEvent: (String, [String: Any]) -> Void
     }
 
+    private static let silentCaptureReason = "silent_audio"
     private static let maxPendingTranscripts = 300
     private static let maxTranscriptChars = 6_000
     private static let classificationDebugEmitIntervalMs = 2_000
@@ -424,6 +425,19 @@ actor AudioStreamManager {
         let snapshot = recorder.snapshot()
         guard !snapshot.pcm.isEmpty, snapshot.durationMs > 0 else {
             emitError("Recording burst produced no audio", source: "capture")
+            return
+        }
+        guard snapshot.speechActivity.isSpeechLike else {
+            emitCaptureDiscarded(
+                burstId: burstId,
+                captureSessionId: captureSessionId,
+                capturedAt: Date(),
+                durationMs: snapshot.durationMs,
+                byteSize: snapshot.pcm.count,
+                triggerSource: triggerSource,
+                reason: Self.silentCaptureReason,
+                speechActivity: snapshot.speechActivity
+            )
             return
         }
 
@@ -1019,6 +1033,32 @@ actor AudioStreamManager {
         ])
     }
 
+    private func emitCaptureDiscarded(
+        burstId: String,
+        captureSessionId: String,
+        capturedAt: Date,
+        durationMs: Int,
+        byteSize: Int,
+        triggerSource: String,
+        reason: String,
+        speechActivity: AudioSpeechActivitySnapshot
+    ) {
+        callbacks.emitEvent("captureDiscarded", [
+            "platform": "ios",
+            "burstId": burstId,
+            "captureSessionId": captureSessionId,
+            "capturedAt": iso8601(capturedAt),
+            "durationMs": durationMs,
+            "byteSize": byteSize,
+            "triggerSource": triggerSource,
+            "reason": reason,
+            "rms": Double(speechActivity.rms),
+            "peak": Double(speechActivity.peak),
+            "speechLikeFrameCount": speechActivity.speechLikeFrameCount,
+            "speechLikeDurationMs": speechActivity.speechLikeDurationMs,
+        ])
+    }
+
     private func emitTranscriptRefined(
         text: String,
         metadata: AudioCaptureMetadata,
@@ -1207,6 +1247,7 @@ private final class RecordingState: AudioRecordingSink {
     private var totalMs = 0
     private var sampleRate: Double = 16_000
     private var channels: UInt16 = 1
+    private var speechActivity = AudioSpeechActivityAccumulator()
 
     func recordingDidStart(
         format: AVAudioFormat,
@@ -1219,6 +1260,7 @@ private final class RecordingState: AudioRecordingSink {
         if !preRollPCM.isEmpty {
             pcm.append(preRollPCM)
             totalMs += preRollDurationMs
+            speechActivity.append(pcm: preRollPCM, durationMs: preRollDurationMs)
         }
         lock.unlock()
     }
@@ -1230,13 +1272,129 @@ private final class RecordingState: AudioRecordingSink {
         channels = converted.channels
         pcm.append(converted.pcm)
         totalMs += converted.durationMs
+        speechActivity.append(pcm: converted.pcm, durationMs: converted.durationMs)
         lock.unlock()
     }
 
-    func snapshot() -> (pcm: Data, durationMs: Int, sampleRate: Double, channels: UInt16) {
+    func snapshot() -> (
+        pcm: Data,
+        durationMs: Int,
+        sampleRate: Double,
+        channels: UInt16,
+        speechActivity: AudioSpeechActivitySnapshot
+    ) {
         lock.lock()
         defer { lock.unlock() }
-        return (pcm, totalMs, sampleRate, channels)
+        return (pcm, totalMs, sampleRate, channels, speechActivity.snapshot())
+    }
+}
+
+struct AudioSpeechActivitySnapshot {
+    let rms: Float
+    let peak: Float
+    let speechLikeFrameCount: Int
+    let speechLikeDurationMs: Int
+
+    var isSpeechLike: Bool {
+        speechLikeFrameCount >= AudioSpeechActivityAccumulator.minSpeechLikeFrameCount
+            && speechLikeDurationMs >= AudioSpeechActivityAccumulator.minSpeechLikeDurationMs
+    }
+}
+
+struct AudioSpeechActivityAccumulator {
+    static let windowDurationMs = 100
+    static let minSpeechLikeFrameCount = 2
+    static let minSpeechLikeDurationMs = 300
+    static let speechRmsThreshold: Float = 0.012
+    static let speechPeakThreshold: Float = 0.08
+
+    private var sumSquares: Double = 0
+    private var sampleCount = 0
+    private var peak: Float = 0
+    private var speechLikeFrameCount = 0
+    private var speechLikeDurationMs = 0
+
+    mutating func append(pcm: Data, durationMs: Int) {
+        guard !pcm.isEmpty, durationMs > 0 else { return }
+        let sampleTotal = pcm.count / MemoryLayout<Int16>.size
+        guard sampleTotal > 0 else { return }
+        let samplesPerWindow = max(1, Int((Double(sampleTotal) * Double(Self.windowDurationMs) / Double(durationMs)).rounded()))
+
+        pcm.withUnsafeBytes { rawBuffer in
+            var windowSumSquares: Double = 0
+            var windowPeak: Float = 0
+            var windowSamples = 0
+
+            for index in 0..<sampleTotal {
+                let raw = rawBuffer.loadUnaligned(
+                    fromByteOffset: index * MemoryLayout<Int16>.size,
+                    as: Int16.self
+                )
+                let normalized = Float(Int16(littleEndian: raw)) / 32_768.0
+                let absValue = abs(normalized)
+                let squared = Double(normalized * normalized)
+
+                sumSquares += squared
+                sampleCount += 1
+                peak = max(peak, absValue)
+
+                windowSumSquares += squared
+                windowPeak = max(windowPeak, absValue)
+                windowSamples += 1
+
+                if windowSamples >= samplesPerWindow {
+                    recordWindow(
+                        sumSquares: windowSumSquares,
+                        peak: windowPeak,
+                        sampleCount: windowSamples,
+                        totalSamples: sampleTotal,
+                        totalDurationMs: durationMs
+                    )
+                    windowSumSquares = 0
+                    windowPeak = 0
+                    windowSamples = 0
+                }
+            }
+
+            if windowSamples > 0 {
+                recordWindow(
+                    sumSquares: windowSumSquares,
+                    peak: windowPeak,
+                    sampleCount: windowSamples,
+                    totalSamples: sampleTotal,
+                    totalDurationMs: durationMs
+                )
+            }
+        }
+    }
+
+    func snapshot() -> AudioSpeechActivitySnapshot {
+        let rms = sampleCount > 0
+            ? Float(sqrt(sumSquares / Double(sampleCount)))
+            : 0
+        return AudioSpeechActivitySnapshot(
+            rms: rms,
+            peak: peak,
+            speechLikeFrameCount: speechLikeFrameCount,
+            speechLikeDurationMs: speechLikeDurationMs
+        )
+    }
+
+    private mutating func recordWindow(
+        sumSquares: Double,
+        peak: Float,
+        sampleCount: Int,
+        totalSamples: Int,
+        totalDurationMs: Int
+    ) {
+        guard sampleCount > 0, totalSamples > 0 else { return }
+        let rms = Float(sqrt(sumSquares / Double(sampleCount)))
+        guard rms >= Self.speechRmsThreshold || peak >= Self.speechPeakThreshold else {
+            return
+        }
+        speechLikeFrameCount += 1
+        let windowDurationMs = max(1, Int((Double(sampleCount) / Double(totalSamples) * Double(totalDurationMs)).rounded()))
+        speechLikeDurationMs += windowDurationMs
     }
 }
 

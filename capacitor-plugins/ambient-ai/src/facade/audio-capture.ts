@@ -7,6 +7,7 @@ import type {
   AudioErrorEvent,
   AudioPermissions,
   AudioState,
+  CaptureDiscardedEvent,
   CaptureReadyEvent,
   RecentAudioCapture,
   SoundClassificationEvent,
@@ -20,6 +21,7 @@ export interface AudioCaptureEventMap {
   ambientLevel: AmbientLevelEvent;
   audioError: AudioErrorEvent;
   audioState: AudioState;
+  captureDiscarded: CaptureDiscardedEvent;
   captureReady: CaptureReadyEvent;
   soundClassification: SoundClassificationEvent;
   speechBurst: SpeechBurstEvent;

@@ -148,6 +148,21 @@ export interface CaptureReadyEvent {
   triggerSource?: string;
 }
 
+export interface CaptureDiscardedEvent {
+  platform: AmbientPlatform;
+  burstId: string;
+  captureSessionId: string;
+  capturedAt: string;
+  durationMs: number;
+  byteSize: number;
+  triggerSource?: string;
+  reason: 'silent_audio' | string;
+  rms: number;
+  peak: number;
+  speechLikeFrameCount: number;
+  speechLikeDurationMs: number;
+}
+
 export interface TranscriptRefinedEvent {
   platform: AmbientPlatform;
   wavId: string;
@@ -332,6 +347,7 @@ export interface AmbientEventMap {
   calendarSummary: CalendarSummaryEvent;
   contacts: ContactsSnapshot;
   captureReady: CaptureReadyEvent;
+  captureDiscarded: CaptureDiscardedEvent;
   deviceState: DeviceStateSnapshot;
   focus: FocusEvent;
   heartRate: HeartRateEvent;

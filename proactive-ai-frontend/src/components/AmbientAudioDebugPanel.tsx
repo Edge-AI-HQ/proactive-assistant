@@ -13,6 +13,7 @@ type AudioDebugEventName =
   | "audioState"
   | "soundClassification"
   | "speechBurst"
+  | "captureDiscarded"
   | "transcriptDraft"
   | "transcriptRefined"
   | "transcriptReady"
@@ -90,6 +91,7 @@ const AUDIO_EVENT_NAMES: readonly AudioDebugEventName[] = [
   "audioState",
   "soundClassification",
   "speechBurst",
+  "captureDiscarded",
   "transcriptDraft",
   "transcriptRefined",
   "transcriptReady",
@@ -262,6 +264,10 @@ function previewEvent<K extends AudioDebugEventName>(name: K, event: AmbientEven
     case "speechBurst": {
       const burst = event as AmbientEventMap["speechBurst"];
       return `${formatDuration(burst.durationMs)} · confidence ${(burst.confidence * 100).toFixed(0)}%`;
+    }
+    case "captureDiscarded": {
+      const discarded = event as AmbientEventMap["captureDiscarded"];
+      return `${discarded.reason} · ${formatDuration(discarded.durationMs)} · ${formatBytes(discarded.byteSize)} · speech ${discarded.speechLikeDurationMs}ms · rms ${discarded.rms.toFixed(3)} · peak ${discarded.peak.toFixed(3)}`;
     }
     case "transcriptDraft": {
       const draft = event as AmbientEventMap["transcriptDraft"];

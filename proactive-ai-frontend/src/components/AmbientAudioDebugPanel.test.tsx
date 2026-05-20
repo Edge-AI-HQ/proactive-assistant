@@ -239,6 +239,7 @@ describe("AmbientAudioDebugPanel", () => {
     await waitFor(() => {
       expect(AmbientAi.addListener).toHaveBeenCalledWith("audioState", expect.any(Function));
       expect(AmbientAi.addListener).toHaveBeenCalledWith("speechBurst", expect.any(Function));
+      expect(AmbientAi.addListener).toHaveBeenCalledWith("captureDiscarded", expect.any(Function));
       expect(AmbientAi.addListener).toHaveBeenCalledWith("transcriptDraft", expect.any(Function));
       expect(AmbientAi.addListener).toHaveBeenCalledWith("transcriptRefined", expect.any(Function));
       expect(AmbientAi.addListener).toHaveBeenCalledWith("transcriptReady", expect.any(Function));
@@ -262,6 +263,20 @@ describe("AmbientAudioDebugPanel", () => {
         source: "cloud",
         message: "refine timeout",
       });
+      mockControls.emitAmbientAudioTestEvent("captureDiscarded", {
+        platform: "ios",
+        burstId: "burst-silent",
+        captureSessionId: "session-silent",
+        capturedAt: "2026-05-10T11:00:04.000Z",
+        durationMs: 3000,
+        byteSize: 96044,
+        triggerSource: "background_continuous",
+        reason: "silent_audio",
+        rms: 0.003,
+        peak: 0.021,
+        speechLikeFrameCount: 0,
+        speechLikeDurationMs: 0,
+      });
     });
 
     expect(await screen.findByText("transcriptReady")).toBeTruthy();
@@ -269,6 +284,8 @@ describe("AmbientAudioDebugPanel", () => {
     expect(screen.getAllByText(/zh-CN/i).length).toBeGreaterThan(0);
     expect(screen.getByText("audioError")).toBeTruthy();
     expect(screen.getByText(/cloud: refine timeout/i)).toBeTruthy();
+    expect(screen.getByText("captureDiscarded")).toBeTruthy();
+    expect(screen.getByText(/silent_audio/i)).toBeTruthy();
   });
 
 
