@@ -11,7 +11,18 @@ from datetime import UTC, datetime
 import pytest
 
 from pinai_agents.web import composio_service as cs
+from pinai_agents.web.auth.user_service import User
 from pinai_agents.web.services import ingest_runner as ir
+
+
+def _user(internal_id: int = 7) -> User:
+    return User(
+        id=internal_id,
+        supabase_user_id=f"u-{internal_id}",
+        email=None,
+        litellm_virtual_key=None,
+        browserbase_context_id=None,
+    )
 
 
 @pytest.fixture
@@ -20,7 +31,7 @@ def stub_execute(monkeypatch):
     the test can inspect. Each call appends (slug, args, cid)."""
     calls: list[tuple[str, dict, str | None]] = []
 
-    async def fake_execute(user_id, slug, args, *, connected_account_id=None):
+    async def fake_execute(user, slug, args, *, connected_account_id=None):
         calls.append((slug, args, connected_account_id))
         # Simulate Composio response based on slug — minimum viable
         # for recipes the tests touch.
@@ -144,14 +155,14 @@ def test_walk_path_empty_path_returns_payload():
 
 @pytest.mark.asyncio
 async def test_run_fetch_unknown_toolkit_returns_empty(stub_execute):
-    items = await ir.run_fetch(7, "nonexistent", "ca_x")
+    items = await ir.run_fetch(_user(),"nonexistent", "ca_x")
     assert items == []
     assert stub_execute == []
 
 
 @pytest.mark.asyncio
 async def test_run_fetch_calendly_resolves_prereq(stub_execute):
-    items = await ir.run_fetch(7, "calendly", "ca_cal")
+    items = await ir.run_fetch(_user(),"calendly", "ca_cal")
     assert len(items) == 2
     # Two calls: GET_USER then LIST_SCHEDULED_EVENTS
     assert [c[0] for c in stub_execute] == [
@@ -166,7 +177,7 @@ async def test_run_fetch_calendly_resolves_prereq(stub_execute):
 @pytest.mark.asyncio
 async def test_run_fetch_gmail_uses_query_after_unix(stub_execute):
     since = datetime(2026, 5, 1, tzinfo=UTC)
-    items = await ir.run_fetch(7, "gmail", "ca_gm", since=since)
+    items = await ir.run_fetch(_user(),"gmail", "ca_gm", since=since)
     assert len(items) == 2
     args = stub_execute[0][1]
     assert args["query"] == f"after:{int(since.timestamp())}"
@@ -177,7 +188,7 @@ async def test_run_fetch_gmail_uses_query_after_unix(stub_execute):
 @pytest.mark.asyncio
 async def test_run_fetch_stripe_uses_nested_dotted_filter(stub_execute):
     since = datetime(2026, 5, 1, tzinfo=UTC)
-    items = await ir.run_fetch(7, "stripe", "ca_st", since=since)
+    items = await ir.run_fetch(_user(),"stripe", "ca_st", since=since)
     assert len(items) == 1
     args = stub_execute[0][1]
     # since_param "created.gte" → args["created"]["gte"]
@@ -188,7 +199,7 @@ async def test_run_fetch_stripe_uses_nested_dotted_filter(stub_execute):
 @pytest.mark.asyncio
 async def test_run_fetch_linkedin_wraps_single_object(stub_execute):
     """LinkedIn returns a single profile dict; runner wraps as 1-item list."""
-    items = await ir.run_fetch(7, "linkedin", "ca_li")
+    items = await ir.run_fetch(_user(),"linkedin", "ca_li")
     assert len(items) == 1
     assert items[0]["headline"] == "PM"
 
@@ -198,7 +209,7 @@ async def test_run_fetch_omits_since_when_recipe_has_no_param(stub_execute):
     """LinkedIn / YouTube / Twitter have since_param=null; runner must
     not invent an arg even if `since` is supplied."""
     since = datetime(2026, 5, 1, tzinfo=UTC)
-    await ir.run_fetch(7, "linkedin", "ca_li", since=since)
+    await ir.run_fetch(_user(),"linkedin", "ca_li", since=since)
     args = stub_execute[0][1]
     # No injection of any since-related arg.
     assert "since" not in args
@@ -207,9 +218,9 @@ async def test_run_fetch_omits_since_when_recipe_has_no_param(stub_execute):
 
 @pytest.mark.asyncio
 async def test_run_fetch_prereq_failure_short_circuits(stub_execute, monkeypatch):
-    async def failing_execute(user_id, slug, args, *, connected_account_id=None):
+    async def failing_execute(user, slug, args, *, connected_account_id=None):
         return cs.ExecuteResult(slug=slug, successful=False, error="auth")
 
     monkeypatch.setattr(cs, "execute", failing_execute)
-    items = await ir.run_fetch(7, "calendly", "ca_cal")
+    items = await ir.run_fetch(_user(),"calendly", "ca_cal")
     assert items == []

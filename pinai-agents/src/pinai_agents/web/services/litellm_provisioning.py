@@ -11,7 +11,11 @@ Lifecycle:
 
 Only `litellm_virtual_key` is persisted on the users table. We don't
 cache user_id / key_alias / budget separately — LiteLLM is the source
-of truth and we re-derive aliases from internal user_id deterministically.
+of truth and we re-derive aliases from the Supabase UUID
+deterministically. See AGENTS.md "用户标识规约": LiteLLM user_id is an
+external namespace, so it must derive from supabase_user_id (UUID) and
+not the internal BIGINT — local docker / dev / prod SERIAL sequences
+would otherwise collide on the shared LiteLLM control plane.
 
 Failure semantics: if LiteLLM is unreachable on first INSERT, the row
 goes in with virtual_key=NULL and the user is logged in fine; the next
@@ -43,15 +47,17 @@ logger = logging.getLogger(__name__)
 GENERATOR_REQUIRED_MODELS = {"gpt-5.5"}
 
 
-def _litellm_user_id(internal_user_id: int) -> str:
-    """Deterministic LiteLLM user_id derived from our BIGINT id. Stable
-    across re-provisioning so /user/new is genuinely idempotent."""
-    return f"pinai-{internal_user_id}"
+def _litellm_user_id(supabase_user_id: str) -> str:
+    """Deterministic LiteLLM user_id derived from the Supabase UUID.
+    Stable across re-provisioning so /user/new is genuinely idempotent,
+    and globally unique across environments (see module docstring)."""
+    return f"pinai-{supabase_user_id}"
 
 
-def _key_alias(internal_user_id: int) -> str:
-    """Human-friendly key alias surfaced in LiteLLM's dashboard."""
-    return f"pinai-{internal_user_id}"
+def _key_alias(supabase_user_id: str) -> str:
+    """Human-friendly key alias surfaced in LiteLLM's dashboard.
+    Same string as the user_id — dashboard rows align 1:1."""
+    return f"pinai-{supabase_user_id}"
 
 
 def _allowed_models(required_models: Iterable[str] = ()) -> list[str]:
@@ -113,8 +119,8 @@ async def _provision_and_persist(
     and return the raw key. Cleans up any stale key bound to the same alias
     so we don't accumulate orphans on retries."""
     s = get_web_settings()
-    litellm_uid = _litellm_user_id(user.id)
-    alias = _key_alias(user.id)
+    litellm_uid = _litellm_user_id(user.supabase_user_id)
+    alias = _key_alias(user.supabase_user_id)
 
     await create_user(
         user_id=litellm_uid,

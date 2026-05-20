@@ -27,6 +27,7 @@ from fastapi import APIRouter, Body, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
 from ...auth.deps import User, current_user, get_pool
+from ...auth.user_service import load_user_by_id
 from ...db.repositories.devices import (
     DeviceOwnerMismatch,
     DevicesRepository,
@@ -437,6 +438,19 @@ async def rotate_device_token(
 # ── ingest / media (device-token auth) ──
 
 
+def _payload_has_binary(raw_item: Any) -> bool:
+    """Cheap pre-scan: does this raw ingest item carry a binary_b64
+    payload? Used to decide whether the batch needs a User hydration
+    (only media uploads need the Supabase Storage path prefix)."""
+    if not isinstance(raw_item, dict):
+        return False
+    payload = raw_item.get("payload")
+    if not isinstance(payload, dict):
+        return False
+    b64 = payload.get("binary_b64")
+    return isinstance(b64, str) and bool(b64)
+
+
 async def _verify_device(
     pool, device_id: str, device_token: str,
 ):
@@ -526,13 +540,25 @@ async def ingest_devices(
     if not by_device and not pre_results and not wrapper_device_id:
         raise HTTPException(400, "deviceId or signal `source` required")
 
+    # Lazy User hydration: device ingest is a hot path and most batches
+    # carry no media (signal-only items). Only resolve the device owner's
+    # Supabase UUID when a payload actually carries binary_b64 — that's
+    # the one place we need the external namespace (Storage path prefix
+    # per AGENTS.md "用户标识规约"). One extra DB roundtrip on
+    # media-bearing batches; zero on the common case.
+    device_user: User | None = None
+    if any(_payload_has_binary(r) for r in items_raw):
+        device_user = await load_user_by_id(pool, device.user_id)
+        if device_user is None:
+            raise HTTPException(404, f"device user {device.user_id} not found")
+
     item_results: list[dict[str, Any]] = list(pre_results)
     async with user_scoped_tx(pool, device.user_id) as conn:
         signals_repo = PersonalSignalsRepository(device.user_id, conn)
         raw_repo = RawDeviceRepository(device.user_id, conn)
         for did, items in by_device.items():
             r = await _ingest_for_device(
-                user_id=device.user_id, device_id=did, raw_items=items,
+                user=device_user, device_id=did, raw_items=items,
                 signals_repo=signals_repo, raw_repo=raw_repo,
             )
             item_results.extend(r["results"])
@@ -546,7 +572,7 @@ async def ingest_devices(
 
 
 async def _ingest_for_device(
-    *, user_id: int, device_id: str, raw_items: list[dict[str, Any]],
+    *, user: User | None, device_id: str, raw_items: list[dict[str, Any]],
     signals_repo: PersonalSignalsRepository, raw_repo: RawDeviceRepository,
 ) -> dict[str, Any]:
     """Per-device leg of the ingest. Returns ``{"results": [...]}`` only —
@@ -592,12 +618,22 @@ async def _ingest_for_device(
         # Media-bearing kinds: upload binary_b64 → Supabase Storage,
         # rewrite payload to reference storage_path instead of raw bytes.
         b64 = payload.get("binary_b64") if isinstance(payload, dict) else None
-        if isinstance(b64, str) and b64:
+        if isinstance(b64, str) and b64 and user is None:
+            # Caller's pre-scan said no media in this batch, yet we found
+            # binary_b64 here. Log and skip the upload (signal still
+            # ingests) — never crash the batch on an internal invariant.
+            logger.warning(
+                "device ingest: binary payload arrived but user not "
+                "hydrated (device=%s kind=%s) — skipping media upload",
+                device_id, kind,
+            )
+        elif isinstance(b64, str) and b64 and user is not None:
             ext = media_ext_for_kind(kind, payload.get("mime"))
             if ext:
                 try:
                     media = await upload_media(
-                        user_id=user_id, device_id=device_id, item_id=item.id,
+                        supabase_user_id=user.supabase_user_id,
+                        device_id=device_id, item_id=item.id,
                         occurred_at_iso=occurred,
                         binary_b64=b64,
                         mime=payload.get("mime"),

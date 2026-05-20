@@ -2,7 +2,8 @@
 
 Wraps `composio_service` for the user-facing OAuth lifecycle. Composio
 is reached via the SDK; per-user separation comes from passing each
-user's internal id (mapped to `pai-{id}`) as the SDK's `user_id`.
+user's Supabase UUID (mapped to `pai-{supabase_user_id}`) as the SDK's
+`user_id`. See AGENTS.md "用户标识规约".
 
 Frontend flow:
   GET  /status      → has the env-level master key been configured?
@@ -62,7 +63,7 @@ async def composio_connections(
     user: User = Depends(current_user), pool=Depends(get_pool),
 ) -> dict:
     try:
-        items = await list_connections(user.id)
+        items = await list_connections(user)
     except ComposioError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
 
@@ -89,7 +90,7 @@ async def composio_connections(
             # Legacy / row missing — resolve inline so the next call is fast.
             # Bounded by `resolve_and_persist_label`'s single SDK roundtrip.
             try:
-                resolved = await resolve_and_persist_label(pool, user.id, cid, c.toolkit)
+                resolved = await resolve_and_persist_label(pool, user, cid, c.toolkit)
             except Exception as e:  # noqa: BLE001 — best-effort, must not 502 the list
                 logger.warning(
                     "composio: inline label resolve failed user=%s cid=%s: %s",
@@ -115,7 +116,7 @@ async def composio_connect(body: dict, user: User = Depends(current_user)) -> di
     if not toolkit:
         raise HTTPException(status_code=400, detail="Missing toolkit")
     try:
-        init = await connect(user.id, toolkit)
+        init = await connect(user, toolkit)
     except ComposioError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
     return {
@@ -140,7 +141,7 @@ async def composio_disconnect(
     # Clean up the cached label so the row doesn't outlive the connection.
     if pool is not None:
         try:
-            await delete_label(pool, user.id, cid)
+            await delete_label(pool, user, cid)
         except Exception as e:  # noqa: BLE001 — best-effort cleanup
             logger.warning(
                 "composio: delete label failed user=%s cid=%s: %s",
@@ -149,7 +150,7 @@ async def composio_disconnect(
     # Drop any cached Tool Router session so the next chat call sees the
     # fresh connection state (e.g. user just disconnected one of two
     # accounts on the same toolkit).
-    await evict_session(user.id)
+    await evict_session(user)
     return None
 
 
@@ -179,7 +180,7 @@ async def composio_wait(
     # lazy-retried on the next /connections call.
     if toolkit and toolkit != "unknown" and pool is not None:
         try:
-            await resolve_and_persist_label(pool, user.id, cid, toolkit)
+            await resolve_and_persist_label(pool, user, cid, toolkit)
         except Exception as e:  # noqa: BLE001 — label is best-effort, must not break /wait
             logger.warning(
                 "composio: eager label resolve failed user=%s cid=%s tk=%s: %s",
@@ -217,7 +218,7 @@ async def composio_reconnect(
     # different profile); refresh the label proactively.
     if pool is not None:
         try:
-            await resolve_and_persist_label(pool, user.id, cid, toolkit)
+            await resolve_and_persist_label(pool, user, cid, toolkit)
         except Exception as e:  # noqa: BLE001 — best-effort
             logger.warning(
                 "composio: label refresh on reconnect failed user=%s cid=%s: %s",

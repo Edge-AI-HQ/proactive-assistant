@@ -47,7 +47,7 @@ async def claim_event(conn, event: Any) -> bool:
     """Try to claim the event for processing. Returns True if we got the
     claim (caller proceeds), False if it was already claimed
     (caller short-circuits with status=skipped). Idempotent on retry."""
-    user_id = _resolve_user_id_for_event(event)
+    user_id = await _resolve_user_id_for_event(conn, event)
     async with conn.cursor() as cur:
         await cur.execute(
             """
@@ -121,9 +121,10 @@ async def _handle_checkout_completed(conn, session: Any) -> None:
     """A user finished Stripe Checkout. The session contains:
       - customer (id we should pin onto users.stripe_customer_id)
       - subscription (id; we fetch full Subscription to sync state)
-      - metadata.user_id (we set this on session creation)
+      - metadata.supabase_user_id (we set this on session creation —
+        external namespace per AGENTS.md "用户标识规约")
     """
-    user_id = _user_id_from_metadata(session)
+    user_id = await _user_id_from_metadata(conn, session)
     if user_id is None:
         # Fall back to looking up by customer_id (e.g. session created
         # without our metadata for some reason).
@@ -160,7 +161,7 @@ async def _handle_subscription_event(conn, sub: Any) -> None:
         return
 
     # Try to resolve user via metadata first (same path as checkout).
-    user_id = _user_id_from_metadata(sub)
+    user_id = await _user_id_from_metadata(conn, sub)
     if user_id is None:
         # Fall back to customer_id, then to existing pai_subscriptions row.
         cust = _attr(sub, "customer")
@@ -211,23 +212,28 @@ async def _handle_invoice_paid(conn, invoice: Any) -> None:
 # ── helpers ──
 
 
-def _resolve_user_id_for_event(event: Any) -> int | None:
+async def _resolve_user_id_for_event(conn, event: Any) -> int | None:
     """Best-effort user id pull from event payload metadata.
     Used for the audit log; sync handlers re-resolve more carefully."""
     obj = event.data.object if hasattr(event, "data") else event["data"]["object"]
-    return _user_id_from_metadata(obj)
+    return await _user_id_from_metadata(conn, obj)
 
 
-def _user_id_from_metadata(obj: Any) -> int | None:
+async def _user_id_from_metadata(conn, obj: Any) -> int | None:
+    """Resolve the internal BIGINT user id from a Stripe metadata blob.
+
+    Primary key is `supabase_user_id` (UUID) per AGENTS.md "用户标识规约";
+    `internal_user_id` is debug-only context. We never trust the BIGINT
+    from metadata alone — local docker / dev / prod assign different
+    SERIAL ids to the same Supabase user, so resolving by BIGINT would
+    cross-env-pollute. Always re-resolve via the UUID's users row.
+    """
     md = _attr(obj, "metadata") or {}
-    if isinstance(md, dict):
-        raw = md.get("user_id") or md.get("supabase_user_id_int")
-        if raw is None:
-            return None
-        try:
-            return int(raw)
-        except (ValueError, TypeError):
-            return None
+    if not isinstance(md, dict):
+        return None
+    supabase_uuid = md.get("supabase_user_id")
+    if isinstance(supabase_uuid, str) and supabase_uuid:
+        return await subscriptions.find_user_by_supabase_user_id(conn, supabase_uuid)
     return None
 
 

@@ -26,6 +26,7 @@ import yaml
 from pydantic import BaseModel, Field
 
 from .. import composio_service as cs
+from ..auth.user_service import User
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +185,7 @@ def _walk_path(payload: Any, path: Iterable[str]) -> Any:
 
 
 async def run_fetch(
-    user_id: int,
+    user: User,
     toolkit: str,
     connected_account_id: str,
     *,
@@ -215,7 +216,7 @@ async def run_fetch(
     # Resolve prereqs first (e.g. Calendly: GET_USER → user URI).
     for pre in recipe.prereqs:
         pre_result = await cs.execute(
-            user_id, pre.slug, pre.args,
+            user, pre.slug, pre.args,
             connected_account_id=connected_account_id,
         )
         if not pre_result.successful:
@@ -249,7 +250,7 @@ async def run_fetch(
 
     # Main call.
     result = await cs.execute(
-        user_id, recipe.slug or "",
+        user, recipe.slug or "",
         args, connected_account_id=connected_account_id,
     )
     if not result.successful:

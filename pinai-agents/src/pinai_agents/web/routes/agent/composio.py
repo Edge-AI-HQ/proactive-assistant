@@ -33,10 +33,27 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from ... import composio_service as cs
-from ...auth.deps import AgentRun, current_agent_run
+from ...auth.deps import AgentRun, current_agent_run, get_pool
+from ...auth.user_service import User, load_user_by_id
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/agent/composio", tags=["agent-composio"])
+
+
+async def _agent_user(
+    run: AgentRun = Depends(current_agent_run),
+    pool=Depends(get_pool),
+) -> User:
+    """Hydrate the User row behind an agent-run principal. The agent JWT
+    only carries the internal BIGINT id; the Composio service layer
+    requires the Supabase UUID to derive the external namespace
+    (`pai-{supabase_user_id}`). See AGENTS.md "用户标识规约"."""
+    user = await load_user_by_id(pool, run.user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=404, detail=f"user {run.user_id} not found",
+        )
+    return user
 
 
 # Whitelist of Composio meta-tool slugs we forward. Anything else 404s
@@ -75,7 +92,7 @@ class _MetaCallBody(BaseModel):
 async def meta_call(
     tool_name: str,
     body: _MetaCallBody = Body(default_factory=_MetaCallBody),
-    run: AgentRun = Depends(current_agent_run),
+    user: User = Depends(_agent_user),
 ) -> dict[str, Any]:
     """Forward one Composio meta-tool call through the user's Tool
     Router session. The session is created (or reused from cache) on
@@ -89,7 +106,7 @@ async def meta_call(
     composio_slug = f"COMPOSIO_{tool_name}"
     try:
         return await cs.execute_meta_tool(
-            run.user_id, composio_slug, body.args,
+            user, composio_slug, body.args,
             toolkits=body.toolkits, tools=body.tools,
         )
     except cs.ComposioError as e:
@@ -101,10 +118,10 @@ async def meta_call(
 
 @router.get("/connections")
 async def list_connections(
-    run: AgentRun = Depends(current_agent_run),
+    user: User = Depends(_agent_user),
 ) -> dict[str, Any]:
     try:
-        items = await cs.list_connections(run.user_id)
+        items = await cs.list_connections(user)
     except cs.ComposioError as e:
         raise _map_error(e) from e
     return {"items": [c.model_dump() for c in items]}
@@ -119,11 +136,11 @@ class _SearchBody(BaseModel):
 @router.post("/search")
 async def search_tools(
     body: _SearchBody,
-    run: AgentRun = Depends(current_agent_run),
+    user: User = Depends(_agent_user),
 ) -> dict[str, Any]:
     try:
         hits = await cs.search_tools(
-            run.user_id, body.query, toolkit=body.toolkit, limit=body.limit,
+            user, body.query, toolkit=body.toolkit, limit=body.limit,
         )
     except cs.ComposioError as e:
         raise _map_error(e) from e
@@ -152,11 +169,11 @@ class _ExecuteBody(BaseModel):
 @router.post("/execute")
 async def execute(
     body: _ExecuteBody,
-    run: AgentRun = Depends(current_agent_run),
+    user: User = Depends(_agent_user),
 ) -> dict[str, Any]:
     try:
         result = await cs.execute(
-            run.user_id, body.slug, body.args,
+            user, body.slug, body.args,
             connected_account_id=body.connected_account_id,
         )
     except cs.ComposioError as e:
@@ -172,11 +189,11 @@ class _MultiExecuteBody(BaseModel):
 @router.post("/multi_execute")
 async def multi_execute(
     body: _MultiExecuteBody,
-    run: AgentRun = Depends(current_agent_run),
+    user: User = Depends(_agent_user),
 ) -> dict[str, Any]:
     try:
         results = await cs.multi_execute(
-            run.user_id, body.calls, parallelism=body.parallelism,
+            user, body.calls, parallelism=body.parallelism,
         )
     except cs.ComposioError as e:
         raise _map_error(e) from e

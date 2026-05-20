@@ -68,10 +68,10 @@ from ..storage import delete_all_user_media
 logger = logging.getLogger(__name__)
 
 
-def _litellm_user_id(internal_user_id: int) -> str:
+def _litellm_user_id(supabase_user_id: str) -> str:
     # Mirrors services/litellm_provisioning._litellm_user_id. One line is
     # not worth a cross-module private import.
-    return f"pinai-{internal_user_id}"
+    return f"pinai-{supabase_user_id}"
 
 
 class AccountDeletionError(Exception):
@@ -104,7 +104,7 @@ class AccountDeletionResult:
 
 async def _cleanup_composio(user: User, result: AccountDeletionResult) -> None:
     try:
-        connections = await list_connections(user.id)
+        connections = await list_connections(user)
     except ComposioError as e:
         logger.warning("account.delete: composio list failed user=%s: %s", user.id, e)
         result.composio_errors.append(f"list: {e}")
@@ -125,7 +125,7 @@ async def _cleanup_litellm(user: User, result: AccountDeletionResult) -> None:
     # List + delete all keys (not just users.litellm_virtual_key) so
     # orphan keys from old re-provisioning paths get cleaned up too.
     try:
-        keys = await list_keys_for_user(_litellm_user_id(user.id))
+        keys = await list_keys_for_user(_litellm_user_id(user.supabase_user_id))
         tokens = [k["token"] for k in keys if isinstance(k.get("token"), str)]
         if tokens:
             await delete_keys(tokens)  # SDK swallows LiteLLMError internally
@@ -202,7 +202,7 @@ async def _cleanup_browserbase(user: User, result: AccountDeletionResult) -> Non
 
 async def _cleanup_storage(user: User, result: AccountDeletionResult) -> None:
     try:
-        result.storage_files_deleted = await delete_all_user_media(user.id)
+        result.storage_files_deleted = await delete_all_user_media(user.supabase_user_id)
     except Exception as e:  # noqa: BLE001 — supabase storage SDK raises many types
         logger.warning(
             "account.delete: storage cleanup failed user=%s: %s", user.id, e,

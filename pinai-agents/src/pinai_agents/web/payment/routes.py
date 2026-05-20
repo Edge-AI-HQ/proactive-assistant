@@ -117,7 +117,14 @@ async def create_checkout(
         # Service-tx — new customer creation needs to write users.
         customer = stripe.Customer.create(
             email=user.email or None,
-            metadata={"user_id": str(user.id), "supabase_user_id": user.supabase_user_id},
+            # supabase_user_id is the primary back-reference (the external
+            # namespace per AGENTS.md "用户标识规约"). internal_user_id is
+            # included as debug-only context — webhook handlers resolve
+            # the user via supabase_user_id.
+            metadata={
+                "supabase_user_id": user.supabase_user_id,
+                "internal_user_id": str(user.id),
+            },
         )
         customer_id = customer.id
         async with service_tx(pool) as conn:
@@ -143,7 +150,11 @@ async def create_checkout(
         success_url=success + "?session_id={CHECKOUT_SESSION_ID}",
         cancel_url=cancel,
         allow_promotion_codes=True,
-        metadata={"user_id": str(user.id), "plan_code": plan.plan_code},
+        metadata={
+            "supabase_user_id": user.supabase_user_id,
+            "internal_user_id": str(user.id),
+            "plan_code": plan.plan_code,
+        },
         subscription_data={
             "metadata": {"user_id": str(user.id), "plan_code": plan.plan_code},
         },

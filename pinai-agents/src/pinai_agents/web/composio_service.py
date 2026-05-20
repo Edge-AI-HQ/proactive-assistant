@@ -53,6 +53,7 @@ from composio_client import APIStatusError as _SDKClientStatusError
 from pydantic import BaseModel, Field
 
 from ..config import get_web_settings
+from .auth.user_service import User
 
 logger = logging.getLogger(__name__)
 
@@ -148,10 +149,13 @@ def _composio() -> Composio:
     return _client
 
 
-def composio_user_id(internal_user_id: int) -> str:
-    """Pin AI internal id → Composio user_id. Stable namespace prefix so
-    a Composio dashboard query can identify pinai-agents users."""
-    return f"pai-{internal_user_id}"
+def composio_user_id(user: User) -> str:
+    """Pin AI user → Composio user_id. Uses Supabase UUID (not internal
+    BIGINT) so the namespace is stable across environments and never
+    collides with another env's recycled SERIAL id. Stable `pai-` prefix
+    so a Composio dashboard query can identify pinai-agents users.
+    See AGENTS.md "用户标识规约"."""
+    return f"pai-{user.supabase_user_id}"
 
 
 async def _to_thread(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
@@ -312,7 +316,7 @@ async def _call_identity_action(
 
 async def resolve_and_persist_label(
     pool: Any,
-    internal_user_id: int,
+    user: User,
     connected_account_id: str,
     toolkit: str,
 ) -> str | None:
@@ -334,31 +338,31 @@ async def resolve_and_persist_label(
         # No identity action exposed for this toolkit (e.g. Stripe). Still
         # write the row so list_connections sees a "resolved with None
         # label" entry and stops asking.
-        async with user_scoped_tx(pool, internal_user_id) as conn:
-            await ConnectorLabelsRepository(internal_user_id, conn).upsert_resolved(
+        async with user_scoped_tx(pool, user.id) as conn:
+            await ConnectorLabelsRepository(user.id, conn).upsert_resolved(
                 connected_account_id=connected_account_id,
                 toolkit=toolkit, label=None, raw_user_info=None,
             )
         return None
 
-    cx_user = composio_user_id(internal_user_id)
+    cx_user = composio_user_id(user)
     try:
         raw = await _call_identity_action(toolkit, cx_user, connected_account_id)
     except ComposioError as e:
         logger.warning(
             "composio: identity action failed user=%s tk=%s cid=%s: %s",
-            internal_user_id, toolkit, connected_account_id, e,
+            user.id, toolkit, connected_account_id, e,
         )
-        async with user_scoped_tx(pool, internal_user_id) as conn:
-            await ConnectorLabelsRepository(internal_user_id, conn).record_attempt_failure(
+        async with user_scoped_tx(pool, user.id) as conn:
+            await ConnectorLabelsRepository(user.id, conn).record_attempt_failure(
                 connected_account_id=connected_account_id,
                 toolkit=toolkit, error=str(e),
             )
         return None
 
     label = spec.extract(raw) if raw else None
-    async with user_scoped_tx(pool, internal_user_id) as conn:
-        await ConnectorLabelsRepository(internal_user_id, conn).upsert_resolved(
+    async with user_scoped_tx(pool, user.id) as conn:
+        await ConnectorLabelsRepository(user.id, conn).upsert_resolved(
             connected_account_id=connected_account_id,
             toolkit=toolkit, label=label, raw_user_info=raw,
         )
@@ -366,15 +370,15 @@ async def resolve_and_persist_label(
 
 
 async def delete_label(
-    pool: Any, internal_user_id: int, connected_account_id: str,
+    pool: Any, user: User, connected_account_id: str,
 ) -> None:
     from .db.repositories.connector_labels import (  # noqa: PLC0415
         ConnectorLabelsRepository,
     )
     from .db.rls import user_scoped_tx  # noqa: PLC0415
 
-    async with user_scoped_tx(pool, internal_user_id) as conn:
-        await ConnectorLabelsRepository(internal_user_id, conn).delete(
+    async with user_scoped_tx(pool, user.id) as conn:
+        await ConnectorLabelsRepository(user.id, conn).delete(
             connected_account_id,
         )
 
@@ -418,7 +422,7 @@ def _normalize_response_data(resp: Any) -> dict[str, Any] | Any:
 # ── Connection lifecycle ───────────────────────────────────────────────
 
 
-async def list_connections(internal_user_id: int) -> list[Connection]:
+async def list_connections(user: User) -> list[Connection]:
     """List ACTIVE connected accounts for the user. Pure SDK call — does
     NOT enrich with labels; the route joins pai_connector_labels itself
     (see `composio_connections` in routes/ui/composio.py).
@@ -426,7 +430,7 @@ async def list_connections(internal_user_id: int) -> list[Connection]:
     Callers that need labels should go through the route or query the
     repository directly. Tool Router session building only needs cid +
     toolkit, so it's unaffected."""
-    cx_user = composio_user_id(internal_user_id)
+    cx_user = composio_user_id(user)
 
     def _list() -> Any:
         return _composio().connected_accounts.list(
@@ -454,14 +458,14 @@ async def list_connections(internal_user_id: int) -> list[Connection]:
     return out
 
 
-async def connect(internal_user_id: int, toolkit: str) -> ConnectInit:
+async def connect(user: User, toolkit: str) -> ConnectInit:
     """Initiate OAuth: ensure auth_config exists for the toolkit, then
     link → returns a redirect URL the user opens to complete OAuth."""
     toolkit = toolkit.strip().lower()
     if not toolkit:
         msg = "toolkit required"
         raise ValueError(msg)
-    cx_user = composio_user_id(internal_user_id)
+    cx_user = composio_user_id(user)
 
     # Step 1: find a Composio-managed auth_config for this toolkit.
     def _list_cfg() -> Any:
@@ -584,7 +588,7 @@ async def disconnect(connected_account_id: str) -> None:
 
 
 async def search_tools(
-    internal_user_id: int,
+    user: User,
     query: str,
     *,
     toolkit: str | None = None,
@@ -594,10 +598,9 @@ async def search_tools(
     description; `toolkit` optionally narrows to one app. Returns up to
     `limit` ranked ToolHit entries.
 
-    `internal_user_id` is accepted for symmetry with `execute` (and
-    future filtering by what's connected) but not currently used by the
-    SDK's search call."""
-    _ = internal_user_id  # currently unused; reserved
+    `user` is accepted for symmetry with `execute` (and future filtering
+    by what's connected) but not currently used by the SDK's search call."""
+    _ = user  # currently unused; reserved
 
     def _search() -> Any:
         return _composio().tools.get_raw_composio_tools(
@@ -652,7 +655,7 @@ async def get_tool_schema(slug: str) -> ToolSchema:
 
 
 async def execute(
-    internal_user_id: int,
+    user: User,
     slug: str,
     args: dict[str, Any],
     *,
@@ -670,7 +673,7 @@ async def execute(
     semantics may shift on Composio's next major bump per toolkit;
     we accept that and rely on recipe drift alerts to catch breakages.
     """
-    cx_user = composio_user_id(internal_user_id)
+    cx_user = composio_user_id(user)
 
     def _exec() -> Any:
         return _composio().tools.execute(
@@ -696,7 +699,7 @@ async def execute(
 
 
 async def multi_execute(
-    internal_user_id: int,
+    user: User,
     calls: list[ExecuteCall],
     *,
     parallelism: int = 8,
@@ -709,7 +712,7 @@ async def multi_execute(
     async def _one(call: ExecuteCall) -> ExecuteResult:
         async with sem:
             return await execute(
-                internal_user_id, call.slug, call.args,
+                user, call.slug, call.args,
                 connected_account_id=call.connected_account_id,
             )
 
@@ -732,12 +735,12 @@ _SESSION_MAX = 256
 _SESSION_IDLE_TTL_SEC = 60 * 60  # 1h idle
 
 
-def _session_cache_key(internal_user_id: int, config_key: str) -> str:
-    return f"{internal_user_id}:{config_key}"
+def _session_cache_key(supabase_user_id: str, config_key: str) -> str:
+    return f"{supabase_user_id}:{config_key}"
 
 
 async def get_or_create_session(
-    internal_user_id: int,
+    user: User,
     *,
     toolkits: list[str] | None = None,
     tools: list[str] | None = None,
@@ -756,18 +759,18 @@ async def get_or_create_session(
     session reports every toolkit as unconnected and the LLM falls into
     a `MANAGE_CONNECTIONS` re-OAuth loop. We resolve this user's ACTIVE
     connections via `list_connections` (server-side filtered to
-    `user_ids=[pai-{X}]`) and pass them in. The connections fingerprint
-    is folded into the cache key so adding/removing a connection
-    invalidates any stale session naturally.
+    `user_ids=[pai-{supabase_uuid}]`) and pass them in. The connections
+    fingerprint is folded into the cache key so adding/removing a
+    connection invalidates any stale session naturally.
 
     Cross-user isolation invariant:
-      * `cid`s only ever come from `list_connections(internal_user_id)`,
-        which Composio filters server-side to this user — cids cannot
-        cross user namespaces.
-      * Cache key is prefixed by `internal_user_id`, so user A can never
+      * `cid`s only ever come from `list_connections(user)`, which
+        Composio filters server-side to this user's supabase UUID
+        namespace — cids cannot cross user namespaces.
+      * Cache key is prefixed by the supabase UUID, so user A can never
         receive a session built for user B.
     """
-    cx_user = composio_user_id(internal_user_id)
+    cx_user = composio_user_id(user)
 
     # Resolve THIS user's ACTIVE connections. Filtered to `toolkits` if
     # the caller narrowed the session surface. First ACTIVE wins per
@@ -775,7 +778,7 @@ async def get_or_create_session(
     # users with two accounts on the same toolkit get whichever the API
     # returns first; agent code can override per-call via the existing
     # `connected_account_id` arg on `execute()` / `multi_execute()`.
-    user_conns = await list_connections(internal_user_id)
+    user_conns = await list_connections(user)
     connected_accounts: dict[str, str] = {}
     for c in user_conns:
         if c.status != "ACTIVE":
@@ -793,7 +796,7 @@ async def get_or_create_session(
         f"|mc={int(manage_connections)}"
         f"|ca={ca_fingerprint}"
     )
-    cache_key = _session_cache_key(internal_user_id, config_key)
+    cache_key = _session_cache_key(user.supabase_user_id, config_key)
     now = time.monotonic()
 
     async with _SESSION_LOCK:
@@ -837,7 +840,7 @@ async def get_or_create_session(
 
 
 async def execute_meta_tool(
-    internal_user_id: int,
+    user: User,
     tool_name: str,
     args: dict[str, Any],
     *,
@@ -849,7 +852,7 @@ async def execute_meta_tool(
     as a dict. Session-level errors raise ComposioError; tool-level
     errors come back inside the result envelope."""
     session = await get_or_create_session(
-        internal_user_id, toolkits=toolkits, tools=tools,
+        user, toolkits=toolkits, tools=tools,
     )
 
     def _exec() -> Any:
@@ -863,10 +866,10 @@ async def execute_meta_tool(
     return {"data": resp}
 
 
-async def evict_session(internal_user_id: int) -> None:
+async def evict_session(user: User) -> None:
     """Drop all cached sessions for a user. Called after disconnect()
     so a new session reflects the new connection state."""
-    prefix = f"{internal_user_id}:"
+    prefix = f"{user.supabase_user_id}:"
     async with _SESSION_LOCK:
         stale = [k for k in _SESSION_REGISTRY if k.startswith(prefix)]
         for k in stale:

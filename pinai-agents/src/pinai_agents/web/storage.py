@@ -1,8 +1,15 @@
 """Supabase Storage helper — replaces openclaw's local-FS media writes.
 
-Bucket layout: pai-media/{user_id}/{device_id}/{YYYY-MM-DD}/{item_id}.{ext}
-The user_id prefix is the per-user partition; signed URLs grant
-per-object read access (TTL controlled by `signed_url_ttl_seconds`).
+Bucket layout:
+    pai-media/{supabase_user_id}/{device_id}/{YYYY-MM-DD}/{item_id}.{ext}
+
+The per-user partition is the **Supabase UUID**, not the internal BIGINT
+— `pai-media` is a Supabase-project-level bucket shared across local
+docker / dev / prod, so a BIGSERIAL prefix would let env A's user_id=153
+read/write env B's user_id=153 directory. See AGENTS.md "用户标识规约".
+
+Signed URLs grant per-object read access (TTL controlled by
+`signed_url_ttl_seconds`).
 
 Storage SDK is sync — every call goes through asyncio.to_thread so the
 FastAPI event loop never stalls.
@@ -67,7 +74,7 @@ def storage_enabled() -> bool:
 
 async def upload_media(
     *,
-    user_id: int,
+    supabase_user_id: str,
     device_id: str,
     item_id: str,
     occurred_at_iso: str,
@@ -90,14 +97,17 @@ async def upload_media(
     try:
         data = base64.b64decode(binary_b64, validate=False)
     except (ValueError, TypeError):
-        logger.warning("device media: bad base64 (user=%s kind=%s)", user_id, kind)
+        logger.warning(
+            "device media: bad base64 (user=%s kind=%s)",
+            supabase_user_id, kind,
+        )
         return None
     if not data:
         return None
 
     bucket = get_web_settings().supabase_media_bucket
     date_dir = (occurred_at_iso or "")[:10]  # YYYY-MM-DD
-    path = f"{user_id}/{device_id}/{date_dir}/{item_id}.{ext}"
+    path = f"{supabase_user_id}/{device_id}/{date_dir}/{item_id}.{ext}"
     content_type = mime or "application/octet-stream"
 
     def _put() -> None:
@@ -110,10 +120,10 @@ async def upload_media(
     return UploadedMedia(storage_path=path, byte_len=len(data), mime=content_type)
 
 
-async def delete_all_user_media(user_id: int) -> int:
-    """Recursively delete every file under pai-media/{user_id}/. Returns
-    the number of files removed (0 when storage is disabled or the user
-    has no media).
+async def delete_all_user_media(supabase_user_id: str) -> int:
+    """Recursively delete every file under pai-media/{supabase_user_id}/.
+    Returns the number of files removed (0 when storage is disabled or
+    the user has no media).
 
     Supabase's list endpoint isn't recursive — folders surface as bare
     entries without `metadata.size`. DFS through them, then batch-remove.
@@ -125,7 +135,7 @@ async def delete_all_user_media(user_id: int) -> int:
     if cli is None:
         return 0
     bucket = get_web_settings().supabase_media_bucket
-    user_prefix = str(user_id)
+    user_prefix = supabase_user_id
 
     files: list[str] = []
     stack = [user_prefix]
