@@ -73,6 +73,12 @@ export function sourceLabel(sourceType: AmbientSourceType): string {
       return "Microphone";
     case "calendar":
       return "Calendar";
+    case "focus":
+      return "Focus";
+    case "audio_route":
+      return "Audio Route";
+    case "device_state":
+      return "Device State";
   }
 }
 

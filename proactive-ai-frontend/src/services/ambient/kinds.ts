@@ -13,6 +13,11 @@ export const SIGNAL_KINDS = {
   motionSegment: "device.motion_segment",
   location: "device.location",
   timelineEvent: "ambient.timeline_event",
+  candidateWindow: "ambient.candidate_window",
+  calendarEvent: "device.calendar_event",
+  focusState: "device.focus_state",
+  audioRoute: "device.audio_route",
+  deviceState: "device.device_state",
 } as const;
 
 export type SignalKind = (typeof SIGNAL_KINDS)[keyof typeof SIGNAL_KINDS];

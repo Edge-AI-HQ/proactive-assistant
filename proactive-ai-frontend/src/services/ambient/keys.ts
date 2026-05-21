@@ -13,7 +13,11 @@ export type SourceKey =
   | "visit"
   | "activity"
   | "location"
-  | "health";
+  | "health"
+  | "calendar"
+  | "focus"
+  | "audio_route"
+  | "device_state";
 
 export const DEFAULT_AUTO_START_SOURCES: SourceKey[] = [
   "sound_classifier",
@@ -25,4 +29,8 @@ export const DEFAULT_AUTO_START_SOURCES: SourceKey[] = [
 export const ALL_SOURCE_KEYS: SourceKey[] = [
   ...DEFAULT_AUTO_START_SOURCES,
   "health",
+  "calendar",
+  "focus",
+  "audio_route",
+  "device_state",
 ];

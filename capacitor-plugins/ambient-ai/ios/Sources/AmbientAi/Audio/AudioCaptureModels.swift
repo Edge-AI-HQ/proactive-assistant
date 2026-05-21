@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 
 enum AudioSuppressedReason: String, Hashable {
@@ -42,6 +43,9 @@ struct AudioCaptureSnapshot {
     let currentCaptureTriggerSource: String?
 
     var payload: [String: Any] {
+        let route = AVAudioSession.sharedInstance().currentRoute
+        let inputs = route.inputs.map { portPayload($0) }
+        let outputs = route.outputs.map { portPayload($0) }
         var data: [String: Any] = [
             "running": running,
             "paused": paused,
@@ -53,6 +57,11 @@ struct AudioCaptureSnapshot {
             "engineState": engineState.rawValue,
             "classifierRestartCount": classifierRestartCount,
             "backgroundCaptureLoopRunning": backgroundCaptureLoopRunning,
+            "routeInputs": inputs,
+            "routeOutputs": outputs,
+            "hasCarAudio": route.outputs.contains { $0.portType == .carAudio },
+            "hasBluetoothA2DP": route.outputs.contains { $0.portType == .bluetoothA2DP },
+            "hasBluetoothHFP": route.inputs.contains { $0.portType == .bluetoothHFP } || route.outputs.contains { $0.portType == .bluetoothHFP },
         ]
         if let lastClassificationAt {
             data["lastClassificationAt"] = Int(lastClassificationAt.timeIntervalSince1970 * 1_000)
@@ -164,4 +173,13 @@ enum AudioCaptureFailure: LocalizedError {
             return "Missing wavId"
         }
     }
+}
+
+
+private func portPayload(_ port: AVAudioSessionPortDescription) -> [String: Any] {
+    [
+        "portType": port.portType.rawValue,
+        "portName": port.portName,
+        "uid": port.uid,
+    ]
 }

@@ -335,3 +335,114 @@ GROUP BY kind;
 - Always 和 When In Use 在 UI/debug/status 里可区分，When In Use 不再显示为 Place Visits 已可用。
 - server settings 全 false 时，UI 和 runtime 不再被 stale `pin.ambient.enabled=1` 误判为开启；App hydrate 后 native visit monitoring 也会被 stop。
 - 真机 SQLite 可以看到至少一条 `source_type='visit'` 的 raw event，且后续有包含 `visit` 的 candidate/timeline 派生记录。
+
+
+## Ambient P0 Source Expansion 补充计划
+
+本计划的 durable capture 模式要扩展为所有 P0 Ambient Source 的统一原则。新增 Calendar、Focus、AudioRoute/CarPlay、DeviceState 和 `context_snapshot` 时,不能再依赖“JS listener 在线才收到事件”;native 能收到的变化必须先落到本地 pending queue 或 latest-state store,JS 在 start/resume/watchdog 时 drain,成功写入 Ambient local raw 后再 ack。
+
+### 背景故事
+
+`capacitor-plugins/ambient-ai` 已经有比 App 控制面板更多的 iOS ambient 能力,但 App 侧 Ambient Source 仍主要是 sound/visit/activity/location/health 五类。另一方面,现有端侧上报模型已经确定为:
+
+```mermaid
+flowchart TD
+  Src[Native Source] --> NativeQ[Native Queue or State]
+  NativeQ --> Drain[JS Drain]
+  Drain --> Raw[Local Raw]
+  Raw --> Win[Candidate Window]
+  Win --> Outbox[Outbox]
+  Outbox --> API[/api/devices/ingest]
+```
+
+移动端只负责采集事实、去噪、按时间组织 Window,不负责最终场景/意图判断。分析端消费 `ambient.candidate_window`、`ambient.timeline_event`、`health.observation`;新增 source raw 不直接上传。
+
+### P0 需求
+
+P0 集成范围:
+
+- `calendar`:上传完整日历事件数据,不做隐私脱敏。
+- `focus`:集成 Focus 插件,上传可用的 focused/status 信息。
+- `audio_route`:采集 CarPlay、Bluetooth、speaker/headphones 等 route state,作为驾驶/通话/车内上下文证据。
+- `device_state`:采集 battery/thermal/low power,但只有影响采集质量时才上传 evidence。
+- `context_snapshot`:每 15 分钟 best-effort 生成全组状态快照,覆盖用户没说话或麦克风权限 denied 的场景。
+
+P0 不做 Wi-Fi、BLE、Media、Contacts、Barometer/Altimeter、端上 scene classification。Health 已集成,本计划只保持兼容。
+
+### 后台常驻约束
+
+“后台正常获取并保持常驻”在 iOS 上不能理解成 JS 永久在线或任意插件 15 分钟准点后台轮询。可实现边界是:
+
+1. 系统能后台唤醒的 source,例如 CLVisit / 部分系统 notification,必须 native auto-resume + durable queue。
+2. 系统不能保证后台唤醒的 source,例如 Calendar 快照类数据,必须保存 latest known state,App foreground/resume 时立即 refresh/drain。
+3. `context_snapshot` 在前台和 resume 后稳定执行;后台只做 BackgroundTasks best-effort,不能作为唯一采集保证。
+4. 所有 source 都要有 monitoring state/debug state,至少能看 authorization、nativeMonitoring、pendingCount/lastStateAt、lastDrainAt、lastError。
+
+### 统一 Durable Source Contract
+
+新增或改造 native source 时优先实现以下契约:
+
+```ts
+startMonitoring(): Promise<void>
+stopMonitoring(): Promise<void>
+drainPendingEvents({ limit }): Promise<{ events: PendingEvent[] }>
+ackPendingEvents({ ids }): Promise<void>
+getMonitoringState(): Promise<MonitoringState>
+```
+
+前端 source 使用 `SourceContext.pushDurable(item)` 写入 local raw/timeline,只有 promise resolve 后才 ack native pending event。listener 只是实时优化,不是可靠数据入口。
+
+### Raw / Window / Upload 设计
+
+新增 raw source type:
+
+- `calendar`
+- `focus`
+- `audio_route`
+- `device_state`
+
+新增 candidate window type:
+
+- `calendar_context`
+- `focus_context`
+- `audio_route_context`
+- `device_state_context`
+- `context_snapshot`
+
+上传策略:
+
+| Window | 策略 |
+|---|---|
+| `calendar_context` | 可上传完整 payload |
+| `focus_context` | 可上传 |
+| `audio_route_context` | 可上传 |
+| `device_state_context` | 仅 low power / thermal serious critical / battery < 15% 时上传 |
+| `context_snapshot` | 15 分钟尝试,状态变化上传;无变化最多 30 分钟强制上传 |
+
+`context_snapshot` 必须携带 source presence / permission 信息,尤其:
+
+- `microphone: granted | denied | prompt | unknown`
+- `transcript: present | missing | permission_denied | not_observed`
+- `sound/calendar/focus/audio_route/motion/location/device_state` 的 present/missing/permission 状态
+
+### 分阶段实现
+
+1. **Visit durable capture 作为模板**:优先完成 native queue、drain、ack、Always 权限诊断和 settings reconcile。
+2. **前端 durable ingest 基础**:保持 `push` 现有 fire-and-forget 行为,新增/使用 `pushDurable` 给 durable source ack。
+3. **P0 source wrappers**:接入 Calendar、Focus、AudioRoute、DeviceState 到 Control → Ambient 和 runtime。
+4. **Raw → Window**:扩展 normalize 和 pipeline,生成 P0 evidence windows。
+5. **Evidence merge**:让 transcript/transition/motion/location 等上传窗口附带 nearby calendar/focus/audio_route/device constrained evidence。
+6. **Context snapshot scheduler**:runtime 每 15 分钟 best-effort 生成 `context_snapshot`,无语音/无麦克风权限也上传。
+7. **真机验证**:验证冷启动/resume drain、锁屏后 visit、Focus 切换、CarPlay/BT route、Low Power Mode、无语音、麦克风 denied。
+
+### 成功标准
+
+- JS listener 不在线时,native 可采集事件不丢。
+- start/resume/watchdog 能 drain pending native events。
+- 只有 `pushDurable` 写 local raw 成功后才 ack。
+- App Control 面板新增 Calendar、Focus、AudioRoute、DeviceState。
+- 新 source raw 进入 local raw 表,不直接作为 raw kind 上传。
+- 新 evidence windows 通过 `ambient.candidate_window` 上传。
+- `transcript_session` 上传上下文包含新增 source evidence。
+- 没有 speech/transcript 或 microphone denied 时,仍会生成并上传 `context_snapshot`。
+- DeviceState 只有采集受限时形成上传 evidence。

@@ -150,6 +150,7 @@ describe("AmbientRuntime source reconciliation", () => {
         payload: { local_event_id: "evt_1" },
       }]),
       processPendingWindows: vi.fn(),
+      generateContextSnapshot: vi.fn(async () => null),
     };
     const runtime = new AmbientRuntime({
       sources: [source],

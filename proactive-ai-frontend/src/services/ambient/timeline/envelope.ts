@@ -63,6 +63,9 @@ export function candidateWindowToSignal(
       window_status: window.status,
       raw_ref_count: window.rawRefs.length,
       source_payloads: context.sourcePayloads,
+      ...(window.windowType === "context_snapshot"
+        ? { source_presence: contextSnapshotPresence(context.sourcePayloads) }
+        : {}),
     },
   };
 }
@@ -111,4 +114,20 @@ export function localEventIdsFromSignals(
 
 function safeIdPart(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+
+function contextSnapshotPresence(sourcePayloads: AmbientWindowSourcePayload[]): Record<string, string> {
+  const sources = new Set(sourcePayloads.map((payload) => payload.source_type));
+  return {
+    microphone: sources.has("transcript") || sources.has("sound") ? "granted" : "unknown",
+    transcript: sources.has("transcript") ? "present" : "not_observed",
+    sound: sources.has("sound") ? "present" : "missing",
+    calendar: sources.has("calendar") ? "present" : "missing",
+    focus: sources.has("focus") ? "present" : "missing",
+    audio_route: sources.has("audio_route") ? "present" : "missing",
+    motion: sources.has("motion") ? "present" : "missing",
+    location: sources.has("location") || sources.has("visit") ? "present" : "missing",
+    device_state: sources.has("device_state") ? "present" : "missing",
+  };
 }
