@@ -326,3 +326,7 @@ SELECT status, count(*) FROM pai_embedding_queue GROUP BY status;
 - [Background Tasks](./background-tasks):`auto.dreaming` / `connector.evolve` 的派发框架(`crystallize` kind 已预留但当前未接 producer)。
 - [Execution](./execution):chat-stream 沉淀触发 crystallize 的入口。
 - [Runtime & Deployment](./runtime-deployment):RLS / Postgres pool / yoyo migration 通用基建。
+
+## 相关 AI Plans
+
+- [Feedback Agent + Evolution Loop](../plans/2026-05-21-feedback-agent-evolution-loop):定义 Personal Evolution Agent 如何把用户主动反馈沉淀为高权重 preference,再同步影响 profile / memory / skill。
