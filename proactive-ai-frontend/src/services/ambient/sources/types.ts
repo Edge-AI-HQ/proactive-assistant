@@ -7,6 +7,7 @@ import type { PersonalSignalInput } from "@/lib/devices";
  */
 export interface SourceContext {
   push: (item: PersonalSignalInput) => void;
+  pushDurable?: (item: PersonalSignalInput) => Promise<void>;
   onEvent: (sourceKey: string, summary: string) => void;
   getTranscriptionLanguage?: () => string | null | undefined;
 }

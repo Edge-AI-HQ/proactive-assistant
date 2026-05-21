@@ -117,8 +117,11 @@ export class AmbientRuntime {
 
     const ctx: SourceContext = {
       push: (item: PersonalSignalInput) => {
-        void this.ingestLocalSignal(item);
+        void this.ingestLocalSignal(item).catch(() => {
+          /* ingestLocalSignal records lastIngestError */
+        });
       },
+      pushDurable: (item: PersonalSignalInput) => this.ingestLocalSignal(item),
       onEvent: (key, summary) =>
         this.recordEvent(key as SourceKey, summary),
       getTranscriptionLanguage: () => this.transcriptionLanguage,
@@ -348,6 +351,7 @@ export class AmbientRuntime {
       await this.refreshOutboxCount();
     } catch (err) {
       this.lastIngestError = describeError(err);
+      throw err;
     } finally {
       this.notify();
     }

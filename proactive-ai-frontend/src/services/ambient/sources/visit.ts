@@ -1,5 +1,6 @@
 import {
   AmbientAi,
+  type PendingVisit,
   type VisitEvent,
 } from "@pin/capacitor-ambient-ai";
 import type { PluginListenerHandle } from "@capacitor/core";
@@ -31,14 +32,17 @@ export class VisitSource implements AmbientSource {
   async start(): Promise<void> {
     if (this.started) return;
     const perm = await AmbientAi.visit.requestPermissions();
-    if (perm.location !== "granted") {
-      throw new Error(`location permission ${perm.location}`);
+    if (perm.location !== "always") {
+      throw new Error(`location permission ${perm.location}; always required for visit`);
     }
     this.listenerHandle = await AmbientAi.addListener("visit", (event) =>
-      this.handle(event),
+      void this.handleRealtime(event).catch((err) => {
+        console.warn("[VisitSource] realtime visit ingest failed", err);
+      }),
     );
     await AmbientAi.visit.startMonitoring();
     this.started = true;
+    await this.drainPendingVisits();
   }
 
   async stop(): Promise<void> {
@@ -54,7 +58,38 @@ export class VisitSource implements AmbientSource {
     }
   }
 
-  private handle(event: VisitEvent): void {
+  async refresh(): Promise<void> {
+    if (!this.started) return;
+    await this.drainPendingVisits();
+  }
+
+  private async drainPendingVisits(): Promise<void> {
+    const result = await AmbientAi.visit.drainPendingVisits({ limit: 50 });
+    for (const visit of result.visits) {
+      try {
+        await this.handlePendingVisit(visit);
+      } catch (err) {
+        console.warn("[VisitSource] pending visit ingest failed", err);
+      }
+    }
+  }
+
+  private async handleRealtime(event: VisitEvent): Promise<void> {
+    if (event.placeStatus === "pending") {
+      return;
+    }
+    await this.handle(event);
+    if (event.id) {
+      await AmbientAi.visit.ackPendingVisits({ ids: [event.id] });
+    }
+  }
+
+  private async handlePendingVisit(visit: PendingVisit): Promise<void> {
+    await this.handle({ ...visit.payload, id: visit.payload.id ?? visit.id });
+    await AmbientAi.visit.ackPendingVisits({ ids: [visit.id] });
+  }
+
+  private async handle(event: VisitEvent): Promise<void> {
     const isArrival = event.departureAt === null;
     const ts = isArrival ? event.arrivalAt : (event.departureAt ?? event.arrivalAt);
     const lat = event.latitude.toFixed(4);
@@ -66,7 +101,12 @@ export class VisitSource implements AmbientSource {
       ? `Arrived @ ${where} (±${Math.round(event.accuracy)}m)`
       : `Departed @ ${where}`;
 
-    this.ctx.push({
+    const pushDurable = this.ctx.pushDurable;
+    if (!pushDurable) {
+      throw new Error("durable visit ingest unavailable");
+    }
+
+    await pushDurable({
       kind: SIGNAL_KINDS.visit,
       title: isArrival ? "Place arrival" : "Place departure",
       summary,
@@ -79,11 +119,13 @@ export class VisitSource implements AmbientSource {
         accuracy: event.accuracy,
         kind: isArrival ? "arrival" : "departure",
         place: event.place,
+        native_id: event.id,
+        place_status: event.placeStatus,
       },
       // CLVisit objects emit twice per place (arrival + departure). Keying
       // by (lat,lng,timestamp) keeps both unique while letting retries
       // dedupe.
-      dedupe_key: `visit:${lat}:${lng}:${ts}`,
+      dedupe_key: event.id ? `visit:${event.id}` : `visit:${lat}:${lng}:${ts}`,
     });
     this.ctx.onEvent(this.key, summary);
   }

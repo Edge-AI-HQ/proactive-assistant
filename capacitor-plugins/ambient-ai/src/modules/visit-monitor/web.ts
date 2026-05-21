@@ -6,11 +6,11 @@ import type {
 
 export class VisitMonitorWeb implements VisitMonitorPlugin {
   async requestPermissions(): Promise<VisitMonitorPermissions> {
-    return { location: 'prompt' as PermissionState };
+    return { location: 'prompt' };
   }
 
   async checkPermissions(): Promise<VisitMonitorPermissions> {
-    return { location: 'prompt' as PermissionState };
+    return { location: 'prompt' };
   }
 
   async startMonitoring(): Promise<void> {
@@ -18,6 +18,25 @@ export class VisitMonitorWeb implements VisitMonitorPlugin {
   }
 
   async stopMonitoring(): Promise<void> {}
+
+  async drainPendingVisits(): Promise<{ visits: [] }> {
+    return { visits: [] };
+  }
+
+  async ackPendingVisits(): Promise<void> {}
+
+  async getMonitoringState() {
+    return {
+      authorization: 'prompt' as const,
+      nativeMonitoring: false,
+      enabled: false,
+      pendingVisitCount: 0,
+      storedVisitCount: 0,
+      lastNativeVisitAt: null,
+      lastDrainAt: null,
+      lastError: null,
+    };
+  }
 
   async getCurrentPosition(): Promise<PositionResult> {
     throw new Error(

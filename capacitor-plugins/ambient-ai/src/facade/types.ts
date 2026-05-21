@@ -54,8 +54,12 @@ import type {
 } from '../modules/sound-classifier/definitions';
 import type {
   ActivityEvent,
+  AckPendingVisitsOptions,
+  PendingVisit,
+  PendingVisitsResult,
   PositionResult,
   VisitEvent,
+  VisitMonitoringState,
   VisitMonitorPermissions,
 } from '../modules/visit-monitor/definitions';
 
@@ -79,7 +83,7 @@ export type { BatteryStartOptions, CalendarEventEvent, CalendarSummaryEvent };
 export type { ContactsSnapshot, DeviceStateSnapshot, FocusEvent, HeartRateEvent };
 export type { NearbyBTEvent, NotificationCountEvent, PhotosEvent, PositionResult };
 export type { PlaceInfo, ReverseGeocodeOptions };
-export type { SleepEvent, SoundClassification, StepsEvent, VisitEvent };
+export type { PendingVisit, SleepEvent, SoundClassification, StepsEvent, VisitEvent };
 
 export type SoundClassificationEvent = SoundClassifierEvent;
 
@@ -395,6 +399,9 @@ export interface VisitNamespace {
   checkPermissions(): Promise<VisitPermissions>;
   startMonitoring(): Promise<void>;
   stopMonitoring(): Promise<void>;
+  drainPendingVisits(options?: { limit?: number }): Promise<PendingVisitsResult>;
+  ackPendingVisits(options: AckPendingVisitsOptions): Promise<void>;
+  getMonitoringState(): Promise<VisitMonitoringState>;
   getCurrentPosition(): Promise<PositionResult>;
   startActivityRecognition(): Promise<void>;
   stopActivityRecognition(): Promise<void>;
