@@ -41,7 +41,6 @@ from .routes.agent.raw import router as agent_raw_router
 from .routes.agent.sandbox_phantom import router as agent_sandbox_phantom_router
 from .routes.agent.signals import router as agent_signals_router
 from .routes.agent.skills import router as agent_skills_router
-from .routes.agent.state import router as agent_state_router
 from .routes.agent.world import router as agent_world_router
 from .routes.ui.account import router as ui_account_router
 from .routes.ui.agent_runs import router as ui_agent_runs_router
@@ -188,7 +187,6 @@ def create_app() -> FastAPI:
     app.include_router(agent_memory_router)
     app.include_router(agent_signals_router)
     app.include_router(agent_world_router)
-    app.include_router(agent_state_router)
     app.include_router(agent_profile_router)
     app.include_router(agent_skills_router)
     app.include_router(agent_composio_router)

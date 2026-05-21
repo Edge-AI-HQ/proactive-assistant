@@ -267,47 +267,6 @@ describe("personalDataMarkdown", () => {
     expect(markdown).not.toContain("secret-refresh-token");
   });
 
-  it("redacts app state values when the key carries the sensitive meaning", () => {
-    const data = personalData();
-    data.sections[0] = {
-      key: "app_state",
-      label: "应用状态",
-      description: "KV 状态",
-      total: 1,
-      items: [{
-        id: "auth:accessToken",
-        category: "app_state",
-        sourceKey: "auth",
-        sourceLabel: "应用状态",
-        kind: "auth",
-        title: "accessToken",
-        subtitle: "auth",
-        summary: "raw secret-access-token",
-        status: null,
-        score: null,
-        occurredAt: null,
-        updatedAt: null,
-        chips: ["auth"],
-        payload: {
-          namespace: "auth",
-          key: "accessToken",
-          value: "secret-access-token",
-        },
-      }],
-    };
-
-    const markdown = personalDataMarkdown(data, {
-      categoryLabel: "应用状态",
-      query: "",
-      selectedTotal: 1,
-      timeRangeLabel: "全部时间",
-    });
-
-    expect(markdown).toContain("应用状态值见字段明细，敏感字段已脱敏。");
-    expect(markdown).toContain("已隐藏敏感值");
-    expect(markdown).not.toContain("secret-access-token");
-  });
-
   it("redacts profile spotlight payload before display helpers can read it", () => {
     const item = personalData().sections[0].items[0];
     item.payload = {

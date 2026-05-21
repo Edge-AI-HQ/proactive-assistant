@@ -223,8 +223,7 @@ export type PersonalDataCategory =
   | "world"
   | "raw"
   | "devices"
-  | "connectors"
-  | "app_state";
+  | "connectors";
 
 const personalDataCategoryValues = new Set<string>([
   "all",
@@ -238,7 +237,6 @@ const personalDataCategoryValues = new Set<string>([
   "raw",
   "devices",
   "connectors",
-  "app_state",
 ]);
 
 export interface PersonalDataItem {

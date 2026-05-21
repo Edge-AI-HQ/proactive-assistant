@@ -39,7 +39,6 @@ const categories: Array<{ key: PersonalDataCategory; label: string; description:
   { key: "world", label: "世界信号", description: "外部信息" },
   { key: "devices", label: "设备", description: "设备状态" },
   { key: "connectors", label: "连接器", description: "账号和同步游标" },
-  { key: "app_state", label: "应用状态", description: "本地迁移状态" },
   { key: "all", label: "全部概况", description: "每类最新样本" },
 ];
 const categoryKeys = new Set<string>(categories.map((item) => item.key));
@@ -71,7 +70,6 @@ const hiddenPayloadKeys = new Set([
   "source_raw_ids",
   "metadata",
 ]);
-const appStateValueSummary = "应用状态值见字段明细，敏感字段已脱敏。";
 
 const labelMap: Record<string, string> = {
   facts: "事实",
@@ -244,13 +242,6 @@ function payloadRecord(item: PersonalDataItem | null | undefined): Record<string
   return isRecord(item?.payload) ? item.payload : {};
 }
 
-function itemSensitiveAppStateKey(item: PersonalDataItem): boolean {
-  if (item.category !== "app_state") return false;
-  const payload = payloadRecord(item);
-  return [item.title, item.kind, item.sourceKey, payload.key, payload.namespace]
-    .some((value) => typeof value === "string" && isSensitiveKey(value));
-}
-
 function hasValue(value: unknown): boolean {
   if (value === null || value === undefined) return false;
   if (typeof value === "string") return value.trim().length > 0;
@@ -312,21 +303,13 @@ function flattenProfileEntries(
 }
 
 function payloadEntries(item: PersonalDataItem): Array<[string, unknown]> {
-  const appStateKeyIsSensitive = itemSensitiveAppStateKey(item);
   return Object.entries(payloadRecord(item))
     .filter(([key, value]) => !hiddenPayloadKeys.has(key) && hasValue(value))
     .map(([key, value]) => [
       key,
-      isSensitiveKey(key) || (item.category === "app_state" && key === "value" && appStateKeyIsSensitive)
-        ? redactedSecretText
-        : redactSensitivePayload(value),
+      isSensitiveKey(key) ? redactedSecretText : redactSensitivePayload(value),
     ] as [string, unknown])
     .slice(0, 28);
-}
-
-function safeItemSummary(item: PersonalDataItem): string | null {
-  if (itemSensitiveAppStateKey(item)) return appStateValueSummary;
-  return item.summary;
 }
 
 export function personalDataDisplayPayload(item: PersonalDataItem | null | undefined): Record<string, unknown> {
@@ -525,7 +508,7 @@ export function personalDataMarkdown(
         `  - 来源: ${valueText(item.sourceLabel, 120)}${item.kind ? ` / ${valueText(item.kind, 80)}` : ""}`,
         `  - 时间: ${time}`,
         `  - 状态/分数: ${[item.status, score].filter(Boolean).join(" / ") || "-"}`,
-        `  - 摘要: ${valueText(safeItemSummary(item) ?? item.subtitle, 360)}`,
+        `  - 摘要: ${valueText(item.summary ?? item.subtitle, 360)}`,
       );
       if (item.chips.length > 0) {
         lines.push(`  - 标签: ${item.chips.slice(0, 6).map((chip) => valueText(chip, 80)).join(", ")}`);
@@ -686,8 +669,8 @@ function DataTable({
                   <td>
                     <div className="content-cell">
                       <strong>{valueText(item.title, 180)}</strong>
-                      {(item.subtitle || safeItemSummary(item)) && (
-                        <span>{[item.subtitle, safeItemSummary(item)].filter(Boolean).map((value) => valueText(value, 220)).join(" · ")}</span>
+                      {(item.subtitle || item.summary) && (
+                        <span>{[item.subtitle, item.summary].filter(Boolean).map((value) => valueText(value, 220)).join(" · ")}</span>
                       )}
                       {item.chips.length > 0 && (
                         <div className="data-chip-row compact">

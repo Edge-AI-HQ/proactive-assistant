@@ -7,7 +7,6 @@ for humans. It is not used by agents.
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Sequence
 from datetime import date, datetime
@@ -27,7 +26,6 @@ PersonalDataCategory = Literal[
     "raw",
     "devices",
     "connectors",
-    "app_state",
 ]
 
 CATEGORY_LABELS: dict[str, tuple[str, str]] = {
@@ -41,10 +39,8 @@ CATEGORY_LABELS: dict[str, tuple[str, str]] = {
     "raw": ("原始数据", "Gmail、日历、文件、设备、Slack、GitHub 等 typed raw 行。"),
     "devices": ("设备", "已注册设备、最近在线状态和端侧 metadata。"),
     "connectors": ("连接器", "Composio 连接标签和同步游标。"),
-    "app_state": ("应用状态", "迁移或本地应用保留的状态快照。"),
 }
 REDACTED_SECRET = "已隐藏敏感值"
-APP_STATE_VALUE_SUMMARY = "应用状态值见字段明细，敏感字段已脱敏。"
 SENSITIVE_KEY_RE = re.compile(
     r"(^|[_-])(api[_-]?key|authorization|cookie|credential|password|private[_-]?key|refresh[_-]?token|secret|session|token)([_-]|$)",
     re.IGNORECASE,
@@ -226,34 +222,6 @@ def _redact_sensitive_payload(value: Any) -> Any:
     return value
 
 
-def _redact_app_state_payload(row: dict[str, Any], safe_payload: Any) -> Any:
-    if row.get("category") != "app_state" or not isinstance(safe_payload, dict):
-        return safe_payload
-
-    key_candidates = (
-        row.get("title"),
-        row.get("kind"),
-        safe_payload.get("key"),
-        safe_payload.get("namespace"),
-    )
-    if any(_is_sensitive_key(candidate) for candidate in key_candidates):
-        return {**safe_payload, "value": REDACTED_SECRET}
-    return safe_payload
-
-
-def _safe_summary(row: dict[str, Any], safe_payload: Any) -> Any:
-    if row.get("category") != "app_state":
-        return row.get("summary")
-    if not isinstance(safe_payload, dict):
-        return APP_STATE_VALUE_SUMMARY
-
-    value = safe_payload.get("value")
-    if isinstance(value, dict | list):
-        summary = json.dumps(value, ensure_ascii=False)[:320]
-        return summary or APP_STATE_VALUE_SUMMARY
-    return APP_STATE_VALUE_SUMMARY
-
-
 def _clean_chip(value: Any) -> str | None:
     if value is None:
         return None
@@ -278,7 +246,6 @@ def _item(row: dict[str, Any]) -> dict[str, Any]:
     payload = row.get("payload")
     safe_payload = _redact_sensitive_payload(payload)
     safe_payload = _iso(safe_payload)
-    safe_payload = _redact_app_state_payload(row, safe_payload)
     return {
         "id": str(row.get("item_id") or ""),
         "category": str(row.get("category") or ""),
@@ -287,7 +254,7 @@ def _item(row: dict[str, Any]) -> dict[str, Any]:
         "kind": row.get("kind"),
         "title": str(row.get("title") or "未命名数据"),
         "subtitle": row.get("subtitle"),
-        "summary": _safe_summary(row, safe_payload),
+        "summary": row.get("summary"),
         "status": row.get("status"),
         "score": row.get("score"),
         "occurredAt": _iso(row.get("occurred_at")),
@@ -795,43 +762,6 @@ class PersonalDataSnapshotService:
                 self._user_id, since, since, until, until,
                 query, like, like, like, limit, offset,
             ),
-        )
-
-    async def _fetch_app_state(self, **kwargs: Any) -> dict[str, Any]:
-        return await self._fetch_rows(
-            "app_state",
-            """
-            SELECT
-              'app_state' AS category,
-              CONCAT(a.namespace, ':', a.key) AS item_id,
-              a.namespace AS source_key,
-              '应用状态' AS source_label,
-              a.namespace AS kind,
-              a.key AS title,
-              a.namespace AS subtitle,
-              LEFT(a.value::text, 320) AS summary,
-              NULL::text AS status,
-              NULL::float AS score,
-              a.updated_at AS occurred_at,
-              a.updated_at,
-              jsonb_build_array(a.namespace) AS chips,
-              to_jsonb(a) - 'user_id' AS payload,
-              COUNT(*) OVER() AS total
-            FROM pai_app_state a
-            WHERE a.user_id = %s
-              AND (%s::timestamptz IS NULL OR a.updated_at >= %s)
-              AND (%s::timestamptz IS NULL OR a.updated_at <= %s)
-              AND (
-                %s::text IS NULL
-                OR a.namespace ILIKE %s
-                OR a.key ILIKE %s
-                OR a.value::text ILIKE %s
-              )
-            ORDER BY a.updated_at DESC
-            LIMIT %s
-            OFFSET %s
-            """,
-            self._params(kwargs),
         )
 
     async def _fetch_raw(self, **kwargs: Any) -> dict[str, Any]:
