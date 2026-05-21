@@ -358,9 +358,8 @@ function ModelSection({
               </div>
               {(verifyOk || verifyFail) && selectedStatus ? (
                 <div
-                  className={`flex items-start gap-1.5 text-[10px] leading-snug ${
-                    verifyOk ? "text-emerald-700" : "text-red-500"
-                  }`}
+                  className={`flex items-start gap-1.5 text-[10px] leading-snug ${verifyOk ? "text-emerald-700" : "text-red-500"
+                    }`}
                 >
                   {verifyOk ? (
                     <CheckCircle2 size={11} strokeWidth={1.75} className="mt-0.5 shrink-0" />
@@ -500,10 +499,6 @@ export default function AmbientModelsPanel() {
         />
         Advanced
       </button>
-
-      <p className="text-[10px] text-foreground/40 leading-snug">
-        Auto fallback: {mirror === "hf-mirror" ? "hf-mirror → huggingface" : "huggingface → hf-mirror"} on first HTTP / network error. The active selection in each dropdown is what ambient uses; runtime auto-verifies on first use.
-      </p>
 
       {error && profiles.length > 0 && (
         <p className="text-[10px] text-red-500 leading-snug">{error}</p>

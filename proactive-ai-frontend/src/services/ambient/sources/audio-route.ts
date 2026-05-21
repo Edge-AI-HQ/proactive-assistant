@@ -10,6 +10,7 @@ export class AudioRouteSource implements AmbientSource {
   private listenerHandle: PluginListenerHandle | null = null;
   private started = false;
   private lastRouteKey: string | null = null;
+  private lastValuableRouteKey: string | null = null;
 
   constructor(private ctx: SourceContext) {}
 
@@ -36,6 +37,7 @@ export class AudioRouteSource implements AmbientSource {
     }
     this.started = false;
     this.lastRouteKey = null;
+    this.lastValuableRouteKey = null;
   }
 
   private handle(event: AudioState): void {
@@ -50,7 +52,15 @@ export class AudioRouteSource implements AmbientSource {
     });
     if (this.lastRouteKey === routeKey) return;
     this.lastRouteKey = routeKey;
-    const summary = audioRouteSummary(event);
+
+    const valuable = isValuableRoute(event);
+    const wasValuable = this.lastValuableRouteKey !== null;
+    if (!valuable && !wasValuable) return;
+
+    const summary = valuable
+      ? audioRouteSummary(event)
+      : "Audio route returned to default output.";
+    this.lastValuableRouteKey = valuable ? routeKey : null;
     const observedAt = new Date().toISOString();
     this.ctx.push({
       kind: SIGNAL_KINDS.audioRoute,
@@ -64,6 +74,8 @@ export class AudioRouteSource implements AmbientSource {
         has_car_audio: event.hasCarAudio === true,
         has_bluetooth_a2dp: event.hasBluetoothA2DP === true,
         has_bluetooth_hfp: event.hasBluetoothHFP === true,
+        valuable_route: valuable,
+        route_transition: valuable ? "active" : "ended",
         engine_state: event.engineState,
         suppressed: event.suppressed,
         suppressed_reason: event.suppressedReason,
@@ -76,6 +88,21 @@ export class AudioRouteSource implements AmbientSource {
     });
     this.ctx.onEvent(this.key, summary);
   }
+}
+
+function isValuableRoute(event: AudioState): boolean {
+  if (event.hasCarAudio || event.hasBluetoothA2DP || event.hasBluetoothHFP) return true;
+  const ports = [...(event.routeInputs ?? []), ...(event.routeOutputs ?? [])];
+  return ports.some((port) => isValuablePort(port.portType));
+}
+
+function isValuablePort(portType: string): boolean {
+  const normalized = portType.toLowerCase();
+  return normalized.includes("headphone")
+    || normalized.includes("headset")
+    || normalized.includes("bluetooth")
+    || normalized.includes("caraudio")
+    || normalized.includes("airplay");
 }
 
 function audioRouteSummary(event: AudioState): string {
