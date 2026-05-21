@@ -105,6 +105,12 @@ export interface AudioCaptureConfig {
   wavMaxFiles?: number;
 }
 
+export interface AudioRoutePort {
+  portType: string;
+  portName: string;
+  uid: string;
+}
+
 export interface AudioState {
   running: boolean;
   paused: boolean;
@@ -120,6 +126,11 @@ export interface AudioState {
   suppressedReason?: 'media' | 'playback' | 'interruption';
   backgroundCaptureLoopRunning?: boolean;
   currentCaptureTriggerSource?: string;
+  routeInputs?: AudioRoutePort[];
+  routeOutputs?: AudioRoutePort[];
+  hasCarAudio?: boolean;
+  hasBluetoothA2DP?: boolean;
+  hasBluetoothHFP?: boolean;
 }
 
 export interface SpeechBurstEvent {

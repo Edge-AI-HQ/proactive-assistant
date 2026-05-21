@@ -72,6 +72,10 @@ export function sourceTypeFromSignal(kind: string): AmbientSourceType {
   if (kind === SIGNAL_KINDS.location) return "location";
   if (kind === SIGNAL_KINDS.activity || kind === SIGNAL_KINDS.motionSegment) return "motion";
   if (kind === SIGNAL_KINDS.soundClassification || kind === SIGNAL_KINDS.soundSceneRun) return "sound";
+  if (kind === SIGNAL_KINDS.calendarEvent) return "calendar";
+  if (kind === SIGNAL_KINDS.focusState) return "focus";
+  if (kind === SIGNAL_KINDS.audioRoute) return "audio_route";
+  if (kind === SIGNAL_KINDS.deviceState) return "device_state";
   return "sound";
 }
 
@@ -83,7 +87,10 @@ export function privacyForSource(sourceType: AmbientSourceType): AmbientPrivacy 
     case "visit":
     case "transcript":
     case "calendar":
+    case "focus":
+    case "audio_route":
       return "private";
+    case "device_state":
     case "motion":
     case "sound":
       return "normal";
@@ -101,6 +108,10 @@ function rawEventType(
   if (kind === SIGNAL_KINDS.activity) return "motion.activity";
   if (kind === SIGNAL_KINDS.soundSceneRun || payload.schema_version === "sound_scene_run.v1") return "sound.scene_run";
   if (kind === SIGNAL_KINDS.soundClassification) return "sound.frame";
+  if (kind === SIGNAL_KINDS.calendarEvent) return "calendar.event";
+  if (kind === SIGNAL_KINDS.focusState) return "focus.state";
+  if (kind === SIGNAL_KINDS.audioRoute) return "audio_route.state";
+  if (kind === SIGNAL_KINDS.deviceState) return "device.state";
   if (kind === SIGNAL_KINDS.visit) {
     const visitKind = cleanText(payload.kind);
     return visitKind === "departure" ? "visit.departure" : "visit.arrival";
@@ -135,6 +146,15 @@ function compactText(
     return `Motion ${type ?? "activity"}${confidence ? ` (${confidence})` : ""}.`;
   }
   if (sourceType === "health") return `Health summary: ${item.summary}`;
+  if (sourceType === "calendar") {
+    const title = cleanText(payload.title) ?? "calendar event";
+    return `Calendar context: ${title}.`;
+  }
+  if (sourceType === "focus") {
+    return cleanText(payload.focused) === "true" ? "Focus mode active." : item.summary;
+  }
+  if (sourceType === "audio_route") return `Audio route context: ${item.summary}`;
+  if (sourceType === "device_state") return `Device state: ${item.summary}`;
   if (sourceType === "transcript") return stripTranscriptSegmentLabels(item.summary);
   if (eventType === "sound.scene_run") {
     const label = cleanText(payload.label) ?? "sound";

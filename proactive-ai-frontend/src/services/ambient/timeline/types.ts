@@ -12,7 +12,10 @@ export type AmbientSourceType =
   | "transcript"
   | "health"
   | "motion"
-  | "calendar";
+  | "calendar"
+  | "focus"
+  | "audio_route"
+  | "device_state";
 
 export interface AmbientRawRef {
   sourceType: AmbientSourceType;
@@ -31,7 +34,12 @@ export type AmbientWindowType =
   | "motion_state_run"
   | "location_update"
   | "workout"
-  | "focus_block";
+  | "focus_block"
+  | "calendar_context"
+  | "focus_context"
+  | "audio_route_context"
+  | "device_state_context"
+  | "context_snapshot";
 
 export type AmbientEventType =
   | "morning"

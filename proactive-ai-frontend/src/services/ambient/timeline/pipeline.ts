@@ -41,6 +41,7 @@ export interface AmbientTimelinePipeline {
   ingestSignal(item: PersonalSignalInput): Promise<PersonalSignalInput[]>;
   regenerateDay(localDate?: string, options?: AmbientTimelineProcessOptions): Promise<PersonalSignalInput[]>;
   processPendingWindows(localDate?: string, options?: AmbientTimelineProcessOptions): Promise<PersonalSignalInput[]>;
+  generateContextSnapshot(now?: Date): Promise<PersonalSignalInput | null>;
 }
 
 export interface AmbientTimelinePipelineOptions {
@@ -73,6 +74,64 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     }
     out.push(...await this.processPendingWindows(localDate, options));
     return out;
+  }
+
+
+  async generateContextSnapshot(now = this.now()): Promise<PersonalSignalInput | null> {
+    await this.store.init();
+    const endedAt = now.toISOString();
+    const startedAt = new Date(now.getTime() - 15 * 60_000).toISOString();
+    const localDate = localDateFromIso(endedAt);
+    const sources: AmbientSourceType[] = [
+      "calendar",
+      "focus",
+      "audio_route",
+      "device_state",
+      "motion",
+      "location",
+      "visit",
+      "sound",
+      "transcript",
+    ];
+    const raws = (await Promise.all(sources.map(async (sourceType) => this.store.listRawEventsInRange({
+      localDate,
+      sourceType,
+      start: startedAt,
+      end: endedAt,
+      limit: 20,
+    })))).flat();
+    const sourcePayloads = raws
+      .sort(compareNearbyContext)
+      .slice(0, 12)
+      .flatMap((raw) => {
+        const payload = sanitizeRawPayload(raw);
+        return payload ? [sourcePayload(raw, "nearby_context", payload)] : [];
+      });
+    if (sourcePayloads.length === 0) return null;
+    const presentSources = uniqueSourceTypes(raws.map((raw) => raw.sourceType));
+    const sourcePresence = sourcePresencePayload(presentSources);
+    const compactContext = contextSnapshotText(sourcePayloads, sourcePresence);
+    const window = await this.upsertWindow({
+      id: stableId("win", ["context_snapshot", localDate, String(Math.floor(now.getTime() / (15 * 60_000)))]),
+      localDate,
+      windowType: "context_snapshot",
+      startedAt,
+      endedAt,
+      sourceTypes: presentSources,
+      deviceLabels: ["iPhone"],
+      rawRefs: uniqueRawRefs(raws.map(rawRef)),
+      compactContext,
+      privacyHint: maxPrivacy(presentSources.map((source) => source === "device_state" ? "normal" : source === "motion" || source === "sound" ? "normal" : "private")),
+      confidenceHint: 0.65,
+      salienceHint: 0.45,
+      generationPolicy: "do_not_generate",
+      status: "evidence",
+      llmInputHash: stableHash(JSON.stringify({ sourcePresence, sourcePayloads })),
+    });
+    return candidateWindowToSignal(window, {
+      sourcePayloads,
+      contextHash: stableHash(JSON.stringify({ compactContext, sourcePresence, sourcePayloads })),
+    });
   }
 
   async processPendingWindows(
@@ -317,6 +376,26 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
         const window = await this.upsertMotionStateWindow(raw);
         signals.push(await this.candidateWindowSignal(window));
       }
+      return signals;
+    }
+    if (raw.sourceType === "calendar") {
+      const window = await this.upsertCalendarContextWindow(raw);
+      signals.push(await this.candidateWindowSignal(window));
+      return signals;
+    }
+    if (raw.sourceType === "focus") {
+      const window = await this.upsertFocusContextWindow(raw);
+      signals.push(await this.candidateWindowSignal(window));
+      return signals;
+    }
+    if (raw.sourceType === "audio_route") {
+      const window = await this.upsertAudioRouteContextWindow(raw);
+      signals.push(await this.candidateWindowSignal(window));
+      return signals;
+    }
+    if (raw.sourceType === "device_state") {
+      const window = await this.upsertDeviceStateContextWindow(raw);
+      if (window) signals.push(await this.candidateWindowSignal(window));
       return signals;
     }
     return signals;
@@ -569,6 +648,85 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     });
   }
 
+  private async upsertCalendarContextWindow(raw: AmbientRawEvent): Promise<AmbientCandidateWindow> {
+    const startedAt = stringPayload(raw.payload, "starts_at") ?? raw.occurredAt;
+    const endedAt = stringPayload(raw.payload, "ends_at") ?? raw.endedAt;
+    return this.upsertWindow({
+      id: stableId("win", ["calendar_context", raw.dedupeKey]),
+      localDate: raw.localDate,
+      windowType: "calendar_context",
+      startedAt,
+      endedAt,
+      sourceTypes: ["calendar"],
+      deviceLabels: ["Calendar"],
+      rawRefs: [rawRef(raw)],
+      compactContext: calendarContext(raw),
+      privacyHint: "private",
+      confidenceHint: 0.82,
+      salienceHint: 0.5,
+      generationPolicy: "do_not_generate",
+      status: "evidence",
+    });
+  }
+
+  private async upsertFocusContextWindow(raw: AmbientRawEvent): Promise<AmbientCandidateWindow> {
+    return this.upsertWindow({
+      id: stableId("win", ["focus_context", raw.dedupeKey]),
+      localDate: raw.localDate,
+      windowType: "focus_context",
+      startedAt: raw.occurredAt,
+      endedAt: raw.endedAt,
+      sourceTypes: ["focus"],
+      deviceLabels: ["iPhone"],
+      rawRefs: [rawRef(raw)],
+      compactContext: focusContext(raw),
+      privacyHint: "private",
+      confidenceHint: 0.7,
+      salienceHint: 0.35,
+      generationPolicy: "do_not_generate",
+      status: "evidence",
+    });
+  }
+
+  private async upsertAudioRouteContextWindow(raw: AmbientRawEvent): Promise<AmbientCandidateWindow> {
+    return this.upsertWindow({
+      id: stableId("win", ["audio_route_context", raw.dedupeKey]),
+      localDate: raw.localDate,
+      windowType: "audio_route_context",
+      startedAt: raw.occurredAt,
+      endedAt: raw.endedAt,
+      sourceTypes: ["audio_route"],
+      deviceLabels: ["iPhone"],
+      rawRefs: [rawRef(raw)],
+      compactContext: audioRouteContext(raw),
+      privacyHint: "private",
+      confidenceHint: 0.72,
+      salienceHint: 0.45,
+      generationPolicy: "do_not_generate",
+      status: "evidence",
+    });
+  }
+
+  private async upsertDeviceStateContextWindow(raw: AmbientRawEvent): Promise<AmbientCandidateWindow | null> {
+    if (!isDeviceCollectionConstrained(raw)) return null;
+    return this.upsertWindow({
+      id: stableId("win", ["device_state_context", raw.dedupeKey]),
+      localDate: raw.localDate,
+      windowType: "device_state_context",
+      startedAt: raw.occurredAt,
+      endedAt: raw.endedAt,
+      sourceTypes: ["device_state"],
+      deviceLabels: ["iPhone"],
+      rawRefs: [rawRef(raw)],
+      compactContext: deviceStateContext(raw),
+      privacyHint: "normal",
+      confidenceHint: 0.8,
+      salienceHint: 0.55,
+      generationPolicy: "do_not_generate",
+      status: "evidence",
+    });
+  }
+
   private async upsertTranscriptWindow(raw: AmbientRawEvent): Promise<AmbientCandidateWindow | null> {
     const durationMs = numberPayload(raw.payload, "durationMs");
     const startedAt = raw.occurredAt;
@@ -590,12 +748,20 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     const locationWindows = await this.overlappingLocationUpdateWindows(raw.localDate, windowStartedAt, windowEndedAt);
     const motionWindows = await this.overlappingMotionStateRunWindows(raw.localDate, windowStartedAt, windowEndedAt);
     const visitWindows = await this.overlappingVisitStayWindows(raw.localDate, windowStartedAt, windowEndedAt);
+    const calendarWindows = await this.overlappingContextWindows(raw.localDate, "calendar_context", windowStartedAt, windowEndedAt);
+    const focusWindows = await this.overlappingContextWindows(raw.localDate, "focus_context", windowStartedAt, windowEndedAt);
+    const audioRouteWindows = await this.overlappingContextWindows(raw.localDate, "audio_route_context", windowStartedAt, windowEndedAt);
+    const deviceStateWindows = await this.overlappingContextWindows(raw.localDate, "device_state_context", windowStartedAt, windowEndedAt);
     const hasNewRefs = (windows: AmbientCandidateWindow[]) =>
       windows.filter((window) => window.rawRefs.some((ref) => !existingRawRefIds.has(ref.id)));
     const newSoundWindows = hasNewRefs(soundWindows);
     const newLocationWindows = hasNewRefs(locationWindows);
     const newMotionWindows = hasNewRefs(motionWindows);
     const newVisitWindows = hasNewRefs(visitWindows);
+    const newCalendarWindows = hasNewRefs(calendarWindows);
+    const newFocusWindows = hasNewRefs(focusWindows);
+    const newAudioRouteWindows = hasNewRefs(audioRouteWindows);
+    const newDeviceStateWindows = hasNewRefs(deviceStateWindows);
     const joinContext = (windows: AmbientCandidateWindow[]) =>
       windows.map((window) => window.compactContext).filter(Boolean).join(" ");
     const transcriptText = stripTranscriptSegmentLabels(raw.compactText);
@@ -605,12 +771,25 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
       newLocationWindows.length > 0 ? `Location context: ${joinContext(newLocationWindows)}` : "",
       newMotionWindows.length > 0 ? `Motion context: ${joinContext(newMotionWindows)}` : "",
       newVisitWindows.length > 0 ? `Place context: ${joinContext(newVisitWindows)}` : "",
+      newCalendarWindows.length > 0 ? `Calendar context: ${joinContext(newCalendarWindows)}` : "",
+      newFocusWindows.length > 0 ? `Focus context: ${joinContext(newFocusWindows)}` : "",
+      newAudioRouteWindows.length > 0 ? `Audio route context: ${joinContext(newAudioRouteWindows)}` : "",
+      newDeviceStateWindows.length > 0 ? `Device context: ${joinContext(newDeviceStateWindows)}` : "",
     ].filter(Boolean);
     const additionsText = additions.join(" ");
     const compactContext = existing?.compactContext
       ? stripTranscriptSegmentLabels([transcriptTextOnly(existing.compactContext), additionsText].filter(Boolean).join(" "))
       : additionsText || transcriptText;
-    const evidenceWindows = [...soundWindows, ...locationWindows, ...motionWindows, ...visitWindows];
+    const evidenceWindows = [
+      ...soundWindows,
+      ...locationWindows,
+      ...motionWindows,
+      ...visitWindows,
+      ...calendarWindows,
+      ...focusWindows,
+      ...audioRouteWindows,
+      ...deviceStateWindows,
+    ];
     const evidenceRawRefs = evidenceWindows.flatMap((window) => window.rawRefs);
     const evidenceSourceTypes = evidenceWindows.flatMap((window) => window.sourceTypes);
     const nextHash = stableHash(compactContext);
@@ -810,13 +989,22 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     const endMs = Date.parse(effectiveEnd);
     const nearbyStart = new Date(startMs - 10 * 60_000).toISOString();
     const nearbyEnd = new Date(endMs + 10 * 60_000).toISOString();
-    const nearbyLocation = await this.store.listRawEventsInRange({
+    const nearbyBySource = await Promise.all(([
+      "location",
+      "calendar",
+      "focus",
+      "audio_route",
+      "device_state",
+      "motion",
+      "sound",
+      "visit",
+    ] as AmbientSourceType[]).map(async (sourceType) => this.store.listRawEventsInRange({
       localDate: window.localDate,
-      sourceType: "location",
+      sourceType,
       start: nearbyStart,
       end: nearbyEnd,
       limit: 20,
-    });
+    })));
     const seen = new Set<string>();
     const out: AmbientWindowSourcePayload[] = [];
     for (const raw of byRef) {
@@ -825,13 +1013,15 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
       seen.add(raw.id);
       out.push(sourcePayload(raw, "window_raw_ref", payload));
     }
-    const locations = nearbyLocation
+    const nearby = nearbyBySource
+      .flat()
       .filter((raw) => !seen.has(raw.id))
-      .sort(compareLocationContext)
-      .slice(0, 2);
-    for (const raw of locations) {
+      .sort(compareNearbyContext)
+      .slice(0, 8);
+    for (const raw of nearby) {
       const payload = sanitizeRawPayload(raw);
       if (!payload) continue;
+      seen.add(raw.id);
       out.push(sourcePayload(raw, "nearby_context", payload));
     }
     return out.slice(0, 10);
@@ -1128,7 +1318,24 @@ function sanitizeRawPayload(raw: AmbientRawEvent): Record<string, unknown> | nul
         "observations", "metric", "value", "unit", "local_date", "source_app",
       ]);
     case "calendar":
-      return pick(raw.payload, ["title", "starts_at", "ends_at", "calendar_id"]);
+      return pick(raw.payload, [
+        "schema_version", "title", "starts_at", "ends_at", "attendee_count",
+        "attendees", "calendar", "calendar_id", "location", "notes", "availability",
+        "is_all_day", "observed_at",
+      ]);
+    case "focus":
+      return pick(raw.payload, ["schema_version", "focused", "focus_label", "authorization_state", "observed_at"]);
+    case "audio_route":
+      return pick(raw.payload, [
+        "schema_version", "route_inputs", "route_outputs", "has_car_audio",
+        "has_bluetooth_a2dp", "has_bluetooth_hfp", "engine_state",
+        "suppressed", "suppressed_reason", "observed_at",
+      ]);
+    case "device_state":
+      return pick(raw.payload, [
+        "schema_version", "thermal", "low_power", "battery_pct", "charging",
+        "reason", "observed_at",
+      ]);
   }
 }
 
@@ -1202,6 +1409,84 @@ function pick(payload: Record<string, unknown>, keys: string[]): Record<string, 
     if (value !== undefined && value !== null) out[key] = value;
   }
   return out;
+}
+
+
+
+function sourcePresencePayload(presentSources: AmbientSourceType[]): Record<string, string> {
+  const present = new Set(presentSources);
+  return {
+    microphone: present.has("transcript") || present.has("sound") ? "granted" : "unknown",
+    transcript: present.has("transcript") ? "present" : "not_observed",
+    sound: present.has("sound") ? "present" : "missing",
+    calendar: present.has("calendar") ? "present" : "missing",
+    focus: present.has("focus") ? "present" : "missing",
+    audio_route: present.has("audio_route") ? "present" : "missing",
+    motion: present.has("motion") ? "present" : "missing",
+    location: present.has("location") || present.has("visit") ? "present" : "missing",
+    device_state: present.has("device_state") ? "present" : "missing",
+  };
+}
+
+function contextSnapshotText(
+  sourcePayloads: AmbientWindowSourcePayload[],
+  sourcePresence: Record<string, string>,
+): string {
+  const sources = uniqueStrings(sourcePayloads.map((payload) => payload.source_type));
+  const mic = sourcePresence.microphone === "unknown" ? "microphone state unknown" : `microphone ${sourcePresence.microphone}`;
+  return `Context snapshot: ${sources.join(", ")} observed; ${mic}; transcript ${sourcePresence.transcript}.`;
+}
+
+function calendarContext(raw: AmbientRawEvent): string {
+  const title = stringPayload(raw.payload, "title") ?? "Calendar event";
+  const starts = stringPayload(raw.payload, "starts_at") ?? raw.occurredAt;
+  const ends = stringPayload(raw.payload, "ends_at");
+  const attendees = numberPayload(raw.payload, "attendee_count");
+  return `Calendar shows "${title}" from ${formatTime(starts)}${ends ? ` to ${formatTime(ends)}` : ""}${attendees !== null ? ` with ${attendees} attendees` : ""}.`;
+}
+
+function focusContext(raw: AmbientRawEvent): string {
+  const focused = raw.payload.focused === true;
+  return focused ? "Focus mode active." : "Focus mode inactive.";
+}
+
+function audioRouteContext(raw: AmbientRawEvent): string {
+  if (raw.payload.has_car_audio === true) return "Audio route indicates CarPlay or car audio.";
+  if (raw.payload.has_bluetooth_a2dp === true || raw.payload.has_bluetooth_hfp === true) {
+    return "Audio route indicates Bluetooth audio.";
+  }
+  return raw.compactText;
+}
+
+function deviceStateContext(raw: AmbientRawEvent): string {
+  const reason = stringPayload(raw.payload, "reason");
+  if (reason === "low_power") return "Device collection constrained: Low Power Mode enabled.";
+  if (reason === "thermal") return `Device collection constrained: thermal state ${stringPayload(raw.payload, "thermal") ?? "unknown"}.`;
+  if (reason === "low_battery") return `Device collection constrained: low battery ${numberPayload(raw.payload, "battery_pct") ?? "unknown"}%.`;
+  return raw.compactText;
+}
+
+function isDeviceCollectionConstrained(raw: AmbientRawEvent): boolean {
+  const reason = stringPayload(raw.payload, "reason");
+  return reason === "low_power" || reason === "thermal" || reason === "low_battery";
+}
+
+function compareNearbyContext(a: AmbientRawEvent, b: AmbientRawEvent): number {
+  const priority = (raw: AmbientRawEvent) => {
+    if (raw.sourceType === "calendar") return 0;
+    if (raw.sourceType === "audio_route") return 1;
+    if (raw.sourceType === "focus") return 2;
+    if (raw.sourceType === "device_state") return 3;
+    if (raw.sourceType === "location") return 4;
+    if (raw.sourceType === "visit") return 5;
+    if (raw.sourceType === "motion") return 6;
+    if (raw.sourceType === "sound") return 7;
+    return 8;
+  };
+  const diff = priority(a) - priority(b);
+  if (diff !== 0) return diff;
+  if (a.sourceType === "location" && b.sourceType === "location") return compareLocationContext(a, b);
+  return Date.parse(a.occurredAt) - Date.parse(b.occurredAt);
 }
 
 function compareLocationContext(a: AmbientRawEvent, b: AmbientRawEvent): number {

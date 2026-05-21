@@ -150,7 +150,7 @@ export default function AmbientTimelineSummaryStatusPanel() {
             aria-label="Run timeline summary now"
           >
             <Play size={12} strokeWidth={2} />
-            {summaryRunning ? "Running" : "Summary now"}
+            {summaryRunning ? "Running" : "Trigger"}
           </button>
           <button
             type="button"

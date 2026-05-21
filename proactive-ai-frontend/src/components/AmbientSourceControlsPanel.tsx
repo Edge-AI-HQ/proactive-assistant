@@ -49,6 +49,30 @@ const SOURCE_META: Record<SourceKey, {
     hint: "Reads foreground snapshots for steps, sleep, and heart rate.",
     nativeOnly: true,
   },
+  calendar: {
+    label: "Calendar",
+    permission: "Calendar",
+    hint: "Uploads current and upcoming calendar context into ambient windows.",
+    nativeOnly: true,
+  },
+  focus: {
+    label: "Focus",
+    permission: "Notifications",
+    hint: "Tracks Focus/DND status as low-frequency ambient context.",
+    nativeOnly: true,
+  },
+  audio_route: {
+    label: "Audio Route",
+    permission: "Audio Session",
+    hint: "Observes CarPlay, Bluetooth, speaker, and headphone route changes.",
+    nativeOnly: true,
+  },
+  device_state: {
+    label: "Device State",
+    permission: "Device",
+    hint: "Reports low power, thermal, or low battery states that affect collection quality.",
+    nativeOnly: true,
+  },
 };
 
 interface SourceRowState {
@@ -124,8 +148,8 @@ function AmbientSourceRow({
           disabled={disabled}
           aria-label={`${row.enabled ? "Disable" : "Enable"} ${row.label}`}
           className={`min-h-11 min-w-[64px] rounded-full px-3 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${row.enabled
-              ? "bg-foreground text-background hover:opacity-90"
-              : "bg-foreground/[0.08] text-foreground/58 hover:bg-foreground/[0.12]"
+            ? "bg-foreground text-background hover:opacity-90"
+            : "bg-foreground/[0.08] text-foreground/58 hover:bg-foreground/[0.12]"
             }`}
         >
           {stateLabel}
@@ -253,7 +277,7 @@ export default function AmbientSourceControlsPanel() {
               <ShieldCheck size={13} strokeWidth={1.8} className="text-foreground/42" />
             </div>
             <p className="mt-1 text-[12px] leading-relaxed text-foreground/55">
-              Pick which ambient signals PIN AI may observe. Each source stays off until you enable it.
+              Pick which ambient signals PIN AI may observe.
             </p>
           </div>
         </div>

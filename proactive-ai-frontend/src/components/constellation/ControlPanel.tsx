@@ -45,8 +45,8 @@ const PERSONALITY_DIMENSIONS: PersonalityDim[] = [
     subtitle: "Set the tempo of your assistant.",
     accent: "292 70% 58%",
     options: [
-      { label: "Gentle",    caption: "I'll wait for you",        icon: Leaf },
-      { label: "Balanced",  caption: "I'll suggest and assist",  icon: Wind },
+      { label: "Gentle", caption: "I'll wait for you", icon: Leaf },
+      { label: "Balanced", caption: "I'll suggest and assist", icon: Wind },
       { label: "Proactive", caption: "I'll take action for you", icon: Flame },
     ],
   },
@@ -56,8 +56,8 @@ const PERSONALITY_DIMENSIONS: PersonalityDim[] = [
     subtitle: "From minimal to expressive.",
     accent: "200 70% 50%",
     options: [
-      { label: "Concise",    caption: "Just the essentials",      icon: Feather },
-      { label: "Balanced",   caption: "Clear and natural",        icon: MessageCircle },
+      { label: "Concise", caption: "Just the essentials", icon: Feather },
+      { label: "Balanced", caption: "Clear and natural", icon: MessageCircle },
       { label: "Expressive", caption: "More human, more context", icon: Mic },
     ],
   },
@@ -67,9 +67,9 @@ const PERSONALITY_DIMENSIONS: PersonalityDim[] = [
     subtitle: "Where should I tilt the balance?",
     accent: "160 55% 42%",
     options: [
-      { label: "Efficiency", caption: "Get things done",       icon: Target },
-      { label: "Balanced",   caption: "Work and life in sync", icon: Sun },
-      { label: "Well-being", caption: "Take care of me",       icon: HeartPulse },
+      { label: "Efficiency", caption: "Get things done", icon: Target },
+      { label: "Balanced", caption: "Work and life in sync", icon: Sun },
+      { label: "Well-being", caption: "Take care of me", icon: HeartPulse },
     ],
   },
   {
@@ -78,8 +78,8 @@ const PERSONALITY_DIMENSIONS: PersonalityDim[] = [
     subtitle: "Pick your rhythm of nudges.",
     accent: "30 80% 55%",
     options: [
-      { label: "Minimal",  caption: "Only when needed",          icon: Moon },
-      { label: "Balanced", caption: "At the right moments",      icon: Bell },
+      { label: "Minimal", caption: "Only when needed", icon: Moon },
+      { label: "Balanced", caption: "At the right moments", icon: Bell },
       { label: "Frequent", caption: "Stay on top of everything", icon: BellRing },
     ],
   },
@@ -137,11 +137,10 @@ export default function ControlPanel() {
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
-            className={`flex-1 py-2 text-[11px] font-medium rounded-lg transition-all duration-200 ${
-              activeTab === tab
+            className={`flex-1 py-2 text-[11px] font-medium rounded-lg transition-all duration-200 ${activeTab === tab
                 ? "bg-foreground text-background shadow-sm"
                 : "text-foreground/50"
-            }`}
+              }`}
           >
             {tab}
           </button>
@@ -441,10 +440,7 @@ export default function ControlPanel() {
                 <h2 className="text-base font-semibold text-foreground">On-device models</h2>
               </div>
               <p className="text-[12px] text-foreground/55 leading-relaxed">
-                Manage the Whisper and local LLM models PIN AI uses for offline
-                speech recognition and on-device reasoning. Downloads stay
-                cached until you delete them; verifying runs a quick
-                llama.cpp inference (LLM) or magic-header check (ASR).
+                Manage the on-device models
               </p>
             </div>
 
@@ -722,11 +718,10 @@ function WorldModelTab() {
                     <button
                       key={cat}
                       onClick={() => setDraftCategory(cat)}
-                      className={`text-[11.5px] font-medium px-2.5 py-1 rounded-full transition-colors border ${
-                        active
+                      className={`text-[11.5px] font-medium px-2.5 py-1 rounded-full transition-colors border ${active
                           ? "bg-foreground text-background border-foreground"
                           : `${TOPIC_CATEGORY_STYLES[cat]} border-transparent`
-                      }`}
+                        }`}
                     >
                       {cat}
                     </button>

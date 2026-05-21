@@ -28,8 +28,12 @@ import {
   type AmbientTimelinePipeline,
 } from "./timeline";
 import { ActivitySource } from "./sources/activity";
+import { CalendarSource } from "./sources/calendar";
+import { DeviceStateSource } from "./sources/device-state";
+import { FocusSource } from "./sources/focus";
 import { HealthSource } from "./sources/health";
 import { LocationSource } from "./sources/location";
+import { AudioRouteSource } from "./sources/audio-route";
 import { SoundClassifierSource } from "./sources/sound-classifier";
 import type { AmbientSource, SourceContext } from "./sources/types";
 import { VisitSource } from "./sources/visit";
@@ -70,10 +74,12 @@ export interface AmbientRuntimeOptions {
   enableTimers?: boolean;
   sourceWatchdogIntervalMs?: number;
   timelineSummaryIntervalMs?: number;
+  contextSnapshotIntervalMs?: number;
 }
 
 const SOURCE_WATCHDOG_INTERVAL_MS = 60_000;
 const TIMELINE_SUMMARY_INTERVAL_MS = 15 * 60_000;
+const CONTEXT_SNAPSHOT_INTERVAL_MS = 15 * 60_000;
 const POWER_LOG_PREFIX = "[ambient-power]";
 
 export class AmbientRuntime {
@@ -93,7 +99,9 @@ export class AmbientRuntime {
   private drainTimer: ReturnType<typeof setInterval> | null = null;
   private sourceWatchdogTimer: ReturnType<typeof setInterval> | null = null;
   private timelineSummaryTimer: ReturnType<typeof setInterval> | null = null;
+  private contextSnapshotTimer: ReturnType<typeof setInterval> | null = null;
   private timelineSummaryInFlight = false;
+  private contextSnapshotInFlight = false;
   private sourceReconcileInFlight = false;
   private sourceReconcilePending = false;
   private desiredSourceKeys = new Set<SourceKey>();
@@ -134,6 +142,10 @@ export class AmbientRuntime {
         new ActivitySource(ctx),
         new LocationSource(ctx),
         new HealthSource(ctx),
+        new CalendarSource(ctx),
+        new FocusSource(ctx),
+        new AudioRouteSource(ctx),
+        new DeviceStateSource(ctx),
       ]).map((source) => [source.key as SourceKey, source]),
     );
 
@@ -150,6 +162,7 @@ export class AmbientRuntime {
     if (options.enableTimers !== false) {
       this.startDrainTimer();
       this.startTimelineSummaryTimer(options.timelineSummaryIntervalMs);
+      this.startContextSnapshotTimer(options.contextSnapshotIntervalMs);
       this.startSourceWatchdog(options.sourceWatchdogIntervalMs);
     }
     console.info(`${POWER_LOG_PREFIX} runtime created`, {
@@ -272,6 +285,23 @@ export class AmbientRuntime {
 
   async refreshActiveSources(): Promise<void> {
     await this.reconcileDesiredSources();
+  }
+
+  async refreshContextSnapshot(now = new Date()): Promise<void> {
+    try {
+      const signal = await this.timelinePipeline.generateContextSnapshot(now);
+      if (signal) {
+        await this.outbox.enqueue([signal]);
+        this.lastFlushTs = Date.now();
+      }
+      this.lastIngestError = null;
+      await this.refreshOutboxCount();
+    } catch (err) {
+      this.lastIngestError = describeError(err);
+      throw err;
+    } finally {
+      this.notify();
+    }
   }
 
   async refreshTimeline(localDate?: string, options: { force?: boolean; forceReady?: boolean } = {}): Promise<void> {
@@ -413,6 +443,24 @@ export class AmbientRuntime {
     console.info(`${POWER_LOG_PREFIX} timeline summary timer started`, { intervalMs });
   }
 
+  private startContextSnapshotTimer(intervalMs = CONTEXT_SNAPSHOT_INTERVAL_MS): void {
+    if (this.contextSnapshotTimer) return;
+    this.contextSnapshotTimer = setInterval(() => {
+      void this.runScheduledContextSnapshot();
+    }, intervalMs);
+    console.info(`${POWER_LOG_PREFIX} context snapshot timer started`, { intervalMs });
+  }
+
+  private async runScheduledContextSnapshot(): Promise<void> {
+    if (this.contextSnapshotInFlight) return;
+    this.contextSnapshotInFlight = true;
+    try {
+      await this.refreshContextSnapshot();
+    } finally {
+      this.contextSnapshotInFlight = false;
+    }
+  }
+
   private async runScheduledTimelineSummary(): Promise<void> {
     if (this.timelineSummaryInFlight) return;
     this.timelineSummaryInFlight = true;
@@ -459,6 +507,11 @@ export class AmbientRuntime {
     if (this.sourceWatchdogTimer) {
       clearInterval(this.sourceWatchdogTimer);
       this.sourceWatchdogTimer = null;
+      stopped += 1;
+    }
+    if (this.contextSnapshotTimer) {
+      clearInterval(this.contextSnapshotTimer);
+      this.contextSnapshotTimer = null;
       stopped += 1;
     }
     console.info(`${POWER_LOG_PREFIX} runtime timers stopped`, { reason, stopped });
@@ -523,6 +576,10 @@ const SOURCE_TO_KIND: Record<SourceKey, string> = {
   activity: SIGNAL_KINDS.activity,
   location: SIGNAL_KINDS.location,
   health: "health.observation",
+  calendar: SIGNAL_KINDS.calendarEvent,
+  focus: SIGNAL_KINDS.focusState,
+  audio_route: SIGNAL_KINDS.audioRoute,
+  device_state: SIGNAL_KINDS.deviceState,
 };
 
 const OPT_OUT_STORAGE_KEY = "pin.ambient.optOutSources";
