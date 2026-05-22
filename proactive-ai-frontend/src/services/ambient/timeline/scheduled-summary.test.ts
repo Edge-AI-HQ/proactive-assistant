@@ -70,9 +70,86 @@ describe("maybeRunScheduledAmbientSummary", () => {
       title: "Office arrival",
     }));
   });
+
+  test("persists provider metadata for cloud summaries", async () => {
+    const timelineStore = store();
+    vi.mocked(timelineStore.listRawEventsInRange).mockResolvedValue([
+      raw("calendar_1", "calendar", "Meeting with product team"),
+    ]);
+    const bridge = {
+      generateAmbientSummaryEvent: vi.fn(async () => ({
+        ok: true as const,
+        draft: {
+          title: "Product meeting",
+          summary: "You had a product discussion with the team.",
+          tags: ["meeting"],
+          confidence: 0.75,
+          confidenceLabel: "certain" as const,
+        },
+        modelId: "gpt-5.5",
+        generationMethod: "cloud_llm" as const,
+        primarySourceLabel: "Cloud summary",
+      })),
+    };
+
+    await maybeRunScheduledAmbientSummary({
+      store: timelineStore,
+      bridge,
+      now: new Date("2026-05-19T11:15:00.000Z"),
+      localDate: "2026-05-19",
+      timezone: "UTC",
+      localUserId: "local",
+    });
+
+    expect(timelineStore.upsertTimelineEvent).toHaveBeenCalledWith(expect.objectContaining({
+      generationMethod: "cloud_llm",
+      primarySourceLabel: "Cloud summary",
+      llmModelId: "gpt-5.5",
+    }));
+  });
+
+
+  test("does not persist a cloud summary when the privacy gate rejects it", async () => {
+    const timelineStore = store();
+    vi.mocked(timelineStore.listRawEventsInRange).mockResolvedValue([
+      raw("calendar_2", "calendar", "Sensitive appointment"),
+    ]);
+    const bridge = {
+      generateAmbientSummaryEvent: vi.fn(async () => ({
+        ok: true as const,
+        draft: {
+          title: "Appointment",
+          summary: "You had a sensitive appointment.",
+          tags: ["calendar"],
+          confidence: 0.7,
+          confidenceLabel: "certain" as const,
+        },
+        modelId: "gpt-5.5",
+        generationMethod: "cloud_llm" as const,
+        primarySourceLabel: "Cloud summary",
+      })),
+    };
+
+    const result = await maybeRunScheduledAmbientSummary({
+      store: timelineStore,
+      bridge,
+      now: new Date("2026-05-19T12:15:00.000Z"),
+      localDate: "2026-05-19",
+      timezone: "UTC",
+      localUserId: "local",
+      shouldPersistResult: (summaryResult) => summaryResult.generationMethod !== "cloud_llm",
+    });
+
+    expect(result).toEqual({ ran: true, status: "failed" });
+    expect(timelineStore.upsertTimelineEvent).not.toHaveBeenCalled();
+    expect(timelineStore.setSummarySchedulerState).toHaveBeenCalledWith(expect.objectContaining({
+      lastErrorCode: "cloud_result_discarded_after_lock",
+    }));
+  });
+
 });
 
-function raw(id: string, sourceType: "motion" | "location", compactText: string): import("./types").AmbientRawEvent {
+function raw(id: string, sourceType: "motion" | "location" | "calendar", compactText: string): import("./types").AmbientRawEvent {
   return {
     id,
     localUserId: "local",
