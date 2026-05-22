@@ -1,6 +1,7 @@
 import type { IntentCard, EvaluationScore } from "@/types/intent-card";
 import { useMemo } from "react";
 import MainChatView from "./main-chat/MainChatView";
+import { useProactiveChatRuntime } from "./chat/useProactiveChatRuntime";
 
 interface CardChatProps {
   card: IntentCard;
@@ -47,14 +48,21 @@ export default function CardChat({ card, score, onBack, bootstrapMessage }: Card
     [card, score],
   );
 
+  const sessionKey = stableSessionKey(card.id);
+  const { runtime, historyLoaded } = useProactiveChatRuntime({
+    sessionKey,
+    cardContext,
+    bootstrapMessage,
+  });
+
   return (
     <MainChatView
-      sessionKey={stableSessionKey(card.id)}
+      sessionKey={sessionKey}
+      runtime={runtime}
+      historyLoaded={historyLoaded}
       title={card.title}
       subtitle="Chat about this card"
       onBack={onBack}
-      cardContext={cardContext}
-      bootstrapMessage={bootstrapMessage}
       // Card chats bootstrap with an agent-authored first message, so the
       // profile-prompt empty state from Main Chat isn't applicable here.
       // `null` suppresses it entirely; ThreadPrimitive shows nothing while

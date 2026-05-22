@@ -12,7 +12,10 @@ interface PlaceCandidateLike {
   confidence?: number;
 }
 
-type PlaceInfoWithCandidates = PlaceInfo & {
+type PlaceInfoWithCandidates = Omit<
+  PlaceInfo,
+  "candidates" | "display_place" | "resolution_strategy"
+> & {
   candidates?: unknown[];
   resolution_strategy?: "structured_poi" | "reverse_geocode" | "coordinates";
 };
@@ -22,7 +25,6 @@ export interface DisplayPlace {
   label: string;
   confidence: number;
 }
-
 
 export interface LocationSourceOptions {
   /**
@@ -227,24 +229,35 @@ export function resolveDisplayPlace(input: {
   if (candidate && input.accuracy <= 25 && candidate.distance_m <= 25) {
     return { mode: "exact_place", label: candidate.name, confidence: 0.9 };
   }
-  if (candidate && candidate.distance_m <= 80 && candidate.distance_m <= Math.max(input.accuracy * 1.5, 50)) {
-    return { mode: "nearby_poi", label: `Near ${candidate.name}`, confidence: 0.65 };
+  if (
+    candidate &&
+    candidate.distance_m <= 80 &&
+    candidate.distance_m <= Math.max(input.accuracy * 1.5, 50)
+  ) {
+    return {
+      mode: "nearby_poi",
+      label: `Near ${candidate.name}`,
+      confidence: 0.65,
+    };
   }
   const areaLabel = input.area ?? input.address;
   if (areaLabel) return { mode: "area", label: areaLabel, confidence: 0.7 };
   return { mode: "coordinates", label: coordinateLabel, confidence: 0.5 };
 }
 
-function candidatePlaces(place: PlaceInfoWithCandidates | null): PlaceCandidateLike[] {
+function candidatePlaces(
+  place: PlaceInfoWithCandidates | null,
+): PlaceCandidateLike[] {
   const candidates = Array.isArray(place?.candidates) ? place.candidates : [];
   const normalized: PlaceCandidateLike[] = [];
   for (const candidate of candidates) {
     if (!candidate || typeof candidate !== "object") continue;
     const row = candidate as Record<string, unknown>;
     const name = typeof row.name === "string" ? row.name.trim() : "";
-    const distance = typeof row.distance_m === "number" && Number.isFinite(row.distance_m)
-      ? row.distance_m
-      : null;
+    const distance =
+      typeof row.distance_m === "number" && Number.isFinite(row.distance_m)
+        ? row.distance_m
+        : null;
     if (!name || distance === null) continue;
     normalized.push({
       name,
@@ -256,11 +269,13 @@ function candidatePlaces(place: PlaceInfoWithCandidates | null): PlaceCandidateL
   }
   if (normalized.length > 0) return normalized;
   if (place?.poi_name && typeof place.poi_distance_m === "number") {
-    return [{
-      name: place.poi_name,
-      distance_m: place.poi_distance_m,
-      category: place.poi_category,
-    }];
+    return [
+      {
+        name: place.poi_name,
+        distance_m: place.poi_distance_m,
+        category: place.poi_category,
+      },
+    ];
   }
   return [];
 }

@@ -164,7 +164,7 @@ interface InputCategory {
   sources: DataSource[];
 }
 
-const INPUT_CATEGORIES: InputCategory[] = [
+export const INPUT_CATEGORIES: InputCategory[] = [
   {
     name: "Health",
     icon: Heart,
@@ -313,15 +313,6 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
       (s) => s.composioId && connectionsByToolkit.has(s.composioId),
     ).length;
 
-  const totalConnected = INPUT_CATEGORIES.reduce(
-    (sum, c) => sum + countConnected(c),
-    0,
-  );
-  const totalSources = INPUT_CATEGORIES.reduce(
-    (sum, c) => sum + c.sources.length,
-    0,
-  );
-
   const cancelledRef = useRef(false);
 
   const handleConnect = async (composioId: string) => {
@@ -395,44 +386,6 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
             Composio is not configured on this deployment. Connections will be
             unavailable until the backend operator sets it up.
           </span>
-        </div>
-      )}
-
-      {/* Stats row */}
-      {configured && (
-        <div className="grid grid-cols-4 gap-2 mb-4">
-          {[
-            {
-              value: String(totalConnected),
-              label: "Connected",
-              sub: `of ${totalSources}`,
-            },
-            {
-              value: `${INPUT_CATEGORIES.filter((c) => countConnected(c) > 0).length}/${INPUT_CATEGORIES.length}`,
-              label: "Layers",
-              sub: "active",
-            },
-            {
-              value: String(
-                connections.filter((c) => c.status === "ACTIVE").length,
-              ),
-              label: "Accounts",
-              sub: "linked",
-            },
-            { value: "—", label: "Last Sync", sub: "" },
-          ].map((stat) => (
-            <div key={stat.label} className="glass-card p-2.5">
-              <span className="text-lg font-semibold text-foreground">
-                {stat.value}
-              </span>
-              <p className="text-[10px] text-foreground/50 mt-0.5 leading-tight">
-                {stat.label}
-              </p>
-              {stat.sub && (
-                <p className="text-[9px] text-foreground/30">{stat.sub}</p>
-              )}
-            </div>
-          ))}
         </div>
       )}
 

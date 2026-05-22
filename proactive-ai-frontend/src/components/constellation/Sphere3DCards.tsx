@@ -110,17 +110,27 @@ const Sphere3DCards = ({
     };
   }, []);
 
+  // Sphere center sits at 36% of the container height (was 21%, which clipped
+  // top-half cards under overflow-hidden). Vertical radius can't simply be
+  // `containerH/2 - halfH`; with the center pushed up, the top has less room
+  // than the bottom, so we take the min of (centered, top-safe, bottom-safe).
+  const sphereCenterTop = 0.36;
   // Compute horizontal & vertical radii so cards never escape the bounds.
   // Horizontal: front-most cards reach scale ≈ 1.1 → reserve full halfW.
   // Vertical: cards at top/bottom (y=±yMax) sit on the equator plane (z≈0),
-  // so their depth is ~0.5 and scale ~0.83. Use that smaller margin so the
-  // sphere extends much closer to the top/bottom of the container.
+  // so their depth is ~0.5 and scale ~0.83.
   const maxScale = 1.1;
   const polarScale = 0.83;
   const halfW = (cardWidth / 2) * maxScale;
   const halfH = (cardHeight / 2) * polarScale;
   const autoRx = Math.max(40, containerSize.w / 2 - halfW - 4);
-  const autoRy = Math.max(40, containerSize.h / 2 - halfH - 2);
+  const verticalMargin = halfH + 4;
+  const centeredRy = containerSize.h / 2 - halfH - 2;
+  const topSafeRy = containerSize.h * sphereCenterTop - verticalMargin;
+  const bottomSafeRy = containerSize.h * (1 - sphereCenterTop) - verticalMargin;
+  const autoRy = containerSize.h > 0
+    ? Math.max(1, Math.min(centeredRy, topSafeRy, bottomSafeRy))
+    : 40;
   const rx = radius ?? autoRx;
   const ry = radius ?? autoRy;
 
@@ -273,13 +283,13 @@ const Sphere3DCards = ({
       <div
         className="absolute left-1/2"
         style={{
-          // Sphere center sits high in the container so the front cards
-          // (which `pitch=-10°` tilts toward the lower hemisphere) land in
-          // the visual middle of the available space. Cards at the sphere
-          // top (rp.y → -yMax) get clipped by overflow-hidden, but those
-          // are the back-half / semi-transparent cards so the loss is
-          // imperceptible. Tune this if header above the sphere changes.
-          top: "21%",
+          // Sphere center driven by `sphereCenterTop` (declared above).
+          // 36% keeps the front-hemisphere cards (pitched toward the lower
+          // half by `pitch=-10°`) in the visual middle while leaving enough
+          // room for the upper-hemisphere cards under overflow-hidden.
+          // `autoRy` shrinks if the top has less margin than the bottom,
+          // so the upper cap never gets clipped.
+          top: `${sphereCenterTop * 100}%`,
           transform: "translate(-50%, -50%)",
           transformStyle: "preserve-3d",
           perspective: "1000px",

@@ -32,6 +32,18 @@ export default {
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
       },
+      keyframes: {
+        // Subtle color breathing — text drifts toward purple and cools back
+        // to neutral. Signals "ambient sensing active" without animating
+        // any geometry (so it stays calm even on long-running pages).
+        "ambient-drift": {
+          "0%, 100%": { color: "hsl(var(--foreground) / 0.4)" },
+          "50%":      { color: "hsl(304 75% 55% / 0.7)" },
+        },
+      },
+      animation: {
+        "ambient-drift": "ambient-drift 4s ease-in-out infinite",
+      },
     },
   },
   plugins: [typography],

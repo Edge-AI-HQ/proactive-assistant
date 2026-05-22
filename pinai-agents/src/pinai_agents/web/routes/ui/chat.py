@@ -1,9 +1,10 @@
 """/api/chat-stream/* — frontend chat SSE entry; web → chat proxy.
 
 Wire layout:
-    POST /init     → mints / echoes session_key + tells caller whether the
-                     thread already has persisted turns (drives card-chat
-                     bootstrap on the frontend).
+    POST /init     → resolves the user's session_key. Main chat is a
+                     singleton per user (one row, kind='main'); the
+                     row is created lazily on first call. Card chat
+                     uses a deterministic card-thread-<id> key.
     POST /send     → SSE pipe to the chat worker.
     GET  /history  → returns the merged turn list in HistoryMessage shape.
 
@@ -26,8 +27,6 @@ from ....shared.api_models import (
     ChatInitRequest,
     ChatInitResponse,
     ChatSendRequest,
-    ChatThreadItem,
-    ChatThreadListResponse,
 )
 from ...auth.deps import User, current_user, get_pool
 from ...db.repositories.chat_threads import ChatThreadsRepository
@@ -75,24 +74,22 @@ async def chat_init(
     """Resolve the session_key + check whether the thread already exists.
 
     Resolution order:
-      1. body.session_key explicit (FE has localStorage cache or card path) —
-         validate it belongs to this user, ensure metadata row exists.
+      1. body.session_key explicit (FE has cached the key, or card chat
+         resumes a card-thread-<id>) — validate it belongs to this user,
+         ensure the metadata row exists.
       2. body.card_id (card chat first-open) — derive
          card-thread-<card_id>, kind='card'.
-      3. neither (Main Chat first-open / cache miss) — look up the user's
-         most-recently-active main thread in pai_chat_threads. If found,
-         reuse it so the user resumes their history. If none, mint a new
-         main-<user_id>-<rand> thread (genuinely first time).
+      3. neither (Main Chat) — return the user's singleton main thread.
+         Main chat is one thread per user: pick the most-recently-active
+         existing main row, or mint a new one if the user has none yet.
 
-    The third case is the bug fix that motivated 035_pai_chat_threads:
-    minting blindly here orphaned LangGraph history whenever localStorage
-    got cleared. The pai_chat_threads metadata table is the source of
-    truth for "what threads does this user have"; we trust it over the
-    browser cache.
+    This was previously a 3-thread-per-user model with `new_thread=true`
+    starting fresh threads. The model collapsed to "one main thread per
+    user, history accumulates" — see migration 053 for the cleanup +
+    UNIQUE constraint enforcing this going forward.
     """
     kind: str
     card_id: str | None
-    title: str | None = None
 
     if body.session_key:
         session_key = body.session_key
@@ -101,8 +98,8 @@ async def chat_init(
         session_key = f"{_CARD_THREAD_PREFIX}{body.card_id}"
         kind, card_id = "card", body.card_id
     else:
-        # Main chat with no hint — recover the user's existing thread
-        # from pai_chat_threads. Mint a new one only if they truly have none.
+        # Main chat with no hint — recover the singleton main thread for
+        # this user. Mint only if they truly have none.
         async with user_scoped_tx(pool, user.id) as conn:
             existing_thread_id = await ChatThreadsRepository(
                 user_id=user.id, conn=conn,
@@ -120,44 +117,12 @@ async def chat_init(
         await ChatThreadsRepository(
             user_id=user.id, conn=conn,
         ).insert_thread(
-            thread_id=session_key, kind=kind,
-            card_id=card_id, title=title,
+            thread_id=session_key, kind=kind, card_id=card_id,
         )
 
     existing = await call_chat_exists(user_id=user.id, session_key=session_key)
     return ChatInitResponse(
         session_key=session_key, existing=existing,
-    )
-
-
-@router.get("/threads", response_model=ChatThreadListResponse)
-async def list_chat_threads(
-    user: User = Depends(current_user),
-    pool=Depends(get_pool),
-    kind: str | None = Query(None, pattern="^(main|card)$"),
-    limit: int = Query(50, ge=1, le=200),
-) -> ChatThreadListResponse:
-    """List the user's chat threads, latest-active first. Reads only
-    pai_chat_threads (no LangGraph hop) — fast list endpoint for a
-    sidebar / picker UI."""
-    async with user_scoped_tx(pool, user.id) as conn:
-        rows = await ChatThreadsRepository(
-            user_id=user.id, conn=conn,
-        ).list_threads(kind=kind, limit=limit)
-    return ChatThreadListResponse(
-        threads=[
-            ChatThreadItem(
-                thread_id=r.thread_id,
-                kind=r.kind,
-                card_id=r.card_id,
-                title=r.title,
-                archived=r.archived,
-                created_at=r.created_at,
-                last_message_at=r.last_message_at,
-                message_count=r.message_count,
-            )
-            for r in rows
-        ],
     )
 
 
@@ -225,19 +190,25 @@ async def chat_send(
                 virtual_key=user.litellm_virtual_key,
                 browserbase_context_id=user.browserbase_context_id,
                 client_hints=hints_dict,
+                regenerate=body.regenerate,
             ):
                 yield chunk
         finally:
-            try:
-                async with user_scoped_tx(pool, user.id) as conn:
-                    await ChatThreadsRepository(
-                        user_id=user.id, conn=conn,
-                    ).bump_after_send(thread_id=body.session_key)
-            except Exception:
-                logger.exception(
-                    "bump_after_send failed user=%d thread=%s",
-                    user.id, body.session_key,
-                )
+            # Regenerate doesn't add a new user turn — the trailing
+            # HumanMessage in LangGraph state is the existing one we're
+            # re-running against. Skip the metadata bump so message_count
+            # / last_message_at reflect actual conversation turns.
+            if not body.regenerate:
+                try:
+                    async with user_scoped_tx(pool, user.id) as conn:
+                        await ChatThreadsRepository(
+                            user_id=user.id, conn=conn,
+                        ).bump_after_send(thread_id=body.session_key)
+                except Exception:
+                    logger.exception(
+                        "bump_after_send failed user=%d thread=%s",
+                        user.id, body.session_key,
+                    )
 
     return StreamingResponse(
         _stream_with_metadata_bump(),
