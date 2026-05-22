@@ -3,6 +3,29 @@ import { AmbientAi, type PlaceInfo } from "@pin/capacitor-ambient-ai";
 import { SIGNAL_KINDS } from "../kinds";
 import type { AmbientSource, SourceContext } from "./types";
 
+type DisplayPlaceMode = "exact_place" | "nearby_poi" | "area" | "coordinates";
+
+interface PlaceCandidateLike {
+  name: string;
+  distance_m: number;
+  category?: string;
+  confidence?: number;
+}
+
+type PlaceInfoWithCandidates = Omit<
+  PlaceInfo,
+  "candidates" | "display_place" | "resolution_strategy"
+> & {
+  candidates?: unknown[];
+  resolution_strategy?: "structured_poi" | "reverse_geocode" | "coordinates";
+};
+
+export interface DisplayPlace {
+  mode: DisplayPlaceMode;
+  label: string;
+  confidence: number;
+}
+
 export interface LocationSourceOptions {
   /**
    * How often to poll `Geolocation.getCurrentPosition`, in milliseconds.
@@ -121,11 +144,18 @@ export class LocationSource implements AmbientSource {
     this.lastLng = longitude;
 
     const { place, placeCached } = await this.resolvePlace(latitude, longitude);
+    const placeInfo = place as PlaceInfoWithCandidates | null;
+    const placeCandidates = candidatePlaces(placeInfo);
+    const displayPlace = resolveDisplayPlace({
+      latitude,
+      longitude,
+      accuracy,
+      candidate: placeCandidates[0],
+      address: place?.address,
+      area: place?.area_of_interest ?? place?.sub_locality ?? place?.locality,
+    });
 
-    const placeLabel = place?.label ?? place?.place_name ?? place?.address;
-    const summary = placeLabel
-      ? `${placeLabel} (${latitude.toFixed(4)}, ${longitude.toFixed(4)} ±${Math.round(accuracy)}m)`
-      : `${latitude.toFixed(4)}, ${longitude.toFixed(4)} ±${Math.round(accuracy)}m`;
+    const summary = displayPlace.label;
     this.ctx.push({
       kind: SIGNAL_KINDS.location,
       title: "Location update",
@@ -140,6 +170,13 @@ export class LocationSource implements AmbientSource {
         heading: pos.coords.heading,
         place: place ?? undefined,
         place_cached: place ? placeCached : undefined,
+        location_fix: { latitude, longitude, accuracy },
+        place_candidates: placeCandidates,
+        display_place: displayPlace,
+        place_resolution: {
+          strategy: placeInfo?.resolution_strategy ?? "reverse_geocode",
+          source: place?.source ?? "apple_mapkit",
+        },
       },
     });
     this.ctx.onEvent(this.key, summary);
@@ -177,6 +214,70 @@ export class LocationSource implements AmbientSource {
       return { place: this.lastPlace, placeCached: this.lastPlace !== null };
     }
   }
+}
+
+export function resolveDisplayPlace(input: {
+  latitude: number;
+  longitude: number;
+  accuracy: number;
+  candidate?: PlaceCandidateLike;
+  address?: string;
+  area?: string;
+}): DisplayPlace {
+  const coordinateLabel = `${input.latitude.toFixed(4)}, ${input.longitude.toFixed(4)} ±${Math.round(input.accuracy)}m`;
+  const candidate = input.candidate;
+  if (candidate && input.accuracy <= 25 && candidate.distance_m <= 25) {
+    return { mode: "exact_place", label: candidate.name, confidence: 0.9 };
+  }
+  if (
+    candidate &&
+    candidate.distance_m <= 80 &&
+    candidate.distance_m <= Math.max(input.accuracy * 1.5, 50)
+  ) {
+    return {
+      mode: "nearby_poi",
+      label: `Near ${candidate.name}`,
+      confidence: 0.65,
+    };
+  }
+  const areaLabel = input.area ?? input.address;
+  if (areaLabel) return { mode: "area", label: areaLabel, confidence: 0.7 };
+  return { mode: "coordinates", label: coordinateLabel, confidence: 0.5 };
+}
+
+function candidatePlaces(
+  place: PlaceInfoWithCandidates | null,
+): PlaceCandidateLike[] {
+  const candidates = Array.isArray(place?.candidates) ? place.candidates : [];
+  const normalized: PlaceCandidateLike[] = [];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const row = candidate as Record<string, unknown>;
+    const name = typeof row.name === "string" ? row.name.trim() : "";
+    const distance =
+      typeof row.distance_m === "number" && Number.isFinite(row.distance_m)
+        ? row.distance_m
+        : null;
+    if (!name || distance === null) continue;
+    normalized.push({
+      name,
+      distance_m: distance,
+      category: typeof row.category === "string" ? row.category : undefined,
+      confidence: typeof row.confidence === "number" ? row.confidence : undefined,
+    });
+    if (normalized.length >= 5) break;
+  }
+  if (normalized.length > 0) return normalized;
+  if (place?.poi_name && typeof place.poi_distance_m === "number") {
+    return [
+      {
+        name: place.poi_name,
+        distance_m: place.poi_distance_m,
+        category: place.poi_category,
+      },
+    ];
+  }
+  return [];
 }
 
 function haversineMeters(
