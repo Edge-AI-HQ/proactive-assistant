@@ -676,7 +676,7 @@ describe("SoundClassifierSource transcript ingest", () => {
       title: "music",
       dedupe_key: "sound:music:2026-04-24T03:06:40.000Z",
       payload: {
-        schema_version: "sound_scene_run.v1",
+        schema_version: "sound_scene_run.v2",
         label: "music",
         sampleCount: 3,
       },

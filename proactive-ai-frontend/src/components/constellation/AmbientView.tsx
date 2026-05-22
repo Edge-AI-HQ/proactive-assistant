@@ -200,10 +200,10 @@ function pendingTranscriptWindowToEntry(window: AmbientCandidateWindow): Timelin
     icon: Mic,
     device: { name: "Microphone", icon: Mic },
     privacyTag: "private",
-    confidenceLabel: window.confidenceHint >= 0.65 ? "certain" : "uncertain",
-    title: "Voice transcript pending",
+    confidenceLabel: undefined,
+    title: "Voice transcript",
     body: transcriptWindowPreview(window.compactContext),
-    tags: ["voice", "pending"],
+    tags: ["voice"],
   };
 }
 
@@ -297,13 +297,15 @@ function rawEventBody(raw: AmbientRawEvent): string {
 }
 
 function soundBody(text: string): string {
-  const match = /^Heard\s+([a-zA-Z_ -]+?)\s+for\s+/.exec(text.trim());
-  const label = match?.[1]?.trim().toLowerCase();
-  if (label === "speech" || label === "conversation") return "Speech detected";
-  if (label === "traffic") return "Traffic sound";
-  if (label === "quiet" || label === "quiet room") return "Quiet room";
-  if (label === "music" || label === "singing") return "Music";
-  return "Sound detected";
+  const match = /^Heard\s+(.+?)\s+for\s+/.exec(text.trim());
+  const label = match?.[1]?.trim();
+  const normalized = label?.toLowerCase();
+  if (!label) return "Sound detected";
+  if (normalized === "speech" || normalized === "conversation") return "Speech detected";
+  if (normalized === "traffic") return "Traffic sound detected";
+  if (normalized === "quiet" || normalized === "quiet room") return "Quiet room";
+  if (normalized === "music" || normalized === "singing") return "Music detected";
+  return `${label.replace(/^./, (char) => char.toUpperCase())} detected`;
 }
 
 function transcriptWindowPreview(compactContext: string): string {

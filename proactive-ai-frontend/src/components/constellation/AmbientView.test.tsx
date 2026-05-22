@@ -262,9 +262,31 @@ describe("AmbientView ambient toggle", () => {
 
     render(<AmbientView />);
 
-    expect(await screen.findByText("Voice transcript pending")).toBeTruthy();
+    expect(await screen.findByText("Voice transcript")).toBeTruthy();
     expect(await screen.findByText("对决每年的世界杯决赛杯，决赛就是美国队大法国队。")).toBeTruthy();
+    expect(screen.queryByText("Voice transcript pending")).toBeNull();
+    expect(screen.queryByText("#pending")).toBeNull();
+    expect(screen.queryByText("uncertain")).toBeNull();
     expect(screen.queryByText(/Motion context/i)).toBeNull();
+  });
+
+  test("renders concrete sound labels instead of generic sound detected text", async () => {
+    runtimeMock.status.mockReturnValue(makeStatus());
+    ambientTimelineMock.latestRawEvents = [{
+      id: "raw-sound-1",
+      sourceType: "sound",
+      eventType: "sound.scene_run",
+      occurredAt: "2026-05-18T08:08:00.000Z",
+      compactText: "Heard Dog bark for 12s.",
+      sensitivity: "normal",
+      confidence: 0.81,
+    }];
+
+    render(<AmbientView />);
+
+    expect(await screen.findByText("Sound context")).toBeTruthy();
+    expect(await screen.findByText("Dog bark detected")).toBeTruthy();
+    expect(screen.queryByText("Sound detected")).toBeNull();
   });
 
 });

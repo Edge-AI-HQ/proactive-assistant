@@ -385,12 +385,34 @@ describe("candidate window live session context", () => {
     expect(session?.assists.map((item) => item.text)).toEqual([
       "Location near Office.",
       "Motion stationary for 1m 1s.",
-      "Sound detected",
+      "Dictionary detected",
       "Health summary: 1311 steps today",
     ]);
     expect(session?.assists.every((item, index, items) =>
       index === 0 || (items[index - 1].sortTs ?? 0) <= (item.sortTs ?? 0),
     )).toBe(true);
+  });
+
+
+
+  test("keeps conservative display place labels from normalized location context", () => {
+    const contextItems = candidateWindowsToLiveSessionContextItems([
+      makeWindow({
+        id: "location-display",
+        windowType: "location_update",
+        startedAt: "2026-05-15T10:01:00.000Z",
+        compactContext: "Location: Near Driving School.",
+        privacyHint: "private",
+      }),
+    ], { now: new Date("2026-05-15T10:05:00.000Z") });
+
+    const session = liveSessionDataToSession(true, null, contextItems);
+
+    expect(session).toMatchObject({
+      title: "Sensing near Driving School",
+      location: "Near Driving School",
+    });
+    expect(session?.assists[0].text).toBe("Near Driving School · private");
   });
 
   test("builds a context-only live session when transcript is absent", () => {

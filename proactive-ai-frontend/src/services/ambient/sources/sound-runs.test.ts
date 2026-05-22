@@ -25,13 +25,45 @@ describe("SoundRunAggregator", () => {
       title: "music",
       dedupe_key: "sound:music:1970-01-01T00:00:01.000Z",
       payload: {
-        schema_version: "sound_scene_run.v1",
+        schema_version: "sound_scene_run.v2",
         label: "music",
+        primaryLabel: "music",
+        displayLabel: "Music",
         started_at: "1970-01-01T00:00:01.000Z",
         ended_at: "1970-01-01T00:00:17.000Z",
         sampleCount: 3,
         maxConfidence: 0.81,
+        sourceConfidence: 0.81,
+        topCandidates: [{ label: "music", confidence: 0.81 }],
       },
     });
   });
+
+  test("preserves concrete sound labels and top candidates", () => {
+    const aggregator = new SoundRunAggregator();
+
+    aggregator.addSample({ timestamp: 1_000, classifications: [
+      { label: "dog bark", confidence: 0.7 },
+      { label: "speech", confidence: 0.2 },
+    ] });
+    aggregator.addSample({ timestamp: 9_000, classifications: [
+      { label: "dog bark", confidence: 0.75 },
+      { label: "speech", confidence: 0.21 },
+    ] });
+    const emitted = aggregator.addSample({ timestamp: 17_000, classifications: [
+      { label: "dog bark", confidence: 0.81 },
+      { label: "speech", confidence: 0.21 },
+    ] });
+
+    expect(emitted[0].payload).toMatchObject({
+      primaryLabel: "dog_bark",
+      displayLabel: "Dog bark",
+      topCandidates: [
+        { label: "dog_bark", confidence: 0.81 },
+        { label: "speech", confidence: 0.21 },
+      ],
+      sourceConfidence: 0.81,
+    });
+  });
+
 });

@@ -1,3 +1,17 @@
+export interface PlaceCandidate {
+  name: string;
+  category?: string;
+  distance_m: number;
+  source: 'apple_mapkit' | 'apple_geocoder';
+  confidence: number;
+}
+
+export interface DisplayPlace {
+  mode: 'exact_place' | 'nearby_poi' | 'area' | 'coordinates';
+  label: string;
+  confidence: number;
+}
+
 export interface PlaceInfo {
   /**
    * Multi-segment label composed natively as
@@ -19,6 +33,11 @@ export interface PlaceInfo {
   poi_category?: string;
   /** Distance in meters from the user's coordinate to the matched POI. */
   poi_distance_m?: number;
+  /** Ranked structured POI candidates from MapKit. */
+  candidates?: PlaceCandidate[];
+  /** Conservative display-safe place text chosen from address, area, or POI candidates. */
+  display_place?: DisplayPlace;
+  resolution_strategy?: 'structured_poi' | 'reverse_geocode' | 'coordinates';
   /** First entry of `CLPlacemark.areasOfInterest`. */
   area_of_interest?: string;
   /** Full `CLPlacemark.areasOfInterest` list. */
