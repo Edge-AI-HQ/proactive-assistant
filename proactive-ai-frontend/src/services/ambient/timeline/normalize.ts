@@ -133,6 +133,8 @@ function compactText(
     return `Arrived ${place ? `near ${place}` : "at a place"}. ${item.summary}`;
   }
   if (sourceType === "location") {
+    const display = displayPlaceLabel(payload);
+    if (display) return `Location: ${display}.`;
     const place = placeLabel(payload);
     return place ? `Location near ${place}.` : item.summary;
   }
@@ -157,7 +159,10 @@ function compactText(
   if (sourceType === "device_state") return `Device state: ${item.summary}`;
   if (sourceType === "transcript") return stripTranscriptSegmentLabels(item.summary);
   if (eventType === "sound.scene_run") {
-    const label = cleanText(payload.label) ?? "sound";
+    const label = cleanText(payload.displayLabel)
+      ?? cleanText(payload.primaryLabel)
+      ?? cleanText(payload.label)
+      ?? "sound";
     return `Heard ${label} for ${formatDuration(parseOptionalNumber(payload.durationMs))}.`;
   }
   return item.summary;
@@ -184,6 +189,8 @@ function endedAtForRaw(
 }
 
 export function placeLabel(payload: Record<string, unknown>): string | null {
+  const display = displayPlaceLabel(payload);
+  if (display) return display;
   const direct = cleanText(payload.place_label);
   if (direct) return direct;
   const place = payload.place;
@@ -192,6 +199,15 @@ export function placeLabel(payload: Record<string, unknown>): string | null {
   return cleanText(row.label)
     ?? cleanText(row.place_name)
     ?? cleanText(row.address);
+}
+
+function displayPlaceLabel(payload: Record<string, unknown>): string | null {
+  const direct = payload.display_place;
+  if (direct && typeof direct === "object") {
+    const label = cleanText((direct as Record<string, unknown>).label);
+    if (label) return label;
+  }
+  return null;
 }
 
 function normalizeIso(value: string | null | undefined): string | null {

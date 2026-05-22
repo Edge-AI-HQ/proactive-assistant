@@ -62,7 +62,7 @@ export class SoundRunAggregator {
       endedAt: sample.timestamp,
       sampleCount: 1,
       maxConfidence: top.confidence,
-      latestTop: sample.classifications.slice(0, 3),
+      latestTop: normalizeClassifications(sample.classifications).slice(0, 3),
       lastPushedAt: null,
     };
     return output;
@@ -81,7 +81,7 @@ export class SoundRunAggregator {
       endedAt: sample.timestamp,
       sampleCount: this.current.sampleCount + 1,
       maxConfidence: Math.max(this.current.maxConfidence, top?.confidence ?? 0),
-      latestTop: sample.classifications.slice(0, 3),
+      latestTop: normalizeClassifications(sample.classifications).slice(0, 3),
     };
   }
 
@@ -114,27 +114,49 @@ function signalFromRun(run: OpenSoundRun): PersonalSignalInput {
   const startedAt = new Date(run.startedAt).toISOString();
   const endedAt = new Date(run.endedAt).toISOString();
   const runId = `sound:${run.label}:${startedAt}`;
+  const displayLabel = displayLabelForSound(run.label);
   return {
     kind: SIGNAL_KINDS.soundSceneRun,
     title: run.label,
-    summary: `Heard ${run.label}`,
+    summary: `Heard ${displayLabel}`,
     occurred_at: startedAt,
     payload: {
-      schema_version: "sound_scene_run.v1",
+      schema_version: "sound_scene_run.v2",
       runId,
       label: run.label,
+      primaryLabel: run.label,
+      displayLabel,
       started_at: startedAt,
       ended_at: endedAt,
       durationMs: run.endedAt - run.startedAt,
       sampleCount: run.sampleCount,
       maxConfidence: run.maxConfidence,
+      sourceConfidence: run.maxConfidence,
       top: run.latestTop,
+      topCandidates: run.latestTop,
     },
     confidence: run.maxConfidence,
     dedupe_key: runId,
   };
 }
 
+function normalizeClassifications(
+  classifications: Array<{ label: string; confidence: number }>,
+): Array<{ label: string; confidence: number }> {
+  return classifications.map((item) => ({
+    label: normalizeLabel(item.label),
+    confidence: item.confidence,
+  }));
+}
+
 function normalizeLabel(label: string): string {
-  return label.trim().toLowerCase().replace(/\s+/g, "_");
+  return label.trim().toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+function displayLabelForSound(label: string): string {
+  const text = label
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+  return text ? text.replace(/^./, (char) => char.toUpperCase()) : "Sound";
 }

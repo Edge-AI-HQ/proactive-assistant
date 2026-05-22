@@ -10,6 +10,15 @@ const { startAmbientUploadMock, useUserSettingsMock } = vi.hoisted(() => ({
   useUserSettingsMock: vi.fn(),
 }));
 
+vi.mock("@/services/ambient", () => ({
+  getAmbientRuntime: () => ({
+    status: () => ({ uploadsLocked: false }),
+    subscribe: () => () => {},
+  }),
+}));
+vi.mock("@/lib/api", () => ({
+  summarizeAmbientWithCloud: vi.fn(),
+}));
 vi.mock("@/lib/platform", () => ({ isNative: true }));
 vi.mock("@/hooks/useAuth", () => ({
   useAuth: () => ({

@@ -20,7 +20,13 @@ export interface AmbientSummaryModelBridge {
   generateAmbientSummaryEvent(
     context: AmbientSummaryContext,
   ): Promise<
-    | { ok: true; draft: AmbientSummaryEventDraft; modelId?: string }
+    | {
+      ok: true;
+      draft: AmbientSummaryEventDraft;
+      modelId?: string;
+      generationMethod?: "local_llm" | "cloud_llm";
+      primarySourceLabel?: string;
+    }
     | { ok: false; errorCode: string; errorMessage?: string }
   >;
 }
@@ -32,6 +38,7 @@ export async function maybeRunScheduledAmbientSummary(input: {
   localDate: string;
   timezone: string;
   localUserId: string;
+  shouldPersistResult?: (result: { generationMethod?: "local_llm" | "cloud_llm" }) => boolean;
 }): Promise<{ ran: false; status: "not_due" } | { ran: true; status: "success" | "no_content" | "failed" }> {
   const currentState = await input.store.getSummarySchedulerState();
   const nowMs = input.now.getTime();
@@ -72,6 +79,18 @@ export async function maybeRunScheduledAmbientSummary(input: {
     return { ran: true, status: "failed" };
   }
 
+  if (input.shouldPersistResult && !input.shouldPersistResult(result)) {
+    await input.store.setSummarySchedulerState(
+      recordAmbientSummaryFailure(
+        currentState,
+        input.now,
+        "cloud_result_discarded_after_lock",
+        "Ambient summary result was discarded because uploads were locked before persistence.",
+      ),
+    );
+    return { ran: true, status: "failed" };
+  }
+
   const sourceTypes = Array.from(new Set(rawEvents.map((event) => event.sourceType)));
   const id = `ambient-summary-${input.localDate}-${nowMs}`;
   const event: AmbientTimelineEvent = {
@@ -83,7 +102,7 @@ export async function maybeRunScheduledAmbientSummary(input: {
     eventType: "other",
     title: result.draft.title,
     summary: result.draft.summary,
-    primarySourceLabel: "On-device summary",
+    primarySourceLabel: result.primarySourceLabel ?? "On-device summary",
     deviceLabels: Array.from(new Set(rawEvents.flatMap((event) => event.deviceId ? [event.deviceId] : []))).slice(0, 5),
     sourceTypes,
     tags: result.draft.tags,
@@ -93,7 +112,7 @@ export async function maybeRunScheduledAmbientSummary(input: {
     salience: 0.7,
     rawRefs: rawEvents.map((event) => ({ sourceType: event.sourceType, id: event.id })),
     observationIds: [],
-    generationMethod: "local_llm",
+    generationMethod: result.generationMethod ?? "local_llm",
     generationSource: "llm_summary",
     sourceWindowIds: [],
     ...(result.modelId ? { llmModelId: result.modelId } : {}),

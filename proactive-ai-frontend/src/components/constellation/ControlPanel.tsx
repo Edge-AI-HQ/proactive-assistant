@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Sparkles, MapPin, Plus, X, User as UserIcon,
@@ -16,7 +16,9 @@ import {
 import { Slider } from "@/components/ui/slider";
 import { isNative } from "@/lib/platform";
 import AmbientSourceControlsPanel from "@/components/AmbientSourceControlsPanel";
+import { getAmbientRuntime, type RuntimeStatus } from "@/services/ambient";
 import AmbientTimelineSummaryStatusPanel from "@/components/AmbientTimelineSummaryStatusPanel";
+import AmbientSummaryModePanel from "@/components/AmbientSummaryModePanel";
 import GoalsView from "./GoalsView";
 import { VoiceButton } from "@/components/voice";
 
@@ -121,9 +123,16 @@ export default function ControlPanel() {
   const [draftPrompt, setDraftPrompt] = useState(INITIAL_SYSTEM_PROMPT);
   const [isEditingPrompt, setIsEditingPrompt] = useState(false);
   const [requestInput, setRequestInput] = useState("");
+  const [ambientRuntimeStatus, setAmbientRuntimeStatus] = useState<RuntimeStatus | null>(null);
   const [personality, setPersonality] = useState<Record<DimensionId, number>>({
     proactivity: 1, communication: 1, focus: 1, intervention: 1,
   });
+
+  useEffect(() => {
+    const runtime = getAmbientRuntime();
+    setAmbientRuntimeStatus(runtime.status());
+    return runtime.subscribe(() => setAmbientRuntimeStatus(runtime.status()));
+  }, []);
 
   return (
     <div className="flex flex-col h-full px-4 pt-14 pb-2 overflow-y-auto">
@@ -430,6 +439,8 @@ export default function ControlPanel() {
           </div>
 
           <AmbientSourceControlsPanel />
+
+          <AmbientSummaryModePanel runtimeStatus={ambientRuntimeStatus} />
 
           <AmbientTimelineSummaryStatusPanel />
 

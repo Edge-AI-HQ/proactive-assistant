@@ -587,7 +587,7 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
       .reverse()
       .find((candidate) => candidate.eventType === "location.fix");
     if (earlier && !shouldUploadLocationUpdate(raw, earlier)) return null;
-    const context = place ? `Location near ${place}.` : raw.compactText;
+    const context = place ? `Location: ${place}.` : raw.compactText;
     return this.upsertWindow({
       id: stableId("win", ["location_update", raw.id]),
       localDate: raw.localDate,
@@ -1235,7 +1235,10 @@ export function todayLocalDate(): string {
 
 
 function soundContext(raw: AmbientRawEvent): string {
-  const label = stringPayload(raw.payload, "label") ?? "sound";
+  const label = stringPayload(raw.payload, "displayLabel")
+    ?? stringPayload(raw.payload, "primaryLabel")
+    ?? stringPayload(raw.payload, "label")
+    ?? "sound";
   const confidence = numberPayload(raw.payload, "maxConfidence") ?? raw.confidence;
   const confidenceText = confidence !== null ? `, max confidence ${Math.round(confidence * 100)}%` : "";
   return `Heard ${label} for ${formatDuration(numberPayload(raw.payload, "durationMs"))}${confidenceText}.`;
@@ -1310,8 +1313,8 @@ function sanitizeRawPayload(raw: AmbientRawEvent): Record<string, unknown> | nul
       ]);
     case "sound":
       return pick(raw.payload, [
-        "label", "started_at", "ended_at", "durationMs",
-        "maxConfidence", "sampleCount",
+        "label", "primaryLabel", "displayLabel", "started_at", "ended_at", "durationMs",
+        "maxConfidence", "sourceConfidence", "sampleCount", "topCandidates",
       ]);
     case "health":
       return pick(raw.payload, [
@@ -1352,7 +1355,13 @@ function sanitizeTranscriptPayload(raw: AmbientRawEvent): Record<string, unknown
 }
 
 function sanitizeLocationPayload(raw: AmbientRawEvent): Record<string, unknown> {
-  return withPoi(raw.payload, pick(raw.payload, ["latitude", "longitude", "accuracy"]));
+  const payload = pick(raw.payload, [
+    "latitude", "longitude", "accuracy", "location_fix",
+    "place_candidates", "display_place", "place_resolution",
+  ]);
+  const candidates = Array.isArray(payload.place_candidates) ? payload.place_candidates.slice(0, 5) : undefined;
+  if (candidates) payload.place_candidates = candidates;
+  return withPoi(raw.payload, payload);
 }
 
 function sanitizeVisitPayload(raw: AmbientRawEvent): Record<string, unknown> {

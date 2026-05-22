@@ -38,7 +38,8 @@ import { SoundClassifierSource } from "./sources/sound-classifier";
 import type { AmbientSource, SourceContext } from "./sources/types";
 import { VisitSource } from "./sources/visit";
 import { maybeRunScheduledAmbientSummary } from "./timeline/scheduled-summary";
-import { ambientTimelineModels } from "./timeline/models";
+import { createCloudFirstAmbientSummaryBridge, createLocalAmbientSummaryBridge } from "./summary-bridges";
+import { effectiveAmbientSummaryMode } from "./summary-preference";
 
 export { ALL_SOURCE_KEYS, DEFAULT_AUTO_START_SOURCES };
 export type { SourceKey };
@@ -461,20 +462,29 @@ export class AmbientRuntime {
     }
   }
 
-  private async runScheduledTimelineSummary(): Promise<void> {
+  async runScheduledTimelineSummary(nowOverride?: Date): Promise<void> {
     if (this.timelineSummaryInFlight) return;
     this.timelineSummaryInFlight = true;
     try {
-      const localDate = new Date().toISOString().slice(0, 10);
-      if (!ambientTimelineModels.generateAmbientSummaryEvent) return;
+      const now = nowOverride ?? new Date();
+      const localDate = now.toISOString().slice(0, 10);
+      const uploadsLockedAtStart = this.scheduler.isUploadsLocked();
+      const bridge = effectiveAmbientSummaryMode({ uploadsLocked: uploadsLockedAtStart }) === "cloud_llm"
+        ? createCloudFirstAmbientSummaryBridge({
+          shouldUseCloud: () => !this.scheduler.isUploadsLocked(),
+        })
+        : createLocalAmbientSummaryBridge();
       const localUserId = await currentDeviceOwnerUserId();
       const result = await maybeRunScheduledAmbientSummary({
         store: getAmbientTimelineStore(),
-        bridge: { generateAmbientSummaryEvent: ambientTimelineModels.generateAmbientSummaryEvent.bind(ambientTimelineModels) },
-        now: new Date(),
+        bridge,
+        now,
         localDate,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
         localUserId: localUserId ?? "local",
+        shouldPersistResult: (summaryResult) => (
+          summaryResult.generationMethod !== "cloud_llm" || !this.scheduler.isUploadsLocked()
+        ),
       });
       if (result.ran && result.status === "success") {
         await this.refreshTimeline(localDate);

@@ -145,7 +145,7 @@ export interface AmbientTimelineEvent {
   rawRefs: AmbientRawRef[];
   observationIds: string[];
   windowId?: string;
-  generationMethod: "rule" | "local_llm";
+  generationMethod: "rule" | "local_llm" | "cloud_llm";
   generationSource?: "rule_based" | "llm_summary";
   summaryRunId?: string;
   sourceWindowIds?: string[];
