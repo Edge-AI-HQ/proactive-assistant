@@ -1,56 +1,123 @@
-import { useEffect, useState } from "react";
-import { useAuth } from "@/hooks/useAuth";
+import { useCallback, useEffect, useState } from "react";
 import { proxyPost } from "@/lib/api";
+import { useProactiveChatRuntime } from "./chat/useProactiveChatRuntime";
 import MainChatView from "./main-chat/MainChatView";
+import MinimalistLanding from "./main-chat/MinimalistLanding";
 
 interface MainChatProps {
   onBack: () => void;
 }
 
-// Per-user main-thread session_key cache. Backend (pai_chat_threads)
-// is the source of truth — localStorage is only a perf optimization
-// to skip the round-trip when the user reopens Main Chat in the same
-// browser. If the cache is missing or stale (cleared / new device /
-// incognito), backend looks up the user's most-recent main thread
-// from pai_chat_threads and returns it, so history is never orphaned.
-const STORAGE_PREFIX = "pinai:main-session:";
+type ViewMode = "landing" | "conversation";
 
+/**
+ * Main-Chat router. Two views over the user's singleton main thread:
+ *
+ *   - MinimalistLanding (sphere + greeting + chips + composer)
+ *   - MainChatView (the conversation transcript)
+ *
+ * Landing is always the entry. Tapping a chip / sending from the
+ * composer transitions into the conversation; backing out from the
+ * conversation closes Main Chat and returns to the app's Now surface.
+ * The thread is a singleton per user (enforced server-side, see
+ * migration 053) — conversation history accumulates and is never split
+ * or rotated.
+ *
+ * Both views stay mounted while sessionKey is known; visibility is
+ * toggled via CSS so the in-flight SSE survives the landing →
+ * conversation transition.
+ */
 export default function MainChat({ onBack }: MainChatProps) {
-  const { user } = useAuth();
   const [sessionKey, setSessionKey] = useState<string | null>(null);
 
+  // Fetch the user's main thread once on mount. Backend returns the
+  // singleton — created lazily if the user has none yet.
   useEffect(() => {
-    if (!user?.id) return;
-    const storageKey = STORAGE_PREFIX + user.id;
     let cancelled = false;
-
     void (async () => {
-      // Always hit /init — sending the cached sessionKey if we have one
-      // lets the backend validate it (RLS-scoped) and bring the metadata
-      // row up to date. If we don't have one, backend either returns the
-      // user's existing latest main thread or mints a fresh one. Either
-      // way the response is the canonical sessionKey.
-      const cached = localStorage.getItem(storageKey);
       try {
-        const res = await proxyPost(
-          "/chat-stream/init",
-          cached ? { sessionKey: cached } : {},
-        );
-        if (!res.ok || cancelled) return;
+        const res = await proxyPost("/chat-stream/init", {});
+        if (!res.ok) return;
         const data = (await res.json()) as { sessionKey?: string };
-        if (!data.sessionKey) return;
-        localStorage.setItem(storageKey, data.sessionKey);
-        setSessionKey(data.sessionKey);
+        if (!cancelled && data.sessionKey) {
+          setSessionKey(data.sessionKey);
+        }
       } catch {
-        // Transient network failure — closing and reopening retries.
+        // Transient — the next mount retries. Caller (ConstellationLayout)
+        // owns retry-by-reopen via the ASK PIN AI button.
       }
     })();
-
     return () => {
       cancelled = true;
     };
-  }, [user?.id]);
+  }, []);
 
-  if (!sessionKey) return null;
-  return <MainChatView sessionKey={sessionKey} title="Chat" onBack={onBack} />;
+  // Brief blank while /init resolves (typically <200ms). The parent
+  // wrap has its own fade-in transition, so the user mostly sees that
+  // animation cover this gap.
+  if (sessionKey === null) return null;
+  return <MainChatScope sessionKey={sessionKey} onBack={onBack} />;
+}
+
+/**
+ * Holds the assistant-ui runtime + view toggle once sessionKey is known.
+ * Split out so the hook is only called with a real key (no placeholder
+ * runtime). Both Landing and MainChatView share this runtime so the
+ * Landing's submit can append directly into the same thread without
+ * any bootstrap-message indirection.
+ */
+function MainChatScope({
+  sessionKey,
+  onBack,
+}: {
+  sessionKey: string;
+  onBack: () => void;
+}) {
+  const { runtime, historyLoaded } = useProactiveChatRuntime({ sessionKey });
+  const [view, setView] = useState<ViewMode>("landing");
+
+  const handleSubmitFromLanding = useCallback(
+    (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      setView("conversation");
+      void runtime.thread.append({
+        role: "user",
+        content: [{ type: "text", text: trimmed }],
+      });
+    },
+    [runtime],
+  );
+
+  const handleConversationBack = useCallback(() => {
+    onBack();
+  }, [onBack]);
+
+  return (
+    <>
+      <div
+        className="absolute inset-0"
+        style={{ display: view === "landing" ? "block" : "none" }}
+        aria-hidden={view !== "landing"}
+      >
+        <MinimalistLanding
+          onBack={onBack}
+          onSubmit={handleSubmitFromLanding}
+          disabled={!historyLoaded}
+        />
+      </div>
+      <div
+        className="absolute inset-0"
+        style={{ display: view === "conversation" ? "block" : "none" }}
+        aria-hidden={view !== "conversation"}
+      >
+        <MainChatView
+          sessionKey={sessionKey}
+          runtime={runtime}
+          historyLoaded={historyLoaded}
+          onBack={handleConversationBack}
+        />
+      </div>
+    </>
+  );
 }

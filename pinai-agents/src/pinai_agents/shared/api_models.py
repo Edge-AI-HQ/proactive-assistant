@@ -435,6 +435,14 @@ class GeneratorOutput(_AgentModel):
 
 # ── Chat ──
 class ChatInitRequest(_CamelModel):
+    """Body for POST /api/chat-stream/init.
+
+    All fields are optional. The backend resolution order is:
+      1. session_key explicit (FE cache hit / card resume)
+      2. card_id (card chat first-open → derives card-thread-<id>)
+      3. neither (main chat) → singleton per-user main thread
+    """
+
     session_key: str | None = None
     card_id: str | None = None
 
@@ -458,24 +466,6 @@ class ChatHistoryResponse(_CamelModel):
     messages: list[dict[str, Any]] = Field(default_factory=list)
 
 
-class ChatThreadItem(_CamelModel):
-    """Single thread row for the /api/chat-stream/threads list endpoint.
-    Mirrors pai_chat_threads + minor camelCase wrapping."""
-
-    thread_id: str
-    kind: str  # 'main' | 'card'
-    card_id: str | None = None
-    title: str | None = None
-    archived: bool = False
-    created_at: datetime
-    last_message_at: datetime | None = None
-    message_count: int = 0
-
-
-class ChatThreadListResponse(_CamelModel):
-    threads: list[ChatThreadItem]
-
-
 class ClientHints(_CamelModel):
     """Frontend-supplied device hints, forwarded to the chat worker.
 
@@ -491,14 +481,20 @@ class ClientHints(_CamelModel):
 
 class ChatSendRequest(_CamelModel):
     session_key: str = Field(min_length=1, max_length=200)
-    # Always non-empty: every chat-stream/send call carries either a
-    # user-typed message OR a synthesized intent (e.g. card "Confirm"
-    # button → frontend bootstraps with the card's primaryAction text).
-    # Empty-message bootstrap (cardContext-only) was an early FE design
-    # that never reached prod — see card-chat-session.ts.
-    message: str = Field(min_length=1, max_length=8000)
+    # Non-empty for normal sends (user-typed text or a synthesized intent
+    # like a card "Confirm" → primaryAction). Allowed to be empty ONLY
+    # when `regenerate=True`, in which case the chat worker pops the
+    # trailing AI / Tool messages from LangGraph state and resumes the
+    # run from the existing HumanMessage already at the tail.
+    message: str = Field(default="", max_length=8000)
     card_context: dict[str, Any] | None = None
     client_hints: ClientHints | None = None
+    # When True, drop the trailing AIMessage(s) + ToolMessage(s) from the
+    # LangGraph thread state, then resume the agent from the existing
+    # HumanMessage. Powers the frontend's "Regenerate" (on the last
+    # assistant turn) and "Retry" (on the last user turn) actions —
+    # both reduce to the same backend op: pop tail, rerun.
+    regenerate: bool = False
 
 
 # ── Scheduled Tasks ──

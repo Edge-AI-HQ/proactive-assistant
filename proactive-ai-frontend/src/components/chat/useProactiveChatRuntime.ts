@@ -57,6 +57,16 @@ interface AdapterOptions {
   /** Latest device hints — read via ref at send time so resizes flow
    *  through without rebuilding the adapter. */
   clientHintsRef: MutableRefObject<ClientHints | null>;
+  /** Total message count the runtime had on the previous adapter
+   *  invocation. We compare against the current `messages.length` to
+   *  decide whether this turn is a fresh send (count grew → a new
+   *  user msg was appended) or a Regenerate / Edit (count stayed
+   *  same / shrunk → assistant-ui dropped the trailing assistant before
+   *  re-invoking us). On Regenerate / Edit we pass `regenerate=true`
+   *  to the backend so it pops the stale AI / Tool messages from
+   *  LangGraph state (and replaces the trailing HumanMessage if the
+   *  user edited it) instead of appending duplicate turns. */
+  lastSeenMessageCountRef: MutableRefObject<number>;
 }
 
 /**
@@ -80,6 +90,7 @@ function createAdapter({
   bootstrapMessage,
   bootstrappedSessionsRef,
   clientHintsRef,
+  lastSeenMessageCountRef,
 }: AdapterOptions): ChatModelAdapter {
   return {
     async *run({ messages, abortSignal }) {
@@ -90,14 +101,33 @@ function createAdapter({
         .map((p) => p.text)
         .join("\n");
 
+      // Regenerate / Edit detection: when assistant-ui drops the trailing
+      // assistant (Reload, beginEdit-submit, startRun(parentId=user.id))
+      // and re-invokes the adapter, the messages array's length doesn't
+      // grow (it either stays the same — in-place edit / placeholder
+      // swap — or shrinks). When the user types a brand-new message,
+      // length grows by 1+. We compare against the previous-seen count
+      // (initialized from history on mount, see useEffect below).
+      const prevCount = lastSeenMessageCountRef.current;
+      const isRegenerate = prevCount > 0 && messages.length <= prevCount;
+      lastSeenMessageCountRef.current = messages.length;
+
+      // "Fresh thread" means: first turn after init, no prior user turn
+      // in this runtime instance. Triggers (a) bootstrap-message firing
+      // and (b) card-context inclusion in the request body.
+      // - CardChat: cardContext drives this (legacy path).
+      // - MainChat new-conversation: bootstrapMessage drives this
+      //   (MinimalistLanding chip / composer path). cardContext stays
+      //   undefined and `buildChatRequestBody` correctly omits it.
       const isFreshThread =
-        Boolean(cardContext) &&
+        (Boolean(cardContext) || Boolean(bootstrapMessage?.trim())) &&
         !bootstrappedSessionsRef.current.has(sessionKey);
 
-      // Card-chat bootstrap: caller-provided `bootstrapMessage` (e.g. the
-      // card's primaryAction text on Confirm) gets sent as if the user
-      // typed it. Without it, an empty thread + no user text means the
-      // user just opened Chat — bail out and wait for them to type.
+      // Bootstrap: caller-provided `bootstrapMessage` (card primaryAction
+      // on Confirm, or Main Chat's chip / composer entry) gets sent as
+      // if the user typed it. Without it, an empty thread + no user
+      // text means the user just opened a fresh Chat — bail out and
+      // wait for them to type.
       const effectiveText = userText || (isFreshThread ? bootstrapMessage : undefined);
       if (!effectiveText) {
         return;
@@ -110,6 +140,11 @@ function createAdapter({
         includeCardContext: isFreshThread,
         clientHints: clientHintsRef.current ?? undefined,
       });
+      if (isRegenerate) {
+        // Backend ignores `message` when regenerate=true; we keep
+        // sending it (harmless) so request shape stays consistent.
+        body.regenerate = true;
+      }
 
       // Retry loop wraps the whole fetch + SSE parse so that a transient
       // chat:error (gateway draining for restart) starts over on a fresh
@@ -281,8 +316,8 @@ function createAdapter({
  * parts: user messages carry one text part; assistant messages carry a mix
  * of text and tool-call parts. We map directly into assistant-ui's
  * ThreadMessageLike content shape so tool-call parts flow through the same
- * rendering path as live SSE tool events (ToolActivityCard via
- * MessagePrimitive.Content `tools: { Fallback }`).
+ * rendering path as live SSE tool events (ChatToolGroup, grouped inside
+ * AssistantMessage by manual iteration over `m.content`).
  */
 interface HistoryTextPart {
   type: "text";
@@ -378,6 +413,10 @@ export function useProactiveChatRuntime(options: UseProactiveChatRuntimeOptions)
   const [pendingBootstrap, setPendingBootstrap] = useState(false);
   const bootstrappedSessionsRef = useRef<Set<string>>(new Set());
   const triggeredBootstrapRef = useRef<Set<string>>(new Set());
+  // Tracks the runtime `messages.length` we last sent for — adapter
+  // compares against the current length to distinguish "fresh send"
+  // (count grew) from "Regenerate / Edit" (count stayed / shrunk).
+  const lastSeenMessageCountRef = useRef<number>(0);
   // Latest device hints — kept in a ref so resize-driven re-renders
   // don't force the adapter to rebuild every turn.
   const clientHints = useClientHints();
@@ -397,6 +436,10 @@ export function useProactiveChatRuntime(options: UseProactiveChatRuntimeOptions)
     setHistoryLoaded(false);
     setInitialMessages(undefined);
     setPendingBootstrap(false);
+    // Reset for the new session — stale count from a prior thread would
+    // otherwise mis-trigger regenerate detection on this thread's
+    // first send.
+    lastSeenMessageCountRef.current = 0;
 
     void (async () => {
       try {
@@ -447,6 +490,7 @@ export function useProactiveChatRuntime(options: UseProactiveChatRuntimeOptions)
         bootstrapMessage: options.bootstrapMessage,
         bootstrappedSessionsRef,
         clientHintsRef,
+        lastSeenMessageCountRef,
       }),
     // cardContextJson is the string-stable dep — the closure reads the
     // current options.cardContext object at the time the memo recomputes.
@@ -455,28 +499,50 @@ export function useProactiveChatRuntime(options: UseProactiveChatRuntimeOptions)
   );
   const runtime = useLocalRuntime(adapter, { initialMessages });
 
+  // After history first loads into the runtime, seed
+  // lastSeenMessageCountRef from the runtime's initial message count.
+  // Without this, the first Regenerate / Edit click after a fresh page
+  // load would look like a brand-new send (prevCount=0 → fresh) and
+  // the backend would append a duplicate HumanMessage.
+  useEffect(() => {
+    if (!historyLoaded) return;
+    lastSeenMessageCountRef.current = runtime.thread.getState().messages.length;
+  }, [historyLoaded, runtime]);
+
   // Once the runtime is mounted and the thread is confirmed empty,
-  // kick off an agent-only run so the first card-chat message streams
-  // into the UI in real time (rather than landing as a static bubble
-  // after a silent pre-fetch).
+  // append the bootstrap message as a user turn — assistant-ui then
+  // auto-fires the run, so the user bubble is visible in the UI and
+  // the agent's reply streams in below it. (Previously this used
+  // `startRun({parentId: null})` which drove the same backend flow
+  // but skipped adding the user message to the runtime's state, so
+  // no user bubble ever rendered. CardChat's "Confirm" path also
+  // benefits from showing the user's action as a bubble.)
   useEffect(() => {
     if (!pendingBootstrap || !historyLoaded) return;
     if (triggeredBootstrapRef.current.has(options.sessionKey)) return;
+    const text = options.bootstrapMessage?.trim();
+    if (!text) {
+      setPendingBootstrap(false);
+      return;
+    }
 
-    // Defer startRun to the next macrotask so React's commit phase
-    // (including StrictMode dev's setup→cleanup→setup pair) and
-    // useLocalRuntime's internal LocalThreadRuntimeCore detach→reattach
-    // both settle first. Without this, the synchronous startRun lands on
-    // a thread runtime that's about to be detached, the in-flight fetch
-    // is aborted, and the wedged ref marker prevents any re-trigger.
+    // Defer to the next macrotask so React's commit phase (including
+    // StrictMode dev's setup→cleanup→setup pair) and useLocalRuntime's
+    // internal LocalThreadRuntimeCore detach→reattach both settle first.
+    // Without this, the synchronous append lands on a thread runtime
+    // that's about to be detached, the in-flight fetch is aborted, and
+    // the wedged ref marker prevents any re-trigger.
     let cancelled = false;
     const timer = setTimeout(() => {
       if (cancelled) return;
       triggeredBootstrapRef.current.add(options.sessionKey);
       try {
-        runtime.thread.startRun({ parentId: null });
+        void runtime.thread.append({
+          role: "user",
+          content: [{ type: "text", text }],
+        });
       } catch (error) {
-        console.warn("[Chat] startRun for card bootstrap failed:", error);
+        console.warn("[Chat] append for bootstrap failed:", error);
       }
       setPendingBootstrap(false);
     }, 0);
@@ -485,7 +551,13 @@ export function useProactiveChatRuntime(options: UseProactiveChatRuntimeOptions)
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [pendingBootstrap, historyLoaded, options.sessionKey, runtime]);
+  }, [
+    pendingBootstrap,
+    historyLoaded,
+    options.sessionKey,
+    options.bootstrapMessage,
+    runtime,
+  ]);
 
   return { runtime, historyLoaded };
 }

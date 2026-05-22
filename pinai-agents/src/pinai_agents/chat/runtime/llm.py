@@ -19,14 +19,14 @@ Cache control:
   propagate. Verified Step 1.2 spike: cache_creation 2049 first call,
   cache_read 2049 second.
 
-Extended thinking:
-  Default ON for chat / generator. Anthropic's thinking parameter forwards
-  through LiteLLM unchanged so the model can reason internally for higher-
-  quality answers. To surface thinking text downstream we use the
-  `ChatLiteLLMReasoning` subclass below — stock langchain-openai 1.2.1
-  drops `delta.reasoning_content` because its `_convert_delta_to_message_chunk`
-  only handles function_call / tool_calls. Our subclass converts each
-  chunk's content into v1 protocol blocks
+Reasoning:
+  Default ON for chat / generator. Anthropic models use the `thinking`
+  parameter; OpenAI reasoning models use `reasoning.summary`. To surface
+  provider reasoning downstream we use the `ChatLiteLLMReasoning` subclass
+  below — stock langchain-openai 1.2.1 drops provider-specific reasoning
+  fields because its `_convert_delta_to_message_chunk` only handles
+  function_call / tool_calls. Our subclass converts each chunk's content
+  into v1 protocol blocks
   (`[{"type":"reasoning","reasoning":"…"}, {"type":"text","text":"…"}]`)
   and we set `output_version="v1"` on the model so langchain-openai keeps
   it that way through aggregation. This is the same shape ChatAnthropic
@@ -46,20 +46,14 @@ from langchain_core.outputs import ChatResult
 from langchain_openai import ChatOpenAI
 
 from ...config import get_chat_settings
+from .reasoning import (
+    build_reasoning_options,
+    extract_reasoning_text,
+    prepend_reasoning_block,
+)
 
 settings = get_chat_settings()
 
-
-# LiteLLM AnthropicCacheControlHook injection points. Mirrors what was
-# (intended to be) in litellm_config.yaml. Two breakpoints:
-# - system message: stable per-agent system prompt
-# - last user message: tail of conversation, includes the new turn's context
-# Anthropic cache TTL is 5min ephemeral; this matches typical agent loop
-# turnaround (subagent dispatch + LLM call < 5min).
-_DEFAULT_CACHE_INJECTION_POINTS = [
-    {"location": "message", "role": "system"},
-    {"location": "message", "role": "user", "index": -1},
-]
 
 # Default budget for extended thinking. 5000 tokens covers most chat /
 # card-chat reasoning without huge latency hit. Generator agent overrides
@@ -68,14 +62,15 @@ _DEFAULT_THINKING_BUDGET = 5000
 
 
 class ChatLiteLLMReasoning(ChatOpenAI):
-    """ChatOpenAI variant that surfaces LiteLLM's `delta.reasoning_content`
-    as a v1-protocol reasoning content block.
+    """ChatOpenAI variant that surfaces provider reasoning as a v1-protocol
+    reasoning content block.
 
     Stock `langchain-openai`'s chunk converter only handles `function_call`
-    and `tool_calls`; reasoning text is silently dropped. LiteLLM's
+    and `tool_calls`; reasoning text/summary is silently dropped. LiteLLM's
     OpenAI-compatible adapter exposes Anthropic extended thinking via
     `delta.reasoning_content` (streaming) and `message.reasoning_content`
-    (non-streaming).
+    (non-streaming). OpenAI Responses-style payloads expose reasoning as a
+    separate `reasoning` output item with `summary` content.
 
     We attach it as a `{"type":"reasoning","reasoning":"…"}` block in the
     chunk's `content` list (alongside any text block from the same delta).
@@ -102,7 +97,7 @@ class ChatLiteLLMReasoning(ChatOpenAI):
         if not choices:
             return gen
         delta = choices[0].get("delta") or {}
-        reasoning = delta.get("reasoning_content")
+        reasoning = extract_reasoning_text(delta)
         if not (reasoning and isinstance(gen.message, AIMessageChunk)):
             return gen
 
@@ -110,15 +105,7 @@ class ChatLiteLLMReasoning(ChatOpenAI):
         # (matches Anthropic's actual block ordering). Whatever the base
         # converter produced for this chunk's text — be it a non-empty
         # string or an existing block list — gets carried over.
-        existing = gen.message.content
-        new_content: list[dict[str, Any]] = [
-            {"type": "reasoning", "reasoning": reasoning},
-        ]
-        if isinstance(existing, str) and existing:
-            new_content.append({"type": "text", "text": existing})
-        elif isinstance(existing, list):
-            new_content.extend(existing)
-        gen.message.content = new_content
+        gen.message.content = prepend_reasoning_block(gen.message.content, reasoning)
         return gen
 
     def _create_chat_result(
@@ -131,29 +118,25 @@ class ChatLiteLLMReasoning(ChatOpenAI):
         Hit when the model is invoked with `response_format=` (structured
         output) — langchain-openai routes that through OpenAI's `parse()`
         endpoint, which is non-streaming and bypasses the chunk converter.
-        We pull `reasoning_content` from the raw response and prepend a
-        v1 reasoning block to each generation's content so traces and
-        downstream consumers see the same shape as the streaming path.
+        We pull provider reasoning from the raw response and prepend a v1
+        reasoning block to each generation's content so traces and downstream
+        consumers see the same shape as the streaming path.
         """
         result = super()._create_chat_result(response, generation_info)
         response_dict = (
             response if isinstance(response, dict) else response.model_dump()
         )
-        for gen, choice in zip(
-            result.generations, response_dict.get("choices") or [], strict=False
-        ):
-            reasoning = (choice.get("message") or {}).get("reasoning_content")
+        response_reasoning = extract_reasoning_text(response_dict)
+        choices = response_dict.get("choices") or []
+        for index, gen in enumerate(result.generations):
+            choice = choices[index] if index < len(choices) else {}
+            choice_message = choice.get("message") if isinstance(choice, dict) else None
+            reasoning = extract_reasoning_text(choice_message) or (
+                response_reasoning if index == 0 else None
+            )
             if not (reasoning and isinstance(gen.message, AIMessage)):
                 continue
-            existing = gen.message.content
-            new_content: list[dict[str, Any]] = [
-                {"type": "reasoning", "reasoning": reasoning},
-            ]
-            if isinstance(existing, str) and existing:
-                new_content.append({"type": "text", "text": existing})
-            elif isinstance(existing, list):
-                new_content.extend(existing)
-            gen.message.content = new_content
+            gen.message.content = prepend_reasoning_block(gen.message.content, reasoning)
         return result
 
 
@@ -178,22 +161,24 @@ def make_chat_model(
         streaming: Whether to enable token-level streaming.
         enable_prompt_cache: Inject cache_control on system + last user
             message via LiteLLM's AnthropicCacheControlHook.
-        enable_thinking: Enable Claude extended thinking (reasoning). On
-            by default for answer quality. Internal scratchpad only —
-            content does not reach the UI.
+        enable_thinking: Enable provider reasoning. Claude uses Anthropic
+            `thinking`; OpenAI reasoning models request `reasoning.summary`.
         thinking_budget: Max thinking tokens. 5000 = chat default;
             generator overrides higher.
     """
-    extra_body: dict[str, Any] = {}
-    if enable_prompt_cache:
-        extra_body["cache_control_injection_points"] = _DEFAULT_CACHE_INJECTION_POINTS
-    if enable_thinking:
-        extra_body["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
+    model_name = model or settings.default_model
+    reasoning_options = build_reasoning_options(
+        model=model_name,
+        enable_prompt_cache=enable_prompt_cache,
+        enable_thinking=enable_thinking,
+        thinking_budget=thinking_budget,
+    )
+    if reasoning_options.force_temperature_one:
         # Anthropic rejects non-1.0 temperature with thinking enabled.
         temperature = 1.0
 
     return ChatLiteLLMReasoning(
-        model=model or settings.default_model,
+        model=model_name,
         api_key=virtual_key,  # pyright: ignore[reportArgumentType]
         base_url=settings.litellm_base_url,
         temperature=temperature,
@@ -204,5 +189,5 @@ def make_chat_model(
         # through aggregation, persistence, and LangSmith trace UI as a
         # typed list rather than collapsing back to bare-string content.
         output_version="v1",
-        extra_body=extra_body or None,
+        extra_body=reasoning_options.extra_body or None,
     )

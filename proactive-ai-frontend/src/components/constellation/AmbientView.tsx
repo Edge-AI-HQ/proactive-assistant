@@ -15,14 +15,10 @@ import { useUserSettings } from "@/hooks/useUserSettings";
 import { useUserDevices } from "@/hooks/useUserDevices";
 import { useAmbientTimeline } from "@/hooks/useAmbientTimeline";
 import { useAmbientLiveSession } from "@/hooks/useAmbientLiveSession";
+import { useAmbientToggle } from "@/hooks/useAmbientToggle";
 import LiveSessionCard from "./LiveSessionCard";
 import AmbientModelRequiredCard from "@/components/ambient/AmbientModelRequiredCard";
 import AmbientModelSetupStep from "@/components/onboarding/AmbientModelSetupStep";
-import { ALL_SOURCE_KEYS, type SourceKey } from "@/services/ambient/keys";
-import {
-  getPersistedAmbientEnabled,
-  setPersistedAmbientEnabled,
-} from "@/services/ambient/enabled-state";
 import type {
   AmbientCandidateWindow,
   AmbientPrivacy,
@@ -379,14 +375,18 @@ interface AmbientViewProps {
 }
 
 export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHandled, onOpenFullscreen, onAmbientAction }: AmbientViewProps = {}) {
-  const { settings, patch } = useUserSettings();
+  const { settings } = useUserSettings();
   const { devices, loading: devicesLoading, error: devicesError } = useUserDevices(true);
   const ambientTimeline = useAmbientTimeline();
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
-  const [persistedAmbientOn, setPersistedAmbientOn] = useState(() =>
-    getPersistedAmbientEnabled(),
-  );
-  const [togglePending, setTogglePending] = useState(false);
+  // Master ambient switch — settings patch + localStorage + native lifecycle.
+  // The same hook drives the NOW-view toggle in ConstellationLayout so a flip
+  // from either place stays consistent.
+  const {
+    ambientOn: hookAmbientOn,
+    togglePending,
+    toggle: handleAmbientToggle,
+  } = useAmbientToggle();
   const [timelineVisibleCount, setTimelineVisibleCount] = useState(INITIAL_TIMELINE_VISIBLE_COUNT);
   const [modelSetupOpen, setModelSetupOpen] = useState(false);
   const connectedDevices = useMemo(
@@ -402,15 +402,13 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
       ? "devices unavailable"
       : `${connectedCount} ${connectedCount === 1 ? "device" : "devices"}`;
 
-  // Reflect server-side consent first; fall back to live runtime state
-  // before settings hydrate so the hero doesn't flicker on mount.
-  const consentOn = settings
-    ? Object.values(settings.ambientSources ?? {}).some((c) => c?.enabled === true)
-    : null;
-  const runtimeOn = runtimeStatus
-    ? runtimeStatus.sources.some((s) => s.enabled)
-    : false;
-  const ambientOn = persistedAmbientOn || (consentOn ?? runtimeOn);
+  // Shared with the NOW-view toggle via useAmbientToggle. Don't OR with
+  // runtimeStatus.sources.enabled — that was an old flicker-prevention net
+  // for cold boot, but it caused the toggle to keep showing ON for ~200ms
+  // after a "stop" while lifecycle was still tearing the sensors down.
+  // useAmbientToggle's own fallback (localStorage boot flag while consent
+  // is null) already prevents the original cold-boot flicker.
+  const ambientOn = hookAmbientOn;
   const uploadsLocked = runtimeStatus?.uploadsLocked ?? false;
   const firstSourceError =
     runtimeStatus?.sources.find((s) => s.lastError)?.lastError ?? null;
@@ -445,37 +443,6 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
       unsubscribe?.();
     };
   }, [ambientOn]);
-
-  const handleAmbientToggle = useCallback(async () => {
-    if (togglePending) return;
-    const next = !ambientOn;
-    setTogglePending(true);
-    try {
-      const consentPatch = Object.fromEntries(
-        ALL_SOURCE_KEYS.map((key) => [key, { enabled: next }]),
-      );
-      const updated = await patch({ ambientSources: consentPatch });
-      setPersistedAmbientEnabled(next);
-      setPersistedAmbientOn(next);
-      if (!isNative) return;
-      const lifecycle = await import("@/services/ambient/lifecycle");
-      if (next) {
-        const enabledSources = updated
-          ? (Object.entries(updated.ambientSources ?? {})
-            .filter(([, v]) => v?.enabled === true)
-            .map(([k]) => k as SourceKey))
-          : ALL_SOURCE_KEYS;
-        lifecycle.startAmbientUpload({
-          enabledSources: enabledSources.length > 0 ? enabledSources : ALL_SOURCE_KEYS,
-          transcriptionLanguage: updated?.generationLanguage ?? settings?.generationLanguage ?? null,
-        });
-      } else {
-        await lifecycle.stopAmbientUpload();
-      }
-    } finally {
-      setTogglePending(false);
-    }
-  }, [ambientOn, patch, settings?.generationLanguage, togglePending]);
 
   const handleLockToggle = useCallback(() => {
     if (!isNative) return;

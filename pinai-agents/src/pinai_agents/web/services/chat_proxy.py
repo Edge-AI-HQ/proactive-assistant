@@ -39,6 +39,7 @@ async def stream_chat(
     virtual_key: str,
     browserbase_context_id: str | None = None,
     client_hints: dict[str, Any] | None = None,
+    regenerate: bool = False,
 ) -> AsyncIterator[bytes]:
     """Forward to chat worker /agent/chat and yield SSE bytes back.
 
@@ -59,6 +60,7 @@ async def stream_chat(
         "session_key": session_key,
         "message": message,
         "card_context": card_context,
+        "regenerate": regenerate,
     }
     if client_hints is not None:
         body["client_hints"] = client_hints

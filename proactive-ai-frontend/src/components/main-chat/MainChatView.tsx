@@ -1,31 +1,43 @@
 /**
- * Claude-style streaming chat view for Main Chat.
+ * Claude-style streaming chat view.
  *
- * Structure mirrors Chat.tsx (header / thread / composer / browser panel)
- * but messages, tool-activity, and action bar are restyled to match a more
- * mature assistant product (Claude.ai / Claude Code).
+ * Renders a single thread's transcript + composer + browser panel using an
+ * assistant-ui runtime supplied by the parent (MainChat lifts the singleton
+ * main-thread runtime; CardChat instantiates its own per-card runtime).
  *
- * Shares data-layer with Chat.tsx via useProactiveChatRuntime and tool-steps.
- * Kept as a separate component so Chat.tsx / CardChat keep working untouched;
- * once MainChatView is validated, CardChat can migrate in a single line.
+ * Header chrome adapts: when `title` is supplied (CardChat path) it draws a
+ * glass header bar; otherwise it falls back to the minimalist design — just
+ * a ChevronDown back-affordance in the top-left, matching the reference
+ * MinimalistConversation visual. Pull-down at the top of the viewport
+ * dismisses the conversation (back to Landing) on touch devices.
  */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { motion } from "framer-motion";
-import { ArrowLeft, Send, Loader2, ChevronDown, Sparkles } from "lucide-react";
+import { ArrowLeft, ChevronDown, Loader2, Send } from "lucide-react";
+import bgGradient from "@/assets/bg-gradient.jpg";
 import {
   AssistantRuntimeProvider,
   ThreadPrimitive,
   MessagePrimitive,
   useMessage,
+  useMessageRuntime,
   useThreadRuntime,
+  type AssistantRuntime,
 } from "@assistant-ui/react";
 import { useAuiState } from "@assistant-ui/store";
 import "highlight.js/styles/github.css";
-import { useProactiveChatRuntime } from "../chat/useProactiveChatRuntime";
-import ToolActivityCard from "./ToolActivityCard";
+import ChatToolGroup, { type ChatToolGroupItem } from "./ChatToolGroup";
+import ProposeActionCard from "./ProposeActionCard";
 import MessageActionBar from "./MessageActionBar";
+import { EditableUserMessageComposer } from "./EditableUserMessageComposer";
 import MarkdownContent from "./MarkdownContent";
-import ReasoningBlock from "./ReasoningBlock";
+import ReasoningBlock, { ShimmerText } from "./ReasoningBlock";
 import TodoPanel from "./TodoPanel";
 import BrowserPanel from "../browser-view/BrowserPanel";
 import type { SheetStage } from "../browser-view/BrowserView";
@@ -34,35 +46,32 @@ import { VoiceButton } from "@/components/voice";
 
 interface MainChatViewProps {
   sessionKey: string;
-  title: string;
-  subtitle?: string;
+  /** assistant-ui runtime supplied by parent (MainChat / CardChat). The
+   *  parent owns runtime lifecycle so multiple views over the same thread
+   *  (Landing + Conversation) share one runtime and one in-flight SSE. */
+  runtime: AssistantRuntime;
+  /** True once the parent's history fetch has resolved. Gates the
+   *  composer + message rendering so a half-mounted thread doesn't
+   *  flash an empty state mid-load. */
+  historyLoaded: boolean;
   onBack: () => void;
+  /** When set, renders the full glass header with title + subtitle.
+   *  Omit (main chat path) for the minimalist design — only a
+   *  ChevronDown back button, no thread label. */
+  title?: string;
+  subtitle?: string;
+  /** Extra header content rendered below the title bar (e.g. CardChat's
+   *  goal-basket strip). */
   headerSlot?: ReactNode;
   emptyMessage?: string;
   inputPlaceholder?: string;
-  cardContext?: Record<string, unknown>;
-  /**
-   * If non-empty, the runtime auto-fires on mount with this text as the
-   * user's first message (fresh thread only). Used by card "Confirm"
-   * paths so the agent receives the user's intent immediately. Card
-   * "Chat" path leaves it undefined → empty thread waits for input.
-   */
-  bootstrapMessage?: string;
-  /**
-   * Rendered inside `<ThreadPrimitive.Empty>`. Defaults to the profile-
-   * building prompt cards used by Main Chat. Card-context surfaces pass
-   * `null` (the agent sends the first message, so the empty slot is
-   * transient and doesn't need suggestions).
-   */
+  /** Content for the empty-thread state. Default is `null` (no empty
+   *  state UI) since the user only enters the conversation by sending a
+   *  message — Landing handles the "nothing to show" affordance for
+   *  main chat. CardChat passes `null` for the same reason (the agent
+   *  bootstrap fills the first turn). */
   emptyState?: ReactNode;
 }
-
-const DEFAULT_PROFILE_PROMPTS: readonly string[] = [
-  "Tell me about your typical weekday — when you start, work, wind down.",
-  "What are you working on right now?",
-  "What apps and tools do you live inside?",
-  "What's something new you want to try or learn this month?",
-];
 
 
 function UserMessage() {
@@ -74,7 +83,7 @@ function UserMessage() {
         transition={{ duration: 0.18, ease: "easeOut" }}
         className="mb-4 flex flex-col items-end"
       >
-        <div className="max-w-[82%] px-4 py-2.5 text-[17px] leading-relaxed whitespace-pre-wrap bg-foreground/90 text-background rounded-2xl rounded-br-md">
+        <div className="max-w-[82%] px-4 py-2.5 text-[13px] leading-relaxed whitespace-pre-wrap bg-foreground/90 text-background rounded-2xl rounded-br-md">
           <MessagePrimitive.Content />
         </div>
         <MessageActionBar variant="user" />
@@ -83,6 +92,72 @@ function UserMessage() {
   );
 }
 
+/**
+ * Inline edit composer rendered in place of `UserMessage` when the user
+ * clicks the pencil icon on their last message (via
+ * `ActionBarPrimitive.Edit` → assistant-ui's `beginEdit`).
+ *
+ * Visually keeps the dark user-bubble look. Save commits the edit:
+ * assistant-ui drops the trailing assistant + tools, switches the
+ * runtime state to the new text on the same user msg, then re-invokes
+ * our adapter. The adapter sees `messages.length` unchanged (the
+ * placeholder for the new assistant slot fills the dropped slot) and
+ * passes `regenerate=true` to the backend; the backend diffs `message`
+ * against LangGraph's trailing HumanMessage and replaces it with the
+ * edited text before rerunning.
+ */
+function UserEditComposer() {
+  const messageRuntime = useMessageRuntime();
+  const composerText = useAuiState((s) => s.composer.text);
+  const isRunning = useAuiState((s) => s.thread.isRunning);
+  const initialTextRef = useRef(composerText);
+  const editComposer = messageRuntime.composer;
+
+  const handleDraftChange = useCallback(
+    (draft: string) => {
+      editComposer.setText(draft);
+    },
+    [editComposer],
+  );
+
+  const handleCancel = useCallback(() => {
+    editComposer.cancel();
+  }, [editComposer]);
+
+  const handleSend = useCallback(
+    (draft: string) => {
+      editComposer.setText(draft);
+      editComposer.send();
+    },
+    [editComposer],
+  );
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.18, ease: "easeOut" }}
+      className="mb-4 flex flex-col items-end"
+    >
+      <EditableUserMessageComposer
+        initialText={initialTextRef.current}
+        disabled={isRunning}
+        onDraftChange={handleDraftChange}
+        onCancel={handleCancel}
+        onSend={handleSend}
+      />
+    </motion.div>
+  );
+}
+
+/**
+ * Shown only in the very-first-token-pending window: the assistant turn
+ * is running but no reasoning / text / tool part has streamed yet.
+ *
+ * Visually matches ReasoningBlock's collapsed "Thinking…" pill so the
+ * transition from "no parts yet" → "reasoning streaming" → "Thought for Xs"
+ * feels like one continuous pill that morphs in place.
+ */
 function ThinkingIndicator() {
   const isRunning = useMessage((m) => m.status?.type === "running");
   const hasContent = useMessage((m) =>
@@ -93,11 +168,10 @@ function ThinkingIndicator() {
   );
   if (!isRunning || hasContent) return null;
   return (
-    <div className="flex items-center gap-1.5 py-1 text-foreground/40">
-      <span className="inline-block w-1.5 h-1.5 rounded-full bg-foreground/40 animate-pulse [animation-delay:-0.3s]" />
-      <span className="inline-block w-1.5 h-1.5 rounded-full bg-foreground/40 animate-pulse [animation-delay:-0.15s]" />
-      <span className="inline-block w-1.5 h-1.5 rounded-full bg-foreground/40 animate-pulse" />
-      <span className="ml-1 text-[12px]">Thinking…</span>
+    <div className="mb-2">
+      <div className="inline-flex items-center px-2 py-1 -ml-2 rounded-lg text-[12.5px] font-medium text-foreground/65">
+        <ShimmerText>Thinking…</ShimmerText>
+      </div>
     </div>
   );
 }
@@ -111,15 +185,9 @@ function AssistantMessage() {
         transition={{ duration: 0.22, ease: "easeOut" }}
         className="mb-5"
       >
-        <div className="px-1 text-[17px] leading-[1.55] text-foreground/85">
+        <div className="px-1 text-foreground/85">
           <ThinkingIndicator />
-          <MessagePrimitive.Content
-            components={{
-              Text: MarkdownContent,
-              Reasoning: ReasoningBlock,
-              tools: { Fallback: ToolActivityCard },
-            }}
-          />
+          <AssistantContent />
           <MessageActionBar variant="assistant" />
         </div>
       </motion.div>
@@ -127,65 +195,159 @@ function AssistantMessage() {
   );
 }
 
-function SuggestionCard({ text, onSelect }: { text: string; onSelect: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className="group text-left w-full rounded-2xl border border-foreground/10 bg-white/40 hover:bg-white/60 active:bg-white/70 backdrop-blur-sm transition-colors px-3.5 py-3"
-    >
-      <div className="flex items-start gap-2">
-        <Sparkles
-          size={14}
-          strokeWidth={1.8}
-          className="mt-0.5 text-foreground/40 group-hover:text-foreground/60 shrink-0"
-        />
-        <span className="text-[13.5px] leading-snug text-foreground/75">{text}</span>
-      </div>
-    </button>
-  );
+/**
+ * Parses a `<thinking>...</thinking>` (or `<think>...</think>`) prefix
+ * out of an assistant text part. Used to surface a thinking block for
+ * non-Anthropic models that don't emit a native `reasoning` part but
+ * are prompted (see `main_chat.py` <thinking_protocol>) to wrap their
+ * preamble in an explicit tag.
+ *
+ * Returns:
+ *   thinking: the inner content (or "" while only the opening tag has
+ *             arrived), or null when no thinking prefix exists
+ *   thinkingComplete: true once `</thinking>` has arrived; false while
+ *                     still streaming inside the tag
+ *   remaining: text after the closing tag (the user-facing answer)
+ */
+function parseThinkingFromText(text: string): {
+  thinking: string | null;
+  thinkingComplete: boolean;
+  remaining: string;
+} {
+  const completeRe =
+    /^\s*<(?:thinking|think)>([\s\S]*?)<\/(?:thinking|think)>\s*([\s\S]*)$/i;
+  const m = completeRe.exec(text);
+  if (m) {
+    return { thinking: m[1], thinkingComplete: true, remaining: m[2] };
+  }
+  const partialRe = /^\s*<(?:thinking|think)>([\s\S]*)$/i;
+  const pm = partialRe.exec(text);
+  if (pm) {
+    return { thinking: pm[1], thinkingComplete: false, remaining: "" };
+  }
+  return { thinking: null, thinkingComplete: true, remaining: text };
 }
 
-function EmptyState({ prompts, title }: { prompts: readonly string[]; title: string }) {
-  const runtime = useThreadRuntime();
-  const send = (text: string) => {
-    runtime.append({ role: "user", content: [{ type: "text", text }] });
+/**
+ * Renders the assistant message's content parts in order, grouping
+ * consecutive non-`propose_action` tool-call parts into a single
+ * ChatToolGroup card. We deliberately bypass `MessagePrimitive.Content`
+ * (which renders parts one-by-one through per-type slots) because
+ * grouping requires looking at the whole array.
+ *
+ * Two sources of "thinking" text we surface as a ReasoningBlock pill:
+ *   1. Native `reasoning` parts — emitted by Anthropic Claude
+ *      extended-thinking (via ChatLiteLLMReasoning → `chat:reasoning:delta`).
+ *   2. A `<thinking>…</thinking>` prefix inside the first text part —
+ *      prompt-driven, works for any model (gpt-5.5, kimi, minimax).
+ *      We parse it out client-side so the user sees the same collapsible
+ *      pill regardless of which mechanism the model used. If both
+ *      sources exist on a message, native reasoning wins and the text
+ *      `<thinking>` prefix is left as-is (rare edge — only triggers if
+ *      the prompt is inherited on a model that also emits reasoning).
+ *
+ * Ordering invariants we rely on (enforced by LiveContentBuilder):
+ *   - reasoning / text deltas fold into the trailing same-type part
+ *   - a tool-call closes the open text and reasoning cursors so any
+ *     later deltas start fresh parts AFTER the tool
+ * → therefore a reasoning part (or in-progress `<thinking>`) is still
+ *   "streaming" iff the message is running AND its containing part is
+ *   the very last item in the content array.
+ */
+function AssistantContent() {
+  const parts = useMessage((m) => m.content);
+  const isRunning = useMessage((m) => m.status?.type === "running");
+  const hasNativeReasoning = parts.some((p) => p.type === "reasoning");
+
+  const blocks: ReactNode[] = [];
+  let toolBuffer: ChatToolGroupItem[] = [];
+  let groupKey = 0;
+
+  const flushTools = () => {
+    if (toolBuffer.length === 0) return;
+    blocks.push(
+      <ChatToolGroup key={`group-${groupKey++}`} tools={toolBuffer} />,
+    );
+    toolBuffer = [];
   };
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, ease: "easeOut" }}
-      className="max-w-lg mx-auto py-10 px-4"
-    >
-      <div className="text-center mb-5">
-        <h3 className="text-display text-[18px] text-foreground/80 mb-1">
-          {title}
-        </h3>
-        <p className="text-[13px] text-foreground/45">
-          Share a bit about yourself so I can help more precisely.
-        </p>
-      </div>
-      <div className="flex flex-col gap-2">
-        {prompts.map((p) => (
-          <SuggestionCard key={p} text={p} onSelect={() => send(p)} />
-        ))}
-      </div>
-    </motion.div>
-  );
+
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    const isLast = i === parts.length - 1;
+    if (part.type === "tool-call") {
+      if (part.toolName === "propose_action") {
+        // HITL pause panel — never grouped. Flush any preceding tools
+        // first so the propose_action card sits at the right ordinal.
+        flushTools();
+        blocks.push(
+          <ProposeActionCard
+            key={`pa-${part.toolCallId}`}
+            args={part.args}
+          />,
+        );
+      } else {
+        toolBuffer.push({
+          toolCallId: part.toolCallId,
+          toolName: part.toolName,
+          args: part.args as ChatToolGroupItem["args"],
+          result: part.result as ChatToolGroupItem["result"],
+          isError: part.isError,
+        });
+      }
+    } else if (part.type === "text") {
+      flushTools();
+      // Always strip `<thinking>` from the text part. If the message
+      // has a native reasoning part too, that one wins for the
+      // visible ReasoningBlock — but we still must strip the inline
+      // tag so it doesn't bleed into the rendered answer.
+      const parsed = parseThinkingFromText(part.text);
+      if (parsed.thinking !== null && !hasNativeReasoning) {
+        const thinkingAppending = isRunning && isLast && !parsed.thinkingComplete;
+        blocks.push(
+          <ReasoningBlock
+            key={`thk-${i}`}
+            text={parsed.thinking.trim()}
+            shimmer={isRunning}
+            appending={thinkingAppending}
+          />,
+        );
+      }
+      if (parsed.remaining) {
+        blocks.push(<MarkdownContent key={`t-${i}`} text={parsed.remaining} />);
+      }
+    } else if (part.type === "reasoning") {
+      flushTools();
+      blocks.push(
+        <ReasoningBlock
+          key={`r-${i}`}
+          text={part.text}
+          shimmer={isRunning}
+          appending={isRunning && isLast}
+        />,
+      );
+    }
+    // Other part types (source/file/image/data) aren't produced by our
+    // backend and are intentionally ignored.
+  }
+  flushTools();
+
+  return <>{blocks}</>;
 }
+
+const PULL_DOWN_THRESHOLD_PX = 100;
+const PULL_DOWN_TOP_TOLERANCE_PX = 4;
 
 export default function MainChatView({
   sessionKey,
+  runtime,
+  historyLoaded,
+  onBack,
   title,
   subtitle,
-  onBack,
   headerSlot,
   emptyMessage = "Send a message to start chatting",
   inputPlaceholder,
-  cardContext,
-  bootstrapMessage,
-  emptyState,
+  emptyState = null,
 }: MainChatViewProps) {
   const { session: browserSession, setControl, sendInput, refreshLiveView, close: closeBrowser } =
     useBrowserSession(sessionKey);
@@ -199,6 +361,30 @@ export default function MainChatView({
   // Composer focus → BrowserPanel demotes full → medium so the typing area
   // isn't covered when the keyboard comes up.
   const [composerFocused, setComposerFocused] = useState(false);
+
+  // Ref to the viewport's scroll element. Used by the pull-down gesture
+  // handler to confirm we're at the top of the message list before
+  // treating a downward swipe as a "back" intent.
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const touchStartYRef = useRef<number | null>(null);
+
+  const onTouchStart = useCallback((e: React.TouchEvent) => {
+    touchStartYRef.current = e.touches[0]?.clientY ?? null;
+  }, []);
+  const onTouchEnd = useCallback(
+    (e: React.TouchEvent) => {
+      const startY = touchStartYRef.current;
+      touchStartYRef.current = null;
+      if (startY === null || title) return; // disable pull-down in card chat
+      const delta = (e.changedTouches[0]?.clientY ?? startY) - startY;
+      const atTop =
+        (viewportRef.current?.scrollTop ?? 0) <= PULL_DOWN_TOP_TOLERANCE_PX;
+      if (atTop && delta > PULL_DOWN_THRESHOLD_PX) {
+        onBack();
+      }
+    },
+    [onBack, title],
+  );
 
   // When the app returns to the foreground, iOS may have paused the
   // Browserbase Live View's WebSocket AND its signed iframe URL may have
@@ -269,52 +455,78 @@ export default function MainChatView({
   }, [closeBrowser]);
 
   return (
-    <motion.div
-      initial={{ y: "100%" }}
-      animate={{ y: 0 }}
-      exit={{ y: "100%" }}
-      transition={{ type: "spring", damping: 30, stiffness: 300 }}
-      className="absolute inset-0 z-50 flex flex-col font-native"
-      style={{
-        background: "hsla(220, 30%, 96%, 0.95)",
-        backdropFilter: "blur(60px) saturate(1.4)",
-        WebkitBackdropFilter: "blur(60px) saturate(1.4)",
-        // 键盘响应由 ChatRuntimeScope 内部的 padding-bottom 处理
-        // （不再上移整块 MainChatView），这样 BrowserPanel 贴 header
-        // 下沿的位置不受键盘影响，不会被挤出屏幕顶部。
-      }}
+    <div
+      className="absolute inset-0 z-50 font-native overflow-hidden"
+      onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
     >
-      {/* Header */}
-      <div
-        className="shrink-0 px-4 pt-[calc(env(safe-area-inset-top,0px)+12px)] pb-3"
-        style={{
-          background: "hsla(0, 0%, 100%, 0.5)",
-          borderBottom: "1px solid hsla(0, 0%, 100%, 0.4)",
-          backdropFilter: "blur(40px)",
-          WebkitBackdropFilter: "blur(40px)",
-        }}
-      >
-        <div className="flex items-center gap-3">
-          <button
-            onClick={onBack}
-            className="p-2 -ml-1 rounded-xl hover:bg-foreground/10 transition-colors"
-          >
-            <ArrowLeft
-              size={20}
-              strokeWidth={1.8}
-              className="text-foreground/70"
-            />
-          </button>
-          <div className="flex-1 min-w-0">
-            <h2 className="text-display text-[15px] text-foreground truncate">
-              {title}
-            </h2>
-            <p className="text-[11px] text-foreground/40">
-              {subtitle ?? emptyMessage}
-            </p>
+      {/* Aurora background — same system as ConstellationLayout +
+          MinimalistLanding so the visual continuity holds when the user
+          slides up into a conversation from the landing page. */}
+      <img
+        src={bgGradient}
+        alt=""
+        className="absolute inset-0 w-full h-full object-cover opacity-60"
+        aria-hidden="true"
+      />
+      <div className="absolute inset-0 aurora-layer aurora-layer-1" aria-hidden="true" />
+      <div className="absolute inset-0 aurora-layer aurora-layer-2" aria-hidden="true" />
+      <div className="absolute inset-0 aurora-layer aurora-layer-3" aria-hidden="true" />
+      <div className="absolute inset-0 bg-white/35" />
+
+      <div className="relative z-10 flex flex-col h-full">
+      {title ? (
+        // CardChat header — keep the title/subtitle bar so the user can
+        // see which card the conversation is about.
+        <div
+          className="shrink-0 px-4 pt-[calc(env(safe-area-inset-top,0px)+12px)] pb-3"
+          style={{
+            background: "hsla(0, 0%, 100%, 0.5)",
+            borderBottom: "1px solid hsla(0, 0%, 100%, 0.4)",
+            backdropFilter: "blur(40px)",
+            WebkitBackdropFilter: "blur(40px)",
+          }}
+        >
+          <div className="flex items-center gap-3">
+            <button
+              onClick={onBack}
+              className="p-2 -ml-1 rounded-xl hover:bg-foreground/10 transition-colors"
+              aria-label="Back"
+            >
+              <ArrowLeft
+                size={20}
+                strokeWidth={1.8}
+                className="text-foreground/70"
+              />
+            </button>
+            <div className="flex-1 min-w-0">
+              <h2 className="text-display text-[15px] text-foreground truncate">
+                {title}
+              </h2>
+              <p className="text-[11px] text-foreground/40">
+                {subtitle ?? emptyMessage}
+              </p>
+            </div>
           </div>
         </div>
-      </div>
+      ) : (
+        // Main-chat header — minimalist; only a chevron back. The thread
+        // is a singleton so no title is meaningful. Matches the reference
+        // MinimalistConversation top bar.
+        <div className="shrink-0 flex items-center px-4 pt-[calc(env(safe-area-inset-top,0px)+12px)] pb-3">
+          <button
+            onClick={onBack}
+            className="p-2 -ml-1 rounded-full hover:bg-foreground/[0.06] transition-colors"
+            aria-label="Back"
+          >
+            <ChevronDown
+              size={20}
+              strokeWidth={1.5}
+              className="text-foreground/65"
+            />
+          </button>
+        </div>
+      )}
 
       {headerSlot}
 
@@ -327,8 +539,9 @@ export default function MainChatView({
       <div className="relative flex-1 min-h-0 flex flex-col">
         <ChatRuntimeScope
           sessionKey={sessionKey}
-          cardContext={cardContext}
-          bootstrapMessage={bootstrapMessage}
+          runtime={runtime}
+          historyLoaded={historyLoaded}
+          viewportRef={viewportRef}
           topOffset={browserStage === "mini" ? 32 : 0}
           emptyState={emptyState}
           inputPlaceholder={inputPlaceholder}
@@ -362,24 +575,24 @@ export default function MainChatView({
         />
 
       </div>
-    </motion.div>
+      </div>
+    </div>
   );
 }
 
 /**
- * Holds the useProactiveChatRuntime call + assistant-ui thread JSX.
- *
- * Extracted so MainChatView can force a remount via `key={refreshKey}` when
- * the user returns to the foreground — this re-fetches history and catches
- * any writes that happened while the view was hidden (e.g. another client,
- * a background job, or a run that finished after the first mount sampled
- * partial history). Everything outside this scope (header, browser panel,
- * SSE subscriptions) stays mounted across refreshes.
+ * Wires the parent-supplied runtime into the assistant-ui primitive tree.
+ * Owns:
+ *   - keyboard visibility tracking (Capacitor Keyboard events)
+ *   - the ThreadPrimitive subtree (viewport / messages / footer / composer)
+ *   - the composer's local text state (we deliberately don't use
+ *     ComposerPrimitive.Input — see ChatComposer notes)
  */
 function ChatRuntimeScope({
   sessionKey,
-  cardContext,
-  bootstrapMessage,
+  runtime,
+  historyLoaded,
+  viewportRef,
   topOffset,
   emptyState,
   inputPlaceholder,
@@ -387,8 +600,9 @@ function ChatRuntimeScope({
   onComposerFocusChange,
 }: {
   sessionKey: string;
-  cardContext?: Record<string, unknown>;
-  bootstrapMessage?: string;
+  runtime: AssistantRuntime;
+  historyLoaded: boolean;
+  viewportRef: React.Ref<HTMLDivElement>;
   /** px of top padding so messages aren't clipped behind the mini drag bar. */
   topOffset: number;
   emptyState?: ReactNode;
@@ -396,6 +610,12 @@ function ChatRuntimeScope({
   composerFocused: boolean;
   onComposerFocusChange: (focused: boolean) => void;
 }) {
+  // Composer text is local to ChatComposer (it's a controlled textarea).
+  // Lifting it up here was used briefly for an "Edit prefills composer"
+  // pattern, but that's now replaced by assistant-ui's in-place edit
+  // composer (see `UserEditComposer` below + `ActionBarPrimitive.Edit`
+  // in MessageActionBar) so the thread-composer state stays local.
+
   // Track keyboard so we can render a dismiss-keyboard button in the
   // composer. Listens to the global events dispatched from main.tsx when
   // Capacitor Keyboard fires willShow / willHide.
@@ -415,11 +635,6 @@ function ChatRuntimeScope({
     const active = document.activeElement as HTMLElement | null;
     active?.blur?.();
   }, []);
-  const { runtime, historyLoaded } = useProactiveChatRuntime({
-    sessionKey,
-    cardContext,
-    bootstrapMessage,
-  });
 
   if (!historyLoaded) {
     return (
@@ -449,22 +664,17 @@ function ChatRuntimeScope({
         }}
       >
         <ThreadPrimitive.Root className="flex-1 flex flex-col overflow-hidden">
-          <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto px-4 py-4">
-            <ThreadPrimitive.Empty>
-              {emptyState !== undefined ? (
-                emptyState
-              ) : (
-                <EmptyState
-                  prompts={DEFAULT_PROFILE_PROMPTS}
-                  title="What's on your mind?"
-                />
-              )}
-            </ThreadPrimitive.Empty>
+          <ThreadPrimitive.Viewport
+            ref={viewportRef}
+            className="flex-1 overflow-y-auto px-4 py-4"
+          >
+            <ThreadPrimitive.Empty>{emptyState}</ThreadPrimitive.Empty>
 
             <ThreadPrimitive.Messages
               components={{
                 UserMessage,
                 AssistantMessage,
+                UserEditComposer,
               }}
             />
 
@@ -550,16 +760,17 @@ function ChatComposer({
     }
   };
 
+  const canSend = !!text.trim() && !isRunning;
   return (
-    <div
-      className="shrink-0 px-3 pb-3 pt-2"
-      style={{
-        background: "hsla(0, 0%, 100%, 0.35)",
-        borderTop: "1px solid hsla(0, 0%, 100%, 0.3)",
-      }}
-    >
+    <div className="shrink-0 px-3 pb-6 pt-2">
       <div
-        className="glass-card-strong flex items-end gap-1 px-4 py-2 rounded-2xl"
+        className="flex items-end gap-2 pl-4 pr-2 py-2 rounded-3xl border border-foreground/[0.08] focus-within:border-foreground/[0.18] transition-colors"
+        style={{
+          background: "rgba(255,255,255,0.6)",
+          backdropFilter: "blur(20px) saturate(1.5)",
+          WebkitBackdropFilter: "blur(20px) saturate(1.5)",
+          boxShadow: "0 4px 24px hsl(0 0% 0% / 0.04)",
+        }}
         onFocusCapture={() => onComposerFocusChange(true)}
         onBlurCapture={() => onComposerFocusChange(false)}
       >
@@ -568,9 +779,9 @@ function ChatComposer({
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={inputPlaceholder ?? "Type a message..."}
+          placeholder={inputPlaceholder ?? "Message PIN AI…"}
           rows={1}
-          className="flex-1 bg-transparent text-[16px] text-foreground placeholder:text-foreground/35 outline-none resize-none max-h-32 py-1"
+          className="flex-1 resize-none bg-transparent text-[15px] text-foreground placeholder:text-foreground/35 outline-none leading-[20px] py-2 min-h-9 max-h-[120px]"
         />
         {kbVisible && (
           <button
@@ -579,26 +790,39 @@ function ChatComposer({
             // our handler runs.
             onMouseDown={(e) => e.preventDefault()}
             onClick={onDismissKeyboard}
-            className="p-2 rounded-xl transition-colors hover:bg-foreground/10 text-foreground/50"
+            className="w-9 h-9 rounded-full flex items-center justify-center text-foreground/55 hover:bg-foreground/[0.06] hover:text-foreground/80 transition-colors shrink-0"
             title="Dismiss keyboard"
           >
-            <ChevronDown size={18} strokeWidth={1.8} />
+            <ChevronDown size={18} strokeWidth={1.6} />
           </button>
         )}
         <VoiceButton
           prefill={text}
           onUpdate={setText}
           size={18}
-          className="rounded-xl bg-foreground/5 text-foreground/55 hover:bg-foreground/10 hover:text-foreground/75"
+          className="w-9 h-9 rounded-full bg-transparent text-foreground/55 hover:bg-foreground/[0.06] hover:text-foreground/80"
         />
         <button
           type="button"
           onClick={() => void submit()}
-          disabled={!text.trim() || isRunning}
-          className="p-2 rounded-xl transition-colors disabled:opacity-30 hover:bg-foreground/10"
+          disabled={!canSend}
+          className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition-all active:scale-95"
+          style={
+            canSend
+              ? {
+                  background:
+                    "linear-gradient(135deg, hsl(292 78% 63%) 0%, hsl(330 80% 65%) 100%)",
+                  boxShadow: "0 4px 12px hsl(292 78% 63% / 0.35)",
+                  color: "hsl(var(--background))",
+                }
+              : {
+                  background: "hsl(var(--foreground) / 0.08)",
+                  color: "hsl(var(--foreground) / 0.35)",
+                }
+          }
           aria-label="Send"
         >
-          <Send size={18} strokeWidth={1.8} className="text-foreground/60" />
+          <Send size={15} strokeWidth={2} />
         </button>
       </div>
     </div>

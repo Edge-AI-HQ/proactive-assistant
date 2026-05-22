@@ -24,7 +24,13 @@ from typing import Any, Literal
 import daytona
 from fastapi import APIRouter, Header, HTTPException, status
 from fastapi.responses import StreamingResponse
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    HumanMessage,
+    RemoveMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from pydantic import BaseModel, Field
 
 from ..agents.card_execution import make_card_execution_agent
@@ -78,12 +84,18 @@ class ChatRequest(BaseModel):
     (single deployment-wide model). card_context is consumed only on the
     first turn of a card thread. client_hints carries the frontend's
     panel CSS size + device kind so browser_tool sizes BB sessions for
-    the device that's actually displaying them."""
+    the device that's actually displaying them.
+
+    `regenerate=True` makes `message` optional — the worker pops the
+    trailing AI / Tool messages from LangGraph state and resumes the
+    run from the existing HumanMessage at the tail.
+    """
 
     session_key: str = Field(min_length=1, max_length=200)
-    message: str = Field(min_length=1, max_length=8000)
+    message: str = Field(default="", max_length=8000)
     card_context: dict[str, Any] | None = None
     client_hints: ClientHintsBody | None = None
+    regenerate: bool = False
 
 
 def _extract_bearer(authorization: str | None) -> str:
@@ -116,6 +128,29 @@ def _verify_principal(token: str) -> RunPrincipal:
             detail="run JWT missing `vk` claim — caller must be a chat-driving route",
         )
     return principal
+
+
+def _extract_human_text(msg: HumanMessage | None) -> str:
+    """Return the plain-text portion of a HumanMessage, regardless of
+    whether its `content` is a bare string (legacy / Anthropic non-v1)
+    or a v1-protocol block list (langchain-core 1.x). Used by the
+    regenerate-edit diff to decide whether the frontend is asking us to
+    replace the trailing HumanMessage with new text or just rerun the
+    existing one."""
+    if msg is None:
+        return ""
+    c = msg.content
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        out: list[str] = []
+        for block in c:
+            if isinstance(block, dict) and block.get("type") == "text":
+                t = block.get("text")
+                if isinstance(t, str):
+                    out.append(t)
+        return "".join(out)
+    return ""
 
 
 async def _is_first_turn(session_key: str) -> bool:
@@ -194,22 +229,111 @@ async def _stream(
         yield chat_done()
         return
 
-    # ── input messages ──
+    # ── regenerate / edit state surgery (optional) ──
+    # `regenerate=True` covers two frontend flows:
+    #
+    #   - Pure regenerate (Retry on last user msg, Regenerate on last
+    #     assistant msg): pop trailing AI / Tool messages, leave the
+    #     trailing HumanMessage untouched, rerun. `req.message` here
+    #     equals the trailing HumanMessage's current text (the adapter
+    #     just echoes back the current last-user text); no replacement
+    #     is needed.
+    #
+    #   - Edit-and-rerun (user edited the last user msg, hit Send): pop
+    #     trailing AI / Tool messages AND replace the trailing
+    #     HumanMessage with `req.message` (the edited text), then rerun.
+    #
+    # We auto-detect which case we're in by diffing `req.message`
+    # against the trailing HumanMessage's text content. Identical → pure
+    # regenerate, no human-side change. Different → edit, drop + add.
+    input_messages: list[Any] = []
+    if req.regenerate:
+        state_config: dict[str, Any] = {
+            "configurable": {"thread_id": req.session_key},
+        }
+        try:
+            snapshot = await agent.aget_state(state_config)
+        except Exception as e:
+            logger.exception(
+                "regenerate state read failed session=%s", req.session_key,
+            )
+            yield chat_error(
+                f"regenerate state read failed: {type(e).__name__}: {e}",
+            )
+            yield chat_done()
+            return
+        msgs = (snapshot.values or {}).get("messages", []) if snapshot else []
+        to_remove_ids: list[str] = []
+        trailing_human: HumanMessage | None = None
+        # Walk back: collect AI/Tool ids to drop until we hit the first
+        # non-AI/Tool message. If it's a HumanMessage we remember it for
+        # the edit-diff check below.
+        for msg in reversed(msgs):
+            if isinstance(msg, (AIMessage, ToolMessage)):
+                mid = getattr(msg, "id", None)
+                if mid:
+                    to_remove_ids.append(mid)
+                continue
+            if isinstance(msg, HumanMessage):
+                trailing_human = msg
+            break
+
+        new_text = (req.message or "").strip()
+        trailing_text = (
+            _extract_human_text(trailing_human) if trailing_human else ""
+        )
+        is_edit = bool(new_text) and new_text != trailing_text.strip()
+
+        if is_edit and trailing_human is not None:
+            th_id = getattr(trailing_human, "id", None)
+            if th_id:
+                to_remove_ids.append(th_id)
+
+        if to_remove_ids:
+            try:
+                await agent.aupdate_state(
+                    state_config,
+                    {"messages": [RemoveMessage(id=mid) for mid in to_remove_ids]},
+                )
+            except Exception as e:
+                logger.exception(
+                    "regenerate pop failed session=%s", req.session_key,
+                )
+                yield chat_error(
+                    f"regenerate pop failed: {type(e).__name__}: {e}",
+                )
+                yield chat_done()
+                return
+            logger.info(
+                "regenerate popped %d trailing messages session=%s is_edit=%s",
+                len(to_remove_ids), req.session_key, is_edit,
+            )
+
+        # If edit, add the replacement HumanMessage; if pure regen, leave
+        # input_messages empty so LangGraph reruns from the popped state.
+        if is_edit:
+            input_messages.append({"role": "user", "content": new_text})
+
+    # ── input messages (normal-send path) ──
     # Card threads with card_context: inject the JSON as a SystemMessage
     # on the first turn only; subsequent turns rely on LangGraph's
     # checkpoint state to retain the context. SystemMessages are filtered
     # out of the rendered history, so this stays invisible to the user.
-    input_messages: list[Any] = []
-    if (
-        is_card_thread
-        and req.card_context is not None
-        and await _is_first_turn(req.session_key)
-    ):
-        ctx_json = json.dumps(req.card_context, ensure_ascii=False, indent=2)
-        input_messages.append(
-            SystemMessage(content=f"<card_context>\n{ctx_json}\n</card_context>"),
-        )
-    input_messages.append({"role": "user", "content": req.message})
+    if not req.regenerate:
+        if not req.message.strip():
+            yield chat_error("message is required when not regenerating")
+            yield chat_done()
+            return
+        if (
+            is_card_thread
+            and req.card_context is not None
+            and await _is_first_turn(req.session_key)
+        ):
+            ctx_json = json.dumps(req.card_context, ensure_ascii=False, indent=2)
+            input_messages.append(
+                SystemMessage(content=f"<card_context>\n{ctx_json}\n</card_context>"),
+            )
+        input_messages.append({"role": "user", "content": req.message})
 
     config: dict[str, Any] = {
         "configurable": {"thread_id": req.session_key},

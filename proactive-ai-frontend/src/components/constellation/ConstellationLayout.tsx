@@ -2,10 +2,10 @@ import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Menu, X, Zap, ListChecks, Settings, Pencil, Radio, User as UserIcon, Plug,
+  Menu, X, Zap, ListChecks, Settings, Pencil, Radio, Plug,
   Sprout, Briefcase, TrendingUp, Heart, BookOpen, Sparkles,
   ArrowRight, ChevronDown, Check, Cloud, Lock as LockIcon,
-  MapPin, Sun, Activity, Users, ChevronRight, Target, MessageCircle,
+  MapPin, Sun, Activity, Users, ChevronUp, Target,
   type LucideIcon,
 } from "lucide-react";
 import bgGradient from "@/assets/bg-gradient.jpg";
@@ -13,7 +13,6 @@ import AiSphere from "./AiSphere";
 import Sphere3DCards from "./Sphere3DCards";
 import ChatTimeline from "./ChatTimeline";
 
-import ControlPanel from "./ControlPanel";
 import AccountPanel from "./AccountPanel";
 import ConnectPanel from "./ConnectPanel";
 import AmbientView, { LiveFullscreen, type TimelineEntry as AmbientTimelineEntry } from "./AmbientView";
@@ -53,17 +52,8 @@ import { PreNotificationPrompt } from "@/components/PreNotificationPrompt";
 import { isNative } from "@/lib/platform";
 import type { GoalBasket, IntentCard } from "@/types/intent-card";
 import { useAmbientLiveSession } from "@/hooks/useAmbientLiveSession";
-import { getPersistedAmbientEnabled } from "@/services/ambient/enabled-state";
-import LiveSessionCard from "./LiveSessionCard";
+import { useAmbientToggle } from "@/hooks/useAmbientToggle";
 import type { LiveSession } from "@/services/ambient/live-session";
-
-/** Pretty Member-since month from Supabase user.created_at (ISO). */
-function formatMemberSince(iso: string | null | undefined): string | undefined {
-  if (!iso) return undefined;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return undefined;
-  return d.toLocaleDateString(undefined, { month: "short", year: "numeric" });
-}
 
 /** Stable string→number hash so real card.id (string) gets a numeric id for
  *  Lovable's sphere components without losing the original. */
@@ -258,10 +248,9 @@ const MENU_ITEMS = [
   { id: "now", label: "NOW", icon: Zap },
   { id: "ambient", label: "AMBIENT", icon: Radio },
   { id: "chat", label: "TASKS", icon: ListChecks },
-  { id: "profile", label: "PROFILE", icon: Target },
   { id: "connect", label: "CONNECT", icon: Plug },
-  { id: "control", label: "CONTROL", icon: Settings },
-  { id: "account", label: "ACCOUNT", icon: UserIcon },
+  { id: "profile", label: "PROFILE", icon: Target },
+  { id: "account", label: "SETTING", icon: Settings },
 ] as const;
 type MenuId = (typeof MENU_ITEMS)[number]["id"];
 
@@ -284,18 +273,26 @@ export default function BigBallLayout() {
   // hook below (line ~330) returns the full result; this destructure
   // reads the same state for ambient-consent gating.
   const userSettings = useUserSettings();
-  const settings = userSettings.settings;
-  const consentOn = settings
-    ? Object.values(settings.ambientSources ?? {}).some((c) => c?.enabled === true)
-    : null;
-  const ambientOn = getPersistedAmbientEnabled() || (consentOn ?? false);
-  const { session: liveSession, previewVisibleCount } = useAmbientLiveSession({
+  // Shared with AmbientView via useAmbientToggle: settings patch +
+  // localStorage + native lifecycle. A flip from either view stays
+  // consistent because both consume the same /api/settings consent
+  // (App.tsx's startAmbientUpload effect rebinds on that field).
+  const {
+    ambientOn,
+    togglePending: ambientTogglePending,
+    toggle: handleToggleAmbient,
+  } = useAmbientToggle();
+  const { session: liveSession } = useAmbientLiveSession({
     ambientOn,
     enableWebDemo: false,
     dismissible: false,
   });
   const [isScrolled, setIsScrolled] = useState(false);
   const [mainChatOpen, setMainChatOpen] = useState(false);
+  const handleMainChatBack = useCallback(() => {
+    setActiveView("now");
+    setMainChatOpen(false);
+  }, []);
 
   useEffect(() => {
     if (!mainChatOpen) return;
@@ -315,10 +312,10 @@ export default function BigBallLayout() {
   const emailPrefix = user?.email ? user.email.split("@")[0] : "";
   const displayName = firstName || emailPrefix || "there";
   const avatarLetter = (firstName || emailPrefix || "?").slice(0, 1).toUpperCase();
-  const memberSince = formatMemberSince(user?.created_at);
 
   // ── Real-backend integration (preserved card execution path) ──
-  const cardsState = useCards();
+  const cardsState = useCards({ cacheScope: user?.id ?? null });
+  const refreshCards = cardsState.refresh;
   const composio = useComposio();
   const pipeline = usePipeline();
   // Notification permission flow. iOS OS state is the source of truth;
@@ -380,6 +377,7 @@ export default function BigBallLayout() {
     card: IntentCard;
     bootstrap?: string;
   } | null>(null);
+  const lastCompleteRunIdRef = useRef<string | null>(null);
   const cardActions = useCardActions({
     onOpenChat: (card, bootstrap) => {
       const trimmed = bootstrap.trim();
@@ -388,6 +386,13 @@ export default function BigBallLayout() {
       setSelectedCard(null);
     },
   });
+
+  useEffect(() => {
+    if (pipeline.run.status !== "complete" || !pipeline.run.runId) return;
+    if (pipeline.run.runId === lastCompleteRunIdRef.current) return;
+    lastCompleteRunIdRef.current = pipeline.run.runId;
+    void refreshCards();
+  }, [pipeline.run.runId, pipeline.run.status, refreshCards]);
 
   // Detect scroll on any descendant scroll container (capture phase catches them all)
   useEffect(() => {
@@ -575,32 +580,58 @@ export default function BigBallLayout() {
         {/* Subtle divider */}
         <div className="mt-4 h-px bg-foreground/[0.08]" />
 
-        {/* Ambient — passive, always present. Single subtle line. */}
-        <button
-          onClick={() => setActiveView("ambient")}
-          className="w-full flex items-center gap-3 py-2.5 text-left group"
-          aria-label="Open Ambient"
-        >
-          <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground/40 shrink-0 w-[60px]">
-            Ambient
-          </span>
-          <span className="text-[13px] text-foreground/75 truncate flex-1 leading-snug">
-            {weather
-              ? `${weather.city} · ${weather.label} · ${weather.temp}°`
-              : "Quiet ambient — connect sources to start streaming signals"}
-          </span>
-          <ChevronRight size={14} className="text-foreground/25 group-hover:text-foreground/55 shrink-0 transition-colors" />
-        </button>
-
-        {/* Live session — always present; real transcript replaces standby when available. */}
-        <div className="h-px bg-foreground/[0.08] mb-3" />
-        <LiveSessionCard
-          session={liveSession}
-          previewVisibleCount={previewVisibleCount}
-          variant="now"
-          alwaysVisible
-          onFocus={setLiveOverlay}
-        />
+        {/* Ambient — left tap opens the Ambient tab; right pill toggles
+            the master ambient switch (persisted to localStorage). When OFF
+            the label says "Paused — not sensing" and the toggle dot slides
+            left; when ON the "Ambient" word drifts purple via the
+            ambient-drift keyframe and the dot slides right. */}
+        <div className="w-full flex items-center gap-3 py-2.5">
+          <button
+            onClick={() => setActiveView("ambient")}
+            className="flex items-center gap-3 flex-1 min-w-0 text-left group"
+            aria-label="Open Ambient"
+          >
+            <span
+              className={`text-[10px] font-semibold uppercase tracking-[0.18em] shrink-0 w-[60px] ${
+                ambientOn ? "animate-ambient-drift" : "text-foreground/40"
+              }`}
+            >
+              Ambient
+            </span>
+            <span
+              className={`text-[13px] truncate flex-1 leading-snug transition-colors ${
+                ambientOn ? "text-foreground/75" : "text-foreground/35"
+              }`}
+            >
+              {!ambientOn
+                ? "Paused — not sensing"
+                : weather
+                  ? `${weather.city} · ${weather.label} · ${weather.temp}°`
+                  : "Quiet ambient — connect sources to start streaming signals"}
+            </span>
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              void handleToggleAmbient();
+            }}
+            disabled={ambientTogglePending}
+            className={`relative w-9 h-5 rounded-full transition-colors shrink-0 disabled:opacity-60 disabled:cursor-progress ${
+              ambientOn ? "bg-foreground" : "bg-foreground/20"
+            }`}
+            aria-label="Toggle ambient"
+            aria-pressed={ambientOn}
+            aria-busy={ambientTogglePending}
+          >
+            <motion.span
+              layout
+              transition={{ type: "tween", duration: 0.2, ease: "easeInOut" }}
+              className={`absolute top-0.5 w-4 h-4 rounded-full bg-background shadow-sm ${
+                ambientOn ? "left-[18px]" : "left-0.5"
+              }`}
+            />
+          </button>
+        </div>
       </div>
 
       {/* 3D sphere of all cards — drag to rotate */}
@@ -672,14 +703,6 @@ export default function BigBallLayout() {
             + hamburger. Same composition as the old AppShell. */}
         <div className="absolute top-12 right-5 z-30 flex items-center gap-1.5">
           <AgentRunIndicator />
-          <button
-            onClick={() => setMainChatOpen(true)}
-            className="px-3 py-1.5 rounded-full glass-card-strong text-xs font-medium text-foreground/70 inline-flex items-center gap-1.5"
-            title="Open main chat"
-          >
-            <MessageCircle size={14} strokeWidth={1.5} />
-            Chat
-          </button>
           <DebugPanel
             run={pipeline.run}
             isRunning={pipeline.isRunning}
@@ -760,40 +783,39 @@ export default function BigBallLayout() {
             ) : activeView === "now" ? (
               renderNowView()
             ) : activeView === "chat" ? (
-              /* Real card history (old AppShell CHAT view). Reads from
-                 /api/cards via useCards(); confirm/dismiss/done buttons
-                 POST to /feedback via the timeline itself. */
-              <div className="h-full overflow-y-auto pt-12">
-                <RealChatTimeline
-                  processingIds={cardActions.processingIds}
-                  doneIds={cardActions.doneIds}
-                  confirmedIds={cardActions.confirmedIds}
-                  dismissedIds={cardActions.dismissedIds}
-                  chattedIds={cardActions.chattedIds}
-                  onOpenChat={(card, bootstrap) => {
-                    chatEntryView.current = "chat";
-                    setChatTarget({
-                      card,
-                      bootstrap:
-                        bootstrap && bootstrap.trim().length > 0
-                          ? bootstrap
-                          : undefined,
-                    });
-                  }}
-                  onOpenCardDetail={(card) => {
-                    const status: CardStatus = cardActions.processingIds.has(card.id)
-                      ? "processing"
-                      : "normal";
-                    setSelectedCard(realCardToLovableIntent(card, status));
-                    setDrawerOpen(true);
-                  }}
-                  onConfirmId={cardActions.markConfirmed}
-                  onDismissId={cardActions.markDismissed}
-                  onDoneId={cardActions.markDone}
-                  onProcessingId={cardActions.markProcessing}
-                  onChattedId={cardActions.markChatted}
-                />
-              </div>
+              /* Real card history (old AppShell CHAT view). Reuses the
+                 shared /api/cards state from this layout so TASKS does not
+                 refetch on every tab entry. */
+              <RealChatTimeline
+                cards={cardsState}
+                processingIds={cardActions.processingIds}
+                doneIds={cardActions.doneIds}
+                confirmedIds={cardActions.confirmedIds}
+                dismissedIds={cardActions.dismissedIds}
+                chattedIds={cardActions.chattedIds}
+                onOpenChat={(card, bootstrap) => {
+                  chatEntryView.current = "chat";
+                  setChatTarget({
+                    card,
+                    bootstrap:
+                      bootstrap && bootstrap.trim().length > 0
+                        ? bootstrap
+                        : undefined,
+                  });
+                }}
+                onOpenCardDetail={(card) => {
+                  const status: CardStatus = cardActions.processingIds.has(card.id)
+                    ? "processing"
+                    : "normal";
+                  setSelectedCard(realCardToLovableIntent(card, status));
+                  setDrawerOpen(true);
+                }}
+                onConfirmId={cardActions.markConfirmed}
+                onDismissId={cardActions.markDismissed}
+                onDoneId={cardActions.markDone}
+                onProcessingId={cardActions.markProcessing}
+                onChattedId={cardActions.markChatted}
+              />
             ) : activeView === "ambient" ? (
               <AmbientView
                 onConnectMore={() => setActiveView("connect")}
@@ -813,14 +835,11 @@ export default function BigBallLayout() {
               <div className="h-full overflow-y-auto pt-12">
                 <RealControlPanel composio={composio} />
               </div>
-            ) : activeView === "control" ? (
-              <ControlPanel />
             ) : activeView === "account" ? (
               <AccountPanel
                 userName={fullName || displayName}
                 avatarLetter={avatarLetter}
                 userEmail={user?.email ?? undefined}
-                memberSince={memberSince}
                 onSignOut={() => void signOut()}
                 onDeleteAccount={async () => {
                   // Throws DeleteAccountError on fail-fast abort
@@ -859,6 +878,28 @@ export default function BigBallLayout() {
           </motion.div>
         </AnimatePresence>
 
+        {/* ASK PIN AI — bottom-center entry into MainChat. Mirrors the
+            minimalist constellation design (MinimalistNow): subtle pulse +
+            ChevronUp + uppercase label. */}
+        {activeView === "now" && (
+          <button
+            onClick={() => setMainChatOpen(true)}
+            className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-1 px-3 py-1.5 group"
+            aria-label="Open main chat"
+          >
+            <motion.div
+              animate={{ y: [0, -4, 0], opacity: [0.45, 0.75, 0.45] }}
+              transition={{ duration: 2.2, repeat: Infinity, ease: "easeInOut" }}
+              className="flex items-center justify-center"
+            >
+              <ChevronUp size={18} strokeWidth={1.6} className="text-foreground/55 group-hover:text-foreground/80 transition-colors" />
+            </motion.div>
+            <span className="text-[10px] tracking-[0.18em] uppercase text-foreground/35 group-hover:text-foreground/60 transition-colors font-medium">
+              Ask PIN AI
+            </span>
+          </button>
+        )}
+
       </div>
 
       {/* Live session fullscreen overlay — rendered at root via portal, fully independent of activeView.
@@ -876,10 +917,13 @@ export default function BigBallLayout() {
         document.body
       )}
 
-      {/* Main chat overlay (full-screen). Opened by the top-right "Chat"
-          button. Separate from card chat: this is a standalone main
-          thread keyed by user.id, restored from sessionStorage. Mirrors
-          the AppShell-era mainChatOpen behavior. */}
+      {/* Main chat overlay. Opened by the bottom-center ASK PIN AI
+          button. Separate from card chat: a standalone main thread per
+          user. The portal escapes the Constellation tree (so z-index is
+          unambiguous and the hamburger menu doesn't interfere) but the
+          inner container forces the same `max-w-md` mobile column the
+          rest of the app uses — without this, desktop viewers see the
+          chat sprawled full-width, breaking the minimalist design. */}
       {createPortal(
         <AnimatePresence>
           {mainChatOpen && (
@@ -889,9 +933,11 @@ export default function BigBallLayout() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.18 }}
-              className="fixed inset-0 z-50 bg-background"
+              className="fixed inset-0 z-50 flex justify-center bg-foreground/[0.04]"
             >
-              <MainChat onBack={() => setMainChatOpen(false)} />
+              <div className="relative w-full max-w-md h-screen overflow-hidden bg-background">
+                <MainChat onBack={handleMainChatBack} />
+              </div>
             </motion.div>
           )}
         </AnimatePresence>,

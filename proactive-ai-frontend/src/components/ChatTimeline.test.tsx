@@ -48,8 +48,11 @@ const card: IntentCard = {
   createdAt: "2026-05-18T19:00:00Z",
 };
 
-vi.mock("@/hooks/useCards", () => ({
-  useCards: () => ({
+import ChatTimeline from "./ChatTimeline";
+
+const noop = vi.fn();
+const baseProps = {
+  cards: {
     cards: [{
       card,
       runId: "run-1",
@@ -60,14 +63,7 @@ vi.mock("@/hooks/useCards", () => ({
     }],
     loading: false,
     error: null,
-    refresh: vi.fn(),
-  }),
-}));
-
-import ChatTimeline from "./ChatTimeline";
-
-const noop = vi.fn();
-const baseProps = {
+  },
   onOpenChat: noop,
   dismissedIds: new Set<string>(),
   confirmedIds: new Set<string>(),
