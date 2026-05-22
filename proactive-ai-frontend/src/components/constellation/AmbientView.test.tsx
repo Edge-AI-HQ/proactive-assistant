@@ -289,4 +289,76 @@ describe("AmbientView ambient toggle", () => {
     expect(screen.queryByText("Sound detected")).toBeNull();
   });
 
+  test("labels cloud and on-device summary events by their generation method", async () => {
+    runtimeMock.status.mockReturnValue(makeStatus());
+    ambientTimelineMock.events = [
+      {
+        id: "cloud-summary-1",
+        localUserId: "local",
+        localDate: "2026-05-22",
+        timezone: "UTC",
+        occurredAt: "2026-05-22T10:00:00.000Z",
+        eventType: "other",
+        title: "Cloud generated day summary",
+        summary: "Cloud generated summary body.",
+        primarySourceLabel: "On-device summary",
+        deviceLabels: [],
+        sourceTypes: ["calendar"],
+        tags: ["summary"],
+        privacy: "private",
+        confidence: 0.8,
+        confidenceLabel: "certain",
+        salience: 0.7,
+        rawRefs: [],
+        observationIds: [],
+        generationMethod: "cloud_llm",
+        generationSource: "llm_summary",
+        generationStatus: "visible",
+        memoryCandidate: false,
+        cardTriggerCandidate: false,
+        schemaVersion: "ambient_timeline_event.v1",
+        syncStatus: "pending",
+        dedupeKey: "ambient:timeline:2026-05-22:cloud",
+        createdAt: "2026-05-22T10:00:00.000Z",
+        updatedAt: "2026-05-22T10:00:00.000Z",
+      },
+      {
+        id: "local-summary-1",
+        localUserId: "local",
+        localDate: "2026-05-22",
+        timezone: "UTC",
+        occurredAt: "2026-05-22T09:00:00.000Z",
+        eventType: "other",
+        title: "Local generated day summary",
+        summary: "Local generated summary body.",
+        primarySourceLabel: "Ambient",
+        deviceLabels: [],
+        sourceTypes: ["motion"],
+        tags: ["summary"],
+        privacy: "private",
+        confidence: 0.7,
+        confidenceLabel: "certain",
+        salience: 0.7,
+        rawRefs: [],
+        observationIds: [],
+        generationMethod: "local_llm",
+        generationSource: "llm_summary",
+        generationStatus: "visible",
+        memoryCandidate: false,
+        cardTriggerCandidate: false,
+        schemaVersion: "ambient_timeline_event.v1",
+        syncStatus: "pending",
+        dedupeKey: "ambient:timeline:2026-05-22:local",
+        createdAt: "2026-05-22T09:00:00.000Z",
+        updatedAt: "2026-05-22T09:00:00.000Z",
+      },
+    ];
+
+    render(<AmbientView />);
+
+    expect(await screen.findByText("Cloud generated day summary")).toBeTruthy();
+    expect(screen.getByText("Cloud summary")).toBeTruthy();
+    expect(screen.getByText("On-device summary")).toBeTruthy();
+  });
+
 });

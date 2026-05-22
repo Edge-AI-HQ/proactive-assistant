@@ -158,7 +158,7 @@ describe("AmbientRuntime source reconciliation", () => {
 
   test("reruns reconciliation immediately when desired sources change mid-start", async () => {
     const source = new FakeSource("sound_classifier");
-    let releaseStart: () => void = () => {};
+    let releaseStart: () => void = () => { };
     source.startWaiter = new Promise((resolve) => {
       releaseStart = resolve;
     });
@@ -233,7 +233,7 @@ describe("AmbientRuntime scheduled summary routing", () => {
     expect(ambientSummaryBridgeCalls.cloud).toBe(0);
   });
 
-  test("uses cloud summary bridge when uploads are unlocked and preference allows cloud", async () => {
+  test("uses Ambient summary bridge when uploads are unlocked and preference allows cloud", async () => {
     localStorage.setItem("pin.ambient.summaryPreference", "cloud_when_unlocked");
     const source = new FakeSource("sound_classifier");
     const runtime = new AmbientRuntime({

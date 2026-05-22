@@ -8,7 +8,7 @@ function store(): AmbientTimelineStore {
   const state = { current: DEFAULT_AMBIENT_SUMMARY_SCHEDULER_STATE };
   return {
     kind: "memory",
-    init: vi.fn(async () => {}),
+    init: vi.fn(async () => { }),
     status: vi.fn(() => ({ mode: "memory", ready: true, lastError: null })),
     upsertRawEvent: vi.fn(),
     listRawEvents: vi.fn(async () => []),
@@ -19,8 +19,8 @@ function store(): AmbientTimelineStore {
     upsertTimelineEvent: vi.fn(async (event) => ({ event, shouldSync: true })),
     listTimelineEvents: vi.fn(async () => []),
     listTimelineEventsByGenerationSource: vi.fn(async () => []),
-    dismissTimelineEvent: vi.fn(async () => {}),
-    markTimelineEventsSynced: vi.fn(async () => {}),
+    dismissTimelineEvent: vi.fn(async () => { }),
+    markTimelineEventsSynced: vi.fn(async () => { }),
     getSummarySchedulerState: vi.fn(async () => state.current),
     setSummarySchedulerState: vi.fn(async (next) => { state.current = next; }),
   } as unknown as AmbientTimelineStore;
@@ -88,7 +88,7 @@ describe("maybeRunScheduledAmbientSummary", () => {
         },
         modelId: "gpt-5.5",
         generationMethod: "cloud_llm" as const,
-        primarySourceLabel: "Cloud summary",
+        primarySourceLabel: "Ambient summary",
       })),
     };
 
@@ -103,13 +103,13 @@ describe("maybeRunScheduledAmbientSummary", () => {
 
     expect(timelineStore.upsertTimelineEvent).toHaveBeenCalledWith(expect.objectContaining({
       generationMethod: "cloud_llm",
-      primarySourceLabel: "Cloud summary",
+      primarySourceLabel: "Ambient summary",
       llmModelId: "gpt-5.5",
     }));
   });
 
 
-  test("does not persist a cloud summary when the privacy gate rejects it", async () => {
+  test("does not persist a Ambient summary when the privacy gate rejects it", async () => {
     const timelineStore = store();
     vi.mocked(timelineStore.listRawEventsInRange).mockResolvedValue([
       raw("calendar_2", "calendar", "Sensitive appointment"),
@@ -126,7 +126,7 @@ describe("maybeRunScheduledAmbientSummary", () => {
         },
         modelId: "gpt-5.5",
         generationMethod: "cloud_llm" as const,
-        primarySourceLabel: "Cloud summary",
+        primarySourceLabel: "Ambient summary",
       })),
     };
 

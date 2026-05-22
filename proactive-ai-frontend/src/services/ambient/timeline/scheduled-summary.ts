@@ -85,7 +85,7 @@ export async function maybeRunScheduledAmbientSummary(input: {
         currentState,
         input.now,
         "cloud_result_discarded_after_lock",
-        "Cloud summary result was discarded because uploads were locked before persistence.",
+        "Ambient summary result was discarded because uploads were locked before persistence.",
       ),
     );
     return { ran: true, status: "failed" };

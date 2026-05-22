@@ -161,6 +161,8 @@ function deviceIconForTimelineEvent(event: AmbientTimelineEvent): LucideIcon {
 }
 
 function deviceLabelForTimelineEvent(event: AmbientTimelineEvent): string {
+  if (event.generationMethod === "cloud_llm") return "Ambient summary";
+  if (event.generationMethod === "local_llm") return "On-device summary";
   if (isLlmSummaryEvent(event)) return "On-device summary";
   return event.primarySourceLabel;
 }
@@ -623,8 +625,8 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
             <button
               onClick={handleLockToggle}
               className={`w-9 h-9 rounded-full flex items-center justify-center border transition-colors ${uploadsLocked
-                  ? "bg-foreground text-background border-foreground"
-                  : "bg-foreground/[0.04] text-foreground/60 hover:bg-foreground/[0.08] hover:text-foreground border-foreground/15"
+                ? "bg-foreground text-background border-foreground"
+                : "bg-foreground/[0.04] text-foreground/60 hover:bg-foreground/[0.08] hover:text-foreground border-foreground/15"
                 }`}
               aria-label={uploadsLocked ? "Unlock uploads" : "Lock uploads"}
               title={uploadsLocked ? "Uploads locked" : "Lock uploads"}
@@ -901,9 +903,9 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                         onClick={
                           entry.action && onAmbientAction
                             ? (e) => {
-                                e.stopPropagation();
-                                onAmbientAction(entry);
-                              }
+                              e.stopPropagation();
+                              onAmbientAction(entry);
+                            }
                             : undefined
                         }
                         className="text-[11px] font-semibold text-[hsl(304_75%_45%)] shrink-0 flex items-center gap-0.5 hover:text-[hsl(304_75%_35%)]"
@@ -1208,10 +1210,10 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
                       )}
                       <p
                         className={`leading-snug transition-colors duration-500 ${a.kind === "action"
-                            ? "text-white text-[18px] md:text-[20px] font-medium"
-                            : a.kind === "assist"
-                              ? "text-white/90 text-[17px] md:text-[19px]"
-                              : "text-white/75 text-[16px] md:text-[18px]"
+                          ? "text-white text-[18px] md:text-[20px] font-medium"
+                          : a.kind === "assist"
+                            ? "text-white/90 text-[17px] md:text-[19px]"
+                            : "text-white/75 text-[16px] md:text-[18px]"
                           }`}
                       >
                         {a.text}

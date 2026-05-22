@@ -42,7 +42,7 @@ export function createCloudFirstAmbientSummaryBridge(options: { shouldUseCloud?:
           draft: result.draft,
           modelId: result.modelId,
           generationMethod: "cloud_llm",
-          primarySourceLabel: "Cloud summary",
+          primarySourceLabel: "Ambient summary",
         };
       } catch (err) {
         const fallback = await local.generateAmbientSummaryEvent(context);
