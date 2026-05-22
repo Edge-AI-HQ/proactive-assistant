@@ -731,7 +731,7 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
         JSON.stringify(event.observationIds),
         event.windowId ?? null,
         event.generationMethod,
-        event.generationSource ?? (event.generationMethod === "local_llm" ? "llm_summary" : "rule_based"),
+        event.generationSource ?? (event.generationMethod === "local_llm" || event.generationMethod === "cloud_llm" ? "llm_summary" : "rule_based"),
         event.summaryRunId ?? null,
         JSON.stringify(event.sourceWindowIds ?? []),
         event.llmModelId ?? null,
@@ -976,7 +976,7 @@ function cloneTimelineEvent(event: AmbientTimelineEvent): AmbientTimelineEvent {
 }
 
 function effectiveGenerationSource(event: AmbientTimelineEvent): NonNullable<AmbientTimelineEvent["generationSource"]> {
-  return event.generationSource ?? (event.generationMethod === "local_llm" ? "llm_summary" : "rule_based");
+  return event.generationSource ?? (event.generationMethod === "local_llm" || event.generationMethod === "cloud_llm" ? "llm_summary" : "rule_based");
 }
 
 function effectiveSummaryStatus(window: AmbientCandidateWindow): NonNullable<AmbientCandidateWindow["summaryStatus"]> {

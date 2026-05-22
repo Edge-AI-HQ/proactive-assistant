@@ -157,6 +157,8 @@ function deviceIconForTimelineEvent(event: AmbientTimelineEvent): LucideIcon {
 }
 
 function deviceLabelForTimelineEvent(event: AmbientTimelineEvent): string {
+  if (event.generationMethod === "cloud_llm") return "Ambient summary";
+  if (event.generationMethod === "local_llm") return "On-device summary";
   if (isLlmSummaryEvent(event)) return "On-device summary";
   return event.primarySourceLabel;
 }
@@ -196,10 +198,10 @@ function pendingTranscriptWindowToEntry(window: AmbientCandidateWindow): Timelin
     icon: Mic,
     device: { name: "Microphone", icon: Mic },
     privacyTag: "private",
-    confidenceLabel: window.confidenceHint >= 0.65 ? "certain" : "uncertain",
-    title: "Voice transcript pending",
+    confidenceLabel: undefined,
+    title: "Voice transcript",
     body: transcriptWindowPreview(window.compactContext),
-    tags: ["voice", "pending"],
+    tags: ["voice"],
   };
 }
 
@@ -293,13 +295,15 @@ function rawEventBody(raw: AmbientRawEvent): string {
 }
 
 function soundBody(text: string): string {
-  const match = /^Heard\s+([a-zA-Z_ -]+?)\s+for\s+/.exec(text.trim());
-  const label = match?.[1]?.trim().toLowerCase();
-  if (label === "speech" || label === "conversation") return "Speech detected";
-  if (label === "traffic") return "Traffic sound";
-  if (label === "quiet" || label === "quiet room") return "Quiet room";
-  if (label === "music" || label === "singing") return "Music";
-  return "Sound detected";
+  const match = /^Heard\s+(.+?)\s+for\s+/.exec(text.trim());
+  const label = match?.[1]?.trim();
+  const normalized = label?.toLowerCase();
+  if (!label) return "Sound detected";
+  if (normalized === "speech" || normalized === "conversation") return "Speech detected";
+  if (normalized === "traffic") return "Traffic sound detected";
+  if (normalized === "quiet" || normalized === "quiet room") return "Quiet room";
+  if (normalized === "music" || normalized === "singing") return "Music detected";
+  return `${label.replace(/^./, (char) => char.toUpperCase())} detected`;
 }
 
 function transcriptWindowPreview(compactContext: string): string {
@@ -588,8 +592,8 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
             <button
               onClick={handleLockToggle}
               className={`w-9 h-9 rounded-full flex items-center justify-center border transition-colors ${uploadsLocked
-                  ? "bg-foreground text-background border-foreground"
-                  : "bg-foreground/[0.04] text-foreground/60 hover:bg-foreground/[0.08] hover:text-foreground border-foreground/15"
+                ? "bg-foreground text-background border-foreground"
+                : "bg-foreground/[0.04] text-foreground/60 hover:bg-foreground/[0.08] hover:text-foreground border-foreground/15"
                 }`}
               aria-label={uploadsLocked ? "Unlock uploads" : "Lock uploads"}
               title={uploadsLocked ? "Uploads locked" : "Lock uploads"}
@@ -866,9 +870,9 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                         onClick={
                           entry.action && onAmbientAction
                             ? (e) => {
-                                e.stopPropagation();
-                                onAmbientAction(entry);
-                              }
+                              e.stopPropagation();
+                              onAmbientAction(entry);
+                            }
                             : undefined
                         }
                         className="text-[11px] font-semibold text-[hsl(304_75%_45%)] shrink-0 flex items-center gap-0.5 hover:text-[hsl(304_75%_35%)]"
@@ -1173,10 +1177,10 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
                       )}
                       <p
                         className={`leading-snug transition-colors duration-500 ${a.kind === "action"
-                            ? "text-white text-[18px] md:text-[20px] font-medium"
-                            : a.kind === "assist"
-                              ? "text-white/90 text-[17px] md:text-[19px]"
-                              : "text-white/75 text-[16px] md:text-[18px]"
+                          ? "text-white text-[18px] md:text-[20px] font-medium"
+                          : a.kind === "assist"
+                            ? "text-white/90 text-[17px] md:text-[19px]"
+                            : "text-white/75 text-[16px] md:text-[18px]"
                           }`}
                       >
                         {a.text}

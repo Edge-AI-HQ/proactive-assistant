@@ -60,6 +60,15 @@ vi.mock("@/components/ui/slider", () => ({
   Slider: () => <input aria-label="personality slider" readOnly />,
 }));
 
+vi.mock("@/services/ambient", () => ({
+  getAmbientRuntime: () => ({
+    status: () => ({ uploadsLocked: false }),
+    subscribe: () => () => {},
+  }),
+}));
+vi.mock("@/lib/api", () => ({
+  summarizeAmbientWithCloud: vi.fn(),
+}));
 vi.mock("@/lib/platform", () => ({ isNative: false }));
 vi.mock("./GoalsView", () => ({ default: () => <div>Goals view</div> }));
 vi.mock("@/components/AmbientSourceControlsPanel", () => ({

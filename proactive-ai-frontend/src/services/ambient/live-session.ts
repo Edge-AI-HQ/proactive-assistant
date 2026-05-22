@@ -356,11 +356,12 @@ function candidateWindowToLiveSessionItem(
   };
   if (window.windowType === "location_update") {
     const place = placeLabelFromWindow(window);
+    const label = locationDisplayLabel(place);
     return {
       ...base,
       kind: "place",
-      label: place ? `Near ${place}` : "Location updated",
-      summary: privacySuffix(place ? `Near ${place}` : "Location updated", window.privacyHint),
+      label,
+      summary: privacySuffix(label, window.privacyHint),
     };
   }
   if (window.windowType === "visit_stay") {
@@ -413,7 +414,7 @@ function rawEventToLiveSessionItem(event: AmbientRawEvent): LiveSessionContextIt
   }
   if (event.sourceType === "location") {
     const place = placeLabelFromText(event.compactText);
-    const label = place ? `Near ${place}` : "Location updated";
+    const label = locationDisplayLabel(place);
     return { ...base, kind: "place", label, summary: compactSummary(event) };
   }
   if (event.sourceType === "motion") {
@@ -530,8 +531,16 @@ function placeLabelFromWindow(window: AmbientCandidateWindow): string | null {
   return placeLabelFromText(window.compactContext);
 }
 
+function locationDisplayLabel(place: string | null): string {
+  if (!place) return "Location updated";
+  return /^Near\s+/i.test(place) ? place : `Near ${place}`;
+}
+
 function placeLabelFromText(text: string): string | null {
-  const match = /(?:Location updated|Location near|Arrived|Departed) near ([^.]+)\.?/i.exec(text.trim());
+  const trimmed = text.trim();
+  const displayMatch = /^Location:\s+(.+?)\.?$/i.exec(trimmed);
+  if (displayMatch?.[1]) return displayMatch[1].trim();
+  const match = /(?:Location updated|Location near|Arrived|Departed) near ([^.]+)\.?/i.exec(trimmed);
   const label = match?.[1]?.trim();
   return label || null;
 }
@@ -547,14 +556,15 @@ function motionLabel(context: string): string {
 }
 
 function soundLabel(context: string): string {
-  const match = /^Heard\s+([a-zA-Z_ -]+?)\s+for\s+/.exec(context.trim());
-  const label = match?.[1]?.trim().toLowerCase();
+  const match = /^Heard\s+(.+?)\s+for\s+/.exec(context.trim());
+  const label = match?.[1]?.trim();
+  const normalized = label?.toLowerCase();
   if (!label) return "Sound detected";
-  if (label === "speech" || label === "conversation") return "Speech detected";
-  if (label === "traffic") return "Traffic sound";
-  if (label === "quiet" || label === "quiet room") return "Quiet room";
-  if (label === "music" || label === "singing") return "Music";
-  return "Sound detected";
+  if (normalized === "speech" || normalized === "conversation") return "Speech detected";
+  if (normalized === "traffic") return "Traffic sound detected";
+  if (normalized === "quiet" || normalized === "quiet room") return "Quiet room";
+  if (normalized === "music" || normalized === "singing") return "Music detected";
+  return `${label.replace(/^./, (char) => char.toUpperCase())} detected`;
 }
 
 function privacySuffix(label: string, privacy: AmbientPrivacy): string {

@@ -1,4 +1,42 @@
-import { describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
+
+const ambientSummaryBridgeCalls = vi.hoisted(() => ({ local: 0, cloud: 0 }));
+
+vi.mock("@/lib/api", () => ({
+  summarizeAmbientWithCloud: vi.fn(),
+}));
+
+vi.mock("@/lib/devices", () => ({
+  currentDeviceOwnerUserId: vi.fn(async () => "local"),
+}));
+
+vi.mock("./summary-bridges", () => ({
+  createLocalAmbientSummaryBridge: () => ({
+    generateAmbientSummaryEvent: vi.fn(async () => {
+      ambientSummaryBridgeCalls.local += 1;
+      return { ok: false as const, errorCode: "no_content" };
+    }),
+  }),
+  createCloudFirstAmbientSummaryBridge: () => ({
+    generateAmbientSummaryEvent: vi.fn(async () => {
+      ambientSummaryBridgeCalls.cloud += 1;
+      return { ok: false as const, errorCode: "no_content" };
+    }),
+  }),
+}));
+
+vi.mock("./timeline/scheduled-summary", () => ({
+  maybeRunScheduledAmbientSummary: vi.fn(async ({ bridge }) => {
+    await bridge.generateAmbientSummaryEvent({
+      schemaVersion: "ambient_summary.v1",
+      localDate: "2026-05-19",
+      generatedAt: "2026-05-19T10:15:00.000Z",
+      rawEvents: [],
+      recentSummaries: [],
+    });
+    return { ran: true, status: "failed" };
+  }),
+}));
 
 import { AmbientRuntime } from "./index";
 import { MemoryOutboxStore } from "./outbox";
@@ -62,6 +100,11 @@ function makeRuntime(source: FakeSource): AmbientRuntime {
 }
 
 describe("AmbientRuntime source reconciliation", () => {
+  beforeEach(() => {
+    ambientSummaryBridgeCalls.local = 0;
+    ambientSummaryBridgeCalls.cloud = 0;
+    localStorage.clear();
+  });
   test("retries a desired source after an earlier start failure", async () => {
     const source = new FakeSource("sound_classifier");
     source.failNextStart = true;
@@ -115,7 +158,7 @@ describe("AmbientRuntime source reconciliation", () => {
 
   test("reruns reconciliation immediately when desired sources change mid-start", async () => {
     const source = new FakeSource("sound_classifier");
-    let releaseStart: () => void = () => {};
+    let releaseStart: () => void = () => { };
     source.startWaiter = new Promise((resolve) => {
       releaseStart = resolve;
     });
@@ -166,4 +209,42 @@ describe("AmbientRuntime source reconciliation", () => {
     expect(runtime.status().outboxPendingCount).toBe(1);
   });
 
+});
+
+
+describe("AmbientRuntime scheduled summary routing", () => {
+  beforeEach(() => {
+    ambientSummaryBridgeCalls.local = 0;
+    ambientSummaryBridgeCalls.cloud = 0;
+    localStorage.clear();
+  });
+  test("uses local summary bridge when uploads are locked", async () => {
+    const source = new FakeSource("sound_classifier");
+    const runtime = new AmbientRuntime({
+      sources: [source],
+      outbox: new MemoryOutboxStore(),
+      enableTimers: false,
+    });
+    runtime.setUploadsLocked(true);
+
+    await runtime.runScheduledTimelineSummary(new Date("2026-05-19T10:15:00.000Z"));
+
+    expect(ambientSummaryBridgeCalls.local).toBe(1);
+    expect(ambientSummaryBridgeCalls.cloud).toBe(0);
+  });
+
+  test("uses Ambient summary bridge when uploads are unlocked and preference allows cloud", async () => {
+    localStorage.setItem("pin.ambient.summaryPreference", "cloud_when_unlocked");
+    const source = new FakeSource("sound_classifier");
+    const runtime = new AmbientRuntime({
+      sources: [source],
+      outbox: new MemoryOutboxStore(),
+      enableTimers: false,
+    });
+
+    await runtime.runScheduledTimelineSummary(new Date("2026-05-19T10:15:00.000Z"));
+
+    expect(ambientSummaryBridgeCalls.cloud).toBe(1);
+    expect(ambientSummaryBridgeCalls.local).toBe(0);
+  });
 });

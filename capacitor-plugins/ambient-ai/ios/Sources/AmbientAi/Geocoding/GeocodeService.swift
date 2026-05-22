@@ -6,19 +6,13 @@ import MapKit
 ///
 /// 1. `CLGeocoder.reverseGeocodeLocation` → street address + administrative
 ///    fields + occasional `areasOfInterest`.
-/// 2. `MKLocalSearch.Request` with `naturalLanguageQuery = "point of
-///    interest"` over a 180 m region (`.includingAll` POI filter) → real
-///    POI / business name (e.g. "Starbucks Reserve Roastery") + category +
-///    distance to the user.
-///
-/// The MapKit query style and 180 m region match the sibling native app
-/// `proactive-ai-ios` (`LocationMotionPlugin.resolvePOI`) so both
-/// platforms surface comparable POI metadata.
+/// 2. `MKLocalPointsOfInterestRequest` over a 180 m radius → structured
+///    POI candidates with name, category, distance, and confidence.
 ///
 /// Both lookups run concurrently; the result is merged into a single
-/// `PlaceInfo` whose `label` is a deduplicated " | " join of
-/// `poi_name | area_of_interest | address` (max 3 segments) — the same
-/// composition the native app uses for its `locationLabel`.
+/// `PlaceInfo`. `label` is intentionally conservative and prefers area or
+/// address text over a nearby POI unless the frontend can prove the fix is
+/// precise enough to display an exact place.
 ///
 /// An 11 m-grid LRU cache (cap 200, TTL 24 h) keeps us well under
 /// Apple's undocumented `CLGeocoder` rate limit while avoiding stale
@@ -27,6 +21,24 @@ public final class GeocodeService {
 
     public static let shared = GeocodeService()
 
+    public struct PlaceCandidate: Sendable {
+        public let name: String
+        public let category: String?
+        public let distanceMeters: Double
+        public let confidence: Double
+
+        public func toDict() -> [String: Any] {
+            var dict: [String: Any] = [
+                "name": name,
+                "distance_m": distanceMeters,
+                "source": "apple_mapkit",
+                "confidence": confidence,
+            ]
+            if let category { dict["category"] = category }
+            return dict
+        }
+    }
+
     public struct PlaceInfo: Sendable {
         public let label: String?
         public let placeName: String?
@@ -34,6 +46,7 @@ public final class GeocodeService {
         public let poiName: String?
         public let poiCategory: String?
         public let poiDistanceMeters: Double?
+        public let candidates: [PlaceCandidate]
         public let areaOfInterest: String?
         public let areasOfInterest: [String]
         public let thoroughfare: String?
@@ -59,6 +72,8 @@ public final class GeocodeService {
             if let v = poiName { dict["poi_name"] = v }
             if let v = poiCategory { dict["poi_category"] = v }
             if let v = poiDistanceMeters { dict["poi_distance_m"] = v }
+            if !candidates.isEmpty { dict["candidates"] = candidates.map { $0.toDict() } }
+            dict["resolution_strategy"] = candidates.isEmpty ? "reverse_geocode" : "structured_poi"
             if let v = areaOfInterest { dict["area_of_interest"] = v }
             if !areasOfInterest.isEmpty { dict["areas_of_interest"] = areasOfInterest }
             if let v = thoroughfare { dict["thoroughfare"] = v }
@@ -102,12 +117,12 @@ public final class GeocodeService {
         let loc = CLLocation(latitude: lat, longitude: lng)
 
         async let placemarkResult = reverseGeocodeWithTimeout(loc)
-        async let poiResult = findNearestPOIWithTimeout(near: loc, coord: coord)
+        async let poiResult = findPOICandidatesWithTimeout(near: loc, coord: coord)
 
         let placemark = await placemarkResult
         let poi = await poiResult
 
-        let merged = merge(target: loc, placemark: placemark, poi: poi)
+        let merged = merge(target: loc, placemark: placemark, poiCandidates: poi)
         writeCache(key, info: merged)
         return merged
     }
@@ -147,93 +162,80 @@ public final class GeocodeService {
 
     // MARK: - MapKit POI
 
-    private func findNearestPOIWithTimeout(near loc: CLLocation, coord: CLLocationCoordinate2D) async -> MKMapItem? {
-        await withTaskGroup(of: MKMapItem?.self) { group in
+    private func findPOICandidatesWithTimeout(near loc: CLLocation, coord: CLLocationCoordinate2D) async -> [PlaceCandidate] {
+        await withTaskGroup(of: [PlaceCandidate].self) { group in
             group.addTask { [weak self] in
-                guard let self else { return nil }
-                return await self.findNearestPOI(near: loc, coord: coord)
+                guard let self else { return [] }
+                return await self.findPOICandidates(near: loc, coord: coord)
             }
             group.addTask { [lookupTimeoutSeconds] in
                 try? await Task.sleep(nanoseconds: UInt64(lookupTimeoutSeconds * 1_000_000_000))
-                return nil
+                return []
             }
-            let first = await group.next() ?? nil
+            let first = await group.next() ?? []
             group.cancelAll()
             return first
         }
     }
 
-    /// Mirrors `proactive-ai-ios/LocationMotionPlugin.nearestMapPOI`:
-    /// natural-language POI search over a 180 m square region with the
-    /// "include all" POI filter, then pick the named item closest to
-    /// the user.
-    private func findNearestPOI(near loc: CLLocation, coord: CLLocationCoordinate2D) async -> MKMapItem? {
-        let request = MKLocalSearch.Request()
-        request.naturalLanguageQuery = "point of interest"
-        request.region = MKCoordinateRegion(
-            center: coord,
-            latitudinalMeters: poiRegionMeters,
-            longitudinalMeters: poiRegionMeters
-        )
-        if #available(iOS 13.0, *) {
+    private func findPOICandidates(near loc: CLLocation, coord: CLLocationCoordinate2D) async -> [PlaceCandidate] {
+        if #available(iOS 14.0, *) {
+            let request = MKLocalPointsOfInterestRequest(center: coord, radius: poiRegionMeters)
             request.pointOfInterestFilter = .includingAll
-        }
-        return await withCheckedContinuation { continuation in
-            MKLocalSearch(request: request).start { response, error in
-                if let error {
-                    NSLog("[GeocodeService] MKLocalSearch error: %@", error.localizedDescription)
-                    continuation.resume(returning: nil)
-                    return
+            return await withCheckedContinuation { continuation in
+                MKLocalSearch(request: request).start { [poiRegionMeters] response, error in
+                    if let error {
+                        NSLog("[GeocodeService] MKLocalSearch error: %@", error.localizedDescription)
+                        continuation.resume(returning: [])
+                        return
+                    }
+                    let candidates = (response?.mapItems ?? []).compactMap { item -> PlaceCandidate? in
+                        guard let rawName = item.name?.trimmingCharacters(in: .whitespacesAndNewlines), !rawName.isEmpty else {
+                            return nil
+                        }
+                        guard let itemLocation = item.placemark.location else { return nil }
+                        let distance = loc.distance(from: itemLocation)
+                        guard distance.isFinite else { return nil }
+                        let category = item.pointOfInterestCategory?.rawValue
+                        let confidence = max(0.0, min(1.0, 1.0 - (distance / poiRegionMeters)))
+                        return PlaceCandidate(name: rawName, category: category, distanceMeters: distance, confidence: confidence)
+                    }
+                    .sorted { lhs, rhs in
+                        if lhs.distanceMeters == rhs.distanceMeters { return lhs.confidence > rhs.confidence }
+                        return lhs.distanceMeters < rhs.distanceMeters
+                    }
+                    .prefix(5)
+                    continuation.resume(returning: Array(candidates))
                 }
-                let items = (response?.mapItems ?? []).filter { ($0.name ?? "").isEmpty == false }
-                let nearest = items.min { lhs, rhs in
-                    let l = lhs.placemark.location.map { loc.distance(from: $0) } ?? .greatestFiniteMagnitude
-                    let r = rhs.placemark.location.map { loc.distance(from: $0) } ?? .greatestFiniteMagnitude
-                    return l < r
-                }
-                continuation.resume(returning: nearest)
             }
         }
+        return []
     }
 
     // MARK: - Merge
 
-    private func merge(target loc: CLLocation, placemark: CLPlacemark?, poi: MKMapItem?) -> PlaceInfo {
+    private func merge(target loc: CLLocation, placemark: CLPlacemark?, poiCandidates: [PlaceCandidate]) -> PlaceInfo {
         let source: String
-        switch (placemark, poi) {
-        case (.some, .some): source = "mapkit+clgeocoder"
-        case (.some, .none): source = "clgeocoder"
-        case (.none, .some): source = "mapkit"
-        case (.none, .none): source = "none"
+        switch (placemark, poiCandidates.isEmpty) {
+        case (.some, false): source = "mapkit+clgeocoder"
+        case (.some, true): source = "clgeocoder"
+        case (.none, false): source = "mapkit"
+        case (.none, true): source = "none"
         }
 
         let areas = placemark?.areasOfInterest ?? []
         let firstArea = areas.first?.trimmingCharacters(in: .whitespacesAndNewlines)
         let areaOfInterest = (firstArea?.isEmpty == false) ? firstArea : nil
 
-        let poiName = poi?.name?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nonEmptyPoiName = (poiName?.isEmpty == false) ? poiName : nil
-
-        let poiCategory: String?
-        if #available(iOS 14.0, *), let cat = poi?.pointOfInterestCategory?.rawValue, !cat.isEmpty {
-            poiCategory = cat
-        } else {
-            poiCategory = nil
-        }
-
-        let poiDistance: Double?
-        if let poiLocation = poi?.placemark.location {
-            poiDistance = loc.distance(from: poiLocation)
-        } else {
-            poiDistance = nil
-        }
+        let nearestPOI = poiCandidates.first
+        let nonEmptyPoiName = nearestPOI?.name
+        let poiCategory = nearestPOI?.category
+        let poiDistance = nearestPOI?.distanceMeters
 
         let address = formatAddress(placemark)
-        let placeName = nonEmptyPoiName ?? areaOfInterest ?? placemark?.name
+        let placeName = areaOfInterest ?? address ?? placemark?.name ?? nonEmptyPoiName
 
-        // Multi-segment label matches proactive-ai-ios composition:
-        // poi_name | area_of_interest | address, deduped, max 3 parts.
-        let labelParts = [nonEmptyPoiName, areaOfInterest, address]
+        let labelParts = [areaOfInterest, address]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         let dedupedLabel = dedupePreservingOrder(labelParts).prefix(3).joined(separator: " | ")
@@ -246,6 +248,7 @@ public final class GeocodeService {
             poiName: nonEmptyPoiName,
             poiCategory: poiCategory,
             poiDistanceMeters: poiDistance,
+            candidates: poiCandidates,
             areaOfInterest: areaOfInterest,
             areasOfInterest: areas,
             thoroughfare: placemark?.thoroughfare,
