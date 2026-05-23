@@ -6,7 +6,7 @@ Topology (one Daytona sandbox shared across all 5 agents):
       ├─ task("data-collector", "...")    — sonnet, writes /state/phase1.json
       ├─ task("planner", "...")           — sonnet, response_format=PlanOutput
       ├─ task("card-generator", "...")    — sonnet, response_format=CardsList
-      └─ task("evaluator", "...")         — gpt-5.5, response_format=EvalReport
+      └─ task("evaluator", "...")         — sonnet, response_format=EvalReport
 
 Why 4 subagents instead of one big prompt:
 
@@ -15,8 +15,7 @@ Why 4 subagents instead of one big prompt:
     Each LLM call sees only what it needs to decide.
   - Specialization: planner reasons about dedup / feedback alignment;
     generator focuses on writing high-quality cards; evaluator reviews
-    them with a CRITIC prompt and a CROSS-FAMILY model (gpt-5.5) so
-    "self-review" actually has independent perspective.
+    them with a CRITIC prompt against the same CardsList output.
   - Schema enforcement at the LLM layer: each subagent's
     `response_format` is a Pydantic model, validated by the model
     runtime. Replaces the old hand-written `parse_generator_output` +
@@ -470,27 +469,18 @@ async def run_generator(
             # bound to the SHARED `backend`. Without the shared backend
             # they'd spawn separate sandboxes and lose file continuity.
             #
-            # Reasoning posture per agent:
-            #   data_collector — no response_format, but still stays on the
-            #     same OpenAI model as the structured agents in local/dev so a
-            #     single per-user LiteLLM key/model allowlist can run the full
-            #     chain without Anthropic billing coupling.
-            #   planner / card_generator / orchestrator — have
-            #     response_format, which langchain implements via forced
-            #     tool_choice. Anthropic rejects extended-thinking +
-            #     forced tool_choice. We switch these to gpt-5.5 so they
-            #     get OpenAI's built-in reasoning (compatible with
-            #     structured output) instead of running without any
-            #     reasoning at all. Reasoning text isn't surfaced by
-            #     OpenAI's chat.completions API — only reasoning_tokens
-            #     in usage — so traces show "the model thought" without
-            #     the chain-of-thought text.
+            # All subagents run on claude-sonnet-4-6. The ones with
+            # response_format (planner / card_generator / evaluator /
+            # orchestrator) keep enable_thinking=False because langchain
+            # implements response_format via forced tool_choice, which
+            # Anthropic rejects when extended-thinking is on. Cache is
+            # left at the default (on) so the shared system prompt /
+            # last user turn ride Anthropic's prompt cache.
             data_collector = create_deep_agent(
                 model=make_chat_model(
                     virtual_key=virtual_key,
-                    model="gpt-5.5",
+                    model="claude-sonnet-4-6",
                     enable_thinking=False,
-                    enable_prompt_cache=False,
                 ),
                 system_prompt=_DATA_COLLECTOR_PROMPT,
                 backend=backend,
@@ -498,9 +488,8 @@ async def run_generator(
             planner = create_deep_agent(
                 model=make_chat_model(
                     virtual_key=virtual_key,
-                    model="gpt-5.5",
+                    model="claude-sonnet-4-6",
                     enable_thinking=False,
-                    enable_prompt_cache=False,
                 ),
                 system_prompt=_PLANNER_PROMPT.format(cards_to_generate=cards_to_generate),
                 backend=backend,
@@ -509,9 +498,8 @@ async def run_generator(
             card_generator = create_deep_agent(
                 model=make_chat_model(
                     virtual_key=virtual_key,
-                    model="gpt-5.5",
+                    model="claude-sonnet-4-6",
                     enable_thinking=False,
-                    enable_prompt_cache=False,
                 ),
                 system_prompt=_CARD_GENERATOR_PROMPT.format(
                     lang_clause=_lang_clause(output_language),
@@ -519,20 +507,11 @@ async def run_generator(
                 backend=backend,
                 response_format=CardsList,
             )
-            # Evaluator uses gpt-5.5 (cross-family) for genuinely
-            # independent perspective. Same-family critic ends up
-            # rubber-stamping its sibling's output (8/8 pass at 7.2-8.6
-            # was the symptom of self-evaluation in the old design).
-            # gpt-5.5 has internal reasoning by default (no separate
-            # `thinking` parameter — the reasoning_tokens path is
-            # always-on and compatible with structured output / tool_choice
-            # unlike Anthropic).
             evaluator = create_deep_agent(
                 model=make_chat_model(
                     virtual_key=virtual_key,
-                    model="gpt-5.5",
-                    enable_thinking=False,  # gpt-5.5 reasoning is built-in
-                    enable_prompt_cache=False,  # OpenAI doesn't honor Anthropic cache hints
+                    model="claude-sonnet-4-6",
+                    enable_thinking=False,
                 ),
                 system_prompt=_EVALUATOR_PROMPT,
                 backend=backend,
@@ -542,9 +521,8 @@ async def run_generator(
             orchestrator = create_deep_agent(
                 model=make_chat_model(
                     virtual_key=virtual_key,
-                    model="gpt-5.5",
+                    model="claude-sonnet-4-6",
                     enable_thinking=False,
-                    enable_prompt_cache=False,
                 ),
                 system_prompt=_MAIN_ORCHESTRATOR_PROMPT.format(
                     current_date=current_date,
@@ -571,7 +549,7 @@ async def run_generator(
                     },
                     {
                         "name": "evaluator",
-                        "description": "Takes a CardsList inline, returns an EvalReport (5-dim scores + pass/fail + batch_feedback). CROSS-FAMILY model (gpt-5.5) for independent critique. Use ONCE after card-generator.",
+                        "description": "Takes a CardsList inline, returns an EvalReport (5-dim scores + pass/fail + batch_feedback). Use ONCE after card-generator.",
                         "runnable": evaluator,
                     },
                 ],

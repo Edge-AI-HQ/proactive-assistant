@@ -405,7 +405,7 @@ class CardEvaluation(_AgentModel):
     )
     feedback: str = Field(
         max_length=3000,
-        description="Critic's per-card note. gpt-5.5 evaluator naturally writes long, multi-paragraph critiques when scoring across 5 dims; budget generously rather than forcing truncation.",
+        description="Critic's per-card note. The evaluator naturally writes long, multi-paragraph critiques when scoring across 5 dims; budget generously rather than forcing truncation.",
     )
 
 

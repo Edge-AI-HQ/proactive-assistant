@@ -44,7 +44,7 @@ from ..litellm.client import (
 )
 
 logger = logging.getLogger(__name__)
-GENERATOR_REQUIRED_MODELS = {"gpt-5.5"}
+GENERATOR_REQUIRED_MODELS = {"claude-sonnet-4-6"}
 
 
 def _litellm_user_id(supabase_user_id: str) -> str:

@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ...config import get_web_settings
 from ..litellm.client import LiteLLMError
 
-DEFAULT_AMBIENT_SUMMARY_MODEL = "gpt-5.5"
+DEFAULT_AMBIENT_SUMMARY_MODEL = "claude-sonnet-4-6"
 
 
 class AmbientSummaryContextRawEvent(BaseModel):
