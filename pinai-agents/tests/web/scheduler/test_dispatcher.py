@@ -32,6 +32,61 @@ def test_dream_result_fields_extracts_fenced_json_from_text_block_string():
 
 
 @pytest.mark.asyncio
+async def test_recurring_success_clears_previous_failure_state(
+    pool, user_ids, monkeypatch,
+):
+    user_a, _ = user_ids
+    scheduled_for = datetime.now(UTC)
+
+    async with user_scoped_tx(pool, user_a) as conn:
+        task = await ScheduledTasksRepository(user_a, conn).upsert(
+            id="gen.auto.test",
+            kind="generator.auto",
+            trigger_kind="schedule",
+            interval_seconds=720 * 60,
+            next_run_at=None,
+            payload={"trigger": "auto"},
+        )
+        await conn.execute(
+            """
+            UPDATE pai_scheduled_tasks
+            SET attempts = 2,
+                last_error = 'old validation error',
+                last_run_status = 'failed'
+            WHERE user_id = %s AND id = %s
+            """,
+            (user_a, task.id),
+        )
+    task.last_run_at = scheduled_for
+
+    async def fake_handle_kind(self, task_arg, run_id):
+        assert task_arg.id == task.id
+        assert run_id.startswith(f"{task.id}.")
+
+    monkeypatch.setattr(DefaultDispatcher, "_handle_kind", fake_handle_kind)
+
+    dispatcher = DefaultDispatcher(pool=pool, lease_seconds=60, owner="test")
+    await dispatcher.dispatch(task)
+
+    async with service_tx(pool) as conn:
+        cur = await conn.execute(
+            """
+            SELECT status, attempts, last_error, last_run_status
+            FROM pai_scheduled_tasks
+            WHERE user_id = %s AND id = %s
+            """,
+            (user_a, task.id),
+        )
+        row = await cur.fetchone()
+
+    assert row is not None
+    assert row["status"] == "active"
+    assert row["attempts"] == 0
+    assert row["last_error"] is None
+    assert row["last_run_status"] == "success"
+
+
+@pytest.mark.asyncio
 async def test_dream_dispatch_persists_summary_and_output_counts(
     pool, user_ids, monkeypatch,
 ):

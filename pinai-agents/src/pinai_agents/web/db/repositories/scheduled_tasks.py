@@ -387,6 +387,29 @@ async def archive_after_success(
         )
 
 
+async def record_recurring_success(
+    conn: AsyncConnection,
+    *,
+    user_id: int,
+    task_id: str,
+) -> None:
+    """Clear stale failure bookkeeping after a recurring task succeeds."""
+    async with conn.cursor() as cur:
+        await cur.execute(
+            """
+            UPDATE pai_scheduled_tasks
+            SET attempts = 0,
+                last_run_status = 'success',
+                last_error = NULL,
+                updated_at = NOW()
+            WHERE user_id = %s
+              AND id = %s
+              AND trigger_kind <> 'once'
+            """,
+            (user_id, task_id),
+        )
+
+
 async def update_progress(
     conn: AsyncConnection,
     *,

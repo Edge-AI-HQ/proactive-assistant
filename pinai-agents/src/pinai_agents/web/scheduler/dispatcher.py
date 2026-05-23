@@ -45,6 +45,7 @@ from ..db.repositories.scheduled_tasks import (
     complete_run,
     insert_run,
     record_failure_and_decide,
+    record_recurring_success,
 )
 from ..db.rls import service_tx, user_scoped_tx
 
@@ -228,6 +229,10 @@ class DefaultDispatcher:
                 # Stamp success on the already-archived row so /api/tasks
                 # surfaces "succeeded" instead of "failed".
                 await archive_after_success(
+                    conn, user_id=task.user_id, task_id=task.id,
+                )
+            else:
+                await record_recurring_success(
                     conn, user_id=task.user_id, task_id=task.id,
                 )
 
