@@ -19,13 +19,16 @@ router_settings:
   timeout: 180
 
 model_list:
-  # Anthropic
+  # Anthropic Claude on AWS Bedrock (default upstream for sonnet/opus 4.6).
+  # Uses US cross-region inference profile (us-east-1 / us-east-2 / us-west-2).
+  # Credentials provisioned via dedicated IAM user 'pinai-litellm-bedrock'
+  # (policy: PinaiLiteLLMBedrockInvoke — Anthropic Claude models only).
   - model_name: claude-sonnet-4-6
     litellm_params:
-      model: anthropic/claude-sonnet-4-6
-      api_key: os.environ/ANTHROPIC_API_KEY
-      # Auto-inject cache_control breakpoints so Anthropic reuses stable
-      # prompt prefixes across turns (~90% cheaper on cache reads).
+      model: bedrock/us.anthropic.claude-sonnet-4-6
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_region_name: us-east-1
       cache_control_injection_points:
         - location: message
           role: system
@@ -41,6 +44,46 @@ model_list:
       cache_read_input_token_cost_above_200k_tokens: 0.0000003
 
   - model_name: claude-opus-4-6
+    litellm_params:
+      model: bedrock/us.anthropic.claude-opus-4-6-v1
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_region_name: us-east-1
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          role: user
+          index: -1
+    model_info:
+      input_cost_per_token: 0.000005
+      output_cost_per_token: 0.000025
+      input_cost_per_token_above_200k_tokens: 0.000005
+      output_cost_per_token_above_200k_tokens: 0.000025
+      cache_creation_input_token_cost_above_200k_tokens: 0.00000625
+      cache_read_input_token_cost_above_200k_tokens: 0.0000005
+
+  # Anthropic direct (kept as fallback / for capability comparison).
+  # Address as 'claude-sonnet-4-6-anthropic' / 'claude-opus-4-6-anthropic'.
+  - model_name: claude-sonnet-4-6-anthropic
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          role: user
+          index: -1
+    model_info:
+      input_cost_per_token: 0.000003
+      output_cost_per_token: 0.000015
+      input_cost_per_token_above_200k_tokens: 0.000003
+      output_cost_per_token_above_200k_tokens: 0.000015
+      cache_creation_input_token_cost_above_200k_tokens: 0.00000375
+      cache_read_input_token_cost_above_200k_tokens: 0.0000003
+
+  - model_name: claude-opus-4-6-anthropic
     litellm_params:
       model: anthropic/claude-opus-4-6
       api_key: os.environ/ANTHROPIC_API_KEY
