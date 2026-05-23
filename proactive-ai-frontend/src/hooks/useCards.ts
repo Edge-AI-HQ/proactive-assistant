@@ -30,6 +30,7 @@ import {
 
 const POLL_INTERVAL_MS = 30_000;
 const DEFAULT_LIMIT = 200;
+export const CARDS_CACHE_PREFIX = "pinai.cards.v1";
 
 export interface CardScore {
   overall: number;
@@ -91,7 +92,7 @@ function parseScore(value: unknown): CardScore | null {
   return { overall: r.overall, pass: r.pass };
 }
 
-function parseEntries(payload: unknown): VisibleCardEntry[] {
+export function parseEntries(payload: unknown): VisibleCardEntry[] {
   if (!payload || typeof payload !== "object") return [];
   const list = (payload as { cards?: unknown }).cards;
   if (!Array.isArray(list)) return [];
@@ -111,16 +112,52 @@ function parseEntries(payload: unknown): VisibleCardEntry[] {
   return out;
 }
 
-export function useCards(opts?: { limit?: number }): UseCardsState & {
+export function cardsCacheKey(limit: number, cacheScope: string): string {
+  return `${CARDS_CACHE_PREFIX}.${encodeURIComponent(cacheScope)}.limit.${limit}`;
+}
+
+function sessionStorageOrNull(): Storage | null {
+  try {
+    return globalThis.sessionStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function readCachedCards(limit: number, cacheScope: string): VisibleCardEntry[] | null {
+  const storage = sessionStorageOrNull();
+  if (!storage) return null;
+  try {
+    const raw = storage.getItem(cardsCacheKey(limit, cacheScope));
+    if (!raw) return null;
+    const cards = parseEntries(JSON.parse(raw));
+    return cards.length > 0 ? cards : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeCardsCache(limit: number, cacheScope: string, payload: unknown): void {
+  const storage = sessionStorageOrNull();
+  if (!storage) return;
+  try {
+    storage.setItem(cardsCacheKey(limit, cacheScope), JSON.stringify(payload));
+  } catch {
+    // Cache writes are best-effort; the live /cards response remains source of truth.
+  }
+}
+
+export function useCards(opts?: { limit?: number; cacheScope?: string | null }): UseCardsState & {
   refresh: () => Promise<void>;
 } {
-  const [state, setState] = useState<UseCardsState>({
-    loading: true,
-    cards: [],
-    error: null,
-  });
-  const inFlightRef = useRef(false);
   const limit = opts?.limit ?? DEFAULT_LIMIT;
+  const cacheScope = opts?.cacheScope ?? null;
+  const [state, setState] = useState<UseCardsState>(() => ({
+    loading: true,
+    cards: cacheScope ? readCachedCards(limit, cacheScope) ?? [] : [],
+    error: null,
+  }));
+  const inFlightRef = useRef(false);
 
   const load = useCallback(
     async (signal?: AbortSignal): Promise<void> => {
@@ -135,7 +172,9 @@ export function useCards(opts?: { limit?: number }): UseCardsState & {
         }
         const data = await res.json();
         if (signal?.aborted) return;
-        setState({ loading: false, cards: parseEntries(data), error: null });
+        const parsed = parseEntries(data);
+        if (cacheScope) writeCardsCache(limit, cacheScope, data);
+        setState({ loading: false, cards: parsed, error: null });
       } catch (err) {
         if (signal?.aborted) return;
         const msg = err instanceof Error ? err.message : String(err);
@@ -145,7 +184,7 @@ export function useCards(opts?: { limit?: number }): UseCardsState & {
         inFlightRef.current = false;
       }
     },
-    [limit],
+    [cacheScope, limit],
   );
 
   useEffect(() => {

@@ -5,6 +5,7 @@ import {
   Briefcase,
   Check,
   ChevronDown,
+  ChevronRight,
   Heart,
   Loader2,
   Mic,
@@ -206,6 +207,12 @@ const statusColor: Record<VisualStatus, string> = {
   Watch: "bg-amber-400/30",
 };
 
+const statusPillColor: Record<VisualStatus, string> = {
+  Normal: "bg-emerald-500/10 text-emerald-700",
+  Alert: "bg-rose-500/10 text-rose-700",
+  Watch: "bg-amber-500/10 text-amber-700",
+};
+
 const statusBarColor: Record<VisualStatus, string> = {
   Normal: "bg-emerald-400/50",
   Alert: "bg-rose-400/50",
@@ -357,7 +364,6 @@ const PROFILE_GROUP_META: Array<{
   { key: "facts", title: "Facts", description: "Stable details the assistant knows about you." },
   { key: "preferences", title: "Preferences", description: "How you prefer the assistant to behave." },
   { key: "constraints", title: "Constraints", description: "Rules and boundaries the assistant should honor." },
-  { key: "metadata", title: "Metadata", description: "System-managed fields attached to your profile." },
 ];
 
 // ---------------------------------------------------------------------------
@@ -401,6 +407,13 @@ function rawTimeMs(value?: string | null): number {
   if (!value || !isRawTimeVisible(value)) return 0;
   const time = Date.parse(value);
   return Number.isFinite(time) ? time : 0;
+}
+
+/** Normalize a profile field key for display. Backend fields use
+ *  snake_case (e.g. `pin_ai_coworking`); design renders them as
+ *  uppercase space-separated labels (e.g. `PIN AI COWORKING`). */
+function prettyFieldKey(key: string): string {
+  return key.replace(/_+/g, " ").trim().toUpperCase();
 }
 
 function formatValue(value: unknown): string {
@@ -842,10 +855,9 @@ function WorkbenchTabButton({
     <button
       type="button"
       onClick={onClick}
-      className={`min-h-16 rounded-2xl px-3 py-3 text-left ring-1 transition-colors ${
-        active
-          ? "bg-foreground text-background ring-foreground"
-          : "bg-white/50 text-foreground ring-white/60 hover:bg-white/80"
+      aria-pressed={active}
+      className={`glass-card p-4 text-left transition-all ${
+        active ? "bg-foreground text-background" : ""
       }`}
     >
       <div className={`text-[10px] uppercase tracking-[0.16em] ${active ? "text-background/60" : "text-foreground/35"}`}>
@@ -902,22 +914,25 @@ function ProfileGroupCard({
             transition={{ duration: 0.2 }}
             className="overflow-hidden"
           >
-            <div className="border-t border-foreground/8 px-4 py-3">
+            <div className="border-t border-foreground/8 px-4 pb-4 pt-3">
               {entries.length === 0 ? (
                 <EmptyState
                   title={`No ${title.toLowerCase()} yet`}
                   description="This group is empty right now."
                 />
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-1">
                   {entries.map(([key, value]) => (
-                    <div key={key} className="rounded-2xl bg-foreground/[0.03] px-3 py-3">
-                      <div className="text-[10px] font-mono uppercase tracking-[0.14em] text-foreground/38">
-                        {key}
-                      </div>
-                      <pre className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-foreground/72">
+                    <div
+                      key={key}
+                      className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 py-1"
+                    >
+                      <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-foreground/45">
+                        {prettyFieldKey(key)}
+                      </span>
+                      <span className="min-w-[60%] flex-1 whitespace-pre-wrap break-words text-[13px] leading-5 text-foreground/80">
                         {formatValue(value)}
-                      </pre>
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -1214,54 +1229,33 @@ function DeviceRawRecords({ preview }: { preview: DeviceRawPreview }) {
 
 function MirrorPanel({
   profile,
-  topicMemories,
   openGroups,
   onToggleGroup,
 }: {
   profile: ProfileSnapshot["profile"];
-  topicMemories: Memory[];
   openGroups: Record<ProfileGroupKey, boolean>;
   onToggleGroup: (group: ProfileGroupKey) => void;
 }) {
   return (
     <div>
       <div className="mb-3">
-        <h2 className="text-sm font-semibold text-foreground">Mirror</h2>
-        <p className="mt-1 max-w-2xl text-[11px] leading-5 text-foreground/42">
-          Profile facts, preferences, constraints, and topic memory in one derived view.
+        <h2 className="text-sm font-semibold text-foreground">Profile</h2>
+        <p className="mt-1 text-[11px] leading-5 text-foreground/42">
+          Facts, preferences, constraints, and metadata — derived from your data.
         </p>
       </div>
 
-      <div className="max-h-[58vh] min-h-[360px] space-y-4 overflow-y-auto pr-1">
-        <div className="space-y-3">
-          {PROFILE_GROUP_META.map((group) => (
-            <ProfileGroupCard
-              key={group.key}
-              title={group.title}
-              description={group.description}
-              values={profile?.[group.key] ?? {}}
-              expanded={openGroups[group.key]}
-              onToggle={() => onToggleGroup(group.key)}
-            />
-          ))}
-        </div>
-
-        <div className="rounded-2xl bg-foreground/[0.03] p-4">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <h3 className="text-sm font-semibold text-foreground">Topic Memory</h3>
-            <span className="text-xs text-foreground/38">{topicMemories.length}</span>
-          </div>
-          <div className="max-h-72 space-y-3 overflow-y-auto pr-1">
-            {topicMemories.length === 0 ? (
-              <EmptyState
-                title="No topic memory"
-                description="Interest-like data now appears as memory rows, usually under topic subjects."
-              />
-            ) : (
-              topicMemories.map((memory) => <MemoryItem key={memory.id} memory={memory} />)
-            )}
-          </div>
-        </div>
+      <div className="space-y-2.5">
+        {PROFILE_GROUP_META.map((group) => (
+          <ProfileGroupCard
+            key={group.key}
+            title={group.title}
+            description={group.description}
+            values={profile?.[group.key] ?? {}}
+            expanded={openGroups[group.key]}
+            onToggle={() => onToggleGroup(group.key)}
+          />
+        ))}
       </div>
     </div>
   );
@@ -1270,73 +1264,149 @@ function MirrorPanel({
 function MemoryPanel({
   memories,
   total,
-  page,
-  pageSize,
-  loadingPage,
-  onPageChange,
+  hasMore,
+  loadingMore,
+  onLoadMore,
 }: {
   memories: Memory[];
   total: number;
-  page: number;
-  pageSize: number;
-  loadingPage: boolean;
-  onPageChange: (nextPage: number) => void;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
 }) {
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const hasPrevious = page > 0;
-  const hasNext = page + 1 < totalPages;
-  const firstVisible = total === 0 ? 0 : page * pageSize + 1;
-  const lastVisible = Math.min(total, page * pageSize + memories.length);
+  // Group memories by relative day label (TODAY / YESTERDAY / "MMM D" /
+  // "MMM D, YYYY"). Memories arrive already sorted desc by created_at, so
+  // we preserve insertion order — Object.entries keeps that on modern JS.
+  const groups = useMemo(() => groupMemoriesByDay(memories), [memories]);
 
   return (
     <div>
-      <div className="mb-3 flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-sm font-semibold text-foreground">Memory</h2>
-          <p className="mt-1 text-[11px] leading-5 text-foreground/42">
-            Long-term things the assistant remembers about you. This panel pages without stretching the whole page.
-          </p>
-        </div>
-        <div className="shrink-0 rounded-2xl bg-foreground/5 px-3 py-2 text-right">
-          <div className="text-[10px] uppercase tracking-[0.14em] text-foreground/35">Total</div>
-          <div className="mt-0.5 text-sm font-semibold text-foreground">{total}</div>
-        </div>
+      <div className="mb-3">
+        <h2 className="text-sm font-semibold text-foreground">Memory</h2>
+        <p className="mt-1 text-[11px] leading-5 text-foreground/42">
+          What your AI has noticed and saved. Newest first.
+        </p>
       </div>
-      <div className="max-h-[58vh] min-h-[360px] space-y-3 overflow-y-auto pr-1">
+      <div className="space-y-5">
         {memories.length === 0 ? (
           <EmptyState title="No memories yet" description="Nothing has been saved as long-term memory yet." />
         ) : (
-          memories.map((memory) => <MemoryItem key={memory.id} memory={memory} />)
+          groups.map((group) => (
+            <div key={group.key}>
+              <div className="mb-2 flex items-baseline gap-2 px-1">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-foreground/45">
+                  {group.label}
+                </span>
+                <span className="text-[10px] font-medium text-foreground/30">{group.items.length}</span>
+              </div>
+              <div className="space-y-3">
+                {group.items.map((memory) => (
+                  <MemoryListItem key={memory.id} memory={memory} />
+                ))}
+              </div>
+            </div>
+          ))
         )}
       </div>
-      <div className="mt-3 flex items-center justify-between gap-3 rounded-2xl bg-white/45 px-3 py-2 ring-1 ring-white/60">
-        <div className="text-[11px] text-foreground/45">
-          {total === 0 ? "0 memories" : `${firstVisible}-${lastVisible} of ${total}`}
+      <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl bg-white/45 px-3 py-2 ring-1 ring-white/60">
+        <div className="text-[11px] text-foreground/45 tabular-nums">
+          {total === 0 ? "0 memories" : `${memories.length} of ${total}`}
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            disabled={!hasPrevious || loadingPage}
-            onClick={() => onPageChange(page - 1)}
-            className="rounded-xl bg-foreground/5 px-3 py-1.5 text-[11px] font-medium text-foreground/55 transition-colors hover:bg-foreground/10 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Prev
-          </button>
-          <span className="min-w-12 text-center text-[11px] tabular-nums text-foreground/40">
-            {loadingPage ? <Loader2 size={12} className="mx-auto animate-spin" /> : `${page + 1}/${totalPages}`}
-          </span>
-          <button
-            type="button"
-            disabled={!hasNext || loadingPage}
-            onClick={() => onPageChange(page + 1)}
-            className="rounded-xl bg-foreground/5 px-3 py-1.5 text-[11px] font-medium text-foreground/55 transition-colors hover:bg-foreground/10 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Next
-          </button>
-        </div>
+        <button
+          type="button"
+          disabled={!hasMore || loadingMore}
+          onClick={onLoadMore}
+          className="flex items-center gap-1.5 rounded-xl bg-foreground/5 px-3 py-1.5 text-[11px] font-medium text-foreground/55 transition-colors hover:bg-foreground/10 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {loadingMore ? (
+            <>
+              <Loader2 size={12} className="animate-spin" /> Loading…
+            </>
+          ) : hasMore ? (
+            "Load more"
+          ) : (
+            "End of list"
+          )}
+        </button>
       </div>
     </div>
   );
+}
+
+/** One memory row matching the reference design — text first, attribution
+ *  line ("Inferred from {source} · {time}") underneath. */
+function MemoryListItem({ memory }: { memory: Memory }) {
+  const when = memory.occurred_at ?? memory.created_at;
+  const time = formatClockTime(when);
+  return (
+    <div>
+      <p className="text-[13.5px] leading-6 text-foreground/85">{memory.text}</p>
+      <p className="mt-1 text-[11px] text-foreground/45">
+        Inferred from {memory.source}
+        {time && ` · ${time}`}
+      </p>
+    </div>
+  );
+}
+
+interface MemoryGroup {
+  key: string;
+  label: string;
+  items: Memory[];
+}
+
+function groupMemoriesByDay(memories: Memory[]): MemoryGroup[] {
+  const now = new Date();
+  const todayKey = dayBucketKey(now);
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayKey = dayBucketKey(yesterday);
+
+  const byKey = new Map<string, MemoryGroup>();
+  for (const memory of memories) {
+    const ref = memory.occurred_at ?? memory.created_at;
+    const date = ref ? new Date(ref) : null;
+    if (!date || Number.isNaN(date.getTime())) {
+      const fallback = byKey.get("unknown") ?? {
+        key: "unknown",
+        label: "UNKNOWN",
+        items: [],
+      };
+      fallback.items.push(memory);
+      byKey.set("unknown", fallback);
+      continue;
+    }
+    const key = dayBucketKey(date);
+    const label = key === todayKey
+      ? "TODAY"
+      : key === yesterdayKey
+        ? "YESTERDAY"
+        : formatDayLabel(date, now);
+    const group = byKey.get(key) ?? { key, label, items: [] };
+    group.items.push(memory);
+    byKey.set(key, group);
+  }
+  return Array.from(byKey.values());
+}
+
+function dayBucketKey(d: Date): string {
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
+
+function formatDayLabel(d: Date, now: Date): string {
+  const sameYear = d.getFullYear() === now.getFullYear();
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: sameYear ? undefined : "numeric",
+  }).toUpperCase();
+}
+
+function formatClockTime(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
 function SignalsPanel({
@@ -1576,8 +1646,8 @@ export default function GoalsView({ composio }: GoalsViewProps) {
   const [snapshot, setSnapshot] = useState<ProfileSnapshot>(EMPTY_SNAPSHOT);
   const [memories, setMemories] = useState<Memory[]>([]);
   const [memoryTotal, setMemoryTotal] = useState(0);
-  const [memoryPage, setMemoryPage] = useState(0);
-  const [memoryLoadingPage, setMemoryLoadingPage] = useState(false);
+  const [memoryHasMore, setMemoryHasMore] = useState(false);
+  const [memoryLoadingMore, setMemoryLoadingMore] = useState(false);
   const [signals, setSignals] = useState<PersonalSignal[]>([]);
   const [signalTotal, setSignalTotal] = useState(0);
   const [signalFetchedCount, setSignalFetchedCount] = useState(0);
@@ -1592,6 +1662,12 @@ export default function GoalsView({ composio }: GoalsViewProps) {
   const [genericRawCounts, setGenericRawCounts] = useState<Record<string, number>>({});
   const [genericLoading, setGenericLoading] = useState<Set<string>>(new Set());
   const genericCountLoadingRef = useRef<Set<string>>(new Set());
+  const [activeTab, setActiveTab] = useState<"identity" | "goals">("identity");
+  const [identitySubTab, setIdentitySubTab] = useState<"profile" | "memory">("profile");
+  // Legacy DataPanel state kept inert for now — the few remaining places
+  // that referenced it (scrollToSection, raw-source effects) are dead code
+  // post the workbench → Identity/Goals tab redesign and will be cleaned
+  // in a follow-up pass.
   const [activePanel, setActivePanel] = useState<DataPanel>("memory");
   const [activeRawPanel, setActiveRawPanel] = useState<RawPanel>("");
   const rawPanelTouchedRef = useRef(false);
@@ -1654,8 +1730,9 @@ export default function GoalsView({ composio }: GoalsViewProps) {
       if (!controller.signal.aborted) {
         setSnapshot(data);
         setMemories(memoryData.memories);
-        setMemoryTotal(memoryData.total ?? memoryData.memories.length);
-        setMemoryPage(0);
+        const total = memoryData.total ?? memoryData.memories.length;
+        setMemoryTotal(total);
+        setMemoryHasMore(memoryData.memories.length < total);
         const visibleSignals = signalData.signals.filter((signal) => isCurrentOrPastTime(signal.occurred_at));
         setSignals(visibleSignals);
         setSignalTotal(signalData.total ?? signalData.signals.length);
@@ -1795,30 +1872,36 @@ export default function GoalsView({ composio }: GoalsViewProps) {
     element?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
 
-  const loadMemoryPage = useCallback(async (nextPage: number) => {
-    if (memoryLoadingPage || nextPage < 0) return;
+  const loadMoreMemories = useCallback(async () => {
+    if (memoryLoadingMore || !memoryHasMore) return;
 
-    setMemoryLoadingPage(true);
+    setMemoryLoadingMore(true);
     setError(null);
     try {
       const data = await fetchMemories({
         status: "active",
         limit: MEMORY_PAGE_SIZE,
-        offset: nextPage * MEMORY_PAGE_SIZE,
+        offset: memories.length,
         orderBy: "created_at",
         orderDirection: "desc",
       });
-      const total = data.total ?? data.memories.length;
-      setMemories(data.memories);
+      const total = data.total ?? memories.length + data.memories.length;
+      setMemories((prev) => {
+        // Defensive dedupe by id in case of concurrent inserts / re-render races.
+        const seen = new Set(prev.map((m) => m.id));
+        const appended = data.memories.filter((m) => !seen.has(m.id));
+        const next = [...prev, ...appended];
+        setMemoryHasMore(next.length < total);
+        return next;
+      });
       setMemoryTotal(total);
-      setMemoryPage(nextPage);
     } catch (err) {
-      console.warn("[GoalsView] loadMemoryPage failed:", err);
-      setError(err instanceof Error ? err.message : "Failed to load memory page");
+      console.warn("[GoalsView] loadMoreMemories failed:", err);
+      setError(err instanceof Error ? err.message : "Failed to load more memories");
     } finally {
-      setMemoryLoadingPage(false);
+      setMemoryLoadingMore(false);
     }
-  }, [memoryLoadingPage]);
+  }, [memoryLoadingMore, memoryHasMore, memories.length]);
 
   const loadMoreSignals = useCallback(async () => {
     if (signalLoadingMore || !signalHasMore) return;
@@ -1875,12 +1958,9 @@ export default function GoalsView({ composio }: GoalsViewProps) {
     >
       {/* Page header */}
       <div className="mb-6 pr-20">
-        <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-foreground/35">
-          Memory Profile
-        </div>
-        <h1 className="text-display mt-1 text-2xl text-foreground">Profile</h1>
-        <p className="mt-1 truncate text-sm leading-6 text-muted-foreground">
-          What your assistant knows and can use.
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground">Profile</h1>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          Who your AI thinks you are — derived from your data.
         </p>
       </div>
 
@@ -1898,178 +1978,151 @@ export default function GoalsView({ composio }: GoalsViewProps) {
             </motion.section>
           )}
 
-          <motion.section {...sectionMotion} className="glass-card-strong p-5">
-            <div className="space-y-4">
-              <div className="min-w-0">
-                <div className="text-[11px] uppercase tracking-[0.18em] text-foreground/35">
-                  Current Profile Data
+          {/* Top-level Identity / Goals pill switcher. Inline style mirrors
+              the design's blurred-glass segmented control. */}
+          <div
+            className="flex items-center gap-1 p-1 rounded-full"
+            style={{
+              background: "linear-gradient(180deg, hsla(0, 0%, 100%, 0.7) 0%, hsla(0, 0%, 100%, 0.5) 100%)",
+              backdropFilter: "blur(20px) saturate(1.4)",
+              WebkitBackdropFilter: "blur(20px) saturate(1.4)",
+              border: "1px solid hsla(0, 0%, 100%, 0.5)",
+            }}
+          >
+            {(["identity", "goals"] as const).map((tab) => {
+              const isActive = activeTab === tab;
+              return (
+                <button
+                  key={tab}
+                  type="button"
+                  aria-pressed={isActive}
+                  onClick={() => setActiveTab(tab)}
+                  className={`flex-1 py-2.5 text-sm font-semibold rounded-full transition-colors ${
+                    isActive ? "bg-foreground text-background" : "text-foreground/55 hover:text-foreground/80"
+                  }`}
+                >
+                  {tab === "identity" ? "Identity" : "Goals"}
+                </button>
+              );
+            })}
+          </div>
+
+          {activeTab === "identity" && (
+            <>
+              <motion.section {...sectionMotion} className="glass-card-strong p-5">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-foreground/45">
+                  IDENTITY
                 </div>
-                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
-                  <h2 className="text-display text-xl text-foreground">
-                    {profile?.display_name?.trim() || "Unnamed user"}
-                  </h2>
-                  <span className="rounded-full bg-foreground/5 px-2 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-foreground/42">
-                    {profile?.locale ?? "n/a"}
-                  </span>
-                  <span className="rounded-full bg-foreground/5 px-2 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-foreground/42">
-                    {profile?.timezone ?? "n/a"}
-                  </span>
-                </div>
-                <p className="mt-3 max-w-[68ch] text-sm leading-6 text-foreground/65 line-clamp-5">
+                <h2 className="mt-2 text-xl font-semibold tracking-tight text-foreground">
+                  {profile?.display_name?.trim() || "Unnamed user"}
+                </h2>
+                <p className="mt-2 text-[13px] leading-6 text-foreground/65 line-clamp-6">
                   {profileSummaryText(profile)}
                 </p>
-              </div>
-            </div>
+              </motion.section>
 
-            <div className="mt-5 grid grid-cols-2 gap-3">
-              <MetricCard
-                label="Profile"
-                value={String(profileFieldCount)}
-                detail="fields"
-                onClick={() => scrollToSection("mirror")}
-              />
-              <MetricCard
-                label="Memory"
-                value={String(memoryTotal)}
-                detail="rows"
-                onClick={() => scrollToSection("memory")}
-              />
-              <MetricCard
-                label="Signals"
-                value={String(signalTotal)}
-                detail="open"
-                onClick={() => scrollToSection("signals")}
-              />
-              <MetricCard
-                label="Raw"
-                value={String(rawTotal)}
-                detail="rows"
-                onClick={() => scrollToSection("raw")}
-              />
-            </div>
-          </motion.section>
-
-          <motion.section id="profile-section-goals" {...sectionMotion} className="glass-card-strong p-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <h2 className="text-sm font-semibold text-foreground">Goals</h2>
-              <span className="text-xs text-foreground/38">{activeGoals.length} active</span>
-            </div>
-            {activeGoals.length === 0 ? (
-              <EmptyState title="No active goals" description="Goals stay as a first-class collection in the mirror layer." />
-            ) : (
-              <div className="grid grid-cols-2 gap-3">
-                {activeGoals.map((goal) => {
-                  const visual = getVisualMeta(goal.key);
-                  const basket = basketMeta(goal.key);
-                  const status = priorityToStatus(goal.priority);
-                  const Icon = basket.icon;
-
-                  return (
-                    <button
-                      key={goal.key}
-                      type="button"
-                      className="glass-card cursor-pointer overflow-hidden text-left transition-transform active:scale-[0.98]"
-                      onClick={() => setExpandedGoal(goal.key)}
-                    >
-                      <div className="flex h-20 items-center justify-center bg-foreground/[0.03]">
-                        <img
-                          src={visual.image}
-                          alt={basket.label}
-                          className={`w-auto object-contain ${basket.label === "Growth" ? "h-[62%]" : "h-full"}`}
-                        />
-                      </div>
-                      <div className="p-3">
-                        <div className="mb-2 flex items-center gap-2">
-                          <Icon size={18} className="text-foreground" />
-                          <span className="text-display text-sm text-foreground">{basket.label}</span>
-                        </div>
-                        <div className="mb-2 h-1.5 w-full overflow-hidden rounded-full bg-foreground/10">
-                          <div className={`h-full rounded-full ${statusColor[status]}`} style={{ width: `${visual.pct}%` }} />
-                        </div>
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-display text-base text-foreground">{visual.pct}%</span>
-                          <span className="truncate text-[11px] text-foreground/45">{goal.summary || goal.title}</span>
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </motion.section>
-
-          <motion.section id="profile-section-workbench" {...sectionMotion} className="glass-card-strong overflow-hidden p-0">
-            <div className="border-b border-foreground/8 p-4">
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {/* PROFILE / MEMORY sub-tab switcher inside the Identity tab.
+                  Reuses WorkbenchTabButton for the design's glass-card-style
+                  2-col grid. */}
+              <div className="grid grid-cols-2 gap-2.5">
                 <WorkbenchTabButton
-                  active={activePanel === "mirror"}
-                  label="Mirror"
+                  active={identitySubTab === "profile"}
+                  label="Profile"
                   value={profile ? "Profile" : "Empty"}
-                  onClick={() => setActivePanel("mirror")}
+                  onClick={() => setIdentitySubTab("profile")}
                 />
                 <WorkbenchTabButton
-                  active={activePanel === "memory"}
+                  active={identitySubTab === "memory"}
                   label="Memory"
                   value={String(memoryTotal)}
-                  onClick={() => setActivePanel("memory")}
-                />
-                <WorkbenchTabButton
-                  active={activePanel === "signals"}
-                  label="Signals"
-                  value={String(signalTotal)}
-                  onClick={() => setActivePanel("signals")}
-                />
-                <WorkbenchTabButton
-                  active={activePanel === "raw"}
-                  label="Raw"
-                  value={String(rawTotal)}
-                  onClick={() => setActivePanel("raw")}
+                  onClick={() => setIdentitySubTab("memory")}
                 />
               </div>
-            </div>
-            <div className="p-4">
-              {activePanel === "mirror" && (
-                <MirrorPanel
-                  profile={profile}
-                  topicMemories={topicMemories}
-                  openGroups={openGroups}
-                  onToggleGroup={toggleGroup}
-                />
+
+              {identitySubTab === "profile" && (
+                <motion.section {...sectionMotion} className="glass-card-strong p-4">
+                  <MirrorPanel
+                    profile={profile}
+                    openGroups={openGroups}
+                    onToggleGroup={toggleGroup}
+                  />
+                </motion.section>
               )}
-              {activePanel === "memory" && (
-                <MemoryPanel
-                  memories={memories}
-                  total={memoryTotal}
-                  page={memoryPage}
-                  pageSize={MEMORY_PAGE_SIZE}
-                  loadingPage={memoryLoadingPage}
-                  onPageChange={loadMemoryPage}
-                />
+
+              {identitySubTab === "memory" && (
+                <motion.section {...sectionMotion} className="glass-card-strong p-4">
+                  <MemoryPanel
+                    memories={memories}
+                    total={memoryTotal}
+                    hasMore={memoryHasMore}
+                    loadingMore={memoryLoadingMore}
+                    onLoadMore={loadMoreMemories}
+                  />
+                </motion.section>
               )}
-              {activePanel === "signals" && (
-                <SignalsPanel
-                  signals={signals}
-                  total={signalTotal}
-                  hasMore={signalHasMore}
-                  loadingMore={signalLoadingMore}
-                  onLoadMore={loadMoreSignals}
-                />
+            </>
+          )}
+
+          {activeTab === "goals" && (
+            <motion.section id="profile-section-goals" {...sectionMotion} className="glass-card-strong p-4">
+              <div className="mb-3">
+                <h2 className="text-sm font-semibold text-foreground">Goals</h2>
+                <p className="mt-1 text-[11px] leading-5 text-foreground/42">
+                  Share your goals — help AI know you. Tap any basket to expand.
+                </p>
+              </div>
+              {activeGoals.length === 0 ? (
+                <EmptyState title="No active goals" description="Goals stay as a first-class collection in the mirror layer." />
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  {activeGoals.map((goal) => {
+                    const visual = getVisualMeta(goal.key);
+                    const basket = basketMeta(goal.key);
+                    const status = priorityToStatus(goal.priority);
+                    const Icon = basket.icon;
+
+                    return (
+                      <button
+                        key={goal.key}
+                        type="button"
+                        className="glass-card cursor-pointer overflow-hidden text-left transition-transform active:scale-[0.98]"
+                        onClick={() => setExpandedGoal(goal.key)}
+                      >
+                        <div className="flex h-24 items-center justify-center bg-foreground/[0.03]">
+                          <img
+                            src={visual.image}
+                            alt={basket.label}
+                            className={`w-auto object-contain ${basket.label === "Growth" ? "h-[62%]" : "h-[85%]"}`}
+                          />
+                        </div>
+                        <div className="p-3">
+                          <div className="mb-2 flex items-center gap-2">
+                            <Icon size={16} className="text-foreground" />
+                            <span className="text-sm font-semibold text-foreground">{basket.label}</span>
+                          </div>
+                          <div className="mb-2 h-1.5 w-full overflow-hidden rounded-full bg-foreground/10">
+                            <div className={`h-full rounded-full ${statusBarColor[status]}`} style={{ width: `${visual.pct}%` }} />
+                          </div>
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <span className="text-lg font-semibold tabular-nums text-foreground">{visual.pct}%</span>
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${statusPillColor[status]}`}>
+                              {status}
+                            </span>
+                          </div>
+                          <div className="flex items-end justify-between gap-2">
+                            <p className="line-clamp-2 text-[11px] leading-snug text-foreground/55">
+                              {goal.summary || goal.title}
+                            </p>
+                            <ChevronRight size={14} className="shrink-0 text-foreground/30" />
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
               )}
-              {activePanel === "raw" && (
-                <RawPanelContent
-                  raw={rawPreview}
-                  generic={genericRaw}
-                  genericLoading={genericLoading}
-                  sources={rawSources}
-                  activeRawPanel={activeRawPanel}
-                  onChangeRawPanel={(panel) => {
-                    rawPanelTouchedRef.current = true;
-                    setActiveRawPanel(panel);
-                  }}
-                />
-              )}
-            </div>
-          </motion.section>
+            </motion.section>
+          )}
         </div>
       )}
 

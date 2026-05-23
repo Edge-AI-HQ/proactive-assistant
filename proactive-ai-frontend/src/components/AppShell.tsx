@@ -769,6 +769,7 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
             >
               {activeView === "chat" && (
                 <ChatTimeline
+                  cards={cardsState}
                   onOpenChat={handleOpenChatDirect}
                   dismissedIds={dismissedIds}
                   confirmedIds={confirmedIds}

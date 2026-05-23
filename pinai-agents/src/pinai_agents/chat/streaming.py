@@ -7,7 +7,7 @@ Envelope shape (defined in shared/sse_envelope.py):
 Per-event-type `data` payloads:
   * chat:thinking          — empty
   * chat:delta             — {delta: str}
-  * chat:reasoning:delta   — {delta: str}     (Claude extended thinking)
+  * chat:reasoning:delta   — {delta: str}     (provider reasoning summary/text)
   * chat:tool:start        — {toolCallId, name, argsPreview, args?}
   * chat:tool:result       — {toolCallId, isError, meta}
   * chat:error             — {error: str}
@@ -19,12 +19,13 @@ UI for selected tools (e.g. `write_todos` → TodoPanel) instead of parsing the
 truncated `argsPreview` string. Omitted for oversized payloads (e.g.
 `python_exec` carrying large code) — the frontend falls back to `argsPreview`.
 
-Note on extended thinking: agents run with `enable_thinking=True` and
-`ChatLiteLLMReasoning` (see runtime/llm.py) re-attaches LiteLLM's
-`reasoning_content` onto AIMessageChunk.additional_kwargs. We forward
-it as `chat:reasoning:delta` so the frontend can render it in a
-collapsible block; the same field also rides along through the Postgres
-checkpointer, which is what makes refresh-replay work.
+Note on reasoning: agents run with `enable_thinking=True` and
+`ChatLiteLLMReasoning` (see runtime/llm.py) normalizes provider reasoning
+(`reasoning_content` for Claude/LiteLLM, `reasoning.summary` for OpenAI-style
+payloads) into v1 reasoning content blocks. We forward those blocks as
+`chat:reasoning:delta` so the frontend can render them in a collapsible block;
+the same field also rides along through the Postgres checkpointer, which is
+what makes refresh-replay work.
 
 All emit through `emit()` so:
   * The wire is camelCase and stable.
@@ -137,7 +138,7 @@ def _extract_chunk_text(chunk: Any) -> str:
 def _extract_chunk_reasoning(chunk: Any) -> str:
     """Pull reasoning text out of an AIMessageChunk's v1 content blocks.
 
-    With `output_version="v1"`, extended-thinking deltas appear as
+    With `output_version="v1"`, reasoning deltas appear as
     `{"type":"reasoning","reasoning":"…"}` blocks alongside text. Older
     chunks may still carry the field on `additional_kwargs.reasoning_content`
     (langchain-core compat path); we read both for safety.
@@ -214,10 +215,9 @@ async def langgraph_to_sse(
                 chunk = data.get("chunk")
                 if chunk is None:
                     continue
-                # Reasoning arrives ahead of visible text in Anthropic's
-                # block ordering; emit it first so the UI keeps the same
-                # order and the collapsible reasoning block sits above the
-                # answer text.
+                # Reasoning should precede visible text when the provider
+                # gives us both in one chunk, so the collapsible block stays
+                # above the answer text.
                 reasoning = _extract_chunk_reasoning(chunk)
                 if reasoning:
                     yield chat_reasoning_delta(reasoning, trace_id=trace_id)

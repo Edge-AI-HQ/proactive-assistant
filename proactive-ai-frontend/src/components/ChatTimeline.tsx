@@ -13,7 +13,7 @@ import CardDetailBody from "./CardDetailBody";
 import type { IntentCard } from "@/types/intent-card";
 import { proxyPost } from "@/lib/api";
 import { basketMeta } from "@/lib/basket-meta";
-import { useCards, type CardScore } from "@/hooks/useCards";
+import type { CardScore, UseCardsState } from "@/hooks/useCards";
 
 type TimelineCard = IntentCard & {
   runId: string;
@@ -40,6 +40,7 @@ interface ChatTimelineProps {
   onDoneId: (id: string) => void;
   onProcessingId: (id: string) => void;
   onChattedId: (id: string) => void;
+  cards: UseCardsState;
 }
 
 function formatTime(iso: string): string {
@@ -69,8 +70,8 @@ export default function ChatTimeline({
   onDoneId,
   onProcessingId,
   onChattedId,
+  cards,
 }: ChatTimelineProps) {
-  const cards = useCards();
   const [selectedCard, setSelectedCard] = useState<TimelineCard | null>(null);
 
   const handleDismiss = () => {
@@ -183,11 +184,11 @@ export default function ChatTimeline({
   }
 
   return (
-    <div className="flex flex-col h-full px-4 pt-3 pb-2 overflow-y-auto">
-      <h1 className="text-display text-2xl text-foreground mb-1 pr-20">Timeline</h1>
-      <p className="text-sm text-muted-foreground mb-6">AI memory &amp; action log</p>
+    <div className="flex flex-col h-full px-4 pt-14 pb-2 overflow-y-auto">
+      <h1 className="text-display text-2xl text-foreground mb-1">Tasks</h1>
+      <p className="text-sm text-muted-foreground mb-6">AI is running these for you</p>
 
-      {cards.loading && (
+      {cards.loading && cards.cards.length === 0 && (
         <div className="flex items-center justify-center py-8 gap-2">
           <Loader2 size={16} className="animate-spin text-foreground/40" />
           <span className="text-[13px] text-foreground/40">Loading history...</span>

@@ -4,8 +4,14 @@
  * Built on ReactMarkdown with:
  *   - remark-gfm for tables, task lists, strikethrough, autolinks
  *   - rehype-highlight for syntax highlighting (hljs classes)
- *   - custom components: code blocks (header + copy), external links (native
- *     Capacitor Browser for iOS/Android), table wrapper with horizontal scroll
+ *   - custom components: code blocks (header + copy via CodeBlock),
+ *     external links (native Capacitor Browser for iOS/Android),
+ *     table wrapper with horizontal scroll, task-list checkboxes.
+ *
+ * Visual style matches the minimalist conversation design — 13px body,
+ * compact heading hierarchy, muted list markers, glassy code/table chrome.
+ * `muted` flips body text from /85 to /60 for embedded contexts like the
+ * collapsed thinking-block expansion.
  */
 import type { ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -14,6 +20,12 @@ import rehypeHighlight from "rehype-highlight";
 import { Browser } from "@capacitor/browser";
 import { isNative } from "@/lib/platform";
 import CodeBlock from "./CodeBlock";
+
+interface MarkdownContentProps {
+  text: string;
+  muted?: boolean;
+  className?: string;
+}
 
 function isExternalHref(href: string | undefined): boolean {
   if (!href) return false;
@@ -48,107 +60,168 @@ function nodeText(node: unknown): string {
   return "";
 }
 
-const components: Components = {
-  pre({ children }) {
-    // CodeBlock is rendered by the `code` handler; pre just passes through.
-    return <>{children}</>;
-  },
-  code(props) {
-    const { className, children, node, ...rest } = props as {
-      className?: string;
-      children?: ReactNode;
-      node?: { tagName?: string };
-      [key: string]: unknown;
-    };
-    const inline = !className || !/language-/.test(className);
-    if (inline) {
+export default function MarkdownContent({
+  text,
+  muted = false,
+  className = "",
+}: MarkdownContentProps) {
+  const bodyColor = muted ? "text-foreground/60" : "text-foreground/85";
+
+  const components: Components = {
+    p: ({ children }) => (
+      <p
+        className={`text-[13px] leading-relaxed my-2 first:mt-0 last:mb-0 ${bodyColor}`}
+      >
+        {children}
+      </p>
+    ),
+    h1: ({ children }) => (
+      <h1 className="text-display text-[17px] font-semibold text-foreground tracking-tight mt-3.5 mb-1.5 first:mt-0">
+        {children}
+      </h1>
+    ),
+    h2: ({ children }) => (
+      <h2 className="text-display text-[15px] font-semibold text-foreground tracking-tight mt-3 mb-1.5 first:mt-0">
+        {children}
+      </h2>
+    ),
+    h3: ({ children }) => (
+      <h3 className="text-[13.5px] font-semibold text-foreground mt-2.5 mb-1 first:mt-0">
+        {children}
+      </h3>
+    ),
+    h4: ({ children }) => (
+      <h4 className="text-[11px] font-bold uppercase tracking-[0.12em] text-foreground/55 mt-2.5 mb-1 first:mt-0">
+        {children}
+      </h4>
+    ),
+    ul: ({ children }) => (
+      <ul className="list-disc pl-5 my-2 space-y-1 marker:text-foreground/30 first:mt-0 last:mb-0">
+        {children}
+      </ul>
+    ),
+    ol: ({ children }) => (
+      <ol className="list-decimal pl-5 my-2 space-y-1 marker:text-foreground/45 first:mt-0 last:mb-0">
+        {children}
+      </ol>
+    ),
+    li: ({ children }) => (
+      <li className={`text-[13px] leading-relaxed pl-0.5 ${bodyColor}`}>
+        {children}
+      </li>
+    ),
+    strong: ({ children }) => (
+      <strong className="font-semibold text-foreground">{children}</strong>
+    ),
+    em: ({ children }) => <em className="italic">{children}</em>,
+    del: ({ children }) => (
+      <del className="text-foreground/45 line-through decoration-foreground/35">
+        {children}
+      </del>
+    ),
+    pre({ children }) {
+      // CodeBlock is rendered by the `code` handler; pre just passes through.
+      return <>{children}</>;
+    },
+    code(props) {
+      const { className: codeClass, children, node, ...rest } = props as {
+        className?: string;
+        children?: ReactNode;
+        node?: { tagName?: string };
+        [key: string]: unknown;
+      };
+      const inline = !codeClass || !/language-/.test(codeClass);
+      if (inline) {
+        return (
+          <code
+            className="px-1.5 py-0.5 mx-[1px] rounded-md text-[12px] font-mono bg-foreground/[0.06] text-foreground/85 border border-foreground/[0.05]"
+            {...rest}
+          >
+            {children}
+          </code>
+        );
+      }
+      const language = extractLanguage(codeClass);
+      const rawText = nodeText(children).replace(/\n$/, "");
       return (
-        <code
-          className="px-1 py-0.5 rounded bg-foreground/[0.06] text-[13px] font-mono text-foreground/85"
-          {...rest}
-        >
-          {children}
-        </code>
+        <CodeBlock language={language} rawText={rawText}>
+          <code className={codeClass} {...rest}>
+            {children}
+          </code>
+        </CodeBlock>
       );
-    }
-    const language = extractLanguage(className);
-    const rawText = nodeText(children).replace(/\n$/, "");
-    return (
-      <CodeBlock language={language} rawText={rawText}>
-        <code className={className} {...rest}>
-          {children}
-        </code>
-      </CodeBlock>
-    );
-  },
-  a({ href, children, ...rest }) {
-    if (isExternalHref(href)) {
+    },
+    a({ href, children, ...rest }) {
+      if (isExternalHref(href)) {
+        return (
+          <a
+            href={href}
+            onClick={(e) => {
+              e.preventDefault();
+              if (href) void openLink(href);
+            }}
+            className="text-foreground font-medium underline decoration-foreground/30 underline-offset-[3px] hover:decoration-foreground/65 transition-colors"
+            {...rest}
+          >
+            {children}
+          </a>
+        );
+      }
       return (
-        <a
-          href={href}
-          onClick={(e) => {
-            e.preventDefault();
-            if (href) void openLink(href);
-          }}
-          className="text-blue-600 hover:text-blue-700 underline decoration-blue-600/30 underline-offset-2"
-          {...rest}
-        >
+        <a href={href} {...rest}>
           {children}
         </a>
       );
-    }
-    return (
-      <a href={href} {...rest}>
-        {children}
-      </a>
-    );
-  },
-  table({ children }) {
-    return (
-      <div className="my-2 overflow-x-auto rounded-lg border border-foreground/10">
-        <table className="w-full text-[13px]">{children}</table>
-      </div>
-    );
-  },
-  th({ children }) {
-    return (
-      <th className="px-2 py-1.5 text-left font-medium text-foreground/70 border-b border-foreground/10 bg-foreground/[0.03]">
-        {children}
-      </th>
-    );
-  },
-  td({ children }) {
-    return (
-      <td className="px-2 py-1.5 text-foreground/80 border-b border-foreground/5">
-        {children}
-      </td>
-    );
-  },
-  blockquote({ children }) {
-    return (
-      <blockquote className="my-2 pl-3 border-l-2 border-foreground/20 text-foreground/60 italic">
+    },
+    blockquote: ({ children }) => (
+      <blockquote className="border-l-2 border-foreground/15 pl-3 my-3 text-foreground/65 italic [&>p]:my-1 first:mt-0 last:mb-0">
         {children}
       </blockquote>
-    );
-  },
-  img({ src, alt }) {
-    return (
+    ),
+    table: ({ children }) => (
+      <div className="my-3 -mx-0.5 overflow-x-auto first:mt-0 last:mb-0">
+        <table className="w-full text-[12.5px] border-collapse">{children}</table>
+      </div>
+    ),
+    thead: ({ children }) => <thead>{children}</thead>,
+    tbody: ({ children }) => <tbody>{children}</tbody>,
+    tr: ({ children }) => (
+      <tr className="border-b border-foreground/[0.06] last:border-b-0">
+        {children}
+      </tr>
+    ),
+    th: ({ children }) => (
+      <th className="text-left px-2.5 py-1.5 font-semibold text-foreground/85 bg-foreground/[0.04] first:rounded-l-md last:rounded-r-md">
+        {children}
+      </th>
+    ),
+    td: ({ children }) => (
+      <td className={`px-2.5 py-1.5 align-top ${bodyColor}`}>{children}</td>
+    ),
+    hr: () => <hr className="my-4 border-foreground/10" />,
+    img: ({ src, alt }) => (
       <img
         src={src}
         alt={alt ?? ""}
         loading="lazy"
-        className="my-2 max-w-full rounded-lg"
+        className="my-3 rounded-xl border border-foreground/[0.08] max-w-full"
       />
-    );
-  },
-  hr() {
-    return <hr className="my-3 border-foreground/10" />;
-  },
-};
+    ),
+    // GFM task list checkbox
+    input: ({ type, checked, disabled }) =>
+      type === "checkbox" ? (
+        <input
+          type="checkbox"
+          checked={!!checked}
+          disabled={disabled}
+          readOnly
+          className="mr-1.5 -ml-5 align-middle accent-foreground/70"
+        />
+      ) : null,
+  };
 
-export default function MarkdownContent({ text }: { text: string; [key: string]: unknown }) {
   return (
-    <div className="prose max-w-none text-[17px] leading-[1.55] prose-p:my-2 prose-p:text-[17px] prose-ul:my-2 prose-ol:my-2 prose-li:my-1 prose-li:text-[17px] prose-headings:my-2.5">
+    <div className={className}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[[rehypeHighlight, { detect: true, ignoreMissing: true }]]}

@@ -17,6 +17,10 @@ export interface BuildChatRequestBodyParams {
 
 export interface ShouldBootstrapCardChatParams {
   hasExistingHistory: boolean;
+  /** Kept for call-site clarity (`true` = card chat, `false` = main chat).
+   *  Bootstrap firing no longer requires this — Main Chat's "start new
+   *  conversation" path (MinimalistLanding chip / composer) also opens a
+   *  fresh thread + bootstraps the user's first message. */
   hasCardContext: boolean;
   alreadyBootstrapped: boolean;
   /** Caller-provided text to send as the user's first message. Without it,
@@ -47,8 +51,10 @@ export function buildChatRequestBody(
 export function shouldBootstrapCardChat(
   params: ShouldBootstrapCardChatParams,
 ): boolean {
+  // hasCardContext is intentionally not gated — both Card Chat (with
+  // cardContext) and Main Chat's new-conversation path (no cardContext)
+  // bootstrap on a fresh thread when the caller hands us a message.
   return (
-    params.hasCardContext &&
     !params.hasExistingHistory &&
     !params.alreadyBootstrapped &&
     Boolean(params.bootstrapMessage?.trim())
