@@ -329,4 +329,4 @@ SELECT status, count(*) FROM pai_embedding_queue GROUP BY status;
 
 ## 相关 AI Plans
 
-- [Feedback Agent + Evolution Loop](../plans/2026-05-21-feedback-agent-evolution-loop):定义 Personal Evolution Agent 如何把用户主动反馈沉淀为高权重 preference,再同步影响 profile / memory / skill。
+- [反馈并入 Main Chat + 高权重偏好](../plans/2026-05-24-feedback-into-main-chat-preferences):main chat 把用户亲口偏好写进新表 `pai_preference_records`(表达层),和 `pai_profile`(聚合画像)/ `pai_user_fingerprint`(行为层)分工;不走 Personal Evolution Agent。

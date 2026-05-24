@@ -1,0 +1,210 @@
+---
+title: "反馈并入 Main Chat + 高权重偏好（Goal 驱动）"
+description: "Goal 驱动实现规格：反馈走 main chat；用户亲口偏好写进 pai_preference_records 带权重，下一次生成必然读到并服从；语言类偏好翻 generation_language 设置。每个 goal 带可自动验证的退出条件，循环到全绿为止。"
+---
+
+# 反馈并入 Main Chat + 高权重偏好（Goal 驱动）
+
+> 本文是 **goal 驱动实现规格**，给自动实现循环用。结构：一个总目标 → 若干有序 goal → 每个 goal 有「验证门（自动，循环退出条件）」和「人工验收（循环外，不进门）」。
+> **循环规则**：实现一个 goal，跑它的验证门命令，全绿才算这个 goal 完成；任何门红就继续改同一个 goal。**LLM 行为类（如 planner 是否真的偏向某主题）不可确定性断言，绝不作为循环门**——只在人工验收里列，循环不要去断言 LLM 输出文本。
+
+## 总目标
+
+让用户在 main chat 里说出的偏好，下一次卡片生成**必然生效**：
+
+- 内容偏好（「我要看 A 股新闻」「别推工作类」）→ 写进新表 `pai_preference_records`（带 weight / 来源 / 证据），generation 读取并当硬约束。
+- 语言类偏好（「以后用英文」）→ 翻 `pai_user_settings.generation_language` 设置（确定性进生成，不靠 LLM）。
+- internal dashboard 复用同一 main chat，内部人员以 `internal_operator` 身份代用户补偏好，来源服务端强制可见。
+
+不造独立 Feedback Agent / 反馈页 / thread 表 / 语音子系统 / Personal Evolution Agent；Product Evolution Agent 推后。
+
+## 不变约束（循环任何时候都不能违反）
+
+1. **不动这些现状链路**：`pai_feedback_events` schema、`FeedbackRepository` 的 fingerprint fan-out、`UserFingerprintRepository`、`pai_card_reward_events` / card_open reward 事件。本 plan 是新增层，不改它们。
+2. **migration 一旦 merge 不可改**；本 plan 只加 `056_pai_preference_records.sql`，additive，含 RLS policy。（051–055 已被占用，实现时如号又被占，往后顺延取下一个空号。）
+3. **trust boundary**：偏好写入是「代表用户」动作，相关 master credential 路径只在 web 进程；chat 进程经 `/api/agent/*` + per-run JWT 调用，不碰 DB 凭据。`source` 由服务端按 principal 决定，**不信 agent 自报**。
+4. **语言必须确定性生效**：走 `generation_language` 设置 + 现有 `output_language` / `_lang_clause` 链路，**禁止**把语言塞进 ledger 赌 LLM 读到。
+5. **不主动 kick 重生成**：偏好即时持久化，等下一次自然生成读到。
+6. **语音复用现有组件**（`VoiceProvider` / `VoiceButton` / `BrowserSpeechEngine`），不新增。
+7. 遵守仓库编码原则：无 `as any` / `# type: ignore` / `eslint-disable`（除非注释说明唯一选项）；改动最小化；复用同模块已有 pattern。
+
+## 完成定义（全部 goal 的验证门都绿）
+
+```bash
+cd pinai-agents && uv run ruff check .
+cd pinai-agents && uv run pytest tests/web/db/repositories/test_preferences_repo.py tests/web/routes/test_preferences.py tests/chat/agents/test_generator_preferences.py tests/chat/routes/test_chat_card_context.py tests/web/routes/test_preferences_impersonation.py
+cd proactive-ai-frontend && npm run type-check
+cd internal-reward-dashboard && npm run type-check
+```
+
+以上全过 + 每个 goal 的「验证门」全绿 = 完成。
+
+## 实现现状锚点（已核实，循环直接信，不要重新猜）
+
+| 事实 | 出处 |
+|---|---|
+| `output_language` 在生成入队时从 `settings.generation_language` 读定，写进 `generator.manual` task payload | `web/routes/ui/generate.py`（`output_language = settings.generation_language`） |
+| 生成时 `_lang_clause(output_language)` 硬注入 planner / writer prompt | `chat/agents/generator.py` 的 `_lang_clause`（行号会漂，按符号找） |
+| 改 `generation_language` 必须**重盖 schedule payload** 的 `output_language` | `web/routes/ui/profile.py`（注释明说 re-stamp schedule payload；按符号找 set 路径，别认死行号） |
+| data-collector 子 agent 用 `pinai_sdk` 实时拉 `profile/memory/signals/feedback/cards/world` 进 `/state/phase1.json` | `chat/agents/generator.py:_DATA_COLLECTOR_PROMPT` 的 canonical 脚本 |
+| planner `read_file('/state/phase1.json')` 后产出 PlanOutput | `chat/agents/generator.py:_PLANNER_PROMPT` |
+| chat-stream 已有 `card_context` 注入：card thread 首轮把 JSON 作为 `<card_context>` SystemMessage 注入，仅 `card-thread-` 前缀 + `_is_first_turn` guard 生效 | `chat/routes/chat.py`（`ChatRequest.card_context`、`_CARD_THREAD_PREFIX`、`_is_first_turn`、`<card_context>` 注入块） |
+| **main chat 是每用户单例线程**（053 起）：main thread 长期存在，`_is_first_turn` 一辈子只真一次。所以 main thread 不能靠首轮 guard 注入 card_context | `db/migrations/053_pai_chat_threads_singleton.sql`（card thread `kind='card'` 不受影响，仍多条） |
+| main chat 现有 native tool：`profile_upsert`（写 facts/preferences/constraints 桶）、`memory_add`、`goal_upsert`、`feedback_list`（只读） | `chat/tools/native/profile.py`、`chat/tools/native/__init__.py` `ALL_TOOLS` |
+| 现有 evolution / memory supersede 链写法（断言 new_id 之前 active） | `web/db/repositories/memory.py` `supersede` |
+| 现有最大 migration 号是 055，下一个空号是 056 | `db/migrations/` |
+| RLS policy 风格 | `db/migrations/023_pai_rls.sql`，`USING (user_id = current_setting('app.user_id', true)::bigint)` |
+
+---
+
+## Goal 1 — 数据模型 + 偏好写入链路（无依赖）
+
+**目标**：偏好能从 chat 端写进 DB。新表 + repository + agent route + SDK + 两个 native tool 全通。
+
+**交付物**：
+
+- `db/migrations/056_pai_preference_records.sql`：建表（字段见下）+ CHECK + 2 个索引 + RLS policy。（号被占就顺延取下一个空号。）
+- `web/db/repositories/preferences.py`：`PreferenceRepository.add / list(status,scope,limit) / supersede(old_id,new_id) / archive`。supersede 复用 `memory.py` 的链式断言。
+- `web/routes/agent/preferences.py`：`add` / `list` / `supersede`，agent-run JWT / phantom token 鉴权，`source` 按 principal 决定（普通 run 恒为 `user`）。注册进 web app router。
+- `web/routes/agent/profile.py` 扩展：settings upsert endpoint，内部复用 profile.py 的 `generation_language` re-stamp 逻辑（不复制实现）。
+- `packages/pinai_sdk/`：`client.preferences.list / add / supersede`；`client.settings.set_generation_language(lang)`（或挂在 `client.profile` 下，跟现有 SDK 命名一致）。
+- `chat/tools/native/preferences.py`：`preference_add(statement, scope, polarity)` → POST `/api/agent/preferences/add`；`set_generation_language(language)` → POST settings upsert。注册进 `chat/tools/native/__init__.py` 的 `ALL_TOOLS`。
+- `chat/agents/main_chat.py` 的 `<tool_routing>` 加路由规则：持续性内容偏好→`preference_add`；改语言→`set_generation_language`；一次性闲聊事实→`memory_add`；结构化画像→`profile_upsert`。
+
+**表字段（`pai_preference_records`）**：
+
+`user_id BIGINT NOT NULL` (FK users) · `id TEXT NOT NULL` (`pref_<uuid>`) · `statement TEXT NOT NULL` · `scope TEXT NOT NULL` CHECK in (`topic`,`source`,`timing`,`format`,`global`) · `polarity TEXT NOT NULL` CHECK in (`positive`,`negative`) · `weight REAL NOT NULL` · `confidence REAL` · `source TEXT NOT NULL` CHECK in (`user`,`internal_operator`,`agent`) · `evidence JSONB NOT NULL DEFAULT '{}'` · `status TEXT NOT NULL` CHECK in (`active`,`superseded`,`archived`) · `superseded_by TEXT NULL` · `created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()` · `updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`。PK `(user_id, id)`。索引 `(user_id, status, created_at DESC)`、`(user_id, scope, status)`。RLS policy 同 023 风格。
+
+**验证门（自动，全绿才算完成）**：
+
+```bash
+# 1. migration 干净应用
+cd pinai-agents && make migrate     # 056 应用成功，无报错
+
+# 2. lint
+cd pinai-agents && uv run ruff check .
+
+# 3. repository 单测（需新写，断言下列行为）
+cd pinai-agents && uv run pytest tests/web/db/repositories/test_preferences_repo.py
+#   - add() 写入后 list(status='active') 能取回，weight/scope/polarity/source 原样
+#   - supersede(old,new) 后 old.status='superseded' 且 old.superseded_by=new；new 必须先 active（断言）
+#   - RLS：另一个 user_id 看不到本 user 的偏好
+
+# 4. agent route 单测（需新写）
+cd pinai-agents && uv run pytest tests/web/routes/test_preferences.py
+#   - POST /api/agent/preferences/add 普通 run principal → 落库行 source='user'
+#   - GET  /api/agent/preferences/list 返回 active 行，按 created_at DESC
+#   - settings upsert 改 generation_language 后，pai_user_settings 该字段更新，且对应 schedule payload 的 output_language 同步（断言 re-stamp 发生）
+
+# 5. 工具注册（静态断言）
+cd pinai-agents && uv run python -c "from pinai_agents.chat.tools.native import ALL_TOOLS; names={t.name for t in ALL_TOOLS}; assert {'preference_add','set_generation_language'} <= names, names"
+```
+
+**人工验收（循环外）**：本地 `make up`，main chat 说「我要看 A 股新闻」→ DB 出现 active/positive/source=user 行；说「以后用英文」→ `generation_language='en'`。
+
+---
+
+## Goal 2 — 生成读取链路：偏好下一次生成必然生效（依赖 Goal 1）
+
+**目标**：active 偏好进入 generation 的 data-collector digest，planner 把最近 + 高 weight 偏好当硬约束。语言已由设置确定性覆盖，不在这条链路处理。
+
+**交付物**：
+
+- `chat/agents/generator.py:_DATA_COLLECTOR_PROMPT` 的 canonical 脚本：`asyncio.gather` 加 `client.preferences.list(status="active", limit=50)`，digest 加 `preferences` 段（key 名 `preferences`）。
+- `chat/agents/generator.py:_PLANNER_PROMPT` 加「偏好对齐」段：active preferences 当约束；最近 + 高 weight 接近强制；positive 偏向 / negative 抑制；命中的 preference id 写进 `notes`。
+
+**验证门（自动）**：
+
+```bash
+cd pinai-agents && uv run ruff check .
+
+# 新写测试（断言 plumbing，不断言 LLM 输出）
+cd pinai-agents && uv run pytest tests/chat/agents/test_generator_preferences.py
+#   - _DATA_COLLECTOR_PROMPT 文本包含 'client.preferences.list' 且 digest keys 含 'preferences'
+#   - _PLANNER_PROMPT 文本包含偏好对齐段的锚点关键词（如 'preference' / 'positive' / 'negative' / 硬约束措辞）
+#   - SDK 暴露 client.preferences.list（import + 属性存在断言）
+```
+
+**人工验收（循环外，不进门）**：本地写一条偏好后触发 `/api/generate`，看 LangSmith trace 里 planner `notes` 引用了 preference id、下一批卡片体现偏好（A 股变多 / 工作类减少）；翻语言后下一批卡用新语言。**这是 LLM 行为，循环不要断言文本。**
+
+---
+
+## Goal 3 — 卡片上下文进 main chat（依赖 Goal 1）
+
+**目标**：从某张卡打开 main chat 给反馈时，卡片上下文进 prompt，偏好写入带 `evidence.card_id`。
+
+> **注意单例线程（053）**：main chat 是每用户单例长期线程，`_is_first_turn` 一辈子只真一次，所以 main thread **不能**复用 card thread 的首轮 guard 来注入。机制改为：main thread 上**只要本轮 `req.card_context` 非空就注入一条 `<card_context>` SystemMessage**（按轮注入，不看是不是首轮）。card thread（`kind='card'`）保持原有首轮 guard 不动。
+
+**交付物**：
+
+- `chat/routes/chat.py`：让 **main chat thread**（非 `card-thread-` 前缀）在**本轮携带 `card_context` 时**注入 `<card_context>` SystemMessage（复用现有注入函数，触发条件改成「main thread 且本轮 card_context 非空」，不经 `_is_first_turn`）。card thread 分支一行不动。
+- `proactive-ai-frontend`：从卡片打开 `MainChatView` 的入口，该轮带 `card_context`（card_id / 正文 / 来源 / intent）。复用现有语音组件。
+- main chat prompt：从卡片上下文进来时，`preference_add` 的 `evidence.card_id` 带上该卡 id。
+
+**验证门（自动）**：
+
+```bash
+cd pinai-agents && uv run ruff check .
+cd pinai-agents && uv run pytest tests/chat/routes/test_chat_card_context.py
+#   - main chat thread 本轮带 card_context → 注入一条 <card_context> SystemMessage
+#   - main chat thread 本轮不带 card_context → 不注入
+#   - card thread 分支行为不变（首轮 guard 仍生效，回归不破）
+cd proactive-ai-frontend && npm run type-check
+cd proactive-ai-frontend && npm test
+```
+
+**人工验收（循环外）**：在某张卡里打开 chat 说「这张卡不准」，写入的 preference `evidence.card_id` == 该卡 id。
+
+---
+
+## Goal 4 — internal dashboard 代用户补偏好（依赖 Goal 1）
+
+**目标**：内部人员选定目标用户，以 `internal_operator` 身份通过同一 main chat 补偏好；来源服务端强制，不可伪装成用户原话。
+
+**交付物**：
+
+- web 新增受控 endpoint（仅 internal dashboard 鉴权可调）：为目标用户 mint per-run JWT，带 `actor='internal_operator'` + `operator_id` claim。
+- `PreferenceRepository.add` / agent route：当 principal 是 internal_operator 时，**服务端强制** `source='internal_operator'`、`evidence.operator_id=<operator>`，忽略 agent 自报。
+- `internal-reward-dashboard`：嵌 chat（选目标用户 → 走 impersonation endpoint）+ 展示该用户 active 偏好列表（区分 user / internal_operator）。
+
+**验证门（自动）**：
+
+```bash
+cd pinai-agents && uv run ruff check .
+cd pinai-agents && uv run pytest tests/web/routes/test_preferences_impersonation.py
+#   - 普通用户 JWT 调 add → source 恒为 'user'（即使 body 传 source='internal_operator' 也被忽略）
+#   - internal_operator principal 调 add → source 强制 'internal_operator' 且 evidence.operator_id 落库
+#   - 非 internal 鉴权调 impersonation mint endpoint → 拒绝（401/403）
+cd internal-reward-dashboard && npm run type-check
+```
+
+**人工验收（循环外）**：dashboard 选定用户补一条偏好，DB 行 `source='internal_operator'` 带 operator id，列表里和用户原话区分可见。
+
+---
+
+## 推后（本规格不实现，循环不要碰）
+
+- Personal Evolution Agent（已砍，main chat 直写覆盖）。
+- Product Evolution Agent（全局聚合提改进候选，撞 per-user RLS 跨用户聚合，单独立 plan）。
+
+## 风险和决策
+
+| 风险 | 决策 |
+|---|---|
+| 语言写进 ledger 赌 LLM 读到，生效不确定 | 语言走 `generation_language` 设置，确定性生效；ledger 只装内容偏好。 |
+| 循环在 LLM 行为门上空转 | LLM 行为只进人工验收，验证门只断言 plumbing（脚本含某调用、prompt 含某段、SDK 有某方法、DB 落某行）。 |
+| main chat 把随口闲聊写成偏好 | prompt 划清 `preference_add` / `memory_add` / `profile_upsert` 边界，要求偏好是「持续性表达」。 |
+| 偏好和 profile / fingerprint 抢数据 | 三层分工：preference=表达层、profile=聚合画像、fingerprint=行为层；main chat 反馈只写 preference + 语言设置。 |
+| 内部反馈伪装成用户原话 | `source` 服务端强制 + impersonation token 带 operator_id + dashboard 区分展示。 |
+
+## 和旧 plan / 旧能力的关系
+
+- 取代 `2026-05-21-feedback-agent-evolution-loop`（已删除）。旧 Feedback Agent / thread 表 / 语音子系统 / Personal Evolution Agent 不做。
+- `2026-05-13-card-reward-infra` 的 reward ledger / casebook / trace 作为内部调试保留，不作为主流程。
+- `pai_feedback_events` / `UserFingerprintRepository` / card_open reward 事件保持现状。
+
+## 实现时先读
+
+1. `docs/index.mdx`
+2. `docs/modules/feedback.mdx`、`memory.mdx`、`generation.mdx`、`execution.mdx`
+3. 本规格 + 上面「实现现状锚点」表里列的文件。

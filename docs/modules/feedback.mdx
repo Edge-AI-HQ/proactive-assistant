@@ -225,4 +225,4 @@ FROM pai_intent_thread_state WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 1
 ## 相关 AI Plans
 
 - [Card Reward Infra + Internal Dashboard](../plans/2026-05-13-card-reward-infra):用户 open reward、reviewer score、casebook 和 trace artifact。
-- [Feedback Agent + Evolution Loop](../plans/2026-05-21-feedback-agent-evolution-loop):把 feedback 从单条卡片事件扩展为全局可唤起的 Feedback Agent、feedback thread、explicit preference 和 feedback-driven evolution。
+- [反馈并入 Main Chat + 高权重偏好](../plans/2026-05-24-feedback-into-main-chat-preferences):反馈不再独立成 Feedback Agent，而是走 main chat；用户亲口偏好写进新表 `pai_preference_records`，下一次生成必然生效。本模块的 `pai_feedback_events` / fingerprint fan-out 保持现状。
