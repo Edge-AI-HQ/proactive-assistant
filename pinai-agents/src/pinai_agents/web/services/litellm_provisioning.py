@@ -1,13 +1,12 @@
 """Per-user LiteLLM virtual key provisioning.
 
-Lifecycle:
-    user upsert (first INSERT) → provision_user_litellm_key()
+Lifecycle (lazy — the key is never minted on the auth/signup path so
+login can't block on LiteLLM availability; see web/auth/user_service.py):
+    first use that needs the key (chat-send, generate, ambient, voice,
+    proactive, scheduler) → ensure_user_litellm_key()
         → /user/new (idempotent on conflict)
         → /key/generate (returns sk-*)
         → UPDATE users SET litellm_virtual_key = ...
-
-    chat send when key is missing → ensure_user_litellm_key()
-        → exact same path, just keyed off the existing user row.
 
 Only `litellm_virtual_key` is persisted on the users table. We don't
 cache user_id / key_alias / budget separately — LiteLLM is the source
@@ -17,10 +16,10 @@ external namespace, so it must derive from supabase_user_id (UUID) and
 not the internal BIGINT — local docker / dev / prod SERIAL sequences
 would otherwise collide on the shared LiteLLM control plane.
 
-Failure semantics: if LiteLLM is unreachable on first INSERT, the row
-goes in with virtual_key=NULL and the user is logged in fine; the next
-chat-send tries again (lazy recovery). This treats LiteLLM downtime as
-a transient outage rather than a hard signup blocker.
+Failure semantics: ensure_user_litellm_key() raises on LiteLLM failure
+so the triggering request sees a clean 502 rather than a silent hang.
+Because nothing mints the key at signup, LiteLLM downtime never blocks
+login — it only defers the key to the next request that needs it.
 """
 
 from __future__ import annotations
@@ -159,37 +158,6 @@ async def _provision_and_persist(
         user.id, alias, raw_key[-4:],
     )
     return raw_key
-
-
-async def provision_user_litellm_key(
-    pool: AsyncConnectionPool, user: User,
-) -> User:
-    """First-touch provisioning — called from upsert_user_by_supabase_id
-    when a brand-new row was just INSERTed. On LiteLLM failure we log and
-    return the user unchanged so login still succeeds; lazy recovery on
-    chat-send will try again.
-    """
-    if user.litellm_virtual_key and user.litellm_virtual_key.startswith(
-        LITELLM_KEY_PREFIX,
-    ):
-        return user
-    try:
-        raw_key = await _provision_and_persist(
-            pool, user, required_models=GENERATOR_REQUIRED_MODELS,
-        )
-    except Exception as e:
-        logger.warning(
-            "litellm: first-touch provisioning failed user=%d (will lazy-retry): %s",
-            user.id, e,
-        )
-        return user
-    return User(
-        id=user.id,
-        supabase_user_id=user.supabase_user_id,
-        email=user.email,
-        litellm_virtual_key=raw_key,
-        browserbase_context_id=user.browserbase_context_id,
-    )
 
 
 async def ensure_user_litellm_key(
