@@ -36,6 +36,7 @@ from .routes.agent.evolution import router as agent_evolution_router
 from .routes.agent.feedback import router as agent_feedback_router
 from .routes.agent.memory import router as agent_memory_router
 from .routes.agent.pipeline import router as agent_pipeline_router
+from .routes.agent.preferences import router as agent_preferences_router
 from .routes.agent.profile import router as agent_profile_router
 from .routes.agent.raw import router as agent_raw_router
 from .routes.agent.sandbox_phantom import router as agent_sandbox_phantom_router
@@ -52,6 +53,7 @@ from .routes.ui.devices import router as ui_devices_router
 from .routes.ui.dreaming import router as ui_dreaming_router_real
 from .routes.ui.feedback import router as ui_feedback_router
 from .routes.ui.generate import router as ui_generate_router
+from .routes.ui.impersonation import router as ui_impersonation_router
 from .routes.ui.jwt_revoke import router as ui_jwt_revoke_router
 from .routes.ui.memory import router as ui_memory_router
 from .routes.ui.profile import router as ui_profile_router
@@ -176,6 +178,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_tasks_router)
     app.include_router(ui_raw_router)
     app.include_router(ui_reward_dashboard_router)
+    app.include_router(ui_impersonation_router)
     app.include_router(ui_agent_runs_router)
     app.include_router(ui_devices_router)
     app.include_router(ui_payment_router)
@@ -190,6 +193,7 @@ def create_app() -> FastAPI:
     app.include_router(agent_signals_router)
     app.include_router(agent_world_router)
     app.include_router(agent_profile_router)
+    app.include_router(agent_preferences_router)
     app.include_router(agent_skills_router)
     app.include_router(agent_composio_router)
     app.include_router(agent_raw_router)

@@ -6,6 +6,11 @@ import MinimalistLanding from "./main-chat/MinimalistLanding";
 
 interface MainChatProps {
   onBack: () => void;
+  /** Set when main chat is opened FROM a specific card (give feedback on
+   *  that card). Carried on the opening turn so the backend injects it as
+   *  <card_context> and any preference the agent writes records the card
+   *  as evidence. Undefined for the normal "Ask PIN AI" entry. */
+  cardContext?: Record<string, unknown>;
 }
 
 type ViewMode = "landing" | "conversation";
@@ -27,7 +32,7 @@ type ViewMode = "landing" | "conversation";
  * toggled via CSS so the in-flight SSE survives the landing →
  * conversation transition.
  */
-export default function MainChat({ onBack }: MainChatProps) {
+export default function MainChat({ onBack, cardContext }: MainChatProps) {
   const [sessionKey, setSessionKey] = useState<string | null>(null);
 
   // Fetch the user's main thread once on mount. Backend returns the
@@ -56,7 +61,13 @@ export default function MainChat({ onBack }: MainChatProps) {
   // wrap has its own fade-in transition, so the user mostly sees that
   // animation cover this gap.
   if (sessionKey === null) return null;
-  return <MainChatScope sessionKey={sessionKey} onBack={onBack} />;
+  return (
+    <MainChatScope
+      sessionKey={sessionKey}
+      onBack={onBack}
+      cardContext={cardContext}
+    />
+  );
 }
 
 /**
@@ -69,11 +80,16 @@ export default function MainChat({ onBack }: MainChatProps) {
 function MainChatScope({
   sessionKey,
   onBack,
+  cardContext,
 }: {
   sessionKey: string;
   onBack: () => void;
+  cardContext?: Record<string, unknown>;
 }) {
-  const { runtime, historyLoaded } = useProactiveChatRuntime({ sessionKey });
+  const { runtime, historyLoaded } = useProactiveChatRuntime({
+    sessionKey,
+    cardContext,
+  });
   const [view, setView] = useState<ViewMode>("landing");
 
   const handleSubmitFromLanding = useCallback(

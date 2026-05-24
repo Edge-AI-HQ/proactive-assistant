@@ -153,6 +153,47 @@ def _extract_human_text(msg: HumanMessage | None) -> str:
     return ""
 
 
+def _card_context_message(card_context: dict[str, Any]) -> SystemMessage:
+    """Wrap card context JSON as the `<card_context>` SystemMessage both
+    the card-thread first-turn path and the main-thread per-turn path
+    inject. SystemMessages are filtered out of /history, so this never
+    renders to the user."""
+    ctx_json = json.dumps(card_context, ensure_ascii=False, indent=2)
+    return SystemMessage(content=f"<card_context>\n{ctx_json}\n</card_context>")
+
+
+def _build_send_messages(
+    *,
+    message: str,
+    card_context: dict[str, Any] | None,
+    is_card_thread: bool,
+    is_first_turn: bool,
+) -> list[Any]:
+    """Assemble the input messages for a normal (non-regenerate) send.
+
+    Two card-context injection rules, by thread kind:
+      * Card thread (`card-thread-…`): inject once, on the first turn only.
+        The thread is short-lived (one per card); later turns rely on the
+        checkpoint retaining the SystemMessage.
+      * Main thread (per-user singleton, migration 053): inject on ANY turn
+        that carries card_context. The first turn happens once in the
+        user's lifetime, so a first-turn guard would never re-fire — the
+        trigger is "this turn opened main chat from a card", not "first
+        turn". `is_first_turn` is irrelevant here.
+
+    Pure + side-effect-free so the branch logic is unit-testable without
+    spinning up the agent / sandbox.
+    """
+    msgs: list[Any] = []
+    if is_card_thread:
+        if card_context is not None and is_first_turn:
+            msgs.append(_card_context_message(card_context))
+    elif card_context is not None:
+        msgs.append(_card_context_message(card_context))
+    msgs.append({"role": "user", "content": message})
+    return msgs
+
+
 async def _is_first_turn(session_key: str) -> bool:
     """True when the LangGraph thread for `session_key` has zero persisted
     messages. Used to guard one-shot card_context injection.
@@ -315,25 +356,24 @@ async def _stream(
             input_messages.append({"role": "user", "content": new_text})
 
     # ── input messages (normal-send path) ──
-    # Card threads with card_context: inject the JSON as a SystemMessage
-    # on the first turn only; subsequent turns rely on LangGraph's
-    # checkpoint state to retain the context. SystemMessages are filtered
-    # out of the rendered history, so this stays invisible to the user.
     if not req.regenerate:
         if not req.message.strip():
             yield chat_error("message is required when not regenerating")
             yield chat_done()
             return
-        if (
-            is_card_thread
-            and req.card_context is not None
-            and await _is_first_turn(req.session_key)
-        ):
-            ctx_json = json.dumps(req.card_context, ensure_ascii=False, indent=2)
-            input_messages.append(
-                SystemMessage(content=f"<card_context>\n{ctx_json}\n</card_context>"),
-            )
-        input_messages.append({"role": "user", "content": req.message})
+        # Only card threads need the (async) first-turn probe; main threads
+        # inject per-turn so we skip the checkpoint read for them.
+        is_first_turn = (
+            await _is_first_turn(req.session_key) if is_card_thread else False
+        )
+        input_messages.extend(
+            _build_send_messages(
+                message=req.message,
+                card_context=req.card_context,
+                is_card_thread=is_card_thread,
+                is_first_turn=is_first_turn,
+            ),
+        )
 
     config: dict[str, Any] = {
         "configurable": {"thread_id": req.session_key},

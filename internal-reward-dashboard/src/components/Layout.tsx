@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, Brain, Clock3, Database, GitBranch, LogOut, RefreshCw } from "lucide-react";
+import { BarChart3, BookOpen, Brain, Clock3, Database, GitBranch, LogOut, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { dashboardNavPath, dashboardRouteTitle, dashboardRoutes, parseDashboardRoute } from "@/lib/dashboardRoutes";
@@ -18,6 +18,7 @@ const nav = [
   { path: dashboardRoutes.runs, label: "生成批次", icon: BarChart3 },
   { path: dashboardRoutes.patterns, label: "认知范式库", icon: Brain },
   { path: dashboardRoutes.personalData, label: "个人数据", icon: Database },
+  { path: dashboardRoutes.preferences, label: "用户偏好", icon: SlidersHorizontal },
   { path: dashboardRoutes.casebook, label: "样本库", icon: BookOpen },
 ];
 

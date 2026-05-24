@@ -138,11 +138,19 @@ type FloatingCard = IntentCard & { slotIndex: number; exitDirection?: "left" | "
 export default function AppShell({ userName, onSignOut }: AppShellProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [mainChatOpen, setMainChatOpen] = useState(false);
+  // Set when main chat is opened FROM a card (feedback on that card) so the
+  // opening turn carries <card_context>. Null for the plain "Ask PIN AI"
+  // entry. Cleared when main chat closes.
+  const [mainChatCardContext, setMainChatCardContext] =
+    useState<Record<string, unknown> | null>(null);
 
   useEffect(() => {
     if (!mainChatOpen) return;
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setMainChatOpen(false);
+      if (e.key === "Escape") {
+        setMainChatOpen(false);
+        setMainChatCardContext(null);
+      }
     }
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
@@ -440,6 +448,30 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
       }).catch(() => {});
     }
   }, [selectedCard]);
+
+  const handleDiscussInMainChat = useCallback(() => {
+    if (selectedCard) {
+      // card_id / body / source / intent — the backend injects this verbatim
+      // as <card_context> on the opening turn; a preference the agent writes
+      // from this conversation records `evidence.card_id`.
+      setMainChatCardContext({
+        card_id: selectedCard.id,
+        title: selectedCard.title,
+        why_now: selectedCard.whyNow,
+        summary: selectedCard.summary,
+        intent: selectedCard.goalBasket,
+        sources: selectedCard.sources,
+      });
+      setMainChatOpen(true);
+    }
+    setDrawerOpen(false);
+    setSelectedCard(null);
+  }, [selectedCard]);
+
+  const handleMainChatClose = useCallback(() => {
+    setMainChatOpen(false);
+    setMainChatCardContext(null);
+  }, []);
 
   const handleOpenChatFromDrawer = useCallback(() => {
     if (selectedCard) {
@@ -892,6 +924,7 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
               onModify={handleModifyCard}
               onDone={handleDoneCard}
               onTextFeedback={handleTextFeedback}
+              onDiscussInMainChat={handleDiscussInMainChat}
               enableSwipe
             />
           )}
@@ -900,7 +933,10 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
 
       {mainChatOpen && (
         <div className="fixed inset-0 z-[60] bg-background">
-          <MainChat onBack={() => setMainChatOpen(false)} />
+          <MainChat
+            onBack={handleMainChatClose}
+            cardContext={mainChatCardContext ?? undefined}
+          />
         </div>
       )}
     </div>

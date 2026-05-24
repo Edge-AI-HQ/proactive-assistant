@@ -93,6 +93,16 @@ client.composio                                      # live SaaS access via Comp
   .multi_execute(calls, *, parallelism=8) -> list    # run many in parallel
                                                       # calls: [{slug, args, connected_account_id?}]
 
+client.preferences                                   # high-weight stated preferences (main-chat)
+  .list(*, status="active", scope=None, limit=50) -> list  # newest first; read active for generation
+  .add(*, statement, scope, polarity, weight=None,   # source stamped server-side, not here
+       confidence=None, evidence=None) -> dict        # scope: topic|source|timing|format|global
+                                                      # polarity: positive|negative
+  .supersede(*, old_id, new_id) -> dict | None       # new_id must already be active
+
+client.settings                                      # user settings the agent may change
+  .set_generation_language(language) -> dict         # 'en' | 'zh-Hans' | ...; deterministic, re-stamps schedule
+
 All methods are async — `await` everything. Errors return
 `{"error": "http_4xx", "detail": "..."}` instead of raising; check
 `isinstance(res, dict) and "error" in res`."""

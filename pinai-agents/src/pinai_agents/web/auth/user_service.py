@@ -91,6 +91,37 @@ async def upsert_user_by_supabase_id(
     return user
 
 
+async def load_user_by_supabase_id(
+    pool: AsyncConnectionPool, supabase_user_id: str,
+) -> User | None:
+    """Hydrate a User by Supabase UUID WITHOUT creating one.
+
+    Unlike `upsert_user_by_supabase_id`, this never inserts — used by the
+    internal impersonation mint, where the target must already exist
+    (minting a chat token for a brand-new empty user is meaningless).
+    Returns None if no such user.
+    """
+    async with service_tx(pool) as conn:
+        cur = await conn.execute(
+            """
+            SELECT id, supabase_user_id, email, litellm_virtual_key,
+                   browserbase_context_id
+            FROM users WHERE supabase_user_id = %s
+            """,
+            (supabase_user_id,),
+        )
+        row: dict[str, Any] | None = await cur.fetchone()
+    if row is None:
+        return None
+    return User(
+        id=row["id"],
+        supabase_user_id=row["supabase_user_id"],
+        email=row.get("email"),
+        litellm_virtual_key=row.get("litellm_virtual_key"),
+        browserbase_context_id=row.get("browserbase_context_id"),
+    )
+
+
 async def load_user_by_id(
     pool: AsyncConnectionPool, internal_user_id: int,
 ) -> User | None:

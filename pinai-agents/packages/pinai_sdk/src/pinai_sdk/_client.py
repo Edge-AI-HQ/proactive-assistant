@@ -579,6 +579,71 @@ class Composio(_Endpoint):
         return []
 
 
+class Preferences(_Endpoint):
+    """High-weight user preferences stated in plain words in main chat.
+    Read by the generator's data-collector so the planner can treat the
+    most recent / highest-weight ones as near-hard constraints. Writes go
+    through the chat agent's native tool, not usually the sandbox — but
+    `add` / `supersede` are here for code-mode agents that distil a
+    preference."""
+
+    def __init__(self, parent: _Client) -> None:
+        super().__init__(parent, "/api/agent/preferences")
+
+    async def list(
+        self,
+        *,
+        status: str = "active",
+        scope: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List preferences, newest first. status ∈ {active, superseded,
+        archived}; default 'active' is what generation should read."""
+        payload = await self._get("/list", status=status, scope=scope, limit=limit)
+        return payload.get("items", []) if isinstance(payload, dict) else []
+
+    async def add(
+        self,
+        *,
+        statement: str,
+        scope: str,
+        polarity: str,
+        weight: float | None = None,
+        confidence: float | None = None,
+        evidence: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Persist a stated preference. `source` is stamped server-side
+        from the run principal — you cannot set it here."""
+        return await self._post("/add", {
+            "statement": statement, "scope": scope, "polarity": polarity,
+            "weight": weight, "confidence": confidence,
+            "evidence": evidence or {},
+        })
+
+    async def supersede(
+        self, *, old_id: str, new_id: str,
+    ) -> dict[str, Any] | None:
+        """Mark old_id superseded by new_id (new_id must already be active)."""
+        return await self._post("/supersede", {"oldId": old_id, "newId": new_id})
+
+
+class Settings(_Endpoint):
+    """User settings the agent may change from chat. Language is the only
+    one wired today — and it MUST flow through here (not a preference row)
+    so it takes effect deterministically on the next generation."""
+
+    def __init__(self, parent: _Client) -> None:
+        super().__init__(parent, "/api/agent/profile/settings")
+
+    async def set_generation_language(self, language: str) -> dict[str, Any]:
+        """Flip generation_language and re-stamp the auto-generate schedule
+        payload. `language` is a SupportedLanguage code (e.g. 'en',
+        'zh-Hans')."""
+        return await self._post(
+            "/generation-language", {"generationLanguage": language},
+        )
+
+
 class _Client:
     def __init__(self) -> None:
         self._client: httpx.AsyncClient | None = None
@@ -590,6 +655,8 @@ class _Client:
         self.world = World(self)
         self.raw = Raw(self)
         self.composio = Composio(self)
+        self.preferences = Preferences(self)
+        self.settings = Settings(self)
 
     def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -708,6 +775,16 @@ client.composio                                      # live SaaS access via Comp
            connected_account_id=None) -> dict        # → {successful, data, error}
   .multi_execute(calls, *, parallelism=8) -> list    # run many in parallel
                                                       # calls: [{slug, args, connected_account_id?}]
+
+client.preferences                                   # high-weight stated preferences (main-chat)
+  .list(*, status="active", scope=None, limit=50) -> list  # newest first; read active for generation
+  .add(*, statement, scope, polarity, weight=None,   # source stamped server-side, not here
+       confidence=None, evidence=None) -> dict        # scope: topic|source|timing|format|global
+                                                      # polarity: positive|negative
+  .supersede(*, old_id, new_id) -> dict | None       # new_id must already be active
+
+client.settings                                      # user settings the agent may change
+  .set_generation_language(language) -> dict         # 'en' | 'zh-Hans' | ...; deterministic, re-stamps schedule
 
 All methods are async — `await` everything. Errors return
 `{"error": "http_4xx", "detail": "..."}` instead of raising; check

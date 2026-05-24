@@ -10,7 +10,11 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, status
 
-from ....shared.api_models import GoalUpsertRequest, ProfileUpsertRequest
+from ....shared.api_models import (
+    GenerationLanguageSetRequest,
+    GoalUpsertRequest,
+    ProfileUpsertRequest,
+)
 from ...auth.deps import AgentRun, current_agent_run, get_pool
 from ...db.repositories.profile import ProfileRepository
 from ...db.rls import user_scoped_tx
@@ -71,4 +75,33 @@ async def agent_upsert_goal(
             priority=body.priority, status=body.status,
             summary=body.summary,
         )
+    return asdict(row)
+
+
+@router.post("/settings/generation-language")
+async def agent_set_generation_language(
+    body: GenerationLanguageSetRequest,
+    run: AgentRun = Depends(current_agent_run),
+    pool=Depends(get_pool),
+):
+    """Flip the user's `generation_language` from chat (the user said
+    "use English from now on"). Language must take effect deterministically
+    — so this re-stamps the auto-generate schedule payload's
+    `output_language` via the exact same helper the UI settings route uses
+    (`_sync_auto_generate_schedule`), not by hoping the next planner reads
+    a preference row. Returns the updated settings row.
+    """
+    # Import here, not at module top: the UI profile module pulls in the
+    # full settings-route surface, and a top-level import would create an
+    # import cycle (agent route ← ui route ← shared models). Deferring keeps
+    # the dependency one-directional at load time. Reuses the helper, does
+    # NOT copy the re-stamp implementation.
+    from ..ui.profile import _sync_auto_generate_schedule  # noqa: PLC0415
+
+    async with user_scoped_tx(pool, run.user_id) as conn:
+        repo = ProfileRepository(run.user_id, conn)
+        row = await repo.upsert_settings(
+            generation_language=body.generation_language,
+        )
+        await _sync_auto_generate_schedule(conn, user_id=run.user_id, settings=row)
     return asdict(row)

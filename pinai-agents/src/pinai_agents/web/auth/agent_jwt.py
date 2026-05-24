@@ -50,6 +50,8 @@ class AgentRunClaims:
     jti: str
     virtual_key: str | None  # LiteLLM `vk` claim — present for chat-driving JWTs
     browserbase_context_id: str | None  # `bbctx` — per-user persistent context
+    actor: str  # 'user' (default) or 'internal_operator' — who is driving this run
+    operator_id: str | None  # internal operator identity when actor != 'user'
     raw: dict[str, Any]
 
 
@@ -83,6 +85,8 @@ def sign_agent_run_jwt(
     ttl_seconds: int | None = None,
     virtual_key: str | None = None,
     browserbase_context_id: str | None = None,
+    actor: str = "user",
+    operator_id: str | None = None,
 ) -> tuple[str, str]:
     """Sign a fresh per-run JWT. Returns (token, run_id).
 
@@ -92,6 +96,12 @@ def sign_agent_run_jwt(
     `virtual_key` (optional): LiteLLM virtual key embedded as the `vk`
     claim. Required for chat-driving JWTs (the chat worker uses it to
     auth its LLM calls). Sandbox / scheduler tokens omit it.
+
+    `actor` / `operator_id` (optional): impersonation provenance. Default
+    `actor='user'` is the account owner driving their own run. The
+    internal dashboard mints `actor='internal_operator'` + `operator_id`
+    so writes (preferences) are server-stamped `source='internal_operator'`
+    instead of trusting agent-reported source.
     """
     settings = get_web_settings()
     actual_run_id = run_id or f"run_{uuid.uuid4().hex[:16]}"
@@ -111,6 +121,10 @@ def sign_agent_run_jwt(
         claims["vk"] = virtual_key
     if browserbase_context_id:
         claims["bbctx"] = browserbase_context_id
+    if actor and actor != "user":
+        claims["actor"] = actor
+        if operator_id:
+            claims["operator_id"] = operator_id
     priv = _signing_key()
     pem = priv.private_bytes(
         encoding=serialization.Encoding.PEM,
@@ -160,6 +174,8 @@ def verify_agent_run_jwt(token: str) -> AgentRunClaims:
 
     vk = claims.get("vk")
     bbctx = claims.get("bbctx")
+    actor = claims.get("actor")
+    operator_id = claims.get("operator_id")
     return AgentRunClaims(
         user_id=user_id,
         run_id=run_id,
@@ -167,5 +183,7 @@ def verify_agent_run_jwt(token: str) -> AgentRunClaims:
         jti=claims.get("jti", ""),
         virtual_key=vk if isinstance(vk, str) and vk else None,
         browserbase_context_id=bbctx if isinstance(bbctx, str) and bbctx else None,
+        actor=actor if isinstance(actor, str) and actor else "user",
+        operator_id=operator_id if isinstance(operator_id, str) and operator_id else None,
         raw=claims,
     )

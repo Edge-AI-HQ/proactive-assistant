@@ -22,6 +22,7 @@ export const dashboardRoutes = {
   runs: runsPath,
   casebook: "/casebook",
   personalData: "/personal-data",
+  preferences: "/preferences",
   patterns: "/patterns",
   patternsPending: "/patterns/pending",
   patternsHealth: "/patterns/health",
@@ -66,6 +67,7 @@ export type DashboardRoute =
   | { kind: "card"; cardId: string }
   | { kind: "casebook" }
   | { kind: "personal-data" }
+  | { kind: "preferences" }
   | { kind: "trace"; runId: string }
   | { kind: "patterns" }
   | { kind: "patterns-pending" }
@@ -88,6 +90,7 @@ export function parseDashboardRoute(pathname: string): DashboardRoute {
   if (parts[0] === "cards" && id) return { kind: "card", cardId: id };
   if (parts[0] === "casebook") return { kind: "casebook" };
   if (parts[0] === "personal-data") return { kind: "personal-data" };
+  if (parts[0] === "preferences") return { kind: "preferences" };
   if (parts[0] === "traces" && id) return { kind: "trace", runId: id };
   if (parts[0] === "patterns") {
     // Reserved subpaths take precedence over the dynamic patternId match.
@@ -114,6 +117,7 @@ export function dashboardRouteTitle(route: DashboardRoute): string {
   if (route.kind === "card") return `卡片 ${shortRouteId(route.cardId)}`;
   if (route.kind === "casebook") return "样本库";
   if (route.kind === "personal-data") return "个人数据";
+  if (route.kind === "preferences") return "用户偏好";
   if (route.kind === "patterns") return "认知范式库";
   if (route.kind === "patterns-pending") return "范式 · 待审批";
   if (route.kind === "patterns-health") return "范式 · 健康监控";
@@ -129,6 +133,7 @@ export function dashboardDocumentTitle(route: DashboardRoute): string {
 export function dashboardNavPath(route: DashboardRoute): string {
   if (route.kind === "casebook") return dashboardRoutes.casebook;
   if (route.kind === "personal-data") return dashboardRoutes.personalData;
+  if (route.kind === "preferences") return dashboardRoutes.preferences;
   if (
     route.kind === "patterns"
     || route.kind === "pattern"

@@ -32,6 +32,7 @@ from .composio_meta import (
 )
 from .feedback import feedback_list
 from .memory import memory_add, memory_get, memory_list, memory_search
+from .preferences import preference_add, set_generation_language
 from .profile import goal_upsert, profile_get, profile_upsert
 from .raw import raw_gcal_today, raw_gcal_week, raw_gmail_recent, raw_list
 from .signals import signals_get, signals_kinds, signals_recent
@@ -47,6 +48,10 @@ ALL_TOOLS = [
     signals_kinds, signals_recent, signals_get,
     # Profile + goals (persona / trajectory) + world context
     profile_get, profile_upsert, goal_upsert, world_recent, world_search,
+    # Stated preferences (expression layer) + language switch. preference_add
+    # is the high-weight content-preference write; set_generation_language
+    # flips the deterministic output-language setting.
+    preference_add, set_generation_language,
     # Raw (high-frequency named tools + generic long-tail). These read
     # the offline-ingested raw tables (gmail / gcal / etc.) — for
     # FRESH SaaS data the model goes through the Composio meta-tools.
@@ -83,8 +88,10 @@ __all__ = [
     "memory_get",
     "memory_list",
     "memory_search",
+    "preference_add",
     "profile_get",
     "profile_upsert",
+    "set_generation_language",
     "raw_gcal_today",
     "raw_gcal_week",
     "raw_gmail_recent",

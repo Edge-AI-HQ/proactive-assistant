@@ -458,6 +458,83 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// ── Internal-operator impersonation + preferences ──
+// The dashboard authenticates as the internal operator (Supabase). To read
+// or補 a TARGET user's preferences, it first mints a per-run token bound to
+// that user (server-tagged actor='internal_operator'), then calls the
+// per-user agent endpoints WITH that token as the bearer (not the operator's
+// Supabase token).
+
+export interface ImpersonationToken {
+  token: string;
+  runId: string;
+  userId: number;
+}
+
+export type PreferenceScope = "topic" | "source" | "timing" | "format" | "global";
+export type PreferencePolarity = "positive" | "negative";
+
+export interface PreferenceRecord {
+  id: string;
+  statement: string;
+  scope: PreferenceScope;
+  polarity: PreferencePolarity;
+  weight: number;
+  confidence: number | null;
+  source: string;
+  evidence: Record<string, unknown>;
+  status: string;
+  superseded_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Fetch with an explicit bearer (the minted impersonation token), bypassing
+ *  the Supabase-token injection `request()` does. Still attaches X-Dev-Auth
+ *  in a dev bypass build so local verification works. */
+async function requestWithBearer<T>(path: string, token: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  headers.set("Authorization", `Bearer ${token}`);
+  if (devAuthBypassActive()) {
+    headers.set("X-Dev-Auth", DEV_AUTH_BYPASS_VALUE);
+  }
+  const res = await fetch(`${PIN_API_BASE}${path}`, { ...init, headers });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(apiErrorMessage(res.status, text));
+  }
+  return res.json() as Promise<T>;
+}
+
+export function mintImpersonationToken(
+  targetSupabaseUserId: string,
+): Promise<ImpersonationToken> {
+  return request("/api/reward-dashboard/impersonate/chat-token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ targetSupabaseUserId }),
+  });
+}
+
+export async function listTargetPreferences(token: string): Promise<PreferenceRecord[]> {
+  const payload = await requestWithBearer<{ items: PreferenceRecord[] }>(
+    "/api/agent/preferences/list?status=active",
+    token,
+  );
+  return payload.items ?? [];
+}
+
+export function addTargetPreference(
+  token: string,
+  input: { statement: string; scope: PreferenceScope; polarity: PreferencePolarity },
+): Promise<PreferenceRecord> {
+  return requestWithBearer("/api/agent/preferences/add", token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
 export function listRuns(params: {
   limit?: number;
   trigger?: string;

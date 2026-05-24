@@ -91,7 +91,7 @@ from pinai_sdk import client
 
 async def main():
     (profile, memory, signals, gmail, gcal,
-     cards_recent, feedback, world) = await asyncio.gather(
+     cards_recent, feedback, world, preferences) = await asyncio.gather(
         client.profile.get(),
         client.memory.list(min_quality=0.7, limit=30),
         client.signals.recent(status="open", hours=24, min_salience=0.1, limit=80),
@@ -100,12 +100,13 @@ async def main():
         client.cards.recent(limit=30),
         client.feedback.list(limit=50),
         client.world.recent(status="open", limit=10),
+        client.preferences.list(status="active", limit=50),
         return_exceptions=True,
     )
     keys = ["profile","memory","signals","gmail","gcal",
-            "cards_recent","feedback","world"]
+            "cards_recent","feedback","world","preferences"]
     vals = [profile, memory, signals, gmail, gcal,
-            cards_recent, feedback, world]
+            cards_recent, feedback, world, preferences]
     digest = {}
     for k, v in zip(keys, vals):
         if isinstance(v, BaseException):
@@ -195,6 +196,32 @@ card-generator subagent will turn each plan item into a full card.
   collapse to zero just because the highest-value items require review,
   update, follow-up, or confirmation rather than a brand-new intent.
 </dedup_and_feedback_rules>
+
+<preference_alignment>
+`/state/phase1.json` has a `preferences` array — the user's OWN stated
+preferences (each: statement, scope, polarity, weight, created_at,
+optional evidence). These are a HARD CONSTRAINT on this batch, stronger
+than inferred signals:
+
+- The most RECENT preferences and the HIGHEST-`weight` ones are near-
+  mandatory. Treat a recent, high-weight preference as a rule you must
+  obey this run, not a hint to weigh against everything else.
+- `polarity = "positive"` → actively BIAS the plan TOWARD that topic /
+  source / timing / format. Plan an item that satisfies it when any
+  grounded evidence supports one.
+- `polarity = "negative"` → SUPPRESS matching items. Do not plan a card
+  the user told you they don't want, even if a signal would otherwise
+  justify it. Add the basket to `cold_baskets` when a negative
+  preference is why you skipped it.
+- When a plan item is shaped by a preference, name the preference `id`
+  in `notes` so the choice is auditable downstream.
+- Preferences outrank cold-basket inference: a positive preference can
+  re-warm a basket; a negative preference keeps it cold regardless of
+  fresh signals.
+- Language is NOT handled here — output language comes from a
+  deterministic setting, never from a preference row. Ignore any
+  language-shaped preference for planning.
+</preference_alignment>
 
 <intent_key_convention>
 intent_key is a stable slug — kebab-case, ≤120 chars, identifies the

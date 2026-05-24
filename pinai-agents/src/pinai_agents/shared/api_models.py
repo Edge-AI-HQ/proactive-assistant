@@ -223,6 +223,73 @@ class SettingsUpdateRequest(_CamelModel):
     onboarding_completed: bool | None = None
 
 
+# ── Preference records ──
+# Expression-layer preferences the user states in plain words in main chat.
+# `scope` / `polarity` mirror the CHECK constraints in
+# 056_pai_preference_records.sql. Frontend has no direct write surface —
+# these come through the chat agent's native tools only.
+PreferenceScope = Literal["topic", "source", "timing", "format", "global"]
+PreferencePolarity = Literal["positive", "negative"]
+
+
+class PreferenceItem(_CamelModel):
+    id: str
+    statement: str
+    scope: PreferenceScope
+    polarity: PreferencePolarity
+    weight: float
+    confidence: float | None = None
+    source: str
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    status: str
+    superseded_by: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PreferenceListResponse(_CamelModel):
+    items: list[PreferenceItem]
+
+
+class PreferenceAddRequest(_CamelModel):
+    """Agent-supplied preference fields. `source` is NOT here on purpose —
+    the route stamps it from the JWT principal so the agent cannot claim
+    a write came from the user when it came from an internal operator
+    (and vice-versa). `weight` / `confidence` are optional; the route
+    defaults them (user-stated preferences are high-weight by design)."""
+
+    statement: str = Field(min_length=1, max_length=2000)
+    scope: PreferenceScope
+    polarity: PreferencePolarity
+    weight: float | None = Field(default=None, ge=0, le=1)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    # Free-form provenance the agent may attach (e.g. `{"card_id": "..."}`
+    # when the preference came from feedback on a specific card). The route
+    # overwrites `operator_id` here for internal-operator writes.
+    evidence: dict[str, Any] | None = None
+
+
+class PreferenceSupersedeRequest(_CamelModel):
+    old_id: str
+    new_id: str
+
+
+class ImpersonationMintRequest(_CamelModel):
+    """Internal-dashboard request to mint a chat token acting AS a target
+    user. `target_supabase_user_id` is the Supabase UUID (the stable
+    external identifier — never the BIGINT users.id)."""
+
+    target_supabase_user_id: str = Field(min_length=1, max_length=64)
+
+
+class GenerationLanguageSetRequest(_CamelModel):
+    """Agent-driven language switch — flips `generation_language` and
+    re-stamps the auto-generate schedule payload, the same deterministic
+    path the UI settings route uses."""
+
+    generation_language: SupportedLanguage
+
+
 # ── App State KV ──
 class AppStateValue(_CamelModel):
     value: Any

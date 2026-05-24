@@ -14,6 +14,7 @@ import { PatternsPendingView } from "@/routes/PatternsPendingView";
 import { PatternsRetiredView } from "@/routes/PatternsRetiredView";
 import { PatternsView } from "@/routes/PatternsView";
 import { PersonalDataView } from "@/routes/PersonalDataView";
+import { PreferencesView } from "@/routes/PreferencesView";
 import { RunDetailView } from "@/routes/RunDetailView";
 import { RunsView } from "@/routes/RunsView";
 import { TraceView } from "@/routes/TraceView";
@@ -175,6 +176,7 @@ export default function App() {
       {route.kind === "card" && <CardView cardId={route.cardId} onNavigate={navigate} />}
       {route.kind === "casebook" && <CasebookView onNavigate={navigate} />}
       {route.kind === "personal-data" && <PersonalDataView onNavigate={navigate} />}
+      {route.kind === "preferences" && <PreferencesView onNavigate={navigate} />}
       {route.kind === "trace" && <TraceView runId={route.runId} onNavigate={navigate} />}
       {route.kind === "patterns" && <PatternsView onNavigate={navigate} />}
       {route.kind === "pattern" && (

@@ -31,6 +31,11 @@ class AgentRun:
     user_id: int
     run_id: str
     scope: str
+    # Impersonation provenance. 'user' = the account owner drives this run.
+    # 'internal_operator' = an internal reviewer acting on the user's behalf;
+    # routes use this (not agent-reported body) to stamp write `source`.
+    actor: str = "user"
+    operator_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -229,7 +234,10 @@ async def current_agent_run(
                     detail="agent run token revoked",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
-    return AgentRun(user_id=claims.user_id, run_id=claims.run_id, scope=claims.scope)
+    return AgentRun(
+        user_id=claims.user_id, run_id=claims.run_id, scope=claims.scope,
+        actor=claims.actor, operator_id=claims.operator_id,
+    )
 
 
 async def current_chat_principal(

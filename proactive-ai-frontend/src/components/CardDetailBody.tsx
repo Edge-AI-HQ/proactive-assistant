@@ -35,6 +35,10 @@ interface CardDetailBodyProps {
   onModify: () => void;
   onDone: () => void;
   onTextFeedback: (text: string) => void;
+  /** Optional — when provided, renders an entry that opens Main Chat with
+   *  this card's context so the user can give richer feedback there
+   *  (feedback flows into main chat, not a separate card thread). */
+  onDiscussInMainChat?: () => void;
   enableSwipe?: boolean;
 }
 
@@ -48,6 +52,7 @@ export default function CardDetailBody({
   onModify,
   onDone,
   onTextFeedback,
+  onDiscussInMainChat,
   enableSwipe = false,
 }: CardDetailBodyProps) {
   const [feedbackText, setFeedbackText] = useState("");
@@ -212,6 +217,16 @@ export default function CardDetailBody({
           <Send size={12} strokeWidth={1.5} />
         </button>
       </div>
+
+      {onDiscussInMainChat && (
+        <button
+          onClick={onDiscussInMainChat}
+          className="mt-2 w-full flex items-center justify-center gap-1.5 text-[11px] text-foreground/40 hover:text-foreground/60 transition-colors"
+        >
+          <MessageCircle size={11} strokeWidth={1.5} />
+          Discuss this card in PIN AI
+        </button>
+      )}
     </>
   );
 
