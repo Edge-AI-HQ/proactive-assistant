@@ -1,16 +1,18 @@
 """users table upsert by Supabase UUID → BIGINT user_id.
 
 This module owns the row's first-touch lifecycle:
-    1. INSERT a fresh users row when the Supabase UUID isn't on file yet.
-    2. Synchronously provision a LiteLLM virtual key for the new row.
-    3. ON CONFLICT UPDATE on subsequent calls (same user re-authing) —
-       just bumps last_active_at + email-sync. virtual_key is left alone
-       once provisioned.
+    1. INSERT a fresh users row when the Supabase UUID isn't on file yet,
+       then seed the user's default goals (local, idempotent).
+    2. ON CONFLICT UPDATE on subsequent calls (same user re-authing) —
+       just bumps last_active_at + email-sync.
 
-If LiteLLM is unreachable during step 2, the user logs in fine with
-virtual_key=NULL; lazy provisioning on the next /chat-stream/send round-
-trip recovers. We treat LiteLLM downtime as transient and avoid blocking
-authentication.
+Authentication stays free of external-service calls: the LiteLLM virtual
+key is intentionally NOT minted here. Every consumer that needs it
+(chat-send, generate, ambient, voice, proactive, scheduler) lazily
+provisions it via `ensure_user_litellm_key` at point of use, so keeping it
+off the auth hot path means login never blocks on LiteLLM availability.
+This matters most for brand-new users: the first authenticated request
+(GET /api/settings) gates the whole UI, so it must stay millisecond-fast.
 """
 
 from __future__ import annotations
@@ -44,11 +46,11 @@ async def upsert_user_by_supabase_id(
     """Find or create a users row for this Supabase user.
 
     Behavior:
-      * INSERT path → row is created, then we synchronously provision a
-        LiteLLM virtual key (best-effort; failure leaves the row with a
-        NULL key so chat-send can lazy-retry).
+      * INSERT path → row is created, then we seed the user's default
+        goals (local, idempotent). The LiteLLM key is left NULL and
+        lazily provisioned at point of use (see module docstring).
       * UPDATE path → existing row, only bumps last_active_at + email
-        if Supabase changed it. Doesn't touch virtual_key.
+        if Supabase changed it.
     """
     async with service_tx(pool) as conn:
         cur = await conn.execute(
@@ -77,17 +79,12 @@ async def upsert_user_by_supabase_id(
     )
 
     # First-touch bootstrap on the INSERT branch (xmax=0 means the row
-    # came from INSERT, not ON CONFLICT). Both steps are best-effort —
-    # LiteLLM downtime degrades to NULL key + lazy-retry on chat-send,
-    # goal seeding failure logs and is recoverable via the agent's
-    # evolve / goal_upsert path.
+    # came from INSERT, not ON CONFLICT). Seed default goals only —
+    # idempotent local-DB work, recoverable via the agent's evolve /
+    # goal_upsert path if it fails. The LiteLLM key is deliberately not
+    # minted here (see module docstring): every consumer lazy-provisions
+    # via ensure_user_litellm_key, so external calls stay off the auth path.
     if row.get("inserted"):
-        if not user.litellm_virtual_key:
-            from ..services.litellm_provisioning import (  # noqa: PLC0415
-                provision_user_litellm_key,
-            )
-            user = await provision_user_litellm_key(pool, user)
-
         from ..services.default_goals import seed_default_goals  # noqa: PLC0415
         await seed_default_goals(pool, user.id)
 

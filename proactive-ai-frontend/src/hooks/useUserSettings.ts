@@ -73,6 +73,14 @@ export interface UseUserSettingsResult {
   refetch: () => Promise<void>;
 }
 
+// Bootstrap resilience: `/settings` is the one request that gates the
+// whole UI (App.tsx shows a spinner until it lands). A single hung or
+// dropped request — common on native right after the OAuth browser
+// round-trip — used to strand the app on an unbounded spinner. So each
+// attempt gets a hard timeout and transient failures retry with backoff.
+const SETTINGS_TIMEOUT_MS = 12_000;
+const SETTINGS_RETRY_DELAYS_MS = [500, 1500, 3000];
+
 let settingsCache: UserSettings | null = null;
 const settingsListeners = new Set<(settings: UserSettings) => void>();
 
@@ -102,19 +110,40 @@ export function useUserSettings(): UseUserSettingsResult {
 
   const refetch = useCallback(async () => {
     setLoading(true);
-    try {
-      const res = await proxyFetch("/settings");
-      if (!res.ok) throw new Error(`/settings ${res.status}`);
-      const data = await res.json() as UserSettings;
-      if (!mountedRef.current) return;
-      publishSettings(data);
-      setError(null);
-    } catch (err) {
-      if (!mountedRef.current) return;
-      setError(err instanceof Error ? err.message : "Failed to load settings");
-    } finally {
-      if (mountedRef.current) setLoading(false);
+    let lastError: unknown = null;
+    // attempt 0 is the initial try; the rest are backoff retries.
+    for (let attempt = 0; attempt <= SETTINGS_RETRY_DELAYS_MS.length; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) => setTimeout(r, SETTINGS_RETRY_DELAYS_MS[attempt - 1]));
+        if (!mountedRef.current) return;
+      }
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), SETTINGS_TIMEOUT_MS);
+      try {
+        const res = await proxyFetch("/settings", { signal: controller.signal });
+        if (res.ok) {
+          const data = await res.json() as UserSettings;
+          if (!mountedRef.current) return;
+          publishSettings(data);
+          setError(null);
+          setLoading(false);
+          return;
+        }
+        lastError = new Error(`/settings ${res.status}`);
+        // 4xx (incl. a 401 that already survived proxyFetch's token-refresh
+        // retry) won't recover by retrying — surface it and stop.
+        if (res.status >= 400 && res.status < 500) break;
+        // 5xx falls through to the backoff retry.
+      } catch (err) {
+        // Network error or timeout (AbortController) — transient, retry.
+        lastError = err;
+      } finally {
+        clearTimeout(timer);
+      }
     }
+    if (!mountedRef.current) return;
+    setError(lastError instanceof Error ? lastError.message : "Failed to load settings");
+    setLoading(false);
   }, []);
 
   useEffect(() => {

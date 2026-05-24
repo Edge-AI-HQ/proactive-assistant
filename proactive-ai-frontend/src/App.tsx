@@ -31,6 +31,28 @@ function Spinner() {
   );
 }
 
+// Shown when the settings bootstrap fails after its retries. The retry
+// button re-issues the fetch in place — no app restart needed.
+function BootstrapError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="relative flex h-full items-center justify-center overflow-hidden">
+      <div className="absolute inset-0 animate-bg-flow opacity-60" />
+      <div className="absolute inset-0 bg-white/20" />
+      <div className="relative z-10 w-full max-w-sm glass-card-strong p-8 text-center">
+        <p className="text-sm text-foreground/80">
+          Couldn't reach the server. Check your connection and try again.
+        </p>
+        <button
+          onClick={onRetry}
+          className="mt-5 w-full rounded-xl border border-foreground/10 bg-white/60 px-4 py-3 text-sm font-medium text-foreground/80 shadow-sm transition-colors hover:bg-white/80"
+        >
+          Retry
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const { loading: authLoading, user, signInWithGoogle } = useAuth();
   // Opt-in start the ambient sources the user has explicitly enabled.
@@ -42,6 +64,7 @@ export default function App() {
     settings: userSettings,
     loading: settingsLoading,
     patch: patchSettings,
+    refetch: refetchSettings,
   } = useUserSettings();
   // Stable key signature so unrelated settings changes (autoGenerate,
   // language, etc.) don't re-trigger the reconcile. We deliberately
@@ -102,12 +125,17 @@ export default function App() {
   }
 
   // Authenticated path needs settings before we can decide between
-  // onboarding and the main shell — show the spinner until the first
-  // /settings response lands so the user never sees the main UI flash
-  // before being redirected into onboarding. previewBypass skips this
-  // since it never has a user/settings to fetch.
-  if (!previewBypass && (settingsLoading || userSettings === null)) {
+  // onboarding and the main shell — gate on the first /settings response
+  // so the user never sees the main UI flash before being redirected into
+  // onboarding. Three states (never an unbounded spinner): in-flight →
+  // spinner; failed after retries (loaded but still null) → actionable
+  // retry screen; loaded → fall through. previewBypass skips this since
+  // it never has a user/settings to fetch.
+  if (!previewBypass && settingsLoading) {
     return <Spinner />;
+  }
+  if (!previewBypass && userSettings === null) {
+    return <BootstrapError onRetry={() => void refetchSettings()} />;
   }
 
   if (!previewBypass && userSettings && !userSettings.onboardingCompletedAt) {
