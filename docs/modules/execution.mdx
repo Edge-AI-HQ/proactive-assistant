@@ -126,7 +126,7 @@ chat 端验签 + `jti` 黑名单(`pai_jti_revocations`),失败 401。
 - verify run JWT → `RunPrincipal`。
 - 看 session_key prefix 选 agent:`card-thread-` → `make_card_execution_agent`,否则 `make_main_chat_agent`。
 - 拿 LangGraph checkpointer(`chat/runtime/checkpoint.py` 在 Postgres `langgraph` schema 持久化);thread_id = session_key。
-- 首次 card-thread + 有 `card_context` 时,把 `SystemMessage(json.dumps(card_context))` push 进 thread state,之后不需要前端再传。SystemMessage 会被 `/history` 过滤掉,不进前端渲染。
+- card_context 注入分两种线程(`chat/routes/chat.py:_build_send_messages`):**card thread** 首次 + 有 `card_context` 时把 `SystemMessage(json.dumps(card_context))` push 进 thread state,之后不需要前端再传;**main thread** 是每用户单例(migration 053),首轮一辈子只真一次,所以改成**本轮带 `card_context` 就注入**(从某张卡打开 main chat 给反馈时),不看是不是首轮。两种都被 `/history` 过滤掉,不进前端渲染。
 - 跑 agent loop,把 LangGraph stream 转成 SSE 帧:`chat:thinking` / `chat:delta` / `chat:tool:start` / `chat:tool:update` / `chat:tool:result` / `chat:reply`(非流式 fallback)/ `chat:error` / `chat:done`(`chat/streaming.py:langgraph_to_sse`)。
 
 #### main_chat agent
@@ -154,6 +154,7 @@ chat 端验签 + `jti` 黑名单(`pai_jti_revocations`),失败 401。
 | `composio_meta.py` | `COMPOSIO_SEARCH_TOOLS`、`COMPOSIO_GET_TOOL_SCHEMAS`、`COMPOSIO_MULTI_EXECUTE_TOOL`、`COMPOSIO_MANAGE_CONNECTIONS` |
 | `feedback.py` | `feedback_list`、`feedback_get` |
 | `memory.py` | `memory_list`、`memory_search`、`memory_get`、`memory_add`、`memory_upsert` |
+| `preferences.py` | `preference_add`(持续性内容偏好 → `pai_preference_records`,高权重)、`set_generation_language`(改输出语言 → `generation_language` 设置,确定性,非偏好行)。详见 [Feedback](./feedback) 偏好层 |
 | `profile.py` | `profile_get`、`profile_upsert`、`goal_list`、`goal_upsert` |
 | `raw.py` | `raw_list`、`raw_get`、`raw_gmail_recent`、`raw_gcal_today`、`raw_gcal_week` |
 | `signals.py` | `signals_recent`、`signals_get` |

@@ -19,6 +19,10 @@ from ...auth.deps import AgentRun, current_agent_run, get_pool
 from ...db.repositories.profile import ProfileRepository
 from ...db.rls import user_scoped_tx
 
+# Reuse the UI settings route's schedule re-stamp (don't copy the impl). No
+# import cycle: ui.profile imports nothing from routes/agent/*.
+from ..ui.profile import _sync_auto_generate_schedule
+
 router = APIRouter(prefix="/api/agent/profile", tags=["agent-profile"])
 
 
@@ -91,13 +95,6 @@ async def agent_set_generation_language(
     (`_sync_auto_generate_schedule`), not by hoping the next planner reads
     a preference row. Returns the updated settings row.
     """
-    # Import here, not at module top: the UI profile module pulls in the
-    # full settings-route surface, and a top-level import would create an
-    # import cycle (agent route ← ui route ← shared models). Deferring keeps
-    # the dependency one-directional at load time. Reuses the helper, does
-    # NOT copy the re-stamp implementation.
-    from ..ui.profile import _sync_auto_generate_schedule  # noqa: PLC0415
-
     async with user_scoped_tx(pool, run.user_id) as conn:
         repo = ProfileRepository(run.user_id, conn)
         row = await repo.upsert_settings(

@@ -121,20 +121,49 @@ async def test_mint_endpoint_rejects_non_internal_auth(app_and_client, user_ids)
     assert r.status_code in (401, 403), r.text
 
 
+def _refresh_settings():
+    from pinai_agents import config
+    config.get_web_settings.cache_clear()
+
+
 @pytest.mark.asyncio
-async def test_mint_endpoint_success_under_operator_auth(app_and_client, user_ids, pool):
-    """Internal operator (current_user) mints a token bound to the target."""
+async def test_mint_endpoint_rejects_authenticated_non_operator(app_and_client, user_ids, pool):
+    """Authenticated current_user that is NOT on the operator allowlist →
+    403. current_user alone must not be enough to impersonate (the routes
+    live in the shared web process)."""
     app, client = app_and_client
     operator_id, target_id = user_ids
+    target_sub = await _supabase_sub(pool, target_id)
 
-    async with pool.connection() as conn:
-        cur = await conn.execute(
-            "SELECT id, supabase_user_id FROM users WHERE id IN (%s, %s)",
-            (operator_id, target_id),
+    operator_user = User(
+        id=operator_id, supabase_user_id="not-on-the-allowlist",
+        email="op@test.invalid", litellm_virtual_key=None, browserbase_context_id=None,
+    )
+    app.dependency_overrides[current_user] = lambda: operator_user
+    _refresh_settings()  # INTERNAL_OPERATOR_SUBS unset → fail-closed
+    try:
+        r = await client.post(
+            "/api/reward-dashboard/impersonate/chat-token",
+            json={"targetSupabaseUserId": target_sub},
         )
-        rows = {r["id"]: str(r["supabase_user_id"]) for r in await cur.fetchall()}
-    operator_sub = rows[operator_id]
-    target_sub = rows[target_id]
+    finally:
+        app.dependency_overrides.pop(current_user, None)
+        _refresh_settings()
+    assert r.status_code == 403, r.text
+
+
+@pytest.mark.asyncio
+async def test_mint_endpoint_success_for_allowlisted_operator(
+    app_and_client, user_ids, pool, monkeypatch,
+):
+    """Allowlisted internal operator mints a token bound to the target."""
+    app, client = app_and_client
+    operator_id, target_id = user_ids
+    operator_sub = await _supabase_sub(pool, operator_id)
+    target_sub = await _supabase_sub(pool, target_id)
+
+    monkeypatch.setenv("INTERNAL_OPERATOR_SUBS", f"some-other-uuid,{operator_sub}")
+    _refresh_settings()
 
     operator_user = User(
         id=operator_id, supabase_user_id=operator_sub, email="op@test.invalid",
@@ -148,9 +177,19 @@ async def test_mint_endpoint_success_under_operator_auth(app_and_client, user_id
         )
     finally:
         app.dependency_overrides.pop(current_user, None)
+        _refresh_settings()
 
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["userId"] == target_id
     assert body["token"]
     assert body["runId"]
+
+
+async def _supabase_sub(pool, user_id: int) -> str:
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT supabase_user_id FROM users WHERE id = %s", (user_id,),
+        )
+        row = await cur.fetchone()
+    return str(row["supabase_user_id"])

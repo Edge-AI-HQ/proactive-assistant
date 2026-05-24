@@ -87,6 +87,25 @@ flowchart LR
 
 `pai_card_evaluations`(同 migration)是 generation 自评(详见 [Generation](./generation)),`pass / overall / dim_*` 五维评分,跟用户反馈联合解释卡片质量。
 
+## 偏好层(表达层 · pai_preference_records)
+
+反馈分三层,各管一摊,不互相覆盖:
+
+- **行为层** = `pai_feedback_events`(本模块) + fingerprint fan-out。confirm / dismiss / snooze / text_feedback,planner 据此 dedupe + cold-basket 抑制。
+- **聚合画像** = `pai_profile`(facts / preferences / constraints 桶,见 [Memory](./memory))。
+- **表达层** = `pai_preference_records`(migration `056_pai_preference_records.sql`):用户在 **main chat 亲口说的持续性偏好**(「想看更多 A 股新闻」「别推工作类」)。**高权重**,下一次生成当近似硬约束读。
+
+`pai_preference_records` 字段:`scope` ∈ topic/source/timing/format/global · `polarity` ∈ positive/negative · `weight`(用户亲口默认 1.0)· `confidence` · `source` ∈ user/internal_operator/agent · `evidence JSONB`(可带 `card_id` / `operator_id`)· `status` ∈ active/superseded/archived(状态机同 `pai_memory`,supersede 断言 new 先 active)。RLS 同 023 风格。
+
+写入只走 chat 端 native tool,**没有前端直接写接口**:
+
+- `preference_add(statement, scope, polarity, card_id?)` → `POST /api/agent/preferences/add`。**`source` 由服务端按 JWT principal 决定**(普通 run 恒 `user`;impersonation run 强制 `internal_operator` 且 `evidence.operator_id` 服务端盖章),**不信 agent 自报**。
+- 语言类偏好**不进这张表** —— `set_generation_language(language)` → `POST /api/agent/profile/settings/generation-language`,翻 `pai_user_settings.generation_language` 并 re-stamp 自动生成 schedule 的 `output_language`(确定性生效,见 [Generation](./generation))。
+
+internal dashboard 代用户补偏好:`POST /api/reward-dashboard/impersonate/chat-token`(`current_user` 鉴权)为目标用户 mint 带 `actor=internal_operator` + `operator_id` 的 per-run JWT;dashboard 的「用户偏好」页用它列偏好 + 代填,来源在列表里和用户原话区分可见。
+
+> `pai_feedback_events` / fingerprint / reward ledger 一行未动 —— 偏好层是新增旁路,不是改造。
+
 ## 用户操作映射
 
 | 输入 | 写入 |

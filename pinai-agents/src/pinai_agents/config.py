@@ -119,6 +119,16 @@ class WebSettings(_BaseAppSettings):
     browserbase_api_key: str | None = None
     browserbase_project_id: str | None = None
 
+    # ── Internal-operator impersonation allowlist ──
+    # Comma-separated Supabase UUIDs permitted to mint a chat token acting
+    # AS another user (internal-reward-dashboard reviewers). The
+    # impersonation route lives in the shared web process, so `current_user`
+    # alone would let any authenticated product user impersonate anyone —
+    # this allowlist is the actual gate. Empty = no one may impersonate
+    # (fail-closed), EXCEPT the dev-auth-bypass reviewer under DEPLOY_ENV=dev
+    # so local verification still works.
+    internal_operator_subs: str = ""
+
     # ── CORS ──
     # Comma-separated list of origins allowed to call /api/* + /api/agent/*.
     # Frontend lives on a different origin (different host/port), so the

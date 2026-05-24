@@ -86,7 +86,8 @@ sequenceDiagram
 | 入口 | `web/routes/ui/generate.py:POST /api/generate`。`_find_active_generator_task` 按 `kind='generator.manual'` + `status='active'` + user 去重;有就返回 `{deduped:true, taskId}`。 |
 | 入队 | `enqueue_once(kind='generator.manual', id=f"gen.{uuid4().hex[:12]}", payload={cards_to_generate, output_language, trigger})`,trigger_kind=`once`。 |
 | Virtual key | `_ensure_virtual_key`:user 没 `litellm_virtual_key` 时调 `services/litellm_provisioning.ensure_user_litellm_key` lazy-recover;失败 502。 |
-| 输出语言 | 读 user_settings 的 `generation_language`(`zh-Hans` / `en`),走 payload 传给 chat。 |
+| 输出语言 | 读 user_settings 的 `generation_language`(`zh-Hans` / `en`),走 payload 传给 chat。语言类偏好走这条设置(确定性),**不**进 `pai_preference_records`。 |
+| 高权重偏好 | data-collector 额外调 `client.preferences.list(status="active", limit=50)`,写进 `/state/phase1.json` 的 `preferences` 段;planner 把最近 + 高 `weight` 的当近似硬约束(positive 偏向 / negative 抑制),命中的 preference id 写进 `PlanOutput.notes`。来源见 [Feedback](./feedback) 的「偏好层」。 |
 | 自动生成 | `web/routes/ui/profile.py:_sync_auto_generate_schedule`:settings 写 `auto_generate=true/false` + `auto_generate_interval_minutes`,upsert 到 `pai_scheduled_tasks` 一行 `kind='generator.auto'`,`trigger_kind='schedule'`,`interval_seconds = interval_minutes * 60`,关掉切 `archived`。默认 `auto_generate=ON`(migration `038_auto_generate_default_on.sql`),默认间隔 12h(`037_pai_user_settings_auto_generate_interval.sql`)。 |
 | 派发 | dispatcher 看到 `generator.manual` / `generator.auto` 都走 `_run_generator`(`039_split_generator_kinds.sql` 拆 kind 但共用 handler);60s lease。 |
 | chat 调用 | `_run_generator` HTTP POST `chat /agent/generate`,签 EdDSA agent-run JWT,带 `run_id` + virtual_key claim。 |
@@ -115,8 +116,8 @@ main agent (sonnet 4.6, response_format=GeneratorOutput)
 
 | Subagent | 输入 | 输出 |
 |---|---|---|
-| data-collector | sandbox 里跑 `pinai_sdk` 拉 profile / memory / signals / gmail / gcal / cards_recent / feedback / world | `/state/phase1.json`(给后续 subagent 共享) |
-| planner | `/state/phase1.json` + sandbox state | `PlanOutput {plan[], skipped_duplicates[], cold_baskets[], notes}`。dedup against `cards_recent`、feedback alignment、cold-basket suppression。 |
+| data-collector | sandbox 里跑 `pinai_sdk` 拉 profile / memory / signals / gmail / gcal / cards_recent / feedback / world / **preferences** | `/state/phase1.json`(给后续 subagent 共享) |
+| planner | `/state/phase1.json` + sandbox state | `PlanOutput {plan[], skipped_duplicates[], cold_baskets[], notes}`。dedup against `cards_recent`、feedback alignment、cold-basket suppression、**preference alignment(positive 偏向 / negative 抑制,命中 id 进 notes)**。 |
 | card-generator | plan + sandbox state | `CardsList`,每张卡 `sources[]` 必须非空且 verbatim cite(signal id / memory id / gmail id / profile field / world id)。 |
 | evaluator(cross-family,gpt-5.5)| cards + 同样 sandbox state | `EvalReport`,5 维评分 `relevance / actionability / why_now_clarity / novelty / decision_compression`,`overall = mean`,`pass = (overall >= 5.0 AND no grounding violation)`。 |
 
