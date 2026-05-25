@@ -723,14 +723,10 @@ export default function BigBallLayout() {
             className="flex-1 overflow-hidden"
           >
             {chatTarget ? (
-              /* Real card execution: the rich ChatDetailView (EXECUTION
-                 timeline + Generated draft card + NEEDS YOUR INPUT pink
-                 panel + Dismiss/Pause toolbar). Backed by the
-                 chat-stream-adapter `useCardExecutionRun` hook —
-                 session_key = `card-thread-<cardId>` so the propose_action
-                 history persists on LangGraph's checkpointer. `bootstrap`
-                 is the Confirm-path's primaryAction text; the hook auto-
-                 fires it if the thread is empty (fanout missed it). */
+              /* Real card chat: ChatDetailView now wraps MainChatView with
+                 session_key = `card-thread-<cardId>`. `bootstrap` is the
+                 Confirm-path's primaryAction text; the shared chat runtime
+                 auto-fires it only when the thread is empty. */
               <ChatDetailView
                 card={realIntentToChatCard(chatTarget.card)}
                 runId={chatTarget.card.id}

@@ -159,8 +159,7 @@ describe("useCardActions", () => {
       channel: "web",
     });
     // Steer bootstrap is non-empty by design — the card_execution agent
-    // needs an explicit "ask me before acting" instruction, otherwise
-    // ChatDetailView opens to an empty thread with no composer.
+    // needs an explicit "ask me before acting" instruction.
     const [card, bootstrap] = onOpenChat.mock.calls[0]!;
     expect(card).toBe(baseCard);
     expect(bootstrap).toMatch(/steer/i);

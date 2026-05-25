@@ -68,6 +68,7 @@ export default function CardChat({ card, score, onBack, bootstrapMessage }: Card
       // `null` suppresses it entirely; ThreadPrimitive shows nothing while
       // the bootstrap SSE stream is producing the first assistant turn.
       emptyState={null}
+      renderProposeActionAsText
       headerSlot={
         <div className="px-4 pt-3 pb-1">
           <div className="glass-card px-3 py-2 text-[12px] text-foreground/60 leading-relaxed">
