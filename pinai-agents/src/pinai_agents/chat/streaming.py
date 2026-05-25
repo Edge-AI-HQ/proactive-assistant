@@ -54,6 +54,7 @@ from ..shared.sse_envelope import (
     EV_CHAT_TOOL_START,
     emit,
 )
+from .runtime.reasoning import extract_reasoning_text
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +128,7 @@ def _extract_chunk_text(chunk: Any) -> str:
     if isinstance(content, list):
         parts = []
         for b in content:
-            if isinstance(b, dict) and b.get("type") == "text":
+            if isinstance(b, dict) and b.get("type") in {"text", "output_text"}:
                 t = b.get("text")
                 if isinstance(t, str):
                     parts.append(t)
@@ -135,7 +136,11 @@ def _extract_chunk_text(chunk: Any) -> str:
     return ""
 
 
-def _extract_chunk_reasoning(chunk: Any) -> str:
+def _extract_chunk_reasoning(
+    chunk: Any,
+    *,
+    preserve_whitespace: bool = False,
+) -> str:
     """Pull reasoning text out of an AIMessageChunk's v1 content blocks.
 
     With `output_version="v1"`, reasoning deltas appear as
@@ -145,14 +150,12 @@ def _extract_chunk_reasoning(chunk: Any) -> str:
     """
     content = getattr(chunk, "content", None)
     if isinstance(content, list):
-        parts = []
-        for b in content:
-            if isinstance(b, dict) and b.get("type") == "reasoning":
-                r = b.get("reasoning")
-                if isinstance(r, str):
-                    parts.append(r)
-        if parts:
-            return "".join(parts)
+        reasoning = extract_reasoning_text(
+            content,
+            preserve_whitespace=preserve_whitespace,
+        )
+        if reasoning:
+            return reasoning
     additional = getattr(chunk, "additional_kwargs", None) or {}
     legacy = additional.get("reasoning_content")
     return legacy if isinstance(legacy, str) else ""
@@ -206,23 +209,57 @@ async def langgraph_to_sse(
     chat runtime knows. Everything else is dropped to keep the wire clean.
     """
     yield chat_thinking(trace_id=trace_id)
+    streamed_text_run_ids: set[str] = set()
+    streamed_reasoning_run_ids: set[str] = set()
     try:
         async for event in events:
             etype = event.get("event", "")
             data = event.get("data", {}) or {}
 
             if etype == "on_chat_model_stream":
+                run_id = event.get("run_id")
                 chunk = data.get("chunk")
                 if chunk is None:
                     continue
                 # Reasoning should precede visible text when the provider
                 # gives us both in one chunk, so the collapsible block stays
                 # above the answer text.
-                reasoning = _extract_chunk_reasoning(chunk)
+                reasoning = _extract_chunk_reasoning(
+                    chunk,
+                    preserve_whitespace=True,
+                )
                 if reasoning:
+                    if isinstance(run_id, str):
+                        streamed_reasoning_run_ids.add(run_id)
                     yield chat_reasoning_delta(reasoning, trace_id=trace_id)
                 text = _extract_chunk_text(chunk)
                 if text:
+                    if isinstance(run_id, str):
+                        streamed_text_run_ids.add(run_id)
+                    yield chat_delta(text, trace_id=trace_id)
+
+            elif etype == "on_chat_model_end":
+                run_id = event.get("run_id")
+                output = data.get("output")
+                if output is None:
+                    continue
+                reasoning = _extract_chunk_reasoning(output)
+                if (
+                    reasoning
+                    and not (
+                        isinstance(run_id, str)
+                        and run_id in streamed_reasoning_run_ids
+                    )
+                ):
+                    yield chat_reasoning_delta(reasoning, trace_id=trace_id)
+                text = _extract_chunk_text(output)
+                if (
+                    text
+                    and not (
+                        isinstance(run_id, str)
+                        and run_id in streamed_text_run_ids
+                    )
+                ):
                     yield chat_delta(text, trace_id=trace_id)
 
             elif etype == "on_tool_start":
@@ -241,15 +278,16 @@ async def langgraph_to_sse(
                 tool_call_id = event.get("run_id") or ""
                 output = data.get("output")
                 is_error = bool(getattr(output, "status", None) == "error")
-                if hasattr(output, "content"):
-                    meta = _safe_preview(output.content, _META_LIMIT)
+                output_content = getattr(output, "content", None)
+                if output_content is not None:
+                    meta = _safe_preview(output_content, _META_LIMIT)
                 else:
                     meta = _safe_preview(output, _META_LIMIT)
                 yield chat_tool_result(
                     tool_call_id=tool_call_id, is_error=is_error,
                     meta=meta, trace_id=trace_id,
                 )
-            # Everything else (on_chain_*, on_chat_model_start/end,
+            # Everything else (on_chain_*, on_chat_model_start,
             # on_prompt_*, etc.) is intentionally ignored — they're either
             # redundant with chat:delta / chat:tool:* or not user-visible.
     except Exception as e:

@@ -21,6 +21,12 @@ ANTHROPIC_CACHE_INJECTION_POINTS: list[dict[str, str | int]] = [
 class ReasoningOptions:
     extra_body: dict[str, Any]
     force_temperature_one: bool
+    output_version: str
+    reasoning: dict[str, Any] | None
+    include: list[str] | None
+    use_responses_api: bool
+    use_previous_response_id: bool
+    allow_streaming: bool
 
 
 def is_openai_reasoning_model(model: str | None) -> bool:
@@ -34,6 +40,15 @@ def is_openai_reasoning_model(model: str | None) -> bool:
     return normalized.startswith(("gpt-5", "o1", "o3", "o4"))
 
 
+def is_claude_model(model: str | None) -> bool:
+    """Return true for Anthropic Claude aliases across LiteLLM providers."""
+
+    if not model:
+        return False
+    normalized = model.lower()
+    return "claude" in normalized or "anthropic." in normalized
+
+
 def build_reasoning_options(
     *,
     model: str | None,
@@ -43,14 +58,36 @@ def build_reasoning_options(
 ) -> ReasoningOptions:
     extra_body: dict[str, Any] = {}
     openai_reasoning = is_openai_reasoning_model(model)
+    claude_reasoning = is_claude_model(model)
+    use_responses_api = False
+    output_version = "v1"
+    reasoning: dict[str, Any] | None = None
+    include: list[str] | None = None
+    use_previous_response_id = False
+    allow_streaming = True
 
-    if enable_prompt_cache and not openai_reasoning:
+    if enable_prompt_cache and claude_reasoning:
         extra_body["cache_control_injection_points"] = ANTHROPIC_CACHE_INJECTION_POINTS
 
     if enable_thinking:
         if openai_reasoning:
-            extra_body["reasoning"] = {"effort": "medium", "summary": "auto"}
-        else:
+            use_responses_api = True
+            use_previous_response_id = True
+            output_version = "responses/v1"
+            reasoning = {"effort": "high", "summary": "auto"}
+            # `summary="auto"` lets OpenAI choose the most detailed summary
+            # mode supported by the selected reasoning model.
+            # We do not render encrypted_content, but Responses tool-calling
+            # loops need it so OpenAI can carry reasoning items across turns.
+            include = ["reasoning.encrypted_content"]
+            # Let OpenAI keep the response-state pointer instead of replaying
+            # large tool/reasoning histories through LiteLLM. This is the
+            # recommended Responses pattern for reasoning + function calling.
+            # Keep streaming on so visible assistant text still arrives
+            # progressively; any real reasoning summaries that stream or land
+            # at model end are forwarded by chat/streaming.py.
+            allow_streaming = True
+        elif claude_reasoning:
             extra_body["thinking"] = {
                 "type": "enabled",
                 "budget_tokens": thinking_budget,
@@ -58,21 +95,34 @@ def build_reasoning_options(
 
     return ReasoningOptions(
         extra_body=extra_body,
-        force_temperature_one=enable_thinking and not openai_reasoning,
+        force_temperature_one=enable_thinking and claude_reasoning,
+        output_version=output_version,
+        reasoning=reasoning,
+        include=include,
+        use_responses_api=use_responses_api,
+        use_previous_response_id=use_previous_response_id,
+        allow_streaming=allow_streaming,
     )
 
 
-def extract_reasoning_text(value: Any) -> str | None:
+def extract_reasoning_text(
+    value: Any,
+    *,
+    preserve_whitespace: bool = False,
+) -> str | None:
     """Extract provider reasoning text/summary from known response shapes."""
 
     pieces: list[str] = []
     _collect_reasoning(value, pieces)
+    if preserve_whitespace:
+        text = "".join(pieces)
+        return text if text else None
     text = "\n".join(piece.strip() for piece in pieces if piece.strip())
     return text or None
 
 
-def prepend_reasoning_block(existing: Any, reasoning: str) -> list[dict[str, Any]]:
-    content: list[dict[str, Any]] = [{"type": "reasoning", "reasoning": reasoning}]
+def prepend_reasoning_block(existing: Any, reasoning: str) -> list[str | dict[str, Any]]:
+    content: list[str | dict[str, Any]] = [{"type": "reasoning", "reasoning": reasoning}]
     if isinstance(existing, str) and existing:
         content.append({"type": "text", "text": existing})
     elif isinstance(existing, list):
@@ -100,7 +150,9 @@ def _collect_reasoning(value: Any, pieces: list[str]) -> None:
         _collect_text_items(reasoning_summary, pieces, {"summary_text"})
 
     reasoning = value.get("reasoning")
-    if isinstance(reasoning, dict | list):
+    if isinstance(reasoning, str):
+        pieces.append(reasoning)
+    elif isinstance(reasoning, dict | list):
         _collect_reasoning(reasoning, pieces)
 
     if value.get("type") == "reasoning":
