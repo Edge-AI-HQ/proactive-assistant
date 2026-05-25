@@ -318,19 +318,15 @@ export default function BigBallLayout() {
   const refreshCards = cardsState.refresh;
   const composio = useComposio();
   const pipeline = usePipeline();
-  // Notification permission flow. iOS OS state is the source of truth;
-  // notifyNewCards is a backend mirror that the send pipeline reads. The
-  // two effects below keep these in sync:
+  // Notification permission flow. iOS OS state is a capability; the
+  // product-level `notifyNewCards` preference is controlled by the
+  // Notifications page switch. The effects below only decide when to
+  // show/stamp the one-time permission pre-prompt.
   //
   //   * Sheet only opens when state is "prompt" — granted / denied skip
   //     it entirely (the second effect auto-stamps prompted_at so the
   //     skip doesn't keep firing on every cold start).
-  //   * notifyNewCards <- (state === "granted") on every transition so
-  //     a user who toggles in iOS Settings sees the backend reconciled
-  //     on the next foreground (usePushNotifications listens to
-  //     appStateChange and re-checks).
   const pushNotifications = usePushNotifications();
-  const osGranted = pushNotifications.permissionState === "granted";
   const osPromptable = (
     pushNotifications.permissionState === "prompt"
     || pushNotifications.permissionState === "prompt-with-rationale"
@@ -356,18 +352,6 @@ export default function BigBallLayout() {
     void userSettings.patch({ notifyPermissionPrompted: true });
   }, [
     pushNotifications.ready, osPromptable,
-    userSettings.settings, userSettings.patch,
-  ]);
-  // Mirror OS state into the backend `notify_new_cards` flag so the
-  // send pipeline sees the up-to-date preference. Triggers on resume
-  // (state re-check fires) and on initial mount once ready.
-  useEffect(() => {
-    if (!isNative || !pushNotifications.ready) return;
-    if (!userSettings.settings) return;
-    if (userSettings.settings.notifyNewCards === osGranted) return;
-    void userSettings.patch({ notifyNewCards: osGranted });
-  }, [
-    pushNotifications.ready, osGranted,
     userSettings.settings, userSettings.patch,
   ]);
   /** When set, ConstellationLayout renders our existing CardChat overlay
@@ -1148,11 +1132,11 @@ export default function BigBallLayout() {
       <PreNotificationPrompt
         open={notifPromptShow}
         onAccept={async () => {
-          // The auto-sync effect above handles notifyNewCards once
-          // permissionState updates — we only stamp prompted_at here so
-          // the sheet doesn't re-show.
-          await pushNotifications.requestPermission();
-          await userSettings.patch({ notifyPermissionPrompted: true });
+          const nextPermission = await pushNotifications.requestPermission();
+          await userSettings.patch({
+            notifyPermissionPrompted: true,
+            ...(nextPermission === "granted" ? { notifyNewCards: true } : {}),
+          });
         }}
         onDecline={async () => {
           await userSettings.patch({ notifyPermissionPrompted: true });

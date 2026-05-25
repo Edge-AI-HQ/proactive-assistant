@@ -11,6 +11,7 @@ import AmbientSourceControlsPanel from "@/components/AmbientSourceControlsPanel"
 import AmbientTimelineSummaryStatusPanel from "@/components/AmbientTimelineSummaryStatusPanel";
 import { isNative } from "@/lib/platform";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
+import { useUserSettings } from "@/hooks/useUserSettings";
 
 // AmbientModelsPanel pulls in @pin/capacitor-ambient-ai which is
 // rollup-external for the web build, so it must be loaded lazily and
@@ -398,17 +399,8 @@ function PreferencesSubPage({ onBack }: { onBack: () => void }) {
 /* ── Push Notifications sub-page ───────────────────────────────────── */
 
 /**
- * Push Notifications sub-page — mirrors `MinimalistNotifications` from
- * the design source. Single "Card generation" toggle row wired into
- * `usePushNotifications`: iOS is the source of truth for the
- * permission state (granted / denied / prompt). The toggle's tap path
- * matches the existing `NotificationSettings` behaviour:
- *   - permission "prompt" → fire system permission sheet via
- *     `requestPermission()`.
- *   - permission "granted" or "denied" → iOS won't programmatically
- *     flip from inside the app; deep-link to `app-settings:` so the
- *     user can toggle it there. (Coming back from Settings, the hook
- *     re-checks OS state and the switch reflects the new value.)
+ * Push Notifications sub-page — system permission is a capability,
+ * `notifyNewCards` is the product-level preference.
  *
  * Web has no Capacitor push runtime, so on web the toggle is rendered
  * disabled with the design layout intact — keeps the sub-page non-empty
@@ -416,20 +408,35 @@ function PreferencesSubPage({ onBack }: { onBack: () => void }) {
  */
 function NotificationsSubPage({ onBack }: { onBack: () => void }) {
   const push = usePushNotifications();
+  const userSettings = useUserSettings();
   const unsupported = push.permissionState === "unsupported";
   const granted = push.permissionState === "granted";
   const denied = push.permissionState === "denied";
-  const isOn = granted;
+  const promptable = push.permissionState === "prompt"
+    || push.permissionState === "prompt-with-rationale";
+  const notifyNewCards = userSettings.settings?.notifyNewCards ?? false;
+  const isOn = granted && notifyNewCards;
+  const busy = !push.ready || userSettings.loading || userSettings.saving;
 
-  const handleToggle = () => {
-    if (unsupported) return;
-    if (granted || denied) {
-      // iOS forbids in-app permission changes once decided; the only
-      // path back is the system Settings app.
+  const handleToggle = async () => {
+    if (unsupported || busy) return;
+
+    if (!granted) {
+      if (promptable) {
+        const nextPermission = await push.requestPermission();
+        if (nextPermission === "granted") {
+          void userSettings.patch({ notifyNewCards: true });
+        }
+        return;
+      }
+      // Once iOS notification permission is denied/disabled, only the
+      // system Settings app can re-enable it.
       window.location.href = "app-settings:";
       return;
     }
-    void push.requestPermission();
+
+    if (!userSettings.settings) return;
+    void userSettings.patch({ notifyNewCards: !notifyNewCards });
   };
 
   return (
@@ -445,7 +452,7 @@ function NotificationsSubPage({ onBack }: { onBack: () => void }) {
           type="button"
           onClick={handleToggle}
           aria-pressed={isOn}
-          disabled={unsupported || !push.ready}
+          disabled={unsupported || busy}
           className="glass-card-strong w-full p-4 flex items-center gap-3 text-left hover:bg-white/20 transition-colors disabled:hover:bg-transparent disabled:cursor-default"
         >
           <div className="flex-1 min-w-0">
@@ -457,7 +464,9 @@ function NotificationsSubPage({ onBack }: { onBack: () => void }) {
                   ? "Disabled in system settings — tap to open."
                   : isOn
                     ? "Notify me when your AI surfaces a new proactive card."
-                    : "Tap to enable system notifications."}
+                    : granted
+                      ? "Paused in PIN AI — tap to resume card alerts."
+                      : "Tap to enable system notifications."}
             </p>
           </div>
           <span
