@@ -20,7 +20,7 @@ import { createPortal } from "react-dom";
 import ChatDetailView, { type ChatCard, brandSvg, detectToolIcon } from "./ChatDetailView";
 import { DrawerDetailBody } from "./CardDrawerDetail";
 import { useCardExecutionRun } from "@/hooks/useCardExecutionRun";
-import { PlanPaymentForm, isPayValid, PLANS, type PlanId, type PayMethod, type CardInfo } from "./PlanPaymentForm";
+import { PlanPaymentForm, PLANS, type PlanId, type PayMethod, type CardInfo } from "./PlanPaymentForm";
 import {
   Drawer,
   DrawerContent,
@@ -29,7 +29,7 @@ import {
   DrawerDescription,
 } from "@/components/ui/drawer";
 import CardChat from "@/components/CardChat";
-import { deleteAccount, DeleteAccountError } from "@/lib/api";
+import { createCheckout, deleteAccount, DeleteAccountError } from "@/lib/api";
 import DebugPanel from "@/components/DebugPanel";
 import MainChat from "@/components/MainChat";
 import AgentRunIndicator from "@/components/AgentRunIndicator";
@@ -265,6 +265,8 @@ export default function BigBallLayout() {
   const [paywallPlan, setPaywallPlan] = useState<PlanId>("pro");
   const [paywallPay, setPaywallPay] = useState<PayMethod | null>("apple");
   const [paywallCard_, setPaywallCardInfo] = useState<CardInfo>({ number: "", expiry: "", cvc: "" });
+  const [paywallPending, setPaywallPending] = useState(false);
+  const [paywallError, setPaywallError] = useState<string | null>(null);
   const navigate = useNavigate();
   const weather = useWeather();
   const { user, signOut } = useAuth();
@@ -1111,18 +1113,35 @@ export default function BigBallLayout() {
                 Not now
               </button>
               <button
-                disabled={!isPayValid(paywallPay, paywallCard_)}
-                onClick={() => {
-                  const card = paywallCard;
-                  setPaywallCard(null);
-                  if (card) {
-                    handleExecute({ ...card, locked: false });
+                disabled={paywallPending}
+                onClick={async () => {
+                  setPaywallPending(true);
+                  setPaywallError(null);
+                  try {
+                    const { checkoutUrl } = await createCheckout(paywallPlan, {
+                      successUrl: `${window.location.origin}/?checkout=success`,
+                      cancelUrl: `${window.location.origin}/?checkout=cancel`,
+                    });
+                    if (checkoutUrl) {
+                      window.location.href = checkoutUrl;
+                    } else {
+                      // upgrade/downgrade applied in place — close drawer
+                      setPaywallCard(null);
+                    }
+                  } catch (e) {
+                    setPaywallError(
+                      e instanceof Error ? e.message : "checkout failed",
+                    );
+                  } finally {
+                    setPaywallPending(false);
                   }
                 }}
                 className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl text-background text-[13px] font-semibold transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
                 style={{ background: "linear-gradient(135deg, hsl(292,78%,63%) 0%, hsl(330,80%,65%) 100%)" }}
               >
-                Subscribe · ${PLANS.find((p) => p.id === paywallPlan)?.price}/mo
+                {paywallPending
+                  ? "Loading…"
+                  : `Subscribe · $${PLANS.find((p) => p.id === paywallPlan)?.price}/mo`}
               </button>
             </div>
           </div>

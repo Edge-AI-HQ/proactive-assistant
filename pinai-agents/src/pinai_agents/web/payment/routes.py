@@ -20,13 +20,12 @@ import logging
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
-from ...config import get_web_settings
 from ..auth.deps import User, current_user, get_pool
 from ..db.rls import service_tx, user_scoped_tx
+from . import checkout as checkout_flow
 from . import plans as plans_repo
 from . import subscriptions as subs_repo
 from . import webhook as webhook_handler
-from .stripe_client import requires_stripe
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/payment", tags=["payment"])
@@ -91,75 +90,133 @@ async def create_checkout(
     user: User = Depends(current_user),
     pool=Depends(get_pool),
 ) -> dict:
-    """Create a Stripe Checkout Session for the user.
+    """Create a Stripe Checkout Session OR modify an existing subscription
+    in place (upgrade / downgrade), depending on the user's current state.
 
-    Reuses an existing stripe_customer_id when the user has one (avoids
-    duplicate customers in Stripe). New users get a fresh Customer
-    created with metadata.user_id pointing back at our row.
+    See checkout.create_or_change_subscription for the branch table.
+    Response:
+      - {"checkoutUrl": str, "sessionId": str, "flow": "new"} → redirect.
+      - {"checkoutUrl": null, "flow": "upgrade"|"downgrade"}  → frontend
+        can show success without redirect.
     """
-    stripe = requires_stripe()
-    settings = get_web_settings()
-
-    async with user_scoped_tx(pool, user.id) as conn:
-        plan = await plans_repo.find_by_code(conn, body.planCode)
-        if plan is None:
-            raise HTTPException(400, f"unknown plan: {body.planCode}")
-        # Look up existing customer.
-        async with conn.cursor() as cur:
-            await cur.execute(
-                "SELECT stripe_customer_id FROM users WHERE id = %s", (user.id,),
-            )
-            row = await cur.fetchone()
-        existing_customer_id = (row or {}).get("stripe_customer_id")
-
-    customer_id = existing_customer_id
-    if not customer_id:
-        # Service-tx — new customer creation needs to write users.
-        customer = stripe.Customer.create(
-            email=user.email or None,
-            # supabase_user_id is the primary back-reference (the external
-            # namespace per AGENTS.md "用户标识规约"). internal_user_id is
-            # included as debug-only context — webhook handlers resolve
-            # the user via supabase_user_id.
-            metadata={
-                "supabase_user_id": user.supabase_user_id,
-                "internal_user_id": str(user.id),
-            },
-        )
-        customer_id = customer.id
-        async with service_tx(pool) as conn:
-            await subs_repo.upsert_user_stripe_customer(
-                conn, user_id=user.id, stripe_customer_id=customer_id,
-            )
-
-    # Compute redirect URLs.
-    base = settings.payment_public_base_url or ""
-    success = body.successUrl or (f"{base}/payment/success" if base else None)
-    cancel = body.cancelUrl or (f"{base}/payment/cancel" if base else None)
-    if not success or not cancel:
-        raise HTTPException(
-            500,
-            "checkout success / cancel URLs not configured "
-            "(set PAYMENT_PUBLIC_BASE_URL or pass successUrl/cancelUrl)",
-        )
-
-    session = stripe.checkout.Session.create(
-        mode="subscription",
-        customer=customer_id,
-        line_items=[{"price": plan.stripe_price_id, "quantity": 1}],
-        success_url=success + "?session_id={CHECKOUT_SESSION_ID}",
-        cancel_url=cancel,
-        allow_promotion_codes=True,
-        metadata={
-            "supabase_user_id": user.supabase_user_id,
-            "internal_user_id": str(user.id),
-            "plan_code": plan.plan_code,
-        },
-        subscription_data={
-            "metadata": {"user_id": str(user.id), "plan_code": plan.plan_code},
-        },
+    return await checkout_flow.create_or_change_subscription(
+        pool, user=user, plan_code=body.planCode,
+        success_url_override=body.successUrl,
+        cancel_url_override=body.cancelUrl,
     )
-    return {"checkoutUrl": session.url, "sessionId": session.id}
+
+
+# ── /cancel ──
+
+
+@router.post("/cancel")
+async def cancel_subscription(
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+) -> dict:
+    """Schedule cancellation at end of current period (soft cancel).
+
+    User keeps access until current_period_end; Stripe then transitions
+    to status=canceled and fires customer.subscription.deleted which
+    zeros the LiteLLM budget. No refund (matches PIN Claw policy)."""
+    return await checkout_flow.cancel_subscription(pool, user=user)
+
+
+# ── /customer-portal ──
+
+
+class CustomerPortalRequest(BaseModel):
+    returnUrl: str | None = None
+
+
+@router.post("/customer-portal")
+async def customer_portal(
+    body: CustomerPortalRequest | None = None,
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+) -> dict:
+    """Mint a Stripe Customer Portal URL the frontend redirects to.
+
+    The portal handles: billing history, card update, cancel UI, invoice
+    download. We deliberately don't self-implement any of that surface."""
+    return await checkout_flow.create_customer_portal_session(
+        pool, user=user,
+        return_url_override=(body.returnUrl if body else None),
+    )
+
+
+# ── /reconcile ──
+
+
+@router.post("/reconcile")
+async def reconcile(
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+) -> dict:
+    """Pull the user's current subscription state from Stripe and sync
+    into pai_subscriptions. Used by the frontend on mount + after returning
+    from Stripe Checkout — in local dev we don't have Stripe webhook
+    forwarding so this is the synchronization path."""
+    return await checkout_flow.reconcile_subscription_from_stripe(pool, user=user)
+
+
+# ── /payment-methods ──
+
+
+@router.get("/payment-methods")
+async def payment_methods(
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+) -> dict:
+    """List the user's Stripe-managed cards (real data; no mocks).
+    Returns empty when the user hasn't started checkout yet."""
+    return await checkout_flow.list_payment_methods_for_user(pool, user=user)
+
+
+# ── /invoices ──
+
+
+@router.get("/invoices")
+async def invoices(
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+    limit: int = 12,
+) -> dict:
+    """List the user's invoices from Stripe (real billing history).
+    Includes hosted_invoice_url for the UI to link out to each receipt."""
+    return await checkout_flow.list_invoices_for_user(pool, user=user, limit=limit)
+
+
+# ── /usage ──
+
+
+@router.get("/usage")
+async def usage(
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+) -> dict:
+    """Return the user's LiteLLM spend / max_budget / reset time.
+
+    The UI uses this to render a budget progress bar in the Subscription
+    page. Real data — comes straight from LiteLLM via /key/info."""
+    from ..litellm import client as litellm_client
+    async with user_scoped_tx(pool, user.id) as conn:
+        key = await checkout_flow._virtual_key_for_user(conn, user.id)
+    if not key:
+        return {"spendUsd": 0.0, "maxBudgetUsd": 0.0, "budgetResetAt": None, "budgetDuration": None}
+    info = await litellm_client.get_key_info(key)
+    spend = info.get("spend")
+    if not isinstance(spend, (int, float)):
+        spend = 0.0
+    max_budget = info.get("max_budget")
+    if not isinstance(max_budget, (int, float)):
+        max_budget = 0.0
+    return {
+        "spendUsd": float(spend),
+        "maxBudgetUsd": float(max_budget),
+        "budgetResetAt": info.get("budget_reset_at"),
+        "budgetDuration": info.get("budget_duration"),
+    }
 
 
 # ── /webhook ──

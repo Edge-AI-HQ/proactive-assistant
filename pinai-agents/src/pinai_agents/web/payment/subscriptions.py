@@ -82,6 +82,26 @@ async def upsert_user_stripe_customer(
         )
 
 
+async def get_user_stripe_customer(conn, user_id: int) -> str | None:
+    """Read users.stripe_customer_id for a user. Returns None when the
+    user has never started a Stripe Checkout (no customer created yet).
+
+    This is the canonical "does this user have a Stripe customer?" lookup
+    — it answers BEFORE any subscription is created (pai_subscriptions
+    might be empty even when users.stripe_customer_id is set, because
+    the user might have abandoned Checkout)."""
+    async with conn.cursor() as cur:
+        await cur.execute(
+            "SELECT stripe_customer_id FROM users WHERE id = %s",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+    if not row:
+        return None
+    cid = row.get("stripe_customer_id")
+    return cid if isinstance(cid, str) and cid else None
+
+
 async def sync_from_stripe_subscription(
     conn, *, user_id: int, plan_code: str | None, stripe_subscription: Any,
 ) -> SubscriptionRow:

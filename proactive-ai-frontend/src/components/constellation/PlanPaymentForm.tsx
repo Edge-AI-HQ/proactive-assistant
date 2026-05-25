@@ -20,16 +20,18 @@ interface Plan {
   highlight?: boolean;
 }
 
+// Display credits per plan. Numbers match pai_billing_plans.monthly_refresh_credits
+// (100 credits = $1 USD LiteLLM budget). Updated 2026-05-24 to align with DB.
 export const PLANS: Plan[] = [
-  { id: "basic", name: "Basic", price: 39, credits: "1,500 credits / mo",
+  { id: "basic", name: "Basic", price: 39, credits: "3,200 credits / mo",
     localModel: "Gemma 2B", cloudModel: "Gemini Flash",
     perks: ["Daily card feed", "Connect 3 apps", "Email + Calendar"],
     icon: Star },
-  { id: "pro",   name: "Pro",   price: 99, credits: "6,000 credits / mo",
+  { id: "pro",   name: "Pro",   price: 99, credits: "12,800 credits / mo",
     localModel: "Llama 3 8B", cloudModel: "Claude Sonnet",
     perks: ["Everything in Basic", "Connect unlimited apps", "Voice + Ambient mode", "Priority execution"],
     icon: Zap, highlight: true },
-  { id: "max",   name: "Max",   price: 199, credits: "20,000 credits / mo",
+  { id: "max",   name: "Max",   price: 199, credits: "28,800 credits / mo",
     localModel: "Llama 3 70B", cloudModel: "Claude Opus / GPT-5",
     perks: ["Everything in Pro", "Custom personas", "Team sharing", "Early access models"],
     icon: Crown },

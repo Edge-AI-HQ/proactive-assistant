@@ -22,10 +22,18 @@ import json
 import logging
 from typing import Any
 
+from ..litellm import client as litellm_client
 from . import plans, subscriptions
 from .stripe_client import requires_stripe, requires_webhook_secret
 
 logger = logging.getLogger(__name__)
+
+# 100 LiteLLM credits == $1 USD spend ceiling. PIN Claw mapping; we keep
+# it 1:1 with pai_billing_plans.monthly_refresh_credits.
+_CREDITS_PER_USD = 100
+
+# LiteLLM budget window: refreshes monthly on each invoice.paid.
+_BUDGET_DURATION = "30d"
 
 
 class WebhookSignatureError(Exception):
@@ -155,7 +163,10 @@ async def _handle_checkout_completed(conn, session: Any) -> None:
 async def _handle_subscription_event(conn, sub: Any) -> None:
     """customer.subscription.{created,updated,deleted} — re-fetch for
     canonical state and upsert. Stripe webhooks can arrive out of order;
-    re-fetching avoids stale overwrites."""
+    re-fetching avoids stale overwrites.
+
+    On status=canceled (terminal), also zero the LiteLLM budget so the
+    user can no longer hit paid LLMs."""
     sub_id = _attr(sub, "id")
     if not sub_id:
         return
@@ -182,10 +193,31 @@ async def _handle_subscription_event(conn, sub: Any) -> None:
         conn, user_id=user_id, plan_code=plan_code, stripe_subscription=fresh,
     )
 
+    # On terminal cancel, demote the user back to Free tier (not zero
+    # budget — Free is the default state, $5/30d). Note:
+    # cancel_at_period_end=True alone does NOT trigger this — Stripe
+    # only fires deleted (status=canceled) when the period actually
+    # ends. Customer Portal "cancel immediately" also lands here.
+    from . import checkout as checkout_flow
+    fresh_status = _attr(fresh, "status")
+    if fresh_status == "canceled":
+        await checkout_flow.ensure_user_free_subscription(conn, user_id)
+        await checkout_flow.sync_litellm_budget_for_plan(
+            conn, user_id, "free", reset_spend=True,
+        )
+
 
 async def _handle_invoice_paid(conn, invoice: Any) -> None:
-    """invoice.paid arrives on each renewal. We re-sync the subscription
-    so current_period_{start,end} advance to the next period."""
+    """invoice.paid arrives on each renewal. Two jobs:
+      1. Re-sync pai_subscriptions so current_period_{start,end} advance.
+      2. Refresh the LiteLLM virtual key budget:
+         - max_budget = plan.monthly_refresh_credits / 100 (USD ceiling)
+         - budget_duration = '30d' (LiteLLM rebases window to NOW)
+         - spend = 0 (explicit reset)
+
+    invoice.paid is the SSOT for LiteLLM budget refresh. Other invoice.*
+    events do NOT touch LiteLLM (invoice.payment_succeeded falls through
+    to dispatch as skip)."""
     sub_id = _attr(invoice, "subscription")
     if isinstance(sub_id, dict):
         sub_id = sub_id.get("id")
@@ -207,6 +239,43 @@ async def _handle_invoice_paid(conn, invoice: Any) -> None:
     await subscriptions.sync_from_stripe_subscription(
         conn, user_id=user_id, plan_code=plan_code, stripe_subscription=fresh,
     )
+
+    # ── LiteLLM budget refresh ──
+    if plan_code is None:
+        logger.warning(
+            "invoice.paid for user=%d but plan_code unresolved; LiteLLM "
+            "budget not refreshed", user_id,
+        )
+        return
+    plan = await plans.find_by_code(conn, plan_code)
+    if plan is None:
+        return
+    virtual_key = await _virtual_key_for_user(conn, user_id)
+    if not virtual_key:
+        logger.warning(
+            "invoice.paid: user=%d has no litellm_virtual_key; budget not "
+            "refreshed", user_id,
+        )
+        return
+    budget_usd = plan.monthly_refresh_credits / _CREDITS_PER_USD
+    try:
+        await litellm_client.update_key(
+            virtual_key=virtual_key,
+            max_budget_usd=budget_usd,
+            budget_duration=_BUDGET_DURATION,
+            reset_spend=True,
+        )
+        logger.info(
+            "litellm budget refreshed: user=%d plan=%s max_budget=$%.2f",
+            user_id, plan_code, budget_usd,
+        )
+    except litellm_client.LiteLLMError as e:
+        # Don't fail the whole webhook on LiteLLM hiccup — Stripe state
+        # is already persisted; spend tracking just drifts until next
+        # invoice.paid retry. Log and continue.
+        logger.exception(
+            "litellm /key/update failed for user=%d: %s", user_id, e,
+        )
 
 
 # ── helpers ──
@@ -260,6 +329,26 @@ async def _plan_code_for_subscription(conn, sub: Any) -> str | None:
         return None
     plan = await plans.find_by_stripe_price(conn, price_id)
     return plan.plan_code if plan else None
+
+
+async def _virtual_key_for_user(conn, user_id: int) -> str | None:
+    """Fetch the user's LiteLLM virtual key from users table. Returns
+    None if the user has no key provisioned yet (will be set on next
+    chat-side `ensure_user_litellm_key` call).
+
+    Mirrors checkout._virtual_key_for_user — duplicated here to avoid
+    a webhook → checkout circular import (checkout already imports
+    plans + subscriptions which webhook also uses)."""
+    async with conn.cursor() as cur:
+        await cur.execute(
+            "SELECT litellm_virtual_key FROM users WHERE id = %s",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+    if not row:
+        return None
+    key = row.get("litellm_virtual_key")
+    return key if isinstance(key, str) and key else None
 
 
 def _event_to_dict(event: Any) -> dict[str, Any]:

@@ -136,11 +136,25 @@ async def _provision_and_persist(
     if stale_tokens:
         await delete_keys(stale_tokens)
 
+    # Read the Free tier budget from pai_billing_plans (SSOT). Every
+    # newly-provisioned user starts on Free; webhook on `invoice.paid`
+    # later bumps the budget when they subscribe. Falls back to the env
+    # default if 'free' row is missing (shouldn't happen post-058).
+    from ..payment import plans as plans_repo
+    async with service_tx(pool) as conn:
+        free_plan = await plans_repo.find_by_code(conn, "free")
+    if free_plan is not None:
+        budget_usd = free_plan.monthly_refresh_credits / 100.0
+        budget_duration = "30d"
+    else:
+        budget_usd = s.litellm_default_budget_usd
+        budget_duration = s.litellm_default_budget_duration
+
     raw_key = await generate_key(
         user_id=litellm_uid,
         key_alias=alias,
-        max_budget_usd=s.litellm_default_budget_usd,
-        budget_duration=s.litellm_default_budget_duration,
+        max_budget_usd=budget_usd,
+        budget_duration=budget_duration,
         rpm_limit=s.litellm_default_rpm_limit,
         tpm_limit=s.litellm_default_tpm_limit,
         models=_allowed_models(required_models or ()),
@@ -153,9 +167,13 @@ async def _provision_and_persist(
             "WHERE id = %s",
             (raw_key, user.id),
         )
+        # Also make sure they have a pai_subscriptions row on Free tier.
+        from ..payment.checkout import ensure_user_free_subscription
+        await ensure_user_free_subscription(conn, user.id)
     logger.info(
-        "litellm: provisioned virtual key user=%d alias=%s last4=%s",
-        user.id, alias, raw_key[-4:],
+        "litellm: provisioned virtual key user=%d alias=%s last4=%s "
+        "budget=$%.2f (Free tier)",
+        user.id, alias, raw_key[-4:], budget_usd,
     )
     return raw_key
 

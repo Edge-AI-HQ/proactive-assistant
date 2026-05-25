@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Sparkles, Check, Bell, SlidersHorizontal, Radio, ChevronRight, ArrowLeft,
@@ -12,6 +12,14 @@ import AmbientTimelineSummaryStatusPanel from "@/components/AmbientTimelineSumma
 import { isNative } from "@/lib/platform";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
 import { useUserSettings } from "@/hooks/useUserSettings";
+import {
+  cancelCurrentSubscription, createCheckout, getCurrentSubscription,
+  getCustomerPortalUrl, getUsage, listInvoices, listPaymentMethods,
+  reconcileSubscription,
+  type InvoiceEntry, type PaymentMethodEntry,
+  type PlanCode, type SubscriptionState, type UsageInfo,
+} from "@/lib/api";
+import { PLANS } from "./PlanPaymentForm";
 
 // AmbientModelsPanel pulls in @pin/capacitor-ambient-ai which is
 // rollup-external for the web build, so it must be loaded lazily and
@@ -226,11 +234,179 @@ const SUBSCRIPTION_PRO_FEATURES = [
 ];
 
 /**
- * Subscription sub-page — mirrors `MinimalistSubscription` from the
- * design source. Plan / payment / billing data is presentation-only
- * mock for now; wiring to real Stripe state happens in a follow-up.
+ * Subscription sub-page — fetches real Stripe-backed state from
+ * /api/payment/subscription, surfaces Manage (Customer Portal) and
+ * Cancel (cancel_at_period_end) actions. Billing history, card update,
+ * invoice download all live inside the Stripe Customer Portal, not
+ * here — we deliberately don't self-implement that surface.
  */
 function SubscriptionSubPage({ onBack }: { onBack: () => void }) {
+  const [sub, setSub] = useState<SubscriptionState | null>(null);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethodEntry[]>([]);
+  const [invoices, setInvoices] = useState<InvoiceEntry[]>([]);
+  const [usage, setUsage] = useState<UsageInfo | null>(null);
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [actionPending, setActionPending] = useState(false);
+  const [pendingPlanCode, setPendingPlanCode] = useState<PlanCode | null>(null);
+  const [actionToast, setActionToast] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [showPlanPicker, setShowPlanPicker] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      setLoading(true);
+      // Stripe webhook isn't forwarded in local dev → reconcile pulls
+      // canonical state from Stripe + upserts pai_subscriptions. Silent
+      // failure (reconcile is a "nice to have"; getCurrentSubscription
+      // is the authoritative read below).
+      let multipleActive = false;
+      try {
+        const r = await reconcileSubscription();
+        // Only warn when 2+ subs are actually going to bill — a sub in
+        // cancel_at_period_end will wind down on its own, not a duplicate.
+        if ((r.activelyRenewing ?? r.totalActive ?? 0) > 1) multipleActive = true;
+      } catch {
+        /* ignored — reconcile may error on edge cases like no customer */
+      }
+      const [s, pms, invs, u] = await Promise.all([
+        getCurrentSubscription(),
+        listPaymentMethods().catch(() => [] as PaymentMethodEntry[]),
+        listInvoices(12).catch(() => [] as InvoiceEntry[]),
+        getUsage().catch(() => null as UsageInfo | null),
+      ]);
+      setSub(s);
+      setPaymentMethods(pms);
+      setInvoices(invs);
+      setUsage(u);
+      setError(null);
+      if (multipleActive) {
+        setActionToast(
+          "Multiple actively-renewing subscriptions detected on Stripe — open Customer Portal to cancel duplicates.",
+        );
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "load failed");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const onSubscribeOrChange = async (planCode: PlanCode) => {
+    if (actionPending) return;
+    setActionPending(true);
+    setPendingPlanCode(planCode);
+    setActionToast(null);
+    setError(null);
+    try {
+      const r = await createCheckout(planCode, {
+        successUrl: `${window.location.origin}/?checkout=success`,
+        cancelUrl: `${window.location.origin}/?checkout=cancel`,
+      });
+      if (r.checkoutUrl) {
+        // new subscription — go to Stripe Checkout for card entry + trial
+        window.location.href = r.checkoutUrl;
+        return;
+      }
+      // upgrade/downgrade applied in place via Stripe.Subscription.modify
+      setActionToast(
+        r.flow === "upgrade"
+          ? "Upgraded — new plan effective now"
+          : "Downgrade scheduled — takes effect next period",
+      );
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "checkout failed");
+    } finally {
+      setActionPending(false);
+      setPendingPlanCode(null);
+    }
+  };
+
+  const onManage = async () => {
+    setActionPending(true);
+    setError(null);
+    try {
+      const { portalUrl } = await getCustomerPortalUrl({
+        returnUrl: window.location.href,
+      });
+      window.open(portalUrl, "_blank", "noopener");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "portal failed");
+    } finally {
+      setActionPending(false);
+    }
+  };
+
+  const performCancel = async () => {
+    setConfirmingCancel(false);
+    setActionPending(true);
+    setError(null);
+    try {
+      await cancelCurrentSubscription();
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "cancel failed");
+    } finally {
+      setActionPending(false);
+    }
+  };
+
+  // Inline two-step confirm — replaces window.confirm() which can hang in
+  // Capacitor / certain WebView contexts and leave actionPending pending
+  // forever. The Cancel button toggles confirmingCancel, then a second
+  // tap on the same button (now "Yes, cancel") performs the cancel.
+  const onCancel = () => {
+    if (!confirmingCancel) {
+      setConfirmingCancel(true);
+      return;
+    }
+    void performCancel();
+  };
+
+  const planLabel = sub?.planCode
+    ? sub.planCode.charAt(0).toUpperCase() + sub.planCode.slice(1)
+    : "Free";
+
+  const periodEnd = sub?.currentPeriodEnd
+    ? new Date(sub.currentPeriodEnd).toLocaleDateString("en-US", {
+        year: "numeric", month: "short", day: "numeric",
+      })
+    : null;
+
+  const statusLabel = (() => {
+    if (!sub) return "Free";
+    if (sub.planCode === "free") return "Free";
+    if (sub.status === "trialing") return "Trial";
+    if (sub.status === "active" && sub.cancelAtPeriodEnd) return "Canceling";
+    if (sub.status === "active") return "Active";
+    if (sub.status === "past_due") return "Past due";
+    if (sub.status === "canceled") return "Canceled";
+    if (sub.status === "inactive") return "Free";
+    return sub.status;
+  })();
+
+  const isFree = !sub || sub.planCode == null || sub.planCode === "free";
+  const currentPlanInfo = PLANS.find((p) => p.id === sub?.planCode);
+  const currentFeatures = currentPlanInfo?.perks ?? [];
+  const priceLine = (() => {
+    if (isFree) return "$5 / month budget · upgrade for more";
+    const head = currentPlanInfo?.price ? `$${currentPlanInfo.price} / mo` : "—";
+    if (sub.cancelAtPeriodEnd && periodEnd) return `${head} · ends ${periodEnd}`;
+    if (sub.status === "trialing" && periodEnd) return `${head} · trial ends ${periodEnd}`;
+    if (periodEnd) return `${head} · renews on ${periodEnd}`;
+    return head;
+  })();
+  const otherPlansLabel = (() => {
+    if (isFree) return "Basic / Pro / Max";
+    const others = PLANS.filter((p) => p.id !== sub?.planCode).map((p) => p.name);
+    return others.length > 0 ? others.join(" / ") : "—";
+  })();
+
   return (
     <div className="flex flex-col h-full px-4 pt-14 pb-2 overflow-y-auto">
       <SubPageHeader
@@ -239,118 +415,326 @@ function SubscriptionSubPage({ onBack }: { onBack: () => void }) {
         onBack={onBack}
       />
 
-      {/* Current plan */}
-      <div className="glass-card-strong p-4 mb-3">
-        <div className="flex items-center gap-3 mb-3">
-          <div className="w-10 h-10 rounded-xl bg-[hsl(304_75%_63%/0.12)] flex items-center justify-center flex-shrink-0">
-            <Sparkles size={16} strokeWidth={1.8} className="text-[hsl(304_75%_63%)]" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-baseline gap-2">
-              <span className="text-base font-semibold text-foreground">Pro</span>
-              <span className="text-[10px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded-md bg-[hsl(304_75%_63%/0.1)] text-[hsl(304_75%_63%)]">
-                Active
-              </span>
-            </div>
-            <p className="text-[11px] text-foreground/55 mt-0.5">
-              $99 / mo · renews on Jun 1, 2026
-            </p>
-          </div>
+      {loading && (
+        <div className="text-[12px] text-foreground/55 py-4">
+          Loading subscription…
         </div>
-        <div className="grid grid-cols-2 gap-x-3 gap-y-1 pt-1">
-          {SUBSCRIPTION_PRO_FEATURES.map((f) => (
-            <div key={f} className="flex items-center gap-1.5">
-              <Check size={11} strokeWidth={2.5} className="text-[hsl(304_75%_63%)] flex-shrink-0" />
-              <span className="text-[11px] text-foreground/70 truncate">{f}</span>
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
 
-      {/* Quick actions */}
-      <div className="grid grid-cols-2 gap-2.5 mb-5">
-        <button className="glass-card-strong p-3 text-left hover:bg-white/20 transition-colors">
-          <p className="text-[10px] font-semibold text-foreground/45 uppercase tracking-[0.12em] mb-0.5">
-            Switch plan
-          </p>
-          <p className="text-[13px] font-semibold text-foreground">Basic / Max</p>
-        </button>
-        <button className="glass-card-strong p-3 text-left hover:bg-white/20 transition-colors">
-          <p className="text-[10px] font-semibold text-foreground/45 uppercase tracking-[0.12em] mb-0.5">
-            Add credits
-          </p>
-          <p className="text-[13px] font-semibold text-foreground">One-time top-up</p>
-        </button>
-      </div>
+      {error && (
+        <div className="rounded-xl border border-[hsl(0_72%_60%/0.25)] bg-[hsl(0_72%_60%/0.04)] px-3 py-2 mb-3 text-[12px] text-[hsl(0_72%_45%)]">
+          {error}
+        </div>
+      )}
 
-      {/* Payment method */}
-      <div className="glass-card-strong p-4 mb-3">
-        <div className="flex items-center gap-2 mb-2">
-          <CreditCard size={13} strokeWidth={1.8} className="text-foreground/55" />
-          <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/55">
-            Payment method
-          </span>
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-7 rounded-md bg-foreground/85 text-background flex items-center justify-center text-[10px] font-bold tracking-wider">
-              VISA
-            </div>
-            <div className="min-w-0">
-              <p className="text-[13px] font-semibold text-foreground">•••• 4242</p>
-              <p className="text-[11px] text-foreground/50">Expires 09 / 27 · Default</p>
-            </div>
-          </div>
-          <button className="text-[11px] font-semibold text-foreground border border-foreground/15 rounded-lg px-2.5 py-1 hover:bg-foreground/[0.04] transition-colors">
-            Update
-          </button>
-        </div>
-      </div>
-
-      {/* Billing history */}
-      <div className="glass-card-strong p-4 mb-3">
-        <div className="flex items-center gap-2 mb-3">
-          <Receipt size={13} strokeWidth={1.8} className="text-foreground/55" />
-          <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/55">
-            Billing history
-          </span>
-          <span className="text-[10px] text-foreground/40 ml-auto">{SUBSCRIPTION_BILLING_HISTORY.length} entries</span>
-        </div>
-        <ul className="divide-y divide-foreground/[0.06]">
-          {SUBSCRIPTION_BILLING_HISTORY.map((b) => (
-            <li key={b.date} className="py-2.5 flex items-center gap-3">
-              <Calendar size={13} strokeWidth={1.7} className="text-foreground/40 shrink-0" />
+      {!loading && sub && (
+        <>
+          {/* 1. Current plan — adapts to sub state. Features grid uses PLANS perks for active plan; hidden for Free. */}
+          <div className="glass-card-strong p-4 mb-3">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-xl bg-[hsl(304_75%_63%/0.12)] flex items-center justify-center flex-shrink-0">
+                <Sparkles size={16} strokeWidth={1.8} className="text-[hsl(304_75%_63%)]" />
+              </div>
               <div className="flex-1 min-w-0">
-                <p className="text-[12.5px] font-medium text-foreground/85 truncate">
-                  {b.description}
-                </p>
-                <p className="text-[11px] text-foreground/45">{b.date}</p>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-base font-semibold text-foreground">{planLabel}</span>
+                  <span className="text-[10px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded-md bg-[hsl(304_75%_63%/0.1)] text-[hsl(304_75%_63%)]">
+                    {statusLabel}
+                  </span>
+                </div>
+                <p className="text-[11px] text-foreground/55 mt-0.5">{priceLine}</p>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <span className="text-[13px] font-semibold text-foreground tabular-nums">{b.amount}</span>
-                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-md bg-foreground/[0.06] text-foreground/55">
-                  {b.status}
-                </span>
+            </div>
+            {currentFeatures.length > 0 && (
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1 pt-1">
+                {currentFeatures.map((f) => (
+                  <div key={f} className="flex items-center gap-1.5">
+                    <Check size={11} strokeWidth={2.5} className="text-[hsl(304_75%_63%)] flex-shrink-0" />
+                    <span className="text-[11px] text-foreground/70 truncate">{f}</span>
+                  </div>
+                ))}
               </div>
-            </li>
-          ))}
-        </ul>
-      </div>
+            )}
 
-      {/* Cancel */}
-      <button
-        className="w-full rounded-2xl border border-[hsl(0_72%_60%/0.25)] bg-[hsl(0_72%_60%/0.04)] px-4 py-3.5 flex items-center gap-3 text-left hover:bg-[hsl(0_72%_60%/0.08)] transition-colors"
-      >
-        <div className="w-10 h-10 rounded-xl bg-[hsl(0_72%_60%/0.10)] flex items-center justify-center flex-shrink-0">
-          <AlertTriangle size={16} strokeWidth={1.8} className="text-[hsl(0_72%_50%)]" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-[hsl(0_72%_45%)]">Cancel subscription</p>
-          <p className="text-[11px] text-foreground/50 mt-0.5">
-            Keep Pro features until Jun 1, then downgrade to Basic.
-          </p>
-        </div>
-      </button>
+            {/* Budget usage progress — real LiteLLM spend / max_budget */}
+            {usage && usage.maxBudgetUsd > 0 && (() => {
+              const pct = (usage.spendUsd / usage.maxBudgetUsd) * 100;
+              const clamped = Math.min(100, Math.max(0, pct));
+              const overBudget = usage.spendUsd >= usage.maxBudgetUsd;
+              const barColor = overBudget
+                ? "hsl(0 75% 55%)"
+                : pct >= 80
+                  ? "hsl(40 95% 55%)"
+                  : "hsl(150 70% 50%)";
+              return (
+                <div className={`${currentFeatures.length > 0 ? "mt-3 pt-3 border-t border-foreground/[0.06]" : "mt-2"}`}>
+                  <div className="flex items-center justify-between text-[11px] mb-1.5">
+                    <span className="text-foreground/55 uppercase tracking-[0.12em] font-semibold">
+                      Budget this period
+                    </span>
+                    <span className="text-foreground/85 font-medium tabular-nums">
+                      ${usage.spendUsd.toFixed(2)} / ${usage.maxBudgetUsd.toFixed(2)}
+                      <span className="text-foreground/45 ml-1">({Math.round(pct)}%)</span>
+                    </span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-foreground/[0.08] overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-500"
+                      style={{ width: `${clamped}%`, background: barColor }}
+                    />
+                  </div>
+                  {overBudget && (
+                    <p className="text-[11px] text-[hsl(0_72%_45%)] mt-1.5">
+                      Budget exceeded — LLM calls blocked until {isFree ? "you upgrade your plan" : "next renewal"}.
+                    </p>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+
+          {actionToast && (
+            <div className="rounded-xl border border-[hsl(304_75%_63%/0.25)] bg-[hsl(304_75%_63%/0.05)] px-3 py-2 mb-3 text-[12px] text-foreground/75">
+              {actionToast}
+            </div>
+          )}
+
+          {/* 2. Quick actions — Switch plan expands the picker below; Add credits is a placeholder until we wire one-time top-ups. */}
+          <div className="grid grid-cols-2 gap-2.5 mb-3">
+            <button
+              onClick={() => setShowPlanPicker((v) => !v)}
+              className="glass-card-strong p-3 text-left hover:bg-white/20 transition-colors"
+            >
+              <p className="text-[10px] font-semibold text-foreground/45 uppercase tracking-[0.12em] mb-0.5">
+                {showPlanPicker ? "Hide options" : isFree ? "Upgrade plan" : "Switch plan"}
+              </p>
+              <p className="text-[13px] font-semibold text-foreground">{otherPlansLabel}</p>
+            </button>
+            <button
+              disabled
+              className="glass-card-strong p-3 text-left opacity-60 cursor-not-allowed"
+            >
+              <p className="text-[10px] font-semibold text-foreground/45 uppercase tracking-[0.12em] mb-0.5">
+                Add credits
+              </p>
+              <p className="text-[13px] font-semibold text-foreground/70">Coming soon</p>
+            </button>
+          </div>
+
+          {/* 2a. Plan picker — revealed when Switch plan is tapped. Wires to /api/payment/create-checkout (handles new / upgrade / downgrade). */}
+          {showPlanPicker && (
+            <div className="space-y-2 mb-5">
+              {PLANS.map((p) => {
+                const isCurrent = p.id === sub.planCode;
+                const isPending = pendingPlanCode === p.id;
+                return (
+                  <button
+                    key={p.id}
+                    disabled={actionPending || isCurrent}
+                    onClick={() => onSubscribeOrChange(p.id)}
+                    className="w-full glass-card-strong p-4 text-left transition-colors hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
+                    style={isCurrent ? { borderColor: "hsla(292 78% 63% / 0.45)" } : undefined}
+                  >
+                    <div className="flex items-baseline gap-2 mb-1">
+                      <span className="text-[14px] font-semibold text-foreground">{p.name}</span>
+                      <span className="text-[12px] text-foreground/80">${p.price}/mo</span>
+                      {isCurrent && (
+                        <span className="text-[9px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded-md bg-[hsl(292_78%_63%/0.12)] text-[hsl(292_78%_63%)] ml-auto">
+                          Current
+                        </span>
+                      )}
+                      {isPending && (
+                        <span className="text-[10px] text-foreground/55 ml-auto">Loading…</span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-foreground/55">{p.credits}</p>
+                  </button>
+                );
+              })}
+              <p className="text-[11px] text-foreground/45 mt-2 px-1">
+                {isFree
+                  ? "7-day free trial. Card required. Cancel anytime."
+                  : "Upgrades apply immediately. Downgrades take effect next period."}
+              </p>
+            </div>
+          )}
+
+          {/* 3. Payment method — real Stripe cards. Update opens Stripe Customer Portal. */}
+          <div className="glass-card-strong p-4 mb-3">
+            <div className="flex items-center gap-2 mb-2">
+              <CreditCard size={13} strokeWidth={1.8} className="text-foreground/55" />
+              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/55">
+                Payment method
+              </span>
+              <button
+                onClick={onManage}
+                disabled={actionPending}
+                className="text-[10px] font-semibold text-foreground/55 hover:text-foreground ml-auto disabled:opacity-50"
+              >
+                Update on Stripe →
+              </button>
+            </div>
+            {paymentMethods.length === 0 ? (
+              <p className="text-[12px] text-foreground/55 py-1">
+                {isFree ? "No card on file — added at checkout." : "No payment method on file."}
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {paymentMethods.map((pm) => {
+                  // Pick display shape per Stripe PaymentMethod type.
+                  let chipLabel = "CARD";
+                  let primary = "Payment method";
+                  let secondary: string | null = null;
+                  if (pm.type === "card") {
+                    chipLabel = (pm.brand ?? "card").toUpperCase().slice(0, 5);
+                    primary = `•••• ${pm.last4 ?? "····"}`;
+                    secondary = pm.expMonth != null && pm.expYear != null
+                      ? `Expires ${String(pm.expMonth).padStart(2, "0")} / ${String(pm.expYear).slice(-2)}`
+                      : null;
+                  } else if (pm.type === "link") {
+                    chipLabel = "LINK";
+                    primary = "Stripe Link";
+                    secondary = pm.linkEmail ?? null;
+                  } else if (pm.type === "apple_pay") {
+                    chipLabel = " ";
+                    primary = "Apple Pay";
+                  } else if (pm.type === "google_pay") {
+                    chipLabel = "G PAY";
+                    primary = "Google Pay";
+                  } else if (pm.type === "us_bank_account") {
+                    chipLabel = "BANK";
+                    primary = `Bank ${pm.last4 ? "•••• " + pm.last4 : "account"}`;
+                  } else {
+                    chipLabel = pm.type.toUpperCase().slice(0, 5);
+                    primary = pm.type;
+                  }
+                  return (
+                    <li key={pm.id} className="flex items-center gap-3">
+                      <div className="w-10 h-7 rounded-md bg-foreground/85 text-background flex items-center justify-center text-[10px] font-bold tracking-wider">
+                        {chipLabel}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[13px] font-semibold text-foreground truncate">
+                          {primary}
+                          {pm.isDefault && (
+                            <span className="ml-2 text-[10px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded-md bg-[hsl(292_78%_63%/0.12)] text-[hsl(292_78%_63%)]">
+                              Default
+                            </span>
+                          )}
+                        </p>
+                        {secondary && (
+                          <p className="text-[11px] text-foreground/50 truncate">{secondary}</p>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+
+          {/* 4. Billing history — real Stripe invoices. Each row links to hosted_invoice_url. */}
+          <div className="glass-card-strong p-4 mb-3">
+            <div className="flex items-center gap-2 mb-3">
+              <Receipt size={13} strokeWidth={1.8} className="text-foreground/55" />
+              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/55">
+                Billing history
+              </span>
+              <button
+                onClick={onManage}
+                disabled={actionPending}
+                className="text-[10px] font-semibold text-foreground/55 hover:text-foreground ml-auto disabled:opacity-50"
+              >
+                View all on Stripe →
+              </button>
+            </div>
+            {invoices.length === 0 ? (
+              <p className="text-[12px] text-foreground/55 py-1">No payments yet.</p>
+            ) : (
+              <ul className="divide-y divide-foreground/[0.06]">
+                {invoices.map((inv) => {
+                  const dateStr = new Date(inv.createdAt * 1000).toLocaleDateString("en-US", {
+                    year: "numeric", month: "short", day: "numeric",
+                  });
+                  const amount = `$${(inv.amountPaidCents / 100).toFixed(2)}`;
+                  const statusLabel = inv.status === "paid" ? "Paid"
+                    : inv.status === "open" ? "Open"
+                    : inv.status === "draft" ? "Draft"
+                    : inv.status === "void" ? "Void"
+                    : inv.status === "uncollectible" ? "Failed"
+                    : inv.status;
+                  return (
+                    <li key={inv.id} className="py-2.5">
+                      <a
+                        href={inv.hostedInvoiceUrl ?? "#"}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-3 hover:bg-white/10 -mx-2 px-2 rounded-md transition-colors"
+                      >
+                        <Calendar size={13} strokeWidth={1.7} className="text-foreground/40 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[12.5px] font-medium text-foreground/85 truncate">
+                            {inv.description}
+                          </p>
+                          <p className="text-[11px] text-foreground/45">{dateStr}</p>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[13px] font-semibold text-foreground tabular-nums">{amount}</span>
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-md bg-foreground/[0.06] text-foreground/55">
+                            {statusLabel}
+                          </span>
+                        </div>
+                      </a>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+
+          {/* 5. Cancel — wired to /api/payment/cancel (cancel_at_period_end).
+              Two-tap inline confirm (avoids window.confirm hangs in some
+              webview contexts). Disabled when Free or already scheduled. */}
+          <div className="flex items-stretch gap-2">
+            <button
+              onClick={onCancel}
+              disabled={actionPending || isFree || sub.cancelAtPeriodEnd}
+              className="flex-1 rounded-2xl border border-[hsl(0_72%_60%/0.25)] bg-[hsl(0_72%_60%/0.04)] px-4 py-3.5 flex items-center gap-3 text-left hover:bg-[hsl(0_72%_60%/0.08)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <div className="w-10 h-10 rounded-xl bg-[hsl(0_72%_60%/0.10)] flex items-center justify-center flex-shrink-0">
+                <AlertTriangle size={16} strokeWidth={1.8} className="text-[hsl(0_72%_50%)]" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-[hsl(0_72%_45%)]">
+                  {sub.cancelAtPeriodEnd
+                    ? "Cancellation scheduled"
+                    : confirmingCancel
+                      ? "Tap again to confirm"
+                      : "Cancel subscription"}
+                </p>
+                <p className="text-[11px] text-foreground/50 mt-0.5">
+                  {isFree
+                    ? "No active subscription to cancel"
+                    : sub.cancelAtPeriodEnd && periodEnd
+                      ? `Plan ends ${periodEnd}`
+                      : confirmingCancel
+                        ? `You'll keep ${planLabel} features until ${periodEnd ?? "period end"}`
+                        : `Keep ${planLabel} features until ${periodEnd ?? "period end"}, then your plan ends.`}
+                </p>
+              </div>
+            </button>
+            {confirmingCancel && !sub.cancelAtPeriodEnd && (
+              <button
+                onClick={() => setConfirmingCancel(false)}
+                disabled={actionPending}
+                className="px-3 rounded-2xl border border-foreground/15 bg-foreground/[0.02] text-[12px] text-foreground/65 hover:bg-foreground/[0.06] transition-colors disabled:opacity-50"
+              >
+                Keep it
+              </button>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
