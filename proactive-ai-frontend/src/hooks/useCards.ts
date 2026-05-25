@@ -157,12 +157,14 @@ export function useCards(opts?: { limit?: number; cacheScope?: string | null }):
     cards: cacheScope ? readCachedCards(limit, cacheScope) ?? [] : [],
     error: null,
   }));
-  const inFlightRef = useRef(false);
+  const inFlightRef = useRef<{ signal: AbortSignal | null } | null>(null);
 
   const load = useCallback(
     async (signal?: AbortSignal): Promise<void> => {
-      if (inFlightRef.current) return;
-      inFlightRef.current = true;
+      const currentRequest = inFlightRef.current;
+      if (currentRequest && !(currentRequest.signal?.aborted ?? false)) return;
+      const request = { signal: signal ?? null };
+      inFlightRef.current = request;
       try {
         const res = await proxyFetch(`/cards?limit=${encodeURIComponent(limit)}`, { signal });
         if (signal?.aborted) return;
@@ -181,11 +183,20 @@ export function useCards(opts?: { limit?: number; cacheScope?: string | null }):
         // Don't blank out previously-loaded cards on a transient error.
         setState((prev) => ({ ...prev, loading: false, error: msg }));
       } finally {
-        inFlightRef.current = false;
+        if (inFlightRef.current === request) {
+          inFlightRef.current = null;
+        }
       }
     },
     [cacheScope, limit],
   );
+
+  useEffect(() => {
+    if (!cacheScope) return;
+    const cached = readCachedCards(limit, cacheScope);
+    if (!cached) return;
+    setState((prev) => ({ ...prev, cards: cached, error: null }));
+  }, [cacheScope, limit]);
 
   useEffect(() => {
     const controller = new AbortController();
