@@ -1,4 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 
 import { EditableUserMessageComposer } from "./EditableUserMessageComposer";
@@ -54,5 +56,19 @@ describe("EditableUserMessageComposer", () => {
     expect((editor as HTMLTextAreaElement).selectionStart).toBe(
       "What should I focus on today?".length,
     );
+  });
+});
+
+describe("MainChatView reasoning rendering", () => {
+  test("does not parse inline thinking tags as displayable reasoning", () => {
+    const sourcePath = resolve(
+      process.cwd(),
+      "src/components/main-chat/MainChatView.tsx",
+    );
+    const source = readFileSync(sourcePath, "utf8");
+
+    expect(source).not.toContain("parseThinkingFromText");
+    expect(source).not.toContain("<thinking>");
+    expect(source).not.toContain("<think>");
   });
 });

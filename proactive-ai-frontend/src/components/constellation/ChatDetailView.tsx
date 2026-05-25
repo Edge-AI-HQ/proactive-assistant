@@ -6,6 +6,8 @@ import { DrawerDetailBody, executeArtifactToLovable } from "./CardDrawerDetail";
 import BrowserPanel from "../browser-view/BrowserPanel";
 import type { SheetStage } from "../browser-view/BrowserView";
 import { useBrowserSession } from "@/hooks/useBrowserSession";
+import MainChatView from "@/components/main-chat/MainChatView";
+import { useProactiveChatRuntime } from "@/components/chat/useProactiveChatRuntime";
 import {
   useCardExecutionRun,
   type LastMessagePayload,
@@ -946,7 +948,142 @@ function statusToTaskState(
   return "running";
 }
 
+function cardThreadSessionKey(card: ChatCard, runId?: string): string {
+  const raw = (runId ?? String(card.id)).trim();
+  return raw.startsWith("card-thread-") ? raw : `card-thread-${raw}`;
+}
+
+function parseSources(line2: string): string[] {
+  return line2
+    .replace("Sources:", "")
+    .replace("Sources: ", "")
+    .split("·")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function buildCardContext(card: ChatCard): Record<string, unknown> {
+  return {
+    title: card.title,
+    category: card.category,
+    tag: card.tag,
+    summary: card.line1,
+    whyNow: card.whyNow ?? card.line1,
+    sources: parseSources(card.line2),
+    primaryAction: card.detail?.willExecute
+      ? { label: card.detail.willExecute, type: "confirm" }
+      : undefined,
+    detail: card.detail,
+  };
+}
+
+function CardContextHeaderSlot({
+  card,
+  onOpen,
+}: {
+  card: ChatCard;
+  onOpen: () => void;
+}) {
+  const summary = card.detail?.willExecute || card.line1;
+  return (
+    <div className="px-4 pt-3 pb-1">
+      <button
+        type="button"
+        aria-label="View card details"
+        onClick={onOpen}
+        className="w-full rounded-2xl px-4 py-3 border border-foreground/8 text-left group hover:bg-background/65 transition-colors"
+        style={{
+          background: "rgba(255,255,255,0.48)",
+          backdropFilter: "blur(18px)",
+          WebkitBackdropFilter: "blur(18px)",
+        }}
+      >
+        <div className="flex items-start gap-2.5">
+          <div className="flex-1 min-w-0">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-foreground/40 mb-1">
+              Context
+            </p>
+            <p className="text-[13px] text-foreground/78 leading-relaxed line-clamp-2">
+              {summary}
+            </p>
+          </div>
+          <ChevronUp
+            size={13}
+            className="text-foreground/30 group-hover:text-foreground/60 transition-colors shrink-0 mt-0.5"
+          />
+        </div>
+      </button>
+    </div>
+  );
+}
+
 export default function ChatDetailView({
+  card,
+  runId,
+  onBack,
+  bootstrap,
+}: ChatDetailViewProps) {
+  const [cardDrawerOpen, setCardDrawerOpen] = useState(false);
+  const sessionKey = useMemo(
+    () => cardThreadSessionKey(card, runId),
+    [card, runId],
+  );
+  const cardContext = useMemo(() => buildCardContext(card), [card]);
+  const sources = useMemo(() => parseSources(card.line2), [card.line2]);
+  const { runtime, historyLoaded } = useProactiveChatRuntime({
+    sessionKey,
+    cardContext,
+    bootstrapMessage: bootstrap,
+  });
+
+  return (
+    <>
+      <MainChatView
+        sessionKey={sessionKey}
+        runtime={runtime}
+        historyLoaded={historyLoaded}
+        title={card.title}
+        subtitle="Chat about this card"
+        onBack={onBack}
+        emptyState={null}
+        inputPlaceholder="Message about this card..."
+        renderProposeActionAsText
+        headerSlot={
+          <CardContextHeaderSlot
+            card={card}
+            onOpen={() => setCardDrawerOpen(true)}
+          />
+        }
+      />
+
+      <Drawer open={cardDrawerOpen} onOpenChange={setCardDrawerOpen}>
+        <DrawerContent
+          className="max-h-[85vh] border-t-0 !bg-transparent"
+          style={{
+            background: "linear-gradient(180deg, hsla(0, 0%, 100%, 0.5) 0%, hsla(0, 0%, 100%, 0.7) 100%)",
+            backdropFilter: "blur(40px) saturate(1.5)",
+            WebkitBackdropFilter: "blur(40px) saturate(1.5)",
+            border: "1px solid hsla(0, 0%, 100%, 0.4)",
+            borderBottom: "none",
+            borderRadius: "1.5rem 1.5rem 0 0",
+          }}
+          overlayClassName="!bg-foreground/5 backdrop-blur-[2px]"
+        >
+          <DrawerHeader className="sr-only">
+            <DrawerTitle>{card.title}</DrawerTitle>
+            <DrawerDescription>Card detail view</DrawerDescription>
+          </DrawerHeader>
+          <ChatCardDrawerBody
+            card={card}
+            sources={sources}
+          />
+        </DrawerContent>
+      </Drawer>
+    </>
+  );
+}
+
+function LegacyExecutionChatDetailView({
   card,
   runId,
   onBack,

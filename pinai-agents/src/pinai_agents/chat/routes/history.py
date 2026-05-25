@@ -29,6 +29,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel
 
 from ..runtime.checkpoint import get_checkpointer
+from ..runtime.reasoning import extract_reasoning_text
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -115,7 +116,7 @@ def _extract_text(msg: Any) -> str:
     if isinstance(content, list):
         pieces: list[str] = []
         for b in content:
-            if isinstance(b, dict) and b.get("type") == "text":
+            if isinstance(b, dict) and b.get("type") in {"text", "output_text"}:
                 t = b.get("text")
                 if isinstance(t, str):
                     pieces.append(t)
@@ -133,14 +134,9 @@ def _extract_reasoning(msg: Any) -> str:
     """
     content = getattr(msg, "content", None)
     if isinstance(content, list):
-        pieces: list[str] = []
-        for b in content:
-            if isinstance(b, dict) and b.get("type") == "reasoning":
-                r = b.get("reasoning")
-                if isinstance(r, str):
-                    pieces.append(r)
-        if pieces:
-            return "\n".join(pieces)
+        reasoning = extract_reasoning_text(content)
+        if reasoning:
+            return reasoning
     legacy = (getattr(msg, "additional_kwargs", None) or {}).get("reasoning_content")
     return legacy if isinstance(legacy, str) else ""
 
@@ -274,16 +270,16 @@ def _build_history(messages: list[Any]) -> list[dict[str, Any]]:
             tc_id = getattr(msg, "tool_call_id", None)
             if not tc_id:
                 continue
-            part = tool_index.get(tc_id)
-            if part is None:
+            tool_part = tool_index.get(tc_id)
+            if tool_part is None:
                 # Orphaned tool result — likely from an earlier (closed)
                 # assistant turn; ignore silently to avoid status=running ghosts.
                 continue
             status_str = (getattr(msg, "status", None) or "success").lower()
-            part["status"] = "error" if status_str == "error" else "ok"
+            tool_part["status"] = "error" if status_str == "error" else "ok"
             content_text = _extract_text(msg)
             if content_text:
-                part["meta"] = _truncate_meta(content_text)
+                tool_part["meta"] = _truncate_meta(content_text)
             continue
         # SystemMessage / FunctionMessage / unknown types — skip.
 

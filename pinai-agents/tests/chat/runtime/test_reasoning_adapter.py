@@ -4,17 +4,21 @@ from importlib import import_module
 from pathlib import Path
 
 import pytest
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 
-def test_main_chat_prompt_does_not_request_inline_thinking_tags() -> None:
+def test_chat_prompts_do_not_request_inline_thinking_tags() -> None:
     root = Path(__file__).resolve().parents[3]
-    prompt_source = root / "src" / "pinai_agents" / "chat" / "agents" / "main_chat.py"
+    prompt_paths = [
+        root / "src" / "pinai_agents" / "chat" / "agents" / "main_chat.py",
+        root / "src" / "pinai_agents" / "chat" / "agents" / "card_execution.py",
+    ]
 
-    text = prompt_source.read_text()
-
-    assert "<thinking_protocol>" not in text
-    assert "<thinking>" not in text
-    assert "<think>" not in text
+    for prompt_path in prompt_paths:
+        text = prompt_path.read_text()
+        assert "<thinking_protocol>" not in text
+        assert "<thinking>" not in text
+        assert "<think>" not in text
 
 
 def test_reasoning_extractor_reads_openai_response_summary() -> None:
@@ -47,6 +51,30 @@ def test_reasoning_extractor_reads_openai_response_summary() -> None:
     assert extract_reasoning_text(response) == "Checked recent signals and cards first."
 
 
+def test_reasoning_extractor_reads_responses_streaming_summary_blocks() -> None:
+    try:
+        module = import_module("pinai_agents.chat.runtime.reasoning")
+    except ModuleNotFoundError as exc:
+        pytest.fail(f"reasoning adapter module is missing: {exc}")
+
+    extract_reasoning_text = getattr(module, "extract_reasoning_text", None)
+    assert callable(extract_reasoning_text)
+
+    chunk_content = [
+        {
+            "type": "reasoning",
+            "summary": [
+                {
+                    "type": "summary_text",
+                    "text": "Summarized the model's real reasoning.",
+                }
+            ],
+        }
+    ]
+
+    assert extract_reasoning_text(chunk_content) == "Summarized the model's real reasoning."
+
+
 def test_reasoning_extractor_keeps_litellm_reasoning_content_support() -> None:
     try:
         module = import_module("pinai_agents.chat.runtime.reasoning")
@@ -64,7 +92,21 @@ def test_reasoning_extractor_keeps_litellm_reasoning_content_support() -> None:
     assert extract_reasoning_text(message) == "Claude/LiteLLM streamed this reasoning block."
 
 
-def test_openai_reasoning_model_uses_summary_protocol_not_anthropic_thinking() -> None:
+def test_reasoning_extractor_keeps_claude_v1_reasoning_block_support() -> None:
+    try:
+        module = import_module("pinai_agents.chat.runtime.reasoning")
+    except ModuleNotFoundError as exc:
+        pytest.fail(f"reasoning adapter module is missing: {exc}")
+
+    extract_reasoning_text = getattr(module, "extract_reasoning_text", None)
+    assert callable(extract_reasoning_text)
+
+    content = [{"type": "reasoning", "reasoning": "Claude v1 reasoning text."}]
+
+    assert extract_reasoning_text(content) == "Claude v1 reasoning text."
+
+
+def test_gpt55_uses_high_effort_responses_api_reasoning_summary_protocol() -> None:
     try:
         module = import_module("pinai_agents.chat.runtime.reasoning")
     except ModuleNotFoundError as exc:
@@ -80,5 +122,101 @@ def test_openai_reasoning_model_uses_summary_protocol_not_anthropic_thinking() -
         thinking_budget=5000,
     )
 
-    assert options.extra_body == {"reasoning": {"effort": "medium", "summary": "auto"}}
+    assert options.extra_body == {}
+    assert options.use_responses_api is True
+    assert options.output_version == "responses/v1"
+    assert options.reasoning == {"effort": "high", "summary": "auto"}
+    assert options.include == ["reasoning.encrypted_content"]
+    assert options.use_previous_response_id is True
     assert options.force_temperature_one is False
+
+
+def test_claude_model_still_uses_anthropic_thinking_protocol() -> None:
+    try:
+        module = import_module("pinai_agents.chat.runtime.reasoning")
+    except ModuleNotFoundError as exc:
+        pytest.fail(f"reasoning adapter module is missing: {exc}")
+
+    build_reasoning_options = getattr(module, "build_reasoning_options", None)
+    assert callable(build_reasoning_options)
+
+    options = build_reasoning_options(
+        model="claude-sonnet-4-6",
+        enable_prompt_cache=True,
+        enable_thinking=True,
+        thinking_budget=5000,
+    )
+
+    assert options.extra_body == {
+        "cache_control_injection_points": [
+            {"location": "message", "role": "system"},
+            {"location": "message", "role": "user", "index": -1},
+        ],
+        "thinking": {"type": "enabled", "budget_tokens": 5000},
+    }
+    assert options.use_responses_api is False
+    assert options.output_version == "v1"
+    assert options.reasoning is None
+    assert options.include is None
+    assert options.force_temperature_one is True
+
+
+def test_openai_responses_reasoning_keeps_streaming_enabled() -> None:
+    try:
+        module = import_module("pinai_agents.chat.runtime.reasoning")
+    except ModuleNotFoundError as exc:
+        pytest.fail(f"reasoning adapter module is missing: {exc}")
+
+    build_reasoning_options = getattr(module, "build_reasoning_options", None)
+    assert callable(build_reasoning_options)
+
+    options = build_reasoning_options(
+        model="openai/gpt-5.5",
+        enable_prompt_cache=True,
+        enable_thinking=True,
+        thinking_budget=5000,
+    )
+
+    assert options.allow_streaming is True
+
+
+def test_openai_responses_payload_drops_legacy_call_ids_from_message_ids() -> None:
+    from pinai_agents.chat.runtime.llm import ChatLiteLLMReasoning
+
+    model = ChatLiteLLMReasoning(
+        model="gpt-5.5",
+        api_key="sk-test",
+        base_url="http://example.invalid/v1",
+        use_responses_api=True,
+        output_version="responses/v1",
+        reasoning={"effort": "medium", "summary": "detailed"},
+        include=["reasoning.encrypted_content"],
+    )
+
+    payload = model._get_request_payload([
+        HumanMessage(content="hi"),
+        AIMessage(
+            content=[
+                {
+                    "type": "text",
+                    "id": "call_bad",
+                    "name": "signals_recent",
+                    "text": "<thinking>old prompt fallback text</thinking>",
+                },
+                {"type": "tool_call", "id": "call_tool", "name": "memory_list", "args": {}},
+            ],
+            tool_calls=[{"name": "memory_list", "args": {}, "id": "call_tool"}],
+        ),
+        ToolMessage(content="[]", tool_call_id="call_tool"),
+    ])
+
+    message_ids = [
+        item.get("id")
+        for item in payload["input"]
+        if item.get("type") == "message"
+    ]
+    assert "call_bad" not in message_ids
+    assert any(
+        item.get("type") == "function_call" and item.get("call_id") == "call_tool"
+        for item in payload["input"]
+    )
