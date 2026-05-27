@@ -21,6 +21,34 @@ def test_chat_prompts_do_not_request_inline_thinking_tags() -> None:
         assert "<think>" not in text
 
 
+def test_main_chat_prompt_treats_card_context_as_current_card() -> None:
+    root = Path(__file__).resolve().parents[3]
+    prompt_source = root / "src" / "pinai_agents" / "chat" / "agents" / "main_chat.py"
+
+    text = prompt_source.read_text()
+
+    assert "<card_context>" in text
+    assert "exact card" in text
+    assert "Do not call `cards_recent`" in text
+
+
+def test_card_execution_prompt_treats_user_correction_as_card_feedback() -> None:
+    root = Path(__file__).resolve().parents[3]
+    prompt_source = (
+        root / "src" / "pinai_agents" / "chat" / "agents" / "card_execution.py"
+    )
+
+    text = prompt_source.read_text()
+
+    assert "<card_context>" in text
+    assert "feedback on this exact card" in text
+    assert "preference_add" in text
+    assert "MUST call `preference_add`" in text
+    assert "Do not say you remembered" in text
+    assert "card_id" in text
+    assert "Do not call `cards_recent`" in text
+
+
 def test_reasoning_extractor_reads_openai_response_summary() -> None:
     try:
         module = import_module("pinai_agents.chat.runtime.reasoning")

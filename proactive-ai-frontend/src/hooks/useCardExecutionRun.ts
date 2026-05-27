@@ -37,6 +37,11 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
+import {
+  buildRequestUserText,
+  stripRequestOnlyCardContext,
+} from "@/components/chat/card-chat-session";
+import { buildCardThreadTextFeedbackBody } from "@/components/chat/card-feedback";
 import { proxyFetch, proxyPost } from "@/lib/api";
 
 // ── Shared event envelope ─────────────────────────────────────────────────
@@ -280,7 +285,7 @@ function chatHistoryToSnapshot(
         .join("")
         .trim();
       if (replyText) {
-        planRevisions.push({ reply: replyText });
+        planRevisions.push({ reply: stripRequestOnlyCardContext(replyText) });
         awaitingUserReplyForPause = false;
       }
     }
@@ -500,10 +505,24 @@ function sessionKeyFor(runId: string): string {
  *  an SSE response; we drain the body to completion so the chat
  *  worker's StreamingResponse finishes (and the agent's checkpointer
  *  state stabilises) before the caller re-fetches history. */
-async function sendBootstrap(sessionKey: string, message: string): Promise<void> {
+async function sendBootstrap(
+  sessionKey: string,
+  message: string,
+  cardContext?: Record<string, unknown>,
+): Promise<void> {
+  const requestMessage = buildRequestUserText({
+    sessionKey,
+    userText: message,
+    cardContext,
+  });
+  const body: Record<string, unknown> = {
+    session_key: sessionKey,
+    message: requestMessage,
+  };
+  if (cardContext) body.cardContext = cardContext;
   const res = await proxyPost(
     "/chat-stream/send",
-    { session_key: sessionKey, message },
+    body,
   );
   if (!res.ok) {
     throw new Error(`chat-stream/send bootstrap failed: ${res.status}`);
@@ -529,13 +548,17 @@ export interface UseCardExecutionRunOptions {
    *  empty-thread) pair; subsequent visits to a thread with existing
    *  history skip the bootstrap. */
   bootstrap?: string;
+  /** Current card payload. Sent with every card-thread turn so old
+   *  backend deployments and existing threads still know which card
+   *  the user means when they say "this card". */
+  cardContext?: Record<string, unknown>;
 }
 
 export function useCardExecutionRun(
   runId: string | null,
   options: UseCardExecutionRunOptions = {},
 ): UseCardExecutionRun {
-  const { bootstrap } = options;
+  const { bootstrap, cardContext } = options;
   const [state, dispatch] = useReducer(reducer, NULL_STATE);
   // Track which session_keys we've already fired a bootstrap into so
   // a parent re-render or a polling tick can't double-send the same
@@ -661,7 +684,7 @@ export function useCardExecutionRun(
               // a user reply uses. We don't await an SSE drain here
               // explicitly — `reply()` already does that internally
               // and then dispatches a fresh snapshot.
-              await sendBootstrap(sessionKey, bootstrap);
+              await sendBootstrap(sessionKey, bootstrap, cardContext);
               // Loop body re-runs immediately so the next iteration
               // picks up the populated history.
               continue;
@@ -696,7 +719,7 @@ export function useCardExecutionRun(
     return () => {
       abort = true;
     };
-  }, [runId, fetchSnapshot]);
+  }, [bootstrap, cardContext, fetchSnapshot, runId]);
 
   const reply = useCallback(
     async (text: string) => {
@@ -704,6 +727,28 @@ export function useCardExecutionRun(
       const trimmed = text.trim();
       if (!trimmed) throw new Error("reply text must be non-empty");
       const session = sessionKeyFor(runId);
+      const requestMessage = buildRequestUserText({
+        sessionKey: session,
+        userText: trimmed,
+        cardContext,
+      });
+      const body: Record<string, unknown> = {
+        session_key: session,
+        message: requestMessage,
+      };
+      if (cardContext) body.cardContext = cardContext;
+      const feedbackBody = buildCardThreadTextFeedbackBody({
+        sessionKey: session,
+        userText: trimmed,
+        cardContext,
+      });
+      if (feedbackBody) {
+        try {
+          await proxyPost("/feedback", feedbackBody);
+        } catch {
+          // Feedback persistence is best-effort; chat must still proceed.
+        }
+      }
       dispatch({ kind: "patch_status", status: "resuming" });
       // POST /send streams an SSE response. We drain it to completion
       // (so the chat worker isn't aborted mid-turn) but ignore the
@@ -711,7 +756,7 @@ export function useCardExecutionRun(
       // the history fetch below.
       const res = await proxyPost(
         "/chat-stream/send",
-        { session_key: session, message: trimmed },
+        body,
       );
       if (!res.ok) {
         throw new Error(`chat-stream/send failed: ${res.status}`);
@@ -734,7 +779,7 @@ export function useCardExecutionRun(
         dispatch({ kind: "error", message: msg });
       }
     },
-    [runId, fetchSnapshot],
+    [cardContext, runId, fetchSnapshot],
   );
 
   const cancel = useCallback(

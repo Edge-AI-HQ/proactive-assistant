@@ -1098,7 +1098,27 @@ function LegacyExecutionChatDetailView({
   // `bootstrap` (when set) gets fired as the first HumanMessage if the
   // card-thread has no persisted turns yet — see the hook's
   // empty-thread bootstrap path for the rationale.
-  const run = useCardExecutionRun(runId ?? null, { bootstrap });
+  const cardContext = useMemo<Record<string, unknown> | undefined>(() => {
+    if (!runId) return undefined;
+    return {
+      card_id: runId,
+      title: card.title,
+      summary: card.line1,
+      why_now: card.whyNow,
+      sources: card.line2,
+      category: card.category,
+      will_execute: card.detail?.willExecute,
+    };
+  }, [
+    card.category,
+    card.detail?.willExecute,
+    card.line1,
+    card.line2,
+    card.title,
+    card.whyNow,
+    runId,
+  ]);
+  const run = useCardExecutionRun(runId ?? null, { bootstrap, cardContext });
 
   // Browser-tool surface: the card-execution agent shares the same
   // browser_tool that main chat uses. Mirror MainChatView's hookup so

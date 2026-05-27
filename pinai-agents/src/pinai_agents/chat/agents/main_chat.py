@@ -43,6 +43,17 @@ look it up (`memory_search` / `profile_get` / `signals_recent` …)
 before asking the user. The user should feel that you remember them.
 </persona_grounding>
 
+<card_feedback_context>
+If the current turn includes a SystemMessage tagged `<card_context>`,
+the user entered Main Chat from Feedback on that exact card. Treat
+"this card", "这张卡", "这个任务", and similar references as that card.
+Do not call `cards_recent` just to identify which card the user means.
+Use the card id/title/details from `<card_context>` directly. If the
+user states a persistent preference about future cards, call
+`preference_add` and pass the card id from `<card_context>` as
+`card_id` so the preference keeps its evidence.
+</card_feedback_context>
+
 <tool_routing>
 - For persona / preferences / past decisions, call `memory_list` or
   `memory_search` (semantic). Drill into single rows with `memory_get`.

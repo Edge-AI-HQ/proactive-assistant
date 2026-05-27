@@ -159,7 +159,17 @@ def _card_context_message(card_context: dict[str, Any]) -> SystemMessage:
     inject. SystemMessages are filtered out of /history, so this never
     renders to the user."""
     ctx_json = json.dumps(card_context, ensure_ascii=False, indent=2)
-    return SystemMessage(content=f"<card_context>\n{ctx_json}\n</card_context>")
+    return SystemMessage(
+        content=(
+            "<card_context>\n"
+            "The user is giving feedback on this exact current card. "
+            "If they say \"this card\", \"这张卡\", \"这个任务\", or ask what "
+            "the current feedback card is, answer from this JSON. "
+            "Do not call cards_recent to identify it.\n"
+            f"{ctx_json}\n"
+            "</card_context>"
+        ),
+    )
 
 
 def _build_send_messages(

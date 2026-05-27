@@ -39,6 +39,8 @@ def test_main_thread_with_card_context_injects_system_message():
     sysmsgs = _system_messages(msgs)
     assert len(sysmsgs) == 1
     assert "<card_context>" in sysmsgs[0].content
+    assert "exact current card" in sysmsgs[0].content
+    assert "Do not call cards_recent" in sysmsgs[0].content
     assert "card_99" in sysmsgs[0].content
     # The user turn is still appended after the context.
     assert _user_turns(msgs) == [{"role": "user", "content": "this card is off"}]
