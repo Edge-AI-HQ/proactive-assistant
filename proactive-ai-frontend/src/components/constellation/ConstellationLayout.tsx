@@ -343,13 +343,20 @@ export default function BigBallLayout() {
       y: event.clientY,
     };
   }, []);
+  // Try to open main chat from an in-progress swipe. Returns whether the
+  // gesture fired. Importantly, DOES NOT clear the start ref when the
+  // threshold hasn't been crossed yet — clearing it on every pointermove
+  // breaks iOS, where many tiny move events fire before the user reaches
+  // 36px of vertical travel. The first sub-threshold move would null
+  // the ref, so subsequent moves saw start=null and could never fire.
+  // Web/desktop didn't show this because mouse moves produce fewer, larger
+  // event deltas — the single move was often already past threshold.
   const openMainChatFromEntrySwipe = useCallback((
     end: TouchPoint,
     event: { preventDefault: () => void },
   ) => {
-    const shouldOpen = isMainChatEntrySwipeUp(mainChatEntryPointerStartRef.current, end);
+    if (!isMainChatEntrySwipeUp(mainChatEntryPointerStartRef.current, end)) return;
     mainChatEntryPointerStartRef.current = null;
-    if (!shouldOpen) return;
     event.preventDefault();
     openMainChat();
   }, [openMainChat]);
@@ -358,6 +365,9 @@ export default function BigBallLayout() {
       x: event.clientX,
       y: event.clientY,
     }, event);
+    // pointerup is the gesture's terminal state — clear regardless of
+    // whether the swipe fired so the next gesture starts clean.
+    mainChatEntryPointerStartRef.current = null;
   }, [openMainChatFromEntrySwipe]);
   const handleMainChatEntryPointerMove = useCallback((event: PointerEvent<HTMLButtonElement>) => {
     openMainChatFromEntrySwipe({
@@ -383,14 +393,14 @@ export default function BigBallLayout() {
   }, [openMainChatFromEntrySwipe]);
   const handleMainChatEntryTouchEnd = useCallback((event: TouchEvent<HTMLButtonElement>) => {
     const touch = event.changedTouches[0];
-    if (!touch) {
-      mainChatEntryPointerStartRef.current = null;
-      return;
+    if (touch) {
+      openMainChatFromEntrySwipe({
+        x: touch.clientX,
+        y: touch.clientY,
+      }, event);
     }
-    openMainChatFromEntrySwipe({
-      x: touch.clientX,
-      y: touch.clientY,
-    }, event);
+    // touchend is terminal — always clear so the next gesture starts clean.
+    mainChatEntryPointerStartRef.current = null;
   }, [openMainChatFromEntrySwipe]);
 
   useEffect(() => {
@@ -1171,7 +1181,8 @@ export default function BigBallLayout() {
             onTouchCancel={() => {
               mainChatEntryPointerStartRef.current = null;
             }}
-            className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-1 px-3 py-1.5 touch-none select-none group"
+            className="absolute left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-1 px-3 py-1.5 touch-none select-none group"
+            style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 16px)" }}
             aria-label="Open main chat"
           >
             <motion.div
@@ -1214,17 +1225,29 @@ export default function BigBallLayout() {
       {createPortal(
         <AnimatePresence>
           {mainChatOpen && (
+            // iOS-style sheet entry: two-layer animation.
+            //   - Outer backdrop fades in/out (opacity tween, easeOut, 280ms).
+            //   - Inner content panel slides up from the bottom (spring).
+            // Both layers animate transform/opacity only — no layout
+            // properties — so the WKWebView keeps it on the GPU compositor
+            // thread, matching the buttery feel of native iOS sheets.
             <motion.div
               key="main-chat-overlay"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              transition={{ duration: 0.18 }}
+              transition={{ duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
               className="fixed inset-0 z-50 flex justify-center bg-foreground/[0.04]"
             >
-              <div className="relative w-full max-w-md h-screen overflow-hidden bg-background">
+              <motion.div
+                initial={{ y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ type: "spring", stiffness: 320, damping: 32, mass: 0.9 }}
+                className="relative w-full max-w-md h-screen overflow-hidden bg-background will-change-transform"
+              >
                 <MainChat onBack={handleMainChatBack} />
-              </div>
+              </motion.div>
             </motion.div>
           )}
         </AnimatePresence>,

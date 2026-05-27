@@ -1,6 +1,7 @@
 export type TouchPoint = { x: number; y: number };
 
 const MAIN_CHAT_ENTRY_SWIPE_THRESHOLD_PX = 36;
+const MAIN_CHAT_EXIT_SWIPE_THRESHOLD_PX = 36;
 const MAIN_MENU_SWIPE_THRESHOLD_PX = 48;
 const MAIN_MENU_SWIPE_IGNORE_ATTR = "data-main-menu-swipe-ignore";
 
@@ -34,6 +35,40 @@ export function isMainChatEntrySwipeUp(
     verticalTravel >= MAIN_CHAT_ENTRY_SWIPE_THRESHOLD_PX
     && verticalTravel > horizontalTravel
   );
+}
+
+/**
+ * Mirror of isMainChatEntrySwipeUp for the exit direction: vertical
+ * downward travel exceeding the threshold (and dominating any horizontal
+ * jitter) means the user wants to dismiss the landing page back to the
+ * Constellation. Used by MinimalistLanding.
+ */
+export function isMainChatExitSwipeDown(
+  start: TouchPoint | null,
+  end: TouchPoint,
+): boolean {
+  if (!start) return false;
+  const verticalTravel = end.y - start.y;
+  const horizontalTravel = Math.abs(end.x - start.x);
+  return (
+    verticalTravel >= MAIN_CHAT_EXIT_SWIPE_THRESHOLD_PX
+    && verticalTravel > horizontalTravel
+  );
+}
+
+/**
+ * Returns true if the gesture target sits inside an interactive surface
+ * (textarea / input / button / contenteditable) where a swipe would
+ * conflict with text editing, selection, or button activation. Used by
+ * MinimalistLanding's swipe-to-close so the user can still interact with
+ * the composer + suggestion chips without accidentally dismissing.
+ */
+export function shouldIgnoreLandingExitSwipe(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  if (target.closest("textarea, input, button, [contenteditable='true']")) {
+    return true;
+  }
+  return false;
 }
 
 export function isMainMenuSwipeLeft(
