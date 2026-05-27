@@ -10,6 +10,10 @@ decided HERE from the JWT principal, never from the request body:
 This is the trust-boundary contract for impersonation (Goal 4): an
 internal reviewer driving a user's chat cannot disguise a write as the
 user's own words, and a normal run cannot claim it came from an operator.
+
+Temporary rows are still active in storage until explicitly archived or
+superseded, but list(status='active') hides rows past `expires_at` so
+generation does not keep obeying stale "today / next batch" guidance.
 """
 
 from __future__ import annotations
@@ -66,6 +70,8 @@ async def agent_add_preference(
                 confidence=body.confidence,
                 source=source,
                 evidence=evidence,
+                durability=body.durability,
+                expires_at=body.expires_at,
             ),
         )
     return asdict(row)

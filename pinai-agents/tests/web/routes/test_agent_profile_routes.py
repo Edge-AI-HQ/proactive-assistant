@@ -128,6 +128,35 @@ async def test_profile_upsert_partial_patch_preserves_unspecified(client, user_i
     assert body["preferences"] == {"comm": "terse"}
 
 
+@pytest.mark.asyncio
+async def test_profile_preference_merge_preserves_siblings(client, user_ids):
+    """Main chat uses this route to internalize one durable preference
+    without replacing the whole profile preferences bucket."""
+    user_a, _ = user_ids
+
+    r = await client.post(
+        "/api/agent/profile/upsert",
+        headers=_auth(user_a),
+        json={"preferences": {"comm": "terse"}},
+    )
+    assert r.status_code == 200, r.text
+
+    r = await client.post(
+        "/api/agent/profile/preferences/merge",
+        headers=_auth(user_a),
+        json={
+            "key": "card_topics",
+            "value": "Prefers proactive cards about AI and market news.",
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["preferences"] == {
+        "comm": "terse",
+        "card_topics": "Prefers proactive cards about AI and market news.",
+    }
+
+
 # ── goal_upsert ──
 
 

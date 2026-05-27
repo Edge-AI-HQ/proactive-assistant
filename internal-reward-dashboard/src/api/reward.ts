@@ -473,6 +473,7 @@ export interface ImpersonationToken {
 
 export type PreferenceScope = "topic" | "source" | "timing" | "format" | "global";
 export type PreferencePolarity = "positive" | "negative";
+export type PreferenceDurability = "temporary" | "persistent";
 
 export interface PreferenceRecord {
   id: string;
@@ -483,6 +484,8 @@ export interface PreferenceRecord {
   confidence: number | null;
   source: string;
   evidence: Record<string, unknown>;
+  durability: PreferenceDurability;
+  expires_at: string | null;
   status: string;
   superseded_by: string | null;
   created_at: string;

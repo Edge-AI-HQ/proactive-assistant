@@ -36,10 +36,13 @@ Why share one sandbox backend:
 from __future__ import annotations
 
 import logging
+import os
 import re
+from pathlib import Path
 from typing import Any
 
 from deepagents import create_deep_agent
+from deepagents.backends.local_shell import LocalShellBackend
 
 from ...shared.api_models import (
     CardsList,
@@ -52,6 +55,42 @@ from ..runtime.llm import make_chat_model
 from ..tools.sandbox import evict_thread, get_or_create_thread_sandbox
 
 logger = logging.getLogger(__name__)
+
+
+def _use_local_sandbox() -> bool:
+    return os.environ.get("PINAI_LOCAL_SANDBOX", "").lower() in {"1", "true", "yes"}
+
+
+def _create_local_sandbox_backend(*, run_jwt: str) -> LocalShellBackend:
+    """Local dev backend for generator runs.
+
+    This intentionally only activates behind PINAI_LOCAL_SANDBOX. It lets
+    DeepAgents execute code inside the pinai-chat container, where docker DNS
+    can resolve pinai-web without ngrok.
+    """
+    state_dir = Path("/state")
+    state_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("phase1.json", "matched_patterns.json"):
+        (state_dir / name).unlink(missing_ok=True)
+
+    path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+    pythonpath = os.environ.get("PYTHONPATH", "")
+    sdk_path = "/app/packages/pinai_sdk/src"
+    if sdk_path not in pythonpath.split(":"):
+        pythonpath = f"{sdk_path}:{pythonpath}" if pythonpath else sdk_path
+
+    return LocalShellBackend(
+        root_dir="/state",
+        virtual_mode=False,
+        timeout=5 * 60,
+        inherit_env=True,
+        env={
+            "PATH": f"/app/.venv/bin:{path}",
+            "PYTHONPATH": pythonpath,
+            "PAI_API_URL": os.environ.get("WEB_INTERNAL_URL", "http://pinai-web:8000"),
+            "PAI_RUN_JWT": run_jwt,
+        },
+    )
 
 
 # ── Subagent prompts ────────────────────────────────────────────────
@@ -199,13 +238,22 @@ card-generator subagent will turn each plan item into a full card.
 
 <preference_alignment>
 `/state/phase1.json` has a `preferences` array — the user's OWN stated
-preferences (each: statement, scope, polarity, weight, created_at,
-optional evidence). These are a HARD CONSTRAINT on this batch, stronger
-than inferred signals:
+preferences (each: statement, scope, polarity, durability, expires_at,
+weight, created_at, optional evidence). The list endpoint already filters
+out expired temporary rows. Valid active preferences are a HARD CONSTRAINT
+on this batch, stronger than inferred signals:
 
 - The most RECENT preferences and the HIGHEST-`weight` ones are near-
   mandatory. Treat a recent, high-weight preference as a rule you must
   obey this run, not a hint to weigh against everything else.
+- If valid preferences conflict, follow the newest one for this batch.
+  Mention the conflict in `notes` instead of averaging the two.
+- `durability = "temporary"` means the user asked for a time-boxed
+  generation change (today / next batch / this card). Obey it now but
+  do not treat it as evidence of long-term taste.
+- `durability = "persistent"` is long-lived. It should usually agree
+  with `profile.preferences`; if the two conflict, prefer the newer
+  explicit preference for this batch and note the mismatch.
 - `polarity = "positive"` → actively BIAS the plan TOWARD that topic /
   source / timing / format. Plan an item that satisfies it when any
   grounded evidence supports one.
@@ -468,7 +516,12 @@ async def run_generator(
         no further parse / shape check needed.
     """
     session_key = f"gen-{run_id}"
-    backend, _ = await get_or_create_thread_sandbox(session_key, run_jwt=run_jwt)
+    use_local_sandbox = _use_local_sandbox()
+    if use_local_sandbox:
+        backend = _create_local_sandbox_backend(run_jwt=run_jwt)
+        logger.info("generator using local sandbox backend run_id=%s", run_id)
+    else:
+        backend, _ = await get_or_create_thread_sandbox(session_key, run_jwt=run_jwt)
     try:
         # Stage matched_patterns to /state so the planner subagent can
         # read_file('/state/matched_patterns.json'). Empty list still gets
@@ -594,7 +647,8 @@ async def run_generator(
                 },
             )
     finally:
-        await evict_thread(session_key)
+        if not use_local_sandbox:
+            await evict_thread(session_key)
 
     structured = result.get("structured_response")
     if not isinstance(structured, GeneratorOutput):

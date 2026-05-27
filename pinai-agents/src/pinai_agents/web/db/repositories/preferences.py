@@ -11,7 +11,9 @@ main chat. Append-only state machine, same shape as `memory.py`:
 
 Lifecycle ops are named methods, not generic UPDATE, so the state machine
 reads off the code. `source` is decided by the route from the JWT
-principal — this layer just persists what it's handed.
+principal — this layer just persists what it's handed. `list(active)`
+filters expired temporary rows so generation only sees currently valid
+guidance.
 """
 
 from __future__ import annotations
@@ -36,6 +38,8 @@ class PreferenceRow:
     confidence: float | None
     source: str
     evidence: dict[str, Any]
+    durability: str
+    expires_at: datetime | None
     status: str
     superseded_by: str | None
     created_at: datetime
@@ -53,6 +57,8 @@ class PreferenceRow:
             confidence=float(row["confidence"]) if row.get("confidence") is not None else None,
             source=row["source"],
             evidence=evidence if isinstance(evidence, dict) else json.loads(evidence),
+            durability=row["durability"],
+            expires_at=row.get("expires_at"),
             status=row["status"],
             superseded_by=row.get("superseded_by"),
             created_at=row["created_at"],
@@ -70,6 +76,8 @@ class AddPreferenceInput:
     source: str
     confidence: float | None = None
     evidence: dict[str, Any] | None = None
+    durability: str = "persistent"
+    expires_at: datetime | None = None
 
 
 class PreferenceRepository(UserScopedRepository):
@@ -82,15 +90,16 @@ class PreferenceRepository(UserScopedRepository):
                 """
                 INSERT INTO pai_preference_records
                   (user_id, id, statement, scope, polarity, weight,
-                   confidence, source, evidence, status)
+                   confidence, source, evidence, durability, expires_at, status)
                 VALUES
-                  (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, 'active')
+                  (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, 'active')
                 RETURNING *
                 """,
                 (
                     self._user_id, input.id, input.statement, input.scope,
                     input.polarity, input.weight, input.confidence,
                     input.source, json.dumps(input.evidence or {}),
+                    input.durability, input.expires_at,
                 ),
             )
             row = await cur.fetchone()
@@ -115,10 +124,11 @@ class PreferenceRepository(UserScopedRepository):
                 WHERE user_id = %s
                   AND status = %s
                   AND (%s::text IS NULL OR scope = %s)
+                  AND (%s::text <> 'active' OR expires_at IS NULL OR expires_at > NOW())
                 ORDER BY created_at DESC
                 LIMIT %s
                 """,
-                (self._user_id, status, scope, scope, limit),
+                (self._user_id, status, scope, scope, status, limit),
             )
             rows = await cur.fetchall()
         return [PreferenceRow.from_record(r) for r in rows]

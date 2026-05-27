@@ -10,7 +10,7 @@ bodies below):
 
     client.memory.list / search / get / add / archive / supersede
     client.signals.recent / get / consume / add (alias: ingest)
-    client.profile.get / upsert / upsert_goal
+    client.profile.get / upsert / merge_preference / upsert_goal
     client.cards.recent
     client.feedback.list / log
     client.world.recent / score / consume / reference
@@ -287,6 +287,15 @@ class Profile(_Endpoint):
             "priority": priority,
             "status": status,
             "summary": summary,
+        })
+
+    async def merge_preference(self, *, key: str, value: str) -> dict[str, Any]:
+        """Merge one durable preference into pai_profile.preferences.
+        Safer than `upsert(preferences=...)` because it preserves sibling
+        keys server-side."""
+        return await self._post("/preferences/merge", {
+            "key": key,
+            "value": value,
         })
 
 
@@ -610,6 +619,8 @@ class Preferences(_Endpoint):
         polarity: str,
         weight: float | None = None,
         confidence: float | None = None,
+        durability: str = "persistent",
+        expires_at: datetime | str | None = None,
         evidence: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Persist a stated preference. `source` is stamped server-side
@@ -617,6 +628,8 @@ class Preferences(_Endpoint):
         return await self._post("/add", {
             "statement": statement, "scope": scope, "polarity": polarity,
             "weight": weight, "confidence": confidence,
+            "durability": durability,
+            "expiresAt": _iso(expires_at) if expires_at is not None else None,
             "evidence": evidence or {},
         })
 
@@ -733,6 +746,7 @@ client.profile
   .upsert(*, display_name=None, locale=None, timezone=None,
           summary=None, facts=None, preferences=None,
           constraints=None) -> dict                  # JSONB buckets replaced wholesale
+  .merge_preference(*, key, value) -> dict           # safe one-key merge into profile.preferences
   .upsert_goal(*, key, title, id=None, priority="medium",
                status="active", summary=None) -> dict
 
@@ -779,7 +793,8 @@ client.composio                                      # live SaaS access via Comp
 client.preferences                                   # high-weight stated preferences (main-chat)
   .list(*, status="active", scope=None, limit=50) -> list  # newest first; read active for generation
   .add(*, statement, scope, polarity, weight=None,   # source stamped server-side, not here
-       confidence=None, evidence=None) -> dict        # scope: topic|source|timing|format|global
+       confidence=None, durability="persistent",
+       expires_at=None, evidence=None) -> dict        # scope: topic|source|timing|format|global
                                                       # polarity: positive|negative
   .supersede(*, old_id, new_id) -> dict | None       # new_id must already be active
 

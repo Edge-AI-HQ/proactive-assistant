@@ -16,6 +16,7 @@ Fixture wiring matches test_agent_profile_routes.py.
 from __future__ import annotations
 
 import base64
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -88,8 +89,65 @@ async def test_add_normal_run_is_source_user(client, user_ids):
     assert body["scope"] == "topic"
     assert body["polarity"] == "positive"
     assert body["weight"] == 1.0  # default high weight
+    assert body["durability"] == "persistent"
+    assert body["expires_at"] is None
     assert body["status"] == "active"
     assert body["evidence"] == {"card_id": "card_42"}
+
+
+@pytest.mark.asyncio
+async def test_add_temporary_preference_with_expiry(client, user_ids):
+    user_a, _ = user_ids
+    expires_at = datetime.now(tz=UTC) + timedelta(hours=2)
+    r = await client.post(
+        "/api/agent/preferences/add",
+        headers=_auth(user_a),
+        json={
+            "statement": "Today show me AI news",
+            "scope": "topic",
+            "polarity": "positive",
+            "durability": "temporary",
+            "expiresAt": expires_at.isoformat(),
+        },
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["durability"] == "temporary"
+    assert body["expires_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_temporary_preference_requires_expiry(client, user_ids):
+    user_a, _ = user_ids
+    r = await client.post(
+        "/api/agent/preferences/add",
+        headers=_auth(user_a),
+        json={
+            "statement": "Next batch show me AI news",
+            "scope": "topic",
+            "polarity": "positive",
+            "durability": "temporary",
+        },
+    )
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_persistent_preference_rejects_expiry(client, user_ids):
+    user_a, _ = user_ids
+    expires_at = datetime.now(tz=UTC) + timedelta(hours=2)
+    r = await client.post(
+        "/api/agent/preferences/add",
+        headers=_auth(user_a),
+        json={
+            "statement": "Always show me AI news",
+            "scope": "topic",
+            "polarity": "positive",
+            "durability": "persistent",
+            "expiresAt": expires_at.isoformat(),
+        },
+    )
+    assert r.status_code == 422
 
 
 @pytest.mark.asyncio

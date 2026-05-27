@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 
 class _CamelModel(BaseModel):
@@ -230,6 +230,7 @@ class SettingsUpdateRequest(_CamelModel):
 # these come through the chat agent's native tools only.
 PreferenceScope = Literal["topic", "source", "timing", "format", "global"]
 PreferencePolarity = Literal["positive", "negative"]
+PreferenceDurability = Literal["temporary", "persistent"]
 
 
 class PreferenceItem(_CamelModel):
@@ -241,6 +242,8 @@ class PreferenceItem(_CamelModel):
     confidence: float | None = None
     source: str
     evidence: dict[str, Any] = Field(default_factory=dict)
+    durability: PreferenceDurability
+    expires_at: datetime | None = None
     status: str
     superseded_by: str | None = None
     created_at: datetime
@@ -263,15 +266,38 @@ class PreferenceAddRequest(_CamelModel):
     polarity: PreferencePolarity
     weight: float | None = Field(default=None, ge=0, le=1)
     confidence: float | None = Field(default=None, ge=0, le=1)
+    durability: PreferenceDurability = "persistent"
+    expires_at: datetime | None = None
     # Free-form provenance the agent may attach (e.g. `{"card_id": "..."}`
     # when the preference came from feedback on a specific card). The route
     # overwrites `operator_id` here for internal-operator writes.
     evidence: dict[str, Any] | None = None
 
+    @model_validator(mode="after")
+    def validate_lifetime(self) -> PreferenceAddRequest:
+        if self.durability == "temporary" and self.expires_at is None:
+            raise ValueError("temporary preferences require expires_at")
+        if self.durability == "persistent" and self.expires_at is not None:
+            raise ValueError("persistent preferences must not set expires_at")
+        return self
+
 
 class PreferenceSupersedeRequest(_CamelModel):
     old_id: str
     new_id: str
+
+
+class ProfilePreferenceMergeRequest(_CamelModel):
+    """Merge a single durable preference into pai_profile.preferences.
+
+    The profile JSONB bucket is normally wholesale-replaced by
+    ProfileUpsertRequest. This request is the safe one-key merge path for
+    chat tools so adding a durable preference cannot wipe sibling profile
+    entries.
+    """
+
+    key: str = Field(min_length=1, max_length=120)
+    value: str = Field(min_length=1, max_length=2000)
 
 
 class ImpersonationMintRequest(_CamelModel):

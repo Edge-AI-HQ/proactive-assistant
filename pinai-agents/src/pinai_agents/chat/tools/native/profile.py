@@ -113,6 +113,40 @@ async def profile_upsert(
     )
 
 
+class ProfilePreferenceMergeInput(BaseModel):
+    key: str = Field(
+        min_length=1,
+        max_length=120,
+        description=(
+            "Stable snake_case key for the durable preference inside "
+            "pai_profile.preferences, e.g. 'card_topics' or "
+            "'work_card_timing'."
+        ),
+    )
+    value: str = Field(
+        min_length=1,
+        max_length=2000,
+        description=(
+            "Descriptive sentence for a durable preference: what the user "
+            "prefers, why/scope if known, and that it came from an explicit "
+            "user statement. Do not use for temporary requests such as "
+            "'today show me AI news'."
+        ),
+    )
+
+
+@tool("profile_preference_merge", args_schema=ProfilePreferenceMergeInput)
+async def profile_preference_merge(key: str, value: str):
+    """Merge one durable preference into the profile preferences bucket.
+    Use after `preference_add` for long-lived card-generation preferences
+    that should affect every future generation. This is safer than
+    `profile_upsert(preferences=...)` because it preserves sibling keys."""
+    return await http_client.post(
+        "/api/agent/profile/preferences/merge",
+        {"key": key, "value": value},
+    )
+
+
 class GoalUpsertInput(BaseModel):
     key: str = Field(
         min_length=1, max_length=120,

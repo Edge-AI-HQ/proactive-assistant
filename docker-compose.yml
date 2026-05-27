@@ -178,6 +178,9 @@ services:
       # (sourced from ./.env). Default keeps internal URL so chat still
       # boots when the tunnel is down.
       PAI_API_URL: ${PAI_API_URL:-http://pinai-web:8000}
+      # Local-only generator debug path: run DeepAgents code execution in
+      # the chat container instead of Daytona so pinai_sdk can use docker DNS.
+      PINAI_LOCAL_SANDBOX: ${PINAI_LOCAL_SANDBOX:-0}
     ports:
       - "8001:8001"
     healthcheck:

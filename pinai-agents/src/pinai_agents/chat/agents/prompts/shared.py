@@ -50,6 +50,7 @@ client.profile
   .upsert(*, display_name=None, locale=None, timezone=None,
           summary=None, facts=None, preferences=None,
           constraints=None) -> dict                  # JSONB buckets replaced wholesale
+  .merge_preference(*, key, value) -> dict           # safe one-key merge into profile.preferences
   .upsert_goal(*, key, title, id=None, priority="medium",
                status="active", summary=None) -> dict
 
@@ -96,7 +97,8 @@ client.composio                                      # live SaaS access via Comp
 client.preferences                                   # high-weight stated preferences (main-chat)
   .list(*, status="active", scope=None, limit=50) -> list  # newest first; read active for generation
   .add(*, statement, scope, polarity, weight=None,   # source stamped server-side, not here
-       confidence=None, evidence=None) -> dict        # scope: topic|source|timing|format|global
+       confidence=None, durability="persistent",
+       expires_at=None, evidence=None) -> dict        # scope: topic|source|timing|format|global
                                                       # polarity: positive|negative
   .supersede(*, old_id, new_id) -> dict | None       # new_id must already be active
 

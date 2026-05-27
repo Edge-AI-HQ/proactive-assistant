@@ -221,6 +221,35 @@ class ProfileRepository(UserScopedRepository):
             raise RuntimeError(msg)
         return ProfileRow.from_record(row)
 
+    async def merge_profile_preference(
+        self,
+        *,
+        key: str,
+        value: str,
+        id: str = "primary",
+    ) -> ProfileRow:
+        """Atomically merge one top-level key into profile.preferences."""
+        patch_json = json.dumps({key: value})
+        async with self._conn.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO pai_profile
+                  (user_id, id, display_name, preferences)
+                VALUES
+                  (%s, %s, 'User', %s::jsonb)
+                ON CONFLICT (user_id, id) DO UPDATE SET
+                  preferences = pai_profile.preferences || EXCLUDED.preferences,
+                  updated_at  = NOW()
+                RETURNING *
+                """,
+                (self._user_id, id, patch_json),
+            )
+            row = await cur.fetchone()
+        if row is None:
+            msg = "profile preference merge returned no row"
+            raise RuntimeError(msg)
+        return ProfileRow.from_record(row)
+
     # ── pai_goals ─────────────────────────────────────────────────
     async def list_goals(self, *, status: str | None = None) -> list[GoalRow]:
         async with self._conn.cursor() as cur:

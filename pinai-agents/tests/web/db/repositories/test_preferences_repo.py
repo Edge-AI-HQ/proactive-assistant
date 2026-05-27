@@ -9,6 +9,8 @@ separate user_scoped_tx.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from pinai_agents.web.db.repositories.preferences import (
@@ -20,8 +22,16 @@ from pinai_agents.web.db.rls import user_scoped_tx
 pytestmark = pytest.mark.asyncio
 
 
-def _input(pref_id: str, *, scope: str = "topic", polarity: str = "positive",
-           source: str = "user", weight: float = 1.0) -> AddPreferenceInput:
+def _input(
+    pref_id: str,
+    *,
+    scope: str = "topic",
+    polarity: str = "positive",
+    source: str = "user",
+    weight: float = 1.0,
+    durability: str = "persistent",
+    expires_at: datetime | None = None,
+) -> AddPreferenceInput:
     return AddPreferenceInput(
         id=pref_id,
         statement="Wants more A-share market news",
@@ -31,6 +41,8 @@ def _input(pref_id: str, *, scope: str = "topic", polarity: str = "positive",
         confidence=0.8,
         source=source,
         evidence={"card_id": "card_x"},
+        durability=durability,
+        expires_at=expires_at,
     )
 
 
@@ -51,6 +63,8 @@ async def test_add_then_list_active_roundtrip(pool, user_ids):
     assert row.source == "user"
     assert row.weight == 1.0
     assert row.confidence == 0.8
+    assert row.durability == "persistent"
+    assert row.expires_at is None
     assert row.status == "active"
     assert row.evidence == {"card_id": "card_x"}
 
@@ -67,6 +81,29 @@ async def test_list_scope_filter(pool, user_ids):
 
         all_active = await repo.list(status="active")
         assert {r.id for r in all_active} == {"pref_topic", "pref_timing"}
+
+
+async def test_list_active_omits_expired_temporary_preferences(pool, user_ids):
+    user_a, _ = user_ids
+    now = datetime.now(tz=UTC)
+    async with user_scoped_tx(pool, user_a) as conn:
+        repo = PreferenceRepository(user_a, conn)
+        await repo.add(_input(
+            "pref_expired",
+            durability="temporary",
+            expires_at=now - timedelta(hours=1),
+        ))
+        await repo.add(_input(
+            "pref_current",
+            durability="temporary",
+            expires_at=now + timedelta(hours=1),
+        ))
+
+        active = await repo.list(status="active")
+
+    assert {r.id for r in active} == {"pref_current"}
+    assert active[0].durability == "temporary"
+    assert active[0].expires_at is not None
 
 
 async def test_supersede_links_old_to_new(pool, user_ids):
