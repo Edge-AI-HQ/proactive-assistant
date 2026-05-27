@@ -12,7 +12,9 @@
  * dismisses the conversation (back to Landing) on touch devices.
  */
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useRef,
   useState,
@@ -71,6 +73,28 @@ interface MainChatViewProps {
    *  main chat. CardChat passes `null` for the same reason (the agent
    *  bootstrap fills the first turn). */
   emptyState?: ReactNode;
+  /** Card chat v1 should read `propose_action` as a normal assistant
+   *  message instead of rendering draft cards / quick-reply chips. Main
+   *  chat leaves this false, preserving the existing behavior. */
+  renderProposeActionAsText?: boolean;
+}
+
+const ChatRenderOptionsContext = createContext({
+  renderProposeActionAsText: false,
+});
+
+function useChatRenderOptions() {
+  return useContext(ChatRenderOptionsContext);
+}
+
+function proposeActionTextFromArgs(raw: unknown): string | null {
+  if (!raw || typeof raw !== "object") return null;
+  const root = raw as Record<string, unknown>;
+  const inner = root.input && typeof root.input === "object"
+    ? (root.input as Record<string, unknown>)
+    : root;
+  const text = typeof inner.message === "string" ? inner.message.trim() : "";
+  return text || null;
 }
 
 
@@ -196,68 +220,26 @@ function AssistantMessage() {
 }
 
 /**
- * Parses a `<thinking>...</thinking>` (or `<think>...</think>`) prefix
- * out of an assistant text part. Used to surface a thinking block for
- * non-Anthropic models that don't emit a native `reasoning` part but
- * are prompted (see `main_chat.py` <thinking_protocol>) to wrap their
- * preamble in an explicit tag.
- *
- * Returns:
- *   thinking: the inner content (or "" while only the opening tag has
- *             arrived), or null when no thinking prefix exists
- *   thinkingComplete: true once `</thinking>` has arrived; false while
- *                     still streaming inside the tag
- *   remaining: text after the closing tag (the user-facing answer)
- */
-function parseThinkingFromText(text: string): {
-  thinking: string | null;
-  thinkingComplete: boolean;
-  remaining: string;
-} {
-  const completeRe =
-    /^\s*<(?:thinking|think)>([\s\S]*?)<\/(?:thinking|think)>\s*([\s\S]*)$/i;
-  const m = completeRe.exec(text);
-  if (m) {
-    return { thinking: m[1], thinkingComplete: true, remaining: m[2] };
-  }
-  const partialRe = /^\s*<(?:thinking|think)>([\s\S]*)$/i;
-  const pm = partialRe.exec(text);
-  if (pm) {
-    return { thinking: pm[1], thinkingComplete: false, remaining: "" };
-  }
-  return { thinking: null, thinkingComplete: true, remaining: text };
-}
-
-/**
  * Renders the assistant message's content parts in order, grouping
  * consecutive non-`propose_action` tool-call parts into a single
  * ChatToolGroup card. We deliberately bypass `MessagePrimitive.Content`
  * (which renders parts one-by-one through per-type slots) because
  * grouping requires looking at the whole array.
  *
- * Two sources of "thinking" text we surface as a ReasoningBlock pill:
- *   1. Native `reasoning` parts — emitted by Anthropic Claude
- *      extended-thinking (via ChatLiteLLMReasoning → `chat:reasoning:delta`).
- *   2. A `<thinking>…</thinking>` prefix inside the first text part —
- *      prompt-driven, works for any model (gpt-5.5, kimi, minimax).
- *      We parse it out client-side so the user sees the same collapsible
- *      pill regardless of which mechanism the model used. If both
- *      sources exist on a message, native reasoning wins and the text
- *      `<thinking>` prefix is left as-is (rare edge — only triggers if
- *      the prompt is inherited on a model that also emits reasoning).
+ * The only source of "thinking" text we surface is native `reasoning`
+ * parts emitted by the backend from model-provider fields.
  *
  * Ordering invariants we rely on (enforced by LiveContentBuilder):
  *   - reasoning / text deltas fold into the trailing same-type part
  *   - a tool-call closes the open text and reasoning cursors so any
  *     later deltas start fresh parts AFTER the tool
- * → therefore a reasoning part (or in-progress `<thinking>`) is still
- *   "streaming" iff the message is running AND its containing part is
- *   the very last item in the content array.
+ * → therefore a reasoning part is still "streaming" iff the message is
+ *   running AND its containing part is the very last item in the content array.
  */
 function AssistantContent() {
   const parts = useMessage((m) => m.content);
   const isRunning = useMessage((m) => m.status?.type === "running");
-  const hasNativeReasoning = parts.some((p) => p.type === "reasoning");
+  const { renderProposeActionAsText } = useChatRenderOptions();
 
   const blocks: ReactNode[] = [];
   let toolBuffer: ChatToolGroupItem[] = [];
@@ -279,12 +261,19 @@ function AssistantContent() {
         // HITL pause panel — never grouped. Flush any preceding tools
         // first so the propose_action card sits at the right ordinal.
         flushTools();
-        blocks.push(
-          <ProposeActionCard
-            key={`pa-${part.toolCallId}`}
-            args={part.args}
-          />,
-        );
+        if (renderProposeActionAsText) {
+          const text = proposeActionTextFromArgs(part.args);
+          if (text) {
+            blocks.push(<MarkdownContent key={`pa-text-${part.toolCallId}`} text={text} />);
+          }
+        } else {
+          blocks.push(
+            <ProposeActionCard
+              key={`pa-${part.toolCallId}`}
+              args={part.args}
+            />,
+          );
+        }
       } else {
         toolBuffer.push({
           toolCallId: part.toolCallId,
@@ -296,24 +285,8 @@ function AssistantContent() {
       }
     } else if (part.type === "text") {
       flushTools();
-      // Always strip `<thinking>` from the text part. If the message
-      // has a native reasoning part too, that one wins for the
-      // visible ReasoningBlock — but we still must strip the inline
-      // tag so it doesn't bleed into the rendered answer.
-      const parsed = parseThinkingFromText(part.text);
-      if (parsed.thinking !== null && !hasNativeReasoning) {
-        const thinkingAppending = isRunning && isLast && !parsed.thinkingComplete;
-        blocks.push(
-          <ReasoningBlock
-            key={`thk-${i}`}
-            text={parsed.thinking.trim()}
-            shimmer={isRunning}
-            appending={thinkingAppending}
-          />,
-        );
-      }
-      if (parsed.remaining) {
-        blocks.push(<MarkdownContent key={`t-${i}`} text={parsed.remaining} />);
+      if (part.text) {
+        blocks.push(<MarkdownContent key={`t-${i}`} text={part.text} />);
       }
     } else if (part.type === "reasoning") {
       flushTools();
@@ -348,6 +321,7 @@ export default function MainChatView({
   emptyMessage = "Send a message to start chatting",
   inputPlaceholder,
   emptyState = null,
+  renderProposeActionAsText = false,
 }: MainChatViewProps) {
   const { session: browserSession, setControl, sendInput, refreshLiveView, close: closeBrowser } =
     useBrowserSession(sessionKey);
@@ -547,6 +521,7 @@ export default function MainChatView({
           inputPlaceholder={inputPlaceholder}
           composerFocused={composerFocused}
           onComposerFocusChange={setComposerFocused}
+          renderProposeActionAsText={renderProposeActionAsText}
         />
 
         <BrowserPanel
@@ -598,6 +573,7 @@ function ChatRuntimeScope({
   inputPlaceholder,
   composerFocused,
   onComposerFocusChange,
+  renderProposeActionAsText,
 }: {
   sessionKey: string;
   runtime: AssistantRuntime;
@@ -609,6 +585,7 @@ function ChatRuntimeScope({
   inputPlaceholder?: string;
   composerFocused: boolean;
   onComposerFocusChange: (focused: boolean) => void;
+  renderProposeActionAsText: boolean;
 }) {
   // Composer text is local to ChatComposer (it's a controlled textarea).
   // Lifting it up here was used briefly for an "Edit prefills composer"
@@ -670,13 +647,15 @@ function ChatRuntimeScope({
           >
             <ThreadPrimitive.Empty>{emptyState}</ThreadPrimitive.Empty>
 
-            <ThreadPrimitive.Messages
-              components={{
-                UserMessage,
-                AssistantMessage,
-                UserEditComposer,
-              }}
-            />
+            <ChatRenderOptionsContext.Provider value={{ renderProposeActionAsText }}>
+              <ThreadPrimitive.Messages
+                components={{
+                  UserMessage,
+                  AssistantMessage,
+                  UserEditComposer,
+                }}
+              />
+            </ChatRenderOptionsContext.Provider>
 
             <ThreadPrimitive.ViewportFooter />
           </ThreadPrimitive.Viewport>

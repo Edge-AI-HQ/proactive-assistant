@@ -29,6 +29,21 @@ export interface ShouldBootstrapCardChatParams {
   bootstrapMessage?: string;
 }
 
+export interface ShouldIncludeCardContextParams {
+  hasCardContext: boolean;
+  isFreshThread: boolean;
+  sessionKey: string;
+}
+
+export interface BuildRequestUserTextParams {
+  sessionKey: string;
+  userText: string;
+  cardContext?: Record<string, unknown>;
+}
+
+const CARD_FEEDBACK_CONTEXT_RE =
+  /^<current_feedback_card>[\s\S]*?<\/current_feedback_card>\s*\n+User message:\n/;
+
 export function buildChatRequestBody(
   params: BuildChatRequestBodyParams,
 ): Record<string, unknown> {
@@ -59,4 +74,31 @@ export function shouldBootstrapCardChat(
     !params.alreadyBootstrapped &&
     Boolean(params.bootstrapMessage?.trim())
   );
+}
+
+export function shouldIncludeCardContext(
+  params: ShouldIncludeCardContextParams,
+): boolean {
+  if (!params.hasCardContext) return false;
+  if (!params.sessionKey.startsWith("card-thread-")) return true;
+  return params.isFreshThread;
+}
+
+export function buildRequestUserText(params: BuildRequestUserTextParams): string {
+  if (!params.cardContext) {
+    return params.userText;
+  }
+  return [
+    "<current_feedback_card>",
+    "The user is giving feedback on this exact current card. Use this card when they say this card / 这张卡 / 当前卡片.",
+    JSON.stringify(params.cardContext, null, 2),
+    "</current_feedback_card>",
+    "",
+    "User message:",
+    params.userText,
+  ].join("\n");
+}
+
+export function stripRequestOnlyCardContext(text: string): string {
+  return text.replace(CARD_FEEDBACK_CONTEXT_RE, "");
 }

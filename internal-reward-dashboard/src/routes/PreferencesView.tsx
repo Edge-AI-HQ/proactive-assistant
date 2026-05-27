@@ -170,9 +170,11 @@ export function PreferencesView({ onNavigate }: PreferencesViewProps) {
                 </span>
                 <span className="badge">{p.scope}</span>
                 <span className="badge">{p.polarity}</span>
+                <span className="badge">{p.durability}</span>
                 <span className="badge">w={p.weight}</span>
               </div>
               <p>{p.statement}</p>
+              {p.expires_at && <p className="muted">有效期至 {p.expires_at}</p>}
             </li>
           ))}
         </ul>

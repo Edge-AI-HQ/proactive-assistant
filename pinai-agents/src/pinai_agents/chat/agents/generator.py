@@ -49,6 +49,7 @@ from ...shared.api_models import (
 )
 from ..runtime.ctx import run_context
 from ..runtime.llm import make_chat_model
+from ..tools.local_sandbox import create_local_sandbox_backend, use_local_sandbox
 from ..tools.sandbox import evict_thread, get_or_create_thread_sandbox
 
 logger = logging.getLogger(__name__)
@@ -199,13 +200,22 @@ card-generator subagent will turn each plan item into a full card.
 
 <preference_alignment>
 `/state/phase1.json` has a `preferences` array — the user's OWN stated
-preferences (each: statement, scope, polarity, weight, created_at,
-optional evidence). These are a HARD CONSTRAINT on this batch, stronger
-than inferred signals:
+preferences (each: statement, scope, polarity, durability, expires_at,
+weight, created_at, optional evidence). The list endpoint already filters
+out expired temporary rows. Valid active preferences are a HARD CONSTRAINT
+on this batch, stronger than inferred signals:
 
 - The most RECENT preferences and the HIGHEST-`weight` ones are near-
   mandatory. Treat a recent, high-weight preference as a rule you must
   obey this run, not a hint to weigh against everything else.
+- If valid preferences conflict, follow the newest one for this batch.
+  Mention the conflict in `notes` instead of averaging the two.
+- `durability = "temporary"` means the user asked for a time-boxed
+  generation change (today / next batch / this card). Obey it now but
+  do not treat it as evidence of long-term taste.
+- `durability = "persistent"` is long-lived. It should usually agree
+  with `profile.preferences`; if the two conflict, prefer the newer
+  explicit preference for this batch and note the mismatch.
 - `polarity = "positive"` → actively BIAS the plan TOWARD that topic /
   source / timing / format. Plan an item that satisfies it when any
   grounded evidence supports one.
@@ -468,7 +478,16 @@ async def run_generator(
         no further parse / shape check needed.
     """
     session_key = f"gen-{run_id}"
-    backend, _ = await get_or_create_thread_sandbox(session_key, run_jwt=run_jwt)
+    is_local_sandbox = use_local_sandbox()
+    if is_local_sandbox:
+        backend = create_local_sandbox_backend(
+            run_jwt=run_jwt,
+            root_dir="/state",
+            reset_files=("phase1.json", "matched_patterns.json"),
+        )
+        logger.info("generator using local sandbox backend run_id=%s", run_id)
+    else:
+        backend, _ = await get_or_create_thread_sandbox(session_key, run_jwt=run_jwt)
     try:
         # Stage matched_patterns to /state so the planner subagent can
         # read_file('/state/matched_patterns.json'). Empty list still gets
@@ -594,7 +613,8 @@ async def run_generator(
                 },
             )
     finally:
-        await evict_thread(session_key)
+        if not is_local_sandbox:
+            await evict_thread(session_key)
 
     structured = result.get("structured_response")
     if not isinstance(structured, GeneratorOutput):

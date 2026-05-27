@@ -44,6 +44,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.outputs import ChatResult
 from langchain_openai import ChatOpenAI
+from pydantic import SecretStr
 
 from ...config import get_chat_settings
 from .reasoning import (
@@ -81,6 +82,18 @@ class ChatLiteLLMReasoning(ChatOpenAI):
     LangSmith renders as a thinking block, the Postgres checkpointer
     persists, and the chat history endpoint replays.
     """
+
+    def _get_request_payload(
+        self,
+        input_: Any,
+        *,
+        stop: list[str] | None = None,
+        **kwargs: Any,
+    ) -> dict:
+        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        if self._use_responses_api(payload):
+            _drop_invalid_responses_message_ids(payload)
+        return payload
 
     def _convert_chunk_to_generation_chunk(
         self,
@@ -140,6 +153,30 @@ class ChatLiteLLMReasoning(ChatOpenAI):
         return result
 
 
+def _drop_invalid_responses_message_ids(payload: dict[str, Any]) -> None:
+    """Remove legacy tool-call IDs from Responses message item IDs.
+
+    OpenAI Responses only accepts persisted message IDs that start with
+    `msg`. Older streamed chat history can attach tool-call IDs
+    (`call_...`) to assistant text blocks; LangChain then promotes those
+    into `{"type": "message", "id": "call_..."}` input items. Tool
+    `call_id` fields must remain intact, so this only touches message
+    item IDs.
+    """
+
+    items = payload.get("input")
+    if not isinstance(items, list):
+        return
+    for item in items:
+        if (
+            isinstance(item, dict)
+            and item.get("type") == "message"
+            and isinstance(item.get("id"), str)
+            and not item["id"].startswith("msg")
+        ):
+            item.pop("id", None)
+
+
 def make_chat_model(
     *,
     virtual_key: str,
@@ -179,15 +216,19 @@ def make_chat_model(
 
     return ChatLiteLLMReasoning(
         model=model_name,
-        api_key=virtual_key,  # pyright: ignore[reportArgumentType]
+        api_key=SecretStr(virtual_key),
         base_url=settings.litellm_base_url,
         temperature=temperature,
-        streaming=streaming,
+        streaming=streaming and reasoning_options.allow_streaming,
         stream_usage=True,
+        reasoning=reasoning_options.reasoning,
+        include=reasoning_options.include,
+        use_responses_api=reasoning_options.use_responses_api,
+        use_previous_response_id=reasoning_options.use_previous_response_id,
         # Opt into langchain-core 1.x v1 content-block protocol — required
         # for reasoning blocks (see ChatLiteLLMReasoning above) to flow
         # through aggregation, persistence, and LangSmith trace UI as a
         # typed list rather than collapsing back to bare-string content.
-        output_version="v1",
+        output_version=reasoning_options.output_version,
         extra_body=reasoning_options.extra_body or None,
     )

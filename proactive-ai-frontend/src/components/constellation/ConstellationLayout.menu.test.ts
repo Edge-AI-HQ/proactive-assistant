@@ -120,4 +120,22 @@ describe("ConstellationLayout menu order", () => {
       /if \(pipeline\.run\.status !== "complete" \|\| !pipeline\.run\.runId\) return;[\s\S]*void refreshCards\(\);/,
     );
   });
+
+  test("does not render a separate card feedback drawer button", () => {
+    const source = readFileSync(join(__dirname, "ConstellationLayout.tsx"), "utf8");
+
+    expect(source).not.toContain("mainChatCardContext");
+    expect(source).not.toContain("openMainChatForCardFeedback");
+    expect(source).not.toContain("onFeedback");
+    expect(source).not.toContain("Give card feedback in PIN AI");
+    expect(source).not.toContain("<MessageCircle");
+  });
+
+  test("opens Steer as the card feedback conversation without auto voice", () => {
+    const source = readFileSync(join(__dirname, "ConstellationLayout.tsx"), "utf8");
+
+    expect(source).not.toContain('autoStartVoice: mode === "steer"');
+    expect(source).not.toMatch(/<ChatDetailView[\s\S]*autoStartVoice=/);
+    expect(source).toMatch(/onModify=\{\(card\) => \{[\s\S]*void cardActions\.modify\(real\);/);
+  });
 });

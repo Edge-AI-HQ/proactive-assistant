@@ -158,57 +158,6 @@ function realCardToLovableIntent(card: IntentCard, status: CardStatus): Intent {
   };
 }
 
-/* ── Lovable mock Intent → our real IntentCard (so the existing CardChat /
- * MainChatView runtime can consume Lovable's mock cards while the real
- * /cards backend isn't connected yet). Backend stays untouched. ── */
-function intentCategoryToBasket(category: string): GoalBasket {
-  switch (category) {
-    case "growth":  return "growth";
-    case "work":    return "work";
-    case "finance": return "wealth";
-    case "health":  return "health";
-    case "learn":   return "growth";
-    case "life":    return "life";
-    default:        return "life";
-  }
-}
-
-type AdaptableCard = Pick<
-  Intent,
-  "id" | "category" | "title" | "line1" | "line2" | "detail"
->;
-
-function lovableIntentToIntentCard(intent: AdaptableCard): IntentCard {
-  const scoreMap = new Map<string, number>(
-    (intent.detail?.scores ?? []).map((s) => [s.label, s.value]),
-  );
-  const score = (label: string, fallback: number) =>
-    (scoreMap.get(label) ?? fallback) / 100;
-  const sources = (intent.line2 ?? "")
-    .replace(/^Sources:\s*/i, "")
-    .split(/[·,]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return {
-    id: `lovable-${intent.id}`,
-    goalBasket: intentCategoryToBasket(intent.category),
-    title: intent.title,
-    whyNow: intent.line1,
-    summary: intent.line1,
-    primaryAction: {
-      label: intent.detail?.willExecute || intent.title,
-      type: "confirm",
-    },
-    secondaryActions: [],
-    confidence: score("Confidence", 80),
-    urgency: score("Urgency", 80),
-    importance: score("Importance", 80),
-    sources,
-    agentChain: [],
-    createdAt: new Date().toISOString(),
-  };
-}
-
 /* ── Card data (reused from NowFeed) ── */
 
 interface ExecutionStep { text: string; tool: string; }
@@ -406,7 +355,9 @@ export default function BigBallLayout() {
   useEffect(() => {
     if (!mainChatOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMainChatOpen(false);
+      if (e.key === "Escape") {
+        setMainChatOpen(false);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -474,7 +425,10 @@ export default function BigBallLayout() {
   const cardActions = useCardActions({
     onOpenChat: (card, bootstrap) => {
       const trimmed = bootstrap.trim();
-      setChatTarget({ card, bootstrap: trimmed.length > 0 ? trimmed : undefined });
+      setChatTarget({
+        card,
+        bootstrap: trimmed.length > 0 ? trimmed : undefined,
+      });
       setDrawerOpen(false);
       setSelectedCard(null);
     },
@@ -1024,14 +978,10 @@ export default function BigBallLayout() {
             className="flex-1 overflow-hidden"
           >
             {chatTarget ? (
-              /* Real card execution: the rich ChatDetailView (EXECUTION
-                 timeline + Generated draft card + NEEDS YOUR INPUT pink
-                 panel + Dismiss/Pause toolbar). Backed by the
-                 chat-stream-adapter `useCardExecutionRun` hook —
-                 session_key = `card-thread-<cardId>` so the propose_action
-                 history persists on LangGraph's checkpointer. `bootstrap`
-                 is the Confirm-path's primaryAction text; the hook auto-
-                 fires it if the thread is empty (fanout missed it). */
+              /* Real card chat: ChatDetailView now wraps MainChatView with
+                 session_key = `card-thread-<cardId>`. `bootstrap` is the
+                 Confirm-path's primaryAction text; the shared chat runtime
+                 auto-fires it only when the thread is empty. */
               <ChatDetailView
                 card={realIntentToChatCard(chatTarget.card)}
                 runId={chatTarget.card.id}
@@ -1376,7 +1326,7 @@ export default function BigBallLayout() {
                 setSelectedCard(null);
                 chatEntryView.current = activeView;
                 // Real card → POST /feedback kind=card_action action=modify
-                // and open MainChatView with empty bootstrap (lets user type).
+                // and open the card-thread as the feedback / steer surface.
                 if (card.originalId) {
                   const real = cardsState.cards.find(
                     (c) => c.card.id === card.originalId,

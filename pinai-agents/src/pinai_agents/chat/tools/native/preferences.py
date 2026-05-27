@@ -10,6 +10,7 @@ language instead of hoping the planner reads a row.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from langchain_core.tools import tool
@@ -46,6 +47,21 @@ class PreferenceAddInput(BaseModel):
             "preference records its evidence."
         ),
     )
+    durability: Literal["temporary", "persistent"] = Field(
+        default="persistent",
+        description=(
+            "'temporary' for time-boxed generation guidance such as 'today "
+            "show me AI news' or 'for the next batch'; 'persistent' for "
+            "durable preferences that should keep shaping future cards."
+        ),
+    )
+    expires_at: datetime | None = Field(
+        default=None,
+        description=(
+            "Expiry timestamp for temporary preferences. Use the user's "
+            "timezone when known. Leave null for persistent preferences."
+        ),
+    )
 
 
 @tool("preference_add", args_schema=PreferenceAddInput)
@@ -54,15 +70,20 @@ async def preference_add(
     scope: Literal["topic", "source", "timing", "format", "global"],
     polarity: Literal["positive", "negative"],
     card_id: str | None,
+    durability: Literal["temporary", "persistent"] = "persistent",
+    expires_at: datetime | None = None,
 ):
-    """Persist a PERSISTENT content preference the user just stated in
-    chat ("I want to see more X", "stop showing me Y"). High-weight: the
-    next card generation treats recent preferences as near-hard
-    constraints. Use this — not `memory_add` — when the user is telling
-    you what they want MORE or LESS of going forward. For a one-off
-    factual tidbit use `memory_add`; for a structured persona attribute
-    use `profile_upsert`. To change the OUTPUT LANGUAGE, use
-    `set_generation_language` instead — that's a setting, not a preference."""
+    """Persist content preference / generation guidance the user just
+    stated in chat ("I want to see more X", "stop showing me Y").
+    High-weight: the next card generation treats valid active preferences
+    as near-hard constraints. Use `durability='temporary'` plus
+    `expires_at` for time-boxed asks such as "today push AI news"; do not
+    promote those into profile. For durable card-generation preferences,
+    call this first for immediate effect, then call
+    `profile_preference_merge` so the preference becomes part of the
+    long-term profile. To change the OUTPUT LANGUAGE, use
+    `set_generation_language` instead — that's a setting, not a
+    preference."""
     evidence = {"card_id": card_id} if card_id else None
     return await http_client.post(
         "/api/agent/preferences/add",
@@ -70,6 +91,8 @@ async def preference_add(
             "statement": statement,
             "scope": scope,
             "polarity": polarity,
+            "durability": durability,
+            "expiresAt": expires_at.isoformat() if expires_at else None,
             "evidence": evidence,
         },
     )

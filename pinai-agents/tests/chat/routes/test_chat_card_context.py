@@ -14,9 +14,11 @@ decision without spinning up the agent / sandbox.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from langchain_core.messages import SystemMessage
 
-from pinai_agents.chat.routes.chat import _build_send_messages
+from pinai_agents.chat.routes.chat import _build_send_messages, _turn_context_message
 
 _CTX = {"card_id": "card_99", "title": "A-share digest", "intent": "review"}
 
@@ -30,16 +32,23 @@ def _user_turns(msgs: list) -> list[dict]:
 
 
 def test_main_thread_with_card_context_injects_system_message():
+    turn_context = _turn_context_message(datetime(2026, 5, 27, 12, 0, tzinfo=UTC))
     msgs = _build_send_messages(
         message="this card is off",
         card_context=_CTX,
         is_card_thread=False,
         is_first_turn=False,  # main thread is a singleton — never "first"
+        turn_context=turn_context,
     )
     sysmsgs = _system_messages(msgs)
-    assert len(sysmsgs) == 1
-    assert "<card_context>" in sysmsgs[0].content
-    assert "card_99" in sysmsgs[0].content
+    assert len(sysmsgs) == 2
+    assert "<turn_context>" in sysmsgs[0].content
+    assert "2026-05-27T12:00:00+00:00" in sysmsgs[0].content
+    assert "temporary preferences" in sysmsgs[0].content
+    assert "<card_context>" in sysmsgs[1].content
+    assert "exact current card" in sysmsgs[1].content
+    assert "Do not call cards_recent" in sysmsgs[1].content
+    assert "card_99" in sysmsgs[1].content
     # The user turn is still appended after the context.
     assert _user_turns(msgs) == [{"role": "user", "content": "this card is off"}]
 

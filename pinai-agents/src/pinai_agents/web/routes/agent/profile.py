@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, status
 from ....shared.api_models import (
     GenerationLanguageSetRequest,
     GoalUpsertRequest,
+    ProfilePreferenceMergeRequest,
     ProfileUpsertRequest,
 )
 from ...auth.deps import AgentRun, current_agent_run, get_pool
@@ -59,6 +60,24 @@ async def agent_upsert_profile(
             constraints=body.constraints,
             metadata=body.metadata,
         )
+    return asdict(row)
+
+
+@router.post("/preferences/merge")
+async def agent_merge_profile_preference(
+    body: ProfilePreferenceMergeRequest,
+    run: AgentRun = Depends(current_agent_run),
+    pool=Depends(get_pool),
+):
+    """Merge one durable preference into pai_profile.preferences.
+
+    Profile JSONB buckets are replaced wholesale by the generic upsert
+    endpoint, so this one-key merge route is the safer native-tool path
+    for main chat.
+    """
+    async with user_scoped_tx(pool, run.user_id) as conn:
+        repo = ProfileRepository(run.user_id, conn)
+        row = await repo.merge_profile_preference(key=body.key, value=body.value)
     return asdict(row)
 
 

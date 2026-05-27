@@ -1,17 +1,22 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import { renderHook, waitFor } from "@testing-library/react";
 
 vi.mock("@/lib/api", () => ({
   proxyFetch: vi.fn(),
 }));
 
+import { proxyFetch } from "@/lib/api";
 import {
   cardsCacheKey,
   isCompletedCardOutcome,
   isHiddenCardOutcome,
   parseEntries,
   readCachedCards,
+  useCards,
   writeCardsCache,
 } from "./useCards";
+
+const mockProxyFetch = vi.mocked(proxyFetch);
 
 const liveCardsPayload = {
   cards: [
@@ -57,9 +62,25 @@ function installSessionStorage() {
   });
 }
 
+function jsonResp(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function abortableNever(init?: RequestInit): Promise<Response> {
+  return new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener("abort", () => {
+      reject(new DOMException("Aborted", "AbortError"));
+    });
+  });
+}
+
 describe("useCards helpers", () => {
   beforeEach(() => {
     installSessionStorage();
+    mockProxyFetch.mockReset();
   });
 
   test("parses latest card outcome from /cards", () => {
@@ -80,5 +101,47 @@ describe("useCards helpers", () => {
     expect(cards?.[0]?.card.id).toBe("card_1");
     expect(globalThis.sessionStorage.getItem(cardsCacheKey(200, "user-1"))).toContain("card_1");
     expect(readCachedCards(200, "user-2")).toBeNull();
+  });
+
+  test("hydrates cached cards when cacheScope becomes available after mount", async () => {
+    writeCardsCache(200, "user-1", liveCardsPayload);
+    mockProxyFetch.mockImplementation((_path, init) => abortableNever(init));
+    const initialProps: { cacheScope: string | null } = { cacheScope: null };
+
+    const { result, rerender } = renderHook(
+      ({ cacheScope }: { cacheScope: string | null }) => useCards({ cacheScope }),
+      { initialProps },
+    );
+
+    expect(result.current.cards).toHaveLength(0);
+
+    rerender({ cacheScope: "user-1" });
+
+    await waitFor(() => {
+      expect(result.current.cards[0]?.card.id).toBe("card_1");
+    });
+  });
+
+  test("starts a replacement /cards request after the pre-auth request is aborted", async () => {
+    mockProxyFetch
+      .mockImplementationOnce((_path, init) => abortableNever(init))
+      .mockResolvedValueOnce(jsonResp(200, liveCardsPayload));
+    const initialProps: { cacheScope: string | null } = { cacheScope: null };
+
+    const { result, rerender } = renderHook(
+      ({ cacheScope }: { cacheScope: string | null }) => useCards({ cacheScope }),
+      { initialProps },
+    );
+
+    expect(mockProxyFetch).toHaveBeenCalledTimes(1);
+
+    rerender({ cacheScope: "user-1" });
+
+    await waitFor(() => {
+      expect(mockProxyFetch).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(result.current.cards[0]?.card.id).toBe("card_1");
+    });
   });
 });

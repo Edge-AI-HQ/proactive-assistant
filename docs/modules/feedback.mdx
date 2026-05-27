@@ -87,19 +87,21 @@ flowchart LR
 
 `pai_card_evaluations`(同 migration)是 generation 自评(详见 [Generation](./generation)),`pass / overall / dim_*` 五维评分,跟用户反馈联合解释卡片质量。
 
-## 偏好层(表达层 · pai_preference_records)
+## 偏好层(即时表达层 · pai_preference_records)
 
 反馈分三层,各管一摊,不互相覆盖:
 
 - **行为层** = `pai_feedback_events`(本模块) + fingerprint fan-out。confirm / dismiss / snooze / text_feedback,planner 据此 dedupe + cold-basket 抑制。
-- **聚合画像** = `pai_profile`(facts / preferences / constraints 桶,见 [Memory](./memory))。
-- **表达层** = `pai_preference_records`(migration `056_pai_preference_records.sql`):用户在 **main chat 亲口说的持续性偏好**(「想看更多 A 股新闻」「别推工作类」)。**高权重**,下一次生成当近似硬约束读。
+- **聚合画像** = `pai_profile`(facts / preferences / constraints 桶,见 [Memory](./memory))。长期偏好必须最终内化到这里,否则时间久了只靠偏好流水会越来越乱。
+- **即时表达层** = `pai_preference_records`(migration `056_pai_preference_records.sql` + `057_pai_preference_lifetime.sql`):用户在 **main chat 亲口说的生成偏好/指令**。下一次生成读 active 且未过期的行,当近似硬约束。
 
-`pai_preference_records` 字段:`scope` ∈ topic/source/timing/format/global · `polarity` ∈ positive/negative · `weight`(用户亲口默认 1.0)· `confidence` · `source` ∈ user/internal_operator/agent · `evidence JSONB`(可带 `card_id` / `operator_id`)· `status` ∈ active/superseded/archived(状态机同 `pai_memory`,supersede 断言 new 先 active)。RLS 同 023 风格。
+`pai_preference_records` 字段:`scope` ∈ topic/source/timing/format/global · `polarity` ∈ positive/negative · `durability` ∈ temporary/persistent · `expires_at` · `weight`(用户亲口默认 1.0)· `confidence` · `source` ∈ user/internal_operator/agent · `evidence JSONB`(可带 `card_id` / `operator_id`)· `status` ∈ active/superseded/archived(状态机同 `pai_memory`,supersede 断言 new 先 active)。RLS 同 023 风格。
 
 写入只走 chat 端 native tool,**没有前端直接写接口**:
 
-- `preference_add(statement, scope, polarity, card_id?)` → `POST /api/agent/preferences/add`。**`source` 由服务端按 JWT principal 决定**(普通 run 恒 `user`;impersonation run 强制 `internal_operator` 且 `evidence.operator_id` 服务端盖章),**不信 agent 自报**。
+- `preference_add(statement, scope, polarity, card_id?, durability, expires_at?)` → `POST /api/agent/preferences/add`。**`source` 由服务端按 JWT principal 决定**(普通 run 恒 `user`;impersonation run 强制 `internal_operator` 且 `evidence.operator_id` 服务端盖章),**不信 agent 自报**。
+- `durability='temporary'`:用于「今天给我推 AI 新闻」「下一批不要这类卡」这类短期生成指令。必须有清晰时效,过期后 `/api/agent/preferences/list?status=active` 自动不返回;**不要写 profile**。
+- `durability='persistent'`:用于长期偏好。main chat 先写 `preference_add` 保证下一次生成立刻生效,再调用 `profile_preference_merge(key,value)` 把它合进 `pai_profile.preferences`,保证长期生成也能稳定读到。
 - 语言类偏好**不进这张表** —— `set_generation_language(language)` → `POST /api/agent/profile/settings/generation-language`,翻 `pai_user_settings.generation_language` 并 re-stamp 自动生成 schedule 的 `output_language`(确定性生效,见 [Generation](./generation))。
 
 internal dashboard 代用户补偏好:`POST /api/reward-dashboard/impersonate/chat-token`(`current_user` 鉴权)为目标用户 mint 带 `actor=internal_operator` + `operator_id` 的 per-run JWT;dashboard 的「用户偏好」页用它列偏好 + 代填,来源在列表里和用户原话区分可见。
@@ -160,6 +162,7 @@ sequenceDiagram
 | Agent 路由 | `web/routes/agent/feedback.py` 暴露 `list` / `log`,给 chat 端 native tool `feedback_list` / `feedback_log` 用。`source='agent_analysis'` 走这条。 |
 | chat-feedback 触发 | 当前由 chat 进程**内联**触发(scheduler 的 `crystallize` kind 路由已就位但未接 enqueue producer),`chat/agents/crystallize.py` 处理 transcript;失败只 warn,不阻断 generation。crystallize 写 memory / skill **跟** chat-feedback 写 feedback events 是两条不同链路,但都用同一份 `normalizeCardChatMessages`。 |
 | Generation 使用 | `chat/agents/generator.py:_DATA_COLLECTOR_PROMPT` 让 data-collector 调 `feedback_list` 拉最近 feedback,写进 `/state/phase1.json`;planner 据此 dedupe(`skipped_duplicates`)+ cold-basket 抑制(`cold_baskets`)。 |
+| 偏好使用 | data-collector 另调 `client.preferences.list(status="active", limit=50)`。repository 对 active 查询自动过滤 `expires_at <= NOW()` 的临时偏好;planner 遇到冲突时按最新有效偏好优先,并在 notes 写明。 |
 | `metadata` | 字符串 / object 都接,字符串会尝试 JSON.parse;前端约定传 object。 |
 | `intentKey` / `basket` fallback | route 在缺失时按 `intentCardId` 查最近 generation 卡补齐(避免前端老版本 schema 漏字段)。 |
 | Reward ledger 分界 | 用户打开卡片时,`AppShell` 额外写 `pai_card_reward_events(source='user', event_type='card_open', score=1)` 到 `/api/reward-dashboard/cards/{card_id}/score`。confirm / dismiss / snooze / text feedback 仍写 `pai_feedback_events`;不要把所有 feedback 复制进 reward ledger。 |
@@ -170,11 +173,13 @@ sequenceDiagram
 |---|---|
 | Feedback UI 路由 | `pinai-agents/src/pinai_agents/web/routes/ui/feedback.py` |
 | Feedback agent 路由 | `pinai-agents/src/pinai_agents/web/routes/agent/feedback.py` |
+| Preference agent 路由 | `pinai-agents/src/pinai_agents/web/routes/agent/preferences.py`、`web/routes/agent/profile.py:/preferences/merge` |
 | Repository / SQL | `pinai-agents/src/pinai_agents/web/db/repositories/feedback.py` |
-| Schema | `pinai-agents/db/migrations/011_pai_memory_signals.sql`(feedback_events)、`014_pai_pipeline.sql`(intent_card_state、intent_thread_state、card_evaluations) |
+| Schema | `pinai-agents/db/migrations/011_pai_memory_signals.sql`(feedback_events)、`014_pai_pipeline.sql`(intent_card_state、intent_thread_state、card_evaluations)、`056_pai_preference_records.sql`、`057_pai_preference_lifetime.sql` |
 | chat-feedback / crystallize agent | `pinai-agents/src/pinai_agents/chat/agents/crystallize.py` |
 | Generation 端使用 | `pinai-agents/src/pinai_agents/chat/agents/generator.py` 里 `_DATA_COLLECTOR_PROMPT` 调 `feedback_list`,`_PLANNER_PROMPT` 用 skipped_duplicates / cold_baskets 字段 |
 | native `feedback_*` 工具 | `pinai-agents/src/pinai_agents/chat/tools/native/feedback.py` |
+| native preference/profile 工具 | `pinai-agents/src/pinai_agents/chat/tools/native/preferences.py`、`profile.py:profile_preference_merge` |
 | 前端卡片操作 UI | `proactive-ai-frontend/src/components/AppShell.tsx`、`NowFeed.tsx`、`CardDetailBody.tsx` |
 | 前端 chat 反馈 UI | `proactive-ai-frontend/src/components/ChatTimeline.tsx` |
 
@@ -183,6 +188,7 @@ sequenceDiagram
 ```bash
 # Repository + route
 cd pinai-agents && uv run pytest tests/web/db/repositories/test_feedback_repo.py
+cd pinai-agents && uv run pytest tests/web/db/repositories/test_preferences_repo.py tests/web/routes/test_preferences.py
 cd pinai-agents && uv run pytest tests/web/routes/                          # 全 route 套件
 
 # chat-feedback / crystallize(若存在专项测试)

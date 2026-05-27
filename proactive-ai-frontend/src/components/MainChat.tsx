@@ -32,7 +32,10 @@ type ViewMode = "landing" | "conversation";
  * toggled via CSS so the in-flight SSE survives the landing →
  * conversation transition.
  */
-export default function MainChat({ onBack, cardContext }: MainChatProps) {
+export default function MainChat({
+  onBack,
+  cardContext,
+}: MainChatProps) {
   const [sessionKey, setSessionKey] = useState<string | null>(null);
 
   // Fetch the user's main thread once on mount. Backend returns the
@@ -90,7 +93,8 @@ function MainChatScope({
     sessionKey,
     cardContext,
   });
-  const [view, setView] = useState<ViewMode>("landing");
+  const [view, setView] = useState<ViewMode>(cardContext ? "conversation" : "landing");
+  const cardTitle = typeof cardContext?.title === "string" ? cardContext.title : undefined;
 
   const handleSubmitFromLanding = useCallback(
     (text: string) => {
@@ -132,6 +136,21 @@ function MainChatScope({
           runtime={runtime}
           historyLoaded={historyLoaded}
           onBack={handleConversationBack}
+          inputPlaceholder={
+            cardContext ? "Tell PIN AI what to change about this card…" : undefined
+          }
+          headerSlot={
+            cardContext ? (
+              <div className="px-4 pt-1 pb-2">
+                <div className="rounded-2xl border border-foreground/[0.06] bg-white/45 px-3 py-2 text-[12px] leading-snug text-foreground/60 backdrop-blur-xl">
+                  <span className="font-semibold text-foreground/75">
+                    Feedback on this card
+                  </span>
+                  {cardTitle ? <span> · {cardTitle}</span> : null}
+                </div>
+              </div>
+            ) : null
+          }
         />
       </div>
     </>

@@ -146,7 +146,7 @@ HNSW 索引 + RLS(WHERE user_id 先短路再做 vector op),hot path:
 |---|---|
 | `/api/agent/memory` | list / get / add / search / archive / supersede |
 | `/api/agent/signals` | recent / get / add / consume |
-| `/api/agent/profile` | get / upsert / upsert_goal |
+| `/api/agent/profile` | get / upsert / preferences/merge / upsert_goal |
 | `/api/agent/skills` | list / get / add |
 | `/api/agent/raw` | list / get(toolkit-aware) |
 | `/api/agent/world` | recent / search / score / consume / reference |
@@ -171,6 +171,7 @@ await client.signals.add(kind="...", title="...", payload={...}, dedupe_key="...
 
 await client.profile.get()                       # {profile, goals}
 await client.profile.upsert(facts={...}, preferences={...}, constraints={...})
+await client.profile.merge_preference(key="card_topics", value="Prefers proactive AI and market-news cards.")
 await client.profile.upsert_goal(key="health_marathon", title="...", priority="high")
 
 await client.skills.list(status="enabled")

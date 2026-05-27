@@ -38,6 +38,9 @@ def test_planner_prompt_has_preference_alignment():
     assert "preference" in prompt
     assert "positive" in prompt
     assert "negative" in prompt
+    assert "durability" in prompt
+    assert "expires_at" in prompt
+    assert "newest" in prompt
     # Hard-constraint framing — preferences are not just a hint.
     assert "hard constraint" in prompt
     # The planner must surface which preference shaped a plan item.
@@ -59,6 +62,7 @@ def test_sdk_exposes_preferences_list():
     assert callable(client.preferences.list)
     assert callable(client.preferences.add)
     assert callable(client.preferences.supersede)
+    assert callable(client.profile.merge_preference)
     # Language is a deterministic setting, not a preference.
     assert hasattr(client, "settings")
     assert callable(client.settings.set_generation_language)

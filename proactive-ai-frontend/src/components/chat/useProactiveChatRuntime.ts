@@ -31,7 +31,10 @@ import {
 import { proxyFetch, proxyPost } from "@/lib/api";
 import {
   buildChatRequestBody,
+  buildRequestUserText,
+  shouldIncludeCardContext,
   shouldBootstrapCardChat,
+  stripRequestOnlyCardContext,
 } from "./card-chat-session";
 import { LiveContentBuilder, type JsonValue } from "./tool-steps";
 import { parseTodosFromArgs, setTodos } from "./todos-store";
@@ -113,12 +116,10 @@ function createAdapter({
       lastSeenMessageCountRef.current = messages.length;
 
       // "Fresh thread" means: first turn after init, no prior user turn
-      // in this runtime instance. Triggers (a) bootstrap-message firing
-      // and (b) card-context inclusion in the request body.
-      // - CardChat: cardContext drives this (legacy path).
-      // - MainChat new-conversation: bootstrapMessage drives this
-      //   (MinimalistLanding chip / composer path). cardContext stays
-      //   undefined and `buildChatRequestBody` correctly omits it.
+      // in this runtime instance. It still gates bootstrap-message firing.
+      // Card-context inclusion is decided below: card threads keep their
+      // one-shot behavior, while main chat carries card context on every
+      // card-feedback turn because the main thread is a per-user singleton.
       const isFreshThread =
         (Boolean(cardContext) || Boolean(bootstrapMessage?.trim())) &&
         !bootstrappedSessionsRef.current.has(sessionKey);
@@ -135,9 +136,17 @@ function createAdapter({
 
       const body = buildChatRequestBody({
         sessionKey,
-        userText: effectiveText,
+        userText: buildRequestUserText({
+          sessionKey,
+          userText: effectiveText,
+          cardContext,
+        }),
         cardContext,
-        includeCardContext: isFreshThread,
+        includeCardContext: shouldIncludeCardContext({
+          hasCardContext: Boolean(cardContext),
+          isFreshThread,
+          sessionKey,
+        }),
         clientHints: clientHintsRef.current ?? undefined,
       });
       if (isRegenerate) {
@@ -356,7 +365,7 @@ interface HistoryMessage {
 
 function toRuntimePart(part: HistoryPart) {
   if (part.type === "text") {
-    return { type: "text" as const, text: part.text };
+    return { type: "text" as const, text: stripRequestOnlyCardContext(part.text) };
   }
   if (part.type === "reasoning") {
     return { type: "reasoning" as const, text: part.text };
