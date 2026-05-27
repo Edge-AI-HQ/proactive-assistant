@@ -1,4 +1,13 @@
-import { useState, useEffect, useCallback, useRef, Suspense } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  Suspense,
+  type CSSProperties,
+  type PointerEvent,
+  type TouchEvent,
+} from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -54,6 +63,14 @@ import type { GoalBasket, IntentCard } from "@/types/intent-card";
 import { useAmbientLiveSession } from "@/hooks/useAmbientLiveSession";
 import { useAmbientToggle } from "@/hooks/useAmbientToggle";
 import type { LiveSession } from "@/services/ambient/live-session";
+import {
+  isFromRightEdgeOfScreen,
+  isMainChatEntrySwipeUp,
+  isMainMenuSwipeLeft,
+  isMainMenuSwipeRight,
+  shouldIgnoreMainMenuSwipeTarget,
+  type TouchPoint,
+} from "./mainChatEntryGesture";
 
 /** Stable string→number hash so real card.id (string) gets a numeric id for
  *  Lovable's sphere components without losing the original. */
@@ -254,10 +271,30 @@ const MENU_ITEMS = [
 ] as const;
 type MenuId = (typeof MENU_ITEMS)[number]["id"];
 
+const CONSTELLATION_HEADER_TOP =
+  "max(4.5rem, calc(max(env(safe-area-inset-top, 0px), var(--safe-top, 0px)) + 0.75rem))";
+const constellationShellStyle = {
+  "--constellation-header-top": CONSTELLATION_HEADER_TOP,
+} as CSSProperties;
+
 /* ── Main component ── */
 export default function BigBallLayout() {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [activeView, setActiveView] = useState<MenuId>("now");
+  // activeView persisted to sessionStorage so a page reload (F5) drops the
+  // user back where they were instead of resetting to "now". sessionStorage
+  // (not localStorage): cleared when the tab closes, so the next fresh
+  // open of the app does start from "now".
+  const [activeView, setActiveViewState] = useState<MenuId>(() => {
+    if (typeof window === "undefined") return "now";
+    const stored = window.sessionStorage.getItem("pai-active-view");
+    return (stored as MenuId | null) ?? "now";
+  });
+  const setActiveView = useCallback((v: MenuId) => {
+    setActiveViewState(v);
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem("pai-active-view", v);
+    }
+  }, []);
   const [liveOverlay, setLiveOverlay] = useState<LiveSession | null>(null);
   const [selectedCard, setSelectedCard] = useState<Intent | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -291,10 +328,70 @@ export default function BigBallLayout() {
   });
   const [isScrolled, setIsScrolled] = useState(false);
   const [mainChatOpen, setMainChatOpen] = useState(false);
+  const mainChatEntryPointerStartRef = useRef<TouchPoint | null>(null);
+  const openMainChat = useCallback(() => {
+    setMainChatOpen(true);
+  }, []);
   const handleMainChatBack = useCallback(() => {
     setActiveView("now");
     setMainChatOpen(false);
   }, []);
+  const handleMainChatEntryPointerDown = useCallback((event: PointerEvent<HTMLButtonElement>) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    mainChatEntryPointerStartRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+    };
+  }, []);
+  const openMainChatFromEntrySwipe = useCallback((
+    end: TouchPoint,
+    event: { preventDefault: () => void },
+  ) => {
+    const shouldOpen = isMainChatEntrySwipeUp(mainChatEntryPointerStartRef.current, end);
+    mainChatEntryPointerStartRef.current = null;
+    if (!shouldOpen) return;
+    event.preventDefault();
+    openMainChat();
+  }, [openMainChat]);
+  const handleMainChatEntryPointerUp = useCallback((event: PointerEvent<HTMLButtonElement>) => {
+    openMainChatFromEntrySwipe({
+      x: event.clientX,
+      y: event.clientY,
+    }, event);
+  }, [openMainChatFromEntrySwipe]);
+  const handleMainChatEntryPointerMove = useCallback((event: PointerEvent<HTMLButtonElement>) => {
+    openMainChatFromEntrySwipe({
+      x: event.clientX,
+      y: event.clientY,
+    }, event);
+  }, [openMainChatFromEntrySwipe]);
+  const handleMainChatEntryTouchStart = useCallback((event: TouchEvent<HTMLButtonElement>) => {
+    const touch = event.touches[0];
+    if (!touch) return;
+    mainChatEntryPointerStartRef.current = {
+      x: touch.clientX,
+      y: touch.clientY,
+    };
+  }, []);
+  const handleMainChatEntryTouchMove = useCallback((event: TouchEvent<HTMLButtonElement>) => {
+    const touch = event.touches[0];
+    if (!touch) return;
+    openMainChatFromEntrySwipe({
+      x: touch.clientX,
+      y: touch.clientY,
+    }, event);
+  }, [openMainChatFromEntrySwipe]);
+  const handleMainChatEntryTouchEnd = useCallback((event: TouchEvent<HTMLButtonElement>) => {
+    const touch = event.changedTouches[0];
+    if (!touch) {
+      mainChatEntryPointerStartRef.current = null;
+      return;
+    }
+    openMainChatFromEntrySwipe({
+      x: touch.clientX,
+      y: touch.clientY,
+    }, event);
+  }, [openMainChatFromEntrySwipe]);
 
   useEffect(() => {
     if (!mainChatOpen) return;
@@ -431,6 +528,181 @@ export default function BigBallLayout() {
   const [activeChat, setActiveChat] = useState<ChatCard | null>(null);
   const [chatMode, setChatMode] = useState<"confirm" | "modify" | "done" | "steer">("confirm");
   const chatEntryView = useRef<MenuId | null>(null);
+  const mainMenuSwipeStartRef = useRef<TouchPoint | null>(null);
+  const menuCloseSwipeStartRef = useRef<TouchPoint | null>(null);
+  const canOpenMenuFromMainSwipe = (
+    !menuOpen
+    && !mainChatOpen
+    && !chatTarget
+    && !activeChat
+    && !drawerOpen
+    && !paywallCard
+    && !liveOverlay
+  );
+
+  const openMenuFromMainSwipe = useCallback((
+    end: TouchPoint,
+    event: { preventDefault: () => void },
+  ) => {
+    if (!canOpenMenuFromMainSwipe) {
+      mainMenuSwipeStartRef.current = null;
+      return;
+    }
+    const shouldOpen = isMainMenuSwipeLeft(mainMenuSwipeStartRef.current, end);
+    if (!shouldOpen) return;
+    mainMenuSwipeStartRef.current = null;
+    event.preventDefault();
+    setMenuOpen(true);
+  }, [canOpenMenuFromMainSwipe]);
+  const handleMainSurfacePointerDown = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    if (!canOpenMenuFromMainSwipe) return;
+    // Edge-gesture-only model (iOS-style): only swipes starting in the
+    // right-edge zone open the menu. Non-edge swipes belong to whatever
+    // content is below (e.g. Sphere3DCards card drag).
+    //
+    // This handler is wired as onPointerDownCapture (CAPTURE PHASE) on
+    // the JSX below — so it fires BEFORE Sphere3DCards' own onPointerDown.
+    // That's the only way to win: Sphere3DCards' own handler also calls
+    // setPointerCapture, so the bubble-phase ordering would otherwise
+    // let the sphere claim the gesture first.
+    const screenWidth = typeof window === "undefined" ? Infinity : window.innerWidth;
+    if (!isFromRightEdgeOfScreen(event.clientX, screenWidth)) {
+      // Not an edge gesture — let the event continue propagating to the
+      // sphere (or whatever child is under the finger) so they can do
+      // their normal drag handling.
+      mainMenuSwipeStartRef.current = null;
+      return;
+    }
+    // Edge gesture: STOP the event here. The sphere's onPointerDown will
+    // not fire, so its draggingRef stays false and it won't track the
+    // pointer at all. We then claim the pointer ourselves for the
+    // upcoming pointermove/up so the sphere never sees them either.
+    event.stopPropagation();
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      /* setPointerCapture may throw in unusual env (jsdom etc.); ignore */
+    }
+    mainMenuSwipeStartRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+    };
+  }, [canOpenMenuFromMainSwipe]);
+  const handleMainSurfacePointerMove = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    openMenuFromMainSwipe({
+      x: event.clientX,
+      y: event.clientY,
+    }, event);
+  }, [openMenuFromMainSwipe]);
+  const handleMainSurfacePointerUp = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    openMenuFromMainSwipe({
+      x: event.clientX,
+      y: event.clientY,
+    }, event);
+    mainMenuSwipeStartRef.current = null;
+  }, [openMenuFromMainSwipe]);
+  const handleMainSurfaceTouchStart = useCallback((event: TouchEvent<HTMLDivElement>) => {
+    if (!canOpenMenuFromMainSwipe) return;
+    const touch = event.touches[0];
+    if (!touch) return;
+    // Edge-gesture-only model — see handleMainSurfacePointerDown comment.
+    // Wired as onTouchStartCapture (CAPTURE PHASE) so it fires before
+    // the sphere's own touch/pointer handlers.
+    const screenWidth = typeof window === "undefined" ? Infinity : window.innerWidth;
+    if (!isFromRightEdgeOfScreen(touch.clientX, screenWidth)) {
+      mainMenuSwipeStartRef.current = null;
+      return;
+    }
+    // Edge gesture: stop here so the sphere doesn't receive touchstart.
+    event.stopPropagation();
+    mainMenuSwipeStartRef.current = {
+      x: touch.clientX,
+      y: touch.clientY,
+    };
+  }, [canOpenMenuFromMainSwipe]);
+  const handleMainSurfaceTouchMove = useCallback((event: TouchEvent<HTMLDivElement>) => {
+    const touch = event.touches[0];
+    if (!touch) return;
+    openMenuFromMainSwipe({
+      x: touch.clientX,
+      y: touch.clientY,
+    }, event);
+  }, [openMenuFromMainSwipe]);
+  const handleMainSurfaceTouchEnd = useCallback((event: TouchEvent<HTMLDivElement>) => {
+    const touch = event.changedTouches[0];
+    if (!touch) {
+      mainMenuSwipeStartRef.current = null;
+      return;
+    }
+    openMenuFromMainSwipe({
+      x: touch.clientX,
+      y: touch.clientY,
+    }, event);
+    mainMenuSwipeStartRef.current = null;
+  }, [openMenuFromMainSwipe]);
+  const resetMainMenuSwipe = useCallback(() => {
+    mainMenuSwipeStartRef.current = null;
+  }, []);
+  const closeMenuFromSwipe = useCallback((
+    end: TouchPoint,
+    event: { preventDefault: () => void },
+  ) => {
+    const shouldClose = isMainMenuSwipeRight(menuCloseSwipeStartRef.current, end);
+    if (!shouldClose) return;
+    menuCloseSwipeStartRef.current = null;
+    event.preventDefault();
+    setMenuOpen(false);
+  }, []);
+  const handleMenuPointerDown = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    menuCloseSwipeStartRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+    };
+  }, []);
+  const handleMenuPointerMove = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    closeMenuFromSwipe({
+      x: event.clientX,
+      y: event.clientY,
+    }, event);
+  }, [closeMenuFromSwipe]);
+  const handleMenuPointerUp = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    closeMenuFromSwipe({
+      x: event.clientX,
+      y: event.clientY,
+    }, event);
+    menuCloseSwipeStartRef.current = null;
+  }, [closeMenuFromSwipe]);
+  const handleMenuTouchStart = useCallback((event: TouchEvent<HTMLDivElement>) => {
+    const touch = event.touches[0];
+    if (!touch) return;
+    menuCloseSwipeStartRef.current = {
+      x: touch.clientX,
+      y: touch.clientY,
+    };
+  }, []);
+  const handleMenuTouchMove = useCallback((event: TouchEvent<HTMLDivElement>) => {
+    const touch = event.touches[0];
+    if (!touch) return;
+    closeMenuFromSwipe({
+      x: touch.clientX,
+      y: touch.clientY,
+    }, event);
+  }, [closeMenuFromSwipe]);
+  const handleMenuTouchEnd = useCallback((event: TouchEvent<HTMLDivElement>) => {
+    const touch = event.changedTouches[0];
+    if (!touch) {
+      menuCloseSwipeStartRef.current = null;
+      return;
+    }
+    closeMenuFromSwipe({
+      x: touch.clientX,
+      y: touch.clientY,
+    }, event);
+    menuCloseSwipeStartRef.current = null;
+  }, [closeMenuFromSwipe]);
+  const resetMenuCloseSwipe = useCallback(() => {
+    menuCloseSwipeStartRef.current = null;
+  }, []);
 
   // Sphere card status is driven entirely by the real backend now:
   //   • `cardsState.cards` (useCards / GET /api/cards, 30s poll)
@@ -551,7 +823,10 @@ export default function BigBallLayout() {
   const renderNowView = () => (
     <div className="relative flex flex-col h-full">
       {/* Greeting + Ambient (always) + Live (when active) */}
-      <div className="relative z-20 px-5 pt-20 pb-3">
+      <div
+        className="relative z-20 px-5 pb-3"
+        style={{ paddingTop: "var(--constellation-header-top)" }}
+      >
         {/* Greeting — generous space, editorial feel */}
         <h2 className="text-[30px] font-semibold tracking-tight text-foreground leading-[1.05]">
           Hi,{" "}
@@ -676,7 +951,18 @@ export default function BigBallLayout() {
   );
 
   return (
-    <div className="relative h-screen w-full max-w-md mx-auto overflow-hidden">
+    <div
+      className="relative h-screen w-full max-w-md mx-auto overflow-hidden"
+      style={constellationShellStyle}
+      onPointerDownCapture={handleMainSurfacePointerDown}
+      onPointerMove={handleMainSurfacePointerMove}
+      onPointerUp={handleMainSurfacePointerUp}
+      onPointerCancel={resetMainMenuSwipe}
+      onTouchStartCapture={handleMainSurfaceTouchStart}
+      onTouchMove={handleMainSurfaceTouchMove}
+      onTouchEnd={handleMainSurfaceTouchEnd}
+      onTouchCancel={resetMainMenuSwipe}
+    >
       {/* Background — aurora flow using existing palette */}
       <img src={bgGradient} alt="" className="absolute inset-0 w-full h-full object-cover opacity-60" aria-hidden="true" />
       <div className="absolute inset-0 aurora-layer aurora-layer-1" aria-hidden="true" />
@@ -687,7 +973,10 @@ export default function BigBallLayout() {
       <div className="relative z-10 flex flex-col h-full">
         {/* Top bar — AgentRunIndicator + Chat (MainChat) + DebugPanel (gear)
             + hamburger. Same composition as the old AppShell. */}
-        <div className="absolute top-12 right-5 z-30 flex items-center gap-1.5">
+        <div
+          className="absolute right-5 z-30 flex items-start gap-1.5"
+          style={{ top: "var(--constellation-header-top)" }}
+        >
           <AgentRunIndicator />
           <DebugPanel
             run={pipeline.run}
@@ -697,7 +986,7 @@ export default function BigBallLayout() {
           />
           <button
             onClick={() => setMenuOpen(true)}
-            className={`-mt-1 p-2 rounded-full transition-all duration-200 ${
+            className={`p-2 rounded-full transition-all duration-200 ${
               isScrolled
                 ? "border border-foreground/12 bg-background/55 backdrop-blur-md shadow-sm hover:bg-background/75"
                 : "border border-transparent hover:bg-foreground/[0.04]"
@@ -810,7 +1099,7 @@ export default function BigBallLayout() {
               />
             ) : activeView === "profile" ? (
               /* Real goals/memory/skill page (old AppShell GOALS view). */
-              <div className="h-full min-h-0 overflow-hidden pt-12">
+              <div className="h-full min-h-0 overflow-hidden">
                 <RealGoalsView composio={composio} />
               </div>
             ) : activeView === "connect" ? (
@@ -818,7 +1107,7 @@ export default function BigBallLayout() {
                  CONTROL view). Replaces Lovable's hardcoded ConnectPanel
                  so users can actually wire Composio, devices, auto-generate
                  and auto-dreaming. */
-              <div className="h-full overflow-y-auto pt-12">
+              <div className="h-full overflow-y-auto">
                 <RealControlPanel composio={composio} />
               </div>
             ) : activeView === "account" ? (
@@ -869,8 +1158,20 @@ export default function BigBallLayout() {
             ChevronUp + uppercase label. */}
         {activeView === "now" && (
           <button
-            onClick={() => setMainChatOpen(true)}
-            className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-1 px-3 py-1.5 group"
+            onClick={openMainChat}
+            onPointerDown={handleMainChatEntryPointerDown}
+            onPointerMove={handleMainChatEntryPointerMove}
+            onPointerUp={handleMainChatEntryPointerUp}
+            onPointerCancel={() => {
+              mainChatEntryPointerStartRef.current = null;
+            }}
+            onTouchStart={handleMainChatEntryTouchStart}
+            onTouchMove={handleMainChatEntryTouchMove}
+            onTouchEnd={handleMainChatEntryTouchEnd}
+            onTouchCancel={() => {
+              mainChatEntryPointerStartRef.current = null;
+            }}
+            className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-1 px-3 py-1.5 touch-none select-none group"
             aria-label="Open main chat"
           >
             <motion.div
@@ -940,6 +1241,14 @@ export default function BigBallLayout() {
               exit={{ opacity: 0 }}
               className="fixed inset-0 z-40 bg-foreground/10 backdrop-blur-sm"
               onClick={() => setMenuOpen(false)}
+              onPointerDown={handleMenuPointerDown}
+              onPointerMove={handleMenuPointerMove}
+              onPointerUp={handleMenuPointerUp}
+              onPointerCancel={resetMenuCloseSwipe}
+              onTouchStart={handleMenuTouchStart}
+              onTouchMove={handleMenuTouchMove}
+              onTouchEnd={handleMenuTouchEnd}
+              onTouchCancel={resetMenuCloseSwipe}
             />
             <motion.div
               initial={{ x: "100%" }}
@@ -947,6 +1256,14 @@ export default function BigBallLayout() {
               exit={{ x: "100%" }}
               transition={{ type: "spring", damping: 28, stiffness: 300 }}
               className="fixed top-0 right-0 bottom-0 z-50 w-56"
+              onPointerDown={handleMenuPointerDown}
+              onPointerMove={handleMenuPointerMove}
+              onPointerUp={handleMenuPointerUp}
+              onPointerCancel={resetMenuCloseSwipe}
+              onTouchStart={handleMenuTouchStart}
+              onTouchMove={handleMenuTouchMove}
+              onTouchEnd={handleMenuTouchEnd}
+              onTouchCancel={resetMenuCloseSwipe}
               style={{
                 background: "linear-gradient(180deg, hsl(0 0% 100% / 0.85) 0%, hsl(0 0% 100% / 0.95) 100%)",
                 backdropFilter: "blur(48px) saturate(1.5)",
@@ -1075,7 +1392,7 @@ export default function BigBallLayout() {
           overlayClassName="!bg-foreground/10 backdrop-blur-[2px]"
         >
           <DrawerHeader className="sr-only">
-            <DrawerTitle>Start free trial</DrawerTitle>
+            <DrawerTitle>Choose your plan</DrawerTitle>
             <DrawerDescription>Choose a plan and payment method to approve this task</DrawerDescription>
           </DrawerHeader>
           <div className="flex flex-col" style={{ maxHeight: "84vh" }}>
@@ -1097,8 +1414,6 @@ export default function BigBallLayout() {
                 plan={paywallPlan} setPlan={setPaywallPlan}
                 payMethod={paywallPay} setPayMethod={setPaywallPay}
                 cardInfo={paywallCard_} setCardInfo={setPaywallCardInfo}
-                showHero={false}
-                allowSkip={false}
               />
             </div>
 
