@@ -104,6 +104,10 @@ describe("SoundClassifierSource transcript ingest", () => {
           localProvider: "sfspeech",
           segmentIndex: 2,
           triggerSource: "audio_vad_fallback",
+          speaker_segments: [],
+          speaker_labels: [],
+          self_text: "",
+          diarization_status: "fallback_plain_text",
         },
         salience: 0.7,
         confidence: 0.75,
@@ -123,6 +127,15 @@ describe("SoundClassifierSource transcript ingest", () => {
     const source = new SoundClassifierSource(ctx);
     captureTranscriptionMock.transcribeAmbientCapture.mockResolvedValue({
       text: "我现在说话应该尽快显示出来，并且进入 ambient transcript session summary。",
+      selfText: "我现在说话应该尽快显示出来",
+      speakerLabels: ["self", "speaker_1"],
+      segments: [
+        { speaker: "self", text: "我现在说话应该尽快显示出来", startMs: 0, endMs: 1800 },
+        { speaker: "speaker_1", text: "并且进入 ambient transcript session summary。", startMs: 1800, endMs: 3500 },
+      ],
+      diarizationStatus: "matched_reference",
+      diarizationModel: "gpt-4o-transcribe-diarize",
+      provider: "cloud_diarize",
       event: {},
     });
 
@@ -147,7 +160,7 @@ describe("SoundClassifierSource transcript ingest", () => {
         {
           id: "burst-cloud",
           text: "我现在说话应该尽快显示出来，并且进入 ambient transcript session summary。",
-          source: "cloud_whisper",
+          source: "cloud_diarize",
         },
       ],
     });
@@ -163,9 +176,17 @@ describe("SoundClassifierSource transcript ingest", () => {
           burstId: "burst-cloud",
           captureSessionId: "capture-cloud",
           durationMs: 3500,
-          provider: "cloud_whisper",
+          provider: "cloud_diarize",
           fallback: false,
           triggerSource: "sound_analysis",
+          speaker_segments: [
+            { speaker: "self", text: "我现在说话应该尽快显示出来", start_ms: 0, end_ms: 1800 },
+            { speaker: "speaker_1", text: "并且进入 ambient transcript session summary。", start_ms: 1800, end_ms: 3500 },
+          ],
+          speaker_labels: ["self", "speaker_1"],
+          self_text: "我现在说话应该尽快显示出来",
+          diarization_model: "gpt-4o-transcribe-diarize",
+          diarization_status: "matched_reference",
         }),
         dedupe_key: "ios:audio:burst-cloud",
       }),

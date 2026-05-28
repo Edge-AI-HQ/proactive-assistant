@@ -120,6 +120,68 @@ async def upload_media(
     return UploadedMedia(storage_path=path, byte_len=len(data), mime=content_type)
 
 
+async def upload_user_media_bytes(
+    *,
+    supabase_user_id: str,
+    storage_path: str,
+    data: bytes,
+    content_type: str,
+) -> UploadedMedia | None:
+    """Upload user-owned bytes under pai-media/{supabase_user_id}/.
+
+    This is for non-device media such as voice identity references. The
+    caller chooses the bucket-relative path, but it must stay under the
+    Supabase UUID partition.
+    """
+    cli = _client()
+    if cli is None:
+        return None
+    if not data:
+        return None
+    expected_prefix = f"{supabase_user_id}/"
+    if not storage_path.startswith(expected_prefix):
+        msg = f"storage_path must be under {expected_prefix}"
+        raise ValueError(msg)
+    bucket = get_web_settings().supabase_media_bucket
+    media_type = content_type or "application/octet-stream"
+
+    def _put() -> None:
+        cli.storage.from_(bucket).upload(
+            path=storage_path,
+            file=data,
+            file_options={"content-type": media_type, "upsert": "true"},
+        )
+
+    await asyncio.to_thread(_put)
+    return UploadedMedia(
+        storage_path=storage_path,
+        byte_len=len(data),
+        mime=media_type,
+    )
+
+
+async def download_media_bytes(storage_path: str) -> bytes | None:
+    """Download a bucket-relative media object. Returns None when storage
+    is not configured."""
+    cli = _client()
+    if cli is None:
+        return None
+    bucket = get_web_settings().supabase_media_bucket
+    data = await asyncio.to_thread(cli.storage.from_(bucket).download, storage_path)
+    return bytes(data)
+
+
+async def delete_media(storage_path: str) -> bool:
+    """Delete one bucket-relative media object. Returns False when storage
+    is not configured."""
+    cli = _client()
+    if cli is None:
+        return False
+    bucket = get_web_settings().supabase_media_bucket
+    await asyncio.to_thread(cli.storage.from_(bucket).remove, [storage_path])
+    return True
+
+
 async def delete_all_user_media(supabase_user_id: str) -> int:
     """Recursively delete every file under pai-media/{supabase_user_id}/.
     Returns the number of files removed (0 when storage is disabled or

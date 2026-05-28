@@ -9,6 +9,7 @@ import AutoGenerateSettings from "@/components/AutoGenerateSettings";
 import GenerationLanguageSettings from "@/components/GenerationLanguageSettings";
 import AmbientSourceControlsPanel from "@/components/AmbientSourceControlsPanel";
 import AmbientTimelineSummaryStatusPanel from "@/components/AmbientTimelineSummaryStatusPanel";
+import VoiceIdentitySettings from "@/components/VoiceIdentitySettings";
 import { isNative } from "@/lib/platform";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
 import { useUserSettings } from "@/hooks/useUserSettings";
@@ -518,6 +519,8 @@ function AmbientSubPage({ onBack }: { onBack: () => void }) {
         className="space-y-3"
       >
         <AmbientSourceControlsPanel />
+
+        <VoiceIdentitySettings />
 
         <AmbientTimelineSummaryStatusPanel />
 

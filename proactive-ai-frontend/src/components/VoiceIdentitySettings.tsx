@@ -1,0 +1,324 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Mic, RotateCcw, Square, Trash2 } from "lucide-react";
+import { createPcmRecorder, type PcmRecorder } from "@/components/voice/pcmRecorder";
+import {
+  deleteVoiceIdentityReference,
+  fetchVoiceIdentity,
+  setVoiceIdentityEnabled,
+  uploadVoiceIdentityReference,
+  type VoiceIdentityProfile,
+} from "@/services/voiceIdentityApi";
+import { useUserSettings } from "@/hooks/useUserSettings";
+
+const TARGET_DURATION_MS = 5_000;
+const MIN_DURATION_MS = 2_000;
+const MAX_DURATION_MS = 10_000;
+const ENGLISH_REFERENCE_PROMPT = "This morning I checked my schedule, and this afternoon I will reply to a colleague.";
+const CHINESE_REFERENCE_PROMPT = "今天早上我整理了日程，下午会给同事回一条消息。";
+
+export default function VoiceIdentitySettings() {
+  const { settings } = useUserSettings();
+  const [profile, setProfile] = useState<VoiceIdentityProfile | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [reviewBlob, setReviewBlob] = useState<Blob | null>(null);
+  const [reviewUrl, setReviewUrl] = useState<string | null>(null);
+  const [reviewDurationMs, setReviewDurationMs] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  const recorderRef = useRef<PcmRecorder | null>(null);
+  const startedAtRef = useRef(0);
+  const intervalRef = useRef<number | null>(null);
+  const autoStopRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    void fetchVoiceIdentity()
+      .then((next) => {
+        if (mounted) setProfile(next);
+      })
+      .catch((err) => {
+        if (mounted) setError(errorMessage(err));
+      })
+      .finally(() => {
+        if (mounted) setLoading(false);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!reviewBlob) {
+      setReviewUrl(null);
+      return;
+    }
+    if (typeof URL === "undefined" || !URL.createObjectURL) return;
+    const url = URL.createObjectURL(reviewBlob);
+    setReviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [reviewBlob]);
+
+  const clearTimers = useCallback(() => {
+    if (intervalRef.current !== null) window.clearInterval(intervalRef.current);
+    if (autoStopRef.current !== null) window.clearTimeout(autoStopRef.current);
+    intervalRef.current = null;
+    autoStopRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      clearTimers();
+      const recorder = recorderRef.current;
+      recorderRef.current = null;
+      if (recorder) void recorder.stop().catch(() => {});
+    };
+  }, [clearTimers]);
+
+  const stopRecording = useCallback(async () => {
+    const recorder = recorderRef.current;
+    if (!recorder) return;
+    recorderRef.current = null;
+    clearTimers();
+    setRecording(false);
+    const durationMs = Math.min(Date.now() - startedAtRef.current, MAX_DURATION_MS);
+    setElapsedMs(durationMs);
+    try {
+      const audio = await recorder.stop();
+      setReviewBlob(audio);
+      setReviewDurationMs(durationMs);
+      setError(null);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }, [clearTimers]);
+
+  const startRecording = useCallback(async () => {
+    setError(null);
+    setReviewBlob(null);
+    setReviewDurationMs(0);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = await createPcmRecorder(stream);
+      recorderRef.current = recorder;
+      startedAtRef.current = Date.now();
+      setElapsedMs(0);
+      setRecording(true);
+      intervalRef.current = window.setInterval(() => {
+        setElapsedMs(Math.min(Date.now() - startedAtRef.current, MAX_DURATION_MS));
+      }, 200);
+      autoStopRef.current = window.setTimeout(() => {
+        void stopRecording();
+      }, MAX_DURATION_MS);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }, [stopRecording]);
+
+  const saveReview = useCallback(async () => {
+    if (!reviewBlob || reviewDurationMs < MIN_DURATION_MS) {
+      setError("Record at least 2 seconds before saving.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await uploadVoiceIdentityReference(reviewBlob, reviewDurationMs);
+      setProfile(next);
+      setReviewBlob(null);
+      setReviewDurationMs(0);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }, [reviewBlob, reviewDurationMs]);
+
+  const toggleEnabled = useCallback(async (enabled: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      setProfile(await setVoiceIdentityEnabled(enabled));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const deleteReference = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await deleteVoiceIdentityReference();
+      setProfile(null);
+      setReviewBlob(null);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const reviewTooShort = Boolean(reviewBlob) && reviewDurationMs < MIN_DURATION_MS;
+  const enrolled = profile !== null;
+  const status = loading
+    ? "Loading"
+    : !enrolled
+      ? "Not enrolled"
+      : profile.enabled
+        ? "Enrolled"
+        : "Disabled";
+  const referencePrompt = voiceReferencePrompt(settings?.generationLanguage);
+
+  return (
+    <section className="glass-card-strong p-4 space-y-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold text-foreground">Voice identity</h2>
+          <p className="mt-1 text-[11px] leading-relaxed text-foreground/45">
+            Save a short sample so Ambient can label your own speech as self.
+          </p>
+        </div>
+        <span className="shrink-0 whitespace-nowrap rounded-full bg-foreground/[0.06] px-2.5 py-1 text-[10px] font-semibold leading-none text-foreground/55">
+          {status}
+        </span>
+      </div>
+
+      <div className="border-l-2 border-foreground/15 pl-3">
+        <p className="text-[10px] font-semibold text-foreground/35">Read aloud</p>
+        <p className="mt-1 text-[12px] font-medium leading-relaxed text-foreground/75">
+          {referencePrompt}
+        </p>
+      </div>
+
+      {profile && (
+        <div className="grid grid-cols-2 gap-2 text-[11px] text-foreground/55">
+          <div>
+            <span className="block text-foreground/35">Duration</span>
+            <span className="font-medium text-foreground/75">{formatDuration(profile.referenceDurationMs ?? 0)}</span>
+          </div>
+          <div>
+            <span className="block text-foreground/35">Updated</span>
+            <span className="font-medium text-foreground/75">{formatDate(profile.updatedAt)}</span>
+          </div>
+        </div>
+      )}
+
+      {recording && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-foreground/10 bg-foreground/[0.03] px-3 py-3">
+          <div className="min-w-0">
+            <p className="text-[13px] font-semibold text-foreground">Recording {formatDuration(elapsedMs)}</p>
+            <p className="text-[11px] text-foreground/45">Target {formatDuration(TARGET_DURATION_MS)}, max {formatDuration(MAX_DURATION_MS)}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void stopRecording()}
+            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-foreground px-3 text-[11px] font-semibold text-background"
+          >
+            <Square size={13} />
+            Stop
+          </button>
+        </div>
+      )}
+
+      {reviewBlob && !recording && (
+        <div className="space-y-2 rounded-lg border border-foreground/10 bg-foreground/[0.03] px-3 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-[13px] font-semibold text-foreground">Review {formatDuration(reviewDurationMs)}</p>
+            <button
+              type="button"
+              onClick={() => void startRecording()}
+              className="inline-flex min-h-9 items-center gap-1.5 rounded-lg bg-foreground/[0.08] px-3 text-[11px] font-semibold text-foreground/70"
+            >
+              <RotateCcw size={13} />
+              Re-record
+            </button>
+          </div>
+          {reviewUrl && <audio controls src={reviewUrl} className="w-full" />}
+          {reviewTooShort && (
+            <p className="text-[11px] font-medium text-red-500">Record at least 2 seconds before saving.</p>
+          )}
+          <button
+            type="button"
+            onClick={() => void saveReview()}
+            disabled={busy || reviewTooShort}
+            className="min-h-10 w-full rounded-lg bg-foreground px-3 text-[12px] font-semibold text-background disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Save reference
+          </button>
+        </div>
+      )}
+
+      {!recording && !reviewBlob && (
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => void startRecording()}
+            disabled={busy || loading}
+            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-foreground px-3 text-[12px] font-semibold text-background disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Mic size={14} />
+            {profile ? "Re-record" : "Record self reference"}
+          </button>
+          {profile && !profile.enabled && (
+            <button
+              type="button"
+              onClick={() => void toggleEnabled(true)}
+              disabled={busy}
+              className="min-h-10 rounded-lg bg-foreground/[0.08] px-3 text-[12px] font-semibold text-foreground/70 disabled:opacity-40"
+            >
+              Enable voice identity
+            </button>
+          )}
+          {profile && profile.enabled && (
+            <button
+              type="button"
+              onClick={() => void toggleEnabled(false)}
+              disabled={busy}
+              className="min-h-10 rounded-lg bg-foreground/[0.08] px-3 text-[12px] font-semibold text-foreground/70 disabled:opacity-40"
+            >
+              Disable
+            </button>
+          )}
+          {profile && (
+            <button
+              type="button"
+              onClick={() => void deleteReference()}
+              disabled={busy}
+              className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-red-500/10 px-3 text-[12px] font-semibold text-red-600 disabled:opacity-40"
+            >
+              <Trash2 size={14} />
+              Delete
+            </button>
+          )}
+        </div>
+      )}
+
+      {error && <p className="text-[11px] font-medium leading-snug text-red-500">{error}</p>}
+    </section>
+  );
+}
+
+function formatDuration(ms: number): string {
+  return `${Math.max(0, Math.round(ms / 1000))}s`;
+}
+
+function formatDate(value: string | null): string {
+  if (!value) return "Never";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unknown";
+  return date.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function voiceReferencePrompt(language: string | null | undefined): string {
+  return language?.toLowerCase().startsWith("zh")
+    ? CHINESE_REFERENCE_PROMPT
+    : ENGLISH_REFERENCE_PROMPT;
+}

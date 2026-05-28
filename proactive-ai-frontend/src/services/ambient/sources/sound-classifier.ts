@@ -9,7 +9,10 @@ import type { PluginListenerHandle } from "@capacitor/core";
 import { normalizeVoiceLanguage } from "@/components/voice/language";
 import type { AmbientSource, SourceContext } from "./types";
 import { SoundRunAggregator } from "./sound-runs";
-import { transcribeAmbientCapture } from "../capture-transcription";
+import {
+  transcribeAmbientCapture,
+  type CaptureTranscriptionResult,
+} from "../capture-transcription";
 import { applyAmbientLiveTranscriptUpdate } from "../live-transcript-store";
 
 export interface SoundClassifierOptions {
@@ -320,7 +323,7 @@ export class SoundClassifierSource implements AmbientSource {
         captureSessionId: event.captureSessionId,
         id: event.burstId,
         text,
-        source: "cloud_whisper",
+        source: result.provider ?? "cloud_whisper",
         receivedAt: Date.parse(event.capturedAt) || Date.now(),
       });
 
@@ -328,8 +331,9 @@ export class SoundClassifierSource implements AmbientSource {
         this.pushTranscript({
           event,
           text,
-          provider: "cloud_whisper",
+          provider: result.provider ?? "cloud_whisper",
           fallback: false,
+          transcription: result,
         });
       }
       await this.markCaptureProcessed(event.wavId);
@@ -381,6 +385,7 @@ export class SoundClassifierSource implements AmbientSource {
     fallback: boolean;
     localProvider?: string;
     segmentIndex?: number;
+    transcription?: CaptureTranscriptionResult;
   }): void {
     const { event, text } = input;
     const payload: Record<string, unknown> = {
@@ -392,6 +397,19 @@ export class SoundClassifierSource implements AmbientSource {
       provider: input.provider,
       fallback: input.fallback,
     };
+    const speakerSegments = (input.transcription?.segments ?? []).map((segment) => ({
+      speaker: segment.speaker || "other",
+      text: segment.text,
+      start_ms: segment.startMs,
+      end_ms: segment.endMs,
+    }));
+    payload.speaker_segments = speakerSegments;
+    payload.speaker_labels = input.transcription?.speakerLabels ?? [];
+    payload.self_text = input.transcription?.selfText ?? "";
+    if (input.transcription?.diarizationModel) {
+      payload.diarization_model = input.transcription.diarizationModel;
+    }
+    payload.diarization_status = input.transcription?.diarizationStatus ?? "fallback_plain_text";
     if (input.localProvider) payload.localProvider = input.localProvider;
     if (typeof input.segmentIndex === "number") {
       payload.segmentIndex = input.segmentIndex;

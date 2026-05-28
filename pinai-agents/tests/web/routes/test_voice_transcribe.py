@@ -7,6 +7,10 @@ from pinai_agents.web.app import create_app
 from pinai_agents.web.auth.deps import current_user, get_pool
 from pinai_agents.web.auth.user_service import User
 from pinai_agents.web.routes.ui import voice as voice_routes
+from pinai_agents.web.services.voice_transcription import (
+    DiarizedTranscriptionResult,
+    SpeakerSegment,
+)
 
 
 def _user(user_id: int = 123) -> User:
@@ -167,3 +171,111 @@ async def test_voice_transcribe_rejects_oversized_payload(monkeypatch):
         )
 
     assert response.status_code == 413
+
+
+@pytest.mark.asyncio
+async def test_voice_transcribe_diarized_uses_litellm_virtual_key_and_reference(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeProfile:
+        enabled = True
+        speaker_name = "self"
+        reference_storage_path = "test-sub-123/voice_identity/self_reference.wav"
+        reference_mime = "audio/wav"
+
+    class FakeRepo:
+        def __init__(self, _user_id, _conn):
+            pass
+
+        async def get_profile(self):
+            return FakeProfile()
+
+    async def fake_transcribe_audio_diarized(**kwargs):
+        captured.update(kwargs)
+        return DiarizedTranscriptionResult(
+            text="Self hello.\nSpeaker one replies.",
+            segments=[
+                SpeakerSegment(speaker="self", text="Self hello.", start_ms=0, end_ms=1200),
+                SpeakerSegment(speaker="speaker_1", text="Speaker one replies.", start_ms=1300, end_ms=2800),
+            ],
+        )
+
+    async def fake_ensure_user_litellm_key(_pool, user, *, required_models=None):
+        captured["required_models"] = required_models
+        user.litellm_virtual_key = "sk-test-diarize"
+        return user
+
+    class FakeTx:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *args):
+            return None
+
+    monkeypatch.setattr(voice_routes, "VoiceIdentityRepository", FakeRepo)
+    monkeypatch.setattr(voice_routes, "user_scoped_tx", lambda _pool, _user_id: FakeTx())
+    async def fake_download_media_bytes(_path):
+        return b"reference-wav"
+
+    monkeypatch.setattr(voice_routes, "download_media_bytes", fake_download_media_bytes)
+    monkeypatch.setattr(voice_routes, "ensure_user_litellm_key", fake_ensure_user_litellm_key)
+    monkeypatch.setattr(voice_routes, "transcribe_audio_diarized", fake_transcribe_audio_diarized)
+
+    client = await _client()
+    async with client:
+        response = await client.post(
+            "/api/voice/transcribe-diarized?language=en-US",
+            content=b"meeting-wav",
+            headers={"Content-Type": "audio/wav", "X-Audio-Filename": "meeting.wav"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "text": "Self hello.\nSpeaker one replies.",
+        "model": "gpt-4o-transcribe-diarize",
+        "segments": [
+            {"speaker": "self", "text": "Self hello.", "startMs": 0, "endMs": 1200},
+            {"speaker": "speaker_1", "text": "Speaker one replies.", "startMs": 1300, "endMs": 2800},
+        ],
+        "selfText": "Self hello.",
+        "speakerLabels": ["self", "speaker_1"],
+        "diarizationModel": "gpt-4o-transcribe-diarize",
+        "diarizationStatus": "matched_reference",
+    }
+    assert captured["audio"] == b"meeting-wav"
+    assert captured["known_speaker_reference"] == b"reference-wav"
+    assert captured["known_speaker_reference_mime"] == "audio/wav"
+    assert captured["bearer_token"] == "sk-test-diarize"
+    assert captured["language"] == "en"
+    assert captured["required_models"] == {"gpt-4o-transcribe-diarize"}
+
+
+@pytest.mark.asyncio
+async def test_voice_transcribe_diarized_returns_conflict_when_not_enrolled(monkeypatch):
+    class FakeRepo:
+        def __init__(self, _user_id, _conn):
+            pass
+
+        async def get_profile(self):
+            return None
+
+    class FakeTx:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *args):
+            return None
+
+    monkeypatch.setattr(voice_routes, "VoiceIdentityRepository", FakeRepo)
+    monkeypatch.setattr(voice_routes, "user_scoped_tx", lambda _pool, _user_id: FakeTx())
+
+    client = await _client()
+    async with client:
+        response = await client.post(
+            "/api/voice/transcribe-diarized",
+            content=b"meeting-wav",
+            headers={"Content-Type": "audio/wav"},
+        )
+
+    assert response.status_code == 409
