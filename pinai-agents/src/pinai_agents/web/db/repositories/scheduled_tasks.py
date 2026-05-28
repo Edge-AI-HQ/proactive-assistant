@@ -324,10 +324,12 @@ async def record_failure_and_decide(
     """Single atomic UPDATE that records a failure and decides whether
     to retry or archive.
 
-    If attempts+1 < max_attempts: schedule retry (status → 'active',
-    next_run_at = NOW() + backoff). Otherwise archive (status → 'archived',
-    next_run_at = NULL). Either way attempts is incremented and last_error
-    is recorded.
+    Once-shot tasks archive after max_attempts. Recurring tasks stay active:
+    transient runtime failures such as model quota, timeouts, or connector
+    outages must not permanently disable a user's schedule.
+
+    Either way attempts is incremented and last_error is recorded. Success
+    later clears attempts / last_error via record_recurring_success().
 
     Returns (new_attempts, new_status). Returning (0, 'archived') means
     the row didn't exist (caller already lost the race with reaper /
@@ -342,9 +344,12 @@ async def record_failure_and_decide(
                 next_run_at = CASE
                   WHEN attempts + 1 < max_attempts
                     THEN NOW() + (%s::int * INTERVAL '1 second')
+                  WHEN trigger_kind <> 'once'
+                    THEN COALESCE(next_run_at, NOW() + (%s::int * INTERVAL '1 second'))
                   ELSE NULL
                 END,
                 status = CASE
+                  WHEN trigger_kind <> 'once' THEN 'active'
                   WHEN attempts + 1 < max_attempts THEN 'active'
                   ELSE 'archived'
                 END,
@@ -354,7 +359,13 @@ async def record_failure_and_decide(
             WHERE user_id = %s AND id = %s
             RETURNING attempts, status
             """,
-            (retry_backoff_seconds, last_error[:1000], user_id, task_id),
+            (
+                retry_backoff_seconds,
+                retry_backoff_seconds,
+                last_error[:1000],
+                user_id,
+                task_id,
+            ),
         )
         row = await cur.fetchone()
     if not row:

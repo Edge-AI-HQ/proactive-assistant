@@ -24,6 +24,8 @@ from ..auth.agent_jwt import sign_agent_run_jwt
 
 logger = logging.getLogger(__name__)
 
+_GENERATE_READ_TIMEOUT_SECONDS = 1800.0
+
 
 def _chat_internal_url() -> str:
     """Step C default. Step F+: WEB_INTERNAL_URL / CHAT_INTERNAL_URL split."""
@@ -195,13 +197,27 @@ async def call_generate(
     if matched_patterns:
         body["matched_patterns"] = matched_patterns
     url = f"{_chat_internal_url()}/agent/generate"
-    timeout = httpx.Timeout(connect=5.0, read=600.0, write=10.0, pool=10.0)
+    timeout = httpx.Timeout(
+        connect=5.0, read=_GENERATE_READ_TIMEOUT_SECONDS, write=10.0, pool=10.0,
+    )
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             resp = await client.post(
                 url, json=body,
                 headers={"Authorization": f"Bearer {token}", "X-Run-Id": outbound_run_id},
             )
+        except httpx.ReadTimeout as e:
+            logger.exception(
+                "generate worker timed out run=%s read_timeout_seconds=%d",
+                outbound_run_id, int(_GENERATE_READ_TIMEOUT_SECONDS),
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=(
+                    "chat worker timed out after "
+                    f"{int(_GENERATE_READ_TIMEOUT_SECONDS)}s waiting for /agent/generate"
+                ),
+            ) from e
         except httpx.RequestError as e:
             logger.exception("generate worker unreachable run=%s", outbound_run_id)
             raise HTTPException(

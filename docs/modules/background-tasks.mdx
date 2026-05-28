@@ -136,8 +136,8 @@ reaper 索引:`idx_pai_schedrun_lease (status, lease_expires_at) WHERE status='r
 
 | Kind | 入口 | Lease | 备注 |
 |---|---|---|---|
-| `generator.manual` | in-process `_run_generator` → HTTP POST `/agent/generate` | 60s | `/api/generate` 入队;dispatcher 在 web 进程里组装 prompt context、调 chat、写 `pai_pipeline_runs`。 |
-| `generator.auto` | 同上 | 60s | 自动循环生成,由前端 settings 调 profile route 写 `interval_seconds`(默认从 migration `038_auto_generate_default_on.sql`)。 |
+| `generator.manual` | in-process `_run_generator` → HTTP POST `/agent/generate` | **1800s** | `/api/generate` 入队;dispatcher 在 web 进程里组装 prompt context、调 chat、写 `pai_pipeline_runs`。 |
+| `generator.auto` | 同上 | **1800s** | 自动循环生成,由前端 settings 调 profile route 写 `interval_seconds`(默认从 migration `038_auto_generate_default_on.sql`)。 |
 | `connector.init` | in-process `connector_ingest.run` | 60s | 拉一批 Composio 数据写 `pai_raw_*` + `pai_personal_signals` + 一次 `connector.evolve` once-shot。 |
 | `connector.sync` | 同上 | 60s | 增量拉取,用 cursor;成功才前推 cursor + 入 evolve。`connector.init` 跑完会保证一行 sync schedule(`cron */30 * * * *`)。 |
 | `connector.evolve` | HTTP POST `/agent/run/evolve` | **600s**(long-running) | chat 端 DeepAgents 把刚拉的 raw / signal 沉淀成 memory / skill。 |
@@ -145,7 +145,7 @@ reaper 索引:`idx_pai_schedrun_lease (status, lease_expires_at) WHERE status='r
 | `crystallize` | HTTP POST `/agent/run/crystallize` | 60s | dispatcher 路由已就位,但**当前没有 producer 入队** — `dispatcher.py` 顶部注释明说 "crystallize → not scheduled (chat worker fires inline)"。今天 crystallize 走 chat 端 inline 调用,不走这套队列。 |
 | `user.prompt` | HTTP POST `/agent/run/dream`(复用 dream entry) | **600s** | 后续的 synthetic-prompt 通道,目前 placeholder。 |
 
-`_LONG_RUNNING_KINDS = {auto.dreaming, connector.evolve, user.prompt}` 走 `_LONG_LEASE_SECONDS=600`,跟普通 60s 区分,防止 LLM 中段被 reaper 误判 crash。
+`_GENERATOR_KINDS = {generator.manual, generator.auto}` 走 `_GENERATOR_LEASE_SECONDS=1800`;`_LONG_RUNNING_KINDS = {auto.dreaming, connector.evolve, user.prompt}` 走 `_LONG_LEASE_SECONDS=600`,跟普通 60s 区分,防止 LLM 中段被 reaper 误判 crash。
 
 dispatcher 调用 chat 走 EdDSA 每 run JWT(`web/auth/agent_jwt.py`),凭证不跨 run 复用。chat 验签 + check `pai_jti_revocations` 黑名单(`chat/auth/run_jwt.py`)。
 
@@ -179,16 +179,17 @@ dispatcher 调用 chat 走 EdDSA 每 run JWT(`web/auth/agent_jwt.py`),凭证不�
 
 判断:
 - `attempts + 1 < max_attempts` → `status='active'`,`next_run_at = NOW() + backoff`,`attempts += 1`。
-- 否则 → `status='archived'`,`next_run_at=NULL`。
+- once 任务达到 `max_attempts` → `status='archived'`,`next_run_at=NULL`。
+- recurring 任务达到 `max_attempts` → 仍保持 `status='active'`,保留下一次 schedule 时间;临时模型限流、超时、connector 抖动不应永久关闭用户的自动任务。
 
-`once` 任务在 `_persist_next` 阶段就 archive(`next_run_at=NULL`);失败的 once 任务靠 `record_failure_and_decide` 把 `status` 翻回 `active` 才能继续重试,直到 `max_attempts` 用完后再 archive。
+`once` 任务在 `_persist_next` 阶段就 archive(`next_run_at=NULL`);失败的 once 任务靠 `record_failure_and_decide` 把 `status` 翻回 `active` 才能继续重试,直到 `max_attempts` 用完后再 archive。recurring 任务失败只记录 `attempts/last_error`,成功后 `record_recurring_success` 清零。
 
-cron / interval 任务被 archive 是终止信号,需要外部重新 INSERT(或把 status 改回 `active`)才会再跑。
+cron / interval 任务只有外部显式关掉时才会 archive(例如用户关闭开关);一旦被 archive 就是终止信号,需要外部重新 INSERT(或把 status 改回 `active`)才会再跑。
 
 ### Lease + heartbeat
 
 - claim 时 dispatcher 起 `lease_expires_at = NOW() + lease_seconds`(per-kind 决定)。
-- 长任务可调 `heartbeat_run(user_id, run_id, lease_owner, lease_seconds)` 续约;目前 chat 端的 run loop 不主动续,统一靠 dispatcher 设的 600s 兜住。
+- 长任务可调 `heartbeat_run(user_id, run_id, lease_owner, lease_seconds)` 续约;目前 chat 端的 run loop 不主动续,统一靠 dispatcher 设的 kind-specific lease 兜住(generator 1800s,其它长任务 600s)。
 - reaper 每 tick 跑一次,`status='running' AND lease_expires_at < NOW()` → `failed`。
 - handler 写完结果通过 `complete_run` 翻 `success` / `failed`;race 输的 dispatcher(`insert_run` 返回 False)直接 return,不写 result。
 
@@ -215,7 +216,7 @@ cron / interval 任务被 archive 是终止信号,需要外部重新 INSERT(或�
 | 改动 | 先看 |
 |---|---|
 | Tick loop / claim / 唤醒 | `pinai-agents/src/pinai_agents/web/scheduler/tick_loop.py` |
-| Dispatcher 路由表 / 长 lease 列表 | `web/scheduler/dispatcher.py`(`_handle_kind`、`_LONG_RUNNING_KINDS`)|
+| Dispatcher 路由表 / 长 lease 列表 | `web/scheduler/dispatcher.py`(`_handle_kind`、`_GENERATOR_KINDS`、`_LONG_RUNNING_KINDS`)|
 | 加新 kind | 1)dispatcher 路由分支;2)入队点(routes/service);3)如果 HTTP 调 chat,加 `chat/routes/run.py` 对应 handler。 |
 | cron 计算 | `web/scheduler/cron.py:next_fire` |
 | 入队 / claim / 完成 / 重试 SQL | `web/db/repositories/scheduled_tasks.py`(`enqueue_once`、`claim_due_tasks`、`insert_run`、`complete_run`、`heartbeat_run`、`reap_stale_runs`、`record_failure_and_decide`)|
@@ -269,7 +270,7 @@ make logs-pinai-chat | grep -E "run/dream|run/evolve|run/crystallize|run/generat
 - `enqueue_once` 是按 `(user_id, id)` 幂等,不是按 `(user_id, kind, payload)`。同一个 user 不同 task id 但相同语义会重复入队,自己上层去重。
 - `claim_due_tasks` 用 SKIP LOCKED,事务里抛错会让 row 短暂被锁,但下次 tick 还能领;不要在 claim 后的 dispatch 里手开新事务而忘记 commit。
 - handler 跑完但 lease 已过期是已知 race:`complete_run` 仍会写 status,但 reaper 已经先一步把它标 `failed`;靠业务上的 idempotency key 兜底(connector 用 raw 表 dedupe_key;generator 写 `pai_pipeline_runs` 时 INSERT ON CONFLICT)。
-- 长 lease(600s)不是免死金牌:chat 真挂掉时 reaper 还是会在 lease 过期后翻成 `failed`;handler 自己长跑要主动 `heartbeat_run` 续约。
+- 长 lease 不是免死金牌:chat 真挂掉时 reaper 还是会在 lease 过期后翻成 `failed`;handler 自己长跑要主动 `heartbeat_run` 续约。
 - once 任务在 `_persist_next` 就 archive(`status='archived'`、`next_run_at=NULL`);失败重试靠 `record_failure_and_decide` 把 status 翻回 `active`。直接对着这张行的 status 做判断要注意已经 fire 过一次。
 - 加新 kind **不**用改 schema(开 enum),但加新 kind 后必须同时改 dispatcher 路由分支,否则 `unknown task.kind` 只 warning 不报错,任务就一直 `success`-但-啥都没做。
 - `_LONG_RUNNING_KINDS` 改动要跟 chat 端 handler 的真实跑时一起 review;调短会让 reaper 误杀,调长会让真挂的 worker 占着 lease 不放。

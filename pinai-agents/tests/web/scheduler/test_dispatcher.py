@@ -11,8 +11,9 @@ from pinai_agents.web.scheduler.dispatcher import DefaultDispatcher, _dream_resu
 def test_generator_tasks_use_long_running_lease():
     dispatcher = DefaultDispatcher(pool=cast(Any, None), lease_seconds=60)
 
-    assert dispatcher._lease_for("generator.manual") == 600
-    assert dispatcher._lease_for("generator.auto") == 600
+    assert dispatcher._lease_for("generator.manual") == 1800
+    assert dispatcher._lease_for("generator.auto") == 1800
+    assert dispatcher._lease_for("auto.dreaming") == 600
 
 
 def test_dream_result_fields_extracts_fenced_json_from_text_block_string():

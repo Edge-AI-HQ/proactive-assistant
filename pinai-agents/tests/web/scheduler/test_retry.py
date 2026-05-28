@@ -3,6 +3,8 @@ behavior on the consolidated pai_scheduled_tasks queue."""
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from pinai_agents.web.db.repositories.scheduled_tasks import (
@@ -131,6 +133,48 @@ async def test_record_failure_decides_retry_then_archive(pool, user_ids):
     assert row["attempts"] == 3
     assert row["last_error"] == "net 3"
     assert row["next_run_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_recurring_failure_stays_active_after_max_attempts(pool, user_ids):
+    user_a, _ = user_ids
+    next_run_at = datetime.now(UTC) + timedelta(hours=12)
+    async with user_scoped_tx(pool, user_a) as conn:
+        await ScheduledTasksRepository(user_a, conn).upsert(
+            id="gen.auto.retry",
+            kind="generator.auto",
+            trigger_kind="schedule",
+            interval_seconds=12 * 60 * 60,
+            next_run_at=next_run_at,
+            payload={"trigger": "auto"},
+        )
+
+    for attempt in range(3):
+        async with service_tx(pool) as conn:
+            attempts, status = await record_failure_and_decide(
+                conn,
+                user_id=user_a,
+                task_id="gen.auto.retry",
+                last_error=f"net {attempt + 1}",
+                retry_backoff_seconds=600,
+            )
+
+    assert attempts == 3
+    assert status == "active"
+
+    async with service_tx(pool) as conn:
+        cur = await conn.execute(
+            "SELECT status, attempts, last_error, next_run_at "
+            "FROM pai_scheduled_tasks WHERE user_id=%s AND id=%s",
+            (user_a, "gen.auto.retry"),
+        )
+        row = await cur.fetchone()
+
+    assert row is not None
+    assert row["status"] == "active"
+    assert row["attempts"] == 3
+    assert row["last_error"] == "net 3"
+    assert row["next_run_at"] is not None
 
 
 @pytest.mark.asyncio

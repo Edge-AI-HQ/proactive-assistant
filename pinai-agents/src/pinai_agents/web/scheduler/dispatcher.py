@@ -116,18 +116,20 @@ def _chat_internal_url() -> str:
     return os.environ.get("CHAT_INTERNAL_URL", "http://pinai-chat:8001")
 
 
-# kinds that fan out to chat-worker /agent/run/* — those run a full
-# DeepAgents loop (LLM rounds + Daytona sandbox + tool calls), routinely
-# pushing past the default 60s lease. The reaper would happily mark such
-# runs 'lease expired (worker crashed)' even though the agent is making
-# progress. Bump them to 10min, matching what the OpenClaw plugin's
-# auto-dreaming handler used to renew its lease to via `ctx.heartbeat`.
+# Kinds that fan out to chat-worker /agent/run/* run a full DeepAgents loop
+# (LLM rounds + Daytona sandbox + tool calls), routinely pushing past the
+# default 60s lease. The reaper would otherwise mark such runs "lease expired"
+# while the agent is still making progress.
+#
+# Generator runs can exceed 10 minutes when upstream model calls stall or retry,
+# so they get a longer lease matching the web->chat HTTP read timeout.
 # init / sync are pure HTTP-then-INSERT and stay at the default.
 _LONG_RUNNING_KINDS: frozenset[str] = frozenset({
-    "auto.dreaming", "connector.evolve", "generator.manual",
-    "generator.auto", "user.prompt",
+    "auto.dreaming", "connector.evolve", "user.prompt",
 })
+_GENERATOR_KINDS: frozenset[str] = frozenset({"generator.manual", "generator.auto"})
 _LONG_LEASE_SECONDS = 600
+_GENERATOR_LEASE_SECONDS = 1800
 
 
 class DefaultDispatcher:
@@ -145,6 +147,8 @@ class DefaultDispatcher:
         self._owner = owner or f"web-{uuid.uuid4().hex[:8]}"
 
     def _lease_for(self, kind: str) -> int:
+        if kind in _GENERATOR_KINDS:
+            return max(self._lease_seconds, _GENERATOR_LEASE_SECONDS)
         if kind in _LONG_RUNNING_KINDS:
             return max(self._lease_seconds, _LONG_LEASE_SECONDS)
         return self._lease_seconds
