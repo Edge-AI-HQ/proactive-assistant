@@ -189,18 +189,26 @@ async def _handle_subscription_event(conn, sub: Any) -> None:
     stripe = requires_stripe()
     fresh = stripe.Subscription.retrieve(sub_id)
     plan_code = await _plan_code_for_subscription(conn, fresh)
+
+    # update_plan_code=False: Stripe.subscription.items[0].price may
+    # already reflect a scheduled mid-period switch (see checkout
+    # create_or_change_subscription's "Switch" path). Letting that
+    # bleed into pai_subscriptions.plan_code would activate the
+    # next-cycle plan early. invoice.paid is the SSOT for actually
+    # promoting pending_plan_code → plan_code on renewal.
     await subscriptions.sync_from_stripe_subscription(
         conn, user_id=user_id, plan_code=plan_code, stripe_subscription=fresh,
+        update_plan_code=False,
     )
 
-    # On terminal cancel, demote the user back to Free tier (not zero
-    # budget — Free is the default state, $5/30d). Note:
-    # cancel_at_period_end=True alone does NOT trigger this — Stripe
-    # only fires deleted (status=canceled) when the period actually
-    # ends. Customer Portal "cancel immediately" also lands here.
     from . import checkout as checkout_flow
     fresh_status = _attr(fresh, "status")
     if fresh_status == "canceled":
+        # On terminal cancel, demote the user back to Free tier (not zero
+        # budget — Free is the default state, $5/30d). Note:
+        # cancel_at_period_end=True alone does NOT trigger this — Stripe
+        # only fires deleted (status=canceled) when the period actually
+        # ends. Customer Portal "cancel immediately" also lands here.
         await checkout_flow.ensure_user_free_subscription(conn, user_id)
         await checkout_flow.sync_litellm_budget_for_plan(
             conn, user_id, "free", reset_spend=True,
@@ -208,16 +216,20 @@ async def _handle_subscription_event(conn, sub: Any) -> None:
 
 
 async def _handle_invoice_paid(conn, invoice: Any) -> None:
-    """invoice.paid arrives on each renewal. Two jobs:
+    """invoice.paid arrives on each renewal. Three jobs:
       1. Re-sync pai_subscriptions so current_period_{start,end} advance.
-      2. Refresh the LiteLLM virtual key budget:
-         - max_budget = plan.monthly_refresh_credits / 100 (USD ceiling)
+      2. Promote pending_plan_code (if set) → plan_code, clear pending.
+         This is where mid-period plan switches actually take effect.
+      3. Refresh the LiteLLM virtual key budget:
+         - max_budget = new plan.monthly_refresh_credits / 100 (USD ceiling)
          - budget_duration = '30d' (LiteLLM rebases window to NOW)
          - spend = 0 (explicit reset)
 
-    invoice.paid is the SSOT for LiteLLM budget refresh. Other invoice.*
-    events do NOT touch LiteLLM (invoice.payment_succeeded falls through
-    to dispatch as skip)."""
+    invoice.paid is the SSOT for LiteLLM budget refresh AND for plan
+    transitions. customer.subscription.updated NEVER promotes plan_code
+    (it only syncs status/period metadata) because Stripe.items[0].price
+    can change mid-period without an actual billing event.
+    """
     sub_id = _attr(invoice, "subscription")
     if isinstance(sub_id, dict):
         sub_id = sub_id.get("id")
@@ -235,10 +247,27 @@ async def _handle_invoice_paid(conn, invoice: Any) -> None:
         return
     stripe = requires_stripe()
     fresh = stripe.Subscription.retrieve(sub_id)
-    plan_code = await _plan_code_for_subscription(conn, fresh)
+    stripe_plan_code = await _plan_code_for_subscription(conn, fresh)
+
+    # If a switch was scheduled (pending_plan_code set), this renewal
+    # is what activates it. Promote pending → plan_code and clear it.
+    # Otherwise use whatever Stripe reports as current.
+    pre_sync = await subscriptions.get_for_user(conn, user_id)
+    pending = pre_sync.pending_plan_code if pre_sync else None
+    if pending:
+        plan_code = pending
+        logger.info(
+            "invoice.paid promoting pending plan: user=%d %s → %s",
+            user_id, pre_sync.plan_code if pre_sync else "?", pending,
+        )
+    else:
+        plan_code = stripe_plan_code
+
     await subscriptions.sync_from_stripe_subscription(
         conn, user_id=user_id, plan_code=plan_code, stripe_subscription=fresh,
     )
+    if pending:
+        await subscriptions.clear_pending_plan_code(conn, user_id)
 
     # ── LiteLLM budget refresh ──
     if plan_code is None:

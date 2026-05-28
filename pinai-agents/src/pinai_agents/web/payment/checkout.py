@@ -167,16 +167,21 @@ async def ensure_stripe_customer(pool, *, user: User) -> str:
 def get_subscription_item_id(stripe_subscription_id: str) -> str:
     """Look up the (singleton) subscription_item id for a Stripe Subscription.
     We only ever attach one line item per subscription, so items.data[0].id
-    is the canonical answer."""
+    is the canonical answer.
+
+    NOTE: stripe.StripeObject subclasses dict, so `sub.items` returns
+    dict.items() (the builtin method), not the subscription items field.
+    Must use sub["items"] for the actual subscription items collection.
+    """
     stripe = requires_stripe()
     sub = stripe.Subscription.retrieve(stripe_subscription_id)
-    items = sub.items
-    data = items.data if hasattr(items, "data") else items["data"]
+    items = sub["items"]
+    data = items["data"] if isinstance(items, dict) else items.data
     if not data:
         msg = f"subscription {stripe_subscription_id} has no items"
         raise RuntimeError(msg)
     first = data[0]
-    return first.id if hasattr(first, "id") else first["id"]
+    return first["id"] if isinstance(first, dict) else first.id
 
 
 # ── main flow ──
@@ -249,7 +254,6 @@ async def create_or_change_subscription(
             allow_promotion_codes=True,
             metadata=sub_metadata,
             subscription_data={
-                "trial_period_days": target_plan.trial_period_days or None,
                 "metadata": sub_metadata,
             },
         )
@@ -262,6 +266,63 @@ async def create_or_change_subscription(
     # ── existing modifiable sub ──
     assert existing_sub is not None  # for type-narrowing
     assert existing_sub.stripe_subscription_id is not None
+
+    # Case A: target matches an already-scheduled switch — user clicked
+    # the same pending plan again. Stripe.items[0].price + pending_plan_code
+    # are already correct; skip the redundant Stripe API call + DB write.
+    # Frontend gets the same "switch scheduled" toast as the first click.
+    if (
+        existing_sub.pending_plan_code is not None
+        and existing_sub.pending_plan_code == target_plan.plan_code
+    ):
+        return {
+            "checkoutUrl": None,
+            # Direction relative to the current plan, not the pending one.
+            "flow": (
+                "upgrade" if current_plan is not None
+                and target_plan.price_cents_monthly > current_plan.price_cents_monthly
+                else "downgrade"
+            ),
+            "pendingPlanCode": target_plan.plan_code,
+        }
+
+    # Case B: target matches current plan AND there's a pending switch
+    # → user wants to revoke the scheduled switch and stay put.
+    # We must reset Stripe.items[0].price back to the current plan's
+    # price too — otherwise next renewal still bills at the pending
+    # plan's price even though we cleared pending_plan_code on our side.
+    if (
+        existing_sub.plan_code == target_plan.plan_code
+        and existing_sub.pending_plan_code is not None
+    ):
+        item_id = get_subscription_item_id(existing_sub.stripe_subscription_id)
+        revoked = stripe.Subscription.modify(
+            existing_sub.stripe_subscription_id,
+            items=[{"id": item_id, "price": target_plan.stripe_price_id}],
+            proration_behavior="none",
+            billing_cycle_anchor="unchanged",
+            cancel_at_period_end=False,
+            metadata={
+                "supabase_user_id": user.supabase_user_id,
+                "plan_code": target_plan.plan_code,
+            },
+        )
+        async with service_tx(pool) as conn:
+            await subs_repo.sync_from_stripe_subscription(
+                conn, user_id=user.id, plan_code=None,
+                stripe_subscription=revoked,
+                update_plan_code=False,
+            )
+            await subs_repo.clear_pending_plan_code(conn, user.id)
+        return {
+            "checkoutUrl": None,
+            "flow": "revoke",
+            "pendingPlanCode": None,
+        }
+
+    # Case C: target matches current plan, no pending — genuinely a no-op
+    # that almost certainly is a user error (the picker shouldn't expose
+    # the current plan as an option).
     if existing_sub.plan_code == target_plan.plan_code:
         raise HTTPException(400, f"already on plan {target_plan.plan_code}")
     if current_plan is None:
@@ -283,29 +344,46 @@ async def create_or_change_subscription(
         "plan_code": target_plan.plan_code,
     }
 
-    if is_upgrade:
-        # UPGRADE: prorate + invoice immediately (always_invoice). The
-        # invoice.paid webhook will then fire and refresh LiteLLM budget
-        # to the new ceiling.
-        stripe.Subscription.modify(
-            existing_sub.stripe_subscription_id,
-            items=[{"id": item_id, "price": target_plan.stripe_price_id}],
-            proration_behavior="always_invoice",
-            metadata=mod_metadata,
-        )
-        return {"checkoutUrl": None, "flow": "upgrade"}
-
-    # DOWNGRADE: no proration, no anchor shift — user keeps the higher
-    # budget through current period end, then Stripe rolls them to the
-    # cheaper plan at next renewal.
-    stripe.Subscription.modify(
+    # Switch (upgrade / downgrade / lateral): never apply mid-period.
+    # User keeps the current plan + budget through current_period_end;
+    # the new plan kicks in on the next invoice.paid, where the webhook
+    # promotes pending_plan_code → plan_code and resets LiteLLM to the
+    # new cap. Stripe: items[0].price changes now (Stripe needs it to
+    # compute the next invoice), but billing_cycle_anchor="unchanged" +
+    # proration_behavior="none" mean the user isn't charged a cent until
+    # next renewal.
+    #
+    # cancel_at_period_end=False: switching plans signals "I want to keep
+    # using this product", so we revoke any pending cancellation. Without
+    # this, a user who clicked Cancel and then Switch ends up with a
+    # subscription that cancels at period_end (no renewal → no
+    # invoice.paid → pending_plan_code never activates).
+    modified = stripe.Subscription.modify(
         existing_sub.stripe_subscription_id,
         items=[{"id": item_id, "price": target_plan.stripe_price_id}],
         proration_behavior="none",
         billing_cycle_anchor="unchanged",
+        cancel_at_period_end=False,
         metadata=mod_metadata,
     )
-    return {"checkoutUrl": None, "flow": "downgrade"}
+    async with service_tx(pool) as conn:
+        # Sync canonical Stripe state back (status / period / cancel
+        # flag) without touching plan_code — the new price already lives
+        # on the Stripe sub, but pai_subscriptions.plan_code stays on
+        # the current paid plan until invoice.paid promotes pending.
+        await subs_repo.sync_from_stripe_subscription(
+            conn, user_id=user.id, plan_code=None,
+            stripe_subscription=modified,
+            update_plan_code=False,
+        )
+        await subs_repo.set_pending_plan_code(
+            conn, user_id=user.id, pending_plan_code=target_plan.plan_code,
+        )
+    return {
+        "checkoutUrl": None,
+        "flow": "upgrade" if is_upgrade else "downgrade",
+        "pendingPlanCode": target_plan.plan_code,
+    }
 
 
 async def cancel_subscription(pool, *, user: User) -> dict[str, Any]:
@@ -470,10 +548,40 @@ async def reconcile_subscription_from_stripe(
             plan_code = plan.plan_code if plan else None
 
     async with service_tx(pool) as conn:
+        # Read existing state so we can detect "first subscribe": user was
+        # on free (or no row) and Stripe now shows an active paid sub.
+        # In production invoice.paid webhook is the canonical promotion
+        # path, but in local dev (no webhook forwarding) or during the
+        # brief window before invoice.paid lands, the DB would otherwise
+        # stay on free while Stripe already says paid. This is the ONLY
+        # case where reconcile is allowed to overwrite plan_code +
+        # touch LiteLLM — switches between paid plans (the "pending"
+        # case) still require invoice.paid because items[0].price on
+        # Stripe may be scheduled-for-next-cycle, not current.
+        old_sub = await subs_repo.get_for_user(conn, user.id)
+        old_plan_code = old_sub.plan_code if old_sub else None
+        canonical_status = getattr(canonical, "status", "")
+        is_first_subscribe = (
+            old_plan_code in (None, "free")
+            and canonical_status in ("trialing", "active")
+            and plan_code is not None
+            and plan_code != "free"
+        )
+
         await subs_repo.sync_from_stripe_subscription(
             conn, user_id=user.id, plan_code=plan_code,
             stripe_subscription=canonical,
+            update_plan_code=is_first_subscribe,
         )
+
+        if is_first_subscribe:
+            # New paid subscription is now active — bring LiteLLM into
+            # line with the plan cap + zero the spend window. Idempotent
+            # if the invoice.paid webhook fires later: webhook re-syncs
+            # the same plan/budget pair, no drift.
+            await sync_litellm_budget_for_plan(
+                conn, user.id, plan_code, reset_spend=True,
+            )
 
     return {
         "synced": True,

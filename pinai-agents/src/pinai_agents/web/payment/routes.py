@@ -56,12 +56,14 @@ async def my_subscription(
         sub = await subs_repo.get_for_user(conn, user.id)
     if sub is None:
         return {
-            "status": "inactive", "planCode": None, "accessGranted": False,
+            "status": "inactive", "planCode": None, "pendingPlanCode": None,
+            "accessGranted": False,
             "currentPeriodEnd": None, "cancelAtPeriodEnd": False,
         }
     return {
         "status": sub.status,
         "planCode": sub.plan_code,
+        "pendingPlanCode": sub.pending_plan_code,
         "accessGranted": sub.is_access_granted(),
         "currentPeriodStart": (
             sub.current_period_start.isoformat() if sub.current_period_start else None
