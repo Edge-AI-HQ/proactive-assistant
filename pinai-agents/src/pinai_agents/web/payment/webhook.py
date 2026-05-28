@@ -249,11 +249,23 @@ async def _handle_invoice_paid(conn, invoice: Any) -> None:
     fresh = stripe.Subscription.retrieve(sub_id)
     stripe_plan_code = await _plan_code_for_subscription(conn, fresh)
 
-    # If a switch was scheduled (pending_plan_code set), this renewal
-    # is what activates it. Promote pending → plan_code and clear it.
-    # Otherwise use whatever Stripe reports as current.
+    # Resolve pending_plan_code from two sources, in this order:
+    #   1. Stripe subscription.metadata.pending_plan_code — set by whichever
+    #      backend ran the switch (see checkout.create_or_change_subscription).
+    #      This is the cross-environment SSOT: if a switch was scheduled on
+    #      one backend (e.g. local dev) and invoice.paid lands on a different
+    #      backend (e.g. cloud dev where the webhook is configured), the
+    #      metadata is the only place both sides can see the pending value.
+    #      Without this lookup the cloud backend would fall back to
+    #      Stripe.items[0].price — which is already the next-cycle price —
+    #      and incorrectly promote plan_code one cycle early.
+    #   2. Local DB pai_subscriptions.pending_plan_code — fallback for
+    #      subscriptions scheduled before this metadata path rolled out,
+    #      and as a belt-and-suspenders read on the same backend.
+    pending = _pending_from_stripe_metadata(fresh)
     pre_sync = await subscriptions.get_for_user(conn, user_id)
-    pending = pre_sync.pending_plan_code if pre_sync else None
+    if pending is None:
+        pending = pre_sync.pending_plan_code if pre_sync else None
     if pending:
         plan_code = pending
         logger.info(
@@ -268,6 +280,19 @@ async def _handle_invoice_paid(conn, invoice: Any) -> None:
     )
     if pending:
         await subscriptions.clear_pending_plan_code(conn, user_id)
+        # Also clear from Stripe metadata so the next invoice.paid doesn't
+        # re-detect the same pending value and re-promote. DB is already
+        # consistent at this point so metadata cleanup is best-effort —
+        # log + continue on Stripe API failure.
+        try:
+            stripe.Subscription.modify(
+                sub_id, metadata={"pending_plan_code": ""},
+            )
+        except Exception as e:
+            logger.warning(
+                "failed to clear pending_plan_code from Stripe metadata "
+                "for sub=%s: %s", sub_id, e,
+            )
 
     # ── LiteLLM budget refresh ──
     if plan_code is None:
@@ -342,6 +367,24 @@ def _attr(obj: Any, name: str) -> Any:
         return getattr(obj, name)
     if isinstance(obj, dict):
         return obj.get(name)
+    return None
+
+
+def _pending_from_stripe_metadata(sub: Any) -> str | None:
+    """Read pending_plan_code from a Stripe Subscription's metadata.
+
+    Returns None when the key is absent or empty-string. Empty-string is
+    the Stripe-API convention for 'unset this metadata field' — used by
+    checkout's revoke path and by _handle_invoice_paid post-promote
+    cleanup. Treating it as None means a metadata key that was explicitly
+    cleared on Stripe doesn't accidentally re-trigger a promotion.
+    """
+    md = _attr(sub, "metadata") or {}
+    if not isinstance(md, dict):
+        return None
+    value = md.get("pending_plan_code")
+    if isinstance(value, str) and value:
+        return value
     return None
 
 

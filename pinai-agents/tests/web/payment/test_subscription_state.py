@@ -16,7 +16,7 @@ def _row(status: str) -> SubscriptionRow:
     now = datetime.now(UTC)
     return SubscriptionRow(
         user_id=1, stripe_customer_id="cus_x", stripe_subscription_id="sub_y",
-        plan_code="pro", status=status,
+        plan_code="pro", pending_plan_code=None, status=status,
         current_period_start=now, current_period_end=now,
         cancel_at_period_end=False, created_at=now, updated_at=now,
     )
