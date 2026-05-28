@@ -1,21 +1,28 @@
-"""Webhook helpers — _user_id_from_metadata / _attr — no Stripe needed.
+"""Webhook helpers — _user_id_from_metadata / _attr / _pending_from_stripe_metadata
+and a focused integration check of _handle_invoice_paid's pending-plan-code
+priority order.
 
-These helpers resolve a Stripe event's metadata back to our internal
-BIGINT user id by looking up the Supabase UUID against the users table.
-See AGENTS.md "用户标识规约" for why metadata's primary key is the UUID
-and never the BIGINT.
+The pending-plan-code lookup is the cross-environment SSOT for plan
+switches: a switch scheduled on one backend must be visible to a webhook
+processed on a different backend (see checkout.create_or_change_subscription
++ webhook._handle_invoice_paid). The tests below pin that priority order
+(Stripe metadata > local DB) plus the post-promote cleanup behavior.
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from pinai_agents.web.payment import subscriptions
+from pinai_agents.web.payment import plans, subscriptions
+from pinai_agents.web.payment import webhook as webhook_mod
 from pinai_agents.web.payment.webhook import (
     _attr,
+    _handle_invoice_paid,
+    _pending_from_stripe_metadata,
     _resolve_user_id_for_event,
     _user_id_from_metadata,
 )
@@ -90,3 +97,201 @@ async def test_resolve_user_id_for_event_drills_through_event_data_object(
         )),
     )
     assert await _resolve_user_id_for_event(None, event) == 7
+
+
+# ── _pending_from_stripe_metadata (pure logic) ──
+
+
+def test_pending_metadata_returns_value_when_set():
+    sub = SimpleNamespace(metadata={"pending_plan_code": "max"})
+    assert _pending_from_stripe_metadata(sub) == "max"
+
+
+def test_pending_metadata_empty_string_treated_as_none():
+    """Stripe convention: empty string unsets a metadata key. Callers
+    branch on `is None`, so empty-string must not look 'present'."""
+    sub = SimpleNamespace(metadata={"pending_plan_code": ""})
+    assert _pending_from_stripe_metadata(sub) is None
+
+
+def test_pending_metadata_missing_key_returns_none():
+    sub = SimpleNamespace(metadata={"supabase_user_id": "u-1"})
+    assert _pending_from_stripe_metadata(sub) is None
+
+
+def test_pending_metadata_no_metadata_attr_returns_none():
+    assert _pending_from_stripe_metadata(SimpleNamespace()) is None
+
+
+def test_pending_metadata_works_on_dict_payload():
+    """Stripe-py StripeObject is dict-like — mirror the same accommodation
+    _user_id_from_metadata makes for raw-dict event payloads."""
+    sub = {"metadata": {"pending_plan_code": "basic"}}
+    assert _pending_from_stripe_metadata(sub) == "basic"
+
+
+# ── _handle_invoice_paid: pending resolution priority ──
+#
+# These pin the cross-environment SSOT contract: switch scheduled on
+# backend A + invoice.paid handled on backend B must still resolve the
+# pending plan, because Stripe.metadata is the only place both backends
+# see. Without this, backend B falls back to Stripe.items[0].price which
+# is already the next-cycle price → DB gets promoted one cycle early
+# (the original bug).
+
+
+def _sub_row(*, pending: str | None, plan: str = "pro") -> subscriptions.SubscriptionRow:
+    now = datetime.now(UTC)
+    return subscriptions.SubscriptionRow(
+        user_id=42,
+        stripe_customer_id="cus_x",
+        stripe_subscription_id="sub_y",
+        plan_code=plan,
+        pending_plan_code=pending,
+        status="active",
+        current_period_start=now,
+        current_period_end=now,
+        cancel_at_period_end=False,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+@pytest.fixture
+def invoice_paid_harness(monkeypatch):
+    """Stub every collaborator _handle_invoice_paid touches so the test
+    isolates the pending-resolution + cleanup logic. Per-case the tests
+    mutate `fresh_sub.metadata` and `sub_row_container["row"]` to drive
+    the branch under test."""
+    fresh_sub = SimpleNamespace(
+        id="sub_y", customer="cus_x", status="active",
+        cancel_at_period_end=False,
+        current_period_start=1730000000, current_period_end=1732678400,
+        metadata={},
+    )
+    sub_row_container = {"row": _sub_row(pending=None)}
+
+    stripe_modify = MagicMock()
+    fake_stripe = SimpleNamespace(
+        Subscription=SimpleNamespace(
+            retrieve=MagicMock(return_value=fresh_sub),
+            modify=stripe_modify,
+        ),
+    )
+    monkeypatch.setattr(webhook_mod, "requires_stripe", lambda: fake_stripe)
+
+    monkeypatch.setattr(
+        subscriptions, "find_user_by_stripe_subscription",
+        AsyncMock(return_value=42),
+    )
+    monkeypatch.setattr(
+        webhook_mod, "_plan_code_for_subscription",
+        AsyncMock(return_value="pro"),  # Stripe items currently 'pro'
+    )
+
+    async def fake_get_for_user(conn, user_id):
+        return sub_row_container["row"]
+    monkeypatch.setattr(subscriptions, "get_for_user", fake_get_for_user)
+
+    sync_mock = AsyncMock()
+    monkeypatch.setattr(
+        subscriptions, "sync_from_stripe_subscription", sync_mock,
+    )
+    clear_mock = AsyncMock()
+    monkeypatch.setattr(
+        subscriptions, "clear_pending_plan_code", clear_mock,
+    )
+
+    # Short-circuit LiteLLM budget refresh (out of scope for these tests).
+    monkeypatch.setattr(plans, "find_by_code", AsyncMock(return_value=None))
+
+    return SimpleNamespace(
+        fresh_sub=fresh_sub,
+        sub_row_container=sub_row_container,
+        sync_mock=sync_mock,
+        clear_mock=clear_mock,
+        stripe_modify=stripe_modify,
+    )
+
+
+def _invoice(sub_id: str = "sub_y") -> SimpleNamespace:
+    return SimpleNamespace(id="in_test", subscription=sub_id, customer="cus_x")
+
+
+@pytest.mark.asyncio
+async def test_invoice_paid_prefers_stripe_metadata_over_db(invoice_paid_harness):
+    """The bug fix: cross-backend schedule → cloud webhook → pending must
+    come from Stripe metadata, not (stale or absent) DB row."""
+    invoice_paid_harness.fresh_sub.metadata = {"pending_plan_code": "max"}
+    invoice_paid_harness.sub_row_container["row"] = _sub_row(pending="basic")
+
+    await _handle_invoice_paid(conn=None, invoice=_invoice())
+
+    invoice_paid_harness.sync_mock.assert_awaited_once()
+    _, kwargs = invoice_paid_harness.sync_mock.await_args
+    assert kwargs["plan_code"] == "max"
+    invoice_paid_harness.clear_mock.assert_awaited_once_with(None, 42)
+    invoice_paid_harness.stripe_modify.assert_called_once_with(
+        "sub_y", metadata={"pending_plan_code": ""},
+    )
+
+
+@pytest.mark.asyncio
+async def test_invoice_paid_falls_back_to_db_pending(invoice_paid_harness):
+    """Legacy path: subscription scheduled before this rolled out has no
+    metadata yet — DB pending_plan_code must still be honored."""
+    invoice_paid_harness.fresh_sub.metadata = {}
+    invoice_paid_harness.sub_row_container["row"] = _sub_row(pending="max")
+
+    await _handle_invoice_paid(conn=None, invoice=_invoice())
+
+    _, kwargs = invoice_paid_harness.sync_mock.await_args
+    assert kwargs["plan_code"] == "max"
+    invoice_paid_harness.clear_mock.assert_awaited_once_with(None, 42)
+    invoice_paid_harness.stripe_modify.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_invoice_paid_empty_metadata_falls_back_to_db(invoice_paid_harness):
+    """Empty-string metadata is Stripe's 'unset' signal — must not be
+    treated as a real pending value."""
+    invoice_paid_harness.fresh_sub.metadata = {"pending_plan_code": ""}
+    invoice_paid_harness.sub_row_container["row"] = _sub_row(pending="basic")
+
+    await _handle_invoice_paid(conn=None, invoice=_invoice())
+
+    _, kwargs = invoice_paid_harness.sync_mock.await_args
+    assert kwargs["plan_code"] == "basic"
+
+
+@pytest.mark.asyncio
+async def test_invoice_paid_no_pending_uses_stripe_plan_code(invoice_paid_harness):
+    """No scheduled switch anywhere — plain renewal. plan_code comes from
+    Stripe items[0].price (mocked 'pro'). No cleanup call expected."""
+    invoice_paid_harness.fresh_sub.metadata = {}
+    invoice_paid_harness.sub_row_container["row"] = _sub_row(pending=None)
+
+    await _handle_invoice_paid(conn=None, invoice=_invoice())
+
+    _, kwargs = invoice_paid_harness.sync_mock.await_args
+    assert kwargs["plan_code"] == "pro"
+    invoice_paid_harness.clear_mock.assert_not_awaited()
+    invoice_paid_harness.stripe_modify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_invoice_paid_metadata_cleanup_failure_does_not_break_webhook(
+    invoice_paid_harness,
+):
+    """If the post-promote Stripe.modify fails (network blip / rate limit),
+    the webhook must still complete — DB is already consistent. Worst case
+    next renewal re-detects+re-promotes (idempotent) and retries cleanup."""
+    invoice_paid_harness.fresh_sub.metadata = {"pending_plan_code": "max"}
+    invoice_paid_harness.sub_row_container["row"] = _sub_row(pending="max")
+    invoice_paid_harness.stripe_modify.side_effect = RuntimeError("Stripe down")
+
+    await _handle_invoice_paid(conn=None, invoice=_invoice())  # must NOT raise
+
+    _, kwargs = invoice_paid_harness.sync_mock.await_args
+    assert kwargs["plan_code"] == "max"
+    invoice_paid_harness.clear_mock.assert_awaited_once()

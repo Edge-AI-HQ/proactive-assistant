@@ -305,6 +305,10 @@ async def create_or_change_subscription(
             metadata={
                 "supabase_user_id": user.supabase_user_id,
                 "plan_code": target_plan.plan_code,
+                # Stripe convention: empty string unsets the metadata key.
+                # Must clear here too so the cloud webhook doesn't re-promote
+                # the now-revoked plan on next invoice.paid.
+                "pending_plan_code": "",
             },
         )
         async with service_tx(pool) as conn:
@@ -339,9 +343,15 @@ async def create_or_change_subscription(
     is_upgrade = (
         target_plan.price_cents_monthly > current_plan.price_cents_monthly
     )
+    # pending_plan_code is replicated to Stripe subscription metadata so the
+    # webhook on a *different* backend can still resolve it on next renewal.
+    # Without this, a switch scheduled locally + invoice.paid handled in the
+    # cloud falls back to "Stripe items[0].price" which is already the next-
+    # cycle price → cloud DB gets promoted one cycle early.
     mod_metadata = {
         "supabase_user_id": user.supabase_user_id,
         "plan_code": target_plan.plan_code,
+        "pending_plan_code": target_plan.plan_code,
     }
 
     # Switch (upgrade / downgrade / lateral): never apply mid-period.
