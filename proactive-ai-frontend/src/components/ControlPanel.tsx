@@ -52,7 +52,10 @@ export default function ControlPanel({ composio }: ControlPanelProps) {
   }, [activeToolkits]);
 
   return (
-    <div className="flex flex-col h-full min-h-0 px-4 pt-3">
+    <div
+      className="flex flex-col h-full min-h-0 px-4"
+      style={{ paddingTop: "var(--constellation-header-top, 0.75rem)" }}
+    >
       <div className="flex-shrink-0 mb-5">
         <h1 className="text-2xl font-semibold text-foreground tracking-tight mb-0.5 pr-20">Connect</h1>
         <p className="text-xs text-muted-foreground">Data sources & devices powering your AI</p>

@@ -1953,8 +1953,11 @@ export default function GoalsView({ composio }: GoalsViewProps) {
 
   return (
     <div
-      className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain px-4 pb-2 pt-3"
-      style={{ WebkitOverflowScrolling: "touch" }}
+      className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain px-4 pb-2"
+      style={{
+        WebkitOverflowScrolling: "touch",
+        paddingTop: "var(--constellation-header-top, 0.75rem)",
+      }}
     >
       {/* Page header */}
       <div className="mb-6 pr-20">
