@@ -852,7 +852,7 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
       .catch(() => ({ result: false }));
     const conn = probe.result
       ? await sqlite.retrieveConnection(DB_NAME, false)
-      : await sqlite.createConnection(DB_NAME, false, "no-encryption", 1, false);
+      : await createOrRetrieveSqliteConnection(sqlite);
     const open = await conn.isDBOpen?.().catch(() => ({ result: false }));
     if (open?.result !== true) await conn.open();
     this.conn = conn;
@@ -882,6 +882,22 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
     ]);
     await cleanTranscriptSegmentLabels(conn);
   }
+}
+
+async function createOrRetrieveSqliteConnection(
+  sqlite: SqliteConnectionFactory,
+): Promise<SqliteConnection> {
+  try {
+    return await sqlite.createConnection(DB_NAME, false, "no-encryption", 1, false);
+  } catch (err) {
+    if (!isConnectionAlreadyExistsError(err)) throw err;
+    return sqlite.retrieveConnection(DB_NAME, false);
+  }
+}
+
+function isConnectionAlreadyExistsError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.toLowerCase().includes("already exists");
 }
 
 async function cleanTranscriptSegmentLabels(conn: SqliteConnection): Promise<void> {

@@ -68,6 +68,20 @@ describe("SqliteTimelineStore migrations", () => {
     );
   });
 
+  test("reuses an existing connection when createConnection reports it already exists", async () => {
+    sqliteMock.factory.isConnection.mockResolvedValue({ result: false });
+    sqliteMock.factory.createConnection.mockRejectedValueOnce(
+      new Error("CreateConnection: Connection pin_ambient_timeline already exists"),
+    );
+
+    await new SqliteTimelineStore().init();
+
+    expect(sqliteMock.factory.retrieveConnection).toHaveBeenCalledWith("pin_ambient_timeline", false);
+    expect(sqliteMock.conn.execute).toHaveBeenCalledWith(expect.stringContaining(
+      "CREATE TABLE IF NOT EXISTS ambient_raw_events",
+    ));
+  });
+
   test("does not alter candidate window tables that already have retry metadata", async () => {
     sqliteMock.conn.query.mockImplementation(async (sql?: string) => {
       if ((sql ?? "").startsWith("PRAGMA table_info(ambient_candidate_windows)")) {
