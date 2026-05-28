@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 import daytona
@@ -39,6 +40,11 @@ from ..auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
 from ..runtime.checkpoint import get_checkpointer
 from ..runtime.ctx import ClientHints, run_context
 from ..streaming import chat_done, chat_error, langgraph_to_sse
+from ..tools.local_sandbox import (
+    create_local_sandbox_backend,
+    local_chat_root_dir,
+    use_local_sandbox,
+)
 from ..tools.sandbox import evict_thread, get_or_create_thread_sandbox
 
 logger = logging.getLogger(__name__)
@@ -172,12 +178,28 @@ def _card_context_message(card_context: dict[str, Any]) -> SystemMessage:
     )
 
 
+def _turn_context_message(now: datetime | None = None) -> SystemMessage:
+    current = (now or datetime.now(UTC)).astimezone(UTC).isoformat()
+    return SystemMessage(
+        content=(
+            "<turn_context>\n"
+            f"Current UTC datetime: {current}\n"
+            "Use this as the reference for relative dates like today, "
+            "tonight, tomorrow, next batch, and this week. When writing "
+            "temporary preferences, set expires_at in the future; never "
+            "use an older date.\n"
+            "</turn_context>"
+        ),
+    )
+
+
 def _build_send_messages(
     *,
     message: str,
     card_context: dict[str, Any] | None,
     is_card_thread: bool,
     is_first_turn: bool,
+    turn_context: SystemMessage | None = None,
 ) -> list[Any]:
     """Assemble the input messages for a normal (non-regenerate) send.
 
@@ -195,6 +217,8 @@ def _build_send_messages(
     spinning up the agent / sandbox.
     """
     msgs: list[Any] = []
+    if turn_context is not None:
+        msgs.append(turn_context)
     if is_card_thread:
         if card_context is not None and is_first_turn:
             msgs.append(_card_context_message(card_context))
@@ -256,12 +280,10 @@ async def _stream(
 
     # ── sandbox ──
     try:
-        backend, _ = await get_or_create_thread_sandbox(
-            req.session_key, run_jwt=raw_jwt,
-        )
+        backend = await _get_thread_backend(req.session_key, raw_jwt=raw_jwt)
     except Exception as e:
         logger.exception(
-            "daytona sandbox provisioning failed session_key=%s", req.session_key,
+            "sandbox provisioning failed session_key=%s", req.session_key,
         )
         yield chat_error(f"sandbox provisioning failed: {type(e).__name__}: {e}")
         yield chat_done()
@@ -382,6 +404,7 @@ async def _stream(
                 card_context=req.card_context,
                 is_card_thread=is_card_thread,
                 is_first_turn=is_first_turn,
+                turn_context=_turn_context_message(),
             ),
         )
 
@@ -447,3 +470,16 @@ async def _stream(
                         "evict_thread on failure path failed session_key=%s",
                         req.session_key,
                     )
+
+
+async def _get_thread_backend(session_key: str, *, raw_jwt: str) -> Any:
+    if use_local_sandbox():
+        root_dir = local_chat_root_dir(session_key)
+        logger.info(
+            "chat using local sandbox backend session_key=%s root_dir=%s",
+            session_key,
+            root_dir,
+        )
+        return create_local_sandbox_backend(run_jwt=raw_jwt, root_dir=root_dir)
+    backend, _ = await get_or_create_thread_sandbox(session_key, run_jwt=raw_jwt)
+    return backend

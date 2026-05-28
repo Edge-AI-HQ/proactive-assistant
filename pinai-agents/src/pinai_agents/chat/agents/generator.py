@@ -36,13 +36,10 @@ Why share one sandbox backend:
 from __future__ import annotations
 
 import logging
-import os
 import re
-from pathlib import Path
 from typing import Any
 
 from deepagents import create_deep_agent
-from deepagents.backends.local_shell import LocalShellBackend
 
 from ...shared.api_models import (
     CardsList,
@@ -52,45 +49,10 @@ from ...shared.api_models import (
 )
 from ..runtime.ctx import run_context
 from ..runtime.llm import make_chat_model
+from ..tools.local_sandbox import create_local_sandbox_backend, use_local_sandbox
 from ..tools.sandbox import evict_thread, get_or_create_thread_sandbox
 
 logger = logging.getLogger(__name__)
-
-
-def _use_local_sandbox() -> bool:
-    return os.environ.get("PINAI_LOCAL_SANDBOX", "").lower() in {"1", "true", "yes"}
-
-
-def _create_local_sandbox_backend(*, run_jwt: str) -> LocalShellBackend:
-    """Local dev backend for generator runs.
-
-    This intentionally only activates behind PINAI_LOCAL_SANDBOX. It lets
-    DeepAgents execute code inside the pinai-chat container, where docker DNS
-    can resolve pinai-web without ngrok.
-    """
-    state_dir = Path("/state")
-    state_dir.mkdir(parents=True, exist_ok=True)
-    for name in ("phase1.json", "matched_patterns.json"):
-        (state_dir / name).unlink(missing_ok=True)
-
-    path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
-    pythonpath = os.environ.get("PYTHONPATH", "")
-    sdk_path = "/app/packages/pinai_sdk/src"
-    if sdk_path not in pythonpath.split(":"):
-        pythonpath = f"{sdk_path}:{pythonpath}" if pythonpath else sdk_path
-
-    return LocalShellBackend(
-        root_dir="/state",
-        virtual_mode=False,
-        timeout=5 * 60,
-        inherit_env=True,
-        env={
-            "PATH": f"/app/.venv/bin:{path}",
-            "PYTHONPATH": pythonpath,
-            "PAI_API_URL": os.environ.get("WEB_INTERNAL_URL", "http://pinai-web:8000"),
-            "PAI_RUN_JWT": run_jwt,
-        },
-    )
 
 
 # ── Subagent prompts ────────────────────────────────────────────────
@@ -516,9 +478,13 @@ async def run_generator(
         no further parse / shape check needed.
     """
     session_key = f"gen-{run_id}"
-    use_local_sandbox = _use_local_sandbox()
-    if use_local_sandbox:
-        backend = _create_local_sandbox_backend(run_jwt=run_jwt)
+    is_local_sandbox = use_local_sandbox()
+    if is_local_sandbox:
+        backend = create_local_sandbox_backend(
+            run_jwt=run_jwt,
+            root_dir="/state",
+            reset_files=("phase1.json", "matched_patterns.json"),
+        )
         logger.info("generator using local sandbox backend run_id=%s", run_id)
     else:
         backend, _ = await get_or_create_thread_sandbox(session_key, run_jwt=run_jwt)
@@ -647,7 +613,7 @@ async def run_generator(
                 },
             )
     finally:
-        if not use_local_sandbox:
+        if not is_local_sandbox:
             await evict_thread(session_key)
 
     structured = result.get("structured_response")

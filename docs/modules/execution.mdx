@@ -126,6 +126,7 @@ chat 端验签 + `jti` 黑名单(`pai_jti_revocations`),失败 401。
 - verify run JWT → `RunPrincipal`。
 - 看 session_key prefix 选 agent:`card-thread-` → `make_card_execution_agent`,否则 `make_main_chat_agent`。
 - 拿 LangGraph checkpointer(`chat/runtime/checkpoint.py` 在 Postgres `langgraph` schema 持久化);thread_id = session_key。
+- 每个普通发送 turn 都注入隐藏 `turn_context` SystemMessage,包含当前 UTC 时间;agent 用它解析"今天 / 明天 / 下一批"等相对时间,尤其是写临时 `preference_add.expires_at` 时必须保证过期时间在未来。
 - card_context 注入分两种线程(`chat/routes/chat.py:_build_send_messages`):**card thread** 首次 + 有 `card_context` 时把 `SystemMessage(json.dumps(card_context))` push 进 thread state,之后不需要前端再传;**main thread** 是每用户单例(migration 053),首轮一辈子只真一次,所以改成**本轮带 `card_context` 就注入**(从某张卡打开 main chat 给反馈时),不看是不是首轮。两种都被 `/history` 过滤掉,不进前端渲染。
 - 跑 agent loop,把 LangGraph stream 转成 SSE 帧:`chat:thinking` / `chat:delta` / `chat:tool:start` / `chat:tool:update` / `chat:tool:result` / `chat:reply`(非流式 fallback)/ `chat:error` / `chat:done`(`chat/streaming.py:langgraph_to_sse`)。
 
@@ -161,7 +162,7 @@ chat 端验签 + `jti` 黑名单(`pai_jti_revocations`),失败 401。
 | `tavily.py` | `tavily_search`、`tavily_extract`(LangChain Tavily 工具,API key 在 web 进程,chat 通过 web 转发) |
 | `world.py` | `world_recent`、`world_search` |
 
-### python_exec(Daytona Code Mode)
+### python_exec(Code Mode)
 
 `chat/tools/sandbox.py:python_exec`:
 
@@ -169,6 +170,7 @@ chat 端验签 + `jti` 黑名单(`pai_jti_revocations`),失败 401。
 - 每个 LangGraph thread 一个 sandbox(LRU 100,5min auto_stop,24h auto_delete,详见 [Runtime & Deployment](./runtime-deployment))。
 - 注入 env:`PAI_API_URL`(本地 ngrok / 生产公网)+ `PAI_SANDBOX_TOKEN` phantom token + `PAI_RUN_JWT`。
 - sandbox 里 baked `pinai_sdk`,`from pinai_sdk import client`,所有 `/api/agent/*` 走 phantom token 鉴权。
+- 本地只想验证 chat/generator 质量、不想走 Daytona/ngrok 时,设置 `PINAI_LOCAL_SANDBOX=1` 并重建 `pinai-chat`;chat route 和 generator 都会用 `LocalShellBackend` 在 `pinai-chat` 容器内执行,`pinai_sdk` 通过 `http://pinai-web:8000` 回连 web。
 - 适合多步组合调用(`run_query=fetch + filter + reduce + memory.add`),不要为每步都开 native tool。
 - 退出 thread 时 `evict_thread(thread_id)` 主动回收;`auto_stop` 兜底防 sandbox 泄漏。
 
@@ -245,6 +247,7 @@ Browserbase context(`ensure_browserbase_context`)在 `/chat-stream/send` 入口�
 | Native @tool 套件 | `pinai-agents/src/pinai_agents/chat/tools/native/` |
 | Tool HTTP client(签 run JWT) | `pinai-agents/src/pinai_agents/chat/tools/http_client.py` |
 | python_exec sandbox 工具 | `pinai-agents/src/pinai_agents/chat/tools/sandbox.py` |
+| 本地 sandbox helper | `pinai-agents/src/pinai_agents/chat/tools/local_sandbox.py` |
 | Browser tool / 状态 / 路由 | `pinai-agents/src/pinai_agents/chat/browser/{manager,tool,control_state,events,routes}.py` |
 | Composio meta-tool 转发 / 副作用约束 | `pinai-agents/src/pinai_agents/chat/tools/native/composio_meta.py`、`web/routes/agent/composio.py`(顶部 docstring 说明 verb gate deferred)、`web/composio_service.py` 的 session `tools=` allowlist |
 | LangGraph checkpointer | `pinai-agents/src/pinai_agents/chat/runtime/checkpoint.py` |
@@ -304,7 +307,7 @@ make logs-pinai-chat | grep -E "/agent/chat|chat:tool|browser:"
 - chat agent prompt 的 stable / volatile 边界没像旧 OpenClaw plugin 那样有硬测试断言,改 prompt 时要自觉把 `card_context` / firstMessage 这种 volatile 字段放在最末,不要污染前缀(否则 LiteLLM cache 失效)。
 - Composio side-effect gate 当前是 **prompt-only**(`web/routes/agent/composio.py` docstring 明说 "Side-effect gate: deferred"),没有 verb 黑/白名单硬闸 — 改 toolkit / 改 agent prompt 时**不要**假设代码会兜底拦截危险 slug。等 DeepAgents permission middleware 落地之后才会补 verb 闸。
 - `GMAIL_SEND_EMAIL` 不会被代码拒;agent 走不走 draft 链路完全靠 prompt 控住,改 prompt 别去掉这条规则。
-- python_exec 在 sandbox 里跑,sandbox 跟 chat 进程异步;`/state/*.json` 文件是 sandbox 文件系统,前端拿不到,只能通过 agent 输出的文本看。
+- python_exec 在 sandbox 里跑,sandbox 跟 chat 进程异步;`/state/*.json` 文件是 sandbox 文件系统,前端拿不到,只能通过 agent 输出的文本看。本地 `PINAI_LOCAL_SANDBOX=1` 时这些文件在 `pinai-chat` 容器的 `/state` 下。
 - Browser session 上限 5,开第六个会 reject;开 session 后 5min 空闲会自动 close,前端 reconnect 时 server 会主推 `browser:closed`,前端用过期 session id 调 `/input` 打死。
 - AI / user control 切换只对写动作生效,`snapshot` / `get_text` / `screenshot` 在 user 接管期间也允许 — 设计就是让 AI 保留情境感知。
 - LangGraph checkpointer 写 `langgraph` schema,清 chat 状态不要 truncate `pai_chat_threads`(那是 metadata),要清 `langgraph.*` 表。
