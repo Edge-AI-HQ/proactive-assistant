@@ -61,7 +61,20 @@ export default function AccountPanel({
   const initial = (avatarLetter ?? userName.trim().slice(0, 1) ?? "?").toUpperCase();
   const subtitle = userEmail ?? "Signed in";
 
-  const [subPage, setSubPage] = useState<SettingsSubPage>("main");
+  // subPage persisted to sessionStorage so F5 keeps the user on the
+  // sub-page they were viewing (e.g. Subscription) instead of bouncing
+  // back to Account → main.
+  const [subPage, setSubPageState] = useState<SettingsSubPage>(() => {
+    if (typeof window === "undefined") return "main";
+    const stored = window.sessionStorage.getItem("pai-account-subpage");
+    return (stored as SettingsSubPage | null) ?? "main";
+  });
+  const setSubPage = useCallback((v: SettingsSubPage) => {
+    setSubPageState(v);
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem("pai-account-subpage", v);
+    }
+  }, []);
 
   if (subPage === "subscription") {
     return <SubscriptionSubPage onBack={() => setSubPage("main")} />;
@@ -77,7 +90,10 @@ export default function AccountPanel({
   }
 
   return (
-    <div className="flex flex-col h-full px-4 pt-14 pb-2 overflow-y-auto">
+    <div
+      className="flex flex-col h-full px-4 pb-2 overflow-y-auto"
+      style={{ paddingTop: "var(--constellation-header-top, 3.5rem)" }}
+    >
       {/* Header — mirrors MinimalistSetting from the design source. */}
       <h1 className="text-2xl font-semibold text-foreground tracking-tight mb-0.5">Setting</h1>
       <p className="text-xs text-muted-foreground mb-5">Subscription · Preferences · Notifications · Ambient</p>
@@ -225,6 +241,25 @@ const SUBSCRIPTION_BILLING_HISTORY: BillingEntry[] = [
   { date: "Feb 1, 2026", amount: "$39.00", status: "Paid", description: "Basic plan — monthly" },
 ];
 
+// Module-level cache so SubscriptionSubPage renders cached data on
+// re-mount (tab switches, after action) instead of flashing a spinner.
+// Survives across React mounts but not across full page reloads — F5
+// resets the module. Populated by refresh() and never invalidated
+// (last write wins; reconcile is the silent refresh path).
+const subscriptionPanelCache: {
+  sub: SubscriptionState | null;
+  usage: UsageInfo | null;
+  paymentMethods: PaymentMethodEntry[];
+  invoices: InvoiceEntry[];
+  primed: boolean;
+} = {
+  sub: null,
+  usage: null,
+  paymentMethods: [],
+  invoices: [],
+  primed: false,
+};
+
 const SUBSCRIPTION_PRO_FEATURES = [
   "6,000 credits / mo",
   "Local Llama 3 8B · Cloud Claude Sonnet",
@@ -241,21 +276,29 @@ const SUBSCRIPTION_PRO_FEATURES = [
  * here — we deliberately don't self-implement that surface.
  */
 function SubscriptionSubPage({ onBack }: { onBack: () => void }) {
-  const [sub, setSub] = useState<SubscriptionState | null>(null);
-  const [paymentMethods, setPaymentMethods] = useState<PaymentMethodEntry[]>([]);
-  const [invoices, setInvoices] = useState<InvoiceEntry[]>([]);
-  const [usage, setUsage] = useState<UsageInfo | null>(null);
+  // Initial values come from the module cache: if the user has visited
+  // this page before this session, we render those values instantly and
+  // refresh silently in the background. First-ever mount has primed=false
+  // so loading=true triggers the cold-start spinner once.
+  const [sub, setSub] = useState<SubscriptionState | null>(subscriptionPanelCache.sub);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethodEntry[]>(subscriptionPanelCache.paymentMethods);
+  const [invoices, setInvoices] = useState<InvoiceEntry[]>(subscriptionPanelCache.invoices);
+  const [usage, setUsage] = useState<UsageInfo | null>(subscriptionPanelCache.usage);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!subscriptionPanelCache.primed);
   const [actionPending, setActionPending] = useState(false);
   const [pendingPlanCode, setPendingPlanCode] = useState<PlanCode | null>(null);
   const [actionToast, setActionToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showPlanPicker, setShowPlanPicker] = useState(false);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (silent: boolean = false) => {
     try {
-      setLoading(true);
+      // silent=true: keep current UI visible while we refetch in the
+      // background (cache-first / stale-while-revalidate). Used when the
+      // module cache is already primed, or after a user action where we
+      // want the action's result to drive UI not a full reload spinner.
+      if (!silent) setLoading(true);
       // Stripe webhook isn't forwarded in local dev → reconcile pulls
       // canonical state from Stripe + upserts pai_subscriptions. Silent
       // failure (reconcile is a "nice to have"; getCurrentSubscription
@@ -275,10 +318,13 @@ function SubscriptionSubPage({ onBack }: { onBack: () => void }) {
         listInvoices(12).catch(() => [] as InvoiceEntry[]),
         getUsage().catch(() => null as UsageInfo | null),
       ]);
-      setSub(s);
-      setPaymentMethods(pms);
-      setInvoices(invs);
-      setUsage(u);
+      // Write through to module cache so the next mount can render
+      // instantly without re-fetching.
+      setSub(s); subscriptionPanelCache.sub = s;
+      setPaymentMethods(pms); subscriptionPanelCache.paymentMethods = pms;
+      setInvoices(invs); subscriptionPanelCache.invoices = invs;
+      setUsage(u); subscriptionPanelCache.usage = u;
+      subscriptionPanelCache.primed = true;
       setError(null);
       if (multipleActive) {
         setActionToast(
@@ -293,7 +339,10 @@ function SubscriptionSubPage({ onBack }: { onBack: () => void }) {
   }, []);
 
   useEffect(() => {
-    void refresh();
+    // If the cache is already primed (user has visited this page during
+    // this session), do a silent background refresh — no spinner. Cold
+    // start (primed=false) shows the spinner exactly once per page load.
+    void refresh(subscriptionPanelCache.primed);
   }, [refresh]);
 
   const onSubscribeOrChange = async (planCode: PlanCode) => {
@@ -308,17 +357,27 @@ function SubscriptionSubPage({ onBack }: { onBack: () => void }) {
         cancelUrl: `${window.location.origin}/?checkout=cancel`,
       });
       if (r.checkoutUrl) {
-        // new subscription — go to Stripe Checkout for card entry + trial
+        // new subscription — go to Stripe Checkout for card entry
         window.location.href = r.checkoutUrl;
         return;
       }
-      // upgrade/downgrade applied in place via Stripe.Subscription.modify
-      setActionToast(
-        r.flow === "upgrade"
-          ? "Upgraded — new plan effective now"
-          : "Downgrade scheduled — takes effect next period",
-      );
-      await refresh();
+      if (r.flow === "revoke") {
+        // User clicked their current plan with a pending switch active —
+        // backend cleared pending_plan_code and reset Stripe price.
+        setActionToast("Scheduled switch revoked — staying on current plan");
+      } else {
+        // Switch (upgrade / downgrade / lateral): scheduled for next renewal,
+        // no immediate charge. Plan card now shows a "→ Switching to X on
+        // <date>" hint sourced from sub.pendingPlanCode.
+        const newPlanName =
+          PLANS.find((p) => p.id === planCode)?.name
+          ?? (planCode.charAt(0).toUpperCase() + planCode.slice(1));
+        setActionToast(
+          `Switch scheduled — ${newPlanName} takes effect at next renewal`,
+        );
+      }
+      setShowPlanPicker(false);  // collapse picker so user sees the new state
+      await refresh(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "checkout failed");
     } finally {
@@ -348,7 +407,7 @@ function SubscriptionSubPage({ onBack }: { onBack: () => void }) {
     setError(null);
     try {
       await cancelCurrentSubscription();
-      await refresh();
+      await refresh(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "cancel failed");
     } finally {
@@ -408,7 +467,10 @@ function SubscriptionSubPage({ onBack }: { onBack: () => void }) {
   })();
 
   return (
-    <div className="flex flex-col h-full px-4 pt-14 pb-2 overflow-y-auto">
+    <div
+      className="flex flex-col h-full px-4 pb-2 overflow-y-auto"
+      style={{ paddingTop: "var(--constellation-header-top, 3.5rem)" }}
+    >
       <SubPageHeader
         title="Subscription"
         subtitle="Plan, billing, and payment method."
@@ -443,6 +505,14 @@ function SubscriptionSubPage({ onBack }: { onBack: () => void }) {
                   </span>
                 </div>
                 <p className="text-[11px] text-foreground/55 mt-0.5">{priceLine}</p>
+                {sub.pendingPlanCode && (
+                  <p className="text-[11px] text-[hsl(292_78%_63%)] mt-0.5 font-medium">
+                    → Switching to{" "}
+                    {PLANS.find((p) => p.id === sub.pendingPlanCode)?.name
+                      ?? (sub.pendingPlanCode.charAt(0).toUpperCase() + sub.pendingPlanCode.slice(1))}
+                    {periodEnd ? ` on ${periodEnd}` : ""}
+                  </p>
+                )}
               </div>
             </div>
             {currentFeatures.length > 0 && (
@@ -470,10 +540,10 @@ function SubscriptionSubPage({ onBack }: { onBack: () => void }) {
                 <div className={`${currentFeatures.length > 0 ? "mt-3 pt-3 border-t border-foreground/[0.06]" : "mt-2"}`}>
                   <div className="flex items-center justify-between text-[11px] mb-1.5">
                     <span className="text-foreground/55 uppercase tracking-[0.12em] font-semibold">
-                      Budget this period
+                      Plan usage
                     </span>
                     <span className="text-foreground/85 font-medium tabular-nums">
-                      ${usage.spendUsd.toFixed(2)} / ${usage.maxBudgetUsd.toFixed(2)}
+                      {Math.round(usage.spendUsd * 100).toLocaleString()} / {Math.round(usage.maxBudgetUsd * 100).toLocaleString()} credits
                       <span className="text-foreground/45 ml-1">({Math.round(pct)}%)</span>
                     </span>
                   </div>
@@ -485,7 +555,7 @@ function SubscriptionSubPage({ onBack }: { onBack: () => void }) {
                   </div>
                   {overBudget && (
                     <p className="text-[11px] text-[hsl(0_72%_45%)] mt-1.5">
-                      Budget exceeded — LLM calls blocked until {isFree ? "you upgrade your plan" : "next renewal"}.
+                      Plan usage limit reached — calls blocked until {isFree ? "you upgrade your plan" : "next renewal"}.
                     </p>
                   )}
                 </div>
@@ -553,8 +623,8 @@ function SubscriptionSubPage({ onBack }: { onBack: () => void }) {
               })}
               <p className="text-[11px] text-foreground/45 mt-2 px-1">
                 {isFree
-                  ? "7-day free trial. Card required. Cancel anytime."
-                  : "Upgrades apply immediately. Downgrades take effect next period."}
+                  ? "Card required. Cancel anytime."
+                  : "All plan changes take effect at next renewal. Cancel anytime."}
               </p>
             </div>
           )}
@@ -743,7 +813,10 @@ function SubscriptionSubPage({ onBack }: { onBack: () => void }) {
 
 function PreferencesSubPage({ onBack }: { onBack: () => void }) {
   return (
-    <div className="flex flex-col h-full px-4 pt-14 pb-2 overflow-y-auto">
+    <div
+      className="flex flex-col h-full px-4 pb-2 overflow-y-auto"
+      style={{ paddingTop: "var(--constellation-header-top, 3.5rem)" }}
+    >
       <SubPageHeader
         title="Preferences"
         subtitle="How your AI behaves — tone, formatting, and defaults."
@@ -824,7 +897,10 @@ function NotificationsSubPage({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <div className="flex flex-col h-full px-4 pt-14 pb-2 overflow-y-auto">
+    <div
+      className="flex flex-col h-full px-4 pb-2 overflow-y-auto"
+      style={{ paddingTop: "var(--constellation-header-top, 3.5rem)" }}
+    >
       <SubPageHeader
         title="Push Notifications"
         subtitle="Control what your AI is allowed to interrupt you with."
@@ -889,7 +965,10 @@ function NotificationsSubPage({ onBack }: { onBack: () => void }) {
  */
 function AmbientSubPage({ onBack }: { onBack: () => void }) {
   return (
-    <div className="flex flex-col h-full px-4 pt-14 pb-2 overflow-y-auto">
+    <div
+      className="flex flex-col h-full px-4 pb-2 overflow-y-auto"
+      style={{ paddingTop: "var(--constellation-header-top, 3.5rem)" }}
+    >
       <SubPageHeader
         title="Ambient"
         subtitle="Control what PIN AI can observe locally, and which on-device models it uses."

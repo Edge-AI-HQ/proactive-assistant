@@ -579,18 +579,26 @@ export interface BillingPlanPublic {
 export interface SubscriptionState {
   status: SubscriptionStatus;
   planCode: PlanCode | null;
+  /**
+   * Plan scheduled to take effect at next renewal. Set when the user
+   * switches plan mid-period (upgrade or downgrade); the switch only
+   * activates on the next invoice.paid. NULL = no scheduled change.
+   */
+  pendingPlanCode: PlanCode | null;
   accessGranted: boolean;
-  currentPeriodStart: string | null;
+  currentPeriodStart?: string | null;
   currentPeriodEnd: string | null;
   cancelAtPeriodEnd: boolean;
 }
 
-export type CheckoutFlow = "new" | "upgrade" | "downgrade";
+export type CheckoutFlow = "new" | "upgrade" | "downgrade" | "revoke";
 
 export interface CreateCheckoutResponse {
   checkoutUrl: string | null;
   sessionId?: string;
   flow: CheckoutFlow;
+  /** Set on upgrade/downgrade (scheduled-for-next-cycle switch). */
+  pendingPlanCode?: PlanCode | null;
 }
 
 export interface CancelSubscriptionResponse {

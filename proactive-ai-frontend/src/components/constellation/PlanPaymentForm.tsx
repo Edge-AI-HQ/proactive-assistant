@@ -1,11 +1,11 @@
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Check, Apple, CreditCard, SkipForward, Zap, Crown, Star,
+  Check, Apple, CreditCard, Zap, Crown, Star,
   type LucideIcon,
 } from "lucide-react";
 
 export type PlanId = "basic" | "pro" | "max";
-export type PayMethod = "apple" | "card" | "skip";
+export type PayMethod = "apple" | "card";
 export interface CardInfo { number: string; expiry: string; cvc: string }
 
 interface Plan {
@@ -41,7 +41,7 @@ export const PLANS: Plan[] = [
 
 export function isPayValid(payMethod: PayMethod | null, cardInfo: CardInfo) {
   if (!payMethod) return false;
-  if (payMethod === "apple" || payMethod === "skip") return true;
+  if (payMethod === "apple") return true;
   return (
     cardInfo.number.replace(/\s/g, "").length === 16 &&
     cardInfo.expiry.replace(/\D/g, "").length === 4 &&
@@ -51,35 +51,15 @@ export function isPayValid(payMethod: PayMethod | null, cardInfo: CardInfo) {
 
 export function PlanPaymentForm({
   plan, setPlan, payMethod, setPayMethod, cardInfo, setCardInfo,
-  showHero = true,
-  allowSkip = true,
 }: {
   plan: PlanId; setPlan: (p: PlanId) => void;
   payMethod: PayMethod | null; setPayMethod: (m: PayMethod) => void;
   cardInfo: CardInfo; setCardInfo: (c: CardInfo) => void;
-  showHero?: boolean;
-  allowSkip?: boolean;
 }) {
   return (
     <div>
-      {showHero && (
-        <div className="text-center px-2 pt-1 pb-4 mb-2">
-          <div className="text-[10px] font-medium uppercase tracking-[0.22em] text-foreground/45 mb-3">
-            Free for 7 days
-          </div>
-          <h2 className="text-display text-2xl leading-tight tracking-tight text-foreground">
-            Seven days,{" "}
-            <span className="italic font-light text-foreground/55">on us.</span>
-          </h2>
-          <div className="mx-auto mt-3 h-px w-10 bg-foreground/15" />
-          <p className="text-[12.5px] text-foreground/55 mt-3 max-w-[18rem] mx-auto leading-relaxed">
-            Full access to everything. No charge until day&nbsp;8 — cancel anytime.
-          </p>
-        </div>
-      )}
-
       <div className="text-[11px] uppercase tracking-wider text-foreground/45 font-semibold mb-2 px-1">
-        Then continue with
+        Choose your plan
       </div>
 
       <div className="space-y-2.5">
@@ -154,19 +134,13 @@ export function PlanPaymentForm({
 
       <div className="mt-5">
         <div className="text-[10.5px] text-foreground/45 mb-2 px-1">
-          {allowSkip
-            ? "Add a payment method to start your free trial. You won't be charged until day 8."
-            : "Choose how to pay. You'll be charged today."}
+          Choose how to pay. You'll be charged today.
         </div>
         <div className="space-y-2">
           <PayButton active={payMethod === "apple"} onClick={() => setPayMethod("apple")}
             icon={<Apple size={18} />} label="Apple Pay" sub="Recommended · one tap" />
           <PayButton active={payMethod === "card"} onClick={() => setPayMethod("card")}
             icon={<CreditCard size={18} />} label="Credit or debit card" sub="Visa · Mastercard · Amex" />
-          {allowSkip && (
-            <PayButton active={payMethod === "skip"} onClick={() => setPayMethod("skip")}
-              icon={<SkipForward size={18} />} label="Skip payment for now" sub="Still 7 days free · add later" />
-          )}
         </div>
 
         <AnimatePresence initial={false}>
