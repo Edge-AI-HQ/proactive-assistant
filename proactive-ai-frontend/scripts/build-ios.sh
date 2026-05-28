@@ -83,10 +83,15 @@ done
 #
 # CI:  CFBundleVersion = GITHUB_RUN_NUMBER + BUILD_NUMBER_OFFSET.
 #      Monotonic per run, no commits required, no external API calls.
-#      The offset keeps CI builds safely above pre-CI manual TestFlight
-#      uploads (the highest manual build before CI takeover was 25 as of
-#      2026-05-15). Once we cross over, only CI should upload — Apple
-#      rejects duplicate or non-increasing CFBundleVersion values per
+#      The offset was originally 100 to stay above pre-CI manual uploads
+#      (the highest manual build before CI takeover was 25 as of
+#      2026-05-15). Bumped to 200 on 2026-05-28 after migrating the repo
+#      from PIN-AI to Edge-AI-HQ — GITHUB_RUN_NUMBER reset to 1 in the
+#      new repo, so the next CI build would have been 101, below the old
+#      repo's last TestFlight upload (run #50 + 100 = build 150). New
+#      offset puts run #2 at build 202, comfortably above. Once CI
+#      crosses a prior max, only CI should upload — Apple rejects
+#      duplicate or non-increasing CFBundleVersion values per
 #      CFBundleShortVersionString.
 #
 # Local: fall back to agvtool's pbxproj bump. Will collide with CI builds
@@ -94,7 +99,7 @@ done
 #        for any release-style upload.
 
 cd "$IOS_DIR"
-BUILD_NUMBER_OFFSET=100
+BUILD_NUMBER_OFFSET=200
 if [ -n "${GITHUB_RUN_NUMBER:-}" ]; then
   NEW_BUILD=$((BUILD_NUMBER_OFFSET + GITHUB_RUN_NUMBER))
   echo "==> CI run #$GITHUB_RUN_NUMBER -> CFBundleVersion = $NEW_BUILD (offset $BUILD_NUMBER_OFFSET)"
