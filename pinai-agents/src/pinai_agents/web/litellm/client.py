@@ -239,6 +239,60 @@ async def list_models_for_key(virtual_key: str) -> set[str]:
     }
 
 
+async def update_key(
+    *, virtual_key: str,
+    max_budget_usd: float | None = None,
+    budget_duration: str | None = None,
+    models: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+    reset_spend: bool = False,
+) -> None:
+    """Update an existing LiteLLM virtual key in-place. Only fields with
+    non-None values are sent; LiteLLM preserves untouched fields.
+
+    Note on monthly refresh: setting `budget_duration='30d'` rebases the
+    budget tracking window to NOW. Combined with a fresh `max_budget` and
+    `reset_spend=True`, this gives the user a clean N USD ceiling for the
+    next 30 days — equivalent to PIN Claw's "spend reset on invoice.paid"
+    behavior.
+    """
+    body: dict[str, Any] = {"key": virtual_key}
+    if max_budget_usd is not None:
+        body["max_budget"] = max_budget_usd
+    if budget_duration is not None:
+        body["budget_duration"] = budget_duration
+    if models is not None:
+        body["models"] = models
+    if metadata is not None:
+        body["metadata"] = metadata
+    if reset_spend:
+        body["spend"] = 0
+    await _request("POST", "/key/update", json_body=body)
+
+
+async def get_key_info(virtual_key: str) -> dict[str, Any]:
+    """Read spend / max_budget / budget_reset_at for a single virtual key.
+
+    LiteLLM nests the key fields under `info` (or sometimes at top-level
+    depending on version); we walk `_records()` to find the canonical
+    record with `max_budget`. Returns empty dict on no-match (caller
+    treats as $0 / $0)."""
+    try:
+        parsed = await _request("GET", "/key/info", params={"key": virtual_key})
+    except LiteLLMError as e:
+        # /key/info on some LiteLLM versions rejects GET; fall back to POST.
+        if e.status_code in (404, 405):
+            parsed = await _request(
+                "POST", "/key/info", json_body={"key": virtual_key},
+            )
+        else:
+            raise
+    for r in _records(parsed):
+        if "max_budget" in r or "spend" in r:
+            return r
+    return {}
+
+
 async def delete_keys(tokens: list[str]) -> None:
     if not tokens:
         return

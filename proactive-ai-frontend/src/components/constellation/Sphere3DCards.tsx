@@ -263,6 +263,7 @@ const Sphere3DCards = ({
   return (
     <div
       ref={containerRef}
+      data-main-menu-swipe-ignore="true"
       className="relative w-full h-full select-none touch-none cursor-grab active:cursor-grabbing"
       onPointerDown={(e) => {
         dragStartXY.current = { x: e.clientX, y: e.clientY };

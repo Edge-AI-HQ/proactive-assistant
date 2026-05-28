@@ -18,6 +18,7 @@ class BillingPlan:
     currency: str
     price_cents_monthly: int
     monthly_refresh_credits: int
+    trial_period_days: int
     sort_order: int
     is_active: bool
     metadata: dict[str, Any]
@@ -35,6 +36,7 @@ class BillingPlan:
             currency=row["currency"],
             price_cents_monthly=int(row["price_cents_monthly"]),
             monthly_refresh_credits=int(row["monthly_refresh_credits"]),
+            trial_period_days=int(row.get("trial_period_days") or 0),
             sort_order=int(row["sort_order"]),
             is_active=bool(row["is_active"]),
             metadata=meta if isinstance(meta, dict) else {},
@@ -48,6 +50,7 @@ class BillingPlan:
             "currency": self.currency,
             "priceCentsMonthly": self.price_cents_monthly,
             "monthlyRefreshCredits": self.monthly_refresh_credits,
+            "trialPeriodDays": self.trial_period_days,
             "sortOrder": self.sort_order,
         }
 

@@ -184,7 +184,10 @@ export default function ChatTimeline({
   }
 
   return (
-    <div className="flex flex-col h-full px-4 pt-14 pb-2 overflow-y-auto">
+    <div
+      className="flex flex-col h-full px-4 pb-2 overflow-y-auto"
+      style={{ paddingTop: "var(--constellation-header-top, 3.5rem)" }}
+    >
       <h1 className="text-display text-2xl text-foreground mb-1">Tasks</h1>
       <p className="text-sm text-muted-foreground mb-6">AI is running these for you</p>
 

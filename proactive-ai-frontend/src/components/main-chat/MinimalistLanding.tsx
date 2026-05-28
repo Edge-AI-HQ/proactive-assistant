@@ -1,8 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent, type TouchEvent } from "react";
 import { motion } from "framer-motion";
 import { ChevronDown, Send } from "lucide-react";
 import bgGradient from "@/assets/bg-gradient.jpg";
 import AiSphere from "@/components/constellation/AiSphere";
+import {
+  isMainChatExitSwipeDown,
+  shouldIgnoreLandingExitSwipe,
+  type TouchPoint,
+} from "@/components/constellation/mainChatEntryGesture";
 import { VoiceButton } from "@/components/voice";
 
 interface Suggestion {
@@ -77,8 +82,79 @@ export default function MinimalistLanding({
 
   const canSend = !!text.trim() && !disabled;
 
+  // Swipe-down-to-close gesture. Mirrors the swipe-up-to-open from
+  // ConstellationLayout: start ref is set on pointer/touch start, the
+  // exit fires when downward travel >= 36px and dominates horizontal
+  // jitter. Critical (learned the hard way on iOS): we do NOT clear the
+  // start ref inside pointermove — small touch deltas would null it
+  // before threshold is reached and the gesture would never fire.
+  // The ref is cleared only on success or on the terminal pointerup /
+  // touchend, with onPointerCancel / onTouchCancel as belt-and-suspenders.
+  //
+  // shouldIgnoreLandingExitSwipe excludes textarea / button / input
+  // targets so editing the composer or tapping a chip never accidentally
+  // closes the landing.
+  const exitSwipeStartRef = useRef<TouchPoint | null>(null);
+
+  const tryExitFromSwipe = useCallback((
+    end: TouchPoint,
+    event: { preventDefault: () => void },
+  ) => {
+    if (!isMainChatExitSwipeDown(exitSwipeStartRef.current, end)) return;
+    exitSwipeStartRef.current = null;
+    event.preventDefault();
+    onBack();
+  }, [onBack]);
+
+  const handleExitPointerDown = useCallback((e: PointerEvent<HTMLDivElement>) => {
+    if (shouldIgnoreLandingExitSwipe(e.target)) {
+      exitSwipeStartRef.current = null;
+      return;
+    }
+    exitSwipeStartRef.current = { x: e.clientX, y: e.clientY };
+  }, []);
+  const handleExitPointerMove = useCallback((e: PointerEvent<HTMLDivElement>) => {
+    tryExitFromSwipe({ x: e.clientX, y: e.clientY }, e);
+  }, [tryExitFromSwipe]);
+  const handleExitPointerUp = useCallback((e: PointerEvent<HTMLDivElement>) => {
+    tryExitFromSwipe({ x: e.clientX, y: e.clientY }, e);
+    exitSwipeStartRef.current = null;
+  }, [tryExitFromSwipe]);
+  const handleExitTouchStart = useCallback((e: TouchEvent<HTMLDivElement>) => {
+    if (shouldIgnoreLandingExitSwipe(e.target)) {
+      exitSwipeStartRef.current = null;
+      return;
+    }
+    const t = e.touches[0];
+    if (!t) return;
+    exitSwipeStartRef.current = { x: t.clientX, y: t.clientY };
+  }, []);
+  const handleExitTouchMove = useCallback((e: TouchEvent<HTMLDivElement>) => {
+    const t = e.touches[0];
+    if (!t) return;
+    tryExitFromSwipe({ x: t.clientX, y: t.clientY }, e);
+  }, [tryExitFromSwipe]);
+  const handleExitTouchEnd = useCallback((e: TouchEvent<HTMLDivElement>) => {
+    const t = e.changedTouches[0];
+    if (t) tryExitFromSwipe({ x: t.clientX, y: t.clientY }, e);
+    exitSwipeStartRef.current = null;
+  }, [tryExitFromSwipe]);
+  const resetExitSwipe = useCallback(() => {
+    exitSwipeStartRef.current = null;
+  }, []);
+
   return (
-    <div className="absolute inset-0 z-50 font-native overflow-hidden">
+    <div
+      className="absolute inset-0 z-50 font-native overflow-hidden"
+      onPointerDown={handleExitPointerDown}
+      onPointerMove={handleExitPointerMove}
+      onPointerUp={handleExitPointerUp}
+      onPointerCancel={resetExitSwipe}
+      onTouchStart={handleExitTouchStart}
+      onTouchMove={handleExitTouchMove}
+      onTouchEnd={handleExitTouchEnd}
+      onTouchCancel={resetExitSwipe}
+    >
       {/* Background — same aurora system as ConstellationLayout / the
           reference MinimalistConstellationLayout. The page lives over a
           gradient image with three drifting aurora layers and a soft

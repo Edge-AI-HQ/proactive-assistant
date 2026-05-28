@@ -28,6 +28,7 @@ class SubscriptionRow:
     stripe_customer_id: str | None
     stripe_subscription_id: str | None
     plan_code: str | None
+    pending_plan_code: str | None
     status: str
     current_period_start: datetime | None
     current_period_end: datetime | None
@@ -42,6 +43,7 @@ class SubscriptionRow:
             stripe_customer_id=row.get("stripe_customer_id"),
             stripe_subscription_id=row.get("stripe_subscription_id"),
             plan_code=row.get("plan_code"),
+            pending_plan_code=row.get("pending_plan_code"),
             status=row["status"],
             current_period_start=row.get("current_period_start"),
             current_period_end=row.get("current_period_end"),
@@ -82,8 +84,29 @@ async def upsert_user_stripe_customer(
         )
 
 
+async def get_user_stripe_customer(conn, user_id: int) -> str | None:
+    """Read users.stripe_customer_id for a user. Returns None when the
+    user has never started a Stripe Checkout (no customer created yet).
+
+    This is the canonical "does this user have a Stripe customer?" lookup
+    — it answers BEFORE any subscription is created (pai_subscriptions
+    might be empty even when users.stripe_customer_id is set, because
+    the user might have abandoned Checkout)."""
+    async with conn.cursor() as cur:
+        await cur.execute(
+            "SELECT stripe_customer_id FROM users WHERE id = %s",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+    if not row:
+        return None
+    cid = row.get("stripe_customer_id")
+    return cid if isinstance(cid, str) and cid else None
+
+
 async def sync_from_stripe_subscription(
     conn, *, user_id: int, plan_code: str | None, stripe_subscription: Any,
+    update_plan_code: bool = True,
 ) -> SubscriptionRow:
     """Upsert pai_subscriptions from a Stripe Subscription object.
 
@@ -95,6 +118,13 @@ async def sync_from_stripe_subscription(
     plan_code is resolved by the caller (look up pai_billing_plans by the
     subscription's first item's price id). Pass None to leave plan_code
     untouched (e.g. delete events).
+
+    update_plan_code=False: never overwrite plan_code (only update status /
+    period / customer / sub id). Used by reconcile + subscription.updated
+    webhook where Stripe.subscription.items already reflects a scheduled
+    switch — we don't want to bleed the next-cycle plan into the current-
+    cycle plan_code. invoice.paid handler is the SSOT for promoting
+    pending_plan_code → plan_code on actual renewal.
     """
     sub = stripe_subscription
     sub_id = sub.id if hasattr(sub, "id") else sub.get("id")
@@ -108,8 +138,18 @@ async def sync_from_stripe_subscription(
     p_start = _coerce_dt(_get(sub, "current_period_start"))
     p_end = _coerce_dt(_get(sub, "current_period_end"))
 
+    # Three modes:
+    #   plan_code is None              → never touch plan_code (delete events)
+    #   update_plan_code is False      → never touch plan_code (reconcile /
+    #                                     subscription.updated; protects
+    #                                     pending switches from leaking
+    #                                     into plan_code)
+    #   update_plan_code is True       → upsert plan_code (new subscription
+    #                                     via checkout.session.completed,
+    #                                     or invoice.paid promoting pending)
+    write_plan = plan_code is not None and update_plan_code
     async with conn.cursor() as cur:
-        if plan_code is None:
+        if not write_plan:
             await cur.execute(
                 """
                 INSERT INTO pai_subscriptions
@@ -210,6 +250,38 @@ async def find_user_by_stripe_subscription(conn, stripe_subscription_id: str) ->
         )
         row = await cur.fetchone()
     return int(row["user_id"]) if row else None
+
+
+async def set_pending_plan_code(
+    conn, *, user_id: int, pending_plan_code: str,
+) -> None:
+    """Schedule a plan switch to take effect at next renewal. Stored on
+    pai_subscriptions.pending_plan_code; consumed by webhook
+    _handle_invoice_paid which promotes it to plan_code and clears this
+    column. Safe to call repeatedly — last write wins."""
+    async with conn.cursor() as cur:
+        await cur.execute(
+            """
+            UPDATE pai_subscriptions
+            SET pending_plan_code = %s, updated_at = NOW()
+            WHERE user_id = %s
+            """,
+            (pending_plan_code, user_id),
+        )
+
+
+async def clear_pending_plan_code(conn, user_id: int) -> None:
+    """Wipe a scheduled switch. Called by invoice.paid after promotion
+    and (eventually) by a user-facing 'cancel scheduled switch' action."""
+    async with conn.cursor() as cur:
+        await cur.execute(
+            """
+            UPDATE pai_subscriptions
+            SET pending_plan_code = NULL, updated_at = NOW()
+            WHERE user_id = %s AND pending_plan_code IS NOT NULL
+            """,
+            (user_id,),
+        )
 
 
 async def find_user_by_supabase_user_id(conn, supabase_user_id: str) -> int | None:
