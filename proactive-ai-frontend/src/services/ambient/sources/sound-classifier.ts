@@ -14,6 +14,7 @@ import {
   type CaptureTranscriptionResult,
 } from "../capture-transcription";
 import { applyAmbientLiveTranscriptUpdate } from "../live-transcript-store";
+import { speakerAwareTranscriptText } from "../speaker-transcript";
 
 export interface SoundClassifierOptions {
   /** Min top-1 confidence (0-1) before we even consider emitting. */
@@ -322,7 +323,7 @@ export class SoundClassifierSource implements AmbientSource {
       applyAmbientLiveTranscriptUpdate({
         captureSessionId: event.captureSessionId,
         id: event.burstId,
-        text,
+        text: speakerAwareTranscriptText(result.segments, text),
         source: result.provider ?? "cloud_whisper",
         receivedAt: Date.parse(event.capturedAt) || Date.now(),
       });
@@ -427,7 +428,10 @@ export class SoundClassifierSource implements AmbientSource {
       dedupe_key: `${event.platform}:audio:${event.burstId}`,
     });
     this.storedTranscriptBurstIds.add(event.burstId);
-    this.ctx.onEvent(this.key, `Voice transcript: ${text}`);
+    this.ctx.onEvent(
+      this.key,
+      `Voice transcript: ${speakerAwareTranscriptText(payload.speaker_segments, text)}`,
+    );
   }
 
   private handle(event: SoundClassificationEvent): void {

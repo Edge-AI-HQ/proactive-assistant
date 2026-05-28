@@ -14,9 +14,12 @@ import importlib.util
 from pathlib import Path
 
 from pinai_agents.chat.agents.generator import (
+    _CARD_GENERATOR_PROMPT,
     _DATA_COLLECTOR_PROMPT,
+    _EVALUATOR_PROMPT,
     _PLANNER_PROMPT,
 )
+from pinai_agents.chat.agents.prompts.shared import GROUNDING_POLICY
 
 _SDK_CLIENT_PY = (
     Path(__file__).resolve().parents[3]
@@ -32,6 +35,12 @@ def test_data_collector_pulls_preferences_into_digest():
     assert '"preferences"' in _DATA_COLLECTOR_PROMPT
 
 
+def test_data_collector_pulls_full_ambient_signal_details_into_digest():
+    assert "ambient_signal_details" in _DATA_COLLECTOR_PROMPT
+    assert 's.get("kind") == "ambient.candidate_window"' in _DATA_COLLECTOR_PROMPT
+    assert "client.signals.get(signal_id)" in _DATA_COLLECTOR_PROMPT
+
+
 def test_planner_prompt_has_preference_alignment():
     prompt = _PLANNER_PROMPT.lower()
     # Anchor keywords for the alignment section.
@@ -45,6 +54,22 @@ def test_planner_prompt_has_preference_alignment():
     assert "hard constraint" in prompt
     # The planner must surface which preference shaped a plan item.
     assert "notes" in prompt
+
+
+def test_generator_prompts_preserve_ambient_speaker_attribution():
+    planner = _PLANNER_PROMPT.lower()
+    card_generator = _CARD_GENERATOR_PROMPT.lower()
+    evaluator = _EVALUATOR_PROMPT.lower()
+    grounding = GROUNDING_POLICY.lower()
+
+    assert "payload.self_text" in planner
+    assert "`self:` lines" in planner
+    assert "non-self speech" in planner
+    assert "do not write \"you said\"" in card_generator
+    assert "attributes" in evaluator
+    assert "non-self speaker text to the user" in evaluator
+    assert "payload.self_text" in grounding
+    assert "never attribute non-self speech to the user" in grounding
 
 
 def test_sdk_exposes_preferences_list():

@@ -1,4 +1,5 @@
 import type { TranscriptReadyEvent } from "@pin/capacitor-ambient-ai";
+import { speakerAwareTranscriptTextFromPayload } from "./speaker-transcript";
 import type { AmbientCandidateWindow, AmbientPrivacy, AmbientRawEvent } from "./timeline";
 import {
   Activity,
@@ -302,6 +303,8 @@ function rawTranscriptEventToMessage(
 }
 
 function transcriptTextFromRaw(event: AmbientRawEvent): string | null {
+  const speakerText = speakerAwareTranscriptTextFromPayload(event.payload, "");
+  if (speakerText) return speakerText;
   const payloadText = event.payload.text;
   if (typeof payloadText === "string" && payloadText.trim()) {
     const text = payloadText.trim();

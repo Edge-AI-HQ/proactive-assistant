@@ -87,4 +87,31 @@ describe("buildAmbientSummaryContext", () => {
     expect(context.rawEvents.map((event) => event.text)).toContain("Arrived at office");
     expect(context.recentSummaries[0]?.title).toBe("Previous summary");
   });
+
+  test("passes diarized transcript text to the summary model with speaker labels", () => {
+    const context = buildAmbientSummaryContext({
+      nowIso: "2026-05-19T10:15:00.000Z",
+      localDate: "2026-05-19",
+      rawEvents: [
+        raw({
+          id: "transcript_1",
+          sourceType: "transcript",
+          compactText: "plain transcript fallback",
+          payload: {
+            text: "plain transcript fallback",
+            speaker_segments: [
+              { speaker: "self", text: "我觉得这个测试可行", start_ms: 0, end_ms: 1200 },
+              { speaker: "speaker_1", text: "那我们明天继续", start_ms: 1300, end_ms: 2600 },
+            ],
+            speaker_labels: ["self", "speaker_1"],
+            self_text: "我觉得这个测试可行",
+          },
+        }),
+      ],
+    });
+
+    expect(context.rawEvents[0]?.text).toBe(
+      'self: "我觉得这个测试可行"\nspeaker_1: "那我们明天继续"',
+    );
+  });
 });

@@ -119,10 +119,19 @@ export function stripTranscriptSegmentLabels(value: string): string {
 const TRANSCRIPT_CONTEXT_LABEL_PATTERN = /\b(?:sound|motion|location|place|visit) context:\s*/i;
 
 export function transcriptTextOnly(value: string): string {
-  const stripped = stripTranscriptSegmentLabels(value);
+  const stripped = value.replace(/Transcript segment:\s*/g, "").trim();
   const contextStart = stripped.search(TRANSCRIPT_CONTEXT_LABEL_PATTERN);
   const transcript = contextStart >= 0 ? stripped.slice(0, contextStart) : stripped;
-  return transcript.replace(/\s+/g, " ").trim();
+  return normalizeTranscriptWhitespace(transcript);
+}
+
+function normalizeTranscriptWhitespace(value: string): string {
+  const lines = value
+    .split(/\n+/g)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  if (lines.length > 1) return lines.join("\n");
+  return lines[0] ?? "";
 }
 
 export function jsonCloneRecord(

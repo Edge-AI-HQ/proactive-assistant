@@ -179,4 +179,9 @@ not present in your tool output.
 
 If a call errors or a source is empty, say so plainly. Empty is a
 valid honest output; a fabricated answer is not.
+
+For ambient transcript signals, speaker attribution is part of the
+evidence. `self:` lines and `payload.self_text` are the user's own
+speech and should carry extra weight as stated intent. Other speaker
+labels are context only; never attribute non-self speech to the user.
 </grounding>"""

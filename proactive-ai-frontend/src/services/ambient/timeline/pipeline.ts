@@ -1,4 +1,5 @@
 import type { PersonalSignalInput } from "@/lib/devices";
+import { normalizeSpeakerSegments, speakerAwareTranscriptTextFromPayload } from "../speaker-transcript";
 import { candidateWindowToSignal, timelineEventToSignal, type AmbientWindowSourcePayload } from "./envelope";
 import { ambientTimelineModels, type AmbientTimelineModelBridge, type AmbientTimelineEventDraft } from "./models";
 import { rawEventFromSignal, placeLabel } from "./normalize";
@@ -764,7 +765,10 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     const newDeviceStateWindows = hasNewRefs(deviceStateWindows);
     const joinContext = (windows: AmbientCandidateWindow[]) =>
       windows.map((window) => window.compactContext).filter(Boolean).join(" ");
-    const transcriptText = stripTranscriptSegmentLabels(raw.compactText);
+    const transcriptText = speakerAwareTranscriptTextFromPayload(
+      raw.payload,
+      stripTranscriptSegmentLabels(raw.compactText),
+    );
     const additions = [
       existingRawRefIds.has(raw.id) ? "" : transcriptText,
       newSoundWindows.length > 0 ? `Sound context: ${joinContext(newSoundWindows)}` : "",
@@ -1345,7 +1349,12 @@ function sanitizeRawPayload(raw: AmbientRawEvent): Record<string, unknown> | nul
 function sanitizeTranscriptPayload(raw: AmbientRawEvent): Record<string, unknown> {
   const payload = pick(raw.payload, [
     "durationMs", "provider", "language", "captureSessionId", "burstId",
+    "speaker_labels", "self_text", "diarization_model", "diarization_status",
   ]);
+  const speakerSegments = normalizeSpeakerSegments(raw.payload.speaker_segments);
+  if (speakerSegments.length > 0) payload.speaker_segments = speakerSegments;
+  const speakerText = speakerAwareTranscriptTextFromPayload(raw.payload, "");
+  if (speakerText) payload.speaker_text = speakerText;
   const text = stringValue(raw.payload.text)
     ?? stringValue(raw.payload.transcript)
     ?? stringValue(raw.payload.signal_summary)

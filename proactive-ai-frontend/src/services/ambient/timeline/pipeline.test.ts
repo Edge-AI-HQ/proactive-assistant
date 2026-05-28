@@ -1080,6 +1080,52 @@ describe("LocalAmbientTimelinePipeline", () => {
     expect(serialized).not.toContain("speed");
   });
 
+  test("keeps speaker-labelled transcript context for AI and upload payloads", async () => {
+    const { pipeline } = makePipeline();
+
+    const signals = await pipeline.ingestSignal({
+      kind: "session_summary",
+      title: "Voice summary",
+      summary: "我觉得这个测试可行。那我们明天继续。",
+      occurred_at: "2026-05-15T10:00:00.000Z",
+      payload: {
+        captureSessionId: "cap-speakers",
+        burstId: "burst-speakers",
+        durationMs: 2600,
+        provider: "cloud_diarize",
+        speaker_segments: [
+          { speaker: "self", text: "我觉得这个测试可行", start_ms: 0, end_ms: 1200 },
+          { speaker: "speaker_1", text: "那我们明天继续", start_ms: 1300, end_ms: 2600 },
+        ],
+        speaker_labels: ["self", "speaker_1"],
+        self_text: "我觉得这个测试可行",
+        diarization_status: "matched_reference",
+      },
+      confidence: 0.75,
+      dedupe_key: "audio:burst:speakers",
+    });
+
+    const candidate = signals.find((signal) => signal.kind === AMBIENT_CANDIDATE_WINDOW_KIND);
+    expect(candidate?.summary).toBe(
+      'self: "我觉得这个测试可行"\nspeaker_1: "那我们明天继续"',
+    );
+    expect(candidate?.payload?.source_payloads).toEqual([
+      expect.objectContaining({
+        source_type: "transcript",
+        payload: expect.objectContaining({
+          text: "我觉得这个测试可行。那我们明天继续。",
+          speaker_segments: [
+            { speaker: "self", text: "我觉得这个测试可行", start_ms: 0, end_ms: 1200 },
+            { speaker: "speaker_1", text: "那我们明天继续", start_ms: 1300, end_ms: 2600 },
+          ],
+          speaker_labels: ["self", "speaker_1"],
+          self_text: "我觉得这个测试可行",
+          diarization_status: "matched_reference",
+        }),
+      }),
+    ]);
+  });
+
 
 
   test("regenerates existing evidence windows into stable candidate window upload signals", async () => {

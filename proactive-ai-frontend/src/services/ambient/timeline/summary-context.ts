@@ -1,4 +1,5 @@
 import type { AmbientRawEvent, AmbientSourceType, AmbientTimelineEvent } from "./types";
+import { speakerAwareTranscriptTextFromPayload } from "../speaker-transcript";
 
 export interface AmbientSummaryContextRawEvent {
   id: string;
@@ -46,7 +47,7 @@ export function buildAmbientSummaryContext(input: {
         eventType: event.eventType,
         occurredAt: event.occurredAt,
         ...(event.endedAt ? { endedAt: event.endedAt } : {}),
-        text: truncate(event.compactText, 260),
+        text: truncate(summaryText(event), 260),
         sensitivity: event.sensitivity,
         confidence: event.confidence,
       })),
@@ -62,6 +63,11 @@ export function buildAmbientSummaryContext(input: {
         sourceTypes: event.sourceTypes.slice(0, 6),
       })),
   };
+}
+
+function summaryText(event: AmbientRawEvent): string {
+  if (event.sourceType !== "transcript") return event.compactText;
+  return speakerAwareTranscriptTextFromPayload(event.payload, event.compactText);
 }
 
 function truncate(value: string, max: number): string {

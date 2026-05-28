@@ -1,5 +1,6 @@
 import type { PersonalSignalInput } from "@/lib/devices";
 import { SIGNAL_KINDS } from "../kinds";
+import { speakerAwareTranscriptTextFromPayload } from "../speaker-transcript";
 import type {
   AmbientPrivacy,
   AmbientRawEvent,
@@ -157,7 +158,12 @@ function compactText(
   }
   if (sourceType === "audio_route") return `Audio route context: ${item.summary}`;
   if (sourceType === "device_state") return `Device state: ${item.summary}`;
-  if (sourceType === "transcript") return stripTranscriptSegmentLabels(item.summary);
+  if (sourceType === "transcript") {
+    return speakerAwareTranscriptTextFromPayload(
+      payload,
+      stripTranscriptSegmentLabels(item.summary),
+    );
+  }
   if (eventType === "sound.scene_run") {
     const label = cleanText(payload.displayLabel)
       ?? cleanText(payload.primaryLabel)

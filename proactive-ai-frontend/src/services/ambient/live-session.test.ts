@@ -435,6 +435,33 @@ describe("candidate window live session context", () => {
 });
 
 describe("raw transcript live session replay", () => {
+  test("shows diarized speaker labels in replayed live transcript messages", () => {
+    const replay = rawTranscriptEventsToLiveSessionData([
+      makeTranscriptRaw({
+        id: "speaker-aware",
+        occurredAt: "2026-05-17T10:00:00.000Z",
+        compactText: "plain transcript fallback",
+        payload: {
+          captureSessionId: "cap-speaker-aware",
+          provider: "cloud_diarize",
+          text: "plain transcript fallback",
+          speaker_segments: [
+            { speaker: "self", text: "我觉得这个测试可行", start_ms: 0, end_ms: 1200 },
+            { speaker: "speaker_1", text: "那我们明天继续", start_ms: 1300, end_ms: 2600 },
+          ],
+          speaker_labels: ["self", "speaker_1"],
+          self_text: "我觉得这个测试可行",
+        },
+      }),
+    ]);
+
+    const session = liveSessionDataToSession(true, replay, []);
+
+    expect(session?.assists.map((item) => item.text)).toEqual([
+      'self: "我觉得这个测试可行"\nspeaker_1: "那我们明天继续"',
+    ]);
+  });
+
   test("rebuilds latest transcript session from persisted raw transcript events", () => {
     const replay = rawTranscriptEventsToLiveSessionData([
       makeTranscriptRaw({

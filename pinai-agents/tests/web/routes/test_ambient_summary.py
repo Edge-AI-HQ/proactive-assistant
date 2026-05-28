@@ -8,7 +8,10 @@ from pinai_agents.web.auth.deps import current_user, get_pool
 from pinai_agents.web.auth.user_service import User
 from pinai_agents.web.litellm.client import LiteLLMError
 from pinai_agents.web.routes.ui import ambient as ambient_routes
-from pinai_agents.web.services.ambient_summary import DEFAULT_AMBIENT_SUMMARY_MODEL
+from pinai_agents.web.services.ambient_summary import (
+    _SYSTEM_PROMPT,
+    DEFAULT_AMBIENT_SUMMARY_MODEL,
+)
 
 
 def _user(user_id: int = 123) -> User:
@@ -49,6 +52,14 @@ def _payload() -> dict[str, object]:
             "recentSummaries": [],
         }
     }
+
+
+def test_ambient_summary_prompt_weights_self_speech():
+    prompt = _SYSTEM_PROMPT.lower()
+
+    assert "`self:` is the user's own speech" in prompt
+    assert "stronger evidence of user intent" in prompt
+    assert "non-self labels are context only" in prompt
 
 
 @pytest.mark.asyncio

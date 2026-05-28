@@ -104,10 +104,25 @@ async def main():
         client.preferences.list(status="active", limit=50),
         return_exceptions=True,
     )
+    ambient_signal_details = []
+    if isinstance(signals, list):
+        ambient_ids = [
+            str(s.get("id")) for s in signals
+            if isinstance(s, dict)
+            and s.get("kind") == "ambient.candidate_window"
+            and s.get("id")
+        ][:20]
+        if ambient_ids:
+            ambient_signal_details = await asyncio.gather(
+                *(client.signals.get(signal_id) for signal_id in ambient_ids),
+                return_exceptions=True,
+            )
     keys = ["profile","memory","signals","gmail","gcal",
-            "cards_recent","feedback","world","preferences"]
+            "cards_recent","feedback","world","preferences",
+            "ambient_signal_details"]
     vals = [profile, memory, signals, gmail, gcal,
-            cards_recent, feedback, world, preferences]
+            cards_recent, feedback, world, preferences,
+            ambient_signal_details]
     digest = {}
     for k, v in zip(keys, vals):
         if isinstance(v, BaseException):
@@ -233,6 +248,22 @@ on this batch, stronger than inferred signals:
   language-shaped preference for planning.
 </preference_alignment>
 
+<ambient_transcript_attribution>
+`/state/phase1.json` may include `ambient.candidate_window` signals and
+`ambient_signal_details` with full payloads. Speaker labels are evidence
+attribution:
+
+- `self:` lines and `payload.self_text` are the user's own speech. Treat
+  them as stronger, more direct evidence of user intent than inferred
+  ambient context.
+- `speaker_1`, `speaker_2`, `A`, `B`, etc. are other people. Use them
+  only as surrounding context; never treat their words as the user's
+  preference, task, promise, or goal.
+- When planning from a transcript, prefer a card grounded in `self`
+  speech. If only non-self speech supports an idea, the card should be
+  framed as context to review, not as something the user said or wants.
+</ambient_transcript_attribution>
+
 <intent_key_convention>
 intent_key is a stable slug — kebab-case, ≤120 chars, identifies the
 underlying decision (not the card title). Examples:
@@ -290,6 +321,10 @@ Every card must meet ALL:
   The reader (evaluator subagent) MUST be able to find each cited id
   back in phase1.json. World-signal citations are how downstream
   auto-consume identifies which news items the run actually used.
+- ambient transcript citations must preserve attribution. `self:` or
+  `payload.self_text` can support user intent; non-self speaker labels
+  can support context only. Do not write "you said" unless the cited
+  source is `self`.
 - {lang_clause}. For Chinese strings, use 「」 or 《》 — NEVER ASCII
   double-quote inside a JSON string field.
 </card_quality_rules>
@@ -366,6 +401,9 @@ pattern_grounding >= 5.
 - If two cards address the same underlying decision (different angles
   of the same intent), flag the weaker as a duplicate by failing
   novelty (give 3-4) and noting it in `feedback`.
+- For ambient transcript cards, fail grounding when the card attributes
+  non-self speaker text to the user or treats another speaker's words as
+  the user's stated intent.
 </calibration>
 
 <output>

@@ -159,7 +159,7 @@ describe("SoundClassifierSource transcript ingest", () => {
       messages: [
         {
           id: "burst-cloud",
-          text: "我现在说话应该尽快显示出来，并且进入 ambient transcript session summary。",
+          text: 'self: "我现在说话应该尽快显示出来"\nspeaker_1: "并且进入 ambient transcript session summary。"',
           source: "cloud_diarize",
         },
       ],
