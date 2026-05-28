@@ -67,8 +67,9 @@ async def signals_recent(status: str, kind: str | None, hours: int | None, limit
     if isinstance(payload, dict) and payload.get("error"):
         return payload
     items = payload.get("items", []) if isinstance(payload, dict) else []
-    return [
-        {
+    out = []
+    for s in items:
+        item = {
             "id": s["id"],
             "kind": s.get("kind"),
             "title": s.get("title"),
@@ -76,8 +77,12 @@ async def signals_recent(status: str, kind: str | None, hours: int | None, limit
             "salience": s.get("salience"),
             "occurredAt": s.get("occurredAt"),
         }
-        for s in items
-    ]
+        if s.get("selfText"):
+            item["selfText"] = s.get("selfText")
+        if s.get("speakerText"):
+            item["speakerText"] = s.get("speakerText")
+        out.append(item)
+    return out
 
 
 class SignalsGetInput(BaseModel):

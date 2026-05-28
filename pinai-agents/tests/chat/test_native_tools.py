@@ -114,6 +114,43 @@ async def test_signals_recent_path(mock_http, jwt_ctx):
 
 
 @pytest.mark.asyncio
+async def test_signals_recent_keeps_ambient_speaker_preview(monkeypatch, jwt_ctx):
+    async def fake_get(path, **params):
+        return {
+            "items": [{
+                "id": "sig_ambient",
+                "kind": "ambient.candidate_window",
+                "title": "Ambient transcript",
+                "summary": 'speaker_1: "lunch?"',
+                "speakerText": 'speaker_1: "lunch?"\nself: "after the review"',
+                "selfText": "after the review",
+                "salience": 0.7,
+                "occurredAt": "2026-05-28T10:00:00Z",
+            }]
+        }
+
+    monkeypatch.setattr(http_client, "get", fake_get)
+
+    result = await signals_recent.ainvoke({
+        "status": "open",
+        "kind": "ambient.candidate_window",
+        "hours": 12,
+        "limit": 5,
+    })
+
+    assert result == [{
+        "id": "sig_ambient",
+        "kind": "ambient.candidate_window",
+        "title": "Ambient transcript",
+        "summary": 'speaker_1: "lunch?"',
+        "speakerText": 'speaker_1: "lunch?"\nself: "after the review"',
+        "selfText": "after the review",
+        "salience": 0.7,
+        "occurredAt": "2026-05-28T10:00:00Z",
+    }]
+
+
+@pytest.mark.asyncio
 async def test_signals_get_path(mock_http, jwt_ctx):
     await signals_get.ainvoke({"id": "sig_abc"})
     assert mock_http[0]["path"] == "/api/agent/signals/get/sig_abc"

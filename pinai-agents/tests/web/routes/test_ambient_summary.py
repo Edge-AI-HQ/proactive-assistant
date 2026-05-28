@@ -57,7 +57,7 @@ def _payload() -> dict[str, object]:
 def test_ambient_summary_prompt_weights_self_speech():
     prompt = _SYSTEM_PROMPT.lower()
 
-    assert "`self:` is the user's own speech" in prompt
+    assert "`self:` and `selftext` are the user's own speech" in prompt
     assert "stronger evidence of user intent" in prompt
     assert "non-self labels are context only" in prompt
 

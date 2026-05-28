@@ -1126,6 +1126,41 @@ describe("LocalAmbientTimelinePipeline", () => {
     ]);
   });
 
+  test("preserves speaker line breaks when appending transcript session chunks", async () => {
+    const { pipeline } = makePipeline();
+
+    await pipeline.ingestSignal({
+      kind: "session_summary",
+      title: "Voice summary",
+      summary: "第一段。",
+      occurred_at: "2026-05-15T10:00:00.000Z",
+      payload: {
+        captureSessionId: "cap-speakers",
+        burstId: "burst-1",
+        durationMs: 1000,
+        speaker_segments: [{ speaker: "self", text: "第一段", start_ms: 0, end_ms: 1000 }],
+        self_text: "第一段",
+      },
+      dedupe_key: "audio:burst:1",
+    });
+    const signals = await pipeline.ingestSignal({
+      kind: "session_summary",
+      title: "Voice summary",
+      summary: "第二段。",
+      occurred_at: "2026-05-15T10:00:02.000Z",
+      payload: {
+        captureSessionId: "cap-speakers",
+        burstId: "burst-2",
+        durationMs: 1000,
+        speaker_segments: [{ speaker: "speaker_1", text: "第二段", start_ms: 0, end_ms: 1000 }],
+      },
+      dedupe_key: "audio:burst:2",
+    });
+
+    const candidate = signals.find((signal) => signal.kind === AMBIENT_CANDIDATE_WINDOW_KIND);
+    expect(candidate?.summary).toBe('self: "第一段"\nspeaker_1: "第二段"');
+  });
+
 
 
   test("regenerates existing evidence windows into stable candidate window upload signals", async () => {

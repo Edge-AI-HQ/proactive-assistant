@@ -23,6 +23,7 @@ from pinai_agents.web.db.repositories.personal_signals import (
     PersonalSignalsRepository,
 )
 from pinai_agents.web.db.rls import user_scoped_tx
+from pinai_agents.web.routes.agent.signals import _ambient_speaker_preview
 
 
 def _gen_keypair_b64() -> str:
@@ -61,6 +62,24 @@ async def client(pool):
 def _auth(user_id: int) -> dict[str, str]:
     token, _ = sign_agent_run_jwt(user_id=user_id, virtual_key=None)
     return {"Authorization": f"Bearer {token}"}
+
+
+def test_ambient_speaker_preview_derives_text_from_payload():
+    assert _ambient_speaker_preview({
+        "self_text": " I need to finish the review first ",
+        "speaker_text": 'speaker_1: "lunch?"\nself: "review first"',
+    }) == {
+        "selfText": "I need to finish the review first",
+        "speakerText": 'speaker_1: "lunch?"\nself: "review first"',
+    }
+    assert _ambient_speaker_preview({
+        "speaker_segments": [
+            {"speaker": "speaker_1", "text": "lunch?"},
+            {"speaker": "self", "text": "review first"},
+        ],
+    }) == {
+        "speakerText": 'speaker_1: "lunch?"\nself: "review first"',
+    }
 
 
 @pytest.mark.asyncio
@@ -179,6 +198,44 @@ async def test_recent_accepts_daily_dream_full_context_limit(client, pool, user_
     assert "sig_daily_dream_limit" in items
     assert items["sig_daily_dream_limit"]["payload"]["transcript"] == (
         "Full transcript text should be available."
+    )
+
+
+@pytest.mark.asyncio
+async def test_recent_surfaces_ambient_speaker_preview_without_full_payload(client, pool, user_ids):
+    user_a, _ = user_ids
+    now = datetime.now(UTC)
+    async with user_scoped_tx(pool, user_a) as conn:
+        repo = PersonalSignalsRepository(user_a, conn)
+        await repo.ingest_one(IngestSignalInput(
+            id="sig_ambient_speakers",
+            kind="ambient.candidate_window",
+            title="Ambient transcript_session window",
+            summary='speaker_1: "we should order lunch"',
+            payload={
+                "speaker_text": 'speaker_1: "we should order lunch"\nself: "I need to finish the review first"',
+                "self_text": "I need to finish the review first",
+                "speaker_segments": [
+                    {"speaker": "speaker_1", "text": "we should order lunch"},
+                    {"speaker": "self", "text": "I need to finish the review first"},
+                ],
+            },
+            occurred_at=now - timedelta(minutes=5),
+            salience=0.7,
+            source="device",
+        ))
+
+    r = await client.get(
+        "/api/agent/signals/recent?hours=24&kind=ambient.candidate_window",
+        headers=_auth(user_a),
+    )
+
+    assert r.status_code == 200, r.text
+    item = r.json()["items"][0]
+    assert "payload" not in item
+    assert item["selfText"] == "I need to finish the review first"
+    assert item["speakerText"] == (
+        'speaker_1: "we should order lunch"\nself: "I need to finish the review first"'
     )
 
 

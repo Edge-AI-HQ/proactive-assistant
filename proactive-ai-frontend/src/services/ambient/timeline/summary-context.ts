@@ -8,6 +8,7 @@ export interface AmbientSummaryContextRawEvent {
   occurredAt: string;
   endedAt?: string;
   text: string;
+  selfText?: string;
   sensitivity: AmbientRawEvent["sensitivity"];
   confidence: number | null;
 }
@@ -48,6 +49,7 @@ export function buildAmbientSummaryContext(input: {
         occurredAt: event.occurredAt,
         ...(event.endedAt ? { endedAt: event.endedAt } : {}),
         text: truncate(summaryText(event), 260),
+        ...(summarySelfText(event) ? { selfText: truncate(summarySelfText(event) ?? "", 260) } : {}),
         sensitivity: event.sensitivity,
         confidence: event.confidence,
       })),
@@ -68,6 +70,14 @@ export function buildAmbientSummaryContext(input: {
 function summaryText(event: AmbientRawEvent): string {
   if (event.sourceType !== "transcript") return event.compactText;
   return speakerAwareTranscriptTextFromPayload(event.payload, event.compactText);
+}
+
+function summarySelfText(event: AmbientRawEvent): string | null {
+  if (event.sourceType !== "transcript") return null;
+  const value = event.payload.self_text;
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  return text || null;
 }
 
 function truncate(value: string, max: number): string {

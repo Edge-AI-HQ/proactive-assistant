@@ -114,4 +114,28 @@ describe("buildAmbientSummaryContext", () => {
       'self: "我觉得这个测试可行"\nspeaker_1: "那我们明天继续"',
     );
   });
+
+  test("keeps self text separately when transcript text is truncated", () => {
+    const context = buildAmbientSummaryContext({
+      nowIso: "2026-05-19T10:15:00.000Z",
+      localDate: "2026-05-19",
+      rawEvents: [
+        raw({
+          id: "transcript_1",
+          sourceType: "transcript",
+          compactText: "plain transcript fallback",
+          payload: {
+            speaker_segments: [
+              { speaker: "speaker_1", text: "A".repeat(320), start_ms: 0, end_ms: 1200 },
+              { speaker: "self", text: "我要先把 review 做完", start_ms: 1300, end_ms: 2600 },
+            ],
+            self_text: "我要先把 review 做完",
+          },
+        }),
+      ],
+    });
+
+    expect(context.rawEvents[0]?.text).not.toContain("我要先把 review 做完");
+    expect(context.rawEvents[0]?.selfText).toBe("我要先把 review 做完");
+  });
 });

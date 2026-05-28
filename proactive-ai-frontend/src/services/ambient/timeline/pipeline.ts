@@ -782,7 +782,7 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     ].filter(Boolean);
     const additionsText = additions.join(" ");
     const compactContext = existing?.compactContext
-      ? stripTranscriptSegmentLabels([transcriptTextOnly(existing.compactContext), additionsText].filter(Boolean).join(" "))
+      ? transcriptTextOnly([transcriptTextOnly(existing.compactContext), additionsText].filter(Boolean).join("\n"))
       : additionsText || transcriptText;
     const evidenceWindows = [
       ...soundWindows,
