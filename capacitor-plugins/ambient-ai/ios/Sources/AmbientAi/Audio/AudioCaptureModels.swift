@@ -2,7 +2,6 @@ import AVFoundation
 import Foundation
 
 enum AudioSuppressedReason: String, Hashable {
-    case media
     case playback
     case interruption
 }

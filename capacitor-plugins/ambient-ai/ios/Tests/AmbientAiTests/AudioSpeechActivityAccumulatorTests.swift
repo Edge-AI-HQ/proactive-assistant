@@ -3,12 +3,14 @@ import XCTest
 @testable import AmbientAi
 
 final class AudioSpeechActivityAccumulatorTests: XCTestCase {
-    func testLowRmsSpeechFrameUsesSameThresholdAsChunkFilter() {
-        XCTAssertTrue(AudioSpeechActivityHeuristics.isSpeechLikeFrame(rms: 0.004, peak: 0.01))
+    func testSpeechFrameRequiresBothRmsAndPeak() {
+        // 中等收紧后改用 AND:rms 与 peak 都要过门槛才算语音帧
+        XCTAssertTrue(AudioSpeechActivityHeuristics.isSpeechLikeFrame(rms: 0.02, peak: 0.06))
     }
 
-    func testHighPeakSpeechFrameCanExtendRecordingEvenWithLowRms() {
-        XCTAssertTrue(AudioSpeechActivityHeuristics.isSpeechLikeFrame(rms: 0.001, peak: 0.03))
+    func testHighPeakWithLowRmsIsNotSpeechLike() {
+        // 旧 OR 逻辑会因单个高 peak 通过;AND 下 rms 不够即拒绝
+        XCTAssertFalse(AudioSpeechActivityHeuristics.isSpeechLikeFrame(rms: 0.001, peak: 0.06))
     }
 
     func testQuietFrameDoesNotExtendRecording() {
@@ -73,15 +75,14 @@ final class AudioSpeechActivityAccumulatorTests: XCTestCase {
         XCTAssertEqual(snapshot.peak, 0, accuracy: 0.001)
     }
 
-    func testShortBurstIsEnoughForTestingGate() {
+    func testShortQuietBurstIsRejected() {
+        // 中等收紧:100ms 的弱突发(peak < 0.05 或时长不足 300ms)不再算语音,过滤细微噪声
         var accumulator = AudioSpeechActivityAccumulator()
 
         accumulator.append(pcm: makePCM(durationMs: 100, amplitude: 0.02), durationMs: 100)
 
         let snapshot = accumulator.snapshot()
-        XCTAssertTrue(snapshot.isSpeechLike)
-        XCTAssertGreaterThanOrEqual(snapshot.speechLikeFrameCount, 1)
-        XCTAssertGreaterThanOrEqual(snapshot.speechLikeDurationMs, AudioSpeechActivityAccumulator.minSpeechLikeDurationMs)
+        XCTAssertFalse(snapshot.isSpeechLike)
     }
 
     func testSustainedAudioIsSpeechLike() {

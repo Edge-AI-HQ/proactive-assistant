@@ -745,7 +745,7 @@ describe("SoundClassifierSource transcript ingest", () => {
     expect(ambientAiMock.sound.startClassification).not.toHaveBeenCalled();
   });
 
-  test("refresh does not restart while native audio is intentionally media-suppressed", async () => {
+  test("refresh does not restart while native audio is intentionally playback-suppressed", async () => {
     const ctx: SourceContext = {
       push: vi.fn(),
       onEvent: vi.fn(),
@@ -758,7 +758,7 @@ describe("SoundClassifierSource transcript ingest", () => {
       paused: false,
       capturing: false,
       suppressed: true,
-      suppressedReason: "media",
+      suppressedReason: "playback",
       classificationRunning: true,
       engineRunning: false,
     });

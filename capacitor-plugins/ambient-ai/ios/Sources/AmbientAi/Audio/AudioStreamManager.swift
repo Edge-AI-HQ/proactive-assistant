@@ -36,8 +36,6 @@ actor AudioStreamManager {
     private var pendingTranscripts: [TranscriptReadyRecord] = []
     private var segmentIndex = 0
     private var stitcher = TranscriptStitcher()
-    private var mediaPollTask: Task<Void, Never>?
-    private var secondaryAudioObserver: NSObjectProtocol?
     private var callbacksInstalled = false
     private var lastClassificationDebugEmitAt: Date?
     private var appIsBackgrounded = false
@@ -66,8 +64,6 @@ actor AudioStreamManager {
         await fileStore.ensureDirectory()
         guard !isCaptureRunning else {
             suppressionReasons.remove(.interruption)
-            refreshMediaSuppression()
-            setupMediaObservers()
             let ok = reconcileClassifierState(reason: "startCapture")
             emitState()
             if !ok && suppressionReasons.isEmpty {
@@ -83,8 +79,6 @@ actor AudioStreamManager {
         // event was missed while the WebView/runtime was paused, an explicit
         // user restart should not leave capture permanently suppressed.
         suppressionReasons.remove(.interruption)
-        refreshMediaSuppression()
-        setupMediaObservers()
 
         let ok = reconcileClassifierState(reason: "startCapture")
         emitState()
@@ -105,7 +99,6 @@ actor AudioStreamManager {
         stopCurrentRecording = true
         if !isClassificationRunning {
             suppressionReasons.removeAll()
-            teardownMediaObservers()
         }
         _ = reconcileClassifierState(reason: "stopCapture")
         emitState()
@@ -115,8 +108,6 @@ actor AudioStreamManager {
         installClassifierCallbacksIfNeeded()
         guard !isClassificationRunning else {
             suppressionReasons.remove(.interruption)
-            refreshMediaSuppression()
-            setupMediaObservers()
             let ok = reconcileClassifierState(reason: "startClassification")
             emitState()
             if !ok && suppressionReasons.isEmpty {
@@ -129,8 +120,6 @@ actor AudioStreamManager {
         // source toggle are explicit starts, so they should recover the audio
         // engine from a wedged interruption state.
         suppressionReasons.remove(.interruption)
-        refreshMediaSuppression()
-        setupMediaObservers()
         let ok = reconcileClassifierState(reason: "startClassification")
         emitState()
         if !ok && suppressionReasons.isEmpty {
@@ -144,7 +133,6 @@ actor AudioStreamManager {
         isClassificationRunning = false
         if !isCaptureRunning {
             suppressionReasons.removeAll()
-            teardownMediaObservers()
         }
         _ = reconcileClassifierState(reason: "stopClassification")
         emitState()
@@ -205,8 +193,6 @@ actor AudioStreamManager {
         } else if isCaptureRunning || isClassificationRunning {
             stopBackgroundCaptureLoop(interruptBackgroundRecording: true)
             suppressionReasons.remove(.interruption)
-            refreshMediaSuppression()
-            setupMediaObservers()
         }
         _ = reconcileClassifierState(reason: reason)
         if backgrounded {
@@ -221,8 +207,6 @@ actor AudioStreamManager {
             return
         }
         suppressionReasons.remove(.interruption)
-        refreshMediaSuppression()
-        setupMediaObservers()
         _ = reconcileClassifierState(reason: reason)
         emitState()
     }
@@ -241,9 +225,6 @@ actor AudioStreamManager {
         }
         classifier.onSpeechBurst = { [weak self] confidence, triggerSource in
             Task { await self?.handleSpeechBurst(confidence: confidence, triggerSource: triggerSource) }
-        }
-        classifier.onOtherAudioDetected = { [weak self] in
-            Task { await self?.handleOtherAudioDetected() }
         }
         classifier.onInterruptionBegan = { [weak self] in
             Task { await self?.handleInterruptionBegan() }
@@ -316,15 +297,6 @@ actor AudioStreamManager {
                 triggerSource: triggerSource
             )
         }
-    }
-
-    private func handleOtherAudioDetected() {
-        guard isCaptureRunning || isClassificationRunning else { return }
-        guard !suppressionReasons.contains(.media) else { return }
-        suppressionReasons.insert(.media)
-        startMediaResumePolling()
-        _ = reconcileClassifierState(reason: "otherAudioDetected")
-        emitState()
     }
 
     private func handleInterruptionBegan() {
@@ -1134,20 +1106,9 @@ actor AudioStreamManager {
 
     // MARK: - Suppression
 
-    private func refreshMediaSuppression() {
-        if AVAudioSession.sharedInstance().isOtherAudioPlaying {
-            suppressionReasons.insert(.media)
-            startMediaResumePolling()
-        } else {
-            suppressionReasons.remove(.media)
-            stopMediaResumePolling()
-        }
-    }
-
     private func resolvedSuppressedReason() -> AudioSuppressedReason? {
         if suppressionReasons.contains(.playback) { return .playback }
         if suppressionReasons.contains(.interruption) { return .interruption }
-        if suppressionReasons.contains(.media) { return .media }
         return nil
     }
 
@@ -1178,69 +1139,6 @@ actor AudioStreamManager {
         return true
     }
 
-    private func setupMediaObservers() {
-        guard secondaryAudioObserver == nil else { return }
-        secondaryAudioObserver = NotificationCenter.default.addObserver(
-            forName: AVAudioSession.silenceSecondaryAudioHintNotification,
-            object: AVAudioSession.sharedInstance(),
-            queue: .main
-        ) { [weak self] notification in
-            guard let userInfo = notification.userInfo,
-                  let value = userInfo[AVAudioSessionSilenceSecondaryAudioHintTypeKey] as? UInt,
-                  let type = AVAudioSession.SilenceSecondaryAudioHintType(rawValue: value) else {
-                return
-            }
-            Task { await self?.handleSecondaryAudioHint(type) }
-        }
-    }
-
-    private func teardownMediaObservers() {
-        if let secondaryAudioObserver {
-            NotificationCenter.default.removeObserver(secondaryAudioObserver)
-            self.secondaryAudioObserver = nil
-        }
-        stopMediaResumePolling()
-    }
-
-    private func handleSecondaryAudioHint(_ type: AVAudioSession.SilenceSecondaryAudioHintType) {
-        switch type {
-        case .begin:
-            handleOtherAudioDetected()
-        case .end:
-            suppressionReasons.remove(.media)
-            stopMediaResumePolling()
-            _ = reconcileClassifierState(reason: "secondaryAudioHintEnded")
-            emitState()
-        @unknown default:
-            break
-        }
-    }
-
-    private func startMediaResumePolling() {
-        stopMediaResumePolling()
-        mediaPollTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-                if !AVAudioSession.sharedInstance().isOtherAudioPlaying {
-                    await self?.clearMediaSuppressionFromPoll()
-                    return
-                }
-            }
-        }
-    }
-
-    private func stopMediaResumePolling() {
-        mediaPollTask?.cancel()
-        mediaPollTask = nil
-    }
-
-    private func clearMediaSuppressionFromPoll() {
-        guard suppressionReasons.contains(.media) else { return }
-        suppressionReasons.remove(.media)
-        stopMediaResumePolling()
-        _ = reconcileClassifierState(reason: "mediaResumePoll")
-        emitState()
-    }
 }
 
 private final class RecordingState: AudioRecordingSink {
@@ -1304,18 +1202,18 @@ struct AudioSpeechActivitySnapshot {
 }
 
 struct AudioSpeechActivityHeuristics {
-    static let speechRmsThreshold: Float = 0.003
-    static let speechPeakThreshold: Float = 0.02
+    static let speechRmsThreshold: Float = 0.01
+    static let speechPeakThreshold: Float = 0.05
 
     static func isSpeechLikeFrame(rms: Float, peak: Float) -> Bool {
-        rms >= speechRmsThreshold || peak >= speechPeakThreshold
+        rms >= speechRmsThreshold && peak >= speechPeakThreshold
     }
 }
 
 struct AudioSpeechActivityAccumulator {
     static let windowDurationMs = 100
-    static let minSpeechLikeFrameCount = 1
-    static let minSpeechLikeDurationMs = 100
+    static let minSpeechLikeFrameCount = 3
+    static let minSpeechLikeDurationMs = 300
     static let speechRmsThreshold = AudioSpeechActivityHeuristics.speechRmsThreshold
     static let speechPeakThreshold = AudioSpeechActivityHeuristics.speechPeakThreshold
 
