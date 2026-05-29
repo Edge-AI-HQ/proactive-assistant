@@ -38,7 +38,6 @@ final class SoundClassificationService {
     var onFrame: ((SoundClassificationFrame) -> Void)?
     var onSpeechFrame: (() -> Void)?
     var onSpeechBurst: ((Double, String) -> Void)?
-    var onOtherAudioDetected: (() -> Void)?
     var onInterruptionBegan: (() -> Void)?
     var onInterruptionEnded: (() -> Void)?
     var onError: ((String, String) -> Void)?
@@ -59,13 +58,13 @@ final class SoundClassificationService {
     private var restartCount = 0
     private var consecutiveSpeechCount = 0
     private var lastFallbackBurstAt: Date?
-    private var minSpeechConfidence = 0.35
-    private var consecutiveFramesNeeded = 1
+    private var minSpeechConfidence = 0.55
+    private var consecutiveFramesNeeded = 2
     private var interruptionObserver: NSObjectProtocol?
     private var mediaServicesResetObserver: NSObjectProtocol?
     private var routeChangeObserver: NSObjectProtocol?
     private var fallbackSpeechBurstEnabled = true
-    private let fallbackRmsThreshold: Float = 0.006
+    private let fallbackRmsThreshold: Float = 0.012
     private let fallbackMinIntervalMs = 10_000
 
     var isRunning: Bool {
@@ -137,7 +136,7 @@ final class SoundClassificationService {
         do {
             try session.setCategory(
                 .playAndRecord,
-                mode: .measurement,
+                mode: .default,
                 options: [.mixWithOthers, .allowBluetoothHFP, .defaultToSpeaker]
             )
             try session.setActive(true, options: [])
@@ -220,7 +219,7 @@ final class SoundClassificationService {
         do {
             try session.setCategory(
                 .playAndRecord,
-                mode: .measurement,
+                mode: .default,
                 options: [.mixWithOthers, .allowBluetoothHFP, .defaultToSpeaker]
             )
             try session.setActive(true, options: [])
@@ -507,11 +506,8 @@ final class SoundClassificationService {
     }
 
     private func isRecordingSpeechFrame(_ buffer: AVAudioPCMBuffer) -> Bool {
-        guard let rms = Self.rms(buffer: buffer) else { return false }
-        if AudioSpeechActivityHeuristics.isSpeechLikeFrame(rms: rms, peak: 0) {
-            return true
-        }
-        guard let peak = Self.peak(buffer: buffer) else { return false }
+        guard let rms = Self.rms(buffer: buffer),
+              let peak = Self.peak(buffer: buffer) else { return false }
         return AudioSpeechActivityHeuristics.isSpeechLikeFrame(rms: rms, peak: peak)
     }
 
@@ -520,10 +516,6 @@ final class SoundClassificationService {
         lastFrameAt = frame.timestamp
         engineState = .healthy
         lock.unlock()
-
-        if AVAudioSession.sharedInstance().isOtherAudioPlaying {
-            onOtherAudioDetected?()
-        }
 
         onFrame?(frame)
 

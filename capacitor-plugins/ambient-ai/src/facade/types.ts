@@ -123,7 +123,7 @@ export interface AudioState {
   lastClassificationAt?: number;
   lastAudioError?: string;
   classifierRestartCount?: number;
-  suppressedReason?: 'media' | 'playback' | 'interruption';
+  suppressedReason?: 'playback' | 'interruption';
   backgroundCaptureLoopRunning?: boolean;
   currentCaptureTriggerSource?: string;
   routeInputs?: AudioRoutePort[];
