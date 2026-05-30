@@ -802,38 +802,47 @@ export default function BigBallLayout() {
           Your proactive feed · {sphereCards.length} cards today
         </p>
 
-        {/* Subtle divider */}
-        <div className="mt-4 h-px bg-foreground/[0.08]" />
-
-        {/* Ambient — left tap opens the Ambient tab; right pill toggles
-            the master ambient switch (persisted to localStorage). When OFF
-            the label says "Paused — not sensing" and the toggle dot slides
-            left; when ON the "Ambient" word drifts purple via the
-            ambient-drift keyframe and the dot slides right. */}
-        <div className="w-full flex items-center gap-3 py-2.5">
+        {/* Ambient — a prominent card (replaces the old divider + plain text
+            row). Left tap opens the Ambient tab; right pill toggles the master
+            ambient switch (persisted via useAmbientToggle). When ON the Radio
+            icon circle and the toggle pill pulse an emerald "sensing" halo
+            (animate-ambient-{icon,toggle}-breathe); when OFF the icon greys. */}
+        <div className="mt-4 rounded-2xl bg-foreground/[0.04] border border-foreground/[0.06] shadow-sm px-3 py-2.5 flex items-center gap-3">
           <button
             onClick={() => setActiveView("ambient")}
-            className="flex items-center gap-3 flex-1 min-w-0 text-left group"
+            className="flex items-center gap-3 flex-1 min-w-0 text-left"
             aria-label="Open Ambient"
           >
             <span
-              className={`text-[10px] font-semibold uppercase tracking-[0.18em] shrink-0 w-[60px] ${
-                ambientOn ? "animate-ambient-drift" : "text-foreground/40"
+              className={`relative shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
+                ambientOn ? "bg-foreground animate-ambient-icon-breathe" : "bg-foreground/30"
               }`}
             >
-              Ambient
+              <Radio
+                size={14}
+                strokeWidth={2}
+                className={ambientOn ? "text-background" : "text-background/60"}
+              />
+              {ambientOn && (
+                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-background" />
+              )}
             </span>
-            <span
-              className={`text-[13px] truncate flex-1 leading-snug transition-colors ${
-                ambientOn ? "text-foreground/75" : "text-foreground/35"
-              }`}
-            >
-              {!ambientOn
-                ? "Paused — not sensing"
-                : weather
-                  ? `${weather.city} · ${weather.label} · ${weather.temp}°`
-                  : "Quiet ambient — connect sources to start streaming signals"}
-            </span>
+            <div className="flex-1 min-w-0">
+              <div
+                className={`text-[14px] font-semibold leading-tight ${
+                  ambientOn ? "text-foreground" : "text-foreground/70"
+                }`}
+              >
+                {ambientOn ? "Ambient is on" : "Ambient is off"}
+              </div>
+              <div className="text-[12px] text-foreground/50 leading-snug truncate mt-0.5">
+                {!ambientOn
+                  ? "Tap to start sensing context"
+                  : weather
+                    ? `${weather.city} · ${weather.label} · ${weather.temp}°`
+                    : "Quiet ambient — connect sources to start streaming signals"}
+              </div>
+            </div>
           </button>
           <button
             onClick={(e) => {
@@ -841,8 +850,8 @@ export default function BigBallLayout() {
               void handleToggleAmbient();
             }}
             disabled={ambientTogglePending}
-            className={`relative w-9 h-5 rounded-full transition-colors shrink-0 disabled:opacity-60 disabled:cursor-progress ${
-              ambientOn ? "bg-foreground" : "bg-foreground/20"
+            className={`relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-60 disabled:cursor-progress ${
+              ambientOn ? "bg-foreground animate-ambient-toggle-breathe" : "bg-foreground/20"
             }`}
             aria-label="Toggle ambient"
             aria-pressed={ambientOn}
@@ -851,8 +860,8 @@ export default function BigBallLayout() {
             <motion.span
               layout
               transition={{ type: "tween", duration: 0.2, ease: "easeInOut" }}
-              className={`absolute top-0.5 w-4 h-4 rounded-full bg-background shadow-sm ${
-                ambientOn ? "left-[18px]" : "left-0.5"
+              className={`absolute top-0.5 w-5 h-5 rounded-full bg-background shadow-sm ${
+                ambientOn ? "left-[22px]" : "left-0.5"
               }`}
             />
           </button>

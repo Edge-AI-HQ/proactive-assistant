@@ -60,9 +60,10 @@ const rotationCache = new Map<string, RotState>();
 function fibonacciSphere(n: number) {
   const points: { x: number; y: number; z: number }[] = [];
   const phi = Math.PI * (3 - Math.sqrt(5)); // golden angle
-  // Wider band so points fill more of the vertical space, but still avoid
-  // exact poles (which never move under yaw rotation).
-  const yMax = 0.95;
+  // Keep points away from the poles — polar cards never rotate to the front
+  // under yaw, so they always render at small scale with unreadable text.
+  // Constrain the band so every card can reach a near-front, readable size.
+  const yMax = 0.62;
   for (let i = 0; i < n; i++) {
     const t = n === 1 ? 0.5 : i / (n - 1);
     const y = (1 - t * 2) * yMax;
@@ -116,11 +117,14 @@ const Sphere3DCards = ({
   // than the bottom, so we take the min of (centered, top-safe, bottom-safe).
   const sphereCenterTop = 0.36;
   // Compute horizontal & vertical radii so cards never escape the bounds.
-  // Horizontal: front-most cards reach scale ≈ 1.1 → reserve full halfW.
-  // Vertical: cards at top/bottom (y=±yMax) sit on the equator plane (z≈0),
-  // so their depth is ~0.5 and scale ~0.83.
-  const maxScale = 1.1;
+  // Horizontal: front-most cards reach scale ≈ maxScale (1.25) → reserve full halfW.
+  // Vertical: with yMax=0.62 + pitch≈-10°, card centers only reach ~yExtent of
+  // the vertical radius. Divide the clip-safe radius (still the min of centered /
+  // top-safe / bottom-safe so the upper cap never clips under overflow-hidden)
+  // by yExtent so the narrowed band fills the height instead of clustering.
+  const maxScale = 1.25;
   const polarScale = 0.83;
+  const yExtent = 0.75; // worst-case |rp.y| given yMax=0.62 + pitch≈-10°
   const halfW = (cardWidth / 2) * maxScale;
   const halfH = (cardHeight / 2) * polarScale;
   const autoRx = Math.max(40, containerSize.w / 2 - halfW - 4);
@@ -129,7 +133,7 @@ const Sphere3DCards = ({
   const topSafeRy = containerSize.h * sphereCenterTop - verticalMargin;
   const bottomSafeRy = containerSize.h * (1 - sphereCenterTop) - verticalMargin;
   const autoRy = containerSize.h > 0
-    ? Math.max(1, Math.min(centeredRy, topSafeRy, bottomSafeRy))
+    ? Math.max(1, Math.min(centeredRy, topSafeRy, bottomSafeRy) / yExtent)
     : 40;
   const rx = radius ?? autoRx;
   const ry = radius ?? autoRy;
@@ -310,7 +314,7 @@ const Sphere3DCards = ({
           const y = rp.y * ry;
           const z = rp.z * rDepth;
           const depth = (z + rDepth) / (2 * rDepth); // 0..1 (1 = front)
-          const scale = 0.55 + depth * 0.55;
+          const scale = 0.6 + depth * 0.65;
           const presentation = getSphereCardPresentation(depth);
           // Front-most cards get a brighter, more opaque surface for readability
           const frontBoost = Math.max(0, depth - 0.6) / 0.4; // 0..1 for depth 0.6..1
