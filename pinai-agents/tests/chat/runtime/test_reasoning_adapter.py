@@ -175,11 +175,9 @@ def test_claude_model_still_uses_anthropic_thinking_protocol() -> None:
         thinking_budget=5000,
     )
 
+    # cache_control injection is now config-driven (ops/litellm/litellm_config.yaml),
+    # no longer per-request extra_body — see reasoning.py. extra_body carries thinking only.
     assert options.extra_body == {
-        "cache_control_injection_points": [
-            {"location": "message", "role": "system"},
-            {"location": "message", "role": "user", "index": -1},
-        ],
         "thinking": {"type": "enabled", "budget_tokens": 5000},
     }
     assert options.use_responses_api is False

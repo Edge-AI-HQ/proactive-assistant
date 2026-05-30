@@ -11,11 +11,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-ANTHROPIC_CACHE_INJECTION_POINTS: list[dict[str, str | int]] = [
-    {"location": "message", "role": "system"},
-    {"location": "message", "role": "user", "index": -1},
-]
-
 
 @dataclass(frozen=True)
 class ReasoningOptions:
@@ -66,8 +61,19 @@ def build_reasoning_options(
     use_previous_response_id = False
     allow_streaming = True
 
-    if enable_prompt_cache and claude_reasoning:
-        extra_body["cache_control_injection_points"] = ANTHROPIC_CACHE_INJECTION_POINTS
+    # Anthropic prompt-cache injection is owned solely by LiteLLM's config-level
+    # `cache_control_injection_points` (ops/litellm/litellm_config.yaml).
+    #
+    # The old per-request `extra_body` injection here was a workaround for LiteLLM
+    # v1.82's "config not propagated" proxy bug. On v1.83.10 (current) the config
+    # path works again, so running BOTH paths double-injected cache_control and, on
+    # long multi-block requests, pushed the marked-block count past Anthropic's max
+    # of 4 — the main-chat 400 "A maximum of 4 blocks with cache_control". Keeping a
+    # single source (config) keeps it at system + last-user = 2 blocks.
+    #
+    # `enable_prompt_cache` is retained in the signature for callers; caching is now
+    # config-driven and not toggled per request here.
+    _ = enable_prompt_cache
 
     if enable_thinking:
         if openai_reasoning:
