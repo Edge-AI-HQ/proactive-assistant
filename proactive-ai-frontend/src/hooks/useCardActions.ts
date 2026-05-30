@@ -27,7 +27,8 @@ export interface UseCardActionsOptions {
   /**
    * confirm / modify 后回调：调用方负责切到 chat 视图并把 bootstrapMessage 当
    * 首条 user turn 喂给 chat runtime。两条路径都传非空 bootstrap：
-   *   - confirm：primaryAction.label / card.title — 让 agent 直接按原方案推进。
+   *   - confirm：primaryAction.agentPrompt（回退 label / card.title）— 给 agent
+   *     的执行任务句，让它直接按原方案推进。
    *   - modify (Steer)：一段"想调整、先问意图"的 instruction — 让 agent 主动
    *     在卡片 chat 里作为普通首条用户消息启动 agent；ChatDetailView
    *     现在复用 MainChatView，所以即使没有 bootstrap 也有底部全局 composer。
@@ -135,8 +136,13 @@ export function useCardActions({ onOpenChat }: UseCardActionsOptions) {
       } catch {
         /* swallow; UI 已 optimistic */
       }
+      // Prefer the agent task spec (agentPrompt) over the short button label.
+      // Older cards lack agentPrompt → fall back to label / title.
       const bootstrap =
-        (card.primaryAction?.label || card.title || "").trim();
+        (card.primaryAction?.agentPrompt
+          || card.primaryAction?.label
+          || card.title
+          || "").trim();
       onOpenChat(card, bootstrap);
     },
     [onOpenChat, persistChatted],

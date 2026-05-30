@@ -8,6 +8,10 @@ export type GoalBasket = 'work' | 'health' | 'family' | 'wealth' | 'growth' | 'l
 export interface IntentCardAction {
   label: string;
   type: 'confirm' | 'modify' | 'snooze' | 'dismiss';
+  /** Full task instruction for the Card Execution agent on Confirm — distinct
+   *  from the short button `label`. Optional: older cards omit it and callers
+   *  fall back to `label`. */
+  agentPrompt?: string;
 }
 
 export interface IntentCard {
@@ -93,7 +97,10 @@ function normalizeAction(
   const type = typeof value.type === "string" && VALID_ACTION_TYPES.has(value.type as IntentCardAction["type"])
     ? value.type as IntentCardAction["type"]
     : fallback.type;
-  return { label, type };
+  const agentPrompt = typeof value.agentPrompt === "string" && value.agentPrompt.trim().length > 0
+    ? value.agentPrompt.trim()
+    : fallback.agentPrompt;
+  return { label, type, ...(agentPrompt ? { agentPrompt } : {}) };
 }
 
 export function normalizeIntentCard(card: unknown): IntentCard {

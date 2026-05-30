@@ -439,6 +439,11 @@ class PlanOutput(_AgentModel):
 class CardAction(_AgentModel):
     label: str = Field(min_length=1, max_length=80)
     type: Literal["confirm", "modify", "snooze", "dismiss"] = "confirm"
+    # Full task instruction the Card Execution agent carries out when the user
+    # confirms — distinct from the short button `label`. Serializes to camelCase
+    # `agentPrompt`. Optional: pre-existing cards and non-confirm actions omit
+    # it, and the frontend falls back to `label`.
+    agent_prompt: str | None = Field(default=None, max_length=600)
 
 
 class GeneratedCard(_AgentModel):

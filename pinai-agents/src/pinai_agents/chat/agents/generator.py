@@ -313,6 +313,11 @@ Every card must meet ALL:
 - whyNow: one sentence with a CONCRETE trigger (date / number / event)
 - summary: 2-4 sentences of compressed context — enough to decide
 - primary_action: concrete verb + object button label
+- primary_action.agent_prompt: the full task the Card Execution agent runs on
+  confirm — one sentence naming the concrete deliverable PLUS the key parameters
+  drawn from THIS card, so the agent has a real task spec instead of guessing
+  intent from the short button label. Required for confirm/modify; omit for
+  snooze/dismiss.
 - sources: at least one verbatim citation per source layer used,
   formatted as "signal id=sig_..., title=...", "memory id=mem_...,
   text=...", "gmail message id=..., subject=...", "profile id=primary,
