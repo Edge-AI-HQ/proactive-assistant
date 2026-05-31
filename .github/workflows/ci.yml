@@ -4,6 +4,17 @@ on:
   pull_request:
     branches: [proactive-ai-v3]
 
+# dorny/paths-filter calls the GitHub REST API to list changed files on
+# pull_request events, which needs pull-requests: read. The repo's default
+# workflow token is read-only with no PR scope, so without this block the
+# changes job 403s with "Resource not accessible by integration" and every
+# downstream check is skipped via needs:. An explicit permissions block
+# narrows everything unlisted to none, so contents: read (used by
+# actions/checkout) must be listed alongside it.
+permissions:
+  contents: read
+  pull-requests: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
