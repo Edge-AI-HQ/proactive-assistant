@@ -53,8 +53,9 @@ pinai-agents 在同一 codebase 里跑两个进程，**单一信任边界**：
 ```
 pinai-agents/.env.dev / .env.test / .env.production       # 后端 + VITE_* 加密真源（已 checkin）
 ops/litellm/.env.dev / .env.test / .env.production        # LiteLLM 加密真源
-pinai-agents/.env.keys / ops/litellm/.env.keys            # 私钥，不 checkin，找团队成员获取
-pinai-agents/.env / pinai-agents/.env.chat / ops/litellm/.env  # 本地明文，make ensure-env 自动生成，不要手改、不要 commit
+./.env.dev                                                # 根：NGROK_AUTHTOKEN 加密真源（复用 DEV keypair，已 checkin）
+pinai-agents/.env.keys / ops/litellm/.env.keys            # 私钥文件，不 checkin；或用 DOTENV_PRIVATE_KEY_* env var（~/.zshrc），二选一
+pinai-agents/.env / pinai-agents/.env.chat / ops/litellm/.env / ./.env  # 本地明文，make ensure-env 自动生成，不要手改、不要 commit
 ```
 
 `.env.chat` 是 `make ensure-env-pinai-agents` 从 `.env` 派生出来的——把 `FORBIDDEN_ENVS` 列出的 master credentials 剔掉，专给本地 `pinai-chat` 容器用。dotenvx CLI 用法见 [dotenvx 官方文档](https://dotenvx.com/)；Fly secret 同步看 `pinai-agents/scripts/sync_fly_secrets.py`；CI secrets 注入看 `.github/workflows/deploy-{dev,test,prod}.yml`。
@@ -120,8 +121,9 @@ pinai-agents/.env / pinai-agents/.env.chat / ops/litellm/.env  # 本地明文，
 cd pinai-agents && uv sync && cd -
 npm install                # root workspace 安装 proactive-ai-frontend + capacitor-plugins；iOS SPM 路径依赖这里的 node_modules
 cd internal-reward-dashboard && npm install && cd -
-# 找团队成员获取 .env.keys
-# 放到 pinai-agents/.env.keys 和 ops/litellm/.env.keys
+# 找团队成员获取 dotenvx 私钥，放进 ~/.zshrc（一把 DEV 私钥解密所有 .env.dev）：
+#   export DOTENV_PRIVATE_KEY_DEV=...
+# （或老办法：把 .env.keys 文件放到 pinai-agents/ 和 ops/litellm/，二选一）
 make up                    # 自动解密 .env.dev → .env，构建并启动所有服务
 ```
 
@@ -135,7 +137,13 @@ make restart               # 改了 pinai-agents 代码后重建 web+chat
 make restart-frontend      # 改了前端代码（容器版本）
 make reset                 # 清空数据从头来（数据会丢失）
 make status                # 查看容器状态
+make urls                  # 看本 group 的随机 host 端口 + ngrok URL
 ```
+
+多 worktree 并行：每个 worktree 起独立 docker group（`COMPOSE_PROJECT_NAME=pinai-<worktree 路径 hash>`，容器/网络/卷/端口自动隔离），可同时 `make up` 互不撞。
+- host 端口**随机**（不再固定 8000/3000/54322），`make urls` 看本 group 实际端口；浏览器 web 测试走各自 localhost，**不需要 ngrok**（same-origin + 容器内 nginx 反代到 `pinai-web:8000`）。
+- 容器**无固定名**，进容器/看日志用 `docker compose exec <service>` / `docker compose logs <service>`，**不要** `docker exec pin-ai-xxx`。
+- 多 worktree 共享 Docker Desktop 内存：litellm 已调瘦到 1 worker + 1.5g cap，每 group ~1.25GB，7.65GB 能并行 ~6 个。
 
 轻量开发（不走 Docker）：
 ```bash
@@ -148,21 +156,20 @@ cd internal-reward-dashboard && npm run dev -- --host 127.0.0.1 --port 3004  # �
 
 `internal-reward-dashboard` 本地通过 Vite same-origin `/api/*` proxy 打 `pinai-web:8000`，默认从 `pinai-agents/.env` 读取 Supabase `VITE_*`。它当前不是 root npm workspace；dev 环境是独立 Fly app `proactive-ai-reward-dashboard-dev`，不是 `proactive-ai-frontend` 部署产物。
 
-Daytona sandbox 需要公网回连 `pinai-web` 才能完整跑通 generator / chat 的 `python_exec`。本地用 ngrok 暴露：
+Daytona sandbox（generator/dreaming 的 `python_exec`）和 mobile 真机需要公网回连 `pinai-web`。`NGROK_AUTHTOKEN` 已加密 checkin 在根 `./.env.dev`（`make ensure-env` 自动解密），ngrok 给随机 URL，无需手填。**`make up` 不自动起 tunnel**（web 测试不需要，多 worktree 也不会抢 dev domain）；需要时显式起：
 ```bash
-cp .env.example .env       # 填 NGROK_AUTHTOKEN / NGROK_DOMAIN / PAI_API_URL
-make tunnel-up             # 起 ngrok，re-create pinai-chat 把 PAI_API_URL 注入
-make tunnel-status
+make tunnel-up             # 起 ngrok（随机 URL）+ 把 URL 注入 pinai-chat（generator 用）
+make tunnel-status         # 看当前 URL
 make tunnel-down
 ```
+单个 ngrok 账户只有一个 dev domain（账户级唯一，按公网 domain 路由，不看机器/IP），所以 **多 worktree、甚至多人共享同一个 token，都不能同时各起 tunnel**（第二个 ERR_NGROK_334）—— generator/mobile 一次只一个 worktree / 一个人。真要多人或多 worktree 同时 tunnel：每人各自 ngrok 账户（各自 dev domain，token 不共享），或上 PAYG custom subdomain。
 
 Mobile（Capacitor，iOS / Android）：
 ```bash
-make ngrok                 # 单独把 pinai-web 暴露到公网（mobile dev 用，不用于 Daytona）
-make ios                   # 构建前端 → cap sync → 打开 Xcode
-make android               # 构建前端 → cap sync → 装到 USB device
+make ios                   # 默认：自动起本 worktree tunnel + 抓 URL → 构建前端 → cap sync → 打开 Xcode
+make android               # 同上，装到 USB device
 ```
-后端切换：`NGROK=<url> make ios` 走临时公网；`DEV=1 make ios` 指 fly dev；`PROD=1 make ios` 指 fly prod；不传变量时使用项目根目录 `./.env` 的 `PAI_API_URL`（ngrok），没配就直接失败，不退回本机 LAN IP。
+`make ios` / `make android` 默认会**自带起本 worktree 的 ngrok tunnel**，把随机 URL bake 进 build —— 在哪个 worktree 跑就连那个 worktree 的后端（一台手机一次一个 worktree）。后端切换：`NGROK=<url>` 走指定公网、`DEV=1` 指 fly dev、`PROD=1` 指 fly prod（这三者跳过本地 tunnel）。
 
 iOS 真机安装硬规则：永远不要为了绕过签名、权限、验证或并存安装去新增/改用 bundle id、包名、scheme、target，或安装 `*.dev` 之类的新 App。必须直接 build 当前已安装 App 的原 bundle id，并用新包覆盖替换旧 App；如果原 bundle id 的 signing/profile 不满足能力要求，就停下来报告真实 blocker，不要换 bundle id 绕过。
 
@@ -178,7 +185,7 @@ cd internal-reward-dashboard && npm test            # 内部 review app 单测
 
 改完怎么验证（按改动范围选最轻的）：
 - 纯 Python 逻辑/类型 → `uv run ruff check` + 相关 `uv run pytest tests/<path>`
-- 改 `pinai-agents/src/pinai_agents/web/` → `make restart`，看 `make logs-pinai-web` 起得来 + 打目标接口
+- 改 `pinai-agents/src/pinai_agents/web/` → `make restart`，看 `make logs-pinai-web` 起得来 + 打目标接口（端口随机，`make urls` 查）
 - 改 `pinai-agents/src/pinai_agents/chat/` → `make restart`，看 `make logs-pinai-chat` + 用前端发一条消息验证
 - 改前端 → `npm run dev`（端口 3003）在浏览器点；或 `make restart-frontend` 看容器版本
 - 改 `internal-reward-dashboard/` → `npm run type-check` + `npm test` + `npm run dev -- --host 127.0.0.1 --port 3004`，在 `/runs` / `/traces/:runId` 点真实流程
@@ -304,6 +311,7 @@ make deploy-litellm-prod    # LiteLLM → prod
 5. **`.env.chat` 不会自动跟 `.env` 同步**：手动改 `.env` 后，`make ensure-env-pinai-agents` 才会重新派生 `.env.chat`；直接 docker compose up 不会触发，必要时 `make env-local` 强制重新解密。
 6. **`apis/` / `pinai-openclaw/` / `miniapp/` 是退役时代的路径**：如果旧脚本、旧文档或本地残留目录提到它们，不要复活旧服务；当前后端事实以 `pinai-agents/` 为准，用户产品前端类型检查走 `cd proactive-ai-frontend && npm run type-check`。
 7. **`internal-reward-dashboard/` 是独立内部工具**：不要把 dashboard 页面放进 `proactive-ai-frontend/src/`，不要把 `/api/reward-dashboard/*` 当普通用户产品 API 扩散。用户 confirm / dismiss / snooze / text feedback 仍写 `pai_feedback_events`，只有 card open / score / reviewer score / casebook / trace 走 reward dashboard 链路。
+8. **容器无固定名（多 worktree 隔离）**：compose 去掉了 `container_name`，每个 worktree 是独立 group（`pinai-<路径hash>`，可同时 `make up` 互不撞）。旧的 `docker exec pin-ai-xxx` 全失效，改用 `docker compose exec <service>` / `docker compose logs <service>`（在对应 worktree 目录跑，自动命中那个 group）。host 端口随机，`make urls` 查；`make up` 不自动起 tunnel，generator/mobile 要 tunnel 时 `make tunnel-up`（一次一个 worktree，单 dev domain 抢不过来）。
 
 ## 提交规范
 - Conventional Commits：`feat(...)` / `fix(...)` / `chore(...)` / `docs(...)`。
