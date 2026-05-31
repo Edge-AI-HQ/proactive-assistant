@@ -198,6 +198,22 @@ def _safe_args(value: Any, max_bytes: int = _ARGS_FULL_LIMIT) -> Any | None:
     return value
 
 
+def _is_subagent_model_event(event: dict[str, Any]) -> bool:
+    """True when a model stream/end event comes from a `task`-spawned subagent
+    rather than the orchestrator itself.
+
+    Subagents run as nested graphs under the `task` tool, so their model
+    events carry a checkpoint_ns containing a `tools:` segment (verified:
+    orchestrator tokens → ns `model:…`, subagent tokens → ns `tools:…`). The
+    orchestrator folds each subagent's *returned result* into its own visible
+    reply, so forwarding the subagent's internal tokens as chat:delta would
+    duplicate / interleave them into the user-facing answer. We drop them; the
+    delegation stays visible through the `task` tool's own chat:tool:* events.
+    """
+    ns = (event.get("metadata") or {}).get("checkpoint_ns", "") or ""
+    return "tools:" in ns
+
+
 async def langgraph_to_sse(
     events: AsyncIterator[dict[str, Any]],
     *,
@@ -217,6 +233,8 @@ async def langgraph_to_sse(
             data = event.get("data", {}) or {}
 
             if etype == "on_chat_model_stream":
+                if _is_subagent_model_event(event):
+                    continue
                 run_id = event.get("run_id")
                 chunk = data.get("chunk")
                 if chunk is None:
@@ -239,6 +257,8 @@ async def langgraph_to_sse(
                     yield chat_delta(text, trace_id=trace_id)
 
             elif etype == "on_chat_model_end":
+                if _is_subagent_model_event(event):
+                    continue
                 run_id = event.get("run_id")
                 output = data.get("output")
                 if output is None:
