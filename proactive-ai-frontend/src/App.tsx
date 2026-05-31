@@ -65,7 +65,7 @@ export default function App() {
     loading: settingsLoading,
     patch: patchSettings,
     refetch: refetchSettings,
-  } = useUserSettings();
+  } = useUserSettings(user?.id ?? null);
   // Stable key signature so unrelated settings changes (autoGenerate,
   // language, etc.) don't re-trigger the reconcile. We deliberately
   // distinguish "settings not yet loaded" (null) from "loaded, empty

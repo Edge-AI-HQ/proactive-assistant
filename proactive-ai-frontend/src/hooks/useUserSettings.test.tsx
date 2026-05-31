@@ -36,7 +36,9 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 // Re-import with a fresh module registry each test so the module-level
-// `settingsCache` starts empty and the mount effect always issues a fetch.
+// `settingsCache` starts empty. Tests render with a non-null userKey (a
+// signed-in user) so the mount effect issues its bootstrap fetch — the
+// hook intentionally skips the fetch when userKey is null (logged out).
 async function loadHook() {
   vi.resetModules();
   return (await import("./useUserSettings")).useUserSettings;
@@ -59,7 +61,7 @@ describe("useUserSettings bootstrap resilience", () => {
       .mockResolvedValueOnce(jsonResponse(SETTINGS));
 
     const useUserSettings = await loadHook();
-    const { result } = renderHook(() => useUserSettings());
+    const { result } = renderHook(() => useUserSettings("user-1"));
 
     await act(async () => {
       await vi.runAllTimersAsync();
@@ -75,7 +77,7 @@ describe("useUserSettings bootstrap resilience", () => {
     proxyFetchMock.mockRejectedValue(new Error("network down"));
 
     const useUserSettings = await loadHook();
-    const { result } = renderHook(() => useUserSettings());
+    const { result } = renderHook(() => useUserSettings("user-1"));
 
     await act(async () => {
       await vi.runAllTimersAsync();
@@ -92,7 +94,7 @@ describe("useUserSettings bootstrap resilience", () => {
     proxyFetchMock.mockResolvedValue(jsonResponse(null, 401));
 
     const useUserSettings = await loadHook();
-    const { result } = renderHook(() => useUserSettings());
+    const { result } = renderHook(() => useUserSettings("user-1"));
 
     await act(async () => {
       await vi.runAllTimersAsync();
@@ -102,5 +104,24 @@ describe("useUserSettings bootstrap resilience", () => {
     expect(result.current.loading).toBe(false);
     expect(result.current.settings).toBeNull();
     expect(result.current.error).not.toBeNull();
+  });
+
+  test("logged out (userKey null) issues no fetch and stays loading", async () => {
+    // Regression: a pre-auth fetch 401s and, being a 4xx, breaks without
+    // retry — stranding App on BootstrapError until manual Retry. Gating on
+    // userKey means no request fires while logged out, so loading stays true
+    // (App shows the spinner, never the error card) until sign-in.
+    proxyFetchMock.mockResolvedValue(jsonResponse(SETTINGS));
+
+    const useUserSettings = await loadHook();
+    const { result } = renderHook(() => useUserSettings(null));
+
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+
+    expect(proxyFetchMock).not.toHaveBeenCalled();
+    expect(result.current.settings).toBeNull();
+    expect(result.current.loading).toBe(true);
   });
 });

@@ -101,7 +101,22 @@ function publishSettings(settings: UserSettings): void {
  * particular, Control Panel language edits must update App.tsx so Ambient
  * transcription uses the new language immediately.
  */
-export function useUserSettings(): UseUserSettingsResult {
+export function useUserSettings(
+  // Gate the bootstrap fetch on an authenticated user. App passes the
+  // signed-in user id (null while logged out). On native the Supabase
+  // session only lands after the PKCE deep-link exchange resolves — after
+  // this hook has already mounted — so firing `/settings` at mount would
+  // reach the backend with no bearer and 401. A 401 is a 4xx, which
+  // `refetch` treats as non-retryable (break), leaving settings=null /
+  // loading=false; since nothing re-fetches on sign-in, that stale failure
+  // surfaced as App.tsx's BootstrapError ("Couldn't reach the server")
+  // until the user manually hit Retry. Keying the fetch on the user id
+  // flips null→id only once a session exists, so the first `/settings`
+  // carries a token. Consumers inside the authenticated tree omit this
+  // (default null): App's instance has already populated `settingsCache`,
+  // and they read it via the module cache + listener below.
+  userKey: string | null = null,
+): UseUserSettingsResult {
   const [settings, setSettings] = useState<UserSettings | null>(() => settingsCache);
   const [loading, setLoading] = useState(settingsCache === null);
   const [saving, setSaving] = useState(false);
@@ -156,15 +171,19 @@ export function useUserSettings(): UseUserSettingsResult {
     };
     settingsListeners.add(listener);
     if (settingsCache) {
+      // Cache already warm (App fetched it post-login) — sync from it even
+      // for consumers that pass no userKey; they only follow, never fetch.
       listener(settingsCache);
-    } else {
+    } else if (userKey !== null) {
+      // Authenticated and no cache yet — this is the one instance that owns
+      // the bootstrap fetch. Re-runs when userKey flips null→id at sign-in.
       void refetch();
     }
     return () => {
       mountedRef.current = false;
       settingsListeners.delete(listener);
     };
-  }, [refetch]);
+  }, [refetch, userKey]);
 
   const patch = useCallback(async (next: UserSettingsPatch): Promise<UserSettings | null> => {
     setSaving(true);
