@@ -25,10 +25,16 @@ model_list:
   # (policy: PinaiLiteLLMBedrockInvoke — Anthropic Claude models only).
   - model_name: claude-sonnet-4-6
     litellm_params:
-      model: bedrock/us.anthropic.claude-sonnet-4-6
-      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
-      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
-      aws_region_name: us-east-1
+      # TEMP (2026-05-24): Bedrock 新账号 RPM 被限到 10（default 10000），提额
+      # case 审批中。期间把这个 alias 临时指向 Anthropic 直连避开 Bedrock 429。
+      # 配额批下来后：还原下面注释掉的 bedrock 三行、删掉 anthropic 两行即可。
+      # 详见 memory project_dev_bedrock_rpm_throttle。
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+      # model: bedrock/us.anthropic.claude-sonnet-4-6
+      # aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      # aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      # aws_region_name: us-east-1
       cache_control_injection_points:
         - location: message
           role: system
@@ -45,10 +51,14 @@ model_list:
 
   - model_name: claude-opus-4-6
     litellm_params:
-      model: bedrock/us.anthropic.claude-opus-4-6-v1
-      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
-      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
-      aws_region_name: us-east-1
+      # TEMP (2026-05-24): 同 claude-sonnet-4-6，临时切 Anthropic 直连避 Bedrock 429。
+      # 配额批下来后还原下面 bedrock 三行、删掉 anthropic 两行。
+      model: anthropic/claude-opus-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+      # model: bedrock/us.anthropic.claude-opus-4-6-v1
+      # aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      # aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      # aws_region_name: us-east-1
       cache_control_injection_points:
         - location: message
           role: system
