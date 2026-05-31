@@ -32,7 +32,12 @@ if ! printenv | grep -q '^DOTENV_PRIVATE_KEY' && [ ! -f "$dir/.env.keys" ]; then
 fi
 
 echo "Decrypting $src -> $dst"
-npx @dotenvx/dotenvx get -f "$src" --format json 2>/dev/null \
+# --overload decrypts to the FILE's values, overriding any same-named variable
+# already in the caller's shell. Without it, `dotenvx get` uses env-var-wins
+# precedence, so a var exported in the shell silently overwrites the real
+# decrypted value in .env — e.g. Claude Code injects an empty ANTHROPIC_API_KEY,
+# which would otherwise blank out the key here.
+npx @dotenvx/dotenvx get -f "$src" --format json --overload 2>/dev/null \
   | python3 -c 'import json,sys;[print(k+"="+chr(39)+str(v)+chr(39)) for k,v in json.load(sys.stdin).items() if not k.startswith("DOTENV_PUBLIC_KEY")]' \
   > "$tmp"
 
