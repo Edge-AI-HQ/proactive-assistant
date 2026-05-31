@@ -235,9 +235,10 @@ services:
   # for local development of the generator/dreaming agents; chat without
   # python_exec works fine without this.
   #
-  # NGROK_AUTHTOKEN + NGROK_DOMAIN come from project-root ./.env (gitignored,
-  # per-developer). Port 4040 (inspector / local API) is published on a random
-  # host port like every other service — find it with `make urls`.
+  # NGROK_AUTHTOKEN comes from project-root ./.env (decrypted from the
+  # checked-in ./.env.dev). No --domain → ngrok assigns a random public URL
+  # per group; `make tunnel-up` reads it from the :4040 API (on a random host
+  # port) and injects it as PAI_API_URL. See scripts/ngrok_url.sh.
   ngrok:
     image: ngrok/ngrok:latest
     restart: unless-stopped
@@ -250,7 +251,6 @@ services:
     command:
       - "http"
       - "pinai-web:8000"
-      - "--domain=${NGROK_DOMAIN:-}"
       - "--log=stdout"
     ports:
       # ngrok inspector / local API (random host port — see make tunnel-up).

@@ -1,4 +1,4 @@
-.PHONY: help init env-local ensure-env ensure-env-litellm ensure-env-pinai-agents
+.PHONY: help init env-local ensure-env ensure-env-litellm ensure-env-pinai-agents ensure-env-root
 .PHONY: up down build build-pinai-agents build-frontend restart restart-frontend status urls
 .PHONY: logs logs-litellm logs-postgres logs-pinai-agents logs-pinai-web logs-pinai-chat logs-frontend
 .PHONY: migrate reset clean
@@ -63,47 +63,49 @@ node_modules/.install-stamp: package-lock.json
 	@touch $@
 
 # ── Environment: auto-decrypt .env.dev → .env ──
-# Triggers when .env is missing or .env.dev is newer.
-# Requires .env.keys (get from team members; never commit).
+# Decrypts the dotenvx-encrypted .env.dev sources into plaintext .env on each
+# `make up`. The private key comes from a DOTENV_PRIVATE_KEY_* env var (put it
+# in your shell — recommended, nothing to distribute) OR a local .env.keys
+# file. Re-runs when .env is missing/empty or .env.dev is newer; recover a
+# stuck or empty env with `make env-local`. Atomic decrypt: see
+# scripts/decrypt_env.sh.
 
-ensure-env: ensure-env-litellm ensure-env-pinai-agents ## Auto-decrypt all .env files if needed
+ensure-env: ensure-env-litellm ensure-env-pinai-agents ensure-env-root ## Auto-decrypt all .env files if needed
 
 ensure-env-litellm:
-	@if [ ! -f ops/litellm/.env ] || [ ops/litellm/.env.dev -nt ops/litellm/.env ]; then \
-		if [ ! -f ops/litellm/.env.keys ]; then \
-			echo "Missing ops/litellm/.env.keys"; \
-			echo "  Get .env.keys from team members"; \
-			exit 1; \
-		fi; \
-		echo "Decrypting ops/litellm/.env.dev -> ops/litellm/.env"; \
-		$(DOTENVX) get -f ops/litellm/.env.dev --format json 2>/dev/null \
-			| python3 -c 'import json,sys;[print(k+"="+chr(39)+str(v)+chr(39)) for k,v in json.load(sys.stdin).items() if not k.startswith("DOTENV_PUBLIC_KEY")]' \
-			> ops/litellm/.env; \
-	fi
+	@bash scripts/decrypt_env.sh ops/litellm
 
 ensure-env-pinai-agents:
-	@if [ ! -f pinai-agents/.env ] || [ pinai-agents/.env.dev -nt pinai-agents/.env ]; then \
-		if [ ! -f pinai-agents/.env.keys ]; then \
-			echo "Missing pinai-agents/.env.keys"; \
-			echo "  Get .env.keys from team members"; \
-			exit 1; \
-		fi; \
-		echo "Decrypting pinai-agents/.env.dev -> pinai-agents/.env"; \
-		$(DOTENVX) get -f pinai-agents/.env.dev --format json 2>/dev/null \
-			| python3 -c 'import json,sys;[print(k+"="+chr(39)+str(v)+chr(39)) for k,v in json.load(sys.stdin).items() if not k.startswith("DOTENV_PUBLIC_KEY")]' \
-			> pinai-agents/.env; \
-	fi
-	@# Re-derive .env.chat whenever .env changes (covers both fresh-decrypt
-	@# above and the manual-edit case where the user tweaks .env directly).
-	@if [ ! -f pinai-agents/.env.chat ] || [ pinai-agents/.env -nt pinai-agents/.env.chat ]; then \
+	@bash scripts/decrypt_env.sh pinai-agents
+	@# Re-derive .env.chat (master creds stripped) whenever .env changes —
+	@# atomically, and only with a valid FORBIDDEN_ENVS filter (an empty regex
+	@# from a trust_boundary import failure would strip every line to nothing).
+	@if [ ! -s pinai-agents/.env.chat ] || [ pinai-agents/.env -nt pinai-agents/.env.chat ]; then \
 		echo "Deriving pinai-agents/.env.chat (master creds stripped for chat process)"; \
 		FORBIDDEN_RE=$$(PYTHONPATH=pinai-agents/src python3 -c \
 			"from pinai_agents.chat.trust_boundary import FORBIDDEN_ENVS; print('^(' + '|'.join(FORBIDDEN_ENVS) + ')=')"); \
-		grep -vE "$$FORBIDDEN_RE" pinai-agents/.env > pinai-agents/.env.chat; \
+		if [ -z "$$FORBIDDEN_RE" ]; then \
+			echo "ERROR: could not compute FORBIDDEN_ENVS regex (trust_boundary import failed)."; \
+			exit 1; \
+		fi; \
+		grep -vE "$$FORBIDDEN_RE" pinai-agents/.env > pinai-agents/.env.chat.tmp; \
+		if [ -s pinai-agents/.env.chat.tmp ]; then \
+			mv pinai-agents/.env.chat.tmp pinai-agents/.env.chat; \
+		else \
+			rm -f pinai-agents/.env.chat.tmp; \
+			echo "ERROR: deriving pinai-agents/.env.chat produced no output."; \
+			exit 1; \
+		fi; \
 	fi
 
+# Root ./.env holds local-infra config (NGROK_AUTHTOKEN), shared across the
+# team via the encrypted ./.env.dev. docker compose reads ./.env automatically
+# for the ngrok service.
+ensure-env-root:
+	@bash scripts/decrypt_env.sh .
+
 env-local: ## Force re-decrypt all .env files
-	@rm -f ops/litellm/.env pinai-agents/.env pinai-agents/.env.chat
+	@rm -f ops/litellm/.env pinai-agents/.env pinai-agents/.env.chat ./.env
 	@$(MAKE) --no-print-directory ensure-env
 
 # ── Setup ──
@@ -131,7 +133,7 @@ build-frontend: ensure-env-pinai-agents ## Build only frontend image
 
 # ── Run ──
 
-up: build ## Build and start the full local stack
+up: build ## Build and start the full local stack (no tunnel — run `make tunnel-up` for generator/mobile)
 	$(COMPOSE) up -d --remove-orphans
 	@$(MAKE) --no-print-directory urls
 
@@ -155,6 +157,7 @@ urls: ## Show this group's project name + live host ports
 	@echo "API:      http://localhost:$$($(COMPOSE) port pinai-web 8000 2>/dev/null | cut -d: -f2)"
 	@echo "Postgres: localhost:$$($(COMPOSE) port postgres 5432 2>/dev/null | cut -d: -f2)"
 	@echo "LiteLLM:  http://localhost:$$($(COMPOSE) port litellm 4000 2>/dev/null | cut -d: -f2)"
+	@url=$$(bash scripts/ngrok_url.sh 2>/dev/null) && echo "ngrok:    $$url" || true
 
 # ── Logs ──
 
@@ -267,11 +270,13 @@ deploy-litellm-prod: ## Deploy LiteLLM to prod
 # default = project .env PAI_API_URL. No LAN-IP fallback: mobile packages
 # should keep working off the current Wi-Fi or fail loudly.
 
-ngrok: ## Expose local pinai-web (:8000) over public ngrok for mobile dev
+ngrok: ## Expose local pinai-web over public ngrok (foreground CLI; prefer `make tunnel-up`)
 	@command -v ngrok >/dev/null 2>&1 || { echo "ngrok not found. brew install ngrok"; exit 1; }
-	@echo "Starting ngrok → http://localhost:8000"
-	@echo "For mobile: rebuild with NGROK=<printed https URL> make ios, or put it in ./.env as PAI_API_URL."
-	@ngrok http 8000
+	@port=$$($(COMPOSE) port pinai-web 8000 2>/dev/null | cut -d: -f2); \
+	[ -n "$$port" ] || { echo "pinai-web not running — run 'make up' first."; exit 1; }; \
+	echo "Starting ngrok → http://localhost:$$port (foreground CLI)."; \
+	echo "Prefer 'make tunnel-up' (docker ngrok + auto-inject into pinai-chat; 'make ios' picks it up)."; \
+	ngrok http $$port
 
 # ── Daytona sandbox tunnel ──
 # Generator / dreaming agents run code in Daytona cloud sandboxes. The
@@ -286,43 +291,20 @@ ngrok: ## Expose local pinai-web (:8000) over public ngrok for mobile dev
 # .env.example for first-time setup. Different developer = different
 # ngrok account + reserved domain (free tier: 1 simultaneous tunnel).
 
-tunnel-up: ## Open ngrok tunnel for Daytona sandbox SDK access
-	@if [ ! -f .env ]; then \
-		echo ""; \
-		echo "ngrok config not set up yet."; \
-		echo ""; \
-		echo "First-time setup:"; \
-		echo "  1. Sign up at https://dashboard.ngrok.com/signup (free)"; \
-		echo "  2. Copy authtoken: https://dashboard.ngrok.com/get-started/your-authtoken"; \
-		echo "  3. Reserve a domain: https://dashboard.ngrok.com/domains → New Domain"; \
-		echo "  4. cp .env.example .env  (then fill in the three values)"; \
-		echo "  5. make tunnel-up"; \
-		echo ""; \
+tunnel-up: ensure-env-root ## Open ngrok tunnel (random URL) and inject it into pinai-chat
+	@if ! grep -qE '^NGROK_AUTHTOKEN=.+' .env 2>/dev/null; then \
+		echo "NGROK_AUTHTOKEN missing from ./.env — ./.env.dev did not decrypt."; \
+		echo "  Set DOTENV_PRIVATE_KEY_DEV in your shell (team key), then retry."; \
 		exit 1; \
 	fi
-	@set -a && . ./.env && set +a; \
-	missing=""; \
-	[ -z "$$NGROK_AUTHTOKEN" ] && missing="$$missing NGROK_AUTHTOKEN"; \
-	[ -z "$$NGROK_DOMAIN" ]    && missing="$$missing NGROK_DOMAIN"; \
-	[ -z "$$PAI_API_URL" ]     && missing="$$missing PAI_API_URL"; \
-	if [ -n "$$missing" ]; then \
-		echo ""; \
-		echo "Missing in ./.env:$$missing"; \
-		echo ""; \
-		echo "Get authtoken / reserve domain at https://dashboard.ngrok.com,"; \
-		echo "then fill values per .env.example."; \
-		echo ""; \
-		exit 1; \
-	fi; \
-	echo "→ starting ngrok ($$NGROK_DOMAIN)"; \
-	$(COMPOSE) --profile tunnel up -d ngrok && \
-	echo "→ recreating pinai-chat with PAI_API_URL=$$PAI_API_URL"; \
-	$(COMPOSE) up -d --force-recreate --no-deps pinai-chat && \
-	echo "" && \
-	echo "Tunnel ready:" && \
-	echo "  Public URL: $$PAI_API_URL" && \
-	echo "  Inspector:  http://localhost:4040" && \
-	echo "  Daytona sandbox python_exec → reaches pinai-web through the tunnel."
+	@echo "→ starting ngrok (random URL)..."
+	@$(COMPOSE) --profile tunnel up -d ngrok
+	@url=$$(bash scripts/ngrok_url.sh) || exit 1; \
+	echo "→ injecting PAI_API_URL=$$url into pinai-chat"; \
+	PAI_API_URL="$$url" $(COMPOSE) up -d --force-recreate --no-deps pinai-chat; \
+	echo ""; \
+	echo "Tunnel ready: $$url"; \
+	echo "  (Daytona sandbox python_exec / mobile reach pinai-web through this URL.)"
 
 tunnel-down: ## Close ngrok tunnel and revert chat to internal PAI_API_URL
 	$(COMPOSE) --profile tunnel rm -sf ngrok
@@ -331,16 +313,10 @@ tunnel-down: ## Close ngrok tunnel and revert chat to internal PAI_API_URL
 	@echo "Tunnel closed. Sandbox SDK calls will fail until reopened."
 
 tunnel-status: ## Show whether the tunnel is up and at what URL
-	@if curl -fsS http://localhost:4040/api/tunnels 2>/dev/null \
-		| python3 -c "import json,sys; t=json.load(sys.stdin).get('tunnels',[]); sys.exit(0) if t and print('Tunnel UP at', t[0]['public_url']) is None else sys.exit(1)" 2>/dev/null; then \
-		: ; \
-	else \
-		echo "Tunnel DOWN. Start with: make tunnel-up"; \
-	fi
+	@url=$$(bash scripts/ngrok_url.sh 2>/dev/null) && echo "Tunnel UP at $$url" || echo "Tunnel DOWN. Start with: make tunnel-up"
 
 ios: install ensure-env ## Build frontend, sync iOS, open Xcode
 	@set -a && . ./pinai-agents/.env && set +a && \
-	MOBILE_TUNNEL_URL=$$(sed -n 's/^PAI_API_URL=//p' .env 2>/dev/null | tail -n 1 | sed -e 's/^"//' -e 's/"$$//'); \
 	if [ -n "$(NGROK)" ]; then \
 		echo "Using ngrok at $(NGROK)"; VITE_PIN_API_URL="$(NGROK)"; \
 	elif [ "$(PROD)" = "1" ]; then \
@@ -349,11 +325,11 @@ ios: install ensure-env ## Build frontend, sync iOS, open Xcode
 		VITE_PIN_API_URL="$$PROD_URL"; \
 	elif [ "$(DEV)" = "1" ]; then \
 		echo "Using fly dev at $$VITE_PIN_API_URL"; \
-	elif [ -n "$$MOBILE_TUNNEL_URL" ]; then \
-		VITE_PIN_API_URL="$$MOBILE_TUNNEL_URL"; \
-		echo "Using local tunnel at $$VITE_PIN_API_URL (from ./.env PAI_API_URL)"; \
 	else \
-		echo "Using fly dev (default) at $$VITE_PIN_API_URL — override with NGROK=<url>, DEV=1, or PROD=1"; \
+		echo "→ starting this worktree's ngrok tunnel for the mobile build..."; \
+		$(MAKE) --no-print-directory tunnel-up || { echo "tunnel-up failed — another worktree may hold the ngrok dev domain; stop its tunnel, or use DEV=1 / PROD=1 / NGROK=<url>."; exit 1; }; \
+		VITE_PIN_API_URL=$$(bash scripts/ngrok_url.sh) || exit 1; \
+		echo "Using this worktree's ngrok tunnel at $$VITE_PIN_API_URL"; \
 	fi; \
 	VITE_PIN_API_URL="$$VITE_PIN_API_URL" \
 		bash proactive-ai-frontend/scripts/sync-ios.sh && \
@@ -362,7 +338,6 @@ ios: install ensure-env ## Build frontend, sync iOS, open Xcode
 android: install ensure-env ## Build frontend, sync Android, install on USB device
 	@set -e; \
 	set -a && . ./pinai-agents/.env && set +a; \
-	MOBILE_TUNNEL_URL=$$(sed -n 's/^PAI_API_URL=//p' .env 2>/dev/null | tail -n 1 | sed -e 's/^"//' -e 's/"$$//'); \
 	if [ -n "$(NGROK)" ]; then \
 		VITE_PIN_API_URL="$(NGROK)"; \
 	elif [ "$(PROD)" = "1" ]; then \
@@ -371,11 +346,11 @@ android: install ensure-env ## Build frontend, sync Android, install on USB devi
 		VITE_PIN_API_URL="$$PROD_URL"; \
 	elif [ "$(DEV)" = "1" ]; then \
 		echo "Using fly dev at $$VITE_PIN_API_URL"; \
-	elif [ -n "$$MOBILE_TUNNEL_URL" ]; then \
-		VITE_PIN_API_URL="$$MOBILE_TUNNEL_URL"; \
-		echo "Using local tunnel at $$VITE_PIN_API_URL (from ./.env PAI_API_URL)"; \
 	else \
-		echo "Using fly dev (default) at $$VITE_PIN_API_URL — override with NGROK=<url>, DEV=1, or PROD=1"; \
+		echo "→ starting this worktree's ngrok tunnel for the mobile build..."; \
+		$(MAKE) --no-print-directory tunnel-up || { echo "tunnel-up failed — another worktree may hold the ngrok dev domain; stop its tunnel, or use DEV=1 / PROD=1 / NGROK=<url>."; exit 1; }; \
+		VITE_PIN_API_URL=$$(bash scripts/ngrok_url.sh) || exit 1; \
+		echo "Using this worktree's ngrok tunnel at $$VITE_PIN_API_URL"; \
 	fi; \
 	cd proactive-ai-frontend && \
 		VITE_CAPACITOR=1 VITE_PIN_API_URL="$$VITE_PIN_API_URL" \
