@@ -200,15 +200,15 @@ cd /Users/ec2-user/Desktop/01PINAI/01code/PIN-AI-ASSISTANT
 make up  # 需要 pinai-agents/.env.keys + ops/litellm/.env.keys
 
 # 2. seed
-docker cp /tmp/seed_5296.sql pin-ai-postgres:/tmp/seed_5296.sql
-docker exec pin-ai-postgres psql -U postgres -d postgres -f /tmp/seed_5296.sql
+docker compose cp /tmp/seed_5296.sql postgres:/tmp/seed_5296.sql
+docker compose exec postgres psql -U postgres -d postgres -f /tmp/seed_5296.sql
 
 # 3. 切到本地 sandbox 路径并重启 chat
 PINAI_LOCAL_SANDBOX=1 docker compose up -d --force-recreate pinai-chat
 
 # 4. 跑一轮
-docker cp /tmp/run_gen.py pin-ai-pinai-web:/tmp/run_gen.py
-docker exec pin-ai-pinai-web python3 /tmp/run_gen.py \
+docker compose cp /tmp/run_gen.py pinai-web:/tmp/run_gen.py
+docker compose exec pinai-web python3 /tmp/run_gen.py \
   --virtual-key <sk-...> \
   --signing-key '<PAI_JWT_SIGNING_KEY base64>' \
   --cards 6 --lang en --run-id testN

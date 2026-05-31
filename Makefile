@@ -1,5 +1,5 @@
 .PHONY: help init env-local ensure-env ensure-env-litellm ensure-env-pinai-agents
-.PHONY: up down build build-pinai-agents build-frontend restart restart-frontend status
+.PHONY: up down build build-pinai-agents build-frontend restart restart-frontend status urls
 .PHONY: logs logs-litellm logs-postgres logs-pinai-agents logs-pinai-web logs-pinai-chat logs-frontend
 .PHONY: migrate reset clean
 .PHONY: deploy-pinai-dev deploy-pinai-prod deploy-frontend-dev deploy-frontend-prod deploy-reward-dashboard-dev
@@ -14,6 +14,13 @@
 
 COMPOSE := docker compose
 DOTENVX := npx @dotenvx/dotenvx
+
+# Per-worktree Compose project name: multiple worktrees run as isolated
+# groups (own containers / network / volumes), never colliding. Hash of the
+# worktree root path — stable per worktree, unique across them (plain
+# basenames all collide as "PIN-AI-ASSISTANT"). `make urls` shows live ports.
+COMPOSE_PROJECT_NAME := pinai-$(shell git rev-parse --show-toplevel 2>/dev/null | shasum | cut -c1-8)
+export COMPOSE_PROJECT_NAME
 
 # Auto-pick npm registry based on OS timezone: China → npmmirror, else npmjs.
 # Manual override: export NPM_REGISTRY=... in shell before running make.
@@ -126,6 +133,7 @@ build-frontend: ensure-env-pinai-agents ## Build only frontend image
 
 up: build ## Build and start the full local stack
 	$(COMPOSE) up -d --remove-orphans
+	@$(MAKE) --no-print-directory urls
 
 down: ## Stop all services
 	$(COMPOSE) down
@@ -140,6 +148,13 @@ restart-frontend: ensure-env-pinai-agents ## Rebuild + recreate frontend contain
 
 status: ## Show running containers
 	$(COMPOSE) ps
+
+urls: ## Show this group's project name + live host ports
+	@echo "Project:  $(COMPOSE_PROJECT_NAME)"
+	@echo "Frontend: http://localhost:$$($(COMPOSE) port frontend 8080 2>/dev/null | cut -d: -f2)"
+	@echo "API:      http://localhost:$$($(COMPOSE) port pinai-web 8000 2>/dev/null | cut -d: -f2)"
+	@echo "Postgres: localhost:$$($(COMPOSE) port postgres 5432 2>/dev/null | cut -d: -f2)"
+	@echo "LiteLLM:  http://localhost:$$($(COMPOSE) port litellm 4000 2>/dev/null | cut -d: -f2)"
 
 # ── Logs ──
 

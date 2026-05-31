@@ -5,9 +5,9 @@ Mirrors what scheduler/dispatcher.py does after persist_generator_run,
 but standalone so we can verify the chat-stream → propose_action loop
 without waiting for a full generator invocation.
 
-Run inside pinai-web:
-    docker cp scripts/test_fanout.py pin-ai-pinai-web:/tmp/test_fanout.py
-    docker exec pin-ai-pinai-web python /tmp/test_fanout.py <user_id>
+Run inside pinai-web (from repo root):
+    docker compose cp pinai-agents/scripts/test_fanout.py pinai-web:/tmp/test_fanout.py
+    docker compose exec pinai-web python /tmp/test_fanout.py <user_id>
 """
 
 from __future__ import annotations
