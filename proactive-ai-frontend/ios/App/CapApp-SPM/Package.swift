@@ -4,14 +4,14 @@ import PackageDescription
 // DO NOT MODIFY THIS FILE - managed by Capacitor CLI commands
 let package = Package(
     name: "CapApp-SPM",
-    platforms: [.iOS(.v17)],
+    platforms: [.iOS("17.0")],
     products: [
         .library(
             name: "CapApp-SPM",
             targets: ["CapApp-SPM"])
     ],
     dependencies: [
-        .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", exact: "8.3.4"),
+        .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", exact: "8.3.3"),
         .package(name: "AparajitaCapacitorSecureStorage", path: "../../../../node_modules/@aparajita/capacitor-secure-storage"),
         .package(name: "CapacitorCommunityContacts", path: "../../../../node_modules/@capacitor-community/contacts"),
         .package(name: "CapacitorCommunitySqlite", path: "../../../../node_modules/@capacitor-community/sqlite"),
