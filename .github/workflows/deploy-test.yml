@@ -3,7 +3,7 @@ name: Deploy Test
 # Test env: deploy any branch via Actions UI dispatch.
 #
 # How discovery works: this workflow file MUST exist on the default
-# branch (proactive-ai-v2) for the "Run workflow" button to appear.
+# branch (proactive-ai-v3) for the "Run workflow" button to appear.
 # Once the dropdown is up, GitHub uses the YAML and code from the
 # branch you select.
 #
