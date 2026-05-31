@@ -17,7 +17,7 @@ dependencies = [
     "langsmith>=0.3.0",
     # DeepAgents harness + Daytona sandbox backend.
     # langchain-daytona pulls in the `daytona` SDK transitively.
-    "deepagents>=0.5.5,<0.6.0",
+    "deepagents>=0.6.7,<0.7.0",
     "langchain-daytona>=0.0.5",
     # LangGraph Postgres checkpointer (Step 1.4) — thread state persists
     # across pinai-agents restarts. Schema isolated under `langgraph` schema
