@@ -8,7 +8,7 @@ import OnboardingFlow from "@/components/onboarding/OnboardingFlow";
 import { isNative } from "@/lib/platform";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { getPersistedAmbientEnabled } from "@/services/ambient/enabled-state";
-import { ALL_SOURCE_KEYS, type SourceKey } from "@/services/ambient/keys";
+import { type SourceKey } from "@/services/ambient/keys";
 
 /**
  * Top-level router after the apis + openclaw retirement:
@@ -73,7 +73,14 @@ export default function App() {
   // just turned everything off has the runtime stop matching sources.
   const enabledKey: string | null = useMemo(() => {
     if (!userSettings) return null;
-    if (getPersistedAmbientEnabled()) return ALL_SOURCE_KEYS.join(",");
+    // per-device gate: ambient capture is authorized per device. If this
+    // device has no local opt-in flag (e.g. a fresh install / reinstall /
+    // new device cleared localStorage), never auto-start a source even
+    // when the server still remembers the user's consent from elsewhere.
+    // Re-opening the master switch (or any source) on this device writes
+    // the flag back, so the next boot restores normally. Once authorized,
+    // which sources start follows the server consent, not "all of them".
+    if (!getPersistedAmbientEnabled()) return "";
     const c = userSettings.ambientSources;
     return Object.entries(c ?? {})
       .filter(([, v]) => v?.enabled === true)

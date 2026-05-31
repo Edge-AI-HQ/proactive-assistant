@@ -43,11 +43,17 @@ export function useAmbientToggle(): UseAmbientToggleResult {
     ? Object.values(settings.ambientSources ?? {}).some((c) => c?.enabled === true)
     : null;
   const [togglePending, setTogglePending] = useState(false);
-  // Before settings hydrate, fall back to the persisted boot flag so the
-  // UI doesn't flash "off" on cold start. After hydration, `consentOn`
-  // takes over and stays in sync across every consumer via useUserSettings'
-  // module-level listener fan-out.
-  const ambientOn = consentOn ?? getPersistedAmbientEnabled();
+  // per-device gate: the master switch reads "on" only when server consent
+  // is still set AND this device has opted in locally (the localStorage
+  // boot flag). A reinstall / new device clears that flag, so ambient shows
+  // "off" there — matching App.tsx, which won't auto-start sources without
+  // the flag — instead of "UI on but nothing capturing". Before settings
+  // hydrate (`consentOn === null`) we fall back to the local flag alone so
+  // the UI doesn't flash "off" on cold start for an already-opted-in device.
+  const ambientOn =
+    consentOn === null
+      ? getPersistedAmbientEnabled()
+      : consentOn && getPersistedAmbientEnabled();
 
   const toggle = useCallback(async () => {
     if (togglePending) return;
