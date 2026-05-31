@@ -1,4 +1,4 @@
-FROM docker.litellm.ai/berriai/litellm:v1.83.10-stable
+FROM docker.litellm.ai/berriai/litellm:v1.86.2
 WORKDIR /app
 
 # Install dotenvx for runtime secret decryption

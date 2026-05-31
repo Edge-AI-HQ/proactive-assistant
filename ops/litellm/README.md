@@ -198,13 +198,20 @@ locust -f ops/litellm/locustfile.py --headless --users 100 --spawn-rate 10 --run
 
 ## 版本管理
 
-**重要：** Dockerfile 使用固定版本标签（如 `v1.81.12-stable`）而不是滚动标签（如 `main-stable`），以避免自动更新导致数据库 schema 不一致。
+**重要：** Dockerfile 和 `docker-compose.yml` 都使用固定版本标签（如 `v1.86.2`）而不是滚动标签（如 `main-stable`），以避免自动更新导致数据库 schema 不一致。两处版本必须一致：线上 fly 构建走 Dockerfile，本地 compose 直接 pull `docker-compose.yml` 里的 `litellm.image`。
+
+> LiteLLM 从 1.84.0 起改用纯 SemVer 命名，不再有 `-stable` 后缀：weekly stable 走 MINOR（`1.84.0` → `1.85.0` → `1.86.0`），hotfix 走 PATCH（`1.86.1` / `1.86.2`）。升级时 pin 到最新 hotfixed 的 weekly stable。
 
 ### 更新 LiteLLM 版本
 
-1. **修改 Dockerfile 版本号**：
+1. **修改版本号（Dockerfile + docker-compose.yml 两处同步）**：
    ```dockerfile
-   FROM docker.litellm.ai/berriai/litellm:v1.XX.XX-stable
+   # ops/litellm/Dockerfile
+   FROM docker.litellm.ai/berriai/litellm:vX.YY.Z
+   ```
+   ```yaml
+   # docker-compose.yml → services.litellm.image
+   image: docker.litellm.ai/berriai/litellm:vX.YY.Z
    ```
 
 2. **部署**：

@@ -33,7 +33,7 @@ services:
   # ── Database migration (runs once, then exits) ──
   # ── LiteLLM proxy ──
   litellm:
-    image: docker.litellm.ai/berriai/litellm:v1.83.10-stable
+    image: docker.litellm.ai/berriai/litellm:v1.86.2
     restart: unless-stopped
     # LiteLLM is by far the heaviest container. One worker is plenty for local
     # dev (single user), and the cap keeps it from ballooning — important when
