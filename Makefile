@@ -291,7 +291,7 @@ ngrok: ## Expose local pinai-web over public ngrok (foreground CLI; prefer `make
 # .env.example for first-time setup. Different developer = different
 # ngrok account + reserved domain (free tier: 1 simultaneous tunnel).
 
-tunnel-up: ensure-env-root ## Open ngrok tunnel (random URL) and inject it into pinai-chat
+tunnel-up: ensure-env-root ## Open ngrok tunnel (this worktree's .ngrok.app subdomain) and inject it into pinai-chat
 	@if ! grep -qE '^NGROK_AUTHTOKEN=.+' .env 2>/dev/null; then \
 		echo "NGROK_AUTHTOKEN missing from ./.env — ./.env.dev did not decrypt."; \
 		echo "  Set DOTENV_PRIVATE_KEY_DEV in your shell (team key), then retry."; \
@@ -327,7 +327,7 @@ ios: install ensure-env ## Build frontend, sync iOS, open Xcode
 		echo "Using fly dev at $$VITE_PIN_API_URL"; \
 	else \
 		echo "→ starting this worktree's ngrok tunnel for the mobile build..."; \
-		$(MAKE) --no-print-directory tunnel-up || { echo "tunnel-up failed — another worktree may hold the ngrok dev domain; stop its tunnel, or use DEV=1 / PROD=1 / NGROK=<url>."; exit 1; }; \
+		$(MAKE) --no-print-directory tunnel-up || { echo "tunnel-up failed — check NGROK_AUTHTOKEN / network, or use DEV=1 / PROD=1 / NGROK=<url>."; exit 1; }; \
 		VITE_PIN_API_URL=$$(bash scripts/ngrok_url.sh) || exit 1; \
 		echo "Using this worktree's ngrok tunnel at $$VITE_PIN_API_URL"; \
 	fi; \
@@ -348,7 +348,7 @@ android: install ensure-env ## Build frontend, sync Android, install on USB devi
 		echo "Using fly dev at $$VITE_PIN_API_URL"; \
 	else \
 		echo "→ starting this worktree's ngrok tunnel for the mobile build..."; \
-		$(MAKE) --no-print-directory tunnel-up || { echo "tunnel-up failed — another worktree may hold the ngrok dev domain; stop its tunnel, or use DEV=1 / PROD=1 / NGROK=<url>."; exit 1; }; \
+		$(MAKE) --no-print-directory tunnel-up || { echo "tunnel-up failed — check NGROK_AUTHTOKEN / network, or use DEV=1 / PROD=1 / NGROK=<url>."; exit 1; }; \
 		VITE_PIN_API_URL=$$(bash scripts/ngrok_url.sh) || exit 1; \
 		echo "Using this worktree's ngrok tunnel at $$VITE_PIN_API_URL"; \
 	fi; \

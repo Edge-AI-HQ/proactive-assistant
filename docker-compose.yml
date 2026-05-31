@@ -255,6 +255,10 @@ services:
     command:
       - "http"
       - "pinai-web:8000"
+      # Per-worktree subdomain (paid plan): each group gets a distinct, stable
+      # .ngrok.app URL = its project name, so multiple worktrees / teammates on
+      # the shared token never collide on the single dev domain (ERR_NGROK_334).
+      - "--url=https://${COMPOSE_PROJECT_NAME}.ngrok.app"
       - "--log=stdout"
     ports:
       # ngrok inspector / local API (random host port — see make tunnel-up).

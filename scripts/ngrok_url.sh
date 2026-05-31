@@ -24,7 +24,7 @@ TIMEOUT="${NGROK_URL_TIMEOUT:-30}"
 api_addr="$(docker compose port ngrok 4040 2>/dev/null || true)"
 if [ -z "$api_addr" ]; then
   echo "ngrok tunnel is not running for project $COMPOSE_PROJECT_NAME." >&2
-  echo "  Start it with: make tunnel-up   (make up also starts it when NGROK_AUTHTOKEN is set)." >&2
+  echo "  Start it with: make tunnel-up   (make ios/android start it automatically)." >&2
   exit 1
 fi
 api_port="${api_addr##*:}"

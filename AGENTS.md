@@ -156,13 +156,13 @@ cd internal-reward-dashboard && npm run dev -- --host 127.0.0.1 --port 3004  # �
 
 `internal-reward-dashboard` 本地通过 Vite same-origin `/api/*` proxy 打 `pinai-web:8000`，默认从 `pinai-agents/.env` 读取 Supabase `VITE_*`。它当前不是 root npm workspace；dev 环境是独立 Fly app `proactive-ai-reward-dashboard-dev`，不是 `proactive-ai-frontend` 部署产物。
 
-Daytona sandbox（generator/dreaming 的 `python_exec`）和 mobile 真机需要公网回连 `pinai-web`。`NGROK_AUTHTOKEN` 已加密 checkin 在根 `./.env.dev`（`make ensure-env` 自动解密），ngrok 给随机 URL，无需手填。**`make up` 不自动起 tunnel**（web 测试不需要，多 worktree 也不会抢 dev domain）；需要时显式起：
+Daytona sandbox（generator/dreaming 的 `python_exec`）和 mobile 真机需要公网回连 `pinai-web`。`NGROK_AUTHTOKEN` 已加密 checkin 在根 `./.env.dev`（`make ensure-env` 自动解密）；ngrok 给每个 worktree 一个**稳定子域** `https://<project-name>.ngrok.app`（compose 用 `--url=https://${COMPOSE_PROJECT_NAME}.ngrok.app`，付费版特性）。**`make up` 不自动起 tunnel**（web 测试不需要，也省 ngrok endpoint hours）；需要时显式起：
 ```bash
 make tunnel-up             # 起 ngrok（随机 URL）+ 把 URL 注入 pinai-chat（generator 用）
 make tunnel-status         # 看当前 URL
 make tunnel-down
 ```
-单个 ngrok 账户只有一个 dev domain（账户级唯一，按公网 domain 路由，不看机器/IP），所以 **多 worktree、甚至多人共享同一个 token，都不能同时各起 tunnel**（第二个 ERR_NGROK_334）—— generator/mobile 一次只一个 worktree / 一个人。真要多人或多 worktree 同时 tunnel：每人各自 ngrok 账户（各自 dev domain，token 不共享），或上 PAYG custom subdomain。
+每个 worktree 用自己的 `.ngrok.app` 子域（= project hash），所以 **多 worktree、多人共享同一个 token 可以并发各起 tunnel，互不冲突**（各拿各的 URL）。前提是**付费 ngrok**——免费版只能用账户那一个 dev domain，多开会 ERR_NGROK_334；付费版才能用任意 `<name>.ngrok.app` 子域。
 
 Mobile（Capacitor，iOS / Android）：
 ```bash
@@ -311,7 +311,7 @@ make deploy-litellm-prod    # LiteLLM → prod
 5. **`.env.chat` 不会自动跟 `.env` 同步**：手动改 `.env` 后，`make ensure-env-pinai-agents` 才会重新派生 `.env.chat`；直接 docker compose up 不会触发，必要时 `make env-local` 强制重新解密。
 6. **`apis/` / `pinai-openclaw/` / `miniapp/` 是退役时代的路径**：如果旧脚本、旧文档或本地残留目录提到它们，不要复活旧服务；当前后端事实以 `pinai-agents/` 为准，用户产品前端类型检查走 `cd proactive-ai-frontend && npm run type-check`。
 7. **`internal-reward-dashboard/` 是独立内部工具**：不要把 dashboard 页面放进 `proactive-ai-frontend/src/`，不要把 `/api/reward-dashboard/*` 当普通用户产品 API 扩散。用户 confirm / dismiss / snooze / text feedback 仍写 `pai_feedback_events`，只有 card open / score / reviewer score / casebook / trace 走 reward dashboard 链路。
-8. **容器无固定名（多 worktree 隔离）**：compose 去掉了 `container_name`，每个 worktree 是独立 group（`pinai-<路径hash>`，可同时 `make up` 互不撞）。旧的 `docker exec pin-ai-xxx` 全失效，改用 `docker compose exec <service>` / `docker compose logs <service>`（在对应 worktree 目录跑，自动命中那个 group）。host 端口随机，`make urls` 查；`make up` 不自动起 tunnel，generator/mobile 要 tunnel 时 `make tunnel-up`（一次一个 worktree，单 dev domain 抢不过来）。
+8. **容器无固定名（多 worktree 隔离）**：compose 去掉了 `container_name`，每个 worktree 是独立 group（`pinai-<路径hash>`，可同时 `make up` 互不撞）。旧的 `docker exec pin-ai-xxx` 全失效，改用 `docker compose exec <service>` / `docker compose logs <service>`（在对应 worktree 目录跑，自动命中那个 group）。host 端口随机，`make urls` 查；`make up` 不自动起 tunnel，generator/mobile 要 tunnel 时 `make tunnel-up` / `make ios`（各 worktree 自己的 `.ngrok.app` 子域，可并发，付费版）。
 
 ## 提交规范
 - Conventional Commits：`feat(...)` / `fix(...)` / `chore(...)` / `docs(...)`。
