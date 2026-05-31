@@ -94,6 +94,13 @@ export default defineConfig(({ mode }) => {
       globals: true,
       include: ["src/**/*.{test,spec}.{ts,tsx}"],
       setupFiles: ["src/testSetup.ts"],
+      // lib/supabase.ts throws at import if these are unset; the real VITE_*
+      // are dotenvx-encrypted and not available to vitest. Inject harmless
+      // dummies so any test that transitively imports it can load.
+      env: {
+        VITE_SUPABASE_URL: "http://localhost:54321",
+        VITE_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_test",
+      },
     },
   };
 });
