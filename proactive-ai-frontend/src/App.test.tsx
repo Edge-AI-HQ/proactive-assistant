@@ -3,7 +3,6 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import App from "./App";
 import { setPersistedAmbientEnabled } from "@/services/ambient/enabled-state";
-import { ALL_SOURCE_KEYS } from "@/services/ambient/keys";
 
 const { startAmbientUploadMock, useUserSettingsMock } = vi.hoisted(() => ({
   startAmbientUploadMock: vi.fn(),
@@ -56,12 +55,15 @@ describe("App ambient boot", () => {
     expect(startAmbientUploadMock).not.toHaveBeenCalled();
   });
 
-  test("restarts all ambient sources with the loaded language when the local ambient switch is persisted on", async () => {
+  test("starts only the server-consented sources when this device has opted in locally", async () => {
     setPersistedAmbientEnabled(true);
     useUserSettingsMock.mockReturnValue({
       settings: {
         generationLanguage: "zh-Hans",
-        ambientSources: {},
+        ambientSources: {
+          location: { enabled: true },
+          visit: { enabled: false },
+        },
       },
     });
 
@@ -69,8 +71,30 @@ describe("App ambient boot", () => {
 
     await waitFor(() => {
       expect(startAmbientUploadMock).toHaveBeenCalledWith({
-        enabledSources: ALL_SOURCE_KEYS,
+        enabledSources: ["location"],
         transcriptionLanguage: "zh-Hans",
+      });
+    });
+  });
+
+  test("does not start ambient on a device with no local opt-in even when the server still consents", async () => {
+    // Reinstall / new device: localStorage was cleared but the server still
+    // remembers the user's ambient consent. The per-device gate must keep
+    // sources off until the user re-opts-in on this device, so the boot
+    // effect reconciles to an empty set instead of restoring the consent.
+    useUserSettingsMock.mockReturnValue({
+      settings: {
+        generationLanguage: "en-US",
+        ambientSources: { location: { enabled: true } },
+      },
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(startAmbientUploadMock).toHaveBeenCalledWith({
+        enabledSources: [],
+        transcriptionLanguage: "en-US",
       });
     });
   });

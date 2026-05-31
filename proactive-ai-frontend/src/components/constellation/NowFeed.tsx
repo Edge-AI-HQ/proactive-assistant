@@ -148,7 +148,11 @@ export default function NowFeed({ onExecute, onModify, onScrollDirectionChange, 
   const consentOn = settings
     ? Object.values(settings.ambientSources ?? {}).some((c) => c?.enabled === true)
     : null;
-  const ambientOn = getPersistedAmbientEnabled() || (consentOn ?? false);
+  // per-device gate: live session only when server consent is set AND this
+  // device opted in locally. Mirrors useAmbientToggle / App.tsx so a
+  // reinstall (localStorage cleared) shows ambient off everywhere instead
+  // of spinning up a live session with no sources actually capturing.
+  const ambientOn = getPersistedAmbientEnabled() && (consentOn ?? false);
   const { session: liveSession, previewVisibleCount } = useAmbientLiveSession({
     ambientOn,
     enableWebDemo: false,

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Radio, ShieldCheck } from "lucide-react";
 import { isNative } from "@/lib/platform";
 import { useUserSettings, type AmbientSourceConsent } from "@/hooks/useUserSettings";
+import { setPersistedAmbientEnabled } from "@/services/ambient/enabled-state";
 import {
   ALL_SOURCE_KEYS,
   type SourceKey,
@@ -236,9 +237,16 @@ export default function AmbientSourceControlsPanel() {
       const updated = await patch({
         ambientSources: { [key]: { enabled: !currentlyEnabled } },
       });
-      if (!updated || !isNative) return;
+      if (!updated) return;
 
+      // per-device gate: keep the local opt-in flag in sync with this
+      // device's source consent so App.tsx's boot gate and the master
+      // switch agree — enabling any source opts this device in; disabling
+      // the last one opts back out. (useAmbientToggle writes the same flag.)
       const enabledSources = enabledKeysFromConsent(updated.ambientSources);
+      setPersistedAmbientEnabled(enabledSources.length > 0);
+      if (!isNative) return;
+
       try {
         const runtime = await loadAmbientRuntime();
         await runtime.reconcileEnabledSources(enabledSources);
