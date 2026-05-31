@@ -35,6 +35,10 @@ services:
   litellm:
     image: docker.litellm.ai/berriai/litellm:v1.83.10-stable
     restart: unless-stopped
+    # LiteLLM is by far the heaviest container. One worker is plenty for local
+    # dev (single user), and the cap keeps it from ballooning — important when
+    # several worktree groups share Docker Desktop's memory.
+    mem_limit: 1536m
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -48,7 +52,7 @@ services:
     volumes:
       - ./ops/litellm/litellm_config.yaml:/app/config.yaml:ro
     command:
-      ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "2"]
+      ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "1"]
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')\""]
       interval: 3s
