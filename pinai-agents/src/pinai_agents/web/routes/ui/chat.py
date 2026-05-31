@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from ....shared.api_models import (
@@ -138,36 +138,10 @@ async def chat_send(
     in the request body) so the chat worker never needs to know the
     body shape. See web/auth/agent_jwt.py § extra claims.
     """
-    if not user.litellm_virtual_key:
-        # Should be rare — provisioning runs synchronously on first user
-        # upsert. If we get here, the LiteLLM admin call failed back then;
-        # try once more before giving up.
-        from ...services.litellm_provisioning import (  # noqa: PLC0415
-            ensure_user_litellm_key,
-        )
-        try:
-            user = await ensure_user_litellm_key(pool, user)
-        except Exception as e:
-            logger.exception("lazy LiteLLM provisioning failed user=%d", user.id)
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"unable to provision LiteLLM key: {type(e).__name__}: {e}",
-            ) from e
-        if not user.litellm_virtual_key:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="LiteLLM key missing after provisioning",
-            )
-
-    # Lazy-provision a per-user persistent Browserbase context on first
-    # chat-send (one-shot ~200ms). Best-effort: if Browserbase isn't
-    # configured or the API call fails, falls through with bbctx=None
-    # and the chat agent uses ephemeral sessions for that user.
-    if not user.browserbase_context_id:
-        from ...services.browserbase_provisioning import (  # noqa: PLC0415
-            ensure_browserbase_context,
-        )
-        user = await ensure_browserbase_context(pool, user)
+    # The LiteLLM virtual_key + Browserbase context are provisioned at
+    # onboarding completion (web/routes/ui/profile.py:update_settings) and
+    # the SPA gates the app on onboarding, so both are already on the user
+    # row by the time chat-send runs — no lazy provisioning here.
 
     # Wrap the SSE generator with a finalizer that bumps the chat
     # thread's last_message_at + message_count once the stream

@@ -227,3 +227,73 @@ async def test_settings_get_repairs_archived_auto_generate_schedule(pool, user_i
     assert row["status"] == "active"
     assert row["next_run_at"] is not None
     assert row["payload"]["output_language"] == "zh-Hans"
+
+
+@pytest.mark.asyncio
+async def test_onboarding_completion_provisions_litellm_key_and_browserbase(
+    pool, user_ids, monkeypatch,
+):
+    """Finishing onboarding provisions the LiteLLM key + Browserbase context
+    before stamping onboarding_completed_at, so every downstream LLM/agent task
+    (connector.evolve / dreaming / generator / proactive / chat) has a key the
+    moment it runs. Provisioning is mocked — assert it's invoked + completion
+    is stamped."""
+    from pinai_agents.web.routes.ui import profile as profile_routes
+
+    user_a, _ = user_ids
+    calls = {"litellm": 0, "browserbase": 0}
+
+    async def fake_litellm(_pool, user, *, required_models=None):
+        calls["litellm"] += 1
+        return user
+
+    async def fake_browserbase(_pool, user):
+        calls["browserbase"] += 1
+        return user
+
+    monkeypatch.setattr(profile_routes, "ensure_user_litellm_key", fake_litellm)
+    monkeypatch.setattr(profile_routes, "ensure_browserbase_context", fake_browserbase)
+
+    app = create_app()
+    app.state.pool = pool
+    app.dependency_overrides[current_user] = lambda: _user(user_a)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver",
+    ) as client:
+        res = await client.post("/api/settings", json={"onboardingCompleted": True})
+
+    assert res.status_code == 200, res.text
+    assert calls == {"litellm": 1, "browserbase": 1}
+    assert res.json()["onboardingCompletedAt"] is not None
+
+
+@pytest.mark.asyncio
+async def test_onboarding_blocked_when_litellm_provisioning_fails(
+    pool, user_ids, monkeypatch,
+):
+    """If LiteLLM key provisioning fails at onboarding completion, the request
+    errors and onboarding_completed_at is NOT stamped — the client retries, so
+    a user never finishes onboarding without a usable key."""
+    from pinai_agents.web.routes.ui import profile as profile_routes
+
+    user_a, _ = user_ids
+
+    async def boom(_pool, user, *, required_models=None):
+        raise RuntimeError("litellm down")
+
+    monkeypatch.setattr(profile_routes, "ensure_user_litellm_key", boom)
+
+    app = create_app()
+    app.state.pool = pool
+    app.dependency_overrides[current_user] = lambda: _user(user_a)
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver",
+    ) as client:
+        res = await client.post("/api/settings", json={"onboardingCompleted": True})
+
+    assert res.status_code >= 500
+    async with user_scoped_tx(pool, user_a) as conn:
+        settings = await ProfileRepository(user_a, conn).get_settings()
+    assert settings.onboarding_completed_at is None

@@ -21,6 +21,8 @@ from ...auth.deps import User, current_user, get_pool
 from ...db.repositories.profile import ProfileRepository, UserSettingsRow
 from ...db.repositories.scheduled_tasks import ScheduledTasksRepository
 from ...db.rls import user_scoped_tx
+from ...services.browserbase_provisioning import ensure_browserbase_context
+from ...services.litellm_provisioning import ensure_user_litellm_key
 
 
 def _auto_generate_task_id(user_id: int) -> str:
@@ -364,6 +366,19 @@ async def update_settings(
                     "enabled": consent.enabled,
                     "updated_at": now_iso,
                 }
+
+    # Onboarding completion is where we provision the user's LiteLLM virtual
+    # key (+ Browserbase context), so every downstream LLM/agent task —
+    # connector.evolve, dreaming, generator, the proactive heartbeat, chat —
+    # has them ready the moment it runs. ensure_user_litellm_key raises on
+    # LiteLLM failure, so onboarding can't finish (onboarding_completed_at
+    # stays NULL) until the key is minted; the client retries the finish step.
+    # Browserbase is best-effort (never blocks). Idempotent, so a re-stamp is
+    # a no-op once provisioned.
+    if body.onboarding_completed:
+        await ensure_user_litellm_key(pool, user)
+        await ensure_browserbase_context(pool, user)
+
     async with user_scoped_tx(pool, user.id) as conn:
         repo = ProfileRepository(user.id, conn)
         row = await repo.upsert_settings(
