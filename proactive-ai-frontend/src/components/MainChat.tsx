@@ -89,12 +89,19 @@ function MainChatScope({
   onBack: () => void;
   cardContext?: Record<string, unknown>;
 }) {
-  const { runtime, historyLoaded } = useProactiveChatRuntime({
+  const { runtime, historyLoaded, hasHistory } = useProactiveChatRuntime({
     sessionKey,
     cardContext,
   });
   const [view, setView] = useState<ViewMode>(cardContext ? "conversation" : "landing");
   const cardTitle = typeof cardContext?.title === "string" ? cardContext.title : undefined;
+
+  // Re-entering a thread that already has history should land directly in the
+  // conversation, not on the orb landing. The orb is the empty-state surface
+  // for a fresh thread; once history loads we skip past it.
+  useEffect(() => {
+    if (hasHistory) setView("conversation");
+  }, [hasHistory]);
 
   const handleSubmitFromLanding = useCallback(
     (text: string) => {

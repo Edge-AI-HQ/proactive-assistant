@@ -568,5 +568,10 @@ export function useProactiveChatRuntime(options: UseProactiveChatRuntimeOptions)
     runtime,
   ]);
 
-  return { runtime, historyLoaded };
+  // History view-gating: true once history has loaded with at least one prior
+  // message. Callers use it to skip the empty-state landing (the orb) and show
+  // the transcript directly — the orb is only for a fresh, empty thread.
+  const hasHistory = (initialMessages?.length ?? 0) > 0;
+
+  return { runtime, historyLoaded, hasHistory };
 }
