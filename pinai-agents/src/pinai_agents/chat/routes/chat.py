@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 from typing import Any, Literal
 
 import daytona
@@ -178,28 +177,12 @@ def _card_context_message(card_context: dict[str, Any]) -> SystemMessage:
     )
 
 
-def _turn_context_message(now: datetime | None = None) -> SystemMessage:
-    current = (now or datetime.now(UTC)).astimezone(UTC).isoformat()
-    return SystemMessage(
-        content=(
-            "<turn_context>\n"
-            f"Current UTC datetime: {current}\n"
-            "Use this as the reference for relative dates like today, "
-            "tonight, tomorrow, next batch, and this week. When writing "
-            "temporary preferences, set expires_at in the future; never "
-            "use an older date.\n"
-            "</turn_context>"
-        ),
-    )
-
-
 def _build_send_messages(
     *,
     message: str,
     card_context: dict[str, Any] | None,
     is_card_thread: bool,
     is_first_turn: bool,
-    turn_context: SystemMessage | None = None,
 ) -> list[Any]:
     """Assemble the input messages for a normal (non-regenerate) send.
 
@@ -217,8 +200,6 @@ def _build_send_messages(
     spinning up the agent / sandbox.
     """
     msgs: list[Any] = []
-    if turn_context is not None:
-        msgs.append(turn_context)
     if is_card_thread:
         if card_context is not None and is_first_turn:
             msgs.append(_card_context_message(card_context))
@@ -404,7 +385,6 @@ async def _stream(
                 card_context=req.card_context,
                 is_card_thread=is_card_thread,
                 is_first_turn=is_first_turn,
-                turn_context=_turn_context_message(),
             ),
         )
 
