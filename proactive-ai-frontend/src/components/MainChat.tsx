@@ -120,12 +120,18 @@ function MainChatScope({
     onBack();
   }, [onBack]);
 
+  // Show the orb landing only after history has loaded and confirmed the
+  // thread is empty — never mid-load, so it can't flash before the transcript
+  // appears on re-entry. (Until then both surfaces stay hidden: a brief blank,
+  // the same pattern as the sessionKey `return null` above.)
+  const showLanding = view === "landing" && historyLoaded;
+
   return (
     <>
       <div
         className="absolute inset-0"
-        style={{ display: view === "landing" ? "block" : "none" }}
-        aria-hidden={view !== "landing"}
+        style={{ display: showLanding ? "block" : "none" }}
+        aria-hidden={!showLanding}
       >
         <MinimalistLanding
           onBack={onBack}
