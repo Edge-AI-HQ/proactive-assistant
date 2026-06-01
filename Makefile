@@ -80,12 +80,24 @@ ensure-env-pinai-agents:
 	@# Re-derive .env.chat (master creds stripped) whenever .env changes —
 	@# atomically, and only with a valid FORBIDDEN_ENVS filter (an empty regex
 	@# from a trust_boundary import failure would strip every line to nothing).
+	@# The strip is line-based, so it assumes every secret is single-line; we
+	@# assert that (total lines == KEY= lines) before stripping, so a future
+	@# multi-line secret fails loudly here instead of silently leaking its
+	@# continuation lines past the trust boundary into the chat container.
 	@if [ ! -s pinai-agents/.env.chat ] || [ pinai-agents/.env -nt pinai-agents/.env.chat ]; then \
 		echo "Deriving pinai-agents/.env.chat (master creds stripped for chat process)"; \
 		FORBIDDEN_RE=$$(PYTHONPATH=pinai-agents/src python3 -c \
 			"from pinai_agents.chat.trust_boundary import FORBIDDEN_ENVS; print('^(' + '|'.join(FORBIDDEN_ENVS) + ')=')"); \
 		if [ -z "$$FORBIDDEN_RE" ]; then \
 			echo "ERROR: could not compute FORBIDDEN_ENVS regex (trust_boundary import failed)."; \
+			exit 1; \
+		fi; \
+		total=$$(grep -c '^' pinai-agents/.env); \
+		kvlines=$$(grep -cE '^[A-Za-z_][A-Za-z0-9_]*=' pinai-agents/.env); \
+		if [ "$$total" != "$$kvlines" ]; then \
+			echo "ERROR: pinai-agents/.env has multi-line values ($$total lines vs $$kvlines KEY= lines)."; \
+			echo "  The line-based strip below would leak secret continuation lines into .env.chat."; \
+			echo "  Store every secret on one line (e.g. base64-encode PEM keys)."; \
 			exit 1; \
 		fi; \
 		grep -vE "$$FORBIDDEN_RE" pinai-agents/.env > pinai-agents/.env.chat.tmp; \
@@ -185,7 +197,15 @@ logs-frontend: ## Tail frontend (nginx) logs
 # ── Database ──
 
 migrate: ## Run db-migrate one-shot (creates litellm db + applies pai_* migrations)
-	$(COMPOSE) up --abort-on-container-exit --exit-code-from db-migrate db-migrate postgres
+	@# `run --rm`, not `up`: db-migrate is a one-shot job. `up
+	@# --abort-on-container-exit` (implied by --exit-code-from) stops EVERY
+	@# container it touched the moment db-migrate exits — including a shared
+	@# postgres that a running stack still depends on, tearing the stack down.
+	@# `run` reuses postgres when it's already healthy (starts it + waits on
+	@# the healthcheck only when needed), applies the migration, and leaves
+	@# postgres alone; --rm removes the job container. `run` returns
+	@# db-migrate's exit code, so a failed migration still fails make.
+	$(COMPOSE) run --rm db-migrate
 
 # ── Reset ──
 
@@ -195,18 +215,18 @@ clean: ## Stop everything and delete all volumes (data loss!)
 reset: ## Stop everything, delete volumes, rebuild and start fresh (incl. ngrok tunnel when ./.env is configured)
 	$(MAKE) clean
 	$(MAKE) up
-	@# Bring up the ngrok tunnel if ./.env has all three values, so a
-	@# generator run right after `make reset` lands SDK calls on a
-	@# reachable URL. Soft-skip when the file is missing or partial —
-	@# teammates without an ngrok account can still `make reset`.
-	@if [ -f .env ] \
-		&& grep -qE '^NGROK_AUTHTOKEN=.+' .env \
-		&& grep -qE '^NGROK_DOMAIN=.+' .env \
-		&& grep -qE '^PAI_API_URL=https://' .env; then \
+	@# Bring up the ngrok tunnel when ./.env carries NGROK_AUTHTOKEN — the
+	@# same (and only) precondition `make tunnel-up` checks — so a generator
+	@# run right after `make reset` lands SDK calls on a reachable URL. The
+	@# public URL and PAI_API_URL are assigned at runtime by tunnel-up (read
+	@# from ngrok's API, not stored in ./.env), so the token is the only gate.
+	@# Soft-skip when it's missing — teammates without an ngrok account can
+	@# still `make reset`.
+	@if [ -f .env ] && grep -qE '^NGROK_AUTHTOKEN=.+' .env; then \
 		$(MAKE) tunnel-up; \
 	else \
 		echo ""; \
-		echo "Skipping ngrok tunnel — ./.env not fully configured."; \
+		echo "Skipping ngrok tunnel — NGROK_AUTHTOKEN missing from ./.env."; \
 		echo "  Generator runs without a tunnel will hit ConnectError"; \
 		echo "  inside the Daytona sandbox. To enable: make tunnel-up"; \
 		echo ""; \
@@ -297,7 +317,7 @@ tunnel-up: ensure-env-root ## Open ngrok tunnel (this worktree's .ngrok.app subd
 		echo "  Set DOTENV_PRIVATE_KEY_DEV in your shell (team key), then retry."; \
 		exit 1; \
 	fi
-	@echo "→ starting ngrok (random URL)..."
+	@echo "→ starting ngrok (this worktree's .ngrok.app subdomain)..."
 	@$(COMPOSE) --profile tunnel up -d ngrok
 	@url=$$(bash scripts/ngrok_url.sh) || exit 1; \
 	echo "→ injecting PAI_API_URL=$$url into pinai-chat"; \

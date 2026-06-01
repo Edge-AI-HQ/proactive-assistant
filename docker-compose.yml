@@ -240,9 +240,10 @@ services:
   # python_exec works fine without this.
   #
   # NGROK_AUTHTOKEN comes from project-root ./.env (decrypted from the
-  # checked-in ./.env.dev). No --domain → ngrok assigns a random public URL
-  # per group; `make tunnel-up` reads it from the :4040 API (on a random host
-  # port) and injects it as PAI_API_URL. See scripts/ngrok_url.sh.
+  # checked-in ./.env.dev). The --url below binds this group's stable
+  # .ngrok.app subdomain; `make tunnel-up` reads the live URL from the :4040
+  # API (on a random host port) and injects it as PAI_API_URL. See
+  # scripts/ngrok_url.sh.
   ngrok:
     image: ngrok/ngrok:latest
     restart: unless-stopped
