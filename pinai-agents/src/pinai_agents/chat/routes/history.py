@@ -34,6 +34,8 @@ from ..runtime.reasoning import extract_reasoning_text
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+_CARD_THREAD_PREFIX = "card-thread-"
+
 
 _TOOL_META_MAX = 300
 _ARGS_PREVIEW_MAX = 240
@@ -55,25 +57,79 @@ class ExistsResponse(BaseModel):
     existing: bool
 
 
-async def _get_thread_snapshot(session_key: str):
-    """Shared helper: fetch the thread checkpoint or surface a clean HTTP
-    error. Returns the snapshot (which may be None for never-touched
-    threads — caller distinguishes)."""
+# Read-only agents cached per kind (main / card). aget_state() only reads
+# checkpoint state — it never invokes the model or touches the backend /
+# sandbox — so one throwaway agent per kind (dummy virtual_key + local backend)
+# can read state for ANY thread_id of that kind. The topology must match the
+# live send-path factory (make_*_agent) so the assembled state schema lines up;
+# only model/backend differ and neither is exercised by a read. Caching avoids
+# rebuilding the full middleware graph on every (frequently-polled) history /
+# exists call. Safe to cache process-wide: the checkpointer is a lifespan
+# singleton, and graph construction is synchronous (no await → no interleave).
+_READONLY_AGENTS: dict[str, Any] = {}
+
+
+def _readonly_agent(*, is_card: bool) -> Any:
+    # Deferred imports: pulling the agent factories (and through them the full
+    # native-tool stack — e.g. tavily's module-level client) at module load
+    # would saddle this route module with the entire agent/tool dependency
+    # chain plus its import-time side effects, and break lightweight test
+    # imports of the pure helpers below (_build_history). We only need them
+    # when actually reading state, where the full runtime env is present.
+    from ..agents.card_execution import make_card_execution_agent
+    from ..agents.main_chat import make_main_chat_agent
+    from ..tools.local_sandbox import (
+        create_local_sandbox_backend,
+        local_chat_root_dir,
+    )
+
+    kind = "card" if is_card else "main"
+    agent = _READONLY_AGENTS.get(kind)
+    if agent is None:
+        backend = create_local_sandbox_backend(
+            run_jwt="state-read",
+            root_dir=local_chat_root_dir(f"__readonly_{kind}__"),
+        )
+        agent = (
+            make_card_execution_agent(virtual_key="state-read", backend=backend)
+            if is_card
+            else make_main_chat_agent(virtual_key="state-read", backend=backend)
+        )
+        _READONLY_AGENTS[kind] = agent
+    return agent
+
+
+async def _get_thread_messages(session_key: str) -> list[Any]:
+    """Read the messages list from a thread's LangGraph state.
+
+    Under deepagents / langgraph 1.x `messages` is a reducer-managed channel
+    whose current value is only assembled by the compiled graph's aget_state();
+    raw checkpointer.aget_tuple() exposes control-flow channels
+    (__pregel_tasks, branch:to:*) in channel_values but NOT the user-visible
+    messages list. So we read through a cached per-kind agent (_readonly_agent).
+    Returns [] when the thread has no persisted state yet.
+    """
     try:
-        checkpointer = get_checkpointer()
+        get_checkpointer()
     except RuntimeError as e:
         # Checkpointer not initialized — DATABASE_URL missing or lifespan
         # didn't run. Surface as 503 so the proxy knows to retry / report.
         raise HTTPException(status_code=503, detail=str(e)) from e
+
+    is_card = session_key.startswith(_CARD_THREAD_PREFIX)
     try:
-        return await checkpointer.aget_tuple(
-            {"configurable": {"thread_id": session_key}}
+        agent = _readonly_agent(is_card=is_card)
+        snapshot = await agent.aget_state(
+            {"configurable": {"thread_id": session_key}},
         )
     except Exception as e:
-        logger.exception("checkpoint fetch failed session_key=%s", session_key)
+        logger.exception("state read failed session_key=%s", session_key)
         raise HTTPException(
             status_code=500, detail=f"{type(e).__name__}: {e}"
         ) from e
+    if snapshot is None:
+        return []
+    return (snapshot.values or {}).get("messages", []) or []
 
 
 @router.get("/agent/chat/exists", response_model=ExistsResponse)
@@ -83,11 +139,13 @@ async def chat_exists(
     """Does `session_key` already have any persisted turn?
 
     Used by `/api/proxy/chat-stream/init` (frontend `useProactiveChatRuntime`
-    bootstrap path). Replaces APIs's direct `langgraph.checkpoints` SQL
-    query so APIs never reaches into the chat process's data store.
+    bootstrap path). "Has persisted turn" = at least one message in the
+    assembled state, not just "checkpoint row exists" — early-graph
+    checkpoints (control-flow only) can be written before the first
+    user-visible message lands.
     """
-    snapshot = await _get_thread_snapshot(session_key)
-    return ExistsResponse(ok=True, existing=snapshot is not None)
+    msgs = await _get_thread_messages(session_key)
+    return ExistsResponse(ok=True, existing=len(msgs) > 0)
 
 
 @router.get("/agent/chat/history", response_model=HistoryResponse)
@@ -98,12 +156,7 @@ async def chat_history(
 
     Empty thread (never sent a message) → ok=true, messages=[].
     """
-    snapshot = await _get_thread_snapshot(session_key)
-    if snapshot is None:
-        return HistoryResponse(ok=True, messages=[])
-    raw_messages = (
-        (snapshot.checkpoint.get("channel_values") or {}).get("messages") or []
-    )
+    raw_messages = await _get_thread_messages(session_key)
     return HistoryResponse(ok=True, messages=_build_history(raw_messages))
 
 

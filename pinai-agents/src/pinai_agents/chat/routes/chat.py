@@ -36,7 +36,6 @@ from pydantic import BaseModel, Field
 from ..agents.card_execution import make_card_execution_agent
 from ..agents.main_chat import make_main_chat_agent
 from ..auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
-from ..runtime.checkpoint import get_checkpointer
 from ..runtime.ctx import ClientHints, run_context
 from ..streaming import chat_done, chat_error, langgraph_to_sse
 from ..tools.local_sandbox import (
@@ -209,26 +208,29 @@ def _build_send_messages(
     return msgs
 
 
-async def _is_first_turn(session_key: str) -> bool:
+async def _is_first_turn(agent: Any, session_key: str) -> bool:
     """True when the LangGraph thread for `session_key` has zero persisted
     messages. Used to guard one-shot card_context injection.
 
-    On any checkpointer error we treat as "not first turn" — re-injecting
-    is harmless under LangGraph's messages reducer (dedups by id), but
-    skipping the snapshot read avoids us blocking on a transient pg blip
-    just to make a polish-level decision.
+    Reads through the compiled agent's aget_state() — under
+    deepagents/langgraph 1.x the messages reducer state isn't surfaced
+    by raw checkpointer.aget_tuple().channel_values, only by aget_state().
+
+    On any read error we treat as "not first turn" — re-injecting is
+    harmless under LangGraph's messages reducer (dedups by id), but
+    skipping the probe avoids us blocking on a transient pg blip just
+    to make a polish-level decision.
     """
     try:
-        cp = get_checkpointer()
-        snapshot = await cp.aget_tuple(
+        snapshot = await agent.aget_state(
             {"configurable": {"thread_id": session_key}},
         )
     except Exception:
-        logger.exception("checkpoint probe failed session_key=%s", session_key)
+        logger.exception("agent state probe failed session_key=%s", session_key)
         return False
     if snapshot is None:
         return True
-    msgs = (snapshot.checkpoint.get("channel_values") or {}).get("messages") or []
+    msgs = (snapshot.values or {}).get("messages", []) or []
     return len(msgs) == 0
 
 
@@ -377,7 +379,7 @@ async def _stream(
         # Only card threads need the (async) first-turn probe; main threads
         # inject per-turn so we skip the checkpoint read for them.
         is_first_turn = (
-            await _is_first_turn(req.session_key) if is_card_thread else False
+            await _is_first_turn(agent, req.session_key) if is_card_thread else False
         )
         input_messages.extend(
             _build_send_messages(

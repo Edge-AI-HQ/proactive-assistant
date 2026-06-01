@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from deepagents import create_deep_agent
+from deepagents import SubAgent, create_deep_agent
 from deepagents.backends.protocol import BackendProtocol
 
 from ..runtime.checkpoint import get_checkpointer
@@ -151,15 +151,44 @@ available, say so plainly — don't invent specifics.
 """
 
 
+# TEST-ONLY subagent. Product is pre-launch; this exercises the
+# `create_deep_agent(subagents=...)` path and the `task` delegation /
+# context-isolation pipeline end to end (main agent → task() → subagent runs
+# in its own context → single result back). Hard-gated in its description so it
+# never fires on real user turns. Replace with real domain subagents
+# (research / browser / code) once the flow is proven.
+_ECHO_PROBE_SUBAGENT: SubAgent = {
+    "name": "echo_probe",
+    "description": (
+        "TEST-ONLY probe for verifying the task() subagent pipeline. Reverses "
+        "a short string inside an isolated subagent context. Use ONLY when the "
+        "user's message literally contains 'test subagent' or 'echo probe' — "
+        "never delegate real user work to it."
+    ),
+    "system_prompt": (
+        "You are a test probe subagent. Reverse the characters of the text you "
+        "are given and reply with ONLY the reversed string — no preamble, no "
+        "explanation, no tool calls."
+    ),
+}
+
+
 def make_main_chat_agent(
     *,
     virtual_key: str,
     backend: BackendProtocol,
 ) -> Any:
+    # create_deep_agent's default middleware stack already includes context
+    # summarization (with backend offload of evicted history to
+    # /conversation_history/<thread>.md), filesystem, todo planning, and
+    # Anthropic prompt caching — see deepagents.create_deep_agent. We only
+    # layer the subagent roster on top; the SubAgentMiddleware + `task` tool
+    # are auto-wired from `subagents`.
     return create_deep_agent(
         model=make_chat_model(virtual_key=virtual_key, streaming=True),
         system_prompt=_INSTRUCTIONS,
         backend=backend,
         checkpointer=get_checkpointer(),
         tools=ALL_TOOLS,
+        subagents=[_ECHO_PROBE_SUBAGENT],
     )
