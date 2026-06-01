@@ -173,6 +173,13 @@ _ECHO_PROBE_SUBAGENT: SubAgent = {
 }
 
 
+# Bounded working-context window for the main chat thread (a persistent
+# singleton). Only the most recent N turns stay live in the agent's thread;
+# older history remains in pai_chat_messages (display) + pai_memory (recall).
+# Trimmed turn-over-turn via langgraph RemoveMessage (see runtime/trim.py).
+MAIN_CHAT_KEEP_TURNS = 12
+
+
 def make_main_chat_agent(
     *,
     virtual_key: str,
