@@ -1,5 +1,0 @@
-app = 'proactive-ai-openclaw'
-primary_region = 'iad'
-
-[build]
-  dockerfile = 'pinai-openclaw/image/Dockerfile'
