@@ -562,6 +562,10 @@ class ChatHistoryResponse(_CamelModel):
 
     ok: bool = True
     messages: list[dict[str, Any]] = Field(default_factory=list)
+    # Pagination cursor for "load older": the smallest message id in this
+    # page when more history may exist before it (else None). Frontend passes
+    # it back as `beforeId` to fetch the previous (older) page.
+    next_cursor: int | None = None
 
 
 class ClientHints(_CamelModel):
