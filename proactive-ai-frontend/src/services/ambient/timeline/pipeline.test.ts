@@ -127,7 +127,9 @@ describe("LocalAmbientTimelinePipeline", () => {
       kind: "health.observation",
       title: "Daily steps",
       summary: "8120 steps today",
-      occurred_at: "2026-05-15T05:00:00.000Z",
+      // 15:00 UTC is past MORNING_CUTOFF_HOUR (12), so this reads as an
+      // afternoon step count (tests run with TZ=UTC; see testSetup.ts).
+      occurred_at: "2026-05-15T15:00:00.000Z",
       payload: {
         metric: "steps",
         observations: [{ metric: "steps", value: 8120, unit: "count" }],
