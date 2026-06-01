@@ -251,7 +251,11 @@ async def test_composio_multi_execute_post(mock_http, jwt_ctx):
     call = mock_http[0]
     assert call["method"] == "POST"
     assert call["path"] == "/api/agent/composio/meta/MULTI_EXECUTE_TOOL"
-    assert call["body"]["args"]["calls"][0]["tool_slug"] == "GMAIL_CREATE_EMAIL_DRAFT"
+    # The tool maps the LLM-facing `calls` arg onto Composio's actual
+    # MULTI_EXECUTE_TOOL payload shape: `tools` + sync_response_to_workbench.
+    # See composio_meta.py composio_multi_execute_tool.
+    assert call["body"]["args"]["tools"][0]["tool_slug"] == "GMAIL_CREATE_EMAIL_DRAFT"
+    assert call["body"]["args"]["sync_response_to_workbench"] is False
 
 
 @pytest.mark.asyncio
