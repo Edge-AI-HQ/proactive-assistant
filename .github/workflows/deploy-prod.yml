@@ -36,7 +36,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: astral-sh/setup-uv@v8
+      - uses: astral-sh/setup-uv@v7
 
       - name: Decrypt DAYTONA_API_KEY from .env.production
         working-directory: pinai-agents
