@@ -260,6 +260,7 @@ def _create_blocking(
     labels = {_LABEL_THREAD: thread_id} if thread_id else None
 
     snapshot = os.environ.get("PINAI_DAYTONA_SNAPSHOT")
+    params: daytona.CreateSandboxFromSnapshotParams | daytona.CreateSandboxFromImageParams
     if snapshot:
         params = daytona.CreateSandboxFromSnapshotParams(
             snapshot=snapshot,
@@ -322,8 +323,13 @@ def _delete_blocking(raw: daytona.Sandbox) -> None:
     raw.delete()
 
 
-def _refresh_state_blocking(raw: daytona.Sandbox) -> daytona.SandboxState:
-    """Pull fresh state from Daytona. Raises if sandbox no longer exists."""
+def _refresh_state_blocking(raw: daytona.Sandbox) -> daytona.SandboxState | None:
+    """Pull fresh state from Daytona. Raises if sandbox no longer exists.
+
+    `state` may be None if the SDK hasn't populated it; the caller routes
+    that through _state_name() (which normalizes None → "none"), so keep it
+    in the return type rather than forcing a raise here.
+    """
     raw.refresh_data()
     return raw.state
 

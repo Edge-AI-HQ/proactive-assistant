@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from psycopg import AsyncConnection
+from psycopg.rows import DictRow
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ class ExtractedPatternCandidate:
 
 
 async def run_pattern_extractor(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     lookback_days: int = LOOKBACK_DAYS,
     min_cluster_size: int = MIN_CLUSTER_SIZE,
@@ -100,7 +101,7 @@ async def run_pattern_extractor(
 
 
 async def _fetch_recent_golden(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     lookback_days: int,
 ) -> list[dict[str, Any]]:
@@ -157,7 +158,7 @@ def _cluster_by_intent(
     return dict(clusters)
 
 
-async def _existing_intent_keys(conn: AsyncConnection) -> set[str]:
+async def _existing_intent_keys(conn: AsyncConnection[DictRow]) -> set[str]:
     """intent_keys already covered by an active or pending pattern. We
     treat the pattern's `intent` column as the join key — patterns whose
     seed intent matches an extracted cluster's intent_key are considered
@@ -205,7 +206,7 @@ def _synthesize_pattern(
 
 
 async def _upsert_candidate(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     candidate: ExtractedPatternCandidate,
     items: list[dict[str, Any]],
 ) -> None:

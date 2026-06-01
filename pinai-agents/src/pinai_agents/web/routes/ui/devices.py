@@ -504,9 +504,8 @@ async def ingest_devices(
     """
     device = await _verify_device(pool, x_device_id or "", x_device_token or "")
 
-    is_array = isinstance(body, list)
-    wrapper_device_id = "" if is_array else str(body.get("deviceId") or "").strip()
-    items_raw = body if is_array else (body.get("items") or [])
+    wrapper_device_id = "" if isinstance(body, list) else str(body.get("deviceId") or "").strip()
+    items_raw = body if isinstance(body, list) else (body.get("items") or [])
     if not isinstance(items_raw, list):
         raise HTTPException(400, "items must be an array")
 

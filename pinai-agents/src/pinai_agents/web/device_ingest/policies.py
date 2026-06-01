@@ -300,12 +300,16 @@ DEVICE_INGEST_POLICIES: dict[str, DeviceIngestPolicy] = {
 }
 
 
+def _unknown_kind_signal(
+    item: DeviceIngestItem,
+    _opts: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return build_default_signal(item, {"fallback_reason": "unknown_kind"})
+
+
 UNKNOWN_KIND_POLICY = DeviceIngestPolicy(
     mode="signal_only",
-    build_signal=lambda item, _opts=None: build_default_signal(
-        item,
-        {"fallback_reason": "unknown_kind"},
-    ),
+    build_signal=_unknown_kind_signal,
 )
 
 

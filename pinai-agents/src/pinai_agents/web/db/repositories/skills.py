@@ -8,6 +8,7 @@ Repository signature stays stable.
 
 from __future__ import annotations
 
+import builtins
 import hashlib
 import json
 import uuid
@@ -117,7 +118,7 @@ class SkillsRepository(UserScopedRepository):
         title: str,
         body: str,
         description: str | None = None,
-        triggers: list[str] | None = None,
+        triggers: builtins.list[str] | None = None,
         status: str = "enabled",
         source: str = "manual",
         created_run_id: str | None = None,
@@ -163,7 +164,7 @@ class SkillsRepository(UserScopedRepository):
         title: str | None = None,
         description: str | None = None,
         body: str | None = None,
-        triggers: list[str] | None = None,
+        triggers: builtins.list[str] | None = None,
         status: str | None = None,
         last_updated_run_id: str | None = None,
     ) -> SkillRow | None:

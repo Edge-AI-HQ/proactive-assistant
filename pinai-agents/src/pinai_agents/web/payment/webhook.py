@@ -276,6 +276,7 @@ async def _handle_invoice_paid(conn, invoice: Any) -> None:
     pre_sync = await subscriptions.get_for_user(conn, user_id)
     if pending is None:
         pending = pre_sync.pending_plan_code if pre_sync else None
+    plan_code: str | None
     if pending:
         plan_code = pending
         logger.info(

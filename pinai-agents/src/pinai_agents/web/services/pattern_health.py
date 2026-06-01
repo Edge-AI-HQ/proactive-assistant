@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from psycopg import AsyncConnection
+from psycopg.rows import DictRow
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ class PatternHealthRow:
 
 
 async def compute_pattern_health_one(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     pattern_id: str,
 ) -> PatternHealthRow | None:
     """Single-pattern variant for the detail page (avoids scanning the
@@ -88,7 +89,7 @@ async def compute_pattern_health_one(
 
 
 async def compute_pattern_health(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     pattern_id: str | None = None,
 ) -> list[PatternHealthRow]:
@@ -230,7 +231,7 @@ async def compute_pattern_health(
     return out
 
 
-async def run_pattern_health_job(conn: AsyncConnection) -> dict[str, Any]:
+async def run_pattern_health_job(conn: AsyncConnection[DictRow]) -> dict[str, Any]:
     """Daily job entry point. Updates base_hit_rate + auto-retires.
 
     Returns a small summary the scheduler can log.

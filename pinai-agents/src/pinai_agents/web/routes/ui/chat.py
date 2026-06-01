@@ -31,7 +31,7 @@ from ....shared.api_models import (
 )
 from ...auth.deps import User, current_user, get_pool
 from ...db.repositories.chat_messages import ChatMessagesRepository
-from ...db.repositories.chat_threads import ChatThreadsRepository
+from ...db.repositories.chat_threads import ChatThreadsRepository, ThreadKind
 from ...db.rls import user_scoped_tx
 from ...services.chat_proxy import (
     call_chat_exists,
@@ -43,7 +43,7 @@ from ...services.chat_turn_recorder import ChatTurnRecorder
 _CARD_THREAD_PREFIX = "card-thread-"
 
 
-def _classify_session_key(session_key: str, user_id: int) -> tuple[str, str | None]:
+def _classify_session_key(session_key: str, user_id: int) -> tuple[ThreadKind, str | None]:
     """Map a session_key to (kind, card_id) for pai_chat_threads.
 
     Validates that frontend-provided session_keys belong to the calling
@@ -92,7 +92,7 @@ async def chat_init(
     user, history accumulates" — see migration 053 for the cleanup +
     UNIQUE constraint enforcing this going forward.
     """
-    kind: str
+    kind: ThreadKind
     card_id: str | None
 
     if body.session_key:

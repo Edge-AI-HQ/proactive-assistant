@@ -6,6 +6,7 @@ The frontend POSTs every card action through /api/feedback. Schema:
 
 from __future__ import annotations
 
+import builtins
 import json
 import uuid
 from dataclasses import dataclass
@@ -172,7 +173,7 @@ class FeedbackRepository(UserScopedRepository):
             rows = await cur.fetchall()
         return [FeedbackRow.from_record(r) for r in rows]
 
-    async def list_dismissed_card_ids(self) -> list[str]:
+    async def list_dismissed_card_ids(self) -> builtins.list[str]:
         """Returns intent_card_ids the user has dismissed.
         Used by frontend to filter cards out of the timeline."""
         async with self._conn.cursor() as cur:
@@ -189,7 +190,7 @@ class FeedbackRepository(UserScopedRepository):
             rows = await cur.fetchall()
         return [r["intent_card_id"] for r in rows]
 
-    async def list_completed_card_ids(self) -> list[str]:
+    async def list_completed_card_ids(self) -> builtins.list[str]:
         """Returns intent_card_ids the user has marked complete.
         Mirrors list_dismissed_card_ids — without it, the sphere's
         doneIds Set resets to empty on refresh and completed cards

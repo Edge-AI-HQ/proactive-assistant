@@ -750,10 +750,14 @@ class BrowserManager:
         evt_type: str,
         data: dict,
     ) -> None:
+        # Construct via the camelCase alias: mypy models pydantic through
+        # dataclass_transform, which uses field aliases and does not honor
+        # populate_by_name, so `trace_id=` (valid at runtime) is rejected
+        # statically. The alias works under both configs.
         ev = SSEEvent(
             type=evt_type,
             ts=int(time.time() * 1000),
-            trace_id=session_key,
+            traceId=session_key,
             data=data,
         )
         await browser_events.publish(session_key, ev.to_wire())

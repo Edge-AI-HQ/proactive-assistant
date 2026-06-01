@@ -6,6 +6,7 @@ debug panel (read runs list / single run detail).
 
 from __future__ import annotations
 
+import builtins
 import json
 import uuid
 from dataclasses import dataclass
@@ -167,7 +168,7 @@ class EvolutionRepository(UserScopedRepository):
         memories_archived: int | None = None,
         memories_superseded: int | None = None,
         profile_updated: bool | None = None,
-        profile_changed_keys: list[str] | None = None,
+        profile_changed_keys: builtins.list[str] | None = None,
         skills_added: int | None = None,
         skills_updated: int | None = None,
         skills_disabled: int | None = None,

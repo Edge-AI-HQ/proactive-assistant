@@ -281,7 +281,9 @@ async def _persist_evaluations(
     if not evaluations:
         return
     basket_by_card: dict[str, str | None] = {
-        c.get("id"): c.get("goalBasket") for c in cards if isinstance(c, dict)
+        cid: c.get("goalBasket")
+        for c in cards
+        if isinstance(c, dict) and isinstance(cid := c.get("id"), str)
     }
     inserted = 0
     for ev in evaluations:
@@ -403,7 +405,10 @@ async def generate(
         # debug); otherwise read user's persisted setting. Fixes the case
         # where the UI never sent the param and every run silently fell
         # back to "en" regardless of `generation_language`.
-        output_language = body.output_language
+        # Widen to str | None: body carries the OutputLanguage Literal, but the
+        # persisted-settings fallback is a plain str and the value only flows
+        # into an opaque task payload below.
+        output_language: str | None = body.output_language
         if output_language is None:
             settings = await ProfileRepository(user.id, conn).get_settings()
             output_language = settings.generation_language

@@ -161,8 +161,8 @@ async def _cleanup_stripe(
         # webhook handlers run their own short queries; a deletion
         # endpoint chains several network calls so the cost adds up.
         await asyncio.to_thread(
-            stripe.Subscription.delete,
-            sub.stripe_subscription_id,  # type: ignore[attr-defined]
+            stripe.Subscription.delete,  # type: ignore[attr-defined]  # get_stripe() is typed object | None
+            sub.stripe_subscription_id,
         )
         result.stripe_subscription_canceled = True
     except Exception as e:  # noqa: BLE001 — stripe SDK raises many concrete types

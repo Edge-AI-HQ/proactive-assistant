@@ -29,6 +29,7 @@ from datetime import UTC, datetime, timedelta
 from threading import Lock
 
 from psycopg import AsyncConnection
+from psycopg.rows import DictRow
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,7 @@ _CACHE_MISS = _Sentinel()
 
 
 async def mint(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     user_id: int,
     scope_label: str | None,
@@ -136,7 +137,7 @@ async def mint(
 
 
 async def bind_sandbox(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     token_hash: str,
     sandbox_id: str,
@@ -160,7 +161,7 @@ async def bind_sandbox(
 
 
 async def resolve(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     raw_token: str,
 ) -> _PhantomResolved | None:
@@ -205,7 +206,7 @@ async def resolve(
 
 
 async def revoke_by_token(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     raw_token: str,
     reason: str | None = None,
@@ -232,7 +233,7 @@ async def revoke_by_token(
 
 
 async def revoke_by_sandbox(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     sandbox_id: str,
     user_id: int,
@@ -259,7 +260,7 @@ async def revoke_by_sandbox(
     return len(rows)
 
 
-async def sweep_expired(conn: AsyncConnection, *, retain_days: int = 7) -> int:
+async def sweep_expired(conn: AsyncConnection[DictRow], *, retain_days: int = 7) -> int:
     """Drop rows whose TTL elapsed > retain_days ago. Run nightly.
 
     Retention beyond expires_at gives us forensic window: if an incident

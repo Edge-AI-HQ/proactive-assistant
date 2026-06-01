@@ -13,6 +13,7 @@ from datetime import date, datetime
 from typing import Any, Literal
 
 from psycopg import AsyncConnection
+from psycopg.rows import DictRow
 
 PersonalDataCategory = Literal[
     "all",
@@ -275,7 +276,7 @@ def _section(key: str, items: list[dict[str, Any]], total: int) -> dict[str, Any
 
 
 class PersonalDataSnapshotService:
-    def __init__(self, conn: AsyncConnection, user_id: int) -> None:
+    def __init__(self, conn: AsyncConnection[DictRow], user_id: int) -> None:
         self._conn = conn
         self._user_id = user_id
 

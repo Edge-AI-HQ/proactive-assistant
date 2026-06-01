@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, cast
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-from psycopg.rows import dict_row
+from psycopg import AsyncConnection
+from psycopg.rows import DictRow, dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from ...config import get_chat_settings
@@ -108,7 +109,13 @@ async def init_checkpointer() -> AsyncPostgresSaver:
     await _pool.open()
     await _ensure_schema(_pool, schema)
 
-    _checkpointer = AsyncPostgresSaver(_pool)
+    # The pool is configured with row_factory=dict_row (kwargs above), so it
+    # yields dict rows at runtime — the type AsyncPostgresSaver requires. The
+    # pool type can't carry row_factory through, so assert it at this single
+    # boundary (mirrors web/db/rls.py).
+    _checkpointer = AsyncPostgresSaver(
+        cast("AsyncConnectionPool[AsyncConnection[DictRow]]", _pool),
+    )
     await _checkpointer.setup()
     logger.info("langgraph checkpointer ready (schema=%s)", schema)
     return _checkpointer

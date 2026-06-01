@@ -36,6 +36,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from psycopg import AsyncConnection
+from psycopg.rows import DictRow
 from psycopg_pool import AsyncConnectionPool
 
 from ..auth.user_service import load_user_by_id
@@ -73,7 +74,7 @@ _BOOTSTRAP_LOOKBACK = timedelta(hours=24)
 
 # Upserter: (conn, user_id, items) → newly-inserted count.
 Upserter = Callable[
-    [AsyncConnection, int, list[dict[str, Any]]],
+    [AsyncConnection[DictRow], int, list[dict[str, Any]]],
     Awaitable[int],
 ]
 
@@ -87,6 +88,17 @@ def _clamp_limit(value: Any) -> int:
     except (TypeError, ValueError):
         return _DEFAULT_LIMIT
     return max(1, min(n, _MAX_LIMIT))
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    """Coerce an untrusted nested value to a dict, defaulting to empty.
+
+    Connector payloads are arbitrary JSON; mapping code walks them
+    defensively. Assigning through this helper (rather than the inline
+    `v if isinstance(v, dict) else {}`) lets the type narrow to dict so
+    chained `.get()` calls stay type-checked.
+    """
+    return value if isinstance(value, dict) else {}
 
 
 async def run(
@@ -159,7 +171,7 @@ async def _mark_skipped(
 
 
 async def _enqueue_evolve(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     user_id: int,
     toolkit: str,
@@ -179,7 +191,7 @@ async def _enqueue_evolve(
 
 
 async def _ensure_sync_schedule(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     user_id: int,
     toolkit: str,
@@ -588,7 +600,7 @@ def _gen_raw_id() -> str:
 
 
 async def _upsert_gmail(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     user_id: int,
     items: list[dict[str, Any]],
 ) -> int:
@@ -639,7 +651,7 @@ async def _upsert_gmail(
 
 
 async def _upsert_gcal(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     user_id: int,
     items: list[dict[str, Any]],
 ) -> int:
@@ -778,7 +790,7 @@ def _map_github_issue(issue: dict[str, Any]) -> dict[str, Any] | None:
 
 
 async def _upsert_github_issues(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     user_id: int,
     items: list[dict[str, Any]],
 ) -> int:
@@ -925,7 +937,7 @@ def _map_slack_message(msg: dict[str, Any]) -> dict[str, Any] | None:
 
 
 async def _upsert_slack_messages(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     user_id: int,
     items: list[dict[str, Any]],
 ) -> int:
@@ -1047,7 +1059,7 @@ def _map_gdrive_file(file: dict[str, Any]) -> dict[str, Any] | None:
 
 
 async def _upsert_gdrive_files(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     user_id: int,
     items: list[dict[str, Any]],
 ) -> int:
@@ -1161,7 +1173,7 @@ def _map_calendly_event(evt: dict[str, Any]) -> dict[str, Any] | None:
 
 
 async def _upsert_calendly_events(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     user_id: int,
     items: list[dict[str, Any]],
 ) -> int:
@@ -1299,7 +1311,7 @@ def _map_linkedin_profile(profile: dict[str, Any]) -> dict[str, Any] | None:
 
 
 async def _upsert_linkedin_profile(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     user_id: int,
     items: list[dict[str, Any]],
 ) -> int:
@@ -1431,7 +1443,7 @@ def _map_stripe_invoice(inv: dict[str, Any]) -> dict[str, Any] | None:
 
 
 async def _upsert_stripe_invoices(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     user_id: int,
     items: list[dict[str, Any]],
 ) -> int:
@@ -1510,8 +1522,8 @@ def _map_youtube_subscription(sub: dict[str, Any]) -> dict[str, Any] | None:
     if not subscription_id:
         return None
 
-    snippet = sub.get("snippet") if isinstance(sub.get("snippet"), dict) else {}
-    resource = snippet.get("resourceId") if isinstance(snippet.get("resourceId"), dict) else {}
+    snippet = _as_dict(sub.get("snippet"))
+    resource = _as_dict(snippet.get("resourceId"))
     channel_id = str(resource.get("channelId") or "").strip()
     if not channel_id:
         # Some Composio shapes flatten resourceId; tolerate top-level fields.
@@ -1519,8 +1531,8 @@ def _map_youtube_subscription(sub: dict[str, Any]) -> dict[str, Any] | None:
     if not channel_id:
         return None
 
-    thumbnails = snippet.get("thumbnails") if isinstance(snippet.get("thumbnails"), dict) else {}
-    thumb_default = thumbnails.get("default") if isinstance(thumbnails.get("default"), dict) else {}
+    thumbnails = _as_dict(snippet.get("thumbnails"))
+    thumb_default = _as_dict(thumbnails.get("default"))
     thumb_url = thumb_default.get("url") if isinstance(thumb_default.get("url"), str) else None
 
     subscribed_at = _parse_iso(snippet.get("publishedAt"))
@@ -1540,7 +1552,7 @@ def _map_youtube_subscription(sub: dict[str, Any]) -> dict[str, Any] | None:
 
 
 async def _upsert_youtube_subscriptions(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     user_id: int,
     items: list[dict[str, Any]],
 ) -> int:
