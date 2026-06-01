@@ -75,13 +75,14 @@ class ChatTurnRecorder:
             self._parts.append(part)
             self._tool_index[tool_call_id] = part
         elif etype == EV_CHAT_TOOL_RESULT:
-            part = self._tool_index.get(data.get("toolCallId"))
-            if part is None:
+            tool_call_id = data.get("toolCallId")
+            existing = self._tool_index.get(tool_call_id) if isinstance(tool_call_id, str) else None
+            if existing is None:
                 return
-            part["status"] = "error" if data.get("isError") else "ok"
+            existing["status"] = "error" if data.get("isError") else "ok"
             meta = data.get("meta")
             if isinstance(meta, str) and meta:
-                part["meta"] = meta[:_META_LIMIT]
+                existing["meta"] = meta[:_META_LIMIT]
 
     def _append_text(self, kind: str, delta: str) -> None:
         if not delta:

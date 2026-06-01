@@ -28,11 +28,12 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from psycopg import AsyncConnection
+from psycopg.rows import DictRow
 
 logger = logging.getLogger(__name__)
 
 
-async def build_phase1_seed(conn: AsyncConnection, user_id: int) -> dict[str, Any]:
+async def build_phase1_seed(conn: AsyncConnection[DictRow], user_id: int) -> dict[str, Any]:
     """Best-effort coarse phase1 for the matcher.
 
     Schema layout matches what the matcher's op-specific evaluators look
@@ -50,7 +51,7 @@ async def build_phase1_seed(conn: AsyncConnection, user_id: int) -> dict[str, An
 
 
 async def _collect_personal_signals_summary(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     user_id: int,
 ) -> dict[str, Any]:
     try:
@@ -78,7 +79,7 @@ async def _collect_personal_signals_summary(
     }
 
 
-async def _collect_memory(conn: AsyncConnection, user_id: int) -> dict[str, Any]:
+async def _collect_memory(conn: AsyncConnection[DictRow], user_id: int) -> dict[str, Any]:
     """Pull memory rows that smell like recurring obligations / birthdays
     so `birthday_within_days` / `anniversary_within_days` can fire.
 
@@ -131,7 +132,7 @@ async def _collect_memory(conn: AsyncConnection, user_id: int) -> dict[str, Any]
 
 
 async def _collect_world_summary(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     user_id: int,
 ) -> dict[str, Any]:
     try:
@@ -155,7 +156,7 @@ async def _collect_world_summary(
     }
 
 
-async def _collect_calendar(conn: AsyncConnection, user_id: int) -> dict[str, Any]:
+async def _collect_calendar(conn: AsyncConnection[DictRow], user_id: int) -> dict[str, Any]:
     """Calendar events arrive as pai_personal_signals.source='calendar'
     rows. The connector stores the event body in `payload`; the start
     time is `occurred_at`."""
@@ -201,7 +202,7 @@ async def _collect_calendar(conn: AsyncConnection, user_id: int) -> dict[str, An
     return {"events": events}
 
 
-async def _collect_gmail(conn: AsyncConnection, user_id: int) -> dict[str, Any]:
+async def _collect_gmail(conn: AsyncConnection[DictRow], user_id: int) -> dict[str, Any]:
     """Surface pai_personal_signals.source='gmail' items flagged is_vip
     in their payload so `unresponded_to_vip` can fire."""
     try:
@@ -237,7 +238,7 @@ async def _collect_gmail(conn: AsyncConnection, user_id: int) -> dict[str, Any]:
     return {"unresponded_to_vip": threads}
 
 
-async def _collect_profile(conn: AsyncConnection, user_id: int) -> dict[str, Any]:
+async def _collect_profile(conn: AsyncConnection[DictRow], user_id: int) -> dict[str, Any]:
     try:
         async with conn.cursor() as cur:
             await cur.execute(

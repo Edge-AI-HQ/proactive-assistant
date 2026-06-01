@@ -91,6 +91,9 @@ class VoiceIdentityRepository(UserScopedRepository):
                 ),
             )
             row = await cur.fetchone()
+        if row is None:  # UPSERT ... RETURNING always yields a row
+            msg = "voice identity upsert did not return a row"
+            raise RuntimeError(msg)
         return VoiceIdentityProfileRow.from_record(row)
 
     async def set_enabled(self, enabled: bool) -> VoiceIdentityProfileRow | None:

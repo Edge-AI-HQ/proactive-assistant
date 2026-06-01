@@ -44,6 +44,9 @@ class ChatMessagesRepository(UserScopedRepository):
                 (self.user_id, thread_id, role, Jsonb(parts)),
             )
             row = await cur.fetchone()
+            if row is None:  # INSERT ... RETURNING id always yields a row
+                msg = "append: INSERT did not return an id"
+                raise RuntimeError(msg)
             return int(row["id"])
 
     async def bulk_append(

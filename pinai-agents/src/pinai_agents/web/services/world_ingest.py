@@ -217,7 +217,15 @@ def _parse_feed(body: bytes) -> list[_ParsedItem]:
         pp = getattr(entry, "published_parsed", None) or getattr(entry, "updated_parsed", None)
         if pp is not None:
             try:
-                published_at = datetime(*pp[:6], tzinfo=UTC)
+                published_at = datetime(
+                    pp[0],
+                    pp[1],
+                    pp[2],
+                    pp[3],
+                    pp[4],
+                    pp[5],
+                    tzinfo=UTC,
+                )
             except Exception:
                 published_at = None
         external_id = getattr(entry, "id", None) or getattr(entry, "guid", None)

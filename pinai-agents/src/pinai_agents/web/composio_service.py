@@ -216,7 +216,8 @@ def _gmail_label(d: dict[str, Any]) -> str | None:
 
 
 def _slack_label(d: dict[str, Any]) -> str | None:
-    user = d.get("user") if isinstance(d.get("user"), dict) else {}
+    user = d.get("user")
+    user = user if isinstance(user, dict) else {}
     return _first_str(user.get("email"), user.get("real_name"), user.get("name"))
 
 
@@ -236,13 +237,15 @@ def _linkedin_label(d: dict[str, Any]) -> str | None:
 
 
 def _calendly_label(d: dict[str, Any]) -> str | None:
-    resource = d.get("resource") if isinstance(d.get("resource"), dict) else d
+    resource = d.get("resource")
+    resource = resource if isinstance(resource, dict) else d
     return _first_str(resource.get("email"), resource.get("name"))
 
 
 def _googledrive_label(d: dict[str, Any]) -> str | None:
     # GOOGLEDRIVE_GET_ABOUT response shape: {user: {emailAddress, displayName, ...}, ...}.
-    user = d.get("user") if isinstance(d.get("user"), dict) else {}
+    user = d.get("user")
+    user = user if isinstance(user, dict) else {}
     return _first_str(user.get("emailAddress"), user.get("displayName"))
 
 
@@ -255,10 +258,14 @@ def _googlecalendar_label(d: dict[str, Any]) -> str | None:
 def _youtube_label(d: dict[str, Any]) -> str | None:
     # YOUTUBE_GET_CHANNEL_STATISTICS(mine=true, part="snippet,statistics"):
     # response shape: {items: [{snippet: {title, customUrl, ...}, ...}, ...], ...}
-    items = d.get("items") if isinstance(d.get("items"), list) else []
-    if not items or not isinstance(items[0], dict):
+    items = d.get("items")
+    if not isinstance(items, list) or not items:
         return None
-    snippet = items[0].get("snippet") if isinstance(items[0].get("snippet"), dict) else {}
+    first = items[0]
+    if not isinstance(first, dict):
+        return None
+    snippet = first.get("snippet")
+    snippet = snippet if isinstance(snippet, dict) else {}
     return _first_str(snippet.get("customUrl"), snippet.get("title"))
 
 
@@ -541,10 +548,13 @@ async def connect(user: User, toolkit: str) -> ConnectInit:
     if not cid or not redirect:
         msg = "link response missing id / redirect_url"
         raise ComposioError(500, msg)
+    # Construct via camelCase aliases — mypy's dataclass_transform view of
+    # pydantic uses field aliases and ignores populate_by_name, so the
+    # snake_case names (valid at runtime) are rejected statically.
     return ConnectInit(
         toolkit=toolkit,
-        connected_account_id=cid,
-        redirect_url=redirect,
+        connectedAccountId=cid,
+        redirectUrl=redirect,
     )
 
 

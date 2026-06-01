@@ -152,7 +152,6 @@ async def _ensure_thread_row(
                 thread_id=session_key,
                 kind="card",
                 card_id=card_id,
-                title=None,
             )
     except Exception:
         logger.exception(

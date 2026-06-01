@@ -615,6 +615,7 @@ async def reconcile_subscription_from_stripe(
             # line with the plan cap + zero the spend window. Idempotent
             # if the invoice.paid webhook fires later: webhook re-syncs
             # the same plan/budget pair, no drift.
+            assert plan_code is not None  # implied by is_first_subscribe
             await sync_litellm_budget_for_plan(
                 conn,
                 user.id,

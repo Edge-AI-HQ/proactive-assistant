@@ -21,8 +21,10 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import cast
 
 from psycopg import AsyncConnection
+from psycopg.rows import DictRow
 from psycopg_pool import AsyncConnectionPool
 
 logger = logging.getLogger(__name__)
@@ -39,7 +41,7 @@ def _validate_user_id(user_id: int) -> None:
 async def user_scoped_tx(
     pool: AsyncConnectionPool,
     user_id: int,
-) -> AsyncIterator[AsyncConnection]:
+) -> AsyncIterator[AsyncConnection[DictRow]]:
     """Acquire a connection, BEGIN, SET LOCAL app.user_id, yield.
 
     On exit: COMMIT on clean exit, ROLLBACK on exception. The pool's
@@ -56,11 +58,18 @@ async def user_scoped_tx(
             "SELECT set_config('app.user_id', %s, true)",
             (str(user_id),),
         )
-        yield conn
+        # The web pool is configured with row_factory=dict_row (see
+        # db/pool.py), so every borrowed connection yields dict rows at
+        # runtime. The pool/connection type can't carry that through, so
+        # assert it once here at the single DB-access boundary — downstream
+        # repositories then see correctly-typed dict cursors.
+        yield cast("AsyncConnection[DictRow]", conn)
 
 
 @asynccontextmanager
-async def service_tx(pool: AsyncConnectionPool) -> AsyncIterator[AsyncConnection]:
+async def service_tx(
+    pool: AsyncConnectionPool,
+) -> AsyncIterator[AsyncConnection[DictRow]]:
     """Acquire a connection WITHOUT user_id scope. Use for ops / scheduler /
     migrations — caller takes responsibility for not leaking cross-user
     data.
@@ -71,4 +80,5 @@ async def service_tx(pool: AsyncConnectionPool) -> AsyncIterator[AsyncConnection
     tick scanning all users' tasks).
     """
     async with pool.connection() as conn, conn.transaction():
-        yield conn
+        # See user_scoped_tx — pool is row_factory=dict_row at runtime.
+        yield cast("AsyncConnection[DictRow]", conn)

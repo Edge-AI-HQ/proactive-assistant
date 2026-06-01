@@ -879,7 +879,8 @@ async def add_pattern_demo(
                 detail = await reward_repo.get_card_detail(card_id)
                 if detail is None:
                     raise HTTPException(status_code=404, detail="card not found")
-                card_snapshot = detail.get("card") if isinstance(detail.get("card"), dict) else {}
+                card_raw = detail.get("card")
+                card_snapshot = card_raw if isinstance(card_raw, dict) else {}
                 if not card_snapshot:
                     raise HTTPException(status_code=404, detail="card body missing")
             else:

@@ -28,12 +28,13 @@ Anti-patterns this layer enforces (by convention + test):
 from __future__ import annotations
 
 from psycopg import AsyncConnection
+from psycopg.rows import DictRow
 
 
 class UserScopedRepository:
     """Base class. Concrete subclasses live in this directory."""
 
-    def __init__(self, user_id: int, conn: AsyncConnection) -> None:
+    def __init__(self, user_id: int, conn: AsyncConnection[DictRow]) -> None:
         if not isinstance(user_id, int) or user_id <= 0:
             msg = f"user_id must be a positive int, got {user_id!r}"
             raise ValueError(msg)
@@ -45,5 +46,5 @@ class UserScopedRepository:
         return self._user_id
 
     @property
-    def conn(self) -> AsyncConnection:
+    def conn(self) -> AsyncConnection[DictRow]:
         return self._conn

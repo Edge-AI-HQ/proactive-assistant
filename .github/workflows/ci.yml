@@ -69,14 +69,9 @@ jobs:
         working-directory: pinai-agents
         run: uv run ruff format --check
 
-      # continue-on-error: ~313 pre-existing mypy errors (single root cause —
-      # cursors not declaring row_factory=dict_row, so dict rows read as
-      # tuples). Reported but non-blocking until the cleanup PR lands; drop
-      # this line afterwards so mypy becomes a hard gate.
       - name: mypy
         working-directory: pinai-agents
         run: uv run mypy src
-        continue-on-error: true
 
       - name: pytest
         working-directory: pinai-agents

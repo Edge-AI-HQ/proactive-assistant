@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, Header, status
 from psycopg import AsyncConnection
+from psycopg.rows import DictRow
 
 from ....shared.api_models import (
     GoalUpsertRequest,
@@ -52,7 +53,7 @@ def _next_auto_dreaming_fire(
     return target.astimezone(UTC)
 
 
-async def _profile_timezone(conn: AsyncConnection, *, user_id: int) -> str:
+async def _profile_timezone(conn: AsyncConnection[DictRow], *, user_id: int) -> str:
     async with conn.cursor() as cur:
         await cur.execute(
             "SELECT timezone FROM pai_profile WHERE user_id=%s LIMIT 1",
@@ -68,7 +69,7 @@ async def _profile_timezone(conn: AsyncConnection, *, user_id: int) -> str:
 
 
 async def _sync_auto_generate_schedule(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     user_id: int,
     settings: UserSettingsRow,
@@ -107,7 +108,7 @@ async def _sync_auto_generate_schedule(
 
 
 async def _sync_auto_dreaming_schedule(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     user_id: int,
     settings: UserSettingsRow,
@@ -144,7 +145,7 @@ async def _sync_auto_dreaming_schedule(
 
 
 async def _ensure_auto_generate_schedule(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     user_id: int,
     settings: UserSettingsRow,
@@ -183,7 +184,7 @@ async def _ensure_auto_generate_schedule(
 
 
 async def _ensure_auto_dreaming_schedule(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     user_id: int,
     settings: UserSettingsRow,
@@ -221,7 +222,7 @@ async def _ensure_auto_dreaming_schedule(
 
 
 async def _ensure_settings_schedules(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     user_id: int,
     settings: UserSettingsRow,

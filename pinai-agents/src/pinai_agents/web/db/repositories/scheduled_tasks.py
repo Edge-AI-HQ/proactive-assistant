@@ -27,6 +27,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from psycopg import AsyncConnection
+from psycopg.rows import DictRow
 
 from .base import UserScopedRepository
 
@@ -239,7 +240,9 @@ class ScheduledTasksRepository(UserScopedRepository):
 # These don't bind a user_id — the scheduler scans all users at once.
 
 
-async def claim_due_tasks(conn: AsyncConnection, *, batch: int = 16) -> list[ScheduledTaskRow]:
+async def claim_due_tasks(
+    conn: AsyncConnection[DictRow], *, batch: int = 16
+) -> list[ScheduledTaskRow]:
     """Atomic SKIP LOCKED claim of due tasks.
 
     Returns a snapshot of claimed tasks; caller computes next_run_at and
@@ -272,7 +275,7 @@ async def claim_due_tasks(conn: AsyncConnection, *, batch: int = 16) -> list[Sch
 
 
 async def update_after_fire(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     user_id: int,
     task_id: str,
@@ -322,7 +325,7 @@ def backoff_seconds_for_attempt(attempts: int) -> int:
 
 
 async def record_failure_and_decide(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     user_id: int,
     task_id: str,
@@ -382,7 +385,7 @@ async def record_failure_and_decide(
 
 
 async def archive_after_success(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     user_id: int,
     task_id: str,
@@ -407,7 +410,7 @@ async def archive_after_success(
 
 
 async def record_recurring_success(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     user_id: int,
     task_id: str,
@@ -430,7 +433,7 @@ async def record_recurring_success(
 
 
 async def update_progress(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     user_id: int,
     task_id: str,
@@ -458,7 +461,7 @@ async def update_progress(
 SCHEDULER_WAKE_CHANNEL = "pai_scheduler_wake"
 
 
-async def notify_scheduler_wake(conn: AsyncConnection) -> None:
+async def notify_scheduler_wake(conn: AsyncConnection[DictRow]) -> None:
     """Fire NOTIFY pai_scheduler_wake. Cheap — single round trip,
     no payload. Best-effort: a dropped notification at most causes one
     tick of latency (≤ scheduler_tick_seconds), never lost work.
@@ -471,7 +474,7 @@ async def notify_scheduler_wake(conn: AsyncConnection) -> None:
 
 
 async def enqueue_once(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     user_id: int,
     task_id: str,
@@ -507,7 +510,7 @@ async def enqueue_once(
 
 
 async def requeue_once(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     user_id: int,
     task_id: str,
@@ -550,7 +553,7 @@ async def requeue_once(
 
 
 async def insert_run(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     user_id: int,
     run_id: str,
@@ -582,7 +585,7 @@ async def insert_run(
 
 
 async def heartbeat_run(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     user_id: int,
     run_id: str,
@@ -605,7 +608,7 @@ async def heartbeat_run(
 
 
 async def complete_run(
-    conn: AsyncConnection,
+    conn: AsyncConnection[DictRow],
     *,
     user_id: int,
     run_id: str,
@@ -624,7 +627,7 @@ async def complete_run(
         )
 
 
-async def reap_stale_runs(conn: AsyncConnection) -> int:
+async def reap_stale_runs(conn: AsyncConnection[DictRow]) -> int:
     """Reset 'running' rows whose lease has expired. Crashed workers
     leave these lying around — bumping back to 'queued' lets the next
     tick re-claim them through normal due-task flow on the next cron
