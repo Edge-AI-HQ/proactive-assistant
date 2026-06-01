@@ -21,13 +21,20 @@ router = APIRouter(prefix="/api/feedback", tags=["feedback"])
 
 def _to_dict(row) -> dict[str, Any]:
     return {
-        "id": row.id, "kind": row.kind, "action": row.action,
-        "pushId": row.push_id, "intentCardId": row.intent_card_id,
-        "intentKey": row.intent_key, "source": row.source,
-        "basket": row.basket, "value": row.value, "text": row.text,
+        "id": row.id,
+        "kind": row.kind,
+        "action": row.action,
+        "pushId": row.push_id,
+        "intentCardId": row.intent_card_id,
+        "intentKey": row.intent_key,
+        "source": row.source,
+        "basket": row.basket,
+        "value": row.value,
+        "text": row.text,
         "metadata": row.metadata,
         "conversationId": row.conversation_id,
-        "messageId": row.message_id, "channel": row.channel,
+        "messageId": row.message_id,
+        "channel": row.channel,
         "createdAt": row.created_at.isoformat(),
     }
 

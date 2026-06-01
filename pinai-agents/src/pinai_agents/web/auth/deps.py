@@ -121,10 +121,7 @@ async def current_user(
 
     settings = get_web_settings()
     bypass_marker = _maybe_dev_bypass_marker(x_dev_auth)
-    if (
-        settings.deploy_env == "dev"
-        and bypass_marker == _DEV_AUTH_BYPASS_HEADER_VALUE
-    ):
+    if settings.deploy_env == "dev" and bypass_marker == _DEV_AUTH_BYPASS_HEADER_VALUE:
         logger.info("dev auth bypass active (DEPLOY_ENV=dev)")
         return await upsert_user_by_supabase_id(
             pool,
@@ -144,7 +141,9 @@ async def current_user(
         ) from e
 
     return await upsert_user_by_supabase_id(
-        pool, supabase_user_id=claims.sub, email=claims.email,
+        pool,
+        supabase_user_id=claims.sub,
+        email=claims.email,
     )
 
 
@@ -203,9 +202,8 @@ async def current_agent_run(
         # back to a sandbox-bound id, then to a generic placeholder so
         # the field is never empty (downstream repos write it as the
         # source_run_id on memory rows etc.).
-        run_id = (
-            resolved.scope_label
-            or (f"sbx_{resolved.sandbox_id}" if resolved.sandbox_id else "phantom")
+        run_id = resolved.scope_label or (
+            f"sbx_{resolved.sandbox_id}" if resolved.sandbox_id else "phantom"
         )
         return AgentRun(user_id=resolved.user_id, run_id=run_id, scope="agent")
 
@@ -227,7 +225,8 @@ async def current_agent_run(
             if await is_revoked(conn, claims.jti):
                 logger.info(
                     "agent JWT verify rejected — jti revoked: jti=%s user=%d",
-                    claims.jti, claims.user_id,
+                    claims.jti,
+                    claims.user_id,
                 )
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -235,8 +234,11 @@ async def current_agent_run(
                     headers={"WWW-Authenticate": "Bearer"},
                 )
     return AgentRun(
-        user_id=claims.user_id, run_id=claims.run_id, scope=claims.scope,
-        actor=claims.actor, operator_id=claims.operator_id,
+        user_id=claims.user_id,
+        run_id=claims.run_id,
+        scope=claims.scope,
+        actor=claims.actor,
+        operator_id=claims.operator_id,
     )
 
 

@@ -21,9 +21,14 @@ class BrowserControlMode(StrEnum):
     USER = "user"
 
 
-_READ_ONLY_ACTIONS = frozenset({
-    "snapshot", "get_text", "console", "request_takeover",
-})
+_READ_ONLY_ACTIONS = frozenset(
+    {
+        "snapshot",
+        "get_text",
+        "console",
+        "request_takeover",
+    }
+)
 
 
 class BrowserControlDenied(Exception):
@@ -31,7 +36,8 @@ class BrowserControlDenied(Exception):
 
 
 def assert_browser_action_allowed(
-    mode: BrowserControlMode, action: str,
+    mode: BrowserControlMode,
+    action: str,
 ) -> None:
     if action in _READ_ONLY_ACTIONS:
         return

@@ -32,6 +32,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PATTERNS_YAML = REPO_ROOT / "docs" / "data" / "patterns.yaml"
 DEMOS_YAML = REPO_ROOT / "docs" / "data" / "demo_cards.yaml"
 
+
 # Demo IDs are deterministic so re-runs upsert in place. The YAML doesn't
 # carry a stable id; pattern_id + index within that pattern is enough.
 def _demo_id(pattern_id: str, index: int) -> str:
@@ -75,7 +76,10 @@ def _coerce_pattern_row(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def _coerce_demo_row(
-    raw: dict[str, Any], *, demo_id: str, default_pattern_id: str | None = None,
+    raw: dict[str, Any],
+    *,
+    demo_id: str,
+    default_pattern_id: str | None = None,
 ) -> dict[str, Any]:
     pattern_id = raw.get("pattern_id") or default_pattern_id
     if not isinstance(pattern_id, str) or not pattern_id:
@@ -248,7 +252,9 @@ async def _run(dsn: str, *, dry_run: bool = False) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Seed pai_card_patterns + demos from docs/data YAMLs.")
+    parser = argparse.ArgumentParser(
+        description="Seed pai_card_patterns + demos from docs/data YAMLs."
+    )
     parser.add_argument("--dsn", help="Postgres DSN; defaults to $DATABASE_URL")
     parser.add_argument("--dry-run", action="store_true", help="Parse only, do not write")
     args = parser.parse_args()

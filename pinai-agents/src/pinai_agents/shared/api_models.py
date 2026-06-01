@@ -125,7 +125,14 @@ class PersonalSignalConsumeRequest(_CamelModel):
 # Generation language whitelist — server bound, frontend mirrors this in
 # `types/intent-card.ts:GENERATION_LANGUAGE_OPTIONS`. Keep in sync.
 SupportedLanguage = Literal[
-    "en", "zh-Hans", "ja", "ko", "es", "fr", "de", "pt",
+    "en",
+    "zh-Hans",
+    "ja",
+    "ko",
+    "es",
+    "fr",
+    "de",
+    "pt",
 ]
 
 
@@ -374,6 +381,7 @@ class GenerateResponse(_CamelModel):
 # top-level `GenerateResponse` (UI contract). _CamelModel is NOT used
 # below — these are agent-internal contracts, not HTTP wire shapes.
 
+
 class _AgentModel(BaseModel):
     """Strict variant — extra fields rejected so the LLM can't smuggle
     free-form prose into a structured response. Also camelCase aliases
@@ -393,16 +401,19 @@ class PlanItem(_AgentModel):
     from the card-generator subagent."""
 
     intent_key: str = Field(
-        min_length=1, max_length=120,
+        min_length=1,
+        max_length=120,
         description="Stable slug identifying this intent (e.g. 'brex-vendor-card-limit'). Used for downstream dedup with `cards.recent`.",
     )
     goal_basket: Literal["work", "health", "family", "wealth", "growth", "life"]
     decision: str = Field(
-        min_length=1, max_length=200,
+        min_length=1,
+        max_length=200,
         description="One sentence describing the decision the user can make.",
     )
     why_now_trigger: str = Field(
-        min_length=1, max_length=200,
+        min_length=1,
+        max_length=200,
         description="The concrete event/date/number that makes this timely RIGHT NOW.",
     )
     primary_source_ids: list[str] = Field(
@@ -427,7 +438,8 @@ class PlanOutput(_AgentModel):
         description="goal baskets the planner is treating as cold (recent dismisses without strong new evidence).",
     )
     notes: str = Field(
-        default="", max_length=3000,
+        default="",
+        max_length=3000,
         description="One-paragraph rationale: how plan reflects fresh signals, dedup, and feedback alignment.",
     )
     selected_pattern_ids: list[str] = Field(

@@ -84,14 +84,23 @@ def _sync_task(toolkit: str, user_id: int, cid: str) -> ScheduledTaskRow:
         user_id=user_id,
         id=f"sync.{toolkit}.{cid}",
         kind="connector.sync",
-        name=None, prompt=None,
-        trigger_kind="schedule", cron_expr="*/30 * * * *",
-        interval_seconds=None, event_filter=None,
+        name=None,
+        prompt=None,
+        trigger_kind="schedule",
+        cron_expr="*/30 * * * *",
+        interval_seconds=None,
+        event_filter=None,
         payload={"toolkit": toolkit, "connectedAccountId": cid},
-        timezone="UTC", status="active",
-        next_run_at=None, last_run_at=datetime.now(UTC),
-        last_run_status="dispatched", run_count=1,
-        attempts=0, max_attempts=3, progress={}, last_error=None,
+        timezone="UTC",
+        status="active",
+        next_run_at=None,
+        last_run_at=datetime.now(UTC),
+        last_run_status="dispatched",
+        run_count=1,
+        attempts=0,
+        max_attempts=3,
+        progress={},
+        last_error=None,
     )
 
 
@@ -109,17 +118,23 @@ def _patch_fetch(monkeypatch, toolkit: str, items_box: dict):
 
 @pytest.mark.asyncio
 async def test_linkedin_sync_refreshes_headline_in_place(
-    pool, user_ids, monkeypatch,
+    pool,
+    user_ids,
+    monkeypatch,
 ):
     user_a, _ = user_ids
-    box = {"items": [
-        {"id": "lid-99", "firstName": "Alice", "lastName": "Lee", "headline": "Eng"},
-    ]}
+    box = {
+        "items": [
+            {"id": "lid-99", "firstName": "Alice", "lastName": "Lee", "headline": "Eng"},
+        ]
+    }
     _patch_fetch(monkeypatch, "linkedin", box)
 
     async with user_scoped_tx(pool, user_a) as conn:
         await enqueue_once(
-            conn, user_id=user_a, task_id="sync.linkedin.cidLI",
+            conn,
+            user_id=user_a,
+            task_id="sync.linkedin.cidLI",
             kind="connector.sync",
             payload={"toolkit": "linkedin", "connectedAccountId": "cidLI"},
         )

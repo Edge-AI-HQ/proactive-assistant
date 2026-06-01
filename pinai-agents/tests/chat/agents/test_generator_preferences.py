@@ -23,7 +23,11 @@ from pinai_agents.chat.agents.prompts.shared import GROUNDING_POLICY
 
 _SDK_CLIENT_PY = (
     Path(__file__).resolve().parents[3]
-    / "packages" / "pinai_sdk" / "src" / "pinai_sdk" / "_client.py"
+    / "packages"
+    / "pinai_sdk"
+    / "src"
+    / "pinai_sdk"
+    / "_client.py"
 )
 
 
@@ -65,7 +69,7 @@ def test_generator_prompts_preserve_ambient_speaker_attribution():
     assert "payload.self_text" in planner
     assert "`self:` lines" in planner
     assert "non-self speech" in planner
-    assert "do not write \"you said\"" in card_generator
+    assert 'do not write "you said"' in card_generator
     assert "attributes" in evaluator
     assert "non-self speaker text to the user" in evaluator
     assert "payload.self_text" in grounding

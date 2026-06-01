@@ -126,19 +126,27 @@ def _parse_apps(item: DeviceIngestItem) -> list[DeviceRawWrite]:
         app_name = _str_or(row, "appName", "app_name", "name")
         if not bundle_id or not app_name:
             continue
-        apps.append(DeviceAppSnapshotItem(
-            bundle_id=bundle_id, app_name=app_name,
-            version=_str_or(row, "version"),
-            last_used_at=_str_or(row, "lastUsedAt", "last_used_at"),
-        ))
+        apps.append(
+            DeviceAppSnapshotItem(
+                bundle_id=bundle_id,
+                app_name=app_name,
+                version=_str_or(row, "version"),
+                last_used_at=_str_or(row, "lastUsedAt", "last_used_at"),
+            )
+        )
     if not apps:
         return []
-    return [DeviceRawWrite(table="device_apps_snapshot", payload={
-        "device_id": item.device_id,
-        "occurred_at": item.occurred_at,
-        "snapshot_id": item.dedupe_key,
-        "apps": apps,
-    })]
+    return [
+        DeviceRawWrite(
+            table="device_apps_snapshot",
+            payload={
+                "device_id": item.device_id,
+                "occurred_at": item.occurred_at,
+                "snapshot_id": item.dedupe_key,
+                "apps": apps,
+            },
+        )
+    ]
 
 
 def _parse_contacts(item: DeviceIngestItem) -> list[DeviceRawWrite]:
@@ -148,6 +156,7 @@ def _parse_contacts(item: DeviceIngestItem) -> list[DeviceRawWrite]:
         s = item.payload.get(k)
         if isinstance(s, str) and s.strip():
             import json
+
             try:
                 parsed = json.loads(s)
                 if isinstance(parsed, list):
@@ -165,37 +174,50 @@ def _parse_contacts(item: DeviceIngestItem) -> list[DeviceRawWrite]:
         if not isinstance(phones, list):
             single = _str_or(row, "phone")
             phones = [single] if single else []
-        contacts.append(DeviceContactSnapshotItem(
-            display_name=_str_or(row, "displayName", "display_name", "name"),
-            emails=[e for e in emails if isinstance(e, str)],
-            phones=[p for p in phones if isinstance(p, str)],
-            last_modified=_str_or(row, "lastModified", "last_modified"),
-        ))
+        contacts.append(
+            DeviceContactSnapshotItem(
+                display_name=_str_or(row, "displayName", "display_name", "name"),
+                emails=[e for e in emails if isinstance(e, str)],
+                phones=[p for p in phones if isinstance(p, str)],
+                last_modified=_str_or(row, "lastModified", "last_modified"),
+            )
+        )
     if not contacts:
         return []
-    return [DeviceRawWrite(table="device_contacts_snapshot", payload={
-        "device_id": item.device_id,
-        "occurred_at": item.occurred_at,
-        "snapshot_id": item.dedupe_key,
-        "contacts": contacts,
-    })]
+    return [
+        DeviceRawWrite(
+            table="device_contacts_snapshot",
+            payload={
+                "device_id": item.device_id,
+                "occurred_at": item.occurred_at,
+                "snapshot_id": item.dedupe_key,
+                "contacts": contacts,
+            },
+        )
+    ]
 
 
 def _parse_health(item: DeviceIngestItem) -> list[DeviceRawWrite]:
     obs: list[DeviceHealthObservationInput] = parse_health_observations(item)
     if not obs:
         return []
-    return [DeviceRawWrite(table="device_health_observations", payload={
-        "device_id": item.device_id,
-        "observations": obs,
-    })]
+    return [
+        DeviceRawWrite(
+            table="device_health_observations",
+            payload={
+                "device_id": item.device_id,
+                "observations": obs,
+            },
+        )
+    ]
 
 
 # ── signal builders ──
 
 
 def build_default_signal(
-    item: DeviceIngestItem, opts: dict[str, Any] | None = None,
+    item: DeviceIngestItem,
+    opts: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Personal-signal repo input shape. Caller writes via PersonalSignalsRepository.ingest_one."""
     fallback_reason = (opts or {}).get("fallback_reason")
@@ -223,13 +245,15 @@ def build_default_signal(
 
 
 _APP_POLICY = DeviceIngestPolicy(
-    mode="dual", raw_table="device_apps_snapshot",
+    mode="dual",
+    raw_table="device_apps_snapshot",
     parse_raw=_parse_apps,
     full_replace_scope=lambda i: DeviceRawReplaceScope("device_apps_snapshot", i.device_id),
     build_signal=build_default_signal,
 )
 _CONTACT_POLICY = DeviceIngestPolicy(
-    mode="dual", raw_table="device_contacts_snapshot",
+    mode="dual",
+    raw_table="device_contacts_snapshot",
     parse_raw=_parse_contacts,
     full_replace_scope=lambda i: DeviceRawReplaceScope("device_contacts_snapshot", i.device_id),
     build_signal=build_default_signal,
@@ -249,8 +273,10 @@ def _health_full_scope(i: DeviceIngestItem) -> DeviceRawReplaceScope | None:
 
 
 _HEALTH_POLICY = DeviceIngestPolicy(
-    mode="raw_only", raw_table="device_health_observations",
-    parse_raw=_parse_health, full_replace_scope=_health_full_scope,
+    mode="raw_only",
+    raw_table="device_health_observations",
+    parse_raw=_parse_health,
+    full_replace_scope=_health_full_scope,
 )
 _SIGNAL_POLICY = DeviceIngestPolicy(mode="signal_only", build_signal=build_default_signal)
 
@@ -277,7 +303,8 @@ DEVICE_INGEST_POLICIES: dict[str, DeviceIngestPolicy] = {
 UNKNOWN_KIND_POLICY = DeviceIngestPolicy(
     mode="signal_only",
     build_signal=lambda item, _opts=None: build_default_signal(
-        item, {"fallback_reason": "unknown_kind"},
+        item,
+        {"fallback_reason": "unknown_kind"},
     ),
 )
 

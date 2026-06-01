@@ -61,8 +61,9 @@ def test_composio_user_id_namespace():
     assert cs.composio_user_id(_user(42, "uuid-42")) == "pai-uuid-42"
 
 
-def _account(*, cid: str, toolkit: str, status: str = "ACTIVE",
-             user_info: dict | None = None) -> MagicMock:
+def _account(
+    *, cid: str, toolkit: str, status: str = "ACTIVE", user_info: dict | None = None
+) -> MagicMock:
     """Build an SDK-style connected_account item with model_dump()."""
     obj = MagicMock()
     obj.model_dump.return_value = {
@@ -86,10 +87,12 @@ async def test_list_connections_empty(mock_sdk):
 
 @pytest.mark.asyncio
 async def test_list_connections_basic(mock_sdk):
-    mock_sdk.connected_accounts.list.return_value = SimpleNamespace(items=[
-        _account(cid="ca_1", toolkit="github"),
-        _account(cid="ca_2", toolkit="slack"),
-    ])
+    mock_sdk.connected_accounts.list.return_value = SimpleNamespace(
+        items=[
+            _account(cid="ca_1", toolkit="github"),
+            _account(cid="ca_2", toolkit="slack"),
+        ]
+    )
     # No identity action for github/slack means identity stays None
     # unless cached. We disable identity in this test by clearing the
     # toolkit map.
@@ -113,10 +116,11 @@ async def test_list_connections_passes_inline_user_info(mock_sdk):
     """Pure SDK pass-through: user_info on the connected_account object
     (when Composio happens to populate it) is forwarded as-is. Label
     resolution + caching live in the route + repository, not here."""
-    mock_sdk.connected_accounts.list.return_value = SimpleNamespace(items=[
-        _account(cid="ca_1", toolkit="gmail",
-                 user_info={"emailAddress": "alice@example.com"}),
-    ])
+    mock_sdk.connected_accounts.list.return_value = SimpleNamespace(
+        items=[
+            _account(cid="ca_1", toolkit="gmail", user_info={"emailAddress": "alice@example.com"}),
+        ]
+    )
     out = await cs.list_connections(_user(7))
     assert out[0].user_info == {"emailAddress": "alice@example.com"}
     # list_connections is pure SDK now — no extra identity action call.
@@ -129,9 +133,11 @@ async def test_list_connections_no_identity_call(mock_sdk):
     calls inline. Post-migration-040 it must not — the route joins
     pai_connector_labels itself. Re-introducing inline resolution would
     re-introduce the N-Composio-calls-per-page-load latency cliff."""
-    mock_sdk.connected_accounts.list.return_value = SimpleNamespace(items=[
-        _account(cid="ca_1", toolkit="gmail"),
-    ])
+    mock_sdk.connected_accounts.list.return_value = SimpleNamespace(
+        items=[
+            _account(cid="ca_1", toolkit="gmail"),
+        ]
+    )
     await cs.list_connections(_user(7))
     mock_sdk.tools.execute.assert_not_called()
 
@@ -145,27 +151,25 @@ async def test_list_connections_no_identity_call(mock_sdk):
         ("gmail", {"emailAddress": "boliang@pinai.io"}, "boliang@pinai.io"),
         ("gmail", {"email": "fallback@x.com"}, "fallback@x.com"),
         ("github", {"login": "boliangzhang"}, "boliangzhang"),
-        ("calendly",
-         {"resource": {"email": "user@example.com", "name": "User"}},
-         "user@example.com"),
-        ("slack",
-         {"user": {"email": "u@slack.com", "name": "slacker"}},
-         "u@slack.com"),
-        ("googledrive",
-         {"user": {"emailAddress": "g@drive.com", "displayName": "G"}},
-         "g@drive.com"),
-        ("googlecalendar",
-         {"id": "boliang@gmail.com", "summary": "boliang"},
-         "boliang@gmail.com"),
-        ("youtube",
-         {"items": [{"snippet": {"title": "MyChannel", "customUrl": "@mych"}}]},
-         "@mych"),
-        ("youtube",
-         {"items": [{"snippet": {"title": "MyChannel"}}]},
-         "MyChannel"),
-        ("linkedin",
-         {"name": {"first_name": "Boliang", "last_name": "Zhang"}},
-         "Boliang Zhang"),
+        (
+            "calendly",
+            {"resource": {"email": "user@example.com", "name": "User"}},
+            "user@example.com",
+        ),
+        ("slack", {"user": {"email": "u@slack.com", "name": "slacker"}}, "u@slack.com"),
+        (
+            "googledrive",
+            {"user": {"emailAddress": "g@drive.com", "displayName": "G"}},
+            "g@drive.com",
+        ),
+        ("googlecalendar", {"id": "boliang@gmail.com", "summary": "boliang"}, "boliang@gmail.com"),
+        (
+            "youtube",
+            {"items": [{"snippet": {"title": "MyChannel", "customUrl": "@mych"}}]},
+            "@mych",
+        ),
+        ("youtube", {"items": [{"snippet": {"title": "MyChannel"}}]}, "MyChannel"),
+        ("linkedin", {"name": {"first_name": "Boliang", "last_name": "Zhang"}}, "Boliang Zhang"),
     ],
 )
 def test_label_extractors(toolkit, raw, expected):
@@ -177,8 +181,7 @@ def test_label_extractor_missing_fields_returns_none():
     # Empty / unexpected payload → extractor returns None; the
     # resolve_and_persist_label caller then writes None to DB and the
     # route surfaces fallback_label().
-    for toolkit in ("gmail", "slack", "github", "googledrive",
-                    "googlecalendar", "youtube"):
+    for toolkit in ("gmail", "slack", "github", "googledrive", "googlecalendar", "youtube"):
         spec = cs._IDENTITY_SPECS[toolkit]
         assert spec.extract({}) is None
 
@@ -231,8 +234,7 @@ async def test_search_tools_maps_fields(mock_sdk):
 async def test_search_tools_skips_slugless(mock_sdk):
     """Defensive: SDK occasionally returns partial entries; drop them
     rather than emit ToolHits with empty slugs."""
-    bad = SimpleNamespace(slug=None, toolkit={"slug": "gmail"},
-                          name="x", description="x", tags=[])
+    bad = SimpleNamespace(slug=None, toolkit={"slug": "gmail"}, name="x", description="x", tags=[])
     mock_sdk.tools.get_raw_composio_tools.return_value = [bad]
     out = await cs.search_tools(_user(7), "anything")
     assert out == []
@@ -306,6 +308,7 @@ async def test_execute_with_connected_account_id(mock_sdk):
 async def test_execute_captures_error(mock_sdk):
     """SDK error is captured into ExecuteResult.error, not raised."""
     from composio.exceptions import HTTPError as SdkHTTP
+
     mock_sdk.tools.execute.side_effect = SdkHTTP("Bad Request", status_code=400)
     result = await cs.execute(_user(7), "BAD_SLUG", {})
     assert result.successful is False
@@ -320,7 +323,8 @@ async def test_multi_execute_preserves_order(mock_sdk):
         counter["n"] += 1
         r = MagicMock()
         r.model_dump.return_value = {
-            "successful": True, "data": {"slug": slug},
+            "successful": True,
+            "data": {"slug": slug},
         }
         return r
 
@@ -348,10 +352,14 @@ async def test_multi_execute_partial_failure(mock_sdk):
         return r
 
     mock_sdk.tools.execute.side_effect = _exec
-    out = await cs.multi_execute(_user(7), [
-        cs.ExecuteCall(slug="A"), cs.ExecuteCall(slug="B"),
-        cs.ExecuteCall(slug="C"),
-    ])
+    out = await cs.multi_execute(
+        _user(7),
+        [
+            cs.ExecuteCall(slug="A"),
+            cs.ExecuteCall(slug="B"),
+            cs.ExecuteCall(slug="C"),
+        ],
+    )
     assert [r.successful for r in out] == [True, False, True]
     assert "upstream broken" in out[1].error
 
@@ -365,7 +373,8 @@ async def test_connect_uses_existing_auth_config(mock_sdk):
         items=[SimpleNamespace(model_dump=lambda: {"id": "ac_existing"})],
     )
     mock_sdk.connected_accounts.link.return_value = SimpleNamespace(
-        id="ca_new", redirect_url="https://oauth/...",
+        id="ca_new",
+        redirect_url="https://oauth/...",
     )
     init = await cs.connect(_user(7), "gmail")
     assert init.connected_account_id == "ca_new"
@@ -383,7 +392,8 @@ async def test_connect_creates_auth_config_when_missing(mock_sdk):
         model_dump=lambda: {"id": "ac_new"},
     )
     mock_sdk.connected_accounts.link.return_value = SimpleNamespace(
-        id="ca_new", redirect_url="https://oauth/...",
+        id="ca_new",
+        redirect_url="https://oauth/...",
     )
     init = await cs.connect(_user(7), "gmail")
     assert init.connected_account_id == "ca_new"
@@ -447,8 +457,9 @@ async def test_execute_meta_tool_forwards_to_session(mock_sdk):
     sess.execute.return_value = resp
     mock_sdk.create.return_value = sess
 
-    out = await cs.execute_meta_tool(_user(7), "COMPOSIO_SEARCH_TOOLS",
-                                      {"queries": [{"use_case": "x"}]})
+    out = await cs.execute_meta_tool(
+        _user(7), "COMPOSIO_SEARCH_TOOLS", {"queries": [{"use_case": "x"}]}
+    )
     assert out == {"data": {"hits": []}}
     sess.execute.assert_called_once_with(
         "COMPOSIO_SEARCH_TOOLS",

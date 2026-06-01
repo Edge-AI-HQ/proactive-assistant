@@ -45,7 +45,8 @@ async def composio_search_tools(queries: list[dict[str, Any]]):
 
 class _GetSchemasInput(BaseModel):
     tool_slugs: list[str] = Field(
-        min_length=1, max_length=20,
+        min_length=1,
+        max_length=20,
         description="Tool slugs to fetch full input/output schemas for.",
     )
 
@@ -63,7 +64,8 @@ async def composio_get_tool_schemas(tool_slugs: list[str]):
 
 class _MultiExecuteInput(BaseModel):
     calls: list[dict[str, Any]] = Field(
-        min_length=1, max_length=50,
+        min_length=1,
+        max_length=50,
         description=(
             "List of tool calls to run in parallel. Each: "
             "{tool_slug: '...', arguments: {...}}. Up to 50 calls."
@@ -90,7 +92,8 @@ async def composio_multi_execute_tool(calls: list[dict[str, Any]]):
 
 class _ManageConnectionsInput(BaseModel):
     toolkits: list[str] = Field(
-        min_length=1, max_length=20,
+        min_length=1,
+        max_length=20,
         description="Toolkit slugs to check / initiate connections for.",
     )
 

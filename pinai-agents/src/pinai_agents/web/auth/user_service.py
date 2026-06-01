@@ -86,13 +86,15 @@ async def upsert_user_by_supabase_id(
     # via ensure_user_litellm_key, so external calls stay off the auth path.
     if row.get("inserted"):
         from ..services.default_goals import seed_default_goals  # noqa: PLC0415
+
         await seed_default_goals(pool, user.id)
 
     return user
 
 
 async def load_user_by_supabase_id(
-    pool: AsyncConnectionPool, supabase_user_id: str,
+    pool: AsyncConnectionPool,
+    supabase_user_id: str,
 ) -> User | None:
     """Hydrate a User by Supabase UUID WITHOUT creating one.
 
@@ -123,7 +125,8 @@ async def load_user_by_supabase_id(
 
 
 async def load_user_by_id(
-    pool: AsyncConnectionPool, internal_user_id: int,
+    pool: AsyncConnectionPool,
+    internal_user_id: int,
 ) -> User | None:
     """Hydrate a User row by BIGINT id.
 

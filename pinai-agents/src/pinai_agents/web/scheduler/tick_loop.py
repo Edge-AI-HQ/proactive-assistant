@@ -91,7 +91,8 @@ async def _persist_next(pool, task: ScheduledTaskRow, nxt) -> None:
     async with service_tx(pool) as conn:
         await update_after_fire(
             conn,
-            user_id=task.user_id, task_id=task.id,
+            user_id=task.user_id,
+            task_id=task.id,
             next_run_at=nxt,
             last_run_status="dispatched",
             archive_if_once=(task.trigger_kind == "once"),
@@ -126,7 +127,8 @@ async def tick_loop(
 
     logger.info(
         "scheduler tick_loop started interval=%ds (NOTIFY %s wakes early)",
-        interval_seconds, SCHEDULER_WAKE_CHANNEL,
+        interval_seconds,
+        SCHEDULER_WAKE_CHANNEL,
     )
     # jti revocation sweep cadence — much rarer than the per-second
     # scheduler tick. Once an hour is plenty: rows past expires_at are
@@ -140,7 +142,8 @@ async def tick_loop(
     # event, whichever comes first" and keeps the loop body unchanged.
     wake_event = asyncio.Event()
     listen_task = asyncio.create_task(
-        _listen_for_wake(pool, wake_event), name="scheduler-listen-wake",
+        _listen_for_wake(pool, wake_event),
+        name="scheduler-listen-wake",
     )
 
     try:
@@ -171,7 +174,8 @@ async def tick_loop(
             # exactly once per loop iteration.
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(
-                    wake_event.wait(), timeout=interval_seconds,
+                    wake_event.wait(),
+                    timeout=interval_seconds,
                 )
             wake_event.clear()
     except asyncio.CancelledError:
@@ -181,7 +185,8 @@ async def tick_loop(
 
 
 async def _listen_for_wake(
-    pool: AsyncConnectionPool, wake_event: asyncio.Event,
+    pool: AsyncConnectionPool,
+    wake_event: asyncio.Event,
 ) -> None:
     """Hold a dedicated connection LISTENing on SCHEDULER_WAKE_CHANNEL.
 
@@ -203,7 +208,8 @@ async def _listen_for_wake(
                 async with conn.cursor() as cur:
                     await cur.execute(f"LISTEN {SCHEDULER_WAKE_CHANNEL}")
                 logger.info(
-                    "scheduler LISTEN started channel=%s", SCHEDULER_WAKE_CHANNEL,
+                    "scheduler LISTEN started channel=%s",
+                    SCHEDULER_WAKE_CHANNEL,
                 )
                 async for _notify in conn.notifies():
                     # Coalesce burst notifies: a single wake_event.set()
@@ -225,6 +231,7 @@ async def _drain_embeddings(pool: AsyncConnectionPool) -> None:
     SELECT). Skips silently when LiteLLM isn't configured (dev without
     full litellm stack)."""
     from ..embeddings import drain_queue  # noqa: PLC0415
+
     async with service_tx(pool) as conn:
         n = await drain_queue(conn)
     if n > 0:
@@ -236,6 +243,7 @@ async def _sweep_jti(pool: AsyncConnectionPool) -> None:
     Pure cleanup — never affects correctness (the JWT exp claim already
     rejects expired tokens), just bounds the table size."""
     from ..db.repositories.jti_revocations import sweep_expired  # noqa: PLC0415
+
     async with service_tx(pool) as conn:
         n = await sweep_expired(conn)
     if n > 0:

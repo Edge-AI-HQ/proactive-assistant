@@ -97,7 +97,10 @@ class ConnectorLabelsRepository(UserScopedRepository):
                   updated_at = NOW()
                 """,
                 (
-                    self._user_id, connected_account_id, toolkit, label,
+                    self._user_id,
+                    connected_account_id,
+                    toolkit,
+                    label,
                     json.dumps(raw_user_info) if raw_user_info is not None else None,
                 ),
             )

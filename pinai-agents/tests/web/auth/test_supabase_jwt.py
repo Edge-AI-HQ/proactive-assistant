@@ -20,6 +20,7 @@ def _set_env(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
     monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "publishable-key-test")
     from pinai_agents import config
+
     config.get_web_settings.cache_clear()
     reset_cache_for_tests()
     yield
@@ -27,8 +28,9 @@ def _set_env(monkeypatch):
     reset_cache_for_tests()
 
 
-def _mock_response(status_code: int, json_body: dict | None = None,
-                   text: str = "") -> httpx.Response:
+def _mock_response(
+    status_code: int, json_body: dict | None = None, text: str = ""
+) -> httpx.Response:
     request = httpx.Request("GET", "https://test.supabase.co/auth/v1/user")
     if json_body is not None:
         return httpx.Response(status_code, json=json_body, request=request)
@@ -39,11 +41,14 @@ def _mock_response(status_code: int, json_body: dict | None = None,
 async def test_verify_success():
     with patch(
         "pinai_agents.web.auth.supabase_jwt.httpx.AsyncClient.get",
-        return_value=_mock_response(200, {
-            "id": "00000000-0000-0000-0000-000000000001",
-            "email": "user@test.invalid",
-            "role": "authenticated",
-        }),
+        return_value=_mock_response(
+            200,
+            {
+                "id": "00000000-0000-0000-0000-000000000001",
+                "email": "user@test.invalid",
+                "role": "authenticated",
+            },
+        ),
     ):
         claims = await verify_supabase_jwt("token-abc")
     assert claims.sub == "00000000-0000-0000-0000-000000000001"
@@ -53,19 +58,25 @@ async def test_verify_success():
 
 @pytest.mark.asyncio
 async def test_verify_rejects_401():
-    with patch(
-        "pinai_agents.web.auth.supabase_jwt.httpx.AsyncClient.get",
-        return_value=_mock_response(401, text='{"error":"invalid"}'),
-    ), pytest.raises(JWTVerifyError, match="rejected"):
+    with (
+        patch(
+            "pinai_agents.web.auth.supabase_jwt.httpx.AsyncClient.get",
+            return_value=_mock_response(401, text='{"error":"invalid"}'),
+        ),
+        pytest.raises(JWTVerifyError, match="rejected"),
+    ):
         await verify_supabase_jwt("bad-token")
 
 
 @pytest.mark.asyncio
 async def test_verify_rejects_missing_sub():
-    with patch(
-        "pinai_agents.web.auth.supabase_jwt.httpx.AsyncClient.get",
-        return_value=_mock_response(200, {"email": "x@y.invalid"}),
-    ), pytest.raises(JWTVerifyError, match="missing user id"):
+    with (
+        patch(
+            "pinai_agents.web.auth.supabase_jwt.httpx.AsyncClient.get",
+            return_value=_mock_response(200, {"email": "x@y.invalid"}),
+        ),
+        pytest.raises(JWTVerifyError, match="missing user id"),
+    ):
         await verify_supabase_jwt("weird-token")
 
 
@@ -73,10 +84,14 @@ async def test_verify_rejects_missing_sub():
 async def test_network_error_surfaces_as_verify_error():
     async def boom(*_args, **_kwargs):
         raise httpx.ConnectError("connection refused")
-    with patch(
-        "pinai_agents.web.auth.supabase_jwt.httpx.AsyncClient.get",
-        side_effect=boom,
-    ), pytest.raises(JWTVerifyError, match="unreachable"):
+
+    with (
+        patch(
+            "pinai_agents.web.auth.supabase_jwt.httpx.AsyncClient.get",
+            side_effect=boom,
+        ),
+        pytest.raises(JWTVerifyError, match="unreachable"),
+    ):
         await verify_supabase_jwt("any")
 
 
@@ -89,9 +104,14 @@ async def test_cache_avoids_second_network_call():
     async def counting_get(*_args, **_kwargs):
         nonlocal call_count
         call_count += 1
-        return _mock_response(200, {
-            "id": "user-cached", "email": "c@x.invalid", "role": "authenticated",
-        })
+        return _mock_response(
+            200,
+            {
+                "id": "user-cached",
+                "email": "c@x.invalid",
+                "role": "authenticated",
+            },
+        )
 
     with patch(
         "pinai_agents.web.auth.supabase_jwt.httpx.AsyncClient.get",
@@ -115,19 +135,21 @@ async def test_concurrent_verifies_dedupe_to_one_call():
         nonlocal call_count
         call_count += 1
         await barrier.wait()
-        return _mock_response(200, {
-            "id": "user-deduped", "email": None, "role": "authenticated",
-        })
+        return _mock_response(
+            200,
+            {
+                "id": "user-deduped",
+                "email": None,
+                "role": "authenticated",
+            },
+        )
 
     with patch(
         "pinai_agents.web.auth.supabase_jwt.httpx.AsyncClient.get",
         side_effect=slow_get,
     ):
         # Five concurrent verifies of the same token.
-        tasks = [
-            asyncio.create_task(verify_supabase_jwt("burst-token"))
-            for _ in range(5)
-        ]
+        tasks = [asyncio.create_task(verify_supabase_jwt("burst-token")) for _ in range(5)]
         # Yield once so each task gets to the inflight check / suspend.
         await asyncio.sleep(0)
         barrier.set()

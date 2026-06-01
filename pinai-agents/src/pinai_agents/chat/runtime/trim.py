@@ -31,7 +31,9 @@ logger = logging.getLogger(__name__)
 
 
 def compute_trim_message_ids(
-    messages: list[Any], *, keep_turns: int,
+    messages: list[Any],
+    *,
+    keep_turns: int,
 ) -> list[str]:
     """Ids of the oldest messages to drop so only the last `keep_turns`
     user-turns remain. Returns [] when the thread is at or under the limit.
@@ -44,9 +46,7 @@ def compute_trim_message_ids(
     """
     if keep_turns <= 0:
         return [m.id for m in messages if getattr(m, "id", None)]
-    turn_starts = [
-        i for i, m in enumerate(messages) if isinstance(m, HumanMessage)
-    ]
+    turn_starts = [i for i, m in enumerate(messages) if isinstance(m, HumanMessage)]
     if len(turn_starts) <= keep_turns:
         return []
     # Cut everything before the start of the kept window. The window begins
@@ -71,10 +71,13 @@ async def trim_thread(agent: Any, *, thread_id: str, keep_turns: int) -> int:
     if not ids:
         return 0
     await agent.aupdate_state(
-        config, {"messages": [RemoveMessage(id=i) for i in ids]},
+        config,
+        {"messages": [RemoveMessage(id=i) for i in ids]},
     )
     logger.info(
         "trimmed thread=%s removed=%d kept_turns=%d",
-        thread_id, len(ids), keep_turns,
+        thread_id,
+        len(ids),
+        keep_turns,
     )
     return len(ids)

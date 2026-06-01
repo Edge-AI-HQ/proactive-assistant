@@ -71,14 +71,23 @@ def _sync_task(toolkit: str, user_id: int, cid: str) -> ScheduledTaskRow:
         user_id=user_id,
         id=f"sync.{toolkit}.{cid}",
         kind="connector.sync",
-        name=None, prompt=None,
-        trigger_kind="schedule", cron_expr="*/30 * * * *",
-        interval_seconds=None, event_filter=None,
+        name=None,
+        prompt=None,
+        trigger_kind="schedule",
+        cron_expr="*/30 * * * *",
+        interval_seconds=None,
+        event_filter=None,
         payload={"toolkit": toolkit, "connectedAccountId": cid},
-        timezone="UTC", status="active",
-        next_run_at=None, last_run_at=datetime.now(UTC),
-        last_run_status="dispatched", run_count=1,
-        attempts=0, max_attempts=3, progress={}, last_error=None,
+        timezone="UTC",
+        status="active",
+        next_run_at=None,
+        last_run_at=datetime.now(UTC),
+        last_run_status="dispatched",
+        run_count=1,
+        attempts=0,
+        max_attempts=3,
+        progress={},
+        last_error=None,
     )
 
 
@@ -96,38 +105,44 @@ def _patch_fetch(monkeypatch, toolkit: str, items_box: dict):
 
 @pytest.mark.asyncio
 async def test_youtube_sync_refreshes_channel_title_in_place(
-    pool, user_ids, monkeypatch,
+    pool,
+    user_ids,
+    monkeypatch,
 ):
     user_a, _ = user_ids
-    box = {"items": [
-        {
-            "id": "sub-keep",
-            "snippet": {
-                "title": "Old Name",
-                "publishedAt": "2024-01-01T00:00:00Z",
-                "resourceId": {"channelId": "UC-keep"},
+    box = {
+        "items": [
+            {
+                "id": "sub-keep",
+                "snippet": {
+                    "title": "Old Name",
+                    "publishedAt": "2024-01-01T00:00:00Z",
+                    "resourceId": {"channelId": "UC-keep"},
+                },
             },
-        },
-    ]}
+        ]
+    }
     _patch_fetch(monkeypatch, "youtube", box)
 
     async with user_scoped_tx(pool, user_a) as conn:
         await enqueue_once(
-            conn, user_id=user_a, task_id="sync.youtube.cidYT",
+            conn,
+            user_id=user_a,
+            task_id="sync.youtube.cidYT",
             kind="connector.sync",
             payload={"toolkit": "youtube", "connectedAccountId": "cidYT"},
         )
     await connector_ingest.run(pool, _sync_task("youtube", user_a, "cidYT"), "ry1")
 
     box["items"][0]["snippet"] = {
-        **box["items"][0]["snippet"], "title": "New Name",
+        **box["items"][0]["snippet"],
+        "title": "New Name",
     }
     await connector_ingest.run(pool, _sync_task("youtube", user_a, "cidYT"), "ry2")
 
     async with service_tx(pool) as conn:
         cur = await conn.execute(
-            "SELECT channel_title FROM pai_raw_youtube_subscriptions "
-            "WHERE user_id = %s",
+            "SELECT channel_title FROM pai_raw_youtube_subscriptions WHERE user_id = %s",
             (user_a,),
         )
         rows = await cur.fetchall()

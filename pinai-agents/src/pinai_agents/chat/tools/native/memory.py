@@ -15,15 +15,20 @@ from .. import http_client
 
 class MemoryListInput(BaseModel):
     min_quality: float = Field(
-        default=0.7, ge=0, le=1,
+        default=0.7,
+        ge=0,
+        le=1,
         description="Quality threshold (0-1). Default 0.7 returns reliable memories; lower it to see more.",
     )
     subject: str | None = Field(
-        default=None, max_length=200,
+        default=None,
+        max_length=200,
         description="Filter by subject tag (e.g. 'work', 'family'). Omit for all subjects.",
     )
     limit: int = Field(
-        default=20, ge=1, le=50,
+        default=20,
+        ge=1,
+        le=50,
         description="Max results. Keep small to save context.",
     )
 
@@ -34,7 +39,9 @@ async def memory_list(min_quality: float, subject: str | None, limit: int):
     persona / preference / past-decision context."""
     payload = await http_client.get(
         "/api/agent/memory/list",
-        minQuality=min_quality, subject=subject, limit=limit,
+        minQuality=min_quality,
+        subject=subject,
+        limit=limit,
     )
     if isinstance(payload, dict) and payload.get("error"):
         return payload
@@ -53,11 +60,14 @@ async def memory_list(min_quality: float, subject: str | None, limit: int):
 
 class MemorySearchInput(BaseModel):
     query: str = Field(
-        min_length=1, max_length=500,
+        min_length=1,
+        max_length=500,
         description="Natural-language query — semantic search over memories.",
     )
     min_quality: float | None = Field(
-        default=None, ge=0, le=1,
+        default=None,
+        ge=0,
+        le=1,
         description="Optional quality floor. Default None returns all qualities.",
     )
     limit: int = Field(default=10, ge=1, le=50)
@@ -70,7 +80,9 @@ async def memory_search(query: str, min_quality: float | None, limit: int):
     enough."""
     payload = await http_client.get(
         "/api/agent/memory/search",
-        q=query, minQuality=min_quality, limit=limit,
+        q=query,
+        minQuality=min_quality,
+        limit=limit,
     )
     if isinstance(payload, dict) and payload.get("error"):
         return payload

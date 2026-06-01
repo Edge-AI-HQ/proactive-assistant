@@ -30,11 +30,11 @@ from __future__ import annotations
 # same superuser DSN. Trust boundary degraded for now — re-tighten
 # when web/chat split into separate fly apps with per-app secrets.
 FORBIDDEN_ENVS: tuple[str, ...] = (
-    "SUPABASE_SECRET_KEY",        # Supabase admin (`sb_secret_*`) — only web
-    "PAI_JWT_SIGNING_KEY",        # EdDSA private key — only web (signs)
-    "COMPOSIO_API_KEY",           # Composio master — only web (connector ingest)
-    "STRIPE_SECRET_KEY",          # Stripe master — only web
-    "STRIPE_WEBHOOK_SECRET",      # Stripe webhook signing — only web
-    "LITELLM_MASTER_KEY",         # LiteLLM master — only web (mints virtual_keys)
-    "APNS_AUTH_KEY",              # APNs .p8 private key — only web (signs push JWTs)
+    "SUPABASE_SECRET_KEY",  # Supabase admin (`sb_secret_*`) — only web
+    "PAI_JWT_SIGNING_KEY",  # EdDSA private key — only web (signs)
+    "COMPOSIO_API_KEY",  # Composio master — only web (connector ingest)
+    "STRIPE_SECRET_KEY",  # Stripe master — only web
+    "STRIPE_WEBHOOK_SECRET",  # Stripe webhook signing — only web
+    "LITELLM_MASTER_KEY",  # LiteLLM master — only web (mints virtual_keys)
+    "APNS_AUTH_KEY",  # APNs .p8 private key — only web (signs push JWTs)
 )

@@ -39,9 +39,9 @@ class JWTVerifyError(Exception):
 
 @dataclass(slots=True)
 class SupabaseClaims:
-    sub: str            # Supabase user UUID
+    sub: str  # Supabase user UUID
     email: str | None
-    role: str           # 'authenticated' for end users
+    role: str  # 'authenticated' for end users
 
 
 _CACHE_TTL_SEC = 30.0

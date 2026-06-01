@@ -41,9 +41,7 @@ def _is_internal_operator(operator: User) -> bool:
     settings = get_web_settings()
     if settings.deploy_env == "dev" and operator.supabase_user_id == _DEV_AUTH_BYPASS_SUB:
         return True
-    allowed = {
-        s.strip() for s in settings.internal_operator_subs.split(",") if s.strip()
-    }
+    allowed = {s.strip() for s in settings.internal_operator_subs.split(",") if s.strip()}
     return operator.supabase_user_id in allowed
 
 

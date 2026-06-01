@@ -31,7 +31,8 @@ async def list_world_signals(
     run: AgentRun = Depends(current_agent_run),
     pool=Depends(get_pool),
     status_filter: str = Query(
-        "open", alias="status",
+        "open",
+        alias="status",
         pattern="^(open|consumed|archived|all|new)$",
     ),
     provider: str | None = Query(None),
@@ -46,18 +47,31 @@ async def list_world_signals(
     async with user_scoped_tx(pool, run.user_id) as conn:
         repo = WorldSignalsRepository(run.user_id, conn)
         rows = await repo.list_for_user(
-            status=actual_status, provider=provider,
-            min_salience=min_salience, since=since, limit=limit,
+            status=actual_status,
+            provider=provider,
+            min_salience=min_salience,
+            since=since,
+            limit=limit,
         )
-    return {"items": [{
-        "id": r.id, "provider": r.provider, "title": r.title,
-        "url": r.url, "summary": r.summary,
-        "publishedAt": r.published_at.isoformat() if r.published_at else None,
-        "topics": r.topics, "importance": r.importance,
-        "salience": r.salience, "status": r.status,
-        "scoredAt": r.scored_at.isoformat() if r.scored_at else None,
-        "referenceCount": r.reference_count,
-    } for r in rows]}
+    return {
+        "items": [
+            {
+                "id": r.id,
+                "provider": r.provider,
+                "title": r.title,
+                "url": r.url,
+                "summary": r.summary,
+                "publishedAt": r.published_at.isoformat() if r.published_at else None,
+                "topics": r.topics,
+                "importance": r.importance,
+                "salience": r.salience,
+                "status": r.status,
+                "scoredAt": r.scored_at.isoformat() if r.scored_at else None,
+                "referenceCount": r.reference_count,
+            }
+            for r in rows
+        ]
+    }
 
 
 @router.post("/score", status_code=status.HTTP_204_NO_CONTENT)
@@ -76,8 +90,10 @@ async def score_world_signal(
     async with user_scoped_tx(pool, run.user_id) as conn:
         repo = WorldSignalsRepository(run.user_id, conn)
         await repo.score(
-            world_signal_id=sig_id, salience=salience,
-            scored_reason=reason, status=next_status,
+            world_signal_id=sig_id,
+            salience=salience,
+            scored_reason=reason,
+            status=next_status,
         )
     return None
 
@@ -105,7 +121,8 @@ async def search_world_signals(
     q: str = Query(..., min_length=1, max_length=500),
     limit: int = Query(10, ge=1, le=50),
     status_filter: str = Query(
-        "open", alias="status",
+        "open",
+        alias="status",
         pattern="^(open|consumed|archived|all|new)$",
     ),
 ):
@@ -180,8 +197,7 @@ async def search_world_signals(
                 ORDER BY ws.embedding <=> %s::vector
                 LIMIT %s
                 """,
-                (query_vec_lit, run.user_id, actual_status, actual_status,
-                 query_vec_lit, fetch_n),
+                (query_vec_lit, run.user_id, actual_status, actual_status, query_vec_lit, fetch_n),
             )
             sem_rows = await cur.fetchall()
 
@@ -193,8 +209,9 @@ async def search_world_signals(
     def _rrf_blend(rows: list, score_key: str) -> None:
         for rank, row in enumerate(rows):
             sig_id = row["id"]
-            slot = fused.setdefault(sig_id, {"row": row, "rrf": 0.0,
-                                              "kw_rank": None, "sem_rank": None})
+            slot = fused.setdefault(
+                sig_id, {"row": row, "rrf": 0.0, "kw_rank": None, "sem_rank": None}
+            )
             slot["rrf"] += 1.0 / (K + rank + 1)
             slot[score_key + "_rank"] = rank + 1
             # Keep the richer row (one with score). Doesn't matter which —
@@ -216,7 +233,8 @@ async def search_world_signals(
                 "topics": s["row"]["topics"],
                 "importance": s["row"]["importance"],
                 "publishedAt": s["row"]["published_at"].isoformat()
-                    if s["row"]["published_at"] else None,
+                if s["row"]["published_at"]
+                else None,
                 "salience": s["row"]["salience"],
                 "status": s["row"]["status"],
                 "rrfScore": s["rrf"],

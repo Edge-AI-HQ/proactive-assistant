@@ -70,7 +70,8 @@ class WebSettings(_BaseAppSettings):
     supabase_publishable_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices(
-            "SUPABASE_PUBLISHABLE_KEY", "VITE_SUPABASE_PUBLISHABLE_KEY",
+            "SUPABASE_PUBLISHABLE_KEY",
+            "VITE_SUPABASE_PUBLISHABLE_KEY",
         ),
     )
 
@@ -78,9 +79,9 @@ class WebSettings(_BaseAppSettings):
     # Ed25519 keypair, base64(raw 32-byte). Web holds private key (signs);
     # chat holds public key only (verifies). Asymmetric design = chat
     # process compromise can't mint new JWTs.
-    pai_jwt_signing_key: str | None = None     # base64 32 bytes (web only)
-    pai_hmac_issuer: str = "pinai-agents-web"        # JWT iss claim
-    pai_hmac_audience: str = "pinai-agents-internal" # JWT aud claim
+    pai_jwt_signing_key: str | None = None  # base64 32 bytes (web only)
+    pai_hmac_issuer: str = "pinai-agents-web"  # JWT iss claim
+    pai_hmac_audience: str = "pinai-agents-internal"  # JWT aud claim
     # Per-run JWT lifetime. 1 hour by default; long-running dream tasks
     # extend via heartbeat refresh (not implemented yet).
     pai_run_jwt_ttl_seconds: int = 3600
@@ -136,10 +137,7 @@ class WebSettings(_BaseAppSettings):
     # to the frontend Fly URL; dev allows the docker-compose nginx port.
     # Example: "http://localhost:3000,https://proactive-ai-frontend-prod.fly.dev"
     cors_allowed_origins: str = (
-        "http://localhost:3000,"
-        "http://127.0.0.1:3000,"
-        "capacitor://localhost,"
-        "https://localhost"
+        "http://localhost:3000,http://127.0.0.1:3000,capacitor://localhost,https://localhost"
     )
 
     # ── LiteLLM gateway (server-side service calls) ──

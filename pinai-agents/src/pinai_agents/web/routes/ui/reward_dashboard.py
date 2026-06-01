@@ -83,7 +83,9 @@ def _optional_trimmed_text(
     if not text:
         return None
     if len(text) > max_length:
-        raise HTTPException(status_code=422, detail=f"{field_name} must be at most {max_length} characters")
+        raise HTTPException(
+            status_code=422, detail=f"{field_name} must be at most {max_length} characters"
+        )
     return text
 
 
@@ -100,8 +102,7 @@ def _safe_metadata_value(value: Any, *, field_name: str, depth: int = 0) -> Any:
         if len(value) > 50:
             raise HTTPException(status_code=422, detail=f"{field_name} contains too many items")
         return [
-            _safe_metadata_value(item, field_name=field_name, depth=depth + 1)
-            for item in value
+            _safe_metadata_value(item, field_name=field_name, depth=depth + 1) for item in value
         ]
     if isinstance(value, dict):
         if len(value) > 50:
@@ -583,9 +584,7 @@ async def trigger_pattern_extract(
     """
     data = _body_dict(body)
     lookback_days = data.get("lookbackDays") or data.get("lookback_days") or 7
-    min_cluster_size = (
-        data.get("minClusterSize") or data.get("min_cluster_size") or 3
-    )
+    min_cluster_size = data.get("minClusterSize") or data.get("min_cluster_size") or 3
     if not isinstance(lookback_days, int) or not 1 <= lookback_days <= 60:
         raise HTTPException(
             status_code=422,
@@ -724,7 +723,9 @@ async def upsert_pattern(
     safe_id = _path_id(pattern_id, field_name="pattern_id")
     data = _body_dict(body)
     abstract = _optional_trimmed_text(
-        data.get("abstract"), field_name="abstract", max_length=2_000,
+        data.get("abstract"),
+        field_name="abstract",
+        max_length=2_000,
     )
     human_insight = _optional_trimmed_text(
         data.get("humanInsight") or data.get("human_insight"),
@@ -732,31 +733,41 @@ async def upsert_pattern(
         max_length=2_000,
     )
     category = _optional_trimmed_text(
-        data.get("category"), field_name="category", max_length=120,
+        data.get("category"),
+        field_name="category",
+        max_length=120,
     )
     intent = _optional_trimmed_text(
-        data.get("intent"), field_name="intent", max_length=120,
+        data.get("intent"),
+        field_name="intent",
+        max_length=120,
     )
     tier = _optional_trimmed_text(
-        data.get("tier"), field_name="tier", max_length=40,
+        data.get("tier"),
+        field_name="tier",
+        max_length=40,
     )
     surprise_init = _optional_trimmed_text(
         data.get("surpriseInit") or data.get("surprise_init"),
-        field_name="surpriseInit", max_length=2,
+        field_name="surpriseInit",
+        max_length=2,
     )
     practical_init = _optional_trimmed_text(
         data.get("practicalInit") or data.get("practical_init"),
-        field_name="practicalInit", max_length=2,
+        field_name="practicalInit",
+        max_length=2,
     )
     signals_required = _opt_json_list(
         data.get("signalsRequired") or data.get("signals_required"),
         "signalsRequired",
     )
     trigger_dsl = _opt_json_list(
-        data.get("triggerDsl") or data.get("trigger_dsl"), "triggerDsl",
+        data.get("triggerDsl") or data.get("trigger_dsl"),
+        "triggerDsl",
     )
     card_skeleton = _opt_json_obj(
-        data.get("cardSkeleton") or data.get("card_skeleton"), "cardSkeleton",
+        data.get("cardSkeleton") or data.get("card_skeleton"),
+        "cardSkeleton",
     )
     specializations = _opt_json_list(data.get("specializations"), "specializations")
     try:
@@ -798,7 +809,8 @@ async def set_pattern_status(
     try:
         async with user_scoped_tx(pool, user.id) as conn:
             updated = await PatternsRepository(user.id, conn).set_status(
-                safe_id, status_value.strip(),
+                safe_id,
+                status_value.strip(),
             )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
@@ -821,26 +833,36 @@ async def add_pattern_demo(
     if source not in {"golden", "anti", "seed"}:
         raise HTTPException(status_code=422, detail="source must be golden|anti|seed")
     redacted = _optional_bool(data.get("redacted"), field_name="redacted", default=True)
-    scenario = _optional_trimmed_text(
-        data.get("scenario"), field_name="scenario", max_length=1_000,
-    ) or ""
+    scenario = (
+        _optional_trimmed_text(
+            data.get("scenario"),
+            field_name="scenario",
+            max_length=1_000,
+        )
+        or ""
+    )
     why_surprise = _optional_trimmed_text(
         data.get("whySurprise") or data.get("why_surprise"),
-        field_name="whySurprise", max_length=500,
+        field_name="whySurprise",
+        max_length=500,
     )
     why_practical = _optional_trimmed_text(
         data.get("whyPractical") or data.get("why_practical"),
-        field_name="whyPractical", max_length=500,
+        field_name="whyPractical",
+        max_length=500,
     )
     wow_level = data.get("wowLevel") or data.get("wow_level")
     if wow_level is not None and not (isinstance(wow_level, int) and 1 <= wow_level <= 5):
         raise HTTPException(status_code=422, detail="wowLevel must be int 1..5")
     subtype = _optional_trimmed_text(
-        data.get("subtype"), field_name="subtype", max_length=120,
+        data.get("subtype"),
+        field_name="subtype",
+        max_length=120,
     )
     raw_card = data.get("card") if isinstance(data.get("card"), dict) else None
     signals_used = _opt_json_list(
-        data.get("signalsUsed") or data.get("signals_used"), "signalsUsed",
+        data.get("signalsUsed") or data.get("signals_used"),
+        "signalsUsed",
     )
 
     try:
@@ -857,20 +879,23 @@ async def add_pattern_demo(
                 detail = await reward_repo.get_card_detail(card_id)
                 if detail is None:
                     raise HTTPException(status_code=404, detail="card not found")
-                card_snapshot = (
-                    detail.get("card")
-                    if isinstance(detail.get("card"), dict) else {}
-                )
+                card_snapshot = detail.get("card") if isinstance(detail.get("card"), dict) else {}
                 if not card_snapshot:
                     raise HTTPException(status_code=404, detail="card body missing")
             else:
                 raise HTTPException(status_code=422, detail="card or cardId required")
             demo = await repo.insert_demo_from_card(
                 safe_id,
-                card=card_snapshot, subtype=subtype, scenario=scenario,
-                signals_used=signals_used, why_surprise=why_surprise,
-                why_practical=why_practical, wow_level=wow_level,
-                source=source, source_card_id=card_id, redacted=redacted,
+                card=card_snapshot,
+                subtype=subtype,
+                scenario=scenario,
+                signals_used=signals_used,
+                why_surprise=why_surprise,
+                why_practical=why_practical,
+                wow_level=wow_level,
+                source=source,
+                source_card_id=card_id,
+                redacted=redacted,
             )
     except HTTPException:
         raise

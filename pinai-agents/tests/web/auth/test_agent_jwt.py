@@ -40,6 +40,7 @@ def _gen_keypair() -> tuple[str, str]:
 def _priv_pem_from_env() -> bytes:
     """Reconstruct PEM from the test fixture's PAI_JWT_SIGNING_KEY env."""
     import os
+
     raw = base64.b64decode(os.environ["PAI_JWT_SIGNING_KEY"])
     priv = Ed25519PrivateKey.from_private_bytes(raw)
     return priv.private_bytes(
@@ -55,6 +56,7 @@ def _set_keypair(monkeypatch):
     monkeypatch.setenv("PAI_JWT_SIGNING_KEY", priv_b64)
     monkeypatch.setenv("PAI_JWT_VERIFY_PUBKEY", pub_b64)
     from pinai_agents import config
+
     config.get_web_settings.cache_clear()
     config.get_chat_settings.cache_clear()
     yield
@@ -94,12 +96,15 @@ def test_hs256_token_rejected_no_fallback():
             "iss": "pinai-agents-web",
             "aud": "pinai-agents-internal",
             "sub": "agent-run",
-            "user_id": 1, "run_id": "run_x",
+            "user_id": 1,
+            "run_id": "run_x",
             "exp": int(time.time()) + 600,
             "iat": int(time.time()),
-            "scope": "agent", "jti": "x",
+            "scope": "agent",
+            "jti": "x",
         },
-        secret, algorithm="HS256",
+        secret,
+        algorithm="HS256",
     )
     with pytest.raises(AgentJWTError):
         verify_agent_run_jwt(hs_token)
@@ -114,8 +119,10 @@ def test_eddsa_token_rejected_when_pubkey_wrong():
 
     _, other_pub = _gen_keypair()
     import os
+
     os.environ["PAI_JWT_VERIFY_PUBKEY"] = other_pub
     from pinai_agents import config
+
     config.get_chat_settings.cache_clear()
     try:
         with pytest.raises(RunJWTError):
@@ -131,10 +138,12 @@ def test_verify_rejects_wrong_audience():
             "iss": "pinai-agents-web",
             "aud": "wrong-audience",
             "sub": "agent-run",
-            "user_id": 1, "run_id": "run_x",
+            "user_id": 1,
+            "run_id": "run_x",
             "exp": int(time.time()) + 60,
         },
-        pem, algorithm="EdDSA",
+        pem,
+        algorithm="EdDSA",
     )
     with pytest.raises(AgentJWTError):
         verify_agent_run_jwt(bad_token)
@@ -149,11 +158,13 @@ def test_verify_rejects_expired():
             "iss": "pinai-agents-web",
             "aud": "pinai-agents-internal",
             "sub": "agent-run",
-            "user_id": 1, "run_id": "run_x",
+            "user_id": 1,
+            "run_id": "run_x",
             "exp": int(time.time()) - 60,
             "iat": int(time.time()) - 120,
         },
-        pem, algorithm="EdDSA",
+        pem,
+        algorithm="EdDSA",
     )
     with pytest.raises(AgentJWTError):
         verify_agent_run_jwt(expired)
@@ -161,8 +172,10 @@ def test_verify_rejects_expired():
 
 def test_sign_without_signing_key_raises():
     import os
+
     saved = os.environ.pop("PAI_JWT_SIGNING_KEY", None)
     from pinai_agents import config
+
     config.get_web_settings.cache_clear()
     try:
         with pytest.raises(AgentJWTError):
@@ -175,8 +188,10 @@ def test_sign_without_signing_key_raises():
 
 def test_verify_without_pubkey_raises():
     import os
+
     saved = os.environ.pop("PAI_JWT_VERIFY_PUBKEY", None)
     from pinai_agents import config
+
     config.get_chat_settings.cache_clear()
     try:
         with pytest.raises(RunJWTError):

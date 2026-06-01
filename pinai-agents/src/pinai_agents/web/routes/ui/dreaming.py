@@ -112,14 +112,8 @@ def _journal_summary(row: EvolutionRunRow, memories: list[dict[str, Any]]) -> st
             if str(memory.get("text") or "").strip()
         ]
         if observations:
-            return (
-                "A few patterns stood out from your day. "
-                + " ".join(observations[:3])
-            )
-    return (
-        "I looked back over your day and found a few signals worth "
-        "carrying forward."
-    )
+            return "A few patterns stood out from your day. " + " ".join(observations[:3])
+    return "I looked back over your day and found a few signals worth carrying forward."
 
 
 def _profile_change_sentence(row: EvolutionRunRow) -> str | None:
@@ -127,10 +121,7 @@ def _profile_change_sentence(row: EvolutionRunRow) -> str | None:
         return None
     keys = [k for k in row.profile_changed_keys if k.strip()]
     if not keys:
-        return (
-            "I also updated my profile of you, but this run did not record "
-            "which fields changed."
-        )
+        return "I also updated my profile of you, but this run did not record which fields changed."
     readable = ", ".join(k.replace("facts.", "").replace("preferences.", "") for k in keys[:6])
     suffix = "" if len(keys) <= 6 else f", and {len(keys) - 6} more"
     return f"I updated my model of you around {readable}{suffix}."
@@ -168,20 +159,24 @@ def _source_breakdown(row: EvolutionRunRow) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     signals = report.get("totalSignals")
     if isinstance(signals, int):
-        out.append({
-            "sourceId": "personal_signals",
-            "status": "ok",
-            "itemCount": signals,
-            "reason": "24h daily dream signal window",
-        })
+        out.append(
+            {
+                "sourceId": "personal_signals",
+                "status": "ok",
+                "itemCount": signals,
+                "reason": "24h daily dream signal window",
+            }
+        )
     raw_rows = report.get("totalRawRows")
     if isinstance(raw_rows, int):
-        out.append({
-            "sourceId": "raw",
-            "status": "ok" if raw_rows > 0 else "skipped",
-            "itemCount": raw_rows,
-            "reason": "24h supplementary raw-source window",
-        })
+        out.append(
+            {
+                "sourceId": "raw",
+                "status": "ok" if raw_rows > 0 else "skipped",
+                "itemCount": raw_rows,
+                "reason": "24h supplementary raw-source window",
+            }
+        )
     return out
 
 
@@ -201,8 +196,7 @@ async def list_dreaming_runs(
         rows = await repo.list(limit=50)
     return {
         "ok": True,
-        "runs": [_to_dict(r) for r in rows
-                 if r.trigger_kind in ("daily_dream", "manual")],
+        "runs": [_to_dict(r) for r in rows if r.trigger_kind in ("daily_dream", "manual")],
     }
 
 
@@ -237,9 +231,7 @@ async def get_dream_run(
                     (user.id, memory_ids),
                 )
                 by_id = {r["id"]: r for r in await cur.fetchall()}
-                memories = [
-                    by_id[mid] for mid in memory_ids if mid in by_id
-                ]
+                memories = [by_id[mid] for mid in memory_ids if mid in by_id]
     if row is None:
         raise HTTPException(status_code=404, detail="dream run not found")
     dream_markdown = _dream_markdown(row, memories)
@@ -293,7 +285,8 @@ async def trigger_dream(
     async with user_scoped_tx(pool, user.id) as conn:
         repo = ScheduledTasksRepository(user.id, conn)
         await repo.upsert(
-            id=task_id, kind="auto.dreaming",
+            id=task_id,
+            kind="auto.dreaming",
             trigger_kind="once",
             next_run_at=datetime.now(UTC) - timedelta(seconds=1),  # immediately due
             payload={"trigger": "manual"},

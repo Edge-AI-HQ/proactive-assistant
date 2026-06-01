@@ -37,7 +37,9 @@ _AUTO_DREAMING_CRON_EXPR = "0 6 * * *"
 
 
 def _next_auto_dreaming_fire(
-    *, timezone: str, after: datetime | None = None,
+    *,
+    timezone: str,
+    after: datetime | None = None,
 ) -> datetime:
     now = after or datetime.now(UTC)
     if now.tzinfo is None:
@@ -66,7 +68,10 @@ async def _profile_timezone(conn: AsyncConnection, *, user_id: int) -> str:
 
 
 async def _sync_auto_generate_schedule(
-    conn: AsyncConnection, *, user_id: int, settings: UserSettingsRow,
+    conn: AsyncConnection,
+    *,
+    user_id: int,
+    settings: UserSettingsRow,
 ) -> None:
     """Reflect (auto_generate, interval, generation_language) into the
     recurring `generator` schedule task. One row per user, idempotent.
@@ -79,7 +84,9 @@ async def _sync_auto_generate_schedule(
     if settings.auto_generate:
         interval_seconds = settings.auto_generate_interval_minutes * 60
         await ScheduledTasksRepository(user_id, conn).upsert(
-            id=task_id, kind="generator.auto", trigger_kind="schedule",
+            id=task_id,
+            kind="generator.auto",
+            trigger_kind="schedule",
             interval_seconds=interval_seconds,
             next_run_at=datetime.now(UTC) + timedelta(seconds=interval_seconds),
             payload={
@@ -100,7 +107,10 @@ async def _sync_auto_generate_schedule(
 
 
 async def _sync_auto_dreaming_schedule(
-    conn: AsyncConnection, *, user_id: int, settings: UserSettingsRow,
+    conn: AsyncConnection,
+    *,
+    user_id: int,
+    settings: UserSettingsRow,
 ) -> None:
     """Reflect auto_dreaming into a daily 06:00 scheduled task.
 
@@ -113,7 +123,9 @@ async def _sync_auto_dreaming_schedule(
     if settings.auto_dreaming:
         timezone = await _profile_timezone(conn, user_id=user_id)
         await ScheduledTasksRepository(user_id, conn).upsert(
-            id=task_id, kind="auto.dreaming", trigger_kind="schedule",
+            id=task_id,
+            kind="auto.dreaming",
+            trigger_kind="schedule",
             cron_expr=_AUTO_DREAMING_CRON_EXPR,
             next_run_at=_next_auto_dreaming_fire(timezone=timezone),
             payload={"trigger": "auto"},
@@ -132,7 +144,10 @@ async def _sync_auto_dreaming_schedule(
 
 
 async def _ensure_auto_generate_schedule(
-    conn: AsyncConnection, *, user_id: int, settings: UserSettingsRow,
+    conn: AsyncConnection,
+    *,
+    user_id: int,
+    settings: UserSettingsRow,
 ) -> None:
     """Read-path counterpart to `_sync_auto_generate_schedule`.
 
@@ -168,7 +183,10 @@ async def _ensure_auto_generate_schedule(
 
 
 async def _ensure_auto_dreaming_schedule(
-    conn: AsyncConnection, *, user_id: int, settings: UserSettingsRow,
+    conn: AsyncConnection,
+    *,
+    user_id: int,
+    settings: UserSettingsRow,
 ) -> None:
     """Backfill or repair the daily dream schedule for enabled users.
 
@@ -203,7 +221,10 @@ async def _ensure_auto_dreaming_schedule(
 
 
 async def _ensure_settings_schedules(
-    conn: AsyncConnection, *, user_id: int, settings: UserSettingsRow,
+    conn: AsyncConnection,
+    *,
+    user_id: int,
+    settings: UserSettingsRow,
 ) -> None:
     await _ensure_auto_generate_schedule(conn, user_id=user_id, settings=settings)
     await _ensure_auto_dreaming_schedule(conn, user_id=user_id, settings=settings)
@@ -252,12 +273,18 @@ async def get_profile_snapshot(
         timezone_hint = _clean_client_timezone(x_pin_client_timezone)
         locale_patch = (
             locale_hint
-            if profile and profile.locale == "en-US" and locale_hint and locale_hint != profile.locale
+            if profile
+            and profile.locale == "en-US"
+            and locale_hint
+            and locale_hint != profile.locale
             else None
         )
         timezone_patch = (
             timezone_hint
-            if profile and profile.timezone == "UTC" and timezone_hint and timezone_hint != profile.timezone
+            if profile
+            and profile.timezone == "UTC"
+            and timezone_hint
+            and timezone_hint != profile.timezone
             else None
         )
         if locale_patch or timezone_patch:
@@ -296,8 +323,11 @@ async def upsert_goal(
     async with user_scoped_tx(pool, user.id) as conn:
         repo = ProfileRepository(user.id, conn)
         row = await repo.upsert_goal(
-            id=goal_id, key=body.key, title=body.title,
-            priority=body.priority, status=body.status,
+            id=goal_id,
+            key=body.key,
+            title=body.title,
+            priority=body.priority,
+            status=body.status,
             summary=body.summary,
         )
     return asdict(row)
@@ -393,9 +423,7 @@ async def update_settings(
             notify_permission_prompted_at=(
                 datetime.now(UTC) if body.notify_permission_prompted else None
             ),
-            onboarding_completed_at=(
-                datetime.now(UTC) if body.onboarding_completed else None
-            ),
+            onboarding_completed_at=(datetime.now(UTC) if body.onboarding_completed else None),
         )
         await _sync_auto_generate_schedule(conn, user_id=user.id, settings=row)
         await _sync_auto_dreaming_schedule(conn, user_id=user.id, settings=row)

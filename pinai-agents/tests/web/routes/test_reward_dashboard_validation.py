@@ -107,7 +107,10 @@ def test_optional_trimmed_text_normalizes_empty_and_rejects_bad_values() -> None
 
 
 def test_score_reason_uses_same_text_boundary() -> None:
-    assert _optional_trimmed_text(" sharp ", field_name="reason", max_length=SCORE_REASON_MAX_LENGTH) == "sharp"
+    assert (
+        _optional_trimmed_text(" sharp ", field_name="reason", max_length=SCORE_REASON_MAX_LENGTH)
+        == "sharp"
+    )
 
     with pytest.raises(HTTPException) as exc:
         _optional_trimmed_text(
@@ -121,7 +124,9 @@ def test_score_reason_uses_same_text_boundary() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_routes_trim_text_filters_before_querying_repo(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_list_routes_trim_text_filters_before_querying_repo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[tuple[str, dict[str, Any]]] = []
 
     class FakeRewardRepository:
@@ -169,14 +174,17 @@ async def test_list_routes_trim_text_filters_before_querying_repo(monkeypatch: p
         offset=0,
     )
 
-    assert calls[0] == ("list_runs", {
-        "limit": 50,
-        "trigger": "manual",
-        "since": None,
-        "until": None,
-        "reviewed": None,
-        "quality": None,
-    })
+    assert calls[0] == (
+        "list_runs",
+        {
+            "limit": 50,
+            "trigger": "manual",
+            "since": None,
+            "until": None,
+            "reviewed": None,
+            "quality": None,
+        },
+    )
     assert calls[1][0] == "count_casebook"
     assert calls[1][1]["basket"] == "work"
     assert calls[1][1]["intent"] == "route"
@@ -200,7 +208,10 @@ async def test_list_routes_reject_oversized_text_filters() -> None:
         )
 
     assert trigger_exc.value.status_code == 422
-    assert trigger_exc.value.detail == f"trigger must be at most {REWARD_TEXT_FILTER_MAX_LENGTH} characters"
+    assert (
+        trigger_exc.value.detail
+        == f"trigger must be at most {REWARD_TEXT_FILTER_MAX_LENGTH} characters"
+    )
 
     with pytest.raises(HTTPException) as intent_exc:
         await reward_dashboard_module.list_casebook(
@@ -219,7 +230,10 @@ async def test_list_routes_reject_oversized_text_filters() -> None:
         )
 
     assert intent_exc.value.status_code == 422
-    assert intent_exc.value.detail == f"intent must be at most {REWARD_TEXT_FILTER_MAX_LENGTH} characters"
+    assert (
+        intent_exc.value.detail
+        == f"intent must be at most {REWARD_TEXT_FILTER_MAX_LENGTH} characters"
+    )
 
 
 def test_score_event_type_defaults_and_trims() -> None:
@@ -271,12 +285,14 @@ def test_score_source_rejects_unknown_sources() -> None:
 
 
 def test_reward_metadata_accepts_small_json_objects() -> None:
-    assert _reward_metadata({
-        "surface": "now_feed",
-        "goalBasket": "career",
-        "rank": 1,
-        "flags": [True, None],
-    }) == {
+    assert _reward_metadata(
+        {
+            "surface": "now_feed",
+            "goalBasket": "career",
+            "rank": 1,
+            "flags": [True, None],
+        }
+    ) == {
         "surface": "now_feed",
         "goalBasket": "career",
         "rank": 1,
@@ -307,7 +323,9 @@ def test_reward_metadata_rejects_oversized_payloads() -> None:
         _reward_metadata({"value": "x" * REWARD_METADATA_MAX_JSON_LENGTH})
 
     assert exc.value.status_code == 422
-    assert exc.value.detail == f"metadata must be at most {REWARD_METADATA_MAX_JSON_LENGTH} characters"
+    assert (
+        exc.value.detail == f"metadata must be at most {REWARD_METADATA_MAX_JSON_LENGTH} characters"
+    )
 
 
 def test_reward_metadata_rejects_deep_or_wide_payloads() -> None:
@@ -411,11 +429,14 @@ def test_rejects_reversed_numeric_ranges() -> None:
     assert exc.value.detail == "minScore must be less than or equal to maxScore"
 
 
-@pytest.mark.parametrize(("name", "min_value", "max_value"), [
-    ("minScore", float("nan"), 5),
-    ("maxScore", 1, float("inf")),
-    ("maxScore", 1, float("-inf")),
-])
+@pytest.mark.parametrize(
+    ("name", "min_value", "max_value"),
+    [
+        ("minScore", float("nan"), 5),
+        ("maxScore", 1, float("inf")),
+        ("maxScore", 1, float("-inf")),
+    ],
+)
 def test_rejects_non_finite_numeric_ranges(
     name: str,
     min_value: float,

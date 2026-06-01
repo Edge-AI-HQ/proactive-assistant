@@ -58,7 +58,7 @@ def _extract_bearer(authorization: str | None) -> str:
             detail="Authorization: Bearer <token> required",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return authorization[len("bearer "):].strip()
+    return authorization[len("bearer ") :].strip()
 
 
 def _verify_principal(token: str) -> RunPrincipal:
@@ -134,7 +134,10 @@ async def generate(
         ev["cardId"] = intent_to_id.get(ev["intentKey"])
     logger.info(
         "generator ok run_id=%s duration=%dms cards=%d evals=%d",
-        run_id, duration_ms, len(cards), len(evals),
+        run_id,
+        duration_ms,
+        len(cards),
+        len(evals),
     )
     return GenerateResponse(
         run_id=run_id,

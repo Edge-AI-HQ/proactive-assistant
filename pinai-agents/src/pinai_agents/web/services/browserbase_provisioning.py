@@ -22,7 +22,8 @@ logger = logging.getLogger(__name__)
 
 
 async def ensure_browserbase_context(
-    pool: AsyncConnectionPool, user: User,
+    pool: AsyncConnectionPool,
+    user: User,
 ) -> User:
     """Idempotent: returns `user` unchanged if already provisioned (or if
     Browserbase isn't configured). Otherwise mints a context, persists
@@ -42,12 +43,15 @@ async def ensure_browserbase_context(
     try:
         bb = Browserbase(api_key=s.browserbase_api_key)
         ctx = await asyncio.to_thread(
-            bb.contexts.create, project_id=s.browserbase_project_id,
+            bb.contexts.create,
+            project_id=s.browserbase_project_id,
         )
     except Exception as e:
         logger.warning(
             "browserbase context provisioning failed user=%d: %s: %s",
-            user.id, type(e).__name__, e,
+            user.id,
+            type(e).__name__,
+            e,
         )
         return user
 

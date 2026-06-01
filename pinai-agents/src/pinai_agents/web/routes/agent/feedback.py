@@ -22,10 +22,16 @@ router = APIRouter(prefix="/api/agent/feedback", tags=["agent-feedback"])
 
 def _to_dict(row: FeedbackRow) -> dict[str, Any]:
     return {
-        "id": row.id, "kind": row.kind, "action": row.action,
-        "intentCardId": row.intent_card_id, "intentKey": row.intent_key,
-        "source": row.source, "basket": row.basket,
-        "value": row.value, "text": row.text, "metadata": row.metadata,
+        "id": row.id,
+        "kind": row.kind,
+        "action": row.action,
+        "intentCardId": row.intent_card_id,
+        "intentKey": row.intent_key,
+        "source": row.source,
+        "basket": row.basket,
+        "value": row.value,
+        "text": row.text,
+        "metadata": row.metadata,
         "channel": row.channel,
         "createdAt": row.created_at.isoformat(),
     }

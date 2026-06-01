@@ -30,7 +30,9 @@ async def feedback_list(kind: str | None, action: str | None, limit: int):
     same kind of card twice / to learn user preferences."""
     payload = await http_client.get(
         "/api/agent/feedback/list",
-        kind=kind, action=action, limit=limit,
+        kind=kind,
+        action=action,
+        limit=limit,
     )
     if isinstance(payload, dict) and payload.get("error"):
         return payload

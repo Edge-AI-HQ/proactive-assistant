@@ -50,7 +50,8 @@ async def build_phase1_seed(conn: AsyncConnection, user_id: int) -> dict[str, An
 
 
 async def _collect_personal_signals_summary(
-    conn: AsyncConnection, user_id: int,
+    conn: AsyncConnection,
+    user_id: int,
 ) -> dict[str, Any]:
     try:
         async with conn.cursor() as cur:
@@ -114,19 +115,24 @@ async def _collect_memory(conn: AsyncConnection, user_id: int) -> dict[str, Any]
 
     obligations: list[dict[str, Any]] = []
     for r in rows:
-        obligations.append({
-            "id": r["id"],
-            "type": "birthday" if "birthday" in (r.get("text") or "").lower() or "生日" in (r.get("text") or "") else "recurring",
-            "text": r.get("text"),
-            "subject": r.get("subject"),
-            "next_occurrence": _iso(r.get("occurred_at")),
-            "tags": _ensure_list(r.get("tags")),
-        })
+        obligations.append(
+            {
+                "id": r["id"],
+                "type": "birthday"
+                if "birthday" in (r.get("text") or "").lower() or "生日" in (r.get("text") or "")
+                else "recurring",
+                "text": r.get("text"),
+                "subject": r.get("subject"),
+                "next_occurrence": _iso(r.get("occurred_at")),
+                "tags": _ensure_list(r.get("tags")),
+            }
+        )
     return {"recurring_obligations": obligations}
 
 
 async def _collect_world_summary(
-    conn: AsyncConnection, user_id: int,
+    conn: AsyncConnection,
+    user_id: int,
 ) -> dict[str, Any]:
     try:
         async with conn.cursor() as cur:
@@ -178,14 +184,20 @@ async def _collect_calendar(conn: AsyncConnection, user_id: int) -> dict[str, An
     events: list[dict[str, Any]] = []
     for r in rows:
         payload = _ensure_dict(r.get("payload"))
-        events.append({
-            "id": r.get("id"),
-            "title": r.get("title") or payload.get("title"),
-            "summary": r.get("summary"),
-            "subtype": payload.get("subtype") or payload.get("event_type"),
-            "start": _iso(r.get("occurred_at")),
-            **{k: v for k, v in payload.items() if k not in {"title", "subtype", "event_type", "start"}},
-        })
+        events.append(
+            {
+                "id": r.get("id"),
+                "title": r.get("title") or payload.get("title"),
+                "summary": r.get("summary"),
+                "subtype": payload.get("subtype") or payload.get("event_type"),
+                "start": _iso(r.get("occurred_at")),
+                **{
+                    k: v
+                    for k, v in payload.items()
+                    if k not in {"title", "subtype", "event_type", "start"}
+                },
+            }
+        )
     return {"events": events}
 
 
@@ -216,10 +228,12 @@ async def _collect_gmail(conn: AsyncConnection, user_id: int) -> dict[str, Any]:
     threads: list[dict[str, Any]] = []
     for r in rows:
         payload = _ensure_dict(r.get("payload"))
-        threads.append({
-            "thread_id": payload.get("thread_id") or r.get("id"),
-            "days_open": float(r.get("days_open") or 0),
-        })
+        threads.append(
+            {
+                "thread_id": payload.get("thread_id") or r.get("id"),
+                "days_open": float(r.get("days_open") or 0),
+            }
+        )
     return {"unresponded_to_vip": threads}
 
 

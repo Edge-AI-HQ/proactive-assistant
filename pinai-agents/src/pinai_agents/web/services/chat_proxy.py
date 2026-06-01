@@ -72,7 +72,8 @@ async def stream_chat(
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             async with client.stream(
-                "POST", url,
+                "POST",
+                url,
                 json=body,
                 headers={"Authorization": f"Bearer {token}", "X-Run-Id": run_id},
             ) as resp:
@@ -80,7 +81,9 @@ async def stream_chat(
                     payload = await resp.aread()
                     logger.warning(
                         "chat worker returned %d for run=%s body=%r",
-                        resp.status_code, run_id, payload[:300],
+                        resp.status_code,
+                        run_id,
+                        payload[:300],
                     )
                     raise HTTPException(
                         status_code=status.HTTP_502_BAD_GATEWAY,
@@ -111,7 +114,8 @@ async def call_chat_exists(*, user_id: int, session_key: str) -> bool:
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             resp = await client.get(
-                url, params={"session_key": session_key},
+                url,
+                params={"session_key": session_key},
                 headers={"Authorization": f"Bearer {token}", "X-Run-Id": run_id},
             )
         except httpx.RequestError as e:
@@ -120,14 +124,18 @@ async def call_chat_exists(*, user_id: int, session_key: str) -> bool:
     if resp.status_code >= 400:
         logger.warning(
             "chat /exists returned %d for run=%s body=%r",
-            resp.status_code, run_id, resp.text[:200],
+            resp.status_code,
+            run_id,
+            resp.text[:200],
         )
         return False
     return bool(resp.json().get("existing", False))
 
 
 async def call_chat_history(
-    *, user_id: int, session_key: str,
+    *,
+    user_id: int,
+    session_key: str,
 ) -> list[dict[str, Any]]:
     """One-shot proxy to chat worker /agent/chat/history.
 
@@ -142,7 +150,8 @@ async def call_chat_history(
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             resp = await client.get(
-                url, params={"session_key": session_key},
+                url,
+                params={"session_key": session_key},
                 headers={"Authorization": f"Bearer {token}", "X-Run-Id": run_id},
             )
         except httpx.RequestError as e:
@@ -151,7 +160,9 @@ async def call_chat_history(
     if resp.status_code >= 400:
         logger.warning(
             "chat /history returned %d for run=%s body=%r",
-            resp.status_code, run_id, resp.text[:200],
+            resp.status_code,
+            run_id,
+            resp.text[:200],
         )
         return []
     payload = resp.json()
@@ -184,7 +195,9 @@ async def call_generate(
     Chat reads it from the payload; chat must NOT query the pattern DB.
     """
     token, jwt_run_id = sign_agent_run_jwt(
-        user_id=user_id, virtual_key=virtual_key, run_id=run_id,
+        user_id=user_id,
+        virtual_key=virtual_key,
+        run_id=run_id,
     )
     # Outbound run_id for tracing headers / fallback if chat doesn't echo it.
     outbound_run_id = run_id or jwt_run_id
@@ -198,18 +211,23 @@ async def call_generate(
         body["matched_patterns"] = matched_patterns
     url = f"{_chat_internal_url()}/agent/generate"
     timeout = httpx.Timeout(
-        connect=5.0, read=_GENERATE_READ_TIMEOUT_SECONDS, write=10.0, pool=10.0,
+        connect=5.0,
+        read=_GENERATE_READ_TIMEOUT_SECONDS,
+        write=10.0,
+        pool=10.0,
     )
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             resp = await client.post(
-                url, json=body,
+                url,
+                json=body,
                 headers={"Authorization": f"Bearer {token}", "X-Run-Id": outbound_run_id},
             )
         except httpx.ReadTimeout as e:
             logger.exception(
                 "generate worker timed out run=%s read_timeout_seconds=%d",
-                outbound_run_id, int(_GENERATE_READ_TIMEOUT_SECONDS),
+                outbound_run_id,
+                int(_GENERATE_READ_TIMEOUT_SECONDS),
             )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,

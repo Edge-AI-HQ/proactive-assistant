@@ -21,7 +21,8 @@ async def test_profile_upsert_idempotent(pool, user_ids):
     async with user_scoped_tx(pool, user_a) as conn:
         repo = ProfileRepository(user_a, conn)
         first = await repo.upsert_profile(
-            id="primary", display_name="Alice",
+            id="primary",
+            display_name="Alice",
             facts={"role": "engineer"},
         )
     assert first.display_name == "Alice"
@@ -30,7 +31,8 @@ async def test_profile_upsert_idempotent(pool, user_ids):
     async with user_scoped_tx(pool, user_a) as conn:
         repo = ProfileRepository(user_a, conn)
         second = await repo.upsert_profile(
-            id="primary", display_name="Alice 2.0",
+            id="primary",
+            display_name="Alice 2.0",
             facts={"role": "engineer", "team": "ai"},
         )
     assert second.display_name == "Alice 2.0"
@@ -47,7 +49,9 @@ async def test_profile_partial_upsert_preserves_existing_fields(pool, user_ids):
     async with user_scoped_tx(pool, user_a) as conn:
         repo = ProfileRepository(user_a, conn)
         await repo.upsert_profile(
-            display_name="Alice", locale="zh-Hans", timezone="Asia/Shanghai",
+            display_name="Alice",
+            locale="zh-Hans",
+            timezone="Asia/Shanghai",
             summary="builds AI agents",
             facts={"role": "founder"},
             preferences={"comm": "terse"},
@@ -110,8 +114,10 @@ async def test_goal_upsert_collapses_on_duplicate_key(pool, user_ids):
     async with user_scoped_tx(pool, user_a) as conn:
         repo = ProfileRepository(user_a, conn)
         first = await repo.upsert_goal(
-            id="goal_seed_xyz", key="sub3-marathon",
-            title="Run sub-3 marathon by Q4 2026", priority="high",
+            id="goal_seed_xyz",
+            key="sub3-marathon",
+            title="Run sub-3 marathon by Q4 2026",
+            priority="high",
         )
     assert first.id == "goal_seed_xyz"
 
@@ -119,7 +125,8 @@ async def test_goal_upsert_collapses_on_duplicate_key(pool, user_ids):
     async with user_scoped_tx(pool, user_a) as conn:
         repo = ProfileRepository(user_a, conn)
         second = await repo.upsert_goal(
-            id="goal_brand_new", key="sub3-marathon",
+            id="goal_brand_new",
+            key="sub3-marathon",
             title="Run sub-3 marathon by Q4 2026 (revised note)",
             priority="high",
         )
@@ -215,7 +222,8 @@ async def test_profile_isolated_across_users(pool, user_ids):
     user_a, user_b = user_ids
     async with user_scoped_tx(pool, user_a) as conn:
         await ProfileRepository(user_a, conn).upsert_profile(
-            id="primary", display_name="Alice",
+            id="primary",
+            display_name="Alice",
         )
     async with user_scoped_tx(pool, user_b) as conn:
         repo_b = ProfileRepository(user_b, conn)

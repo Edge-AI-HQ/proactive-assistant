@@ -100,7 +100,9 @@ async def run_pattern_extractor(
 
 
 async def _fetch_recent_golden(
-    conn: AsyncConnection, *, lookback_days: int,
+    conn: AsyncConnection,
+    *,
+    lookback_days: int,
 ) -> list[dict[str, Any]]:
     """Pull golden casebook entries from the last N days, joined with the
     card's evaluation row + the pattern hit (if any). The join lets us
@@ -210,9 +212,7 @@ async def _upsert_candidate(
     """Insert (or refresh) the candidate pattern as status=pending_review.
     The trigger / card_skeleton are intentionally empty so the reviewer
     edits them before approving."""
-    sample_baskets = [
-        it.get("basket") for it in items if isinstance(it.get("basket"), str)
-    ]
+    sample_baskets = [it.get("basket") for it in items if isinstance(it.get("basket"), str)]
     primary_basket = sample_baskets[0] if sample_baskets else None
     async with conn.cursor() as cur:
         await cur.execute(
@@ -237,5 +237,8 @@ async def _upsert_candidate(
         )
     logger.info(
         "pattern_extractor: candidate=%s intent=%s cluster_size=%d basket=%s",
-        candidate.pattern_id, candidate.intent_key, candidate.cluster_size, primary_basket,
+        candidate.pattern_id,
+        candidate.intent_key,
+        candidate.cluster_size,
+        primary_basket,
     )

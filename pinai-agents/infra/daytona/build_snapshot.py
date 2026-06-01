@@ -53,14 +53,15 @@ def _build_image() -> daytona.Image:
     skips compilation steps so build stays fast.
     """
     return (
-        daytona.Image
-        .debian_slim("3.12")
-        .pip_install([
-            "httpx>=0.27.0,<1.0",
-            "pydantic>=2.6.0,<3.0",
-            "anyio>=4.0.0,<5.0",
-            "orjson>=3.10.0,<4.0",
-        ])
+        daytona.Image.debian_slim("3.12")
+        .pip_install(
+            [
+                "httpx>=0.27.0,<1.0",
+                "pydantic>=2.6.0,<3.0",
+                "anyio>=4.0.0,<5.0",
+                "orjson>=3.10.0,<4.0",
+            ]
+        )
         # Upload local SDK dir + install. Path is relative to the cwd
         # process_image_context() runs from — i.e. wherever this script
         # gets invoked. We chdir to REPO_ROOT below to make this stable.
@@ -78,11 +79,13 @@ def _build_image() -> daytona.Image:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--version", default=None,
+        "--version",
+        default=None,
         help="Snapshot tag (default: read from packages/pinai_sdk/pyproject.toml)",
     )
     parser.add_argument(
-        "--recreate", action="store_true",
+        "--recreate",
+        action="store_true",
         help="Delete existing snapshot with same name before creating",
     )
     args = parser.parse_args()
@@ -114,6 +117,7 @@ def main() -> int:
                 # bounded timeout so we don't hang the CI run forever
                 # if Daytona is degraded.
                 import time  # noqa: PLC0415  — local import keeps the module side-effect-free
+
                 deadline = time.monotonic() + 60
                 while time.monotonic() < deadline:
                     try:
@@ -123,7 +127,9 @@ def main() -> int:
                         break
                     time.sleep(2)
                 else:
-                    print("  WARN: snapshot still visible 60s after delete; create may still conflict")
+                    print(
+                        "  WARN: snapshot still visible 60s after delete; create may still conflict"
+                    )
         except Exception as e:
             # Most likely "not found" — fine.
             print(f"  (no prior snapshot to delete: {type(e).__name__})")

@@ -88,15 +88,19 @@ async def list_raw(
             sql,
             (
                 run.user_id,
-                since, since,
-                until, until,
-                dedupe_key, dedupe_key,
+                since,
+                since,
+                until,
+                until,
+                dedupe_key,
+                dedupe_key,
                 limit,
             ),
         )
         rows = await cur.fetchall()
     return {
-        "toolkit": toolkit, "entity": entity,
+        "toolkit": toolkit,
+        "entity": entity,
         "items": [_row_to_dict(r) for r in rows],
     }
 

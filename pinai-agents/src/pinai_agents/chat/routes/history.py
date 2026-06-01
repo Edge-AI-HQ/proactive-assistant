@@ -124,9 +124,7 @@ async def _get_thread_messages(session_key: str) -> list[Any]:
         )
     except Exception as e:
         logger.exception("state read failed session_key=%s", session_key)
-        raise HTTPException(
-            status_code=500, detail=f"{type(e).__name__}: {e}"
-        ) from e
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
     if snapshot is None:
         return []
     return (snapshot.values or {}).get("messages", []) or []
@@ -269,11 +267,13 @@ def _build_history(messages: list[Any]) -> list[dict[str, Any]]:
             close_assistant()
             text = _extract_text(msg)
             if text:
-                out.append({
-                    "id": msg_id,
-                    "role": "user",
-                    "parts": [{"type": "text", "text": text}],
-                })
+                out.append(
+                    {
+                        "id": msg_id,
+                        "role": "user",
+                        "parts": [{"type": "text", "text": text}],
+                    }
+                )
             continue
 
         if isinstance(msg, AIMessage):
@@ -288,13 +288,11 @@ def _build_history(messages: list[Any]) -> list[dict[str, Any]]:
             # Emit it before the text part so the UI keeps producer order.
             reasoning = _extract_reasoning(msg)
             if reasoning:
-                current_assistant["parts"].append(
-                    {"type": "reasoning", "text": reasoning}
-                )
+                current_assistant["parts"].append({"type": "reasoning", "text": reasoning})
             text = _extract_text(msg)
             if text:
                 current_assistant["parts"].append({"type": "text", "text": text})
-            for tc in (getattr(msg, "tool_calls", None) or []):
+            for tc in getattr(msg, "tool_calls", None) or []:
                 tc_id = tc.get("id") if isinstance(tc, dict) else None
                 if not tc_id:
                     continue

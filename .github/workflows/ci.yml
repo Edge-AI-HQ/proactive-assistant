@@ -65,13 +65,9 @@ jobs:
         working-directory: pinai-agents
         run: uv run ruff check
 
-      # continue-on-error: the codebase carries ~204 pre-existing format
-      # drifts (mostly under tests/). Reported but non-blocking until the
-      # one-shot `ruff format` cleanup lands; drop this line afterwards.
       - name: ruff format check
         working-directory: pinai-agents
         run: uv run ruff format --check
-        continue-on-error: true
 
       # continue-on-error: ~313 pre-existing mypy errors (single root cause —
       # cursors not declaring row_factory=dict_row, so dict rows read as

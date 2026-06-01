@@ -21,7 +21,10 @@ router = APIRouter(prefix="/api/agent/skills", tags=["agent-skills"])
 def _to_dict(row: SkillRow) -> dict:
     d = asdict(row)
     for k in (
-        "enabled_at", "disabled_at", "created_at", "updated_at",
+        "enabled_at",
+        "disabled_at",
+        "created_at",
+        "updated_at",
         "last_referenced_at",
     ):
         v = d.get(k)
@@ -35,7 +38,8 @@ async def list_skills(
     run: AgentRun = Depends(current_agent_run),
     pool=Depends(get_pool),
     status_filter: str | None = Query(
-        None, alias="status", pattern="^(enabled|disabled|archived)$"),
+        None, alias="status", pattern="^(enabled|disabled|archived)$"
+    ),
     limit: int = Query(50, ge=1, le=200),
 ):
     async with user_scoped_tx(pool, run.user_id) as conn:
@@ -55,7 +59,8 @@ async def get_skill(
         row = await repo.get(skill_id)
     if row is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="skill not found",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="skill not found",
         )
     return _to_dict(row)
 

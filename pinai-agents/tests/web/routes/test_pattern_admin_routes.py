@@ -108,9 +108,19 @@ async def test_pattern_pending_approve(pool, user_ids) -> None:
             ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status
             """,
             (
-                pattern_id, "test", "ai-extracted candidate", "[]",
-                '[]', "test_intent", "{}", "[]", "m", "m",
-                "warmup", "pending_review", "ai_extracted",
+                pattern_id,
+                "test",
+                "ai-extracted candidate",
+                "[]",
+                "[]",
+                "test_intent",
+                "{}",
+                "[]",
+                "m",
+                "m",
+                "warmup",
+                "pending_review",
+                "ai_extracted",
             ),
         )
     client = await _client_for(pool, user_a)
@@ -133,7 +143,8 @@ async def test_pattern_pending_approve(pool, user_ids) -> None:
         )
     async with user_scoped_tx(pool, user_a) as conn:
         await conn.execute(
-            "DELETE FROM pai_card_patterns WHERE id = %s", (pattern_id,),
+            "DELETE FROM pai_card_patterns WHERE id = %s",
+            (pattern_id,),
         )
 
 
@@ -153,9 +164,19 @@ async def test_pattern_pending_reject(pool, user_ids) -> None:
             ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status
             """,
             (
-                pattern_id, "test", "reject test", "[]", "[]",
-                "test_intent", "{}", "[]", "m", "m",
-                "warmup", "pending_review", "ai_extracted",
+                pattern_id,
+                "test",
+                "reject test",
+                "[]",
+                "[]",
+                "test_intent",
+                "{}",
+                "[]",
+                "m",
+                "m",
+                "warmup",
+                "pending_review",
+                "ai_extracted",
             ),
         )
     client = await _client_for(pool, user_a)
@@ -194,7 +215,8 @@ async def test_pattern_demo_promotion_from_raw_card(pool, user_ids) -> None:
         # Cleanup: drop just the inserted demo.
     async with user_scoped_tx(pool, user_a) as conn:
         await conn.execute(
-            "DELETE FROM pai_card_pattern_demos WHERE id = %s", (demo["id"],),
+            "DELETE FROM pai_card_pattern_demos WHERE id = %s",
+            (demo["id"],),
         )
 
 

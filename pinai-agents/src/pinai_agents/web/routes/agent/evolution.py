@@ -66,8 +66,10 @@ async def list_evolutions(
     async with user_scoped_tx(pool, run.user_id) as conn:
         repo = EvolutionRepository(run.user_id, conn)
         rows = await repo.list(
-            trigger_kind=trigger_kind, status=status_filter,
-            since=since, limit=limit,
+            trigger_kind=trigger_kind,
+            status=status_filter,
+            since=since,
+            limit=limit,
         )
     return {"items": [_to_dict(r) for r in rows]}
 
@@ -103,7 +105,8 @@ async def complete_evolution(
         )
     if not ok:
         raise HTTPException(
-            status_code=404, detail="evolution not running or not found",
+            status_code=404,
+            detail="evolution not running or not found",
         )
     return None
 
@@ -123,7 +126,8 @@ async def fail_evolution(
         ok = await repo.fail(evol_id, error_message=err)
     if not ok:
         raise HTTPException(
-            status_code=404, detail="evolution not running or not found",
+            status_code=404,
+            detail="evolution not running or not found",
         )
     return None
 

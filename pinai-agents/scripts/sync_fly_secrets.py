@@ -60,13 +60,17 @@ def _flyctl_import(app: str, kvs: dict[str, str], *, stage: bool) -> None:
     try:
         subprocess.run(args, input=payload, text=True, check=True)
     except subprocess.CalledProcessError as exc:
-        sys.exit(f"ERROR: flyctl secrets import exited {exc.returncode} for app={app} (stdin contained {len(kvs)} secrets — not echoed)")
+        sys.exit(
+            f"ERROR: flyctl secrets import exited {exc.returncode} for app={app} (stdin contained {len(kvs)} secrets — not echoed)"
+        )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app", required=True, help="Fly app name, e.g. proactive-ai-agents-test")
-    parser.add_argument("--env-file", required=True, help="dotenvx-encrypted file path, e.g. .env.test")
+    parser.add_argument(
+        "--env-file", required=True, help="dotenvx-encrypted file path, e.g. .env.test"
+    )
     parser.add_argument(
         "--no-stage",
         action="store_true",
@@ -76,7 +80,10 @@ def main() -> int:
 
     kvs = _decrypt_env(args.env_file)
     if not kvs:
-        print(f"ERROR: no decrypted entries from {args.env_file} — check DOTENV_PRIVATE_KEY_*", file=sys.stderr)
+        print(
+            f"ERROR: no decrypted entries from {args.env_file} — check DOTENV_PRIVATE_KEY_*",
+            file=sys.stderr,
+        )
         return 1
 
     print(f"Source: {args.env_file} ({len(kvs)} keys after dotenvx decode)")

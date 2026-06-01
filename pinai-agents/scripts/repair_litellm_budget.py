@@ -86,8 +86,8 @@ async def _read_subscription(conn, user_id: int) -> dict | None:
 
 def _cancel_stripe_subscription(sub_id: str) -> str:
     """Cancel a Stripe subscription immediately. Returns one of:
-      'canceled' (success), 'already_canceled' (Stripe says it's gone),
-      'error: <msg>' (caller logs but continues)."""
+    'canceled' (success), 'already_canceled' (Stripe says it's gone),
+    'error: <msg>' (caller logs but continues)."""
     stripe = requires_stripe()
     try:
         sub = stripe.Subscription.delete(sub_id)
@@ -137,16 +137,19 @@ async def _main(args: argparse.Namespace) -> int:
     try:
         async with pool.connection() as conn:
             user = await _find_user(
-                conn, email=args.email, supabase_uuid=args.supabase_uuid,
+                conn,
+                email=args.email,
+                supabase_uuid=args.supabase_uuid,
             )
             if user is None:
-                logger.error("user not found (email=%s uuid=%s)",
-                             args.email, args.supabase_uuid)
+                logger.error("user not found (email=%s uuid=%s)", args.email, args.supabase_uuid)
                 return 1
             user_id = int(user["id"])
             logger.info(
                 "resolved user: id=%d email=%s supabase_uuid=%s litellm_key=%s",
-                user_id, user.get("email"), user.get("supabase_user_id"),
+                user_id,
+                user.get("email"),
+                user.get("supabase_user_id"),
                 "set" if user.get("litellm_virtual_key") else "MISSING",
             )
 
@@ -156,7 +159,8 @@ async def _main(args: argparse.Namespace) -> int:
             else:
                 logger.info(
                     "current subscription: plan_code=%s status=%s stripe_sub=%s",
-                    sub.get("plan_code"), sub.get("status"),
+                    sub.get("plan_code"),
+                    sub.get("status"),
                     sub.get("stripe_subscription_id"),
                 )
 
@@ -170,12 +174,14 @@ async def _main(args: argparse.Namespace) -> int:
 
             # Step 2: force pai_subscriptions to target plan.
             await _force_set_plan(conn, user_id=user_id, plan_code=args.plan)
-            logger.info("pai_subscriptions updated → plan=%s status=active",
-                        args.plan)
+            logger.info("pai_subscriptions updated → plan=%s status=active", args.plan)
 
             # Step 3: sync LiteLLM key max_budget + reset spend.
             await checkout_flow.sync_litellm_budget_for_plan(
-                conn, user_id, args.plan, reset_spend=True,
+                conn,
+                user_id,
+                args.plan,
+                reset_spend=True,
             )
             # sync_litellm_budget_for_plan logs success/failure internally.
             logger.info("done")
@@ -193,7 +199,8 @@ def main() -> int:
     parser.add_argument("--email", help="user email")
     parser.add_argument("--supabase-uuid", help="users.supabase_user_id (UUID)")
     parser.add_argument(
-        "--plan", required=True,
+        "--plan",
+        required=True,
         help="target plan_code (free / basic / pro / max)",
     )
     args = parser.parse_args()

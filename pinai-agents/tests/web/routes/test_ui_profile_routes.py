@@ -21,7 +21,9 @@ def _user(user_id: int) -> User:
 
 
 @pytest.mark.asyncio
-async def test_profile_snapshot_backfills_default_locale_timezone_from_client_headers(pool, user_ids):
+async def test_profile_snapshot_backfills_default_locale_timezone_from_client_headers(
+    pool, user_ids
+):
     user_a, _ = user_ids
     async with user_scoped_tx(pool, user_a) as conn:
         await ProfileRepository(user_a, conn).upsert_profile(display_name="Alice")
@@ -59,7 +61,8 @@ async def test_settings_auto_dreaming_creates_daily_schedule(pool, user_ids):
     user_a, _ = user_ids
     async with user_scoped_tx(pool, user_a) as conn:
         await ProfileRepository(user_a, conn).upsert_profile(
-            display_name="Alice", timezone="Asia/Shanghai",
+            display_name="Alice",
+            timezone="Asia/Shanghai",
         )
 
     app = create_app()
@@ -102,7 +105,8 @@ async def test_settings_auto_dreaming_off_archives_schedule(pool, user_ids):
     user_a, _ = user_ids
     async with user_scoped_tx(pool, user_a) as conn:
         await ProfileRepository(user_a, conn).upsert_profile(
-            display_name="Alice", timezone="Asia/Shanghai",
+            display_name="Alice",
+            timezone="Asia/Shanghai",
         )
 
     app = create_app()
@@ -231,7 +235,9 @@ async def test_settings_get_repairs_archived_auto_generate_schedule(pool, user_i
 
 @pytest.mark.asyncio
 async def test_onboarding_completion_provisions_litellm_key_and_browserbase(
-    pool, user_ids, monkeypatch,
+    pool,
+    user_ids,
+    monkeypatch,
 ):
     """Finishing onboarding provisions the LiteLLM key + Browserbase context
     before stamping onboarding_completed_at, so every downstream LLM/agent task
@@ -259,7 +265,8 @@ async def test_onboarding_completion_provisions_litellm_key_and_browserbase(
     app.dependency_overrides[current_user] = lambda: _user(user_a)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://testserver",
+        transport=transport,
+        base_url="http://testserver",
     ) as client:
         res = await client.post("/api/settings", json={"onboardingCompleted": True})
 
@@ -270,7 +277,9 @@ async def test_onboarding_completion_provisions_litellm_key_and_browserbase(
 
 @pytest.mark.asyncio
 async def test_onboarding_blocked_when_litellm_provisioning_fails(
-    pool, user_ids, monkeypatch,
+    pool,
+    user_ids,
+    monkeypatch,
 ):
     """If LiteLLM key provisioning fails at onboarding completion, the request
     errors and onboarding_completed_at is NOT stamped — the client retries, so
@@ -289,7 +298,8 @@ async def test_onboarding_blocked_when_litellm_provisioning_fails(
     app.dependency_overrides[current_user] = lambda: _user(user_a)
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://testserver",
+        transport=transport,
+        base_url="http://testserver",
     ) as client:
         res = await client.post("/api/settings", json={"onboardingCompleted": True})
 

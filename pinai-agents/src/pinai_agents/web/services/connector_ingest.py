@@ -131,14 +131,19 @@ def _validate_payload(task: ScheduledTaskRow) -> tuple[str, str, int]:
 
 
 async def _mark_skipped(
-    pool: AsyncConnectionPool, task: ScheduledTaskRow, toolkit: str, *,
+    pool: AsyncConnectionPool,
+    task: ScheduledTaskRow,
+    toolkit: str,
+    *,
     log_prefix: str,
 ) -> None:
     """Common path: registry miss → success-with-skip so reconciler
     doesn't keep poking and the frontend chip can render meaningfully."""
     async with user_scoped_tx(pool, task.user_id) as conn:
         await update_progress(
-            conn, user_id=task.user_id, task_id=task.id,
+            conn,
+            user_id=task.user_id,
+            task_id=task.id,
             progress={
                 "stage": "skipped",
                 "reason": "unsupported_v0",
@@ -147,17 +152,25 @@ async def _mark_skipped(
         )
     logger.info(
         "%s skipped user=%d toolkit=%s — unsupported_v0",
-        log_prefix, task.user_id, toolkit,
+        log_prefix,
+        task.user_id,
+        toolkit,
     )
 
 
 async def _enqueue_evolve(
-    conn: AsyncConnection, *, user_id: int, toolkit: str, cid: str,
+    conn: AsyncConnection,
+    *,
+    user_id: int,
+    toolkit: str,
+    cid: str,
 ) -> str:
     """Reset-or-insert connector.evolve task and return its id."""
     evolve_task_id = f"evolve.{toolkit}.{cid}"
     await requeue_once(
-        conn, user_id=user_id, task_id=evolve_task_id,
+        conn,
+        user_id=user_id,
+        task_id=evolve_task_id,
         kind="connector.evolve",
         payload={"connector": toolkit, "connectedAccountId": cid},
         max_attempts=2,
@@ -166,7 +179,11 @@ async def _enqueue_evolve(
 
 
 async def _ensure_sync_schedule(
-    conn: AsyncConnection, *, user_id: int, toolkit: str, cid: str,
+    conn: AsyncConnection,
+    *,
+    user_id: int,
+    toolkit: str,
+    cid: str,
 ) -> None:
     """After init succeeds, ensure a recurring connector.sync schedule
     for this (toolkit, cid). Idempotent — re-running init for the same
@@ -188,7 +205,9 @@ async def _ensure_sync_schedule(
             ON CONFLICT (user_id, id) DO NOTHING
             """,
             (
-                user_id, sync_task_id, _SYNC_CRON_EXPR,
+                user_id,
+                sync_task_id,
+                _SYNC_CRON_EXPR,
                 first_fire,
                 json.dumps({"toolkit": toolkit, "connectedAccountId": cid}),
             ),
@@ -218,31 +237,47 @@ async def _run_init(
 
     async with user_scoped_tx(pool, user_id) as conn:
         await update_progress(
-            conn, user_id=user_id, task_id=task.id,
+            conn,
+            user_id=user_id,
+            task_id=task.id,
             progress={"stage": "fetch", "toolkit": toolkit_raw, "limit": limit},
         )
 
     # Init mode: since=None — recipe omits the cursor arg; toolkit's
     # natural default window applies.
     items = await ingest_runner.run_fetch(
-        user, toolkit_raw, cid, limit=limit, since=None,
+        user,
+        toolkit_raw,
+        cid,
+        limit=limit,
+        since=None,
     )
 
     async with user_scoped_tx(pool, user_id) as conn:
         await update_progress(
-            conn, user_id=user_id, task_id=task.id,
+            conn,
+            user_id=user_id,
+            task_id=task.id,
             progress={"stage": "raw", "toolkit": toolkit_raw, "fetched": len(items)},
         )
         inserted = await upserter(conn, user_id, items)
 
         evolve_task_id = await _enqueue_evolve(
-            conn, user_id=user_id, toolkit=toolkit_raw, cid=cid,
+            conn,
+            user_id=user_id,
+            toolkit=toolkit_raw,
+            cid=cid,
         )
         await _ensure_sync_schedule(
-            conn, user_id=user_id, toolkit=toolkit_raw, cid=cid,
+            conn,
+            user_id=user_id,
+            toolkit=toolkit_raw,
+            cid=cid,
         )
         await update_progress(
-            conn, user_id=user_id, task_id=task.id,
+            conn,
+            user_id=user_id,
+            task_id=task.id,
             progress={
                 "stage": "evolve",
                 "toolkit": toolkit_raw,
@@ -255,8 +290,13 @@ async def _run_init(
     logger.info(
         "[connector.init] done user=%d toolkit=%s fetched=%d inserted=%d "
         "evolve_task=%s sync_schedule=sync.%s.%s",
-        user_id, toolkit_raw, len(items), inserted, evolve_task_id,
-        toolkit_raw, cid,
+        user_id,
+        toolkit_raw,
+        len(items),
+        inserted,
+        evolve_task_id,
+        toolkit_raw,
+        cid,
     )
 
 
@@ -287,31 +327,39 @@ async def _run_sync(
     # ── Stage: read cursor ──
     async with user_scoped_tx(pool, user_id) as conn:
         cursor = await ConnectorsRepository(user_id, conn).get_cursor(
-            toolkit=toolkit_raw, connected_account_id=cid,
+            toolkit=toolkit_raw,
+            connected_account_id=cid,
         )
-    since = (
-        cursor.last_synced_at if cursor is not None
-        else started_at - _BOOTSTRAP_LOOKBACK
-    )
+    since = cursor.last_synced_at if cursor is not None else started_at - _BOOTSTRAP_LOOKBACK
 
     # ── Stage: fetch ──
     async with user_scoped_tx(pool, user_id) as conn:
         await update_progress(
-            conn, user_id=user_id, task_id=task.id,
+            conn,
+            user_id=user_id,
+            task_id=task.id,
             progress={
-                "stage": "fetch", "toolkit": toolkit_raw,
-                "limit": limit, "since": since.isoformat(),
+                "stage": "fetch",
+                "toolkit": toolkit_raw,
+                "limit": limit,
+                "since": since.isoformat(),
             },
         )
 
     items = await ingest_runner.run_fetch(
-        user, toolkit_raw, cid, limit=limit, since=since,
+        user,
+        toolkit_raw,
+        cid,
+        limit=limit,
+        since=since,
     )
 
     # ── Stage: raw + cursor ──
     async with user_scoped_tx(pool, user_id) as conn:
         await update_progress(
-            conn, user_id=user_id, task_id=task.id,
+            conn,
+            user_id=user_id,
+            task_id=task.id,
             progress={"stage": "raw", "toolkit": toolkit_raw, "fetched": len(items)},
         )
         inserted = await upserter(conn, user_id, items)
@@ -319,7 +367,8 @@ async def _run_sync(
         # bound for the *next* sync. Using now() would skip events created
         # during this run.
         await ConnectorsRepository(user_id, conn).set_cursor(
-            toolkit=toolkit_raw, connected_account_id=cid,
+            toolkit=toolkit_raw,
+            connected_account_id=cid,
             last_synced_at=started_at,
         )
 
@@ -327,13 +376,18 @@ async def _run_sync(
         # syncs are common (cron fires every 30min) and don't need an LLM.
         if inserted > 0:
             evolve_task_id = await _enqueue_evolve(
-                conn, user_id=user_id, toolkit=toolkit_raw, cid=cid,
+                conn,
+                user_id=user_id,
+                toolkit=toolkit_raw,
+                cid=cid,
             )
         else:
             evolve_task_id = None
 
         await update_progress(
-            conn, user_id=user_id, task_id=task.id,
+            conn,
+            user_id=user_id,
+            task_id=task.id,
             progress={
                 "stage": "done",
                 "toolkit": toolkit_raw,
@@ -348,8 +402,12 @@ async def _run_sync(
     logger.info(
         "[connector.sync] done user=%d toolkit=%s fetched=%d inserted=%d "
         "since=%s synced_through=%s",
-        user_id, toolkit_raw, len(items), inserted,
-        since.isoformat(), started_at.isoformat(),
+        user_id,
+        toolkit_raw,
+        len(items),
+        inserted,
+        since.isoformat(),
+        started_at.isoformat(),
     )
 
 
@@ -417,18 +475,14 @@ def _map_gmail_message(msg: dict[str, Any]) -> dict[str, Any] | None:
     if not message_id:
         return None
     headers = _read_gmail_headers(msg)
-    to_list = (
-        msg.get("to") if isinstance(msg.get("to"), list) else None
-    )
+    to_list = msg.get("to") if isinstance(msg.get("to"), list) else None
     if to_list is None:
         to_list = (
             _parse_address_list(msg.get("to"))
             if msg.get("to") is not None
             else _parse_address_list(headers.get("to"))
         )
-    cc_list = (
-        msg.get("cc") if isinstance(msg.get("cc"), list) else None
-    )
+    cc_list = msg.get("cc") if isinstance(msg.get("cc"), list) else None
     if cc_list is None:
         cc_list = (
             _parse_address_list(msg.get("cc"))
@@ -448,9 +502,7 @@ def _map_gmail_message(msg: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(body, str):
         body = None
     occurred = _parse_gmail_timestamp(
-        msg.get("messageTimestamp")
-        or msg.get("internalDate")
-        or msg.get("internal_date"),
+        msg.get("messageTimestamp") or msg.get("internalDate") or msg.get("internal_date"),
     )
     label_ids = msg.get("labelIds")
     if not isinstance(label_ids, list):
@@ -490,14 +542,9 @@ def _map_gcal_event(evt: dict[str, Any]) -> dict[str, Any] | None:
     if not event_id:
         return None
     organizer = evt.get("organizer")
-    organizer_email = (
-        organizer.get("email") if isinstance(organizer, dict) else None
-    )
+    organizer_email = organizer.get("email") if isinstance(organizer, dict) else None
     calendar_id = str(
-        evt.get("calendarId")
-        or evt.get("calendar_id")
-        or organizer_email
-        or "primary",
+        evt.get("calendarId") or evt.get("calendar_id") or organizer_email or "primary",
     ).strip()
     if not calendar_id:
         return None
@@ -541,7 +588,9 @@ def _gen_raw_id() -> str:
 
 
 async def _upsert_gmail(
-    conn: AsyncConnection, user_id: int, items: list[dict[str, Any]],
+    conn: AsyncConnection,
+    user_id: int,
+    items: list[dict[str, Any]],
 ) -> int:
     """ON CONFLICT (user_id, message_id) DO NOTHING. Composio re-fetches
     the same Gmail thread on subsequent inits — we keep the first row,
@@ -568,12 +617,20 @@ async def _upsert_gmail(
                 ON CONFLICT (user_id, message_id) DO NOTHING
                 """,
                 (
-                    user_id, row_id,
-                    mapped["message_id"], mapped["thread_id"], mapped["from_addr"],
-                    json.dumps(mapped["to_addrs"]), json.dumps(mapped["cc_addrs"]),
-                    mapped["subject"], mapped["snippet"], mapped["body"],
+                    user_id,
+                    row_id,
+                    mapped["message_id"],
+                    mapped["thread_id"],
+                    mapped["from_addr"],
+                    json.dumps(mapped["to_addrs"]),
+                    json.dumps(mapped["cc_addrs"]),
+                    mapped["subject"],
+                    mapped["snippet"],
+                    mapped["body"],
                     json.dumps(mapped["label_ids"]),
-                    mapped["internal_date"], mapped["occurred_at"], dedupe,
+                    mapped["internal_date"],
+                    mapped["occurred_at"],
+                    dedupe,
                 ),
             )
             if (cur.rowcount or 0) > 0:
@@ -582,7 +639,9 @@ async def _upsert_gmail(
 
 
 async def _upsert_gcal(
-    conn: AsyncConnection, user_id: int, items: list[dict[str, Any]],
+    conn: AsyncConnection,
+    user_id: int,
+    items: list[dict[str, Any]],
 ) -> int:
     """ON CONFLICT (user_id, calendar_id, event_id) DO NOTHING."""
     inserted = 0
@@ -607,12 +666,19 @@ async def _upsert_gcal(
                 ON CONFLICT (user_id, calendar_id, event_id) DO NOTHING
                 """,
                 (
-                    user_id, row_id,
-                    mapped["calendar_id"], mapped["event_id"],
-                    mapped["title"], mapped["description"], mapped["location"],
-                    mapped["start_at"], mapped["end_at"],
-                    json.dumps(mapped["attendees"]), mapped["status"],
-                    mapped["occurred_at"], dedupe,
+                    user_id,
+                    row_id,
+                    mapped["calendar_id"],
+                    mapped["event_id"],
+                    mapped["title"],
+                    mapped["description"],
+                    mapped["location"],
+                    mapped["start_at"],
+                    mapped["end_at"],
+                    json.dumps(mapped["attendees"]),
+                    mapped["status"],
+                    mapped["occurred_at"],
+                    dedupe,
                 ),
             )
             if (cur.rowcount or 0) > 0:
@@ -712,7 +778,9 @@ def _map_github_issue(issue: dict[str, Any]) -> dict[str, Any] | None:
 
 
 async def _upsert_github_issues(
-    conn: AsyncConnection, user_id: int, items: list[dict[str, Any]],
+    conn: AsyncConnection,
+    user_id: int,
+    items: list[dict[str, Any]],
 ) -> int:
     """ON CONFLICT (user_id, issue_id) DO UPDATE — GitHub issues *change*
     (state flips, comments arrive, labels added). Re-syncs should refresh
@@ -751,13 +819,22 @@ async def _upsert_github_issues(
                   occurred_at = EXCLUDED.occurred_at
                 """,
                 (
-                    user_id, row_id,
-                    mapped["issue_id"], mapped["number"], mapped["repo_full_name"],
-                    mapped["title"], mapped["body_preview"], mapped["state"],
-                    mapped["html_url"], mapped["is_pull_request"],
-                    json.dumps(mapped["labels"]), json.dumps(mapped["assignees"]),
-                    mapped["created_at_remote"], mapped["updated_at_remote"],
-                    mapped["occurred_at"], dedupe,
+                    user_id,
+                    row_id,
+                    mapped["issue_id"],
+                    mapped["number"],
+                    mapped["repo_full_name"],
+                    mapped["title"],
+                    mapped["body_preview"],
+                    mapped["state"],
+                    mapped["html_url"],
+                    mapped["is_pull_request"],
+                    json.dumps(mapped["labels"]),
+                    json.dumps(mapped["assignees"]),
+                    mapped["created_at_remote"],
+                    mapped["updated_at_remote"],
+                    mapped["occurred_at"],
+                    dedupe,
                 ),
             )
             # cur.rowcount is 1 for both INSERT and UPDATE under ON CONFLICT.
@@ -804,11 +881,7 @@ def _map_slack_message(msg: dict[str, Any]) -> dict[str, Any] | None:
     channel_obj = msg.get("channel")
     if isinstance(channel_obj, dict):
         channel_id = str(channel_obj.get("id") or "").strip()
-        channel_name = (
-            channel_obj.get("name")
-            if isinstance(channel_obj.get("name"), str)
-            else None
-        )
+        channel_name = channel_obj.get("name") if isinstance(channel_obj.get("name"), str) else None
     else:
         channel_id = str(channel_obj or msg.get("channel_id") or "").strip()
         channel_name = None
@@ -818,13 +891,10 @@ def _map_slack_message(msg: dict[str, Any]) -> dict[str, Any] | None:
 
     user_obj = msg.get("user")
     if isinstance(user_obj, dict):
-        slack_user_id = (
-            user_obj.get("id") if isinstance(user_obj.get("id"), str) else None
-        )
+        slack_user_id = user_obj.get("id") if isinstance(user_obj.get("id"), str) else None
         slack_user_name = (
             user_obj.get("name") or user_obj.get("real_name")
-            if isinstance(user_obj.get("name"), str)
-            or isinstance(user_obj.get("real_name"), str)
+            if isinstance(user_obj.get("name"), str) or isinstance(user_obj.get("real_name"), str)
             else None
         )
     elif isinstance(user_obj, str):
@@ -838,14 +908,8 @@ def _map_slack_message(msg: dict[str, Any]) -> dict[str, Any] | None:
 
     occurred = _slack_ts_to_datetime(ts) or datetime.now(UTC)
     text = msg.get("text") if isinstance(msg.get("text"), str) else None
-    permalink = (
-        msg.get("permalink") if isinstance(msg.get("permalink"), str) else None
-    )
-    thread_ts = (
-        msg.get("thread_ts")
-        if isinstance(msg.get("thread_ts"), str)
-        else None
-    )
+    permalink = msg.get("permalink") if isinstance(msg.get("permalink"), str) else None
+    thread_ts = msg.get("thread_ts") if isinstance(msg.get("thread_ts"), str) else None
 
     return {
         "channel_id": channel_id,
@@ -861,7 +925,9 @@ def _map_slack_message(msg: dict[str, Any]) -> dict[str, Any] | None:
 
 
 async def _upsert_slack_messages(
-    conn: AsyncConnection, user_id: int, items: list[dict[str, Any]],
+    conn: AsyncConnection,
+    user_id: int,
+    items: list[dict[str, Any]],
 ) -> int:
     """ON CONFLICT (user_id, channel_id, ts) DO NOTHING. Slack messages
     are immutable (edits get a separate ts); first insert wins."""
@@ -887,12 +953,18 @@ async def _upsert_slack_messages(
                 ON CONFLICT (user_id, channel_id, ts) DO NOTHING
                 """,
                 (
-                    user_id, row_id,
-                    mapped["channel_id"], mapped["channel_name"],
-                    mapped["ts"], mapped["thread_ts"],
-                    mapped["slack_user_id"], mapped["slack_user_name"],
-                    mapped["text"], mapped["permalink"],
-                    mapped["occurred_at"], dedupe,
+                    user_id,
+                    row_id,
+                    mapped["channel_id"],
+                    mapped["channel_name"],
+                    mapped["ts"],
+                    mapped["thread_ts"],
+                    mapped["slack_user_id"],
+                    mapped["slack_user_name"],
+                    mapped["text"],
+                    mapped["permalink"],
+                    mapped["occurred_at"],
+                    dedupe,
                 ),
             )
             if (cur.rowcount or 0) > 0:
@@ -956,8 +1028,7 @@ def _map_gdrive_file(file: dict[str, Any]) -> dict[str, Any] | None:
         "name": file.get("name") if isinstance(file.get("name"), str) else None,
         "mime_type": (
             file.get("mimeType") or file.get("mime_type")
-            if isinstance(file.get("mimeType"), str)
-            or isinstance(file.get("mime_type"), str)
+            if isinstance(file.get("mimeType"), str) or isinstance(file.get("mime_type"), str)
             else None
         ),
         "modified_time": modified,
@@ -976,7 +1047,9 @@ def _map_gdrive_file(file: dict[str, Any]) -> dict[str, Any] | None:
 
 
 async def _upsert_gdrive_files(
-    conn: AsyncConnection, user_id: int, items: list[dict[str, Any]],
+    conn: AsyncConnection,
+    user_id: int,
+    items: list[dict[str, Any]],
 ) -> int:
     """ON CONFLICT (user_id, file_id) DO UPDATE — Drive files mutate
     (rename / re-share / trash / re-edit)."""
@@ -1010,12 +1083,19 @@ async def _upsert_gdrive_files(
                   occurred_at = EXCLUDED.occurred_at
                 """,
                 (
-                    user_id, row_id,
-                    mapped["file_id"], mapped["name"], mapped["mime_type"],
-                    mapped["modified_time"], mapped["created_time"],
-                    mapped["size_bytes"], mapped["web_view_link"],
-                    json.dumps(mapped["owners"]), mapped["trashed"],
-                    mapped["occurred_at"], dedupe,
+                    user_id,
+                    row_id,
+                    mapped["file_id"],
+                    mapped["name"],
+                    mapped["mime_type"],
+                    mapped["modified_time"],
+                    mapped["created_time"],
+                    mapped["size_bytes"],
+                    mapped["web_view_link"],
+                    json.dumps(mapped["owners"]),
+                    mapped["trashed"],
+                    mapped["occurred_at"],
+                    dedupe,
                 ),
             )
             if (cur.rowcount or 0) > 0:
@@ -1042,18 +1122,18 @@ def _map_calendly_event(evt: dict[str, Any]) -> dict[str, Any] | None:
         for m in raw_memberships:
             if not isinstance(m, dict):
                 continue
-            invitees.append({
-                "name": m.get("user_name") if isinstance(m.get("user_name"), str) else None,
-                "email": m.get("user_email") if isinstance(m.get("user_email"), str) else None,
-            })
+            invitees.append(
+                {
+                    "name": m.get("user_name") if isinstance(m.get("user_name"), str) else None,
+                    "email": m.get("user_email") if isinstance(m.get("user_email"), str) else None,
+                }
+            )
 
     start_at = _parse_iso(evt.get("start_time"))
     end_at = _parse_iso(evt.get("end_time"))
     occurred = start_at or end_at or datetime.now(UTC)
 
-    location_type = (
-        loc.get("type") if loc and isinstance(loc.get("type"), str) else None
-    )
+    location_type = loc.get("type") if loc and isinstance(loc.get("type"), str) else None
     if loc:
         if isinstance(loc.get("location"), str):
             location_value = loc["location"]
@@ -1081,7 +1161,9 @@ def _map_calendly_event(evt: dict[str, Any]) -> dict[str, Any] | None:
 
 
 async def _upsert_calendly_events(
-    conn: AsyncConnection, user_id: int, items: list[dict[str, Any]],
+    conn: AsyncConnection,
+    user_id: int,
+    items: list[dict[str, Any]],
 ) -> int:
     """ON CONFLICT (user_id, event_uri) DO UPDATE — events get cancelled
     or rescheduled; refresh status + times in place."""
@@ -1116,12 +1198,19 @@ async def _upsert_calendly_events(
                   occurred_at = EXCLUDED.occurred_at
                 """,
                 (
-                    user_id, row_id,
-                    mapped["event_uri"], mapped["name"], mapped["status"],
-                    mapped["start_at"], mapped["end_at"],
-                    mapped["location_type"], mapped["location_value"],
-                    json.dumps(mapped["invitees"]), mapped["meeting_url"],
-                    mapped["occurred_at"], dedupe,
+                    user_id,
+                    row_id,
+                    mapped["event_uri"],
+                    mapped["name"],
+                    mapped["status"],
+                    mapped["start_at"],
+                    mapped["end_at"],
+                    mapped["location_type"],
+                    mapped["location_value"],
+                    json.dumps(mapped["invitees"]),
+                    mapped["meeting_url"],
+                    mapped["occurred_at"],
+                    dedupe,
                 ),
             )
             if (cur.rowcount or 0) > 0:
@@ -1210,7 +1299,9 @@ def _map_linkedin_profile(profile: dict[str, Any]) -> dict[str, Any] | None:
 
 
 async def _upsert_linkedin_profile(
-    conn: AsyncConnection, user_id: int, items: list[dict[str, Any]],
+    conn: AsyncConnection,
+    user_id: int,
+    items: list[dict[str, Any]],
 ) -> int:
     """ON CONFLICT (user_id, linkedin_id) DO UPDATE — profile fields
     (headline, picture, vanity) drift over time; refresh in place."""
@@ -1244,11 +1335,18 @@ async def _upsert_linkedin_profile(
                   occurred_at = EXCLUDED.occurred_at
                 """,
                 (
-                    user_id, row_id,
-                    mapped["linkedin_id"], mapped["first_name"], mapped["last_name"],
-                    mapped["localized_name"], mapped["headline"], mapped["vanity_name"],
-                    mapped["picture_url"], mapped["profile_url"],
-                    mapped["occurred_at"], dedupe,
+                    user_id,
+                    row_id,
+                    mapped["linkedin_id"],
+                    mapped["first_name"],
+                    mapped["last_name"],
+                    mapped["localized_name"],
+                    mapped["headline"],
+                    mapped["vanity_name"],
+                    mapped["picture_url"],
+                    mapped["profile_url"],
+                    mapped["occurred_at"],
+                    dedupe,
                 ),
             )
             if (cur.rowcount or 0) > 0:
@@ -1290,9 +1388,7 @@ def _map_stripe_invoice(inv: dict[str, Any]) -> dict[str, Any] | None:
 
     customer_raw = inv.get("customer")
     if isinstance(customer_raw, dict):
-        customer_id = (
-            customer_raw.get("id") if isinstance(customer_raw.get("id"), str) else None
-        )
+        customer_id = customer_raw.get("id") if isinstance(customer_raw.get("id"), str) else None
     elif isinstance(customer_raw, str):
         customer_id = customer_raw
     else:
@@ -1312,33 +1408,32 @@ def _map_stripe_invoice(inv: dict[str, Any]) -> dict[str, Any] | None:
         "currency": inv.get("currency") if isinstance(inv.get("currency"), str) else None,
         "customer_id": customer_id,
         "customer_email": (
-            inv.get("customer_email")
-            if isinstance(inv.get("customer_email"), str) else None
+            inv.get("customer_email") if isinstance(inv.get("customer_email"), str) else None
         ),
         "customer_name": (
-            inv.get("customer_name")
-            if isinstance(inv.get("customer_name"), str) else None
+            inv.get("customer_name") if isinstance(inv.get("customer_name"), str) else None
         ),
         "collection_method": (
-            inv.get("collection_method")
-            if isinstance(inv.get("collection_method"), str) else None
+            inv.get("collection_method") if isinstance(inv.get("collection_method"), str) else None
         ),
         "created_at_remote": created_at,
         "due_date": due_at.date() if due_at else None,
         "hosted_invoice_url": (
             inv.get("hosted_invoice_url")
-            if isinstance(inv.get("hosted_invoice_url"), str) else None
+            if isinstance(inv.get("hosted_invoice_url"), str)
+            else None
         ),
         "invoice_pdf": (
-            inv.get("invoice_pdf")
-            if isinstance(inv.get("invoice_pdf"), str) else None
+            inv.get("invoice_pdf") if isinstance(inv.get("invoice_pdf"), str) else None
         ),
         "occurred_at": occurred,
     }
 
 
 async def _upsert_stripe_invoices(
-    conn: AsyncConnection, user_id: int, items: list[dict[str, Any]],
+    conn: AsyncConnection,
+    user_id: int,
+    items: list[dict[str, Any]],
 ) -> int:
     """ON CONFLICT (user_id, invoice_id) DO UPDATE — invoice status flips
     (open → paid → void); amounts also mutate via partial payments."""
@@ -1378,16 +1473,25 @@ async def _upsert_stripe_invoices(
                   occurred_at = EXCLUDED.occurred_at
                 """,
                 (
-                    user_id, row_id,
-                    mapped["invoice_id"], mapped["number"], mapped["status"],
-                    mapped["amount_due"], mapped["amount_paid"],
-                    mapped["amount_remaining"], mapped["currency"],
-                    mapped["customer_id"], mapped["customer_email"],
+                    user_id,
+                    row_id,
+                    mapped["invoice_id"],
+                    mapped["number"],
+                    mapped["status"],
+                    mapped["amount_due"],
+                    mapped["amount_paid"],
+                    mapped["amount_remaining"],
+                    mapped["currency"],
+                    mapped["customer_id"],
+                    mapped["customer_email"],
                     mapped["customer_name"],
-                    mapped["collection_method"], mapped["created_at_remote"],
+                    mapped["collection_method"],
+                    mapped["created_at_remote"],
                     mapped["due_date"],
-                    mapped["hosted_invoice_url"], mapped["invoice_pdf"],
-                    mapped["occurred_at"], dedupe,
+                    mapped["hosted_invoice_url"],
+                    mapped["invoice_pdf"],
+                    mapped["occurred_at"],
+                    dedupe,
                 ),
             )
             if (cur.rowcount or 0) > 0:
@@ -1407,10 +1511,7 @@ def _map_youtube_subscription(sub: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
     snippet = sub.get("snippet") if isinstance(sub.get("snippet"), dict) else {}
-    resource = (
-        snippet.get("resourceId")
-        if isinstance(snippet.get("resourceId"), dict) else {}
-    )
+    resource = snippet.get("resourceId") if isinstance(snippet.get("resourceId"), dict) else {}
     channel_id = str(resource.get("channelId") or "").strip()
     if not channel_id:
         # Some Composio shapes flatten resourceId; tolerate top-level fields.
@@ -1418,18 +1519,9 @@ def _map_youtube_subscription(sub: dict[str, Any]) -> dict[str, Any] | None:
     if not channel_id:
         return None
 
-    thumbnails = (
-        snippet.get("thumbnails")
-        if isinstance(snippet.get("thumbnails"), dict) else {}
-    )
-    thumb_default = (
-        thumbnails.get("default")
-        if isinstance(thumbnails.get("default"), dict) else {}
-    )
-    thumb_url = (
-        thumb_default.get("url")
-        if isinstance(thumb_default.get("url"), str) else None
-    )
+    thumbnails = snippet.get("thumbnails") if isinstance(snippet.get("thumbnails"), dict) else {}
+    thumb_default = thumbnails.get("default") if isinstance(thumbnails.get("default"), dict) else {}
+    thumb_url = thumb_default.get("url") if isinstance(thumb_default.get("url"), str) else None
 
     subscribed_at = _parse_iso(snippet.get("publishedAt"))
     occurred = subscribed_at or datetime.now(UTC)
@@ -1437,12 +1529,9 @@ def _map_youtube_subscription(sub: dict[str, Any]) -> dict[str, Any] | None:
     return {
         "subscription_id": subscription_id,
         "channel_id": channel_id,
-        "channel_title": (
-            snippet.get("title") if isinstance(snippet.get("title"), str) else None
-        ),
+        "channel_title": (snippet.get("title") if isinstance(snippet.get("title"), str) else None),
         "channel_description": (
-            snippet.get("description")
-            if isinstance(snippet.get("description"), str) else None
+            snippet.get("description") if isinstance(snippet.get("description"), str) else None
         ),
         "thumbnail_url": thumb_url,
         "subscribed_at": subscribed_at,
@@ -1451,7 +1540,9 @@ def _map_youtube_subscription(sub: dict[str, Any]) -> dict[str, Any] | None:
 
 
 async def _upsert_youtube_subscriptions(
-    conn: AsyncConnection, user_id: int, items: list[dict[str, Any]],
+    conn: AsyncConnection,
+    user_id: int,
+    items: list[dict[str, Any]],
 ) -> int:
     """ON CONFLICT (user_id, subscription_id) DO UPDATE — channel title /
     description / thumbnail can change; subscribed_at stays anchored."""
@@ -1481,11 +1572,16 @@ async def _upsert_youtube_subscriptions(
                   occurred_at = EXCLUDED.occurred_at
                 """,
                 (
-                    user_id, row_id,
-                    mapped["subscription_id"], mapped["channel_id"],
-                    mapped["channel_title"], mapped["channel_description"],
-                    mapped["thumbnail_url"], mapped["subscribed_at"],
-                    mapped["occurred_at"], dedupe,
+                    user_id,
+                    row_id,
+                    mapped["subscription_id"],
+                    mapped["channel_id"],
+                    mapped["channel_title"],
+                    mapped["channel_description"],
+                    mapped["thumbnail_url"],
+                    mapped["subscribed_at"],
+                    mapped["occurred_at"],
+                    dedupe,
                 ),
             )
             if (cur.rowcount or 0) > 0:
@@ -1493,17 +1589,19 @@ async def _upsert_youtube_subscriptions(
     return inserted
 
 
-_UPSERTERS.update({
-    "gmail": _upsert_gmail,
-    "googlecalendar": _upsert_gcal,
-    "github": _upsert_github_issues,
-    "slack": _upsert_slack_messages,
-    "googledrive": _upsert_gdrive_files,
-    "calendly": _upsert_calendly_events,
-    "linkedin": _upsert_linkedin_profile,
-    "stripe": _upsert_stripe_invoices,
-    "youtube": _upsert_youtube_subscriptions,
-})
+_UPSERTERS.update(
+    {
+        "gmail": _upsert_gmail,
+        "googlecalendar": _upsert_gcal,
+        "github": _upsert_github_issues,
+        "slack": _upsert_slack_messages,
+        "googledrive": _upsert_gdrive_files,
+        "calendly": _upsert_calendly_events,
+        "linkedin": _upsert_linkedin_profile,
+        "stripe": _upsert_stripe_invoices,
+        "youtube": _upsert_youtube_subscriptions,
+    }
+)
 
 
 def supported_toolkits() -> frozenset[str]:

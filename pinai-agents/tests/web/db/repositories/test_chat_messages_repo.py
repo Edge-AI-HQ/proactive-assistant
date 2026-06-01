@@ -25,7 +25,9 @@ async def test_append_returns_increasing_ids_and_get_page_newest_first(pool, use
         repo = ChatMessagesRepository(user_a, conn)
         i1 = await repo.append_turn(thread_id=tid, role="user", parts=_text("hi"))
         i2 = await repo.append_turn(
-            thread_id=tid, role="assistant", parts=_text("hello"),
+            thread_id=tid,
+            role="assistant",
+            parts=_text("hello"),
         )
     assert i2 > i1
     async with user_scoped_tx(pool, user_a) as conn:
@@ -52,15 +54,21 @@ async def test_bulk_append_preserves_order(pool, user_ids):
     turns = [{"role": "user", "parts": _text(f"q{i}")} for i in range(5)]
     async with user_scoped_tx(pool, user_a) as conn:
         n = await ChatMessagesRepository(user_a, conn).bulk_append(
-            thread_id=tid, turns=turns,
+            thread_id=tid,
+            turns=turns,
         )
     assert n == 5
     async with user_scoped_tx(pool, user_a) as conn:
         rows = await ChatMessagesRepository(user_a, conn).get_page(
-            thread_id=tid, limit=10,
+            thread_id=tid,
+            limit=10,
         )
     assert [r["parts"][0]["text"] for r in reversed(rows)] == [
-        "q0", "q1", "q2", "q3", "q4",
+        "q0",
+        "q1",
+        "q2",
+        "q3",
+        "q4",
     ]
 
 
@@ -79,7 +87,9 @@ async def test_get_page_cursor_walks_older(pool, user_ids):
         page1 = await repo.get_page(thread_id=tid, limit=2)
         assert [r["id"] for r in page1] == [ids[4], ids[3]]
         page2 = await repo.get_page(
-            thread_id=tid, before_id=page1[-1]["id"], limit=2,
+            thread_id=tid,
+            before_id=page1[-1]["id"],
+            limit=2,
         )
         assert [r["id"] for r in page2] == [ids[2], ids[1]]
 
@@ -118,7 +128,9 @@ async def test_rls_isolates_users(pool, user_ids):
     tid_a = f"main-{user_a}-rls"
     async with user_scoped_tx(pool, user_a) as conn:
         await ChatMessagesRepository(user_a, conn).append_turn(
-            thread_id=tid_a, role="user", parts=_text("secret"),
+            thread_id=tid_a,
+            role="user",
+            parts=_text("secret"),
         )
     async with user_scoped_tx(pool, user_b) as conn:
         rows = await ChatMessagesRepository(user_b, conn).get_page(thread_id=tid_a)

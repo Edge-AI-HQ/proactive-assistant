@@ -62,12 +62,14 @@ def _slug_tokens(s: str | None) -> set[str]:
     return {t for t in raw if len(t) >= 2 and t not in stop}
 
 
-def _user_topic_set(profile_row: dict[str, Any] | None,
-                    goal_rows: list[dict[str, Any]],
-                    recent_card_rows: list[dict[str, Any]]) -> set[str]:
+def _user_topic_set(
+    profile_row: dict[str, Any] | None,
+    goal_rows: list[dict[str, Any]],
+    recent_card_rows: list[dict[str, Any]],
+) -> set[str]:
     """Build the user's interest fingerprint as a flat token set:
-      profile.preferences.topics ∪ active_goals.key tokens ∪
-      recent cards (basket + intentKey + source-id tokens)
+    profile.preferences.topics ∪ active_goals.key tokens ∪
+    recent cards (basket + intentKey + source-id tokens)
     """
     topics: set[str] = set()
 
@@ -148,7 +150,11 @@ def compute_salience(
     else:
         ref = now or datetime.now(UTC)
         # Tolerate naive datetimes by treating them as UTC.
-        pub = signal_published_at if signal_published_at.tzinfo else signal_published_at.replace(tzinfo=UTC)
+        pub = (
+            signal_published_at
+            if signal_published_at.tzinfo
+            else signal_published_at.replace(tzinfo=UTC)
+        )
         hours = max(0.0, (ref - pub).total_seconds() / 3600.0)
         recency = max(0.0, 1.0 - hours / 168.0)
 
@@ -210,13 +216,15 @@ async def score_for_active_users(pool, *, world_signal_ids: list[str]) -> int:
         regions_raw = r.get("regions")
         topics = _coerce_list(topics_raw)
         regions = _coerce_list(regions_raw)
-        signal_payloads.append({
-            "id": r["id"],
-            "topics": topics,
-            "regions": regions,
-            "importance": r.get("importance"),
-            "published_at": r.get("published_at"),
-        })
+        signal_payloads.append(
+            {
+                "id": r["id"],
+                "topics": topics,
+                "regions": regions,
+                "importance": r.get("importance"),
+                "published_at": r.get("published_at"),
+            }
+        )
 
     written = 0
     now = datetime.now(UTC)
@@ -272,9 +280,9 @@ def _coerce_list(v: Any) -> list[str]:
     return []
 
 
-async def _fetch_user_context(conn, user_id: int) -> tuple[
-    dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]]
-]:
+async def _fetch_user_context(
+    conn, user_id: int
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]]]:
     """Pull the three context sources used to build user_topics. Single
     user_scoped_tx — RLS guarantees we only see this user's rows."""
     cur = await conn.execute(

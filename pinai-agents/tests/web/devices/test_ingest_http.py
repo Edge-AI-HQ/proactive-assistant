@@ -32,6 +32,7 @@ def _set_env(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.invalid")
     monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "test-publishable-key")
     from pinai_agents import config
+
     config.get_web_settings.cache_clear()
     yield
     config.get_web_settings.cache_clear()
@@ -42,7 +43,8 @@ def _patch_supabase_verify(monkeypatch):
     async def _fake(token: str) -> supabase_jwt_module.SupabaseClaims:
         try:
             claims = pyjwt.decode(
-                token, options={"verify_signature": False, "verify_exp": False},
+                token,
+                options={"verify_signature": False, "verify_exp": False},
             )
         except pyjwt.InvalidTokenError as e:
             raise supabase_jwt_module.JWTVerifyError(
@@ -69,12 +71,17 @@ def supabase_jwt():
     def _mk(sub: str, email: str | None = None) -> str:
         return pyjwt.encode(
             {
-                "sub": sub, "aud": "authenticated", "role": "authenticated",
-                "email": email, "exp": int(time.time()) + 3600,
+                "sub": sub,
+                "aud": "authenticated",
+                "role": "authenticated",
+                "email": email,
+                "exp": int(time.time()) + 3600,
                 "iat": int(time.time()),
             },
-            "irrelevant-secret-32-bytes-payload-ferry!", algorithm="HS256",
+            "irrelevant-secret-32-bytes-payload-ferry!",
+            algorithm="HS256",
         )
+
     return _mk
 
 
@@ -120,7 +127,8 @@ async def _register_device(
 async def _cleanup_user(pool, sub: str) -> None:
     async with pool.connection() as conn, conn.transaction():
         await conn.execute(
-            "DELETE FROM users WHERE supabase_user_id = %s", (sub,),
+            "DELETE FROM users WHERE supabase_user_id = %s",
+            (sub,),
         )
 
 
@@ -162,8 +170,11 @@ async def test_register_same_fingerprint_keeps_canonical_device_id(client, pool)
     fingerprint = f"ios-fp-{uuid.uuid4().hex}"
 
     await _register_device(
-        c, token, first_id,
-        display_name="iPhone", model="iPhone15,3",
+        c,
+        token,
+        first_id,
+        display_name="iPhone",
+        model="iPhone15,3",
         device_fingerprint=fingerprint,
     )
     second = await c.post(
@@ -221,10 +232,7 @@ async def test_device_list_collapses_legacy_ios_app_rows(client, pool):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert listed.status_code == 200, listed.text
-    ios_rows = [
-        item for item in listed.json()["items"]
-        if item["platform"] == "ios"
-    ]
+    ios_rows = [item for item in listed.json()["items"] if item["platform"] == "ios"]
     assert [item["deviceId"] for item in ios_rows] == [latest_id]
     assert set(ios_rows[0]["aliasedDeviceIds"]) == {old_id, mid_id, latest_id}
 
@@ -258,15 +266,18 @@ async def test_ingest_array_body_shape(device):
     each item. Server must accept it (D-2) — array body with per-item
     source is the production path."""
     c, device_id, dtoken = device
-    items = [{
-        "id": "evt-array-1",
-        "kind": "moment",
-        "title": "Array body smoke",
-        "summary": "A signal from an array-body POST",
-        "source": f"device:{device_id}",
-    }]
+    items = [
+        {
+            "id": "evt-array-1",
+            "kind": "moment",
+            "title": "Array body smoke",
+            "summary": "A signal from an array-body POST",
+            "source": f"device:{device_id}",
+        }
+    ]
     r = await c.post(
-        "/api/devices/ingest", headers=_ingest_headers(device_id, dtoken),
+        "/api/devices/ingest",
+        headers=_ingest_headers(device_id, dtoken),
         json=items,
     )
     assert r.status_code == 200, r.text
@@ -282,11 +293,19 @@ async def test_ingest_wrapper_body_shape(device):
     """Wrapper { deviceId, items } shape — same outcome as array."""
     c, device_id, dtoken = device
     r = await c.post(
-        "/api/devices/ingest", headers=_ingest_headers(device_id, dtoken),
-        json={"deviceId": device_id, "items": [{
-            "id": "evt-wrap-1", "kind": "moment",
-            "title": "Wrapped body", "summary": "Same data different shape",
-        }]},
+        "/api/devices/ingest",
+        headers=_ingest_headers(device_id, dtoken),
+        json={
+            "deviceId": device_id,
+            "items": [
+                {
+                    "id": "evt-wrap-1",
+                    "kind": "moment",
+                    "title": "Wrapped body",
+                    "summary": "Same data different shape",
+                }
+            ],
+        },
     )
     assert r.status_code == 200, r.text
     body = r.json()
@@ -301,14 +320,17 @@ async def test_ingest_all_cross_device_items_returns_item_rejected(device):
     can drop the bad outbox row instead of retrying forever."""
     c, device_id, dtoken = device
     r = await c.post(
-        "/api/devices/ingest", headers=_ingest_headers(device_id, dtoken),
-        json=[{
-            "id": "evt-cross-device-1",
-            "kind": "moment",
-            "title": "Cross-device body",
-            "summary": "A signal carrying a stale device source",
-            "source": "device:stale-device-id",
-        }],
+        "/api/devices/ingest",
+        headers=_ingest_headers(device_id, dtoken),
+        json=[
+            {
+                "id": "evt-cross-device-1",
+                "kind": "moment",
+                "title": "Cross-device body",
+                "summary": "A signal carrying a stale device source",
+                "source": "device:stale-device-id",
+            }
+        ],
     )
     assert r.status_code == 200, r.text
     body = r.json()
@@ -324,7 +346,8 @@ async def test_ingest_all_cross_device_items_returns_item_rejected(device):
 async def test_ingest_items_field_must_be_array(device):
     c, device_id, dtoken = device
     r = await c.post(
-        "/api/devices/ingest", headers=_ingest_headers(device_id, dtoken),
+        "/api/devices/ingest",
+        headers=_ingest_headers(device_id, dtoken),
         json={"deviceId": device_id, "items": "not-a-list"},
     )
     assert r.status_code == 400
@@ -347,16 +370,22 @@ async def test_inserted_then_duplicate_via_dedupe_key(device):
         "payload": {
             "schema_version": "health_observation.v1",
             "local_date": "2026-05-05",
-            "observations": [{
-                "observation_type": "daily_summary",
-                "metric": "steps", "value": 8120, "unit": "count",
-                "local_date": "2026-05-05", "source_app": "healthkit",
-                "dedupe_key": "ios:health:steps:2026-05-05",
-            }],
+            "observations": [
+                {
+                    "observation_type": "daily_summary",
+                    "metric": "steps",
+                    "value": 8120,
+                    "unit": "count",
+                    "local_date": "2026-05-05",
+                    "source_app": "healthkit",
+                    "dedupe_key": "ios:health:steps:2026-05-05",
+                }
+            ],
         },
     }
     first = await c.post(
-        "/api/devices/ingest", headers=_ingest_headers(device_id, dtoken),
+        "/api/devices/ingest",
+        headers=_ingest_headers(device_id, dtoken),
         json=_wrap(device_id, [item]),
     )
     assert first.status_code == 200, first.text
@@ -365,10 +394,10 @@ async def test_inserted_then_duplicate_via_dedupe_key(device):
     # Same payload, different envelope item.id so we don't trip the
     # signal-side UPSERT — what we're testing is the raw_only DO NOTHING
     # path. The observation's dedupe_key is what matters.
-    second_item = dict(item, id="hlt-dup-test-2",
-                       dedupe_key="device:diff:hlt-dup-test-2")
+    second_item = dict(item, id="hlt-dup-test-2", dedupe_key="device:diff:hlt-dup-test-2")
     second = await c.post(
-        "/api/devices/ingest", headers=_ingest_headers(device_id, dtoken),
+        "/api/devices/ingest",
+        headers=_ingest_headers(device_id, dtoken),
         json=_wrap(device_id, [second_item]),
     )
     assert second.status_code == 200, second.text
@@ -383,8 +412,7 @@ async def test_transcript_candidate_window_uses_server_canonical_latest_upsert(
 ):
     c, device_id, dtoken = device
     canonical_key = (
-        f"ambient:candidate_window:{device_id}:"
-        "2026-05-15:transcript_session:win-transcript"
+        f"ambient:candidate_window:{device_id}:2026-05-15:transcript_session:win-transcript"
     )
 
     def item(item_id: str, raw_ref_count: int, content_hash: str, summary: str) -> dict:
@@ -409,9 +437,12 @@ async def test_transcript_candidate_window_uses_server_canonical_latest_upsert(
     first = await c.post(
         "/api/devices/ingest",
         headers=_ingest_headers(device_id, dtoken),
-        json=_wrap(device_id, [
-            item("candidate-1", 1, "hash-1", "Transcript segment: first chunk"),
-        ]),
+        json=_wrap(
+            device_id,
+            [
+                item("candidate-1", 1, "hash-1", "Transcript segment: first chunk"),
+            ],
+        ),
     )
     assert first.status_code == 200, first.text
     assert first.json()["results"][0]["status"] == "inserted"
@@ -420,12 +451,17 @@ async def test_transcript_candidate_window_uses_server_canonical_latest_upsert(
     latest = await c.post(
         "/api/devices/ingest",
         headers=_ingest_headers(device_id, dtoken),
-        json=_wrap(device_id, [
-            item(
-                "candidate-2", 5, "hash-5",
-                "Transcript segment: five chunks Transcript segment: latest",
-            ),
-        ]),
+        json=_wrap(
+            device_id,
+            [
+                item(
+                    "candidate-2",
+                    5,
+                    "hash-5",
+                    "Transcript segment: five chunks Transcript segment: latest",
+                ),
+            ],
+        ),
     )
     assert latest.status_code == 200, latest.text
     assert latest.json()["results"][0]["status"] == "inserted"
@@ -469,7 +505,8 @@ async def test_parse_failed_for_unparseable_item(device):
         {"id": "good-item", "kind": "moment", "title": "ok", "summary": "ok"},
     ]
     r = await c.post(
-        "/api/devices/ingest", headers=_ingest_headers(device_id, dtoken),
+        "/api/devices/ingest",
+        headers=_ingest_headers(device_id, dtoken),
         json=_wrap(device_id, items),
     )
     assert r.status_code == 200, r.text
@@ -483,13 +520,17 @@ async def test_rejected_when_required_fields_missing(device):
     """Missing kind/title/summary — IngestItemIn allows None kind so the
     item parses, but the route-level guard marks it rejected."""
     c, device_id, dtoken = device
-    items = [{
-        "id": "rejected-1",
-        # no kind, no itemType
-        "title": "...", "summary": "...",
-    }]
+    items = [
+        {
+            "id": "rejected-1",
+            # no kind, no itemType
+            "title": "...",
+            "summary": "...",
+        }
+    ]
     r = await c.post(
-        "/api/devices/ingest", headers=_ingest_headers(device_id, dtoken),
+        "/api/devices/ingest",
+        headers=_ingest_headers(device_id, dtoken),
         json=_wrap(device_id, items),
     )
     assert r.status_code == 200, r.text
@@ -502,13 +543,18 @@ async def test_cross_device_dispatch_is_rejected(device):
     """V3 MVP doesn't support fan-out; items with `source` pointing at
     a different device must surface as rejected, not silently dropped."""
     c, device_id, dtoken = device
-    items = [{
-        "id": "wrong-device", "kind": "moment",
-        "title": "Cross-device", "summary": "should reject",
-        "source": "device:other-device-elsewhere",
-    }]
+    items = [
+        {
+            "id": "wrong-device",
+            "kind": "moment",
+            "title": "Cross-device",
+            "summary": "should reject",
+            "source": "device:other-device-elsewhere",
+        }
+    ]
     r = await c.post(
-        "/api/devices/ingest", headers=_ingest_headers(device_id, dtoken),
+        "/api/devices/ingest",
+        headers=_ingest_headers(device_id, dtoken),
         json=_wrap(device_id, items),
     )
     assert r.status_code == 200, r.text
@@ -521,22 +567,34 @@ async def test_unsupported_full_sync_is_rejected(device):
     payload.local_date pin) can't be safely scoped — surface rejected
     so outbox drops, not retries."""
     c, device_id, dtoken = device
-    items = [{
-        "id": "ambiguous-full-sync",
-        "kind": "health.observation",
-        "sync_mode": "full",
-        "title": "Ambiguous", "summary": "Multi-date payload",
-        "payload": {
-            "observations": [
-                {"observation_type": "daily_summary", "metric": "steps",
-                 "value": 1000, "local_date": "2026-05-04"},
-                {"observation_type": "daily_summary", "metric": "steps",
-                 "value": 2000, "local_date": "2026-05-05"},
-            ],
-        },
-    }]
+    items = [
+        {
+            "id": "ambiguous-full-sync",
+            "kind": "health.observation",
+            "sync_mode": "full",
+            "title": "Ambiguous",
+            "summary": "Multi-date payload",
+            "payload": {
+                "observations": [
+                    {
+                        "observation_type": "daily_summary",
+                        "metric": "steps",
+                        "value": 1000,
+                        "local_date": "2026-05-04",
+                    },
+                    {
+                        "observation_type": "daily_summary",
+                        "metric": "steps",
+                        "value": 2000,
+                        "local_date": "2026-05-05",
+                    },
+                ],
+            },
+        }
+    ]
     r = await c.post(
-        "/api/devices/ingest", headers=_ingest_headers(device_id, dtoken),
+        "/api/devices/ingest",
+        headers=_ingest_headers(device_id, dtoken),
         json=_wrap(device_id, items),
     )
     assert r.status_code == 200, r.text
@@ -560,21 +618,30 @@ async def test_retryable_failed_on_server_side_write_exception(device, monkeypat
     monkeypatch.setattr(raw_device_mod.RawDeviceRepository, "replace_health", _boom)
 
     c, device_id, dtoken = device
-    items = [{
-        "id": "retryable-1", "kind": "health.observation",
-        "title": "Steps", "summary": "8120",
-        "payload": {
-            "schema_version": "health_observation.v1",
-            "local_date": "2026-05-05",
-            "observations": [{
-                "observation_type": "daily_summary",
-                "metric": "steps", "value": 8120, "unit": "count",
+    items = [
+        {
+            "id": "retryable-1",
+            "kind": "health.observation",
+            "title": "Steps",
+            "summary": "8120",
+            "payload": {
+                "schema_version": "health_observation.v1",
                 "local_date": "2026-05-05",
-            }],
-        },
-    }]
+                "observations": [
+                    {
+                        "observation_type": "daily_summary",
+                        "metric": "steps",
+                        "value": 8120,
+                        "unit": "count",
+                        "local_date": "2026-05-05",
+                    }
+                ],
+            },
+        }
+    ]
     r = await c.post(
-        "/api/devices/ingest", headers=_ingest_headers(device_id, dtoken),
+        "/api/devices/ingest",
+        headers=_ingest_headers(device_id, dtoken),
         json=_wrap(device_id, items),
     )
     assert r.status_code == 200, r.text
@@ -596,29 +663,46 @@ async def test_health_observation_v1_lands_all_metrics_raw(device, pool):
         "id": "ios-health-2026-05-05",
         "kind": "health.observation",
         "sync_mode": "full",
-        "title": "Health 2026-05-05", "summary": "3 metrics",
+        "title": "Health 2026-05-05",
+        "summary": "3 metrics",
         "occurred_at": "2026-05-05T16:00:00Z",
         "payload": {
             "schema_version": "health_observation.v1",
             "local_date": "2026-05-05",
             "observations": [
-                {"observation_type": "daily_summary", "metric": "steps",
-                 "value": 8120, "unit": "count",
-                 "local_date": "2026-05-05", "source_app": "healthkit",
-                 "dedupe_key": "ios:health:steps:2026-05-05"},
-                {"observation_type": "sample", "metric": "heart_rate",
-                 "value": 72, "unit": "bpm",
-                 "local_date": "2026-05-05", "source_app": "healthkit",
-                 "dedupe_key": "ios:health:hr:2026-05-05T08"},
-                {"observation_type": "session", "metric": "sleep",
-                 "value": 432, "unit": "minute",
-                 "local_date": "2026-05-05", "source_app": "healthkit",
-                 "dedupe_key": "ios:health:sleep:2026-05-05"},
+                {
+                    "observation_type": "daily_summary",
+                    "metric": "steps",
+                    "value": 8120,
+                    "unit": "count",
+                    "local_date": "2026-05-05",
+                    "source_app": "healthkit",
+                    "dedupe_key": "ios:health:steps:2026-05-05",
+                },
+                {
+                    "observation_type": "sample",
+                    "metric": "heart_rate",
+                    "value": 72,
+                    "unit": "bpm",
+                    "local_date": "2026-05-05",
+                    "source_app": "healthkit",
+                    "dedupe_key": "ios:health:hr:2026-05-05T08",
+                },
+                {
+                    "observation_type": "session",
+                    "metric": "sleep",
+                    "value": 432,
+                    "unit": "minute",
+                    "local_date": "2026-05-05",
+                    "source_app": "healthkit",
+                    "dedupe_key": "ios:health:sleep:2026-05-05",
+                },
             ],
         },
     }
     r = await c.post(
-        "/api/devices/ingest", headers=_ingest_headers(device_id, dtoken),
+        "/api/devices/ingest",
+        headers=_ingest_headers(device_id, dtoken),
         json=_wrap(device_id, [item]),
     )
     assert r.status_code == 200, r.text
@@ -646,56 +730,91 @@ async def test_health_metric_scope_preserves_siblings(device, pool):
     # Seed steps + heart_rate (incremental, two items so the parser
     # sees each as single-metric).
     seed = await c.post(
-        "/api/devices/ingest", headers=_ingest_headers(device_id, dtoken),
-        json=_wrap(device_id, [
-            {"id": "seed-steps", "kind": "health.observation",
-             "sync_mode": "incremental",
-             "title": "Seed steps", "summary": "1000",
-             "payload": {
-                "schema_version": "health_observation.v1",
-                "local_date": "2026-05-05", "metric": "steps",
-                "observations": [{
-                    "observation_type": "daily_summary",
-                    "metric": "steps", "value": 1000, "unit": "count",
-                    "local_date": "2026-05-05",
-                    "dedupe_key": "ios:health:steps:seed",
-                }],
-             }},
-            {"id": "seed-hr", "kind": "health.observation",
-             "sync_mode": "incremental",
-             "title": "Seed hr", "summary": "70",
-             "payload": {
-                "schema_version": "health_observation.v1",
-                "local_date": "2026-05-05", "metric": "heart_rate",
-                "observations": [{
-                    "observation_type": "sample",
-                    "metric": "heart_rate", "value": 70, "unit": "bpm",
-                    "local_date": "2026-05-05",
-                    "dedupe_key": "ios:health:hr:seed",
-                }],
-             }},
-        ]),
+        "/api/devices/ingest",
+        headers=_ingest_headers(device_id, dtoken),
+        json=_wrap(
+            device_id,
+            [
+                {
+                    "id": "seed-steps",
+                    "kind": "health.observation",
+                    "sync_mode": "incremental",
+                    "title": "Seed steps",
+                    "summary": "1000",
+                    "payload": {
+                        "schema_version": "health_observation.v1",
+                        "local_date": "2026-05-05",
+                        "metric": "steps",
+                        "observations": [
+                            {
+                                "observation_type": "daily_summary",
+                                "metric": "steps",
+                                "value": 1000,
+                                "unit": "count",
+                                "local_date": "2026-05-05",
+                                "dedupe_key": "ios:health:steps:seed",
+                            }
+                        ],
+                    },
+                },
+                {
+                    "id": "seed-hr",
+                    "kind": "health.observation",
+                    "sync_mode": "incremental",
+                    "title": "Seed hr",
+                    "summary": "70",
+                    "payload": {
+                        "schema_version": "health_observation.v1",
+                        "local_date": "2026-05-05",
+                        "metric": "heart_rate",
+                        "observations": [
+                            {
+                                "observation_type": "sample",
+                                "metric": "heart_rate",
+                                "value": 70,
+                                "unit": "bpm",
+                                "local_date": "2026-05-05",
+                                "dedupe_key": "ios:health:hr:seed",
+                            }
+                        ],
+                    },
+                },
+            ],
+        ),
     )
     assert seed.status_code == 200, seed.text
 
     # Replace steps for the same local_date with a fresh value.
     replace = await c.post(
-        "/api/devices/ingest", headers=_ingest_headers(device_id, dtoken),
-        json=_wrap(device_id, [{
-            "id": "replace-steps", "kind": "health.observation",
-            "sync_mode": "full",
-            "title": "Replace steps", "summary": "8120",
-            "payload": {
-                "schema_version": "health_observation.v1",
-                "local_date": "2026-05-05", "metric": "steps",
-                "observations": [{
-                    "observation_type": "daily_summary",
-                    "metric": "steps", "value": 8120, "unit": "count",
-                    "local_date": "2026-05-05",
-                    "dedupe_key": "ios:health:steps:fresh",
-                }],
-            },
-        }]),
+        "/api/devices/ingest",
+        headers=_ingest_headers(device_id, dtoken),
+        json=_wrap(
+            device_id,
+            [
+                {
+                    "id": "replace-steps",
+                    "kind": "health.observation",
+                    "sync_mode": "full",
+                    "title": "Replace steps",
+                    "summary": "8120",
+                    "payload": {
+                        "schema_version": "health_observation.v1",
+                        "local_date": "2026-05-05",
+                        "metric": "steps",
+                        "observations": [
+                            {
+                                "observation_type": "daily_summary",
+                                "metric": "steps",
+                                "value": 8120,
+                                "unit": "count",
+                                "local_date": "2026-05-05",
+                                "dedupe_key": "ios:health:steps:fresh",
+                            }
+                        ],
+                    },
+                }
+            ],
+        ),
     )
     assert replace.status_code == 200, replace.text
 
@@ -751,38 +870,57 @@ async def test_timeline_interleaves_signal_and_health_by_occurred_at(client, poo
 
     # 3 events at distinct timestamps — 2 health, 1 signal, interleaved.
     items = [
-        {"id": "tl-moment-1", "kind": "moment",
-         "title": "Lunch", "summary": "Pho",
-         "occurred_at": "2026-05-05T12:00:00Z"},
-        {"id": "tl-hlt-1", "kind": "health.observation",
-         "title": "steps", "summary": "5000",
-         "occurred_at": "2026-05-05T10:00:00Z",
-         "payload": {
-            "schema_version": "health_observation.v1",
-            "local_date": "2026-05-05",
-            "observations": [{
-                "observation_type": "daily_summary",
-                "metric": "steps", "value": 5000,
+        {
+            "id": "tl-moment-1",
+            "kind": "moment",
+            "title": "Lunch",
+            "summary": "Pho",
+            "occurred_at": "2026-05-05T12:00:00Z",
+        },
+        {
+            "id": "tl-hlt-1",
+            "kind": "health.observation",
+            "title": "steps",
+            "summary": "5000",
+            "occurred_at": "2026-05-05T10:00:00Z",
+            "payload": {
+                "schema_version": "health_observation.v1",
                 "local_date": "2026-05-05",
-                "dedupe_key": "ios:health:steps:tl-1",
-            }],
-         }},
-        {"id": "tl-hlt-2", "kind": "health.observation",
-         "title": "steps", "summary": "8120",
-         "occurred_at": "2026-05-05T16:00:00Z",
-         "payload": {
-            "schema_version": "health_observation.v1",
-            "local_date": "2026-05-05",
-            "observations": [{
-                "observation_type": "daily_summary",
-                "metric": "steps", "value": 8120,
+                "observations": [
+                    {
+                        "observation_type": "daily_summary",
+                        "metric": "steps",
+                        "value": 5000,
+                        "local_date": "2026-05-05",
+                        "dedupe_key": "ios:health:steps:tl-1",
+                    }
+                ],
+            },
+        },
+        {
+            "id": "tl-hlt-2",
+            "kind": "health.observation",
+            "title": "steps",
+            "summary": "8120",
+            "occurred_at": "2026-05-05T16:00:00Z",
+            "payload": {
+                "schema_version": "health_observation.v1",
                 "local_date": "2026-05-05",
-                "dedupe_key": "ios:health:steps:tl-2",
-            }],
-         }},
+                "observations": [
+                    {
+                        "observation_type": "daily_summary",
+                        "metric": "steps",
+                        "value": 8120,
+                        "local_date": "2026-05-05",
+                        "dedupe_key": "ios:health:steps:tl-2",
+                    }
+                ],
+            },
+        },
     ]
     r_ingest = await c.post(
-        "/api/devices/ingest", headers=_ingest_headers(device_id, dtoken),
+        "/api/devices/ingest",
+        headers=_ingest_headers(device_id, dtoken),
         json=_wrap(device_id, items),
     )
     assert r_ingest.status_code == 200, r_ingest.text
@@ -814,13 +952,18 @@ async def test_timeline_cursor_paginates_in_descending_order(client, pool):
     dtoken = await _register_device(c, token, device_id)
 
     items = [
-        {"id": f"tl-m-{i}", "kind": "moment",
-         "title": f"M{i}", "summary": f"event {i}",
-         "occurred_at": f"2026-05-05T{i:02d}:00:00Z"}
+        {
+            "id": f"tl-m-{i}",
+            "kind": "moment",
+            "title": f"M{i}",
+            "summary": f"event {i}",
+            "occurred_at": f"2026-05-05T{i:02d}:00:00Z",
+        }
         for i in range(5)
     ]
     r_ingest = await c.post(
-        "/api/devices/ingest", headers=_ingest_headers(device_id, dtoken),
+        "/api/devices/ingest",
+        headers=_ingest_headers(device_id, dtoken),
         json=_wrap(device_id, items),
     )
     assert r_ingest.status_code == 200, r_ingest.text
@@ -856,22 +999,35 @@ async def test_health_replace_preserves_reference_count_rows(device, pool):
     c, device_id, dtoken = device
 
     seed = await c.post(
-        "/api/devices/ingest", headers=_ingest_headers(device_id, dtoken),
-        json=_wrap(device_id, [{
-            "id": "seed-steps-ref", "kind": "health.observation",
-            "sync_mode": "incremental",
-            "title": "Seed steps", "summary": "1000",
-            "payload": {
-                "schema_version": "health_observation.v1",
-                "local_date": "2026-05-05", "metric": "steps",
-                "observations": [{
-                    "observation_type": "daily_summary",
-                    "metric": "steps", "value": 1000, "unit": "count",
-                    "local_date": "2026-05-05",
-                    "dedupe_key": "ios:health:steps:refseed",
-                }],
-            },
-        }]),
+        "/api/devices/ingest",
+        headers=_ingest_headers(device_id, dtoken),
+        json=_wrap(
+            device_id,
+            [
+                {
+                    "id": "seed-steps-ref",
+                    "kind": "health.observation",
+                    "sync_mode": "incremental",
+                    "title": "Seed steps",
+                    "summary": "1000",
+                    "payload": {
+                        "schema_version": "health_observation.v1",
+                        "local_date": "2026-05-05",
+                        "metric": "steps",
+                        "observations": [
+                            {
+                                "observation_type": "daily_summary",
+                                "metric": "steps",
+                                "value": 1000,
+                                "unit": "count",
+                                "local_date": "2026-05-05",
+                                "dedupe_key": "ios:health:steps:refseed",
+                            }
+                        ],
+                    },
+                }
+            ],
+        ),
     )
     assert seed.status_code == 200
 
@@ -886,22 +1042,35 @@ async def test_health_replace_preserves_reference_count_rows(device, pool):
 
     # Full-sync replace — pinned row must survive.
     replace = await c.post(
-        "/api/devices/ingest", headers=_ingest_headers(device_id, dtoken),
-        json=_wrap(device_id, [{
-            "id": "replace-steps-ref", "kind": "health.observation",
-            "sync_mode": "full",
-            "title": "Replace steps", "summary": "8120",
-            "payload": {
-                "schema_version": "health_observation.v1",
-                "local_date": "2026-05-05", "metric": "steps",
-                "observations": [{
-                    "observation_type": "daily_summary",
-                    "metric": "steps", "value": 8120, "unit": "count",
-                    "local_date": "2026-05-05",
-                    "dedupe_key": "ios:health:steps:reffresh",
-                }],
-            },
-        }]),
+        "/api/devices/ingest",
+        headers=_ingest_headers(device_id, dtoken),
+        json=_wrap(
+            device_id,
+            [
+                {
+                    "id": "replace-steps-ref",
+                    "kind": "health.observation",
+                    "sync_mode": "full",
+                    "title": "Replace steps",
+                    "summary": "8120",
+                    "payload": {
+                        "schema_version": "health_observation.v1",
+                        "local_date": "2026-05-05",
+                        "metric": "steps",
+                        "observations": [
+                            {
+                                "observation_type": "daily_summary",
+                                "metric": "steps",
+                                "value": 8120,
+                                "unit": "count",
+                                "local_date": "2026-05-05",
+                                "dedupe_key": "ios:health:steps:reffresh",
+                            }
+                        ],
+                    },
+                }
+            ],
+        ),
     )
     assert replace.status_code == 200, replace.text
 
@@ -916,6 +1085,4 @@ async def test_health_replace_preserves_reference_count_rows(device, pool):
         rows: list[dict[str, Any]] = await cur.fetchall()
     # Both rows present: the pinned 1000 and the new 8120.
     values = sorted(float(r["value"]) for r in rows)
-    assert values == [1000.0, 8120.0], (
-        "pinned row must survive full-sync replace"
-    )
+    assert values == [1000.0, 8120.0], "pinned row must survive full-sync replace"

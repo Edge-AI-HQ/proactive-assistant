@@ -36,14 +36,23 @@ def _sync_task(user_id: int, cid: str, *, task_id: str | None = None) -> Schedul
         user_id=user_id,
         id=task_id or f"sync.fake.{cid}",
         kind="connector.sync",
-        name=None, prompt=None,
-        trigger_kind="schedule", cron_expr="*/30 * * * *",
-        interval_seconds=None, event_filter=None,
+        name=None,
+        prompt=None,
+        trigger_kind="schedule",
+        cron_expr="*/30 * * * *",
+        interval_seconds=None,
+        event_filter=None,
         payload={"toolkit": "fake", "connectedAccountId": cid},
-        timezone="UTC", status="active",
-        next_run_at=None, last_run_at=datetime.now(UTC),
-        last_run_status="dispatched", run_count=1,
-        attempts=0, max_attempts=3, progress={}, last_error=None,
+        timezone="UTC",
+        status="active",
+        next_run_at=None,
+        last_run_at=datetime.now(UTC),
+        last_run_status="dispatched",
+        run_count=1,
+        attempts=0,
+        max_attempts=3,
+        progress={},
+        last_error=None,
     )
 
 
@@ -52,14 +61,23 @@ def _init_task(user_id: int, cid: str) -> ScheduledTaskRow:
         user_id=user_id,
         id=f"init.fake.{cid}",
         kind="connector.init",
-        name=None, prompt=None,
-        trigger_kind="once", cron_expr=None, interval_seconds=None,
+        name=None,
+        prompt=None,
+        trigger_kind="once",
+        cron_expr=None,
+        interval_seconds=None,
         event_filter=None,
         payload={"toolkit": "fake", "connectedAccountId": cid, "limit": 50},
-        timezone="UTC", status="archived",
-        next_run_at=None, last_run_at=datetime.now(UTC),
-        last_run_status="dispatched", run_count=1,
-        attempts=0, max_attempts=3, progress={}, last_error=None,
+        timezone="UTC",
+        status="archived",
+        next_run_at=None,
+        last_run_at=datetime.now(UTC),
+        last_run_status="dispatched",
+        run_count=1,
+        attempts=0,
+        max_attempts=3,
+        progress={},
+        last_error=None,
     )
 
 
@@ -76,7 +94,9 @@ def fake_adapter(monkeypatch):
     captured: dict = {}
 
     fake_recipe = ingest_runner.Recipe(
-        toolkit="fake", slug="FAKE_LIST", connect_only=False,
+        toolkit="fake",
+        slug="FAKE_LIST",
+        connect_only=False,
     )
 
     def fake_load_recipe(toolkit: str):
@@ -116,7 +136,9 @@ async def test_first_sync_uses_bootstrap_lookback(pool, user_ids, fake_adapter):
 
     async with user_scoped_tx(pool, user_a) as conn:
         await enqueue_once(
-            conn, user_id=user_a, task_id="sync.fake.cid1",
+            conn,
+            user_id=user_a,
+            task_id="sync.fake.cid1",
             kind="connector.sync",
             payload={"toolkit": "fake", "connectedAccountId": "cid1"},
         )
@@ -133,7 +155,9 @@ async def test_first_sync_uses_bootstrap_lookback(pool, user_ids, fake_adapter):
 
 @pytest.mark.asyncio
 async def test_sync_uses_existing_cursor_then_advances_it(
-    pool, user_ids, fake_adapter,
+    pool,
+    user_ids,
+    fake_adapter,
 ):
     """Prior cursor → fetcher receives that timestamp; cursor advances
     to ~now after the run."""
@@ -144,11 +168,14 @@ async def test_sync_uses_existing_cursor_then_advances_it(
     prior = datetime(2026, 5, 1, 10, 0, 0, tzinfo=UTC)
     async with user_scoped_tx(pool, user_a) as conn:
         await ConnectorsRepository(user_a, conn).set_cursor(
-            toolkit="fake", connected_account_id="cid2",
+            toolkit="fake",
+            connected_account_id="cid2",
             last_synced_at=prior,
         )
         await enqueue_once(
-            conn, user_id=user_a, task_id="sync.fake.cid2",
+            conn,
+            user_id=user_a,
+            task_id="sync.fake.cid2",
             kind="connector.sync",
             payload={"toolkit": "fake", "connectedAccountId": "cid2"},
         )
@@ -160,7 +187,8 @@ async def test_sync_uses_existing_cursor_then_advances_it(
 
     async with user_scoped_tx(pool, user_a) as conn:
         cursor = await ConnectorsRepository(user_a, conn).get_cursor(
-            toolkit="fake", connected_account_id="cid2",
+            toolkit="fake",
+            connected_account_id="cid2",
         )
     assert cursor is not None
     # Advanced to ~started (within a couple seconds).
@@ -176,7 +204,9 @@ async def test_sync_failure_leaves_cursor_untouched(pool, user_ids, monkeypatch)
     prior = datetime(2026, 5, 1, 10, 0, 0, tzinfo=UTC)
 
     fake_recipe = ingest_runner.Recipe(
-        toolkit="fake", slug="FAKE_LIST", connect_only=False,
+        toolkit="fake",
+        slug="FAKE_LIST",
+        connect_only=False,
     )
 
     def fake_load_recipe(toolkit: str):
@@ -195,11 +225,14 @@ async def test_sync_failure_leaves_cursor_untouched(pool, user_ids, monkeypatch)
 
     async with user_scoped_tx(pool, user_a) as conn:
         await ConnectorsRepository(user_a, conn).set_cursor(
-            toolkit="fake", connected_account_id="cid3",
+            toolkit="fake",
+            connected_account_id="cid3",
             last_synced_at=prior,
         )
         await enqueue_once(
-            conn, user_id=user_a, task_id="sync.fake.cid3",
+            conn,
+            user_id=user_a,
+            task_id="sync.fake.cid3",
             kind="connector.sync",
             payload={"toolkit": "fake", "connectedAccountId": "cid3"},
         )
@@ -209,7 +242,8 @@ async def test_sync_failure_leaves_cursor_untouched(pool, user_ids, monkeypatch)
 
     async with user_scoped_tx(pool, user_a) as conn:
         cursor = await ConnectorsRepository(user_a, conn).get_cursor(
-            toolkit="fake", connected_account_id="cid3",
+            toolkit="fake",
+            connected_account_id="cid3",
         )
     assert cursor is not None
     assert cursor.last_synced_at == prior  # unchanged
@@ -225,7 +259,9 @@ async def test_sync_empty_skips_evolve_enqueue(pool, user_ids, fake_adapter):
 
     async with user_scoped_tx(pool, user_a) as conn:
         await enqueue_once(
-            conn, user_id=user_a, task_id="sync.fake.cid4",
+            conn,
+            user_id=user_a,
+            task_id="sync.fake.cid4",
             kind="connector.sync",
             payload={"toolkit": "fake", "connectedAccountId": "cid4"},
         )
@@ -234,8 +270,7 @@ async def test_sync_empty_skips_evolve_enqueue(pool, user_ids, fake_adapter):
 
     async with service_tx(pool) as conn:
         cur = await conn.execute(
-            "SELECT id FROM pai_scheduled_tasks "
-            "WHERE user_id = %s AND kind = 'connector.evolve'",
+            "SELECT id FROM pai_scheduled_tasks WHERE user_id = %s AND kind = 'connector.evolve'",
             (user_a,),
         )
         rows = await cur.fetchall()
@@ -250,7 +285,9 @@ async def test_sync_with_inserts_enqueues_evolve(pool, user_ids, fake_adapter):
 
     async with user_scoped_tx(pool, user_a) as conn:
         await enqueue_once(
-            conn, user_id=user_a, task_id="sync.fake.cid5",
+            conn,
+            user_id=user_a,
+            task_id="sync.fake.cid5",
             kind="connector.sync",
             payload={"toolkit": "fake", "connectedAccountId": "cid5"},
         )
@@ -281,7 +318,9 @@ async def test_init_creates_sync_schedule(pool, user_ids, fake_adapter):
 
     async with user_scoped_tx(pool, user_a) as conn:
         await enqueue_once(
-            conn, user_id=user_a, task_id="init.fake.cid6",
+            conn,
+            user_id=user_a,
+            task_id="init.fake.cid6",
             kind="connector.init",
             payload={"toolkit": "fake", "connectedAccountId": "cid6", "limit": 50},
         )
@@ -312,7 +351,9 @@ async def test_init_sync_schedule_idempotent(pool, user_ids, fake_adapter):
 
     async with user_scoped_tx(pool, user_a) as conn:
         await enqueue_once(
-            conn, user_id=user_a, task_id="init.fake.cid7",
+            conn,
+            user_id=user_a,
+            task_id="init.fake.cid7",
             kind="connector.init",
             payload={"toolkit": "fake", "connectedAccountId": "cid7", "limit": 50},
         )
@@ -320,8 +361,7 @@ async def test_init_sync_schedule_idempotent(pool, user_ids, fake_adapter):
 
     async with service_tx(pool) as conn:
         cur = await conn.execute(
-            "SELECT next_run_at FROM pai_scheduled_tasks "
-            "WHERE user_id = %s AND id = %s",
+            "SELECT next_run_at FROM pai_scheduled_tasks WHERE user_id = %s AND id = %s",
             (user_a, "sync.fake.cid7"),
         )
         first = (await cur.fetchone())["next_run_at"]
@@ -329,7 +369,9 @@ async def test_init_sync_schedule_idempotent(pool, user_ids, fake_adapter):
     # Re-fire init (e.g. reconnect) by re-queuing + re-running.
     async with user_scoped_tx(pool, user_a) as conn:
         await enqueue_once(
-            conn, user_id=user_a, task_id="init.fake.cid7.again",
+            conn,
+            user_id=user_a,
+            task_id="init.fake.cid7.again",
             kind="connector.init",
             payload={"toolkit": "fake", "connectedAccountId": "cid7", "limit": 50},
         )
@@ -339,8 +381,7 @@ async def test_init_sync_schedule_idempotent(pool, user_ids, fake_adapter):
 
     async with service_tx(pool) as conn:
         cur = await conn.execute(
-            "SELECT next_run_at FROM pai_scheduled_tasks "
-            "WHERE user_id = %s AND id = %s",
+            "SELECT next_run_at FROM pai_scheduled_tasks WHERE user_id = %s AND id = %s",
             (user_a, "sync.fake.cid7"),
         )
         second = (await cur.fetchone())["next_run_at"]

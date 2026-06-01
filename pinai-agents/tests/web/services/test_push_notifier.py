@@ -78,14 +78,17 @@ class _FakeTransport:
     async def send(self, *, device, payload: PushPayload) -> PushResult:  # noqa: ARG002
         result = self._results.get(device.device_id, PushResult(ok=True))
         self.calls.append(
-            _Call(device_id=device.device_id,
-                  push_token=device.push_token, result=result),
+            _Call(device_id=device.device_id, push_token=device.push_token, result=result),
         )
         return result
 
 
 async def _setup_user_with_push_device(
-    pool, user_id: int, device_id: str, *, opt_in: bool,
+    pool,
+    user_id: int,
+    device_id: str,
+    *,
+    opt_in: bool,
 ) -> None:
     async with user_scoped_tx(pool, user_id) as conn:
         await ProfileRepository(user_id, conn).upsert_settings(
@@ -93,11 +96,14 @@ async def _setup_user_with_push_device(
         )
         devices = DevicesRepository(user_id, conn)
         await devices.register(
-            device_id=device_id, platform="ios",
+            device_id=device_id,
+            platform="ios",
             display_name="Test iPhone",
         )
         await devices.set_push_token(
-            device_id=device_id, push_token=_TOKEN, push_provider="apns",
+            device_id=device_id,
+            push_token=_TOKEN,
+            push_provider="apns",
         )
 
 
@@ -149,9 +155,11 @@ async def test_notify_terminal_error_clears_push_token(pool, user_ids, monkeypat
     re-attempt against a guaranteed-bad target."""
     user_a, _ = user_ids
     await _setup_user_with_push_device(pool, user_a, "device-aaa", opt_in=True)
-    fake = _FakeTransport(results={
-        "device-aaa": PushResult(ok=False, error_code="BadDeviceToken"),
-    })
+    fake = _FakeTransport(
+        results={
+            "device-aaa": PushResult(ok=False, error_code="BadDeviceToken"),
+        }
+    )
     monkeypatch.setattr(push_notifier, "_transport", fake)
 
     sent = await notify_new_cards(pool, user_id=user_a, card_count=1)
@@ -166,16 +174,20 @@ async def test_notify_terminal_error_clears_push_token(pool, user_ids, monkeypat
 
 @pytest.mark.asyncio
 async def test_notify_transient_error_bumps_failure_counter(
-    pool, user_ids, monkeypatch,
+    pool,
+    user_ids,
+    monkeypatch,
 ):
     """Non-terminal error (e.g. APNs 5xx) → bump the counter. Token
     stays in place; the next run will retry. After enough strikes
     find_push_targets soft-disables the row."""
     user_a, _ = user_ids
     await _setup_user_with_push_device(pool, user_a, "device-aaa", opt_in=True)
-    fake = _FakeTransport(results={
-        "device-aaa": PushResult(ok=False, error_code="InternalServerError"),
-    })
+    fake = _FakeTransport(
+        results={
+            "device-aaa": PushResult(ok=False, error_code="InternalServerError"),
+        }
+    )
     monkeypatch.setattr(push_notifier, "_transport", fake)
 
     sent = await notify_new_cards(pool, user_id=user_a, card_count=1)

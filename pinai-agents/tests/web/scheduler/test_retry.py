@@ -31,13 +31,19 @@ async def test_enqueue_once_idempotent_on_existing(pool, user_ids):
     user_a, _ = user_ids
     async with user_scoped_tx(pool, user_a) as conn:
         first = await enqueue_once(
-            conn, user_id=user_a, task_id="init.gmail.cidA",
-            kind="connector.init", payload={"toolkit": "gmail"},
+            conn,
+            user_id=user_a,
+            task_id="init.gmail.cidA",
+            kind="connector.init",
+            payload={"toolkit": "gmail"},
             max_attempts=3,
         )
         second = await enqueue_once(
-            conn, user_id=user_a, task_id="init.gmail.cidA",
-            kind="connector.init", payload={"toolkit": "gmail"},
+            conn,
+            user_id=user_a,
+            task_id="init.gmail.cidA",
+            kind="connector.init",
+            payload={"toolkit": "gmail"},
             max_attempts=3,
         )
     assert first is True
@@ -49,8 +55,11 @@ async def test_requeue_once_resets_archived(pool, user_ids):
     user_a, _ = user_ids
     async with user_scoped_tx(pool, user_a) as conn:
         await enqueue_once(
-            conn, user_id=user_a, task_id="init.gmail.cidB",
-            kind="connector.init", payload={"toolkit": "gmail"},
+            conn,
+            user_id=user_a,
+            task_id="init.gmail.cidB",
+            kind="connector.init",
+            payload={"toolkit": "gmail"},
             max_attempts=3,
         )
     # Simulate a prior fire that archived the row
@@ -63,7 +72,9 @@ async def test_requeue_once_resets_archived(pool, user_ids):
         )
     async with user_scoped_tx(pool, user_a) as conn:
         await requeue_once(
-            conn, user_id=user_a, task_id="init.gmail.cidB",
+            conn,
+            user_id=user_a,
+            task_id="init.gmail.cidB",
             kind="connector.init",
             payload={"toolkit": "gmail", "reason": "reconnect"},
             max_attempts=3,
@@ -89,16 +100,22 @@ async def test_record_failure_decides_retry_then_archive(pool, user_ids):
     user_a, _ = user_ids
     async with user_scoped_tx(pool, user_a) as conn:
         await enqueue_once(
-            conn, user_id=user_a, task_id="init.gmail.cidC",
-            kind="connector.init", payload={"toolkit": "gmail"},
+            conn,
+            user_id=user_a,
+            task_id="init.gmail.cidC",
+            kind="connector.init",
+            payload={"toolkit": "gmail"},
             max_attempts=3,
         )
 
     # Fail 1 → retry
     async with service_tx(pool) as conn:
         attempts, status = await record_failure_and_decide(
-            conn, user_id=user_a, task_id="init.gmail.cidC",
-            last_error="net 1", retry_backoff_seconds=30,
+            conn,
+            user_id=user_a,
+            task_id="init.gmail.cidC",
+            last_error="net 1",
+            retry_backoff_seconds=30,
         )
     assert attempts == 1
     assert status == "active"
@@ -106,8 +123,11 @@ async def test_record_failure_decides_retry_then_archive(pool, user_ids):
     # Fail 2 → retry
     async with service_tx(pool) as conn:
         attempts, status = await record_failure_and_decide(
-            conn, user_id=user_a, task_id="init.gmail.cidC",
-            last_error="net 2", retry_backoff_seconds=120,
+            conn,
+            user_id=user_a,
+            task_id="init.gmail.cidC",
+            last_error="net 2",
+            retry_backoff_seconds=120,
         )
     assert attempts == 2
     assert status == "active"
@@ -115,8 +135,11 @@ async def test_record_failure_decides_retry_then_archive(pool, user_ids):
     # Fail 3 → archive (attempts+1=3 == max_attempts, no more retries)
     async with service_tx(pool) as conn:
         attempts, status = await record_failure_and_decide(
-            conn, user_id=user_a, task_id="init.gmail.cidC",
-            last_error="net 3", retry_backoff_seconds=600,
+            conn,
+            user_id=user_a,
+            task_id="init.gmail.cidC",
+            last_error="net 3",
+            retry_backoff_seconds=600,
         )
     assert attempts == 3
     assert status == "archived"
@@ -186,13 +209,17 @@ async def test_archive_after_success_only_touches_once(pool, user_ids):
     async with user_scoped_tx(pool, user_a) as conn:
         repo = ScheduledTasksRepository(user_a, conn)
         await repo.upsert(
-            id="cron_task", kind="auto.dreaming",
-            trigger_kind="schedule", cron_expr="0 6 * * *",
+            id="cron_task",
+            kind="auto.dreaming",
+            trigger_kind="schedule",
+            cron_expr="0 6 * * *",
             next_run_at=None,
         )
     async with service_tx(pool) as conn:
         await archive_after_success(
-            conn, user_id=user_a, task_id="cron_task",
+            conn,
+            user_id=user_a,
+            task_id="cron_task",
         )
     async with service_tx(pool) as conn:
         cur = await conn.execute(

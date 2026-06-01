@@ -55,22 +55,31 @@ class BrowserToolInput(BaseModel):
         ),
     )
     url: str | None = Field(default=None, description="For open/navigate.")
-    ref: str | None = Field(default=None,
+    ref: str | None = Field(
+        default=None,
         description="Element ref from latest snapshot (e.g. 'e3'). "
-                    "Required for click / type / get_text.")
+        "Required for click / type / get_text.",
+    )
     text: str | None = Field(default=None, description="For type.")
-    clear: bool = Field(default=True,
-        description="For type: True replaces existing value; False types after current cursor.")
-    key: str | None = Field(default=None,
-        description="For press_key: Enter / Tab / Escape / ArrowDown / Backspace / a / …")
-    ms: int | None = Field(default=None, ge=0, le=30000,
-        description="For wait: settle delay in ms.")
-    url_contains: str | None = Field(default=None,
-        description="For wait: wait until url contains substring (max 10s).")
+    clear: bool = Field(
+        default=True,
+        description="For type: True replaces existing value; False types after current cursor.",
+    )
+    key: str | None = Field(
+        default=None,
+        description="For press_key: Enter / Tab / Escape / ArrowDown / Backspace / a / …",
+    )
+    ms: int | None = Field(
+        default=None, ge=0, le=30000, description="For wait: settle delay in ms."
+    )
+    url_contains: str | None = Field(
+        default=None, description="For wait: wait until url contains substring (max 10s)."
+    )
     dx: int = Field(default=0, description="For scroll: horizontal pixels.")
     dy: int = Field(default=0, description="For scroll: vertical pixels (positive=down).")
-    reason: str | None = Field(default=None,
-        description="For request_takeover: short reason shown to user.")
+    reason: str | None = Field(
+        default=None, description="For request_takeover: short reason shown to user."
+    )
 
 
 @tool("browser_tool", args_schema=BrowserToolInput)
@@ -124,8 +133,11 @@ async def browser_tool(
                 if dk in ("mobile", "tablet", "desktop"):
                     device_kind = dk
             opened = await mgr.open(
-                session_key, url=url, persistent_context_id=ctx_id,
-                viewport=viewport, device_kind=device_kind,
+                session_key,
+                url=url,
+                persistent_context_id=ctx_id,
+                viewport=viewport,
+                device_kind=device_kind,
             )
             return {"ok": True, "action": "open", **opened}
 
@@ -135,7 +147,8 @@ async def browser_tool(
 
         if action == "request_takeover":
             await mgr.set_control_mode(
-                session_key, BrowserControlMode.USER,
+                session_key,
+                BrowserControlMode.USER,
                 reason=reason or "user input required",
             )
             return {"ok": True, "action": "request_takeover", "reason": reason}

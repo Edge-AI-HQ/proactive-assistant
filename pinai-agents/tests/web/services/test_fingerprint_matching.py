@@ -30,9 +30,19 @@ async def test_suppress_after_three_dismisses(pool, user_ids) -> None:
             ON CONFLICT (id) DO UPDATE SET trigger_dsl = EXCLUDED.trigger_dsl
             """,
             (
-                pattern_id, "test", "fp test", '[]',
+                pattern_id,
+                "test",
+                "fp test",
+                "[]",
                 '[{"op": "open_commitment_count_gte", "field": "open_commitments", "min": 5}]',
-                "test_intent", "{}", "[]", "m", "m", "warmup", "active", "seed",
+                "test_intent",
+                "{}",
+                "[]",
+                "m",
+                "m",
+                "warmup",
+                "active",
+                "seed",
             ),
         )
 
@@ -55,7 +65,8 @@ async def test_suppress_after_three_dismisses(pool, user_ids) -> None:
 
         # Cleanup
         await conn.execute(
-            "DELETE FROM pai_card_patterns WHERE id = %s", (pattern_id,),
+            "DELETE FROM pai_card_patterns WHERE id = %s",
+            (pattern_id,),
         )
 
 
@@ -78,9 +89,19 @@ async def test_per_user_isolation(pool, user_ids) -> None:
             ON CONFLICT (id) DO UPDATE SET trigger_dsl = EXCLUDED.trigger_dsl
             """,
             (
-                pattern_id, "test", "iso test", '[]',
+                pattern_id,
+                "test",
+                "iso test",
+                "[]",
                 '[{"op": "open_commitment_count_gte", "field": "open_commitments", "min": 5}]',
-                "test_intent", "{}", "[]", "m", "m", "warmup", "active", "seed",
+                "test_intent",
+                "{}",
+                "[]",
+                "m",
+                "m",
+                "warmup",
+                "active",
+                "seed",
             ),
         )
         fp_a = UserFingerprintRepository(user_a, conn_a)
@@ -97,5 +118,6 @@ async def test_per_user_isolation(pool, user_ids) -> None:
 
     async with user_scoped_tx(pool, user_a) as conn_a2:
         await conn_a2.execute(
-            "DELETE FROM pai_card_patterns WHERE id = %s", (pattern_id,),
+            "DELETE FROM pai_card_patterns WHERE id = %s",
+            (pattern_id,),
         )

@@ -32,8 +32,10 @@ async def test_tick_dispatches_due_and_advances_next_run(pool, user_ids):
     async with user_scoped_tx(pool, user_a) as conn:
         repo = ScheduledTasksRepository(user_a, conn)
         await repo.upsert(
-            id="tick_test", kind="auto.dreaming",
-            trigger_kind="schedule", cron_expr="0 6 * * *",
+            id="tick_test",
+            kind="auto.dreaming",
+            trigger_kind="schedule",
+            cron_expr="0 6 * * *",
             next_run_at=past,
         )
 
@@ -75,8 +77,10 @@ async def test_tick_archives_once_after_fire(pool, user_ids):
     async with user_scoped_tx(pool, user_a) as conn:
         repo = ScheduledTasksRepository(user_a, conn)
         await repo.upsert(
-            id="once_task", kind="user.prompt",
-            trigger_kind="once", cron_expr=None,
+            id="once_task",
+            kind="user.prompt",
+            trigger_kind="once",
+            cron_expr=None,
             next_run_at=past,
         )
 
@@ -87,8 +91,7 @@ async def test_tick_archives_once_after_fire(pool, user_ids):
 
     async with service_tx(pool) as conn:
         cur = await conn.execute(
-            "SELECT status, next_run_at FROM pai_scheduled_tasks "
-            "WHERE user_id = %s AND id = %s",
+            "SELECT status, next_run_at FROM pai_scheduled_tasks WHERE user_id = %s AND id = %s",
             (user_a, "once_task"),
         )
         row = await cur.fetchone()

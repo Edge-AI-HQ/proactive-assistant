@@ -34,9 +34,7 @@ def test_main_chat_prompt_treats_card_context_as_current_card() -> None:
 
 def test_card_execution_prompt_treats_user_correction_as_card_feedback() -> None:
     root = Path(__file__).resolve().parents[3]
-    prompt_source = (
-        root / "src" / "pinai_agents" / "chat" / "agents" / "card_execution.py"
-    )
+    prompt_source = root / "src" / "pinai_agents" / "chat" / "agents" / "card_execution.py"
 
     text = prompt_source.read_text()
 
@@ -219,28 +217,26 @@ def test_openai_responses_payload_drops_legacy_call_ids_from_message_ids() -> No
         include=["reasoning.encrypted_content"],
     )
 
-    payload = model._get_request_payload([
-        HumanMessage(content="hi"),
-        AIMessage(
-            content=[
-                {
-                    "type": "text",
-                    "id": "call_bad",
-                    "name": "signals_recent",
-                    "text": "<thinking>old prompt fallback text</thinking>",
-                },
-                {"type": "tool_call", "id": "call_tool", "name": "memory_list", "args": {}},
-            ],
-            tool_calls=[{"name": "memory_list", "args": {}, "id": "call_tool"}],
-        ),
-        ToolMessage(content="[]", tool_call_id="call_tool"),
-    ])
+    payload = model._get_request_payload(
+        [
+            HumanMessage(content="hi"),
+            AIMessage(
+                content=[
+                    {
+                        "type": "text",
+                        "id": "call_bad",
+                        "name": "signals_recent",
+                        "text": "<thinking>old prompt fallback text</thinking>",
+                    },
+                    {"type": "tool_call", "id": "call_tool", "name": "memory_list", "args": {}},
+                ],
+                tool_calls=[{"name": "memory_list", "args": {}, "id": "call_tool"}],
+            ),
+            ToolMessage(content="[]", tool_call_id="call_tool"),
+        ]
+    )
 
-    message_ids = [
-        item.get("id")
-        for item in payload["input"]
-        if item.get("type") == "message"
-    ]
+    message_ids = [item.get("id") for item in payload["input"] if item.get("type") == "message"]
     assert "call_bad" not in message_ids
     assert any(
         item.get("type") == "function_call" and item.get("call_id") == "call_tool"

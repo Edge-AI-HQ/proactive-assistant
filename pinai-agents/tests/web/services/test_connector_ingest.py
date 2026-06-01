@@ -23,14 +23,26 @@ from pinai_agents.web.services import connector_ingest
 def _make_task(user_id: int, payload: dict, *, task_id: str = "init.t.cid") -> ScheduledTaskRow:
     """Synthesize a row matching what claim_due_tasks would return."""
     return ScheduledTaskRow(
-        user_id=user_id, id=task_id, kind="connector.init",
-        name=None, prompt=None,
-        trigger_kind="once", cron_expr=None, interval_seconds=None,
-        event_filter=None, payload=payload, timezone="UTC",
-        status="archived", next_run_at=None,
-        last_run_at=datetime.now(UTC), last_run_status="dispatched",
-        run_count=1, attempts=0, max_attempts=3,
-        progress={}, last_error=None,
+        user_id=user_id,
+        id=task_id,
+        kind="connector.init",
+        name=None,
+        prompt=None,
+        trigger_kind="once",
+        cron_expr=None,
+        interval_seconds=None,
+        event_filter=None,
+        payload=payload,
+        timezone="UTC",
+        status="archived",
+        next_run_at=None,
+        last_run_at=datetime.now(UTC),
+        last_run_status="dispatched",
+        run_count=1,
+        attempts=0,
+        max_attempts=3,
+        progress={},
+        last_error=None,
     )
 
 
@@ -110,7 +122,9 @@ async def test_run_skips_unsupported_toolkit(pool, user_ids):
     user_a, _ = user_ids
     async with user_scoped_tx(pool, user_a) as conn:
         await enqueue_once(
-            conn, user_id=user_a, task_id="init.dropbox.cidX",
+            conn,
+            user_id=user_a,
+            task_id="init.dropbox.cidX",
             kind="connector.init",
             payload={"toolkit": "dropbox", "connectedAccountId": "cidX"},
             max_attempts=3,

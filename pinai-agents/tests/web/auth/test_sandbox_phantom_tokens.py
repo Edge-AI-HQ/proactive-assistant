@@ -86,12 +86,15 @@ def test_invalidate_drops_entry():
 
 @pytest.mark.asyncio
 async def test_mint_resolve_revoke_roundtrip(
-    pool: AsyncConnectionPool, user_ids: tuple[int, int],
+    pool: AsyncConnectionPool,
+    user_ids: tuple[int, int],
 ):
     user_a, _user_b = user_ids
     async with service_tx(pool) as conn:
         raw, token_hash = await mint(
-            conn, user_id=user_a, scope_label="test-thread",
+            conn,
+            user_id=user_a,
+            scope_label="test-thread",
         )
     assert raw.startswith(PHANTOM_PREFIX)
     assert _hash_token(raw) == token_hash
@@ -120,13 +123,16 @@ async def test_mint_resolve_revoke_roundtrip(
 
 @pytest.mark.asyncio
 async def test_bind_then_revoke_by_sandbox(
-    pool: AsyncConnectionPool, user_ids: tuple[int, int],
+    pool: AsyncConnectionPool,
+    user_ids: tuple[int, int],
 ):
     user_a, user_b = user_ids
     sandbox_id = "sbx_abc123"
     async with service_tx(pool) as conn:
         raw, token_hash = await mint(
-            conn, user_id=user_a, scope_label="bind-test",
+            conn,
+            user_id=user_a,
+            scope_label="bind-test",
         )
         await bind_sandbox(conn, token_hash=token_hash, sandbox_id=sandbox_id)
         resolved = await resolve(conn, raw_token=raw)
@@ -137,7 +143,10 @@ async def test_bind_then_revoke_by_sandbox(
     # (defense-in-depth check baked into the WHERE).
     async with service_tx(pool) as conn:
         n = await revoke_by_sandbox(
-            conn, sandbox_id=sandbox_id, user_id=user_b, reason="wrong_user",
+            conn,
+            sandbox_id=sandbox_id,
+            user_id=user_b,
+            reason="wrong_user",
         )
     assert n == 0
     async with service_tx(pool) as conn:
@@ -147,7 +156,10 @@ async def test_bind_then_revoke_by_sandbox(
     # Now revoke with the correct user_id.
     async with service_tx(pool) as conn:
         n = await revoke_by_sandbox(
-            conn, sandbox_id=sandbox_id, user_id=user_a, reason="correct_user",
+            conn,
+            sandbox_id=sandbox_id,
+            user_id=user_a,
+            reason="correct_user",
         )
     assert n == 1
     async with service_tx(pool) as conn:
@@ -169,7 +181,8 @@ async def test_resolve_rejects_non_phantom_format(pool: AsyncConnectionPool):
 
 @pytest.mark.asyncio
 async def test_resolve_rejects_expired(
-    pool: AsyncConnectionPool, user_ids: tuple[int, int],
+    pool: AsyncConnectionPool,
+    user_ids: tuple[int, int],
 ):
     user_a, _ = user_ids
     # Mint with a 1-second TTL, then poke `expires_at` to the past so
@@ -177,7 +190,10 @@ async def test_resolve_rejects_expired(
     # to keep the test fast — direct UPDATE is clearest.
     async with service_tx(pool) as conn:
         raw, token_hash = await mint(
-            conn, user_id=user_a, scope_label="expired-test", ttl_seconds=60,
+            conn,
+            user_id=user_a,
+            scope_label="expired-test",
+            ttl_seconds=60,
         )
         async with conn.cursor() as cur:
             await cur.execute(
@@ -197,14 +213,18 @@ async def test_resolve_rejects_expired(
 
 @pytest.mark.asyncio
 async def test_sweep_drops_old_expired(
-    pool: AsyncConnectionPool, user_ids: tuple[int, int],
+    pool: AsyncConnectionPool,
+    user_ids: tuple[int, int],
 ):
     user_a, _ = user_ids
     # Create one row that's 10 days past expiration; sweep with
     # retain_days=7 should drop it.
     async with service_tx(pool) as conn:
         raw, token_hash = await mint(
-            conn, user_id=user_a, scope_label="sweep-test", ttl_seconds=60,
+            conn,
+            user_id=user_a,
+            scope_label="sweep-test",
+            ttl_seconds=60,
         )
         async with conn.cursor() as cur:
             await cur.execute(

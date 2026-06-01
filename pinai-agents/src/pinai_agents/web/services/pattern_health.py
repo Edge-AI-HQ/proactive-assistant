@@ -78,7 +78,8 @@ class PatternHealthRow:
 
 
 async def compute_pattern_health_one(
-    conn: AsyncConnection, pattern_id: str,
+    conn: AsyncConnection,
+    pattern_id: str,
 ) -> PatternHealthRow | None:
     """Single-pattern variant for the detail page (avoids scanning the
     whole library on every GET /patterns/{id})."""
@@ -197,8 +198,10 @@ async def compute_pattern_health(
         if hit_rate_7d is not None and hit_rate_7d < HIT_RATE_7D_FLOOR:
             reasons.append(f"hit_rate_7d<{HIT_RATE_7D_FLOOR}")
         if (
-            trend is not None and trend < TREND_SLOPE_FLOOR
-            and hit_rate_30d is not None and hit_rate_30d > TREND_MIN_HIT_RATE
+            trend is not None
+            and trend < TREND_SLOPE_FLOOR
+            and hit_rate_30d is not None
+            and hit_rate_30d > TREND_MIN_HIT_RATE
         ):
             reasons.append("declining_trend")
         if dismiss_rate is not None and dismiss_rate > DISMISS_RATE_CEILING:
@@ -206,22 +209,24 @@ async def compute_pattern_health(
         if gap is not None and gap > EVALUATOR_HUMAN_GAP_CEILING:
             reasons.append(f"eval_human_gap>{EVALUATOR_HUMAN_GAP_CEILING}")
 
-        out.append(PatternHealthRow(
-            pattern_id=r["pattern_id"],
-            category=r["category"],
-            status=r["status"],
-            hit_count_7d=int(r.get("hits_7d") or 0),
-            hit_count_30d=int(r.get("hits_30d") or 0),
-            dismiss_count_30d=int(r.get("dismisses_30d") or 0),
-            hit_rate_7d=hit_rate_7d,
-            hit_rate_30d=hit_rate_30d,
-            hit_rate_30d_trend=trend,
-            dismiss_rate_30d=dismiss_rate,
-            evaluator_human_gap_mean=gap,
-            base_hit_rate=float(r.get("base_hit_rate") or 0.0),
-            should_retire=bool(reasons),
-            retire_reasons=reasons,
-        ))
+        out.append(
+            PatternHealthRow(
+                pattern_id=r["pattern_id"],
+                category=r["category"],
+                status=r["status"],
+                hit_count_7d=int(r.get("hits_7d") or 0),
+                hit_count_30d=int(r.get("hits_30d") or 0),
+                dismiss_count_30d=int(r.get("dismisses_30d") or 0),
+                hit_rate_7d=hit_rate_7d,
+                hit_rate_30d=hit_rate_30d,
+                hit_rate_30d_trend=trend,
+                dismiss_rate_30d=dismiss_rate,
+                evaluator_human_gap_mean=gap,
+                base_hit_rate=float(r.get("base_hit_rate") or 0.0),
+                should_retire=bool(reasons),
+                retire_reasons=reasons,
+            )
+        )
     return out
 
 
@@ -258,7 +263,8 @@ async def run_pattern_health_job(conn: AsyncConnection) -> dict[str, Any]:
                 retires += 1
                 logger.info(
                     "pattern auto-retired id=%s reasons=%s",
-                    r.pattern_id, r.retire_reasons,
+                    r.pattern_id,
+                    r.retire_reasons,
                 )
     logger.info("pattern_health: updated=%d retired=%d", updates, retires)
     return {"updates": updates, "retires": retires, "total": len(rows)}

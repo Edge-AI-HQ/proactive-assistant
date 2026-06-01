@@ -70,8 +70,13 @@ def test_jaccard_empty():
 def test_user_topics_combines_three_sources():
     profile = {"preferences": {"topics": ["AI agents"]}}
     goals = [{"key": "ship-pin-v2", "title": "Ship Pin AI v2 by Q4"}]
-    cards = [{"goalBasket": "wealth", "intentKey": "openai-budget-cap",
-              "sources": ["signal id=sig_x, title=OpenAI billing"]}]
+    cards = [
+        {
+            "goalBasket": "wealth",
+            "intentKey": "openai-budget-cap",
+            "sources": ["signal id=sig_x, title=OpenAI billing"],
+        }
+    ]
     out = _user_topic_set(profile, goals, cards)
     # Profile contributes 'ai', 'agents'
     assert {"ai", "agents"} <= out
@@ -87,6 +92,7 @@ def test_user_topics_handles_string_jsonb():
     """psycopg can hand back JSONB as a JSON string depending on cursor
     config. The function must tolerate both."""
     import json
+
     profile = {"preferences": json.dumps({"topics": ["health", "fitness"]})}
     out = _user_topic_set(profile, [], [])
     assert {"health", "fitness"} <= out
@@ -136,7 +142,8 @@ def test_salience_no_match_medium_old():
 def test_salience_clipped_to_unit_interval():
     """Even with everything maxed, salience can't exceed 1.0."""
     sal, _ = compute_salience(
-        signal_topics=["ai"], signal_regions=[],
+        signal_topics=["ai"],
+        signal_regions=[],
         signal_importance="high",
         signal_published_at=datetime.now(UTC),
         user_topics={"ai"},
@@ -149,7 +156,8 @@ def test_salience_naive_published_at_treated_as_utc():
     rows from older migrations would crash the formula."""
     naive = datetime(2026, 5, 6, 12, 0, 0)  # no tzinfo
     sal, _ = compute_salience(
-        signal_topics=["ai"], signal_regions=[],
+        signal_topics=["ai"],
+        signal_regions=[],
         signal_importance="high",
         signal_published_at=naive,
         user_topics={"ai"},
@@ -161,7 +169,8 @@ def test_salience_naive_published_at_treated_as_utc():
 
 def test_salience_no_published_at_zero_recency():
     sal, reason = compute_salience(
-        signal_topics=["ai"], signal_regions=[],
+        signal_topics=["ai"],
+        signal_regions=[],
         signal_importance="high",
         signal_published_at=None,
         user_topics={"ai"},

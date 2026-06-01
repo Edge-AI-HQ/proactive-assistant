@@ -17,15 +17,17 @@ def test_generator_tasks_use_long_running_lease():
 
 
 def test_dream_result_fields_extracts_fenced_json_from_text_block_string():
-    fields = _dream_result_fields({
-        "summary": (
-            "[{'type': 'text', 'text': '```json\\n"
-            '{"memoriesWritten":1,"memoriesSuperseded":0,'
-            '"profileFieldsUpdated":["facts"],'
-            '"summary":"Daily context covered."}'
-            "\\n```'}]"
-        ),
-    })
+    fields = _dream_result_fields(
+        {
+            "summary": (
+                "[{'type': 'text', 'text': '```json\\n"
+                '{"memoriesWritten":1,"memoriesSuperseded":0,'
+                '"profileFieldsUpdated":["facts"],'
+                '"summary":"Daily context covered."}'
+                "\\n```'}]"
+            ),
+        }
+    )
 
     assert fields["context_summary"] == "Daily context covered."
     assert fields["profile_updated"] is True
@@ -34,7 +36,9 @@ def test_dream_result_fields_extracts_fenced_json_from_text_block_string():
 
 @pytest.mark.asyncio
 async def test_recurring_success_clears_previous_failure_state(
-    pool, user_ids, monkeypatch,
+    pool,
+    user_ids,
+    monkeypatch,
 ):
     user_a, _ = user_ids
     scheduled_for = datetime.now(UTC)
@@ -89,7 +93,9 @@ async def test_recurring_success_clears_previous_failure_state(
 
 @pytest.mark.asyncio
 async def test_dream_dispatch_persists_summary_and_output_counts(
-    pool, user_ids, monkeypatch,
+    pool,
+    user_ids,
+    monkeypatch,
 ):
     user_a, _ = user_ids
     scheduled_for = datetime.now(UTC)

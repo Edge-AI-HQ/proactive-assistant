@@ -15,10 +15,17 @@ from pinai_agents.web.payment.subscriptions import (
 def _row(status: str) -> SubscriptionRow:
     now = datetime.now(UTC)
     return SubscriptionRow(
-        user_id=1, stripe_customer_id="cus_x", stripe_subscription_id="sub_y",
-        plan_code="pro", pending_plan_code=None, status=status,
-        current_period_start=now, current_period_end=now,
-        cancel_at_period_end=False, created_at=now, updated_at=now,
+        user_id=1,
+        stripe_customer_id="cus_x",
+        stripe_subscription_id="sub_y",
+        plan_code="pro",
+        pending_plan_code=None,
+        status=status,
+        current_period_start=now,
+        current_period_end=now,
+        cancel_at_period_end=False,
+        created_at=now,
+        updated_at=now,
     )
 
 
@@ -61,14 +68,20 @@ def test_subscription_row_from_stripe_payload_shape():
     """Stripe SDK objects expose attributes via getattr; our coerce helpers
     must accept both attribute and dict access. Smoke-check both."""
     sub_obj = SimpleNamespace(
-        id="sub_test", customer="cus_test", status="active",
+        id="sub_test",
+        customer="cus_test",
+        status="active",
         cancel_at_period_end=False,
-        current_period_start=1730000000, current_period_end=1732678400,
+        current_period_start=1730000000,
+        current_period_end=1732678400,
     )
     sub_dict = {
-        "id": "sub_test", "customer": "cus_test", "status": "active",
+        "id": "sub_test",
+        "customer": "cus_test",
+        "status": "active",
         "cancel_at_period_end": False,
-        "current_period_start": 1730000000, "current_period_end": 1732678400,
+        "current_period_start": 1730000000,
+        "current_period_end": 1732678400,
     }
     # Both forms should be accepted by sync_from_stripe_subscription
     # (tested implicitly here by checking attr-access doesn't blow up).

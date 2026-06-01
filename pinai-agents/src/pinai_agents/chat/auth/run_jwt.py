@@ -83,7 +83,8 @@ def verify_run_jwt(token: str) -> RunPrincipal:
     vk = claims.get("vk")
     bbctx = claims.get("bbctx")
     return RunPrincipal(
-        user_id=user_id, run_id=run_id,
+        user_id=user_id,
+        run_id=run_id,
         virtual_key=vk if isinstance(vk, str) and vk else None,
         browserbase_context_id=bbctx if isinstance(bbctx, str) and bbctx else None,
         raw=claims,

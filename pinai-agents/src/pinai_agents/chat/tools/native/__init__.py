@@ -46,24 +46,38 @@ from .world import world_recent, world_search
 
 ALL_TOOLS = [
     # Memory (long-term user fact layer)
-    memory_list, memory_search, memory_get, memory_add,
+    memory_list,
+    memory_search,
+    memory_get,
+    memory_add,
     # Signals (increment layer — open / consumed / archived).
     # `signals_kinds` is the discovery entry point; `signals_recent` /
     # `signals_get` drill into a chosen kind.
-    signals_kinds, signals_recent, signals_get,
+    signals_kinds,
+    signals_recent,
+    signals_get,
     # Profile + goals (persona / trajectory) + world context
-    profile_get, profile_upsert, profile_preference_merge, goal_upsert,
-    world_recent, world_search,
+    profile_get,
+    profile_upsert,
+    profile_preference_merge,
+    goal_upsert,
+    world_recent,
+    world_search,
     # Stated preferences (expression layer) + language switch. preference_add
     # is the high-weight content-preference write; set_generation_language
     # flips the deterministic output-language setting.
-    preference_add, set_generation_language,
+    preference_add,
+    set_generation_language,
     # Raw (high-frequency named tools + generic long-tail). These read
     # the offline-ingested raw tables (gmail / gcal / etc.) — for
     # FRESH SaaS data the model goes through the Composio meta-tools.
-    raw_gmail_recent, raw_gcal_today, raw_gcal_week, raw_list,
+    raw_gmail_recent,
+    raw_gcal_today,
+    raw_gcal_week,
+    raw_list,
     # Cards + feedback (recency-bounded reference)
-    cards_recent, feedback_list,
+    cards_recent,
+    feedback_list,
     # Web search + read (Tavily). search returns ranked snippets;
     # extract pulls full markdown for 1-20 URLs in one call.
     tavily_search,

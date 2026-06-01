@@ -48,11 +48,14 @@ class SkillRow:
         if not isinstance(ref_runs, list):
             ref_runs = json.loads(ref_runs) if ref_runs else []
         return cls(
-            id=row["id"], title=row["title"],
+            id=row["id"],
+            title=row["title"],
             description=row.get("description"),
-            status=row["status"], revision=row["revision"],
+            status=row["status"],
+            revision=row["revision"],
             body_hash=row["body_hash"],
-            triggers=triggers, source=row["source"],
+            triggers=triggers,
+            source=row["source"],
             created_run_id=row.get("created_run_id"),
             last_updated_run_id=row.get("last_updated_run_id"),
             enabled_at=row.get("enabled_at"),
@@ -102,8 +105,7 @@ class SkillsRepository(UserScopedRepository):
     async def get(self, skill_id: str) -> SkillRow | None:
         async with self._conn.cursor() as cur:
             await cur.execute(
-                f"SELECT {self._ALL_COLUMNS} FROM pai_skill_index "
-                f"WHERE user_id = %s AND id = %s",
+                f"SELECT {self._ALL_COLUMNS} FROM pai_skill_index WHERE user_id = %s AND id = %s",
                 (self._user_id, skill_id),
             )
             row = await cur.fetchone()
@@ -134,10 +136,17 @@ class SkillsRepository(UserScopedRepository):
                 RETURNING {self._ALL_COLUMNS}
                 """,
                 (
-                    self._user_id, sid, title, description, status,
-                    body, _body_hash(body),
+                    self._user_id,
+                    sid,
+                    title,
+                    description,
+                    status,
+                    body,
+                    _body_hash(body),
                     json.dumps(triggers or []),
-                    source, created_run_id, created_run_id,
+                    source,
+                    created_run_id,
+                    created_run_id,
                     status,
                 ),
             )

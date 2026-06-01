@@ -31,7 +31,7 @@ def _verify(authorization: str | None) -> tuple[int, str, str]:
     JWT, SDK calls 401."""
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing bearer")
-    token = authorization[len("bearer "):].strip()
+    token = authorization[len("bearer ") :].strip()
     try:
         p = verify_run_jwt(token)
     except RunJWTError as e:
@@ -51,7 +51,9 @@ async def post_run_dream(
     if not virtual_key:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "virtual_key required")
     summary = await run_dream(
-        virtual_key=virtual_key, user_id=user_id, run_id=run_id,
+        virtual_key=virtual_key,
+        user_id=user_id,
+        run_id=run_id,
         run_jwt=run_jwt,
         model=body.get("model"),
     )
@@ -70,7 +72,9 @@ async def post_run_evolve(
     if not virtual_key:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "virtual_key required")
     summary = await run_evolve(
-        virtual_key=virtual_key, user_id=user_id, run_id=run_id,
+        virtual_key=virtual_key,
+        user_id=user_id,
+        run_id=run_id,
         run_jwt=run_jwt,
         connector=body.get("connector", "unknown"),
         model=body.get("model"),
@@ -100,7 +104,9 @@ async def post_run_crystallize(
     if not session_key:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "session_key required")
     summary = await run_crystallize(
-        virtual_key=virtual_key, user_id=user_id, run_id=run_id,
+        virtual_key=virtual_key,
+        user_id=user_id,
+        run_id=run_id,
         session_key=session_key,
         model=body.get("model"),
     )

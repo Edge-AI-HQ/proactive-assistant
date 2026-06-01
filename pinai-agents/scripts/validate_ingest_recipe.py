@@ -59,12 +59,17 @@ async def _main(args: argparse.Namespace) -> int:
     if args.since:
         since = datetime.fromisoformat(args.since)
 
-    print(f"→ fetching {args.toolkit} for user_id={args.user_id} "
-          f"cid={args.connected_account_id} since={since}")
+    print(
+        f"→ fetching {args.toolkit} for user_id={args.user_id} "
+        f"cid={args.connected_account_id} since={since}"
+    )
 
     items = await ir.run_fetch(
-        args.user_id, args.toolkit, args.connected_account_id,
-        limit=args.limit, since=since,
+        args.user_id,
+        args.toolkit,
+        args.connected_account_id,
+        limit=args.limit,
+        since=since,
     )
 
     print(f"✓ got {len(items)} items")
@@ -86,14 +91,16 @@ async def _main(args: argparse.Namespace) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Validate an ingest recipe.")
     parser.add_argument("toolkit", help="toolkit slug, e.g. gmail")
-    parser.add_argument("--user-id", type=int, required=True,
-                        help="pinai internal user id")
-    parser.add_argument("--connected-account-id", required=True,
-                        help="Composio connected account id (ca_xxx)")
-    parser.add_argument("--since", default=None,
-                        help="ISO datetime cursor (e.g. 2026-05-01T00:00:00+00:00)")
-    parser.add_argument("--limit", type=int, default=100,
-                        help="max items to fetch (passed to runner)")
+    parser.add_argument("--user-id", type=int, required=True, help="pinai internal user id")
+    parser.add_argument(
+        "--connected-account-id", required=True, help="Composio connected account id (ca_xxx)"
+    )
+    parser.add_argument(
+        "--since", default=None, help="ISO datetime cursor (e.g. 2026-05-01T00:00:00+00:00)"
+    )
+    parser.add_argument(
+        "--limit", type=int, default=100, help="max items to fetch (passed to runner)"
+    )
     args = parser.parse_args()
     sys.exit(asyncio.run(_main(args)))
 

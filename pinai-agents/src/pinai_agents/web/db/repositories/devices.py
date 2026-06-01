@@ -77,8 +77,11 @@ class UserDeviceRow:
             last_seen_at=row.get("last_seen_at"),
             status=row["status"],
             metadata=(
-                row["metadata"] if isinstance(row.get("metadata"), dict)
-                else json.loads(row["metadata"]) if row.get("metadata") else {}
+                row["metadata"]
+                if isinstance(row.get("metadata"), dict)
+                else json.loads(row["metadata"])
+                if row.get("metadata")
+                else {}
             ),
             device_fingerprint_hash=row.get("device_fingerprint_hash"),
             push_token=row.get("push_token"),
@@ -91,6 +94,7 @@ class UserDeviceRow:
 @dataclass(slots=True)
 class RegisterResult:
     """Plaintext token in `device_token` is returned to the client ONCE."""
+
     row: UserDeviceRow
     device_token: str
 
@@ -169,9 +173,12 @@ class DevicesRepository(UserScopedRepository):
                 raise DeviceOwnerMismatch
             refreshed = await self._refresh(
                 row_id=int(existing["id"]),
-                platform=platform, token_hash=token_hash,
-                display_name=display_name, app_version=app_version,
-                model=model, metadata_json=meta_json,
+                platform=platform,
+                token_hash=token_hash,
+                display_name=display_name,
+                app_version=app_version,
+                model=model,
+                metadata_json=meta_json,
                 fingerprint_hash=fp_hash,
             )
             return RegisterResult(row=refreshed, device_token=token)
@@ -194,9 +201,12 @@ class DevicesRepository(UserScopedRepository):
             if fp_match is not None:
                 refreshed = await self._refresh(
                     row_id=int(fp_match["id"]),
-                    platform=platform, token_hash=token_hash,
-                    display_name=display_name, app_version=app_version,
-                    model=model, metadata_json=meta_json,
+                    platform=platform,
+                    token_hash=token_hash,
+                    display_name=display_name,
+                    app_version=app_version,
+                    model=model,
+                    metadata_json=meta_json,
                     fingerprint_hash=fp_hash,
                 )
                 return RegisterResult(row=refreshed, device_token=token)
@@ -213,8 +223,15 @@ class DevicesRepository(UserScopedRepository):
                 RETURNING *
                 """,
                 (
-                    self._user_id, device_id, token_hash, platform,
-                    display_name, app_version, model, meta_json, fp_hash,
+                    self._user_id,
+                    device_id,
+                    token_hash,
+                    platform,
+                    display_name,
+                    app_version,
+                    model,
+                    meta_json,
+                    fp_hash,
                 ),
             )
             row = await cur.fetchone()
@@ -224,9 +241,16 @@ class DevicesRepository(UserScopedRepository):
         return RegisterResult(row=UserDeviceRow.from_record(row), device_token=token)
 
     async def _refresh(
-        self, *, row_id: int, platform: str, token_hash: str,
-        display_name: str | None, app_version: str | None, model: str | None,
-        metadata_json: str, fingerprint_hash: str | None,
+        self,
+        *,
+        row_id: int,
+        platform: str,
+        token_hash: str,
+        display_name: str | None,
+        app_version: str | None,
+        model: str | None,
+        metadata_json: str,
+        fingerprint_hash: str | None,
         new_device_id: str | None = None,
     ) -> UserDeviceRow:
         # device_id is the server canonical identifier used by raw/signal
@@ -265,9 +289,15 @@ class DevicesRepository(UserScopedRepository):
                 RETURNING *
                 """,
                 (
-                    new_device_id, token_hash, platform,
-                    display_name, app_version, model,
-                    metadata_json, fingerprint_hash, row_id,
+                    new_device_id,
+                    token_hash,
+                    platform,
+                    display_name,
+                    app_version,
+                    model,
+                    metadata_json,
+                    fingerprint_hash,
+                    row_id,
                 ),
             )
             row = await cur.fetchone()
@@ -301,7 +331,11 @@ class DevicesRepository(UserScopedRepository):
             return (cur.rowcount or 0) > 0
 
     async def set_push_token(
-        self, *, device_id: str, push_token: str, push_provider: str,
+        self,
+        *,
+        device_id: str,
+        push_token: str,
+        push_provider: str,
     ) -> UserDeviceRow | None:
         """Upsert the push token onto an existing active device row.
 

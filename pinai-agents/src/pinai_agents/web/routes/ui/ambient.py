@@ -41,7 +41,9 @@ async def summarize_ambient(
 ) -> AmbientSummaryResponse:
     try:
         user = await ensure_user_litellm_key(
-            pool, user, required_models={DEFAULT_AMBIENT_SUMMARY_MODEL},
+            pool,
+            user,
+            required_models={DEFAULT_AMBIENT_SUMMARY_MODEL},
         )
     except Exception as exc:
         logger.exception("ambient summary key provisioning failed user=%s", user.id)

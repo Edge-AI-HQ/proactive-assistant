@@ -115,7 +115,8 @@ def _clamp_viewport(w: int, h: int) -> tuple[int, int]:
 
 
 def _normalize_profile(
-    viewport: tuple[int, int] | None, device_kind: DeviceKind,
+    viewport: tuple[int, int] | None,
+    device_kind: DeviceKind,
 ) -> tuple[tuple[int, int], DeviceKind]:
     """Resolve caller-provided hints to a concrete (viewport, device_kind).
 
@@ -131,6 +132,7 @@ def _normalize_profile(
 @dataclass
 class BrowserSession:
     """Public handle — what we hand back to tools and serialize over SSE."""
+
     session_key: str
     bb_session_id: str
     live_view_url: str
@@ -146,6 +148,7 @@ class BrowserSession:
 @dataclass
 class _Internal:
     """Per-session bookkeeping kept inside the manager."""
+
     session: BrowserSession
     browser: Browser
     context: BrowserContext
@@ -180,7 +183,9 @@ class BrowserManager:
     # ── public API ──
 
     async def get_or_create(
-        self, session_key: str, *,
+        self,
+        session_key: str,
+        *,
         persistent_context_id: str | None = None,
         viewport: tuple[int, int] | None = None,
         device_kind: DeviceKind = "desktop",
@@ -211,7 +216,9 @@ class BrowserManager:
                 self._sessions.pop(session_key, None)
                 logger.info(
                     "browser: profile change sk=%s cached=%s requested=%s — recreating",
-                    session_key, cached, requested,
+                    session_key,
+                    cached,
+                    requested,
                 )
                 asyncio.create_task(self._teardown(session_key, existing))
             in_flight = self._creating.get(session_key)
@@ -223,8 +230,10 @@ class BrowserManager:
             return await in_flight
         try:
             session = await self._create(
-                session_key, persistent_context_id,
-                viewport=requested[0], device_kind=requested[1],
+                session_key,
+                persistent_context_id,
+                viewport=requested[0],
+                device_kind=requested[1],
             )
             if not in_flight.done():
                 in_flight.set_result(session)
@@ -238,7 +247,9 @@ class BrowserManager:
                 self._creating.pop(session_key, None)
 
     async def open(
-        self, session_key: str, *,
+        self,
+        session_key: str,
+        *,
         url: str | None = None,
         persistent_context_id: str | None = None,
         viewport: tuple[int, int] | None = None,
@@ -298,21 +309,27 @@ class BrowserManager:
     # ── control mode ──
 
     async def set_control_mode(
-        self, session_key: str, mode: BrowserControlMode,
-        *, reason: str | None = None,
+        self,
+        session_key: str,
+        mode: BrowserControlMode,
+        *,
+        reason: str | None = None,
     ) -> None:
         internal = await self.get(session_key)
         if internal is None:
             return
         internal.session.control_mode = mode
         internal.session.takeover_reason = reason if mode == BrowserControlMode.USER else None
-        evt_type = (
-            "browser:control:takeover" if reason
-            else "browser:control:granted"
+        evt_type = "browser:control:takeover" if reason else "browser:control:granted"
+        await self._publish(
+            session_key,
+            evt_type,
+            {
+                "sessionKey": session_key,
+                "controlMode": mode.value,
+                "reason": reason,
+            },
         )
-        await self._publish(session_key, evt_type, {
-            "sessionKey": session_key, "controlMode": mode.value, "reason": reason,
-        })
 
     # ── live-view URL refresh (Browserbase signed URL TTL is short) ──
 
@@ -361,7 +378,12 @@ class BrowserManager:
         return await self._post_action_snapshot(session_key, "click")
 
     async def type_ref(
-        self, session_key: str, ref: str, text: str, *, clear: bool = True,
+        self,
+        session_key: str,
+        ref: str,
+        text: str,
+        *,
+        clear: bool = True,
     ) -> dict[str, Any]:
         internal = await self._gate(session_key, "type")
         loc = internal.page.locator(f"aria-ref={ref}")
@@ -383,13 +405,17 @@ class BrowserManager:
         return await self._post_action_snapshot(session_key, "scroll")
 
     async def wait_for(
-        self, session_key: str, *,
-        ms: int | None = None, url_contains: str | None = None,
+        self,
+        session_key: str,
+        *,
+        ms: int | None = None,
+        url_contains: str | None = None,
     ) -> dict[str, Any]:
         internal = await self._gate(session_key, "wait")
         if url_contains:
             await internal.page.wait_for_url(
-                f"**{url_contains}**", timeout=10_000,
+                f"**{url_contains}**",
+                timeout=10_000,
             )
         else:
             await internal.page.wait_for_timeout(ms or 500)
@@ -428,7 +454,10 @@ class BrowserManager:
     # ── user-driven input from the BrowserPanel UI ──
 
     async def apply_user_input(
-        self, session_key: str, type_: str, payload: dict[str, Any],
+        self,
+        session_key: str,
+        type_: str,
+        payload: dict[str, Any],
     ) -> None:
         """Frontend POST /input dispatch. NAV-class actions implicitly
         take control from AI so the user can always touch URL bar /
@@ -439,7 +468,8 @@ class BrowserManager:
         nav_types = {"navigate", "back", "forward", "reload"}
         if type_ in nav_types and internal.session.control_mode != BrowserControlMode.USER:
             await self.set_control_mode(
-                session_key, BrowserControlMode.USER,
+                session_key,
+                BrowserControlMode.USER,
                 reason="You took control of the browser",
             )
         page = internal.page
@@ -471,7 +501,9 @@ class BrowserManager:
     # ── internal: session bootstrap + teardown ──
 
     async def _create(
-        self, session_key: str, persistent_context_id: str | None,
+        self,
+        session_key: str,
+        persistent_context_id: str | None,
         *,
         viewport: tuple[int, int],
         device_kind: DeviceKind,
@@ -485,7 +517,8 @@ class BrowserManager:
         bb = self._bb_client()
         project_id = self._project_id()
         create_kwargs: dict[str, Any] = {
-            "project_id": project_id, "keep_alive": False,
+            "project_id": project_id,
+            "keep_alive": False,
             "timeout": _BB_SESSION_TIMEOUT_SEC,
         }
         # Browserbase browserSettings — `viewport` sets the remote
@@ -512,7 +545,8 @@ class BrowserManager:
         pw = await pw_ctx.__aenter__()
         try:
             browser = await pw.chromium.connect_over_cdp(
-                bb_session.connect_url, timeout=_CDP_CONNECT_TIMEOUT_SEC * 1000,
+                bb_session.connect_url,
+                timeout=_CDP_CONNECT_TIMEOUT_SEC * 1000,
             )
         except Exception:
             await pw_ctx.__aexit__(None, None, None)
@@ -537,23 +571,33 @@ class BrowserManager:
             preset = pw.devices.get(_DEVICE_PRESET[device_kind], {})
             cdp = await context.new_cdp_session(page)
             try:
-                await cdp.send("Emulation.setDeviceMetricsOverride", {
-                    "width": viewport[0],
-                    "height": viewport[1],
-                    "deviceScaleFactor": preset.get("device_scale_factor", 2),
-                    "mobile": True,
-                    "screenWidth": viewport[0],
-                    "screenHeight": viewport[1],
-                })
-                await cdp.send("Emulation.setTouchEmulationEnabled", {
-                    "enabled": True, "maxTouchPoints": 5,
-                })
+                await cdp.send(
+                    "Emulation.setDeviceMetricsOverride",
+                    {
+                        "width": viewport[0],
+                        "height": viewport[1],
+                        "deviceScaleFactor": preset.get("device_scale_factor", 2),
+                        "mobile": True,
+                        "screenWidth": viewport[0],
+                        "screenHeight": viewport[1],
+                    },
+                )
+                await cdp.send(
+                    "Emulation.setTouchEmulationEnabled",
+                    {
+                        "enabled": True,
+                        "maxTouchPoints": 5,
+                    },
+                )
                 ua = preset.get("user_agent")
                 if ua:
-                    await cdp.send("Network.setUserAgentOverride", {
-                        "userAgent": ua,
-                        "acceptLanguage": "en-US,en;q=0.9",
-                    })
+                    await cdp.send(
+                        "Network.setUserAgentOverride",
+                        {
+                            "userAgent": ua,
+                            "acceptLanguage": "en-US,en;q=0.9",
+                        },
+                    )
             finally:
                 # Detach the auxiliary CDP session — Playwright's own
                 # Target tracking keeps the page alive without it.
@@ -566,14 +610,16 @@ class BrowserManager:
         # so it has to match what BB is actually rendering at.
         now = time.monotonic()
         session = BrowserSession(
-            session_key=session_key, bb_session_id=bb_session.id,
+            session_key=session_key,
+            bb_session_id=bb_session.id,
             live_view_url=live_view_url,
             viewport={"width": viewport[0], "height": viewport[1]},
             device_kind=device_kind,
             control_mode=BrowserControlMode.AI,
             takeover_reason=None,
             current_url=page.url,
-            created_at=now, last_used_at=now,
+            created_at=now,
+            last_used_at=now,
         )
 
         async def _stop_pw() -> None:
@@ -581,16 +627,23 @@ class BrowserManager:
                 await pw_ctx.__aexit__(None, None, None)
 
         internal = _Internal(
-            session=session, browser=browser, context=context, page=page,
+            session=session,
+            browser=browser,
+            context=context,
+            page=page,
             pw_stop=_stop_pw,
         )
+
         # Capture page console messages for the `console` tool action.
         def _on_console(msg: ConsoleMessage) -> None:
-            internal.console.append({
-                "at": int(time.time() * 1000),
-                "level": msg.type,
-                "text": msg.text,
-            })
+            internal.console.append(
+                {
+                    "at": int(time.time() * 1000),
+                    "level": msg.type,
+                    "text": msg.text,
+                }
+            )
+
         page.on("console", _on_console)
 
         async with self._lock:
@@ -600,13 +653,17 @@ class BrowserManager:
         await self._emit_opened(internal)
         logger.info(
             "browser: created sk=%s bb=%s ctx=%s",
-            session_key, bb_session.id, persistent_context_id or "ephemeral",
+            session_key,
+            bb_session.id,
+            persistent_context_id or "ephemeral",
         )
         self._ensure_background_tasks()
         return session
 
     async def _teardown(
-        self, session_key: str, internal: _Internal,
+        self,
+        session_key: str,
+        internal: _Internal,
     ) -> None:
         with suppress(Exception):
             await internal.browser.close()
@@ -615,13 +672,19 @@ class BrowserManager:
         if bb is not None:
             with suppress(Exception):
                 await asyncio.to_thread(
-                    bb.sessions.update, internal.session.bb_session_id,
-                    project_id=self._project_id(), status="REQUEST_RELEASE",
+                    bb.sessions.update,
+                    internal.session.bb_session_id,
+                    project_id=self._project_id(),
+                    status="REQUEST_RELEASE",
                 )
-        await self._publish(session_key, EV_BROWSER_CLOSED, {
-            "sessionKey": session_key,
-            "bbSessionId": internal.session.bb_session_id,
-        })
+        await self._publish(
+            session_key,
+            EV_BROWSER_CLOSED,
+            {
+                "sessionKey": session_key,
+                "bbSessionId": internal.session.bb_session_id,
+            },
+        )
         browser_events.clear_session(session_key)
         logger.info("browser: destroyed sk=%s", session_key)
 
@@ -640,12 +703,20 @@ class BrowserManager:
         title = ""
         with suppress(PlaywrightError):
             title = await internal.page.title()
-        await self._publish(session_key, EV_BROWSER_NAVIGATED, {
-            "sessionKey": session_key, "url": url, "title": title,
-        })
+        await self._publish(
+            session_key,
+            EV_BROWSER_NAVIGATED,
+            {
+                "sessionKey": session_key,
+                "url": url,
+                "title": title,
+            },
+        )
 
     async def _post_action_snapshot(
-        self, session_key: str, action: str,
+        self,
+        session_key: str,
+        action: str,
     ) -> dict[str, Any]:
         # SPA frameworks (React/Vue/Svelte) commit DOM after a microtask;
         # 400ms catches all but the slowest XHR-driven re-renders.
@@ -658,34 +729,45 @@ class BrowserManager:
 
     async def _emit_opened(self, internal: _Internal) -> None:
         s = internal.session
-        await self._publish(s.session_key, EV_BROWSER_OPENED, {
-            "sessionKey": s.session_key,
-            "bbSessionId": s.bb_session_id,
-            "liveViewUrl": s.live_view_url,
-            "viewport": s.viewport,
-            "deviceKind": s.device_kind,
-            "controlMode": s.control_mode.value,
-            "takeoverReason": s.takeover_reason,
-            "url": s.current_url,
-        })
+        await self._publish(
+            s.session_key,
+            EV_BROWSER_OPENED,
+            {
+                "sessionKey": s.session_key,
+                "bbSessionId": s.bb_session_id,
+                "liveViewUrl": s.live_view_url,
+                "viewport": s.viewport,
+                "deviceKind": s.device_kind,
+                "controlMode": s.control_mode.value,
+                "takeoverReason": s.takeover_reason,
+                "url": s.current_url,
+            },
+        )
 
     async def _publish(
-        self, session_key: str, evt_type: str, data: dict,
+        self,
+        session_key: str,
+        evt_type: str,
+        data: dict,
     ) -> None:
         ev = SSEEvent(
-            type=evt_type, ts=int(time.time() * 1000),
-            trace_id=session_key, data=data,
+            type=evt_type,
+            ts=int(time.time() * 1000),
+            trace_id=session_key,
+            data=data,
         )
         await browser_events.publish(session_key, ev.to_wire())
 
     def _ensure_background_tasks(self) -> None:
         if self._gc_task is None or self._gc_task.done():
             self._gc_task = asyncio.create_task(
-                self._idle_gc_loop(), name="browser-idle-gc",
+                self._idle_gc_loop(),
+                name="browser-idle-gc",
             )
         if self._health_task is None or self._health_task.done():
             self._health_task = asyncio.create_task(
-                self._health_check_loop(), name="browser-health-check",
+                self._health_check_loop(),
+                name="browser-health-check",
             )
 
     async def _idle_gc_loop(self) -> None:

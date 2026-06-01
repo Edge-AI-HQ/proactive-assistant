@@ -83,7 +83,9 @@ async def test_ambient_summary_posts_context_to_litellm(monkeypatch):
 
     monkeypatch.setattr(ambient_routes, "generate_ambient_summary", fake_generate)
     monkeypatch.setattr(
-        ambient_routes, "ensure_user_litellm_key", fake_ensure_user_litellm_key,
+        ambient_routes,
+        "ensure_user_litellm_key",
+        fake_ensure_user_litellm_key,
     )
 
     client = await _client()
@@ -129,7 +131,9 @@ async def test_ambient_summary_returns_502_when_litellm_fails(monkeypatch):
 
     monkeypatch.setattr(ambient_routes, "generate_ambient_summary", fake_generate)
     monkeypatch.setattr(
-        ambient_routes, "ensure_user_litellm_key", fake_ensure_user_litellm_key,
+        ambient_routes,
+        "ensure_user_litellm_key",
+        fake_ensure_user_litellm_key,
     )
 
     client = await _client()

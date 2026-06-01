@@ -107,9 +107,15 @@ class MemoryRepository(UserScopedRepository):
                 RETURNING *
                 """,
                 (
-                    self._user_id, input.id, input.text, input.source,
-                    input.source_run_id, input.subject,
-                    input.quality, input.confidence, input.occurred_at,
+                    self._user_id,
+                    input.id,
+                    input.text,
+                    input.source,
+                    input.source_run_id,
+                    input.subject,
+                    input.quality,
+                    input.confidence,
+                    input.occurred_at,
                     json.dumps(input.tags or []),
                 ),
             )
@@ -121,15 +127,21 @@ class MemoryRepository(UserScopedRepository):
         # Enqueue for embedding. Same transaction as the insert — if the
         # caller commits, the queue row commits too; rollback drops both.
         from ...embeddings import enqueue as enqueue_embedding  # noqa: PLC0415
+
         await enqueue_embedding(
             self._conn,
-            user_id=self._user_id, table_name="pai_memory",
-            row_id=input.id, text=input.text,
+            user_id=self._user_id,
+            table_name="pai_memory",
+            row_id=input.id,
+            text=input.text,
         )
         return MemoryRow.from_record(row)
 
     async def search_semantic(
-        self, *, query_vector: list[float], limit: int = 10,
+        self,
+        *,
+        query_vector: list[float],
+        limit: int = 10,
         min_quality: float | None = None,
     ) -> list[MemoryRow]:
         """Cosine-similarity search against the user's embedded memories.
@@ -197,7 +209,8 @@ class MemoryRepository(UserScopedRepository):
             msg = f"unsupported order_by: {order_by!r}"
             raise ValueError(msg)
 
-        sql = """
+        sql = (
+            """
             SELECT *, COUNT(*) OVER () AS total_count
             FROM pai_memory
             WHERE user_id = %s
@@ -206,18 +219,26 @@ class MemoryRepository(UserScopedRepository):
               AND (%s::text IS NULL OR subject = %s)
               AND (%s::text IS NULL OR subject LIKE %s)
               AND (%s::timestamptz IS NULL OR created_at >= %s)
-        """ + order_clause + " LIMIT %s OFFSET %s"
+        """
+            + order_clause
+            + " LIMIT %s OFFSET %s"
+        )
 
         prefix_pat = f"{subject_prefix}%" if subject_prefix else None
         async with self._conn.cursor() as cur:
             await cur.execute(
                 sql,
                 (
-                    self._user_id, min_quality,
-                    subject, subject,
-                    subject_prefix, prefix_pat,
-                    since, since,
-                    limit, offset,
+                    self._user_id,
+                    min_quality,
+                    subject,
+                    subject,
+                    subject_prefix,
+                    prefix_pat,
+                    since,
+                    since,
+                    limit,
+                    offset,
                 ),
             )
             rows = await cur.fetchall()

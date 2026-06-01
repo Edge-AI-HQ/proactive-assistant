@@ -57,9 +57,7 @@ def _row_to_run(r: dict[str, Any]) -> dict[str, Any]:
     """FE shape (camelCase): {id, kind, status, startedAt, ...}."""
     status = _project_status(r["task_status"], r.get("run_status"))
     progress = r.get("progress") or {}
-    completed_at = (
-        r["updated_at"] if r["task_status"] == "archived" else None
-    )
+    completed_at = r["updated_at"] if r["task_status"] == "archived" else None
     return {
         "id": r["id"],
         "kind": r["kind"],
@@ -147,7 +145,8 @@ async def list_active_agent_runs(
     """
     async with user_scoped_tx(pool, user.id) as conn:
         cur = await conn.execute(
-            _BASE_SELECT + _ACTIVE_FILTER, (user.id, list(_AGENT_KINDS)),
+            _BASE_SELECT + _ACTIVE_FILTER,
+            (user.id, list(_AGENT_KINDS)),
         )
         rows = await cur.fetchall()
     runs = [_row_to_run(r) for r in rows]
@@ -171,5 +170,6 @@ async def get_agent_run(
         row = await cur.fetchone()
     if row is None:
         from fastapi import HTTPException  # noqa: PLC0415
+
         raise HTTPException(status_code=404, detail="agent run not found")
     return {"ok": True, "run": _row_to_run(row)}

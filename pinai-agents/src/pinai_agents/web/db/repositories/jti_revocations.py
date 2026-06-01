@@ -78,7 +78,11 @@ async def is_revoked(conn, jti: str) -> bool:
 
 
 async def revoke(
-    conn, *, jti: str, user_id: int, expires_at: datetime,
+    conn,
+    *,
+    jti: str,
+    user_id: int,
+    expires_at: datetime,
     reason: str | None = None,
 ) -> None:
     """Insert a revocation row. Idempotent on the jti PK — a duplicate
@@ -96,7 +100,10 @@ async def revoke(
 
 
 async def revoke_all_for_user(
-    conn, *, user_id: int, jtis: list[tuple[str, datetime]],
+    conn,
+    *,
+    user_id: int,
+    jtis: list[tuple[str, datetime]],
     reason: str | None = None,
 ) -> int:
     """Bulk-revoke a list of (jti, expires_at) pairs for a single user.

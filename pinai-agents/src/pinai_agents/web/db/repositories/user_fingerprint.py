@@ -99,7 +99,9 @@ class UserFingerprintRepository(UserScopedRepository):
         return _row_to_pattern_pref(row)
 
     async def get_intent_pref(
-        self, intent: str, basket: str | None = None,
+        self,
+        intent: str,
+        basket: str | None = None,
     ) -> dict[str, Any] | None:
         async with self._conn.cursor() as cur:
             await cur.execute(
@@ -146,7 +148,10 @@ class UserFingerprintRepository(UserScopedRepository):
             await self._bump_intent(intent, basket, opened=False)
 
     async def score_for(
-        self, pattern_id: str, *, base_hit_rate: float,
+        self,
+        pattern_id: str,
+        *,
+        base_hit_rate: float,
     ) -> float:
         """Combine global base_hit_rate with per-user fingerprint. Used
         by the matcher when ranking candidates.
@@ -237,13 +242,19 @@ class UserFingerprintRepository(UserScopedRepository):
                           updated_at = NOW()
                         """,
                         (
-                            self._user_id, pid,
-                            suppress_after, suppress_until,
+                            self._user_id,
+                            pid,
+                            suppress_after,
+                            suppress_until,
                         ),
                     )
 
     async def _bump_intent(
-        self, intent: str, basket: str | None, *, opened: bool,
+        self,
+        intent: str,
+        basket: str | None,
+        *,
+        opened: bool,
     ) -> None:
         bk = basket or ""
         async with self._conn.cursor() as cur:

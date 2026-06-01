@@ -39,6 +39,7 @@ def _gen_keypair_b64() -> str:
 def _set_signing_key(monkeypatch):
     monkeypatch.setenv("PAI_JWT_SIGNING_KEY", _gen_keypair_b64())
     from pinai_agents import config
+
     config.get_web_settings.cache_clear()
     config.get_chat_settings.cache_clear()
     yield
@@ -52,7 +53,8 @@ async def app_and_client(pool):
     app.state.pool = pool
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://testserver",
+        transport=transport,
+        base_url="http://testserver",
     ) as c:
         yield app, c
 
@@ -64,8 +66,10 @@ def _agent_auth(user_id: int) -> dict[str, str]:
 
 def _operator_auth(user_id: int, operator_id: str) -> dict[str, str]:
     token, _ = sign_agent_run_jwt(
-        user_id=user_id, virtual_key=None,
-        actor="internal_operator", operator_id=operator_id,
+        user_id=user_id,
+        virtual_key=None,
+        actor="internal_operator",
+        operator_id=operator_id,
     )
     return {"Authorization": f"Bearer {token}"}
 
@@ -123,6 +127,7 @@ async def test_mint_endpoint_rejects_non_internal_auth(app_and_client, user_ids)
 
 def _refresh_settings():
     from pinai_agents import config
+
     config.get_web_settings.cache_clear()
 
 
@@ -136,8 +141,11 @@ async def test_mint_endpoint_rejects_authenticated_non_operator(app_and_client, 
     target_sub = await _supabase_sub(pool, target_id)
 
     operator_user = User(
-        id=operator_id, supabase_user_id="not-on-the-allowlist",
-        email="op@test.invalid", litellm_virtual_key=None, browserbase_context_id=None,
+        id=operator_id,
+        supabase_user_id="not-on-the-allowlist",
+        email="op@test.invalid",
+        litellm_virtual_key=None,
+        browserbase_context_id=None,
     )
     app.dependency_overrides[current_user] = lambda: operator_user
     _refresh_settings()  # INTERNAL_OPERATOR_SUBS unset → fail-closed
@@ -154,7 +162,10 @@ async def test_mint_endpoint_rejects_authenticated_non_operator(app_and_client, 
 
 @pytest.mark.asyncio
 async def test_mint_endpoint_success_for_allowlisted_operator(
-    app_and_client, user_ids, pool, monkeypatch,
+    app_and_client,
+    user_ids,
+    pool,
+    monkeypatch,
 ):
     """Allowlisted internal operator mints a token bound to the target."""
     app, client = app_and_client
@@ -166,8 +177,11 @@ async def test_mint_endpoint_success_for_allowlisted_operator(
     _refresh_settings()
 
     operator_user = User(
-        id=operator_id, supabase_user_id=operator_sub, email="op@test.invalid",
-        litellm_virtual_key=None, browserbase_context_id=None,
+        id=operator_id,
+        supabase_user_id=operator_sub,
+        email="op@test.invalid",
+        litellm_virtual_key=None,
+        browserbase_context_id=None,
     )
     app.dependency_overrides[current_user] = lambda: operator_user
     try:
@@ -189,7 +203,8 @@ async def test_mint_endpoint_success_for_allowlisted_operator(
 async def _supabase_sub(pool, user_id: int) -> str:
     async with pool.connection() as conn:
         cur = await conn.execute(
-            "SELECT supabase_user_id FROM users WHERE id = %s", (user_id,),
+            "SELECT supabase_user_id FROM users WHERE id = %s",
+            (user_id,),
         )
         row = await cur.fetchone()
     return str(row["supabase_user_id"])

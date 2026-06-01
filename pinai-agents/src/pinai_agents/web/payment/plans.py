@@ -28,6 +28,7 @@ class BillingPlan:
         meta = row.get("metadata") or {}
         if isinstance(meta, str):
             import json
+
             meta = json.loads(meta)
         return cls(
             plan_code=row["plan_code"],

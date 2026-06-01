@@ -37,6 +37,7 @@ def _set_env(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.invalid")
     monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "test-publishable-key")
     from pinai_agents import config
+
     config.get_web_settings.cache_clear()
     yield
     config.get_web_settings.cache_clear()
@@ -50,10 +51,12 @@ def _patch_supabase_verify(monkeypatch):
     only purpose is to ferry sub/email from the fixture to here) and
     return a synthesized SupabaseClaims. Mirrors what the real Supabase
     response would look like for a valid bearer."""
+
     async def _fake(token: str) -> supabase_jwt_module.SupabaseClaims:
         try:
             claims = pyjwt.decode(
-                token, options={"verify_signature": False, "verify_exp": False},
+                token,
+                options={"verify_signature": False, "verify_exp": False},
             )
         except pyjwt.InvalidTokenError as e:
             raise supabase_jwt_module.JWTVerifyError(
@@ -81,6 +84,7 @@ def _patch_supabase_verify(monkeypatch):
 def supabase_jwt():
     """Mint an unsigned-payload token. Signature is irrelevant —
     `_patch_supabase_verify` decodes it without verification."""
+
     def _mk(sub: str, email: str | None = None) -> str:
         return pyjwt.encode(
             {
@@ -91,8 +95,10 @@ def supabase_jwt():
                 "exp": int(time.time()) + 3600,
                 "iat": int(time.time()),
             },
-            "irrelevant-secret-32-bytes-payload-ferry!", algorithm="HS256",
+            "irrelevant-secret-32-bytes-payload-ferry!",
+            algorithm="HS256",
         )
+
     return _mk
 
 
@@ -142,7 +148,8 @@ async def test_api_health_with_jwt(client, pool):
     assert body["userId"] > 0
     async with pool.connection() as conn, conn.transaction():
         await conn.execute(
-            "DELETE FROM users WHERE supabase_user_id = %s", (sub,),
+            "DELETE FROM users WHERE supabase_user_id = %s",
+            (sub,),
         )
 
 
@@ -175,7 +182,8 @@ async def test_memory_list_empty_for_new_user(client, pool):
     assert body["total"] == 0
     async with pool.connection() as conn, conn.transaction():
         await conn.execute(
-            "DELETE FROM users WHERE supabase_user_id = %s", (sub,),
+            "DELETE FROM users WHERE supabase_user_id = %s",
+            (sub,),
         )
 
 
@@ -216,7 +224,8 @@ async def test_memory_add_and_list_roundtrip(client, pool):
 
     async with pool.connection() as conn, conn.transaction():
         await conn.execute(
-            "DELETE FROM users WHERE supabase_user_id = %s", (sub,),
+            "DELETE FROM users WHERE supabase_user_id = %s",
+            (sub,),
         )
 
 
@@ -239,14 +248,16 @@ async def test_cross_user_memory_isolation(client, pool):
 
     # User B sees zero
     r = await c.get(
-        "/api/memory", headers={"Authorization": f"Bearer {token_b}"},
+        "/api/memory",
+        headers={"Authorization": f"Bearer {token_b}"},
     )
     assert r.status_code == 200
     assert r.json()["memories"] == []
 
     # User A still sees their own
     r = await c.get(
-        "/api/memory", headers={"Authorization": f"Bearer {token_a}"},
+        "/api/memory",
+        headers={"Authorization": f"Bearer {token_a}"},
     )
     assert len(r.json()["memories"]) == 1
 

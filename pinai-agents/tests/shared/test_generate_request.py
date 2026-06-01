@@ -7,10 +7,13 @@ from pinai_agents.chat.routes.generate import GenerateRequest as ChatGenerateReq
 from pinai_agents.shared.api_models import GenerateRequest
 
 
-@pytest.mark.parametrize(("model", "payload_key"), [
-    (GenerateRequest, "cardsToGenerate"),
-    (ChatGenerateRequest, "cards_to_generate"),
-])
+@pytest.mark.parametrize(
+    ("model", "payload_key"),
+    [
+        (GenerateRequest, "cardsToGenerate"),
+        (ChatGenerateRequest, "cards_to_generate"),
+    ],
+)
 def test_generate_request_accepts_default_and_valid_integer(
     model: type,
     payload_key: str,
@@ -20,10 +23,13 @@ def test_generate_request_accepts_default_and_valid_integer(
 
 
 @pytest.mark.parametrize("value", [True, False, "5", 5.0, 0, 11])
-@pytest.mark.parametrize(("model", "payload_key"), [
-    (GenerateRequest, "cardsToGenerate"),
-    (ChatGenerateRequest, "cards_to_generate"),
-])
+@pytest.mark.parametrize(
+    ("model", "payload_key"),
+    [
+        (GenerateRequest, "cardsToGenerate"),
+        (ChatGenerateRequest, "cards_to_generate"),
+    ],
+)
 def test_generate_request_rejects_implicit_or_out_of_range_counts(
     model: type,
     payload_key: str,

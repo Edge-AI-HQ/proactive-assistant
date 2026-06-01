@@ -50,8 +50,9 @@ async def test_add_then_list_active_roundtrip(pool, user_ids):
     user_a, _ = user_ids
     async with user_scoped_tx(pool, user_a) as conn:
         repo = PreferenceRepository(user_a, conn)
-        await repo.add(_input("pref_a1", scope="topic", polarity="positive",
-                              source="user", weight=1.0))
+        await repo.add(
+            _input("pref_a1", scope="topic", polarity="positive", source="user", weight=1.0)
+        )
         rows = await repo.list(status="active")
 
     assert len(rows) == 1
@@ -88,16 +89,20 @@ async def test_list_active_omits_expired_temporary_preferences(pool, user_ids):
     now = datetime.now(tz=UTC)
     async with user_scoped_tx(pool, user_a) as conn:
         repo = PreferenceRepository(user_a, conn)
-        await repo.add(_input(
-            "pref_expired",
-            durability="temporary",
-            expires_at=now - timedelta(hours=1),
-        ))
-        await repo.add(_input(
-            "pref_current",
-            durability="temporary",
-            expires_at=now + timedelta(hours=1),
-        ))
+        await repo.add(
+            _input(
+                "pref_expired",
+                durability="temporary",
+                expires_at=now - timedelta(hours=1),
+            )
+        )
+        await repo.add(
+            _input(
+                "pref_current",
+                durability="temporary",
+                expires_at=now + timedelta(hours=1),
+            )
+        )
 
         active = await repo.list(status="active")
 

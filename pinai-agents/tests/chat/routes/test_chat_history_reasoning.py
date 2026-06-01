@@ -6,24 +6,26 @@ from pinai_agents.chat.routes.history import _build_history
 
 
 def test_history_preserves_openai_responses_reasoning_summary() -> None:
-    history = _build_history([
-        HumanMessage(content="What should I do next?", id="user-1"),
-        AIMessage(
-            id="assistant-1",
-            content=[
-                {
-                    "type": "reasoning",
-                    "summary": [
-                        {
-                            "type": "summary_text",
-                            "text": "Checked the card context before answering.",
-                        }
-                    ],
-                },
-                {"type": "text", "text": "Draft the agenda first."},
-            ],
-        ),
-    ])
+    history = _build_history(
+        [
+            HumanMessage(content="What should I do next?", id="user-1"),
+            AIMessage(
+                id="assistant-1",
+                content=[
+                    {
+                        "type": "reasoning",
+                        "summary": [
+                            {
+                                "type": "summary_text",
+                                "text": "Checked the card context before answering.",
+                            }
+                        ],
+                    },
+                    {"type": "text", "text": "Draft the agenda first."},
+                ],
+            ),
+        ]
+    )
 
     assert history == [
         {

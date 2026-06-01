@@ -132,10 +132,7 @@ def _format_since(dt: datetime, fmt: str | None) -> Any:
     if fmt == "gdrive_query":
         # Drive's q DSL: combine modifiedTime > '<iso>' with
         # `and trashed = false` so deleted files don't reappear.
-        return (
-            f"modifiedTime > '{dt.replace(microsecond=0).isoformat()}' "
-            f"and trashed = false"
-        )
+        return f"modifiedTime > '{dt.replace(microsecond=0).isoformat()}' and trashed = false"
     if fmt == "slack_query":
         # Slack search supports `after:YYYY-MM-DD` only (day-level).
         # Stripping the time component is fine; raw dedupe absorbs the
@@ -216,20 +213,26 @@ async def run_fetch(
     # Resolve prereqs first (e.g. Calendly: GET_USER → user URI).
     for pre in recipe.prereqs:
         pre_result = await cs.execute(
-            user, pre.slug, pre.args,
+            user,
+            pre.slug,
+            pre.args,
             connected_account_id=connected_account_id,
         )
         if not pre_result.successful:
             logger.warning(
                 "[ingest_runner] prereq %s failed for %s: %s",
-                pre.slug, toolkit, pre_result.error,
+                pre.slug,
+                toolkit,
+                pre_result.error,
             )
             return []
         injected = _walk_path(pre_result.data, pre.inject_path)
         if injected is None:
             logger.warning(
                 "[ingest_runner] prereq %s for %s returned no value at %s",
-                pre.slug, toolkit, pre.inject_path,
+                pre.slug,
+                toolkit,
+                pre.inject_path,
             )
             return []
         args[pre.inject_arg] = injected
@@ -250,22 +253,21 @@ async def run_fetch(
 
     # Main call.
     result = await cs.execute(
-        user, recipe.slug or "",
-        args, connected_account_id=connected_account_id,
+        user,
+        recipe.slug or "",
+        args,
+        connected_account_id=connected_account_id,
     )
     if not result.successful:
         logger.warning(
             "[ingest_runner] %s exec failed: %s",
-            recipe.slug, result.error,
+            recipe.slug,
+            result.error,
         )
         return []
 
     # Walk to the items list.
-    items: Any = (
-        _walk_path(result.data, recipe.result_path)
-        if recipe.result_path
-        else result.data
-    )
+    items: Any = _walk_path(result.data, recipe.result_path) if recipe.result_path else result.data
     if items is None:
         return []
     if isinstance(items, dict):
@@ -274,9 +276,10 @@ async def run_fetch(
         items = [items]
     if not isinstance(items, list):
         logger.warning(
-            "[ingest_runner] %s: result_path %s did not yield a list "
-            "(got %s)",
-            recipe.slug, recipe.result_path, type(items).__name__,
+            "[ingest_runner] %s: result_path %s did not yield a list (got %s)",
+            recipe.slug,
+            recipe.result_path,
+            type(items).__name__,
         )
         return []
     return [x for x in items if isinstance(x, dict)]

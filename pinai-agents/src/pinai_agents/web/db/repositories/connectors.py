@@ -39,7 +39,10 @@ class ConnectorsRepository(UserScopedRepository):
     """Cursor get/set for connector incremental sync."""
 
     async def get_cursor(
-        self, *, toolkit: str, connected_account_id: str,
+        self,
+        *,
+        toolkit: str,
+        connected_account_id: str,
     ) -> ConnectorSyncCursor | None:
         """Return the cursor row, or None if no successful sync yet
         (caller falls back to a bootstrap window — typically 24h)."""
@@ -92,7 +95,9 @@ class ConnectorsRepository(UserScopedRepository):
                       updated_at = NOW()
                 """,
                 (
-                    self._user_id, toolkit, connected_account_id,
+                    self._user_id,
+                    toolkit,
+                    connected_account_id,
                     last_synced_at,
                     json.dumps(toolkit_cursor) if toolkit_cursor is not None else None,
                 ),

@@ -136,7 +136,10 @@ async def mint(
 
 
 async def bind_sandbox(
-    conn: AsyncConnection, *, token_hash: str, sandbox_id: str,
+    conn: AsyncConnection,
+    *,
+    token_hash: str,
+    sandbox_id: str,
 ) -> None:
     """Attach a Daytona sandbox id to an already-minted phantom row.
 
@@ -157,7 +160,9 @@ async def bind_sandbox(
 
 
 async def resolve(
-    conn: AsyncConnection, *, raw_token: str,
+    conn: AsyncConnection,
+    *,
+    raw_token: str,
 ) -> _PhantomResolved | None:
     """Hot-path lookup. None means "no valid phantom for this token".
 
@@ -200,7 +205,10 @@ async def resolve(
 
 
 async def revoke_by_token(
-    conn: AsyncConnection, *, raw_token: str, reason: str | None = None,
+    conn: AsyncConnection,
+    *,
+    raw_token: str,
+    reason: str | None = None,
 ) -> bool:
     """Revoke by raw token. Returns True if a row was actually updated.
 
@@ -224,8 +232,11 @@ async def revoke_by_token(
 
 
 async def revoke_by_sandbox(
-    conn: AsyncConnection, *, sandbox_id: str,
-    user_id: int, reason: str | None = None,
+    conn: AsyncConnection,
+    *,
+    sandbox_id: str,
+    user_id: int,
+    reason: str | None = None,
 ) -> int:
     """Revoke all unrevoked phantoms bound to a Daytona sandbox id.
 

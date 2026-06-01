@@ -118,16 +118,23 @@ async def test_dispatch_fires_one_task_per_well_formed_card(monkeypatch):
     captured: list[tuple[int, str]] = []
 
     async def fake_bootstrap_one(
-        *, pool, user_id, card, virtual_key,  # noqa: ARG001
+        *,
+        pool,
+        user_id,
+        card,
+        virtual_key,  # noqa: ARG001
     ):
         captured.append((user_id, card["id"]))
 
-    with patch(
-        "pinai_agents.web.services.card_fanout._virtual_key_for",
-        new=AsyncMock(return_value="vk_test"),
-    ), patch(
-        "pinai_agents.web.services.card_fanout._bootstrap_one_card",
-        new=fake_bootstrap_one,
+    with (
+        patch(
+            "pinai_agents.web.services.card_fanout._virtual_key_for",
+            new=AsyncMock(return_value="vk_test"),
+        ),
+        patch(
+            "pinai_agents.web.services.card_fanout._bootstrap_one_card",
+            new=fake_bootstrap_one,
+        ),
     ):
         dispatched = await card_fanout.dispatch_card_bootstrap(
             pool=None,  # type: ignore[arg-type]
@@ -135,11 +142,11 @@ async def test_dispatch_fires_one_task_per_well_formed_card(monkeypatch):
             final_cards=[
                 {"id": "card-A", "title": "A"},
                 {"id": "card-B", "title": "B", "primaryAction": {"label": "B!"}},
-                None,                          # malformed — skipped
-                {},                            # missing id — skipped
+                None,  # malformed — skipped
+                {},  # missing id — skipped
                 {"id": "", "title": "empty"},  # empty id — skipped
-                "not a dict",                  # malformed — skipped
-                {"id": "card-C"},              # title fallback empty — still dispatched
+                "not a dict",  # malformed — skipped
+                {"id": "card-C"},  # title fallback empty — still dispatched
             ],
         )
 
@@ -158,6 +165,7 @@ async def test_dispatch_fires_one_task_per_well_formed_card(monkeypatch):
     #
     # Yield control once so the spawned tasks run.
     import asyncio  # noqa: PLC0415
+
     await asyncio.sleep(0)
     captured_card_ids = sorted(card_id for _, card_id in captured)
     assert captured_card_ids == ["card-A", "card-B", "card-C"]
@@ -178,15 +186,19 @@ async def test_bootstrap_one_card_skips_when_thread_already_has_turns():
         if False:
             yield b""
 
-    with patch(
-        "pinai_agents.web.services.card_fanout.call_chat_exists",
-        new=AsyncMock(return_value=True),
-    ), patch(
-        "pinai_agents.web.services.card_fanout._ensure_thread_row",
-        new=AsyncMock(),
-    ), patch(
-        "pinai_agents.web.services.card_fanout.stream_chat",
-        new=fake_stream_chat,
+    with (
+        patch(
+            "pinai_agents.web.services.card_fanout.call_chat_exists",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "pinai_agents.web.services.card_fanout._ensure_thread_row",
+            new=AsyncMock(),
+        ),
+        patch(
+            "pinai_agents.web.services.card_fanout.stream_chat",
+            new=fake_stream_chat,
+        ),
     ):
         await card_fanout._bootstrap_one_card(
             pool=None,  # type: ignore[arg-type]

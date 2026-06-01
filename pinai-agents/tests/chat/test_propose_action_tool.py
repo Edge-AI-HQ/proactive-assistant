@@ -49,8 +49,12 @@ def test_propose_action_accepts_full_payload():
             ),
         ],
         drafts=[
-            Artifact(kind="email_draft", title="Re: Q4 plan",
-                     body="Hi Alex, ...", meta={"draftId": "r123"}),
+            Artifact(
+                kind="email_draft",
+                title="Re: Q4 plan",
+                body="Hi Alex, ...",
+                meta={"draftId": "r123"},
+            ),
         ],
         dangerous_actions=[
             DangerousAction(

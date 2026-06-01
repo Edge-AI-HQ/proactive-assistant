@@ -44,7 +44,9 @@ async def test_insert_thread_persists_row(pool, user_ids):
 
     async with user_scoped_tx(pool, user_a) as conn:
         await ChatThreadsRepository(user_a, conn).insert_thread(
-            thread_id=tid, kind="main", title="My first chat",
+            thread_id=tid,
+            kind="main",
+            title="My first chat",
         )
 
     async with user_scoped_tx(pool, user_a) as conn:
@@ -87,7 +89,9 @@ async def test_insert_card_thread_with_card_id(pool, user_ids):
 
     async with user_scoped_tx(pool, user_a) as conn:
         await ChatThreadsRepository(user_a, conn).insert_thread(
-            thread_id=tid, kind="card", card_id=card_id,
+            thread_id=tid,
+            kind="card",
+            card_id=card_id,
         )
 
     async with user_scoped_tx(pool, user_a) as conn:
@@ -108,7 +112,8 @@ async def test_insert_rejects_main_thread_with_wrong_user_prefix(pool, user_ids)
     async with user_scoped_tx(pool, user_a) as conn:
         with pytest.raises(Exception) as exc:
             await ChatThreadsRepository(user_a, conn).insert_thread(
-                thread_id=bad_tid, kind="main",
+                thread_id=bad_tid,
+                kind="main",
             )
         assert "check" in str(exc.value).lower() or "constraint" in str(exc.value).lower()
 
@@ -119,7 +124,9 @@ async def test_insert_rejects_card_thread_without_card_id(pool, user_ids):
     async with user_scoped_tx(pool, user_a) as conn:
         with pytest.raises(psycopg.errors.CheckViolation):
             await ChatThreadsRepository(user_a, conn).insert_thread(
-                thread_id="card-thread-xyz", kind="card", card_id=None,
+                thread_id="card-thread-xyz",
+                kind="card",
+                card_id=None,
             )
 
 
@@ -131,7 +138,9 @@ async def test_insert_rejects_card_thread_id_card_id_mismatch(pool, user_ids):
     async with user_scoped_tx(pool, user_a) as conn:
         with pytest.raises(psycopg.errors.CheckViolation):
             await ChatThreadsRepository(user_a, conn).insert_thread(
-                thread_id="card-thread-foo", kind="card", card_id="bar",
+                thread_id="card-thread-foo",
+                kind="card",
+                card_id="bar",
             )
 
 
@@ -148,7 +157,8 @@ async def test_latest_main_returns_none_when_user_has_nothing(pool, user_ids):
 
 @pytest.mark.asyncio
 async def test_latest_main_picks_thread_with_most_messages_when_timestamps_tie(
-    pool, user_ids,
+    pool,
+    user_ids,
 ):
     """The migration backfills every existing thread with last_message_at
     = NOW() (single timestamp). Sort breaks ties by message_count DESC
@@ -224,8 +234,7 @@ async def test_latest_main_skips_archived(pool, user_ids):
         await repo.insert_thread(thread_id=archived, kind="main")
         await repo.insert_thread(thread_id=active, kind="main")
         await conn.execute(
-            "UPDATE pai_chat_threads SET archived = TRUE, message_count = 999 "
-            "WHERE thread_id = %s",
+            "UPDATE pai_chat_threads SET archived = TRUE, message_count = 999 WHERE thread_id = %s",
             (archived,),
         )
 
@@ -242,7 +251,9 @@ async def test_latest_main_ignores_card_threads(pool, user_ids):
 
     async with user_scoped_tx(pool, user_a) as conn:
         await ChatThreadsRepository(user_a, conn).insert_thread(
-            thread_id=card_tid, kind="card", card_id="only_card",
+            thread_id=card_tid,
+            kind="card",
+            card_id="only_card",
         )
 
     async with user_scoped_tx(pool, user_a) as conn:
@@ -357,7 +368,8 @@ async def test_archive_thread_soft_deletes(pool, user_ids):
 
     async with user_scoped_tx(pool, user_a) as conn:
         with_archived = await ChatThreadsRepository(
-            user_a, conn,
+            user_a,
+            conn,
         ).list_threads(include_archived=True)
     assert len(with_archived) == 1
     assert with_archived[0].archived is True
@@ -395,11 +407,13 @@ async def test_rls_isolates_users(pool, user_ids):
 
     async with user_scoped_tx(pool, user_a) as conn:
         await ChatThreadsRepository(user_a, conn).insert_thread(
-            thread_id=a_thread, kind="main",
+            thread_id=a_thread,
+            kind="main",
         )
     async with user_scoped_tx(pool, user_b) as conn:
         await ChatThreadsRepository(user_b, conn).insert_thread(
-            thread_id=b_thread, kind="main",
+            thread_id=b_thread,
+            kind="main",
         )
 
     async with user_scoped_tx(pool, user_a) as conn:
@@ -420,7 +434,8 @@ async def test_rls_blocks_cross_user_get_latest(pool, user_ids):
 
     async with user_scoped_tx(pool, user_a) as conn:
         await ChatThreadsRepository(user_a, conn).insert_thread(
-            thread_id=a_thread, kind="main",
+            thread_id=a_thread,
+            kind="main",
         )
 
     async with user_scoped_tx(pool, user_b) as conn:

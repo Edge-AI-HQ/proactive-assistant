@@ -46,7 +46,9 @@ async def test_voice_transcribe_posts_raw_audio(monkeypatch):
 
     monkeypatch.setattr(voice_routes, "transcribe_audio", fake_transcribe_audio)
     monkeypatch.setattr(
-        voice_routes, "ensure_user_litellm_key", fake_ensure_user_litellm_key,
+        voice_routes,
+        "ensure_user_litellm_key",
+        fake_ensure_user_litellm_key,
     )
 
     client = await _client()
@@ -89,7 +91,9 @@ async def test_voice_transcribe_accepts_language_hint(monkeypatch):
 
     monkeypatch.setattr(voice_routes, "transcribe_audio", fake_transcribe_audio)
     monkeypatch.setattr(
-        voice_routes, "ensure_user_litellm_key", fake_ensure_user_litellm_key,
+        voice_routes,
+        "ensure_user_litellm_key",
+        fake_ensure_user_litellm_key,
     )
 
     client = await _client()
@@ -118,7 +122,9 @@ async def test_voice_transcribe_accepts_chinese_language_hint(monkeypatch):
 
     monkeypatch.setattr(voice_routes, "transcribe_audio", fake_transcribe_audio)
     monkeypatch.setattr(
-        voice_routes, "ensure_user_litellm_key", fake_ensure_user_litellm_key,
+        voice_routes,
+        "ensure_user_litellm_key",
+        fake_ensure_user_litellm_key,
     )
 
     client = await _client()
@@ -196,7 +202,9 @@ async def test_voice_transcribe_diarized_uses_litellm_virtual_key_and_reference(
             text="Self hello.\nSpeaker one replies.",
             segments=[
                 SpeakerSegment(speaker="self", text="Self hello.", start_ms=0, end_ms=1200),
-                SpeakerSegment(speaker="speaker_1", text="Speaker one replies.", start_ms=1300, end_ms=2800),
+                SpeakerSegment(
+                    speaker="speaker_1", text="Speaker one replies.", start_ms=1300, end_ms=2800
+                ),
             ],
         )
 
@@ -214,6 +222,7 @@ async def test_voice_transcribe_diarized_uses_litellm_virtual_key_and_reference(
 
     monkeypatch.setattr(voice_routes, "VoiceIdentityRepository", FakeRepo)
     monkeypatch.setattr(voice_routes, "user_scoped_tx", lambda _pool, _user_id: FakeTx())
+
     async def fake_download_media_bytes(_path):
         return b"reference-wav"
 
@@ -236,7 +245,12 @@ async def test_voice_transcribe_diarized_uses_litellm_virtual_key_and_reference(
         "model": "gpt-4o-transcribe-diarize",
         "segments": [
             {"speaker": "self", "text": "Self hello.", "startMs": 0, "endMs": 1200},
-            {"speaker": "speaker_1", "text": "Speaker one replies.", "startMs": 1300, "endMs": 2800},
+            {
+                "speaker": "speaker_1",
+                "text": "Speaker one replies.",
+                "startMs": 1300,
+                "endMs": 2800,
+            },
         ],
         "selfText": "Self hello.",
         "speakerLabels": ["self", "speaker_1"],

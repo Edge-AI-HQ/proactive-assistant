@@ -40,17 +40,20 @@ logger = logging.getLogger(__name__)
 # APNs reason strings that mean "this device token is permanently bad —
 # stop sending to it". The pipeline clears push_token on these.
 # Source: https://developer.apple.com/documentation/usernotifications/sending-notification-requests-to-apns
-_TERMINAL_APNS_REASONS: frozenset[str] = frozenset({
-    "BadDeviceToken",
-    "Unregistered",
-    "DeviceTokenNotForTopic",
-})
+_TERMINAL_APNS_REASONS: frozenset[str] = frozenset(
+    {
+        "BadDeviceToken",
+        "Unregistered",
+        "DeviceTokenNotForTopic",
+    }
+)
 
 
 @dataclass(slots=True)
 class PushPayload:
     """Wire-shape-agnostic notification payload. Each transport renders
     this into its own envelope (APNs aps dict, FCM message, etc.)."""
+
     title: str
     body: str
     # Opaque deep-link target, e.g. ``"app://cards"`` or
@@ -78,9 +81,11 @@ class PushTransport(Protocol):
     platform's verdict."""
 
     async def send(
-        self, *, device: UserDeviceRow, payload: PushPayload,
-    ) -> PushResult:
-        ...
+        self,
+        *,
+        device: UserDeviceRow,
+        payload: PushPayload,
+    ) -> PushResult: ...
 
 
 class _LoggingTransport:
@@ -89,12 +94,19 @@ class _LoggingTransport:
     (DB writes, route shape) still exercises end-to-end."""
 
     async def send(
-        self, *, device: UserDeviceRow, payload: PushPayload,
+        self,
+        *,
+        device: UserDeviceRow,
+        payload: PushPayload,
     ) -> PushResult:
         logger.info(
             "push.stub.send user=%s device=%s provider=%s title=%r body=%r deep_link=%s",
-            device.user_id, device.device_id, device.push_provider,
-            payload.title, payload.body, payload.deep_link,
+            device.user_id,
+            device.device_id,
+            device.push_provider,
+            payload.title,
+            payload.body,
+            payload.deep_link,
         )
         return PushResult(ok=True)
 
@@ -133,7 +145,10 @@ class _ApnsTransport:
         return self._client
 
     async def send(
-        self, *, device: UserDeviceRow, payload: PushPayload,
+        self,
+        *,
+        device: UserDeviceRow,
+        payload: PushPayload,
     ) -> PushResult:
         if device.push_provider not in (None, "apns"):
             # Phase 1 only ships APNs; FCM / web rows shouldn't have
@@ -184,20 +199,24 @@ class _ApnsTransport:
 
 def _select_transport() -> PushTransport:
     settings = get_web_settings()
-    have_all = all([
-        settings.apns_team_id,
-        settings.apns_key_id,
-        settings.apns_auth_key,
-        settings.apns_bundle_id,
-    ])
+    have_all = all(
+        [
+            settings.apns_team_id,
+            settings.apns_key_id,
+            settings.apns_auth_key,
+            settings.apns_bundle_id,
+        ]
+    )
     if have_all:
         logger.info("push.transport.apns enabled (sandbox=%s)", settings.apns_use_sandbox)
         return _ApnsTransport(settings)
     logger.warning(
         "push.transport.stub enabled — APNs credentials missing "
         "(have team=%s key=%s auth=%s bundle=%s)",
-        bool(settings.apns_team_id), bool(settings.apns_key_id),
-        bool(settings.apns_auth_key), bool(settings.apns_bundle_id),
+        bool(settings.apns_team_id),
+        bool(settings.apns_key_id),
+        bool(settings.apns_auth_key),
+        bool(settings.apns_bundle_id),
     )
     return _LoggingTransport()
 
@@ -206,10 +225,7 @@ _transport: PushTransport = _select_transport()
 
 
 def _build_new_cards_payload(*, card_count: int) -> PushPayload:
-    body = (
-        "你有 1 张新的卡片" if card_count == 1
-        else f"你有 {card_count} 张新的卡片"
-    )
+    body = "你有 1 张新的卡片" if card_count == 1 else f"你有 {card_count} 张新的卡片"
     return PushPayload(
         title="新卡片生成",
         body=body,
@@ -222,7 +238,10 @@ def _build_new_cards_payload(*, card_count: int) -> PushPayload:
 
 
 async def notify_new_cards(
-    pool, *, user_id: int, card_count: int,
+    pool,
+    *,
+    user_id: int,
+    card_count: int,
 ) -> int:
     """Dispatch the "new cards" notification to every push-eligible
     device the user has. Returns the count of devices we actually sent
@@ -240,14 +259,16 @@ async def notify_new_cards(
             if not settings.notify_new_cards:
                 logger.info(
                     "push.skip user=%s reason=opted_out card_count=%d",
-                    user_id, card_count,
+                    user_id,
+                    card_count,
                 )
                 return 0
             targets = await DevicesRepository(user_id, conn).find_push_targets()
         if not targets:
             logger.info(
                 "push.skip user=%s reason=no_targets card_count=%d",
-                user_id, card_count,
+                user_id,
+                card_count,
             )
             return 0
 
@@ -259,19 +280,23 @@ async def notify_new_cards(
             except Exception:
                 logger.exception(
                     "push.transport_error user=%s device=%s",
-                    user_id, device.device_id,
+                    user_id,
+                    device.device_id,
                 )
                 continue
             if result.ok:
                 sent += 1
                 logger.info(
                     "push.sent user=%s device=%s",
-                    user_id, device.device_id,
+                    user_id,
+                    device.device_id,
                 )
                 continue
             logger.warning(
                 "push.failed user=%s device=%s code=%s",
-                user_id, device.device_id, result.error_code,
+                user_id,
+                device.device_id,
+                result.error_code,
             )
             # Terminal codes: the token will never deliver again. Clear
             # it so we stop trying. Anything else is transient; bump the
@@ -288,7 +313,9 @@ async def notify_new_cards(
             except Exception:
                 logger.exception(
                     "push.bookkeeping_failed user=%s device=%s terminal=%s",
-                    user_id, device.device_id, terminal,
+                    user_id,
+                    device.device_id,
+                    terminal,
                 )
         return sent
     except Exception:

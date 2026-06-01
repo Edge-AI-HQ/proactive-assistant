@@ -31,8 +31,11 @@ async def test_persist_records_pattern_hits_and_is_idempotent(pool, user_ids) ->
                 "cardId": card_id,
                 "intentKey": "smoke-intent",
                 "dimensions": {
-                    "relevance": 7, "actionability": 7, "whyNowClarity": 7,
-                    "novelty": 7, "decisionCompression": 7,
+                    "relevance": 7,
+                    "actionability": 7,
+                    "whyNowClarity": 7,
+                    "novelty": 7,
+                    "decisionCompression": 7,
                 },
                 "overall": 7,
                 "pass": True,
@@ -57,12 +60,18 @@ async def test_persist_records_pattern_hits_and_is_idempotent(pool, user_ids) ->
 
     # First persist
     await persist_generator_run(
-        pool, user_id=user_a, payload=payload, trigger="test",
+        pool,
+        user_id=user_a,
+        payload=payload,
+        trigger="test",
         matched_patterns=matched,
     )
     # Second persist (retry path) — must not raise
     await persist_generator_run(
-        pool, user_id=user_a, payload=payload, trigger="test",
+        pool,
+        user_id=user_a,
+        payload=payload,
+        trigger="test",
         matched_patterns=matched,
     )
 
@@ -118,21 +127,40 @@ async def test_persist_tolerates_unknown_pattern_id(pool, user_ids) -> None:
     card_id = "smoke_card_002"
     payload = {
         "runId": run_id,
-        "cards": [{
-            "id": card_id, "intentKey": "smoke", "goalBasket": "work",
-            "title": "t", "whyNow": "n", "summary": "s",
-            "sources": ["signal id=sig"],
-        }],
-        "evaluations": [{
-            "cardId": card_id, "intentKey": "smoke",
-            "dimensions": {"relevance": 5, "actionability": 5, "whyNowClarity": 5, "novelty": 5, "decisionCompression": 5},
-            "overall": 5, "pass": True,
-            "patternId": "__never_seen_pattern__",
-        }],
+        "cards": [
+            {
+                "id": card_id,
+                "intentKey": "smoke",
+                "goalBasket": "work",
+                "title": "t",
+                "whyNow": "n",
+                "summary": "s",
+                "sources": ["signal id=sig"],
+            }
+        ],
+        "evaluations": [
+            {
+                "cardId": card_id,
+                "intentKey": "smoke",
+                "dimensions": {
+                    "relevance": 5,
+                    "actionability": 5,
+                    "whyNowClarity": 5,
+                    "novelty": 5,
+                    "decisionCompression": 5,
+                },
+                "overall": 5,
+                "pass": True,
+                "patternId": "__never_seen_pattern__",
+            }
+        ],
     }
 
     await persist_generator_run(
-        pool, user_id=user_a, payload=payload, trigger="test",
+        pool,
+        user_id=user_a,
+        payload=payload,
+        trigger="test",
         matched_patterns=None,
     )
 

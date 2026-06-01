@@ -37,12 +37,14 @@ async def test_diarized_transcription_posts_openai_diarization_fields(monkeypatc
             return None
 
         async def post(self, url, *, data, files, headers):
-            captured.update({
-                "url": url,
-                "data": data,
-                "files": files,
-                "headers": headers,
-            })
+            captured.update(
+                {
+                    "url": url,
+                    "data": data,
+                    "files": files,
+                    "headers": headers,
+                }
+            )
             return FakeResponse()
 
     monkeypatch.setattr(
