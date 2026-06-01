@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # ngrok_url.sh — print this worktree group's public ngrok URL.
 #
-# The ngrok agent (compose service "ngrok", profile=tunnel) runs with a random
-# URL (no --domain), so the URL is only known once the agent connects. We read
+# The ngrok agent (compose service "ngrok", profile=tunnel) binds this
+# worktree's stable .ngrok.app subdomain (--url in docker-compose.yml), but the
+# host port of its :4040 local API is random per group. We read
 # it from ngrok's local API on port 4040. Used by `make tunnel-up` (to inject
 # PAI_API_URL into the chat container) and `make ios` (to bake the URL into the
 # native bundle).
