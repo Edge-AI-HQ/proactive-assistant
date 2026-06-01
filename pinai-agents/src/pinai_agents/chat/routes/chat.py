@@ -34,9 +34,10 @@ from langchain_core.messages import (
 from pydantic import BaseModel, Field
 
 from ..agents.card_execution import make_card_execution_agent
-from ..agents.main_chat import make_main_chat_agent
+from ..agents.main_chat import MAIN_CHAT_KEEP_TURNS, make_main_chat_agent
 from ..auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
 from ..runtime.ctx import ClientHints, run_context
+from ..runtime.trim import trim_thread
 from ..streaming import chat_done, chat_error, langgraph_to_sse
 from ..tools.local_sandbox import (
     create_local_sandbox_backend,
@@ -440,6 +441,20 @@ async def _stream(
         try:
             async for chunk in langgraph_to_sse(events):
                 yield chunk
+            # Bound the main thread's working context once the turn finishes
+            # (card threads are short-lived — no trim). Best-effort: a trim
+            # failure must never surface after the user already got the reply.
+            if not is_card_thread:
+                try:
+                    await trim_thread(
+                        agent,
+                        thread_id=req.session_key,
+                        keep_turns=MAIN_CHAT_KEEP_TURNS,
+                    )
+                except Exception:
+                    logger.exception(
+                        "context trim failed session_key=%s", req.session_key,
+                    )
         except BaseException as e:
             saw_failure = e
             raise

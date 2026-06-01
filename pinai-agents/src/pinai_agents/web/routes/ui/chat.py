@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -29,6 +30,7 @@ from ....shared.api_models import (
     ChatSendRequest,
 )
 from ...auth.deps import User, current_user, get_pool
+from ...db.repositories.chat_messages import ChatMessagesRepository
 from ...db.repositories.chat_threads import ChatThreadsRepository
 from ...db.rls import user_scoped_tx
 from ...services.chat_proxy import (
@@ -36,6 +38,7 @@ from ...services.chat_proxy import (
     call_chat_history,
     stream_chat,
 )
+from ...services.chat_turn_recorder import ChatTurnRecorder
 
 _CARD_THREAD_PREFIX = "card-thread-"
 
@@ -126,6 +129,62 @@ async def chat_init(
     )
 
 
+def _row_to_history_message(row: dict[str, Any]) -> dict[str, Any]:
+    """A pai_chat_messages row → the frontend HistoryMessage shape."""
+    out: dict[str, Any] = {
+        "id": str(row["id"]),
+        "role": row["role"],
+        "parts": row["parts"],
+    }
+    created = row.get("created_at")
+    if created is not None:
+        out["createdAt"] = int(created.timestamp() * 1000)
+    return out
+
+
+async def _persist_turn(
+    repo: ChatMessagesRepository,
+    *,
+    body: ChatSendRequest,
+    assistant_parts: list[dict[str, Any]],
+) -> None:
+    """Append this turn to pai_chat_messages, kept consistent with chat's
+    RemoveMessage surgery on regenerate / edit.
+
+    No-ops when the thread has no rows yet: such threads (anything predating
+    pai_chat_messages, plus a brand-new thread's first turn) are materialized
+    in one shot by /history's lazy backfill from the checkpoint — which
+    already contains this turn, so writing here too would duplicate it. Once
+    the thread has rows, every turn is appended incrementally.
+    """
+    sk = body.session_key
+    if await repo.latest_id(thread_id=sk) is None:
+        return
+
+    if body.regenerate:
+        # Mirror chat's pop-tail-and-rerun: an edit (user text changed)
+        # replaces user+assistant; a pure regenerate replaces only assistant.
+        new_text = (body.message or "").strip()
+        last_user = (await repo.last_user_text(thread_id=sk)) or ""
+        if new_text and new_text != last_user.strip():
+            await repo.delete_tail(thread_id=sk, count=2)
+            await repo.append_turn(
+                thread_id=sk, role="user",
+                parts=[{"type": "text", "text": body.message}],
+            )
+        else:
+            await repo.delete_tail(thread_id=sk, count=1)
+    else:
+        await repo.append_turn(
+            thread_id=sk, role="user",
+            parts=[{"type": "text", "text": body.message}],
+        )
+    if assistant_parts:
+        await repo.append_turn(
+            thread_id=sk, role="assistant", parts=assistant_parts,
+        )
+
+
 @router.post("/send")
 async def chat_send(
     body: ChatSendRequest,
@@ -149,7 +208,14 @@ async def chat_send(
     # turn was accepted by chat). Best-effort: if the bump itself
     # fails we log and move on; the metadata can be reconciled by
     # next list query and chat history is unaffected.
-    async def _stream_with_metadata_bump():
+    async def _stream_and_persist():
+        # Record the assistant turn off the SSE bytes as they flow to the
+        # client, then persist (user + assistant) to pai_chat_messages and
+        # bump thread metadata once the stream ends — success or client
+        # disconnect. Best-effort: a persistence failure is logged, never
+        # surfaced (chat data already landed in the checkpoint; /history
+        # lazy-backfills from there on the next read).
+        recorder = ChatTurnRecorder()
         try:
             hints_dict = (
                 body.client_hints.model_dump(by_alias=False)
@@ -166,26 +232,30 @@ async def chat_send(
                 client_hints=hints_dict,
                 regenerate=body.regenerate,
             ):
+                recorder.feed(chunk)
                 yield chunk
         finally:
-            # Regenerate doesn't add a new user turn — the trailing
-            # HumanMessage in LangGraph state is the existing one we're
-            # re-running against. Skip the metadata bump so message_count
-            # / last_message_at reflect actual conversation turns.
-            if not body.regenerate:
-                try:
-                    async with user_scoped_tx(pool, user.id) as conn:
+            try:
+                async with user_scoped_tx(pool, user.id) as conn:
+                    await _persist_turn(
+                        ChatMessagesRepository(user_id=user.id, conn=conn),
+                        body=body,
+                        assistant_parts=recorder.parts(),
+                    )
+                    # message_count tracks real conversation turns; a
+                    # regenerate replaces a turn rather than adding one.
+                    if not body.regenerate:
                         await ChatThreadsRepository(
                             user_id=user.id, conn=conn,
                         ).bump_after_send(thread_id=body.session_key)
-                except Exception:
-                    logger.exception(
-                        "bump_after_send failed user=%d thread=%s",
-                        user.id, body.session_key,
-                    )
+            except Exception:
+                logger.exception(
+                    "persist chat turn failed user=%d thread=%s",
+                    user.id, body.session_key,
+                )
 
     return StreamingResponse(
-        _stream_with_metadata_bump(),
+        _stream_and_persist(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -198,13 +268,34 @@ async def chat_send(
 @router.get("/history", response_model=ChatHistoryResponse)
 async def chat_history(
     sessionKey: str = Query(..., min_length=1, max_length=200),  # noqa: N803
+    beforeId: int | None = Query(default=None, ge=1),  # noqa: N803
+    limit: int = Query(default=50, ge=1, le=200),
     user: User = Depends(current_user),
+    pool=Depends(get_pool),
 ) -> ChatHistoryResponse:
-    """Fetch persisted turns for `sessionKey` from LangGraph checkpointer.
+    """Paginated chat history from pai_chat_messages.
 
-    The frontend query param is camelCase (matches the rest of the
-    /api/* surface). Empty list on missing thread — caller renders a
-    fresh chat.
+    Returned oldest-first per page (the table is read newest-first then
+    reversed). `beforeId` is the "load older" cursor; the response's
+    `nextCursor` is the smallest id of this page when more may exist.
+
+    The first read of a thread that predates pai_chat_messages lazily
+    backfills its full history from the chat worker's checkpoint
+    (aget_state), then serves from the table — so reads are O(page), not
+    O(whole-thread state reconstruction). Empty list on a missing thread.
     """
-    messages = await call_chat_history(user_id=user.id, session_key=sessionKey)
-    return ChatHistoryResponse(messages=messages)
+    async with user_scoped_tx(pool, user.id) as conn:
+        repo = ChatMessagesRepository(user_id=user.id, conn=conn)
+        if beforeId is None and await repo.latest_id(thread_id=sessionKey) is None:
+            backfilled = await call_chat_history(
+                user_id=user.id, session_key=sessionKey,
+            )
+            if backfilled:
+                await repo.bulk_append(thread_id=sessionKey, turns=backfilled)
+        rows = await repo.get_page(
+            thread_id=sessionKey, before_id=beforeId, limit=limit,
+        )
+    # A full page means older rows may exist before its smallest id.
+    next_cursor = rows[-1]["id"] if len(rows) == limit else None
+    messages = [_row_to_history_message(r) for r in reversed(rows)]
+    return ChatHistoryResponse(messages=messages, next_cursor=next_cursor)

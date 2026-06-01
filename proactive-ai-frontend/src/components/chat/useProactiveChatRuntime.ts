@@ -392,8 +392,13 @@ function toRuntimePart(part: HistoryPart) {
 
 async function fetchHistory(sessionKey: string): Promise<ThreadMessageLike[]> {
   try {
+    // Paginated read (newest page). limit=200 covers a full thread for
+    // virtually all real conversations in one fast page; the backend serves
+    // it from pai_chat_messages in O(page), not by reconstructing agent
+    // state. (Older-than-200 history is reachable via the response's
+    // nextCursor — wiring the scroll-up "load older" UI is a follow-up.)
     const histRes = await proxyFetch(
-      `/chat-stream/history?sessionKey=${encodeURIComponent(sessionKey)}`,
+      `/chat-stream/history?sessionKey=${encodeURIComponent(sessionKey)}&limit=200`,
     );
     const histData = await histRes.json();
 
