@@ -26,8 +26,10 @@ _TOKEN_B = "apns-device-token-" + "b" * 64
 
 async def _register(repo: DevicesRepository, device_id: str) -> None:
     await repo.register(
-        device_id=device_id, platform="ios",
-        display_name="Test iPhone", model="iPhone15,3",
+        device_id=device_id,
+        platform="ios",
+        display_name="Test iPhone",
+        model="iPhone15,3",
     )
 
 
@@ -39,7 +41,8 @@ async def test_set_push_token_upserts_onto_existing_row(pool, user_ids):
         await _register(repo, "device-aaaaaaaa")
         row = await repo.set_push_token(
             device_id="device-aaaaaaaa",
-            push_token=_TOKEN_A, push_provider="apns",
+            push_token=_TOKEN_A,
+            push_provider="apns",
         )
     assert row is not None
     assert row.push_token == _TOKEN_A
@@ -58,14 +61,16 @@ async def test_set_push_token_resets_failure_count(pool, user_ids):
         await _register(repo, "device-aaaaaaaa")
         await repo.set_push_token(
             device_id="device-aaaaaaaa",
-            push_token=_TOKEN_A, push_provider="apns",
+            push_token=_TOKEN_A,
+            push_provider="apns",
         )
         await repo.bump_push_failure("device-aaaaaaaa")
         await repo.bump_push_failure("device-aaaaaaaa")
         # Re-register with a fresh token (e.g. iOS rotated APNs token).
         row = await repo.set_push_token(
             device_id="device-aaaaaaaa",
-            push_token=_TOKEN_B, push_provider="apns",
+            push_token=_TOKEN_B,
+            push_provider="apns",
         )
     assert row is not None
     assert row.push_token == _TOKEN_B
@@ -79,7 +84,8 @@ async def test_set_push_token_returns_none_for_unknown_device(pool, user_ids):
         repo = DevicesRepository(user_a, conn)
         result = await repo.set_push_token(
             device_id="device-does-not-exist",
-            push_token=_TOKEN_A, push_provider="apns",
+            push_token=_TOKEN_A,
+            push_provider="apns",
         )
     assert result is None
 
@@ -93,7 +99,8 @@ async def test_set_push_token_rejects_bad_provider(pool, user_ids):
         with pytest.raises(ValueError, match="unsupported push_provider"):
             await repo.set_push_token(
                 device_id="device-aaaaaaaa",
-                push_token=_TOKEN_A, push_provider="ona-signal",
+                push_token=_TOKEN_A,
+                push_provider="ona-signal",
             )
 
 
@@ -106,7 +113,8 @@ async def test_set_push_token_rejects_short_token(pool, user_ids):
         with pytest.raises(ValueError, match="push_token too short"):
             await repo.set_push_token(
                 device_id="device-aaaaaaaa",
-                push_token="too-short", push_provider="apns",
+                push_token="too-short",
+                push_provider="apns",
             )
 
 
@@ -122,7 +130,8 @@ async def test_find_push_targets_returns_only_eligible_devices(pool, user_ids):
         await _register(repo, "device-eligible")
         await repo.set_push_token(
             device_id="device-eligible",
-            push_token=_TOKEN_A, push_provider="apns",
+            push_token=_TOKEN_A,
+            push_provider="apns",
         )
         # 2. Active without push token — excluded.
         await _register(repo, "device-no-token")
@@ -130,7 +139,8 @@ async def test_find_push_targets_returns_only_eligible_devices(pool, user_ids):
         await _register(repo, "device-burned")
         await repo.set_push_token(
             device_id="device-burned",
-            push_token=_TOKEN_B, push_provider="apns",
+            push_token=_TOKEN_B,
+            push_provider="apns",
         )
         for _ in range(5):  # cross _PUSH_FAILURE_THRESHOLD (=5)
             await repo.bump_push_failure("device-burned")
@@ -138,7 +148,8 @@ async def test_find_push_targets_returns_only_eligible_devices(pool, user_ids):
         await _register(repo, "device-revoked")
         await repo.set_push_token(
             device_id="device-revoked",
-            push_token=_TOKEN_A, push_provider="apns",
+            push_token=_TOKEN_A,
+            push_provider="apns",
         )
         await repo.revoke("device-revoked")
 
@@ -156,7 +167,8 @@ async def test_clear_push_token_strips_push_fields(pool, user_ids):
         await _register(repo, "device-aaaaaaaa")
         await repo.set_push_token(
             device_id="device-aaaaaaaa",
-            push_token=_TOKEN_A, push_provider="apns",
+            push_token=_TOKEN_A,
+            push_provider="apns",
         )
         await repo.bump_push_failure("device-aaaaaaaa")
         cleared = await repo.clear_push_token("device-aaaaaaaa")
@@ -184,7 +196,8 @@ async def test_push_targets_isolated_across_users(pool, user_ids):
         await _register(repo, "device-aaaaaaaa")
         await repo.set_push_token(
             device_id="device-aaaaaaaa",
-            push_token=_TOKEN_A, push_provider="apns",
+            push_token=_TOKEN_A,
+            push_provider="apns",
         )
 
     async with user_scoped_tx(pool, user_b) as conn:

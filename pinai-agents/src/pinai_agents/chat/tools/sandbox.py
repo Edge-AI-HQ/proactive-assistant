@@ -110,15 +110,15 @@ class _CacheEntry:
 
 @dataclass
 class _Metrics:
-    hit_started: int = 0       # cache hit, sandbox still STARTED
-    hit_resumed: int = 0       # cache hit, sandbox STOPPED → resumed
-    miss_create: int = 0       # cache miss, fresh create
-    coalesced: int = 0         # cache miss, joined an in-flight Future
-    evicted_stale: int = 0     # cache hit, sandbox state unrecoverable → evicted
-    evicted_lru: int = 0       # LRU evicted to free capacity
-    evicted_gc: int = 0        # idle GC evicted
-    evicted_manual: int = 0    # routes called evict_thread() (e.g. tool error)
-    create_errors: int = 0     # daytona create_blocking raised
+    hit_started: int = 0  # cache hit, sandbox still STARTED
+    hit_resumed: int = 0  # cache hit, sandbox STOPPED → resumed
+    miss_create: int = 0  # cache miss, fresh create
+    coalesced: int = 0  # cache miss, joined an in-flight Future
+    evicted_stale: int = 0  # cache hit, sandbox state unrecoverable → evicted
+    evicted_lru: int = 0  # LRU evicted to free capacity
+    evicted_gc: int = 0  # idle GC evicted
+    evicted_manual: int = 0  # routes called evict_thread() (e.g. tool error)
+    create_errors: int = 0  # daytona create_blocking raised
 
 
 # OrderedDict for LRU semantics: move_to_end on access, popitem(last=False)
@@ -189,7 +189,10 @@ async def _phantom_mint(*, run_jwt: str, scope_label: str | None) -> tuple[str, 
 
 
 async def _phantom_bind(
-    *, run_jwt: str, token_hash: str, sandbox_id: str,
+    *,
+    run_jwt: str,
+    token_hash: str,
+    sandbox_id: str,
 ) -> None:
     resp = await _phantom_http().post(
         "/api/agent/sandbox/phantom/bind",
@@ -200,7 +203,8 @@ async def _phantom_bind(
 
 
 async def _phantom_revoke(
-    *, run_jwt: str,
+    *,
+    run_jwt: str,
     token: str | None = None,
     sandbox_id: str | None = None,
     reason: str | None = None,
@@ -223,7 +227,8 @@ async def _phantom_revoke(
     except Exception:
         logger.exception(
             "phantom revoke failed sandbox_id=%s reason=%s — TTL will catch up",
-            sandbox_id or "?", reason or "-",
+            sandbox_id or "?",
+            reason or "-",
         )
 
 
@@ -289,14 +294,15 @@ def _pinai_image() -> daytona.Image:
         # /app/packages/pinai_sdk is where the SDK ends up at runtime.
         sdk_dir = "/app/packages/pinai_sdk"
     return (
-        daytona.Image
-        .debian_slim("3.12")
-        .pip_install([
-            "httpx>=0.27.0,<1.0",
-            "pydantic>=2.6.0,<3.0",
-            "anyio>=4.0.0,<5.0",
-            "orjson>=3.10.0,<4.0",
-        ])
+        daytona.Image.debian_slim("3.12")
+        .pip_install(
+            [
+                "httpx>=0.27.0,<1.0",
+                "pydantic>=2.6.0,<3.0",
+                "anyio>=4.0.0,<5.0",
+                "orjson>=3.10.0,<4.0",
+            ]
+        )
         .add_local_dir(sdk_dir, "/opt/pinai_sdk")
         # Each command becomes its own RUN layer. Daytona's run_commands
         # treats a list arg as Docker exec-form (RUN ["a", "b"]), so we
@@ -351,7 +357,8 @@ async def _validate_cached(
     except daytona.DaytonaNotFoundError:
         logger.info(
             "sandbox not found thread=%s id=%s — recreating",
-            thread_id, getattr(raw, "id", "?"),
+            thread_id,
+            getattr(raw, "id", "?"),
         )
         return None
     except daytona.DaytonaError as e:
@@ -363,7 +370,9 @@ async def _validate_cached(
         # surface, not be silently masked as "sandbox missing".
         logger.warning(
             "sandbox state refresh transient error thread=%s id=%s err=%s — recreating",
-            thread_id, getattr(raw, "id", "?"), type(e).__name__,
+            thread_id,
+            getattr(raw, "id", "?"),
+            type(e).__name__,
         )
         return None
 
@@ -383,7 +392,8 @@ async def _validate_cached(
         except Exception:
             logger.warning(
                 "sandbox start failed thread=%s id=%s — recreating",
-                thread_id, raw.id,
+                thread_id,
+                raw.id,
             )
             return None
         logger.info("sandbox resumed thread=%s id=%s", thread_id, raw.id)
@@ -399,7 +409,9 @@ async def _validate_cached(
     # with another caller, simpler to recreate than to poll).
     logger.info(
         "sandbox in non-recoverable state thread=%s id=%s state=%s — recreating",
-        thread_id, raw.id, name,
+        thread_id,
+        raw.id,
+        name,
     )
     return None
 
@@ -505,7 +517,8 @@ async def _create_or_coalesce(
     if run_jwt:
         try:
             phantom_token, phantom_hash = await _phantom_mint(
-                run_jwt=run_jwt, scope_label=thread_id,
+                run_jwt=run_jwt,
+                scope_label=thread_id,
             )
             env_vars["PAI_SANDBOX_TOKEN"] = phantom_token
         except Exception as e:
@@ -533,7 +546,8 @@ async def _create_or_coalesce(
         if phantom_token and run_jwt:
             with contextlib.suppress(Exception):
                 await _phantom_revoke(
-                    run_jwt=run_jwt, token=phantom_token,
+                    run_jwt=run_jwt,
+                    token=phantom_token,
                     reason="sandbox_create_failed",
                 )
         raise
@@ -544,15 +558,20 @@ async def _create_or_coalesce(
     if phantom_hash and run_jwt:
         with contextlib.suppress(Exception):
             await _phantom_bind(
-                run_jwt=run_jwt, token_hash=phantom_hash, sandbox_id=raw.id,
+                run_jwt=run_jwt,
+                token_hash=phantom_hash,
+                sandbox_id=raw.id,
             )
 
     backend = DaytonaSandbox(sandbox=raw, timeout=_DEFAULT_COMMAND_TIMEOUT_SEC)
 
     async with _LOCK:
         _REGISTRY[thread_id] = _CacheEntry(
-            backend=backend, raw=raw, last_used=time.monotonic(),
-            phantom_token=phantom_token, creator_jwt=run_jwt,
+            backend=backend,
+            raw=raw,
+            last_used=time.monotonic(),
+            phantom_token=phantom_token,
+            creator_jwt=run_jwt,
         )
         _CREATING.pop(thread_id, None)
 
@@ -560,7 +579,9 @@ async def _create_or_coalesce(
         new_future.set_result((backend, raw))
     logger.info(
         "daytona sandbox created id=%s thread_id=%s scope=thread phantom=%s",
-        raw.id, thread_id, "yes" if phantom_token else "no",
+        raw.id,
+        thread_id,
+        "yes" if phantom_token else "no",
     )
     return backend, raw
 
@@ -581,7 +602,9 @@ def _evict_lru_locked() -> None:
         _METRICS.evicted_lru += 1
         logger.info(
             "lru evicted thread=%s id=%s (registry at cap %d)",
-            evicted_id, evicted_entry.raw.id, _REGISTRY_MAX_ENTRIES,
+            evicted_id,
+            evicted_entry.raw.id,
+            _REGISTRY_MAX_ENTRIES,
         )
         # Fire-and-forget delete + revoke. Don't await.
         asyncio.create_task(_best_effort_cleanup(evicted_entry, reason="lru_evict"))
@@ -647,7 +670,8 @@ async def create_oneshot_sandbox(
     phantom_hash: str | None = None
     if run_jwt:
         phantom_token, phantom_hash = await _phantom_mint(
-            run_jwt=run_jwt, scope_label=scope_label,
+            run_jwt=run_jwt,
+            scope_label=scope_label,
         )
         env_vars["PAI_SANDBOX_TOKEN"] = phantom_token
 
@@ -657,7 +681,8 @@ async def create_oneshot_sandbox(
         if phantom_token and run_jwt:
             with contextlib.suppress(Exception):
                 await _phantom_revoke(
-                    run_jwt=run_jwt, token=phantom_token,
+                    run_jwt=run_jwt,
+                    token=phantom_token,
                     reason="oneshot_create_failed",
                 )
         raise
@@ -665,14 +690,17 @@ async def create_oneshot_sandbox(
     if phantom_token and phantom_hash and run_jwt:
         with contextlib.suppress(Exception):
             await _phantom_bind(
-                run_jwt=run_jwt, token_hash=phantom_hash, sandbox_id=raw.id,
+                run_jwt=run_jwt,
+                token_hash=phantom_hash,
+                sandbox_id=raw.id,
             )
         _ONESHOT_PHANTOMS[raw.id] = (phantom_token, run_jwt)
 
     backend = DaytonaSandbox(sandbox=raw, timeout=_DEFAULT_COMMAND_TIMEOUT_SEC)
     logger.info(
         "daytona sandbox created id=%s scope=oneshot phantom=%s",
-        raw.id, "yes" if phantom_token else "no",
+        raw.id,
+        "yes" if phantom_token else "no",
     )
     return backend, raw
 
@@ -685,7 +713,9 @@ async def delete_sandbox_now(raw: daytona.Sandbox) -> None:
         phantom_token, run_jwt = pair
         with contextlib.suppress(Exception):
             await _phantom_revoke(
-                run_jwt=run_jwt, token=phantom_token, reason="oneshot_delete",
+                run_jwt=run_jwt,
+                token=phantom_token,
+                reason="oneshot_delete",
             )
     await _best_effort_delete(raw)
 

@@ -173,7 +173,9 @@ async def transcribe_voice_input(
     filename = _safe_audio_filename(x_audio_filename, content_type)
     try:
         user = await ensure_user_litellm_key(
-            pool, user, required_models={model},
+            pool,
+            user,
+            required_models={model},
         )
     except Exception as exc:
         logger.exception("voice transcription key provisioning failed user=%s", user.id)
@@ -280,9 +282,7 @@ async def transcribe_voice_input_diarized(
         logger.warning("voice diarization failed user=%s: %s", user.id, exc)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    speaker_labels = _speaker_labels([
-        segment.speaker for segment in result.segments
-    ])
+    speaker_labels = _speaker_labels([segment.speaker for segment in result.segments])
     self_text = " ".join(
         segment.text for segment in result.segments if segment.speaker == "self"
     ).strip()
@@ -302,7 +302,9 @@ async def transcribe_voice_input_diarized(
         "selfText": self_text,
         "speakerLabels": speaker_labels,
         "diarizationModel": DIARIZED_TRANSCRIPTION_MODEL,
-        "diarizationStatus": "matched_reference" if "self" in speaker_labels else "diarized_without_reference",
+        "diarizationStatus": "matched_reference"
+        if "self" in speaker_labels
+        else "diarized_without_reference",
     }
 
 

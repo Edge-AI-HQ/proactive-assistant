@@ -42,6 +42,7 @@ def _gen_keypair_b64() -> str:
 def _set_signing_key(monkeypatch):
     monkeypatch.setenv("PAI_JWT_SIGNING_KEY", _gen_keypair_b64())
     from pinai_agents import config
+
     config.get_web_settings.cache_clear()
     config.get_chat_settings.cache_clear()
     yield
@@ -55,7 +56,8 @@ async def client(pool):
     app.state.pool = pool
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://testserver",
+        transport=transport,
+        base_url="http://testserver",
     ) as c:
         yield c
 
@@ -222,8 +224,7 @@ async def test_set_generation_language_restamps_schedule(client, user_ids, pool)
         )
         settings_row = await cur.fetchone()
         cur = await conn.execute(
-            "SELECT kind, status, payload FROM pai_scheduled_tasks "
-            "WHERE user_id = %s AND id = %s",
+            "SELECT kind, status, payload FROM pai_scheduled_tasks WHERE user_id = %s AND id = %s",
             (user_a, task_id),
         )
         sched = await cur.fetchone()

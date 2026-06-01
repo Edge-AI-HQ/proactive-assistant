@@ -56,6 +56,7 @@ class WorldSignalRow:
             if val is None:
                 return default
             return val if not isinstance(val, str) else json.loads(val)
+
         return cls(
             id=row["id"],
             provider=row["provider"],
@@ -134,10 +135,14 @@ class WorldSignalsRepository(UserScopedRepository):
                 """,
                 (
                     self._user_id,
-                    status, status,
-                    provider, provider,
-                    min_salience, min_salience,
-                    since, since,
+                    status,
+                    status,
+                    provider,
+                    provider,
+                    min_salience,
+                    min_salience,
+                    since,
+                    since,
                     limit,
                 ),
             )
@@ -145,8 +150,12 @@ class WorldSignalsRepository(UserScopedRepository):
         return [WorldSignalRow.from_record(r) for r in rows]
 
     async def score(
-        self, *, world_signal_id: str, salience: float,
-        scored_reason: str | None = None, status: str = "open",
+        self,
+        *,
+        world_signal_id: str,
+        salience: float,
+        scored_reason: str | None = None,
+        status: str = "open",
     ) -> None:
         """Upsert per-user view row. Used by the evolution / score loop."""
         async with self._conn.cursor() as cur:
@@ -168,7 +177,10 @@ class WorldSignalsRepository(UserScopedRepository):
             )
 
     async def mark_consumed(
-        self, *, world_signal_id: str, run_id: str,
+        self,
+        *,
+        world_signal_id: str,
+        run_id: str,
     ) -> bool:
         async with self._conn.cursor() as cur:
             await cur.execute(
@@ -182,7 +194,10 @@ class WorldSignalsRepository(UserScopedRepository):
             return (cur.rowcount or 0) > 0
 
     async def increment_reference(
-        self, *, world_signal_id: str, run_id: str,
+        self,
+        *,
+        world_signal_id: str,
+        run_id: str,
     ) -> None:
         """Used when an evolution run pulls a world signal as input —
         bump reference_count + record the run in referenced_by_runs."""
@@ -203,7 +218,8 @@ class WorldSignalsRepository(UserScopedRepository):
     # ingestion lives in the scheduled-task connector layer. Provide a
     # helper so background workers can upsert without per-user scoping.
     async def ingest_world(
-        self, input: IngestWorldSignalInput,
+        self,
+        input: IngestWorldSignalInput,
     ) -> WorldSignalRow:
         async with self._conn.cursor() as cur:
             await cur.execute(
@@ -229,9 +245,15 @@ class WorldSignalsRepository(UserScopedRepository):
                 RETURNING *
                 """,
                 (
-                    input.id, input.provider, input.stream_type,
-                    input.title, input.url, input.normalized_url,
-                    input.external_id, input.summary, input.published_at,
+                    input.id,
+                    input.provider,
+                    input.stream_type,
+                    input.title,
+                    input.url,
+                    input.normalized_url,
+                    input.external_id,
+                    input.summary,
+                    input.published_at,
                     json.dumps(input.search_queries or []),
                     json.dumps(input.topics or []),
                     json.dumps(input.regions or []),
@@ -245,7 +267,14 @@ class WorldSignalsRepository(UserScopedRepository):
             raise RuntimeError(msg)
         # Synthesize per-user view fields as NULL — caller hasn't scored yet.
         merged: dict[str, Any] = dict(row)
-        for k in ("salience", "status", "consumed_by_run_id", "scored_at",
-                  "scored_reason", "reference_count", "last_referenced_at"):
+        for k in (
+            "salience",
+            "status",
+            "consumed_by_run_id",
+            "scored_at",
+            "scored_reason",
+            "reference_count",
+            "last_referenced_at",
+        ):
             merged.setdefault(k, None)
         return WorldSignalRow.from_record(merged)

@@ -99,38 +99,52 @@ def _sync_task(user_id: int, cid: str) -> ScheduledTaskRow:
         user_id=user_id,
         id=f"sync.github.{cid}",
         kind="connector.sync",
-        name=None, prompt=None,
-        trigger_kind="schedule", cron_expr="*/30 * * * *",
-        interval_seconds=None, event_filter=None,
+        name=None,
+        prompt=None,
+        trigger_kind="schedule",
+        cron_expr="*/30 * * * *",
+        interval_seconds=None,
+        event_filter=None,
         payload={"toolkit": "github", "connectedAccountId": cid},
-        timezone="UTC", status="active",
-        next_run_at=None, last_run_at=datetime.now(UTC),
-        last_run_status="dispatched", run_count=1,
-        attempts=0, max_attempts=3, progress={}, last_error=None,
+        timezone="UTC",
+        status="active",
+        next_run_at=None,
+        last_run_at=datetime.now(UTC),
+        last_run_status="dispatched",
+        run_count=1,
+        attempts=0,
+        max_attempts=3,
+        progress={},
+        last_error=None,
     )
 
 
 @pytest.mark.asyncio
 async def test_github_sync_inserts_then_state_flip_updates(
-    pool, user_ids, monkeypatch,
+    pool,
+    user_ids,
+    monkeypatch,
 ):
     """Round-trip: first sync inserts an open issue. Second sync (issue
     is now closed) updates the same row via ON CONFLICT — does NOT
     insert a duplicate."""
     user_a, _ = user_ids
-    state = {"items": [
-        {
-            "id": 7001,
-            "number": 1,
-            "title": "Open thing",
-            "state": "open",
-            "html_url": "https://github.com/x/y/issues/1",
-            "repository_url": "https://api.github.com/repos/x/y",
-            "labels": [], "assignees": [{"login": "alice"}],
-            "created_at": "2026-04-01T00:00:00Z",
-            "updated_at": "2026-04-10T00:00:00Z",
-        },
-    ]}
+    state = {
+        "items": [
+            {
+                "id": 7001,
+                "number": 1,
+                "title": "Open thing",
+                "state": "open",
+                "html_url": "https://github.com/x/y/issues/1",
+                "repository_url": "https://api.github.com/repos/x/y",
+                "labels": [],
+                "assignees": [{"login": "alice"}],
+                "created_at": "2026-04-01T00:00:00Z",
+                "updated_at": "2026-04-10T00:00:00Z",
+            },
+        ]
+    }
 
     from pinai_agents.web.services import ingest_runner
 
@@ -145,7 +159,9 @@ async def test_github_sync_inserts_then_state_flip_updates(
 
     async with user_scoped_tx(pool, user_a) as conn:
         await enqueue_once(
-            conn, user_id=user_a, task_id="sync.github.cidGH",
+            conn,
+            user_id=user_a,
+            task_id="sync.github.cidGH",
             kind="connector.sync",
             payload={"toolkit": "github", "connectedAccountId": "cidGH"},
         )
@@ -155,8 +171,7 @@ async def test_github_sync_inserts_then_state_flip_updates(
 
     async with service_tx(pool) as conn:
         cur = await conn.execute(
-            "SELECT issue_id, state FROM pai_raw_github_issues "
-            "WHERE user_id = %s",
+            "SELECT issue_id, state FROM pai_raw_github_issues WHERE user_id = %s",
             (user_a,),
         )
         rows = await cur.fetchall()
@@ -175,8 +190,7 @@ async def test_github_sync_inserts_then_state_flip_updates(
 
     async with service_tx(pool) as conn:
         cur = await conn.execute(
-            "SELECT issue_id, state FROM pai_raw_github_issues "
-            "WHERE user_id = %s",
+            "SELECT issue_id, state FROM pai_raw_github_issues WHERE user_id = %s",
             (user_a,),
         )
         rows = await cur.fetchall()

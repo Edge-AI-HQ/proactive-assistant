@@ -68,11 +68,15 @@ class GoalRow:
     @classmethod
     def from_record(cls, row: dict[str, Any]) -> GoalRow:
         return cls(
-            id=row["id"], key=row["key"], title=row["title"],
-            priority=row["priority"], status=row["status"],
+            id=row["id"],
+            key=row["key"],
+            title=row["title"],
+            priority=row["priority"],
+            status=row["status"],
             summary=row.get("summary"),
             closed_at=row.get("closed_at"),
-            created_at=row["created_at"], updated_at=row["updated_at"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
             reference_count=row["reference_count"],
         )
 
@@ -128,7 +132,8 @@ def _as_dict(v: Any) -> dict[str, Any]:
 
 
 def _merge_ambient_sources(
-    existing: dict[str, Any], patch: dict[str, Any],
+    existing: dict[str, Any],
+    patch: dict[str, Any],
 ) -> dict[str, Any]:
     """Shallow per-key merge. ``patch[k] = None`` deletes ``k``, anything
     else replaces ``existing[k]``. Returns a fresh dict — never mutates
@@ -208,11 +213,24 @@ class ProfileRepository(UserScopedRepository):
                 RETURNING *
                 """,
                 (
-                    self._user_id, id,
-                    display_name, locale, timezone, summary,
-                    facts_json, prefs_json, cons_json, meta_json,
-                    display_name, locale, timezone, summary,
-                    facts_json, prefs_json, cons_json, meta_json,
+                    self._user_id,
+                    id,
+                    display_name,
+                    locale,
+                    timezone,
+                    summary,
+                    facts_json,
+                    prefs_json,
+                    cons_json,
+                    meta_json,
+                    display_name,
+                    locale,
+                    timezone,
+                    summary,
+                    facts_json,
+                    prefs_json,
+                    cons_json,
+                    meta_json,
                 ),
             )
             row = await cur.fetchone()
@@ -426,8 +444,11 @@ class ProfileRepository(UserScopedRepository):
                 RETURNING *
                 """,
                 (
-                    generation_language, auto_generate, auto_generate_interval_minutes,
-                    auto_dreaming, auto_crystallize,
+                    generation_language,
+                    auto_generate,
+                    auto_generate_interval_minutes,
+                    auto_dreaming,
+                    auto_crystallize,
                     json.dumps(metadata) if metadata is not None else None,
                     ambient_json,
                     notify_new_cards,

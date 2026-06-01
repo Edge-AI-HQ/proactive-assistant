@@ -99,7 +99,8 @@ async def upload_media(
     except (ValueError, TypeError):
         logger.warning(
             "device media: bad base64 (user=%s kind=%s)",
-            supabase_user_id, kind,
+            supabase_user_id,
+            kind,
         )
         return None
     if not data:
@@ -112,7 +113,8 @@ async def upload_media(
 
     def _put() -> None:
         cli.storage.from_(bucket).upload(
-            path=path, file=data,
+            path=path,
+            file=data,
             file_options={"content-type": content_type, "upsert": "true"},
         )
 
@@ -221,7 +223,8 @@ async def delete_all_user_media(supabase_user_id: str) -> int:
     chunk = 1000
     for i in range(0, len(files), chunk):
         await asyncio.to_thread(
-            cli.storage.from_(bucket).remove, files[i:i + chunk],
+            cli.storage.from_(bucket).remove,
+            files[i : i + chunk],
         )
     return len(files)
 
@@ -237,7 +240,7 @@ async def signed_url(storage_path: str, *, ttl_seconds: int = 3600) -> str | Non
     def _sign() -> str:
         result = cli.storage.from_(bucket).create_signed_url(storage_path, ttl_seconds)
         # SDK returns dict with 'signedURL' or 'signedUrl' depending on version.
-        return (result.get("signedURL") or result.get("signedUrl") or "")
+        return result.get("signedURL") or result.get("signedUrl") or ""
 
     url = await asyncio.to_thread(_sign)
     return url or None

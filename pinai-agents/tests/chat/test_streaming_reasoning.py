@@ -40,8 +40,7 @@ async def test_non_streaming_chat_model_end_emits_reasoning_and_text() -> None:
         }
 
     payloads = [
-        _decode_sse_event(raw)
-        async for raw in langgraph_to_sse(events(), trace_id="trace-1")
+        _decode_sse_event(raw) async for raw in langgraph_to_sse(events(), trace_id="trace-1")
     ]
 
     assert [payload["type"] for payload in payloads] == [
@@ -79,8 +78,7 @@ async def test_responses_streaming_chunk_emits_reasoning_and_text_deltas() -> No
         }
 
     payloads = [
-        _decode_sse_event(raw)
-        async for raw in langgraph_to_sse(events(), trace_id="trace-1")
+        _decode_sse_event(raw) async for raw in langgraph_to_sse(events(), trace_id="trace-1")
     ]
 
     assert [payload["type"] for payload in payloads] == [
@@ -105,9 +103,7 @@ async def test_responses_streaming_reasoning_preserves_token_spacing() -> None:
                         content=[
                             {
                                 "type": "reasoning",
-                                "summary": [
-                                    {"type": "summary_text", "text": text}
-                                ],
+                                "summary": [{"type": "summary_text", "text": text}],
                             }
                         ]
                     )
@@ -115,8 +111,7 @@ async def test_responses_streaming_reasoning_preserves_token_spacing() -> None:
             }
 
     payloads = [
-        _decode_sse_event(raw)
-        async for raw in langgraph_to_sse(events(), trace_id="trace-1")
+        _decode_sse_event(raw) async for raw in langgraph_to_sse(events(), trace_id="trace-1")
     ]
 
     reasoning_deltas = [
@@ -134,24 +129,19 @@ async def test_streamed_chat_model_end_does_not_duplicate_text() -> None:
             "event": "on_chat_model_stream",
             "run_id": "model-run-1",
             "data": {
-                "chunk": SimpleNamespace(
-                    content=[{"type": "text", "text": "Already streamed."}]
-                )
+                "chunk": SimpleNamespace(content=[{"type": "text", "text": "Already streamed."}])
             },
         }
         yield {
             "event": "on_chat_model_end",
             "run_id": "model-run-1",
             "data": {
-                "output": SimpleNamespace(
-                    content=[{"type": "text", "text": "Already streamed."}]
-                )
+                "output": SimpleNamespace(content=[{"type": "text", "text": "Already streamed."}])
             },
         }
 
     payloads = [
-        _decode_sse_event(raw)
-        async for raw in langgraph_to_sse(events(), trace_id="trace-1")
+        _decode_sse_event(raw) async for raw in langgraph_to_sse(events(), trace_id="trace-1")
     ]
 
     assert [payload["type"] for payload in payloads] == [
@@ -169,9 +159,7 @@ async def test_streamed_chat_model_end_keeps_final_only_reasoning() -> None:
             "event": "on_chat_model_stream",
             "run_id": "model-run-1",
             "data": {
-                "chunk": SimpleNamespace(
-                    content=[{"type": "text", "text": "Already streamed."}]
-                )
+                "chunk": SimpleNamespace(content=[{"type": "text", "text": "Already streamed."}])
             },
         }
         yield {
@@ -196,8 +184,7 @@ async def test_streamed_chat_model_end_keeps_final_only_reasoning() -> None:
         }
 
     payloads = [
-        _decode_sse_event(raw)
-        async for raw in langgraph_to_sse(events(), trace_id="trace-1")
+        _decode_sse_event(raw) async for raw in langgraph_to_sse(events(), trace_id="trace-1")
     ]
 
     assert [payload["type"] for payload in payloads] == [

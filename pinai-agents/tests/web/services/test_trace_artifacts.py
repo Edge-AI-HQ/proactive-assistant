@@ -25,17 +25,19 @@ async def _insert_run(conn, user_id: int, run_id: str) -> None:
             user_id,
             run_id,
             run_id,
-            json.dumps([
-                {
-                    "id": f"{run_id}_card_00",
-                    "intentKey": "work:trace",
-                    "goalBasket": "work",
-                    "title": "Trace this card",
-                    "summary": "Trace summary",
-                    "whyNow": "Trace now",
-                    "sources": ["signal id=sig_trace"],
-                },
-            ]),
+            json.dumps(
+                [
+                    {
+                        "id": f"{run_id}_card_00",
+                        "intentKey": "work:trace",
+                        "goalBasket": "work",
+                        "title": "Trace this card",
+                        "summary": "Trace summary",
+                        "whyNow": "Trace now",
+                        "sources": ["signal id=sig_trace"],
+                    },
+                ]
+            ),
             datetime(2026, 5, 13, 10, 0, tzinfo=UTC),
             datetime(2026, 5, 13, 10, 1, tzinfo=UTC),
         ),
@@ -74,10 +76,10 @@ class _FakeLangSmithClient:
                     end_time=datetime(2026, 5, 13, 10, 1, tzinfo=UTC),
                     error=None,
                     inputs={"run": "input"},
-                outputs={"run": "output"},
-                extra={"metadata": {"pinai_run_id": "run_trace_ready"}},
-                url="https://smith.langchain.com/o/org/projects/p/project/r/root-run",
-            ),
+                    outputs={"run": "output"},
+                    extra={"metadata": {"pinai_run_id": "run_trace_ready"}},
+                    url="https://smith.langchain.com/o/org/projects/p/project/r/root-run",
+                ),
             ]
         return [
             SimpleNamespace(
@@ -141,7 +143,10 @@ async def test_trace_artifact_ready_from_langsmith_runs(pool, user_ids, monkeypa
     assert artifact["summary"]["stages"]["evaluator"]["seen"] is True
     assert artifact["summary"]["dataSources"] == ["memory", "profile", "signals"]
     assert artifact["summary"]["skippedIntents"]
-    assert artifact["langsmithUrl"] == "https://smith.langchain.com/o/org/projects/p/project/r/root-run"
+    assert (
+        artifact["langsmithUrl"]
+        == "https://smith.langchain.com/o/org/projects/p/project/r/root-run"
+    )
     assert artifact["traceTree"]["langsmithUrl"] == artifact["langsmithUrl"]
     assert "<svg" in artifact["traceTree"]["svg"]
 

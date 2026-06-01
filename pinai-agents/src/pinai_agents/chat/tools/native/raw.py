@@ -41,7 +41,8 @@ async def raw_gmail_recent(hours: int, limit: int):
     'check my email' / 'any updates from X' questions."""
     return await http_client.get(
         "/api/agent/raw/gmail/messages",
-        since=_since_from_hours(hours), limit=limit,
+        since=_since_from_hours(hours),
+        limit=limit,
     )
 
 
@@ -51,7 +52,8 @@ async def raw_gcal_today(hours: int, limit: int):
     For 'what's on my calendar today' / 'when am I free now' questions."""
     return await http_client.get(
         "/api/agent/raw/gcal/events",
-        since=_since_from_hours(hours), limit=limit,
+        since=_since_from_hours(hours),
+        limit=limit,
     )
 
 
@@ -66,7 +68,8 @@ async def raw_gcal_week(hours: int, limit: int):
     For 'what's my schedule this week' / weekly-review questions."""
     return await http_client.get(
         "/api/agent/raw/gcal/events",
-        since=_since_from_hours(hours), limit=limit,
+        since=_since_from_hours(hours),
+        limit=limit,
     )
 
 
@@ -83,14 +86,16 @@ _RAW_VALID_PAIRS = (
 
 class RawListGenericInput(BaseModel):
     toolkit: str = Field(
-        min_length=1, max_length=40,
+        min_length=1,
+        max_length=40,
         description=(
             "Connector toolkit (e.g. 'slack', 'gdrive', 'github', "
             "'calendly'). See description for valid pairs."
         ),
     )
     entity: str = Field(
-        min_length=1, max_length=40,
+        min_length=1,
+        max_length=40,
         description="Entity within the toolkit (e.g. 'messages', 'pages', 'issues').",
     )
     hours: int | None = Field(default=72, ge=1, le=336)
@@ -110,5 +115,6 @@ _RAW_LIST_DESCRIPTION = (
 async def raw_list(toolkit: str, entity: str, hours: int | None, limit: int):
     return await http_client.get(
         f"/api/agent/raw/{toolkit}/{entity}",
-        since=_since_from_hours(hours), limit=limit,
+        since=_since_from_hours(hours),
+        limit=limit,
     )

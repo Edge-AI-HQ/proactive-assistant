@@ -28,8 +28,7 @@ def _to_dict(row: SkillRow) -> dict:
     # Frontend expects ISO timestamps, not datetime objects (Pydantic
     # would handle this on response_model, but we're using dict here so
     # convert manually).
-    for k in ("enabled_at", "disabled_at", "created_at", "updated_at",
-              "last_referenced_at"):
+    for k in ("enabled_at", "disabled_at", "created_at", "updated_at", "last_referenced_at"):
         v = d.get(k)
         if v is not None and hasattr(v, "isoformat"):
             d[k] = v.isoformat()
@@ -41,7 +40,8 @@ async def list_skills(
     user: User = Depends(current_user),
     pool=Depends(get_pool),
     status_filter: str | None = Query(
-        None, alias="status", pattern="^(enabled|disabled|archived)$"),
+        None, alias="status", pattern="^(enabled|disabled|archived)$"
+    ),
     limit: int = Query(50, ge=1, le=200),
 ):
     async with user_scoped_tx(pool, user.id) as conn:
@@ -61,7 +61,8 @@ async def get_skill(
         row = await repo.get(skill_id)
     if row is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="skill not found",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="skill not found",
         )
     return {"ok": True, "skill": _to_dict(row)}
 

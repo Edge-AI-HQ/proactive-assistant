@@ -60,7 +60,8 @@ async def composio_status(user: User = Depends(current_user)) -> dict:
 
 @router.get("/connections")
 async def composio_connections(
-    user: User = Depends(current_user), pool=Depends(get_pool),
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
 ) -> dict:
     try:
         items = await list_connections(user)
@@ -94,18 +95,22 @@ async def composio_connections(
             except Exception as e:  # noqa: BLE001 — best-effort, must not 502 the list
                 logger.warning(
                     "composio: inline label resolve failed user=%s cid=%s: %s",
-                    user.id, cid, e,
+                    user.id,
+                    cid,
+                    e,
                 )
                 resolved = None
             label = resolved or fallback_label(c.toolkit, cid)
             raw = c.user_info
-        out.append({
-            "toolkit": c.toolkit,
-            "status": c.status,
-            "connectedAccountId": cid,
-            "label": label,
-            "userInfo": raw,
-        })
+        out.append(
+            {
+                "toolkit": c.toolkit,
+                "status": c.status,
+                "connectedAccountId": cid,
+                "label": label,
+                "userInfo": raw,
+            }
+        )
 
     return {"connections": out}
 
@@ -129,7 +134,9 @@ async def composio_connect(body: dict, user: User = Depends(current_user)) -> di
 
 @router.post("/disconnect", status_code=http_status.HTTP_204_NO_CONTENT)
 async def composio_disconnect(
-    body: dict, user: User = Depends(current_user), pool=Depends(get_pool),
+    body: dict,
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
 ) -> None:
     cid = str(body.get("connectedAccountId") or "").strip()
     if not cid:
@@ -145,7 +152,9 @@ async def composio_disconnect(
         except Exception as e:  # noqa: BLE001 — best-effort cleanup
             logger.warning(
                 "composio: delete label failed user=%s cid=%s: %s",
-                user.id, cid, e,
+                user.id,
+                cid,
+                e,
             )
     # Drop any cached Tool Router session so the next chat call sees the
     # fresh connection state (e.g. user just disconnected one of two
@@ -156,7 +165,9 @@ async def composio_disconnect(
 
 @router.post("/wait")
 async def composio_wait(
-    body: dict, user: User = Depends(current_user), pool=Depends(get_pool),
+    body: dict,
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
 ) -> dict:
     cid = str(body.get("connectedAccountId") or "").strip()
     if not cid:
@@ -184,7 +195,10 @@ async def composio_wait(
         except Exception as e:  # noqa: BLE001 — label is best-effort, must not break /wait
             logger.warning(
                 "composio: eager label resolve failed user=%s cid=%s tk=%s: %s",
-                user.id, cid, toolkit, e,
+                user.id,
+                cid,
+                toolkit,
+                e,
             )
     out: dict = {"status": "ACTIVE", "connectedAccountId": cid}
     if init_task_id:
@@ -194,7 +208,9 @@ async def composio_wait(
 
 @router.post("/reconnect")
 async def composio_reconnect(
-    body: dict, user: User = Depends(current_user), pool=Depends(get_pool),
+    body: dict,
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
 ) -> dict:
     cid = str(body.get("connectedAccountId") or "").strip()
     toolkit = str(body.get("toolkit") or "").strip().lower()
@@ -212,7 +228,8 @@ async def composio_reconnect(
     init_task_id = await _requeue_connector_init(pool, user.id, toolkit, cid)
     if not init_task_id:
         raise HTTPException(
-            status_code=503, detail="Scheduler unavailable or enqueue failed",
+            status_code=503,
+            detail="Scheduler unavailable or enqueue failed",
         )
     # Reconnect can change the identity (rare, e.g. user re-OAuths from a
     # different profile); refresh the label proactively.
@@ -222,11 +239,15 @@ async def composio_reconnect(
         except Exception as e:  # noqa: BLE001 — best-effort
             logger.warning(
                 "composio: label refresh on reconnect failed user=%s cid=%s: %s",
-                user.id, cid, e,
+                user.id,
+                cid,
+                e,
             )
     return {
-        "ok": True, "toolkit": toolkit,
-        "connectedAccountId": cid, "initTaskId": init_task_id,
+        "ok": True,
+        "toolkit": toolkit,
+        "connectedAccountId": cid,
+        "initTaskId": init_task_id,
     }
 
 
@@ -238,7 +259,10 @@ def _init_task_id(toolkit: str, connected_account_id: str) -> str:
 
 
 async def _enqueue_connector_init(
-    pool, user_id: int, toolkit: str, connected_account_id: str,
+    pool,
+    user_id: int,
+    toolkit: str,
+    connected_account_id: str,
 ) -> str | None:
     """Insert a connector.init once-shot task. Returns the task id on
     success, None on failure — failing OAuth over a backend enqueue blip
@@ -256,20 +280,28 @@ async def _enqueue_connector_init(
         async with user_scoped_tx(pool, user_id) as conn:
             await enqueue_once(
                 conn,
-                user_id=user_id, task_id=task_id, kind="connector.init",
-                payload=payload, max_attempts=3,
+                user_id=user_id,
+                task_id=task_id,
+                kind="connector.init",
+                payload=payload,
+                max_attempts=3,
             )
         return task_id
     except Exception as e:
         logger.warning(
             "composio: enqueue connector.init failed user=%s tk=%s: %s",
-            user_id, toolkit, e,
+            user_id,
+            toolkit,
+            e,
         )
         return None
 
 
 async def _requeue_connector_init(
-    pool, user_id: int, toolkit: str, connected_account_id: str,
+    pool,
+    user_id: int,
+    toolkit: str,
+    connected_account_id: str,
 ) -> str | None:
     """Reconnect path: atomic INSERT-or-RESET so a prior archived row gets
     reactivated, payload refreshed, attempts zeroed."""
@@ -286,13 +318,18 @@ async def _requeue_connector_init(
         async with user_scoped_tx(pool, user_id) as conn:
             await requeue_once(
                 conn,
-                user_id=user_id, task_id=task_id, kind="connector.init",
-                payload=payload, max_attempts=3,
+                user_id=user_id,
+                task_id=task_id,
+                kind="connector.init",
+                payload=payload,
+                max_attempts=3,
             )
         return task_id
     except Exception as e:
         logger.warning(
             "composio: requeue connector.init failed user=%s tk=%s: %s",
-            user_id, toolkit, e,
+            user_id,
+            toolkit,
+            e,
         )
         return None

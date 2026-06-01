@@ -56,10 +56,21 @@ INGEST_INTERVAL_SEC = 30 * 60
 
 # Strip these query-string keys when normalizing URLs — UTM and similar
 # trackers are the #1 cause of "same article, different URL" duplicates.
-_TRACKER_PARAMS = frozenset({
-    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
-    "fbclid", "gclid", "mc_cid", "mc_eid", "ref", "ref_src",
-})
+_TRACKER_PARAMS = frozenset(
+    {
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "utm_term",
+        "utm_content",
+        "fbclid",
+        "gclid",
+        "mc_cid",
+        "mc_eid",
+        "ref",
+        "ref_src",
+    }
+)
 
 
 @dataclass(slots=True)
@@ -160,7 +171,9 @@ async def _fetch_feed(client: httpx.AsyncClient, source: _Source) -> bytes | Non
         if resp.status_code != 200:
             logger.warning(
                 "world.ingest %s HTTP %s: %s",
-                source.provider, resp.status_code, resp.text[:200],
+                source.provider,
+                resp.status_code,
+                resp.text[:200],
             )
             return None
         return resp.content
@@ -208,13 +221,15 @@ def _parse_feed(body: bytes) -> list[_ParsedItem]:
             except Exception:
                 published_at = None
         external_id = getattr(entry, "id", None) or getattr(entry, "guid", None)
-        items.append(_ParsedItem(
-            title=title[:500],
-            url=link,
-            summary=(summary or None) and summary[:1500],
-            published_at=published_at,
-            external_id=external_id if isinstance(external_id, str) else None,
-        ))
+        items.append(
+            _ParsedItem(
+                title=title[:500],
+                url=link,
+                summary=(summary or None) and summary[:1500],
+                published_at=published_at,
+                external_id=external_id if isinstance(external_id, str) else None,
+            )
+        )
     return items
 
 
@@ -286,24 +301,26 @@ async def run_once(pool) -> dict[str, int]:
                 if not norm:
                     continue
                 sig_id = _signal_id(source.provider, norm, item.title)
-                row = await repo.ingest_world(IngestWorldSignalInput(
-                    id=sig_id,
-                    provider=source.provider,
-                    stream_type="rss",
-                    title=item.title,
-                    url=item.url,
-                    normalized_url=norm,
-                    external_id=item.external_id,
-                    summary=item.summary,
-                    published_at=item.published_at,
-                    topics=source.topics,
-                    regions=source.regions,
-                    importance=source.importance,
-                    metadata={
-                        "source_url": source.url,
-                        "ingest_at": datetime.now(UTC).isoformat(),
-                    },
-                ))
+                row = await repo.ingest_world(
+                    IngestWorldSignalInput(
+                        id=sig_id,
+                        provider=source.provider,
+                        stream_type="rss",
+                        title=item.title,
+                        url=item.url,
+                        normalized_url=norm,
+                        external_id=item.external_id,
+                        summary=item.summary,
+                        published_at=item.published_at,
+                        topics=source.topics,
+                        regions=source.regions,
+                        importance=source.importance,
+                        metadata={
+                            "source_url": source.url,
+                            "ingest_at": datetime.now(UTC).isoformat(),
+                        },
+                    )
+                )
                 stats["inserted_or_updated"] += 1
                 inserted_ids.append(row.id)
 
@@ -311,12 +328,14 @@ async def run_once(pool) -> dict[str, int]:
                 # index will use for the cosine search; matches the
                 # field selection the old plugin used (title + summary
                 # + topics).
-                emb_text = " ".join([
-                    item.title,
-                    item.summary or "",
-                    " ".join(source.topics),
-                    " ".join(source.regions),
-                ]).strip()
+                emb_text = " ".join(
+                    [
+                        item.title,
+                        item.summary or "",
+                        " ".join(source.topics),
+                        " ".join(source.regions),
+                    ]
+                ).strip()
                 if emb_text:
                     # enqueue() needs a user_id but the queue table is
                     # only used as a worklist — for the shared world
@@ -336,7 +355,8 @@ async def run_once(pool) -> dict[str, int]:
         # there, just unscored.
         try:
             scored_users = await world_scoring.score_for_active_users(
-                pool, world_signal_ids=inserted_ids,
+                pool,
+                world_signal_ids=inserted_ids,
             )
             stats["scored_user_rows"] = scored_users
         except Exception:
@@ -385,7 +405,9 @@ if __name__ == "__main__":
 
     @functools.cache
     def _setup_logging() -> None:
-        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s :: %(message)s")
+        logging.basicConfig(
+            level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s :: %(message)s"
+        )
 
     async def _main() -> None:
         _setup_logging()
@@ -393,8 +415,11 @@ if __name__ == "__main__":
         if not dsn:
             raise SystemExit("SUPABASE_DB_URL or DATABASE_URL required")
         pool = AsyncConnectionPool(
-            conninfo=dsn, min_size=1, max_size=4,
-            kwargs={"row_factory": dict_row}, open=False,
+            conninfo=dsn,
+            min_size=1,
+            max_size=4,
+            kwargs={"row_factory": dict_row},
+            open=False,
         )
         await pool.open()
         try:

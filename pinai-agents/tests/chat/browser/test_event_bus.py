@@ -42,11 +42,12 @@ async def test_replay_delivers_one_state_envelope_with_control_inlined(bus):
     reconnect — no event tape, just current state."""
     await bus.publish("sk1", {"type": "browser:opened", "ts": 1, "data": {"url": "x"}})
     await bus.publish(
-        "sk1", {"type": "browser:control:granted", "ts": 2,
-                "data": {"controlMode": "user"}},
+        "sk1",
+        {"type": "browser:control:granted", "ts": 2, "data": {"controlMode": "user"}},
     )
     await bus.publish(
-        "sk1", {"type": "browser:navigated", "ts": 3, "data": {"url": "y"}},
+        "sk1",
+        {"type": "browser:navigated", "ts": 3, "data": {"url": "y"}},
     )
     async with bus.subscribe("sk1") as q:
         ev = await asyncio.wait_for(q.get(), timeout=1.0)

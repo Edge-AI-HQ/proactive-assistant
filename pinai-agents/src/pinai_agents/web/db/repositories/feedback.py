@@ -39,12 +39,16 @@ class FeedbackRow:
         if not isinstance(meta, dict):
             meta = json.loads(meta) if meta else {}
         return cls(
-            id=row["id"], kind=row["kind"], action=row.get("action"),
+            id=row["id"],
+            kind=row["kind"],
+            action=row.get("action"),
             push_id=row.get("push_id"),
             intent_card_id=row.get("intent_card_id"),
             intent_key=row.get("intent_key"),
-            source=row["source"], basket=row.get("basket"),
-            value=row.get("value"), text=row.get("text"),
+            source=row["source"],
+            basket=row.get("basket"),
+            value=row.get("value"),
+            text=row.get("text"),
             metadata=meta,
             conversation_id=row.get("conversation_id"),
             message_id=row.get("message_id"),
@@ -85,10 +89,21 @@ class FeedbackRepository(UserScopedRepository):
                 RETURNING *
                 """,
                 (
-                    self._user_id, fid, kind, action, push_id, intent_card_id, intent_key,
-                    source, basket, value, text,
+                    self._user_id,
+                    fid,
+                    kind,
+                    action,
+                    push_id,
+                    intent_card_id,
+                    intent_key,
+                    source,
+                    basket,
+                    value,
+                    text,
                     json.dumps(metadata or {}),
-                    conversation_id, message_id, channel,
+                    conversation_id,
+                    message_id,
+                    channel,
                 ),
             )
             row = await cur.fetchone()
@@ -100,8 +115,10 @@ class FeedbackRepository(UserScopedRepository):
         # — only on actions that already mean "user touched this card".
         if intent_card_id and action in {"open", "confirm", "dismiss", "snooze"}:
             await self._fanout_fingerprint(
-                card_id=intent_card_id, action=action,
-                intent_key=intent_key, basket=basket,
+                card_id=intent_card_id,
+                action=action,
+                intent_key=intent_key,
+                basket=basket,
             )
         return FeedbackRow.from_record(row)
 

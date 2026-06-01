@@ -63,8 +63,12 @@ class _BrowserEventBus:
             current = self._state.get(session_key)
             if current and current.get("type") == "browser:opened":
                 current_data = dict(current.get("data") or {})
-                current_data["controlMode"] = data.get("controlMode", current_data.get("controlMode", "ai"))
-                current_data["takeoverReason"] = data.get("reason") if evt_type == "browser:control:takeover" else None
+                current_data["controlMode"] = data.get(
+                    "controlMode", current_data.get("controlMode", "ai")
+                )
+                current_data["takeoverReason"] = (
+                    data.get("reason") if evt_type == "browser:control:takeover" else None
+                )
                 current["data"] = current_data
         elif evt_type == "browser:navigated":
             current = self._state.get(session_key)
@@ -75,7 +79,9 @@ class _BrowserEventBus:
                 current["data"] = current_data
 
     def _enqueue_drop_oldest(
-        self, q: asyncio.Queue[dict[str, Any]], envelope: dict[str, Any],
+        self,
+        q: asyncio.Queue[dict[str, Any]],
+        envelope: dict[str, Any],
     ) -> None:
         try:
             q.put_nowait(envelope)
@@ -89,7 +95,8 @@ class _BrowserEventBus:
 
     @asynccontextmanager
     async def subscribe(
-        self, session_key: str,
+        self,
+        session_key: str,
     ) -> AsyncIterator[asyncio.Queue[dict[str, Any]]]:
         q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=_QUEUE_BOUND)
         async with self._lock:

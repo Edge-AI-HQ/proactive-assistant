@@ -25,7 +25,9 @@ def _chat_internal_url() -> str:
 
 
 async def stream_browser_events(
-    *, user_id: int, session_key: str,
+    *,
+    user_id: int,
+    session_key: str,
 ) -> AsyncIterator[bytes]:
     token, run_id = sign_agent_run_jwt(user_id=user_id)
     url = f"{_chat_internal_url()}/agent/browser/events"
@@ -34,7 +36,8 @@ async def stream_browser_events(
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             async with client.stream(
-                "GET", url,
+                "GET",
+                url,
                 params={"sessionKey": session_key},
                 headers={"Authorization": f"Bearer {token}", "X-Run-Id": run_id},
             ) as resp:
@@ -56,7 +59,11 @@ async def stream_browser_events(
 
 
 async def proxy_browser_action(
-    *, user_id: int, method: str, path: str, body: dict[str, Any] | None = None,
+    *,
+    user_id: int,
+    method: str,
+    path: str,
+    body: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Forward a one-shot REST call. `path` is the chat-side suffix
     (e.g. `/agent/browser/sessions/{key}/control`)."""
@@ -66,7 +73,9 @@ async def proxy_browser_action(
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             resp = await client.request(
-                method, url, json=body,
+                method,
+                url,
+                json=body,
                 headers={"Authorization": f"Bearer {token}", "X-Run-Id": run_id},
             )
         except httpx.RequestError as e:

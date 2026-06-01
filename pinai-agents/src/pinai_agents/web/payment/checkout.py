@@ -50,9 +50,11 @@ async def _get_user_stripe_customer_id(pool, user_id: int) -> str | None:
     """Read users.stripe_customer_id. Returns None if the user has never
     started a checkout."""
     from ..db.rls import user_scoped_tx as _scoped
+
     async with _scoped(pool, user_id) as conn, conn.cursor() as cur:
         await cur.execute(
-            "SELECT stripe_customer_id FROM users WHERE id = %s", (user_id,),
+            "SELECT stripe_customer_id FROM users WHERE id = %s",
+            (user_id,),
         )
         row = await cur.fetchone()
     return (row or {}).get("stripe_customer_id")
@@ -108,13 +110,18 @@ async def ensure_user_free_subscription(conn, user_id: int) -> None:
 
 
 async def sync_litellm_budget_for_plan(
-    conn, user_id: int, plan_code: str, *, reset_spend: bool = True,
+    conn,
+    user_id: int,
+    plan_code: str,
+    *,
+    reset_spend: bool = True,
 ) -> None:
     """Update the user's LiteLLM key max_budget to match their plan.
     Looks up plan.monthly_refresh_credits / 100 for the USD amount.
     Silent no-op when the user has no LiteLLM key yet (will be set on
     next ensure_user_litellm_key call)."""
     from ..litellm import client as litellm_client
+
     plan = await plans_repo.find_by_code(conn, plan_code)
     if plan is None:
         logger.warning("sync_litellm_budget: unknown plan_code=%s user=%d", plan_code, user_id)
@@ -132,12 +139,16 @@ async def sync_litellm_budget_for_plan(
         )
         logger.info(
             "litellm budget set: user=%d plan=%s max_budget=$%.2f",
-            user_id, plan_code, budget_usd,
+            user_id,
+            plan_code,
+            budget_usd,
         )
     except litellm_client.LiteLLMError as e:
         logger.exception(
             "litellm /key/update failed user=%d plan=%s: %s",
-            user_id, plan_code, e,
+            user_id,
+            plan_code,
+            e,
         )
 
 
@@ -159,7 +170,9 @@ async def ensure_stripe_customer(pool, *, user: User) -> str:
     )
     async with service_tx(pool) as conn:
         await subs_repo.upsert_user_stripe_customer(
-            conn, user_id=user.id, stripe_customer_id=customer.id,
+            conn,
+            user_id=user.id,
+            stripe_customer_id=customer.id,
         )
     return customer.id
 
@@ -188,7 +201,10 @@ def get_subscription_item_id(stripe_subscription_id: str) -> str:
 
 
 async def create_or_change_subscription(
-    pool, *, user: User, plan_code: str,
+    pool,
+    *,
+    user: User,
+    plan_code: str,
     success_url_override: str | None = None,
     cancel_url_override: str | None = None,
 ) -> dict[str, Any]:
@@ -227,12 +243,8 @@ async def create_or_change_subscription(
         # NEW SUBSCRIPTION — Checkout Session with trial.
         customer_id = await ensure_stripe_customer(pool, user=user)
         base = settings.payment_public_base_url or ""
-        success = success_url_override or (
-            f"{base}/payment/success" if base else None
-        )
-        cancel = cancel_url_override or (
-            f"{base}/payment/cancel" if base else None
-        )
+        success = success_url_override or (f"{base}/payment/success" if base else None)
+        cancel = cancel_url_override or (f"{base}/payment/cancel" if base else None)
         if not success or not cancel:
             raise HTTPException(
                 500,
@@ -279,7 +291,8 @@ async def create_or_change_subscription(
             "checkoutUrl": None,
             # Direction relative to the current plan, not the pending one.
             "flow": (
-                "upgrade" if current_plan is not None
+                "upgrade"
+                if current_plan is not None
                 and target_plan.price_cents_monthly > current_plan.price_cents_monthly
                 else "downgrade"
             ),
@@ -313,7 +326,9 @@ async def create_or_change_subscription(
         )
         async with service_tx(pool) as conn:
             await subs_repo.sync_from_stripe_subscription(
-                conn, user_id=user.id, plan_code=None,
+                conn,
+                user_id=user.id,
+                plan_code=None,
                 stripe_subscription=revoked,
                 update_plan_code=False,
             )
@@ -340,9 +355,7 @@ async def create_or_change_subscription(
         )
 
     item_id = get_subscription_item_id(existing_sub.stripe_subscription_id)
-    is_upgrade = (
-        target_plan.price_cents_monthly > current_plan.price_cents_monthly
-    )
+    is_upgrade = target_plan.price_cents_monthly > current_plan.price_cents_monthly
     # pending_plan_code is replicated to Stripe subscription metadata so the
     # webhook on a *different* backend can still resolve it on next renewal.
     # Without this, a switch scheduled locally + invoice.paid handled in the
@@ -382,12 +395,16 @@ async def create_or_change_subscription(
         # on the Stripe sub, but pai_subscriptions.plan_code stays on
         # the current paid plan until invoice.paid promotes pending.
         await subs_repo.sync_from_stripe_subscription(
-            conn, user_id=user.id, plan_code=None,
+            conn,
+            user_id=user.id,
+            plan_code=None,
             stripe_subscription=modified,
             update_plan_code=False,
         )
         await subs_repo.set_pending_plan_code(
-            conn, user_id=user.id, pending_plan_code=target_plan.plan_code,
+            conn,
+            user_id=user.id,
+            pending_plan_code=target_plan.plan_code,
         )
     return {
         "checkoutUrl": None,
@@ -409,7 +426,8 @@ async def cancel_subscription(pool, *, user: User) -> dict[str, Any]:
         raise HTTPException(400, "no active subscription to cancel")
     if sub.status not in _MODIFIABLE_STATUSES:
         raise HTTPException(
-            400, f"subscription is {sub.status}, cannot cancel",
+            400,
+            f"subscription is {sub.status}, cannot cancel",
         )
     if sub.cancel_at_period_end:
         # Already scheduled to cancel — idempotent.
@@ -417,24 +435,26 @@ async def cancel_subscription(pool, *, user: User) -> dict[str, Any]:
             "ok": True,
             "alreadyScheduled": True,
             "currentPeriodEnd": (
-                sub.current_period_end.isoformat()
-                if sub.current_period_end else None
+                sub.current_period_end.isoformat() if sub.current_period_end else None
             ),
         }
     stripe.Subscription.modify(
-        sub.stripe_subscription_id, cancel_at_period_end=True,
+        sub.stripe_subscription_id,
+        cancel_at_period_end=True,
     )
     return {
         "ok": True,
         "currentPeriodEnd": (
-            sub.current_period_end.isoformat()
-            if sub.current_period_end else None
+            sub.current_period_end.isoformat() if sub.current_period_end else None
         ),
     }
 
 
 async def create_customer_portal_session(
-    pool, *, user: User, return_url_override: str | None = None,
+    pool,
+    *,
+    user: User,
+    return_url_override: str | None = None,
 ) -> dict[str, Any]:
     """Return a Stripe Customer Portal session URL. The portal handles
     billing history, card update, cancel UI, invoice download —
@@ -448,14 +468,16 @@ async def create_customer_portal_session(
     customer_id = await _get_user_stripe_customer_id(pool, user.id)
     if not customer_id:
         raise HTTPException(
-            400, "no Stripe customer; complete checkout first",
+            400,
+            "no Stripe customer; complete checkout first",
         )
     base = settings.payment_public_base_url or ""
     return_url = return_url_override or (f"{base}/account" if base else None)
     if not return_url:
         raise HTTPException(500, "PAYMENT_PUBLIC_BASE_URL not configured")
     portal = stripe.billing_portal.Session.create(
-        customer=customer_id, return_url=return_url,
+        customer=customer_id,
+        return_url=return_url,
     )
     return {"portalUrl": portal.url}
 
@@ -503,7 +525,9 @@ def _resolve_price_id_from_subscription(stripe_sub: Any) -> str | None:
 
 
 async def reconcile_subscription_from_stripe(
-    pool, *, user: User,
+    pool,
+    *,
+    user: User,
 ) -> dict[str, Any]:
     """Pull canonical subscription state from Stripe and upsert into
     pai_subscriptions. Used when Stripe webhook hasn't (yet) reached
@@ -523,10 +547,13 @@ async def reconcile_subscription_from_stripe(
         return {"synced": True, "planCode": "free", "reason": "no_stripe_customer"}
 
     listing = stripe.Subscription.list(
-        customer=customer_id, status="all", limit=10,
+        customer=customer_id,
+        status="all",
+        limit=10,
     )
     candidates = [
-        s for s in (listing.data or [])
+        s
+        for s in (listing.data or [])
         if getattr(s, "status", "") in {"trialing", "active", "past_due"}
     ]
     if not candidates:
@@ -539,10 +566,7 @@ async def reconcile_subscription_from_stripe(
     # "Actually renewing" = active and NOT scheduled to cancel. A sub
     # in active + cancel_at_period_end=True will wind down on its own,
     # not a duplicate to warn about.
-    actively_renewing = [
-        s for s in candidates
-        if not getattr(s, "cancel_at_period_end", False)
-    ]
+    actively_renewing = [s for s in candidates if not getattr(s, "cancel_at_period_end", False)]
 
     # Pick the most recent (highest created timestamp). Multiple active
     # subscriptions on one customer is a data anomaly we shouldn't enable,
@@ -579,7 +603,9 @@ async def reconcile_subscription_from_stripe(
         )
 
         await subs_repo.sync_from_stripe_subscription(
-            conn, user_id=user.id, plan_code=plan_code,
+            conn,
+            user_id=user.id,
+            plan_code=plan_code,
             stripe_subscription=canonical,
             update_plan_code=is_first_subscribe,
         )
@@ -590,7 +616,10 @@ async def reconcile_subscription_from_stripe(
             # if the invoice.paid webhook fires later: webhook re-syncs
             # the same plan/budget pair, no drift.
             await sync_litellm_budget_for_plan(
-                conn, user.id, plan_code, reset_spend=True,
+                conn,
+                user.id,
+                plan_code,
+                reset_spend=True,
             )
 
     return {
@@ -606,7 +635,10 @@ async def reconcile_subscription_from_stripe(
 
 
 async def list_payment_methods_for_user(
-    pool, *, user: User, limit: int = 10,
+    pool,
+    *,
+    user: User,
+    limit: int = 10,
 ) -> dict[str, Any]:
     """Return the user's Stripe-managed cards.
 
@@ -649,7 +681,7 @@ async def list_payment_methods_for_user(
     # (2) subscription.default_payment_method — Checkout(trial) lands here
     try:
         sub_listing = stripe.Subscription.list(customer=customer_id, status="all", limit=10)
-        for sub in (sub_listing.data or []):
+        for sub in sub_listing.data or []:
             spm = _stripe_attr(sub, "default_payment_method")
             spm_id = spm if isinstance(spm, str) else _stripe_attr(spm, "id")
             if isinstance(spm_id, str) and spm_id and spm_id not in seen:
@@ -661,9 +693,11 @@ async def list_payment_methods_for_user(
     # (3) PaymentMethods attached to the customer (the standard location)
     try:
         attached = stripe.Customer.list_payment_methods(
-            customer_id, type="card", limit=limit,
+            customer_id,
+            type="card",
+            limit=limit,
         )
-        for pm in (attached.data or []):
+        for pm in attached.data or []:
             pm_id = pm.id if hasattr(pm, "id") else _stripe_attr(pm, "id")
             if pm_id and pm_id not in seen:
                 seen.add(pm_id)
@@ -681,7 +715,7 @@ async def list_payment_methods_for_user(
     #   other → pm.id                  — no dedup, treat each as unique
     items: list[dict[str, Any]] = []
     seen_identity: set[tuple[str, ...]] = set()
-    for pm_id in ordered_pm_ids[:limit * 2]:
+    for pm_id in ordered_pm_ids[: limit * 2]:
         try:
             pm = stripe.PaymentMethod.retrieve(pm_id)
             pm_type = _stripe_attr(pm, "type") or "unknown"
@@ -689,7 +723,10 @@ async def list_payment_methods_for_user(
                 "id": pm_id,
                 "type": pm_type,
                 "isDefault": pm_id == default_pm_id,
-                "brand": None, "last4": None, "expMonth": None, "expYear": None,
+                "brand": None,
+                "last4": None,
+                "expMonth": None,
+                "expYear": None,
                 "linkEmail": None,
             }
             identity: tuple[str, ...]
@@ -725,7 +762,10 @@ async def list_payment_methods_for_user(
 
 
 async def list_invoices_for_user(
-    pool, *, user: User, limit: int = 12,
+    pool,
+    *,
+    user: User,
+    limit: int = 12,
 ) -> dict[str, Any]:
     """Return the user's Stripe invoices (real history). Each entry
     includes the hosted_invoice_url so the UI can link out for the
@@ -737,27 +777,30 @@ async def list_invoices_for_user(
 
     listing = stripe.Invoice.list(customer=customer_id, limit=limit)
     items: list[dict[str, Any]] = []
-    for inv in (listing.data or []):
+    for inv in listing.data or []:
         lines_obj = getattr(inv, "lines", None)
         lines = getattr(lines_obj, "data", None) if lines_obj is not None else None
         first_desc: str | None = None
         if lines:
             first = lines[0]
             first_desc = (
-                getattr(first, "description", None) if hasattr(first, "description")
+                getattr(first, "description", None)
+                if hasattr(first, "description")
                 else first.get("description")
             )
         description = first_desc or getattr(inv, "description", None) or "Subscription"
-        items.append({
-            "id": inv.id,
-            "number": getattr(inv, "number", None),
-            "status": inv.status,
-            "amountPaidCents": getattr(inv, "amount_paid", 0),
-            "amountDueCents": getattr(inv, "amount_due", 0),
-            "currency": inv.currency,
-            "description": description,
-            "createdAt": getattr(inv, "created", 0),
-            "hostedInvoiceUrl": getattr(inv, "hosted_invoice_url", None),
-            "pdfUrl": getattr(inv, "invoice_pdf", None),
-        })
+        items.append(
+            {
+                "id": inv.id,
+                "number": getattr(inv, "number", None),
+                "status": inv.status,
+                "amountPaidCents": getattr(inv, "amount_paid", 0),
+                "amountDueCents": getattr(inv, "amount_due", 0),
+                "currency": inv.currency,
+                "description": description,
+                "createdAt": getattr(inv, "created", 0),
+                "hostedInvoiceUrl": getattr(inv, "hosted_invoice_url", None),
+                "pdfUrl": getattr(inv, "invoice_pdf", None),
+            }
+        )
     return {"items": items}

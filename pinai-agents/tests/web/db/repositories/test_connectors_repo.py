@@ -21,7 +21,8 @@ async def test_get_cursor_returns_none_when_absent(pool, user_ids):
     async with user_scoped_tx(pool, user_a) as conn:
         repo = ConnectorsRepository(user_a, conn)
         cursor = await repo.get_cursor(
-            toolkit="github", connected_account_id="cid_x",
+            toolkit="github",
+            connected_account_id="cid_x",
         )
     assert cursor is None
 
@@ -33,14 +34,16 @@ async def test_set_then_get_cursor_roundtrip(pool, user_ids):
 
     async with user_scoped_tx(pool, user_a) as conn:
         await ConnectorsRepository(user_a, conn).set_cursor(
-            toolkit="github", connected_account_id="cid_x",
+            toolkit="github",
+            connected_account_id="cid_x",
             last_synced_at=ts,
             toolkit_cursor={"page": 3, "etag": "abc"},
         )
 
     async with user_scoped_tx(pool, user_a) as conn:
         cursor = await ConnectorsRepository(user_a, conn).get_cursor(
-            toolkit="github", connected_account_id="cid_x",
+            toolkit="github",
+            connected_account_id="cid_x",
         )
 
     assert cursor is not None
@@ -59,19 +62,22 @@ async def test_set_cursor_upserts(pool, user_ids):
 
     async with user_scoped_tx(pool, user_a) as conn:
         await ConnectorsRepository(user_a, conn).set_cursor(
-            toolkit="slack", connected_account_id="cid_y",
+            toolkit="slack",
+            connected_account_id="cid_y",
             last_synced_at=t1,
         )
 
     async with user_scoped_tx(pool, user_a) as conn:
         await ConnectorsRepository(user_a, conn).set_cursor(
-            toolkit="slack", connected_account_id="cid_y",
+            toolkit="slack",
+            connected_account_id="cid_y",
             last_synced_at=t2,
         )
 
     async with user_scoped_tx(pool, user_a) as conn:
         cursor = await ConnectorsRepository(user_a, conn).get_cursor(
-            toolkit="slack", connected_account_id="cid_y",
+            toolkit="slack",
+            connected_account_id="cid_y",
         )
     assert cursor is not None
     assert cursor.last_synced_at == t2
@@ -85,13 +91,15 @@ async def test_get_cursor_isolated_by_user(pool, user_ids):
 
     async with user_scoped_tx(pool, user_a) as conn:
         await ConnectorsRepository(user_a, conn).set_cursor(
-            toolkit="github", connected_account_id="cid_shared",
+            toolkit="github",
+            connected_account_id="cid_shared",
             last_synced_at=ts,
         )
 
     async with user_scoped_tx(pool, user_b) as conn:
         cursor = await ConnectorsRepository(user_b, conn).get_cursor(
-            toolkit="github", connected_account_id="cid_shared",
+            toolkit="github",
+            connected_account_id="cid_shared",
         )
     assert cursor is None
 
@@ -106,21 +114,25 @@ async def test_get_cursor_isolated_by_account(pool, user_ids):
     async with user_scoped_tx(pool, user_a) as conn:
         repo = ConnectorsRepository(user_a, conn)
         await repo.set_cursor(
-            toolkit="github", connected_account_id="cid_1",
+            toolkit="github",
+            connected_account_id="cid_1",
             last_synced_at=t1,
         )
         await repo.set_cursor(
-            toolkit="github", connected_account_id="cid_2",
+            toolkit="github",
+            connected_account_id="cid_2",
             last_synced_at=t2,
         )
 
     async with user_scoped_tx(pool, user_a) as conn:
         repo = ConnectorsRepository(user_a, conn)
         c1 = await repo.get_cursor(
-            toolkit="github", connected_account_id="cid_1",
+            toolkit="github",
+            connected_account_id="cid_1",
         )
         c2 = await repo.get_cursor(
-            toolkit="github", connected_account_id="cid_2",
+            toolkit="github",
+            connected_account_id="cid_2",
         )
 
     assert c1 is not None and c1.last_synced_at == t1

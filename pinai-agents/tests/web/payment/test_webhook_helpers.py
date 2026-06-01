@@ -39,7 +39,8 @@ def stub_find(monkeypatch):
         return mapping.get(supabase_uuid)
 
     monkeypatch.setattr(
-        subscriptions, "find_user_by_supabase_user_id",
+        subscriptions,
+        "find_user_by_supabase_user_id",
         AsyncMock(side_effect=fake_find),
     )
     return mapping
@@ -48,10 +49,12 @@ def stub_find(monkeypatch):
 @pytest.mark.asyncio
 async def test_user_id_from_metadata_resolves_via_supabase_uuid(stub_find):
     stub_find["u-abc"] = 42
-    obj = SimpleNamespace(metadata={
-        "supabase_user_id": "u-abc",
-        "internal_user_id": "42",  # debug-only; never trusted
-    })
+    obj = SimpleNamespace(
+        metadata={
+            "supabase_user_id": "u-abc",
+            "internal_user_id": "42",  # debug-only; never trusted
+        }
+    )
     assert await _user_id_from_metadata(None, obj) == 42
 
 
@@ -91,10 +94,13 @@ async def test_resolve_user_id_for_event_drills_through_event_data_object(
 ):
     stub_find["u-7"] = 7
     event = SimpleNamespace(
-        id="evt_x", type="checkout.session.completed",
-        data=SimpleNamespace(object=SimpleNamespace(
-            metadata={"supabase_user_id": "u-7"},
-        )),
+        id="evt_x",
+        type="checkout.session.completed",
+        data=SimpleNamespace(
+            object=SimpleNamespace(
+                metadata={"supabase_user_id": "u-7"},
+            )
+        ),
     )
     assert await _resolve_user_id_for_event(None, event) == 7
 
@@ -164,9 +170,12 @@ def invoice_paid_harness(monkeypatch):
     mutate `fresh_sub.metadata` and `sub_row_container["row"]` to drive
     the branch under test."""
     fresh_sub = SimpleNamespace(
-        id="sub_y", customer="cus_x", status="active",
+        id="sub_y",
+        customer="cus_x",
+        status="active",
         cancel_at_period_end=False,
-        current_period_start=1730000000, current_period_end=1732678400,
+        current_period_start=1730000000,
+        current_period_end=1732678400,
         metadata={},
     )
     sub_row_container = {"row": _sub_row(pending=None)}
@@ -181,25 +190,32 @@ def invoice_paid_harness(monkeypatch):
     monkeypatch.setattr(webhook_mod, "requires_stripe", lambda: fake_stripe)
 
     monkeypatch.setattr(
-        subscriptions, "find_user_by_stripe_subscription",
+        subscriptions,
+        "find_user_by_stripe_subscription",
         AsyncMock(return_value=42),
     )
     monkeypatch.setattr(
-        webhook_mod, "_plan_code_for_subscription",
+        webhook_mod,
+        "_plan_code_for_subscription",
         AsyncMock(return_value="pro"),  # Stripe items currently 'pro'
     )
 
     async def fake_get_for_user(conn, user_id):
         return sub_row_container["row"]
+
     monkeypatch.setattr(subscriptions, "get_for_user", fake_get_for_user)
 
     sync_mock = AsyncMock()
     monkeypatch.setattr(
-        subscriptions, "sync_from_stripe_subscription", sync_mock,
+        subscriptions,
+        "sync_from_stripe_subscription",
+        sync_mock,
     )
     clear_mock = AsyncMock()
     monkeypatch.setattr(
-        subscriptions, "clear_pending_plan_code", clear_mock,
+        subscriptions,
+        "clear_pending_plan_code",
+        clear_mock,
     )
 
     # Short-circuit LiteLLM budget refresh (out of scope for these tests).
@@ -232,7 +248,8 @@ async def test_invoice_paid_prefers_stripe_metadata_over_db(invoice_paid_harness
     assert kwargs["plan_code"] == "max"
     invoice_paid_harness.clear_mock.assert_awaited_once_with(None, 42)
     invoice_paid_harness.stripe_modify.assert_called_once_with(
-        "sub_y", metadata={"pending_plan_code": ""},
+        "sub_y",
+        metadata={"pending_plan_code": ""},
     )
 
 

@@ -21,7 +21,11 @@ from pinai_agents.chat.agents.prompts.shared import _SDK_CHEAT_SHEET
 
 _SDK_CLIENT_PY = (
     Path(__file__).resolve().parents[2]
-    / "packages" / "pinai_sdk" / "src" / "pinai_sdk" / "_client.py"
+    / "packages"
+    / "pinai_sdk"
+    / "src"
+    / "pinai_sdk"
+    / "_client.py"
 )
 
 

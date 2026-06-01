@@ -53,7 +53,8 @@ async def main(user_id: int) -> None:
         )
 
         dispatched = await dispatch_card_bootstrap(
-            pool=pool, user_id=user_id,
+            pool=pool,
+            user_id=user_id,
             final_cards=final_cards or [],
         )
         print(f"dispatched ids: {dispatched}")
@@ -61,6 +62,7 @@ async def main(user_id: int) -> None:
         # Block on the spawned tasks so we see SSE drain + log output
         # before the script exits.
         from pinai_agents.web.services.card_fanout import _PINNED_TASKS  # noqa: PLC0415
+
         if _PINNED_TASKS:
             print(f"awaiting {len(_PINNED_TASKS)} bootstrap tasks...")
             await asyncio.gather(*list(_PINNED_TASKS), return_exceptions=True)

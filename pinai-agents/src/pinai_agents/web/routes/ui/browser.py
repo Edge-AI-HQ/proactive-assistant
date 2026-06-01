@@ -50,7 +50,8 @@ async def browser_control(
     user: User = Depends(current_user),
 ) -> dict:
     return await proxy_browser_action(
-        user_id=user.id, method="POST",
+        user_id=user.id,
+        method="POST",
         path=f"/agent/browser/sessions/{session_key}/control",
         body=body.model_dump(exclude_none=True),
     )
@@ -74,7 +75,8 @@ async def browser_input(
     user: User = Depends(current_user),
 ) -> dict:
     return await proxy_browser_action(
-        user_id=user.id, method="POST",
+        user_id=user.id,
+        method="POST",
         path=f"/agent/browser/sessions/{session_key}/input",
         body=body.model_dump(exclude_none=True),
     )
@@ -86,7 +88,8 @@ async def browser_heartbeat(
     user: User = Depends(current_user),
 ) -> dict:
     return await proxy_browser_action(
-        user_id=user.id, method="POST",
+        user_id=user.id,
+        method="POST",
         path=f"/agent/browser/sessions/{session_key}/heartbeat",
     )
 
@@ -97,7 +100,8 @@ async def browser_refresh_live_view(
     user: User = Depends(current_user),
 ) -> dict:
     return await proxy_browser_action(
-        user_id=user.id, method="POST",
+        user_id=user.id,
+        method="POST",
         path=f"/agent/browser/sessions/{session_key}/refresh-live-view",
     )
 
@@ -108,6 +112,7 @@ async def browser_destroy(
     user: User = Depends(current_user),
 ) -> dict:
     return await proxy_browser_action(
-        user_id=user.id, method="DELETE",
+        user_id=user.id,
+        method="DELETE",
         path=f"/agent/browser/sessions/{session_key}",
     )

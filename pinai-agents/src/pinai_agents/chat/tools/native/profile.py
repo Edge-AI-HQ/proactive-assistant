@@ -29,19 +29,23 @@ class ProfileUpsertInput(BaseModel):
     facts (those go into `memory_add`)."""
 
     display_name: str | None = Field(
-        default=None, max_length=200,
+        default=None,
+        max_length=200,
         description="User's preferred display name. Set when the user introduces themselves or asks to be called something specific.",
     )
     locale: str | None = Field(
-        default=None, max_length=20,
+        default=None,
+        max_length=20,
         description="BCP-47 locale tag, e.g. 'en-US', 'zh-Hans'. Set when the user reveals their language preference.",
     )
     timezone: str | None = Field(
-        default=None, max_length=64,
+        default=None,
+        max_length=64,
         description="IANA timezone, e.g. 'America/Los_Angeles', 'Asia/Shanghai'. Set when the user states their location/timezone.",
     )
     summary: str | None = Field(
-        default=None, max_length=2000,
+        default=None,
+        max_length=2000,
         description="One-paragraph persona summary the agent uses to ground future replies. Rewrite when the user's high-level situation shifts.",
     )
     facts: dict[str, Any] | None = Field(
@@ -149,11 +153,13 @@ async def profile_preference_merge(key: str, value: str):
 
 class GoalUpsertInput(BaseModel):
     key: str = Field(
-        min_length=1, max_length=120,
+        min_length=1,
+        max_length=120,
         description="Stable slug for this goal (e.g. 'staff-promo-2026', 'sub3-marathon'). Used to update the same goal across conversations.",
     )
     title: str = Field(
-        min_length=1, max_length=200,
+        min_length=1,
+        max_length=200,
         description="One-sentence goal statement, action-led with a target/timeframe.",
     )
     id: str | None = Field(
@@ -169,7 +175,8 @@ class GoalUpsertInput(BaseModel):
         description="'active' for live goals; pass 'archived' to retire one in place (alternative to a separate close call).",
     )
     summary: str | None = Field(
-        default=None, max_length=2000,
+        default=None,
+        max_length=2000,
         description="Optional longer description / context that helps future cards reason about this goal.",
     )
 

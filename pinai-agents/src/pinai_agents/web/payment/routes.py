@@ -50,15 +50,19 @@ async def list_plans(pool=Depends(get_pool)) -> dict:
 
 @router.get("/subscription")
 async def my_subscription(
-    user: User = Depends(current_user), pool=Depends(get_pool),
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
 ) -> dict:
     async with user_scoped_tx(pool, user.id) as conn:
         sub = await subs_repo.get_for_user(conn, user.id)
     if sub is None:
         return {
-            "status": "inactive", "planCode": None, "pendingPlanCode": None,
+            "status": "inactive",
+            "planCode": None,
+            "pendingPlanCode": None,
             "accessGranted": False,
-            "currentPeriodEnd": None, "cancelAtPeriodEnd": False,
+            "currentPeriodEnd": None,
+            "cancelAtPeriodEnd": False,
         }
     return {
         "status": sub.status,
@@ -102,7 +106,9 @@ async def create_checkout(
         can show success without redirect.
     """
     return await checkout_flow.create_or_change_subscription(
-        pool, user=user, plan_code=body.planCode,
+        pool,
+        user=user,
+        plan_code=body.planCode,
         success_url_override=body.successUrl,
         cancel_url_override=body.cancelUrl,
     )
@@ -142,7 +148,8 @@ async def customer_portal(
     The portal handles: billing history, card update, cancel UI, invoice
     download. We deliberately don't self-implement any of that surface."""
     return await checkout_flow.create_customer_portal_session(
-        pool, user=user,
+        pool,
+        user=user,
         return_url_override=(body.returnUrl if body else None),
     )
 
@@ -202,6 +209,7 @@ async def usage(
     The UI uses this to render a budget progress bar in the Subscription
     page. Real data — comes straight from LiteLLM via /key/info."""
     from ..litellm import client as litellm_client
+
     async with user_scoped_tx(pool, user.id) as conn:
         key = await checkout_flow._virtual_key_for_user(conn, user.id)
     if not key:

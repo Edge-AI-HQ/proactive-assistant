@@ -36,6 +36,7 @@ def _maybe_init() -> object | None:
         with _init_lock:
             if not _initialized:
                 import stripe as stripe_mod
+
                 stripe_mod.api_key = settings.stripe_secret_key
                 # Pin API version explicitly so a Stripe-side default bump
                 # doesn't reshape webhook payloads under us.
@@ -43,6 +44,7 @@ def _maybe_init() -> object | None:
                 _initialized = True
                 return stripe_mod
     import stripe as stripe_mod
+
     return stripe_mod
 
 

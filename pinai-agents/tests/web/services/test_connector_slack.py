@@ -70,15 +70,21 @@ def test_map_slack_message_flat_channel_string():
 
 
 def test_map_slack_message_returns_none_without_ts():
-    assert connector_ingest._map_slack_message(
-        {"channel": {"id": "C1"}, "text": "no ts"},
-    ) is None
+    assert (
+        connector_ingest._map_slack_message(
+            {"channel": {"id": "C1"}, "text": "no ts"},
+        )
+        is None
+    )
 
 
 def test_map_slack_message_returns_none_without_channel():
-    assert connector_ingest._map_slack_message(
-        {"ts": "1.0", "text": "no channel"},
-    ) is None
+    assert (
+        connector_ingest._map_slack_message(
+            {"ts": "1.0", "text": "no channel"},
+        )
+        is None
+    )
 
 
 # ── DB-backed sync round-trip ──────────────────────────────────────────
@@ -89,14 +95,23 @@ def _sync_task(toolkit: str, user_id: int, cid: str) -> ScheduledTaskRow:
         user_id=user_id,
         id=f"sync.{toolkit}.{cid}",
         kind="connector.sync",
-        name=None, prompt=None,
-        trigger_kind="schedule", cron_expr="*/30 * * * *",
-        interval_seconds=None, event_filter=None,
+        name=None,
+        prompt=None,
+        trigger_kind="schedule",
+        cron_expr="*/30 * * * *",
+        interval_seconds=None,
+        event_filter=None,
         payload={"toolkit": toolkit, "connectedAccountId": cid},
-        timezone="UTC", status="active",
-        next_run_at=None, last_run_at=datetime.now(UTC),
-        last_run_status="dispatched", run_count=1,
-        attempts=0, max_attempts=3, progress={}, last_error=None,
+        timezone="UTC",
+        status="active",
+        next_run_at=None,
+        last_run_at=datetime.now(UTC),
+        last_run_status="dispatched",
+        run_count=1,
+        attempts=0,
+        max_attempts=3,
+        progress={},
+        last_error=None,
     )
 
 
@@ -129,7 +144,9 @@ async def test_slack_sync_writes_messages_immutably(pool, user_ids, monkeypatch)
 
     async with user_scoped_tx(pool, user_a) as conn:
         await enqueue_once(
-            conn, user_id=user_a, task_id="sync.slack.cidS",
+            conn,
+            user_id=user_a,
+            task_id="sync.slack.cidS",
             kind="connector.sync",
             payload={"toolkit": "slack", "connectedAccountId": "cidS"},
         )

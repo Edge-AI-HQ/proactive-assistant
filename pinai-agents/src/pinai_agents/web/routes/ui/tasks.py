@@ -42,7 +42,12 @@ router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 # pai_scheduled_tasks (active/paused/archived) + pai_scheduled_task_runs
 # (running/success/failed) — _project_status fuses them.
 _PUBLIC_STATUS = {
-    "queued", "running", "succeeded", "failed", "skipped", "cancelled",
+    "queued",
+    "running",
+    "succeeded",
+    "failed",
+    "skipped",
+    "cancelled",
 }
 
 
@@ -155,9 +160,7 @@ async def get_task(
 def _project_row(r: dict[str, Any]) -> dict[str, Any]:
     status = _project_status(r["task_status"], r.get("run_status"))
     last_error = r.get("last_error") or r.get("run_error")
-    completed_at = (
-        r["updated_at"] if r["task_status"] == "archived" else None
-    )
+    completed_at = r["updated_at"] if r["task_status"] == "archived" else None
     progress = r.get("progress") or {}
     return {
         "id": r["id"],
@@ -186,7 +189,8 @@ def _project_row(r: dict[str, Any]) -> dict[str, Any]:
 
 
 def _result_from_progress(
-    status: str, progress: dict[str, Any],
+    status: str,
+    progress: dict[str, Any],
 ) -> dict[str, Any] | None:
     """Promote known counts out of `progress` into the legacy `result`
     shape so the DebugPanel chip can render meaningful numbers.

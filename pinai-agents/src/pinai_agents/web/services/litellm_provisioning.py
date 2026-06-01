@@ -84,25 +84,29 @@ async def _key_supports_models(user: User, required_models: set[str]) -> bool:
         if e.status_code in (401, 403):
             logger.warning(
                 "litellm: virtual key rejected by model probe user=%d status=%d",
-                user.id, e.status_code,
+                user.id,
+                e.status_code,
             )
             return False
         logger.warning(
             "litellm: virtual key model probe failed user=%d, keeping existing key: %s",
-            user.id, e,
+            user.id,
+            e,
         )
         return True
     except Exception as e:
         logger.warning(
             "litellm: virtual key model probe errored user=%d, keeping existing key: %s",
-            user.id, e,
+            user.id,
+            e,
         )
         return True
     missing = sorted(required_models - models)
     if missing:
         logger.warning(
             "litellm: rotating stale virtual key user=%d missing_models=%s",
-            user.id, ",".join(missing),
+            user.id,
+            ",".join(missing),
         )
         return False
     return True
@@ -141,6 +145,7 @@ async def _provision_and_persist(
     # later bumps the budget when they subscribe. Falls back to the env
     # default if 'free' row is missing (shouldn't happen post-058).
     from ..payment import plans as plans_repo
+
     async with service_tx(pool) as conn:
         free_plan = await plans_repo.find_by_code(conn, "free")
     if free_plan is not None:
@@ -163,17 +168,19 @@ async def _provision_and_persist(
 
     async with service_tx(pool) as conn:
         await conn.execute(
-            "UPDATE users SET litellm_virtual_key = %s, updated_at = NOW() "
-            "WHERE id = %s",
+            "UPDATE users SET litellm_virtual_key = %s, updated_at = NOW() WHERE id = %s",
             (raw_key, user.id),
         )
         # Also make sure they have a pai_subscriptions row on Free tier.
         from ..payment.checkout import ensure_user_free_subscription
+
         await ensure_user_free_subscription(conn, user.id)
     logger.info(
-        "litellm: provisioned virtual key user=%d alias=%s last4=%s "
-        "budget=$%.2f (Free tier)",
-        user.id, alias, raw_key[-4:], budget_usd,
+        "litellm: provisioned virtual key user=%d alias=%s last4=%s budget=$%.2f (Free tier)",
+        user.id,
+        alias,
+        raw_key[-4:],
+        budget_usd,
     )
     return raw_key
 

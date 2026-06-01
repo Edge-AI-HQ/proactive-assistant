@@ -105,6 +105,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         # to the per-user scheduler tick. Multi-replica safety comes from
         # the ingest_world UPSERT: idempotent on normalized_url.
         from .services.world_ingest import loop as world_ingest_loop  # noqa: PLC0415
+
         world_ingest_task = asyncio.create_task(
             world_ingest_loop(pool),
             name="pinai-world-ingest",
@@ -145,10 +146,7 @@ def create_app() -> FastAPI:
     # headers; combined with explicit origins (no `*`) this matches the
     # browser security model.
     settings = get_web_settings()
-    origins = [
-        o.strip() for o in (settings.cors_allowed_origins or "").split(",")
-        if o.strip()
-    ]
+    origins = [o.strip() for o in (settings.cors_allowed_origins or "").split(",") if o.strip()]
     if origins:
         app.add_middleware(
             CORSMiddleware,

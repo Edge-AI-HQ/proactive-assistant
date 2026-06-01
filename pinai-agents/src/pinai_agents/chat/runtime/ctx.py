@@ -27,9 +27,11 @@ class ClientHints(TypedDict, total=False):
     sites serve the matching layout. None means "the frontend didn't say
     — fall back to desktop default".
     """
+
     viewport_width: int
     viewport_height: int
     device_kind: Literal["mobile", "tablet", "desktop"]
+
 
 current_agent_user_id: ContextVar[int] = ContextVar("current_agent_user_id", default=0)
 current_agent_run_id: ContextVar[str] = ContextVar("current_agent_run_id", default="")
@@ -43,13 +45,15 @@ current_session_key: ContextVar[str] = ContextVar("current_session_key", default
 # Empty string when Browserbase is unconfigured / provisioning failed —
 # browser_tool falls back to ephemeral sessions in that case.
 current_browserbase_context_id: ContextVar[str] = ContextVar(
-    "current_browserbase_context_id", default="",
+    "current_browserbase_context_id",
+    default="",
 )
 # Frontend-supplied device hints. browser_tool's `open` reads these to
 # size + UA the Browserbase session for mobile / tablet / desktop. None
 # means the request didn't include hints — desktop default applies.
 current_client_hints: ContextVar[ClientHints | None] = ContextVar(
-    "current_client_hints", default=None,
+    "current_client_hints",
+    default=None,
 )
 
 

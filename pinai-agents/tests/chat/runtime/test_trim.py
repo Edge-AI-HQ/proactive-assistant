@@ -81,12 +81,7 @@ def test_keep_zero_removes_all() -> None:
 
 
 def test_window_always_starts_human_no_orphans() -> None:
-    msgs = (
-        _turn(1, tool=True)
-        + _turn(2, tool=True)
-        + _turn(3, tool=True)
-        + _turn(4)
-    )
+    msgs = _turn(1, tool=True) + _turn(2, tool=True) + _turn(3, tool=True) + _turn(4)
     ids = compute_trim_message_ids(msgs, keep_turns=2)
     remaining = [m for m in msgs if m.id not in ids]
     assert isinstance(remaining[0], HumanMessage)

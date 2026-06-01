@@ -88,12 +88,14 @@ async def test_memory_get_path(mock_http, jwt_ctx):
 
 @pytest.mark.asyncio
 async def test_memory_add_post_body(mock_http, jwt_ctx):
-    await memory_add.ainvoke({
-        "text": "user prefers dark mode",
-        "source": "chat",
-        "subject": "ui",
-        "quality": 0.7,
-    })
+    await memory_add.ainvoke(
+        {
+            "text": "user prefers dark mode",
+            "source": "chat",
+            "subject": "ui",
+            "quality": 0.7,
+        }
+    )
     call = mock_http[0]
     assert call["method"] == "POST"
     assert call["path"] == "/api/agent/memory/add"
@@ -117,37 +119,43 @@ async def test_signals_recent_path(mock_http, jwt_ctx):
 async def test_signals_recent_keeps_ambient_speaker_preview(monkeypatch, jwt_ctx):
     async def fake_get(path, **params):
         return {
-            "items": [{
-                "id": "sig_ambient",
-                "kind": "ambient.candidate_window",
-                "title": "Ambient transcript",
-                "summary": 'speaker_1: "lunch?"',
-                "speakerText": 'speaker_1: "lunch?"\nself: "after the review"',
-                "selfText": "after the review",
-                "salience": 0.7,
-                "occurredAt": "2026-05-28T10:00:00Z",
-            }]
+            "items": [
+                {
+                    "id": "sig_ambient",
+                    "kind": "ambient.candidate_window",
+                    "title": "Ambient transcript",
+                    "summary": 'speaker_1: "lunch?"',
+                    "speakerText": 'speaker_1: "lunch?"\nself: "after the review"',
+                    "selfText": "after the review",
+                    "salience": 0.7,
+                    "occurredAt": "2026-05-28T10:00:00Z",
+                }
+            ]
         }
 
     monkeypatch.setattr(http_client, "get", fake_get)
 
-    result = await signals_recent.ainvoke({
-        "status": "open",
-        "kind": "ambient.candidate_window",
-        "hours": 12,
-        "limit": 5,
-    })
+    result = await signals_recent.ainvoke(
+        {
+            "status": "open",
+            "kind": "ambient.candidate_window",
+            "hours": 12,
+            "limit": 5,
+        }
+    )
 
-    assert result == [{
-        "id": "sig_ambient",
-        "kind": "ambient.candidate_window",
-        "title": "Ambient transcript",
-        "summary": 'speaker_1: "lunch?"',
-        "speakerText": 'speaker_1: "lunch?"\nself: "after the review"',
-        "selfText": "after the review",
-        "salience": 0.7,
-        "occurredAt": "2026-05-28T10:00:00Z",
-    }]
+    assert result == [
+        {
+            "id": "sig_ambient",
+            "kind": "ambient.candidate_window",
+            "title": "Ambient transcript",
+            "summary": 'speaker_1: "lunch?"',
+            "speakerText": 'speaker_1: "lunch?"\nself: "after the review"',
+            "selfText": "after the review",
+            "salience": 0.7,
+            "occurredAt": "2026-05-28T10:00:00Z",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -189,10 +197,14 @@ async def test_raw_gcal_week_path(mock_http, jwt_ctx):
 
 @pytest.mark.asyncio
 async def test_raw_list_path(mock_http, jwt_ctx):
-    await raw_list.ainvoke({
-        "toolkit": "slack", "entity": "messages",
-        "hours": 72, "limit": 20,
-    })
+    await raw_list.ainvoke(
+        {
+            "toolkit": "slack",
+            "entity": "messages",
+            "hours": 72,
+            "limit": 20,
+        }
+    )
     call = mock_http[0]
     assert call["path"] == "/api/agent/raw/slack/messages"
     assert "since" in call["params"]
@@ -209,9 +221,13 @@ async def test_cards_recent_path(mock_http, jwt_ctx):
 
 @pytest.mark.asyncio
 async def test_feedback_list_path(mock_http, jwt_ctx):
-    await feedback_list.ainvoke({
-        "kind": "card_action", "action": "dismiss", "limit": 20,
-    })
+    await feedback_list.ainvoke(
+        {
+            "kind": "card_action",
+            "action": "dismiss",
+            "limit": 20,
+        }
+    )
     call = mock_http[0]
     assert call["path"] == "/api/agent/feedback/list"
     assert call["params"]["kind"] == "card_action"
@@ -221,9 +237,11 @@ async def test_feedback_list_path(mock_http, jwt_ctx):
 
 @pytest.mark.asyncio
 async def test_composio_search_tools_post(mock_http, jwt_ctx):
-    await composio_search_tools.ainvoke({
-        "queries": [{"use_case": "send a quick email to recipient"}],
-    })
+    await composio_search_tools.ainvoke(
+        {
+            "queries": [{"use_case": "send a quick email to recipient"}],
+        }
+    )
     call = mock_http[0]
     assert call["method"] == "POST"
     assert call["path"] == "/api/agent/composio/meta/SEARCH_TOOLS"
@@ -232,9 +250,11 @@ async def test_composio_search_tools_post(mock_http, jwt_ctx):
 
 @pytest.mark.asyncio
 async def test_composio_get_tool_schemas_post(mock_http, jwt_ctx):
-    await composio_get_tool_schemas.ainvoke({
-        "tool_slugs": ["GMAIL_CREATE_EMAIL_DRAFT"],
-    })
+    await composio_get_tool_schemas.ainvoke(
+        {
+            "tool_slugs": ["GMAIL_CREATE_EMAIL_DRAFT"],
+        }
+    )
     call = mock_http[0]
     assert call["path"] == "/api/agent/composio/meta/GET_TOOL_SCHEMAS"
     assert call["body"]["args"]["tool_slugs"] == ["GMAIL_CREATE_EMAIL_DRAFT"]
@@ -242,12 +262,16 @@ async def test_composio_get_tool_schemas_post(mock_http, jwt_ctx):
 
 @pytest.mark.asyncio
 async def test_composio_multi_execute_post(mock_http, jwt_ctx):
-    await composio_multi_execute_tool.ainvoke({
-        "calls": [
-            {"tool_slug": "GMAIL_CREATE_EMAIL_DRAFT",
-             "arguments": {"to": "x@y", "subject": "hi"}},
-        ],
-    })
+    await composio_multi_execute_tool.ainvoke(
+        {
+            "calls": [
+                {
+                    "tool_slug": "GMAIL_CREATE_EMAIL_DRAFT",
+                    "arguments": {"to": "x@y", "subject": "hi"},
+                },
+            ],
+        }
+    )
     call = mock_http[0]
     assert call["method"] == "POST"
     assert call["path"] == "/api/agent/composio/meta/MULTI_EXECUTE_TOOL"

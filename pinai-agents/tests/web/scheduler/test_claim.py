@@ -33,13 +33,17 @@ async def test_claim_returns_due_only(pool, user_ids):
     async with user_scoped_tx(pool, user_a) as conn:
         repo = ScheduledTasksRepository(user_a, conn)
         await repo.upsert(
-            id="due_one", kind="auto.dreaming",
-            trigger_kind="schedule", cron_expr="0 6 * * *",
+            id="due_one",
+            kind="auto.dreaming",
+            trigger_kind="schedule",
+            cron_expr="0 6 * * *",
             next_run_at=past,
         )
         await repo.upsert(
-            id="future_one", kind="auto.dreaming",
-            trigger_kind="schedule", cron_expr="0 6 * * *",
+            id="future_one",
+            kind="auto.dreaming",
+            trigger_kind="schedule",
+            cron_expr="0 6 * * *",
             next_run_at=future,
         )
 
@@ -63,16 +67,20 @@ async def test_concurrent_claim_skip_locked(pool, user_ids):
         repo = ScheduledTasksRepository(user_a, conn)
         for i in range(2):
             await repo.upsert(
-                id=f"a_due_{i}", kind="auto.dreaming",
-                trigger_kind="schedule", cron_expr="0 6 * * *",
+                id=f"a_due_{i}",
+                kind="auto.dreaming",
+                trigger_kind="schedule",
+                cron_expr="0 6 * * *",
                 next_run_at=past,
             )
     async with user_scoped_tx(pool, user_b) as conn:
         repo = ScheduledTasksRepository(user_b, conn)
         for i in range(2):
             await repo.upsert(
-                id=f"b_due_{i}", kind="auto.dreaming",
-                trigger_kind="schedule", cron_expr="0 6 * * *",
+                id=f"b_due_{i}",
+                kind="auto.dreaming",
+                trigger_kind="schedule",
+                cron_expr="0 6 * * *",
                 next_run_at=past,
             )
 
@@ -102,17 +110,25 @@ async def test_insert_run_idempotency(pool, user_ids):
 
     async with service_tx(pool) as conn:
         won_a = await insert_run(
-            conn, user_id=user_a, run_id=run_id_a,
-            task_id=task_id, scheduled_for=scheduled_for,
-            lease_owner="worker-1", lease_seconds=60,
+            conn,
+            user_id=user_a,
+            run_id=run_id_a,
+            task_id=task_id,
+            scheduled_for=scheduled_for,
+            lease_owner="worker-1",
+            lease_seconds=60,
         )
     assert won_a is True
 
     async with service_tx(pool) as conn:
         won_b = await insert_run(
-            conn, user_id=user_a, run_id=run_id_b,
-            task_id=task_id, scheduled_for=scheduled_for,
-            lease_owner="worker-2", lease_seconds=60,
+            conn,
+            user_id=user_a,
+            run_id=run_id_b,
+            task_id=task_id,
+            scheduled_for=scheduled_for,
+            lease_owner="worker-2",
+            lease_seconds=60,
         )
     # Same (user, task, scheduled_for) → unique constraint → race lost
     assert won_b is False
@@ -128,9 +144,13 @@ async def test_reap_stale_runs(pool, user_ids):
         # Insert with lease_seconds = -10 → expires immediately in the past.
         # We can't pass negative directly; insert and then UPDATE the row.
         await insert_run(
-            conn, user_id=user_a, run_id=run_id,
-            task_id="reap_task", scheduled_for=past,
-            lease_owner="dead-worker", lease_seconds=60,
+            conn,
+            user_id=user_a,
+            run_id=run_id,
+            task_id="reap_task",
+            scheduled_for=past,
+            lease_owner="dead-worker",
+            lease_seconds=60,
         )
         await conn.execute(
             "UPDATE pai_scheduled_task_runs SET lease_expires_at = NOW() - INTERVAL '1 minute' "

@@ -16,11 +16,16 @@ async def test_add_get_roundtrip(pool, user_ids):
     user_a, _ = user_ids
     async with user_scoped_tx(pool, user_a) as conn:
         repo = MemoryRepository(user_a, conn)
-        added = await repo.add(AddMemoryInput(
-            id="mem_1", text="hello world", source="test",
-            subject="work", quality=0.7,
-            tags=["foo", "bar"],
-        ))
+        added = await repo.add(
+            AddMemoryInput(
+                id="mem_1",
+                text="hello world",
+                source="test",
+                subject="work",
+                quality=0.7,
+                tags=["foo", "bar"],
+            )
+        )
     assert added.id == "mem_1"
     assert added.status == "active"
     assert added.tags == ["foo", "bar"]
@@ -40,8 +45,9 @@ async def test_list_active_filters(pool, user_ids):
         repo = MemoryRepository(user_a, conn)
         await repo.add(AddMemoryInput(id="m_hi", text="hi q", source="t", quality=0.9))
         await repo.add(AddMemoryInput(id="m_lo", text="lo q", source="t", quality=0.2))
-        await repo.add(AddMemoryInput(id="m_work", text="work item", source="t",
-                                      subject="work", quality=0.5))
+        await repo.add(
+            AddMemoryInput(id="m_work", text="work item", source="t", subject="work", quality=0.5)
+        )
 
     async with user_scoped_tx(pool, user_a) as conn:
         repo = MemoryRepository(user_a, conn)

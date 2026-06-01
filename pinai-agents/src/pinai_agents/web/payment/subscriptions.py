@@ -70,7 +70,10 @@ async def get_for_user(conn, user_id: int) -> SubscriptionRow | None:
 
 
 async def upsert_user_stripe_customer(
-    conn, *, user_id: int, stripe_customer_id: str,
+    conn,
+    *,
+    user_id: int,
+    stripe_customer_id: str,
 ) -> None:
     """Persist the Stripe customer_id back onto the users row so
     subsequent checkouts reuse it (avoids duplicate Stripe customers)."""
@@ -105,7 +108,11 @@ async def get_user_stripe_customer(conn, user_id: int) -> str | None:
 
 
 async def sync_from_stripe_subscription(
-    conn, *, user_id: int, plan_code: str | None, stripe_subscription: Any,
+    conn,
+    *,
+    user_id: int,
+    plan_code: str | None,
+    stripe_subscription: Any,
     update_plan_code: bool = True,
 ) -> SubscriptionRow:
     """Upsert pai_subscriptions from a Stripe Subscription object.
@@ -129,12 +136,17 @@ async def sync_from_stripe_subscription(
     sub = stripe_subscription
     sub_id = sub.id if hasattr(sub, "id") else sub.get("id")
     customer = sub.customer if hasattr(sub, "customer") else sub.get("customer")
-    customer_id = customer if isinstance(customer, str) else (
-        customer.get("id") if isinstance(customer, dict) else None
+    customer_id = (
+        customer
+        if isinstance(customer, str)
+        else (customer.get("id") if isinstance(customer, dict) else None)
     )
     status = sub.status if hasattr(sub, "status") else sub.get("status", "inactive")
-    cap = (sub.cancel_at_period_end if hasattr(sub, "cancel_at_period_end")
-           else sub.get("cancel_at_period_end", False))
+    cap = (
+        sub.cancel_at_period_end
+        if hasattr(sub, "cancel_at_period_end")
+        else sub.get("cancel_at_period_end", False)
+    )
     p_start = _coerce_dt(_get(sub, "current_period_start"))
     p_end = _coerce_dt(_get(sub, "current_period_end"))
 
@@ -189,8 +201,7 @@ async def sync_from_stripe_subscription(
                   updated_at = NOW()
                 RETURNING *
                 """,
-                (user_id, customer_id, sub_id, plan_code, status,
-                 p_start, p_end, bool(cap)),
+                (user_id, customer_id, sub_id, plan_code, status, p_start, p_end, bool(cap)),
             )
         row = await cur.fetchone()
     if row is None:
@@ -198,7 +209,9 @@ async def sync_from_stripe_subscription(
         raise RuntimeError(msg)
     if customer_id:
         await upsert_user_stripe_customer(
-            conn, user_id=user_id, stripe_customer_id=customer_id,
+            conn,
+            user_id=user_id,
+            stripe_customer_id=customer_id,
         )
     return SubscriptionRow.from_record(row)
 
@@ -253,7 +266,10 @@ async def find_user_by_stripe_subscription(conn, stripe_subscription_id: str) ->
 
 
 async def set_pending_plan_code(
-    conn, *, user_id: int, pending_plan_code: str,
+    conn,
+    *,
+    user_id: int,
+    pending_plan_code: str,
 ) -> None:
     """Schedule a plan switch to take effect at next renewal. Stored on
     pai_subscriptions.pending_plan_code; consumed by webhook

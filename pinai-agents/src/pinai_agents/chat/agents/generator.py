@@ -537,6 +537,7 @@ async def run_generator(
         # written so the planner has a deterministic file to read.
         try:
             import json as _json  # noqa: PLC0415
+
             await backend.awrite(
                 "/state/matched_patterns.json",
                 _json.dumps(matched_patterns or [], ensure_ascii=False),
@@ -544,7 +545,8 @@ async def run_generator(
         except Exception:
             logger.warning(
                 "failed to stage matched_patterns.json for run=%s — planner will fall back to free-LLM",
-                run_id, exc_info=True,
+                run_id,
+                exc_info=True,
             )
         with run_context(
             user_id=user_id,
@@ -679,12 +681,17 @@ async def run_generator(
     # news item. Best-effort: consume failures don't fail the run
     # (the cards have already been generated; consume is bookkeeping).
     consumed = await _auto_consume_world_signals(
-        cards=structured.cards, run_jwt=run_jwt, run_id=run_id,
+        cards=structured.cards,
+        run_jwt=run_jwt,
+        run_id=run_id,
     )
 
     logger.info(
         "generator ok run_id=%s cards=%d evals=%d world_consumed=%d",
-        run_id, len(structured.cards), len(structured.evaluations), consumed,
+        run_id,
+        len(structured.cards),
+        len(structured.evaluations),
+        consumed,
     )
     return structured
 
@@ -717,7 +724,9 @@ async def _auto_consume_world_signals(
     base = os.environ.get("WEB_INTERNAL_URL", "http://pinai-web:8000")
     headers = {"Authorization": f"Bearer {run_jwt}"}
     consumed = 0
-    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)) as cli:
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
+    ) as cli:
         for sig_id in seen:
             try:
                 resp = await cli.post(
@@ -730,10 +739,15 @@ async def _auto_consume_world_signals(
                 else:
                     logger.warning(
                         "world.consume failed run_id=%s id=%s status=%s",
-                        run_id, sig_id, resp.status_code,
+                        run_id,
+                        sig_id,
+                        resp.status_code,
                     )
             except Exception:
                 logger.warning(
-                    "world.consume error run_id=%s id=%s", run_id, sig_id, exc_info=True,
+                    "world.consume error run_id=%s id=%s",
+                    run_id,
+                    sig_id,
+                    exc_info=True,
                 )
     return consumed

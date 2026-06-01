@@ -71,18 +71,19 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
     # router imports happen below; this block runs first via lifespan).
     if settings.langsmith_tracing and settings.langsmith_api_key:
         import os as _os  # noqa: PLC0415
+
         _os.environ["LANGCHAIN_TRACING_V2"] = "true"
         _os.environ["LANGCHAIN_API_KEY"] = settings.langsmith_api_key
         _os.environ["LANGCHAIN_PROJECT"] = settings.langsmith_project
         _os.environ["LANGCHAIN_ENDPOINT"] = settings.langsmith_endpoint
         logger.info(
             "langsmith tracing ENABLED project=%s endpoint=%s",
-            settings.langsmith_project, settings.langsmith_endpoint,
+            settings.langsmith_project,
+            settings.langsmith_endpoint,
         )
     else:
         logger.info(
-            "langsmith tracing disabled (set LANGSMITH_TRACING=true + "
-            "LANGSMITH_API_KEY to enable)",
+            "langsmith tracing disabled (set LANGSMITH_TRACING=true + LANGSMITH_API_KEY to enable)",
         )
 
     if settings.database_url:

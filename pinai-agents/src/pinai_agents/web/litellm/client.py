@@ -80,7 +80,8 @@ def _records(payload: Any) -> list[dict[str, Any]]:
 
 
 async def _request(
-    method: str, path: str,
+    method: str,
+    path: str,
     *,
     json_body: dict[str, Any] | None = None,
     params: dict[str, Any] | None = None,
@@ -115,7 +116,11 @@ async def _request(
     timeout = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
     async with httpx.AsyncClient(timeout=timeout) as cli:
         resp = await cli.request(
-            method, url, json=json_body, params=params, headers=headers,
+            method,
+            url,
+            json=json_body,
+            params=params,
+            headers=headers,
         )
     text = resp.text
     parsed: Any = None
@@ -141,7 +146,8 @@ async def _request(
 
 async def create_user(
     *,
-    user_id: str, user_alias: str,
+    user_id: str,
+    user_alias: str,
     auto_create_key: bool = False,
     metadata: dict[str, Any] | None = None,
 ) -> None:
@@ -167,7 +173,8 @@ async def create_user(
 
 async def generate_key(
     *,
-    user_id: str, key_alias: str,
+    user_id: str,
+    key_alias: str,
     max_budget_usd: float | None,
     budget_duration: str | None,
     rpm_limit: int | None,
@@ -233,14 +240,13 @@ async def list_models_for_key(virtual_key: str) -> set[str]:
     if not isinstance(data, list):
         return set()
     return {
-        item["id"]
-        for item in data
-        if isinstance(item, dict) and isinstance(item.get("id"), str)
+        item["id"] for item in data if isinstance(item, dict) and isinstance(item.get("id"), str)
     }
 
 
 async def update_key(
-    *, virtual_key: str,
+    *,
+    virtual_key: str,
     max_budget_usd: float | None = None,
     budget_duration: str | None = None,
     models: list[str] | None = None,
@@ -283,7 +289,9 @@ async def get_key_info(virtual_key: str) -> dict[str, Any]:
         # /key/info on some LiteLLM versions rejects GET; fall back to POST.
         if e.status_code in (404, 405):
             parsed = await _request(
-                "POST", "/key/info", json_body={"key": virtual_key},
+                "POST",
+                "/key/info",
+                json_body={"key": virtual_key},
             )
         else:
             raise
@@ -310,13 +318,17 @@ async def list_keys_for_user(user_id: str) -> list[dict[str, Any]]:
     locations depending on version; we walk all candidates."""
     try:
         parsed = await _request(
-            "GET", "/user/info", params={"user_id": user_id},
+            "GET",
+            "/user/info",
+            params={"user_id": user_id},
         )
     except LiteLLMError as e:
         # Some LiteLLM versions reject GET; fall back to POST.
         if e.status_code in (404, 405):
             parsed = await _request(
-                "POST", "/user/info", json_body={"user_id": user_id},
+                "POST",
+                "/user/info",
+                json_body={"user_id": user_id},
             )
         else:
             raise

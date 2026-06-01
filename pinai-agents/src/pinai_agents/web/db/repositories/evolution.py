@@ -51,8 +51,10 @@ class EvolutionRunRow:
             if v is None:
                 return None
             return v if isinstance(v, dict) else json.loads(v)
+
         return cls(
-            id=row["id"], trigger_kind=row["trigger_kind"],
+            id=row["id"],
+            trigger_kind=row["trigger_kind"],
             status=row["status"],
             context_summary=row.get("context_summary"),
             window_start=row.get("window_start"),
@@ -100,8 +102,13 @@ class EvolutionRepository(UserScopedRepository):
                 RETURNING *
                 """,
                 (
-                    self._user_id, rid, trigger_kind,
-                    context_summary, window_start, window_end, prompt_excerpt,
+                    self._user_id,
+                    rid,
+                    trigger_kind,
+                    context_summary,
+                    window_start,
+                    window_end,
+                    prompt_excerpt,
                 ),
             )
             row = await cur.fetchone()
@@ -130,9 +137,12 @@ class EvolutionRepository(UserScopedRepository):
                 """,
                 (
                     self._user_id,
-                    trigger_kind, trigger_kind,
-                    status, status,
-                    since, since,
+                    trigger_kind,
+                    trigger_kind,
+                    status,
+                    status,
+                    since,
+                    since,
                     limit,
                 ),
             )
@@ -192,17 +202,22 @@ class EvolutionRepository(UserScopedRepository):
                 """,
                 (
                     context_summary,
-                    memories_written, memories_archived, memories_superseded,
+                    memories_written,
+                    memories_archived,
+                    memories_superseded,
                     profile_updated,
-                    json.dumps(profile_changed_keys)
-                    if profile_changed_keys is not None else None,
-                    skills_added, skills_updated, skills_disabled,
+                    json.dumps(profile_changed_keys) if profile_changed_keys is not None else None,
+                    skills_added,
+                    skills_updated,
+                    skills_disabled,
                     signals_consumed,
                     json.dumps(refs_consumed) if refs_consumed is not None else None,
                     json.dumps(refs_produced) if refs_produced is not None else None,
-                    llm_tokens, duration_ms,
+                    llm_tokens,
+                    duration_ms,
                     json.dumps(details) if details is not None else None,
-                    self._user_id, run_id,
+                    self._user_id,
+                    run_id,
                 ),
             )
             return (cur.rowcount or 0) > 0
@@ -244,8 +259,13 @@ class EvolutionRepository(UserScopedRepository):
                   AND (created_run_id = %s OR last_updated_run_id = %s)
                 """,
                 (
-                    run_id, run_id, run_id, run_id,
-                    self._user_id, run_id, run_id,
+                    run_id,
+                    run_id,
+                    run_id,
+                    run_id,
+                    self._user_id,
+                    run_id,
+                    run_id,
                 ),
             )
             skills = await cur.fetchone() or {}

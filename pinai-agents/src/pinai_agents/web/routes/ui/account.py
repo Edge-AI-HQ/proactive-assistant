@@ -26,7 +26,8 @@ router = APIRouter(prefix="/api/account", tags=["account"])
 
 @router.delete("")
 async def delete_account(
-    user: User = Depends(current_user), pool=Depends(get_pool),
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
 ) -> dict:
     """Permanently delete the authenticated user.
 
@@ -45,7 +46,9 @@ async def delete_account(
         # the client knows what to communicate to the user (and what's
         # safe to retry).
         logger.error(
-            "account.delete: aborted user=%s: %s", user.id, e,
+            "account.delete: aborted user=%s: %s",
+            user.id,
+            e,
         )
         raise HTTPException(
             status_code=502,

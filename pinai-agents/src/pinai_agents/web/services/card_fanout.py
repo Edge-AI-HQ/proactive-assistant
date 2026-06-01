@@ -95,9 +95,17 @@ def _card_context_for(card: dict[str, Any]) -> dict[str, Any]:
     path or this fan-out path.
     """
     keys = (
-        "id", "title", "goalBasket", "whyNow", "summary",
-        "primaryAction", "secondaryActions",
-        "confidence", "urgency", "importance", "sources",
+        "id",
+        "title",
+        "goalBasket",
+        "whyNow",
+        "summary",
+        "primaryAction",
+        "secondaryActions",
+        "confidence",
+        "urgency",
+        "importance",
+        "sources",
     )
     return {k: card[k] for k in keys if k in card}
 
@@ -118,7 +126,10 @@ async def _virtual_key_for(pool: AsyncConnectionPool, user_id: int) -> str:
 
 
 async def _ensure_thread_row(
-    pool: AsyncConnectionPool, *, user_id: int, session_key: str,
+    pool: AsyncConnectionPool,
+    *,
+    user_id: int,
+    session_key: str,
     card_id: str,
 ) -> None:
     """Insert the pai_chat_threads metadata row.
@@ -135,15 +146,19 @@ async def _ensure_thread_row(
     try:
         async with user_scoped_tx(pool, user_id) as conn:
             await ChatThreadsRepository(
-                user_id=user_id, conn=conn,
+                user_id=user_id,
+                conn=conn,
             ).insert_thread(
-                thread_id=session_key, kind="card",
-                card_id=card_id, title=None,
+                thread_id=session_key,
+                kind="card",
+                card_id=card_id,
+                title=None,
             )
     except Exception:
         logger.exception(
             "fanout: insert_thread failed user=%d session=%s — continuing",
-            user_id, session_key,
+            user_id,
+            session_key,
         )
 
 
@@ -174,29 +189,36 @@ async def _bootstrap_one_card(
     bootstrap = _bootstrap_message_for(card)
     if not bootstrap:
         logger.debug(
-            "fanout: card=%s missing bootstrap message; skip", card_id,
+            "fanout: card=%s missing bootstrap message; skip",
+            card_id,
         )
         return
 
     try:
         already = await call_chat_exists(
-            user_id=user_id, session_key=session_key,
+            user_id=user_id,
+            session_key=session_key,
         )
     except Exception:
         logger.exception(
             "fanout: chat_exists probe failed user=%d card=%s — proceeding",
-            user_id, card_id,
+            user_id,
+            card_id,
         )
         already = False
     if already:
         logger.info(
             "fanout: thread already has turns user=%d session=%s — skip",
-            user_id, session_key,
+            user_id,
+            session_key,
         )
         return
 
     await _ensure_thread_row(
-        pool, user_id=user_id, session_key=session_key, card_id=card_id,
+        pool,
+        user_id=user_id,
+        session_key=session_key,
+        card_id=card_id,
     )
 
     ctx = _card_context_for(card)
@@ -216,12 +238,16 @@ async def _bootstrap_one_card(
             pass
         logger.info(
             "fanout: bootstrap done user=%d card=%s session=%s",
-            user_id, card_id, session_key,
+            user_id,
+            card_id,
+            session_key,
         )
     except Exception:
         logger.exception(
             "fanout: bootstrap stream failed user=%d card=%s session=%s",
-            user_id, card_id, session_key,
+            user_id,
+            card_id,
+            session_key,
         )
 
 
@@ -246,8 +272,9 @@ async def dispatch_card_bootstrap(
     """
     if not _fanout_enabled():
         logger.info(
-            "fanout: disabled by PINAI_CARD_FANOUT_ENABLED env; "
-            "skipping %d cards user=%d", len(final_cards), user_id,
+            "fanout: disabled by PINAI_CARD_FANOUT_ENABLED env; skipping %d cards user=%d",
+            len(final_cards),
+            user_id,
         )
         return []
 
@@ -270,14 +297,17 @@ async def dispatch_card_bootstrap(
         dispatched.append(card_id)
         task = asyncio.create_task(
             _bootstrap_one_card(
-                pool=pool, user_id=user_id,
-                card=card, virtual_key=virtual_key,
+                pool=pool,
+                user_id=user_id,
+                card=card,
+                virtual_key=virtual_key,
             ),
             name=f"card_fanout:{user_id}:{card_id}",
         )
         _pin_task(task)
     logger.info(
         "fanout: dispatched %d card bootstraps user=%d",
-        len(dispatched), user_id,
+        len(dispatched),
+        user_id,
     )
     return dispatched

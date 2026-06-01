@@ -135,7 +135,8 @@ async def run_dream(
     model: str | None = None,
 ) -> dict[str, Any]:
     backend, raw = await create_oneshot_sandbox(
-        run_jwt=run_jwt, scope_label="dream",
+        run_jwt=run_jwt,
+        scope_label="dream",
     )
     try:
         agent = create_deep_agent(
@@ -143,20 +144,24 @@ async def run_dream(
             system_prompt=_DREAM_SYSTEM_PROMPT,
             backend=backend,
         )
-        result: dict[str, Any] = await agent.ainvoke({
-            "messages": [{
-                "role": "user",
-                "content": (
-                    f"Run nightly dream for user_id={user_id} run_id={run_id}. "
-                    "Before analysis, gather the full daily context with "
-                    f"client.signals.recent(status='all', hours={_DREAM_LOOKBACK_HOURS}, "
-                    f"limit={_DREAM_MAX_ROWS}, include_payload=True) and same-window raw.list calls "
-                    f"with limit={_DREAM_MAX_ROWS}. Use signals as the primary "
-                    "source and raw as supporting evidence. Distill into "
-                    "memory/profile updates only when the evidence is direct."
-                ),
-            }],
-        })
+        result: dict[str, Any] = await agent.ainvoke(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Run nightly dream for user_id={user_id} run_id={run_id}. "
+                            "Before analysis, gather the full daily context with "
+                            f"client.signals.recent(status='all', hours={_DREAM_LOOKBACK_HOURS}, "
+                            f"limit={_DREAM_MAX_ROWS}, include_payload=True) and same-window raw.list calls "
+                            f"with limit={_DREAM_MAX_ROWS}. Use signals as the primary "
+                            "source and raw as supporting evidence. Distill into "
+                            "memory/profile updates only when the evidence is direct."
+                        ),
+                    }
+                ],
+            }
+        )
     finally:
         await delete_sandbox_now(raw)
     msgs = result.get("messages", [])

@@ -47,7 +47,7 @@ class AgentAuditMiddleware(BaseHTTPMiddleware):
         auth = request.headers.get("authorization")
         if auth and auth.lower().startswith("bearer "):
             try:
-                claims = verify_agent_run_jwt(auth[len("bearer "):].strip())
+                claims = verify_agent_run_jwt(auth[len("bearer ") :].strip())
                 user_id = claims.user_id
                 run_id = claims.run_id
             except AgentJWTError:
@@ -63,16 +63,24 @@ class AgentAuditMiddleware(BaseHTTPMiddleware):
             # skip persistence. Log to stderr for grep.
             logger.info(
                 "audit: %s %s status=%s lat=%dms user=%s run=%s (pool=%s)",
-                request.method, path, response.status_code, latency_ms,
-                user_id or "?", run_id or "?", "yes" if pool else "no",
+                request.method,
+                path,
+                response.status_code,
+                latency_ms,
+                user_id or "?",
+                run_id or "?",
+                "yes" if pool else "no",
             )
             return response
 
         await log_request(
             pool,
-            user_id=user_id, run_id=run_id,
-            endpoint=path, method=request.method,
-            status=response.status_code, latency_ms=latency_ms,
+            user_id=user_id,
+            run_id=run_id,
+            endpoint=path,
+            method=request.method,
+            status=response.status_code,
+            latency_ms=latency_ms,
             error_code=None if response.status_code < 400 else f"http_{response.status_code}",
         )
         return response

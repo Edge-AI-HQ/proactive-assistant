@@ -197,11 +197,11 @@ def main(argv: list[str]) -> int:
 def print_report(rows: list[dict[str, Any]]) -> None:
     duplicate_rows = [row for row in rows if row["group_count"] > 1 and row["rn"] > 1]
     normalize_rows = [
-        row for row in rows
-        if row["rn"] == 1 and row["dedupe_key"] != row["canonical_key"]
+        row for row in rows if row["rn"] == 1 and row["dedupe_key"] != row["canonical_key"]
     ]
     clean_rows = [
-        row for row in rows
+        row
+        for row in rows
         if row["rn"] == 1
         and (
             "Transcript segment:" in (row["summary"] or "")

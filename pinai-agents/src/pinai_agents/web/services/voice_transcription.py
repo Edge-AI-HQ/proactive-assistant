@@ -158,8 +158,7 @@ async def transcribe_audio_diarized(
 
     reference_mime = known_speaker_reference_mime or "audio/wav"
     reference_data_url = (
-        f"data:{reference_mime};base64,"
-        f"{base64.b64encode(known_speaker_reference).decode('ascii')}"
+        f"data:{reference_mime};base64,{base64.b64encode(known_speaker_reference).decode('ascii')}"
     )
     data = {
         "model": model,
@@ -230,12 +229,16 @@ def _parse_diarized_transcription(payload: Any) -> DiarizedTranscriptionResult:
         if not isinstance(segment_text, str) or not segment_text.strip():
             continue
         speaker = raw.get("speaker")
-        segments.append(SpeakerSegment(
-            speaker=speaker.strip() if isinstance(speaker, str) and speaker.strip() else "other",
-            text=segment_text.strip(),
-            start_ms=_seconds_to_ms(raw.get("start")),
-            end_ms=_seconds_to_ms(raw.get("end")),
-        ))
+        segments.append(
+            SpeakerSegment(
+                speaker=speaker.strip()
+                if isinstance(speaker, str) and speaker.strip()
+                else "other",
+                text=segment_text.strip(),
+                start_ms=_seconds_to_ms(raw.get("start")),
+                end_ms=_seconds_to_ms(raw.get("end")),
+            )
+        )
     return DiarizedTranscriptionResult(text=text.strip(), segments=segments)
 
 

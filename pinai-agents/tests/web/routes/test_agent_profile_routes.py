@@ -43,6 +43,7 @@ def _gen_keypair_b64() -> str:
 def _set_signing_key(monkeypatch):
     monkeypatch.setenv("PAI_JWT_SIGNING_KEY", _gen_keypair_b64())
     from pinai_agents import config
+
     config.get_web_settings.cache_clear()
     config.get_chat_settings.cache_clear()
     yield
@@ -56,7 +57,8 @@ async def client(pool):
     app.state.pool = pool
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://testserver",
+        transport=transport,
+        base_url="http://testserver",
     ) as c:
         yield c
 
@@ -82,7 +84,9 @@ async def test_profile_upsert_creates_row_with_defaults(client, user_ids):
     (display_name='User', locale='en-US', timezone='UTC', JSONB→{})."""
     user_a, _ = user_ids
     r = await client.post(
-        "/api/agent/profile/upsert", headers=_auth(user_a), json={},
+        "/api/agent/profile/upsert",
+        headers=_auth(user_a),
+        json={},
     )
     assert r.status_code == 200, r.text
     body = r.json()

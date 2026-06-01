@@ -136,9 +136,7 @@ class ChatLiteLLMReasoning(ChatOpenAI):
         consumers see the same shape as the streaming path.
         """
         result = super()._create_chat_result(response, generation_info)
-        response_dict = (
-            response if isinstance(response, dict) else response.model_dump()
-        )
+        response_dict = response if isinstance(response, dict) else response.model_dump()
         response_reasoning = extract_reasoning_text(response_dict)
         choices = response_dict.get("choices") or []
         for index, gen in enumerate(result.generations):

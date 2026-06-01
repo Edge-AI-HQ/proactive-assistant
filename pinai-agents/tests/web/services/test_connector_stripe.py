@@ -63,9 +63,9 @@ def test_map_stripe_invoice_handles_expanded_customer():
 def test_map_stripe_invoice_amounts_reject_floats_and_bools():
     raw = {
         "id": "in_3",
-        "amount_due": True,         # bool — must NOT count as int
-        "amount_paid": "5000",      # numeric string — accept
-        "amount_remaining": 1.5,    # float — reject (cents are int)
+        "amount_due": True,  # bool — must NOT count as int
+        "amount_paid": "5000",  # numeric string — accept
+        "amount_remaining": 1.5,  # float — reject (cents are int)
     }
     mapped = connector_ingest._map_stripe_invoice(raw)
     assert mapped is not None
@@ -86,14 +86,23 @@ def _sync_task(toolkit: str, user_id: int, cid: str) -> ScheduledTaskRow:
         user_id=user_id,
         id=f"sync.{toolkit}.{cid}",
         kind="connector.sync",
-        name=None, prompt=None,
-        trigger_kind="schedule", cron_expr="*/30 * * * *",
-        interval_seconds=None, event_filter=None,
+        name=None,
+        prompt=None,
+        trigger_kind="schedule",
+        cron_expr="*/30 * * * *",
+        interval_seconds=None,
+        event_filter=None,
         payload={"toolkit": toolkit, "connectedAccountId": cid},
-        timezone="UTC", status="active",
-        next_run_at=None, last_run_at=datetime.now(UTC),
-        last_run_status="dispatched", run_count=1,
-        attempts=0, max_attempts=3, progress={}, last_error=None,
+        timezone="UTC",
+        status="active",
+        next_run_at=None,
+        last_run_at=datetime.now(UTC),
+        last_run_status="dispatched",
+        run_count=1,
+        attempts=0,
+        max_attempts=3,
+        progress={},
+        last_error=None,
     )
 
 
@@ -111,27 +120,33 @@ def _patch_fetch(monkeypatch, toolkit: str, items_box: dict):
 
 @pytest.mark.asyncio
 async def test_stripe_sync_status_flips_open_to_paid(
-    pool, user_ids, monkeypatch,
+    pool,
+    user_ids,
+    monkeypatch,
 ):
     user_a, _ = user_ids
-    box = {"items": [
-        {
-            "id": "in_payflip",
-            "number": "INV-9",
-            "status": "open",
-            "amount_due": 5000,
-            "amount_paid": 0,
-            "amount_remaining": 5000,
-            "currency": "usd",
-            "customer": "cus_pay",
-            "created": 1714521600,
-        },
-    ]}
+    box = {
+        "items": [
+            {
+                "id": "in_payflip",
+                "number": "INV-9",
+                "status": "open",
+                "amount_due": 5000,
+                "amount_paid": 0,
+                "amount_remaining": 5000,
+                "currency": "usd",
+                "customer": "cus_pay",
+                "created": 1714521600,
+            },
+        ]
+    }
     _patch_fetch(monkeypatch, "stripe", box)
 
     async with user_scoped_tx(pool, user_a) as conn:
         await enqueue_once(
-            conn, user_id=user_a, task_id="sync.stripe.cidST",
+            conn,
+            user_id=user_a,
+            task_id="sync.stripe.cidST",
             kind="connector.sync",
             payload={"toolkit": "stripe", "connectedAccountId": "cidST"},
         )

@@ -82,8 +82,11 @@ class SSEEvent(BaseModel):
 
 
 def emit(
-    type: str, data: dict[str, Any] | None = None,
-    *, trace_id: str | None = None, ts_ms: int | None = None,
+    type: str,
+    data: dict[str, Any] | None = None,
+    *,
+    trace_id: str | None = None,
+    ts_ms: int | None = None,
 ) -> bytes:
     """Build one SSE-encoded event.
 

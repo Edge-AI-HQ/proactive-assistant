@@ -41,6 +41,7 @@ def _set_signing_key(monkeypatch):
     # The audience / issuer claims default to whatever config provides;
     # we just need a consistent value across sign + verify in this test.
     from pinai_agents import config
+
     config.get_web_settings.cache_clear()
     config.get_chat_settings.cache_clear()
     clear_cache_for_tests()
@@ -56,7 +57,8 @@ async def client(pool):
     app.state.pool = pool
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://testserver",
+        transport=transport,
+        base_url="http://testserver",
     ) as c:
         yield c
 

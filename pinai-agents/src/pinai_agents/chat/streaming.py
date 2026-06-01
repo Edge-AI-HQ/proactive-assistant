@@ -80,7 +80,10 @@ def chat_reasoning_delta(text: str, *, trace_id: str | None = None) -> bytes:
 
 
 def chat_tool_start(
-    *, tool_call_id: str, name: str, args_preview: str,
+    *,
+    tool_call_id: str,
+    name: str,
+    args_preview: str,
     args: Any = None,
     trace_id: str | None = None,
 ) -> bytes:
@@ -95,14 +98,21 @@ def chat_tool_start(
 
 
 def chat_tool_result(
-    *, tool_call_id: str, is_error: bool, meta: str,
+    *,
+    tool_call_id: str,
+    is_error: bool,
+    meta: str,
     trace_id: str | None = None,
 ) -> bytes:
-    return emit(EV_CHAT_TOOL_RESULT, {
-        "toolCallId": tool_call_id,
-        "isError": is_error,
-        "meta": meta[:_META_LIMIT],
-    }, trace_id=trace_id)
+    return emit(
+        EV_CHAT_TOOL_RESULT,
+        {
+            "toolCallId": tool_call_id,
+            "isError": is_error,
+            "meta": meta[:_META_LIMIT],
+        },
+        trace_id=trace_id,
+    )
 
 
 def chat_error(message: str, *, trace_id: str | None = None) -> bytes:
@@ -264,22 +274,12 @@ async def langgraph_to_sse(
                 if output is None:
                     continue
                 reasoning = _extract_chunk_reasoning(output)
-                if (
-                    reasoning
-                    and not (
-                        isinstance(run_id, str)
-                        and run_id in streamed_reasoning_run_ids
-                    )
+                if reasoning and not (
+                    isinstance(run_id, str) and run_id in streamed_reasoning_run_ids
                 ):
                     yield chat_reasoning_delta(reasoning, trace_id=trace_id)
                 text = _extract_chunk_text(output)
-                if (
-                    text
-                    and not (
-                        isinstance(run_id, str)
-                        and run_id in streamed_text_run_ids
-                    )
-                ):
+                if text and not (isinstance(run_id, str) and run_id in streamed_text_run_ids):
                     yield chat_delta(text, trace_id=trace_id)
 
             elif etype == "on_tool_start":
@@ -288,7 +288,8 @@ async def langgraph_to_sse(
                 raw_input = data.get("input")
                 args_preview = _safe_preview(raw_input)
                 yield chat_tool_start(
-                    tool_call_id=tool_call_id, name=name,
+                    tool_call_id=tool_call_id,
+                    name=name,
                     args_preview=args_preview,
                     args=_safe_args(raw_input),
                     trace_id=trace_id,
@@ -304,8 +305,10 @@ async def langgraph_to_sse(
                 else:
                     meta = _safe_preview(output, _META_LIMIT)
                 yield chat_tool_result(
-                    tool_call_id=tool_call_id, is_error=is_error,
-                    meta=meta, trace_id=trace_id,
+                    tool_call_id=tool_call_id,
+                    is_error=is_error,
+                    meta=meta,
+                    trace_id=trace_id,
                 )
             # Everything else (on_chain_*, on_chat_model_start,
             # on_prompt_*, etc.) is intentionally ignored — they're either

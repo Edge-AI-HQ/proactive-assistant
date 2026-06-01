@@ -91,21 +91,31 @@ class Memory(_Endpoint):
     ) -> list[dict[str, Any]]:
         payload = await self._get(
             "/list",
-            minQuality=min_quality, subject=subject,
+            minQuality=min_quality,
+            subject=subject,
             subjectPrefix=subject_prefix,
             since=_iso(since) if since is not None else None,
-            limit=limit, offset=offset, orderBy=order_by,
+            limit=limit,
+            offset=offset,
+            orderBy=order_by,
         )
         return payload.get("items", []) if isinstance(payload, dict) else []
 
     async def search(
-        self, *, q: str, min_quality: float | None = None, limit: int = 10,
+        self,
+        *,
+        q: str,
+        min_quality: float | None = None,
+        limit: int = 10,
     ) -> list[dict[str, Any]]:
         """Semantic search via pgvector. Falls back via 503 if the
         embedding service is down — caller can switch to .list with
         `subject_prefix` for keyword filtering."""
         payload = await self._get(
-            "/search", q=q, minQuality=min_quality, limit=limit,
+            "/search",
+            q=q,
+            minQuality=min_quality,
+            limit=limit,
         )
         return payload.get("items", []) if isinstance(payload, dict) else []
 
@@ -124,11 +134,19 @@ class Memory(_Endpoint):
         tags: list[str] | None = None,
         id: str | None = None,
     ) -> dict[str, Any]:
-        return await self._post("/add", {
-            "id": id, "text": text, "source": source, "subject": subject,
-            "quality": quality, "confidence": confidence,
-            "sourceRunId": source_run_id, "tags": tags or [],
-        })
+        return await self._post(
+            "/add",
+            {
+                "id": id,
+                "text": text,
+                "source": source,
+                "subject": subject,
+                "quality": quality,
+                "confidence": confidence,
+                "sourceRunId": source_run_id,
+                "tags": tags or [],
+            },
+        )
 
     async def archive(self, id: str) -> dict[str, Any] | None:
         """Mark a memory archived. Returns the archived row, or None if
@@ -136,13 +154,17 @@ class Memory(_Endpoint):
         return await self._post(f"/archive/{id}", {})
 
     async def supersede(
-        self, *, old_id: str, new_id: str,
+        self,
+        *,
+        old_id: str,
+        new_id: str,
     ) -> dict[str, Any] | None:
         """Atomically replace old_id with new_id (used by dream/crystallize
         when restating a fact more accurately). Prefer one supersede over
         two archives + an add."""
         return await self._post(
-            "/supersede", {"oldId": old_id, "newId": new_id},
+            "/supersede",
+            {"oldId": old_id, "newId": new_id},
         )
 
 
@@ -178,8 +200,12 @@ class Signals(_Endpoint):
         """status ∈ {open, consumed, archived, all}. hours filters by
         occurred_at window (server-side translation to since)."""
         payload = await self._get(
-            "/recent", status=status, kind=kind, hours=hours,
-            minSalience=min_salience, limit=limit,
+            "/recent",
+            status=status,
+            kind=kind,
+            hours=hours,
+            minSalience=min_salience,
+            limit=limit,
             includePayload=include_payload,
         )
         return payload.get("items", []) if isinstance(payload, dict) else []
@@ -210,8 +236,11 @@ class Signals(_Endpoint):
         Use connector-natural keys for dedupe_key (gmail.<thread_id>,
         gcal.<event_id>) to avoid duplicates across evolve runs."""
         body: dict[str, Any] = {
-            "kind": kind, "title": title, "summary": summary,
-            "salience": salience, "confidence": confidence,
+            "kind": kind,
+            "title": title,
+            "summary": summary,
+            "salience": salience,
+            "confidence": confidence,
             "source": source,
         }
         if dedupe_key is not None:
@@ -257,15 +286,18 @@ class Profile(_Endpoint):
         field call doesn't clobber the rest. JSONB buckets (facts /
         preferences / constraints) are *replaced wholesale* — read-merge-
         write client-side if you want to preserve sibling keys."""
-        return await self._post("/upsert", {
-            "displayName": display_name,
-            "locale": locale,
-            "timezone": timezone,
-            "summary": summary,
-            "facts": facts,
-            "preferences": preferences,
-            "constraints": constraints,
-        })
+        return await self._post(
+            "/upsert",
+            {
+                "displayName": display_name,
+                "locale": locale,
+                "timezone": timezone,
+                "summary": summary,
+                "facts": facts,
+                "preferences": preferences,
+                "constraints": constraints,
+            },
+        )
 
     async def upsert_goal(
         self,
@@ -280,23 +312,29 @@ class Profile(_Endpoint):
         """Insert or update a long-term named goal. Conflict-on-`key`,
         so passing the same `key` twice updates in place. Use a stable
         slug (`'sub3-marathon'`, `'staff-promo-2026'`)."""
-        return await self._post("/goals/upsert", {
-            "id": id,
-            "key": key,
-            "title": title,
-            "priority": priority,
-            "status": status,
-            "summary": summary,
-        })
+        return await self._post(
+            "/goals/upsert",
+            {
+                "id": id,
+                "key": key,
+                "title": title,
+                "priority": priority,
+                "status": status,
+                "summary": summary,
+            },
+        )
 
     async def merge_preference(self, *, key: str, value: str) -> dict[str, Any]:
         """Merge one durable preference into pai_profile.preferences.
         Safer than `upsert(preferences=...)` because it preserves sibling
         keys server-side."""
-        return await self._post("/preferences/merge", {
-            "key": key,
-            "value": value,
-        })
+        return await self._post(
+            "/preferences/merge",
+            {
+                "key": key,
+                "value": value,
+            },
+        )
 
 
 class Cards(_Endpoint):
@@ -325,7 +363,9 @@ class Feedback(_Endpoint):
         """Recent feedback events — used by generator to learn what the
         user dismissed / confirmed and shape the next batch."""
         payload = await self._get(
-            "/list", kind=kind, action=action,
+            "/list",
+            kind=kind,
+            action=action,
             since=_iso(since) if since is not None else None,
             limit=limit,
         )
@@ -347,13 +387,21 @@ class Feedback(_Endpoint):
     ) -> dict[str, Any]:
         """Log an agent-derived feedback event (crystallize / dream).
         `source='agent'` distinguishes from user-direct feedback."""
-        return await self._post("/log", {
-            "kind": kind, "action": action,
-            "intentCardId": intent_card_id, "intentKey": intent_key,
-            "source": source, "basket": basket,
-            "value": value, "text": text,
-            "metadata": metadata or {}, "channel": channel,
-        })
+        return await self._post(
+            "/log",
+            {
+                "kind": kind,
+                "action": action,
+                "intentCardId": intent_card_id,
+                "intentKey": intent_key,
+                "source": source,
+                "basket": basket,
+                "value": value,
+                "text": text,
+                "metadata": metadata or {},
+                "channel": channel,
+            },
+        )
 
 
 class World(_Endpoint):
@@ -370,8 +418,12 @@ class World(_Endpoint):
         limit: int = 30,
     ) -> list[dict[str, Any]]:
         payload = await self._get(
-            "/recent", status=status, provider=provider,
-            hours=hours, minSalience=min_salience, limit=limit,
+            "/recent",
+            status=status,
+            provider=provider,
+            hours=hours,
+            minSalience=min_salience,
+            limit=limit,
         )
         return payload.get("items", []) if isinstance(payload, dict) else []
 
@@ -397,10 +449,15 @@ class World(_Endpoint):
         scored_reason: str | None = None,
         status: str = "open",
     ) -> None:
-        await self._post("/score", {
-            "id": id, "salience": salience,
-            "scoredReason": scored_reason, "status": status,
-        })
+        await self._post(
+            "/score",
+            {
+                "id": id,
+                "salience": salience,
+                "scoredReason": scored_reason,
+                "status": status,
+            },
+        )
 
     async def consume(self, *, id: str, run_id: str) -> None:
         await self._post("/consume", {"id": id, "runId": run_id})
@@ -449,10 +506,7 @@ class Raw:
         # Validate (toolkit, entity) early — saves a round-trip + gives
         # a clearer error than the server's 404. Server still enforces.
         if toolkit not in SUPPORTED_RAW_SOURCES:
-            msg = (
-                f"unknown raw toolkit: {toolkit!r}. "
-                f"Supported: {sorted(SUPPORTED_RAW_SOURCES)}"
-            )
+            msg = f"unknown raw toolkit: {toolkit!r}. Supported: {sorted(SUPPORTED_RAW_SOURCES)}"
             raise ValueError(msg)
         if entity not in SUPPORTED_RAW_SOURCES[toolkit]:
             msg = (
@@ -472,7 +526,8 @@ class Raw:
             params["dedupeKey"] = dedupe_key
 
         payload = await self._parent._get(
-            f"/api/agent/raw/{toolkit}/{entity}", **params,
+            f"/api/agent/raw/{toolkit}/{entity}",
+            **params,
         )
         return payload.get("items", []) if isinstance(payload, dict) else []
 
@@ -490,10 +545,16 @@ class _GmailRaw:
         self._raw = raw
 
     async def recent(
-        self, *, hours: int = 24, limit: int = 20,
+        self,
+        *,
+        hours: int = 24,
+        limit: int = 20,
     ) -> list[dict[str, Any]]:
         return await self._raw.list(
-            "gmail", "messages", hours=hours, limit=limit,
+            "gmail",
+            "messages",
+            hours=hours,
+            limit=limit,
         )
 
 
@@ -502,10 +563,16 @@ class _GcalRaw:
         self._raw = raw
 
     async def today(
-        self, *, hours: int = 48, limit: int = 20,
+        self,
+        *,
+        hours: int = 48,
+        limit: int = 20,
     ) -> list[dict[str, Any]]:
         return await self._raw.list(
-            "gcal", "events", hours=hours, limit=limit,
+            "gcal",
+            "events",
+            hours=hours,
+            limit=limit,
         )
 
 
@@ -544,9 +611,14 @@ class Composio(_Endpoint):
         """Search Composio's tool catalog by use-case query. Returns
         ranked tool slugs + descriptions; call .schema() for full args.
         """
-        payload = await self._post("/search", {
-            "query": query, "toolkit": toolkit, "limit": limit,
-        })
+        payload = await self._post(
+            "/search",
+            {
+                "query": query,
+                "toolkit": toolkit,
+                "limit": limit,
+            },
+        )
         if isinstance(payload, dict) and "items" in payload:
             return payload["items"]
         return []
@@ -565,11 +637,14 @@ class Composio(_Endpoint):
         """Execute one Composio tool. `args` matches the tool's input
         schema (use .schema(slug) to confirm). Errors come back inside
         the response (`{successful: false, error: "..."}`)."""
-        return await self._post("/execute", {
-            "slug": slug,
-            "args": args or {},
-            "connected_account_id": connected_account_id,
-        })
+        return await self._post(
+            "/execute",
+            {
+                "slug": slug,
+                "args": args or {},
+                "connected_account_id": connected_account_id,
+            },
+        )
 
     async def multi_execute(
         self,
@@ -580,9 +655,13 @@ class Composio(_Endpoint):
         """Run multiple Composio tools in parallel. Each call:
         {slug, args, connected_account_id?}. Returns one ExecuteResult
         per call in the same order."""
-        payload = await self._post("/multi_execute", {
-            "calls": calls, "parallelism": parallelism,
-        })
+        payload = await self._post(
+            "/multi_execute",
+            {
+                "calls": calls,
+                "parallelism": parallelism,
+            },
+        )
         if isinstance(payload, dict) and "results" in payload:
             return payload["results"]
         return []
@@ -625,16 +704,25 @@ class Preferences(_Endpoint):
     ) -> dict[str, Any]:
         """Persist a stated preference. `source` is stamped server-side
         from the run principal — you cannot set it here."""
-        return await self._post("/add", {
-            "statement": statement, "scope": scope, "polarity": polarity,
-            "weight": weight, "confidence": confidence,
-            "durability": durability,
-            "expiresAt": _iso(expires_at) if expires_at is not None else None,
-            "evidence": evidence or {},
-        })
+        return await self._post(
+            "/add",
+            {
+                "statement": statement,
+                "scope": scope,
+                "polarity": polarity,
+                "weight": weight,
+                "confidence": confidence,
+                "durability": durability,
+                "expiresAt": _iso(expires_at) if expires_at is not None else None,
+                "evidence": evidence or {},
+            },
+        )
 
     async def supersede(
-        self, *, old_id: str, new_id: str,
+        self,
+        *,
+        old_id: str,
+        new_id: str,
     ) -> dict[str, Any] | None:
         """Mark old_id superseded by new_id (new_id must already be active)."""
         return await self._post("/supersede", {"oldId": old_id, "newId": new_id})
@@ -653,7 +741,8 @@ class Settings(_Endpoint):
         payload. `language` is a SupportedLanguage code (e.g. 'en',
         'zh-Hans')."""
         return await self._post(
-            "/generation-language", {"generationLanguage": language},
+            "/generation-language",
+            {"generationLanguage": language},
         )
 
 

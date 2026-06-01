@@ -25,7 +25,7 @@ def _parse_emit_bytes(b: bytes) -> dict:
     text = b.decode()
     assert text.startswith("data: ")
     assert text.endswith("\n\n")
-    return json.loads(text[len("data: "):-2])
+    return json.loads(text[len("data: ") : -2])
 
 
 def test_emit_returns_sse_framed_bytes():
@@ -65,10 +65,10 @@ def test_validate_event_accepts_well_formed():
 
 def test_validate_event_rejects_bad_type_pattern():
     bad_types = [
-        "ChatDelta",        # no namespace separator
-        "chat:Delta",       # uppercase
-        "chat-delta",       # dash instead of colon
-        "chat: delta",      # space
+        "ChatDelta",  # no namespace separator
+        "chat:Delta",  # uppercase
+        "chat-delta",  # dash instead of colon
+        "chat: delta",  # space
         "",
     ]
     for t in bad_types:
@@ -79,17 +79,22 @@ def test_validate_event_rejects_bad_type_pattern():
 def test_validate_event_rejects_extra_top_level_keys():
     """Envelope is closed — flat-shape callers must move payload into `data`."""
     from pydantic import ValidationError
+
     with pytest.raises(ValidationError):
-        validate_event({
-            "type": "chat:delta", "ts": 1,
-            "delta": "leaked-flat",  # should be inside `data`
-            "data": {},
-        })
+        validate_event(
+            {
+                "type": "chat:delta",
+                "ts": 1,
+                "delta": "leaked-flat",  # should be inside `data`
+                "data": {},
+            }
+        )
 
 
 def test_known_event_types_match_pattern():
     """Living inventory — every constant must validate as a real event type."""
     from pinai_agents.shared import sse_envelope as mod
+
     type_pattern = re.compile(r"^[a-z]+(:[a-z][a-z_]*)+$")
     for name in dir(mod):
         if not name.startswith("EV_"):
@@ -145,8 +150,10 @@ def test_chat_tool_start_includes_args_when_provided():
     from pinai_agents.chat.streaming import chat_tool_start
 
     out = chat_tool_start(
-        tool_call_id="t1", name="write_todos",
-        args_preview="{...}", args={"todos": [{"content": "a", "status": "pending"}]},
+        tool_call_id="t1",
+        name="write_todos",
+        args_preview="{...}",
+        args={"todos": [{"content": "a", "status": "pending"}]},
     )
     parsed = _parse_emit_bytes(out)
     assert parsed["data"]["args"] == {"todos": [{"content": "a", "status": "pending"}]}
@@ -156,7 +163,9 @@ def test_chat_tool_start_omits_args_when_none():
     from pinai_agents.chat.streaming import chat_tool_start
 
     out = chat_tool_start(
-        tool_call_id="t1", name="memory_list", args_preview="{}",
+        tool_call_id="t1",
+        name="memory_list",
+        args_preview="{}",
     )
     parsed = _parse_emit_bytes(out)
     assert "args" not in parsed["data"]
@@ -183,8 +192,12 @@ def test_chat_helpers_emit_envelope_shape():
         chat_done(),
     ]
     expected_types = {
-        EV_CHAT_THINKING, EV_CHAT_DELTA,
-        EV_CHAT_TOOL_START, EV_CHAT_TOOL_RESULT, "chat:error", EV_CHAT_DONE,
+        EV_CHAT_THINKING,
+        EV_CHAT_DELTA,
+        EV_CHAT_TOOL_START,
+        EV_CHAT_TOOL_RESULT,
+        "chat:error",
+        EV_CHAT_DONE,
     }
     seen_types: set[str] = set()
     for sample in samples:

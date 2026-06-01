@@ -56,7 +56,10 @@ async def create_run(
             RETURNING *
             """,
             (
-                agent_run.user_id, pid, rid, trigger,
+                agent_run.user_id,
+                pid,
+                rid,
+                trigger,
                 body.get("subagentRunId") or body.get("subagent_run_id"),
                 body.get("subagentSessionKey") or body.get("subagent_session_key"),
             ),
@@ -93,7 +96,8 @@ async def complete_run(
                 json.dumps(final_cards) if final_cards is not None else None,
                 json.dumps(iterations) if iterations is not None else None,
                 total_iterations,
-                agent_run.user_id, pipeline_id,
+                agent_run.user_id,
+                pipeline_id,
             ),
         )
         row = await cur.fetchone()

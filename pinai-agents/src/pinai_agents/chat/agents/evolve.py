@@ -118,7 +118,8 @@ async def run_evolve(
     # phantom token for the sandbox; without it sandbox-side SDK calls
     # would 401 against /api/agent/* (no auth header).
     backend, raw = await create_oneshot_sandbox(
-        run_jwt=run_jwt, scope_label=f"evolve:{connector}",
+        run_jwt=run_jwt,
+        scope_label=f"evolve:{connector}",
     )
     try:
         agent = create_deep_agent(
@@ -126,17 +127,21 @@ async def run_evolve(
             system_prompt=_EVOLVE_SYSTEM_PROMPT,
             backend=backend,
         )
-        result: dict[str, Any] = await agent.ainvoke({
-            "messages": [{
-                "role": "user",
-                "content": (
-                    f"Run evolve for user_id={user_id} run_id={run_id} "
-                    f"connector={connector}. Distill the latest raw window "
-                    f"into signals, memory, profile, and goal updates per "
-                    f"the goal block + hard_rules."
-                ),
-            }],
-        })
+        result: dict[str, Any] = await agent.ainvoke(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Run evolve for user_id={user_id} run_id={run_id} "
+                            f"connector={connector}. Distill the latest raw window "
+                            f"into signals, memory, profile, and goal updates per "
+                            f"the goal block + hard_rules."
+                        ),
+                    }
+                ],
+            }
+        )
     finally:
         await delete_sandbox_now(raw)
     msgs = result.get("messages", [])

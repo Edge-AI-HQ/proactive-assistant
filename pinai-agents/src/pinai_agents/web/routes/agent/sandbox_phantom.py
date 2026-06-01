@@ -86,7 +86,10 @@ async def mint_phantom(
         )
     logger.info(
         "phantom minted user=%d scope=%s hash_prefix=%s ttl=%ds",
-        principal.user_id, body.scope_label or "-", token_hash[:8], ttl,
+        principal.user_id,
+        body.scope_label or "-",
+        token_hash[:8],
+        ttl,
     )
     return MintResponse(token=raw, token_hash=token_hash, ttl_seconds=ttl)
 
@@ -111,7 +114,9 @@ async def bind_phantom(
         )
     async with service_tx(pool) as conn:
         await bind_sandbox(
-            conn, token_hash=body.token_hash, sandbox_id=body.sandbox_id,
+            conn,
+            token_hash=body.token_hash,
+            sandbox_id=body.sandbox_id,
         )
     # No body — purely a metadata write.
 
@@ -150,17 +155,23 @@ async def revoke_phantom(
     async with service_tx(pool) as conn:
         if body.token is not None:
             ok = await revoke_by_token(
-                conn, raw_token=body.token, reason=body.reason,
+                conn,
+                raw_token=body.token,
+                reason=body.reason,
             )
             count = 1 if ok else 0
         else:
             assert body.sandbox_id is not None  # narrowed by xor above
             count = await revoke_by_sandbox(
-                conn, sandbox_id=body.sandbox_id,
-                user_id=principal.user_id, reason=body.reason,
+                conn,
+                sandbox_id=body.sandbox_id,
+                user_id=principal.user_id,
+                reason=body.reason,
             )
     logger.info(
         "phantom revoked user=%d count=%d reason=%s",
-        principal.user_id, count, body.reason or "-",
+        principal.user_id,
+        count,
+        body.reason or "-",
     )
     return {"revoked": count}

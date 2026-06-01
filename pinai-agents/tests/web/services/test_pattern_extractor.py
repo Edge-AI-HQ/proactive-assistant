@@ -14,7 +14,11 @@ from pinai_agents.web.services.pattern_extractor import (
 
 
 async def _seed_casebook_cluster(
-    conn, *, user_id: int, intent_key: str, count: int,
+    conn,
+    *,
+    user_id: int,
+    intent_key: str,
+    count: int,
 ) -> list[str]:
     """Drop `count` golden casebook rows + matching evaluations sharing
     the same intent_key. Returns the card_ids so the test can clean up."""
@@ -56,7 +60,10 @@ async def _seed_casebook_cluster(
             ON CONFLICT (user_id, card_id) DO NOTHING
             """,
             (
-                user_id, f"case_{intent_key}_{i}", run_id, card_id,
+                user_id,
+                f"case_{intent_key}_{i}",
+                run_id,
+                card_id,
                 json.dumps(snapshot),
             ),
         )
@@ -93,11 +100,16 @@ async def test_extractor_creates_candidate_for_new_intent(pool, user_ids) -> Non
     try:
         async with user_scoped_tx(pool, user_a) as conn:
             card_ids = await _seed_casebook_cluster(
-                conn, user_id=user_a, intent_key=intent_key, count=3,
+                conn,
+                user_id=user_a,
+                intent_key=intent_key,
+                count=3,
             )
         async with service_tx(pool) as conn:
             summary = await run_pattern_extractor(
-                conn, lookback_days=30, min_cluster_size=3,
+                conn,
+                lookback_days=30,
+                min_cluster_size=3,
             )
         assert summary["candidates_inserted"] >= 1
         pattern_ids = [c["patternId"] for c in summary["candidates"]]
@@ -117,7 +129,9 @@ async def test_extractor_creates_candidate_for_new_intent(pool, user_ids) -> Non
     finally:
         async with service_tx(pool) as conn:
             await _cleanup(
-                conn, user_id=user_a, card_ids=card_ids,
+                conn,
+                user_id=user_a,
+                card_ids=card_ids,
                 pattern_id=expected_pattern_id,
             )
 
@@ -131,11 +145,16 @@ async def test_extractor_skips_below_min_cluster(pool, user_ids) -> None:
     try:
         async with user_scoped_tx(pool, user_a) as conn:
             card_ids = await _seed_casebook_cluster(
-                conn, user_id=user_a, intent_key=intent_key, count=2,
+                conn,
+                user_id=user_a,
+                intent_key=intent_key,
+                count=2,
             )
         async with service_tx(pool) as conn:
             summary = await run_pattern_extractor(
-                conn, lookback_days=30, min_cluster_size=3,
+                conn,
+                lookback_days=30,
+                min_cluster_size=3,
             )
         # No new pattern for this intent.
         async with service_tx(pool) as conn, conn.cursor() as cur:
@@ -150,7 +169,9 @@ async def test_extractor_skips_below_min_cluster(pool, user_ids) -> None:
     finally:
         async with service_tx(pool) as conn:
             await _cleanup(
-                conn, user_id=user_a, card_ids=card_ids,
+                conn,
+                user_id=user_a,
+                card_ids=card_ids,
                 pattern_id=expected_pattern_id,
             )
 
@@ -168,17 +189,20 @@ async def test_extractor_skips_intent_already_covered(pool, user_ids) -> None:
     try:
         async with user_scoped_tx(pool, user_a) as conn:
             card_ids = await _seed_casebook_cluster(
-                conn, user_id=user_a, intent_key=intent_key, count=4,
+                conn,
+                user_id=user_a,
+                intent_key=intent_key,
+                count=4,
             )
         async with service_tx(pool) as conn:
             summary = await run_pattern_extractor(
-                conn, lookback_days=30, min_cluster_size=3,
+                conn,
+                lookback_days=30,
+                min_cluster_size=3,
             )
         # Even though cluster size meets threshold, the intent already has
         # active patterns → no candidate inserted.
-        assert all(
-            c["intentKey"] != intent_key for c in summary["candidates"]
-        )
+        assert all(c["intentKey"] != intent_key for c in summary["candidates"])
         async with service_tx(pool) as conn, conn.cursor() as cur:
             await cur.execute(
                 "SELECT 1 FROM pai_card_patterns WHERE id = %s",
@@ -188,6 +212,8 @@ async def test_extractor_skips_intent_already_covered(pool, user_ids) -> None:
     finally:
         async with service_tx(pool) as conn:
             await _cleanup(
-                conn, user_id=user_a, card_ids=card_ids,
+                conn,
+                user_id=user_a,
+                card_ids=card_ids,
                 pattern_id=expected_pattern_id,
             )

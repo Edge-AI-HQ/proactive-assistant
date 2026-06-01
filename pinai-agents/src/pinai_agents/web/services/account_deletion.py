@@ -116,7 +116,9 @@ async def _cleanup_composio(user: User, result: AccountDeletionResult) -> None:
         except (ComposioError, ValueError) as e:
             logger.warning(
                 "account.delete: composio disconnect failed user=%s cid=%s: %s",
-                user.id, conn.connected_account_id, e,
+                user.id,
+                conn.connected_account_id,
+                e,
             )
             result.composio_errors.append(f"{conn.toolkit}:{e}")
 
@@ -136,7 +138,9 @@ async def _cleanup_litellm(user: User, result: AccountDeletionResult) -> None:
 
 
 async def _cleanup_stripe(
-    pool: AsyncConnectionPool, user: User, result: AccountDeletionResult,
+    pool: AsyncConnectionPool,
+    user: User,
+    result: AccountDeletionResult,
 ) -> None:
     # Cancel subscription only — Customer object is kept for Stripe-side
     # invoice / dispute audit (deleting it nukes invoice history too).
@@ -157,7 +161,8 @@ async def _cleanup_stripe(
         # webhook handlers run their own short queries; a deletion
         # endpoint chains several network calls so the cost adds up.
         await asyncio.to_thread(
-            stripe.Subscription.delete, sub.stripe_subscription_id,  # type: ignore[attr-defined]
+            stripe.Subscription.delete,
+            sub.stripe_subscription_id,  # type: ignore[attr-defined]
         )
         result.stripe_subscription_canceled = True
     except Exception as e:  # noqa: BLE001 — stripe SDK raises many concrete types
@@ -195,7 +200,9 @@ async def _cleanup_browserbase(user: User, result: AccountDeletionResult) -> Non
             return
         logger.warning(
             "account.delete: browserbase delete failed user=%s ctx=%s: %s",
-            user.id, ctx_id, e,
+            user.id,
+            ctx_id,
+            e,
         )
         result.browserbase_error = str(e)
 
@@ -205,13 +212,16 @@ async def _cleanup_storage(user: User, result: AccountDeletionResult) -> None:
         result.storage_files_deleted = await delete_all_user_media(user.supabase_user_id)
     except Exception as e:  # noqa: BLE001 — supabase storage SDK raises many types
         logger.warning(
-            "account.delete: storage cleanup failed user=%s: %s", user.id, e,
+            "account.delete: storage cleanup failed user=%s: %s",
+            user.id,
+            e,
         )
         result.storage_error = str(e)
 
 
 async def _delete_supabase_auth_user(
-    user: User, result: AccountDeletionResult,
+    user: User,
+    result: AccountDeletionResult,
 ) -> None:
     """Fail-fast: any error other than 404 raises.
 
@@ -225,10 +235,7 @@ async def _delete_supabase_auth_user(
         result.supabase_auth_error = msg
         raise AccountDeletionError(msg, result)
 
-    url = (
-        f"{settings.supabase_url.rstrip('/')}"
-        f"/auth/v1/admin/users/{user.supabase_user_id}"
-    )
+    url = f"{settings.supabase_url.rstrip('/')}/auth/v1/admin/users/{user.supabase_user_id}"
     headers = {
         "apikey": settings.supabase_secret_key,
         "Authorization": f"Bearer {settings.supabase_secret_key}",
@@ -245,15 +252,15 @@ async def _delete_supabase_auth_user(
     if resp.is_success or resp.status_code == 404:
         result.supabase_auth_deleted = True
         return
-    msg = (
-        f"supabase admin delete {resp.status_code}: {resp.text[:200]}"
-    )
+    msg = f"supabase admin delete {resp.status_code}: {resp.text[:200]}"
     result.supabase_auth_error = msg
     raise AccountDeletionError(msg, result)
 
 
 async def _delete_db_user(
-    pool: AsyncConnectionPool, user: User, result: AccountDeletionResult,
+    pool: AsyncConnectionPool,
+    user: User,
+    result: AccountDeletionResult,
 ) -> None:
     """DB cascade. Tolerates rowcount=0 because Supabase Auth may have
     already been deleted in a prior retry attempt, taking the row with
@@ -264,7 +271,8 @@ async def _delete_db_user(
     """
     async with service_tx(pool) as conn:
         cur = await conn.execute(
-            "DELETE FROM users WHERE id = %s", (user.id,),
+            "DELETE FROM users WHERE id = %s",
+            (user.id,),
         )
         if cur.rowcount != 1:
             msg = f"users DELETE affected {cur.rowcount} rows (expected 1)"
@@ -273,7 +281,8 @@ async def _delete_db_user(
 
 
 async def delete_user_account(
-    pool: AsyncConnectionPool, user: User,
+    pool: AsyncConnectionPool,
+    user: User,
 ) -> AccountDeletionResult:
     """Tear down `user` across every system that holds their data.
 
@@ -284,7 +293,9 @@ async def delete_user_account(
     """
     result = AccountDeletionResult()
     logger.info(
-        "account.delete: starting user=%s email=%s", user.id, user.email,
+        "account.delete: starting user=%s email=%s",
+        user.id,
+        user.email,
     )
 
     await _cleanup_composio(user, result)
@@ -294,7 +305,7 @@ async def delete_user_account(
     await _cleanup_storage(user, result)
     # ── point of no return ──
     await _delete_supabase_auth_user(user, result)  # fail-fast
-    await _delete_db_user(pool, user, result)       # gate
+    await _delete_db_user(pool, user, result)  # gate
 
     logger.info(
         "account.delete: done user=%s composio=%d litellm=%d stripe=%s "

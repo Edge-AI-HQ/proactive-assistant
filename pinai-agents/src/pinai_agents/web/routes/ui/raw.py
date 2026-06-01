@@ -38,22 +38,24 @@ router = APIRouter(prefix="/api/raw", tags=["raw"])
 # public API hiding the internal table-name convention. Frontend
 # `fetchRawTable` (proactive-ai-frontend GoalsView RAW_SOURCE_CONFIG)
 # is the source of truth for these slugs.
-_GENERIC_RAW_SLUGS: frozenset[str] = frozenset({
-    # Composio toolkits
-    "gmail_messages",
-    "gcal_events",
-    "gdrive_files",
-    "slack_messages",
-    "github_issues",
-    "calendly_events",
-    "stripe_invoices",
-    "youtube_subscriptions",
-    "linkedin_profile",
-    # Device (mobile sync)
-    "device_apps_snapshot",
-    "device_contacts_snapshot",
-    "device_health_observations",
-})
+_GENERIC_RAW_SLUGS: frozenset[str] = frozenset(
+    {
+        # Composio toolkits
+        "gmail_messages",
+        "gcal_events",
+        "gdrive_files",
+        "slack_messages",
+        "github_issues",
+        "calendly_events",
+        "stripe_invoices",
+        "youtube_subscriptions",
+        "linkedin_profile",
+        # Device (mobile sync)
+        "device_apps_snapshot",
+        "device_contacts_snapshot",
+        "device_health_observations",
+    }
+)
 
 
 def _row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
@@ -68,7 +70,8 @@ def _row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _select_recent(
-    pool, *,
+    pool,
+    *,
     user_id: int,
     table: str,
     extra_where: str = "",
@@ -124,9 +127,13 @@ async def list_gmail(
         extra_params = (threadId,)
     rows, total = await _select_recent(
         pool,
-        user_id=user.id, table="pai_raw_gmail_messages",
-        extra_where=extra_where, extra_params=extra_params,
-        since=since, until=until, limit=limit,
+        user_id=user.id,
+        table="pai_raw_gmail_messages",
+        extra_where=extra_where,
+        extra_params=extra_params,
+        since=since,
+        until=until,
+        limit=limit,
     )
     return {"ok": True, "messages": rows, "total": total}
 
@@ -147,9 +154,13 @@ async def list_gcal(
         extra_params = (calendarId,)
     rows, total = await _select_recent(
         pool,
-        user_id=user.id, table="pai_raw_gcal_events",
-        extra_where=extra_where, extra_params=extra_params,
-        since=since, until=until, limit=limit,
+        user_id=user.id,
+        table="pai_raw_gcal_events",
+        extra_where=extra_where,
+        extra_params=extra_params,
+        since=since,
+        until=until,
+        limit=limit,
     )
     return {"ok": True, "events": rows, "total": total}
 
@@ -166,10 +177,15 @@ async def list_device_apps(
     limit: int = Query(50, ge=1, le=500),
 ):
     rows, total = await _device_snapshot_query(
-        pool, user_id=user.id, table="pai_raw_device_apps_snapshot",
-        device_id=deviceId, snapshot_id=snapshotId,
+        pool,
+        user_id=user.id,
+        table="pai_raw_device_apps_snapshot",
+        device_id=deviceId,
+        snapshot_id=snapshotId,
         latest_only=latestSnapshotOnly,
-        since=since, until=until, limit=limit,
+        since=since,
+        until=until,
+        limit=limit,
     )
     return {"ok": True, "apps": rows, "total": total}
 
@@ -197,10 +213,15 @@ async def list_device_contacts(
         like = f"%{search}%"
         extra_params.extend([like, like])
     rows, total = await _device_snapshot_query(
-        pool, user_id=user.id, table="pai_raw_device_contacts_snapshot",
-        device_id=deviceId, snapshot_id=snapshotId,
+        pool,
+        user_id=user.id,
+        table="pai_raw_device_contacts_snapshot",
+        device_id=deviceId,
+        snapshot_id=snapshotId,
         latest_only=latestSnapshotOnly,
-        since=since, until=until, limit=limit,
+        since=since,
+        until=until,
+        limit=limit,
         extra_where=" ".join(f"AND {c}" for c in extra_clauses),
         extra_params=tuple(extra_params),
     )
@@ -223,20 +244,30 @@ async def list_device_health(
         extra_params = (deviceId,)
     rows, total = await _select_recent(
         pool,
-        user_id=user.id, table="pai_raw_device_health_observations",
-        extra_where=extra_where, extra_params=extra_params,
-        since=since, until=until, limit=limit,
+        user_id=user.id,
+        table="pai_raw_device_health_observations",
+        extra_where=extra_where,
+        extra_params=extra_params,
+        since=since,
+        until=until,
+        limit=limit,
     )
     return {"ok": True, "observations": rows, "total": total}
 
 
 async def _device_snapshot_query(
-    pool, *,
-    user_id: int, table: str,
-    device_id: str | None, snapshot_id: str | None, latest_only: bool,
-    since: datetime | None, until: datetime | None,
+    pool,
+    *,
+    user_id: int,
+    table: str,
+    device_id: str | None,
+    snapshot_id: str | None,
+    latest_only: bool,
+    since: datetime | None,
+    until: datetime | None,
     limit: int,
-    extra_where: str = "", extra_params: tuple = (),
+    extra_where: str = "",
+    extra_params: tuple = (),
 ) -> tuple[list[dict[str, Any]], int]:
     """Shared filter logic for *_snapshot tables.
 
@@ -271,10 +302,14 @@ async def _device_snapshot_query(
         params.append(user_id)
 
     return await _select_recent(
-        pool, user_id=user_id, table=table,
+        pool,
+        user_id=user_id,
+        table=table,
         extra_where=" ".join(clauses),
         extra_params=tuple(params),
-        since=since, until=until, limit=limit,
+        since=since,
+        until=until,
+        limit=limit,
     )
 
 
@@ -300,11 +335,16 @@ async def list_generic(
     before parametric ones."""
     if slug not in _GENERIC_RAW_SLUGS:
         raise HTTPException(
-            status_code=404, detail=f"unknown raw slug: {slug}",
+            status_code=404,
+            detail=f"unknown raw slug: {slug}",
         )
     table = f"pai_raw_{slug}"
     rows, total = await _select_recent(
-        pool, user_id=user.id, table=table,
-        since=since, until=until, limit=limit,
+        pool,
+        user_id=user.id,
+        table=table,
+        since=since,
+        until=until,
+        limit=limit,
     )
     return {"ok": True, "rows": rows, "total": total, "table": table}

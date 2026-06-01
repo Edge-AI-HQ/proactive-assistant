@@ -50,8 +50,7 @@ async def test_dreaming_detail_surfaces_run_outputs(pool, user_ids):
             details={
                 "agentReport": {
                     "summary": (
-                        "24h window: 112 signals and 8 raw rows processed. "
-                        "Profile facts refreshed."
+                        "24h window: 112 signals and 8 raw rows processed. Profile facts refreshed."
                     ),
                     "totalSignals": 112,
                     "totalRawRows": 8,

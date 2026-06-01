@@ -56,5 +56,6 @@ async def log_request(
     except Exception:
         logger.exception(
             "audit log write failed user=%s endpoint=%s — continuing",
-            user_id, endpoint,
+            user_id,
+            endpoint,
         )

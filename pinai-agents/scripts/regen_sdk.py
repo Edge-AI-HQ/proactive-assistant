@@ -47,7 +47,8 @@ def _check() -> int:
         print(f"FAIL: {init_path} missing", file=sys.stderr)
         return 1
     spec = importlib.util.spec_from_file_location(
-        "pinai_sdk", init_path,
+        "pinai_sdk",
+        init_path,
         submodule_search_locations=[str(SDK_DIR / "src" / "pinai_sdk")],
     )
     if spec is None or spec.loader is None:

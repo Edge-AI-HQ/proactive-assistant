@@ -80,7 +80,8 @@ class DangerousAction(BaseModel):
 
 class ProposeActionInput(BaseModel):
     message: str = Field(
-        min_length=1, max_length=4000,
+        min_length=1,
+        max_length=4000,
         description=(
             "Your chat message to the user explaining what you've "
             "prepared and what you want them to decide. 1-3 sentences "

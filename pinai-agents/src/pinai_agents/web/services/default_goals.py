@@ -29,17 +29,18 @@ logger = logging.getLogger(__name__)
 # Verbatim port of openclaw plugin's starterGoals
 # (pinai-openclaw/plugins/proactive-ai/index.ts:55).
 _STARTER_GOALS: tuple[tuple[str, str, str], ...] = (
-    ("career-growth",  "Advance career and professional skills",          "high"),
-    ("stay-healthy",   "Maintain consistent exercise and healthy habits", "medium"),
+    ("career-growth", "Advance career and professional skills", "high"),
+    ("stay-healthy", "Maintain consistent exercise and healthy habits", "medium"),
     ("financial-plan", "Grow savings and make smart financial decisions", "medium"),
-    ("learn-and-grow", "Dedicate time to learning new skills and ideas",  "medium"),
-    ("relationships",  "Stay connected with family and close friends",    "medium"),
-    ("life-balance",   "Protect personal time and avoid burnout",         "high"),
+    ("learn-and-grow", "Dedicate time to learning new skills and ideas", "medium"),
+    ("relationships", "Stay connected with family and close friends", "medium"),
+    ("life-balance", "Protect personal time and avoid burnout", "high"),
 )
 
 
 async def seed_default_goals(
-    pool: AsyncConnectionPool, user_id: int,
+    pool: AsyncConnectionPool,
+    user_id: int,
 ) -> None:
     """Seed 6 starter goals for a freshly INSERTed user row."""
     try:
@@ -54,12 +55,13 @@ async def seed_default_goals(
                 )
     except Exception as e:
         logger.warning(
-            "default goals: seeding failed user=%d (skipping; agent can "
-            "upsert goals later): %s",
-            user_id, e,
+            "default goals: seeding failed user=%d (skipping; agent can upsert goals later): %s",
+            user_id,
+            e,
         )
         return
     logger.info(
         "default goals: seeded %d starter goals user=%d",
-        len(_STARTER_GOALS), user_id,
+        len(_STARTER_GOALS),
+        user_id,
     )

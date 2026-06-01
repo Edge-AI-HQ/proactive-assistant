@@ -47,9 +47,14 @@ async def test_repository_user_id_invariant(pool, user_ids):
     user_a, user_b = user_ids
     async with user_scoped_tx(pool, user_a) as conn:
         repo_a = MemoryRepository(user_a, conn)
-        await repo_a.add(AddMemoryInput(
-            id="mem_a_only", text="A's secret", source="test", quality=0.8,
-        ))
+        await repo_a.add(
+            AddMemoryInput(
+                id="mem_a_only",
+                text="A's secret",
+                source="test",
+                quality=0.8,
+            )
+        )
 
     async with user_scoped_tx(pool, user_b) as conn:
         repo_b = MemoryRepository(user_b, conn)

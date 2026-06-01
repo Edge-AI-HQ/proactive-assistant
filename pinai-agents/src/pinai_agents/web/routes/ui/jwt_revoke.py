@@ -55,11 +55,17 @@ async def revoke_jwt(
     expires_at = datetime.fromtimestamp(body.expiresAtUnix, tz=UTC)
     async with service_tx(pool) as conn:
         await revoke(
-            conn, jti=body.jti, user_id=user.id,
-            expires_at=expires_at, reason=body.reason,
+            conn,
+            jti=body.jti,
+            user_id=user.id,
+            expires_at=expires_at,
+            reason=body.reason,
         )
     logger.info(
-        "jwt revoke: user=%d jti=%s reason=%s", user.id, body.jti, body.reason,
+        "jwt revoke: user=%d jti=%s reason=%s",
+        user.id,
+        body.jti,
+        body.reason,
     )
     return None
 
@@ -80,7 +86,10 @@ async def revoke_jwt_bulk(
         pairs.append((jti, datetime.fromtimestamp(int(exp), tz=UTC)))
     async with service_tx(pool) as conn:
         n = await revoke_all_for_user(
-            conn, user_id=user.id, jtis=pairs, reason=body.reason,
+            conn,
+            user_id=user.id,
+            jtis=pairs,
+            reason=body.reason,
         )
     logger.info("jwt bulk revoke: user=%d count=%d", user.id, n)
     return {"revoked": n}

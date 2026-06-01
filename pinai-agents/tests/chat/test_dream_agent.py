@@ -7,16 +7,14 @@ class _Message:
 
 
 def test_final_message_text_extracts_langchain_text_blocks():
-    final = _Message([
-        {
-            "type": "text",
-            "text": (
-                "```json\n"
-                '{"memoriesWritten":1,"summary":"Daily context covered."}\n'
-                "```"
-            ),
-        },
-    ])
+    final = _Message(
+        [
+            {
+                "type": "text",
+                "text": ('```json\n{"memoriesWritten":1,"summary":"Daily context covered."}\n```'),
+            },
+        ]
+    )
 
     text = _final_message_text(final)
 

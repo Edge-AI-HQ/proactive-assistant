@@ -21,7 +21,8 @@ from .. import http_client
 
 class PreferenceAddInput(BaseModel):
     statement: str = Field(
-        min_length=1, max_length=2000,
+        min_length=1,
+        max_length=2000,
         description=(
             "The preference in the user's own framing, one sentence "
             "(e.g. 'Wants more A-share market news', 'Does not want "
@@ -100,7 +101,8 @@ async def preference_add(
 
 class SetGenerationLanguageInput(BaseModel):
     language: str = Field(
-        min_length=2, max_length=10,
+        min_length=2,
+        max_length=10,
         description=(
             "BCP-47-ish language code the user asked for going forward: "
             "'en', 'zh-Hans', 'ja', 'ko', 'es', 'fr', 'de', 'pt'."

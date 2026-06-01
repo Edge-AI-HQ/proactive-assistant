@@ -88,25 +88,18 @@ def _pattern_to_wire(row: dict[str, Any]) -> dict[str, Any]:
         "source": row["source"],
         "baseHitRate": float(row["base_hit_rate"]) if row.get("base_hit_rate") is not None else 0.0,
         "demoTitle": (
-            _text_value(demo_card.get("title"))
-            or _text_value(demo_card.get("hook"))
+            _text_value(demo_card.get("title")) or _text_value(demo_card.get("hook"))
             if isinstance(demo_card, dict)
             else None
         ),
         "demoCardCategory": (
-            _text_value(demo_card.get("cardCategory"))
-            if isinstance(demo_card, dict)
-            else None
+            _text_value(demo_card.get("cardCategory")) if isinstance(demo_card, dict) else None
         ),
         "demoHumanNeed": (
-            _text_value(demo_card.get("humanNeed"))
-            if isinstance(demo_card, dict)
-            else None
+            _text_value(demo_card.get("humanNeed")) if isinstance(demo_card, dict) else None
         ),
         "demoEntryPoint": (
-            _text_value(demo_card.get("entryPoint"))
-            if isinstance(demo_card, dict)
-            else None
+            _text_value(demo_card.get("entryPoint")) if isinstance(demo_card, dict) else None
         ),
         "demoSourceDataSummary": _demo_source_summary(
             row.get("demo_card_json"),
@@ -184,12 +177,18 @@ class PatternsRepository(UserScopedRepository):
                 LIMIT %s OFFSET %s
                 """,
                 (
-                    category, category,
-                    status, status,
-                    surprise, surprise,
-                    tier, tier,
-                    intent, intent,
-                    limit, offset,
+                    category,
+                    category,
+                    status,
+                    status,
+                    surprise,
+                    surprise,
+                    tier,
+                    tier,
+                    intent,
+                    intent,
+                    limit,
+                    offset,
                 ),
             )
             rows = await cur.fetchall()
@@ -216,11 +215,16 @@ class PatternsRepository(UserScopedRepository):
                   AND (%s::text IS NULL OR intent = %s)
                 """,
                 (
-                    category, category,
-                    status, status,
-                    surprise, surprise,
-                    tier, tier,
-                    intent, intent,
+                    category,
+                    category,
+                    status,
+                    status,
+                    surprise,
+                    surprise,
+                    tier,
+                    tier,
+                    intent,
+                    intent,
                 ),
             )
             row = await cur.fetchone()
@@ -263,7 +267,10 @@ class PatternsRepository(UserScopedRepository):
         return _pattern_to_wire(row) if row is not None else None
 
     async def list_recent_hits(
-        self, pattern_id: str, *, limit: int = 25,
+        self,
+        pattern_id: str,
+        *,
+        limit: int = 25,
     ) -> list[dict[str, Any]]:
         """Recent (user, card_id, opened?, reviewer_score, evaluator_overall)
         rows for one pattern. Used by /patterns/:id "Recent matched cards"."""
@@ -303,14 +310,23 @@ class PatternsRepository(UserScopedRepository):
                 "cardId": r["card_id"],
                 "subtype": r.get("subtype"),
                 "evidence": _json_value(r.get("evidence"), default={}),
-                "combinedScore": float(r["combined_score"]) if r.get("combined_score") is not None else None,
-                "patternGroundingOk": bool(r.get("pattern_grounding_ok")) if r.get("pattern_grounding_ok") is not None else None,
+                "combinedScore": float(r["combined_score"])
+                if r.get("combined_score") is not None
+                else None,
+                "patternGroundingOk": bool(r.get("pattern_grounding_ok"))
+                if r.get("pattern_grounding_ok") is not None
+                else None,
                 "opened": bool(r.get("opened")),
-                "reviewerScore": float(r["reviewer_score"]) if r.get("reviewer_score") is not None else None,
-                "evaluatorOverall": float(r["evaluator_overall"]) if r.get("evaluator_overall") is not None else None,
+                "reviewerScore": float(r["reviewer_score"])
+                if r.get("reviewer_score") is not None
+                else None,
+                "evaluatorOverall": float(r["evaluator_overall"])
+                if r.get("evaluator_overall") is not None
+                else None,
                 "evaluatorHumanGap": (
                     abs(float(r["evaluator_overall"]) - float(r["reviewer_score"]))
-                    if r.get("evaluator_overall") is not None and r.get("reviewer_score") is not None
+                    if r.get("evaluator_overall") is not None
+                    and r.get("reviewer_score") is not None
                     else None
                 ),
                 "createdAt": _iso(r.get("created_at")),
@@ -410,9 +426,7 @@ class PatternsRepository(UserScopedRepository):
         if status not in VALID_PATTERN_STATUSES:
             msg = f"invalid pattern status: {status}"
             raise ValueError(msg)
-        retired_clause = (
-            "retired_at = NOW()" if status == "retired" else "retired_at = NULL"
-        )
+        retired_clause = "retired_at = NOW()" if status == "retired" else "retired_at = NULL"
         async with self._conn.cursor() as cur:
             await cur.execute(
                 f"""
@@ -459,11 +473,18 @@ class PatternsRepository(UserScopedRepository):
                 RETURNING *
                 """,
                 (
-                    demo_id, pattern_id, subtype, scenario,
+                    demo_id,
+                    pattern_id,
+                    subtype,
+                    scenario,
                     json.dumps(card, ensure_ascii=False),
                     json.dumps(signals_used or []),
-                    why_surprise, why_practical, wow_level,
-                    source, redacted, source_card_id,
+                    why_surprise,
+                    why_practical,
+                    wow_level,
+                    source,
+                    redacted,
+                    source_card_id,
                 ),
             )
             row = await cur.fetchone()

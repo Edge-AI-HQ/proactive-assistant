@@ -23,8 +23,7 @@ router = APIRouter(prefix="/api/agent/signals", tags=["agent-signals"])
 async def list_signals(
     run: AgentRun = Depends(current_agent_run),
     pool=Depends(get_pool),
-    status_filter: str = Query("open", alias="status",
-                               pattern="^(open|consumed|archived|all)$"),
+    status_filter: str = Query("open", alias="status", pattern="^(open|consumed|archived|all)$"),
     kind: str | None = Query(None),
     hours: int | None = Query(None, ge=1, le=24 * 14),
     min_salience: float | None = Query(None, ge=0, le=1, alias="minSalience"),
@@ -36,6 +35,7 @@ async def list_signals(
     before = None
     if hours is not None:
         from datetime import UTC, timedelta
+
         now = datetime.now(UTC)
         since = now - timedelta(hours=hours)
         # `hours` means "past N hours"; without an upper bound, future
@@ -45,25 +45,36 @@ async def list_signals(
     async with user_scoped_tx(pool, run.user_id) as conn:
         repo = PersonalSignalsRepository(run.user_id, conn)
         rows, _total = await repo.list_recent(
-            status=actual_status, kind=kind,
-            min_salience=min_salience, since=since, before=before, limit=limit,
+            status=actual_status,
+            kind=kind,
+            min_salience=min_salience,
+            since=since,
+            before=before,
+            limit=limit,
         )
     items = []
     for r in rows:
         item = {
-            "id": r.id, "kind": r.kind, "title": r.title, "summary": r.summary,
-            "salience": r.salience, "occurredAt": r.occurred_at.isoformat(),
-            "status": r.status, "subject": r.subject,
+            "id": r.id,
+            "kind": r.kind,
+            "title": r.title,
+            "summary": r.summary,
+            "salience": r.salience,
+            "occurredAt": r.occurred_at.isoformat(),
+            "status": r.status,
+            "subject": r.subject,
         }
         if r.kind == "ambient.candidate_window":
             item.update(_ambient_speaker_preview(r.payload))
         if include_payload:
-            item.update({
-                "payload": r.payload,
-                "confidence": r.confidence,
-                "source": r.source,
-                "deviceId": r.device_id,
-            })
+            item.update(
+                {
+                    "payload": r.payload,
+                    "confidence": r.confidence,
+                    "source": r.source,
+                    "deviceId": r.device_id,
+                }
+            )
         items.append(item)
     return {"items": items}
 
@@ -73,7 +84,9 @@ def _ambient_speaker_preview(payload: dict[str, Any]) -> dict[str, str]:
     self_text = _clean_text(payload.get("self_text"))
     if self_text:
         out["selfText"] = self_text
-    speaker_text = _clean_text(payload.get("speaker_text"), preserve_lines=True) or _speaker_text_from_segments(
+    speaker_text = _clean_text(
+        payload.get("speaker_text"), preserve_lines=True
+    ) or _speaker_text_from_segments(
         payload.get("speaker_segments"),
     )
     if speaker_text:
@@ -111,7 +124,9 @@ async def list_kinds(
     run: AgentRun = Depends(current_agent_run),
     pool=Depends(get_pool),
     status_filter: str = Query(
-        "all", alias="status", pattern="^(open|consumed|archived|all)$",
+        "all",
+        alias="status",
+        pattern="^(open|consumed|archived|all)$",
     ),
     hours: int | None = Query(None, ge=1, le=24 * 14),
 ):
@@ -124,6 +139,7 @@ async def list_kinds(
     since = None
     if hours is not None:
         from datetime import timedelta
+
         since = datetime.now(UTC) - timedelta(hours=hours)
     async with user_scoped_tx(pool, run.user_id) as conn:
         repo = PersonalSignalsRepository(run.user_id, conn)
@@ -157,12 +173,18 @@ async def get_signal(
     if row is None:
         raise HTTPException(status_code=404, detail="signal not found")
     return {
-        "id": row.id, "kind": row.kind, "title": row.title,
-        "summary": row.summary, "payload": row.payload,
-        "salience": row.salience, "confidence": row.confidence,
+        "id": row.id,
+        "kind": row.kind,
+        "title": row.title,
+        "summary": row.summary,
+        "payload": row.payload,
+        "salience": row.salience,
+        "confidence": row.confidence,
         "occurredAt": row.occurred_at.isoformat(),
-        "status": row.status, "subject": row.subject,
-        "source": row.source, "deviceId": row.device_id,
+        "status": row.status,
+        "subject": row.subject,
+        "source": row.source,
+        "deviceId": row.device_id,
         "consumedByRunId": row.consumed_by_run_id,
     }
 
@@ -204,15 +226,19 @@ async def ingest_signal(
         occurred_at = datetime.now(UTC)
     async with user_scoped_tx(pool, run.user_id) as conn:
         repo = PersonalSignalsRepository(run.user_id, conn)
-        row = await repo.ingest_one(IngestSignalInput(
-            id=sig_id, kind=body["kind"], title=body["title"],
-            summary=body.get("summary", ""),
-            occurred_at=occurred_at,
-            payload=body.get("payload") or {},
-            salience=float(body.get("salience", 0)),
-            confidence=float(body.get("confidence", 0)),
-            dedupe_key=body.get("dedupeKey"),
-            source=body.get("source", "agent"),
-            subject=body.get("subject"),
-        ))
+        row = await repo.ingest_one(
+            IngestSignalInput(
+                id=sig_id,
+                kind=body["kind"],
+                title=body["title"],
+                summary=body.get("summary", ""),
+                occurred_at=occurred_at,
+                payload=body.get("payload") or {},
+                salience=float(body.get("salience", 0)),
+                confidence=float(body.get("confidence", 0)),
+                dedupe_key=body.get("dedupeKey"),
+                source=body.get("source", "agent"),
+                subject=body.get("subject"),
+            )
+        )
     return {"id": row.id, "status": row.status}

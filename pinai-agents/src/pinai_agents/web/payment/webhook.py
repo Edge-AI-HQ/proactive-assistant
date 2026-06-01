@@ -127,10 +127,10 @@ async def dispatch(conn, event: Any) -> bool:
 
 async def _handle_checkout_completed(conn, session: Any) -> None:
     """A user finished Stripe Checkout. The session contains:
-      - customer (id we should pin onto users.stripe_customer_id)
-      - subscription (id; we fetch full Subscription to sync state)
-      - metadata.supabase_user_id (we set this on session creation —
-        external namespace per AGENTS.md "用户标识规约")
+    - customer (id we should pin onto users.stripe_customer_id)
+    - subscription (id; we fetch full Subscription to sync state)
+    - metadata.supabase_user_id (we set this on session creation —
+      external namespace per AGENTS.md "用户标识规约")
     """
     user_id = await _user_id_from_metadata(conn, session)
     if user_id is None:
@@ -141,8 +141,9 @@ async def _handle_checkout_completed(conn, session: Any) -> None:
         if cust_id:
             user_id = await subscriptions.find_user_by_stripe_customer(conn, cust_id)
     if user_id is None:
-        logger.warning("checkout.completed without resolvable user (session=%s)",
-                       _attr(session, "id"))
+        logger.warning(
+            "checkout.completed without resolvable user (session=%s)", _attr(session, "id")
+        )
         return
 
     sub_id = _attr(session, "subscription")
@@ -156,7 +157,10 @@ async def _handle_checkout_completed(conn, session: Any) -> None:
     sub = stripe.Subscription.retrieve(sub_id)
     plan_code = await _plan_code_for_subscription(conn, sub)
     await subscriptions.sync_from_stripe_subscription(
-        conn, user_id=user_id, plan_code=plan_code, stripe_subscription=sub,
+        conn,
+        user_id=user_id,
+        plan_code=plan_code,
+        stripe_subscription=sub,
     )
 
 
@@ -197,11 +201,15 @@ async def _handle_subscription_event(conn, sub: Any) -> None:
     # next-cycle plan early. invoice.paid is the SSOT for actually
     # promoting pending_plan_code → plan_code on renewal.
     await subscriptions.sync_from_stripe_subscription(
-        conn, user_id=user_id, plan_code=plan_code, stripe_subscription=fresh,
+        conn,
+        user_id=user_id,
+        plan_code=plan_code,
+        stripe_subscription=fresh,
         update_plan_code=False,
     )
 
     from . import checkout as checkout_flow
+
     fresh_status = _attr(fresh, "status")
     if fresh_status == "canceled":
         # On terminal cancel, demote the user back to Free tier (not zero
@@ -211,7 +219,10 @@ async def _handle_subscription_event(conn, sub: Any) -> None:
         # ends. Customer Portal "cancel immediately" also lands here.
         await checkout_flow.ensure_user_free_subscription(conn, user_id)
         await checkout_flow.sync_litellm_budget_for_plan(
-            conn, user_id, "free", reset_spend=True,
+            conn,
+            user_id,
+            "free",
+            reset_spend=True,
         )
 
 
@@ -242,8 +253,7 @@ async def _handle_invoice_paid(conn, invoice: Any) -> None:
         if cust_id:
             user_id = await subscriptions.find_user_by_stripe_customer(conn, cust_id)
     if user_id is None:
-        logger.warning("invoice.paid without resolvable user (invoice=%s)",
-                       _attr(invoice, "id"))
+        logger.warning("invoice.paid without resolvable user (invoice=%s)", _attr(invoice, "id"))
         return
     stripe = requires_stripe()
     fresh = stripe.Subscription.retrieve(sub_id)
@@ -270,13 +280,18 @@ async def _handle_invoice_paid(conn, invoice: Any) -> None:
         plan_code = pending
         logger.info(
             "invoice.paid promoting pending plan: user=%d %s → %s",
-            user_id, pre_sync.plan_code if pre_sync else "?", pending,
+            user_id,
+            pre_sync.plan_code if pre_sync else "?",
+            pending,
         )
     else:
         plan_code = stripe_plan_code
 
     await subscriptions.sync_from_stripe_subscription(
-        conn, user_id=user_id, plan_code=plan_code, stripe_subscription=fresh,
+        conn,
+        user_id=user_id,
+        plan_code=plan_code,
+        stripe_subscription=fresh,
     )
     if pending:
         await subscriptions.clear_pending_plan_code(conn, user_id)
@@ -286,19 +301,21 @@ async def _handle_invoice_paid(conn, invoice: Any) -> None:
         # log + continue on Stripe API failure.
         try:
             stripe.Subscription.modify(
-                sub_id, metadata={"pending_plan_code": ""},
+                sub_id,
+                metadata={"pending_plan_code": ""},
             )
         except Exception as e:
             logger.warning(
-                "failed to clear pending_plan_code from Stripe metadata "
-                "for sub=%s: %s", sub_id, e,
+                "failed to clear pending_plan_code from Stripe metadata for sub=%s: %s",
+                sub_id,
+                e,
             )
 
     # ── LiteLLM budget refresh ──
     if plan_code is None:
         logger.warning(
-            "invoice.paid for user=%d but plan_code unresolved; LiteLLM "
-            "budget not refreshed", user_id,
+            "invoice.paid for user=%d but plan_code unresolved; LiteLLM budget not refreshed",
+            user_id,
         )
         return
     plan = await plans.find_by_code(conn, plan_code)
@@ -307,8 +324,8 @@ async def _handle_invoice_paid(conn, invoice: Any) -> None:
     virtual_key = await _virtual_key_for_user(conn, user_id)
     if not virtual_key:
         logger.warning(
-            "invoice.paid: user=%d has no litellm_virtual_key; budget not "
-            "refreshed", user_id,
+            "invoice.paid: user=%d has no litellm_virtual_key; budget not refreshed",
+            user_id,
         )
         return
     budget_usd = plan.monthly_refresh_credits / _CREDITS_PER_USD
@@ -321,14 +338,18 @@ async def _handle_invoice_paid(conn, invoice: Any) -> None:
         )
         logger.info(
             "litellm budget refreshed: user=%d plan=%s max_budget=$%.2f",
-            user_id, plan_code, budget_usd,
+            user_id,
+            plan_code,
+            budget_usd,
         )
     except litellm_client.LiteLLMError as e:
         # Don't fail the whole webhook on LiteLLM hiccup — Stripe state
         # is already persisted; spend tracking just drifts until next
         # invoice.paid retry. Log and continue.
         logger.exception(
-            "litellm /key/update failed for user=%d: %s", user_id, e,
+            "litellm /key/update failed for user=%d: %s",
+            user_id,
+            e,
         )
 
 

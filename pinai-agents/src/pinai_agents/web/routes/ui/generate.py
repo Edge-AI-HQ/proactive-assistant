@@ -41,6 +41,7 @@ async def _ensure_virtual_key(user: User, pool) -> User:
     from ...services.litellm_provisioning import (  # noqa: PLC0415
         ensure_user_litellm_key,
     )
+
     try:
         return await ensure_user_litellm_key(pool, user)
     except Exception as e:
@@ -52,7 +53,11 @@ async def _ensure_virtual_key(user: User, pool) -> User:
 
 
 async def persist_generator_run(
-    pool, *, user_id: int, payload: dict, trigger: str,
+    pool,
+    *,
+    user_id: int,
+    payload: dict,
+    trigger: str,
     matched_patterns: list[dict[str, Any]] | None = None,
 ) -> None:
     """Write the completed generator run to pai_pipeline_runs +
@@ -97,18 +102,27 @@ async def persist_generator_run(
                   updated_at = NOW()
                 """,
                 (
-                    user_id, run_id, run_id, trigger,
+                    user_id,
+                    run_id,
+                    run_id,
+                    trigger,
                     json.dumps(cards),
                     json.dumps(iterations) if iterations is not None else None,
                 ),
             )
             await _persist_evaluations(
-                conn, user_id=user_id, run_id=run_id,
-                cards=cards, evaluations=evaluations,
+                conn,
+                user_id=user_id,
+                run_id=run_id,
+                cards=cards,
+                evaluations=evaluations,
             )
             await _persist_pattern_hits(
-                conn, user_id=user_id, run_id=run_id,
-                cards=cards, evaluations=evaluations,
+                conn,
+                user_id=user_id,
+                run_id=run_id,
+                cards=cards,
+                evaluations=evaluations,
                 matched_patterns=matched_patterns or [],
             )
     except Exception:
@@ -163,8 +177,10 @@ async def _persist_pattern_hits(
             continue
         ev = eval_pattern_by_card.get(card_id, {})
         pattern_id = (
-            ev.get("patternId") or ev.get("pattern_id")
-            or card.get("patternId") or card.get("pattern_id")
+            ev.get("patternId")
+            or ev.get("pattern_id")
+            or card.get("patternId")
+            or card.get("pattern_id")
         )
         if not isinstance(pattern_id, str) or not pattern_id:
             continue
@@ -188,7 +204,10 @@ async def _persist_pattern_hits(
     if dropped:
         logger.info(
             "persist pattern hits: dropping %d hallucinated pattern_ids user=%d run=%s ids=%s",
-            len(dropped), user_id, run_id, sorted(dropped),
+            len(dropped),
+            user_id,
+            run_id,
+            sorted(dropped),
         )
 
     inserted = 0
@@ -198,9 +217,7 @@ async def _persist_pattern_hits(
         evidence = match.get("evidence") or {}
         base_hit_rate = match.get("baseHitRate")
         combined_score = (
-            match.get("combinedScore")
-            if match.get("combinedScore") is not None
-            else base_hit_rate
+            match.get("combinedScore") if match.get("combinedScore") is not None else base_hit_rate
         )
         await conn.execute(
             """
@@ -220,7 +237,10 @@ async def _persist_pattern_hits(
               pattern_grounding_ok = EXCLUDED.pattern_grounding_ok
             """,
             (
-                user_id, run_id, card_id, pattern_id,
+                user_id,
+                run_id,
+                card_id,
+                pattern_id,
                 match.get("subtype"),
                 json.dumps(evidence),
                 match.get("userFitScore"),
@@ -231,7 +251,10 @@ async def _persist_pattern_hits(
         inserted += 1
     if inserted:
         logger.info(
-            "persisted %d pattern hits user=%d run=%s", inserted, user_id, run_id,
+            "persisted %d pattern hits user=%d run=%s",
+            inserted,
+            user_id,
+            run_id,
         )
 
 
@@ -296,10 +319,15 @@ async def _persist_evaluations(
                   evaluated_at = NOW()
                 """,
                 (
-                    user_id, card_id, run_id, basket_by_card.get(card_id),
-                    dims.get("relevance"), dims.get("actionability"),
+                    user_id,
+                    card_id,
+                    run_id,
+                    basket_by_card.get(card_id),
+                    dims.get("relevance"),
+                    dims.get("actionability"),
                     dims.get("whyNowClarity"),
-                    dims.get("novelty"), dims.get("decisionCompression"),
+                    dims.get("novelty"),
+                    dims.get("decisionCompression"),
                     ev.get("overall"),
                     bool(ev.get("pass")),
                     ev.get("feedback"),
@@ -309,11 +337,16 @@ async def _persist_evaluations(
         except Exception:
             logger.exception(
                 "persist evaluation failed user=%d run=%s card=%s",
-                user_id, run_id, card_id,
+                user_id,
+                run_id,
+                card_id,
             )
     logger.info(
         "persisted %d/%d evaluations user=%d run=%s",
-        inserted, len(evaluations), user_id, run_id,
+        inserted,
+        len(evaluations),
+        user_id,
+        run_id,
     )
 
 
@@ -359,7 +392,9 @@ async def generate(
         existing = await _find_active_generator_task(conn, user.id)
         if existing:
             return {
-                "ok": True, "taskId": existing, "runId": existing,
+                "ok": True,
+                "taskId": existing,
+                "runId": existing,
                 "status": "queued",
                 "asOf": datetime.now(UTC).isoformat(),
                 "deduped": True,
@@ -375,7 +410,9 @@ async def generate(
         task_id = f"gen.{uuid.uuid4().hex[:12]}"
         await enqueue_once(
             conn,
-            user_id=user.id, task_id=task_id, kind="generator.manual",
+            user_id=user.id,
+            task_id=task_id,
+            kind="generator.manual",
             payload={
                 "cards_to_generate": body.cards_to_generate,
                 "output_language": output_language,
@@ -384,7 +421,9 @@ async def generate(
             max_attempts=2,  # keep low — generator is expensive, retry once max
         )
     return {
-        "ok": True, "taskId": task_id, "runId": task_id,
+        "ok": True,
+        "taskId": task_id,
+        "runId": task_id,
         "status": "queued",
         "asOf": datetime.now(UTC).isoformat(),
         "deduped": False,

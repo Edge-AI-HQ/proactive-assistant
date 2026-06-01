@@ -51,7 +51,8 @@ async def pool() -> AsyncIterator[AsyncConnectionPool]:
         pytest.skip("TEST_DATABASE_URL not set")
     p = AsyncConnectionPool(
         conninfo=dsn,
-        min_size=1, max_size=8,
+        min_size=1,
+        max_size=8,
         kwargs={"row_factory": dict_row},
         open=False,
     )

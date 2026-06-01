@@ -152,12 +152,14 @@ async def test_seed_pattern_back_to_back_events(pool, user_ids):
     events = []
     for i in range(3):
         start = base + _td(minutes=i * 30)
-        events.append({
-            "id": f"ev_{i}",
-            "title": f"Event {i}",
-            "start": start.isoformat(),
-            "end": (start + _td(minutes=27)).isoformat(),
-        })
+        events.append(
+            {
+                "id": f"ev_{i}",
+                "title": f"Event {i}",
+                "start": start.isoformat(),
+                "end": (start + _td(minutes=27)).isoformat(),
+            }
+        )
     phase1 = {"calendar": {"events": events}}
     async with user_scoped_tx(pool, user_a) as conn:
         repo = PatternsRepository(user_a, conn)
@@ -200,8 +202,11 @@ async def test_match_patterns_hits_when_phase1_satisfies_trigger(pool, user_ids)
                 "test_intent",
                 "{}",
                 "[]",
-                "m", "m",
-                "warmup", "active", "seed",
+                "m",
+                "m",
+                "warmup",
+                "active",
+                "seed",
             ),
         )
         repo = PatternsRepository(user_a, conn)

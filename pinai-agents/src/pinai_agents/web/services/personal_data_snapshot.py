@@ -206,8 +206,7 @@ def _normalized_payload_key(value: Any) -> str:
 def _redact_sensitive_payload(value: Any) -> Any:
     if isinstance(value, dict):
         has_sensitive_value_label = any(
-            _normalized_payload_key(k) in SENSITIVE_VALUE_LABEL_KEYS
-            and _is_sensitive_key(v)
+            _normalized_payload_key(k) in SENSITIVE_VALUE_LABEL_KEYS and _is_sensitive_key(v)
             for k, v in value.items()
         )
         return {
@@ -290,10 +289,7 @@ class PersonalDataSnapshotService:
         limit: int = 40,
         offset: int = 0,
     ) -> dict[str, Any]:
-        requested = [
-            key for key in CATEGORY_LABELS
-            if category == "all" or key == category
-        ]
+        requested = [key for key in CATEGORY_LABELS if category == "all" or key == category]
         sections: list[dict[str, Any]] = []
         for key in requested:
             fetcher = getattr(self, f"_fetch_{key}")
@@ -758,9 +754,22 @@ class PersonalDataSnapshotService:
             OFFSET %s
             """,
             (
-                self._user_id, since, since, until, until,
-                self._user_id, since, since, until, until,
-                query, like, like, like, limit, offset,
+                self._user_id,
+                since,
+                since,
+                until,
+                until,
+                self._user_id,
+                since,
+                since,
+                until,
+                until,
+                query,
+                like,
+                like,
+                like,
+                limit,
+                offset,
             ),
         )
 
@@ -827,15 +836,25 @@ class PersonalDataSnapshotService:
         if one_text_search:
             return (
                 self._user_id,
-                since, since,
-                until, until,
-                query, like,
-                limit, offset,
+                since,
+                since,
+                until,
+                until,
+                query,
+                like,
+                limit,
+                offset,
             )
         return (
             self._user_id,
-            since, since,
-            until, until,
-            query, like, like, like,
-            limit, offset,
+            since,
+            since,
+            until,
+            until,
+            query,
+            like,
+            like,
+            like,
+            limit,
+            offset,
         )

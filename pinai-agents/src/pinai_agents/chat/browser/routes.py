@@ -38,7 +38,7 @@ _INPUT_TEXT_MAX = 2000
 def _verify_or_401(authorization: str | None) -> None:
     if not (authorization and authorization.lower().startswith("bearer ")):
         return
-    token = authorization[len("bearer "):].strip()
+    token = authorization[len("bearer ") :].strip()
     try:
         verify_run_jwt(token)
     except RunJWTError as e:
@@ -47,6 +47,7 @@ def _verify_or_401(authorization: str | None) -> None:
 
 
 # ── SSE ──
+
 
 @router.get("/agent/browser/events")
 async def browser_events_sse(
@@ -70,16 +71,13 @@ async def _event_stream(session_key: str) -> AsyncIterator[bytes]:
         while True:
             try:
                 envelope = await asyncio.wait_for(q.get(), timeout=25.0)
-                yield (
-                    b"data: "
-                    + json.dumps(envelope, ensure_ascii=False).encode()
-                    + b"\n\n"
-                )
+                yield (b"data: " + json.dumps(envelope, ensure_ascii=False).encode() + b"\n\n")
             except TimeoutError:
                 yield b": ping\n\n"
 
 
 # ── REST ──
+
 
 class ControlBody(BaseModel):
     mode: str = Field(pattern="^(ai|user)$")
@@ -95,7 +93,9 @@ async def browser_control(
     _verify_or_401(authorization)
     mode = normalize_mode(body.mode)
     await get_browser_manager().set_control_mode(
-        session_key, mode, reason=body.reason if body.mode == "user" else None,
+        session_key,
+        mode,
+        reason=body.reason if body.mode == "user" else None,
     )
     return {"ok": True, "mode": mode.value}
 

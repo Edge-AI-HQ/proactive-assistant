@@ -172,11 +172,19 @@ class ScheduledTasksRepository(UserScopedRepository):
                 RETURNING *
                 """,
                 (
-                    self._user_id, id, kind, name, prompt, trigger_kind,
-                    cron_expr, interval_seconds,
+                    self._user_id,
+                    id,
+                    kind,
+                    name,
+                    prompt,
+                    trigger_kind,
+                    cron_expr,
+                    interval_seconds,
                     json.dumps(event_filter) if event_filter is not None else None,
                     json.dumps(payload or {}),
-                    timezone, status, next_run_at,
+                    timezone,
+                    status,
+                    next_run_at,
                 ),
             )
             row = await cur.fetchone()
@@ -597,8 +605,12 @@ async def heartbeat_run(
 
 
 async def complete_run(
-    conn: AsyncConnection, *, user_id: int, run_id: str,
-    status: str, error: str | None = None,
+    conn: AsyncConnection,
+    *,
+    user_id: int,
+    run_id: str,
+    status: str,
+    error: str | None = None,
 ) -> None:
     """Mark a run finished. status: success | failed."""
     async with conn.cursor() as cur:

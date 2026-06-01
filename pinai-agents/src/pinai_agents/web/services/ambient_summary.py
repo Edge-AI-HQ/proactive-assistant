@@ -44,9 +44,13 @@ class AmbientSummaryContext(BaseModel):
     schema_version: Literal["ambient_summary.v1"] = Field(alias="schemaVersion")
     local_date: str = Field(alias="localDate", min_length=1, max_length=32)
     generated_at: str = Field(alias="generatedAt", min_length=1, max_length=80)
-    raw_events: list[AmbientSummaryContextRawEvent] = Field(alias="rawEvents", min_length=1, max_length=80)
+    raw_events: list[AmbientSummaryContextRawEvent] = Field(
+        alias="rawEvents", min_length=1, max_length=80
+    )
     recent_summaries: list[AmbientSummaryContextRecentSummary] = Field(
-        default_factory=list, alias="recentSummaries", max_length=3,
+        default_factory=list,
+        alias="recentSummaries",
+        max_length=3,
     )
 
 
@@ -79,7 +83,10 @@ async def generate_ambient_summary(
         "model": model,
         "messages": [
             {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps(context.model_dump(by_alias=True), ensure_ascii=False)},
+            {
+                "role": "user",
+                "content": json.dumps(context.model_dump(by_alias=True), ensure_ascii=False),
+            },
         ],
         "temperature": 0.2,
         "response_format": {"type": "json_object"},

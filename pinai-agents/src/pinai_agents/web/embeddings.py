@@ -93,7 +93,12 @@ async def embed_batch(texts: list[str]) -> list[list[float]]:
 
 
 async def enqueue(
-    conn, *, user_id: int, table_name: str, row_id: str, text: str,
+    conn,
+    *,
+    user_id: int,
+    table_name: str,
+    row_id: str,
+    text: str,
 ) -> None:
     """Add a (table, row_id) entry to the embedding queue. Idempotent
     on the (user_id, table, id) PK — re-enqueueing the same row resets
@@ -163,8 +168,12 @@ async def drain_queue(conn, *, batch_size: int = _BATCH) -> int:
                     WHERE user_id = %s AND table_name = %s AND row_id = %s
                     """,
                     (
-                        new_attempts, new_status, str(e)[:500],
-                        r["user_id"], r["table_name"], r["row_id"],
+                        new_attempts,
+                        new_status,
+                        str(e)[:500],
+                        r["user_id"],
+                        r["table_name"],
+                        r["row_id"],
                     ),
                 )
         return 0
@@ -217,7 +226,10 @@ async def drain_queue(conn, *, batch_size: int = _BATCH) -> int:
             except Exception as e:
                 logger.warning(
                     "embedding write-back failed user=%d table=%s id=%s: %s",
-                    uid, table, rid, e,
+                    uid,
+                    table,
+                    rid,
+                    e,
                 )
     return written
 

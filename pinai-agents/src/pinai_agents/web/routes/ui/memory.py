@@ -24,12 +24,19 @@ router = APIRouter(prefix="/api/memory", tags=["memory"])
 
 def _to_item(row: MemoryRow) -> MemoryItem:
     return MemoryItem(
-        id=row.id, text=row.text, source=row.source,
-        source_run_id=row.source_run_id, subject=row.subject,
-        quality=row.quality, confidence=row.confidence,
-        status=row.status, superseded_by=row.superseded_by,
-        occurred_at=row.occurred_at, created_at=row.created_at,
-        tags=row.tags, related_memory_ids=row.related_memory_ids,
+        id=row.id,
+        text=row.text,
+        source=row.source,
+        source_run_id=row.source_run_id,
+        subject=row.subject,
+        quality=row.quality,
+        confidence=row.confidence,
+        status=row.status,
+        superseded_by=row.superseded_by,
+        occurred_at=row.occurred_at,
+        created_at=row.created_at,
+        tags=row.tags,
+        related_memory_ids=row.related_memory_ids,
         reference_count=row.reference_count,
         last_referenced_at=row.last_referenced_at,
     )
@@ -49,9 +56,16 @@ _ORDER_BY_MAP: dict[tuple[str, str], str] = {
 
 
 def _resolve_order_by(order_by: str | None, order_direction: str | None) -> str:
-    if order_by and "_" in order_by and order_by in {
-        "created_at_desc", "quality_desc", "last_referenced_desc",
-    }:
+    if (
+        order_by
+        and "_" in order_by
+        and order_by
+        in {
+            "created_at_desc",
+            "quality_desc",
+            "last_referenced_desc",
+        }
+    ):
         return order_by  # already a combined token
     direction = (order_direction or "desc").lower()
     return _ORDER_BY_MAP.get((order_by or "created_at", direction), "created_at_desc")
@@ -78,9 +92,12 @@ async def list_memory(
     async with user_scoped_tx(pool, user.id) as conn:
         repo = MemoryRepository(user.id, conn)
         rows, total = await repo.list_active(
-            min_quality=min_quality, subject=subject,
-            subject_prefix=subject_prefix, since=since,
-            limit=limit, offset=offset,
+            min_quality=min_quality,
+            subject=subject,
+            subject_prefix=subject_prefix,
+            since=since,
+            limit=limit,
+            offset=offset,
             order_by=_resolve_order_by(order_by, order_direction),
         )
     items = [_to_item(r) for r in rows]
@@ -117,14 +134,19 @@ async def add_memory(
     mem_id = body.id or f"mem_{uuid.uuid4().hex[:16]}"
     async with user_scoped_tx(pool, user.id) as conn:
         repo = MemoryRepository(user.id, conn)
-        row = await repo.add(AddMemoryInput(
-            id=mem_id, text=body.text, source=body.source,
-            subject=body.subject, quality=body.quality,
-            confidence=body.confidence,
-            source_run_id=body.source_run_id,
-            occurred_at=body.occurred_at,
-            tags=body.tags,
-        ))
+        row = await repo.add(
+            AddMemoryInput(
+                id=mem_id,
+                text=body.text,
+                source=body.source,
+                subject=body.subject,
+                quality=body.quality,
+                confidence=body.confidence,
+                source_run_id=body.source_run_id,
+                occurred_at=body.occurred_at,
+                tags=body.tags,
+            )
+        )
     return _to_item(row)
 
 

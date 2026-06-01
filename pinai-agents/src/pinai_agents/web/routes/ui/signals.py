@@ -25,14 +25,24 @@ router = APIRouter(prefix="/api/signals", tags=["signals"])
 
 def _to_item(row: PersonalSignalRow) -> PersonalSignalItem:
     return PersonalSignalItem(
-        id=row.id, kind=row.kind, title=row.title, summary=row.summary,
-        payload=row.payload, salience=row.salience, confidence=row.confidence,
-        dedupe_key=row.dedupe_key, occurred_at=row.occurred_at,
-        available_at=row.available_at, expires_at=row.expires_at,
-        source=row.source, device_id=row.device_id, subject=row.subject,
+        id=row.id,
+        kind=row.kind,
+        title=row.title,
+        summary=row.summary,
+        payload=row.payload,
+        salience=row.salience,
+        confidence=row.confidence,
+        dedupe_key=row.dedupe_key,
+        occurred_at=row.occurred_at,
+        available_at=row.available_at,
+        expires_at=row.expires_at,
+        source=row.source,
+        device_id=row.device_id,
+        subject=row.subject,
         source_raw_table=row.source_raw_table,
         source_raw_ids=row.source_raw_ids,
-        status=row.status, consumed_by_run_id=row.consumed_by_run_id,
+        status=row.status,
+        consumed_by_run_id=row.consumed_by_run_id,
         ingested_at=row.ingested_at,
     )
 
@@ -41,8 +51,9 @@ def _to_item(row: PersonalSignalRow) -> PersonalSignalItem:
 async def list_signals(
     user: User = Depends(current_user),
     pool=Depends(get_pool),
-    status_filter: str | None = Query("open", alias="status",
-                                      pattern="^(open|consumed|archived|all)$"),
+    status_filter: str | None = Query(
+        "open", alias="status", pattern="^(open|consumed|archived|all)$"
+    ),
     kind: str | None = Query(None),
     source: str | None = Query(None),
     device_id: str | None = Query(None, alias="deviceId"),
@@ -70,9 +81,15 @@ async def list_signals(
     async with user_scoped_tx(pool, user.id) as conn:
         repo = PersonalSignalsRepository(user.id, conn)
         rows, total = await repo.list_recent(
-            status=actual_status, kind=kind, source=source,
-            device_id=device_id, since=since, before=before,
-            min_salience=min_salience, limit=limit, offset=offset,
+            status=actual_status,
+            kind=kind,
+            source=source,
+            device_id=device_id,
+            since=since,
+            before=before,
+            min_salience=min_salience,
+            limit=limit,
+            offset=offset,
         )
     items = [_to_item(r) for r in rows]
     return {
@@ -84,8 +101,7 @@ async def list_signals(
     }
 
 
-@router.post("/ingest", response_model=PersonalSignalItem,
-             status_code=status.HTTP_201_CREATED)
+@router.post("/ingest", response_model=PersonalSignalItem, status_code=status.HTTP_201_CREATED)
 async def ingest_signal(
     body: PersonalSignalIngestRequest,
     user: User = Depends(current_user),
@@ -94,16 +110,26 @@ async def ingest_signal(
     sig_id = body.id or f"sig_{uuid.uuid4().hex[:16]}"
     async with user_scoped_tx(pool, user.id) as conn:
         repo = PersonalSignalsRepository(user.id, conn)
-        row = await repo.ingest_one(IngestSignalInput(
-            id=sig_id, kind=body.kind, title=body.title, summary=body.summary,
-            occurred_at=body.occurred_at, payload=body.payload,
-            salience=body.salience, confidence=body.confidence,
-            dedupe_key=body.dedupe_key, available_at=body.available_at,
-            expires_at=body.expires_at, source=body.source,
-            device_id=body.device_id, subject=body.subject,
-            source_raw_table=body.source_raw_table,
-            source_raw_ids=body.source_raw_ids,
-        ))
+        row = await repo.ingest_one(
+            IngestSignalInput(
+                id=sig_id,
+                kind=body.kind,
+                title=body.title,
+                summary=body.summary,
+                occurred_at=body.occurred_at,
+                payload=body.payload,
+                salience=body.salience,
+                confidence=body.confidence,
+                dedupe_key=body.dedupe_key,
+                available_at=body.available_at,
+                expires_at=body.expires_at,
+                source=body.source,
+                device_id=body.device_id,
+                subject=body.subject,
+                source_raw_table=body.source_raw_table,
+                source_raw_ids=body.source_raw_ids,
+            )
+        )
     return _to_item(row)
 
 

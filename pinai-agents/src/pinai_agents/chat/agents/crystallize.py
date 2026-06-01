@@ -68,15 +68,19 @@ async def run_crystallize(
             system_prompt=_CRYSTALLIZE_SYSTEM_PROMPT,
             backend=backend,
         )
-        result: dict[str, Any] = await agent.ainvoke({
-            "messages": [{
-                "role": "user",
-                "content": (
-                    f"Crystallize chat session_key={session_key} user_id={user_id} "
-                    f"run_id={run_id}. Distill the thread into memory + skills."
-                ),
-            }],
-        })
+        result: dict[str, Any] = await agent.ainvoke(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Crystallize chat session_key={session_key} user_id={user_id} "
+                            f"run_id={run_id}. Distill the thread into memory + skills."
+                        ),
+                    }
+                ],
+            }
+        )
     finally:
         await delete_sandbox_now(raw)
     msgs = result.get("messages", [])

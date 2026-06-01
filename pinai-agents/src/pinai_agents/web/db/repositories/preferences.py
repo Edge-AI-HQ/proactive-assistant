@@ -96,10 +96,17 @@ class PreferenceRepository(UserScopedRepository):
                 RETURNING *
                 """,
                 (
-                    self._user_id, input.id, input.statement, input.scope,
-                    input.polarity, input.weight, input.confidence,
-                    input.source, json.dumps(input.evidence or {}),
-                    input.durability, input.expires_at,
+                    self._user_id,
+                    input.id,
+                    input.statement,
+                    input.scope,
+                    input.polarity,
+                    input.weight,
+                    input.confidence,
+                    input.source,
+                    json.dumps(input.evidence or {}),
+                    input.durability,
+                    input.expires_at,
                 ),
             )
             row = await cur.fetchone()

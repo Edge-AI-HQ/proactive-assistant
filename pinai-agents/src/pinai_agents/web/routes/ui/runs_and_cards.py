@@ -59,6 +59,7 @@ def _row_to_camel(row: dict[str, Any] | None) -> dict[str, Any] | None:
 
 # ── routes ──
 
+
 @router.get("/health")
 async def api_health(
     user: User = Depends(current_user),
@@ -124,9 +125,7 @@ async def api_status(
             "finalCards": latest_row["final_cards"],
             "batchFeedback": None,
             "completedAt": (
-                latest_row["completed_at"].isoformat()
-                if latest_row.get("completed_at")
-                else None
+                latest_row["completed_at"].isoformat() if latest_row.get("completed_at") else None
             ),
         }
 
@@ -204,7 +203,8 @@ async def get_run(
         row = await cur.fetchone()
     if row is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="run not found",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="run not found",
         )
     return {"ok": True, "run": _row_to_camel(row)}
 
@@ -309,7 +309,9 @@ async def list_cards(
             score: dict[str, Any] | None = None
             if isinstance(score_raw, dict) and "overall" in score_raw and "pass" in score_raw:
                 score = {
-                    "overall": float(score_raw["overall"]) if score_raw["overall"] is not None else 0.0,
+                    "overall": float(score_raw["overall"])
+                    if score_raw["overall"] is not None
+                    else 0.0,
                     "pass": bool(score_raw["pass"]),
                 }
             latest_outcome: str | None = None
@@ -319,14 +321,16 @@ async def list_cards(
                 raw_at = outcome_raw.get("outcomeAt")
                 latest_outcome = raw_outcome if isinstance(raw_outcome, str) else None
                 outcome_at = raw_at if isinstance(raw_at, str) else None
-            out.append({
-                "card": c,
-                "runId": r["run_id"],
-                "runCompletedAt": run_completed_at,
-                "score": score,
-                "latestOutcome": latest_outcome,
-                "outcomeAt": outcome_at,
-            })
+            out.append(
+                {
+                    "card": c,
+                    "runId": r["run_id"],
+                    "runCompletedAt": run_completed_at,
+                    "score": score,
+                    "latestOutcome": latest_outcome,
+                    "outcomeAt": outcome_at,
+                }
+            )
             if len(out) >= limit:
                 break
         if len(out) >= limit:

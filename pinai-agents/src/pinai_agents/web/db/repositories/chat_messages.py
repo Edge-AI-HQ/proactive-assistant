@@ -27,7 +27,11 @@ class ChatMessagesRepository(UserScopedRepository):
     """CRUD for pai_chat_messages. Append-only per (user, thread)."""
 
     async def append_turn(
-        self, *, thread_id: str, role: Role, parts: list[dict[str, Any]],
+        self,
+        *,
+        thread_id: str,
+        role: Role,
+        parts: list[dict[str, Any]],
     ) -> int:
         """Append one turn. Returns the new row id (== conversation order)."""
         async with self.conn.cursor(row_factory=dict_row) as cur:
@@ -43,7 +47,10 @@ class ChatMessagesRepository(UserScopedRepository):
             return int(row["id"])
 
     async def bulk_append(
-        self, *, thread_id: str, turns: list[dict[str, Any]],
+        self,
+        *,
+        thread_id: str,
+        turns: list[dict[str, Any]],
     ) -> int:
         """Insert many turns in order (lazy-backfill from checkpoint history).
 
@@ -58,15 +65,16 @@ class ChatMessagesRepository(UserScopedRepository):
                 INSERT INTO pai_chat_messages (user_id, thread_id, role, parts)
                 VALUES (%s, %s, %s, %s)
                 """,
-                [
-                    (self.user_id, thread_id, t["role"], Jsonb(t["parts"]))
-                    for t in turns
-                ],
+                [(self.user_id, thread_id, t["role"], Jsonb(t["parts"])) for t in turns],
             )
         return len(turns)
 
     async def get_page(
-        self, *, thread_id: str, before_id: int | None = None, limit: int = 50,
+        self,
+        *,
+        thread_id: str,
+        before_id: int | None = None,
+        limit: int = 50,
     ) -> list[dict[str, Any]]:
         """Newest-first page of turns. `before_id` is an exclusive cursor for
         "load older" (pass the smallest id from the previous page). Returns

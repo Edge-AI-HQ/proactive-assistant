@@ -201,11 +201,7 @@ def _fold_rewards(events: list[dict[str, Any]]) -> dict[str, Any]:
         event_type = event.get("event_type")
         if source == "user" and event_type == "card_open":
             opened = True
-        elif (
-            source == "user"
-            and event_type == "user_score"
-            and latest_user_score is None
-        ):
+        elif source == "user" and event_type == "user_score" and latest_user_score is None:
             latest_user_score = _as_float(event.get("score"))
             latest_user_score_at = _iso(event.get("created_at"))
         elif (
@@ -470,7 +466,15 @@ class RewardRepository(UserScopedRepository):
                 FULL OUTER JOIN daily_cases dcase ON dcase.day = dc.day
                 ORDER BY day ASC
                 """,
-                (self._user_id, since, self._user_id, self._user_id, self._user_id, self._user_id, since),
+                (
+                    self._user_id,
+                    since,
+                    self._user_id,
+                    self._user_id,
+                    self._user_id,
+                    self._user_id,
+                    since,
+                ),
             )
             rows = await cur.fetchall()
         return {
@@ -495,7 +499,8 @@ class RewardRepository(UserScopedRepository):
         if run is None:
             return None
         cards = [
-            c for c in (run.get("final_cards") or [])
+            c
+            for c in (run.get("final_cards") or [])
             if isinstance(c, dict) and isinstance(c.get("id"), str)
         ]
         card_ids = [c["id"] for c in cards]
@@ -507,14 +512,16 @@ class RewardRepository(UserScopedRepository):
         for card in cards:
             cid = card["id"]
             events = histories.get(cid, [])
-            cards_out.append({
-                "card": card,
-                "evaluation": evaluations.get(cid),
-                "rewards": _fold_rewards(events),
-                "rewardHistory": [_reward_event_to_wire(e) for e in events],
-                "casebook": casebook.get(cid),
-                "feedbackEvents": feedback.get(cid, []),
-            })
+            cards_out.append(
+                {
+                    "card": card,
+                    "evaluation": evaluations.get(cid),
+                    "rewards": _fold_rewards(events),
+                    "rewardHistory": [_reward_event_to_wire(e) for e in events],
+                    "casebook": casebook.get(cid),
+                    "feedbackEvents": feedback.get(cid, []),
+                }
+            )
         return {
             "run": self._run_to_wire(run),
             "cards": cards_out,
@@ -619,7 +626,9 @@ class RewardRepository(UserScopedRepository):
         # job, not the per-user fingerprint.
         if source == "user" and event_type in {"card_open", "dismiss", "user_score"}:
             await self._fanout_fingerprint(
-                card_id=card_id, event_type=event_type, score=score,
+                card_id=card_id,
+                event_type=event_type,
+                score=score,
             )
         return _reward_event_to_wire(row)
 
@@ -1008,7 +1017,8 @@ class RewardRepository(UserScopedRepository):
             return await cur.fetchone() is not None
 
     async def _evaluations_for_cards(
-        self, card_ids: list[str],
+        self,
+        card_ids: list[str],
     ) -> dict[str, dict[str, Any] | None]:
         if not card_ids:
             return {}
@@ -1075,22 +1085,24 @@ class RewardRepository(UserScopedRepository):
             rows = await cur.fetchall()
         grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in rows:
-            grouped[row["intent_card_id"]].append({
-                "id": row["id"],
-                "kind": row["kind"],
-                "action": row.get("action"),
-                "intentCardId": row.get("intent_card_id"),
-                "intentKey": row.get("intent_key"),
-                "source": row.get("source"),
-                "basket": row.get("basket"),
-                "value": row.get("value"),
-                "text": row.get("text"),
-                "metadata": _json_obj(row.get("metadata")),
-                "conversationId": row.get("conversation_id"),
-                "messageId": row.get("message_id"),
-                "channel": row.get("channel"),
-                "createdAt": _iso(row.get("created_at")),
-            })
+            grouped[row["intent_card_id"]].append(
+                {
+                    "id": row["id"],
+                    "kind": row["kind"],
+                    "action": row.get("action"),
+                    "intentCardId": row.get("intent_card_id"),
+                    "intentKey": row.get("intent_key"),
+                    "source": row.get("source"),
+                    "basket": row.get("basket"),
+                    "value": row.get("value"),
+                    "text": row.get("text"),
+                    "metadata": _json_obj(row.get("metadata")),
+                    "conversationId": row.get("conversation_id"),
+                    "messageId": row.get("message_id"),
+                    "channel": row.get("channel"),
+                    "createdAt": _iso(row.get("created_at")),
+                }
+            )
         return grouped
 
     async def _related_cards(self, card: dict[str, Any]) -> list[dict[str, Any]]:

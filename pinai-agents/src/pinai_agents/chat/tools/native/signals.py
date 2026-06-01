@@ -10,11 +10,14 @@ from .. import http_client
 
 class SignalsKindsInput(BaseModel):
     status: str = Field(
-        default="all", pattern="^(open|consumed|archived|all)$",
+        default="all",
+        pattern="^(open|consumed|archived|all)$",
         description="Default 'all' so already-consumed kinds still show up.",
     )
     hours: int | None = Field(
-        default=None, ge=1, le=336,
+        default=None,
+        ge=1,
+        le=336,
         description="Look-back window in hours. None = all time (the discovery default).",
     )
 
@@ -31,7 +34,9 @@ async def signals_kinds(status: str, hours: int | None):
     they ingest. After picking a kind, drill in with
     `signals_recent(kind=<picked>)`."""
     payload = await http_client.get(
-        "/api/agent/signals/kinds", status=status, hours=hours,
+        "/api/agent/signals/kinds",
+        status=status,
+        hours=hours,
     )
     if isinstance(payload, dict) and payload.get("error"):
         return payload
@@ -40,7 +45,8 @@ async def signals_kinds(status: str, hours: int | None):
 
 class SignalsRecentInput(BaseModel):
     status: str = Field(
-        default="open", pattern="^(open|consumed|archived|all)$",
+        default="open",
+        pattern="^(open|consumed|archived|all)$",
         description="open=fresh signals not yet consumed. Most chat queries want open.",
     )
     kind: str | None = Field(
@@ -51,8 +57,9 @@ class SignalsRecentInput(BaseModel):
             "user has is NOT fixed — call `signals_kinds` first when unsure."
         ),
     )
-    hours: int | None = Field(default=24, ge=1, le=336,
-        description="Look-back window in hours. None = no time bound.")
+    hours: int | None = Field(
+        default=24, ge=1, le=336, description="Look-back window in hours. None = no time bound."
+    )
     limit: int = Field(default=20, ge=1, le=10_000)
 
 
@@ -62,7 +69,10 @@ async def signals_recent(status: str, kind: str | None, hours: int | None, limit
     'what happened lately' or 'anything new from <connector>'."""
     payload = await http_client.get(
         "/api/agent/signals/recent",
-        status=status, kind=kind, hours=hours, limit=limit,
+        status=status,
+        kind=kind,
+        hours=hours,
+        limit=limit,
     )
     if isinstance(payload, dict) and payload.get("error"):
         return payload

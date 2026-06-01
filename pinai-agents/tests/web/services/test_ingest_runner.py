@@ -59,8 +59,15 @@ def stub_execute(monkeypatch):
 def test_all_recipes_load():
     """All 9 live yaml files parse into Recipe."""
     expected = {
-        "calendly", "github", "gmail", "googlecalendar", "googledrive",
-        "linkedin", "slack", "stripe", "youtube",
+        "calendly",
+        "github",
+        "gmail",
+        "googlecalendar",
+        "googledrive",
+        "linkedin",
+        "slack",
+        "stripe",
+        "youtube",
     }
     assert ir.supported_toolkits() == expected
 
@@ -155,14 +162,14 @@ def test_walk_path_empty_path_returns_payload():
 
 @pytest.mark.asyncio
 async def test_run_fetch_unknown_toolkit_returns_empty(stub_execute):
-    items = await ir.run_fetch(_user(),"nonexistent", "ca_x")
+    items = await ir.run_fetch(_user(), "nonexistent", "ca_x")
     assert items == []
     assert stub_execute == []
 
 
 @pytest.mark.asyncio
 async def test_run_fetch_calendly_resolves_prereq(stub_execute):
-    items = await ir.run_fetch(_user(),"calendly", "ca_cal")
+    items = await ir.run_fetch(_user(), "calendly", "ca_cal")
     assert len(items) == 2
     # Two calls: GET_USER then LIST_SCHEDULED_EVENTS
     assert [c[0] for c in stub_execute] == [
@@ -177,7 +184,7 @@ async def test_run_fetch_calendly_resolves_prereq(stub_execute):
 @pytest.mark.asyncio
 async def test_run_fetch_gmail_uses_query_after_unix(stub_execute):
     since = datetime(2026, 5, 1, tzinfo=UTC)
-    items = await ir.run_fetch(_user(),"gmail", "ca_gm", since=since)
+    items = await ir.run_fetch(_user(), "gmail", "ca_gm", since=since)
     assert len(items) == 2
     args = stub_execute[0][1]
     assert args["query"] == f"after:{int(since.timestamp())}"
@@ -188,7 +195,7 @@ async def test_run_fetch_gmail_uses_query_after_unix(stub_execute):
 @pytest.mark.asyncio
 async def test_run_fetch_stripe_uses_nested_dotted_filter(stub_execute):
     since = datetime(2026, 5, 1, tzinfo=UTC)
-    items = await ir.run_fetch(_user(),"stripe", "ca_st", since=since)
+    items = await ir.run_fetch(_user(), "stripe", "ca_st", since=since)
     assert len(items) == 1
     args = stub_execute[0][1]
     # since_param "created.gte" → args["created"]["gte"]
@@ -199,7 +206,7 @@ async def test_run_fetch_stripe_uses_nested_dotted_filter(stub_execute):
 @pytest.mark.asyncio
 async def test_run_fetch_linkedin_wraps_single_object(stub_execute):
     """LinkedIn returns a single profile dict; runner wraps as 1-item list."""
-    items = await ir.run_fetch(_user(),"linkedin", "ca_li")
+    items = await ir.run_fetch(_user(), "linkedin", "ca_li")
     assert len(items) == 1
     assert items[0]["headline"] == "PM"
 
@@ -209,7 +216,7 @@ async def test_run_fetch_omits_since_when_recipe_has_no_param(stub_execute):
     """LinkedIn / YouTube / Twitter have since_param=null; runner must
     not invent an arg even if `since` is supplied."""
     since = datetime(2026, 5, 1, tzinfo=UTC)
-    await ir.run_fetch(_user(),"linkedin", "ca_li", since=since)
+    await ir.run_fetch(_user(), "linkedin", "ca_li", since=since)
     args = stub_execute[0][1]
     # No injection of any since-related arg.
     assert "since" not in args
@@ -222,5 +229,5 @@ async def test_run_fetch_prereq_failure_short_circuits(stub_execute, monkeypatch
         return cs.ExecuteResult(slug=slug, successful=False, error="auth")
 
     monkeypatch.setattr(cs, "execute", failing_execute)
-    items = await ir.run_fetch(_user(),"calendly", "ca_cal")
+    items = await ir.run_fetch(_user(), "calendly", "ca_cal")
     assert items == []

@@ -74,14 +74,23 @@ def _sync_task(toolkit: str, user_id: int, cid: str) -> ScheduledTaskRow:
         user_id=user_id,
         id=f"sync.{toolkit}.{cid}",
         kind="connector.sync",
-        name=None, prompt=None,
-        trigger_kind="schedule", cron_expr="*/30 * * * *",
-        interval_seconds=None, event_filter=None,
+        name=None,
+        prompt=None,
+        trigger_kind="schedule",
+        cron_expr="*/30 * * * *",
+        interval_seconds=None,
+        event_filter=None,
         payload={"toolkit": toolkit, "connectedAccountId": cid},
-        timezone="UTC", status="active",
-        next_run_at=None, last_run_at=datetime.now(UTC),
-        last_run_status="dispatched", run_count=1,
-        attempts=0, max_attempts=3, progress={}, last_error=None,
+        timezone="UTC",
+        status="active",
+        next_run_at=None,
+        last_run_at=datetime.now(UTC),
+        last_run_status="dispatched",
+        run_count=1,
+        attempts=0,
+        max_attempts=3,
+        progress={},
+        last_error=None,
     )
 
 
@@ -103,20 +112,24 @@ def _patch_fetch(monkeypatch, toolkit: str, items_box: dict):
 @pytest.mark.asyncio
 async def test_calendly_sync_status_flips_to_canceled(pool, user_ids, monkeypatch):
     user_a, _ = user_ids
-    box = {"items": [
-        {
-            "uri": "https://api.calendly.com/scheduled_events/evt-9",
-            "name": "Standup",
-            "status": "active",
-            "start_time": "2026-05-10T10:00:00Z",
-            "end_time": "2026-05-10T10:30:00Z",
-        },
-    ]}
+    box = {
+        "items": [
+            {
+                "uri": "https://api.calendly.com/scheduled_events/evt-9",
+                "name": "Standup",
+                "status": "active",
+                "start_time": "2026-05-10T10:00:00Z",
+                "end_time": "2026-05-10T10:30:00Z",
+            },
+        ]
+    }
     _patch_fetch(monkeypatch, "calendly", box)
 
     async with user_scoped_tx(pool, user_a) as conn:
         await enqueue_once(
-            conn, user_id=user_a, task_id="sync.calendly.cidCAL",
+            conn,
+            user_id=user_a,
+            task_id="sync.calendly.cidCAL",
             kind="connector.sync",
             payload={"toolkit": "calendly", "connectedAccountId": "cidCAL"},
         )

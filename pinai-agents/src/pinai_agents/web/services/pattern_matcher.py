@@ -269,8 +269,10 @@ def _op_not_in(cond: dict[str, Any], data: Phase1Data) -> tuple[bool, dict[str, 
 # suffix routing below doesn't need to guess. Add more here as the
 # web-side phase1 collector grows to source the underlying signals.
 
+
 def _op_event_in_next_hours(
-    cond: dict[str, Any], data: Phase1Data,
+    cond: dict[str, Any],
+    data: Phase1Data,
 ) -> tuple[bool, dict[str, Any]]:
     """Used by preparation_gap_*, time_buffer_*, etc.
     Re-uses the list-of-events branch of _op_within_hours."""
@@ -278,7 +280,8 @@ def _op_event_in_next_hours(
 
 
 def _op_unresponded_to_vip(
-    cond: dict[str, Any], data: Phase1Data,
+    cond: dict[str, Any],
+    data: Phase1Data,
 ) -> tuple[bool, dict[str, Any]]:
     """`forgotten_vip_email` style — looks at gmail.derived.unresponded_to_vip
     which is a list of {thread_id, days_open}. Fires when any thread is
@@ -311,7 +314,8 @@ def _op_unresponded_to_vip(
 
 
 def _op_title_match(
-    cond: dict[str, Any], data: Phase1Data,
+    cond: dict[str, Any],
+    data: Phase1Data,
 ) -> tuple[bool, dict[str, Any]]:
     """`preparation_gap_interview` / `preparation_gap_presentation` style —
     scan calendar.events[].title for any of `keywords`. Case-insensitive."""
@@ -340,7 +344,8 @@ def _op_title_match(
 
 
 def _op_no_doc_attachment(
-    cond: dict[str, Any], data: Phase1Data,
+    cond: dict[str, Any],
+    data: Phase1Data,
 ) -> tuple[bool, dict[str, Any]]:
     """`preparation_gap_meeting` — true when at least one event has no
     document attached (`doc_attachments` empty / missing). Pairs with an
@@ -366,7 +371,8 @@ def _op_no_doc_attachment(
 
 
 def _op_back_to_back_events(
-    cond: dict[str, Any], data: Phase1Data,
+    cond: dict[str, Any],
+    data: Phase1Data,
 ) -> tuple[bool, dict[str, Any]]:
     """`time_buffer_multi_event_squeeze` — N events whose adjacent gaps
     are all <= gap_min_lte minutes. count_gte = number of stacked events."""
@@ -408,7 +414,8 @@ def _op_back_to_back_events(
 
 
 def _op_weather_disruption(
-    cond: dict[str, Any], data: Phase1Data,
+    cond: dict[str, Any],
+    data: Phase1Data,
 ) -> tuple[bool, dict[str, Any]]:
     """`time_buffer_weather_delay` style — fires when phase1.world.weather
     reports a disruption level at or above the requested threshold."""
@@ -431,7 +438,8 @@ def _op_weather_disruption(
 
 
 def _op_planned_intent_exists(
-    cond: dict[str, Any], data: Phase1Data,
+    cond: dict[str, Any],
+    data: Phase1Data,
 ) -> tuple[bool, dict[str, Any]]:
     """Fires when phase1.feedback.intent_state lists a confirmed
     intent matching `subtype` (or any intent_key supplied via `keyword`)."""
@@ -454,7 +462,8 @@ def _op_planned_intent_exists(
 
 
 def _op_birthday_within_days(
-    cond: dict[str, Any], data: Phase1Data,
+    cond: dict[str, Any],
+    data: Phase1Data,
 ) -> tuple[bool, dict[str, Any]]:
     """`forgotten_birthday_approaching` — scan memory.recurring_obligations
     for entries with type=birthday and a date within `days`."""
@@ -521,7 +530,8 @@ _FAMILY_SUFFIXES = (
 
 
 def evaluate_condition(
-    cond: dict[str, Any], data: Phase1Data,
+    cond: dict[str, Any],
+    data: Phase1Data,
 ) -> tuple[bool, dict[str, Any]]:
     op = cond.get("op")
     if not isinstance(op, str) or not op:
@@ -595,26 +605,29 @@ async def match_patterns(
         combined = base
         if fingerprint is not None:
             user_fit = await fingerprint.score_for(
-                pattern["id"], base_hit_rate=base or 0.1,
+                pattern["id"],
+                base_hit_rate=base or 0.1,
             )
             combined = user_fit
             # Suppressed = drop from match list entirely so it never shows
             # up in `selected_pattern_ids`.
             if combined <= 0 and pattern["id"] in fingerprint_prefs:
                 continue
-        matched.append(MatchedPattern(
-            pattern_id=pattern["id"],
-            category=pattern["category"],
-            intent=pattern["intent"],
-            abstract=pattern["abstract"],
-            human_insight=pattern.get("humanInsight") or "",
-            card_skeleton=pattern.get("cardSkeleton") or {},
-            subtype=None,
-            evidence=evidence,
-            base_hit_rate=base,
-            user_fit_score=user_fit,
-            combined_score=combined,
-        ))
+        matched.append(
+            MatchedPattern(
+                pattern_id=pattern["id"],
+                category=pattern["category"],
+                intent=pattern["intent"],
+                abstract=pattern["abstract"],
+                human_insight=pattern.get("humanInsight") or "",
+                card_skeleton=pattern.get("cardSkeleton") or {},
+                subtype=None,
+                evidence=evidence,
+                base_hit_rate=base,
+                user_fit_score=user_fit,
+                combined_score=combined,
+            )
+        )
 
     matched.sort(key=lambda m: m.combined_score or 0.0, reverse=True)
     return PatternMatchResult(matched=matched[:top_k])

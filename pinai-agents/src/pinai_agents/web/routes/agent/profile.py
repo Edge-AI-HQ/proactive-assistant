@@ -94,8 +94,11 @@ async def agent_upsert_goal(
     async with user_scoped_tx(pool, run.user_id) as conn:
         repo = ProfileRepository(run.user_id, conn)
         row = await repo.upsert_goal(
-            id=goal_id, key=body.key, title=body.title,
-            priority=body.priority, status=body.status,
+            id=goal_id,
+            key=body.key,
+            title=body.title,
+            priority=body.priority,
+            status=body.status,
             summary=body.summary,
         )
     return asdict(row)

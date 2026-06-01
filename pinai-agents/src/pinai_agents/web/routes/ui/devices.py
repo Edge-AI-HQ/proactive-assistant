@@ -90,6 +90,7 @@ class IngestItemIn(BaseModel):
     sensible default. Source override (per-item `source: "device:<id>"`)
     is parsed at the route level, not here.
     """
+
     id: str
     kind: str | None = None
     itemType: str | None = None  # legacy alias
@@ -158,10 +159,7 @@ def _payload_text(payload: dict[str, Any], key: str) -> str | None:
 
 
 def _is_transcript_candidate_window(kind: str, payload: dict[str, Any]) -> bool:
-    return (
-        kind == _TRANSCRIPT_CANDIDATE_KIND
-        and payload.get("window_type") == "transcript_session"
-    )
+    return kind == _TRANSCRIPT_CANDIDATE_KIND and payload.get("window_type") == "transcript_session"
 
 
 def _canonical_transcript_candidate_key(
@@ -173,10 +171,7 @@ def _canonical_transcript_candidate_key(
     local_window_id = _payload_text(payload, "local_window_id")
     if not local_date or not local_window_id:
         return None
-    return (
-        f"ambient:candidate_window:{device_id}:"
-        f"{local_date}:transcript_session:{local_window_id}"
-    )
+    return f"ambient:candidate_window:{device_id}:{local_date}:transcript_session:{local_window_id}"
 
 
 def _valid_raw_ref_count(payload: dict[str, Any]) -> bool:
@@ -199,7 +194,11 @@ def _clean_transcript_candidate_payload(
 ) -> dict[str, Any]:
     compact_context = payload.get("compact_context")
     if not isinstance(compact_context, str):
-        return {k: v for k, v in payload.items() if k != "content_hash"} if summary_changed else payload
+        return (
+            {k: v for k, v in payload.items() if k != "content_hash"}
+            if summary_changed
+            else payload
+        )
     cleaned = _clean_transcript_summary(compact_context)
     compact_changed = cleaned != compact_context
     if not compact_changed and not summary_changed:
@@ -253,9 +252,7 @@ class CanonicalDeviceGroup:
 
 def _canonicalize_device_groups(rows: list[UserDeviceRow]) -> list[CanonicalDeviceGroup]:
     modern_platforms = {
-        r.platform
-        for r in rows
-        if _device_metadata_value(r.metadata, "hardware_signature")
+        r.platform for r in rows if _device_metadata_value(r.metadata, "hardware_signature")
     }
     modern_group_by_platform = {
         r.platform: _device_display_group_key(r)
@@ -326,25 +323,38 @@ async def register_device(
 
 @router.get("/list")
 async def list_devices(
-    user: User = Depends(current_user), pool=Depends(get_pool),
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
 ) -> dict[str, Any]:
     async with user_scoped_tx(pool, user.id) as conn:
         repo = DevicesRepository(user.id, conn)
         groups = _canonicalize_device_groups(await repo.list_active())
-    return {"items": [{
-        "deviceId": group.row.device_id, "platform": group.row.platform,
-        "displayName": group.row.display_name, "appVersion": group.row.app_version,
-        "model": group.row.model, "registeredAt": group.row.registered_at.isoformat(),
-        "lastSeenAt": group.row.last_seen_at.isoformat() if group.row.last_seen_at else None,
-        "status": group.row.status,
-        "metadata": group.row.metadata,
-        "aliasedDeviceIds": group.aliased_device_ids,
-    } for group in groups]}
+    return {
+        "items": [
+            {
+                "deviceId": group.row.device_id,
+                "platform": group.row.platform,
+                "displayName": group.row.display_name,
+                "appVersion": group.row.app_version,
+                "model": group.row.model,
+                "registeredAt": group.row.registered_at.isoformat(),
+                "lastSeenAt": group.row.last_seen_at.isoformat()
+                if group.row.last_seen_at
+                else None,
+                "status": group.row.status,
+                "metadata": group.row.metadata,
+                "aliasedDeviceIds": group.aliased_device_ids,
+            }
+            for group in groups
+        ]
+    }
 
 
 @router.post("/revoke", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_device(
-    body: dict, user: User = Depends(current_user), pool=Depends(get_pool),
+    body: dict,
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
 ) -> None:
     device_id = str(body.get("deviceId") or "").strip()
     if not device_id:
@@ -373,10 +383,12 @@ async def test_push(
     settings.notify_new_cards or device.push_token gating; if those are
     off the test correctly fails (and the log line tells you why).
     """
+
     async def _delayed() -> None:
         try:
             await asyncio.sleep(_TEST_PUSH_DELAY_SECONDS)
             from ...services.push_notifier import notify_new_cards  # noqa: PLC0415
+
             await notify_new_cards(pool, user_id=user.id, card_count=1)
         except Exception:
             logger.exception("test_push delayed task failed user=%s", user.id)
@@ -414,8 +426,7 @@ async def set_push_token(
         "deviceId": row.device_id,
         "pushProvider": row.push_provider,
         "pushTokenUpdatedAt": (
-            row.push_token_updated_at.isoformat()
-            if row.push_token_updated_at else None
+            row.push_token_updated_at.isoformat() if row.push_token_updated_at else None
         ),
     }
 
@@ -452,7 +463,9 @@ def _payload_has_binary(raw_item: Any) -> bool:
 
 
 async def _verify_device(
-    pool, device_id: str, device_token: str,
+    pool,
+    device_id: str,
+    device_token: str,
 ):
     """Service-role lookup — no app.user_id binding (RLS service_role
     fallback policy lets it through). Returns the verified device row.
@@ -492,11 +505,7 @@ async def ingest_devices(
     device = await _verify_device(pool, x_device_id or "", x_device_token or "")
 
     is_array = isinstance(body, list)
-    wrapper_device_id = (
-        ""
-        if is_array
-        else str(body.get("deviceId") or "").strip()
-    )
+    wrapper_device_id = "" if is_array else str(body.get("deviceId") or "").strip()
     items_raw = body if is_array else (body.get("items") or [])
     if not isinstance(items_raw, list):
         raise HTTPException(400, "items must be an array")
@@ -509,31 +518,41 @@ async def ingest_devices(
     by_device: dict[str, list[dict[str, Any]]] = {}
     for idx, raw in enumerate(items_raw):
         if not isinstance(raw, dict):
-            pre_results.append({
-                "id": f"unknown_{idx}", "dedupeKey": None,
-                "status": "parse_failed", "reason": "item is not an object",
-            })
+            pre_results.append(
+                {
+                    "id": f"unknown_{idx}",
+                    "dedupeKey": None,
+                    "status": "parse_failed",
+                    "reason": "item is not an object",
+                }
+            )
             continue
         src = _parse_source(raw.get("source"))
         target_device = src[1] if src else wrapper_device_id
         if not target_device:
-            pre_results.append({
-                "id": str(raw.get("id") or f"unknown_{idx}"),
-                "dedupeKey": None, "status": "rejected",
-                "reason": "no deviceId in wrapper and no source on item",
-            })
+            pre_results.append(
+                {
+                    "id": str(raw.get("id") or f"unknown_{idx}"),
+                    "dedupeKey": None,
+                    "status": "rejected",
+                    "reason": "no deviceId in wrapper and no source on item",
+                }
+            )
             continue
         # Cross-device dispatch is not supported for MVP. Surface as
         # ``rejected`` instead of silently dropping (V2 contract).
         if target_device != device.device_id:
-            pre_results.append({
-                "id": str(raw.get("id") or f"unknown_{idx}"),
-                "dedupeKey": None, "status": "rejected",
-                "reason": (
-                    f"cross-device dispatch not supported: source target "
-                    f"{target_device!r} != verified device {device.device_id!r}"
-                ),
-            })
+            pre_results.append(
+                {
+                    "id": str(raw.get("id") or f"unknown_{idx}"),
+                    "dedupeKey": None,
+                    "status": "rejected",
+                    "reason": (
+                        f"cross-device dispatch not supported: source target "
+                        f"{target_device!r} != verified device {device.device_id!r}"
+                    ),
+                }
+            )
             continue
         by_device.setdefault(target_device, []).append(raw)
 
@@ -558,22 +577,32 @@ async def ingest_devices(
         raw_repo = RawDeviceRepository(device.user_id, conn)
         for did, items in by_device.items():
             r = await _ingest_for_device(
-                user=device_user, device_id=did, raw_items=items,
-                signals_repo=signals_repo, raw_repo=raw_repo,
+                user=device_user,
+                device_id=did,
+                raw_items=items,
+                signals_repo=signals_repo,
+                raw_repo=raw_repo,
             )
             item_results.extend(r["results"])
     accepted = len(items_raw)
     inserted = sum(1 for r in item_results if r["status"] == "inserted")
     ignored = accepted - inserted
     return {
-        "ok": True, "accepted": accepted, "inserted": inserted,
-        "ignored": ignored, "results": item_results,
+        "ok": True,
+        "accepted": accepted,
+        "inserted": inserted,
+        "ignored": ignored,
+        "results": item_results,
     }
 
 
 async def _ingest_for_device(
-    *, user: User | None, device_id: str, raw_items: list[dict[str, Any]],
-    signals_repo: PersonalSignalsRepository, raw_repo: RawDeviceRepository,
+    *,
+    user: User | None,
+    device_id: str,
+    raw_items: list[dict[str, Any]],
+    signals_repo: PersonalSignalsRepository,
+    raw_repo: RawDeviceRepository,
 ) -> dict[str, Any]:
     """Per-device leg of the ingest. Returns ``{"results": [...]}`` only —
     the caller aggregates accepted/inserted/ignored across all legs."""
@@ -590,22 +619,26 @@ async def _ingest_for_device(
             item = IngestItemIn.model_validate(r)
         except Exception as e:
             logger.warning("device ingest: drop unparseable item: %s", e)
-            results.append({
-                "id": str(item_id_raw) if item_id_raw else "unknown",
-                "dedupeKey": None,
-                "status": "parse_failed",
-                "reason": str(e)[:200],
-            })
+            results.append(
+                {
+                    "id": str(item_id_raw) if item_id_raw else "unknown",
+                    "dedupeKey": None,
+                    "status": "parse_failed",
+                    "reason": str(e)[:200],
+                }
+            )
             continue
 
         kind = item.kind or item.itemType
         if not kind or not item.id or not item.title or not item.summary:
-            results.append({
-                "id": item.id or (str(item_id_raw) if item_id_raw else "unknown"),
-                "dedupeKey": None,
-                "status": "rejected",
-                "reason": "missing required field (kind/id/title/summary)",
-            })
+            results.append(
+                {
+                    "id": item.id or (str(item_id_raw) if item_id_raw else "unknown"),
+                    "dedupeKey": None,
+                    "status": "rejected",
+                    "reason": "missing required field (kind/id/title/summary)",
+                }
+            )
             continue
 
         occurred = _normalize_iso(item.occurredAt, created_at)
@@ -625,7 +658,8 @@ async def _ingest_for_device(
             logger.warning(
                 "device ingest: binary payload arrived but user not "
                 "hydrated (device=%s kind=%s) — skipping media upload",
-                device_id, kind,
+                device_id,
+                kind,
             )
         elif isinstance(b64, str) and b64 and user is not None:
             ext = media_ext_for_kind(kind, payload.get("mime"))
@@ -633,16 +667,15 @@ async def _ingest_for_device(
                 try:
                     media = await upload_media(
                         supabase_user_id=user.supabase_user_id,
-                        device_id=device_id, item_id=item.id,
+                        device_id=device_id,
+                        item_id=item.id,
                         occurred_at_iso=occurred,
                         binary_b64=b64,
                         mime=payload.get("mime"),
                         kind=kind,
                     )
                     if media:
-                        payload = {
-                            k: v for k, v in payload.items() if k != "binary_b64"
-                        }
+                        payload = {k: v for k, v in payload.items() if k != "binary_b64"}
                         payload["storage_path"] = media.storage_path
                         payload["byte_len"] = media.byte_len
                         if media.mime:
@@ -657,15 +690,17 @@ async def _ingest_for_device(
                 payload=payload,
             )
             if canonical_key is None:
-                results.append({
-                    "id": item.id,
-                    "dedupeKey": None,
-                    "status": "rejected",
-                    "reason": (
-                        "transcript candidate window requires "
-                        "payload.local_date and payload.local_window_id"
-                    ),
-                })
+                results.append(
+                    {
+                        "id": item.id,
+                        "dedupeKey": None,
+                        "status": "rejected",
+                        "reason": (
+                            "transcript candidate window requires "
+                            "payload.local_date and payload.local_window_id"
+                        ),
+                    }
+                )
                 continue
             if not _valid_raw_ref_count(payload):
                 logger.warning(
@@ -682,16 +717,28 @@ async def _ingest_for_device(
             summary = cleaned_summary
             dedupe_key = canonical_key
         n = DeviceIngestItem(
-            id=item.id, device_id=device_id, kind=kind, sync_mode=sync_mode,
-            title=item.title, summary=summary, payload=payload,
-            salience=item.salience, confidence=item.confidence,
+            id=item.id,
+            device_id=device_id,
+            kind=kind,
+            sync_mode=sync_mode,
+            title=item.title,
+            summary=summary,
+            payload=payload,
+            salience=item.salience,
+            confidence=item.confidence,
             dedupe_key=dedupe_key,
-            occurred_at=occurred, available_at=available, expires_at=expires,
+            occurred_at=occurred,
+            available_at=available,
+            expires_at=expires,
         )
         result_idx = len(results)
-        results.append({
-            "id": n.id, "dedupeKey": n.dedupe_key, "status": "pending",
-        })
+        results.append(
+            {
+                "id": n.id,
+                "dedupeKey": n.dedupe_key,
+                "status": "pending",
+            }
+        )
         normalized.append((result_idx, n))
 
     # Write pipeline — per-item SAVEPOINT keeps single-row faults from
@@ -715,7 +762,8 @@ async def _ingest_for_device(
                 # signal so the data isn't lost. Per-item success will be
                 # decided by whether the signal write lands.
                 signal_payload = build_default_signal(
-                    n, {"fallback_reason": "raw_parse_failed"},
+                    n,
+                    {"fallback_reason": "raw_parse_failed"},
                 )
             else:
                 scope = (
@@ -732,14 +780,18 @@ async def _ingest_for_device(
                         async with raw_repo.conn.transaction():
                             for w in raw_writes:
                                 r = await _apply_raw_write(
-                                    raw_repo, w, n.sync_mode, scope,
+                                    raw_repo,
+                                    w,
+                                    n.sync_mode,
+                                    scope,
                                 )
                                 raw_inserted = raw_inserted or r.inserted > 0
                     except Exception as e:
                         raw_failed_exc = e
                         logger.warning(
                             "device ingest: raw policy %s failed: %s",
-                            n.kind, e,
+                            n.kind,
+                            e,
                         )
 
         if rejected_reason is not None:
@@ -752,15 +804,13 @@ async def _ingest_for_device(
             # signal — surface as retryable so outbox keeps the item.
             results[result_idx]["status"] = "retryable_failed"
             results[result_idx]["reason"] = (
-                f"raw write failed: {type(raw_failed_exc).__name__}: "
-                f"{str(raw_failed_exc)[:160]}"
+                f"raw write failed: {type(raw_failed_exc).__name__}: {str(raw_failed_exc)[:160]}"
             )
             continue
 
         if signal_payload is None and policy.mode in ("signal_only", "dual"):
             signal_payload = (
-                policy.build_signal(n, None) if policy.build_signal
-                else build_default_signal(n)
+                policy.build_signal(n, None) if policy.build_signal else build_default_signal(n)
             )
 
         signal_inserted = False
@@ -768,15 +818,21 @@ async def _ingest_for_device(
         if signal_payload is not None:
             sig = signal_payload
             signal_input = IngestSignalInput(
-                id=sig["id"], kind=sig["kind"],
-                title=sig["title"], summary=sig["summary"],
+                id=sig["id"],
+                kind=sig["kind"],
+                title=sig["title"],
+                summary=sig["summary"],
                 occurred_at=datetime.fromisoformat(
-                    sig["occurred_at"] if not sig["occurred_at"].endswith("Z")
+                    sig["occurred_at"]
+                    if not sig["occurred_at"].endswith("Z")
                     else sig["occurred_at"][:-1] + "+00:00",
                 ),
-                payload=sig["payload"], salience=sig["salience"],
-                confidence=sig["confidence"], dedupe_key=sig["dedupe_key"],
-                source=sig["source"], device_id=sig["device_id"],
+                payload=sig["payload"],
+                salience=sig["salience"],
+                confidence=sig["confidence"],
+                dedupe_key=sig["dedupe_key"],
+                source=sig["source"],
+                device_id=sig["device_id"],
                 subject=sig.get("subject"),
             )
             try:
@@ -795,7 +851,9 @@ async def _ingest_for_device(
             except Exception as e:
                 signal_failed_exc = e
                 logger.warning(
-                    "device ingest: signal write failed (id=%s): %s", n.id, e,
+                    "device ingest: signal write failed (id=%s): %s",
+                    n.id,
+                    e,
                 )
 
         # Decide per-item status.
@@ -807,9 +865,7 @@ async def _ingest_for_device(
             exc = raw_failed_exc or signal_failed_exc
             assert exc is not None
             results[result_idx]["status"] = "retryable_failed"
-            results[result_idx]["reason"] = (
-                f"{type(exc).__name__}: {str(exc)[:160]}"
-            )
+            results[result_idx]["reason"] = f"{type(exc).__name__}: {str(exc)[:160]}"
         else:
             # Wrote nothing, no exception → ON CONFLICT no-op for every
             # write attempted on this item. True idempotent duplicate.
@@ -824,36 +880,48 @@ async def _apply_raw_write(repo: RawDeviceRepository, write, sync_mode, scope):
     if write.table == "device_apps_snapshot":
         if sync_mode == "full":
             return await repo.replace_apps(
-                device_id=p["device_id"], occurred_at=p["occurred_at"],
-                snapshot_id=p["snapshot_id"], apps=p["apps"],
+                device_id=p["device_id"],
+                occurred_at=p["occurred_at"],
+                snapshot_id=p["snapshot_id"],
+                apps=p["apps"],
             )
         return await repo.ingest_apps(
-            device_id=p["device_id"], occurred_at=p["occurred_at"],
-            snapshot_id=p["snapshot_id"], apps=p["apps"],
+            device_id=p["device_id"],
+            occurred_at=p["occurred_at"],
+            snapshot_id=p["snapshot_id"],
+            apps=p["apps"],
         )
     if write.table == "device_contacts_snapshot":
         if sync_mode == "full":
             return await repo.replace_contacts(
-                device_id=p["device_id"], occurred_at=p["occurred_at"],
-                snapshot_id=p["snapshot_id"], contacts=p["contacts"],
+                device_id=p["device_id"],
+                occurred_at=p["occurred_at"],
+                snapshot_id=p["snapshot_id"],
+                contacts=p["contacts"],
             )
         return await repo.ingest_contacts(
-            device_id=p["device_id"], occurred_at=p["occurred_at"],
-            snapshot_id=p["snapshot_id"], contacts=p["contacts"],
+            device_id=p["device_id"],
+            occurred_at=p["occurred_at"],
+            snapshot_id=p["snapshot_id"],
+            contacts=p["contacts"],
         )
     if write.table == "device_health_observations":
         if sync_mode == "full":
             local_date = scope.local_date if scope else None
             metric = scope.metric if scope else None
             return await repo.replace_health(
-                device_id=p["device_id"], local_date=local_date,
-                metric=metric, observations=p["observations"],
+                device_id=p["device_id"],
+                local_date=local_date,
+                metric=metric,
+                observations=p["observations"],
             )
         return await repo.ingest_health(
-            device_id=p["device_id"], observations=p["observations"],
+            device_id=p["device_id"],
+            observations=p["observations"],
         )
     # Unknown table — record as zero-impact.
     from ...db.repositories.raw_device import RawIngestResult
+
     return RawIngestResult(0, 0, 0)
 
 
@@ -920,8 +988,10 @@ async def get_device_timeline(
             LIMIT %(fetch_n)s
             """,
             {
-                "user_id": user.id, "device_id": device_id,
-                "before": before, "fetch_n": fetch_n,
+                "user_id": user.id,
+                "device_id": device_id,
+                "before": before,
+                "fetch_n": fetch_n,
             },
         )
         rows = await cur.fetchall()
@@ -940,12 +1010,12 @@ async def get_device_timeline(
         }
         for r in rows
     ]
-    next_cursor = (
-        rows[-1]["occurred_at"].isoformat() if has_more and rows else None
-    )
+    next_cursor = rows[-1]["occurred_at"].isoformat() if has_more and rows else None
     return {
-        "ok": True, "items": items,
-        "next_cursor": next_cursor, "has_more": has_more,
+        "ok": True,
+        "items": items,
+        "next_cursor": next_cursor,
+        "has_more": has_more,
     }
 
 

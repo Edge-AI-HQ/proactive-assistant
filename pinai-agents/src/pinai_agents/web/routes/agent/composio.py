@@ -51,7 +51,8 @@ async def _agent_user(
     user = await load_user_by_id(pool, run.user_id)
     if user is None:
         raise HTTPException(
-            status_code=404, detail=f"user {run.user_id} not found",
+            status_code=404,
+            detail=f"user {run.user_id} not found",
         )
     return user
 
@@ -59,15 +60,17 @@ async def _agent_user(
 # Whitelist of Composio meta-tool slugs we forward. Anything else 404s
 # rather than letting an arbitrary slug reach the session.execute path
 # (defense against the LLM hallucinating a slug into the URL).
-_ALLOWED_META_TOOLS = frozenset({
-    "SEARCH_TOOLS",
-    "GET_TOOL_SCHEMAS",
-    "MULTI_EXECUTE_TOOL",
-    "MANAGE_CONNECTIONS",
-    # REMOTE_WORKBENCH / REMOTE_BASH_TOOL deliberately omitted: agents
-    # already have a Daytona sandbox; introducing a second one would
-    # confuse the runtime. Re-enable behind a flag if needed.
-})
+_ALLOWED_META_TOOLS = frozenset(
+    {
+        "SEARCH_TOOLS",
+        "GET_TOOL_SCHEMAS",
+        "MULTI_EXECUTE_TOOL",
+        "MANAGE_CONNECTIONS",
+        # REMOTE_WORKBENCH / REMOTE_BASH_TOOL deliberately omitted: agents
+        # already have a Daytona sandbox; introducing a second one would
+        # confuse the runtime. Re-enable behind a flag if needed.
+    }
+)
 
 
 def _map_error(e: cs.ComposioError) -> HTTPException:
@@ -85,7 +88,7 @@ def _map_error(e: cs.ComposioError) -> HTTPException:
 class _MetaCallBody(BaseModel):
     args: dict[str, Any] = Field(default_factory=dict)
     toolkits: list[str] | None = None  # filter session at create time
-    tools: list[str] | None = None      # slug allowlist
+    tools: list[str] | None = None  # slug allowlist
 
 
 @router.post("/meta/{tool_name}")
@@ -106,8 +109,11 @@ async def meta_call(
     composio_slug = f"COMPOSIO_{tool_name}"
     try:
         return await cs.execute_meta_tool(
-            user, composio_slug, body.args,
-            toolkits=body.toolkits, tools=body.tools,
+            user,
+            composio_slug,
+            body.args,
+            toolkits=body.toolkits,
+            tools=body.tools,
         )
     except cs.ComposioError as e:
         raise _map_error(e) from e
@@ -140,7 +146,10 @@ async def search_tools(
 ) -> dict[str, Any]:
     try:
         hits = await cs.search_tools(
-            user, body.query, toolkit=body.toolkit, limit=body.limit,
+            user,
+            body.query,
+            toolkit=body.toolkit,
+            limit=body.limit,
         )
     except cs.ComposioError as e:
         raise _map_error(e) from e
@@ -173,7 +182,9 @@ async def execute(
 ) -> dict[str, Any]:
     try:
         result = await cs.execute(
-            user, body.slug, body.args,
+            user,
+            body.slug,
+            body.args,
             connected_account_id=body.connected_account_id,
         )
     except cs.ComposioError as e:
@@ -193,7 +204,9 @@ async def multi_execute(
 ) -> dict[str, Any]:
     try:
         results = await cs.multi_execute(
-            user, body.calls, parallelism=body.parallelism,
+            user,
+            body.calls,
+            parallelism=body.parallelism,
         )
     except cs.ComposioError as e:
         raise _map_error(e) from e

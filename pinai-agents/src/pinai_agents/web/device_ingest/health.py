@@ -84,20 +84,22 @@ def parse_health_observations(item: DeviceIngestItem) -> list[DeviceHealthObserv
         if not otype:
             continue
         local_date = _str_field(row, "local_date", "localDate") or payload_local_date
-        out.append(DeviceHealthObservationInput(
-            id=_str_field(row, "id"),
-            observation_type=otype,
-            metric=_str_field(row, "metric"),
-            value=_num_field(row, "value"),
-            unit=_str_field(row, "unit"),
-            start_at=_str_field(row, "start_at", "startAt"),
-            end_at=_str_field(row, "end_at", "endAt"),
-            local_date=local_date,
-            source_app=_str_field(row, "source_app", "sourceApp"),
-            payload=row,
-            occurred_at=_str_field(row, "occurred_at", "occurredAt") or item.occurred_at,
-            dedupe_key=_str_field(row, "dedupe_key", "dedupeKey"),
-        ))
+        out.append(
+            DeviceHealthObservationInput(
+                id=_str_field(row, "id"),
+                observation_type=otype,
+                metric=_str_field(row, "metric"),
+                value=_num_field(row, "value"),
+                unit=_str_field(row, "unit"),
+                start_at=_str_field(row, "start_at", "startAt"),
+                end_at=_str_field(row, "end_at", "endAt"),
+                local_date=local_date,
+                source_app=_str_field(row, "source_app", "sourceApp"),
+                payload=row,
+                occurred_at=_str_field(row, "occurred_at", "occurredAt") or item.occurred_at,
+                dedupe_key=_str_field(row, "dedupe_key", "dedupeKey"),
+            )
+        )
     return out
 
 
@@ -132,14 +134,12 @@ def health_full_replace_scope(item: DeviceIngestItem) -> DeviceHealthReplaceScop
         metric: str | None = payload_metric
     elif obs:
         metrics = {o.metric for o in obs if o.metric}
-        metric = (
-            next(iter(metrics))
-            if len(metrics) == 1 and all(o.metric for o in obs)
-            else None
-        )
+        metric = next(iter(metrics)) if len(metrics) == 1 and all(o.metric for o in obs) else None
     else:
         metric = None
 
     return DeviceHealthReplaceScope(
-        device_id=item.device_id, local_date=local_date, metric=metric,
+        device_id=item.device_id,
+        local_date=local_date,
+        metric=metric,
     )

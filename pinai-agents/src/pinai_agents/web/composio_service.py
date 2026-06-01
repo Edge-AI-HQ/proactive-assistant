@@ -62,8 +62,13 @@ logger = logging.getLogger(__name__)
 
 
 type ConnectionStatus = Literal[
-    "ACTIVE", "INITIALIZING", "INITIATED", "FAILED",
-    "EXPIRED", "INACTIVE", "REVOKED",
+    "ACTIVE",
+    "INITIALIZING",
+    "INITIATED",
+    "FAILED",
+    "EXPIRED",
+    "INACTIVE",
+    "REVOKED",
 ]
 
 
@@ -267,18 +272,20 @@ def _first_str(*values: Any) -> str | None:
 
 
 _IDENTITY_SPECS: dict[str, _IdentitySpec] = {
-    "gmail":          _IdentitySpec("GMAIL_GET_PROFILE", {}, _gmail_label),
-    "slack":          _IdentitySpec("SLACK_RETRIEVE_A_USER_S_IDENTITY_DETAILS", {}, _slack_label),
-    "github":         _IdentitySpec("GITHUB_GET_THE_AUTHENTICATED_USER", {}, _github_label),
-    "linkedin":       _IdentitySpec("LINKEDIN_GET_MY_INFO", {}, _linkedin_label),
-    "calendly":       _IdentitySpec("CALENDLY_GET_USER", {}, _calendly_label),
-    "googledrive":    _IdentitySpec("GOOGLEDRIVE_GET_ABOUT", {}, _googledrive_label),
+    "gmail": _IdentitySpec("GMAIL_GET_PROFILE", {}, _gmail_label),
+    "slack": _IdentitySpec("SLACK_RETRIEVE_A_USER_S_IDENTITY_DETAILS", {}, _slack_label),
+    "github": _IdentitySpec("GITHUB_GET_THE_AUTHENTICATED_USER", {}, _github_label),
+    "linkedin": _IdentitySpec("LINKEDIN_GET_MY_INFO", {}, _linkedin_label),
+    "calendly": _IdentitySpec("CALENDLY_GET_USER", {}, _calendly_label),
+    "googledrive": _IdentitySpec("GOOGLEDRIVE_GET_ABOUT", {}, _googledrive_label),
     "googlecalendar": _IdentitySpec(
         # No "get user info" action exists; Google Calendar API convention
         # is that primary calendar's id equals the user's email.
-        "GOOGLECALENDAR_GET_CALENDAR", {"calendar_id": "primary"}, _googlecalendar_label,
+        "GOOGLECALENDAR_GET_CALENDAR",
+        {"calendar_id": "primary"},
+        _googlecalendar_label,
     ),
-    "youtube":        _IdentitySpec(
+    "youtube": _IdentitySpec(
         "YOUTUBE_GET_CHANNEL_STATISTICS",
         {"mine": True, "part": "snippet,statistics"},
         _youtube_label,
@@ -294,7 +301,9 @@ def fallback_label(toolkit: str, connected_account_id: str) -> str:
 
 
 async def _call_identity_action(
-    toolkit: str, cx_user: str, connected_account_id: str,
+    toolkit: str,
+    cx_user: str,
+    connected_account_id: str,
 ) -> dict[str, Any] | None:
     """Fire the per-toolkit identity action, return its normalized data
     dict. Returns None if the toolkit has no spec; raises ComposioError
@@ -341,7 +350,9 @@ async def resolve_and_persist_label(
         async with user_scoped_tx(pool, user.id) as conn:
             await ConnectorLabelsRepository(user.id, conn).upsert_resolved(
                 connected_account_id=connected_account_id,
-                toolkit=toolkit, label=None, raw_user_info=None,
+                toolkit=toolkit,
+                label=None,
+                raw_user_info=None,
             )
         return None
 
@@ -351,12 +362,16 @@ async def resolve_and_persist_label(
     except ComposioError as e:
         logger.warning(
             "composio: identity action failed user=%s tk=%s cid=%s: %s",
-            user.id, toolkit, connected_account_id, e,
+            user.id,
+            toolkit,
+            connected_account_id,
+            e,
         )
         async with user_scoped_tx(pool, user.id) as conn:
             await ConnectorLabelsRepository(user.id, conn).record_attempt_failure(
                 connected_account_id=connected_account_id,
-                toolkit=toolkit, error=str(e),
+                toolkit=toolkit,
+                error=str(e),
             )
         return None
 
@@ -364,13 +379,17 @@ async def resolve_and_persist_label(
     async with user_scoped_tx(pool, user.id) as conn:
         await ConnectorLabelsRepository(user.id, conn).upsert_resolved(
             connected_account_id=connected_account_id,
-            toolkit=toolkit, label=label, raw_user_info=raw,
+            toolkit=toolkit,
+            label=label,
+            raw_user_info=raw,
         )
     return label
 
 
 async def delete_label(
-    pool: Any, user: User, connected_account_id: str,
+    pool: Any,
+    user: User,
+    connected_account_id: str,
 ) -> None:
     from .db.repositories.connector_labels import (  # noqa: PLC0415
         ConnectorLabelsRepository,
@@ -385,10 +404,10 @@ async def delete_label(
 
 def _toolkit_slug(toolkit_field: Any) -> str:
     """Extract toolkit slug from the various shapes Composio returns:
-      * dict {slug: ..., name: ..., logo: ...}
-      * Pydantic model with .slug attribute (newer SDK versions)
-      * raw string
-      * None / unknown → 'unknown'
+    * dict {slug: ..., name: ..., logo: ...}
+    * Pydantic model with .slug attribute (newer SDK versions)
+    * raw string
+    * None / unknown → 'unknown'
     """
     if toolkit_field is None:
         return "unknown"
@@ -448,12 +467,14 @@ async def list_connections(user: User) -> list[Connection]:
         cid = d.get("id") or d.get("connected_account_id")
         if not cid:
             continue
-        out.append(Connection(
-            toolkit=_toolkit_slug(d.get("toolkit")),
-            status=str(d.get("status") or "INACTIVE").upper(),  # type: ignore[arg-type]
-            connected_account_id=cid,
-            user_info=d.get("user_info") or d.get("current_user_info"),
-        ))
+        out.append(
+            Connection(
+                toolkit=_toolkit_slug(d.get("toolkit")),
+                status=str(d.get("status") or "INACTIVE").upper(),  # type: ignore[arg-type]
+                connected_account_id=cid,
+                user_info=d.get("user_info") or d.get("current_user_info"),
+            )
+        )
 
     return out
 
@@ -509,7 +530,8 @@ async def connect(user: User, toolkit: str) -> ConnectInit:
     # `+add` click in the UI.
     def _link() -> Any:
         return _composio().connected_accounts.link(
-            user_id=cx_user, auth_config_id=auth_config_id,
+            user_id=cx_user,
+            auth_config_id=auth_config_id,
             allow_multiple=True,
         )
 
@@ -527,7 +549,9 @@ async def connect(user: User, toolkit: str) -> ConnectInit:
 
 
 async def wait_active(
-    connected_account_id: str, *, timeout: float = 120.0,
+    connected_account_id: str,
+    *,
+    timeout: float = 120.0,
 ) -> Connection:
     """Block until the connection is ACTIVE or `timeout` elapses.
     Returns the resulting Connection (status may still be non-ACTIVE on
@@ -535,7 +559,8 @@ async def wait_active(
 
     def _wait() -> Any:
         return _composio().connected_accounts.wait_for_connection(
-            id=connected_account_id, timeout=timeout,
+            id=connected_account_id,
+            timeout=timeout,
         )
 
     try:
@@ -615,14 +640,17 @@ async def search_tools(
         slug = getattr(t, "slug", None)
         if not slug:
             continue
-        out.append(ToolHit(
-            slug=slug,
-            toolkit=_toolkit_slug(getattr(t, "toolkit", None)),
-            name=getattr(t, "name", "") or slug,
-            description=(getattr(t, "description", None)
-                         or getattr(t, "human_description", "") or ""),
-            tags=list(getattr(t, "tags", None) or []),
-        ))
+        out.append(
+            ToolHit(
+                slug=slug,
+                toolkit=_toolkit_slug(getattr(t, "toolkit", None)),
+                name=getattr(t, "name", "") or slug,
+                description=(
+                    getattr(t, "description", None) or getattr(t, "human_description", "") or ""
+                ),
+                tags=list(getattr(t, "tags", None) or []),
+            )
+        )
     return out
 
 
@@ -641,13 +669,11 @@ async def get_tool_schema(slug: str) -> ToolSchema:
         slug=getattr(t, "slug", slug),
         toolkit=_toolkit_slug(getattr(t, "toolkit", None)),
         name=getattr(t, "name", "") or slug,
-        description=(getattr(t, "description", None)
-                     or getattr(t, "human_description", "") or ""),
+        description=(getattr(t, "description", None) or getattr(t, "human_description", "") or ""),
         input_schema=getattr(t, "input_parameters", None) or {},
         output_schema=getattr(t, "output_parameters", None) or {},
         tags=list(getattr(t, "tags", None) or []),
-        scopes=list(getattr(t, "scopes", None)
-                    or getattr(t, "scope_requirements", None) or []),
+        scopes=list(getattr(t, "scopes", None) or getattr(t, "scope_requirements", None) or []),
     )
 
 
@@ -694,7 +720,10 @@ async def execute(
     data = _normalize_response_data(d) if successful else None
     error = d.get("error") if not successful else None
     return ExecuteResult(
-        slug=slug, successful=successful, data=data, error=error,
+        slug=slug,
+        successful=successful,
+        data=data,
+        error=error,
     )
 
 
@@ -712,7 +741,9 @@ async def multi_execute(
     async def _one(call: ExecuteCall) -> ExecuteResult:
         async with sem:
             return await execute(
-                user, call.slug, call.args,
+                user,
+                call.slug,
+                call.args,
                 connected_account_id=call.connected_account_id,
             )
 
@@ -787,9 +818,7 @@ async def get_or_create_session(
             continue
         connected_accounts.setdefault(c.toolkit, c.connected_account_id)
 
-    ca_fingerprint = ",".join(
-        f"{tk}={cid}" for tk, cid in sorted(connected_accounts.items())
-    )
+    ca_fingerprint = ",".join(f"{tk}={cid}" for tk, cid in sorted(connected_accounts.items()))
     config_key = (
         f"tk={','.join(sorted(toolkits)) if toolkits else '*'}"
         f"|tl={','.join(sorted(tools)) if tools else '*'}"
@@ -831,7 +860,9 @@ async def get_or_create_session(
     session = await _to_thread(_create)
     async with _SESSION_LOCK:
         _SESSION_REGISTRY[cache_key] = _SessionEntry(
-            session=session, last_used=now, config_key=config_key,
+            session=session,
+            last_used=now,
+            config_key=config_key,
         )
         # Bound the cache.
         while len(_SESSION_REGISTRY) > _SESSION_MAX:
@@ -852,7 +883,9 @@ async def execute_meta_tool(
     as a dict. Session-level errors raise ComposioError; tool-level
     errors come back inside the result envelope."""
     session = await get_or_create_session(
-        user, toolkits=toolkits, tools=tools,
+        user,
+        toolkits=toolkits,
+        tools=tools,
     )
 
     def _exec() -> Any:

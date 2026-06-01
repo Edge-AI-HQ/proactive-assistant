@@ -46,7 +46,7 @@ class ChatTurnRecorder:
             if not line.startswith(b"data:"):
                 continue
             try:
-                payload = json.loads(line[len(b"data:"):].strip())
+                payload = json.loads(line[len(b"data:") :].strip())
             except (ValueError, UnicodeDecodeError):
                 continue
             if isinstance(payload, dict):

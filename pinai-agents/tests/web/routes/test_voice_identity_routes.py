@@ -37,15 +37,17 @@ async def _client() -> httpx.AsyncClient:
 def _wav(duration_ms: int, sample_rate: int = 16_000) -> bytes:
     samples = max(1, sample_rate * duration_ms // 1000)
     data = b"\0\0" * samples
-    return b"".join([
-        b"RIFF",
-        struct.pack("<I", 36 + len(data)),
-        b"WAVEfmt ",
-        struct.pack("<IHHIIHH", 16, 1, 1, sample_rate, sample_rate * 2, 2, 16),
-        b"data",
-        struct.pack("<I", len(data)),
-        data,
-    ])
+    return b"".join(
+        [
+            b"RIFF",
+            struct.pack("<I", 36 + len(data)),
+            b"WAVEfmt ",
+            struct.pack("<IHHIIHH", 16, 1, 1, sample_rate, sample_rate * 2, 2, 16),
+            b"data",
+            struct.pack("<I", len(data)),
+            data,
+        ]
+    )
 
 
 @dataclass(slots=True)
@@ -174,6 +176,7 @@ async def test_disable_and_delete_voice_identity(monkeypatch):
         )
 
     deleted: list[str] = []
+
     async def fake_delete_media(path: str) -> bool:
         deleted.append(path)
         return True

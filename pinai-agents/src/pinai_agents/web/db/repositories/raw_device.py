@@ -38,7 +38,6 @@ def _gen_id(prefix: str) -> str:
 
 
 class RawDeviceRepository(UserScopedRepository):
-
     # ── apps_snapshot ──
 
     async def ingest_apps(
@@ -65,16 +64,27 @@ class RawDeviceRepository(UserScopedRepository):
                     ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
                     """,
                     (
-                        self._user_id, _gen_id("app"), snapshot_id, device_id,
-                        a.bundle_id, a.app_name, a.version, a.last_used_at,
-                        occurred_at, dedupe,
+                        self._user_id,
+                        _gen_id("app"),
+                        snapshot_id,
+                        device_id,
+                        a.bundle_id,
+                        a.app_name,
+                        a.version,
+                        a.last_used_at,
+                        occurred_at,
+                        dedupe,
                     ),
                 )
                 inserted += cur.rowcount or 0
         return RawIngestResult(accepted, inserted, accepted - inserted)
 
     async def replace_apps(
-        self, *, device_id: str, occurred_at: str, snapshot_id: str,
+        self,
+        *,
+        device_id: str,
+        occurred_at: str,
+        snapshot_id: str,
         apps: list[DeviceAppSnapshotItem],
     ) -> RawIngestResult:
         async with self._conn.cursor() as cur:
@@ -83,8 +93,10 @@ class RawDeviceRepository(UserScopedRepository):
                 (self._user_id, device_id),
             )
         return await self.ingest_apps(
-            device_id=device_id, occurred_at=occurred_at,
-            snapshot_id=snapshot_id, apps=apps,
+            device_id=device_id,
+            occurred_at=occurred_at,
+            snapshot_id=snapshot_id,
+            apps=apps,
         )
 
     # ── contacts_snapshot ──
@@ -116,17 +128,27 @@ class RawDeviceRepository(UserScopedRepository):
                     ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
                     """,
                     (
-                        self._user_id, _gen_id("ct"), snapshot_id, device_id,
+                        self._user_id,
+                        _gen_id("ct"),
+                        snapshot_id,
+                        device_id,
                         c.display_name,
-                        json.dumps(c.emails), json.dumps(c.phones),
-                        c.last_modified, occurred_at, dedupe,
+                        json.dumps(c.emails),
+                        json.dumps(c.phones),
+                        c.last_modified,
+                        occurred_at,
+                        dedupe,
                     ),
                 )
                 inserted += cur.rowcount or 0
         return RawIngestResult(accepted, inserted, accepted - inserted)
 
     async def replace_contacts(
-        self, *, device_id: str, occurred_at: str, snapshot_id: str,
+        self,
+        *,
+        device_id: str,
+        occurred_at: str,
+        snapshot_id: str,
         contacts: list[DeviceContactSnapshotItem],
     ) -> RawIngestResult:
         async with self._conn.cursor() as cur:
@@ -135,14 +157,19 @@ class RawDeviceRepository(UserScopedRepository):
                 (self._user_id, device_id),
             )
         return await self.ingest_contacts(
-            device_id=device_id, occurred_at=occurred_at,
-            snapshot_id=snapshot_id, contacts=contacts,
+            device_id=device_id,
+            occurred_at=occurred_at,
+            snapshot_id=snapshot_id,
+            contacts=contacts,
         )
 
     # ── health_observations ──
 
     async def ingest_health(
-        self, *, device_id: str, observations: list,
+        self,
+        *,
+        device_id: str,
+        observations: list,
     ) -> RawIngestResult:
         if not observations:
             return RawIngestResult(0, 0, 0)
@@ -165,10 +192,20 @@ class RawDeviceRepository(UserScopedRepository):
                     ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
                     """,
                     (
-                        self._user_id, row_id, device_id, o.observation_type,
-                        o.metric, o.value, o.unit, o.start_at, o.end_at,
-                        o.local_date, o.source_app,
-                        json.dumps(o.payload or {}), o.occurred_at, dedupe,
+                        self._user_id,
+                        row_id,
+                        device_id,
+                        o.observation_type,
+                        o.metric,
+                        o.value,
+                        o.unit,
+                        o.start_at,
+                        o.end_at,
+                        o.local_date,
+                        o.source_app,
+                        json.dumps(o.payload or {}),
+                        o.occurred_at,
+                        dedupe,
                     ),
                 )
                 inserted += cur.rowcount or 0
@@ -203,12 +240,10 @@ class RawDeviceRepository(UserScopedRepository):
         if metric:
             clauses.append("metric = %s")
             params.append(metric)
-        sql = (
-            "DELETE FROM pai_raw_device_health_observations WHERE "
-            + " AND ".join(clauses)
-        )
+        sql = "DELETE FROM pai_raw_device_health_observations WHERE " + " AND ".join(clauses)
         async with self._conn.cursor() as cur:
             await cur.execute(sql, tuple(params))
         return await self.ingest_health(
-            device_id=device_id, observations=observations,
+            device_id=device_id,
+            observations=observations,
         )

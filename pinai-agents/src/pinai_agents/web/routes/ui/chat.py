@@ -52,7 +52,7 @@ def _classify_session_key(session_key: str, user_id: int) -> tuple[str, str | No
     rows under arbitrary user_ids.
     """
     if session_key.startswith(_CARD_THREAD_PREFIX):
-        card_id = session_key[len(_CARD_THREAD_PREFIX):]
+        card_id = session_key[len(_CARD_THREAD_PREFIX) :]
         if not card_id:
             raise HTTPException(status_code=400, detail="empty card_id in session_key")
         return "card", card_id
@@ -63,6 +63,7 @@ def _classify_session_key(session_key: str, user_id: int) -> tuple[str, str | No
         status_code=400,
         detail="session_key must be 'card-thread-<id>' or 'main-<your_user_id>-<rand>'",
     )
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat-stream", tags=["chat"])
@@ -105,7 +106,8 @@ async def chat_init(
         # this user. Mint only if they truly have none.
         async with user_scoped_tx(pool, user.id) as conn:
             existing_thread_id = await ChatThreadsRepository(
-                user_id=user.id, conn=conn,
+                user_id=user.id,
+                conn=conn,
             ).get_latest_main_thread_id()
         if existing_thread_id is not None:
             session_key = existing_thread_id
@@ -118,14 +120,18 @@ async def chat_init(
     # common case (sessionKey already known to us).
     async with user_scoped_tx(pool, user.id) as conn:
         await ChatThreadsRepository(
-            user_id=user.id, conn=conn,
+            user_id=user.id,
+            conn=conn,
         ).insert_thread(
-            thread_id=session_key, kind=kind, card_id=card_id,
+            thread_id=session_key,
+            kind=kind,
+            card_id=card_id,
         )
 
     existing = await call_chat_exists(user_id=user.id, session_key=session_key)
     return ChatInitResponse(
-        session_key=session_key, existing=existing,
+        session_key=session_key,
+        existing=existing,
     )
 
 
@@ -169,19 +175,23 @@ async def _persist_turn(
         if new_text and new_text != last_user.strip():
             await repo.delete_tail(thread_id=sk, count=2)
             await repo.append_turn(
-                thread_id=sk, role="user",
+                thread_id=sk,
+                role="user",
                 parts=[{"type": "text", "text": body.message}],
             )
         else:
             await repo.delete_tail(thread_id=sk, count=1)
     else:
         await repo.append_turn(
-            thread_id=sk, role="user",
+            thread_id=sk,
+            role="user",
             parts=[{"type": "text", "text": body.message}],
         )
     if assistant_parts:
         await repo.append_turn(
-            thread_id=sk, role="assistant", parts=assistant_parts,
+            thread_id=sk,
+            role="assistant",
+            parts=assistant_parts,
         )
 
 
@@ -246,12 +256,14 @@ async def chat_send(
                     # regenerate replaces a turn rather than adding one.
                     if not body.regenerate:
                         await ChatThreadsRepository(
-                            user_id=user.id, conn=conn,
+                            user_id=user.id,
+                            conn=conn,
                         ).bump_after_send(thread_id=body.session_key)
             except Exception:
                 logger.exception(
                     "persist chat turn failed user=%d thread=%s",
-                    user.id, body.session_key,
+                    user.id,
+                    body.session_key,
                 )
 
     return StreamingResponse(
@@ -288,12 +300,15 @@ async def chat_history(
         repo = ChatMessagesRepository(user_id=user.id, conn=conn)
         if beforeId is None and await repo.latest_id(thread_id=sessionKey) is None:
             backfilled = await call_chat_history(
-                user_id=user.id, session_key=sessionKey,
+                user_id=user.id,
+                session_key=sessionKey,
             )
             if backfilled:
                 await repo.bulk_append(thread_id=sessionKey, turns=backfilled)
         rows = await repo.get_page(
-            thread_id=sessionKey, before_id=beforeId, limit=limit,
+            thread_id=sessionKey,
+            before_id=beforeId,
+            limit=limit,
         )
     # A full page means older rows may exist before its smallest id.
     next_cursor = rows[-1]["id"] if len(rows) == limit else None

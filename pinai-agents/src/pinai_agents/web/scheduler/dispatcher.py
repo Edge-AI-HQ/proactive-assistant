@@ -68,8 +68,7 @@ def _json_obj(value: Any) -> dict[str, Any]:
     elif raw.startswith("```"):
         candidates.insert(
             0,
-            raw.removeprefix("```json").removeprefix("```")
-            .removesuffix("```").strip(),
+            raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip(),
         )
     for candidate in candidates:
         try:
@@ -92,9 +91,7 @@ def _dream_result_fields(result: dict[str, Any]) -> dict[str, Any]:
         summary = raw_summary if isinstance(raw_summary, str) else ""
 
     profile_fields = (
-        parsed.get("profileFieldsUpdated")
-        or parsed.get("profile_fields_updated")
-        or []
+        parsed.get("profileFieldsUpdated") or parsed.get("profile_fields_updated") or []
     )
     if not isinstance(profile_fields, list):
         profile_fields = []
@@ -124,9 +121,13 @@ def _chat_internal_url() -> str:
 # Generator runs can exceed 10 minutes when upstream model calls stall or retry,
 # so they get a longer lease matching the web->chat HTTP read timeout.
 # init / sync are pure HTTP-then-INSERT and stay at the default.
-_LONG_RUNNING_KINDS: frozenset[str] = frozenset({
-    "auto.dreaming", "connector.evolve", "user.prompt",
-})
+_LONG_RUNNING_KINDS: frozenset[str] = frozenset(
+    {
+        "auto.dreaming",
+        "connector.evolve",
+        "user.prompt",
+    }
+)
 _GENERATOR_KINDS: frozenset[str] = frozenset({"generator.manual", "generator.auto"})
 _LONG_LEASE_SECONDS = 600
 _GENERATOR_LEASE_SECONDS = 1800
@@ -173,7 +174,8 @@ class DefaultDispatcher:
         scheduled_for = task.last_run_at  # type: ignore[assignment]
         if scheduled_for is None:
             logger.warning(
-                "dispatch skipped: task=%s has no last_run_at", task.id,
+                "dispatch skipped: task=%s has no last_run_at",
+                task.id,
             )
             return
 
@@ -185,14 +187,19 @@ class DefaultDispatcher:
         async with service_tx(self._pool) as conn:
             won = await insert_run(
                 conn,
-                user_id=task.user_id, run_id=run_id, task_id=task.id,
+                user_id=task.user_id,
+                run_id=run_id,
+                task_id=task.id,
                 scheduled_for=scheduled_for,
-                lease_owner=self._owner, lease_seconds=lease_seconds,
+                lease_owner=self._owner,
+                lease_seconds=lease_seconds,
             )
         if not won:
             logger.info(
                 "dispatch lost race user=%d task=%s scheduled_for=%s",
-                task.user_id, task.id, scheduled_for,
+                task.user_id,
+                task.id,
+                scheduled_for,
             )
             return
 
@@ -201,7 +208,10 @@ class DefaultDispatcher:
         except Exception as e:
             logger.exception(
                 "dispatch handler failed user=%d task=%s kind=%s run_id=%s",
-                task.user_id, task.id, task.kind, run_id,
+                task.user_id,
+                task.id,
+                task.kind,
+                run_id,
             )
             err = f"{type(e).__name__}: {e}"
             # The retry decision is uniform regardless of trigger_kind:
@@ -215,29 +225,41 @@ class DefaultDispatcher:
             backoff = backoff_seconds_for_attempt(task.attempts + 1)
             async with service_tx(self._pool) as conn:
                 await complete_run(
-                    conn, user_id=task.user_id, run_id=run_id,
-                    status="failed", error=err[:1000],
+                    conn,
+                    user_id=task.user_id,
+                    run_id=run_id,
+                    status="failed",
+                    error=err[:1000],
                 )
                 await record_failure_and_decide(
                     conn,
-                    user_id=task.user_id, task_id=task.id,
-                    last_error=err, retry_backoff_seconds=backoff,
+                    user_id=task.user_id,
+                    task_id=task.id,
+                    last_error=err,
+                    retry_backoff_seconds=backoff,
                 )
             return
 
         async with service_tx(self._pool) as conn:
             await complete_run(
-                conn, user_id=task.user_id, run_id=run_id, status="success",
+                conn,
+                user_id=task.user_id,
+                run_id=run_id,
+                status="success",
             )
             if task.trigger_kind == "once":
                 # Stamp success on the already-archived row so /api/tasks
                 # surfaces "succeeded" instead of "failed".
                 await archive_after_success(
-                    conn, user_id=task.user_id, task_id=task.id,
+                    conn,
+                    user_id=task.user_id,
+                    task_id=task.id,
                 )
             else:
                 await record_recurring_success(
-                    conn, user_id=task.user_id, task_id=task.id,
+                    conn,
+                    user_id=task.user_id,
+                    task_id=task.id,
                 )
 
     async def _handle_kind(self, task: ScheduledTaskRow, run_id: str) -> None:
@@ -246,16 +268,22 @@ class DefaultDispatcher:
             await self._dispatch_dream(task, run_id)
         elif kind == "connector.evolve":
             await self._call_chat(
-                "/agent/run/evolve", task, run_id,
+                "/agent/run/evolve",
+                task,
+                run_id,
                 extra={"connector": (task.payload or {}).get("connector", "unknown")},
             )
         elif kind == "user.prompt":
             await self._call_chat(
-                "/agent/run/dream", task, run_id,  # reuse dream as a generic synthetic-prompt path
+                "/agent/run/dream",
+                task,
+                run_id,  # reuse dream as a generic synthetic-prompt path
             )
         elif kind == "crystallize":
             await self._call_chat(
-                "/agent/run/crystallize", task, run_id,
+                "/agent/run/crystallize",
+                task,
+                run_id,
                 extra={"session_key": (task.payload or {}).get("session_key", "")},
             )
         elif kind in ("generator.manual", "generator.auto"):
@@ -275,12 +303,15 @@ class DefaultDispatcher:
             # The handler routes init vs. sync by task.kind internally so
             # we don't duplicate the entry-point plumbing here.
             from ..services import connector_ingest  # noqa: PLC0415
+
             await connector_ingest.run(self._pool, task, run_id)
         else:
             logger.warning("unknown task.kind=%s — no-op", kind)
 
     async def _dispatch_dream(
-        self, task: ScheduledTaskRow, run_id: str,
+        self,
+        task: ScheduledTaskRow,
+        run_id: str,
     ) -> None:
         """auto.dreaming dispatch + pai_evolution_runs lifecycle wrap.
 
@@ -321,7 +352,8 @@ class DefaultDispatcher:
         except Exception:
             logger.exception(
                 "evolution.create failed user=%d run_id=%s — dream history will miss this row",
-                task.user_id, run_id,
+                task.user_id,
+                run_id,
             )
 
         try:
@@ -331,7 +363,8 @@ class DefaultDispatcher:
                 try:
                     async with user_scoped_tx(self._pool, task.user_id) as conn:
                         await EvolutionRepository(task.user_id, conn).fail(
-                            evol_id, error_message=f"{type(e).__name__}: {e}"[:1000],
+                            evol_id,
+                            error_message=f"{type(e).__name__}: {e}"[:1000],
                         )
                 except Exception:
                     logger.exception(
@@ -365,7 +398,9 @@ class DefaultDispatcher:
                 )
 
     async def _run_generator(
-        self, task: ScheduledTaskRow, run_id: str,
+        self,
+        task: ScheduledTaskRow,
+        run_id: str,
     ) -> None:
         """Generator dispatch path: call chat /agent/generate and persist
         the cards JSON to pai_pipeline_runs (+ pai_card_evaluations).
@@ -434,13 +469,17 @@ class DefaultDispatcher:
         # docs/plans/2026-05-15-pattern-driven-card-generation.mdx.
         matched_payload: list[dict[str, Any]] = []
         try:
-            payload_phase1 = payload.get("phase1") if isinstance(payload.get("phase1"), dict) else None
+            payload_phase1 = (
+                payload.get("phase1") if isinstance(payload.get("phase1"), dict) else None
+            )
             async with user_scoped_tx(self._pool, task.user_id) as conn:
                 phase1_seed = payload_phase1 or await build_phase1_seed(conn, task.user_id)
                 repo = PatternsRepository(task.user_id, conn)
                 fp = UserFingerprintRepository(task.user_id, conn)
                 match_result = await match_patterns(
-                    repo, phase1_seed or {}, fingerprint=fp,
+                    repo,
+                    phase1_seed or {},
+                    fingerprint=fp,
                 )
             matched_payload = [m.to_payload() for m in match_result.matched]
         except Exception:  # noqa: BLE001
@@ -448,7 +487,8 @@ class DefaultDispatcher:
             # generation if the matcher trips on a malformed DSL row.
             logger.exception(
                 "pattern matcher failed user=%d run=%s (continuing with empty match list)",
-                task.user_id, run_id,
+                task.user_id,
+                run_id,
             )
 
         result = await call_generate(
@@ -466,7 +506,9 @@ class DefaultDispatcher:
         # original matcher evidence per pattern (chat-side cannot read
         # the pattern DB — see trust boundary).
         await persist_generator_run(
-            self._pool, user_id=task.user_id, payload=result,
+            self._pool,
+            user_id=task.user_id,
+            payload=result,
             trigger=str(payload.get("trigger") or "manual"),
             matched_patterns=matched_payload or None,
         )
@@ -482,16 +524,19 @@ class DefaultDispatcher:
             from ..services.card_fanout import (  # noqa: PLC0415
                 dispatch_card_bootstrap,
             )
+
             cards = result.get("cards") or []
             await dispatch_card_bootstrap(
-                pool=self._pool, user_id=task.user_id,
+                pool=self._pool,
+                user_id=task.user_id,
                 final_cards=cards if isinstance(cards, list) else [],
             )
         except Exception:
             logger.exception(
                 "card fanout dispatch failed user=%d run=%s — cards "
                 "persisted; FE Confirm path will bootstrap on demand",
-                task.user_id, run_id,
+                task.user_id,
+                run_id,
             )
 
         # Dispatch "new cards" push notification. Multi-card collapse:
@@ -500,15 +545,22 @@ class DefaultDispatcher:
         # body string). notify_new_cards is internally exception-safe so
         # a push failure never propagates back into the task lifecycle.
         from ..services.push_notifier import notify_new_cards  # noqa: PLC0415
+
         card_count = len(result.get("cards") or [])
         if card_count > 0:
             await notify_new_cards(
-                self._pool, user_id=task.user_id, card_count=card_count,
+                self._pool,
+                user_id=task.user_id,
+                card_count=card_count,
             )
 
     async def _call_chat(
-        self, path: str, task: ScheduledTaskRow, run_id: str,
-        *, extra: dict | None = None,
+        self,
+        path: str,
+        task: ScheduledTaskRow,
+        run_id: str,
+        *,
+        extra: dict | None = None,
     ) -> dict[str, Any]:
         # Need user's litellm_virtual_key — fetch from users table.
         async with service_tx(self._pool) as conn:
@@ -531,7 +583,9 @@ class DefaultDispatcher:
         # chat-driving in every meaningful sense (LLM loop + sandbox tools);
         # they need the same auth profile.
         token, _ = sign_agent_run_jwt(
-            user_id=task.user_id, run_id=run_id, virtual_key=virtual_key,
+            user_id=task.user_id,
+            run_id=run_id,
+            virtual_key=virtual_key,
         )
         body = {
             "user_id": task.user_id,
@@ -544,7 +598,8 @@ class DefaultDispatcher:
         async with httpx.AsyncClient(timeout=timeout) as client:
             try:
                 resp = await client.post(
-                    url, json=body,
+                    url,
+                    json=body,
                     headers={"Authorization": f"Bearer {token}"},
                 )
             except httpx.RequestError as e:
@@ -558,10 +613,7 @@ class DefaultDispatcher:
             # Previously this only logged a warning, which made the
             # dispatcher mark the task succeeded despite the chat worker
             # exploding (e.g. phantom mint 403 leaked through silently).
-            msg = (
-                f"chat worker {path} returned {resp.status_code} "
-                f"body={resp.text[:300]}"
-            )
+            msg = f"chat worker {path} returned {resp.status_code} body={resp.text[:300]}"
             raise RuntimeError(msg)
         if not resp.content:
             return {}

@@ -110,7 +110,7 @@ def _extract_bearer(authorization: str | None) -> str:
             detail="Authorization: Bearer <token> required",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return authorization[len("bearer "):].strip()
+    return authorization[len("bearer ") :].strip()
 
 
 def _verify_principal(token: str) -> RunPrincipal:
@@ -168,7 +168,7 @@ def _card_context_message(card_context: dict[str, Any]) -> SystemMessage:
         content=(
             "<card_context>\n"
             "The user is giving feedback on this exact current card. "
-            "If they say \"this card\", \"这张卡\", \"这个任务\", or ask what "
+            'If they say "this card", "这张卡", "这个任务", or ask what '
             "the current feedback card is, answer from this JSON. "
             "Do not call cards_recent to identify it.\n"
             f"{ctx_json}\n"
@@ -255,7 +255,10 @@ async def chat(
 
 
 async def _stream(
-    req: ChatRequest, principal: RunPrincipal, *, raw_jwt: str,
+    req: ChatRequest,
+    principal: RunPrincipal,
+    *,
+    raw_jwt: str,
 ) -> AsyncIterator[bytes]:
     is_card_thread = req.session_key.startswith(_CARD_THREAD_PREFIX)
     # virtual_key is guaranteed non-None by _verify_principal.
@@ -267,7 +270,8 @@ async def _stream(
         backend = await _get_thread_backend(req.session_key, raw_jwt=raw_jwt)
     except Exception as e:
         logger.exception(
-            "sandbox provisioning failed session_key=%s", req.session_key,
+            "sandbox provisioning failed session_key=%s",
+            req.session_key,
         )
         yield chat_error(f"sandbox provisioning failed: {type(e).__name__}: {e}")
         yield chat_done()
@@ -312,7 +316,8 @@ async def _stream(
             snapshot = await agent.aget_state(state_config)
         except Exception as e:
             logger.exception(
-                "regenerate state read failed session=%s", req.session_key,
+                "regenerate state read failed session=%s",
+                req.session_key,
             )
             yield chat_error(
                 f"regenerate state read failed: {type(e).__name__}: {e}",
@@ -336,9 +341,7 @@ async def _stream(
             break
 
         new_text = (req.message or "").strip()
-        trailing_text = (
-            _extract_human_text(trailing_human) if trailing_human else ""
-        )
+        trailing_text = _extract_human_text(trailing_human) if trailing_human else ""
         is_edit = bool(new_text) and new_text != trailing_text.strip()
 
         if is_edit and trailing_human is not None:
@@ -354,7 +357,8 @@ async def _stream(
                 )
             except Exception as e:
                 logger.exception(
-                    "regenerate pop failed session=%s", req.session_key,
+                    "regenerate pop failed session=%s",
+                    req.session_key,
                 )
                 yield chat_error(
                     f"regenerate pop failed: {type(e).__name__}: {e}",
@@ -363,7 +367,9 @@ async def _stream(
                 return
             logger.info(
                 "regenerate popped %d trailing messages session=%s is_edit=%s",
-                len(to_remove_ids), req.session_key, is_edit,
+                len(to_remove_ids),
+                req.session_key,
+                is_edit,
             )
 
         # If edit, add the replacement HumanMessage; if pure regen, leave
@@ -379,9 +385,7 @@ async def _stream(
             return
         # Only card threads need the (async) first-turn probe; main threads
         # inject per-turn so we skip the checkpoint read for them.
-        is_first_turn = (
-            await _is_first_turn(agent, req.session_key) if is_card_thread else False
-        )
+        is_first_turn = await _is_first_turn(agent, req.session_key) if is_card_thread else False
         input_messages.extend(
             _build_send_messages(
                 message=req.message,
@@ -436,7 +440,9 @@ async def _stream(
         client_hints=hints,
     ):
         events = agent.astream_events(
-            {"messages": input_messages}, config=config, version="v2",
+            {"messages": input_messages},
+            config=config,
+            version="v2",
         )
         try:
             async for chunk in langgraph_to_sse(events):
@@ -453,7 +459,8 @@ async def _stream(
                     )
                 except Exception:
                     logger.exception(
-                        "context trim failed session_key=%s", req.session_key,
+                        "context trim failed session_key=%s",
+                        req.session_key,
                     )
         except BaseException as e:
             saw_failure = e

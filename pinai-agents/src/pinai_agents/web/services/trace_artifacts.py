@@ -19,7 +19,16 @@ from ...config import get_web_settings
 from ..db.repositories.reward import RewardRepository
 
 STAGES = ("data-collector", "planner", "card-generator", "evaluator")
-DATA_SOURCES = ("profile", "memory", "signals", "gmail", "gcal", "cards_recent", "feedback", "world")
+DATA_SOURCES = (
+    "profile",
+    "memory",
+    "signals",
+    "gmail",
+    "gcal",
+    "cards_recent",
+    "feedback",
+    "world",
+)
 
 
 def _clip(value: Any, limit: int = 500) -> str:
@@ -70,8 +79,7 @@ def _stages_for_text(text: str) -> list[str]:
 
 def _node_text(node: dict[str, Any]) -> str:
     return " ".join(
-        str(node.get(key) or "")
-        for key in ("name", "inputsPreview", "outputsPreview", "error")
+        str(node.get(key) or "") for key in ("name", "inputsPreview", "outputsPreview", "error")
     )
 
 
@@ -80,14 +88,13 @@ def _stage_snippet(text: str, stage: str) -> str | None:
     for needle in (stage, "phase1", "skipped", "pass", "overall", "feedback"):
         idx = lowered.find(needle)
         if idx >= 0:
-            return _clip(text[max(0, idx - 120): idx + 420], 500)
+            return _clip(text[max(0, idx - 120) : idx + 420], 500)
     return None
 
 
 def _summarize(nodes: Sequence[dict[str, Any]]) -> dict[str, Any]:
     stages: dict[str, dict[str, Any]] = {
-        stage: {"seen": False, "nodes": 0, "errors": [], "snippets": []}
-        for stage in STAGES
+        stage: {"seen": False, "nodes": 0, "errors": [], "snippets": []} for stage in STAGES
     }
     data_sources: set[str] = set()
     skipped_intents: list[str] = []
@@ -172,13 +179,13 @@ def _svg(summary: dict[str, Any]) -> str:
     return (
         '<svg xmlns="http://www.w3.org/2000/svg" '
         f'width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
-        "<defs><marker id=\"arrow\" markerWidth=\"8\" markerHeight=\"8\" refX=\"5\" "
-        "refY=\"3\" orient=\"auto\" markerUnits=\"strokeWidth\">"
-        "<path d=\"M0,0 L0,6 L6,3 z\" fill=\"#64748b\"/></marker></defs>"
+        '<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="5" '
+        'refY="3" orient="auto" markerUnits="strokeWidth">'
+        '<path d="M0,0 L0,6 L6,3 z" fill="#64748b"/></marker></defs>'
         '<rect width="100%" height="100%" fill="#ffffff"/>'
         '<text x="52" y="38" font-family="Inter,Arial" font-size="18" '
         'font-weight="800" fill="#0f172a">Generation trace</text>'
-        f'{"".join(arrows)}{"".join(boxes)}'
+        f"{''.join(arrows)}{''.join(boxes)}"
         '<text x="52" y="218" font-family="Inter,Arial" font-size="13" '
         f'fill="#475569">{html.escape(error_text)}</text>'
         "</svg>"
@@ -221,18 +228,20 @@ class TraceArtifactService:
             )
 
         try:
-            root_runs = list(client.list_runs(
-                project_name=settings.langsmith_project,
-                filter=(
-                    "and("
-                    "eq(metadata_key, 'pinai_run_id'), "
-                    f"eq(metadata_value, '{canonical_run_id}')"
-                    ")"
-                ),
-                is_root=True,
-                start_time=datetime.now(UTC) - timedelta(days=7),
-                limit=1,
-            ))
+            root_runs = list(
+                client.list_runs(
+                    project_name=settings.langsmith_project,
+                    filter=(
+                        "and("
+                        "eq(metadata_key, 'pinai_run_id'), "
+                        f"eq(metadata_value, '{canonical_run_id}')"
+                        ")"
+                    ),
+                    is_root=True,
+                    start_time=datetime.now(UTC) - timedelta(days=7),
+                    limit=1,
+                )
+            )
         except Exception as e:
             return await self._repo.upsert_trace_artifact(
                 run_id=canonical_run_id,
@@ -260,12 +269,14 @@ class TraceArtifactService:
         trace_id = str(getattr(root, "trace_id", None) or getattr(root, "id", ""))
         langsmith_url = getattr(root, "url", None)
         try:
-            runs = list(client.list_runs(
-                project_name=settings.langsmith_project,
-                trace_id=trace_id,
-                start_time=datetime.now(UTC) - timedelta(days=7),
-                limit=100,
-            ))
+            runs = list(
+                client.list_runs(
+                    project_name=settings.langsmith_project,
+                    trace_id=trace_id,
+                    start_time=datetime.now(UTC) - timedelta(days=7),
+                    limit=100,
+                )
+            )
         except Exception as e:
             return await self._repo.upsert_trace_artifact(
                 run_id=canonical_run_id,
