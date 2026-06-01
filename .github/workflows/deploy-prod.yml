@@ -1,20 +1,16 @@
 name: Deploy Prod
 
-# Prod env: manual workflow_dispatch only.
+# Prod env: manual dispatch only. Thin caller; all deploy logic lives in
+# _deploy.yml.
 #
-# Scope: pinai-agents + LiteLLM + frontend. Always deploys all four
-# stages (snapshot + agents + litellm + frontend) — no path filter,
-# since prod is human-triggered and infrequent.
+# environment: production passes through to every job in _deploy.yml, so the
+# GitHub Environment approval rules (reviewers / wait timer / branch policy)
+# still gate the deploy — those live on the environment, not in this file.
 #
-# environment: production gates every job behind the GitHub Environment
-# approval rules (reviewers / wait timer / branch policy live there,
-# not in this file).
+# concurrency cancel-in-progress: false — never tear down a partial prod
+# deploy mid-flight.
 #
-# concurrency cancel-in-progress: false — don't tear down a partial
-# prod deploy mid-flight.
-#
-# Secret injection model mirrors deploy-test.yml / deploy-dev.yml,
-# keyed on DOTENV_PRIVATE_KEY_PRODUCTION + .env.production.
+# run_filter is off — prod always deploys all components.
 
 on:
   workflow_dispatch:
@@ -24,124 +20,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-daytona-snapshot:
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - uses: astral-sh/setup-uv@v7
-
-      - name: Decrypt DAYTONA_API_KEY from .env.production
-        working-directory: pinai-agents
-        env:
-          DOTENV_PRIVATE_KEY_PRODUCTION: ${{ secrets.DOTENV_PRIVATE_KEY_PRODUCTION }}
-        run: |
-          DAYTONA_API_KEY=$(npx @dotenvx/dotenvx get DAYTONA_API_KEY -f .env.production)
-          # Mask before exporting so it never appears in subsequent step logs.
-          echo "::add-mask::$DAYTONA_API_KEY"
-          echo "DAYTONA_API_KEY=$DAYTONA_API_KEY" >> "$GITHUB_ENV"
-
-      - name: Build/refresh Daytona snapshot (pinai-sandbox:production)
-        working-directory: pinai-agents
-        run: |
-          uv sync --no-dev
-          uv run python infra/daytona/build_snapshot.py --version production --recreate
-
-  deploy-agents:
-    needs: build-daytona-snapshot
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      - uses: superfly/flyctl-actions/setup-flyctl@v1
-
-      - name: Sync fly secrets from .env.production
-        working-directory: pinai-agents
-        env:
-          DOTENV_PRIVATE_KEY_PRODUCTION: ${{ secrets.DOTENV_PRIVATE_KEY_PRODUCTION }}
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: |
-          python3 scripts/sync_fly_secrets.py \
-            --app proactive-ai-agents-prod \
-            --env-file .env.production
-
-      - name: Deploy pinai-agents to prod
-        working-directory: pinai-agents
-        run: flyctl deploy --config fly.prod.toml --remote-only
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-
-  deploy-litellm:
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      - uses: superfly/flyctl-actions/setup-flyctl@v1
-
-      - name: Stage DOTENV_PRIVATE_KEY_PRODUCTION as fly secret
-        run: |
-          flyctl secrets set --app proactive-ai-litellm-prod --stage \
-            "DOTENV_PRIVATE_KEY_PRODUCTION=${DOTENV_PRIVATE_KEY_PRODUCTION}"
-        env:
-          DOTENV_PRIVATE_KEY_PRODUCTION: ${{ secrets.DOTENV_PRIVATE_KEY_PRODUCTION }}
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-
-      - name: Deploy LiteLLM to prod
-        working-directory: ops/litellm
-        run: flyctl deploy --config fly.litellm-prod.toml --remote-only
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-
-  deploy-frontend:
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 20
-
-      - uses: superfly/flyctl-actions/setup-flyctl@v1
-
-      - name: Extract VITE_* build args from encrypted env
-        run: |
-          VITE_PIN_API_URL=$(npx @dotenvx/dotenvx get VITE_PIN_API_URL -f pinai-agents/.env.production)
-          VITE_SUPABASE_URL=$(npx @dotenvx/dotenvx get VITE_SUPABASE_URL -f pinai-agents/.env.production)
-          VITE_SUPABASE_PUBLISHABLE_KEY=$(npx @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f pinai-agents/.env.production)
-          echo "VITE_PIN_API_URL=$VITE_PIN_API_URL" >> "$GITHUB_ENV"
-          echo "VITE_SUPABASE_URL=$VITE_SUPABASE_URL" >> "$GITHUB_ENV"
-          echo "VITE_SUPABASE_PUBLISHABLE_KEY=$VITE_SUPABASE_PUBLISHABLE_KEY" >> "$GITHUB_ENV"
-        env:
-          DOTENV_PRIVATE_KEY_PRODUCTION: ${{ secrets.DOTENV_PRIVATE_KEY_PRODUCTION }}
-
-      # Build context = repo root so `COPY capacitor-plugins/` in the
-      # Dockerfile resolves the sibling workspace. See deploy-dev.yml for
-      # the long comment.
-      - name: Deploy frontend to prod
-        run: |
-          flyctl deploy . \
-            --config proactive-ai-frontend/fly.prod.toml \
-            --dockerfile proactive-ai-frontend/Dockerfile \
-            --remote-only \
-            --build-arg WORKDIR=proactive-ai-frontend \
-            --build-arg VITE_PIN_API_URL="$VITE_PIN_API_URL" \
-            --build-arg VITE_SUPABASE_URL="$VITE_SUPABASE_URL" \
-            --build-arg VITE_SUPABASE_PUBLISHABLE_KEY="$VITE_SUPABASE_PUBLISHABLE_KEY"
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+  deploy:
+    uses: ./.github/workflows/_deploy.yml
+    secrets: inherit
+    with:
+      environment: production
+      env_file: .env.production
+      dotenv_key_name: DOTENV_PRIVATE_KEY_PRODUCTION
+      agents_app: proactive-ai-agents-prod
+      litellm_app: proactive-ai-litellm-prod
+      agents_toml: fly.prod.toml
+      litellm_toml: fly.litellm-prod.toml
+      frontend_toml: proactive-ai-frontend/fly.prod.toml
+      daytona_version: production
+      run_filter: false

@@ -1,0 +1,237 @@
+name: _deploy
+
+# Reusable deploy workflow — the single source of truth for deploying
+# pinai-agents + LiteLLM + frontend to a Fly environment. The dev / test /
+# prod callers (deploy-{dev,test,prod}.yml) are thin: each only declares its
+# trigger + concurrency, then calls this with its environment's parameters.
+#
+# Why reusable workflow (not matrix / composite action): the three
+# environments have *heterogeneous* triggers (dev = push + dispatch with
+# path filtering, test/prod = manual dispatch, prod = approval gate +
+# no-cancel). A matrix can't express per-environment `on:` triggers or
+# concurrency; a composite action can't express the 4-job needs graph or
+# per-job environment approval. workflow_call is the standard fit.
+#
+# Secret handling: callers pass `secrets: inherit`, so all three
+# DOTENV_PRIVATE_KEY_{DEV,TEST,PRODUCTION} + FLY_API_TOKEN reach every job.
+# dotenvx auto-selects the right private key by matching the public key
+# embedded in the .env file (variable name is irrelevant — see
+# scripts/sync_fly_secrets.py), so snapshot/agents/frontend never name a
+# key explicitly. The only place that needs the literal key *name* is the
+# LiteLLM job (it sets that exact fly secret for the container's startup
+# `dotenvx run`), which reads it via `dotenv_key_name` + bash indirection.
+#
+# Per-component filtering (changes job + the `if:` guards) only matters for
+# dev's push trigger. `run_filter` gates it: dev passes true (filter by
+# changed paths), test/prod pass false (deploy everything).
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: GitHub Environment for approval gates ('' = none)
+        type: string
+        default: ''
+      env_file:
+        description: dotenvx-encrypted env file (.env.dev / .env.test / .env.production)
+        type: string
+        required: true
+      dotenv_key_name:
+        description: Name of the DOTENV_PRIVATE_KEY_* secret LiteLLM's container needs
+        type: string
+        required: true
+      agents_app:
+        type: string
+        required: true
+      litellm_app:
+        type: string
+        required: true
+      agents_toml:
+        type: string
+        required: true
+      litellm_toml:
+        type: string
+        required: true
+      frontend_toml:
+        type: string
+        required: true
+      daytona_version:
+        description: Daytona snapshot version tag (dev / test / production)
+        type: string
+        required: true
+      run_filter:
+        description: Gate each component on changed paths (dev push) vs deploy all
+        type: boolean
+        default: false
+
+jobs:
+  changes:
+    # Only runs when run_filter is on — currently only dev's push trigger.
+    # test/prod pass run_filter=false, so this job is skipped and the deploy
+    # jobs ignore its outputs entirely (deploy everything). The .env.dev
+    # frontend path is dev-specific (VITE_* build args live there); it's
+    # harmless for other environments since they never reach this job.
+    if: ${{ inputs.run_filter }}
+    runs-on: ubuntu-latest
+    outputs:
+      agents: ${{ steps.filter.outputs.agents }}
+      litellm: ${{ steps.filter.outputs.litellm }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            agents:
+              - 'pinai-agents/**'
+            litellm:
+              - 'ops/litellm/**'
+            frontend:
+              - 'proactive-ai-frontend/**'
+              - 'pinai-agents/.env.dev'
+
+  build-daytona-snapshot:
+    needs: changes
+    # always() so this runs even when `changes` was skipped (run_filter off).
+    # Then gate on: not filtering, OR agents actually changed.
+    if: ${{ always() && (!inputs.run_filter || needs.changes.outputs.agents == 'true') }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment != '' && inputs.environment || null }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Decrypt DAYTONA_API_KEY from ${{ inputs.env_file }}
+        working-directory: pinai-agents
+        env:
+          DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
+          DOTENV_PRIVATE_KEY_TEST: ${{ secrets.DOTENV_PRIVATE_KEY_TEST }}
+          DOTENV_PRIVATE_KEY_PRODUCTION: ${{ secrets.DOTENV_PRIVATE_KEY_PRODUCTION }}
+        run: |
+          DAYTONA_API_KEY=$(npx @dotenvx/dotenvx get DAYTONA_API_KEY -f ${{ inputs.env_file }})
+          # Mask before exporting so it never appears in subsequent step logs.
+          echo "::add-mask::$DAYTONA_API_KEY"
+          echo "DAYTONA_API_KEY=$DAYTONA_API_KEY" >> "$GITHUB_ENV"
+
+      - name: Build/refresh Daytona snapshot (pinai-sandbox:${{ inputs.daytona_version }})
+        working-directory: pinai-agents
+        run: |
+          uv sync --no-dev
+          uv run python infra/daytona/build_snapshot.py --version ${{ inputs.daytona_version }} --recreate
+
+  deploy-agents:
+    needs: [changes, build-daytona-snapshot]
+    if: ${{ always() && (!inputs.run_filter || needs.changes.outputs.agents == 'true') && needs.build-daytona-snapshot.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment != '' && inputs.environment || null }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - uses: superfly/flyctl-actions/setup-flyctl@v1
+
+      - name: Sync fly secrets from ${{ inputs.env_file }}
+        working-directory: pinai-agents
+        env:
+          DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
+          DOTENV_PRIVATE_KEY_TEST: ${{ secrets.DOTENV_PRIVATE_KEY_TEST }}
+          DOTENV_PRIVATE_KEY_PRODUCTION: ${{ secrets.DOTENV_PRIVATE_KEY_PRODUCTION }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          python3 scripts/sync_fly_secrets.py \
+            --app ${{ inputs.agents_app }} \
+            --env-file ${{ inputs.env_file }}
+
+      - name: Deploy pinai-agents to ${{ inputs.daytona_version }}
+        working-directory: pinai-agents
+        run: flyctl deploy --config ${{ inputs.agents_toml }} --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  deploy-litellm:
+    needs: changes
+    if: ${{ always() && (!inputs.run_filter || needs.changes.outputs.litellm == 'true') }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment != '' && inputs.environment || null }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - uses: superfly/flyctl-actions/setup-flyctl@v1
+
+      - name: Stage ${{ inputs.dotenv_key_name }} as fly secret
+        env:
+          DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
+          DOTENV_PRIVATE_KEY_TEST: ${{ secrets.DOTENV_PRIVATE_KEY_TEST }}
+          DOTENV_PRIVATE_KEY_PRODUCTION: ${{ secrets.DOTENV_PRIVATE_KEY_PRODUCTION }}
+          KEY_NAME: ${{ inputs.dotenv_key_name }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          # The container decrypts .env at startup via `dotenvx run`, so it
+          # needs this exact secret name set on the app. Indirect expansion
+          # reads whichever DOTENV_PRIVATE_KEY_* env var KEY_NAME points at.
+          key_value="${!KEY_NAME}"
+          flyctl secrets set --app ${{ inputs.litellm_app }} --stage \
+            "${KEY_NAME}=${key_value}"
+
+      - name: Deploy LiteLLM to ${{ inputs.daytona_version }}
+        working-directory: ops/litellm
+        run: flyctl deploy --config ${{ inputs.litellm_toml }} --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  deploy-frontend:
+    needs: changes
+    if: ${{ always() && (!inputs.run_filter || needs.changes.outputs.frontend == 'true') }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment != '' && inputs.environment || null }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+
+      - uses: superfly/flyctl-actions/setup-flyctl@v1
+
+      - name: Extract VITE_* build args from ${{ inputs.env_file }}
+        env:
+          DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
+          DOTENV_PRIVATE_KEY_TEST: ${{ secrets.DOTENV_PRIVATE_KEY_TEST }}
+          DOTENV_PRIVATE_KEY_PRODUCTION: ${{ secrets.DOTENV_PRIVATE_KEY_PRODUCTION }}
+        run: |
+          envf="pinai-agents/${{ inputs.env_file }}"
+          {
+            echo "VITE_PIN_API_URL=$(npx @dotenvx/dotenvx get VITE_PIN_API_URL -f "$envf")"
+            echo "VITE_SUPABASE_URL=$(npx @dotenvx/dotenvx get VITE_SUPABASE_URL -f "$envf")"
+            echo "VITE_SUPABASE_PUBLISHABLE_KEY=$(npx @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f "$envf")"
+          } >> "$GITHUB_ENV"
+
+      # Build context = repo root so the Dockerfile's `COPY capacitor-plugins/`
+      # can pick up the sibling workspace (file:../capacitor-plugins/ambient-ai).
+      # Mirrors docker-compose.yml's frontend service. Without it CI fails with
+      # "/capacitor-plugins: not found".
+      - name: Deploy frontend to ${{ inputs.daytona_version }}
+        run: |
+          flyctl deploy . \
+            --config ${{ inputs.frontend_toml }} \
+            --dockerfile proactive-ai-frontend/Dockerfile \
+            --remote-only \
+            --build-arg WORKDIR=proactive-ai-frontend \
+            --build-arg VITE_PIN_API_URL="$VITE_PIN_API_URL" \
+            --build-arg VITE_SUPABASE_URL="$VITE_SUPABASE_URL" \
+            --build-arg VITE_SUPABASE_PUBLISHABLE_KEY="$VITE_SUPABASE_PUBLISHABLE_KEY"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
