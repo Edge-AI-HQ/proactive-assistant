@@ -58,6 +58,14 @@ class FeedbackRow:
         )
 
 
+def _effective_card_action(kind: str, action: str | None) -> str | None:
+    if action:
+        return action
+    if kind in {"dismiss", "snooze"}:
+        return kind
+    return None
+
+
 class FeedbackRepository(UserScopedRepository):
     async def log(
         self,
@@ -111,13 +119,14 @@ class FeedbackRepository(UserScopedRepository):
         if row is None:
             msg = "feedback insert returned no row"
             raise RuntimeError(msg)
+        effective_action = _effective_card_action(kind, action)
         # Phase 3: fan out card-targeted dismiss / confirm actions to
         # the per-user pattern fingerprint. We don't run on every kind
         # — only on actions that already mean "user touched this card".
-        if intent_card_id and action in {"open", "confirm", "dismiss", "snooze"}:
+        if intent_card_id and effective_action in {"open", "confirm", "dismiss", "snooze"}:
             await self._fanout_fingerprint(
                 card_id=intent_card_id,
-                action=action,
+                action=effective_action,
                 intent_key=intent_key,
                 basket=basket,
             )
@@ -182,7 +191,10 @@ class FeedbackRepository(UserScopedRepository):
                 SELECT DISTINCT intent_card_id
                 FROM pai_feedback_events
                 WHERE user_id = %s
-                  AND action = 'dismiss'
+                  AND (
+                    action IN ('dismiss', 'snooze')
+                    OR (action IS NULL AND kind IN ('dismiss', 'snooze'))
+                  )
                   AND intent_card_id IS NOT NULL
                 """,
                 (self._user_id,),
