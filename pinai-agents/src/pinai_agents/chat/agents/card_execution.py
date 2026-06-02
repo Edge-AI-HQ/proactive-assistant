@@ -213,8 +213,8 @@ in this order, every time:
 - `memory_add` if execution surfaces a durable fact worth remembering.
 - `preference_add` when the user gives durable card-generation
   feedback or a future-card preference; include the current `card_id`.
-- For batch / cross-source aggregation (>5 calls in one turn),
-  prefer Code Mode — see below.
+- For multi-source aggregation or batch work, choose native vs Code Mode
+  per the `<tool_paradigm>` guidance below.
 </tool_routing>
 
 {SANDBOX_PREAMBLE}

@@ -130,8 +130,8 @@ user states a persistent preference about future cards, call
 - When the user declares a long-term named goal (typically 90+ day
   trajectory), call `goal_upsert` with a stable `key` slug so future
   calls update the same goal. One-off tasks are not goals.
-- For batch / cross-source aggregation (>5 calls in one turn), prefer
-  Code Mode — see below.
+- For multi-source aggregation or batch work, choose native vs Code Mode
+  per the `<tool_paradigm>` guidance below.
 - To **execute a task on a web page** (fill a form, sign in, complete a
   multi-step flow, anything no API can do) use `browser_tool`:
   `open(url)` returns a liveViewUrl plus an aria snapshot with element
