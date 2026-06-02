@@ -50,6 +50,11 @@ interface UseProactiveChatRuntimeOptions {
   // primaryAction text as the user's first turn. Card "Chat" path
   // (just open, let user type) leaves this undefined.
   bootstrapMessage?: string;
+  // Caller already resolved the session via its own /chat-stream/init
+  // (main chat does this in MainChat.tsx to obtain the server-assigned
+  // singleton key). Skip the hook's duplicate /init round-trip; `existing`
+  // is then derived from fetched history. Card callers omit this.
+  skipInit?: boolean;
 }
 
 interface AdapterOptions {
@@ -457,14 +462,21 @@ export function useProactiveChatRuntime(options: UseProactiveChatRuntimeOptions)
 
     void (async () => {
       try {
-        const initRes = await proxyPost("/chat-stream/init", {
-          sessionKey: options.sessionKey,
-        });
-        const initData = await initRes.json() as { ok?: boolean; existing?: boolean };
-        const hasExistingHistory = Boolean(initData.ok && initData.existing);
-
-        if (hasExistingHistory) {
-          bootstrappedSessionsRef.current.add(options.sessionKey);
+        // main chat already resolved the key (and existence) via its own
+        // /init in MainChat.tsx; skip the duplicate round-trip on the
+        // open-chat hot path. `existing` for main is a dead value anyway —
+        // it only feeds card bootstrap (which requires bootstrapMessage,
+        // never set for main), so history is derived from fetchHistory.
+        let hasExistingHistory = false;
+        if (!options.skipInit) {
+          const initRes = await proxyPost("/chat-stream/init", {
+            sessionKey: options.sessionKey,
+          });
+          const initData = await initRes.json() as { ok?: boolean; existing?: boolean };
+          hasExistingHistory = Boolean(initData.ok && initData.existing);
+          if (hasExistingHistory) {
+            bootstrappedSessionsRef.current.add(options.sessionKey);
+          }
         }
 
         const msgs = await fetchHistory(options.sessionKey);
