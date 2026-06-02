@@ -115,6 +115,10 @@ function MainChatScope({
       void runtime.thread.append({
         role: "user",
         content: [{ type: "text", text: trimmed }],
+        // Stamp the real send time so this bubble keeps its own timestamp.
+        // Without it assistant-ui lazily fills createdAt with new Date() and
+        // re-stamps every user bubble to "now" on each subsequent send.
+        createdAt: new Date(),
       });
     },
     [runtime],

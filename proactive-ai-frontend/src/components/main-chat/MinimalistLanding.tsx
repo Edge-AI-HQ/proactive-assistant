@@ -1,13 +1,8 @@
-import { useCallback, useEffect, useRef, useState, type PointerEvent, type TouchEvent } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { ChevronDown, Send } from "lucide-react";
 import bgGradient from "@/assets/bg-gradient.jpg";
 import AiSphere from "@/components/constellation/AiSphere";
-import {
-  isMainChatExitSwipeDown,
-  shouldIgnoreLandingExitSwipe,
-  type TouchPoint,
-} from "@/components/constellation/mainChatEntryGesture";
 import { VoiceButton } from "@/components/voice";
 
 interface Suggestion {
@@ -52,6 +47,16 @@ export default function MinimalistLanding({
 }: MinimalistLandingProps) {
   const [text, setText] = useState("");
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
+  // "整体上移" keyboard avoidance. The composer floats above the keyboard
+  // (absolute bottom:--kb-height) while the body stays put, so the body's lower
+  // chips can end up hidden behind the composer. We measure how far the content
+  // overruns the composer's floated-up top edge and lift the whole body by
+  // exactly that (+ a small gap) — the last chip lands just above the input and
+  // the sphere rides off the top (clipped by the root overflow-hidden). At rest
+  // (--kb-height 0) lift is 0, so the landing is byte-for-byte unchanged.
+  const [lift, setLift] = useState(0);
 
   useEffect(() => {
     const ta = taRef.current;
@@ -59,6 +64,37 @@ export default function MinimalistLanding({
     ta.style.height = "auto";
     ta.style.height = `${Math.min(ta.scrollHeight, 120)}px`;
   }, [text]);
+
+  useEffect(() => {
+    const recompute = () => {
+      const kb = parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue("--kb-height"),
+      );
+      const body = bodyRef.current;
+      const composer = composerRef.current;
+      if (!body || !composer || !kb || kb <= 0) {
+        setLift(0);
+        return;
+      }
+      // Bottom of the real content — the chips block is the body's last child.
+      // Body carries no transform here (lift was reset to 0 on the prior hide),
+      // so this rect is the true on-screen position.
+      const chips = body.lastElementChild;
+      if (!chips) return;
+      const contentBottom = chips.getBoundingClientRect().bottom;
+      // Composer's top once floated to bottom:--kb-height. offsetHeight is
+      // independent of the bottom transition, so we needn't wait for it.
+      const composerTop = window.innerHeight - kb - composer.offsetHeight;
+      const overrun = contentBottom - composerTop;
+      setLift(overrun > 0 ? Math.ceil(overrun) + 12 : 0);
+    };
+    window.addEventListener("pinai:kbShow", recompute);
+    window.addEventListener("pinai:kbHide", recompute);
+    return () => {
+      window.removeEventListener("pinai:kbShow", recompute);
+      window.removeEventListener("pinai:kbHide", recompute);
+    };
+  }, []);
 
   const submit = useCallback(() => {
     const trimmed = text.trim();
@@ -82,79 +118,8 @@ export default function MinimalistLanding({
 
   const canSend = !!text.trim() && !disabled;
 
-  // Swipe-down-to-close gesture. Mirrors the swipe-up-to-open from
-  // ConstellationLayout: start ref is set on pointer/touch start, the
-  // exit fires when downward travel >= 36px and dominates horizontal
-  // jitter. Critical (learned the hard way on iOS): we do NOT clear the
-  // start ref inside pointermove — small touch deltas would null it
-  // before threshold is reached and the gesture would never fire.
-  // The ref is cleared only on success or on the terminal pointerup /
-  // touchend, with onPointerCancel / onTouchCancel as belt-and-suspenders.
-  //
-  // shouldIgnoreLandingExitSwipe excludes textarea / button / input
-  // targets so editing the composer or tapping a chip never accidentally
-  // closes the landing.
-  const exitSwipeStartRef = useRef<TouchPoint | null>(null);
-
-  const tryExitFromSwipe = useCallback((
-    end: TouchPoint,
-    event: { preventDefault: () => void },
-  ) => {
-    if (!isMainChatExitSwipeDown(exitSwipeStartRef.current, end)) return;
-    exitSwipeStartRef.current = null;
-    event.preventDefault();
-    onBack();
-  }, [onBack]);
-
-  const handleExitPointerDown = useCallback((e: PointerEvent<HTMLDivElement>) => {
-    if (shouldIgnoreLandingExitSwipe(e.target)) {
-      exitSwipeStartRef.current = null;
-      return;
-    }
-    exitSwipeStartRef.current = { x: e.clientX, y: e.clientY };
-  }, []);
-  const handleExitPointerMove = useCallback((e: PointerEvent<HTMLDivElement>) => {
-    tryExitFromSwipe({ x: e.clientX, y: e.clientY }, e);
-  }, [tryExitFromSwipe]);
-  const handleExitPointerUp = useCallback((e: PointerEvent<HTMLDivElement>) => {
-    tryExitFromSwipe({ x: e.clientX, y: e.clientY }, e);
-    exitSwipeStartRef.current = null;
-  }, [tryExitFromSwipe]);
-  const handleExitTouchStart = useCallback((e: TouchEvent<HTMLDivElement>) => {
-    if (shouldIgnoreLandingExitSwipe(e.target)) {
-      exitSwipeStartRef.current = null;
-      return;
-    }
-    const t = e.touches[0];
-    if (!t) return;
-    exitSwipeStartRef.current = { x: t.clientX, y: t.clientY };
-  }, []);
-  const handleExitTouchMove = useCallback((e: TouchEvent<HTMLDivElement>) => {
-    const t = e.touches[0];
-    if (!t) return;
-    tryExitFromSwipe({ x: t.clientX, y: t.clientY }, e);
-  }, [tryExitFromSwipe]);
-  const handleExitTouchEnd = useCallback((e: TouchEvent<HTMLDivElement>) => {
-    const t = e.changedTouches[0];
-    if (t) tryExitFromSwipe({ x: t.clientX, y: t.clientY }, e);
-    exitSwipeStartRef.current = null;
-  }, [tryExitFromSwipe]);
-  const resetExitSwipe = useCallback(() => {
-    exitSwipeStartRef.current = null;
-  }, []);
-
   return (
-    <div
-      className="absolute inset-0 z-50 font-native overflow-hidden"
-      onPointerDown={handleExitPointerDown}
-      onPointerMove={handleExitPointerMove}
-      onPointerUp={handleExitPointerUp}
-      onPointerCancel={resetExitSwipe}
-      onTouchStart={handleExitTouchStart}
-      onTouchMove={handleExitTouchMove}
-      onTouchEnd={handleExitTouchEnd}
-      onTouchCancel={resetExitSwipe}
-    >
+    <div className="absolute inset-0 z-50 font-native overflow-hidden">
       {/* Background — same aurora system as ConstellationLayout / the
           reference MinimalistConstellationLayout. The page lives over a
           gradient image with three drifting aurora layers and a soft
@@ -170,6 +135,9 @@ export default function MinimalistLanding({
       <div className="absolute inset-0 aurora-layer aurora-layer-3" aria-hidden="true" />
       <div className="absolute inset-0 bg-white/35" />
 
+      {/* Content column. The landing layout itself NEVER moves when the keyboard
+          opens — only the composer floats up (see its absolute bottom:--kb-height
+          below). relative makes this the positioning context for that composer. */}
       <div className="relative z-10 flex flex-col h-full">
         {/* Minimal top bar — single back chevron. The conversation view
             has its own header shown after the user enters it. */}
@@ -187,10 +155,24 @@ export default function MinimalistLanding({
           </button>
         </div>
 
-        {/* Scrollable body — sphere + greeting + chips. No "Recent Chats"
-            list: the thread is a singleton, the user simply continues
-            their existing conversation by tapping a chip / typing. */}
-        <div className="flex-1 overflow-y-auto px-4 pb-3">
+        {/* Inner column under the top bar — fills the remaining height and holds
+            the scrollable body. The composer is NOT stacked in here; it's an
+            absolutely-positioned element that floats above the keyboard, so the
+            body (sphere + chips) keeps its resting position no matter what the
+            keyboard does. */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Scrollable body — sphere + greeting + chips. Lifted up by `lift` when
+            the keyboard is open (see the measuring effect above) so the chips
+            clear the floated composer; untouched at rest. No "Recent Chats"
+            list: the thread is a singleton, tap a chip / type to continue. */}
+        <div
+          ref={bodyRef}
+          className="flex-1 overflow-y-auto px-4 pb-3"
+          style={{
+            transform: `translateY(-${lift}px)`,
+            transition: "transform 250ms cubic-bezier(0.17, 0.59, 0.4, 0.77)",
+          }}
+        >
           <div className="flex flex-col items-center pt-2 pb-4">
             <div className="mb-7">
               <AiSphere size={216} mode="idle" />
@@ -236,9 +218,21 @@ export default function MinimalistLanding({
         </div>
 
         {/* Composer — capsule glass card matching MainChatView's restyled
-            composer. Submit appends the text into the singleton main
-            thread and transitions to the conversation view. */}
-        <div className="shrink-0 px-3 pb-6 pt-2">
+            composer. Floats above the keyboard via absolute bottom:--kb-height
+            WITHOUT moving the landing body: at rest (--kb-height 0) it sits at
+            the screen bottom exactly as before; when the keyboard opens it rides
+            up to just above it, and the keyboard covers the empty space that was
+            below the chips — so the landing layout never shifts. Submit appends
+            the text into the singleton main thread and switches to the
+            conversation view. */}
+        <div
+          ref={composerRef}
+          className="absolute inset-x-0 px-3 pb-6 pt-2"
+          style={{
+            bottom: "var(--kb-height, 0px)",
+            transition: "bottom 250ms cubic-bezier(0.17, 0.59, 0.4, 0.77)",
+          }}
+        >
           <div
             className="flex items-end gap-2 pl-4 pr-2 py-2 rounded-3xl border border-foreground/[0.08] focus-within:border-foreground/[0.18] transition-colors"
             style={{
@@ -286,6 +280,7 @@ export default function MinimalistLanding({
               <Send size={15} strokeWidth={2} />
             </button>
           </div>
+        </div>
         </div>
       </div>
     </div>

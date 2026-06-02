@@ -70,7 +70,16 @@ export default function ChatToolGroup({ tools }: { tools: ChatToolGroupItem[] })
     : `Used ${tools.length} tool${tools.length > 1 ? "s" : ""}`;
 
   return (
-    <div
+    <motion.div
+      // Mount animation so the card UNFOLDS in smoothly instead of popping into
+      // place mid-stream. height 0→auto means the shell grows and pushes the
+      // content below it down gradually, rather than snapping a block of height
+      // in at once. (Inner chips already stagger-fade — this was the missing
+      // animation on the outer shell that made tools feel like they "popped".)
+      // Local to this one card, so it won't reflow the rest of the message.
+      initial={{ opacity: 0, height: 0 }}
+      animate={{ opacity: 1, height: "auto" }}
+      transition={{ duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
       className="rounded-2xl overflow-hidden border border-foreground/10 bg-white/40 mb-3"
       style={{
         backdropFilter: "blur(20px) saturate(1.3)",
@@ -123,7 +132,7 @@ export default function ChatToolGroup({ tools }: { tools: ChatToolGroupItem[] })
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
+    </motion.div>
   );
 }
 
