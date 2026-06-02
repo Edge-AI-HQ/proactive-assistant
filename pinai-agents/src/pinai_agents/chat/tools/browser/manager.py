@@ -49,7 +49,7 @@ from playwright.async_api import (
     Error as PlaywrightError,
 )
 
-from ...shared.sse_envelope import (
+from ....shared.sse_envelope import (
     EV_BROWSER_CLOSED,
     EV_BROWSER_NAVIGATED,
     EV_BROWSER_OPENED,

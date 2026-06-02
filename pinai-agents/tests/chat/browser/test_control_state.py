@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pinai_agents.chat.browser.control_state import (
+from pinai_agents.chat.tools.browser.control_state import (
     BrowserControlDenied,
     BrowserControlMode,
     assert_browser_action_allowed,

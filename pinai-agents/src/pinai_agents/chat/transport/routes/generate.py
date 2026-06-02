@@ -17,8 +17,8 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, status
 from pydantic import BaseModel, Field, StrictInt
 
-from ..agents.generator import run_generator
-from ..auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
+from ...agents.generator import run_generator
+from ...auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

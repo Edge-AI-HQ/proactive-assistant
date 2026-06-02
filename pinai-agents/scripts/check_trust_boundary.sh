@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# Import-boundary checks, both of which ruff banned-api can't enforce here
+# (chat/** is blanket TID251-ignored as the sibling-import escape hatch —
+# see pyproject.toml):
+#   (1) trust boundary  — web ↔ chat process groups must not import each other
+#   (2) facade boundary — chat's agents/tools/transport must not import
+#       deepagents top-level / langgraph; that goes through harness/.
+#
 # Trust-boundary directional check.
 #
 # Greps the source tree for cross-process-group imports that ruff
@@ -42,7 +49,22 @@ if grep -rE '^from pinai_agents\.(web|chat)|^import pinai_agents\.(web|chat)' sr
   fail=1
 fi
 
+# ── facade boundary (plan 2026-06-02 §PR-C) ──
+# agents / tools / transport must not import deepagents top-level symbols
+# (create_deep_agent, SubAgent, …) or langgraph. Agent construction goes
+# through harness.factory.build_agent; state reads/writes through
+# harness.session; checkpointer through harness.checkpoint. harness/ is the
+# facade and is exempt. `deepagents.backends.*` (the sandbox backend adapter
+# used by tools/code_mode/local_sandbox) is matched by neither pattern below.
+for layer in agents tools transport; do
+  if grep -rnE '^[[:space:]]*(from deepagents import|import deepagents$|from langgraph|import langgraph)' "src/pinai_agents/chat/$layer/" 2>/dev/null; then
+    echo "❌ chat/$layer/ must not import deepagents top-level / langgraph —"
+    echo "   route through harness/ (build_agent / read_state_messages / stream_events / get_checkpointer)."
+    fail=1
+  fi
+done
+
 if [ "$fail" -eq 0 ]; then
-  echo "✓ trust boundary clean"
+  echo "✓ trust + facade boundaries clean"
 fi
 exit "$fail"

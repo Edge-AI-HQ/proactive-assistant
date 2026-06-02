@@ -11,7 +11,7 @@ import pytest
 from fastapi import HTTPException
 
 from pinai_agents.chat.auth.run_jwt import RunPrincipal
-from pinai_agents.chat.routes._session_auth import assert_session_key_principal
+from pinai_agents.chat.transport.routes._session_auth import assert_session_key_principal
 
 
 def _principal(user_id: int) -> RunPrincipal:

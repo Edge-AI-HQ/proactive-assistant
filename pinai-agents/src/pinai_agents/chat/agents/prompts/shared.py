@@ -138,14 +138,28 @@ fetching a URL the user mentioned) but no other internal hosts.
 </sandbox>"""
 
 
-# When to write a sandbox script vs use a single tool call.
-# Direct, no mechanical "write_file + execute" prescription —
-# DeepAgents tool descriptions cover the mechanics.
+# Two-paradigm tool choice (direct vs Code Mode) + how to write a
+# sandbox script. Direct, no mechanical "write_file + execute"
+# prescription — DeepAgents tool descriptions cover the mechanics.
 CODE_MODE_GUIDANCE = """\
+<tool_paradigm>
+You can act two ways — choose per task:
+- Direct tool calls (memory_search / signals_recent / Composio meta / …):
+  single-step, immediate, and the user sees each step. DEFAULT to these for
+  everyday lookups, single reads/writes, and anything the user should review.
+- Code Mode (write Python in your sandbox, `from pinai_sdk import client`):
+  for multi-source aggregation (3+ sources), batch processing, filtering or
+  reducing a large intermediate result, or loop/conditional logic — one
+  script runs it all and returns only the conclusion.
+Trade-off: a thread's sandbox is reused, but the FIRST Code Mode call in a
+thread pays a few-seconds cold start and the user can't see inside the
+sandbox. Don't reach for Code Mode when a direct call or two already does
+the job.
+</tool_paradigm>
+
 <code_mode>
-Use Code Mode when you need to combine multiple SDK calls, batch
-fetches, or post-process results. Write one Python script that does
-everything in one shot — typically:
+When you do use Code Mode, write one script that does everything in one
+shot — typically:
 
     import asyncio, json
     from pinai_sdk import client
@@ -161,9 +175,8 @@ everything in one shot — typically:
     res = asyncio.run(gather())
     print(json.dumps(res, default=str)[:6000])
 
-Run that in your sandbox. One script = one round-trip beats N
-separate SDK calls. Truncate large outputs in `print` — your context
-window is the bottleneck, not the SDK.
+One script = one round-trip beats N separate SDK calls. Truncate large
+outputs in `print` — your context window is the bottleneck, not the SDK.
 </code_mode>"""
 
 

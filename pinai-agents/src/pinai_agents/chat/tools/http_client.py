@@ -16,7 +16,7 @@ from typing import Any
 
 import httpx
 
-from ..runtime.ctx import current_run_jwt
+from ..harness.ctx import current_run_jwt
 
 logger = logging.getLogger(__name__)
 

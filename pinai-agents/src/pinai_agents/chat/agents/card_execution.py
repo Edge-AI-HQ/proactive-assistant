@@ -25,13 +25,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from deepagents import create_deep_agent
-from deepagents.backends.protocol import BackendProtocol
-
-from ..runtime.checkpoint import get_checkpointer
-from ..runtime.llm import make_chat_model
-from ..tools.native import ALL_TOOLS
-from ..tools.native.propose_action import propose_action
+from ..harness.factory import BackendProtocol, build_agent
+from ..harness.llm import make_chat_model
+from ..tools.direct import ALL_TOOLS
+from ..tools.direct.propose_action import propose_action
 from .prompts import (
     CODE_MODE_GUIDANCE,
     GROUNDING_POLICY,
@@ -213,8 +210,8 @@ in this order, every time:
 - `memory_add` if execution surfaces a durable fact worth remembering.
 - `preference_add` when the user gives durable card-generation
   feedback or a future-card preference; include the current `card_id`.
-- For batch / cross-source aggregation (>5 calls in one turn),
-  prefer Code Mode — see below.
+- For multi-source aggregation or batch work, choose native vs Code Mode
+  per the `<tool_paradigm>` guidance below.
 </tool_routing>
 
 {SANDBOX_PREAMBLE}
@@ -238,10 +235,10 @@ def make_card_execution_agent(
     virtual_key: str,
     backend: BackendProtocol,
 ) -> Any:
-    return create_deep_agent(
+    return build_agent(
         model=make_chat_model(virtual_key=virtual_key, streaming=True),
         system_prompt=_INSTRUCTIONS,
         backend=backend,
-        checkpointer=get_checkpointer(),
         tools=[*ALL_TOOLS, propose_action],
+        with_checkpointer=True,
     )

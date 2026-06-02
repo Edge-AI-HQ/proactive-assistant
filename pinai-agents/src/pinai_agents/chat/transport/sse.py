@@ -44,7 +44,7 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
-from ..shared.sse_envelope import (
+from ...shared.sse_envelope import (
     EV_CHAT_DELTA,
     EV_CHAT_DONE,
     EV_CHAT_ERROR,
@@ -54,7 +54,7 @@ from ..shared.sse_envelope import (
     EV_CHAT_TOOL_START,
     emit,
 )
-from .runtime.reasoning import extract_reasoning_text
+from ..harness.reasoning import extract_reasoning_text
 
 logger = logging.getLogger(__name__)
 

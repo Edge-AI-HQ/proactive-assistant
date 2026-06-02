@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException, status
 
-from ..auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
+from ...auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
 
 _CARD_THREAD_PREFIX = "card-thread-"
 

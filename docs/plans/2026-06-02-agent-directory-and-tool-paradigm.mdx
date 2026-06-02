@@ -117,6 +117,8 @@ packages/pinai_sdk/   ← 独立 wheel,sandbox pip install(不进 chat/,位置�
 - **chat 装 sdk**：`packages/pinai_sdk` 加进 chat 进程依赖（editable / path install）。增量依赖小（httpx + pydantic 已有）；但要确认不把 sandbox-only 的重依赖带进 chat。
 - **风险**：契约测试要处理 endpoint 仍在动（drift 即红是预期）；per-call token 改造要覆盖 sdk 所有 `_Endpoint`。
 
+> **实现（2026-06-02 落地，部分修正）**：契约测试 = `tests/web/test_sdk_contract.py`（resource 级：每个 sdk resource prefix 映射到真实 web `/api/agent/*` endpoint；method 级 suffix 是 f-string 运行时拼，靠 `test_sdk_cheat_sheet_sync` + review 守，全 path 的 ast 契约 deferred as YAGNI）+ `regen_sdk.py --check`（sdk 源码 health）。**native 复用 sdk + per-call token + chat 装 sdk：实测后判断 over-engineer，未做。** 读 sdk 源码确认它是模块级单例 `client = _Client()` + 进程 env token（为 sandbox 单租户设计），而 native `@tool` 现在走 `http_client` + per-request ContextVar token，**已经跨用户安全**。native 改基于 sdk = 11 个 tool 重写 + sdk 加 per-call token + chat 进程装 sdk wheel + **重新引入**串号风险，收益仅 DRY（无功能/安全提升）；`sdk per-call token` 若 native 不改则无消费者（YAGNI）。三处漂移里 sdk↔endpoint 由契约测试守，native↔endpoint 仍靠 review（低频，可接受）。
+
 ### PR-B：目录重构 Step A（机械移动，低风险）
 - `runtime/` → `harness/`；`browser/` → `tools/browser/`；`tools/native/` → `tools/direct/`；`tools/sandbox.py`+`local_sandbox.py` → `tools/code_mode/`；`routes/` → `transport/routes/`；`streaming.py` → `transport/sse.py`（**整体移动，内部不拆**）。
 - **中立 AgentEvent 中间层暂不引入**（P1：当前单一 SSE + langgraph，新增事件类型层是 YAGNI）。`langgraph_to_sse` 保持现状移到 `transport/sse.py`；facade 的可替换性靠 `harness` 的接口边界保证，不靠新增事件类型。真要换 transport/runtime 时再抽中立层。

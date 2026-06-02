@@ -33,18 +33,23 @@ from langchain_core.messages import (
 )
 from pydantic import BaseModel, Field
 
-from ..agents.card_execution import make_card_execution_agent
-from ..agents.main_chat import MAIN_CHAT_KEEP_TURNS, make_main_chat_agent
-from ..auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
-from ..runtime.ctx import ClientHints, run_context
-from ..runtime.trim import trim_thread
-from ..streaming import chat_done, chat_error, langgraph_to_sse
-from ..tools.local_sandbox import (
+from ...agents.card_execution import make_card_execution_agent
+from ...agents.main_chat import MAIN_CHAT_KEEP_TURNS, make_main_chat_agent
+from ...auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
+from ...harness.ctx import ClientHints, run_context
+from ...harness.session import (
+    apply_message_updates,
+    read_state_messages,
+    stream_events,
+)
+from ...harness.trim import trim_thread
+from ...tools.code_mode.local_sandbox import (
     create_local_sandbox_backend,
     local_chat_root_dir,
     use_local_sandbox,
 )
-from ..tools.sandbox import evict_thread, get_or_create_thread_sandbox
+from ...tools.code_mode.sandbox import evict_thread, get_or_create_thread_sandbox
+from ..sse import chat_done, chat_error, langgraph_to_sse
 from ._session_auth import assert_session_key_principal
 
 logger = logging.getLogger(__name__)
@@ -224,15 +229,10 @@ async def _is_first_turn(agent: Any, session_key: str) -> bool:
     to make a polish-level decision.
     """
     try:
-        snapshot = await agent.aget_state(
-            {"configurable": {"thread_id": session_key}},
-        )
+        msgs = await read_state_messages(agent, session_key)
     except Exception:
         logger.exception("agent state probe failed session_key=%s", session_key)
         return False
-    if snapshot is None:
-        return True
-    msgs = (snapshot.values or {}).get("messages", []) or []
     return len(msgs) == 0
 
 
@@ -313,11 +313,8 @@ async def _stream(
     # regenerate, no human-side change. Different → edit, drop + add.
     input_messages: list[Any] = []
     if req.regenerate:
-        state_config: dict[str, Any] = {
-            "configurable": {"thread_id": req.session_key},
-        }
         try:
-            snapshot = await agent.aget_state(state_config)
+            msgs = await read_state_messages(agent, req.session_key)
         except Exception as e:
             logger.exception(
                 "regenerate state read failed session=%s",
@@ -328,7 +325,6 @@ async def _stream(
             )
             yield chat_done()
             return
-        msgs = (snapshot.values or {}).get("messages", []) if snapshot else []
         to_remove_ids: list[str] = []
         trailing_human: HumanMessage | None = None
         # Walk back: collect AI/Tool ids to drop until we hit the first
@@ -355,9 +351,10 @@ async def _stream(
 
         if to_remove_ids:
             try:
-                await agent.aupdate_state(
-                    state_config,
-                    {"messages": [RemoveMessage(id=mid) for mid in to_remove_ids]},
+                await apply_message_updates(
+                    agent,
+                    req.session_key,
+                    [RemoveMessage(id=mid) for mid in to_remove_ids],
                 )
             except Exception as e:
                 logger.exception(
@@ -443,11 +440,7 @@ async def _stream(
         browserbase_context_id=principal.browserbase_context_id or "",
         client_hints=hints,
     ):
-        events = agent.astream_events(
-            {"messages": input_messages},
-            config=config,
-            version="v2",
-        )
+        events = stream_events(agent, {"messages": input_messages}, config)
         try:
             async for chunk in langgraph_to_sse(events):
                 yield chunk

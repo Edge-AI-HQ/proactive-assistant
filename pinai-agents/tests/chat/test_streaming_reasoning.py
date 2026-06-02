@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from pinai_agents.chat.streaming import langgraph_to_sse
+from pinai_agents.chat.transport.sse import langgraph_to_sse
 
 
 def _decode_sse_event(raw: bytes) -> dict[str, Any]:

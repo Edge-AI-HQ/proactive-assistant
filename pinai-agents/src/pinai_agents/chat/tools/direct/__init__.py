@@ -22,7 +22,7 @@ docs/plans/2026-05-07-composio-architecture-redesign.mdx.
 
 from __future__ import annotations
 
-from ...browser.tools import browser_tool
+from ..browser.tools import browser_tool
 from .cards import cards_recent
 from .composio_meta import (
     composio_get_tool_schemas,

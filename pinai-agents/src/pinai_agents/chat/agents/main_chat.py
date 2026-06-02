@@ -15,12 +15,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from deepagents import SubAgent, create_deep_agent
-from deepagents.backends.protocol import BackendProtocol
-
-from ..runtime.checkpoint import get_checkpointer
-from ..runtime.llm import make_chat_model
-from ..tools.native import ALL_TOOLS
+from ..harness.factory import BackendProtocol, SubAgent, build_agent
+from ..harness.llm import make_chat_model
+from ..tools.direct import ALL_TOOLS
 from .prompts import (
     CODE_MODE_GUIDANCE,
     GROUNDING_POLICY,
@@ -130,8 +127,8 @@ user states a persistent preference about future cards, call
 - When the user declares a long-term named goal (typically 90+ day
   trajectory), call `goal_upsert` with a stable `key` slug so future
   calls update the same goal. One-off tasks are not goals.
-- For batch / cross-source aggregation (>5 calls in one turn), prefer
-  Code Mode — see below.
+- For multi-source aggregation or batch work, choose native vs Code Mode
+  per the `<tool_paradigm>` guidance below.
 - To **execute a task on a web page** (fill a form, sign in, complete a
   multi-step flow, anything no API can do) use `browser_tool`:
   `open(url)` returns a liveViewUrl plus an aria snapshot with element
@@ -198,11 +195,11 @@ def make_main_chat_agent(
     # Anthropic prompt caching — see deepagents.create_deep_agent. We only
     # layer the subagent roster on top; the SubAgentMiddleware + `task` tool
     # are auto-wired from `subagents`.
-    return create_deep_agent(
+    return build_agent(
         model=make_chat_model(virtual_key=virtual_key, streaming=True),
         system_prompt=_INSTRUCTIONS,
         backend=backend,
-        checkpointer=get_checkpointer(),
         tools=ALL_TOOLS,
         subagents=[_ECHO_PROBE_SUBAGENT],
+        with_checkpointer=True,
     )

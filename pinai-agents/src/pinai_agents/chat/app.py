@@ -24,19 +24,19 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from ..config import get_chat_settings
-from .browser.manager import get_browser_manager
-from .browser.routes import router as browser_router
-from .routes.chat import router as chat_router
-from .routes.generate import router as generate_router
-from .routes.history import router as history_router
-from .routes.run import router as run_router
-from .runtime.checkpoint import close_checkpointer, init_checkpointer
-from .tools.sandbox import (
+from .harness.checkpoint import close_checkpointer, init_checkpointer
+from .tools.browser.manager import get_browser_manager
+from .tools.browser.routes import router as browser_router
+from .tools.code_mode.sandbox import (
     gc_idle_threads,
     metrics_snapshot,
     registry_size,
     shutdown_all_sandboxes,
 )
+from .transport.routes.chat import router as chat_router
+from .transport.routes.generate import router as generate_router
+from .transport.routes.history import router as history_router
+from .transport.routes.run import router as run_router
 
 logger = logging.getLogger(__name__)
 

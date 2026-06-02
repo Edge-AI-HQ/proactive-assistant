@@ -12,10 +12,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from deepagents import create_deep_agent
-
-from ..runtime.llm import make_chat_model
-from ..tools.sandbox import create_oneshot_sandbox, delete_sandbox_now
+from ..harness.factory import build_agent
+from ..harness.llm import make_chat_model
+from ..tools.code_mode.sandbox import create_oneshot_sandbox, delete_sandbox_now
 from .prompts import CODE_MODE_GUIDANCE, GROUNDING_POLICY, SANDBOX_PREAMBLE
 
 logger = logging.getLogger(__name__)
@@ -63,7 +62,7 @@ async def run_crystallize(
 ) -> dict[str, Any]:
     backend, raw = await create_oneshot_sandbox()
     try:
-        agent = create_deep_agent(
+        agent = build_agent(
             model=make_chat_model(virtual_key=virtual_key, model=model, thinking_budget=4000),
             system_prompt=_CRYSTALLIZE_SYSTEM_PROMPT,
             backend=backend,

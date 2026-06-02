@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from langchain_core.messages import SystemMessage
 
-from pinai_agents.chat.routes.chat import _build_send_messages
+from pinai_agents.chat.transport.routes.chat import _build_send_messages
 
 _CTX = {"card_id": "card_99", "title": "A-share digest", "intent": "review"}
 
