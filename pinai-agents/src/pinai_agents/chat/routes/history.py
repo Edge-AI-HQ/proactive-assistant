@@ -24,12 +24,13 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel
 
 from ..runtime.checkpoint import get_checkpointer
 from ..runtime.reasoning import extract_reasoning_text
+from ._session_auth import assert_session_key_principal, principal_from_header
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -133,6 +134,7 @@ async def _get_thread_messages(session_key: str) -> list[Any]:
 @router.get("/agent/chat/exists", response_model=ExistsResponse)
 async def chat_exists(
     session_key: str = Query(..., min_length=1, max_length=200),
+    authorization: str | None = Header(default=None),
 ) -> ExistsResponse:
     """Does `session_key` already have any persisted turn?
 
@@ -142,6 +144,8 @@ async def chat_exists(
     checkpoints (control-flow only) can be written before the first
     user-visible message lands.
     """
+    principal = principal_from_header(authorization)
+    assert_session_key_principal(session_key, principal)
     msgs = await _get_thread_messages(session_key)
     return ExistsResponse(ok=True, existing=len(msgs) > 0)
 
@@ -149,11 +153,14 @@ async def chat_exists(
 @router.get("/agent/chat/history", response_model=HistoryResponse)
 async def chat_history(
     session_key: str = Query(..., min_length=1, max_length=200),
+    authorization: str | None = Header(default=None),
 ) -> HistoryResponse:
     """Return all turns for `session_key` in frontend HistoryMessage shape.
 
     Empty thread (never sent a message) → ok=true, messages=[].
     """
+    principal = principal_from_header(authorization)
+    assert_session_key_principal(session_key, principal)
     raw_messages = await _get_thread_messages(session_key)
     return HistoryResponse(ok=True, messages=_build_history(raw_messages))
 

@@ -45,6 +45,7 @@ from ..tools.local_sandbox import (
     use_local_sandbox,
 )
 from ..tools.sandbox import evict_thread, get_or_create_thread_sandbox
+from ._session_auth import assert_session_key_principal
 
 logger = logging.getLogger(__name__)
 
@@ -242,6 +243,9 @@ async def chat(
 ) -> StreamingResponse:
     token = _extract_bearer(authorization)
     principal = _verify_principal(token)
+    # Defense-in-depth: web validates session_key ownership before signing
+    # the JWT, but this internal endpoint must not trust that single point.
+    assert_session_key_principal(req.session_key, principal)
     return StreamingResponse(
         _stream(req, principal, raw_jwt=token),
         media_type="text/event-stream",

@@ -22,6 +22,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from psycopg.types.json import Jsonb
 
 from ....shared.api_models import (
     ChatHistoryResponse,
@@ -65,6 +66,37 @@ def _classify_session_key(session_key: str, user_id: int) -> tuple[ThreadKind, s
     )
 
 
+async def _assert_session_owned(
+    session_key: str,
+    user_id: int,
+    conn: Any,
+) -> tuple[ThreadKind, str | None]:
+    """Authorize that `session_key` belongs to `user_id` (raises 403 if not).
+
+    main threads encode the owner in the key — `_classify_session_key`'s
+    prefix check covers them. card threads carry only a card_id, so we
+    verify the card was generated for this user via an RLS-scoped
+    containment check on `pai_pipeline_runs.final_cards`. Without this a
+    client could pass any `card-thread-<id>` and read another user's
+    card-chat checkpoint (langgraph checkpoints have no RLS). Must run
+    inside a `user_scoped_tx` for `user_id`.
+    """
+    kind, card_id = _classify_session_key(session_key, user_id)
+    if kind == "card":
+        assert card_id is not None  # _classify guarantees non-empty for card
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT 1 FROM pai_pipeline_runs WHERE user_id = %s AND final_cards @> %s LIMIT 1",
+                (user_id, Jsonb([{"id": card_id}])),
+            )
+            if await cur.fetchone() is None:
+                raise HTTPException(
+                    status_code=403,
+                    detail="card does not belong to this user",
+                )
+    return kind, card_id
+
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat-stream", tags=["chat"])
 
@@ -92,15 +124,11 @@ async def chat_init(
     user, history accumulates" — see migration 053 for the cleanup +
     UNIQUE constraint enforcing this going forward.
     """
-    kind: ThreadKind
-    card_id: str | None
-
+    # Resolve the session_key first (no ownership decision yet).
     if body.session_key:
         session_key = body.session_key
-        kind, card_id = _classify_session_key(session_key, user.id)
     elif body.card_id:
         session_key = f"{_CARD_THREAD_PREFIX}{body.card_id}"
-        kind, card_id = "card", body.card_id
     else:
         # Main chat with no hint — recover the singleton main thread for
         # this user. Mint only if they truly have none.
@@ -109,16 +137,14 @@ async def chat_init(
                 user_id=user.id,
                 conn=conn,
             ).get_latest_main_thread_id()
-        if existing_thread_id is not None:
-            session_key = existing_thread_id
-        else:
-            session_key = f"main-{user.id}-{uuid.uuid4().hex[:12]}"
-        kind, card_id = "main", None
+        session_key = existing_thread_id or f"main-{user.id}-{uuid.uuid4().hex[:12]}"
 
-    # Idempotent INSERT into pai_chat_threads — the metadata row should
-    # exist for every active thread. ON CONFLICT DO NOTHING handles the
-    # common case (sessionKey already known to us).
+    # Authorize ownership + idempotent metadata insert in one tx. The
+    # ownership check (403 if this session_key isn't the user's) is the
+    # primary cross-user isolation guard here — chat checkpoints have no
+    # RLS, so a bad card-thread-<id> must be rejected before we touch it.
     async with user_scoped_tx(pool, user.id) as conn:
+        kind, card_id = await _assert_session_owned(session_key, user.id, conn)
         await ChatThreadsRepository(
             user_id=user.id,
             conn=conn,
@@ -239,6 +265,13 @@ async def chat_send(
     # turn was accepted by chat). Best-effort: if the bump itself
     # fails we log and move on; the metadata can be reconciled by
     # next list query and chat history is unaffected.
+
+    # Cross-user isolation: the session_key must belong to this user before
+    # we drive the chat worker against it (chat checkpoints have no RLS).
+    # 403 otherwise — primary guard for /send.
+    async with user_scoped_tx(pool, user.id) as conn:
+        await _assert_session_owned(body.session_key, user.id, conn)
+
     async def _stream_and_persist():
         # Record the assistant turn off the SSE bytes as they flow to the
         # client, then persist (user + assistant) to pai_chat_messages and
@@ -318,6 +351,7 @@ async def chat_history(
     O(whole-thread state reconstruction). Empty list on a missing thread.
     """
     async with user_scoped_tx(pool, user.id) as conn:
+        await _assert_session_owned(sessionKey, user.id, conn)
         repo = ChatMessagesRepository(user_id=user.id, conn=conn)
         if beforeId is None and await repo.latest_id(thread_id=sessionKey) is None:
             backfilled = await call_chat_history(
