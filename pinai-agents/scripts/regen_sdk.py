@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
-"""pinai_sdk codegen entry point.
+"""pinai_sdk packaging + contract guard.
 
 The SDK lives at `packages/pinai_sdk/` as a standalone wheel-buildable
 package. It's installed into the Daytona sandbox image (see
-`infra/daytona/Dockerfile` and `chat/tools/sandbox.py:_pinai_image`) so
+`infra/daytona/Dockerfile` and `chat/tools/code_mode/sandbox.py`) so
 sandbox-side `from pinai_sdk import client` works at agent runtime.
 
-Today: hand-written in `packages/pinai_sdk/src/pinai_sdk/`.
-Future (Step E full): once /api/agent/* endpoint shapes settle, wire
-`openapi-python-client` here:
+It is hand-written on purpose and stays that way: object-style
+(`client.memory.list()`), which every Code Mode script + SDK_CHEAT_SHEET
+depends on. `openapi-python-client` emits a function-style API that would
+break all of that, so there is NO codegen step (plan 2026-06-02 §PR-A
+overturned the original codegen idea).
 
-    1. Boot a transient web instance (uvicorn pinai_agents.web.asgi:app).
-    2. curl http://localhost:NNNN/openapi.json → /tmp/openapi.json.
-    3. openapi-python-client generate --path /tmp/openapi.json \\
-         --custom-template-path scripts/sdk_templates/ \\
-         --output-path packages/pinai_sdk/src/pinai_sdk
-    4. Format / lint / commit.
+Drift against the real `/api/agent/*` endpoints is guarded by tests instead:
+  - `tests/web/test_sdk_contract.py` — each sdk resource maps to a live web
+    endpoint group (sdk ↔ endpoint contract).
+  - `tests/chat/test_sdk_cheat_sheet_sync.py` — SDK_CHEAT_SHEET ↔ sdk surface.
 
-For now, run with --check to verify the SDK source exists, has the
-expected namespaces, and the wheel builds cleanly. CI guard against
-accidental deletion.
+Run with --check to verify the SDK source exists, has the expected
+namespaces, and the wheel builds cleanly (CI guard against accidental
+deletion / a broken package).
 """
 
 import importlib.util
