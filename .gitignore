@@ -29,6 +29,8 @@ env.pinclaw-bot
 api_key_env
 !.env.example
 docker-compose.override.yml
+# Local-only: shared cross-worktree postgres (per-dev, not project config).
+docker-compose.shared-db.yml
 
 # dotenvx private keys (NEVER commit — get from team members)
 .env.keys

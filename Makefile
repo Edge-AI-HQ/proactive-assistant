@@ -23,6 +23,12 @@ DOTENVX := npx @dotenvx/dotenvx
 COMPOSE_PROJECT_NAME := pinai-$(shell git rev-parse --show-toplevel 2>/dev/null | shasum | cut -c1-8)
 export COMPOSE_PROJECT_NAME
 
+# Dev label (git branch) surfaced via web /health → frontend DebugPanel, so a
+# phone tunneled to :8000 shows which worktree/branch it's hitting. The web
+# container reads it only when docker-compose.override.yml passes it through
+# (local dev); prod/CI never set it, so /health omits it. Harmless to export.
+export PINAI_DEV_LABEL := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null)
+
 # Auto-pick npm registry based on OS timezone: China → npmmirror, else npmjs.
 # Manual override: export NPM_REGISTRY=... in shell before running make.
 ifndef NPM_REGISTRY
