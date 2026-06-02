@@ -26,6 +26,7 @@ import { proxyFetch, proxyPost } from "@/lib/api";
 
 const baseCard: IntentCard = {
   id: "c1",
+  intentKey: "work:review-pr",
   goalBasket: "work",
   title: "T",
   whyNow: "w",
@@ -109,6 +110,7 @@ describe("useCardActions", () => {
       kind: "card_action",
       action: "confirm",
       intentCardId: "c1",
+      intentKey: "work:review-pr",
       basket: "work",
       channel: "web",
     });
@@ -125,6 +127,7 @@ describe("useCardActions", () => {
     expect(proxyPost).toHaveBeenCalledWith("/feedback", {
       kind: "dismiss",
       intentCardId: "c1",
+      intentKey: "work:review-pr",
       basket: "work",
       channel: "web",
     });
@@ -139,6 +142,7 @@ describe("useCardActions", () => {
     expect(proxyPost).toHaveBeenCalledWith("/feedback", {
       kind: "snooze",
       intentCardId: "c1",
+      intentKey: "work:review-pr",
       basket: "work",
       channel: "web",
     });
@@ -155,6 +159,7 @@ describe("useCardActions", () => {
       kind: "card_action",
       action: "modify",
       intentCardId: "c1",
+      intentKey: "work:review-pr",
       basket: "work",
       channel: "web",
     });
@@ -180,6 +185,7 @@ describe("useCardActions", () => {
       kind: "card_action",
       action: "complete",
       intentCardId: "c1",
+      intentKey: "work:review-pr",
       basket: "work",
       channel: "web",
     });
@@ -256,6 +262,7 @@ describe("useCardActions", () => {
     expect(proxyPost).toHaveBeenCalledWith("/feedback", {
       kind: "text_feedback",
       intentCardId: "c1",
+      intentKey: "work:review-pr",
       basket: "work",
       channel: "web",
       text: "too eager",

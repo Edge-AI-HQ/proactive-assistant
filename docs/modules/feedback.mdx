@@ -7,118 +7,96 @@ description: "反馈事件和学习回流的当前事实。"
 
 ## 结论
 
-Feedback 模块把用户对卡片和卡片聊天的反应转成下一轮生成可用的偏置信号。两类输入:
+Feedback 现在分三层生效：
 
-- **用户直接操作**:confirm / modify / dismiss / snooze / complete / text feedback。前端 `POST /api/feedback` 写 `pai_feedback_events`；`/api/cards` 会带回每张卡从 feedback 事件推导出的 `latestOutcome` / `outcomeAt`，用于 iOS/web 冷启动恢复 sphere 和 drawer 状态。
-- **agent 分析**:card chat session 满阈值后,sub-agent 汇总成 `card_chat_interest` 类型 feedback,`source='agent_analysis'`,跟 `pai_intent_card_state.latest_chat_decision` / `pai_intent_thread_state` 联动。
-
-下一轮 generation 跑 `data-collector` subagent 时通过 `feedback_list` 工具拉最近反馈,planner subagent 按反馈做 dedupe + cold-basket 抑制。
+- **事件层**：所有用户操作先写 `pai_feedback_events`，用于审计、`/api/cards.latestOutcome` 冷启动恢复、`feedback_list` 给下一轮 generation 读取。
+- **指纹层**：卡片级正负操作同步 fan-out 到 `pai_user_intent_pref`，让同 intent / basket 的偏好权重能逐步变化。
+- **即时偏好层**：用户明确说“以后不要/少推某类卡”时，除了写 feedback event，还会写 active `pai_preference_records`，下一轮 generator 会把它当高权重约束。
 
 ```mermaid
 flowchart LR
-  UI["AppShell / ChatTimeline"] --> Route["POST /api/feedback"]
-  Route --> Events[("pai_feedback_events")]
-  Route --> CardState[("pai_intent_card_state")]
-  Chat["card chat transcript"] --> CFA["chat-feedback sub-agent"]
-  CFA --> Events
-  CFA --> ThreadState[("pai_intent_thread_state")]
-  Events --> Gen["generation planner subagent"]
-  CardState --> Gen
-  ThreadState --> Gen
+  UI["Frontend card / chat UI"] --> Feedback["POST /api/feedback"]
+  Feedback --> Events[("pai_feedback_events")]
+  Feedback --> Fingerprint[("pai_user_intent_pref")]
+  Feedback --> Prefs[("pai_preference_records")]
+  Agent["chat / generator agent"] --> AgentFeedback["GET /api/agent/feedback/list"]
+  Agent --> AgentPrefs["GET /api/agent/preferences/list"]
+  Events --> AgentFeedback
+  Prefs --> AgentPrefs
+  Fingerprint --> Planner["generation planner"]
+  AgentFeedback --> Planner
+  AgentPrefs --> Planner
 ```
 
 ## 边界
 
-包含:
+包含：
 
-- `POST /api/feedback` + `GET /api/feedback` + `GET /api/feedback/dismissed`。
-- `pai_feedback_events` 表 schema 与写入语义。
-- `pai_intent_card_state`(单卡 outcome / chat decision / next angles)。
-- `pai_intent_thread_state`(同 intent 跨卡片状态、`thread_decision` ∈ advance / refine / hold / suppress)。
-- `pai_card_evaluations`(generation 自评,不是用户反馈,但跟 feedback 一起解释卡片质量)。
-- card chat 沉淀触发的 `agent_analysis` 反馈。
-- 前端 confirm / dismiss / modify UI 与 polling。
+- `POST /api/feedback`、`GET /api/feedback`、`GET /api/feedback/dismissed`、`GET /api/feedback/completed`。
+- `pai_feedback_events` 的写入语义和 `latestOutcome` 推导。
+- card action 到 `pai_user_intent_pref` 的正负指纹 fan-out。
+- future-negative 文本反馈到 `pai_preference_records` 的即时偏好写入。
+- main chat assistant thumbs up / down 到统一 feedback event 的写入。
+- agent 侧 `feedback_list` / `preferences.list` 如何被 generation 读取。
 
-不包含:
+不包含：
 
-- 卡片怎么生成,看 [Generation](./generation)。
-- crystallize 写长期 memory / skill,看 [Memory](./memory)。
-- chat-stream SSE / 卡内对话执行,看 [Execution](./execution)。
-- 容器 / 部署,看 [Runtime & Deployment](./runtime-deployment)。
+- 卡片怎么生成，看 [Generation](./generation)。
+- 长期 memory / skill 怎么沉淀，看 [Memory](./memory)。
+- chat-stream SSE / 卡内对话执行，看 [Execution](./execution)。
+- reward dashboard 的人工评分、casebook、trace artifact，看 [Internal Reward Dashboard](./internal-reward-dashboard)。
 
 ## 表结构
 
-`pai_feedback_events`(migration `011_pai_memory_signals.sql`):
+`pai_feedback_events`（migration `011_pai_memory_signals.sql`）：
 
 | 列 | 含义 |
 |---|---|
-| `user_id`、`id` | 复合 PK。 |
-| `kind` | 反馈类型,如 `card_action`、`card_chat_interest`、`text_feedback`。 |
-| `action` | `confirm` / `modify` / `dismiss` / `snooze`(`card_action` 用),`agent_analysis` 类可能为 `interest_up` / `interest_down` 等。 |
-| `push_id`、`intent_card_id`、`intent_key`、`basket` | 反向定位被反馈的卡。 |
-| `source` | `user_direct` / `agent_analysis` 区分用户直接 vs sub-agent 汇总。 |
-| `value` | 数值偏置(可选)。 |
-| `text` | 文本反馈正文。 |
-| `metadata` | JSONB,前端可塞渠道、tab 之类的扩展位。 |
-| `conversation_id`、`message_id`、`channel` | 链回 chat session(`source='agent_analysis'` 必填)。 |
+| `user_id`、`id` | 复合 PK；repository 用 `fb_...` 生成，不吃前端传入的行 id。 |
+| `kind` | 反馈类型，如 `card_action`、`text_feedback`、`chat_message_feedback`；兼容老前端直接传 `dismiss` / `snooze` kind。 |
+| `action` | `confirm` / `modify` / `dismiss` / `snooze` / `complete` / `thumbs_up` / `thumbs_down` 等。 |
+| `push_id`、`intent_card_id`、`intent_key`、`basket` | 反向定位被反馈的卡和 intent。 |
+| `source` | 用户直写默认 `user_direct`；agent route 默认 `agent`；文本偏好写入时接受 `user` / `user_direct`。 |
+| `value`、`text` | 数值反馈和自由文本反馈正文。 |
+| `metadata` | JSONB；repository 接受 object 或 JSON string，非法 string 会存为 `{ raw }`。 |
+| `conversation_id`、`message_id`、`channel` | 链回 chat / message，例如 main chat thumbs 写 `message_id` + `channel='main_chat'`。 |
 | `created_at` | 写入时间。 |
 
-`pai_intent_card_state`(migration `014_pai_pipeline.sql`):
+`pai_user_intent_pref`（migration `043_pai_card_patterns.sql`）：
 
 | 列 | 含义 |
 |---|---|
-| `(user_id, card_id)` | PK。 |
-| `intent_key`、`goal_basket` | 卡所属 intent / basket。 |
-| `latest_outcome` | `confirm` / `modify` / `dismiss` / `snooze` / `none`。 |
-| `outcome_at` | 上次 outcome 时间。 |
-| `has_deep_chat`、`latest_chat_decision`、`latest_chat_summary`、`next_angles JSONB` | card-chat 沉淀产物。 |
-| `updated_at` | bookkeeping。 |
+| `(user_id, intent, basket)` | 单用户 intent / basket 指纹。 |
+| `ctr_7d`、`ctr_30d` | 简化偏好强度；正反馈上调，负反馈下调。 |
+| `last_open_at`、`last_dismiss_at` | 最近正/负操作时间。 |
 
-`pai_intent_thread_state`(同 migration):
+`pai_preference_records`（migration `056_pai_preference_records.sql` + `057_pai_preference_lifetime.sql`）：
 
 | 列 | 含义 |
 |---|---|
-| `(user_id, intent_key)` | PK。 |
-| `goal_basket`、`latest_card_id`、`latest_generated_at`、`latest_card_outcome` | 当前 intent 的最近代表卡片状态。 |
-| `has_any_confirmed_card`、`has_any_dismissed_card` | 跨卡片累计信号。 |
-| `latest_chat_decision`、`latest_chat_summary`、`next_angles JSONB` | 最近一次 chat 沉淀。 |
-| `thread_decision` | `advance` / `refine` / `hold` / `suppress`,给 planner 看的明确建议。 |
-| `updated_at` | bookkeeping。 |
+| `statement` | 用户明确表达的生成偏好/禁忌。 |
+| `scope` | `topic` / `source` / `timing` / `format` / `global`。 |
+| `polarity` | `positive` / `negative`。 |
+| `durability`、`expires_at` | `temporary` 有过期时间；`persistent` 长期有效。 |
+| `weight`、`confidence` | 用户明确表达默认高权重。 |
+| `source`、`evidence`、`status` | 来源、证据、active/superseded/archived 状态。 |
 
-`pai_card_evaluations`(同 migration)是 generation 自评(详见 [Generation](./generation)),`pass / overall / dim_*` 五维评分,跟用户反馈联合解释卡片质量。
-
-## 偏好层(即时表达层 · pai_preference_records)
-
-反馈分三层,各管一摊,不互相覆盖:
-
-- **行为层** = `pai_feedback_events`(本模块) + fingerprint fan-out。confirm / dismiss / snooze / text_feedback,planner 据此 dedupe + cold-basket 抑制。
-- **聚合画像** = `pai_profile`(facts / preferences / constraints 桶,见 [Memory](./memory))。长期偏好必须最终内化到这里,否则时间久了只靠偏好流水会越来越乱。
-- **即时表达层** = `pai_preference_records`(migration `056_pai_preference_records.sql` + `057_pai_preference_lifetime.sql`):用户在 **main chat 亲口说的生成偏好/指令**。下一次生成读 active 且未过期的行,当近似硬约束。
-
-`pai_preference_records` 字段:`scope` ∈ topic/source/timing/format/global · `polarity` ∈ positive/negative · `durability` ∈ temporary/persistent · `expires_at` · `weight`(用户亲口默认 1.0)· `confidence` · `source` ∈ user/internal_operator/agent · `evidence JSONB`(可带 `card_id` / `operator_id`)· `status` ∈ active/superseded/archived(状态机同 `pai_memory`,supersede 断言 new 先 active)。RLS 同 023 风格。
-
-写入只走 chat 端 native tool,**没有前端直接写接口**:
-
-- `preference_add(statement, scope, polarity, card_id?, durability, expires_at?)` → `POST /api/agent/preferences/add`。**`source` 由服务端按 JWT principal 决定**(普通 run 恒 `user`;impersonation run 强制 `internal_operator` 且 `evidence.operator_id` 服务端盖章),**不信 agent 自报**。
-- `durability='temporary'`:用于「今天给我推 AI 新闻」「下一批不要这类卡」这类短期生成指令。必须有清晰时效,过期后 `/api/agent/preferences/list?status=active` 自动不返回;**不要写 profile**。
-- `durability='persistent'`:用于长期偏好。main chat 先写 `preference_add` 保证下一次生成立刻生效,再调用 `profile_preference_merge(key,value)` 把它合进 `pai_profile.preferences`,保证长期生成也能稳定读到。
-- 语言类偏好**不进这张表** —— `set_generation_language(language)` → `POST /api/agent/profile/settings/generation-language`,翻 `pai_user_settings.generation_language` 并 re-stamp 自动生成 schedule 的 `output_language`(确定性生效,见 [Generation](./generation))。
-
-internal dashboard 代用户补偏好:`POST /api/reward-dashboard/impersonate/chat-token`(`current_user` 鉴权)为目标用户 mint 带 `actor=internal_operator` + `operator_id` 的 per-run JWT;dashboard 的「用户偏好」页用它列偏好 + 代填,来源在列表里和用户原话区分可见。
-
-> `pai_feedback_events` / fingerprint / reward ledger 一行未动 —— 偏好层是新增旁路,不是改造。
+`pai_intent_card_state` / `pai_intent_thread_state` 已由 migration `051_drop_intent_state_tables.sql` 删除。当前卡片 outcome 从 `pai_feedback_events` 推导，不再维护独立 intent state 表。
 
 ## 用户操作映射
 
-| 输入 | 写入 |
-|---|---|
-| `card_action: confirm` | `pai_feedback_events`(`kind=card_action`,`action=confirm`),`/api/cards.latestOutcome=confirm` |
-| `card_action: modify` | 同上,`latestOutcome=modify` |
-| `dismiss` | `pai_feedback_events`(`kind=dismiss`),`/api/cards.latestOutcome=dismiss` |
-| `snooze` | `pai_feedback_events`(`kind=snooze`),`/api/cards.latestOutcome=snooze` |
-| `card_action: complete` | `pai_feedback_events`(`kind=card_action`,`action=complete`),`/api/cards.latestOutcome=complete` |
-| 自由文本反馈 | `kind=text_feedback`,`text` 写正文 |
-| card chat summary(sub-agent)| `kind=card_chat_interest`,`source=agent_analysis`,同步更新 `pai_intent_card_state.latest_chat_decision` + `pai_intent_thread_state` |
+| 输入 | 写入 | 立即效果 |
+|---|---|---|
+| `card_action: confirm` | `pai_feedback_events` + `pai_user_intent_pref` 正向 fan-out | `/api/cards.latestOutcome=confirm`；同 intent / basket 权重上调。 |
+| `card_action: complete` | `pai_feedback_events` + `pai_user_intent_pref` 正向 fan-out | `/api/cards.latestOutcome=complete`；刷新后 completed card 不回到 sphere。 |
+| `card_action: dismiss` 或 `kind=dismiss` | `pai_feedback_events` + `pai_user_intent_pref` 负向 fan-out | `/api/feedback/dismissed` 返回该卡；同 intent / basket 权重下调。 |
+| `card_action: snooze` 或 `kind=snooze` | 同 dismiss | `/api/feedback/dismissed` 返回该卡；下一批视为短期冷信号。 |
+| `card_action: modify` | `pai_feedback_events` | `/api/cards.latestOutcome=modify`；不更新 fingerprint。 |
+| `text_feedback` | `pai_feedback_events` | `feedback_list` 能读到原文。 |
+| future-negative `text_feedback` | `pai_feedback_events` + active `pai_preference_records` | 下一轮 `preferences.list` 能读到 negative preference，generator 按高权重约束避开。 |
+| main chat thumbs up/down | `pai_feedback_events(kind=chat_message_feedback, action=thumbs_up/thumbs_down)` | 统一进入 feedback log；当前不更新 card fingerprint。 |
+
+future-negative 的确定性识别只覆盖明确未来禁忌表达，例如 `stop showing`、`do not show`、`don't show`、`no more`、`less of`、`不要再`、`不用再`、`别再`、`少推`、`屏蔽`、`停止`。这是小而保守的规则：先保证“用户明确说不要”的场景真实生效，避免把普通吐槽误写成长期偏好。
 
 ## 核心链路
 
@@ -128,126 +106,127 @@ sequenceDiagram
   participant R as POST /api/feedback
   participant Repo as FeedbackRepository
   participant Events as pai_feedback_events
+  participant FP as pai_user_intent_pref
+  participant Prefs as pai_preference_records
   participant Cards as GET /api/cards
-  participant CS as pai_intent_card_state
-  participant TS as pai_intent_thread_state
-  participant CFA as chat-feedback sub-agent
-  participant Gen as data-collector subagent (next generate)
+  participant Gen as next generation
 
-  UI->>R: POST { kind, action, intentCardId, intentKey, basket, ... }
+  UI->>R: POST { kind, action, intentCardId, intentKey, basket, text, metadata }
   R->>Repo: log()
-  Repo->>Events: INSERT row
-  Repo-->>R: pai_feedback_events row id
-  R-->>UI: { ok, id }
+  Repo->>Events: INSERT feedback row
+  alt card positive or negative action
+    Repo->>FP: record_open / record_dismiss
+  end
+  alt future-negative text feedback
+    Repo->>Prefs: add active negative topic preference
+  end
+  R-->>UI: { received: true, id }
   Events->>Cards: latest event per intent_card_id
-  Cards-->>UI: latestOutcome / outcomeAt for UI cold-start
-
-  Note over CFA: card chat session 满阈值时 chat 端 inline 触发 chat-feedback / crystallize(当前不走 scheduler 队列)
-  CFA->>Repo: log(kind=card_chat_interest, source=agent_analysis)
-  CFA->>CS: update latest_chat_decision / next_angles
-  CFA->>TS: update thread_decision
-
-  Gen->>Repo: list(kind='card_action', since=...)
-  Gen->>CS: read current card states
-  Gen->>TS: read thread decisions
+  Cards-->>UI: latestOutcome / outcomeAt
+  Gen->>Events: feedback_list(limit=50)
+  Gen->>Prefs: preferences.list(status='active', limit=50)
 ```
 
 ## 当前设计
 
 | 维度 | 当前事实 |
 |---|---|
-| 路由 | `pinai-agents/src/pinai_agents/web/routes/ui/feedback.py`:`POST /api/feedback`、`GET /api/feedback`(可按 kind / action / since 查)、`GET /api/feedback/dismissed`、`GET /api/feedback/completed`。`/api/cards` 也会随卡片返回 `latestOutcome` / `outcomeAt`,这是 cold-start 时 sphere/drawer 的优先状态来源。 |
-| 鉴权 | Supabase JWT(`current_user`)。 |
-| Repository | `web/db/repositories/feedback.py:FeedbackRepository.log()` 写 `pai_feedback_events`;当前 UI 卡片 outcome 冷启动恢复由 `web/routes/ui/runs_and_cards.py:/api/cards` 从最新 feedback 事件推导。 |
-| Agent 路由 | `web/routes/agent/feedback.py` 暴露 `list` / `log`,给 chat 端 native tool `feedback_list` / `feedback_log` 用。`source='agent_analysis'` 走这条。 |
-| chat-feedback 触发 | 当前由 chat 进程**内联**触发(scheduler 的 `crystallize` kind 路由已就位但未接 enqueue producer),`chat/agents/crystallize.py` 处理 transcript;失败只 warn,不阻断 generation。crystallize 写 memory / skill **跟** chat-feedback 写 feedback events 是两条不同链路,但都用同一份 `normalizeCardChatMessages`。 |
-| Generation 使用 | `chat/agents/generator.py:_DATA_COLLECTOR_PROMPT` 让 data-collector 调 `feedback_list` 拉最近 feedback,写进 `/state/phase1.json`;planner 据此 dedupe(`skipped_duplicates`)+ cold-basket 抑制(`cold_baskets`)。 |
-| 偏好使用 | data-collector 另调 `client.preferences.list(status="active", limit=50)`。repository 对 active 查询自动过滤 `expires_at <= NOW()` 的临时偏好;planner 遇到冲突时按最新有效偏好优先,并在 notes 写明。 |
-| `metadata` | 字符串 / object 都接,字符串会尝试 JSON.parse;前端约定传 object。 |
-| `intentKey` / `basket` fallback | route 在缺失时按 `intentCardId` 查最近 generation 卡补齐(避免前端老版本 schema 漏字段)。 |
-| Reward ledger 分界 | 用户打开卡片时,`AppShell` 额外写 `pai_card_reward_events(source='user', event_type='card_open', score=1)` 到 `/api/reward-dashboard/cards/{card_id}/score`。confirm / dismiss / snooze / text feedback 仍写 `pai_feedback_events`;不要把所有 feedback 复制进 reward ledger。 |
+| UI 路由 | `pinai-agents/src/pinai_agents/web/routes/ui/feedback.py` 暴露 `POST /api/feedback`、`GET /api/feedback`、`GET /api/feedback/dismissed`、`GET /api/feedback/completed`。 |
+| 鉴权 | Supabase JWT（`current_user`）+ `user_scoped_tx`。 |
+| Repository | `FeedbackRepository.log()` 先写 `pai_feedback_events`，再按输入类型决定是否 fan-out 到 fingerprint / preference。 |
+| `/api/cards` | `runs_and_cards.py` 从最新 feedback event 推导每张卡的 `latestOutcome` / `outcomeAt`；不依赖 intent state 表。 |
+| Agent feedback | `GET /api/agent/feedback/list` 给 `feedback_list` native tool 读取；`POST /api/agent/feedback/log` 保留 agent-originated feedback 写入，默认 `source='agent'`。 |
+| Preference 写入 | 常规 chat agent 仍通过 `preference_add` 写 `/api/agent/preferences/add`；现在 future-negative card text feedback 也会在 repository 内直接写一条 `source='user'` 的 active preference。 |
+| Generation 使用 | `generator.py` 的 data-collector 同时拉 `client.feedback.list(limit=50)` 和 `client.preferences.list(status="active", limit=50)`；planner 规则里 active preference 强于冷 basket 推断。 |
+| `metadata` | object / JSON string 都接；非法 string 存 `{ raw: <原文> }`，避免打断 feedback 写入。 |
+| `intentKey` / `basket` | route 不做补齐；前端需要尽量传齐。缺字段时 event 仍写入，但 fingerprint 只能更新已有的 intent / basket 维度。 |
+| Reward ledger 分界 | 用户 open card 仍走 reward dashboard score 事件；confirm / dismiss / snooze / complete / text feedback 不复制进 reward ledger。 |
 
 ## 开发入口
 
 | 改动 | 先看 |
 |---|---|
-| Feedback UI 路由 | `pinai-agents/src/pinai_agents/web/routes/ui/feedback.py` |
-| Feedback agent 路由 | `pinai-agents/src/pinai_agents/web/routes/agent/feedback.py` |
-| Preference agent 路由 | `pinai-agents/src/pinai_agents/web/routes/agent/preferences.py`、`web/routes/agent/profile.py:/preferences/merge` |
+| Feedback UI route | `pinai-agents/src/pinai_agents/web/routes/ui/feedback.py` |
+| Agent feedback route | `pinai-agents/src/pinai_agents/web/routes/agent/feedback.py` |
 | Repository / SQL | `pinai-agents/src/pinai_agents/web/db/repositories/feedback.py` |
-| Schema | `pinai-agents/db/migrations/011_pai_memory_signals.sql`(feedback_events)、`014_pai_pipeline.sql`(intent_card_state、intent_thread_state、card_evaluations)、`056_pai_preference_records.sql`、`057_pai_preference_lifetime.sql` |
-| chat-feedback / crystallize agent | `pinai-agents/src/pinai_agents/chat/agents/crystallize.py` |
-| Generation 端使用 | `pinai-agents/src/pinai_agents/chat/agents/generator.py` 里 `_DATA_COLLECTOR_PROMPT` 调 `feedback_list`,`_PLANNER_PROMPT` 用 skipped_duplicates / cold_baskets 字段 |
-| native `feedback_*` 工具 | `pinai-agents/src/pinai_agents/chat/tools/native/feedback.py` |
-| native preference/profile 工具 | `pinai-agents/src/pinai_agents/chat/tools/native/preferences.py`、`profile.py:profile_preference_merge` |
-| 前端卡片操作 UI | `proactive-ai-frontend/src/components/AppShell.tsx`、`NowFeed.tsx`、`CardDetailBody.tsx` |
-| 前端 chat 反馈 UI | `proactive-ai-frontend/src/components/ChatTimeline.tsx` |
+| Preference repository / route | `pinai-agents/src/pinai_agents/web/db/repositories/preferences.py`、`web/routes/agent/preferences.py` |
+| Fingerprint repository | `pinai-agents/src/pinai_agents/web/db/repositories/user_fingerprint.py` |
+| Card latestOutcome 推导 | `pinai-agents/src/pinai_agents/web/routes/ui/runs_and_cards.py` |
+| Schema | `011_pai_memory_signals.sql`、`043_pai_card_patterns.sql`、`056_pai_preference_records.sql`、`057_pai_preference_lifetime.sql`、`051_drop_intent_state_tables.sql` |
+| Generation 端使用 | `pinai-agents/src/pinai_agents/chat/agents/generator.py` |
+| Native feedback tool | `pinai-agents/src/pinai_agents/chat/tools/native/feedback.py` |
+| Native preference/profile tools | `pinai-agents/src/pinai_agents/chat/tools/native/preferences.py`、`profile.py:profile_preference_merge` |
+| 前端卡片反馈 UI | `proactive-ai-frontend/src/components/AppShell.tsx`、`NowFeed.tsx`、`CardDetailBody.tsx` |
+| 前端 main chat thumbs | `proactive-ai-frontend/src/components/main-chat/MessageActionBar.tsx` |
 
 ## 验证方式
 
 ```bash
-# Repository + route
-cd pinai-agents && uv run pytest tests/web/db/repositories/test_feedback_repo.py
-cd pinai-agents && uv run pytest tests/web/db/repositories/test_preferences_repo.py tests/web/routes/test_preferences.py
-cd pinai-agents && uv run pytest tests/web/routes/                          # 全 route 套件
+# Repository + end-to-end route flow
+cd pinai-agents && uv run pytest tests/web/db/repositories/test_feedback_repo.py tests/web/routes/test_feedback_flow.py
 
-# chat-feedback / crystallize(若存在专项测试)
-cd pinai-agents && uv run pytest tests/chat/agents/                         # 含 crystallize
+# Preference + generator read surface
+cd pinai-agents && uv run pytest tests/web/db/repositories/test_preferences_repo.py tests/web/routes/test_preferences.py tests/chat/agents/test_generator_preferences.py
 
-# 类型 + 前端
+# Related card route / native tools
+cd pinai-agents && uv run pytest tests/web/routes/test_cards_route.py tests/chat/test_native_tools.py
+
+# Static checks
 cd pinai-agents && uv run ruff check .
+cd pinai-agents && uv run mypy src
+
+# Frontend feedback helpers and card feedback state
+cd proactive-ai-frontend && npm test -- MessageActionBar.feedback.test.ts useCardActions.test.tsx card-feedback.test.ts card-chat-session.test.ts
 cd proactive-ai-frontend && npm run type-check
-cd proactive-ai-frontend && npm test
 ```
 
-手工验证:
+手工验证：
 
-- 对一张卡 dismiss → `GET /api/feedback/dismissed` 返回该 `intentCardId`,前端 NowFeed 该卡不再出现。
-- 对一张卡 Done / complete → `/api/cards` 该卡条目应返回 `latestOutcome='complete'`,前端冷启动后 sphere 不应再显示该卡;如果仍打开 drawer,底部只显示灰色 `Close`。
-- card chat 跑过阈值后,下次 generate 前应该看到 `data-collector` 在 trace 里调 `feedback_list`;planner 输出的 `PlanOutput.skipped_duplicates` / `cold_baskets` 应该体现新反馈。失败只 warn(不阻断 generation)。
-- 下一轮 `pai_pipeline_runs.iterations` JSON 里(audit dump)应能看到 feedback summary 段。
+- 对一张卡 dismiss / snooze，`GET /api/feedback/dismissed` 应返回该 `intentCardId`，刷新后卡不回到 sphere。
+- 对一张卡 Done / complete，`GET /api/feedback/completed` 应返回该 `intentCardId`，`/api/cards` 应返回 `latestOutcome='complete'`。
+- 对一张未来卡提交明确 negative 文本，例如 “Stop showing me VC funding rumor cards again”，`/api/agent/feedback/list` 应能读到原文，`/api/agent/preferences/list?status=active` 应能读到对应 negative preference。
+- 对 main chat assistant message 点 thumbs up/down，`pai_feedback_events` 应出现 `kind='chat_message_feedback'`、`message_id`、`channel='main_chat'`。
 
-容器日志:
-
-```bash
-make logs-pinai-web | grep -E "/api/feedback|FeedbackRepository"
-make logs-pinai-chat | grep -E "feedback_list|crystallize"
-```
-
-DB 速查:
+DB 速查：
 
 ```sql
 SELECT kind, action, source, count(*)
-FROM pai_feedback_events WHERE user_id = $1 GROUP BY kind, action, source;
+FROM pai_feedback_events
+WHERE user_id = $1
+GROUP BY kind, action, source
+ORDER BY kind, action, source;
 
-SELECT card_id, intent_key, latest_outcome, latest_chat_decision
-FROM pai_intent_card_state WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 20;
+SELECT intent, basket, ctr_7d, ctr_30d, last_open_at, last_dismiss_at
+FROM pai_user_intent_pref
+WHERE user_id = $1
+ORDER BY updated_at DESC
+LIMIT 20;
 
-SELECT intent_key, thread_decision, has_any_confirmed_card, has_any_dismissed_card
-FROM pai_intent_thread_state WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 10;
+SELECT statement, scope, polarity, durability, source, evidence, created_at
+FROM pai_preference_records
+WHERE user_id = $1 AND status = 'active'
+ORDER BY created_at DESC
+LIMIT 20;
 ```
 
 ## 踩坑
 
-- `metadata` 前端最好传 object,字符串会走 JSON.parse 容错路径,失败时存 raw 文本,不影响 log 但影响下游解析。
-- `intentKey` / `basket` 缺失时 route 会按 `intentCardId` 查最近卡补齐;**不要**靠这个兜底,前端应该总是传齐。
-- chat-feedback / crystallize sub-agent 失败时 generation 不会重试,只 warn — 这是有意设计避免拖死主路径。但失败堆积久了反馈学习会断,需要看日志主动排查。
-- `pai_card_evaluations` 是 generator 自评,不要跟 user feedback 混。两者一起读才解释得清卡片质量。
-- `source='agent_analysis'` 的反馈不等同用户直接表达,planner prompt 里要区分对待(用户 dismiss 是强信号,agent 推断的 interest_down 是弱信号)。
-- `pai_intent_thread_state.thread_decision` 是给 planner 看的明确建议;前端不展示。改算法时不要把它当 UI 字段。
-- `next_angles JSONB` 是数组,代表"这条 intent 还可以从哪些角度切",由 chat-feedback / crystallize 写入;planner 读取做后续卡片生成的角度替换。
-- chat-feedback 和 conversation-crystallize 都消费同一份 transcript 归一化(`normalizeCardChatMessages`),改 normalization 时要同时跑两套测试,否则一端走偏。
-- `pai_feedback_events.id` 不要在 web 侧手写,repository 用 `uuid4()` 生成;前端传的"id"字段应该是 push_id / message_id 等业务 id,不是行 PK。
+- `metadata` 前端最好传 object；string 只是兼容路径。
+- `intentKey` / `basket` 不会在 route 自动补齐。卡片操作要传齐，否则 fingerprint 的 intent / basket 维度会缺失。
+- `kind=dismiss` / `kind=snooze` 是老前端兼容路径；新代码优先传 `kind='card_action'` + `action`。
+- `complete` 是正反馈，不是单纯 UI 关闭；它会更新 fingerprint。
+- future-negative 文本写 preference 是保守规则，不做复杂自然语言分类。语义不明确的反馈只进 `pai_feedback_events`。
+- `pai_preference_records` 只是即时偏好层。长期画像仍要靠 profile / memory 路径沉淀，不要把所有 feedback 都硬塞进 profile。
+- `pai_card_evaluations` 是 generator 自评，不是用户反馈；不要和 `pai_feedback_events` 混用。
 
 ## 相关模块
 
-- [Generation](./generation):feedback summary 和 intent state 怎么进 planner 输入。
-- [Execution](./execution):card chat transcript 由执行层产出,chat-feedback / crystallize 都消费它(下游不同)。
-- [Memory](./memory):长期沉淀走 crystallize(memory / skill),feedback 只影响短期生成偏置。
-- [Background Tasks](./background-tasks):scheduler 的 `crystallize` kind 路由已注册但当前没有 producer;chat-feedback / crystallize 走 chat 进程内联触发。
-- [Internal Reward Dashboard](./internal-reward-dashboard):reward ledger 和用户 feedback 的分界,以及内部 reviewer score/casebook。
+- [Generation](./generation)：feedback / preferences 怎么进入 planner 输入。
+- [Execution](./execution)：chat 事件和 main chat UI 的执行链路。
+- [Memory](./memory)：长期沉淀走 profile / memory / skill。
+- [Internal Reward Dashboard](./internal-reward-dashboard)：reward ledger、reviewer score、casebook、trace artifact。
 
 ## 相关 AI Plans
 
-- [Card Reward Infra + Internal Dashboard](../plans/2026-05-13-card-reward-infra):用户 open reward、reviewer score、casebook 和 trace artifact。
-- [反馈并入 Main Chat + 高权重偏好](../plans/2026-05-24-feedback-into-main-chat-preferences):反馈不再独立成 Feedback Agent，而是走 main chat；用户亲口偏好写进新表 `pai_preference_records`，下一次生成必然生效。本模块的 `pai_feedback_events` / fingerprint fan-out 保持现状。
+- [Card Reward Infra + Internal Dashboard](../plans/2026-05-13-card-reward-infra)：用户 open reward、reviewer score、casebook 和 trace artifact。
+- [反馈并入 Main Chat + 高权重偏好](../plans/2026-05-24-feedback-into-main-chat-preferences)：反馈不再独立成 Feedback Agent，而是走 main chat；用户亲口偏好写进 `pai_preference_records`，下一次生成必然生效。

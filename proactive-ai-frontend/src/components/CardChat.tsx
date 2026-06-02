@@ -29,6 +29,8 @@ function stableSessionKey(cardId: string): string {
 export default function CardChat({ card, score, onBack, bootstrapMessage }: CardChatProps) {
   const cardContext = useMemo(
     () => ({
+      card_id: card.id,
+      intent_key: card.intentKey,
       title: card.title,
       goalBasket: card.goalBasket,
       whyNow: card.whyNow,

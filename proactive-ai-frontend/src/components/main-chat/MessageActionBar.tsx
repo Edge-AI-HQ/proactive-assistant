@@ -18,9 +18,7 @@
  *
  * Assistant-message variant:
  *   - Copy
- *   - ThumbsUp / ThumbsDown (local-only state for now; we don't post
- *     feedback to the backend yet — UI scaffold for an upcoming
- *     reward-dashboard hookup)
+ *   - ThumbsUp / ThumbsDown (posts unified feedback events)
  *   - Regenerate (only on the last assistant message)
  */
 import { useMemo, useState } from "react";
@@ -32,12 +30,30 @@ import {
   useThreadRuntime,
 } from "@assistant-ui/react";
 import { useAuiState } from "@assistant-ui/store";
+import { proxyPost } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type Variant = "assistant" | "user";
+type AssistantFeedback = "up" | "down";
 
 interface Props {
   variant: Variant;
+}
+
+export function buildAssistantMessageFeedbackBody(
+  messageId: string,
+  feedback: AssistantFeedback | null,
+): Record<string, unknown> | null {
+  if (!feedback) return null;
+  return {
+    kind: "chat_message_feedback",
+    action: feedback === "up" ? "thumbs_up" : "thumbs_down",
+    messageId,
+    channel: "main_chat",
+    metadata: {
+      surface: "assistant_message_action_bar",
+    },
+  };
 }
 
 function formatClockTime(createdAt: Date | undefined): string | null {
@@ -195,10 +211,7 @@ function AssistantActionBar() {
   const threadRuntime = useThreadRuntime();
   const isRunning = useAuiState((s) => s.thread.isRunning);
 
-  // Local-only feedback toggle. Click again to clear. We don't post to
-  // the backend yet — reward dashboard's feedback channel will plug in
-  // here later via a `submitFeedback` adapter call.
-  const [feedback, setFeedback] = useState<"up" | "down" | null>(null);
+  const [feedback, setFeedback] = useState<AssistantFeedback | null>(null);
 
   const handleRegenerate = () => {
     if (isRunning || !parentUserId) return;
@@ -206,6 +219,16 @@ function AssistantActionBar() {
       parentId: parentUserId,
       sourceId: null,
       runConfig: {},
+    });
+  };
+
+  const handleFeedback = (next: AssistantFeedback) => {
+    const effective = feedback === next ? null : next;
+    setFeedback(effective);
+    const body = buildAssistantMessageFeedbackBody(messageId, effective);
+    if (!body) return;
+    void proxyPost("/feedback", body).catch(() => {
+      // Feedback persistence is best-effort; keep the local reaction responsive.
     });
   };
 
@@ -217,7 +240,7 @@ function AssistantActionBar() {
       <CopyButton />
       <button
         type="button"
-        onClick={() => setFeedback((p) => (p === "up" ? null : "up"))}
+        onClick={() => handleFeedback("up")}
         className={
           feedback === "up" ? ICON_BUTTON_ACTIVE_CLASS : ICON_BUTTON_CLASS
         }
@@ -232,7 +255,7 @@ function AssistantActionBar() {
       </button>
       <button
         type="button"
-        onClick={() => setFeedback((p) => (p === "down" ? null : "down"))}
+        onClick={() => handleFeedback("down")}
         className={
           feedback === "down" ? ICON_BUTTON_ACTIVE_CLASS : ICON_BUTTON_CLASS
         }

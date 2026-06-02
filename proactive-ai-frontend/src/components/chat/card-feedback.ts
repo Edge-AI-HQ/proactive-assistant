@@ -25,9 +25,21 @@ export function buildCardThreadTextFeedbackBody(
     ? params.cardContext.card_id
     : undefined;
   if (!cardId) return null;
+  const intentKey = typeof params.cardContext.intent_key === "string"
+    ? params.cardContext.intent_key
+    : typeof params.cardContext.intentKey === "string"
+      ? params.cardContext.intentKey
+      : undefined;
+  const basket = typeof params.cardContext.goalBasket === "string"
+    ? params.cardContext.goalBasket
+    : typeof params.cardContext.basket === "string"
+      ? params.cardContext.basket
+      : undefined;
   return {
     kind: "text_feedback",
     intentCardId: cardId,
+    intentKey,
+    basket,
     text,
     channel: "card_thread",
     conversationId: params.sessionKey,

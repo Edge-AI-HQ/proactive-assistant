@@ -130,6 +130,7 @@ export function useCardActions({ onOpenChat }: UseCardActionsOptions) {
           kind: "card_action",
           action: "confirm",
           intentCardId: cardId,
+          intentKey: card.intentKey,
           basket: card.goalBasket,
           channel: "web",
         });
@@ -154,6 +155,7 @@ export function useCardActions({ onOpenChat }: UseCardActionsOptions) {
       await proxyPost("/feedback", {
         kind: "dismiss",
         intentCardId: card.id,
+        intentKey: card.intentKey,
         basket: card.goalBasket,
         channel: "web",
       });
@@ -168,6 +170,7 @@ export function useCardActions({ onOpenChat }: UseCardActionsOptions) {
       await proxyPost("/feedback", {
         kind: "snooze",
         intentCardId: card.id,
+        intentKey: card.intentKey,
         basket: card.goalBasket,
         channel: "web",
       });
@@ -185,6 +188,7 @@ export function useCardActions({ onOpenChat }: UseCardActionsOptions) {
           kind: "card_action",
           action: "modify",
           intentCardId: card.id,
+          intentKey: card.intentKey,
           basket: card.goalBasket,
           channel: "web",
         });
@@ -211,6 +215,7 @@ export function useCardActions({ onOpenChat }: UseCardActionsOptions) {
         kind: "card_action",
         action: "complete",
         intentCardId: card.id,
+        intentKey: card.intentKey,
         basket: card.goalBasket,
         channel: "web",
       });
@@ -243,6 +248,7 @@ export function useCardActions({ onOpenChat }: UseCardActionsOptions) {
       await proxyPost("/feedback", {
         kind: "text_feedback",
         intentCardId: card.id,
+        intentKey: card.intentKey,
         basket: card.goalBasket,
         channel: "web",
         text: trimmed,

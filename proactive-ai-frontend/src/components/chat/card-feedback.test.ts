@@ -7,6 +7,8 @@ import {
 
 const cardContext = {
   card_id: "card-1",
+  intent_key: "work:charging-check",
+  goalBasket: "work",
   title: "检查充电桩",
 };
 
@@ -31,6 +33,8 @@ describe("card thread feedback detection", () => {
     ).toEqual({
       kind: "text_feedback",
       intentCardId: "card-1",
+      intentKey: "work:charging-check",
+      basket: "work",
       text: "不用再发这个什么检查充电桩的卡片了",
       channel: "card_thread",
       conversationId: "card-thread-card-1",

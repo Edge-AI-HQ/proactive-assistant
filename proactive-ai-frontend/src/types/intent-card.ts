@@ -16,6 +16,7 @@ export interface IntentCardAction {
 
 export interface IntentCard {
   id: string;
+  intentKey?: string;
   goalBasket: GoalBasket;
   title: string;
   whyNow: string;
@@ -117,6 +118,11 @@ export function normalizeIntentCard(card: unknown): IntentCard {
     id: typeof record.id === "string" && record.id.trim().length > 0
       ? record.id
       : `card-${Math.random().toString(36).slice(2, 10)}`,
+    ...(typeof record.intentKey === "string" && record.intentKey.trim().length > 0
+      ? { intentKey: record.intentKey.trim() }
+      : typeof record.intent_key === "string" && record.intent_key.trim().length > 0
+        ? { intentKey: record.intent_key.trim() }
+        : {}),
     goalBasket,
     title: typeof record.title === "string" && record.title.trim().length > 0
       ? record.title.trim()

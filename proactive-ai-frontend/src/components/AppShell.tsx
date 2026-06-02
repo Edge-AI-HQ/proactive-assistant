@@ -338,6 +338,7 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
       proxyPost("/feedback", {
         kind: "dismiss",
         intentCardId: selectedCard.id,
+        intentKey: selectedCard.intentKey,
         basket: selectedCard.goalBasket,
         channel: "web",
       }).catch(() => {});
@@ -352,6 +353,7 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
       proxyPost("/feedback", {
         kind: "dismiss",
         intentCardId: cardId,
+        intentKey: card.intentKey,
         basket: card.goalBasket,
         channel: "web",
       }).catch(() => {});
@@ -367,6 +369,7 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
         kind: "card_action",
         action: "confirm",
         intentCardId: cardId,
+        intentKey: selectedCard.intentKey,
         basket: selectedCard.goalBasket,
         channel: "web",
       }).catch(() => {});
@@ -398,6 +401,7 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
         kind: "card_action",
         action: "complete",
         intentCardId: cardId,
+        intentKey: selectedCard.intentKey,
         basket: selectedCard.goalBasket,
         channel: "web",
       }).catch(() => {});
@@ -411,6 +415,7 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
       proxyPost("/feedback", {
         kind: "snooze",
         intentCardId: selectedCard.id,
+        intentKey: selectedCard.intentKey,
         basket: selectedCard.goalBasket,
         channel: "web",
       }).catch(() => {});
@@ -426,6 +431,7 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
         kind: "card_action",
         action: "modify",
         intentCardId: selectedCard.id,
+        intentKey: selectedCard.intentKey,
         basket: selectedCard.goalBasket,
         channel: "web",
       }).catch(() => {});
@@ -442,6 +448,7 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
       proxyPost("/feedback", {
         kind: "text_feedback",
         intentCardId: selectedCard.id,
+        intentKey: selectedCard.intentKey,
         basket: selectedCard.goalBasket,
         channel: "web",
         text,
@@ -456,6 +463,7 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
       // from this conversation records `evidence.card_id`.
       setMainChatCardContext({
         card_id: selectedCard.id,
+        intent_key: selectedCard.intentKey,
         title: selectedCard.title,
         why_now: selectedCard.whyNow,
         summary: selectedCard.summary,

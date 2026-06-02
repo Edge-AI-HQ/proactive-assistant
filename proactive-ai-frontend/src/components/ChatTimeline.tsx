@@ -81,6 +81,7 @@ export default function ChatTimeline({
     proxyPost("/feedback", {
       kind: "dismiss",
       intentCardId: cardId,
+      intentKey: selectedCard.intentKey,
       basket: selectedCard.goalBasket,
       channel: "web",
     }).catch(() => {});
@@ -97,6 +98,7 @@ export default function ChatTimeline({
       kind: "card_action",
       action: "confirm",
       intentCardId: cardId,
+      intentKey: selectedCard.intentKey,
       basket: selectedCard.goalBasket,
       channel: "web",
     }).catch(() => {});
@@ -123,6 +125,7 @@ export default function ChatTimeline({
     proxyPost("/feedback", {
       kind: "snooze",
       intentCardId: selectedCard.id,
+      intentKey: selectedCard.intentKey,
       basket: selectedCard.goalBasket,
       channel: "web",
     }).catch(() => {});
@@ -136,6 +139,7 @@ export default function ChatTimeline({
       kind: "card_action",
       action: "modify",
       intentCardId: selectedCard.id,
+      intentKey: selectedCard.intentKey,
       basket: selectedCard.goalBasket,
       channel: "web",
     }).catch(() => {});
@@ -152,6 +156,7 @@ export default function ChatTimeline({
       kind: "card_action",
       action: "complete",
       intentCardId: selectedCard.id,
+      intentKey: selectedCard.intentKey,
       basket: selectedCard.goalBasket,
       channel: "web",
     }).catch(() => {});
@@ -163,6 +168,7 @@ export default function ChatTimeline({
     proxyPost("/feedback", {
       kind: "text_feedback",
       intentCardId: selectedCard.id,
+      intentKey: selectedCard.intentKey,
       basket: selectedCard.goalBasket,
       channel: "web",
       text,

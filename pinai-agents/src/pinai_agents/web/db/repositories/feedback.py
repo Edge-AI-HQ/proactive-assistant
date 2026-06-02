@@ -8,12 +8,20 @@ from __future__ import annotations
 
 import builtins
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 from .base import UserScopedRepository
+from .preferences import AddPreferenceInput, PreferenceRepository
+
+_FUTURE_NEGATIVE_TEXT_RE = re.compile(
+    r"(stop showing|do not show|don't show|no more|less of|"
+    r"不要再|不用再|别再|少推|屏蔽|停止)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(slots=True)
@@ -66,6 +74,34 @@ def _effective_card_action(kind: str, action: str | None) -> str | None:
     return None
 
 
+def _metadata_dict(metadata: dict[str, Any] | str | None) -> dict[str, Any]:
+    if isinstance(metadata, dict):
+        return metadata
+    if isinstance(metadata, str):
+        try:
+            parsed = json.loads(metadata)
+        except json.JSONDecodeError:
+            return {"raw": metadata}
+        return parsed if isinstance(parsed, dict) else {"raw": metadata}
+    return {}
+
+
+def _is_future_negative_card_feedback(
+    *,
+    kind: str,
+    source: str,
+    intent_card_id: str | None,
+    text: str | None,
+) -> bool:
+    if kind != "text_feedback":
+        return False
+    if source not in {"user", "user_direct"}:
+        return False
+    if not intent_card_id:
+        return False
+    return bool(text and _FUTURE_NEGATIVE_TEXT_RE.search(text))
+
+
 class FeedbackRepository(UserScopedRepository):
     async def log(
         self,
@@ -79,12 +115,13 @@ class FeedbackRepository(UserScopedRepository):
         basket: str | None = None,
         value: str | None = None,
         text: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | str | None = None,
         conversation_id: str | None = None,
         message_id: str | None = None,
         channel: str | None = None,
     ) -> FeedbackRow:
         fid = f"fb_{uuid.uuid4().hex[:16]}"
+        metadata_obj = _metadata_dict(metadata)
         async with self._conn.cursor() as cur:
             await cur.execute(
                 """
@@ -109,7 +146,7 @@ class FeedbackRepository(UserScopedRepository):
                     basket,
                     value,
                     text,
-                    json.dumps(metadata or {}),
+                    json.dumps(metadata_obj),
                     conversation_id,
                     message_id,
                     channel,
@@ -123,12 +160,47 @@ class FeedbackRepository(UserScopedRepository):
         # Phase 3: fan out card-targeted dismiss / confirm actions to
         # the per-user pattern fingerprint. We don't run on every kind
         # — only on actions that already mean "user touched this card".
-        if intent_card_id and effective_action in {"open", "confirm", "dismiss", "snooze"}:
+        if intent_card_id and effective_action in {
+            "open",
+            "confirm",
+            "complete",
+            "dismiss",
+            "snooze",
+        }:
             await self._fanout_fingerprint(
                 card_id=intent_card_id,
                 action=effective_action,
                 intent_key=intent_key,
                 basket=basket,
+            )
+        if _is_future_negative_card_feedback(
+            kind=kind,
+            source=source,
+            intent_card_id=intent_card_id,
+            text=text,
+        ):
+            pref_evidence = {
+                "card_id": intent_card_id,
+                "feedback_id": fid,
+            }
+            if intent_key:
+                pref_evidence["intent_key"] = intent_key
+            if basket:
+                pref_evidence["basket"] = basket
+            surface = metadata_obj.get("surface")
+            if isinstance(surface, str) and surface:
+                pref_evidence["surface"] = surface
+            await PreferenceRepository(self._user_id, self._conn).add(
+                AddPreferenceInput(
+                    id=f"pref_{uuid.uuid4().hex[:12]}",
+                    statement=text or "",
+                    scope="topic",
+                    polarity="negative",
+                    weight=1.0,
+                    source="user",
+                    evidence=pref_evidence,
+                    durability="persistent",
+                )
             )
         return FeedbackRow.from_record(row)
 
@@ -144,8 +216,8 @@ class FeedbackRepository(UserScopedRepository):
 
         fp = UserFingerprintRepository(self._user_id, self._conn)
         pattern_ids = await fp.patterns_for_card(card_id)
-        # confirm + open = positive engagement; dismiss + snooze = negative.
-        positive = action in {"open", "confirm"}
+        # confirm / complete / open = positive engagement; dismiss / snooze = negative.
+        positive = action in {"open", "confirm", "complete"}
         if positive:
             await fp.record_open(
                 pattern_ids=pattern_ids,
