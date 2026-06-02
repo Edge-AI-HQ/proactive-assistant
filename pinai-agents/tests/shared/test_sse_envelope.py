@@ -118,21 +118,21 @@ def test_namespaces_cover_three_domains():
 
 
 def test_safe_args_returns_value_when_under_cap():
-    from pinai_agents.chat.streaming import _safe_args
+    from pinai_agents.chat.transport.sse import _safe_args
 
     payload = {"todos": [{"content": "step", "status": "pending"}]}
     assert _safe_args(payload) == payload
 
 
 def test_safe_args_returns_none_for_oversized_payload():
-    from pinai_agents.chat.streaming import _ARGS_FULL_LIMIT, _safe_args
+    from pinai_agents.chat.transport.sse import _ARGS_FULL_LIMIT, _safe_args
 
     big = {"code": "x" * (_ARGS_FULL_LIMIT + 1)}
     assert _safe_args(big) is None
 
 
 def test_safe_args_returns_none_for_non_serializable():
-    from pinai_agents.chat.streaming import _safe_args
+    from pinai_agents.chat.transport.sse import _safe_args
 
     class Unserializable:
         pass
@@ -141,13 +141,13 @@ def test_safe_args_returns_none_for_non_serializable():
 
 
 def test_safe_args_returns_none_for_none_input():
-    from pinai_agents.chat.streaming import _safe_args
+    from pinai_agents.chat.transport.sse import _safe_args
 
     assert _safe_args(None) is None
 
 
 def test_chat_tool_start_includes_args_when_provided():
-    from pinai_agents.chat.streaming import chat_tool_start
+    from pinai_agents.chat.transport.sse import chat_tool_start
 
     out = chat_tool_start(
         tool_call_id="t1",
@@ -160,7 +160,7 @@ def test_chat_tool_start_includes_args_when_provided():
 
 
 def test_chat_tool_start_omits_args_when_none():
-    from pinai_agents.chat.streaming import chat_tool_start
+    from pinai_agents.chat.transport.sse import chat_tool_start
 
     out = chat_tool_start(
         tool_call_id="t1",
@@ -174,7 +174,7 @@ def test_chat_tool_start_omits_args_when_none():
 def test_chat_helpers_emit_envelope_shape():
     """Smoke check that chat/streaming.py helpers produce envelopes
     matching what validate_event accepts."""
-    from pinai_agents.chat.streaming import (
+    from pinai_agents.chat.transport.sse import (
         chat_delta,
         chat_done,
         chat_error,

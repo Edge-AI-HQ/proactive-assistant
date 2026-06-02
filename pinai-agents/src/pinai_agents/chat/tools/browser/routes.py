@@ -23,7 +23,7 @@ from fastapi import APIRouter, Header, HTTPException, Path, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from ..auth.run_jwt import RunJWTError, verify_run_jwt
+from ...auth.run_jwt import RunJWTError, verify_run_jwt
 from .control_state import normalize_mode
 from .events import browser_events
 from .manager import get_browser_manager

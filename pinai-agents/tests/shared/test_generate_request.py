@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from pinai_agents.chat.routes.generate import GenerateRequest as ChatGenerateRequest
+from pinai_agents.chat.transport.routes.generate import GenerateRequest as ChatGenerateRequest
 from pinai_agents.shared.api_models import GenerateRequest
 
 

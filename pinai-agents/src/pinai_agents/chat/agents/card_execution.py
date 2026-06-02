@@ -28,10 +28,10 @@ from typing import Any
 from deepagents import create_deep_agent
 from deepagents.backends.protocol import BackendProtocol
 
-from ..runtime.checkpoint import get_checkpointer
-from ..runtime.llm import make_chat_model
-from ..tools.native import ALL_TOOLS
-from ..tools.native.propose_action import propose_action
+from ..harness.checkpoint import get_checkpointer
+from ..harness.llm import make_chat_model
+from ..tools.direct import ALL_TOOLS
+from ..tools.direct.propose_action import propose_action
 from .prompts import (
     CODE_MODE_GUIDANCE,
     GROUNDING_POLICY,

@@ -9,7 +9,7 @@ import asyncio
 
 import pytest
 
-from pinai_agents.chat.browser.events import _BrowserEventBus
+from pinai_agents.chat.tools.browser.events import _BrowserEventBus
 
 
 @pytest.fixture

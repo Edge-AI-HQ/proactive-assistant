@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from pinai_agents.chat.routes.history import _build_history
+from pinai_agents.chat.transport.routes.history import _build_history
 
 
 def test_history_preserves_openai_responses_reasoning_summary() -> None:

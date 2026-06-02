@@ -47,10 +47,10 @@ from ...shared.api_models import (
     GeneratorOutput,
     PlanOutput,
 )
-from ..runtime.ctx import run_context
-from ..runtime.llm import make_chat_model
-from ..tools.local_sandbox import create_local_sandbox_backend, use_local_sandbox
-from ..tools.sandbox import evict_thread, get_or_create_thread_sandbox
+from ..harness.ctx import run_context
+from ..harness.llm import make_chat_model
+from ..tools.code_mode.local_sandbox import create_local_sandbox_backend, use_local_sandbox
+from ..tools.code_mode.sandbox import evict_thread, get_or_create_thread_sandbox
 
 logger = logging.getLogger(__name__)
 

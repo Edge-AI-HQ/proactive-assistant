@@ -49,7 +49,7 @@ def test_card_execution_prompt_treats_user_correction_as_card_feedback() -> None
 
 def test_reasoning_extractor_reads_openai_response_summary() -> None:
     try:
-        module = import_module("pinai_agents.chat.runtime.reasoning")
+        module = import_module("pinai_agents.chat.harness.reasoning")
     except ModuleNotFoundError as exc:
         pytest.fail(f"reasoning adapter module is missing: {exc}")
 
@@ -79,7 +79,7 @@ def test_reasoning_extractor_reads_openai_response_summary() -> None:
 
 def test_reasoning_extractor_reads_responses_streaming_summary_blocks() -> None:
     try:
-        module = import_module("pinai_agents.chat.runtime.reasoning")
+        module = import_module("pinai_agents.chat.harness.reasoning")
     except ModuleNotFoundError as exc:
         pytest.fail(f"reasoning adapter module is missing: {exc}")
 
@@ -103,7 +103,7 @@ def test_reasoning_extractor_reads_responses_streaming_summary_blocks() -> None:
 
 def test_reasoning_extractor_keeps_litellm_reasoning_content_support() -> None:
     try:
-        module = import_module("pinai_agents.chat.runtime.reasoning")
+        module = import_module("pinai_agents.chat.harness.reasoning")
     except ModuleNotFoundError as exc:
         pytest.fail(f"reasoning adapter module is missing: {exc}")
 
@@ -120,7 +120,7 @@ def test_reasoning_extractor_keeps_litellm_reasoning_content_support() -> None:
 
 def test_reasoning_extractor_keeps_claude_v1_reasoning_block_support() -> None:
     try:
-        module = import_module("pinai_agents.chat.runtime.reasoning")
+        module = import_module("pinai_agents.chat.harness.reasoning")
     except ModuleNotFoundError as exc:
         pytest.fail(f"reasoning adapter module is missing: {exc}")
 
@@ -134,7 +134,7 @@ def test_reasoning_extractor_keeps_claude_v1_reasoning_block_support() -> None:
 
 def test_gpt55_uses_high_effort_responses_api_reasoning_summary_protocol() -> None:
     try:
-        module = import_module("pinai_agents.chat.runtime.reasoning")
+        module = import_module("pinai_agents.chat.harness.reasoning")
     except ModuleNotFoundError as exc:
         pytest.fail(f"reasoning adapter module is missing: {exc}")
 
@@ -159,7 +159,7 @@ def test_gpt55_uses_high_effort_responses_api_reasoning_summary_protocol() -> No
 
 def test_claude_model_still_uses_anthropic_thinking_protocol() -> None:
     try:
-        module = import_module("pinai_agents.chat.runtime.reasoning")
+        module = import_module("pinai_agents.chat.harness.reasoning")
     except ModuleNotFoundError as exc:
         pytest.fail(f"reasoning adapter module is missing: {exc}")
 
@@ -187,7 +187,7 @@ def test_claude_model_still_uses_anthropic_thinking_protocol() -> None:
 
 def test_openai_responses_reasoning_keeps_streaming_enabled() -> None:
     try:
-        module = import_module("pinai_agents.chat.runtime.reasoning")
+        module = import_module("pinai_agents.chat.harness.reasoning")
     except ModuleNotFoundError as exc:
         pytest.fail(f"reasoning adapter module is missing: {exc}")
 
@@ -205,7 +205,7 @@ def test_openai_responses_reasoning_keeps_streaming_enabled() -> None:
 
 
 def test_openai_responses_payload_drops_legacy_call_ids_from_message_ids() -> None:
-    from pinai_agents.chat.runtime.llm import ChatLiteLLMReasoning
+    from pinai_agents.chat.harness.llm import ChatLiteLLMReasoning
 
     model = ChatLiteLLMReasoning(
         model="gpt-5.5",

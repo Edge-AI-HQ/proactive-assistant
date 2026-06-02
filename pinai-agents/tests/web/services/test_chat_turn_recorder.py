@@ -3,7 +3,7 @@
 SSE is generated via shared.sse_envelope.emit with the exact field names
 chat/streaming.py sends (toolCallId / name / argsPreview / args / isError /
 meta / delta) — so this also pins the web↔chat wire contract. We do NOT
-import chat.streaming here (trust-boundary banned-api).
+import chat.transport.sse here (trust-boundary banned-api).
 """
 
 from __future__ import annotations

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from pinai_agents.chat.runtime.trim import compute_trim_message_ids
+from pinai_agents.chat.harness.trim import compute_trim_message_ids
 
 
 def _turn(n: int, *, tool: bool = False) -> list:

@@ -14,8 +14,8 @@ from typing import Any
 
 from deepagents import create_deep_agent
 
-from ..runtime.llm import make_chat_model
-from ..tools.sandbox import create_oneshot_sandbox, delete_sandbox_now
+from ..harness.llm import make_chat_model
+from ..tools.code_mode.sandbox import create_oneshot_sandbox, delete_sandbox_now
 from .prompts import CODE_MODE_GUIDANCE, GROUNDING_POLICY, SANDBOX_PREAMBLE
 
 logger = logging.getLogger(__name__)

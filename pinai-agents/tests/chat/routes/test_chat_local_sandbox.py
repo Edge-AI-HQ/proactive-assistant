@@ -7,8 +7,8 @@ import pytest
 
 os.environ.setdefault("TAVILY_API_KEY", "test")
 
-from pinai_agents.chat.routes import chat
-from pinai_agents.chat.tools import local_sandbox
+from pinai_agents.chat.tools.code_mode import local_sandbox
+from pinai_agents.chat.transport.routes import chat
 
 
 def test_local_chat_root_dir_sanitizes_thread_id():

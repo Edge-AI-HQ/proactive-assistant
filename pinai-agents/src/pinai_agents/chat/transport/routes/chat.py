@@ -33,18 +33,18 @@ from langchain_core.messages import (
 )
 from pydantic import BaseModel, Field
 
-from ..agents.card_execution import make_card_execution_agent
-from ..agents.main_chat import MAIN_CHAT_KEEP_TURNS, make_main_chat_agent
-from ..auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
-from ..runtime.ctx import ClientHints, run_context
-from ..runtime.trim import trim_thread
-from ..streaming import chat_done, chat_error, langgraph_to_sse
-from ..tools.local_sandbox import (
+from ...agents.card_execution import make_card_execution_agent
+from ...agents.main_chat import MAIN_CHAT_KEEP_TURNS, make_main_chat_agent
+from ...auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
+from ...harness.ctx import ClientHints, run_context
+from ...harness.trim import trim_thread
+from ...tools.code_mode.local_sandbox import (
     create_local_sandbox_backend,
     local_chat_root_dir,
     use_local_sandbox,
 )
-from ..tools.sandbox import evict_thread, get_or_create_thread_sandbox
+from ...tools.code_mode.sandbox import evict_thread, get_or_create_thread_sandbox
+from ..sse import chat_done, chat_error, langgraph_to_sse
 from ._session_auth import assert_session_key_principal
 
 logger = logging.getLogger(__name__)

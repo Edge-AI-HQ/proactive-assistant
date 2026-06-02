@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from pinai_agents.chat.tools.native.propose_action import (
+from pinai_agents.chat.tools.direct.propose_action import (
     Artifact,
     DangerousAction,
     ExecutionStep,

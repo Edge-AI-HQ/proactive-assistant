@@ -28,8 +28,8 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel
 
-from ..runtime.checkpoint import get_checkpointer
-from ..runtime.reasoning import extract_reasoning_text
+from ...harness.checkpoint import get_checkpointer
+from ...harness.reasoning import extract_reasoning_text
 from ._session_auth import assert_session_key_principal, principal_from_header
 
 logger = logging.getLogger(__name__)
@@ -79,7 +79,7 @@ def _readonly_agent(*, is_card: bool) -> Any:
     # when actually reading state, where the full runtime env is present.
     from ..agents.card_execution import make_card_execution_agent
     from ..agents.main_chat import make_main_chat_agent
-    from ..tools.local_sandbox import (
+    from ..tools.code_mode.local_sandbox import (
         create_local_sandbox_backend,
         local_chat_root_dir,
     )

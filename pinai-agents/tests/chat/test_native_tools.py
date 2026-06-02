@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import pytest
 
-from pinai_agents.chat.runtime.ctx import run_context
+from pinai_agents.chat.harness.ctx import run_context
 from pinai_agents.chat.tools import http_client
-from pinai_agents.chat.tools.native import (
+from pinai_agents.chat.tools.direct import (
     cards_recent,
     composio_get_tool_schemas,
     composio_manage_connections,
