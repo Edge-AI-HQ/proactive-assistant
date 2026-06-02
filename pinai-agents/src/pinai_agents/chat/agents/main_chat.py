@@ -21,7 +21,12 @@ from deepagents.backends.protocol import BackendProtocol
 from ..runtime.checkpoint import get_checkpointer
 from ..runtime.llm import make_chat_model
 from ..tools.native import ALL_TOOLS
-from .prompts import CODE_MODE_GUIDANCE, GROUNDING_POLICY, SANDBOX_PREAMBLE
+from .prompts import (
+    CODE_MODE_GUIDANCE,
+    GROUNDING_POLICY,
+    SANDBOX_PREAMBLE,
+    TOOL_DISCIPLINE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +147,8 @@ user states a persistent preference about future cards, call
 {CODE_MODE_GUIDANCE}
 
 {GROUNDING_POLICY}
+
+{TOOL_DISCIPLINE}
 
 <output_style>
 Don't explain your tool use to the user. They see only your final

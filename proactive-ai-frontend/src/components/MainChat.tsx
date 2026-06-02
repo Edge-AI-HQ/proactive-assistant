@@ -60,10 +60,11 @@ export default function MainChat({
     };
   }, []);
 
-  // Brief blank while /init resolves (typically <200ms). The parent
-  // wrap has its own fade-in transition, so the user mostly sees that
-  // animation cover this gap.
-  if (sessionKey === null) return null;
+  // Brief transparent placeholder while /init resolves the singleton key
+  // (now an O(1) latest_id lookup, typically <100ms). A transparent fill
+  // (not null) keeps the layout from collapsing; the parent's fade-in
+  // covers the gap.
+  if (sessionKey === null) return <div className="absolute inset-0" aria-hidden />;
   return (
     <MainChatScope
       sessionKey={sessionKey}
@@ -92,6 +93,9 @@ function MainChatScope({
   const { runtime, historyLoaded, hasHistory } = useProactiveChatRuntime({
     sessionKey,
     cardContext,
+    // MainChat already did /init to get this singleton key, so the hook's
+    // own /init would be a duplicate round-trip on the open-chat hot path.
+    skipInit: true,
   });
   const [view, setView] = useState<ViewMode>(cardContext ? "conversation" : "landing");
   const cardTitle = typeof cardContext?.title === "string" ? cardContext.title : undefined;

@@ -127,8 +127,25 @@ async def chat_init(
             kind=kind,
             card_id=card_id,
         )
+        # main: `existing` = has any pai_chat_messages row (O(1) index hit),
+        # replacing the chat-worker aget_state full-state rebuild that
+        # dominated open-chat white-screen latency (plan 2026-06-01 §5.4 P0).
+        main_latest_id = (
+            await ChatMessagesRepository(
+                user_id=user.id,
+                conn=conn,
+            ).latest_id(thread_id=session_key)
+            if kind == "main"
+            else None
+        )
 
-    existing = await call_chat_exists(user_id=user.id, session_key=session_key)
+    # card thread: pai_chat_messages stays empty until /send persists its
+    # first turn, so the table can't answer "existing" — probe the checkpoint.
+    if kind == "main":
+        existing = main_latest_id is not None
+    else:
+        existing = await call_chat_exists(user_id=user.id, session_key=session_key)
+
     return ChatInitResponse(
         session_key=session_key,
         existing=existing,
@@ -157,17 +174,21 @@ async def _persist_turn(
     """Append this turn to pai_chat_messages, kept consistent with chat's
     RemoveMessage surgery on regenerate / edit.
 
-    No-ops when the thread has no rows yet: such threads (anything predating
-    pai_chat_messages, plus a brand-new thread's first turn) are materialized
-    in one shot by /history's lazy backfill from the checkpoint — which
-    already contains this turn, so writing here too would duplicate it. Once
-    the thread has rows, every turn is appended incrementally.
+    A normal send appends unconditionally — even on a brand-new thread or one
+    whose /history lazy backfill silently timed out — so the thread always
+    records its first turn here. This unblocks the "new messages never
+    persist" chicken-and-egg: the old `latest_id is None → return` guard
+    assumed backfill had seeded row 1, but backfill can time out and write
+    nothing (plan 2026-06-01 §5.4 P0). regenerate/edit still needs an existing
+    tail to pop, so it no-ops on an empty table.
     """
     sk = body.session_key
-    if await repo.latest_id(thread_id=sk) is None:
-        return
 
     if body.regenerate:
+        # No tail to pop on an empty table (thread predates pai_chat_messages
+        # and backfill hasn't run) — skip surgery; next normal send records it.
+        if await repo.latest_id(thread_id=sk) is None:
+            return
         # Mirror chat's pop-tail-and-rerun: an edit (user text changed)
         # replaces user+assistant; a pure regenerate replaces only assistant.
         new_text = (body.message or "").strip()

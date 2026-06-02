@@ -146,7 +146,12 @@ async def call_chat_history(
     """
     token, run_id = sign_agent_run_jwt(user_id=user_id)
     url = f"{_chat_internal_url()}/agent/chat/history"
-    timeout = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
+    # 60s read: a large thread's checkpoint aget_state rebuild can take tens
+    # of seconds; 15s was timing out → silently returning [] (treated as "no
+    # history", so backfill never wrote — plan 2026-06-01 §5.4). New turns are
+    # seeded by /send's _persist_turn regardless, so this only widens the
+    # one-shot legacy-thread backfill window.
+    timeout = httpx.Timeout(connect=5.0, read=60.0, write=5.0, pool=5.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             resp = await client.get(

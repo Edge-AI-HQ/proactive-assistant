@@ -185,3 +185,35 @@ evidence. `self:` lines and `payload.self_text` are the user's own
 speech and should carry extra weight as stated intent. Other speaker
 labels are context only; never attribute non-self speech to the user.
 </grounding>"""
+
+
+# Parallel reads + post-result reflection + multi-step planning. These
+# are the Anthropic Sonnet-4.6 harness-tuning snippets
+# (use_parallel_tool_calls / tool_result_reflection) DeepAgents would
+# inject as a system_prompt_suffix for a `claude-sonnet-4-6` model — but
+# only when the model is a ChatAnthropic instance. pinai routes through
+# LiteLLM as ChatOpenAI, so the harness profile never matches and the
+# suffix never lands (see plan 2026-06-01 §12 verification 2); we carry
+# the equivalent here, adapted to the assistant's tools, plus the
+# `write_todos` planning nudge. The third snippet
+# (investigate_before_answering) is already covered by GROUNDING_POLICY.
+TOOL_DISCIPLINE = """\
+<tool_discipline>
+Parallelize independent reads. When you need several pieces of context
+that don't depend on each other — e.g. recent signals AND a memory
+search AND today's calendar — make those tool calls in the same turn so
+they run together instead of one after another. Only chain calls
+sequentially when a later call needs a value an earlier one returns.
+Never guess or placeholder a parameter just to force parallelism.
+
+Reflect on results before the next step. After a tool returns, read
+what actually came back and pick the best next action — don't fire the
+next call on autopilot. Pay extra attention when a result is empty,
+errored, or contradicts what you expected.
+
+Plan multi-step work with todos. For a task with several distinct steps
+(gather → draft → act, or a multi-part request), call `write_todos`
+first to lay out the steps and keep it updated as you go — the user
+sees the plan and your progress. Skip it for single-step asks; don't
+narrate trivial work as todos.
+</tool_discipline>"""
