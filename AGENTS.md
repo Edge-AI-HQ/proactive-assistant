@@ -176,6 +176,7 @@ iOS 真机安装硬规则：永远不要为了绕过签名、权限、验证或�
 验证：
 ```bash
 cd pinai-agents && uv run ruff check               # 静态检查（含 trust-boundary 防墙）
+cd pinai-agents && uv run mypy src                 # 类型检查（CI 硬门禁；增量缓存，重复跑只几秒）
 cd pinai-agents && uv run pytest                   # 后端测试
 cd proactive-ai-frontend && npm run type-check     # 前端类型检查
 cd proactive-ai-frontend && npm test               # 前端单测（vitest）
@@ -184,7 +185,7 @@ cd internal-reward-dashboard && npm test            # 内部 review app 单测
 ```
 
 改完怎么验证（按改动范围选最轻的）：
-- 纯 Python 逻辑/类型 → `uv run ruff check` + 相关 `uv run pytest tests/<path>`
+- 纯 Python 逻辑/类型 → `uv run ruff check` + `uv run mypy src` + 相关 `uv run pytest tests/<path>`
 - 改 `pinai-agents/src/pinai_agents/web/` → `make restart`，看 `make logs-pinai-web` 起得来 + 打目标接口（端口随机，`make urls` 查）
 - 改 `pinai-agents/src/pinai_agents/chat/` → `make restart`，看 `make logs-pinai-chat` + 用前端发一条消息验证
 - 改前端 → `npm run dev`（端口 3003）在浏览器点；或 `make restart-frontend` 看容器版本
@@ -316,7 +317,7 @@ make deploy-litellm-prod    # LiteLLM → prod
 ## 提交规范
 - Conventional Commits：`feat(...)` / `fix(...)` / `chore(...)` / `docs(...)`。
 - 每次提交聚焦一个变更点。
-- 提交前最少跑：`cd pinai-agents && uv run ruff check` + 前端动到的话 `cd proactive-ai-frontend && npm run type-check`。
+- 提交前最少跑：`cd pinai-agents && uv run ruff check && uv run mypy src` + 前端动到的话 `cd proactive-ai-frontend && npm run type-check`。
 
 ## 规则单一真源
 - `AGENTS.md` 是 SSOT。
