@@ -30,6 +30,7 @@ from pydantic import BaseModel
 
 from ...harness.checkpoint import get_checkpointer
 from ...harness.reasoning import extract_reasoning_text
+from ...harness.session import read_state_messages
 from ._session_auth import assert_session_key_principal, principal_from_header
 
 logger = logging.getLogger(__name__)
@@ -77,9 +78,9 @@ def _readonly_agent(*, is_card: bool) -> Any:
     # chain plus its import-time side effects, and break lightweight test
     # imports of the pure helpers below (_build_history). We only need them
     # when actually reading state, where the full runtime env is present.
-    from ..agents.card_execution import make_card_execution_agent
-    from ..agents.main_chat import make_main_chat_agent
-    from ..tools.code_mode.local_sandbox import (
+    from ...agents.card_execution import make_card_execution_agent
+    from ...agents.main_chat import make_main_chat_agent
+    from ...tools.code_mode.local_sandbox import (
         create_local_sandbox_backend,
         local_chat_root_dir,
     )
@@ -120,15 +121,10 @@ async def _get_thread_messages(session_key: str) -> list[Any]:
     is_card = session_key.startswith(_CARD_THREAD_PREFIX)
     try:
         agent = _readonly_agent(is_card=is_card)
-        snapshot = await agent.aget_state(
-            {"configurable": {"thread_id": session_key}},
-        )
+        return await read_state_messages(agent, session_key)
     except Exception as e:
         logger.exception("state read failed session_key=%s", session_key)
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
-    if snapshot is None:
-        return []
-    return (snapshot.values or {}).get("messages", []) or []
 
 
 @router.get("/agent/chat/exists", response_model=ExistsResponse)

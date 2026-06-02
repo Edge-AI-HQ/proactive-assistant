@@ -39,8 +39,6 @@ import logging
 import re
 from typing import Any
 
-from deepagents import create_deep_agent
-
 from ...shared.api_models import (
     CardsList,
     EvalReport,
@@ -48,6 +46,7 @@ from ...shared.api_models import (
     PlanOutput,
 )
 from ..harness.ctx import run_context
+from ..harness.factory import create_deep_agent
 from ..harness.llm import make_chat_model
 from ..tools.code_mode.local_sandbox import create_local_sandbox_backend, use_local_sandbox
 from ..tools.code_mode.sandbox import evict_thread, get_or_create_thread_sandbox

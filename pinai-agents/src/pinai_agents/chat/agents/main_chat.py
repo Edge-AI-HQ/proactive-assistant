@@ -15,10 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from deepagents import SubAgent, create_deep_agent
-from deepagents.backends.protocol import BackendProtocol
-
-from ..harness.checkpoint import get_checkpointer
+from ..harness.factory import BackendProtocol, SubAgent, build_agent
 from ..harness.llm import make_chat_model
 from ..tools.direct import ALL_TOOLS
 from .prompts import (
@@ -198,11 +195,11 @@ def make_main_chat_agent(
     # Anthropic prompt caching — see deepagents.create_deep_agent. We only
     # layer the subagent roster on top; the SubAgentMiddleware + `task` tool
     # are auto-wired from `subagents`.
-    return create_deep_agent(
+    return build_agent(
         model=make_chat_model(virtual_key=virtual_key, streaming=True),
         system_prompt=_INSTRUCTIONS,
         backend=backend,
-        checkpointer=get_checkpointer(),
         tools=ALL_TOOLS,
         subagents=[_ECHO_PROBE_SUBAGENT],
+        with_checkpointer=True,
     )

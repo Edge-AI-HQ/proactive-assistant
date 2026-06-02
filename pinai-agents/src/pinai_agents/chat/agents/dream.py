@@ -13,8 +13,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from deepagents import create_deep_agent
-
+from ..harness.factory import build_agent
 from ..harness.llm import make_chat_model
 from ..tools.code_mode.sandbox import create_oneshot_sandbox, delete_sandbox_now
 from .prompts import CODE_MODE_GUIDANCE, GROUNDING_POLICY, SANDBOX_PREAMBLE
@@ -139,7 +138,7 @@ async def run_dream(
         scope_label="dream",
     )
     try:
-        agent = create_deep_agent(
+        agent = build_agent(
             model=make_chat_model(virtual_key=virtual_key, model=model, thinking_budget=8000),
             system_prompt=_DREAM_SYSTEM_PROMPT,
             backend=backend,
