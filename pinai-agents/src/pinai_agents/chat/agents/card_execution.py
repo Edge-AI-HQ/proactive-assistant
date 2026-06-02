@@ -32,7 +32,12 @@ from ..runtime.checkpoint import get_checkpointer
 from ..runtime.llm import make_chat_model
 from ..tools.native import ALL_TOOLS
 from ..tools.native.propose_action import propose_action
-from .prompts import CODE_MODE_GUIDANCE, GROUNDING_POLICY, SANDBOX_PREAMBLE
+from .prompts import (
+    CODE_MODE_GUIDANCE,
+    GROUNDING_POLICY,
+    SANDBOX_PREAMBLE,
+    TOOL_DISCIPLINE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +222,8 @@ in this order, every time:
 {CODE_MODE_GUIDANCE}
 
 {GROUNDING_POLICY}
+
+{TOOL_DISCIPLINE}
 
 <output_style>
 Action over explanation. Quiet while working. Speak only via
