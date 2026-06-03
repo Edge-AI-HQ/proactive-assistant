@@ -21,13 +21,19 @@ private let sileroLogger = Logger(subsystem: "ai.pin.ambient-ai", category: "sil
 final class SileroVadGate {
 
     struct Configuration {
-        /// Silero positive-detection threshold. Conservative ambient-capture
-        /// baseline; 0.5 is OpenAI Realtime's "quiet room" default but ambient
-        /// background is much noisier so 0.6 holds keyboard/HVAC down.
-        var threshold: Float = 0.6
-        /// Minimum sustained-speech window before `speechStart` fires. 500ms
-        /// rejects single-syllable interjections.
-        var minSpeechMs: Int = 500
+        /// Silero positive-detection threshold. 0.45 is below OpenAI
+        /// Realtime's "quiet room" 0.5 default on purpose: ambient capture
+        /// runs far-field (phone on a desk / in a pocket, speaker meters
+        /// away) so the model's probability output is consistently
+        /// depressed relative to its training distribution. 0.6 was the
+        /// initial pick and turned out to require near-mic speech to fire
+        /// at all — users had to lean in to be heard.
+        var threshold: Float = 0.45
+        /// Minimum sustained-speech window before `speechStart` fires.
+        /// 250ms keeps single-word triggers like "对" / "嗯" / "stop"
+        /// alive while still rejecting one-off clicks. FluidAudio's
+        /// own default is 150ms; 500ms was too aggressive.
+        var minSpeechMs: Int = 250
         /// Silence window before `speechEnd` fires. 700ms keeps short
         /// inter-word pauses inside one burst.
         var minSilenceMs: Int = 700
