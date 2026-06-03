@@ -4,11 +4,14 @@ export interface PcmRecorder {
 
 type AudioContextConstructor = new (options?: AudioContextOptions) => AudioContext;
 
-export async function createPcmRecorder(stream: MediaStream): Promise<PcmRecorder> {
+export async function createPcmRecorder(
+  stream: MediaStream,
+  options?: { sampleRate?: number },
+): Promise<PcmRecorder> {
   const AudioContextCtor = getAudioContextCtor();
   if (!AudioContextCtor) throw new Error("AudioContext API not supported");
 
-  const audioContext = new AudioContextCtor();
+  const audioContext = createAudioContext(AudioContextCtor, options?.sampleRate);
   if (audioContext.state === "suspended") {
     await audioContext.resume();
   }
@@ -42,6 +45,24 @@ export async function createPcmRecorder(stream: MediaStream): Promise<PcmRecorde
 function getAudioContextCtor(): AudioContextConstructor | undefined {
   return window.AudioContext
     || (window as unknown as { webkitAudioContext?: AudioContextConstructor }).webkitAudioContext;
+}
+
+/**
+ * Create an AudioContext, optionally pinned to a target sample rate. A forced
+ * rate downsamples the mic input (e.g. 16 kHz for speech), which shrinks the
+ * WAV and keeps it under downstream size limits (the diarize reference must
+ * stay under the transcription API's per-part base64 cap). Some engines reject
+ * a forced rate, so fall back to the device default rather than failing capture.
+ */
+function createAudioContext(Ctor: AudioContextConstructor, sampleRate?: number): AudioContext {
+  if (sampleRate) {
+    try {
+      return new Ctor({ sampleRate });
+    } catch {
+      // fall through to the device default
+    }
+  }
+  return new Ctor();
 }
 
 function encodeWav(chunks: Float32Array[], sampleRate: number): Blob {

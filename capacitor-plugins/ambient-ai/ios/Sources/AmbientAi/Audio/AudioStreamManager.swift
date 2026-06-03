@@ -1,6 +1,9 @@
 import AVFoundation
 import Foundation
+import os
 import Speech
+
+private let audioStreamLogger = Logger(subsystem: "ai.pin.ambient-ai", category: "audio-stream")
 
 actor AudioStreamManager {
     struct Callbacks {
@@ -12,6 +15,9 @@ actor AudioStreamManager {
     private static let maxTranscriptChars = 6_000
     private static let classificationDebugEmitIntervalMs = 2_000
     private static let classificationStaleTimeoutMs = 15_000
+    // Best-effort window to auto-clear an `external_mic` suppression if the JS
+    // release is ever lost — comfortably longer than a normal voice capture.
+    private static let externalMicSuppressionTimeoutNs: UInt64 = 20 * 1_000_000_000
     // Keep SFSpeech code dormant for now; cloud transcription is the active path.
     private static let localSpeechTranscriptionEnabled = false
     // Frontend /voice/transcribe owns cloud transcription and retry semantics.
@@ -48,6 +54,7 @@ actor AudioStreamManager {
     private var backgroundCaptureLoop: Task<Void, Never>?
     private var backgroundCaptureLoopGeneration = 0
     private var currentCaptureTriggerSource: String?
+    private var externalMicWatchdog: Task<Void, Never>?
     private let speechRecognitionCoordinator = SpeechRecognitionCoordinator()
 
     init(callbacks: Callbacks) {
@@ -189,6 +196,58 @@ actor AudioStreamManager {
             suppressionReasons.remove(.playback)
         }
         _ = reconcileClassifierState(reason: "playbackSuppression")
+        emitState()
+    }
+
+    /// Yield the mic while the WebView (chat-voice getUserMedia /
+    /// SpeechRecognition) holds it. Suppressing tears down our engine and
+    /// deactivates the session so WebKit gets a clean session; the desired
+    /// `isCaptureRunning` / `isClassificationRunning` state is left untouched,
+    /// so clearing the suppression auto-restarts. Mirrors `setPlaybackSuppressed`.
+    /// The resume is best-effort: if reconcile's restart loses the race with
+    /// WebKit's async session teardown, the JS source watchdog retries.
+    func setExternalMicSuppressed(_ suppressed: Bool) {
+        if suppressed {
+            suppressionReasons.insert(.externalMic)
+            scheduleExternalMicWatchdog()
+        } else {
+            suppressionReasons.remove(.externalMic)
+            cancelExternalMicWatchdog()
+        }
+        _ = reconcileClassifierState(reason: "externalMicSuppression")
+        emitState()
+    }
+
+    // MARK: - External-mic watchdog
+
+    /// Safety net for `external_mic` suppression. The JS side clears it after a
+    /// chat-voice / enrollment capture ends, but that resume can be lost (page
+    /// reload mid-capture, dropped bridge call). Unlike `.interruption` — which
+    /// several explicit-start paths clear — nothing else clears `.externalMic`,
+    /// and the JS source watchdog treats it as intentional and won't restart, so
+    /// a lost resume would otherwise leave ambient suppressed indefinitely. This
+    /// timer auto-clears it after a window that comfortably covers a normal
+    /// capture, mirroring what the OS interruption-ended event does for `.interruption`.
+    private func scheduleExternalMicWatchdog() {
+        externalMicWatchdog?.cancel()
+        externalMicWatchdog = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.externalMicSuppressionTimeoutNs)
+            guard !Task.isCancelled else { return }
+            await self?.clearExternalMicSuppressionByWatchdog()
+        }
+    }
+
+    private func cancelExternalMicWatchdog() {
+        externalMicWatchdog?.cancel()
+        externalMicWatchdog = nil
+    }
+
+    private func clearExternalMicSuppressionByWatchdog() {
+        externalMicWatchdog = nil
+        guard suppressionReasons.contains(.externalMic) else { return }
+        audioStreamLogger.warning("external_mic suppression auto-cleared by watchdog; resume was likely lost")
+        suppressionReasons.remove(.externalMic)
+        _ = reconcileClassifierState(reason: "externalMicWatchdog")
         emitState()
     }
 
@@ -1144,6 +1203,7 @@ actor AudioStreamManager {
     // MARK: - Suppression
 
     private func resolvedSuppressedReason() -> AudioSuppressedReason? {
+        if suppressionReasons.contains(.externalMic) { return .externalMic }
         if suppressionReasons.contains(.playback) { return .playback }
         if suppressionReasons.contains(.interruption) { return .interruption }
         return nil
@@ -1172,7 +1232,7 @@ actor AudioStreamManager {
             }
             return classifier.start()
         }
-        if classifier.canAnalyze || classifier.diagnostics.capturePipelineRunning {
+        if classifier.hasEngine {
             classifier.stop()
         }
         sileroGate.stop()

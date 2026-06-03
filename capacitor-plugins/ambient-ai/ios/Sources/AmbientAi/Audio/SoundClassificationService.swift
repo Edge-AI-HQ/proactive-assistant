@@ -85,6 +85,16 @@ final class SoundClassificationService {
             && ![.stopped, .failed, .suspended, .stale].contains(engineState)
     }
 
+    /// True while we still hold an engine/analyzer object, even a dead one
+    /// (e.g. a `.failed` engine after a start that lost the input). The
+    /// reconcile teardown path uses this so toggling capture off always
+    /// releases a wedged engine instead of leaving it retained.
+    var hasEngine: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return engine != nil || analyzer != nil
+    }
+
     var isSuspended: Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -165,6 +175,7 @@ final class SoundClassificationService {
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
             emitError("Input audio format is unavailable", source: "audioSession")
+            discardEngine()
             return false
         }
 
@@ -185,8 +196,8 @@ final class SoundClassificationService {
             do {
                 try engine.start()
             } catch {
-                input.removeTap(onBus: 0)
                 emitError("Audio engine failed to start: \(error.localizedDescription)", source: "audioSession")
+                discardEngine()
                 return false
             }
         }
@@ -252,6 +263,7 @@ final class SoundClassificationService {
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
             emitError("Input audio format is unavailable", source: "audioSession")
+            discardEngine()
             return false
         }
 
@@ -267,8 +279,8 @@ final class SoundClassificationService {
         do {
             try engine.start()
         } catch {
-            input.removeTap(onBus: 0)
             emitError("Audio engine failed to start: \(error.localizedDescription)", source: "audioSession")
+            discardEngine()
             return false
         }
 
@@ -417,6 +429,24 @@ final class SoundClassificationService {
         engine?.inputNode.removeTap(onBus: 0)
         engine?.stop()
         soundLogger.info("SoundAnalysis engine stopped")
+    }
+
+    /// Drop the current engine after a failed `start()` so the next attempt
+    /// rebuilds against a fresh input node. The wedge we are guarding against:
+    /// when WebKit (chat-voice getUserMedia) or keyboard dictation grabs the
+    /// mic, our `inputNode` reports a 0 sample-rate format or `engine.start()`
+    /// throws; keeping that half-initialized engine means every later start
+    /// reuses the same dead input and fails forever. Leaves `engineState`
+    /// alone (the caller's `emitError` already set `.failed`). Same lock
+    /// discipline as `stopEngine()`: nil under lock, tear down outside it.
+    private func discardEngine() {
+        lock.lock()
+        let engine = self.engine
+        self.engine = nil
+        lock.unlock()
+
+        engine?.inputNode.removeTap(onBus: 0)
+        engine?.stop()
     }
 
     private func startAnalyzer(format: AVAudioFormat, restarting: Bool) -> Bool {

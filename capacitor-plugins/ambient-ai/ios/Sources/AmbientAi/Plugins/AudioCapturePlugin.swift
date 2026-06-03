@@ -22,6 +22,7 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
         CAPPluginMethod(name: "stopPlayback", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startClassification", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopClassification", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setExternalMicSuppressed", returnType: CAPPluginReturnPromise),
     ]
 
     private lazy var audioManager = AudioStreamManager(callbacks: .init(
@@ -318,6 +319,14 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
     @objc func stopClassification(_ call: CAPPluginCall) {
         Task { [weak self] in
             await self?.audioManager.stopClassification()
+            DispatchQueue.main.async { call.resolve() }
+        }
+    }
+
+    @objc func setExternalMicSuppressed(_ call: CAPPluginCall) {
+        let suppressed = call.getBool("suppressed") ?? false
+        Task { [weak self] in
+            await self?.audioManager.setExternalMicSuppressed(suppressed)
             DispatchQueue.main.async { call.resolve() }
         }
     }

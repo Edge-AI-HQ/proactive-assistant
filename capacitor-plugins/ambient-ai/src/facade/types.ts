@@ -123,7 +123,7 @@ export interface AudioState {
   lastClassificationAt?: number;
   lastAudioError?: string;
   classifierRestartCount?: number;
-  suppressedReason?: 'playback' | 'interruption';
+  suppressedReason?: 'playback' | 'interruption' | 'external_mic';
   backgroundCaptureLoopRunning?: boolean;
   currentCaptureTriggerSource?: string;
   routeInputs?: AudioRoutePort[];
@@ -396,6 +396,7 @@ export interface AudioNamespace {
   markCaptureProcessed(options: { wavId: string }): Promise<void>;
   playCapture(options: { wavId: string }): Promise<void>;
   stopPlayback(): Promise<void>;
+  setExternalMicSuppressed(options: { suppressed: boolean }): Promise<void>;
 }
 
 export interface SoundNamespace {
