@@ -1,8 +1,10 @@
 import {
   AmbientAi,
+  type AudioState,
   type CaptureReadyEvent,
   type RecentAudioCapture,
   type SoundClassificationEvent,
+  type SpeechBurstEvent,
   type TranscriptReadyEvent,
 } from "@pin/capacitor-ambient-ai";
 import type { PluginListenerHandle } from "@capacitor/core";
@@ -13,7 +15,7 @@ import {
   transcribeAmbientCapture,
   type CaptureTranscriptionResult,
 } from "../capture-transcription";
-import { applyAmbientLiveTranscriptUpdate } from "../live-transcript-store";
+import { applyAmbientLiveTranscriptUpdate, showAmbientListening } from "../live-transcript-store";
 import { speakerAwareTranscriptText } from "../speaker-transcript";
 
 export interface SoundClassifierOptions {
@@ -63,6 +65,8 @@ export class SoundClassifierSource implements AmbientSource {
   private listenerHandle: PluginListenerHandle | null = null;
   private transcriptListenerHandle: PluginListenerHandle | null = null;
   private captureReadyListenerHandle: PluginListenerHandle | null = null;
+  private speechBurstListenerHandle: PluginListenerHandle | null = null;
+  private audioStateListenerHandle: PluginListenerHandle | null = null;
   private started = false;
   private opts: Required<SoundClassifierOptions>;
   private runs = new SoundRunAggregator();
@@ -95,28 +99,37 @@ export class SoundClassifierSource implements AmbientSource {
       ...LIVE_AUDIO_CONFIG,
       recognitionLocale: this.voiceLanguage().browser,
     });
-    this.listenerHandle = await AmbientAi.addListener(
-      "soundClassification",
-      (event) => this.handle(event),
-    );
-    this.captureReadyListenerHandle = await AmbientAi.addListener(
-      "captureReady",
-      (event) => {
-        void this.handleCaptureReady(event, this.activeRunId ?? undefined);
-      },
-    );
-    this.transcriptListenerHandle = await AmbientAi.addListener(
-      "transcriptReady",
-      (event) => this.handleTranscriptReady(event, this.activeRunId ?? undefined),
-    );
-    const runId = this.beginRun();
+    let runId: number | null = null;
     try {
+      this.listenerHandle = await AmbientAi.addListener(
+        "soundClassification",
+        (event) => this.handle(event),
+      );
+      this.captureReadyListenerHandle = await AmbientAi.addListener(
+        "captureReady",
+        (event) => {
+          void this.handleCaptureReady(event, this.activeRunId ?? undefined);
+        },
+      );
+      this.transcriptListenerHandle = await AmbientAi.addListener(
+        "transcriptReady",
+        (event) => this.handleTranscriptReady(event, this.activeRunId ?? undefined),
+      );
+      this.speechBurstListenerHandle = await AmbientAi.addListener(
+        "speechBurst",
+        (event) => this.handleSpeechBurst(event),
+      );
+      this.audioStateListenerHandle = await AmbientAi.addListener(
+        "audioState",
+        (event) => this.handleAudioState(event),
+      );
+      runId = this.beginRun();
       await AmbientAi.audio.startCapture();
       await AmbientAi.sound.startClassification();
       this.started = true;
       this.schedulePendingAudioRecovery("start");
     } catch (err) {
-      if (this.activeRunId === runId) this.activeRunId = null;
+      if (runId !== null && this.activeRunId === runId) this.activeRunId = null;
       await this.cleanupNativeStartFailure();
       throw err;
     }
@@ -518,12 +531,28 @@ export class SoundClassifierSource implements AmbientSource {
   }
 
   private async removeListeners(): Promise<void> {
-    const handles = [this.listenerHandle, this.captureReadyListenerHandle, this.transcriptListenerHandle]
+    const handles = [
+      this.listenerHandle,
+      this.captureReadyListenerHandle,
+      this.transcriptListenerHandle,
+      this.speechBurstListenerHandle,
+      this.audioStateListenerHandle,
+    ]
       .filter((handle): handle is PluginListenerHandle => handle !== null);
     this.listenerHandle = null;
     this.captureReadyListenerHandle = null;
     this.transcriptListenerHandle = null;
+    this.speechBurstListenerHandle = null;
+    this.audioStateListenerHandle = null;
     await Promise.all(handles.map((handle) => handle.remove()));
+  }
+
+  private handleSpeechBurst(event: SpeechBurstEvent): void {
+    showAmbientListening(event.timestamp);
+  }
+
+  private handleAudioState(event: AudioState): void {
+    if (event.capturing) showAmbientListening();
   }
 }
 

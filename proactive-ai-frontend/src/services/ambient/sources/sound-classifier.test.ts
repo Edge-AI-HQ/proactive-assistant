@@ -13,9 +13,22 @@ const captureTranscriptionMock = vi.hoisted(() => ({
 
 const ambientAiMock = vi.hoisted(() => {
   const listenerRemove = vi.fn(async () => {});
+  const listeners: Record<string, Array<(event: unknown) => void>> = {};
+  let failListenerEventName: string | null = null;
   return {
     listenerRemove,
-    addListener: vi.fn(async () => ({ remove: listenerRemove })),
+    listeners,
+    setFailListenerEventName: (eventName: string | null) => {
+      failListenerEventName = eventName;
+    },
+    addListener: vi.fn(async (eventName: string, listener: (event: unknown) => void) => {
+      if (eventName === failListenerEventName) {
+        throw new Error(`listener failed: ${eventName}`);
+      }
+      listeners[eventName] ??= [];
+      listeners[eventName].push(listener);
+      return { remove: listenerRemove };
+    }),
     audio: {
       configure: vi.fn(async () => {}),
       drainPendingTranscripts: vi.fn(async (): Promise<unknown[]> => []),
@@ -51,6 +64,10 @@ describe("SoundClassifierSource transcript ingest", () => {
     vi.clearAllMocks();
     resetAmbientLiveTranscriptForTest();
     captureTranscriptionMock.transcribeAmbientCapture.mockReset();
+    for (const key of Object.keys(ambientAiMock.listeners)) {
+      delete ambientAiMock.listeners[key];
+    }
+    ambientAiMock.setFailListenerEventName(null);
     ambientAiMock.audio.drainPendingTranscripts.mockResolvedValue([]);
     ambientAiMock.audio.listRecentCaptures.mockResolvedValue({ captures: [] });
     ambientAiMock.audio.markCaptureProcessed.mockResolvedValue(undefined);
@@ -62,6 +79,29 @@ describe("SoundClassifierSource transcript ingest", () => {
       classificationRunning: true,
       engineRunning: true,
     });
+  });
+
+  test("shows listening immediately when native speechBurst arrives", async () => {
+    const ctx: SourceContext = {
+      push: vi.fn(),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+
+    await source.start();
+    ambientAiMock.listeners.speechBurst?.[0]?.({
+      confidence: 0.5,
+      durationMs: 0,
+      timestamp: 1_777_000_001_000,
+      triggerSource: "audio_vad_fallback",
+    });
+
+    expect(getAmbientLiveTranscriptSnapshot()?.messages).toContainEqual(
+      expect.objectContaining({
+        id: "listening",
+        text: "Listening...",
+      }),
+    );
   });
 
   test("pushes transcriptReady as a session_summary signal", () => {
@@ -787,9 +827,24 @@ describe("SoundClassifierSource transcript ingest", () => {
       sessionSilenceGapMs: 30000,
       maxSessionDurationMs: 300000,
     });
-    expect(ambientAiMock.listenerRemove).toHaveBeenCalledTimes(3);
+    expect(ambientAiMock.listenerRemove).toHaveBeenCalledTimes(5);
     expect(ambientAiMock.sound.stopClassification).toHaveBeenCalledTimes(1);
     expect(ambientAiMock.audio.stopCapture).toHaveBeenCalledTimes(1);
+    expect(source.isStarted()).toBe(false);
+  });
+
+  test("cleans up registered listeners when later listener registration fails", async () => {
+    const ctx: SourceContext = {
+      push: vi.fn(),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+    ambientAiMock.setFailListenerEventName("audioState");
+
+    await expect(source.start()).rejects.toThrow("listener failed: audioState");
+
+    expect(ambientAiMock.listenerRemove).toHaveBeenCalledTimes(4);
+    expect(ambientAiMock.audio.startCapture).not.toHaveBeenCalled();
     expect(source.isStarted()).toBe(false);
   });
 

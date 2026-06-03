@@ -24,8 +24,8 @@ actor AudioStreamManager {
     // Silero VAD v5 is the primary speech-trigger gate (replaces the old
     // SoundAnalysis "speech" label path which mistook keyboard/HVAC/TV
     // background voices for user speech).  SoundClassificationService
-    // still runs and emits scene labels for the JS side, but its
-    // `onSpeechBurst` callback is no longer installed.
+    // still runs and emits scene labels for the JS side, but only RMS fallback
+    // speech-burst events are accepted from the classifier.
     private let sileroGate = SileroVadGate()
 
     private var config = AudioCaptureConfig.default
@@ -229,16 +229,18 @@ actor AudioStreamManager {
         classifier.onSpeechFrame = { [weak self] in
             Task { await self?.markSpeechFrame() }
         }
-        // SoundAnalysis no longer drives speech-burst triggers — Silero
-        // does. Keep onSpeechFrame for liveness tracking but leave
-        // onSpeechBurst unwired so the "speech" label can't open a
-        // capture by itself.
-        classifier.onSpeechBurst = nil
-        // Keep the RMS-energy fallback as a safety net while Silero is
-        // still loading its CoreML model (first launch downloads ~1.8MB
-        // from HuggingFace; can take a few seconds on cellular) or if
-        // model loading outright fails. Once Silero is hot the fallback
-        // gets disabled in `sileroGate.onModelReady` below.
+        // SoundAnalysis no longer drives speech-burst triggers. Keep the
+        // callback wired for RMS fallback, but reject the SoundAnalysis
+        // "speech" label so it cannot open a capture by itself.
+        classifier.onSpeechBurst = { [weak self] confidence, source in
+            guard Self.acceptsClassifierSpeechBurst(source: source) else { return }
+            Task { await self?.handleSpeechBurst(confidence: confidence, triggerSource: source) }
+        }
+        // Keep the RMS-energy fallback as a safety net. Silero loading
+        // successfully only proves the model is ready to score chunks; it
+        // does not prove the current far-field audio will cross Silero's
+        // probability threshold. The fallback keeps foreground "Listening..."
+        // responsive when Silero is under-triggering.
         classifier.setFallbackSpeechBurstEnabled(true)
         classifier.onAudioBuffer = { [weak self] buffer in
             self?.sileroGate.ingest(buffer: buffer)
@@ -260,18 +262,19 @@ actor AudioStreamManager {
             Task { await self?.handleSpeechBurst(confidence: confidence, triggerSource: "silero_vad") }
         }
         sileroGate.onModelReady = { [weak self] in
-            // Silero is the more accurate gate; promote it to sole trigger
-            // once the model is actually loaded and ready to score chunks.
-            Task { await self?.disableFallbackSpeechBurst(reason: "silero_ready") }
+            Task { await self?.handleSileroReady(reason: "silero_ready") }
         }
         sileroGate.onError = { [weak self] message in
             Task { await self?.emitError(message, source: "silero_vad") }
         }
     }
 
-    private func disableFallbackSpeechBurst(reason: String) {
-        classifier.setFallbackSpeechBurstEnabled(false)
+    private func handleSileroReady(reason: String) {
         callbacks.emitEvent("audioState", ["sileroState": "ready", "reason": reason] as [String: Any])
+    }
+
+    nonisolated static func acceptsClassifierSpeechBurst(source: String) -> Bool {
+        source == "audio_vad_fallback"
     }
 
     private func handleClassificationFrame(_ frame: SoundClassificationFrame) {
@@ -1156,11 +1159,8 @@ actor AudioStreamManager {
 
     @discardableResult
     private func reconcileClassifierState(reason: String) -> Bool {
-        // RMS-fallback is owned by `installClassifierCallbacksIfNeeded`
-        // (default ON while Silero loads) and `disableFallbackSpeechBurst`
-        // (turned OFF once Silero's onModelReady fires). Reconcile must NOT
-        // override that — otherwise a route-change reconcile would silently
-        // re-enable the fallback after Silero already took over.
+        // RMS fallback is owned by `installClassifierCallbacksIfNeeded`.
+        // Reconcile should only start/stop the audio engine and Silero gate.
         classifier.markStaleIfNeeded(maxAgeMs: Self.classificationStaleTimeoutMs)
         if shouldClassifierRun {
             sileroGate.start()

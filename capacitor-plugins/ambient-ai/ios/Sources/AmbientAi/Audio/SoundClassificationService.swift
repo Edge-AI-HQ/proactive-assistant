@@ -175,8 +175,11 @@ final class SoundClassificationService {
         if !engine.isRunning {
             input.removeTap(onBus: 0)
             input.installTap(onBus: 0, bufferSize: 8_192, format: format) { [weak self] buffer, time in
-                self?.dispatchAudioBuffer(buffer)
-                self?.analyze(buffer: buffer, atAudioFramePosition: time.sampleTime)
+                self?.handleMicrophoneTap(
+                    buffer: buffer,
+                    atAudioFramePosition: time.sampleTime,
+                    analyzeWithSoundAnalysis: true
+                )
             }
 
             do {
@@ -254,9 +257,11 @@ final class SoundClassificationService {
 
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 8_192, format: format) { [weak self] buffer, time in
-            self?.onAudioBuffer?(buffer)
-            self?.dispatchAudioBuffer(buffer)
-            self?.analyze(buffer: buffer, atAudioFramePosition: time.sampleTime)
+            self?.handleMicrophoneTap(
+                buffer: buffer,
+                atAudioFramePosition: time.sampleTime,
+                analyzeWithSoundAnalysis: false
+            )
         }
 
         do {
@@ -486,12 +491,23 @@ final class SoundClassificationService {
         }
     }
 
+    func handleMicrophoneTap(
+        buffer: AVAudioPCMBuffer,
+        atAudioFramePosition framePosition: AVAudioFramePosition,
+        analyzeWithSoundAnalysis: Bool
+    ) {
+        onAudioBuffer?(buffer)
+        dispatchAudioBuffer(buffer)
+        if analyzeWithSoundAnalysis {
+            analyze(buffer: buffer, atAudioFramePosition: framePosition)
+        }
+    }
+
     private func maybeEmitFallbackSpeechBurst(_ buffer: AVAudioPCMBuffer) {
         lock.lock()
         let now = Date()
-        let analyzerUnavailable = [.failed, .suspended, .stale].contains(engineState)
         let elapsedMs = lastFallbackBurstAt.map { Int(now.timeIntervalSince($0) * 1_000) } ?? Int.max
-        let canFire = fallbackSpeechBurstEnabled && analyzerUnavailable && elapsedMs >= fallbackMinIntervalMs
+        let canFire = fallbackSpeechBurstEnabled && elapsedMs >= fallbackMinIntervalMs
         lock.unlock()
 
         guard canFire, isFallbackSpeech(buffer) else {
