@@ -4,6 +4,7 @@ import Foundation
 enum AudioSuppressedReason: String, Hashable {
     case playback
     case interruption
+    case externalMic = "external_mic"
 }
 
 enum AudioTranscriptProvider: String {

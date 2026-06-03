@@ -27,10 +27,17 @@ export interface StartCaptureOptions {
   // Fires once when the user clicks "Done". Use for the commit step.
   // Not called on Cancel or backdrop dismiss.
   onResult?(text: string): void;
+  // Caller renders its own recording UI (e.g. the chat composer's inline
+  // recording bar) and drives stop/cancel via `stopCapture`; the provider then
+  // suppresses its own global bottom-sheet overlay for this capture.
+  inline?: boolean;
 }
 
 export interface VoiceContextValue {
   startCapture(opts?: StartCaptureOptions): void;
+  // Commit (true → fires onResult) or cancel (false) the active capture. Lets
+  // an inline caller drive its own Done / Cancel buttons.
+  stopCapture(commit: boolean): void;
   isCapturing: boolean;
 }
 

@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, Mic, X } from "lucide-react";
 
+import { isNative } from "@/lib/platform";
 import { BrowserSpeechEngine } from "./BrowserSpeechEngine";
 import { normalizeVoiceLanguage } from "./language";
 import type {
@@ -35,6 +36,9 @@ export function VoiceProvider({ children, engine, transcriptionLanguage }: Voice
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [pulseColorIndex, setPulseColorIndex] = useState(0);
+  // When the active capture is `inline`, the caller renders its own recording
+  // UI (e.g. the chat composer bar), so we suppress the global overlay.
+  const [inline, setInline] = useState(false);
 
   const handleRef = useRef<VoiceEngineHandle | null>(null);
   const optsRef = useRef<StartCaptureOptions | null>(null);
@@ -75,6 +79,7 @@ export function VoiceProvider({ children, engine, transcriptionLanguage }: Voice
       optsRef.current = null;
       setIsCapturing(false);
       setIsFinalizing(false);
+      setInline(false);
       if (commit && captureSeqRef.current === seq) captureSeqRef.current += 1;
       if (commit && completed && opts?.onResult) opts.onResult(finalText);
     }
@@ -100,6 +105,7 @@ export function VoiceProvider({ children, engine, transcriptionLanguage }: Voice
       setPulseColorIndex(Math.floor(Math.random() * PULSE_PALETTES.length));
       setIsCapturing(true);
       setIsFinalizing(false);
+      setInline(opts?.inline ?? false);
 
       const apply = (text: string) => {
         if (captureSeqRef.current !== seq) return;
@@ -136,8 +142,8 @@ export function VoiceProvider({ children, engine, transcriptionLanguage }: Voice
   );
 
   const value = useMemo<VoiceContextValue>(
-    () => ({ startCapture, isCapturing }),
-    [startCapture, isCapturing],
+    () => ({ startCapture, stopCapture: finishCapture, isCapturing }),
+    [startCapture, finishCapture, isCapturing],
   );
 
   const palette = PULSE_PALETTES[pulseColorIndex % PULSE_PALETTES.length];
@@ -148,11 +154,32 @@ export function VoiceProvider({ children, engine, transcriptionLanguage }: Voice
     node.scrollLeft = node.scrollWidth;
   }, [transcript, isFinalizing]);
 
+  // Main-chat voice records via the WebView (getUserMedia / SpeechRecognition),
+  // which seizes the shared iOS audio session and kills the native ambient
+  // recorder with no interruption callback. Yield ambient while a capture is
+  // live and restore it after. Keyed on isCapturing so the pause/resume pair
+  // can't desync across the imperative start/cancel/commit paths; the cancelled
+  // flag drops a stale pause if the capture ends before the lazy import lands.
+  // No-op off-native and when ambient is disabled.
+  useEffect(() => {
+    if (!isNative || !isCapturing) return;
+    let cancelled = false;
+    void import("@/services/ambient/external-mic").then(({ pauseAmbientForExternalMic }) => {
+      if (!cancelled) void pauseAmbientForExternalMic();
+    });
+    return () => {
+      cancelled = true;
+      void import("@/services/ambient/external-mic").then(({ resumeAmbientAfterExternalMic }) => {
+        void resumeAmbientAfterExternalMic();
+      });
+    };
+  }, [isCapturing]);
+
   return (
     <VoiceContext.Provider value={value}>
       {children}
       <AnimatePresence>
-        {isCapturing && (
+        {isCapturing && !inline && (
           <>
             <motion.div
               key="voice-backdrop"

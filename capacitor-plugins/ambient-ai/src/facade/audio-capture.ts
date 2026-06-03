@@ -45,6 +45,7 @@ export interface AudioCapturePlugin {
   stopPlayback(): Promise<void>;
   startClassification(): Promise<void>;
   stopClassification(): Promise<void>;
+  setExternalMicSuppressed(options: { suppressed: boolean }): Promise<void>;
   addListener<K extends keyof AudioCaptureEventMap>(
     eventName: K,
     listenerFunc: (event: AudioCaptureEventMap[K]) => void,
@@ -107,6 +108,8 @@ export class AudioCaptureWeb implements AudioCapturePlugin {
   async startClassification(): Promise<void> {}
 
   async stopClassification(): Promise<void> {}
+
+  async setExternalMicSuppressed(): Promise<void> {}
 
   async addListener<K extends keyof AudioCaptureEventMap>(
     _eventName: K,

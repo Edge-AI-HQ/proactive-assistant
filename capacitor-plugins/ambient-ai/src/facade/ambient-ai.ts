@@ -51,6 +51,7 @@ export const AmbientAi: AmbientAiFacade = {
     markCaptureProcessed: (options) => native.audio.markCaptureProcessed(options),
     playCapture: (options) => native.audio.playCapture(options),
     stopPlayback: () => native.audio.stopPlayback(),
+    setExternalMicSuppressed: (options) => native.audio.setExternalMicSuppressed(options),
   },
 
   sound: {

@@ -47,7 +47,7 @@ const LIVE_AUDIO_CONFIG = {
   sessionSilenceGapMs: 30_000,
   maxSessionDurationMs: 5 * 60_000,
 } as const;
-const INTENTIONAL_SUPPRESSION_REASONS = new Set(["playback"]);
+const INTENTIONAL_SUPPRESSION_REASONS = new Set(["playback", "external_mic"]);
 const UNHEALTHY_ENGINE_STATES = new Set(["failed", "stale", "suspended"]);
 const CLASSIFICATION_STALE_MS = 15_000;
 

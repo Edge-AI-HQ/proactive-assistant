@@ -192,6 +192,23 @@ actor AudioStreamManager {
         emitState()
     }
 
+    /// Yield the mic while the WebView (chat-voice getUserMedia /
+    /// SpeechRecognition) holds it. Suppressing tears down our engine and
+    /// deactivates the session so WebKit gets a clean session; the desired
+    /// `isCaptureRunning` / `isClassificationRunning` state is left untouched,
+    /// so clearing the suppression auto-restarts. Mirrors `setPlaybackSuppressed`.
+    /// The resume is best-effort: if reconcile's restart loses the race with
+    /// WebKit's async session teardown, the JS source watchdog retries.
+    func setExternalMicSuppressed(_ suppressed: Bool) {
+        if suppressed {
+            suppressionReasons.insert(.externalMic)
+        } else {
+            suppressionReasons.remove(.externalMic)
+        }
+        _ = reconcileClassifierState(reason: "externalMicSuppression")
+        emitState()
+    }
+
     func setAppBackgrounded(_ backgrounded: Bool, reason: String) {
         appIsBackgrounded = backgrounded
         if backgrounded {
@@ -1144,6 +1161,7 @@ actor AudioStreamManager {
     // MARK: - Suppression
 
     private func resolvedSuppressedReason() -> AudioSuppressedReason? {
+        if suppressionReasons.contains(.externalMic) { return .externalMic }
         if suppressionReasons.contains(.playback) { return .playback }
         if suppressionReasons.contains(.interruption) { return .interruption }
         return nil
@@ -1172,7 +1190,7 @@ actor AudioStreamManager {
             }
             return classifier.start()
         }
-        if classifier.canAnalyze || classifier.diagnostics.capturePipelineRunning {
+        if classifier.hasEngine {
             classifier.stop()
         }
         sileroGate.stop()
