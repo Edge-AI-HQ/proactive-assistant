@@ -28,7 +28,11 @@ const DEFAULT_OPTS: Required<SoundClassifierOptions> = {
   dedupeWindowMs: 4_000,
 };
 
-const MIN_TRANSCRIPT_LENGTH = 24;
+// We used to gate transcripts < 24 chars out of both the live UI and the
+// outbox. Short Chinese replies ("好的", "等一下", "什么时候开会") all sit
+// under 24 chars and got silently lost — that was a dominant chunk of the
+// "where did my text go" reports. Downstream consumers can filter for
+// length if they want; the capture pipeline must not eat user speech.
 const TRANSCRIPT_SALIENCE = 0.7;
 const TRANSCRIPT_CONFIDENCE = 0.75;
 const SPEECH_LABEL = "speech";
@@ -281,14 +285,38 @@ export class SoundClassifierSource implements AmbientSource {
   }
 
   private handleTranscriptReady(event: TranscriptReadyEvent, runId?: number): void {
-    if (runId !== undefined && !this.isRunActive(runId)) return;
     if (DISABLED_TRANSCRIPT_PROVIDERS.has(event.provider)) {
       this.ctx.onEvent(this.key, `Ignored transcript provider: ${event.provider}`);
       return;
     }
     const text = event.text.trim();
-    if (text.length < MIN_TRANSCRIPT_LENGTH) return;
-    if (this.storedTranscriptBurstIds.has(event.burstId)) return;
+    if (!text) {
+      this.ctx.onEvent(this.key, `discard:empty_text burst=${event.burstId}`);
+      return;
+    }
+    if (this.storedTranscriptBurstIds.has(event.burstId)) {
+      this.ctx.onEvent(this.key, `discard:dedup_stored burst=${event.burstId}`);
+      return;
+    }
+
+    // The live transcript widget is per-captureSessionId, not per source-run.
+    // A transcript that finished after we stopped/restarted the source still
+    // belongs to its original capture session, so route it there regardless
+    // of which run is "active" right now.
+    applyAmbientLiveTranscriptUpdate({
+      captureSessionId: event.captureSessionId,
+      id: event.burstId,
+      text,
+      source: event.provider,
+      receivedAt: Date.parse(event.capturedAt) || Date.now(),
+    });
+
+    // Signal push is gated by run lifecycle — replay of stale transcripts
+    // after a stop/restart cycle would create duplicate outbox entries.
+    if (runId !== undefined && !this.isRunActive(runId)) {
+      this.ctx.onEvent(this.key, `discard:runid_skip_signal burst=${event.burstId}`);
+      return;
+    }
 
     this.pushTranscript({
       event,
@@ -304,22 +332,31 @@ export class SoundClassifierSource implements AmbientSource {
   }
 
   private async handleCaptureReady(event: CaptureReadyEvent, runId?: number): Promise<void> {
-    if (runId !== undefined && !this.isRunActive(runId)) return;
-    if (this.storedTranscriptBurstIds.has(event.burstId)) return;
-    if (this.handledCaptureBurstIds.has(event.burstId)) return;
-    if (this.inFlightCaptureBurstIds.has(event.burstId)) return;
+    if (this.storedTranscriptBurstIds.has(event.burstId)) {
+      this.ctx.onEvent(this.key, `discard:dedup_stored burst=${event.burstId}`);
+      return;
+    }
+    if (this.handledCaptureBurstIds.has(event.burstId)) {
+      this.ctx.onEvent(this.key, `discard:dedup_handled burst=${event.burstId}`);
+      return;
+    }
+    if (this.inFlightCaptureBurstIds.has(event.burstId)) {
+      this.ctx.onEvent(this.key, `discard:dedup_inflight burst=${event.burstId}`);
+      return;
+    }
     this.inFlightCaptureBurstIds.add(event.burstId);
     try {
       const result = await transcribeAmbientCapture(event, this.transcriptionLanguage());
-      if (runId !== undefined && !this.isRunActive(runId)) return;
       const text = result.text.trim();
       if (!text) {
         this.handledCaptureBurstIds.add(event.burstId);
         await this.markCaptureProcessed(event.wavId);
         return;
       }
-      this.handledCaptureBurstIds.add(event.burstId);
 
+      // Always update the live transcript widget — it routes by
+      // captureSessionId, not by source-run lifecycle, so a transcript that
+      // finished after stop/restart still belongs to its original session.
       applyAmbientLiveTranscriptUpdate({
         captureSessionId: event.captureSessionId,
         id: event.burstId,
@@ -328,7 +365,13 @@ export class SoundClassifierSource implements AmbientSource {
         receivedAt: Date.parse(event.capturedAt) || Date.now(),
       });
 
-      if (text.length >= MIN_TRANSCRIPT_LENGTH && !this.storedTranscriptBurstIds.has(event.burstId)) {
+      // Signal push, WAV cleanup, and the "handled" dedup mark are all
+      // gated by run lifecycle: a stale capture must not duplicate the
+      // outbox, must not delete the native WAV, and must not mark itself
+      // handled — otherwise the next run's recovery scan would skip it.
+      const runStillActive = runId === undefined || this.isRunActive(runId);
+      if (runStillActive && !this.storedTranscriptBurstIds.has(event.burstId)) {
+        this.handledCaptureBurstIds.add(event.burstId);
         this.pushTranscript({
           event,
           text,
@@ -336,8 +379,10 @@ export class SoundClassifierSource implements AmbientSource {
           fallback: false,
           transcription: result,
         });
+        await this.markCaptureProcessed(event.wavId);
+      } else if (!runStillActive) {
+        this.ctx.onEvent(this.key, `discard:runid_skip_signal burst=${event.burstId}`);
       }
-      await this.markCaptureProcessed(event.wavId);
     } catch (error) {
       applyAmbientLiveTranscriptUpdate({
         captureSessionId: event.captureSessionId,

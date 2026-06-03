@@ -21,6 +21,20 @@ export interface CaptureTranscriptionResult {
   diarizationModel?: "gpt-4o-transcribe-diarize";
 }
 
+// Transient transcription failures used to bubble straight back to
+// handleCaptureReady. The caller then kept the WAV on disk and waited for
+// the next refresh() (typically only triggered on app foreground) before
+// retrying. A 429 burst during heavy use therefore meant minutes of
+// "Transcription unavailable" in the live widget for no good reason.
+// Two short retries fold the common transient cases (network blip / 429 /
+// 5xx) back into a single user-visible call without touching the
+// recovery loop.
+const RETRY_DELAYS_MS = [300, 1_000] as const;
+
+export const __testHelpers = {
+  isRetryableTranscribeError,
+};
+
 export async function transcribeAmbientCapture(
   event: CaptureReadyEvent,
   language?: string,
@@ -40,16 +54,61 @@ export async function transcribeAmbientCapture(
 
   if (profileEnabled) {
     try {
-      const result = await transcribeVoiceAudioDiarized(audio, { language });
+      const result = await withTranscribeRetry(() =>
+        transcribeVoiceAudioDiarized(audio, { language }),
+      );
       return { ...result, event };
     } catch {
-      const text = await transcribeVoiceAudio(audio, { language });
+      const text = await withTranscribeRetry(() =>
+        transcribeVoiceAudio(audio, { language }),
+      );
       return plainResult(event, text, "fallback_plain_text");
     }
   }
 
-  const text = await transcribeVoiceAudio(audio, { language });
+  const text = await withTranscribeRetry(() =>
+    transcribeVoiceAudio(audio, { language }),
+  );
   return plainResult(event, text, disabledStatus);
+}
+
+async function withTranscribeRetry<T>(attempt: () => Promise<T>): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i <= RETRY_DELAYS_MS.length; i += 1) {
+    try {
+      return await attempt();
+    } catch (err) {
+      lastErr = err;
+      if (i === RETRY_DELAYS_MS.length || !isRetryableTranscribeError(err)) {
+        throw err;
+      }
+      // eslint-disable-next-line no-console
+      console.warn("[ambient] transcription retry", {
+        attempt: i + 1,
+        nextDelayMs: RETRY_DELAYS_MS[i],
+        error: err instanceof Error ? err.message : String(err),
+      });
+      await delay(RETRY_DELAYS_MS[i]);
+    }
+  }
+  throw lastErr;
+}
+
+// The /voice/transcribe* helpers throw plain Errors with the status code
+// embedded as the first token after "failed:" (e.g. "...failed: 429 rate
+// limited"). Network-level failures surface as TypeError("Failed to fetch")
+// from fetch() itself, so we treat any TypeError as retryable too.
+function isRetryableTranscribeError(err: unknown): boolean {
+  if (err instanceof TypeError) return true;
+  if (!(err instanceof Error)) return false;
+  const match = err.message.match(/failed:\s*(\d{3})/);
+  if (!match) return false;
+  const status = Number(match[1]);
+  return status === 429 || (status >= 500 && status < 600);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function base64ToBlob(base64: string, contentType: string): Blob {

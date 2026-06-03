@@ -121,4 +121,98 @@ describe("transcribeAmbientCapture", () => {
       diarizationStatus: "fallback_plain_text",
     });
   });
+
+  test("retries plain transcription on a transient 429 then succeeds", async () => {
+    voiceApiMock.fetchVoiceIdentity.mockResolvedValue(null);
+    transcriptionApiMock.transcribeVoiceAudio
+      .mockRejectedValueOnce(new Error("/voice/transcribe failed: 429 rate limited"))
+      .mockResolvedValueOnce("Survived the burst");
+
+    vi.useFakeTimers();
+    try {
+      const { transcribeAmbientCapture } = await import("./capture-transcription");
+      const pending = transcribeAmbientCapture(event, "zh");
+      await vi.advanceTimersByTimeAsync(300);
+      const result = await pending;
+
+      expect(transcriptionApiMock.transcribeVoiceAudio).toHaveBeenCalledTimes(2);
+      expect(result.text).toBe("Survived the burst");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("retries plain transcription on a transient 5xx then succeeds", async () => {
+    voiceApiMock.fetchVoiceIdentity.mockResolvedValue(null);
+    transcriptionApiMock.transcribeVoiceAudio
+      .mockRejectedValueOnce(new Error("/voice/transcribe failed: 503 service unavailable"))
+      .mockResolvedValueOnce("Recovered after 5xx");
+
+    vi.useFakeTimers();
+    try {
+      const { transcribeAmbientCapture } = await import("./capture-transcription");
+      const pending = transcribeAmbientCapture(event, "zh");
+      await vi.advanceTimersByTimeAsync(300);
+      const result = await pending;
+
+      expect(transcriptionApiMock.transcribeVoiceAudio).toHaveBeenCalledTimes(2);
+      expect(result.text).toBe("Recovered after 5xx");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("retries on a fetch-level TypeError (offline / DNS hiccup)", async () => {
+    voiceApiMock.fetchVoiceIdentity.mockResolvedValue(null);
+    transcriptionApiMock.transcribeVoiceAudio
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce("Came back from offline");
+
+    vi.useFakeTimers();
+    try {
+      const { transcribeAmbientCapture } = await import("./capture-transcription");
+      const pending = transcribeAmbientCapture(event, "zh");
+      await vi.advanceTimersByTimeAsync(300);
+      const result = await pending;
+
+      expect(transcriptionApiMock.transcribeVoiceAudio).toHaveBeenCalledTimes(2);
+      expect(result.text).toBe("Came back from offline");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("does not retry on a non-retryable 4xx — bad payload should fail fast", async () => {
+    voiceApiMock.fetchVoiceIdentity.mockResolvedValue(null);
+    transcriptionApiMock.transcribeVoiceAudio.mockRejectedValue(
+      new Error("/voice/transcribe failed: 400 invalid audio"),
+    );
+
+    const { transcribeAmbientCapture } = await import("./capture-transcription");
+    await expect(transcribeAmbientCapture(event, "zh")).rejects.toThrow(/400 invalid audio/);
+    expect(transcriptionApiMock.transcribeVoiceAudio).toHaveBeenCalledTimes(1);
+  });
+
+  test("exhausts retries on persistent failure and surfaces the last error", async () => {
+    voiceApiMock.fetchVoiceIdentity.mockResolvedValue(null);
+    transcriptionApiMock.transcribeVoiceAudio.mockRejectedValue(
+      new Error("/voice/transcribe failed: 502 bad gateway"),
+    );
+
+    vi.useFakeTimers();
+    try {
+      const { transcribeAmbientCapture } = await import("./capture-transcription");
+      const pending = transcribeAmbientCapture(event, "zh");
+      // Attach the rejection expectation BEFORE advancing timers so the
+      // promise rejection has a handler ready and vitest doesn't flag it
+      // as an unhandled rejection.
+      const expectation = expect(pending).rejects.toThrow(/502 bad gateway/);
+      // First retry waits 300ms, second waits 1000ms.
+      await vi.advanceTimersByTimeAsync(1_300);
+      await expectation;
+      expect(transcriptionApiMock.transcribeVoiceAudio).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

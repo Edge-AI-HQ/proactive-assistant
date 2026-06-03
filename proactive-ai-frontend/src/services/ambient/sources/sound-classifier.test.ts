@@ -365,7 +365,16 @@ describe("SoundClassifierSource transcript ingest", () => {
     expect(ambientAiMock.audio.markCaptureProcessed).toHaveBeenCalledWith({ wavId: "wav-race" });
   });
 
-  test("does not push or delete recovered captures after the source stops", async () => {
+  test("does not duplicate the signal or delete the WAV after stop, but still surfaces the late text in the live transcript", async () => {
+    // Earlier we hard-dropped everything (signal + live UI + WAV cleanup)
+    // when a transcript finished after stop(). That fed the "switching the
+    // mic loses text" complaint: the user said something just before
+    // stopping, transcription took a few seconds, and by the time it
+    // resolved the source was no longer "active" so the text vanished.
+    // New invariant: the late transcript lands in the captureSession's
+    // live transcript widget (idempotent by burstId), the signal push
+    // skips (would duplicate after recovery), and the WAV stays on disk
+    // so the next run's recovery scan picks it up and pushes the signal.
     const pushed: unknown[] = [];
     const ctx: SourceContext = {
       push: (item) => pushed.push(item),
@@ -401,13 +410,26 @@ describe("SoundClassifierSource transcript ingest", () => {
 
     await source.stop();
     resolveTranscription?.({
-      text: "This transcript finished after the source stopped and should be ignored.",
+      text: "This transcript finished after the source stopped — the user should still see it in the live widget.",
       event: {},
     });
     await source.flushPendingAudioRecoveryForTest();
 
     expect(pushed).toEqual([]);
     expect(ambientAiMock.audio.markCaptureProcessed).not.toHaveBeenCalledWith({ wavId: "wav-stop" });
+    expect(getAmbientLiveTranscriptSnapshot()).toMatchObject({
+      captureSessionId: "capture-stop",
+      messages: [
+        {
+          id: "burst-stop",
+          text: "This transcript finished after the source stopped — the user should still see it in the live widget.",
+        },
+      ],
+    });
+    expect(ctx.onEvent).toHaveBeenCalledWith(
+      "sound_classifier",
+      "discard:runid_skip_signal burst=burst-stop",
+    );
   });
 
   test("runs a queued recovery scan when refresh happens during pending recovery", async () => {
@@ -630,7 +652,13 @@ describe("SoundClassifierSource transcript ingest", () => {
     expect(ambientAiMock.audio.markCaptureProcessed).toHaveBeenCalledWith({ wavId: "wav-retry" });
   });
 
-  test("ignores short transcriptReady text", () => {
+  test("delivers short transcriptReady text — short replies must not be silently dropped", () => {
+    // Earlier versions filtered transcripts < 24 chars out of both the live
+    // UI and the outbox. Short Chinese replies ("好的", "等一下", "什么时候
+    // 开会") all sit under 24 chars and got eaten, which was a dominant
+    // source of "where did my text go" complaints. The capture pipeline
+    // must not eat user speech; any length-based filtering belongs
+    // downstream (signal generation, summarization), not here.
     const pushed: unknown[] = [];
     const ctx: SourceContext = {
       push: (item) => pushed.push(item),
@@ -643,15 +671,51 @@ describe("SoundClassifierSource transcript ingest", () => {
       wavId: "wav-2",
       burstId: "burst-2",
       captureSessionId: "capture-2",
-      text: "too short",
+      text: "好的",
       capturedAt: "2026-05-10T12:00:00.000Z",
       durationMs: 500,
       provider: "cloud_whisper",
       fallback: true,
     });
 
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]).toMatchObject({
+      kind: "session_summary",
+      summary: "好的",
+      dedupe_key: "ios:audio:burst-2",
+    });
+    expect(getAmbientLiveTranscriptSnapshot()).toMatchObject({
+      captureSessionId: "capture-2",
+      messages: [{ id: "burst-2", text: "好的", source: "cloud_whisper" }],
+    });
+    expect(ctx.onEvent).toHaveBeenCalledWith("sound_classifier", "Voice transcript: 好的");
+  });
+
+  test("drops empty-after-trim transcriptReady text with a discard counter", () => {
+    const pushed: unknown[] = [];
+    const ctx: SourceContext = {
+      push: (item) => pushed.push(item),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+
+    source.handleTranscriptReadyForTest({
+      platform: "ios",
+      wavId: "wav-blank",
+      burstId: "burst-blank",
+      captureSessionId: "capture-blank",
+      text: "   ",
+      capturedAt: "2026-05-10T12:00:00.000Z",
+      durationMs: 500,
+      provider: "cloud_whisper",
+      fallback: false,
+    });
+
     expect(pushed).toEqual([]);
-    expect(ctx.onEvent).not.toHaveBeenCalled();
+    expect(ctx.onEvent).toHaveBeenCalledWith(
+      "sound_classifier",
+      "discard:empty_text burst=burst-blank",
+    );
   });
   test("does not upload speech classification ticks", () => {
     const pushed: unknown[] = [];
