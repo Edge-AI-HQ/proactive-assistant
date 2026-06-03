@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Mic, RotateCcw, Square, Trash2 } from "lucide-react";
 import { createPcmRecorder, type PcmRecorder } from "@/components/voice/pcmRecorder";
+import { acquireExternalMic, type ExternalMicLease } from "@/services/ambient/external-mic";
 import {
   deleteVoiceIdentityReference,
   fetchVoiceIdentity,
@@ -13,6 +14,9 @@ import { useUserSettings } from "@/hooks/useUserSettings";
 const TARGET_DURATION_MS = 5_000;
 const MIN_DURATION_MS = 2_000;
 const MAX_DURATION_MS = 10_000;
+// Downsample the reference to 16 kHz: plenty for speaker diarization, and small
+// enough that 10s base64-encoded stays under the transcription API's per-part cap.
+const REFERENCE_SAMPLE_RATE = 16_000;
 const ENGLISH_REFERENCE_PROMPT = "This morning I checked my schedule, and this afternoon I will reply to a colleague.";
 const CHINESE_REFERENCE_PROMPT = "今天早上我整理了日程，下午会给同事回一条消息。";
 
@@ -29,6 +33,7 @@ export default function VoiceIdentitySettings() {
   const [error, setError] = useState<string | null>(null);
 
   const recorderRef = useRef<PcmRecorder | null>(null);
+  const leaseRef = useRef<ExternalMicLease | null>(null);
   const startedAtRef = useRef(0);
   const intervalRef = useRef<number | null>(null);
   const autoStopRef = useRef<number | null>(null);
@@ -74,6 +79,8 @@ export default function VoiceIdentitySettings() {
       const recorder = recorderRef.current;
       recorderRef.current = null;
       if (recorder) void recorder.stop().catch(() => {});
+      void leaseRef.current?.release();
+      leaseRef.current = null;
     };
   }, [clearTimers]);
 
@@ -92,6 +99,11 @@ export default function VoiceIdentitySettings() {
       setError(null);
     } catch (err) {
       setError(errorMessage(err));
+    } finally {
+      // recorder.stop() released the mic tracks — hand ambient back now,
+      // independent of upload, so it isn't left suppressed.
+      await leaseRef.current?.release();
+      leaseRef.current = null;
     }
   }, [clearTimers]);
 
@@ -100,8 +112,11 @@ export default function VoiceIdentitySettings() {
     setReviewBlob(null);
     setReviewDurationMs(0);
     try {
+      // Yield the native ambient mic before grabbing the WebView mic so the two
+      // recorders don't fight over the shared iOS audio session.
+      leaseRef.current = await acquireExternalMic();
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = await createPcmRecorder(stream);
+      const recorder = await createPcmRecorder(stream, { sampleRate: REFERENCE_SAMPLE_RATE });
       recorderRef.current = recorder;
       startedAtRef.current = Date.now();
       setElapsedMs(0);
@@ -113,6 +128,8 @@ export default function VoiceIdentitySettings() {
         void stopRecording();
       }, MAX_DURATION_MS);
     } catch (err) {
+      await leaseRef.current?.release();
+      leaseRef.current = null;
       setError(errorMessage(err));
     }
   }, [stopRecording]);
