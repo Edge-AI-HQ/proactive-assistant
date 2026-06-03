@@ -1,0 +1,348 @@
+---
+title: "Ambient AI 发布前问题清单（2026-06-15）"
+description: "Ambient AI 6/15 发布前的 P0/P1/P2/P3 问题清单，跨 iOS plugin / TS pipeline / React UI / 后端 ingest 6 层全量盘点。"
+---
+
+# Ambient AI 发布前问题清单（目标日期 2026-06-15）
+
+> 生成日期：2026-06-03
+> 分支：`proactive-ai-v3`
+> 扫描范围：iOS 音频/VAD 层、iOS 端上 LLM/ASR 模型层、TS timeline pipeline + outbox、TS 采集 + source 适配器、React UI + hooks、后端 ingest + ambient summary
+> 工具：6 路并行静态深读 + 关键热点 commit diff（最近 5 个 ambient commit）
+
+---
+
+## 0. 一句话定调
+
+关键链路有静默回归：
+1. **Foreground Silero VAD tap 实际从未触发**（commit `5a02430e` 名义上换了，code 里 `start()` 路径少调 `onAudioBuffer`）。
+2. **端上 LLM 每个 cycle 都冷加载模型 + Metal 重编译**，180s timeout 在真机经常一个 token 都来不及输出。
+3. **端上 LLM 是纯 greedy argmax 无 repetition penalty**，小模型直接 loop。
+4. **TS pipeline 没有锁**，auto refresh + manual "Summary now" 会双触发 native LLM。
+5. **后端 `ambient_summary.text` `max_length=320`** 跟 Silero v5 放宽后的转录长度对不上，会 422 把整批拒掉——本质是 commit `cdd39d30` 修过的"drop short transcripts"问题从客户端搬到了服务端。
+
+## 1. 优先级定义
+
+| 级别 | 含义 | 处理时限 |
+|---|---|---|
+| **P0** | 阻塞发布——功能失效、数据损坏、隐私违规、安全风险 | 必须 6/15 前修 |
+| **P1** | 强烈建议 6/15 前修——发布后首周必然踩到的回归、明显的体验/性能问题 | 6/15 前修；不修要在 release note 标已知问题 |
+| **P2** | 上线后 1 周内修——次要正确性、边界、可观测性 | 6/22 前 |
+| **P3** | debt 清理——风格、dead code、测试空洞 | 排期清 |
+
+引用格式：`file:line` 可点击跳转。
+
+---
+
+## 2. P0 — 阻塞发布
+
+### 2.1 iOS 音频 / VAD 层
+
+- **[P0-A1] `capacitor-plugins/ambient-ai/ios/Sources/AmbientAi/Audio/AudioStreamManager.swift:177-179`** — Foreground Silero VAD 实际不收音频。`start()` 装的 tap 只调 `dispatchAudioBuffer` + `analyze`，**未调 `onAudioBuffer?(buffer)`** → `SileroVadGate.ingest()` foreground 永远拿不到样本。只有 background-only `startCapturePipelineOnly()`（line 256-260）同时调 `onAudioBuffer`。**直接让 commit `5a02430e` 在 foreground 失效**。
+
+- **[P0-A2] `Audio/AudioStreamManager.swift:298-333`** — 每个 burst 丢头 100–300ms。`handleSpeechBurst` 立刻置 `isCapturing=true`，但 sink 在 `runOneCaptureCycle` await 之后才 attach（line 411）。Tap 在这段间隙里把 leading frames 丢进 preRollBuffer，不进当前 cycle 的 recorder。
+
+- **[P0-A3] `Audio/AudioStreamManager.swift:354-367`** — `backgroundCaptureLoop` generation race。快速前后台切换时 `stopBackgroundCaptureLoop` bump generation，仍在跑的 Task 完成时可能把刚启动的新 loop 给 nil 掉 → 两个 loop 并发跑 `startCaptureCycle`。
+
+- **[P0-A4] `Audio/AudioStreamManager.swift:1374-1395`** — `SpeechRecognitionCoordinator.canAttemptRecognition` 不检查 `activeTask != nil`。第二次 `beginRecognition` 直接覆盖前一个 task；同一段录音 fan-out 出 4–6 个并发 `recognitionTask`，违反 Apple "one active SFSpeechRecognitionTask per recognizer" 限制。
+
+- **[P0-A5] `Audio/SileroVadGate.swift:204-253`** — `AVAudioConverter` 被 audio tap 线程直接 mutate 无同步：
+  ```swift
+  if converter == nil || converterSourceFormat?.isEqual(inputFormat) != true {
+      converter = AVAudioConverter(...)
+      converterSourceFormat = inputFormat
+  }
+  ```
+  路由切换（AirPods 插拔）时 inputFormat 变化，tap 线程半写状态可被另一线程观察到。
+
+- **[P0-A6] `Audio/SileroVadGate.swift:256-265`** — `.unbounded` AsyncStream backpressure。CoreML 热降频时 backlog 无上限，无 drop-oldest → OOM。
+
+- **[P0-A7] `Audio/SileroVadGate.swift:139-145`** — Silero 模型 load 失败后 chunk stream 仍开着。Processor task 早 return，但 `ingest` 继续往 `.unbounded` stream 灌样本 → 内存常年攀升。
+
+### 2.2 iOS 端上 LLM / 模型
+
+- **[P0-B1] `capacitor-plugins/ambient-ai/ios/Sources/AmbientAi/Plugins/AmbientModelsPlugin.swift`** — `generateAmbientSummaryEvent` 在 native 端**没注册** `CAPPluginMethod`。JS 侧 `models.ts:368` 的 `if (!api.generateAmbientSummaryEvent)` 拦不住（Capacitor proxy 给 truthy function），运行时 `UNIMPLEMENTED`。`summary-bridges.ts:13` 的 cloud fallback 也会撞上。
+
+- **[P0-B2] `Models/LlamaTextGenerationEngine.swift:191-215`** — `llama_chat_apply_template` **不是 Jinja 解释器**。llama.h:1154 明说 "does not use a jinja parser, only supports a pre-defined list of template"。Gemma 2/3 IT、新版 Qwen3 的 Jinja 大概率不在 llama.cpp 的内置 lookup → probe 返回 -1 → `chatTemplateApplyFailed`。**设计 SSOT §6.2 描述错了**。
+
+- **[P0-B3] `Models/LlamaTextGenerationEngine.swift:312-343`** — 纯 greedy argmax，**无** repetition penalty / top_k / top_p / temperature。Qwen3 0.6B / Gemma 2 2B 在小输入下经常 A → B → A → ... loop 把 maxTokens=512 全填满；JSON shape 仍可能 pass。
+
+- **[P0-B4] `Plugins/AmbientModelsPlugin.swift:189`** — Prefill + text 拼接产生 `{{` 双开括号。`combined = plan.prefill + text`，prefill 是 `{"decisions":[{`，模型若再次输出 `{` 就变成 `{"decisions":[{{...}]}` 无法解析。
+
+- **[P0-B5] `Models/LlamaTextGenerationEngine.swift:265-279`** — Tokenize buffer `utf8Count + 8`，对中文/CJK + chat-template special token 不够。当 `nTokens == maxTokenCount` 时 buffer 边界刚好 fit，但前缀未 memset，position ≥ N 是垃圾。
+
+- **[P0-B6] `Models/LlamaTextGenerationEngine.swift:142-167`** — `mergeSystemIntoFirstUserIfNeeded` 用 `lowercased().contains("system")` 判模板是否接 system role。不接受 system role 的模板也常在 Jinja 注释/宏里出现 "system" 字面量 → Gemma 模板拿不到 merge → `chatTemplateApplyFailed`。
+
+- **[P0-B7] `Plugins/AmbientModelsPlugin.swift:25` + `LlamaTextGenerationEngine.swift`** — 每次 `generateTimelineBatchDecision` 都重新 `llama_model_load_from_file`。真机 1.1GB Qwen3 1.7B + Metal full offload 冷加载 5–15s + 4–10s shader 编译。15 分钟 cadence 每轮付一次，**首跑 180s timeout 几乎必中**。
+
+- **[P0-B8] `LlamaTextGenerationEngine.swift:255-261`** — `n_ctx=4096` + `n_gpu_layers=99` + Gemma 3 4B IT 在 4GB-RAM 设备（XR/SE2/SE3）必 jetsam。无 device-tier 选择（§11 TODO #8 未实现）。
+
+- **[P0-B9] `LlamaTextGenerationEngine.swift:345-356`** — UTF-8 跨 token 边界丢字。每 token 单独 `String(bytes:, encoding:.utf8)`；3 字节中文字符在 token 边界被截成 2 字节时整 piece 被丢 → **中文输出可见地少字**。
+
+- **[P0-B10] `LlamaTextGenerationEngine.swift:174-183`** — `strdup` + `free` 双释放路径。`strdup` 对某个 role 返回 nil 触发 guard 时，guard body 已 `free()` 部分指针，外层 `defer` 再 free → crash。
+
+- **[P0-B11] `Models/ModelDownloader.swift:50-67, 354-372` + `Models/ModelManifest.swift:15`** — `.ggml` magic 字节序错。写的是 `[0x6c, 0x6d, 0x67, 0x67]`（"lmgg"），真正的 ggml magic 是 `0x67676d6c`（"ggml"）。**所有 whisper-base / whisper-small ASR 下载完整失败**。
+
+- **[P0-B12] `Models/ModelDownloader.swift:67-72`** — Background URLSession 没注册 `handleEventsForBackgroundURLSession`。后台完成时 iOS 把 callback 投给 AppDelegate，**没实现** → 后台完成事件丢失。
+
+- **[P0-B13] `Models/ModelDownloader.swift:227-273`** — 无 cert pinning，无 sha256 verify，整模型链路只校验 4 字节 magic。GGUF 历史有过堆解析 CVE 级 bug，下到设备直接 Metal 跑——MITM 攻击面真实存在。
+
+- **[P0-B14] `Models/ModelDownloader.swift:135-158`** — `cancel` 与 finish 竞态留孤儿：cancel 没删 staging 文件，没记 lastStatus 转换；finish 在 cancel 后跑到的话会把 model 偷偷重装回来，状态显示 absent 但磁盘还在。
+
+- **[P0-B15] `Plugins/AmbientModelsPlugin.swift:151-211`** — 同模型 re-entrant generation 无跨 call 锁。两个并发 caller 触发两个 `llama_model_load_from_file` 跑同一 GGUF + 共享 Metal queue → 行为未定义。§11 TODO #2 已知未做。
+
+### 2.3 TS Timeline Pipeline / Outbox
+
+- **[P0-C1] `proactive-ai-frontend/src/services/ambient/timeline/pipeline.ts:138-213`** — `processPendingWindows` **无锁/lease**。Auto refresh 与 manual Summary now 并发触发，双跑 native LLM、双写同 idempotencyKey 行。`timelineSummaryInFlight` 只保护 `runScheduledTimelineSummary`，`refreshTimeline` 完全裸奔。
+
+- **[P0-C2] `timeline/pipeline.ts:144-211`** — `summaryStatus='processing'` 状态**从未写入**。设计 §4.1 / §11#3 承诺的 processing → expiry recovery 完全缺失，崩溃/挂起的 cycle 永远停在 pending。
+
+- **[P0-C3] `timeline/pipeline.ts:307-322`** — `attemptCount` 成功后**不 reset**。几次 transient error 后 cooldown 顶到 30 分钟，之后即便成功也不归零。
+
+- **[P0-C4] `timeline/pipeline.ts:308-312`** — 永久错误（`model_not_found` / `model_not_llm` / `no_selected_model`）与 transient 共用 exponential ladder，用户卸了模型重试只把 nextRetryAt 推得更远。
+
+- **[P0-C5] `timeline/models.ts:478-489`** — 一条 decision 失败 → 整批拒。未来多窗口批处理时是 DoS。
+
+- **[P0-C6] `services/ambient/outbox.ts:189-201`** — `shouldReplaceExistingOutboxRecord` 只处理 `transcript_session` candidate window，其它 kind dedupe-key 命中直接静默丢弃。Title/summary 修正后无法上传，旧版本永久卡住。
+
+- **[P0-C7] `services/ambient/outbox.ts:746-763`** — `markSynced` 用 `id IN (...)` 过滤，**不校验 owner**。User A 同步过的行，User B 登录后 `pending()` 重发，回到 markSynced 直接把 ownerUserId 改写成 B → 审计链断裂。
+
+- **[P0-C8] `timeline/scheduled-summary.ts:95-130`** — event `id = "ambient-summary-${localDate}-${nowMs}"` 含 nowMs，每个 run 造新 id，idempotencyKey 就是这个 id → 跨 run 完全无幂等。
+
+- **[P0-C9] `services/ambient/models-recommendation.ts:1`** — `RECOMMENDED_AMBIENT_LLM_MODEL_ID = "gemma-2-2b-q4"` 与文档 §6.1 推荐的 `qwen3-1_7b-q4` **冲突**；同时 `models-selection.ts:4-11` 无 fallback 到 recommendation——**新装用户 selectedId=null → 每次 `no_selected_model` 退避**，UI 没任何提示。
+
+### 2.4 TS 采集 / Sources / Live
+
+- **[P0-D1] `services/ambient/sources/sound-classifier.ts:329-331`** — Inflight burst 的 transcript 跳过 `markCaptureProcessed`。下次 recovery scan 反复 cloud-transcribe 同段 → 重复计费 + 重复信号。
+
+- **[P0-D2] `sources/sound-classifier.ts:382-385`** — Stop 后完成的 capture 跳过 `markCaptureProcessed` 和 `handledCaptureBurstIds.add`。下次 start 时 recovery 把它当新东西再跑，transcript 用旧 `captureSessionId` 灌进新 session UI。
+
+- **[P0-D3] `sources/sound-classifier.ts:69-71, 511-518`** — `storedTranscriptBurstIds` / `handledCaptureBurstIds` / `inFlightCaptureBurstIds` / `runs` **stop/restart 都不清**。长时间运行内存持续增长。
+
+- **[P0-D4] `sources/sound-classifier.ts:108-111, 287-332`** — `handleTranscriptReady` 拿的是 dispatch 时的 `this.activeRunId`，不是 listener register 时的 runId。跨 session 残留 transcript 带**新** session id 飘到 live UI。**commit `cdd39d30` "stop dropping stale-run cloud captures" 没真修掉这条**。
+
+- **[P0-D5] `sources/sound-classifier.ts:445-457`** — `start_ms` / `end_ms` 可能 `null`。`SpeakerSegment.startMs: number | null`，下游 `normalizeSpeakerSegments` 静默丢字段，diarization / timeline 对齐拿到无时间戳 segment。
+
+- **[P0-D6] `sources/sound-classifier.ts:94-97`** — 语言切换不推到 native。`setTranscriptionLanguage` 只改 JS field，native SFSpeech/Silero locale 始终是 start 时的初值。
+
+- **[P0-D7] `services/ambient/transcript-listener.ts:24-39`** — `Promise.all` 注册 5 listener，单个失败已注册的 handle 全部 leak。重试时 zombie listener 累积。
+
+### 2.5 React UI / Hooks
+
+- **[P0-E1] `proactive-ai-frontend/src/hooks/useAmbientToggle.ts:53-56`** — `ambientOn` 直接在 render 里读 `getPersistedAmbientEnabled()`，**没订阅**。其它 consumer（NowFeed / AmbientView）不会响应 toggle 变化，UI 严重 desync。
+
+- **[P0-E2] `hooks/useAmbientLiveSession.ts:43-44`** — `nativeLiveBridgeStarted` / `nativeLiveBridgeHandle` 是 module-level singleton，toggle off / unmount **都不重置**。切账户后旧 listener 仍在 → 跨账户灌数据。
+
+- **[P0-E3] `hooks/useAmbientTimeline.ts:152-154`** — 5 秒轮询 `refresh()`，refresh 内部调 `runPendingGeneration()` → `runtime.refreshTimeline(localDate)`。**每 5 秒触发一次端上 LLM**，与设计 §5.1 承诺的 15 分钟 cadence 完全冲突，耗电/计算暴涨。
+
+- **[P0-E4] `components/AmbientTimelineSummaryStatusPanel.tsx:239-243`** — `loadNativeAmbientTimelineRuntime` 用的是 `getAmbientRuntime`（构造形态）。用户 ambient 是 OFF 时按 "Trigger" 按钮**会偷偷把 runtime 构造起来** → 绕开 consent。应该用 `getExistingAmbientRuntime`。
+
+- **[P0-E5] `components/AmbientTimelineSummaryStatusPanel.tsx:84-109`** — `runSummaryNow` 只传 `{force:true}`，**没传** `includeRecentPending` / `forceReady`。设计 §5.2 承诺 runtime 会补齐，但 `refreshTimeline` 的实现**两个都没自动派生**——文档 §10.1/§10.2 修过的跨午夜 + readiness 拦截 bug 实质回归。
+
+- **[P0-E6] `components/constellation/AmbientView.tsx:486-507`** — `sortTs` 在 mock `TIMELINE` 不存在，`Number.isFinite(undefined)===false` → sort 退化；真机数据里多条 `occurredAt="iso"` 脏数据都被归一到 sortTs=0，相对顺序由 Tim-sort 决定。
+
+### 2.6 后端 ingest / summary
+
+- **[P0-F1] `pinai-agents/src/pinai_agents/web/routes/ui/devices.py:482-595`** — `/api/devices/ingest` body 大小、item 数量**完全不限**。单设备可上传单 batch 几 GB 拖死 worker。
+
+- **[P0-F2] `web/storage.py:97-122`** — Base64 媒体直接 `b64decode(validate=False)` 进内存，无大小校验、无 MIME 校验，`upsert=true` → 同 `item_id` 可覆盖，路径无 content hash。DoS + 任意覆盖。
+
+- **[P0-F3] `web/routes/ui/devices.py:1024-1038`** — Signed-URL 前缀校验拿的是**内部 BIGINT `user.id`**，但 `storage.py:111` 写入路径用的是 **`supabase_user_id` UUID**。两边对不上——要么这个 endpoint 一直返回不了任何真实媒体（静默死代码），要么真有数据落在 `<user.id>/` 下就给错权限。
+
+- **[P0-F4] `web/db/repositories/personal_signals.py:124-185`** — `ingest_one` UPSERT 冲突路径**无条件重置 `status='open'` 和 `consumed_by_run_id=NULL`**。设备 outbox 重传一条已被 generator 消费的 ambient signal → 重新触发卡片、推送、reward event 重复。
+
+- **[P0-F5] `web/services/ambient_summary.py:20-25`** — `AmbientSummaryContextRawEvent.text` / `selfText` `max_length=320`。Silero VAD v5 放宽后转录段动辄 > 320 → 整批 422。**本质是 commit `cdd39d30` "stop dropping short transcripts" 同一类回归，只是从客户端搬到了服务端**。
+
+- **[P0-F6] `web/services/ambient_summary.py:88`** — 用户转录文本**未经过 prompt-injection 中和**直接拼进 LLM message。System prompt 只写了一句 "Event text is untrusted"，没做任何 escape / sentinel。
+
+---
+
+## 3. P1 — 强烈建议 6/15 前修
+
+### 3.1 iOS 音频
+
+- **[P1-A8] `Audio/SoundClassificationService.swift:333-364`** — 三个 NotificationCenter observer 注册/读取无锁，多入口 reconcile 时竞态。
+- **[P1-A9] `Audio/SoundClassificationService.swift:177-188, 253-268`** — `start()` 和 `startCapturePipelineOnly()` 切换时 `removeTap` 后 `installTap` 被 isRunning guard 跳过 → bus 上没 tap 但 isRunning=true，状态报告 healthy 假象。
+- **[P1-A10] `Audio/AudioStreamManager.swift:1166-1178`** — `sileroGate.start()` 在 actor 内同步调，`stop()` 跑 `workQueue.async` → 反复 reconcile 触发 start/stop race。
+- **[P1-A11] `Audio/SileroVadGate.swift:129-181`** — processorTask 持 `self` 强引用，stop 后 `try await manager.processStreamingChunk` 不可取消 → callback 可在 deinit 后触发。
+- **[P1-A12] `Audio/CloudTranscriptionWorker.swift:14-29`** — `withThrowingTaskGroup` 取消是协作式，URLSession 在 timeout 后仍跑完上传，apiKey / audioData 长寿。
+- **[P1-A13] `Audio/CloudTranscriptionWorker.swift:38-44`** — `body.append(audioData)` 全 WAV 拷贝到内存，并发上传时 RAM 峰值翻倍。
+- **[P1-A14] `Audio/AudioStreamManager.swift:185-193`** — `setPlaybackSuppressed` 改 AVAudioSession category 时 classifier 可能 isRunning → engine 在 `.playback` 下跑出 `kAudioUnitErr_CannotDoInCurrentContext`。
+- **[P1-A15] `Audio/AudioStreamManager.swift:336-340`** — `.began` 中断只加 suppression 不停 engine（不对称于 `.ended`），iOS 不发 `.ended` 时 suppression 永卡。
+- **[P1-A16] `Audio/AudioStreamManager.swift:166-179, 1124-1126`** — `snapshot()` / `emitState` 有副作用（`classifier.markStaleIfNeeded`），高频 getState 轮询反复 flip 引擎为 stale。
+- **[P1-A17] `Audio/SoundClassificationService.swift:489-506`** — fallback speech burst 只在 `analyzerUnavailable` 才发，**Silero loading + SoundAnalysis 健康时** fallback 沉默 → commit `594de011` 意图未真正落地。
+
+### 3.2 iOS 模型
+
+- **[P1-B16] `Plugins/AmbientModelsPlugin.swift:421-425`** — `logModelOutput` 把模型整段输出（含用户转录 PII）记到 console，sysdiag / Xcode / diagnostics 都能看到。**隐私违规**。
+- **[P1-B17] `LlamaTextGenerationEngine.swift:225-231`** — `n_gpu_layers=99` 无 device-tier fallback，Metal heap OOM 直接 modelLoadFailed。
+- **[P1-B18] `LlamaTextGenerationEngine.swift:233-236`** — `llama_model_load_from_file` 失败只抛 generic error，llama.cpp 的 stderr 在 iOS 不入 console → 报告无诊断。
+- **[P1-B19] `Models/ModelStore.swift:7-10`** — 模型存 `documentDirectory` 默认进 iCloud backup，2.6GB GGUF 撑爆备份。
+- **[P1-B20] `Models/ModelStore.swift:50-57`** — `moveItem` 跨 volume 时非原子，崩溃留半文件。
+- **[P1-B21] `Models/ModelVerifier.swift:88-116`** — Verify prompt `"Say hi in one word"`，任何非空输出都算 ok。loop / gibberish 仍 pass。
+- **[P1-B22] `Models/ModelDownloader.swift:127-133`** — 启动下载前**不查磁盘空间**（`availableDiskBytes` 是 dead code）。
+- **[P1-B23] `Models/ModelDownloader.swift:155-158`** — 取消未 produce resume-data，2.6GB 下载断点不可续。
+- **[P1-B24] `Models/ModelDownloader.swift:451-465`** — 同 volume 不同卷时 `moveItem` 退化成 copy + delete，阻塞 delegate queue 数秒。
+
+### 3.3 TS Pipeline / Outbox
+
+- **[P1-C10] `services/ambient/index.ts:308-327`** — `refreshTimeline` 无 in-flight guard，"Summary now" 狂点直接并发 native LLM。
+- **[P1-C11] `services/ambient/index.ts:441-444`** — 15 分钟 cadence 用 `setInterval`，iOS 后台 throttle 至 ≥1 分钟，长时间后台后一次 burst 补跑。
+- **[P1-C12] `timeline/pipeline.ts:71`** — `regenerateDay` 每 tick 把当日所有 raw events 重 replay，无时间窗，1000 行 upsert + 12 source query。
+- **[P1-C13] `timeline/pipeline.ts:282-289`** — `recentLocalDatesWithPendingTranscriptWindows` 名不副实，没真正过滤 pending 状态。
+- **[P1-C14] `timeline/store.ts:1278-1287`** — `ensureColumns` 的 PRAGMA check + ALTER 不在事务里 → 多并发 init 报 "duplicate column"。
+- **[P1-C15] `timeline/store.ts:594`** — 老 schema 升级后 `summary_status` 默认 'pending'，但 `WHERE summary_status=?` 查不出已 `generated` 的 legacy 行。
+- **[P1-C16] `timeline/store.ts:1258-1271`** — `timelineVisiblePayloadChanged` 不比较 `actionCandidates` / `idempotencyKey` / `triggeredCard*` → 修正后不会重新 sync 上云。
+- **[P1-C17] `timeline/models.ts:511, 612`** — `sanitizeLlmTitle` 按 UTF-16 code unit 截 30，CJK / 表情 surrogate pair 会被切坏。
+- **[P1-C18] `services/ambient/outbox.ts:706-714`** — `enqueue` 内并发同 dedupe_key 触发 UNIQUE 违反 → 整批 INSERT 失败回滚后续行。
+- **[P1-C19] `services/ambient/sync-scheduler.ts:174-189`** — 失败 retry 用第二次 `pending()` 拿 id 列表去 markFailed，跟实际 attempted 集合不重合。
+- **[P1-C20] `services/ambient/sync-scheduler.ts:263-266`** — 退避指数用 batch 内 attemptCount 最大值，一条卡死的行把全 batch 拖到 15 分钟。
+
+### 3.4 TS Sources
+
+- **[P1-D8] `sources/sound-classifier.ts:317-319`** — `runid_skip_signal` 早 return 前 `applyAmbientLiveTranscriptUpdate` 已写进 live store，stale transcript 实际还是污染 UI。
+- **[P1-D9] `sources/sound-classifier.ts:387-400`** — 错误路径写 "Transcription unavailable"，但被 `HIDDEN_LIVE_TRANSCRIPT_TEXTS` 隐藏，外加无 `lastError`，用户和运维都看不到。
+- **[P1-D10] `sources/location.ts:38-58`** — 5 分钟 GPS 轮询无 appState 节流，前台一直跑，耗电。
+- **[P1-D11] `sources/visit.ts:38-46, 87-90`** — visit listener 是 async-fire-forget，realtime + drain 重叠；`handle` 抛错时 visit 永远不 ack。
+- **[P1-D12] `sources/calendar.ts:43-67`** — dedupe_key 用可编辑字段（title/start/end），改标题 → 重复信号。
+- **[P1-D13] `sources/health.ts:128-138, 144-145`** — `local_date` 用 host 时区跨日界线/DST 重复；睡眠 `start_at` 由 `endedAtMs - duration` 反推不对（含 awake 间隙）。
+- **[P1-D14] `capacitor-plugins/ambient-ai/src/facade/ambient-ai.ts:31-32, 121-123`** — `models` plugin 用 registerPlugin 注册，native 未实现时 Proxy 抛 UNIMPLEMENTED，`summary-bridges.ts:13` 兜底接不住。
+
+### 3.5 UI / Hooks
+
+- **[P1-E7] `hooks/useAmbientToggle.ts:62-83`** — `toggle()` 没 rollback，patch 成功 + native start 失败 → UI on 但 capture off。
+- **[P1-E8] `hooks/useAmbientToggle.ts:71-79`** — `patch` 返回 null 时 fallback 启所有 source，包括用户已关的 → **privacy 倒挂**。
+- **[P1-E9] `components/AmbientTimelineSummaryStatusPanel.tsx:119`** — `latestEvent = llmEvents[length-1]`，若 store 默认 DESC 这取的是**最旧**条。
+- **[P1-E10] `components/AmbientTimelineSummaryStatusPanel.tsx:111-117`** — 不论 ambient 是否开、panel 是否可见，每 5 秒查一次 store。
+- **[P1-E11] `components/AmbientModelsPanel.tsx:411-423` + `AmbientAudioDebugPanel.tsx:413-529`** — listener handle 是 `Promise<Handle>`，HMR / strict mode 下 remove 跟不上 mount，duplicate listener 堆积。
+- **[P1-E12] `hooks/useAmbientLiveSession.ts:194-209`** — `listLiveSessionRawContextEvents` 6 SQLite 并行查 + 每 5s 跑一次。
+- **[P1-E13] `components/constellation/AmbientView.tsx:868-882`** — "Open →" button 条件不满足时**仍渲染**，`onClick=undefined` → 静默不响应。
+- **[P1-E14] `components/constellation/AmbientView.tsx:768`** — `key={entry.id ?? entry.time + entry.title}`，同分钟同标题碰撞，motion.div 动画错乱。
+- **[P1-E15] `components/constellation/ConstellationLayout.tsx:738`** — Virtual IntentCard id `ambient-${time-title}` 同样碰撞，跳到同一 chat thread。
+- **[P1-E16] `components/AmbientSourceControlsPanel.tsx:143`** — hint 写死 "iOS app"，Android 上文案错。
+
+### 3.6 后端
+
+- **[P1-F7] `web/routes/ui/devices.py:144-150`** — `payload.device_id` 不校验是否等于已验证 device → 设备可污染他设备的 transcript canonical window 命名空间。
+- **[P1-F8] `web/services/ambient_summary.py:99-101`** — 45s 同步 httpx，无 backpressure、无 `request.is_disconnected()` 短路、无 cost log。
+- **[P1-F9] `web/routes/ui/devices.py:617-628`** — pydantic 错误信息（含用户 payload 片段）回写到 HTTP 响应和日志 → 转录文本泄露。
+- **[P1-F10] `web/db/repositories/personal_signals.py:464-529`** — `list_recent` 的 `COUNT(*) OVER()` 无复合索引覆盖，10w+ 信号后单查询多秒级阻塞。
+- **[P1-F11] `web/db/repositories/personal_signals.py:187-450`** — `ingest_transcript_candidate_window_latest` 多语句无显式事务，并发同 dedupe_key 时 idempotency 漏。
+- **[P1-F12] `web/routes/ui/devices.py:646`** — `_normalize_iso` 对 NaN/Inf 触发 `OverflowError`（非 ValueError），逃出 handler → 500。
+- **[P1-F13] `scripts/cleanup_transcript_window_duplicates.py:174-194`** — 无显式事务、无 `--user-id` scope、跨用户 DELETE，prod 误用 DATABASE_URL 直接灾难。
+
+---
+
+## 4. P2 — 上线后 1 周内修
+
+### iOS 音频
+- `Audio/AudioFileStore.swift:93-125` enforceRetention N×stat 同步 I/O。
+- `Audio/AudioFileStore.swift:153-172` cold launch 120 文件全开。
+- `Audio/TranscriptStitcher.swift:80-85` normalise 不剥标点不归一 unicode，dedup miss。
+- `Audio/AudioStreamManager.swift:1186-1230` recorder pcm 无 memory-pressure 早 flush。
+- `Audio/SoundClassificationService.swift:141-150` 缺 `.allowBluetoothA2DP` / `.duckOthers`，AirPods 输出静默。
+- `Audio/SoundClassificationService.swift:579-595` Siri 中断后 `.ended` 漏发 suppression 永卡。
+- `Audio/AudioStreamManager.swift:1273-1313` AccumulatorAppend 每样 Swift loop，48kHz 30s 是 1.44M 迭代——上 vDSP。
+
+### iOS 模型
+- `Plugins/AmbientModelsPlugin.swift:285-322` system prompt 英文，小模型对中文输入仍输出英文。
+- `Plugins/AmbientModelsPlugin.swift:301-302` act omit 规则小模型遵守差，30%+ 发空对象。
+- `LlamaTextGenerationEngine.swift:313` deadline 只在 token-loop 里检查，prompt-decode 阶段无限制。
+- `Models/ModelVerifier.swift:81` verify 60s timeout 在冷加载下经常超时 → 用户卡住进不去。
+
+### TS Pipeline / Outbox
+- `timeline/pipeline.ts:1080, 1196-1198` `toLocaleTimeString` 不传 locale。
+- `timeline/utils.ts:25-30` `localDateFromDate` 用 host tz，跨时区时移动转录被分到错的本地日。
+- `timeline/utils.ts:47-54` FNV32 6 字符 hash 有碰撞概率。
+- `timeline/models.ts:614` confidence 默认 0.5 永远 "uncertain"。
+- `outbox.ts:42-43` 7 天 prune 静默丢用户数据。
+- `timeline/normalize.ts:155-158` `cleanText(payload.focused)==="true"` 拿 boolean → 永远 false。
+- `timeline/summary-scheduler.ts:88` retryCount 卡在 3 后无 backoff 增长。
+- `timeline/store.ts:209-219` dismissTimelineEvent 不上 sync 信号。
+- `outbox.ts:817-818` corrupted 行 salvage 为 `kind:"unknown"`，又落入 local-only 丢弃路径。
+
+### TS Sources
+- `services/ambient/buffer.ts:39-70` flushing 期间无重排，idle 时积压无限延迟。
+- `services/ambient/capture-transcription.ts:42-66` `readCapture` 错误未走 retry 分类，永远 "Transcription unavailable"。
+- `services/ambient/live-session.ts:115-122` burstId 为空时 messageId 用 timestamp，dedup 失效。
+- `services/ambient/speaker-transcript.ts:27` `JSON.stringify` 把 transcript 包成 `"hello"` 给 UI 显示。
+- `services/ambient/summary-bridges.ts:32-38` `shouldUseCloud` 重复读。
+- `sources/sound-runs.ts:23-31` 跨 NTP 时钟回拨 periodic 永久卡。
+- `capacitor-plugins/ambient-ai/src/shared/identity-normalizer.ts:39-47` URL 含 `@` 被误判 email。
+- `capacitor-plugins/ambient-ai/src/shared/event-emitter.ts:38-43` debug log 每事件刷屏。
+
+### UI / Hooks
+- `hooks/useAmbientTimeline.ts:37` localDate 默认参只算一次，过夜不滚。
+- `components/constellation/AmbientView.tsx:519` 同上。
+- `components/constellation/AmbientView.tsx:610-624` master switch 无 `aria-pressed` / `role="switch"`。
+- `components/constellation/AmbientView.tsx:590-606` lock toggle 同 a11y 缺失。
+- `components/AmbientSourceControlsPanel.tsx:115-170` source toggle 同 a11y 缺失。
+- `components/AmbientSummaryModePanel.tsx:25` 全英文文案不 i18n。
+- `components/AmbientModelsPanel.tsx:67-72` 用 1024^n 但标 "MB" 与 manifest 十进制不一致。
+- `components/AmbientModelsPanel.tsx:284-308` progress bar 无 aria。
+- `components/AmbientSourcesPanel.tsx:24` 用浏览器 `confirm()` 不走 Capacitor Dialog。
+- `hooks/useAmbientLiveSession.ts:162-167` `setLiveDismissed(false)` 每条新消息抵消用户的 dismiss。
+- `hooks/useAmbientTimeline.ts:82-106` `pendingGenerationRef` 永不超时，hang 后再无生成。
+
+### 后端
+- `web/routes/ui/devices.py:86-109` `IngestItemIn` 无 id/title/summary/kind length 限制，可炸 btree key 长度。
+- `web/storage.py:107-122` 路径基于 `occurred_at_iso[:10]` 假设 ISO。
+- `web/services/personal_data_snapshot.py:538-598` 转录原文未 redact（仅 SENSITIVE_KEY_RE），内部 reviewer 直接看到。
+- `web/routes/ui/devices.py:685` 空 dedupe_key fallback 无 telemetry。
+- `web/routes/ui/devices.py:686-717` 路由删 `content_hash` 破坏 repo monotonic 不变量。
+- `web/services/ambient_summary.py:7, 99` httpx client 每次新建。
+- `web/services/ambient_summary.py:41-54` raw_events max 80，长会议直接 422。
+- `web/services/ambient_summary.py:14` model id 写死无 fallback。
+
+---
+
+## 5. P3 — debt / 清理
+
+- iOS：日志 PII（`SoundClassificationService.swift:194-195` 输出 BT 设备名）、`ISO8601DateFormatter` 每次重新 alloc（`AudioStreamManager.swift:1135-1139`）、dead SFSpeech code 200 行、`AudioCaptureConfig.swift:136-138` force-unwrap URL。
+- TS：`reset-sqlite.ts:60-67` 不重 migration record；`outbox.ts:474-497` JSON1 依赖；`models.ts:60-100` `PLACEHOLDER_ECHO_TOKENS` 缺 lowercase 变体；`pipeline.ts:1276-1286` `earlierIso(NaN)` 走错分支；`narrative.ts:28` `occurredAt.slice(11,13)` 对日期短 string 退化为 Morning；`normalize.ts:69-81` 未知 signal 默认归 "sound"——隐私敏感默认值。
+- 测试覆盖空洞：`AmbientTimelineSummaryStatusPanel.test.tsx` 不存在、`useAmbientToggle.test.ts` 不存在、`LiveFullscreen` 无测试、Silero 模型 load 失败路径无测试、`handleRouteChange` BT flap 无测试、`AudioFileStore.recoverMetadata` 孤儿恢复无测试、长 day 100+ entry timeline perf 未压。
+
+---
+
+## 6. 重灾区文件（按 P0/P1 密度排）
+
+1. **`capacitor-plugins/ambient-ai/ios/Sources/AmbientAi/Audio/AudioStreamManager.swift`** — foreground Silero tap 漏调、sink-attach gap、bg loop generation race、SFSpeech 并发、playback session 冲突、snapshot 副作用。1516 行里有约 200 行 dead SFSpeech 代码。
+2. **`capacitor-plugins/ambient-ai/ios/Sources/AmbientAi/Models/LlamaTextGenerationEngine.swift`** — chat-template 不是 Jinja、greedy 无 rep penalty、tokenize buffer 不够、prompt-decode 无 deadline、UTF-8 跨 token 丢字、strdup double-free 路径、冷加载每 cycle 重跑。
+3. **`proactive-ai-frontend/src/services/ambient/timeline/pipeline.ts`** — 无锁、无 processing 状态、attemptCount 不复位、永久错误共享退避、`includeRecentPending` 名实不符、每 tick 重 replay 全天 raw。
+4. **`proactive-ai-frontend/src/services/ambient/sources/sound-classifier.ts`** — runId 捕获时机错、dedup set 不清、inflight/post-stop 漏 `markProcessed`、locale 不同步、null `start_ms`。
+5. **`pinai-agents/src/pinai_agents/web/routes/ui/devices.py`** — body/item 无限制、media upsert 覆盖、signed-url prefix 错、设备 id 不校验、savepoint N×N、`normalize_iso` NaN/Inf 500。
+
+---
+
+## 7. 给 6/15 的建议节奏（仅 triage 参考）
+
+- **本周内必须 review P0 共 ~50 项**。
+- **P0-B11 / P0-B12 / P0-B13** 是 ASR 模型链路相关——如果首版不强依赖端上 ASR 模型下载，可先 ship 关闭、Phase 2 修；若依赖必须修。
+- **P0-B1 / P0-E4** 是简单修：注册 `@objc` 方法 / 改用 `getExistingAmbientRuntime`，最先吃。
+- **P0-B2 / P0-B3 / P0-B7** 是端上 LLM 体系问题，可能要决定"6/15 是否把端上 LLM 路径设默认关闭、cloud 路径优先"——关乎 §6.4 整体取舍。
+- **P0-F5** 直接拉一行改 `max_length`（注意同步 normalize 链路）。
+- **P0-E1 / P0-E2** 是 UI 状态机问题，一周冲刺型修复。
+
+---
+
+## 8. 验证清单（每条 P0 修完后跑）
+
+- `cd pinai-agents && uv run ruff check && uv run mypy src`
+- `cd pinai-agents && uv run pytest tests/web/services/test_ambient_summary.py tests/web/routes/test_devices_ingest.py tests/web/db/repositories/test_personal_signals.py`
+- `cd proactive-ai-frontend && npm run type-check`
+- `cd proactive-ai-frontend && npm test -- ambient`
+- `npm --prefix capacitor-plugins/ambient-ai run build`
+- `xcodebuild ... -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build`
+- 真机回归：
+  1. Foreground Silero VAD 触发率（命中 commit `5a02430e` 的真意）
+  2. 端上 LLM 首跑延迟 + 中文输出完整性
+  3. 跨午夜后 "Summary now" 是否能拉到昨天的 pending transcript window
+  4. Master toggle on/off 后 5 秒内所有 UI 一致
+  5. 切账户后无旧 listener 残留
+
+---
+
+## 9. 关联文档
+
+- 设计 SSOT：[`docs/feat/Ambient/2026-05-18-on-device-timeline-summaries.md`](./2026-05-18-on-device-timeline-summaries.md)（§4 数据模型、§6 模型策略、§7 prompt 防御、§11 TODO、§13 端上 action 候选）。
+- 最近热点 commit：`594de011`（RMS fallback alive while Silero loads）、`87fa7e24`（far-field 放宽）、`5a02430e`（SoundAnalysis → Silero v5）、`cdd39d30`（stop dropping short transcripts / stale-run cloud captures）。
