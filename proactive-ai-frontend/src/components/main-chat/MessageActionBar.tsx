@@ -167,38 +167,44 @@ function UserActionBar() {
   };
 
   return (
-    <ActionBarPrimitive.Root
-      hideWhenRunning
-      className="mt-1 flex items-center gap-0.5 pr-0.5 justify-end"
-    >
+    // Timestamp lives OUTSIDE ActionBarPrimitive.Root so it stays visible while
+    // the agent is running — only the action buttons (Retry/Edit/Copy) are
+    // gated by `hideWhenRunning`. (Previously the timestamp sat inside Root and
+    // vanished on every turn while the assistant streamed, then reappeared.)
+    <div className="mt-1 flex items-center gap-0.5 pr-0.5 justify-end">
       {clockLabel && (
         <span className="text-[11px] font-medium tabular-nums text-foreground/45 mr-1.5">
           {clockLabel}
         </span>
       )}
-      {isLastUser && (
-        <button
-          type="button"
-          onClick={handleRetry}
-          disabled={isRunning}
-          className={ICON_BUTTON_CLASS}
-          title="Retry"
-          aria-label="Retry"
-        >
-          <RotateCcw size={13} strokeWidth={1.6} />
-        </button>
-      )}
-      {isLastUser && (
-        <ActionBarPrimitive.Edit
-          className={ICON_BUTTON_CLASS}
-          title="Edit"
-          aria-label="Edit message"
-        >
-          <Pencil size={13} strokeWidth={1.6} />
-        </ActionBarPrimitive.Edit>
-      )}
-      <CopyButton />
-    </ActionBarPrimitive.Root>
+      <ActionBarPrimitive.Root
+        hideWhenRunning
+        className="flex items-center gap-0.5"
+      >
+        {isLastUser && (
+          <button
+            type="button"
+            onClick={handleRetry}
+            disabled={isRunning}
+            className={ICON_BUTTON_CLASS}
+            title="Retry"
+            aria-label="Retry"
+          >
+            <RotateCcw size={13} strokeWidth={1.6} />
+          </button>
+        )}
+        {isLastUser && (
+          <ActionBarPrimitive.Edit
+            className={ICON_BUTTON_CLASS}
+            title="Edit"
+            aria-label="Edit message"
+          >
+            <Pencil size={13} strokeWidth={1.6} />
+          </ActionBarPrimitive.Edit>
+        )}
+        <CopyButton />
+      </ActionBarPrimitive.Root>
+    </div>
   );
 }
 

@@ -98,7 +98,31 @@ function proposeActionTextFromArgs(raw: unknown): string | null {
 }
 
 
+/** Id of the first user message in the thread (or null). Used to hide the
+ *  card-chat lead bubble — the pre-executed primaryAction. */
+function useFirstUserMessageId(): string | null {
+  return useAuiState((s) => {
+    const msgs = s.thread.messages;
+    for (let i = 0; i < msgs.length; i++) {
+      if (msgs[i].role === "user") return msgs[i].id;
+    }
+    return null;
+  });
+}
+
 function UserMessage() {
+  const { renderProposeActionAsText } = useChatRenderOptions();
+  const messageId = useMessage((m) => m.id);
+  const firstUserId = useFirstUserMessageId();
+  // Card chat (renderProposeActionAsText=true) opens on a PRE-EXECUTED thread
+  // whose first user turn IS the card's primaryAction — already shown verbatim
+  // in the CONTEXT header. Hide just that one bubble so the card chat reads as
+  // "agent reply", not a duplicate of the header. The message still exists in
+  // the runtime (so the assistant reply's Regenerate, which targets this user
+  // id as parent, keeps working). Main chat leaves the flag false → its first
+  // user turn (what the user actually typed) renders normally.
+  if (renderProposeActionAsText && messageId === firstUserId) return null;
+
   return (
     <MessagePrimitive.Root asChild>
       <motion.div
