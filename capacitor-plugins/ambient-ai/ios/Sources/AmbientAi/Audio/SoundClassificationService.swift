@@ -42,6 +42,10 @@ final class SoundClassificationService {
     var onInterruptionEnded: (() -> Void)?
     var onError: ((String, String) -> Void)?
     var onAnalyzerFailed: ((String) -> Void)?
+    /// Raw PCM tap forwarded for VAD. The tap fires on a private audio
+    /// dispatch queue; consumers must hop to their own queue/actor before
+    /// touching shared state.
+    var onAudioBuffer: ((AVAudioPCMBuffer) -> Void)?
 
     private let lock = NSLock()
     private let analysisQueue = DispatchQueue(label: "ai.pin.ambient-ai.sound-analysis", qos: .utility)
@@ -250,6 +254,7 @@ final class SoundClassificationService {
 
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 8_192, format: format) { [weak self] buffer, time in
+            self?.onAudioBuffer?(buffer)
             self?.dispatchAudioBuffer(buffer)
             self?.analyze(buffer: buffer, atAudioFramePosition: time.sampleTime)
         }

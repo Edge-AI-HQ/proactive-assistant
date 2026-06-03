@@ -3,17 +3,23 @@ import XCTest
 @testable import AmbientAi
 
 final class AudioSpeechActivityAccumulatorTests: XCTestCase {
+    // 注意:Silero VAD v5 现在是语音触发的主门,SoundAnalysis 的 onSpeechBurst
+    // 已经断开,fallback RMS 也常驻禁用。post-capture 这层只剩"丢掉完全死寂"
+    // 的兜底,所以每帧阈值 (0.003 / 0.015) 和聚合判定 (frameCount>=1 OR
+    // durationMs>=100) 都比之前宽很多。
+
     func testSpeechFrameRequiresBothRmsAndPeak() {
-        // 中等收紧后改用 AND:rms 与 peak 都要过门槛才算语音帧
+        // 每帧判定仍是 AND:rms 和 peak 都要过门槛,避免单个 spike 误判
         XCTAssertTrue(AudioSpeechActivityHeuristics.isSpeechLikeFrame(rms: 0.02, peak: 0.06))
     }
 
     func testHighPeakWithLowRmsIsNotSpeechLike() {
-        // 旧 OR 逻辑会因单个高 peak 通过;AND 下 rms 不够即拒绝
+        // AND 下 rms 不够即拒绝,即便 peak 很高
         XCTAssertFalse(AudioSpeechActivityHeuristics.isSpeechLikeFrame(rms: 0.001, peak: 0.06))
     }
 
     func testQuietFrameDoesNotExtendRecording() {
+        // 0.001 RMS / 0.01 peak 都低于新阈值 (0.003 / 0.015)
         XCTAssertFalse(AudioSpeechActivityHeuristics.isSpeechLikeFrame(rms: 0.001, peak: 0.01))
     }
 
@@ -75,15 +81,21 @@ final class AudioSpeechActivityAccumulatorTests: XCTestCase {
         XCTAssertEqual(snapshot.peak, 0, accuracy: 0.001)
     }
 
-    func testShortQuietBurstIsRejected() {
-        // 中等收紧:100ms 的弱突发(peak < 0.05 或时长不足 300ms)不再算语音,过滤细微噪声
+    func testShortQuietBurstIsAcceptedNowThatSileroGatesUpstream() {
+        // Silero 已经在触发层确认这是语音才会开始 capture,所以 post-capture
+        // 这层 100ms / amplitude 0.02 的小突发应该被接受 (peak 0.02 >= 0.015,
+        // rms ≈ 0.014 >= 0.003,OR 判定下 frameCount=1 >= 1 满足)。这种短促
+        // 应答词(比如"好的"、"嗯")是过去 24-字符过滤一起丢掉的主要受害者。
         var accumulator = AudioSpeechActivityAccumulator()
 
         accumulator.append(pcm: makePCM(durationMs: 100, amplitude: 0.02), durationMs: 100)
 
         let snapshot = accumulator.snapshot()
-        XCTAssertFalse(snapshot.isSpeechLike)
+        XCTAssertTrue(snapshot.isSpeechLike)
     }
+
+    // Pure-silence rejection is covered by `testSilenceIsNotSpeechLike`
+    // above — that invariant survived the loosening unchanged.
 
     func testSustainedAudioIsSpeechLike() {
         var accumulator = AudioSpeechActivityAccumulator()

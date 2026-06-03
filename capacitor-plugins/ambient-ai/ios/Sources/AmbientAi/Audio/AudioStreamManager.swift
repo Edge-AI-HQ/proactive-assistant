@@ -21,6 +21,12 @@ actor AudioStreamManager {
     private let classifier = SoundClassificationService()
     private let fileStore = AudioFileStore()
     private let cloudWorker = CloudTranscriptionWorker()
+    // Silero VAD v5 is the primary speech-trigger gate (replaces the old
+    // SoundAnalysis "speech" label path which mistook keyboard/HVAC/TV
+    // background voices for user speech).  SoundClassificationService
+    // still runs and emits scene labels for the JS side, but its
+    // `onSpeechBurst` callback is no longer installed.
+    private let sileroGate = SileroVadGate()
 
     private var config = AudioCaptureConfig.default
     private var captureSessionId = UUID().uuidString
@@ -223,8 +229,14 @@ actor AudioStreamManager {
         classifier.onSpeechFrame = { [weak self] in
             Task { await self?.markSpeechFrame() }
         }
-        classifier.onSpeechBurst = { [weak self] confidence, triggerSource in
-            Task { await self?.handleSpeechBurst(confidence: confidence, triggerSource: triggerSource) }
+        // SoundAnalysis no longer drives speech-burst triggers — Silero
+        // does. Keep onSpeechFrame for liveness tracking but leave
+        // onSpeechBurst unwired so the "speech" label can't open a
+        // capture by itself.
+        classifier.onSpeechBurst = nil
+        classifier.setFallbackSpeechBurstEnabled(false)
+        classifier.onAudioBuffer = { [weak self] buffer in
+            self?.sileroGate.ingest(buffer: buffer)
         }
         classifier.onInterruptionBegan = { [weak self] in
             Task { await self?.handleInterruptionBegan() }
@@ -237,6 +249,13 @@ actor AudioStreamManager {
         }
         classifier.onAnalyzerFailed = { [weak self] _ in
             Task { await self?.handleAnalyzerFailed() }
+        }
+
+        sileroGate.onSpeechStart = { [weak self] confidence in
+            Task { await self?.handleSpeechBurst(confidence: confidence, triggerSource: "silero_vad") }
+        }
+        sileroGate.onError = { [weak self] message in
+            Task { await self?.emitError(message, source: "silero_vad") }
         }
     }
 
@@ -1122,9 +1141,13 @@ actor AudioStreamManager {
 
     @discardableResult
     private func reconcileClassifierState(reason: String) -> Bool {
-        classifier.setFallbackSpeechBurstEnabled(true)
+        // SoundAnalysis's RMS-fallback speech burst is permanently disabled
+        // now that Silero VAD is the primary speech-trigger source. We
+        // *don't* re-enable it on reconcile.
+        classifier.setFallbackSpeechBurstEnabled(false)
         classifier.markStaleIfNeeded(maxAgeMs: Self.classificationStaleTimeoutMs)
         if shouldClassifierRun {
+            sileroGate.start()
             if appIsBackgrounded {
                 return classifier.startCapturePipelineOnly()
             }
@@ -1136,6 +1159,7 @@ actor AudioStreamManager {
         if classifier.canAnalyze || classifier.diagnostics.capturePipelineRunning {
             classifier.stop()
         }
+        sileroGate.stop()
         return true
     }
 
@@ -1196,14 +1220,22 @@ struct AudioSpeechActivitySnapshot {
     let speechLikeDurationMs: Int
 
     var isSpeechLike: Bool {
+        // Silero VAD already gated speech before the capture even opened.
+        // This post-capture check is now a safety net that drops obvious
+        // dead air only — OR the frame-count and duration thresholds so
+        // a single soft "uh huh" doesn't get silently discarded.
         speechLikeFrameCount >= AudioSpeechActivityAccumulator.minSpeechLikeFrameCount
-            && speechLikeDurationMs >= AudioSpeechActivityAccumulator.minSpeechLikeDurationMs
+            || speechLikeDurationMs >= AudioSpeechActivityAccumulator.minSpeechLikeDurationMs
     }
 }
 
 struct AudioSpeechActivityHeuristics {
-    static let speechRmsThreshold: Float = 0.01
-    static let speechPeakThreshold: Float = 0.05
+    // Pre-Silero we used 0.01 / 0.05 to tighten against HVAC/keyboard, which
+    // also silently dropped genuine quiet speech. Silero now owns trigger
+    // gating; these are loosened back to "is the audio non-trivially
+    // non-zero" so we don't double-reject what the VAD already passed.
+    static let speechRmsThreshold: Float = 0.003
+    static let speechPeakThreshold: Float = 0.015
 
     static func isSpeechLikeFrame(rms: Float, peak: Float) -> Bool {
         rms >= speechRmsThreshold && peak >= speechPeakThreshold
@@ -1212,8 +1244,8 @@ struct AudioSpeechActivityHeuristics {
 
 struct AudioSpeechActivityAccumulator {
     static let windowDurationMs = 100
-    static let minSpeechLikeFrameCount = 3
-    static let minSpeechLikeDurationMs = 300
+    static let minSpeechLikeFrameCount = 1
+    static let minSpeechLikeDurationMs = 100
     static let speechRmsThreshold = AudioSpeechActivityHeuristics.speechRmsThreshold
     static let speechPeakThreshold = AudioSpeechActivityHeuristics.speechPeakThreshold
 
