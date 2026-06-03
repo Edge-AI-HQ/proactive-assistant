@@ -234,7 +234,12 @@ actor AudioStreamManager {
         // onSpeechBurst unwired so the "speech" label can't open a
         // capture by itself.
         classifier.onSpeechBurst = nil
-        classifier.setFallbackSpeechBurstEnabled(false)
+        // Keep the RMS-energy fallback as a safety net while Silero is
+        // still loading its CoreML model (first launch downloads ~1.8MB
+        // from HuggingFace; can take a few seconds on cellular) or if
+        // model loading outright fails. Once Silero is hot the fallback
+        // gets disabled in `sileroGate.onModelReady` below.
+        classifier.setFallbackSpeechBurstEnabled(true)
         classifier.onAudioBuffer = { [weak self] buffer in
             self?.sileroGate.ingest(buffer: buffer)
         }
@@ -254,9 +259,19 @@ actor AudioStreamManager {
         sileroGate.onSpeechStart = { [weak self] confidence in
             Task { await self?.handleSpeechBurst(confidence: confidence, triggerSource: "silero_vad") }
         }
+        sileroGate.onModelReady = { [weak self] in
+            // Silero is the more accurate gate; promote it to sole trigger
+            // once the model is actually loaded and ready to score chunks.
+            Task { await self?.disableFallbackSpeechBurst(reason: "silero_ready") }
+        }
         sileroGate.onError = { [weak self] message in
             Task { await self?.emitError(message, source: "silero_vad") }
         }
+    }
+
+    private func disableFallbackSpeechBurst(reason: String) {
+        classifier.setFallbackSpeechBurstEnabled(false)
+        callbacks.emitEvent("audioState", ["sileroState": "ready", "reason": reason] as [String: Any])
     }
 
     private func handleClassificationFrame(_ frame: SoundClassificationFrame) {
@@ -1141,10 +1156,11 @@ actor AudioStreamManager {
 
     @discardableResult
     private func reconcileClassifierState(reason: String) -> Bool {
-        // SoundAnalysis's RMS-fallback speech burst is permanently disabled
-        // now that Silero VAD is the primary speech-trigger source. We
-        // *don't* re-enable it on reconcile.
-        classifier.setFallbackSpeechBurstEnabled(false)
+        // RMS-fallback is owned by `installClassifierCallbacksIfNeeded`
+        // (default ON while Silero loads) and `disableFallbackSpeechBurst`
+        // (turned OFF once Silero's onModelReady fires). Reconcile must NOT
+        // override that — otherwise a route-change reconcile would silently
+        // re-enable the fallback after Silero already took over.
         classifier.markStaleIfNeeded(maxAgeMs: Self.classificationStaleTimeoutMs)
         if shouldClassifierRun {
             sileroGate.start()
