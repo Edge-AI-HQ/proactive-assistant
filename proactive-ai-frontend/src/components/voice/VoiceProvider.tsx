@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Check, Mic, X } from "lucide-react";
 
 import { isNative } from "@/lib/platform";
+import type { ExternalMicLease } from "@/services/ambient/external-mic";
 import { BrowserSpeechEngine } from "./BrowserSpeechEngine";
 import { normalizeVoiceLanguage } from "./language";
 import type {
@@ -156,22 +157,23 @@ export function VoiceProvider({ children, engine, transcriptionLanguage }: Voice
 
   // Main-chat voice records via the WebView (getUserMedia / SpeechRecognition),
   // which seizes the shared iOS audio session and kills the native ambient
-  // recorder with no interruption callback. Yield ambient while a capture is
-  // live and restore it after. Keyed on isCapturing so the pause/resume pair
-  // can't desync across the imperative start/cancel/commit paths; the cancelled
-  // flag drops a stale pause if the capture ends before the lazy import lands.
+  // recorder with no interruption callback. Hold an external-mic lease while a
+  // capture is live and release it after. Keyed on isCapturing so acquire/release
+  // can't desync across the imperative start/cancel/commit paths; if the capture
+  // ends before the lazy import / acquire lands, `cancelled` releases at once.
   // No-op off-native and when ambient is disabled.
   useEffect(() => {
     if (!isNative || !isCapturing) return;
     let cancelled = false;
-    void import("@/services/ambient/external-mic").then(({ pauseAmbientForExternalMic }) => {
-      if (!cancelled) void pauseAmbientForExternalMic();
+    let lease: ExternalMicLease | null = null;
+    void import("@/services/ambient/external-mic").then(async ({ acquireExternalMic }) => {
+      const acquired = await acquireExternalMic();
+      if (cancelled) void acquired.release();
+      else lease = acquired;
     });
     return () => {
       cancelled = true;
-      void import("@/services/ambient/external-mic").then(({ resumeAmbientAfterExternalMic }) => {
-        void resumeAmbientAfterExternalMic();
-      });
+      void lease?.release();
     };
   }, [isCapturing]);
 
