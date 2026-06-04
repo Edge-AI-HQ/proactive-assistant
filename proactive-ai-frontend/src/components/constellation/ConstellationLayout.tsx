@@ -45,6 +45,7 @@ import AgentRunIndicator from "@/components/AgentRunIndicator";
 import RealGoalsView from "@/components/GoalsView";
 import RealControlPanel from "@/components/ControlPanel";
 import RealChatTimeline from "@/components/ChatTimeline";
+import { CardStateProvider } from "./CardStateContext";
 import { useAuth } from "@/hooks/useAuth";
 import { useCardActions } from "@/hooks/useCardActions";
 import {
@@ -893,6 +894,7 @@ export default function BigBallLayout() {
   );
 
   return (
+    <CardStateProvider value={{ cardsState, cardActions }}>
     <div
       className="relative h-screen w-full max-w-md mx-auto overflow-hidden"
       style={constellationShellStyle}
@@ -996,13 +998,7 @@ export default function BigBallLayout() {
                  shared /api/cards state from this layout so TASKS does not
                  refetch on every tab entry. */
               <RealChatTimeline
-                cards={cardsState}
                 composio={composio}
-                processingIds={cardActions.processingIds}
-                doneIds={cardActions.doneIds}
-                confirmedIds={cardActions.confirmedIds}
-                dismissedIds={cardActions.dismissedIds}
-                chattedIds={cardActions.chattedIds}
                 onOpenChat={(card, bootstrap) => {
                   openCardChat(
                     card,
@@ -1016,13 +1012,6 @@ export default function BigBallLayout() {
                   setSelectedCard(realCardToLovableIntent(card, status));
                   setDrawerOpen(true);
                 }}
-                onConfirmId={cardActions.markConfirmed}
-                onClearConfirmId={cardActions.clearConfirmed}
-                onDismissId={cardActions.markDismissed}
-                onDoneId={cardActions.markDone}
-                onProcessingId={cardActions.markProcessing}
-                onClearProcessingId={cardActions.clearProcessing}
-                onChattedId={cardActions.markChatted}
               />
             ) : activeView === "ambient" ? (
               <AmbientView
@@ -1443,6 +1432,7 @@ export default function BigBallLayout() {
         }}
       />
     </div>
+    </CardStateProvider>
   );
 }
 

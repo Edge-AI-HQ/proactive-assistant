@@ -20,10 +20,12 @@ describe("ChatTimeline minimalist copy", () => {
     expect(source).not.toContain("AI memory &amp; action log");
   });
 
-  test("receives card data from the parent instead of fetching again", () => {
+  test("receives card data from context instead of fetching again", () => {
     const source = readFileSync(join(__dirname, "ChatTimeline.tsx"), "utf8");
 
-    expect(source).toContain("cards: UseCardsState");
-    expect(source).not.toContain("const cards = useCards()");
+    // Card data/actions now arrive via CardStateContext (phase-2), not 11
+    // props and not a self-owned fetch.
+    expect(source).toContain("useCardState()");
+    expect(source).not.toContain("useCards(");
   });
 });

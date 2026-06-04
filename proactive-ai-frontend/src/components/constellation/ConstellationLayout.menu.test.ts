@@ -101,14 +101,16 @@ describe("ConstellationLayout menu order", () => {
     expect(tasksBranch?.[1]).not.toContain('className="h-full overflow-y-auto pt-12"');
   });
 
-  test("passes the shared cards state into the TASKS view", () => {
+  test("provides shared card state to the TASKS view via context", () => {
     const source = readFileSync(join(__dirname, "ConstellationLayout.tsx"), "utf8");
+    // cardsState/cardActions reach the Tasks timeline through CardStateContext
+    // (phase-2 de-prop-drilling), not 11 individual props.
+    expect(source).toContain("<CardStateProvider value={{ cardsState, cardActions }}>");
     const tasksBranch = source.match(
       /\) : activeView === "chat" \? \(([\s\S]*?)\) : activeView === "ambient" \? \(/,
     );
-
     expect(tasksBranch).not.toBeNull();
-    expect(tasksBranch?.[1]).toContain("cards={cardsState}");
+    expect(tasksBranch?.[1]).toContain("<RealChatTimeline");
   });
 
   test("refreshes cards immediately after generation completes", () => {

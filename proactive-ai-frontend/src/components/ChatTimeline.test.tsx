@@ -3,6 +3,12 @@ import { describe, expect, test, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { ComposioState } from "@/hooks/useComposio";
 import type { IntentCard } from "@/types/intent-card";
+import {
+  CardStateProvider,
+  type CardActions,
+  type CardStateValue,
+} from "@/components/constellation/CardStateContext";
+import type { UseCardsState } from "@/hooks/useCards";
 
 type MockElementProps = { children?: ReactNode } & Record<string, unknown>;
 
@@ -76,31 +82,35 @@ const stubComposio: ComposioState = {
 };
 
 const noop = vi.fn();
-const baseProps = {
-  cards: {
-    cards: [{
-      card,
-      runId: "run-1",
-      runCompletedAt: "2026-05-18T19:00:00Z",
-      score: null,
-      latestOutcome: null,
-      outcomeAt: null,
-    }],
+
+// cardsState + cardActions now arrive via CardStateContext instead of props.
+const mockCardState: CardStateValue = {
+  cardsState: {
+    cards: [
+      {
+        card,
+        runId: "run-1",
+        runCompletedAt: "2026-05-18T19:00:00Z",
+        score: null,
+        latestOutcome: null,
+        outcomeAt: null,
+      },
+    ],
     loading: false,
     error: null,
-  },
-  onOpenChat: noop,
-  dismissedIds: new Set<string>(),
-  confirmedIds: new Set<string>(),
-  processingIds: new Set<string>(),
-  doneIds: new Set<string>(),
-  chattedIds: new Set<string>(),
-  onDismissId: noop,
-  onConfirmId: noop,
-  onDoneId: noop,
-  onProcessingId: noop,
-  onChattedId: noop,
-  composio: stubComposio,
+  } as unknown as UseCardsState,
+  cardActions: {
+    dismissedIds: new Set<string>(),
+    confirmedIds: new Set<string>(),
+    processingIds: new Set<string>(),
+    doneIds: new Set<string>(),
+    chattedIds: new Set<string>(),
+    markDismissed: noop,
+    markConfirmed: noop,
+    markDone: noop,
+    markProcessing: noop,
+    markChatted: noop,
+  } as unknown as CardActions,
 };
 
 describe("ChatTimeline card detail routing", () => {
@@ -108,10 +118,9 @@ describe("ChatTimeline card detail routing", () => {
     const onOpenCardDetail = vi.fn();
 
     render(
-      <ChatTimeline
-        {...baseProps}
-        onOpenCardDetail={onOpenCardDetail}
-      />,
+      <CardStateProvider value={mockCardState}>
+        <ChatTimeline onOpenChat={noop} onOpenCardDetail={onOpenCardDetail} composio={stubComposio} />
+      </CardStateProvider>,
     );
 
     fireEvent.click(screen.getByText("Timeline Card"));
@@ -124,7 +133,7 @@ describe("ChatTimeline card detail routing", () => {
 
   test("connector card confirm persists complete and does not open chat", async () => {
     const onOpenChat = vi.fn();
-    const onDoneId = vi.fn();
+    const markDone = vi.fn();
     const composio: ComposioState = {
       ...stubComposio,
       connectToolkit: vi.fn(async () => ({ ok: true })),
@@ -138,23 +147,36 @@ describe("ChatTimeline card detail routing", () => {
     };
 
     render(
-      <ChatTimeline
-        {...baseProps}
-        cards={{
-          ...baseProps.cards,
-          cards: [{
-            card: connectorCard,
-            runId: "run-1",
-            runCompletedAt: "2026-05-18T19:00:00Z",
-            score: null,
-            latestOutcome: null,
-            outcomeAt: null,
-          }],
+      <CardStateProvider
+        value={{
+          cardsState: {
+            cards: [{
+              card: connectorCard,
+              runId: "run-1",
+              runCompletedAt: "2026-05-18T19:00:00Z",
+              score: null,
+              latestOutcome: null,
+              outcomeAt: null,
+            }],
+            loading: false,
+            error: null,
+          } as unknown as UseCardsState,
+          cardActions: {
+            dismissedIds: new Set<string>(),
+            confirmedIds: new Set<string>(),
+            processingIds: new Set<string>(),
+            doneIds: new Set<string>(),
+            chattedIds: new Set<string>(),
+            markDismissed: noop,
+            markConfirmed: noop,
+            markDone,
+            markProcessing: noop,
+            markChatted: noop,
+          } as unknown as CardActions,
         }}
-        composio={composio}
-        onOpenChat={onOpenChat}
-        onDoneId={onDoneId}
-      />,
+      >
+        <ChatTimeline composio={composio} onOpenChat={onOpenChat} />
+      </CardStateProvider>,
     );
 
     fireEvent.click(screen.getByText("Connect Gmail"));
@@ -171,7 +193,7 @@ describe("ChatTimeline card detail routing", () => {
       });
     });
     expect(composio.connectToolkit).toHaveBeenCalledWith("gmail");
-    expect(onDoneId).toHaveBeenCalledWith("connector-card");
+    expect(markDone).toHaveBeenCalledWith("connector-card");
     expect(onOpenChat).not.toHaveBeenCalled();
   });
 });
