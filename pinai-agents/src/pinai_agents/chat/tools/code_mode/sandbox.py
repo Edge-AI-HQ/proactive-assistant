@@ -132,7 +132,14 @@ async def _run_blocking[T](fn: Callable[..., T], *args: object, timeout: float, 
     still be running afterward (Python can't cancel it), but the bounded
     pool caps the blast radius until the SDK call drains or errors out."""
     loop = asyncio.get_running_loop()
-    fut = loop.run_in_executor(_DAYTONA_EXECUTOR, lambda: fn(*args))
+    try:
+        fut = loop.run_in_executor(_DAYTONA_EXECUTOR, lambda: fn(*args))
+    except RuntimeError as exc:
+        # Executor shut down (lifespan exit) while a stream was still
+        # provisioning. Surface as a normal provision error so the
+        # (DaytonaError, SandboxProvisionError) handlers catch it rather
+        # than a bare RuntimeError leaking past them.
+        raise SandboxProvisionError(f"{what} unavailable: provisioning pool shut down") from exc
     try:
         return await asyncio.wait_for(fut, timeout=timeout)
     except TimeoutError as exc:
@@ -172,10 +179,22 @@ def _breaker_fast_fail_if_open() -> None:
 
 def _breaker_record_success() -> None:
     global _breaker_failures, _breaker_opened_at
-    if _breaker_opened_at is not None or _breaker_failures:
-        logger.info("sandbox provisioning circuit CLOSED (recovered)")
-    _breaker_failures = 0
-    _breaker_opened_at = None
+    if _breaker_opened_at is not None:
+        # Only a HALF-OPEN probe (cooldown already elapsed) closes the
+        # breaker. A success from a concurrent thread while still inside the
+        # cooldown is NOT the probe — ignore it, so one in-flight success
+        # can't reopen the floodgates while Daytona is still half-dead.
+        if time.monotonic() - _breaker_opened_at >= _BREAKER_COOLDOWN_SEC:
+            logger.info("sandbox provisioning circuit CLOSED (recovered)")
+            _breaker_failures = 0
+            _breaker_opened_at = None
+    elif _breaker_failures > 0:
+        # CLOSED: decay ONE failure rather than wiping the count. Under
+        # concurrent provisioning against a half-dead Daytona, a single
+        # success in the burst must not erase other in-flight threads'
+        # accumulated failures — otherwise the count never reaches the
+        # threshold and the breaker never opens.
+        _breaker_failures -= 1
 
 
 def _breaker_record_failure() -> None:

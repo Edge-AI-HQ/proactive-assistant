@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -63,6 +64,18 @@ async def test_run_blocking_propagates_real_errors() -> None:
 
     with pytest.raises(ValueError, match="daytona said no"):
         await sandbox._run_blocking(boom, timeout=1.0, what="t")
+
+
+async def test_run_blocking_surfaces_shutdown_pool_as_provision_error(monkeypatch) -> None:
+    # After lifespan shutdown the executor rejects submits with RuntimeError;
+    # _run_blocking must normalize that to SandboxProvisionError so the
+    # (DaytonaError, SandboxProvisionError) handlers catch it instead of a
+    # bare RuntimeError leaking past them.
+    dead = ThreadPoolExecutor(max_workers=1)
+    dead.shutdown(wait=True)
+    monkeypatch.setattr(sandbox, "_DAYTONA_EXECUTOR", dead)
+    with pytest.raises(sandbox.SandboxProvisionError, match="shut down"):
+        await sandbox._run_blocking(lambda: 1, timeout=1.0, what="create")
 
 
 async def test_validate_cached_refresh_timeout_degrades_to_none(monkeypatch) -> None:

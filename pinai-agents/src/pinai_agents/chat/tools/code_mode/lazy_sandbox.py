@@ -11,8 +11,10 @@ inside the ls/read_file/write_file/edit_file tools, the execute tool calls
 check (`supports_execution`) that never provisions. Summarization offloads
 to the backend only past a token threshold. So we hand the agent a proxy
 that provisions the REAL Daytona sandbox on the first such call and reuses
-it thereafter. A pure-text turn never calls `_ensure`, so it never
-provisions — that is the fix.
+it thereafter. A short pure-text turn never calls `_ensure`, so it never
+provisions — that is the fix (a long one can still provision once it crosses
+the summarization threshold above; that path is correct and bounded by the
+P0 provisioning timeout).
 
 This is deepagents' officially-recommended production posture ("lazy
 provisioning ... sandboxes are created when needed"), reached through the
@@ -62,7 +64,12 @@ class LazyThreadSandbox(SandboxBackendProtocol):
         self._lock = asyncio.Lock()
 
     async def _ensure(self) -> DaytonaSandbox:
-        """Provision (or fetch the cached) Daytona sandbox on first use."""
+        """Provision (or fetch the cached) Daytona sandbox on first use.
+
+        `_real` is a turn-scoped snapshot: a fresh proxy is built per turn,
+        so it can't outlive a registry LRU/GC eviction beyond the current
+        turn. The next turn's proxy re-fetches through
+        `get_or_create_thread_sandbox`, which re-validates or recreates."""
         if self._real is None:
             async with self._lock:
                 if self._real is None:

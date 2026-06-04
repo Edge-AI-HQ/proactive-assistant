@@ -41,12 +41,41 @@ def test_opens_after_threshold_and_fast_fails() -> None:
         sandbox._breaker_fast_fail_if_open()
 
 
-def test_success_closes_breaker() -> None:
+def test_half_open_probe_success_closes() -> None:
     for _ in range(sandbox._BREAKER_FAIL_THRESHOLD):
         sandbox._breaker_record_failure()
+    # Backdate past cooldown → this success IS the half-open probe → closes.
+    sandbox._breaker_opened_at = time.monotonic() - sandbox._BREAKER_COOLDOWN_SEC - 1
     sandbox._breaker_record_success()
-    sandbox._breaker_fast_fail_if_open()  # closed again — no raise
+    assert sandbox._breaker_opened_at is None
     assert sandbox._breaker_failures == 0
+    sandbox._breaker_fast_fail_if_open()  # closed — no raise
+
+
+def test_open_cooldown_concurrent_success_does_not_close() -> None:
+    # MAJOR fix: a success from a concurrent thread WITHIN cooldown is not
+    # the half-open probe — it must not reopen the floodgates while Daytona
+    # is still half-dead.
+    for _ in range(sandbox._BREAKER_FAIL_THRESHOLD):
+        sandbox._breaker_record_failure()
+    sandbox._breaker_record_success()  # concurrent success, still in cooldown
+    assert sandbox._breaker_opened_at is not None  # still OPEN
+    with pytest.raises(sandbox.SandboxProvisionError, match="circuit open"):
+        sandbox._breaker_fast_fail_if_open()
+
+
+def test_closed_success_decays_not_wipes() -> None:
+    # MAJOR fix: in CLOSED state a success decays ONE failure but does not
+    # wipe the count, so a half-dead Daytona (failures dominate) still
+    # reaches the threshold instead of one success resetting everything.
+    sandbox._breaker_record_failure()  # 1
+    sandbox._breaker_record_success()  # decay → 0
+    sandbox._breaker_record_failure()  # 1
+    sandbox._breaker_record_failure()  # 2
+    assert sandbox._breaker_opened_at is None  # not opened yet
+    sandbox._breaker_record_failure()  # 3 → OPEN (not wiped by the success)
+    with pytest.raises(sandbox.SandboxProvisionError, match="circuit open"):
+        sandbox._breaker_fast_fail_if_open()
 
 
 def test_half_open_after_cooldown_allows_probe() -> None:
