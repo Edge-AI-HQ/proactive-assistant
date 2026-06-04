@@ -238,6 +238,23 @@ class SettingsUpdateRequest(_CamelModel):
 PreferenceScope = Literal["topic", "source", "timing", "format", "global"]
 PreferencePolarity = Literal["positive", "negative"]
 PreferenceDurability = Literal["temporary", "persistent"]
+DevelopmentFeedbackCategory = Literal[
+    "ui",
+    "feature",
+    "bug_like",
+    "workflow",
+    "settings",
+    "other",
+]
+DevelopmentFeedbackSurface = Literal[
+    "main_chat",
+    "card_detail",
+    "settings",
+    "ambient",
+    "unknown",
+]
+DevelopmentFeedbackStatus = Literal["new", "reviewed", "planned", "closed"]
+DevelopmentFeedbackSource = Literal["user", "internal_operator", "agent"]
 
 
 class PreferenceItem(_CamelModel):
@@ -321,6 +338,42 @@ class GenerationLanguageSetRequest(_CamelModel):
     path the UI settings route uses."""
 
     generation_language: SupportedLanguage
+
+
+class DevelopmentFeedbackLogRequest(_CamelModel):
+    """Product development suggestion. This is not a personalization
+    preference; it is product triage data for feature/UI/workflow requests
+    the agent cannot implement immediately."""
+
+    text: str = Field(min_length=1, max_length=4000)
+    category: DevelopmentFeedbackCategory
+    surface: DevelopmentFeedbackSurface = "unknown"
+    summary: str | None = Field(default=None, max_length=500)
+    conversation_id: str | None = Field(default=None, max_length=200)
+    message_id: str | None = Field(default=None, max_length=200)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DevelopmentFeedbackItem(_CamelModel):
+    user_id: StrictInt
+    supabase_user_id: str
+    id: str
+    text: str
+    summary: str | None
+    category: DevelopmentFeedbackCategory
+    surface: DevelopmentFeedbackSurface
+    status: DevelopmentFeedbackStatus
+    source: DevelopmentFeedbackSource
+    conversation_id: str | None
+    message_id: str | None
+    metadata: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+
+
+class DevelopmentFeedbackCreateResponse(_CamelModel):
+    received: bool
+    item: DevelopmentFeedbackItem
 
 
 # ── App State KV ──

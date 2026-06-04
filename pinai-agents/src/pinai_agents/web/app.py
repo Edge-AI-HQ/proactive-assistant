@@ -32,6 +32,7 @@ from .middleware.audit import AgentAuditMiddleware
 from .payment.routes import router as ui_payment_router
 from .routes.agent.cards import router as agent_cards_router
 from .routes.agent.composio import router as agent_composio_router
+from .routes.agent.development_feedback import router as agent_development_feedback_router
 from .routes.agent.evolution import router as agent_evolution_router
 from .routes.agent.feedback import router as agent_feedback_router
 from .routes.agent.memory import router as agent_memory_router
@@ -49,6 +50,7 @@ from .routes.ui.ambient import router as ui_ambient_router
 from .routes.ui.browser import router as ui_browser_router
 from .routes.ui.chat import router as ui_chat_router
 from .routes.ui.composio import router as ui_composio_router
+from .routes.ui.development_feedback import router as ui_development_feedback_router
 from .routes.ui.devices import router as ui_devices_router
 from .routes.ui.dreaming import router as ui_dreaming_router_real
 from .routes.ui.feedback import router as ui_feedback_router
@@ -185,6 +187,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_voice_router)
     app.include_router(ui_ambient_router)
     app.include_router(ui_account_router)
+    app.include_router(ui_development_feedback_router)
 
     # ── /api/agent/* (sandbox / chat, HS256 JWT) ──
     app.include_router(agent_memory_router)
@@ -200,6 +203,7 @@ def create_app() -> FastAPI:
     app.include_router(agent_evolution_router)
     app.include_router(agent_pipeline_router)
     app.include_router(agent_sandbox_phantom_router)
+    app.include_router(agent_development_feedback_router)
 
     @app.get("/health")
     async def health() -> dict[str, object]:
