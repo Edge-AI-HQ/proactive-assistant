@@ -72,6 +72,7 @@ import {
   type TouchPoint,
 } from "./mainChatEntryGesture";
 import { useAppNavigation, type MenuId } from "./useAppNavigation";
+import SwipeBackLayer from "./SwipeBackLayer";
 
 /** Stable string→number hash so real card.id (string) gets a numeric id for
  *  Lovable's sphere components without losing the original. */
@@ -959,31 +960,35 @@ export default function BigBallLayout() {
                  session_key = `card-thread-<cardId>`. `bootstrap` is the
                  Confirm-path's primaryAction text; the shared chat runtime
                  auto-fires it only when the thread is empty. */
-              <ChatDetailView
-                card={realIntentToChatCard(chatTarget.card)}
-                runId={chatTarget.card.id}
-                bootstrap={chatTarget.bootstrap}
-                onBack={() => closeCardChat()}
-                // Sphere → TASKS lifecycle: Dismiss / Done in the
-                // chat toolbar must POST /feedback so the card moves
-                // off the sphere (dismissedIds / doneIds filter) and
-                // shows as Dismissed / Completed in the TASKS view.
-                // Without these the hook's cancel/confirmDone are
-                // purely local UI flips.
-                onDismissBackend={() => {
-                  return cardActions.dismiss(chatTarget.card);
-                }}
-                onDoneBackend={() => {
-                  return cardActions.complete(chatTarget.card);
-                }}
-              />
+              <SwipeBackLayer onBack={() => closeCardChat()} className="h-full">
+                <ChatDetailView
+                  card={realIntentToChatCard(chatTarget.card)}
+                  runId={chatTarget.card.id}
+                  bootstrap={chatTarget.bootstrap}
+                  onBack={() => closeCardChat()}
+                  // Sphere → TASKS lifecycle: Dismiss / Done in the
+                  // chat toolbar must POST /feedback so the card moves
+                  // off the sphere (dismissedIds / doneIds filter) and
+                  // shows as Dismissed / Completed in the TASKS view.
+                  // Without these the hook's cancel/confirmDone are
+                  // purely local UI flips.
+                  onDismissBackend={() => {
+                    return cardActions.dismiss(chatTarget.card);
+                  }}
+                  onDoneBackend={() => {
+                    return cardActions.complete(chatTarget.card);
+                  }}
+                />
+              </SwipeBackLayer>
             ) : activeChat ? (
               /* Legacy mock-card path. Kept so type-checking stays honest
                  if mock data is reintroduced for demos. */
-              <ChatDetailView
-                card={activeChat as ChatCard}
-                onBack={() => closeCardChat()}
-              />
+              <SwipeBackLayer onBack={() => closeCardChat()} className="h-full">
+                <ChatDetailView
+                  card={activeChat as ChatCard}
+                  onBack={() => closeCardChat()}
+                />
+              </SwipeBackLayer>
             ) : activeView === "now" ? (
               renderNowView()
             ) : activeView === "chat" ? (
@@ -1166,7 +1171,9 @@ export default function BigBallLayout() {
                 transition={{ type: "spring", stiffness: 320, damping: 32, mass: 0.9 }}
                 className="relative w-full max-w-md h-screen overflow-hidden bg-background will-change-transform"
               >
-                <MainChat onBack={() => closeMainChat()} />
+                <SwipeBackLayer onBack={() => closeMainChat()} className="h-full">
+                  <MainChat onBack={() => closeMainChat()} />
+                </SwipeBackLayer>
               </motion.div>
             </motion.div>
           )}

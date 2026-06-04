@@ -21,6 +21,7 @@ import {
   type PlanCode, type SubscriptionState, type UsageInfo,
 } from "@/lib/api";
 import { PLANS } from "./PlanPaymentForm";
+import SwipeBackLayer from "./SwipeBackLayer";
 
 // AmbientModelsPanel pulls in @pin/capacitor-ambient-ai which is
 // rollup-external for the web build, so it must be loaded lazily and
@@ -73,17 +74,19 @@ export default function AccountPanel({
   // sessionStorage persistence now lives in the hook.
   const setSubPage = onSubPageChange;
 
-  if (subPage === "subscription") {
-    return <SubscriptionSubPage onBack={() => setSubPage("main")} />;
-  }
-  if (subPage === "preferences") {
-    return <PreferencesSubPage onBack={() => setSubPage("main")} />;
-  }
-  if (subPage === "notifications") {
-    return <NotificationsSubPage onBack={() => setSubPage("main")} />;
-  }
-  if (subPage === "ambient") {
-    return <AmbientSubPage onBack={() => setSubPage("main")} />;
+  if (subPage !== "main") {
+    // Each sub-page keeps its own ArrowLeft button; SwipeBackLayer adds the
+    // iOS-style left-edge drag that also pops back to the settings main page.
+    const sub =
+      subPage === "subscription" ? <SubscriptionSubPage onBack={() => setSubPage("main")} /> :
+      subPage === "preferences" ? <PreferencesSubPage onBack={() => setSubPage("main")} /> :
+      subPage === "notifications" ? <NotificationsSubPage onBack={() => setSubPage("main")} /> :
+      <AmbientSubPage onBack={() => setSubPage("main")} />;
+    return (
+      <SwipeBackLayer onBack={() => setSubPage("main")} className="h-full">
+        {sub}
+      </SwipeBackLayer>
+    );
   }
 
   return (
