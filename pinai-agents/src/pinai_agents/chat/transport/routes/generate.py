@@ -53,6 +53,7 @@ def _serialize_passing_cards(
     parsed,
     *,
     run_id: str,
+    max_cards: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Serialize generator output and select cards for the web response.
 
@@ -85,6 +86,7 @@ def _serialize_passing_cards(
             run_id,
             len(raw_cards),
         )
+    cards = cards[:max_cards]
     for i, card in enumerate(cards):
         card["id"] = f"{run_id}_card_{i:02d}"
     intent_to_id = {c["intentKey"]: c["id"] for c in cards}
@@ -178,7 +180,7 @@ async def generate(
     # joins are stable. We dump with by_alias=True so `pass_` round-trips
     # back as `pass` on the wire.
     try:
-        cards, evals = _serialize_passing_cards(parsed, run_id=run_id)
+        cards, evals = _serialize_passing_cards(parsed, run_id=run_id, max_cards=req.cards_to_generate)
     except ValueError as e:
         logger.warning("generator shape error run_id=%s: %s", run_id, e)
         raise HTTPException(status_code=502, detail=f"generator shape error: {e}") from e

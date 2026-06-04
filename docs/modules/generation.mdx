@@ -123,7 +123,7 @@ main agent (sonnet 4.6, response_format=GeneratorOutput)
 
 ### 选卡规则
 
-- `pass==true` 的卡优先进最终响应;如果 evaluator 把所有候选都判 fail,chat route 保留最高 `overall` 的 1 张候选,同时把 failed evaluation 保留做审计,避免整轮生成 502。
+- `pass==true` 的卡优先进最终响应,chat route 再按请求的 `cards_to_generate` 硬截断;如果 evaluator 把所有候选都判 fail,chat route 保留最高 `overall` 的 1 张候选,同时把 failed evaluation 保留做审计,避免整轮生成 502。
 - 不在 `chat/agents/generator.py` 里写硬上限;以前的"每 basket 最多 3 张、整体最多 10 张"规则由 planner 在 `_PLANNER_PROMPT` 里靠 instruction + few-shot 控住,不是 code-level cap。
 - card id 在 web 侧重写:`f"{run_id}_card_{i:02d}"`(`chat/routes/generate.py:121`),evaluation 的 cardId 按 `intentKey` 匹配 + 重 map(`:130`)。
 

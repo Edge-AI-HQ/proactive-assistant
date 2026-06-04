@@ -55,7 +55,7 @@ def test_generate_route_drops_failed_cards_before_returning_to_web() -> None:
         batchFeedback="drop failed placeholder",
     )
 
-    cards, evals = _serialize_passing_cards(parsed, run_id="run_filter")
+    cards, evals = _serialize_passing_cards(parsed, run_id="run_filter", max_cards=10)
 
     assert [card["intentKey"] for card in cards] == ["real-cpo-card"]
     assert cards[0]["id"] == "run_filter_card_00"
@@ -73,11 +73,30 @@ def test_generate_route_keeps_best_candidate_when_evaluator_fails_all_cards() ->
         batchFeedback="no passing card",
     )
 
-    cards, evals = _serialize_passing_cards(parsed, run_id="run_filter")
+    cards, evals = _serialize_passing_cards(parsed, run_id="run_filter", max_cards=10)
 
     assert [card["intentKey"] for card in cards] == ["less-weak-card"]
     assert cards[0]["id"] == "run_filter_card_00"
     assert [ev["cardId"] for ev in evals] == [None, "run_filter_card_00"]
+
+
+def test_generate_route_caps_returned_cards_to_requested_count() -> None:
+    parsed = GeneratorOutput(
+        reasoning="more passing cards than requested",
+        cards=[_card("first-card"), _card("second-card"), _card("third-card")],
+        evaluations=[
+            _evaluation("first-card", passed=True, overall=6),
+            _evaluation("second-card", passed=True, overall=7),
+            _evaluation("third-card", passed=True, overall=8),
+        ],
+        batchFeedback="cap to requested count",
+    )
+
+    cards, evals = _serialize_passing_cards(parsed, run_id="run_filter", max_cards=1)
+
+    assert [card["intentKey"] for card in cards] == ["first-card"]
+    assert cards[0]["id"] == "run_filter_card_00"
+    assert [ev["cardId"] for ev in evals] == ["run_filter_card_00", None, None]
 
 
 def test_generate_route_caps_agent_runtime_to_ten_minutes() -> None:
