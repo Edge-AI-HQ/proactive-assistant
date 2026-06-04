@@ -11,15 +11,21 @@ loop), never asserted here.
 from __future__ import annotations
 
 import importlib.util
+import inspect
 from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
 
 from pinai_agents.chat.agents.generator import (
     _CARD_GENERATOR_PROMPT,
     _DATA_COLLECTOR_PROMPT,
     _EVALUATOR_PROMPT,
     _PLANNER_PROMPT,
+    run_generator,
 )
 from pinai_agents.chat.agents.prompts.shared import GROUNDING_POLICY
+from pinai_agents.shared.api_models import CardsList, EvalReport, GeneratorOutput, PlanOutput
 
 _SDK_CLIENT_PY = (
     Path(__file__).resolve().parents[3]
@@ -43,6 +49,22 @@ def test_data_collector_pulls_full_ambient_signal_details_into_digest():
     assert "ambient_signal_details" in _DATA_COLLECTOR_PROMPT
     assert 's.get("kind") == "ambient.candidate_window"' in _DATA_COLLECTOR_PROMPT
     assert "client.signals.get(signal_id)" in _DATA_COLLECTOR_PROMPT
+
+
+def test_data_collector_pulls_connected_raw_sources_into_digest():
+    assert "client.composio.connections()" in _DATA_COLLECTOR_PROMPT
+    assert "RAW_SOURCE_BY_TOOLKIT" in _DATA_COLLECTOR_PROMPT
+    assert '"slack": ("slack", "messages")' in _DATA_COLLECTOR_PROMPT
+    assert '"googledrive": ("gdrive", "files")' in _DATA_COLLECTOR_PROMPT
+    assert 'client.raw.list(toolkit, entity, hours=24, limit=20)' in _DATA_COLLECTOR_PROMPT
+    assert "client.raw.list(toolkit, entity, hours=24, limit=80)" not in _DATA_COLLECTOR_PROMPT
+    assert '"connected_raw"' in _DATA_COLLECTOR_PROMPT
+
+
+def test_generator_runtime_caps_langgraph_recursion():
+    source = inspect.getsource(run_generator)
+
+    assert '"recursion_limit": 80' in source
 
 
 def test_planner_prompt_has_preference_alignment():
@@ -95,3 +117,44 @@ def test_sdk_exposes_preferences_list():
     # Language is a deterministic setting, not a preference.
     assert hasattr(client, "settings")
     assert callable(client.settings.set_generation_language)
+
+
+@pytest.mark.parametrize(
+    ("model", "payload"),
+    [
+        (
+            PlanOutput,
+            {
+                "plan": [],
+                "notes": "phase1 has usable sources but planner returned nothing",
+            },
+        ),
+        (
+            CardsList,
+            {
+                "cards": [],
+            },
+        ),
+        (
+            EvalReport,
+            {
+                "evaluations": [],
+                "batchFeedback": "card-generator produced cards but evaluator returned nothing",
+            },
+        ),
+        (
+            GeneratorOutput,
+            {
+                "reasoning": "phase1 had usable sources but orchestrator returned no cards",
+                "cards": [],
+                "evaluations": [],
+                "batchFeedback": "empty result",
+            },
+        ),
+    ],
+)
+def test_generator_structured_outputs_reject_empty_success(model, payload):
+    """A generator run with zero cards must fail validation, not persist as
+    a successful completed batch."""
+    with pytest.raises(ValidationError):
+        model.model_validate(payload)

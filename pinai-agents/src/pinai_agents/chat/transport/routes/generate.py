@@ -8,6 +8,7 @@ through unchanged.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -21,6 +22,7 @@ from ...agents.generator import run_generator
 from ...auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
 
 logger = logging.getLogger(__name__)
+_GENERATE_AGENT_TIMEOUT_SECONDS = 600.0
 router = APIRouter()
 
 
@@ -45,6 +47,50 @@ class GenerateResponse(BaseModel):
     cards: list[dict[str, Any]]
     evaluations: list[dict[str, Any]]
     batch_feedback: str | None = None
+
+
+def _serialize_passing_cards(
+    parsed,
+    *,
+    run_id: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Serialize generator output and select cards for the web response.
+
+    Passing evaluator rows win. If the evaluator fails every candidate,
+    keep the highest-scored candidate instead of turning the whole
+    user-facing generation into a 502; the failed evaluation remains
+    attached for audit.
+    """
+    raw_cards: list[dict[str, Any]] = [c.model_dump(by_alias=True) for c in parsed.cards]
+    evals: list[dict[str, Any]] = [e.model_dump(by_alias=True) for e in parsed.evaluations]
+    eval_by_intent = {
+        str(ev.get("intentKey")): ev for ev in evals if isinstance(ev.get("intentKey"), str)
+    }
+    passing_intents = {
+        str(ev.get("intentKey"))
+        for ev in evals
+        if ev.get("pass") is True and ev.get("intentKey")
+    }
+    cards = [card for card in raw_cards if str(card.get("intentKey")) in passing_intents]
+    if not cards:
+        cards = sorted(
+            raw_cards,
+            key=lambda card: float(
+                eval_by_intent.get(str(card.get("intentKey")), {}).get("overall") or -1
+            ),
+            reverse=True,
+        )[:1]
+        logger.warning(
+            "generator returned no passing cards run=%s candidates=%d; keeping best-scored candidate",
+            run_id,
+            len(raw_cards),
+        )
+    for i, card in enumerate(cards):
+        card["id"] = f"{run_id}_card_{i:02d}"
+    intent_to_id = {c["intentKey"]: c["id"] for c in cards}
+    for ev in evals:
+        ev["cardId"] = intent_to_id.get(ev["intentKey"])
+    return cards, evals
 
 
 def _extract_bearer(authorization: str | None) -> str:
@@ -97,16 +143,27 @@ async def generate(
     virtual_key = principal.virtual_key
     assert virtual_key is not None
     try:
-        parsed = await run_generator(
-            virtual_key=virtual_key,
-            current_date=current_date,
-            user_id=principal.user_id,
-            run_id=run_id,
-            run_jwt=raw_jwt,
-            cards_to_generate=req.cards_to_generate,
-            output_language=req.output_language,
-            matched_patterns=req.matched_patterns,
+        async with asyncio.timeout(_GENERATE_AGENT_TIMEOUT_SECONDS):
+            parsed = await run_generator(
+                virtual_key=virtual_key,
+                current_date=current_date,
+                user_id=principal.user_id,
+                run_id=run_id,
+                run_jwt=raw_jwt,
+                cards_to_generate=req.cards_to_generate,
+                output_language=req.output_language,
+                matched_patterns=req.matched_patterns,
+            )
+    except TimeoutError as e:
+        logger.warning(
+            "generator timed out run_id=%s after %ss",
+            run_id,
+            int(_GENERATE_AGENT_TIMEOUT_SECONDS),
         )
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=f"generator timed out after {int(_GENERATE_AGENT_TIMEOUT_SECONDS)}s",
+        ) from e
     except ValueError as e:
         # Bad output shape from the model — distinct from infra failure.
         logger.warning("generator shape error run_id=%s: %s", run_id, e)
@@ -116,22 +173,15 @@ async def generate(
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
 
     duration_ms = int((time.perf_counter() - t0) * 1000)
-    # parsed is a validated GeneratorOutput (Pydantic). Convert each
-    # card / evaluation to dict + assign run-scoped ids so downstream
-    # selection / evaluation joins are stable. We dump with by_alias=True
-    # so `pass_` round-trips back as `pass` on the wire.
-    cards: list[dict[str, Any]] = [c.model_dump(by_alias=True) for c in parsed.cards]
-    for i, card in enumerate(cards):
-        card["id"] = f"{run_id}_card_{i:02d}"
-    evals: list[dict[str, Any]] = [e.model_dump(by_alias=True) for e in parsed.evaluations]
-    # Map evaluations to their cards by intentKey, then attach the
-    # run-scoped card id. This is more robust than positional indexing
-    # because the orchestrator may emit evaluations for cards it dropped
-    # (audit trail), so list lengths can differ. Keys are camelCase
-    # because by_alias=True respects the alias_generator.
-    intent_to_id = {c["intentKey"]: c["id"] for c in cards}
-    for ev in evals:
-        ev["cardId"] = intent_to_id.get(ev["intentKey"])
+    # Convert each card / evaluation to dict, filter out evaluator-failed
+    # cards, then assign run-scoped ids so downstream selection / evaluation
+    # joins are stable. We dump with by_alias=True so `pass_` round-trips
+    # back as `pass` on the wire.
+    try:
+        cards, evals = _serialize_passing_cards(parsed, run_id=run_id)
+    except ValueError as e:
+        logger.warning("generator shape error run_id=%s: %s", run_id, e)
+        raise HTTPException(status_code=502, detail=f"generator shape error: {e}") from e
     logger.info(
         "generator ok run_id=%s duration=%dms cards=%d evals=%d",
         run_id,

@@ -8,11 +8,11 @@ from pinai_agents.web.db.rls import service_tx, user_scoped_tx
 from pinai_agents.web.scheduler.dispatcher import DefaultDispatcher, _dream_result_fields
 
 
-def test_generator_tasks_use_long_running_lease():
+def test_generator_tasks_use_ten_minute_lease():
     dispatcher = DefaultDispatcher(pool=cast(Any, None), lease_seconds=60)
 
-    assert dispatcher._lease_for("generator.manual") == 1800
-    assert dispatcher._lease_for("generator.auto") == 1800
+    assert dispatcher._lease_for("generator.manual") == 600
+    assert dispatcher._lease_for("generator.auto") == 600
     assert dispatcher._lease_for("auto.dreaming") == 600
 
 

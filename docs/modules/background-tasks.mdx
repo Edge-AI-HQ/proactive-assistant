@@ -136,8 +136,8 @@ reaper 索引:`idx_pai_schedrun_lease (status, lease_expires_at) WHERE status='r
 
 | Kind | 入口 | Lease | 备注 |
 |---|---|---|---|
-| `generator.manual` | in-process `_run_generator` → HTTP POST `/agent/generate` | **1800s** | `/api/generate` 入队;dispatcher 在 web 进程里组装 prompt context、调 chat、写 `pai_pipeline_runs`。 |
-| `generator.auto` | 同上 | **1800s** | 自动循环生成,由前端 settings 调 profile route 写 `interval_seconds`(默认从 migration `038_auto_generate_default_on.sql`)。 |
+| `generator.manual` | in-process `_run_generator` → HTTP POST `/agent/generate` | **600s** | `/api/generate` 入队;用户可见链路,超过 10 分钟无结果就失败;手动生成不自动 retry。 |
+| `generator.auto` | 同上 | **600s** | 自动循环生成,由前端 settings 调 profile route 写 `interval_seconds`(默认从 migration `038_auto_generate_default_on.sql`)。 |
 | `connector.init` | in-process `connector_ingest.run` | 60s | 拉一批 Composio 数据写 `pai_raw_*` + `pai_personal_signals` + 一次 `connector.evolve` once-shot。 |
 | `connector.sync` | 同上 | 60s | 增量拉取,用 cursor;成功才前推 cursor + 入 evolve。`connector.init` 跑完会保证一行 sync schedule(`cron */30 * * * *`)。 |
 | `connector.evolve` | HTTP POST `/agent/run/evolve` | **600s**(long-running) | chat 端 DeepAgents 把刚拉的 raw / signal 沉淀成 memory / skill。 |
@@ -145,7 +145,7 @@ reaper 索引:`idx_pai_schedrun_lease (status, lease_expires_at) WHERE status='r
 | `crystallize` | HTTP POST `/agent/run/crystallize` | 60s | dispatcher 路由已就位,但**当前没有 producer 入队** — `dispatcher.py` 顶部注释明说 "crystallize → not scheduled (chat worker fires inline)"。今天 crystallize 走 chat 端 inline 调用,不走这套队列。 |
 | `user.prompt` | HTTP POST `/agent/run/dream`(复用 dream entry) | **600s** | 后续的 synthetic-prompt 通道,目前 placeholder。 |
 
-`_GENERATOR_KINDS = {generator.manual, generator.auto}` 走 `_GENERATOR_LEASE_SECONDS=1800`;`_LONG_RUNNING_KINDS = {auto.dreaming, connector.evolve, user.prompt}` 走 `_LONG_LEASE_SECONDS=600`,跟普通 60s 区分,防止 LLM 中段被 reaper 误判 crash。
+`_GENERATOR_KINDS = {generator.manual, generator.auto}` 走 `_GENERATOR_LEASE_SECONDS=600`;web→chat `/agent/generate` read timeout 和 chat route 内部 timeout 也都是 600s。`_LONG_RUNNING_KINDS = {auto.dreaming, connector.evolve, user.prompt}` 走 `_LONG_LEASE_SECONDS=600`,跟普通 60s 区分,防止 LLM 中段被 reaper 误判 crash。generator 虽然也是 LLM 链路,但产品上是即时生成,所以 10 分钟是硬失败边界。
 
 dispatcher 调用 chat 走 EdDSA 每 run JWT(`web/auth/agent_jwt.py`),凭证不跨 run 复用。chat 验签 + check `pai_jti_revocations` 黑名单(`chat/auth/run_jwt.py`)。
 
@@ -189,7 +189,7 @@ cron / interval 任务只有外部显式关掉时才会 archive(例如用户关�
 ### Lease + heartbeat
 
 - claim 时 dispatcher 起 `lease_expires_at = NOW() + lease_seconds`(per-kind 决定)。
-- 长任务可调 `heartbeat_run(user_id, run_id, lease_owner, lease_seconds)` 续约;目前 chat 端的 run loop 不主动续,统一靠 dispatcher 设的 kind-specific lease 兜住(generator 1800s,其它长任务 600s)。
+- 长任务可调 `heartbeat_run(user_id, run_id, lease_owner, lease_seconds)` 续约;目前 chat 端的 run loop 不主动续,统一靠 dispatcher 设的 kind-specific lease 兜住(generator 600s,其它长任务 600s)。
 - reaper 每 tick 跑一次,`status='running' AND lease_expires_at < NOW()` → `failed`。
 - handler 写完结果通过 `complete_run` 翻 `success` / `failed`;race 输的 dispatcher(`insert_run` 返回 False)直接 return,不写 result。
 

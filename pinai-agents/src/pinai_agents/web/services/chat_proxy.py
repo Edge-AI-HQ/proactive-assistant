@@ -24,7 +24,7 @@ from ..auth.agent_jwt import sign_agent_run_jwt
 
 logger = logging.getLogger(__name__)
 
-_GENERATE_READ_TIMEOUT_SECONDS = 1800.0
+_GENERATE_READ_TIMEOUT_SECONDS = 600.0
 
 
 def _chat_internal_url() -> str:

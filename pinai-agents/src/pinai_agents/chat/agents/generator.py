@@ -89,9 +89,53 @@ import asyncio, json
 from pathlib import Path
 from pinai_sdk import client
 
+RAW_SOURCE_BY_TOOLKIT = {
+    "gmail": ("gmail", "messages"),
+    "googlecalendar": ("gcal", "events"),
+    "gcal": ("gcal", "events"),
+    "googledrive": ("gdrive", "files"),
+    "gdrive": ("gdrive", "files"),
+    "slack": ("slack", "messages"),
+    "github": ("github", "issues"),
+    "calendly": ("calendly", "events"),
+    "stripe": ("stripe", "invoices"),
+    "youtube": ("youtube", "subscriptions"),
+    "linkedin": ("linkedin", "profile"),
+}
+
+def _connection_toolkit(connection):
+    if not isinstance(connection, dict):
+        return None
+    raw = connection.get("toolkit")
+    if isinstance(raw, dict):
+        raw = raw.get("slug") or raw.get("name")
+    return str(raw).strip().lower() if raw else None
+
+async def _fetch_connected_raw(connections):
+    if not isinstance(connections, list):
+        return {}
+    tasks = {}
+    seen = set()
+    for connection in connections:
+        toolkit_slug = _connection_toolkit(connection)
+        source = RAW_SOURCE_BY_TOOLKIT.get(toolkit_slug or "")
+        if source is None or source in seen:
+            continue
+        seen.add(source)
+        toolkit, entity = source
+        key = f"{toolkit}/{entity}"
+        tasks[key] = client.raw.list(toolkit, entity, hours=24, limit=20)
+    if not tasks:
+        return {}
+    results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+    return {
+        key: ({"_error": f"{type(value).__name__}: {value}"} if isinstance(value, BaseException) else value)
+        for key, value in zip(tasks.keys(), results)
+    }
+
 async def main():
     (profile, memory, signals, gmail, gcal,
-     cards_recent, feedback, world, preferences) = await asyncio.gather(
+     cards_recent, feedback, world, preferences, connections) = await asyncio.gather(
         client.profile.get(),
         client.memory.list(min_quality=0.7, limit=30),
         client.signals.recent(status="open", hours=24, min_salience=0.1, limit=80),
@@ -101,8 +145,10 @@ async def main():
         client.feedback.list(limit=50),
         client.world.recent(status="open", limit=10),
         client.preferences.list(status="active", limit=50),
+        client.composio.connections(),
         return_exceptions=True,
     )
+    connected_raw = await _fetch_connected_raw(connections)
     ambient_signal_details = []
     if isinstance(signals, list):
         ambient_ids = [
@@ -118,10 +164,10 @@ async def main():
             )
     keys = ["profile","memory","signals","gmail","gcal",
             "cards_recent","feedback","world","preferences",
-            "ambient_signal_details"]
+            "connections","connected_raw","ambient_signal_details"]
     vals = [profile, memory, signals, gmail, gcal,
             cards_recent, feedback, world, preferences,
-            ambient_signal_details]
+            connections, connected_raw, ambient_signal_details]
     digest = {}
     for k, v in zip(keys, vals):
         if isinstance(v, BaseException):
@@ -129,12 +175,17 @@ async def main():
         else:
             digest[k] = v
     Path("/state").mkdir(parents=True, exist_ok=True)
-    out = json.dumps(digest, default=str, indent=2)
+    out = json.dumps(digest, default=str, ensure_ascii=False, separators=(",", ":"))
     Path("/state/phase1.json").write_text(out)
-    summary = {k: ("error" if isinstance(digest[k], dict) and "_error" in digest[k]
-                   else (f"{len(digest[k])} rows" if isinstance(digest[k], list)
-                         else "ok"))
-               for k in keys}
+    summary = {
+        k: (
+            "error" if isinstance(digest[k], dict) and "_error" in digest[k]
+            else (f"{len(digest[k])} sources" if k == "connected_raw" and isinstance(digest[k], dict)
+                  else (f"{len(digest[k])} rows" if isinstance(digest[k], list)
+                        else "ok"))
+        )
+        for k in keys
+    }
     print(f"phase1 written: {len(out)} bytes, {summary}")
 
 asyncio.run(main())
@@ -154,7 +205,8 @@ the error verbatim — downstream agents will skip the run.
 <output>
 Return only a brief plain-text summary (no JSON, no markdown), e.g.:
 "phase1 written: profile=ok, memory=10 rows, signals=14 open,
-gmail=3, gcal=0 (empty), cards_recent=4, feedback=0 (empty)."
+gmail=3, gcal=0 (empty), connected_raw=4 sources,
+cards_recent=4, feedback=0 (empty)."
 The actual data is in `/state/phase1.json`.
 </output>
 """
@@ -247,6 +299,22 @@ on this batch, stronger than inferred signals:
   language-shaped preference for planning.
 </preference_alignment>
 
+<connected_raw_sources>
+`/state/phase1.json` includes `connections` (ACTIVE Composio accounts)
+and `connected_raw` (recent local raw rows from each connected, supported
+source over the last 24 hours). Treat `connected_raw` as first-class fresh
+evidence alongside Gmail/GCal:
+
+- Connected Slack appears under `connected_raw["slack/messages"]`.
+- Connected Google Drive appears under `connected_raw["gdrive/files"]`.
+- If a positive preference names a source or topic (for example Boliang
+  in Slack, or proactive AI docs in Drive), search the relevant
+  `connected_raw` rows before deciding there is no grounded card.
+- Do not require connector.evolve to have already converted raw rows into
+  memory or personal_signals. Fresh connected raw rows are enough to plan
+  a card when they satisfy a valid preference or strong user relevance.
+</connected_raw_sources>
+
 <ambient_transcript_attribution>
 `/state/phase1.json` may include `ambient.candidate_window` signals and
 `ambient_signal_details` with full payloads. Speaker labels are evidence
@@ -290,7 +358,8 @@ You are the ONLY subagent that produces user-facing card text.
    each plan item, write one card.
 2. Source data is in `/state/phase1.json` — `read_file` it to look up
    any source body you need to cite verbatim (gmail subjects, signal
-   summaries, memory text). Don't paraphrase a source name; quote it.
+   summaries, memory text, connected raw rows). Don't paraphrase a
+   source name; quote it.
 3. When `plan_item.pattern_id` is set, `read_file('/state/matched_patterns.json')`
    and find the matching entry. Use its `evidence` field to ensure every
    signal source the pattern requires actually appears as a verbatim
@@ -321,7 +390,9 @@ Every card must meet ALL:
   formatted as "signal id=sig_..., title=...", "memory id=mem_...,
   text=...", "gmail message id=..., subject=...", "profile id=primary,
   display_name='...', summary='...'", "world id=world_..., title=..."
-  (for items pulled from phase1's `world` layer — global news), etc.
+  (for items pulled from phase1's `world` layer — global news),
+  "slack message id=..., user=..., text=...", "gdrive file id=...,
+  name=...", etc.
   The reader (evaluator subagent) MUST be able to find each cited id
   back in phase1.json. World-signal citations are how downstream
   auto-consume identifies which news items the run actually used.
@@ -428,7 +499,7 @@ You MUST execute these four `task` calls in this exact order. Do not
 skip, reorder, or run in parallel — each step depends on the previous
 step's side-effects (sandbox files) or its returned JSON.
 
-1. `task(subagent_type="data-collector", description="Pull all 8 sources (profile / memory / signals / gmail / gcal / cards_recent / feedback / world) and persist /state/phase1.json. Today is {current_date}. Target {cards_to_generate} cards.")`
+1. `task(subagent_type="data-collector", description="Pull profile / memory / signals / gmail / gcal / cards_recent / feedback / world / preferences plus recent raw rows for every connected supported connector, then persist /state/phase1.json. Today is {current_date}. Target {cards_to_generate} cards.")`
    → Returns a one-line summary. Sandbox file `/state/phase1.json` is
    now populated. If the summary reports a fatal error (auth /
    sandbox), STOP and emit a GeneratorOutput with cards=[],
@@ -654,6 +725,7 @@ async def run_generator(
                         "pinai_agent": "generator",
                     },
                     "tags": ["pinai", "generator", f"pinai_run:{run_id}"],
+                    "recursion_limit": 80,
                 },
             )
     finally:

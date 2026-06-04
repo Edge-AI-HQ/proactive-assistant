@@ -423,7 +423,7 @@ async def generate(
                 "output_language": output_language,
                 "trigger": trigger,
             },
-            max_attempts=2,  # keep low — generator is expensive, retry once max
+            max_attempts=1,
         )
     return {
         "ok": True,

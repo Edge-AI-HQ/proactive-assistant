@@ -418,7 +418,7 @@ class PlanItem(_AgentModel):
     )
     primary_source_ids: list[str] = Field(
         default_factory=list,
-        description="ids from phase 1 data (signal/memory/gmail/gcal) that ground this plan.",
+        description="ids from phase 1 data (signal/memory/gmail/gcal/connected_raw) that ground this plan.",
     )
     pattern_id: str | None = Field(
         default=None,
@@ -428,7 +428,10 @@ class PlanItem(_AgentModel):
 
 
 class PlanOutput(_AgentModel):
-    plan: list[PlanItem]
+    plan: list[PlanItem] = Field(
+        min_length=1,
+        description="At least one planned card. A generator run must fail instead of succeeding with zero cards.",
+    )
     skipped_duplicates: list[str] = Field(
         default_factory=list,
         description="intent_keys / titles from cards.recent that the planner explicitly chose NOT to repeat. Audit trail.",
@@ -474,12 +477,15 @@ class GeneratedCard(_AgentModel):
     importance: float = Field(ge=0, le=1)
     sources: list[str] = Field(
         min_length=1,
-        description="Verbatim citations from phase 1 data: 'signal id=..., title=...', 'memory id=..., text=...', 'gmail message id=..., subject=...', etc. min_length=1 enforces grounding at the schema layer.",
+        description="Verbatim citations from phase 1 data: 'signal id=..., title=...', 'memory id=..., text=...', 'gmail message id=..., subject=...', 'slack message id=..., text=...', 'gdrive file id=..., name=...', etc. min_length=1 enforces grounding at the schema layer.",
     )
 
 
 class CardsList(_AgentModel):
-    cards: list[GeneratedCard]
+    cards: list[GeneratedCard] = Field(
+        min_length=1,
+        description="At least one generated card. Empty batches must not be treated as successful generation.",
+    )
     skipped_plan_items: list[str] = Field(
         default_factory=list,
         description="intent_keys from the plan that were dropped during generation (insufficient grounding, duplicate angle, etc.).",
@@ -520,7 +526,10 @@ class CardEvaluation(_AgentModel):
 
 
 class EvalReport(_AgentModel):
-    evaluations: list[CardEvaluation]
+    evaluations: list[CardEvaluation] = Field(
+        min_length=1,
+        description="At least one evaluation for a generated card.",
+    )
     batch_feedback: str = Field(
         max_length=3000,
         description="Cross-card observations: dedup audit, source attribution quality, basket distribution, weakest card and why.",
@@ -538,8 +547,14 @@ class GeneratorOutput(_AgentModel):
         max_length=3000,
         description="One-paragraph rationale: which subagents fired, dedup decisions, basket distribution, why count == N.",
     )
-    cards: list[GeneratedCard]
-    evaluations: list[CardEvaluation]
+    cards: list[GeneratedCard] = Field(
+        min_length=1,
+        description="At least one passing generated card. Zero-card runs are validation failures, not successful batches.",
+    )
+    evaluations: list[CardEvaluation] = Field(
+        min_length=1,
+        description="At least one evaluation explaining the generated cards.",
+    )
     batch_feedback: str = Field(max_length=3000)
 
 

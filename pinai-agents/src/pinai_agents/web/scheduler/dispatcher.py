@@ -118,8 +118,8 @@ def _chat_internal_url() -> str:
 # default 60s lease. The reaper would otherwise mark such runs "lease expired"
 # while the agent is still making progress.
 #
-# Generator runs can exceed 10 minutes when upstream model calls stall or retry,
-# so they get a longer lease matching the web->chat HTTP read timeout.
+# Generator is user-facing: if no cards land within 10 minutes, the run
+# must fail instead of holding the UI in an active state.
 # init / sync are pure HTTP-then-INSERT and stay at the default.
 _LONG_RUNNING_KINDS: frozenset[str] = frozenset(
     {
@@ -130,7 +130,7 @@ _LONG_RUNNING_KINDS: frozenset[str] = frozenset(
 )
 _GENERATOR_KINDS: frozenset[str] = frozenset({"generator.manual", "generator.auto"})
 _LONG_LEASE_SECONDS = 600
-_GENERATOR_LEASE_SECONDS = 1800
+_GENERATOR_LEASE_SECONDS = 600
 
 
 class DefaultDispatcher:
