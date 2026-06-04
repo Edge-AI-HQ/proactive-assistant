@@ -31,7 +31,13 @@ def _card(intent_key: str) -> GeneratedCard:
     )
 
 
-def _evaluation(intent_key: str, *, passed: bool, overall: float | None = None) -> CardEvaluation:
+def _evaluation(
+    intent_key: str,
+    *,
+    passed: bool,
+    overall: float | None = None,
+    feedback: str | None = None,
+) -> CardEvaluation:
     score = overall if overall is not None else (8 if passed else 0)
     return CardEvaluation(
         intentKey=intent_key,
@@ -42,7 +48,7 @@ def _evaluation(intent_key: str, *, passed: bool, overall: float | None = None) 
         decisionCompression=score,
         overall=score,
         pass_=passed,
-        feedback="usable card" if passed else "error placeholder, not a real card",
+        feedback=feedback or ("usable card" if passed else "error placeholder, not a real card"),
     )
 
 
@@ -118,6 +124,38 @@ def test_generate_route_fills_requested_count_after_passing_cards() -> None:
         "run_filter_card_01",
         None,
     ]
+
+
+def test_generate_route_does_not_fill_with_duplicate_failed_cards() -> None:
+    parsed = GeneratorOutput(
+        reasoning="one strong card and one duplicate failed card",
+        cards=[
+            _card("passed-one"),
+            _card("duplicate-high"),
+            _card("usable-high"),
+        ],
+        evaluations=[
+            _evaluation("passed-one", passed=True, overall=8),
+            _evaluation(
+                "duplicate-high",
+                passed=False,
+                overall=7.4,
+                feedback="Near-duplicate of cards_recent; novelty is critically low.",
+            ),
+            _evaluation(
+                "usable-high",
+                passed=False,
+                overall=7.1,
+                feedback="Grounded and useful, but action label could be stronger.",
+            ),
+        ],
+        batchFeedback="fill batch",
+    )
+
+    cards, evals = _serialize_passing_cards(parsed, run_id="run_filter", max_cards=3)
+
+    assert [card["intentKey"] for card in cards] == ["passed-one", "usable-high"]
+    assert [ev["cardId"] for ev in evals] == ["run_filter_card_00", None, "run_filter_card_01"]
 
 
 def test_generate_route_caps_returned_cards_to_requested_count() -> None:

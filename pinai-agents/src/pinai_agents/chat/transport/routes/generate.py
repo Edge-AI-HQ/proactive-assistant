@@ -60,6 +60,16 @@ _INFRA_ERROR_CARD_MARKERS = (
     "无法生成个性化卡片",
 )
 
+_DUPLICATE_REJECTION_MARKERS = (
+    "duplicate",
+    "near-duplicate",
+    "near duplicate",
+    "novelty is critically low",
+    "novelty is severely penalized",
+    "重复",
+    "近重复",
+)
+
 
 def _is_infra_error_card(card: dict[str, Any], evaluation: dict[str, Any] | None) -> bool:
     sources = card.get("sources")
@@ -77,6 +87,13 @@ def _is_infra_error_card(card: dict[str, Any], evaluation: dict[str, Any] | None
         if value
     ).lower()
     return any(marker in text for marker in _INFRA_ERROR_CARD_MARKERS)
+
+
+def _is_duplicate_rejection(evaluation: dict[str, Any] | None) -> bool:
+    if not evaluation or evaluation.get("pass") is True:
+        return False
+    feedback = str(evaluation.get("feedback") or "").lower()
+    return any(marker in feedback for marker in _DUPLICATE_REJECTION_MARKERS)
 
 
 def _serialize_passing_cards(
@@ -117,6 +134,7 @@ def _serialize_passing_cards(
             for card in raw_cards
             if str(card.get("intentKey")) not in selected_intents
             and not _is_infra_error_card(card, eval_by_intent.get(str(card.get("intentKey"))))
+            and not _is_duplicate_rejection(eval_by_intent.get(str(card.get("intentKey"))))
             and float(eval_by_intent.get(str(card.get("intentKey")), {}).get("overall") or -1) >= 5
         ]
         cards.extend(

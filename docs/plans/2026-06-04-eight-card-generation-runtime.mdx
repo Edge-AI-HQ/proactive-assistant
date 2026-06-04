@@ -15,8 +15,9 @@ description: "把卡片生成恢复到一次 8 张,同时控制在 10 分钟以�
 2. 把 phase1 压缩成 source index。
 3. planner 只做选题,输出多于 8 个候选。
 4. 每张卡只携带自己的 source bundle,并行生成和评价。
-5. 最后用轻量 batch rank 选出 8 张。
-6. card-thread fanout 限流,避免生成后又把 chat worker 打满。
+5. 如果 pass 不足目标数,用 top-up 再补一小批候选。
+6. 最后用轻量 final selection + rank 选出 8 张。
+7. card-thread fanout 限流,避免生成后又把 chat worker 打满。
 
 ## 目标
 
@@ -48,7 +49,9 @@ flowchart TD
   Plan --> Bundle["source bundle per plan item"]
   Bundle --> Writers["parallel card writers"]
   Writers --> Evals["parallel evaluators"]
-  Evals --> Rank["batch dedup/rank"]
+  Evals --> Topup["top-up when pass count is low"]
+  Topup --> Select["final selection"]
+  Select --> Rank["rule fallback rank"]
   Rank --> Persist["persist top 8"]
   Persist --> Fanout["rate-limited fanout"]
 ```
@@ -124,18 +127,36 @@ flowchart TD
 - 用 fake structured model 测试多个 plan item 会并行调 writer。
 - writer stage 只收到 source bundle,不收到完整 phase1。
 
-### Task 4: 并行单卡 evaluator + batch rank
+### Task 4: 并行单卡 evaluator + final selection
 
 修改:
 
 - evaluator 输入改成 `card_json + source_bundle_json`。
 - 新增 `_rank_cards(cards, evaluations, limit)`。
+- 新增 `FinalSelection` 小上下文终选 stage,只看 card/eval summaries。
 
 验证:
 
 - `pass=true` 且 `overall` 高的卡优先。
 - 同 intent_key 只保留最高分。
 - goal basket 尽量分散,但不牺牲 pass 质量。
+- final selection 返回未知 key 或不足时,Python rank fallback 补齐。
+
+### Task 4.5: pass 不足时 top-up 一轮
+
+修改:
+
+- `run_generator()` 在初始候选评价后统计 `pass=true` 数量。
+- 如果少于目标数,用 top 40 sources 的 compact phase1 + existing intent keys + existing card summaries 再跑 planner。
+- top-up 只规划新 intent,最多 2 轮;第一轮最多 6 个候选,第二轮最多 4 个候选,然后复用 per-card writer/evaluator。
+- `cards_recent` 在 compact planner input 中保留 title / whyNow / summary / sources 摘要,避免 planner 用 `v2` / `v3` 变体绕过语义去重。
+- 若 top-up 后仍不足 8 张 non-duplicate pass 卡,最终可以少于 8 张;这表示当前数据不足,不是生成失败。
+
+验证:
+
+- 源码包含 `topup_planner` stage。
+- top-up 失败只记录 warning,不让整轮生成失败。
+- route 不拿 evaluator 明确判 duplicate 的 failed card 补数。
 
 ### Task 5: fanout 限流
 

@@ -9,7 +9,7 @@ description: "卡片生成 pipeline 的当前事实。"
 
 卡片生成全链路异步:
 
-`POST /api/generate → enqueue_once(kind=generator.manual) → pai_scheduled_tasks → web tick_loop → dispatcher._run_generator → HTTP POST chat /agent/generate → data-collector → source index → planner → 并行 card-generator / evaluator → rank → 返回 JSON → web persist_generator_run → pai_pipeline_runs + pai_card_evaluations`
+`POST /api/generate → enqueue_once(kind=generator.manual) → pai_scheduled_tasks → web tick_loop → dispatcher._run_generator → HTTP POST chat /agent/generate → data-collector → source index → planner → 并行 card-generator / evaluator → 必要时 top-up → final selection → rank → 返回 JSON → web persist_generator_run → pai_pipeline_runs + pai_card_evaluations`
 
 前端 `POST /api/generate` 拿 `taskId` 后轮询 `/api/agent-runs/active` + `/api/cards`。同一用户只能有一个 active generator,duplicate 直接返回既有 taskId(dedupe pattern)。`generator.auto` 是另一种 kind,frontend settings 改 interval 时 web 侧 upsert 到 `pai_scheduled_tasks` 上,scheduler 周期触发。
 
@@ -74,7 +74,9 @@ sequenceDiagram
   Agent->>Agent: planner → PlanOutput candidates
   Agent->>Agent: parallel card-generator per source bundle
   Agent->>Agent: parallel evaluator per card/source bundle
-  Agent->>Agent: rank top cards
+  Agent->>Agent: top-up if pass count is below target
+  Agent->>Agent: final selection over small card/eval summaries
+  Agent->>Agent: rank/fill top cards
   Chat-->>Sched: GeneratorResponse { cards, evaluations, batch_feedback }
   Sched->>Save: persist_generator_run(...)
   Save->>DB: pai_pipeline_runs + pai_card_evaluations
@@ -113,7 +115,9 @@ run_generator()
   ├─ planner             → PlanOutput(最多 target+4,上限 12)
   ├─ card-generator x N  → 每个 PlanItem 一个 source bundle,并发上限 4
   ├─ evaluator x N       → 每张卡独立评价,并发上限 4
-  └─ rank                → 按 pass/overall/importance/urgency + intent 去重选 top N
+  ├─ top-up              → pass 不足目标数时再规划/生成/评价一小批候选
+  ├─ final-selection     → 只看卡片摘要 + evaluator 分数,做最终编辑排序
+  └─ rank/fill           → final-selection 不足或失败时按 pass/overall/importance/urgency + intent 去重补齐 top N
 ```
 
 ### Stage 职责
@@ -121,15 +125,19 @@ run_generator()
 | Stage | 输入 | 输出 |
 |---|---|---|
 | data-collector | sandbox 里跑 `pinai_sdk` 拉 profile / memory / signals / gmail / gcal / cards_recent / feedback / world / **active non-expired preferences** | `/state/phase1.json` |
-| source-index | full phase1 JSON | `SourceRecord[]`(`id/source_type/title/snippet/timestamp/salience/citation/payload`) + compact planner input。 |
+| source-index | full phase1 JSON | `SourceRecord[]`(`id/source_type/title/snippet/timestamp/salience/citation/payload`) + compact planner input。`cards_recent` 保留 title / whyNow / summary / sources 摘要,用于语义去重。 |
 | planner | compact phase1 + matched patterns | `PlanOutput {plan[], skipped_duplicates[], cold_baskets[], notes}`。目标候选数是 `cards_to_generate + 4`,最多 12。 |
 | card-generator | 单个 `PlanItem` + 对应 source bundle | `CardsList`,通常一张卡;`sources[]` 必须复制 bundle citation。 |
 | evaluator | 单张卡 + 同一个 source bundle | `EvalReport`,5 维评分 `relevance / actionability / why_now_clarity / novelty / decision_compression`,`overall = mean`,`pass = (overall >= 5.0 AND no grounding violation)`。 |
-| rank | cards + evaluations | 去重同 intent,优先 `pass=true` / high overall / high importance / high urgency,选 top N。 |
+| top-up | compact phase1 + existing intent keys + existing card summaries | 当 `pass=true` 少于目标数时,最多补 2 轮。top-up 只看 top 40 sources + 12 张 recent cards 的压缩视图;第一轮最多 6 个新候选,第二轮最多 4 个,都跳过既有 intent,并显式避开 recent/current card 的语义重复。 |
+| final-selection | 小的 card/eval summaries | 结构化 `FinalSelection`,只输出 intent key 顺序和 rejection notes,用于最终编辑精选;失败时回退规则排序。 |
+| rank/fill | cards + evaluations + final selection | 去重同 intent,优先 `pass=true` / high overall / high importance / high urgency,并按 final-selection 顺序补齐 top N。 |
 
 ### 选卡规则
 
 - `pass==true` 的卡优先进最终响应,chat route 再按请求的 `cards_to_generate` 硬截断;当前用户可见生成默认/上限是 8 张。
+- route 只用 `overall >= 5` 的非 duplicate failed 卡补数;如果 evaluator 明确说 near-duplicate / novelty critically low,不会为了凑数进入最终卡流。
+- 如果当前数据里不足 8 张非重复、可通过 evaluator 的候选,最终响应允许少于 8 张;这是质量底线,不是 timeout/error。产品层要展示"本轮只找到 N 张高质量卡",不要把重复卡硬凑进去。
 - 如果 evaluator 把所有真实候选都判 fail,chat route 保留最高 `overall` 的 1 张候选,同时把 failed evaluation 保留做审计,避免整轮生成 502。
 - infra tombstone / error card 不允许进入卡流:空 `GeneratorOutput` 或只有 `ConnectError` / `_error` / `no-grounded-source-fallback` 的候选会变成失败 run,不会持久化为 `pai_pipeline_runs.final_cards`。
 - card id 在 web 侧重写:`f"{run_id}_card_{i:02d}"`(`chat/routes/generate.py:121`),evaluation 的 cardId 按 `intentKey` 匹配 + 重 map(`:130`)。
@@ -204,7 +212,7 @@ langsmith trace list --project pinai-agents-dev --run-type chain --format pretty
 - `generator.manual` 跟 `generator.auto` 是两个独立 kind(migration `039` 拆开),dispatcher 走同一 `_run_generator`,但 dedupe 只查 `manual`;auto 周期跑不阻塞 manual,反过来也不阻塞。
 - `pai_pipeline_runs.id` 和 `run_id` 现在故意同值(老 schema 留两列做 multi-run pipeline 时分开,现在 step 1 generator 是单 agent invocation,合一)。
 - 客户端必须按 `runId` polling 而不是按时间戳猜 — auto-generate 会让"最新一行" race condition。
-- writer / evaluator 是 per-card 并发调用,不要重新把 full phase1 放回每张卡的 prompt;否则 8 张会重新退化成大上下文超时问题。
+- writer / evaluator 是 per-card 并发调用,final-selection 也只看小的 card/eval summaries;不要重新把 full phase1 放回每张卡或终选 prompt,否则 8 张会重新退化成大上下文超时问题。
 - 生成后 card fanout 默认只预热前 2 张卡,其余卡用户打开时按 existing fallback bootstrap;不要把 8 张卡全部同步预热。
 - `cards[i].sources[]` 必须非空且能在 sandbox 里 verbatim 验证(signal id 真存在、gmail id 能 fetch 到),evaluator 把"grounding violation"当 hard fail。这是 LLM 编卡内容的一道闸,实施层别削弱它。
 - 本地只想验证 generator 质量、不想走 Daytona/ngrok 时,可以用 `PINAI_LOCAL_SANDBOX=1 docker compose up -d --force-recreate pinai-chat`。这会让 generator 的 DeepAgents code execution 在 `pinai-chat` 容器里跑,`pinai_sdk` 通过 docker DNS 调 `http://pinai-web:8000`。默认值仍是 `0`,线上不走这条。
