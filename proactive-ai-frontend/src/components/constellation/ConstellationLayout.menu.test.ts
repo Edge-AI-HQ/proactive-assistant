@@ -13,7 +13,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 describe("ConstellationLayout menu order", () => {
   test("matches the minimalist constellation design nav order", () => {
-    const source = readFileSync(join(__dirname, "ConstellationLayout.tsx"), "utf8");
+    // MENU_ITEMS moved into SideMenu.tsx (god-component extraction); the
+    // nav order it locks is unchanged.
+    const source = readFileSync(join(__dirname, "SideMenu.tsx"), "utf8");
     const menuSource = source.match(/const MENU_ITEMS = \[([\s\S]*?)\] as const;/);
 
     expect(menuSource).not.toBeNull();

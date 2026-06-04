@@ -11,7 +11,7 @@ import {
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Menu, X, Zap, ListChecks, Settings, Pencil, Radio, Plug,
+  Menu, Zap, ListChecks, Settings, Pencil, Radio, Plug,
   ArrowRight, ChevronDown, Check, Cloud, Lock as LockIcon,
   MapPin, Sun, Activity, Users, ChevronUp, Target, Loader2,
 } from "lucide-react";
@@ -64,7 +64,6 @@ import {
   isFromRightEdgeOfScreen,
   isMainChatEntrySwipeUp,
   isMainMenuSwipeLeft,
-  isMainMenuSwipeRight,
   shouldIgnoreMainMenuSwipeTarget,
   type TouchPoint,
 } from "./mainChatEntryGesture";
@@ -72,6 +71,7 @@ import { useAppNavigation, type MenuId } from "./useAppNavigation";
 import SwipeBackLayer from "./SwipeBackLayer";
 import LiveOverlay from "./LiveOverlay";
 import MainChatOverlay from "./MainChatOverlay";
+import SideMenu from "./SideMenu";
 import {
   realIntentToChatCard,
   realCardToLovableIntent,
@@ -80,16 +80,6 @@ import {
   type CardStatus,
 } from "./cardModel";
 
-
-/* ── Hamburger side menu items ── */
-const MENU_ITEMS = [
-  { id: "now", label: "NOW", icon: Zap },
-  { id: "ambient", label: "AMBIENT", icon: Radio },
-  { id: "chat", label: "TASKS", icon: ListChecks },
-  { id: "connect", label: "CONNECT", icon: Plug },
-  { id: "profile", label: "PROFILE", icon: Target },
-  { id: "account", label: "SETTING", icon: Settings },
-] as const;
 
 const CONSTELLATION_HEADER_TOP =
   "max(4.5rem, calc(max(env(safe-area-inset-top, 0px), var(--safe-top, 0px)) + 0.75rem))";
@@ -338,7 +328,6 @@ export default function BigBallLayout() {
   const [cardChats, setCardChats] = useState<ChatCard[]>([]);
   const [chatMode, setChatMode] = useState<"confirm" | "modify" | "done" | "steer">("confirm");
   const mainMenuSwipeStartRef = useRef<TouchPoint | null>(null);
-  const menuCloseSwipeStartRef = useRef<TouchPoint | null>(null);
   const canOpenMenuFromMainSwipe = (
     !menuOpen
     && !mainChatOpen
@@ -451,66 +440,6 @@ export default function BigBallLayout() {
   }, [openMenuFromMainSwipe]);
   const resetMainMenuSwipe = useCallback(() => {
     mainMenuSwipeStartRef.current = null;
-  }, []);
-  const closeMenuFromSwipe = useCallback((
-    end: TouchPoint,
-    event: { preventDefault: () => void },
-  ) => {
-    const shouldClose = isMainMenuSwipeRight(menuCloseSwipeStartRef.current, end);
-    if (!shouldClose) return;
-    menuCloseSwipeStartRef.current = null;
-    event.preventDefault();
-    setMenuOpen(false);
-  }, []);
-  const handleMenuPointerDown = useCallback((event: PointerEvent<HTMLDivElement>) => {
-    menuCloseSwipeStartRef.current = {
-      x: event.clientX,
-      y: event.clientY,
-    };
-  }, []);
-  const handleMenuPointerMove = useCallback((event: PointerEvent<HTMLDivElement>) => {
-    closeMenuFromSwipe({
-      x: event.clientX,
-      y: event.clientY,
-    }, event);
-  }, [closeMenuFromSwipe]);
-  const handleMenuPointerUp = useCallback((event: PointerEvent<HTMLDivElement>) => {
-    closeMenuFromSwipe({
-      x: event.clientX,
-      y: event.clientY,
-    }, event);
-    menuCloseSwipeStartRef.current = null;
-  }, [closeMenuFromSwipe]);
-  const handleMenuTouchStart = useCallback((event: TouchEvent<HTMLDivElement>) => {
-    const touch = event.touches[0];
-    if (!touch) return;
-    menuCloseSwipeStartRef.current = {
-      x: touch.clientX,
-      y: touch.clientY,
-    };
-  }, []);
-  const handleMenuTouchMove = useCallback((event: TouchEvent<HTMLDivElement>) => {
-    const touch = event.touches[0];
-    if (!touch) return;
-    closeMenuFromSwipe({
-      x: touch.clientX,
-      y: touch.clientY,
-    }, event);
-  }, [closeMenuFromSwipe]);
-  const handleMenuTouchEnd = useCallback((event: TouchEvent<HTMLDivElement>) => {
-    const touch = event.changedTouches[0];
-    if (!touch) {
-      menuCloseSwipeStartRef.current = null;
-      return;
-    }
-    closeMenuFromSwipe({
-      x: touch.clientX,
-      y: touch.clientY,
-    }, event);
-    menuCloseSwipeStartRef.current = null;
-  }, [closeMenuFromSwipe]);
-  const resetMenuCloseSwipe = useCallback(() => {
-    menuCloseSwipeStartRef.current = null;
   }, []);
 
   // Sphere card status is driven entirely by the real backend now:
@@ -994,74 +923,13 @@ export default function BigBallLayout() {
       <MainChatOverlay open={mainChatOpen} onBack={() => closeMainChat()} />
 
       {/* Hamburger side menu overlay */}
-      <AnimatePresence>
-        {menuOpen && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-40 bg-foreground/10 backdrop-blur-sm"
-              onClick={() => setMenuOpen(false)}
-              onPointerDown={handleMenuPointerDown}
-              onPointerMove={handleMenuPointerMove}
-              onPointerUp={handleMenuPointerUp}
-              onPointerCancel={resetMenuCloseSwipe}
-              onTouchStart={handleMenuTouchStart}
-              onTouchMove={handleMenuTouchMove}
-              onTouchEnd={handleMenuTouchEnd}
-              onTouchCancel={resetMenuCloseSwipe}
-            />
-            <motion.div
-              initial={{ x: "100%" }}
-              animate={{ x: 0 }}
-              exit={{ x: "100%" }}
-              transition={{ type: "spring", damping: 28, stiffness: 300 }}
-              className="fixed top-0 right-0 bottom-0 z-50 w-56"
-              onPointerDown={handleMenuPointerDown}
-              onPointerMove={handleMenuPointerMove}
-              onPointerUp={handleMenuPointerUp}
-              onPointerCancel={resetMenuCloseSwipe}
-              onTouchStart={handleMenuTouchStart}
-              onTouchMove={handleMenuTouchMove}
-              onTouchEnd={handleMenuTouchEnd}
-              onTouchCancel={resetMenuCloseSwipe}
-              style={{
-                background: "linear-gradient(180deg, hsl(0 0% 100% / 0.85) 0%, hsl(0 0% 100% / 0.95) 100%)",
-                backdropFilter: "blur(48px) saturate(1.5)",
-                WebkitBackdropFilter: "blur(48px) saturate(1.5)",
-                borderLeft: "1px solid hsl(0 0% 100% / 0.5)",
-              }}
-            >
-              <div className="pt-14 px-5">
-                <button onClick={() => setMenuOpen(false)} className="mb-8 p-1.5 rounded-full hover:bg-foreground/8">
-                  <X size={20} strokeWidth={1.5} className="text-foreground/60" />
-                </button>
-                <div className="flex flex-col gap-1">
-                  {MENU_ITEMS.map((item) => {
-                    const Icon = item.icon;
-                    const isActive = activeView === item.id && !activeChat;
-                    return (
-                      <button
-                        key={item.id}
-                        onClick={() => handleMenuNav(item.id)}
-                        className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
-                          isActive ? "bg-foreground/8 text-foreground" : "text-foreground/50 hover:bg-foreground/4"
-                        }`}
-                      >
-                        <Icon size={18} strokeWidth={isActive ? 2 : 1.5} />
-                        <span className={`text-sm tracking-wider ${isActive ? "font-semibold" : "font-medium"}`}>
-                          {item.label}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
+      <SideMenu
+        open={menuOpen}
+        activeView={activeView}
+        activeChat={activeChat}
+        onClose={() => setMenuOpen(false)}
+        onNavigate={handleMenuNav}
+      />
 
       {/* Card detail drawer */}
       <Drawer open={drawerOpen} onOpenChange={setDrawerOpen}>
