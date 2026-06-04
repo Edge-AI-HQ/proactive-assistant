@@ -1,4 +1,4 @@
-import { X, Pencil, Check, Lock as LockIcon } from "lucide-react";
+import { X, Pencil, Check, Lock as LockIcon, Loader2 } from "lucide-react";
 import { useCardExecutionRun } from "@/hooks/useCardExecutionRun";
 import { DrawerDetailBody } from "./CardDrawerDetail";
 import { CATEGORIES, type Intent } from "./cardModel";
@@ -17,6 +17,7 @@ import { CATEGORIES, type Intent } from "./cardModel";
 export default function CardDrawerContent({
   card,
   completed,
+  pending,
   onExecute,
   onClose,
   onModify,
@@ -24,6 +25,7 @@ export default function CardDrawerContent({
 }: {
   card: Intent;
   completed: boolean;
+  pending: boolean;
   onExecute: (card: Intent) => void;
   onClose: () => void;
   onModify: (card: Intent) => void;
@@ -97,23 +99,28 @@ export default function CardDrawerContent({
           <>
             <button
               onClick={() => onDismiss(card)}
-              className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[13px] font-medium text-foreground/55"
+              disabled={pending}
+              className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[13px] font-medium text-foreground/55 disabled:opacity-45 disabled:cursor-default"
             >
               <X size={13} strokeWidth={2} /> Dismiss
             </button>
             {!card.locked && (
               <button
                 onClick={() => onModify(card)}
-                className="flex items-center justify-center gap-1 px-3 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[12px] font-medium text-foreground/55"
+                disabled={pending}
+                className="flex items-center justify-center gap-1 px-3 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[12px] font-medium text-foreground/55 disabled:opacity-45 disabled:cursor-default"
               >
                 <Pencil size={11} strokeWidth={2} /> Steer
               </button>
             )}
             <button
               onClick={() => onExecute(card)}
-              className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground text-background text-[13px] font-semibold hover:bg-foreground/85 transition-colors"
+              disabled={pending}
+              className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground text-background text-[13px] font-semibold hover:bg-foreground/85 transition-colors disabled:opacity-70 disabled:cursor-default"
             >
-              {card.locked ? (
+              {pending ? (
+                <><Loader2 size={13} className="animate-spin" /> Opening...</>
+              ) : card.locked ? (
                 <><LockIcon size={13} strokeWidth={2.5} /> Approve</>
               ) : (
                 <><Check size={13} strokeWidth={2.5} /> Approve</>

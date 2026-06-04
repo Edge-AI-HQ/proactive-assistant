@@ -24,7 +24,6 @@ import AccountPanel from "./AccountPanel";
 import ConnectPanel from "./ConnectPanel";
 import AmbientView, { type TimelineEntry as AmbientTimelineEntry } from "./AmbientView";
 import ChatDetailView, { type ChatCard, brandSvg, detectToolIcon } from "./ChatDetailView";
-import CardDrawerContent from "./CardDrawerContent";
 import { useCardExecutionRun } from "@/hooks/useCardExecutionRun";
 import { PlanPaymentForm, PLANS, type PlanId, type PayMethod, type CardInfo } from "./PlanPaymentForm";
 import {
@@ -72,6 +71,7 @@ import SwipeBackLayer from "./SwipeBackLayer";
 import LiveOverlay from "./LiveOverlay";
 import MainChatOverlay from "./MainChatOverlay";
 import SideMenu from "./SideMenu";
+import CardDetailDrawer from "./CardDetailDrawer";
 import {
   realIntentToChatCard,
   realCardToLovableIntent,
@@ -932,85 +932,66 @@ export default function BigBallLayout() {
       />
 
       {/* Card detail drawer */}
-      <Drawer open={drawerOpen} onOpenChange={setDrawerOpen}>
-        <DrawerContent
-          className="max-h-[92vh] border-t-0 !bg-transparent"
-          style={{
-            background: "linear-gradient(180deg, hsla(0, 0%, 100%, 0.5) 0%, hsla(0, 0%, 100%, 0.7) 100%)",
-            backdropFilter: "blur(40px) saturate(1.5)",
-            WebkitBackdropFilter: "blur(40px) saturate(1.5)",
-            border: "1px solid hsla(0, 0%, 100%, 0.4)",
-            borderBottom: "none",
-            borderRadius: "1.5rem 1.5rem 0 0",
-          }}
-          overlayClassName="!bg-foreground/5 backdrop-blur-[2px]"
-        >
-          <DrawerHeader className="sr-only">
-            <DrawerTitle>{selectedCard?.title ?? "Card Detail"}</DrawerTitle>
-            <DrawerDescription>Card detail view</DrawerDescription>
-          </DrawerHeader>
-          {selectedCard && (
-            <CardDrawerContent
-              card={selectedCard}
-              completed={
-                selectedCard.originalId
-                  ? cardActions.doneIds.has(selectedCard.originalId) ||
-                    isCompletedCardOutcome(
-                      cardsState.cards.find(
-                        (c) => c.card.id === selectedCard.originalId,
-                      )?.latestOutcome,
-                    )
-                  : false
-              }
-              pending={
-                selectedCard.originalId
-                  ? cardActions.processingIds.has(selectedCard.originalId)
-                  : false
-              }
-              onExecute={handleExecute}
-              onClose={() => { setDrawerOpen(false); setSelectedCard(null); }}
-              onDismiss={(card) => {
-                setDrawerOpen(false);
-                setSelectedCard(null);
-                // Real card → POST /feedback kind=dismiss (useCardActions).
-                if (card.originalId) {
-                  const real = cardsState.cards.find(
-                    (c) => c.card.id === card.originalId,
-                  )?.card;
-                  if (real) {
-                    void cardActions.dismiss(real);
-                    return;
-                  }
-                }
-              }}
-              onModify={(card) => {
-                setDrawerOpen(false);
-                setSelectedCard(null);
-                recordChatEntryView();
-                // Real card → POST /feedback kind=card_action action=modify
-                // and open the card-thread as the feedback / steer surface.
-                if (card.originalId) {
-                  const real = cardsState.cards.find(
-                    (c) => c.card.id === card.originalId,
-                  )?.card;
-                  if (real) {
-                    void cardActions.modify(real);
-                    return;
-                  }
-                }
-                const chatCard = card as ChatCard;
-                setCardChats((prev) => {
-                  if (prev.find((c) => c.id === chatCard.id)) return prev;
-                  return [chatCard, ...prev];
-                });
-                setChatMode("steer");
-                navigateTo("chat");
-                setActiveChat(chatCard);
-              }}
-            />
-          )}
-        </DrawerContent>
-      </Drawer>
+      <CardDetailDrawer
+        open={drawerOpen}
+        onOpenChange={setDrawerOpen}
+        card={selectedCard}
+        completed={
+          selectedCard?.originalId
+            ? cardActions.doneIds.has(selectedCard.originalId) ||
+              isCompletedCardOutcome(
+                cardsState.cards.find(
+                  (c) => c.card.id === selectedCard.originalId,
+                )?.latestOutcome,
+              )
+            : false
+        }
+        pending={
+          selectedCard?.originalId
+            ? cardActions.processingIds.has(selectedCard.originalId)
+            : false
+        }
+        onExecute={handleExecute}
+        onClose={() => { setDrawerOpen(false); setSelectedCard(null); }}
+        onDismiss={(card) => {
+          setDrawerOpen(false);
+          setSelectedCard(null);
+          // Real card → POST /feedback kind=dismiss (useCardActions).
+          if (card.originalId) {
+            const real = cardsState.cards.find(
+              (c) => c.card.id === card.originalId,
+            )?.card;
+            if (real) {
+              void cardActions.dismiss(real);
+              return;
+            }
+          }
+        }}
+        onModify={(card) => {
+          setDrawerOpen(false);
+          setSelectedCard(null);
+          recordChatEntryView();
+          // Real card → POST /feedback kind=card_action action=modify
+          // and open the card-thread as the feedback / steer surface.
+          if (card.originalId) {
+            const real = cardsState.cards.find(
+              (c) => c.card.id === card.originalId,
+            )?.card;
+            if (real) {
+              void cardActions.modify(real);
+              return;
+            }
+          }
+          const chatCard = card as ChatCard;
+          setCardChats((prev) => {
+            if (prev.find((c) => c.id === chatCard.id)) return prev;
+            return [chatCard, ...prev];
+          });
+          setChatMode("steer");
+          navigateTo("chat");
+          setActiveChat(chatCard);
+        }}
+      />
 
       {/* Paywall dialog — locked tasks require Pro to approve */}
       <Drawer open={!!paywallCard} onOpenChange={(o) => !o && setPaywallCard(null)}>
