@@ -1169,7 +1169,7 @@ export default function BigBallLayout() {
                 animate={{ y: 0 }}
                 exit={{ y: "100%" }}
                 transition={{ type: "spring", stiffness: 320, damping: 32, mass: 0.9 }}
-                className="relative w-full max-w-md h-screen overflow-hidden bg-background will-change-transform"
+                className="relative w-full max-w-md h-screen overflow-hidden will-change-transform"
               >
                 <SwipeBackLayer onBack={() => closeMainChat()} className="h-full">
                   <MainChat onBack={() => closeMainChat()} />
