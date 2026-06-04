@@ -19,6 +19,7 @@ from pinai_agents.chat.tools.direct import (
     composio_manage_connections,
     composio_multi_execute_tool,
     composio_search_tools,
+    development_feedback_log,
     feedback_list,
     memory_add,
     memory_get,
@@ -233,6 +234,53 @@ async def test_feedback_list_path(mock_http, jwt_ctx):
     assert call["params"]["kind"] == "card_action"
     assert call["params"]["action"] == "dismiss"
     assert call["params"]["limit"] == 20
+
+
+@pytest.mark.asyncio
+async def test_development_feedback_log_post_body(mock_http, jwt_ctx):
+    await development_feedback_log.ainvoke(
+        {
+            "text": "Can you add an export button to these cards?",
+            "summary": "User wants an export button on cards.",
+            "category": "ui",
+            "surface": "main_chat",
+            "conversation_id": "thread_main",
+            "message_id": "msg_123",
+            "metadata": {"requested_control": "export_button"},
+        }
+    )
+    call = mock_http[0]
+    assert call["method"] == "POST"
+    assert call["path"] == "/api/agent/development-feedback/log"
+    assert call["body"] == {
+        "text": "Can you add an export button to these cards?",
+        "summary": "User wants an export button on cards.",
+        "category": "ui",
+        "surface": "main_chat",
+        "conversationId": "thread_main",
+        "messageId": "msg_123",
+        "metadata": {"requested_control": "export_button"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_development_feedback_log_defaults_conversation_id_from_session(mock_http):
+    with run_context(
+        user_id=42,
+        run_id="run_test",
+        run_jwt="fake-jwt",
+        virtual_key="vk-x",
+        session_key="main-42-session",
+    ):
+        await development_feedback_log.ainvoke(
+            {
+                "text": "Can you add an export button to these cards?",
+                "category": "feature",
+            }
+        )
+
+    call = mock_http[0]
+    assert call["body"]["conversationId"] == "main-42-session"
 
 
 @pytest.mark.asyncio

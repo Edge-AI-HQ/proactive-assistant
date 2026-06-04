@@ -30,6 +30,7 @@ from .composio_meta import (
     composio_multi_execute_tool,
     composio_search_tools,
 )
+from .development_feedback import development_feedback_log
 from .feedback import feedback_list
 from .memory import memory_add, memory_get, memory_list, memory_search
 from .preferences import preference_add, set_generation_language
@@ -78,6 +79,8 @@ ALL_TOOLS = [
     # Cards + feedback (recency-bounded reference)
     cards_recent,
     feedback_list,
+    # Product-team triage suggestions. This is not a personalization signal.
+    development_feedback_log,
     # Web search + read (Tavily). search returns ranked snippets;
     # extract pulls full markdown for 1-20 URLs in one call.
     tavily_search,
@@ -102,6 +105,7 @@ __all__ = [
     "composio_manage_connections",
     "composio_multi_execute_tool",
     "composio_search_tools",
+    "development_feedback_log",
     "feedback_list",
     "goal_upsert",
     "memory_add",
