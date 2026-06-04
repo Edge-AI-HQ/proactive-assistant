@@ -570,7 +570,7 @@ async def run_generator(
     user_id: int,
     run_id: str,
     run_jwt: str,
-    cards_to_generate: int = 8,
+    cards_to_generate: int = 3,
     output_language: str = "en",
     user_message: str = "Generate Intent Cards now.",
     matched_patterns: list[dict[str, Any]] | None = None,

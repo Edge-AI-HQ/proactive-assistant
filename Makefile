@@ -154,7 +154,13 @@ down: ## Stop all services
 
 restart: ensure-env ## Rebuild + recreate pinai-web + pinai-chat (most common dev loop)
 	$(COMPOSE) build pinai-web
-	$(COMPOSE) up -d --force-recreate --no-deps pinai-web pinai-chat
+	@url=$$(bash scripts/ngrok_url.sh 2>/dev/null || true); \
+	if [ -n "$$url" ]; then \
+		echo "→ injecting PAI_API_URL=$$url into pinai-chat"; \
+		PAI_API_URL="$$url" $(COMPOSE) up -d --force-recreate --no-deps pinai-web pinai-chat; \
+	else \
+		$(COMPOSE) up -d --force-recreate --no-deps pinai-web pinai-chat; \
+	fi
 
 restart-frontend: ensure-env-pinai-agents ## Rebuild + recreate frontend container
 	$(export_vite) && $(COMPOSE) build frontend

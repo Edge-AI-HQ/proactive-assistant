@@ -27,7 +27,7 @@ router = APIRouter()
 
 
 class GenerateRequest(BaseModel):
-    cards_to_generate: StrictInt = Field(default=8, ge=1, le=10)
+    cards_to_generate: StrictInt = Field(default=3, ge=1, le=3)
     output_language: str = Field(default="en")
     # Optional: caller-supplied run id. Web's scheduler dispatcher passes
     # the task.id here so pai_scheduled_tasks → pai_pipeline_runs share
@@ -49,6 +49,36 @@ class GenerateResponse(BaseModel):
     batch_feedback: str | None = None
 
 
+_INFRA_ERROR_CARD_MARKERS = (
+    "_error=",
+    "connecterror",
+    "name or service not known",
+    "no-grounded-source-fallback",
+    "system-error tombstone",
+    "should never reach the user-facing pipeline",
+    "数据源暂时无法连接",
+    "无法生成个性化卡片",
+)
+
+
+def _is_infra_error_card(card: dict[str, Any], evaluation: dict[str, Any] | None) -> bool:
+    sources = card.get("sources")
+    source_text = " ".join(str(item) for item in sources) if isinstance(sources, list) else ""
+    text = " ".join(
+        str(value)
+        for value in (
+            card.get("intentKey"),
+            card.get("title"),
+            card.get("whyNow"),
+            card.get("summary"),
+            source_text,
+            (evaluation or {}).get("feedback"),
+        )
+        if value
+    ).lower()
+    return any(marker in text for marker in _INFRA_ERROR_CARD_MARKERS)
+
+
 def _serialize_passing_cards(
     parsed,
     *,
@@ -63,6 +93,8 @@ def _serialize_passing_cards(
     attached for audit.
     """
     raw_cards: list[dict[str, Any]] = [c.model_dump(by_alias=True) for c in parsed.cards]
+    if not raw_cards:
+        raise ValueError("generator returned no cards")
     evals: list[dict[str, Any]] = [e.model_dump(by_alias=True) for e in parsed.evaluations]
     eval_by_intent = {
         str(ev.get("intentKey")): ev for ev in evals if isinstance(ev.get("intentKey"), str)
@@ -72,10 +104,22 @@ def _serialize_passing_cards(
         for ev in evals
         if ev.get("pass") is True and ev.get("intentKey")
     }
-    cards = [card for card in raw_cards if str(card.get("intentKey")) in passing_intents]
+    cards = [
+        card
+        for card in raw_cards
+        if str(card.get("intentKey")) in passing_intents
+        and not _is_infra_error_card(card, eval_by_intent.get(str(card.get("intentKey"))))
+    ]
     if not cards:
+        fallback_cards = [
+            card
+            for card in raw_cards
+            if not _is_infra_error_card(card, eval_by_intent.get(str(card.get("intentKey"))))
+        ]
+        if not fallback_cards:
+            raise ValueError("generator returned only infrastructure-error cards")
         cards = sorted(
-            raw_cards,
+            fallback_cards,
             key=lambda card: float(
                 eval_by_intent.get(str(card.get("intentKey")), {}).get("overall") or -1
             ),

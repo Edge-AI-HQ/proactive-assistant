@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import inspect
 
+import pytest
+
 from pinai_agents.chat.transport.routes import generate as generate_route
 from pinai_agents.chat.transport.routes.generate import _serialize_passing_cards
 from pinai_agents.shared.api_models import (
@@ -97,6 +99,43 @@ def test_generate_route_caps_returned_cards_to_requested_count() -> None:
     assert [card["intentKey"] for card in cards] == ["first-card"]
     assert cards[0]["id"] == "run_filter_card_00"
     assert [ev["cardId"] for ev in evals] == ["run_filter_card_00", None, None]
+
+
+def test_generate_route_rejects_empty_error_shell() -> None:
+    parsed = GeneratorOutput(
+        reasoning="phase1 failed before any grounded cards existed",
+        cards=[],
+        evaluations=[],
+        batchFeedback="ConnectError: [Errno -2] Name or service not known",
+    )
+
+    with pytest.raises(ValueError, match="no cards"):
+        _serialize_passing_cards(parsed, run_id="run_filter", max_cards=10)
+
+
+def test_generate_route_rejects_infrastructure_tombstone_cards() -> None:
+    parsed = GeneratorOutput(
+        reasoning="all data sources failed",
+        cards=[
+            GeneratedCard(
+                intentKey="no-grounded-source-fallback",
+                goalBasket="life",
+                title="数据源暂时无法连接，无法生成个性化卡片",
+                whyNow="全部数据源均返回 ConnectError。",
+                summary="本次卡片生成所需的全部数据源均因网络错误无法访问。",
+                primaryAction=CardAction(label="知道了，稍后重试", type="dismiss"),
+                confidence=0.0,
+                urgency=0.1,
+                importance=0.2,
+                sources=["phase1 profile _error='ConnectError: [Errno -2] Name or service not known'"],
+            )
+        ],
+        evaluations=[_evaluation("no-grounded-source-fallback", passed=False, overall=1.3)],
+        batchFeedback="system-error tombstone",
+    )
+
+    with pytest.raises(ValueError, match="infrastructure-error"):
+        _serialize_passing_cards(parsed, run_id="run_filter", max_cards=10)
 
 
 def test_generate_route_caps_agent_runtime_to_ten_minutes() -> None:

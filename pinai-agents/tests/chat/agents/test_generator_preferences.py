@@ -15,7 +15,6 @@ import inspect
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
 from pinai_agents.chat.agents.generator import (
     _CARD_GENERATOR_PROMPT,
@@ -153,8 +152,7 @@ def test_sdk_exposes_preferences_list():
         ),
     ],
 )
-def test_generator_structured_outputs_reject_empty_success(model, payload):
-    """A generator run with zero cards must fail validation, not persist as
-    a successful completed batch."""
-    with pytest.raises(ValidationError):
-        model.model_validate(payload)
+def test_generator_structured_outputs_allow_empty_error_shells(model, payload):
+    """Empty structured outputs are valid error/no-grounding shells; the
+    HTTP route rejects them before persistence."""
+    assert model.model_validate(payload)

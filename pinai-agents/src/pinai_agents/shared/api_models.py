@@ -351,7 +351,7 @@ class MatchedPatternPayload(_CamelModel):
 
 
 class GenerateRequest(_CamelModel):
-    cards_to_generate: StrictInt = Field(default=8, ge=1, le=10)
+    cards_to_generate: StrictInt = Field(default=3, ge=1, le=3)
     # None → fall back to user's `generation_language` setting at the
     # route boundary. Explicit value (admin / A-B / debug) overrides.
     output_language: SupportedLanguage | None = None
@@ -429,8 +429,8 @@ class PlanItem(_AgentModel):
 
 class PlanOutput(_AgentModel):
     plan: list[PlanItem] = Field(
-        min_length=1,
-        description="At least one planned card. A generator run must fail instead of succeeding with zero cards.",
+        default_factory=list,
+        description="Planned cards. Empty is allowed when no source can ground a card; downstream route rejects empty user-facing batches.",
     )
     skipped_duplicates: list[str] = Field(
         default_factory=list,
@@ -483,8 +483,8 @@ class GeneratedCard(_AgentModel):
 
 class CardsList(_AgentModel):
     cards: list[GeneratedCard] = Field(
-        min_length=1,
-        description="At least one generated card. Empty batches must not be treated as successful generation.",
+        default_factory=list,
+        description="Generated cards. Empty is allowed for no-grounded-candidate/error shells; the HTTP route must reject empty user-facing batches before persistence.",
     )
     skipped_plan_items: list[str] = Field(
         default_factory=list,
@@ -527,8 +527,8 @@ class CardEvaluation(_AgentModel):
 
 class EvalReport(_AgentModel):
     evaluations: list[CardEvaluation] = Field(
-        min_length=1,
-        description="At least one evaluation for a generated card.",
+        default_factory=list,
+        description="Evaluations for generated cards. Empty is allowed when no cards were generated.",
     )
     batch_feedback: str = Field(
         max_length=3000,
@@ -548,12 +548,12 @@ class GeneratorOutput(_AgentModel):
         description="One-paragraph rationale: which subagents fired, dedup decisions, basket distribution, why count == N.",
     )
     cards: list[GeneratedCard] = Field(
-        min_length=1,
-        description="At least one passing generated card. Zero-card runs are validation failures, not successful batches.",
+        default_factory=list,
+        description="Passing generated cards, or empty when the orchestrator returns an error/no-grounded-candidate shell.",
     )
     evaluations: list[CardEvaluation] = Field(
-        min_length=1,
-        description="At least one evaluation explaining the generated cards.",
+        default_factory=list,
+        description="Evaluation audit rows. Empty is allowed for error/no-grounded-candidate shells.",
     )
     batch_feedback: str = Field(max_length=3000)
 
