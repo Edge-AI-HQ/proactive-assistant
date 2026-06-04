@@ -1,14 +1,14 @@
-"""Unified generator — orchestrator + 4 subagents.
+"""Unified generator fixed pipeline.
 
-Topology (one Daytona sandbox shared across all 5 agents):
+Topology:
 
-    main (sonnet 4.6, response_format=GeneratorOutput)
-      ├─ task("data-collector", "...")    — sonnet, writes /state/phase1.json
-      ├─ task("planner", "...")           — sonnet, response_format=PlanOutput
-      ├─ task("card-generator", "...")    — sonnet, response_format=CardsList
-      └─ task("evaluator", "...")         — sonnet, response_format=EvalReport
+    run_generator()
+      ├─ data-collector DeepAgent     — sonnet, writes /state/phase1.json
+      ├─ planner structured call      — sonnet, response_format=PlanOutput
+      ├─ card-generator structured    — sonnet, response_format=CardsList
+      └─ evaluator structured         — sonnet, response_format=EvalReport
 
-Why 4 subagents instead of one big prompt:
+Why 4 stages instead of one big prompt:
 
   - Context isolation: data-collector's raw 30-row gmail/signals dump
     never enters the planner / generator / evaluator context windows.
@@ -16,25 +16,21 @@ Why 4 subagents instead of one big prompt:
   - Specialization: planner reasons about dedup / feedback alignment;
     generator focuses on writing high-quality cards; evaluator reviews
     them with a CRITIC prompt against the same CardsList output.
-  - Schema enforcement at the LLM layer: each subagent's
+  - Schema enforcement at the LLM layer: each structured stage's
     `response_format` is a Pydantic model, validated by the model
     runtime. Replaces the old hand-written `parse_generator_output` +
     `is_complete_generator_output` + grounding checks (now schema-level
     via `min_length=1` on `sources[]`).
 
 Why share one sandbox backend:
-  Sandbox is per-(thread_id) Daytona resource. Subagents inherit the
-  main agent's `runtime.state` (deepagents internal — see
-  SubAgentMiddleware._validate_and_prepare_state), but the BACKEND
-  itself isn't in state — it's closure-bound to each compiled agent.
-  Threading the same `backend` instance into all 5
-  `create_deep_agent(...)` calls is what makes filesystem / execute
-  hit the same Daytona sandbox; otherwise each subagent would spawn
-  its own and `read_file('/state/phase1.json')` would 404.
+  The data-collector needs Code Mode tools to query `pinai_sdk` and write
+  `/state/phase1.json`. Later stages read that file once from Python and
+  receive the compact JSON inline, so they cannot loop over sandbox tools.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any
@@ -54,10 +50,9 @@ from ..tools.code_mode.sandbox import evict_thread, get_or_create_thread_sandbox
 logger = logging.getLogger(__name__)
 
 
-# ── Subagent prompts ────────────────────────────────────────────────
-# Each prompt is single-purpose. They share one convention: state files
-# live under `/state/` in the sandbox. data-collector writes phase1.json,
-# everything else reads from there.
+# ── Stage prompts ───────────────────────────────────────────────────
+# Data collection writes `/state/phase1.json` in the sandbox. Later
+# structured stages receive that JSON inline from Python.
 
 _DATA_COLLECTOR_PROMPT = """You are the data-collector subagent of the Pin AI card generator.
 
@@ -192,8 +187,8 @@ asyncio.run(main())
 ```
 
 After `execute` returns, just confirm "phase1 written" succeeded.
-DO NOT print the digest body. The downstream subagents `read_file`
-the file directly.
+DO NOT print the digest body. Downstream structured stages receive
+the digest from Python.
 </workflow>
 
 <no_fabrication>
@@ -212,22 +207,22 @@ The actual data is in `/state/phase1.json`.
 """
 
 
-_PLANNER_PROMPT = """You are the planner subagent of the Pin AI card generator.
+_PLANNER_PROMPT = """You are the planner stage of the Pin AI card generator.
 
 <role>
-Read `/state/phase1.json` and decide which Intent Cards to generate next.
+Read the provided phase1 JSON and decide which Intent Cards to generate next.
 For an explicit generator run, produce 1-{cards_to_generate} planned
 items whenever phase1 contains any usable grounded source. Return zero
 items only when every source is empty/error or every candidate would be
 unambiguously harmful, hallucinated, or impossible to ground.
 Your output is a structured Plan — not the cards themselves. The
-card-generator subagent will turn each plan item into a full card.
+card-generator stage will turn each plan item into a full card.
 </role>
 
 <workflow>
-1. `read_file('/state/phase1.json')` — full JSON digest from data-collector.
-2. `read_file('/state/matched_patterns.json')` — candidates the web-side
-   pattern matcher already verified are triggerable. Each item has
+1. Use `<phase1_json>` — full JSON digest from data-collector.
+2. Use `<matched_patterns_json>` — candidates the web-side pattern matcher
+   already verified are triggerable. Each item has
    `patternId`, `category`, `intent`, `abstract`, `humanInsight`,
    `cardSkeleton` (including `title_strategy` when available), `evidence`
    (the signal evidence that satisfied the trigger), and a `baseHitRate` score.
@@ -265,7 +260,7 @@ card-generator subagent will turn each plan item into a full card.
 </dedup_and_feedback_rules>
 
 <preference_alignment>
-`/state/phase1.json` has a `preferences` array — the user's OWN stated
+`<phase1_json>` has a `preferences` array — the user's OWN stated
 preferences (each: statement, scope, polarity, durability, expires_at,
 weight, created_at, optional evidence). The list endpoint already filters
 out expired temporary rows. Valid active preferences are a HARD CONSTRAINT
@@ -300,7 +295,7 @@ on this batch, stronger than inferred signals:
 </preference_alignment>
 
 <connected_raw_sources>
-`/state/phase1.json` includes `connections` (ACTIVE Composio accounts)
+`<phase1_json>` includes `connections` (ACTIVE Composio accounts)
 and `connected_raw` (recent local raw rows from each connected, supported
 source over the last 24 hours). Treat `connected_raw` as first-class fresh
 evidence alongside Gmail/GCal:
@@ -316,7 +311,7 @@ evidence alongside Gmail/GCal:
 </connected_raw_sources>
 
 <ambient_transcript_attribution>
-`/state/phase1.json` may include `ambient.candidate_window` signals and
+`<phase1_json>` may include `ambient.candidate_window` signals and
 `ambient_signal_details` with full payloads. Speaker labels are evidence
 attribution:
 
@@ -346,26 +341,24 @@ free-form prose. Stay strictly within the schema.
 """
 
 
-_CARD_GENERATOR_PROMPT = """You are the card-generator subagent of the Pin AI card generator.
+_CARD_GENERATOR_PROMPT = """You are the card-generator stage of the Pin AI card generator.
 
 <role>
-Take the plan from the orchestrator and write the actual Intent Cards.
-You are the ONLY subagent that produces user-facing card text.
+Take the provided plan and write the actual Intent Cards.
+You are the ONLY stage that produces user-facing card text.
 </role>
 
 <workflow>
-1. The orchestrator gives you a plan inline (PlanOutput JSON). For
-   each plan item, write one card.
-2. Source data is in `/state/phase1.json` — `read_file` it to look up
-   any source body you need to cite verbatim (gmail subjects, signal
-   summaries, memory text, connected raw rows). Don't paraphrase a
-   source name; quote it.
-3. When `plan_item.pattern_id` is set, `read_file('/state/matched_patterns.json')`
-   and find the matching entry. Use its `evidence` field to ensure every
-   signal source the pattern requires actually appears as a verbatim
-   citation in `sources[]`. Use `humanInsight` + `cardSkeleton.title_strategy`
-   to choose the title angle and action. The pattern's abstract / category
-   should inform tone but not be quoted to the user.
+1. Use `<plan_json>` (PlanOutput JSON). For each plan item, write one card.
+2. Use `<phase1_json>` to look up any source body you need to cite verbatim
+   (gmail subjects, signal summaries, memory text, connected raw rows).
+   Don't paraphrase a source name; quote it.
+3. When `plan_item.pattern_id` is set, find the matching entry in
+   `<matched_patterns_json>`. Use its `evidence` field to ensure every signal
+   source the pattern requires actually appears as a verbatim citation in
+   `sources[]`. Use `humanInsight` + `cardSkeleton.title_strategy` to choose
+   the title angle and action. The pattern's abstract / category should
+   inform tone but not be quoted to the user.
 4. Output a CardsList with one GeneratedCard per plan item you can
    ground. If a plan item lacks the source data needed to write a
    solid card, drop it and add the intent_key to `skipped_plan_items`.
@@ -393,7 +386,7 @@ Every card must meet ALL:
   (for items pulled from phase1's `world` layer — global news),
   "slack message id=..., user=..., text=...", "gdrive file id=...,
   name=...", etc.
-  The reader (evaluator subagent) MUST be able to find each cited id
+  The reader (evaluator stage) MUST be able to find each cited id
   back in phase1.json. World-signal citations are how downstream
   auto-consume identifies which news items the run actually used.
 - ambient transcript citations must preserve attribution. `self:` or
@@ -411,7 +404,7 @@ non-empty per card; the LLM runtime will reject malformed output.
 """
 
 
-_EVALUATOR_PROMPT = """You are the evaluator subagent of the Pin AI card generator.
+_EVALUATOR_PROMPT = """You are the evaluator stage of the Pin AI card generator.
 
 <role>
 You are the INDEPENDENT critic. You did not write these cards. Your
@@ -444,11 +437,11 @@ Score each on a 0.0-10.0 scale:
   0-3 must research · 4-6 some context · 7-8 most thinking done · 9-10 complete package
 
 - **pattern_grounding**: When the card claims a `pattern_id`, every
-  signal type required by that pattern (read
-  `/state/matched_patterns.json`, find the entry, inspect its `evidence`
-  keys) must appear in `sources[]` with a verbatim citation. The
-  combination of signals must also be visible in the card copy — not
-  just listed in `sources[]`. When the pattern includes
+  signal type required by that pattern (find the entry in the provided
+  matched patterns JSON and inspect its `evidence` keys) must appear in
+  `sources[]` with a verbatim citation. The combination of signals must
+  also be visible in the card copy — not just listed in `sources[]`. When
+  the pattern includes
   `cardSkeleton.title_strategy`, judge whether the title follows its
   formula/example style: concrete fact / number / time + human stake +
   immediate action. Score 0 = the card claims a pattern but
@@ -488,79 +481,64 @@ observations (basket distribution, weakest card, sourcing patterns).
 """
 
 
-_MAIN_ORCHESTRATOR_PROMPT = """You are the Pin AI **card-generation orchestrator**.
-
-You do NOT pull data, write cards, or score them yourself. You
-sequence four subagents and assemble their structured outputs into
-the final `GeneratorOutput`.
-
-<sequence>
-You MUST execute these four `task` calls in this exact order. Do not
-skip, reorder, or run in parallel — each step depends on the previous
-step's side-effects (sandbox files) or its returned JSON.
-
-1. `task(subagent_type="data-collector", description="Pull profile / memory / signals / gmail / gcal / cards_recent / feedback / world / preferences plus recent raw rows for every connected supported connector, then persist /state/phase1.json. Today is {current_date}. Target {cards_to_generate} cards.")`
-   → Returns a one-line summary. Sandbox file `/state/phase1.json` is
-   now populated. If the summary reports a fatal error (auth /
-   sandbox), STOP and emit a GeneratorOutput with cards=[],
-   evaluations=[], and the error in batch_feedback.
-
-2. `task(subagent_type="planner", description="Read /state/phase1.json and produce a grounded plan for 1-{cards_to_generate} cards whenever any usable source exists. Return zero only if every source is empty/error or impossible to ground. Today is {current_date}. {lang_clause}.")`
-   → Returns a PlanOutput JSON. Inspect it. If `plan` is empty,
-   STOP and emit GeneratorOutput with cards=[], evaluations=[], and
-   the planner's `notes` in batch_feedback.
-
-3. `task(subagent_type="card-generator", description="Plan: <PASTE THE PlanOutput JSON FROM STEP 2 HERE VERBATIM>. Read /state/phase1.json for source citations. {lang_clause}. Today is {current_date}.")`
-   → Returns a CardsList JSON. The plan goes inline in the
-   description so the card-generator has full context without
-   another file roundtrip.
-
-4. `task(subagent_type="evaluator", description="Cards to evaluate: <PASTE THE CardsList JSON FROM STEP 3 HERE VERBATIM>. Score strictly per the calibration rules.")`
-   → Returns an EvalReport JSON.
-</sequence>
-
-<final_assembly>
-After all four steps, emit ONE GeneratorOutput. Field rules:
-
-- `reasoning`: one paragraph — which subagents fired, dedup decisions
-  the planner made (cite from PlanOutput.notes), basket distribution,
-  why count == N (if fewer than {cards_to_generate}, why).
-- `cards`: from CardsList.cards, FILTERED to only those whose
-  matching CardEvaluation has pass==true. Drop the rest.
-- `evaluations`: the full EvalReport.evaluations (including failed —
-  audit trail for why a card was dropped).
-- `batch_feedback`: synthesize EvalReport.batch_feedback +
-  PlanOutput.notes. Mention skipped duplicates and cold baskets.
-</final_assembly>
-
-<hard_rules>
-- Today is {current_date}.
-- {lang_clause} for any user-visible text in the final cards (the
-  card-generator subagent enforces this; you just thread the
-  language through descriptions).
-- Pass plan/cards JSON inline in description verbatim — do NOT
-  summarize. Subagents need full structure to do their job.
-- If a subagent returns an error, emit a GeneratorOutput shell (empty
-  cards / evaluations) with the failure in batch_feedback. NEVER
-  fabricate cards.
-- If planner or card-generator returns empty while phase1 was written
-  successfully, do one recovery pass: ask the same subagent to produce
-  one conservative, well-grounded card from the strongest available
-  source. Only return empty after that recovery pass also finds no
-  grounded candidate.
-</hard_rules>
-
-<output>
-`response_format` is `GeneratorOutput`. Output exactly one validated
-instance, nothing else.
-</output>
-"""
-
-
 def _lang_clause(output_language: str) -> str:
     if output_language in ("zh-Hans", "zh"):
         return "Use Simplified Chinese for all user-visible text fields"
     return "Use English for all user-visible text fields"
+
+
+def _stage_config(*, run_id: str, user_id: int, stage: str) -> dict[str, Any]:
+    return {
+        "metadata": {
+            "pinai_run_id": run_id,
+            "pinai_user_id": str(user_id),
+            "pinai_agent": "generator",
+            "pinai_generator_stage": stage,
+        },
+        "tags": ["pinai", "generator", f"pinai_run:{run_id}", f"stage:{stage}"],
+        "recursion_limit": 50,
+    }
+
+
+def _dump_model(value: Any) -> str:
+    if hasattr(value, "model_dump"):
+        return json.dumps(value.model_dump(by_alias=False), ensure_ascii=False)
+    return json.dumps(value, ensure_ascii=False)
+
+
+async def _invoke_stage(
+    agent: Any,
+    *,
+    content: str,
+    run_id: str,
+    user_id: int,
+    stage: str,
+) -> dict[str, Any]:
+    result = await agent.ainvoke(
+        {"messages": [{"role": "user", "content": content}]},
+        config=_stage_config(run_id=run_id, user_id=user_id, stage=stage),
+    )
+    if not isinstance(result, dict):
+        msg = f"generator stage {stage} returned {type(result).__name__}, expected dict. run_id={run_id}."
+        raise ValueError(msg)
+    return result
+
+
+async def _invoke_structured_stage(
+    model: Any,
+    schema: type[Any],
+    *,
+    system: str,
+    content: str,
+    run_id: str,
+    user_id: int,
+    stage: str,
+) -> Any:
+    runnable = model.with_structured_output(schema)
+    return await runnable.ainvoke(
+        [("system", system), ("human", content)],
+        config=_stage_config(run_id=run_id, user_id=user_id, stage=stage),
+    )
 
 
 async def run_generator(
@@ -570,7 +548,7 @@ async def run_generator(
     user_id: int,
     run_id: str,
     run_jwt: str,
-    cards_to_generate: int = 3,
+    cards_to_generate: int = 1,
     output_language: str = "en",
     user_message: str = "Generate Intent Cards now.",
     matched_patterns: list[dict[str, Any]] | None = None,
@@ -578,10 +556,10 @@ async def run_generator(
     """One-shot generator run. Returns the validated GeneratorOutput.
 
     A Daytona thread sandbox is provisioned keyed on `gen-{run_id}`.
-    All five agents (orchestrator + 4 subagents) share it via the same
-    `backend` instance — that's the only way `read_file('/state/...')`
-    in one subagent finds files written by another. Evicted in finally;
-    the registry won't cache it past this call.
+    The data-collector writes `/state/phase1.json` there, then Python
+    passes that compact JSON inline to the structured planner / card /
+    evaluator calls. Evicted in finally; the registry won't cache it
+    past this call.
 
     Caller responsibilities:
       - current_date in YYYY-MM-DD.
@@ -596,28 +574,12 @@ async def run_generator(
         backend = create_local_sandbox_backend(
             run_jwt=run_jwt,
             root_dir="/state",
-            reset_files=("phase1.json", "matched_patterns.json"),
+            reset_files=("phase1.json",),
         )
         logger.info("generator using local sandbox backend run_id=%s", run_id)
     else:
         backend, _ = await get_or_create_thread_sandbox(session_key, run_jwt=run_jwt)
     try:
-        # Stage matched_patterns to /state so the planner subagent can
-        # read_file('/state/matched_patterns.json'). Empty list still gets
-        # written so the planner has a deterministic file to read.
-        try:
-            import json as _json  # noqa: PLC0415
-
-            await backend.awrite(
-                "/state/matched_patterns.json",
-                _json.dumps(matched_patterns or [], ensure_ascii=False),
-            )
-        except Exception:
-            logger.warning(
-                "failed to stage matched_patterns.json for run=%s — planner will fall back to free-LLM",
-                run_id,
-                exc_info=True,
-            )
         with run_context(
             user_id=user_id,
             run_id=run_id,
@@ -625,18 +587,9 @@ async def run_generator(
             virtual_key=virtual_key,
             session_key=session_key,
         ):
-            # Subagents — each is a CompiledSubAgent so it inherits the
-            # FilesystemMiddleware (read_file / write_file / execute)
-            # bound to the SHARED `backend`. Without the shared backend
-            # they'd spawn separate sandboxes and lose file continuity.
-            #
-            # All subagents run on claude-sonnet-4-6. The ones with
-            # response_format (planner / card_generator / evaluator /
-            # orchestrator) keep enable_thinking=False because langchain
-            # implements response_format via forced tool_choice, which
-            # Anthropic rejects when extended-thinking is on. Cache is
-            # left at the default (on) so the shared system prompt /
-            # last user turn ride Anthropic's prompt cache.
+            # Data collection still needs tools and the shared sandbox
+            # backend. Later stages use direct structured model calls to
+            # avoid root-orchestrator task loops.
             data_collector = create_deep_agent(
                 model=make_chat_model(
                     virtual_key=virtual_key,
@@ -646,88 +599,175 @@ async def run_generator(
                 system_prompt=_DATA_COLLECTOR_PROMPT,
                 backend=backend,
             )
-            planner = create_deep_agent(
-                model=make_chat_model(
-                    virtual_key=virtual_key,
-                    model="claude-sonnet-4-6",
-                    enable_thinking=False,
-                ),
-                system_prompt=_PLANNER_PROMPT.format(cards_to_generate=cards_to_generate),
-                backend=backend,
-                response_format=PlanOutput,
-            )
-            card_generator = create_deep_agent(
-                model=make_chat_model(
-                    virtual_key=virtual_key,
-                    model="claude-sonnet-4-6",
-                    enable_thinking=False,
-                ),
-                system_prompt=_CARD_GENERATOR_PROMPT.format(
-                    lang_clause=_lang_clause(output_language),
-                ),
-                backend=backend,
-                response_format=CardsList,
-            )
-            evaluator = create_deep_agent(
-                model=make_chat_model(
-                    virtual_key=virtual_key,
-                    model="claude-sonnet-4-6",
-                    enable_thinking=False,
-                ),
-                system_prompt=_EVALUATOR_PROMPT,
-                backend=backend,
-                response_format=EvalReport,
+            structured_model = make_chat_model(
+                virtual_key=virtual_key,
+                model="claude-sonnet-4-6",
+                temperature=0.2,
+                enable_thinking=False,
             )
 
-            orchestrator = create_deep_agent(
-                model=make_chat_model(
-                    virtual_key=virtual_key,
-                    model="claude-sonnet-4-6",
-                    enable_thinking=False,
+            # Fixed pipeline: the old root orchestrator could loop over
+            # `task()` calls for hundreds of LLM turns. Drive the four stages
+            # once from Python so user-facing generation has a predictable
+            # runtime envelope.
+            await _invoke_stage(
+                data_collector,
+                content=(
+                    "Pull profile / memory / signals / gmail / gcal / "
+                    "cards_recent / feedback / world / preferences plus "
+                    "recent raw rows for every connected supported connector, "
+                    f"then persist /state/phase1.json. Today is {current_date}. "
+                    f"Target {cards_to_generate} cards."
                 ),
-                system_prompt=_MAIN_ORCHESTRATOR_PROMPT.format(
-                    current_date=current_date,
-                    cards_to_generate=cards_to_generate,
-                    lang_clause=_lang_clause(output_language),
-                ),
-                backend=backend,
-                response_format=GeneratorOutput,
-                subagents=[
-                    {
-                        "name": "data-collector",
-                        "description": "Pulls user data via pinai_sdk and writes /state/phase1.json. Use ONCE at the start of each generator run.",
-                        "runnable": data_collector,
-                    },
-                    {
-                        "name": "planner",
-                        "description": "Reads /state/phase1.json, returns a PlanOutput (which N intent cards to generate, with dedup + feedback alignment). Use ONCE after data-collector.",
-                        "runnable": planner,
-                    },
-                    {
-                        "name": "card-generator",
-                        "description": "Takes a PlanOutput inline, returns a CardsList (full GeneratedCard objects). Use ONCE after planner.",
-                        "runnable": card_generator,
-                    },
-                    {
-                        "name": "evaluator",
-                        "description": "Takes a CardsList inline, returns an EvalReport (5-dim scores + pass/fail + batch_feedback). Use ONCE after card-generator.",
-                        "runnable": evaluator,
-                    },
-                ],
+                run_id=run_id,
+                user_id=user_id,
+                stage="data_collector",
             )
+            logger.info("generator stage ok run_id=%s stage=data_collector", run_id)
 
-            result: dict[str, Any] = await orchestrator.ainvoke(
-                {"messages": [{"role": "user", "content": user_message}]},
-                config={
-                    "metadata": {
-                        "pinai_run_id": run_id,
-                        "pinai_user_id": str(user_id),
-                        "pinai_agent": "generator",
-                    },
-                    "tags": ["pinai", "generator", f"pinai_run:{run_id}"],
-                    "recursion_limit": 80,
-                },
-            )
+            phase1_read = await backend.aread("/state/phase1.json", limit=250_000)
+            if phase1_read.error or phase1_read.file_data is None:
+                result = {
+                    "structured_response": GeneratorOutput(
+                        reasoning="Fixed pipeline stopped because phase1.json could not be read.",
+                        cards=[],
+                        evaluations=[],
+                        batch_feedback=phase1_read.error or "phase1.json missing",
+                    )
+                }
+            else:
+                phase1_json = phase1_read.file_data["content"]
+                matched_json = json.dumps(matched_patterns or [], ensure_ascii=False)
+
+                plan = await _invoke_structured_stage(
+                    structured_model,
+                    PlanOutput,
+                    system=(
+                        _PLANNER_PROMPT.format(cards_to_generate=cards_to_generate)
+                        + "\n\nDIRECT MODE: phase1.json and matched_patterns.json are provided "
+                        "in the user message. Do not call tools or read_file; use only the "
+                        "provided JSON and return one PlanOutput."
+                    ),
+                    content=(
+                        f"Today is {current_date}. {_lang_clause(output_language)}.\n"
+                        f"Target {cards_to_generate} card.\n"
+                        f"<matched_patterns_json>{matched_json}</matched_patterns_json>\n"
+                        f"<phase1_json>{phase1_json}</phase1_json>"
+                    ),
+                    run_id=run_id,
+                    user_id=user_id,
+                    stage="planner",
+                )
+                if not isinstance(plan, PlanOutput):
+                    msg = (
+                        f"planner did not return PlanOutput; "
+                        f"got {type(plan).__name__}. run_id={run_id}."
+                    )
+                    raise ValueError(msg)
+                logger.info(
+                    "generator stage ok run_id=%s stage=planner items=%d",
+                    run_id,
+                    len(plan.plan),
+                )
+
+                if not plan.plan:
+                    result = {
+                        "structured_response": GeneratorOutput(
+                            reasoning="Fixed pipeline stopped after planner returned no grounded plan.",
+                            cards=[],
+                            evaluations=[],
+                            batch_feedback=plan.notes or "planner returned no grounded plan",
+                        )
+                    }
+                else:
+                    cards_list = await _invoke_structured_stage(
+                        structured_model,
+                        CardsList,
+                        system=(
+                            _CARD_GENERATOR_PROMPT.format(
+                                lang_clause=_lang_clause(output_language),
+                            )
+                            + "\n\nDIRECT MODE: phase1.json, matched_patterns.json, and the "
+                            "PlanOutput are provided in the user message. Do not call tools "
+                            "or read_file; use only the provided JSON and return one CardsList."
+                        ),
+                        content=(
+                            f"Today is {current_date}. {_lang_clause(output_language)}.\n"
+                            f"<plan_json>{_dump_model(plan)}</plan_json>\n"
+                            f"<matched_patterns_json>{matched_json}</matched_patterns_json>\n"
+                            f"<phase1_json>{phase1_json}</phase1_json>"
+                        ),
+                        run_id=run_id,
+                        user_id=user_id,
+                        stage="card_generator",
+                    )
+                    if not isinstance(cards_list, CardsList):
+                        msg = (
+                            f"card-generator did not return CardsList; "
+                            f"got {type(cards_list).__name__}. run_id={run_id}."
+                        )
+                        raise ValueError(msg)
+                    logger.info(
+                        "generator stage ok run_id=%s stage=card_generator cards=%d",
+                        run_id,
+                        len(cards_list.cards),
+                    )
+
+                    if not cards_list.cards:
+                        result = {
+                            "structured_response": GeneratorOutput(
+                                reasoning=(
+                                    "Fixed pipeline stopped after card-generator returned "
+                                    "no grounded cards."
+                                ),
+                                cards=[],
+                                evaluations=[],
+                                batch_feedback="card-generator returned no grounded cards",
+                            )
+                        }
+                    else:
+                        eval_report = await _invoke_structured_stage(
+                            structured_model,
+                            EvalReport,
+                            system=(
+                                _EVALUATOR_PROMPT
+                                + "\n\nDIRECT MODE: cards, phase1.json, and matched_patterns.json "
+                                "are provided in the user message. Do not call tools or read_file; "
+                                "use only the provided JSON and return one EvalReport."
+                            ),
+                            content=(
+                                f"Today is {current_date}.\n"
+                                f"<cards_json>{_dump_model(cards_list)}</cards_json>\n"
+                                f"<matched_patterns_json>{matched_json}</matched_patterns_json>\n"
+                                f"<phase1_json>{phase1_json}</phase1_json>"
+                            ),
+                            run_id=run_id,
+                            user_id=user_id,
+                            stage="evaluator",
+                        )
+                        if not isinstance(eval_report, EvalReport):
+                            msg = (
+                                f"evaluator did not return EvalReport; "
+                                f"got {type(eval_report).__name__}. run_id={run_id}."
+                            )
+                            raise ValueError(msg)
+                        logger.info(
+                            "generator stage ok run_id=%s stage=evaluator evals=%d",
+                            run_id,
+                            len(eval_report.evaluations),
+                        )
+                        result = {
+                            "structured_response": GeneratorOutput(
+                                reasoning=(
+                                    "Fixed pipeline ran data collector, planner, "
+                                    "card generator, and evaluator once. "
+                                    f"Planner notes: {plan.notes}"
+                                ),
+                                cards=cards_list.cards,
+                                evaluations=eval_report.evaluations,
+                                batch_feedback=eval_report.batch_feedback,
+                            )
+                        }
     finally:
         if not is_local_sandbox:
             await evict_thread(session_key)
@@ -738,7 +778,7 @@ async def run_generator(
         # the runtime returns one. If it does, the model failed schema
         # validation past the runtime's retry budget.
         msg = (
-            f"orchestrator did not return GeneratorOutput; "
+            f"generator pipeline did not return GeneratorOutput; "
             f"got {type(structured).__name__}. run_id={run_id}."
         )
         raise ValueError(msg)

@@ -84,7 +84,7 @@ sequenceDiagram
 | 环节 | 当前事实 |
 |---|---|
 | 入口 | `web/routes/ui/generate.py:POST /api/generate`。`_find_active_generator_task` 按 `kind='generator.manual'` + `status='active'` + user 去重;有就返回 `{deduped:true, taskId}`。 |
-| 入队 | `enqueue_once(kind='generator.manual', id=f"gen.{uuid4().hex[:12]}", payload={cards_to_generate, output_language, trigger})`,trigger_kind=`once`。用户可见生成默认/上限是 3 张;dispatcher 对旧 payload 也会 clamp 到 3。 |
+| 入队 | `enqueue_once(kind='generator.manual', id=f"gen.{uuid4().hex[:12]}", payload={cards_to_generate, output_language, trigger})`,trigger_kind=`once`。用户可见生成默认/上限是 1 张;dispatcher 对旧 payload 也会 clamp 到 1。 |
 | Virtual key | `_ensure_virtual_key`:user 没 `litellm_virtual_key` 时调 `services/litellm_provisioning.ensure_user_litellm_key` lazy-recover;失败 502。 |
 | 输出语言 | 读 user_settings 的 `generation_language`(`zh-Hans` / `en`),走 payload 传给 chat。语言类偏好走这条设置(确定性),**不**进 `pai_preference_records`。 |
 | 高权重偏好 / fresh raw | data-collector 额外调 `client.preferences.list(status="active", limit=50)`,写进 `/state/phase1.json` 的 `preferences` 段。active 查询会过滤已过期的 `durability='temporary'` 行;planner 把最新有效 + 高 `weight` 的当近似硬约束(positive 偏向 / negative 抑制),命中的 preference id 写进 `PlanOutput.notes`。连接中的 Slack / Drive / Gmail / GCal 等 source 会额外拉最近 24h raw rows,但每源硬 cap 20 行,并用 compact JSON 写 phase1,避免把生成上下文放大到不可控。来源见 [Feedback](./feedback) 的「偏好层」。 |
@@ -93,7 +93,7 @@ sequenceDiagram
 | chat 调用 | `_run_generator` HTTP POST `chat /agent/generate`,签 EdDSA agent-run JWT,带 `run_id` + virtual_key claim。 |
 | 持久化 | `persist_generator_run`:`pai_pipeline_runs` 一行(`id=run_id`,`run_id=run_id` 两列同值,`status='completed'`,`final_cards JSONB`,`iterations JSONB`,`trigger`,`started_at`,`completed_at`);`_persist_evaluations`:返回给 web 的卡对应评价写一行 `pai_card_evaluations`(ON CONFLICT (user_id, card_id) DO UPDATE),全部候选都未 pass 时会保留最高分候选及其 failed 评价。 |
 | Reward review | 内部 review 不改 generation 主链路。`/api/reward-dashboard/*` 只读 `pai_pipeline_runs.final_cards` + `pai_card_evaluations`,把用户 open / score 和 reviewer score 追加到 `pai_card_reward_events`,案例库写 `pai_card_casebook`,trace artifact 写 `pai_trace_artifacts`。 |
-| LangSmith metadata | generator root invocation 带 `metadata={pinai_run_id, pinai_user_id, pinai_agent:'generator'}` 和 `tags=['pinai','generator',...]`,reward dashboard 用这个稳定绑定 trace,不靠时间窗口猜。 |
+| LangSmith metadata | generator 每个固定 stage invocation 带 `metadata={pinai_run_id, pinai_user_id, pinai_agent:'generator', pinai_generator_stage}` 和 `tags=['pinai','generator','stage:...']`,reward dashboard 用这个稳定绑定 trace,不靠时间窗口猜。 |
 | 前端轮询 | `usePipeline.ts` 用 sessionStorage 恢复 run state;`useActiveAgentRuns.ts` 轮询 `/api/agent-runs/active`;`useGenerationStatus.ts` 取 `pai_scheduled_task_runs` 状态;成功后 `useCards.ts` 拉 `/api/cards`。`/api/cards` 除了 `card/runId/score` 还带 `latestOutcome/outcomeAt`,让 cold-start 后的 sphere/drawer 直接按用户已完成或已隐藏状态恢复。 |
 
 ## chat 端 generator agent
@@ -102,14 +102,14 @@ sequenceDiagram
 
 ### Subagent 拓扑
 
-DeepAgents harness,4 个串行 subagent,共享一个 Daytona sandbox + LangGraph state:
+DeepAgents harness,4 个固定顺序 stage,共享一个 Daytona sandbox + LangGraph state。Python 代码直接 `ainvoke` 每个 stage 一次,不再创建 root orchestrator 去自由循环 `task()`:
 
 ```
-main agent (sonnet 4.6, response_format=GeneratorOutput)
-  ├─ task("data-collector", _DATA_COLLECTOR_PROMPT)  → 写 /state/phase1.json
-  ├─ task("planner",        _PLANNER_PROMPT)         → response_format=PlanOutput
-  ├─ task("card-generator", _CARD_GENERATOR_PROMPT)  → response_format=CardsList
-  └─ task("evaluator",      _EVALUATOR_PROMPT)       → response_format=EvalReport (gpt-5.5)
+run_generator()
+  ├─ data-collector  → 写 /state/phase1.json
+  ├─ planner         → response_format=PlanOutput
+  ├─ card-generator  → response_format=CardsList
+  └─ evaluator       → response_format=EvalReport
 ```
 
 ### Subagent 职责
@@ -123,7 +123,7 @@ main agent (sonnet 4.6, response_format=GeneratorOutput)
 
 ### 选卡规则
 
-- `pass==true` 的卡优先进最终响应,chat route 再按请求的 `cards_to_generate` 硬截断;当前用户可见生成默认/上限是 3 张,这是 600s 预算内的产品级 cap。
+- `pass==true` 的卡优先进最终响应,chat route 再按请求的 `cards_to_generate` 硬截断;当前用户可见生成默认/上限是 1 张,这是恢复稳定出卡的临时产品级 cap。
 - 如果 evaluator 把所有真实候选都判 fail,chat route 保留最高 `overall` 的 1 张候选,同时把 failed evaluation 保留做审计,避免整轮生成 502。
 - infra tombstone / error card 不允许进入卡流:空 `GeneratorOutput` 或只有 `ConnectError` / `_error` / `no-grounded-source-fallback` 的候选会变成失败 run,不会持久化为 `pai_pipeline_runs.final_cards`。
 - card id 在 web 侧重写:`f"{run_id}_card_{i:02d}"`(`chat/routes/generate.py:121`),evaluation 的 cardId 按 `intentKey` 匹配 + 重 map(`:130`)。

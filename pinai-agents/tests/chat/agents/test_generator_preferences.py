@@ -63,7 +63,8 @@ def test_data_collector_pulls_connected_raw_sources_into_digest():
 def test_generator_runtime_caps_langgraph_recursion():
     source = inspect.getsource(run_generator)
 
-    assert '"recursion_limit": 80' in source
+    assert '"recursion_limit": 50' in inspect.getsource(run_generator.__globals__["_stage_config"])
+    assert "subagents=[" not in source
 
 
 def test_planner_prompt_has_preference_alignment():
@@ -144,7 +145,7 @@ def test_sdk_exposes_preferences_list():
         (
             GeneratorOutput,
             {
-                "reasoning": "phase1 had usable sources but orchestrator returned no cards",
+                "reasoning": "phase1 had usable sources but fixed pipeline returned no cards",
                 "cards": [],
                 "evaluations": [],
                 "batchFeedback": "empty result",

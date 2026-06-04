@@ -27,7 +27,7 @@ router = APIRouter()
 
 
 class GenerateRequest(BaseModel):
-    cards_to_generate: StrictInt = Field(default=3, ge=1, le=3)
+    cards_to_generate: StrictInt = Field(default=1, ge=1, le=1)
     output_language: str = Field(default="en")
     # Optional: caller-supplied run id. Web's scheduler dispatcher passes
     # the task.id here so pai_scheduled_tasks → pai_pipeline_runs share

@@ -351,7 +351,7 @@ class MatchedPatternPayload(_CamelModel):
 
 
 class GenerateRequest(_CamelModel):
-    cards_to_generate: StrictInt = Field(default=3, ge=1, le=3)
+    cards_to_generate: StrictInt = Field(default=1, ge=1, le=1)
     # None → fall back to user's `generation_language` setting at the
     # route boundary. Explicit value (admin / A-B / debug) overrides.
     output_language: SupportedLanguage | None = None

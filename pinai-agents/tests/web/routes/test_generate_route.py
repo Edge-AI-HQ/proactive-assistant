@@ -35,7 +35,7 @@ async def test_manual_generate_does_not_retry_after_timeout(
 
     monkeypatch.setattr(generate_route, "_ensure_virtual_key", fake_ensure_virtual_key)
 
-    body = GenerateRequest(cards_to_generate=3, output_language="zh-Hans")
+    body = GenerateRequest(cards_to_generate=1, output_language="zh-Hans")
     result = await generate_route.generate(body=body, user=user, pool=pool)
 
     async with service_tx(pool) as conn:
