@@ -7,37 +7,39 @@ const here = dirname(fileURLToPath(import.meta.url));
 const layoutSrc = () =>
   readFileSync(join(here, "ConstellationLayout.tsx"), "utf8");
 
-describe("ConstellationLayout navigation behavior (characterization)", () => {
-  test("menu nav clears card-chat overlays and closes the menu", () => {
+// Phase-1 god-component extraction: navigation STATE + behavior (goBack,
+// sessionStorage, overlay clearing) now live in useAppNavigation and are
+// covered by useAppNavigation.test.tsx. These characterization tests lock
+// that ConstellationLayout DELEGATES to the hook (the wiring contract),
+// instead of re-implementing navigation inline.
+describe("ConstellationLayout navigation wiring (characterization)", () => {
+  test("drives navigation through the useAppNavigation hook", () => {
+    const src = layoutSrc();
+    expect(src).toContain("useAppNavigation()");
+    // Inline activeView state + its sessionStorage handling moved to the hook.
+    expect(src).not.toContain('sessionStorage.getItem("pai-active-view")');
+  });
+
+  test("menu nav delegates to navigateTo (which clears overlays + menu)", () => {
     const src = layoutSrc();
     const fn = src.match(/const handleMenuNav = [\s\S]*?\n  \};/);
     expect(fn).not.toBeNull();
-    const body = fn![0];
-    expect(body).toContain("setActiveView(id)");
-    expect(body).toContain("setActiveChat(null)");
-    expect(body).toContain("setChatTarget(null)");
-    expect(body).toContain("setMenuOpen(false)");
+    expect(fn![0]).toContain("navigateTo(id)");
   });
 
-  test("main chat back returns to now and closes the overlay", () => {
+  test("card chat back delegates to closeCardChat", () => {
     const src = layoutSrc();
-    const fn = src.match(/const handleMainChatBack = [\s\S]*?\n  \}/);
-    expect(fn).not.toBeNull();
-    expect(fn![0]).toContain('setActiveView("now")');
-    expect(fn![0]).toContain("setMainChatOpen(false)");
+    expect(src).toContain("onBack={() => closeCardChat()}");
   });
 
-  test("card chat onBack clears chatTarget and restores entry view", () => {
+  test("main chat back delegates to closeMainChat", () => {
     const src = layoutSrc();
-    // The ChatDetailView onBack closure for the real chatTarget path.
-    expect(src).toMatch(
-      /onBack=\{\(\) => \{\s*const returnTo = chatEntryView\.current;\s*setChatTarget\(null\);\s*if \(returnTo\) setActiveView\(returnTo\);/,
-    );
+    expect(src).toContain("onBack={() => closeMainChat()}");
   });
 
-  test("activeView persists to sessionStorage key 'pai-active-view'", () => {
+  test("settings panel is controlled via the hook's sub-page state", () => {
     const src = layoutSrc();
-    expect(src).toContain('sessionStorage.getItem("pai-active-view")');
-    expect(src).toContain('sessionStorage.setItem("pai-active-view", v)');
+    expect(src).toContain("subPage={settingsSubPage}");
+    expect(src).toContain("onSubPageChange={setSettingsSubPage}");
   });
 });

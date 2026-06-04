@@ -71,6 +71,7 @@ import {
   shouldIgnoreMainMenuSwipeTarget,
   type TouchPoint,
 } from "./mainChatEntryGesture";
+import { useAppNavigation, type MenuId } from "./useAppNavigation";
 
 /** Stable string→number hash so real card.id (string) gets a numeric id for
  *  Lovable's sphere components without losing the original. */
@@ -218,7 +219,6 @@ const MENU_ITEMS = [
   { id: "profile", label: "PROFILE", icon: Target },
   { id: "account", label: "SETTING", icon: Settings },
 ] as const;
-type MenuId = (typeof MENU_ITEMS)[number]["id"];
 
 const CONSTELLATION_HEADER_TOP =
   "max(4.5rem, calc(max(env(safe-area-inset-top, 0px), var(--safe-top, 0px)) + 0.75rem))";
@@ -228,23 +228,16 @@ const constellationShellStyle = {
 
 /* ── Main component ── */
 export default function BigBallLayout() {
-  const [menuOpen, setMenuOpen] = useState(false);
-  // activeView persisted to sessionStorage so a page reload (F5) drops the
-  // user back where they were instead of resetting to "now". sessionStorage
-  // (not localStorage): cleared when the tab closes, so the next fresh
-  // open of the app does start from "now".
-  const [activeView, setActiveViewState] = useState<MenuId>(() => {
-    if (typeof window === "undefined") return "now";
-    const stored = window.sessionStorage.getItem("pai-active-view");
-    return (stored as MenuId | null) ?? "now";
-  });
-  const setActiveView = useCallback((v: MenuId) => {
-    setActiveViewState(v);
-    if (typeof window !== "undefined") {
-      window.sessionStorage.setItem("pai-active-view", v);
-    }
-  }, []);
-  const [liveOverlay, setLiveOverlay] = useState<LiveSession | null>(null);
+  // Navigation state + unified goBack() live in useAppNavigation (phase-1
+  // god-component extraction). Bottom-sheet drawers (selectedCard /
+  // drawerOpen / paywallCard) stay local — their Intent type isn't exported.
+  const {
+    activeView, menuOpen, chatTarget, activeChat, mainChatOpen, liveOverlay,
+    settingsSubPage,
+    navigateTo, setMenuOpen, openCardChat, closeCardChat, setActiveChat,
+    openMainChat, closeMainChat, setMainChatOpen, setLiveOverlay,
+    setSettingsSubPage, recordChatEntryView, goBack,
+  } = useAppNavigation();
   const [selectedCard, setSelectedCard] = useState<Intent | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [paywallCard, setPaywallCard] = useState<Intent | null>(null);
@@ -276,15 +269,7 @@ export default function BigBallLayout() {
     dismissible: false,
   });
   const [isScrolled, setIsScrolled] = useState(false);
-  const [mainChatOpen, setMainChatOpen] = useState(false);
   const mainChatEntryPointerStartRef = useRef<TouchPoint | null>(null);
-  const openMainChat = useCallback(() => {
-    setMainChatOpen(true);
-  }, []);
-  const handleMainChatBack = useCallback(() => {
-    setActiveView("now");
-    setMainChatOpen(false);
-  }, []);
   const handleMainChatEntryPointerDown = useCallback((event: PointerEvent<HTMLButtonElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
     mainChatEntryPointerStartRef.current = {
@@ -414,21 +399,11 @@ export default function BigBallLayout() {
     pushNotifications.ready, osPromptable,
     userSettings.settings, userSettings.patch,
   ]);
-  /** When set, ConstellationLayout renders our existing CardChat overlay
-   *  (MainChatView + SSE chat-stream runtime). Replaces Lovable's mock
-   *  ChatDetailView path. */
-  const [chatTarget, setChatTarget] = useState<{
-    card: IntentCard;
-    bootstrap?: string;
-  } | null>(null);
   const lastCompleteRunIdRef = useRef<string | null>(null);
   const cardActions = useCardActions({
     onOpenChat: (card, bootstrap) => {
       const trimmed = bootstrap.trim();
-      setChatTarget({
-        card,
-        bootstrap: trimmed.length > 0 ? trimmed : undefined,
-      });
+      openCardChat(card, trimmed.length > 0 ? trimmed : undefined);
       setDrawerOpen(false);
       setSelectedCard(null);
     },
@@ -490,9 +465,7 @@ export default function BigBallLayout() {
 
   // Chat state
   const [cardChats, setCardChats] = useState<ChatCard[]>([]);
-  const [activeChat, setActiveChat] = useState<ChatCard | null>(null);
   const [chatMode, setChatMode] = useState<"confirm" | "modify" | "done" | "steer">("confirm");
-  const chatEntryView = useRef<MenuId | null>(null);
   const mainMenuSwipeStartRef = useRef<TouchPoint | null>(null);
   const menuCloseSwipeStartRef = useRef<TouchPoint | null>(null);
   const canOpenMenuFromMainSwipe = (
@@ -700,7 +673,7 @@ export default function BigBallLayout() {
       setPaywallCard(card);
       return;
     }
-    chatEntryView.current = activeView;
+    recordChatEntryView();
     // Real /api/cards path: drive our existing chat runtime (POST /feedback
     // → MainChatView SSE). cardActions.confirm calls onOpenChat which sets
     // chatTarget; the render branches on chatTarget to mount CardChat.
@@ -726,7 +699,7 @@ export default function BigBallLayout() {
     });
     setChatMode("modify");
     setActiveChat(chatCard);
-  }, [activeView, cardActions, cardsState.cards]);
+  }, [activeView, cardActions, cardsState.cards, recordChatEntryView]);
 
   /** Ambient Action handoff (B+ MVP, web-only).
    *  Wraps an AmbientTimelineEntry into a virtual IntentCard so the existing
@@ -766,22 +739,17 @@ export default function BigBallLayout() {
       "Goal:",
       entry.action.goal,
     ].join("\n");
-    chatEntryView.current = "ambient";
     setDrawerOpen(false);
     setSelectedCard(null);
-    setChatTarget({ card: virtualCard, bootstrap });
-  }, []);
+    openCardChat(virtualCard, bootstrap);
+  }, [openCardChat]);
 
   const handleMenuNav = (id: MenuId) => {
-    setActiveView(id);
-    setActiveChat(null);
-    // Without this, opening the side menu from inside ChatDetailView
-    // (which is rendered iff `chatTarget` is set) leaves chatTarget
-    // populated, and the main-content branch `chatTarget ? ChatDetailView
-    // : activeChat ? ... : activeView` keeps rendering ChatDetailView —
-    // the user sees the menu close but no navigation.
-    setChatTarget(null);
-    setMenuOpen(false);
+    // navigateTo clears the card-chat overlays (activeChat + chatTarget) and
+    // the menu in one shot — same effect as the previous inline resets, which
+    // existed so opening the menu from inside ChatDetailView actually navigates
+    // instead of leaving chatTarget populated.
+    navigateTo(id);
   };
 
   /* ── "now" home view ── */
@@ -810,7 +778,7 @@ export default function BigBallLayout() {
             (animate-ambient-{icon,toggle}-breathe); when OFF the icon greys. */}
         <div className="mt-4 rounded-2xl bg-foreground/[0.04] border border-foreground/[0.06] shadow-sm px-3 py-2.5 flex items-center gap-3">
           <button
-            onClick={() => setActiveView("ambient")}
+            onClick={() => navigateTo("ambient")}
             className="flex items-center gap-3 flex-1 min-w-0 text-left"
             aria-label="Open Ambient"
           >
@@ -901,18 +869,17 @@ export default function BigBallLayout() {
                   (c) => c.card.id === card.originalId,
                 )?.card;
                 if (real) {
-                  chatEntryView.current = activeView;
                   // No bootstrap — user re-entering an existing run;
                   // they want to see what's already there, not kick
                   // a fresh agent turn.
-                  setChatTarget({ card: real, bootstrap: undefined });
+                  openCardChat(real);
                   return;
                 }
               }
               // Legacy mock fallback.
               const chatCard = card as ChatCard;
               setCardChats((prev) => prev.find((c) => c.id === chatCard.id) ? prev : [chatCard, ...prev]);
-              chatEntryView.current = activeView;
+              recordChatEntryView();
               setChatMode(card.status === "done" ? "done" : "modify");
               setActiveChat(chatCard);
             } else {
@@ -996,11 +963,7 @@ export default function BigBallLayout() {
                 card={realIntentToChatCard(chatTarget.card)}
                 runId={chatTarget.card.id}
                 bootstrap={chatTarget.bootstrap}
-                onBack={() => {
-                  const returnTo = chatEntryView.current;
-                  setChatTarget(null);
-                  if (returnTo) setActiveView(returnTo);
-                }}
+                onBack={() => closeCardChat()}
                 // Sphere → TASKS lifecycle: Dismiss / Done in the
                 // chat toolbar must POST /feedback so the card moves
                 // off the sphere (dismissedIds / doneIds filter) and
@@ -1019,11 +982,7 @@ export default function BigBallLayout() {
                  if mock data is reintroduced for demos. */
               <ChatDetailView
                 card={activeChat as ChatCard}
-                onBack={() => {
-                  const returnTo = chatEntryView.current;
-                  setActiveChat(null);
-                  if (returnTo) setActiveView(returnTo);
-                }}
+                onBack={() => closeCardChat()}
               />
             ) : activeView === "now" ? (
               renderNowView()
@@ -1040,14 +999,10 @@ export default function BigBallLayout() {
                 dismissedIds={cardActions.dismissedIds}
                 chattedIds={cardActions.chattedIds}
                 onOpenChat={(card, bootstrap) => {
-                  chatEntryView.current = "chat";
-                  setChatTarget({
+                  openCardChat(
                     card,
-                    bootstrap:
-                      bootstrap && bootstrap.trim().length > 0
-                        ? bootstrap
-                        : undefined,
-                  });
+                    bootstrap && bootstrap.trim().length > 0 ? bootstrap : undefined,
+                  );
                 }}
                 onOpenCardDetail={(card) => {
                   const status: CardStatus = cardActions.processingIds.has(card.id)
@@ -1066,7 +1021,7 @@ export default function BigBallLayout() {
               />
             ) : activeView === "ambient" ? (
               <AmbientView
-                onConnectMore={() => setActiveView("connect")}
+                onConnectMore={() => navigateTo("connect")}
                 onOpenFullscreen={(s) => setLiveOverlay(s)}
                 onAmbientAction={handleAmbientAction}
               />
@@ -1085,6 +1040,8 @@ export default function BigBallLayout() {
               </div>
             ) : activeView === "account" ? (
               <AccountPanel
+                subPage={settingsSubPage}
+                onSubPageChange={setSettingsSubPage}
                 userName={fullName || displayName}
                 avatarLetter={avatarLetter}
                 userEmail={user?.email ?? undefined}
@@ -1209,7 +1166,7 @@ export default function BigBallLayout() {
                 transition={{ type: "spring", stiffness: 320, damping: 32, mass: 0.9 }}
                 className="relative w-full max-w-md h-screen overflow-hidden bg-background will-change-transform"
               >
-                <MainChat onBack={handleMainChatBack} />
+                <MainChat onBack={() => closeMainChat()} />
               </motion.div>
             </motion.div>
           )}
@@ -1342,7 +1299,7 @@ export default function BigBallLayout() {
               onModify={(card) => {
                 setDrawerOpen(false);
                 setSelectedCard(null);
-                chatEntryView.current = activeView;
+                recordChatEntryView();
                 // Real card → POST /feedback kind=card_action action=modify
                 // and open the card-thread as the feedback / steer surface.
                 if (card.originalId) {
@@ -1360,8 +1317,8 @@ export default function BigBallLayout() {
                   return [chatCard, ...prev];
                 });
                 setChatMode("steer");
+                navigateTo("chat");
                 setActiveChat(chatCard);
-                setActiveView("chat");
               }}
             />
           )}

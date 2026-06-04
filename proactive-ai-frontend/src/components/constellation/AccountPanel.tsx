@@ -51,6 +51,11 @@ export interface AccountPanelProps {
    * can resurrect the flow under a different surface without API churn.
    */
   onDeleteAccount?: () => Promise<void>;
+  /** Controlled current sub-page. Lifted to useAppNavigation so the global
+   *  goBack() (left-edge swipe) can pop a sub-page back to "main". */
+  subPage: SettingsSubPage;
+  /** Setter for the controlled sub-page. */
+  onSubPageChange: (p: SettingsSubPage) => void;
 }
 
 export default function AccountPanel({
@@ -58,24 +63,15 @@ export default function AccountPanel({
   avatarLetter,
   userEmail,
   onSignOut,
-}: AccountPanelProps = {}) {
+  subPage,
+  onSubPageChange,
+}: AccountPanelProps) {
   const initial = (avatarLetter ?? userName.trim().slice(0, 1) ?? "?").toUpperCase();
   const subtitle = userEmail ?? "Signed in";
-
-  // subPage persisted to sessionStorage so F5 keeps the user on the
-  // sub-page they were viewing (e.g. Subscription) instead of bouncing
-  // back to Account → main.
-  const [subPage, setSubPageState] = useState<SettingsSubPage>(() => {
-    if (typeof window === "undefined") return "main";
-    const stored = window.sessionStorage.getItem("pai-account-subpage");
-    return (stored as SettingsSubPage | null) ?? "main";
-  });
-  const setSubPage = useCallback((v: SettingsSubPage) => {
-    setSubPageState(v);
-    if (typeof window !== "undefined") {
-      window.sessionStorage.setItem("pai-account-subpage", v);
-    }
-  }, []);
+  // subPage is controlled by ConstellationLayout via useAppNavigation so the
+  // global goBack() (left-edge swipe) can pop a sub-page back to "main".
+  // sessionStorage persistence now lives in the hook.
+  const setSubPage = onSubPageChange;
 
   if (subPage === "subscription") {
     return <SubscriptionSubPage onBack={() => setSubPage("main")} />;
