@@ -22,7 +22,7 @@ import ChatTimeline from "./ChatTimeline";
 
 import AccountPanel from "./AccountPanel";
 import ConnectPanel from "./ConnectPanel";
-import AmbientView, { LiveFullscreen, type TimelineEntry as AmbientTimelineEntry } from "./AmbientView";
+import AmbientView, { type TimelineEntry as AmbientTimelineEntry } from "./AmbientView";
 import { createPortal } from "react-dom";
 import ChatDetailView, { type ChatCard, brandSvg, detectToolIcon } from "./ChatDetailView";
 import CardDrawerContent from "./CardDrawerContent";
@@ -72,6 +72,7 @@ import {
 } from "./mainChatEntryGesture";
 import { useAppNavigation, type MenuId } from "./useAppNavigation";
 import SwipeBackLayer from "./SwipeBackLayer";
+import LiveOverlay from "./LiveOverlay";
 import {
   realIntentToChatCard,
   realCardToLovableIntent,
@@ -983,20 +984,12 @@ export default function BigBallLayout() {
 
       </div>
 
-      {/* Live session fullscreen overlay — rendered at root via portal, fully independent of activeView.
-          Wrapped in AnimatePresence so exit animation runs cleanly without affecting the underlying view. */}
-      {createPortal(
-        <AnimatePresence>
-          {liveOverlay && (
-            <LiveFullscreen
-              key="live-fullscreen"
-              session={liveSession ?? liveOverlay}
-              onClose={() => setLiveOverlay(null)}
-            />
-          )}
-        </AnimatePresence>,
-        document.body
-      )}
+      {/* Live session fullscreen overlay — rendered at root via portal, fully independent of activeView. */}
+      <LiveOverlay
+        liveOverlay={liveOverlay}
+        liveSession={liveSession ?? null}
+        onClose={() => setLiveOverlay(null)}
+      />
 
       {/* Main chat overlay. Opened by the bottom-center ASK PIN AI
           button. Separate from card chat: a standalone main thread per
