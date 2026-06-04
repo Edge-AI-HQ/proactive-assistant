@@ -9,7 +9,7 @@ description: "卡片生成 pipeline 的当前事实。"
 
 卡片生成全链路异步:
 
-`POST /api/generate → enqueue_once(kind=generator.manual) → pai_scheduled_tasks → web tick_loop → dispatcher._run_generator → HTTP POST chat /agent/generate → data-collector → source index → planner → 并行 card-generator / evaluator → 必要时 top-up → final selection → rank → 返回 JSON → web persist_generator_run → pai_pipeline_runs + pai_card_evaluations`
+`POST /api/generate → enqueue_once(kind=generator.manual) → pai_scheduled_tasks → web tick_loop → dispatcher._run_generator → HTTP POST chat /agent/generate → deterministic context builder → source index → planner → 并行 card-generator / evaluator → 必要时 top-up → final selection → rank → 返回 JSON → web persist_generator_run → pai_pipeline_runs + pai_card_evaluations`
 
 前端 `POST /api/generate` 拿 `taskId` 后轮询 `/api/agent-runs/active` + `/api/cards`。同一用户只能有一个 active generator,duplicate 直接返回既有 taskId(dedupe pattern)。`generator.auto` 是另一种 kind,frontend settings 改 interval 时 web 侧 upsert 到 `pai_scheduled_tasks` 上,scheduler 周期触发。
 
@@ -69,7 +69,7 @@ sequenceDiagram
   end
   Sched->>DB: claim
   Sched->>Chat: POST /agent/generate (EdDSA agent-run JWT, run_id)
-  Chat->>Agent: data-collector → /state/phase1.json
+  Chat->>Agent: deterministic context builder
   Agent->>Agent: source index + compact phase1
   Agent->>Agent: planner → PlanOutput candidates
   Agent->>Agent: parallel card-generator per source bundle
@@ -91,7 +91,7 @@ sequenceDiagram
 | 入队 | `enqueue_once(kind='generator.manual', id=f"gen.{uuid4().hex[:12]}", payload={cards_to_generate, output_language, trigger})`,trigger_kind=`once`。用户可见生成默认/上限是 8 张;dispatcher 对旧 payload 也会 clamp 到 8。 |
 | Virtual key | `_ensure_virtual_key`:user 没 `litellm_virtual_key` 时调 `services/litellm_provisioning.ensure_user_litellm_key` lazy-recover;失败 502。 |
 | 输出语言 | 读 user_settings 的 `generation_language`(`zh-Hans` / `en`),走 payload 传给 chat。语言类偏好走这条设置(确定性),**不**进 `pai_preference_records`。 |
-| 高权重偏好 / fresh raw | data-collector 额外调 `client.preferences.list(status="active", limit=50)`,写进 `/state/phase1.json` 的 `preferences` 段。active 查询会过滤已过期的 `durability='temporary'` 行;planner 把最新有效 + 高 `weight` 的当近似硬约束(positive 偏向 / negative 抑制),命中的 preference id 写进 `PlanOutput.notes`。连接中的 Slack / Drive / Gmail / GCal 等 source 会额外拉最近 24h raw rows,但每源硬 cap 20 行,并用 compact JSON 写 phase1,避免把生成上下文放大到不可控。来源见 [Feedback](./feedback) 的「偏好层」。 |
+| 高权重偏好 / fresh raw | chat 侧 deterministic context builder 用本次 run JWT 调 web agent API,收集 `profile/memory/signals/raw/cards_recent/feedback/world/preferences/connections`。window 是 `min(上次成功生成 completed_at, now-24h) → now`;没有上次成功则取过去 24h。raw/signals 在收集层分页拉完窗口内行,不再每源 cap 20;planner 只看 source index 的 compact JSON,writer/evaluator 只看单卡 source bundle。active preferences 仍过滤过期 temporary 行,planner 把最新有效 + 高 `weight` 的当近似硬约束。 |
 | 自动生成 | `web/routes/ui/profile.py:_sync_auto_generate_schedule`:settings 写 `auto_generate=true/false` + `auto_generate_interval_minutes`,upsert 到 `pai_scheduled_tasks` 一行 `kind='generator.auto'`,`trigger_kind='schedule'`,`interval_seconds = interval_minutes * 60`,关掉切 `archived`。默认 `auto_generate=ON`(migration `038_auto_generate_default_on.sql`),默认间隔 12h(`037_pai_user_settings_auto_generate_interval.sql`)。 |
 | 派发 | dispatcher 看到 `generator.manual` / `generator.auto` 都走 `_run_generator`(`039_split_generator_kinds.sql` 拆 kind 但共用 handler);generator 是用户可见链路,DB lease、web→chat `/agent/generate` read timeout、chat route 内部 timeout 都是 600s。手动 `generator.manual` 不自动 retry,超过 10 分钟直接失败。 |
 | chat 调用 | `_run_generator` HTTP POST `chat /agent/generate`,签 EdDSA agent-run JWT,带 `run_id` + virtual_key claim。 |
@@ -106,11 +106,11 @@ sequenceDiagram
 
 ### Stage 拓扑
 
-Data collector 仍用 DeepAgents + Code Mode 拉数据。后续 stage 不再共享完整 phase1 大上下文:Python 先把 phase1 压成 source index,planner 用 compact phase1 选候选,card-generator/evaluator 按单卡 source bundle 并行执行。
+Context builder 不走 DeepAgents / Code Mode。它在 chat 进程内用本次 run JWT 读 web 的 `/api/agent/*` 确定性接口,先收集完整窗口数据;后续 stage 不共享完整 artifact:Python 先把 context 压成 source index,planner 用 compact phase1 选候选,card-generator/evaluator 按单卡 source bundle 并行执行。
 
 ```
 run_generator()
-  ├─ data-collector      → 写 /state/phase1.json
+  ├─ context-builder     → 收集 full 24h / last-cycle context
   ├─ source-index        → SourceRecord[] + compact planner input
   ├─ planner             → PlanOutput(最多 target+4,上限 12)
   ├─ card-generator x N  → 每个 PlanItem 一个 source bundle,并发上限 4
@@ -124,7 +124,7 @@ run_generator()
 
 | Stage | 输入 | 输出 |
 |---|---|---|
-| data-collector | sandbox 里跑 `pinai_sdk` 拉 profile / memory / signals / gmail / gcal / cards_recent / feedback / world / **active non-expired preferences** | `/state/phase1.json` |
+| context-builder | 用本次 run JWT 调 web agent API,按 window 分页拉 raw/signals,并拉 profile / memory / cards_recent / feedback / world / **active non-expired preferences** | full context artifact(dict) |
 | source-index | full phase1 JSON | `SourceRecord[]`(`id/source_type/title/snippet/timestamp/salience/citation/payload`) + compact planner input。`cards_recent` 保留 title / whyNow / summary / sources 摘要,用于语义去重。 |
 | planner | compact phase1 + matched patterns | `PlanOutput {plan[], skipped_duplicates[], cold_baskets[], notes}`。目标候选数是 `cards_to_generate + 4`,最多 12。 |
 | card-generator | 单个 `PlanItem` + 对应 source bundle | `CardsList`,通常一张卡;`sources[]` 必须复制 bundle citation。 |
@@ -153,7 +153,7 @@ generator 走 LiteLLM 时,`ops/litellm/litellm_config.yaml` 的 `cache_control_i
 | 生成 HTTP 入口 / dedupe / lazy virtual key / persist | `pinai-agents/src/pinai_agents/web/routes/ui/generate.py` |
 | Auto-generate settings → schedule 同步 | `pinai-agents/src/pinai_agents/web/routes/ui/profile.py`(`_sync_auto_generate_schedule`、`_ensure_auto_generate_schedule`)|
 | Scheduler dispatcher generator handler | `pinai-agents/src/pinai_agents/web/scheduler/dispatcher.py`(`_run_generator`、`call_generate`)|
-| chat 端 indexed parallel pipeline + GeneratorOutput | `pinai-agents/src/pinai_agents/chat/agents/generator.py`(`_build_source_index` / `_source_bundle_for_plan_item` / `_DATA_COLLECTOR_PROMPT` / `_PLANNER_PROMPT` / `_CARD_GENERATOR_PROMPT` / `_EVALUATOR_PROMPT`)|
+| chat 端 indexed parallel pipeline + GeneratorOutput | `pinai-agents/src/pinai_agents/chat/agents/generator.py`(`_build_source_index` / `_source_bundle_for_plan_item` / `_PLANNER_PROMPT` / `_CARD_GENERATOR_PROMPT` / `_EVALUATOR_PROMPT`) 和 `chat/agents/generation_context.py` |
 | chat HTTP route | `pinai-agents/src/pinai_agents/chat/routes/generate.py` |
 | 输出 schema(GeneratorOutput / PlanOutput / CardsList / EvalReport) | `pinai-agents/src/pinai_agents/chat/agents/generator.py` 顶部 pydantic |
 | 共享 api models | `pinai-agents/src/pinai_agents/shared/api_models.py`(`GenerateRequest` 等) |

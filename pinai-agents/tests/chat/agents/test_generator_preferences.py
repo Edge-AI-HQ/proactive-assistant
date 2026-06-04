@@ -1,11 +1,11 @@
 """Goal 2 plumbing: active preferences reach generation.
 
-These are plumbing assertions only — that the data-collector pulls
-preferences into the phase1 digest, that the planner prompt carries the
-preference-alignment instruction, and that the SDK exposes the method the
-script calls. Whether the planner actually biases toward a preference is
-an LLM behavior, verified manually against a LangSmith trace (out of the
-loop), never asserted here.
+These are plumbing assertions only — that the deterministic context
+builder exists, that the planner prompt carries the preference-alignment
+instruction, and that the SDK still exposes the preference surface used by
+agent code. Whether the planner actually biases toward a preference is an
+LLM behavior, verified manually against a LangSmith trace, never asserted
+here.
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ import pytest
 from pinai_agents.chat.agents import generator as generator_module
 from pinai_agents.chat.agents.generator import (
     _CARD_GENERATOR_PROMPT,
-    _DATA_COLLECTOR_PROMPT,
     _EVALUATOR_PROMPT,
     _PLANNER_PROMPT,
     _build_source_index,
@@ -48,35 +47,13 @@ _SDK_CLIENT_PY = (
 )
 
 
-def test_data_collector_pulls_preferences_into_digest():
-    # The canonical script calls the SDK preferences endpoint ...
-    assert "client.preferences.list" in _DATA_COLLECTOR_PROMPT
-    # ... and stages it under the 'preferences' digest key for downstream
-    # subagents to read out of /state/phase1.json.
-    assert '"preferences"' in _DATA_COLLECTOR_PROMPT
-
-
-def test_data_collector_pulls_full_ambient_signal_details_into_digest():
-    assert "ambient_signal_details" in _DATA_COLLECTOR_PROMPT
-    assert 's.get("kind") == "ambient.candidate_window"' in _DATA_COLLECTOR_PROMPT
-    assert "client.signals.get(signal_id)" in _DATA_COLLECTOR_PROMPT
-
-
-def test_data_collector_pulls_connected_raw_sources_into_digest():
-    assert "client.composio.connections()" in _DATA_COLLECTOR_PROMPT
-    assert "RAW_SOURCE_BY_TOOLKIT" in _DATA_COLLECTOR_PROMPT
-    assert '"slack": ("slack", "messages")' in _DATA_COLLECTOR_PROMPT
-    assert '"googledrive": ("gdrive", "files")' in _DATA_COLLECTOR_PROMPT
-    assert 'client.raw.list(toolkit, entity, hours=24, limit=20)' in _DATA_COLLECTOR_PROMPT
-    assert "client.raw.list(toolkit, entity, hours=24, limit=80)" not in _DATA_COLLECTOR_PROMPT
-    assert '"connected_raw"' in _DATA_COLLECTOR_PROMPT
-
-
 def test_generator_runtime_caps_langgraph_recursion():
     source = inspect.getsource(run_generator)
 
     assert '"recursion_limit": 50' in inspect.getsource(run_generator.__globals__["_stage_config"])
     assert "subagents=[" not in source
+    assert "build_generation_context" in source
+    assert "create_deep_agent" not in source
 
 
 def test_source_index_compacts_phase1_sources_for_planner_and_bundles():
@@ -289,8 +266,7 @@ def test_generator_prompts_preserve_ambient_speaker_attribution():
 def test_sdk_exposes_preferences_list():
     """Load the SDK source directly (the wheel isn't installed in the
     agents test env, same constraint as test_sdk_cheat_sheet_sync) and
-    assert the client surface the data-collector script depends on
-    actually exists."""
+    assert the client surface agent code depends on still exists."""
     spec = importlib.util.spec_from_file_location("pinai_sdk_client", _SDK_CLIENT_PY)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

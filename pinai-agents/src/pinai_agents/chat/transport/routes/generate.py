@@ -37,6 +37,8 @@ class GenerateRequest(BaseModel):
     # Web-side pattern matcher output. Chat receives this read-only so it
     # never has to query the pattern DB (trust boundary).
     matched_patterns: list[dict[str, Any]] = Field(default_factory=list)
+    context_since: datetime | None = Field(default=None)
+    context_until: datetime | None = Field(default=None)
 
 
 class GenerateResponse(BaseModel):
@@ -219,7 +221,8 @@ async def generate(
     # Caller-supplied run_id wins (scheduler dispatch path); else mint
     # a fresh one (legacy sync /api/generate path).
     run_id = req.run_id or f"run_{uuid.uuid4().hex[:16]}"
-    current_date = datetime.now(UTC).strftime("%Y-%m-%d")
+    context_until = req.context_until or datetime.now(UTC)
+    current_date = context_until.strftime("%Y-%m-%d")
     t0 = time.perf_counter()
     # Guarded by _verify_principal — virtual_key is non-None here.
     virtual_key = principal.virtual_key
@@ -235,6 +238,8 @@ async def generate(
                 cards_to_generate=req.cards_to_generate,
                 output_language=req.output_language,
                 matched_patterns=req.matched_patterns,
+                context_since=req.context_since,
+                context_until=context_until,
             )
     except TimeoutError as e:
         logger.warning(

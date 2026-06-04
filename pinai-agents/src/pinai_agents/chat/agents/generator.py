@@ -3,16 +3,16 @@
 Topology:
 
     run_generator()
-      ├─ data-collector DeepAgent     — sonnet, writes /state/phase1.json
+      ├─ deterministic context builder — web agent APIs, no LLM
       ├─ planner structured call      — sonnet, response_format=PlanOutput
       ├─ card-generator structured    — sonnet, response_format=CardsList
       └─ evaluator structured         — sonnet, response_format=EvalReport
 
 Why 4 stages instead of one big prompt:
 
-  - Context isolation: data-collector's raw 30-row gmail/signals dump
-    never enters the planner / generator / evaluator context windows.
-    Each LLM call sees only what it needs to decide.
+  - Context isolation: the builder collects the full 24h/last-cycle
+    artifact, then source-index compaction ensures each LLM call sees
+    only what it needs to decide.
   - Specialization: planner reasons about dedup / feedback alignment;
     generator focuses on writing high-quality cards; evaluator reviews
     them with a CRITIC prompt against the same CardsList output.
@@ -23,9 +23,9 @@ Why 4 stages instead of one big prompt:
     via `min_length=1` on `sources[]`).
 
 Why share one sandbox backend:
-  The data-collector needs Code Mode tools to query `pinai_sdk` and write
-  `/state/phase1.json`. Later stages read that file once from Python and
-  receive the compact JSON inline, so they cannot loop over sandbox tools.
+  No sandbox is needed for collection anymore. Chat reads web's agent
+  APIs directly with the per-run JWT, so collection is deterministic and
+  still respects the web/chat trust boundary.
 """
 
 from __future__ import annotations
@@ -34,6 +34,8 @@ import asyncio
 import json
 import logging
 import re
+from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -45,10 +47,8 @@ from ...shared.api_models import (
     PlanOutput,
 )
 from ..harness.ctx import run_context
-from ..harness.factory import create_deep_agent
 from ..harness.llm import make_chat_model
-from ..tools.code_mode.local_sandbox import create_local_sandbox_backend, use_local_sandbox
-from ..tools.code_mode.sandbox import evict_thread, get_or_create_thread_sandbox
+from .generation_context import build_generation_context
 
 logger = logging.getLogger(__name__)
 
@@ -83,161 +83,8 @@ class FinalSelection(BaseModel):
 
 
 # ── Stage prompts ───────────────────────────────────────────────────
-# Data collection writes `/state/phase1.json` in the sandbox. Later
-# structured stages receive that JSON inline from Python.
-
-_DATA_COLLECTOR_PROMPT = """You are the data-collector subagent of the Pin AI card generator.
-
-<role>
-You pull the user's current data via `pinai_sdk` running inside the
-shared Daytona sandbox, and persist a JSON digest to
-`/state/phase1.json` for the downstream planner / generator / evaluator
-to consume. You produce NO cards, NO plan, NO opinions — just data.
-</role>
-
-<workflow>
-Use Code Mode: `write_file('/tmp/collect.py', <SCRIPT>)` then
-`execute('python3 /tmp/collect.py')`. The sandbox has `pinai_sdk`
-pre-installed; auth via env-injected phantom token, you do not handle
-credentials.
-
-The SDK exports a SINGLETON `client` (NOT a class — do NOT write
-`from pinai_sdk import PinAIClient` or `PinAIClient()`):
-
-```python
-from pinai_sdk import client  # this exact import — singleton
-```
-
-Use this canonical script verbatim (adapt only if a source must be
-re-fetched after a transient failure):
-
-```python
-import asyncio, json
-from pathlib import Path
-from pinai_sdk import client
-
-RAW_SOURCE_BY_TOOLKIT = {
-    "gmail": ("gmail", "messages"),
-    "googlecalendar": ("gcal", "events"),
-    "gcal": ("gcal", "events"),
-    "googledrive": ("gdrive", "files"),
-    "gdrive": ("gdrive", "files"),
-    "slack": ("slack", "messages"),
-    "github": ("github", "issues"),
-    "calendly": ("calendly", "events"),
-    "stripe": ("stripe", "invoices"),
-    "youtube": ("youtube", "subscriptions"),
-    "linkedin": ("linkedin", "profile"),
-}
-
-def _connection_toolkit(connection):
-    if not isinstance(connection, dict):
-        return None
-    raw = connection.get("toolkit")
-    if isinstance(raw, dict):
-        raw = raw.get("slug") or raw.get("name")
-    return str(raw).strip().lower() if raw else None
-
-async def _fetch_connected_raw(connections):
-    if not isinstance(connections, list):
-        return {}
-    tasks = {}
-    seen = set()
-    for connection in connections:
-        toolkit_slug = _connection_toolkit(connection)
-        source = RAW_SOURCE_BY_TOOLKIT.get(toolkit_slug or "")
-        if source is None or source in seen:
-            continue
-        seen.add(source)
-        toolkit, entity = source
-        key = f"{toolkit}/{entity}"
-        tasks[key] = client.raw.list(toolkit, entity, hours=24, limit=20)
-    if not tasks:
-        return {}
-    results = await asyncio.gather(*tasks.values(), return_exceptions=True)
-    return {
-        key: ({"_error": f"{type(value).__name__}: {value}"} if isinstance(value, BaseException) else value)
-        for key, value in zip(tasks.keys(), results)
-    }
-
-async def main():
-    (profile, memory, signals, gmail, gcal,
-     cards_recent, feedback, world, preferences, connections) = await asyncio.gather(
-        client.profile.get(),
-        client.memory.list(min_quality=0.7, limit=30),
-        client.signals.recent(status="open", hours=24, min_salience=0.1, limit=80),
-        client.raw.gmail.recent(),
-        client.raw.gcal.today(),
-        client.cards.recent(limit=30),
-        client.feedback.list(limit=50),
-        client.world.recent(status="open", limit=10),
-        client.preferences.list(status="active", limit=50),
-        client.composio.connections(),
-        return_exceptions=True,
-    )
-    connected_raw = await _fetch_connected_raw(connections)
-    ambient_signal_details = []
-    if isinstance(signals, list):
-        ambient_ids = [
-            str(s.get("id")) for s in signals
-            if isinstance(s, dict)
-            and s.get("kind") == "ambient.candidate_window"
-            and s.get("id")
-        ][:20]
-        if ambient_ids:
-            ambient_signal_details = await asyncio.gather(
-                *(client.signals.get(signal_id) for signal_id in ambient_ids),
-                return_exceptions=True,
-            )
-    keys = ["profile","memory","signals","gmail","gcal",
-            "cards_recent","feedback","world","preferences",
-            "connections","connected_raw","ambient_signal_details"]
-    vals = [profile, memory, signals, gmail, gcal,
-            cards_recent, feedback, world, preferences,
-            connections, connected_raw, ambient_signal_details]
-    digest = {}
-    for k, v in zip(keys, vals):
-        if isinstance(v, BaseException):
-            digest[k] = {"_error": f"{type(v).__name__}: {v}"}
-        else:
-            digest[k] = v
-    Path("/state").mkdir(parents=True, exist_ok=True)
-    out = json.dumps(digest, default=str, ensure_ascii=False, separators=(",", ":"))
-    Path("/state/phase1.json").write_text(out)
-    summary = {
-        k: (
-            "error" if isinstance(digest[k], dict) and "_error" in digest[k]
-            else (f"{len(digest[k])} sources" if k == "connected_raw" and isinstance(digest[k], dict)
-                  else (f"{len(digest[k])} rows" if isinstance(digest[k], list)
-                        else "ok"))
-        )
-        for k in keys
-    }
-    print(f"phase1 written: {len(out)} bytes, {summary}")
-
-asyncio.run(main())
-```
-
-After `execute` returns, just confirm "phase1 written" succeeded.
-DO NOT print the digest body. Downstream structured stages receive
-the digest from Python.
-</workflow>
-
-<no_fabrication>
-If a source returns `_error`, surface it. Never invent data. If
-`pinai_sdk` itself fails (auth, sandbox unreachable), STOP and report
-the error verbatim — downstream agents will skip the run.
-</no_fabrication>
-
-<output>
-Return only a brief plain-text summary (no JSON, no markdown), e.g.:
-"phase1 written: profile=ok, memory=10 rows, signals=14 open,
-gmail=3, gcal=0 (empty), connected_raw=4 sources,
-cards_recent=4, feedback=0 (empty)."
-The actual data is in `/state/phase1.json`.
-</output>
-"""
-
+# Data collection is deterministic. Structured stages receive compact
+# context JSON inline from Python.
 
 _PLANNER_PROMPT = """You are the planner stage of the Pin AI card generator.
 
@@ -252,7 +99,8 @@ card-generator stage will turn each plan item into a full card.
 </role>
 
 <workflow>
-1. Use `<phase1_json>` — full JSON digest from data-collector.
+1. Use `<phase1_json>` — compact context JSON from the deterministic
+   context builder.
 2. Use `<matched_patterns_json>` — candidates the web-side pattern matcher
    already verified are triggerable. Each item has
    `patternId`, `category`, `intent`, `abstract`, `humanInsight`,
@@ -328,8 +176,8 @@ on this batch, stronger than inferred signals:
 
 <connected_raw_sources>
 `<phase1_json>` includes `connections` (ACTIVE Composio accounts)
-and `connected_raw` (recent local raw rows from each connected, supported
-source over the last 24 hours). Treat `connected_raw` as first-class fresh
+and `connected_raw` (local raw rows from each connected, supported
+source over the context window). Treat `connected_raw` as first-class fresh
 evidence alongside Gmail/GCal:
 
 - Connected Slack appears under `connected_raw["slack/messages"]`.
@@ -1129,33 +977,22 @@ async def run_generator(
     output_language: str = "en",
     user_message: str = "Generate Intent Cards now.",
     matched_patterns: list[dict[str, Any]] | None = None,
+    context_since: datetime | None = None,
+    context_until: datetime | None = None,
 ) -> GeneratorOutput:
     """One-shot generator run. Returns the validated GeneratorOutput.
 
-    A Daytona thread sandbox is provisioned keyed on `gen-{run_id}`.
-    The data-collector writes `/state/phase1.json` there, then Python
-    passes that compact JSON inline to the structured planner / card /
-    evaluator calls. Evicted in finally; the registry won't cache it
-    past this call.
+    The deterministic context builder reads web's agent APIs with the
+    per-run JWT, then Python passes compact JSON inline to the structured
+    planner / card / evaluator calls.
 
     Caller responsibilities:
       - current_date in YYYY-MM-DD.
-      - user_id / run_id / run_jwt — `tools/sandbox.py` mints the
-        phantom token consumed by `pinai_sdk` env in the sandbox.
+      - user_id / run_id / run_jwt for web agent API reads.
       - The returned GeneratorOutput is already validated (Pydantic);
         no further parse / shape check needed.
     """
     session_key = f"gen-{run_id}"
-    is_local_sandbox = use_local_sandbox()
-    if is_local_sandbox:
-        backend = create_local_sandbox_backend(
-            run_jwt=run_jwt,
-            root_dir="/state",
-            reset_files=("phase1.json",),
-        )
-        logger.info("generator using local sandbox backend run_id=%s", run_id)
-    else:
-        backend, _ = await get_or_create_thread_sandbox(session_key, run_jwt=run_jwt)
     try:
         with run_context(
             user_id=user_id,
@@ -1164,18 +1001,6 @@ async def run_generator(
             virtual_key=virtual_key,
             session_key=session_key,
         ):
-            # Data collection still needs tools and the shared sandbox
-            # backend. Later stages use direct structured model calls to
-            # avoid root-orchestrator task loops.
-            data_collector = create_deep_agent(
-                model=make_chat_model(
-                    virtual_key=virtual_key,
-                    model="claude-sonnet-4-6",
-                    enable_thinking=False,
-                ),
-                system_prompt=_DATA_COLLECTOR_PROMPT,
-                backend=backend,
-            )
             structured_model = make_chat_model(
                 virtual_key=virtual_key,
                 model="claude-sonnet-4-6",
@@ -1184,25 +1009,25 @@ async def run_generator(
             )
 
             # Fixed pipeline: the old root orchestrator could loop over
-            # `task()` calls for hundreds of LLM turns. Drive the four stages
-            # once from Python so user-facing generation has a predictable
-            # runtime envelope.
-            await _invoke_stage(
-                data_collector,
-                content=(
-                    "Pull profile / memory / signals / gmail / gcal / "
-                    "cards_recent / feedback / world / preferences plus "
-                    "recent raw rows for every connected supported connector, "
-                    f"then persist /state/phase1.json. Today is {current_date}. "
-                    f"Target {cards_to_generate} cards."
-                ),
-                run_id=run_id,
-                user_id=user_id,
-                stage="data_collector",
+            # `task()` calls for hundreds of LLM turns. Context collection
+            # is deterministic HTTP, then the LLM stages run once from
+            # Python so user-facing generation has a predictable envelope.
+            phase1 = await build_generation_context(
+                now=context_until or datetime.now(UTC),
+                context_since=context_since,
+                context_until=context_until,
             )
-            logger.info("generator stage ok run_id=%s stage=data_collector", run_id)
+            phase1_json = json.dumps(phase1, default=str, ensure_ascii=False)
+            phase1_read = SimpleNamespace(
+                error=None,
+                file_data={"content": phase1_json},
+            )
+            logger.info(
+                "generator stage ok run_id=%s stage=context_builder bytes=%d",
+                run_id,
+                len(phase1_json),
+            )
 
-            phase1_read = await backend.aread("/state/phase1.json", limit=250_000)
             if phase1_read.error or phase1_read.file_data is None:
                 result = {
                     "structured_response": GeneratorOutput(
@@ -1583,7 +1408,7 @@ async def run_generator(
                         result = {
                             "structured_response": GeneratorOutput(
                                 reasoning=(
-                                    "Fixed pipeline ran data collector, planner, "
+                                    "Fixed pipeline ran deterministic context builder, planner, "
                                     "parallel card generators, and parallel evaluators. "
                                     f"Planner notes: {plan.notes} "
                                     f"Final selection notes: {final_selection_notes}"
@@ -1597,8 +1422,7 @@ async def run_generator(
                             )
                         }
     finally:
-        if not is_local_sandbox:
-            await evict_thread(session_key)
+        pass
 
     structured = result.get("structured_response")
     if not isinstance(structured, GeneratorOutput):

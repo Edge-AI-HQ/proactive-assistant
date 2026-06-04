@@ -11,8 +11,8 @@ description: "把卡片生成恢复到一次 8 张,同时控制在 10 分钟以�
 
 目标架构是:
 
-1. 只收集一次数据。
-2. 把 phase1 压缩成 source index。
+1. 用 deterministic Context Builder 只收集一次数据。
+2. 收集层拿完整 24h / last-cycle window,再把 phase1 压缩成 source index。
 3. planner 只做选题,输出多于 8 个候选。
 4. 每张卡只携带自己的 source bundle,并行生成和评价。
 5. 如果 pass 不足目标数,用 top-up 再补一小批候选。
@@ -30,21 +30,22 @@ description: "把卡片生成恢复到一次 8 张,同时控制在 10 分钟以�
 
 ## 当前问题
 
-当前 fixed pipeline 已经解决 root orchestrator 无限循环,但 1 张卡仍然约 125 秒、10 次调用、29 万 tokens。
+旧 fixed pipeline 已经解决 root orchestrator 无限循环,但 1 张卡仍然约 125 秒、10 次调用、29 万 tokens。
 
 主要原因:
 
-- `phase1_json` 完整传给 planner。
-- 同一个完整 `phase1_json` 又传给 card-generator。
-- 同一个完整 `phase1_json` 再传给 evaluator。
-- data collector 本质是确定性 IO,但现在仍通过 DeepAgent 写脚本和执行。
+- data collector 本质是确定性 IO,但旧版仍通过 DeepAgent 写脚本和执行。
+- 旧版 raw/signals 在收集层就有小 cap,会丢掉窗口内事实。
+- `phase1_json` 曾经完整传给 planner。
+- 同一个完整 `phase1_json` 曾经又传给 card-generator。
+- 同一个完整 `phase1_json` 曾经再传给 evaluator。
 - 生成后每张卡会触发 card-thread fanout,8 张时后台并发会放大。
 
 ## 设计
 
 ```mermaid
 flowchart TD
-  Collect["Context Builder / data collector"] --> Index["Source Index"]
+  Collect["Deterministic Context Builder<br/>full 24h / last-cycle window"] --> Index["Source Index"]
   Index --> Plan["Planner: 10-12 candidates"]
   Plan --> Bundle["source bundle per plan item"]
   Bundle --> Writers["parallel card writers"]
@@ -114,6 +115,31 @@ flowchart TD
 
 - 单元测试覆盖 memory / signal / gmail / connected_raw 的 source id 和 citation。
 - planner prompt 不再吃 raw full phase1。
+
+### Task 2.5: 用 deterministic Context Builder 替代 LLM data collector
+
+修改:
+
+- `pinai-agents/src/pinai_agents/chat/agents/generation_context.py`
+- `pinai-agents/src/pinai_agents/chat/agents/generator.py`
+- `pinai-agents/src/pinai_agents/chat/transport/routes/generate.py`
+- `pinai-agents/src/pinai_agents/web/scheduler/dispatcher.py`
+- `pinai-agents/src/pinai_agents/web/routes/agent/raw.py`
+- `pinai-agents/src/pinai_agents/web/routes/agent/signals.py`
+
+关键规则:
+
+- web 派发前查询上次成功 `pai_pipeline_runs.completed_at`。
+- context window = `min(last_success_at, now - 24h) → now`;没有上次成功则 `now - 24h → now`。
+- raw / signals 在收集层分页拉完窗口内行;`limit` 只是 page size,不是最终 cap。
+- planner / writer / evaluator 仍只看 compact source index / per-card source bundle。
+
+验证:
+
+- 单元测试覆盖 6h / 30h last-success window 规则。
+- raw route 支持 offset pagination。
+- signals route 支持 since / until / offset pagination。
+- Context Builder 测试覆盖 connected raw 多页拉取到耗尽。
 
 ### Task 3: 并行单卡 writer
 

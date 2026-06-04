@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import AsyncIterator
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -183,6 +184,8 @@ async def call_generate(
     virtual_key: str,
     run_id: str | None = None,
     matched_patterns: list[dict[str, Any]] | None = None,
+    context_since: datetime | None = None,
+    context_until: datetime | None = None,
 ) -> dict[str, Any]:
     """One-shot proxy to chat worker /agent/generate. JSON in / JSON out.
 
@@ -214,6 +217,10 @@ async def call_generate(
         body["run_id"] = run_id
     if matched_patterns:
         body["matched_patterns"] = matched_patterns
+    if context_since is not None:
+        body["context_since"] = context_since.isoformat()
+    if context_until is not None:
+        body["context_until"] = context_until.isoformat()
     url = f"{_chat_internal_url()}/agent/generate"
     timeout = httpx.Timeout(
         connect=5.0,

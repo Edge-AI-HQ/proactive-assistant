@@ -31,6 +31,7 @@ import os
 import re
 import time
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 import httpx
@@ -129,6 +130,27 @@ _LONG_RUNNING_KINDS: frozenset[str] = frozenset(
     }
 )
 _GENERATOR_KINDS: frozenset[str] = frozenset({"generator.manual", "generator.auto"})
+
+
+def _aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _generation_context_since(
+    *,
+    now: datetime,
+    last_success_at: datetime | None,
+) -> datetime:
+    min_since = _aware_utc(now) - timedelta(hours=24)
+    if last_success_at is not None:
+        last = _aware_utc(last_success_at)
+        if last < min_since:
+            return last
+    return min_since
+
+
 _LONG_LEASE_SECONDS = 600
 _GENERATOR_LEASE_SECONDS = 600
 
@@ -491,6 +513,34 @@ class DefaultDispatcher:
                 run_id,
             )
 
+        context_until = datetime.now(UTC)
+        context_since = context_until - timedelta(hours=24)
+        try:
+            async with user_scoped_tx(self._pool, task.user_id) as conn:
+                cur = await conn.execute(
+                    """
+                    SELECT completed_at
+                    FROM pai_pipeline_runs
+                    WHERE user_id = %s
+                      AND status = 'completed'
+                      AND completed_at IS NOT NULL
+                    ORDER BY completed_at DESC
+                    LIMIT 1
+                    """,
+                    (task.user_id,),
+                )
+                last_success = await cur.fetchone()
+            context_since = _generation_context_since(
+                now=context_until,
+                last_success_at=last_success.get("completed_at") if last_success else None,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "generator context window lookup failed user=%d run=%s; falling back to 24h",
+                task.user_id,
+                run_id,
+            )
+
         result = await call_generate(
             user_id=task.user_id,
             cards_to_generate=cards_to_generate,
@@ -498,6 +548,8 @@ class DefaultDispatcher:
             virtual_key=virtual_key,
             run_id=run_id,
             matched_patterns=matched_payload or None,
+            context_since=context_since,
+            context_until=context_until,
         )
         # Persist into pai_pipeline_runs / pai_card_evaluations using the
         # same id the task / FE polled with — `run_id` here equals
