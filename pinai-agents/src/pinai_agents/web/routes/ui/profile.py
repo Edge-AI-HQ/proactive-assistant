@@ -91,7 +91,7 @@ async def _sync_auto_generate_schedule(
             interval_seconds=interval_seconds,
             next_run_at=datetime.now(UTC) + timedelta(seconds=interval_seconds),
             payload={
-                "cards_to_generate": 1,
+                "cards_to_generate": 8,
                 "output_language": settings.generation_language,
                 "trigger": "auto",
             },

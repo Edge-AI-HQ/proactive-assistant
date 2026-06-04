@@ -82,6 +82,44 @@ def test_generate_route_keeps_best_candidate_when_evaluator_fails_all_cards() ->
     assert [ev["cardId"] for ev in evals] == [None, "run_filter_card_00"]
 
 
+def test_generate_route_fills_requested_count_after_passing_cards() -> None:
+    parsed = GeneratorOutput(
+        reasoning="two strong cards and two usable-but-failed candidates",
+        cards=[
+            _card("passed-one"),
+            _card("failed-high"),
+            _card("passed-two"),
+            _card("failed-low"),
+        ],
+        evaluations=[
+            _evaluation("passed-one", passed=True, overall=8),
+            _evaluation("failed-high", passed=False, overall=7),
+            _evaluation("passed-two", passed=True, overall=8.5),
+            _evaluation("failed-low", passed=False, overall=4),
+        ],
+        batchFeedback="fill batch",
+    )
+
+    cards, evals = _serialize_passing_cards(parsed, run_id="run_filter", max_cards=3)
+
+    assert [card["intentKey"] for card in cards] == [
+        "passed-one",
+        "passed-two",
+        "failed-high",
+    ]
+    assert [card["id"] for card in cards] == [
+        "run_filter_card_00",
+        "run_filter_card_01",
+        "run_filter_card_02",
+    ]
+    assert [ev["cardId"] for ev in evals] == [
+        "run_filter_card_00",
+        "run_filter_card_02",
+        "run_filter_card_01",
+        None,
+    ]
+
+
 def test_generate_route_caps_returned_cards_to_requested_count() -> None:
     parsed = GeneratorOutput(
         reasoning="more passing cards than requested",

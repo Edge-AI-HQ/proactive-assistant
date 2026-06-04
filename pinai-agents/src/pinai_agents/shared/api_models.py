@@ -351,7 +351,7 @@ class MatchedPatternPayload(_CamelModel):
 
 
 class GenerateRequest(_CamelModel):
-    cards_to_generate: StrictInt = Field(default=1, ge=1, le=1)
+    cards_to_generate: StrictInt = Field(default=8, ge=1, le=8)
     # None → fall back to user's `generation_language` setting at the
     # route boundary. Explicit value (admin / A-B / debug) overrides.
     output_language: SupportedLanguage | None = None
@@ -520,7 +520,7 @@ class CardEvaluation(_AgentModel):
         description="True when the card's sources[] satisfy the pattern's required signal types. Only meaningful when pattern_id is set.",
     )
     feedback: str = Field(
-        max_length=3000,
+        max_length=8000,
         description="Critic's per-card note. The evaluator naturally writes long, multi-paragraph critiques when scoring across 5 dims; budget generously rather than forcing truncation.",
     )
 

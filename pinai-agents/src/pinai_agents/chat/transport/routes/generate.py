@@ -27,7 +27,7 @@ router = APIRouter()
 
 
 class GenerateRequest(BaseModel):
-    cards_to_generate: StrictInt = Field(default=1, ge=1, le=1)
+    cards_to_generate: StrictInt = Field(default=8, ge=1, le=8)
     output_language: str = Field(default="en")
     # Optional: caller-supplied run id. Web's scheduler dispatcher passes
     # the task.id here so pai_scheduled_tasks → pai_pipeline_runs share
@@ -110,6 +110,24 @@ def _serialize_passing_cards(
         if str(card.get("intentKey")) in passing_intents
         and not _is_infra_error_card(card, eval_by_intent.get(str(card.get("intentKey"))))
     ]
+    if cards and len(cards) < max_cards:
+        selected_intents = {str(card.get("intentKey")) for card in cards}
+        fill_candidates = [
+            card
+            for card in raw_cards
+            if str(card.get("intentKey")) not in selected_intents
+            and not _is_infra_error_card(card, eval_by_intent.get(str(card.get("intentKey"))))
+            and float(eval_by_intent.get(str(card.get("intentKey")), {}).get("overall") or -1) >= 5
+        ]
+        cards.extend(
+            sorted(
+                fill_candidates,
+                key=lambda card: float(
+                    eval_by_intent.get(str(card.get("intentKey")), {}).get("overall") or -1
+                ),
+                reverse=True,
+            )[: max_cards - len(cards)]
+        )
     if not cards:
         fallback_cards = [
             card

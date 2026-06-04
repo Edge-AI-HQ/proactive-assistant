@@ -457,7 +457,7 @@ class DefaultDispatcher:
             raise RuntimeError(msg)
 
         payload = task.payload or {}
-        cards_to_generate = min(int(payload.get("cards_to_generate") or 1), 1)
+        cards_to_generate = min(int(payload.get("cards_to_generate") or 8), 8)
         output_language = str(payload.get("output_language") or "en")
 
         # Phase 2: pattern matcher runs in the web process so the chat

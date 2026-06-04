@@ -21,10 +21,21 @@ from pinai_agents.chat.agents.generator import (
     _DATA_COLLECTOR_PROMPT,
     _EVALUATOR_PROMPT,
     _PLANNER_PROMPT,
+    _build_source_index,
+    _card_writer_content,
+    _compact_phase1_for_planner,
+    _source_bundle_for_plan_item,
     run_generator,
 )
 from pinai_agents.chat.agents.prompts.shared import GROUNDING_POLICY
-from pinai_agents.shared.api_models import CardsList, EvalReport, GeneratorOutput, PlanOutput
+from pinai_agents.shared.api_models import (
+    CardEvaluation,
+    CardsList,
+    EvalReport,
+    GeneratorOutput,
+    PlanItem,
+    PlanOutput,
+)
 
 _SDK_CLIENT_PY = (
     Path(__file__).resolve().parents[3]
@@ -65,6 +76,112 @@ def test_generator_runtime_caps_langgraph_recursion():
 
     assert '"recursion_limit": 50' in inspect.getsource(run_generator.__globals__["_stage_config"])
     assert "subagents=[" not in source
+
+
+def test_source_index_compacts_phase1_sources_for_planner_and_bundles():
+    phase1 = {
+        "profile": {
+            "display_name": "Xing",
+            "summary": "Builds proactive AI systems.",
+            "facts": {"role": "founder", "long": "x" * 2000},
+        },
+        "signals": [
+            {
+                "id": "sig_ci_failed",
+                "title": "Deploy Dev failed",
+                "summary": "CI failed on proactive-ai-v3.",
+                "occurred_at": "2026-06-04T04:56:00Z",
+                "payload": {"salience": 0.91, "body": "y" * 2000},
+            }
+        ],
+        "gmail": [
+            {
+                "id": "raw_gmail_1",
+                "subject": "Run failed: Deploy Dev",
+                "snippet": "Some jobs were not successful.",
+                "received_at": "2026-06-04T04:56:00Z",
+                "body": "z" * 2000,
+            }
+        ],
+        "connected_raw": {
+            "slack/messages": [
+                {
+                    "id": "raw_slack_1",
+                    "text": "Boliang asked for the generation runtime plan.",
+                    "ts": "2026-06-04T09:00:00Z",
+                }
+            ]
+        },
+    }
+
+    index = _build_source_index(phase1)
+    by_id = {item["id"]: item for item in index}
+
+    assert by_id["sig_ci_failed"]["source_type"] == "signal"
+    assert by_id["sig_ci_failed"]["citation"].startswith("signal id=sig_ci_failed")
+    assert by_id["raw_gmail_1"]["source_type"] == "gmail"
+    assert by_id["raw_slack_1"]["source_type"] == "slack/messages"
+    assert len(by_id["raw_gmail_1"]["payload"]) < 900
+
+    compact = _compact_phase1_for_planner(phase1, index)
+    assert "sources" in compact
+    assert "connected_raw" not in compact
+    assert len(str(compact)) < len(str(phase1))
+
+    plan_item = PlanItem(
+        intent_key="deploy-dev-failed",
+        goal_basket="work",
+        decision="Open the failing CI run and inspect the failed job.",
+        why_now_trigger="Deploy Dev failed on 2026-06-04.",
+        primary_source_ids=["sig_ci_failed"],
+        pattern_id=None,
+    )
+    bundle = _source_bundle_for_plan_item(
+        plan_item=plan_item,
+        source_index=index,
+        compact_phase1=compact,
+        matched_patterns=[],
+    )
+    bundle_ids = {item["id"] for item in bundle["sources"]}
+    assert "sig_ci_failed" in bundle_ids
+    assert "raw_gmail_1" in bundle_ids
+
+
+def test_card_writer_content_uses_source_bundle_not_full_phase1():
+    plan_item = PlanItem(
+        intent_key="deploy-dev-failed",
+        goal_basket="work",
+        decision="Open the failing CI run and inspect the failed job.",
+        why_now_trigger="Deploy Dev failed on 2026-06-04.",
+        primary_source_ids=["sig_ci_failed"],
+        pattern_id=None,
+    )
+    source_bundle = {
+        "sources": [
+            {
+                "id": "sig_ci_failed",
+                "source_type": "signal",
+                "title": "Deploy Dev failed",
+                "snippet": "Some jobs were not successful.",
+                "citation": "signal id=sig_ci_failed, title=Deploy Dev failed",
+                "payload": "{}",
+            }
+        ],
+        "profile": {"summary": "Builds proactive AI systems."},
+        "preferences": [],
+        "cards_recent": [],
+    }
+
+    content = _card_writer_content(
+        plan_item=plan_item,
+        source_bundle=source_bundle,
+        current_date="2026-06-04",
+        output_language="zh-Hans",
+    )
+
+    assert "<source_bundle_json>" in content
+    assert "<phase1_json>" not in content
+    assert "sig_ci_failed" in content
 
 
 def test_planner_prompt_has_preference_alignment():
@@ -157,3 +274,17 @@ def test_generator_structured_outputs_allow_empty_error_shells(model, payload):
     """Empty structured outputs are valid error/no-grounding shells; the
     HTTP route rejects them before persistence."""
     assert model.model_validate(payload)
+
+
+def test_card_evaluation_allows_long_single_card_feedback():
+    assert CardEvaluation(
+        intentKey="long-feedback-card",
+        relevance=8,
+        actionability=8,
+        whyNowClarity=8,
+        novelty=8,
+        decisionCompression=8,
+        overall=8,
+        pass_=True,
+        feedback="grounding detail " * 350,
+    )
