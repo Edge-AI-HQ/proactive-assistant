@@ -1169,8 +1169,19 @@ export default function BigBallLayout() {
                 animate={{ y: 0 }}
                 exit={{ y: "100%" }}
                 transition={{ type: "spring", stiffness: 320, damping: 32, mass: 0.9 }}
-                className="relative w-full max-w-md h-screen overflow-hidden will-change-transform"
+                className="relative w-full max-w-md h-screen overflow-hidden bg-background will-change-transform"
               >
+                {/* Aurora backdrop — same layers as the Constellation root, on
+                    top of the opaque bg-background. So the panel is NOT
+                    see-through (the live Now tab can't bleed through the
+                    semi-transparent MainChatView), and swiping the chat back
+                    reveals this home aurora instead of a flat white panel.
+                    Sits beneath the swipe layer so it stays put as chat slides. */}
+                <img src={bgGradient} alt="" className="absolute inset-0 w-full h-full object-cover opacity-60" aria-hidden="true" />
+                <div className="absolute inset-0 aurora-layer aurora-layer-1" aria-hidden="true" />
+                <div className="absolute inset-0 aurora-layer aurora-layer-2" aria-hidden="true" />
+                <div className="absolute inset-0 aurora-layer aurora-layer-3" aria-hidden="true" />
+                <div className="absolute inset-0 bg-white/35" aria-hidden="true" />
                 <SwipeBackLayer onBack={() => closeMainChat()} className="h-full">
                   <MainChat onBack={() => closeMainChat()} />
                 </SwipeBackLayer>
