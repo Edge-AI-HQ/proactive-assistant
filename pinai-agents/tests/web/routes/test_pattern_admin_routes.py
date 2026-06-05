@@ -63,6 +63,11 @@ async def test_pattern_edit_roundtrip(pool, user_ids) -> None:
                     "why_now": "引用观察到的天数和稳定度",
                     "evidence": "gps history range",
                     "action": "提议加入提醒或确认节律",
+                    "title_strategy": {
+                        "avoid": "泛泛“我发现了”/“可能会喜欢”/只问“要不要”;必须带证据和动作",
+                        "example": "明早暴雨会吃掉你 15 分钟｜8:15 叫你出门",
+                        "formula": "具体事实/数字/时间 + 人性刺点 + 立刻动作",
+                    },
                 },
             },
         )

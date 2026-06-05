@@ -199,7 +199,7 @@ localStorage.setItem('__devAuthBypass', '1');
 location.reload();
 ```
 
-dashboard 会用一个假 Session 跳过 login,API client 自动带 `X-Dev-Auth: pinai-dev-reviewer` header。后端 `current_user` 在 `DEPLOY_ENV=dev` 时认这个 header,落到 deterministic dev 用户 `00000000-0000-0000-0000-00000000d0d0`。**不要在 prod / test 环境用,后端会直接 401。**
+dashboard 会用一个假 Session 跳过 login,API client 自动带 `X-Dev-Auth: pinai-dev-reviewer` header。后端 `current_user` 在 `DEPLOY_ENV=dev` 时认这个 header,落到 deterministic reviewer 用户 `00000000-0000-0000-0000-00000000d0d1`。主产品 Local Hot 模式使用另一个 header (`pinai-local-dev-user`) 和用户 `00000000-0000-0000-0000-00000000d0d0`,两者不要混用。**不要在 prod / test 环境用,后端会直接 401。**
 
 ## Pattern library 工作流
 

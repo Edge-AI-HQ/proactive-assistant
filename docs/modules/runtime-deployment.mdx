@@ -111,12 +111,39 @@ cd internal-reward-dashboard && npm install && cd -
 make up                        # 解密 .env.dev → .env,build 全栈,起 postgres + litellm + db-migrate + pinai-web + pinai-chat + frontend
 ```
 
+本地开发现在有两条入口:
+
+| 模式 | 命令 | 适合场景 | 端口 | 数据 | 登录 |
+|---|---|---|---|---|---|
+| Local Hot | `make local` | 单机日常开发、AI 快速改代码 | 固定 `3000 / 8000 / 8001` | 固定 local DB (`localhost:54322`) | `X-Dev-Auth: pinai-local-dev-user` 固定用户 |
+| Docker Isolated | `make up` | 多 worktree 并行、完整镜像验收 | 随机 host port,`make urls` 查看 | worktree 独立 volume | 原 Supabase OAuth / dashboard dev bypass |
+
+Local Hot 只把 Postgres/pgvector 和 LiteLLM 放在固定依赖容器里;`pinai-web`、`pinai-chat`、`proactive-ai-frontend` 都跑在本机热重载:
+
+```bash
+make local        # foreground: uvicorn --reload + Vite dev server
+make local-status # 看固定 URL、host 进程和依赖容器
+make local-stop   # 停 host 进程 + 依赖容器,保留 DB volume
+```
+
+固定入口:
+
+```text
+Frontend: http://localhost:3000
+Web API:  http://localhost:8000
+Chat API: http://localhost:8001
+DB:       postgresql://postgres:postgres@127.0.0.1:54322/postgres
+LiteLLM:  http://127.0.0.1:4000/v1
+```
+
+Local Hot 前端会设置 `VITE_PIN_LOCAL_DEV_AUTH=1`,`useAuth()` 返回固定 local user,API client 自动带 `X-Dev-Auth: pinai-local-dev-user`。后端只有 `DEPLOY_ENV=dev` 且 header 显式存在时接受;test/prod 会忽略该 header 并继续走 Supabase JWT。
+
 常用循环:
 
 | 改动 | 用什么 |
 |---|---|
-| pinai-agents Python 代码 | `make restart` |
-| 前端代码(容器版) | `make restart-frontend`,或者本地 `cd proactive-ai-frontend && npm run dev` 直接连 `:8000` |
+| pinai-agents Python 代码 | `make local` 热重载;Docker 验收用 `make restart` |
+| 前端代码 | `make local` 热更新;容器版验收用 `make restart-frontend` |
 | 内部 reward dashboard | `cd internal-reward-dashboard && npm run dev -- --host 127.0.0.1 --port 3004` |
 | docker-compose / Dockerfile | `make up`(会重 build) |
 | 翻数据丢档从头来 | `make clean && make up`(`reset` 同语义 + 自动起 ngrok) |

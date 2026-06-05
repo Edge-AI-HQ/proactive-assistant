@@ -12,6 +12,10 @@ import { Capacitor } from "@capacitor/core";
 import { KeychainAccess, SecureStorage } from "@aparajita/capacitor-secure-storage";
 import { authHeaders } from "./api";
 import { DEVICE_REGISTERED_EVENT } from "./device-events";
+import {
+  isPinLocalDevAuthEnabled,
+  PIN_LOCAL_DEV_AUTH_USER_ID,
+} from "./dev-auth";
 import { PIN_API_BASE, isNative, pinApiRequestHeaders } from "./platform";
 import { supabase } from "./supabase";
 
@@ -300,6 +304,7 @@ interface RegisterResponse {
 }
 
 async function currentUserId(): Promise<string> {
+  if (isPinLocalDevAuthEnabled()) return PIN_LOCAL_DEV_AUTH_USER_ID;
   const {
     data: { session },
   } = await supabase.auth.getSession();

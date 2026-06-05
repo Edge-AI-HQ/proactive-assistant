@@ -8,6 +8,35 @@ import { vi } from "vitest";
 // in CI. Setting TZ before any Date is constructed makes both agree.
 process.env.TZ = "UTC";
 
+function createMemoryStorage(): Storage {
+  const store = new Map<string, string>();
+  return {
+    get length() {
+      return store.size;
+    },
+    clear: vi.fn(() => {
+      store.clear();
+    }),
+    getItem: vi.fn((key: string) => store.get(key) ?? null),
+    key: vi.fn((index: number) => Array.from(store.keys())[index] ?? null),
+    removeItem: vi.fn((key: string) => {
+      store.delete(key);
+    }),
+    setItem: vi.fn((key: string, value: string) => {
+      store.set(key, String(value));
+    }),
+  };
+}
+
+Object.defineProperty(globalThis, "localStorage", {
+  configurable: true,
+  value: createMemoryStorage(),
+});
+Object.defineProperty(globalThis, "sessionStorage", {
+  configurable: true,
+  value: createMemoryStorage(),
+});
+
 const ResizeObserverMock = class {
   observe() {}
   unobserve() {}

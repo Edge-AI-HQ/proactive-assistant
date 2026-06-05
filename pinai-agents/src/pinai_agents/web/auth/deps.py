@@ -81,23 +81,56 @@ def get_pool(request: Request) -> AsyncConnectionPool:
 
 
 # Dev-only short-circuit. Active ONLY when DEPLOY_ENV=dev AND the request
-# carries an opaque marker header. Lets the internal-reward-dashboard be
-# verified end-to-end in a local browser without Supabase OAuth round-trips.
-# The marker is a fixed string rather than a secret because:
+# carries an opaque marker header. Lets local product development and the
+# internal-reward-dashboard be verified end-to-end in a browser without
+# Supabase OAuth round-trips. The markers are fixed strings rather than
+# secrets because:
 #   * the bypass only fires under DEPLOY_ENV=dev, never on prod/test/fly
-#   * the dev compose Postgres is local-only and not exposed
+#   * the local dev Postgres is not exposed as a production credential surface
 # In any non-dev environment the header is ignored entirely.
-_DEV_AUTH_BYPASS_HEADER_VALUE = "pinai-dev-reviewer"
-_DEV_AUTH_BYPASS_EMAIL = "dev-reviewer@local.invalid"
-# Fixed deterministic UUID for the dev bypass user (so the same row is reused
-# every time the bypass fires). users.supabase_user_id is UUID-typed.
-_DEV_AUTH_BYPASS_SUB = "00000000-0000-0000-0000-00000000d0d0"
+_DEV_AUTH_LOCAL_USER_HEADER_VALUE = "pinai-local-dev-user"
+_DEV_AUTH_LOCAL_USER_EMAIL = "dev-user@local.invalid"
+_DEV_AUTH_LOCAL_USER_SUB = "00000000-0000-0000-0000-00000000d0d0"
+
+_DEV_AUTH_REVIEWER_HEADER_VALUE = "pinai-dev-reviewer"
+_DEV_AUTH_REVIEWER_EMAIL = "dev-reviewer@local.invalid"
+_DEV_AUTH_REVIEWER_SUB = "00000000-0000-0000-0000-00000000d0d1"
+
+# Backward-compatible names for reward-dashboard impersonation code. The
+# dashboard reviewer remains the only dev bypass identity allowed to
+# impersonate other users.
+_DEV_AUTH_BYPASS_HEADER_VALUE = _DEV_AUTH_REVIEWER_HEADER_VALUE
+_DEV_AUTH_BYPASS_EMAIL = _DEV_AUTH_REVIEWER_EMAIL
+_DEV_AUTH_BYPASS_SUB = _DEV_AUTH_REVIEWER_SUB
+
+
+@dataclass(frozen=True, slots=True)
+class _DevAuthIdentity:
+    role: str
+    supabase_user_id: str
+    email: str
 
 
 def _maybe_dev_bypass_marker(value: str | None) -> str | None:
     if not value:
         return None
     return value.strip() or None
+
+
+def _dev_auth_identity(marker: str | None) -> _DevAuthIdentity | None:
+    if marker == _DEV_AUTH_LOCAL_USER_HEADER_VALUE:
+        return _DevAuthIdentity(
+            role="local-user",
+            supabase_user_id=_DEV_AUTH_LOCAL_USER_SUB,
+            email=_DEV_AUTH_LOCAL_USER_EMAIL,
+        )
+    if marker == _DEV_AUTH_REVIEWER_HEADER_VALUE:
+        return _DevAuthIdentity(
+            role="reviewer",
+            supabase_user_id=_DEV_AUTH_REVIEWER_SUB,
+            email=_DEV_AUTH_REVIEWER_EMAIL,
+        )
+    return None
 
 
 async def current_user(
@@ -110,10 +143,10 @@ async def current_user(
     On miss: 401. The user upsert is idempotent — first time a user hits
     this dep we create the row; subsequent calls fetch existing.
 
-    Dev-only bypass: when DEPLOY_ENV=dev AND the request carries
-    `X-Dev-Auth: pinai-dev-reviewer`, return a deterministic test user
-    without touching Supabase. Used by the internal-reward-dashboard for
-    local browser verification. Inert outside DEPLOY_ENV=dev.
+    Dev-only bypass: when DEPLOY_ENV=dev AND the request carries a known
+    `X-Dev-Auth` marker, return a deterministic test user without touching
+    Supabase. Used by local product development and the
+    internal-reward-dashboard. Inert outside DEPLOY_ENV=dev.
     """
     # NOTE: defer the settings import to avoid widening the module-load
     # surface; this keeps the bypass strictly opt-in per request.
@@ -121,12 +154,13 @@ async def current_user(
 
     settings = get_web_settings()
     bypass_marker = _maybe_dev_bypass_marker(x_dev_auth)
-    if settings.deploy_env == "dev" and bypass_marker == _DEV_AUTH_BYPASS_HEADER_VALUE:
-        logger.info("dev auth bypass active (DEPLOY_ENV=dev)")
+    identity = _dev_auth_identity(bypass_marker)
+    if settings.deploy_env == "dev" and identity is not None:
+        logger.info("dev auth bypass active (DEPLOY_ENV=dev, role=%s)", identity.role)
         return await upsert_user_by_supabase_id(
             pool,
-            supabase_user_id=_DEV_AUTH_BYPASS_SUB,
-            email=_DEV_AUTH_BYPASS_EMAIL,
+            supabase_user_id=identity.supabase_user_id,
+            email=identity.email,
         )
 
     token = _extract_bearer(authorization)

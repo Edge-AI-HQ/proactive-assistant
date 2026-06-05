@@ -11,7 +11,8 @@
     "jsx": "react-jsx",
     "strict": true,
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@pin/capacitor-ambient-ai": ["../capacitor-plugins/ambient-ai/src/index.ts"]
     },
     "types": ["vite/client", "vitest/globals"]
   },

@@ -8,14 +8,23 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import {
   clearDeviceCredentials,
+  currentDeviceOwnerUserId,
   ensureDevice,
   ingestSignals,
   withDeviceHeaders,
 } from "./devices";
 
-const { platformState, secureStore, devicePluginState, appPluginState, authState } = vi.hoisted(() => ({
+const {
+  platformState,
+  secureStore,
+  localStore,
+  devicePluginState,
+  appPluginState,
+  authState,
+} = vi.hoisted(() => ({
   platformState: { isNative: false, platform: "web" },
   secureStore: new Map<string, string>(),
+  localStore: new Map<string, string>(),
   authState: { userId: "user-a", accessToken: "token-a" },
   devicePluginState: {
     identifier: "ios-vendor-visible-id",
@@ -95,6 +104,18 @@ vi.mock("@aparajita/capacitor-secure-storage", () => ({
 const fetchMock = vi.fn();
 beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("localStorage", {
+    getItem: vi.fn((key: string) => localStore.get(key) ?? null),
+    setItem: vi.fn((key: string, value: string) => {
+      localStore.set(key, value);
+    }),
+    removeItem: vi.fn((key: string) => {
+      localStore.delete(key);
+    }),
+    clear: vi.fn(() => {
+      localStore.clear();
+    }),
+  });
 });
 
 async function waitForFetchCallCount(count: number): Promise<void> {
@@ -106,6 +127,7 @@ async function waitForFetchCallCount(count: number): Promise<void> {
 
 describe("ensureDevice", () => {
   beforeEach(() => {
+    vi.stubEnv("VITE_PIN_LOCAL_DEV_AUTH", "");
     platformState.isNative = false;
     platformState.platform = "web";
     secureStore.clear();
@@ -116,7 +138,17 @@ describe("ensureDevice", () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await clearDeviceCredentials();
+  });
+
+  test("uses the fixed local dev user as the device owner when enabled", async () => {
+    authState.userId = null as unknown as string;
+    vi.stubEnv("VITE_PIN_LOCAL_DEV_AUTH", "1");
+
+    await expect(currentDeviceOwnerUserId()).resolves.toBe(
+      "00000000-0000-0000-0000-00000000d0d0",
+    );
   });
 
   test("registers a new device on first call and persists the token", async () => {

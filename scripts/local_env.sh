@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+export PINAI_LOCAL_COMPOSE_PROJECT="${PINAI_LOCAL_COMPOSE_PROJECT:-pinai-local-hot}"
+export PINAI_LOCAL_FRONTEND_URL="${PINAI_LOCAL_FRONTEND_URL:-http://localhost:3000}"
+export PINAI_LOCAL_WEB_URL="${PINAI_LOCAL_WEB_URL:-http://localhost:8000}"
+export PINAI_LOCAL_CHAT_URL="${PINAI_LOCAL_CHAT_URL:-http://localhost:8001}"
+export PINAI_LOCAL_DATABASE_URL="${PINAI_LOCAL_DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:54322/postgres}"
+export PINAI_LOCAL_LITELLM_BASE_URL="${PINAI_LOCAL_LITELLM_BASE_URL:-http://127.0.0.1:4000/v1}"
+export PINAI_LOCAL_DEV_AUTH_HEADER="${PINAI_LOCAL_DEV_AUTH_HEADER:-pinai-local-dev-user}"

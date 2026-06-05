@@ -11,6 +11,7 @@
 
 import { supabase } from "./supabase";
 import { PIN_API_BASE, pinApiRequestHeaders } from "./platform";
+import { isPinLocalDevAuthEnabled, pinLocalDevAuthHeaders } from "./dev-auth";
 
 export interface Goal {
   id: string;
@@ -204,6 +205,7 @@ async function getAccessToken(): Promise<string | null> {
 }
 
 export async function authHeaders(): Promise<Record<string, string>> {
+  if (isPinLocalDevAuthEnabled()) return pinLocalDevAuthHeaders();
   const token = await getAccessToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
@@ -251,6 +253,7 @@ async function readErrorMessage(res: Response): Promise<string> {
 let refreshPromise: Promise<string | null> | null = null;
 
 async function refreshAndGetToken(): Promise<string | null> {
+  if (isPinLocalDevAuthEnabled()) return null;
   if (refreshPromise) return refreshPromise;
   refreshPromise = (async () => {
     try {

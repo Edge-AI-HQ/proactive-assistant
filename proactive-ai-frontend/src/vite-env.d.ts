@@ -14,6 +14,9 @@ interface ImportMetaEnv {
   // Vite dev server only: where `/api/*` proxies to during `npm run dev`.
   // See vite.config.ts. Defaults to http://127.0.0.1:8000 when unset.
   readonly VITE_PIN_API_PROXY_TARGET?: string;
+
+  // Local Hot mode only: bypass Supabase OAuth with X-Dev-Auth.
+  readonly VITE_PIN_LOCAL_DEV_AUTH?: string;
 }
 
 interface ImportMeta {

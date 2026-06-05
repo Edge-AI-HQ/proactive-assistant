@@ -1,5 +1,6 @@
 .PHONY: help init env-local ensure-env ensure-env-litellm ensure-env-pinai-agents ensure-env-root
 .PHONY: up down build build-pinai-agents build-frontend restart restart-frontend status urls
+.PHONY: local local-stop local-status
 .PHONY: logs logs-litellm logs-postgres logs-pinai-agents logs-pinai-web logs-pinai-chat logs-frontend
 .PHONY: migrate reset clean
 .PHONY: deploy-pinai-dev deploy-pinai-prod deploy-frontend-dev deploy-frontend-prod deploy-reward-dashboard-dev
@@ -176,6 +177,17 @@ urls: ## Show this group's project name + live host ports
 	@echo "Postgres: localhost:$$($(COMPOSE) port postgres 5432 2>/dev/null | cut -d: -f2)"
 	@echo "LiteLLM:  http://localhost:$$($(COMPOSE) port litellm 4000 2>/dev/null | cut -d: -f2)"
 	@url=$$(bash scripts/ngrok_url.sh 2>/dev/null) && echo "ngrok:    $$url" || true
+
+# ── Local Hot mode ──
+
+local: ## Start fixed-port hot-reload local mode (frontend 3000, web 8000, chat 8001)
+	bash scripts/local_dev.sh start
+
+local-stop: ## Stop Local Hot host processes and dependency containers (keeps DB volume)
+	bash scripts/local_dev.sh stop
+
+local-status: ## Show Local Hot process/container status and fixed URLs
+	bash scripts/local_dev.sh status
 
 # ── Logs ──
 

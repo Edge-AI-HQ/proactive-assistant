@@ -1,0 +1,83 @@
+# Fixed dependency stack for `make local`.
+#
+# App processes run on the host with hot reload. Only Postgres/pgvector and
+# LiteLLM stay in Docker so daily local data is stable and independent from
+# the per-worktree Docker isolated stack in docker-compose.yml.
+services:
+  postgres:
+    image: pgvector/pgvector:pg15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "54322:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  db-migrate:
+    build:
+      context: ./pinai-agents
+      dockerfile: Dockerfile
+      args:
+        DEPLOY_ENV: dev
+    image: pinai-agents:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: postgres
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/postgres
+    working_dir: /app
+    entrypoint: ["sh", "-eu", "-c"]
+    command:
+      - |
+        echo "→ ensuring litellm database exists..."
+        if ! python3 -c "
+        import psycopg
+        conn = psycopg.connect('postgresql://postgres:postgres@postgres:5432/postgres', autocommit=True)
+        cur = conn.execute(\"SELECT 1 FROM pg_database WHERE datname='litellm'\")
+        if not cur.fetchone():
+          conn.execute('CREATE DATABASE litellm')
+          print('  created litellm database')
+        else:
+          print('  litellm database already present')
+        "; then
+          echo "FATAL: failed to ensure litellm database"; exit 1
+        fi
+        echo "→ applying pai_* yoyo migrations..."
+        yoyo apply --batch -d "$$DATABASE_URL"
+        echo "→ db-migrate complete."
+
+  litellm:
+    image: docker.litellm.ai/berriai/litellm:v1.86.2
+    restart: unless-stopped
+    mem_limit: 1536m
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ./ops/litellm/.env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/litellm
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./ops/litellm/litellm_config.yaml:/app/config.yaml:ro
+    command:
+      ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "1"]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')\""]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+      start_period: 120s
+
+volumes:
+  pgdata:
