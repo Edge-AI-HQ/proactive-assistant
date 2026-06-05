@@ -1,10 +1,9 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { Expand, MapPin, Mic, Radio, X } from "lucide-react";
-import type { LiveHistoryTranscript, LiveSession } from "@/services/ambient/live-session";
+import type { LiveSession } from "@/services/ambient/live-session";
 
 interface LiveSessionCardProps {
   session: LiveSession | null;
-  history?: LiveHistoryTranscript[];
   previewVisibleCount: number;
   variant: "ambient" | "now";
   alwaysVisible?: boolean;
@@ -14,15 +13,13 @@ interface LiveSessionCardProps {
 
 export default function LiveSessionCard({
   session,
-  history = [],
   previewVisibleCount,
   variant,
   alwaysVisible = false,
   onFocus,
   onDismiss,
 }: LiveSessionCardProps) {
-  const historyItems = history.slice(0, 5);
-  if (!session && !alwaysVisible && historyItems.length === 0) return null;
+  if (!session && !alwaysVisible) return null;
   const isNow = variant === "now";
   const isIdle = !session;
   const title = session?.title ?? "Live standby";
@@ -189,39 +186,6 @@ export default function LiveSessionCard({
         </div>
       )}
 
-      {historyItems.length > 0 && (
-        <div className="border-t border-foreground/[0.08] px-4 py-3 bg-white/[0.18]">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-foreground/45">
-              Earlier
-            </span>
-            <span className="text-[10px] text-foreground/35 tabular-nums">
-              {historyItems.length}
-            </span>
-          </div>
-          <div className="space-y-2">
-            {historyItems.map((item) => (
-              <div key={item.id} className="flex gap-2.5">
-                <span className="w-14 shrink-0 pt-0.5 font-mono text-[9px] tabular-nums text-foreground/35">
-                  {formatHistoryTime(item.occurredAt)}
-                </span>
-                <p className="min-w-0 flex-1 text-[12px] leading-snug text-foreground/62">
-                  {item.text}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </motion.div>
   );
-}
-
-function formatHistoryTime(occurredAt: string): string {
-  const date = new Date(occurredAt);
-  if (Number.isNaN(date.getTime())) return "Earlier";
-  return date.toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
 }

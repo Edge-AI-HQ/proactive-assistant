@@ -462,7 +462,6 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
 
   const {
     session: liveSession,
-    history: liveHistory,
     previewVisibleCount,
     dismiss: dismissLiveSession,
   } = useAmbientLiveSession({
@@ -628,13 +627,11 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
 
       {/* ── LIVE SESSION (only when ambient on + active) ── */}
       <AnimatePresence mode="wait">
-        {(liveSession || liveHistory.length > 0) && (
+        {liveSession && (
           <LiveSessionCard
             session={liveSession}
-            history={liveHistory}
             previewVisibleCount={previewVisibleCount}
             variant="ambient"
-            alwaysVisible={liveHistory.length > 0}
             onFocus={onOpenFullscreen}
             onDismiss={dismissLiveSession}
           />
@@ -1150,21 +1147,15 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
 
       {/* Streaming assist messages — scrollable history with bottom-follow when live. */}
       <div className="relative flex-1 overflow-hidden px-5 md:px-12 pb-32">
-        {/* top fade mask so older messages dissolve out */}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-x-0 top-0 h-24 z-10"
-          style={{
-            background:
-              "linear-gradient(to bottom, hsl(0 0% 4%) 0%, hsl(0 0% 4% / 0.85) 40%, transparent 100%)",
-          }}
-        />
-
         <div
           ref={messagesRef}
           onScroll={handleMessagesScroll}
           data-testid="live-fullscreen-messages"
           className="relative z-0 max-w-3xl mx-auto w-full h-full overflow-y-auto overscroll-contain scrollbar-none pr-1"
+          style={{
+            WebkitMaskImage: "linear-gradient(to bottom, transparent 0%, black 14%, black 100%)",
+            maskImage: "linear-gradient(to bottom, transparent 0%, black 14%, black 100%)",
+          }}
         >
           <div className="min-h-full flex flex-col justify-end gap-4 pt-24 pb-8">
             <AnimatePresence initial={false} mode="popLayout">
@@ -1172,8 +1163,7 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
                 <LiveFullscreenAssistRow
                   key={liveAssistKey(a)}
                   assist={a}
-                  index={idx}
-                  total={visible.length}
+                  isNewest={idx === visible.length - 1}
                   animated={animatedAssistKeys.has(liveAssistKey(a))}
                   onAnimationComplete={handleAssistRowAnimationComplete}
                 />
@@ -1218,34 +1208,18 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
 
 interface LiveFullscreenAssistRowProps {
   assist: LiveAssistItem;
-  index: number;
-  total: number;
+  isNewest: boolean;
   animated: boolean;
   onAnimationComplete: (key: string) => void;
 }
 
 function LiveFullscreenAssistRow({
   assist,
-  index,
-  total,
+  isNewest,
   animated,
   onAnimationComplete,
 }: LiveFullscreenAssistRowProps) {
   const key = liveAssistKey(assist);
-  const fromBottom = total - 1 - index; // 0 = newest at bottom
-  const isNewest = fromBottom === 0;
-  const ageOpacity =
-    fromBottom === 0
-      ? 1
-      : fromBottom === 1
-        ? 0.88
-        : fromBottom === 2
-          ? 0.7
-          : fromBottom === 3
-            ? 0.5
-            : fromBottom === 4
-              ? 0.32
-              : 0.18;
   const content = (
     <>
       <span
@@ -1291,7 +1265,7 @@ function LiveFullscreenAssistRow({
           scale: 0.96,
         }}
         animate={{
-          opacity: ageOpacity,
+          opacity: 1,
           y: 0,
           filter: "blur(0px)",
           scale: 1,
@@ -1312,7 +1286,7 @@ function LiveFullscreenAssistRow({
   }
 
   return (
-    <div data-testid="live-fullscreen-assist-row" className="flex gap-3" style={{ opacity: ageOpacity }}>
+    <div data-testid="live-fullscreen-assist-row" className="flex gap-3">
       {content}
     </div>
   );

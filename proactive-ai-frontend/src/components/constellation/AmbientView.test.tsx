@@ -444,6 +444,24 @@ describe("LiveFullscreen scrolling", () => {
       restore();
     }
   });
+
+  test("keeps historical fullscreen rows readable instead of dimming by absolute age", () => {
+    const { restore } = mockScrollTo();
+    try {
+      render(
+        <LiveFullscreen
+          session={makeLiveFullscreenSession(["one", "two", "three", "four", "five", "six"])}
+          onClose={vi.fn()}
+        />,
+      );
+
+      const scroller = screen.getByTestId("live-fullscreen-messages");
+      expect(scroller.style.maskImage).toContain("linear-gradient");
+      expect(screen.getAllByTestId("live-fullscreen-assist-row")[0].style.opacity).toBe("");
+    } finally {
+      restore();
+    }
+  });
 });
 
 function makeLiveFullscreenSession(texts: string[]): LiveSession {

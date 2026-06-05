@@ -72,26 +72,4 @@ describe("LiveSessionCard signals", () => {
     expect(screen.getByText("Provider: cloud_whisper")).toBeTruthy();
   });
 
-  test("renders earlier transcripts separately from current assists", () => {
-    render(
-      <LiveSessionCard
-        session={makeSession(["1 transcript"])}
-        previewVisibleCount={1}
-        variant="ambient"
-        history={[
-          {
-            id: "hist-1",
-            captureSessionId: "cap-old",
-            occurredAt: "2026-05-17T10:00:00.000Z",
-            text: "五分钟前锁屏采集到的历史转录",
-            source: "cloud_whisper",
-          },
-        ]}
-      />,
-    );
-
-    expect(screen.getByText("Earlier")).toBeTruthy();
-    expect(screen.getByText("五分钟前锁屏采集到的历史转录")).toBeTruthy();
-    expect(screen.getByText("10:00 AM")).toBeTruthy();
-  });
 });
