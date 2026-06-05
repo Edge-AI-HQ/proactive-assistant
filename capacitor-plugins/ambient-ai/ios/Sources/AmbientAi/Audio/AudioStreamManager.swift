@@ -53,6 +53,7 @@ actor AudioStreamManager {
     private var appIsBackgrounded = false
     private var backgroundCaptureLoop: Task<Void, Never>?
     private var backgroundCaptureLoopGeneration = 0
+    private var lastBackgroundCaptureTickAt: Date?
     private var currentCaptureTriggerSource: String?
     private var externalMicWatchdog: Task<Void, Never>?
     private let speechRecognitionCoordinator = SpeechRecognitionCoordinator()
@@ -85,7 +86,7 @@ actor AudioStreamManager {
             return
         }
 
-        rotateCaptureSession(now: Date())
+        rotateCaptureSession(now: Date(), reason: .manualStart)
         isCaptureRunning = true
         isPaused = false
         // If iOS delivered an interruption began event but the matching ended
@@ -177,8 +178,13 @@ actor AudioStreamManager {
         return drained
     }
 
-    func listRecentCaptures() async -> [[String: Any]] {
-        await fileStore.listRecentCaptures().map(\.recentPayload)
+    func listRecentCaptures(
+        limit: Int? = nil,
+        cursor: String? = nil,
+        order: AudioCaptureListOrder = .desc
+    ) async -> [[String: Any]] {
+        await fileStore.listRecentCaptures(limit: limit, cursor: cursor, order: order)
+            .map(\.recentPayload)
     }
 
     func captureURL(wavId: String) async -> URL? {
@@ -273,6 +279,15 @@ actor AudioStreamManager {
         }
         suppressionReasons.remove(.interruption)
         _ = reconcileClassifierState(reason: reason)
+        emitState()
+    }
+
+    func noteRouteChanged(reason: String) {
+        emitCaptureDiagnostic(name: "audioRouteChanged", fields: [
+            "reason": reason,
+            "appIsBackgrounded": appIsBackgrounded,
+            "engineState": currentEngineState().rawValue,
+        ])
         emitState()
     }
 
@@ -382,6 +397,12 @@ actor AudioStreamManager {
         currentCaptureTriggerSource = triggerSource
         rotateCaptureSessionIfNeeded(now: Date())
         lastSpeechAt = Date()
+        emitCaptureDiagnostic(name: "captureCycleStart", fields: [
+            "triggerSource": triggerSource,
+            "appIsBackgrounded": appIsBackgrounded,
+            "isCapturing": isCapturing,
+            "engineState": currentEngineState().rawValue,
+        ])
         emitState()
 
         let burstId = UUID().uuidString
@@ -396,13 +417,25 @@ actor AudioStreamManager {
     }
 
     private func handleInterruptionBegan() {
+        let before = currentEngineState()
         suppressionReasons.insert(.interruption)
+        emitCaptureDiagnostic(name: "audioInterruption", fields: [
+            "phase": "began",
+            "engineStateBefore": before.rawValue,
+            "engineStateAfter": currentEngineState().rawValue,
+        ])
         emitState()
     }
 
     private func handleInterruptionEnded() {
+        let before = currentEngineState()
         suppressionReasons.remove(.interruption)
         _ = reconcileClassifierState(reason: "interruptionEnded")
+        emitCaptureDiagnostic(name: "audioInterruption", fields: [
+            "phase": "ended",
+            "engineStateBefore": before.rawValue,
+            "engineStateAfter": currentEngineState().rawValue,
+        ])
         emitState()
     }
 
@@ -429,6 +462,18 @@ actor AudioStreamManager {
     }
 
     private func backgroundCaptureLoopTick() -> Bool {
+        let now = Date()
+        let tickGapMs = lastBackgroundCaptureTickAt.map {
+            Int(now.timeIntervalSince($0) * 1_000)
+        }
+        lastBackgroundCaptureTickAt = now
+        emitCaptureDiagnostic(name: "backgroundCaptureTick", fields: [
+            "tickGapMs": tickGapMs ?? 0,
+            "appIsBackgrounded": appIsBackgrounded,
+            "isCapturing": isCapturing,
+            "isCaptureRunning": isCaptureRunning,
+            "engineState": currentEngineState().rawValue,
+        ])
         guard appIsBackgrounded, isCaptureRunning else { return false }
         guard suppressionReasons.isEmpty else { return true }
         _ = reconcileClassifierState(reason: "backgroundCaptureLoop")
@@ -442,6 +487,7 @@ actor AudioStreamManager {
         backgroundCaptureLoopGeneration += 1
         backgroundCaptureLoop?.cancel()
         backgroundCaptureLoop = nil
+        lastBackgroundCaptureTickAt = nil
         if interruptBackgroundRecording && currentCaptureTriggerSource == "background_continuous" {
             stopCurrentRecording = true
         }
@@ -494,10 +540,28 @@ actor AudioStreamManager {
         classifier.detachRecordingSink()
         let snapshot = recorder.snapshot()
         guard !snapshot.pcm.isEmpty, snapshot.durationMs > 0 else {
+            emitCaptureCycleEnd(
+                status: "no_audio",
+                burstId: burstId,
+                captureSessionId: captureSessionId,
+                triggerSource: triggerSource,
+                durationMs: snapshot.durationMs,
+                byteSize: snapshot.pcm.count,
+                speechActivity: snapshot.speechActivity
+            )
             emitError("Recording burst produced no audio", source: "capture")
             return
         }
         guard snapshot.speechActivity.isSpeechLike else {
+            emitCaptureCycleEnd(
+                status: "discarded",
+                burstId: burstId,
+                captureSessionId: captureSessionId,
+                triggerSource: triggerSource,
+                durationMs: snapshot.durationMs,
+                byteSize: snapshot.pcm.count,
+                speechActivity: snapshot.speechActivity
+            )
             emitCaptureDiscarded(
                 burstId: burstId,
                 captureSessionId: captureSessionId,
@@ -521,6 +585,7 @@ actor AudioStreamManager {
                 captureSessionId: captureSessionId,
                 capturedAt: capturedAt,
                 durationMs: snapshot.durationMs,
+                triggerSource: triggerSource,
                 sampleRate: UInt32(snapshot.sampleRate),
                 channels: snapshot.channels
             )
@@ -529,6 +594,15 @@ actor AudioStreamManager {
             return
         }
 
+        emitCaptureCycleEnd(
+            status: "ready",
+            burstId: burstId,
+            captureSessionId: captureSessionId,
+            triggerSource: triggerSource,
+            durationMs: snapshot.durationMs,
+            byteSize: metadata.byteSize,
+            speechActivity: snapshot.speechActivity
+        )
         emitCaptureReady(
             metadata: metadata,
             triggerSource: triggerSource
@@ -627,22 +701,47 @@ actor AudioStreamManager {
         }
 
         if sessionAgeMs >= config.maxSessionDurationMs {
-            rotateCaptureSession(now: now)
+            rotateCaptureSession(
+                now: now,
+                reason: .maxAge,
+                ageMs: sessionAgeMs,
+                idleGapMs: idleGapMs
+            )
             captureSessionFirstCaptureStartedAt = now
             return
         }
         if let idleGapMs, idleGapMs >= config.sessionSilenceGapMs {
-            rotateCaptureSession(now: now)
+            rotateCaptureSession(
+                now: now,
+                reason: .idleGap,
+                ageMs: sessionAgeMs,
+                idleGapMs: idleGapMs
+            )
             captureSessionFirstCaptureStartedAt = now
         }
     }
 
-    private func rotateCaptureSession(now: Date) {
+    private func rotateCaptureSession(
+        now: Date,
+        reason: CaptureSessionRotationReason,
+        ageMs: Int? = nil,
+        idleGapMs: Int? = nil
+    ) {
+        let oldSessionId = captureSessionId
         captureSessionId = UUID().uuidString
         captureSessionFirstCaptureStartedAt = nil
         lastCaptureSpeechEndedAt = nil
         segmentIndex = 0
         stitcher = TranscriptStitcher()
+        let record = CaptureSessionRotatedRecord(
+            oldCaptureSessionId: oldSessionId,
+            newCaptureSessionId: captureSessionId,
+            reason: reason,
+            rotatedAt: now,
+            ageMs: ageMs,
+            idleGapMs: idleGapMs
+        )
+        callbacks.emitEvent("captureSessionRotated", record.payload)
     }
 
     private func transcribeLocally(wavURL: URL, durationMs: Int) async -> LocalTranscriptionResult? {
@@ -1187,6 +1286,37 @@ actor AudioStreamManager {
         callbacks.emitEvent("audioState", snapshot().payload)
     }
 
+    private func emitCaptureCycleEnd(
+        status: String,
+        burstId: String,
+        captureSessionId: String,
+        triggerSource: String,
+        durationMs: Int,
+        byteSize: Int,
+        speechActivity: AudioSpeechActivitySnapshot
+    ) {
+        emitCaptureDiagnostic(name: "captureCycleEnd", fields: [
+            "status": status,
+            "burstId": burstId,
+            "captureSessionId": captureSessionId,
+            "triggerSource": triggerSource,
+            "durationMs": durationMs,
+            "byteSize": byteSize,
+            "speechLikeDurationMs": speechActivity.speechLikeDurationMs,
+            "speechLikeFrameCount": speechActivity.speechLikeFrameCount,
+            "rms": Double(speechActivity.rms),
+            "peak": Double(speechActivity.peak),
+        ])
+    }
+
+    private func emitCaptureDiagnostic(name: String, fields: [String: Any]) {
+        var payload = fields
+        payload["name"] = name
+        payload["timestamp"] = Int(Date().timeIntervalSince1970 * 1_000)
+        callbacks.emitEvent("audioDiagnostic", payload)
+        audioStreamLogger.info("\(name, privacy: .public) \(String(describing: fields), privacy: .public)")
+    }
+
     private func emitError(_ message: String, source: String) {
         callbacks.emitEvent("audioError", [
             "message": message,
@@ -1215,6 +1345,11 @@ actor AudioStreamManager {
 
     private func resolvedEngineState(_ state: AudioEngineState) -> AudioEngineState {
         return resolvedSuppressedReason() == nil ? state : .suppressed
+    }
+
+    private func currentEngineState() -> AudioEngineState {
+        classifier.markStaleIfNeeded(maxAgeMs: Self.classificationStaleTimeoutMs)
+        return resolvedEngineState(classifier.diagnostics.engineState)
     }
 
     @discardableResult

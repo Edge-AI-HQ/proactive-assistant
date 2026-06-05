@@ -1,11 +1,13 @@
 import type { ReactNode } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { Radio } from "lucide-react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import AmbientView from "./AmbientView";
+import AmbientView, { LiveFullscreen } from "./AmbientView";
 import { getPersistedAmbientEnabled } from "@/services/ambient/enabled-state";
 import { ALL_SOURCE_KEYS } from "@/services/ambient/keys";
 import type { UserDevice } from "@/lib/api";
+import type { LiveSession } from "@/services/ambient/live-session";
 
 type MockElementProps = { children?: ReactNode } & Record<string, unknown>;
 
@@ -56,6 +58,7 @@ vi.mock("framer-motion", async () => {
       exit,
       initial,
       layout,
+      onAnimationComplete,
       transition,
       whileHover,
       whileTap,
@@ -65,6 +68,7 @@ vi.mock("framer-motion", async () => {
     void exit;
     void initial;
     void layout;
+    void onAnimationComplete;
     void transition;
     void whileHover;
     void whileTap;
@@ -102,6 +106,7 @@ vi.mock("@/hooks/useAmbientLiveSession", () => ({
       signals: ["1 transcript"],
       assists: [{ time: "+00:00", kind: "context", text: "Captured transcript" }],
     },
+    history: [],
     previewVisibleCount: 1,
     isRealSession: true,
     dismiss: liveDismissMock,
@@ -364,3 +369,152 @@ describe("AmbientView ambient toggle", () => {
   });
 
 });
+
+describe("LiveFullscreen scrolling", () => {
+  test("auto-scrolls when new live messages arrive while the reader is at the bottom", async () => {
+    const { mock, restore } = mockScrollTo();
+    try {
+      const { rerender } = render(
+        <LiveFullscreen session={makeLiveFullscreenSession(["old", "current"])} onClose={vi.fn()} />,
+      );
+      const scroller = screen.getByTestId("live-fullscreen-messages");
+      setScrollGeometry(scroller, { scrollHeight: 1_000, clientHeight: 200, scrollTop: 800 });
+      fireEvent.scroll(scroller);
+      mock.mockClear();
+
+      rerender(
+        <LiveFullscreen session={makeLiveFullscreenSession(["old", "current", "new"])} onClose={vi.fn()} />,
+      );
+
+      await waitFor(() => {
+        expect(mock).toHaveBeenCalledWith({ top: 1_000, behavior: "smooth" });
+      });
+      expect(screen.queryByRole("button", { name: /new live message/i })).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  test("keeps scroll position and shows a new-message affordance when reading older live messages", async () => {
+    const { mock, restore } = mockScrollTo();
+    try {
+      const { rerender } = render(
+        <LiveFullscreen session={makeLiveFullscreenSession(["old", "current"])} onClose={vi.fn()} />,
+      );
+      const scroller = screen.getByTestId("live-fullscreen-messages");
+      setScrollGeometry(scroller, { scrollHeight: 1_000, clientHeight: 200, scrollTop: 120 });
+      fireEvent.scroll(scroller);
+      mock.mockClear();
+
+      rerender(
+        <LiveFullscreen session={makeLiveFullscreenSession(["old", "current", "new"])} onClose={vi.fn()} />,
+      );
+
+      const button = await screen.findByRole("button", { name: "Show 1 new live message" });
+      expect(button).toBeTruthy();
+      expect(mock).not.toHaveBeenCalled();
+
+      fireEvent.click(button);
+
+      expect(mock).toHaveBeenCalledWith({ top: 1_000, behavior: "smooth" });
+    } finally {
+      restore();
+    }
+  });
+
+  test("renders existing live messages without row motion and animates only newly appended messages", async () => {
+    const { restore } = mockScrollTo();
+    try {
+      const { container, rerender } = render(
+        <LiveFullscreen session={makeLiveFullscreenSession(["old", "current"])} onClose={vi.fn()} />,
+      );
+
+      expect(screen.getAllByTestId("live-fullscreen-assist-row")).toHaveLength(2);
+      expect(container.querySelector("[data-live-animated='true']")).toBeNull();
+
+      rerender(
+        <LiveFullscreen session={makeLiveFullscreenSession(["old", "current", "new"])} onClose={vi.fn()} />,
+      );
+
+      await waitFor(() => {
+        expect(container.querySelector("[data-live-animated='true']")?.textContent).toContain("new");
+      });
+      expect(screen.getAllByTestId("live-fullscreen-assist-row")).toHaveLength(3);
+    } finally {
+      restore();
+    }
+  });
+});
+
+function makeLiveFullscreenSession(texts: string[]): LiveSession {
+  return {
+    icon: Radio,
+    kind: "Voice session",
+    title: texts[texts.length - 1] ?? "Live",
+    location: "On device",
+    device: "Microphone",
+    startedAt: "10:00",
+    signals: [`${texts.length} transcript${texts.length === 1 ? "" : "s"}`],
+    assists: texts.map((text, index) => ({
+      time: `10:${String(index).padStart(2, "0")}`,
+      sortTs: Date.parse(`2026-05-17T10:${String(index).padStart(2, "0")}:00.000Z`),
+      kind: "context" as const,
+      text,
+    })),
+  };
+}
+
+function setScrollGeometry(
+  el: HTMLElement,
+  geometry: { scrollHeight: number; clientHeight: number; scrollTop: number },
+): void {
+  Object.defineProperty(el, "scrollHeight", {
+    configurable: true,
+    value: geometry.scrollHeight,
+  });
+  Object.defineProperty(el, "clientHeight", {
+    configurable: true,
+    value: geometry.clientHeight,
+  });
+  Object.defineProperty(el, "scrollTop", {
+    configurable: true,
+    writable: true,
+    value: geometry.scrollTop,
+  });
+}
+
+function mockScrollTo(): {
+  mock: ReturnType<typeof vi.fn>;
+  restore: () => void;
+} {
+  const original = HTMLElement.prototype.scrollTo;
+  const hadOriginal = Object.prototype.hasOwnProperty.call(HTMLElement.prototype, "scrollTo");
+  const mock = vi.fn(function scrollToMock(
+    this: HTMLElement,
+    options?: ScrollToOptions | number,
+    y?: number,
+  ) {
+    if (typeof options === "object" && typeof options.top === "number") {
+      this.scrollTop = options.top;
+      return;
+    }
+    if (typeof y === "number") this.scrollTop = y;
+  });
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+    configurable: true,
+    value: mock,
+  });
+  return {
+    mock,
+    restore: () => {
+      if (hadOriginal) {
+        Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+          configurable: true,
+          value: original,
+        });
+        return;
+      }
+      delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo;
+    },
+  };
+}

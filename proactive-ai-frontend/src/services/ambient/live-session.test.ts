@@ -4,13 +4,16 @@ import {
   appendLiveTranscript,
   candidateWindowsToLiveSessionContextItems,
   liveSessionDataToSession,
+  rawTranscriptEventsToHistory,
   rawTranscriptEventsToLiveSessionData,
   rawEventsToLiveSessionContextItems,
   type LiveSessionData,
 } from "./live-session";
 import {
   applyAmbientLiveTranscriptUpdate,
+  applyCaptureSessionRotation,
   getAmbientLiveTranscriptSnapshot,
+  getAmbientLiveTranscriptHistorySnapshot,
   resetAmbientLiveTranscriptForTest,
   showAmbientListening,
 } from "./live-transcript-store";
@@ -108,6 +111,7 @@ function makeWindow(
 
 describe("candidate window live session context", () => {
   test("shows a fresh listening placeholder after an earlier transcript", () => {
+    vi.setSystemTime(new Date("2026-05-17T05:01:30.000Z"));
     resetAmbientLiveTranscriptForTest();
     applyAmbientLiveTranscriptUpdate({
       captureSessionId: "cap-live",
@@ -124,9 +128,11 @@ describe("candidate window live session context", () => {
       expect.objectContaining({ id: "listening", text: "Listening..." }),
     ]);
     resetAmbientLiveTranscriptForTest();
+    vi.useRealTimers();
   });
 
   test("filters exact live transcript system error messages", () => {
+    vi.setSystemTime(new Date("2026-05-17T10:01:30.000Z"));
     const unavailable = appendLiveTranscript(null, {
       captureSessionId: "cap-live",
       id: "burst-error",
@@ -149,6 +155,7 @@ describe("candidate window live session context", () => {
         text: "There is an error in the dashboard",
       }),
     ]);
+    vi.useRealTimers();
   });
 
   test("updates the same live burst from listening to draft to final text", () => {
@@ -180,6 +187,73 @@ describe("candidate window live session context", () => {
         source: "local_speech",
       }),
     ]);
+    vi.useRealTimers();
+  });
+
+  test("does not treat stale recovered transcript as current live", () => {
+    vi.setSystemTime(new Date("2026-05-17T10:05:00.000Z"));
+
+    const current = appendLiveTranscript(null, {
+      captureSessionId: "cap-stale",
+      id: "burst-stale",
+      text: "五分钟前锁屏采集到的内容",
+      source: "cloud_whisper",
+      receivedAt: Date.parse("2026-05-17T10:00:00.000Z"),
+    });
+
+    expect(current.messages).toHaveLength(0);
+    vi.useRealTimers();
+  });
+
+  test("keeps recent transcript update in current live", () => {
+    vi.setSystemTime(new Date("2026-05-17T10:05:00.000Z"));
+
+    const current = appendLiveTranscript(null, {
+      captureSessionId: "cap-fresh",
+      id: "burst-fresh",
+      text: "刚刚说的内容应该显示在 Current Live",
+      source: "cloud_whisper",
+      receivedAt: Date.parse("2026-05-17T10:04:10.000Z"),
+    });
+
+    expect(current.messages).toEqual([
+      expect.objectContaining({
+        id: "burst-fresh",
+        text: "刚刚说的内容应该显示在 Current Live",
+      }),
+    ]);
+    vi.useRealTimers();
+  });
+
+  test("moves old current messages into history on capture session rotation", () => {
+    vi.setSystemTime(new Date("2026-05-17T10:05:00.000Z"));
+    resetAmbientLiveTranscriptForTest();
+    applyAmbientLiveTranscriptUpdate({
+      captureSessionId: "cap-old",
+      id: "burst-old",
+      text: "旧 session 的最后一句话",
+      source: "cloud_whisper",
+      receivedAt: Date.parse("2026-05-17T10:04:10.000Z"),
+    });
+
+    applyCaptureSessionRotation({
+      oldCaptureSessionId: "cap-old",
+      newCaptureSessionId: "cap-new",
+      reason: "idle_gap",
+      rotatedAt: "2026-05-17T10:05:00.000Z",
+      idleGapMs: 30_000,
+    });
+
+    expect(getAmbientLiveTranscriptSnapshot()).toBeNull();
+    expect(getAmbientLiveTranscriptHistorySnapshot()).toEqual([
+      expect.objectContaining({
+        id: "burst-old",
+        captureSessionId: "cap-old",
+        text: "旧 session 的最后一句话",
+        source: "cloud_whisper",
+      }),
+    ]);
+    resetAmbientLiveTranscriptForTest();
     vi.useRealTimers();
   });
 
@@ -302,7 +376,7 @@ describe("candidate window live session context", () => {
     ]);
   });
 
-  test("uses transcript window text as live replay when raw transcript events are not available", () => {
+  test("does not use transcript window text as current live replay when raw transcript events are not available", () => {
     const contextItems = candidateWindowsToLiveSessionContextItems([
       makeWindow({
         id: "pending-transcript",
@@ -325,15 +399,13 @@ describe("candidate window live session context", () => {
     const session = liveSessionDataToSession(true, null, contextItems);
 
     expect(session).toMatchObject({
-      kind: "Voice session",
-      title: "重启以后也应该显示之前的转录文字",
-      location: "On device · captured locally",
-      device: "Microphone · iPhone",
+      kind: "Ambient context",
+      title: "Ambient context active",
+      device: "iPhone",
     });
-    expect(session?.signals).toEqual(expect.arrayContaining(["Stationary", "1 transcript"]));
+    expect(session?.signals).toEqual(["Stationary"]);
     expect(session?.signals).not.toContain("Conversation window active");
     expect(session?.assists.map((item) => item.text)).toEqual([
-      "重启以后也应该显示之前的转录文字",
       "Stationary",
     ]);
   });
@@ -435,8 +507,8 @@ describe("candidate window live session context", () => {
 });
 
 describe("raw transcript live session replay", () => {
-  test("shows diarized speaker labels in replayed live transcript messages", () => {
-    const replay = rawTranscriptEventsToLiveSessionData([
+  test("keeps diarized speaker labels in transcript history", () => {
+    const history = rawTranscriptEventsToHistory([
       makeTranscriptRaw({
         id: "speaker-aware",
         occurredAt: "2026-05-17T10:00:00.000Z",
@@ -455,15 +527,18 @@ describe("raw transcript live session replay", () => {
       }),
     ]);
 
-    const session = liveSessionDataToSession(true, replay, []);
-
-    expect(session?.assists.map((item) => item.text)).toEqual([
-      'self: "我觉得这个测试可行"\nspeaker_1: "那我们明天继续"',
+    expect(history).toEqual([
+      expect.objectContaining({
+        id: "speaker-aware",
+        captureSessionId: "cap-speaker-aware",
+        text: 'self: "我觉得这个测试可行"\nspeaker_1: "那我们明天继续"',
+      }),
     ]);
   });
 
-  test("rebuilds latest transcript session from persisted raw transcript events", () => {
-    const replay = rawTranscriptEventsToLiveSessionData([
+  test("replays persisted raw transcript events as today's live session snapshot", () => {
+    vi.setSystemTime(new Date("2026-05-17T10:05:00.000Z"));
+    const rawEvents = [
       makeTranscriptRaw({
         id: "old",
         occurredAt: "2026-05-17T09:00:00.000Z",
@@ -484,16 +559,43 @@ describe("raw transcript live session replay", () => {
         compactText: "Transcript segment: second live transcript",
         payload: { captureSessionId: "cap-db", provider: "cloud_whisper" },
       }),
-    ]);
+    ];
 
-    const session = liveSessionDataToSession(true, replay, []);
+    const replay = rawTranscriptEventsToLiveSessionData(rawEvents);
+    const history = rawTranscriptEventsToHistory(rawEvents);
 
-    expect(replay?.captureSessionId).toBe("cap-db");
-    expect(session?.title).toBe("second live transcript");
-    expect(session?.assists.map((item) => item.text)).toEqual([
+    expect(replay).toMatchObject({
+      captureSessionId: "ambient-live-replay:2026-05-17",
+      startedAt: Date.parse("2026-05-17T09:00:00.000Z"),
+    });
+    expect(replay?.messages.map((item) => item.text)).toEqual([
+      "previous session should not show",
       "first live transcript",
       "second live transcript",
     ]);
-    expect(JSON.stringify(session)).not.toContain("previous session should not show");
+    expect(history.map((item) => item.text)).toEqual([
+      "second live transcript",
+      "first live transcript",
+      "previous session should not show",
+    ]);
+    vi.useRealTimers();
+  });
+
+  test("uses fresh raw transcript events in the same live snapshot", () => {
+    vi.setSystemTime(new Date("2026-05-17T10:05:00.000Z"));
+
+    const replay = rawTranscriptEventsToLiveSessionData([
+      makeTranscriptRaw({
+        id: "fresh",
+        occurredAt: "2026-05-17T10:04:30.000Z",
+        compactText: "Transcript segment: fresh live transcript",
+        payload: { captureSessionId: "cap-fresh", provider: "cloud_whisper" },
+      }),
+    ]);
+
+    expect(replay?.messages.map((item) => item.text)).toEqual([
+      "fresh live transcript",
+    ]);
+    vi.useRealTimers();
   });
 });

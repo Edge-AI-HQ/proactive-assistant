@@ -15,9 +15,9 @@ struct AudioCaptureConfig {
     static let defaultMinBurstMs = 800
     static let defaultSessionSilenceGapMs = 30_000
     static let defaultMaxSessionDurationMs = 5 * 60 * 1_000
-    static let defaultWavRetentionTtlMs = 60 * 60 * 1_000
-    static let defaultWavMaxBytes = 100 * 1024 * 1024
-    static let defaultWavMaxFiles = 120
+    static let defaultWavRetentionTtlMs = 7 * 24 * 60 * 60 * 1_000
+    static let defaultWavMaxBytes = 3 * 1024 * 1024 * 1024
+    static let defaultWavMaxFiles = 10_000
 
     let cloudMode: AudioCloudMode
     let recognitionLocale: String?
@@ -119,13 +119,13 @@ struct AudioCaptureConfig {
             wavMaxBytes,
             fallback: Self.defaultWavMaxBytes,
             minimum: 256 * 1024,
-            maximum: 2 * 1024 * 1024 * 1024
+            maximum: Self.defaultWavMaxBytes
         )
         self.wavMaxFiles = Self.positive(
             wavMaxFiles,
             fallback: Self.defaultWavMaxFiles,
             minimum: 1,
-            maximum: 1_000
+            maximum: Self.defaultWavMaxFiles
         )
     }
 

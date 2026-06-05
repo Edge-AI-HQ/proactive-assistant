@@ -6,11 +6,13 @@ import {
   candidateWindowsToLiveSessionContextItems,
   liveSessionDataToSession,
   rawTranscriptEventsToLiveSessionData,
+  rawTranscriptEventsToHistory,
   rawEventsToLiveSessionContextItems,
   LIVE_SCENARIOS,
   type LiveSession,
   type LiveSessionData,
   type LiveSessionContextItem,
+  type LiveHistoryTranscript,
 } from "@/services/ambient/live-session";
 import {
   getAmbientTimelineStore,
@@ -23,8 +25,10 @@ import {
 import {
   applyAmbientLiveTranscriptUpdate,
   getAmbientLiveTranscriptSnapshot,
+  getAmbientLiveTranscriptHistorySnapshot,
   showAmbientListening,
   subscribeAmbientLiveTranscript,
+  applyCaptureSessionRotation,
 } from "@/services/ambient/live-transcript-store";
 
 interface UseAmbientLiveSessionOptions {
@@ -35,6 +39,7 @@ interface UseAmbientLiveSessionOptions {
 
 interface UseAmbientLiveSessionResult {
   session: LiveSession | null;
+  history: LiveHistoryTranscript[];
   previewVisibleCount: number;
   isRealSession: boolean;
   dismiss: () => void;
@@ -50,6 +55,7 @@ const LIVE_CONTEXT_SOURCE_TYPES: AmbientSourceType[] = [
   "sound",
   "calendar",
 ];
+const LIVE_SESSION_TODAY_LIMIT = 10_000;
 
 export function useAmbientLiveSession({
   ambientOn,
@@ -60,6 +66,9 @@ export function useAmbientLiveSession({
   const [liveSessionData, setLiveSessionData] = useState<LiveSessionData | null>(
     () => getAmbientLiveTranscriptSnapshot(),
   );
+  const [localHistory, setLocalHistory] = useState<LiveHistoryTranscript[]>(
+    () => getAmbientLiveTranscriptHistorySnapshot(),
+  );
   const [candidateWindows, setCandidateWindows] = useState<AmbientCandidateWindow[]>([]);
   const [rawTranscripts, setRawTranscripts] = useState<AmbientRawEvent[]>([]);
   const [rawContextEvents, setRawContextEvents] = useState<AmbientRawEvent[]>([]);
@@ -69,6 +78,7 @@ export function useAmbientLiveSession({
   useEffect(() => {
     return subscribeAmbientLiveTranscript(() => {
       setLiveSessionData(getAmbientLiveTranscriptSnapshot());
+      setLocalHistory(getAmbientLiveTranscriptHistorySnapshot());
     });
   }, []);
 
@@ -96,13 +106,14 @@ export function useAmbientLiveSession({
         const [windows, transcripts, rawContext] = await Promise.all([
           store.listCandidateWindows({
             localDate,
-            limit: 50,
+            limit: LIVE_SESSION_TODAY_LIMIT,
           }),
           store.listRawEvents({
             localDate,
             sourceType: "transcript",
             eventType: "transcript.ready",
-            limit: 50,
+            order: "asc",
+            limit: LIVE_SESSION_TODAY_LIMIT,
           }),
           listLiveSessionRawContextEvents(store, localDate),
         ]);
@@ -133,16 +144,33 @@ export function useAmbientLiveSession({
     [candidateWindows, rawContextEvents],
   );
 
-  const replayedLiveSessionData = useMemo(
+  const rawHistory = useMemo(
+    () => rawTranscriptEventsToHistory(rawTranscripts),
+    [rawTranscripts],
+  );
+
+  const replaySessionData = useMemo(
     () => rawTranscriptEventsToLiveSessionData(rawTranscripts),
     [rawTranscripts],
   );
 
-  const effectiveLiveSessionData = liveSessionData ?? replayedLiveSessionData;
+  const mergedLiveSessionData = useMemo(
+    () => mergeLiveSessionData(replaySessionData, liveSessionData),
+    [replaySessionData, liveSessionData],
+  );
 
   const realSession = useMemo(
-    () => liveSessionDataToSession(ambientOn, effectiveLiveSessionData, contextItems),
-    [ambientOn, effectiveLiveSessionData, contextItems],
+    () => liveSessionDataToSession(ambientOn, mergedLiveSessionData, contextItems),
+    [ambientOn, mergedLiveSessionData, contextItems],
+  );
+
+  const history = useMemo(
+    () => mergeHistoryTranscripts(
+      localHistory,
+      rawHistory,
+      new Set(mergedLiveSessionData?.messages.map((message) => message.id) ?? []),
+    ),
+    [localHistory, rawHistory, mergedLiveSessionData],
   );
 
   const session = ambientOn && !liveDismissed
@@ -159,25 +187,20 @@ export function useAmbientLiveSession({
   }, [ambientOn, enableWebDemo, realSession]);
 
   useEffect(() => {
+    if (realSession) return;
     setPreviewVisibleCount(1);
-  }, [liveIndex, ambientOn, liveDismissed, effectiveLiveSessionData?.captureSessionId, realSession?.startedAt]);
+  }, [liveIndex, ambientOn, liveDismissed, liveSessionData?.captureSessionId, realSession?.startedAt]);
 
   useEffect(() => {
     setLiveDismissed(false);
-  }, [effectiveLiveSessionData?.captureSessionId, effectiveLiveSessionData?.messages.length]);
+  }, [liveSessionData?.captureSessionId, liveSessionData?.messages.length]);
 
   useEffect(() => {
-    if (realSession) {
-      setPreviewVisibleCount(realSession.assists.length);
-    }
-  }, [realSession]);
-
-  useEffect(() => {
-    if (!session) return;
+    if (!session || realSession) return;
     if (previewVisibleCount >= session.assists.length) return;
     const t = setTimeout(() => setPreviewVisibleCount((c) => c + 1), 2600);
     return () => clearTimeout(t);
-  }, [previewVisibleCount, session]);
+  }, [previewVisibleCount, realSession, session]);
 
   const dismiss = useCallback(() => {
     if (dismissible) setLiveDismissed(true);
@@ -185,7 +208,8 @@ export function useAmbientLiveSession({
 
   return {
     session,
-    previewVisibleCount,
+    history,
+    previewVisibleCount: realSession ? realSession.assists.length : previewVisibleCount,
     isRealSession: realSession !== null,
     dismiss,
   };
@@ -221,6 +245,24 @@ function dedupeContextItems(items: LiveSessionContextItem[]): LiveSessionContext
   return unique;
 }
 
+function mergeLiveSessionData(
+  replay: LiveSessionData | null,
+  live: LiveSessionData | null,
+): LiveSessionData | null {
+  if (!replay) return live;
+  if (!live) return replay;
+  const messagesById = new Map<string, LiveSessionData["messages"][number]>();
+  for (const message of replay.messages) messagesById.set(message.id, message);
+  for (const message of live.messages) messagesById.set(message.id, message);
+  const messages = Array.from(messagesById.values())
+    .sort((a, b) => (a.sortTs ?? Number.MAX_SAFE_INTEGER) - (b.sortTs ?? Number.MAX_SAFE_INTEGER));
+  return {
+    captureSessionId: live.captureSessionId,
+    startedAt: Math.min(replay.startedAt, live.startedAt),
+    messages,
+  };
+}
+
 function ensureNativeLiveTranscriptBridge(): void {
   if (nativeLiveBridgeStarted || nativeLiveBridgeHandle) return;
   nativeLiveBridgeStarted = true;
@@ -240,6 +282,10 @@ function ensureNativeLiveTranscriptBridge(): void {
 function handleNativeLiveEvent(event: AmbientLiveTranscriptEvent): void {
   if (event.type === "audioState") {
     if (event.event.capturing) showAmbientListening();
+    return;
+  }
+  if (event.type === "captureSessionRotated") {
+    applyCaptureSessionRotation(event.event);
     return;
   }
   if (event.type === "speechBurst") {
@@ -270,4 +316,22 @@ function handleNativeLiveEvent(event: AmbientLiveTranscriptEvent): void {
     text: event.event.refinedText,
     source: event.event.provider,
   });
+}
+
+function mergeHistoryTranscripts(
+  localHistory: LiveHistoryTranscript[],
+  rawHistory: LiveHistoryTranscript[],
+  excludedMessageIds: Set<string> = new Set(),
+): LiveHistoryTranscript[] {
+  const seen = new Set<string>();
+  const merged: LiveHistoryTranscript[] = [];
+  for (const item of [...localHistory, ...rawHistory]
+    .sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt))) {
+    if (excludedMessageIds.has(item.id)) continue;
+    const key = `${item.captureSessionId}:${item.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+  }
+  return merged.slice(0, 5);
 }

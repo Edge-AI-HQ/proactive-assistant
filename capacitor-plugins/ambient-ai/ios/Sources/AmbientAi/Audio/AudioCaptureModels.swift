@@ -27,6 +27,44 @@ enum AudioLocalSpeechProvider: String {
     case sfSpeech = "sfspeech"
 }
 
+enum CaptureSessionRotationReason: String {
+    case maxAge = "max_age"
+    case idleGap = "idle_gap"
+    case manualStart = "manual_start"
+}
+
+struct CaptureSessionRotatedRecord {
+    let oldCaptureSessionId: String
+    let newCaptureSessionId: String
+    let reason: CaptureSessionRotationReason
+    let rotatedAt: Date
+    let ageMs: Int?
+    let idleGapMs: Int?
+
+    var payload: [String: Any] {
+        var data: [String: Any] = [
+            "oldCaptureSessionId": oldCaptureSessionId,
+            "newCaptureSessionId": newCaptureSessionId,
+            "reason": reason.rawValue,
+            "rotatedAt": Self.iso8601.string(from: rotatedAt),
+        ]
+        if let ageMs {
+            data["ageMs"] = ageMs
+        }
+        if let idleGapMs {
+            data["idleGapMs"] = idleGapMs
+        }
+        return data
+    }
+
+    private static let iso8601: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+}
+
 struct AudioCaptureSnapshot {
     let running: Bool
     let paused: Bool
@@ -86,10 +124,11 @@ struct AudioCaptureMetadata {
     let capturedAt: Date
     let durationMs: Int
     let byteSize: Int
+    let triggerSource: String?
     let url: URL
 
     var recentPayload: [String: Any] {
-        [
+        var data: [String: Any] = [
             "wavId": wavId,
             "burstId": burstId,
             "captureSessionId": captureSessionId,
@@ -97,6 +136,10 @@ struct AudioCaptureMetadata {
             "durationMs": durationMs,
             "byteSize": byteSize,
         ]
+        if let triggerSource {
+            data["triggerSource"] = triggerSource
+        }
+        return data
     }
 
     private static let iso8601: ISO8601DateFormatter = {

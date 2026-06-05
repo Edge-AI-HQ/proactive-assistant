@@ -1,11 +1,11 @@
-import { useState, useEffect, useCallback, useMemo, useRef, forwardRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect, forwardRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { isNative } from "@/lib/platform";
 import {
   Radio, Smartphone, Watch, Laptop,
   MapPin, Compass, Mic, Activity, Wifi,
   Stethoscope,
-  Lightbulb, Sparkles, Plus, ChevronRight, X,
+  Lightbulb, Sparkles, Plus, ChevronDown, ChevronRight, X,
   Phone, Sun, Waves, Target,
   Soup, Minimize2, Lock, Unlock,
   NotebookPen,
@@ -28,7 +28,7 @@ import type {
   AmbientTimelineEvent,
 } from "@/services/ambient/timeline";
 import type { RuntimeStatus } from "@/services/ambient";
-import type { LiveSession } from "@/services/ambient/live-session";
+import type { LiveAssistItem, LiveSession } from "@/services/ambient/live-session";
 import { transcriptTextOnly } from "@/services/ambient/timeline/utils";
 import type { UserDevice, UserDevicePlatform } from "@/lib/api";
 
@@ -462,6 +462,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
 
   const {
     session: liveSession,
+    history: liveHistory,
     previewVisibleCount,
     dismiss: dismissLiveSession,
   } = useAmbientLiveSession({
@@ -627,11 +628,13 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
 
       {/* ── LIVE SESSION (only when ambient on + active) ── */}
       <AnimatePresence mode="wait">
-        {liveSession && (
+        {(liveSession || liveHistory.length > 0) && (
           <LiveSessionCard
             session={liveSession}
+            history={liveHistory}
             previewVisibleCount={previewVisibleCount}
             variant="ambient"
+            alwaysVisible={liveHistory.length > 0}
             onFocus={onOpenFullscreen}
             onDismiss={dismissLiveSession}
           />
@@ -955,33 +958,72 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
   session: LiveSession;
   onClose: () => void;
 }>(function LiveFullscreen({ session, onClose }, ref) {
-  // Progressively reveal assist messages, one at a time
-  const [visibleCount, setVisibleCount] = useState(1);
   const [elapsed, setElapsed] = useState(0);
+  const [isFollowingLive, setIsFollowingLive] = useState(true);
+  const [unseenCount, setUnseenCount] = useState(0);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const shouldFollowLiveRef = useRef(true);
   const previousAssistCount = useRef(session.assists.length);
+  const previousAssistKeys = useRef(new Set(session.assists.map(liveAssistKey)));
+  const [animatedAssistKeys, setAnimatedAssistKeys] = useState<Set<string>>(() => new Set());
+
+  const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    const el = messagesRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+    shouldFollowLiveRef.current = true;
+    setIsFollowingLive(true);
+    setUnseenCount(0);
+  }, []);
 
   useEffect(() => {
     const tick = setInterval(() => setElapsed((e) => e + 1), 1000);
     return () => clearInterval(tick);
   }, []);
 
-  useEffect(() => {
-    if (visibleCount >= session.assists.length) return;
-    const t = setTimeout(() => setVisibleCount((c) => c + 1), 2000);
-    return () => clearTimeout(t);
-  }, [visibleCount, session.assists.length]);
+  useLayoutEffect(() => {
+    previousAssistCount.current = session.assists.length;
+    previousAssistKeys.current = new Set(session.assists.map(liveAssistKey));
+    setAnimatedAssistKeys(new Set());
+    scrollMessagesToBottom("auto");
+  }, [scrollMessagesToBottom, session.startedAt]);
 
   useEffect(() => {
     const previous = previousAssistCount.current;
     previousAssistCount.current = session.assists.length;
-    if (session.assists.length <= previous) {
-      setVisibleCount((count) => Math.min(count, session.assists.length));
+    const previousKeys = previousAssistKeys.current;
+    const currentKeys = new Set(session.assists.map(liveAssistKey));
+    previousAssistKeys.current = currentKeys;
+    const addedKeys = session.assists
+      .map(liveAssistKey)
+      .filter((key) => !previousKeys.has(key));
+    if (session.assists.length <= previous || addedKeys.length === 0) return;
+    setAnimatedAssistKeys((keys) => new Set([...keys, ...addedKeys]));
+    const added = addedKeys.length;
+    if (shouldFollowLiveRef.current) {
+      requestAnimationFrame(() => scrollMessagesToBottom("smooth"));
       return;
     }
-    setVisibleCount((count) => (
-      count >= previous ? session.assists.length : count
-    ));
-  }, [session.assists.length]);
+    setUnseenCount((count) => count + added);
+  }, [scrollMessagesToBottom, session.assists.length]);
+
+  const handleMessagesScroll = useCallback(() => {
+    const el = messagesRef.current;
+    if (!el) return;
+    const atBottom = isNearScrollBottom(el);
+    shouldFollowLiveRef.current = atBottom;
+    setIsFollowingLive(atBottom);
+    if (atBottom) setUnseenCount(0);
+  }, []);
+
+  const handleAssistRowAnimationComplete = useCallback((key: string) => {
+    setAnimatedAssistKeys((keys) => {
+      if (!keys.has(key)) return keys;
+      const next = new Set(keys);
+      next.delete(key);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -998,7 +1040,8 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
   };
 
   const SessionIcon = session.icon;
-  const visible = session.assists.slice(0, visibleCount);
+  const visibleCount = session.assists.length;
+  const visible = session.assists;
 
   return (
     <motion.div
@@ -1105,7 +1148,7 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
         </div>
       </div>
 
-      {/* Streaming assist messages — livestream-style: newest slides up from bottom */}
+      {/* Streaming assist messages — scrollable history with bottom-follow when live. */}
       <div className="relative flex-1 overflow-hidden px-5 md:px-12 pb-32">
         {/* top fade mask so older messages dissolve out */}
         <div
@@ -1117,105 +1160,47 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
           }}
         />
 
-        <div className="max-w-3xl mx-auto w-full h-full flex flex-col justify-end">
-          <div className="flex flex-col gap-4">
+        <div
+          ref={messagesRef}
+          onScroll={handleMessagesScroll}
+          data-testid="live-fullscreen-messages"
+          className="relative z-0 max-w-3xl mx-auto w-full h-full overflow-y-auto overscroll-contain scrollbar-none pr-1"
+        >
+          <div className="min-h-full flex flex-col justify-end gap-4 pt-24 pb-8">
             <AnimatePresence initial={false} mode="popLayout">
-              {visible.map((a, idx) => {
-                const total = visible.length;
-                const fromBottom = total - 1 - idx; // 0 = newest at bottom
-                const isNewest = fromBottom === 0;
-                // Older messages fade as they get pushed up
-                const ageOpacity =
-                  fromBottom === 0
-                    ? 1
-                    : fromBottom === 1
-                      ? 0.88
-                      : fromBottom === 2
-                        ? 0.7
-                        : fromBottom === 3
-                          ? 0.5
-                          : fromBottom === 4
-                            ? 0.32
-                            : 0.18;
-                return (
-                  <motion.div
-                    key={a.time + a.text}
-                    layout
-                    initial={{
-                      opacity: 0,
-                      y: 36,
-                      filter: "blur(6px)",
-                      scale: 0.96,
-                    }}
-                    animate={{
-                      opacity: ageOpacity,
-                      y: 0,
-                      filter: "blur(0px)",
-                      scale: 1,
-                    }}
-                    exit={{ opacity: 0, y: -8, filter: "blur(4px)" }}
-                    transition={{
-                      opacity: { duration: 0.5, ease: [0.22, 1, 0.36, 1] },
-                      y: { type: "spring", stiffness: 320, damping: 32, mass: 0.7 },
-                      filter: { duration: 0.4, ease: "easeOut" },
-                      scale: { duration: 0.45, ease: [0.22, 1, 0.36, 1] },
-                      layout: { type: "spring", stiffness: 320, damping: 34, mass: 0.7 },
-                    }}
-                    className="flex gap-3"
-                  >
-                    <span
-                      className={`text-[11px] font-mono pt-1 w-14 shrink-0 tabular-nums transition-colors duration-500 ${isNewest ? "text-[hsl(304_75%_70%)]" : "text-white/30"
-                        }`}
-                    >
-                      {a.time}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      {a.kind === "action" && (
-                        <span className="inline-block mb-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[hsl(304_75%_63%)] text-white">
-                          Action
-                        </span>
-                      )}
-                      <p
-                        className={`leading-snug transition-colors duration-500 ${a.kind === "action"
-                          ? "text-white text-[18px] md:text-[20px] font-medium"
-                          : a.kind === "assist"
-                            ? "text-white/90 text-[17px] md:text-[19px]"
-                            : "text-white/75 text-[16px] md:text-[18px]"
-                          }`}
-                      >
-                        {a.text}
-                      </p>
-                      {a.source && (
-                        <p className="text-[11px] text-white/40 mt-1">via {a.source}</p>
-                      )}
-                    </div>
-                  </motion.div>
-                );
-              })}
+              {visible.map((a, idx) => (
+                <LiveFullscreenAssistRow
+                  key={liveAssistKey(a)}
+                  assist={a}
+                  index={idx}
+                  total={visible.length}
+                  animated={animatedAssistKeys.has(liveAssistKey(a))}
+                  onAnimationComplete={handleAssistRowAnimationComplete}
+                />
+              ))}
             </AnimatePresence>
-
-            {/* Typing indicator pinned at the bottom — next message arriving */}
-            {visibleCount < session.assists.length && (
-              <motion.div
-                layout
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.35, ease: "easeOut" }}
-                className="flex items-center gap-2 pt-1"
-              >
-                <span className="text-[10px] font-mono text-[hsl(304_75%_70%)] w-14 shrink-0">
-                  live
-                </span>
-                <span className="flex gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[hsl(304_75%_70%)] animate-pulse" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-[hsl(304_75%_70%)] animate-pulse [animation-delay:200ms]" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-[hsl(304_75%_70%)] animate-pulse [animation-delay:400ms]" />
-                </span>
-                <span className="text-[11px] text-white/45 italic">listening…</span>
-              </motion.div>
-            )}
           </div>
         </div>
+
+        <AnimatePresence>
+          {!isFollowingLive && unseenCount > 0 && (
+            <div className="pointer-events-none absolute inset-x-0 bottom-14 z-20 flex justify-center">
+              <motion.button
+                type="button"
+                onClick={() => scrollMessagesToBottom("smooth")}
+                initial={{ opacity: 0, y: 12, scale: 0.96 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 8, scale: 0.96 }}
+                transition={{ duration: 0.22, ease: "easeOut" }}
+                className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-[hsl(304_75%_70%/0.35)] bg-[hsl(0_0%_4%/0.88)] px-3 py-2 text-[12px] font-semibold text-[hsl(304_75%_82%)] shadow-lg backdrop-blur-md"
+                aria-label={`Show ${unseenCount} new live message${unseenCount === 1 ? "" : "s"}`}
+              >
+                <ChevronDown size={14} strokeWidth={2.2} />
+                <span>{unseenCount} new</span>
+              </motion.button>
+            </div>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* Bottom footer */}
@@ -1230,3 +1215,113 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
     </motion.div>
   );
 });
+
+interface LiveFullscreenAssistRowProps {
+  assist: LiveAssistItem;
+  index: number;
+  total: number;
+  animated: boolean;
+  onAnimationComplete: (key: string) => void;
+}
+
+function LiveFullscreenAssistRow({
+  assist,
+  index,
+  total,
+  animated,
+  onAnimationComplete,
+}: LiveFullscreenAssistRowProps) {
+  const key = liveAssistKey(assist);
+  const fromBottom = total - 1 - index; // 0 = newest at bottom
+  const isNewest = fromBottom === 0;
+  const ageOpacity =
+    fromBottom === 0
+      ? 1
+      : fromBottom === 1
+        ? 0.88
+        : fromBottom === 2
+          ? 0.7
+          : fromBottom === 3
+            ? 0.5
+            : fromBottom === 4
+              ? 0.32
+              : 0.18;
+  const content = (
+    <>
+      <span
+        className={`text-[11px] font-mono pt-1 w-14 shrink-0 tabular-nums transition-colors duration-500 ${isNewest ? "text-[hsl(304_75%_70%)]" : "text-white/30"
+          }`}
+      >
+        {assist.time}
+      </span>
+      <div className="min-w-0 flex-1">
+        {assist.kind === "action" && (
+          <span className="inline-block mb-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[hsl(304_75%_63%)] text-white">
+            Action
+          </span>
+        )}
+        <p
+          className={`leading-snug transition-colors duration-500 ${assist.kind === "action"
+            ? "text-white text-[18px] md:text-[20px] font-medium"
+            : assist.kind === "assist"
+              ? "text-white/90 text-[17px] md:text-[19px]"
+              : "text-white/75 text-[16px] md:text-[18px]"
+            }`}
+        >
+          {assist.text}
+        </p>
+        {assist.source && (
+          <p className="text-[11px] text-white/40 mt-1">via {assist.source}</p>
+        )}
+      </div>
+    </>
+  );
+
+  if (animated) {
+    return (
+      <motion.div
+        layout
+        data-testid="live-fullscreen-assist-row"
+        data-live-animated="true"
+        onAnimationComplete={() => onAnimationComplete(key)}
+        initial={{
+          opacity: 0,
+          y: 36,
+          filter: "blur(6px)",
+          scale: 0.96,
+        }}
+        animate={{
+          opacity: ageOpacity,
+          y: 0,
+          filter: "blur(0px)",
+          scale: 1,
+        }}
+        exit={{ opacity: 0, y: -8, filter: "blur(4px)" }}
+        transition={{
+          opacity: { duration: 0.5, ease: [0.22, 1, 0.36, 1] },
+          y: { type: "spring", stiffness: 320, damping: 32, mass: 0.7 },
+          filter: { duration: 0.4, ease: "easeOut" },
+          scale: { duration: 0.45, ease: [0.22, 1, 0.36, 1] },
+          layout: { type: "spring", stiffness: 320, damping: 34, mass: 0.7 },
+        }}
+        className="flex gap-3"
+      >
+        {content}
+      </motion.div>
+    );
+  }
+
+  return (
+    <div data-testid="live-fullscreen-assist-row" className="flex gap-3" style={{ opacity: ageOpacity }}>
+      {content}
+    </div>
+  );
+}
+
+function liveAssistKey(assist: LiveAssistItem): string {
+  return `${assist.time}:${assist.text}`;
+}
+
+function isNearScrollBottom(el: HTMLElement): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= 64;
+}

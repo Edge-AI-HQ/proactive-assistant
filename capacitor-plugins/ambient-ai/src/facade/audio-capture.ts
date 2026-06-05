@@ -2,13 +2,16 @@ import type { PluginListenerHandle } from '@capacitor/core';
 
 import type {
   AmbientLevelEvent,
+  AudioCaptureListOptions,
   AudioCaptureReadResult,
   AudioCaptureConfig,
+  AudioDiagnosticEvent,
   AudioErrorEvent,
   AudioPermissions,
   AudioState,
   CaptureDiscardedEvent,
   CaptureReadyEvent,
+  CaptureSessionRotatedEvent,
   RecentAudioCapture,
   SoundClassificationEvent,
   SpeechBurstEvent,
@@ -19,10 +22,12 @@ import type {
 
 export interface AudioCaptureEventMap {
   ambientLevel: AmbientLevelEvent;
+  audioDiagnostic: AudioDiagnosticEvent;
   audioError: AudioErrorEvent;
   audioState: AudioState;
   captureDiscarded: CaptureDiscardedEvent;
   captureReady: CaptureReadyEvent;
+  captureSessionRotated: CaptureSessionRotatedEvent;
   soundClassification: SoundClassificationEvent;
   speechBurst: SpeechBurstEvent;
   transcriptDraft: TranscriptDraftEvent;
@@ -38,7 +43,7 @@ export interface AudioCapturePlugin {
   stopCapture(): Promise<void>;
   getState(): Promise<AudioState>;
   drainPendingTranscripts(): Promise<{ transcripts: TranscriptReadyEvent[] }>;
-  listRecentCaptures(): Promise<{ captures: RecentAudioCapture[] }>;
+  listRecentCaptures(options?: AudioCaptureListOptions): Promise<{ captures: RecentAudioCapture[] }>;
   readCapture(options: { wavId: string }): Promise<AudioCaptureReadResult>;
   markCaptureProcessed(options: { wavId: string }): Promise<void>;
   playCapture(options: { wavId: string }): Promise<void>;
@@ -86,7 +91,7 @@ export class AudioCaptureWeb implements AudioCapturePlugin {
     return { transcripts: [] };
   }
 
-  async listRecentCaptures(): Promise<{ captures: RecentAudioCapture[] }> {
+  async listRecentCaptures(_options?: AudioCaptureListOptions): Promise<{ captures: RecentAudioCapture[] }> {
     return { captures: [] };
   }
 

@@ -36,6 +36,7 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
     private var appActiveObserver: NSObjectProtocol?
     private var appWillResignActiveObserver: NSObjectProtocol?
     private var appDidEnterBackgroundObserver: NSObjectProtocol?
+    private var routeChangeObserver: NSObjectProtocol?
 
     public override func load() {
         appActiveObserver = NotificationCenter.default.addObserver(
@@ -62,6 +63,17 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
         ) { [weak self] _ in
             Task { await self?.audioManager.setAppBackgrounded(true, reason: "appDidEnterBackground") }
         }
+        routeChangeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let reasonValue = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+            let reason = reasonValue
+                .flatMap(AVAudioSession.RouteChangeReason.init(rawValue:))
+                .map(Self.routeChangeReasonName) ?? "unknown"
+            Task { await self?.audioManager.noteRouteChanged(reason: reason) }
+        }
     }
 
     deinit {
@@ -73,6 +85,9 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
         }
         if let appDidEnterBackgroundObserver {
             NotificationCenter.default.removeObserver(appDidEnterBackgroundObserver)
+        }
+        if let routeChangeObserver {
+            NotificationCenter.default.removeObserver(routeChangeObserver)
         }
     }
 
@@ -173,8 +188,16 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
     }
 
     @objc func listRecentCaptures(_ call: CAPPluginCall) {
+        let limit = call.getInt("limit")
+        let cursor = call.getString("cursor")
+        let order = call.getString("order")
+            .flatMap(AudioCaptureListOrder.init(rawValue:)) ?? .desc
         Task { [weak self] in
-            let captures = await self?.audioManager.listRecentCaptures() ?? []
+            let captures = await self?.audioManager.listRecentCaptures(
+                limit: limit,
+                cursor: cursor,
+                order: order
+            ) ?? []
             DispatchQueue.main.async {
                 call.resolve(["captures": captures])
             }
@@ -361,6 +384,29 @@ public class AudioCapturePlugin: CAPPlugin, CAPBridgedPlugin, AVAudioPlayerDeleg
                 "message": message,
                 "source": source,
             ])
+        }
+    }
+
+    private static func routeChangeReasonName(_ reason: AVAudioSession.RouteChangeReason) -> String {
+        switch reason {
+        case .newDeviceAvailable:
+            return "new_device_available"
+        case .oldDeviceUnavailable:
+            return "old_device_unavailable"
+        case .categoryChange:
+            return "category_change"
+        case .override:
+            return "override"
+        case .wakeFromSleep:
+            return "wake_from_sleep"
+        case .noSuitableRouteForCategory:
+            return "no_suitable_route_for_category"
+        case .routeConfigurationChange:
+            return "route_configuration_change"
+        case .unknown:
+            return "unknown"
+        @unknown default:
+            return "unknown"
         }
     }
 

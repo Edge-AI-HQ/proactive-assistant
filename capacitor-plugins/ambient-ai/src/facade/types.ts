@@ -178,6 +178,17 @@ export interface CaptureDiscardedEvent {
   speechLikeDurationMs: number;
 }
 
+export type CaptureSessionRotationReason = 'max_age' | 'idle_gap' | 'manual_start';
+
+export interface CaptureSessionRotatedEvent {
+  oldCaptureSessionId: string;
+  newCaptureSessionId: string;
+  reason: CaptureSessionRotationReason;
+  rotatedAt: string;
+  ageMs?: number;
+  idleGapMs?: number;
+}
+
 export interface TranscriptRefinedEvent {
   platform: AmbientPlatform;
   wavId: string;
@@ -212,6 +223,12 @@ export interface AudioErrorEvent {
   source: string;
 }
 
+export interface AudioDiagnosticEvent {
+  name: string;
+  timestamp: number;
+  [key: string]: unknown;
+}
+
 export interface RecentAudioCapture {
   wavId: string;
   burstId?: string;
@@ -219,6 +236,13 @@ export interface RecentAudioCapture {
   capturedAt: string;
   durationMs: number;
   byteSize: number;
+  triggerSource?: string;
+}
+
+export interface AudioCaptureListOptions {
+  limit?: number;
+  cursor?: string;
+  order?: 'asc' | 'desc';
 }
 
 export interface AudioCaptureReadResult {
@@ -355,6 +379,7 @@ export interface AmbientEventMap {
   activity: ActivityEvent;
   altimeter: AltimeterEvent;
   ambientLevel: AmbientLevelEvent;
+  audioDiagnostic: AudioDiagnosticEvent;
   audioError: AudioErrorEvent;
   audioState: AudioState;
   battery: BatterySnapshot;
@@ -363,6 +388,7 @@ export interface AmbientEventMap {
   contacts: ContactsSnapshot;
   captureReady: CaptureReadyEvent;
   captureDiscarded: CaptureDiscardedEvent;
+  captureSessionRotated: CaptureSessionRotatedEvent;
   deviceState: DeviceStateSnapshot;
   focus: FocusEvent;
   heartRate: HeartRateEvent;
@@ -391,7 +417,7 @@ export interface AudioNamespace {
   stopCapture(): Promise<void>;
   getState(): Promise<AudioState>;
   drainPendingTranscripts(): Promise<TranscriptReadyEvent[]>;
-  listRecentCaptures(): Promise<{ captures: RecentAudioCapture[] }>;
+  listRecentCaptures(options?: AudioCaptureListOptions): Promise<{ captures: RecentAudioCapture[] }>;
   readCapture(options: { wavId: string }): Promise<AudioCaptureReadResult>;
   markCaptureProcessed(options: { wavId: string }): Promise<void>;
   playCapture(options: { wavId: string }): Promise<void>;

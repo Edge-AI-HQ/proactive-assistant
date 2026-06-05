@@ -82,6 +82,7 @@ describe("SoundClassifierSource transcript ingest", () => {
   });
 
   test("shows listening immediately when native speechBurst arrives", async () => {
+    vi.setSystemTime(new Date(1_777_000_001_500));
     const ctx: SourceContext = {
       push: vi.fn(),
       onEvent: vi.fn(),
@@ -102,6 +103,7 @@ describe("SoundClassifierSource transcript ingest", () => {
         text: "Listening...",
       }),
     );
+    vi.useRealTimers();
   });
 
   test("pushes transcriptReady as a session_summary signal", () => {
@@ -159,6 +161,7 @@ describe("SoundClassifierSource transcript ingest", () => {
   });
 
   test("transcribes captureReady through the backend proxy and pushes the session summary", async () => {
+    vi.setSystemTime(new Date("2026-05-17T05:15:30.000Z"));
     const pushed: unknown[] = [];
     const ctx: SourceContext = {
       push: (item) => pushed.push(item),
@@ -232,6 +235,7 @@ describe("SoundClassifierSource transcript ingest", () => {
       }),
     ]);
     expect(ambientAiMock.audio.markCaptureProcessed).toHaveBeenCalledWith({ wavId: "wav-cloud" });
+    vi.useRealTimers();
   });
 
   test("marks empty cloud transcription captures as processed without storing a signal", async () => {
@@ -406,6 +410,7 @@ describe("SoundClassifierSource transcript ingest", () => {
   });
 
   test("does not duplicate the signal or delete the WAV after stop, but still surfaces the late text in the live transcript", async () => {
+    vi.setSystemTime(new Date("2026-05-18T02:46:45.000Z"));
     // Earlier we hard-dropped everything (signal + live UI + WAV cleanup)
     // when a transcript finished after stop(). That fed the "switching the
     // mic loses text" complaint: the user said something just before
@@ -470,6 +475,7 @@ describe("SoundClassifierSource transcript ingest", () => {
       "sound_classifier",
       "discard:runid_skip_signal burst=burst-stop",
     );
+    vi.useRealTimers();
   });
 
   test("runs a queued recovery scan when refresh happens during pending recovery", async () => {
@@ -623,6 +629,64 @@ describe("SoundClassifierSource transcript ingest", () => {
     ]);
   });
 
+  test("paginates pending recent captures during recovery", async () => {
+    const pushed: unknown[] = [];
+    const ctx: SourceContext = {
+      push: (item) => pushed.push(item),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+    captureTranscriptionMock.transcribeAmbientCapture.mockResolvedValue({
+      text: "Second page capture should be recovered.",
+      event: {},
+    });
+
+    await source.start();
+    await source.flushPendingAudioRecoveryForTest();
+    ambientAiMock.audio.listRecentCaptures.mockClear();
+    const firstPage = Array.from({ length: 25 }, (_, index) => ({
+      wavId: `wav-page-1-${index}`,
+      capturedAt: `2026-05-18T02:46:${String(59 - index).padStart(2, "0")}.000Z`,
+      durationMs: 1000,
+      byteSize: 1000,
+    }));
+    ambientAiMock.audio.listRecentCaptures
+      .mockResolvedValueOnce({ captures: firstPage })
+      .mockResolvedValueOnce({
+        captures: [
+          {
+            wavId: "wav-page-2",
+            burstId: "burst-page-2",
+            captureSessionId: "capture-page-2",
+            capturedAt: "2026-05-18T02:45:30.000Z",
+            durationMs: 3080,
+            byteSize: 295_616,
+          },
+        ],
+      });
+
+    await source.refresh();
+    await source.flushPendingAudioRecoveryForTest();
+
+    expect(ambientAiMock.audio.listRecentCaptures).toHaveBeenNthCalledWith(1, {
+      limit: 25,
+      cursor: undefined,
+      order: "desc",
+    });
+    expect(ambientAiMock.audio.listRecentCaptures).toHaveBeenNthCalledWith(2, {
+      limit: 25,
+      cursor: "2026-05-18T02:46:35.000Z",
+      order: "desc",
+    });
+    expect(pushed).toEqual([
+      expect.objectContaining({
+        kind: "session_summary",
+        summary: "Second page capture should be recovered.",
+        dedupe_key: "ios:audio:burst-page-2",
+      }),
+    ]);
+  });
+
   test("keeps failed cloud captures unprocessed so recovery can retry them", async () => {
     const pushed: unknown[] = [];
     const ctx: SourceContext = {
@@ -693,6 +757,7 @@ describe("SoundClassifierSource transcript ingest", () => {
   });
 
   test("delivers short transcriptReady text — short replies must not be silently dropped", () => {
+    vi.setSystemTime(new Date("2026-05-10T12:00:30.000Z"));
     // Earlier versions filtered transcripts < 24 chars out of both the live
     // UI and the outbox. Short Chinese replies ("好的", "等一下", "什么时候
     // 开会") all sit under 24 chars and got eaten, which was a dominant
@@ -729,6 +794,7 @@ describe("SoundClassifierSource transcript ingest", () => {
       messages: [{ id: "burst-2", text: "好的", source: "cloud_whisper" }],
     });
     expect(ctx.onEvent).toHaveBeenCalledWith("sound_classifier", "Voice transcript: 好的");
+    vi.useRealTimers();
   });
 
   test("drops empty-after-trim transcriptReady text with a discard counter", () => {

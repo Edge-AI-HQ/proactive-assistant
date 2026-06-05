@@ -10,9 +10,11 @@ import {
 } from "@pin/capacitor-ambient-ai";
 
 type AudioDebugEventName =
+  | "audioDiagnostic"
   | "audioState"
   | "soundClassification"
   | "speechBurst"
+  | "captureSessionRotated"
   | "captureDiscarded"
   | "transcriptDraft"
   | "transcriptRefined"
@@ -31,6 +33,11 @@ interface SpeechGateState {
   consecutiveSpeechCount: number;
   lastBurstConfidence: number | null;
   lastBurstAt: number | null;
+}
+
+interface CaptureDiscardStats {
+  count: number;
+  lastReason: string | null;
 }
 
 type RecordingSessionStatus = "idle" | "capturing" | "transcribing" | "ready" | "empty" | "error";
@@ -70,6 +77,7 @@ type AudioConfigNumberField =
   | "postRollMs"
   | "maxBurstMs"
   | "wavRetentionTtlMs"
+  | "wavMaxBytes"
   | "wavMaxFiles";
 
 interface AudioConfigForm {
@@ -82,15 +90,18 @@ interface AudioConfigForm {
   postRollMs: string;
   maxBurstMs: string;
   wavRetentionTtlMs: string;
+  wavMaxBytes: string;
   wavMaxFiles: string;
 }
 
 type StoredAudioConfigForm = Omit<AudioConfigForm, "cloudApiKey">;
 
 const AUDIO_EVENT_NAMES: readonly AudioDebugEventName[] = [
+  "audioDiagnostic",
   "audioState",
   "soundClassification",
   "speechBurst",
+  "captureSessionRotated",
   "captureDiscarded",
   "transcriptDraft",
   "transcriptRefined",
@@ -100,7 +111,7 @@ const AUDIO_EVENT_NAMES: readonly AudioDebugEventName[] = [
 
 const SPEECH_CONFIDENCE_THRESHOLD = 0.60;
 const SPEECH_CONSECUTIVE_FRAMES = 1;
-const AUDIO_CONFIG_STORAGE_KEY = "pinai:ambient-audio-debug-config:v1";
+const AUDIO_CONFIG_STORAGE_KEY = "pinai:ambient-audio-debug-config:v2";
 const SOUND_CONFIDENCE_THRESHOLD_STORAGE_KEY = "pinai:ambient-audio-debug-sound-threshold:v1";
 const DEFAULT_SOUND_CONFIDENCE_PERCENT = 50;
 
@@ -135,8 +146,9 @@ const INITIAL_CONFIG: AudioConfigForm = {
   preRollMs: "2000",
   postRollMs: "10000",
   maxBurstMs: "30000",
-  wavRetentionTtlMs: "3600000",
-  wavMaxFiles: "12",
+  wavRetentionTtlMs: "604800000",
+  wavMaxBytes: "3221225472",
+  wavMaxFiles: "10000",
 };
 
 const AUDIO_CONFIG_NUMBER_FIELDS: readonly AudioConfigNumberField[] = [
@@ -145,6 +157,7 @@ const AUDIO_CONFIG_NUMBER_FIELDS: readonly AudioConfigNumberField[] = [
   "postRollMs",
   "maxBurstMs",
   "wavRetentionTtlMs",
+  "wavMaxBytes",
   "wavMaxFiles",
 ];
 
@@ -223,6 +236,7 @@ function saveStoredConfig(form: AudioConfigForm): void {
     postRollMs: form.postRollMs,
     maxBurstMs: form.maxBurstMs,
     wavRetentionTtlMs: form.wavRetentionTtlMs,
+    wavMaxBytes: form.wavMaxBytes,
     wavMaxFiles: form.wavMaxFiles,
   };
   try {
@@ -255,6 +269,10 @@ function summarizeAudioState(state: AudioState): string {
 
 function previewEvent<K extends AudioDebugEventName>(name: K, event: AmbientEventMap[K]): string {
   switch (name) {
+    case "audioDiagnostic": {
+      const diagnostic = event as AmbientEventMap["audioDiagnostic"];
+      return JSON.stringify(diagnostic);
+    }
     case "audioState":
       return summarizeAudioState(event as AmbientEventMap["audioState"]);
     case "soundClassification": {
@@ -264,6 +282,16 @@ function previewEvent<K extends AudioDebugEventName>(name: K, event: AmbientEven
     case "speechBurst": {
       const burst = event as AmbientEventMap["speechBurst"];
       return `${formatDuration(burst.durationMs)} · confidence ${(burst.confidence * 100).toFixed(0)}%`;
+    }
+    case "captureSessionRotated": {
+      const rotated = event as AmbientEventMap["captureSessionRotated"];
+      const parts = [
+        rotated.reason,
+        `${rotated.oldCaptureSessionId} -> ${rotated.newCaptureSessionId}`,
+      ];
+      if (typeof rotated.ageMs === "number") parts.push(`age ${rotated.ageMs}ms`);
+      if (typeof rotated.idleGapMs === "number") parts.push(`idle ${rotated.idleGapMs}ms`);
+      return parts.join(" · ");
     }
     case "captureDiscarded": {
       const discarded = event as AmbientEventMap["captureDiscarded"];
@@ -301,6 +329,7 @@ function buildConfig(form: AudioConfigForm): AudioCaptureConfig {
   const postRollMs = parseOptionalNumber(form.postRollMs);
   const maxBurstMs = parseOptionalNumber(form.maxBurstMs);
   const wavRetentionTtlMs = parseOptionalNumber(form.wavRetentionTtlMs);
+  const wavMaxBytes = parseOptionalNumber(form.wavMaxBytes);
   const wavMaxFiles = parseOptionalNumber(form.wavMaxFiles);
 
   if (cloudRefineTimeoutMs !== undefined) config.cloudRefineTimeoutMs = cloudRefineTimeoutMs;
@@ -308,6 +337,7 @@ function buildConfig(form: AudioConfigForm): AudioCaptureConfig {
   if (postRollMs !== undefined) config.postRollMs = postRollMs;
   if (maxBurstMs !== undefined) config.maxBurstMs = maxBurstMs;
   if (wavRetentionTtlMs !== undefined) config.wavRetentionTtlMs = wavRetentionTtlMs;
+  if (wavMaxBytes !== undefined) config.wavMaxBytes = wavMaxBytes;
   if (wavMaxFiles !== undefined) config.wavMaxFiles = wavMaxFiles;
 
   return config;
@@ -385,6 +415,10 @@ export default function AmbientAudioDebugPanel() {
     lastBurstConfidence: null,
     lastBurstAt: null,
   });
+  const [captureDiscardStats, setCaptureDiscardStats] = useState<CaptureDiscardStats>({
+    count: 0,
+    lastReason: null,
+  });
   const [session, setSession] = useState<RecordingSession>({
     status: "idle",
     burstId: null,
@@ -460,6 +494,14 @@ export default function AmbientAudioDebugPanel() {
             status: "capturing",
             confidence: burst.confidence,
             updatedAt: Date.now(),
+          }));
+        }
+
+        if (eventName === "captureDiscarded") {
+          const discarded = event as AmbientEventMap["captureDiscarded"];
+          setCaptureDiscardStats((prevStats) => ({
+            count: prevStats.count + 1,
+            lastReason: discarded.reason,
           }));
         }
 
@@ -674,6 +716,7 @@ export default function AmbientAudioDebugPanel() {
           <NumberField label="Post-roll ms" value={form.postRollMs} onChange={(value) => updateNumber("postRollMs", value)} />
           <NumberField label="Max burst ms" value={form.maxBurstMs} onChange={(value) => updateNumber("maxBurstMs", value)} />
           <NumberField label="WAV retention ttl ms" value={form.wavRetentionTtlMs} onChange={(value) => updateNumber("wavRetentionTtlMs", value)} />
+          <NumberField label="WAV max bytes" value={form.wavMaxBytes} onChange={(value) => updateNumber("wavMaxBytes", value)} />
           <NumberField label="WAV max files" value={form.wavMaxFiles} onChange={(value) => updateNumber("wavMaxFiles", value)} />
         </div>
         <button
@@ -742,6 +785,18 @@ export default function AmbientAudioDebugPanel() {
         </div>
         <p className="mt-1 text-[10px] text-foreground/40 leading-snug">
           Drops sound classification events below this confidence from Recent audio events.
+        </p>
+      </div>
+
+      <div className="mt-3 rounded-lg bg-white/60 border border-foreground/10 px-3 py-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[10px] font-medium text-foreground/40 uppercase tracking-wider">Capture diagnostics</span>
+          <span className="text-[10px] text-foreground/45 tabular-nums">
+            discarded: {captureDiscardStats.count}
+          </span>
+        </div>
+        <p className="mt-1 text-[10px] text-foreground/45">
+          last: {captureDiscardStats.lastReason ?? "—"}
         </p>
       </div>
 
@@ -840,7 +895,7 @@ export default function AmbientAudioDebugPanel() {
                 </button>
               </div>
               <p className="mt-1 text-[10px] text-foreground/45 tabular-nums">
-                {formatTime(capture.capturedAt)} · {formatDuration(capture.durationMs)} · {formatBytes(capture.byteSize)}
+                {formatTime(capture.capturedAt)} · {formatDuration(capture.durationMs)} · {formatBytes(capture.byteSize)}{capture.triggerSource ? ` · ${capture.triggerSource}` : ""}
               </p>
             </div>
           ))}
@@ -879,7 +934,7 @@ export default function AmbientAudioDebugPanel() {
         <span className="text-[10px] font-semibold uppercase tracking-wider text-amber-700/80">Background/WAV validation prep</span>
         <ul className="mt-1 list-disc pl-4 text-[10px] leading-relaxed text-amber-800/75">
           <li>Test with screen locked and app backgrounded; confirm audioState resumes after interruptions.</li>
-          <li>Verify listed WAV duration and bytes before playback; keep cloud API keys dev-only.</li>
+          <li>Play each WAV before trusting transcript text; keep cloud API keys dev-only.</li>
         </ul>
       </div>
     </div>

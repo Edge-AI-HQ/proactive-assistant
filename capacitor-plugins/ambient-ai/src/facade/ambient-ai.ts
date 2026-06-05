@@ -7,6 +7,7 @@ import type {
   AmbientEventMap,
   AmbientEventName,
   AmbientLevelEvent,
+  AudioDiagnosticEvent,
   AudioErrorEvent,
   AudioState,
   BatterySnapshot,
@@ -14,6 +15,7 @@ import type {
   CalendarSummaryEvent,
   ContactsSnapshot,
   CaptureReadyEvent,
+  CaptureSessionRotatedEvent,
   DeviceStateSnapshot,
   FocusEvent,
   HeartRateEvent,
@@ -46,7 +48,7 @@ export const AmbientAi: AmbientAiFacade = {
       const result = await native.audio.drainPendingTranscripts();
       return result.transcripts;
     },
-    listRecentCaptures: () => native.audio.listRecentCaptures(),
+    listRecentCaptures: (options) => native.audio.listRecentCaptures(options),
     readCapture: (options) => native.audio.readCapture(options),
     markCaptureProcessed: (options) => native.audio.markCaptureProcessed(options),
     playCapture: (options) => native.audio.playCapture(options),
@@ -181,6 +183,8 @@ function addListener<K extends AmbientEventName>(
       return native.sensor.addListener('altimeter', listenerFunc as (event: AmbientEventMap['altimeter']) => void);
     case 'ambientLevel':
       return native.audio.addListener('ambientLevel', listenerFunc as (event: AmbientLevelEvent) => void);
+    case 'audioDiagnostic':
+      return native.audio.addListener('audioDiagnostic', listenerFunc as (event: AudioDiagnosticEvent) => void);
     case 'audioError':
       return native.audio.addListener('audioError', listenerFunc as (event: AudioErrorEvent) => void);
     case 'audioState':
@@ -197,6 +201,8 @@ function addListener<K extends AmbientEventName>(
       return native.audio.addListener('captureReady', listenerFunc as (event: CaptureReadyEvent) => void);
     case 'captureDiscarded':
       return native.audio.addListener('captureDiscarded', listenerFunc as (event: AmbientEventMap['captureDiscarded']) => void);
+    case 'captureSessionRotated':
+      return native.audio.addListener('captureSessionRotated', listenerFunc as (event: CaptureSessionRotatedEvent) => void);
     case 'deviceState':
       return native.device.addListener('deviceState', listenerFunc as (event: DeviceStateSnapshot) => void);
     case 'focus':

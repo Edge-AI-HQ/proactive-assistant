@@ -56,6 +56,7 @@ vi.mock("@pin/capacitor-ambient-ai", () => {
               capturedAt: "2026-05-10T09:00:00.000Z",
               durationMs: 1500,
               byteSize: 48044,
+              triggerSource: "background_continuous",
             },
           ],
         }),
@@ -94,6 +95,9 @@ describe("AmbientAudioDebugPanel", () => {
     expect((screen.getByLabelText("Pre-roll ms") as HTMLInputElement).value).toBe("2000");
     expect((screen.getByLabelText("Post-roll ms") as HTMLInputElement).value).toBe("10000");
     expect((screen.getByLabelText("Max burst ms") as HTMLInputElement).value).toBe("30000");
+    expect((screen.getByLabelText("WAV retention ttl ms") as HTMLInputElement).value).toBe("604800000");
+    expect((screen.getByLabelText("WAV max bytes") as HTMLInputElement).value).toBe("3221225472");
+    expect((screen.getByLabelText("WAV max files") as HTMLInputElement).value).toBe("10000");
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /apply audio config/i }));
@@ -103,6 +107,9 @@ describe("AmbientAudioDebugPanel", () => {
       preRollMs: 2000,
       postRollMs: 10000,
       maxBurstMs: 30000,
+      wavRetentionTtlMs: 604800000,
+      wavMaxBytes: 3221225472,
+      wavMaxFiles: 10000,
     }));
   });
 
@@ -118,6 +125,7 @@ describe("AmbientAudioDebugPanel", () => {
     fireEvent.change(screen.getByLabelText("Post-roll ms"), { target: { value: "1300" } });
     fireEvent.change(screen.getByLabelText("Max burst ms"), { target: { value: "9000" } });
     fireEvent.change(screen.getByLabelText("WAV retention ttl ms"), { target: { value: "3600000" } });
+    fireEvent.change(screen.getByLabelText("WAV max bytes"), { target: { value: "524288000" } });
     fireEvent.change(screen.getByLabelText("WAV max files"), { target: { value: "7" } });
 
     await act(async () => {
@@ -134,6 +142,7 @@ describe("AmbientAudioDebugPanel", () => {
       postRollMs: 1300,
       maxBurstMs: 9000,
       wavRetentionTtlMs: 3600000,
+      wavMaxBytes: 524288000,
       wavMaxFiles: 7,
     });
     expect(await screen.findByText("Config applied")).toBeTruthy();
@@ -189,6 +198,7 @@ describe("AmbientAudioDebugPanel", () => {
     expect(await screen.findByText("wav-1")).toBeTruthy();
     expect(screen.getByText(/1\.5s/)).toBeTruthy();
     expect(screen.getByText(/48\.0 KB/)).toBeTruthy();
+    expect(screen.getByText(/background_continuous/i)).toBeTruthy();
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /play wav-1/i }));
@@ -285,7 +295,9 @@ describe("AmbientAudioDebugPanel", () => {
     expect(screen.getByText("audioError")).toBeTruthy();
     expect(screen.getByText(/cloud: refine timeout/i)).toBeTruthy();
     expect(screen.getByText("captureDiscarded")).toBeTruthy();
-    expect(screen.getByText(/silent_audio/i)).toBeTruthy();
+    expect(screen.getAllByText(/silent_audio/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/discarded: 1/i)).toBeTruthy();
+    expect(screen.getByText(/last: silent_audio/i)).toBeTruthy();
   });
 
 
@@ -399,6 +411,6 @@ describe("AmbientAudioDebugPanel", () => {
 
     expect(screen.getByText(/Background\/WAV validation prep/i)).toBeTruthy();
     expect(screen.getByText(/Test with screen locked and app backgrounded/i)).toBeTruthy();
-    expect(screen.getByText(/Verify listed WAV duration and bytes before playback/i)).toBeTruthy();
+    expect(screen.getByText(/Play each WAV before trusting transcript text/i)).toBeTruthy();
   });
 });

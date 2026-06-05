@@ -45,6 +45,20 @@ export interface LiveSessionData {
   messages: LiveAssistMessage[];
 }
 
+export interface LiveHistoryTranscript {
+  id: string;
+  captureSessionId: string;
+  occurredAt: string;
+  text: string;
+  source?: string;
+}
+
+export interface AmbientLiveSessionState {
+  current: LiveSessionData | null;
+  history: LiveHistoryTranscript[];
+  contextItems: LiveSessionContextItem[];
+}
+
 export interface LiveTranscriptUpdate {
   captureSessionId: string;
   id: string;
@@ -54,7 +68,10 @@ export interface LiveTranscriptUpdate {
 }
 
 const MAX_LIVE_MESSAGES = 30;
+const CURRENT_LIVE_FRESHNESS_MS = 120_000;
 const LIVE_SESSION_TITLE_MAX = 64;
+const MAX_HISTORY_TRANSCRIPTS = 5;
+const MAX_REPLAY_TRANSCRIPTS = 10_000;
 const MAX_CONTEXT_WINDOWS = 8;
 const MAX_SESSION_SIGNALS = 5;
 const MAX_CONTEXT_ASSISTS = 8;
@@ -126,10 +143,13 @@ export function appendLiveTranscript(
   update: LiveTranscriptUpdate,
 ): LiveSessionData {
   const text = update.text.trim();
-  if (isHiddenLiveTranscriptText(text)) {
-    return prev ?? emptyLiveSessionData(update.captureSessionId, update.receivedAt ?? Date.now());
-  }
   const receivedAt = update.receivedAt ?? Date.now();
+  if (isHiddenLiveTranscriptText(text)) {
+    return prev ?? emptyLiveSessionData(update.captureSessionId, receivedAt);
+  }
+  if (!isFreshLiveTimestamp(receivedAt)) {
+    return prev ?? emptyLiveSessionData(update.captureSessionId, receivedAt);
+  }
   const isNewSession = !prev || prev.captureSessionId !== update.captureSessionId;
   const startedAt = isNewSession ? receivedAt : prev.startedAt;
   const message: LiveAssistMessage = {
@@ -160,6 +180,15 @@ function upsertLiveMessage(
   return [...withoutListening, next];
 }
 
+function dedupeLiveMessages(messages: LiveAssistMessage[]): LiveAssistMessage[] {
+  const byId = new Map<string, LiveAssistMessage>();
+  for (const message of messages) {
+    byId.set(message.id, message);
+  }
+  return Array.from(byId.values())
+    .sort((a, b) => (a.sortTs ?? 0) - (b.sortTs ?? 0));
+}
+
 function emptyLiveSessionData(captureSessionId: string, startedAt: number): LiveSessionData {
   return {
     captureSessionId,
@@ -175,31 +204,50 @@ function isHiddenLiveTranscriptText(text: string): boolean {
 
 export function rawTranscriptEventsToLiveSessionData(
   events: AmbientRawEvent[],
+  maxItems = MAX_REPLAY_TRANSCRIPTS,
 ): LiveSessionData | null {
+  const messages = events
+    .filter((event) => event.sourceType === "transcript")
+    .filter((event) => event.eventType === "transcript.ready")
+    .sort((a, b) => Date.parse(a.occurredAt) - Date.parse(b.occurredAt))
+    .flatMap((event) => {
+      const text = transcriptTextFromRaw(event);
+      const sortTs = Date.parse(event.occurredAt);
+      if (!text || !Number.isFinite(sortTs)) return [];
+      return [{
+        id: transcriptBurstId(event) ?? event.id,
+        time: formatStartTimestamp(sortTs),
+        sortTs,
+        text,
+        source: transcriptProvider(event),
+      }];
+    });
+  const deduped = dedupeLiveMessages(messages).slice(-maxItems);
+  if (deduped.length === 0) return null;
+  const first = deduped[0];
+  const localDate = events.find((event) => event.localDate)?.localDate ?? "unknown";
+  return {
+    captureSessionId: `ambient-live-replay:${localDate}`,
+    startedAt: first.sortTs ?? Date.now(),
+    messages: deduped,
+  };
+}
+
+export function rawTranscriptEventsToHistory(
+  events: AmbientRawEvent[],
+  maxItems = MAX_HISTORY_TRANSCRIPTS,
+): LiveHistoryTranscript[] {
   const transcripts = events
     .filter((event) => event.sourceType === "transcript")
     .filter((event) => event.eventType === "transcript.ready")
-    .sort((a, b) => Date.parse(a.occurredAt) - Date.parse(b.occurredAt));
-  const latest = transcripts[transcripts.length - 1];
-  if (!latest) return null;
+    .sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt));
 
-  const captureSessionId = transcriptCaptureSessionId(latest);
-  const sessionEvents = transcripts.filter(
-    (event) => transcriptCaptureSessionId(event) === captureSessionId,
-  );
-  const startedAt = Date.parse(sessionEvents[0]?.occurredAt ?? latest.occurredAt);
-  const start = Number.isFinite(startedAt) ? startedAt : Date.now();
-  const messages = sessionEvents
-    .map((event) => rawTranscriptEventToMessage(event, start))
-    .filter((message): message is LiveAssistMessage => message !== null)
-    .slice(-MAX_LIVE_MESSAGES);
-
-  if (messages.length === 0) return null;
-  return {
-    captureSessionId,
-    startedAt: start,
-    messages,
-  };
+  return transcripts
+    .flatMap((event) => {
+      const item = rawTranscriptEventToHistory(event);
+      return item ? [item] : [];
+    })
+    .slice(0, maxItems);
 }
 
 export function liveSessionDataToSession(
@@ -209,10 +257,11 @@ export function liveSessionDataToSession(
 ): LiveSession | null {
   if (!ambientOn) return null;
   const hasTranscript = !!data && data.messages.length > 0;
-  const visibleContext = contextItems.slice(0, MAX_CONTEXT_ASSISTS);
+  const visibleContext = contextItems
+    .filter((item) => item.kind !== "transcript")
+    .slice(0, MAX_CONTEXT_ASSISTS);
   if (!hasTranscript && visibleContext.length === 0) return null;
-  const transcriptContextMessages = hasTranscript ? [] : transcriptContextToMessages(visibleContext);
-  const transcriptMessages = data?.messages ?? transcriptContextMessages;
+  const transcriptMessages = data?.messages ?? [];
   const hasDisplayTranscript = transcriptMessages.length > 0;
   const displayContext = hasDisplayTranscript
     ? visibleContext.filter((item) => item.kind !== "transcript")
@@ -286,17 +335,13 @@ export function rawEventsToLiveSessionContextItems(
 
 
 
-function rawTranscriptEventToMessage(
-  event: AmbientRawEvent,
-  _sessionStartedAt: number,
-): LiveAssistMessage | null {
+function rawTranscriptEventToHistory(event: AmbientRawEvent): LiveHistoryTranscript | null {
   const text = transcriptTextFromRaw(event);
   if (!text) return null;
-  const occurredAt = Date.parse(event.occurredAt);
   return {
     id: transcriptBurstId(event) ?? event.id,
-    time: Number.isFinite(occurredAt) ? formatStartTimestamp(occurredAt) : "live",
-    sortTs: Number.isFinite(occurredAt) ? occurredAt : undefined,
+    captureSessionId: transcriptCaptureSessionId(event),
+    occurredAt: event.occurredAt,
     text,
     source: transcriptProvider(event),
   };
@@ -500,24 +545,7 @@ function sessionSignals(
   ]).slice(0, MAX_SESSION_SIGNALS);
 }
 
-function transcriptContextToMessages(items: LiveSessionContextItem[]): LiveAssistMessage[] {
-  return items
-    .filter((item) => item.kind === "transcript")
-    .flatMap((item) => {
-      const text = item.transcriptText?.()?.trim();
-      if (!text || text.startsWith("Conversation window active")) return [];
-      return [{
-        id: item.id,
-        time: formatStartTimestamp(Date.parse(item.startedAt)),
-        sortTs: Date.parse(item.startedAt),
-        text,
-        source: "local transcript",
-      }];
-    });
-}
-
 function deviceLabelsForContext(items: LiveSessionContextItem[]): string[] {
-  if (items.some((item) => item.kind === "transcript")) return ["Microphone"];
   if (items.some((item) => item.kind === "health")) return ["HealthKit"];
   if (items.length > 0) return ["iPhone"];
   return [];
@@ -612,6 +640,10 @@ function latestRawEventsBySource(events: AmbientRawEvent[]): AmbientRawEvent[] {
 function isRecentRawEvent(event: AmbientRawEvent, now: Date): boolean {
   const ts = Date.parse(event.endedAt ?? event.occurredAt);
   return Number.isFinite(ts) && now.getTime() - ts <= RECENT_CONTEXT_WINDOW_MS;
+}
+
+function isFreshLiveTimestamp(timestamp: number): boolean {
+  return Date.now() - timestamp <= CURRENT_LIVE_FRESHNESS_MS;
 }
 
 function compactSummary(event: AmbientRawEvent): string {

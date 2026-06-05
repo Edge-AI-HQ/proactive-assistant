@@ -39,6 +39,8 @@ const TRANSCRIPT_SALIENCE = 0.7;
 const TRANSCRIPT_CONFIDENCE = 0.75;
 const SPEECH_LABEL = "speech";
 const DISABLED_TRANSCRIPT_PROVIDERS = new Set(["local_speech"]);
+const RECENT_CAPTURE_RECOVERY_BATCH_SIZE = 25;
+const RECENT_CAPTURE_RECOVERY_MAX_PAGES = 20;
 const LIVE_AUDIO_CONFIG = {
   preRollMs: 2_000,
   postRollMs: 2_500,
@@ -257,30 +259,40 @@ export class SoundClassifierSource implements AmbientSource {
   }
 
   private async transcribeUnhandledRecentCaptures(runId: number): Promise<void> {
-    let captures: RecentAudioCapture[];
-    try {
-      ({ captures } = await AmbientAi.audio.listRecentCaptures());
-    } catch (error) {
-      this.ctx.onEvent(this.key, `Recent capture scan failed: ${errorMessage(error)}`);
-      return;
-    }
-    if (!this.isRunActive(runId)) return;
-    for (const capture of captures) {
-      if (!this.isRunActive(runId)) return;
-      if (!capture.burstId || !capture.captureSessionId) continue;
-      if (this.storedTranscriptBurstIds.has(capture.burstId)) continue;
-      if (this.handledCaptureBurstIds.has(capture.burstId)) continue;
-      if (this.inFlightCaptureBurstIds.has(capture.burstId)) continue;
-      await this.handleCaptureReady({
-        platform: "ios",
-        wavId: capture.wavId,
-        burstId: capture.burstId,
-        captureSessionId: capture.captureSessionId,
-        capturedAt: capture.capturedAt,
-        durationMs: capture.durationMs,
-        byteSize: capture.byteSize,
-        triggerSource: "recent_capture_scan",
-      }, runId);
+    let cursor: string | undefined;
+    for (let page = 0; page < RECENT_CAPTURE_RECOVERY_MAX_PAGES; page += 1) {
+      let captures: RecentAudioCapture[];
+      try {
+        ({ captures } = await AmbientAi.audio.listRecentCaptures({
+          limit: RECENT_CAPTURE_RECOVERY_BATCH_SIZE,
+          cursor,
+          order: "desc",
+        }));
+      } catch (error) {
+        this.ctx.onEvent(this.key, `Recent capture scan failed: ${errorMessage(error)}`);
+        return;
+      }
+      if (!this.isRunActive(runId) || captures.length === 0) return;
+      for (const capture of captures) {
+        if (!this.isRunActive(runId)) return;
+        if (!capture.burstId || !capture.captureSessionId) continue;
+        if (this.storedTranscriptBurstIds.has(capture.burstId)) continue;
+        if (this.handledCaptureBurstIds.has(capture.burstId)) continue;
+        if (this.inFlightCaptureBurstIds.has(capture.burstId)) continue;
+        await this.handleCaptureReady({
+          platform: "ios",
+          wavId: capture.wavId,
+          burstId: capture.burstId,
+          captureSessionId: capture.captureSessionId,
+          capturedAt: capture.capturedAt,
+          durationMs: capture.durationMs,
+          byteSize: capture.byteSize,
+          triggerSource: "recent_capture_scan",
+        }, runId);
+      }
+      if (captures.length < RECENT_CAPTURE_RECOVERY_BATCH_SIZE) return;
+      cursor = captures[captures.length - 1]?.capturedAt;
+      if (!cursor) return;
     }
   }
 

@@ -2,6 +2,7 @@ import type { PluginListenerHandle } from "@capacitor/core";
 import {
   AmbientAi,
   type AudioState,
+  type CaptureSessionRotatedEvent,
   type SpeechBurstEvent,
   type TranscriptDraftEvent,
   type TranscriptRefinedEvent,
@@ -10,6 +11,7 @@ import {
 
 export type AmbientLiveTranscriptEvent =
   | { type: "audioState"; event: AudioState }
+  | { type: "captureSessionRotated"; event: CaptureSessionRotatedEvent }
   | { type: "speechBurst"; event: SpeechBurstEvent }
   | { type: "transcriptDraft"; event: TranscriptDraftEvent }
   | { type: "transcriptReady"; event: TranscriptReadyEvent }
@@ -26,6 +28,7 @@ export async function addAmbientLiveTranscriptListeners(
 ): Promise<PluginListenerHandle> {
   const handles = await Promise.all([
     AmbientAi.addListener("audioState", (event) => listener({ type: "audioState", event })),
+    AmbientAi.addListener("captureSessionRotated", (event) => listener({ type: "captureSessionRotated", event })),
     AmbientAi.addListener("speechBurst", (event) => listener({ type: "speechBurst", event })),
     AmbientAi.addListener("transcriptDraft", (event) => listener({ type: "transcriptDraft", event })),
     AmbientAi.addListener("transcriptReady", (event) => listener({ type: "transcriptReady", event })),
