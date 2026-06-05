@@ -21,3 +21,4 @@ apis/data
 apis/dist
 apis/public/proactive
 proactive-ai-frontend/dist
+proactive-ai-frontend/ios/DerivedData
