@@ -34,6 +34,9 @@ import type { UserDevice, UserDevicePlatform } from "@/lib/api";
 
 /* ──────────────── TIMELINE (today's narrative) ──────────────── */
 
+const LIVE_FULLSCREEN_VIEWPORT_FADE_MASK =
+  "linear-gradient(to bottom, rgba(0, 0, 0, 0.18) 0%, rgba(0, 0, 0, 0.32) 24%, rgba(0, 0, 0, 0.58) 48%, rgba(0, 0, 0, 0.82) 68%, black 86%, black 100%)";
+
 export type { AmbientTimelineAction };
 
 export interface TimelineEntry {
@@ -1153,8 +1156,8 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
           data-testid="live-fullscreen-messages"
           className="relative z-0 max-w-3xl mx-auto w-full h-full overflow-y-auto overscroll-contain scrollbar-none pr-1"
           style={{
-            WebkitMaskImage: "linear-gradient(to bottom, transparent 0%, black 14%, black 100%)",
-            maskImage: "linear-gradient(to bottom, transparent 0%, black 14%, black 100%)",
+            WebkitMaskImage: LIVE_FULLSCREEN_VIEWPORT_FADE_MASK,
+            maskImage: LIVE_FULLSCREEN_VIEWPORT_FADE_MASK,
           }}
         >
           <div className="min-h-full flex flex-col justify-end gap-4 pt-24 pb-8">

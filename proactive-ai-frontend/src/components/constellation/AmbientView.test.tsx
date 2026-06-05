@@ -445,7 +445,7 @@ describe("LiveFullscreen scrolling", () => {
     }
   });
 
-  test("keeps historical fullscreen rows readable instead of dimming by absolute age", () => {
+  test("fades fullscreen rows by viewport position instead of absolute age", () => {
     const { restore } = mockScrollTo();
     try {
       render(
@@ -457,6 +457,8 @@ describe("LiveFullscreen scrolling", () => {
 
       const scroller = screen.getByTestId("live-fullscreen-messages");
       expect(scroller.style.maskImage).toContain("linear-gradient");
+      expect(scroller.style.maskImage).toContain("rgba(0, 0, 0, 0.18)");
+      expect(scroller.style.maskImage).toContain("black 86%");
       expect(screen.getAllByTestId("live-fullscreen-assist-row")[0].style.opacity).toBe("");
     } finally {
       restore();
