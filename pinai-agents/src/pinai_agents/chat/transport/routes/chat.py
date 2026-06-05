@@ -43,12 +43,13 @@ from ...harness.session import (
     stream_events,
 )
 from ...harness.trim import trim_thread
+from ...tools.code_mode.lazy_sandbox import LazyThreadSandbox
 from ...tools.code_mode.local_sandbox import (
     create_local_sandbox_backend,
     local_chat_root_dir,
     use_local_sandbox,
 )
-from ...tools.code_mode.sandbox import evict_thread, get_or_create_thread_sandbox
+from ...tools.code_mode.sandbox import evict_thread
 from ..sse import chat_done, chat_error, langgraph_to_sse
 from ._session_auth import assert_session_key_principal
 
@@ -269,15 +270,16 @@ async def _stream(
     virtual_key = principal.virtual_key
     assert virtual_key is not None
 
-    # ── sandbox ──
+    # ── sandbox (lazy: the real Daytona sandbox is provisioned on the first
+    # file/exec tool call, NOT now — a pure-text turn never touches it) ──
     try:
-        backend = await _get_thread_backend(req.session_key, raw_jwt=raw_jwt)
+        backend = _get_thread_backend(req.session_key, raw_jwt=raw_jwt)
     except Exception as e:
         logger.exception(
-            "sandbox provisioning failed session_key=%s",
+            "sandbox backend init failed session_key=%s",
             req.session_key,
         )
-        yield chat_error(f"sandbox provisioning failed: {type(e).__name__}: {e}")
+        yield chat_error(f"sandbox backend init failed: {type(e).__name__}: {e}")
         yield chat_done()
         return
 
@@ -473,7 +475,7 @@ async def _stream(
                     )
 
 
-async def _get_thread_backend(session_key: str, *, raw_jwt: str) -> Any:
+def _get_thread_backend(session_key: str, *, raw_jwt: str) -> Any:
     if use_local_sandbox():
         root_dir = local_chat_root_dir(session_key)
         logger.info(
@@ -482,5 +484,7 @@ async def _get_thread_backend(session_key: str, *, raw_jwt: str) -> Any:
             root_dir,
         )
         return create_local_sandbox_backend(run_jwt=raw_jwt, root_dir=root_dir)
-    backend, _ = await get_or_create_thread_sandbox(session_key, run_jwt=raw_jwt)
-    return backend
+    # Daytona: hand back a lazy proxy. The real sandbox is provisioned on the
+    # first file/exec tool call, NOT now — a pure-text turn never touches
+    # Daytona (P1 root-cause fix for the prod hang).
+    return LazyThreadSandbox(session_key, run_jwt=raw_jwt)

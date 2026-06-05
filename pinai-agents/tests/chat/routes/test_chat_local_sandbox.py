@@ -3,8 +3,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-import pytest
-
 os.environ.setdefault("TAVILY_API_KEY", "test")
 
 from pinai_agents.chat.tools.code_mode import local_sandbox
@@ -16,8 +14,7 @@ def test_local_chat_root_dir_sanitizes_thread_id():
     assert root == Path("/state/chat/main-chat")
 
 
-@pytest.mark.anyio
-async def test_chat_route_uses_local_backend_when_enabled(monkeypatch):
+def test_chat_route_uses_local_backend_when_enabled(monkeypatch):
     sentinel = object()
     created: dict[str, object] = {}
 
@@ -29,13 +26,13 @@ async def test_chat_route_uses_local_backend_when_enabled(monkeypatch):
         created["root_dir"] = root_dir
         return sentinel
 
-    async def fail_daytona(*_args, **_kwargs):
-        raise AssertionError("Daytona should not be used in local sandbox mode")
+    def fail_lazy(*_args, **_kwargs):
+        raise AssertionError("LazyThreadSandbox must not be built in local sandbox mode")
 
     monkeypatch.setattr(chat, "create_local_sandbox_backend", fake_create)
-    monkeypatch.setattr(chat, "get_or_create_thread_sandbox", fail_daytona)
+    monkeypatch.setattr(chat, "LazyThreadSandbox", fail_lazy)
 
-    backend = await chat._get_thread_backend("thread-1", raw_jwt="jwt-1")
+    backend = chat._get_thread_backend("thread-1", raw_jwt="jwt-1")
 
     assert backend is sentinel
     assert created == {"run_jwt": "jwt-1", "root_dir": Path("/tmp/thread-1")}

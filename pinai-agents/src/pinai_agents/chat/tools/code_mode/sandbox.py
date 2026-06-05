@@ -51,6 +51,8 @@ import logging
 import os
 import time
 from collections import OrderedDict
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import daytona
@@ -89,6 +91,125 @@ _REGISTRY_MAX_ENTRIES = 256
 # Diagnostic correlation only — registry is the source of truth for
 # active sandboxes; this label just lets you eyeball Daytona dashboard.
 _LABEL_THREAD = "pinai-agents-thread-id"
+
+
+# ── Provision resilience (P0) ──
+#
+# Every Daytona blocking call runs on a DEDICATED bounded pool, never the
+# default asyncio executor. `asyncio.wait_for` cancels the *await* on
+# timeout but CANNOT kill the underlying thread — the SDK's sync HTTP call
+# keeps running until it returns. A dedicated, bounded pool caps how many
+# such stuck threads can pile up and isolates them from unrelated
+# `to_thread` work, so a Daytona outage can't exhaust the process-wide pool
+# and wedge every sandbox path (the failure mode behind the prod hang).
+_PROVISION_POOL_SIZE = 8
+_DAYTONA_EXECUTOR = ThreadPoolExecutor(
+    max_workers=_PROVISION_POOL_SIZE,
+    thread_name_prefix="daytona-provision",
+)
+
+# Outer asyncio ceilings (seconds). `resume` also passes the SDK's native
+# start timeout (forwarded to the HTTP `_request_timeout`); these wait_for
+# values sit just above it as the backstop for a wedged socket that ignores
+# the SDK timeout. `refresh`/`create` have no native timeout, so wait_for is
+# their only ceiling.
+_REFRESH_TIMEOUT_SEC = 20.0
+_RESUME_TIMEOUT_SEC = 90.0
+_CREATE_TIMEOUT_SEC = 150.0
+_SDK_START_TIMEOUT_SEC = 60.0
+
+
+class SandboxProvisionError(Exception):
+    """Thread-sandbox provisioning failed (timeout or unrecoverable Daytona
+    error). Raised so callers fail-open — surface a tool/chat error instead
+    of hanging the turn."""
+
+
+async def _run_blocking[T](fn: Callable[..., T], *args: object, timeout: float, what: str) -> T:
+    """Run a Daytona sync call on the dedicated pool under an outer timeout.
+
+    Raises `SandboxProvisionError` on timeout. The underlying thread may
+    still be running afterward (Python can't cancel it), but the bounded
+    pool caps the blast radius until the SDK call drains or errors out."""
+    loop = asyncio.get_running_loop()
+    try:
+        fut = loop.run_in_executor(_DAYTONA_EXECUTOR, lambda: fn(*args))
+    except RuntimeError as exc:
+        # Executor shut down (lifespan exit) while a stream was still
+        # provisioning. Surface as a normal provision error so the
+        # (DaytonaError, SandboxProvisionError) handlers catch it rather
+        # than a bare RuntimeError leaking past them.
+        raise SandboxProvisionError(f"{what} unavailable: provisioning pool shut down") from exc
+    try:
+        return await asyncio.wait_for(fut, timeout=timeout)
+    except TimeoutError as exc:
+        raise SandboxProvisionError(f"{what} timed out after {timeout:.0f}s") from exc
+
+
+# ── Circuit breaker (P2) ──
+#
+# When Daytona is down, every provision would otherwise burn its full
+# timeout budget before failing — slow, wasteful, and it keeps hammering a
+# dead dependency. After N consecutive provision failures the breaker
+# OPENS: provisioning fast-fails for a cooldown window WITHOUT touching
+# Daytona, so callers (LazyThreadSandbox → tool → SSE) degrade instantly
+# instead of every turn eating the timeout. After cooldown it goes
+# HALF-OPEN — the next attempt probes Daytona; success closes it, failure
+# restarts the cooldown. Single-threaded asyncio: plain module globals are
+# safe (no await between read and write in these helpers).
+_BREAKER_FAIL_THRESHOLD = 3
+_BREAKER_COOLDOWN_SEC = 60.0
+_breaker_failures = 0
+_breaker_opened_at: float | None = None
+
+
+def _breaker_fast_fail_if_open() -> None:
+    """Raise immediately if the breaker is OPEN and still within cooldown."""
+    if _breaker_opened_at is None:
+        return
+    elapsed = time.monotonic() - _breaker_opened_at
+    if elapsed < _BREAKER_COOLDOWN_SEC:
+        raise SandboxProvisionError(
+            f"sandbox provisioning circuit open "
+            f"({_breaker_failures} consecutive failures); "
+            f"retry in {_BREAKER_COOLDOWN_SEC - elapsed:.0f}s"
+        )
+    # Cooldown elapsed → HALF-OPEN: let this probe through.
+
+
+def _breaker_record_success() -> None:
+    global _breaker_failures, _breaker_opened_at
+    if _breaker_opened_at is not None:
+        # Only a HALF-OPEN probe (cooldown already elapsed) closes the
+        # breaker. A success from a concurrent thread while still inside the
+        # cooldown is NOT the probe — ignore it, so one in-flight success
+        # can't reopen the floodgates while Daytona is still half-dead.
+        if time.monotonic() - _breaker_opened_at >= _BREAKER_COOLDOWN_SEC:
+            logger.info("sandbox provisioning circuit CLOSED (recovered)")
+            _breaker_failures = 0
+            _breaker_opened_at = None
+    elif _breaker_failures > 0:
+        # CLOSED: decay ONE failure rather than wiping the count. Under
+        # concurrent provisioning against a half-dead Daytona, a single
+        # success in the burst must not erase other in-flight threads'
+        # accumulated failures — otherwise the count never reaches the
+        # threshold and the breaker never opens.
+        _breaker_failures -= 1
+
+
+def _breaker_record_failure() -> None:
+    global _breaker_failures, _breaker_opened_at
+    _breaker_failures += 1
+    if _breaker_failures >= _BREAKER_FAIL_THRESHOLD:
+        was_closed = _breaker_opened_at is None
+        _breaker_opened_at = time.monotonic()  # (re)open / restart cooldown
+        if was_closed:
+            logger.warning(
+                "sandbox provisioning circuit OPEN after %d consecutive failures — "
+                "fast-failing for %.0fs",
+                _breaker_failures,
+                _BREAKER_COOLDOWN_SEC,
+            )
 
 
 @dataclass
@@ -335,10 +456,11 @@ def _refresh_state_blocking(raw: daytona.Sandbox) -> daytona.SandboxState | None
 
 
 def _start_and_wait_blocking(raw: daytona.Sandbox) -> None:
-    """Resume a STOPPED sandbox. start() is async on Daytona's side; we
-    explicitly wait for STARTED so callers can immediately use the sandbox."""
-    raw.start()
-    raw.wait_for_sandbox_start()
+    """Resume a STOPPED sandbox. Pass the SDK's native timeout (forwarded to
+    the HTTP `_request_timeout`) so the blocking call can't wait forever even
+    when the outer `asyncio.wait_for`'s thread-cancel can't reach it."""
+    raw.start(_SDK_START_TIMEOUT_SEC)
+    raw.wait_for_sandbox_start(_SDK_START_TIMEOUT_SEC)
 
 
 def _state_name(state: object) -> str:
@@ -359,7 +481,9 @@ async def _validate_cached(
     unrecoverable and the cache entry should be dropped + recreated.
     """
     try:
-        state = await asyncio.to_thread(_refresh_state_blocking, raw)
+        state = await _run_blocking(
+            _refresh_state_blocking, raw, timeout=_REFRESH_TIMEOUT_SEC, what="refresh"
+        )
     except daytona.DaytonaNotFoundError:
         logger.info(
             "sandbox not found thread=%s id=%s — recreating",
@@ -367,7 +491,7 @@ async def _validate_cached(
             getattr(raw, "id", "?"),
         )
         return None
-    except daytona.DaytonaError as e:
+    except (daytona.DaytonaError, SandboxProvisionError) as e:
         # Auth / connection / rate-limit / timeout / validation — sandbox
         # state unknown this turn. Conservative: drop the cached entry and
         # let the create path retry, rather than hand back a backend whose
@@ -393,16 +517,26 @@ async def _validate_cached(
 
     if name == "stopped":
         # auto_stop fired between turns — restart.
+        logger.info("sandbox resume start thread=%s id=%s", thread_id, raw.id)
+        resume_started = time.monotonic()
         try:
-            await asyncio.to_thread(_start_and_wait_blocking, raw)
-        except Exception:
+            await _run_blocking(
+                _start_and_wait_blocking, raw, timeout=_RESUME_TIMEOUT_SEC, what="resume"
+            )
+        except Exception as e:
             logger.warning(
-                "sandbox start failed thread=%s id=%s — recreating",
+                "sandbox resume failed thread=%s id=%s err=%s — recreating",
                 thread_id,
                 raw.id,
+                type(e).__name__,
             )
             return None
-        logger.info("sandbox resumed thread=%s id=%s", thread_id, raw.id)
+        logger.info(
+            "sandbox resumed thread=%s id=%s in %.1fs",
+            thread_id,
+            raw.id,
+            time.monotonic() - resume_started,
+        )
         async with _LOCK:
             entry = _REGISTRY.get(thread_id)
             if entry is not None:
@@ -514,6 +648,17 @@ async def _create_or_coalesce(
         return await follower_future
     assert new_future is not None  # narrowed by the else branch above
 
+    # Circuit breaker: if Daytona has been failing repeatedly, fast-fail now
+    # without minting a phantom token or touching Daytona at all.
+    try:
+        _breaker_fast_fail_if_open()
+    except SandboxProvisionError as e:
+        async with _LOCK:
+            _CREATING.pop(thread_id, None)
+        if not new_future.done():
+            new_future.set_exception(e)
+        raise
+
     # Phantom token must be minted BEFORE Daytona create — env vars are
     # fixed at create time, no post-create mutation API.
     phantom_token: str | None = None
@@ -539,10 +684,15 @@ async def _create_or_coalesce(
             )
             raise
 
+    logger.info("sandbox create start thread_id=%s", thread_id)
+    create_started = time.monotonic()
     try:
-        raw = await asyncio.to_thread(_create_blocking, thread_id, env_vars)
+        raw = await _run_blocking(
+            _create_blocking, thread_id, env_vars, timeout=_CREATE_TIMEOUT_SEC, what="create"
+        )
     except Exception as e:
         _METRICS.create_errors += 1
+        _breaker_record_failure()
         async with _LOCK:
             _CREATING.pop(thread_id, None)
         if not new_future.done():
@@ -557,6 +707,8 @@ async def _create_or_coalesce(
                     reason="sandbox_create_failed",
                 )
         raise
+
+    _breaker_record_success()  # create succeeded → Daytona is healthy again
 
     # Bind the sandbox id back to the phantom row so we can revoke-by-id
     # later if the raw token isn't around. Bind failure is non-fatal —
@@ -584,10 +736,11 @@ async def _create_or_coalesce(
     if not new_future.done():
         new_future.set_result((backend, raw))
     logger.info(
-        "daytona sandbox created id=%s thread_id=%s scope=thread phantom=%s",
+        "daytona sandbox created id=%s thread_id=%s scope=thread phantom=%s in %.1fs",
         raw.id,
         thread_id,
         "yes" if phantom_token else "no",
+        time.monotonic() - create_started,
     )
     return backend, raw
 
@@ -682,7 +835,9 @@ async def create_oneshot_sandbox(
         env_vars["PAI_SANDBOX_TOKEN"] = phantom_token
 
     try:
-        raw = await asyncio.to_thread(_create_blocking, None, env_vars)
+        raw = await _run_blocking(
+            _create_blocking, None, env_vars, timeout=_CREATE_TIMEOUT_SEC, what="oneshot create"
+        )
     except Exception:
         if phantom_token and run_jwt:
             with contextlib.suppress(Exception):
@@ -754,14 +909,16 @@ async def shutdown_all_sandboxes() -> None:
         entries = list(_REGISTRY.items())
         _REGISTRY.clear()
         _CREATING.clear()
-    if not entries:
-        return
-    logger.info("shutdown: deleting %d cached sandboxes", len(entries))
-    for tid, entry in entries:
-        try:
-            await _best_effort_cleanup(entry, reason="shutdown")
-        except Exception:
-            logger.exception("shutdown sandbox cleanup failed thread=%s", tid)
+    if entries:
+        logger.info("shutdown: deleting %d cached sandboxes", len(entries))
+        for tid, entry in entries:
+            try:
+                await _best_effort_cleanup(entry, reason="shutdown")
+            except Exception:
+                logger.exception("shutdown sandbox cleanup failed thread=%s", tid)
+    # Drop the provision pool last — wait=False so a wedged Daytona call
+    # can't block lifespan shutdown; cancel_futures clears the queue.
+    _DAYTONA_EXECUTOR.shutdown(wait=False, cancel_futures=True)
 
 
 def registry_size() -> int:
@@ -776,5 +933,7 @@ def metrics_snapshot() -> dict[str, int]:
         "registry_size": len(_REGISTRY),
         "in_flight_creations": len(_CREATING),
         "registry_max": _REGISTRY_MAX_ENTRIES,
+        "breaker_failures": _breaker_failures,
+        "breaker_open": int(_breaker_opened_at is not None),
         **{f.name: getattr(_METRICS, f.name) for f in _METRICS.__dataclass_fields__.values()},
     }
