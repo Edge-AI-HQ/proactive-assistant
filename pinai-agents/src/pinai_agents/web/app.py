@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -216,6 +217,13 @@ def create_app() -> FastAPI:
         readiness probes for stricter gating).
         """
         out: dict[str, object] = {"status": "ok", "service": "pinai-agents-web"}
+        # Local-dev only: which git branch this web process is running, so a
+        # phone tunneled to :8000 can show (in the frontend DebugPanel) which
+        # worktree it's hitting. Injected by the Makefile via the local
+        # docker-compose.override.yml; unset in prod/CI → omitted here.
+        dev_label = os.environ.get("PINAI_DEV_LABEL")
+        if dev_label:
+            out["dev_label"] = dev_label
         pool: AsyncConnectionPool | None = getattr(app.state, "pool", None)
         if pool is None:
             out["db"] = "disabled"
