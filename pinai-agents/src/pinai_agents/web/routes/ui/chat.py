@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -30,14 +30,9 @@ from ....shared.api_models import (
     ChatInitResponse,
     ChatSendRequest,
 )
-from ....shared.sse_envelope import EV_CHAT_DELTA, EV_CHAT_DONE, emit
 from ...auth.deps import User, current_user, get_pool
 from ...db.repositories.chat_messages import ChatMessagesRepository
 from ...db.repositories.chat_threads import ChatThreadsRepository, ThreadKind
-from ...db.repositories.development_feedback import (
-    AddDevelopmentFeedbackInput,
-    DevelopmentFeedbackRepository,
-)
 from ...db.rls import user_scoped_tx
 from ...services.chat_proxy import (
     call_chat_exists,
@@ -105,75 +100,16 @@ async def _assert_session_owned(
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat-stream", tags=["chat"])
 
-_DEVELOPMENT_REQUEST_MARKERS = (
-    "add",
-    "support",
-    "change",
-    "improve",
-    "make",
-    "can you",
-    "could you",
-    "please",
-    "加",
-    "新增",
-    "支持",
-    "修改",
-    "改一下",
-    "能不能",
-    "可以",
-)
-_DEVELOPMENT_PRODUCT_MARKERS = (
-    "button",
-    "export",
-    "mic",
-    "microphone",
-    "ui",
-    "interface",
-    "screen",
-    "card",
-    "cards",
-    "setting",
-    "按钮",
-    "导出",
-    "麦克风",
-    "卡片",
-    "界面",
-    "页面",
-    "功能",
-    "设置",
-)
-
-
-def _is_chinese_text(text: str) -> bool:
-    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
-
-
-def _development_feedback_from_chat(body: ChatSendRequest) -> AddDevelopmentFeedbackInput | None:
-    text = body.message.strip()
-    if body.regenerate or not text:
-        return None
-    lowered = text.lower()
-    if not any(marker in lowered for marker in _DEVELOPMENT_REQUEST_MARKERS):
-        return None
-    if not any(marker in lowered for marker in _DEVELOPMENT_PRODUCT_MARKERS):
-        return None
-    surface: Literal["main_chat", "card_detail"] = (
-        "card_detail" if body.session_key.startswith(_CARD_THREAD_PREFIX) else "main_chat"
-    )
-    return AddDevelopmentFeedbackInput(
-        text=text,
-        category="feature",
-        surface=surface,
-        source="user",
-        conversation_id=body.session_key,
-        metadata={"capture": "chat_send_fast_path"},
-    )
-
-
-def _development_feedback_ack(message: str) -> str:
-    if _is_chinese_text(message):
-        return "已记录给开发团队，会作为产品改进意见 review。"
-    return "Recorded for the product team to review."
+# NOTE: Chat-send used to keyword-detect product/UI requests here and
+# short-circuit into pai_development_feedback without ever calling the
+# LLM, returning a canned "已记录给开发团队" reply. The markers were so
+# broad that normal user messages like "Can you summarize my cards?" or
+# "可以帮我看一下这张卡片吗" matched on (request marker × product noun)
+# substring pairs and got silently intercepted. Capture now lives only
+# on the agent path: the chat LLM has `development_feedback_log`
+# registered (see chat/tools/direct/__init__.py) and main_chat's prompt
+# routes genuine product/UI/feature requests to it. Keeps the feature
+# working but stops hijacking real chat turns.
 
 
 @router.post("/init", response_model=ChatInitResponse)
@@ -344,11 +280,8 @@ async def chat_send(
     # Cross-user isolation: the session_key must belong to this user before
     # we drive the chat worker against it (chat checkpoints have no RLS).
     # 403 otherwise — primary guard for /send.
-    development_feedback = _development_feedback_from_chat(body)
     async with user_scoped_tx(pool, user.id) as conn:
         await _assert_session_owned(body.session_key, user.id, conn)
-        if development_feedback is not None:
-            await DevelopmentFeedbackRepository(user.id, conn).add(development_feedback)
 
     async def _stream_and_persist():
         # Record the assistant turn off the SSE bytes as they flow to the
@@ -359,14 +292,6 @@ async def chat_send(
         # lazy-backfills from there on the next read).
         recorder = ChatTurnRecorder()
         try:
-            if development_feedback is not None:
-                for chunk in (
-                    emit(EV_CHAT_DELTA, {"delta": _development_feedback_ack(body.message)}),
-                    emit(EV_CHAT_DONE),
-                ):
-                    recorder.feed(chunk)
-                    yield chunk
-                return
             hints_dict = (
                 body.client_hints.model_dump(by_alias=False)
                 if body.client_hints is not None

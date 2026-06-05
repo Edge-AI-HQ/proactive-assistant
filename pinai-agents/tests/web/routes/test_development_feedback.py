@@ -123,16 +123,25 @@ async def test_agent_route_stamps_internal_operator_source(pool, user_ids):
 
 
 @pytest.mark.asyncio
-async def test_chat_send_fast_path_logs_development_feedback(pool, user_ids, monkeypatch):
+async def test_chat_send_does_not_intercept_normal_user_messages(pool, user_ids, monkeypatch):
+    """`/api/chat-stream/send` must always reach the LLM — no web-side
+    keyword fast-path silently logs the turn as dev feedback. Capture
+    flows only through the agent's `development_feedback_log` tool now.
+    """
     user_a, _ = user_ids
 
-    async def fake_stream_chat(**_kwargs):
+    seen: list[str] = []
+
+    async def fake_stream_chat(**kwargs):
+        seen.append(kwargs["message"])
         yield b"event: chat:done\ndata: {}\n\n"
 
     monkeypatch.setattr("pinai_agents.web.routes.ui.chat.stream_chat", fake_stream_chat)
     client = await _client_for(pool, user_a)
     session_key = f"main-{user_a}-devfeedback"
 
+    # This message previously matched the (request marker × product noun)
+    # fast-path heuristic and got silently converted to dev feedback.
     async with client:
         res = await client.post(
             "/api/chat-stream/send",
@@ -143,15 +152,13 @@ async def test_chat_send_fast_path_logs_development_feedback(pool, user_ids, mon
         )
 
     assert res.status_code == 200, res.text
+    # Now it must reach the chat worker like any other turn.
+    assert seen == ["Can you add an export button to these cards?"]
     async with user_scoped_tx(pool, user_a) as conn:
         rows = await DevelopmentFeedbackRepository(user_a, conn).list(status="new")
-
-    assert len(rows) == 1
-    assert rows[0].text == "Can you add an export button to these cards?"
-    assert rows[0].category == "feature"
-    assert rows[0].surface == "main_chat"
-    assert rows[0].conversation_id == session_key
-    assert rows[0].source == "user"
+    # And no row is silently written by the web layer; the LLM tool path
+    # is the only writer for user-sourced dev feedback.
+    assert rows == []
 
 
 @pytest.mark.asyncio
