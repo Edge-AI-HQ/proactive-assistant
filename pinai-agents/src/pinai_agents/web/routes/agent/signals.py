@@ -26,18 +26,21 @@ async def list_signals(
     status_filter: str = Query("open", alias="status", pattern="^(open|consumed|archived|all)$"),
     kind: str | None = Query(None),
     hours: int | None = Query(None, ge=1, le=24 * 14),
+    since: datetime | None = Query(None),
+    until: datetime | None = Query(None),
     min_salience: float | None = Query(None, ge=0, le=1, alias="minSalience"),
     limit: int = Query(30, ge=1, le=10_000),
+    offset: int = Query(0, ge=0),
     include_payload: bool = Query(False, alias="includePayload"),
 ):
     actual_status = None if status_filter == "all" else status_filter
-    since = None
-    before = None
+    lower_bound = since
+    before = until
     if hours is not None:
         from datetime import UTC, timedelta
 
         now = datetime.now(UTC)
-        since = now - timedelta(hours=hours)
+        lower_bound = now - timedelta(hours=hours)
         # `hours` means "past N hours"; without an upper bound, future
         # calendar-derived signals can crowd out genuinely recent device
         # signals in the DESC/LIMIT page that generator consumes.
@@ -48,9 +51,10 @@ async def list_signals(
             status=actual_status,
             kind=kind,
             min_salience=min_salience,
-            since=since,
+            since=lower_bound,
             before=before,
             limit=limit,
+            offset=offset,
         )
     items = []
     for r in rows:
@@ -76,7 +80,7 @@ async def list_signals(
                 }
             )
         items.append(item)
-    return {"items": items}
+    return {"items": items, "total": _total, "limit": limit, "offset": offset}
 
 
 def _ambient_speaker_preview(payload: dict[str, Any]) -> dict[str, str]:

@@ -1,0 +1,227 @@
+---
+title: "Eight-card Generation Runtime"
+description: "把卡片生成恢复到一次 8 张,同时控制在 10 分钟以内的设计与实施计划。"
+---
+
+# Eight-card Generation Runtime
+
+## 结论
+
+一次生成 8 张不能回到「完整 phase1 → 单个 writer → 单个 evaluator」的大上下文串行模式。
+
+目标架构是:
+
+1. 用 deterministic Context Builder 只收集一次数据。
+2. 收集层拿完整 24h / last-cycle window,再把 phase1 压缩成 source index。
+3. planner 只做选题,输出多于 8 个候选。
+4. 每张卡只携带自己的 source bundle,并行生成和评价。
+5. 如果 pass 不足目标数,用 top-up 再补一小批候选。
+6. 最后用轻量 final selection + rank 选出 8 张。
+7. card-thread fanout 限流,避免生成后又把 chat worker 打满。
+
+## 目标
+
+- 用户可见入口恢复 `cards_to_generate <= 8`。
+- 8 张卡端到端必须低于 10 分钟。
+- 目标健康值是 8 张低于 4 分钟。
+- 单个 LLM 调用 prompt 尽量低于 20k tokens。
+- 不允许 infra tombstone / ConnectError 占位卡入库。
+- 最终 8 张优先来自 `pass=true` evaluator 结果。
+
+## 当前问题
+
+旧 fixed pipeline 已经解决 root orchestrator 无限循环,但 1 张卡仍然约 125 秒、10 次调用、29 万 tokens。
+
+主要原因:
+
+- data collector 本质是确定性 IO,但旧版仍通过 DeepAgent 写脚本和执行。
+- 旧版 raw/signals 在收集层就有小 cap,会丢掉窗口内事实。
+- `phase1_json` 曾经完整传给 planner。
+- 同一个完整 `phase1_json` 曾经又传给 card-generator。
+- 同一个完整 `phase1_json` 曾经再传给 evaluator。
+- 生成后每张卡会触发 card-thread fanout,8 张时后台并发会放大。
+
+## 设计
+
+```mermaid
+flowchart TD
+  Collect["Deterministic Context Builder<br/>full 24h / last-cycle window"] --> Index["Source Index"]
+  Index --> Plan["Planner: 10-12 candidates"]
+  Plan --> Bundle["source bundle per plan item"]
+  Bundle --> Writers["parallel card writers"]
+  Writers --> Evals["parallel evaluators"]
+  Evals --> Topup["top-up when pass count is low"]
+  Topup --> Select["final selection"]
+  Select --> Rank["rule fallback rank"]
+  Rank --> Persist["persist top 8"]
+  Persist --> Fanout["rate-limited fanout"]
+```
+
+## 数据结构
+
+### SourceRecord
+
+每条可引用输入变成一个小记录:
+
+- `id`: 稳定 source id。
+- `source_type`: `signal` / `memory` / `gmail` / `gcal` / `world` / `raw` / `profile` / `preference`。
+- `title`: 短标题。
+- `snippet`: 可引用片段。
+- `timestamp`: 可选时间。
+- `salience`: 可选分数。
+- `citation`: writer 必须复制进 `sources[]` 的引用前缀。
+- `payload`: 截断后的局部 JSON。
+
+### SourceBundle
+
+每个 plan item 只拿:
+
+- planner 指定的 `primary_source_ids`。
+- matched pattern evidence 指向的 source。
+- 与 `decision / why_now_trigger / intent_key` 词面相关的少量补充 source。
+- profile / preference / recent cards 的压缩摘要。
+
+## 实施计划
+
+### Task 1: 恢复 8-card 请求边界
+
+修改:
+
+- `pinai-agents/src/pinai_agents/shared/api_models.py`
+- `pinai-agents/src/pinai_agents/chat/transport/routes/generate.py`
+- `pinai-agents/src/pinai_agents/web/scheduler/dispatcher.py`
+- `pinai-agents/src/pinai_agents/web/routes/ui/profile.py`
+- 对应 tests。
+
+验证:
+
+- `GenerateRequest(cards_to_generate=8)` 通过。
+- `cards_to_generate=9` 拒绝。
+- scheduler 对旧 payload clamp 到 8。
+
+### Task 2: 加 source index 和 compact planner input
+
+修改:
+
+- `pinai-agents/src/pinai_agents/chat/agents/generator.py`
+
+新增内部 helper:
+
+- `_build_source_index(phase1: dict[str, Any]) -> list[SourceRecord]`
+- `_compact_phase1_for_planner(...) -> dict[str, Any]`
+- `_source_bundle_for_plan_item(...) -> dict[str, Any]`
+
+验证:
+
+- 单元测试覆盖 memory / signal / gmail / connected_raw 的 source id 和 citation。
+- planner prompt 不再吃 raw full phase1。
+
+### Task 2.5: 用 deterministic Context Builder 替代 LLM data collector
+
+修改:
+
+- `pinai-agents/src/pinai_agents/chat/agents/generation_context.py`
+- `pinai-agents/src/pinai_agents/chat/agents/generator.py`
+- `pinai-agents/src/pinai_agents/chat/transport/routes/generate.py`
+- `pinai-agents/src/pinai_agents/web/scheduler/dispatcher.py`
+- `pinai-agents/src/pinai_agents/web/routes/agent/raw.py`
+- `pinai-agents/src/pinai_agents/web/routes/agent/signals.py`
+
+关键规则:
+
+- web 派发前查询上次成功 `pai_pipeline_runs.completed_at`。
+- context window = `min(last_success_at, now - 24h) → now`;没有上次成功则 `now - 24h → now`。
+- raw / signals 在收集层分页拉完窗口内行;`limit` 只是 page size,不是最终 cap。
+- planner / writer / evaluator 仍只看 compact source index / per-card source bundle。
+
+验证:
+
+- 单元测试覆盖 6h / 30h last-success window 规则。
+- raw route 支持 offset pagination。
+- signals route 支持 since / until / offset pagination。
+- Context Builder 测试覆盖 connected raw 多页拉取到耗尽。
+
+### Task 3: 并行单卡 writer
+
+修改:
+
+- `run_generator()`
+- card-generator prompt 输入从 full phase1 改成 `plan_item_json + source_bundle_json`。
+
+验证:
+
+- 用 fake structured model 测试多个 plan item 会并行调 writer。
+- writer stage 只收到 source bundle,不收到完整 phase1。
+
+### Task 4: 并行单卡 evaluator + final selection
+
+修改:
+
+- evaluator 输入改成 `card_json + source_bundle_json`。
+- 新增 `_rank_cards(cards, evaluations, limit)`。
+- 新增 `FinalSelection` 小上下文终选 stage,只看 card/eval summaries。
+
+验证:
+
+- `pass=true` 且 `overall` 高的卡优先。
+- 同 intent_key 只保留最高分。
+- goal basket 尽量分散,但不牺牲 pass 质量。
+- final selection 返回未知 key 或不足时,Python rank fallback 补齐。
+
+### Task 4.5: pass 不足时 top-up 一轮
+
+修改:
+
+- `run_generator()` 在初始候选评价后统计 `pass=true` 数量。
+- 如果少于目标数,用 top 40 sources 的 compact phase1 + existing intent keys + existing card summaries 再跑 planner。
+- top-up 只规划新 intent,最多 2 轮;第一轮最多 6 个候选,第二轮最多 4 个候选,然后复用 per-card writer/evaluator。
+- `cards_recent` 在 compact planner input 中保留 title / whyNow / summary / sources 摘要,避免 planner 用 `v2` / `v3` 变体绕过语义去重。
+- 若 top-up 后仍不足 8 张 non-duplicate pass 卡,最终可以少于 8 张;这表示当前数据不足,不是生成失败。
+
+验证:
+
+- 源码包含 `topup_planner` stage。
+- top-up 失败只记录 warning,不让整轮生成失败。
+- route 不拿 evaluator 明确判 duplicate 的 failed card 补数。
+
+### Task 5: fanout 限流
+
+修改:
+
+- `pinai-agents/src/pinai_agents/web/services/card_fanout.py`
+
+规则:
+
+- 默认只预热前 2 张卡。
+- 后续卡用户打开时按现有 fallback bootstrap。
+- 可用 env 调整上限。
+
+验证:
+
+- 8 张输入只 dispatch 2 个 fanout task。
+- 禁用 env 仍然跳过全部 fanout。
+
+### Task 6: 真实链路验收
+
+验证命令:
+
+```bash
+cd pinai-agents && uv run ruff check
+cd pinai-agents && uv run mypy src
+cd pinai-agents && TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:55436/postgres uv run pytest tests/shared/test_generate_request.py tests/web/scheduler/test_dispatcher.py tests/web/routes/test_generate_route.py tests/chat/agents/test_generator_preferences.py tests/chat/routes/test_generate_filtering.py tests/web/services/test_card_fanout.py
+```
+
+真实验收:
+
+- `make restart`
+- 插入 `cards_to_generate=8` 的 `generator.manual` 本地任务。
+- DB 确认 `pai_pipeline_runs.final_cards` 有 8 张或至少记录为什么不足。
+- LiteLLM 窗口统计 calls / tokens / max_prompt。
+- chat log 确认 duration < 600s。
+
+## 风险
+
+- 如果 source bundle 过窄,卡片可能漏掉更好的证据。缓解:每个 bundle 除 primary ids 外保留 top lexical matches。
+- 如果并发过高,会触发 LiteLLM/upstream rate limit。缓解:writer/evaluator concurrency 默认 4。
+- 如果 planner 只给少于 8 个有效计划,最终不足 8。缓解:planner 目标候选数设置为 `cards_to_generate + 4`,最多 12。
+- 如果 fanout 仍然全部预热,生成后 chat worker 会抖。缓解:默认 fanout top 2。

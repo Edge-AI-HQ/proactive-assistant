@@ -1,11 +1,15 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import pytest
 
 from pinai_agents.web.db.repositories.scheduled_tasks import ScheduledTasksRepository
 from pinai_agents.web.db.rls import service_tx, user_scoped_tx
-from pinai_agents.web.scheduler.dispatcher import DefaultDispatcher, _dream_result_fields
+from pinai_agents.web.scheduler.dispatcher import (
+    DefaultDispatcher,
+    _dream_result_fields,
+    _generation_context_since,
+)
 
 
 def test_generator_tasks_use_ten_minute_lease():
@@ -14,6 +18,20 @@ def test_generator_tasks_use_ten_minute_lease():
     assert dispatcher._lease_for("generator.manual") == 600
     assert dispatcher._lease_for("generator.auto") == 600
     assert dispatcher._lease_for("auto.dreaming") == 600
+
+
+def test_generation_context_since_covers_24h_or_last_success_cycle():
+    now = datetime(2026, 6, 4, 12, 0, tzinfo=UTC)
+
+    assert _generation_context_since(now=now, last_success_at=None) == now - timedelta(hours=24)
+    assert _generation_context_since(
+        now=now,
+        last_success_at=now - timedelta(hours=6),
+    ) == now - timedelta(hours=24)
+    assert _generation_context_since(
+        now=now,
+        last_success_at=now - timedelta(hours=30),
+    ) == now - timedelta(hours=30)
 
 
 def test_dream_result_fields_extracts_fenced_json_from_text_block_string():

@@ -22,7 +22,7 @@ from pinai_agents.web.db.repositories.personal_signals import (
     IngestSignalInput,
     PersonalSignalsRepository,
 )
-from pinai_agents.web.db.rls import user_scoped_tx
+from pinai_agents.web.db.rls import service_tx, user_scoped_tx
 from pinai_agents.web.routes.agent.signals import _ambient_speaker_preview
 
 
@@ -270,3 +270,133 @@ async def test_agent_raw_accepts_daily_dream_full_context_limit(client, user_ids
     )
     assert r.status_code == 200, r.text
     assert r.json()["items"] == []
+
+
+@pytest.mark.asyncio
+async def test_agent_raw_supports_offset_pagination(client, pool, user_ids):
+    user_a, _ = user_ids
+    now = datetime.now(UTC)
+    async with user_scoped_tx(pool, user_a) as conn:
+        await conn.execute(
+            """
+            INSERT INTO pai_raw_gmail_messages
+              (user_id, id, message_id, subject, occurred_at)
+            VALUES
+              (%s, 'raw_gmail_offset_0', 'msg_offset_0', 'Newest', %s),
+              (%s, 'raw_gmail_offset_1', 'msg_offset_1', 'Middle', %s),
+              (%s, 'raw_gmail_offset_2', 'msg_offset_2', 'Oldest', %s)
+            """,
+            (
+                user_a,
+                now,
+                user_a,
+                now - timedelta(minutes=1),
+                user_a,
+                now - timedelta(minutes=2),
+            ),
+        )
+
+    r = await client.get(
+        "/api/agent/raw/gmail/messages?limit=1&offset=1",
+        headers=_auth(user_a),
+    )
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert [item["id"] for item in body["items"]] == ["raw_gmail_offset_1"]
+    assert body["offset"] == 1
+    assert body["limit"] == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_signals_support_since_until_offset_pagination(client, pool, user_ids):
+    user_a, _ = user_ids
+    now = datetime.now(UTC)
+    async with user_scoped_tx(pool, user_a) as conn:
+        repo = PersonalSignalsRepository(user_a, conn)
+        for idx in range(3):
+            await repo.ingest_one(
+                IngestSignalInput(
+                    id=f"sig_context_page_{idx}",
+                    kind="context.test",
+                    title=f"context {idx}",
+                    summary=f"context summary {idx}",
+                    occurred_at=now - timedelta(minutes=idx),
+                    salience=0.7,
+                    source="test",
+                )
+            )
+
+    r = await client.get(
+        "/api/agent/signals/recent",
+        params={
+            "status": "all",
+            "since": (now - timedelta(hours=1)).isoformat(),
+            "until": (now + timedelta(seconds=1)).isoformat(),
+            "limit": 1,
+            "offset": 1,
+        },
+        headers=_auth(user_a),
+    )
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert [item["id"] for item in body["items"]] == ["sig_context_page_1"]
+    assert body["offset"] == 1
+    assert body["limit"] == 1
+    assert body["total"] >= 3
+
+
+@pytest.mark.asyncio
+async def test_agent_world_supports_since_until_window(client, pool, user_ids):
+    user_a, _ = user_ids
+    now = datetime.now(UTC)
+    old_id = f"world_window_old_{user_a}"
+    future_id = f"world_window_future_{user_a}"
+    async with service_tx(pool) as conn:
+        await conn.execute(
+            """
+            INSERT INTO pai_world_signals
+              (id, provider, title, url, normalized_url, published_at)
+            VALUES
+              (%s, 'test', 'Old but in previous cycle', %s, %s, %s),
+              (%s, 'test', 'Future outside window', %s, %s, %s)
+            """,
+            (
+                old_id,
+                f"https://example.com/world-window-old-{user_a}",
+                f"https://example.com/world-window-old-{user_a}",
+                now - timedelta(hours=30),
+                future_id,
+                f"https://example.com/world-window-future-{user_a}",
+                f"https://example.com/world-window-future-{user_a}",
+                now + timedelta(hours=2),
+            ),
+        )
+    async with user_scoped_tx(pool, user_a) as conn:
+        await conn.execute(
+            """
+            INSERT INTO pai_world_signal_user_view
+              (user_id, world_signal_id, salience, status)
+            VALUES
+              (%s, %s, 0.5, 'open'),
+              (%s, %s, 0.9, 'open')
+            """,
+            (user_a, old_id, user_a, future_id),
+        )
+
+    r = await client.get(
+        "/api/agent/world/recent",
+        params={
+            "status": "open",
+            "since": (now - timedelta(hours=36)).isoformat(),
+            "until": now.isoformat(),
+            "limit": 10,
+        },
+        headers=_auth(user_a),
+    )
+
+    assert r.status_code == 200, r.text
+    ids = [item["id"] for item in r.json()["items"]]
+    assert old_id in ids
+    assert future_id not in ids

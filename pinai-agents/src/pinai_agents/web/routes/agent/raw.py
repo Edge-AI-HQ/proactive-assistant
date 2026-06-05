@@ -6,7 +6,8 @@ LLM injection where a tool param ends up in a table name). Each table
 has the same shared envelope: id + occurred_at + ingested_at +
 dedupe_key + payload columns; reader returns rows verbatim.
 
-Filters: ?since=<iso> ?until=<iso> ?limit=N. Optional ?dedupeKey=<exact>.
+Filters: ?since=<iso> ?until=<iso> ?limit=N ?offset=N.
+Optional ?dedupeKey=<exact>.
 Order: occurred_at DESC.
 """
 
@@ -64,6 +65,7 @@ async def list_raw(
     since: datetime | None = Query(None),
     until: datetime | None = Query(None),
     limit: int = Query(50, ge=1, le=10_000),
+    offset: int = Query(0, ge=0),
     dedupe_key: str | None = Query(None, alias="dedupeKey"),
 ):
     """Read recent rows from the typed raw table for (toolkit, entity).
@@ -81,7 +83,7 @@ async def list_raw(
           AND (%s::timestamptz IS NULL OR occurred_at <= %s)
           AND (%s::text IS NULL OR dedupe_key = %s)
         ORDER BY occurred_at DESC
-        LIMIT %s
+        LIMIT %s OFFSET %s
     """
     async with user_scoped_tx(pool, run.user_id) as conn:
         cur = await conn.execute(
@@ -95,12 +97,15 @@ async def list_raw(
                 dedupe_key,
                 dedupe_key,
                 limit,
+                offset,
             ),
         )
         rows = await cur.fetchall()
     return {
         "toolkit": toolkit,
         "entity": entity,
+        "limit": limit,
+        "offset": offset,
         "items": [_row_to_dict(r) for r in rows],
     }
 

@@ -37,20 +37,26 @@ async def list_world_signals(
     ),
     provider: str | None = Query(None),
     hours: int | None = Query(None, ge=1, le=24 * 14),
+    since: datetime | None = Query(None),
+    until: datetime | None = Query(None),
     min_salience: float | None = Query(None, ge=0, le=1, alias="minSalience"),
     limit: int = Query(30, ge=1, le=200),
 ):
     actual_status = None if status_filter == "all" else status_filter
-    since = None
+    lower_bound = since
+    before = until
     if hours is not None:
-        since = datetime.now(UTC) - timedelta(hours=hours)
+        now = datetime.now(UTC)
+        lower_bound = now - timedelta(hours=hours)
+        before = now
     async with user_scoped_tx(pool, run.user_id) as conn:
         repo = WorldSignalsRepository(run.user_id, conn)
         rows = await repo.list_for_user(
             status=actual_status,
             provider=provider,
             min_salience=min_salience,
-            since=since,
+            since=lower_bound,
+            before=before,
             limit=limit,
         )
     return {

@@ -115,6 +115,7 @@ async def test_dispatch_fires_one_task_per_well_formed_card(monkeypatch):
     """One spawn per card with id + bootstrap message. Malformed entries
     (missing id, non-dict, empty bootstrap) are silently skipped."""
     monkeypatch.setenv("PINAI_CARD_FANOUT_ENABLED", "1")
+    monkeypatch.setenv("PINAI_CARD_FANOUT_LIMIT", "10")
     captured: list[tuple[int, str]] = []
 
     async def fake_bootstrap_one(
@@ -169,6 +170,50 @@ async def test_dispatch_fires_one_task_per_well_formed_card(monkeypatch):
     await asyncio.sleep(0)
     captured_card_ids = sorted(card_id for _, card_id in captured)
     assert captured_card_ids == ["card-A", "card-B", "card-C"]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_limits_default_preheated_cards(monkeypatch):
+    """8-card generation should not immediately fan out 8 card agents.
+    Default preheat is top 2; the rest still bootstrap on user open."""
+    monkeypatch.setenv("PINAI_CARD_FANOUT_ENABLED", "1")
+    monkeypatch.delenv("PINAI_CARD_FANOUT_LIMIT", raising=False)
+    captured: list[str] = []
+
+    async def fake_bootstrap_one(
+        *,
+        pool,
+        user_id,  # noqa: ARG001
+        card,
+        virtual_key,  # noqa: ARG001
+    ):
+        captured.append(card["id"])
+
+    with (
+        patch(
+            "pinai_agents.web.services.card_fanout._virtual_key_for",
+            new=AsyncMock(return_value="vk_test"),
+        ),
+        patch(
+            "pinai_agents.web.services.card_fanout._bootstrap_one_card",
+            new=fake_bootstrap_one,
+        ),
+    ):
+        dispatched = await card_fanout.dispatch_card_bootstrap(
+            pool=None,  # type: ignore[arg-type]
+            user_id=42,
+            final_cards=[
+                {"id": f"card-{i}", "title": f"Card {i}"}
+                for i in range(8)
+            ],
+        )
+
+    assert dispatched == ["card-0", "card-1"]
+
+    import asyncio  # noqa: PLC0415
+
+    await asyncio.sleep(0)
+    assert sorted(captured) == ["card-0", "card-1"]
 
 
 # ── _bootstrap_one_card short-circuits ─────────────────────────────────

@@ -136,8 +136,8 @@ reaper 索引:`idx_pai_schedrun_lease (status, lease_expires_at) WHERE status='r
 
 | Kind | 入口 | Lease | 备注 |
 |---|---|---|---|
-| `generator.manual` | in-process `_run_generator` → HTTP POST `/agent/generate` | **600s** | `/api/generate` 入队;用户可见链路,超过 10 分钟无结果就失败;手动生成不自动 retry。 |
-| `generator.auto` | 同上 | **600s** | 自动循环生成,由前端 settings 调 profile route 写 `interval_seconds`(默认从 migration `038_auto_generate_default_on.sql`)。 |
+| `generator.manual` | in-process `_run_generator` → HTTP POST `/agent/generate` | **600s** | `/api/generate` 入队;用户可见链路,默认/上限 8 张,超过 10 分钟无结果就失败;手动生成不自动 retry。 |
+| `generator.auto` | 同上 | **600s** | 自动循环生成,由前端 settings 调 profile route 写 `interval_seconds`(默认从 migration `038_auto_generate_default_on.sql`),每批最多 8 张。 |
 | `connector.init` | in-process `connector_ingest.run` | 60s | 拉一批 Composio 数据写 `pai_raw_*` + `pai_personal_signals` + 一次 `connector.evolve` once-shot。 |
 | `connector.sync` | 同上 | 60s | 增量拉取,用 cursor;成功才前推 cursor + 入 evolve。`connector.init` 跑完会保证一行 sync schedule(`cron */30 * * * *`)。 |
 | `connector.evolve` | HTTP POST `/agent/run/evolve` | **600s**(long-running) | chat 端 DeepAgents 把刚拉的 raw / signal 沉淀成 memory / skill。 |

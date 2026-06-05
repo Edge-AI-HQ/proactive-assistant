@@ -491,6 +491,7 @@ class Raw:
         since: datetime | str | None = None,
         until: datetime | str | None = None,
         limit: int = 50,
+        offset: int = 0,
         dedupe_key: str | None = None,
     ) -> list[dict[str, Any]]:
         """Read recent rows from a typed raw source.
@@ -502,6 +503,7 @@ class Raw:
         works; don't pass both.
 
         Returns rows ordered by `occurred_at DESC`, capped at `limit`.
+        Use `offset` for deterministic paging.
         """
         # Validate (toolkit, entity) early — saves a round-trip + gives
         # a clearer error than the server's 404. Server still enforces.
@@ -515,7 +517,7 @@ class Raw:
             )
             raise ValueError(msg)
 
-        params: dict[str, Any] = {"limit": limit}
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
         if since is not None:
             params["since"] = _iso(since)
         elif hours is not None:
@@ -669,7 +671,7 @@ class Composio(_Endpoint):
 
 class Preferences(_Endpoint):
     """High-weight user preferences stated in plain words in main chat.
-    Read by the generator's data-collector so the planner can treat the
+    Read by generation context collection so the planner can treat the
     most recent / highest-weight ones as near-hard constraints. Writes go
     through the chat agent's native tool, not usually the sandbox — but
     `add` / `supersede` are here for code-mode agents that distil a
@@ -857,7 +859,7 @@ client.world
 
 client.raw                                           # canonical entry: .list(toolkit, entity, ...)
   .list(toolkit, entity, *, hours=None, since=None, until=None,
-        limit=50, dedupe_key=None) -> list           # pass hours OR since, not both
+        limit=50, offset=0, dedupe_key=None) -> list # pass hours OR since, not both
   .gmail.recent(*, hours=24, limit=20) -> list       # convenience
   .gcal.today(*, hours=48, limit=20) -> list         # convenience
   # other toolkits: use .list("slack","messages"), .list("github","issues"),

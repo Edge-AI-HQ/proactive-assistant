@@ -72,7 +72,7 @@ client.world
 
 client.raw                                           # canonical entry: .list(toolkit, entity, ...)
   .list(toolkit, entity, *, hours=None, since=None, until=None,
-        limit=50, dedupe_key=None) -> list           # pass hours OR since, not both
+        limit=50, offset=0, dedupe_key=None) -> list # pass hours OR since, not both
   .gmail.recent(*, hours=24, limit=20) -> list       # convenience
   .gcal.today(*, hours=48, limit=20) -> list         # convenience
   # other toolkits: use .list("slack","messages"), .list("github","issues"),

@@ -61,11 +61,23 @@ logger = logging.getLogger(__name__)
 _PINNED_TASKS: set[asyncio.Task[Any]] = set()
 
 _CARD_THREAD_PREFIX = "card-thread-"
+_DEFAULT_FANOUT_LIMIT = 2
 
 
 def _fanout_enabled() -> bool:
     val = os.environ.get("PINAI_CARD_FANOUT_ENABLED", "1").strip().lower()
     return val not in ("0", "false", "no", "")
+
+
+def _fanout_limit() -> int:
+    raw = os.environ.get("PINAI_CARD_FANOUT_LIMIT")
+    if raw is None or raw.strip() == "":
+        return _DEFAULT_FANOUT_LIMIT
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        logger.warning("fanout: invalid PINAI_CARD_FANOUT_LIMIT=%r; using default", raw)
+        return _DEFAULT_FANOUT_LIMIT
 
 
 def _bootstrap_message_for(card: dict[str, Any]) -> str:
@@ -286,8 +298,20 @@ async def dispatch_card_bootstrap(
         )
         return []
 
+    limit = _fanout_limit()
+    if limit <= 0:
+        logger.info(
+            "fanout: PINAI_CARD_FANOUT_LIMIT=%d; skipping %d cards user=%d",
+            limit,
+            len(final_cards),
+            user_id,
+        )
+        return []
+
     dispatched: list[str] = []
     for card in final_cards:
+        if len(dispatched) >= limit:
+            break
         if not isinstance(card, dict):
             continue
         card_id = card.get("id")
