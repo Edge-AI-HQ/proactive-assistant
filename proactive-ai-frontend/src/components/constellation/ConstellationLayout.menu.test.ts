@@ -70,6 +70,10 @@ describe("ConstellationLayout menu order", () => {
 
   test("aligns top action buttons with the active page title safe-area height", () => {
     const layoutSource = readFileSync(join(__dirname, "ConstellationLayout.tsx"), "utf8");
+    // The NOW greeting (which carries the title's paddingTop) moved into
+    // NowView.tsx during god-component extraction; the top action buttons
+    // (top: ...) stay in the layout. Both still share the same var.
+    const nowViewSource = readFileSync(join(__dirname, "NowView.tsx"), "utf8");
     const ambientSource = readFileSync(join(__dirname, "AmbientView.tsx"), "utf8");
     const tasksSource = readFileSync(join(__dirname, "..", "ChatTimeline.tsx"), "utf8");
     const connectSource = readFileSync(join(__dirname, "..", "ControlPanel.tsx"), "utf8");
@@ -82,7 +86,7 @@ describe("ConstellationLayout menu order", () => {
       "max(4.5rem, calc(max(env(safe-area-inset-top, 0px), var(--safe-top, 0px)) + 0.75rem))",
     );
     expect(layoutSource).toContain('top: "var(--constellation-header-top)"');
-    expect(layoutSource).toContain('paddingTop: "var(--constellation-header-top)"');
+    expect(nowViewSource).toContain('paddingTop: "var(--constellation-header-top)"');
     expect(platformSource).toContain("--safe-top");
     expect(layoutSource).not.toContain('className="absolute top-12 right-5');
     expect(layoutSource).not.toContain('className={`-mt-1 p-2');
