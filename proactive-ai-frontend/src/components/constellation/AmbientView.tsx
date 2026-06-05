@@ -35,7 +35,7 @@ import type { UserDevice, UserDevicePlatform } from "@/lib/api";
 /* ──────────────── TIMELINE (today's narrative) ──────────────── */
 
 const LIVE_FULLSCREEN_VIEWPORT_FADE_MASK =
-  "linear-gradient(to bottom, rgba(0, 0, 0, 0.18) 0%, rgba(0, 0, 0, 0.32) 24%, rgba(0, 0, 0, 0.58) 48%, rgba(0, 0, 0, 0.82) 68%, black 86%, black 100%)";
+  "linear-gradient(to bottom, rgba(0, 0, 0, 0.18) 0%, rgba(0, 0, 0, 0.34) 22%, rgba(0, 0, 0, 0.62) 44%, rgba(0, 0, 0, 0.88) 62%, black 76%, black 100%)";
 
 export type { AmbientTimelineAction };
 

@@ -458,7 +458,7 @@ describe("LiveFullscreen scrolling", () => {
       const scroller = screen.getByTestId("live-fullscreen-messages");
       expect(scroller.style.maskImage).toContain("linear-gradient");
       expect(scroller.style.maskImage).toContain("rgba(0, 0, 0, 0.18)");
-      expect(scroller.style.maskImage).toContain("black 86%");
+      expect(scroller.style.maskImage).toContain("black 76%");
       expect(screen.getAllByTestId("live-fullscreen-assist-row")[0].style.opacity).toBe("");
     } finally {
       restore();
