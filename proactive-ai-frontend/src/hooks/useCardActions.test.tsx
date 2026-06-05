@@ -248,18 +248,33 @@ describe("useCardActions", () => {
     expect(result.current.processingIds.has("c1")).toBe(false);
   });
 
-  test("complete: keeps card processing when feedback persistence fails", async () => {
+  test("complete: clears spinner but does not mark done when feedback persistence fails", async () => {
+    // Two invariants live in this test, separated on purpose:
+    //   - `doneIds` stays in sync with the server: we ONLY claim
+    //     completion when the POST succeeded. (This is the
+    //     `fix(card-actions): sync completion state` invariant
+    //     from commit d2672ba3.)
+    //   - `processingIds` must drop on failure too — the user
+    //     has tapped the terminal "Done" action, so the
+    //     "Processing…" spinner that ChatTimeline / sphere render
+    //     should come off whether or not the server got the
+    //     message. Without this, a transient blip leaves the
+    //     card spinning on the sphere with no visible feedback
+    //     to the user (handleConfirmDone's `if (persisted ===
+    //     false) return;` early-out swallows the failure UI-side).
     (proxyPost as ReturnType<typeof vi.fn>).mockImplementation(
       async (_path: string, body: { action?: string }) => {
         if (body.action === "complete") return new Response("{}", { status: 500 });
         return new Response("{}", { status: 200 });
       },
     );
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn(), composio: stubComposio() }));
     await act(async () => {
       await result.current.confirm(baseCard);
     });
+    expect(result.current.processingIds.has("c1")).toBe(true);
 
     let persisted: boolean | undefined;
     await act(async () => {
@@ -268,7 +283,9 @@ describe("useCardActions", () => {
 
     expect(persisted).toBe(false);
     expect(result.current.doneIds.has("c1")).toBe(false);
-    expect(result.current.processingIds.has("c1")).toBe(true);
+    expect(result.current.processingIds.has("c1")).toBe(false);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 
   test("textFeedback: posts trimmed text; ignores empty/whitespace", async () => {

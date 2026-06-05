@@ -231,6 +231,16 @@ export function useCardActions({ onOpenChat, composio }: UseCardActionsOptions) 
   );
 
   const complete = useCallback(async (card: IntentCard) => {
+    // `complete` is the terminal Done action — typically fired from
+    // ChatDetailView.handleConfirmDone after the user explicitly
+    // confirms the card is finished. processingIds was set earlier
+    // by openChat / confirm to render the "Processing…" spinner on
+    // the sphere; once the user has answered "this is done", that
+    // spinner must come off whether or not the POST succeeded.
+    // Otherwise a transient blip on /feedback leaves the card spinning
+    // forever and the caller's `if (persisted === false) return;`
+    // silently no-ops with no visible feedback to the user.
+    let persisted = false;
     try {
       const res = await proxyPost("/feedback", {
         kind: "card_action",
@@ -240,17 +250,26 @@ export function useCardActions({ onOpenChat, composio }: UseCardActionsOptions) 
         basket: card.goalBasket,
         channel: "web",
       });
-      if (!res.ok) return false;
-    } catch {
-      return false;
+      persisted = res.ok;
+      if (!res.ok) {
+        console.warn(
+          `[card] complete POST failed: ${res.status} — clearing spinner so user can retry`,
+        );
+      }
+    } catch (err) {
+      console.warn("[card] complete POST threw — clearing spinner so user can retry", err);
+      persisted = false;
     }
-    setDoneIds((s) => new Set(s).add(card.id));
     setProcessingIds((s) => {
+      if (!s.has(card.id)) return s;
       const n = new Set(s);
       n.delete(card.id);
       return n;
     });
-    return true;
+    if (persisted) {
+      setDoneIds((s) => new Set(s).add(card.id));
+    }
+    return persisted;
   }, []);
 
   const openChat = useCallback(
