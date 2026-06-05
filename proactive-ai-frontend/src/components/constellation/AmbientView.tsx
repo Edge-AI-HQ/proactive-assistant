@@ -1149,7 +1149,7 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
       </div>
 
       {/* Streaming assist messages — scrollable history with bottom-follow when live. */}
-      <div className="relative flex-1 overflow-hidden px-5 md:px-12 pb-32">
+      <div className="relative flex-1 overflow-hidden px-5 md:px-12 pb-20">
         <div
           ref={messagesRef}
           onScroll={handleMessagesScroll}

@@ -464,6 +464,24 @@ describe("LiveFullscreen scrolling", () => {
       restore();
     }
   });
+
+  test("keeps the live message area close to the footer", () => {
+    const { restore } = mockScrollTo();
+    try {
+      render(
+        <LiveFullscreen
+          session={makeLiveFullscreenSession(["old", "current"])}
+          onClose={vi.fn()}
+        />,
+      );
+
+      const scrollerShell = screen.getByTestId("live-fullscreen-messages").parentElement;
+      expect(scrollerShell?.className).toContain("pb-20");
+      expect(scrollerShell?.className).not.toContain("pb-32");
+    } finally {
+      restore();
+    }
+  });
 });
 
 function makeLiveFullscreenSession(texts: string[]): LiveSession {
