@@ -97,7 +97,9 @@ describe("ConstellationLayout menu order", () => {
   });
 
   test("does not add extra top padding around the TASKS view", () => {
-    const source = readFileSync(join(__dirname, "ConstellationLayout.tsx"), "utf8");
+    // The activeView dispatch (incl. the TASKS branch) moved into
+    // ViewRouter during god-component extraction.
+    const source = readFileSync(join(__dirname, "ViewRouter.tsx"), "utf8");
     const tasksBranch = source.match(
       /\) : activeView === "chat" \? \(([\s\S]*?)\) : activeView === "ambient" \? \(/,
     );
@@ -110,9 +112,11 @@ describe("ConstellationLayout menu order", () => {
   test("provides shared card state to the TASKS view via context", () => {
     const source = readFileSync(join(__dirname, "ConstellationLayout.tsx"), "utf8");
     // cardsState/cardActions reach the Tasks timeline through CardStateContext
-    // (phase-2 de-prop-drilling), not 11 individual props.
+    // (phase-2 de-prop-drilling), not 11 individual props. The provider stays
+    // in the layout; the TASKS branch that consumes it moved into ViewRouter.
     expect(source).toContain("<CardStateProvider value={{ cardsState, cardActions }}>");
-    const tasksBranch = source.match(
+    const routerSource = readFileSync(join(__dirname, "ViewRouter.tsx"), "utf8");
+    const tasksBranch = routerSource.match(
       /\) : activeView === "chat" \? \(([\s\S]*?)\) : activeView === "ambient" \? \(/,
     );
     expect(tasksBranch).not.toBeNull();

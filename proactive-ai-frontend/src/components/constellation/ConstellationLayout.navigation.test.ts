@@ -28,8 +28,11 @@ describe("ConstellationLayout navigation wiring (characterization)", () => {
   });
 
   test("card chat back delegates to closeCardChat", () => {
+    // Card chat moved into ViewRouter (god-component extraction); the layout
+    // now passes its back handler down as onCardChatBack, still delegating
+    // to the hook's closeCardChat.
     const src = layoutSrc();
-    expect(src).toContain("onBack={() => closeCardChat()}");
+    expect(src).toContain("onCardChatBack={() => closeCardChat()}");
   });
 
   test("main chat back delegates to closeMainChat", () => {
@@ -38,8 +41,17 @@ describe("ConstellationLayout navigation wiring (characterization)", () => {
   });
 
   test("settings panel is controlled via the hook's sub-page state", () => {
+    // AccountPanel moved into ViewRouter; the layout threads the hook's
+    // sub-page state + setter down to ViewRouter, which binds them onto the
+    // AccountPanel's subPage / onSubPageChange.
     const src = layoutSrc();
-    expect(src).toContain("subPage={settingsSubPage}");
+    expect(src).toContain("settingsSubPage={settingsSubPage}");
     expect(src).toContain("onSubPageChange={setSettingsSubPage}");
+    const routerSrc = readFileSync(
+      join(here, "ViewRouter.tsx"),
+      "utf8",
+    );
+    expect(routerSrc).toContain("subPage={settingsSubPage}");
+    expect(routerSrc).toContain("onSubPageChange={onSubPageChange}");
   });
 });

@@ -9,7 +9,7 @@ import {
   type TouchEvent,
 } from "react";
 import { useNavigate } from "react-router-dom";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import {
   Menu, Zap, ListChecks, Settings, Pencil, Plug,
   ArrowRight, ChevronDown, Check, Cloud,
@@ -19,18 +19,14 @@ import bgGradient from "@/assets/bg-gradient.jpg";
 import AiSphere from "./AiSphere";
 import ChatTimeline from "./ChatTimeline";
 
-import AccountPanel from "./AccountPanel";
 import ConnectPanel from "./ConnectPanel";
-import AmbientView, { type TimelineEntry as AmbientTimelineEntry } from "./AmbientView";
-import ChatDetailView, { type ChatCard, brandSvg, detectToolIcon } from "./ChatDetailView";
+import { type TimelineEntry as AmbientTimelineEntry } from "./AmbientView";
+import { type ChatCard, brandSvg, detectToolIcon } from "./ChatDetailView";
 import { useCardExecutionRun } from "@/hooks/useCardExecutionRun";
 import CardChat from "@/components/CardChat";
 import { deleteAccount, DeleteAccountError } from "@/lib/api";
 import DebugPanel from "@/components/DebugPanel";
 import AgentRunIndicator from "@/components/AgentRunIndicator";
-import RealGoalsView from "@/components/GoalsView";
-import RealControlPanel from "@/components/ControlPanel";
-import RealChatTimeline from "@/components/ChatTimeline";
 import { CardStateProvider } from "./CardStateContext";
 import { useAuth } from "@/hooks/useAuth";
 import { useCardActions } from "@/hooks/useCardActions";
@@ -58,15 +54,13 @@ import {
   type TouchPoint,
 } from "./mainChatEntryGesture";
 import { useAppNavigation, type MenuId } from "./useAppNavigation";
-import SwipeBackLayer from "./SwipeBackLayer";
 import LiveOverlay from "./LiveOverlay";
 import MainChatOverlay from "./MainChatOverlay";
 import SideMenu from "./SideMenu";
 import CardDetailDrawer from "./CardDetailDrawer";
 import PaywallDrawer from "./PaywallDrawer";
-import NowView from "./NowView";
+import ViewRouter from "./ViewRouter";
 import {
-  realIntentToChatCard,
   realCardToLovableIntent,
   type Intent,
   type CardStatus,
@@ -624,149 +618,76 @@ export default function BigBallLayout() {
         </div>
 
         {/* Main content area */}
-        <AnimatePresence mode="wait" initial={false}>
-          <motion.div
-            key={
-              chatTarget
-                ? `card-chat-${chatTarget.card.id}`
-                : activeChat
-                  ? `chat-detail-${activeChat.id}`
-                  : activeView
+        <ViewRouter
+          chatTarget={chatTarget}
+          activeChat={activeChat}
+          activeView={activeView}
+          cardActions={cardActions}
+          composio={composio}
+          onCardChatBack={() => closeCardChat()}
+          displayName={displayName}
+          sphereCards={sphereCards}
+          ambientOn={ambientOn}
+          ambientTogglePending={ambientTogglePending}
+          weather={weather}
+          onOpenAmbient={() => navigateTo("ambient")}
+          onToggleAmbient={() => void handleToggleAmbient()}
+          onSphereCardTap={handleSphereCardTap}
+          onTasksOpenChat={(card, bootstrap) => {
+            openCardChat(
+              card,
+              bootstrap && bootstrap.trim().length > 0 ? bootstrap : undefined,
+            );
+          }}
+          onTasksOpenCardDetail={(card) => {
+            const status: CardStatus = cardActions.processingIds.has(card.id)
+              ? "processing"
+              : "normal";
+            setSelectedCard(realCardToLovableIntent(card, status));
+            setDrawerOpen(true);
+          }}
+          onConnectMore={() => navigateTo("connect")}
+          onOpenFullscreen={(s) => setLiveOverlay(s)}
+          onAmbientAction={handleAmbientAction}
+          settingsSubPage={settingsSubPage}
+          onSubPageChange={setSettingsSubPage}
+          userName={fullName || displayName}
+          avatarLetter={avatarLetter}
+          userEmail={user?.email ?? undefined}
+          onSignOut={() => void signOut()}
+          onDeleteAccount={async () => {
+            // Throws DeleteAccountError on fail-fast abort
+            // (Supabase Auth or DB cascade); panel surfaces the
+            // message. External partial failures (composio /
+            // litellm / stripe / browserbase / storage) come back
+            // as fields on the result, not exceptions — the
+            // cascade still succeeded so we proceed to sign out.
+            let result;
+            try {
+              result = await deleteAccount();
+            } catch (err) {
+              if (err instanceof DeleteAccountError && err.partial) {
+                console.warn("Delete account partial state:", err.partial);
+              }
+              throw err;
             }
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="flex-1 overflow-hidden"
-          >
-            {chatTarget ? (
-              /* Real card chat: ChatDetailView now wraps MainChatView with
-                 session_key = `card-thread-<cardId>`. `bootstrap` is the
-                 Confirm-path's primaryAction text; the shared chat runtime
-                 auto-fires it only when the thread is empty. */
-              <SwipeBackLayer onBack={() => closeCardChat()} className="h-full">
-                <ChatDetailView
-                  card={realIntentToChatCard(chatTarget.card)}
-                  runId={chatTarget.card.id}
-                  bootstrap={chatTarget.bootstrap}
-                  onBack={() => closeCardChat()}
-                  // Sphere → TASKS lifecycle: Dismiss / Done in the
-                  // chat toolbar must POST /feedback so the card moves
-                  // off the sphere (dismissedIds / doneIds filter) and
-                  // shows as Dismissed / Completed in the TASKS view.
-                  // Without these the hook's cancel/confirmDone are
-                  // purely local UI flips.
-                  onDismissBackend={() => {
-                    return cardActions.dismiss(chatTarget.card);
-                  }}
-                  onDoneBackend={() => {
-                    return cardActions.complete(chatTarget.card);
-                  }}
-                />
-              </SwipeBackLayer>
-            ) : activeChat ? (
-              /* Legacy mock-card path. Kept so type-checking stays honest
-                 if mock data is reintroduced for demos. */
-              <SwipeBackLayer onBack={() => closeCardChat()} className="h-full">
-                <ChatDetailView
-                  card={activeChat as ChatCard}
-                  onBack={() => closeCardChat()}
-                />
-              </SwipeBackLayer>
-            ) : activeView === "now" ? (
-              <NowView
-                displayName={displayName}
-                sphereCards={sphereCards}
-                ambientOn={ambientOn}
-                ambientTogglePending={ambientTogglePending}
-                weather={weather}
-                onOpenAmbient={() => navigateTo("ambient")}
-                onToggleAmbient={() => void handleToggleAmbient()}
-                onCardTap={handleSphereCardTap}
-              />
-            ) : activeView === "chat" ? (
-              /* Real card history (old AppShell CHAT view). Reuses the
-                 shared /api/cards state from this layout so TASKS does not
-                 refetch on every tab entry. */
-              <RealChatTimeline
-                composio={composio}
-                onOpenChat={(card, bootstrap) => {
-                  openCardChat(
-                    card,
-                    bootstrap && bootstrap.trim().length > 0 ? bootstrap : undefined,
-                  );
-                }}
-                onOpenCardDetail={(card) => {
-                  const status: CardStatus = cardActions.processingIds.has(card.id)
-                    ? "processing"
-                    : "normal";
-                  setSelectedCard(realCardToLovableIntent(card, status));
-                  setDrawerOpen(true);
-                }}
-              />
-            ) : activeView === "ambient" ? (
-              <AmbientView
-                onConnectMore={() => navigateTo("connect")}
-                onOpenFullscreen={(s) => setLiveOverlay(s)}
-                onAmbientAction={handleAmbientAction}
-              />
-            ) : activeView === "profile" ? (
-              /* Real goals/memory/skill page (old AppShell GOALS view). */
-              <div className="h-full min-h-0 overflow-hidden">
-                <RealGoalsView composio={composio} />
-              </div>
-            ) : activeView === "connect" ? (
-              /* Real data + device connections + auto settings (old AppShell
-                 CONTROL view). Replaces Lovable's hardcoded ConnectPanel
-                 so users can actually wire Composio, devices, auto-generate
-                 and auto-dreaming. */
-              <div className="h-full overflow-y-auto">
-                <RealControlPanel composio={composio} />
-              </div>
-            ) : activeView === "account" ? (
-              <AccountPanel
-                subPage={settingsSubPage}
-                onSubPageChange={setSettingsSubPage}
-                userName={fullName || displayName}
-                avatarLetter={avatarLetter}
-                userEmail={user?.email ?? undefined}
-                onSignOut={() => void signOut()}
-                onDeleteAccount={async () => {
-                  // Throws DeleteAccountError on fail-fast abort
-                  // (Supabase Auth or DB cascade); panel surfaces the
-                  // message. External partial failures (composio /
-                  // litellm / stripe / browserbase / storage) come back
-                  // as fields on the result, not exceptions — the
-                  // cascade still succeeded so we proceed to sign out.
-                  let result;
-                  try {
-                    result = await deleteAccount();
-                  } catch (err) {
-                    if (err instanceof DeleteAccountError && err.partial) {
-                      console.warn("Delete account partial state:", err.partial);
-                    }
-                    throw err;
-                  }
-                  if (
-                    result.composioErrors.length > 0
-                    || result.litellmError
-                    || result.stripeError
-                    || result.browserbaseError
-                    || result.storageError
-                  ) {
-                    console.warn(
-                      "Delete account: non-fatal external failures",
-                      result,
-                    );
-                  }
-                  // signOut clears local/session storage and reloads
-                  // / — the actual app-state flush.
-                  await signOut();
-                }}
-              />
-            ) : null}
-          </motion.div>
-        </AnimatePresence>
+            if (
+              result.composioErrors.length > 0
+              || result.litellmError
+              || result.stripeError
+              || result.browserbaseError
+              || result.storageError
+            ) {
+              console.warn(
+                "Delete account: non-fatal external failures",
+                result,
+              );
+            }
+            // signOut clears local/session storage and reloads
+            // / — the actual app-state flush.
+            await signOut();
+          }}
+        />
 
         {/* ASK PIN AI — bottom-center entry into MainChat. Mirrors the
             minimalist constellation design (MinimalistNow): subtle pulse +
