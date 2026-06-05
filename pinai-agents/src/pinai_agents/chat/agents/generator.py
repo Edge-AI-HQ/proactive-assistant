@@ -727,6 +727,24 @@ def _compact_recent_cards(value: Any, limit: int = 12) -> list[dict[str, Any]]:
     return compacted
 
 
+# Composio's canonical slug ↔ the underscore-form slug the planner /
+# main-chat prompts emit (`connect:<slug>`, `[connect:<slug>]`). Only the
+# two Google connectors actually differ; everything else round-trips.
+# Keep this aligned with the prompt whitelist in _PLANNER_PROMPT /
+# _CARD_GENERATOR_PROMPT / main_chat.py and with the frontend ALIASES
+# table in proactive-ai-frontend/src/lib/toolkit-icons.ts.
+_COMPOSIO_TO_PROMPT_SLUG: dict[str, str] = {
+    "googlecalendar": "google_calendar",
+    "googledrive": "google_drive",
+}
+
+
+def _prompt_slug_for_toolkit(composio_slug: str | None) -> str | None:
+    if not composio_slug:
+        return None
+    return _COMPOSIO_TO_PROMPT_SLUG.get(composio_slug, composio_slug)
+
+
 def _compact_phase1_for_planner(
     phase1: dict[str, Any],
     source_index: list[dict[str, Any]],
@@ -771,14 +789,26 @@ def _compact_phase1_for_planner(
         # whether to emit a connector-guidance card (intent_key="connect:<slug>").
         # The full `connections` and `connected_raw` blobs are still in phase1
         # for downstream stages; planner only needs toolkit + status + label.
+        #
+        # `toolkit` is normalized to the prompt-friendly underscore form
+        # (`google_calendar`, `google_drive`) so the planner can do literal
+        # string dedup between `connections_summary[].toolkit` and the
+        # `connect:<slug>` keys it's instructed to emit. Without this the
+        # LLM sees Composio's `googlecalendar` but is told to write
+        # `connect:google_calendar`, and dedup becomes a fuzzy mental match
+        # that misfires on the two Google connectors.
         "connections_summary": [
-            {
-                "toolkit": _connection_toolkit(conn),
-                "status": conn.get("status"),
-                "label": conn.get("label"),
-            }
-            for conn in (phase1.get("connections") or [])
-            if isinstance(conn, dict) and _connection_toolkit(conn)
+            entry
+            for entry in (
+                {
+                    "toolkit": _prompt_slug_for_toolkit(_connection_toolkit(conn)),
+                    "status": conn.get("status"),
+                    "label": conn.get("label"),
+                }
+                for conn in (phase1.get("connections") or [])
+                if isinstance(conn, dict)
+            )
+            if entry["toolkit"]
         ],
     }
 
