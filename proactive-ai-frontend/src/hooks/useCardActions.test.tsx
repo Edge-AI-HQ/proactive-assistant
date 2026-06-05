@@ -2,7 +2,28 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { useCardActions } from "./useCardActions";
+import type { ComposioState } from "@/hooks/useComposio";
 import type { IntentCard } from "@/types/intent-card";
+
+// Minimal ComposioState stub. useCardActions only consults it via
+// tryHandleConnectorCard for the connect:* short-circuit, which never
+// fires in these tests because baseCard.intentKey starts with "work:".
+function stubComposio(): ComposioState {
+  return {
+    keyStatus: { configured: false },
+    connections: [],
+    statusLoading: false,
+    loadingConns: false,
+    loadStatus: vi.fn(async () => undefined),
+    loadConnections: vi.fn(async () => []),
+    connectToolkit: vi.fn(async () => ({ ok: true })),
+    disconnectAccount: vi.fn(async () => ({ ok: true })),
+    waitForToolkit: vi.fn(async () => ({ connected: true })),
+    cancelWait: vi.fn(),
+    isToolkitConnected: vi.fn(() => false),
+    reconnectAccount: vi.fn(async () => ({ ok: true })),
+  };
+}
 
 vi.mock("@/lib/api", () => ({
   proxyPost: vi.fn(async () => new Response("{}", { status: 200 })),
@@ -63,7 +84,7 @@ describe("useCardActions", () => {
       },
     );
 
-    const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn() }));
+    const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn(), composio: stubComposio() }));
     await waitFor(() => {
       expect(result.current.dismissedIds.has("d1")).toBe(true);
       expect(result.current.dismissedIds.has("d2")).toBe(true);
@@ -90,7 +111,7 @@ describe("useCardActions", () => {
       },
     );
 
-    const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn() }));
+    const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn(), composio: stubComposio() }));
     await waitFor(() => {
       expect(result.current.doneIds.has("c9")).toBe(true);
       expect(result.current.doneIds.has("c10")).toBe(true);
@@ -100,7 +121,7 @@ describe("useCardActions", () => {
 
   test("confirm: posts card_action + opens chat with primaryAction.label as bootstrap", async () => {
     const onOpenChat = vi.fn();
-    const { result } = renderHook(() => useCardActions({ onOpenChat }));
+    const { result } = renderHook(() => useCardActions({ onOpenChat, composio: stubComposio() }));
 
     await act(async () => {
       await result.current.confirm(baseCard);
@@ -120,7 +141,7 @@ describe("useCardActions", () => {
   });
 
   test("dismiss: posts kind=dismiss and adds to dismissedIds", async () => {
-    const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn() }));
+    const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn(), composio: stubComposio() }));
     await act(async () => {
       await result.current.dismiss(baseCard);
     });
@@ -135,7 +156,7 @@ describe("useCardActions", () => {
   });
 
   test("snooze: posts kind=snooze and hides via dismissedIds", async () => {
-    const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn() }));
+    const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn(), composio: stubComposio() }));
     await act(async () => {
       await result.current.snooze(baseCard);
     });
@@ -151,7 +172,7 @@ describe("useCardActions", () => {
 
   test("modify: posts card_action modify and opens chat with Steer bootstrap", async () => {
     const onOpenChat = vi.fn();
-    const { result } = renderHook(() => useCardActions({ onOpenChat }));
+    const { result } = renderHook(() => useCardActions({ onOpenChat, composio: stubComposio() }));
     await act(async () => {
       await result.current.modify(baseCard);
     });
@@ -173,7 +194,7 @@ describe("useCardActions", () => {
   });
 
   test("complete: posts card_action complete and moves processing → done", async () => {
-    const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn() }));
+    const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn(), composio: stubComposio() }));
     await act(async () => {
       await result.current.confirm(baseCard); // seed processing
     });
@@ -205,7 +226,7 @@ describe("useCardActions", () => {
       },
     );
 
-    const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn() }));
+    const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn(), composio: stubComposio() }));
     await act(async () => {
       await result.current.confirm(baseCard);
     });
@@ -235,7 +256,7 @@ describe("useCardActions", () => {
       },
     );
 
-    const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn() }));
+    const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn(), composio: stubComposio() }));
     await act(async () => {
       await result.current.confirm(baseCard);
     });
@@ -251,7 +272,7 @@ describe("useCardActions", () => {
   });
 
   test("textFeedback: posts trimmed text; ignores empty/whitespace", async () => {
-    const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn() }));
+    const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn(), composio: stubComposio() }));
     await act(async () => {
       await result.current.textFeedback(baseCard, "   ");
     });
@@ -271,7 +292,7 @@ describe("useCardActions", () => {
 
   test("chattedIds persists to sessionStorage across mounts", async () => {
     const { result, unmount } = renderHook(() =>
-      useCardActions({ onOpenChat: vi.fn() }),
+      useCardActions({ onOpenChat: vi.fn(), composio: stubComposio() }),
     );
     await act(async () => {
       await result.current.confirm(baseCard);
@@ -280,7 +301,7 @@ describe("useCardActions", () => {
     unmount();
 
     const { result: result2 } = renderHook(() =>
-      useCardActions({ onOpenChat: vi.fn() }),
+      useCardActions({ onOpenChat: vi.fn(), composio: stubComposio() }),
     );
     expect(result2.current.chattedIds.has("c1")).toBe(true);
   });

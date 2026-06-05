@@ -14,11 +14,13 @@
  * collapsed thinking-block expansion.
  */
 import type { ReactNode } from "react";
+import { Children, isValidElement, cloneElement, Fragment } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { Browser } from "@capacitor/browser";
 import { isNative } from "@/lib/platform";
+import { ConnectChip } from "@/components/ConnectChip";
 import CodeBlock from "./CodeBlock";
 
 interface MarkdownContentProps {
@@ -60,6 +62,51 @@ function nodeText(node: unknown): string {
   return "";
 }
 
+// Matches the literal `[connect:<slug>]` tag the chat agent emits per
+// the <connector_nudges> prompt section in main_chat.py. Slugs are
+// lower-case ASCII + underscore (gmail, google_calendar, etc.).
+const CONNECT_TAG_RE = /\[connect:([a-z_]+)\]/g;
+
+/**
+ * Walk React children produced by ReactMarkdown and replace any literal
+ * `[connect:<slug>]` substrings inside string children with an inline
+ * <ConnectChip slug={slug} />. Recurses into nested elements (e.g.
+ * <em>, <strong>) so a tag wrapped in emphasis still renders correctly.
+ * Code / pre blocks bypass this because their renderer doesn't call
+ * `transformChildren`.
+ */
+function transformChildren(children: ReactNode): ReactNode {
+  if (children == null) return children;
+  if (Array.isArray(children)) {
+    return Children.map(children, (child, i) => (
+      <Fragment key={i}>{transformChildren(child)}</Fragment>
+    ));
+  }
+  if (typeof children === "string") {
+    if (!children.includes("[connect:")) return children;
+    const parts: ReactNode[] = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    CONNECT_TAG_RE.lastIndex = 0;
+    while ((match = CONNECT_TAG_RE.exec(children)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push(children.slice(lastIndex, match.index));
+      }
+      parts.push(<ConnectChip key={`c-${match.index}`} toolkit={match[1]} />);
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex < children.length) parts.push(children.slice(lastIndex));
+    return parts.length === 1 ? parts[0] : <>{parts}</>;
+  }
+  if (isValidElement(children)) {
+    const element = children as React.ReactElement<{ children?: ReactNode }>;
+    const inner = element.props?.children;
+    if (inner == null) return children;
+    return cloneElement(element, undefined, transformChildren(inner));
+  }
+  return children;
+}
+
 export default function MarkdownContent({
   text,
   muted = false,
@@ -72,27 +119,27 @@ export default function MarkdownContent({
       <p
         className={`text-[13px] leading-relaxed my-2 first:mt-0 last:mb-0 ${bodyColor}`}
       >
-        {children}
+        {transformChildren(children)}
       </p>
     ),
     h1: ({ children }) => (
       <h1 className="text-display text-[17px] font-semibold text-foreground tracking-tight mt-3.5 mb-1.5 first:mt-0">
-        {children}
+        {transformChildren(children)}
       </h1>
     ),
     h2: ({ children }) => (
       <h2 className="text-display text-[15px] font-semibold text-foreground tracking-tight mt-3 mb-1.5 first:mt-0">
-        {children}
+        {transformChildren(children)}
       </h2>
     ),
     h3: ({ children }) => (
       <h3 className="text-[13.5px] font-semibold text-foreground mt-2.5 mb-1 first:mt-0">
-        {children}
+        {transformChildren(children)}
       </h3>
     ),
     h4: ({ children }) => (
       <h4 className="text-[11px] font-bold uppercase tracking-[0.12em] text-foreground/55 mt-2.5 mb-1 first:mt-0">
-        {children}
+        {transformChildren(children)}
       </h4>
     ),
     ul: ({ children }) => (
@@ -107,7 +154,7 @@ export default function MarkdownContent({
     ),
     li: ({ children }) => (
       <li className={`text-[13px] leading-relaxed pl-0.5 ${bodyColor}`}>
-        {children}
+        {transformChildren(children)}
       </li>
     ),
     strong: ({ children }) => (
@@ -196,7 +243,7 @@ export default function MarkdownContent({
       </th>
     ),
     td: ({ children }) => (
-      <td className={`px-2.5 py-1.5 align-top ${bodyColor}`}>{children}</td>
+      <td className={`px-2.5 py-1.5 align-top ${bodyColor}`}>{transformChildren(children)}</td>
     ),
     hr: () => <hr className="my-4 border-foreground/10" />,
     img: ({ src, alt }) => (

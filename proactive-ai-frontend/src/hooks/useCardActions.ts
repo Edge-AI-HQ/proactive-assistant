@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { proxyFetch, proxyPost } from "@/lib/api";
+import { tryHandleConnectorCard } from "@/lib/connector-card";
+import type { ComposioState } from "@/hooks/useComposio";
 import type { IntentCard } from "@/types/intent-card";
 
 const CHATTED_KEY = "proactive-ai:chattedCardIds";
@@ -34,6 +36,15 @@ export interface UseCardActionsOptions {
    *     现在复用 MainChatView，所以即使没有 bootstrap 也有底部全局 composer。
    */
   onOpenChat: (card: IntentCard, bootstrapMessage: string) => void;
+  /**
+   * Caller-owned Composio state. Injected (rather than this hook calling
+   * `useComposio()` itself) so the live shell shares ONE useComposio
+   * instance — otherwise every consumer of useCardActions would spawn its
+   * own /composio/status + /composio/connections poll on mount and hold
+   * its own connections[] state. Used by the connect:* short-circuit in
+   * `confirm` to skip the chat-open path and trigger OAuth directly.
+   */
+  composio: ComposioState;
 }
 
 /**
@@ -43,7 +54,7 @@ export interface UseCardActionsOptions {
  * 分 `card_action` / `dismiss` / `snooze` / `text_feedback`；`intentCardId` +
  * `basket` + `channel: "web"`），不动协议。
  */
-export function useCardActions({ onOpenChat }: UseCardActionsOptions) {
+export function useCardActions({ onOpenChat, composio }: UseCardActionsOptions) {
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
   const [doneIds, setDoneIds] = useState<Set<string>>(new Set());
   const [confirmedIds, setConfirmedIds] = useState<Set<string>>(new Set());
@@ -122,9 +133,18 @@ export function useCardActions({ onOpenChat }: UseCardActionsOptions) {
   const confirm = useCallback(
     async (card: IntentCard) => {
       const cardId = card.id;
+      // Connector-guidance card (intent_key="connect:<slug>"): kick off
+      // OAuth directly and mark the card done. Skip the chat-open path —
+      // the connect flow lives in the popup, not in a conversation.
+      const connectorSlug = tryHandleConnectorCard(card, composio);
       setConfirmedIds((s) => new Set(s).add(cardId));
-      setProcessingIds((s) => new Set(s).add(cardId));
-      persistChatted(cardId);
+      if (connectorSlug) {
+        // Treat as resolved — no follow-up chat, no processing spinner.
+        setDoneIds((s) => new Set(s).add(cardId));
+      } else {
+        setProcessingIds((s) => new Set(s).add(cardId));
+        persistChatted(cardId);
+      }
       try {
         await proxyPost("/feedback", {
           kind: "card_action",
@@ -137,6 +157,7 @@ export function useCardActions({ onOpenChat }: UseCardActionsOptions) {
       } catch {
         /* swallow; UI 已 optimistic */
       }
+      if (connectorSlug) return;
       // Prefer the agent task spec (agentPrompt) over the short button label.
       // Older cards lack agentPrompt → fall back to label / title.
       const bootstrap =
@@ -146,7 +167,7 @@ export function useCardActions({ onOpenChat }: UseCardActionsOptions) {
           || "").trim();
       onOpenChat(card, bootstrap);
     },
-    [onOpenChat, persistChatted],
+    [composio, onOpenChat, persistChatted],
   );
 
   const dismiss = useCallback(async (card: IntentCard) => {

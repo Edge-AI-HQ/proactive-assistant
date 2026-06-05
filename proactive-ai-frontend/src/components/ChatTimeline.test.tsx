@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 import type { ReactNode } from "react";
+import type { ComposioState } from "@/hooks/useComposio";
 import type { IntentCard } from "@/types/intent-card";
 
 type MockElementProps = { children?: ReactNode } & Record<string, unknown>;
@@ -50,6 +51,23 @@ const card: IntentCard = {
 
 import ChatTimeline from "./ChatTimeline";
 
+// Minimal ComposioState stub. The connect:* short-circuit never fires
+// in these tests because `card.intentKey` is undefined.
+const stubComposio: ComposioState = {
+  keyStatus: { configured: false },
+  connections: [],
+  statusLoading: false,
+  loadingConns: false,
+  loadStatus: vi.fn(async () => undefined),
+  loadConnections: vi.fn(async () => []),
+  connectToolkit: vi.fn(async () => ({ ok: true })),
+  disconnectAccount: vi.fn(async () => ({ ok: true })),
+  waitForToolkit: vi.fn(async () => ({ connected: true })),
+  cancelWait: vi.fn(),
+  isToolkitConnected: vi.fn(() => false),
+  reconnectAccount: vi.fn(async () => ({ ok: true })),
+};
+
 const noop = vi.fn();
 const baseProps = {
   cards: {
@@ -75,6 +93,7 @@ const baseProps = {
   onDoneId: noop,
   onProcessingId: noop,
   onChattedId: noop,
+  composio: stubComposio,
 };
 
 describe("ChatTimeline card detail routing", () => {

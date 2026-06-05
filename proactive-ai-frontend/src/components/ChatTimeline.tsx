@@ -13,7 +13,10 @@ import CardDetailBody from "./CardDetailBody";
 import type { IntentCard } from "@/types/intent-card";
 import { proxyPost } from "@/lib/api";
 import { basketMeta } from "@/lib/basket-meta";
+import { connectorSlugFromIntentKey, tryHandleConnectorCard } from "@/lib/connector-card";
+import { getToolkit } from "@/lib/toolkit-icons";
 import type { CardScore, UseCardsState } from "@/hooks/useCards";
+import type { ComposioState } from "@/hooks/useComposio";
 
 type TimelineCard = IntentCard & {
   runId: string;
@@ -41,6 +44,13 @@ interface ChatTimelineProps {
   onProcessingId: (id: string) => void;
   onChattedId: (id: string) => void;
   cards: UseCardsState;
+  /**
+   * Caller-owned Composio state. Injected so the live shell shares ONE
+   * useComposio instance (ConstellationLayout already has one). Used by
+   * the connect:* short-circuit in `handleConfirm` to trigger OAuth
+   * directly instead of opening a chat thread.
+   */
+  composio: ComposioState;
 }
 
 function formatTime(iso: string): string {
@@ -71,6 +81,7 @@ export default function ChatTimeline({
   onProcessingId,
   onChattedId,
   cards,
+  composio,
 }: ChatTimelineProps) {
   const [selectedCard, setSelectedCard] = useState<TimelineCard | null>(null);
 
@@ -91,9 +102,17 @@ export default function ChatTimeline({
   const handleConfirm = () => {
     if (!selectedCard) return;
     const cardId = selectedCard.id;
+    // Connector-guidance card (intent_key="connect:<slug>"): kick off
+    // OAuth directly and mark the card done. Do NOT open chat — the
+    // connector flow lives in the popup, not in a conversation.
+    const connectorSlug = tryHandleConnectorCard(selectedCard, composio);
     onConfirmId(cardId);
-    onProcessingId(cardId);
-    onChattedId(cardId);
+    if (connectorSlug) {
+      onDoneId(cardId);
+    } else {
+      onProcessingId(cardId);
+      onChattedId(cardId);
+    }
     proxyPost("/feedback", {
       kind: "card_action",
       action: "confirm",
@@ -103,6 +122,7 @@ export default function ChatTimeline({
       channel: "web",
     }).catch(() => {});
     setSelectedCard(null);
+    if (connectorSlug) return;
     // Send the card's primaryAction label (or fall back to title) as
     // the user's first message — that's what "Confirm" semantically
     // means. primaryAction is {label, type}; we send its label.
@@ -212,7 +232,12 @@ export default function ChatTimeline({
           <div className="space-y-2">
             {cards.map((card) => {
               const meta = basketMeta(card.goalBasket);
-              const CatIcon = meta.icon;
+              // Connector-guidance card (intent_key="connect:<slug>"):
+              // swap the basket icon for the toolkit icon so the row
+              // reads as "this is a Gmail/Calendar/… nudge" at a glance.
+              const connectorSlug = connectorSlugFromIntentKey(card.intentKey);
+              const toolkit = connectorSlug ? getToolkit(connectorSlug) : null;
+              const CatIcon = toolkit?.icon ?? meta.icon;
               const actionCount = card.secondaryActions?.length ?? 0;
               const isDismissed = dismissedIds.has(card.id);
               const isConfirmed = confirmedIds.has(card.id);

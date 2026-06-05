@@ -432,6 +432,7 @@ export default function BigBallLayout() {
       setDrawerOpen(false);
       setSelectedCard(null);
     },
+    composio,
   });
 
   useEffect(() => {
@@ -1032,6 +1033,7 @@ export default function BigBallLayout() {
                  refetch on every tab entry. */
               <RealChatTimeline
                 cards={cardsState}
+                composio={composio}
                 processingIds={cardActions.processingIds}
                 doneIds={cardActions.doneIds}
                 confirmedIds={cardActions.confirmedIds}

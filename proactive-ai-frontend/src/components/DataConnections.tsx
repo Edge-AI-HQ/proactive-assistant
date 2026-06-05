@@ -23,12 +23,11 @@ import {
   CircleDot,
   type LucideIcon,
 } from "lucide-react";
-import { Browser } from "@capacitor/browser";
 import type { ComposioState, Connection } from "@/hooks/useComposio";
 import { buildConnectorInitTaskId } from "@/hooks/useComposio";
 import { useInitTask, isInitTaskFresh } from "@/hooks/useInitTask";
 import { resolveComposioConnectionIdentity } from "@/lib/composioDisplayIdentity";
-import { isNative } from "@/lib/platform";
+import { openOAuthAndAwaitClose } from "@/lib/oauth-popup";
 
 /**
  * Small inline chip that polls a connector.init task and renders a
@@ -107,39 +106,6 @@ function InitTaskChip({ toolkit, connectedAccountId }: { toolkit: string; connec
       初始化中 · {progressDetail}
     </p>
   );
-}
-
-/** Resolves when the popup window is closed (+ 3s grace period for OAuth callback processing). */
-function windowClosed(win: Window | null): Promise<void> {
-  return new Promise((resolve) => {
-    if (!win) return;
-    const poll = setInterval(() => {
-      if (win.closed) {
-        clearInterval(poll);
-        setTimeout(resolve, 3000);
-      }
-    }, 1000);
-  });
-}
-
-/**
- * Opens OAuth URL and resolves when the user closes the auth surface.
- * Web: popup window + closed-polling. Native (Capacitor): in-app Browser + browserFinished event.
- * window.open to external origins silently fails inside WKWebView, so native must go through @capacitor/browser.
- */
-async function openOAuthAndAwaitClose(url: string): Promise<void> {
-  if (isNative) {
-    const closedPromise = new Promise<void>((resolve) => {
-      void Browser.addListener("browserFinished", () => {
-        void Browser.removeAllListeners();
-        setTimeout(resolve, 3000);
-      });
-    });
-    await Browser.open({ url, presentationStyle: "popover" });
-    return closedPromise;
-  }
-  const win = window.open(url, "_blank");
-  return windowClosed(win);
 }
 
 function resolveIdentity(
