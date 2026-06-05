@@ -112,6 +112,7 @@ class WorldSignalsRepository(UserScopedRepository):
         provider: str | None = None,
         min_salience: float | None = None,
         since: datetime | None = None,
+        before: datetime | None = None,
         limit: int = 30,
     ) -> list[WorldSignalRow]:
         """Per-user feed: shared world signals + caller's salience/status.
@@ -130,6 +131,7 @@ class WorldSignalsRepository(UserScopedRepository):
                   AND (%s::text IS NULL OR ws.provider = %s)
                   AND (%s::real IS NULL OR v.salience >= %s)
                   AND (%s::timestamptz IS NULL OR ws.published_at >= %s)
+                  AND (%s::timestamptz IS NULL OR ws.published_at <= %s)
                 ORDER BY COALESCE(v.salience, 0) DESC, ws.published_at DESC NULLS LAST
                 LIMIT %s
                 """,
@@ -143,6 +145,8 @@ class WorldSignalsRepository(UserScopedRepository):
                     min_salience,
                     since,
                     since,
+                    before,
+                    before,
                     limit,
                 ),
             )

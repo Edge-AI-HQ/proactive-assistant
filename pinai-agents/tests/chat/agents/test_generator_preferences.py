@@ -90,6 +90,13 @@ def test_source_index_compacts_phase1_sources_for_planner_and_bundles():
                 }
             ]
         },
+        "goals": [
+            {
+                "id": "goal_generation_quality",
+                "title": "Improve card generation quality",
+                "summary": "Generated cards should be grounded and useful.",
+            }
+        ],
     }
 
     index = _build_source_index(phase1)
@@ -99,10 +106,12 @@ def test_source_index_compacts_phase1_sources_for_planner_and_bundles():
     assert by_id["sig_ci_failed"]["citation"].startswith("signal id=sig_ci_failed")
     assert by_id["raw_gmail_1"]["source_type"] == "gmail"
     assert by_id["raw_slack_1"]["source_type"] == "slack/messages"
+    assert by_id["goal_generation_quality"]["source_type"] == "goal"
     assert len(by_id["raw_gmail_1"]["payload"]) < 900
 
     compact = _compact_phase1_for_planner(phase1, index)
     assert "sources" in compact
+    assert compact["goals"][0]["id"] == "goal_generation_quality"
     assert "connected_raw" not in compact
     assert len(str(compact)) < len(str(phase1))
 
@@ -398,6 +407,26 @@ def test_final_selection_prefers_judge_order_then_fills_with_ranked_cards():
     )
 
     assert [card.intent_key for card in selected] == ["editor-pick", "steady-high"]
+
+
+def test_usable_unique_card_count_ignores_duplicate_passing_evals():
+    count_usable = getattr(generator_module, "_usable_unique_card_count", None)
+    assert count_usable is not None
+
+    cards = [
+        _test_card("same-decision", basket="work", title="First angle"),
+        _test_card("same-decision", basket="work", title="Duplicate angle"),
+        _test_card("second-decision", basket="wealth"),
+        _test_card("failed-decision", basket="life"),
+    ]
+    evaluations = [
+        _test_eval("same-decision", passed=True, overall=8.0),
+        _test_eval("same-decision", passed=True, overall=7.0),
+        _test_eval("second-decision", passed=True, overall=7.5),
+        _test_eval("failed-decision", passed=False, overall=6.5),
+    ]
+
+    assert count_usable(cards, evaluations) == 2
 
 
 def test_final_selection_content_uses_card_eval_summaries_not_full_phase1():

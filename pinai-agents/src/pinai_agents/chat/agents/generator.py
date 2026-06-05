@@ -499,6 +499,8 @@ def _citation_for(source_type: str, source_id: str, title: str, snippet: str) ->
         return f"world id={source_id}, title={_truncate(title_or_snippet, 160)}"
     if source_type == "profile":
         return f"profile id={source_id}, summary={_truncate(snippet or title, 160)}"
+    if source_type == "goal":
+        return f"goal id={source_id}, title={_truncate(title_or_snippet, 160)}"
     if source_type == "preference":
         return f"preference id={source_id}, statement={_truncate(snippet or title, 160)}"
     return f"{source_type} id={source_id}, text={_truncate(snippet or title, 160)}"
@@ -569,6 +571,7 @@ def _build_source_index(phase1: dict[str, Any]) -> list[dict[str, Any]]:
             )
         )
     _append_list_sources(records, source_type="memory", value=phase1.get("memory"))
+    _append_list_sources(records, source_type="goal", value=phase1.get("goals"))
     _append_list_sources(records, source_type="signal", value=phase1.get("signals"))
     _append_list_sources(records, source_type="gmail", value=phase1.get("gmail"))
     _append_list_sources(records, source_type="gcal", value=phase1.get("gcal"))
@@ -656,6 +659,11 @@ def _compact_phase1_for_planner(
             for item in source_index[:_MAX_PLANNER_SOURCES]
         ],
         "cards_recent": _compact_recent_cards(phase1.get("cards_recent")),
+        "goals": _compact_list(
+            phase1.get("goals"),
+            20,
+            keys=("id", "key", "title", "priority", "status", "summary"),
+        ),
         "feedback": _compact_list(
             phase1.get("feedback"),
             30,
@@ -846,6 +854,21 @@ def _evaluation_by_intent(evaluations: list[Any]) -> dict[str, Any]:
 
 def _passing_evaluation_count(evaluations: list[Any]) -> int:
     return sum(1 for ev in evaluations if bool(getattr(ev, "pass_", False)))
+
+
+def _usable_unique_card_count(cards: list[Any], evaluations: list[Any]) -> int:
+    passing_intents: set[str] = set()
+    for ev in evaluations:
+        intent = str(getattr(ev, "intent_key", "") or "")
+        if intent and bool(getattr(ev, "pass_", False)):
+            passing_intents.add(intent)
+
+    usable_intents: set[str] = set()
+    for card in cards:
+        intent = str(getattr(card, "intent_key", "") or "")
+        if intent in passing_intents:
+            usable_intents.add(intent)
+    return len(usable_intents)
 
 
 def _candidate_summary(card: Any, evaluation: Any | None) -> dict[str, Any]:
@@ -1310,10 +1333,10 @@ async def run_generator(
                             stage_prefix="evaluator",
                         )
                         for topup_round in range(1, _MAX_TOPUP_ROUNDS + 1):
-                            passing_count = _passing_evaluation_count(evaluations)
-                            if passing_count >= target_cards:
+                            usable_count = _usable_unique_card_count(generated_cards, evaluations)
+                            if usable_count >= target_cards:
                                 break
-                            missing_count = target_cards - passing_count
+                            missing_count = target_cards - usable_count
                             topup_count = min(
                                 max(missing_count + (2 if topup_round == 1 else 1), 2),
                                 6 if topup_round == 1 else 4,

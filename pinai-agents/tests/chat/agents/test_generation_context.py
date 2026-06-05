@@ -42,7 +42,10 @@ async def test_context_builder_pages_connected_raw_until_exhausted(monkeypatch):
     async def fake_get(path: str, **params: Any) -> dict[str, Any]:
         calls.append({"path": path, "params": params})
         if path == "/api/agent/profile/get":
-            return {"profile": {"summary": "Builds PIN AI"}, "goals": []}
+            return {
+                "profile": {"summary": "Builds PIN AI"},
+                "goals": [{"id": "goal_cards", "title": "Improve generated cards"}],
+            }
         if path == "/api/agent/memory/list":
             return {"items": []}
         if path == "/api/agent/signals/recent":
@@ -52,6 +55,8 @@ async def test_context_builder_pages_connected_raw_until_exhausted(monkeypatch):
         if path == "/api/agent/feedback/list":
             return {"items": []}
         if path == "/api/agent/world/recent":
+            assert params["since"] == since.isoformat()
+            assert params["until"] == now.isoformat()
             return {"items": []}
         if path == "/api/agent/preferences/list":
             return {"items": []}
@@ -70,7 +75,7 @@ async def test_context_builder_pages_connected_raw_until_exhausted(monkeypatch):
                 return {"items": [{"id": "gmail-2"}]}
             return {"items": []}
         if path == "/api/agent/raw/slack/messages":
-            return {"items": []}
+            return {"_error": "ConnectError: down"}
         raise AssertionError(f"unexpected path {path}")
 
     from pinai_agents.chat.agents import generation_context
@@ -88,8 +93,13 @@ async def test_context_builder_pages_connected_raw_until_exhausted(monkeypatch):
         "gmail-1",
         "gmail-2",
     ]
+    assert context["profile"] == {"summary": "Builds PIN AI"}
+    assert context["goals"] == [{"id": "goal_cards", "title": "Improve generated cards"}]
     assert context["gmail"] == context["connected_raw"]["gmail/messages"]
     assert context["context_stats"]["connected_raw"]["gmail/messages"]["count"] == 3
+    assert context["context_stats"]["connected_raw"]["slack/messages"]["error"] == (
+        "ConnectError: down"
+    )
     raw_calls = [call for call in calls if call["path"] == "/api/agent/raw/gmail/messages"]
     assert [call["params"]["offset"] for call in raw_calls] == [0, 2]
     assert all(call["params"]["limit"] == 2 for call in raw_calls)

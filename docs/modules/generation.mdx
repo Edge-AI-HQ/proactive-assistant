@@ -91,7 +91,7 @@ sequenceDiagram
 | 入队 | `enqueue_once(kind='generator.manual', id=f"gen.{uuid4().hex[:12]}", payload={cards_to_generate, output_language, trigger})`,trigger_kind=`once`。用户可见生成默认/上限是 8 张;dispatcher 对旧 payload 也会 clamp 到 8。 |
 | Virtual key | `_ensure_virtual_key`:user 没 `litellm_virtual_key` 时调 `services/litellm_provisioning.ensure_user_litellm_key` lazy-recover;失败 502。 |
 | 输出语言 | 读 user_settings 的 `generation_language`(`zh-Hans` / `en`),走 payload 传给 chat。语言类偏好走这条设置(确定性),**不**进 `pai_preference_records`。 |
-| 高权重偏好 / fresh raw | chat 侧 deterministic context builder 用本次 run JWT 调 web agent API,收集 `profile/memory/signals/raw/cards_recent/feedback/world/preferences/connections`。window 是 `min(上次成功生成 completed_at, now-24h) → now`;没有上次成功则取过去 24h。raw/signals 在收集层分页拉完窗口内行,不再每源 cap 20;planner 只看 source index 的 compact JSON,writer/evaluator 只看单卡 source bundle。active preferences 仍过滤过期 temporary 行,planner 把最新有效 + 高 `weight` 的当近似硬约束。 |
+| 高权重偏好 / fresh raw | chat 侧 deterministic context builder 用本次 run JWT 调 web agent API,收集 `profile/goals/memory/signals/raw/cards_recent/feedback/world/preferences/connections`。window 是 `min(上次成功生成 completed_at, now-24h) → now`;没有上次成功则取过去 24h。raw/signals 在收集层分页拉完窗口内行,world 也按同一 window 过滤,不再每源 cap 20;planner 只看 source index 的 compact JSON,writer/evaluator 只看单卡 source bundle。active preferences 仍过滤过期 temporary 行,planner 把最新有效 + 高 `weight` 的当近似硬约束。 |
 | 自动生成 | `web/routes/ui/profile.py:_sync_auto_generate_schedule`:settings 写 `auto_generate=true/false` + `auto_generate_interval_minutes`,upsert 到 `pai_scheduled_tasks` 一行 `kind='generator.auto'`,`trigger_kind='schedule'`,`interval_seconds = interval_minutes * 60`,关掉切 `archived`。默认 `auto_generate=ON`(migration `038_auto_generate_default_on.sql`),默认间隔 12h(`037_pai_user_settings_auto_generate_interval.sql`)。 |
 | 派发 | dispatcher 看到 `generator.manual` / `generator.auto` 都走 `_run_generator`(`039_split_generator_kinds.sql` 拆 kind 但共用 handler);generator 是用户可见链路,DB lease、web→chat `/agent/generate` read timeout、chat route 内部 timeout 都是 600s。手动 `generator.manual` 不自动 retry,超过 10 分钟直接失败。 |
 | chat 调用 | `_run_generator` HTTP POST `chat /agent/generate`,签 EdDSA agent-run JWT,带 `run_id` + virtual_key claim。 |
@@ -124,7 +124,7 @@ run_generator()
 
 | Stage | 输入 | 输出 |
 |---|---|---|
-| context-builder | 用本次 run JWT 调 web agent API,按 window 分页拉 raw/signals,并拉 profile / memory / cards_recent / feedback / world / **active non-expired preferences** | full context artifact(dict) |
+| context-builder | 用本次 run JWT 调 web agent API,按 window 分页拉 raw/signals,并拉 profile / goals / memory / cards_recent / feedback / world / **active non-expired preferences** | full context artifact(dict) |
 | source-index | full phase1 JSON | `SourceRecord[]`(`id/source_type/title/snippet/timestamp/salience/citation/payload`) + compact planner input。`cards_recent` 保留 title / whyNow / summary / sources 摘要,用于语义去重。 |
 | planner | compact phase1 + matched patterns | `PlanOutput {plan[], skipped_duplicates[], cold_baskets[], notes}`。目标候选数是 `cards_to_generate + 4`,最多 12。 |
 | card-generator | 单个 `PlanItem` + 对应 source bundle | `CardsList`,通常一张卡;`sources[]` 必须复制 bundle citation。 |

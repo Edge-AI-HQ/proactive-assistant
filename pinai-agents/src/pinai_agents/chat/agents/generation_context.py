@@ -106,6 +106,12 @@ def _error_payload(exc: BaseException) -> dict[str, str]:
     return {"_error": f"{type(exc).__name__}: {exc}"}
 
 
+def _profile_row(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, dict) and isinstance(payload.get("profile"), dict):
+        return payload["profile"]
+    return payload if isinstance(payload, dict) else {}
+
+
 async def _safe_get(path: str, **params: Any) -> Any:
     try:
         return await http_client.get(path, **params)
@@ -131,8 +137,8 @@ async def _paged_items(
             limit=page_size,
             offset=offset,
         )
-        if isinstance(payload, dict) and payload.get("error"):
-            error = str(payload.get("detail") or payload.get("error"))
+        if isinstance(payload, dict) and (payload.get("error") or payload.get("_error")):
+            error = str(payload.get("detail") or payload.get("error") or payload.get("_error"))
             break
         page = _items(payload)
         rows.extend(page)
@@ -211,12 +217,15 @@ async def build_generation_context(
         ),
         _safe_get("/api/agent/cards/recent", limit=30),
         _safe_get("/api/agent/feedback/list", since=since_iso, limit=200),
-        _safe_get("/api/agent/world/recent", status="open", hours=24, limit=200),
+        _safe_get("/api/agent/world/recent", status="open", since=since_iso, until=until_iso, limit=200),
         _safe_get("/api/agent/preferences/list", status="active", limit=200),
         _safe_get("/api/agent/composio/connections"),
     )
 
     signal_rows, signal_stats = signals
+    profile_payload = profile
+    profile = _profile_row(profile_payload)
+    goals = _items(profile_payload.get("goals") if isinstance(profile_payload, dict) else [])
     connections = _items(connections_payload)
     raw_sources = _raw_sources_from_connections(connections)
     raw_results = await asyncio.gather(
@@ -240,6 +249,7 @@ async def build_generation_context(
     context = {
         "context_window": window.as_dict(),
         "profile": profile,
+        "goals": goals,
         "memory": _items(memory_payload),
         "signals": signal_rows,
         "gmail": connected_raw.get("gmail/messages", []),
@@ -255,6 +265,7 @@ async def build_generation_context(
             "window": window.as_dict(),
             "signals": signal_stats,
             "connected_raw": raw_stats,
+            "goals": {"count": len(goals)},
             "memory": {"count": len(_items(memory_payload))},
             "cards_recent": {"count": len(_items(cards_recent))},
             "feedback": {"count": len(_items(feedback))},

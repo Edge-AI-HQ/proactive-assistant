@@ -22,7 +22,7 @@ from pinai_agents.web.db.repositories.personal_signals import (
     IngestSignalInput,
     PersonalSignalsRepository,
 )
-from pinai_agents.web.db.rls import user_scoped_tx
+from pinai_agents.web.db.rls import service_tx, user_scoped_tx
 from pinai_agents.web.routes.agent.signals import _ambient_speaker_preview
 
 
@@ -345,3 +345,58 @@ async def test_agent_signals_support_since_until_offset_pagination(client, pool,
     assert body["offset"] == 1
     assert body["limit"] == 1
     assert body["total"] >= 3
+
+
+@pytest.mark.asyncio
+async def test_agent_world_supports_since_until_window(client, pool, user_ids):
+    user_a, _ = user_ids
+    now = datetime.now(UTC)
+    old_id = f"world_window_old_{user_a}"
+    future_id = f"world_window_future_{user_a}"
+    async with service_tx(pool) as conn:
+        await conn.execute(
+            """
+            INSERT INTO pai_world_signals
+              (id, provider, title, url, normalized_url, published_at)
+            VALUES
+              (%s, 'test', 'Old but in previous cycle', %s, %s, %s),
+              (%s, 'test', 'Future outside window', %s, %s, %s)
+            """,
+            (
+                old_id,
+                f"https://example.com/world-window-old-{user_a}",
+                f"https://example.com/world-window-old-{user_a}",
+                now - timedelta(hours=30),
+                future_id,
+                f"https://example.com/world-window-future-{user_a}",
+                f"https://example.com/world-window-future-{user_a}",
+                now + timedelta(hours=2),
+            ),
+        )
+    async with user_scoped_tx(pool, user_a) as conn:
+        await conn.execute(
+            """
+            INSERT INTO pai_world_signal_user_view
+              (user_id, world_signal_id, salience, status)
+            VALUES
+              (%s, %s, 0.5, 'open'),
+              (%s, %s, 0.9, 'open')
+            """,
+            (user_a, old_id, user_a, future_id),
+        )
+
+    r = await client.get(
+        "/api/agent/world/recent",
+        params={
+            "status": "open",
+            "since": (now - timedelta(hours=36)).isoformat(),
+            "until": now.isoformat(),
+            "limit": 10,
+        },
+        headers=_auth(user_a),
+    )
+
+    assert r.status_code == 200, r.text
+    ids = [item["id"] for item in r.json()["items"]]
+    assert old_id in ids
+    assert future_id not in ids

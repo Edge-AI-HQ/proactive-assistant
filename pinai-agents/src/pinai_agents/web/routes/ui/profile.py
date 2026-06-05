@@ -178,6 +178,7 @@ async def _ensure_auto_generate_schedule(
         and row["status"] == "active"
         and row["interval_seconds"] == interval_seconds
         and (row["payload"] or {}).get("output_language") == settings.generation_language
+        and (row["payload"] or {}).get("cards_to_generate") == 8
     ):
         return
     await _sync_auto_generate_schedule(conn, user_id=user_id, settings=settings)
