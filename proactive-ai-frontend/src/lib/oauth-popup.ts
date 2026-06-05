@@ -16,10 +16,22 @@ import { Browser } from "@capacitor/browser";
 
 import { isNative } from "./platform";
 
+/**
+ * Thrown when `window.open` returns null on the web path — Safari, mobile
+ * Chrome strict mode, embedded WebViews, or a user-installed popup blocker
+ * will all surface this. Callers catch it to clear their "connecting"
+ * spinner instead of hanging on a Promise that will never settle.
+ */
+export class PopupBlockedError extends Error {
+  constructor(message = "Popup was blocked by the browser") {
+    super(message);
+    this.name = "PopupBlockedError";
+  }
+}
+
 /** Resolves when the popup window is closed (+ 3s grace for OAuth callback). */
-function windowClosed(win: Window | null): Promise<void> {
+function windowClosed(win: Window): Promise<void> {
   return new Promise((resolve) => {
-    if (!win) return;
     const poll = setInterval(() => {
       if (win.closed) {
         clearInterval(poll);
@@ -40,6 +52,13 @@ export async function openOAuthAndAwaitClose(url: string): Promise<void> {
     await Browser.open({ url, presentationStyle: "popover" });
     return closedPromise;
   }
+  // `window.open` returns null when the browser blocked the popup.
+  // Throw rather than returning a Promise that never resolves — the
+  // calling component would otherwise spin its "Connecting…" UI
+  // indefinitely with no way to recover. Callers should catch this and
+  // reset their busy state (and optionally tell the user to retry /
+  // unblock popups).
   const win = window.open(url, "_blank");
+  if (!win) throw new PopupBlockedError();
   return windowClosed(win);
 }
