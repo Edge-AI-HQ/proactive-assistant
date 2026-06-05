@@ -1,0 +1,277 @@
+---
+title: "Ambient Lock-Screen Audio + Live Session Fix"
+description: "修复 Ambient 熄屏录音不准和 Live Session 显示不同步：先用真机证据区分 WAV 采集问题和转写问题，再把当前 Live 与历史转录拆成两个数据面。"
+---
+
+# Ambient Lock-Screen Audio + Live Session Fix
+
+> 日期：2026-06-05
+> 状态：实施计划
+> 读者：改 `capacitor-plugins/ambient-ai/ios/Sources/AmbientAi/Audio/`、`proactive-ai-frontend/src/services/ambient/`、`proactive-ai-frontend/src/hooks/useAmbientLiveSession.ts`、`LiveSessionCard` 前必读。
+
+## 结论
+
+这次两个 bug 是同一条 Ambient audio 链路上的不同层级问题：
+
+1. **熄屏录音不准是采集层问题优先**。当前后台链路是 native 先存短 WAV，前端恢复后再读 WAV 调云转写。先验证 WAV 本身是否准确；如果 WAV 已经缺字、切碎或丢失，先修 iOS capture，不先调转写模型。
+2. **Live Session 不同步是前端数据模型问题**。当前前端把“当前 live”和“历史 transcript replay”混在一个 `LiveSessionData` 里；`captureSessionId` 一旋转，旧消息被清空；今天的历史转录又可能被伪装成当前 Live。
+
+最终产品语义：
+
+- **Current Live**：只显示当前正在发生或最近 `120 秒`内发生的 live transcript / listening 状态。
+- **History**：显示今天或最近一段历史 transcript，不抢占当前 Live，不伪装成正在进行的 session。
+- **Timeline / Outbox**：不受 Live freshness 影响。旧 transcript 仍然要存、要补传、要进入 Ambient timeline。
+
+## 已确认根因
+
+### R1：iOS 会旋转 captureSessionId，但前端把新 session 当清空边界
+
+iOS 当前会按两个条件旋转 `captureSessionId`：
+
+- session 年龄达到 `maxSessionDurationMs`，默认 5 分钟。
+- idle gap 达到 `sessionSilenceGapMs`，默认 30 秒。
+
+位置：`AudioStreamManager.rotateCaptureSessionIfNeeded()`。
+
+前端 `appendLiveTranscript()` 当前逻辑：
+
+```ts
+const isNewSession = !prev || prev.captureSessionId !== update.captureSessionId;
+const messages = upsertLiveMessage(isNewSession ? [] : prev.messages, message);
+```
+
+这会导致：只要 native session id 变了，Live card 里的历史消息就被丢掉。
+
+### R2：Live replay 用 `??` 二选一，不合并历史和当前
+
+`useAmbientLiveSession.ts` 当前逻辑：
+
+```ts
+const effectiveLiveSessionData = liveSessionData ?? replayedLiveSessionData;
+```
+
+结果：
+
+- 有当前 live event 时，看不到历史 replay。
+- 没当前 live event 时，历史 replay 会顶成当前 Live。
+- 用户看到的是“时有时无、不同步”，而不是一个稳定的“当前 + 历史”视图。
+
+### R3：后台音频当前依赖短 WAV recover，不是持久音频队列
+
+当前链路：
+
+1. iOS 后台进入 `setAppBackgrounded(true)`。
+2. native 停掉 SoundAnalysis analyzer，保留 audio tap。
+3. `backgroundCaptureLoop` 周期性开启 `background_continuous` capture。
+4. capture 完成后存 WAV 到 Caches。
+5. 前端恢复/refresh 时 `listRecentCaptures()`，再 `readCapture()`，再调 `/api/voice/transcribe*`。
+
+风险：
+
+- 后台 capture 结束条件依赖 Swift task 循环和普通时间判断，需要真机验证是否在熄屏后按预期推进。
+- WAV 默认只保留 1 小时 / 120 个 / 100MB，长时间熄屏会丢未处理片段。
+- 如果 WAV 边界不准，云转写再强也只能转出不准的文本。
+
+## 已排除或降级的点
+
+- `CloudTranscriptionWorker` 不是当前主链路根因。`nativeCloudRefinementEnabled = false`，当前云转写由前端 `/voice/transcribe*` 路径负责。
+- `TranscriptStitcher` 不是当前主链路根因。`localSpeechTranscriptionEnabled = false`，本地 SFSpeech 代码当前 dormant。
+- `Silero threshold = 0.45` 是风险，但不应先定为最终根因。后台 `background_continuous` 不完全依赖 Silero speechStart 触发；要看真机日志里的 speechBurst、captureReady、captureDiscarded 和 WAV 回放。
+- `Task.sleep` 是高风险点，但不能只靠静态代码断言它一定是最终根因。必须用真机日志看 lock-screen 后 tick gap、capture duration、captureReady 是否继续出现。
+
+## 非目标
+
+- 不重写整个 Ambient timeline。
+- 不把 Live freshness 用到 outbox / sync / cloud ingest。
+- 不承诺 iOS 进程被系统 kill 后还能继续采集。只保证 kill 前已经产生的 capture metadata 和 WAV 不因内存丢失。
+- 不为了绕过后台限制新增 bundle id / target / scheme。
+
+## 阶段计划
+
+### Phase 0：先补可观测性
+
+目标：用真机数据区分“WAV 采集不准”和“转写不准”。
+
+Native 需要补：
+
+- `backgroundCaptureLoop` 每次 tick 记录 `tickGapMs`、`appIsBackgrounded`、`isCapturing`、`engineState`。
+- capture cycle start/end 记录 `triggerSource`、`durationMs`、`byteSize`、`speechLikeDurationMs`、`rms`、`peak`。
+- `captureDiscarded` 继续带 `reason/rms/peak/speechLikeDurationMs`。
+- `rotateCaptureSession` 记录 `reason=max_age|idle_gap`、`oldSessionId`、`newSessionId`、`ageMs`、`idleGapMs`。
+- route/interruption 记录前后 engine state。
+
+Frontend debug panel 需要显示：
+
+- Recent WAV captures 的 `triggerSource`。
+- capture discarded 统计。
+- lock-screen validation 提示：先播放 WAV，再看 transcript。
+
+验证：
+
+```bash
+npm --prefix proactive-ai-frontend test -- --run src/components/AmbientAudioDebugPanel.test.tsx
+```
+
+真机验证：
+
+1. 打开 Ambient audio debug。
+2. 锁屏 3-5 分钟，说 3 组固定句子。
+3. 回前台刷新 captures，逐个播放 WAV。
+4. 记录 WAV 是否完整、是否切头尾、是否丢段。
+
+### Phase 1：修 Live 数据模型
+
+目标：当前 Live 与历史 transcript 分开。
+
+新增/调整类型：
+
+```ts
+interface AmbientLiveSessionState {
+  current: LiveSession | null;
+  history: LiveHistoryTranscript[];
+  contextItems: LiveSessionContextItem[];
+}
+
+interface LiveHistoryTranscript {
+  id: string;
+  captureSessionId: string;
+  occurredAt: string;
+  text: string;
+  source?: string;
+}
+```
+
+规则：
+
+- `current` 只接收 `now - eventTime <= 120_000` 的 native live event。
+- `history` 来自 raw transcript events / candidate windows / recovered captures，不进入 `current`。
+- `appendLiveTranscript()` 不再因为新 `captureSessionId` 把旧历史丢掉；它只维护 current buffer。
+- `rawTranscriptEventsToLiveSessionData()` 改成 `rawTranscriptEventsToHistory()`。
+- `candidateWindowsToLiveSessionContextItems()` 不再把旧 `transcript_session` fallback 成当前 Live message。
+
+UI：
+
+- `LiveSessionCard` 上半部分显示 Current Live。
+- 下半部分显示 `Earlier`，最多 3-5 条历史 transcript。
+- `NowFeed` 可以只显示 current；`AmbientView` 显示 current + history。
+
+验证：
+
+```bash
+npm --prefix proactive-ai-frontend test -- --run \
+  src/services/ambient/live-session.test.ts \
+  src/hooks/useAmbientLiveSession.test.ts \
+  src/components/constellation/LiveSessionCard.test.tsx
+```
+
+必须新增测试：
+
+- 5 分钟前 raw transcript 不生成 current Live。
+- 5 分钟前 raw transcript 出现在 history。
+- 新 `captureSessionId` 不删除 history。
+- 当前 120 秒内 live event 显示在 current。
+
+### Phase 2：加 native session rotation event
+
+目标：前端知道 session 为什么切了。
+
+Native 新增事件：
+
+```ts
+type CaptureSessionRotatedEvent = {
+  oldCaptureSessionId: string;
+  newCaptureSessionId: string;
+  reason: "max_age" | "idle_gap" | "manual_start";
+  rotatedAt: string;
+  ageMs?: number;
+  idleGapMs?: number;
+};
+```
+
+用途：
+
+- 前端收到 rotation 后，把旧 current 归入 history，不清空整个显示状态。
+- Debug panel 可显示最近 rotation，判断是否“30 秒 idle 太激进”。
+
+验证：
+
+- Swift 单测覆盖 max age / idle gap rotation event payload。
+- 前端 listener 测试覆盖 rotation 后 history 保留。
+
+### Phase 3：修后台 capture 持久性
+
+目标：后台产生的 capture 不靠内存和短期 Caches 生存。
+
+Native 变更：
+
+- 新增 `Application Support/pin-ambient-ai/audio-capture-ledger.sqlite`。
+- capture metadata 先落 ledger，再 emit `captureReady`。
+- drain recent captures 支持 `limit/cursor/order`。
+- ack capture 后再删除 processed WAV。
+- pending WAV retention 调整到 24 小时 / 1000 files / 1GB。
+- processed WAV 可立即删除。
+
+Frontend 变更：
+
+- `recoverPendingAudio()` 分批 drain，成功写入 local timeline/outbox 后 ack。
+- stale recovered capture 只进 history/timeline，不进 current Live。
+
+验证：
+
+- JS crash / app reload 前未 ack 的 capture 下次还能 drain。
+- 同一个 `burstId` 重放不会重复写 signal。
+- 锁屏 30 分钟后，最新一批先显示，历史分批补齐。
+
+### Phase 4：评估后台调度改造
+
+只有 Phase 0 真机日志证明 `Task.sleep` 在 lock-screen 下造成明显 tick gap 或 capture 不收尾，才做这一阶段。
+
+可选修法：
+
+- capture cycle 结束条件改用 audio frame count / monotonic clock。
+- `backgroundCaptureLoop` 从 `Task.sleep` polling 改成 audio tap 驱动的 cycle manager。
+- 避免在后台依赖 JS bridge 及时消费事件。
+
+验证：
+
+- 锁屏 10 分钟，`captureReady` 持续出现。
+- tick gap 不再决定 capture 是否能结束。
+- WAV duration 与实际说话窗口基本一致。
+
+## 实施顺序
+
+1. Phase 0 先做，不先猜。
+2. Phase 1 先落地，能最快解决用户看到的 Live 不同步。
+3. Phase 2 让 iOS session rotation 对前端可见。
+4. Phase 3 修长时间后台数据可靠性。
+5. Phase 4 只在真机证明确有调度冻结时做。
+
+## 文件清单
+
+| 范围 | 文件 |
+|---|---|
+| Native audio state / capture | `capacitor-plugins/ambient-ai/ios/Sources/AmbientAi/Audio/AudioStreamManager.swift` |
+| Native file retention / ledger | `capacitor-plugins/ambient-ai/ios/Sources/AmbientAi/Audio/AudioFileStore.swift` |
+| Native plugin events | `capacitor-plugins/ambient-ai/ios/Sources/AmbientAi/Plugins/AudioCapturePlugin.swift` |
+| JS source recovery | `proactive-ai-frontend/src/services/ambient/sources/sound-classifier.ts` |
+| Live state model | `proactive-ai-frontend/src/services/ambient/live-session.ts` |
+| Live hook | `proactive-ai-frontend/src/hooks/useAmbientLiveSession.ts` |
+| Live UI | `proactive-ai-frontend/src/components/constellation/LiveSessionCard.tsx` |
+| Debug UI | `proactive-ai-frontend/src/components/AmbientAudioDebugPanel.tsx` |
+| Facade types | `capacitor-plugins/ambient-ai/src/facade/ambient-ai.ts` |
+
+## 成功标准
+
+- 锁屏 3-5 分钟后，Recent WAV captures 能听到完整测试句子。
+- WAV 准确时，transcript 与 WAV 内容基本一致。
+- 当前 Live 不再显示几分钟前/几小时前的历史 transcript。
+- AmbientView 能同时看到当前 live 和历史 transcript。
+- `captureSessionId` 旋转不再导致用户刚说过的话从 UI 消失。
+- 长时间后台后，pending capture 能分批补进 timeline/outbox，不一次性塞爆内存。
+
+## 和旧计划的关系
+
+- 本计划继承 [Ambient Live Freshness + Persistent Transcript Queue](./2026-05-18-ambient-live-freshness-persistent-transcript-queue) 的方向。
+- 本计划新增了两个更具体的拍板：
+  - Current Live 与 History 必须拆成两个 UI/数据面。
+  - 熄屏录音先用 WAV 回放和 native capture 日志定因，不先把锅甩给转写模型或 Silero 阈值。
