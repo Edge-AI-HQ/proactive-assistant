@@ -13,7 +13,12 @@ import CardDetailBody from "./CardDetailBody";
 import type { IntentCard } from "@/types/intent-card";
 import { proxyPost } from "@/lib/api";
 import { basketMeta } from "@/lib/basket-meta";
-import { connectorSlugFromIntentKey, tryHandleConnectorCard } from "@/lib/connector-card";
+import {
+  canonicalConnectorSlugFromIntentKey,
+  connectorSlugFromIntentKey,
+  openPreparedConnectorOAuth,
+  prepareConnectorOAuth,
+} from "@/lib/connector-card";
 import { getToolkit } from "@/lib/toolkit-icons";
 import type { CardScore, UseCardsState } from "@/hooks/useCards";
 import type { ComposioState } from "@/hooks/useComposio";
@@ -40,8 +45,10 @@ interface ChatTimelineProps {
   chattedIds: Set<string>;
   onDismissId: (id: string) => void;
   onConfirmId: (id: string) => void;
+  onClearConfirmId?: (id: string) => void;
   onDoneId: (id: string) => void;
   onProcessingId: (id: string) => void;
+  onClearProcessingId?: (id: string) => void;
   onChattedId: (id: string) => void;
   cards: UseCardsState;
   /**
@@ -77,8 +84,10 @@ export default function ChatTimeline({
   chattedIds,
   onDismissId,
   onConfirmId,
+  onClearConfirmId,
   onDoneId,
   onProcessingId,
+  onClearProcessingId,
   onChattedId,
   cards,
   composio,
@@ -99,36 +108,59 @@ export default function ChatTimeline({
     setSelectedCard(null);
   };
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     if (!selectedCard) return;
+    const card = selectedCard;
     const cardId = selectedCard.id;
-    // Connector-guidance card (intent_key="connect:<slug>"): kick off
-    // OAuth directly and mark the card done. Do NOT open chat — the
-    // connector flow lives in the popup, not in a conversation.
-    const connectorSlug = tryHandleConnectorCard(selectedCard, composio);
     onConfirmId(cardId);
-    if (connectorSlug) {
-      onDoneId(cardId);
-    } else {
+
+    // Connector-guidance card (intent_key="connect:<slug>"): show the
+    // row as processing while Composio prepares the redirect URL. Do
+    // not open chat — the connector flow lives in the popup.
+    const canonicalConnectorSlug = canonicalConnectorSlugFromIntentKey(card.intentKey);
+    if (canonicalConnectorSlug) {
       onProcessingId(cardId);
-      onChattedId(cardId);
+      setSelectedCard(null);
+      const preparedOAuth = await prepareConnectorOAuth(canonicalConnectorSlug, composio);
+      if (!preparedOAuth) {
+        onClearProcessingId?.(cardId);
+        onClearConfirmId?.(cardId);
+        return;
+      }
+      try {
+        await proxyPost("/feedback", {
+          kind: "card_action",
+          action: "complete",
+          intentCardId: cardId,
+          intentKey: card.intentKey,
+          basket: card.goalBasket,
+          channel: "web",
+        });
+      } catch {
+        /* swallow; UI already moved to processing */
+      }
+      await openPreparedConnectorOAuth(preparedOAuth, { awaitClose: false });
+      onDoneId(cardId);
+      return;
     }
+
+    onProcessingId(cardId);
+    onChattedId(cardId);
     proxyPost("/feedback", {
       kind: "card_action",
       action: "confirm",
       intentCardId: cardId,
-      intentKey: selectedCard.intentKey,
-      basket: selectedCard.goalBasket,
+      intentKey: card.intentKey,
+      basket: card.goalBasket,
       channel: "web",
     }).catch(() => {});
     setSelectedCard(null);
-    if (connectorSlug) return;
     // Send the card's primaryAction label (or fall back to title) as
     // the user's first message — that's what "Confirm" semantically
     // means. primaryAction is {label, type}; we send its label.
     const bootstrap =
-      (selectedCard.primaryAction?.label || selectedCard.title || "").trim();
-    onOpenChat(selectedCard, bootstrap || undefined);
+      (card.primaryAction?.label || card.title || "").trim();
+    onOpenChat(card, bootstrap || undefined);
   };
 
   const handleChat = () => {

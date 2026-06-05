@@ -14,7 +14,7 @@ import {
   Menu, X, Zap, ListChecks, Settings, Pencil, Radio, Plug,
   Sprout, Briefcase, TrendingUp, Heart, BookOpen, Sparkles,
   ArrowRight, ChevronDown, Check, Cloud, Lock as LockIcon,
-  MapPin, Sun, Activity, Users, ChevronUp, Target,
+  MapPin, Sun, Activity, Users, ChevronUp, Target, Loader2,
   type LucideIcon,
 } from "lucide-react";
 import bgGradient from "@/assets/bg-gradient.jpg";
@@ -1057,9 +1057,11 @@ export default function BigBallLayout() {
                   setDrawerOpen(true);
                 }}
                 onConfirmId={cardActions.markConfirmed}
+                onClearConfirmId={cardActions.clearConfirmed}
                 onDismissId={cardActions.markDismissed}
                 onDoneId={cardActions.markDone}
                 onProcessingId={cardActions.markProcessing}
+                onClearProcessingId={cardActions.clearProcessing}
                 onChattedId={cardActions.markChatted}
               />
             ) : activeView === "ambient" ? (
@@ -1316,6 +1318,11 @@ export default function BigBallLayout() {
                     )
                   : false
               }
+              pending={
+                selectedCard.originalId
+                  ? cardActions.processingIds.has(selectedCard.originalId)
+                  : false
+              }
               onExecute={handleExecute}
               onClose={() => { setDrawerOpen(false); setSelectedCard(null); }}
               onDismiss={(card) => {
@@ -1478,6 +1485,7 @@ export default function BigBallLayout() {
 function CardDrawerContent({
   card,
   completed,
+  pending,
   onExecute,
   onClose,
   onModify,
@@ -1485,6 +1493,7 @@ function CardDrawerContent({
 }: {
   card: Intent;
   completed: boolean;
+  pending: boolean;
   onExecute: (card: Intent) => void;
   onClose: () => void;
   onModify: (card: Intent) => void;
@@ -1558,23 +1567,28 @@ function CardDrawerContent({
           <>
             <button
               onClick={() => onDismiss(card)}
-              className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[13px] font-medium text-foreground/55"
+              disabled={pending}
+              className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[13px] font-medium text-foreground/55 disabled:opacity-45 disabled:cursor-default"
             >
               <X size={13} strokeWidth={2} /> Dismiss
             </button>
             {!card.locked && (
               <button
                 onClick={() => onModify(card)}
-                className="flex items-center justify-center gap-1 px-3 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[12px] font-medium text-foreground/55"
+                disabled={pending}
+                className="flex items-center justify-center gap-1 px-3 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[12px] font-medium text-foreground/55 disabled:opacity-45 disabled:cursor-default"
               >
                 <Pencil size={11} strokeWidth={2} /> Steer
               </button>
             )}
             <button
               onClick={() => onExecute(card)}
-              className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground text-background text-[13px] font-semibold hover:bg-foreground/85 transition-colors"
+              disabled={pending}
+              className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground text-background text-[13px] font-semibold hover:bg-foreground/85 transition-colors disabled:opacity-70 disabled:cursor-default"
             >
-              {card.locked ? (
+              {pending ? (
+                <><Loader2 size={13} className="animate-spin" /> Opening...</>
+              ) : card.locked ? (
                 <><LockIcon size={13} strokeWidth={2.5} /> Approve</>
               ) : (
                 <><Check size={13} strokeWidth={2.5} /> Approve</>

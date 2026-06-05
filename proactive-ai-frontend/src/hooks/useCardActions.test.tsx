@@ -140,6 +140,110 @@ describe("useCardActions", () => {
     expect(onOpenChat).toHaveBeenCalledWith(baseCard, "Draft a reply");
   });
 
+  test("confirm: connector card starts OAuth, persists complete, and skips chat", async () => {
+    const onOpenChat = vi.fn();
+    const composio = stubComposio();
+    const connectorCard: IntentCard = {
+      ...baseCard,
+      id: "connect-card",
+      intentKey: "connect:google_calendar",
+      title: "Connect Calendar",
+      primaryAction: { label: "Connect Calendar", type: "confirm" },
+    };
+    const { result } = renderHook(() => useCardActions({ onOpenChat, composio }));
+
+    await act(async () => {
+      await result.current.confirm(connectorCard);
+    });
+
+    expect(composio.connectToolkit).toHaveBeenCalledWith("googlecalendar");
+    expect(proxyPost).toHaveBeenCalledWith("/feedback", {
+      kind: "card_action",
+      action: "complete",
+      intentCardId: "connect-card",
+      intentKey: "connect:google_calendar",
+      basket: "work",
+      channel: "web",
+    });
+    expect(result.current.confirmedIds.has("connect-card")).toBe(true);
+    expect(result.current.doneIds.has("connect-card")).toBe(true);
+    expect(result.current.processingIds.has("connect-card")).toBe(false);
+    expect(onOpenChat).not.toHaveBeenCalled();
+  });
+
+  test("confirm: connector card stays processing while OAuth is preparing", async () => {
+    const onOpenChat = vi.fn();
+    let resolveConnect!: (value: { ok: true }) => void;
+    const connectPromise = new Promise<{ ok: true }>((resolve) => {
+      resolveConnect = resolve;
+    });
+    const composio = {
+      ...stubComposio(),
+      connectToolkit: vi.fn(() => connectPromise),
+    };
+    const connectorCard: IntentCard = {
+      ...baseCard,
+      id: "connect-card",
+      intentKey: "connect:gmail",
+      title: "Connect Gmail",
+      primaryAction: { label: "Connect Gmail", type: "confirm" },
+    };
+    const { result } = renderHook(() => useCardActions({ onOpenChat, composio }));
+
+    let confirmPromise!: Promise<void>;
+    act(() => {
+      confirmPromise = result.current.confirm(connectorCard);
+    });
+
+    await waitFor(() => {
+      expect(result.current.processingIds.has("connect-card")).toBe(true);
+    });
+    expect(result.current.doneIds.has("connect-card")).toBe(false);
+    expect(proxyPost).not.toHaveBeenCalledWith("/feedback", expect.objectContaining({
+      action: "complete",
+      intentCardId: "connect-card",
+    }));
+
+    await act(async () => {
+      resolveConnect({ ok: true });
+      await confirmPromise;
+    });
+
+    expect(result.current.processingIds.has("connect-card")).toBe(false);
+    expect(result.current.doneIds.has("connect-card")).toBe(true);
+    expect(onOpenChat).not.toHaveBeenCalled();
+  });
+
+  test("confirm: connector card failure does not complete or open chat", async () => {
+    const onOpenChat = vi.fn();
+    const composio = {
+      ...stubComposio(),
+      connectToolkit: vi.fn(async () => ({ ok: false, error: "No redirect URL returned" })),
+    };
+    const connectorCard: IntentCard = {
+      ...baseCard,
+      id: "connect-card",
+      intentKey: "connect:gmail",
+      title: "Connect Gmail",
+      primaryAction: { label: "Connect Gmail", type: "confirm" },
+    };
+    const { result } = renderHook(() => useCardActions({ onOpenChat, composio }));
+
+    await act(async () => {
+      await result.current.confirm(connectorCard);
+    });
+
+    expect(composio.connectToolkit).toHaveBeenCalledWith("gmail");
+    expect(proxyPost).not.toHaveBeenCalledWith("/feedback", expect.objectContaining({
+      action: "complete",
+      intentCardId: "connect-card",
+    }));
+    expect(result.current.confirmedIds.has("connect-card")).toBe(false);
+    expect(result.current.processingIds.has("connect-card")).toBe(false);
+    expect(result.current.doneIds.has("connect-card")).toBe(false);
+    expect(onOpenChat).not.toHaveBeenCalled();
+  });
+
   test("dismiss: posts kind=dismiss and adds to dismissedIds", async () => {
     const { result } = renderHook(() => useCardActions({ onOpenChat: vi.fn(), composio: stubComposio() }));
     await act(async () => {

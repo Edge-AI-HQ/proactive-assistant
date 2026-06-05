@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { proxyFetch, proxyPost } from "@/lib/api";
-import { tryHandleConnectorCard } from "@/lib/connector-card";
+import {
+  canonicalConnectorSlugFromIntentKey,
+  openPreparedConnectorOAuth,
+  prepareConnectorOAuth,
+} from "@/lib/connector-card";
 import type { ComposioState } from "@/hooks/useComposio";
 import type { IntentCard } from "@/types/intent-card";
 
@@ -133,18 +137,53 @@ export function useCardActions({ onOpenChat, composio }: UseCardActionsOptions) 
   const confirm = useCallback(
     async (card: IntentCard) => {
       const cardId = card.id;
-      // Connector-guidance card (intent_key="connect:<slug>"): kick off
-      // OAuth directly and mark the card done. Skip the chat-open path —
-      // the connect flow lives in the popup, not in a conversation.
-      const connectorSlug = tryHandleConnectorCard(card, composio);
       setConfirmedIds((s) => new Set(s).add(cardId));
-      if (connectorSlug) {
-        // Treat as resolved — no follow-up chat, no processing spinner.
-        setDoneIds((s) => new Set(s).add(cardId));
-      } else {
+
+      // Connector-guidance card (intent_key="connect:<slug>"): show a
+      // local pending state while Composio prepares the redirect URL,
+      // then mark the card done. Skip chat — the connect flow lives in
+      // the popup, not in a conversation.
+      const canonicalConnectorSlug = canonicalConnectorSlugFromIntentKey(card.intentKey);
+      if (canonicalConnectorSlug) {
         setProcessingIds((s) => new Set(s).add(cardId));
-        persistChatted(cardId);
+        const preparedOAuth = await prepareConnectorOAuth(canonicalConnectorSlug, composio);
+        if (!preparedOAuth) {
+          setProcessingIds((s) => {
+            const n = new Set(s);
+            n.delete(cardId);
+            return n;
+          });
+          setConfirmedIds((s) => {
+            const n = new Set(s);
+            n.delete(cardId);
+            return n;
+          });
+          return;
+        }
+        try {
+          await proxyPost("/feedback", {
+            kind: "card_action",
+            action: "complete",
+            intentCardId: cardId,
+            intentKey: card.intentKey,
+            basket: card.goalBasket,
+            channel: "web",
+          });
+        } catch {
+          /* swallow; UI already optimistic */
+        }
+        await openPreparedConnectorOAuth(preparedOAuth, { awaitClose: false });
+        setProcessingIds((s) => {
+          const n = new Set(s);
+          n.delete(cardId);
+          return n;
+        });
+        setDoneIds((s) => new Set(s).add(cardId));
+        return;
       }
+
+      setProcessingIds((s) => new Set(s).add(cardId));
+      persistChatted(cardId);
       try {
         await proxyPost("/feedback", {
           kind: "card_action",
@@ -155,9 +194,8 @@ export function useCardActions({ onOpenChat, composio }: UseCardActionsOptions) 
           channel: "web",
         });
       } catch {
-        /* swallow; UI 已 optimistic */
+        /* swallow; UI already optimistic */
       }
-      if (connectorSlug) return;
       // Prefer the agent task spec (agentPrompt) over the short button label.
       // Older cards lack agentPrompt → fall back to label / title.
       const bootstrap =
@@ -308,10 +346,26 @@ export function useCardActions({ onOpenChat, composio }: UseCardActionsOptions) 
     (id: string) => setConfirmedIds((s) => new Set(s).add(id)),
     [],
   );
+  const clearConfirmed = useCallback((id: string) => {
+    setConfirmedIds((s) => {
+      if (!s.has(id)) return s;
+      const n = new Set(s);
+      n.delete(id);
+      return n;
+    });
+  }, []);
   const markProcessing = useCallback(
     (id: string) => setProcessingIds((s) => new Set(s).add(id)),
     [],
   );
+  const clearProcessing = useCallback((id: string) => {
+    setProcessingIds((s) => {
+      if (!s.has(id)) return s;
+      const n = new Set(s);
+      n.delete(id);
+      return n;
+    });
+  }, []);
   const markDone = useCallback((id: string) => {
     setDoneIds((s) => new Set(s).add(id));
     setProcessingIds((s) => {
@@ -341,7 +395,9 @@ export function useCardActions({ onOpenChat, composio }: UseCardActionsOptions) 
     textFeedback,
     markDismissed,
     markConfirmed,
+    clearConfirmed,
     markProcessing,
+    clearProcessing,
     markDone,
     markChatted,
   };

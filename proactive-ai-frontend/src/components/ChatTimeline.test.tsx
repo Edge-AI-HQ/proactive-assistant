@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { ComposioState } from "@/hooks/useComposio";
@@ -26,12 +26,19 @@ vi.mock("@/components/ui/drawer", async () => {
 });
 
 vi.mock("./CardDetailBody", () => ({
-  default: () => <div>Legacy timeline drawer</div>,
+  default: ({ onConfirm }: { onConfirm: () => void }) => (
+    <div>
+      Legacy timeline drawer
+      <button type="button" onClick={onConfirm}>Confirm mock</button>
+    </div>
+  ),
 }));
 
 vi.mock("@/lib/api", () => ({
   proxyPost: vi.fn(async () => new Response("{}", { status: 200 })),
 }));
+
+import { proxyPost } from "@/lib/api";
 
 const card: IntentCard = {
   id: "card-1",
@@ -113,5 +120,58 @@ describe("ChatTimeline card detail routing", () => {
       expect.objectContaining({ id: card.id, title: card.title }),
     );
     expect(screen.queryByText("Legacy timeline drawer")).toBeNull();
+  });
+
+  test("connector card confirm persists complete and does not open chat", async () => {
+    const onOpenChat = vi.fn();
+    const onDoneId = vi.fn();
+    const composio: ComposioState = {
+      ...stubComposio,
+      connectToolkit: vi.fn(async () => ({ ok: true })),
+    };
+    const connectorCard: IntentCard = {
+      ...card,
+      id: "connector-card",
+      intentKey: "connect:gmail",
+      title: "Connect Gmail",
+      primaryAction: { label: "Connect Gmail", type: "confirm" },
+    };
+
+    render(
+      <ChatTimeline
+        {...baseProps}
+        cards={{
+          ...baseProps.cards,
+          cards: [{
+            card: connectorCard,
+            runId: "run-1",
+            runCompletedAt: "2026-05-18T19:00:00Z",
+            score: null,
+            latestOutcome: null,
+            outcomeAt: null,
+          }],
+        }}
+        composio={composio}
+        onOpenChat={onOpenChat}
+        onDoneId={onDoneId}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Connect Gmail"));
+    fireEvent.click(screen.getByText("Confirm mock"));
+
+    await waitFor(() => {
+      expect(proxyPost).toHaveBeenCalledWith("/feedback", {
+        kind: "card_action",
+        action: "complete",
+        intentCardId: "connector-card",
+        intentKey: "connect:gmail",
+        basket: "work",
+        channel: "web",
+      });
+    });
+    expect(composio.connectToolkit).toHaveBeenCalledWith("gmail");
+    expect(onDoneId).toHaveBeenCalledWith("connector-card");
+    expect(onOpenChat).not.toHaveBeenCalled();
   });
 });

@@ -9,9 +9,9 @@
  *     contains a literal `[connect:<slug>]` tag.
  *
  * Returns the canonical Composio slug if the card / chip was a
- * connector-guidance one and the OAuth flow was kicked off; returns
- * null when the input wasn't recognized (caller falls back to its
- * normal confirm flow).
+ * connector-guidance one and the OAuth flow ran; returns null when
+ * the input wasn't recognized (caller falls back to its normal
+ * confirm flow).
  */
 import type { ComposioState } from "@/hooks/useComposio";
 import type { IntentCard } from "@/types/intent-card";
@@ -20,6 +20,11 @@ import { openOAuthAndAwaitClose } from "./oauth-popup";
 import { getToolkit } from "./toolkit-icons";
 
 const CONNECT_PREFIX = "connect:";
+
+export interface PreparedConnectorOAuth {
+  canonicalSlug: string;
+  redirectUrl?: string;
+}
 
 /** True if this card is a connector-guidance card (intent_key="connect:<slug>"). */
 export function isConnectorCard(card: Pick<IntentCard, "intentKey">): boolean {
@@ -31,6 +36,13 @@ export function isConnectorCard(card: Pick<IntentCard, "intentKey">): boolean {
 export function connectorSlugFromIntentKey(intentKey: string | undefined): string | null {
   if (!intentKey || !intentKey.startsWith(CONNECT_PREFIX)) return null;
   return intentKey.slice(CONNECT_PREFIX.length);
+}
+
+/** Return the canonical toolkit slug for a recognized connector card. */
+export function canonicalConnectorSlugFromIntentKey(intentKey: string | undefined): string | null {
+  const slug = connectorSlugFromIntentKey(intentKey);
+  if (!slug) return null;
+  return getToolkit(slug)?.canonicalSlug ?? null;
 }
 
 /**
@@ -47,37 +59,61 @@ export function connectorSlugFromIntentKey(intentKey: string | undefined): strin
 export async function triggerConnectorOAuth(
   slug: string,
   composio: ComposioState,
+  options?: { awaitClose?: boolean },
 ): Promise<string | null> {
+  const prepared = await prepareConnectorOAuth(slug, composio);
+  if (!prepared) return null;
+  await openPreparedConnectorOAuth(prepared, options);
+  return prepared.canonicalSlug;
+}
+
+export async function prepareConnectorOAuth(
+  slug: string,
+  composio: ComposioState,
+): Promise<PreparedConnectorOAuth | null> {
   const meta = getToolkit(slug);
   if (!meta) return null;
   try {
     const result = await composio.connectToolkit(meta.canonicalSlug);
-    if (result.ok && result.redirectUrl) {
-      await openOAuthAndAwaitClose(result.redirectUrl);
-    }
-    // No error toast here: nudges are best-effort. Connection list
-    // refresh happens via DataConnections / useComposio's own poll.
+    if (!result.ok) return null;
+    return {
+      canonicalSlug: meta.canonicalSlug,
+      ...(result.redirectUrl ? { redirectUrl: result.redirectUrl } : {}),
+    };
   } catch {
     // swallow — the chip / card already returned the user to flow
   }
-  return meta.canonicalSlug;
+  return null;
+}
+
+export async function openPreparedConnectorOAuth(
+  prepared: PreparedConnectorOAuth,
+  options?: { awaitClose?: boolean },
+): Promise<void> {
+  if (!prepared.redirectUrl) return;
+  const closePromise = openOAuthAndAwaitClose(prepared.redirectUrl);
+  if (options?.awaitClose === false) {
+    void closePromise.catch(() => undefined);
+    return;
+  }
+  await closePromise;
 }
 
 /**
- * Card-side entry point: if `card` is a connector-guidance card, kick
- * off OAuth and return the canonical slug; otherwise return null so
- * the caller can run its normal confirm flow (open chat thread, etc.).
+ * Card-side entry point: if `card` is a connector-guidance card, run
+ * OAuth and return the canonical slug; otherwise return null so the
+ * caller can run its normal confirm flow (open chat thread, etc.).
  */
-export function tryHandleConnectorCard(
+export async function tryHandleConnectorCard(
   card: Pick<IntentCard, "intentKey">,
   composio: ComposioState,
-): string | null {
-  const slug = connectorSlugFromIntentKey(card.intentKey);
-  if (!slug) return null;
-  const meta = getToolkit(slug);
+): Promise<string | null> {
+  const canonicalSlug = canonicalConnectorSlugFromIntentKey(card.intentKey);
+  if (!canonicalSlug) return null;
+  const meta = getToolkit(canonicalSlug);
   if (!meta) return null;
-  // Fire and forget — handleConfirm / useCardActions update card state
-  // (mark done, post feedback) synchronously alongside this call.
-  void triggerConnectorOAuth(slug, composio);
+  const prepared = await prepareConnectorOAuth(canonicalSlug, composio);
+  if (!prepared) return null;
+  await openPreparedConnectorOAuth(prepared, { awaitClose: false });
   return meta.canonicalSlug;
 }
