@@ -48,7 +48,7 @@ from ...shared.api_models import (
 )
 from ..harness.ctx import run_context
 from ..harness.llm import make_chat_model
-from .generation_context import build_generation_context
+from .generation_context import _connection_toolkit, build_generation_context
 
 logger = logging.getLogger(__name__)
 
@@ -175,10 +175,11 @@ on this batch, stronger than inferred signals:
 </preference_alignment>
 
 <connected_raw_sources>
-`<phase1_json>` includes `connections` (ACTIVE Composio accounts)
-and `connected_raw` (local raw rows from each connected, supported
-source over the context window). Treat `connected_raw` as first-class fresh
-evidence alongside Gmail/GCal:
+`<phase1_json>` includes `connections_summary` (the user's ACTIVE
+Composio accounts, one row per toolkit) and `connected_raw` rows
+surface inside `sources[]` from each connected, supported source
+over the context window. Treat connected raw rows as first-class
+fresh evidence alongside Gmail/GCal:
 
 - Connected Slack appears under `connected_raw["slack/messages"]`.
 - Connected Google Drive appears under `connected_raw["gdrive/files"]`.
@@ -213,6 +214,57 @@ underlying decision (not the card title). Examples:
 "openai-budget-cap". The same intent across runs gets the same key
 so dedup is deterministic.
 </intent_key_convention>
+
+<connector_guidance_cards>
+You may plan cards with intent_key prefix "connect:<toolkit_slug>". These
+are SOFT NUDGES to connect a missing Composio data source so future cards
+and chat answers get materially better. They are NOT marketing — never
+plan one without a real reason.
+
+Valid slugs (use exactly these — the frontend renders icons by slug):
+  gmail, google_calendar, slack, github, google_drive, calendly,
+  linkedin, stripe, youtube.
+
+Inputs you read to decide:
+- `connections_summary[]` — toolkits the user has ALREADY connected
+  (status="ACTIVE"). Never nudge a toolkit listed here.
+- `cards_recent[].intentKey` + `latestOutcome` — was this same nudge
+  already shown? if `latestOutcome` is null (no action yet) or
+  positive, do NOT re-plan it; if dismissed, see feedback rule below.
+- `feedback[].intentKey` + `outcome` — has the user explicitly
+  rejected this connector before? if so, do not re-plan it this run.
+- `sources[]` — the user's actual context, used to make the nudge
+  SPECIFIC to their data instead of generic.
+
+WHEN to plan one:
+  1. SIGNAL-DRIVEN: a `sources[]` entry mentions a domain whose connector
+     is NOT in connections_summary as ACTIVE. Examples:
+       - a signal mentions a meeting → suggest google_calendar
+       - a signal mentions email → suggest gmail
+       - a memory mentions a PR/repo → suggest github
+       - a signal mentions a Slack thread → suggest slack
+     The triggering source MUST be citable in the card's `sources[]`.
+  2. COLD-START: connections_summary is empty AND `cards_recent` has
+     fewer than 3 entries → plan exactly ONE guidance card. Rotation
+     order: gmail → google_calendar → slack. Pick the first slug in
+     this list whose `connect:<slug>` is NOT in cards_recent and NOT
+     in feedback as a dismiss/snooze.
+
+WHEN NOT to plan one:
+  - target toolkit is in connections_summary with status="ACTIVE"
+  - same `connect:<toolkit>` intent_key appears in `cards_recent` and
+    its `latestOutcome` is null or positive (still pending user action)
+  - same `connect:<toolkit>` appears in `feedback` with an outcome
+    that signals rejection (dismiss/snooze/negative)
+
+BUDGET per run:
+  - cold-start: at most 1 guidance card
+  - signal-driven: at most 2 guidance cards, each for a DIFFERENT toolkit
+
+TONE: soft, specific to the user's own data. Never marketing. Never
+"You should connect X." The card-generator stage will write the actual
+text; planner just decides whether to include the item.
+</connector_guidance_cards>
 
 <output>
 Your `response_format` is `PlanOutput`. Validation will reject
@@ -313,6 +365,47 @@ a `secondary_actions` entry or skip it. The primary_action represents
 your single recommendation; if you can't pick, the card isn't ready
 and should be dropped into `skipped_plan_items`.
 </one_decision_per_card>
+
+<connector_guidance_card_format>
+When the plan item has intent_key prefix "connect:<toolkit_slug>", you
+are writing a connector-guidance card. The frontend renders these
+specially: clicking the primary action opens the OAuth connect flow
+directly — it does NOT open a chat thread. Emit the card with:
+
+- intent_key: keep the plan item's slug verbatim (e.g.,
+  "connect:google_calendar"). Valid toolkits: gmail, google_calendar,
+  slack, github, google_drive, calendly, linkedin, stripe, youtube.
+- goal_basket: the basket that best explains WHY this connector helps
+  the user (e.g., a calendar nudge tied to work meetings → "work";
+  a generic personal calendar → "life").
+- title: ≤60 chars, soft and outcome-led. DO NOT start with the
+  imperative verb "Connect".
+    GOOD: "I could prep your Tuesday review if you connect Calendar"
+    BAD : "Connect Google Calendar"
+- why_now: one sentence citing the SPECIFIC trigger signal (verbatim
+  detail from `sources[]`). For cold-start, write: "You haven't
+  connected any data sources yet."
+- summary: 2 sentences. (1) the concrete value this connector unlocks
+  for THIS user given their context. (2) what data we pull, in plain
+  words ("read-only access to your calendar events"). No marketing.
+- primary_action:
+    label: "Connect <Human Name>"   # e.g., "Connect Calendar"
+    type: "confirm"
+    agent_prompt: null   # REQUIRED null — frontend intercepts on click
+                         # and runs the OAuth flow; chat MUST NOT open.
+- secondary_actions: [{"label": "Not now", "type": "snooze",
+                       "agent_prompt": null}]
+- sources: cite the triggering signal/memory verbatim. For cold-start,
+  cite the cold-start fact literally:
+    "connections_summary=[] (no data sources connected yet)"
+- confidence: 0.7–0.9
+- urgency: ≤0.4   # connector guidance is NEVER urgent
+- importance: 0.5–0.7
+
+The agent_prompt=null exception only applies to connector-guidance
+cards. All other cards still require a runnable agent_prompt on
+confirm/modify.
+</connector_guidance_card_format>
 
 <output>
 `response_format` is `CardsList`. The schema enforces `sources[]`
@@ -674,6 +767,19 @@ def _compact_phase1_for_planner(
             30,
             keys=("id", "statement", "scope", "polarity", "durability", "expires_at", "weight"),
         ),
+        # Compact view of Composio connections so the planner can decide
+        # whether to emit a connector-guidance card (intent_key="connect:<slug>").
+        # The full `connections` and `connected_raw` blobs are still in phase1
+        # for downstream stages; planner only needs toolkit + status + label.
+        "connections_summary": [
+            {
+                "toolkit": _connection_toolkit(conn),
+                "status": conn.get("status"),
+                "label": conn.get("label"),
+            }
+            for conn in (phase1.get("connections") or [])
+            if isinstance(conn, dict) and _connection_toolkit(conn)
+        ],
     }
 
 
