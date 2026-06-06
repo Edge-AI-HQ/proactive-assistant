@@ -21,6 +21,7 @@ import {
   type PlanCode, type SubscriptionState, type UsageInfo,
 } from "@/lib/api";
 import { PLANS } from "./PlanPaymentForm";
+import SwipeBackLayer from "./SwipeBackLayer";
 
 // AmbientModelsPanel pulls in @pin/capacitor-ambient-ai which is
 // rollup-external for the web build, so it must be loaded lazily and
@@ -51,6 +52,11 @@ export interface AccountPanelProps {
    * can resurrect the flow under a different surface without API churn.
    */
   onDeleteAccount?: () => Promise<void>;
+  /** Controlled current sub-page. Lifted to useAppNavigation so the global
+   *  goBack() (left-edge swipe) can pop a sub-page back to "main". */
+  subPage: SettingsSubPage;
+  /** Setter for the controlled sub-page. */
+  onSubPageChange: (p: SettingsSubPage) => void;
 }
 
 export default function AccountPanel({
@@ -58,36 +64,29 @@ export default function AccountPanel({
   avatarLetter,
   userEmail,
   onSignOut,
-}: AccountPanelProps = {}) {
+  subPage,
+  onSubPageChange,
+}: AccountPanelProps) {
   const initial = (avatarLetter ?? userName.trim().slice(0, 1) ?? "?").toUpperCase();
   const subtitle = userEmail ?? "Signed in";
+  // subPage is controlled by ConstellationLayout via useAppNavigation so the
+  // global goBack() (left-edge swipe) can pop a sub-page back to "main".
+  // sessionStorage persistence now lives in the hook.
+  const setSubPage = onSubPageChange;
 
-  // subPage persisted to sessionStorage so F5 keeps the user on the
-  // sub-page they were viewing (e.g. Subscription) instead of bouncing
-  // back to Account → main.
-  const [subPage, setSubPageState] = useState<SettingsSubPage>(() => {
-    if (typeof window === "undefined") return "main";
-    const stored = window.sessionStorage.getItem("pai-account-subpage");
-    return (stored as SettingsSubPage | null) ?? "main";
-  });
-  const setSubPage = useCallback((v: SettingsSubPage) => {
-    setSubPageState(v);
-    if (typeof window !== "undefined") {
-      window.sessionStorage.setItem("pai-account-subpage", v);
-    }
-  }, []);
-
-  if (subPage === "subscription") {
-    return <SubscriptionSubPage onBack={() => setSubPage("main")} />;
-  }
-  if (subPage === "preferences") {
-    return <PreferencesSubPage onBack={() => setSubPage("main")} />;
-  }
-  if (subPage === "notifications") {
-    return <NotificationsSubPage onBack={() => setSubPage("main")} />;
-  }
-  if (subPage === "ambient") {
-    return <AmbientSubPage onBack={() => setSubPage("main")} />;
+  if (subPage !== "main") {
+    // Each sub-page keeps its own ArrowLeft button; SwipeBackLayer adds the
+    // iOS-style left-edge drag that also pops back to the settings main page.
+    const sub =
+      subPage === "subscription" ? <SubscriptionSubPage onBack={() => setSubPage("main")} /> :
+      subPage === "preferences" ? <PreferencesSubPage onBack={() => setSubPage("main")} /> :
+      subPage === "notifications" ? <NotificationsSubPage onBack={() => setSubPage("main")} /> :
+      <AmbientSubPage onBack={() => setSubPage("main")} />;
+    return (
+      <SwipeBackLayer onBack={() => setSubPage("main")} className="h-full">
+        {sub}
+      </SwipeBackLayer>
+    );
   }
 
   return (

@@ -13,7 +13,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 describe("ConstellationLayout menu order", () => {
   test("matches the minimalist constellation design nav order", () => {
-    const source = readFileSync(join(__dirname, "ConstellationLayout.tsx"), "utf8");
+    // MENU_ITEMS moved into SideMenu.tsx (god-component extraction); the
+    // nav order it locks is unchanged.
+    const source = readFileSync(join(__dirname, "SideMenu.tsx"), "utf8");
     const menuSource = source.match(/const MENU_ITEMS = \[([\s\S]*?)\] as const;/);
 
     expect(menuSource).not.toBeNull();
@@ -68,6 +70,10 @@ describe("ConstellationLayout menu order", () => {
 
   test("aligns top action buttons with the active page title safe-area height", () => {
     const layoutSource = readFileSync(join(__dirname, "ConstellationLayout.tsx"), "utf8");
+    // The NOW greeting (which carries the title's paddingTop) moved into
+    // NowView.tsx during god-component extraction; the top action buttons
+    // (top: ...) stay in the layout. Both still share the same var.
+    const nowViewSource = readFileSync(join(__dirname, "NowView.tsx"), "utf8");
     const ambientSource = readFileSync(join(__dirname, "AmbientView.tsx"), "utf8");
     const tasksSource = readFileSync(join(__dirname, "..", "ChatTimeline.tsx"), "utf8");
     const connectSource = readFileSync(join(__dirname, "..", "ControlPanel.tsx"), "utf8");
@@ -80,7 +86,7 @@ describe("ConstellationLayout menu order", () => {
       "max(4.5rem, calc(max(env(safe-area-inset-top, 0px), var(--safe-top, 0px)) + 0.75rem))",
     );
     expect(layoutSource).toContain('top: "var(--constellation-header-top)"');
-    expect(layoutSource).toContain('paddingTop: "var(--constellation-header-top)"');
+    expect(nowViewSource).toContain('paddingTop: "var(--constellation-header-top)"');
     expect(platformSource).toContain("--safe-top");
     expect(layoutSource).not.toContain('className="absolute top-12 right-5');
     expect(layoutSource).not.toContain('className={`-mt-1 p-2');
@@ -91,7 +97,9 @@ describe("ConstellationLayout menu order", () => {
   });
 
   test("does not add extra top padding around the TASKS view", () => {
-    const source = readFileSync(join(__dirname, "ConstellationLayout.tsx"), "utf8");
+    // The activeView dispatch (incl. the TASKS branch) moved into
+    // ViewRouter during god-component extraction.
+    const source = readFileSync(join(__dirname, "ViewRouter.tsx"), "utf8");
     const tasksBranch = source.match(
       /\) : activeView === "chat" \? \(([\s\S]*?)\) : activeView === "ambient" \? \(/,
     );
@@ -101,14 +109,18 @@ describe("ConstellationLayout menu order", () => {
     expect(tasksBranch?.[1]).not.toContain('className="h-full overflow-y-auto pt-12"');
   });
 
-  test("passes the shared cards state into the TASKS view", () => {
+  test("provides shared card state to the TASKS view via context", () => {
     const source = readFileSync(join(__dirname, "ConstellationLayout.tsx"), "utf8");
-    const tasksBranch = source.match(
+    // cardsState/cardActions reach the Tasks timeline through CardStateContext
+    // (phase-2 de-prop-drilling), not 11 individual props. The provider stays
+    // in the layout; the TASKS branch that consumes it moved into ViewRouter.
+    expect(source).toContain("<CardStateProvider value={{ cardsState, cardActions }}>");
+    const routerSource = readFileSync(join(__dirname, "ViewRouter.tsx"), "utf8");
+    const tasksBranch = routerSource.match(
       /\) : activeView === "chat" \? \(([\s\S]*?)\) : activeView === "ambient" \? \(/,
     );
-
     expect(tasksBranch).not.toBeNull();
-    expect(tasksBranch?.[1]).toContain("cards={cardsState}");
+    expect(tasksBranch?.[1]).toContain("<RealChatTimeline");
   });
 
   test("refreshes cards immediately after generation completes", () => {

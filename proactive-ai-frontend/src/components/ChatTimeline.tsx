@@ -20,8 +20,9 @@ import {
   prepareConnectorOAuth,
 } from "@/lib/connector-card";
 import { getToolkit } from "@/lib/toolkit-icons";
-import type { CardScore, UseCardsState } from "@/hooks/useCards";
+import type { CardScore } from "@/hooks/useCards";
 import type { ComposioState } from "@/hooks/useComposio";
+import { useCardState } from "@/components/constellation/CardStateContext";
 
 type TimelineCard = IntentCard & {
   runId: string;
@@ -38,19 +39,6 @@ interface ChatTimelineProps {
   // rich drawer as NOW. Standalone legacy callers omit it and keep the
   // local CardDetailBody fallback below.
   onOpenCardDetail?: (card: IntentCard) => void;
-  dismissedIds: Set<string>;
-  confirmedIds: Set<string>;
-  processingIds: Set<string>;
-  doneIds: Set<string>;
-  chattedIds: Set<string>;
-  onDismissId: (id: string) => void;
-  onConfirmId: (id: string) => void;
-  onClearConfirmId?: (id: string) => void;
-  onDoneId: (id: string) => void;
-  onProcessingId: (id: string) => void;
-  onClearProcessingId?: (id: string) => void;
-  onChattedId: (id: string) => void;
-  cards: UseCardsState;
   /**
    * Caller-owned Composio state. Injected so the live shell shares ONE
    * useComposio instance (ConstellationLayout already has one). Used by
@@ -77,21 +65,26 @@ function formatDate(iso: string): string {
 export default function ChatTimeline({
   onOpenChat,
   onOpenCardDetail,
-  dismissedIds,
-  confirmedIds,
-  processingIds,
-  doneIds,
-  chattedIds,
-  onDismissId,
-  onConfirmId,
-  onClearConfirmId,
-  onDoneId,
-  onProcessingId,
-  onClearProcessingId,
-  onChattedId,
-  cards,
   composio,
 }: ChatTimelineProps) {
+  // cardsState + cardActions come from context (phase-2 de-prop-drilling).
+  // Alias the action fields back to the old local names so the render/handlers
+  // below are untouched.
+  const { cardsState: cards, cardActions } = useCardState();
+  const {
+    dismissedIds,
+    confirmedIds,
+    processingIds,
+    doneIds,
+    chattedIds,
+    markDismissed: onDismissId,
+    markConfirmed: onConfirmId,
+    clearConfirmed: onClearConfirmId,
+    markDone: onDoneId,
+    markProcessing: onProcessingId,
+    clearProcessing: onClearProcessingId,
+    markChatted: onChattedId,
+  } = cardActions;
   const [selectedCard, setSelectedCard] = useState<TimelineCard | null>(null);
 
   const handleDismiss = () => {

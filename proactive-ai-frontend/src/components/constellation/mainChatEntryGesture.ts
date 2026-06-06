@@ -101,3 +101,16 @@ export function shouldIgnoreMainMenuSwipeTarget(target: EventTarget | null): boo
   if (!(target instanceof Element)) return false;
   return target.closest(`[${MAIN_MENU_SWIPE_IGNORE_ATTR}="true"]`) !== null;
 }
+
+/**
+ * Width of the screen-edge zone (px from the LEFT edge) where a touch
+ * is treated as "go back" intent — mirrors MAIN_MENU_EDGE_OPEN_THRESHOLD_PX
+ * on the right edge. Kept narrow so it doesn't steal horizontal scrolls /
+ * sphere drags that start mid-screen.
+ */
+export const LEFT_EDGE_BACK_THRESHOLD_PX = 20;
+
+/** True when the pointer started in the left-edge zone of the screen. */
+export function isFromLeftEdgeOfScreen(clientX: number): boolean {
+  return clientX <= LEFT_EDGE_BACK_THRESHOLD_PX;
+}

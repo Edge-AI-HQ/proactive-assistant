@@ -20,6 +20,7 @@ import { basketMeta } from "@/lib/basket-meta";
 import type { IntentCard, EvaluationScore } from "@/types/intent-card";
 import NowFeed from "./NowFeed";
 import ChatTimeline from "./ChatTimeline";
+import { CardStateProvider, type CardActions } from "@/components/constellation/CardStateContext";
 import GoalsView from "./GoalsView";
 import ControlPanel from "./ControlPanel";
 import DebugPanel from "./DebugPanel";
@@ -808,27 +809,44 @@ export default function AppShell({ userName, onSignOut }: AppShellProps) {
               className="flex-1 min-h-0"
             >
               {activeView === "chat" && (
-                <ChatTimeline
-                  cards={cardsState}
-                  composio={composio}
-                  onOpenChat={handleOpenChatDirect}
-                  dismissedIds={dismissedIds}
-                  confirmedIds={confirmedIds}
-                  processingIds={processingIds}
-                  doneIds={doneIds}
-                  chattedIds={chattedIds}
-                  onDismissId={(id) => setDismissedIds((prev) => new Set(prev).add(id))}
-                  onConfirmId={(id) => {
-                    setConfirmedIds((prev) => new Set(prev).add(id));
-                    setProcessingIds((prev) => new Set(prev).add(id));
+                // AppShell is the retired shell (not mounted by App.tsx) and
+                // predates useCardActions — it tracks these ids in its own
+                // local state. Adapt that state to the CardActions shape
+                // ChatTimeline now reads from context. The `as unknown as`
+                // is the only option here: this legacy adapter only needs the
+                // ~10 fields ChatTimeline reads, not the full useCardActions
+                // surface, and AppShell has no useCardActions to hand over.
+                <CardStateProvider
+                  value={{
+                    cardsState,
+                    cardActions: {
+                      dismissedIds,
+                      confirmedIds,
+                      processingIds,
+                      doneIds,
+                      chattedIds,
+                      markDismissed: (id: string) =>
+                        setDismissedIds((prev) => new Set(prev).add(id)),
+                      markConfirmed: (id: string) => {
+                        setConfirmedIds((prev) => new Set(prev).add(id));
+                        setProcessingIds((prev) => new Set(prev).add(id));
+                      },
+                      markDone: (id: string) => {
+                        setDoneIds((prev) => new Set(prev).add(id));
+                        setProcessingIds((prev) => {
+                          const n = new Set(prev);
+                          n.delete(id);
+                          return n;
+                        });
+                      },
+                      markProcessing: (id: string) =>
+                        setProcessingIds((prev) => new Set(prev).add(id)),
+                      markChatted: persistChatted,
+                    } as unknown as CardActions,
                   }}
-                  onDoneId={(id) => {
-                    setDoneIds((prev) => new Set(prev).add(id));
-                    setProcessingIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
-                  }}
-                  onProcessingId={(id) => setProcessingIds((prev) => new Set(prev).add(id))}
-                  onChattedId={persistChatted}
-                />
+                >
+                  <ChatTimeline onOpenChat={handleOpenChatDirect} composio={composio} />
+                </CardStateProvider>
               )}
               {activeView === "goals" && <GoalsView composio={composio} />}
               {activeView === "control" && <ControlPanel composio={composio} />}
