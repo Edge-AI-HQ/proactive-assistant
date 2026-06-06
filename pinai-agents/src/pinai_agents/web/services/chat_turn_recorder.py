@@ -50,9 +50,16 @@ class ChatTurnRecorder:
             except (ValueError, UnicodeDecodeError):
                 continue
             if isinstance(payload, dict):
-                self._consume(payload)
+                self.consume_event(payload)
 
-    def _consume(self, payload: dict[str, Any]) -> None:
+    def consume_event(self, payload: dict[str, Any]) -> None:
+        """Accumulate one already-parsed SSE event dict.
+
+        `feed()` calls this after parsing raw bytes (main chat, which pipes the
+        worker's byte stream). proactive_loop iterates already-decoded events
+        (it json.loads each SSE line to relay to the bus) and feeds them here
+        directly, so the same coalescing logic backs both history sources.
+        """
         etype = payload.get("type")
         data = payload.get("data") or {}
         if etype == EV_CHAT_DELTA:

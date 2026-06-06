@@ -27,7 +27,7 @@ from typing import Any
 
 from ..harness.factory import BackendProtocol, build_agent
 from ..harness.llm import make_chat_model
-from ..tools.direct import ALL_TOOLS
+from ..tools.direct import ALL_TOOLS, HITL_INTERRUPT_ON
 from ..tools.direct.propose_action import propose_action
 from .prompts import (
     CODE_MODE_GUIDANCE,
@@ -240,5 +240,6 @@ def make_card_execution_agent(
         system_prompt=_INSTRUCTIONS,
         backend=backend,
         tools=[*ALL_TOOLS, propose_action],
+        interrupt_on=HITL_INTERRUPT_ON,
         with_checkpointer=True,
     )

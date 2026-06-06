@@ -25,6 +25,7 @@ Once-shot task lifecycle (after migration 031):
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -37,6 +38,8 @@ from typing import Any, Protocol
 import httpx
 from psycopg_pool import AsyncConnectionPool
 
+from ...shared.agent_run import AgentKind
+from ..agent_core.service import AgentRunService
 from ..auth.agent_jwt import sign_agent_run_jwt
 from ..db.repositories.evolution import EvolutionRepository
 from ..db.repositories.scheduled_tasks import (
@@ -154,9 +157,38 @@ def _generation_context_since(
 _LONG_LEASE_SECONDS = 600
 _GENERATOR_LEASE_SECONDS = 600
 
+# Scheduler task.kind → unified pai_agent_runs agent_kind (RC-3). Batch agents
+# get a ledger row alongside conversational agents so every agent run lives in
+# one table. Excluded: connector.init/sync (not agents — plan §299) and
+# proactive.tick (RC-1 routes it through the actor mailbox, where the worker
+# creates the run).
+_AGENT_RUN_KIND: dict[str, AgentKind] = {
+    "auto.dreaming": "dream",
+    "connector.evolve": "evolve",
+    "crystallize": "crystallize",
+    "generator.manual": "generator",
+    "generator.auto": "generator",
+    "user.prompt": "dream",
+}
+
+# Producer kinds: scheduled tasks that only PRODUCE work (enqueue onto the actor
+# mailbox) instead of executing it inline. They take the lightweight dispatch
+# path (see dispatch / _dispatch_producer) — no per-run ledger row, no
+# pai_agent_runs mirror — because the real execution (the proactive agent) runs
+# in AgentRunWorker with its own pai_agent_runs row. Multi-instance dedup still
+# comes from tick_loop's SKIP LOCKED claim + next_run_at advance, so dropping the
+# insert_run UNIQUE guard here is safe.
+_PRODUCER_KINDS: frozenset[str] = frozenset({"proactive.tick"})
+
 
 class DefaultDispatcher:
-    """Routes by task.kind. Step F-3 wires real chat-worker handlers."""
+    """Routes a scheduled task to its handler by task.kind.
+
+    Handler methods import their service deps lazily (function-body imports,
+    flagged PLC0415) on purpose: it breaks the scheduler↔services import cycle
+    and keeps heavy modules (generator, card_fanout, …) off the dispatcher's
+    import path until the matching task actually fires.
+    """
 
     def __init__(
         self,
@@ -164,10 +196,15 @@ class DefaultDispatcher:
         *,
         lease_seconds: int,
         owner: str | None = None,
+        service: AgentRunService | None = None,
     ) -> None:
         self._pool = pool
         self._lease_seconds = lease_seconds
         self._owner = owner or f"web-{uuid.uuid4().hex[:8]}"
+        # RC-3: when set, batch agent runs are mirrored into the unified
+        # pai_agent_runs ledger via start_run/finish_run. Optional so tests can
+        # build a dispatcher without the full actor service.
+        self._service = service
 
     def _lease_for(self, kind: str) -> int:
         if kind in _GENERATOR_KINDS:
@@ -193,12 +230,18 @@ class DefaultDispatcher:
         # pai_evolution_runs) key on their own ids set by the chat
         # worker, not on this run_id, so they're unaffected too.
         run_id = f"{task.id}.{uuid.uuid4().hex[:8]}"
-        scheduled_for = task.last_run_at  # type: ignore[assignment]
+        scheduled_for = task.last_run_at
         if scheduled_for is None:
             logger.warning(
                 "dispatch skipped: task=%s has no last_run_at",
                 task.id,
             )
+            return
+
+        # Producer kinds (proactive.tick) only enqueue onto the actor mailbox,
+        # so they skip the whole per-run ledger below — see _PRODUCER_KINDS.
+        if task.kind in _PRODUCER_KINDS:
+            await self._dispatch_producer(task, run_id)
             return
 
         # Idempotent run-row insert; race losers exit cleanly. Lease
@@ -225,6 +268,17 @@ class DefaultDispatcher:
             )
             return
 
+        # RC-3: mirror batch agent runs into the unified pai_agent_runs ledger.
+        # Best-effort: a ledger hiccup must not block the actual run or its
+        # scheduled_task_runs / domain bookkeeping (the authoritative records).
+        agent_run_kind = _AGENT_RUN_KIND.get(task.kind)
+        agent_run_id: str | None = None
+        if agent_run_kind is not None and self._service is not None:
+            with contextlib.suppress(Exception):
+                agent_run_id = await self._service.start_run(
+                    agent_run_kind, user_id=task.user_id, trigger=task.kind
+                )
+
         try:
             await self._handle_kind(task, run_id)
         except Exception as e:
@@ -236,6 +290,11 @@ class DefaultDispatcher:
                 run_id,
             )
             err = f"{type(e).__name__}: {e}"
+            if agent_run_id is not None and self._service is not None:
+                with contextlib.suppress(Exception):
+                    await self._service.finish_run(
+                        agent_run_id, user_id=task.user_id, status="failed", error=err[:1000]
+                    )
             # The retry decision is uniform regardless of trigger_kind:
             # cron/interval tasks already had next_run_at advanced by
             # _persist_next, so record_failure_and_decide on a non-once
@@ -262,6 +321,12 @@ class DefaultDispatcher:
                 )
             return
 
+        if agent_run_id is not None and self._service is not None:
+            with contextlib.suppress(Exception):
+                await self._service.finish_run(
+                    agent_run_id, user_id=task.user_id, status="succeeded"
+                )
+
         async with service_tx(self._pool) as conn:
             await complete_run(
                 conn,
@@ -283,6 +348,39 @@ class DefaultDispatcher:
                     user_id=task.user_id,
                     task_id=task.id,
                 )
+
+    async def _dispatch_producer(self, task: ScheduledTaskRow, run_id: str) -> None:
+        """Lightweight dispatch for producer kinds (see _PRODUCER_KINDS): run the
+        handler (which enqueues onto the actor mailbox) + flip the task's
+        recurring success/failure state for backoff + /api/tasks status. No
+        per-run ledger row, no pai_agent_runs mirror — the worker owns the real
+        run record. next_run_at was already advanced by tick_loop at claim time;
+        multi-instance dedup is tick_loop's SKIP LOCKED claim."""
+        try:
+            await self._handle_kind(task, run_id)
+        except Exception as e:
+            logger.exception(
+                "producer dispatch failed user=%d task=%s kind=%s",
+                task.user_id,
+                task.id,
+                task.kind,
+            )
+            backoff = backoff_seconds_for_attempt(task.attempts + 1)
+            async with service_tx(self._pool) as conn:
+                await record_failure_and_decide(
+                    conn,
+                    user_id=task.user_id,
+                    task_id=task.id,
+                    last_error=f"{type(e).__name__}: {e}"[:1000],
+                    retry_backoff_seconds=backoff,
+                )
+            return
+        async with service_tx(self._pool) as conn:
+            await record_recurring_success(
+                conn,
+                user_id=task.user_id,
+                task_id=task.id,
+            )
 
     async def _handle_kind(self, task: ScheduledTaskRow, run_id: str) -> None:
         kind = task.kind
@@ -327,6 +425,46 @@ class DefaultDispatcher:
             from ..services import connector_ingest  # noqa: PLC0415
 
             await connector_ingest.run(self._pool, task, run_id)
+        elif kind == "proactive.tick":
+            # RC-1 (plan §十七): build the heartbeat content NOW (timeline window
+            # since the cursor) and post it as one source=heartbeat message onto
+            # the user's proactive session; the unified AgentRunWorker drains it.
+            # The cursor advances here (enqueue time) so a delayed drain never
+            # loses or repeats events. idempotency_key on run_id makes a
+            # scheduler retry a no-op (no duplicate heartbeat / double advance).
+            from ..agent_core.bus import notify_message  # noqa: PLC0415
+            from ..agent_core.mailbox import MailboxRepository  # noqa: PLC0415
+            from ..agent_core.sessions import SessionRepository  # noqa: PLC0415
+            from ..db.repositories.proactive import ProactiveRepository  # noqa: PLC0415
+            from ..db.rls import user_scoped_tx  # noqa: PLC0415
+            from ..services.proactive_window import build_heartbeat_message  # noqa: PLC0415
+
+            session_id = f"proactive-{task.user_id}"
+            window = await build_heartbeat_message(self._pool, task.user_id, session_id=session_id)
+            async with user_scoped_tx(self._pool, task.user_id) as conn:
+                await SessionRepository(task.user_id, conn).ensure_session(
+                    session_id=session_id, agent_kind="proactive"
+                )
+                enqueued = await MailboxRepository(task.user_id, conn).enqueue(
+                    session_id=session_id,
+                    source="heartbeat",
+                    content=window.text,
+                    meta={
+                        "windowStart": window.window_start.isoformat(),
+                        "windowEnd": window.window_end.isoformat(),
+                    },
+                    idempotency_key=f"tick-{run_id}",
+                )
+                # Advance the cursor in the SAME tx as the enqueue so a crash
+                # between the two can't replay or duplicate the window — they
+                # commit together or not at all. Only when we actually enqueued
+                # (idempotency_key dedupe returns None on a scheduler retry).
+                if enqueued is not None:
+                    await ProactiveRepository(task.user_id, conn).advance_last_tick_at(
+                        window.advance_to, thread_id=session_id
+                    )
+            if enqueued is not None:
+                await notify_message(self._pool, session_id)
         else:
             logger.warning("unknown task.kind=%s — no-op", kind)
 

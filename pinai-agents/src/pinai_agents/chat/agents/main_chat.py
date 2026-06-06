@@ -17,7 +17,7 @@ from typing import Any
 
 from ..harness.factory import BackendProtocol, SubAgent, build_agent
 from ..harness.llm import make_chat_model
-from ..tools.direct import ALL_TOOLS
+from ..tools.direct import ALL_TOOLS, HITL_INTERRUPT_ON
 from .prompts import (
     CODE_MODE_GUIDANCE,
     GROUNDING_POLICY,
@@ -244,5 +244,6 @@ def make_main_chat_agent(
         backend=backend,
         tools=ALL_TOOLS,
         subagents=[_ECHO_PROBE_SUBAGENT],
+        interrupt_on=HITL_INTERRUPT_ON,
         with_checkpointer=True,
     )

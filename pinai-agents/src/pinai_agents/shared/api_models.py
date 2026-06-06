@@ -157,6 +157,12 @@ class SettingsResponse(_CamelModel):
     auto_generate_interval_minutes: int
     auto_dreaming: bool
     auto_crystallize: bool
+    # Proactive heartbeat opt-in (the "Proactive" page toggle). Mirrored
+    # server-side into a per-user proactive.tick scheduler task.
+    proactive_enabled: bool
+    # Heartbeat cadence (seconds) — one of {30, 60, 300, 1800}. Mirrored into
+    # the proactive.tick task's interval. Default 300 (5 min).
+    proactive_interval_seconds: int
     metadata: dict[str, Any]
     # Keyed by source slug (sound_classifier, location, visit, activity,
     # barometer, media_notebook, etc.). Missing keys = no consent.
@@ -212,6 +218,10 @@ class SettingsUpdateRequest(_CamelModel):
     auto_generate_interval_minutes: int | None = Field(default=None, ge=15, le=1440)
     auto_dreaming: bool | None = None
     auto_crystallize: bool | None = None
+    proactive_enabled: bool | None = None
+    # One of the three UI buckets (seconds). Literal pins them so a bad client
+    # can't create a runaway heartbeat; the DB CHECK is the backstop.
+    proactive_interval_seconds: Literal[60, 300, 1800] | None = None
     metadata: dict[str, Any] | None = None
     # Partial patch — keys present in this map are merged into
     # pai_user_settings.ambient_sources; keys with ``null`` value are

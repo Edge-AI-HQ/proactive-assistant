@@ -1,4 +1,4 @@
-"""/api/agent/memory/* — agent-side memory endpoints (HS256 JWT).
+"""/api/agent/memory/* — agent-side memory endpoints (EdDSA JWT).
 
 Endpoints follow PinCLI command surface:
   GET  /api/agent/memory/list
@@ -8,7 +8,7 @@ Endpoints follow PinCLI command surface:
   POST /api/agent/memory/supersede
 
 Implementation reuses MemoryRepository (same as /api/memory). Auth dep
-swaps Supabase JWT for HS256 agent run JWT.
+swaps Supabase JWT for EdDSA agent run JWT.
 """
 
 from __future__ import annotations

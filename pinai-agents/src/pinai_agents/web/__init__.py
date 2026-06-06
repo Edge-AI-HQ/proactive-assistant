@@ -2,7 +2,7 @@
 
 FastAPI server that takes Supabase JWT from the frontend, exposes
 `/api/*` (UI) and `/api/agent/*` (agent), runs Repository against
-service_role Postgres, signs HS256 JWTs for chat process / sandbox.
+service_role Postgres, signs EdDSA JWTs for chat process / sandbox.
 
 ruff banned-api forbids `pinai_agents.chat` imports from here — the LLM
 loop must stay isolated in the chat process. See

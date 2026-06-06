@@ -3,7 +3,7 @@
 Three principal types map to three deps:
 
   * `current_user`            — frontend Supabase JWT → User (BIGINT id)
-  * `current_agent_run`       — agent HS256 JWT → AgentRun (user_id + run_id)
+  * `current_agent_run`       — agent EdDSA JWT → AgentRun (user_id + run_id)
   * `pool` (utility)          — extracts the live pg pool from app.state
 
 The deps DO NOT enforce app.user_id RLS — that's the route's job to

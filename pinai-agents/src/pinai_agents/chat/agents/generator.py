@@ -988,7 +988,9 @@ def _compact_phase1_for_topup(compact_phase1: dict[str, Any]) -> dict[str, Any]:
 
 
 def _tokenize(value: str) -> set[str]:
-    return {part for part in re.split(r"[^A-Za-z0-9_\-\u4e00-\u9fff]+", value.lower()) if len(part) > 2}
+    return {
+        part for part in re.split(r"[^A-Za-z0-9_\-\u4e00-\u9fff]+", value.lower()) if len(part) > 2
+    }
 
 
 def _source_score_for_plan(plan_text: str, source: dict[str, Any]) -> float:
@@ -1123,7 +1125,9 @@ def _rank_cards(
         best_by_intent.values(),
         key=lambda card: (
             bool(getattr(eval_by_intent.get(getattr(card, "intent_key", "")), "pass_", False)),
-            float(getattr(eval_by_intent.get(getattr(card, "intent_key", "")), "overall", 0.0) or 0.0),
+            float(
+                getattr(eval_by_intent.get(getattr(card, "intent_key", "")), "overall", 0.0) or 0.0
+            ),
             float(getattr(card, "importance", 0.0) or 0.0),
             float(getattr(card, "urgency", 0.0) or 0.0),
         ),
@@ -1205,10 +1209,7 @@ def _existing_card_context(
                 "title": _truncate(getattr(card, "title", ""), 160),
                 "why_now": _truncate(getattr(card, "why_now", ""), 160),
                 "summary": _truncate(getattr(card, "summary", ""), 260),
-                "sources": [
-                    _truncate(source, 140)
-                    for source in getattr(card, "sources", [])[:2]
-                ],
+                "sources": [_truncate(source, 140) for source in getattr(card, "sources", [])[:2]],
             }
             for card in generated_cards
         ],

@@ -145,8 +145,7 @@ async def test_future_card_text_feedback_creates_active_preference(pool, user_id
     assert len(preferences) == 1
     pref = preferences[0]
     assert pref.statement == (
-        "Stop showing me VC funding rumor cards again; "
-        "focus on deeply technical AI infra papers."
+        "Stop showing me VC funding rumor cards again; focus on deeply technical AI infra papers."
     )
     assert pref.scope == "topic"
     assert pref.polarity == "negative"

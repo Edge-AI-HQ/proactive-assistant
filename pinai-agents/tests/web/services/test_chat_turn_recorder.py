@@ -39,6 +39,13 @@ def _tool_result(tcid: str, is_error: bool, meta: str) -> bytes:
     return emit(EV_CHAT_TOOL_RESULT, {"toolCallId": tcid, "isError": is_error, "meta": meta})
 
 
+def _event(etype: str, data: dict[str, object] | None = None) -> dict[str, object]:
+    """A parsed SSE event dict — the shape proactive_loop feeds via
+    consume_event() (it json.loads each SSE line to relay to the bus, then hands
+    the decoded dict straight to the recorder, vs main chat's feed(raw bytes))."""
+    return {"type": etype, "data": data or {}}
+
+
 def test_text_deltas_coalesce_into_one_part() -> None:
     r = ChatTurnRecorder()
     r.feed(emit(EV_CHAT_THINKING))
@@ -71,6 +78,36 @@ def test_tool_call_pairing_and_fields() -> None:
     assert parts[1]["status"] == "ok"
     assert parts[1]["meta"] == "found 3"
     assert parts[1]["args"] == {"limit": 20}
+
+
+def test_consume_event_dict_accumulates_like_feed() -> None:
+    """proactive_loop feeds already-parsed event dicts via consume_event();
+    same accumulation as feed(bytes), just one layer of parsing earlier."""
+    r = ChatTurnRecorder()
+    r.consume_event(_event(EV_CHAT_DELTA, {"delta": "one "}))
+    r.consume_event(_event(EV_CHAT_DELTA, {"delta": "two"}))
+    assert r.parts() == [{"type": "text", "text": "one two"}]
+
+
+def test_consume_event_notify_user_becomes_tool_call_part() -> None:
+    """The proactive say-tick contract end to end: a notify_user event the loop
+    relays becomes a tool-call part — what _persist_proactive_turn writes
+    (trigger=tick) and the FE renders as the user-visible outreach."""
+    r = ChatTurnRecorder()
+    r.consume_event(_event(EV_CHAT_DELTA, {"delta": "drafting"}))
+    r.consume_event(
+        _event(
+            EV_CHAT_TOOL_START,
+            {"toolCallId": "n1", "name": "notify_user", "args": {"text": "你明天 10 点有个会"}},
+        )
+    )
+    r.consume_event(_event(EV_CHAT_TOOL_RESULT, {"toolCallId": "n1", "isError": False}))
+    parts = r.parts()
+    assert parts[0] == {"type": "text", "text": "drafting"}
+    assert parts[1]["type"] == "tool-call"
+    assert parts[1]["toolName"] == "notify_user"
+    assert parts[1]["status"] == "ok"
+    assert parts[1]["args"] == {"text": "你明天 10 点有个会"}
 
 
 def test_tool_error_status() -> None:

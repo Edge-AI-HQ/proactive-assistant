@@ -1,0 +1,69 @@
+"""Unit tests for /api/conversation session_key classification + ownership.
+
+_classify is the cross-user isolation guard for the unified actor route: it
+maps a session_key to (kind, card_id) and rejects keys that don't belong to the
+caller. card ownership (pai_pipeline_runs) is checked separately in
+_assert_card_owned (needs a DB) — these cover the pure prefix logic.
+"""
+
+from __future__ import annotations
+
+import pytest
+from fastapi import HTTPException
+
+from pinai_agents.web.routes.ui.conversation import _AGENT_KIND_BY_THREAD, _classify
+
+
+def test_classify_card_thread() -> None:
+    assert _classify("card-thread-abc123", 31) == ("card", "abc123")
+
+
+def test_classify_card_thread_empty_id_rejected() -> None:
+    with pytest.raises(HTTPException) as e:
+        _classify("card-thread-", 31)
+    assert e.value.status_code == 400
+
+
+def test_classify_proactive_own() -> None:
+    assert _classify("proactive-31", 31) == ("proactive", None)
+
+
+def test_classify_proactive_other_user_rejected() -> None:
+    # A user must not address another user's proactive thread.
+    with pytest.raises(HTTPException) as e:
+        _classify("proactive-99", 31)
+    assert e.value.status_code == 400
+
+
+def test_classify_main_own() -> None:
+    assert _classify("main-31-abc123def456", 31) == ("main", None)
+
+
+def test_classify_main_other_user_rejected() -> None:
+    with pytest.raises(HTTPException) as e:
+        _classify("main-99-abc123", 31)
+    assert e.value.status_code == 400
+
+
+def test_classify_main_empty_rand_rejected() -> None:
+    # "main-31-" has the prefix but no random suffix → not a valid main key
+    # (len must exceed the prefix), so it can't collide with the bare prefix.
+    with pytest.raises(HTTPException) as e:
+        _classify("main-31-", 31)
+    assert e.value.status_code == 400
+
+
+def test_classify_garbage_rejected() -> None:
+    with pytest.raises(HTTPException) as e:
+        _classify("random-garbage", 31)
+    assert e.value.status_code == 400
+
+
+def test_agent_kind_mapping_covers_all_conversational_kinds() -> None:
+    # Every ThreadKind maps to the actor-kernel agent_kind the worker accounts
+    # on; chat /agent/chat re-derives the same agent from the prefix.
+    assert _AGENT_KIND_BY_THREAD == {
+        "main": "main_chat",
+        "card": "card_execution",
+        "proactive": "proactive",
+    }

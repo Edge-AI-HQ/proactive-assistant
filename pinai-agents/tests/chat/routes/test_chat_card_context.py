@@ -31,7 +31,7 @@ def _user_turns(msgs: list) -> list[dict]:
 
 def test_main_thread_with_card_context_injects_system_message():
     msgs = _build_send_messages(
-        message="this card is off",
+        messages=["this card is off"],
         card_context=_CTX,
         is_card_thread=False,
         is_first_turn=False,  # main thread is a singleton — never "first"
@@ -48,7 +48,7 @@ def test_main_thread_with_card_context_injects_system_message():
 
 def test_main_thread_without_card_context_injects_nothing():
     msgs = _build_send_messages(
-        message="hello",
+        messages=["hello"],
         card_context=None,
         is_card_thread=False,
         is_first_turn=False,
@@ -59,7 +59,7 @@ def test_main_thread_without_card_context_injects_nothing():
 
 def test_card_thread_first_turn_injects_once():
     msgs = _build_send_messages(
-        message="help with this",
+        messages=["help with this"],
         card_context=_CTX,
         is_card_thread=True,
         is_first_turn=True,
@@ -71,10 +71,27 @@ def test_card_thread_later_turn_does_not_reinject():
     """Regression: the main-thread change must not break the card-thread
     first-turn guard — later card-thread turns inject nothing."""
     msgs = _build_send_messages(
-        message="follow-up",
+        messages=["follow-up"],
         card_context=_CTX,
         is_card_thread=True,
         is_first_turn=False,
     )
     assert _system_messages(msgs) == []
     assert _user_turns(msgs) == [{"role": "user", "content": "follow-up"}]
+
+
+def test_merge_sends_each_message_as_its_own_user_turn():
+    """Actor-kernel merge: several pending user messages become SEPARATE
+    role=user turns (not concatenated) — CORE-0 verified the LLM accepts
+    consecutive user messages."""
+    msgs = _build_send_messages(
+        messages=["first", "second", "third"],
+        card_context=None,
+        is_card_thread=False,
+        is_first_turn=False,
+    )
+    assert _user_turns(msgs) == [
+        {"role": "user", "content": "first"},
+        {"role": "user", "content": "second"},
+        {"role": "user", "content": "third"},
+    ]

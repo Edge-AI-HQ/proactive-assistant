@@ -88,6 +88,15 @@ class UserSettingsRow:
     auto_generate_interval_minutes: int
     auto_dreaming: bool
     auto_crystallize: bool
+    # Proactive heartbeat opt-in (the "Proactive" page toggle). False by
+    # default. The settings route mirrors this into a per-user `proactive.tick`
+    # scheduler task — the scheduler tick only reads pai_scheduled_tasks, never
+    # this column.
+    proactive_enabled: bool
+    # Heartbeat cadence — the interval of the per-user `proactive.tick` task.
+    # One of {60, 300, 1800}s (081 CHECK); the settings route mirrors it
+    # into the task's interval_seconds. Default 300 (5 min).
+    proactive_interval_seconds: int
     metadata: dict[str, Any]
     # Per-mobile-source ambient capture consents. Shape:
     # { "<source_key>": { "enabled": <bool>, "updated_at": "<iso>" } }.
@@ -114,6 +123,8 @@ class UserSettingsRow:
             auto_generate_interval_minutes=row["auto_generate_interval_minutes"],
             auto_dreaming=row["auto_dreaming"],
             auto_crystallize=row["auto_crystallize"],
+            proactive_enabled=row["proactive_enabled"],
+            proactive_interval_seconds=row["proactive_interval_seconds"],
             metadata=_as_dict(row["metadata"]),
             ambient_sources=_as_dict(row.get("ambient_sources")),
             notify_new_cards=bool(row.get("notify_new_cards", False)),
@@ -375,6 +386,8 @@ class ProfileRepository(UserScopedRepository):
         auto_generate_interval_minutes: int | None = None,
         auto_dreaming: bool | None = None,
         auto_crystallize: bool | None = None,
+        proactive_enabled: bool | None = None,
+        proactive_interval_seconds: int | None = None,
         metadata: dict[str, Any] | None = None,
         ambient_sources_patch: dict[str, Any] | None = None,
         notify_new_cards: bool | None = None,
@@ -434,6 +447,8 @@ class ProfileRepository(UserScopedRepository):
                   auto_generate_interval_minutes = COALESCE(%s, auto_generate_interval_minutes),
                   auto_dreaming                  = COALESCE(%s, auto_dreaming),
                   auto_crystallize               = COALESCE(%s, auto_crystallize),
+                  proactive_enabled              = COALESCE(%s, proactive_enabled),
+                  proactive_interval_seconds     = COALESCE(%s, proactive_interval_seconds),
                   metadata                       = COALESCE(%s::jsonb, metadata),
                   ambient_sources                = COALESCE(%s::jsonb, ambient_sources),
                   notify_new_cards               = COALESCE(%s, notify_new_cards),
@@ -449,6 +464,8 @@ class ProfileRepository(UserScopedRepository):
                     auto_generate_interval_minutes,
                     auto_dreaming,
                     auto_crystallize,
+                    proactive_enabled,
+                    proactive_interval_seconds,
                     json.dumps(metadata) if metadata is not None else None,
                     ambient_json,
                     notify_new_cards,

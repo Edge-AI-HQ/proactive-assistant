@@ -22,10 +22,7 @@ class DevelopmentFeedbackLogInput(BaseModel):
         description="The user's original product/UI/feature suggestion.",
     )
     category: Literal["ui", "feature", "bug_like", "workflow", "settings", "other"] = Field(
-        description=(
-            "Product triage bucket: ui, feature, bug_like, workflow, "
-            "settings, or other."
-        ),
+        description=("Product triage bucket: ui, feature, bug_like, workflow, settings, or other."),
     )
     surface: Literal["main_chat", "card_detail", "settings", "ambient", "unknown"] = Field(
         default="main_chat",

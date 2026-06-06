@@ -155,7 +155,8 @@ async def test_feedback_flow_for_silicon_valley_ai_engineer(pool, user_ids) -> N
     assert cards_by_id["card_vc_rumors"]["latestOutcome"] == "snooze"
     assert any(
         item["kind"] == "text_feedback"
-        and item["text"] == "Stop showing me VC funding rumor cards; I want technical AI infra papers."
+        and item["text"]
+        == "Stop showing me VC funding rumor cards; I want technical AI infra papers."
         for item in agent_feedback.json()["items"]
     )
     assert [item["statement"] for item in agent_preferences.json()["items"]] == [

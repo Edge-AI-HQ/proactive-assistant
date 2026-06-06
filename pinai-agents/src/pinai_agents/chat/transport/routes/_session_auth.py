@@ -7,6 +7,9 @@ that single point (these endpoints sit on the internal network).
 
 - main threads encode the owner: `main-<user_id>-<rand>` → check the prefix
   against `principal.user_id`.
+- proactive threads are the per-user singleton `proactive-<user_id>`
+  (the session_key convention web mints in `conversation._classify`) →
+  exact-match the user_id.
 - card threads (`card-thread-<card_id>`) carry no user_id; their ownership
   (card belongs to user) is enforced in web before the JWT is signed, so
   here we only require the card-thread shape.
@@ -58,9 +61,19 @@ def principal_from_header(
 def assert_session_key_principal(session_key: str, principal: RunPrincipal) -> None:
     """Reject when `session_key` does not belong to `principal` (403).
 
-    See module docstring: main = prefix check; card = shape only.
+    See module docstring: main = prefix check; card = shape only; proactive =
+    exact `proactive-<user_id>` match.
     """
     if session_key.startswith(_CARD_THREAD_PREFIX):
+        return
+    # Proactive thread: the per-user singleton `proactive-<user_id>` (the
+    # session_key convention; web mints it in conversation._classify). It has
+    # no random suffix, so the
+    # user_id embedded in the id IS the ownership check — same guarantee as the
+    # main-thread prefix below. Without this branch the proactive page's
+    # /history (which forwards through here with a run-JWT) 403s, and the page
+    # renders with no history.
+    if session_key == f"proactive-{principal.user_id}":
         return
     expected = f"main-{principal.user_id}-"
     if not (session_key.startswith(expected) and len(session_key) > len(expected)):

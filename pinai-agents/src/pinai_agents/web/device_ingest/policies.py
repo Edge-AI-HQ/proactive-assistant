@@ -1,11 +1,16 @@
 """Device ingest policy registry — port of plugin device-ingest/policies.ts.
 
-Each kind picks one of three modes:
-  * signal_only — only write personal_signals (most events: moments,
-    attention items, ambient media chunks).
-  * raw_only    — only write a typed raw table (health observations).
-  * dual        — write raw table + personal_signal in same call (apps,
+Each kind picks one of four modes:
+  * signal_only   — only write personal_signals (legacy device events:
+    moments, attention items, legacy ambient media chunks).
+  * raw_only      — only write a typed raw table (health observations).
+  * dual          — write raw table + personal_signal in same call (apps,
     contacts directories — agents read raw, generator surfaces signals).
+  * timeline_only — write directly to pai_timeline_events with
+    curation_status='pending'. ADDITIVE mode for the V3 ambient sources
+    (ambient.utterance / location / activity / sound / visit / health /
+    …) that feed the proactive agent's timeline. The signal/raw path is
+    untouched; this is a parallel sink.
 
 The signal/raw split mirrors memory architecture §一:
   signals = increment / consumption layer, raw = source of truth.
@@ -24,7 +29,7 @@ from .health import (
     parse_health_observations,
 )
 
-type DeviceIngestMode = Literal["raw_only", "signal_only", "dual"]
+type DeviceIngestMode = Literal["raw_only", "signal_only", "dual", "timeline_only"]
 type DeviceSyncMode = Literal["incremental", "full"]
 type DeviceRawTable = Literal[
     "device_apps_snapshot",
@@ -92,6 +97,13 @@ class DeviceIngestPolicy:
     build_signal: (
         Callable[[DeviceIngestItem, dict[str, Any] | None], dict[str, Any] | None] | None
     ) = None
+    # timeline_only mode: build a pai_timeline_events row. Returned dict is
+    # consumed by the ingest route → IngestTimelineEvent — see
+    # `build_default_timeline_event` for the default shape.
+    build_timeline: Callable[[DeviceIngestItem], dict[str, Any] | None] | None = None
+    # Semantic event_type assigned to the timeline row (e.g. "utterance",
+    # "state_change", "movement", "health"). Used by the timeline builder.
+    timeline_event_type: str = "state_change"
 
 
 def normalize_sync_mode(raw: Any) -> DeviceSyncMode:
@@ -241,6 +253,67 @@ def build_default_signal(
     }
 
 
+# ── timeline builders (V3 ambient → pai_timeline_events) ──
+
+
+def build_default_timeline_event(item: DeviceIngestItem) -> dict[str, Any]:
+    """Generic ambient → timeline event mapping.
+
+    Conventions:
+      * source = kind (verbatim — e.g. 'ambient.utterance')
+      * event_type = policy's timeline_event_type (added by the route)
+      * title = item.title (already concise)
+      * body = item.summary/text when text-heavy (utterance), else NULL
+      * occurred_at = item.occurred_at; end_at = payload.endAt if present
+      * source_ref = {device_id, sensor: <sub>, client_event_id}
+      * dedupe_key = item.dedupe_key (already canonicalized upstream)
+      * curation_status = 'pending' — async curator scores later
+
+    The kind taxonomy stays in `source` (verbatim string), so future
+    queries can filter by `source='ambient.utterance'` without parsing.
+    """
+    payload = item.payload or {}
+    end_at = payload.get("endAt") or payload.get("end_at")
+    end_at_str = end_at if isinstance(end_at, str) else None
+
+    sensor = item.kind.removeprefix("ambient.")
+
+    metadata = {
+        k: v
+        for k, v in payload.items()
+        # `text`/`endAt` migrate into typed columns above; everything
+        # else stays in metadata as source-specific extras.
+        if k not in ("text", "endAt", "end_at")
+    }
+    metadata.setdefault("salience", item.salience)
+    metadata.setdefault("confidence", item.confidence)
+
+    # body: utterance gets full transcript text; others NULL.
+    body: str | None = None
+    text = payload.get("text")
+    if isinstance(text, str) and text:
+        body = text
+
+    location = payload.get("location") if isinstance(payload.get("location"), dict) else None
+
+    return {
+        "id": item.id,
+        "occurred_at": item.occurred_at,
+        "end_at": end_at_str,
+        "source": item.kind,
+        "title": item.title,
+        "body": body,
+        "metadata": metadata,
+        "location": location,
+        "source_ref": {
+            "device_id": item.device_id,
+            "sensor": sensor,
+            "client_event_id": item.id,
+        },
+        "dedupe_key": item.dedupe_key,
+    }
+
+
 # ── registry ──
 
 
@@ -281,7 +354,39 @@ _HEALTH_POLICY = DeviceIngestPolicy(
 _SIGNAL_POLICY = DeviceIngestPolicy(mode="signal_only", build_signal=build_default_signal)
 
 
+# V3 ambient → pai_timeline_events (timeline_only). One policy per
+# semantic event_type; the per-kind mapping below picks which one. All use
+# the same generic builder — only event_type differs.
+def _tl_policy(event_type: str) -> DeviceIngestPolicy:
+    return DeviceIngestPolicy(
+        mode="timeline_only",
+        build_timeline=build_default_timeline_event,
+        timeline_event_type=event_type,
+    )
+
+
+_TL_UTTERANCE = _tl_policy("utterance")
+_TL_MOVEMENT = _tl_policy("movement")
+_TL_MEETING = _tl_policy("meeting")
+_TL_HEALTH = _tl_policy("health")
+_TL_STATE = _tl_policy("state_change")
+
+
 DEVICE_INGEST_POLICIES: dict[str, DeviceIngestPolicy] = {
+    # V3 ambient sources → pai_timeline_events (timeline_only). These feed
+    # the proactive agent's timeline; the signal/raw path below is untouched.
+    "ambient.utterance": _TL_UTTERANCE,
+    "ambient.location": _TL_STATE,
+    "ambient.visit": _TL_MOVEMENT,
+    "ambient.activity": _TL_STATE,
+    "ambient.sound": _TL_STATE,
+    "ambient.audio_route": _TL_STATE,
+    "ambient.calendar_event": _TL_MEETING,
+    "ambient.focus_state": _TL_STATE,
+    "ambient.device_state": _TL_STATE,
+    "ambient.health": _TL_HEALTH,
+    # Legacy device events (signal layer) — kept for any client still on
+    # the V2 ambient pipeline / older builds.
     "session_summary": _SIGNAL_POLICY,
     "moment": _SIGNAL_POLICY,
     "attention_item": _SIGNAL_POLICY,

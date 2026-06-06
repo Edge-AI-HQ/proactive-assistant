@@ -1,4 +1,4 @@
-"""/api/agent/skills/* — agent-side skills CRUD (HS256 JWT).
+"""/api/agent/skills/* — agent-side skills CRUD (EdDSA JWT).
 
 Same Repository as /api/skills, just swapped onto the agent run dep.
 The skill index is the agent's writable knowledge base — dream / evolve

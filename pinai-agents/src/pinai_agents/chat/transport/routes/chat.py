@@ -35,12 +35,15 @@ from pydantic import BaseModel, Field
 
 from ...agents.card_execution import make_card_execution_agent
 from ...agents.main_chat import MAIN_CHAT_KEEP_TURNS, make_main_chat_agent
+from ...agents.proactive import make_proactive_agent
 from ...auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
 from ...harness.ctx import ClientHints, run_context
 from ...harness.session import (
     apply_message_updates,
+    make_resume_input,
     read_state_messages,
     stream_events,
+    thread_has_pending_interrupt,
 )
 from ...harness.trim import trim_thread
 from ...tools.code_mode.lazy_sandbox import LazyThreadSandbox
@@ -57,6 +60,9 @@ logger = logging.getLogger(__name__)
 
 # Card threads use this session_key prefix — see web/routes/ui/chat.py.
 _CARD_THREAD_PREFIX = "card-thread-"
+# Proactive sessions: proactive-<user_id> (RC-1 routes these to the proactive
+# agent on the same unified /agent/chat path).
+_PROACTIVE_PREFIX = "proactive-"
 
 
 def _is_sandbox_dead(exc: BaseException) -> bool:
@@ -105,9 +111,20 @@ class ChatRequest(BaseModel):
 
     session_key: str = Field(min_length=1, max_length=200)
     message: str = Field(default="", max_length=8000)
+    # Actor-kernel merge: when several user messages drain as one turn they're
+    # sent as SEPARATE role=user messages (NOT concatenated — CORE-0 verified
+    # LiteLLM/Anthropic accept consecutive user turns). Takes precedence over
+    # `message` when non-empty; `message` stays for the single-message frontend
+    # path (ui/chat /send).
+    messages: list[str] = Field(default_factory=list, max_length=50)
     card_context: dict[str, Any] | None = None
     client_hints: ClientHintsBody | None = None
     regenerate: bool = False
+    # HITL resume: re-enter a thread paused on interrupt() with the human's
+    # decision(s): {"decisions": [{"type": "approve"|"reject"|..., ...}]}
+    # (HumanInTheLoopMiddleware schema). Mutually exclusive with messages /
+    # regenerate — when set, no new input is added; Command(resume=) re-enters.
+    resume: dict[str, Any] | None = None
 
 
 def _extract_bearer(authorization: str | None) -> str:
@@ -186,12 +203,18 @@ def _card_context_message(card_context: dict[str, Any]) -> SystemMessage:
 
 def _build_send_messages(
     *,
-    message: str,
+    messages: list[str],
     card_context: dict[str, Any] | None,
     is_card_thread: bool,
     is_first_turn: bool,
 ) -> list[Any]:
     """Assemble the input messages for a normal (non-regenerate) send.
+
+    `messages` is one-or-more user-message texts. The actor kernel's mailbox
+    merge sends every pending user message as its OWN role=user message (NOT
+    concatenated — CORE-0 verified LiteLLM/Anthropic accept consecutive user
+    turns), so the model sees distinct turns. The single-message frontend path
+    passes a one-element list.
 
     Two card-context injection rules, by thread kind:
       * Card thread (`card-thread-…`): inject once, on the first turn only.
@@ -212,7 +235,7 @@ def _build_send_messages(
             msgs.append(_card_context_message(card_context))
     elif card_context is not None:
         msgs.append(_card_context_message(card_context))
-    msgs.append({"role": "user", "content": message})
+    msgs.extend({"role": "user", "content": text} for text in messages)
     return msgs
 
 
@@ -288,6 +311,8 @@ async def _stream(
         agent = (
             make_card_execution_agent(virtual_key=virtual_key, backend=backend)
             if is_card_thread
+            else make_proactive_agent(virtual_key=virtual_key, backend=backend)
+            if req.session_key.startswith(_PROACTIVE_PREFIX)
             else make_main_chat_agent(virtual_key=virtual_key, backend=backend)
         )
     except Exception as e:
@@ -381,9 +406,13 @@ async def _stream(
             input_messages.append({"role": "user", "content": new_text})
 
     # ── input messages (normal-send path) ──
-    if not req.regenerate:
-        if not req.message.strip():
-            yield chat_error("message is required when not regenerating")
+    if not req.regenerate and not req.resume:
+        # Actor kernel sends `messages` (merge: ≥1 user message, each its own
+        # role=user turn); the single-message frontend path sends `message`.
+        # Prefer the list when present.
+        user_texts = req.messages or ([req.message] if req.message.strip() else [])
+        if not user_texts:
+            yield chat_error("message(s) required when not regenerating")
             yield chat_done()
             return
         # Only card threads need the (async) first-turn probe; main threads
@@ -391,7 +420,7 @@ async def _stream(
         is_first_turn = await _is_first_turn(agent, req.session_key) if is_card_thread else False
         input_messages.extend(
             _build_send_messages(
-                message=req.message,
+                messages=user_texts,
                 card_context=req.card_context,
                 is_card_thread=is_card_thread,
                 is_first_turn=is_first_turn,
@@ -442,14 +471,26 @@ async def _stream(
         browserbase_context_id=principal.browserbase_context_id or "",
         client_hints=hints,
     ):
-        events = stream_events(agent, {"messages": input_messages}, config)
+        # HITL resume re-enters the paused graph via Command(resume=); a
+        # normal/regenerate turn feeds the assembled messages.
+        stream_input: Any = (
+            make_resume_input(req.resume.get("decisions") or [])
+            if req.resume
+            else {"messages": input_messages}
+        )
+        events = stream_events(agent, stream_input, config)
         try:
             async for chunk in langgraph_to_sse(events):
                 yield chunk
             # Bound the main thread's working context once the turn finishes
             # (card threads are short-lived — no trim). Best-effort: a trim
             # failure must never surface after the user already got the reply.
-            if not is_card_thread:
+            # Skip trimming while a HITL decision is pending — the turn paused
+            # on interrupt(), isn't finished, and trimming mid-interrupt would
+            # mutate the state the resume re-enters.
+            if not is_card_thread and not await thread_has_pending_interrupt(
+                agent, req.session_key
+            ):
                 try:
                     await trim_thread(
                         agent,

@@ -273,51 +273,106 @@ async def notify_new_cards(
             return 0
 
         payload = _build_new_cards_payload(card_count=card_count)
-        sent = 0
-        for device in targets:
-            try:
-                result = await _transport.send(device=device, payload=payload)
-            except Exception:
-                logger.exception(
-                    "push.transport_error user=%s device=%s",
-                    user_id,
-                    device.device_id,
-                )
-                continue
-            if result.ok:
-                sent += 1
-                logger.info(
-                    "push.sent user=%s device=%s",
-                    user_id,
-                    device.device_id,
-                )
-                continue
-            logger.warning(
-                "push.failed user=%s device=%s code=%s",
-                user_id,
-                device.device_id,
-                result.error_code,
-            )
-            # Terminal codes: the token will never deliver again. Clear
-            # it so we stop trying. Anything else is transient; bump the
-            # counter and let find_push_targets's threshold soft-disable
-            # after enough strikes.
-            terminal = result.error_code in _TERMINAL_APNS_REASONS
-            try:
-                async with user_scoped_tx(pool, user_id) as conn:
-                    repo = DevicesRepository(user_id, conn)
-                    if terminal:
-                        await repo.clear_push_token(device.device_id)
-                    else:
-                        await repo.bump_push_failure(device.device_id)
-            except Exception:
-                logger.exception(
-                    "push.bookkeeping_failed user=%s device=%s terminal=%s",
-                    user_id,
-                    device.device_id,
-                    terminal,
-                )
-        return sent
+        return await _send_to_targets(
+            pool,
+            user_id=user_id,
+            targets=targets,
+            payload=payload,
+        )
     except Exception:
         logger.exception("push.dispatch_failed user=%s", user_id)
+        return 0
+
+
+async def _send_to_targets(
+    pool,
+    *,
+    user_id: int,
+    targets: list[UserDeviceRow],
+    payload: PushPayload,
+) -> int:
+    """Per-device send + soft-failure bookkeeping. Shared by every notify_*
+    entry point. Returns the count of devices we delivered to."""
+    sent = 0
+    for device in targets:
+        try:
+            result = await _transport.send(device=device, payload=payload)
+        except Exception:
+            logger.exception(
+                "push.transport_error user=%s device=%s",
+                user_id,
+                device.device_id,
+            )
+            continue
+        if result.ok:
+            sent += 1
+            logger.info("push.sent user=%s device=%s", user_id, device.device_id)
+            continue
+        logger.warning(
+            "push.failed user=%s device=%s code=%s",
+            user_id,
+            device.device_id,
+            result.error_code,
+        )
+        # Terminal codes: the token will never deliver again. Clear it so we
+        # stop trying. Anything else is transient; bump the counter and let
+        # find_push_targets's threshold soft-disable after enough strikes.
+        terminal = result.error_code in _TERMINAL_APNS_REASONS
+        try:
+            async with user_scoped_tx(pool, user_id) as conn:
+                repo = DevicesRepository(user_id, conn)
+                if terminal:
+                    await repo.clear_push_token(device.device_id)
+                else:
+                    await repo.bump_push_failure(device.device_id)
+        except Exception:
+            logger.exception(
+                "push.bookkeeping_failed user=%s device=%s terminal=%s",
+                user_id,
+                device.device_id,
+                terminal,
+            )
+    return sent
+
+
+def _build_proactive_payload(*, message: str) -> PushPayload:
+    # Single banner per outreach; collapse so a burst shows the latest only.
+    # We always emit the push; the OS banner only shows when the app is NOT
+    # foregrounded. Foreground suppression is client-side: iOS willPresent is
+    # gated by capacitor.config `PushNotifications.presentationOptions: []`, so
+    # an in-app user sees nothing here (the message arrives on the live stream).
+    return PushPayload(
+        title="Pin AI",
+        body=message[:240],
+        deep_link="app://proactive",
+        collapse_key="proactive",
+    )
+
+
+async def notify_proactive_message(
+    pool,
+    *,
+    user_id: int,
+    message: str,
+) -> int:
+    """Dispatch a proactive notify_user message to the user's push-eligible
+    devices. Unlike notify_new_cards there is no opt-in gate — proactive
+    outreach is the product; the client decides whether to surface the
+    banner. Never raises into the caller (the emit route)."""
+    if not message.strip():
+        return 0
+    try:
+        async with user_scoped_tx(pool, user_id) as conn:
+            targets = await DevicesRepository(user_id, conn).find_push_targets()
+        if not targets:
+            logger.info("push.skip user=%s reason=no_targets kind=proactive", user_id)
+            return 0
+        return await _send_to_targets(
+            pool,
+            user_id=user_id,
+            targets=targets,
+            payload=_build_proactive_payload(message=message),
+        )
+    except Exception:
+        logger.exception("push.proactive_dispatch_failed user=%s", user_id)
         return 0

@@ -40,6 +40,7 @@ from ...db.repositories.personal_signals import (
     PersonalSignalsRepository,
 )
 from ...db.repositories.raw_device import RawDeviceRepository
+from ...db.repositories.timeline import IngestTimelineEvent, TimelineRepository
 from ...db.rls import service_tx, user_scoped_tx
 from ...device_ingest import (
     DeviceIngestItem,
@@ -114,6 +115,18 @@ class IngestItemIn(BaseModel):
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _parse_dt(v: Any) -> datetime:
+    """ISO string → aware datetime. Tolerates trailing Z. Raises
+    ValueError on un-parseable input; callers should catch and surface
+    as a per-item rejection."""
+    if isinstance(v, datetime):
+        return v if v.tzinfo else v.replace(tzinfo=UTC)
+    if isinstance(v, str):
+        s = v if not v.endswith("Z") else v[:-1] + "+00:00"
+        return datetime.fromisoformat(s).astimezone(UTC)
+    raise ValueError(f"unparseable datetime: {v!r}")
 
 
 def _normalize_iso(v: Any, fallback: str) -> str:
@@ -574,6 +587,7 @@ async def ingest_devices(
     async with user_scoped_tx(pool, device.user_id) as conn:
         signals_repo = PersonalSignalsRepository(device.user_id, conn)
         raw_repo = RawDeviceRepository(device.user_id, conn)
+        timeline_repo = TimelineRepository(device.user_id, conn)
         for did, items in by_device.items():
             r = await _ingest_for_device(
                 user=device_user,
@@ -581,6 +595,7 @@ async def ingest_devices(
                 raw_items=items,
                 signals_repo=signals_repo,
                 raw_repo=raw_repo,
+                timeline_repo=timeline_repo,
             )
             item_results.extend(r["results"])
     accepted = len(items_raw)
@@ -602,6 +617,7 @@ async def _ingest_for_device(
     raw_items: list[dict[str, Any]],
     signals_repo: PersonalSignalsRepository,
     raw_repo: RawDeviceRepository,
+    timeline_repo: TimelineRepository,
 ) -> dict[str, Any]:
     """Per-device leg of the ingest. Returns ``{"results": [...]}`` only —
     the caller aggregates accepted/inserted/ignored across all legs."""
@@ -744,6 +760,55 @@ async def _ingest_for_device(
     # poisoning the batch.
     for result_idx, n in normalized:
         policy = resolve_policy(n.kind)
+
+        # ── timeline_only path (V3 ambient → pai_timeline_events) ──
+        # Per-utterance / per-sensor ambient events go straight to the
+        # timeline with curation_status='pending' — no LLM at write time.
+        # Wrapped in a savepoint (like the raw/signal branches below) so one
+        # bad item can't poison the rest of the batch. Resolves + short-
+        # circuits here, never touching the signal/raw path.
+        if policy.mode == "timeline_only":
+            if policy.build_timeline is None:
+                results[result_idx]["status"] = "rejected"
+                results[result_idx]["reason"] = "timeline policy missing builder"
+                continue
+            try:
+                tl_dict = policy.build_timeline(n)
+                if tl_dict is None:
+                    results[result_idx]["status"] = "rejected"
+                    results[result_idx]["reason"] = "timeline builder returned None"
+                    continue
+                ev = IngestTimelineEvent(
+                    id=tl_dict["id"],
+                    occurred_at=_parse_dt(tl_dict["occurred_at"]),
+                    end_at=_parse_dt(tl_dict["end_at"]) if tl_dict.get("end_at") else None,
+                    source=tl_dict["source"],
+                    event_type=policy.timeline_event_type,
+                    title=tl_dict["title"],
+                    body=tl_dict.get("body"),
+                    metadata=tl_dict.get("metadata") or {},
+                    location=tl_dict.get("location"),
+                    source_ref=tl_dict["source_ref"],
+                    importance=0.5,
+                    confidence=1.0,
+                    is_predicted=False,
+                    curation_status="pending",
+                    dedupe_key=tl_dict.get("dedupe_key"),
+                )
+                async with timeline_repo.conn.transaction():
+                    await timeline_repo.upsert_event(ev)
+                results[result_idx]["status"] = "inserted"
+            except Exception as e:
+                logger.warning(
+                    "device ingest: timeline write failed (id=%s kind=%s): %s",
+                    n.id,
+                    n.kind,
+                    e,
+                )
+                results[result_idx]["status"] = "retryable_failed"
+                results[result_idx]["reason"] = f"{type(e).__name__}: {str(e)[:160]}"
+            continue
+
         # Per-item state: raw_inserted = raw row actually written;
         # raw_failed = server-side exception during raw writes;
         # signal_payload = signal to attempt (or None);

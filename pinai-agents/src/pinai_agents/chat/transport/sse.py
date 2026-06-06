@@ -49,6 +49,7 @@ from ...shared.sse_envelope import (
     EV_CHAT_DONE,
     EV_CHAT_ERROR,
     EV_CHAT_REASONING_DELTA,
+    EV_CHAT_REQUIRES_ACTION,
     EV_CHAT_THINKING,
     EV_CHAT_TOOL_RESULT,
     EV_CHAT_TOOL_START,
@@ -110,6 +111,31 @@ def chat_tool_result(
             "toolCallId": tool_call_id,
             "isError": is_error,
             "meta": meta[:_META_LIMIT],
+        },
+        trace_id=trace_id,
+    )
+
+
+def chat_requires_action(
+    *,
+    interrupt_id: str,
+    tool_name: str,
+    args: Any,
+    args_preview: str,
+    allowed_decisions: list[str],
+    trace_id: str | None = None,
+) -> bytes:
+    """HITL pause frame: one interrupt_on tool call awaiting a human decision.
+    `interruptId` is the resume anchor; the web worker stores it on the run's
+    pending_action and a later decision resumes via Command(resume=)."""
+    return emit(
+        EV_CHAT_REQUIRES_ACTION,
+        {
+            "interruptId": interrupt_id,
+            "toolName": tool_name,
+            "args": args,
+            "argsPreview": args_preview,
+            "allowedDecisions": allowed_decisions,
         },
         trace_id=trace_id,
     )
@@ -224,6 +250,18 @@ def _is_subagent_model_event(event: dict[str, Any]) -> bool:
     return "tools:" in ns
 
 
+def _extract_interrupts(chunk: Any) -> list[Any]:
+    """Pull langgraph Interrupt objects out of an on_chain_stream chunk.
+    HumanInTheLoopMiddleware's interrupt() surfaces as
+    `chunk={"__interrupt__": (Interrupt(...), ...)}` — verified 2026-06-05
+    as the only astream_events(v2) surface it appears on (plan §五)."""
+    if isinstance(chunk, dict):
+        intr = chunk.get("__interrupt__")
+        if intr:
+            return list(intr)
+    return []
+
+
 async def langgraph_to_sse(
     events: AsyncIterator[dict[str, Any]],
     *,
@@ -310,7 +348,52 @@ async def langgraph_to_sse(
                     meta=meta,
                     trace_id=trace_id,
                 )
-            # Everything else (on_chain_*, on_chat_model_start,
+
+            elif etype == "on_chain_stream":
+                # HITL: a langgraph interrupt() (HumanInTheLoopMiddleware on an
+                # interrupt_on tool) surfaces here as a chunk carrying
+                # `__interrupt__`. Translate each into a requires_action frame
+                # so web can pause the run + collect a decision.
+                for intr in _extract_interrupts(data.get("chunk")):
+                    val = getattr(intr, "value", None) or {}
+                    reqs = val.get("action_requests") or []
+                    if len(reqs) > 1:
+                        # CC3: one interrupt with several tool calls. We surface
+                        # only the first; resume sends one decision but the
+                        # middleware expects one per request. Rare (agents emit
+                        # one side-effect call) — log it; multi-action approval
+                        # is a later step.
+                        logger.warning(
+                            "multi-action interrupt (%d requests) — surfacing first only",
+                            len(reqs),
+                        )
+                    configs = val.get("review_configs") or []
+                    raw_allowed = (
+                        configs[0].get("allowed_decisions")
+                        if configs and isinstance(configs[0], dict)
+                        else None
+                    )
+                    allowed = (
+                        [str(d) for d in raw_allowed]
+                        if isinstance(raw_allowed, list)
+                        else ["approve", "reject"]
+                    )
+                    intr_id = str(getattr(intr, "id", "") or "")
+                    # CORE-4 surfaces one action per interrupt (the common
+                    # single side-effect-tool call); multi-action interrupts
+                    # stay [:1] until the frontend renders an approval list.
+                    for req in reqs[:1]:
+                        if not isinstance(req, dict):
+                            continue
+                        yield chat_requires_action(
+                            interrupt_id=intr_id,
+                            tool_name=str(req.get("name") or "tool"),
+                            args=req.get("args") or {},
+                            args_preview=_safe_preview(req.get("args")),
+                            allowed_decisions=allowed,
+                            trace_id=trace_id,
+                        )
+            # Everything else (other on_chain_*, on_chat_model_start,
             # on_prompt_*, etc.) is intentionally ignored — they're either
             # redundant with chat:delta / chat:tool:* or not user-visible.
     except Exception as e:

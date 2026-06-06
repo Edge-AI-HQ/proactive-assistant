@@ -3,14 +3,14 @@
 This process must NOT hold master credentials — see
 `chat/asgi.py` for the boot-time fail-fast assert that enforces it.
 
-Currently mounts the Step 1 routes (/agent/chat SSE, /agent/generate)
-verbatim — the wire path is preserved so APIs / plugin proxy targets
-just need their URL pointed at the chat process port instead of the
-old single port. Step F-1 will introduce a separate /run endpoint that
-the web process proxies to with an HS256 JWT.
+Mounts the agent-facing routes the web process proxies to (all behind the
+per-run EdDSA JWT): /agent/chat (conversation SSE — main / card / proactive),
+/agent/chat/history, /agent/generate (card pipeline), /agent/run/{kind}
+(scheduler-dispatched batch runs — dream / evolve / crystallize), and the
+browser-tool routes.
 
-Lifespan owns LangGraph checkpointer + Daytona sandbox GC loop — same
-as Step 1's main.py, just relocated to its real home.
+Lifespan owns the LangGraph checkpointer + Daytona sandbox GC loop + browser
+manager.
 """
 
 from __future__ import annotations

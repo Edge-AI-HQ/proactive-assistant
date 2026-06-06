@@ -202,10 +202,7 @@ async def test_dispatch_limits_default_preheated_cards(monkeypatch):
         dispatched = await card_fanout.dispatch_card_bootstrap(
             pool=None,  # type: ignore[arg-type]
             user_id=42,
-            final_cards=[
-                {"id": f"card-{i}", "title": f"Card {i}"}
-                for i in range(8)
-            ],
+            final_cards=[{"id": f"card-{i}", "title": f"Card {i}"} for i in range(8)],
         )
 
     assert dispatched == ["card-0", "card-1"]

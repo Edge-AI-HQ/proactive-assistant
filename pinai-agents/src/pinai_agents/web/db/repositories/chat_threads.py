@@ -20,7 +20,7 @@ from psycopg.rows import dict_row
 
 from .base import UserScopedRepository
 
-ThreadKind = Literal["main", "card"]
+ThreadKind = Literal["main", "card", "proactive"]
 
 
 class ChatThreadsRepository(UserScopedRepository):

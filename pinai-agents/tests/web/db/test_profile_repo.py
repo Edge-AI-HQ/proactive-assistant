@@ -177,6 +177,7 @@ async def test_settings_lazy_create_returns_defaults(pool, user_ids):
     assert s.auto_generate_interval_minutes == 720
     assert s.auto_dreaming is False
     assert s.auto_crystallize is True
+    assert s.proactive_interval_seconds == 300  # default (081): 5 min
     assert s.metadata == {}
 
 

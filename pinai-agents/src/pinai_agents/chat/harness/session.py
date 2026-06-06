@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from langgraph.types import Command
+
 
 def _thread_config(session_key: str) -> dict[str, Any]:
     return {"configurable": {"thread_id": session_key}}
@@ -34,14 +36,33 @@ async def read_state_messages(agent: Any, session_key: str) -> list[Any]:
     return (snapshot.values or {}).get("messages", []) or []
 
 
-def stream_events(agent: Any, inputs: dict[str, Any], config: dict[str, Any]) -> Any:
+def stream_events(agent: Any, inputs: Any, config: dict[str, Any]) -> Any:
     """The single call to `agent.astream_events` (langgraph v2 event stream).
 
-    Returns the raw async event iterator; transport's `langgraph_to_sse`
-    translates it into chat:* SSE frames. `config` (thread_id, tags,
-    recursion_limit, …) is the caller's per-turn run config.
+    `inputs` is either `{"messages": [...]}` for a normal/regenerate turn or a
+    langgraph `Command` (HITL resume, built by `make_resume_input`) — both are
+    valid astream_events inputs. Returns the raw async event iterator;
+    transport's `langgraph_to_sse` translates it into chat:* SSE frames.
+    `config` (thread_id, tags, recursion_limit, …) is the per-turn run config.
     """
     return agent.astream_events(inputs, config=config, version="v2")
+
+
+def make_resume_input(decisions: list[dict[str, Any]]) -> Command:
+    """Build the langgraph resume input for a HITL decision. Kept in this
+    facade so transport never imports langgraph (banned-api). `decisions`
+    matches HumanInTheLoopMiddleware's resume schema — a list of
+    `{type: approve|edit|reject|respond, ...}` aligned with the interrupt's
+    action_requests (verified 2026-06-05: resume={"decisions": [...]})."""
+    return Command(resume={"decisions": decisions})
+
+
+async def thread_has_pending_interrupt(agent: Any, session_key: str) -> bool:
+    """True if the thread is paused on an interrupt (the graph has a `next`
+    node). The send path skips post-turn context trimming while a HITL
+    decision is pending — the turn isn't finished."""
+    snapshot = await agent.aget_state(_thread_config(session_key))
+    return bool(snapshot is not None and snapshot.next)
 
 
 async def apply_message_updates(agent: Any, session_key: str, updates: list[Any]) -> None:
