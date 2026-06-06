@@ -138,13 +138,15 @@ export class AmbientRuntime {
 
     this.sources = new Map<SourceKey, AmbientSource>(
       (options.sources ?? [
-        new SoundClassifierSource(ctx),
-        new VisitSource(ctx),
-        new ActivitySource(ctx),
-        new LocationSource(ctx),
+        // Ask for platform data permissions before starting live audio capture,
+        // otherwise the microphone path can dominate first-run onboarding.
         new HealthSource(ctx),
         new CalendarSource(ctx),
+        new LocationSource(ctx),
+        new VisitSource(ctx),
+        new ActivitySource(ctx),
         new FocusSource(ctx),
+        new SoundClassifierSource(ctx),
         new AudioRouteSource(ctx),
         new DeviceStateSource(ctx),
       ]).map((source) => [source.key as SourceKey, source]),

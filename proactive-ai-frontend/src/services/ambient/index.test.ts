@@ -105,6 +105,27 @@ describe("AmbientRuntime source reconciliation", () => {
     ambientSummaryBridgeCalls.cloud = 0;
     localStorage.clear();
   });
+
+  test("starts system permission sources before audio capture by default", () => {
+    const runtime = new AmbientRuntime({
+      outbox: new MemoryOutboxStore(),
+      enableTimers: false,
+    });
+
+    const sourceOrder = runtime.status().sources.map((source) => source.key);
+
+    expect(sourceOrder.slice(0, 5)).toEqual([
+      "health",
+      "calendar",
+      "location",
+      "visit",
+      "activity",
+    ]);
+    expect(sourceOrder.indexOf("sound_classifier")).toBeGreaterThan(
+      sourceOrder.indexOf("activity"),
+    );
+  });
+
   test("retries a desired source after an earlier start failure", async () => {
     const source = new FakeSource("sound_classifier");
     source.failNextStart = true;
