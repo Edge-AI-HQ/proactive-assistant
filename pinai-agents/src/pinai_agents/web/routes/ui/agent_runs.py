@@ -120,12 +120,18 @@ _ACTIVE_FILTER = """
       --   2. run.status='running' → claimed, agent currently working.
       --      For recurring schedules this is the only signal that
       --      surfaces them (st.status stays 'active' across all fires).
-      --   3. recently completed (within 30s) → for the brief
-      --      success/failure flash before the pill disappears.
+      --   3. recently completed one-shot tasks (within 30s) → for the
+      --      brief success/failure flash before the pill disappears.
+      --      Recurring schedule rows can also be archived by settings
+      --      updates, which is not an agent run completion.
       AND (
         (st.status = 'active' AND st.trigger_kind = 'once')
         OR run.status = 'running'
-        OR (st.status = 'archived' AND st.updated_at >= NOW() - INTERVAL '30 seconds')
+        OR (
+          st.status = 'archived'
+          AND st.trigger_kind = 'once'
+          AND st.updated_at >= NOW() - INTERVAL '30 seconds'
+        )
       )
     ORDER BY st.updated_at DESC
     LIMIT 50
