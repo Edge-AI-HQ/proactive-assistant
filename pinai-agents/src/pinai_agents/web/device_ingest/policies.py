@@ -276,7 +276,9 @@ def build_default_timeline_event(item: DeviceIngestItem) -> dict[str, Any]:
     end_at = payload.get("endAt") or payload.get("end_at")
     end_at_str = end_at if isinstance(end_at, str) else None
 
-    sensor = item.kind.removeprefix("ambient.")
+    # V3 ambient kinds are `device.*` / `session_summary`; the legacy path
+    # used `ambient.*`. Strip whichever prefix to get the bare sensor name.
+    sensor = item.kind.removeprefix("ambient.").removeprefix("device.")
 
     metadata = {
         k: v
@@ -288,11 +290,15 @@ def build_default_timeline_event(item: DeviceIngestItem) -> dict[str, Any]:
     metadata.setdefault("salience", item.salience)
     metadata.setdefault("confidence", item.confidence)
 
-    # body: utterance gets full transcript text; others NULL.
+    # body: utterance gets full transcript text. V3 ambient puts the
+    # transcript in `summary` (kind=session_summary); the legacy ambient.*
+    # path puts it in payload.text. Other kinds keep body NULL.
     body: str | None = None
     text = payload.get("text")
     if isinstance(text, str) and text:
         body = text
+    elif item.kind in ("session_summary", "ambient.utterance") and item.summary:
+        body = item.summary
 
     location = payload.get("location") if isinstance(payload.get("location"), dict) else None
 
@@ -350,6 +356,12 @@ _HEALTH_POLICY = DeviceIngestPolicy(
     raw_table="device_health_observations",
     parse_raw=_parse_health,
     full_replace_scope=_health_full_scope,
+    # Additive timeline projection: health stays raw (raw_list / personal
+    # data snapshot read `device_health_observations`) AND lands on the
+    # proactive agent's timeline. The route writes both when build_timeline
+    # is set on a non-timeline_only policy.
+    build_timeline=build_default_timeline_event,
+    timeline_event_type="health",
 )
 _SIGNAL_POLICY = DeviceIngestPolicy(mode="signal_only", build_signal=build_default_signal)
 
@@ -385,9 +397,25 @@ DEVICE_INGEST_POLICIES: dict[str, DeviceIngestPolicy] = {
     "ambient.focus_state": _TL_STATE,
     "ambient.device_state": _TL_STATE,
     "ambient.health": _TL_HEALTH,
+    # V3 ambient client emits `device.*` kinds (services/ambient/kinds.ts).
+    # Map each to the same timeline projectors as the ambient.* aliases
+    # above. health.observation is raw+timeline (see _HEALTH_POLICY) and
+    # stays in the raw block below.
+    "device.location": _TL_STATE,
+    "device.visit": _TL_MOVEMENT,
+    "device.activity": _TL_STATE,
+    "device.motion_segment": _TL_MOVEMENT,
+    "device.sound_classification": _TL_STATE,
+    "device.sound_scene_run": _TL_STATE,
+    "device.calendar_event": _TL_MEETING,
+    "device.focus_state": _TL_STATE,
+    "device.audio_route": _TL_STATE,
+    "device.device_state": _TL_STATE,
+    # `session_summary` carries the V3 voice transcript (speaker_segments +
+    # full text in `summary`) — route to the utterance timeline, not signal.
+    "session_summary": _TL_UTTERANCE,
     # Legacy device events (signal layer) — kept for any client still on
     # the V2 ambient pipeline / older builds.
-    "session_summary": _SIGNAL_POLICY,
     "moment": _SIGNAL_POLICY,
     "attention_item": _SIGNAL_POLICY,
     "ambient.image_chunk": _SIGNAL_POLICY,

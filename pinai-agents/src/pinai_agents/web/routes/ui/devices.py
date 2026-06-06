@@ -761,43 +761,44 @@ async def _ingest_for_device(
     for result_idx, n in normalized:
         policy = resolve_policy(n.kind)
 
-        # ── timeline_only path (V3 ambient → pai_timeline_events) ──
-        # Per-utterance / per-sensor ambient events go straight to the
-        # timeline with curation_status='pending' — no LLM at write time.
-        # Wrapped in a savepoint (like the raw/signal branches below) so one
-        # bad item can't poison the rest of the batch. Resolves + short-
-        # circuits here, never touching the signal/raw path.
-        if policy.mode == "timeline_only":
-            if policy.build_timeline is None:
-                results[result_idx]["status"] = "rejected"
-                results[result_idx]["reason"] = "timeline policy missing builder"
-                continue
+        # ── timeline write (V3 ambient → pai_timeline_events) ──
+        # Additive: any policy with `build_timeline` writes a timeline event
+        # (curation_status='pending', no LLM at write time). For
+        # `timeline_only` kinds this is the sole write and short-circuits.
+        # For raw+timeline kinds (health → raw table for the raw_list / data
+        # snapshot downstream AND timeline for the proactive agent) it's
+        # additive; the raw/signal path below sets the item's status and a
+        # timeline failure here is logged, not fatal. Wrapped in a savepoint
+        # so one bad item can't poison the rest of the batch.
+        if policy.build_timeline is not None:
+            tl_status: str | None = None
+            tl_reason: str | None = None
             try:
                 tl_dict = policy.build_timeline(n)
                 if tl_dict is None:
-                    results[result_idx]["status"] = "rejected"
-                    results[result_idx]["reason"] = "timeline builder returned None"
-                    continue
-                ev = IngestTimelineEvent(
-                    id=tl_dict["id"],
-                    occurred_at=_parse_dt(tl_dict["occurred_at"]),
-                    end_at=_parse_dt(tl_dict["end_at"]) if tl_dict.get("end_at") else None,
-                    source=tl_dict["source"],
-                    event_type=policy.timeline_event_type,
-                    title=tl_dict["title"],
-                    body=tl_dict.get("body"),
-                    metadata=tl_dict.get("metadata") or {},
-                    location=tl_dict.get("location"),
-                    source_ref=tl_dict["source_ref"],
-                    importance=0.5,
-                    confidence=1.0,
-                    is_predicted=False,
-                    curation_status="pending",
-                    dedupe_key=tl_dict.get("dedupe_key"),
-                )
-                async with timeline_repo.conn.transaction():
-                    await timeline_repo.upsert_event(ev)
-                results[result_idx]["status"] = "inserted"
+                    tl_status = "rejected"
+                    tl_reason = "timeline builder returned None"
+                else:
+                    ev = IngestTimelineEvent(
+                        id=tl_dict["id"],
+                        occurred_at=_parse_dt(tl_dict["occurred_at"]),
+                        end_at=_parse_dt(tl_dict["end_at"]) if tl_dict.get("end_at") else None,
+                        source=tl_dict["source"],
+                        event_type=policy.timeline_event_type,
+                        title=tl_dict["title"],
+                        body=tl_dict.get("body"),
+                        metadata=tl_dict.get("metadata") or {},
+                        location=tl_dict.get("location"),
+                        source_ref=tl_dict["source_ref"],
+                        importance=0.5,
+                        confidence=1.0,
+                        is_predicted=False,
+                        curation_status="pending",
+                        dedupe_key=tl_dict.get("dedupe_key"),
+                    )
+                    async with timeline_repo.conn.transaction():
+                        await timeline_repo.upsert_event(ev)
+                    tl_status = "inserted"
             except Exception as e:
                 logger.warning(
                     "device ingest: timeline write failed (id=%s kind=%s): %s",
@@ -805,9 +806,16 @@ async def _ingest_for_device(
                     n.kind,
                     e,
                 )
-                results[result_idx]["status"] = "retryable_failed"
-                results[result_idx]["reason"] = f"{type(e).__name__}: {str(e)[:160]}"
-            continue
+                tl_status = "retryable_failed"
+                tl_reason = f"{type(e).__name__}: {str(e)[:160]}"
+
+            if policy.mode == "timeline_only":
+                results[result_idx]["status"] = tl_status or "rejected"
+                if tl_reason:
+                    results[result_idx]["reason"] = tl_reason
+                continue
+            # raw+timeline kind: timeline write was additive; fall through to
+            # the raw/signal path below, which decides the item's status.
 
         # Per-item state: raw_inserted = raw row actually written;
         # raw_failed = server-side exception during raw writes;
