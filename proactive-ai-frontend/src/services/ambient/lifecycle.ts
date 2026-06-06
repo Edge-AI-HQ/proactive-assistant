@@ -4,6 +4,7 @@ import {
   getAmbientRuntime,
   getExistingAmbientRuntime,
   shutdownAmbientRuntime,
+  type RuntimeStatus,
   type SourceKey,
 } from "./index";
 
@@ -57,19 +58,19 @@ export function bindAmbientLifecycle(): void {
 export function startAmbientUpload(opts: {
   enabledSources?: SourceKey[];
   transcriptionLanguage?: string | null;
-} = {}): void {
-  if (!isNative) return;
+} = {}): Promise<RuntimeStatus | null> {
+  if (!isNative) return Promise.resolve(null);
   const enabledSources = opts.enabledSources ?? [];
   if (enabledSources.length === 0) {
     console.info(`${POWER_LOG_PREFIX} ambient disabled; shutting down runtime`);
-    void shutdownAmbientRuntime("empty-enabled-sources");
-    return;
+    return shutdownAmbientRuntime("empty-enabled-sources").then(() => null);
   }
   const runtime = getAmbientRuntime();
   runtime.setTranscriptionLanguage(opts.transcriptionLanguage ?? null);
-  void (async () => {
+  return (async () => {
     await runtime.reconcileEnabledSources(enabledSources);
     await runtime.drain();
+    return runtime.status();
   })();
 }
 

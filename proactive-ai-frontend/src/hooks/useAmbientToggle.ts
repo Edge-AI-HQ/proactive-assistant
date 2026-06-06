@@ -5,6 +5,7 @@ import {
   setPersistedAmbientEnabled,
 } from "@/services/ambient/enabled-state";
 import { ALL_SOURCE_KEYS, type SourceKey } from "@/services/ambient/keys";
+import type { RuntimeStatus } from "@/services/ambient";
 import { useUserSettings } from "./useUserSettings";
 
 export interface UseAmbientToggleResult {
@@ -16,10 +17,13 @@ export interface UseAmbientToggleResult {
    *  start/stop). Buttons should disable themselves during this. */
   togglePending: boolean;
   /** Flip the master ambient switch. Does three things in sequence:
-   *  1. PATCH /api/settings ambientSources for every source → next
-   *  2. Write the localStorage master flag so App.tsx can rehydrate on boot
+   *  1. For enable, write a pending localStorage master flag so App.tsx
+   *     does not race the settings PATCH by reconciling sources back off
+   *  2. PATCH /api/settings ambientSources for every source → next
    *  3. On native, immediately call lifecycle.start/stopAmbientUpload so
    *     real sensors react without waiting for the next render pass.
+   *     If any desired native source fails to start, the local flag is
+   *     rolled back and already-started sources are stopped.
    *  Safe to call from any view; AmbientView and the NOW-view toggle in
    *  ConstellationLayout share this so flipping from either stays in sync. */
   toggle: () => Promise<void>;
@@ -60,11 +64,20 @@ export function useAmbientToggle(): UseAmbientToggleResult {
     const next = !ambientOn;
     setTogglePending(true);
     try {
+      if (next) {
+        setPersistedAmbientEnabled(true);
+      }
       const consentPatch = Object.fromEntries(
         ALL_SOURCE_KEYS.map((key) => [key, { enabled: next }]),
       );
       const updated = await patch({ ambientSources: consentPatch });
-      setPersistedAmbientEnabled(next);
+      if (!updated) {
+        if (next) setPersistedAmbientEnabled(false);
+        return;
+      }
+      if (!next) {
+        setPersistedAmbientEnabled(false);
+      }
       if (!isNative) return;
       const lifecycle = await import("@/services/ambient/lifecycle");
       if (next) {
@@ -73,11 +86,16 @@ export function useAmbientToggle(): UseAmbientToggleResult {
               .filter(([, v]) => v?.enabled === true)
               .map(([k]) => k as SourceKey))
           : ALL_SOURCE_KEYS;
-        lifecycle.startAmbientUpload({
-          enabledSources: enabledSources.length > 0 ? enabledSources : ALL_SOURCE_KEYS,
+        const desiredSources = enabledSources.length > 0 ? enabledSources : ALL_SOURCE_KEYS;
+        const status = await lifecycle.startAmbientUpload({
+          enabledSources: desiredSources,
           transcriptionLanguage:
             updated?.generationLanguage ?? settings?.generationLanguage ?? null,
         });
+        if (hasMissingDesiredSources(status, desiredSources)) {
+          setPersistedAmbientEnabled(false);
+          await lifecycle.stopAmbientUpload();
+        }
       } else {
         await lifecycle.stopAmbientUpload();
       }
@@ -87,4 +105,13 @@ export function useAmbientToggle(): UseAmbientToggleResult {
   }, [ambientOn, patch, settings?.generationLanguage, togglePending]);
 
   return { ambientOn, togglePending, toggle };
+}
+
+function hasMissingDesiredSources(
+  status: RuntimeStatus | null,
+  desiredSources: SourceKey[],
+): boolean {
+  if (!status) return false;
+  const byKey = new Map(status.sources.map((source) => [source.key, source]));
+  return desiredSources.some((key) => byKey.get(key)?.enabled !== true);
 }

@@ -224,6 +224,40 @@ describe("AmbientView ambient toggle", () => {
       });
     });
   });
+
+  test("rolls back manual enablement when a desired native source does not start", async () => {
+    runtimeMock.status.mockReturnValue(makeStatus());
+    patchMock.mockResolvedValue({
+      ambientSources: Object.fromEntries(
+        ALL_SOURCE_KEYS.map((key) => [key, { enabled: true }]),
+      ),
+      generationLanguage: "zh-Hans",
+    });
+    startAmbientUploadMock.mockResolvedValue({
+      ...makeStatus(),
+      sources: ALL_SOURCE_KEYS.map((key) => ({
+        key,
+        label: key,
+        enabled: key !== "health",
+        lastEvent: null,
+        ingestedCount: 0,
+        lastError: key === "health" ? "health permission denied" : null,
+      })),
+    });
+
+    render(<AmbientView />);
+    fireEvent.click(screen.getByRole("button", { name: "Toggle ambient" }));
+
+    await waitFor(() => {
+      expect(startAmbientUploadMock).toHaveBeenCalledWith({
+        enabledSources: ALL_SOURCE_KEYS,
+        transcriptionLanguage: "zh-Hans",
+      });
+      expect(stopAmbientUploadMock).toHaveBeenCalled();
+      expect(getPersistedAmbientEnabled()).toBe(false);
+    });
+  });
+
   test("renders dismissible ambient live session", async () => {
     runtimeMock.status.mockReturnValue(makeStatus());
 
