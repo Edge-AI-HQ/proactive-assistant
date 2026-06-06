@@ -23,6 +23,7 @@ from pinai_agents.web.db.repositories.personal_signals import (
     PersonalSignalsRepository,
 )
 from pinai_agents.web.db.rls import service_tx, user_scoped_tx
+from pinai_agents.web.routes.agent import raw as agent_raw
 from pinai_agents.web.routes.agent.signals import _ambient_speaker_preview
 
 
@@ -261,20 +262,93 @@ async def test_recent_surfaces_ambient_speaker_preview_without_full_payload(clie
 
 
 @pytest.mark.asyncio
-async def test_agent_raw_accepts_daily_dream_full_context_limit(client, user_ids):
+async def test_agent_raw_reports_missing_connector(client, monkeypatch, user_ids):
     user_a, _ = user_ids
+
+    async def fake_list_connections(_user):
+        return []
+
+    monkeypatch.setattr(agent_raw.cs, "list_connections", fake_list_connections)
 
     r = await client.get(
         "/api/agent/raw/gmail/messages?limit=10000",
         headers=_auth(user_a),
     )
     assert r.status_code == 200, r.text
-    assert r.json()["items"] == []
+    body = r.json()
+    assert body["items"] == []
+    assert body["connectionRequired"] is True
+    assert body["connectorToolkit"] == "gmail"
+    assert body["nextTool"] == "COMPOSIO_MANAGE_CONNECTIONS"
 
 
 @pytest.mark.asyncio
-async def test_agent_raw_supports_offset_pagination(client, pool, user_ids):
+async def test_agent_raw_connector_status_error_is_unknown(monkeypatch):
+    async def fake_load_user_by_id(_pool, _user_id):
+        return object()
+
+    async def fake_list_connections(_user):
+        raise agent_raw.cs.ComposioError(502, "upstream unavailable")
+
+    monkeypatch.setattr(agent_raw, "load_user_by_id", fake_load_user_by_id)
+    monkeypatch.setattr(agent_raw.cs, "list_connections", fake_list_connections)
+
+    status = await agent_raw._active_connector_toolkit(object(), 123, "gmail")
+
+    assert status is None
+
+
+@pytest.mark.asyncio
+async def test_agent_raw_reads_cache_when_connector_status_is_unavailable(
+    client,
+    pool,
+    monkeypatch,
+    user_ids,
+):
     user_a, _ = user_ids
+    now = datetime.now(UTC)
+    async with user_scoped_tx(pool, user_a) as conn:
+        await conn.execute(
+            """
+            INSERT INTO pai_raw_gmail_messages
+              (user_id, id, message_id, subject, occurred_at)
+            VALUES
+              (%s, 'raw_gmail_cached_on_status_error', 'msg_cached', 'Cached', %s)
+            """,
+            (user_a, now),
+        )
+
+    async def fake_list_connections(_user):
+        raise agent_raw.cs.ComposioError(502, "upstream unavailable")
+
+    monkeypatch.setattr(agent_raw.cs, "list_connections", fake_list_connections)
+
+    r = await client.get(
+        "/api/agent/raw/gmail/messages?limit=10",
+        headers=_auth(user_a),
+    )
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "connectionRequired" not in body
+    assert [item["id"] for item in body["items"]] == ["raw_gmail_cached_on_status_error"]
+
+
+@pytest.mark.asyncio
+async def test_agent_raw_supports_offset_pagination(client, pool, monkeypatch, user_ids):
+    user_a, _ = user_ids
+
+    async def fake_list_connections(_user):
+        return [
+            agent_raw.cs.Connection(
+                toolkit="gmail",
+                status="ACTIVE",
+                connected_account_id="cid_gmail",
+            )
+        ]
+
+    monkeypatch.setattr(agent_raw.cs, "list_connections", fake_list_connections)
+
     now = datetime.now(UTC)
     async with user_scoped_tx(pool, user_a) as conn:
         await conn.execute(

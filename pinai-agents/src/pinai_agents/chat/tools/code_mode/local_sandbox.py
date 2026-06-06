@@ -15,12 +15,13 @@ def use_local_sandbox() -> bool:
 
 
 def local_chat_root_dir(thread_id: str) -> Path:
-    """Stable per-thread workspace under /state for local chat tests."""
+    """Stable per-thread workspace for local chat tests."""
     safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", thread_id).strip(".-") or "thread"
     if len(safe) > 80:
         digest = hashlib.sha1(thread_id.encode("utf-8")).hexdigest()[:10]
         safe = f"{safe[:69]}-{digest}"
-    return Path("/state/chat") / safe
+    root = os.environ.get("PINAI_LOCAL_SANDBOX_ROOT", "/state/chat")
+    return Path(root) / safe
 
 
 def create_local_sandbox_backend(

@@ -183,6 +183,35 @@ async def test_raw_gmail_recent_path(mock_http, jwt_ctx):
 
 
 @pytest.mark.asyncio
+async def test_raw_gmail_recent_adds_connection_guidance(monkeypatch, jwt_ctx):
+    calls: list[dict] = []
+
+    async def fake_get(path, **params):
+        calls.append({"method": "GET", "path": path, "params": params})
+        return {
+            "items": [],
+            "connectionRequired": True,
+            "connectorToolkit": "gmail",
+        }
+
+    async def fake_post(path, body):
+        calls.append({"method": "POST", "path": path, "body": body})
+        return {"ok": True, "toolkits": [{"toolkit": "gmail", "status": "PENDING"}]}
+
+    monkeypatch.setattr(http_client, "get", fake_get)
+    monkeypatch.setattr(http_client, "post", fake_post)
+
+    result = await raw_gmail_recent.ainvoke({"hours": 24, "limit": 10})
+
+    assert calls[1] == {
+        "method": "POST",
+        "path": "/api/agent/composio/meta/MANAGE_CONNECTIONS",
+        "body": {"args": {"toolkits": ["gmail"]}},
+    }
+    assert result["connectionGuidance"]["toolkits"][0]["toolkit"] == "gmail"
+
+
+@pytest.mark.asyncio
 async def test_raw_gcal_today_path(mock_http, jwt_ctx):
     await raw_gcal_today.ainvoke({"hours": 48, "limit": 5})
     assert mock_http[0]["path"] == "/api/agent/raw/gcal/events"

@@ -148,6 +148,7 @@ start_host_processes() {
     export WEB_INTERNAL_URL="$PINAI_LOCAL_WEB_URL"
     export PAI_API_URL="${PAI_API_URL:-$PINAI_LOCAL_WEB_URL}"
     export PINAI_LOCAL_SANDBOX="${PINAI_LOCAL_SANDBOX:-1}"
+    export PINAI_LOCAL_SANDBOX_ROOT="${PINAI_LOCAL_SANDBOX_ROOT:-$STATE_DIR/state/chat}"
     cd "$ROOT_DIR/pinai-agents"
     exec uv run uvicorn pinai_agents.chat.asgi:app --reload --host 127.0.0.1 --port 8001
   ) &

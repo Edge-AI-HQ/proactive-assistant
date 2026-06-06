@@ -30,6 +30,19 @@ def _since_from_hours(hours: int | None) -> str | None:
     return (datetime.now(UTC) - timedelta(hours=hours)).isoformat()
 
 
+async def _with_connection_guidance(result):
+    if not isinstance(result, dict) or not result.get("connectionRequired"):
+        return result
+    toolkit = result.get("connectorToolkit")
+    if not isinstance(toolkit, str) or not toolkit:
+        return result
+    result["connectionGuidance"] = await http_client.post(
+        "/api/agent/composio/meta/MANAGE_CONNECTIONS",
+        {"args": {"toolkits": [toolkit]}},
+    )
+    return result
+
+
 class RawListInput(BaseModel):
     hours: int = Field(default=24, ge=1, le=336)
     limit: int = Field(default=20, ge=1, le=10_000)
@@ -38,12 +51,15 @@ class RawListInput(BaseModel):
 @tool("raw_gmail_recent", args_schema=RawListInput)
 async def raw_gmail_recent(hours: int, limit: int):
     """Recent Gmail messages from the user's connected account. Use for
-    'check my email' / 'any updates from X' questions."""
-    return await http_client.get(
+    'check my email' / 'any updates from X' questions. If the result has
+    connectionRequired=true, call COMPOSIO_MANAGE_CONNECTIONS for gmail
+    and ask the user to connect Gmail."""
+    result = await http_client.get(
         "/api/agent/raw/gmail/messages",
         since=_since_from_hours(hours),
         limit=limit,
     )
+    return await _with_connection_guidance(result)
 
 
 @tool("raw_gcal_today", args_schema=RawListInput)

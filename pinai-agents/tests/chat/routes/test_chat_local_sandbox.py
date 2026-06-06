@@ -14,6 +14,14 @@ def test_local_chat_root_dir_sanitizes_thread_id():
     assert root == Path("/state/chat/main-chat")
 
 
+def test_local_chat_root_dir_allows_root_override(monkeypatch):
+    monkeypatch.setenv("PINAI_LOCAL_SANDBOX_ROOT", "/tmp/pinai-chat")
+
+    root = local_sandbox.local_chat_root_dir("main-1")
+
+    assert root == Path("/tmp/pinai-chat/main-1")
+
+
 def test_chat_route_uses_local_backend_when_enabled(monkeypatch):
     sentinel = object()
     created: dict[str, object] = {}

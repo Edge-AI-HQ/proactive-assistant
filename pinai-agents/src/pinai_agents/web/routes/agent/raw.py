@@ -13,12 +13,15 @@ Order: occurred_at DESC.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from ... import composio_service as cs
 from ...auth.deps import AgentRun, current_agent_run, get_pool
+from ...auth.user_service import load_user_by_id
 from ...db.rls import user_scoped_tx
 
 router = APIRouter(prefix="/api/agent/raw", tags=["agent-raw"])
@@ -44,6 +47,18 @@ _RAW_TABLES: dict[tuple[str, str], str] = {
     ("device", "health"): "pai_raw_device_health_observations",
 }
 
+_RAW_CONNECTOR_TOOLKITS: dict[tuple[str, str], str] = {
+    ("gmail", "messages"): "gmail",
+    ("gcal", "events"): "googlecalendar",
+    ("gdrive", "files"): "googledrive",
+    ("slack", "messages"): "slack",
+    ("github", "issues"): "github",
+    ("calendly", "events"): "calendly",
+    ("stripe", "invoices"): "stripe",
+    ("youtube", "subscriptions"): "youtube",
+    ("linkedin", "profile"): "linkedin",
+}
+
 
 def _table_for(toolkit: str, entity: str) -> str:
     key = (toolkit.strip().lower(), entity.strip().lower())
@@ -54,6 +69,49 @@ def _table_for(toolkit: str, entity: str) -> str:
             detail=f"unknown raw source: {toolkit}/{entity}",
         )
     return table
+
+
+def _raw_key(toolkit: str, entity: str) -> tuple[str, str]:
+    return (toolkit.strip().lower(), entity.strip().lower())
+
+
+async def _active_connector_toolkit(
+    pool,
+    user_id: int,
+    composio_toolkit: str,
+) -> bool | None:
+    user = await load_user_by_id(pool, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail=f"user {user_id} not found")
+    try:
+        connections = await asyncio.wait_for(cs.list_connections(user), timeout=3.0)
+    except (TimeoutError, cs.ComposioError):
+        return None
+    return any(c.toolkit == composio_toolkit and c.status == "ACTIVE" for c in connections)
+
+
+def _connector_required_response(
+    *,
+    toolkit: str,
+    entity: str,
+    composio_toolkit: str,
+    limit: int,
+    offset: int,
+) -> dict[str, Any]:
+    return {
+        "toolkit": toolkit,
+        "entity": entity,
+        "limit": limit,
+        "offset": offset,
+        "items": [],
+        "connectionRequired": True,
+        "connectorToolkit": composio_toolkit,
+        "nextTool": "COMPOSIO_MANAGE_CONNECTIONS",
+        "message": (
+            f"{composio_toolkit} is not connected. Ask the user to connect "
+            "the data connector before answering from this source."
+        ),
+    }
 
 
 @router.get("/{toolkit}/{entity}")
@@ -74,7 +132,22 @@ async def list_raw(
     user_id + id + occurred_at + ingested_at + dedupe_key columns, so
     one SELECT covers every entry in the allowlist.
     """
+    key = _raw_key(toolkit, entity)
     table = _table_for(toolkit, entity)
+    composio_toolkit = _RAW_CONNECTOR_TOOLKITS.get(key)
+    connector_active = (
+        await _active_connector_toolkit(pool, run.user_id, composio_toolkit)
+        if composio_toolkit
+        else None
+    )
+    if composio_toolkit and connector_active is False:
+        return _connector_required_response(
+            toolkit=toolkit,
+            entity=entity,
+            composio_toolkit=composio_toolkit,
+            limit=limit,
+            offset=offset,
+        )
     # Table name comes from a static allowlist; safe to format into SQL.
     sql = f"""
         SELECT * FROM {table}
