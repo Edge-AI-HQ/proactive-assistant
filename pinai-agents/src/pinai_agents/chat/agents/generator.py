@@ -57,6 +57,12 @@ _MAX_SOURCE_SNIPPET_CHARS = 360
 _MAX_PLANNER_SOURCES = 80
 _MAX_BUNDLE_SOURCES = 8
 _CARD_STAGE_CONCURRENCY = 4
+# Each structured stage (planner / card writer / evaluator) is one LLM call.
+# dev chat workers churn (lease-expired / ConnectError / timeout under
+# concurrency), so a single transient blip used to kill a whole card. Retry
+# the call a couple times before giving up.
+_STRUCTURED_STAGE_MAX_ATTEMPTS = 3
+_STRUCTURED_STAGE_RETRY_BACKOFF_S = 1.5
 _MAX_TOPUP_ROUNDS = 2
 
 
@@ -1156,10 +1162,30 @@ async def _invoke_structured_stage(
     stage: str,
 ) -> Any:
     runnable = model.with_structured_output(schema)
-    return await runnable.ainvoke(
-        [("system", system), ("human", content)],
-        config=_stage_config(run_id=run_id, user_id=user_id, stage=stage),
-    )
+    last_exc: BaseException | None = None
+    for attempt in range(_STRUCTURED_STAGE_MAX_ATTEMPTS):
+        try:
+            return await runnable.ainvoke(
+                [("system", system), ("human", content)],
+                config=_stage_config(run_id=run_id, user_id=user_id, stage=stage),
+            )
+        except Exception as exc:
+            # Broad catch is intentional: LiteLLM/transport blips, worker
+            # restarts, and provider 429/5xx all surface as different types
+            # here and are all worth one more try before failing the stage.
+            last_exc = exc
+            logger.warning(
+                "structured stage retry run_id=%s stage=%s attempt=%d/%d error=%r",
+                run_id,
+                stage,
+                attempt + 1,
+                _STRUCTURED_STAGE_MAX_ATTEMPTS,
+                exc,
+            )
+            if attempt + 1 < _STRUCTURED_STAGE_MAX_ATTEMPTS:
+                await asyncio.sleep(_STRUCTURED_STAGE_RETRY_BACKOFF_S * (attempt + 1))
+    assert last_exc is not None
+    raise last_exc
 
 
 async def run_generator(
@@ -1320,8 +1346,13 @@ async def run_generator(
                                 structured_model,
                                 CardsList,
                                 system=(
-                                    _CARD_GENERATOR_PROMPT.format(
-                                        lang_clause=_lang_clause(output_language),
+                                    # .replace, not .format: the prompt body is
+                                    # full of literal JSON examples ({"label": ...})
+                                    # that str.format() parses as fields and dies
+                                    # on (KeyError: '"label"'). Only one real
+                                    # placeholder, so a sentinel replace is safe.
+                                    _CARD_GENERATOR_PROMPT.replace(
+                                        "{lang_clause}", _lang_clause(output_language)
                                     )
                                     + "\n\nDIRECT MODE: a single PlanItem and source_bundle_json "
                                     "are provided in the user message. Do not call tools or "
@@ -1362,10 +1393,12 @@ async def run_generator(
                             return_exceptions=True,
                         )
                         stage_cards: list[Any] = []
+                        failures: list[BaseException] = []
                         for idx, item_result in enumerate(card_results):
                             if isinstance(item_result, BaseException):
+                                failures.append(item_result)
                                 logger.warning(
-                                    "generator card stage failed run_id=%s stage=%s idx=%d error=%s",
+                                    "generator card stage failed run_id=%s stage=%s idx=%d error=%r",
                                     run_id,
                                     stage_prefix,
                                     idx,
@@ -1373,11 +1406,22 @@ async def run_generator(
                                 )
                                 continue
                             stage_cards.extend(item_result)
+                        if not stage_cards and failures:
+                            # Every writer failed. Surface the real cause instead of
+                            # returning an empty batch — downstream that collapses to
+                            # an opaque "generator returned no cards" 502 and the true
+                            # exception only ever lands in chat-process logs.
+                            raise RuntimeError(
+                                f"all {len(failures)} card writers failed "
+                                f"run_id={run_id} stage={stage_prefix}; "
+                                f"first error: {failures[0]!r}"
+                            ) from failures[0]
                         logger.info(
-                            "generator stage ok run_id=%s stage=%s cards=%d",
+                            "generator stage ok run_id=%s stage=%s cards=%d failed=%d",
                             run_id,
                             stage_prefix,
                             len(stage_cards),
+                            len(failures),
                         )
                         return stage_cards
 
