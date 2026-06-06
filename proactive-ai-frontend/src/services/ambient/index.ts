@@ -103,7 +103,7 @@ export class AmbientRuntime {
   private contextSnapshotTimer: ReturnType<typeof setInterval> | null = null;
   private timelineSummaryInFlight = false;
   private contextSnapshotInFlight = false;
-  private sourceReconcileInFlight = false;
+  private sourceReconcilePromise: Promise<void> | null = null;
   private sourceReconcilePending = false;
   private desiredSourceKeys = new Set<SourceKey>();
   private optOutSources = loadOptOutSources();
@@ -528,11 +528,22 @@ export class AmbientRuntime {
   }
 
   private async reconcileDesiredSources(): Promise<void> {
-    if (this.sourceReconcileInFlight) {
+    if (this.sourceReconcilePromise) {
       this.sourceReconcilePending = true;
-      return;
+      return this.sourceReconcilePromise;
     }
-    this.sourceReconcileInFlight = true;
+    const promise = this.runReconcileDesiredSources();
+    this.sourceReconcilePromise = promise;
+    try {
+      await promise;
+    } finally {
+      if (this.sourceReconcilePromise === promise) {
+        this.sourceReconcilePromise = null;
+      }
+    }
+  }
+
+  private async runReconcileDesiredSources(): Promise<void> {
     try {
       do {
         this.sourceReconcilePending = false;
@@ -570,7 +581,6 @@ export class AmbientRuntime {
         }
       } while (this.sourceReconcilePending);
     } finally {
-      this.sourceReconcileInFlight = false;
       this.notify();
     }
   }

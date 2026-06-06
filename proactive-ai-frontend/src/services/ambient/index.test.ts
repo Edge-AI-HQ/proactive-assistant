@@ -179,6 +179,33 @@ describe("AmbientRuntime source reconciliation", () => {
     });
   });
 
+  test("waits for in-flight reconciliation before reporting status to overlapping callers", async () => {
+    const source = new FakeSource("sound_classifier");
+    let releaseStart: () => void = () => { };
+    source.startWaiter = new Promise((resolve) => {
+      releaseStart = resolve;
+    });
+    const runtime = makeRuntime(source);
+
+    const firstPass = runtime.reconcileEnabledSources(["sound_classifier"]);
+    await Promise.resolve();
+    let secondResolved = false;
+    const secondPass = runtime.reconcileEnabledSources(["sound_classifier"]).then(() => {
+      secondResolved = true;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(secondResolved).toBe(false);
+    releaseStart();
+    await Promise.all([firstPass, secondPass]);
+
+    expect(secondResolved).toBe(true);
+    expect(runtime.status().sources[0]).toMatchObject({
+      enabled: true,
+      lastError: null,
+    });
+  });
+
   test("refreshTimeline enqueues generated timeline signals", async () => {
     const source = new FakeSource("sound_classifier");
     const outbox = new MemoryOutboxStore();
