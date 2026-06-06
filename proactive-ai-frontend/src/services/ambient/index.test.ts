@@ -106,7 +106,7 @@ describe("AmbientRuntime source reconciliation", () => {
     localStorage.clear();
   });
 
-  test("starts system permission sources before audio capture by default", () => {
+  test("starts audio first and leaves HealthKit last by default", () => {
     const runtime = new AmbientRuntime({
       outbox: new MemoryOutboxStore(),
       enableTimers: false,
@@ -115,15 +115,13 @@ describe("AmbientRuntime source reconciliation", () => {
     const sourceOrder = runtime.status().sources.map((source) => source.key);
 
     expect(sourceOrder.slice(0, 5)).toEqual([
-      "health",
+      "sound_classifier",
       "calendar",
       "location",
       "visit",
       "activity",
     ]);
-    expect(sourceOrder.indexOf("sound_classifier")).toBeGreaterThan(
-      sourceOrder.indexOf("activity"),
-    );
+    expect(sourceOrder.at(-1)).toBe("health");
   });
 
   test("retries a desired source after an earlier start failure", async () => {

@@ -225,7 +225,7 @@ describe("AmbientView ambient toggle", () => {
     });
   });
 
-  test("rolls back manual enablement when a desired native source does not start", async () => {
+  test("keeps manual enablement when only HealthKit does not start", async () => {
     runtimeMock.status.mockReturnValue(makeStatus());
     patchMock.mockResolvedValue({
       ambientSources: Object.fromEntries(
@@ -242,6 +242,39 @@ describe("AmbientView ambient toggle", () => {
         lastEvent: null,
         ingestedCount: 0,
         lastError: key === "health" ? "health permission denied" : null,
+      })),
+    });
+
+    render(<AmbientView />);
+    fireEvent.click(screen.getByRole("button", { name: "Toggle ambient" }));
+
+    await waitFor(() => {
+      expect(startAmbientUploadMock).toHaveBeenCalledWith({
+        enabledSources: ALL_SOURCE_KEYS,
+        transcriptionLanguage: "zh-Hans",
+      });
+      expect(stopAmbientUploadMock).not.toHaveBeenCalled();
+      expect(getPersistedAmbientEnabled()).toBe(true);
+    });
+  });
+
+  test("rolls back manual enablement when the sound source does not start", async () => {
+    runtimeMock.status.mockReturnValue(makeStatus());
+    patchMock.mockResolvedValue({
+      ambientSources: Object.fromEntries(
+        ALL_SOURCE_KEYS.map((key) => [key, { enabled: true }]),
+      ),
+      generationLanguage: "zh-Hans",
+    });
+    startAmbientUploadMock.mockResolvedValue({
+      ...makeStatus(),
+      sources: ALL_SOURCE_KEYS.map((key) => ({
+        key,
+        label: key,
+        enabled: key !== "sound_classifier",
+        lastEvent: null,
+        ingestedCount: 0,
+        lastError: key === "sound_classifier" ? "microphone permission denied" : null,
       })),
     });
 

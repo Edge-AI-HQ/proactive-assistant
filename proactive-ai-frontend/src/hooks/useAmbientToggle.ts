@@ -22,8 +22,9 @@ export interface UseAmbientToggleResult {
    *  2. PATCH /api/settings ambientSources for every source → next
    *  3. On native, immediately call lifecycle.start/stopAmbientUpload so
    *     real sensors react without waiting for the next render pass.
-   *     If any desired native source fails to start, the local flag is
-   *     rolled back and already-started sources are stopped.
+   *     If the core sound source fails to start, the local flag is rolled
+   *     back and already-started sources are stopped. Other data sources
+   *     can be retried by the lifecycle reconciler later.
    *  Safe to call from any view; AmbientView and the NOW-view toggle in
    *  ConstellationLayout share this so flipping from either stays in sync. */
   toggle: () => Promise<void>;
@@ -92,7 +93,7 @@ export function useAmbientToggle(): UseAmbientToggleResult {
           transcriptionLanguage:
             updated?.generationLanguage ?? settings?.generationLanguage ?? null,
         });
-        if (hasMissingDesiredSources(status, desiredSources)) {
+        if (hasMissingCoreSource(status, desiredSources)) {
           setPersistedAmbientEnabled(false);
           await lifecycle.stopAmbientUpload();
         }
@@ -107,11 +108,12 @@ export function useAmbientToggle(): UseAmbientToggleResult {
   return { ambientOn, togglePending, toggle };
 }
 
-function hasMissingDesiredSources(
+function hasMissingCoreSource(
   status: RuntimeStatus | null,
   desiredSources: SourceKey[],
 ): boolean {
   if (!status) return false;
+  if (!desiredSources.includes("sound_classifier")) return false;
   const byKey = new Map(status.sources.map((source) => [source.key, source]));
-  return desiredSources.some((key) => byKey.get(key)?.enabled !== true);
+  return byKey.get("sound_classifier")?.enabled !== true;
 }
