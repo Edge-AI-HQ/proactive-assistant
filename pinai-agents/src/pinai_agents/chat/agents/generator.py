@@ -213,6 +213,24 @@ attribution:
   framed as context to review, not as something the user said or wants.
 </ambient_transcript_attribution>
 
+<no_fabricated_stakes>
+Never plan a card that ASSUMES the user holds an asset, uses a tool, or
+has a personal stake that no source proves. A `world[]` / news / market /
+policy signal is background, not evidence that THIS user is exposed:
+- Do NOT plan "review your crypto / chip-stock / REIT / FX exposure" or
+  "adjust your position" unless a source (holdings, transaction, memory,
+  signal, or connected account) shows the user actually holds that asset.
+  If the news is genuinely relevant but ownership is unproven, plan it as
+  an "assess whether this affects you" item — say so in `decision` — never
+  as "adjust your position".
+- Do NOT plan a tool / workflow card (GitHub PRs, Slack triage, etc.)
+  unless a source shows the user actually uses that tool.
+- A speculative or rumored trigger (a proposal, "considering", an
+  unconfirmed filing, no enacted date) is not a "now" trigger. Skip it or
+  down-rank it; never plan it as urgent.
+Better to plan fewer grounded items than one that invents the user's stake.
+</no_fabricated_stakes>
+
 <intent_key_convention>
 intent_key is a stable slug — kebab-case, ≤120 chars, identifies the
 underlying decision (not the card title). Examples:
@@ -371,6 +389,29 @@ a `secondary_actions` entry or skip it. The primary_action represents
 your single recommendation; if you can't pick, the card isn't ready
 and should be dropped into `skipped_plan_items`.
 </one_decision_per_card>
+
+<must_add_value_over_source>
+A card must tell the user something they do NOT already know from the raw
+source it cites. A bare restatement of an email, a notification, a CI
+failure, an open ticket, or the user's own log (e.g. "you walked 1320
+steps", "CI failed again") is NOT a card — the user already got that from
+the source. Before emitting each card, make it carry at least ONE of:
+- a quantified comparison (vs the user's own average / a prior value / a
+  threshold / a trend), or
+- a pre-extracted detail that saves the user a click (the exact failing
+  job or error line, the vendor + last-4 of a failed charge, the specific
+  clause / amount / id), or
+- a concrete next step with the parameters already filled in.
+If a plan item only echoes its source and you can add none of these, drop
+it into `skipped_plan_items` rather than ship a zero-delta card.
+</must_add_value_over_source>
+
+<no_fabricated_holdings>
+Never assert the user owns, holds, or uses something unless a cited source
+proves it. If a card is grounded only in a `world` / news source, frame it
+as "assess whether this affects you", not "your position" / "your
+exposure" / "your portfolio".
+</no_fabricated_holdings>
 
 <connector_guidance_card_format>
 When the plan item has intent_key prefix "connect:<toolkit_slug>", you
@@ -1277,7 +1318,15 @@ async def _invoke_structured_stage(
     user_id: int,
     stage: str,
 ) -> Any:
-    runnable = model.with_structured_output(schema)
+    # method="function_calling" (not the ChatOpenAI default "json_schema"):
+    # json_schema routes through Anthropic's `output_format`, which rejects
+    # JSON-Schema `$defs`/`$ref` ("External schema references are not
+    # supported"). Our schemas nest models (PlanOutput.plan -> PlanItem),
+    # so pydantic emits `$defs`. Tool `input_schema` accepts `$defs`, so
+    # function_calling works. Safe here because structured_model runs with
+    # enable_thinking=False — forced tool_choice is incompatible with
+    # Anthropic extended thinking, but we never enable thinking on this model.
+    runnable = model.with_structured_output(schema, method="function_calling")
     last_exc: BaseException | None = None
     for attempt in range(_STRUCTURED_STAGE_MAX_ATTEMPTS):
         try:
