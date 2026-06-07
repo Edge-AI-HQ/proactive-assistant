@@ -17,7 +17,6 @@ import {
 } from "lucide-react";
 import bgGradient from "@/assets/bg-gradient.jpg";
 import AiSphere from "@/components/now/AiSphere";
-import ChatTimeline from "@/components/chat/ChatTimeline";
 
 import ConnectPanel from "@/components/connect/ConnectPanel";
 import { type TimelineEntry as AmbientTimelineEntry } from "@/components/ambient/AmbientView";
@@ -57,7 +56,7 @@ import { useAppNavigation, type MenuId } from "@/components/app/useAppNavigation
 import LiveOverlay from "@/components/ambient/LiveOverlay";
 import MainChatOverlay from "@/components/chat/MainChatOverlay";
 import SideMenu from "@/components/app/SideMenu";
-import CardDetailDrawer from "@/components/card/CardDetailDrawer";
+import CardDrawer from "@/components/card/CardDrawer";
 import PaywallDrawer from "@/components/account/PaywallDrawer";
 import ViewRouter from "@/components/app/ViewRouter";
 import {
@@ -747,7 +746,7 @@ export default function AppLayout() {
       />
 
       {/* Card detail drawer */}
-      <CardDetailDrawer
+      <CardDrawer
         open={drawerOpen}
         onOpenChange={setDrawerOpen}
         card={selectedCard}

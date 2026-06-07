@@ -83,7 +83,7 @@ describe("AppLayout menu order", () => {
     // (top: ...) stay in the layout. Both still share the same var.
     const nowViewSource = readFileSync(join(__dirname, "..", "now", "NowView.tsx"), "utf8");
     const ambientSource = readFileSync(join(__dirname, "..", "ambient", "AmbientView.tsx"), "utf8");
-    const tasksSource = readFileSync(join(__dirname, "..", "ChatTimeline.tsx"), "utf8");
+    const tasksSource = readFileSync(join(__dirname, "..", "tasks", "CardTimeline.tsx"), "utf8");
     const connectSource = readFileSync(join(__dirname, "..", "connect", "ControlPanel.tsx"), "utf8");
     const profileSource = readFileSync(join(__dirname, "..", "profile", "GoalsView.tsx"), "utf8");
     const settingSource = readFileSync(join(__dirname, "..", "account", "AccountPanel.tsx"), "utf8");
@@ -113,7 +113,7 @@ describe("AppLayout menu order", () => {
     );
 
     expect(tasksBranch).not.toBeNull();
-    expect(tasksBranch?.[1]).toContain("<RealChatTimeline");
+    expect(tasksBranch?.[1]).toContain("<CardTimeline");
     expect(tasksBranch?.[1]).not.toContain('className="h-full overflow-y-auto pt-12"');
   });
 
@@ -128,7 +128,7 @@ describe("AppLayout menu order", () => {
       /\) : activeView === "chat" \? \(([\s\S]*?)\) : activeView === "ambient" \? \(/,
     );
     expect(tasksBranch).not.toBeNull();
-    expect(tasksBranch?.[1]).toContain("<RealChatTimeline");
+    expect(tasksBranch?.[1]).toContain("<CardTimeline");
   });
 
   test("refreshes cards immediately after generation completes", () => {

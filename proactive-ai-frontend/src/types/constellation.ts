@@ -6,7 +6,7 @@
  * `src/lib/cardAdapter.ts`。
  *
  * `detail.executionPlan` / `detail.impact` / `detail.permissions` 在后端没接的
- * 阶段会留空（[] 或 ""），CardDrawerDetail 根据空值隐藏对应 section。
+ * 阶段会留空（[] 或 ""），CardDrawerBody 根据空值隐藏对应 section。
  */
 
 export type CardStatus = "normal" | "new" | "processing" | "done";

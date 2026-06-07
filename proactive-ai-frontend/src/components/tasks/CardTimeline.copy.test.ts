@@ -7,7 +7,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 describe("ChatTimeline minimalist copy", () => {
   test("matches the minimalist Tasks header copy and spacing", () => {
-    const source = readFileSync(join(__dirname, "ChatTimeline.tsx"), "utf8");
+    const source = readFileSync(join(__dirname, "..", "tasks", "CardTimeline.tsx"), "utf8");
 
     // Top spacing moved from a hardcoded `pt-14` to the shared
     // `--constellation-header-top` CSS var (same 3.5rem default); the rest of
@@ -21,7 +21,7 @@ describe("ChatTimeline minimalist copy", () => {
   });
 
   test("receives card data from context instead of fetching again", () => {
-    const source = readFileSync(join(__dirname, "ChatTimeline.tsx"), "utf8");
+    const source = readFileSync(join(__dirname, "..", "tasks", "CardTimeline.tsx"), "utf8");
 
     // Card data/actions now arrive via CardStateContext (phase-2), not 11
     // props and not a self-owned fetch.

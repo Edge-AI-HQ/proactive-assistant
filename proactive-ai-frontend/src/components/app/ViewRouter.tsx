@@ -7,7 +7,7 @@ import NowView from "@/components/now/NowView";
 import SwipeBackLayer from "@/components/app/SwipeBackLayer";
 import RealGoalsView from "@/components/profile/GoalsView";
 import RealControlPanel from "@/components/connect/ControlPanel";
-import RealChatTimeline from "@/components/ChatTimeline";
+import CardTimeline from "@/components/tasks/CardTimeline";
 import { realIntentToChatCard, type Intent } from "@/components/now/cardModel";
 import type { CardActions } from "@/components/card/CardStateContext";
 import type { MenuId, SettingsSubPage } from "@/components/app/useAppNavigation";
@@ -155,7 +155,7 @@ export default function ViewRouter({
           /* Real card history (old AppShell CHAT view). Reuses the
              shared /api/cards state from this layout so TASKS does not
              refetch on every tab entry. */
-          <RealChatTimeline
+          <CardTimeline
             composio={composio}
             onOpenChat={onTasksOpenChat}
             onOpenCardDetail={onTasksOpenCardDetail}

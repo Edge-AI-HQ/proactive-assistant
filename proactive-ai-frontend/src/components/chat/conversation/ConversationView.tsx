@@ -36,9 +36,9 @@ import ChatToolGroup, {
 } from "@/components/chat/conversation/ChatToolGroup";
 import MarkdownContent from "@/components/chat/conversation/MarkdownContent";
 import { buildAssistantMessageFeedbackBody } from "@/components/chat/conversation/feedback";
-// The always-animated, iOS-tuned orb (constellation/AiSphere falls back to a
-// static gradient on native — wrong for the landing where the orb is the hero).
-import AiSphere from "@/components/AiSphere";
+// The shared animated orb — looping video with a buffering reveal so the
+// landing hero doesn't flash dark when the Ask PIN AI sheet opens.
+import AiSphere from "@/components/now/AiSphere";
 import ReasoningBlock, { ShimmerText } from "@/components/chat/conversation/ReasoningBlock";
 import ProposeActionCard from "@/components/chat/conversation/ProposeActionCard";
 import { HitlApprovalCard, type HitlRequiresAction } from "@/components/chat/conversation/HitlApprovalCard";

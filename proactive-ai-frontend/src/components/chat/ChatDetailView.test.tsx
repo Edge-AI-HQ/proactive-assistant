@@ -63,7 +63,7 @@ vi.mock("../browser-view/BrowserPanel", () => ({
   default: () => null,
 }));
 
-vi.mock("./CardDrawerDetail", () => ({
+vi.mock("./CardDrawerBody", () => ({
   DrawerDetailBody: () => null,
 }));
 

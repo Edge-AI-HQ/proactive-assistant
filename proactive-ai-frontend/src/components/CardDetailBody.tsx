@@ -1,6 +1,6 @@
 /**
  * @deprecated 2026-05-14 — Replaced by
- * `src/components/constellation/CardDrawerDetail`. AppLayout owns
+ * `src/components/constellation/CardDrawerBody`. AppLayout owns
  * the drawer chrome + action wiring now. Kept for fast rollback.
  */
 

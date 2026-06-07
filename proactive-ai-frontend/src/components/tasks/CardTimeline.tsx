@@ -9,7 +9,7 @@ import {
   DrawerTitle,
   DrawerDescription,
 } from "@/components/ui/drawer";
-import CardDetailBody from "./CardDetailBody";
+import CardDetailBody from "@/components/CardDetailBody";
 import type { IntentCard } from "@/types/intent-card";
 import { proxyPost } from "@/lib/api";
 import { basketMeta } from "@/lib/basket-meta";
@@ -62,7 +62,7 @@ function formatDate(iso: string): string {
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-export default function ChatTimeline({
+export default function CardTimeline({
   onOpenChat,
   onOpenCardDetail,
   composio,

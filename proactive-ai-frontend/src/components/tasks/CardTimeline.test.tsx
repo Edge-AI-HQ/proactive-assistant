@@ -31,7 +31,7 @@ vi.mock("@/components/ui/drawer", async () => {
   };
 });
 
-vi.mock("./CardDetailBody", () => ({
+vi.mock("@/components/CardDetailBody", () => ({
   default: ({ onConfirm }: { onConfirm: () => void }) => (
     <div>
       Legacy timeline drawer
@@ -62,7 +62,7 @@ const card: IntentCard = {
   createdAt: "2026-05-18T19:00:00Z",
 };
 
-import ChatTimeline from "./ChatTimeline";
+import CardTimeline from "./CardTimeline";
 
 // Minimal ComposioState stub. The connect:* short-circuit never fires
 // in these tests because `card.intentKey` is undefined.
@@ -113,13 +113,13 @@ const mockCardState: CardStateValue = {
   } as unknown as CardActions,
 };
 
-describe("ChatTimeline card detail routing", () => {
+describe("CardTimeline card detail routing", () => {
   test("delegates card detail opens to the shared parent drawer when provided", () => {
     const onOpenCardDetail = vi.fn();
 
     render(
       <CardStateProvider value={mockCardState}>
-        <ChatTimeline onOpenChat={noop} onOpenCardDetail={onOpenCardDetail} composio={stubComposio} />
+        <CardTimeline onOpenChat={noop} onOpenCardDetail={onOpenCardDetail} composio={stubComposio} />
       </CardStateProvider>,
     );
 
@@ -175,7 +175,7 @@ describe("ChatTimeline card detail routing", () => {
           } as unknown as CardActions,
         }}
       >
-        <ChatTimeline composio={composio} onOpenChat={onOpenChat} />
+        <CardTimeline composio={composio} onOpenChat={onOpenChat} />
       </CardStateProvider>,
     );
 

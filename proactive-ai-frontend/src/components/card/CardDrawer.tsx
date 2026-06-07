@@ -8,7 +8,7 @@ import {
 import CardDrawerContent from "@/components/card/CardDrawerContent";
 import type { Intent } from "@/components/now/cardModel";
 
-interface CardDetailDrawerProps {
+interface CardDrawerProps {
   open: boolean;
   /** The tapped card whose detail is shown; null collapses the body (the
    *  Drawer shell still animates closed via `open`). */
@@ -32,7 +32,7 @@ interface CardDetailDrawerProps {
  * (execute / dismiss / modify / completed lookup) stays in the parent so
  * behavior is unchanged.
  */
-export default function CardDetailDrawer({
+export default function CardDrawer({
   open,
   card,
   onOpenChange,
@@ -42,7 +42,7 @@ export default function CardDetailDrawer({
   onClose,
   onDismiss,
   onModify,
-}: CardDetailDrawerProps) {
+}: CardDrawerProps) {
   return (
     <Drawer open={open} onOpenChange={onOpenChange}>
       <DrawerContent
