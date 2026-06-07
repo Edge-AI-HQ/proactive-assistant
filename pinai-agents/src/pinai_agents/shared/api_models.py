@@ -9,10 +9,13 @@ attribute names.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
+
+logger = logging.getLogger(__name__)
 
 
 class _CamelModel(BaseModel):
@@ -457,6 +460,49 @@ class _AgentModel(BaseModel):
         alias_generator=_to_camel,
         populate_by_name=True,
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _clip_overlong_strings(cls, data: Any) -> Any:
+        """Clip (don't reject) over-`max_length` strings from LLM output.
+
+        LLM structured output does NOT enforce JSON-Schema ``maxLength`` —
+        neither OpenAI strict ``json_schema`` nor Anthropic tool use guarantees
+        string length (only structure/type/enum/required), and the LiteLLM →
+        Anthropic path enforces none of it. Treating ``max_length`` as a hard
+        validation gate means a single over-long field aborts the whole batch
+        (a recurring failure: decision/why_now_trigger 200→400, then
+        agentPrompt 600, …). Downgrade to truncation so ``max_length`` stays a
+        real UI/DB ceiling while an over-long value is clipped + logged instead
+        of raising. Runs at every nesting level: each _AgentModel subclass
+        inherits this validator, and Pydantic builds nested models bottom-up.
+        """
+        if not isinstance(data, dict):
+            return data
+        for name, field in cls.model_fields.items():
+            max_len: int | None = next(
+                (
+                    m.max_length
+                    for m in field.metadata
+                    if isinstance(getattr(m, "max_length", None), int)
+                ),
+                None,
+            )
+            if max_len is None:
+                continue
+            # LLM emits camelCase aliases; SDK callers may use snake_case names.
+            key = name if name in data else field.alias
+            value = data.get(key)
+            if isinstance(value, str) and len(value) > max_len:
+                logger.warning(
+                    "clipped over-long LLM field model=%s field=%s len=%d max=%d",
+                    cls.__name__,
+                    name,
+                    len(value),
+                    max_len,
+                )
+                data[key] = value[:max_len]
+        return data
 
 
 class PlanItem(_AgentModel):
