@@ -31,7 +31,7 @@ Proactive AI 后端整体收敛到 **pinai-agents**（Python / FastAPI / LangCha
 pinai-agents 在同一 codebase 里跑两个进程，**单一信任边界**：
 
 - **web 进程**：持 master credentials（`SUPABASE_SECRET_KEY` / `PAI_JWT_SIGNING_KEY` / `COMPOSIO_API_KEY` / `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` / `LITELLM_MASTER_KEY`）。负责签 JWT、mint LiteLLM virtual key、写入 Supabase Storage、调 Supabase Auth admin API、跑 Composio ingest 等"代表用户"的动作。
-- **chat 进程**：跑 LLM loop，**不能**看到 master credentials。和 web 之间走 HTTPS + HS256 JWT，输入视为不可信。
+- **chat 进程**：跑 LLM loop，**不能**看到 master credentials。和 web 之间走 HTTPS + EdDSA（Ed25519）签名的 per-run JWT，输入视为不可信。
 - **运行时防线现状**（FORBIDDEN_ENVS 单一真源：`pinai-agents/src/pinai_agents/chat/trust_boundary.py`）：
   - **本地 compose 仍生效**：Makefile `ensure-env-pinai-agents` 派生 `.env.chat`，本地 chat 容器看不到 master credentials。
   - **fly 部署上暂时降级**：flyctl 没有 per-process-group secret（验过 0.4.48），fly 上 chat 进程实际能看到 master credentials。`chat/asgi.py` 的 boot fail-fast 已注释掉、`scripts/sync_fly_secrets.py` 退化成 app-level 整体推（详见 script docstring 和 `chat/asgi.py` 文件头）。下一次 web/chat 拆成两个独立 fly app 时再启用运行时防线。
@@ -292,7 +292,7 @@ make deploy-litellm-prod    # LiteLLM → prod
 ## 安全约束（P0）
 - **Trust boundary**：master credentials（`SUPABASE_SECRET_KEY` / `PAI_JWT_SIGNING_KEY` / `COMPOSIO_API_KEY` / `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` / `LITELLM_MASTER_KEY`）禁止进入 chat 进程环境。单一真源在 `pinai-agents/src/pinai_agents/chat/trust_boundary.py` 的 `FORBIDDEN_ENVS`；改动 chat secret 注入相关代码后必须确认 `chat/asgi.py` 的 boot fail-fast、Makefile `.env.chat` 派生、`pinai-agents/scripts/sync_fly_secrets.py` 三道防线都还在。
 - **Composio 写命令受控**：read/query 类 Composio tool 默认可执行；有副作用的 tool 只有代码 allowlist 内的 `GMAIL_CREATE_EMAIL_DRAFT` / `GMAIL_SEND_DRAFT` 可执行，且必须显式传 side-effect 同意标记。不要指导 agent 用 `GMAIL_SEND_EMAIL` 或 allowlist 外任意 create/update/delete/send tool。
-- **JWT 签名隔离**：web 用 EdDSA 私钥签 PAI JWT；chat 用 HS256 共享 secret 验。私钥永远只在 web 进程。
+- **JWT 签名隔离**：web 用 Ed25519 私钥签 per-run agent JWT；chat 只持 Ed25519 公钥验签（chat 侧泄露也无法伪造新 token，这是相对 HS256 对称密钥的核心安全升级）。私钥永远只在 web 进程。
 - **dotenvx 私钥**（`.env.keys`）禁止 checkin，找团队成员获取。
 - **用户标识规约**：`users.id` (BIGINT) 仅用于 DB 内部 FK / RLS / `user_scoped_tx` / 内部 JWT 的 `user_id` claim，**永远不出本系统**——BIGSERIAL 在本地 docker / dev fly / prod fly 是独立序列，跨环境必撞。任何对外 namespace（Composio user_id、LiteLLM user_id / key_alias、Supabase Storage path prefix、Stripe metadata 主键、其它第三方 SaaS）必须用 `users.supabase_user_id` (UUID NOT NULL，全球唯一、Supabase 不复用、跨环境一致)。
 
