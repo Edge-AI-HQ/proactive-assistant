@@ -831,13 +831,17 @@ def _connector_intent_key(intent_key: str | None) -> str | None:
 
 
 def _feedback_outcome(row: dict[str, Any]) -> str:
-    return str(
-        row.get("action")
-        or row.get("outcome")
-        or row.get("latestOutcome")
-        or row.get("kind")
-        or ""
-    ).strip().lower()
+    return (
+        str(
+            row.get("action")
+            or row.get("outcome")
+            or row.get("latestOutcome")
+            or row.get("kind")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
 
 
 def _filter_connector_guidance_plan_items(
@@ -862,29 +866,18 @@ def _filter_connector_guidance_plan_items(
         normalized
         for card in compact_phase1.get("cards_recent") or []
         if isinstance(card, dict)
-        for normalized in [
-            _connector_intent_key(
-                card.get("intentKey") or card.get("intent_key")
-            )
-        ]
+        for normalized in [_connector_intent_key(card.get("intentKey") or card.get("intent_key"))]
         if normalized
     }
     rejected_connector_intents = {
         normalized
         for row in compact_phase1.get("feedback") or []
-        if isinstance(row, dict)
-        and _feedback_outcome(row) in _CONNECTOR_REJECTION_OUTCOMES
-        for normalized in [
-            _connector_intent_key(
-                row.get("intentKey") or row.get("intent_key")
-            )
-        ]
+        if isinstance(row, dict) and _feedback_outcome(row) in _CONNECTOR_REJECTION_OUTCOMES
+        for normalized in [_connector_intent_key(row.get("intentKey") or row.get("intent_key"))]
         if normalized
     }
     connector_count = sum(
-        1
-        for key in existing_intent_keys or []
-        if _connector_slug_from_intent_key(str(key))
+        1 for key in existing_intent_keys or [] if _connector_slug_from_intent_key(str(key))
     )
 
     filtered: list[Any] = []
@@ -988,7 +981,9 @@ def _compact_phase1_for_topup(compact_phase1: dict[str, Any]) -> dict[str, Any]:
 
 
 def _tokenize(value: str) -> set[str]:
-    return {part for part in re.split(r"[^A-Za-z0-9_\-\u4e00-\u9fff]+", value.lower()) if len(part) > 2}
+    return {
+        part for part in re.split(r"[^A-Za-z0-9_\-\u4e00-\u9fff]+", value.lower()) if len(part) > 2
+    }
 
 
 def _source_score_for_plan(plan_text: str, source: dict[str, Any]) -> float:
@@ -1123,7 +1118,9 @@ def _rank_cards(
         best_by_intent.values(),
         key=lambda card: (
             bool(getattr(eval_by_intent.get(getattr(card, "intent_key", "")), "pass_", False)),
-            float(getattr(eval_by_intent.get(getattr(card, "intent_key", "")), "overall", 0.0) or 0.0),
+            float(
+                getattr(eval_by_intent.get(getattr(card, "intent_key", "")), "overall", 0.0) or 0.0
+            ),
             float(getattr(card, "importance", 0.0) or 0.0),
             float(getattr(card, "urgency", 0.0) or 0.0),
         ),
@@ -1205,10 +1202,7 @@ def _existing_card_context(
                 "title": _truncate(getattr(card, "title", ""), 160),
                 "why_now": _truncate(getattr(card, "why_now", ""), 160),
                 "summary": _truncate(getattr(card, "summary", ""), 260),
-                "sources": [
-                    _truncate(source, 140)
-                    for source in getattr(card, "sources", [])[:2]
-                ],
+                "sources": [_truncate(source, 140) for source in getattr(card, "sources", [])[:2]],
             }
             for card in generated_cards
         ],

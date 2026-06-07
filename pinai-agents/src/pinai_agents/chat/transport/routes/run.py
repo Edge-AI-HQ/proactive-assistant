@@ -1,6 +1,6 @@
 """POST /agent/run/{kind} — chat worker entry for scheduler-dispatched runs.
 
-Web's scheduler dispatcher signs an HS256 JWT and POSTs here for
+Web's scheduler dispatcher signs an EdDSA JWT and POSTs here for
 auto.dreaming / connector.evolve / etc. — no SSE response, just a
 JSON summary of the run.
 

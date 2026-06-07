@@ -1,16 +1,17 @@
 """Web FastAPI app factory.
 
 Trust boundary: this process holds master credentials. Frontend → here
-with Supabase JWT; sandbox / chat process → here with HS256 JWT (HS256 is
-Step F-1+, not yet wired in this refactor PR).
+with Supabase JWT; sandbox / chat process → here with an EdDSA agent-run JWT.
 
 Lifespan owns:
     * DB pool (psycopg AsyncConnectionPool, service_role)
-    * Scheduler tick_loop background task
+    * Agent Core actor kernel (AgentRunService + AgentRunWorker + AgentBus
+      + in-memory FrameBus — swap to Redis before prod multi-instance)
+    * Scheduler tick_loop + world-ingest background tasks
 
-Step C will mount:
+Mounts:
     * /api/* (UI)       — Supabase JWT
-    * /api/agent/*      — HS256 JWT
+    * /api/agent/*      — EdDSA JWT
     * /api/sys/*        — HMAC service-to-service
 """
 
@@ -28,6 +29,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from psycopg_pool import AsyncConnectionPool
 
 from ..config import get_web_settings
+from .agent_core import (
+    AgentRunService,
+    AgentRunWorker,
+    ChatRunClient,
+    InMemoryFrameBus,
+    agent_bus,
+)
 from .db.pool import close_pool, open_pool
 from .middleware.audit import AgentAuditMiddleware
 from .payment.routes import router as ui_payment_router
@@ -39,18 +47,22 @@ from .routes.agent.feedback import router as agent_feedback_router
 from .routes.agent.memory import router as agent_memory_router
 from .routes.agent.pipeline import router as agent_pipeline_router
 from .routes.agent.preferences import router as agent_preferences_router
+from .routes.agent.proactive import router as agent_proactive_router
 from .routes.agent.profile import router as agent_profile_router
 from .routes.agent.raw import router as agent_raw_router
 from .routes.agent.sandbox_phantom import router as agent_sandbox_phantom_router
 from .routes.agent.signals import router as agent_signals_router
 from .routes.agent.skills import router as agent_skills_router
+from .routes.agent.timeline import router as agent_timeline_router
 from .routes.agent.world import router as agent_world_router
 from .routes.ui.account import router as ui_account_router
+from .routes.ui.agent_core_dev import router as ui_agent_core_dev_router
 from .routes.ui.agent_runs import router as ui_agent_runs_router
 from .routes.ui.ambient import router as ui_ambient_router
 from .routes.ui.browser import router as ui_browser_router
 from .routes.ui.chat import router as ui_chat_router
 from .routes.ui.composio import router as ui_composio_router
+from .routes.ui.conversation import router as ui_conversation_router
 from .routes.ui.development_feedback import router as ui_development_feedback_router
 from .routes.ui.devices import router as ui_devices_router
 from .routes.ui.dreaming import router as ui_dreaming_router_real
@@ -93,12 +105,22 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     scheduler_task: asyncio.Task[None] | None = None
     world_ingest_task: asyncio.Task[None] | None = None
+    agent_worker: AgentRunWorker | None = None
     if pool is not None:
+        # Agent Core actor kernel (plan 2026-06-04): AgentRunService is the
+        # produce-side API the routes call; the worker (below) drains every
+        # conversational session via a per-session lease. In-memory FrameBus
+        # (dev / single instance) — swap to Redis before prod multi-instance
+        # (plan §四.4). Created before the scheduler so its dispatcher can
+        # mirror batch agent runs into pai_agent_runs (RC-3).
+        framebus = InMemoryFrameBus()
+        app.state.agent_service = AgentRunService(pool, framebus)
         scheduler_task = asyncio.create_task(
             tick_loop(
                 pool,
                 interval_seconds=settings.scheduler_tick_seconds,
                 lease_seconds=settings.scheduler_lease_seconds,
+                service=app.state.agent_service,
             ),
             name="pinai-scheduler-tick",
         )
@@ -113,11 +135,18 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             world_ingest_loop(pool),
             name="pinai-world-ingest",
         )
+        agent_worker = AgentRunWorker(pool, framebus, agent_bus, ChatRunClient())
+        await agent_worker.start()
 
     try:
         yield
     finally:
         logger.info("pinai-agents WEB shutting down")
+        # RC-1: proactive now runs on the actor kernel — its cancel/live-stream
+        # go through agent_bus / FrameBus (worker.stop tears those down). The
+        # old proactive_loop / proactive_bus are retired (no longer started).
+        if agent_worker is not None:
+            await agent_worker.stop()
         for t in (scheduler_task, world_ingest_task):
             if t is not None:
                 t.cancel()
@@ -170,6 +199,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_settings_router)
     app.include_router(ui_runs_router)
     app.include_router(ui_chat_router)
+    app.include_router(ui_conversation_router)
     app.include_router(ui_generate_router)
     app.include_router(ui_skills_router)
     app.include_router(ui_feedback_router)
@@ -189,8 +219,9 @@ def create_app() -> FastAPI:
     app.include_router(ui_ambient_router)
     app.include_router(ui_account_router)
     app.include_router(ui_development_feedback_router)
+    app.include_router(ui_agent_core_dev_router)
 
-    # ── /api/agent/* (sandbox / chat, HS256 JWT) ──
+    # ── /api/agent/* (sandbox / chat, EdDSA JWT) ──
     app.include_router(agent_memory_router)
     app.include_router(agent_signals_router)
     app.include_router(agent_world_router)
@@ -203,8 +234,10 @@ def create_app() -> FastAPI:
     app.include_router(agent_feedback_router)
     app.include_router(agent_evolution_router)
     app.include_router(agent_pipeline_router)
+    app.include_router(agent_proactive_router)
     app.include_router(agent_sandbox_phantom_router)
     app.include_router(agent_development_feedback_router)
+    app.include_router(agent_timeline_router)
 
     @app.get("/health")
     async def health() -> dict[str, object]:

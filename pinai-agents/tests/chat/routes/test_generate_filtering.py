@@ -203,7 +203,9 @@ def test_generate_route_rejects_infrastructure_tombstone_cards() -> None:
                 confidence=0.0,
                 urgency=0.1,
                 importance=0.2,
-                sources=["phase1 profile _error='ConnectError: [Errno -2] Name or service not known'"],
+                sources=[
+                    "phase1 profile _error='ConnectError: [Errno -2] Name or service not known'"
+                ],
             )
         ],
         evaluations=[_evaluation("no-grounded-source-fallback", passed=False, overall=1.3)],

@@ -13,9 +13,7 @@ from pinai_agents.web.db.rls import user_scoped_tx
 def test_development_feedback_routes_are_mounted():
     app = create_app()
     routes = {
-        (route.path, method)
-        for route in app.routes
-        for method in getattr(route, "methods", set())
+        (route.path, method) for route in app.routes for method in getattr(route, "methods", set())
     }
 
     assert ("/api/development-feedback", "POST") in routes
@@ -41,10 +39,13 @@ async def _client_for(
     app = create_app()
     app.state.pool = pool
     app.dependency_overrides[current_user] = lambda: _user(user_id)
-    app.dependency_overrides[current_agent_run] = lambda: agent_run or AgentRun(
-        user_id=user_id,
-        run_id="run_development_feedback",
-        scope="test",
+    app.dependency_overrides[current_agent_run] = lambda: (
+        agent_run
+        or AgentRun(
+            user_id=user_id,
+            run_id="run_development_feedback",
+            scope="test",
+        )
     )
     transport = httpx.ASGITransport(app=app)
     return httpx.AsyncClient(transport=transport, base_url="http://testserver")

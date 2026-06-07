@@ -23,6 +23,7 @@ from collections.abc import Awaitable, Callable
 
 from psycopg_pool import AsyncConnectionPool
 
+from ..agent_core.service import AgentRunService
 from ..db.repositories.scheduled_tasks import (
     SCHEDULER_WAKE_CHANNEL,
     ScheduledTaskRow,
@@ -112,17 +113,19 @@ async def tick_loop(
     interval_seconds: int,
     dispatcher: Dispatcher | None = None,
     lease_seconds: int = 60,
+    service: AgentRunService | None = None,
 ) -> None:
     """Long-running tick task. Cancellable; cancellation cleanly exits.
 
     Pass a custom dispatcher (Dispatcher protocol) for testing; defaults
-    to the real DefaultDispatcher routing by task.kind.
+    to the real DefaultDispatcher routing by task.kind. `service` (RC-3) lets
+    the default dispatcher mirror batch agent runs into pai_agent_runs.
     """
     actual_dispatcher: Dispatcher
     if dispatcher is not None:
         actual_dispatcher = dispatcher
     else:
-        d = DefaultDispatcher(pool, lease_seconds=lease_seconds)
+        d = DefaultDispatcher(pool, lease_seconds=lease_seconds, service=service)
         actual_dispatcher = d.dispatch
 
     logger.info(

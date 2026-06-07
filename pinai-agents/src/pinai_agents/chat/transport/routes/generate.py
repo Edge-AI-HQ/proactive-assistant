@@ -119,9 +119,7 @@ def _serialize_passing_cards(
         str(ev.get("intentKey")): ev for ev in evals if isinstance(ev.get("intentKey"), str)
     }
     passing_intents = {
-        str(ev.get("intentKey"))
-        for ev in evals
-        if ev.get("pass") is True and ev.get("intentKey")
+        str(ev.get("intentKey")) for ev in evals if ev.get("pass") is True and ev.get("intentKey")
     }
     cards = [
         card
@@ -265,7 +263,9 @@ async def generate(
     # joins are stable. We dump with by_alias=True so `pass_` round-trips
     # back as `pass` on the wire.
     try:
-        cards, evals = _serialize_passing_cards(parsed, run_id=run_id, max_cards=req.cards_to_generate)
+        cards, evals = _serialize_passing_cards(
+            parsed, run_id=run_id, max_cards=req.cards_to_generate
+        )
     except ValueError as e:
         logger.warning("generator shape error run_id=%s: %s", run_id, e)
         raise HTTPException(status_code=502, detail=f"generator shape error: {e}") from e

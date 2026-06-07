@@ -23,6 +23,9 @@ export interface UserSettings {
   autoGenerateIntervalMinutes: number;
   autoDreaming: boolean;
   autoCrystallize: boolean;
+  /** Proactive heartbeat cadence in seconds — one of 30/60/300/1800. The
+   * server mirrors it into the per-user proactive.tick task's interval. */
+  proactiveIntervalSeconds: number;
   metadata: Record<string, unknown>;
   ambientSources: Record<string, AmbientSourceConsent>;
   notifyNewCards: boolean;

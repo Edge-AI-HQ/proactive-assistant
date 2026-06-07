@@ -1,7 +1,7 @@
 """Shared httpx client for native tools to call web's /api/agent/*.
 
 The chat process is the LLM loop's host — it must NOT hold service_role.
-Native tools call back into web over HTTPS with the per-run HS256 JWT
+Native tools call back into web over HTTPS with the per-run EdDSA JWT
 (verified by web's current_agent_run dependency).
 
 One module-level AsyncClient with HTTP/2 + keep-alive for connection

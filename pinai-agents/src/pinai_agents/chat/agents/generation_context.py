@@ -217,7 +217,9 @@ async def build_generation_context(
         ),
         _safe_get("/api/agent/cards/recent", limit=30),
         _safe_get("/api/agent/feedback/list", since=since_iso, limit=200),
-        _safe_get("/api/agent/world/recent", status="open", since=since_iso, until=until_iso, limit=200),
+        _safe_get(
+            "/api/agent/world/recent", status="open", since=since_iso, until=until_iso, limit=200
+        ),
         _safe_get("/api/agent/preferences/list", status="active", limit=200),
         _safe_get("/api/agent/composio/connections"),
     )

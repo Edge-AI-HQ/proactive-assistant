@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Query
@@ -48,10 +49,29 @@ _ARGS_PREVIEW_MAX = 240
 # propose_action) get the same dict in both code paths.
 _ARGS_FULL_MAX = 8192
 
+# Cursor-pagination cap, applied post-filter. `_MAX_LIMIT` bounds a single
+# page when `limit` IS supplied (malicious / buggy client). Omitting `limit`
+# means "no pagination — return the whole filtered history": the main-chat
+# backfill (`call_chat_history`) relies on that to seed pai_chat_messages with
+# the FULL thread, while the proactive page passes an explicit `limit` to page.
+_MAX_LIMIT = 500
+
+# `_build_history` falls back to `f"msg_{i}"` when a LangChain message
+# has no native UUID (rare; happens on very old checkpoints). Indices are
+# unstable across reloads (they shift when the thread grows), so these
+# ids must NOT be used as a `before` cursor — `_oldest_cursor` skips them.
+_FALLBACK_ID = re.compile(r"^msg_\d+$")
+
 
 class HistoryResponse(BaseModel):
     ok: bool
     messages: list[dict[str, Any]]
+    # Cursor-pagination fields. Names are camelCase to stay consistent with
+    # the per-entry shape (`toolCallId`, `argsPreview`, …) that the FE
+    # already consumes. Defaults keep the response shape backward-compatible
+    # for any pre-cursor consumer (they can ignore the new fields).
+    hasMore: bool = False
+    oldestCursor: str | None = None
 
 
 class ExistsResponse(BaseModel):
@@ -146,19 +166,140 @@ async def chat_exists(
     return ExistsResponse(ok=True, existing=len(msgs) > 0)
 
 
+def _is_debug_only(entry: dict[str, Any]) -> bool:
+    """An entry the user only sees in Debug mode.
+
+    Mirrors `ProactiveAgentView.tsx`'s `debugHidden` rule so a response
+    with `include_debug=0` contains exactly what the UI would render with
+    the Debug toggle off — backend filters at the source, FE doesn't have
+    to second-guess.
+
+      - `role=heartbeat` → always debug-only (the ~30s tick input).
+      - `role=assistant, trigger=tick` → debug-only UNLESS the turn made
+        at least one `notify_user` tool call (the only thing in a tick
+        turn that the user is meant to see).
+      - everything else (user messages, user-triggered assistant) → kept.
+    """
+    if entry.get("role") == "heartbeat":
+        return True
+    if entry.get("role") == "assistant" and entry.get("trigger") == "tick":
+        for p in entry.get("parts") or []:
+            if (
+                isinstance(p, dict)
+                and p.get("type") == "tool-call"
+                and p.get("toolName") == "notify_user"
+            ):
+                return False
+        return True
+    return False
+
+
+def _oldest_cursor(page: list[dict[str, Any]]) -> str | None:
+    """First stable id in `page`, usable as the next `before` cursor.
+
+    Skips `_FALLBACK_ID` matches because those reflect a positional index
+    that shifts when the thread grows — passing one back would point at a
+    different message after the next reload.
+    """
+    for entry in page:
+        eid = entry.get("id") or ""
+        if eid and not _FALLBACK_ID.match(eid):
+            return eid
+    return None
+
+
 @router.get("/agent/chat/history", response_model=HistoryResponse)
 async def chat_history(
     session_key: str = Query(..., min_length=1, max_length=200),
     authorization: str | None = Header(default=None),
+    include_debug: bool = Query(
+        False,
+        description=(
+            "When false (default), drop entries the UI would hide with"
+            " Debug off (heartbeats + tick-triggered turns w/o notify_user)."
+            " Pass true to get the full debug-visible history."
+        ),
+    ),
+    before: str | None = Query(
+        None,
+        max_length=200,
+        description=(
+            "Cursor: return up to `limit` entries strictly OLDER than the"
+            " entry with this id. Use the previous response's"
+            " `oldestCursor`. Omit for the newest page."
+        ),
+    ),
+    limit: int | None = Query(
+        None,
+        ge=1,
+        le=_MAX_LIMIT,
+        description=(
+            "Max entries to return (newest page). Omit for the ENTIRE"
+            " filtered history in one page — main chat's one-shot backfill"
+            " relies on this; the proactive page sends an explicit limit to"
+            " paginate."
+        ),
+    ),
 ) -> HistoryResponse:
-    """Return all turns for `session_key` in frontend HistoryMessage shape.
+    """Return one page of turns for `session_key` in frontend HistoryMessage shape.
 
-    Empty thread (never sent a message) → ok=true, messages=[].
+    Pagination is cursor-based + time-ascending: the returned `messages`
+    list ends with the newest entry the client requested, and
+    `oldestCursor` is the id to pass back as `before` for the next older
+    page. `hasMore` says whether more older entries exist beyond the page.
+
+    Implementation note: LangGraph checkpointer always reads the full
+    thread state, so this endpoint serializes/sends a slice but doesn't
+    save DB IO. Real benefit is bounding JSON / network / FE render cost.
+
+    Omitting `limit` returns the ENTIRE filtered history in one page
+    (hasMore=false): the main-chat backfill (`call_chat_history`) depends on
+    this to seed pai_chat_messages with the full thread. The proactive page
+    always sends an explicit `limit` to paginate.
+
+    Empty thread → ok=true, messages=[], hasMore=false, oldestCursor=null.
+    Stale `before` (id not in the filtered list) → 400.
     """
     principal = principal_from_header(authorization)
     assert_session_key_principal(session_key, principal)
     raw_messages = await _get_thread_messages(session_key)
-    return HistoryResponse(ok=True, messages=_build_history(raw_messages))
+    all_entries = _build_history(raw_messages)
+    filtered = all_entries if include_debug else [e for e in all_entries if not _is_debug_only(e)]
+
+    # Locate the cursor inside the filtered list (cursor was issued from a
+    # previous page that ran under the same filter, so it has to exist
+    # there). If it doesn't, the client is paging against a stale view —
+    # surface as 400 so the FE knows to refetch the first page.
+    if before is not None:
+        try:
+            cursor_idx = next(i for i, e in enumerate(filtered) if e.get("id") == before)
+        except StopIteration as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"stale cursor: {before}",
+            ) from e
+        end = cursor_idx
+    else:
+        end = len(filtered)
+
+    # `limit is None` → no pagination: take the whole filtered range so the
+    # main-chat backfill seeds pai_chat_messages with the full thread.
+    start = max(0, end - limit) if limit is not None else 0
+    page = filtered[start:end]
+    has_more = start > 0
+    oldest = _oldest_cursor(page)
+    # If we couldn't extract a stable cursor from the page (every entry
+    # used the `msg_{i}` fallback id), there's no way for the client to
+    # ask for an older page even though one exists — collapse `hasMore`
+    # so the UI doesn't dangle a useless "load older" affordance.
+    if has_more and oldest is None:
+        has_more = False
+    return HistoryResponse(
+        ok=True,
+        messages=page,
+        hasMore=has_more,
+        oldestCursor=oldest,
+    )
 
 
 def _extract_text(msg: Any) -> str:
@@ -255,6 +396,11 @@ def _build_history(messages: list[Any]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     current_assistant: dict[str, Any] | None = None
     tool_index: dict[str, dict[str, Any]] = {}
+    # How the turn currently being built was triggered. A heartbeat input
+    # (HumanMessage with additional_kwargs.proactive_kind == "tick") flips this
+    # to "tick"; the assistant turn that follows inherits it so the frontend
+    # can classify the whole turn as debug-only.
+    current_trigger = "user"
 
     def close_assistant() -> None:
         nonlocal current_assistant
@@ -268,12 +414,17 @@ def _build_history(messages: list[Any]) -> list[dict[str, Any]]:
 
         if isinstance(msg, HumanMessage):
             close_assistant()
+            kind = (getattr(msg, "additional_kwargs", None) or {}).get("proactive_kind")
+            current_trigger = "tick" if kind == "tick" else "user"
             text = _extract_text(msg)
             if text:
                 out.append(
                     {
                         "id": msg_id,
-                        "role": "user",
+                        # A heartbeat input renders as a heartbeat entry (debug-only)
+                        # on the frontend, not a user bubble. Mirrors the live
+                        # `proactive:tick` event so reload looks the same as live.
+                        "role": "heartbeat" if current_trigger == "tick" else "user",
                         "parts": [{"type": "text", "text": text}],
                     }
                 )
@@ -285,6 +436,10 @@ def _build_history(messages: list[Any]) -> list[dict[str, Any]]:
                     "id": msg_id,
                     "role": "assistant",
                     "parts": [],
+                    # Inherit the triggering input's kind so the UI can mark a
+                    # heartbeat-triggered turn debug (hidden unless Debug is on),
+                    # while a user-triggered turn always shows.
+                    "trigger": current_trigger,
                 }
             # Extended thinking is a v1 reasoning block in this AIMessage's
             # content list (see ChatLiteLLMReasoning in chat/runtime/llm.py).

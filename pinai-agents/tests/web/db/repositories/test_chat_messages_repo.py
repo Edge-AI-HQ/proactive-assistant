@@ -123,6 +123,40 @@ async def test_last_user_text_is_most_recent_user_turn(pool, user_ids):
 
 
 @pytest.mark.asyncio
+async def test_get_page_include_debug_filters_heartbeat_and_silent(pool, user_ids):
+    # proactive debug-only rows: heartbeat inputs (role='heartbeat') and 'silent'
+    # tick turns (trigger='tick' with no notify_user) are hidden when
+    # include_debug=False; a tick turn that reached out (a notify_user part) and
+    # plain user turns stay visible. Mirrors the FE Debug toggle so a reconnect
+    # rebuilds the right view from the table.
+    user_a, _ = user_ids
+    tid = f"proactive-{user_a}"
+    notify_parts = [
+        {"type": "tool-call", "toolCallId": "t1", "toolName": "notify_user", "status": "ok"}
+    ]
+    async with user_scoped_tx(pool, user_a) as conn:
+        repo = ChatMessagesRepository(user_a, conn)
+        await repo.append_turn(
+            thread_id=tid, role="heartbeat", parts=_text("[hb] window"), trigger="tick"
+        )
+        await repo.append_turn(
+            thread_id=tid, role="assistant", parts=_text("silent think"), trigger="tick"
+        )
+        await repo.append_turn(thread_id=tid, role="user", parts=_text("hi"))
+        await repo.append_turn(thread_id=tid, role="assistant", parts=notify_parts, trigger="tick")
+    async with user_scoped_tx(pool, user_a) as conn:
+        repo = ChatMessagesRepository(user_a, conn)
+        full = await repo.get_page(thread_id=tid, include_debug=True)
+        clean = await repo.get_page(thread_id=tid, include_debug=False)
+    # Debug on: all four rows.
+    assert len(full) == 4
+    # Debug off: heartbeat row + silent tick turn dropped; the user turn and the
+    # notify_user tick turn survive (oldest-first after reversing).
+    assert [r["role"] for r in reversed(clean)] == ["user", "assistant"]
+    assert clean[0]["parts"] == notify_parts  # the surviving assistant is the notify one
+
+
+@pytest.mark.asyncio
 async def test_rls_isolates_users(pool, user_ids):
     user_a, user_b = user_ids
     tid_a = f"main-{user_a}-rls"

@@ -20,7 +20,16 @@ from psycopg.types.json import Jsonb
 
 from .base import UserScopedRepository
 
-Role = Literal["user", "assistant"]
+# Persisted turn roles. 'user' / 'assistant' are the visible conversation;
+# 'heartbeat' is a proactive tick's input (the ~30s ambient heartbeat text fed to
+# the agent) — a debug-only row so a reconnect / Debug-toggle can rebuild the
+# proactive Debug transcript from the table (live frames are never persisted).
+# 079 + 083.
+Role = Literal["user", "assistant", "heartbeat"]
+# How an assistant turn was triggered. 'user' for every main-chat turn and the
+# user side of a proactive exchange; 'tick' for a heartbeat-triggered proactive
+# assistant turn (the frontend marks those debug-only unless they reached out).
+Trigger = Literal["user", "tick"]
 
 
 class ChatMessagesRepository(UserScopedRepository):
@@ -32,16 +41,17 @@ class ChatMessagesRepository(UserScopedRepository):
         thread_id: str,
         role: Role,
         parts: list[dict[str, Any]],
+        trigger: Trigger = "user",
     ) -> int:
         """Append one turn. Returns the new row id (== conversation order)."""
         async with self.conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 """
-                INSERT INTO pai_chat_messages (user_id, thread_id, role, parts)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO pai_chat_messages (user_id, thread_id, role, parts, trigger)
+                VALUES (%s, %s, %s, %s, %s)
                 RETURNING id
                 """,
-                (self.user_id, thread_id, role, Jsonb(parts)),
+                (self.user_id, thread_id, role, Jsonb(parts), trigger),
             )
             row = await cur.fetchone()
             if row is None:  # INSERT ... RETURNING id always yields a row
@@ -65,10 +75,19 @@ class ChatMessagesRepository(UserScopedRepository):
         async with self.conn.cursor() as cur:
             await cur.executemany(
                 """
-                INSERT INTO pai_chat_messages (user_id, thread_id, role, parts)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO pai_chat_messages (user_id, thread_id, role, parts, trigger)
+                VALUES (%s, %s, %s, %s, %s)
                 """,
-                [(self.user_id, thread_id, t["role"], Jsonb(t["parts"])) for t in turns],
+                [
+                    (
+                        self.user_id,
+                        thread_id,
+                        t["role"],
+                        Jsonb(t["parts"]),
+                        t.get("trigger", "user"),
+                    )
+                    for t in turns
+                ],
             )
         return len(turns)
 
@@ -78,17 +97,41 @@ class ChatMessagesRepository(UserScopedRepository):
         thread_id: str,
         before_id: int | None = None,
         limit: int = 50,
+        include_debug: bool = True,
     ) -> list[dict[str, Any]]:
         """Newest-first page of turns. `before_id` is an exclusive cursor for
         "load older" (pass the smallest id from the previous page). Returns
-        rows with id / role / parts / created_at, newest first."""
+        rows with id / role / parts / trigger / created_at, newest first.
+
+        `include_debug=False` drops proactive debug-only rows so the default
+        (non-Debug) view matches the live transcript: heartbeat input rows and
+        'silent' tick turns (trigger='tick' with no notify_user) are hidden,
+        while tick turns that reached out (a notify_user part) stay visible.
+        Main-chat / card threads have no such rows, so the filter is a no-op
+        there. The clause is a fixed literal (no user input) — safe to inline."""
+        # A tick turn stays visible iff it carries a notify_user tool-call part.
+        # The containment matches the part shape ChatTurnRecorder emits and keeps
+        # this in sync with FE `partsHaveNotifyUser` (both gate on
+        # type == 'tool-call' AND toolName). Perf: this is a
+        # per-row JSONB filter after the (user_id, thread_id, id DESC) index
+        # ordering — a thread with many silent ticks scans them to fill a page;
+        # heavy proactive threads need debug-row retention (see migration 083).
+        debug_clause = (
+            ""
+            if include_debug
+            else (
+                " AND role <> 'heartbeat'"
+                " AND (trigger <> 'tick' OR parts @>"
+                ' \'[{"type": "tool-call", "toolName": "notify_user"}]\'::jsonb)'
+            )
+        )
         async with self.conn.cursor(row_factory=dict_row) as cur:
             if before_id is None:
                 await cur.execute(
-                    """
-                    SELECT id, role, parts, created_at
+                    f"""
+                    SELECT id, role, parts, trigger, created_at
                     FROM pai_chat_messages
-                    WHERE user_id = %s AND thread_id = %s
+                    WHERE user_id = %s AND thread_id = %s{debug_clause}
                     ORDER BY id DESC
                     LIMIT %s
                     """,
@@ -96,10 +139,10 @@ class ChatMessagesRepository(UserScopedRepository):
                 )
             else:
                 await cur.execute(
-                    """
-                    SELECT id, role, parts, created_at
+                    f"""
+                    SELECT id, role, parts, trigger, created_at
                     FROM pai_chat_messages
-                    WHERE user_id = %s AND thread_id = %s AND id < %s
+                    WHERE user_id = %s AND thread_id = %s AND id < %s{debug_clause}
                     ORDER BY id DESC
                     LIMIT %s
                     """,

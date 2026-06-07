@@ -1,7 +1,7 @@
 """Chat process group — does NOT hold master credentials.
 
 Runs LangGraph / DeepAgents loop. Reaches user data only via HTTPS
-calls to web `/api/agent/*` with HS256 JWT. Holds: LiteLLM virtual
+calls to web `/api/agent/*` with EdDSA JWT. Holds: LiteLLM virtual
 key (per-user scope), Daytona token, LangGraph checkpointer DB user
 (schema-scoped).
 

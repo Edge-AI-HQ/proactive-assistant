@@ -93,7 +93,7 @@ export default defineConfig(({ mode }) => {
       environment: "jsdom",
       globals: true,
       include: ["src/**/*.{test,spec}.{ts,tsx}"],
-      setupFiles: ["src/testSetup.ts"],
+      setupFiles: ["src/test-setup.ts"],
       // lib/supabase.ts throws at import if these are unset; the real VITE_*
       // are dotenvx-encrypted and not available to vitest. Inject harmless
       // dummies so any test that transitively imports it can load.

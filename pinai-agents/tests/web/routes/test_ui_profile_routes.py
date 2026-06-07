@@ -185,7 +185,7 @@ async def test_settings_get_repairs_archived_auto_generate_schedule(pool, user_i
     user_a, _ = user_ids
     async with user_scoped_tx(pool, user_a) as conn:
         repo = ProfileRepository(user_a, conn)
-        settings = await repo.upsert_settings(auto_generate=True)
+        settings = await repo.upsert_settings(auto_generate=True, generation_language="zh-Hans")
         async with conn.cursor() as cur:
             await cur.execute(
                 """
@@ -285,6 +285,51 @@ async def test_settings_get_repairs_auto_generate_cards_to_generate_payload(pool
 
     assert row is not None
     assert row["payload"]["cards_to_generate"] == 8
+
+
+@pytest.mark.asyncio
+async def test_settings_update_proactive_interval_resyncs_tick_task(pool, user_ids, monkeypatch):
+    """Changing proactive_interval_seconds re-syncs the per-user proactive.tick
+    task's interval — the server reads the user's choice on the settings WRITE
+    and mirrors it into the scheduler task (the scheduler then ticks at that
+    cadence; there is no per-tick config read). Enabling the heartbeat needs a
+    LiteLLM key, so that provisioning is mocked."""
+    from pinai_agents.web.routes.ui import profile as profile_routes
+
+    async def fake_litellm(_pool, user, *, required_models=None):
+        return user
+
+    monkeypatch.setattr(profile_routes, "ensure_user_litellm_key", fake_litellm)
+
+    user_a, _ = user_ids
+    app = create_app()
+    app.state.pool = pool
+    app.dependency_overrides[current_user] = lambda: _user(user_a)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+    ) as client:
+        res = await client.post(
+            "/api/settings",
+            json={"proactiveEnabled": True, "proactiveIntervalSeconds": 1800},
+        )
+
+    assert res.status_code == 200, res.text
+    assert res.json()["proactiveIntervalSeconds"] == 1800
+
+    # the proactive.tick task was (re)created with the chosen interval
+    async with user_scoped_tx(pool, user_a) as conn, conn.cursor() as cur:
+        await cur.execute(
+            "SELECT interval_seconds, status FROM pai_scheduled_tasks "
+            "WHERE user_id=%s AND id='proactive.tick'",
+            (user_a,),
+        )
+        row = await cur.fetchone()
+
+    assert row is not None
+    assert row["interval_seconds"] == 1800
+    assert row["status"] == "active"
 
 
 @pytest.mark.asyncio

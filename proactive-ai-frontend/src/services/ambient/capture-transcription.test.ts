@@ -17,8 +17,8 @@ const transcriptionApiMock = vi.hoisted(() => ({
 vi.mock("@pin/capacitor-ambient-ai", () => ({
   AmbientAi: ambientAiMock,
 }));
-vi.mock("@/services/voiceIdentityApi", () => voiceApiMock);
-vi.mock("@/components/voice/transcriptionApi", () => transcriptionApiMock);
+vi.mock("@/services/voice-identity-api", () => voiceApiMock);
+vi.mock("@/components/voice/transcription-api", () => transcriptionApiMock);
 
 const event: CaptureReadyEvent = {
   platform: "ios",

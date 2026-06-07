@@ -121,6 +121,9 @@ EV_CHAT_DELTA = "chat:delta"
 EV_CHAT_REASONING_DELTA = "chat:reasoning:delta"
 EV_CHAT_TOOL_START = "chat:tool:start"
 EV_CHAT_TOOL_RESULT = "chat:tool:result"
+# HITL: a side-effect tool paused on HumanInTheLoopMiddleware's interrupt().
+# Carries interruptId (resume anchor) + the tool call + allowedDecisions.
+EV_CHAT_REQUIRES_ACTION = "chat:requires_action"
 EV_CHAT_ERROR = "chat:error"
 EV_CHAT_DONE = "chat:done"
 

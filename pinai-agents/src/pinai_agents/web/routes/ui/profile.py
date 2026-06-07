@@ -36,6 +36,13 @@ def _auto_dreaming_task_id(user_id: int) -> str:
 
 _AUTO_DREAMING_CRON_EXPR = "0 6 * * *"
 
+# The proactive heartbeat is a per-user `proactive.tick` scheduler task. The
+# id == kind are fixed strings the dispatcher (scheduler/dispatcher.py) and the
+# seed script key off — don't rename. The interval is per-user
+# (pai_user_settings.proactive_interval_seconds, default 300); the sync/ensure
+# helpers below mirror it into the task's interval_seconds. Proactive thread only.
+_PROACTIVE_TASK_ID = "proactive.tick"
+
 
 def _next_auto_dreaming_fire(
     *,
@@ -222,14 +229,83 @@ async def _ensure_auto_dreaming_schedule(
     await _sync_auto_dreaming_schedule(conn, user_id=user_id, settings=settings)
 
 
+async def _sync_proactive_schedule(
+    conn: AsyncConnection[DictRow],
+    *,
+    pool,
+    user: User,
+    settings: UserSettingsRow,
+) -> None:
+    """Reflect proactive_enabled into the per-user `proactive.tick` heartbeat
+    task. Mirrors _sync_auto_generate_schedule. Enabling first ensures the user
+    has a LiteLLM key — the heartbeat runs the proactive agent, which needs it.
+    Disabled = archived so the tick loop skips it without losing the row."""
+    if settings.proactive_enabled:
+        if not user.litellm_virtual_key:
+            await ensure_user_litellm_key(pool, user)
+        await ScheduledTasksRepository(user.id, conn).upsert(
+            id=_PROACTIVE_TASK_ID,
+            kind=_PROACTIVE_TASK_ID,
+            trigger_kind="schedule",
+            interval_seconds=settings.proactive_interval_seconds,
+            next_run_at=datetime.now(UTC),
+            name="Proactive agent heartbeat",
+            status="active",
+        )
+    else:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "UPDATE pai_scheduled_tasks "
+                "SET status='archived', next_run_at=NULL, updated_at=NOW() "
+                "WHERE user_id=%s AND id=%s",
+                (user.id, _PROACTIVE_TASK_ID),
+            )
+
+
+async def _ensure_proactive_schedule(
+    conn: AsyncConnection[DictRow],
+    *,
+    pool,
+    user: User,
+    settings: UserSettingsRow,
+) -> None:
+    """Read-path repair for the proactive heartbeat. If enabled but the tick
+    row is missing/stale/archived (e.g. after a DB reset), re-sync. Mirrors
+    _ensure_auto_generate_schedule — already-correct rows return early so a
+    settings read doesn't bump next_run_at or re-touch the LiteLLM key."""
+    if not settings.proactive_enabled:
+        return
+    async with conn.cursor() as cur:
+        await cur.execute(
+            """
+            SELECT kind, trigger_kind, status, interval_seconds
+            FROM pai_scheduled_tasks
+            WHERE user_id=%s AND id=%s
+            """,
+            (user.id, _PROACTIVE_TASK_ID),
+        )
+        row = await cur.fetchone()
+    if (
+        row is not None
+        and row["kind"] == _PROACTIVE_TASK_ID
+        and row["trigger_kind"] == "schedule"
+        and row["status"] == "active"
+        and row["interval_seconds"] == settings.proactive_interval_seconds
+    ):
+        return
+    await _sync_proactive_schedule(conn, pool=pool, user=user, settings=settings)
+
+
 async def _ensure_settings_schedules(
     conn: AsyncConnection[DictRow],
     *,
-    user_id: int,
+    pool,
+    user: User,
     settings: UserSettingsRow,
 ) -> None:
-    await _ensure_auto_generate_schedule(conn, user_id=user_id, settings=settings)
-    await _ensure_auto_dreaming_schedule(conn, user_id=user_id, settings=settings)
+    await _ensure_auto_generate_schedule(conn, user_id=user.id, settings=settings)
+    await _ensure_auto_dreaming_schedule(conn, user_id=user.id, settings=settings)
+    await _ensure_proactive_schedule(conn, pool=pool, user=user, settings=settings)
 
 
 def _settings_response(row: UserSettingsRow) -> SettingsResponse:
@@ -296,7 +372,7 @@ async def get_profile_snapshot(
             )
         goals = await repo.list_goals()
         settings = await repo.get_settings()
-        await _ensure_settings_schedules(conn, user_id=user.id, settings=settings)
+        await _ensure_settings_schedules(conn, pool=pool, user=user, settings=settings)
     return ProfileResponse(
         profile=asdict(profile) if profile else None,
         goals=[asdict(g) for g in goals],
@@ -366,7 +442,7 @@ async def get_settings(
     """
     async with user_scoped_tx(pool, user.id) as conn:
         s = await ProfileRepository(user.id, conn).get_settings()
-        await _ensure_settings_schedules(conn, user_id=user.id, settings=s)
+        await _ensure_settings_schedules(conn, pool=pool, user=user, settings=s)
     return _settings_response(s)
 
 
@@ -419,6 +495,8 @@ async def update_settings(
             auto_generate_interval_minutes=body.auto_generate_interval_minutes,
             auto_dreaming=body.auto_dreaming,
             auto_crystallize=body.auto_crystallize,
+            proactive_enabled=body.proactive_enabled,
+            proactive_interval_seconds=body.proactive_interval_seconds,
             metadata=body.metadata,
             ambient_sources_patch=ambient_patch,
             notify_new_cards=body.notify_new_cards,
@@ -429,4 +507,5 @@ async def update_settings(
         )
         await _sync_auto_generate_schedule(conn, user_id=user.id, settings=row)
         await _sync_auto_dreaming_schedule(conn, user_id=user.id, settings=row)
+        await _sync_proactive_schedule(conn, pool=pool, user=user, settings=row)
     return _settings_response(row)

@@ -1,13 +1,14 @@
 """web → chat HTTP proxy + SSE pipe-through.
 
-Frontend hits /api/chat-stream/send on web (Supabase JWT). web:
-  1. resolves to BIGINT user_id
-  2. signs an HS256 agent run JWT
-  3. POST chat-worker:8001/agent/chat with JWT in Authorization
-  4. streams the chat worker's SSE response back to the client byte-for-byte
+Used by the legacy /api/chat-stream/* routes (ui/chat.py, slated for removal);
+the new /api/conversation/* path drives chat through agent_core/client.py
+instead, and only reuses call_chat_history() here for history backfill.
 
-Until Step F-1 introduces a chat /run endpoint, we forward to the legacy
-/agent/chat path that's already serving SSE.
+stream_chat flow — web takes a Supabase-authenticated request and:
+  1. resolves to BIGINT user_id
+  2. signs an EdDSA agent run JWT
+  3. POST chat:8001/agent/chat with JWT in Authorization
+  4. streams the chat worker's SSE response back to the client byte-for-byte
 """
 
 from __future__ import annotations
@@ -174,6 +175,80 @@ async def call_chat_history(
     payload = resp.json()
     msgs = payload.get("messages")
     return msgs if isinstance(msgs, list) else []
+
+
+class StaleCursorError(Exception):
+    """The chat worker said our `before` cursor is no longer in the
+    filtered list (thread mutated, debug-filter changed, etc.). Callers
+    should surface this to the client as a 400 so the FE refetches the
+    first page."""
+
+
+_EMPTY_PROACTIVE_HISTORY: dict[str, Any] = {
+    "messages": [],
+    "hasMore": False,
+    "oldestCursor": None,
+}
+
+
+async def call_proactive_history(
+    *,
+    user_id: int,
+    session_key: str,
+    include_debug: bool = False,
+    before: str | None = None,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Cursor-paginated proxy to chat worker /agent/chat/history, for the
+    proactive page (separate from main chat's `call_chat_history`, which
+    returns the bare list it has always returned).
+
+    Forwards the cursor-pagination params and returns the worker's full
+    payload (`{messages, hasMore, oldestCursor}`) so the web→FE chain
+    preserves pagination state end-to-end. Raises `StaleCursorError` for a
+    400 from the worker (cursor-out-of-window). Returns an empty payload on
+    missing thread / other 4xx / connection failure.
+    """
+    token, run_id = sign_agent_run_jwt(user_id=user_id)
+    url = f"{_chat_internal_url()}/agent/chat/history"
+    params: dict[str, Any] = {"session_key": session_key, "limit": limit}
+    if include_debug:
+        params["include_debug"] = "1"
+    if before:
+        params["before"] = before
+    timeout = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        try:
+            resp = await client.get(
+                url,
+                params=params,
+                headers={"Authorization": f"Bearer {token}", "X-Run-Id": run_id},
+            )
+        except httpx.RequestError as e:
+            logger.warning("proactive /history unreachable run=%s: %s", run_id, e)
+            return dict(_EMPTY_PROACTIVE_HISTORY)
+    if resp.status_code == 400:
+        detail = ""
+        try:
+            detail = resp.json().get("detail", "")
+        except Exception:
+            detail = resp.text[:200]
+        raise StaleCursorError(detail or "stale cursor")
+    if resp.status_code >= 400:
+        logger.warning(
+            "proactive /history returned %d for run=%s body=%r",
+            resp.status_code,
+            run_id,
+            resp.text[:200],
+        )
+        return dict(_EMPTY_PROACTIVE_HISTORY)
+    payload = resp.json()
+    msgs = payload.get("messages")
+    return {
+        "messages": msgs if isinstance(msgs, list) else [],
+        "hasMore": bool(payload.get("hasMore", False)),
+        "oldestCursor": payload.get("oldestCursor"),
+    }
 
 
 async def call_generate(

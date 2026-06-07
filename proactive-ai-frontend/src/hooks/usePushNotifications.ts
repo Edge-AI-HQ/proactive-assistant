@@ -89,7 +89,7 @@ export function usePushNotifications(): UsePushNotificationsResult {
   // PushNotifications.removeAllListeners() is global — using it from one
   // hook instance wipes any other instance's listeners too, which is
   // exactly what was dropping the APNs registration token: NotificationSettings
-  // (mounted in Account tab) unmount cleanup was killing ConstellationLayout's
+  // (mounted in Account tab) unmount cleanup was killing AppLayout's
   // listeners, so the registration event had nowhere to land.
   const listenerHandlesRef = useRef<PluginListenerHandle[]>([]);
 

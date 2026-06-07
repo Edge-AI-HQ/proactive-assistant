@@ -53,7 +53,7 @@ export interface UseCardActionsOptions {
 
 /**
  * 把 AppShell 里 confirm / dismiss / snooze / modify / complete / chat /
- * text_feedback 的副作用抽到一处，让 ConstellationLayout 复用。**所有
+ * text_feedback 的副作用抽到一处，让 AppLayout 复用。**所有
  * `/feedback` POST 的 payload 形态严格沿用 AppShell 现行实现**（`kind` 维度
  * 分 `card_action` / `dismiss` / `snooze` / `text_feedback`；`intentCardId` +
  * `basket` + `channel: "web"`），不动协议。

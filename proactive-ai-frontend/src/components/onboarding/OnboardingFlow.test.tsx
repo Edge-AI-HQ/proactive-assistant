@@ -4,8 +4,8 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import OnboardingFlow from "./OnboardingFlow";
 
 vi.mock("@/lib/platform", () => ({ isNative: true }));
-vi.mock("@/components/AmbientSourceControlsPanel", () => ({ default: () => <div>Ambient controls</div> }));
-vi.mock("@/components/DataConnections", () => ({ default: () => <div>Data connections</div> }));
+vi.mock("@/components/ambient/AmbientSourceControlsPanel", () => ({ default: () => <div>Ambient controls</div> }));
+vi.mock("@/components/connect/DataConnections", () => ({ default: () => <div>Data connections</div> }));
 vi.mock("@/hooks/useComposio", () => ({ useComposio: () => ({}) }));
 vi.mock("./AmbientModelSetupStep", () => ({ default: () => <div>Gemma 2B setup</div> }));
 

@@ -1,6 +1,6 @@
 import type { VoiceEngine, VoiceEngineCallbacks, VoiceEngineHandle } from "./types";
-import { transcribeVoiceAudio } from "./transcriptionApi";
-import { createPcmRecorder } from "./pcmRecorder";
+import { transcribeVoiceAudio } from "./transcription-api";
+import { createPcmRecorder } from "./pcm-recorder";
 
 interface GptTranscriptionEngineOptions {
   model?: string;

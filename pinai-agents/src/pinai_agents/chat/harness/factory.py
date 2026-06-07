@@ -36,6 +36,7 @@ def build_agent(
     backend: BackendProtocol,
     tools: list[Any] | None = None,
     subagents: list[SubAgent] | None = None,
+    interrupt_on: dict[str, Any] | None = None,
     with_checkpointer: bool = False,
 ) -> Any:
     """Wrap `create_deep_agent` with the business spec.
@@ -44,14 +45,20 @@ def build_agent(
     tier / thinking budget / streaming are business choices). `with_checkpointer`
     is opt-in: only the persistent main + card chat threads checkpoint; the
     one-shot batch agents (crystallize / evolve / dream / generator) don't.
-    deepagents' default middleware stack (todo / fs / subagent / summarization
-    / prompt-caching) is applied by create_deep_agent itself.
+    `interrupt_on` maps side-effect tool names → HITL gate: deepagents wires
+    `HumanInTheLoopMiddleware`, so the run pauses on langgraph `interrupt()`
+    BEFORE the tool runs; web translates that into a requires_action frame and
+    resumes with `Command(resume=)` once a decision arrives. deepagents'
+    default middleware stack (todo / fs / subagent / summarization /
+    prompt-caching) is applied by create_deep_agent itself.
     """
     kwargs: dict[str, Any] = {}
     if tools is not None:
         kwargs["tools"] = tools
     if subagents:
         kwargs["subagents"] = subagents
+    if interrupt_on:
+        kwargs["interrupt_on"] = interrupt_on
     if with_checkpointer:
         kwargs["checkpointer"] = get_checkpointer()
     return create_deep_agent(

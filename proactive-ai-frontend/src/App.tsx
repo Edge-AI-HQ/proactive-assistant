@@ -1,8 +1,8 @@
 import { useEffect, useMemo } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
-import LoginPage from "@/components/LoginPage";
-import ConstellationLayout from "@/components/constellation/ConstellationLayout";
+import LoginPage from "@/components/auth/LoginPage";
+import AppLayout from "@/components/app/AppLayout";
 import { VoiceProvider } from "@/components/voice";
 import OnboardingFlow from "@/components/onboarding/OnboardingFlow";
 import { isNative } from "@/lib/platform";
@@ -14,10 +14,10 @@ import { type SourceKey } from "@/services/ambient/keys";
  * Top-level router after the apis + openclaw retirement:
  *   loading → spinner
  *   no user → LoginPage (Supabase Google OAuth)
- *   user    → ConstellationLayout (v2026-05-14)
+ *   user    → AppLayout (v2026-05-14)
  *
  * The old `AppShell` is kept in `src/components/AppShell.tsx` for reference
- * but no longer mounted. ConstellationLayout owns the 7-view shell + card
+ * but no longer mounted. AppLayout owns the 7-view shell + card
  * drawer + fullscreen chat overlay; the card execution chat runtime
  * (CardChat → MainChatView via useProactiveChatRuntime) is unchanged.
  */
@@ -161,7 +161,7 @@ export default function App() {
   return (
     <MemoryRouter>
       <VoiceProvider transcriptionLanguage={userSettings?.generationLanguage ?? null}>
-        <ConstellationLayout />
+        <AppLayout />
       </VoiceProvider>
     </MemoryRouter>
   );
