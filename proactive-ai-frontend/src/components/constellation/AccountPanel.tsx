@@ -10,6 +10,7 @@ import GenerationLanguageSettings from "@/components/GenerationLanguageSettings"
 import AmbientSourceControlsPanel from "@/components/AmbientSourceControlsPanel";
 import AmbientTimelineSummaryStatusPanel from "@/components/AmbientTimelineSummaryStatusPanel";
 import VoiceIdentitySettings from "@/components/VoiceIdentitySettings";
+import ProactiveSettings from "@/components/ProactiveSettings";
 import { isNative } from "@/lib/platform";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
 import { useUserSettings } from "@/hooks/useUserSettings";
@@ -192,6 +193,18 @@ export default function AccountPanel({
           </div>
           <ChevronRight size={16} strokeWidth={1.5} className="text-foreground/35 shrink-0" />
         </button>
+
+        {/* Proactive — heartbeat cadence for the Proactive AI check-ins.
+            Inline (not a sub-page) since it's a single control. */}
+        <section className="glass-card-strong p-4">
+          <div className="mb-3">
+            <h2 className="text-sm font-semibold text-foreground">Proactive</h2>
+            <p className="text-[11px] text-foreground/42 mt-1">
+              How often your Proactive AI checks in on you.
+            </p>
+          </div>
+          <ProactiveSettings />
+        </section>
       </motion.div>
     </div>
   );

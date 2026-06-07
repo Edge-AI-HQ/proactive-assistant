@@ -23,7 +23,15 @@ describe("ConstellationLayout menu order", () => {
       ([, label]) => label,
     );
 
-    expect(labels).toEqual(["NOW", "AMBIENT", "TASKS", "CONNECT", "PROFILE", "SETTING"]);
+    expect(labels).toEqual([
+      "NOW",
+      "AMBIENT",
+      "TASKS",
+      "CONNECT",
+      "PROFILE",
+      "SETTING",
+      "PROACTIVE",
+    ]);
   });
 
   test("scopes the ASK PIN AI entry to the NOW view", () => {

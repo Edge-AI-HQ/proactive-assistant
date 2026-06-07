@@ -13,13 +13,21 @@
  * `muted` flips body text from /85 to /60 for embedded contexts like the
  * collapsed thinking-block expansion.
  */
-import type { ReactNode } from "react";
+import {
+  Children,
+  Fragment,
+  cloneElement,
+  isValidElement,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { Browser } from "@capacitor/browser";
 import { isNative } from "@/lib/platform";
 import CodeBlock from "./CodeBlock";
+import { ConnectChip } from "@/components/ConnectChip";
 
 interface MarkdownContentProps {
   text: string;
@@ -60,6 +68,48 @@ function nodeText(node: unknown): string {
   return "";
 }
 
+// Matches the literal `[connect:<slug>]` tag the chat agent emits per the
+// <connector_nudges> prompt section in main_chat.py. Slugs are lower-case
+// ASCII + underscore (gmail, google_calendar, …).
+const CONNECT_TAG_RE = /\[connect:([a-z_]+)\]/g;
+
+/**
+ * Replace any literal `[connect:<slug>]` substrings inside ReactMarkdown's
+ * string children with an inline <ConnectChip toolkit={slug} />. Recurses
+ * into nested elements (<em>, <strong>) so a tag wrapped in emphasis still
+ * renders. Strings without "[connect:" pass through untouched (zero cost
+ * for normal messages); code/pre bypass this since they don't call it.
+ */
+function transformChildren(children: ReactNode): ReactNode {
+  if (children == null) return children;
+  if (Array.isArray(children)) {
+    return Children.map(children, (child, i) => (
+      <Fragment key={i}>{transformChildren(child)}</Fragment>
+    ));
+  }
+  if (typeof children === "string") {
+    if (!children.includes("[connect:")) return children;
+    const parts: ReactNode[] = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    CONNECT_TAG_RE.lastIndex = 0;
+    while ((match = CONNECT_TAG_RE.exec(children)) !== null) {
+      if (match.index > lastIndex) parts.push(children.slice(lastIndex, match.index));
+      parts.push(<ConnectChip key={`c-${match.index}`} toolkit={match[1]} />);
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex < children.length) parts.push(children.slice(lastIndex));
+    return parts.length === 1 ? parts[0] : <>{parts}</>;
+  }
+  if (isValidElement(children)) {
+    const element = children as ReactElement<{ children?: ReactNode }>;
+    const inner = element.props?.children;
+    if (inner == null) return children;
+    return cloneElement(element, undefined, transformChildren(inner));
+  }
+  return children;
+}
+
 export default function MarkdownContent({
   text,
   muted = false,
@@ -72,7 +122,7 @@ export default function MarkdownContent({
       <p
         className={`text-[13px] leading-relaxed my-2 first:mt-0 last:mb-0 ${bodyColor}`}
       >
-        {children}
+        {transformChildren(children)}
       </p>
     ),
     h1: ({ children }) => (
@@ -107,7 +157,7 @@ export default function MarkdownContent({
     ),
     li: ({ children }) => (
       <li className={`text-[13px] leading-relaxed pl-0.5 ${bodyColor}`}>
-        {children}
+        {transformChildren(children)}
       </li>
     ),
     strong: ({ children }) => (

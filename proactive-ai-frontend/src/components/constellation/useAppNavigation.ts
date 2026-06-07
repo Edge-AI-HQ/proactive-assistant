@@ -3,10 +3,10 @@ import type { IntentCard } from "@/types/intent-card";
 import type { LiveSession } from "@/services/ambient/live-session";
 import type { ChatCard } from "./ChatDetailView";
 
-/** Single source of truth for the 6 top-level views. ConstellationLayout's
+/** Single source of truth for the 7 top-level views. SideMenu's
  *  MENU_ITEMS must stay in this same order (locked by the menu test). */
 export type MenuId =
-  | "now" | "ambient" | "chat" | "connect" | "profile" | "account";
+  | "now" | "ambient" | "chat" | "connect" | "profile" | "account" | "proactive";
 
 export type SettingsSubPage =
   | "main" | "subscription" | "preferences" | "notifications" | "ambient";

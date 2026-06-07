@@ -625,6 +625,7 @@ export default function BigBallLayout() {
           cardActions={cardActions}
           composio={composio}
           onCardChatBack={() => closeCardChat()}
+          onProactiveBack={() => navigateTo("now")}
           displayName={displayName}
           sphereCards={sphereCards}
           ambientOn={ambientOn}

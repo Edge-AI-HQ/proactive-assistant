@@ -1,5 +1,6 @@
 import { motion, AnimatePresence } from "framer-motion";
 import ChatDetailView, { type ChatCard } from "./ChatDetailView";
+import ConversationView from "@/components/conversation/ConversationView";
 import AmbientView, { type TimelineEntry as AmbientTimelineEntry } from "./AmbientView";
 import AccountPanel from "./AccountPanel";
 import NowView from "./NowView";
@@ -25,6 +26,8 @@ interface ViewRouterProps {
   composio: ComposioState;
   // ── card chat (chatTarget + legacy activeChat branches) ──
   onCardChatBack: () => void;
+  // ── PROACTIVE view (full-screen ConversationView, kind="proactive") ──
+  onProactiveBack: () => void;
   // ── NOW view ──
   displayName: string;
   sphereCards: Intent[];
@@ -65,6 +68,7 @@ export default function ViewRouter({
   cardActions,
   composio,
   onCardChatBack,
+  onProactiveBack,
   displayName,
   sphereCards,
   ambientOn,
@@ -185,6 +189,11 @@ export default function ViewRouter({
             onSignOut={onSignOut}
             onDeleteAccount={onDeleteAccount}
           />
+        ) : activeView === "proactive" ? (
+          /* Proactive agent — the unified ConversationView (kind defaults
+             to "proactive", heartbeat-capable). Full-screen like main chat;
+             the in-chat back button returns to NOW. */
+          <ConversationView onBack={onProactiveBack} />
         ) : null}
       </motion.div>
     </AnimatePresence>

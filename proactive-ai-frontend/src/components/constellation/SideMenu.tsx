@@ -1,7 +1,7 @@
 import { useCallback, useRef, type PointerEvent, type TouchEvent } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  X, Zap, ListChecks, Settings, Radio, Plug, Target,
+  X, Zap, ListChecks, Settings, Radio, Plug, Target, Sparkles,
 } from "lucide-react";
 import { isMainMenuSwipeRight, type TouchPoint } from "./mainChatEntryGesture";
 import type { MenuId } from "./useAppNavigation";
@@ -15,6 +15,7 @@ const MENU_ITEMS = [
   { id: "connect", label: "CONNECT", icon: Plug },
   { id: "profile", label: "PROFILE", icon: Target },
   { id: "account", label: "SETTING", icon: Settings },
+  { id: "proactive", label: "PROACTIVE", icon: Sparkles },
 ] as const;
 
 interface SideMenuProps {
