@@ -269,12 +269,15 @@ async def _ensure_proactive_schedule(
     user: User,
     settings: UserSettingsRow,
 ) -> None:
-    """Read-path repair for the proactive heartbeat. If enabled but the tick
-    row is missing/stale/archived (e.g. after a DB reset), re-sync. Mirrors
-    _ensure_auto_generate_schedule — already-correct rows return early so a
-    settings read doesn't bump next_run_at or re-touch the LiteLLM key."""
-    if not settings.proactive_enabled:
-        return
+    """Read-path repair for the proactive heartbeat, both directions:
+    * enabled but the tick row is missing/stale/archived (e.g. after a DB
+      reset) → re-sync so the heartbeat runs.
+    * disabled but the tick row is still active (flag flipped directly in the
+      DB, or a legacy row predating the settings sync) → archive it so the
+      heartbeat actually stops. This mirrors the dispatcher's runtime gate
+      one layer earlier, on a settings read instead of the next tick.
+    Mirrors _ensure_auto_generate_schedule — already-correct rows return early
+    so a settings read doesn't bump next_run_at or re-touch the LiteLLM key."""
     async with conn.cursor() as cur:
         await cur.execute(
             """
@@ -285,6 +288,13 @@ async def _ensure_proactive_schedule(
             (user.id, _PROACTIVE_TASK_ID),
         )
         row = await cur.fetchone()
+    if not settings.proactive_enabled:
+        # Disabled: the only drift worth fixing is a tick row still active.
+        # Missing / already-archived rows need nothing (return early — no
+        # redundant write). _sync archives when proactive_enabled is false.
+        if row is not None and row["status"] != "archived":
+            await _sync_proactive_schedule(conn, pool=pool, user=user, settings=settings)
+        return
     if (
         row is not None
         and row["kind"] == _PROACTIVE_TASK_ID

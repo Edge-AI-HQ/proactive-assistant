@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import httpx
 import pytest
 
@@ -7,6 +9,7 @@ from pinai_agents.web.app import create_app
 from pinai_agents.web.auth.deps import current_user
 from pinai_agents.web.auth.user_service import User
 from pinai_agents.web.db.repositories.profile import ProfileRepository
+from pinai_agents.web.db.repositories.scheduled_tasks import ScheduledTasksRepository
 from pinai_agents.web.db.rls import user_scoped_tx
 
 
@@ -330,6 +333,85 @@ async def test_settings_update_proactive_interval_resyncs_tick_task(pool, user_i
     assert row is not None
     assert row["interval_seconds"] == 1800
     assert row["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_settings_proactive_off_archives_tick_task(pool, user_ids, monkeypatch):
+    """The frontend toggle's write path: POST /settings proactiveEnabled=false
+    archives the proactive.tick task so the scheduler stops claiming it."""
+    from pinai_agents.web.routes.ui import profile as profile_routes
+
+    async def fake_litellm(_pool, user, *, required_models=None):
+        return user
+
+    monkeypatch.setattr(profile_routes, "ensure_user_litellm_key", fake_litellm)
+
+    user_a, _ = user_ids
+    app = create_app()
+    app.state.pool = pool
+    app.dependency_overrides[current_user] = lambda: _user(user_a)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        on_res = await client.post("/api/settings", json={"proactiveEnabled": True})
+        off_res = await client.post("/api/settings", json={"proactiveEnabled": False})
+
+    assert on_res.status_code == 200, on_res.text
+    assert off_res.status_code == 200, off_res.text
+    assert off_res.json()["proactiveEnabled"] is False
+
+    async with user_scoped_tx(pool, user_a) as conn, conn.cursor() as cur:
+        await cur.execute(
+            "SELECT status, next_run_at FROM pai_scheduled_tasks "
+            "WHERE user_id=%s AND id='proactive.tick'",
+            (user_a,),
+        )
+        row = await cur.fetchone()
+
+    assert row is not None
+    assert row["status"] == "archived"
+    assert row["next_run_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_settings_read_archives_active_tick_when_disabled(pool, user_ids):
+    """Read-path self-heal: a proactive.tick left active while proactive is
+    disabled (flag flipped directly in DB / a legacy row) is archived on the
+    next GET /settings — mirrors the dispatcher runtime gate one layer earlier."""
+    user_a, _ = user_ids
+    async with user_scoped_tx(pool, user_a) as conn:
+        # Default settings have proactive_enabled=false. Force a stale ACTIVE
+        # tick row directly, bypassing _sync (simulates the dev drift).
+        await ProfileRepository(user_a, conn).upsert_settings(proactive_enabled=False)
+        await ScheduledTasksRepository(user_a, conn).upsert(
+            id="proactive.tick",
+            kind="proactive.tick",
+            trigger_kind="schedule",
+            interval_seconds=30,
+            next_run_at=datetime.now(UTC),
+            status="active",
+        )
+
+    app = create_app()
+    app.state.pool = pool
+    app.dependency_overrides[current_user] = lambda: _user(user_a)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        res = await client.get("/api/settings")
+
+    assert res.status_code == 200, res.text
+    assert res.json()["proactiveEnabled"] is False
+
+    async with user_scoped_tx(pool, user_a) as conn, conn.cursor() as cur:
+        await cur.execute(
+            "SELECT status, next_run_at FROM pai_scheduled_tasks "
+            "WHERE user_id=%s AND id='proactive.tick'",
+            (user_a,),
+        )
+        row = await cur.fetchone()
+
+    assert row is not None
+    assert row["status"] == "archived"
+    assert row["next_run_at"] is None
 
 
 @pytest.mark.asyncio
