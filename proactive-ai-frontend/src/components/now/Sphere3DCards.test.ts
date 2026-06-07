@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { getSphereCardPresentation } from "./Sphere3DCards";
+import { getSphereCardPresentation } from "@/components/now/Sphere3DCards";
 
 describe("getSphereCardPresentation", () => {
   test("keeps back-half cards visible but dimmed", () => {

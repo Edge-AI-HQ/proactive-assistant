@@ -5,14 +5,14 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const layoutSrc = () =>
-  readFileSync(join(here, "ConstellationLayout.tsx"), "utf8");
+  readFileSync(join(here, "AppLayout.tsx"), "utf8");
 
 // Phase-1 god-component extraction: navigation STATE + behavior (goBack,
 // sessionStorage, overlay clearing) now live in useAppNavigation and are
 // covered by useAppNavigation.test.tsx. These characterization tests lock
-// that ConstellationLayout DELEGATES to the hook (the wiring contract),
+// that AppLayout DELEGATES to the hook (the wiring contract),
 // instead of re-implementing navigation inline.
-describe("ConstellationLayout navigation wiring (characterization)", () => {
+describe("AppLayout navigation wiring (characterization)", () => {
   test("drives navigation through the useAppNavigation hook", () => {
     const src = layoutSrc();
     expect(src).toContain("useAppNavigation()");

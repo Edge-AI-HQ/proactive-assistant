@@ -1,7 +1,7 @@
 import { motion } from "framer-motion";
 import { Radio } from "lucide-react";
-import Sphere3DCards from "./Sphere3DCards";
-import { CATEGORIES, type Intent } from "./cardModel";
+import Sphere3DCards from "@/components/now/Sphere3DCards";
+import { CATEGORIES, type Intent } from "@/components/now/cardModel";
 import type { WeatherData } from "@/hooks/useWeather";
 
 interface NowViewProps {
@@ -26,7 +26,7 @@ interface NowViewProps {
 /**
  * "now" home view — greeting + a prominent Ambient card + the 3D sphere of
  * all cards. Purely presentational: card-tap routing and the ambient toggle
- * action live in the parent (ConstellationLayout) and arrive as callbacks.
+ * action live in the parent (AppLayout) and arrive as callbacks.
  */
 export default function NowView({
   displayName,

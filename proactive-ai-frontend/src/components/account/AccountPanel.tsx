@@ -21,8 +21,8 @@ import {
   type InvoiceEntry, type PaymentMethodEntry,
   type PlanCode, type SubscriptionState, type UsageInfo,
 } from "@/lib/api";
-import { PLANS } from "./PlanPaymentForm";
-import SwipeBackLayer from "./SwipeBackLayer";
+import { PLANS } from "@/components/account/PlanPaymentForm";
+import SwipeBackLayer from "@/components/layout/SwipeBackLayer";
 
 // AmbientModelsPanel pulls in @pin/capacitor-ambient-ai which is
 // rollup-external for the web build, so it must be loaded lazily and
@@ -49,7 +49,7 @@ export interface AccountPanelProps {
   /**
    * Reserved for future re-introduction of an account-deletion entry
    * point. The Setting tab now matches the design which has no Danger
-   * Zone surface; ConstellationLayout still wires a real handler so we
+   * Zone surface; AppLayout still wires a real handler so we
    * can resurrect the flow under a different surface without API churn.
    */
   onDeleteAccount?: () => Promise<void>;
@@ -70,7 +70,7 @@ export default function AccountPanel({
 }: AccountPanelProps) {
   const initial = (avatarLetter ?? userName.trim().slice(0, 1) ?? "?").toUpperCase();
   const subtitle = userEmail ?? "Signed in";
-  // subPage is controlled by ConstellationLayout via useAppNavigation so the
+  // subPage is controlled by AppLayout via useAppNavigation so the
   // global goBack() (left-edge swipe) can pop a sub-page back to "main".
   // sessionStorage persistence now lives in the hook.
   const setSubPage = onSubPageChange;

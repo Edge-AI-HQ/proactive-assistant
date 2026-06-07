@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Radio } from "lucide-react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import AmbientView, { LiveFullscreen } from "./AmbientView";
+import AmbientView, { LiveFullscreen } from "@/components/ambient/AmbientView";
 import { getPersistedAmbientEnabled } from "@/services/ambient/enabled-state";
 import { ALL_SOURCE_KEYS } from "@/services/ambient/keys";
 import type { UserDevice } from "@/lib/api";

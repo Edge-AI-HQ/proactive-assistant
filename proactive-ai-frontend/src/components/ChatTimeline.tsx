@@ -22,7 +22,7 @@ import {
 import { getToolkit } from "@/lib/toolkit-icons";
 import type { CardScore } from "@/hooks/useCards";
 import type { ComposioState } from "@/hooks/useComposio";
-import { useCardState } from "@/components/constellation/CardStateContext";
+import { useCardState } from "@/components/card/CardStateContext";
 
 type TimelineCard = IntentCard & {
   runId: string;
@@ -35,13 +35,13 @@ interface ChatTimelineProps {
   // auto-fires it as the user's first turn so the agent starts working
   // on the card. Plain "Chat" path passes nothing → empty thread.
   onOpenChat: (card: IntentCard, bootstrapMessage?: string) => void;
-  // ConstellationLayout passes this so Timeline/Tasks uses the same
+  // AppLayout passes this so Timeline/Tasks uses the same
   // rich drawer as NOW. Standalone legacy callers omit it and keep the
   // local CardDetailBody fallback below.
   onOpenCardDetail?: (card: IntentCard) => void;
   /**
    * Caller-owned Composio state. Injected so the live shell shares ONE
-   * useComposio instance (ConstellationLayout already has one). Used by
+   * useComposio instance (AppLayout already has one). Used by
    * the connect:* short-circuit in `handleConfirm` to trigger OAuth
    * directly instead of opening a chat thread.
    */

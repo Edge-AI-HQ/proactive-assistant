@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
 import { Sprout, Briefcase, TrendingUp, Heart, BookOpen, Sparkles, CheckCircle2, Loader2, type LucideIcon } from "lucide-react";
-import type { ChatCard } from "./ChatDetailView";
+import type { ChatCard } from "@/components/chat/ChatDetailView";
 
 const CATEGORIES: Record<string, { icon: LucideIcon; label: string }> = {
   growth: { icon: Sprout, label: "Growth" },

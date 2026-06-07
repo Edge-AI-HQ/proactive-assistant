@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Check, ChevronUp, Sprout, Briefcase, TrendingUp, Heart, BookOpen, Sparkles, Globe, FileSearch, Settings, Hand, Database, Bell, DollarSign, Users, Search, Brain, Lock, type LucideIcon } from "lucide-react";
-import { DrawerDetailBody } from "./CardDrawerDetail";
+import { DrawerDetailBody } from "@/components/card/CardDrawerDetail";
 import ConversationView from "@/components/conversation/ConversationView";
 import type {
   LastMessagePayload,
@@ -181,7 +181,7 @@ interface ChatDetailViewProps {
   /**
    * Card-execute run id. Optional only to keep alternate Lovable demo
    * layouts (AppLayout / BigBallLayout) type-checking; production
-   * always passes a real run id from ConstellationLayout.
+   * always passes a real run id from AppLayout.
    */
   runId?: string;
   onBack: () => void;

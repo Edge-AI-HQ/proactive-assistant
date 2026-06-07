@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { ChevronDown, Send } from "lucide-react";
 import bgGradient from "@/assets/bg-gradient.jpg";
-import AiSphere from "@/components/constellation/AiSphere";
+import AiSphere from "@/components/now/AiSphere";
 import { VoiceButton } from "@/components/voice";
 
 interface Suggestion {
@@ -120,8 +120,8 @@ export default function MinimalistLanding({
 
   return (
     <div className="absolute inset-0 z-50 font-native overflow-hidden">
-      {/* Background — same aurora system as ConstellationLayout / the
-          reference MinimalistConstellationLayout. The page lives over a
+      {/* Background — same aurora system as AppLayout / the
+          reference MinimalistAppLayout. The page lives over a
           gradient image with three drifting aurora layers and a soft
           white wash so glass-card chips read clearly. */}
       <img

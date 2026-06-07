@@ -16,7 +16,7 @@ import { useUserDevices } from "@/hooks/useUserDevices";
 import { useAmbientTimeline } from "@/hooks/useAmbientTimeline";
 import { useAmbientLiveSession } from "@/hooks/useAmbientLiveSession";
 import { useAmbientToggle } from "@/hooks/useAmbientToggle";
-import LiveSessionCard from "./LiveSessionCard";
+import LiveSessionCard from "@/components/ambient/LiveSessionCard";
 import AmbientModelRequiredCard from "@/components/ambient/AmbientModelRequiredCard";
 import AmbientModelSetupStep from "@/components/onboarding/AmbientModelSetupStep";
 import type {
@@ -387,7 +387,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
   const ambientTimeline = useAmbientTimeline();
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
   // Master ambient switch — settings patch + localStorage + native lifecycle.
-  // The same hook drives the NOW-view toggle in ConstellationLayout so a flip
+  // The same hook drives the NOW-view toggle in AppLayout so a flip
   // from either place stays consistent.
   const {
     ambientOn: hookAmbientOn,
@@ -947,7 +947,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
         )}
       </AnimatePresence>
 
-      {/* Fullscreen overlay is owned by parent (ConstellationLayout) so it survives view changes. */}
+      {/* Fullscreen overlay is owned by parent (AppLayout) so it survives view changes. */}
     </div>
   );
 }

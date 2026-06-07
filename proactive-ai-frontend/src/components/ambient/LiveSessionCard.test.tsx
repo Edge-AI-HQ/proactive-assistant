@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 import { Mic } from "lucide-react";
 
-import LiveSessionCard from "./LiveSessionCard";
+import LiveSessionCard from "@/components/ambient/LiveSessionCard";
 import type { LiveSession } from "@/services/ambient/live-session";
 
 type MockElementProps = { children?: ReactNode } & Record<string, unknown>;

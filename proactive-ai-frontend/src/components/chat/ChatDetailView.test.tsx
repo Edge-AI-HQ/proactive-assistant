@@ -104,7 +104,7 @@ vi.mock("@/components/conversation/ConversationView", async () => {
   };
 });
 
-import ChatDetailView, { type ChatCard } from "./ChatDetailView";
+import ChatDetailView, { type ChatCard } from "@/components/chat/ChatDetailView";
 
 const card: ChatCard = {
   id: 1,

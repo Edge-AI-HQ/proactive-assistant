@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 
-import AmbientView from "./AmbientView";
+import AmbientView from "@/components/ambient/AmbientView";
 
 vi.mock("@/lib/platform", () => ({ isNative: true }));
 vi.mock("@/hooks/useUserSettings", () => ({

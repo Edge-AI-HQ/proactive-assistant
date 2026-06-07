@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   isFromLeftEdgeOfScreen,
   LEFT_EDGE_BACK_THRESHOLD_PX,
-} from "./mainChatEntryGesture";
+} from "@/components/chat/mainChatEntryGesture";
 
 describe("isFromLeftEdgeOfScreen", () => {
   test("true when pointer starts within the left-edge zone", () => {

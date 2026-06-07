@@ -1,7 +1,7 @@
 import { type ReactNode, type PointerEvent as ReactPointerEvent } from "react";
 import { motion, useMotionValue, animate, useDragControls } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { LEFT_EDGE_BACK_THRESHOLD_PX } from "./mainChatEntryGesture";
+import { LEFT_EDGE_BACK_THRESHOLD_PX } from "@/components/chat/mainChatEntryGesture";
 
 /** Fraction of viewport width (or velocity) the drag must reach for release
  *  to commit the back navigation. Tuned on-device. */

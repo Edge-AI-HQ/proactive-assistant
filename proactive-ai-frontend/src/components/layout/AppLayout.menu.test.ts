@@ -7,11 +7,11 @@ import {
   isMainMenuSwipeLeft,
   isMainMenuSwipeRight,
   shouldIgnoreMainMenuSwipeTarget,
-} from "./mainChatEntryGesture";
+} from "@/components/chat/mainChatEntryGesture";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-describe("ConstellationLayout menu order", () => {
+describe("AppLayout menu order", () => {
   test("matches the minimalist constellation design nav order", () => {
     // MENU_ITEMS moved into SideMenu.tsx (god-component extraction); the
     // nav order it locks is unchanged.
@@ -35,7 +35,7 @@ describe("ConstellationLayout menu order", () => {
   });
 
   test("scopes the ASK PIN AI entry to the NOW view", () => {
-    const source = readFileSync(join(__dirname, "ConstellationLayout.tsx"), "utf8");
+    const source = readFileSync(join(__dirname, "AppLayout.tsx"), "utf8");
 
     expect(source).toMatch(
       /\{activeView === "now" && \(\s*<button[\s\S]*aria-label="Open main chat"/,
@@ -64,7 +64,7 @@ describe("ConstellationLayout menu order", () => {
   });
 
   test("ignores menu swipes that start inside the 3D card sphere", () => {
-    const source = readFileSync(join(__dirname, "Sphere3DCards.tsx"), "utf8");
+    const source = readFileSync(join(__dirname, "..", "now", "Sphere3DCards.tsx"), "utf8");
     expect(source).toContain('data-main-menu-swipe-ignore="true"');
 
     const sphere = document.createElement("div");
@@ -77,16 +77,16 @@ describe("ConstellationLayout menu order", () => {
   });
 
   test("aligns top action buttons with the active page title safe-area height", () => {
-    const layoutSource = readFileSync(join(__dirname, "ConstellationLayout.tsx"), "utf8");
+    const layoutSource = readFileSync(join(__dirname, "AppLayout.tsx"), "utf8");
     // The NOW greeting (which carries the title's paddingTop) moved into
     // NowView.tsx during god-component extraction; the top action buttons
     // (top: ...) stay in the layout. Both still share the same var.
-    const nowViewSource = readFileSync(join(__dirname, "NowView.tsx"), "utf8");
-    const ambientSource = readFileSync(join(__dirname, "AmbientView.tsx"), "utf8");
+    const nowViewSource = readFileSync(join(__dirname, "..", "now", "NowView.tsx"), "utf8");
+    const ambientSource = readFileSync(join(__dirname, "..", "ambient", "AmbientView.tsx"), "utf8");
     const tasksSource = readFileSync(join(__dirname, "..", "ChatTimeline.tsx"), "utf8");
     const connectSource = readFileSync(join(__dirname, "..", "ControlPanel.tsx"), "utf8");
     const profileSource = readFileSync(join(__dirname, "..", "GoalsView.tsx"), "utf8");
-    const settingSource = readFileSync(join(__dirname, "AccountPanel.tsx"), "utf8");
+    const settingSource = readFileSync(join(__dirname, "..", "account", "AccountPanel.tsx"), "utf8");
     const platformSource = readFileSync(join(__dirname, "..", "..", "lib", "platform.ts"), "utf8");
 
     expect(layoutSource).toContain("--constellation-header-top");
@@ -118,7 +118,7 @@ describe("ConstellationLayout menu order", () => {
   });
 
   test("provides shared card state to the TASKS view via context", () => {
-    const source = readFileSync(join(__dirname, "ConstellationLayout.tsx"), "utf8");
+    const source = readFileSync(join(__dirname, "AppLayout.tsx"), "utf8");
     // cardsState/cardActions reach the Tasks timeline through CardStateContext
     // (phase-2 de-prop-drilling), not 11 individual props. The provider stays
     // in the layout; the TASKS branch that consumes it moved into ViewRouter.
@@ -132,7 +132,7 @@ describe("ConstellationLayout menu order", () => {
   });
 
   test("refreshes cards immediately after generation completes", () => {
-    const source = readFileSync(join(__dirname, "ConstellationLayout.tsx"), "utf8");
+    const source = readFileSync(join(__dirname, "AppLayout.tsx"), "utf8");
 
     expect(source).toContain("const refreshCards = cardsState.refresh");
     expect(source).toContain("const lastCompleteRunIdRef = useRef<string | null>(null)");
@@ -142,7 +142,7 @@ describe("ConstellationLayout menu order", () => {
   });
 
   test("does not render a separate card feedback drawer button", () => {
-    const source = readFileSync(join(__dirname, "ConstellationLayout.tsx"), "utf8");
+    const source = readFileSync(join(__dirname, "AppLayout.tsx"), "utf8");
 
     expect(source).not.toContain("mainChatCardContext");
     expect(source).not.toContain("openMainChatForCardFeedback");
@@ -152,7 +152,7 @@ describe("ConstellationLayout menu order", () => {
   });
 
   test("opens Steer as the card feedback conversation without auto voice", () => {
-    const source = readFileSync(join(__dirname, "ConstellationLayout.tsx"), "utf8");
+    const source = readFileSync(join(__dirname, "AppLayout.tsx"), "utf8");
 
     expect(source).not.toContain('autoStartVoice: mode === "steer"');
     expect(source).not.toMatch(/<ChatDetailView[\s\S]*autoStartVoice=/);

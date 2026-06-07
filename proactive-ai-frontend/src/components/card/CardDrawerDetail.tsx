@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronDown, Zap, FileText, AlertTriangle, Loader2 } from "lucide-react";
-import { brandSvg, detectToolIcon, ArtifactItem, matchSideEffect, type Artifact } from "./ChatDetailView";
+import { brandSvg, detectToolIcon, ArtifactItem, matchSideEffect, type Artifact } from "@/components/chat/ChatDetailView";
 import type {
   DangerousAction,
   ExecuteArtifact,
@@ -12,7 +12,7 @@ import type {
   SSEEvent,
 } from "@/hooks/useCardExecutionRun";
 
-/* ── Shared types (mirrored across ConstellationLayout / ChatDetailView) ── */
+/* ── Shared types (mirrored across AppLayout / ChatDetailView) ── */
 export interface DrawerDetailCard {
   tag?: string;
   line2: string;

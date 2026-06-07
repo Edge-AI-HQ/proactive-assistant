@@ -16,18 +16,18 @@ import {
   MapPin, Sun, Activity, Users, ChevronUp, Target,
 } from "lucide-react";
 import bgGradient from "@/assets/bg-gradient.jpg";
-import AiSphere from "./AiSphere";
-import ChatTimeline from "./ChatTimeline";
+import AiSphere from "@/components/now/AiSphere";
+import ChatTimeline from "@/components/chat/ChatTimeline";
 
-import ConnectPanel from "./ConnectPanel";
-import { type TimelineEntry as AmbientTimelineEntry } from "./AmbientView";
-import { type ChatCard, brandSvg, detectToolIcon } from "./ChatDetailView";
+import ConnectPanel from "@/components/connect/ConnectPanel";
+import { type TimelineEntry as AmbientTimelineEntry } from "@/components/ambient/AmbientView";
+import { type ChatCard, brandSvg, detectToolIcon } from "@/components/chat/ChatDetailView";
 import { useCardExecutionRun } from "@/hooks/useCardExecutionRun";
 import CardChat from "@/components/CardChat";
 import { deleteAccount, DeleteAccountError } from "@/lib/api";
 import DebugPanel from "@/components/DebugPanel";
 import AgentRunIndicator from "@/components/AgentRunIndicator";
-import { CardStateProvider } from "./CardStateContext";
+import { CardStateProvider } from "@/components/card/CardStateContext";
 import { useAuth } from "@/hooks/useAuth";
 import { useCardActions } from "@/hooks/useCardActions";
 import {
@@ -52,19 +52,19 @@ import {
   isMainMenuSwipeLeft,
   shouldIgnoreMainMenuSwipeTarget,
   type TouchPoint,
-} from "./mainChatEntryGesture";
-import { useAppNavigation, type MenuId } from "./useAppNavigation";
-import LiveOverlay from "./LiveOverlay";
-import MainChatOverlay from "./MainChatOverlay";
-import SideMenu from "./SideMenu";
-import CardDetailDrawer from "./CardDetailDrawer";
-import PaywallDrawer from "./PaywallDrawer";
-import ViewRouter from "./ViewRouter";
+} from "@/components/chat/mainChatEntryGesture";
+import { useAppNavigation, type MenuId } from "@/components/layout/useAppNavigation";
+import LiveOverlay from "@/components/ambient/LiveOverlay";
+import MainChatOverlay from "@/components/chat/MainChatOverlay";
+import SideMenu from "@/components/layout/SideMenu";
+import CardDetailDrawer from "@/components/card/CardDetailDrawer";
+import PaywallDrawer from "@/components/account/PaywallDrawer";
+import ViewRouter from "@/components/layout/ViewRouter";
 import {
   realCardToLovableIntent,
   type Intent,
   type CardStatus,
-} from "./cardModel";
+} from "@/components/now/cardModel";
 
 
 const CONSTELLATION_HEADER_TOP =
@@ -74,7 +74,7 @@ const constellationShellStyle = {
 } as CSSProperties;
 
 /* ── Main component ── */
-export default function BigBallLayout() {
+export default function AppLayout() {
   // Navigation state + unified goBack() live in useAppNavigation (phase-1
   // god-component extraction). Bottom-sheet drawers (selectedCard /
   // drawerOpen / paywallCard) stay local — their Intent type isn't exported.

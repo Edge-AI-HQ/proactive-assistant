@@ -1,6 +1,6 @@
 import { createPortal } from "react-dom";
 import { AnimatePresence } from "framer-motion";
-import { LiveFullscreen } from "./AmbientView";
+import { LiveFullscreen } from "@/components/ambient/AmbientView";
 import type { LiveSession } from "@/services/ambient/live-session";
 
 interface LiveOverlayProps {

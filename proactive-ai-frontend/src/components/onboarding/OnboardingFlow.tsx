@@ -10,7 +10,7 @@ import { isNative } from "@/lib/platform";
  * First-run onboarding — three-step flow shown the first time a user lands
  * in the SPA. Gated by `settings.onboardingCompletedAt == null` in
  * App.tsx; the final action stamps that field server-side so subsequent
- * loads go straight to ConstellationLayout.
+ * loads go straight to AppLayout.
  *
  * All steps allow Skip; we stamp completion only at the end of step 3,
  * so a mid-flow page reload restarts from step 1 (matches user intuition
@@ -71,7 +71,7 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
     setError(null);
     try {
       await onComplete();
-      // On success App.tsx flips to ConstellationLayout — this component
+      // On success App.tsx flips to AppLayout — this component
       // unmounts before the next render so we don't clear local state.
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");

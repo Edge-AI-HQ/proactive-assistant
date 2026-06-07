@@ -7,7 +7,7 @@ import {
   CardStateProvider,
   type CardActions,
   type CardStateValue,
-} from "@/components/constellation/CardStateContext";
+} from "@/components/card/CardStateContext";
 import type { UseCardsState } from "@/hooks/useCards";
 
 type MockElementProps = { children?: ReactNode } & Record<string, unknown>;

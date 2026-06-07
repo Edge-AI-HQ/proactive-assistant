@@ -32,7 +32,7 @@ vi.mock("@/hooks/useUserSettings", () => ({
 vi.mock("@/components/LoginPage", () => ({
   default: () => <div>Login</div>,
 }));
-vi.mock("@/components/constellation/ConstellationLayout", () => ({
+vi.mock("@/components/constellation/AppLayout", () => ({
   default: () => <div>Constellation</div>,
 }));
 vi.mock("@/services/ambient/lifecycle", () => ({

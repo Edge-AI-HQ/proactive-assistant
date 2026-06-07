@@ -3,9 +3,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   X, Zap, ListChecks, Settings, Radio, Plug, Target, Sparkles,
 } from "lucide-react";
-import { isMainMenuSwipeRight, type TouchPoint } from "./mainChatEntryGesture";
-import type { MenuId } from "./useAppNavigation";
-import type { ChatCard } from "./ChatDetailView";
+import { isMainMenuSwipeRight, type TouchPoint } from "@/components/chat/mainChatEntryGesture";
+import type { MenuId } from "@/components/layout/useAppNavigation";
+import type { ChatCard } from "@/components/chat/ChatDetailView";
 
 /* ── Hamburger side menu items ── */
 const MENU_ITEMS = [
@@ -34,7 +34,7 @@ interface SideMenuProps {
  * Hamburger side menu overlay. Slides in from the right; a rightward swipe
  * on either the scrim or the panel closes it (the close-swipe gesture is
  * self-contained here — it only needs onClose). The open gesture (left swipe
- * from the right edge) stays in ConstellationLayout because it competes with
+ * from the right edge) stays in AppLayout because it competes with
  * the 3D sphere's pointer capture on the main surface.
  */
 export default function SideMenu({

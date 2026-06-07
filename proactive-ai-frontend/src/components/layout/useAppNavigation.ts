@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { IntentCard } from "@/types/intent-card";
 import type { LiveSession } from "@/services/ambient/live-session";
-import type { ChatCard } from "./ChatDetailView";
+import type { ChatCard } from "@/components/chat/ChatDetailView";
 
 /** Single source of truth for the 7 top-level views. SideMenu's
  *  MENU_ITEMS must stay in this same order (locked by the menu test). */
@@ -21,7 +21,7 @@ function readSession<T extends string>(key: string, fallback: T): T {
 
 export interface AppNavigation {
   // ── state (full-screen layers only; bottom-sheet drawers stay in
-  //    ConstellationLayout because their Intent type isn't exported) ──
+  //    AppLayout because their Intent type isn't exported) ──
   activeView: MenuId;
   menuOpen: boolean;
   chatTarget: { card: IntentCard; bootstrap?: string } | null;

@@ -7,9 +7,9 @@ import {
   DrawerTitle,
   DrawerDescription,
 } from "@/components/ui/drawer";
-import { PlanPaymentForm, PLANS, type PlanId, type PayMethod, type CardInfo } from "./PlanPaymentForm";
+import { PlanPaymentForm, PLANS, type PlanId, type PayMethod, type CardInfo } from "@/components/account/PlanPaymentForm";
 import { createCheckout } from "@/lib/api";
-import type { Intent } from "./cardModel";
+import type { Intent } from "@/components/now/cardModel";
 
 interface PaywallDrawerProps {
   /** The locked card that triggered the paywall; null keeps the drawer

@@ -13,7 +13,7 @@ const CardStateContext = createContext<CardStateValue | null>(null);
 
 /**
  * Card data (useCards) + actions (useCardActions) shared with deep
- * descendants (the Tasks timeline) without prop-drilling. ConstellationLayout
+ * descendants (the Tasks timeline) without prop-drilling. AppLayout
  * still owns the hooks; this just exposes their result through context so
  * ChatTimeline doesn't need 11 individual props threaded through.
  */

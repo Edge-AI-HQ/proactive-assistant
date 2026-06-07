@@ -3,7 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 
 vi.mock("@/lib/platform", () => ({ isNative: true }));
 
-import AiSphere from "./AiSphere";
+import AiSphere from "@/components/now/AiSphere";
 
 describe("constellation AiSphere", () => {
   test("renders the animated sphere video in native builds", () => {

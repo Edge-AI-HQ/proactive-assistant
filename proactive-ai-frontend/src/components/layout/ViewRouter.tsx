@@ -1,16 +1,16 @@
 import { motion, AnimatePresence } from "framer-motion";
-import ChatDetailView, { type ChatCard } from "./ChatDetailView";
+import ChatDetailView, { type ChatCard } from "@/components/chat/ChatDetailView";
 import ConversationView from "@/components/conversation/ConversationView";
-import AmbientView, { type TimelineEntry as AmbientTimelineEntry } from "./AmbientView";
-import AccountPanel from "./AccountPanel";
-import NowView from "./NowView";
-import SwipeBackLayer from "./SwipeBackLayer";
+import AmbientView, { type TimelineEntry as AmbientTimelineEntry } from "@/components/ambient/AmbientView";
+import AccountPanel from "@/components/account/AccountPanel";
+import NowView from "@/components/now/NowView";
+import SwipeBackLayer from "@/components/layout/SwipeBackLayer";
 import RealGoalsView from "@/components/GoalsView";
 import RealControlPanel from "@/components/ControlPanel";
 import RealChatTimeline from "@/components/ChatTimeline";
-import { realIntentToChatCard, type Intent } from "./cardModel";
-import type { CardActions } from "./CardStateContext";
-import type { MenuId, SettingsSubPage } from "./useAppNavigation";
+import { realIntentToChatCard, type Intent } from "@/components/now/cardModel";
+import type { CardActions } from "@/components/card/CardStateContext";
+import type { MenuId, SettingsSubPage } from "@/components/layout/useAppNavigation";
 import type { WeatherData } from "@/hooks/useWeather";
 import type { ComposioState } from "@/hooks/useComposio";
 import type { IntentCard } from "@/types/intent-card";
@@ -59,7 +59,7 @@ interface ViewRouterProps {
  * cross-fades between the active full-screen surface: card chat (real
  * `chatTarget` or legacy `activeChat`), then the 6 top-level views keyed by
  * `activeView`. Purely a dispatcher — every action it fires arrives as a
- * prop, so ConstellationLayout keeps ownership of all state + side effects.
+ * prop, so AppLayout keeps ownership of all state + side effects.
  */
 export default function ViewRouter({
   chatTarget,

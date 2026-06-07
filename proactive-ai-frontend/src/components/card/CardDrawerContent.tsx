@@ -1,7 +1,7 @@
 import { X, Pencil, Check, Lock as LockIcon, Loader2 } from "lucide-react";
 import { useCardExecutionRun } from "@/hooks/useCardExecutionRun";
-import { DrawerDetailBody } from "./CardDrawerDetail";
-import { CATEGORIES, type Intent } from "./cardModel";
+import { DrawerDetailBody } from "@/components/card/CardDrawerDetail";
+import { CATEGORIES, type Intent } from "@/components/now/cardModel";
 
 /* ── Drawer card detail ──
  *

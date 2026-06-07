@@ -26,7 +26,7 @@ export interface UseAmbientToggleResult {
    *     back and already-started sources are stopped. Other data sources
    *     can be retried by the lifecycle reconciler later.
    *  Safe to call from any view; AmbientView and the NOW-view toggle in
-   *  ConstellationLayout share this so flipping from either stays in sync. */
+   *  AppLayout share this so flipping from either stays in sync. */
   toggle: () => Promise<void>;
 }
 

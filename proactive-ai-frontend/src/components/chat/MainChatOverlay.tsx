@@ -2,7 +2,7 @@ import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import bgGradient from "@/assets/bg-gradient.jpg";
 import MainChat from "@/components/MainChat";
-import SwipeBackLayer from "./SwipeBackLayer";
+import SwipeBackLayer from "@/components/layout/SwipeBackLayer";
 
 interface MainChatOverlayProps {
   /** Opens the overlay. Toggled by the bottom-center ASK PIN AI button. */
