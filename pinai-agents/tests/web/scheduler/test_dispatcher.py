@@ -3,6 +3,7 @@ from typing import Any, cast
 
 import pytest
 
+from pinai_agents.web.db.repositories.profile import ProfileRepository
 from pinai_agents.web.db.repositories.scheduled_tasks import ScheduledTasksRepository
 from pinai_agents.web.db.rls import service_tx, user_scoped_tx
 from pinai_agents.web.scheduler.dispatcher import (
@@ -193,3 +194,127 @@ async def test_dream_dispatch_persists_summary_and_output_counts(
     assert evol["details"]["outputSummary"]["memories_written"] == 2
     assert task_run is not None
     assert task_run["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_proactive_tick_archives_and_skips_when_disabled(
+    pool,
+    user_ids,
+    monkeypatch,
+):
+    """proactive_enabled=false ⇒ the tick must NOT emit a heartbeat and must
+    self-heal by archiving the still-active task. This is the runtime gate that
+    stops a stale 'active' proactive.tick (flag flipped in DB / legacy row) from
+    emitting heartbeats forever and growing an unbounded checkpoint."""
+    user_a, _ = user_ids
+    async with user_scoped_tx(pool, user_a) as conn:
+        await ProfileRepository(user_a, conn).upsert_settings(proactive_enabled=False)
+        task = await ScheduledTasksRepository(user_a, conn).upsert(
+            id="proactive.tick",
+            kind="proactive.tick",
+            trigger_kind="schedule",
+            interval_seconds=30,
+            next_run_at=datetime.now(UTC),
+            status="active",
+        )
+    task.last_run_at = datetime.now(UTC)
+
+    async def boom(*args, **kwargs):
+        raise AssertionError("build_heartbeat_message must not run when disabled")
+
+    monkeypatch.setattr(
+        "pinai_agents.web.services.proactive_window.build_heartbeat_message",
+        boom,
+    )
+
+    dispatcher = DefaultDispatcher(pool=pool, lease_seconds=60, owner="test")
+    await dispatcher.dispatch(task)
+
+    async with service_tx(pool) as conn:
+        cur = await conn.execute(
+            "SELECT status, next_run_at FROM pai_scheduled_tasks "
+            "WHERE user_id=%s AND id='proactive.tick'",
+            (user_a,),
+        )
+        row = await cur.fetchone()
+        cur = await conn.execute(
+            "SELECT count(*) AS n FROM pai_agent_messages WHERE user_id=%s AND source='heartbeat'",
+            (user_a,),
+        )
+        msgs = await cur.fetchone()
+
+    assert row is not None
+    assert row["status"] == "archived"
+    assert row["next_run_at"] is None
+    assert msgs is not None
+    assert msgs["n"] == 0
+
+
+@pytest.mark.asyncio
+async def test_proactive_tick_enqueues_when_enabled(
+    pool,
+    user_ids,
+    monkeypatch,
+):
+    """proactive_enabled=true ⇒ the gate lets the tick through: a heartbeat is
+    enqueued onto the mailbox and the task stays active."""
+    from pinai_agents.web.services.proactive_window import HeartbeatWindow
+
+    user_a, _ = user_ids
+    now = datetime.now(UTC)
+    async with user_scoped_tx(pool, user_a) as conn:
+        await ProfileRepository(user_a, conn).upsert_settings(proactive_enabled=True)
+        task = await ScheduledTasksRepository(user_a, conn).upsert(
+            id="proactive.tick",
+            kind="proactive.tick",
+            trigger_kind="schedule",
+            interval_seconds=300,
+            next_run_at=now,
+            status="active",
+        )
+    task.last_run_at = now
+
+    async def fake_window(*args, **kwargs):
+        return HeartbeatWindow(
+            text="[heartbeat] test",
+            window_start=now,
+            window_end=now,
+            event_count=0,
+            advance_to=now,
+        )
+
+    notified: list[str] = []
+
+    async def fake_notify(_pool, session_id):
+        notified.append(session_id)
+
+    monkeypatch.setattr(
+        "pinai_agents.web.services.proactive_window.build_heartbeat_message",
+        fake_window,
+    )
+    monkeypatch.setattr(
+        "pinai_agents.web.agent_core.bus.notify_message",
+        fake_notify,
+    )
+
+    dispatcher = DefaultDispatcher(pool=pool, lease_seconds=60, owner="test")
+    await dispatcher.dispatch(task)
+
+    async with service_tx(pool) as conn:
+        cur = await conn.execute(
+            "SELECT status FROM pai_scheduled_tasks WHERE user_id=%s AND id='proactive.tick'",
+            (user_a,),
+        )
+        row = await cur.fetchone()
+        cur = await conn.execute(
+            "SELECT count(*) AS n FROM pai_agent_messages "
+            "WHERE user_id=%s AND session_id=%s AND source='heartbeat'",
+            (user_a, f"proactive-{user_a}"),
+        )
+        msgs = await cur.fetchone()
+
+    assert row is not None
+    assert row["status"] == "active"
+    assert msgs is not None
+    assert msgs["n"] == 1
+    assert notified == [f"proactive-{user_a}"]

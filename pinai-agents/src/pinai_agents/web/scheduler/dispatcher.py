@@ -436,8 +436,35 @@ class DefaultDispatcher:
             from ..agent_core.mailbox import MailboxRepository  # noqa: PLC0415
             from ..agent_core.sessions import SessionRepository  # noqa: PLC0415
             from ..db.repositories.proactive import ProactiveRepository  # noqa: PLC0415
+            from ..db.repositories.profile import ProfileRepository  # noqa: PLC0415
             from ..db.rls import user_scoped_tx  # noqa: PLC0415
             from ..services.proactive_window import build_heartbeat_message  # noqa: PLC0415
+
+            # Runtime gate: proactive_enabled (pai_user_settings) is the source
+            # of truth for whether the heartbeat runs. claim_due_tasks filters
+            # only on task status, so a proactive.tick left 'active' while the
+            # user disabled proactive — flag flipped directly in the DB, or a
+            # legacy row predating _sync_proactive_schedule — would emit
+            # heartbeats forever (the runaway that grew a multi-GB checkpoint).
+            # Re-check here and self-heal: archive the task so the next tick
+            # stops claiming it, then skip this tick without enqueuing.
+            async with user_scoped_tx(self._pool, task.user_id) as conn:
+                proactive_enabled = (
+                    await ProfileRepository(task.user_id, conn).get_settings()
+                ).proactive_enabled
+                if not proactive_enabled:
+                    await conn.execute(
+                        "UPDATE pai_scheduled_tasks "
+                        "SET status='archived', next_run_at=NULL, updated_at=NOW() "
+                        "WHERE user_id=%s AND id=%s",
+                        (task.user_id, task.id),
+                    )
+                    logger.info(
+                        "proactive.tick gated: user=%d has proactive_enabled=false; "
+                        "archived stale task",
+                        task.user_id,
+                    )
+                    return
 
             session_id = f"proactive-{task.user_id}"
             window = await build_heartbeat_message(self._pool, task.user_id, session_id=session_id)
