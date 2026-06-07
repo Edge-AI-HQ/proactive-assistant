@@ -34,6 +34,10 @@ MessageSource = Literal[
     "system_event",
     "tool_decision",
 ]
+# migration 083 的 source CHECK 还允许 'card_bootstrap'（DB 超集），它是 RC-2
+# "fanout 走 actor" 的预留 source：当前 card bootstrap 走老 card_fanout.stream_chat()
+# 直打 chat、不经 mailbox，所以从未写入。不收进上面的 Literal —— worker 的
+# _pick_trigger / _input_rows 不处理它，补进来反而埋雷。RC-2 fanout 迁移时再启用。
 
 RunStatus = Literal[
     "pending",

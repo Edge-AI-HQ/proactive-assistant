@@ -56,8 +56,10 @@ _REAPER_INTERVAL = 60
 _RUN_STALE_TTL = 1200  # a `running` run untouched this long → reaped (crash)
 _REFRESH_EVERY = 50  # frames between fencing lease refreshes during relay
 
-# CORE-4: chat translates langgraph __interrupt__ into this frame type. Until
-# then chat never emits it, so the awaiting branch below stays dormant.
+# CORE-4: chat translates a langgraph __interrupt__ (HumanInTheLoopMiddleware on
+# an interrupt_on tool) into this frame type — see chat/transport/sse.py. HITL is
+# verified end-to-end (plan §十六, real preference_add tool), so the awaiting
+# branch below is a LIVE path, not dormant.
 _EV_REQUIRES_ACTION = "chat:requires_action"
 
 # source priority for the run's recorded trigger when a merge mixes sources.
