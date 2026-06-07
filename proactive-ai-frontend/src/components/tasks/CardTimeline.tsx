@@ -1,27 +1,9 @@
-import { useState } from "react";
-import {
-  Loader2, CheckCircle2, Circle, Sparkles,
-} from "lucide-react";
-import {
-  Drawer,
-  DrawerContent,
-  DrawerHeader,
-  DrawerTitle,
-  DrawerDescription,
-} from "@/components/ui/drawer";
-import CardDetailBody from "@/components/CardDetailBody";
+import { Loader2, CheckCircle2, Circle, Sparkles } from "lucide-react";
 import type { IntentCard } from "@/types/intent-card";
-import { proxyPost } from "@/lib/api";
 import { basketMeta } from "@/lib/basket-meta";
-import {
-  canonicalConnectorSlugFromIntentKey,
-  connectorSlugFromIntentKey,
-  openPreparedConnectorOAuth,
-  prepareConnectorOAuth,
-} from "@/lib/connector-card";
+import { connectorSlugFromIntentKey } from "@/lib/connector-card";
 import { getToolkit } from "@/lib/toolkit-icons";
 import type { CardScore } from "@/hooks/useCards";
-import type { ComposioState } from "@/hooks/useComposio";
 import { useCardState } from "@/components/card/CardStateContext";
 
 type TimelineCard = IntentCard & {
@@ -30,22 +12,14 @@ type TimelineCard = IntentCard & {
   score: CardScore | null;
 };
 
-interface ChatTimelineProps {
+interface CardTimelineProps {
   // bootstrapMessage carries Confirm intent: when present, the chat
   // auto-fires it as the user's first turn so the agent starts working
   // on the card. Plain "Chat" path passes nothing → empty thread.
   onOpenChat: (card: IntentCard, bootstrapMessage?: string) => void;
-  // AppLayout passes this so Timeline/Tasks uses the same
-  // rich drawer as NOW. Standalone legacy callers omit it and keep the
-  // local CardDetailBody fallback below.
-  onOpenCardDetail?: (card: IntentCard) => void;
-  /**
-   * Caller-owned Composio state. Injected so the live shell shares ONE
-   * useComposio instance (AppLayout already has one). Used by
-   * the connect:* short-circuit in `handleConfirm` to trigger OAuth
-   * directly instead of opening a chat thread.
-   */
-  composio: ComposioState;
+  // AppLayout passes this so Tasks opens card detail in the same rich
+  // drawer as NOW (CardDrawer); the per-card action wiring lives there.
+  onOpenCardDetail: (card: IntentCard) => void;
 }
 
 function formatTime(iso: string): string {
@@ -65,8 +39,7 @@ function formatDate(iso: string): string {
 export default function CardTimeline({
   onOpenChat,
   onOpenCardDetail,
-  composio,
-}: ChatTimelineProps) {
+}: CardTimelineProps) {
   // cardsState + cardActions come from context (phase-2 de-prop-drilling).
   // Alias the action fields back to the old local names so the render/handlers
   // below are untouched.
@@ -85,141 +58,6 @@ export default function CardTimeline({
     clearProcessing: onClearProcessingId,
     markChatted: onChattedId,
   } = cardActions;
-  const [selectedCard, setSelectedCard] = useState<TimelineCard | null>(null);
-
-  const handleDismiss = () => {
-    if (!selectedCard) return;
-    const cardId = selectedCard.id;
-    onDismissId(cardId);
-    proxyPost("/feedback", {
-      kind: "dismiss",
-      intentCardId: cardId,
-      intentKey: selectedCard.intentKey,
-      basket: selectedCard.goalBasket,
-      channel: "web",
-    }).catch(() => {});
-    setSelectedCard(null);
-  };
-
-  const handleConfirm = async () => {
-    if (!selectedCard) return;
-    const card = selectedCard;
-    const cardId = selectedCard.id;
-    onConfirmId(cardId);
-
-    // Connector-guidance card (intent_key="connect:<slug>"): show the
-    // row as processing while Composio prepares the redirect URL. Do
-    // not open chat — the connector flow lives in the popup.
-    const canonicalConnectorSlug = canonicalConnectorSlugFromIntentKey(card.intentKey);
-    if (canonicalConnectorSlug) {
-      onProcessingId(cardId);
-      setSelectedCard(null);
-      const preparedOAuth = await prepareConnectorOAuth(canonicalConnectorSlug, composio);
-      if (!preparedOAuth) {
-        onClearProcessingId?.(cardId);
-        onClearConfirmId?.(cardId);
-        return;
-      }
-      try {
-        await proxyPost("/feedback", {
-          kind: "card_action",
-          action: "complete",
-          intentCardId: cardId,
-          intentKey: card.intentKey,
-          basket: card.goalBasket,
-          channel: "web",
-        });
-      } catch {
-        /* swallow; UI already moved to processing */
-      }
-      await openPreparedConnectorOAuth(preparedOAuth, { awaitClose: false });
-      onDoneId(cardId);
-      return;
-    }
-
-    onProcessingId(cardId);
-    onChattedId(cardId);
-    proxyPost("/feedback", {
-      kind: "card_action",
-      action: "confirm",
-      intentCardId: cardId,
-      intentKey: card.intentKey,
-      basket: card.goalBasket,
-      channel: "web",
-    }).catch(() => {});
-    setSelectedCard(null);
-    // Send the card's primaryAction label (or fall back to title) as
-    // the user's first message — that's what "Confirm" semantically
-    // means. primaryAction is {label, type}; we send its label.
-    const bootstrap =
-      (card.primaryAction?.label || card.title || "").trim();
-    onOpenChat(card, bootstrap || undefined);
-  };
-
-  const handleChat = () => {
-    if (!selectedCard) return;
-    onProcessingId(selectedCard.id);
-    onChattedId(selectedCard.id);
-    setSelectedCard(null);
-    // No bootstrap — just enter the chat, let the user type.
-    onOpenChat(selectedCard);
-  };
-
-  const handleSnooze = () => {
-    if (!selectedCard) return;
-    proxyPost("/feedback", {
-      kind: "snooze",
-      intentCardId: selectedCard.id,
-      intentKey: selectedCard.intentKey,
-      basket: selectedCard.goalBasket,
-      channel: "web",
-    }).catch(() => {});
-    onDismissId(selectedCard.id);
-    setSelectedCard(null);
-  };
-
-  const handleModify = () => {
-    if (!selectedCard) return;
-    proxyPost("/feedback", {
-      kind: "card_action",
-      action: "modify",
-      intentCardId: selectedCard.id,
-      intentKey: selectedCard.intentKey,
-      basket: selectedCard.goalBasket,
-      channel: "web",
-    }).catch(() => {});
-    onProcessingId(selectedCard.id);
-    onChattedId(selectedCard.id);
-    setSelectedCard(null);
-    onOpenChat(selectedCard);
-  };
-
-  const handleDone = () => {
-    if (!selectedCard) return;
-    onDoneId(selectedCard.id);
-    proxyPost("/feedback", {
-      kind: "card_action",
-      action: "complete",
-      intentCardId: selectedCard.id,
-      intentKey: selectedCard.intentKey,
-      basket: selectedCard.goalBasket,
-      channel: "web",
-    }).catch(() => {});
-    setSelectedCard(null);
-  };
-
-  const handleTextFeedback = (text: string) => {
-    if (!selectedCard) return;
-    proxyPost("/feedback", {
-      kind: "text_feedback",
-      intentCardId: selectedCard.id,
-      intentKey: selectedCard.intentKey,
-      basket: selectedCard.goalBasket,
-      channel: "web",
-      text,
-    }).catch(() => {});
-  };
-
   const allCards: TimelineCard[] = cards.cards.map((entry) => ({
     ...entry.card,
     runId: entry.runId,
@@ -290,13 +128,7 @@ export default function CardTimeline({
                 <div
                   key={`${card.runId}-${card.id}`}
                   className="glass-card px-3.5 py-4 w-full text-left cursor-pointer active:scale-[0.98] transition-transform"
-                  onClick={() => {
-                    if (onOpenCardDetail) {
-                      onOpenCardDetail(card);
-                    } else {
-                      setSelectedCard(card);
-                    }
-                  }}
+                  onClick={() => onOpenCardDetail(card)}
                 >
                   <div className="flex items-center gap-2.5">
                     <span className="text-foreground/50 shrink-0">
@@ -345,40 +177,6 @@ export default function CardTimeline({
           </p>
         </div>
       )}
-
-      <Drawer open={!!selectedCard} onOpenChange={(open) => { if (!open) setSelectedCard(null); }}>
-        <DrawerContent
-          className="max-h-[85vh] border-t-0 !bg-transparent"
-          style={{
-            background: "linear-gradient(180deg, hsla(0, 0%, 100%, 0.5) 0%, hsla(0, 0%, 100%, 0.7) 100%)",
-            backdropFilter: "blur(40px) saturate(1.5)",
-            WebkitBackdropFilter: "blur(40px) saturate(1.5)",
-            border: "1px solid hsla(0, 0%, 100%, 0.4)",
-            borderBottom: "none",
-            borderRadius: "1.5rem 1.5rem 0 0",
-          }}
-          overlayClassName="!bg-foreground/5 backdrop-blur-[2px]"
-        >
-          <DrawerHeader className="sr-only">
-            <DrawerTitle>{selectedCard?.title || "Card Detail"}</DrawerTitle>
-            <DrawerDescription>Intent card detail view</DrawerDescription>
-          </DrawerHeader>
-
-          {selectedCard && (
-            <CardDetailBody
-              card={selectedCard}
-              score={selectedCard.score}
-              onChat={handleChat}
-              onDismiss={handleDismiss}
-              onConfirm={handleConfirm}
-              onSnooze={handleSnooze}
-              onModify={handleModify}
-              onDone={handleDone}
-              onTextFeedback={handleTextFeedback}
-            />
-          )}
-        </DrawerContent>
-      </Drawer>
     </div>
   );
 }

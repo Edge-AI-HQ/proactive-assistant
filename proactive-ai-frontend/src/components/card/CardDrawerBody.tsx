@@ -326,7 +326,7 @@ export function DrawerDetailBody({
       {/* Why now — generator's rationale for surfacing this card. Sits
           ABOVE the execution plan because it explains the WHY before
           the WHAT/HOW. Matches the visual treatment of the legacy
-          CardDetailBody so users moving between the two views see the
+          the legacy card detail body so users moving between the two views see the
           same context. */}
       {whyNowText && (
         <div

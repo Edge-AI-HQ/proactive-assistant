@@ -156,7 +156,6 @@ export default function ViewRouter({
              shared /api/cards state from this layout so TASKS does not
              refetch on every tab entry. */
           <CardTimeline
-            composio={composio}
             onOpenChat={onTasksOpenChat}
             onOpenCardDetail={onTasksOpenCardDetail}
           />
