@@ -1,0 +1,547 @@
+---
+title: "Agent Core:统一 agent 执行内核(actor 模型 · web 控制平面 / chat 执行平面)"
+description: "把 7 个 agent 统一成 actor 模型内核:会话=actor(Session),mailbox(Message 队列,全 user role + source 维度),per-session 串行,一次 Run 合并消费 mailbox,输出经 FrameBus(内存/Redis pub/sub)live streaming(不持久化、重连显示 waiting + 读 pai_chat_messages)。HITL 用 langgraph interrupt()+Command(resume)+deepagents interrupt_on 原生做法。控制平面在 web、执行在 chat、协议在 shared。3 张表;彻底重构不考虑 backward 兼容;不碰 checkpoint 增长(另行)。"
+---
+
+# Agent Core:统一 agent 执行内核
+
+> **状态**:实施计划(第四版,已纳入两路对抗 review 的全部 P0/P1 + 用户 4 项拍板,可开工)。彻底重构,**不考虑 backward 兼容**。
+>
+> **一句话**:7 个 agent(main_chat / card_execution / proactive / generator / dream / evolve / crystallize)各有一条手写执行链路。Agent Core 统一成 **actor 模型**:会话=actor(`Session`),mailbox(`Message` 队列),per-session 串行,一次 `Run` 醒来合并消费 mailbox、跑一轮,输出经 `FrameBus` live streaming。**控制平面在 web(账本/worker/bus,碰 DB),执行在 chat(LLM loop,不碰 DB),协议在 shared**——与现有 web/chat 信任边界重合。
+>
+> **定位**:[2026-06-01](./2026-06-01-agent-architecture-redesign) §8 四层 + [2026-06-02](./2026-06-02-agent-directory-and-tool-paradigm) 目录解决"单 agent 怎么组织代码";本文解决"跨 agent 怎么统一编排执行"。执行器=06-01 的 `harness/`;`RunProfile`(web)与 `AgentSpec`(chat)互补。
+>
+> **对标**:**actor 模型**(Erlang/Akka mailbox、Cloudflare Durable Objects)、**Claude Managed Agents**(stop_reason 挂起态 / events / multiagent threads)、**LangGraph Platform**(Runs / `multitask_strategy` / `interrupt`+`Command(resume)`)、**Claude Code** `Task.ts`、**Temporal/Restate**(durable + per-key 串行)。
+>
+> **明确不碰**:① checkpoint/context 增长(06-01 §8.2 + 独立 PR);② trust boundary(web 持凭据+DB、chat 不碰 DB、JWT、ruff banned-api 全不变)。
+>
+> **第四版相对第三版的关键修正**(两路对抗 review 后):frames 不落库改 **FrameBus(内存/Redis)live streaming**(去 frames 表,4→3 表);重连不回放改 **waiting 模式**(Claude app 做法);message **role 统一 user + 加 source 维度**;**HITL 用 langgraph/deepagents 原生**(awaiting_input 不再是空壳);worker **notify + 轮询兜底**(丢通知不卡死);cancel **真停 chat+sandbox**;lease **fencing**;加廉价口子(`multitask`/`parent_run_id`/`idempotency_key`/`notify_run_status`)。
+
+---
+
+## 一、TL;DR
+
+```
+一个 Session(=actor,= langgraph thread_id = 串行锁 key)
+  ├─ Mailbox:任何来源输入都是一条 Message(role 统一 user;source 区分 user/heartbeat/...)
+  ├─ per-session 串行:同一 Session 一次只跑一个 Run(lease,per-drain)
+  ├─ Run:醒来 → 合并消费 mailbox 全部 pending Message(多条 HumanMessage 一并发)→ 跑一轮
+  ├─ Frame:输出经 FrameBus(内存/Redis pub/sub)live 推送,不持久化
+  └─ HITL:副作用工具用 deepagents interrupt_on → langgraph interrupt() → run 进 awaiting_input
+           → 决策走 mailbox 一条 message → Command(resume) 同 thread 续跑
+```
+
+**三平面**(落在信任边界):
+- **控制平面 = web**(`web/agent_core/`):3 表账本、Service、Worker、FrameBus、ChatRunClient、RunProfile。
+- **执行平面 = chat**(`chat/transport/routes/run.py` + `agents/`):stateless executor,按 `AgentKind` 选工厂,跑 `astream_events`,产帧 + 翻译 `__interrupt__`。
+- **协议 = shared**(`shared/agent_run.py`):`AgentKind` 枚举、Frame 信封、run-JWT claim、resume 协议。
+
+**重连/刷新交互(Claude app 模式)**:live streaming 只给当前连接;断连重连查 run 状态——`running` 显示 "agent 正在处理…"(不回放 in-flight 帧)→ 终态读 `pai_chat_messages` 显示最终结果。
+
+---
+
+## 二、为什么 actor 模型(统一了什么)
+
+| actor 概念 | 现在散落在 | 统一后 |
+|---|---|---|
+| actor 实例 | proactive `(user,thread)` lease / chat-stream session_key / scheduler task | **`Session`**(`pai_agent_sessions`) |
+| mailbox | proactive_inbox / chat-stream 同步直发 / scheduled_task payload | **`Message`**(`pai_agent_messages`) |
+| 串行消费 | proactive per-thread lease / scheduler per-fire lease | **per-session lease(per-drain)** |
+| 一次执行 | proactive turn / scheduled_task_run / 一次 stream_chat | **`Run`**(`pai_agent_runs`) |
+| 输出 | proactive bus 帧 / chat-stream 同请求 SSE / generator 结构化返回 | **`Frame`**(FrameBus live,不持久) |
+
+价值:加一个新 agent = 注册一条 `RunProfile` + 写一个 agent 工厂,内核零改动。
+
+**三个吸收的决定**:① 输出统一 streaming(后台=无订阅者的流,结构化结果从终态提取存 `run.result`);② **心跳也是 message**(`role=user`、`source=heartbeat`,系统代发);③ **mailbox merge**(一次消费全部 pending,多条 HumanMessage 一并发;矛盾指令交模型化解)。
+
+---
+
+## 三、三平面架构(落在 web/chat 信任边界)
+
+判据:碰 DB/凭据 → web;跑 LLM → chat;纯类型 → shared。
+
+```
+┌─ 前端(只跟 web 说话)────────────────────────────────────────────────┐
+│  POST /api/agent/send(post_message)   GET /api/agent/stream(live + run 状态)│
+│  POST /api/agent/decision(HITL 批准/拒绝)  POST /api/agent/cancel|interrupt │
+└──────────────────────────────┬────────────────────────────────────────┘
+┌─ web 进程 = 控制平面 web/agent_core/ ──────────────────────────────────┐
+│  repo:   SessionRepository / MailboxRepository / RunRepository   (DB)   │
+│  service:AgentRunService(post_message/subscribe/cancel/interrupt/        │
+│          submit_decision/start_run)                                      │
+│  worker: AgentRunWorker(notify + interval 轮询兜底;drain: lease→merge→   │
+│          run→relay;awaiting_input→resume 分支)                          │
+│  FrameBus(内存 dev / Redis pub/sub prod)── live 帧 fan-out,不持久      │
+│  bus(pg_notify):notify_message / notify_run_status / notify_cancel      │
+│  RunProfile(kind/execution/triggers/multitask)                          │
+│  ChatRunClient ── 签 per-run JWT ──┐                                     │
+│  scheduler(独立)── post_message(source=heartbeat/cron)─┘               │
+└──────────────────────────────┬────────────────────────────────────────┘
+                HTTPS + HS256 run-JWT(chat 视输入不可信)
+┌─ chat 进程 = 执行平面(stateless executor)─────────────────────────────┐
+│  POST /agent/run:verify JWT → AgentKind 选 make_<kind>_agent →           │
+│    astream_events → 帧 + 翻译 langgraph __interrupt__ → requires_action 帧│
+│    (resume 模式:Command(resume=decision) 同 thread_id 续跑)             │
+│  harness/(build_agent 唯一 create_deep_agent 出口) · agents/(AgentSpec  │
+│    + interrupt_on 配副作用工具) · tools/ · Daytona sandbox  (不碰 DB)   │
+└──────────────────────────────────────────────────────────────────────────┘
+shared/agent_run.py:AgentKind 枚举 · Frame 信封(复用 sse_envelope)· run-JWT claim · resume 协议
+```
+
+| 部件 | 在哪 | 因为 |
+|---|---|---|
+| 3 表 + repo、Service、Worker、bus、FrameBus、ChatRunClient、RunProfile、scheduler | **web** | DB / 凭据 / 调度 |
+| make_<kind>_agent + astream_events + interrupt_on + __interrupt__ 翻译 | **chat** | LLM loop |
+| AgentKind / Frame 信封 / JWT claim / resume 协议 | **shared** | 纯类型 |
+
+> **对称**:`RunProfile`(怎么调度)在 web,`AgentSpec`(agent 是什么)在 chat。
+
+---
+
+## 四、actor 核心机制
+
+### 4.1 Session = 串行锁 key
+`session_id` = langgraph `thread_id` = lease key = mailbox 归属。main `main-<uid>-<rand>` / card `card-thread-<card_id>` / proactive `proactive-<uid>`。batch(generator/dream/...)无持续 Session,one-shot Run。
+
+### 4.2 per-session 串行(per-drain lease,应用层锁)
+langgraph `thread_id` 只给状态隔离,不给并发串行;同 thread 并发 Run = checkpoint 竞态。lease 由内核实现(泛化 proactive 075 的 per-thread lease)。**lease 是 per-drain**(worker 每次醒 acquire→drain→release),不是 per-run 长期持有;run 的挂起态(awaiting_input)存 DB,不靠占锁。
+
+### 4.3 mailbox merge(多条 message 一并发)
+Run 醒来 `claim_pending` 取该 session 全部未消费 Message,作为多条 HumanMessage 一次喂 agent。本轮跑时新到的 message 下一圈合并。
+- **role 统一 user**(给 LLM);**source 维度**(`user|heartbeat|cron|system_event|card_bootstrap|tool_decision`,给 worker 做记账/调度,不给 LLM)。
+- **proactive 记账靠 source 集合**:消费的 message 任一 `source=user` → 用户发起的 turn,不记 silent;全 `source=heartbeat` 且无 notify_user → 记 silent(写 proactive_events 卫星)。
+- **心跳窗口 worker drain 时现算**:heartbeat message enqueue 时只是标记,worker 消费时才查 timeline 窗口拼成 agent 输入(保留现状 `_execute_turn` 窗口逻辑,避免快照过期)。
+- ⚠️ **连续 user message 是硬依赖,CORE-1/2 最早实测**(见 §十三)。
+
+### 4.4 统一 streaming via FrameBus(不持久化)+ 重连 waiting
+- **FrameBus 抽象**:`publish(session_id, frame)` / `subscribe(session_id) -> AsyncIterator[frame]`。实现:**内存**(dev 单实例,进程内 asyncio fan-out)/ **Redis pub/sub**(prod 多实例)。worker relay chat 的帧 → FrameBus.publish。**不落任何表**(配合重连 waiting,不需要持久 replay)。
+- **三层退两层**:live(FrameBus,瞬时)+ 历史真源(`pai_chat_messages`,`ChatTurnRecorder` 写,终态)。**无 frames 表 / 无 cursor / 无 TTL sweep**。
+- **重连/刷新(Claude app 模式)**:前端断连重连 → 查 run 状态:`running` → 显示 "agent 正在处理…"(订阅 FrameBus 收后续,但**不回放**已发帧)+ 监听 `notify_run_status`;终态 → 读 `pai_chat_messages` 显示最终结果。半截 in-flight 帧丢失可接受(history 兜底)。
+- ⚠️ **硬提醒**:内存 FrameBus **只在单 web 实例成立**。prod `min_machines_running=2`,**上线前必须切 Redis**(否则 subscribe 实例 ≠ 跑 run 实例时收不到 live 帧)。FrameBus 接口稳定,切实现一处改动。
+
+---
+
+## 五、HITL / 工具审批(langgraph + deepagents 原生)
+
+不自己造,用三家一致的框架原生做法。
+
+**链路**:
+1. **chat 配置**:副作用工具用 `create_deep_agent(interrupt_on={"GMAIL_SEND_DRAFT": True, ...})` → `HumanInTheLoopMiddleware` 在工具调用前抛 langgraph `interrupt()`。
+2. **chat 翻译**(CORE-4 ✅ 实测落地):langgraph `interrupt()` 在 `astream_events(v2)` 以 `on_chain_stream` 的 chunk `{"__interrupt__": (Interrupt(value={action_requests, review_configs}, id),)}` 出现。`langgraph_to_sse` 翻译成 `requires_action` 帧(interruptId + toolName + args + argsPreview + allowedDecisions)。
+   - **推翻 06-01**:06-01 §5.4 以为「interrupt 帧在 SSE 被丢、不可翻译」,真因是旧 `langgraph_to_sse` 根本没处理 `on_chain_stream`。CORE-4 真实测:interrupt **可捕获**、`Command(resume={"decisions":[…]})` **能同 thread 重入**(approve→工具执行 / reject→跳过)。`propose_action` 软闸可在 RC 退役。
+3. **web 挂起**:worker 收到 `requires_action` 帧 → `run.status='awaiting_input'` + `pending_action JSONB`(等待的 tool_use_id + 摘要)+ `notify_run_status`(前端弹审批 UI)。**释放 lease**(per-drain),不长期占锁。
+4. **决策回灌走同一 mailbox**:用户批准/拒绝 = 一条 Message(`role=user`、`source=tool_decision`、`meta={tool_use_id, decision: allow|deny, message?}`)。
+5. **resume**:worker drain 时检查——session 有 `awaiting_input` run + 来了匹配的 decision message → 调 chat `/agent/run` 的 **resume 模式**(`{session_id, resume:{tool_use_id, decision}}`)→ chat 用 **同 thread_id + `Command(resume=decision)`** 续跑。
+   - session 有 awaiting_input run + 非 decision message → 排队等(保持串行,审批期间不起新 run);无 → 正常 create。
+
+**对齐三家**:Managed Agents(`stop_reason=requires_action` + `user.tool_confirmation` 走同 events 流)/ LangGraph(`interrupt()`+`Command(resume)` 同 thread)/ OpenAI(`requires_action`+`submit_tool_outputs`)——挂起态 + 判别字段 + 带 tool_use_id 的决策回灌 + 同会话 resume。
+
+---
+
+## 六、数据流(穿越边界,含 HITL)
+
+```
+前端 POST /api/agent/send
+  → web post_message → MailboxRepository.enqueue(DB,含 idempotency_key 去重)→ bus.notify_message
+  → web Worker(notify 醒 / interval 轮询兜底)→ SessionRepository.acquire_lease(DB)
+      → 检查 session 有无 awaiting_input run:
+          有 + decision message → resume 分支(下方)
+          无 → MailboxRepository.claim_pending 多条(DB)→ RunRepository.create(DB)
+      → ChatRunClient 签 run-JWT → POST chat /agent/run {kind, session_id, messages}
+          → chat make_<kind>_agent → astream_events → 帧流(含可能的 __interrupt__)
+  → web Worker relay 每帧:FrameBus.publish(live)+ ChatTurnRecorder.feed(攒 history)
+       + 周期 refresh_lease(fencing,防 run 超 TTL 双 writer)
+  → 收到 requires_action 帧 → run.status=awaiting_input + pending_action + notify_run_status + 释放 lease
+  → 否则终态:RunRepository.complete(result=终态提取)+ ChatTurnRecorder.flush→pai_chat_messages
+       + MailboxRepository.mark_consumed + notify_run_status
+HITL resume:
+  前端 POST /api/agent/decision → mailbox.enqueue(source=tool_decision)→ notify
+  → Worker → acquire_lease → 见 awaiting_input run + decision → ChatRunClient resume 模式
+  → chat Command(resume=decision) 同 thread 续 → 帧流继续 → 终态
+前端 GET /api/agent/stream(断连重连)
+  → 查 run 状态:running→显示 waiting + 订阅 FrameBus 后续 + 听 notify_run_status;终态→读 pai_chat_messages
+```
+
+---
+
+## 七、表设计(3 张,新 migration,不兼容旧、不双写)
+
+```sql
+pai_agent_sessions (
+  session_id   TEXT PRIMARY KEY,
+  user_id      BIGINT NOT NULL,
+  agent_kind   TEXT NOT NULL,
+  lease_owner  TEXT, lease_expires_at TIMESTAMPTZ,    -- per-drain 串行锁 + fencing
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+
+pai_agent_messages (                                   -- mailbox
+  id              BIGSERIAL PRIMARY KEY,
+  session_id      TEXT NOT NULL,
+  user_id         BIGINT NOT NULL,
+  role            TEXT NOT NULL DEFAULT 'user',         -- 给 LLM:统一 user
+  source          TEXT NOT NULL,                        -- 给 worker:user|heartbeat|cron|system_event|card_bootstrap|tool_decision
+  content         TEXT,
+  meta            JSONB,                                -- card_context;tool_decision 的 {tool_use_id, decision}
+  idempotency_key TEXT,                                 -- 防重投/重试(唯一索引)
+  enqueued_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  consumed_at     TIMESTAMPTZ,
+  run_id          UUID
+)  -- FIFO 索引 (session_id, id) WHERE consumed_at IS NULL;UNIQUE(session_id, idempotency_key) WHERE idempotency_key IS NOT NULL
+
+pai_agent_runs (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id    TEXT,                                  -- 会话型有;batch one-shot NULL
+  user_id       BIGINT NOT NULL,
+  agent_kind    TEXT NOT NULL,
+  parent_run_id UUID,                                  -- 子 agent 兜底(nullable;子 agent 默认留 chat 内)
+  trigger       TEXT NOT NULL,                         -- 主触发源(merge 时取最高优先级 user>其它)
+  status        TEXT NOT NULL,                         -- pending|running|awaiting_input|succeeded|failed|cancelled
+  stop_reason   TEXT,                                  -- awaiting_input 时:requires_action;终态:end_turn 等
+  pending_action JSONB,                                -- awaiting_input:等待的 tool_use_id + 工具摘要
+  result        JSONB, error TEXT, cancel_reason TEXT, -- cancel_reason: user_cancel|user_interrupt
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ
+)
+```
+3 表全部加 RLS(仿 023/069);worker 跨用户走 `service_tx`,用户读走 `user_scoped_tx`。**无 frames 表**(live 走 FrameBus)。
+
+---
+
+## 八、模块结构 + 命名(锁定)
+
+```
+shared/agent_run.py        ← AgentKind 枚举 · Frame 信封(复用 sse_envelope)· RunJWTClaim · ResumePayload
+
+web/agent_core/            ← 控制平面
+  __init__.py
+  profiles.py    RunProfile(kind / execution=conversational|batch / triggers / multitask)
+  sessions.py    SessionRepository(ensure / acquire_lease / refresh_lease / release_lease,带 fencing)
+  mailbox.py     MailboxRepository(enqueue / claim_pending / mark_consumed)
+  runs.py        RunRepository(create / start / complete / fail / cancel / set_awaiting / get / list / reap)
+  framebus.py    FrameBus 接口 + InMemoryFrameBus(dev) + (RedisFrameBus 上线前补)
+  bus.py         notify_message / notify_run_status / notify_cancel + LISTEN(pg_notify)
+  client.py      ChatRunClient(签 JWT → POST chat /agent/run,正常 + resume 两模式,relay 帧)
+  service.py     AgentRunService(post_message/subscribe/cancel/interrupt/submit_decision/start_run)
+  worker.py      AgentRunWorker(notify + interval 兜底;drain;awaiting_input/resume;reaper)
+
+chat/transport/routes/run.py  ← 执行平面:POST /agent/run(正常 + resume),按 AgentKind 选工厂,翻译 __interrupt__
+chat/agents/<kind>.py         ← AgentSpec + make_<kind>_agent + interrupt_on(副作用工具)
+```
+
+`RunProfile`(`transport` 维度已删——统一 streaming):
+```python
+@dataclass(frozen=True, slots=True)
+class RunProfile:
+    kind: AgentKind
+    execution: Literal["conversational", "batch"]
+    triggers: frozenset[str]
+    multitask: Literal["enqueue", "interrupt", "reject"] = "enqueue"   # double-text 策略(对标 LangGraph)
+```
+
+---
+
+## 九、对外接口(`AgentRunService`)
+
+```python
+async def post_message(session_id, *, user_id, agent_kind, source, content, meta=None, idempotency_key=None) -> None
+def     subscribe(session_id) -> AsyncIterator[Frame]                  # live(FrameBus),不回放
+async def submit_decision(session_id, *, user_id, tool_use_id, decision, message=None) -> None  # HITL
+async def cancel(session_id, reason="user_cancel") -> None            # 真停(标 DB + notify + abort chat HTTP)
+async def interrupt(session_id, *, new_message) -> None               # = cancel(user_interrupt)+post_message 原子
+async def start_run(agent_kind, *, user_id, trigger, params, idempotency_key=None) -> run_id   # batch one-shot
+```
+
+## 十、Worker drain loop
+
+```
+被 bus 唤醒 或 interval 轮询(兜底,防丢通知)→ 找有 pending message 或 awaiting_input+decision 的 session:
+  acquire_lease(session_id)   # per-drain;抢不到=别人在跑
+   won:
+     # 1) HITL resume 优先
+     if 有 awaiting_input run:
+        if mailbox 有匹配 decision message → ChatRunClient.resume(run, decision);处理帧(同下)
+        elif mailbox 有非 decision message → release;return   # 审批期间不起新 run,保持串行
+        else → release;return
+     # 2) 正常 run
+     while True:
+       refresh_lease
+       msgs = mailbox.claim_pending(session_id)        # 多条
+       if not msgs: release_lease_if_empty; break
+       run = runs.create(session_id, kind, trigger=高优先级 source)
+       async for frame in ChatRunClient.run(kind, session_id, msgs):
+           FrameBus.publish(session_id, frame); recorder.feed(frame)
+           周期 refresh_lease                          # fencing:防 run 超 TTL 双 writer
+           if frame == requires_action:
+               runs.set_awaiting(run, pending_action); notify_run_status; release; return
+       runs.complete(run, result=extract); recorder.flush→pai_chat_messages
+       mailbox.mark_consumed(msgs, run); notify_run_status
+       # proactive 记账:msgs 全 heartbeat 且无 notify_user → 记 silent(卫星)
+reaper(interval):running 超时无 lease 的 run → fail(防僵尸行)
+```
+
+---
+
+## 十一、关键不变量
+
+- **chat 永不碰 DB**:只产帧;FrameBus/chat_messages 落地由 web 写。
+- **凭据只在 web**;前端只跟 web 说话;ruff banned-api 仍禁 web↔chat 互 import,共享走 `shared/agent_run.py`;不引第三进程(worker 在 web lifespan)。
+- **cancel 真停**:web abort 对 chat 的 HTTP;chat `/agent/run` 必须处理 client disconnect → abort LLM + **释放 Daytona sandbox**(否则 UI 停了但算力/计费没停,参考 MEMORY "main chat sandbox hang")。cancel 丢弃 partial;interrupt 保留 partial。
+- **single-writer 靠 fencing 不靠 TTL**:relay 循环周期 `refresh_lease`;写操作带 `lease_owner` WHERE,过期 owner 写不进。
+- **副作用幂等**:chat stateless + web relay = at-least-once,崩溃重放;side-effect tool 带 idempotency key(接 Composio allowlist)。
+- **worker 正确性靠轮询,不靠通知**:notify 只是低延迟优化,丢了 interval 兜底。
+
+---
+
+## 十二、现有机制处置(不考虑 backward 兼容)
+
+**保留(卫星)**:scheduler(`scheduled_tasks` 调度定义 + tick + cron;RC 阶段 agent 触发改调 `post_message(source=heartbeat/cron)` / `start_run`;connector ingest 非 agent 照旧)、proactive timeline cursor(`last_tick_at`)、proactive events ledger、领域账本(`pai_pipeline_runs`/`pai_evolution_runs`)。
+
+**取代(RC 切换后废弃)**:`pai_scheduled_task_runs`→`pai_agent_runs`;`pai_proactive_inbox`→`pai_agent_messages`;`pai_proactive_state` lease→`pai_agent_sessions`;proactive_loop drain→`AgentRunWorker`;`stream_chat`/`call_generate`/`dispatcher._call_chat`/`_stream_turn`→`ChatRunClient`;3 套 cancel→`AgentRunService.cancel`;proactive bus(整帧塞 pg_notify)→FrameBus。
+
+**删**:`pai_scheduled_task_runs.agent_run_id`(死列)、`crystallize` orphan kind、`pai_background_tasks`(退役)。
+
+migration forward-only(021/069 不改,加新表 + 切换后另起 migration 删旧)。pre-launch 无需迁存量。
+
+---
+
+## 十三、⚠️ 必须实测(提前到 CORE-1/2)
+
+**LLM 接受连续多条 user message** —— merge 硬依赖。Claude 4.x 文档说连续 same-role 合并成一个 turn,但你走 `ChatLiteLLMReasoning(ChatOpenAI)`→LiteLLM→Anthropic 两层转换,OpenAI-shaped 中间层行为没保证,且官方文档自身有"must alternate"历史残留。**CORE-1/2 就发 2 条连续 HumanMessage 打真实链路确认**,结果决定 merge 默认语义,不能等 CORE-4。
+
+---
+
+## 十四、实施步骤(每步本地起服务端到端验证)
+
+**CORE 阶段:全在 web + shared,不碰现有 agent/UI/chat**
+
+| 步 | 做什么 | 端到端验证 |
+|---|---|---|
+| **CORE-0** | 连续 user message 真实链路实测(§十三):临时脚本经现有 `/agent/chat` 发 2 条连续 HumanMessage,看 LiteLLM→Anthropic 是否接受 | `make up` 起服务 + 跑脚本,确认不 400、agent 看到两条 |
+| **CORE-1** | 3 表 migration + RLS;`shared/agent_run.py`(AgentKind/Frame/JWT claim/Resume) | `make migrate` 确认 3 表 + RLS 建出;`uv run ruff check && ruff format && mypy src` |
+| **CORE-2** | `web/agent_core/` 五 repo + `profiles.py` + `framebus.py`(内存)+ 真 DB 单测(lease 串行+fencing / claim_pending 多条 / consume 恢复 / idempotency / FrameBus pub-sub) | `uv run pytest tests/web/agent_core/`;`make up` 起 postgres 验 repo 真跑 |
+| **CORE-3** | `AgentRunService` + `AgentRunWorker`(notify+轮询+awaiting_input+reaper)+ `bus` + `ChatRunClient`;chat `/agent/run` 加翻译 `__interrupt__`(execute 先复用现有 endpoint) | `make up` 起全栈;打一个临时 `/api/agent/send` 接口验:post → worker drain → ChatRunClient 调现有 endpoint → FrameBus 收帧 → run 终态 |
+| **CORE-4** | 端到端 e2e 测:post 多条→合并→一个 run→FrameBus 流→终态 chat_messages;心跳 source post;cancel 真停;HITL(interrupt_on 工具→requires_action→decision→resume) | `make up` + 前端临时页或脚本走完整 actor 链路(含 HITL resume + cancel sandbox 释放) |
+
+**验证状态(2026-06-05,本地全栈端到端、真跑 Anthropic):**
+- **CORE-0 ✅** 连续 user message 经真实链路(`ChatLiteLLMReasoning`→LiteLLM→Anthropic)被接受,第二条答出第一条内容 → **merge 默认锁定 = 多条独立 HumanMessage(多个 `role=user`),不拼接**。
+- **CORE-1 ✅** 3 表 migration(082)+ RLS 建出。
+- **CORE-2 ✅** 8 真 DB 单测(lease 串行+fencing / merge claim / consume 恢复 / idempotency / scan+reap / FrameBus pub-sub)。
+- **CORE-3 ✅** `post → worker drain → ChatRunClient → chat → 真跑 Anthropic → FrameBus 收帧 → run succeeded`,DB 终态(run / message consumed / lease 释放 / chat_messages)全对。chat `/agent/chat` 扩展 `messages` 字段收多条 → fan 成多个 `role=user`(**不拼接**,符合 §四.3 原设计);单条 `message` 路径保留给前端。
+- **CORE-4** merge ✅(2 条 message → 1 run,2 条**独立** user turn,无 notify 时 interval 轮询兜底)· cancel ✅(run→cancelled + lease 释放;reason 权威在 `service.cancel`;shutdown 留 message replay)· **HITL ✅**(实测**推翻 06-01「SSE 与 interrupt 不兼容」**:`interrupt_on` → langgraph `interrupt()` 捕获于 `astream_events` 的 `on_chain_stream` chunk `__interrupt__` → `requires_action` 帧 → worker `awaiting_input` + 暂停即记 user turn → decision message → `Command(resume={"decisions":[…]})` 同 thread 续 → **approve 工具真执行 / reject 跳过**,resume 记 assistant turn,run succeeded;用真副作用工具 `preference_add` 端到端验证)· 心跳完整(timeline 窗口 + silent 记账)属 RC-1。
+
+每步:`env -u ANTHROPIC_API_KEY` 跑 make(防注入空 key 污染);`make logs-pinai-web`/`pinai-chat` 看起得来;改 Python 后 `ruff check && ruff format && mypy src`。**docker healthy ≠ 功能对**:依赖真实数据的链路如实声明只验了启动+表+repo。
+
+**RC 阶段:逐个切(每个 agent 一个 PR,可灰度回滚,每步本地端到端验证)**
+RC-1 proactive → RC-2 main_chat+card(fanout 去 drain-and-discard)→ RC-3 batch(scheduler→start_run)→ RC-4 chat 5 endpoint→1 → RC-5 前端统一 `useAgentRun`(waiting 模式)+ 删 3 套 runtime。
+
+---
+
+## 十五、风险 + 开放问题
+
+1. **连续 message 实测**(§十三)——CORE-0 必验,结果定 merge 默认。
+2. **内存 FrameBus 多实例失效**——prod 上线前硬切 Redis(§四.4)。
+3. **HITL lease per-drain 的 resume 竞态**——decision message 到达时 run 必须仍是 awaiting_input;并发 decision 去重靠 idempotency_key。CORE-4 重点测。
+4. **cancel 真停 sandbox**——chat 侧 client-disconnect 处理 + Daytona 释放,CORE-4 验(构造 sandbox 跑到一半 cancel,确认 sandbox 释放)。
+5. **generator 特殊**——orchestrator+4 CompiledSubAgent 编排留 `chat/agents/generator.py`,batch 只统一 run 账本+入口。
+6. **scheduler 与 worker 边界**——scheduler 只触发(post_message/start_run),worker 只消费;端到端失败传播(scheduler claim 了但 worker 没醒)靠 worker interval 轮询兜底覆盖。
+
+---
+
+## 十六、HITL use case / corner case 矩阵(CORE-4 review)
+
+副作用工具审批是 HITL 核心。下表是 review 出的全部场景 + 当前状态,test 按此覆盖。
+
+**正常路径**
+| UC | 场景 | 状态 |
+|---|---|---|
+| UC1 | 对话不碰副作用工具 → 无 interrupt → 正常完成 | ✅ |
+| UC2 | 副作用工具 + approve → 工具执行 + 完成 | ✅ 实测(preference_add) |
+| UC3 | 副作用工具 + reject → 工具跳过 + agent 续 + 完成 | ✅ 实测 |
+
+**A. streaming / history 一致性**
+| CC1 | interrupt 前 agent 已 stream 的 reasoning/text → history 必须完整 | ⚠️ **bug:partial 丢失** → awaiting 存 partial parts、resume 合并 |
+| CC2 | 同 turn 多轮 interrupt(approve 后又一副作用工具) | ✅ `_resume_run` outcome=awaiting |
+| CC3 | 同 turn 一次多个副作用工具(multi-action interrupt) | ⚠️ 限制 `[:1]` → 防御:多 action 时一并暴露/拒绝 + 日志 |
+
+**B. 重连/刷新(后端支持 + 前端 RC-5)**
+| CC4 | streaming 中刷新 → awaiting 持久 → 重连显示审批 | 后端 ✅(`get_awaiting`);前端 RC-5 |
+| CC5 | 审批前切出/刷新 → 同 CC4 | 后端 ✅ |
+| CC6 | 审批后切出/刷新 → decision 已入队 + resume 异步 → 重连查 run 终态 | 后端 ✅;前端 RC-5 |
+| CC7 | 历史 compress(trim / summarization) | trim ✅(guard 跳过);summarization 待验 |
+
+**C. 并发/竞态**
+| CC8 | double-tap approve | ✅ idempotency_key 去重 |
+| CC9 | approve + reject 矛盾 | ✅ 同 key 去重,先到赢 |
+| CC10 | 审批期间发新消息 → 排队(serial,不起新 run) | ✅ |
+| CC11 | resume 时 lease 被偷 | ✅ refresh 检测 stolen |
+| CC12 | resume 时 chat 报错 | ✅ `_fail` |
+
+**D. 取消/清理**
+| CC13 | cancel awaiting run → chat thread 的 interrupt | ✅ 实测:langgraph 收到新 message 自动丢弃 pending interrupt + 正常新 turn,无需清 checkpoint |
+| CC14 | stale decision(不匹配当前 interrupt) | ⚠️ 改进:无 awaiting 时跳过 tool_decision message |
+| CC15 | awaiting 永不审批 → 永久 awaiting | 限制(无超时);后续可加长 TTL auto-fail |
+
+**E. 决策类型**
+| CC16 | edit(改工具入参) / CC17 respond(代工具回复) | 限制:CORE-4 只 approve/reject;edit/respond 后续 |
+
+**F. 数据完整性**
+| CC18 | interrupt_id 缺失 → 不能匹配任意 decision | ⚠️ 防御:None 时不匹配 |
+| CC19 | pending_action 无 allowed_decisions | ✅ 默认 [approve,reject] |
+
+**必修(robust)**:CC1 partial · CC13 cancel awaiting · CC14 stale · CC3 multi-action 防御 · CC18 interrupt_id 防御。
+**可接受限制(文档标 + 后续)**:CC15 超时 · CC16/17 edit/respond。
+**前端 RC-5**:CC4/5/6 重连 UI(running→waiting / 审批 chip,终态→结果,审批中按钮置灰)。
+
+---
+
+## 十七、RC-1 实施计划(proactive 切 actor)
+
+**用户决策**:merge 时 user + heartbeat 都 `role=user`、按 FIFO 顺序一并发给 agent(source 仅用于 worker 记账/路由);做**完整 RC-1 后端**;前端 `ui/proactive` 只改内部调用链走 service,UI 不动(RC-5)。
+
+**proactive 特有、必须挂到 kernel 的 2 点**(2026-06-05 用户简化方案:心跳在 enqueue 时拼,不在 worker drain 现算):
+1. **heartbeat content 在 scheduler enqueue 时拼**:scheduler tick 用游标(`last_tick_at`→now)查 timeline → 拼好 content → `post_message(source=heartbeat, content=窗口文本, meta={windowStart,windowEnd})` + advance 游标。worker drain **完全通用**(content 已拼,当普通 `role=user` message 发,不区分),只加两个轻钩子:drain 时按 source=heartbeat publish `tick_frame` 给前端、终态记 silent。**权衡**:enqueue 时快照固定——agent 忙时心跳在 queue 等,drain 时 content 已 stale(下个心跳补,proactive 非实时可接受);**游标(不是死的"过去 n 分钟")保证不漏/不重**。
+2. **silent-by-default 靠 prompt,不再用 input_kind**:proactive agent prompt 总原则 = 默认沉默 + 有 user 消息就回答;**silent 记账按 source 集合**——消费的 msgs 全 `heartbeat` 且无 `notify_user` → `record_event(silent)`;任一 `user` → 不记。
+
+**步骤(每步本地端到端验证):**
+| 步 | 做什么 | 验证 |
+|---|---|---|
+| RC1-a | ✅ `web/services/proactive_window.py`:`build_heartbeat_message`(游标→now 拼窗口,返回 HeartbeatWindow)+`advance_cursor`+`tick_frame` | 单元 |
+| RC1-b | scheduler `proactive.tick` handler→`build_heartbeat_message`+`post_message(heartbeat,content,meta)`+`advance_cursor` | post tick→queue 里有拼好的心跳 |
+| RC1-c | `AgentRunWorker` 两个轻钩子:drain heartbeat→publish `tick_frame`(从 meta);终态全 heartbeat 无 notify_user→`record_event(silent)`。drain 主体通用 | 端到端 heartbeat turn |
+| RC1-d | enqueue 改 service:`ui/proactive /send`→`post_message(source=user)` | post user→drain |
+| RC1-e | chat proactive 按 kind 接 messages:`ChatRunClient` kind=proactive 路由;chat 入口按 kind 选 `make_proactive_agent` + 接 `messages`;prompt 去 input_kind | proactive agent 真跑 |
+| RC1-f | `ui/proactive /stream`→`service.subscribe`、`/cancel`→`service.cancel`;`ProactiveRepository` 瘦身(删 lease/inbox-drain,留 `record_event`+cursor);删 proactive_loop drain/lease + `proactive_bus` | 前端透明 |
+| RC1-g | 端到端:真实 heartbeat turn(窗口+silent)+ user 消息 + cancel + 多 tick | 全栈 |
+
+**风险**:① 多 heartbeat 合并成一个窗口(非每 tick 一个)② `notify_user` 检测(relay 帧看 `chat:tool:start` name=notify_user)③ cursor 在终态推进 ④ timeline 现算只能 web(信任边界)⑤ proactive prompt 去 input_kind 后行为回归。
+
+---
+
+## 十八、RC-2 实施记录(main_chat + card 切 actor)
+
+**结论**:main_chat / card_execution 走 actor 的执行链路 CORE 阶段已就绪——worker `_run_once` 非 proactive 分支→`_finalize_turn` 写 pai_chat_messages;chat `/agent/chat` 按 session_key 前缀选 agent(`card-thread-*`→card_execution、`proactive-*`→proactive、其它→main_chat)。RC-2 补齐 web 前端入口 + 一个 worker gap;前端切到统一入口属 RC-5。
+
+**改动**:
+- 新建 `web/routes/ui/conversation.py`(`/api/conversation/*`):统一 actor 会话入口,支持 main/card/proactive。`init`(main 单例解析 / card / proactive)、`send`(post_message,agent_kind 按 thread kind)、`stream`(subscribe FrameBus)、`decision`(HITL submit_decision)、`cancel`、`history`(pai_chat_messages 分页 + backfill)。RC-5 前端切到这里后删 `ui/chat.py`(/chat-stream/*)+ `ui/proactive.py`(/api/proactive/*)+ 3 套前端 runtime。
+- `AgentRunWorker._run_once`:补 `card_context`(从 message meta 取,传 `ChatRunClient.run`)——RC-1 遗留 gap(card 走 actor 时 cardContext 丢失)。
+- **backfill 双写修复**(conversation.py + proactive.py `/history`):有 active run 时跳过 lazy backfill。否则 backfill 从进行中的 checkpoint 读到 worker 即将写的 user turn,`_finalize_turn` 再写一次→重复 user turn(实测 messages=3)。run 终态的 complete+append 同一 tx,所以终态后 latest_id 非 None 不会再 backfill。
+
+**验证(本地全栈、真跑 Anthropic + Daytona,dev auth bypass header)**:
+- main_chat HTTP 全链路:init/send/stream/history,run succeeded,history user+assistant **无重复**(messages=2)。
+- card_execution:seed mock card→`init{card_id}`→kind=card(`_assert_card_owned` 通过)→card_execution agent run succeeded,从 card_context 答出 card title。
+- HITL `/decision`:agent 调 preference_add→interrupt→`chat:requires_action` 帧(stream)→`/decision` approve→`Command(resume)`→`chat:tool:start/result`(工具真执行)→succeeded。
+- stream live frames:`conversation:hello`+`chat:thinking/reasoning:delta/delta/done`+`chat:requires_action`。
+- 单元:`_classify`(main/card/proactive 分类 + 跨用户隔离,9 passed);回归 29 passed。
+
+**未做(RC-5)**:前端切 `useAgentRun`、regenerate/edit(actor 模式需 history pop+rewrite)、proactive Debug 视图(checkpoint 全量)——这三者暂留 legacy 路由。
+
+---
+
+## 十九、RC-3 实施记录(batch 接 actor run 账本)
+
+**结论**:batch agent(dream / evolve / crystallize / generator / user.prompt)的 run 现在镜像进统一 `pai_agent_runs` 账本,和会话型 agent 同一张表。**执行器(chat /agent/run/{kind}、/agent/generate)+ 领域账本(pai_evolution_runs / pai_pipeline_runs)+ scheduler 账本(pai_scheduled_task_runs)全部不变**(plan §十七.5「batch 只统一 run 账本+入口」),改动最小、风险隔离。
+
+**改动**:
+- `AgentRunService`:`start_run(agent_kind, user_id, trigger, parent_run_id)` 精简为 create-only(去掉未用的 params/idempotency_key);新增 `finish_run(run_id, status, result/error)` 终态。batch one-shot 不碰 Session/lease/mailbox。
+- `DefaultDispatcher`:`__init__` 加可选 `service`;`_AGENT_RUN_KIND` 映射 task.kind→AgentKind;`dispatch()` 在 `_handle_kind` 前后包 `start_run`/`finish_run`(全程 `contextlib.suppress` best-effort——账本写入失败绝不阻塞真实执行 + scheduled_task_runs / 领域账本)。
+- `tick_loop` / `app.py`:把 `app.state.agent_service` 传给 dispatcher(service 在 scheduler 之前创建)。
+- 排除:`connector.init/sync`(非 agent)、`proactive.tick`(RC-1 走 actor mailbox,worker 建 run)。
+
+**验证(本地全栈、真跑 Anthropic + Daytona)**:
+- service 单元:`start_run("dream")`→pai_agent_runs(session_id=NULL, running);`finish_run` succeeded→(succeeded/end_turn/result)、failed→(failed/error)。
+- dispatcher 端到端:seed `generator.manual` once task→scheduler→dispatcher→`start_run("generator")`→`_run_generator`(~57s)→`finish_run`→**generator run succeeded**(agent_kind=generator, trigger=generator.manual, session_id=NULL)。
+- 回归:scheduler + agent_core 21 passed;ruff + mypy(200 files)。
+
+---
+
+## 二十、RC-4 实施记录(chat 执行入口收敛)
+
+**已做**:删除 RC-1 遗留的 dead endpoint `/agent/proactive/run`(`chat/transport/routes/proactive.py` 整文件 + `chat/app.py` unmount)。该 route 的 docstring 自述靠 `web/services/proactive_loop.py` 驱动——而 proactive_loop 在 RC-1 已删,proactive 改走 worker→`/agent/chat`(session_key=`proactive-*`)。确认 web 端零调用者后删除。验证:chat boot OK、proactive user message 端到端(post→worker→`/agent/chat`→proactive agent→run succeeded、trigger=user)、ruff + mypy(199 files)、无 test 残留引用。
+
+**统一执行的实质已在前序 RC 达成**:plan 设想的"统一入口按 AgentKind 选工厂"的核心(一个入口按 kind 路由 + 统一 run 账本)已实现——
+- 会话执行:`/agent/chat` 按 session_key 前缀选 agent(main_chat / card_execution / proactive),接 `messages`(merge)+ `resume`(HITL),RC-1/2 验证。加会话 agent 零 endpoint 改动。
+- batch 执行:run 进统一 `pai_agent_runs` 账本(RC-3)。
+- 剩余执行 endpoint:`/agent/chat`(会话 SSE)、`/agent/run/{dream,evolve,crystallize}`(batch JSON)、`/agent/generate`(generator JSON)、`/agent/chat/{history,exists}`(checkpoint 读)。
+
+**未做(低优先,显式标注)**:把 batch endpoint(`/agent/run/{kind}` + `/agent/generate`)物理合并进单一 `/agent/run`、会话 `/agent/chat` 重命名 `/agent/run`、batch 输出 SSE 化(plan §四「结果从终态提取存 run.result」)。这是纯结构/命名重构:会话(多帧 SSE)与 batch(单一结果 JSON)执行模型不同,强行同一 endpoint 需 batch SSE 化 + 改 dispatcher / chat_proxy / ChatRunClient 全部调用方,风险高于收益(现有 endpoint 各司其职、工作良好)。建议作为独立聚焦 PR,不阻塞 RC-5。
+
+---
+
+## 二十一、RC-5 实施计划(前端统一 useAgentRun + HITL 审批 UI + 删旧)
+
+> 后端统一入口 `/api/conversation/*`(init/send/stream/cancel/decision/history)已在 RC-2 建好并端到端验证(含 HITL `/decision`)。RC-5 是把前端切上去 + 建 HITL UI + 删旧,纯前端重构 + 真实浏览器验证。
+
+> **用户决策(2026-06-05):前端统一成"一个界面",三会话(main/card/proactive)只是不同 session。** 后端收敛到 `/api/conversation/*`(`useProactiveAgentRuntime` 改走它);main 的 regenerate/edit 统一时一并补。
+>
+> **关键现状(已勘查)**:`ProactiveAgentView` 本就是为 actor push 模型设计的**通用会话 UI**——props 已含 `onBack/session/cardContext/bootstrap/title/placeholder/onDone/onDismiss`(card chat 全套)+ transcript/tool/browser/todos + 本 session 加的 HITL(`awaitingDecision`/`submitDecision`→`HitlApprovalCard`)。叫 proactive 只是历史命名。统一 = 把它当通用 ConversationView,main/card 也用它。渲染现状:
+> - main:`MainChat`(AppShell:944 / ConstellationLayout:1172)→ `MainChatView`(assistant-ui)。
+> - card:`CardChat` / `ChatDetailView`(:1041)→ `MainChatView`(assistant-ui)。
+> - proactive:`ProactiveAgentView`(ConstellationLayout:1027)→ `useProactiveAgentRuntime`(push,/api/proactive/*)。
+>
+> **本 session 已做**:① conversation.py `init` 支持 `kind=proactive`→`proactive-<uid>`(前端能用 conversation 拿 proactive sessionKey,前端不知 user_id);② RC-5 核心:`lib/api.ts` conversation client + `useAgentRun`(精简,conversation,单元 3)+ `HitlApprovalCard`(单元 5);③ proactive HITL 端到端接好(ui/proactive.py `/decision` + `useProactiveAgentRuntime` 的 `awaitingDecision`/`submitDecision` + ProactiveAgentView 渲染 HitlApprovalCard;type-check+ruff+mypy+7 单元)。
+>
+> **实施结果(2026-06-05 完成,阶段 1–4 全绿:type-check + 后端 ruff/mypy(198 files)/format + 前端 257 单元 + web app 构建验证。阶段 5 浏览器验由用户手工)**:
+> 1. **后端 regenerate ✅**:conversation.py `/send` 接 `regenerate`→meta;worker `_run_once` 检测单条 regenerate→`ChatRunClient.run(regenerate=)`;`_finalize_turn` pop+rewrite(edit 删 user+asst / pure 删 asst,镜像 ui/chat.py);ChatRunClient 透传 `message`(chat regenerate 靠 message diff)。端到端已验(post→[user,asst]→regenerate→[user,新asst])。**未做(低优先)**:conversation.py `/history` 的 `include_debug`(proactive Debug 全量,走 chat history.py)。
+> 2. **hook 统一 ✅(已完成:type-check + 15 单元绿;proactive 页走 /api/conversation/*)**:`useProactiveAgentRuntime`(818 行)改 conversation API。精确改点:import(38-44)conversation* 替 proactive* IO(留 fetchProactiveEnabled/setProactiveEnabled);opts(232)`session?`→明确 `sessionKey`(空时 connect idle),调用方 ProactiveAgentView `conversationInit({sessionKey/cardId/kind})` 解析后传入;isMain(296,851)→`isProactive=sessionKey.startsWith("proactive-")`(heartbeat toggle 仅 proactive);connect(575-695)`fetchProactiveHistory(session,{includeDebug})`→`conversationHistory(sessionKey,{before,limit})`(去 includeDebug)、`oldestCursor/hasMore`→`nextCursor`(number)、`streamProactive`→`conversationStream`、dep `session`→`sessionKey`;loadMore(700-730)同上 + cursor str→number;postUserMessage(746)`sendProactiveMessage(text,{session,cardContext})`→`conversationSend(sessionKey,text,{cardContext})`;stop(802)`cancelProactive`→`conversationCancel`;submitDecision(822)`sendProactiveDecision`→`conversationDecision(sessionKey,...)`;hello(437)`proactive:hello`→`conversation:hello`(`data.sessionKey`);`useProactiveAgentRuntime.test` mock 改 conversation*。弃精简 `useAgentRun`(逻辑已并入)。
+> 3. **界面切换 ✅**:`MainChat`/`CardChat`/`ChatDetailView` 三入口全渲染 `ProactiveAgentView`(对应 session + card props,kind=main/card/proactive)。regenerate/edit 补进 ProactiveAgentView:`UserEntry` last 加 Edit(`ProactiveComposer` 改 forwardRef 暴露 `setDraft`,imperative prefill);`AssistantEntry` last 加 Regenerate(→`regenerateLast`:删尾 assistant + 重发 lastUserText regenerate=true);`TranscriptView` 算 lastUserId/lastAssistantId 门控;regenerate 单测 2 个;`ChatDetailView.test` 改测 ProactiveAgentView。
+> 4. **删旧 ✅**:前端删 `useAgentRun(.test)` + `useProactiveChatRuntime` + `MainChatView(.edit-composer.test)` + `EditableUserMessageComposer` + lib/api dead proactive client(fetch/send/cancel/decision/stream + sessionQuery + FetchProactiveHistoryOpts/ProactiveHistoryPage);后端删 `ui/proactive.py` + app.py import/mount(web app 构建验证:186 routes,/api/conversation/* 全在、/api/proactive ui 清空)。**纠正原计划——以下保留**:`useCardExecutionRun`(card execute/propose_action run state,非 chat runtime,CardDrawerDetail/ConstellationLayout 仍用)+ `ui/chat.py`(/chat-stream/* 喂 useCardExecutionRun)+ `MessageActionBar`(`buildAssistantMessageFeedbackBody` thumbs feedback 契约,组件渲染部分暂 dead)+ ProactiveHistory* types(ConversationHistoryPage.messages 复用)。
+> 5. **浏览器验**:用户手工(本 session 按用户指示跳过 chrome,验证到 type-check + 单元 + web app 构建 level)。
+>
+> **统一界面 action bar 已补齐 ✅(2026-06-05,本地起服务端到端验证)**:copy / 👍👎 feedback / 绝对时间戳全部迁到 `ProactiveAgentView`(`AssistantActionBar` + `UserEntry` 时间戳)。**live-turn 的后端 message id 映射解决方案**:后端 `_finalize_turn` 写完 pai_chat_messages 后 emit `chat:persisted{messageId}` frame(在 chat:done 之后到),前端 `chat:persisted` 把最后一条 assistant entry 的 id patch 成后端 id → live turn 与 history turn 都用真 id 做 feedback(thumbs join pai_chat_messages.id;未拿到真 id 前 thumbs 不显示——id 是否为纯数字)。`buildAssistantMessageFeedbackBody` 抽到 `components/chat/feedback.ts`(去 assistant-ui 依赖),`MessageActionBar` 随之删除。端到端验证:发消息→stream 顺序 `…chat:done → chat:persisted{messageId:35}`→POST /feedback→`pai_feedback_events` 落库(message_id=35,channel=main_chat,surface=assistant_message_action_bar)。**剩余 assistant-ui 依赖**:`ProposeActionCard`/`ToolStepCard`(既有,本轮未动),故 package.json 仍保留 assistant-ui。
+
+**现状(3 套 runtime,模型不同)**:
+- `useProactiveChatRuntime`(594 行,main chat):assistant-ui `useLocalRuntime`,request→response adapter,打 `/api/chat-stream/*`。
+- `useCardExecutionRun`(858 行,card):chat-stream adapter,打 `/api/chat-stream/*`。
+- `useProactiveAgentRuntime`(818 行,proactive 页):push transcript(plain React state + `LiveContentBuilder`),打 `/api/proactive/*` —— **最接近 conversation.py 模型**。
+
+**`useAgentRun(sessionKey)` 设计**(push 模型,以 proactive runtime 为基):
+- 状态:transcript(user/assistant/heartbeat)、connectionState、awaitingDecision(pending_action)。
+- 长连 `GET /stream` 订阅 frames;`chat:*` 累积进 `LiveContentBuilder`;`chat:requires_action` → 置 awaitingDecision;`chat:done` finalize。
+- `send(text,{cardContext?})`→`POST /send`(202,reply 走 stream);`submitDecision(toolUseId,decision,message?)`→`POST /decision`;`cancel()`→`POST /cancel`。
+- 初始 + reconnect:`GET /history`(O(page))+ 查当前 run 状态(awaiting → 重建审批卡)。
+
+**HITL 审批 UI**(用户核心;corner case 矩阵见 §十六):
+- `chat:requires_action` → 渲染审批卡(工具名 + args 预览 + Approve/Reject;edit/respond 后续)。
+- disable 态:streaming 中禁用;提交后置灰等 resume(CC8 双击靠 idempotency);刷新/重连从 run.awaiting_input 重建(CC4/5);审批后切出/刷新→重连查 run 终态(CC6);历史里被 compress 的旧审批→只读灰显(CC7)。
+- 提交乐观更新 + 失败回滚。
+
+**切换顺序(每步浏览器端到端验证)**:
+1. **proactive**(`ProactiveAgentView`)→ useAgentRun(/api/proactive/* → /api/conversation/* 接口几乎同构,改动最小)。验:心跳显示 + user 消息 + 流式。
+2. **card**(`CardChat`/`CardDrawerDetail`/`ChatDetailView`)→ useAgentRun(sessionKey=card-thread-<id>)。验:cardContext 注入 + propose_action。
+3. **main**(`MainChat`)→ useAgentRun(assistant-ui `useLocalRuntime` 迁 push,**最大单项**)。验:发消息 + 流式 + trim + regenerate。
+4. **HITL UI 接入**(三处会话都能触发副作用工具审批)。验:approve/reject + 各 disable corner case。
+
+**删旧(切完 + 验证后)**:
+- 前端:三套 runtime + 相关 test(`useProactiveChatRuntime` / `useCardExecutionRun` / `useProactiveAgentRuntime`)。
+- 后端:`web/routes/ui/chat.py`(/api/chat-stream/*) + `web/routes/ui/proactive.py`(/api/proactive/*) + 其 backfill 双写防护一并消除。chat `history.py`(/agent/chat/{history,exists})保留——conversation /history 的 backfill 仍走它读 checkpoint。
+
+**前置依赖(main 切换前必补)**:
+- **actor regenerate/edit**:worker 端 history pop+rewrite(pai_chat_messages delete_tail + 重写)+ `ChatRunClient.run(regenerate=...)` 透传(chat `/agent/chat` 已支持 regenerate)。否则 main chat 丢 Retry/Edit。
+- **proactive Debug 视图**(checkpoint 全量):conversation `/history` 目前只读 pai_chat_messages;Debug toggle 需在 conversation `/history` 加 `include_debug` 走 chat history.py 的 debug 路径。
+
+**本 session 已落地(type-check + 单元级,均为新增、不破坏现有 runtime)**:
+- `lib/api.ts` conversation API client(init / send / stream / cancel / decision / history),type-check 通过。
+- `hooks/useAgentRun.ts`:统一会话 push hook(transcript + connection + ready + busy + awaitingDecision + send/stop/submitDecision),复用 proactive runtime 的 `LiveContentBuilder`/flushTurn 模式 + 接 conversation API + `chat:requires_action`→awaitingDecision,type-check 通过。
+- `components/chat/HitlApprovalCard.tsx`:HITL 审批卡(approve / reject+reason / disabled / readOnly / allowedDecisions),单元测试 5 passed。
+
+**剩余(需 dev server 真实浏览器验证 corner case)**:切 ProactiveAgentView / CardChat / MainChat 到 `useAgentRun` + 接 `HitlApprovalCard`、删三套旧 runtime + 后端老 route、按 §十六 矩阵逐个浏览器验(streaming 中 interrupt / 刷新重连重建审批 / 历史 compress 只读灰显 / 审批后切出)。
+
+## 二十二、Post-unification review 重构(2026-06-05)
+
+RC-1~5 完成后整体 review,命名/目录/死代码收敛。**纯清理,无设计/逻辑变更**;全绿(前端 type-check + 257 单元 + vite build / 后端 ruff + mypy 198 + pytest / 起服务 smoke chat:persisted + feedback)。
+
+- **命名正名(本节是命名 SSOT;§十八~二十一 里的 `ProactiveAgentView`/`useProactiveAgentRuntime`/`Proactive*` 是当时名)**:`ProactiveAgentView`→`ConversationView`、`useProactiveAgentRuntime`→`useConversationRuntime`、`Proactive{Content,Transcript,Assistant,User,Heartbeat,History}*`→`Conversation*`、`ProactiveComposer`→`Composer`;修两个反了的名 `isMain`→`isProactive`、`MainChatLanding`→`ProactiveLanding`。保留真 proactive 语义(fetch/setProactiveEnabled、ProactiveSettings、proactive:tick、proactive- 前缀)。
+- **目录收敛**:前端 `proactive/` + `main-chat/`(main chat 早删) 全并入 `components/conversation/`(统一会话 view/runtime/渲染组件/tool-steps/HitlApprovalCard/feedback);`main-chat/` 目录消除;`chat/` 只留 card-* legacy(card-chat-session/card-feedback,useCardExecutionRun 用)。
+- **死代码删除**:后端 `ResumePayload`(allow/deny 词表与实际 approve/reject/edit/respond 矛盾)/`shared.Frame` 别名/`tick_frame`/`card_bootstrap` source(未接线)+ stale docstring(proactive_loop/proactive_bus/旧 route)+ 裸 `# type:ignore`;前端 `ToolStepCard`/`ProposeActionCardAui`(连 @assistant-ui import,src 内 @assistant-ui 引用归零)/`LegacyExecutionChatDetailView`(ChatDetailView.tsx 2183→603 行)+ lib/api dead proactive client + `LiveContentBuilder.replaceText`。
+- **feedback channel 参数化**:ConversationView 按 session 算 channel(main_chat/card_execution/proactive)经 `FeedbackChannelContext` 传 action bar 的 👍👎,不再硬编码 main_chat。
+- **判断「真统一非为统一,不强合」**(业务/信任边界不同):worker `_finalize_turn` vs `_proactive_finalize`(薄壳)、conversation(ui 用户 JWT) vs agent proactive route(chat 回调)、`ui/chat.py`↔worker regenerate(迁移期双轨,迁完一并删)——保留。
+
+---
+
+## 相关
+
+- [2026-06-01 agent 架构重构](./2026-06-01-agent-architecture-redesign) · [2026-06-02 目录+工具范式](./2026-06-02-agent-directory-and-tool-paradigm)
+- 模块:[`execution.mdx`](../modules/execution) · [`background-tasks.mdx`](../modules/background-tasks) · [`runtime-deployment.mdx`](../modules/runtime-deployment)(信任边界)
+- 对标:Claude Managed Agents(stop_reason/events/multiagent)· LangGraph Platform(Runs/multitask_strategy/interrupt+resume)· Claude Code Task.ts · actor 模型 · Temporal/Restate
