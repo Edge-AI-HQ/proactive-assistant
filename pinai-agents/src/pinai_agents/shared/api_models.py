@@ -461,13 +461,13 @@ class PlanItem(_AgentModel):
     goal_basket: Literal["work", "health", "family", "wealth", "growth", "life"]
     decision: str = Field(
         min_length=1,
-        max_length=200,
-        description="One sentence describing the decision the user can make.",
+        max_length=400,
+        description="One sentence (<=400 chars) describing the decision the user can make.",
     )
     why_now_trigger: str = Field(
         min_length=1,
-        max_length=200,
-        description="The concrete event/date/number that makes this timely RIGHT NOW.",
+        max_length=400,
+        description="The concrete event/date/number (<=400 chars) that makes this timely RIGHT NOW.",
     )
     primary_source_ids: list[str] = Field(
         default_factory=list,
