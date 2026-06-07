@@ -568,6 +568,16 @@ export default function AppLayout() {
     }
   };
 
+  // Card execution (chatTarget / legacy activeChat) and the proactive agent
+  // view both mount the full-screen ConversationView *inside* this layout's
+  // content area. Unlike main chat — a portal overlay (MainChatOverlay) that
+  // covers the whole layout — these surfaces don't hide the layout's own
+  // floating chrome. ConversationView already carries its own aurora
+  // background, header and back button, so the top-right menu bar and the
+  // bottom ASK PIN AI entry must step aside or they overlap that surface.
+  const inFullscreenChat =
+    chatTarget != null || activeChat != null || activeView === "proactive";
+
   return (
     <CardStateProvider value={{ cardsState, cardActions }}>
     <div
@@ -591,30 +601,36 @@ export default function AppLayout() {
 
       <div className="relative z-10 flex flex-col h-full">
         {/* Top bar — AgentRunIndicator + Chat (MainChat) + DebugPanel (gear)
-            + hamburger. Same composition as the old AppShell. */}
-        <div
-          className="absolute right-5 z-30 flex items-start gap-1.5"
-          style={{ top: "var(--constellation-header-top)" }}
-        >
-          <AgentRunIndicator />
-          <DebugPanel
-            run={pipeline.run}
-            isRunning={pipeline.isRunning}
-            onGenerate={() => pipeline.generate()}
-            composio={composio}
-          />
-          <button
-            onClick={() => setMenuOpen(true)}
-            className={`p-2 rounded-full transition-all duration-200 ${
-              isScrolled
-                ? "border border-foreground/12 bg-background/55 backdrop-blur-md shadow-sm hover:bg-background/75"
-                : "border border-transparent hover:bg-foreground/[0.04]"
-            }`}
-            aria-label="Open menu"
+            + hamburger. Same composition as the old AppShell. Hidden while a
+            full-screen ConversationView (card execution / proactive) owns the
+            content area — that surface carries its own header + back button, so
+            this floating bar would otherwise overlap it (main chat avoids this
+            by rendering as a portal overlay that covers the whole layout). */}
+        {!inFullscreenChat && (
+          <div
+            className="absolute right-5 z-30 flex items-start gap-1.5"
+            style={{ top: "var(--constellation-header-top)" }}
           >
-            <Menu size={20} strokeWidth={1.5} className={isScrolled ? "text-foreground/65" : "text-foreground/55"} />
-          </button>
-        </div>
+            <AgentRunIndicator />
+            <DebugPanel
+              run={pipeline.run}
+              isRunning={pipeline.isRunning}
+              onGenerate={() => pipeline.generate()}
+              composio={composio}
+            />
+            <button
+              onClick={() => setMenuOpen(true)}
+              className={`p-2 rounded-full transition-all duration-200 ${
+                isScrolled
+                  ? "border border-foreground/12 bg-background/55 backdrop-blur-md shadow-sm hover:bg-background/75"
+                  : "border border-transparent hover:bg-foreground/[0.04]"
+              }`}
+              aria-label="Open menu"
+            >
+              <Menu size={20} strokeWidth={1.5} className={isScrolled ? "text-foreground/65" : "text-foreground/55"} />
+            </button>
+          </div>
+        )}
 
         {/* Main content area */}
         <ViewRouter
@@ -691,8 +707,10 @@ export default function AppLayout() {
 
         {/* ASK PIN AI — bottom-center entry into MainChat. Mirrors the
             minimalist constellation design (MinimalistNow): subtle pulse +
-            ChevronUp + uppercase label. */}
-        {activeView === "now" && (
+            ChevronUp + uppercase label. Suppressed during card execution
+            (activeView stays "now" while chatTarget is set) so the arrow
+            doesn't float over the card conversation surface. */}
+        {activeView === "now" && !inFullscreenChat && (
           <button
             onClick={openMainChat}
             onPointerDown={handleMainChatEntryPointerDown}
