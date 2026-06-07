@@ -1,0 +1,128 @@
+---
+title: "Proactive Agent 实施计划:统一 inbox + per-user 串行循环 + 心跳驱动"
+description: "独立 Proactive agent 的设计 SSOT:统一 inbox(tick + user message)、per-user lease 串行化、心跳静默优先、跨进程 SSE/cancel 走 Postgres LISTEN/NOTIFY、timeline 事件窗口游标。2026-05-23 定稿,2026-06-01 补齐文档并加端到端测试。"
+---
+
+# Proactive Agent 实施计划
+
+> **状态**:已上线。本文档是 proactive agent 的设计 SSOT,代码多处 `docs/plans/2026-05-23-proactive-agent-impl.mdx (决策 N / 组件 X)` 直接引用本文。改 `web/services/proactive_loop.py`、`web/services/proactive_bus.py`、`chat/agents/proactive.py`、`web/db/repositories/proactive.py`、migrations 064/068-077 前以本文为准。
+
+**目标**:一个独立的、连续的"个人 agent",既回应用户消息、又在消息之间作为心跳(~30s)运行,自主决定何时主动触达。它与 main-chat agent、card-execution agent 分离——独立 thread(`proactive-<user_id>`)、独立路由(`/agent/proactive/run`)、独立读 `pai_timeline_events`(timeline_* 工具)而非 main chat 的 `pai_personal_signals` / `pai_raw_*`。
+
+**边界**:
+- proactive 只在 **web/chat 两进程** 内;不引入新服务。心跳调度复用 `pai_scheduled_tasks`(kind=`proactive.tick`)。
+- 触达只有两种出口:**plain reply**(用户消息的内联回复,无通知) 和 **notify_user**(心跳里的主动推送)。心跳上的 plain text 是私有草稿,用户看不到。
+- 信任边界不破:web 签 per-run JWT(user_id / run_id / virtual_key / browserbase_context_id),chat 验 JWT 并从 claim 取凭据,**chat 不查 DB**。profile/goals 由 web 取好传入。
+
+---
+
+## 架构:端到端链路
+
+```
+[scheduler tick ~30s]                      [user message / card feedback]
+  enqueue_tick(user)                          POST /api/proactive/send
+        │                                            │
+        ▼                                            ▼
+  ┌──────────────────────  pai_proactive_inbox (FIFO, kind=tick|user)  ──────────────────────┐
+  └──────────────────────────────────────────┬───────────────────────────────────────────────┘
+                                              │ try_process(user, thread)
+                                              ▼
+                    ┌─────────  _maybe_run → acquire_lease(pai_proactive_state)  ─────────┐
+                    │  WON ──► _process_loop:  refresh_lease → next_pending → _run_turn   │
+                    │                          → release_lease_if_empty                    │
+                    │  LOST ─► return (no-op; 另一实例/另一 owner 在跑)                     │
+                    └────────────────────────────────┬───────────────────────────────────┘
+                                                      │ _run_turn(item)  [可取消子任务]
+                                                      ▼
+              _execute_turn:  tick → 查 pai_timeline_events[last_tick_at, enqueued_at]
+                                       → _format_heartbeat → publish(proactive:tick)
+                              user → input_text = item.content
+                                       │
+                                       ▼  _stream_turn: POST {chat}/agent/proactive/run (Bearer run-JWT)
+                              ┌──────────────────  CHAT 进程  ──────────────────┐
+                              │  make_proactive_agent(create_deep_agent)         │
+                              │  astream_events → langgraph_to_sse               │
+                              └──────────────────────┬───────────────────────────┘
+                                       SSE 逐帧 ◄────┘
+                                       │ proactive_bus.publish(event)
+                                       ▼  pg_notify('pai_proactive_stream', sanitized)
+                    ┌──────  ProactiveBus LISTEN loop(每 web 实例一个)  ──────┐
+                    │  fan-out 到本实例的 subscriber 队列                       │
+                    └──────────────────────┬───────────────────────────────────┘
+                                           ▼  GET /api/proactive/stream (SSE)
+                                        [前端 useProactiveAgentRuntime]
+        turn 结束(tick 且未 notify):record_event(kind=silent) + advance_last_tick_at
+        turn 结束:mark_consumed(item)   ← consume-on-completion
+```
+
+**进程边界**:enqueue / loop / lease / cursor / bus / cancel 全在 **web**;LLM loop 在 **chat**;两者 HTTPS + HS256 run-JWT。
+
+**DB 表**(migrations 064/068-070/074-077):
+- `pai_proactive_inbox` — 统一 FIFO 队列,一条 = 一个 agent turn(tick marker content=NULL;user 带文本)。
+- `pai_proactive_state` — 每 (user, thread) 一行:per-user lease(`processing_lease_owner` / `_expires_at`) + 窗口游标 `last_tick_at`。
+- `pai_proactive_events` — 决策日志 / 投递账本:`silent`(心跳未触达,负样本语料) / `say` / `action`。
+- `pai_timeline_events` — proactive 读用户生活的事件存储(timeline_* 工具),与 `pai_personal_signals` 平行。
+
+---
+
+## 关键决策
+
+### 决策 1:per-user 单 lease 串行化(消除 tick 重叠)
+两个 web 实例、或一个 tick 还没跑完下一个 tick 又来,都不能让同一用户同时跑两个 turn。`pai_proactive_state` 的 lease 是**唯一**的串行原语:`acquire_lease` 用一条 `UPDATE ... WHERE owner IS NULL OR expired RETURNING` 原子抢占;`_process_loop` 每个 turn 顶部 `refresh_lease`(TTL 1200s,>chat 600s 读超时),被偷则停。`release_lease_if_empty` 用单条 SQL 关掉"队列空→释放"与"新 item 到达"的竞态。崩溃/取消 `_force_release`,不靠 TTL 等待。不同 thread(主 proactive vs 各 card)的 lease 独立,可并发。
+
+### 决策 2:consume-on-completion(poison-pill 保护 + 崩溃可恢复)
+`item.consumed_at` 只在 turn **返回后** 置位(`_run_turn` 的 `_consume`)。已处理的 turn 即使报错也 consume(防毒丸反复重放);只有硬崩溃留 pending,下个 lease 持有者 FIFO 重处理。
+
+### 决策 3:tick 窗口游标 `last_tick_at`(跳过/崩溃自愈,不重不漏)
+tick 的输入窗口是 `[last_tick_at, tick.enqueued_at]`,查 `pai_timeline_events` 按 **ingested_at**(到达时间,非 occurred_at)——这样刚连接的 connector 回填的旧事件、离线期间的积压都能到达 agent。turn 完成才 `advance_last_tick_at`(GREATEST 保护,不倒退):正常推到 `window_end`;命中 `_CATCHUP_LIMIT`(500) 则只推到 batch 最大 ingested_at,余量下个 tick 续抽。首连/回填的大批量靠 `_HEARTBEAT_CHAR_BUDGET`(36000)截断成"+N more",游标照常前进不重放。
+
+### 决策 4:静默优先(scarce resource = 用户注意力)
+心跳默认沉默,且沉默是**真实输出**不是失败。`notify_user` 必须同时满足 TIMELY + NON-OBVIOUS。system prompt(`_PROACTIVE_BASE`)给出"何时沉默 / 何时值得 push"的角色清单(loose-end / guardian / briefing / reduce-load / conflict / one-light-question)。per-turn `<this_turn>` directive 区分 user(内联回复) vs tick(默认沉默)。
+
+### 决策 5:跨进程 SSE / cancel 走 Postgres LISTEN/NOTIFY(不引 Redis)
+turn 可能跑在与服务 `/stream`、`/cancel` 不同的 web 实例。`ProactiveBus` 用 `pg_notify('pai_proactive_stream')` 广播 SSE 帧、每实例一个 LISTEN loop fan-out 到本地订阅队列。用户 Stop 走 `pg_notify('pai_proactive_cancel')`,只有持有 in-flight turn 的实例 `_cancel_local` 命中(其余 no-op)。NOTIFY 8000 字节限 → `_sanitize` 压缩信封(保留 notify_user 文本,丢其它工具 args,超大截断)。
+
+---
+
+## 组件
+
+- **组件 B — proactive loop drain**(`web/services/proactive_loop.py`):enqueue/try_process、lease、`_process_loop`、`_run_turn`(可取消 + consume)、`_execute_turn`(heartbeat 构建 + cursor 推进 + silent 记账)、`_stream_turn`(POST chat,relay SSE,检测 notify_user)。
+- **组件 C — bus**(`web/services/proactive_bus.py`):LISTEN/NOTIFY 中介 + `_sanitize`。
+- **组件 D — agent**(`chat/agents/proactive.py`):`make_proactive_agent` = `create_deep_agent` + Postgres checkpointer + `PROACTIVE_TOOLS`;`compose_proactive_prompt` 每 turn 注入 profile/goals + `<this_turn>` directive(cached prefix 稳定)。
+- **组件 E — 路由**:`web/routes/ui/proactive.py`(`/api/proactive/stream|send|cancel|history`)、`web/routes/agent/proactive.py`(`/emit`)、`chat/routes/proactive.py`(`/agent/proactive/run`,选 proactive vs card_execution agent)。
+- **组件 G — events 账本**(`pai_proactive_events`):silent 负样本语料 + say/action 投递追踪。完整轨迹在 checkpoint + LangSmith。
+
+---
+
+## deepagents 集成
+
+`make_proactive_agent` 走标准 `create_deep_agent`,**完整继承默认栈**:agent loop、默认 summarization(见 memory「deepagents 默认栈」,别重复传)、增量 checkpoint、tool calling、extended thinking(budget 8000,介于默认 5000 与 generator 10000)、streaming、prompt caching(靠稳定的 base+profile/goals prefix + 末尾才追加 `<this_turn>`)。
+
+工具集 `PROACTIVE_TOOLS` = `ALL_TOOLS` 去掉 signals_*/raw_* + `TIMELINE_TOOLS` + `notify_user`。覆盖 timeline / memory / world / cards / feedback / composio / tavily / browser / code-mode / preference·profile·goal 写入。
+
+**无 subagent**:proactive 是单连续 agent,不像 main_chat 在 crystallize/dream/evolve/generator 用 subagent。这是设计选择(一个 thread 承载用户的全部连续上下文),不是缺陷。若未来要"深度定制",候选方向:规划 subagent(长程任务拆解)、proactive 专用 middleware(心跳预算/触达频率硬控)。
+
+---
+
+## 验证
+
+端到端编排测试(`tests/web/services/test_proactive_loop_e2e.py`,真 DB + stub chat/bus):
+- silent tick → item consumed + 1 条 `silent` 账本 + cursor 前进 + lease 释放 + `proactive:tick` 发布;
+- tick 调了 notify_user → 无 `silent` 账本;
+- user message → drain 但不做 tick-only 记账;
+- FIFO 按入队序 drain 全部;
+- per-user lease 串行(第二个 runner 在 lease 持有时 no-op);
+- 窗口游标跨 tick 单调前进。
+
+需 `TEST_DATABASE_URL`(无则 skip,见 conftest)。单元层另有 `test_proactive_repo`(inbox/lease)、`test_proactive_bus`(sanitize)、`test_proactive_loop_cancel`(Stop 语义)、`test_proactive_heartbeat`(speaker 渲染)、`test_proactive`(prompt 注入)。
+
+**未覆盖(后续 e2e 缺口)**:前端 SSE 渲染、真实 chat worker 的 `/agent/proactive/run`、跨实例 cancel 的 NOTIFY 真实传播、card 线程模式(`card-thread-<id>` × card_execution agent × card_context 注入)、profile 偏好真实生效(verbosity 改变回复)。
+
+---
+
+## 踩坑
+
+1. **心跳靠手动 seed**:`scripts/seed_proactive_tick.py <user_id>` 建 `pai_scheduled_tasks` 行;不自动建,`make reset` 后消失(见 memory「proactive heartbeat seed」)。
+2. **多 worktree image stale**:动了 migrations(064/068-077)后,新 worktree 跑 DB 前必须 `make build-pinai-agents`,否则复用别 worktree 的旧 image,proactive 表建不出来报 `UndefinedTable`(见 memory「多 worktree docker image stale」)。
+3. **window_start 不可为 None**:`pai_proactive_state.last_tick_at` DEFAULT NOW() NOT NULL,`_ensure_state` 保证行存在,`_format_heartbeat` 才不会 `None.astimezone()`。
+4. **silent 只记 tick**:user turn 内联回复,不是 silent,不进账本(否则污染语料 + card 线程)。

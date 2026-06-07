@@ -56,7 +56,6 @@ from .routes.agent.skills import router as agent_skills_router
 from .routes.agent.timeline import router as agent_timeline_router
 from .routes.agent.world import router as agent_world_router
 from .routes.ui.account import router as ui_account_router
-from .routes.ui.agent_core_dev import router as ui_agent_core_dev_router
 from .routes.ui.agent_runs import router as ui_agent_runs_router
 from .routes.ui.ambient import router as ui_ambient_router
 from .routes.ui.browser import router as ui_browser_router
@@ -219,7 +218,6 @@ def create_app() -> FastAPI:
     app.include_router(ui_ambient_router)
     app.include_router(ui_account_router)
     app.include_router(ui_development_feedback_router)
-    app.include_router(ui_agent_core_dev_router)
 
     # ── /api/agent/* (sandbox / chat, EdDSA JWT) ──
     app.include_router(agent_memory_router)

@@ -115,15 +115,3 @@ class MailboxRepository(UserScopedRepository):
                 """,
                 (run_id, self._user_id, message_ids),
             )
-
-    async def has_pending(self, *, session_id: str) -> bool:
-        async with self._conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute(
-                """
-                SELECT 1 FROM pai_agent_messages
-                WHERE session_id = %s AND user_id = %s AND consumed_at IS NULL
-                LIMIT 1
-                """,
-                (session_id, self._user_id),
-            )
-            return (await cur.fetchone()) is not None
