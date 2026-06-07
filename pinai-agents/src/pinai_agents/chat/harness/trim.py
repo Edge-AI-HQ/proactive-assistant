@@ -27,6 +27,8 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, RemoveMessage
 
+from .checkpoint import get_checkpointer
+
 logger = logging.getLogger(__name__)
 
 
@@ -81,3 +83,29 @@ async def trim_thread(agent: Any, *, thread_id: str, keep_turns: int) -> int:
         keep_turns,
     )
     return len(ids)
+
+
+async def compact_thread(agent: Any, *, thread_id: str, background: bool) -> int:
+    """Collapse a thread's checkpoint history into a single fresh checkpoint.
+
+    `trim_thread` bounds the MESSAGE window but not the checkpoint ROW count:
+    LangGraph appends one checkpoint per super-step, so a never-ending thread
+    (the proactive heartbeat) grows them unbounded and every state read walks
+    the whole delta chain — the slow read that starved the connection pool on
+    2026-06-07. compact reads the current (already-trimmed) messages, deletes
+    the entire thread, then re-seeds those messages as one new checkpoint: the
+    row count resets while the working window is preserved.
+
+    Lossy on non-message channels (todo / filesystem / summary) — acceptable
+    for the proactive thread, whose durable memory lives in pai_memory /
+    pai_timeline_events, not the checkpoint. Best-effort; the caller guards it
+    behind a pending-interrupt check (never compact a paused HITL turn).
+    """
+    config = {"configurable": {"thread_id": thread_id}}
+    snapshot = await agent.aget_state(config)
+    messages = (snapshot.values or {}).get("messages", []) if snapshot else []
+    await get_checkpointer(background=background).adelete_thread(thread_id)
+    if messages:
+        await agent.aupdate_state(config, {"messages": messages})
+    logger.info("compacted thread=%s reseeded=%d", thread_id, len(messages))
+    return len(messages)

@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _CARD_THREAD_PREFIX = "card-thread-"
+_PROACTIVE_PREFIX = "proactive-"
 
 
 _TOOL_META_MAX = 300
@@ -91,7 +92,7 @@ class ExistsResponse(BaseModel):
 _READONLY_AGENTS: dict[str, Any] = {}
 
 
-def _readonly_agent(*, is_card: bool) -> Any:
+def _readonly_agent(*, kind: str) -> Any:
     # Deferred imports: pulling the agent factories (and through them the full
     # native-tool stack — e.g. tavily's module-level client) at module load
     # would saddle this route module with the entire agent/tool dependency
@@ -100,23 +101,28 @@ def _readonly_agent(*, is_card: bool) -> Any:
     # when actually reading state, where the full runtime env is present.
     from ...agents.card_execution import make_card_execution_agent
     from ...agents.main_chat import make_main_chat_agent
+    from ...agents.proactive import make_proactive_agent
     from ...tools.code_mode.local_sandbox import (
         create_local_sandbox_backend,
         local_chat_root_dir,
     )
 
-    kind = "card" if is_card else "main"
     agent = _READONLY_AGENTS.get(kind)
     if agent is None:
         backend = create_local_sandbox_backend(
             run_jwt="state-read",
             root_dir=local_chat_root_dir(f"__readonly_{kind}__"),
         )
-        agent = (
-            make_card_execution_agent(virtual_key="state-read", backend=backend)
-            if is_card
-            else make_main_chat_agent(virtual_key="state-read", backend=backend)
-        )
+        if kind == "card":
+            agent = make_card_execution_agent(virtual_key="state-read", backend=backend)
+        elif kind == "proactive":
+            # proactive state reads MUST go through the proactive agent so they
+            # use the isolated background checkpoint pool (build_agent
+            # background=True) — reading a huge proactive thread through the main
+            # agent would occupy the interactive pool and starve live chat.
+            agent = make_proactive_agent(virtual_key="state-read", backend=backend)
+        else:
+            agent = make_main_chat_agent(virtual_key="state-read", backend=backend)
         _READONLY_AGENTS[kind] = agent
     return agent
 
@@ -138,9 +144,14 @@ async def _get_thread_messages(session_key: str) -> list[Any]:
         # didn't run. Surface as 503 so the proxy knows to retry / report.
         raise HTTPException(status_code=503, detail=str(e)) from e
 
-    is_card = session_key.startswith(_CARD_THREAD_PREFIX)
+    if session_key.startswith(_CARD_THREAD_PREFIX):
+        kind = "card"
+    elif session_key.startswith(_PROACTIVE_PREFIX):
+        kind = "proactive"
+    else:
+        kind = "main"
     try:
-        agent = _readonly_agent(is_card=is_card)
+        agent = _readonly_agent(kind=kind)
         return await read_state_messages(agent, session_key)
     except Exception as e:
         logger.exception("state read failed session_key=%s", session_key)
