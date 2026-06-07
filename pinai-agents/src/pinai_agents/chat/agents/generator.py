@@ -744,11 +744,127 @@ _COMPOSIO_TO_PROMPT_SLUG: dict[str, str] = {
     "googledrive": "google_drive",
 }
 
+_PROMPT_CONNECTOR_SLUG_ALIASES: dict[str, str] = {
+    "gcal": "google_calendar",
+    "googlecalendar": "google_calendar",
+    "gdrive": "google_drive",
+    "googledrive": "google_drive",
+}
+
+_CONNECT_INTENT_PREFIX = "connect:"
+_CONNECTOR_REJECTION_OUTCOMES = {
+    "dismiss",
+    "snooze",
+    "negative",
+    "thumbs_down",
+}
+
 
 def _prompt_slug_for_toolkit(composio_slug: str | None) -> str | None:
     if not composio_slug:
         return None
     return _COMPOSIO_TO_PROMPT_SLUG.get(composio_slug, composio_slug)
+
+
+def _normalize_connector_prompt_slug(slug: str | None) -> str | None:
+    if not slug:
+        return None
+    value = slug.strip().lower()
+    if not value:
+        return None
+    return _PROMPT_CONNECTOR_SLUG_ALIASES.get(value, value)
+
+
+def _connector_slug_from_intent_key(intent_key: str | None) -> str | None:
+    if not intent_key:
+        return None
+    value = intent_key.strip().lower()
+    if not value.startswith(_CONNECT_INTENT_PREFIX):
+        return None
+    return _normalize_connector_prompt_slug(value[len(_CONNECT_INTENT_PREFIX) :])
+
+
+def _connector_intent_key(intent_key: str | None) -> str | None:
+    slug = _connector_slug_from_intent_key(intent_key)
+    return f"{_CONNECT_INTENT_PREFIX}{slug}" if slug else None
+
+
+def _feedback_outcome(row: dict[str, Any]) -> str:
+    return str(
+        row.get("action")
+        or row.get("outcome")
+        or row.get("latestOutcome")
+        or row.get("kind")
+        or ""
+    ).strip().lower()
+
+
+def _filter_connector_guidance_plan_items(
+    items: list[Any],
+    *,
+    compact_phase1: dict[str, Any],
+    existing_intent_keys: list[str] | None = None,
+) -> list[Any]:
+    """Enforce connector-card product limits outside the LLM prompt."""
+    active_toolkits: set[str] = set()
+    for conn in compact_phase1.get("connections_summary") or []:
+        if not isinstance(conn, dict):
+            continue
+        status = str(conn.get("status") or "ACTIVE").upper()
+        if status != "ACTIVE":
+            continue
+        slug = _normalize_connector_prompt_slug(str(conn.get("toolkit") or ""))
+        if slug:
+            active_toolkits.add(slug)
+
+    recent_connector_intents = {
+        normalized
+        for card in compact_phase1.get("cards_recent") or []
+        if isinstance(card, dict)
+        for normalized in [
+            _connector_intent_key(
+                card.get("intentKey") or card.get("intent_key")
+            )
+        ]
+        if normalized
+    }
+    rejected_connector_intents = {
+        normalized
+        for row in compact_phase1.get("feedback") or []
+        if isinstance(row, dict)
+        and _feedback_outcome(row) in _CONNECTOR_REJECTION_OUTCOMES
+        for normalized in [
+            _connector_intent_key(
+                row.get("intentKey") or row.get("intent_key")
+            )
+        ]
+        if normalized
+    }
+    connector_count = sum(
+        1
+        for key in existing_intent_keys or []
+        if _connector_slug_from_intent_key(str(key))
+    )
+
+    filtered: list[Any] = []
+    for item in items:
+        intent_key = str(getattr(item, "intent_key", "") or "")
+        slug = _connector_slug_from_intent_key(intent_key)
+        if not slug:
+            filtered.append(item)
+            continue
+
+        normalized_intent = f"{_CONNECT_INTENT_PREFIX}{slug}"
+        if (
+            slug in active_toolkits
+            or normalized_intent in recent_connector_intents
+            or normalized_intent in rejected_connector_intents
+            or connector_count >= 1
+        ):
+            continue
+        filtered.append(item)
+        connector_count += 1
+    return filtered
 
 
 def _compact_phase1_for_planner(
@@ -1314,7 +1430,10 @@ async def run_generator(
                     len(plan.plan),
                 )
 
-                plan_items = plan.plan[:candidate_count]
+                plan_items = _filter_connector_guidance_plan_items(
+                    plan.plan[:candidate_count],
+                    compact_phase1=compact_phase1,
+                )
                 if not plan_items:
                     result = {
                         "structured_response": GeneratorOutput(
@@ -1568,11 +1687,16 @@ async def run_generator(
                                         f"got {type(topup_plan).__name__}. run_id={run_id}."
                                     )
                                     raise ValueError(msg)
-                                topup_items = [
+                                raw_topup_items = [
                                     item
                                     for item in topup_plan.plan
                                     if str(getattr(item, "intent_key", "")) not in existing_intents
                                 ][:topup_count]
+                                topup_items = _filter_connector_guidance_plan_items(
+                                    raw_topup_items,
+                                    compact_phase1=compact_phase1,
+                                    existing_intent_keys=existing_intents,
+                                )[:topup_count]
                                 logger.info(
                                     "generator stage ok run_id=%s stage=%s items=%d",
                                     run_id,

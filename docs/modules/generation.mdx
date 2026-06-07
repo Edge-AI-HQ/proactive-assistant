@@ -139,6 +139,7 @@ run_generator()
 - route 只用 `overall >= 5` 的非 duplicate failed 卡补数;如果 evaluator 明确说 near-duplicate / novelty critically low,不会为了凑数进入最终卡流。
 - 如果当前数据里不足 8 张非重复、可通过 evaluator 的候选,最终响应允许少于 8 张;这是质量底线,不是 timeout/error。产品层要展示"本轮只找到 N 张高质量卡",不要把重复卡硬凑进去。
 - 如果 evaluator 把所有真实候选都判 fail,chat route 保留最高 `overall` 的 1 张候选,同时把 failed evaluation 保留做审计,避免整轮生成 502。
+- connector guidance(`intentKey="connect:<slug>"`)在 planner 后有确定性过滤:已 ACTIVE 的 toolkit 不再推,最近已出现或用户 dismiss/snooze 过的同 slug 不再推,并且初始规划 + top-up 合计每轮最多 1 张连接建议卡。
 - infra tombstone / error card 不允许进入卡流:空 `GeneratorOutput` 或只有 `ConnectError` / `_error` / `no-grounded-source-fallback` 的候选会变成失败 run,不会持久化为 `pai_pipeline_runs.final_cards`。
 - card id 在 web 侧重写:`f"{run_id}_card_{i:02d}"`(`chat/routes/generate.py:121`),evaluation 的 cardId 按 `intentKey` 匹配 + 重 map(`:130`)。
 

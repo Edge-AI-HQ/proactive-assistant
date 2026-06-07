@@ -204,6 +204,96 @@ def test_topup_phase1_uses_smaller_source_window():
     assert topup["profile"] == {"summary": "x"}
 
 
+def test_connector_guidance_filter_drops_active_recent_and_rejected_then_caps_to_one():
+    filter_items = getattr(generator_module, "_filter_connector_guidance_plan_items", None)
+    assert filter_items is not None
+
+    items = [
+        PlanItem(
+            intent_key="connect:gmail",
+            goal_basket="work",
+            decision="Connect Gmail.",
+            why_now_trigger="Email context would help.",
+        ),
+        PlanItem(
+            intent_key="connect:google_calendar",
+            goal_basket="work",
+            decision="Connect Calendar.",
+            why_now_trigger="Meeting context would help.",
+        ),
+        PlanItem(
+            intent_key="connect:youtube",
+            goal_basket="growth",
+            decision="Connect YouTube.",
+            why_now_trigger="Video context would help.",
+        ),
+        PlanItem(
+            intent_key="connect:slack",
+            goal_basket="work",
+            decision="Connect Slack.",
+            why_now_trigger="Slack context would help.",
+        ),
+        PlanItem(
+            intent_key="connect:stripe",
+            goal_basket="wealth",
+            decision="Connect Stripe.",
+            why_now_trigger="Revenue context would help.",
+        ),
+        PlanItem(
+            intent_key="regular-work-card",
+            goal_basket="work",
+            decision="Review the real work item.",
+            why_now_trigger="A real signal changed today.",
+        ),
+    ]
+    compact_phase1 = {
+        "connections_summary": [
+            {"toolkit": "gmail", "status": "ACTIVE"},
+        ],
+        "cards_recent": [
+            {"intentKey": "connect:google_calendar", "latestOutcome": None},
+        ],
+        "feedback": [
+            {"intentKey": "connect:youtube", "action": "dismiss"},
+        ],
+    }
+
+    filtered = filter_items(items, compact_phase1=compact_phase1)
+
+    assert [item.intent_key for item in filtered] == [
+        "connect:slack",
+        "regular-work-card",
+    ]
+
+
+def test_connector_guidance_filter_blocks_topup_when_one_already_exists():
+    filter_items = getattr(generator_module, "_filter_connector_guidance_plan_items", None)
+    assert filter_items is not None
+
+    items = [
+        PlanItem(
+            intent_key="connect:stripe",
+            goal_basket="wealth",
+            decision="Connect Stripe.",
+            why_now_trigger="Revenue context would help.",
+        ),
+        PlanItem(
+            intent_key="regular-wealth-card",
+            goal_basket="wealth",
+            decision="Review the revenue signal.",
+            why_now_trigger="A real source changed today.",
+        ),
+    ]
+
+    filtered = filter_items(
+        items,
+        compact_phase1={"connections_summary": [], "cards_recent": [], "feedback": []},
+        existing_intent_keys=["connect:slack"],
+    )
+
+    assert [item.intent_key for item in filtered] == ["regular-wealth-card"]
+
+
 def test_card_writer_content_uses_source_bundle_not_full_phase1():
     plan_item = PlanItem(
         intent_key="deploy-dev-failed",
