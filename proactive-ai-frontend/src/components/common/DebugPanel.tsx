@@ -18,9 +18,9 @@ import {
   formatOptionalComposioConnectionIdentity,
   formatComposioToolkitName,
 } from "@/lib/composioDisplayIdentity";
-import CrystallizePanel from "./CrystallizePanel";
-import SkillsPanel from "./SkillsPanel";
-import MemoriesPanel from "./MemoriesPanel";
+import CrystallizePanel from "@/components/common/CrystallizePanel";
+import SkillsPanel from "@/components/profile/SkillsPanel";
+import MemoriesPanel from "@/components/profile/MemoriesPanel";
 import type { RunState, PipelinePhase } from "@/hooks/usePipeline";
 import type { ComposioState } from "@/hooks/useComposio";
 

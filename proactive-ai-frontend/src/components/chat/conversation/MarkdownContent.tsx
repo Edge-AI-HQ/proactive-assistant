@@ -26,8 +26,8 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { Browser } from "@capacitor/browser";
 import { isNative } from "@/lib/platform";
-import CodeBlock from "./CodeBlock";
-import { ConnectChip } from "@/components/ConnectChip";
+import CodeBlock from "@/components/chat/conversation/CodeBlock";
+import { ConnectChip } from "@/components/connect/ConnectChip";
 
 interface MarkdownContentProps {
   text: string;

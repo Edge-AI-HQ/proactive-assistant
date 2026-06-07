@@ -1,6 +1,6 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import GoalsView from "./GoalsView";
+import GoalsView from "@/components/profile/GoalsView";
 import type { ComposioState } from "@/hooks/useComposio";
 import type { ReactNode } from "react";
 

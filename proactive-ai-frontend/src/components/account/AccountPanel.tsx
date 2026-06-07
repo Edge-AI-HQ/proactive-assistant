@@ -4,13 +4,13 @@ import {
   Sparkles, Check, Bell, SlidersHorizontal, Radio, ChevronRight, ArrowLeft,
   CreditCard, Calendar, AlertTriangle, Receipt,
 } from "lucide-react";
-import AutoDreamingSettings from "@/components/AutoDreamingSettings";
-import AutoGenerateSettings from "@/components/AutoGenerateSettings";
-import GenerationLanguageSettings from "@/components/GenerationLanguageSettings";
-import AmbientSourceControlsPanel from "@/components/AmbientSourceControlsPanel";
-import AmbientTimelineSummaryStatusPanel from "@/components/AmbientTimelineSummaryStatusPanel";
-import VoiceIdentitySettings from "@/components/VoiceIdentitySettings";
-import ProactiveSettings from "@/components/ProactiveSettings";
+import AutoDreamingSettings from "@/components/account/AutoDreamingSettings";
+import AutoGenerateSettings from "@/components/account/AutoGenerateSettings";
+import GenerationLanguageSettings from "@/components/account/GenerationLanguageSettings";
+import AmbientSourceControlsPanel from "@/components/ambient/AmbientSourceControlsPanel";
+import AmbientTimelineSummaryStatusPanel from "@/components/ambient/AmbientTimelineSummaryStatusPanel";
+import VoiceIdentitySettings from "@/components/account/VoiceIdentitySettings";
+import ProactiveSettings from "@/components/account/ProactiveSettings";
 import { isNative } from "@/lib/platform";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
 import { useUserSettings } from "@/hooks/useUserSettings";
@@ -22,13 +22,13 @@ import {
   type PlanCode, type SubscriptionState, type UsageInfo,
 } from "@/lib/api";
 import { PLANS } from "@/components/account/PlanPaymentForm";
-import SwipeBackLayer from "@/components/layout/SwipeBackLayer";
+import SwipeBackLayer from "@/components/app/SwipeBackLayer";
 
 // AmbientModelsPanel pulls in @pin/capacitor-ambient-ai which is
 // rollup-external for the web build, so it must be loaded lazily and
 // only mounted on native; the web bundle never references the bare
 // specifier this way.
-const AmbientModelsPanel = lazy(() => import("@/components/AmbientModelsPanel"));
+const AmbientModelsPanel = lazy(() => import("@/components/ambient/AmbientModelsPanel"));
 
 type SettingsSubPage =
   | "main"

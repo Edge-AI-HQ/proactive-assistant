@@ -48,9 +48,9 @@ import {
   LiveContentBuilder,
   type JsonValue,
   type ConversationContentPart,
-} from "./tool-steps";
-import { parseTodosFromArgs, setTodos, type Todo } from "./todos-store";
-import type { HitlRequiresAction } from "./HitlApprovalCard";
+} from "@/components/chat/conversation/tool-steps";
+import { parseTodosFromArgs, setTodos, type Todo } from "@/components/chat/conversation/todos-store";
+import type { HitlRequiresAction } from "@/components/chat/conversation/HitlApprovalCard";
 
 
 export type ConversationConnectionState =

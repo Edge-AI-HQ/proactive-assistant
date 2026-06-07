@@ -50,7 +50,7 @@ describe("VoiceIdentitySettings", () => {
   });
 
   test("shows an English daily read-aloud prompt without product naming", async () => {
-    const { default: VoiceIdentitySettings } = await import("./VoiceIdentitySettings");
+    const { default: VoiceIdentitySettings } = await import("@/components/account/VoiceIdentitySettings");
     render(<VoiceIdentitySettings />);
 
     expect(await screen.findByText(/This morning I checked my schedule/i)).toBeTruthy();
@@ -58,7 +58,7 @@ describe("VoiceIdentitySettings", () => {
   });
 
   test("keeps the enrollment status on one line", async () => {
-    const { default: VoiceIdentitySettings } = await import("./VoiceIdentitySettings");
+    const { default: VoiceIdentitySettings } = await import("@/components/account/VoiceIdentitySettings");
     render(<VoiceIdentitySettings />);
 
     const status = await screen.findByText("Not enrolled");
@@ -74,7 +74,7 @@ describe("VoiceIdentitySettings", () => {
       patch: vi.fn(),
     });
 
-    const { default: VoiceIdentitySettings } = await import("./VoiceIdentitySettings");
+    const { default: VoiceIdentitySettings } = await import("@/components/account/VoiceIdentitySettings");
     render(<VoiceIdentitySettings />);
 
     expect(await screen.findByText(/今天早上我整理了日程/)).toBeTruthy();
@@ -82,7 +82,7 @@ describe("VoiceIdentitySettings", () => {
   });
 
   test("renders no-profile state and rejects saving a short sample", async () => {
-    const { default: VoiceIdentitySettings } = await import("./VoiceIdentitySettings");
+    const { default: VoiceIdentitySettings } = await import("@/components/account/VoiceIdentitySettings");
     render(<VoiceIdentitySettings />);
 
     expect(await screen.findByText("Voice identity")).toBeTruthy();
@@ -99,7 +99,7 @@ describe("VoiceIdentitySettings", () => {
     const dateNow = vi.spyOn(Date, "now");
     let now = 1_000;
     dateNow.mockImplementation(() => now);
-    const { default: VoiceIdentitySettings } = await import("./VoiceIdentitySettings");
+    const { default: VoiceIdentitySettings } = await import("@/components/account/VoiceIdentitySettings");
     render(<VoiceIdentitySettings />);
 
     fireEvent.click(await screen.findByRole("button", { name: /Record self reference/i }));
@@ -137,7 +137,7 @@ describe("VoiceIdentitySettings", () => {
       referenceByteLen: 32000,
     });
 
-    const { default: VoiceIdentitySettings } = await import("./VoiceIdentitySettings");
+    const { default: VoiceIdentitySettings } = await import("@/components/account/VoiceIdentitySettings");
     render(<VoiceIdentitySettings />);
 
     fireEvent.click(await screen.findByRole("button", { name: /Enable voice identity/i }));

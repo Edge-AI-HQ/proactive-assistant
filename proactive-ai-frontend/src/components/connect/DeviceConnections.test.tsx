@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import DeviceConnections from "./DeviceConnections";
+import DeviceConnections from "@/components/connect/DeviceConnections";
 
 vi.mock("@/lib/api", () => ({
   claimPairCode: vi.fn(),

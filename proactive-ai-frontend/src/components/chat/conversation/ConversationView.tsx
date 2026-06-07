@@ -33,18 +33,18 @@ import bgGradient from "@/assets/bg-gradient.jpg";
 import { cn } from "@/lib/utils";
 import ChatToolGroup, {
   type ChatToolGroupItem,
-} from "./ChatToolGroup";
-import MarkdownContent from "./MarkdownContent";
-import { buildAssistantMessageFeedbackBody } from "./feedback";
+} from "@/components/chat/conversation/ChatToolGroup";
+import MarkdownContent from "@/components/chat/conversation/MarkdownContent";
+import { buildAssistantMessageFeedbackBody } from "@/components/chat/conversation/feedback";
 // The always-animated, iOS-tuned orb (constellation/AiSphere falls back to a
 // static gradient on native — wrong for the landing where the orb is the hero).
 import AiSphere from "@/components/AiSphere";
-import ReasoningBlock, { ShimmerText } from "./ReasoningBlock";
-import ProposeActionCard from "./ProposeActionCard";
-import { HitlApprovalCard, type HitlRequiresAction } from "./HitlApprovalCard";
-import TodoPanel from "./TodoPanel";
-import BrowserPanel from "../browser-view/BrowserPanel";
-import type { SheetStage } from "../browser-view/BrowserView";
+import ReasoningBlock, { ShimmerText } from "@/components/chat/conversation/ReasoningBlock";
+import ProposeActionCard from "@/components/chat/conversation/ProposeActionCard";
+import { HitlApprovalCard, type HitlRequiresAction } from "@/components/chat/conversation/HitlApprovalCard";
+import TodoPanel from "@/components/chat/conversation/TodoPanel";
+import BrowserPanel from "@/components/browser/BrowserPanel";
+import type { SheetStage } from "@/components/browser/BrowserView";
 import { useBrowserSession } from "@/hooks/useBrowserSession";
 import { useVoiceInput, Waveform, appendVoiceTranscript } from "@/components/voice";
 import {
@@ -52,8 +52,8 @@ import {
   type ConversationAssistantEntry,
   type ConversationEntry,
   type ConversationUserEntry,
-} from "./useConversationRuntime";
-import type { ConversationContentPart } from "./tool-steps";
+} from "@/components/chat/conversation/useConversationRuntime";
+import type { ConversationContentPart } from "@/components/chat/conversation/tool-steps";
 import { conversationInit, proxyPost } from "@/lib/api";
 
 interface ConversationViewProps {

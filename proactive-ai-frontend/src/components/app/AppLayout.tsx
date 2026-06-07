@@ -23,10 +23,10 @@ import ConnectPanel from "@/components/connect/ConnectPanel";
 import { type TimelineEntry as AmbientTimelineEntry } from "@/components/ambient/AmbientView";
 import { type ChatCard, brandSvg, detectToolIcon } from "@/components/chat/ChatDetailView";
 import { useCardExecutionRun } from "@/hooks/useCardExecutionRun";
-import CardChat from "@/components/CardChat";
+import CardChat from "@/components/chat/CardChat";
 import { deleteAccount, DeleteAccountError } from "@/lib/api";
-import DebugPanel from "@/components/DebugPanel";
-import AgentRunIndicator from "@/components/AgentRunIndicator";
+import DebugPanel from "@/components/common/DebugPanel";
+import AgentRunIndicator from "@/components/common/AgentRunIndicator";
 import { CardStateProvider } from "@/components/card/CardStateContext";
 import { useAuth } from "@/hooks/useAuth";
 import { useCardActions } from "@/hooks/useCardActions";
@@ -40,7 +40,7 @@ import { usePipeline } from "@/hooks/usePipeline";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { useWeather } from "@/hooks/useWeather";
-import { PreNotificationPrompt } from "@/components/PreNotificationPrompt";
+import { PreNotificationPrompt } from "@/components/common/PreNotificationPrompt";
 import { isNative } from "@/lib/platform";
 import type { GoalBasket, IntentCard } from "@/types/intent-card";
 import { useAmbientLiveSession } from "@/hooks/useAmbientLiveSession";
@@ -53,13 +53,13 @@ import {
   shouldIgnoreMainMenuSwipeTarget,
   type TouchPoint,
 } from "@/components/chat/mainChatEntryGesture";
-import { useAppNavigation, type MenuId } from "@/components/layout/useAppNavigation";
+import { useAppNavigation, type MenuId } from "@/components/app/useAppNavigation";
 import LiveOverlay from "@/components/ambient/LiveOverlay";
 import MainChatOverlay from "@/components/chat/MainChatOverlay";
-import SideMenu from "@/components/layout/SideMenu";
+import SideMenu from "@/components/app/SideMenu";
 import CardDetailDrawer from "@/components/card/CardDetailDrawer";
 import PaywallDrawer from "@/components/account/PaywallDrawer";
-import ViewRouter from "@/components/layout/ViewRouter";
+import ViewRouter from "@/components/app/ViewRouter";
 import {
   realCardToLovableIntent,
   type Intent,

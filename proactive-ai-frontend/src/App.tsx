@@ -1,8 +1,8 @@
 import { useEffect, useMemo } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
-import LoginPage from "@/components/LoginPage";
-import AppLayout from "@/components/layout/AppLayout";
+import LoginPage from "@/components/auth/LoginPage";
+import AppLayout from "@/components/app/AppLayout";
 import { VoiceProvider } from "@/components/voice";
 import OnboardingFlow from "@/components/onboarding/OnboardingFlow";
 import { isNative } from "@/lib/platform";

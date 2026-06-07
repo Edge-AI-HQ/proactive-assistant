@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 
-import BrowserView from "./BrowserView";
+import BrowserView from "@/components/browser/BrowserView";
 
 function renderBrowserView(overrides: Partial<Parameters<typeof BrowserView>[0]> = {}) {
   const props: Parameters<typeof BrowserView>[0] = {

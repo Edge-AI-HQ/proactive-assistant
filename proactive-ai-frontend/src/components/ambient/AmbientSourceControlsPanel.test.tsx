@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import AmbientSourceControlsPanel from "./AmbientSourceControlsPanel";
+import AmbientSourceControlsPanel from "@/components/ambient/AmbientSourceControlsPanel";
 
 const { patchMock, runtimeMock } = vi.hoisted(() => ({
   patchMock: vi.fn(),

@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { SplashScreen } from "@capacitor/splash-screen";
 import { StatusBar, Style } from "@capacitor/status-bar";
 import { isNative } from "./lib/platform";
-import ErrorBoundary from "./components/ErrorBoundary";
+import ErrorBoundary from "@/components/app/ErrorBoundary";
 import App from "./App";
 import "./index.css";
 

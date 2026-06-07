@@ -20,7 +20,7 @@
 import { useEffect, useState } from "react";
 import { Check, ChevronDown, Circle, Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useTodos, type Todo } from "./todos-store";
+import { useTodos, type Todo } from "@/components/chat/conversation/todos-store";
 
 interface TodoPanelProps {
   sessionKey: string;

@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronDown, ChevronUp, Smartphone } from "lucide-react";
-import DataConnections, { INPUT_CATEGORIES } from "./DataConnections";
-import DeviceConnections from "./DeviceConnections";
+import DataConnections, { INPUT_CATEGORIES } from "@/components/connect/DataConnections";
+import DeviceConnections from "@/components/connect/DeviceConnections";
 import { useUserDevices } from "@/hooks/useUserDevices";
 import type { ComposioState } from "@/hooks/useComposio";
 

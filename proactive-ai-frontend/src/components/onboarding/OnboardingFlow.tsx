@@ -1,8 +1,8 @@
 import { useCallback, useState } from "react";
 import { ChevronRight, Loader2 } from "lucide-react";
-import AmbientSourceControlsPanel from "@/components/AmbientSourceControlsPanel";
+import AmbientSourceControlsPanel from "@/components/ambient/AmbientSourceControlsPanel";
 import AmbientModelSetupStep from "./AmbientModelSetupStep";
-import DataConnections from "@/components/DataConnections";
+import DataConnections from "@/components/connect/DataConnections";
 import { useComposio } from "@/hooks/useComposio";
 import { isNative } from "@/lib/platform";
 

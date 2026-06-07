@@ -29,10 +29,10 @@ vi.mock("@/hooks/useAuth", () => ({
 vi.mock("@/hooks/useUserSettings", () => ({
   useUserSettings: () => useUserSettingsMock(),
 }));
-vi.mock("@/components/LoginPage", () => ({
+vi.mock("@/components/auth/LoginPage", () => ({
   default: () => <div>Login</div>,
 }));
-vi.mock("@/components/constellation/AppLayout", () => ({
+vi.mock("@/components/app/AppLayout", () => ({
   default: () => <div>Constellation</div>,
 }));
 vi.mock("@/services/ambient/lifecycle", () => ({

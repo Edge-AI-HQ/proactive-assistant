@@ -20,8 +20,8 @@ import {
   ChevronDown,
   ChevronUp,
 } from "lucide-react";
-import MarkdownContent from "./MarkdownContent";
-import { resolveToolPresentation } from "./tool-presentation";
+import MarkdownContent from "@/components/chat/conversation/MarkdownContent";
+import { resolveToolPresentation } from "@/components/chat/conversation/tool-presentation";
 
 export interface ChatToolGroupItem {
   toolCallId: string;

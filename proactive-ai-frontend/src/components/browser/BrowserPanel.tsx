@@ -13,7 +13,7 @@ import {
   useMotionValue,
   type PanInfo,
 } from "framer-motion";
-import BrowserView, { type SheetStage } from "./BrowserView";
+import BrowserView, { type SheetStage } from "@/components/browser/BrowserView";
 import { isNative } from "@/lib/platform";
 
 interface BrowserSession {

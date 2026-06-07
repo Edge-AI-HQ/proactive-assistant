@@ -84,8 +84,8 @@ describe("AppLayout menu order", () => {
     const nowViewSource = readFileSync(join(__dirname, "..", "now", "NowView.tsx"), "utf8");
     const ambientSource = readFileSync(join(__dirname, "..", "ambient", "AmbientView.tsx"), "utf8");
     const tasksSource = readFileSync(join(__dirname, "..", "ChatTimeline.tsx"), "utf8");
-    const connectSource = readFileSync(join(__dirname, "..", "ControlPanel.tsx"), "utf8");
-    const profileSource = readFileSync(join(__dirname, "..", "GoalsView.tsx"), "utf8");
+    const connectSource = readFileSync(join(__dirname, "..", "connect", "ControlPanel.tsx"), "utf8");
+    const profileSource = readFileSync(join(__dirname, "..", "profile", "GoalsView.tsx"), "utf8");
     const settingSource = readFileSync(join(__dirname, "..", "account", "AccountPanel.tsx"), "utf8");
     const platformSource = readFileSync(join(__dirname, "..", "..", "lib", "platform.ts"), "utf8");
 

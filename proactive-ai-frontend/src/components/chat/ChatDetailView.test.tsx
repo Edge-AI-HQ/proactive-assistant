@@ -86,7 +86,7 @@ vi.mock("@/hooks/useCardExecutionRun", () => ({
   useCardExecutionRun: vi.fn(),
 }));
 
-vi.mock("@/components/conversation/ConversationView", async () => {
+vi.mock("@/components/chat/conversation/ConversationView", async () => {
   const React = await import("react");
   return {
     default: (props: Record<string, unknown>) => {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { buildAssistantMessageFeedbackBody } from "./feedback";
+import { buildAssistantMessageFeedbackBody } from "@/components/chat/conversation/feedback";
 
 describe("assistant message feedback payload", () => {
   test("builds a thumbs-up event tagged with the conversation channel", () => {

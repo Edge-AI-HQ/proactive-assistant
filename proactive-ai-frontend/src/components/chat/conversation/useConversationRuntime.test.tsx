@@ -8,7 +8,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import type { ConversationContentPart } from "./tool-steps";
+import type { ConversationContentPart } from "@/components/chat/conversation/tool-steps";
 import type { ConversationHistoryPage, ConversationHistoryMessage } from "@/lib/api";
 
 // `@/lib/api` is mocked: history is the only thing tested here so the
@@ -35,7 +35,7 @@ import {
   partsHaveNotifyUser,
   useConversationRuntime,
   type ConversationAssistantEntry,
-} from "./useConversationRuntime";
+} from "@/components/chat/conversation/useConversationRuntime";
 
 const fetchHistoryMock = conversationHistory as unknown as ReturnType<
   typeof vi.fn

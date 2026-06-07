@@ -13,7 +13,7 @@ vi.mock("@/hooks/useUserDevices", () => ({
 vi.mock("@/hooks/useAmbientLiveSession", () => ({
   useAmbientLiveSession: () => ({ session: null, previewVisibleCount: 0, dismiss: vi.fn() }),
 }));
-vi.mock("@/components/AmbientSourceControlsPanel", () => ({ default: () => <div /> }));
+vi.mock("@/components/ambient/AmbientSourceControlsPanel", () => ({ default: () => <div /> }));
 vi.mock("./LiveSessionCard", () => ({ default: () => <div /> }));
 vi.mock("@/hooks/useAmbientTimeline", () => ({
   useAmbientTimeline: () => ({

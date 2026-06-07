@@ -1,6 +1,6 @@
 import { renderHook, act } from "@testing-library/react";
 import { beforeEach, describe, expect, test } from "vitest";
-import { useAppNavigation } from "@/components/layout/useAppNavigation";
+import { useAppNavigation } from "@/components/app/useAppNavigation";
 import type { IntentCard } from "@/types/intent-card";
 import type { LiveSession } from "@/services/ambient/live-session";
 

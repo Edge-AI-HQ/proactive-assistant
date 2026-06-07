@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import AmbientModelsPanel from "./AmbientModelsPanel";
+import AmbientModelsPanel from "@/components/ambient/AmbientModelsPanel";
 import { AmbientAi } from "@pin/capacitor-ambient-ai";
 
 interface ModelsMockControls {

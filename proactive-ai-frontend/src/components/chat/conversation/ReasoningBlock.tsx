@@ -25,7 +25,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronDown } from "lucide-react";
-import MarkdownContent from "./MarkdownContent";
+import MarkdownContent from "@/components/chat/conversation/MarkdownContent";
 
 interface Props {
   text: string;
