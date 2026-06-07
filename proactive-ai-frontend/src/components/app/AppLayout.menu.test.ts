@@ -37,8 +37,11 @@ describe("AppLayout menu order", () => {
   test("scopes the ASK PIN AI entry to the NOW view", () => {
     const source = readFileSync(join(__dirname, "AppLayout.tsx"), "utf8");
 
+    // Gated on the NOW view AND !inFullscreenChat: card execution keeps
+    // activeView "now" while chatTarget is set, so the extra guard stops the
+    // entry arrow from floating over the full-screen card conversation.
     expect(source).toMatch(
-      /\{activeView === "now" && \(\s*<button[\s\S]*aria-label="Open main chat"/,
+      /\{activeView === "now" && !inFullscreenChat && \(\s*<button[\s\S]*aria-label="Open main chat"/,
     );
   });
 
