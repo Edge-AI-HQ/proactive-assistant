@@ -35,8 +35,9 @@ from pydantic import BaseModel, Field
 
 from ...agents.card_execution import make_card_execution_agent
 from ...agents.main_chat import MAIN_CHAT_KEEP_TURNS, make_main_chat_agent
-from ...agents.proactive import make_proactive_agent
+from ...agents.proactive import PROACTIVE_MAX_CHECKPOINTS, make_proactive_agent
 from ...auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
+from ...harness.checkpoint import count_thread_checkpoints
 from ...harness.ctx import ClientHints, run_context
 from ...harness.session import (
     apply_message_updates,
@@ -45,7 +46,7 @@ from ...harness.session import (
     stream_events,
     thread_has_pending_interrupt,
 )
-from ...harness.trim import trim_thread
+from ...harness.trim import compact_thread, trim_thread
 from ...tools.code_mode.lazy_sandbox import LazyThreadSandbox
 from ...tools.code_mode.local_sandbox import (
     create_local_sandbox_backend,
@@ -497,9 +498,21 @@ async def _stream(
                         thread_id=req.session_key,
                         keep_turns=MAIN_CHAT_KEEP_TURNS,
                     )
+                    # Proactive is a never-ending thread: trim bounds its
+                    # message window but not its checkpoint ROW count, which
+                    # keeps growing every tick and slows reads. Once the history
+                    # is long enough, collapse it back to a single checkpoint.
+                    if req.session_key.startswith(_PROACTIVE_PREFIX):
+                        cp_count = await count_thread_checkpoints(req.session_key, background=True)
+                        if cp_count > PROACTIVE_MAX_CHECKPOINTS:
+                            await compact_thread(
+                                agent,
+                                thread_id=req.session_key,
+                                background=True,
+                            )
                 except Exception:
                     logger.exception(
-                        "context trim failed session_key=%s",
+                        "context trim/compact failed session_key=%s",
                         req.session_key,
                     )
         except BaseException as e:

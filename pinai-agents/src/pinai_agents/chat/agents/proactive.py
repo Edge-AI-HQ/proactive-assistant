@@ -40,6 +40,13 @@ logger = logging.getLogger(__name__)
 # Mid thinking budget: between the 5000 default and the generator's 10000.
 _PROACTIVE_THINKING_BUDGET = 8000
 
+# Compact the proactive thread's checkpoint history once it exceeds this many
+# rows. LangGraph appends one checkpoint per super-step on this never-ending
+# thread; `trim_thread` bounds the message window but not the row count, so
+# reads slow as the delta chain grows. Compaction collapses the history back to
+# a single checkpoint (harness/trim.compact_thread). ~80 rows ≈ a dozen ticks.
+PROACTIVE_MAX_CHECKPOINTS = 80
+
 # The proactive agent reads the user's life off the timeline event store
 # (timeline_* tools), NOT pai_personal_signals / pai_raw_* — those stay with
 # the main-chat agent. So its toolset is: every shared tool in ALL_TOOLS
@@ -390,4 +397,8 @@ def make_proactive_agent(
         tools=PROACTIVE_TOOLS,
         interrupt_on=HITL_INTERRUPT_ON,
         with_checkpointer=True,
+        # Isolated background checkpoint pool: the proactive thread's large,
+        # slow checkpoint reads must never starve the interactive (main/card)
+        # connection pool (root cause of the 2026-06-07 main-chat hang).
+        background=True,
     )

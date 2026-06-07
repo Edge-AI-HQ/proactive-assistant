@@ -1,13 +1,27 @@
 """LangGraph Postgres checkpointer.
 
-One process-wide AsyncConnectionPool + AsyncPostgresSaver, opened on FastAPI
-startup, closed on shutdown. The pool is configured with `search_path` set
-to a dedicated schema (default `langgraph`) so the saver's tables
-(`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations`)
-don't pollute `public` — keeping a clean separation from Step 2's `pai_*`
-tables and from existing Supabase identity/billing tables.
+TWO process-wide AsyncConnectionPools + AsyncPostgresSavers, opened on FastAPI
+startup, closed on shutdown:
 
-Lifecycle is owned by `main.lifespan` to guarantee a single pool per process.
+  * interactive — main + card chat. Larger share + a SHORT getconn timeout so a
+    starved interactive turn fails fast (the user sees an error) instead of
+    hanging until the worker's 600s read timeout.
+  * background — proactive heartbeat (+ future batch persistent threads). The
+    proactive thread's checkpoint history is large and slow to read
+    (`aget_delta_channel_history` walks the delta chain), so isolating it onto
+    its OWN pool means a slow proactive read can never occupy every connection
+    and starve interactive chat. This is the fix for the 2026-06-07 main-chat
+    hang: a single shared max_size=10 pool, proactive reads holding all 10
+    connections, interactive turns blocking forever in `pool.getconn()`.
+
+Both savers share the same `langgraph` schema (same tables); only their
+connection pools differ. The pool is configured with `search_path` set to a
+dedicated schema (default `langgraph`) so the saver's tables
+(`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations`)
+don't pollute `public`.
+
+Lifecycle is owned by `main.lifespan` to guarantee a single pool-pair per
+process.
 """
 
 from __future__ import annotations
@@ -27,10 +41,25 @@ settings = get_chat_settings()
 
 logger = logging.getLogger(__name__)
 
-# Module-scoped singletons. Initialized by `init_checkpointer()` during
-# FastAPI lifespan startup; closed by `close_checkpointer()` on shutdown.
-_pool: AsyncConnectionPool | None = None
-_checkpointer: AsyncPostgresSaver | None = None
+# Pool sizing. Interactive (main/card) gets the larger share + a short getconn
+# timeout so a starved turn fails fast instead of hanging. Background
+# (proactive) is smaller and more patient — a slow heartbeat read waiting for a
+# connection is fine; it's isolated and never blocks interactive chat.
+_INTERACTIVE_MAX_SIZE = 15
+_INTERACTIVE_TIMEOUT = 10.0
+_BACKGROUND_MAX_SIZE = 6
+_BACKGROUND_TIMEOUT = 30.0
+
+# Module-scoped singletons (one pair). Initialized by `init_checkpointer()`
+# during FastAPI lifespan startup; closed by `close_checkpointer()` on shutdown.
+_interactive_pool: AsyncConnectionPool | None = None
+_interactive_checkpointer: AsyncPostgresSaver | None = None
+_background_pool: AsyncConnectionPool | None = None
+_background_checkpointer: AsyncPostgresSaver | None = None
+
+
+def _is_safe_identifier(name: str) -> bool:
+    return bool(name) and all(c.isalnum() or c == "_" for c in name) and not name[0].isdigit()
 
 
 async def _ensure_schema(pool: AsyncConnectionPool, schema: str) -> None:
@@ -46,52 +75,30 @@ async def _ensure_schema(pool: AsyncConnectionPool, schema: str) -> None:
         await conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
 
 
-def _is_safe_identifier(name: str) -> bool:
-    return bool(name) and all(c.isalnum() or c == "_" for c in name) and not name[0].isdigit()
+async def _open_pool(*, max_size: int, timeout: float, options: str) -> AsyncConnectionPool:
+    """Open one connection pool with the shared stale-connection hardening.
 
-
-async def init_checkpointer() -> AsyncPostgresSaver:
-    """Open the pool, ensure schema, run AsyncPostgresSaver.setup().
-
-    Idempotent: returns the existing checkpointer on subsequent calls.
+    Stale-connection protection — three independent layers because
+    cloud-Postgres + idle-pool combinations can each fail differently:
+      1. TCP keepalive (kernel-level): probes start after 15s idle, socket
+         errored within ~30s of detecting a dead peer.
+      2. tcp_user_timeout: hard cap on outstanding TCP packets without ack —
+         any pool op on a dead socket bubbles up within 10s, not a multi-minute
+         hang.
+      3. max_idle=60: proactively recycle conns idle > 60s, shorter than the
+         typical fly-NAT idle window; min_size=0 avoids re-warming idle conns
+         that immediately re-stale.
+    `timeout` caps how long getconn waits for a free connection before raising
+    PoolTimeout — the fast-fail that stops a starved pool from hanging a turn.
+    `check=` is a final SELECT-1 borrow guard.
     """
-    global _pool, _checkpointer
-
-    if _checkpointer is not None:
-        return _checkpointer
-
-    if not settings.database_url:
-        msg = "DATABASE_URL is not set; LangGraph checkpointer disabled"
-        raise RuntimeError(msg)
-
-    schema = settings.langgraph_schema
-    if not _is_safe_identifier(schema):
-        msg = f"Unsafe LANGGRAPH_SCHEMA: {schema!r}"
-        raise ValueError(msg)
-
-    # search_path: <schema>,public ensures (a) AsyncPostgresSaver DDL targets
-    # our schema, (b) any built-in functions resolved via public still work.
-    options = f"-c search_path={schema},public"
-    # Stale-connection protection — three independent layers because
-    # cloud-Postgres + idle-pool combinations can each fail differently:
-    #   1. TCP keepalive (kernel-level): probes start after 15s idle,
-    #      socket errored within ~30s of detecting a dead peer. Without
-    #      this, a borrow that hits a NAT-killed socket hangs for the
-    #      full statement_timeout (10+ min) on Linux defaults.
-    #   2. tcp_user_timeout: hard cap on outstanding TCP packets without
-    #      ack. Any pool operation on a dead socket bubbles up as an
-    #      error within 10s instead of multi-minute hangs.
-    #   3. max_idle=60: proactively recycle conns idle > 60s, shorter
-    #      than the typical fly-NAT idle window (~90-300s) so we never
-    #      hand out stale handles in the first place. min_size=0 avoids
-    #      the pool re-warming idle conns that immediately re-stale.
-    # `check=` is kept as a final SELECT-1 borrow guard; under this
-    # config it almost never has anything to recover from.
-    _pool = AsyncConnectionPool(
+    assert settings.database_url
+    pool = AsyncConnectionPool(
         conninfo=settings.database_url,
         min_size=0,
-        max_size=10,
+        max_size=max_size,
         max_idle=60,
+        timeout=timeout,
         kwargs={
             "autocommit": True,
             "row_factory": dict_row,
@@ -106,39 +113,114 @@ async def init_checkpointer() -> AsyncPostgresSaver:
         check=AsyncConnectionPool.check_connection,
         open=False,
     )
-    await _pool.open()
-    await _ensure_schema(_pool, schema)
+    await pool.open()
+    return pool
 
-    # The pool is configured with row_factory=dict_row (kwargs above), so it
-    # yields dict rows at runtime — the type AsyncPostgresSaver requires. The
-    # pool type can't carry row_factory through, so assert it at this single
-    # boundary (mirrors web/db/rls.py).
-    _checkpointer = AsyncPostgresSaver(
-        cast("AsyncConnectionPool[AsyncConnection[DictRow]]", _pool),
+
+async def init_checkpointer() -> AsyncPostgresSaver:
+    """Open both pools, ensure schema, run AsyncPostgresSaver.setup() once.
+
+    Idempotent: returns the existing interactive checkpointer on subsequent
+    calls. Returns the interactive saver (the default main+card one).
+    """
+    global _interactive_pool, _interactive_checkpointer
+    global _background_pool, _background_checkpointer
+
+    if _interactive_checkpointer is not None:
+        return _interactive_checkpointer
+
+    if not settings.database_url:
+        msg = "DATABASE_URL is not set; LangGraph checkpointer disabled"
+        raise RuntimeError(msg)
+
+    schema = settings.langgraph_schema
+    if not _is_safe_identifier(schema):
+        msg = f"Unsafe LANGGRAPH_SCHEMA: {schema!r}"
+        raise ValueError(msg)
+
+    # search_path: <schema>,public ensures (a) AsyncPostgresSaver DDL targets
+    # our schema, (b) any built-in functions resolved via public still work.
+    options = f"-c search_path={schema},public"
+
+    # Interactive pool first: it owns schema creation + saver.setup() (the DDL
+    # that creates the shared checkpoint tables).
+    _interactive_pool = await _open_pool(
+        max_size=_INTERACTIVE_MAX_SIZE, timeout=_INTERACTIVE_TIMEOUT, options=options
     )
-    await _checkpointer.setup()
-    logger.info("langgraph checkpointer ready (schema=%s)", schema)
-    return _checkpointer
+    await _ensure_schema(_interactive_pool, schema)
+    # The pool yields dict rows (kwargs row_factory=dict_row) — the type
+    # AsyncPostgresSaver requires. The pool type can't carry row_factory
+    # through, so assert it at this single boundary (mirrors web/db/rls.py).
+    _interactive_checkpointer = AsyncPostgresSaver(
+        cast("AsyncConnectionPool[AsyncConnection[DictRow]]", _interactive_pool),
+    )
+    await _interactive_checkpointer.setup()
+
+    # Background pool: same schema/tables (created above), separate connections
+    # so a slow proactive checkpoint read can't starve interactive chat. No
+    # setup() — the tables already exist.
+    _background_pool = await _open_pool(
+        max_size=_BACKGROUND_MAX_SIZE, timeout=_BACKGROUND_TIMEOUT, options=options
+    )
+    _background_checkpointer = AsyncPostgresSaver(
+        cast("AsyncConnectionPool[AsyncConnection[DictRow]]", _background_pool),
+    )
+
+    logger.info(
+        "langgraph checkpointers ready (schema=%s interactive_max=%d background_max=%d)",
+        schema,
+        _INTERACTIVE_MAX_SIZE,
+        _BACKGROUND_MAX_SIZE,
+    )
+    return _interactive_checkpointer
 
 
 async def close_checkpointer() -> None:
-    """Close the pool. Called by FastAPI lifespan shutdown."""
-    global _pool, _checkpointer
-    if _pool is not None:
-        await _pool.close()
-        logger.info("langgraph checkpointer pool closed")
-    _pool = None
-    _checkpointer = None
+    """Close both pools. Called by FastAPI lifespan shutdown."""
+    global _interactive_pool, _interactive_checkpointer
+    global _background_pool, _background_checkpointer
+    for pool in (_interactive_pool, _background_pool):
+        if pool is not None:
+            await pool.close()
+    logger.info("langgraph checkpointer pools closed")
+    _interactive_pool = None
+    _interactive_checkpointer = None
+    _background_pool = None
+    _background_checkpointer = None
 
 
-def get_checkpointer() -> AsyncPostgresSaver:
-    """Return the running checkpointer. Raises if init_checkpointer() wasn't
-    called (i.e. the FastAPI lifespan didn't run, or DATABASE_URL is missing).
+def get_checkpointer(*, background: bool = False) -> AsyncPostgresSaver:
+    """Return the running checkpointer. `background=True` selects the isolated
+    proactive/batch pool; the default is the interactive (main/card) pool.
+
+    Raises if init_checkpointer() wasn't called (i.e. the FastAPI lifespan
+    didn't run, or DATABASE_URL is missing).
     """
-    if _checkpointer is None:
+    cp = _background_checkpointer if background else _interactive_checkpointer
+    if cp is None:
         msg = "Checkpointer not initialized; ensure FastAPI lifespan has run"
         raise RuntimeError(msg)
-    return _checkpointer
+    return cp
+
+
+async def count_thread_checkpoints(thread_id: str, *, background: bool = False) -> int:
+    """Count a thread's checkpoint rows — drives proactive history compaction.
+
+    Uses the matching pool; returns 0 if it isn't open. `search_path` already
+    points at the langgraph schema, so `checkpoints` is unqualified.
+    """
+    pool = _background_pool if background else _interactive_pool
+    if pool is None:
+        return 0
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT count(*) AS n FROM checkpoints WHERE thread_id = %s",
+            (thread_id,),
+        )
+        row = await cur.fetchone()
+    # Pool yields dict rows (kwargs row_factory=dict_row); the pool type can't
+    # carry that through, so cast at this boundary (mirrors the saver cast above).
+    return int(cast("dict[str, Any]", row)["n"]) if row else 0
 
 
 @asynccontextmanager

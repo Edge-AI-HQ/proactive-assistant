@@ -38,6 +38,7 @@ def build_agent(
     subagents: list[SubAgent] | None = None,
     interrupt_on: dict[str, Any] | None = None,
     with_checkpointer: bool = False,
+    background: bool = False,
 ) -> Any:
     """Wrap `create_deep_agent` with the business spec.
 
@@ -60,7 +61,10 @@ def build_agent(
     if interrupt_on:
         kwargs["interrupt_on"] = interrupt_on
     if with_checkpointer:
-        kwargs["checkpointer"] = get_checkpointer()
+        # `background=True` routes proactive (+ future batch) persistent threads
+        # onto the isolated background checkpoint pool so their large/slow
+        # checkpoint reads never starve the interactive (main/card) pool.
+        kwargs["checkpointer"] = get_checkpointer(background=background)
     return create_deep_agent(
         model=model,
         system_prompt=system_prompt,
