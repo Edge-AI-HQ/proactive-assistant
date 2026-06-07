@@ -4,7 +4,7 @@ import {
   DEVICE_TIMELINE_QUICK_FILTERS,
   formatLocalDateInput,
   getDeviceTimelineDateRange,
-} from "./deviceTimelineFilters";
+} from "./device-timeline-filters";
 
 describe("device timeline date filters", () => {
   test("all days does not constrain the query", () => {

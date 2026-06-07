@@ -17,7 +17,7 @@ import { buildConnectorInitTaskId } from "@/hooks/useComposio";
 import {
   formatOptionalComposioConnectionIdentity,
   formatComposioToolkitName,
-} from "@/lib/composioDisplayIdentity";
+} from "@/lib/composio-display-identity";
 import CrystallizePanel from "@/components/common/CrystallizePanel";
 import SkillsPanel from "@/components/profile/SkillsPanel";
 import MemoriesPanel from "@/components/profile/MemoriesPanel";

@@ -14,7 +14,7 @@
 - 所有请求通过 `lib/api.ts` 封装，不在组件里直接 fetch。流式用 `proxySSE`。
 
 ## 导入与命名
-- 用 `@/*` 别名。组件 PascalCase，hooks `use` 前缀 camelCase，工具 camelCase。
+- 用 `@/*` 别名。文件名分三类：组件 / class 文件 PascalCase（文件名 = 组件名 / 类名），hooks `use` 前缀 camelCase（文件名 = hook 名），其余工具 `.ts` 用 kebab-case（跨 OS 大小写安全，社区主流）。
 
 ## 平台
 - 原生能力通过 Capacitor API，环境判断用 `lib/platform.ts`。

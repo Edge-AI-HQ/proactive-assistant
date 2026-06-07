@@ -14,8 +14,8 @@ const userSettingsMock = vi.hoisted(() => ({
   useUserSettings: vi.fn(),
 }));
 
-vi.mock("@/services/voiceIdentityApi", () => voiceApiMock);
-vi.mock("@/components/voice/pcmRecorder", () => recorderMock);
+vi.mock("@/services/voice-identity-api", () => voiceApiMock);
+vi.mock("@/components/voice/pcm-recorder", () => recorderMock);
 vi.mock("@/hooks/useUserSettings", () => userSettingsMock);
 
 describe("VoiceIdentitySettings", () => {

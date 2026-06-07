@@ -5,7 +5,7 @@ import {
   formatOptionalComposioConnectionIdentity,
   formatComposioToolkitName,
   resolveComposioConnectionIdentity,
-} from "./composioDisplayIdentity";
+} from "./composio-display-identity";
 
 describe("composio display identity", () => {
   test("extracts Gmail profile emailAddress", () => {

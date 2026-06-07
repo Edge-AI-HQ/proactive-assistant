@@ -1,7 +1,7 @@
 import { motion } from "framer-motion";
 import { Radio } from "lucide-react";
 import Sphere3DCards from "@/components/now/Sphere3DCards";
-import { CATEGORIES, type Intent } from "@/components/now/cardModel";
+import { CATEGORIES, type Intent } from "@/components/now/card-model";
 import type { WeatherData } from "@/hooks/useWeather";
 
 interface NowViewProps {

@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   X, Zap, ListChecks, Settings, Radio, Plug, Target, Sparkles,
 } from "lucide-react";
-import { isMainMenuSwipeRight, type TouchPoint } from "@/components/chat/mainChatEntryGesture";
+import { isMainMenuSwipeRight, type TouchPoint } from "@/components/chat/main-chat-entry-gesture";
 import type { MenuId } from "@/components/app/useAppNavigation";
 import type { ChatCard } from "@/components/chat/ChatDetailView";
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Mic, RotateCcw, Square, Trash2 } from "lucide-react";
-import { createPcmRecorder, type PcmRecorder } from "@/components/voice/pcmRecorder";
+import { createPcmRecorder, type PcmRecorder } from "@/components/voice/pcm-recorder";
 import { acquireExternalMic, type ExternalMicLease } from "@/services/ambient/external-mic";
 import {
   deleteVoiceIdentityReference,
@@ -8,7 +8,7 @@ import {
   setVoiceIdentityEnabled,
   uploadVoiceIdentityReference,
   type VoiceIdentityProfile,
-} from "@/services/voiceIdentityApi";
+} from "@/services/voice-identity-api";
 import { useUserSettings } from "@/hooks/useUserSettings";
 
 const TARGET_DURATION_MS = 5_000;

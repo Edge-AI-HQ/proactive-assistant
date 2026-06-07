@@ -26,7 +26,7 @@ import {
 import type { ComposioState, Connection } from "@/hooks/useComposio";
 import { buildConnectorInitTaskId } from "@/hooks/useComposio";
 import { useInitTask, isInitTaskFresh } from "@/hooks/useInitTask";
-import { resolveComposioConnectionIdentity } from "@/lib/composioDisplayIdentity";
+import { resolveComposioConnectionIdentity } from "@/lib/composio-display-identity";
 import { openOAuthAndAwaitClose } from "@/lib/oauth-popup";
 
 /**

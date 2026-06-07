@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 
 describe("encodeWav", () => {
   test("writes a mono PCM WAV blob", async () => {
-    const { encodeWavForTest } = await import("./pcmRecorder");
+    const { encodeWavForTest } = await import("./pcm-recorder");
     const blob = encodeWavForTest([new Float32Array([0, 0.5, -0.5])], 16_000);
     const bytes = new Uint8Array(await readBlob(blob));
 

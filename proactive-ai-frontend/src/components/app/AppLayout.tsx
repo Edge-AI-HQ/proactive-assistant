@@ -51,7 +51,7 @@ import {
   isMainMenuSwipeLeft,
   shouldIgnoreMainMenuSwipeTarget,
   type TouchPoint,
-} from "@/components/chat/mainChatEntryGesture";
+} from "@/components/chat/main-chat-entry-gesture";
 import { useAppNavigation, type MenuId } from "@/components/app/useAppNavigation";
 import LiveOverlay from "@/components/ambient/LiveOverlay";
 import MainChatOverlay from "@/components/chat/MainChatOverlay";
@@ -63,7 +63,7 @@ import {
   realCardToLovableIntent,
   type Intent,
   type CardStatus,
-} from "@/components/now/cardModel";
+} from "@/components/now/card-model";
 
 
 const CONSTELLATION_HEADER_TOP =

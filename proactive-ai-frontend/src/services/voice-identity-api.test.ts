@@ -33,7 +33,7 @@ describe("voiceIdentityApi", () => {
       },
     }));
 
-    const { fetchVoiceIdentity } = await import("./voiceIdentityApi");
+    const { fetchVoiceIdentity } = await import("./voice-identity-api");
     const profile = await fetchVoiceIdentity();
 
     expect(proxyFetchMock).toHaveBeenCalledWith("/voice/identity", undefined);
@@ -44,7 +44,7 @@ describe("voiceIdentityApi", () => {
     proxyFetchMock.mockResolvedValue(jsonResponse({ ok: true, profile: null }));
     const audio = new Blob([new Uint8Array([1, 2, 3])], { type: "audio/wav" });
 
-    const { uploadVoiceIdentityReference } = await import("./voiceIdentityApi");
+    const { uploadVoiceIdentityReference } = await import("./voice-identity-api");
     await uploadVoiceIdentityReference(audio, 5000);
 
     expect(proxyFetchMock).toHaveBeenCalledWith("/voice/identity/reference", {
@@ -63,7 +63,7 @@ describe("voiceIdentityApi", () => {
     const {
       setVoiceIdentityEnabled,
       deleteVoiceIdentityReference,
-    } = await import("./voiceIdentityApi");
+    } = await import("./voice-identity-api");
     await setVoiceIdentityEnabled(false);
     await deleteVoiceIdentityReference();
 
@@ -92,7 +92,7 @@ describe("voiceIdentityApi", () => {
     }));
     const audio = new Blob([new Uint8Array([1])], { type: "audio/wav" });
 
-    const { transcribeVoiceAudioDiarized } = await import("./voiceIdentityApi");
+    const { transcribeVoiceAudioDiarized } = await import("./voice-identity-api");
     const result = await transcribeVoiceAudioDiarized(audio, { language: "en" });
 
     expect(result.selfText).toBe("Self text");

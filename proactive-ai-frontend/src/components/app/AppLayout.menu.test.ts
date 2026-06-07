@@ -7,7 +7,7 @@ import {
   isMainMenuSwipeLeft,
   isMainMenuSwipeRight,
   shouldIgnoreMainMenuSwipeTarget,
-} from "@/components/chat/mainChatEntryGesture";
+} from "@/components/chat/main-chat-entry-gesture";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 

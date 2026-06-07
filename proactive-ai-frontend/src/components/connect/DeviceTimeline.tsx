@@ -13,7 +13,7 @@ import {
   formatLocalDateInput,
   getDeviceTimelineDateRange,
   type DeviceTimelineDayFilter,
-} from "@/lib/deviceTimelineFilters";
+} from "@/lib/device-timeline-filters";
 
 const PAGE_SIZE = 10;
 

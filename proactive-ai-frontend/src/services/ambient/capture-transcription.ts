@@ -2,13 +2,13 @@ import {
   AmbientAi,
   type CaptureReadyEvent,
 } from "@pin/capacitor-ambient-ai";
-import { transcribeVoiceAudio } from "@/components/voice/transcriptionApi";
+import { transcribeVoiceAudio } from "@/components/voice/transcription-api";
 import {
   fetchVoiceIdentity,
   transcribeVoiceAudioDiarized,
   type DiarizationStatus,
   type SpeakerSegment,
-} from "@/services/voiceIdentityApi";
+} from "@/services/voice-identity-api";
 
 export interface CaptureTranscriptionResult {
   text: string;

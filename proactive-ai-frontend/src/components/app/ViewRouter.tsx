@@ -8,7 +8,7 @@ import SwipeBackLayer from "@/components/app/SwipeBackLayer";
 import RealGoalsView from "@/components/profile/GoalsView";
 import RealControlPanel from "@/components/connect/ControlPanel";
 import CardTimeline from "@/components/tasks/CardTimeline";
-import { realIntentToChatCard, type Intent } from "@/components/now/cardModel";
+import { realIntentToChatCard, type Intent } from "@/components/now/card-model";
 import type { CardActions } from "@/components/card/CardStateContext";
 import type { MenuId, SettingsSubPage } from "@/components/app/useAppNavigation";
 import type { WeatherData } from "@/hooks/useWeather";

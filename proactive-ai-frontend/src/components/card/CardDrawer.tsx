@@ -6,7 +6,7 @@ import {
   DrawerDescription,
 } from "@/components/ui/drawer";
 import CardDrawerContent from "@/components/card/CardDrawerContent";
-import type { Intent } from "@/components/now/cardModel";
+import type { Intent } from "@/components/now/card-model";
 
 interface CardDrawerProps {
   open: boolean;
