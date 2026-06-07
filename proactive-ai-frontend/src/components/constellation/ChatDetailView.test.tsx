@@ -65,7 +65,6 @@ vi.mock("../browser-view/BrowserPanel", () => ({
 
 vi.mock("./CardDrawerDetail", () => ({
   DrawerDetailBody: () => null,
-  executeArtifactToLovable: () => [],
 }));
 
 vi.mock("@/hooks/useBrowserSession", () => ({
@@ -78,29 +77,25 @@ vi.mock("@/hooks/useBrowserSession", () => ({
   }),
 }));
 
-const mockUseCardExecutionRun = vi.fn();
-const mockUseProactiveChatRuntime = vi.fn();
-const mockMainChatView = vi.fn();
+const mockConversationView = vi.fn();
 
+// ChatDetailView imports only TYPES from useCardExecutionRun (the live view
+// renders ConversationView, not the legacy run hook). Stub the module so the
+// import resolves without pulling the real hook into the test.
 vi.mock("@/hooks/useCardExecutionRun", () => ({
-  useCardExecutionRun: (...args: unknown[]) => mockUseCardExecutionRun(...args),
+  useCardExecutionRun: vi.fn(),
 }));
 
-vi.mock("@/components/chat/useProactiveChatRuntime", () => ({
-  useProactiveChatRuntime: (...args: unknown[]) =>
-    mockUseProactiveChatRuntime(...args),
-}));
-
-vi.mock("@/components/main-chat/MainChatView", async () => {
+vi.mock("@/components/conversation/ConversationView", async () => {
   const React = await import("react");
   return {
     default: (props: Record<string, unknown>) => {
-      mockMainChatView(props);
+      mockConversationView(props);
       return React.createElement(
         "div",
         {
-          "data-testid": "main-chat-view",
-          "data-session-key": String(props.sessionKey ?? ""),
+          "data-testid": "conversation-view",
+          "data-session-key": String(props.session ?? ""),
           "data-title": String(props.title ?? ""),
         },
         props.headerSlot as ReactNode,
@@ -119,42 +114,9 @@ const card: ChatCard = {
   line2: "Sources: Gmail",
 };
 
-function makeRun(status: "done" | "error" = "done") {
-  return {
-    snapshot: {
-      status,
-      pendingInput: null,
-      events: [],
-      result: { summary: "Finished." },
-    },
-    events: [
-      {
-        type: "result",
-        data: { summary: "Finished." },
-        ts: Date.now(),
-      },
-    ],
-    loading: false,
-    error: null,
-    reply: vi.fn(),
-    cancel: vi.fn(),
-    retry: vi.fn(async () => "run-1"),
-    refresh: vi.fn(),
-    confirmDone: vi.fn(),
-    continueWith: vi.fn(),
-    lastMessagePayload: null,
-    messageCount: 0,
-  };
-}
-
 describe("ChatDetailView", () => {
-  test("renders card chat through the shared MainChatView runtime", () => {
+  test("renders card chat through the unified ConversationView", () => {
     const onBack = vi.fn();
-    mockUseCardExecutionRun.mockReturnValue(makeRun("done"));
-    mockUseProactiveChatRuntime.mockReturnValue({
-      runtime: { thread: {} },
-      historyLoaded: true,
-    });
 
     render(
       <ChatDetailView
@@ -165,28 +127,23 @@ describe("ChatDetailView", () => {
       />,
     );
 
-    expect(screen.getByTestId("main-chat-view")).toBeTruthy();
-    expect(screen.getByTestId("main-chat-view").dataset.sessionKey).toBe(
+    expect(screen.getByTestId("conversation-view")).toBeTruthy();
+    expect(screen.getByTestId("conversation-view").dataset.sessionKey).toBe(
       "card-thread-run-1",
     );
-    expect(screen.getByTestId("main-chat-view").dataset.title).toBe(
+    expect(screen.getByTestId("conversation-view").dataset.title).toBe(
       "Done card",
     );
-    expect(mockUseProactiveChatRuntime).toHaveBeenCalledWith({
-      sessionKey: "card-thread-run-1",
-      cardContext: expect.objectContaining({
-        title: "Done card",
-        summary: "Generated from signal.",
-      }),
-      bootstrapMessage: "Approve this card",
-    });
-    expect(mockMainChatView).toHaveBeenCalledWith(
+    expect(mockConversationView).toHaveBeenCalledWith(
       expect.objectContaining({
-        historyLoaded: true,
-        onBack,
-        renderProposeActionAsText: true,
-        sessionKey: "card-thread-run-1",
+        session: "card-thread-run-1",
         title: "Done card",
+        bootstrap: "Approve this card",
+        onBack,
+        cardContext: expect.objectContaining({
+          title: "Done card",
+          summary: "Generated from signal.",
+        }),
       }),
     );
     expect(screen.getByRole("button", { name: "View card details" })).toBeTruthy();

@@ -1,31 +1,34 @@
 import type { IntentCard, EvaluationScore } from "@/types/intent-card";
 import { useMemo } from "react";
-import MainChatView from "./main-chat/MainChatView";
-import { useProactiveChatRuntime } from "./chat/useProactiveChatRuntime";
+import ConversationView from "./conversation/ConversationView";
 
 interface CardChatProps {
   card: IntentCard;
   score?: EvaluationScore | null;
   onBack: () => void;
   /**
-   * Non-empty → adapter auto-fires this as the user's first turn on
-   * mount. Set by the "Confirm" button path (typically the card's
-   * primaryAction text). The "Chat" button leaves this undefined →
-   * empty thread waits for user to type. Empty bootstrap is rejected
-   * by the backend's strict ChatSendRequest schema, so the FE simply
-   * never auto-fires when the field is absent.
+   * Non-empty → ConversationView auto-fires this as the user's first turn on
+   * mount (the "Confirm" path, typically the card's primaryAction text). The
+   * "Chat" button leaves this undefined → empty thread waits for the user.
    */
   bootstrapMessage?: string;
 }
 
-// Backend (`pinai-agents/.../chat/routes/chat.py`) detects card-mode chats by
-// `_CARD_THREAD_PREFIX = "card-thread-"`. Threads matching this prefix get the
-// card-aware system prompt + card_context tooling; anything else falls through
-// to main-chat. Card IDs are globally unique, so no per-user suffix is needed.
+// Backend (`pinai-agents/.../chat/transport/routes/chat.py`) detects card-mode
+// chats by `_CARD_THREAD_PREFIX = "card-thread-"`. Threads matching this prefix
+// get the card-aware system prompt + card_context tooling. Card IDs are globally
+// unique, so no per-user suffix is needed.
 function stableSessionKey(cardId: string): string {
   return `card-thread-${cardId}`;
 }
 
+/**
+ * Card chat — RC-5: now a thin wrapper over the unified `ConversationView`
+ * (the actor-kernel conversation UI), keyed by the card-thread session. The
+ * card JSON rides in as `cardContext` (injected server-side as a
+ * <card_context> SystemMessage on the first turn) and the card metadata fills
+ * the header. Replaces the old conversation runtime path.
+ */
 export default function CardChat({ card, score, onBack, bootstrapMessage }: CardChatProps) {
   const cardContext = useMemo(
     () => ({
@@ -50,27 +53,14 @@ export default function CardChat({ card, score, onBack, bootstrapMessage }: Card
     [card, score],
   );
 
-  const sessionKey = stableSessionKey(card.id);
-  const { runtime, historyLoaded } = useProactiveChatRuntime({
-    sessionKey,
-    cardContext,
-    bootstrapMessage,
-  });
-
   return (
-    <MainChatView
-      sessionKey={sessionKey}
-      runtime={runtime}
-      historyLoaded={historyLoaded}
-      title={card.title}
-      subtitle="Chat about this card"
+    <ConversationView
+      session={stableSessionKey(card.id)}
+      cardContext={cardContext}
+      bootstrap={bootstrapMessage}
       onBack={onBack}
-      // Card chats bootstrap with an agent-authored first message, so the
-      // profile-prompt empty state from Main Chat isn't applicable here.
-      // `null` suppresses it entirely; ThreadPrimitive shows nothing while
-      // the bootstrap SSE stream is producing the first assistant turn.
-      emptyState={null}
-      renderProposeActionAsText
+      title={card.title}
+      placeholder="Tell PIN AI what to change about this card…"
       headerSlot={
         <div className="px-4 pt-3 pb-1">
           <div className="glass-card px-3 py-2 text-[12px] text-foreground/60 leading-relaxed">

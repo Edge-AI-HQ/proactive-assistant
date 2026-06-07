@@ -71,6 +71,7 @@ const NAME_MAP: Record<string, ToolPresentation> = {
   sessions_spawn: { Icon: UserCog, verb: "Spawned agent" },
   subagents: { Icon: Bot, verb: "Delegated to agent" },
   write_todos: { Icon: List, verb: "Updated plan" },
+  notify_user: { Icon: MessageSquare, verb: "Messaged you" },
 };
 
 // Prefix-based fallback for Composio tools. Order matters: more specific

@@ -1,11 +1,11 @@
 /**
  * ProposeActionCard — renders the card-execution agent's structured
- * pause UI inside the chat thread.
+ * pause UI inside the conversation thread.
  *
  * Wire shape: the agent calls the `propose_action` tool with a typed
  * payload (message + drafts + options + plan + dangerous_actions +
- * risks). assistant-ui surfaces the raw args to this component via
- * its `ToolCallMessagePartComponent` slot. We render:
+ * risks). The conversation runtime surfaces the raw tool args to this
+ * component (ConversationView's assistant turn). We render:
  *
  *   - The agent's chat message at the top
  *   - A collapsible "Generated draft" card per artifact in `drafts`
@@ -13,17 +13,14 @@
  *     `options`) + permanent free-text input + Continue button.
  *
  * User reply path: tapping a chip or typing into the input + Continue
- * appends a normal `{role:"user", content:[{type:"text", text}]}`
- * message via assistant-ui's threadRuntime. That's the same path
- * `ChatComposer` uses for typed input — the agent receives the reply
- * as a HumanMessage on its next turn.
+ * calls `onReply` (the runtime's sendMessage) — the agent receives the
+ * reply as a HumanMessage on its next turn.
  *
  * Plan / dangerous_actions / risks fields are intentionally NOT
  * rendered in this chat-thread card — they're audit metadata for the
  * home drawer's pre-review view, which reads them out of the same
- * tool-call args via /api/chat-stream/history. Keeping the chat
- * scrollback focused on conversation (message + drafts + reply) keeps
- * the surface readable.
+ * tool-call args. Keeping the conversation scrollback focused on
+ * (message + drafts + reply) keeps the surface readable.
  */
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -36,8 +33,6 @@ import {
   Mail,
   MessageSquare,
 } from "lucide-react";
-import { useThreadRuntime } from "@assistant-ui/react";
-import { useAuiState } from "@assistant-ui/store";
 import { VoiceButton } from "@/components/voice";
 import { cn } from "@/lib/utils";
 
@@ -60,7 +55,7 @@ interface ProposeActionArgs {
   risks?: unknown;
 }
 
-/** Tolerantly project the assistant-ui tool-args blob into the shape
+/** Tolerantly project the conversation runtime's tool-args blob into the shape
  *  we expect.
  *
  *  Wire layout: the runtime's snapshot args dict carries string
@@ -164,39 +159,54 @@ function DraftItem({ artifact, index }: { artifact: ProposeActionArtifact; index
   );
 }
 
-interface ProposeActionCardProps {
+export default function ProposeActionCard({
+  args,
+  onReply,
+  busy,
+}: {
   args: unknown;
-}
-
-export default function ProposeActionCard({ args }: ProposeActionCardProps) {
+  /** Enqueue the user's reply — the conversation runtime's sendMessage. */
+  onReply: (text: string) => void | Promise<void>;
+  /** True while a turn is streaming on this thread — disables Continue. */
+  busy: boolean;
+}) {
   const parsed = parseArgs(args);
-  const threadRuntime = useThreadRuntime();
-  const isRunning = useAuiState((s) => s.thread.isRunning);
 
   const [inputValue, setInputValue] = useState("");
   const [selectedOption, setSelectedOption] = useState(0);
+  const [submitting, setSubmitting] = useState(false);
+  // Once the user replies to THIS pause, lock the panel: re-replying to an
+  // already-answered propose_action makes no sense and would double-send in
+  // the window between the POST returning and the next turn streaming.
+  const [sent, setSent] = useState(false);
 
-  // Reset selection when the agent's question changes — keyed off the
-  // message text so each fresh propose_action gets a clean default.
+  // Reset when the agent's question changes — keyed off the message text so
+  // each fresh propose_action gets a clean, un-sent default.
   useEffect(() => {
     setSelectedOption(0);
     setInputValue("");
+    setSent(false);
   }, [parsed?.message]);
 
   if (!parsed) return null;
 
   const options = parsed.options ?? [];
   const drafts = parsed.drafts ?? [];
+  const isRunning = busy || submitting;
+  const locked = isRunning || sent;
 
   const submitReply = async () => {
     const typed = inputValue.trim();
     const replyText = typed || options[selectedOption] || "";
-    if (!replyText || isRunning) return;
+    if (!replyText || locked) return;
     setInputValue("");
-    await threadRuntime.append({
-      role: "user",
-      content: [{ type: "text", text: replyText }],
-    });
+    setSubmitting(true);
+    try {
+      await onReply(replyText);
+      setSent(true);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   // The chip+input panel always renders interactive. While the thread
@@ -251,11 +261,12 @@ export default function ProposeActionCard({ args }: ProposeActionCardProps) {
                 <button
                   key={i}
                   type="button"
+                  disabled={locked}
                   onClick={() => {
                     setSelectedOption(i);
                     if (inputValue) setInputValue("");
                   }}
-                  className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-left text-[13px] border"
+                  className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-left text-[13px] border disabled:cursor-not-allowed"
                   style={{
                     background: isSelected
                       ? "hsl(0 0% 0% / 0.04)"
@@ -308,11 +319,13 @@ export default function ProposeActionCard({ args }: ProposeActionCardProps) {
               }
             }}
             placeholder={
-              options.length > 0
-                ? "Or type your own reply..."
-                : "Type your reply..."
+              sent
+                ? "Reply sent"
+                : options.length > 0
+                  ? "Or type your own reply..."
+                  : "Type your reply..."
             }
-            disabled={isRunning}
+            disabled={locked}
             className="flex-1 bg-transparent text-[13px] text-foreground placeholder:text-foreground/35 outline-none disabled:opacity-50"
           />
           <VoiceButton prefill={inputValue} onUpdate={setInputValue} />
@@ -322,12 +335,16 @@ export default function ProposeActionCard({ args }: ProposeActionCardProps) {
           type="button"
           onClick={() => void submitReply()}
           disabled={
-            isRunning
+            locked
             || (options.length === 0 && !inputValue.trim())
           }
           className="mt-3 w-full px-4 py-2.5 rounded-xl bg-foreground text-background text-[13px] font-semibold hover:bg-foreground/85 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
         >
-          {isRunning ? (
+          {sent ? (
+            <>
+              <Check size={13} strokeWidth={2.5} /> Sent
+            </>
+          ) : isRunning ? (
             <>
               <Loader2 size={13} className="animate-spin" /> Sending…
             </>

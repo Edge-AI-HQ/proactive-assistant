@@ -19,6 +19,7 @@ const SETTINGS: UserSettings = {
   autoGenerateIntervalMinutes: 60,
   autoDreaming: false,
   autoCrystallize: false,
+  proactiveIntervalSeconds: 300,
   metadata: {},
   ambientSources: {},
   notifyNewCards: true,

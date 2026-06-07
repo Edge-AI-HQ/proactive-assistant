@@ -217,7 +217,7 @@ export default function MinimalistLanding({
           </div>
         </div>
 
-        {/* Composer — capsule glass card matching MainChatView's restyled
+        {/* Composer — capsule glass card matching ConversationView's restyled
             composer. Floats above the keyboard via absolute bottom:--kb-height
             WITHOUT moving the landing body: at rest (--kb-height 0) it sits at
             the screen bottom exactly as before; when the keyboard opens it rides

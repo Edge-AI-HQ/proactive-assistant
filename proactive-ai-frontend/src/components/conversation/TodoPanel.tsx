@@ -2,7 +2,7 @@
  * Collapsible plan panel rendered above the chat composer.
  *
  * Reads from the module-level todos-store, keyed by sessionKey. When the
- * agent calls `write_todos`, useProactiveChatRuntime's SSE handler writes
+ * agent calls `write_todos`, useConversationRuntime's SSE handler writes
  * the full plan into the store; this panel subscribes via useSyncExternalStore
  * and re-renders. Read-only — users can't edit, only the agent can.
  *
@@ -20,7 +20,7 @@
 import { useEffect, useState } from "react";
 import { Check, ChevronDown, Circle, Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useTodos, type Todo } from "../chat/todos-store";
+import { useTodos, type Todo } from "./todos-store";
 
 interface TodoPanelProps {
   sessionKey: string;

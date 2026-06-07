@@ -9,7 +9,7 @@
  *
  * `propose_action` is handled separately by ProposeActionCard (HITL
  * pause panel) and never reaches this component — AssistantMessage in
- * MainChatView flushes the group buffer before rendering it.
+ * ConversationView flushes the group buffer before rendering it.
  */
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -26,7 +26,7 @@ import { resolveToolPresentation } from "./tool-presentation";
 export interface ChatToolGroupItem {
   toolCallId: string;
   toolName: string;
-  /** Subset of ProactiveToolCallSnapshotArgs we actually read in the UI. */
+  /** Subset of ToolCallSnapshotArgs we actually read in the UI. */
   args: {
     status?: string;
     meta?: string;

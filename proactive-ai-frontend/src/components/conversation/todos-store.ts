@@ -2,13 +2,13 @@
  * Module-level store for `write_todos` plans, keyed by chat sessionKey.
  *
  * The chat agent's `write_todos` tool emits a structured `args.todos` array
- * on `chat:tool:start`. We capture it here so MainChatView's TodoPanel can
- * subscribe without prop-drilling through the assistant-ui runtime.
+ * on `chat:tool:start`. We capture it here so ConversationView's TodoPanel can
+ * subscribe without prop-drilling through the conversation runtime.
  *
  * Module-level (not React context) because:
- *   - Writer (SSE adapter inside useProactiveChatRuntime) and reader
+ *   - Writer (SSE adapter inside useConversationRuntime) and reader
  *     (TodoPanel) live in different parts of the tree; a context provider
- *     would need to wrap both, which means lifting state to MainChatView
+ *     would need to wrap both, which means lifting state to ConversationView
  *     and threading it through ChatRuntimeScope just for this.
  *   - The data is per-session, never global; the Map keyed by sessionKey
  *     gives the same isolation a per-thread context would.

@@ -1,163 +1,88 @@
 import { useCallback, useEffect, useState } from "react";
-import { proxyPost } from "@/lib/api";
-import { useProactiveChatRuntime } from "./chat/useProactiveChatRuntime";
-import MainChatView from "./main-chat/MainChatView";
-import MinimalistLanding from "./main-chat/MinimalistLanding";
+import { conversationInit } from "@/lib/api";
+import ConversationView from "./conversation/ConversationView";
+import MinimalistLanding from "./conversation/MinimalistLanding";
 
 interface MainChatProps {
   onBack: () => void;
-  /** Set when main chat is opened FROM a specific card (give feedback on
-   *  that card). Carried on the opening turn so the backend injects it as
-   *  <card_context> and any preference the agent writes records the card
-   *  as evidence. Undefined for the normal "Ask PIN AI" entry. */
+  /** Set when main chat is opened FROM a specific card (give feedback on that
+   *  card). Carried on the opening turn so the backend injects it as
+   *  <card_context>. Undefined for the normal "Ask PIN AI" entry. */
   cardContext?: Record<string, unknown>;
 }
 
 type ViewMode = "landing" | "conversation";
 
 /**
- * Main-Chat router. Two views over the user's singleton main thread:
+ * Main-Chat router — RC-5: the conversation surface is now the unified
+ * `ConversationView` (actor-kernel push UI), keyed by the user's main-chat
+ * singleton thread. The MinimalistLanding orb stays the empty-state entry;
+ * sending from it transitions into the conversation (carried as `bootstrap`,
+ * which ConversationView auto-fires once the thread is ready). Replaces the
+ * old conversation runtime path.
  *
- *   - MinimalistLanding (sphere + greeting + chips + composer)
- *   - MainChatView (the conversation transcript)
- *
- * Landing is always the entry. Tapping a chip / sending from the
- * composer transitions into the conversation; backing out from the
- * conversation closes Main Chat and returns to the app's Now surface.
- * The thread is a singleton per user (enforced server-side, see
- * migration 053) — conversation history accumulates and is never split
- * or rotated.
- *
- * Both views stay mounted while sessionKey is known; visibility is
- * toggled via CSS so the in-flight SSE survives the landing →
- * conversation transition.
+ * The thread is a singleton per user (migration 053) — history accumulates and
+ * is never split. Both surfaces stay mounted (CSS toggle) so the in-flight
+ * stream survives the landing → conversation transition.
  */
-export default function MainChat({
-  onBack,
-  cardContext,
-}: MainChatProps) {
+export default function MainChat({ onBack, cardContext }: MainChatProps) {
   const [sessionKey, setSessionKey] = useState<string | null>(null);
+  const [view, setView] = useState<ViewMode>(cardContext ? "conversation" : "landing");
+  const [bootstrap, setBootstrap] = useState<string | undefined>(undefined);
 
-  // Fetch the user's main thread once on mount. Backend returns the
-  // singleton — created lazily if the user has none yet.
+  // Resolve the user's singleton main thread once on mount. A thread that
+  // already has history lands directly in the conversation; a fresh thread
+  // shows the orb landing (the empty-state entry).
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const res = await proxyPost("/chat-stream/init", {});
-        if (!res.ok) return;
-        const data = (await res.json()) as { sessionKey?: string };
-        if (!cancelled && data.sessionKey) {
-          setSessionKey(data.sessionKey);
-        }
+        const r = await conversationInit({ kind: "main" });
+        if (cancelled) return;
+        setSessionKey(r.sessionKey);
+        if (r.existing && !cardContext) setView("conversation");
       } catch {
-        // Transient — the next mount retries. Caller (ConstellationLayout)
-        // owns retry-by-reopen via the ASK PIN AI button.
+        // Transient — the caller's ASK PIN AI button retries by reopening.
       }
     })();
     return () => {
       cancelled = true;
     };
+  }, [cardContext]);
+
+  const handleSubmitFromLanding = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setBootstrap(trimmed);
+    setView("conversation");
   }, []);
 
-  // Brief transparent placeholder while /init resolves the singleton key
-  // (now an O(1) latest_id lookup, typically <100ms). A transparent fill
-  // (not null) keeps the layout from collapsing; the parent's fade-in
-  // covers the gap.
-  if (sessionKey === null) return <div className="absolute inset-0" aria-hidden />;
-  return (
-    <MainChatScope
-      sessionKey={sessionKey}
-      onBack={onBack}
-      cardContext={cardContext}
-    />
-  );
-}
-
-/**
- * Holds the assistant-ui runtime + view toggle once sessionKey is known.
- * Split out so the hook is only called with a real key (no placeholder
- * runtime). Both Landing and MainChatView share this runtime so the
- * Landing's submit can append directly into the same thread without
- * any bootstrap-message indirection.
- */
-function MainChatScope({
-  sessionKey,
-  onBack,
-  cardContext,
-}: {
-  sessionKey: string;
-  onBack: () => void;
-  cardContext?: Record<string, unknown>;
-}) {
-  const { runtime, historyLoaded, hasHistory } = useProactiveChatRuntime({
-    sessionKey,
-    cardContext,
-    // MainChat already did /init to get this singleton key, so the hook's
-    // own /init would be a duplicate round-trip on the open-chat hot path.
-    skipInit: true,
-  });
-  const [view, setView] = useState<ViewMode>(cardContext ? "conversation" : "landing");
   const cardTitle = typeof cardContext?.title === "string" ? cardContext.title : undefined;
 
-  // Re-entering a thread that already has history should land directly in the
-  // conversation, not on the orb landing. The orb is the empty-state surface
-  // for a fresh thread; once history loads we skip past it.
-  useEffect(() => {
-    if (hasHistory) setView("conversation");
-  }, [hasHistory]);
-
-  const handleSubmitFromLanding = useCallback(
-    (text: string) => {
-      const trimmed = text.trim();
-      if (!trimmed) return;
-      setView("conversation");
-      void runtime.thread.append({
-        role: "user",
-        content: [{ type: "text", text: trimmed }],
-        // Stamp the real send time so this bubble keeps its own timestamp.
-        // Without it assistant-ui lazily fills createdAt with new Date() and
-        // re-stamps every user bubble to "now" on each subsequent send.
-        createdAt: new Date(),
-      });
-    },
-    [runtime],
-  );
-
-  const handleConversationBack = useCallback(() => {
-    onBack();
-  }, [onBack]);
-
-  // Show the orb landing only after history has loaded and confirmed the
-  // thread is empty — never mid-load, so it can't flash before the transcript
-  // appears on re-entry. (Until then both surfaces stay hidden: a brief blank,
-  // the same pattern as the sessionKey `return null` above.)
-  const showLanding = view === "landing" && historyLoaded;
+  // Brief transparent placeholder while the singleton key resolves (O(1)
+  // latest_id lookup, typically <100ms); the parent's fade-in covers the gap.
+  if (sessionKey === null) return <div className="absolute inset-0" aria-hidden />;
 
   return (
     <>
       <div
         className="absolute inset-0"
-        style={{ display: showLanding ? "block" : "none" }}
-        aria-hidden={!showLanding}
+        style={{ display: view === "landing" ? "block" : "none" }}
+        aria-hidden={view !== "landing"}
       >
-        <MinimalistLanding
-          onBack={onBack}
-          onSubmit={handleSubmitFromLanding}
-          disabled={!historyLoaded}
-        />
+        <MinimalistLanding onBack={onBack} onSubmit={handleSubmitFromLanding} disabled={false} />
       </div>
       <div
         className="absolute inset-0"
         style={{ display: view === "conversation" ? "block" : "none" }}
         aria-hidden={view !== "conversation"}
       >
-        <MainChatView
-          sessionKey={sessionKey}
-          runtime={runtime}
-          historyLoaded={historyLoaded}
-          onBack={handleConversationBack}
-          inputPlaceholder={
+        <ConversationView
+          session={sessionKey}
+          cardContext={cardContext}
+          bootstrap={bootstrap}
+          onBack={onBack}
+          placeholder={
             cardContext ? "Tell PIN AI what to change about this card…" : undefined
           }
           headerSlot={
@@ -170,7 +95,7 @@ function MainChatScope({
                   {cardTitle ? <span> · {cardTitle}</span> : null}
                 </div>
               </div>
-            ) : null
+            ) : undefined
           }
         />
       </div>

@@ -113,7 +113,7 @@ export default function ReasoningBlock({
  * Claude-style shimmer label — a subtle gradient sweeps across the text
  * to convey "in progress" without an icon or spinner.
  *
- * Exported so the very-first-token-pending state in MainChatView's
+ * Exported so the very-first-token-pending state in ConversationView's
  * AssistantMessage can reuse the same visual.
  */
 export function ShimmerText({ children }: { children: ReactNode }) {

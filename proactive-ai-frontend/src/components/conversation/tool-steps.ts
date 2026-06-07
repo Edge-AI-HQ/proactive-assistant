@@ -1,7 +1,7 @@
 /**
- * Pure helpers for turning proactive-ai SSE events into assistant-ui
- * ChatModelRunResult content parts. Kept separate from the runtime hook so it
- * can be unit-tested without pulling the React / assistant-ui tree.
+ * Pure helpers for turning proactive-ai SSE events into the conversation
+ * runtime's content parts. Kept separate from the runtime hook so it
+ * can be unit-tested without pulling the React tree.
  *
  * Live events arrive interleaved: text deltas, tool-call starts, tool-call
  * results. `LiveContentBuilder` maintains an ordered parts list so the UI
@@ -9,10 +9,9 @@
  * agent produced them (matching the reload path in chat-history-merge.ts).
  */
 
-/** JSON value type — matches what assistant-ui's `ReadonlyJSONObject`
- *  accepts. Used for the structured `input` payload so the tool-call
- *  part's args stay JSON-compatible end-to-end (backend sends JSON;
- *  assistant-ui's ToolCallMessagePart args are typed as JSON object). */
+/** JSON value type. Used for the structured `input` payload so the tool-call
+ *  part's args stay JSON-compatible end-to-end (backend sends JSON; the
+ *  conversation runtime's tool-call part args are typed as JSON object). */
 export type JsonValue =
   | string
   | number
@@ -21,7 +20,7 @@ export type JsonValue =
   | JsonValue[]
   | { [k: string]: JsonValue };
 
-export interface ProactiveToolCallArgs {
+export interface ToolCallArgs {
   meta?: string;
   argsPreview?: string;
   pinCommand?: string;
@@ -35,19 +34,18 @@ export interface ProactiveToolCallArgs {
   input?: JsonValue;
 }
 
-/** Per-tool-call args dict surfaced to assistant-ui's
- *  ToolCallMessagePartComponent. Always JSON-serializable end-to-end
- *  so assistant-ui's `ReadonlyJSONObject` constraint is satisfied. */
-export type ProactiveToolCallSnapshotArgs = { [k: string]: JsonValue };
+/** Per-tool-call args dict surfaced to the conversation runtime's
+ *  tool-call part renderer. Always JSON-serializable end-to-end. */
+export type ToolCallSnapshotArgs = { [k: string]: JsonValue };
 
-export type ProactiveContentPart =
+export type ConversationContentPart =
   | { type: "text"; text: string }
   | { type: "reasoning"; text: string }
   | {
       type: "tool-call";
       toolCallId: string;
       toolName: string;
-      args: ProactiveToolCallSnapshotArgs;
+      args: ToolCallSnapshotArgs;
       argsText: string;
       result?: { ok: boolean };
       isError?: boolean;
@@ -73,8 +71,8 @@ interface ToolComplete {
   meta?: string;
 }
 
-function buildArgs(args: ProactiveToolCallArgs): ProactiveToolCallSnapshotArgs {
-  const out: ProactiveToolCallSnapshotArgs = { status: args.status };
+function buildArgs(args: ToolCallArgs): ToolCallSnapshotArgs {
+  const out: ToolCallSnapshotArgs = { status: args.status };
   if (args.meta) out.meta = args.meta;
   if (args.argsPreview) out.argsPreview = args.argsPreview;
   if (args.pinCommand) out.pinCommand = args.pinCommand;
@@ -82,7 +80,7 @@ function buildArgs(args: ProactiveToolCallArgs): ProactiveToolCallSnapshotArgs {
   return out;
 }
 
-function toolPart(args: ProactiveToolCallArgs & { toolCallId: string; toolName: string }): ProactiveContentPart {
+function toolPart(args: ToolCallArgs & { toolCallId: string; toolName: string }): ConversationContentPart {
   const snapshotArgs = buildArgs({
     status: args.status,
     meta: args.meta,
@@ -90,7 +88,7 @@ function toolPart(args: ProactiveToolCallArgs & { toolCallId: string; toolName: 
     pinCommand: args.pinCommand,
     input: args.input,
   });
-  const part: ProactiveContentPart = {
+  const part: ConversationContentPart = {
     type: "tool-call",
     toolCallId: args.toolCallId,
     toolName: args.toolName,
@@ -118,7 +116,7 @@ function toolPart(args: ProactiveToolCallArgs & { toolCallId: string; toolName: 
  *     disturbing order or the open cursors.
  */
 export class LiveContentBuilder {
-  private readonly parts: ProactiveContentPart[] = [];
+  private readonly parts: ConversationContentPart[] = [];
   /** Index of the text part currently open for append; -1 when none. */
   private openTextIdx = -1;
   /** Index of the reasoning part currently open for append; -1 when none. */
@@ -178,7 +176,7 @@ export class LiveContentBuilder {
     const slot = this.parts[idx];
     if (slot.type !== "tool-call") return;
     const status = update.isError ? "error" : "ok";
-    const nextArgs: ProactiveToolCallSnapshotArgs = { ...slot.args, status };
+    const nextArgs: ToolCallSnapshotArgs = { ...slot.args, status };
     if (update.meta && !nextArgs.meta) nextArgs.meta = update.meta;
     this.parts[idx] = {
       ...slot,
@@ -189,34 +187,9 @@ export class LiveContentBuilder {
     };
   }
 
-  /** Return a shallow-frozen copy for assistant-ui to render. */
-  snapshot(): ProactiveContentPart[] {
+  /** Return a shallow copy of the ordered parts for the view to render. */
+  snapshot(): ConversationContentPart[] {
     return this.parts.slice();
-  }
-
-  /**
-   * Replace the entire text content while keeping tool and reasoning
-   * parts. Used for `chat:reply` finalization events that resend the full
-   * assistant text — reasoning was streamed separately and must stay.
-   */
-  replaceText(fullText: string): void {
-    const kept = this.parts.filter(
-      (p) => p.type === "tool-call" || p.type === "reasoning",
-    );
-    this.parts.length = 0;
-    this.toolIndex.clear();
-    this.openTextIdx = -1;
-    this.openReasoningIdx = -1;
-    for (const part of kept) {
-      if (part.type === "tool-call") {
-        this.toolIndex.set(part.toolCallId, this.parts.length);
-      }
-      this.parts.push(part);
-    }
-    if (fullText) {
-      this.parts.push({ type: "text", text: fullText });
-      this.openTextIdx = this.parts.length - 1;
-    }
   }
 
   isEmpty(): boolean {
