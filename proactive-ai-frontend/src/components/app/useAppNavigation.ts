@@ -85,7 +85,11 @@ export function useAppNavigation(): AppNavigation {
     setActiveChat(null);
     setChatTarget(null);
     setMenuOpen(false);
-  }, [setActiveView]);
+    // Re-enter Setting at its top level: a stale sub-page (e.g. Ambient) must
+    // not resurface when navigating into Setting from another view. Harmless
+    // for non-account targets since the sub-page only renders under "account".
+    setSettingsSubPage("main");
+  }, [setActiveView, setSettingsSubPage]);
 
   const recordChatEntryView = useCallback(() => {
     chatEntryView.current = activeView;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, animate, motion, useMotionValue, type PanInfo } from "framer-motion";
 import {
   ArrowRightCircle,
   Briefcase,
@@ -365,6 +365,15 @@ const PROFILE_GROUP_META: Array<{
   { key: "preferences", title: "Preferences", description: "How you prefer the assistant to behave." },
   { key: "constraints", title: "Constraints", description: "Rules and boundaries the assistant should honor." },
 ];
+
+// Top-level Profile tabs, in display order. A horizontal swipe across the page
+// body steps between them (left swipe → next, right swipe → previous).
+const TOP_TABS = ["identity", "goals"] as const;
+/** Fraction of the viewport width a horizontal drag must cross — or the
+ *  velocity it must exceed — to settle on the next/previous tab on release
+ *  instead of springing back to the current one. */
+const TAB_COMMIT_FRACTION = 0.3;
+const TAB_COMMIT_VELOCITY_PX_S = 300;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1664,6 +1673,13 @@ export default function GoalsView({ composio }: GoalsViewProps) {
   const genericCountLoadingRef = useRef<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<"identity" | "goals">("identity");
   const [identitySubTab, setIdentitySubTab] = useState<"profile" | "memory">("profile");
+  // Horizontal carousel: both tabs are mounted side by side on a track. `trackX`
+  // (px) is the live track offset — finger-tracked while dragging, sprung to the
+  // active pane on release. `pagerWidth` is one pane's width (the viewport),
+  // measured from the DOM so drag math is in real pixels.
+  const trackX = useMotionValue(0);
+  const pagerRef = useRef<HTMLDivElement>(null);
+  const [pagerWidth, setPagerWidth] = useState(0);
   // Legacy DataPanel state kept inert for now — the few remaining places
   // that referenced it (scrollToSection, raw-source effects) are dead code
   // post the workbench → Identity/Goals tab redesign and will be cleaned
@@ -1943,6 +1959,52 @@ export default function GoalsView({ composio }: GoalsViewProps) {
   const rawTotal = rawSources.reduce((sum, source) => sum + source.count, 0);
   const profileFieldCount = countProfileFields(profile);
 
+  // Measure one pane's width (the carousel viewport) and keep it current on
+  // resize, so drag distance and snap targets are in real pixels.
+  useEffect(() => {
+    const el = pagerRef.current;
+    if (!el) return;
+    const measure = () => setPagerWidth(el.clientWidth);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+    // [loading]: on first mount the pager is still the loading spinner (ref is
+    // null); re-run when loading flips false so the real width gets measured.
+  }, [loading]);
+
+  // Snap the track to the active pane when the tab changes (pill taps) or the
+  // viewport is (re)measured. While dragging, framer drives trackX live.
+  useEffect(() => {
+    // Read the live viewport width from the DOM so the snap is correct even
+    // before the ResizeObserver has reported a measurement into state.
+    const width = pagerRef.current?.clientWidth ?? pagerWidth;
+    const controls = animate(trackX, -TOP_TABS.indexOf(activeTab) * width, {
+      type: "spring",
+      stiffness: 400,
+      damping: 40,
+    });
+    return () => controls.stop();
+  }, [activeTab, pagerWidth, trackX]);
+
+  // On release, commit to the next/previous pane if the drag crossed the
+  // distance or velocity threshold; otherwise spring back to the current one.
+  const settleDrag = (info: PanInfo) => {
+    const width = pagerRef.current?.clientWidth || pagerWidth || 1;
+    const cur = TOP_TABS.indexOf(activeTab);
+    let target = cur;
+    if (info.offset.x < -width * TAB_COMMIT_FRACTION || info.velocity.x < -TAB_COMMIT_VELOCITY_PX_S) {
+      target = Math.min(cur + 1, TOP_TABS.length - 1);
+    } else if (info.offset.x > width * TAB_COMMIT_FRACTION || info.velocity.x > TAB_COMMIT_VELOCITY_PX_S) {
+      target = Math.max(cur - 1, 0);
+    }
+    if (target === cur) {
+      animate(trackX, -cur * width, { type: "spring", stiffness: 400, damping: 40 });
+    } else {
+      setActiveTab(TOP_TABS[target]); // the effect above springs the track
+    }
+  };
+
   const sectionMotion = {
     initial: { opacity: 0, y: 12 },
     animate: { opacity: 1, y: 0 },
@@ -1953,9 +2015,8 @@ export default function GoalsView({ composio }: GoalsViewProps) {
 
   return (
     <div
-      className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain px-4 pb-2"
+      className="flex h-full min-h-0 flex-col px-4"
       style={{
-        WebkitOverflowScrolling: "touch",
         paddingTop: "var(--constellation-header-top, 0.75rem)",
       }}
     >
@@ -1973,9 +2034,9 @@ export default function GoalsView({ composio }: GoalsViewProps) {
           <span className="text-[13px] text-foreground/40">Loading profile snapshot...</span>
         </div>
       ) : (
-        <div className="space-y-4">
+        <div className="flex min-h-0 flex-1 flex-col">
           {error && (
-            <motion.section {...sectionMotion} className="glass-card-strong p-4">
+            <motion.section {...sectionMotion} className="glass-card-strong mb-4 p-4">
               <p className="text-sm font-medium text-rose-500">Could not refresh profile snapshot.</p>
               <p className="mt-1 text-xs leading-5 text-foreground/55">{error}</p>
             </motion.section>
@@ -1984,7 +2045,7 @@ export default function GoalsView({ composio }: GoalsViewProps) {
           {/* Top-level Identity / Goals pill switcher. Inline style mirrors
               the design's blurred-glass segmented control. */}
           <div
-            className="flex items-center gap-1 p-1 rounded-full"
+            className="shrink-0 flex items-center gap-1 p-1 rounded-full"
             style={{
               background: "linear-gradient(180deg, hsla(0, 0%, 100%, 0.7) 0%, hsla(0, 0%, 100%, 0.5) 100%)",
               backdropFilter: "blur(20px) saturate(1.4)",
@@ -2010,7 +2071,28 @@ export default function GoalsView({ composio }: GoalsViewProps) {
             })}
           </div>
 
-          {activeTab === "identity" && (
+          {/* Finger-tracked horizontal carousel: both tabs are mounted side by
+              side on the track; a horizontal drag moves the track with the
+              finger (vertical stays native scroll via touch-action: pan-y) and
+              releasing springs to the nearest pane. */}
+          <div ref={pagerRef} className="relative mt-4 min-h-0 flex-1 overflow-hidden">
+            <motion.div
+              className="flex h-full"
+              style={{ x: trackX, touchAction: "pan-y" }}
+              drag="x"
+              dragDirectionLock
+              // Explicit px bounds (not the pager ref): the track's box is only
+              // one viewport wide — its panes overflow — so a ref constraint
+              // computes ~0 draggable range and the track wouldn't follow the
+              // finger. [-(panes-1)*width, 0] lets it track to the last pane.
+              dragConstraints={{ left: -pagerWidth * (TOP_TABS.length - 1), right: 0 }}
+              dragElastic={0.06}
+              onDragEnd={(_, info) => settleDrag(info)}
+            >
+              <div
+                className="h-full w-full shrink-0 space-y-4 overflow-y-auto overscroll-contain pb-2"
+                style={{ WebkitOverflowScrolling: "touch" }}
+              >
             <>
               <motion.section {...sectionMotion} className="glass-card-strong p-5">
                 <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-foreground/45">
@@ -2064,9 +2146,11 @@ export default function GoalsView({ composio }: GoalsViewProps) {
                 </motion.section>
               )}
             </>
-          )}
-
-          {activeTab === "goals" && (
+              </div>
+              <div
+                className="h-full w-full shrink-0 overflow-y-auto overscroll-contain pb-2"
+                style={{ WebkitOverflowScrolling: "touch" }}
+              >
             <motion.section id="profile-section-goals" {...sectionMotion} className="glass-card-strong p-4">
               <div className="mb-3">
                 <h2 className="text-sm font-semibold text-foreground">Goals</h2>
@@ -2125,7 +2209,9 @@ export default function GoalsView({ composio }: GoalsViewProps) {
                 </div>
               )}
             </motion.section>
-          )}
+              </div>
+            </motion.div>
+          </div>
         </div>
       )}
 
