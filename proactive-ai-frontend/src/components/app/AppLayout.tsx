@@ -322,6 +322,12 @@ export default function AppLayout() {
   // Lovable mock initial seed + the legacy add-new ticker. Status reflects
   // useCardActions' optimistic processing/done state.
   useEffect(() => {
+    // De-dup by intentKey so the same intent regenerated across runs only
+    // floats onto the sphere once. useCards is cross-run history with no
+    // internal dedup; /cards returns completed_at DESC, so the first
+    // occurrence of each intentKey is its latest run. Cards without an
+    // intentKey fall back to their unique card.id and are never collapsed.
+    const seenIntentKeys = new Set<string>();
     const next: Intent[] = cardsState.cards
       .filter(
         (c) =>
@@ -329,6 +335,12 @@ export default function AppLayout() {
           !cardActions.doneIds.has(c.card.id) &&
           !isHiddenCardOutcome(c.latestOutcome),
       )
+      .filter((c) => {
+        const key = c.card.intentKey || c.card.id;
+        if (seenIntentKeys.has(key)) return false;
+        seenIntentKeys.add(key);
+        return true;
+      })
       .slice(0, 14)
       .map((c) => {
         const status: CardStatus = cardActions.processingIds.has(c.card.id)
@@ -351,8 +363,9 @@ export default function AppLayout() {
   const canOpenMenuFromMainSwipe = (
     !menuOpen
     && !mainChatOpen
-    && !chatTarget
-    && !activeChat
+    // Card chat (chatTarget / activeChat) KEEPS the right-edge → menu swipe,
+    // matching the design where the edge strip stays active in card chat.
+    // (Card chat's own back gesture is the LEFT edge, so they don't clash.)
     && !drawerOpen
     && !paywallCard
     && !liveOverlay
@@ -699,6 +712,26 @@ export default function AppLayout() {
               aria-label="Open menu"
             >
               <Menu size={20} strokeWidth={1.5} className={isScrolled ? "text-foreground/65" : "text-foreground/55"} />
+            </button>
+          </div>
+        )}
+
+        {/* Card chat keeps just the hamburger menu (design: card chat shows
+            the nav button; the full bar with agent indicator + debug is
+            home-only). inFullscreenChat still hides the bottom ASK PIN AI. */}
+        {(chatTarget || activeChat) && (
+          <div
+            className="absolute right-5 z-30"
+            // Match ConversationView's header padding (safe-area + 12px) so the
+            // hamburger sits level with the card title, not lower.
+            style={{ top: "calc(env(safe-area-inset-top, 0px) + 12px)" }}
+          >
+            <button
+              onClick={() => setMenuOpen(true)}
+              className="p-2 rounded-full border border-transparent transition-all duration-200 hover:bg-foreground/[0.04]"
+              aria-label="Open menu"
+            >
+              <Menu size={20} strokeWidth={1.5} className="text-foreground/55" />
             </button>
           </div>
         )}

@@ -28,7 +28,7 @@ import {
 } from "react";
 import { motion } from "framer-motion";
 import { Virtuoso } from "react-virtuoso";
-import { AlertCircle, Check, ChevronDown, Copy, Loader2, Mic, Pencil, Radio, RotateCcw, Send, Sparkles, Square, ThumbsDown, ThumbsUp, X } from "lucide-react";
+import { AlertCircle, ArrowLeft, Check, ChevronDown, Copy, Loader2, Mic, Pencil, Radio, RotateCcw, Send, Sparkles, Square, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import bgGradient from "@/assets/bg-gradient.jpg";
 import { cn } from "@/lib/utils";
 import ChatToolGroup, {
@@ -81,6 +81,10 @@ interface ConversationViewProps {
   /** Card chat only: dismiss the card (POSTs feedback). When set, a "Dismiss"
    *  button shows in the header; on success the chat closes (onBack). */
   onDismiss?: () => void | Promise<void>;
+  /** Back-button icon. Card chat is a full-screen page → "left" (ArrowLeft,
+   *  go-back semantic, per the design). Main chat / proactive keep "down"
+   *  (ChevronDown, the dismiss-the-sheet semantic). */
+  backIcon?: "down" | "left";
 }
 
 /** Extract the agent's outreach text from a `notify_user` tool-call part's
@@ -328,8 +332,7 @@ function UserEntry({
               className="flex items-center gap-1 text-[11px] font-medium text-foreground/40 transition-colors hover:text-foreground/70"
               aria-label="Edit message"
             >
-              <Pencil size={10} strokeWidth={2} />
-              Edit
+              <Pencil size={12} strokeWidth={2} />
             </button>
           ) : null}
         </div>
@@ -747,6 +750,7 @@ export default function ConversationView({
   placeholder,
   onDone,
   onDismiss,
+  backIcon = "down",
 }: ConversationViewProps) {
   // Debug message visibility: heartbeats + heartbeat-triggered turns (except
   // notify_user). A dev aid; persisted in localStorage so it survives reload.
@@ -953,27 +957,46 @@ export default function ConversationView({
       <div className="relative z-10 flex h-full flex-col">
         {/* Header — back chevron + title + (main) Proactive toggle / (card)
             Done·Dismiss. */}
-        <div className="flex shrink-0 items-center gap-2 px-4 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)]">
+        <div
+          className={cn(
+            "flex shrink-0 items-center gap-2 px-4 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)]",
+            // Card chat carries a context card below → divider under the title
+            // row (matches design). Main chat / proactive pass no headerSlot.
+            headerSlot && "border-b border-foreground/8",
+          )}
+        >
           <button
             onClick={onBack}
             className="-ml-1 rounded-full p-2 transition-colors hover:bg-foreground/[0.06]"
             aria-label="Back"
           >
-            <ChevronDown
-              size={20}
-              strokeWidth={1.5}
-              className="text-foreground/65"
-            />
+            {backIcon === "left" ? (
+              <ArrowLeft
+                size={20}
+                strokeWidth={1.5}
+                className="text-foreground/65"
+              />
+            ) : (
+              <ChevronDown
+                size={20}
+                strokeWidth={1.5}
+                className="text-foreground/65"
+              />
+            )}
           </button>
-          <div className="min-w-0 flex-1">
+          <div className={cn("min-w-0 flex-1", headerSlot && "pr-12")}>
             {/* Card chat shows the card title; main chat has no title (the
-                landing's greeting carries it). */}
+                landing's greeting carries it). The card context card is NOT
+                here — it renders full-width BELOW this header row (see below),
+                so the back button + title stay on one line (matches design).
+                pr-12 (card chat only) reserves room for the floating hamburger
+                menu (AppLayout's ☰, absolute top-right) so a long title
+                truncates with "…" BEFORE it instead of overlapping. */}
             {title && (
               <h2 className="text-display truncate text-[15px] text-foreground">
                 {title}
               </h2>
             )}
-            {headerSlot}
           </div>
           {/* Proactive on/off — main-thread only. The toggle itself shows
               on/off, so the label stays static "Proactive" (no connection
@@ -1038,6 +1061,11 @@ export default function ConversationView({
             </div>
           )}
         </div>
+
+        {/* Card chat's context card renders full-width BELOW the header row
+            (design: back + title share one line, context card is its own
+            block). Main chat / proactive pass no headerSlot → nothing here. */}
+        {headerSlot}
 
         {/* Chat region + browser top-sheet share a relative container so the
             BrowserPanel slides down from just below the header (never covering
