@@ -31,6 +31,7 @@ cd "$FRONTEND_DIR"
 VITE_CAPACITOR=1 \
   VITE_PIN_API_URL="$VITE_PIN_API_URL" \
   VITE_API_BASE_URL="$VITE_PIN_API_URL" \
+  VITE_OAUTH_SCHEME="${VITE_OAUTH_SCHEME:-}" \
   npx vite build
 
 echo "==> Syncing iOS..."

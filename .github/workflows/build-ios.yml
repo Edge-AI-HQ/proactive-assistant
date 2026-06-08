@@ -6,11 +6,24 @@ on:
       environment:
         description: 'Target environment'
         required: true
-        default: 'dev'
+        default: 'prod'
         type: choice
         options:
           - dev
           - prod
+  # dev auto-builds + uploads to TestFlight on push (path-filtered to app
+  # code). prod is dispatch-only — see deploy convention in AGENTS.md.
+  push:
+    branches: [proactive-ai-v3]
+    paths:
+      - 'proactive-ai-frontend/**'
+      - 'capacitor-plugins/**'
+      - '.github/workflows/build-ios.yml'
+
+# Newer push cancels an in-flight dev build so TestFlight isn't flooded.
+concurrency:
+  group: build-ios-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -36,6 +49,16 @@ jobs:
           xcodebuild -version
           xcodebuild -showsdks | grep -i "iphoneos"
 
+      # push → dev (auto); workflow_dispatch → the chosen input.
+      - name: Resolve target environment
+        id: target
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "env=dev" >> "$GITHUB_OUTPUT"
+          else
+            echo "env=${{ inputs.environment }}" >> "$GITHUB_OUTPUT"
+          fi
+
       # Import Apple Distribution certificate into a temporary keychain
       - name: Install Apple certificate
         env:
@@ -54,11 +77,18 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
 
-      # Install provisioning profile
+      # Each bundle id has its own distribution profile: prod = ai.pin.proactive,
+      # dev = ai.pin.proactive.development. Pick the matching secret by target env.
       - name: Install provisioning profile
         env:
-          PROFILE_BASE64: ${{ secrets.PROVISIONING_PROFILE_BASE64 }}
+          PROFILE_PROD: ${{ secrets.PROVISIONING_PROFILE_BASE64 }}
+          PROFILE_DEV: ${{ secrets.PROVISIONING_PROFILE_DEV_BASE64 }}
+          TARGET_ENV: ${{ steps.target.outputs.env }}
         run: |
+          if [ "$TARGET_ENV" = "dev" ]; then PROFILE_BASE64="$PROFILE_DEV"; else PROFILE_BASE64="$PROFILE_PROD"; fi
+          if [ -z "$PROFILE_BASE64" ]; then
+            echo "Missing provisioning profile secret for env=$TARGET_ENV" >&2; exit 1
+          fi
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
           echo "$PROFILE_BASE64" | base64 --decode > ~/Library/MobileDevice/Provisioning\ Profiles/distribution.mobileprovision
 
@@ -83,7 +113,7 @@ jobs:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_API_KEY_PATH: ${{ runner.temp }}/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8
-        run: bash scripts/build-ios.sh ${{ inputs.environment }}
+        run: bash scripts/build-ios.sh ${{ steps.target.outputs.env }}
 
       - name: Cleanup
         if: always()

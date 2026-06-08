@@ -171,7 +171,10 @@ make android               # 同上，装到 USB device
 ```
 `make ios` / `make android` 默认会**自带起本 worktree 的 ngrok tunnel**，把随机 URL bake 进 build —— 在哪个 worktree 跑就连那个 worktree 的后端（一台手机一次一个 worktree）。后端切换：`NGROK=<url>` 走指定公网、`DEV=1` 指 fly dev、`PROD=1` 指 fly prod（这三者跳过本地 tunnel）。
 
-iOS 真机安装硬规则：永远不要为了绕过签名、权限、验证或并存安装去新增/改用 bundle id、包名、scheme、target，或安装 `*.dev` 之类的新 App。必须直接 build 当前已安装 App 的原 bundle id，并用新包覆盖替换旧 App；如果原 bundle id 的 signing/profile 不满足能力要求，就停下来报告真实 blocker，不要换 bundle id 绕过。
+iOS 多环境与签名硬规则：
+- **dev/prod 双 app 是设计内的多环境**：dev = bundle id `ai.pin.proactive.development`（显示名「PIN AI Dev」），prod = `ai.pin.proactive`（「PIN AI」），各走自己的 distribution profile，可同设备并存。bundle id / 显示名 / OAuth scheme 由 CI `proactive-ai-frontend/scripts/build-ios.sh <dev|prod>` 注入（archive 时 build-setting override + ExportOptions per-env + `VITE_OAUTH_SCHEME` bake 进 JS），不手改 Xcode。dev 走 push 自动构建上传 TestFlight、prod 手动 dispatch。
+- **禁止为绕过问题临时换 id**：不要为了绕过签名失败、权限/能力不满足、验证报错而新增或改 bundle id / 包名 / scheme / target。signing/profile 不满足时停下来报告真实 blocker，不要换 id 绕过。
+- 同一环境内的安装是用该环境原 bundle id 覆盖更新，不要为并存再造这两个之外的第三个 id。
 
 验证：
 ```bash

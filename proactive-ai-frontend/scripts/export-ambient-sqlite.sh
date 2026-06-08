@@ -20,7 +20,7 @@ Options:
   --device <id|name|udid>     Device identifier. If omitted and exactly one paired
                               device is known to Xcode, the script uses it.
   --bundle-id <bundle id>     App bundle id. If omitted, tries:
-                              ai.pin.proactive.dev, ai.pin.proactive,
+                              ai.pin.proactive.development, ai.pin.proactive,
                               com.pinai.proactive-ai.dev.
   --out <dir>                 Output directory. Default: ./ambient-db-dumps/current.
                               The directory is reused and overwritten each run.
@@ -29,7 +29,7 @@ Options:
 
 Examples:
   bash scripts/export-ambient-sqlite.sh
-  bash scripts/export-ambient-sqlite.sh --bundle-id ai.pin.proactive.dev
+  bash scripts/export-ambient-sqlite.sh --bundle-id ai.pin.proactive.development
   bash scripts/export-ambient-sqlite.sh --device A3E73438-BF26-5544-B8EB-F93E76D21F77
 USAGE
 }
@@ -135,7 +135,7 @@ import json
 import sys
 
 preferred = [
-    "ai.pin.proactive.dev",
+    "ai.pin.proactive.development",
     "ai.pin.proactive",
     "com.pinai.proactive-ai.dev",
 ]
