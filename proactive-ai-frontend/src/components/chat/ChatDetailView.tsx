@@ -436,28 +436,57 @@ function CardContextHeaderSlot({
   card: ChatCard;
   onOpen: () => void;
 }) {
-  const summary = card.detail?.willExecute || card.line1;
+  const plan = card.detail?.executionPlan ?? [];
   return (
     <div className="px-4 pt-3 pb-1">
       <button
         type="button"
         aria-label="View card details"
         onClick={onOpen}
-        className="w-full rounded-2xl px-4 py-3 border border-foreground/8 text-left group hover:bg-background/65 transition-colors"
+        className="w-full rounded-2xl px-4 py-3 border border-foreground/8 text-left group"
         style={{
-          background: "rgba(255,255,255,0.48)",
-          backdropFilter: "blur(18px)",
-          WebkitBackdropFilter: "blur(18px)",
+          background: "rgba(255,255,255,0.5)",
+          backdropFilter: "blur(16px)",
+          WebkitBackdropFilter: "blur(16px)",
         }}
       >
-        <div className="flex items-start gap-2.5">
+        <div className="flex items-start gap-2">
           <div className="flex-1 min-w-0">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-foreground/40 mb-1">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground/40 mb-1">
               Context
             </p>
-            <p className="text-[13px] text-foreground/78 leading-relaxed line-clamp-2">
-              {summary}
+            <p className="text-[13px] text-foreground/80 leading-relaxed line-clamp-2">
+              {card.detail?.willExecute || card.line1}
             </p>
+            {plan.length > 0 && (
+              <div className="mt-2 flex flex-col gap-1">
+                {plan.slice(0, 3).map((step, i) => {
+                  const icon = detectToolIcon(step.text + " " + step.tool);
+                  return (
+                    <div key={i} className="flex items-center gap-1.5 min-w-0">
+                      <span
+                        className="w-4 h-4 rounded-[5px] flex items-center justify-center overflow-hidden border border-foreground/10 shrink-0"
+                        style={{ background: icon.kind === "brand" ? "#fff" : "rgba(255,255,255,0.85)" }}
+                      >
+                        {icon.kind === "brand" ? (
+                          <div className="w-[11px] h-[11px]">{brandSvg(icon.name)}</div>
+                        ) : (
+                          <icon.Icon size={9} strokeWidth={2} className="text-foreground/70" />
+                        )}
+                      </span>
+                      <span className="text-[11.5px] text-foreground/60 truncate leading-snug">
+                        {step.text}
+                      </span>
+                    </div>
+                  );
+                })}
+                {plan.length > 3 && (
+                  <span className="text-[10.5px] text-foreground/40 pl-[22px]">
+                    +{plan.length - 3} more
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           <ChevronUp
             size={13}
@@ -491,6 +520,7 @@ export default function ChatDetailView({
         bootstrap={bootstrap}
         title={card.title}
         onBack={onBack}
+        backIcon="left"
         placeholder="Message about this card..."
         headerSlot={
           <CardContextHeaderSlot

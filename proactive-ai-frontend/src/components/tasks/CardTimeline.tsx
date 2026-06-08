@@ -128,7 +128,11 @@ export default function CardTimeline({
                 <div
                   key={`${card.runId}-${card.id}`}
                   className="glass-card px-3.5 py-4 w-full text-left cursor-pointer active:scale-[0.98] transition-transform"
-                  onClick={() => onOpenCardDetail(card)}
+                  onClick={() =>
+                    isActiveProcessing || isChatted
+                      ? onOpenChat(card)
+                      : onOpenCardDetail(card)
+                  }
                 >
                   <div className="flex items-center gap-2.5">
                     <span className="text-foreground/50 shrink-0">
