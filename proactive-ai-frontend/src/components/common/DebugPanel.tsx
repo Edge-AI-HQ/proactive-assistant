@@ -8,7 +8,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Settings, Clock,
-  X, Zap, RefreshCw, Plug, Loader2, Bell,
+  X, Zap, RefreshCw, Plug, Loader2, Bell, Trash2,
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { scheduleTestPush, fetchHealth } from "@/lib/api";
@@ -29,6 +29,9 @@ interface DebugPanelProps {
   isRunning: boolean;
   onGenerate: () => void;
   composio: ComposioState;
+  /** Permanently delete the account + all data, then sign out. Optional:
+   *  when absent the Delete Account button isn't rendered. */
+  onDeleteAccount?: () => Promise<void>;
 }
 
 const PHASES: PipelinePhase[] = ["planning", "generating", "evaluating", "complete"];
@@ -249,8 +252,80 @@ function TestPushButton() {
   );
 }
 
+/** Delete Account — permanently wipes the account + all associated data,
+ *  then signs out. Two-tap inline confirm instead of window.confirm(),
+ *  which can hang in Capacitor webviews (same reasoning as AccountPanel's
+ *  cancel-subscription flow). On success onDeleteAccount() signs out and
+ *  reloads /, so this component unmounts before any post-success render —
+ *  we only handle the error path here. */
+function DeleteAccountButton({ onDeleteAccount }: { onDeleteAccount: () => Promise<void> }) {
+  const [confirming, setConfirming] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-export default function DebugPanel({ run, isRunning, onGenerate, composio }: DebugPanelProps) {
+  const handleClick = useCallback(async () => {
+    if (pending) return;
+    if (!confirming) {
+      setConfirming(true);
+      return;
+    }
+    setPending(true);
+    setError(null);
+    try {
+      await onDeleteAccount();
+      // Success → onDeleteAccount signs out + reloads /; we unmount.
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setPending(false);
+      setConfirming(false);
+    }
+  }, [confirming, pending, onDeleteAccount]);
+
+  return (
+    <div className="mt-2 space-y-1.5">
+      <button
+        type="button"
+        onClick={() => void handleClick()}
+        disabled={pending}
+        className={`w-full flex items-center justify-center gap-1.5 rounded-lg border text-[11px] font-medium py-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+          confirming
+            ? "border-red-500 bg-red-500 text-white hover:bg-red-600"
+            : "border-red-300/60 text-red-500 hover:bg-red-50"
+        }`}
+      >
+        {pending
+          ? <Loader2 size={12} className="animate-spin" />
+          : <Trash2 size={12} strokeWidth={1.8} />}
+        {pending
+          ? "Deleting..."
+          : confirming
+            ? "Tap again to permanently delete"
+            : "Delete Account"}
+      </button>
+      {confirming && !pending && (
+        <p className="text-[10px] leading-snug text-foreground/45">
+          Erases your account, connected data, memories, chats, and billing
+          across every device. This can't be undone.{" "}
+          <button
+            type="button"
+            onClick={() => setConfirming(false)}
+            className="font-medium text-foreground/60 underline underline-offset-2 hover:text-foreground/80"
+          >
+            Cancel
+          </button>
+        </p>
+      )}
+      {error && (
+        <p className="text-[10px] leading-snug text-red-500">
+          Delete failed: {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+
+export default function DebugPanel({ run, isRunning, onGenerate, composio, onDeleteAccount }: DebugPanelProps) {
   const { signOut } = useAuth();
   const [open, setOpen] = useState(false);
   const [signOutLoading, setSignOutLoading] = useState(false);
@@ -549,6 +624,9 @@ export default function DebugPanel({ run, isRunning, onGenerate, composio }: Deb
                   >
                     {signOutLoading ? "Signing out..." : "Sign Out"}
                   </button>
+                  {onDeleteAccount && (
+                    <DeleteAccountButton onDeleteAccount={onDeleteAccount} />
+                  )}
                 </div>
               </div>
             </motion.div>
