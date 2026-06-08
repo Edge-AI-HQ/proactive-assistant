@@ -11,8 +11,6 @@ primary_region = 'iad'
 
 [build]
   dockerfile = 'Dockerfile'
-  [build.args]
-    DEPLOY_ENV = 'test'
 
 [env]
   DEPLOY_ENV = 'test'

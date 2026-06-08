@@ -46,6 +46,26 @@ jobs:
     needs: changes
     if: needs.changes.outputs.agents == 'true'
     runs-on: ubuntu-latest
+    # Ephemeral Postgres so the 230+ DB-backed tests actually run in CI.
+    # MUST be pgvector/* — the schema uses the vector extension; vanilla
+    # postgres fails the migration. Fresh per run, never touches real DBs.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Picked up by tests/conftest.py; activates the DB-backed suite.
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v6
         with:
@@ -73,12 +93,20 @@ jobs:
         working-directory: pinai-agents
         run: uv run mypy src
 
+      - name: Apply migrations (pai_* schema + RLS policies + roles)
+        working-directory: pinai-agents
+        run: uv run yoyo apply --batch -d "postgresql+psycopg://postgres:postgres@localhost:5432/postgres"
+
+      - name: Seed patterns (pattern route/matcher tests assume 111 patterns seeded)
+        working-directory: pinai-agents
+        run: uv run python -m scripts.seed_patterns --dsn "postgresql://postgres:postgres@localhost:5432/postgres"
+
       - name: pytest
         working-directory: pinai-agents
-        # DB-backed tests self-skip when TEST_DATABASE_URL is unset
-        # (tests/conftest.py pytest_collection_modifyitems). Dummy values
-        # satisfy import-time client construction (e.g. tavily.py) without
-        # reaching any external service.
+        # DB-backed tests run against the postgres service above
+        # (TEST_DATABASE_URL is set at job level). Dummy values satisfy
+        # import-time client construction (e.g. tavily.py) without reaching
+        # any external service.
         env:
           TAVILY_API_KEY: dummy
           BROWSERBASE_API_KEY: dummy
