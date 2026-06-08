@@ -19,7 +19,13 @@ describe("AppLayout menu order", () => {
     const menuSource = source.match(/const MENU_ITEMS = \[([\s\S]*?)\] as const;/);
 
     expect(menuSource).not.toBeNull();
-    const labels = Array.from(menuSource?.[1].matchAll(/label: "([^"]+)"/g) ?? []).map(
+    // Ignore commented-out rows so a temporarily hidden tab (e.g. PROACTIVE)
+    // doesn't count toward the live nav order.
+    const activeMenuSource = (menuSource?.[1] ?? "")
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+    const labels = Array.from(activeMenuSource.matchAll(/label: "([^"]+)"/g)).map(
       ([, label]) => label,
     );
 
@@ -30,7 +36,6 @@ describe("AppLayout menu order", () => {
       "CONNECT",
       "PROFILE",
       "SETTING",
-      "PROACTIVE",
     ]);
   });
 

@@ -15,7 +15,10 @@ const MENU_ITEMS = [
   { id: "connect", label: "CONNECT", icon: Plug },
   { id: "profile", label: "PROFILE", icon: Target },
   { id: "account", label: "SETTING", icon: Settings },
-  { id: "proactive", label: "PROACTIVE", icon: Sparkles },
+  // PROACTIVE view temporarily hidden from the nav. The view itself stays
+  // routable (useAppNavigation MenuId + ViewRouter branch are untouched);
+  // only its menu entry is removed. Restore by uncommenting this line.
+  // { id: "proactive", label: "PROACTIVE", icon: Sparkles },
 ] as const;
 
 interface SideMenuProps {
