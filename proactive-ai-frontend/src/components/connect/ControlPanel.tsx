@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronDown, ChevronUp, Smartphone } from "lucide-react";
 import DataConnections, { INPUT_CATEGORIES } from "@/components/connect/DataConnections";
@@ -17,6 +17,11 @@ export default function ControlPanel({ composio }: ControlPanelProps) {
   // so the count here stays in sync on register. Revoke is rare enough to accept
   // the brief drift until next refresh / mount.
   const { devices } = useUserDevices(true);
+  useEffect(() => {
+    if (composio.keyStatus?.configured !== true) return;
+    void composio.loadConnections();
+  }, [composio.keyStatus?.configured, composio.loadConnections]);
+
   const peerCount = useMemo(
     () => devices.filter((d) => d.platform !== "web").length,
     [devices],
