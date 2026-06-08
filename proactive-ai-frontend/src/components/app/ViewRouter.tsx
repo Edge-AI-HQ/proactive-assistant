@@ -13,6 +13,7 @@ import type { CardActions } from "@/components/card/CardStateContext";
 import type { MenuId, SettingsSubPage } from "@/components/app/useAppNavigation";
 import type { WeatherData } from "@/hooks/useWeather";
 import type { ComposioState } from "@/hooks/useComposio";
+import type { VoicePermissionState } from "@/hooks/useVoicePermission";
 import type { IntentCard } from "@/types/intent-card";
 import type { LiveSession } from "@/services/ambient/live-session";
 
@@ -34,8 +35,14 @@ interface ViewRouterProps {
   ambientOn: boolean;
   ambientTogglePending: boolean;
   weather: WeatherData | null;
+  feedLoading: boolean;
+  connectorCount: number;
+  connectorsKnown: boolean;
+  voiceState: VoicePermissionState;
   onOpenAmbient: () => void;
   onToggleAmbient: () => void;
+  onEnableVoice: () => void;
+  onReviewPermissions: () => void;
   onSphereCardTap: (id: number) => void;
   // ── TASKS (real card history) ──
   onTasksOpenChat: (card: IntentCard, bootstrap?: string) => void;
@@ -74,8 +81,14 @@ export default function ViewRouter({
   ambientOn,
   ambientTogglePending,
   weather,
+  feedLoading,
+  connectorCount,
+  connectorsKnown,
+  voiceState,
   onOpenAmbient,
   onToggleAmbient,
+  onEnableVoice,
+  onReviewPermissions,
   onSphereCardTap,
   onTasksOpenChat,
   onTasksOpenCardDetail,
@@ -147,8 +160,15 @@ export default function ViewRouter({
             ambientOn={ambientOn}
             ambientTogglePending={ambientTogglePending}
             weather={weather}
+            feedLoading={feedLoading}
+            connectorCount={connectorCount}
+            connectorsKnown={connectorsKnown}
+            voiceState={voiceState}
             onOpenAmbient={onOpenAmbient}
             onToggleAmbient={onToggleAmbient}
+            onEnableVoice={onEnableVoice}
+            onConnect={onConnectMore}
+            onReviewPermissions={onReviewPermissions}
             onCardTap={onSphereCardTap}
           />
         ) : activeView === "chat" ? (

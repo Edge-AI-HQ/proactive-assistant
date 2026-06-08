@@ -35,6 +35,7 @@ import {
   useCards,
 } from "@/hooks/useCards";
 import { useComposio } from "@/hooks/useComposio";
+import { useVoicePermission } from "@/hooks/useVoicePermission";
 import { usePipeline } from "@/hooks/usePipeline";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
 import { useUserSettings } from "@/hooks/useUserSettings";
@@ -203,6 +204,45 @@ export default function AppLayout() {
   const cardsState = useCards({ cacheScope: user?.id ?? null });
   const refreshCards = cardsState.refresh;
   const composio = useComposio();
+  // Empty-state nudges (NowView): count ACTIVE connectors + read mic
+  // permission so we can show only the setup steps that are still missing.
+  const connectorCount = composio.connections.filter(
+    (c) => c.status === "ACTIVE",
+  ).length;
+  // Only treat "0 connectors" as a reason to nudge once we've actually
+  // loaded the (configured) connector list — otherwise the pre-load empty
+  // array would nag already-connected users.
+  const connectorsKnown =
+    !composio.statusLoading &&
+    !composio.loadingConns &&
+    composio.keyStatus?.configured === true;
+  const {
+    state: voiceState,
+    request: requestVoicePermission,
+    refresh: refreshVoicePermission,
+  } = useVoicePermission();
+  // Empty-state "Turn on voice": fire the OS mic prompt; on grant also flip
+  // ambient on so sensing actually starts, otherwise route to the permissions
+  // panel (the OS won't re-prompt once denied).
+  const handleEnableVoice = useCallback(async () => {
+    const next = await requestVoicePermission();
+    if (next === "granted") {
+      if (!ambientOn) await handleToggleAmbient();
+    } else {
+      navigateTo("account");
+      setSettingsSubPage("ambient");
+    }
+  }, [requestVoicePermission, ambientOn, handleToggleAmbient, navigateTo, setSettingsSubPage]);
+  const handleReviewPermissions = useCallback(() => {
+    navigateTo("account");
+    setSettingsSubPage("ambient");
+  }, [navigateTo, setSettingsSubPage]);
+  // Returning to the home view re-checks mic permission so the "Turn on
+  // voice" nudge clears after the user grants it in the permissions panel
+  // (an in-app navigation that doesn't background the app).
+  useEffect(() => {
+    if (activeView === "now") void refreshVoicePermission();
+  }, [activeView, refreshVoicePermission]);
   const pipeline = usePipeline();
   // Notification permission flow. iOS OS state is a capability; the
   // product-level `notifyNewCards` preference is controlled by the
@@ -646,8 +686,14 @@ export default function AppLayout() {
           ambientOn={ambientOn}
           ambientTogglePending={ambientTogglePending}
           weather={weather}
+          feedLoading={cardsState.loading}
+          connectorCount={connectorCount}
+          connectorsKnown={connectorsKnown}
+          voiceState={voiceState}
           onOpenAmbient={() => navigateTo("ambient")}
           onToggleAmbient={() => void handleToggleAmbient()}
+          onEnableVoice={() => void handleEnableVoice()}
+          onReviewPermissions={handleReviewPermissions}
           onSphereCardTap={handleSphereCardTap}
           onTasksOpenChat={(card, bootstrap) => {
             openCardChat(
