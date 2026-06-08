@@ -29,7 +29,11 @@ import {
  *     exchange via `supabase.auth.exchangeCodeForSession`.
  */
 
-const OAUTH_REDIRECT_SCHEME = "ai.pin.proactive://auth/callback";
+// Per-env: scheme = this build's bundle id, injected via VITE_OAUTH_SCHEME at
+// build time (see build-ios.sh). Lets dev (`ai.pin.proactive.development`) and prod
+// (`ai.pin.proactive`) apps coexist on one device without their OAuth callbacks
+// colliding. Falls back to the prod scheme for web / local builds that omit it.
+const OAUTH_REDIRECT_SCHEME = `${import.meta.env.VITE_OAUTH_SCHEME || "ai.pin.proactive"}://auth/callback`;
 
 interface AuthState {
   loading: boolean;

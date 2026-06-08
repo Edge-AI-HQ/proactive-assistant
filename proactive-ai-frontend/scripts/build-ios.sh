@@ -39,10 +39,25 @@ print_log_diagnostics() {
 
 ENV="${1:-dev}"
 case "$ENV" in
-  dev)  ENV_FILE="$REPO_ROOT/pinai-agents/.env.dev" ;;
-  prod) ENV_FILE="$REPO_ROOT/pinai-agents/.env.production" ;;
+  dev)
+    ENV_FILE="$REPO_ROOT/pinai-agents/.env.dev"
+    BUNDLE_ID="ai.pin.proactive.development"
+    APP_DISPLAY_NAME="PIN AI Dev"
+    PROFILE_NAME="PIN AI Dev AppStore Distribution"
+    ;;
+  prod)
+    ENV_FILE="$REPO_ROOT/pinai-agents/.env.production"
+    BUNDLE_ID="ai.pin.proactive"
+    APP_DISPLAY_NAME="PIN AI"
+    PROFILE_NAME="PIN AI AppStore Distribution"
+    ;;
   *)    echo "Usage: $0 [dev|prod]" >&2; exit 1 ;;
 esac
+
+# OAuth deep-link scheme = the bundle id, so the dev and prod apps' callbacks
+# don't collide when both are installed on one device. Baked into the JS
+# bundle via VITE_OAUTH_SCHEME (sync-ios.sh passes it through to vite).
+export VITE_OAUTH_SCHEME="$BUNDLE_ID"
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "Error: $ENV_FILE not found" >&2
@@ -124,8 +139,8 @@ mkdir -p "$(dirname "$ARCHIVE_LOG")"
 
 # ── ExportOptions.plist ──
 
-echo "==> Writing ExportOptions.plist..."
-cat > "$EXPORT_OPTIONS" <<'PLIST'
+echo "==> Writing ExportOptions.plist ($BUNDLE_ID → $PROFILE_NAME)..."
+cat > "$EXPORT_OPTIONS" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -140,8 +155,8 @@ cat > "$EXPORT_OPTIONS" <<'PLIST'
     <string>manual</string>
     <key>provisioningProfiles</key>
     <dict>
-        <key>ai.pin.proactive</key>
-        <string>PIN AI AppStore Distribution</string>
+        <key>$BUNDLE_ID</key>
+        <string>$PROFILE_NAME</string>
     </dict>
     <key>destination</key>
     <string>upload</string>
@@ -162,6 +177,8 @@ if ! xcodebuild \
     -authenticationKeyPath "$ASC_API_KEY_PATH" \
     -authenticationKeyID "$ASC_KEY_ID" \
     -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+    PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
+    APP_DISPLAY_NAME="$APP_DISPLAY_NAME" \
     archive 2>&1 | tee "$ARCHIVE_LOG"; then
   echo "" >&2
   echo "[FAILED] xcodebuild archive exited non-zero." >&2
@@ -211,5 +228,5 @@ echo "=========================================="
 echo "  SUCCESS: uploaded to TestFlight"
 echo "  Env:     $ENV"
 echo "  Version: $MARKETING_VERSION ($NEW_BUILD)"
-echo "  Bundle:  ai.pin.proactive"
+echo "  Bundle:  $BUNDLE_ID"
 echo "=========================================="

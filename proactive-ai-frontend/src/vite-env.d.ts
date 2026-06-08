@@ -17,6 +17,12 @@ interface ImportMetaEnv {
 
   // Local Hot mode only: bypass Supabase OAuth with X-Dev-Auth.
   readonly VITE_PIN_LOCAL_DEV_AUTH?: string;
+
+  // Native (Capacitor) bundle: OAuth deep-link scheme = this build's bundle
+  // id (prod `ai.pin.proactive`, dev `ai.pin.proactive.development`). Injected at
+  // build time so dev/prod apps coexist on one device without OAuth callback
+  // collision. Web bundle: unused (web redirects to same-origin).
+  readonly VITE_OAUTH_SCHEME?: string;
 }
 
 interface ImportMeta {
