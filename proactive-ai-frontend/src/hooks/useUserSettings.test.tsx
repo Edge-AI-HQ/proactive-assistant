@@ -9,6 +9,7 @@ const { proxyFetchMock, proxyPostMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/api", () => ({
+  profileClientHintHeaders: () => ({ "X-Pin-Client-Locale": "zh-CN" }),
   proxyFetch: proxyFetchMock,
   proxyPost: proxyPostMock,
 }));
@@ -69,6 +70,12 @@ describe("useUserSettings bootstrap resilience", () => {
     });
 
     expect(proxyFetchMock).toHaveBeenCalledTimes(3);
+    expect(proxyFetchMock).toHaveBeenCalledWith(
+      "/settings",
+      expect.objectContaining({
+        headers: { "X-Pin-Client-Locale": "zh-CN" },
+      }),
+    );
     expect(result.current.settings).toEqual(SETTINGS);
     expect(result.current.loading).toBe(false);
     expect(result.current.error).toBeNull();

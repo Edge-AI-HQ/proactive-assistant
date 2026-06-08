@@ -175,7 +175,7 @@ export interface ProfileSnapshot {
   interests: ProfileInterest[];
 }
 
-function profileClientHintHeaders(): Record<string, string> {
+export function profileClientHintHeaders(): Record<string, string> {
   const headers: Record<string, string> = {};
 
   if (typeof navigator !== "undefined") {

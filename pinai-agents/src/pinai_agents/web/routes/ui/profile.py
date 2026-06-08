@@ -35,6 +35,15 @@ def _auto_dreaming_task_id(user_id: int) -> str:
 
 
 _AUTO_DREAMING_CRON_EXPR = "0 6 * * *"
+_LOCALE_LANGUAGE_PREFIXES = {
+    "zh": "zh-Hans",
+    "ja": "ja",
+    "ko": "ko",
+    "es": "es",
+    "fr": "fr",
+    "de": "de",
+    "pt": "pt",
+}
 
 # The proactive heartbeat is a per-user `proactive.tick` scheduler task. The
 # id == kind are fixed strings the dispatcher (scheduler/dispatcher.py) and the
@@ -42,6 +51,14 @@ _AUTO_DREAMING_CRON_EXPR = "0 6 * * *"
 # (pai_user_settings.proactive_interval_seconds, default 300); the sync/ensure
 # helpers below mirror it into the task's interval_seconds. Proactive thread only.
 _PROACTIVE_TASK_ID = "proactive.tick"
+
+
+def _initial_generation_language_from_locale(locale: str | None) -> str | None:
+    cleaned = _clean_client_locale(locale)
+    if cleaned is None:
+        return None
+    prefix = cleaned.split("-", 1)[0].lower()
+    return _LOCALE_LANGUAGE_PREFIXES.get(prefix)
 
 
 def _next_auto_dreaming_fire(
@@ -381,7 +398,9 @@ async def get_profile_snapshot(
                 timezone=timezone_patch,
             )
         goals = await repo.list_goals()
-        settings = await repo.get_settings()
+        settings = await repo.get_settings(
+            initial_generation_language=_initial_generation_language_from_locale(locale_hint),
+        )
         await _ensure_settings_schedules(conn, pool=pool, user=user, settings=settings)
     return ProfileResponse(
         profile=asdict(profile) if profile else None,
@@ -440,6 +459,7 @@ settings_router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 @settings_router.get("", response_model=SettingsResponse)
 async def get_settings(
+    x_pin_client_locale: str | None = Header(default=None, alias="X-Pin-Client-Locale"),
     user: User = Depends(current_user),
     pool=Depends(get_pool),
 ):
@@ -451,7 +471,11 @@ async def get_settings(
     also routes here.
     """
     async with user_scoped_tx(pool, user.id) as conn:
-        s = await ProfileRepository(user.id, conn).get_settings()
+        s = await ProfileRepository(user.id, conn).get_settings(
+            initial_generation_language=_initial_generation_language_from_locale(
+                x_pin_client_locale,
+            ),
+        )
         await _ensure_settings_schedules(conn, pool=pool, user=user, settings=s)
     return _settings_response(s)
 

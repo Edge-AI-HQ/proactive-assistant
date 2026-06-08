@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { proxyFetch, proxyPost } from "@/lib/api";
+import { profileClientHintHeaders, proxyFetch, proxyPost } from "@/lib/api";
 import type { SupportedGenerationLanguage } from "@/types/intent-card";
 
 /**
@@ -138,7 +138,10 @@ export function useUserSettings(
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), SETTINGS_TIMEOUT_MS);
       try {
-        const res = await proxyFetch("/settings", { signal: controller.signal });
+        const res = await proxyFetch("/settings", {
+          headers: profileClientHintHeaders(),
+          signal: controller.signal,
+        });
         if (res.ok) {
           const data = await res.json() as UserSettings;
           if (!mountedRef.current) return;

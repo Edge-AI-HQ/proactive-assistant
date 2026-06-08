@@ -11,6 +11,7 @@ from pinai_agents.web.auth.user_service import User
 from pinai_agents.web.db.repositories.profile import ProfileRepository
 from pinai_agents.web.db.repositories.scheduled_tasks import ScheduledTasksRepository
 from pinai_agents.web.db.rls import user_scoped_tx
+from pinai_agents.web.routes.ui.profile import _initial_generation_language_from_locale
 
 
 def _user(user_id: int) -> User:
@@ -21,6 +22,14 @@ def _user(user_id: int) -> User:
         litellm_virtual_key=None,
         browserbase_context_id=None,
     )
+
+
+def test_initial_generation_language_from_locale_uses_supported_language_family():
+    assert _initial_generation_language_from_locale("zh-CN") == "zh-Hans"
+    assert _initial_generation_language_from_locale("zh-Hant-TW") == "zh-Hans"
+    assert _initial_generation_language_from_locale("ja-JP") == "ja"
+    assert _initial_generation_language_from_locale("pt-BR") == "pt"
+    assert _initial_generation_language_from_locale("it-IT") is None
 
 
 @pytest.mark.asyncio
@@ -57,6 +66,60 @@ async def test_profile_snapshot_backfills_default_locale_timezone_from_client_he
     assert stored is not None
     assert stored.locale == "zh-CN"
     assert stored.timezone == "Asia/Shanghai"
+
+
+@pytest.mark.asyncio
+async def test_settings_get_initializes_generation_language_from_client_locale(pool, user_ids):
+    user_a, _ = user_ids
+
+    app = create_app()
+    app.state.pool = pool
+    app.dependency_overrides[current_user] = lambda: _user(user_a)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+    ) as client:
+        res = await client.get(
+            "/api/settings",
+            headers={"X-Pin-Client-Locale": "zh-CN"},
+        )
+
+    assert res.status_code == 200, res.text
+    assert res.json()["generationLanguage"] == "zh-Hans"
+
+    async with user_scoped_tx(pool, user_a) as conn:
+        stored = await ProfileRepository(user_a, conn).get_settings()
+    assert stored.generation_language == "zh-Hans"
+
+
+@pytest.mark.asyncio
+async def test_settings_get_does_not_override_existing_generation_language_from_locale(
+    pool, user_ids
+):
+    user_a, _ = user_ids
+    async with user_scoped_tx(pool, user_a) as conn:
+        await ProfileRepository(user_a, conn).upsert_settings(generation_language="en")
+
+    app = create_app()
+    app.state.pool = pool
+    app.dependency_overrides[current_user] = lambda: _user(user_a)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+    ) as client:
+        res = await client.get(
+            "/api/settings",
+            headers={"X-Pin-Client-Locale": "zh-CN"},
+        )
+
+    assert res.status_code == 200, res.text
+    assert res.json()["generationLanguage"] == "en"
+
+    async with user_scoped_tx(pool, user_a) as conn:
+        stored = await ProfileRepository(user_a, conn).get_settings()
+    assert stored.generation_language == "en"
 
 
 @pytest.mark.asyncio

@@ -353,21 +353,37 @@ class ProfileRepository(UserScopedRepository):
             return (cur.rowcount or 0) > 0
 
     # ── pai_user_settings ─────────────────────────────────────────
-    async def get_settings(self) -> UserSettingsRow:
+    async def get_settings(
+        self,
+        *,
+        initial_generation_language: str | None = None,
+    ) -> UserSettingsRow:
         """Lazy-create on first read, then return the row.
 
         Defaults live exclusively on `pai_user_settings` columns
         (`010_pai_core_state.sql`, `037_pai_user_settings_auto_generate_interval.sql`).
-        We INSERT with only `user_id` so column DEFAULTs apply, then SELECT.
+        We usually INSERT with only `user_id` so column DEFAULTs apply.
+        The UI can pass an initial generation language from the first client
+        locale; ON CONFLICT keeps existing user choices untouched.
         Net effect: every authenticated user always has exactly one row,
         and callers never need a `None` branch.
         """
         async with self._conn.cursor() as cur:
-            await cur.execute(
-                "INSERT INTO pai_user_settings (user_id) VALUES (%s) "
-                "ON CONFLICT (user_id) DO NOTHING",
-                (self._user_id,),
-            )
+            if initial_generation_language:
+                await cur.execute(
+                    """
+                    INSERT INTO pai_user_settings (user_id, generation_language)
+                    VALUES (%s, %s)
+                    ON CONFLICT (user_id) DO NOTHING
+                    """,
+                    (self._user_id, initial_generation_language),
+                )
+            else:
+                await cur.execute(
+                    "INSERT INTO pai_user_settings (user_id) VALUES (%s) "
+                    "ON CONFLICT (user_id) DO NOTHING",
+                    (self._user_id,),
+                )
             await cur.execute(
                 "SELECT * FROM pai_user_settings WHERE user_id = %s",
                 (self._user_id,),
