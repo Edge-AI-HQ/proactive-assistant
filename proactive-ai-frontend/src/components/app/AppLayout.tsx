@@ -564,6 +564,36 @@ export default function AppLayout() {
     openCardChat(virtualCard, bootstrap);
   }, [openCardChat]);
 
+  // Wired to both the Setting tab (AccountPanel, currently dormant) and the
+  // Debug panel's "Delete Account" button. Throws DeleteAccountError on a
+  // fail-fast abort (Supabase Auth or DB cascade) so the caller can surface
+  // the message; external partial failures (composio / litellm / stripe /
+  // browserbase / storage) come back as fields on the result, not
+  // exceptions — the cascade still succeeded so we proceed to sign out.
+  const handleDeleteAccount = useCallback(async () => {
+    let result;
+    try {
+      result = await deleteAccount();
+    } catch (err) {
+      if (err instanceof DeleteAccountError && err.partial) {
+        console.warn("Delete account partial state:", err.partial);
+      }
+      throw err;
+    }
+    if (
+      result.composioErrors.length > 0
+      || result.litellmError
+      || result.stripeError
+      || result.browserbaseError
+      || result.storageError
+    ) {
+      console.warn("Delete account: non-fatal external failures", result);
+    }
+    // signOut clears local/session storage and reloads / — the actual
+    // app-state flush.
+    await signOut();
+  }, [signOut]);
+
   const handleMenuNav = (id: MenuId) => {
     // navigateTo clears the card-chat overlays (activeChat + chatTarget) and
     // the menu in one shot — same effect as the previous inline resets, which
@@ -657,6 +687,7 @@ export default function AppLayout() {
               isRunning={pipeline.isRunning}
               onGenerate={() => pipeline.generate()}
               composio={composio}
+              onDeleteAccount={handleDeleteAccount}
             />
             <button
               onClick={() => setMenuOpen(true)}
@@ -717,38 +748,7 @@ export default function AppLayout() {
           avatarLetter={avatarLetter}
           userEmail={user?.email ?? undefined}
           onSignOut={() => void signOut()}
-          onDeleteAccount={async () => {
-            // Throws DeleteAccountError on fail-fast abort
-            // (Supabase Auth or DB cascade); panel surfaces the
-            // message. External partial failures (composio /
-            // litellm / stripe / browserbase / storage) come back
-            // as fields on the result, not exceptions — the
-            // cascade still succeeded so we proceed to sign out.
-            let result;
-            try {
-              result = await deleteAccount();
-            } catch (err) {
-              if (err instanceof DeleteAccountError && err.partial) {
-                console.warn("Delete account partial state:", err.partial);
-              }
-              throw err;
-            }
-            if (
-              result.composioErrors.length > 0
-              || result.litellmError
-              || result.stripeError
-              || result.browserbaseError
-              || result.storageError
-            ) {
-              console.warn(
-                "Delete account: non-fatal external failures",
-                result,
-              );
-            }
-            // signOut clears local/session storage and reloads
-            // / — the actual app-state flush.
-            await signOut();
-          }}
+          onDeleteAccount={handleDeleteAccount}
         />
 
         {/* ASK PIN AI — bottom-center entry into MainChat. Mirrors the

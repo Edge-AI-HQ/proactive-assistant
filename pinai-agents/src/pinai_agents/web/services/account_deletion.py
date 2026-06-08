@@ -28,7 +28,11 @@ Order (matters — see ordering rationale below):
                      cascade and re-upserting a fresh empty users row
                      against the same supabase_user_id. If we can't
                      guarantee the JWT is dead, we don't proceed.
-    7. DB CASCADE  — DELETE FROM users (drops 27 pai_* tables in one tx).
+    7. DB CASCADE  — wipe pai_stripe_webhook_events for this user (its FK
+                     is ON DELETE SET NULL, not CASCADE, and raw_data
+                     holds the full Stripe event payload — billing PII),
+                     then DELETE FROM users, which drops every per-user
+                     pai_* table via CASCADE in one tx.
 
 Idempotency: every external step (1-5) swallows "already gone" errors so
 a user-initiated retry after a partial failure cleanly walks the chain a
@@ -270,14 +274,24 @@ async def _delete_db_user(
     user: User,
     result: AccountDeletionResult,
 ) -> None:
-    """DB cascade. Tolerates rowcount=0 because Supabase Auth may have
-    already been deleted in a prior retry attempt, taking the row with
-    it via — wait, no. Supabase Auth delete does NOT touch our users
-    table (different DB). So rowcount must be exactly 1 here. If it's
-    0, something race-deleted the row out from under us and we should
+    """DB cascade. rowcount on the users DELETE must be exactly 1 —
+    Supabase Auth delete (step 6) lives in a different database and does
+    NOT touch our users table, so the row is still here. A rowcount of 0
+    means something race-deleted it out from under us and we should
     notice.
+
+    pai_stripe_webhook_events is deleted explicitly first, in the same tx
+    and while user_id is still set: its FK is ON DELETE SET NULL (the
+    idempotency log is meant to outlive any single user), so the users
+    CASCADE would NOT take its rows — and raw_data holds the full Stripe
+    event payload (customer email / name / address / phone). Without this,
+    billing PII survives the account deletion.
     """
     async with service_tx(pool) as conn:
+        await conn.execute(
+            "DELETE FROM pai_stripe_webhook_events WHERE user_id = %s",
+            (user.id,),
+        )
         cur = await conn.execute(
             "DELETE FROM users WHERE id = %s",
             (user.id,),
