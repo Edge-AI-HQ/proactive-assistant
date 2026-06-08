@@ -271,7 +271,7 @@ push 到 `proactive-ai-v3` 后按改动范围自动部署（CI workflow：`.gith
 GitHub Actions 页面手动触发 **Deploy Test**（`deploy-test.yml`）。可以从任意分支部署，用来在合并前在 fly 上跑一次完整链路。
 
 ### Prod 环境
-在 GitHub Actions 页面手动触发 **Deploy Prod**，或 push `v*` tag。需要 production environment approval。
+push `v*` tag 自动触发 **Deploy Prod**（tag = 版本真相），也可在 GitHub Actions 页面手动触发。production environment 靠 branch/tag policy（放行 `v*` tag + `main`）gate；人工审批暂未启用，后续再加。
 
 ### 本地部署（备用）
 CI/CD 不可用时走 Makefile：
@@ -287,7 +287,7 @@ make deploy-litellm-prod    # LiteLLM → prod
 所有 deploy 命令已内置 `env -u all_proxy -u http_proxy -u https_proxy`，避开本机全局代理导致的 flyctl 失败。命令细节看 `Makefile` 对应 target。
 
 ## 生产环境硬性规则
-- 生产部署优先走 GitHub Actions（有审计日志和 approval）。
+- 生产部署优先走 GitHub Actions（有审计日志；人工审批暂未启用，后续再加）。
 - 生产环境禁止直接执行任何数据库变更，migration 必须随部署自动跑。
 - 所有生产变更必须走代码评审 + CI/CD。
 - Fly secrets 通过 `pinai-agents/scripts/sync_fly_secrets.py` 同步，**不要**手动 `flyctl secrets set` 单 key，否则会绕过 trust boundary。

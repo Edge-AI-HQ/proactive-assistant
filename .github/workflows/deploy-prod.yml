@@ -1,11 +1,12 @@
 name: Deploy Prod
 
-# Prod env: manual dispatch only. Thin caller; all deploy logic lives in
-# _deploy.yml.
+# Prod env: triggered by pushing a v* tag (the version source of truth), or
+# by manual dispatch. Thin caller; all deploy logic lives in _deploy.yml.
 #
 # environment: production passes through to every job in _deploy.yml, so the
-# GitHub Environment approval rules (reviewers / wait timer / branch policy)
-# still gate the deploy — those live on the environment, not in this file.
+# GitHub Environment rules gate the deploy (currently the v* tag / branch
+# policy; human-reviewer approval is intentionally not enabled yet) — those
+# live on the environment, not in this file.
 #
 # concurrency cancel-in-progress: false — never tear down a partial prod
 # deploy mid-flight.
@@ -14,6 +15,9 @@ name: Deploy Prod
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - "v*"
 
 concurrency:
   group: deploy-prod
