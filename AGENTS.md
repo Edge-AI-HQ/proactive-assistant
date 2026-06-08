@@ -259,19 +259,23 @@ Snapshot 构建脚本在 `pinai-agents/infra/daytona/`，CI（`deploy-test.yml` 
 
 ## 变更与部署
 
+**分支模型**：`main` 是唯一长期主干，受 ruleset 保护——**禁止直接 push**，所有改动走 PR + CI gate（`pinai-agents-checks` / `frontend-check` 必须绿）才能 merge。功能分支从 `main` 切、PR base 填 `main`。老 `main` 已归档为 `main-legacy`。
+
 ### Dev 环境
-push 到 `proactive-ai-v3` 后按改动范围自动部署（CI workflow：`.github/workflows/deploy-dev.yml`）：
+push 到 `main` 后按改动范围自动部署（CI workflow：`.github/workflows/deploy-dev.yml`）：
 - 改 `pinai-agents/` 或 `proactive-ai-frontend/` → 部署 pinai-agents + 前端
 - 改 `ops/litellm/` → 部署 LiteLLM
 - Daytona snapshot 跟随 pinai-agents 部署刷新
 
-`internal-reward-dashboard/` 使用独立 workflow `.github/workflows/internal-reward-dashboard-dev.yml`：PR 只跑 type-check / test / build；push 到 `proactive-ai-v3` 且该目录变化时，部署到 Fly dev app `proactive-ai-reward-dashboard-dev`（默认地址 `https://proactive-ai-reward-dashboard-dev.fly.dev`）。
+`internal-reward-dashboard/` 使用独立 workflow `.github/workflows/internal-reward-dashboard-dev.yml`：PR 只跑 type-check / test / build；push 到 `main` 且该目录变化时，部署到 Fly dev app `proactive-ai-reward-dashboard-dev`（默认地址 `https://proactive-ai-reward-dashboard-dev.fly.dev`）。
 
 ### Test 环境
 GitHub Actions 页面手动触发 **Deploy Test**（`deploy-test.yml`）。可以从任意分支部署，用来在合并前在 fly 上跑一次完整链路。
 
 ### Prod 环境
-push `v*` tag 自动触发 **Deploy Prod**（tag = 版本真相），也可在 GitHub Actions 页面手动触发。production environment 靠 branch/tag policy（放行 `v*` tag + `main`）gate；人工审批暂未启用，后续再加。
+push `v*` tag 自动触发 **Deploy Prod**（tag = 版本真相），也可在 GitHub Actions 页面手动触发（选 `main` 分支）。production environment 靠 branch/tag policy（放行 `v*` tag + `main`）gate；人工审批暂未启用，后续再加。
+
+发版用 `scripts/release.sh v0.1.0`：脚本校验在 main + 工作区干净 + 与 origin/main 一致后，打 `v*` annotated tag 并 push，自动触发上面的 Deploy Prod。
 
 ### 本地部署（备用）
 CI/CD 不可用时走 Makefile：
