@@ -1,0 +1,99 @@
+---
+title: RLS role 模型修复 —— 让行级隔离真正生效
+status: brainstorm 草稿
+date: 2026-06-08
+---
+
+# RLS role 模型修复
+
+> **一句话**:`pai_*` 表的 RLS policy 写齐了,但**从未真正生效** —— 生产/dev/CI 都用 `postgres`(superuser)连接、`user_scoped_tx` 从不 `SET ROLE`,superuser 永远 bypass RLS。用户隔离实际只靠 repo SQL 显式 `WHERE user_id`。本文给出让 RLS 真生效的 role 模型方案。
+>
+> **不是火警**:主防线(repo 显式 `user_id`,20 个 repo 全有)在,没有正在发生的数据泄露。这是补一道**失效的 defense-in-depth**,并消除"以为有 RLS"的虚假安全感。
+
+## 1. 现状:名存实亡
+
+设计意图(`023_pai_rls.sql`):每个 per-user 表
+- `ENABLE ROW LEVEL SECURITY`
+- main policy:`FOR ALL TO PUBLIC USING (user_id = current_setting('app.user_id', true)::bigint)`
+- fallback policy:`FOR ALL TO service_role USING (app.user_id IS NULL)` —— ops/migration 用
+- `user_scoped_tx` 每请求 `SET LOCAL app.user_id = $uid`,期望 main policy 把可见行限制到该用户
+
+实际行为:
+- 生产 + dev 的 `DATABASE_URL` 连接 role = **`postgres`(superuser, `rolbypassrls=t`)**
+- `user_scoped_tx` 只 `SELECT set_config('app.user_id', …)`,**从不 `SET ROLE`**
+- 全库**无一张表 `FORCE ROW LEVEL SECURITY`**
+- → PostgreSQL 对 **superuser / BYPASSRLS role 永远绕过 RLS**(`FORCE` 只约束 table owner,管不到 superuser)
+- ∴ 所有 RLS policy 从未生效。生产、dev、CI 一致。
+
+实际隔离靠:**repo SQL 显式 `WHERE user_id = self.user_id`**(`ChatThreadsRepository` 等 20 个 repo 全有)。RLS 是失效的第二道墙。`service_tx` 的 docstring 还写着"service_role policy triggers because app.user_id is not set",作者以为 RLS 在工作。
+
+## 2. 关键坑:prod / 本地行为相反
+
+| role | 本地(`023` 建的) | Supabase prod(内置) |
+|---|---|---|
+| `postgres` | superuser + BYPASSRLS | superuser + BYPASSRLS |
+| `service_role` | `rolbypassrls=f`(**受 RLS**) | `rolbypassrls=t`(**BYPASSRLS**,待 prod 确认) |
+
+> ⚠️ **不能用 `service_role` 做 user 路径**。本地 `service_role` 受 RLS、Supabase `service_role` 是 BYPASSRLS —— 用它会造成**本地/CI 测试 RLS 生效(假绿),prod 仍 bypass**,比现状更危险(虚假安全感)。
+
+**待确认**:Supabase prod 的 `service_role` / `authenticated` 实际 `rolbypassrls` 属性(dashboard 或 `SELECT rolname, rolbypassrls FROM pg_roles`,只读,不改)。本文按"Supabase `service_role` = BYPASSRLS、`authenticated` = 受 RLS"的通用事实推进。
+
+## 3. 正解:user 路径用「非 BYPASSRLS」role
+
+核心:让承载 user 查询的 role **既非 superuser、又非 BYPASSRLS、又非 table owner**,这样 main policy(`TO PUBLIC`)对它生效。
+
+### 方案 A — 复用 Supabase `authenticated`
+- `user_scoped_tx`: `SET LOCAL ROLE authenticated` + `SET LOCAL app.user_id`
+- 本地需建 `authenticated` role 对齐 Supabase
+- 风险:依赖 Supabase 内置 role 的属性/权限,prod 和本地仍可能有细微差异
+
+### 方案 B — 自建 `app_user` role(**推荐**)
+两边完全一致,不依赖 Supabase 内置 role 差异:
+- migration:
+  ```sql
+  CREATE ROLE app_user NOLOGIN;            -- 默认非 superuser、非 BYPASSRLS
+  GRANT app_user TO postgres;              -- 让连接 role 能 SET ROLE app_user
+  GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_user;
+  GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_user;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_user;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT USAGE, SELECT ON SEQUENCES TO app_user;
+  -- pai_world_signals / pai_yoyo_migration_log 等共享表按需单独处理
+  ```
+- `user_scoped_tx`:在 `set_config('app.user_id', …)` 后加 `SET LOCAL ROLE app_user`
+- `service_tx`:保持 `postgres`(superuser bypass,ops/scheduler 全用户可见)—— 不变
+- migration(`release_command` 用 postgres):不 SET ROLE,bypass,DDL/DML 正常
+
+`app_user` 非 BYPASSRLS → main policy `user_id = app.user_id` 生效 → 跨用户行被 RLS 挡。
+
+## 4. 实施步骤(方案 B)
+
+1. **migration** `NNN_pai_rls_app_user.sql`:建 `app_user` + GRANT + DEFAULT PRIVILEGES(覆盖现有 + 未来表)
+2. **`user_scoped_tx`** 加 `SET LOCAL ROLE app_user`(事务级,随 COMMIT/ROLLBACK 回退,不泄漏到 pool)
+3. **验证测试**:`conftest` 的 `pool`/`user_scoped_tx` 走 `app_user` 路径后,`test_rls_isolates_users`(user_a 查 user_b 的 thread 应为 `None`)必须 pass —— 这是 RLS 真生效的判据
+4. **逐环境验证**(本地绿不算数,因 role 行为差异):
+   - 本地:全量 DB 测试绿 + RLS 隔离测试 pass
+   - **test 环境**:部署后真实验证 RLS 隔离 + 所有 user 功能(connector/memory/chat/feedback…)不报 permission denied
+   - **prod**:test 通过后谨慎部署
+5. **回滚预案**:`SET LOCAL ROLE app_user` 出问题可单行回退(去掉 SET ROLE → 退回 superuser bypass 现状,主防线 repo user_id 仍在)
+
+## 5. 主要风险
+
+- **权限面**:`user_scoped_tx` 是所有 user 请求的 DB 入口。`app_user` 漏某表/sequence 的 GRANT → 生产 user 路径 `permission denied`。靠 `GRANT … ON ALL TABLES` + `ALTER DEFAULT PRIVILEGES` 兜全 + 全量测试覆盖每个 repo。
+- **prod/本地差异**:必须在 test/prod 真实验证,不能只信本地绿。
+- **`SET ROLE` 开销**:每事务一次 `SET LOCAL ROLE`,可忽略。
+
+## 6. 实施前的缓解(立即可做)
+
+- 主防线 repo 显式 `WHERE user_id` 必须保持。**新增 repo 一律显式过滤 user_id,不得依赖 RLS 兜底**(因为它没生效)。
+- 可加一个轻量静态检查 / code-review 清单:per-user 表的 repo 方法 SQL 必须含 `user_id` 条件。
+
+## 7. 与 DB gate 的关系
+
+`test_rls_*` 这类 RLS 隔离测试在现状(superuser bypass)下**测不出真 RLS**。DB gate(让 CI 跑 DB 测试)收尾时,这些测试先标 `xfail(reason="RLS role 模型未修复,见 2026-06-08-rls-role-model")`,等本方案落地后去掉 xfail。其余非 RLS 的 DB 测试(repo CRUD / pattern / scheduler)正常 enable。
+
+## 相关
+- `db/migrations/023_pai_rls.sql`(policy 模板 + service_role)、`024_pai_chat_role.sql`(pai_chat role split)
+- `src/pinai_agents/web/db/rls.py`(`user_scoped_tx` / `service_tx`)
+- 触发本文的 DB gate 调查:`test_chat_threads_repo.py` 的 `test_rls_isolates_users` 在 superuser 下无法验证隔离
