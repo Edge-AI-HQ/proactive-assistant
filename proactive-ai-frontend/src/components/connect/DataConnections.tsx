@@ -41,9 +41,9 @@ import { openOAuthAndAwaitClose } from "@/lib/oauth-popup";
  * historical and render nothing.
  *
  * Render rules:
- *   - while running:   "初始化中… stage=fetch · 拉取 42/100"
- *   - succeeded:       "初始化完成 · 12 facts"  (hidden 1h after completion)
- *   - failed:          "初始化失败 — short error reason"  (same window)
+ *   - while running:   "Initializing · Fetching data (limit 100)"
+ *   - succeeded:       "Initialized · 12 fetched"  (hidden 1h after completion)
+ *   - failed:          "Initialization failed — short error reason"  (same window)
  *   - lookup error:    nothing (silent fallback so we don't litter the UI)
  */
 function InitTaskChip({ toolkit, connectedAccountId }: { toolkit: string; connectedAccountId: string }) {
@@ -56,7 +56,7 @@ function InitTaskChip({ toolkit, connectedAccountId }: { toolkit: string; connec
     return (
       <p className="text-[10px] text-foreground/40 truncate flex items-center gap-1">
         <Loader2 size={9} className="animate-spin" />
-        正在初始化…
+        Initializing…
       </p>
     );
   }
@@ -71,21 +71,21 @@ function InitTaskChip({ toolkit, connectedAccountId }: { toolkit: string; connec
         const reason = String(task.result?.reason ?? "skipped");
         return (
           <p className="text-[10px] text-foreground/40 truncate">
-            初始化跳过 · {reason}
+            Initialization skipped · {reason}
           </p>
         );
       }
       return (
         <p className="text-[10px] text-emerald-600/80 truncate">
-          初始化完成 · 拉取 {rawInserted}{memoriesWritten > 0 ? ` · 提炼 ${memoriesWritten} memories` : ""}{skillsAdded > 0 ? ` · 生成 ${skillsAdded} skills` : ""}
+          Initialized · {rawInserted} fetched{memoriesWritten > 0 ? ` · ${memoriesWritten} memories` : ""}{skillsAdded > 0 ? ` · ${skillsAdded} skills` : ""}
         </p>
       );
     }
     // failed / timed_out / cancelled / lost — show shortest possible error
-    const shortErr = (task.last_error_message ?? task.last_error_code ?? "未知错误").slice(0, 80);
+    const shortErr = (task.last_error_message ?? task.last_error_code ?? "Unknown error").slice(0, 80);
     return (
       <p className="text-[10px] text-red-500/80 truncate">
-        初始化失败 — {shortErr}
+        Initialization failed — {shortErr}
       </p>
     );
   }
@@ -93,17 +93,17 @@ function InitTaskChip({ toolkit, connectedAccountId }: { toolkit: string; connec
   const stage = typeof task.progress?.stage === "string" ? task.progress.stage : null;
   const limit = Number(task.payload?.limit ?? 0);
   const progressDetail = (() => {
-    if (!stage) return "排队中";
-    if (stage === "fetch") return `拉取数据${limit ? ` (上限 ${limit})` : ""}`;
-    if (stage === "raw") return "落本地";
-    if (stage === "signals") return "提取观察";
-    if (stage === "evolve") return "提炼记忆";
+    if (!stage) return "Queued";
+    if (stage === "fetch") return `Fetching data${limit ? ` (limit ${limit})` : ""}`;
+    if (stage === "raw") return "Saving locally";
+    if (stage === "signals") return "Extracting signals";
+    if (stage === "evolve") return "Distilling memories";
     return stage;
   })();
   return (
     <p className="text-[10px] text-foreground/45 truncate flex items-center gap-1">
       <Loader2 size={9} className="animate-spin" />
-      初始化中 · {progressDetail}
+      Initializing · {progressDetail}
     </p>
   );
 }

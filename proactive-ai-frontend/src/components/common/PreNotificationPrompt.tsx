@@ -27,12 +27,12 @@ import {
  */
 export interface PreNotificationPromptProps {
   open: boolean;
-  /** Called when the user taps "开启通知". Should request OS permission
+  /** Called when the user taps "Turn on". Should request OS permission
    * and stamp notifyPermissionPromptedAt + (on grant) notifyNewCards=true.
    * Resolves after the parent finishes its write so the sheet stays
    * mounted during the network round-trip — no flash-of-empty. */
   onAccept: () => Promise<void>;
-  /** Called when the user taps "稍后". Should stamp
+  /** Called when the user taps "Later". Should stamp
    * notifyPermissionPromptedAt only (don't touch notifyNewCards). */
   onDecline: () => Promise<void>;
 }
@@ -80,10 +80,11 @@ export function PreNotificationPrompt({
           <div className="rounded-full bg-primary/10 p-3">
             <Bell className="h-6 w-6 text-primary" aria-hidden />
           </div>
-          <DrawerTitle className="text-center">开启通知</DrawerTitle>
+          <DrawerTitle className="text-center">Turn on notifications</DrawerTitle>
           <DrawerDescription className="text-center text-base leading-relaxed">
-            卡片生成可能需要几分钟到几小时。开通知后,生成完成时会立刻提醒你,
-            不用一直盯着 app。
+            Generating cards can take a few minutes to a few hours. With
+            notifications on, we'll alert you the moment they're ready — no need
+            to keep watching the app.
           </DrawerDescription>
         </DrawerHeader>
         <DrawerFooter className="gap-2">
@@ -93,7 +94,7 @@ export function PreNotificationPrompt({
             disabled={busy}
             className="w-full rounded-md bg-primary text-primary-foreground py-3 text-sm font-medium disabled:opacity-60"
           >
-            好的,开启
+            Turn on
           </button>
           <button
             type="button"
@@ -101,7 +102,7 @@ export function PreNotificationPrompt({
             disabled={busy}
             className="w-full rounded-md bg-transparent text-muted-foreground py-3 text-sm disabled:opacity-60"
           >
-            稍后
+            Later
           </button>
         </DrawerFooter>
       </DrawerContent>
