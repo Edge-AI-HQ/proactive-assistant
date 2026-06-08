@@ -11,7 +11,7 @@ name: Deploy Dev
 on:
   workflow_dispatch:
   push:
-    branches: [proactive-ai-v3]
+    branches: [main, proactive-ai-v3]
     paths:
       - 'pinai-agents/**'
       - 'ops/litellm/**'

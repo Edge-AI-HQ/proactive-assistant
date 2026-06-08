@@ -10,12 +10,12 @@ name: Internal Reward Dashboard Dev
 on:
   workflow_dispatch:
   pull_request:
-    branches: [proactive-ai-v3]
+    branches: [main, proactive-ai-v3]
     paths:
       - 'internal-reward-dashboard/**'
       - '.github/workflows/internal-reward-dashboard-dev.yml'
   push:
-    branches: [proactive-ai-v3]
+    branches: [main, proactive-ai-v3]
     paths:
       - 'internal-reward-dashboard/**'
       - '.github/workflows/internal-reward-dashboard-dev.yml'
