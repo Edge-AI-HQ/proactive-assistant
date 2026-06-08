@@ -262,7 +262,10 @@ export default function AutoDreamingSettings() {
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [visibleHistoryDays, setVisibleHistoryDays] = useState(DEFAULT_VISIBLE_HISTORY_DAYS);
 
-  const enabled = settings?.autoDreaming ?? false;
+  // Default ON, matching the pai_user_settings.auto_dreaming column DEFAULT
+  // (migration 086). Server lazy-creates the row at TRUE; this is only the
+  // pre-load display fallback.
+  const enabled = settings?.autoDreaming ?? true;
   const schedule = DREAMING_SCHEDULE;
   const loading = settingsLoading || runsLoading;
 
