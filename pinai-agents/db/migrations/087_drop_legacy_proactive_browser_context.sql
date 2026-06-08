@@ -1,0 +1,11 @@
+-- Drop the legacy `proactive_browser_context` table.
+--
+-- This table is not created by any migration in the repo and is not
+-- referenced by any current code: per-user Browserbase contexts now live
+-- on `users.browserbase_context_id` (web/services/browserbase_provisioning.py),
+-- which the account-deletion flow already tears down. The table only
+-- lingers in long-lived environments (dev) as a leftover from a removed
+-- migration, where it was keyed by `supabase_user_id` and thus never got
+-- swept by the `users` ON DELETE CASCADE — leaving orphan rows after an
+-- account delete. IF EXISTS makes this a safe no-op on fresh environments.
+DROP TABLE IF EXISTS proactive_browser_context;

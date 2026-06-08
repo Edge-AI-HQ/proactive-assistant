@@ -124,17 +124,25 @@ async def _cleanup_composio(user: User, result: AccountDeletionResult) -> None:
 
 
 async def _cleanup_litellm(user: User, result: AccountDeletionResult) -> None:
-    # List + delete all keys (not just users.litellm_virtual_key) so
-    # orphan keys from old re-provisioning paths get cleaned up too.
+    # Delete the token stored on the user row AND every key listed under
+    # the computed LiteLLM user_id. The stored token is the only reliable
+    # handle when an account's persisted LiteLLM user_id prefix has drifted
+    # from what _litellm_user_id() computes (e.g. legacy `proactive-<uuid>`
+    # rows that predate the `pinai-` scheme) — list-by-user_id alone would
+    # miss it and leave the key live. The list catches orphan keys from old
+    # re-provisioning paths.
+    tokens: set[str] = set()
+    if user.litellm_virtual_key:
+        tokens.add(user.litellm_virtual_key)
     try:
         keys = await list_keys_for_user(_litellm_user_id(user.supabase_user_id))
-        tokens = [k["token"] for k in keys if isinstance(k.get("token"), str)]
-        if tokens:
-            await delete_keys(tokens)  # SDK swallows LiteLLMError internally
-            result.litellm_keys_deleted = len(tokens)
+        tokens.update(k["token"] for k in keys if isinstance(k.get("token"), str))
     except LiteLLMError as e:
-        logger.warning("account.delete: litellm cleanup failed user=%s: %s", user.id, e)
+        logger.warning("account.delete: litellm list failed user=%s: %s", user.id, e)
         result.litellm_error = str(e)
+    if tokens:
+        await delete_keys(sorted(tokens))  # swallows LiteLLMError internally
+        result.litellm_keys_deleted = len(tokens)
 
 
 async def _cleanup_stripe(

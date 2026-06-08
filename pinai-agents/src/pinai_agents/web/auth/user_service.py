@@ -36,6 +36,13 @@ class User:
     litellm_virtual_key: str | None
     browserbase_context_id: str | None
 
+    def __post_init__(self) -> None:
+        # psycopg hydrates a uuid column as a UUID object; coerce to str at
+        # this boundary so the annotated type holds. Consumers that JSON-
+        # serialize it (Supabase Storage list/remove in account deletion)
+        # or compare it as a string can't trip over a stray UUID instance.
+        self.supabase_user_id = str(self.supabase_user_id)
+
 
 async def upsert_user_by_supabase_id(
     pool: AsyncConnectionPool,
