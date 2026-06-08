@@ -2,7 +2,7 @@ name: CI
 
 on:
   pull_request:
-    branches: [main, proactive-ai-v3]
+    branches: [main]
 
 # dorny/paths-filter calls the GitHub REST API to list changed files on
 # pull_request events, which needs pull-requests: read. The repo's default

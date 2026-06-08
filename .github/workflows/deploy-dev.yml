@@ -1,6 +1,6 @@
 name: Deploy Dev
 
-# Dev env: auto on push to proactive-ai-v3 (path-filtered), also manual
+# Dev env: auto on push to main (path-filtered), also manual
 # dispatch. Thin caller — all deploy logic lives in _deploy.yml.
 #
 # run_filter is on for push (deploy only the components whose source
@@ -11,7 +11,7 @@ name: Deploy Dev
 on:
   workflow_dispatch:
   push:
-    branches: [main, proactive-ai-v3]
+    branches: [main]
     paths:
       - 'pinai-agents/**'
       - 'ops/litellm/**'

@@ -14,7 +14,7 @@ on:
   # dev auto-builds + uploads to TestFlight on push (path-filtered to app
   # code). prod is dispatch-only — see deploy convention in AGENTS.md.
   push:
-    branches: [main, proactive-ai-v3]
+    branches: [main]
     paths:
       - 'proactive-ai-frontend/**'
       - 'capacitor-plugins/**'

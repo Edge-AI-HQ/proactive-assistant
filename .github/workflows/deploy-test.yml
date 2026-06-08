@@ -4,7 +4,7 @@ name: Deploy Test
 # merging. Thin caller; all deploy logic lives in _deploy.yml.
 #
 # Discovery note: this file MUST exist on the default branch
-# (proactive-ai-v3) for the "Run workflow" button to appear; once the
+# (main) for the "Run workflow" button to appear; once the
 # dropdown is up, GitHub uses the YAML + code from the branch you pick.
 #
 # run_filter is off — test always deploys all components (no path filter).
