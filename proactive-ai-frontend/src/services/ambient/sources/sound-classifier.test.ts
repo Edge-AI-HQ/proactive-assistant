@@ -797,6 +797,125 @@ describe("SoundClassifierSource transcript ingest", () => {
     vi.useRealTimers();
   });
 
+  test("drops punctuation-only transcriptReady text before it reaches the live session or outbox", () => {
+    const pushed: unknown[] = [];
+    const ctx: SourceContext = {
+      push: (item) => pushed.push(item),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+
+    source.handleTranscriptReadyForTest({
+      platform: "ios",
+      wavId: "wav-punctuation",
+      burstId: "burst-punctuation",
+      captureSessionId: "capture-punctuation",
+      text: ". . ...",
+      capturedAt: "2026-05-10T12:00:00.000Z",
+      durationMs: 500,
+      provider: "cloud_whisper",
+      fallback: false,
+    });
+
+    expect(pushed).toEqual([]);
+    expect(getAmbientLiveTranscriptSnapshot()).toBeNull();
+    expect(ctx.onEvent).toHaveBeenCalledWith(
+      "sound_classifier",
+      "discard:meaningless_text burst=burst-punctuation",
+    );
+    expect(ambientAiMock.audio.markCaptureProcessed).toHaveBeenCalledWith({
+      wavId: "wav-punctuation",
+    });
+  });
+
+  test("drops filler-only captureReady transcription and marks the capture processed", async () => {
+    const pushed: unknown[] = [];
+    const ctx: SourceContext = {
+      push: (item) => pushed.push(item),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+    captureTranscriptionMock.transcribeAmbientCapture.mockResolvedValue({
+      text: ". . Hello. Yes. ... Ok OK. The",
+      selfText: "",
+      speakerLabels: [],
+      segments: [],
+      diarizationStatus: "fallback_plain_text",
+      provider: "cloud_whisper",
+      event: {},
+    });
+
+    await source.handleCaptureReadyForTest({
+      platform: "ios",
+      wavId: "wav-filler",
+      burstId: "burst-filler",
+      captureSessionId: "capture-filler",
+      capturedAt: "2026-05-17T05:15:12.000Z",
+      durationMs: 3500,
+      byteSize: 320_000,
+      triggerSource: "audio_vad_fallback",
+    });
+
+    expect(pushed).toEqual([]);
+    expect(getAmbientLiveTranscriptSnapshot()).toBeNull();
+    expect(ctx.onEvent).toHaveBeenCalledWith(
+      "sound_classifier",
+      "discard:meaningless_text burst=burst-filler",
+    );
+    expect(ambientAiMock.audio.markCaptureProcessed).toHaveBeenCalledWith({ wavId: "wav-filler" });
+  });
+
+  test("trims leading and trailing filler while keeping meaningful mixed transcript text", async () => {
+    vi.setSystemTime(new Date("2026-05-17T05:15:30.000Z"));
+    const pushed: unknown[] = [];
+    const ctx: SourceContext = {
+      push: (item) => pushed.push(item),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+    captureTranscriptionMock.transcribeAmbientCapture.mockResolvedValue({
+      text: "Hello ... Jesus. . . Hello.. Hmm. 我刚才又把所有中文的地方都翻成英文了。 ...... Hello.",
+      selfText: "",
+      speakerLabels: [],
+      segments: [],
+      diarizationStatus: "fallback_plain_text",
+      provider: "cloud_whisper",
+      event: {},
+    });
+
+    await source.handleCaptureReadyForTest({
+      platform: "ios",
+      wavId: "wav-mixed",
+      burstId: "burst-mixed",
+      captureSessionId: "capture-mixed",
+      capturedAt: "2026-05-17T05:15:12.000Z",
+      durationMs: 3500,
+      byteSize: 320_000,
+      triggerSource: "audio_vad_fallback",
+    });
+
+    expect(pushed).toEqual([
+      expect.objectContaining({
+        kind: "session_summary",
+        summary: "我刚才又把所有中文的地方都翻成英文了。",
+        dedupe_key: "ios:audio:burst-mixed",
+      }),
+    ]);
+    expect(getAmbientLiveTranscriptSnapshot()).toMatchObject({
+      captureSessionId: "capture-mixed",
+      messages: [{
+        id: "burst-mixed",
+        text: "我刚才又把所有中文的地方都翻成英文了。",
+        source: "cloud_whisper",
+      }],
+    });
+    expect(ctx.onEvent).toHaveBeenCalledWith(
+      "sound_classifier",
+      "Voice transcript: 我刚才又把所有中文的地方都翻成英文了。",
+    );
+    vi.useRealTimers();
+  });
+
   test("drops empty-after-trim transcriptReady text with a discard counter", () => {
     const pushed: unknown[] = [];
     const ctx: SourceContext = {

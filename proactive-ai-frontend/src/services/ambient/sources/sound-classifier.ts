@@ -314,9 +314,17 @@ export class SoundClassifierSource implements AmbientSource {
       this.ctx.onEvent(this.key, `Ignored transcript provider: ${event.provider}`);
       return;
     }
-    const text = event.text.trim();
-    if (!text) {
+    const rawText = event.text.trim();
+    if (!rawText) {
       this.ctx.onEvent(this.key, `discard:empty_text burst=${event.burstId}`);
+      return;
+    }
+    const text = cleanAmbientTranscriptText(rawText);
+    if (!text) {
+      this.ctx.onEvent(this.key, `discard:meaningless_text burst=${event.burstId}`);
+      if (!this.inFlightCaptureBurstIds.has(event.burstId)) {
+        void this.markCaptureProcessed(event.wavId);
+      }
       return;
     }
     if (this.storedTranscriptBurstIds.has(event.burstId)) {
@@ -372,9 +380,16 @@ export class SoundClassifierSource implements AmbientSource {
     this.inFlightCaptureBurstIds.add(event.burstId);
     try {
       const result = await transcribeAmbientCapture(event, this.transcriptionLanguage());
-      const text = result.text.trim();
+      const rawText = result.text.trim();
+      if (!rawText) {
+        this.handledCaptureBurstIds.add(event.burstId);
+        await this.markCaptureProcessed(event.wavId);
+        return;
+      }
+      const text = cleanAmbientTranscriptText(rawText);
       if (!text) {
         this.handledCaptureBurstIds.add(event.burstId);
+        this.ctx.onEvent(this.key, `discard:meaningless_text burst=${event.burstId}`);
         await this.markCaptureProcessed(event.wavId);
         return;
       }
@@ -468,15 +483,19 @@ export class SoundClassifierSource implements AmbientSource {
       provider: input.provider,
       fallback: input.fallback,
     };
-    const speakerSegments = (input.transcription?.segments ?? []).map((segment) => ({
-      speaker: segment.speaker || "other",
-      text: segment.text,
-      start_ms: segment.startMs,
-      end_ms: segment.endMs,
-    }));
+    const speakerSegments = (input.transcription?.segments ?? []).flatMap((segment) => {
+      const segmentText = cleanAmbientTranscriptText(segment.text);
+      if (!segmentText) return [];
+      return [{
+        speaker: segment.speaker || "other",
+        text: segmentText,
+        start_ms: segment.startMs,
+        end_ms: segment.endMs,
+      }];
+    });
     payload.speaker_segments = speakerSegments;
     payload.speaker_labels = input.transcription?.speakerLabels ?? [];
-    payload.self_text = input.transcription?.selfText ?? "";
+    payload.self_text = cleanAmbientTranscriptText(input.transcription?.selfText ?? "") ?? "";
     if (input.transcription?.diarizationModel) {
       payload.diarization_model = input.transcription.diarizationModel;
     }
@@ -571,6 +590,130 @@ export class SoundClassifierSource implements AmbientSource {
 function isClassificationStale(lastClassificationAt: number | undefined): boolean {
   return typeof lastClassificationAt === "number"
     && Date.now() - lastClassificationAt > CLASSIFICATION_STALE_MS;
+}
+
+const MAX_TRANSCRIPT_CLEANUP_PASSES = 20;
+const LEADING_BOUNDARY_NOISE_RE = /^[\s\p{Punctuation}\p{Symbol}]+/u;
+const TRAILING_BOUNDARY_NOISE_RE = /[\s\p{Punctuation}\p{Symbol}]+$/u;
+const LEADING_WORD_RE = /^[A-Za-z]+/u;
+const TRAILING_WORD_RE = /[A-Za-z]+$/u;
+const LATIN_WORD_RE = /[A-Za-z][A-Za-z']*/g;
+const CJK_CHAR_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu;
+const NON_CONTENT_RE = /[\s\p{Punctuation}\p{Symbol}]+/gu;
+const EDGE_FILLER_WORDS = new Set([
+  "ah",
+  "er",
+  "hey",
+  "hi",
+  "hello",
+  "hm",
+  "hmm",
+  "jesus",
+  "mm",
+  "mmm",
+  "ok",
+  "okay",
+  "uh",
+  "um",
+  "yeah",
+  "yep",
+  "yes",
+]);
+const LOW_INFORMATION_WORDS = new Set([
+  ...EDGE_FILLER_WORDS,
+  "a",
+  "am",
+  "an",
+  "and",
+  "are",
+  "be",
+  "but",
+  "for",
+  "in",
+  "is",
+  "it",
+  "of",
+  "on",
+  "or",
+  "that",
+  "the",
+  "this",
+  "to",
+  "was",
+  "were",
+  "with",
+]);
+
+function cleanAmbientTranscriptText(value: string): string | null {
+  const cleaned = stripBoundaryTranscriptNoise(normalizeTranscriptWhitespace(value));
+  if (!isMeaningfulTranscriptText(cleaned)) return null;
+  return cleaned;
+}
+
+function stripBoundaryTranscriptNoise(value: string): string {
+  let text = value;
+  for (let pass = 0; pass < MAX_TRANSCRIPT_CLEANUP_PASSES; pass += 1) {
+    const before = text;
+    text = stripLeadingBoundaryNoise(text);
+    text = stripTrailingFillerWord(text);
+    if (text === before) break;
+  }
+  return normalizeTranscriptWhitespace(text);
+}
+
+function stripLeadingBoundaryNoise(value: string): string {
+  let text = value;
+  for (let pass = 0; pass < MAX_TRANSCRIPT_CLEANUP_PASSES; pass += 1) {
+    const before = text;
+    text = text.replace(LEADING_BOUNDARY_NOISE_RE, "").trimStart();
+    text = stripLeadingFillerWord(text).trimStart();
+    if (text === before) break;
+  }
+  return text;
+}
+
+function stripLeadingFillerWord(value: string): string {
+  const match = value.match(LEADING_WORD_RE);
+  if (!match || !isFillerWord(match[0])) return value;
+  return value.slice(match[0].length);
+}
+
+function stripTrailingFillerWord(value: string): string {
+  const withoutTrailingNoise = value.replace(TRAILING_BOUNDARY_NOISE_RE, "").trimEnd();
+  const match = withoutTrailingNoise.match(TRAILING_WORD_RE);
+  if (!match || match.index === undefined || !isFillerWord(match[0])) return value;
+  return trimTrailingFillerSeparator(withoutTrailingNoise.slice(0, match.index));
+}
+
+function trimTrailingFillerSeparator(value: string): string {
+  return value
+    .replace(/[\s…·•]+$/gu, "")
+    .replace(/(?:\s|\.{2,})+$/gu, "")
+    .replace(/[\s,;:、，；：]+$/gu, "")
+    .trimEnd();
+}
+
+function isMeaningfulTranscriptText(value: string): boolean {
+  const compact = value.replace(NON_CONTENT_RE, "");
+  if (!compact) return false;
+
+  const cjkChars = value.match(CJK_CHAR_RE)?.length ?? 0;
+  if (cjkChars >= 2) return true;
+
+  const words = value.match(LATIN_WORD_RE) ?? [];
+  const meaningfulWords = words.filter((word) => !LOW_INFORMATION_WORDS.has(word.toLowerCase()));
+  if (meaningfulWords.length >= 2) return true;
+
+  return /\d/u.test(value) && meaningfulWords.length >= 1;
+}
+
+function isFillerWord(value: string): boolean {
+  const word = value.toLowerCase();
+  return EDGE_FILLER_WORDS.has(word) || /^(?:h+mm+|m+|u+h+|u+m+|a+h+|e+r+)$/u.test(word);
+}
+
+function normalizeTranscriptWhitespace(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function errorMessage(error: unknown): string {
