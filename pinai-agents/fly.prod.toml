@@ -1,9 +1,8 @@
 app = 'proactive-ai-agents-prod'
 primary_region = 'iad'
 
-# Mirrors fly.dev.toml. Two changes:
-#   1. app name + DEPLOY_ENV = 'production'
-#   2. min_machines_running raised to 2 (no warmup penalty on first hit)
+# Mirrors fly.dev.toml. Differences: app name + DEPLOY_ENV = 'production'
+# and larger VM sizes (see [[vm]] below).
 #
 # See docs/plans/2026-05-04-pinai-agents-backend-consolidation.mdx § 部署形态.
 
@@ -44,7 +43,7 @@ primary_region = 'iad'
   force_https = true
   auto_stop_machines = 'suspend'
   auto_start_machines = true
-  min_machines_running = 2
+  min_machines_running = 1
   processes = ['web']
 
   [http_service.concurrency]
