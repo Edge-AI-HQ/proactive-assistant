@@ -45,6 +45,20 @@ describe("useAppNavigation", () => {
     expect(result.current.activeView).toBe("chat");
   });
 
+  test("navigateTo re-enters Setting at the top level (no stale sub-page)", () => {
+    const { result } = renderHook(() => useAppNavigation());
+    // Drill into a Setting sub-page, leave for another view, then come back.
+    act(() => {
+      result.current.navigateTo("account");
+      result.current.setSettingsSubPage("ambient");
+    });
+    expect(result.current.settingsSubPage).toBe("ambient");
+    act(() => result.current.navigateTo("now"));
+    act(() => result.current.navigateTo("account"));
+    expect(result.current.settingsSubPage).toBe("main");
+    expect(result.current.activeView).toBe("account");
+  });
+
   test("goBack closes layers in priority order (live > menu > card chat)", () => {
     const { result } = renderHook(() => useAppNavigation());
     act(() => {
