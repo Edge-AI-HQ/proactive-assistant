@@ -39,6 +39,7 @@ class GenerateRequest(BaseModel):
     matched_patterns: list[dict[str, Any]] = Field(default_factory=list)
     context_since: datetime | None = Field(default=None)
     context_until: datetime | None = Field(default=None)
+    generation_request: dict[str, Any] | None = Field(default=None)
 
 
 class GenerateResponse(BaseModel):
@@ -238,6 +239,7 @@ async def generate(
                 matched_patterns=req.matched_patterns,
                 context_since=req.context_since,
                 context_until=context_until,
+                generation_request=req.generation_request,
             )
     except TimeoutError as e:
         logger.warning(

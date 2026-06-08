@@ -424,6 +424,10 @@ class GenerateRequest(_CamelModel):
     # Pattern matcher output from the web side. Optional so legacy callers
     # (and unit tests) can omit it and fall back to free-LLM generation.
     matched_patterns: list[MatchedPatternPayload] = Field(default_factory=list)
+    # Request-scoped generation intent. Scheduled generator uses this to pass
+    # the user-confirmed brief into the existing generator pipeline without
+    # changing memory retrieval or card persistence.
+    generation_request: dict[str, Any] | None = None
 
 
 class GenerateResponse(_CamelModel):

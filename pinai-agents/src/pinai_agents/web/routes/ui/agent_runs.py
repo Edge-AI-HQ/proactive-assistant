@@ -35,6 +35,7 @@ _AGENT_KINDS = (
     "crystallize",
     "generator.manual",
     "generator.auto",
+    "generator.scheduled",
     "user.prompt",
 )
 

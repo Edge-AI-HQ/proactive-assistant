@@ -7,7 +7,12 @@ description: "Main Chat 创建用户确认过的定时卡片生成任务的设�
 
 ## 状态
 
-design 草案。本文记录已确认的产品和系统设计方向,不表示代码已经实现。
+design 已进入实施阶段。本文记录已确认的产品和系统设计方向;具体执行顺序见
+[`2026-06-07-scheduled-generator-cron-jobs-implementation`](./2026-06-07-scheduled-generator-cron-jobs-implementation)。
+
+2026-06-08 更新:默认分支已从 `proactive-ai-v3` 改名为 `main`,当前工作区已 rebase 到
+`origin/main`。后端核心路径已按本文方向推进到当前分支实现;Main Chat 和 Settings
+前端仍需按新 `main` 的 ConversationView / account 目录继续实现。
 
 ## 结论
 
@@ -176,6 +181,14 @@ create 阶段再做一次相似任务检查,作为 race condition 兜底:
 
 ### Main Chat
 
+当前 `main` 的 Main Chat 不再使用旧 `proactive-ai-frontend/src/components/main-chat/MainChatView.tsx`
+路径。后续实现必须接在当前 actor-kernel conversation 架构上:
+
+- `proactive-ai-frontend/src/components/chat/MainChat.tsx`
+- `proactive-ai-frontend/src/components/chat/conversation/ConversationView.tsx`
+- `proactive-ai-frontend/src/components/chat/conversation/useConversationRuntime.ts`
+- `proactive-ai-frontend/src/lib/api.ts` 的 `/api/conversation/*` client
+
 preview 返回后,Main Chat 展示结构化确认消息。它不是最终生成的 card,也不是 NowFeed card。
 
 结构化确认消息同时展示:
@@ -196,6 +209,12 @@ preview 返回后,Main Chat 展示结构化确认消息。它不是最终生成�
 ### Settings > Preferences
 
 Settings > Preferences 新增 Scheduled Tasks / Cron Jobs 模块。它只展示用户创建的 `generator.scheduled` 任务,不展示系统自己的 `generator.auto`。
+
+当前 `main` 的 Settings 入口已经从旧 `components/constellation/AccountPanel.tsx` 移到 account 目录。后续实现必须接在:
+
+- `proactive-ai-frontend/src/components/account/AccountPanel.tsx`
+- `proactive-ai-frontend/src/components/account/AutoDreamingSettings.tsx`
+- `proactive-ai-frontend/src/lib/api.ts`
 
 每个任务至少显示:
 
@@ -258,7 +277,9 @@ Out of scope:
 - 第一版不做任务质量 feedback loop。
 - 第一版不新建专门的 scheduled generator 表。
 - 第一版不让 Main Chat agent 到点直接执行用户请求。
-- 第一版不改 prompt、时间或 confirmed brief。
+- 第一版不重写 generator prompt 或 generator pipeline。允许在现有 planner prompt 加一个
+  request-scoped `generation_request` 输入,只用于把 `confirmed_brief` / `parsed_intent`
+  作为本次生成约束传入现有 pipeline。
 
 ## 错误处理
 

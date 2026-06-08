@@ -7,6 +7,7 @@ from pinai_agents.web.app import create_app
 from pinai_agents.web.auth.deps import current_user
 from pinai_agents.web.auth.user_service import User
 from pinai_agents.web.db.rls import service_tx
+from pinai_agents.web.routes.ui.agent_runs import _AGENT_KINDS
 
 
 def _user(user_id: int) -> User:
@@ -17,6 +18,10 @@ def _user(user_id: int) -> User:
         litellm_virtual_key=None,
         browserbase_context_id=None,
     )
+
+
+def test_agent_runs_surfaces_scheduled_generator_kind():
+    assert "generator.scheduled" in _AGENT_KINDS
 
 
 @pytest.mark.asyncio
