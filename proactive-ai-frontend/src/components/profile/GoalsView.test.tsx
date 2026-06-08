@@ -17,6 +17,18 @@ vi.mock("framer-motion", async () => {
       transition,
       whileHover,
       whileTap,
+      drag,
+      dragConstraints,
+      dragDirectionLock,
+      dragElastic,
+      dragControls,
+      dragListener,
+      onDrag,
+      onDragStart,
+      onDragEnd,
+      custom,
+      variants,
+      style,
       ...domProps
     } = props;
     void animate;
@@ -26,6 +38,18 @@ vi.mock("framer-motion", async () => {
     void transition;
     void whileHover;
     void whileTap;
+    void drag;
+    void dragConstraints;
+    void dragDirectionLock;
+    void dragElastic;
+    void dragControls;
+    void dragListener;
+    void onDrag;
+    void onDragStart;
+    void onDragEnd;
+    void custom;
+    void variants;
+    void style;
     return React.createElement(tag, domProps, children);
   };
 
@@ -34,6 +58,11 @@ vi.mock("framer-motion", async () => {
     motion: new Proxy({}, {
       get: (_target, tag) => makeMotionElement(String(tag)),
     }),
+    useMotionValue: (value: number) => {
+      let current = value;
+      return { get: () => current, set: (v: number) => { current = v; } };
+    },
+    animate: () => ({ stop: () => {} }),
   };
 });
 
