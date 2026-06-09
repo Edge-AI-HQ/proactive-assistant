@@ -387,3 +387,4 @@ make logs-pinai-web | grep -E "connector\.|composio|/devices/ingest"
 - [Ambient Lock-Screen Audio + Live Session Fix](../plans/2026-06-05-ambient-lock-screen-audio-live-session-fix):改熄屏录音、后台 WAV capture、captureSessionId 旋转、Live 当前/历史分区显示时必读。
 - [iOS Place Visits Durable Capture](../plans/2026-05-20-ios-place-visits-durable-capture):改 iOS CLVisit / Place Visits 采集、后台 visit 持久队列、Always 权限诊断、visit drain 入 Ambient timeline、或 Ambient settings source 启停判断时必读。
 - [Ambient Voice Identity + Speaker Diarization](../plans/2026-05-27-ambient-voice-identity-diarization):改 Setting > Ambient 本人声音录入、OpenAI diarized transcription、speaker segments payload、或 Ambient 转录里 `self` / `speaker_1` 等说话人标注时必读。
+- [Ambient 中英混合转录质量优化](../plans/2026-06-09-ambient-mixed-language-transcription-quality):改 Ambient live transcript / timeline 的中英混说转录质量、WAV burst 切片参数、OpenAI transcription language hint、或普通 `gpt-4o-transcribe` prompt/术语表时必读。
