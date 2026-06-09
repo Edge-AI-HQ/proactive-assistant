@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -303,14 +304,21 @@ async def postprocess_diarized_transcription(
     full_context = result.text.strip()
     async with httpx.AsyncClient(timeout=timeout) as client:
         for segment in result.segments:
-            corrected_text = await _postprocess_segment_text(
-                client=client,
-                base_url=base_url,
-                headers=headers,
-                model=model,
-                text=segment.text,
+            deterministic_text = _hotword_near_miss_corrections(
+                segment.text,
                 full_context=full_context,
             )
+            if deterministic_text != segment.text:
+                corrected_text = deterministic_text
+            else:
+                corrected_text = await _postprocess_segment_text(
+                    client=client,
+                    base_url=base_url,
+                    headers=headers,
+                    model=model,
+                    text=segment.text,
+                    full_context=full_context,
+                )
             corrected_segments.append(
                 SpeakerSegment(
                     speaker=segment.speaker,
@@ -410,6 +418,37 @@ def _postprocess_user_prompt(text: str, full_context: str) -> str:
     if not full_context or full_context == text:
         return f"Segment text to correct:\n{text}"
     return f"Full transcript context:\n{full_context}\n\nSegment text to correct:\n{text}"
+
+
+_TECHNICAL_CONTEXT_RE = re.compile(
+    r"claude|cloud\s*code|cloudcode|codex|code\s*x|gemini|genspark|gen\s*spark|"
+    r"harness|supabase|superbase|litellm|lite\s*[, _-]*l|composio|compusel|"
+    r"compocil|langsmith|lance\s+smith",
+    re.IGNORECASE,
+)
+_HOTWORD_NEAR_MISS_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\b(?:cloud\s*code|cloudcode|claw\s+code|claud\s+code)\b", re.I), "Claude Code"),
+    (re.compile(r"\bcode[\s_-]+x\b", re.I), "Codex"),
+    (re.compile(r"\bgen\s*spark\b", re.I), "Genspark"),
+    (re.compile(r"\bsuperbase\b", re.I), "Supabase"),
+    (
+        re.compile(r"\b(?:light|lite)\s*[, _-]*l\s*[, _-]*l\s*[, _-]*m(?=[\W_]|$)", re.I),
+        "LiteLLM",
+    ),
+    (re.compile(r"(?<![A-Za-z0-9])(?:compose\s*io|compusel|compocil)\b", re.I), "Composio"),
+    (re.compile(r"\bLiteLLM[_ ,.-]+Composio\b", re.I), "LiteLLM Composio"),
+    (re.compile(r"\b(?:lance|lang)\s+smith\b", re.I), "LangSmith"),
+    (re.compile(r"\bharness\s+agent\b", re.I), "Harness agent"),
+)
+
+
+def _hotword_near_miss_corrections(text: str, *, full_context: str) -> str:
+    if not _TECHNICAL_CONTEXT_RE.search(full_context or text):
+        return text
+    corrected = text
+    for pattern, replacement in _HOTWORD_NEAR_MISS_PATTERNS:
+        corrected = pattern.sub(replacement, corrected)
+    return corrected
 
 
 def _message_content(payload: Any) -> str | None:

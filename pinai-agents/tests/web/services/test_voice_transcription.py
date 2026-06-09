@@ -198,17 +198,17 @@ async def test_postprocess_diarized_transcription_corrects_segments_and_preserve
 
     result = await service.postprocess_diarized_transcription(
         result=service.DiarizedTranscriptionResult(
-            text="今天 review claude code 和 code x.\ngemini 走 harness agent.",
+            text="今天 review claude code 和 codex.\ngemini 走 harness workflow.",
             segments=[
                 service.SpeakerSegment(
                     speaker="self",
-                    text="今天 review claude code 和 code x.",
+                    text="今天 review claude code 和 codex.",
                     start_ms=0,
                     end_ms=1200,
                 ),
                 service.SpeakerSegment(
                     speaker="speaker_1",
-                    text="gemini 走 harness agent.",
+                    text="gemini 走 harness workflow.",
                     start_ms=1300,
                     end_ms=2400,
                 ),
@@ -243,9 +243,9 @@ async def test_postprocess_diarized_transcription_corrects_segments_and_preserve
         "role": "user",
         "content": (
             "Full transcript context:\n"
-            "今天 review claude code 和 code x.\ngemini 走 harness agent.\n\n"
+            "今天 review claude code 和 codex.\ngemini 走 harness workflow.\n\n"
             "Segment text to correct:\n"
-            "今天 review claude code 和 code x."
+            "今天 review claude code 和 codex."
         ),
     }
     assert result.text == "今天 review Claude Code 和 Codex.\nGemini 走 Harness agent."
@@ -257,3 +257,59 @@ async def test_postprocess_diarized_transcription_corrects_segments_and_preserve
         "今天 review Claude Code 和 Codex.",
         "Gemini 走 Harness agent.",
     ]
+
+
+async def test_postprocess_diarized_transcription_skips_model_for_known_hotword_near_misses(
+    monkeypatch,
+):
+    called = False
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, *args, **kwargs):
+            nonlocal called
+            called = True
+            raise AssertionError("model should not be called for deterministic hotword corrections")
+
+    monkeypatch.setattr(
+        service,
+        "get_web_settings",
+        lambda: SimpleNamespace(litellm_base_url="http://litellm:4000"),
+    )
+    monkeypatch.setattr(service.httpx, "AsyncClient", FakeAsyncClient)
+
+    raw = (
+        "今天测试 Cloudcode 和 Codex 然后比较 Gemini 和 GenSpark 的 Harness Agent "
+        "最后检查 Superbase Lite L_L_M_Compocil 和 Lance Smith"
+    )
+    result = await service.postprocess_diarized_transcription(
+        result=service.DiarizedTranscriptionResult(
+            text=raw,
+            segments=[
+                service.SpeakerSegment(
+                    speaker="self",
+                    text=raw,
+                    start_ms=0,
+                    end_ms=12950,
+                )
+            ],
+        ),
+        bearer_token="sk-test",
+    )
+
+    assert called is False
+    assert result.text == (
+        "今天测试 Claude Code 和 Codex 然后比较 Gemini 和 Genspark 的 Harness agent "
+        "最后检查 Supabase LiteLLM Composio 和 LangSmith"
+    )
+    assert result.segments[0].speaker == "self"
+    assert result.segments[0].start_ms == 0
+    assert result.segments[0].end_ms == 12950
