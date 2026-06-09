@@ -1,57 +1,109 @@
-"""InMemoryFrameBus — live fan-out, no replay, no DB."""
+"""RedisFrameBus — Redis Streams fan-out with cursor replay (fakeredis).
+
+Covers the two properties the resumable SSE stream rests on:
+  * replay-strictly-after-cursor → a reconnect carrying Last-Event-ID gets the
+    missed frames and NO duplicates (fixes the reconnect-gap loss).
+  * keepalive tick yields None, never closes the generator → an idle stream
+    stays open (fixes the old wait_for(anext) self-disconnect).
+"""
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
+from fakeredis import FakeAsyncRedis
 
-from pinai_agents.web.agent_core.framebus import InMemoryFrameBus
-
-
-@pytest.mark.asyncio
-async def test_framebus_fanout_in_order():
-    bus = InMemoryFrameBus()
-    sid = "s1"
-    received: list[dict] = []
-
-    async def consume() -> None:
-        async for frame in bus.subscribe(sid):
-            received.append(frame)
-            if frame.get("type") == "chat:done":
-                break
-
-    task = asyncio.create_task(consume())
-    await asyncio.sleep(0.01)  # let the subscriber register before publishing
-    await bus.publish(sid, {"type": "chat:delta", "data": {"delta": "hi"}})
-    await bus.publish(sid, {"type": "chat:done"})
-    await asyncio.wait_for(task, timeout=2)
-    assert [f["type"] for f in received] == ["chat:delta", "chat:done"]
+from pinai_agents.web.agent_core.framebus import Frame, RedisFrameBus
 
 
-@pytest.mark.asyncio
-async def test_framebus_publish_no_subscriber_is_noop():
-    bus = InMemoryFrameBus()
-    # batch run with no live subscriber: publish must not raise
-    await bus.publish("nobody", {"type": "chat:delta", "data": {"delta": "x"}})
+def _bus() -> RedisFrameBus:
+    # Own fake server per test; short block so the idle keepalive tick fires fast.
+    return RedisFrameBus(FakeAsyncRedis(decode_responses=True), block_ms=50)
+
+
+async def _drain_backlog(
+    bus: RedisFrameBus, sid: str, *, last_id: str = "0", limit: int = 10
+) -> list[tuple[str, Frame]]:
+    """Collect (entry_id, frame) from last_id until the first keepalive tick
+    (= backlog exhausted) or `limit`."""
+    out: list[tuple[str, Frame]] = []
+    async for item in bus.subscribe(sid, last_id=last_id):
+        if item is None:
+            break  # XREAD BLOCK elapsed → backlog drained
+        out.append(item)
+        if len(out) >= limit:
+            break
+    return out
 
 
 @pytest.mark.asyncio
-async def test_framebus_two_subscribers_both_receive():
-    bus = InMemoryFrameBus()
-    sid = "s2"
-    got_a: list[dict] = []
-    got_b: list[dict] = []
+async def test_publish_then_replay_in_order() -> None:
+    bus = _bus()
+    await bus.publish("s1", {"type": "chat:delta", "data": {"delta": "hi"}})
+    await bus.publish("s1", {"type": "chat:done"})
+    got = await _drain_backlog(bus, "s1")
+    assert [f["type"] for _id, f in got] == ["chat:delta", "chat:done"]
+    # entry ids are monotonic → usable as the SSE cursor / Last-Event-ID
+    ids = [i for i, _f in got]
+    assert ids == sorted(ids)
 
-    async def consume(sink: list[dict]) -> None:
-        async for frame in bus.subscribe(sid):
-            sink.append(frame)
-            if frame.get("type") == "chat:done":
-                break
 
-    ta = asyncio.create_task(consume(got_a))
-    tb = asyncio.create_task(consume(got_b))
-    await asyncio.sleep(0.01)
-    await bus.publish(sid, {"type": "chat:done"})
-    await asyncio.wait_for(asyncio.gather(ta, tb), timeout=2)
-    assert got_a and got_b  # fan-out reached both
+@pytest.mark.asyncio
+async def test_replay_strictly_after_cursor() -> None:
+    # The core resumability guarantee: reconnect from a cursor gets only what
+    # came AFTER it — no loss, no duplication.
+    bus = _bus()
+    await bus.publish("s2", {"type": "chat:delta", "data": {"delta": "a"}})
+    first = await _drain_backlog(bus, "s2")
+    cursor = first[0][0]
+    await bus.publish("s2", {"type": "chat:delta", "data": {"delta": "b"}})
+    after = await _drain_backlog(bus, "s2", last_id=cursor)
+    assert [f["data"]["delta"] for _id, f in after] == ["b"]
+
+
+@pytest.mark.asyncio
+async def test_keepalive_tick_when_idle_keeps_stream_open() -> None:
+    # Nothing published: the first item is the keepalive sentinel (None), and
+    # the generator is STILL ALIVE afterwards — this is the bug we fixed (the
+    # old keepalive cancelled the generator and ended the stream).
+    bus = _bus()
+    agen = bus.subscribe("idle", last_id="$")
+    assert await agen.__anext__() is None
+    assert await agen.__anext__() is None  # still ticking, not StopAsyncIteration
+    await agen.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_exists() -> None:
+    bus = _bus()
+    assert await bus.stream_exists("nope") is False
+    await bus.publish("here", {"type": "chat:done"})
+    assert await bus.stream_exists("here") is True
+
+
+@pytest.mark.asyncio
+async def test_fanout_two_subscribers_both_replay() -> None:
+    bus = _bus()
+    await bus.publish("s3", {"type": "chat:done"})
+    a = await _drain_backlog(bus, "s3")
+    b = await _drain_backlog(bus, "s3")
+    assert [f["type"] for _i, f in a] == ["chat:done"]
+    assert [f["type"] for _i, f in b] == ["chat:done"]
+
+
+@pytest.mark.asyncio
+async def test_history_reads_full_stream_oldest_first() -> None:
+    # /history scans this (by traceId) to locate an in-flight turn's replay
+    # cursor on a refresh.
+    bus = _bus()
+    await bus.publish("h1", {"type": "chat:thinking", "traceId": "run1", "data": {}})
+    await bus.publish("h1", {"type": "chat:delta", "traceId": "run1", "data": {"delta": "yo"}})
+    hist = await bus.history("h1")
+    assert [f["type"] for _id, f in hist] == ["chat:thinking", "chat:delta"]
+    ids = [i for i, _f in hist]
+    assert ids == sorted(ids)  # oldest → newest, so cursor scanning works
+
+
+@pytest.mark.asyncio
+async def test_history_empty_stream_is_empty_list() -> None:
+    bus = _bus()
+    assert await bus.history("nope") == []

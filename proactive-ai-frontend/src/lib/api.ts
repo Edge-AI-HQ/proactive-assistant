@@ -1269,12 +1269,15 @@ export async function* proxySSE<T = unknown>(
   }
 }
 
-/** GET-based SSE generator — sibling of `proxySSE` (which is POST-only).
- * Used by the proactive agent's long-lived push stream. */
+/** GET-based SSE generator — sibling of `proxySSE` (which is POST-only). Used
+ * by the resumable conversation stream. Yields `{ event, lastEventId }`: the
+ * `lastEventId` is the Redis Stream entry id from the preceding `id:` line (the
+ * resume cursor) — the caller stores it and echoes it back as `?lastEventId=`
+ * on reconnect so the server replays exactly the frames missed while gone. */
 export async function* proxyGetSSE<T = unknown>(
   path: string,
   signal?: AbortSignal
-): AsyncGenerator<T> {
+): AsyncGenerator<{ event: T; lastEventId: string | null }> {
   const res = await proxyFetch(path, { signal });
   if (!res.ok) throw new Error(`Proxy GET SSE ${path} failed: ${res.status}`);
   if (!res.body) throw new Error("No response body for SSE");
@@ -1282,6 +1285,10 @@ export async function* proxyGetSSE<T = unknown>(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  // The current resume cursor — tracked across chunks so each event is tagged
+  // with the `id:` that preceded it (an id line and its data line can split
+  // across reads).
+  let lastEventId: string | null = null;
 
   try {
     while (true) {
@@ -1294,12 +1301,16 @@ export async function* proxyGetSSE<T = unknown>(
 
       for (const line of lines) {
         const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith(":")) continue;
+        if (!trimmed || trimmed.startsWith(":")) continue; // blank / `: ping` keepalive
+        if (trimmed.startsWith("id:")) {
+          lastEventId = trimmed.slice(3).trim();
+          continue;
+        }
         if (trimmed.startsWith("data: ")) {
           const data = trimmed.slice(6);
           if (data === "[DONE]") return;
           try {
-            yield JSON.parse(data) as T;
+            yield { event: JSON.parse(data) as T, lastEventId };
           } catch {
             // skip non-JSON data lines
           }
@@ -1454,17 +1465,19 @@ export async function conversationCancel(
   if (!res.ok) throw new Error(`/conversation/cancel failed: ${res.status}`);
 }
 
-/** Long-lived push stream of a session's frames (SSE envelopes): thinking /
- *  reasoning / tool / text / requires_action / proactive:tick. Iterate until it
- *  ends, then reconnect. */
+/** Long-lived, resumable push stream of a session's frames (SSE envelopes):
+ *  thinking / reasoning / tool / text / requires_action / proactive:tick.
+ *  Iterate until it ends, then reconnect — passing the last `lastEventId` seen
+ *  so the server replays the frames missed during the gap (no loss, no dup).
+ *  Yields `{ event, lastEventId }`. */
 export function conversationStream<T = unknown>(
   sessionKey: string,
-  signal?: AbortSignal
-): AsyncGenerator<T> {
-  return proxyGetSSE<T>(
-    `/conversation/stream?session=${encodeURIComponent(sessionKey)}`,
-    signal
-  );
+  signal?: AbortSignal,
+  lastEventId?: string | null
+): AsyncGenerator<{ event: T; lastEventId: string | null }> {
+  const params = new URLSearchParams({ session: sessionKey });
+  if (lastEventId) params.set("lastEventId", lastEventId);
+  return proxyGetSSE<T>(`/conversation/stream?${params.toString()}`, signal);
 }
 
 /** Options for {@link conversationHistory}. */
@@ -1498,10 +1511,24 @@ export interface ConversationAwaiting {
  *  `nextCursor` is the id to pass back as `before` for the next older page
  *  (null when no more). `awaiting` is set only on the newest page (no `before`)
  *  when a HITL run is paused. Reuses the proactive history message shape. */
+/** The in-flight turn, surfaced on the newest page so a REFRESH mid-turn can
+ *  rebuild it — it isn't in pai_chat_messages until it finishes. `userTexts`
+ *  are the user bubble(s) to render (from the unconsumed mailbox; empty for a
+ *  regenerate, which reuses the existing bubble). `replayFrom` is the stream
+ *  cursor to open /stream from so the agent's frames replay and rebuild the
+ *  assistant bubble; null when the turn hasn't produced frames yet (just
+ *  sent — the live tail carries them). */
+export interface ConversationActive {
+  userTexts: string[];
+  replayFrom: string | null;
+}
+
 export interface ConversationHistoryPage {
   messages: ConversationHistoryMessage[];
   nextCursor: number | null;
   awaiting: ConversationAwaiting | null;
+  /** Non-null only on the newest page (no `before`) when a turn is mid-flight. */
+  active: ConversationActive | null;
 }
 
 export async function conversationHistory(
@@ -1520,11 +1547,13 @@ export async function conversationHistory(
     messages?: ConversationHistoryMessage[];
     nextCursor?: number | null;
     awaiting?: ConversationAwaiting | null;
+    active?: ConversationActive | null;
   };
   return {
     messages: Array.isArray(data.messages) ? data.messages : [],
     nextCursor: data.nextCursor ?? null,
     awaiting: data.awaiting ?? null,
+    active: data.active ?? null,
   };
 }
 

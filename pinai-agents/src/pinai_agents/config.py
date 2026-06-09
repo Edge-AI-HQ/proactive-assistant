@@ -53,6 +53,14 @@ class WebSettings(_BaseAppSettings):
     db_pool_max: int = 12
     db_pool_min: int = 1
 
+    # ── Redis (Agent Core live-frame bus) ──
+    # Redis Streams back the resumable SSE stream for conversational agents
+    # (frames:<session>): publish=XADD, subscribe=XREAD BLOCK from a cursor.
+    # Replaces the old in-memory FrameBus so frames survive a reconnect and
+    # reach an SSE held on a different web instance than the worker that
+    # produced them. Required by /api/conversation/stream.
+    redis_url: str | None = None
+
     # Scheduler tick interval. 3s = ceiling: PG LISTEN/NOTIFY wakes the
     # loop instantly on manual triggers, so this only matters for
     # cron-like schedules and as a fallback if NOTIFY drops. Each tick

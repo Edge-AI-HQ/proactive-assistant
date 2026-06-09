@@ -29,16 +29,17 @@ mirrors the chat-side checkpoint surgery).
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import uuid
+from collections.abc import AsyncIterator
 from typing import Any, Literal, cast, get_args
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from psycopg.types.json import Jsonb
 
+from ...agent_core.mailbox import MailboxRepository
 from ...agent_core.runs import RunRepository
 from ...auth.deps import User, current_user, get_pool
 from ...db.repositories.chat_messages import ChatMessagesRepository
@@ -50,7 +51,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/conversation", tags=["conversation"])
 
 _CARD_THREAD_PREFIX = "card-thread-"
-_KEEPALIVE_SECONDS = 15.0
 # Lazy-backfill cap for a thread that predates pai_chat_messages: how many of
 # its newest checkpoint turns to seed on first read. Matches ui/chat.py.
 _BACKFILL_LIMIT = 500
@@ -159,11 +159,21 @@ async def init(
 
     async with user_scoped_tx(pool, user.id) as conn:
         kind, _card_id = await _resolve_owned(session_key, user.id, conn)
-        # `existing` from pai_chat_messages: the worker writes one row per
-        # visible turn, and the legacy /chat-stream path did too, so a thread
-        # with any history has a row. A brand-new thread has none → existing=False.
+        # `existing` decides whether the FE lands on the conversation surface
+        # or the empty-state entry. True when the thread has persisted turns OR
+        # an in-flight one (active run / unconsumed mailbox rows): finalize
+        # writes history rows only at turn END, so a refresh mid-first-turn
+        # must still land in the conversation, where /history's `active`
+        # rebuilds the in-flight turn.
         latest = await ChatMessagesRepository(user.id, conn).latest_id(thread_id=session_key)
-    return {"sessionKey": session_key, "kind": kind, "existing": latest is not None}
+        existing = latest is not None
+        if not existing:
+            existing = await RunRepository(user.id, conn).get_active(
+                session_id=session_key
+            ) is not None or bool(
+                await MailboxRepository(user.id, conn).peek_pending(session_id=session_key)
+            )
+    return {"sessionKey": session_key, "kind": kind, "existing": existing}
 
 
 @router.post("/send", status_code=status.HTTP_202_ACCEPTED)
@@ -273,30 +283,44 @@ async def cancel(
 async def stream(
     request: Request,
     session: str = Query(..., min_length=1, max_length=200),
+    last_event_id: str | None = Query(default=None, alias="lastEventId"),
     user: User = Depends(current_user),
     pool=Depends(get_pool),
 ) -> StreamingResponse:
-    """Live event stream for a session (read via fetch + ReadableStream;
-    EventSource can't send Authorization). No replay — reconnect reads run
-    status + /history (plan §四.4 Claude-app model). Dev is single-instance;
-    prod multi-instance needs a RedisFrameBus."""
+    """Live, resumable event stream for a session (read via fetch +
+    ReadableStream; EventSource can't send the Authorization header).
+
+    Each frame carries its Redis Stream entry id as the SSE `id:` line. The
+    client echoes the last one back as `?lastEventId=` on reconnect and we
+    replay every frame after it (then tail) — a dropped stream (the old
+    keepalive self-disconnect, a network blip, a fly restart) loses nothing.
+    No cursor (first connect) tails from now; the client's past loads from
+    /history. A cursor pointing at an expired stream (TTL elapsed) can never
+    catch up, so we emit `conversation:resync` to make the client refetch
+    history + reconnect fresh. Multi-instance safe: the frames live in Redis,
+    not this process, so the worker need not run on this web instance."""
+    service = request.app.state.agent_service
     async with user_scoped_tx(pool, user.id) as conn:
         await _resolve_owned(session, user.id, conn)
-    sub = request.app.state.agent_service.subscribe(session).__aiter__()
 
-    async def gen():
+    async def gen() -> AsyncIterator[bytes]:
         # Initial event so the client flips to "connected" on an idle stream.
         hello = json.dumps({"type": "conversation:hello", "ts": 0, "data": {"sessionKey": session}})
         yield f"data: {hello}\n\n".encode()
-        while True:
-            try:
-                event = await asyncio.wait_for(anext(sub), timeout=_KEEPALIVE_SECONDS)
-            except TimeoutError:
-                yield b": keepalive\n\n"
+        # Stale-cursor guard: a reconnect whose cursor's stream has expired can
+        # never catch up — tell the client to resync from history.
+        if last_event_id and not await service.stream_exists(session):
+            resync = json.dumps({"type": "conversation:resync", "ts": 0, "data": {}})
+            yield f"data: {resync}\n\n".encode()
+        # "$" = tail from now (first connect); a concrete id = replay-then-tail.
+        start = last_event_id or "$"
+        async for item in service.subscribe(session, last_id=start):
+            if item is None:
+                yield b": ping\n\n"  # XREAD BLOCK window elapsed — keepalive, stream stays open
                 continue
-            except StopAsyncIteration:
-                break
-            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode()
+            entry_id, frame = item
+            data = json.dumps(frame, ensure_ascii=False)
+            yield f"id: {entry_id}\ndata: {data}\n\n".encode()
 
     return StreamingResponse(
         gen(),
@@ -323,8 +347,24 @@ def _row_to_message(row: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+async def _replay_cursor(service: Any, session: str, run_id: str) -> str | None:
+    """Stream cursor to replay the in-flight run's frames from: the entry id
+    just BEFORE the run's first frame (chat stamps every frame's traceId with
+    the run id), so an XREAD from it replays the WHOLE turn — thinking /
+    deltas / tools — while skipping frames of already-finished turns (those
+    are in pai_chat_messages). None when the run has no frames yet (just
+    claimed — the live tail carries them as they come)."""
+    cursor = "0"
+    for entry_id, frame in await service.stream_history(session):
+        if frame.get("traceId") == run_id:
+            return cursor
+        cursor = entry_id
+    return None
+
+
 @router.get("/history")
 async def history(
+    request: Request,
     session: str = Query(..., min_length=1, max_length=200),
     before: int | None = Query(default=None, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
@@ -353,8 +393,8 @@ async def history(
             # already received; _finalize_turn then appends it again). A
             # finished run committed its turns in the same tx as the status
             # flip, so latest_id is non-None and we never reach here.
-            active = await RunRepository(user.id, conn).get_active(session_id=session)
-            if active is None:
+            active_run = await RunRepository(user.id, conn).get_active(session_id=session)
+            if active_run is None:
                 backfilled = await call_chat_history(user_id=user.id, session_key=session)
                 if backfilled:
                     await repo.bulk_append(thread_id=session, turns=backfilled)
@@ -366,6 +406,7 @@ async def history(
         # the requires_action frame. Older pages (before set) skip it: the gate
         # is current state, not history.
         awaiting: dict[str, Any] | None = None
+        active: dict[str, Any] | None = None
         if before is None:
             run = await RunRepository(user.id, conn).get_awaiting(session_id=session)
             pa = run.pending_action if run else None
@@ -382,6 +423,40 @@ async def history(
                     # Same shape as a history message's parts.
                     "partialParts": pa.get("partial_parts") or [],
                 }
+            else:
+                # No paused run. An in-flight turn isn't in pai_chat_messages
+                # yet (finalize writes it on completion), so a refresh would
+                # show a blank where it should be. Rebuild it from the two
+                # durable sources: the unconsumed mailbox rows ARE the user
+                # text(s) (consume-on-completion — they stay pending until the
+                # turn finalizes, covering the sent-but-not-yet-claimed window
+                # too), and the Redis stream gives the cursor to replay the
+                # agent's frames from. A regenerate message renders no bubble —
+                # its user turn is already in history.
+                pending = await MailboxRepository(user.id, conn).peek_pending(session_id=session)
+                user_texts = [
+                    m.content
+                    for m in pending
+                    if m.source == "user" and m.content and not (m.meta or {}).get("regenerate")
+                ]
+                running = await RunRepository(user.id, conn).get_active(session_id=session)
+                if running is not None and running.status == "running":
+                    active = {
+                        "userTexts": user_texts,
+                        "replayFrom": await _replay_cursor(
+                            request.app.state.agent_service, session, running.id
+                        ),
+                    }
+                elif user_texts:
+                    # Sent but not yet claimed (no run row): show the user
+                    # bubble(s); the turn's frames arrive on the live tail
+                    # once the worker picks it up.
+                    active = {"userTexts": user_texts, "replayFrom": None}
     next_cursor = rows[-1]["id"] if len(rows) == limit else None
     messages = [_row_to_message(r) for r in reversed(rows)]
-    return {"messages": messages, "nextCursor": next_cursor, "awaiting": awaiting}
+    return {
+        "messages": messages,
+        "nextCursor": next_cursor,
+        "awaiting": awaiting,
+        "active": active,
+    }

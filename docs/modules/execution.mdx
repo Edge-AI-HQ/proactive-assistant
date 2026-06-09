@@ -105,7 +105,7 @@ sequenceDiagram
 | Endpoint | 模块 | 行为 |
 |---|---|---|
 | `POST /api/chat-stream/init` | `web/routes/ui/chat.py` | 解析 / mint session_key,validate 三种形态:1) 显式 body.session_key + 校 user 名空间;2) `card_id` → `card-thread-<id>`;3) 空 → 找用户最新 main thread 或 mint `main-<user_id>-<uuid>`。upsert `pai_chat_threads` metadata。返回 `{session_key, existing}`(existing 决定前端是否绕过 bootstrap)。 |
-| `POST /api/chat-stream/send` | `web/routes/ui/chat.py` | SSE。`_ensure_virtual_key` lazy-recover LiteLLM key,`ensure_browserbase_context` 一次性建 Browserbase context(用于 browser tool 复用 cookies)。调 `stream_chat()`,最后在 finalizer 里 bump `last_message_at` + `message_count`。 |
+| `POST /api/chat-stream/send` | `web/routes/ui/chat.py` | SSE。LiteLLM virtual key 直接读 user 行(onboarding 时已 provision,**无**懒恢复)。调 `stream_chat()`,最后在 finalizer 里 bump `last_message_at` + `message_count`。 |
 | `GET /api/chat-stream/history?session_key=...` | `web/routes/ui/chat.py` | 一次性 GET 给 `chat /agent/chat/history`,返回合并后的 turn 列表(用户 / assistant / tool 调用)。 |
 
 `pai_chat_threads`(migration `035_pai_chat_threads.sql`)字段:`user_id`、`thread_id` 复合 PK、`kind` ∈ `main|card`、`card_id`、`title`、`archived`、`created_at`、`last_message_at`、`message_count`。CHECK 约束 enforce session_key 命名 `main-{user_id}-{rand}` 或 `card-thread-{card_id}`。

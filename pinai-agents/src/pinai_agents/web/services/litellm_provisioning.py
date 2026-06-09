@@ -1,12 +1,18 @@
 """Per-user LiteLLM virtual key provisioning.
 
-Lifecycle (lazy — the key is never minted on the auth/signup path so
-login can't block on LiteLLM availability; see web/auth/user_service.py):
-    first use that needs the key (chat-send, generate, ambient, voice,
-    proactive, scheduler) → ensure_user_litellm_key()
+Lifecycle (never minted on the auth/signup path so login can't block on
+LiteLLM availability; see web/auth/user_service.py):
+    onboarding completion (profile.py update_settings) → ensure_user_litellm_key()
         → /user/new (idempotent on conflict)
         → /key/generate (returns sk-*)
         → UPDATE users SET litellm_virtual_key = ...
+    point-of-use re-ensure (generate, ambient, voice, scheduler dispatcher):
+        same call — beyond NULL recovery it re-checks the key covers the
+        required models, which is how a payment plan change propagates onto
+        the key (checkout/webhook rely on "the next ensure call").
+    chat send (conversation + legacy chat-stream) deliberately does NOT
+        ensure: the SPA gates the app on onboarding, so the key is already
+        on the user row by the time a chat turn runs.
 
 Only `litellm_virtual_key` is persisted on the users table. We don't
 cache user_id / key_alias / budget separately — LiteLLM is the source
@@ -191,9 +197,13 @@ async def ensure_user_litellm_key(
     *,
     required_models: set[str] | None = None,
 ) -> User:
-    """Lazy recovery — called from /chat-stream/send when the user row's
-    virtual_key is NULL. Raises on LiteLLM failure so the request sees
-    a clean 502 rather than a silent hang."""
+    """Mint-or-verify the user's virtual key. Called at onboarding completion
+    (profile update_settings — the primary mint) and at point of use by
+    generate / ambient / voice / the scheduler dispatcher, where the
+    model-coverage check also propagates payment plan changes onto the key.
+    NOT called on chat send (key must already exist; onboarding gates the
+    app). Raises on LiteLLM failure so the request sees a clean 502 rather
+    than a silent hang."""
     models = required_models or GENERATOR_REQUIRED_MODELS
     if await _key_supports_models(user, models):
         return user

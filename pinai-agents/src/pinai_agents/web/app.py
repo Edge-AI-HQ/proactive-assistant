@@ -6,7 +6,7 @@ with Supabase JWT; sandbox / chat process → here with an EdDSA agent-run JWT.
 Lifespan owns:
     * DB pool (psycopg AsyncConnectionPool, service_role)
     * Agent Core actor kernel (AgentRunService + AgentRunWorker + AgentBus
-      + in-memory FrameBus — swap to Redis before prod multi-instance)
+      + Redis-Streams FrameBus — resumable, multi-instance safe)
     * Scheduler tick_loop + world-ingest background tasks
 
 Mounts:
@@ -27,13 +27,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from psycopg_pool import AsyncConnectionPool
+from redis.asyncio import Redis
 
 from ..config import get_web_settings
 from .agent_core import (
     AgentRunService,
     AgentRunWorker,
     ChatRunClient,
-    InMemoryFrameBus,
+    RedisFrameBus,
     agent_bus,
 )
 from .db.pool import close_pool, open_pool
@@ -106,37 +107,44 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     scheduler_task: asyncio.Task[None] | None = None
     world_ingest_task: asyncio.Task[None] | None = None
     agent_worker: AgentRunWorker | None = None
+    redis_client: Redis | None = None
     if pool is not None:
-        # Agent Core actor kernel (plan 2026-06-04): AgentRunService is the
-        # produce-side API the routes call; the worker (below) drains every
-        # conversational session via a per-session lease. In-memory FrameBus
-        # (dev / single instance) — swap to Redis before prod multi-instance
-        # (plan §四.4). Created before the scheduler so its dispatcher can
-        # mirror batch agent runs into pai_agent_runs (RC-3).
-        framebus = InMemoryFrameBus()
-        app.state.agent_service = AgentRunService(pool, framebus)
-        scheduler_task = asyncio.create_task(
-            tick_loop(
-                pool,
-                interval_seconds=settings.scheduler_tick_seconds,
-                lease_seconds=settings.scheduler_lease_seconds,
-                service=app.state.agent_service,
-            ),
-            name="pinai-scheduler-tick",
-        )
-        # World signals ingest is a GLOBAL loop (one RSS pull serves
-        # every user) — it can't ride on pai_scheduled_tasks because that
-        # table requires user_id. Single asyncio task instead, sibling
-        # to the per-user scheduler tick. Multi-replica safety comes from
-        # the ingest_world UPSERT: idempotent on normalized_url.
+        # World signals ingest is a GLOBAL loop (one RSS pull serves every
+        # user) — it can't ride on pai_scheduled_tasks (that table requires
+        # user_id) and doesn't depend on Redis, so it runs whenever the DB is
+        # up. Multi-replica safety comes from the ingest_world UPSERT:
+        # idempotent on normalized_url.
         from .services.world_ingest import loop as world_ingest_loop  # noqa: PLC0415
 
-        world_ingest_task = asyncio.create_task(
-            world_ingest_loop(pool),
-            name="pinai-world-ingest",
-        )
-        agent_worker = AgentRunWorker(pool, framebus, agent_bus, ChatRunClient())
-        await agent_worker.start()
+        world_ingest_task = asyncio.create_task(world_ingest_loop(pool), name="pinai-world-ingest")
+        # Agent Core actor kernel (plan 2026-06-04): AgentRunService is the
+        # produce-side API the routes call; the worker (below) drains every
+        # conversational session via a per-session lease and fans frames out
+        # over the Redis-Streams FrameBus (resumable + multi-instance safe).
+        # Redis is REQUIRED — without it conversation/* and scheduler-driven
+        # proactive turns have nowhere to stream, so disable the kernel loudly
+        # rather than silently dropping every frame.
+        if not settings.redis_url:
+            logger.error(
+                "REDIS_URL not set — Agent Core kernel + scheduler disabled "
+                "(conversation/* unavailable). Set REDIS_URL (docker-compose "
+                "redis service locally; `fly redis` on dev/prod)."
+            )
+        else:
+            redis_client = Redis.from_url(settings.redis_url, decode_responses=True)
+            framebus = RedisFrameBus(redis_client)
+            app.state.agent_service = AgentRunService(pool, framebus)
+            scheduler_task = asyncio.create_task(
+                tick_loop(
+                    pool,
+                    interval_seconds=settings.scheduler_tick_seconds,
+                    lease_seconds=settings.scheduler_lease_seconds,
+                    service=app.state.agent_service,
+                ),
+                name="pinai-scheduler-tick",
+            )
+            agent_worker = AgentRunWorker(pool, framebus, agent_bus, ChatRunClient())
+            await agent_worker.start()
 
     try:
         yield
@@ -152,6 +160,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 t.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await t
+        if redis_client is not None:
+            await redis_client.aclose()
         if pool is not None:
             await close_pool(pool)
 

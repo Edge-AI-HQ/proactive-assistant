@@ -30,6 +30,22 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── Redis (Agent Core live-frame bus) ──
+  # Redis Streams back the resumable conversation SSE stream (frames:<session>):
+  # publish=XADD, subscribe=XREAD BLOCK from a cursor. Frames are short-lived
+  # (history truth is pai_chat_messages), so NO volume — a restart loses only
+  # in-flight stream tails, which a client reconnect rebuilds from history.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   # ── Database migration (runs once, then exits) ──
   # ── LiteLLM proxy ──
   litellm:
@@ -126,6 +142,8 @@ services:
         condition: service_healthy
       db-migrate:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     env_file:
       - ./pinai-agents/.env
     environment:
@@ -137,6 +155,8 @@ services:
       # cluster compose Postgres uses service-name DNS, not the prod
       # Supabase URL stored in .env.
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
+      # Agent Core FrameBus (Redis Streams) — per-worktree compose redis.
+      REDIS_URL: redis://redis:6379/0
       # web → chat HTTP proxy target.
       CHAT_INTERNAL_URL: http://pinai-chat:8001
     ports:

@@ -206,7 +206,7 @@ CI 把 `DOTENV_PRIVATE_KEY_TEST` / `DOTENV_PRIVATE_KEY_PROD` 当 GitHub secret;d
 
 - 配置:`ops/litellm/litellm_config.yaml`(model list、cache_control_injection、cost 表)。
 - 本地容器:`docker.litellm.ai/berriai/litellm:main-v1.82.0.dev1`,端口 4000。
-- 每用户 virtual key:`web/services/litellm_provisioning.py`,首次 signup 时 `ensure_user_litellm_key(pool, user)` 同步 mint;失败时 generate route lazy-recover 一次(`web/routes/ui/generate.py:_ensure_virtual_key`)。
+- 每用户 virtual key:`web/services/litellm_provisioning.py`,onboarding 完成时(`profile.py update_settings`)`ensure_user_litellm_key(pool, user)` mint;generate / ambient / voice / scheduler dispatcher 在使用点 re-ensure(顺带做模型覆盖检查,payment 套餐变更靠它传播到 key)。chat send(conversation + legacy chat-stream)**不做**懒恢复——SPA 用 onboarding gate,key 在聊天前已就位。
 - LiteLLM 自己用 `litellm` 数据库(db-migrate 容器 `CREATE DATABASE` 那一步),跟 `pai_*` 隔离。
 - Budget / Stripe 同步在 `web/payment/`。
 
