@@ -1,0 +1,434 @@
+---
+title: "Ambient Mixed Chinese-English Transcription Quality"
+description: "优化 Ambient live transcript / timeline 的中英混合转录质量:保留 diarize self 识别,拉长音频切片,普通 fallback 加混合语言 prompt 和术语表。"
+---
+
+# Ambient Mixed Chinese-English Transcription Quality Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** 提升 Ambient timeline / live transcript 在中英混说用户上的转录准确率,同时保留 Voice Identity 的 `self` / speaker attribution 价值。
+
+**Architecture:** iOS Ambient 仍然先保存 WAV capture,前端仍然走 `captureReady -> /api/voice/transcribe-diarized|transcribe -> live transcript + outbox`。本计划只改三层:端侧切片更长、Ambient 云转录默认不固定语言、普通 `gpt-4o-transcribe` 请求加中英混合 prompt + 术语表;diarize 路径保持优先,不因为 prompt 不支持而降级。
+
+**Tech Stack:** React + Vite + Capacitor Ambient plugin, Swift iOS audio capture, FastAPI, LiteLLM OpenAI-compatible `/audio/transcriptions`, OpenAI `gpt-4o-transcribe` / `gpt-4o-transcribe-diarize`, Vitest, pytest.
+
+---
+
+## Decisions Locked
+
+- Primary user language mode: early users are expected to speak mixed Mandarin Chinese and English.
+- Preserve diarize first: if Voice Identity is enabled, `gpt-4o-transcribe-diarize` remains the first attempt because identifying `self` is product-critical.
+- Diarize prompt support is UNVERIFIED, not a locked fact. Task 0 must confirm against current OpenAI docs whether `gpt-4o-transcribe-diarize` accepts `prompt`. If it does NOT, keep diarize prompt-free (plan default). If it DOES, also send the mixed-language prompt to diarize. Do not lock "diarize cannot take prompt" without that check.
+- Plain fallback gets prompt: ordinary `gpt-4o-transcribe` always receives the mixed-language prompt and glossary.
+- Ambient default language is auto/mixed: Ambient cloud transcription should omit the OpenAI `language` parameter by default so the model can detect Chinese and English inside the same capture.
+- Do not change Main Chat voice default in this plan. `VoiceProvider` can keep browser-native `SpeechRecognition`; this plan is only for Ambient timeline/live transcript.
+- This plan only fixes the authoritative CLOUD transcript (the `cloud_whisper` / diarize result that lands in timeline + outbox). The on-device `local_speech` live draft stays bound to `recognitionLocale` (`zh-CN` / `en-US`) and is NOT fixed here — its mixed-language quality residual is expected and out of scope.
+- Assumes the production iOS path routes capture through `readCapture -> /api/voice/transcribe*` (i.e. native `cloudMode = .off`). Task 0 confirms this so the backend prompt change is actually authoritative on device.
+- Prefer transcript quality over sub-second freshness: increase capture window size even if live transcript appears a few seconds later.
+
+## Target Data Flow
+
+```mermaid
+flowchart LR
+  A["iOS Ambient audio<br/>longer WAV capture"] --> B["captureReady"]
+  B --> C["Frontend readCapture"]
+  C --> D{"Voice Identity enabled?"}
+  D -->|yes| E["/api/voice/transcribe-diarized"]
+  E --> F["gpt-4o-transcribe-diarize<br/>speaker segments"]
+  E -->|failure| G["/api/voice/transcribe"]
+  D -->|no| G
+  G --> H["gpt-4o-transcribe<br/>mixed zh/en prompt<br/>no language hint"]
+  F --> I["live transcript + outbox/timeline"]
+  H --> I
+```
+
+## Files And Responsibilities
+
+- Modify `proactive-ai-frontend/src/services/ambient/sources/sound-classifier.ts`
+  - Increase Ambient capture window constants.
+  - Stop passing an OpenAI language hint for Ambient cloud transcription by default.
+- Modify `proactive-ai-frontend/src/services/ambient/capture-transcription.ts`
+  - Keep diarize-first behavior unchanged.
+  - Forward `undefined` language to both diarized and plain paths when Ambient is in mixed/auto mode.
+- Modify `proactive-ai-frontend/src/services/ambient/sources/sound-classifier.test.ts`
+  - Verify longer capture config.
+  - Verify Ambient cloud transcription is called without a fixed OpenAI language by default.
+- Modify `proactive-ai-frontend/src/services/ambient/capture-transcription.test.ts`
+  - Verify no `language` query is sent in the default Ambient path.
+  - Verify diarize failure still falls back to plain transcription.
+- Modify `pinai-agents/src/pinai_agents/web/services/voice_transcription.py`
+  - Add a single constant for the mixed-language prompt.
+  - Send `prompt` for ordinary `gpt-4o-transcribe` requests.
+  - Keep diarized request body unchanged.
+- Modify `pinai-agents/tests/web/routes/test_voice_transcribe.py`
+  - Verify `/api/voice/transcribe` sends `prompt`.
+  - Verify `/api/voice/transcribe-diarized` does not send `prompt`.
+
+## Transcription Prompt
+
+Use this exact prompt for ordinary `gpt-4o-transcribe`:
+
+```text
+The audio may contain mixed Mandarin Chinese and English. Transcribe exactly what is spoken. Keep English words, product names, acronyms, and technical terms in English. Use Simplified Chinese for Chinese speech. Do not translate between languages.
+
+Common terms may include: Claude Code, Codex, ChatGPT, GPT, OpenAI, Gemini, Cursor, Supabase, LiteLLM, Composio, LangSmith, Daytona, Fly.io, Vercel, GitHub, pull request, PR, commit, branch, merge, rebase, deploy, Docker, Xcode, iOS, Android, Ambient, PIN AI, Proactive AI.
+```
+
+> **Glossary hallucination risk.** Whisper-family models treat `prompt` as a prior. On far-field / noisy Ambient audio a long hardcoded term list can make the model PHANTOM-INSERT these exact words when they were never spoken. Task 5 must include a clip that contains NONE of the glossary terms and confirm none get inserted. If phantom insertion shows up, fall back to the language-instruction-only prompt (drop the `Common terms may include:` line) — the first paragraph alone already delivers most of the mixed-language benefit.
+
+## Capture Parameters
+
+Context: the short slicing is caused by the JS `LIVE_AUDIO_CONFIG` OVERRIDING the native defaults downward. The iOS `AudioCaptureConfig.swift` already defaults to longer windows (`postRollMs=10000`, `maxBurstMs=30000`, `minBurstMs=800`) and clamps each field to a hard ceiling (`postRollMs<=20000`, `maxBurstMs<=300000`, `minBurstMs<=30000`). So the new values below are all within native clamps and simply walk JS back toward what native already intended. `postRollMs=5000` is a deliberate latency compromise (native default is 10000); it can be raised toward 10000 if A/B shows sentences still get cut.
+
+Change `LIVE_AUDIO_CONFIG` in `sound-classifier.ts`:
+
+| Field | JS current | New | Native default | Native clamp | Why |
+|---|---:|---:|---:|---:|---|
+| `preRollMs` | 2000 | 2000 | 2000 | ≤5000 | Keep the useful lead-in before VAD fires. |
+| `postRollMs` | 2500 | 5000 | 10000 | ≤20000 | Avoid cutting a sentence during short pauses. |
+| `maxBurstMs` | 12000 | 20000 | 30000 | ≤300000 | Preserve more context than the old short slice while keeping live transcript latency lower than the original 30s plan. |
+| `minBurstMs` | 600 | 1000 | 800 | ≤30000 | Avoid uploading tiny fragments. |
+| `sessionSilenceGapMs` | 30000 | 30000 | 30000 | ≤600000 | Keep session rotation behavior stable. |
+| `maxSessionDurationMs` | 300000 | 300000 | 300000 | ≤3600000 | Keep session cap stable. |
+
+## Tasks
+
+### Implementation Status
+
+**2026-06-09 current checkout:**
+
+- Task 0 pre-flight is done: diarized prompt is unsupported by OpenAI docs, and shipped iOS capture uses native `cloudMode = .off` plus frontend `readCapture -> /api/voice/transcribe*`.
+- Tasks 1-4 code and automated verification are done: focused frontend tests, frontend type-check, focused backend tests, backend ruff/mypy, and ambient plugin build pass.
+- Task 5 real audio acceptance is not yet complete because `Smile iPhone` is currently `unavailable` in `devicectl` and `Offline` in `xctrace`; do not mark this plan complete until the four real Ambient clips are captured and checked.
+
+### Task 0: Pre-Flight Verification (no code changes)
+
+Resolve the two unverified assumptions before writing code. Findings change Task 3 and tell us whether the backend prompt is even authoritative on device.
+
+**Pre-flight result (2026-06-09):**
+
+- OpenAI Speech-to-text docs state `gpt-4o-transcribe-diarize` does not support prompts, logprobs, or `timestamp_granularities[]`; keep diarized transcription prompt-free.
+- Current shipped frontend calls `AmbientAi.audio.configure()` without `cloudMode`; native `AudioCaptureConfig` defaults `cloudMode` to `.off`, so iOS emits `captureReady` and the frontend reads the WAV via `readCapture -> /api/voice/transcribe*`. The backend prompt change is authoritative for the cloud transcript path.
+
+- [ ] **Step 1: Confirm whether `gpt-4o-transcribe-diarize` accepts `prompt`**
+
+Check current OpenAI `/audio/transcriptions` docs for the diarized model. Record the answer in this plan.
+- If `prompt` is NOT supported → keep diarize prompt-free; Task 3 stays as written.
+- If `prompt` IS supported → extend Task 3 to also send `MIXED_ZH_EN_TRANSCRIPTION_PROMPT` on the diarized request, and flip the diarized test assertion from `"prompt" not in captured["data"]` to `"prompt" in captured["data"]`.
+
+- [ ] **Step 2: Confirm the production iOS capture path routes through the backend**
+
+Verify native `cloudMode` is `.off` in the shipped build (so capture is saved as WAV and transcribed via `readCapture -> /api/voice/transcribe*`, not the native `devDirect -> api.openai.com` refine path in `AudioCaptureConfig.swift`). If any environment ships `cloudMode = .devDirect`, note that the backend prompt change will NOT reach those devices and a matching native-side change is required (out of scope here, but must be flagged, not silently missed).
+
+### Task 1: Ambient Capture Window
+
+**Files:**
+- Modify: `proactive-ai-frontend/src/services/ambient/sources/sound-classifier.ts`
+- Modify: `proactive-ai-frontend/src/services/ambient/sources/sound-classifier.test.ts`
+
+- [ ] **Step 1: Update the existing config assertion first**
+
+In `sound-classifier.test.ts`, update the existing configure expectation so it expects:
+
+```ts
+expect(ambientAiMock.audio.configure).toHaveBeenCalledWith({
+  recognitionLocale: "zh-CN",
+  preRollMs: 2000,
+  postRollMs: 5000,
+  maxBurstMs: 20000,
+  minBurstMs: 1000,
+  sessionSilenceGapMs: 30000,
+  maxSessionDurationMs: 300000,
+});
+```
+
+Run:
+
+```bash
+cd proactive-ai-frontend && npm test -- --run src/services/ambient/sources/sound-classifier.test.ts
+```
+
+Expected before implementation: FAIL because the current values are `2500 / 12000 / 600`.
+
+- [ ] **Step 2: Update `LIVE_AUDIO_CONFIG`**
+
+In `sound-classifier.ts`, change:
+
+```ts
+const LIVE_AUDIO_CONFIG = {
+  preRollMs: 2_000,
+  postRollMs: 5_000,
+  maxBurstMs: 20_000,
+  minBurstMs: 1_000,
+  sessionSilenceGapMs: 30_000,
+  maxSessionDurationMs: 5 * 60_000,
+} as const;
+```
+
+- [ ] **Step 3: Verify the capture config test passes**
+
+Run:
+
+```bash
+cd proactive-ai-frontend && npm test -- --run src/services/ambient/sources/sound-classifier.test.ts
+```
+
+Expected: PASS.
+
+### Task 2: Ambient Mixed/Auto Language
+
+**Files:**
+- Modify: `proactive-ai-frontend/src/services/ambient/sources/sound-classifier.ts`
+- Modify: `proactive-ai-frontend/src/services/ambient/sources/sound-classifier.test.ts`
+- Modify: `proactive-ai-frontend/src/services/ambient/capture-transcription.test.ts`
+
+- [ ] **Step 1: Update tests so Ambient cloud transcription no longer receives `zh` / `en` by default**
+
+In `sound-classifier.test.ts`, update tests that currently expect:
+
+```ts
+expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
+  expect.objectContaining({ wavId: "wav-cloud" }),
+  "zh",
+);
+```
+
+to:
+
+```ts
+expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
+  expect.objectContaining({ wavId: "wav-cloud" }),
+  undefined,
+);
+```
+
+For the existing test named like `uses user language preference for native recognition and cloud transcription`, rename it to:
+
+```ts
+test("uses user language preference for native recognition but leaves cloud transcription mixed", async () => {
+  // existing setup
+  expect(ambientAiMock.audio.configure).toHaveBeenCalledWith(
+    expect.objectContaining({ recognitionLocale: "en-US" }),
+  );
+  expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
+    expect.anything(),
+    undefined,
+  );
+});
+```
+
+Run:
+
+```bash
+cd proactive-ai-frontend && npm test -- --run src/services/ambient/sources/sound-classifier.test.ts
+```
+
+Expected before implementation: FAIL because `transcriptionLanguage()` still returns `zh` or `en`.
+
+- [ ] **Step 2: Change Ambient cloud language to mixed/auto**
+
+In `sound-classifier.ts`, keep `voiceLanguage()` for native `recognitionLocale`, but change the cloud language helper:
+
+```ts
+private transcriptionLanguage(): string | undefined {
+  return undefined;
+}
+```
+
+Keep this helper rather than deleting it so a future explicit `transcriptionMode` setting can route through one place.
+
+- [ ] **Step 3: Verify Ambient language tests pass**
+
+Run:
+
+```bash
+cd proactive-ai-frontend && npm test -- --run src/services/ambient/sources/sound-classifier.test.ts src/services/ambient/capture-transcription.test.ts
+```
+
+Expected: PASS.
+
+### Task 3: Plain Transcription Prompt
+
+**Files:**
+- Modify: `pinai-agents/src/pinai_agents/web/services/voice_transcription.py`
+- Modify: `pinai-agents/tests/web/routes/test_voice_transcribe.py`
+
+- [ ] **Step 1: Add tests for prompt behavior**
+
+In `test_voice_transcribe.py`, extend the mocked `httpx.AsyncClient.post` capture so the ordinary transcription test asserts:
+
+```python
+assert captured["data"]["model"] == "gpt-4o-transcribe"
+assert captured["data"]["response_format"] == "json"
+assert "prompt" in captured["data"]
+assert "mixed Mandarin Chinese and English" in captured["data"]["prompt"]
+assert "Claude Code" in captured["data"]["prompt"]
+assert "Codex" in captured["data"]["prompt"]
+assert "Do not translate between languages" in captured["data"]["prompt"]
+```
+
+In the diarized transcription test, assert:
+
+```python
+assert captured["data"]["model"] == "gpt-4o-transcribe-diarize"
+assert "prompt" not in captured["data"]
+```
+
+Run:
+
+```bash
+cd pinai-agents && uv run pytest tests/web/routes/test_voice_transcribe.py -q
+```
+
+Expected before implementation: FAIL because ordinary transcription does not send `prompt`.
+
+- [ ] **Step 2: Add the prompt constant**
+
+In `voice_transcription.py`, add near the model constants:
+
+```python
+MIXED_ZH_EN_TRANSCRIPTION_PROMPT = (
+    "The audio may contain mixed Mandarin Chinese and English. Transcribe exactly what is spoken. "
+    "Keep English words, product names, acronyms, and technical terms in English. "
+    "Use Simplified Chinese for Chinese speech. Do not translate between languages.\n\n"
+    "Common terms may include: Claude Code, Codex, ChatGPT, GPT, OpenAI, Gemini, Cursor, "
+    "Supabase, LiteLLM, Composio, LangSmith, Daytona, Fly.io, Vercel, GitHub, pull request, "
+    "PR, commit, branch, merge, rebase, deploy, Docker, Xcode, iOS, Android, Ambient, "
+    "PIN AI, Proactive AI."
+)
+```
+
+- [ ] **Step 3: Send prompt for ordinary transcription only**
+
+Change ordinary `transcribe_audio` request data from:
+
+```python
+data = {"model": model, "response_format": "json"}
+```
+
+to:
+
+```python
+data = {
+    "model": model,
+    "response_format": "json",
+    "prompt": MIXED_ZH_EN_TRANSCRIPTION_PROMPT,
+}
+```
+
+Do not add `prompt` to `transcribe_audio_diarized` — UNLESS Task 0 Step 1 found that `gpt-4o-transcribe-diarize` accepts `prompt`, in which case also add `"prompt": MIXED_ZH_EN_TRANSCRIPTION_PROMPT` to the diarized request body and update the diarized test assertion accordingly.
+
+- [ ] **Step 4: Verify backend tests pass**
+
+Run:
+
+```bash
+cd pinai-agents && uv run pytest tests/web/routes/test_voice_transcribe.py -q
+```
+
+Expected: PASS.
+
+### Task 4: End-to-End Local Verification
+
+**Files:**
+- No production code changes.
+
+- [ ] **Step 1: Run focused frontend tests**
+
+Run:
+
+```bash
+cd proactive-ai-frontend && npm test -- --run src/services/ambient/sources/sound-classifier.test.ts src/services/ambient/capture-transcription.test.ts src/components/voice/language.test.ts
+```
+
+Expected: PASS.
+
+- [ ] **Step 2: Run frontend type-check**
+
+Run:
+
+```bash
+cd proactive-ai-frontend && npm run type-check
+```
+
+Expected: PASS.
+
+- [ ] **Step 3: Run focused backend tests**
+
+Run:
+
+```bash
+cd pinai-agents && uv run pytest tests/web/routes/test_voice_transcribe.py -q
+```
+
+Expected: PASS.
+
+- [ ] **Step 4: Run backend static checks if backend code changed**
+
+Run:
+
+```bash
+cd pinai-agents && uv run ruff check src tests/web/routes/test_voice_transcribe.py && uv run mypy src
+```
+
+Expected: PASS.
+
+### Task 5: Real Audio Acceptance Check
+
+**Files:**
+- No required code changes.
+
+- [ ] **Step 1: Install or run the app through the normal mobile path**
+
+For iPhone verification, use the repo entrypoint and preserve the canonical app bundle:
+
+```bash
+make ios
+```
+
+Expected: app is built/synced for the existing bundle id; no new bundle id is introduced.
+
+- [ ] **Step 2: Capture three Ambient examples**
+
+Use the same physical environment and capture:
+
+1. A mostly Chinese sentence with one English product name.
+2. A mostly English sentence with one Chinese phrase.
+3. A naturally mixed sentence containing at least two glossary terms, for example `Claude Code`, `Codex`, `Supabase`, or `LiteLLM`.
+4. A control clip containing NONE of the glossary terms (plain everyday Chinese-English chat) — used to catch glossary phantom insertion.
+
+- [ ] **Step 3: Compare product-visible output**
+
+First confirm WHICH transcript you are judging: the fast on-device `local_speech` draft (still locale-bound, not fixed by this plan) or the authoritative cloud/diarize result that persists to timeline + outbox. Judge the cloud result.
+
+Acceptance criteria:
+
+- Live transcript appears later than before but does not split ordinary short pauses into separate fragments.
+- English technical terms remain in English in ordinary fallback transcripts.
+- Chinese speech remains Simplified Chinese.
+- Control clip (#4) transcript contains NONE of the glossary terms — no phantom insertion. If it does, drop the glossary line from the prompt (see Glossary hallucination risk).
+- Voice Identity enabled captures still show `self` / speaker labels when diarize succeeds.
+- If diarize fails, fallback transcript still appears and uses the mixed-language prompt.
+
+## Out Of Scope
+
+- No new transcription settings UI in this plan.
+- No LLM post-correction pass for diarized segments in this plan.
+- No direct OpenAI bypass; keep LiteLLM as the route.
+- No schema or migration changes.
+- No changes to Main Chat voice input.
+
+## Risk Notes
+
+- Longer captures increase transcription latency and request size. The new `maxBurstMs=20000` remains safely below the existing 25 MB backend upload cap for typical mono 16-bit WAV (20s mono 16-bit at 16 kHz ≈ 0.64 MB; even 48 kHz ≈ 1.9 MB).
+- Omitting `language` may slightly reduce accuracy for strictly single-language speech, but the target users are mixed Chinese-English speakers.
+- The hardcoded glossary in the prompt can cause phantom insertion of those terms on noisy/far-field audio. Mitigated by the Task 5 control clip; fallback is the language-instruction-only prompt.
+- Diarized transcription may mis-hear technical terms if it cannot receive `prompt`. Whether that limitation is real depends on Task 0 Step 1; preserving `self` is prioritized over promptability either way.
+- The on-device `local_speech` live draft remains locale-bound, so the first transcript the user sees during capture can still look rough on mixed speech even after this plan. Only the persisted cloud transcript is improved.
+
+## Rollback Plan
+
+- Revert `LIVE_AUDIO_CONFIG` to `postRollMs=2500`, `maxBurstMs=12000`, `minBurstMs=600` if live latency is still unacceptable.
+- Revert `transcriptionLanguage()` to return `this.voiceLanguage().openai` if auto language detection performs worse in real audio.
+- Remove `prompt` from ordinary `transcribe_audio` request data if LiteLLM or OpenAI rejects the field.

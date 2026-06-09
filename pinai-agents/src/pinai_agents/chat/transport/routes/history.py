@@ -5,11 +5,10 @@ into the wire format the proactive-ai-frontend already expects (see
 `proactive-ai-frontend/src/components/chat/useProactiveChatRuntime.ts`
 HistoryMessage / HistoryPart).
 
-Why: the frontend's `fetchHistory()` calls `/api/proxy/chat-stream/history`
-when the user opens MainChat. Without this endpoint the request fell
-through to OpenClaw's catch-all proxy, which has no record of LangGraph
-threads, so MainChat appeared empty even though all turns are stored in
-`langgraph.checkpoints` (Step 1.4 checkpointer).
+Why: web cannot read LangGraph's checkpoint tables itself, so its
+`call_chat_history` proxy (conversation /history backfill for threads that
+predate pai_chat_messages, and the proactive page's cursor reads) forwards
+here.
 
 Message merge logic mirrors `pinai-openclaw/.../chat-history-merge.ts`:
 each chain of (AIMessage … ToolMessage … AIMessage …) between two
@@ -73,11 +72,6 @@ class HistoryResponse(BaseModel):
     # for any pre-cursor consumer (they can ignore the new fields).
     hasMore: bool = False
     oldestCursor: str | None = None
-
-
-class ExistsResponse(BaseModel):
-    ok: bool
-    existing: bool
 
 
 # Read-only agents cached per kind (main / card). aget_state() only reads
@@ -156,25 +150,6 @@ async def _get_thread_messages(session_key: str) -> list[Any]:
     except Exception as e:
         logger.exception("state read failed session_key=%s", session_key)
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
-
-
-@router.get("/agent/chat/exists", response_model=ExistsResponse)
-async def chat_exists(
-    session_key: str = Query(..., min_length=1, max_length=200),
-    authorization: str | None = Header(default=None),
-) -> ExistsResponse:
-    """Does `session_key` already have any persisted turn?
-
-    Used by `/api/proxy/chat-stream/init` (frontend `useProactiveChatRuntime`
-    bootstrap path). "Has persisted turn" = at least one message in the
-    assembled state, not just "checkpoint row exists" — early-graph
-    checkpoints (control-flow only) can be written before the first
-    user-visible message lands.
-    """
-    principal = principal_from_header(authorization)
-    assert_session_key_principal(session_key, principal)
-    msgs = await _get_thread_messages(session_key)
-    return ExistsResponse(ok=True, existing=len(msgs) > 0)
 
 
 def _is_debug_only(entry: dict[str, Any]) -> bool:

@@ -99,6 +99,14 @@ class MailboxRepository(UserScopedRepository):
             for r in rows
         ]
 
+    async def peek_pending(self, *, session_id: str) -> list[Message]:
+        """Read-only view of the unconsumed queue (same rows claim_pending
+        returns — neither mutates; consumption is stamped at mark_consumed).
+        Backs /history's in-flight turn rebuild: consume-on-completion means a
+        running turn's input rows stay pending until finalize, so this IS the
+        durable source for the in-flight user message(s) across a refresh."""
+        return await self.claim_pending(session_id=session_id)
+
     async def mark_consumed(self, *, message_ids: list[int], run_id: str | None) -> None:
         """consume-on-completion: stamp the merged batch after the Run returns,
         recording which run consumed them (audit). run_id=None marks a message

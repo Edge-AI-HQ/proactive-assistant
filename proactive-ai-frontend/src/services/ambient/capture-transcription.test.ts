@@ -78,6 +78,35 @@ describe("transcribeAmbientCapture", () => {
     });
   });
 
+  test("omits language for diarized transcription when Ambient is mixed", async () => {
+    voiceApiMock.fetchVoiceIdentity.mockResolvedValue({
+      enabled: true,
+      speakerName: "self",
+      enrolledAt: "2026-05-27T00:00:00Z",
+      updatedAt: "2026-05-27T00:00:00Z",
+      referenceDurationMs: 5000,
+      referenceByteLen: 1000,
+    });
+    voiceApiMock.transcribeVoiceAudioDiarized.mockResolvedValue({
+      text: "Self said Claude Code. Speaker replied in Chinese.",
+      selfText: "Self said Claude Code.",
+      speakerLabels: ["self", "speaker_1"],
+      segments: [],
+      provider: "cloud_diarize",
+      diarizationStatus: "matched_reference",
+      diarizationModel: "gpt-4o-transcribe-diarize",
+    });
+
+    const { transcribeAmbientCapture } = await import("./capture-transcription");
+    await transcribeAmbientCapture(event);
+
+    expect(voiceApiMock.transcribeVoiceAudioDiarized).toHaveBeenCalledWith(
+      expect.any(Blob),
+      { language: undefined },
+    );
+    expect(transcriptionApiMock.transcribeVoiceAudio).not.toHaveBeenCalled();
+  });
+
   test("falls back to plain transcription when identity is not enrolled", async () => {
     voiceApiMock.fetchVoiceIdentity.mockResolvedValue(null);
     transcriptionApiMock.transcribeVoiceAudio.mockResolvedValue("Plain transcript");
@@ -95,6 +124,24 @@ describe("transcribeAmbientCapture", () => {
       selfText: "",
       speakerLabels: [],
       segments: [],
+      provider: "cloud_whisper",
+      diarizationStatus: "not_enrolled",
+    });
+  });
+
+  test("omits language for plain transcription when Ambient is mixed", async () => {
+    voiceApiMock.fetchVoiceIdentity.mockResolvedValue(null);
+    transcriptionApiMock.transcribeVoiceAudio.mockResolvedValue("Plain mixed transcript");
+
+    const { transcribeAmbientCapture } = await import("./capture-transcription");
+    const result = await transcribeAmbientCapture(event);
+
+    expect(transcriptionApiMock.transcribeVoiceAudio).toHaveBeenCalledWith(
+      expect.any(Blob),
+      { language: undefined },
+    );
+    expect(result).toMatchObject({
+      text: "Plain mixed transcript",
       provider: "cloud_whisper",
       diarizationStatus: "not_enrolled",
     });
@@ -120,6 +167,10 @@ describe("transcribeAmbientCapture", () => {
       provider: "cloud_whisper",
       diarizationStatus: "fallback_plain_text",
     });
+    expect(transcriptionApiMock.transcribeVoiceAudio).toHaveBeenCalledWith(
+      expect.any(Blob),
+      { language: "en" },
+    );
   });
 
   test("retries plain transcription on a transient 429 then succeeds", async () => {

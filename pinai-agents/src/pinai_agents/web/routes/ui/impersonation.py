@@ -66,7 +66,7 @@ async def mint_impersonation_token(
         )
     token, run_id = sign_agent_run_jwt(
         user_id=target.id,
-        # vk lets the token drive chat-stream when the target has a key;
+        # vk lets the token drive chat turns when the target has a key;
         # the preferences write path doesn't require it.
         virtual_key=target.litellm_virtual_key,
         actor="internal_operator",

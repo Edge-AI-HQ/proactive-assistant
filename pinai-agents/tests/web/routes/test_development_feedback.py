@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import httpx
 import pytest
 
@@ -35,9 +37,14 @@ async def _client_for(
     user_id: int,
     *,
     agent_run: AgentRun | None = None,
+    agent_service: AsyncMock | None = None,
 ) -> httpx.AsyncClient:
     app = create_app()
     app.state.pool = pool
+    if agent_service is not None:
+        # /api/conversation/* posts onto the actor kernel; tests inject a
+        # recording fake (the real one is wired in the lifespan).
+        app.state.agent_service = agent_service
     app.dependency_overrides[current_user] = lambda: _user(user_id)
     app.dependency_overrides[current_agent_run] = lambda: (
         agent_run
@@ -124,37 +131,35 @@ async def test_agent_route_stamps_internal_operator_source(pool, user_ids):
 
 
 @pytest.mark.asyncio
-async def test_chat_send_does_not_intercept_normal_user_messages(pool, user_ids, monkeypatch):
-    """`/api/chat-stream/send` must always reach the LLM — no web-side
-    keyword fast-path silently logs the turn as dev feedback. Capture
-    flows only through the agent's `development_feedback_log` tool now.
+async def test_chat_send_does_not_intercept_normal_user_messages(pool, user_ids):
+    """`/api/conversation/send` must always reach the agent pipeline — no
+    web-side keyword fast-path silently logs the turn as dev feedback.
+    Capture flows only through the agent's `development_feedback_log` tool.
     """
     user_a, _ = user_ids
-
-    seen: list[str] = []
-
-    async def fake_stream_chat(**kwargs):
-        seen.append(kwargs["message"])
-        yield b"event: chat:done\ndata: {}\n\n"
-
-    monkeypatch.setattr("pinai_agents.web.routes.ui.chat.stream_chat", fake_stream_chat)
-    client = await _client_for(pool, user_a)
+    service = AsyncMock()
+    client = await _client_for(pool, user_a, agent_service=service)
     session_key = f"main-{user_a}-devfeedback"
 
     # This message previously matched the (request marker × product noun)
     # fast-path heuristic and got silently converted to dev feedback.
     async with client:
         res = await client.post(
-            "/api/chat-stream/send",
+            "/api/conversation/send",
             json={
-                "sessionKey": session_key,
+                "session_key": session_key,
                 "message": "Can you add an export button to these cards?",
             },
         )
 
-    assert res.status_code == 200, res.text
-    # Now it must reach the chat worker like any other turn.
-    assert seen == ["Can you add an export button to these cards?"]
+    assert res.status_code == 202, res.text
+    # It must reach the kernel mailbox unmodified, like any other turn.
+    service.post_message.assert_awaited_once()
+    assert service.post_message.await_args.args == (session_key,)
+    assert (
+        service.post_message.await_args.kwargs["content"]
+        == "Can you add an export button to these cards?"
+    )
     async with user_scoped_tx(pool, user_a) as conn:
         rows = await DevelopmentFeedbackRepository(user_a, conn).list(status="new")
     # And no row is silently written by the web layer; the LLM tool path

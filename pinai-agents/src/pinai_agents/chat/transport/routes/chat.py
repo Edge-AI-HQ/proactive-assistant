@@ -481,7 +481,11 @@ async def _stream(
         )
         events = stream_events(agent, stream_input, config)
         try:
-            async for chunk in langgraph_to_sse(events):
+            # trace_id stamps every frame's traceId with this run's id — the
+            # FE classifies proactive tick turns by it, and web's /history
+            # locates the in-flight turn's frames in the Redis stream by it
+            # (refresh replay).
+            async for chunk in langgraph_to_sse(events, trace_id=principal.run_id):
                 yield chunk
             # Bound the main thread's working context once the turn finishes
             # (card threads are short-lived — no trim). Best-effort: a trim

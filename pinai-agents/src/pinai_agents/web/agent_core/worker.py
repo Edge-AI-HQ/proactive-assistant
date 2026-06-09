@@ -567,7 +567,7 @@ class AgentRunWorker:
             chat_msgs = ChatMessagesRepository(user_id=user_id, conn=conn)
             if regenerate:
                 # Retry / Edit: mirror chat's pop-tail-and-rerun on
-                # pai_chat_messages (same logic as ui/chat.py _persist_turn).
+                # pai_chat_messages.
                 # An edit (user text changed) replaces user+assistant; a pure
                 # regenerate replaces only the assistant. Empty table (thread
                 # predates the table) → skip surgery, just append the new

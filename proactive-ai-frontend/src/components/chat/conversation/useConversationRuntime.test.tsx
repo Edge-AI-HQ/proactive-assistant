@@ -51,6 +51,7 @@ function page(
     messages,
     nextCursor: extras.nextCursor ?? null,
     awaiting: extras.awaiting ?? null,
+    active: extras.active ?? null,
   };
 }
 

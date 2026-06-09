@@ -44,6 +44,20 @@ def is_claude_model(model: str | None) -> bool:
     return "claude" in normalized or "anthropic." in normalized
 
 
+def is_kimi_model(model: str | None) -> bool:
+    """Return true for Moonshot Kimi aliases (e.g. ``kimi-k2.6``).
+
+    Kimi thinking-series models reject any temperature other than 1
+    regardless of whether thinking is requested ("invalid temperature:
+    only 1 is allowed for this model").
+    """
+
+    if not model:
+        return False
+    normalized = model.lower().removeprefix("moonshot/")
+    return normalized.startswith("kimi")
+
+
 def build_reasoning_options(
     *,
     model: str | None,
@@ -101,7 +115,7 @@ def build_reasoning_options(
 
     return ReasoningOptions(
         extra_body=extra_body,
-        force_temperature_one=enable_thinking and claude_reasoning,
+        force_temperature_one=(enable_thinking and claude_reasoning) or is_kimi_model(model),
         output_version=output_version,
         reasoning=reasoning,
         include=include,

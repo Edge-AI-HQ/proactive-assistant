@@ -4,8 +4,8 @@ import { normalizeVoiceLanguage } from "./language";
 
 describe("normalizeVoiceLanguage", () => {
   test("does not force English when no user preference is available", () => {
-    expect(normalizeVoiceLanguage(null)).toEqual({ browser: "zh-CN" });
-    expect(normalizeVoiceLanguage("auto")).toEqual({ browser: "zh-CN" });
+    expect(normalizeVoiceLanguage(null)).toEqual({ openai: "zh", browser: "zh-CN" });
+    expect(normalizeVoiceLanguage("auto")).toEqual({ openai: "zh", browser: "zh-CN" });
   });
 
   test("uses the saved generation language as the transcription hint", () => {

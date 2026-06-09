@@ -20,9 +20,11 @@ from ...services.litellm_provisioning import ensure_user_litellm_key
 from ...services.voice_transcription import (
     ALLOWED_TRANSCRIPTION_MODELS,
     DEFAULT_TRANSCRIPTION_MODEL,
+    DEFAULT_TRANSCRIPTION_POSTPROCESS_MODEL,
     DIARIZED_TRANSCRIPTION_MODEL,
     MAX_AUDIO_BYTES,
     normalize_transcription_language,
+    postprocess_diarized_transcription,
     transcribe_audio,
     transcribe_audio_diarized,
 )
@@ -253,7 +255,7 @@ async def transcribe_voice_input_diarized(
         user = await ensure_user_litellm_key(
             pool,
             user,
-            required_models={DIARIZED_TRANSCRIPTION_MODEL},
+            required_models={DIARIZED_TRANSCRIPTION_MODEL, DEFAULT_TRANSCRIPTION_POSTPROCESS_MODEL},
         )
     except Exception as exc:
         logger.exception("voice diarization key provisioning failed user=%s", user.id)
@@ -281,6 +283,14 @@ async def transcribe_voice_input_diarized(
     except LiteLLMError as exc:
         logger.warning("voice diarization failed user=%s: %s", user.id, exc)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    try:
+        result = await postprocess_diarized_transcription(
+            result=result,
+            bearer_token=user.litellm_virtual_key,
+        )
+    except LiteLLMError as exc:
+        logger.warning("voice diarization postprocess failed user=%s: %s", user.id, exc)
 
     speaker_labels = _speaker_labels([segment.speaker for segment in result.segments])
     self_text = " ".join(

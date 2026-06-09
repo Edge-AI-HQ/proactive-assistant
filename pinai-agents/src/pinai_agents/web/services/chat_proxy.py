@@ -1,21 +1,16 @@
-"""web → chat HTTP proxy + SSE pipe-through.
+"""web → chat one-shot HTTP proxies.
 
-Used by the legacy /api/chat-stream/* routes (ui/chat.py, slated for removal);
-the new /api/conversation/* path drives chat through agent_core/client.py
-instead, and only reuses call_chat_history() here for history backfill.
-
-stream_chat flow — web takes a Supabase-authenticated request and:
-  1. resolves to BIGINT user_id
-  2. signs an EdDSA agent run JWT
-  3. POST chat:8001/agent/chat with JWT in Authorization
-  4. streams the chat worker's SSE response back to the client byte-for-byte
+The conversation path (/api/conversation/*) drives chat through
+agent_core/client.py (ChatRunClient); this module holds the remaining
+one-shot proxies web needs: history reads (conversation backfill + the
+proactive page) and the generator call. Each signs a per-call EdDSA agent
+run JWT — chat never reads the DB.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any
 
@@ -32,106 +27,6 @@ _GENERATE_READ_TIMEOUT_SECONDS = 600.0
 def _chat_internal_url() -> str:
     """Step C default. Step F+: WEB_INTERNAL_URL / CHAT_INTERNAL_URL split."""
     return os.environ.get("CHAT_INTERNAL_URL", "http://pinai-chat:8001")
-
-
-async def stream_chat(
-    *,
-    user_id: int,
-    session_key: str,
-    message: str,
-    card_context: dict[str, Any] | None,
-    virtual_key: str,
-    browserbase_context_id: str | None = None,
-    client_hints: dict[str, Any] | None = None,
-    regenerate: bool = False,
-) -> AsyncIterator[bytes]:
-    """Forward to chat worker /agent/chat and yield SSE bytes back.
-
-    Caller (route handler) wraps the returned iterator in a
-    StreamingResponse(media_type="text/event-stream"). The user's LiteLLM
-    `virtual_key` and Browserbase `bbctx` ride in the JWT claims so the
-    chat worker process never needs DB access for these. `client_hints`
-    is the frontend's device profile (viewport + mobile/tablet/desktop)
-    — passed through to the chat worker which feeds it to BB session
-    creation so mobile users get mobile-rendered pages.
-    """
-    token, run_id = sign_agent_run_jwt(
-        user_id=user_id,
-        virtual_key=virtual_key,
-        browserbase_context_id=browserbase_context_id,
-    )
-    body: dict[str, Any] = {
-        "session_key": session_key,
-        "message": message,
-        "card_context": card_context,
-        "regenerate": regenerate,
-    }
-    if client_hints is not None:
-        body["client_hints"] = client_hints
-    url = f"{_chat_internal_url()}/agent/chat"
-
-    timeout = httpx.Timeout(connect=5.0, read=600.0, write=10.0, pool=10.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        try:
-            async with client.stream(
-                "POST",
-                url,
-                json=body,
-                headers={"Authorization": f"Bearer {token}", "X-Run-Id": run_id},
-            ) as resp:
-                if resp.status_code >= 400:
-                    payload = await resp.aread()
-                    logger.warning(
-                        "chat worker returned %d for run=%s body=%r",
-                        resp.status_code,
-                        run_id,
-                        payload[:300],
-                    )
-                    raise HTTPException(
-                        status_code=status.HTTP_502_BAD_GATEWAY,
-                        detail=f"chat worker {resp.status_code}: {payload[:200].decode(errors='replace')}",
-                    )
-                async for chunk in resp.aiter_bytes():
-                    if chunk:
-                        yield chunk
-        except httpx.RequestError as e:
-            logger.exception("chat worker unreachable run=%s", run_id)
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"chat worker unreachable: {type(e).__name__}: {e}",
-            ) from e
-
-
-async def call_chat_exists(*, user_id: int, session_key: str) -> bool:
-    """One-shot proxy to chat worker /agent/chat/exists.
-
-    Tells whether a LangGraph thread already has any persisted turn.
-    Frontend uses this to decide whether to bootstrap a fresh card-chat
-    session vs replay history. Returns False on any 4xx (e.g. checkpoint
-    table missing in tests) so the caller treats it as a new thread.
-    """
-    token, run_id = sign_agent_run_jwt(user_id=user_id)
-    url = f"{_chat_internal_url()}/agent/chat/exists"
-    timeout = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        try:
-            resp = await client.get(
-                url,
-                params={"session_key": session_key},
-                headers={"Authorization": f"Bearer {token}", "X-Run-Id": run_id},
-            )
-        except httpx.RequestError as e:
-            logger.warning("chat /exists unreachable run=%s: %s", run_id, e)
-            return False
-    if resp.status_code >= 400:
-        logger.warning(
-            "chat /exists returned %d for run=%s body=%r",
-            resp.status_code,
-            run_id,
-            resp.text[:200],
-        )
-        return False
-    return bool(resp.json().get("existing", False))
 
 
 async def call_chat_history(
@@ -258,6 +153,7 @@ async def call_generate(
     output_language: str,
     virtual_key: str,
     run_id: str | None = None,
+    focus: str | None = None,
     matched_patterns: list[dict[str, Any]] | None = None,
     context_since: datetime | None = None,
     context_until: datetime | None = None,
@@ -291,6 +187,8 @@ async def call_generate(
     }
     if run_id is not None:
         body["run_id"] = run_id
+    if focus:
+        body["focus"] = focus
     if matched_patterns:
         body["matched_patterns"] = matched_patterns
     if context_since is not None:

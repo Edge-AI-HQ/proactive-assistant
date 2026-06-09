@@ -1,48 +1,51 @@
 /**
- * Card-execute run hook — chat-stream-backed adapter.
+ * Card-execute run hook — conversation-backed adapter (actor kernel).
  *
- * On this branch (proactive-ai-v3-UX) the heavy card-execute state
- * machine + /api/card-execution-runs/* endpoints are GONE. Cards now
- * use upstream's `/api/chat-stream/*` pipeline scoped by session_key
- * `card-thread-<card_id>`. The agent (`card_execution.py`) calls the
+ * Cards run on the unified `/api/conversation/*` pipeline scoped by
+ * session_key `card-thread-<card_id>` — the same thread CardChat's
+ * ConversationView drives. The agent (`card_execution.py`) calls the
  * `propose_action` tool to surface chips / drafts / plan to the user,
- * and the user's reply is just a normal HumanMessage on the same
- * chat thread.
+ * and the user's reply is just a normal user turn on the same thread.
  *
  * This file preserves the EXTERNAL shape the legacy ChatDetailView
  * was built against (snapshot.status / pendingInput / result, events
  * log of SSE-shaped envelopes, the 5 action methods) so the rich
  * visual layer keeps working without touching it. Internally:
  *
- *   - Initial load: GET /api/chat-stream/history?sessionKey=...,
- *     fold the merged turn list into a RunSnapshot + a synthetic
- *     events log (chat:tool:start / chat:tool:result / input_required
- *     for every propose_action call).
+ *   - Initial load: GET /api/conversation/history (newest page,
+ *     limit 200), fold the persisted turns into a RunSnapshot + a
+ *     synthetic events log (chat:tool:start / chat:tool:result /
+ *     input_required for every propose_action call). The page's
+ *     `active` / `awaiting` fields mark an in-flight / HITL-paused
+ *     turn that isn't in the rows yet (finalize writes on completion).
  *   - Live tail: poll history every 1.5s while status is `running`.
- *     There is no separate /stream endpoint on chat-stream; the live
- *     SSE only arrives when WE POST /send, not for fan-out-spawned
- *     background turns.
- *   - reply / continueWith: POST /api/chat-stream/send with the user
- *     text; drain the SSE response (so the chat worker's
- *     StreamingResponse finishes) and refresh history.
+ *     The drawer is a read-mostly preview, so polling beats wiring a
+ *     stream subscription here; the full live view is CardChat.
+ *   - reply / continueWith: POST /api/conversation/send (202 — the
+ *     turn runs async in the worker), then re-arm the polling loop;
+ *     the next polls watch `active` until the turn lands in history.
  *   - cancel / confirmDone / retry: no real backend equivalent. We
  *     update local state so the UI animation completes and the user
  *     can navigate; the chat thread itself persists either way.
  *
  * The runId argument the hook accepts is the FE-side identifier the
- * old ChatDetailView used; on this branch we treat it as the
- * `card_id` and derive `session_key = card-thread-<card_id>`. Callers
- * pass the IntentCard's string id verbatim.
+ * old ChatDetailView used; we treat it as the `card_id` and derive
+ * `session_key = card-thread-<card_id>`. Callers pass the
+ * IntentCard's string id verbatim.
  */
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
-import {
-  buildRequestUserText,
-  stripRequestOnlyCardContext,
-} from "@/components/chat/card-chat-session";
+import { stripRequestOnlyCardContext } from "@/components/chat/card-chat-session";
 import { buildCardThreadTextFeedbackBody } from "@/components/chat/card-feedback";
-import { proxyFetch, proxyPost } from "@/lib/api";
+import {
+  conversationHistory,
+  conversationSend,
+  proxyPost,
+  type ConversationHistoryMessage,
+  type ConversationHistoryPage,
+  type ConversationHistoryToolCallPart,
+} from "@/lib/api";
 
 // ── Shared event envelope ─────────────────────────────────────────────────
 
@@ -177,52 +180,21 @@ export interface RunSnapshot {
   completedAt: string | null;
 }
 
-// ── chat-stream history → RunSnapshot adapter ────────────────────────────
+// ── conversation history → RunSnapshot adapter ───────────────────────────
 
 const CARD_THREAD_PREFIX = "card-thread-";
 
-interface HistoryToolCallPart {
-  type: "tool-call";
-  toolCallId: string;
-  toolName: string;
-  status: "running" | "ok" | "error";
-  meta?: string;
-  argsPreview?: string;
-  /** Full structured args — present when the backend's
-   *  chat/routes/history.py `_safe_args_full` produced it
-   *  (JSON-serializable and under the 8 KB cap). */
-  args?: unknown;
-}
-
+/** Narrowed text part of a history message (api.ts ConversationHistoryPart). */
 interface HistoryTextPart {
   type: "text";
   text: string;
-}
-
-interface HistoryReasoningPart {
-  type: "reasoning";
-  text: string;
-}
-
-type HistoryPart = HistoryTextPart | HistoryReasoningPart | HistoryToolCallPart;
-
-interface HistoryMessage {
-  id: string;
-  role: "user" | "assistant";
-  parts: HistoryPart[];
-  createdAt?: number;
-}
-
-interface HistoryResponse {
-  ok: boolean;
-  messages: HistoryMessage[];
 }
 
 /** Pull the propose_action structured args out of a tool-call part.
  *  Tolerant: when `args` is missing (e.g. the call exceeded the 8 KB
  *  cap), the call is treated as if propose_action's payload were
  *  unavailable and the FE falls back to argsPreview-only rendering. */
-function parseProposeAction(part: HistoryToolCallPart): PendingInput | null {
+function parseProposeAction(part: ConversationHistoryToolCallPart): PendingInput | null {
   if (part.toolName !== "propose_action") return null;
   const raw = part.args;
   if (!raw || typeof raw !== "object") return null;
@@ -247,18 +219,25 @@ function parseProposeAction(part: HistoryToolCallPart): PendingInput | null {
   };
 }
 
-/** Walk the chat-stream merged turn list and synthesize the
- *  RunSnapshot shape ChatDetailView expects. Each tool-call becomes
- *  a (chat:tool:start, chat:tool:result?) pair in the events log so
- *  the existing eventsToMessages projection keeps working; each
+/** Walk the conversation history page and synthesize the RunSnapshot
+ *  shape ChatDetailView expects. Each tool-call becomes a
+ *  (chat:tool:start, chat:tool:result?) pair in the events log so the
+ *  existing eventsToMessages projection keeps working; each
  *  propose_action additionally emits an input_required event so the
- *  pause-history walker (StaticPauseCard) finds it. */
+ *  pause-history walker (StaticPauseCard) finds it. The page's
+ *  `active` / `awaiting` mark an in-flight turn not yet in the rows —
+ *  they drive the status synthesis and the bootstrap guard
+ *  (metadata.inFlight). */
 function chatHistoryToSnapshot(
   sessionKey: string,
-  history: HistoryResponse,
+  page: ConversationHistoryPage,
 ): RunSnapshot {
   const events: SSEEvent[] = [];
-  const messages = Array.isArray(history.messages) ? history.messages : [];
+  // Cards never heartbeat; filter defensively so the walker only sees
+  // user/assistant turns (the shared history shape includes 'heartbeat').
+  const messages: ConversationHistoryMessage[] = (
+    Array.isArray(page.messages) ? page.messages : []
+  ).filter((m) => m.role !== "heartbeat");
 
   let latestProposeAction: PendingInput | null = null;
   let finalText = "";
@@ -333,22 +312,30 @@ function chatHistoryToSnapshot(
     }
   }
 
-  // Status synthesis: look at the LAST assistant turn.
+  // Status synthesis. An in-flight turn (page.active / page.awaiting) is NOT
+  // in the rows yet — finalize writes on completion — so it overrides the
+  // last-row reading; without it, a reply would flash back to the previous
+  // propose_action's "needs_input" while the agent is actually running.
+  // Otherwise look at the LAST assistant turn:
   //   - tool call in flight (status="running") and not yet a
   //     propose_action → status="running"
   //   - propose_action present AND no user reply after it
   //     (i.e. it's the latest assistant turn) → status="needs_input"
   //   - text-only completion (no propose_action) → status="pending_done"
   //   - any chat:tool:result with isError + nothing past it → "error"
-  //
-  // Implementation: iterate messages newest→oldest. The first
-  // assistant message we hit "owns" the status; user messages
-  // between agent turns mean the agent moved on.
   let status: RunStatus = "running";
   let result: RunResult | null = null;
   let errorMessage: string | null = null;
+  const inFlight = Boolean(page.active || page.awaiting);
 
-  if (messages.length === 0) {
+  if (page.awaiting) {
+    // HITL pause: a side-effect tool awaits approval. The drawer can't
+    // render the approval gate (CardChat's ConversationView does) — surface
+    // as needs_input so the shimmer stops and the user opens the chat.
+    status = "needs_input";
+  } else if (page.active) {
+    status = "running";
+  } else if (messages.length === 0) {
     // Fresh thread (fanout hasn't fired or never reached the worker).
     // Surface as "running" so the FE shows the preparing spinner.
     status = "running";
@@ -362,11 +349,11 @@ function chatHistoryToSnapshot(
       // Assistant message — inspect its parts.
       const parts = Array.isArray(lastMsg.parts) ? lastMsg.parts : [];
       const hasProposeAction = parts.some(
-        (p): p is HistoryToolCallPart =>
+        (p): p is ConversationHistoryToolCallPart =>
           p.type === "tool-call" && p.toolName === "propose_action",
       );
       const hasRunningTool = parts.some(
-        (p): p is HistoryToolCallPart =>
+        (p): p is ConversationHistoryToolCallPart =>
           p.type === "tool-call" && p.status === "running",
       );
       const hasFinalText = parts.some(
@@ -403,7 +390,7 @@ function chatHistoryToSnapshot(
     result,
     errorMessage,
     events,
-    metadata: { plan_revisions: planRevisions },
+    metadata: { plan_revisions: planRevisions, inFlight },
     createdAt: null,
     updatedAt: null,
     completedAt: null,
@@ -499,43 +486,16 @@ function sessionKeyFor(runId: string): string {
   return `${CARD_THREAD_PREFIX}${runId}`;
 }
 
-/** POST /chat-stream/send to fire a HumanMessage into the given
- *  session. Used both by `reply()` for user-driven turns and by the
- *  empty-thread bootstrap path. The chat-stream send endpoint returns
- *  an SSE response; we drain the body to completion so the chat
- *  worker's StreamingResponse finishes (and the agent's checkpointer
- *  state stabilises) before the caller re-fetches history. */
+/** Enqueue the empty-thread bootstrap message (202 — the turn runs async
+ *  in the worker; the polling loop watches it land via `active`). The
+ *  cardContext rides as a field; the backend injects it as the thread's
+ *  <card_context> SystemMessage on the first turn. */
 async function sendBootstrap(
   sessionKey: string,
   message: string,
   cardContext?: Record<string, unknown>,
 ): Promise<void> {
-  const requestMessage = buildRequestUserText({
-    sessionKey,
-    userText: message,
-    cardContext,
-  });
-  const body: Record<string, unknown> = {
-    session_key: sessionKey,
-    message: requestMessage,
-  };
-  if (cardContext) body.cardContext = cardContext;
-  const res = await proxyPost(
-    "/chat-stream/send",
-    body,
-  );
-  if (!res.ok) {
-    throw new Error(`chat-stream/send bootstrap failed: ${res.status}`);
-  }
-  try {
-    await res.text();
-  } catch {
-    // Drain failure — the agent may still persist its turn server-
-    // side, but our polling loop will reconcile on the next history
-    // fetch. Log only.
-    // eslint-disable-next-line no-console -- intentional: drain failures must surface during dev
-    console.warn("chat-stream/send bootstrap drain failed");
-  }
+  await conversationSend(sessionKey, message, { cardContext });
 }
 
 export interface UseCardExecutionRunOptions {
@@ -634,29 +594,34 @@ export function useCardExecutionRun(
   const fetchSnapshot = useCallback(
     async (id: string): Promise<RunSnapshot> => {
       const session = sessionKeyFor(id);
-      const res = await proxyFetch(
-        `/chat-stream/history?sessionKey=${encodeURIComponent(session)}`,
-      );
-      if (!res.ok) {
-        throw new Error(`chat-stream/history failed: ${res.status}`);
-      }
-      const body = (await res.json()) as HistoryResponse;
-      return chatHistoryToSnapshot(session, body);
+      // Newest page at the max page size — card threads are short (a few
+      // turns), so one page covers the propose_action history the drawer
+      // derives plan_revisions / messageCount from.
+      const page = await conversationHistory(session, { limit: 200 });
+      return chatHistoryToSnapshot(session, page);
     },
     [],
   );
 
-  // Mount / runId change: fetch initial snapshot + start a polling
-  // loop that keeps the snapshot in sync. We poll only while status
-  // is non-terminal AND not needs_input — once the agent paused for
-  // user input we don't expect new history until the user replies.
+  // Re-arms the polling loop after a 202 send (reply / continueWith): the
+  // turn runs async in the worker, so the effect below must resume polling
+  // until it lands in history. Bumped instead of calling the loop directly
+  // so the effect's abort/cleanup semantics stay in one place.
+  const [pollEpoch, setPollEpoch] = useState(0);
+
+  // Mount / runId change / pollEpoch bump: fetch the snapshot + poll while
+  // status is `running` (in-flight turn or fresh thread). Stop at
+  // needs_input / pending_done / terminal — no new history is expected
+  // until the user acts.
   useEffect(() => {
     if (!runId) {
       dispatch({ kind: "reset" });
       return;
     }
     let abort = false;
-    dispatch({ kind: "loading" });
+    // Initial load only — a pollEpoch re-arm keeps the current snapshot
+    // rendered (the reply already patched status to "resuming").
+    if (!snapshotRef.current) dispatch({ kind: "loading" });
 
     (async () => {
       while (!abort) {
@@ -666,27 +631,25 @@ export function useCardExecutionRun(
           dispatch({ kind: "snapshot", snapshot: snap });
 
           // Empty-thread bootstrap: when the parent provided a bootstrap
-          // message (typical for the Drawer's Confirm path) AND the
-          // chat thread has zero events (no propose_action / no prior
-          // user reply), fire the bootstrap exactly once and immediately
-          // re-poll. Without this the FE would hang on "preparing the
-          // plan…" for any card whose fan-out missed (e.g. transient
-          // chat-worker hiccup at generator-completion time).
+          // message (typical for the Drawer's Confirm path) AND the thread
+          // has zero events AND no turn is in flight (metadata.inFlight —
+          // the fanout's bootstrap turn may be running right now with
+          // nothing persisted yet; firing here would double-send it),
+          // enqueue the bootstrap exactly once and re-poll. Without this
+          // the FE would hang on "preparing the plan…" for any card whose
+          // fan-out missed (limit, transient failure).
           const sessionKey = sessionKeyFor(runId);
           if (
             bootstrap
             && snap.events.length === 0
+            && !snap.metadata.inFlight
             && !bootstrappedRef.current.has(sessionKey)
           ) {
             bootstrappedRef.current.add(sessionKey);
             try {
-              // Fire the bootstrap via the same /chat-stream/send path
-              // a user reply uses. We don't await an SSE drain here
-              // explicitly — `reply()` already does that internally
-              // and then dispatches a fresh snapshot.
               await sendBootstrap(sessionKey, bootstrap, cardContext);
-              // Loop body re-runs immediately so the next iteration
-              // picks up the populated history.
+              // 202 — re-poll immediately; `active` shows up on the next
+              // history read and keeps the loop alive until the turn lands.
               continue;
             } catch (e) {
               // Don't trap the user forever on a failed bootstrap —
@@ -700,8 +663,8 @@ export function useCardExecutionRun(
 
           if (TERMINAL.has(snap.status) || snap.status === "needs_input"
               || snap.status === "pending_done") {
-            // Steady state — stop polling. We'll re-fetch on user
-            // reply / refresh / confirmDone / continueWith.
+            // Steady state — stop polling. reply/continueWith bump
+            // pollEpoch to re-arm; refresh/confirmDone fetch directly.
             return;
           }
         } catch (e: unknown) {
@@ -711,7 +674,7 @@ export function useCardExecutionRun(
         }
         // Wait before re-polling. Short interval so the
         // "preparing the plan" UI flips to "needs your input" snappily
-        // once fanout's chat worker finishes the first propose_action.
+        // once the worker finishes the first propose_action turn.
         await new Promise<void>((r) => setTimeout(r, POLL_INTERVAL_MS));
       }
     })();
@@ -719,7 +682,7 @@ export function useCardExecutionRun(
     return () => {
       abort = true;
     };
-  }, [bootstrap, cardContext, fetchSnapshot, runId]);
+  }, [bootstrap, cardContext, fetchSnapshot, runId, pollEpoch]);
 
   const reply = useCallback(
     async (text: string) => {
@@ -727,16 +690,7 @@ export function useCardExecutionRun(
       const trimmed = text.trim();
       if (!trimmed) throw new Error("reply text must be non-empty");
       const session = sessionKeyFor(runId);
-      const requestMessage = buildRequestUserText({
-        sessionKey: session,
-        userText: trimmed,
-        cardContext,
-      });
-      const body: Record<string, unknown> = {
-        session_key: session,
-        message: requestMessage,
-      };
-      if (cardContext) body.cardContext = cardContext;
+      // Card-thread free text doubles as card feedback (best-effort).
       const feedbackBody = buildCardThreadTextFeedbackBody({
         sessionKey: session,
         userText: trimmed,
@@ -750,36 +704,15 @@ export function useCardExecutionRun(
         }
       }
       dispatch({ kind: "patch_status", status: "resuming" });
-      // POST /send streams an SSE response. We drain it to completion
-      // (so the chat worker isn't aborted mid-turn) but ignore the
-      // events — the source of truth for ChatDetailView's render is
-      // the history fetch below.
-      const res = await proxyPost(
-        "/chat-stream/send",
-        body,
-      );
-      if (!res.ok) {
-        throw new Error(`chat-stream/send failed: ${res.status}`);
-      }
-      // Drain the body so the response is fully consumed; without
-      // this httpx on the web side may cancel the upstream agent.
-      try {
-        await res.text();
-      } catch {
-        // Bubble drain errors to console only; the agent's persisted
-        // state will be readable on the next history fetch regardless.
-        // eslint-disable-next-line no-console -- intentional: drain failures must surface during dev
-        console.warn("chat-stream/send drain failed; refreshing anyway");
-      }
-      try {
-        const snap = await fetchSnapshot(runId);
-        dispatch({ kind: "snapshot", snapshot: snap });
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        dispatch({ kind: "error", message: msg });
-      }
+      // 202 — the turn runs async in the worker. cardContext rides as a
+      // field (the backend injects <card_context> as the thread's first-turn
+      // SystemMessage; follow-ups rely on the persisted one — same
+      // semantics as CardChat's ConversationView). Re-arm the polling loop
+      // to watch the turn land in history via `active`.
+      await conversationSend(session, trimmed, { cardContext });
+      setPollEpoch((e) => e + 1);
     },
-    [cardContext, runId, fetchSnapshot],
+    [cardContext, runId],
   );
 
   const cancel = useCallback(

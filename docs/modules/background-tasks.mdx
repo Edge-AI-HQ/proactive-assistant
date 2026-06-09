@@ -54,7 +54,7 @@ flowchart LR
 
 - 各 kind 的具体业务(connector 拉数据、generator 出卡、dreaming 沉淀 memory),分别看 [Data Connectors](./data-connectors)、[Generation](./generation)、[Memory](./memory)。
 - chat 端 `/agent/run/*` 内部 agent 实现,看 [Execution](./execution)、[Generation](./generation)。
-- chat-stream 同步 SSE 链路,看 [Execution](./execution)。
+- conversation(actor kernel)聊天链路,看 [Execution](./execution)。
 
 ## 核心链路
 
@@ -289,5 +289,5 @@ make logs-pinai-chat | grep -E "run/dream|run/evolve|run/crystallize|run/generat
 - [Data Connectors](./data-connectors):`connector.init` / `connector.sync` / `connector.evolve` 的业务侧。
 - [Generation](./generation):`generator.manual` / `generator.auto` 的业务侧 + 前端轮询。
 - [Memory](./memory):`auto.dreaming` / `connector.evolve` / `crystallize` 写入的 memory / signals / evolution_runs。
-- [Execution](./execution):chat-stream SSE 是同步链路,跟这套异步队列完全分离。
+- [Execution](./execution):conversation 聊天跑在 agent_core mailbox/worker 上,跟这套 background_tasks 队列是两套独立机制。
 - [Runtime & Deployment](./runtime-deployment):scheduler 的 lifespan 起停、tunable 默认值、信任边界。

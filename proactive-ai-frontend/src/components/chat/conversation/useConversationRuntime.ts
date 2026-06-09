@@ -358,6 +358,11 @@ export function useConversationRuntime(
   // never shift this entry; a transcript trim does, so flushTurn revalidates
   // the cached index and re-finds it on a miss.
   const turnPosRef = useRef(-1);
+  // SSE resume cursor: the Redis Stream entry id of the last frame received.
+  // Echoed back as Last-Event-ID on reconnect so the server replays the frames
+  // missed during the gap (vs the old no-replay model that lost them). Null =
+  // a fresh connection cycle → rebuild from history + tail from now.
+  const lastEventIdRef = useRef<string | null>(null);
 
   // Push the in-progress assistant turn's snapshot into the transcript. If the
   // turn entry doesn't exist yet it's appended; otherwise its parts are
@@ -606,121 +611,152 @@ export function useConversationRuntime(
     let abort: AbortController | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
+    // New connection cycle (mount / session change / debug toggle): no cursor,
+    // so the first connect rebuilds from history. Mid-cycle reconnects keep the
+    // cursor the stream loop sets below and resume via replay instead.
+    lastEventIdRef.current = null;
 
     const connect = async () => {
       if (cancelled) return;
       abort = new AbortController();
       const signal = abort.signal;
 
-      // Resync from history on every (re)connect so a dropped stream can't
-      // leave the transcript missing turns that landed while we were gone.
-      // We fetch the newest page (`before` omitted); older pages load lazily
-      // via `loadMoreHistory` when the user scrolls up. `includeDebug` is
-      // taken from the current prop value so a debug-toggle re-runs this
-      // effect and pulls the matching filtered view.
-      try {
-        const page = await conversationHistory(session, {
-          signal,
-          limit: HISTORY_PAGE_SIZE,
-          includeDebug: debugEnabled,
-        });
-        if (cancelled) return;
-        const history = historyToEntries(page.messages);
-        // Redraw the in-progress (paused) assistant turn above the gate so a
-        // refresh doesn't look like it wiped the thinking / tool calls streamed
-        // before the interrupt. partialParts aren't persisted yet (they land on
-        // resume); the awaiting payload carries them. running:true → it renders
-        // inline without an action bar, matching the live interrupt view.
-        if (page.awaiting?.partialParts?.length) {
-          const [partial] = historyToEntries([
-            {
-              id: `partial-${page.awaiting.toolUseId}`,
-              role: "assistant" as const,
-              parts: page.awaiting.partialParts,
-            },
-          ]);
-          if (partial?.kind === "assistant") {
-            history.push({ ...partial, running: true });
+      // First connect of this cycle (no cursor) resyncs from history so a
+      // dropped stream can't leave the transcript missing turns that landed
+      // while we were gone. A mid-cycle RECONNECT (cursor set) SKIPS this — the
+      // server replays the gap from the cursor and the in-memory transcript
+      // (including a half-streamed turn) is intact, so re-fetching would waste
+      // a round-trip and reset the in-flight turn. `includeDebug` follows the
+      // prop so a debug-toggle (which resets the cursor) refetches the matching
+      // filtered view.
+      const isResume = lastEventIdRef.current !== null;
+      if (!isResume) {
+        try {
+          const page = await conversationHistory(session, {
+            signal,
+            limit: HISTORY_PAGE_SIZE,
+            includeDebug: debugEnabled,
+          });
+          if (cancelled) return;
+          const history = historyToEntries(page.messages);
+          // Redraw the in-progress (paused) assistant turn above the gate so a
+          // refresh doesn't look like it wiped the thinking / tool calls
+          // streamed before the interrupt. partialParts aren't persisted yet
+          // (they land on resume); the awaiting payload carries them.
+          if (page.awaiting?.partialParts?.length) {
+            const [partial] = historyToEntries([
+              {
+                id: `partial-${page.awaiting.toolUseId}`,
+                role: "assistant" as const,
+                parts: page.awaiting.partialParts,
+              },
+            ]);
+            if (partial?.kind === "assistant") {
+              history.push({ ...partial, running: true });
+            }
           }
-        }
-        // Re-hydrate the plan panel from history so a page refresh doesn't
-        // blank it. Applied now if the thread id is already known (card
-        // session); otherwise stashed and applied on the stream hello.
-        pendingTodosRef.current = latestTodosFromHistory(page.messages);
-        if (pendingTodosRef.current && threadIdRef.current) {
-          setTodos(threadIdRef.current, pendingTodosRef.current);
-        }
-        // Discard any half-streamed turn; history is the source of truth for
-        // assistant turns.
-        builderRef.current = null;
-        turnIdRef.current = null;
-        turnPosRef.current = -1;
-        // …but DON'T drop user messages that history doesn't yet reflect: a
-        // just-sent bubble (POST in flight / persisted moments ago) or a
-        // failed send. Carrying them over keeps the user's own message from
-        // blinking out on reconnect/refresh. Dedup by trimmed text against
-        // history's user turns so a confirmed message isn't duplicated.
-        setTranscript((prev) => {
-          const historyUserText = new Set(
-            history.flatMap((e) => (e.kind === "user" ? [e.text.trim()] : [])),
+          // Re-hydrate the plan panel from history so a refresh doesn't blank
+          // it. Applied now if the thread id is known (card); else stashed and
+          // applied on the stream hello.
+          pendingTodosRef.current = latestTodosFromHistory(page.messages);
+          if (pendingTodosRef.current && threadIdRef.current) {
+            setTodos(threadIdRef.current, pendingTodosRef.current);
+          }
+          // Discard any half-streamed turn; history is the source of truth.
+          builderRef.current = null;
+          turnIdRef.current = null;
+          turnPosRef.current = -1;
+          // …but DON'T drop user messages history doesn't yet reflect: a
+          // just-sent bubble (POST in flight) or a failed send. Dedup by
+          // trimmed text against history's user turns so it isn't duplicated.
+          setTranscript((prev) => {
+            const historyUserText = new Set(
+              history.flatMap((e) => (e.kind === "user" ? [e.text.trim()] : [])),
+            );
+            const carry = prev.filter(
+              (e) =>
+                e.kind === "user" &&
+                (e.failed || !historyUserText.has(e.text.trim())),
+            );
+            return [...history, ...carry];
+          });
+          // Note: we deliberately do NOT seed `tickRunIdsRef` from history —
+          // it's keyed by SSE traceId (run_id), a different identifier from a
+          // history entry's AIMessage id. Live events arrive after their tick
+          // (which registers the run_id first), so classification works from
+          // scratch on every reconnect without backfill.
+          setHasMoreHistory(page.nextCursor !== null);
+          oldestCursorRef.current = page.nextCursor;
+          // Rebuild (or clear) the HITL approval gate from current run state:
+          // /stream won't replay requires_action, so a refresh relies on this.
+          setAwaitingDecision(
+            page.awaiting
+              ? {
+                  toolUseId: page.awaiting.toolUseId,
+                  toolName: page.awaiting.toolName,
+                  argsPreview: page.awaiting.argsPreview,
+                  allowedDecisions: page.awaiting.allowedDecisions,
+                }
+              : null,
           );
-          const carry = prev.filter(
-            (e) =>
-              e.kind === "user" &&
-              (e.failed || !historyUserText.has(e.text.trim())),
-          );
-          return [...history, ...carry];
-        });
-        // Note: we deliberately do NOT seed `tickRunIdsRef` from history.
-        // That set is keyed by SSE `traceId` (= run_id, format
-        // `proactive.<user>.<rand>` from proactive_loop), which is a
-        // DIFFERENT identifier from a history entry's AIMessage id (LangChain
-        // `lc_run--<uuid>`). Live chat events always arrive after their tick
-        // (`proactive:tick` registers the run_id first), so classification
-        // works from scratch on every reconnect without backfill.
-        setHasMoreHistory(page.nextCursor !== null);
-        oldestCursorRef.current = page.nextCursor;
-        // Rebuild (or clear) the HITL approval gate from the server's current
-        // run state: /stream is live-only and won't replay requires_action, so a
-        // refresh / reconnect relies on this to restore a paused gate. Only the
-        // decision fields go into the gate (partialParts above already redrew the
-        // in-progress turn), matching the live requires_action shape.
-        setAwaitingDecision(
-          page.awaiting
-            ? {
-                toolUseId: page.awaiting.toolUseId,
-                toolName: page.awaiting.toolName,
-                argsPreview: page.awaiting.argsPreview,
-                allowedDecisions: page.awaiting.allowedDecisions,
-              }
-            : null,
-        );
-        setBusy(false);
-        setReady(true);
-      } catch (err) {
-        if (cancelled || signal.aborted) return;
-        // History failed — keep whatever we have and still try the stream.
-        setReady(true);
-        console.warn("[proactive] history fetch failed:", err);
+          // In-flight turn on a fresh connect (refresh): render the user
+          // bubble(s) and set the resume cursor so the stream below replays
+          // the WHOLE turn (its agent frames rebuild the assistant bubble as
+          // they arrive) instead of tailing from "$". A just-sent turn has no
+          // frames yet (replayFrom null) — bubbles only, frames come live.
+          // Stay busy until the turn ends.
+          if (page.active) {
+            const texts = Array.isArray(page.active.userTexts) ? page.active.userTexts : [];
+            if (texts.length) {
+              setTranscript((prev) => [
+                ...prev,
+                ...texts.map((t) => ({
+                  kind: "user" as const,
+                  id: nextEntryId("user"),
+                  ts: Date.now(),
+                  text: t,
+                })),
+              ]);
+            }
+            if (page.active.replayFrom) lastEventIdRef.current = page.active.replayFrom;
+          }
+          setBusy(page.active != null);
+          setReady(true);
+        } catch (err) {
+          if (cancelled || signal.aborted) return;
+          // History failed — keep whatever we have and still try the stream.
+          setReady(true);
+          console.warn("[proactive] history fetch failed:", err);
+        }
       }
 
       if (cancelled) return;
       setConnection(attempt === 0 ? "connecting" : "reconnecting");
 
-      // The backend emits an initial `proactive:hello` event on connect, so
-      // the first yield flips us to "open" (and resets backoff) even when the
-      // stream is otherwise idle. SSE parsing + keepalive handling live in
-      // the api layer's proxyGetSSE.
+      // The backend's `conversation:hello` flips us to "open" (and resets
+      // backoff) even on an idle stream. Each event carries the resume cursor
+      // (lastEventId) we echo back on reconnect; a `conversation:resync` means
+      // the cursor's stream expired server-side — drop it and reconnect, which
+      // refetches history fresh.
       try {
         let opened = false;
-        for await (const env of conversationStream<SseEnvelope>(session, signal)) {
+        for await (const { event, lastEventId } of conversationStream<SseEnvelope>(
+          session,
+          signal,
+          lastEventIdRef.current,
+        )) {
           if (cancelled) return;
           if (!opened) {
             opened = true;
             setConnection("open");
             attempt = 0;
           }
-          handleEnvelope(env);
+          if (event.type === "conversation:resync") {
+            lastEventIdRef.current = null;
+            break;
+          }
+          if (lastEventId) lastEventIdRef.current = lastEventId;
+          handleEnvelope(event);
         }
       } catch (err) {
         if (cancelled || signal.aborted) return;

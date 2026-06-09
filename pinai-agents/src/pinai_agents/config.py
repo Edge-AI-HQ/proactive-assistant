@@ -28,13 +28,20 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class _BaseAppSettings(BaseSettings):
-    """Fields common to web and chat. Identity / deploy env only — anything
-    with credentials lives in a subclass scoped to one process group."""
+    """Fields common to web and chat — anything with credentials lives in a
+    subclass scoped to one process group."""
 
     model_config = SettingsConfigDict(env_file=None, extra="ignore")
 
     service_name: str = "pinai-agents"
     deploy_env: str = "dev"
+    # Default LLM for agent runs — a LiteLLM model alias from
+    # ops/litellm/litellm_config.yaml. Chat falls back to it when a run
+    # doesn't specify a model; web probes it when checking a virtual key
+    # still covers what agents need (litellm_provisioning).
+    # Per-env override via DEFAULT_MODEL (dev runs kimi-k2.6; prod stays
+    # on the code default).
+    default_model: str = "claude-sonnet-4-6"
 
 
 class WebSettings(_BaseAppSettings):
@@ -52,6 +59,14 @@ class WebSettings(_BaseAppSettings):
     # pg.Pool tuning. 12 mirrors apis pool size; raise as workload grows.
     db_pool_max: int = 12
     db_pool_min: int = 1
+
+    # ── Redis (Agent Core live-frame bus) ──
+    # Redis Streams back the resumable SSE stream for conversational agents
+    # (frames:<session>): publish=XADD, subscribe=XREAD BLOCK from a cursor.
+    # Replaces the old in-memory FrameBus so frames survive a reconnect and
+    # reach an SSE held on a different web instance than the worker that
+    # produced them. Required by /api/conversation/stream.
+    redis_url: str | None = None
 
     # Scheduler tick interval. 3s = ceiling: PG LISTEN/NOTIFY wakes the
     # loop instantly on manual triggers, so this only matters for
@@ -207,8 +222,6 @@ class ChatSettings(_BaseAppSettings):
 
     # LiteLLM gateway (OpenAI-compatible). docker-compose: http://litellm:4000/v1
     litellm_base_url: str = "http://litellm:4000/v1"
-    # LiteLLM model alias from ops/litellm/litellm_config.yaml
-    default_model: str = "claude-sonnet-4-6"
 
     # LangGraph Postgres checkpointer. Same Supabase instance as Step A's
     # pai_*; isolated under `langgraph` schema. Step A's

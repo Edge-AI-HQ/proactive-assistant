@@ -23,7 +23,7 @@ from psycopg_pool import AsyncConnectionPool
 from ...shared.agent_run import AgentKind, MessageSource
 from ..db.rls import user_scoped_tx
 from .bus import notify_cancel, notify_message
-from .framebus import Frame, FrameBus
+from .framebus import Frame, FrameBus, SubItem
 from .mailbox import MailboxRepository
 from .runs import RunRepository
 from .sessions import SessionRepository
@@ -61,10 +61,22 @@ class AgentRunService:
             )
         await notify_message(self._pool, session_id)
 
-    def subscribe(self, session_id: str) -> AsyncIterator[Frame]:
-        """Live frames from now on — no replay. Reconnect uses run status +
-        pai_chat_messages (plan §四.4 Claude-app model)."""
-        return self._framebus.subscribe(session_id)
+    def subscribe(self, session_id: str, *, last_id: str = "$") -> AsyncIterator[SubItem]:
+        """Live frames from `last_id` onward. '$' = live tail only (first
+        connect; the client's past loads from history). A concrete entry id
+        (Last-Event-ID on reconnect) replays the frames after it, then tails —
+        so a dropped stream resumes without losing the in-flight turn."""
+        return self._framebus.subscribe(session_id, last_id=last_id)
+
+    async def stream_exists(self, session_id: str) -> bool:
+        """Whether the session's frame stream still exists (False after its TTL
+        expires) — a reconnect with a stale cursor must resync from history."""
+        return await self._framebus.stream_exists(session_id)
+
+    async def stream_history(self, session_id: str) -> list[tuple[str, Frame]]:
+        """Current stream contents (entry_id, frame) — for rebuilding an
+        in-flight turn on a fresh connect (a refresh has no cursor to resume)."""
+        return await self._framebus.history(session_id)
 
     async def submit_decision(
         self,

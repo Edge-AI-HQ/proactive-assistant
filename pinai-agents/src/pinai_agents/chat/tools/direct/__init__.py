@@ -23,7 +23,7 @@ docs/plans/2026-05-07-composio-architecture-redesign.mdx.
 from __future__ import annotations
 
 from ..browser.tools import browser_tool
-from .cards import cards_recent
+from .cards import cards_recent, generate_card
 from .composio_meta import (
     composio_get_tool_schemas,
     composio_manage_connections,
@@ -91,8 +91,10 @@ ALL_TOOLS = [
     raw_gcal_today,
     raw_gcal_week,
     raw_list,
-    # Cards + feedback (recency-bounded reference)
+    # Cards + feedback (recency-bounded reference). generate_card lets the
+    # user trigger a fresh Now-page card from chat (optional topic focus).
     cards_recent,
+    generate_card,
     feedback_list,
     # Product-team triage suggestions. This is not a personalization signal.
     development_feedback_log,

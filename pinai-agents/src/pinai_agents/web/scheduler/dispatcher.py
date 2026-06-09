@@ -133,7 +133,7 @@ _LONG_RUNNING_KINDS: frozenset[str] = frozenset(
     }
 )
 _GENERATOR_KINDS: frozenset[str] = frozenset(
-    {"generator.manual", "generator.auto", "generator.scheduled"}
+    {"generator.manual", "generator.auto", "generator.chat", "generator.scheduled"}
 )
 
 
@@ -192,6 +192,7 @@ _AGENT_RUN_KIND: dict[str, AgentKind] = {
     "crystallize": "crystallize",
     "generator.manual": "generator",
     "generator.auto": "generator",
+    "generator.chat": "generator",
     "generator.scheduled": "generator",
     "user.prompt": "dream",
 }
@@ -432,10 +433,11 @@ class DefaultDispatcher:
                 extra={"session_key": (task.payload or {}).get("session_key", "")},
             )
         elif kind in _GENERATOR_KINDS:
-            # manual / auto / scheduled → same handler. The kind name is
-            # the only place the source distinction lives; _run_generator
-            # remains trigger-kind-agnostic and only adds request-scoped
-            # generator input for scheduled payloads.
+            # manual / auto / chat / scheduled → same handler. The kind name is
+            # the only place the source distinction lives; _run_generator stays
+            # trigger-kind-agnostic — it reads the optional `focus` from the task
+            # payload (chat) and adds request-scoped generator input for
+            # scheduled payloads (migration 039 for chat).
             await self._run_generator(task, run_id)
         elif kind in ("connector.init", "connector.sync"):
             # In-process Composio ingest. The handler updates progress
@@ -672,6 +674,10 @@ class DefaultDispatcher:
         payload = task.payload or {}
         cards_to_generate = min(int(payload.get("cards_to_generate") or 8), 8)
         output_language = str(payload.get("output_language") or "en")
+        # Optional chat-triggered topic — biases the planner toward this
+        # focus. Absent (None) for manual-button / auto fires (normal batch).
+        # Already normalized at the /api/agent/generate boundary; trust it.
+        focus = payload.get("focus")
 
         # Phase 2: pattern matcher runs in the web process so the chat
         # process never has to query the pattern DB. The web-side phase1
@@ -738,6 +744,7 @@ class DefaultDispatcher:
             output_language=output_language,
             virtual_key=virtual_key,
             run_id=run_id,
+            focus=focus,
             matched_patterns=matched_payload or None,
             context_since=context_since,
             context_until=context_until,
@@ -758,23 +765,30 @@ class DefaultDispatcher:
         )
 
         # Fan out one card-thread bootstrap turn per card so the card-
-        # execution agent runs ahead of the user opening the card. The
-        # agent calls `propose_action` and ends its turn; the FE reads
-        # the resulting chat history later for both the home drawer
-        # pre-review and the chat detail's chip+input panel. Fire-and-
-        # forget — each card's bootstrap runs as its own background
-        # task and a failure on one card doesn't block the others.
+        # execution agent runs ahead of the user opening the card: enqueue
+        # onto the actor kernel's mailbox; the AgentRunWorker drives the
+        # agent until propose_action, persisting to pai_chat_messages +
+        # streaming over the FrameBus. The FE reads the result for both the
+        # home drawer pre-review and the chat detail panel. Best-effort —
+        # a failure on one card doesn't block the others.
         try:
             from ..services.card_fanout import (  # noqa: PLC0415
                 dispatch_card_bootstrap,
             )
 
             cards = result.get("cards") or []
-            await dispatch_card_bootstrap(
-                pool=self._pool,
-                user_id=task.user_id,
-                final_cards=cards if isinstance(cards, list) else [],
-            )
+            if self._service is None:
+                logger.warning(
+                    "card fanout skipped user=%d: no AgentRunService wired",
+                    task.user_id,
+                )
+            else:
+                await dispatch_card_bootstrap(
+                    pool=self._pool,
+                    service=self._service,
+                    user_id=task.user_id,
+                    final_cards=cards if isinstance(cards, list) else [],
+                )
         except Exception:
             logger.exception(
                 "card fanout dispatch failed user=%d run=%s — cards "

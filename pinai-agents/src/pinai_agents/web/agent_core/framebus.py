@@ -1,55 +1,166 @@
-"""FrameBus — live frame fan-out for streaming agent output.
+"""FrameBus — resumable live-frame fan-out over Redis Streams.
 
-Frames are NEVER persisted (history truth is pai_chat_messages; reconnect
-shows a waiting state and reads the final result — Claude-app model, plan
-§四.4). So the bus only needs live fan-out, not a durable stream + cursor.
+Each session has one stream `frames:<session_id>`. publish XADDs one SSE
+envelope per entry; the auto-generated entry id (`<ms>-<seq>`, monotonic) is
+the resume cursor — handed to the client as the SSE `id:` line and sent back as
+`Last-Event-ID` on reconnect, so a dropped stream resumes exactly where it left
+off (replay the entries after the cursor, then tail live).
 
-InMemoryFrameBus: dev / single web instance — process-local asyncio fan-out.
-RedisFrameBus (Redis pub/sub): REQUIRED before prod multi-instance, because
-process-local fan-out can't reach a subscriber on a different instance than
-the worker running the run. The FrameBus Protocol keeps that swap one-file.
+Why Redis Streams (not the old in-memory bus, not Redis pub/sub):
+  * Durable + cursored → a reconnect replays missed frames. pub/sub and the old
+    InMemoryFrameBus are both fire-and-forget: a frame published while no
+    subscriber is attached is lost, which is exactly the reconnect-gap bug.
+  * Multi-instance safe by construction → any web instance XREADs the same
+    stream, so the worker that produced the frames and the instance holding the
+    SSE need not be the same process (a process-local bus can't do this).
+
+Frames are short-lived (history truth is `pai_chat_messages`): each stream is
+MAXLEN-capped and its TTL is refreshed on every publish, so an idle session's
+stream evaporates on its own.
 """
 
 from __future__ import annotations
 
-import asyncio
+import json
+import logging
 from collections.abc import AsyncIterator
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
-# One SSE-envelope wire dict (shared/sse_envelope shape). Not persisted.
+from redis.asyncio import Redis
+
+logger = logging.getLogger(__name__)
+
+# One SSE-envelope wire dict (shared/sse_envelope shape).
 Frame = dict[str, Any]
+
+# A subscribe() item: a (cursor_id, frame) pair to forward, or None as a
+# keepalive tick — the XREAD BLOCK window elapsed with no new frame, so the
+# caller emits a `: ping` comment WITHOUT tearing the stream down. (This is the
+# bug the old `asyncio.wait_for(anext(gen))` keepalive had: a timeout cancelled
+# the generator and ended the stream. A BLOCK timeout is just an empty read.)
+SubItem = tuple[str, Frame] | None
+
+# Decoded XREAD response (decode_responses=True): per stream a
+# (name, [(entry_id, {field: value}), ...]) pair. redis-py types xread as the
+# very wide ResponseT, so we assert the decoded shape at this Redis boundary.
+_XReadResp = list[tuple[str, list[tuple[str, dict[str, str]]]]]
+
+_STREAM_PREFIX = "frames:"
 
 
 @runtime_checkable
 class FrameBus(Protocol):
+    """The seam the service/worker depend on (RedisFrameBus is the only impl;
+    tests inject a fake)."""
+
     async def publish(self, session_id: str, frame: Frame) -> None: ...
 
-    def subscribe(self, session_id: str) -> AsyncIterator[Frame]: ...
+    def subscribe(self, session_id: str, *, last_id: str = "$") -> AsyncIterator[SubItem]: ...
+
+    async def stream_exists(self, session_id: str) -> bool: ...
+
+    async def history(self, session_id: str) -> list[tuple[str, Frame]]: ...
 
 
-class InMemoryFrameBus:
-    """Process-local fan-out. dev / single-instance only — see module docstring."""
+class RedisFrameBus:
+    """Redis Streams fan-out. See module docstring.
 
-    def __init__(self) -> None:
-        self._subs: dict[str, set[asyncio.Queue[Frame]]] = {}
+    `block_ms` is the XREAD BLOCK window = keepalive cadence. `maxlen` caps a
+    session stream (≈ a few turns of frames; history truth lives elsewhere).
+    `ttl_seconds` is refreshed on every publish so idle streams expire.
+    """
+
+    def __init__(
+        self,
+        redis: Redis,
+        *,
+        block_ms: int = 15_000,
+        maxlen: int = 2_000,
+        ttl_seconds: int = 86_400,
+    ) -> None:
+        self._redis = redis
+        self._block_ms = block_ms
+        self._maxlen = maxlen
+        self._ttl = ttl_seconds
+
+    @staticmethod
+    def _key(session_id: str) -> str:
+        return f"{_STREAM_PREFIX}{session_id}"
 
     async def publish(self, session_id: str, frame: Frame) -> None:
-        # snapshot to tuple: a subscriber may unsubscribe (mutate the set)
-        # while we iterate.
-        for q in tuple(self._subs.get(session_id, ())):
-            q.put_nowait(frame)
+        """XADD one frame + refresh the stream TTL. MAXLEN trim keeps the stream
+        bounded (approximate `~` trim is cheaper and fine — replay only needs
+        recent frames; completed turns are in pai_chat_messages)."""
+        key = self._key(session_id)
+        await self._redis.xadd(
+            key,
+            {"data": json.dumps(frame, ensure_ascii=False)},
+            maxlen=self._maxlen,
+            approximate=True,
+        )
+        await self._redis.expire(key, self._ttl)
 
-    async def subscribe(self, session_id: str) -> AsyncIterator[Frame]:
-        """Live frames from now on (no replay — reconnect uses run status +
-        pai_chat_messages, not this)."""
-        queue: asyncio.Queue[Frame] = asyncio.Queue()
-        self._subs.setdefault(session_id, set()).add(queue)
-        try:
-            while True:
-                yield await queue.get()
-        finally:
-            subs = self._subs.get(session_id)
-            if subs is not None:
-                subs.discard(queue)
-                if not subs:
-                    self._subs.pop(session_id, None)
+    async def stream_exists(self, session_id: str) -> bool:
+        """Whether the session's stream is still present. False after TTL
+        expiry → a reconnect carrying a stale cursor must resync from history
+        (the cursor can never catch up to a stream that no longer exists)."""
+        return bool(await self._redis.exists(self._key(session_id)))
+
+    async def history(self, session_id: str, *, count: int = 2_000) -> list[tuple[str, Frame]]:
+        """Read the session's current stream oldest→newest (bounded by MAXLEN).
+        Used to rebuild an in-flight turn on a FRESH connect (a refresh has no
+        cursor to resume from): /history finds where the running turn starts so
+        the client can replay it. Returns (entry_id, frame) pairs."""
+        resp = cast(
+            "list[tuple[str, dict[str, str]]]",
+            await self._redis.xrange(self._key(session_id), count=count),
+        )
+        out: list[tuple[str, Frame]] = []
+        for entry_id, fields in resp:
+            raw = fields.get("data")
+            if raw is None:
+                continue
+            try:
+                out.append((entry_id, json.loads(raw)))
+            except (ValueError, TypeError):
+                logger.warning("frame decode failed session=%s entry=%s", session_id, entry_id)
+                continue
+        return out
+
+    async def subscribe(self, session_id: str, *, last_id: str = "$") -> AsyncIterator[SubItem]:
+        """Yield (entry_id, frame) from `last_id` onward, forever.
+
+        `last_id`:
+          * "$"  → only frames added after this call attaches (live tail; the
+                   client's past is loaded from history, not replayed here).
+          * a concrete entry id → replay every frame strictly after it, then
+            tail live (this is the reconnect / Last-Event-ID path).
+
+        On each XREAD BLOCK timeout (no new frame within `block_ms`) yields None
+        so the caller can emit a keepalive without closing the stream.
+        """
+        key = self._key(session_id)
+        cursor = last_id
+        while True:
+            resp = cast(
+                "_XReadResp | None",
+                await self._redis.xread({key: cursor}, block=self._block_ms, count=200),
+            )
+            if not resp:
+                yield None  # BLOCK window elapsed — keepalive tick, stream stays open
+                continue
+            # resp shape: [(stream_name, [(entry_id, {"data": <json>}), ...])]
+            for _stream, entries in resp:
+                for entry_id, fields in entries:
+                    cursor = entry_id  # advance past "$" onto a concrete id
+                    raw = fields.get("data")
+                    if raw is None:
+                        continue
+                    try:
+                        frame = json.loads(raw)
+                    except (ValueError, TypeError):
+                        logger.warning(
+                            "frame decode failed session=%s entry=%s", session_id, entry_id
+                        )
+                        continue
+                    yield (entry_id, frame)
