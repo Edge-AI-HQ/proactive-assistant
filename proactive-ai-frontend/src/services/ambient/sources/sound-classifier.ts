@@ -549,7 +549,7 @@ export class SoundClassifierSource implements AmbientSource {
   }
 
   private transcriptionLanguage(): string | undefined {
-    return undefined;
+    return this.voiceLanguage().openai;
   }
 
   private async cleanupNativeStartFailure(): Promise<void> {
@@ -595,6 +595,8 @@ function isClassificationStale(lastClassificationAt: number | undefined): boolea
 const MAX_TRANSCRIPT_CLEANUP_PASSES = 20;
 const LEADING_BOUNDARY_NOISE_RE = /^[\s\p{Punctuation}\p{Symbol}]+/u;
 const TRAILING_BOUNDARY_NOISE_RE = /[\s\p{Punctuation}\p{Symbol}]+$/u;
+const LEADING_SUBTITLE_HALLUCINATION_RE = /^(?:thank(?:s| you)? for watching|thanks for watching)[\s\p{Punctuation}\p{Symbol}]+/iu;
+const TRAILING_SUBTITLE_HALLUCINATION_RE = /[\s\p{Punctuation}\p{Symbol}]+(?:thank(?:s| you)? for watching|thanks for watching)[\s\p{Punctuation}\p{Symbol}]*$/iu;
 const LEADING_WORD_RE = /^[A-Za-z]+/u;
 const TRAILING_WORD_RE = /[A-Za-z]+$/u;
 const LATIN_WORD_RE = /[A-Za-z][A-Za-z']*/g;
@@ -665,6 +667,7 @@ function stripLeadingBoundaryNoise(value: string): string {
   let text = value;
   for (let pass = 0; pass < MAX_TRANSCRIPT_CLEANUP_PASSES; pass += 1) {
     const before = text;
+    text = text.replace(LEADING_SUBTITLE_HALLUCINATION_RE, "").trimStart();
     text = text.replace(LEADING_BOUNDARY_NOISE_RE, "").trimStart();
     text = stripLeadingFillerWord(text).trimStart();
     if (text === before) break;
@@ -679,7 +682,10 @@ function stripLeadingFillerWord(value: string): string {
 }
 
 function stripTrailingFillerWord(value: string): string {
-  const withoutTrailingNoise = value.replace(TRAILING_BOUNDARY_NOISE_RE, "").trimEnd();
+  const withoutTrailingNoise = value
+    .replace(TRAILING_SUBTITLE_HALLUCINATION_RE, "")
+    .replace(TRAILING_BOUNDARY_NOISE_RE, "")
+    .trimEnd();
   const match = withoutTrailingNoise.match(TRAILING_WORD_RE);
   if (!match || match.index === undefined || !isFillerWord(match[0])) return value;
   return trimTrailingFillerSeparator(withoutTrailingNoise.slice(0, match.index));

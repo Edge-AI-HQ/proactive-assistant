@@ -195,7 +195,7 @@ describe("SoundClassifierSource transcript ingest", () => {
 
     expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
       expect.objectContaining({ wavId: "wav-cloud" }),
-      undefined,
+      "zh",
     );
     expect(getAmbientLiveTranscriptSnapshot()).toMatchObject({
       captureSessionId: "capture-cloud",
@@ -264,7 +264,7 @@ describe("SoundClassifierSource transcript ingest", () => {
     expect(ambientAiMock.audio.markCaptureProcessed).toHaveBeenCalledWith({ wavId: "wav-empty" });
   });
 
-  test("uses user language preference for native recognition but leaves cloud transcription mixed", async () => {
+  test("uses user language preference for native recognition and cloud transcription", async () => {
     const ctx: SourceContext = {
       push: vi.fn(),
       onEvent: vi.fn(),
@@ -293,7 +293,34 @@ describe("SoundClassifierSource transcript ingest", () => {
     }));
     expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
       expect.objectContaining({ wavId: "wav-en" }),
-      undefined,
+      "en",
+    );
+  });
+
+  test("defaults cloud transcription to Chinese when no user language is set", async () => {
+    const ctx: SourceContext = {
+      push: vi.fn(),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+    captureTranscriptionMock.transcribeAmbientCapture.mockResolvedValue({
+      text: "默认中文语言提示。",
+      event: {},
+    });
+
+    await source.handleCaptureReadyForTest({
+      platform: "ios",
+      wavId: "wav-zh-default",
+      burstId: "burst-zh-default",
+      captureSessionId: "capture-zh-default",
+      capturedAt: "2026-05-17T05:15:12.000Z",
+      durationMs: 3500,
+      byteSize: 320_000,
+    });
+
+    expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
+      expect.objectContaining({ wavId: "wav-zh-default" }),
+      "zh",
     );
   });
 
@@ -450,7 +477,7 @@ describe("SoundClassifierSource transcript ingest", () => {
     await flushMicrotasks();
     expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
       expect.objectContaining({ wavId: "wav-stop" }),
-      undefined,
+      "zh",
     );
 
     await source.stop();
@@ -534,11 +561,11 @@ describe("SoundClassifierSource transcript ingest", () => {
 
     expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
       expect.objectContaining({ wavId: "wav-first" }),
-      undefined,
+      "zh",
     );
     expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
       expect.objectContaining({ wavId: "wav-second" }),
-      undefined,
+      "zh",
     );
     expect(pushed).toEqual([
       expect.objectContaining({ dedupe_key: "ios:audio:burst-first" }),
@@ -618,7 +645,7 @@ describe("SoundClassifierSource transcript ingest", () => {
         burstId: "burst-missed",
         triggerSource: "recent_capture_scan",
       }),
-      undefined,
+      "zh",
     );
     expect(pushed).toEqual([
       expect.objectContaining({
@@ -744,7 +771,7 @@ describe("SoundClassifierSource transcript ingest", () => {
         burstId: "burst-retry",
         triggerSource: "recent_capture_scan",
       }),
-      undefined,
+      "zh",
     );
     expect(pushed).toEqual([
       expect.objectContaining({
@@ -912,6 +939,49 @@ describe("SoundClassifierSource transcript ingest", () => {
     expect(ctx.onEvent).toHaveBeenCalledWith(
       "sound_classifier",
       "Voice transcript: 我刚才又把所有中文的地方都翻成英文了。",
+    );
+    vi.useRealTimers();
+  });
+
+  test("drops boundary subtitle hallucinations from ambient transcripts", async () => {
+    vi.setSystemTime(new Date("2026-05-17T05:15:30.000Z"));
+    const pushed: unknown[] = [];
+    const ctx: SourceContext = {
+      push: (item) => pushed.push(item),
+      onEvent: vi.fn(),
+    };
+    const source = new SoundClassifierSource(ctx);
+    captureTranscriptionMock.transcribeAmbientCapture.mockResolvedValue({
+      text: "Thank you for watching. 这两万的车梨子在冰箱放一天会变甜这个。",
+      selfText: "",
+      speakerLabels: [],
+      segments: [],
+      diarizationStatus: "fallback_plain_text",
+      provider: "cloud_whisper",
+      event: {},
+    });
+
+    await source.handleCaptureReadyForTest({
+      platform: "ios",
+      wavId: "wav-subtitle-noise",
+      burstId: "burst-subtitle-noise",
+      captureSessionId: "capture-subtitle-noise",
+      capturedAt: "2026-05-17T05:15:12.000Z",
+      durationMs: 3500,
+      byteSize: 320_000,
+      triggerSource: "audio_vad_fallback",
+    });
+
+    expect(pushed).toEqual([
+      expect.objectContaining({
+        kind: "session_summary",
+        summary: "这两万的车梨子在冰箱放一天会变甜这个。",
+        dedupe_key: "ios:audio:burst-subtitle-noise",
+      }),
+    ]);
+    expect(ctx.onEvent).toHaveBeenCalledWith(
+      "sound_classifier",
+      "Voice transcript: 这两万的车梨子在冰箱放一天会变甜这个。",
     );
     vi.useRealTimers();
   });
