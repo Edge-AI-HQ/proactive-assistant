@@ -22,9 +22,7 @@ from ..scheduler.cron import next_fire
 
 SCHEDULED_GENERATOR_KIND = "generator.scheduled"
 
-_TIME_RE = re.compile(
-    r"(?P<hour>\d{1,2})(?:[:：](?P<minute>\d{1,2}))?\s*(?:点|时|am|pm|AM|PM)?"
-)
+_TIME_RE = re.compile(r"(?P<hour>\d{1,2})(?:[:：](?P<minute>\d{1,2}))?\s*(?:点|时|am|pm|AM|PM)?")
 
 
 class ScheduledGeneratorError(Exception):
@@ -292,8 +290,7 @@ def _parse_request(
         "title": _title_for_topic(topic),
         "topic": topic,
         "instruction": (
-            f"每天 {local_time} 生成 1 张和 {topic} 相关的卡片,"
-            "优先选择对我有行动价值的信息。"
+            f"每天 {local_time} 生成 1 张和 {topic} 相关的卡片,优先选择对我有行动价值的信息。"
         ),
     }
     semantic_signature = "|".join(

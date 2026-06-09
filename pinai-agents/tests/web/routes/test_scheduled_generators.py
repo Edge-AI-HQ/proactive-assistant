@@ -68,9 +68,7 @@ def _agent_auth(user_id: int) -> dict[str, str]:
 def test_scheduled_generator_routes_are_mounted() -> None:
     app = create_app()
     routes = {
-        (route.path, method)
-        for route in app.routes
-        for method in getattr(route, "methods", set())
+        (route.path, method) for route in app.routes for method in getattr(route, "methods", set())
     }
 
     assert ("/api/scheduled-generators/preview", "POST") in routes

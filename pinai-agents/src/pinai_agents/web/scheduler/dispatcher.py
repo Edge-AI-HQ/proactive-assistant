@@ -165,9 +165,7 @@ def _generation_request_from_task(task: ScheduledTaskRow) -> dict[str, Any] | No
     raw_intent = payload.get("parsed_intent")
     parsed_intent = raw_intent if isinstance(raw_intent, dict) else {}
     title = (
-        confirmed_brief.get("title")
-        or confirmed_brief.get("topic")
-        or parsed_intent.get("topic")
+        confirmed_brief.get("title") or confirmed_brief.get("topic") or parsed_intent.get("topic")
     )
     return {
         "source_kind": "scheduled",
