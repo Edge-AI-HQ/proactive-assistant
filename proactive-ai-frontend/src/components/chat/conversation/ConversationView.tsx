@@ -622,7 +622,7 @@ function TranscriptView({
       }
       if (!(busy && !hasRunningTurn)) return null;
       return (
-        <div className="mb-5 px-1 pt-1">
+        <div className="mb-5 px-4 pt-1">
           <div className="inline-flex items-center -ml-2 rounded-lg px-2 py-1 text-[12.5px] font-medium text-foreground/65">
             <ShimmerText>Thinking…</ShimmerText>
           </div>
