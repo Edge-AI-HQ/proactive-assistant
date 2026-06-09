@@ -61,7 +61,6 @@ from .routes.ui.account import router as ui_account_router
 from .routes.ui.agent_runs import router as ui_agent_runs_router
 from .routes.ui.ambient import router as ui_ambient_router
 from .routes.ui.browser import router as ui_browser_router
-from .routes.ui.chat import router as ui_chat_router
 from .routes.ui.composio import router as ui_composio_router
 from .routes.ui.conversation import router as ui_conversation_router
 from .routes.ui.development_feedback import router as ui_development_feedback_router
@@ -208,7 +207,6 @@ def create_app() -> FastAPI:
     app.include_router(ui_profile_router)
     app.include_router(ui_settings_router)
     app.include_router(ui_runs_router)
-    app.include_router(ui_chat_router)
     app.include_router(ui_conversation_router)
     app.include_router(ui_generate_router)
     app.include_router(ui_skills_router)

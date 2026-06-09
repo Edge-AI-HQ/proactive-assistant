@@ -16,10 +16,11 @@ Why a tool (and not a markdown-embedded JSON block in the agent's text):
     additional persistence layer
 
 No ``interrupt()`` here on purpose:
-  * Upstream ``/chat-stream/`` wire and ``langgraph_to_sse`` do NOT
-    translate LangGraph interrupts into SSE events — they'd be dropped
-    on the floor. So an interrupt-based pause would be invisible to
-    the frontend.
+  * An interrupt would hold the run open (`awaiting_input`) and demand a
+    /decision round-trip (the HITL machinery exists for side-effect
+    tools); a card pause is just "the agent asked, the user will answer
+    eventually" — the natural turn boundary models that with zero pending
+    state.
   * The agent is prompted to STOP its turn immediately after this tool
     call returns (short ack AIMessage, then end of turn). The natural
     chat-turn boundary IS the pause — when the run finishes its turn,
@@ -150,7 +151,7 @@ def canonical_args_hash(args: dict[str, Any] | None) -> str:
 # Sentinel the agent receives back as the tool's return value. The
 # system prompt instructs the agent to STOP its turn immediately on
 # seeing this — output one short acknowledgement AIMessage (or none)
-# and end the turn naturally. The chat-stream's natural turn boundary
+# and end the turn naturally. The chat turn's natural boundary
 # IS the pause.
 _AWAITING_REPLY_SENTINEL = (
     "PROPOSE_ACTION_DELIVERED: structured proposal has been surfaced to "

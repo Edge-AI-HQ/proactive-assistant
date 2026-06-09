@@ -7,11 +7,13 @@ description: "Chat-driven 执行的当前事实(用户/agent 在 card 或 main �
 
 ## 结论
 
-执行层是 chat-stream 单一链路:
+执行层是 conversation(actor kernel)单一链路:
 
-`用户 → MainChatView / CardChat → POST /api/chat-stream/send → web/routes/ui/chat.py → services/chat_proxy.stream_chat(EdDSA agent-run JWT)→ chat /agent/chat (DeepAgents)→ agent 调原生 @tool 或 python_exec(Daytona sandbox + pinai_sdk)→ SSE 推 chat:delta / chat:tool:* 帧 → 前端`
+`用户 → ConversationView(main / card / proactive 同一前端)→ POST /api/conversation/send(202,入 mailbox)→ AgentRunWorker(web 进程)→ agent_core/client.py ChatRunClient(EdDSA agent-run JWT)→ chat /agent/chat (DeepAgents)→ agent 调原生 @tool 或 python_exec(Daytona sandbox + pinai_sdk)→ 帧经 RedisFrameBus(Redis Streams)→ GET /api/conversation/stream(resumable SSE)→ 前端`
 
-session_key 决定走哪个 agent:`main-<user_id>-<rand>` → `main_chat` agent;`card-thread-<card_id>` → `card_execution` agent。第一次发到 card-thread 时,`card_context` 作为 SystemMessage 写进 LangGraph checkpointer 持久化(后续 turn 不需要前端再传)。
+回复是异步的:`/send` 只入队返回 202,turn 的帧从长连 `/stream` 推回(断线带 `lastEventId` 重连 replay gap;刷新靠 `/history` 的 `active` 重建进行中 turn)。turn 结束时 worker 把 user+assistant 行写进 `pai_chat_messages`(history 真相)。
+
+session_key 决定走哪个 agent:`main-<user_id>-<rand>` → `main_chat`;`card-thread-<card_id>` → `card_execution`;`proactive-<user_id>` → `proactive`。card 的 `card_context` 在首轮作为 SystemMessage 写进 LangGraph checkpointer 持久化(后续 turn 不需要前端再传)。卡片生成后,scheduler dispatcher 经 `services/card_fanout.py` 为前 N 张卡(`PINAI_CARD_FANOUT_LIMIT`,默认 2)直接 post_message 预跑 bootstrap turn(pre-run),agent 跑到 `propose_action` 自然停轮;抽屉(useCardExecutionRun 轮询 `/conversation/history`)和 CardChat 读同一线程。
 
 工具决策 Tier 1-4 政策**完全靠 agent system prompt 和 native tool 命名区分**(没有运行时硬拦截 hook,Composio side-effect 强制门**当前只是 prompt 规则 + tools allowlist,没有 verb 分类硬闸**,详见下方"Composio side-effect"段):
 
@@ -22,13 +24,16 @@ session_key 决定走哪个 agent:`main-<user_id>-<rand>` → `main_chat` agent;
 
 ```mermaid
 flowchart LR
-  UI["MainChatView / CardChat"] --> Init["POST /api/chat-stream/init"]
-  UI --> Send["POST /api/chat-stream/send"]
-  UI --> Hist["GET /api/chat-stream/history"]
-  Send --> Web["web/routes/ui/chat.py"]
-  Web --> Proxy["services/chat_proxy.stream_chat"]
-  Proxy --> Chat["chat /agent/chat (SSE)"]
-  Chat --> Agent["main_chat / card_execution agent"]
+  UI["ConversationView (main / card / proactive)"] --> Init["POST /api/conversation/init"]
+  UI --> Send["POST /api/conversation/send (202)"]
+  UI --> Stream["GET /api/conversation/stream (resumable SSE)"]
+  UI --> Hist["GET /api/conversation/history"]
+  Send --> Mailbox[("pai_agent_messages mailbox")]
+  Mailbox --> Worker["AgentRunWorker (web 进程)"]
+  Gen["generator 完成 → card_fanout (pre-run)"] --> Mailbox
+  Worker --> Client["agent_core/client.py ChatRunClient"]
+  Client --> Chat["chat /agent/chat (SSE)"]
+  Chat --> Agent["main_chat / card_execution / proactive agent"]
   Agent --> Native["native @tool (Tier 1)"]
   Agent --> Composio["COMPOSIO_MULTI_EXECUTE_TOOL (Tier 2/3)"]
   Agent --> Tavily["tavily_search / tavily_extract (Tier 4)"]
@@ -37,7 +42,9 @@ flowchart LR
   Native -. HTTP .-> WebAgent["/api/agent/*"]
   PyExec -. SDK .-> WebAgent
   Composio -. /api/agent/composio/meta/* .-> WebAgent
-  Web --> Thread[("pai_chat_threads metadata")]
+  Worker --> Bus[("RedisFrameBus frames:<session>")]
+  Bus --> Stream
+  Worker --> Msgs[("pai_chat_messages history")]
   Chat --> Cp[("langgraph.* checkpoint")]
 ```
 
@@ -45,8 +52,10 @@ flowchart LR
 
 包含:
 
-- `POST /api/chat-stream/{init,send}` + `GET /api/chat-stream/history`。
-- `pai_chat_threads` metadata 表(kind / card_id / message_count / last_message_at)。
+- `POST /api/conversation/{init,send,decision,cancel}` + `GET /api/conversation/{stream,history}`(web/routes/ui/conversation.py,actor kernel 入口)。
+- Agent Core kernel:`web/agent_core/`(mailbox / runs / sessions / worker / RedisFrameBus / ChatRunClient)。
+- card pre-run fanout:`web/services/card_fanout.py`(generator 完成后入队 bootstrap turn)。
+- `pai_chat_threads` metadata 表(kind / card_id / message_count / last_message_at)+ `pai_chat_messages` history 表(turn 落库真相)。
 - LangGraph Postgres checkpointer 持久化 thread state(`langgraph` schema)。
 - chat 端 `main_chat` / `card_execution` agent prompt 与 native @tool 套件。
 - `python_exec` sandbox 工具(Daytona)+ `pinai_sdk` 回连 `/api/agent/*` 的 code-mode 链路。
@@ -69,66 +78,68 @@ flowchart LR
 ```mermaid
 sequenceDiagram
   participant FE as Frontend
-  participant Web as web /api/chat-stream
-  participant Proxy as chat_proxy
+  participant Web as web /api/conversation
+  participant Worker as AgentRunWorker
   participant Chat as chat /agent/chat
-  participant Agent as main_chat / card_execution
+  participant Agent as main_chat / card_execution / proactive
   participant Tool as native @tool / python_exec / browser
 
-  FE->>Web: POST /init { card_id? | session_key? }
-  Web->>Web: classify (main-... | card-thread-<id>) + 校 ownership
-  Web->>Thread: upsert pai_chat_threads
-  Web-->>FE: { session_key, existing }
-  FE->>Web: POST /send { session_key, message, card_context? }
-  Web->>Proxy: stream_chat(...) (sign EdDSA run JWT, attach virtual_key + browserbase_context)
-  Proxy->>Chat: POST /agent/chat (SSE)
+  FE->>Web: POST /init { card_id? | kind? | session_key? }
+  Web->>Web: classify + 校 ownership + upsert pai_chat_threads
+  Web-->>FE: { sessionKey, existing }
+  FE->>Web: GET /stream(长连 SSE,lastEventId 可续)
+  FE->>Web: POST /send { session_key, message, cardContext? }
+  Web->>Web: mailbox enqueue + bump_after_send → 202
+  Worker->>Web: claim mailbox(lease)+ create run
+  Worker->>Chat: ChatRunClient POST /agent/chat(EdDSA run JWT 带 vk/bbctx)
   Chat->>Agent: invoke (LangGraph thread = session_key)
   alt 首次 card-thread + card_context
     Agent->>Cp: SystemMessage(card_context) 持久化
   end
-  Agent-->>Chat: text delta
-  Chat-->>Proxy: chat:delta SSE
-  Proxy-->>Web: forward bytes
-  Web-->>FE: chat:delta
+  Agent-->>Chat: token / tool 事件
+  Chat-->>Worker: chat:* SSE 帧(traceId=run_id)
+  Worker->>Bus: XADD frames:<session>(RedisFrameBus)
+  Bus-->>FE: /stream 推帧(id: 为 resume 游标)
   Agent->>Tool: tool call
   Tool-->>Agent: result
-  Agent-->>Chat: chat:tool:start / chat:tool:result
-  Chat-->>FE: forward
   Agent-->>Chat: chat:done
-  Web->>Thread: bump last_message_at + message_count
+  Worker->>Msgs: finalize:user+assistant 行写 pai_chat_messages + run 完成
+  Bus-->>FE: chat:persisted(采用真实 message id)
 ```
 
 ## 当前设计
 
-### chat-stream 路由
+### conversation 路由(actor kernel 入口)
 
 | Endpoint | 模块 | 行为 |
 |---|---|---|
-| `POST /api/chat-stream/init` | `web/routes/ui/chat.py` | 解析 / mint session_key,validate 三种形态:1) 显式 body.session_key + 校 user 名空间;2) `card_id` → `card-thread-<id>`;3) 空 → 找用户最新 main thread 或 mint `main-<user_id>-<uuid>`。upsert `pai_chat_threads` metadata。返回 `{session_key, existing}`(existing 决定前端是否绕过 bootstrap)。 |
-| `POST /api/chat-stream/send` | `web/routes/ui/chat.py` | SSE。LiteLLM virtual key 直接读 user 行(onboarding 时已 provision,**无**懒恢复)。调 `stream_chat()`,最后在 finalizer 里 bump `last_message_at` + `message_count`。 |
-| `GET /api/chat-stream/history?session_key=...` | `web/routes/ui/chat.py` | 一次性 GET 给 `chat /agent/chat/history`,返回合并后的 turn 列表(用户 / assistant / tool 调用)。 |
+| `POST /api/conversation/init` | `web/routes/ui/conversation.py` | 解析 / mint session_key(显式 / `card_id` / `kind=proactive` / 空 → main 单例)。upsert `pai_chat_threads`。`existing` = 有落库 turn **或** in-flight(active run / pending mailbox)——首轮 turn 进行中刷新也要落到对话视图。 |
+| `POST /api/conversation/send` | 同上 | 入 mailbox 返回 **202**;回复异步走 /stream。`cardContext` 放 meta,由 chat 注入首轮 SystemMessage。`regenerate=true` 重跑上一轮。 |
+| `GET /api/conversation/stream` | 同上 | 长连 resumable SSE:帧带 `id:`(Redis Stream entry id),断线重连带 `?lastEventId=` replay gap;stale cursor → `conversation:resync`。 |
+| `GET /api/conversation/history` | 同上 | `pai_chat_messages` 分页(newest page + `before` 游标);`awaiting` 重建 HITL 审批门,`active`(`{userTexts, replayFrom}`)重建进行中 turn(刷新恢复)。pre-kernel 老线程首读从 checkpoint 一次性 backfill。 |
+| `POST /api/conversation/decision` | 同上 | HITL approve/reject/edit/respond → mailbox → Command(resume=) 续跑。 |
+| `POST /api/conversation/cancel` | 同上 | 真停 in-flight turn(DB 标记 + 跨实例 NOTIFY abort)。 |
 
-`pai_chat_threads`(migration `035_pai_chat_threads.sql`)字段:`user_id`、`thread_id` 复合 PK、`kind` ∈ `main|card`、`card_id`、`title`、`archived`、`created_at`、`last_message_at`、`message_count`。CHECK 约束 enforce session_key 命名 `main-{user_id}-{rand}` 或 `card-thread-{card_id}`。
+`pai_chat_threads`(migration `035_pai_chat_threads.sql`)字段:`user_id`、`thread_id` 复合 PK、`kind` ∈ `main|card|proactive`、`card_id`、`title`、`archived`、`created_at`、`last_message_at`、`message_count`。
 
-### web → chat 代理
+### worker → chat 执行
 
-`web/services/chat_proxy.py`:
-
-- `stream_chat(...)` 签 EdDSA agent-run JWT,claims 带 `user_id` / `run_id` / `virtual_key` / `browserbase_context_id` / 1h TTL / `jti`。POST 到 `CHAT_INTERNAL_URL=http://pinai-chat:8001/agent/chat`,把 SSE 字节直转回前端。
-- `call_chat_exists(session_key)` 一次性 GET `/agent/chat/exists` — 给 `/init` 决定 existing。
-- `call_chat_history(session_key)` 一次性 GET `/agent/chat/history` — 给 `/history`。
+- `web/agent_core/worker.py`:per-session lease drain mailbox → 创建 run → `ChatRunClient` 调 chat → 帧 publish 到 RedisFrameBus + `ChatTurnRecorder` 累积 → finalize 写 `pai_chat_messages`。
+- `web/agent_core/client.py:ChatRunClient` 签 EdDSA agent-run JWT,claims 带 `user_id` / `run_id` / `virtual_key` / `browserbase_context_id` / 1h TTL / `jti`。POST `CHAT_INTERNAL_URL=http://pinai-chat:8001/agent/chat`,解析 SSE 成帧。
+- `web/services/chat_proxy.py` 只剩一次性代理:`call_chat_history`(conversation backfill)、`call_proactive_history`(proactive 分页)、`call_generate`。
+- `web/services/card_fanout.py`:generator 完成后对前 N 张卡 `post_message`(`idempotency_key=card-bootstrap-<id>`)预跑 bootstrap turn。
 
 chat 端验签 + `jti` 黑名单(`pai_jti_revocations`),失败 401。
 
 ### chat agent
 
-`chat/routes/chat.py:POST /agent/chat`:
+`chat/transport/routes/chat.py:POST /agent/chat`:
 - verify run JWT → `RunPrincipal`。
-- 看 session_key prefix 选 agent:`card-thread-` → `make_card_execution_agent`,否则 `make_main_chat_agent`。
-- 拿 LangGraph checkpointer(`chat/runtime/checkpoint.py` 在 Postgres `langgraph` schema 持久化);thread_id = session_key。
+- 看 session_key prefix 选 agent:`card-thread-` → `make_card_execution_agent`,`proactive-` → `make_proactive_agent`,否则 `make_main_chat_agent`。
+- 拿 LangGraph checkpointer(`chat/harness/checkpoint.py` 在 Postgres `langgraph` schema 持久化);thread_id = session_key。
 - 每个普通发送 turn 都注入隐藏 `turn_context` SystemMessage,包含当前 UTC 时间;agent 用它解析"今天 / 明天 / 下一批"等相对时间,尤其是写临时 `preference_add.expires_at` 时必须保证过期时间在未来。
-- card_context 注入分两种线程(`chat/routes/chat.py:_build_send_messages`):**card thread** 首次 + 有 `card_context` 时把 `SystemMessage(json.dumps(card_context))` push 进 thread state,之后不需要前端再传;**main thread** 是每用户单例(migration 053),首轮一辈子只真一次,所以改成**本轮带 `card_context` 就注入**(从某张卡打开 main chat 给反馈时),不看是不是首轮。两种都被 `/history` 过滤掉,不进前端渲染。
-- 跑 agent loop,把 LangGraph stream 转成 SSE 帧:`chat:thinking` / `chat:delta` / `chat:tool:start` / `chat:tool:update` / `chat:tool:result` / `chat:reply`(非流式 fallback)/ `chat:error` / `chat:done`(`chat/streaming.py:langgraph_to_sse`)。
+- card_context 注入分两种线程(`chat/transport/routes/chat.py:_build_send_messages`):**card thread** 首次 + 有 `card_context` 时把 `SystemMessage(json.dumps(card_context))` push 进 thread state,之后不需要前端再传;**main thread** 是每用户单例(migration 053),首轮一辈子只真一次,所以改成**本轮带 `card_context` 就注入**(从某张卡打开 main chat 给反馈时),不看是不是首轮。两种都被 `/history` 过滤掉,不进前端渲染。
+- 跑 agent loop,把 LangGraph stream 转成 SSE 帧:`chat:thinking` / `chat:delta` / `chat:reasoning:delta` / `chat:tool:start` / `chat:tool:result` / `chat:requires_action`(HITL)/ `chat:error` / `chat:done`,每帧 `traceId=run_id`(`chat/transport/sse.py:langgraph_to_sse`)。
 
 #### main_chat agent
 
@@ -188,7 +199,7 @@ chat 端验签 + `jti` 黑名单(`pai_jti_revocations`),失败 401。
 
 Browser tool 支持的 actions:`open` / `snapshot` / `click` / `type` / `press_key` / `wait` / `scroll` / `navigate` / `go_back` / `go_forward` / `reload` / `get_text` / `console` / `request_takeover` / `close`。每个动作返回新 a11y snapshot 带 ref(`e3` 之类)给后续动作引用。
 
-Browserbase context(`ensure_browserbase_context`)在 `/chat-stream/send` 入口处 lazy 建立,session 间复用 cookies,user OAuth 一次后后续 turn 不需要重登。
+Browserbase context(`ensure_browserbase_context`)在 onboarding 完成时(`profile.py update_settings`)provision(和 LiteLLM vk 同模式),session 间复用 cookies,user OAuth 一次后后续 turn 不需要重登。
 
 ### Composio 副作用闭环(当前状态:prompt + allowlist,**没有运行时 verb 闸**)
 
@@ -223,26 +234,34 @@ Browserbase context(`ensure_browserbase_context`)在 `/chat-stream/send` 入口�
 
 | event | 含义 | 关键字段 |
 |---|---|---|
-| `chat:thinking` | agent 开始思考 | — |
-| `chat:delta` | 文本增量 | `text` |
-| `chat:tool:start` | 工具调用开始 | `toolCallId`、`name`、`argsPreview`、`meta` |
-| `chat:tool:update` | 进度更新 | `toolCallId`、`meta` |
-| `chat:tool:result` | 完成或拦截 | `toolCallId`、`isError`、`meta` |
-| `chat:reply` | 非流式 fallback 完整回复 | `text` |
-| `chat:error` | agent / 系统错误 | `message` |
-| `chat:done` | 流结束 | — |
+| `conversation:hello` | /stream 连上(空闲流也能立刻置 connected) | `sessionKey` |
+| `conversation:resync` | 重连游标已过期(stream TTL),客户端重拉 history | — |
+| `chat:thinking` | turn 开始 | — |
+| `chat:delta` | 可见文本增量 | `delta` |
+| `chat:reasoning:delta` | extended thinking 增量 | `delta` |
+| `chat:tool:start` | 工具调用开始 | `toolCallId`、`name`、`argsPreview`、`args?` |
+| `chat:tool:result` | 工具完成 | `toolCallId`、`isError`、`meta` |
+| `chat:requires_action` | HITL:side-effect 工具等审批 | `interruptId`、`toolName`、`args`、`allowedDecisions` |
+| `chat:error` | agent / 系统错误 | `error` |
+| `chat:done` | turn 结束(finally 保证发出) | — |
+| `chat:persisted` | finalize 后回填真实 message id | `messageId` |
+| `proactive:tick` | 心跳输入(proactive 线程) | `text`、`windowStart/End` |
+
+所有 chat:* 帧带 `traceId`(= run_id)与 SSE `id:`(Redis Stream entry id,resume 游标)。
 
 ### 历史与 thread metadata
 
-`chat/routes/history.py:GET /agent/chat/history?session_key=...` 从 LangGraph checkpointer 拉所有 message,过滤 SystemMessage(card_context 不暴露给前端),组成 `{user, assistant, tool_calls[], metadata}` turn 列表返回。web 的 `/api/chat-stream/history` 是这条的薄壳代理。
+history 真相是 `pai_chat_messages`(worker finalize 写入,`/api/conversation/history` 直接分页读,O(page))。`chat/transport/routes/history.py:GET /agent/chat/history` 仍保留:web 的 `call_chat_history` 在 pre-kernel 老线程首读时从 checkpoint 一次性 backfill,proactive 分页也走它;它从 LangGraph checkpointer 拉 message,过滤 SystemMessage(card_context 不暴露给前端)。
 
 ## 开发入口
 
 | 改动 | 先看 |
 |---|---|
-| chat-stream UI 路由 | `pinai-agents/src/pinai_agents/web/routes/ui/chat.py` |
-| web → chat SSE 代理 | `pinai-agents/src/pinai_agents/web/services/chat_proxy.py` |
-| chat 端 SSE 端点 | `pinai-agents/src/pinai_agents/chat/routes/chat.py` |
+| conversation UI 路由 | `pinai-agents/src/pinai_agents/web/routes/ui/conversation.py` |
+| actor kernel(worker / mailbox / runs / FrameBus) | `pinai-agents/src/pinai_agents/web/agent_core/` |
+| card pre-run fanout | `pinai-agents/src/pinai_agents/web/services/card_fanout.py` |
+| web → chat 一次性代理(history/generate) | `pinai-agents/src/pinai_agents/web/services/chat_proxy.py` |
+| chat 端 SSE 端点 | `pinai-agents/src/pinai_agents/chat/transport/routes/chat.py` |
 | chat agent prompt | `pinai-agents/src/pinai_agents/chat/agents/main_chat.py`、`chat/agents/card_execution.py` |
 | Native @tool 套件 | `pinai-agents/src/pinai_agents/chat/tools/native/` |
 | Tool HTTP client(签 run JWT) | `pinai-agents/src/pinai_agents/chat/tools/http_client.py` |
@@ -250,19 +269,19 @@ Browserbase context(`ensure_browserbase_context`)在 `/chat-stream/send` 入口�
 | 本地 sandbox helper | `pinai-agents/src/pinai_agents/chat/tools/local_sandbox.py` |
 | Browser tool / 状态 / 路由 | `pinai-agents/src/pinai_agents/chat/browser/{manager,tool,control_state,events,routes}.py` |
 | Composio meta-tool 转发 / 副作用约束 | `pinai-agents/src/pinai_agents/chat/tools/native/composio_meta.py`、`web/routes/agent/composio.py`(顶部 docstring 说明 verb gate deferred)、`web/composio_service.py` 的 session `tools=` allowlist |
-| LangGraph checkpointer | `pinai-agents/src/pinai_agents/chat/runtime/checkpoint.py` |
-| SSE 信封 | `pinai-agents/src/pinai_agents/shared/sse_envelope.py`、`chat/streaming.py` |
+| LangGraph checkpointer | `pinai-agents/src/pinai_agents/chat/harness/checkpoint.py` |
+| SSE 信封 / 帧转换 | `pinai-agents/src/pinai_agents/shared/sse_envelope.py`、`chat/transport/sse.py` |
 | Thread metadata 表 | `pinai-agents/db/migrations/035_pai_chat_threads.sql`、`web/db/repositories/chat_threads.py` |
 | 共享 api 模型 | `pinai-agents/src/pinai_agents/shared/api_models.py`(`ChatInitRequest` / `ChatSendRequest` / `ChatHistoryResponse` 等) |
-| 前端 chat runtime | `proactive-ai-frontend/src/components/chat/useProactiveChatRuntime.ts` |
-| 共享 chat 视图 | `proactive-ai-frontend/src/components/main-chat/MainChatView.tsx`、`MainChat.tsx`、`CardChat.tsx` |
+| 前端 chat runtime | `proactive-ai-frontend/src/components/chat/conversation/useConversationRuntime.ts` |
+| 共享 chat 视图 | `proactive-ai-frontend/src/components/chat/conversation/ConversationView.tsx`、`chat/MainChat.tsx`、`chat/CardChat.tsx` |
 | 工具活动行 | `proactive-ai-frontend/src/components/chat/tool-steps.ts`、`main-chat/ToolActivityCard.tsx` |
 | 浏览器子视图 | `proactive-ai-frontend/src/components/browser-view/`、`hooks/useBrowserSession.ts` |
 
 ## 验证方式
 
 ```bash
-# 路由 / chat-stream + thread metadata
+# 路由 / conversation + thread metadata
 cd pinai-agents && uv run pytest tests/web/routes/test_chat_threads_routes.py
 cd pinai-agents && uv run pytest tests/web/db/repositories/test_chat_threads_repo.py
 cd pinai-agents && uv run pytest tests/web/routes/                    # 全 route 套件
@@ -298,7 +317,7 @@ langsmith thread list --project pinai-agents-dev                   # chat sessio
 容器日志:
 
 ```bash
-make logs-pinai-web | grep -E "chat-stream|stream_chat"
+make logs-pinai-web | grep -E "conversation|fanout|agent worker"
 make logs-pinai-chat | grep -E "/agent/chat|chat:tool|browser:"
 ```
 

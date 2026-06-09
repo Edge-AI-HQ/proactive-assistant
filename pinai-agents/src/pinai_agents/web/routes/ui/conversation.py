@@ -16,9 +16,9 @@ over the long-lived /stream connection; a HITL tool pause surfaces as a
 The reply is async — it arrives on /stream, not the /send response — so the
 frontend opens one /stream per session and posts sends/decisions against it.
 Main chat, card execution, and the proactive page all run on this kernel-native
-path now. The legacy /api/proactive/* routes (ui/proactive.py) have been
-removed; the old /api/chat-stream/* (ui/chat.py) still ships and is slated for
-removal once nothing depends on it.
+path now. The legacy /api/proactive/* (ui/proactive.py) and /api/chat-stream/*
+(ui/chat.py) routes have been removed — this is the only conversational
+surface.
 
 AgentRunWorker drives every agent_kind through chat /agent/chat (which picks the
 agent by session_key prefix) and persists turns to pai_chat_messages. chat never
@@ -52,7 +52,7 @@ router = APIRouter(prefix="/api/conversation", tags=["conversation"])
 
 _CARD_THREAD_PREFIX = "card-thread-"
 # Lazy-backfill cap for a thread that predates pai_chat_messages: how many of
-# its newest checkpoint turns to seed on first read. Matches ui/chat.py.
+# its newest checkpoint turns to seed on first read.
 _BACKFILL_LIMIT = 500
 
 # session_key kind → the actor-kernel agent_kind the worker routes/accounts on.

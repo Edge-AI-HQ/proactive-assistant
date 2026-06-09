@@ -34,9 +34,9 @@ class ChatThreadsRepository(UserScopedRepository):
         kind: ThreadKind,
         card_id: str | None = None,
     ) -> None:
-        """Idempotent insert. ON CONFLICT DO NOTHING because chat-stream/init
-        may be called twice for the same sessionKey (FE re-mount, retry,
-        etc.) and we don't want a 500 — the row is already there, that's fine.
+        """Idempotent insert. ON CONFLICT DO NOTHING because conversation
+        init/send may be called twice for the same sessionKey (FE re-mount,
+        retry, etc.) and we don't want a 500 — the row is already there.
         """
         async with self.conn.cursor() as cur:
             await cur.execute(
@@ -73,8 +73,8 @@ class ChatThreadsRepository(UserScopedRepository):
             return row["thread_id"] if row else None
 
     async def bump_after_send(self, *, thread_id: str) -> int | None:
-        """Update last_message_at + increment count after a chat-stream/send
-        finishes. Called from web's send route once the SSE stream completes.
+        """Update last_message_at + increment count after a conversation send
+        is accepted (best-effort thread-list freshness, called by /send).
 
         Returns the new `message_count`, or None if no row was bumped
         (send beat init somehow) — that case is logged but not raised;

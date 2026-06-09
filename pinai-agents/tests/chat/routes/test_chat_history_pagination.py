@@ -330,7 +330,7 @@ def test_omitting_limit_returns_full_history_for_backfill(
 ) -> None:
     """`call_chat_history` (main-chat backfill) sends no `limit`; the endpoint
     must return the FULL thread, not a 200/500-capped page — otherwise a long
-    pre-existing thread loses its oldest turns when web /chat-stream/history
+    pre-existing thread loses its oldest turns when web /conversation/history
     seeds pai_chat_messages from the checkpoint on first read."""
     raw = [_user(f"m{i}", f"u-{i}") for i in range(600)]
 

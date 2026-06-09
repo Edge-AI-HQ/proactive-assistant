@@ -21,7 +21,6 @@ import AiSphere from "@/components/now/AiSphere";
 import ConnectPanel from "@/components/connect/ConnectPanel";
 import { type TimelineEntry as AmbientTimelineEntry } from "@/components/ambient/AmbientView";
 import { type ChatCard, brandSvg, detectToolIcon } from "@/components/chat/ChatDetailView";
-import { useCardExecutionRun } from "@/hooks/useCardExecutionRun";
 import CardChat from "@/components/chat/CardChat";
 import { deleteAccount, DeleteAccountError } from "@/lib/api";
 import DebugPanel from "@/components/common/DebugPanel";
@@ -622,12 +621,11 @@ export default function AppLayout() {
     if (card.status === "processing" || card.status === "done") {
       // Real /api/cards path: route through `chatTarget` so
       // ChatDetailView receives `runId={card.id}` and
-      // `useCardExecutionRun` actually fetches LangGraph history.
-      // The legacy `activeChat` branch leaves runId undefined,
-      // the hook bails out
-      // at `if (!runId)`, no /chat-stream/history call ever
-      // fires, and the page hangs at "TASK running · CONTEXT"
-      // forever — which is exactly the empty-card pathology.
+      // `useCardExecutionRun` actually fetches the thread history.
+      // The legacy `activeChat` branch leaves runId undefined, the
+      // hook bails out at `if (!runId)`, no /conversation/history
+      // call ever fires, and the page hangs at "TASK running ·
+      // CONTEXT" forever — which is exactly the empty-card pathology.
       if (card.originalId) {
         const real = cardsState.cards.find(
           (c) => c.card.id === card.originalId,

@@ -10,9 +10,9 @@ LiteLLM availability; see web/auth/user_service.py):
         same call — beyond NULL recovery it re-checks the key covers the
         required models, which is how a payment plan change propagates onto
         the key (checkout/webhook rely on "the next ensure call").
-    chat send (conversation + legacy chat-stream) deliberately does NOT
-        ensure: the SPA gates the app on onboarding, so the key is already
-        on the user row by the time a chat turn runs.
+    conversation send deliberately does NOT ensure: the SPA gates the app
+        on onboarding, so the key is already on the user row by the time a
+        chat turn runs.
 
 Only `litellm_virtual_key` is persisted on the users table. We don't
 cache user_id / key_alias / budget separately — LiteLLM is the source

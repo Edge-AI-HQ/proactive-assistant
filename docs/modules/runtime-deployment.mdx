@@ -64,14 +64,14 @@ flowchart LR
 
 ### web :8000
 
-- `/api/*` — 前端面向接口,Supabase JWT 鉴权。路由模块在 `pinai-agents/src/pinai_agents/web/routes/ui/`:`chat`(`/api/chat-stream/*`)、`generate`、`memory`、`signals`、`profile`、`devices`、`feedback`、`reward_dashboard`、`composio`、`tasks`、`raw`、`runs_and_cards`、`dreaming`、`skills`、`browser`、`agent_runs`、`crystallize`、`jwt_revoke`、`payment`(独立 prefix)。
+- `/api/*` — 前端面向接口,Supabase JWT 鉴权。路由模块在 `pinai-agents/src/pinai_agents/web/routes/ui/`:`conversation`(`/api/conversation/*`)、`generate`、`memory`、`signals`、`profile`、`devices`、`feedback`、`reward_dashboard`、`composio`、`tasks`、`raw`、`runs_and_cards`、`dreaming`、`skills`、`browser`、`agent_runs`、`crystallize`、`jwt_revoke`、`payment`(独立 prefix)。
 - `/api/agent/*` — sandbox 内 `pinai_sdk` 回连接口,phantom token 鉴权。模块在 `web/routes/agent/`:`memory`、`signals`、`world`、`state`、`profile`、`skills`、`composio`、`raw`、`cards`、`feedback`、`evolution`、`pipeline`、`sandbox_phantom`。
 - `/health` — 含一次 `SELECT 1` 探活;DB 异常返回 `db: error` 但不翻 HTTP 状态码,交给 readiness probe 严控。
 - 中间件:`CORSMiddleware`(origin allowlist 来自 `CORS_ALLOWED_ORIGINS`)、`AgentAuditMiddleware`(只在 `/api/agent/*` 路径下记录 audit log)。
 
 ### chat :8001
 
-`chat/app.py` 挂:`/agent/chat`(SSE)、`/agent/generate`、`/agent/history`、`/agent/run/*`(`dream` / `evolve` / `crystallize`)、`/agent/browser/*`、`/health`。所有路由要 `Authorization: Bearer <agent-run-jwt>`,web 走 `services/chat_proxy.py` 签发并代理。
+`chat/app.py` 挂:`/agent/chat`(SSE)、`/agent/generate`、`/agent/history`、`/agent/run/*`(`dream` / `evolve` / `crystallize`)、`/agent/browser/*`、`/health`。所有路由要 `Authorization: Bearer <agent-run-jwt>`;web 侧由 `agent_core/client.py`(ChatRunClient,/agent/chat)和 `services/chat_proxy.py`(history / generate 一次性代理)签发。
 
 ## 鉴权
 
@@ -326,6 +326,6 @@ cd internal-reward-dashboard && npm test             # 内部 review app 单测
 
 - [Background Tasks](./background-tasks):scheduler tick loop、`pai_scheduled_tasks` 表、所有异步任务的派发框架。
 - [Data Connectors](./data-connectors):Composio / device ingest 在 web 进程的入口。
-- [Execution](./execution):chat-stream / browser tool / sandbox 工具决策。
+- [Execution](./execution):conversation 链路 / browser tool / sandbox 工具决策。
 - [Generation](./generation):`POST /api/generate` 怎么进 scheduler、chat 怎么跑 generator agent。
 - [Internal Reward Dashboard](./internal-reward-dashboard):内部 review app、reward ledger、casebook 和 trace artifact。

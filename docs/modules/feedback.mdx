@@ -43,7 +43,7 @@ flowchart LR
 
 - 卡片怎么生成，看 [Generation](./generation)。
 - 长期 memory / skill 怎么沉淀，看 [Memory](./memory)。
-- chat-stream SSE / 卡内对话执行，看 [Execution](./execution)。
+- conversation SSE / 卡内对话执行，看 [Execution](./execution)。
 - reward dashboard 的人工评分、casebook、trace artifact，看 [Internal Reward Dashboard](./internal-reward-dashboard)。
 - 用户要求“加按钮 / 改 UI / 加功能 / 改产品流程”等产品开发建议，看下方“开发建议分界”。
 
@@ -109,7 +109,7 @@ future-negative 的确定性识别只覆盖明确未来禁忌表达，例如 `st
 - “这个页面手机上太难点了。”
 - “希望设置里能关掉这个功能。”
 
-这类诉求是产品团队 triage 数据，不是用户个性化信号。明显的 UI / 功能诉求会在 `/api/chat-stream/send` 先走确定性 fast path 写入 `pai_development_feedback` 并返回简短回执；不明显的场景仍由 Main Chat 的 `development_feedback_log` 写 `POST /api/agent/development-feedback/log` 兜底。回执必须诚实：已记录给团队评估，不能假装已经实现。
+这类诉求是产品团队 triage 数据，不是用户个性化信号。唯一写入路径是 agent 的 `development_feedback_log` 工具（`POST /api/agent/development-feedback/log`）——web 层没有 keyword fast path，普通聊天消息永远原样进入 agent（有测试锁这一点）。回执必须诚实：已记录给团队评估，不能假装已经实现。
 
 ## 核心链路
 
@@ -151,7 +151,7 @@ sequenceDiagram
 | Agent feedback | `GET /api/agent/feedback/list` 给 `feedback_list` native tool 读取；`POST /api/agent/feedback/log` 保留 agent-originated feedback 写入，默认 `source='agent'`。 |
 | Preference 写入 | 常规 chat agent 仍通过 `preference_add` 写 `/api/agent/preferences/add`；现在 future-negative card text feedback 也会在 repository 内直接写一条 `source='user'` 的 active preference。 |
 | Generation 使用 | `generator.py` 的 data-collector 同时拉 `client.feedback.list(limit=50)` 和 `client.preferences.list(status="active", limit=50)`；planner 规则里 active preference 强于冷 basket 推断。 |
-| 开发建议 | `pai_development_feedback` 独立记录产品/UI/功能诉求；明显诉求由 `/api/chat-stream/send` fast path 直接写入，agent 工具兜底；generation 不读取这张表。 |
+| 开发建议 | `pai_development_feedback` 独立记录产品/UI/功能诉求；唯一写入方是 agent 的 `development_feedback_log` 工具；generation 不读取这张表。 |
 | `metadata` | object / JSON string 都接；非法 string 存 `{ raw: <原文> }`，避免打断 feedback 写入。 |
 | `intentKey` / `basket` | route 不做补齐；前端需要尽量传齐。缺字段时 event 仍写入，但 fingerprint 只能更新已有的 intent / basket 维度。 |
 | Reward ledger 分界 | 用户 open card 仍走 reward dashboard score 事件；confirm / dismiss / snooze / complete / text feedback 不复制进 reward ledger。 |
