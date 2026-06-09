@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Radio, ShieldCheck } from "lucide-react";
+import { CheckCircle2, Radio, ShieldCheck } from "lucide-react";
 import { isNative } from "@/lib/platform";
 import { useUserSettings, type AmbientSourceConsent } from "@/hooks/useUserSettings";
 import { setPersistedAmbientEnabled } from "@/services/ambient/enabled-state";
@@ -173,6 +173,7 @@ export default function AmbientSourceControlsPanel() {
   const { settings, loading, error, patch } = useUserSettings();
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
   const [busyKeys, setBusyKeys] = useState<Set<SourceKey>>(new Set());
+  const [bulkEnabling, setBulkEnabling] = useState(false);
 
   useEffect(() => {
     if (!isNative) return;
@@ -226,6 +227,15 @@ export default function AmbientSourceControlsPanel() {
     });
   }, [busyKeys, enabledKeys, runtimeStatus?.sources]);
 
+  const enableableKeys = useMemo(
+    () => rows
+      .filter((row) => !(row.nativeOnly && !isNative))
+      .map((row) => row.key),
+    [rows],
+  );
+  const allEnableableEnabled = enableableKeys.length > 0
+    && enableableKeys.every((key) => enabledKeys.includes(key));
+
   const toggle = useCallback(async (key: SourceKey, currentlyEnabled: boolean) => {
     setBusyKeys((prev) => {
       const next = new Set(prev);
@@ -263,6 +273,46 @@ export default function AmbientSourceControlsPanel() {
     }
   }, [patch]);
 
+  const enableAll = useCallback(async () => {
+    if (enableableKeys.length === 0 || allEnableableEnabled) return;
+
+    setBulkEnabling(true);
+    setBusyKeys((prev) => {
+      const next = new Set(prev);
+      enableableKeys.forEach((key) => next.add(key));
+      return next;
+    });
+
+    try {
+      const ambientSources: Record<string, AmbientSourceConsent> = {};
+      enableableKeys.forEach((key) => {
+        ambientSources[key] = { enabled: true };
+      });
+
+      const updated = await patch({ ambientSources });
+      if (!updated) return;
+
+      const enabledSources = enabledKeysFromConsent(updated.ambientSources);
+      setPersistedAmbientEnabled(enabledSources.length > 0);
+      if (!isNative) return;
+
+      try {
+        const runtime = await loadAmbientRuntime();
+        await runtime.reconcileEnabledSources(enabledSources);
+        setRuntimeStatus(runtime.status());
+      } catch {
+        // Runtime records per-source failures; settings consent is still saved.
+      }
+    } finally {
+      setBulkEnabling(false);
+      setBusyKeys((prev) => {
+        const next = new Set(prev);
+        enableableKeys.forEach((key) => next.delete(key));
+        return next;
+      });
+    }
+  }, [allEnableableEnabled, enableableKeys, patch]);
+
   const flush = useCallback(async () => {
     if (!isNative) return;
     const runtime = await loadAmbientRuntime();
@@ -293,6 +343,17 @@ export default function AmbientSourceControlsPanel() {
           {enabledKeys.length} on
         </span>
       </div>
+
+      <button
+        type="button"
+        onClick={() => void enableAll()}
+        disabled={loading || bulkEnabling || allEnableableEnabled || enableableKeys.length === 0}
+        aria-label="Enable all ambient sources"
+        className="inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl bg-foreground px-3 text-[12px] font-semibold text-background transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        <CheckCircle2 size={14} strokeWidth={2} />
+        {bulkEnabling ? "Enabling..." : allEnableableEnabled ? "All on" : "Enable all"}
+      </button>
 
       {loading ? (
         <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-3 text-[11px] text-foreground/45">
