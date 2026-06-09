@@ -112,12 +112,17 @@ card-generator stage will turn each plan item into a full card.
    `patternId`, `category`, `intent`, `abstract`, `humanInsight`,
    `cardSkeleton` (including `title_strategy` when available), `evidence`
    (the signal evidence that satisfied the trigger), and a `baseHitRate` score.
-3. PREFER plan items that realize a matched pattern: pick `plan_item.pattern_id`
+3. Use `<generation_request_json>` when present. It may include
+   `source_kind`, `source_label`, `scheduled_task_id`, `confirmed_brief`, and
+   `parsed_intent`. `confirmed_brief` is an explicit user-confirmed brief for
+   this run; treat it as the request objective while still grounding every
+   plan item in `<phase1_json>` sources.
+4. PREFER plan items that realize a matched pattern: pick `plan_item.pattern_id`
    from the matched list, set `intent_key`/`decision`/`why_now_trigger` so the
    card grounds in the same evidence. When no pattern fits a strong signal,
    you may still propose a plan item with `pattern_id = null` (free-LLM).
-4. Reason through dedup and feedback alignment BEFORE proposing items.
-5. Emit a PlanOutput with:
+5. Reason through dedup and feedback alignment BEFORE proposing items.
+6. Emit a PlanOutput with:
      - `plan[]`: each item = {{intent_key, goal_basket, decision,
        why_now_trigger, primary_source_ids, pattern_id}}
      - `selected_pattern_ids[]`: same `pattern_id` values surfaced once
@@ -179,6 +184,18 @@ on this batch, stronger than inferred signals:
   deterministic setting, never from a preference row. Ignore any
   language-shaped preference for planning.
 </preference_alignment>
+
+<request_scoped_generation_request>
+When `<generation_request_json>` is non-empty:
+- Prefer the user's `confirmed_brief` and `parsed_intent` over generic batch
+  diversity. For example, a scheduled AI-news brief should bias the plan toward
+  AI-news evidence instead of unrelated high-salience sources.
+- Do not invent sources to satisfy the brief. If phase1 has no grounded source
+  matching the brief, plan fewer cards and explain the constraint in `notes`.
+- Keep memory retrieval unchanged: this field narrows planning for this run; it
+  does not replace profile, memory, preferences, signals, feedback, or world
+  context.
+</request_scoped_generation_request>
 
 <connected_raw_sources>
 `<phase1_json>` includes `connections_summary` (the user's ACTIVE
@@ -1361,6 +1378,7 @@ async def run_generator(
     matched_patterns: list[dict[str, Any]] | None = None,
     context_since: datetime | None = None,
     context_until: datetime | None = None,
+    generation_request: dict[str, Any] | None = None,
 ) -> GeneratorOutput:
     """One-shot generator run. Returns the validated GeneratorOutput.
 
@@ -1439,6 +1457,10 @@ async def run_generator(
                     ensure_ascii=False,
                 )
                 matched_json = json.dumps(matched_patterns or [], ensure_ascii=False)
+                generation_request_json = json.dumps(
+                    generation_request or {},
+                    ensure_ascii=False,
+                )
 
                 # User-requested focus (chat-triggered generation): bias the
                 # planner toward this topic while keeping the grounding rules —
@@ -1469,6 +1491,7 @@ async def run_generator(
                         f"Today is {current_date}. {_lang_clause(output_language)}.\n"
                         f"Target {target_cards} final cards; plan up to {candidate_count} candidates.\n"
                         f"{focus_clause}"
+                        f"<generation_request_json>{generation_request_json}</generation_request_json>\n"
                         f"<matched_patterns_json>{matched_json}</matched_patterns_json>\n"
                         f"<phase1_json>{compact_phase1_json}</phase1_json>"
                     ),
@@ -1732,6 +1755,7 @@ async def run_generator(
                                         "<existing_card_summaries_json>"
                                         f"{json.dumps(_existing_card_context(compact_phase1=compact_phase1, generated_cards=generated_cards), ensure_ascii=False)}"
                                         "</existing_card_summaries_json>\n"
+                                        f"<generation_request_json>{generation_request_json}</generation_request_json>\n"
                                         f"<matched_patterns_json>{matched_json}</matched_patterns_json>\n"
                                         f"<phase1_json>{topup_phase1_json}</phase1_json>"
                                     ),

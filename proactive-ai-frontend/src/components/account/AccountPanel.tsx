@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import AutoDreamingSettings from "@/components/account/AutoDreamingSettings";
 import AutoGenerateSettings from "@/components/account/AutoGenerateSettings";
+import ScheduledTasksSettings from "@/components/account/ScheduledTasksSettings";
 import GenerationLanguageSettings from "@/components/account/GenerationLanguageSettings";
 import AmbientSourceControlsPanel from "@/components/ambient/AmbientSourceControlsPanel";
 import AmbientTimelineSummaryStatusPanel from "@/components/ambient/AmbientTimelineSummaryStatusPanel";
@@ -858,6 +859,16 @@ function PreferencesSubPage({ onBack }: { onBack: () => void }) {
           </div>
           <AutoGenerateSettings />
           <GenerationLanguageSettings />
+        </section>
+
+        <section className="glass-card-strong p-4">
+          <div className="mb-3">
+            <h2 className="text-sm font-semibold text-foreground">Scheduled Tasks</h2>
+            <p className="text-[11px] text-foreground/42 mt-1">
+              Recurring card generation you set up from chat — pause, resume, or remove.
+            </p>
+          </div>
+          <ScheduledTasksSettings />
         </section>
       </motion.div>
     </div>

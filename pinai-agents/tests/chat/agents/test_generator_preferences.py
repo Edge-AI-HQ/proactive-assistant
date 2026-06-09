@@ -362,6 +362,14 @@ def test_generator_prompts_preserve_ambient_speaker_attribution():
     assert "never attribute non-self speech to the user" in grounding
 
 
+def test_planner_prompt_has_scheduled_generation_request_input():
+    prompt = _PLANNER_PROMPT.lower()
+
+    assert "generation_request" in prompt
+    assert "confirmed_brief" in prompt
+    assert "parsed_intent" in prompt
+
+
 def test_sdk_exposes_preferences_list():
     """Load the SDK source directly (the wheel isn't installed in the
     agents test env, same constraint as test_sdk_cheat_sheet_sync) and

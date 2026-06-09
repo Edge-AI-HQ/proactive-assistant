@@ -82,7 +82,12 @@ export function realIntentToChatCard(card: IntentCard): ChatCard {
     tag: card.urgency >= 0.85 ? "Urgent" : undefined,
     title: card.title,
     line1: card.whyNow || card.summary,
-    line2: card.sources.length > 0 ? `Sources: ${card.sources.join(" · ")}` : "",
+    line2:
+      card.sourceKind === "scheduled" && card.sourceLabel
+        ? `Scheduled · ${card.sourceLabel}`
+        : card.sources.length > 0
+          ? `Sources: ${card.sources.join(" · ")}`
+          : "",
     whyNow:
       card.whyNow && card.whyNow.trim() && card.whyNow !== card.summary
         ? card.whyNow
@@ -112,7 +117,12 @@ export function realCardToLovableIntent(card: IntentCard, status: CardStatus): I
     tag: card.urgency >= 0.85 ? "Urgent" : undefined,
     title: card.title,
     line1: card.whyNow || card.summary,
-    line2: card.sources.length > 0 ? `Sources: ${card.sources.join(" · ")}` : "",
+    line2:
+      card.sourceKind === "scheduled" && card.sourceLabel
+        ? `Scheduled · ${card.sourceLabel}`
+        : card.sources.length > 0
+          ? `Sources: ${card.sources.join(" · ")}`
+          : "",
     // Preserved separately from line1 (which collapses whyNow / summary
     // into a single headline) so the drawer can render a dedicated
     // "WHY NOW" block — only fill when both fields exist AND differ, so

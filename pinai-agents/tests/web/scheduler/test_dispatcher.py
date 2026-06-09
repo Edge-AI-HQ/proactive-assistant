@@ -7,6 +7,7 @@ from pinai_agents.web.db.repositories.profile import ProfileRepository
 from pinai_agents.web.db.repositories.scheduled_tasks import ScheduledTasksRepository
 from pinai_agents.web.db.rls import service_tx, user_scoped_tx
 from pinai_agents.web.scheduler.dispatcher import (
+    _AGENT_RUN_KIND,
     DefaultDispatcher,
     _dream_result_fields,
     _generation_context_since,
@@ -18,7 +19,12 @@ def test_generator_tasks_use_ten_minute_lease():
 
     assert dispatcher._lease_for("generator.manual") == 600
     assert dispatcher._lease_for("generator.auto") == 600
+    assert dispatcher._lease_for("generator.scheduled") == 600
     assert dispatcher._lease_for("auto.dreaming") == 600
+
+
+def test_scheduled_generator_maps_to_existing_generator_agent_kind():
+    assert _AGENT_RUN_KIND["generator.scheduled"] == "generator"
 
 
 def test_generation_context_since_covers_24h_or_last_success_cycle():

@@ -212,6 +212,44 @@ class ScheduledTasksRepository(UserScopedRepository):
             rows = await cur.fetchall()
         return [ScheduledTaskRow.from_record(r) for r in rows]
 
+    async def list_by_kind(
+        self,
+        *,
+        kind: str,
+        include_archived: bool = False,
+    ) -> list[ScheduledTaskRow]:
+        async with self._conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT * FROM pai_scheduled_tasks
+                WHERE user_id = %s
+                  AND kind = %s
+                  AND (%s OR status <> 'archived')
+                ORDER BY created_at DESC
+                """,
+                (self._user_id, kind, include_archived),
+            )
+            rows = await cur.fetchall()
+        return [ScheduledTaskRow.from_record(r) for r in rows]
+
+    async def get_by_id_and_kind(
+        self,
+        *,
+        task_id: str,
+        kind: str,
+    ) -> ScheduledTaskRow | None:
+        async with self._conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT * FROM pai_scheduled_tasks
+                WHERE user_id = %s AND id = %s AND kind = %s
+                LIMIT 1
+                """,
+                (self._user_id, task_id, kind),
+            )
+            row = await cur.fetchone()
+        return ScheduledTaskRow.from_record(row) if row is not None else None
+
     async def pause(self, task_id: str) -> bool:
         async with self._conn.cursor() as cur:
             await cur.execute(
@@ -222,6 +260,20 @@ class ScheduledTasksRepository(UserScopedRepository):
                 (self._user_id, task_id),
             )
             return (cur.rowcount or 0) > 0
+
+    async def pause_by_kind(self, *, task_id: str, kind: str) -> ScheduledTaskRow | None:
+        async with self._conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE pai_scheduled_tasks
+                SET status = 'paused', updated_at = NOW()
+                WHERE user_id = %s AND id = %s AND kind = %s AND status = 'active'
+                RETURNING *
+                """,
+                (self._user_id, task_id, kind),
+            )
+            row = await cur.fetchone()
+        return ScheduledTaskRow.from_record(row) if row is not None else None
 
     async def resume(self, task_id: str, *, next_run_at: datetime | None) -> bool:
         async with self._conn.cursor() as cur:
@@ -234,6 +286,43 @@ class ScheduledTasksRepository(UserScopedRepository):
                 (next_run_at, self._user_id, task_id),
             )
             return (cur.rowcount or 0) > 0
+
+    async def resume_by_kind(
+        self,
+        *,
+        task_id: str,
+        kind: str,
+        next_run_at: datetime | None,
+    ) -> ScheduledTaskRow | None:
+        async with self._conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE pai_scheduled_tasks
+                SET status = 'active', next_run_at = %s, updated_at = NOW()
+                WHERE user_id = %s AND id = %s AND kind = %s AND status = 'paused'
+                RETURNING *
+                """,
+                (next_run_at, self._user_id, task_id, kind),
+            )
+            row = await cur.fetchone()
+        return ScheduledTaskRow.from_record(row) if row is not None else None
+
+    async def archive_by_kind(self, *, task_id: str, kind: str) -> ScheduledTaskRow | None:
+        async with self._conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE pai_scheduled_tasks
+                SET status = 'archived', next_run_at = NULL, updated_at = NOW()
+                WHERE user_id = %s
+                  AND id = %s
+                  AND kind = %s
+                  AND status <> 'archived'
+                RETURNING *
+                """,
+                (self._user_id, task_id, kind),
+            )
+            row = await cur.fetchone()
+        return ScheduledTaskRow.from_record(row) if row is not None else None
 
 
 # ── cross-user scheduler ops (free functions, not Repository methods) ──

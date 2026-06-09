@@ -66,3 +66,30 @@ async def post(path: str, body: dict[str, Any]) -> Any:
         logger.warning("native tool POST %s → %d: %s", path, resp.status_code, resp.text[:200])
         return {"error": f"http_{resp.status_code}", "detail": resp.text[:500]}
     return resp.json()
+
+
+async def post_status(path: str, body: dict[str, Any]) -> tuple[int, Any]:
+    """POST returning (status_code, parsed_body).
+
+    Unlike `post`, this does NOT collapse a non-2xx into an opaque error
+    dict — the caller branches on the status itself. Use it where a
+    specific 4xx is a normal business outcome the agent must act on:
+    scheduled-generator create returns 409 with the freshly-found similar
+    tasks when it needs one more confirmation, and `post` would truncate
+    that body to 500 chars. Body is parsed JSON when possible, else
+    {"detail": <text>}.
+    """
+    resp = await _get_client().post(path, json=body, headers=_auth_headers())
+    try:
+        return resp.status_code, resp.json()
+    except ValueError:
+        return resp.status_code, {"detail": resp.text[:500]}
+
+
+async def delete(path: str) -> Any:
+    """DELETE /api/<path>. Returns parsed JSON, or an error dict on >= 400."""
+    resp = await _get_client().delete(path, headers=_auth_headers())
+    if resp.status_code >= 400:
+        logger.warning("native tool DELETE %s → %d: %s", path, resp.status_code, resp.text[:200])
+        return {"error": f"http_{resp.status_code}", "detail": resp.text[:500]}
+    return resp.json()

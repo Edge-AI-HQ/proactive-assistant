@@ -29,6 +29,11 @@ export interface IntentCard {
   sources: string[];
   agentChain: string[];
   createdAt: string;
+  /** Provenance for cards produced by a user's scheduled generator task —
+   *  drives the lightweight "Scheduled · <label>" marker. Absent on
+   *  manual / auto-generated cards. */
+  sourceKind?: string;
+  sourceLabel?: string;
 }
 
 export interface EvaluationScore {
@@ -149,6 +154,12 @@ export function normalizeIntentCard(card: unknown): IntentCard {
     sources: toStringArray(record.sources),
     agentChain: toStringArray(record.agentChain),
     createdAt: typeof record.createdAt === "string" ? record.createdAt : "",
+    ...(typeof record.sourceKind === "string" && record.sourceKind.trim().length > 0
+      ? { sourceKind: record.sourceKind.trim() }
+      : {}),
+    ...(typeof record.sourceLabel === "string" && record.sourceLabel.trim().length > 0
+      ? { sourceLabel: record.sourceLabel.trim() }
+      : {}),
   };
 }
 

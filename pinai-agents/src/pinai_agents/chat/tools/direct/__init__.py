@@ -41,6 +41,14 @@ from .profile import (
     profile_upsert,
 )
 from .raw import raw_gcal_today, raw_gcal_week, raw_gmail_recent, raw_list
+from .scheduled_generators import (
+    scheduled_generator_create,
+    scheduled_generator_delete,
+    scheduled_generator_list,
+    scheduled_generator_pause,
+    scheduled_generator_preview,
+    scheduled_generator_resume,
+)
 from .signals import signals_get, signals_kinds, signals_recent
 from .tavily import tavily_extract, tavily_search
 from .timeline import (
@@ -90,6 +98,16 @@ ALL_TOOLS = [
     feedback_list,
     # Product-team triage suggestions. This is not a personalization signal.
     development_feedback_log,
+    # Scheduled generators — user-created recurring card generation. preview
+    # builds a confirmable draft; create writes it only AFTER the user replies
+    # to confirm (reply-gated, so deliberately NOT in SIDE_EFFECT_TOOL_NAMES);
+    # list / pause / resume / delete manage existing tasks.
+    scheduled_generator_preview,
+    scheduled_generator_create,
+    scheduled_generator_list,
+    scheduled_generator_pause,
+    scheduled_generator_resume,
+    scheduled_generator_delete,
     # Web search + read (Tavily). search returns ranked snippets;
     # extract pulls full markdown for 1-20 URLs in one call.
     tavily_search,
@@ -167,6 +185,12 @@ __all__ = [
     "raw_gcal_week",
     "raw_gmail_recent",
     "raw_list",
+    "scheduled_generator_create",
+    "scheduled_generator_delete",
+    "scheduled_generator_list",
+    "scheduled_generator_pause",
+    "scheduled_generator_preview",
+    "scheduled_generator_resume",
     "signals_get",
     "signals_kinds",
     "signals_recent",

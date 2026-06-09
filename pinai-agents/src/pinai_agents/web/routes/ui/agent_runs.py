@@ -36,6 +36,7 @@ _AGENT_KINDS = (
     "generator.manual",
     "generator.auto",
     "generator.chat",
+    "generator.scheduled",
     "user.prompt",
 )
 

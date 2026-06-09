@@ -157,6 +157,7 @@ async def call_generate(
     matched_patterns: list[dict[str, Any]] | None = None,
     context_since: datetime | None = None,
     context_until: datetime | None = None,
+    generation_request: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One-shot proxy to chat worker /agent/generate. JSON in / JSON out.
 
@@ -194,6 +195,8 @@ async def call_generate(
         body["context_since"] = context_since.isoformat()
     if context_until is not None:
         body["context_until"] = context_until.isoformat()
+    if generation_request is not None:
+        body["generation_request"] = generation_request
     url = f"{_chat_internal_url()}/agent/generate"
     timeout = httpx.Timeout(
         connect=5.0,
