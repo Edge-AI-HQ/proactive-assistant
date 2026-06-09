@@ -132,7 +132,9 @@ _LONG_RUNNING_KINDS: frozenset[str] = frozenset(
         "user.prompt",
     }
 )
-_GENERATOR_KINDS: frozenset[str] = frozenset({"generator.manual", "generator.auto"})
+_GENERATOR_KINDS: frozenset[str] = frozenset(
+    {"generator.manual", "generator.auto", "generator.chat"}
+)
 
 
 def _aware_utc(value: datetime) -> datetime:
@@ -168,6 +170,7 @@ _AGENT_RUN_KIND: dict[str, AgentKind] = {
     "crystallize": "crystallize",
     "generator.manual": "generator",
     "generator.auto": "generator",
+    "generator.chat": "generator",
     "user.prompt": "dream",
 }
 
@@ -406,10 +409,11 @@ class DefaultDispatcher:
                 run_id,
                 extra={"session_key": (task.payload or {}).get("session_key", "")},
             )
-        elif kind in ("generator.manual", "generator.auto"):
-            # Both kinds → same handler. The kind name is the only place
-            # the manual-vs-recurring distinction lives now (see migration
-            # 039); _run_generator is correctly trigger-kind-agnostic.
+        elif kind in ("generator.manual", "generator.auto", "generator.chat"):
+            # All three kinds → same handler. The kind name is the only place
+            # the manual-vs-recurring-vs-chat distinction lives now (see
+            # migration 039); _run_generator is trigger-kind-agnostic and
+            # reads the optional `focus` from the task payload.
             await self._run_generator(task, run_id)
         elif kind in ("connector.init", "connector.sync"):
             # In-process Composio ingest. The handler updates progress
@@ -646,6 +650,10 @@ class DefaultDispatcher:
         payload = task.payload or {}
         cards_to_generate = min(int(payload.get("cards_to_generate") or 8), 8)
         output_language = str(payload.get("output_language") or "en")
+        # Optional chat-triggered topic — biases the planner toward this
+        # focus. Absent (None) for manual-button / auto fires (normal batch).
+        # Already normalized at the /api/agent/generate boundary; trust it.
+        focus = payload.get("focus")
 
         # Phase 2: pattern matcher runs in the web process so the chat
         # process never has to query the pattern DB. The web-side phase1
@@ -712,6 +720,7 @@ class DefaultDispatcher:
             output_language=output_language,
             virtual_key=virtual_key,
             run_id=run_id,
+            focus=focus,
             matched_patterns=matched_payload or None,
             context_since=context_since,
             context_until=context_until,

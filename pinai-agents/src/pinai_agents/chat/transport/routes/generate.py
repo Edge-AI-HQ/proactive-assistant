@@ -34,6 +34,10 @@ class GenerateRequest(BaseModel):
     # one stable id. Sync /api/generate callers omit this and accept the
     # default-generated run_<uuid>.
     run_id: str | None = Field(default=None, max_length=64)
+    # Optional user-requested topic for chat-triggered generation. When set,
+    # the planner biases candidates toward this focus (still grounding-strict).
+    # Omitted by the home "Generate" button / auto-fires → normal batch.
+    focus: str | None = Field(default=None, max_length=400)
     # Web-side pattern matcher output. Chat receives this read-only so it
     # never has to query the pattern DB (trust boundary).
     matched_patterns: list[dict[str, Any]] = Field(default_factory=list)
@@ -235,6 +239,7 @@ async def generate(
                 run_jwt=raw_jwt,
                 cards_to_generate=req.cards_to_generate,
                 output_language=req.output_language,
+                focus=req.focus,
                 matched_patterns=req.matched_patterns,
                 context_since=req.context_since,
                 context_until=context_until,

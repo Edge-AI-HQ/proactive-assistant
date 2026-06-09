@@ -258,6 +258,7 @@ async def call_generate(
     output_language: str,
     virtual_key: str,
     run_id: str | None = None,
+    focus: str | None = None,
     matched_patterns: list[dict[str, Any]] | None = None,
     context_since: datetime | None = None,
     context_until: datetime | None = None,
@@ -290,6 +291,8 @@ async def call_generate(
     }
     if run_id is not None:
         body["run_id"] = run_id
+    if focus:
+        body["focus"] = focus
     if matched_patterns:
         body["matched_patterns"] = matched_patterns
     if context_since is not None:

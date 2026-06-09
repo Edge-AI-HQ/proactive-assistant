@@ -44,6 +44,7 @@ from .routes.agent.composio import router as agent_composio_router
 from .routes.agent.development_feedback import router as agent_development_feedback_router
 from .routes.agent.evolution import router as agent_evolution_router
 from .routes.agent.feedback import router as agent_feedback_router
+from .routes.agent.generate import router as agent_generate_router
 from .routes.agent.memory import router as agent_memory_router
 from .routes.agent.pipeline import router as agent_pipeline_router
 from .routes.agent.preferences import router as agent_preferences_router
@@ -229,6 +230,7 @@ def create_app() -> FastAPI:
     app.include_router(agent_composio_router)
     app.include_router(agent_raw_router)
     app.include_router(agent_cards_router)
+    app.include_router(agent_generate_router)
     app.include_router(agent_feedback_router)
     app.include_router(agent_evolution_router)
     app.include_router(agent_pipeline_router)

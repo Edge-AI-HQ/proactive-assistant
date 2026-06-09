@@ -584,3 +584,22 @@ def test_run_generator_has_topup_and_final_selection_stages():
     assert 'stage_suffix = "" if topup_round == 1 else str(topup_round)' in source
     assert 'planner_stage = f"topup{stage_suffix}_planner"' in source
     assert "final_selection" in source
+
+
+def test_run_generator_threads_focus_into_planner_content():
+    """Chat-triggered generation plumbing: an optional `focus` topic is
+    threaded into the planner content as a hard "USER FOCUS" directive,
+    only when present. Whether the planner actually centers candidates on
+    the focus is an LLM behavior, verified manually against a LangSmith
+    trace (same convention as the preference-alignment plumbing above)."""
+    sig = inspect.signature(run_generator)
+    focus_param = sig.parameters.get("focus")
+    assert focus_param is not None, "run_generator must accept a `focus` kwarg"
+    assert focus_param.default is None, "focus must be optional (default None)"
+
+    source = inspect.getsource(run_generator)
+    # The directive is injected into the planner content, gated on `focus`.
+    assert "USER FOCUS" in source
+    assert "if focus" in source
+    # And the value actually interpolates the caller-supplied focus string.
+    assert "{focus}" in source

@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -29,9 +28,8 @@ from fastapi import APIRouter, Body, Depends, HTTPException, status
 
 from ....shared.api_models import GenerateRequest
 from ...auth.deps import User, current_user, get_pool
-from ...db.repositories.profile import ProfileRepository
-from ...db.repositories.scheduled_tasks import enqueue_once
 from ...db.rls import user_scoped_tx
+from ...services.generator_tasks import enqueue_generator_task
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["generate"])
@@ -401,29 +399,18 @@ async def generate(
                 "asOf": datetime.now(UTC).isoformat(),
                 "deduped": True,
             }
-        # Resolve output_language: explicit body value wins (admin / A-B
-        # debug); otherwise read user's persisted setting. Fixes the case
-        # where the UI never sent the param and every run silently fell
-        # back to "en" regardless of `generation_language`.
-        # Widen to str | None: body carries the OutputLanguage Literal, but the
-        # persisted-settings fallback is a plain str and the value only flows
-        # into an opaque task payload below.
-        output_language: str | None = body.output_language
-        if output_language is None:
-            settings = await ProfileRepository(user.id, conn).get_settings()
-            output_language = settings.generation_language
-        task_id = f"gen.{uuid.uuid4().hex[:12]}"
-        await enqueue_once(
+        # Resolve output_language + enqueue via the shared helper so the
+        # button (generator.manual) and chat trigger (generator.chat) keep
+        # one payload schema / id format. Explicit body value wins (admin /
+        # A-B debug); otherwise the helper reads the user's persisted
+        # `generation_language`.
+        task_id = await enqueue_generator_task(
             conn,
             user_id=user.id,
-            task_id=task_id,
             kind="generator.manual",
-            payload={
-                "cards_to_generate": body.cards_to_generate,
-                "output_language": output_language,
-                "trigger": trigger,
-            },
-            max_attempts=1,
+            cards_to_generate=body.cards_to_generate,
+            output_language=body.output_language,
+            trigger=trigger,
         )
     return {
         "ok": True,

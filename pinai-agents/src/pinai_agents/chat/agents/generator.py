@@ -1357,6 +1357,7 @@ async def run_generator(
     cards_to_generate: int = 8,
     output_language: str = "en",
     user_message: str = "Generate Intent Cards now.",
+    focus: str | None = None,
     matched_patterns: list[dict[str, Any]] | None = None,
     context_since: datetime | None = None,
     context_until: datetime | None = None,
@@ -1440,6 +1441,20 @@ async def run_generator(
                 )
                 matched_json = json.dumps(matched_patterns or [], ensure_ascii=False)
 
+                # User-requested focus (chat-triggered generation): bias the
+                # planner toward this topic while keeping the grounding rules —
+                # candidates must still tie back to phase1 signals/sources.
+                # Off-focus candidates only fill in when the focus yields fewer
+                # than target grounded options. Empty when no focus.
+                focus_clause = (
+                    f"USER FOCUS — the user explicitly asked for cards about: {focus}\n"
+                    "Prioritize candidates that directly serve this focus and are "
+                    "grounded in the phase1 signals/sources below. Only add off-focus "
+                    f"candidates if the focus yields fewer than {target_cards} grounded "
+                    "options.\n"
+                    if focus
+                    else ""
+                )
                 plan = await _invoke_structured_stage(
                     structured_model,
                     PlanOutput,
@@ -1454,6 +1469,7 @@ async def run_generator(
                     content=(
                         f"Today is {current_date}. {_lang_clause(output_language)}.\n"
                         f"Target {target_cards} final cards; plan up to {candidate_count} candidates.\n"
+                        f"{focus_clause}"
                         f"<matched_patterns_json>{matched_json}</matched_patterns_json>\n"
                         f"<phase1_json>{compact_phase1_json}</phase1_json>"
                     ),
