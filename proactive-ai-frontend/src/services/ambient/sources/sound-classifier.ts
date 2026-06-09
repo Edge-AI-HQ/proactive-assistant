@@ -43,9 +43,9 @@ const RECENT_CAPTURE_RECOVERY_BATCH_SIZE = 25;
 const RECENT_CAPTURE_RECOVERY_MAX_PAGES = 20;
 const LIVE_AUDIO_CONFIG = {
   preRollMs: 2_000,
-  postRollMs: 2_500,
-  maxBurstMs: 12_000,
-  minBurstMs: 600,
+  postRollMs: 5_000,
+  maxBurstMs: 30_000,
+  minBurstMs: 1_000,
   sessionSilenceGapMs: 30_000,
   maxSessionDurationMs: 5 * 60_000,
 } as const;
@@ -549,7 +549,7 @@ export class SoundClassifierSource implements AmbientSource {
   }
 
   private transcriptionLanguage(): string | undefined {
-    return this.voiceLanguage().openai;
+    return undefined;
   }
 
   private async cleanupNativeStartFailure(): Promise<void> {

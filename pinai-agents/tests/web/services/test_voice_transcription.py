@@ -9,6 +9,75 @@ from pinai_agents.web.services import voice_transcription as service
 pytestmark = pytest.mark.asyncio
 
 
+async def test_plain_transcription_posts_mixed_language_prompt_without_default_language(
+    monkeypatch,
+):
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        is_success = True
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"text": "今天 review Claude Code 里的 Codex patch."}
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout):
+            captured["timeout"] = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, url, *, data, files, headers):
+            captured.update(
+                {
+                    "url": url,
+                    "data": data,
+                    "files": files,
+                    "headers": headers,
+                }
+            )
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        service,
+        "get_web_settings",
+        lambda: SimpleNamespace(litellm_base_url="http://litellm:4000"),
+    )
+    monkeypatch.setattr(service.httpx, "AsyncClient", FakeAsyncClient)
+
+    result = await service.transcribe_audio(
+        audio=b"ambient-wav",
+        content_type="audio/wav",
+        filename="ambient.wav",
+        bearer_token="sk-test",
+    )
+
+    assert result == "今天 review Claude Code 里的 Codex patch."
+    assert captured["url"] == "http://litellm:4000/v1/audio/transcriptions"
+    assert captured["headers"] == {
+        "Authorization": "Bearer sk-test",
+        "Accept": "application/json",
+    }
+    data = captured["data"]
+    assert isinstance(data, dict)
+    assert data["model"] == "gpt-4o-transcribe"
+    assert data["response_format"] == "json"
+    assert "language" not in data
+    assert "prompt" in data
+    assert "mixed Mandarin Chinese and English" in data["prompt"]
+    assert "Claude Code" in data["prompt"]
+    assert "Codex" in data["prompt"]
+    assert "Do not translate between languages" in data["prompt"]
+    assert captured["files"] == {
+        "file": ("ambient.wav", b"ambient-wav", "audio/wav"),
+    }
+
+
 async def test_diarized_transcription_posts_openai_diarization_fields(monkeypatch):
     captured: dict[str, object] = {}
 
@@ -77,6 +146,7 @@ async def test_diarized_transcription_posts_openai_diarization_fields(monkeypatc
         "known_speaker_references[]": "data:audio/wav;base64,cmVmZXJlbmNlLXdhdg==",
         "language": "en",
     }
+    assert "prompt" not in captured["data"]
     assert captured["files"] == {
         "file": ("meeting.wav", b"meeting-wav", "audio/wav"),
     }
