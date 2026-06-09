@@ -1826,3 +1826,133 @@ export async function supersedeMemory(oldId: string, newId: string): Promise<voi
   const res = await proxyPost("/memory/supersede", { oldId, newId });
   if (!res.ok) throw new Error(`supersede memory failed: ${await readErrorMessage(res)}`);
 }
+
+// ── Scheduled generators (user-created recurring card generation) ──
+// Backs the Settings > Preferences management list and Main Chat's
+// create-via-confirmation flow. Server keys are camelCase (web `_dump`);
+// parsedIntent / confirmedBrief are opaque blobs echoed back verbatim on
+// create — the backend normalizes their keys, so don't reshape them here.
+
+export interface ScheduledGeneratorParsedIntent {
+  frequency?: string;
+  localTime?: string;
+  timezone?: string;
+  topic?: string;
+  cardCount?: number;
+  [key: string]: unknown;
+}
+
+export interface ScheduledGeneratorConfirmedBrief {
+  title?: string;
+  topic?: string;
+  instruction?: string;
+  [key: string]: unknown;
+}
+
+export interface ScheduledGeneratorTask {
+  id: string;
+  kind: string;
+  status: "active" | "paused" | "archived";
+  title: string;
+  frequency: string | null;
+  localTime: string | null;
+  timezone: string;
+  cronExpr: string | null;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  lastRunStatus: string | null;
+  runCount: number;
+  payload: Record<string, unknown>;
+}
+
+export interface ScheduledGeneratorPreview {
+  previewId: string;
+  parsedIntent: ScheduledGeneratorParsedIntent;
+  confirmedBrief: ScheduledGeneratorConfirmedBrief;
+  semanticSignature: string;
+  similarTasks: ScheduledGeneratorTask[];
+  conversationId: string | null;
+}
+
+export interface ScheduledGeneratorPreviewRequest {
+  originalRequest: string;
+  timezone: string;
+  conversationId?: string | null;
+}
+
+export interface ScheduledGeneratorCreateRequest {
+  previewId: string;
+  semanticSignature: string;
+  originalRequest: string;
+  parsedIntent: ScheduledGeneratorParsedIntent;
+  confirmedBrief: ScheduledGeneratorConfirmedBrief;
+  duplicateAck?: boolean;
+  similarTaskIdsSeen?: string[];
+}
+
+/** create resolves to the task, or — on a 409 — to the similar tasks the
+ *  backend wants one more confirmation against (NOT thrown, it's a normal
+ *  branch the caller surfaces to the user). */
+export type ScheduledGeneratorCreateResult =
+  | { ok: true; task: ScheduledGeneratorTask }
+  | { ok: false; requiresConfirmation: true; similarTasks: ScheduledGeneratorTask[] };
+
+export async function scheduledGeneratorPreview(
+  req: ScheduledGeneratorPreviewRequest,
+): Promise<ScheduledGeneratorPreview> {
+  const res = await proxyPost("/scheduled-generators/preview", req);
+  if (!res.ok)
+    throw new Error(`scheduled generator preview failed: ${await readErrorMessage(res)}`);
+  return res.json();
+}
+
+export async function scheduledGeneratorCreate(
+  req: ScheduledGeneratorCreateRequest,
+): Promise<ScheduledGeneratorCreateResult> {
+  const res = await proxyPost("/scheduled-generators", req);
+  if (res.status === 409) {
+    const body = await res.json();
+    return { ok: false, requiresConfirmation: true, similarTasks: body.similarTasks ?? [] };
+  }
+  if (!res.ok)
+    throw new Error(`scheduled generator create failed: ${await readErrorMessage(res)}`);
+  const body = await res.json();
+  return { ok: true, task: body.task };
+}
+
+export async function listScheduledGenerators(
+  includeArchived = false,
+): Promise<ScheduledGeneratorTask[]> {
+  const query = includeArchived ? "?includeArchived=true" : "";
+  const res = await proxyFetch(`/scheduled-generators${query}`);
+  if (!res.ok)
+    throw new Error(`list scheduled generators failed: ${await readErrorMessage(res)}`);
+  const body = await res.json();
+  return body.items ?? [];
+}
+
+export async function pauseScheduledGenerator(taskId: string): Promise<ScheduledGeneratorTask> {
+  const res = await proxyPost(`/scheduled-generators/${encodeURIComponent(taskId)}/pause`, {});
+  if (!res.ok)
+    throw new Error(`pause scheduled generator failed: ${await readErrorMessage(res)}`);
+  const body = await res.json();
+  return body.task;
+}
+
+export async function resumeScheduledGenerator(taskId: string): Promise<ScheduledGeneratorTask> {
+  const res = await proxyPost(`/scheduled-generators/${encodeURIComponent(taskId)}/resume`, {});
+  if (!res.ok)
+    throw new Error(`resume scheduled generator failed: ${await readErrorMessage(res)}`);
+  const body = await res.json();
+  return body.task;
+}
+
+export async function deleteScheduledGenerator(taskId: string): Promise<ScheduledGeneratorTask> {
+  const res = await proxyFetch(`/scheduled-generators/${encodeURIComponent(taskId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok)
+    throw new Error(`delete scheduled generator failed: ${await readErrorMessage(res)}`);
+  const body = await res.json();
+  return body.task;
+}
