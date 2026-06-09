@@ -271,6 +271,18 @@ async def generate(
     except ValueError as e:
         logger.warning("generator shape error run_id=%s: %s", run_id, e)
         raise HTTPException(status_code=502, detail=f"generator shape error: {e}") from e
+    # Stamp scheduled-generator provenance onto each card so the UI can show a
+    # lightweight "Scheduled · <label>" marker. Source comes from the
+    # dispatcher's generation_request (absent on manual / auto runs); cards are
+    # plain dicts here, so this rides through final_cards JSONB to the frontend.
+    gen_req = req.generation_request or {}
+    source_kind = gen_req.get("source_kind")
+    source_label = gen_req.get("source_label")
+    if source_kind:
+        for card in cards:
+            card.setdefault("sourceKind", source_kind)
+            if source_label:
+                card.setdefault("sourceLabel", source_label)
     logger.info(
         "generator ok run_id=%s duration=%dms cards=%d evals=%d",
         run_id,

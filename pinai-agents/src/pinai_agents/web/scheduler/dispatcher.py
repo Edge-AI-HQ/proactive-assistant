@@ -160,12 +160,10 @@ def _generation_request_from_task(task: ScheduledTaskRow) -> dict[str, Any] | No
     if task.kind != "generator.scheduled":
         return None
     payload = task.payload or {}
-    confirmed_brief = (
-        payload.get("confirmed_brief") if isinstance(payload.get("confirmed_brief"), dict) else {}
-    )
-    parsed_intent = (
-        payload.get("parsed_intent") if isinstance(payload.get("parsed_intent"), dict) else {}
-    )
+    raw_brief = payload.get("confirmed_brief")
+    confirmed_brief = raw_brief if isinstance(raw_brief, dict) else {}
+    raw_intent = payload.get("parsed_intent")
+    parsed_intent = raw_intent if isinstance(raw_intent, dict) else {}
     title = (
         confirmed_brief.get("title")
         or confirmed_brief.get("topic")

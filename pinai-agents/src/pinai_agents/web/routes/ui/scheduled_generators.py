@@ -111,7 +111,7 @@ async def scheduled_generator_principal(
     except HTTPException as user_error:
         if authorization is None and x_dev_auth is None:
             raise user_error from user_error
-        raise agent_error or user_error
+        raise (agent_error or user_error) from user_error
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid principal")
 

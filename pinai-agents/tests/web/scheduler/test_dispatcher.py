@@ -7,8 +7,8 @@ from pinai_agents.web.db.repositories.profile import ProfileRepository
 from pinai_agents.web.db.repositories.scheduled_tasks import ScheduledTasksRepository
 from pinai_agents.web.db.rls import service_tx, user_scoped_tx
 from pinai_agents.web.scheduler.dispatcher import (
-    DefaultDispatcher,
     _AGENT_RUN_KIND,
+    DefaultDispatcher,
     _dream_result_fields,
     _generation_context_since,
 )

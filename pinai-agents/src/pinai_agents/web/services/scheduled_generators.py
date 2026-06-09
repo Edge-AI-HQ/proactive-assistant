@@ -108,6 +108,8 @@ async def create_scheduled_generator(
     duplicate_ack: bool = False,
     similar_task_ids_seen: list[str] | None = None,
 ) -> CreateScheduledGeneratorResult:
+    parsed_intent = _normalize_payload_keys(parsed_intent)
+    confirmed_brief = _normalize_payload_keys(confirmed_brief)
     _validate_timezone(str(parsed_intent.get("timezone") or "UTC"))
     cron_expr = _cron_expr_for(parsed_intent)
     task_id = _task_id_for_preview(preview_id)
@@ -161,7 +163,7 @@ async def create_scheduled_generator(
             "original_request": original_request,
             "parsed_intent": parsed_intent,
             "confirmed_brief": confirmed_brief,
-            "cards_to_generate": int(parsed_intent.get("card_count") or 8),
+            "cards_to_generate": int(parsed_intent.get("card_count") or 1),
             "output_language": _output_language_for(original_request),
             "trigger": "scheduled",
         }
@@ -246,12 +248,10 @@ async def delete_scheduled_generator(
 
 def serialize_task(row: ScheduledTaskRow) -> dict[str, Any]:
     payload = row.payload or {}
-    parsed = payload.get("parsed_intent") if isinstance(payload.get("parsed_intent"), dict) else {}
-    brief = (
-        payload.get("confirmed_brief")
-        if isinstance(payload.get("confirmed_brief"), dict)
-        else {}
-    )
+    raw_parsed = payload.get("parsed_intent")
+    parsed = raw_parsed if isinstance(raw_parsed, dict) else {}
+    raw_brief = payload.get("confirmed_brief")
+    brief = raw_brief if isinstance(raw_brief, dict) else {}
     return {
         "id": row.id,
         "kind": row.kind,
@@ -286,13 +286,13 @@ def _parse_request(
         "local_time": local_time,
         "timezone": timezone,
         "topic": topic,
-        "card_count": 8,
+        "card_count": 1,
     }
     confirmed_brief = {
         "title": _title_for_topic(topic),
         "topic": topic,
         "instruction": (
-            f"每天 {local_time} 生成 8 张和 {topic} 相关的卡片,"
+            f"每天 {local_time} 生成 1 张和 {topic} 相关的卡片,"
             "优先选择对我有行动价值的信息。"
         ),
     }
@@ -362,6 +362,31 @@ def _cron_expr_for(parsed_intent: dict[str, Any]) -> str:
     return f"{minute} {hour} * * *"
 
 
+_CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
+
+
+def _to_snake_key(name: str) -> str:
+    return _CAMEL_BOUNDARY.sub("_", name).lower()
+
+
+def _normalize_payload_keys(value: Any) -> Any:
+    """Recursively snake_case dict keys.
+
+    preview returns parsed_intent / confirmed_brief through the route's
+    camelCasing `_dump`, and the frontend / Main Chat tool echo them back to
+    create verbatim. Internally we read snake_case keys (parsed_intent
+    .local_time drives the cron expr), so normalize at the create boundary —
+    the API stays camelCase, storage stays snake_case, and a camelCase
+    round-trip can no longer silently break the schedule. Idempotent on keys
+    that are already snake_case.
+    """
+    if isinstance(value, dict):
+        return {_to_snake_key(str(k)): _normalize_payload_keys(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_normalize_payload_keys(item) for item in value]
+    return value
+
+
 def _preview_id(
     *,
     user_id: int,
@@ -400,14 +425,10 @@ def _find_similar(
     matches: list[ScheduledTaskRow] = []
     for row in tasks:
         payload = row.payload or {}
-        candidate_intent = (
-            payload.get("parsed_intent") if isinstance(payload.get("parsed_intent"), dict) else {}
-        )
-        candidate_brief = (
-            payload.get("confirmed_brief")
-            if isinstance(payload.get("confirmed_brief"), dict)
-            else {}
-        )
+        raw_intent = payload.get("parsed_intent")
+        candidate_intent = raw_intent if isinstance(raw_intent, dict) else {}
+        raw_brief = payload.get("confirmed_brief")
+        candidate_brief = raw_brief if isinstance(raw_brief, dict) else {}
         candidate_topic = _topic_key(
             str(
                 candidate_brief.get("topic")
