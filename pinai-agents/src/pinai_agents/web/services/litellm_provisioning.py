@@ -49,7 +49,12 @@ from ..litellm.client import (
 )
 
 logger = logging.getLogger(__name__)
-GENERATOR_REQUIRED_MODELS = {"claude-sonnet-4-6"}
+
+
+def _agent_required_models() -> set[str]:
+    """Models a virtual key must cover for agent runs — the per-env default
+    agent model (DEFAULT_MODEL; see _BaseAppSettings.default_model)."""
+    return {get_web_settings().default_model}
 
 
 def _litellm_user_id(supabase_user_id: str) -> str:
@@ -204,7 +209,7 @@ async def ensure_user_litellm_key(
     NOT called on chat send (key must already exist; onboarding gates the
     app). Raises on LiteLLM failure so the request sees a clean 502 rather
     than a silent hang."""
-    models = required_models or GENERATOR_REQUIRED_MODELS
+    models = required_models or _agent_required_models()
     if await _key_supports_models(user, models):
         return user
     raw_key = await _provision_and_persist(pool, user, required_models=models)

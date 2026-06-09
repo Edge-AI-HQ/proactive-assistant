@@ -4,9 +4,9 @@ Topology:
 
     run_generator()
       ├─ deterministic context builder — web agent APIs, no LLM
-      ├─ planner structured call      — sonnet, response_format=PlanOutput
-      ├─ card-generator structured    — sonnet, response_format=CardsList
-      └─ evaluator structured         — sonnet, response_format=EvalReport
+      ├─ planner structured call      — default model, response_format=PlanOutput
+      ├─ card-generator structured    — default model, response_format=CardsList
+      └─ evaluator structured         — default model, response_format=EvalReport
 
 Why 4 stages instead of one big prompt:
 
@@ -1385,7 +1385,6 @@ async def run_generator(
         ):
             structured_model = make_chat_model(
                 virtual_key=virtual_key,
-                model="claude-sonnet-4-6",
                 temperature=0.2,
                 enable_thinking=False,
             )

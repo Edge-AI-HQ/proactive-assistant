@@ -190,7 +190,7 @@ def make_chat_model(
     Args:
         virtual_key: User's LiteLLM virtual key (sk-...). Comes from
             users.litellm_virtual_key. NOT the master key.
-        model: LiteLLM model alias. Defaults to claude-sonnet-4-6.
+        model: LiteLLM model alias. Defaults to settings.default_model.
         temperature: 0.0–1.0. Forced to 1.0 if enable_thinking
             (Anthropic constraint).
         streaming: Whether to enable token-level streaming.
