@@ -8,6 +8,7 @@ from pinai_agents.web.auth.deps import current_user, get_pool
 from pinai_agents.web.auth.user_service import User
 from pinai_agents.web.routes.ui import voice as voice_routes
 from pinai_agents.web.services.voice_transcription import (
+    DEFAULT_TRANSCRIPTION_POSTPROCESS_MODEL,
     DiarizedTranscriptionResult,
     SpeakerSegment,
 )
@@ -208,6 +209,27 @@ async def test_voice_transcribe_diarized_uses_litellm_virtual_key_and_reference(
             ],
         )
 
+    async def fake_postprocess_diarized_transcription(**kwargs):
+        captured["postprocess_result"] = kwargs["result"]
+        captured["postprocess_bearer_token"] = kwargs["bearer_token"]
+        return DiarizedTranscriptionResult(
+            text="Self said Claude Code.\nSpeaker one replies about Codex.",
+            segments=[
+                SpeakerSegment(
+                    speaker="self",
+                    text="Self said Claude Code.",
+                    start_ms=0,
+                    end_ms=1200,
+                ),
+                SpeakerSegment(
+                    speaker="speaker_1",
+                    text="Speaker one replies about Codex.",
+                    start_ms=1300,
+                    end_ms=2800,
+                ),
+            ],
+        )
+
     async def fake_ensure_user_litellm_key(_pool, user, *, required_models=None):
         captured["required_models"] = required_models
         user.litellm_virtual_key = "sk-test-diarize"
@@ -229,6 +251,11 @@ async def test_voice_transcribe_diarized_uses_litellm_virtual_key_and_reference(
     monkeypatch.setattr(voice_routes, "download_media_bytes", fake_download_media_bytes)
     monkeypatch.setattr(voice_routes, "ensure_user_litellm_key", fake_ensure_user_litellm_key)
     monkeypatch.setattr(voice_routes, "transcribe_audio_diarized", fake_transcribe_audio_diarized)
+    monkeypatch.setattr(
+        voice_routes,
+        "postprocess_diarized_transcription",
+        fake_postprocess_diarized_transcription,
+    )
 
     client = await _client()
     async with client:
@@ -241,18 +268,18 @@ async def test_voice_transcribe_diarized_uses_litellm_virtual_key_and_reference(
     assert response.status_code == 200
     assert response.json() == {
         "ok": True,
-        "text": "Self hello.\nSpeaker one replies.",
+        "text": "Self said Claude Code.\nSpeaker one replies about Codex.",
         "model": "gpt-4o-transcribe-diarize",
         "segments": [
-            {"speaker": "self", "text": "Self hello.", "startMs": 0, "endMs": 1200},
+            {"speaker": "self", "text": "Self said Claude Code.", "startMs": 0, "endMs": 1200},
             {
                 "speaker": "speaker_1",
-                "text": "Speaker one replies.",
+                "text": "Speaker one replies about Codex.",
                 "startMs": 1300,
                 "endMs": 2800,
             },
         ],
-        "selfText": "Self hello.",
+        "selfText": "Self said Claude Code.",
         "speakerLabels": ["self", "speaker_1"],
         "diarizationModel": "gpt-4o-transcribe-diarize",
         "diarizationStatus": "matched_reference",
@@ -262,7 +289,11 @@ async def test_voice_transcribe_diarized_uses_litellm_virtual_key_and_reference(
     assert captured["known_speaker_reference_mime"] == "audio/wav"
     assert captured["bearer_token"] == "sk-test-diarize"
     assert captured["language"] == "en"
-    assert captured["required_models"] == {"gpt-4o-transcribe-diarize"}
+    assert captured["postprocess_bearer_token"] == "sk-test-diarize"
+    assert captured["required_models"] == {
+        "gpt-4o-transcribe-diarize",
+        DEFAULT_TRANSCRIPTION_POSTPROCESS_MODEL,
+    }
 
 
 @pytest.mark.asyncio

@@ -203,6 +203,7 @@ sequenceDiagram
 - **隐私不变量**:登录本身**绝不**启动任何 source。`startAmbientUpload({ enabledSources })`(`services/ambient/lifecycle.ts`)只对用户在 `pai_user_settings.ambient_sources`(migration `041_pai_user_settings_ambient_sources.sql`)里显式 opt-in 的 source 调 `runtime.startSource(<key>)`,**不调** `runtime.autoStart()`。
 - `bindAmbientLifecycle()`(`main.tsx` 在 `isNative` 分支动态 import)只负责把 `App.appStateChange` 绑到 `runtime.drain()` — 这条只 flush 已经在队列里的事件,不会引起任何新采集。
 - 用户 UI:`components/AmbientSourcesPanel.tsx`(挂在 `DebugPanel` 里,`React.lazy` + `isNative` 守 web build)读 `useUserSettings().ambientSources`,toggle 一旦 flip 既 PATCH 到 server 又同步调 `runtime.start/stop(key)`,做到 UI 立即反映 + server 是持久真源。
+- Voice Identity 开启时,Ambient 云转录先走 `/api/voice/transcribe-diarized` + `gpt-4o-transcribe-diarize` 保留 `self` / speaker labels,再用 `gpt-5-nano` 对每个 diarized segment 的 `text` 做后处理纠错。speaker / start / end 结构只由代码保留和拼回,后处理 prompt 只允许改文本,热词在 `pinai-agents/src/pinai_agents/web/services/voice_transcription.py` 的 `TRANSCRIPTION_POSTPROCESS_TERMS`。
 - 改 ambient source 列表 / lifecycle 行为 / `pai_user_settings.ambient_sources` schema 前必读 [Ambient AI Plugin](../plans/2026-05-10-ambient-ai-plugin) + [V2 → V3 功能迁移计划 D-5](../plans/2026-05-12-v2-to-v3-migration)。
 
 ### 设备统一时间线
