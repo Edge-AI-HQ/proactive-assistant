@@ -13,6 +13,15 @@ from ..litellm.client import LiteLLMError
 
 DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-transcribe"
 DIARIZED_TRANSCRIPTION_MODEL = "gpt-4o-transcribe-diarize"
+MIXED_ZH_EN_TRANSCRIPTION_PROMPT = (
+    "The audio may contain mixed Mandarin Chinese and English. Transcribe exactly what is spoken. "
+    "Keep English words, product names, acronyms, and technical terms in English. "
+    "Use Simplified Chinese for Chinese speech. Do not translate between languages.\n\n"
+    "Common terms may include: Claude Code, Codex, ChatGPT, GPT, OpenAI, Gemini, Cursor, "
+    "Supabase, LiteLLM, Composio, LangSmith, Daytona, Fly.io, Vercel, GitHub, pull request, "
+    "PR, commit, branch, merge, rebase, deploy, Docker, Xcode, iOS, Android, Ambient, "
+    "PIN AI, Proactive AI."
+)
 ALLOWED_TRANSCRIPTION_MODELS = frozenset(
     {DEFAULT_TRANSCRIPTION_MODEL, "gpt-4o-mini-transcribe"},
 )
@@ -67,7 +76,7 @@ async def transcribe_audio(
     filename: str,
     bearer_token: str,
     model: str = DEFAULT_TRANSCRIPTION_MODEL,
-    language: str | None = "zh",
+    language: str | None = None,
 ) -> str:
     if model not in ALLOWED_TRANSCRIPTION_MODELS:
         msg = f"unsupported transcription model: {model}"
@@ -88,7 +97,11 @@ async def transcribe_audio(
     if not bearer_token:
         raise LiteLLMError(500, "LiteLLM virtual key not configured")
 
-    data = {"model": model, "response_format": "json"}
+    data = {
+        "model": model,
+        "response_format": "json",
+        "prompt": MIXED_ZH_EN_TRANSCRIPTION_PROMPT,
+    }
     if language:
         data["language"] = language
     files = {

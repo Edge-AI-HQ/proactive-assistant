@@ -264,7 +264,7 @@ describe("SoundClassifierSource transcript ingest", () => {
     expect(ambientAiMock.audio.markCaptureProcessed).toHaveBeenCalledWith({ wavId: "wav-empty" });
   });
 
-  test("uses user language preference for native recognition and cloud transcription", async () => {
+  test("uses user language preference for native recognition but leaves cloud transcription mixed", async () => {
     const ctx: SourceContext = {
       push: vi.fn(),
       onEvent: vi.fn(),
@@ -293,7 +293,7 @@ describe("SoundClassifierSource transcript ingest", () => {
     }));
     expect(captureTranscriptionMock.transcribeAmbientCapture).toHaveBeenCalledWith(
       expect.objectContaining({ wavId: "wav-en" }),
-      "en",
+      undefined,
     );
   });
 
@@ -1006,9 +1006,9 @@ describe("SoundClassifierSource transcript ingest", () => {
     expect(ambientAiMock.audio.configure).toHaveBeenCalledWith({
       recognitionLocale: "zh-CN",
       preRollMs: 2000,
-      postRollMs: 2500,
-      maxBurstMs: 12000,
-      minBurstMs: 600,
+      postRollMs: 5000,
+      maxBurstMs: 30000,
+      minBurstMs: 1000,
       sessionSilenceGapMs: 30000,
       maxSessionDurationMs: 300000,
     });
