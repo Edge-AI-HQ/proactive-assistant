@@ -1007,7 +1007,7 @@ describe("SoundClassifierSource transcript ingest", () => {
       recognitionLocale: "zh-CN",
       preRollMs: 2000,
       postRollMs: 5000,
-      maxBurstMs: 30000,
+      maxBurstMs: 20000,
       minBurstMs: 1000,
       sessionSilenceGapMs: 30000,
       maxSessionDurationMs: 300000,

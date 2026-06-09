@@ -44,7 +44,7 @@ const RECENT_CAPTURE_RECOVERY_MAX_PAGES = 20;
 const LIVE_AUDIO_CONFIG = {
   preRollMs: 2_000,
   postRollMs: 5_000,
-  maxBurstMs: 30_000,
+  maxBurstMs: 20_000,
   minBurstMs: 1_000,
   sessionSilenceGapMs: 30_000,
   maxSessionDurationMs: 5 * 60_000,
