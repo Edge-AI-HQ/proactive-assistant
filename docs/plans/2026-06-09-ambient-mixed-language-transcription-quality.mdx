@@ -87,7 +87,7 @@ Change `LIVE_AUDIO_CONFIG` in `sound-classifier.ts`:
 |---|---:|---:|---:|---:|---|
 | `preRollMs` | 2000 | 2000 | 2000 | ≤5000 | Keep the useful lead-in before VAD fires. |
 | `postRollMs` | 2500 | 5000 | 10000 | ≤20000 | Avoid cutting a sentence during short pauses. |
-| `maxBurstMs` | 12000 | 30000 | 30000 | ≤300000 | Preserve more context for mixed-language speech. |
+| `maxBurstMs` | 12000 | 20000 | 30000 | ≤300000 | Preserve more context than the old short slice while keeping live transcript latency lower than the original 30s plan. |
 | `minBurstMs` | 600 | 1000 | 800 | ≤30000 | Avoid uploading tiny fragments. |
 | `sessionSilenceGapMs` | 30000 | 30000 | 30000 | ≤600000 | Keep session rotation behavior stable. |
 | `maxSessionDurationMs` | 300000 | 300000 | 300000 | ≤3600000 | Keep session cap stable. |
@@ -136,7 +136,7 @@ expect(ambientAiMock.audio.configure).toHaveBeenCalledWith({
   recognitionLocale: "zh-CN",
   preRollMs: 2000,
   postRollMs: 5000,
-  maxBurstMs: 30000,
+  maxBurstMs: 20000,
   minBurstMs: 1000,
   sessionSilenceGapMs: 30000,
   maxSessionDurationMs: 300000,
@@ -159,7 +159,7 @@ In `sound-classifier.ts`, change:
 const LIVE_AUDIO_CONFIG = {
   preRollMs: 2_000,
   postRollMs: 5_000,
-  maxBurstMs: 30_000,
+  maxBurstMs: 20_000,
   minBurstMs: 1_000,
   sessionSilenceGapMs: 30_000,
   maxSessionDurationMs: 5 * 60_000,
@@ -421,7 +421,7 @@ Acceptance criteria:
 
 ## Risk Notes
 
-- Longer captures increase transcription latency and request size. The new `maxBurstMs=30000` remains safely below the existing 25 MB backend upload cap for typical mono 16-bit WAV (30s mono 16-bit at 16 kHz ≈ 0.96 MB; even 48 kHz ≈ 2.9 MB).
+- Longer captures increase transcription latency and request size. The new `maxBurstMs=20000` remains safely below the existing 25 MB backend upload cap for typical mono 16-bit WAV (20s mono 16-bit at 16 kHz ≈ 0.64 MB; even 48 kHz ≈ 1.9 MB).
 - Omitting `language` may slightly reduce accuracy for strictly single-language speech, but the target users are mixed Chinese-English speakers.
 - The hardcoded glossary in the prompt can cause phantom insertion of those terms on noisy/far-field audio. Mitigated by the Task 5 control clip; fallback is the language-instruction-only prompt.
 - Diarized transcription may mis-hear technical terms if it cannot receive `prompt`. Whether that limitation is real depends on Task 0 Step 1; preserving `self` is prioritized over promptability either way.
@@ -429,6 +429,6 @@ Acceptance criteria:
 
 ## Rollback Plan
 
-- Revert `LIVE_AUDIO_CONFIG` to `postRollMs=2500`, `maxBurstMs=12000`, `minBurstMs=600` if live latency is unacceptable.
+- Revert `LIVE_AUDIO_CONFIG` to `postRollMs=2500`, `maxBurstMs=12000`, `minBurstMs=600` if live latency is still unacceptable.
 - Revert `transcriptionLanguage()` to return `this.voiceLanguage().openai` if auto language detection performs worse in real audio.
 - Remove `prompt` from ordinary `transcribe_audio` request data if LiteLLM or OpenAI rejects the field.
