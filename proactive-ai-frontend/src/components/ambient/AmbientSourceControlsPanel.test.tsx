@@ -12,6 +12,30 @@ const { patchMock, runtimeMock } = vi.hoisted(() => ({
   },
 }));
 
+const ALL_ENABLED_AMBIENT_SOURCES = {
+  sound_classifier: { enabled: true },
+  visit: { enabled: true },
+  activity: { enabled: true },
+  location: { enabled: true },
+  health: { enabled: true },
+  calendar: { enabled: true },
+  focus: { enabled: true },
+  audio_route: { enabled: true },
+  device_state: { enabled: true },
+};
+
+const ALL_AMBIENT_SOURCE_KEYS = [
+  "sound_classifier",
+  "visit",
+  "activity",
+  "location",
+  "health",
+  "calendar",
+  "focus",
+  "audio_route",
+  "device_state",
+];
+
 vi.mock("@/lib/platform", () => ({ isNative: true }));
 vi.mock("@/hooks/useUserSettings", () => ({
   useUserSettings: () => ({
@@ -94,6 +118,23 @@ describe("AmbientSourceControlsPanel", () => {
         "sound_classifier",
         "health",
       ]);
+    });
+  });
+
+  test("enables every ambient source from one action", async () => {
+    patchMock.mockResolvedValueOnce({
+      ambientSources: ALL_ENABLED_AMBIENT_SOURCES,
+    });
+
+    render(<AmbientSourceControlsPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Enable all ambient sources" }));
+
+    await waitFor(() => {
+      expect(patchMock).toHaveBeenCalledWith({
+        ambientSources: ALL_ENABLED_AMBIENT_SOURCES,
+      });
+      expect(runtimeMock.reconcileEnabledSources).toHaveBeenCalledWith(ALL_AMBIENT_SOURCE_KEYS);
     });
   });
 });
