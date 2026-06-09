@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -1822,6 +1822,15 @@ wheels = [
 ]
 
 [[package]]
+name = "opencc-python-reimplemented"
+version = "0.1.7"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/8d/6d/c6f37eed651dd6b752e50f80a93396cdaa42a6acc6ce05ad7452303ea511/opencc-python-reimplemented-0.1.7.tar.gz", hash = "sha256:4f777ea3461a25257a7b876112cfa90bb6acabc6dfb843bf4d11266e43579dee", size = 482566, upload-time = "2023-02-11T03:58:42.25Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/30/6b/055b7806f320cc8f2cdf23c5f70221c0dc1683fca9ffaf76dfc2ad4b91b6/opencc_python_reimplemented-0.1.7-py2.py3-none-any.whl", hash = "sha256:41b3b92943c7bed291f448e9c7fad4b577c8c2eae30fcfe5a74edf8818493aa6", size = 481813, upload-time = "2023-02-11T03:58:39.66Z" },
+]
+
+[[package]]
 name = "opentelemetry-api"
 version = "1.41.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2074,6 +2083,7 @@ dependencies = [
     { name = "langchain-tavily" },
     { name = "langgraph-checkpoint-postgres" },
     { name = "langsmith" },
+    { name = "opencc-python-reimplemented" },
     { name = "playwright" },
     { name = "psycopg", extra = ["binary"] },
     { name = "psycopg-pool" },
@@ -2113,6 +2123,7 @@ requires-dist = [
     { name = "langchain-tavily", specifier = ">=0.2.13" },
     { name = "langgraph-checkpoint-postgres", specifier = ">=2.0.0" },
     { name = "langsmith", specifier = ">=0.3.0" },
+    { name = "opencc-python-reimplemented", specifier = ">=0.1.7" },
     { name = "playwright", specifier = ">=1.49.0,<2.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
     { name = "psycopg-pool", specifier = ">=3.2.0" },

@@ -239,6 +239,7 @@ async def test_postprocess_diarized_transcription_corrects_segments_and_preserve
     assert "CloudCode" in system_message["content"]
     assert "Lite, LLM" in system_message["content"]
     assert "Compusel" in system_message["content"]
+    assert "Use Simplified Chinese" in system_message["content"]
     assert user_message == {
         "role": "user",
         "content": (
@@ -313,3 +314,108 @@ async def test_postprocess_diarized_transcription_skips_model_for_known_hotword_
     assert result.segments[0].speaker == "self"
     assert result.segments[0].start_ms == 0
     assert result.segments[0].end_ms == 12950
+
+
+async def test_postprocess_diarized_transcription_simplifies_chinese_and_cloud_code(
+    monkeypatch,
+):
+    called = False
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, *args, **kwargs):
+            nonlocal called
+            called = True
+            raise AssertionError("model should not be called for deterministic corrections")
+
+    monkeypatch.setattr(
+        service,
+        "get_web_settings",
+        lambda: SimpleNamespace(litellm_base_url="http://litellm:4000"),
+    )
+    monkeypatch.setattr(service.httpx, "AsyncClient", FakeAsyncClient)
+
+    raw = (
+        "我還想知道 Claude Code 和 Codex 在 Last Mist 的用法怎麼樣, How’s it going? "
+        "是吧？ 特別是 Cloud Code 其實用起來非常好，對於 PIN AI 來說我非常需要 Cloud Code"
+    )
+    result = await service.postprocess_diarized_transcription(
+        result=service.DiarizedTranscriptionResult(
+            text=raw,
+            segments=[
+                service.SpeakerSegment(
+                    speaker="self",
+                    text=raw,
+                    start_ms=3956,
+                    end_ms=28506,
+                )
+            ],
+        ),
+        bearer_token="sk-test",
+    )
+
+    assert called is False
+    assert result.text == (
+        "我还想知道 Claude Code 和 Codex 在 Last Mist 的用法怎么样, How’s it going? "
+        "是吧？ 特别是 Claude Code 其实用起来非常好，对于 PIN AI 来说我非常需要 Claude Code"
+    )
+    assert result.segments[0].text == result.text
+
+
+async def test_postprocess_diarized_transcription_keeps_deterministic_edits_when_model_fails(
+    monkeypatch,
+):
+    class FakeAsyncClient:
+        def __init__(self, *, timeout):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, *args, **kwargs):
+            raise service.LiteLLMError(503, "simulated postprocess failure")
+
+    monkeypatch.setattr(
+        service,
+        "get_web_settings",
+        lambda: SimpleNamespace(litellm_base_url="http://litellm:4000"),
+    )
+    monkeypatch.setattr(service.httpx, "AsyncClient", FakeAsyncClient)
+
+    result = await service.postprocess_diarized_transcription(
+        result=service.DiarizedTranscriptionResult(
+            text="特別是 Cloud Code 其實用起來非常好\n普通第二段",
+            segments=[
+                service.SpeakerSegment(
+                    speaker="self",
+                    text="特別是 Cloud Code 其實用起來非常好",
+                    start_ms=0,
+                    end_ms=1200,
+                ),
+                service.SpeakerSegment(
+                    speaker="self",
+                    text="普通第二段",
+                    start_ms=1300,
+                    end_ms=2400,
+                ),
+            ],
+        ),
+        bearer_token="sk-test",
+    )
+
+    assert result.text == "特别是 Claude Code 其实用起来非常好\n普通第二段"
+    assert [segment.text for segment in result.segments] == [
+        "特别是 Claude Code 其实用起来非常好",
+        "普通第二段",
+    ]

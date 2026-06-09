@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from opencc import OpenCC
 
 from ...config import get_web_settings
 from ..litellm.client import LiteLLMError
@@ -15,6 +16,7 @@ from ..litellm.client import LiteLLMError
 DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-transcribe"
 DIARIZED_TRANSCRIPTION_MODEL = "gpt-4o-transcribe-diarize"
 DEFAULT_TRANSCRIPTION_POSTPROCESS_MODEL = "gpt-5-nano"
+_ZH_T2S = OpenCC("t2s")
 MIXED_ZH_EN_TRANSCRIPTION_PROMPT = (
     "The audio may contain mixed Mandarin Chinese and English. Transcribe exactly what is spoken. "
     "Keep English words, product names, acronyms, and technical terms in English. "
@@ -301,24 +303,27 @@ async def postprocess_diarized_transcription(
     }
     timeout = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=5.0)
     corrected_segments: list[SpeakerSegment] = []
-    full_context = result.text.strip()
+    full_context = _simplified_chinese(result.text.strip())
     async with httpx.AsyncClient(timeout=timeout) as client:
         for segment in result.segments:
-            deterministic_text = _hotword_near_miss_corrections(
+            deterministic_text = _deterministic_transcript_corrections(
                 segment.text,
                 full_context=full_context,
             )
             if deterministic_text != segment.text:
                 corrected_text = deterministic_text
             else:
-                corrected_text = await _postprocess_segment_text(
-                    client=client,
-                    base_url=base_url,
-                    headers=headers,
-                    model=model,
-                    text=segment.text,
-                    full_context=full_context,
-                )
+                try:
+                    corrected_text = await _postprocess_segment_text(
+                        client=client,
+                        base_url=base_url,
+                        headers=headers,
+                        model=model,
+                        text=segment.text,
+                        full_context=full_context,
+                    )
+                except (LiteLLMError, httpx.HTTPError):
+                    corrected_text = deterministic_text
             corrected_segments.append(
                 SpeakerSegment(
                     speaker=segment.speaker,
@@ -411,7 +416,7 @@ async def _postprocess_segment_text(
     content = _message_content(parsed)
     if content is None:
         raise LiteLLMError(502, "/chat/completions response missing content")
-    return content.strip()
+    return _deterministic_transcript_corrections(content.strip(), full_context=full_context)
 
 
 def _postprocess_user_prompt(text: str, full_context: str) -> str:
@@ -440,6 +445,15 @@ _HOTWORD_NEAR_MISS_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\b(?:lance|lang)\s+smith\b", re.I), "LangSmith"),
     (re.compile(r"\bharness\s+agent\b", re.I), "Harness agent"),
 )
+
+
+def _deterministic_transcript_corrections(text: str, *, full_context: str) -> str:
+    simplified = _simplified_chinese(text)
+    return _hotword_near_miss_corrections(simplified, full_context=full_context)
+
+
+def _simplified_chinese(text: str) -> str:
+    return _ZH_T2S.convert(text) if text else text
 
 
 def _hotword_near_miss_corrections(text: str, *, full_context: str) -> str:
@@ -495,7 +509,8 @@ Your ONLY task is to correct clear transcription errors. Specifically:
 2. Fix mis-recognized English words and code-switching boundaries.
 3. Ensure these terms are spelled exactly as listed:
 {", ".join(TRANSCRIPTION_POSTPROCESS_TERMS)}
-4. Add only necessary punctuation and capitalization.
+4. Use Simplified Chinese for all Chinese text. Never output Traditional Chinese.
+5. Add only necessary punctuation and capitalization.
 
 Common ASR near-miss corrections when the provided context supports them:
 - CloudCode, Cloud Code, Claw Code, or Claud Code -> Claude Code.
