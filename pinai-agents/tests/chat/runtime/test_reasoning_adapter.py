@@ -185,6 +185,32 @@ def test_claude_model_still_uses_anthropic_thinking_protocol() -> None:
     assert options.force_temperature_one is True
 
 
+def test_kimi_model_forces_temperature_one_even_without_thinking() -> None:
+    try:
+        module = import_module("pinai_agents.chat.harness.reasoning")
+    except ModuleNotFoundError as exc:
+        pytest.fail(f"reasoning adapter module is missing: {exc}")
+
+    build_reasoning_options = getattr(module, "build_reasoning_options", None)
+    assert callable(build_reasoning_options)
+
+    # Moonshot rejects any temperature other than 1 for Kimi thinking-series
+    # models, independent of our enable_thinking flag.
+    for enable_thinking in (True, False):
+        options = build_reasoning_options(
+            model="kimi-k2.6",
+            enable_prompt_cache=True,
+            enable_thinking=enable_thinking,
+            thinking_budget=5000,
+        )
+        assert options.force_temperature_one is True
+        # Kimi is neither Claude nor an OpenAI reasoning model: no thinking
+        # params should be injected.
+        assert options.extra_body == {}
+        assert options.use_responses_api is False
+        assert options.reasoning is None
+
+
 def test_openai_responses_reasoning_keeps_streaming_enabled() -> None:
     try:
         module = import_module("pinai_agents.chat.harness.reasoning")

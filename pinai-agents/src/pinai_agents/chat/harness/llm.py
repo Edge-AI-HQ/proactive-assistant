@@ -192,7 +192,8 @@ def make_chat_model(
             users.litellm_virtual_key. NOT the master key.
         model: LiteLLM model alias. Defaults to settings.default_model.
         temperature: 0.0–1.0. Forced to 1.0 if enable_thinking
-            (Anthropic constraint).
+            (Anthropic constraint) or the model is Moonshot Kimi
+            (its API only accepts temperature=1).
         streaming: Whether to enable token-level streaming.
         enable_prompt_cache: Inject cache_control on system + last user
             message via LiteLLM's AnthropicCacheControlHook.
@@ -209,7 +210,8 @@ def make_chat_model(
         thinking_budget=thinking_budget,
     )
     if reasoning_options.force_temperature_one:
-        # Anthropic rejects non-1.0 temperature with thinking enabled.
+        # Anthropic rejects non-1.0 temperature with thinking enabled;
+        # Moonshot Kimi rejects non-1.0 temperature unconditionally.
         temperature = 1.0
 
     return ChatLiteLLMReasoning(
