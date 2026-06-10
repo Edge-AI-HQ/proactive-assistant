@@ -1937,12 +1937,24 @@ export interface ScheduledGeneratorReminder {
   message: string;
 }
 
+/** Preview's similarTasks items are a summary subset (backend _task_summary),
+ *  NOT full tasks — create's 409 branch is the one that returns full tasks. */
+export interface ScheduledGeneratorTaskSummary {
+  id: string;
+  title: string;
+  status: "active" | "paused" | "archived";
+  frequency: string | null;
+  localTime: string | null;
+  timezone: string;
+  scheduleLabel: string | null;
+}
+
 export interface ScheduledGeneratorPreview {
   previewId: string;
   parsedIntent: ScheduledGeneratorParsedIntent;
   confirmedBrief: ScheduledGeneratorConfirmedBrief;
   semanticSignature: string;
-  similarTasks: ScheduledGeneratorTask[];
+  similarTasks: ScheduledGeneratorTaskSummary[];
   conversationId: string | null;
   scheduleLabel: string;
   mode: string;
@@ -1968,8 +1980,7 @@ export interface ScheduledGeneratorCreateRequest {
   mode?: "reminder" | "generate";
   topic?: string | null;
   reminder?: ScheduledGeneratorReminder | null;
-  parsedIntent: ScheduledGeneratorParsedIntent;
-  confirmedBrief: ScheduledGeneratorConfirmedBrief;
+  confirmedBrief?: ScheduledGeneratorConfirmedBrief | null;
   duplicateAck?: boolean;
   similarTaskIdsSeen?: string[];
 }

@@ -87,7 +87,6 @@ describe("scheduledGeneratorCreate", () => {
       originalRequest: "x",
       timezone: "UTC",
       schedule: { type: "cron", frequency: "daily", localTime: "09:00" },
-      parsedIntent: { frequency: "daily", localTime: "09:00", timezone: "UTC" },
       confirmedBrief: { topic: "AI" },
     });
 
@@ -97,7 +96,7 @@ describe("scheduledGeneratorCreate", () => {
     }
     const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string);
     expect(body.previewId).toBe("pv_1");
-    expect(body.parsedIntent.localTime).toBe("09:00");
+    expect(body.schedule.localTime).toBe("09:00");
   });
 
   test("surfaces 409 requiresConfirmation as a non-thrown result", async () => {
@@ -114,8 +113,6 @@ describe("scheduledGeneratorCreate", () => {
       originalRequest: "x",
       timezone: "UTC",
       schedule: { type: "interval", everySeconds: 300 },
-      parsedIntent: {},
-      confirmedBrief: {},
     });
 
     expect(result.ok).toBe(false);
