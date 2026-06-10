@@ -240,3 +240,59 @@ async def compact_thread(
     )
     logger.info("compacted thread=%s folded=%d kept=%d", thread_id, len(old), len(tail))
     return len(old)
+
+
+def _is_empty_ai_message(message: AIMessage) -> bool:
+    """True when the message carries nothing replayable or renderable: no tool
+    calls and no non-blank text or non-text block. A reasoning-only message is
+    NOT empty — its thinking block still renders in history (the request path
+    in harness/llm.py handles its replay)."""
+    if message.tool_calls or message.invalid_tool_calls:
+        return False
+    if message.additional_kwargs.get("tool_calls") or message.additional_kwargs.get(
+        "function_call"
+    ):
+        return False
+    content = message.content
+    if isinstance(content, str):
+        return not content.strip()
+    if isinstance(content, list):
+        return all(
+            (isinstance(block, str) and not block.strip())
+            or (
+                isinstance(block, dict)
+                and block.get("type") == "text"
+                and not str(block.get("text") or "").strip()
+            )
+            for block in content
+        )
+    return False
+
+
+async def scrub_empty_ai_messages(agent: Any, *, thread_id: str) -> int:
+    """Physically remove empty AI messages from a thread's checkpoint.
+
+    They appear when the model ends a turn with a 0-token reply — seen on dev
+    after propose_action's delivery receipt: finish_reason=stop, content=[].
+    The message renders nothing, but once persisted it poisons the thread for
+    strict providers: Moonshot rejects the whole request on replay ("the
+    message at position N with role 'assistant' must not be empty"), so every
+    later turn 400s. The request-path guard in harness/llm.py keeps such
+    threads usable; this scrub heals the stored state so the poison doesn't
+    accumulate. Cheap (state read + write only when something matched, no
+    LLM), runs post-turn for every thread kind, cards included. Returns the
+    number of messages removed.
+    """
+    config = {"configurable": {"thread_id": thread_id}}
+    snapshot = await agent.aget_state(config)
+    messages: list[Any] = (snapshot.values or {}).get("messages", []) if snapshot else []
+    removals = [
+        RemoveMessage(id=m.id)
+        for m in messages
+        if isinstance(m, AIMessage) and m.id and _is_empty_ai_message(m)
+    ]
+    if not removals:
+        return 0
+    await agent.aupdate_state(config, {"messages": removals})
+    logger.info("scrubbed empty AI messages thread=%s removed=%d", thread_id, len(removals))
+    return len(removals)

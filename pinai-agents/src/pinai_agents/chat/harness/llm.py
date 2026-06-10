@@ -39,6 +39,7 @@ Reasoning:
   (the API rejects other values). We force it.
 """
 
+import logging
 from typing import Any
 
 from langchain_core.messages import AIMessage, AIMessageChunk
@@ -54,6 +55,8 @@ from .reasoning import (
 )
 
 settings = get_chat_settings()
+
+logger = logging.getLogger(__name__)
 
 
 # Default budget for extended thinking. 5000 tokens covers most chat /
@@ -93,6 +96,8 @@ class ChatLiteLLMReasoning(ChatOpenAI):
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
         if self._use_responses_api(payload):
             _drop_invalid_responses_message_ids(payload)
+        else:
+            _drop_unreplayable_history(payload)
         return payload
 
     def _convert_chunk_to_generation_chunk(
@@ -155,6 +160,77 @@ class ChatLiteLLMReasoning(ChatOpenAI):
                 continue
             gen.message.content = prepend_reasoning_block(gen.message.content, reasoning)
         return result
+
+
+def _drop_unreplayable_history(payload: dict[str, Any]) -> None:
+    """Drop degenerate history messages that strict providers reject.
+
+    Persisted threads can carry two shapes that replay fine on Anthropic but
+    400 on Moonshot (both observed on dev after the kimi-k2.6 switch,
+    2026-06-10):
+
+    * assistant messages with no text and no tool_calls — the model sometimes
+      ends a turn with a 0-token reply (e.g. after propose_action's delivery
+      receipt), and a reasoning-only message loses its reasoning block in the
+      chat-completions conversion above. Moonshot: "the message at position N
+      with role 'assistant' must not be empty".
+    * tool results whose calling assistant message is absent — e.g. a
+      summarization window that opens mid-turn. Moonshot: "tool_call_id is
+      not found".
+
+    Dropping them loses nothing the model could use: empty content carries no
+    information, and an orphan tool result has no call to attach to. Applied
+    to every chat-completions request so the behavior is uniform across
+    providers.
+    """
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return
+    kept: list[Any] = []
+    seen_tool_call_ids: set[str] = set()
+    for message in messages:
+        if not isinstance(message, dict):
+            kept.append(message)
+            continue
+        role = message.get("role")
+        if role == "assistant":
+            tool_calls = message.get("tool_calls")
+            if tool_calls or message.get("function_call"):
+                for call in tool_calls or []:
+                    if isinstance(call, dict) and call.get("id"):
+                        seen_tool_call_ids.add(call["id"])
+            elif not _has_visible_content(message.get("content")):
+                continue
+        elif role == "tool" and message.get("tool_call_id") not in seen_tool_call_ids:
+            continue
+        kept.append(message)
+    if len(kept) != len(messages):
+        logger.info(
+            "dropped %d unreplayable history message(s) model=%s",
+            len(messages) - len(kept),
+            payload.get("model"),
+        )
+        payload["messages"] = kept
+
+
+def _has_visible_content(content: Any) -> bool:
+    """True if an assistant message's serialized content is non-empty for the
+    provider: a non-blank string, a text block with non-blank text, or any
+    non-text block (image / audio reference — not ours to judge)."""
+    if isinstance(content, str):
+        return bool(content.strip())
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, str):
+                if block.strip():
+                    return True
+            elif isinstance(block, dict):
+                if block.get("type") != "text":
+                    return True
+                text = block.get("text")
+                if isinstance(text, str) and text.strip():
+                    return True
+    return False
 
 
 def _drop_invalid_responses_message_ids(payload: dict[str, Any]) -> None:
