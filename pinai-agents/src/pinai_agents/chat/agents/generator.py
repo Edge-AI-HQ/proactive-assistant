@@ -38,6 +38,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
+from langchain_core.output_parsers.openai_tools import PydanticToolsParser
 from pydantic import BaseModel, ConfigDict, Field
 
 from ...shared.api_models import (
@@ -123,8 +124,8 @@ card-generator stage will turn each plan item into a full card.
    you may still propose a plan item with `pattern_id = null` (free-LLM).
 5. Reason through dedup and feedback alignment BEFORE proposing items.
 6. Emit a PlanOutput with:
-     - `plan[]`: each item = {{intent_key, goal_basket, decision,
-       why_now_trigger, primary_source_ids, pattern_id}}
+     - `plan[]`: each item = {intent_key, goal_basket, decision,
+       why_now_trigger, primary_source_ids, pattern_id}
      - `selected_pattern_ids[]`: same `pattern_id` values surfaced once
        (deduplicated). Empty when every plan item is `pattern_id = null`.
      - `skipped_duplicates[]`: intent_keys / titles from `cards_recent`
@@ -622,6 +623,28 @@ def _stage_config(*, run_id: str, user_id: int, stage: str) -> dict[str, Any]:
         "tags": ["pinai", "generator", f"pinai_run:{run_id}", f"stage:{stage}"],
         "recursion_limit": 50,
     }
+
+
+def _render_prompt(template: str, **placeholders: str) -> str:
+    """Render a stage prompt by replacing `{name}` sentinels.
+
+    str.format() is banned on these templates: their bodies are full of
+    literal braces (JSON examples, `{gmail, ...}` set notation) that format()
+    parses as replacement fields and dies on with KeyError — it bit the
+    card-generator prompt first (`{"label": ...}`) and the planner prompt
+    again via PR #70's connector list. Plain replacement needs no `{{`
+    escaping; literal braces in prompt text are safe by construction.
+
+    Each placeholder must occur in the template so renamed/missing sentinels
+    fail loudly here instead of silently shipping `{name}` to the LLM.
+    """
+    rendered = template
+    for name, value in placeholders.items():
+        sentinel = "{" + name + "}"
+        if sentinel not in rendered:
+            raise ValueError(f"prompt template has no placeholder {sentinel!r}")
+        rendered = rendered.replace(sentinel, value)
+    return rendered
 
 
 def _dump_model(value: Any) -> str:
@@ -1380,22 +1403,38 @@ async def _invoke_structured_stage(
     user_id: int,
     stage: str,
 ) -> Any:
-    # method="function_calling" (not the ChatOpenAI default "json_schema"):
+    # Tool calling (not the ChatOpenAI default "json_schema" method):
     # json_schema routes through Anthropic's `output_format`, which rejects
     # JSON-Schema `$defs`/`$ref` ("External schema references are not
     # supported"). Our schemas nest models (PlanOutput.plan -> PlanItem),
     # so pydantic emits `$defs`. Tool `input_schema` accepts `$defs`, so
-    # function_calling works. Safe here because structured_model runs with
-    # enable_thinking=False — forced tool_choice is incompatible with
-    # Anthropic extended thinking, but we never enable thinking on this model.
-    runnable = model.with_structured_output(schema, method="function_calling")
+    # tool calling works.
+    #
+    # tool_choice="required", not with_structured_output(method=
+    # "function_calling") which forces the named tool: Moonshot rejects
+    # naming a specific tool while thinking is on ("tool_choice 'specified'
+    # is incompatible with thinking enabled"), kimi-k2.6 has thinking on by
+    # default, and LiteLLM forwards none of the off-switches (`thinking`,
+    # `chat_template_kwargs`, `reasoning_effort`) to Moonshot. "required"
+    # with a single bound tool is equivalent — the model must call the only
+    # tool there is — and both providers accept it (verified against
+    # kimi-k2.6; LiteLLM maps it to Anthropic tool_choice={"type": "any"}).
+    runnable = model.bind_tools([schema], tool_choice="required") | PydanticToolsParser(
+        tools=[schema], first_tool_only=True
+    )
     last_exc: BaseException | None = None
     for attempt in range(_STRUCTURED_STAGE_MAX_ATTEMPTS):
         try:
-            return await runnable.ainvoke(
+            parsed = await runnable.ainvoke(
                 [("system", system), ("human", content)],
                 config=_stage_config(run_id=run_id, user_id=user_id, stage=stage),
             )
+            if parsed is None:
+                # first_tool_only yields None when the model answered in
+                # prose instead of calling the tool — retryable.
+                msg = f"generator stage {stage} returned no tool call"
+                raise ValueError(msg)
+            return parsed
         except Exception as exc:
             # Broad catch is intentional: LiteLLM/transport blips, worker
             # restarts, and provider 429/5xx all surface as different types
@@ -1531,7 +1570,7 @@ async def run_generator(
                     structured_model,
                     PlanOutput,
                     system=(
-                        _PLANNER_PROMPT.format(cards_to_generate=candidate_count)
+                        _render_prompt(_PLANNER_PROMPT, cards_to_generate=str(candidate_count))
                         + "\n\nDIRECT MODE: phase1.json and matched_patterns.json are provided "
                         "in the user message. Do not call tools or read_file; use only the "
                         "provided compact JSON and return one PlanOutput. Plan up to "
@@ -1597,13 +1636,9 @@ async def run_generator(
                                 structured_model,
                                 CardsList,
                                 system=(
-                                    # .replace, not .format: the prompt body is
-                                    # full of literal JSON examples ({"label": ...})
-                                    # that str.format() parses as fields and dies
-                                    # on (KeyError: '"label"'). Only one real
-                                    # placeholder, so a sentinel replace is safe.
-                                    _CARD_GENERATOR_PROMPT.replace(
-                                        "{lang_clause}", _lang_clause(output_language)
+                                    _render_prompt(
+                                        _CARD_GENERATOR_PROMPT,
+                                        lang_clause=_lang_clause(output_language),
                                     )
                                     + "\n\nDIRECT MODE: a single PlanItem and source_bundle_json "
                                     "are provided in the user message. Do not call tools or "
@@ -1788,7 +1823,9 @@ async def run_generator(
                                     structured_model,
                                     PlanOutput,
                                     system=(
-                                        _PLANNER_PROMPT.format(cards_to_generate=topup_count)
+                                        _render_prompt(
+                                            _PLANNER_PROMPT, cards_to_generate=str(topup_count)
+                                        )
                                         + "\n\nTOP-UP DIRECT MODE: phase1_json, "
                                         "matched_patterns_json, and existing_intent_keys_json are "
                                         "provided in the user message. Do not call tools or "
