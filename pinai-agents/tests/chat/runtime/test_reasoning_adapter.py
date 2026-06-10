@@ -230,6 +230,57 @@ def test_openai_responses_reasoning_keeps_streaming_enabled() -> None:
     assert options.allow_streaming is True
 
 
+def test_streaming_reasoning_deltas_keep_token_boundary_whitespace() -> None:
+    # Regression (kimi-k2.6): reasoning_content streams as token-level
+    # fragments (" is", " asking"). The chunk converter must NOT strip them —
+    # stripping shaves the boundary spaces and the aggregated thinking text
+    # runs its words together ("Theuserisasking…").
+    from langchain_core.messages import AIMessageChunk
+
+    from pinai_agents.chat.harness.llm import ChatLiteLLMReasoning
+
+    model = ChatLiteLLMReasoning(
+        model="kimi-k2.6",
+        api_key="sk-test",
+        base_url="http://example.invalid/v1",
+        output_version="v1",
+    )
+
+    def chunk_of(fragment: str) -> dict:
+        return {
+            "id": "chatcmpl-x",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "kimi-k2.6",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "", "reasoning_content": fragment},
+                    "finish_reason": None,
+                }
+            ],
+        }
+
+    fragments = ["The user", " is asking", " casually."]
+    merged: AIMessageChunk | None = None
+    for fragment in fragments:
+        gen = model._convert_chunk_to_generation_chunk(chunk_of(fragment), AIMessageChunk, None)
+        assert gen is not None and isinstance(gen.message, AIMessageChunk)
+        reasoning_blocks = [
+            b for b in gen.message.content if isinstance(b, dict) and b.get("type") == "reasoning"
+        ]
+        # Each delta's fragment survives verbatim — leading space intact.
+        assert [b.get("reasoning") for b in reasoning_blocks] == [fragment]
+        merged = gen.message if merged is None else merged + gen.message
+    assert merged is not None
+    merged_reasoning = "".join(
+        b.get("reasoning", "")
+        for b in merged.content
+        if isinstance(b, dict) and b.get("type") == "reasoning"
+    )
+    assert merged_reasoning == "The user is asking casually."
+
+
 def test_openai_responses_payload_drops_legacy_call_ids_from_message_ids() -> None:
     from pinai_agents.chat.harness.llm import ChatLiteLLMReasoning
 

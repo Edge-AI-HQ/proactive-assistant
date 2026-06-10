@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { ChevronDown, Send } from "lucide-react";
+import { Check, ChevronDown, Loader2, Mic, Send, X } from "lucide-react";
 import bgGradient from "@/assets/bg-gradient.jpg";
 import AiSphere from "@/components/now/AiSphere";
-import { VoiceButton } from "@/components/voice";
+import { useVoiceInput, Waveform, appendVoiceTranscript } from "@/components/voice";
 
 interface Suggestion {
   label: string;
@@ -15,6 +15,12 @@ const SUGGESTIONS: Suggestion[] = [
   { label: "Summarize my week so far", prompt: "Summarize my week so far" },
   { label: "What's on my mind lately?", prompt: "What's on my mind lately?" },
 ];
+
+function formatRecordDuration(totalSec: number): string {
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
 
 interface MinimalistLandingProps {
   /** Return to the Constellation. */
@@ -46,6 +52,12 @@ export default function MinimalistLanding({
   disabled = false,
 }: MinimalistLandingProps) {
   const [text, setText] = useState("");
+  const { startCapture, stopCapture, captureStatus } = useVoiceInput();
+  const [recording, setRecording] = useState(false);
+  const [voiceTranscript, setVoiceTranscript] = useState("");
+  const [voiceFinalizing, setVoiceFinalizing] = useState(false);
+  const [recordSec, setRecordSec] = useState(0);
+  const recordingRef = useRef(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLDivElement>(null);
@@ -116,7 +128,60 @@ export default function MinimalistLanding({
     onSubmit(s.prompt);
   };
 
+  const startRecording = useCallback(() => {
+    if (disabled) return;
+    setVoiceTranscript("");
+    setVoiceFinalizing(false);
+    setRecordSec(0);
+    setRecording(true);
+    startCapture({
+      inline: true,
+      onUpdate: setVoiceTranscript,
+      onError: setVoiceTranscript,
+      onResult: (final) => {
+        setText((prev) => appendVoiceTranscript(prev, final));
+        setRecording(false);
+        setVoiceFinalizing(false);
+        setVoiceTranscript("");
+        window.setTimeout(() => taRef.current?.focus(), 0);
+      },
+    });
+  }, [disabled, startCapture]);
+
+  const cancelRecording = useCallback(() => {
+    void stopCapture(false);
+    setRecording(false);
+    setVoiceFinalizing(false);
+    setVoiceTranscript("");
+  }, [stopCapture]);
+
+  const confirmRecording = useCallback(() => {
+    setVoiceFinalizing(true);
+    void stopCapture(true);
+  }, [stopCapture]);
+
+  useEffect(() => {
+    if (!recording) return;
+    const startedAt = Date.now();
+    const t = window.setInterval(
+      () => setRecordSec(Math.floor((Date.now() - startedAt) / 1000)),
+      250,
+    );
+    return () => window.clearInterval(t);
+  }, [recording]);
+
+  useEffect(() => {
+    recordingRef.current = recording;
+  }, [recording]);
+
+  useEffect(() => {
+    return () => {
+      if (recordingRef.current) void stopCapture(false);
+    };
+  }, [stopCapture]);
+
   const canSend = !!text.trim() && !disabled;
+  const voiceConnecting = recording && captureStatus === "connecting";
 
   return (
     <div className="absolute inset-0 z-50 font-native overflow-hidden">
@@ -233,53 +298,114 @@ export default function MinimalistLanding({
             transition: "bottom 250ms cubic-bezier(0.17, 0.59, 0.4, 0.77)",
           }}
         >
-          <div
-            className="flex items-end gap-2 pl-4 pr-2 py-2 rounded-3xl border border-foreground/[0.08] focus-within:border-foreground/[0.18] transition-colors"
-            style={{
-              background: "rgba(255,255,255,0.6)",
-              backdropFilter: "blur(20px) saturate(1.5)",
-              WebkitBackdropFilter: "blur(20px) saturate(1.5)",
-              boxShadow: "0 4px 24px hsl(0 0% 0% / 0.04)",
-            }}
-          >
-            <textarea
-              ref={taRef}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={onKeyDown}
-              placeholder="Message PIN AI…"
-              rows={1}
-              className="flex-1 resize-none bg-transparent text-[15px] text-foreground placeholder:text-foreground/35 outline-none leading-[20px] py-2 min-h-9 max-h-[120px]"
-            />
-            <VoiceButton
-              prefill={text}
-              onUpdate={setText}
-              size={18}
-              className="w-9 h-9 rounded-full bg-transparent text-foreground/55 hover:bg-foreground/[0.06] hover:text-foreground/80"
-            />
-            <button
-              type="button"
-              onClick={submit}
-              disabled={!canSend}
-              className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition-all active:scale-95"
-              style={
-                canSend
-                  ? {
-                      background:
-                        "linear-gradient(135deg, hsl(292 78% 63%) 0%, hsl(330 80% 65%) 100%)",
-                      boxShadow: "0 4px 12px hsl(292 78% 63% / 0.35)",
-                      color: "hsl(var(--background))",
-                    }
-                  : {
-                      background: "hsl(var(--foreground) / 0.08)",
-                      color: "hsl(var(--foreground) / 0.35)",
-                    }
-              }
-              aria-label="Send"
+          {recording ? (
+            <div
+              className="flex flex-col gap-2 rounded-3xl border border-foreground/[0.08] px-4 py-3"
+              style={{
+                background: "rgba(255,255,255,0.6)",
+                backdropFilter: "blur(20px) saturate(1.5)",
+                WebkitBackdropFilter: "blur(20px) saturate(1.5)",
+                boxShadow: "0 4px 24px hsl(0 0% 0% / 0.04)",
+              }}
             >
-              <Send size={15} strokeWidth={2} />
-            </button>
-          </div>
+              <p className="flex min-h-[20px] items-center gap-1.5 text-[14px] italic leading-snug text-foreground/55">
+                {voiceConnecting && !voiceFinalizing && !voiceTranscript && (
+                  <Loader2 size={14} strokeWidth={2} className="shrink-0 animate-spin" />
+                )}
+                <span className="min-w-0 truncate">
+                  {voiceFinalizing
+                    ? "Polishing…"
+                    : voiceTranscript || (voiceConnecting ? "Connecting…" : "Listening…")}
+                </span>
+              </p>
+              <div className="flex items-center gap-2.5">
+                <span className="w-[40px] shrink-0 text-[12px] font-medium tabular-nums text-foreground/55">
+                  {formatRecordDuration(recordSec)}
+                </span>
+                {voiceConnecting ? (
+                  <div className="flex min-w-0 flex-1 items-center justify-center">
+                    <Loader2 size={19} strokeWidth={2} className="animate-spin text-foreground/50" />
+                  </div>
+                ) : (
+                  <Waveform className="flex-1" />
+                )}
+                <button
+                  type="button"
+                  onClick={cancelRecording}
+                  disabled={voiceFinalizing}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-foreground/[0.06] text-foreground/55 transition-colors hover:bg-foreground/10 disabled:opacity-40"
+                  aria-label="Cancel recording"
+                >
+                  <X size={16} strokeWidth={2} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void confirmRecording()}
+                  disabled={voiceFinalizing || voiceConnecting}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-background transition-transform active:scale-95 disabled:opacity-60"
+                  style={{
+                    background:
+                      "linear-gradient(135deg, hsl(292 78% 63%) 0%, hsl(330 80% 65%) 100%)",
+                    boxShadow: "0 4px 12px hsl(292 78% 63% / 0.35)",
+                  }}
+                  aria-label="Use transcript"
+                >
+                  <Check size={16} strokeWidth={2.5} />
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div
+              className="flex items-end gap-2 pl-4 pr-2 py-2 rounded-3xl border border-foreground/[0.08] focus-within:border-foreground/[0.18] transition-colors"
+              style={{
+                background: "rgba(255,255,255,0.6)",
+                backdropFilter: "blur(20px) saturate(1.5)",
+                WebkitBackdropFilter: "blur(20px) saturate(1.5)",
+                boxShadow: "0 4px 24px hsl(0 0% 0% / 0.04)",
+              }}
+            >
+              <textarea
+                ref={taRef}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={onKeyDown}
+                placeholder="Message PIN AI…"
+                rows={1}
+                className="flex-1 resize-none bg-transparent text-[15px] text-foreground placeholder:text-foreground/35 outline-none leading-[20px] py-2 min-h-9 max-h-[120px]"
+              />
+              <button
+                type="button"
+                onClick={startRecording}
+                disabled={disabled}
+                className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 bg-transparent text-foreground/55 hover:bg-foreground/[0.06] hover:text-foreground/80 disabled:opacity-40"
+                aria-label="Voice input"
+              >
+                <Mic size={18} strokeWidth={1.6} />
+              </button>
+              <button
+                type="button"
+                onClick={submit}
+                disabled={!canSend}
+                className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition-all active:scale-95"
+                style={
+                  canSend
+                    ? {
+                        background:
+                          "linear-gradient(135deg, hsl(292 78% 63%) 0%, hsl(330 80% 65%) 100%)",
+                        boxShadow: "0 4px 12px hsl(292 78% 63% / 0.35)",
+                        color: "hsl(var(--background))",
+                      }
+                    : {
+                        background: "hsl(var(--foreground) / 0.08)",
+                        color: "hsl(var(--foreground) / 0.35)",
+                      }
+                }
+                aria-label="Send"
+              >
+                <Send size={15} strokeWidth={2} />
+              </button>
+            </div>
+          )}
         </div>
         </div>
       </div>

@@ -199,6 +199,18 @@ async def send(
     card_context = body.get("cardContext")
     if card_context is not None and not isinstance(card_context, dict):
         raise HTTPException(status_code=400, detail="cardContext must be an object")
+    # Client message id (FE crypto.randomUUID). Doubles as the mailbox
+    # idempotency_key — a retried POST (timeout, the first one actually
+    # landed) can't enqueue twice — and flows through to the history row +
+    # `active.userEntries` so the FE reconciles its optimistic bubble by
+    # identity instead of text. Optional: older clients send none.
+    client_msg_id = body.get("clientMsgId")
+    if client_msg_id is not None and (
+        not isinstance(client_msg_id, str) or not client_msg_id or len(client_msg_id) > 128
+    ):
+        raise HTTPException(
+            status_code=400, detail="clientMsgId must be a non-empty string (≤128 chars)"
+        )
 
     async with user_scoped_tx(pool, user.id) as conn:
         kind, _card_id = await _resolve_owned(session_key, user.id, conn)
@@ -215,6 +227,7 @@ async def send(
         source="user",
         content=message or None,
         meta=meta or None,
+        idempotency_key=client_msg_id,
     )
     # Best-effort thread-list freshness; never blocks the send.
     try:
@@ -344,6 +357,9 @@ def _row_to_message(row: dict[str, Any]) -> dict[str, Any]:
     created = row.get("created_at")
     if created is not None:
         out["createdAt"] = int(created.timestamp() * 1000)
+    client_msg_id = row.get("client_msg_id")
+    if client_msg_id:
+        out["clientMsgId"] = client_msg_id
     return out
 
 
@@ -434,24 +450,34 @@ async def history(
                 # agent's frames from. A regenerate message renders no bubble —
                 # its user turn is already in history.
                 pending = await MailboxRepository(user.id, conn).peek_pending(session_id=session)
-                user_texts = [
-                    m.content
+                # `userEntries` carries each pending input's client message id
+                # (the send's clientMsgId, ridden as the mailbox
+                # idempotency_key) so the FE reconciles by identity;
+                # `userTexts` is the same list id-less for older clients.
+                user_entries = [
+                    {"text": m.content, "clientId": m.idempotency_key}
                     for m in pending
                     if m.source == "user" and m.content and not (m.meta or {}).get("regenerate")
                 ]
+                user_texts = [e["text"] for e in user_entries]
                 running = await RunRepository(user.id, conn).get_active(session_id=session)
                 if running is not None and running.status == "running":
                     active = {
                         "userTexts": user_texts,
+                        "userEntries": user_entries,
                         "replayFrom": await _replay_cursor(
                             request.app.state.agent_service, session, running.id
                         ),
                     }
-                elif user_texts:
+                elif user_entries:
                     # Sent but not yet claimed (no run row): show the user
                     # bubble(s); the turn's frames arrive on the live tail
                     # once the worker picks it up.
-                    active = {"userTexts": user_texts, "replayFrom": None}
+                    active = {
+                        "userTexts": user_texts,
+                        "userEntries": user_entries,
+                        "replayFrom": None,
+                    }
     next_cursor = rows[-1]["id"] if len(rows) == limit else None
     messages = [_row_to_message(r) for r in reversed(rows)]
     return {

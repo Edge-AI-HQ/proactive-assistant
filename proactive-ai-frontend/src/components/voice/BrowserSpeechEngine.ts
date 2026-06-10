@@ -6,8 +6,8 @@ interface BrowserSpeechOptions {
 }
 
 // Browser-native STT via webkitSpeechRecognition / SpeechRecognition.
-// Works locally and on Safari iOS; quality is uneven. Kept as the default
-// fallback until the backend streaming engine ships.
+// Works locally and on Safari iOS, but quality is uneven. Keep it available
+// for explicit fallback injection; it is not enabled by default.
 export class BrowserSpeechEngine implements VoiceEngine {
   private readonly lang: string;
   private readonly continuous: boolean;

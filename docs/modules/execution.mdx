@@ -114,9 +114,9 @@ sequenceDiagram
 | Endpoint | 模块 | 行为 |
 |---|---|---|
 | `POST /api/conversation/init` | `web/routes/ui/conversation.py` | 解析 / mint session_key(显式 / `card_id` / `kind=proactive` / 空 → main 单例)。upsert `pai_chat_threads`。`existing` = 有落库 turn **或** in-flight(active run / pending mailbox)——首轮 turn 进行中刷新也要落到对话视图。 |
-| `POST /api/conversation/send` | 同上 | 入 mailbox 返回 **202**;回复异步走 /stream。`cardContext` 放 meta,由 chat 注入首轮 SystemMessage。`regenerate=true` 重跑上一轮。 |
+| `POST /api/conversation/send` | 同上 | 入 mailbox 返回 **202**;回复异步走 /stream。`cardContext` 放 meta,由 chat 注入首轮 SystemMessage。`regenerate=true` 重跑上一轮。`clientMsgId`(FE `crypto.randomUUID`)作 mailbox `idempotency_key`(重试 POST 不双发),并随行落 `pai_chat_messages.client_msg_id`(089)。 |
 | `GET /api/conversation/stream` | 同上 | 长连 resumable SSE:帧带 `id:`(Redis Stream entry id),断线重连带 `?lastEventId=` replay gap;stale cursor → `conversation:resync`。 |
-| `GET /api/conversation/history` | 同上 | `pai_chat_messages` 分页(newest page + `before` 游标);`awaiting` 重建 HITL 审批门,`active`(`{userTexts, replayFrom}`)重建进行中 turn(刷新恢复)。pre-kernel 老线程首读从 checkpoint 一次性 backfill。 |
+| `GET /api/conversation/history` | 同上 | `pai_chat_messages` 分页(newest page + `before` 游标);`awaiting` 重建 HITL 审批门,`active`(`{userTexts, userEntries: [{text, clientId}], replayFrom}`)重建进行中 turn(刷新恢复);user 行回显 `clientMsgId`,FE 的 optimistic 气泡按 clientId 身份对账(同文本≠同消息),无 id 时回退 text 认领。pre-kernel 老线程首读从 checkpoint 一次性 backfill。 |
 | `POST /api/conversation/decision` | 同上 | HITL approve/reject/edit/respond → mailbox → Command(resume=) 续跑。 |
 | `POST /api/conversation/cancel` | 同上 | 真停 in-flight turn(DB 标记 + 跨实例 NOTIFY abort)。 |
 

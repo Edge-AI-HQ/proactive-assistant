@@ -77,6 +77,12 @@ export interface ConversationUserEntry {
    *  cleared on a successful resend. Failed bubbles are never in server
    *  history, so they're preserved across reconnect resync. */
   failed?: boolean;
+  /** The message's client-generated identity (clientMsgId on POST /send).
+   *  On an optimistic bubble it equals `id` (sendMessage mints one uuid for
+   *  both); on a history / in-flight entry it's the echoed value. History
+   *  rebuilds reconcile bubbles by this — same text ≠ same message. Absent
+   *  on pre-clientMsgId rows, where reconciliation falls back to text. */
+  clientId?: string;
 }
 
 export interface ConversationAssistantEntry {
@@ -185,7 +191,13 @@ export function historyToEntries(
     }
     if (m.role === "user") {
       lastInputWasTick = false;
-      out.push({ kind: "user", id: m.id, ts, text: historyText(m) });
+      out.push({
+        kind: "user",
+        id: m.id,
+        ts,
+        text: historyText(m),
+        ...(m.clientMsgId ? { clientId: m.clientMsgId } : {}),
+      });
       continue;
     }
     out.push({
@@ -667,18 +679,100 @@ export function useConversationRuntime(
           turnIdRef.current = null;
           turnPosRef.current = -1;
           // …but DON'T drop user messages history doesn't yet reflect: a
-          // just-sent bubble (POST in flight) or a failed send. Dedup by
-          // trimmed text against history's user turns so it isn't duplicated.
+          // just-sent bubble (POST in flight), a failed send, or an in-flight
+          // turn's input. The in-flight input ALSO arrives server-side as
+          // `page.active.userEntries` (unconsumed mailbox rows — consumed
+          // only when the turn finalizes), i.e. usually the SAME message a
+          // local bubble already renders, so both sources must merge in this
+          // ONE rebuild or they'd double-render. Reconciliation is by
+          // clientId (the identity a send mints and the server echoes —
+          // same text ≠ same message); entries without one (pre-clientMsgId
+          // rows, older backends' id-less userTexts) fall back to the text
+          // heuristics: carry keeps bubbles whose trimmed text history lacks,
+          // and each pending text claims one surviving non-failed local
+          // bubble (counted, not Set-deduped, so repeated identical sends
+          // stay distinct).
+          const serverEntries: { text: string; clientId: string | null }[] =
+            page.active?.userEntries
+            ?? (page.active && Array.isArray(page.active.userTexts)
+              ? page.active.userTexts.map((t) => ({ text: t, clientId: null }))
+              : []);
           setTranscript((prev) => {
+            const historyClientIds = new Set(
+              history.flatMap((e) =>
+                e.kind === "user" && e.clientId ? [e.clientId] : [],
+              ),
+            );
             const historyUserText = new Set(
               history.flatMap((e) => (e.kind === "user" ? [e.text.trim()] : [])),
             );
+            // A bubble with an id is covered iff history echoes that id —
+            // including a "failed" bubble whose POST actually landed (the
+            // turn finished; keeping it would render a stale duplicate).
             const carry = prev.filter(
-              (e) =>
+              (e): e is ConversationUserEntry =>
                 e.kind === "user" &&
-                (e.failed || !historyUserText.has(e.text.trim())),
+                (e.clientId
+                  ? !historyClientIds.has(e.clientId)
+                  : e.failed === true || !historyUserText.has(e.text.trim())),
             );
-            return [...history, ...carry];
+            const carriedIds = new Set(
+              carry.flatMap((e) => (e.clientId ? [e.clientId] : [])),
+            );
+            // Identity pass: pending inputs whose clientId matches a local
+            // bubble. (Also proof a "failed" bubble's POST actually landed —
+            // its flag is cleared below.)
+            const confirmedIds = new Set<string>();
+            for (const s of serverEntries) {
+              if (s.clientId && carriedIds.has(s.clientId)) {
+                confirmedIds.add(s.clientId);
+              }
+            }
+            // Text-claim pool for the rest: non-failed bubbles not already
+            // claimed by identity. Id-carrying bubbles are claimable too —
+            // an id-less server entry (older backend) must still match the
+            // bubble of a send that DID carry an id.
+            const claimableTexts = new Map<string, number>();
+            for (const e of carry) {
+              if (e.failed || (e.clientId && confirmedIds.has(e.clientId))) {
+                continue;
+              }
+              const key = e.text.trim();
+              claimableTexts.set(key, (claimableTexts.get(key) ?? 0) + 1);
+            }
+            const inflight: ConversationUserEntry[] = [];
+            for (const s of serverEntries) {
+              if (s.clientId) {
+                // An id-bearing entry reconciles by identity ONLY: matched →
+                // already rendered; unmatched → a send this client has no
+                // bubble for (another tab/device, or pre-reload). Claiming by
+                // text here would swallow a DIFFERENT same-text message —
+                // e.g. two tabs both sending "hello".
+                if (confirmedIds.has(s.clientId)) continue;
+              } else {
+                const key = s.text.trim();
+                const claims = claimableTexts.get(key) ?? 0;
+                if (claims > 0) {
+                  claimableTexts.set(key, claims - 1);
+                  continue;
+                }
+              }
+              // No local bubble for this pending input (e.g. the send
+              // predates a reload) — restore it, keeping its identity.
+              inflight.push({
+                kind: "user",
+                id: s.clientId ?? nextEntryId("user"),
+                ts: Date.now(),
+                text: s.text,
+                ...(s.clientId ? { clientId: s.clientId } : {}),
+              });
+            }
+            const carried = carry.map((e) =>
+              e.failed && e.clientId && confirmedIds.has(e.clientId)
+                ? { ...e, failed: false }
+                : e,
+            );
+            return [...history, ...carried, ...inflight];
           });
           // Note: we deliberately do NOT seed `tickRunIdsRef` from history —
           // it's keyed by SSE traceId (run_id), a different identifier from a
@@ -699,26 +793,14 @@ export function useConversationRuntime(
                 }
               : null,
           );
-          // In-flight turn on a fresh connect (refresh): render the user
-          // bubble(s) and set the resume cursor so the stream below replays
-          // the WHOLE turn (its agent frames rebuild the assistant bubble as
-          // they arrive) instead of tailing from "$". A just-sent turn has no
-          // frames yet (replayFrom null) — bubbles only, frames come live.
-          // Stay busy until the turn ends.
-          if (page.active) {
-            const texts = Array.isArray(page.active.userTexts) ? page.active.userTexts : [];
-            if (texts.length) {
-              setTranscript((prev) => [
-                ...prev,
-                ...texts.map((t) => ({
-                  kind: "user" as const,
-                  id: nextEntryId("user"),
-                  ts: Date.now(),
-                  text: t,
-                })),
-              ]);
-            }
-            if (page.active.replayFrom) lastEventIdRef.current = page.active.replayFrom;
+          // In-flight turn on a fresh connect (refresh): its user bubble(s)
+          // were merged into the rebuild above; here set the resume cursor so
+          // the stream below replays the WHOLE turn (its agent frames rebuild
+          // the assistant bubble as they arrive) instead of tailing from "$".
+          // A just-sent turn has no frames yet (replayFrom null) — bubbles
+          // only, frames come live. Stay busy until the turn ends.
+          if (page.active?.replayFrom) {
+            lastEventIdRef.current = page.active.replayFrom;
           }
           setBusy(page.active != null);
           setReady(true);
@@ -842,7 +924,11 @@ export function useConversationRuntime(
       // but only after the send succeeds, so a failed first send retries with it.
       const cardContext = cardCtxRef.current ?? undefined;
       try {
-        await conversationSend(session, text, { cardContext });
+        // `id` IS the client message id (sendMessage mints a uuid): the
+        // backend dedupes on it (a retry of a timed-out-but-landed POST
+        // can't enqueue twice) and echoes it back on /history so the
+        // bubble reconciles by identity.
+        await conversationSend(session, text, { cardContext, clientMsgId: id });
         cardCtxRef.current = null;
         setTranscript((prev) =>
           prev.map((e) =>
@@ -869,11 +955,13 @@ export function useConversationRuntime(
       const trimmed = text.trim();
       if (!trimmed) return;
       // Optimistic: the reply does NOT come back on this POST — it arrives over
-      // /stream — so we render the user's message locally immediately.
-      const id = nextEntryId("user");
+      // /stream — so we render the user's message locally immediately. One
+      // uuid serves as entry id AND client message id (clientId), so a retry
+      // (which gets the entry id back) naturally reuses the same identity.
+      const id = crypto.randomUUID();
       setTranscript((prev) => [
         ...prev,
-        { kind: "user", id, ts: Date.now(), text: trimmed },
+        { kind: "user", id, ts: Date.now(), text: trimmed, clientId: id },
       ]);
       await postUserMessage(id, trimmed);
     },
@@ -921,7 +1009,16 @@ export function useConversationRuntime(
     setBusy(true);
     setAwaitingDecision(null);
     try {
-      await conversationSend(session, lastUserText, { regenerate: true });
+      // clientMsgId guards the regenerate against a timed-out-but-landed
+      // POST being retried: a duplicate enqueue would merge into one batch,
+      // fail the worker's single-message regenerate check, and replay the
+      // text as two ordinary user turns. No bubble rides this id — a
+      // regenerate reuses the existing one (meta.regenerate rows are
+      // excluded from active.userEntries).
+      await conversationSend(session, lastUserText, {
+        regenerate: true,
+        clientMsgId: crypto.randomUUID(),
+      });
     } catch (err) {
       console.warn("[proactive] regenerate failed:", err);
       setBusy(false);

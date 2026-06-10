@@ -41,6 +41,13 @@ function windowClosed(win: Window): Promise<void> {
   });
 }
 
+/**
+ * Last popup window opened on the web path. Tracked so `closeOAuthSurface`
+ * can dismiss it once the backend confirms the connection — Composio's
+ * hosted success page doesn't close itself.
+ */
+let webWin: Window | null = null;
+
 export async function openOAuthAndAwaitClose(url: string): Promise<void> {
   if (isNative) {
     const closedPromise = new Promise<void>((resolve) => {
@@ -60,5 +67,31 @@ export async function openOAuthAndAwaitClose(url: string): Promise<void> {
   // unblock popups).
   const win = window.open(url, "_blank");
   if (!win) throw new PopupBlockedError();
+  webWin = win;
   return windowClosed(win);
+}
+
+/**
+ * Programmatically dismiss the OAuth surface opened by the most recent
+ * `openOAuthAndAwaitClose` call.
+ *
+ * Composio's OAuth `link()` carries no app deep-link callback (unlike
+ * Supabase auth, which redirects to `ai.pin.proactive://auth/callback` so
+ * `appUrlOpen` can close the browser — see hooks/useAuth.ts). After the
+ * user authorizes, the in-app browser (native) / popup (web) just sits on
+ * Composio's hosted "you can close this" page. Callers that poll the
+ * backend for ACTIVE status call this once confirmed so the surface
+ * auto-closes instead of waiting for a manual dismiss.
+ *
+ * Native: closes `@capacitor/browser` (fires `browserFinished`, which
+ * tears down the listener registered above). Web: closes the popup we
+ * opened — no-op if it was already closed or never opened.
+ */
+export async function closeOAuthSurface(): Promise<void> {
+  if (isNative) {
+    await Browser.close();
+    return;
+  }
+  webWin?.close();
+  webWin = null;
 }

@@ -110,7 +110,13 @@ class ChatLiteLLMReasoning(ChatOpenAI):
         if not choices:
             return gen
         delta = choices[0].get("delta") or {}
-        reasoning = extract_reasoning_text(delta)
+        # preserve_whitespace: a streaming delta is a token-level fragment
+        # (" is", " asking"); the default strip mode would shave the
+        # boundary spaces and the aggregated reasoning text would run its
+        # words together (kimi's OpenAI-style reasoning_content deltas made
+        # this visible). The non-streaming path (_create_chat_result) gets
+        # the full text at once, where edge-stripping is harmless.
+        reasoning = extract_reasoning_text(delta, preserve_whitespace=True)
         if not (reasoning and isinstance(gen.message, AIMessageChunk)):
             return gen
 

@@ -290,17 +290,39 @@ WHEN to plan one:
      order: gmail → google_calendar → slack. Pick the first slug in
      this list whose `connect:<slug>` is NOT in cards_recent and NOT
      in feedback as a dismiss/snooze.
+  3. GAP-FILL (the priority while the user has NOT linked everything):
+     consider {gmail, google_calendar, slack, github, google_drive}. If ANY
+     of them is NOT ACTIVE in connections_summary (i.e. not all are linked
+     yet), ALWAYS plan exactly ONE guidance card this run, even with no
+     fresh signal. Walk this rotation and pick the first slug that is NOT
+     ACTIVE and NOT rejected in feedback (dismiss/snooze/negative):
+       gmail → google_calendar → slack → github → google_drive
+     Prefer a slug that is NOT in cards_recent so each run surfaces a fresh
+     connector; only if every missing-and-not-rejected slug is already in
+     cards_recent, re-surface the highest-priority one (re-nudging across
+     runs is intended here — do NOT skip just because it is pending). Unlike
+     SIGNAL-DRIVEN this does NOT require a citable source; keep the text
+     honest about how that connector complements what they already linked
+     (e.g. "you connected Gmail — adding Google Calendar lets me line up
+     replies with your meetings"). Only once ALL of them are ACTIVE (or the
+     remaining ones were rejected) STOP planning gap-fill cards and rely on
+     SIGNAL-DRIVEN only.
 
 WHEN NOT to plan one:
   - target toolkit is in connections_summary with status="ACTIVE"
-  - same `connect:<toolkit>` intent_key appears in `cards_recent` and
-    its `latestOutcome` is null or positive (still pending user action)
   - same `connect:<toolkit>` appears in `feedback` with an outcome
     that signals rejection (dismiss/snooze/negative)
+  - SIGNAL-DRIVEN / COLD-START only (NOT early-phase gap-fill): the same
+    `connect:<toolkit>` intent_key appears in `cards_recent` with a
+    null/positive `latestOutcome` (still pending user action). During
+    early-phase GAP-FILL this pending-suppression does NOT apply.
 
 BUDGET per run:
   - cold-start: at most 1 guidance card
   - signal-driven: at most 2 guidance cards, each for a DIFFERENT toolkit
+  - gap-fill: at most 1 guidance card
+  Hard cap across ALL cases combined: at most 1 connector card per run
+  (enforced after planning).
 
 TONE: soft, specific to the user's own data. Never marketing. Never
 "You should connect X." The card-generator stage will write the actual
@@ -817,6 +839,26 @@ _CONNECTOR_REJECTION_OUTCOMES = {
     "thumbs_down",
 }
 
+# High-value connectors we actively nudge early on. While the user has
+# fewer than _CONNECTOR_EARLY_PHASE_TARGET of these ACTIVE, the generator
+# surfaces one connector card every run (the planner rotates through the
+# missing ones; in this phase the filter stops suppressing a connector just
+# because it was shown recently, so the nudge stays present run-to-run).
+# Once the user reaches the target, gap-fill stops and only signal-driven
+# connector cards remain. Explicit rejection (dismiss/snooze/negative) and
+# already-ACTIVE toolkits are always skipped, in both phases.
+_HIGH_VALUE_CONNECTOR_SLUGS: tuple[str, ...] = (
+    "gmail",
+    "google_calendar",
+    "slack",
+    "github",
+    "google_drive",
+)
+# Aggressive for now: keep nudging one connector per run until ALL high-value
+# connectors are linked (it is only ever one card per run). Lower this later to
+# taper earlier — e.g. 3 = stop re-nudging once the user connects three of them.
+_CONNECTOR_EARLY_PHASE_TARGET = len(_HIGH_VALUE_CONNECTOR_SLUGS)
+
 
 def _prompt_slug_for_toolkit(composio_slug: str | None) -> str | None:
     if not composio_slug:
@@ -897,6 +939,14 @@ def _filter_connector_guidance_plan_items(
         1 for key in existing_intent_keys or [] if _connector_slug_from_intent_key(str(key))
     )
 
+    # Early phase = user still light on high-value connectors. While early we
+    # keep one connector nudge present every run, so we do NOT suppress a card
+    # just because the same connector was shown in the recent window; the
+    # planner handles rotation. After the user connects the target count, fall
+    # back to the conservative recent-skip so we stop re-nudging.
+    high_value_active = sum(1 for slug in _HIGH_VALUE_CONNECTOR_SLUGS if slug in active_toolkits)
+    early_phase = high_value_active < _CONNECTOR_EARLY_PHASE_TARGET
+
     filtered: list[Any] = []
     for item in items:
         intent_key = str(getattr(item, "intent_key", "") or "")
@@ -906,9 +956,10 @@ def _filter_connector_guidance_plan_items(
             continue
 
         normalized_intent = f"{_CONNECT_INTENT_PREFIX}{slug}"
+        suppressed_recent = not early_phase and normalized_intent in recent_connector_intents
         if (
             slug in active_toolkits
-            or normalized_intent in recent_connector_intents
+            or suppressed_recent
             or normalized_intent in rejected_connector_intents
             or connector_count >= 1
         ):

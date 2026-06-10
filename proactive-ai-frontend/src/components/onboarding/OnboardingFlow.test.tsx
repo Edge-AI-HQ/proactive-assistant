@@ -5,6 +5,7 @@ import OnboardingFlow from "./OnboardingFlow";
 
 vi.mock("@/lib/platform", () => ({ isNative: true }));
 vi.mock("@/components/ambient/AmbientSourceControlsPanel", () => ({ default: () => <div>Ambient controls</div> }));
+vi.mock("@/components/account/VoiceIdentitySettings", () => ({ default: () => <div>Voice identity</div> }));
 vi.mock("@/components/connect/DataConnections", () => ({ default: () => <div>Data connections</div> }));
 vi.mock("@/hooks/useComposio", () => ({ useComposio: () => ({}) }));
 vi.mock("./AmbientModelSetupStep", () => ({ default: () => <div>Gemma 2B setup</div> }));
@@ -18,6 +19,9 @@ describe("OnboardingFlow", () => {
     render(<OnboardingFlow onComplete={vi.fn()} />);
 
     expect(screen.getByText(/Step 1 of 3/i)).toBeTruthy();
+    expect(screen.getByText(/Ambient controls/i)).toBeTruthy();
+    expect(screen.getByText(/Voice identity/i)).toBeTruthy();
+
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
 
     expect(screen.getByText(/Step 2 of 3/i)).toBeTruthy();

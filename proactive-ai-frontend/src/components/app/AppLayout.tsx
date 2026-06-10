@@ -44,6 +44,7 @@ import { isNative } from "@/lib/platform";
 import type { GoalBasket, IntentCard } from "@/types/intent-card";
 import { useAmbientLiveSession } from "@/hooks/useAmbientLiveSession";
 import { useAmbientToggle } from "@/hooks/useAmbientToggle";
+import { bindSystemShortcutActions } from "@/services/system-shortcuts";
 import type { LiveSession } from "@/services/ambient/live-session";
 import {
   isFromRightEdgeOfScreen,
@@ -243,6 +244,28 @@ export default function AppLayout() {
     if (activeView === "now") void refreshVoicePermission();
   }, [activeView, refreshVoicePermission]);
   const pipeline = usePipeline();
+  const systemShortcutHandlersRef = useRef({
+    onToggleAmbient: () => {},
+    onGenerateCards: () => {},
+  });
+  useEffect(() => bindSystemShortcutActions({
+    onToggleAmbient: () => {
+      systemShortcutHandlersRef.current.onToggleAmbient();
+    },
+    onGenerateCards: () => {
+      systemShortcutHandlersRef.current.onGenerateCards();
+    },
+  }), []);
+  useEffect(() => {
+    systemShortcutHandlersRef.current = {
+      onToggleAmbient: () => {
+        void handleToggleAmbient();
+      },
+      onGenerateCards: () => {
+        pipeline.generate();
+      },
+    };
+  }, [handleToggleAmbient, pipeline.generate]);
   // Notification permission flow. iOS OS state is a capability; the
   // product-level `notifyNewCards` preference is controlled by the
   // Notifications page switch. The effects below only decide when to
@@ -922,4 +945,3 @@ export default function AppLayout() {
     </CardStateProvider>
   );
 }
-

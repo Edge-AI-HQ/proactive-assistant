@@ -26,7 +26,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, NamedTuple
 
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
@@ -119,18 +119,35 @@ def _decisions_from(decision_msg: Message) -> list[dict[str, Any]]:
     return [out]
 
 
-def _input_rows(msgs: list[Message]) -> list[tuple[Role, str]]:
+class InputRow(NamedTuple):
+    """One persisted input row of a turn. `client_msg_id` is the mailbox
+    message's idempotency_key — the FE's client message id for a user send
+    (None for internal producers) — stamped onto the history row so the FE
+    reconciles its optimistic bubble by identity, not text."""
+
+    role: Role
+    text: str
+    client_msg_id: str | None
+
+
+def _input_rows(msgs: list[Message]) -> list[InputRow]:
     """Persisted input rows for a turn, split by source so a heartbeat tick lands
     as a debug-only role='heartbeat' row and a real user message as role='user'.
     Skips empty content (e.g. a bare resume signal). Shared by the clean-finish
     and HITL-pause paths so a heartbeat input gets the SAME role no matter which
     path records it (otherwise a proactive tick that paused on a side-effect tool
     would land as role='user' and leak past the include_debug filter)."""
-    rows: list[tuple[Role, str]] = []
+    rows: list[InputRow] = []
     for m in msgs:
         if not m.content:
             continue
-        rows.append(("heartbeat" if m.source == "heartbeat" else "user", m.content))
+        rows.append(
+            InputRow(
+                "heartbeat" if m.source == "heartbeat" else "user",
+                m.content,
+                m.idempotency_key,
+            )
+        )
     return rows
 
 
@@ -352,7 +369,13 @@ class AgentRunWorker:
             await self._proactive_finalize(session_id, user_id, run_id, msg_ids, msgs, recorder)
         else:
             await self._finalize_turn(
-                session_id, user_id, run_id, msg_ids, user_texts, recorder, regenerate=regenerate
+                session_id,
+                user_id,
+                run_id,
+                msg_ids,
+                recorder,
+                regenerate=regenerate,
+                input_rows=_input_rows(msgs),
             )
 
     async def _resume_run(
@@ -411,7 +434,7 @@ class AgentRunWorker:
         # the decision, complete the run.
         partial = (awaiting.pending_action or {}).get("partial_parts") or []
         await self._finalize_turn(
-            session_id, user_id, awaiting.id, dmsg_ids, [], recorder, partial_parts=partial
+            session_id, user_id, awaiting.id, dmsg_ids, recorder, partial_parts=partial
         )
 
     async def _relay_frames(
@@ -470,12 +493,13 @@ class AgentRunWorker:
         async with user_scoped_tx(self._pool, user_id) as conn:
             await MailboxRepository(user_id, conn).mark_consumed(message_ids=msg_ids, run_id=run_id)
             chat_msgs = ChatMessagesRepository(user_id=user_id, conn=conn)
-            for role, text in _input_rows(msgs):
+            for role, text, client_msg_id in _input_rows(msgs):
                 await chat_msgs.append_turn(
                     thread_id=session_id,
                     role=role,
                     parts=[{"type": "text", "text": text}],
                     trigger="tick" if role == "heartbeat" else "user",
+                    client_msg_id=client_msg_id,
                 )
 
     # ── proactive hooks (RC-1) ───────────────────────────────────────
@@ -526,7 +550,6 @@ class AgentRunWorker:
             user_id,
             run_id,
             msg_ids,
-            [],  # proactive inputs ride input_rows (source-aware); user_texts unused
             recorder,
             input_rows=_input_rows(msgs),
             assistant_trigger="tick" if all_heartbeat else "user",
@@ -539,24 +562,22 @@ class AgentRunWorker:
         user_id: int,
         run_id: str,
         msg_ids: list[int],
-        user_texts: list[str],
         recorder: ChatTurnRecorder,
         *,
         partial_parts: list[dict[str, Any]] | None = None,
         regenerate: bool = False,
-        input_rows: list[tuple[Role, str]] | None = None,
+        input_rows: list[InputRow] | None = None,
         assistant_trigger: Trigger = "user",
     ) -> None:
         """Clean finish: complete the run, consume the batch, record history.
-        `user_texts` is the user turns to write — empty for a HITL resume (user
+        `input_rows` is the input turns to write (built from the mailbox batch
+        via _input_rows so each row keeps its client_msg_id; heartbeat inputs
+        land as role='heartbeat' rows) — None/empty for a HITL resume (user
         turn recorded at pause). `partial_parts` is what the agent streamed
         before a HITL pause (CC1), prepended to the assistant parts.
-
-        `input_rows` overrides `user_texts` when the inputs aren't all plain user
-        turns: proactive passes (role, text) pairs so a heartbeat tick lands as a
-        role='heartbeat' row. `assistant_trigger` tags the assistant turn ('tick'
-        for a heartbeat-triggered proactive turn) so a reload matches the live
-        Debug classification."""
+        `assistant_trigger` tags the assistant turn ('tick' for a
+        heartbeat-triggered proactive turn) so a reload matches the live Debug
+        classification."""
         assistant_parts = [*(partial_parts or []), *recorder.parts()]
         assistant_msg_id: int | None = None
         async with user_scoped_tx(self._pool, user_id) as conn:
@@ -572,32 +593,30 @@ class AgentRunWorker:
                 # regenerate replaces only the assistant. Empty table (thread
                 # predates the table) → skip surgery, just append the new
                 # assistant below.
-                new_text = user_texts[0] if user_texts else ""
+                new_row = input_rows[0] if input_rows else None
+                new_text = new_row.text if new_row else ""
                 if await chat_msgs.latest_id(thread_id=session_id) is not None:
                     last_user = (await chat_msgs.last_user_text(thread_id=session_id)) or ""
-                    if new_text and new_text != last_user.strip():
+                    if new_row and new_text and new_text != last_user.strip():
                         await chat_msgs.delete_tail(thread_id=session_id, count=2)
                         await chat_msgs.append_turn(
                             thread_id=session_id,
                             role="user",
                             parts=[{"type": "text", "text": new_text}],
+                            client_msg_id=new_row.client_msg_id,
                         )
                     else:
                         await chat_msgs.delete_tail(thread_id=session_id, count=1)
             else:
                 # history truth (plan §四.4): one row PER merged input message
-                # (mirrors how the model saw them — distinct turns). Default is
-                # all-user; proactive supplies input_rows to split heartbeat
-                # inputs into role='heartbeat' rows.
-                rows: list[tuple[Role, str]] = (
-                    input_rows if input_rows is not None else [("user", t) for t in user_texts]
-                )
-                for role, text in rows:
+                # (mirrors how the model saw them — distinct turns).
+                for role, text, client_msg_id in input_rows or []:
                     await chat_msgs.append_turn(
                         thread_id=session_id,
                         role=role,
                         parts=[{"type": "text", "text": text}],
                         trigger="tick" if role == "heartbeat" else "user",
+                        client_msg_id=client_msg_id,
                     )
             if assistant_parts:
                 assistant_msg_id = await chat_msgs.append_turn(

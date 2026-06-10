@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { describe, expect, test, vi } from "vitest";
 
@@ -7,6 +7,37 @@ import { VoiceProvider } from "./VoiceProvider";
 import type { VoiceEngine, VoiceEngineCallbacks } from "./types";
 
 describe("VoiceProvider", () => {
+  test("shows connecting until a ready-reporting engine opens the stream", async () => {
+    const activeCallbacks: { current: VoiceEngineCallbacks | null } = { current: null };
+    const engine: VoiceEngine = {
+      reportsReady: true,
+      start(callbacks: VoiceEngineCallbacks) {
+        activeCallbacks.current = callbacks;
+        return Promise.resolve({ stop: vi.fn(), cancel: vi.fn() });
+      },
+    };
+
+    render(
+      <VoiceProvider engine={engine}>
+        <VoiceButton />
+      </VoiceProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Voice input" }));
+
+    expect(screen.getByText("Connecting…")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Use transcript" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+
+    act(() => {
+      activeCallbacks.current?.onReady?.();
+    });
+
+    await waitFor(() => expect(screen.getByText("Listening…")).toBeTruthy());
+    expect((screen.getByRole("button", { name: "Use transcript" }) as HTMLButtonElement).disabled)
+      .toBe(false);
+  });
+
   test("commits browser-style sync transcription without showing a finalizing state", async () => {
     const stop = vi.fn();
     const engine: VoiceEngine = {
@@ -27,10 +58,10 @@ describe("VoiceProvider", () => {
     expect(onUpdate).toHaveBeenCalledWith("测试转录");
     expect(screen.getByText("测试转录")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: /done/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Use transcript" }));
 
     expect(stop).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText("Transcribing...")).toBeNull();
+    expect(screen.queryByText("Polishing…")).toBeNull();
     await waitFor(() => expect(screen.queryByText("测试转录")).toBeNull());
   });
 
@@ -59,13 +90,13 @@ describe("VoiceProvider", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Voice input" }));
-    fireEvent.click(screen.getByRole("button", { name: /done/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Use transcript" }));
 
     await waitFor(() => expect(onResult).toHaveBeenCalledWith(finalText));
     expect(onUpdate).toHaveBeenLastCalledWith(finalText);
   });
 
-  test("clears the overlay transcript when a new capture opens", async () => {
+  test("clears the inline transcript when a new capture opens", async () => {
     let starts = 0;
     const engine: VoiceEngine = {
       start(callbacks: VoiceEngineCallbacks) {
@@ -87,8 +118,50 @@ describe("VoiceProvider", () => {
     await waitFor(() => expect(screen.queryByText("上一次残留文字")).toBeNull());
 
     fireEvent.click(screen.getByRole("button", { name: "Voice input" }));
-    expect(screen.getByText("Listening...")).toBeTruthy();
+    expect(screen.getByText("Listening…")).toBeTruthy();
     expect(screen.queryByText("上一次残留文字")).toBeNull();
+  });
+
+  test("shows engine errors in the inline capture control", async () => {
+    const engine: VoiceEngine = {
+      start(callbacks: VoiceEngineCallbacks) {
+        callbacks.onError(new Error("ByteDance streaming ASR is not configured"));
+        return { stop: vi.fn(), cancel: vi.fn() };
+      },
+    };
+
+    render(
+      <VoiceProvider engine={engine}>
+        <VoiceButton />
+      </VoiceProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Voice input" }));
+
+    expect(screen.getByText("ByteDance streaming ASR is not configured")).toBeTruthy();
+  });
+
+  test("cancels the active capture when an inline voice button unmounts", async () => {
+    const cancel = vi.fn();
+    const engine: VoiceEngine = {
+      start(callbacks: VoiceEngineCallbacks) {
+        callbacks.onPartial("录音中");
+        return { stop: vi.fn(), cancel };
+      },
+    };
+
+    const { unmount } = render(
+      <VoiceProvider engine={engine}>
+        <VoiceButton />
+      </VoiceProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Voice input" }));
+    expect(screen.getByText("录音中")).toBeTruthy();
+
+    unmount();
+
+    expect(cancel).toHaveBeenCalledTimes(1);
   });
 
   test("appends transcription to the current input instead of replacing it", async () => {

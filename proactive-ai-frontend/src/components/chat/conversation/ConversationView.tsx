@@ -1234,11 +1234,12 @@ const Composer = forwardRef<
   //    engine). The input bar morphs into a recording bar: live transcript +
   //    duration + waveform + Cancel/Confirm. Confirm fills the input (appends
   //    to any draft) so the user can review and send. ──
-  const { startCapture, stopCapture } = useVoiceInput();
+  const { startCapture, stopCapture, captureStatus } = useVoiceInput();
   const [recording, setRecording] = useState(false);
   const [voiceTranscript, setVoiceTranscript] = useState("");
   const [voiceFinalizing, setVoiceFinalizing] = useState(false);
   const [recordSec, setRecordSec] = useState(0);
+  const recordingRef = useRef(false);
 
   const startRecording = useCallback(() => {
     setVoiceTranscript("");
@@ -1248,6 +1249,7 @@ const Composer = forwardRef<
     startCapture({
       inline: true,
       onUpdate: setVoiceTranscript,
+      onError: setVoiceTranscript,
       onResult: (final) => {
         // Append the transcript to the existing draft, then leave it in the
         // input for the user to review / edit / send (not auto-sent).
@@ -1284,15 +1286,19 @@ const Composer = forwardRef<
     return () => window.clearInterval(t);
   }, [recording]);
 
+  useEffect(() => {
+    recordingRef.current = recording;
+  }, [recording]);
+
   // Cancel an in-flight capture if the composer unmounts mid-recording.
   useEffect(() => {
     return () => {
-      if (recording) void stopCapture(false);
+      if (recordingRef.current) void stopCapture(false);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [stopCapture]);
 
   const canSend = !!text.trim() && !sending;
+  const voiceConnecting = recording && captureStatus === "connecting";
   return (
     <div
       className="shrink-0 px-3 pt-2"
@@ -1316,14 +1322,27 @@ const Composer = forwardRef<
             boxShadow: "0 4px 24px hsl(0 0% 0% / 0.04)",
           }}
         >
-          <p className="min-h-[20px] text-[14px] italic leading-snug text-foreground/55">
-            {voiceFinalizing ? "Transcribing…" : voiceTranscript || "Listening…"}
+          <p className="flex min-h-[20px] items-center gap-1.5 text-[14px] italic leading-snug text-foreground/55">
+            {voiceConnecting && !voiceFinalizing && !voiceTranscript && (
+              <Loader2 size={14} strokeWidth={2} className="shrink-0 animate-spin" />
+            )}
+            <span className="min-w-0 truncate">
+              {voiceFinalizing
+                ? "Polishing…"
+                : voiceTranscript || (voiceConnecting ? "Connecting…" : "Listening…")}
+            </span>
           </p>
           <div className="flex items-center gap-2.5">
             <span className="w-[40px] shrink-0 text-[12px] font-medium tabular-nums text-foreground/55">
               {formatRecordDuration(recordSec)}
             </span>
-            <Waveform className="flex-1" />
+            {voiceConnecting ? (
+              <div className="flex min-w-0 flex-1 items-center justify-center">
+                <Loader2 size={19} strokeWidth={2} className="animate-spin text-foreground/50" />
+              </div>
+            ) : (
+              <Waveform className="flex-1" />
+            )}
             <button
               type="button"
               onClick={cancelRecording}
@@ -1336,7 +1355,7 @@ const Composer = forwardRef<
             <button
               type="button"
               onClick={() => void confirmRecording()}
-              disabled={voiceFinalizing}
+              disabled={voiceFinalizing || voiceConnecting}
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-background transition-transform active:scale-95 disabled:opacity-60"
               style={{
                 background:
