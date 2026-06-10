@@ -204,7 +204,81 @@ def test_topup_phase1_uses_smaller_source_window():
     assert topup["profile"] == {"summary": "x"}
 
 
-def test_connector_guidance_filter_drops_active_recent_and_rejected_then_caps_to_one():
+def test_connector_guidance_filter_late_phase_drops_active_recent_and_rejected_then_caps_to_one():
+    # Late phase: ALL high-value connectors already ACTIVE, so the conservative
+    # recent-skip applies again (a recently-shown connector is NOT re-surfaced).
+    filter_items = getattr(generator_module, "_filter_connector_guidance_plan_items", None)
+    assert filter_items is not None
+
+    items = [
+        PlanItem(
+            intent_key="connect:gmail",
+            goal_basket="work",
+            decision="Connect Gmail.",
+            why_now_trigger="Email context would help.",
+        ),
+        PlanItem(
+            intent_key="connect:youtube",
+            goal_basket="growth",
+            decision="Connect YouTube.",
+            why_now_trigger="Video context would help.",
+        ),
+        PlanItem(
+            intent_key="connect:calendly",
+            goal_basket="work",
+            decision="Connect Calendly.",
+            why_now_trigger="Scheduling context would help.",
+        ),
+        PlanItem(
+            intent_key="connect:linkedin",
+            goal_basket="growth",
+            decision="Connect LinkedIn.",
+            why_now_trigger="Network context would help.",
+        ),
+        PlanItem(
+            intent_key="connect:stripe",
+            goal_basket="wealth",
+            decision="Connect Stripe.",
+            why_now_trigger="Revenue context would help.",
+        ),
+        PlanItem(
+            intent_key="regular-work-card",
+            goal_basket="work",
+            decision="Review the real work item.",
+            why_now_trigger="A real signal changed today.",
+        ),
+    ]
+    compact_phase1 = {
+        # All five high-value connectors linked → late phase.
+        "connections_summary": [
+            {"toolkit": "gmail", "status": "ACTIVE"},
+            {"toolkit": "google_calendar", "status": "ACTIVE"},
+            {"toolkit": "slack", "status": "ACTIVE"},
+            {"toolkit": "github", "status": "ACTIVE"},
+            {"toolkit": "google_drive", "status": "ACTIVE"},
+        ],
+        "cards_recent": [
+            {"intentKey": "connect:youtube", "latestOutcome": None},
+        ],
+        "feedback": [
+            {"intentKey": "connect:calendly", "action": "dismiss"},
+        ],
+    }
+
+    filtered = filter_items(items, compact_phase1=compact_phase1)
+
+    # gmail dropped (ACTIVE), youtube dropped (recent, late phase), calendly
+    # dropped (rejected); linkedin kept (count→1), stripe capped, regular kept.
+    assert [item.intent_key for item in filtered] == [
+        "connect:linkedin",
+        "regular-work-card",
+    ]
+
+
+def test_connector_guidance_filter_early_phase_resurfaces_recent_connector():
+    # Early phase: fewer than 3 high-value connectors ACTIVE, so a connector
+    # already shown in cards_recent is NOT suppressed — it is re-surfaced to
+    # keep one nudge present every run. Active + rejected + cap-1 still hold.
     filter_items = getattr(generator_module, "_filter_connector_guidance_plan_items", None)
     assert filter_items is not None
 
@@ -228,18 +302,6 @@ def test_connector_guidance_filter_drops_active_recent_and_rejected_then_caps_to
             why_now_trigger="Video context would help.",
         ),
         PlanItem(
-            intent_key="connect:slack",
-            goal_basket="work",
-            decision="Connect Slack.",
-            why_now_trigger="Slack context would help.",
-        ),
-        PlanItem(
-            intent_key="connect:stripe",
-            goal_basket="wealth",
-            decision="Connect Stripe.",
-            why_now_trigger="Revenue context would help.",
-        ),
-        PlanItem(
             intent_key="regular-work-card",
             goal_basket="work",
             decision="Review the real work item.",
@@ -247,9 +309,11 @@ def test_connector_guidance_filter_drops_active_recent_and_rejected_then_caps_to
         ),
     ]
     compact_phase1 = {
+        # Only gmail ACTIVE → 1 high-value connector → early phase.
         "connections_summary": [
             {"toolkit": "gmail", "status": "ACTIVE"},
         ],
+        # google_calendar was shown recently; in early phase it is NOT skipped.
         "cards_recent": [
             {"intentKey": "connect:google_calendar", "latestOutcome": None},
         ],
@@ -260,8 +324,10 @@ def test_connector_guidance_filter_drops_active_recent_and_rejected_then_caps_to
 
     filtered = filter_items(items, compact_phase1=compact_phase1)
 
+    # gmail dropped (ACTIVE), youtube dropped (rejected); google_calendar is
+    # re-surfaced despite being recent; cap-1 keeps only the first connector.
     assert [item.intent_key for item in filtered] == [
-        "connect:slack",
+        "connect:google_calendar",
         "regular-work-card",
     ]
 
