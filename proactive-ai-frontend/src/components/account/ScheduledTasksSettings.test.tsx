@@ -48,6 +48,26 @@ describe("ScheduledTasksSettings", () => {
     expect(screen.getByText("active")).toBeTruthy();
   });
 
+  test("prefers server-rendered scheduleLabel over field join", async () => {
+    apiMock.listScheduledGenerators.mockResolvedValue([
+      makeTask({
+        id: "t1",
+        kind: "reminder.card",
+        title: "喝水",
+        triggerKind: "schedule",
+        intervalSeconds: 300,
+        scheduleLabel: "每 5 分钟",
+      }),
+    ]);
+    const { default: ScheduledTasksSettings } = await import(
+      "@/components/account/ScheduledTasksSettings"
+    );
+    render(<ScheduledTasksSettings />);
+
+    expect(await screen.findByText("每 5 分钟")).toBeTruthy();
+    expect(screen.queryByText("daily · 09:00 · America/Los_Angeles")).toBeNull();
+  });
+
   test("shows empty state when there are no tasks", async () => {
     apiMock.listScheduledGenerators.mockResolvedValue([]);
     const { default: ScheduledTasksSettings } = await import(

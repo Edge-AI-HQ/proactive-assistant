@@ -1887,11 +1887,31 @@ export interface ScheduledGeneratorTask {
   localTime: string | null;
   timezone: string;
   cronExpr: string | null;
+  /** "once" | "schedule"; optional so tasks from older backends still parse. */
+  triggerKind?: string | null;
+  intervalSeconds?: number | null;
+  scheduleLabel?: string | null;
   nextRunAt: string | null;
   lastRunAt: string | null;
   lastRunStatus: string | null;
   runCount: number;
   payload: Record<string, unknown>;
+}
+
+export interface ScheduledGeneratorSchedule {
+  type: "once" | "interval" | "cron";
+  inMinutes?: number;
+  atLocal?: string;
+  everySeconds?: number;
+  frequency?: "daily" | "weekly";
+  localTime?: string;
+  /** ISO weekday numbers, 1=Monday … 7=Sunday */
+  daysOfWeek?: number[];
+}
+
+export interface ScheduledGeneratorReminder {
+  title: string;
+  message: string;
 }
 
 export interface ScheduledGeneratorPreview {
@@ -1901,11 +1921,18 @@ export interface ScheduledGeneratorPreview {
   semanticSignature: string;
   similarTasks: ScheduledGeneratorTask[];
   conversationId: string | null;
+  scheduleLabel: string;
+  mode: string;
+  reminder: ScheduledGeneratorReminder | null;
 }
 
 export interface ScheduledGeneratorPreviewRequest {
   originalRequest: string;
   timezone: string;
+  schedule: ScheduledGeneratorSchedule;
+  mode?: "reminder" | "generate";
+  topic?: string | null;
+  reminder?: ScheduledGeneratorReminder | null;
   conversationId?: string | null;
 }
 
@@ -1913,6 +1940,11 @@ export interface ScheduledGeneratorCreateRequest {
   previewId: string;
   semanticSignature: string;
   originalRequest: string;
+  timezone: string;
+  schedule: ScheduledGeneratorSchedule;
+  mode?: "reminder" | "generate";
+  topic?: string | null;
+  reminder?: ScheduledGeneratorReminder | null;
   parsedIntent: ScheduledGeneratorParsedIntent;
   confirmedBrief: ScheduledGeneratorConfirmedBrief;
   duplicateAck?: boolean;

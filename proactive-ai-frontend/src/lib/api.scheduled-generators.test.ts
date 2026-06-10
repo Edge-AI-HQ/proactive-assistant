@@ -61,6 +61,7 @@ describe("scheduledGeneratorPreview", () => {
     const preview = await scheduledGeneratorPreview({
       originalRequest: "每天 9 点给我推 AI 新闻",
       timezone: "UTC",
+      schedule: { type: "cron", frequency: "daily", localTime: "09:00" },
     });
 
     expect(preview.previewId).toBe("pv_1");
@@ -84,6 +85,8 @@ describe("scheduledGeneratorCreate", () => {
       previewId: "pv_1",
       semanticSignature: "sig",
       originalRequest: "x",
+      timezone: "UTC",
+      schedule: { type: "cron", frequency: "daily", localTime: "09:00" },
       parsedIntent: { frequency: "daily", localTime: "09:00", timezone: "UTC" },
       confirmedBrief: { topic: "AI" },
     });
@@ -109,6 +112,8 @@ describe("scheduledGeneratorCreate", () => {
       previewId: "pv_1",
       semanticSignature: "sig",
       originalRequest: "x",
+      timezone: "UTC",
+      schedule: { type: "interval", everySeconds: 300 },
       parsedIntent: {},
       confirmedBrief: {},
     });
