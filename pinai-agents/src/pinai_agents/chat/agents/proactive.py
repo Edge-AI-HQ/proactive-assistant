@@ -40,12 +40,11 @@ logger = logging.getLogger(__name__)
 # Mid thinking budget: between the 5000 default and the generator's 10000.
 _PROACTIVE_THINKING_BUDGET = 8000
 
-# Compact the proactive thread's checkpoint history once it exceeds this many
-# rows. LangGraph appends one checkpoint per super-step on this never-ending
-# thread; `trim_thread` bounds the message window but not the row count, so
-# reads slow as the delta chain grows. Compaction collapses the history back to
-# a single checkpoint (harness/trim.compact_thread). ~80 rows ≈ a dozen ticks.
-PROACTIVE_MAX_CHECKPOINTS = 80
+# Working-context bounding is shared with main chat via
+# harness/compaction.compact_thread (token / message-count triggered, run
+# post-turn). The proactive thread is never-ending, so its checkpoint ROW count
+# still grows over time — that's bounded separately by thread lifecycle, not by
+# compaction (see the compaction module docstring).
 
 # The proactive agent reads the user's life off the timeline event store
 # (timeline_* tools), NOT pai_personal_signals / pai_raw_* — those stay with

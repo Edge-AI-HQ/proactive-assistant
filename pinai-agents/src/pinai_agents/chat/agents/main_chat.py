@@ -277,24 +277,19 @@ _ECHO_PROBE_SUBAGENT: SubAgent = {
 }
 
 
-# Bounded working-context window for the main chat thread (a persistent
-# singleton). Only the most recent N turns stay live in the agent's thread;
-# older history remains in pai_chat_messages (display) + pai_memory (recall).
-# Trimmed turn-over-turn via langgraph RemoveMessage (see runtime/trim.py).
-MAIN_CHAT_KEEP_TURNS = 12
-
-
 def make_main_chat_agent(
     *,
     virtual_key: str,
     backend: BackendProtocol,
 ) -> Any:
-    # create_deep_agent's default middleware stack already includes context
-    # summarization (with backend offload of evicted history to
-    # /conversation_history/<thread>.md), filesystem, todo planning, and
-    # Anthropic prompt caching — see deepagents.create_deep_agent. We only
-    # layer the subagent roster on top; the SubAgentMiddleware + `task` tool
-    # are auto-wired from `subagents`.
+    # create_deep_agent's default middleware stack includes filesystem, todo
+    # planning, Anthropic prompt caching, and a non-mutating summarization that
+    # only fires near the 170k context limit — a backstop that rarely triggers.
+    # The real working-context bound is harness/compaction.compact_thread, run
+    # post-turn on a token/message trigger (it summarizes the old turns and
+    # rewrites the window in place to [summary, *recent]).
+    # We only layer the subagent roster on top; the SubAgentMiddleware + `task`
+    # tool are auto-wired from `subagents`.
     return build_agent(
         model=make_chat_model(virtual_key=virtual_key, streaming=True),
         system_prompt=_INSTRUCTIONS,

@@ -34,10 +34,10 @@ from langchain_core.messages import (
 from pydantic import BaseModel, Field
 
 from ...agents.card_execution import make_card_execution_agent
-from ...agents.main_chat import MAIN_CHAT_KEEP_TURNS, make_main_chat_agent
-from ...agents.proactive import PROACTIVE_MAX_CHECKPOINTS, make_proactive_agent
+from ...agents.main_chat import make_main_chat_agent
+from ...agents.proactive import make_proactive_agent
 from ...auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
-from ...harness.checkpoint import count_thread_checkpoints
+from ...harness.compaction import compact_thread
 from ...harness.ctx import ClientHints, run_context
 from ...harness.session import (
     apply_message_updates,
@@ -46,7 +46,6 @@ from ...harness.session import (
     stream_events,
     thread_has_pending_interrupt,
 )
-from ...harness.trim import compact_thread, trim_thread
 from ...tools.code_mode.lazy_sandbox import LazyThreadSandbox
 from ...tools.code_mode.local_sandbox import (
     create_local_sandbox_backend,
@@ -487,36 +486,28 @@ async def _stream(
             # (refresh replay).
             async for chunk in langgraph_to_sse(events, trace_id=principal.run_id):
                 yield chunk
-            # Bound the main thread's working context once the turn finishes
-            # (card threads are short-lived — no trim). Best-effort: a trim
-            # failure must never surface after the user already got the reply.
-            # Skip trimming while a HITL decision is pending — the turn paused
-            # on interrupt(), isn't finished, and trimming mid-interrupt would
-            # mutate the state the resume re-enters.
+            # Maintain the thread's working context once the turn finishes
+            # (card threads are short-lived — skip). Best-effort: a failure
+            # must never surface after the user already got the reply. Skip
+            # while a HITL decision is pending — the turn paused on interrupt()
+            # and isn't finished; compacting mid-interrupt would mutate the
+            # state the resume re-enters. This runs INSIDE the response
+            # generator (before it returns), so agent_core's worker — which
+            # awaits the whole chat stream — can't start the next turn until
+            # compaction commits: the in-place rewrite is never concurrent with
+            # another turn on this session. main + proactive share one path.
             if not is_card_thread and not await thread_has_pending_interrupt(
                 agent, req.session_key
             ):
                 try:
-                    await trim_thread(
+                    await compact_thread(
                         agent,
                         thread_id=req.session_key,
-                        keep_turns=MAIN_CHAT_KEEP_TURNS,
+                        virtual_key=virtual_key,
                     )
-                    # Proactive is a never-ending thread: trim bounds its
-                    # message window but not its checkpoint ROW count, which
-                    # keeps growing every tick and slows reads. Once the history
-                    # is long enough, collapse it back to a single checkpoint.
-                    if req.session_key.startswith(_PROACTIVE_PREFIX):
-                        cp_count = await count_thread_checkpoints(req.session_key, background=True)
-                        if cp_count > PROACTIVE_MAX_CHECKPOINTS:
-                            await compact_thread(
-                                agent,
-                                thread_id=req.session_key,
-                                background=True,
-                            )
                 except Exception:
                     logger.exception(
-                        "context trim/compact failed session_key=%s",
+                        "context compaction failed session_key=%s",
                         req.session_key,
                     )
         except BaseException as e:
