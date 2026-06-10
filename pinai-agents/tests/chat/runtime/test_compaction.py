@@ -20,6 +20,7 @@ from pinai_agents.chat.harness.compaction import (
     _reported_input_tokens,
     _split_at_turn_boundary,
     compact_thread,
+    scrub_empty_ai_messages,
 )
 
 
@@ -242,4 +243,81 @@ async def test_compact_summary_failure_skips(monkeypatch) -> None:
 
     # A summary outage must not write a half-baked window.
     assert folded == 0
+    agent.aupdate_state.assert_not_awaited()
+
+
+# ── scrub_empty_ai_messages ──────────────────────────────────────────
+
+
+async def test_scrub_removes_empty_ai_messages() -> None:
+    # The poisoned-thread shape (dev 2026-06-10): a 0-token final reply
+    # persisted as AIMessage(content=[]) made Moonshot 400 every later turn.
+    agent = _mock_agent(
+        [
+            HumanMessage(content="q1", id="h1"),
+            AIMessage(content=[], id="empty-list"),
+            AIMessage(content="   ", id="blank-str"),
+            AIMessage(content=[{"type": "text", "text": ""}], id="empty-text-block"),
+            AIMessage(content="real answer", id="a1"),
+        ]
+    )
+
+    removed = await scrub_empty_ai_messages(agent, thread_id="card-1")
+
+    assert removed == 3
+    written = agent.aupdate_state.await_args.args[1]["messages"]
+    assert all(isinstance(m, RemoveMessage) for m in written)
+    assert {m.id for m in written} == {"empty-list", "blank-str", "empty-text-block"}
+
+
+async def test_scrub_keeps_tool_call_and_reasoning_messages() -> None:
+    # Empty content + tool_calls is a normal tool step; reasoning-only keeps
+    # its thinking block for history display — neither may be removed.
+    agent = _mock_agent(
+        [
+            HumanMessage(content="q1", id="h1"),
+            AIMessage(
+                content="",
+                id="a1",
+                tool_calls=[{"id": "tc1", "name": "foo", "args": {}}],
+            ),
+            ToolMessage(content="result", id="t1", tool_call_id="tc1"),
+            AIMessage(content=[{"type": "reasoning", "reasoning": "hmm"}], id="a2"),
+            AIMessage(content="ans", id="a3"),
+        ]
+    )
+
+    removed = await scrub_empty_ai_messages(agent, thread_id="main-1")
+
+    assert removed == 0
+    agent.aupdate_state.assert_not_awaited()
+
+
+async def test_scrub_keeps_legacy_reasoning_content_messages() -> None:
+    # Pre-v1 threads persisted thinking in additional_kwargs.reasoning_content
+    # with empty content; the history reader still renders it — must survive.
+    agent = _mock_agent(
+        [
+            HumanMessage(content="q1", id="h1"),
+            AIMessage(
+                content="",
+                id="a1",
+                additional_kwargs={"reasoning_content": "old-style thinking"},
+            ),
+            AIMessage(content="ans", id="a2"),
+        ]
+    )
+
+    removed = await scrub_empty_ai_messages(agent, thread_id="main-1")
+
+    assert removed == 0
+    agent.aupdate_state.assert_not_awaited()
+
+
+async def test_scrub_noop_on_empty_thread() -> None:
+    agent = _mock_agent([])
+
+    removed = await scrub_empty_ai_messages(agent, thread_id="main-1")
+
+    assert removed == 0
     agent.aupdate_state.assert_not_awaited()

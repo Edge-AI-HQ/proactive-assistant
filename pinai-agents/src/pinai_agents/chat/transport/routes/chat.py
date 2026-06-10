@@ -37,7 +37,7 @@ from ...agents.card_execution import make_card_execution_agent
 from ...agents.main_chat import make_main_chat_agent
 from ...agents.proactive import make_proactive_agent
 from ...auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
-from ...harness.compaction import compact_thread
+from ...harness.compaction import compact_thread, scrub_empty_ai_messages
 from ...harness.ctx import ClientHints, run_context
 from ...harness.group_title import make_group_title_fn
 from ...harness.session import (
@@ -507,30 +507,48 @@ async def _stream(
                 group_title_fn=title_fn,
             ):
                 yield chunk
-            # Maintain the thread's working context once the turn finishes
-            # (card threads are short-lived — skip). Best-effort: a failure
-            # must never surface after the user already got the reply. Skip
-            # while a HITL decision is pending — the turn paused on interrupt()
-            # and isn't finished; compacting mid-interrupt would mutate the
-            # state the resume re-enters. This runs INSIDE the response
-            # generator (before it returns), so agent_core's worker — which
-            # awaits the whole chat stream — can't start the next turn until
-            # compaction commits: the in-place rewrite is never concurrent with
-            # another turn on this session. main + proactive share one path.
-            if not is_card_thread and not await thread_has_pending_interrupt(
-                agent, req.session_key
-            ):
-                try:
-                    await compact_thread(
-                        agent,
-                        thread_id=req.session_key,
-                        virtual_key=virtual_key,
-                    )
-                except Exception:
-                    logger.exception(
-                        "context compaction failed session_key=%s",
-                        req.session_key,
-                    )
+            # Maintain the thread once the turn finishes. Best-effort: a
+            # failure must never surface after the user already got the reply.
+            # Skip while a HITL decision is pending — the turn paused on
+            # interrupt() and isn't finished; mutating state mid-interrupt
+            # would corrupt what the resume re-enters. This runs INSIDE the
+            # response generator (before it returns), so agent_core's worker —
+            # which awaits the whole chat stream — can't start the next turn
+            # until maintenance commits: the in-place rewrites are never
+            # concurrent with another turn on this session.
+            try:
+                if not await thread_has_pending_interrupt(agent, req.session_key):
+                    # Every thread kind, cards included: a 0-token final reply
+                    # persisted into the state breaks all later turns on strict
+                    # providers (Moonshot empty-assistant 400) — scrub it out.
+                    try:
+                        await scrub_empty_ai_messages(agent, thread_id=req.session_key)
+                    except Exception:
+                        logger.exception(
+                            "empty-message scrub failed session_key=%s",
+                            req.session_key,
+                        )
+                    # Working-context compaction (card threads are short-lived —
+                    # skip). main + proactive share one path.
+                    if not is_card_thread:
+                        try:
+                            await compact_thread(
+                                agent,
+                                thread_id=req.session_key,
+                                virtual_key=virtual_key,
+                            )
+                        except Exception:
+                            logger.exception(
+                                "context compaction failed session_key=%s",
+                                req.session_key,
+                            )
+            except Exception:
+                # The pending-interrupt read itself failed — the reply already
+                # streamed, so maintenance is skipped this turn, never raised.
+                logger.exception(
+                    "post-turn maintenance skipped session_key=%s",
+                    req.session_key,
+                )
         except BaseException as e:
             saw_failure = e
             raise
