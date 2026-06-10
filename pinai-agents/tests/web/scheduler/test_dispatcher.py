@@ -23,6 +23,11 @@ def test_generator_tasks_use_ten_minute_lease():
     assert dispatcher._lease_for("auto.dreaming") == 600
 
 
+def test_reminder_card_uses_default_lease():
+    dispatcher = DefaultDispatcher(pool=cast(Any, None), lease_seconds=60)
+    assert dispatcher._lease_for("reminder.card") == 60
+
+
 def test_scheduled_generator_maps_to_existing_generator_agent_kind():
     assert _AGENT_RUN_KIND["generator.scheduled"] == "generator"
 
@@ -200,6 +205,63 @@ async def test_dream_dispatch_persists_summary_and_output_counts(
     assert evol["details"]["outputSummary"]["memories_written"] == 2
     assert task_run is not None
     assert task_run["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_reminder_card_dispatch_writes_card_and_notifies(pool, user_ids, monkeypatch):
+    user_a, _ = user_ids
+    pushed: list[dict] = []
+
+    async def fake_notify(pool_, *, user_id, title, message, task_id):
+        pushed.append({"user_id": user_id, "title": title, "message": message, "task_id": task_id})
+        return 1
+
+    from pinai_agents.web.services import push_notifier
+
+    monkeypatch.setattr(push_notifier, "notify_reminder", fake_notify)
+
+    async with user_scoped_tx(pool, user_a) as conn:
+        task = await ScheduledTasksRepository(user_a, conn).upsert(
+            id="sched.once.remtest",
+            kind="reminder.card",
+            trigger_kind="once",
+            next_run_at=datetime.now(UTC),
+            timezone="Asia/Shanghai",
+            payload={
+                "reminder": {"title": "喝水", "message": "该喝水了"},
+                "schedule_label": "一次 · 06-09 18:05",
+                "trigger": "reminder",
+            },
+        )
+    task.last_run_at = datetime.now(UTC)
+
+    dispatcher = DefaultDispatcher(pool=pool, lease_seconds=60, owner="test")
+    await dispatcher.dispatch(task)
+
+    async with service_tx(pool) as conn:
+        cur = await conn.execute(
+            """
+            SELECT trigger, final_cards FROM pai_pipeline_runs
+            WHERE user_id = %s AND id LIKE 'sched.once.remtest.%%'
+            """,
+            (user_a,),
+        )
+        run = await cur.fetchone()
+        cur = await conn.execute(
+            "SELECT status FROM pai_scheduled_task_runs "
+            "WHERE user_id = %s AND task_id = 'sched.once.remtest'",
+            (user_a,),
+        )
+        task_run = await cur.fetchone()
+
+    assert run is not None and run["trigger"] == "reminder"
+    card = run["final_cards"][0]
+    assert card["title"] == "喝水"
+    assert card["sourceKind"] == "scheduled" and card["sourceLabel"] == "喝水"
+    assert task_run is not None and task_run["status"] == "success"
+    assert pushed == [
+        {"user_id": user_a, "title": "喝水", "message": "该喝水了", "task_id": "sched.once.remtest"}
+    ]
 
 
 @pytest.mark.xfail(
