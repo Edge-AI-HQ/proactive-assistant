@@ -1,16 +1,25 @@
 """Pure-function tests for the scheduled generator service — no DB needed.
 
-Guards the camelCase round-trip contract: preview emits snake_case, the
-route camelCases it via `_dump`, the client echoes it back, and create must
-normalize it back to snake_case so the cron expression still derives
-correctly. The DB-backed create path lives in tests/web/routes/.
+Guards the camelCase round-trip contract (preview emits snake_case, the
+route camelCases it via `_dump`, the client echoes it back) plus the v2
+structured-schedule guardrails: per-mode min gap, reminder payload shape,
+and signature-based similarity matching. The DB-backed create path lives
+in tests/web/routes/.
 """
 
 from __future__ import annotations
 
+import pytest
+
 from pinai_agents.web.services.scheduled_generators import (
-    _cron_expr_for,
+    REMINDER_KIND,
+    SCHEDULED_GENERATOR_KIND,
+    USER_TASK_KINDS,
+    ScheduledGeneratorValidationError,
+    _find_similar,
     _normalize_payload_keys,
+    _resolve_and_guard,
+    _validate_reminder,
 )
 
 
@@ -41,9 +50,56 @@ def test_normalize_payload_keys_recurses_into_nested():
     assert out["confirmed_brief"]["content_focus"] == ["a", "b"]
 
 
-def test_camel_parsed_intent_round_trips_to_valid_cron():
-    # The exact bug this guards: preview → _dump emits localTime (camel);
-    # after the client echoes it back, create must still derive the cron.
-    camel_parsed = {"frequency": "daily", "localTime": "09:00", "timezone": "UTC"}
-    normalized = _normalize_payload_keys(camel_parsed)
-    assert _cron_expr_for(normalized) == "0 9 * * *"
+def test_user_task_kinds_cover_both_modes():
+    assert SCHEDULED_GENERATOR_KIND in USER_TASK_KINDS
+    assert REMINDER_KIND in USER_TASK_KINDS
+
+
+def test_resolve_and_guard_rejects_dense_generate_interval():
+    with pytest.raises(ScheduledGeneratorValidationError):
+        _resolve_and_guard(
+            schedule={"type": "interval", "every_seconds": 300},
+            timezone="UTC",
+            mode="generate",
+            original_request="每 5 分钟推新闻",
+        )
+
+
+def test_resolve_and_guard_allows_dense_reminder_interval():
+    resolved = _resolve_and_guard(
+        schedule={"type": "interval", "every_seconds": 300},
+        timezone="UTC",
+        mode="reminder",
+        original_request="每 5 分钟提醒我喝水",
+    )
+    assert resolved.interval_seconds == 300
+
+
+def test_validate_reminder_requires_title_and_message():
+    with pytest.raises(ScheduledGeneratorValidationError):
+        _validate_reminder("reminder", {"title": "喝水"})
+    clean = _validate_reminder("reminder", {"title": "喝水", "message": "该喝水了"})
+    assert clean == {"title": "喝水", "message": "该喝水了"}
+
+
+def test_find_similar_matches_on_signature():
+    from pinai_agents.web.db.repositories.scheduled_tasks import ScheduledTaskRow
+
+    row = ScheduledTaskRow.from_record(
+        {
+            "user_id": 1,
+            "id": "t1",
+            "kind": SCHEDULED_GENERATOR_KIND,
+            "trigger_kind": "schedule",
+            "payload": {"semantic_signature": "sig-x"},
+            "timezone": "UTC",
+            "status": "active",
+            "run_count": 0,
+        }
+    )
+    assert _find_similar(
+        [row], semantic_signature="sig-x", parsed_intent={}, confirmed_brief={}
+    ) == [row]
+    assert (
+        _find_similar([row], semantic_signature="sig-y", parsed_intent={}, confirmed_brief={}) == []
+    )

@@ -10,7 +10,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
@@ -50,9 +50,28 @@ class _ScheduledGeneratorPrincipal(BaseModel):
     source: str
 
 
+class ScheduleSpecModel(_CamelModel):
+    type: Literal["once", "interval", "cron"]
+    in_minutes: int | None = Field(default=None, ge=1)
+    at_local: str | None = Field(default=None, max_length=20)
+    every_seconds: int | None = Field(default=None, ge=1)
+    frequency: Literal["daily", "weekly"] | None = None
+    local_time: str | None = Field(default=None, max_length=5)
+    days_of_week: list[int] | None = None
+
+
+class ReminderModel(_CamelModel):
+    title: str = Field(min_length=1, max_length=80)
+    message: str = Field(min_length=1, max_length=500)
+
+
 class ScheduledGeneratorPreviewRequest(_CamelModel):
     original_request: str = Field(min_length=1, max_length=2000)
     timezone: str = Field(min_length=1, max_length=100)
+    schedule: ScheduleSpecModel
+    mode: Literal["reminder", "generate"] = "generate"
+    topic: str | None = Field(default=None, max_length=200)
+    reminder: ReminderModel | None = None
     conversation_id: str | None = Field(default=None, max_length=200)
 
 
@@ -60,8 +79,12 @@ class ScheduledGeneratorCreateRequest(_CamelModel):
     preview_id: str = Field(min_length=1, max_length=80)
     semantic_signature: str = Field(min_length=1, max_length=300)
     original_request: str = Field(min_length=1, max_length=2000)
-    parsed_intent: dict[str, Any]
-    confirmed_brief: dict[str, Any]
+    timezone: str = Field(min_length=1, max_length=100)
+    schedule: ScheduleSpecModel
+    mode: Literal["reminder", "generate"] = "generate"
+    topic: str | None = Field(default=None, max_length=200)
+    reminder: ReminderModel | None = None
+    confirmed_brief: dict[str, Any] | None = None
     duplicate_ack: bool = False
     similar_task_ids_seen: list[str] = Field(default_factory=list)
 
@@ -128,6 +151,10 @@ async def preview(
             user_id=principal.user_id,
             original_request=req.original_request,
             timezone=req.timezone,
+            schedule=req.schedule.model_dump(exclude_none=True),
+            mode=req.mode,
+            topic=req.topic,
+            reminder=req.reminder.model_dump() if req.reminder else None,
             conversation_id=req.conversation_id,
         )
     except ScheduledGeneratorValidationError as e:
@@ -162,7 +189,11 @@ async def create(
             preview_id=req.preview_id,
             semantic_signature=req.semantic_signature,
             original_request=req.original_request,
-            parsed_intent=req.parsed_intent,
+            timezone=req.timezone,
+            schedule=req.schedule.model_dump(exclude_none=True),
+            mode=req.mode,
+            topic=req.topic,
+            reminder=req.reminder.model_dump() if req.reminder else None,
             confirmed_brief=req.confirmed_brief,
             duplicate_ack=req.duplicate_ack,
             similar_task_ids_seen=req.similar_task_ids_seen,
