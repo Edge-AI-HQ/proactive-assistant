@@ -43,6 +43,11 @@ class _BaseAppSettings(BaseSettings):
     # on the code default).
     default_model: str = "claude-sonnet-4-6"
 
+    # Small/fast model for internal annotations — currently the chat
+    # work-group titles (harness/group_title.py). Cheap by design: one
+    # short call per closed tool group. Override via GROUP_TITLE_MODEL.
+    group_title_model: str = "claude-haiku-4-5"
+
 
 class WebSettings(_BaseAppSettings):
     """Web process settings."""

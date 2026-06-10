@@ -152,3 +152,68 @@ def test_result_before_start_is_ignored() -> None:
     r = ChatTurnRecorder()
     r.feed(_tool_result("ghost", is_error=False, meta="x"))
     assert r.parts() == []
+
+
+def test_tool_start_attribution_fields_persisted() -> None:
+    rec = ChatTurnRecorder()
+    rec.feed(
+        emit(
+            EV_CHAT_TOOL_START,
+            {
+                "toolCallId": "t1",
+                "name": "tavily_search",
+                "argsPreview": "{}",
+                "parentTaskId": "call-task-A",
+                "agentName": "general-purpose",
+            },
+        )
+    )
+    rec.feed(_tool_start("t2", "memory_search", "{}"))
+
+    nested, plain = rec.parts()
+    assert nested["parentTaskId"] == "call-task-A"
+    assert nested["agentName"] == "general-purpose"
+    assert "parentTaskId" not in plain
+    assert "agentName" not in plain
+
+
+def test_tool_result_links_persisted() -> None:
+    rec = ChatTurnRecorder()
+    rec.feed(_tool_start("t1", "tavily_search", "{}"))
+    rec.feed(
+        emit(
+            EV_CHAT_TOOL_RESULT,
+            {
+                "toolCallId": "t1",
+                "isError": False,
+                "meta": "...",
+                "links": [{"title": "Lindy AI", "url": "https://lindy.ai"}],
+            },
+        )
+    )
+
+    (part,) = rec.parts()
+    assert part["links"] == [{"title": "Lindy AI", "url": "https://lindy.ai"}]
+
+
+def test_group_title_backfills_anchor_part_without_new_part() -> None:
+    from pinai_agents.shared.sse_envelope import EV_CHAT_GROUP_TITLE
+
+    rec = ChatTurnRecorder()
+    rec.feed(_tool_start("t1", "task", "{}"))
+    rec.feed(_delta("progress "))
+    rec.feed(emit(EV_CHAT_GROUP_TITLE, {"anchorToolCallId": "t1", "title": "调研了定价"}))
+    rec.feed(_delta("update"))
+
+    tool_part, text_part = rec.parts()
+    assert tool_part["groupTitle"] == "调研了定价"
+    # The annotation must not split the coalescing text part.
+    assert text_part == {"type": "text", "text": "progress update"}
+
+
+def test_group_title_with_unknown_anchor_is_ignored() -> None:
+    from pinai_agents.shared.sse_envelope import EV_CHAT_GROUP_TITLE
+
+    rec = ChatTurnRecorder()
+    rec.feed(emit(EV_CHAT_GROUP_TITLE, {"anchorToolCallId": "missing", "title": "x"}))
+    assert rec.parts() == []

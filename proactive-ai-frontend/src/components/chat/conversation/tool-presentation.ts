@@ -45,11 +45,17 @@ export interface ToolPresentation {
 
 const NAME_MAP: Record<string, ToolPresentation> = {
   exec: { Icon: Terminal, verb: "Ran" },
+  execute: { Icon: Terminal, verb: "Ran command" },
   process: { Icon: Terminal, verb: "Ran" },
   code_execution: { Icon: Terminal, verb: "Executed" },
   python_exec: { Icon: Terminal, verb: "Ran Python" },
   browser: { Icon: Globe, verb: "Browsed" },
+  browser_tool: { Icon: Globe, verb: "Browsed" },
   web_search: { Icon: Search, verb: "Searched web" },
+  tavily_search: { Icon: Search, verb: "Searched web" },
+  tavily_extract: { Icon: Download, verb: "Read pages" },
+  world_search: { Icon: Search, verb: "Searched news" },
+  memory_search: { Icon: Database, verb: "Searched memory" },
   x_search: { Icon: Search, verb: "Searched X" },
   web_fetch: { Icon: Download, verb: "Fetched" },
   read: { Icon: FileText, verb: "Read" },
@@ -70,6 +76,7 @@ const NAME_MAP: Record<string, ToolPresentation> = {
   sessions_send: { Icon: Send, verb: "Sent" },
   sessions_spawn: { Icon: UserCog, verb: "Spawned agent" },
   subagents: { Icon: Bot, verb: "Delegated to agent" },
+  task: { Icon: Bot, verb: "Delegated" },
   write_todos: { Icon: List, verb: "Updated plan" },
   notify_user: { Icon: MessageSquare, verb: "Messaged you" },
 };

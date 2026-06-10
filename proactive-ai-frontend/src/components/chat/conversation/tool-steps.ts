@@ -38,6 +38,12 @@ export interface ToolCallArgs {
  *  tool-call part renderer. Always JSON-serializable end-to-end. */
 export type ToolCallSnapshotArgs = { [k: string]: JsonValue };
 
+/** One clickable source from a web-search tool's structured results. */
+export interface ToolResultLink {
+  title: string;
+  url: string;
+}
+
 export type ConversationContentPart =
   | { type: "text"; text: string }
   | { type: "reasoning"; text: string }
@@ -49,6 +55,14 @@ export type ConversationContentPart =
       argsText: string;
       result?: { ok: boolean };
       isError?: boolean;
+      /** The `task` call this nested subagent tool belongs to; absent on the
+       *  orchestrator's own calls (renderer keeps the flat stream). */
+      parentTaskId?: string;
+      agentName?: string;
+      /** Async LLM title backfilled onto a work group's anchor (first)
+       *  tool-call part; absent groups keep the deterministic fallback. */
+      groupTitle?: string;
+      links?: ToolResultLink[];
     };
 
 interface ToolStart {
@@ -57,6 +71,8 @@ interface ToolStart {
   meta?: string;
   argsPreview?: string;
   pinCommand?: string;
+  parentTaskId?: string;
+  agentName?: string;
   /** Optional raw structured input — carried verbatim from the SSE
    *  `chat:tool:start` event's `args` field (full payload up to the
    *  8 KB cap in streaming.py). Tools with specialized UI renderers
@@ -69,6 +85,21 @@ interface ToolComplete {
   toolCallId: string;
   isError: boolean;
   meta?: string;
+  links?: ToolResultLink[];
+}
+
+/** Defensive parse for the wire `links` payload (SSE + history share it). */
+export function parseToolLinks(value: unknown): ToolResultLink[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: ToolResultLink[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const url = (item as { url?: unknown }).url;
+    if (typeof url !== "string" || !url) continue;
+    const title = (item as { title?: unknown }).title;
+    out.push({ title: typeof title === "string" && title ? title : url, url });
+  }
+  return out.length ? out : undefined;
 }
 
 function buildArgs(args: ToolCallArgs): ToolCallSnapshotArgs {
@@ -153,17 +184,20 @@ export class LiveContentBuilder {
   openToolCall(step: ToolStart): void {
     if (this.toolIndex.has(step.toolCallId)) return;
     const idx = this.parts.length;
-    this.parts.push(
-      toolPart({
-        toolCallId: step.toolCallId,
-        toolName: step.toolName,
-        meta: step.meta,
-        argsPreview: step.argsPreview,
-        pinCommand: step.pinCommand,
-        input: step.input,
-        status: "running",
-      }),
-    );
+    const part = toolPart({
+      toolCallId: step.toolCallId,
+      toolName: step.toolName,
+      meta: step.meta,
+      argsPreview: step.argsPreview,
+      pinCommand: step.pinCommand,
+      input: step.input,
+      status: "running",
+    });
+    if (part.type === "tool-call" && step.parentTaskId) {
+      part.parentTaskId = step.parentTaskId;
+      if (step.agentName) part.agentName = step.agentName;
+    }
+    this.parts.push(part);
     this.toolIndex.set(step.toolCallId, idx);
     // Future deltas should start fresh parts after this tool.
     this.openTextIdx = -1;
@@ -184,7 +218,18 @@ export class LiveContentBuilder {
       argsText: JSON.stringify(nextArgs),
       result: { ok: !update.isError },
       ...(update.isError ? { isError: true as const } : {}),
+      ...(update.links ? { links: update.links } : {}),
     };
+  }
+
+  /** Backfill the async LLM group title onto its anchor tool-call part.
+   *  No-op for unknown anchors (e.g. annotation replayed without its group). */
+  setGroupTitle(anchorToolCallId: string, title: string): void {
+    const idx = this.toolIndex.get(anchorToolCallId);
+    if (idx === undefined) return;
+    const slot = this.parts[idx];
+    if (slot.type !== "tool-call") return;
+    this.parts[idx] = { ...slot, groupTitle: title };
   }
 
   /** Return a shallow copy of the ordered parts for the view to render. */

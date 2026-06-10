@@ -20,6 +20,7 @@ from typing import Any
 
 from ...shared.sse_envelope import (
     EV_CHAT_DELTA,
+    EV_CHAT_GROUP_TITLE,
     EV_CHAT_REASONING_DELTA,
     EV_CHAT_TOOL_RESULT,
     EV_CHAT_TOOL_START,
@@ -79,6 +80,14 @@ class ChatTurnRecorder:
             }
             if data.get("args") is not None:
                 part["args"] = data["args"]
+            # Subagent attribution — history replay must nest the part under
+            # the same TaskCard the live stream did.
+            parent_task_id = data.get("parentTaskId")
+            if isinstance(parent_task_id, str) and parent_task_id:
+                part["parentTaskId"] = parent_task_id
+                agent_name = data.get("agentName")
+                if isinstance(agent_name, str) and agent_name:
+                    part["agentName"] = agent_name
             self._parts.append(part)
             self._tool_index[tool_call_id] = part
         elif etype == EV_CHAT_TOOL_RESULT:
@@ -90,6 +99,18 @@ class ChatTurnRecorder:
             meta = data.get("meta")
             if isinstance(meta, str) and meta:
                 existing["meta"] = meta[:_META_LIMIT]
+            links = data.get("links")
+            if isinstance(links, list) and links:
+                existing["links"] = links
+        elif etype == EV_CHAT_GROUP_TITLE:
+            # Async annotation — backfilled onto the group's anchor tool-call
+            # part instead of appended (appending would split a text part
+            # that's still coalescing).
+            anchor = data.get("anchorToolCallId")
+            existing = self._tool_index.get(anchor) if isinstance(anchor, str) else None
+            title = data.get("title")
+            if existing is not None and isinstance(title, str) and title:
+                existing["groupTitle"] = title
 
     def _append_text(self, kind: str, delta: str) -> None:
         if not delta:

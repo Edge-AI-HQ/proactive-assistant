@@ -52,9 +52,12 @@ logger = logging.getLogger(__name__)
 
 
 def _agent_required_models() -> set[str]:
-    """Models a virtual key must cover for agent runs — the per-env default
-    agent model (DEFAULT_MODEL; see _BaseAppSettings.default_model)."""
-    return {get_web_settings().default_model}
+    """Models a virtual key must cover for agent runs: the per-env default
+    agent model (DEFAULT_MODEL) plus the annotation tier (GROUP_TITLE_MODEL,
+    chat work-group titles) — a key policy that misses either would silently
+    break that path."""
+    settings = get_web_settings()
+    return {settings.default_model, settings.group_title_model}
 
 
 def _litellm_user_id(supabase_user_id: str) -> str:

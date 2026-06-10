@@ -121,6 +121,12 @@ EV_CHAT_DELTA = "chat:delta"
 EV_CHAT_REASONING_DELTA = "chat:reasoning:delta"
 EV_CHAT_TOOL_START = "chat:tool:start"
 EV_CHAT_TOOL_RESULT = "chat:tool:result"
+# Async annotation: an LLM-generated title for a closed work group
+# (contiguous reasoning/tool run between text segments). Carries
+# anchorToolCallId (the group's first tool call — the part the title is
+# backfilled onto) + title. Best-effort: a group whose title never
+# arrives keeps the frontend's deterministic fallback label.
+EV_CHAT_GROUP_TITLE = "chat:group:title"
 # HITL: a side-effect tool paused on HumanInTheLoopMiddleware's interrupt().
 # Carries interruptId (resume anchor) + the tool call + allowedDecisions.
 EV_CHAT_REQUIRES_ACTION = "chat:requires_action"

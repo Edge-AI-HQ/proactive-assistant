@@ -23,20 +23,52 @@ Configuration:
 
 from __future__ import annotations
 
+from typing import Any
+
+from langchain_core.tools import ToolException
 from langchain_tavily import TavilyExtract, TavilySearch
+
+
+def _raise_on_error_payload(result: dict[str, Any]) -> dict[str, Any]:
+    """langchain_tavily swallows API failures into a normal `{"error": e}`
+    return value (only EMPTY results raise ToolException) — so a quota/auth
+    outage came back as status=ok and the agent kept retrying blind (prod:
+    30x "Error 432" all green). Re-raise so handle_tool_error=True turns it
+    into a real status="error" ToolMessage the agent and UI can see.
+    """
+    if isinstance(result, dict) and "error" in result:
+        raise ToolException(f"tavily request failed: {result['error']}")
+    return result
+
+
+class _TavilySearch(TavilySearch):
+    def _run(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return _raise_on_error_payload(super()._run(*args, **kwargs))
+
+    async def _arun(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return _raise_on_error_payload(await super()._arun(*args, **kwargs))
+
+
+class _TavilyExtract(TavilyExtract):
+    def _run(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return _raise_on_error_payload(super()._run(*args, **kwargs))
+
+    async def _arun(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return _raise_on_error_payload(await super()._arun(*args, **kwargs))
+
 
 # Module-level singletons — pick up TAVILY_API_KEY from os.environ at
 # import time (langchain_tavily validates the key in __init__). Chat
 # module import will fail loudly if the key is missing — same posture
 # as Daytona / Browserbase keys. dotenvx-decrypted via `make ensure-env`,
 # then `make ensure-env-pinai-agents` flows it into .env.chat.
-tavily_search = TavilySearch(
+tavily_search = _TavilySearch(
     max_results=5,
     topic="general",
     include_raw_content=False,
 )
 
-tavily_extract = TavilyExtract(
+tavily_extract = _TavilyExtract(
     extract_depth="basic",
     format="markdown",
     include_images=False,

@@ -27,9 +27,12 @@
  *   chat:thinking            → turn open signal (empty)
  *   chat:reasoning:delta     → { delta } extended thinking
  *   chat:delta               → { delta } visible assistant text
- *   chat:tool:start          → { toolCallId, name, argsPreview, args? }
+ *   chat:tool:start          → { toolCallId, name, argsPreview, args?,
+ *                                parentTaskId?, agentName? }
  *                              name === "notify_user" IS the agent's message
- *   chat:tool:result         → { toolCallId, isError, meta }
+ *   chat:tool:result         → { toolCallId, isError, meta, links? }
+ *   chat:group:title         → { anchorToolCallId, title } async work-group
+ *                              title, backfilled onto the anchor tool part
  *   chat:done                → finalize current turn
  *   chat:error               → { error }
  */
@@ -46,10 +49,15 @@ import {
 } from "@/lib/api";
 import {
   LiveContentBuilder,
+  parseToolLinks,
   type JsonValue,
   type ConversationContentPart,
 } from "@/components/chat/conversation/tool-steps";
-import { parseTodosFromArgs, setTodos, type Todo } from "@/components/chat/conversation/todos-store";
+import {
+  finalizePlanTurn,
+  parseTodosFromArgs,
+  setTodos,
+} from "@/components/chat/conversation/todos-store";
 import type { HitlRequiresAction } from "@/components/chat/conversation/HitlApprovalCard";
 
 
@@ -160,6 +168,13 @@ function historyAssistantParts(m: ConversationHistoryMessage): ConversationConte
       part.result = { ok: p.status === "ok" };
       if (p.status === "error") part.isError = true;
     }
+    if (p.parentTaskId) {
+      part.parentTaskId = p.parentTaskId;
+      if (p.agentName) part.agentName = p.agentName;
+    }
+    if (p.groupTitle) part.groupTitle = p.groupTitle;
+    const links = parseToolLinks(p.links);
+    if (links) part.links = links;
     return part;
   });
 }
@@ -210,26 +225,6 @@ export function historyToEntries(
     });
   }
   return out;
-}
-
-/** Find the most recent `write_todos` plan in persisted history so the
- *  TodoPanel can be re-hydrated after a page refresh (the live store is
- *  module-level and wiped on reload; the plan itself lives in history). */
-function latestTodosFromHistory(
-  messages: ConversationHistoryMessage[],
-): Todo[] | null {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m.role !== "assistant") continue;
-    for (let j = m.parts.length - 1; j >= 0; j--) {
-      const p = m.parts[j];
-      if (p.type === "tool-call" && p.toolName === "write_todos") {
-        const todos = parseTodosFromArgs(p.args);
-        if (todos) return todos;
-      }
-    }
-  }
-  return null;
 }
 
 let entrySeq = 0;
@@ -348,9 +343,6 @@ export function useConversationRuntime(
   // todo store without re-subscribing.
   const [threadId, setThreadId] = useState<string | null>(session || null);
   const threadIdRef = useRef<string | null>(session || null);
-  // Plan parsed from history on (re)connect; applied to the todo store once
-  // the thread id is known (the main thread's id resolves at the stream hello).
-  const pendingTodosRef = useRef<Todo[] | null>(null);
   // run_ids seen on a `proactive:tick` → those runs' chat events form a
   // heartbeat-triggered (debug) turn. Every chat event carries the same
   // traceId (=run_id), so a turn whose traceId is in this set is debug.
@@ -461,8 +453,6 @@ export function useConversationRuntime(
           if (tid) {
             threadIdRef.current = tid;
             setThreadId(tid);
-            // Apply any plan re-hydrated from history now that we can key it.
-            if (pendingTodosRef.current) setTodos(tid, pendingTodosRef.current);
           }
           break;
         }
@@ -521,12 +511,14 @@ export function useConversationRuntime(
           const toolCallId = str(payload.toolCallId);
           const name = str(payload.name);
           if (!toolCallId || !name) break;
-          // write_todos feeds the side-panel plan store (keyed by thread id),
-          // exactly as the old main-chat runtime did — the tool chip still
-          // renders too, but the structured plan drives TodoPanel.
+          // write_todos feeds the side-panel plan store (keyed by thread id,
+          // scoped to this turn via traceId) — the tool chip still renders
+          // too, but the structured plan drives TodoPanel. The backend only
+          // streams the orchestrator's own write_todos (subagent plans are
+          // suppressed at the SSE layer), so no source check is needed here.
           if (name === "write_todos" && threadIdRef.current) {
             const todos = parseTodosFromArgs(payload.args);
-            if (todos) setTodos(threadIdRef.current, todos);
+            if (todos) setTodos(threadIdRef.current, todos, str(env.traceId));
           }
           // All tools — including notify_user — flow through as tool-call parts,
           // matching the history-replay path (historyAssistantParts maps them
@@ -537,6 +529,8 @@ export function useConversationRuntime(
             toolCallId,
             toolName: name,
             argsPreview: str(payload.argsPreview) || undefined,
+            parentTaskId: str(payload.parentTaskId) || undefined,
+            agentName: str(payload.agentName) || undefined,
             input: payload.args as JsonValue | undefined,
           });
           flushTurn(true);
@@ -549,7 +543,19 @@ export function useConversationRuntime(
             toolCallId,
             isError: Boolean(payload.isError),
             meta: str(payload.meta) || undefined,
+            links: parseToolLinks(payload.links),
           });
+          flushTurn(true);
+          break;
+        }
+        case "chat:group:title": {
+          // Async annotation for a closed work group — backfilled onto the
+          // anchor tool-call part (same rule as the backend recorder), so
+          // live rendering matches the persisted history.
+          const anchor = str(payload.anchorToolCallId);
+          const title = str(payload.title);
+          if (!anchor || !title || !builderRef.current) break;
+          builderRef.current.setGroupTitle(anchor, title);
           flushTurn(true);
           break;
         }
@@ -574,6 +580,11 @@ export function useConversationRuntime(
         }
         case "chat:done": {
           finalizeTurn();
+          // Retire this turn's plan (turn-scoped todos): the panel shows its
+          // done beat and hides; the next turn's write_todos starts fresh.
+          if (threadIdRef.current) {
+            finalizePlanTurn(threadIdRef.current, str(env.traceId));
+          }
           setBusy(false);
           break;
         }
@@ -667,13 +678,10 @@ export function useConversationRuntime(
               history.push({ ...partial, running: true });
             }
           }
-          // Re-hydrate the plan panel from history so a refresh doesn't blank
-          // it. Applied now if the thread id is known (card); else stashed and
-          // applied on the stream hello.
-          pendingTodosRef.current = latestTodosFromHistory(page.messages);
-          if (pendingTodosRef.current && threadIdRef.current) {
-            setTodos(threadIdRef.current, pendingTodosRef.current);
-          }
+          // No plan re-hydration from history: todos are turn-scoped. A
+          // finished turn's plan is retired by definition; an in-flight
+          // turn's plan re-arrives via the replayFrom frame replay (the
+          // same write_todos path as live).
           // Discard any half-streamed turn; history is the source of truth.
           builderRef.current = null;
           turnIdRef.current = null;

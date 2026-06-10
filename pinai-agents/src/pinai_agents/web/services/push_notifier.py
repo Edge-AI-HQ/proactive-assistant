@@ -378,6 +378,49 @@ async def notify_proactive_message(
         return 0
 
 
+def _build_turn_completed_payload(*, session_key: str) -> PushPayload:
+    # One banner per session — back-to-back long turns collapse to the
+    # latest. NOTE: the client does NOT currently suppress foreground
+    # banners (capacitor presentationOptions shows alerts in-app), so a
+    # user watching the stream finish also sees this — acceptable for the
+    # rare >120s turn; client-side suppression is the proper fix and would
+    # cover the proactive push too.
+    return PushPayload(
+        title="Pin AI",
+        body="Your long-running task just finished — the results are ready.",
+        deep_link="app://chat",
+        collapse_key=f"turn_done_{session_key}",
+    )
+
+
+async def notify_turn_completed(
+    pool,
+    *,
+    user_id: int,
+    session_key: str,
+) -> int:
+    """Dispatch the "long task finished" notification. The agent worker calls
+    this after finalizing a turn that ran past its long-turn threshold — by
+    then the user has almost certainly backgrounded the app. Same opt-in
+    exemption as notify_proactive_message (the user asked for this work);
+    never raises into finalize."""
+    try:
+        async with user_scoped_tx(pool, user_id) as conn:
+            targets = await DevicesRepository(user_id, conn).find_push_targets()
+        if not targets:
+            logger.info("push.skip user=%s reason=no_targets kind=turn_done", user_id)
+            return 0
+        return await _send_to_targets(
+            pool,
+            user_id=user_id,
+            targets=targets,
+            payload=_build_turn_completed_payload(session_key=session_key),
+        )
+    except Exception:
+        logger.exception("push.turn_done_dispatch_failed user=%s", user_id)
+        return 0
+
+
 def _build_reminder_payload(*, title: str, message: str, task_id: str) -> PushPayload:
     # 同一任务的重复提醒折叠成一条 banner;不同任务互不折叠。
     return PushPayload(

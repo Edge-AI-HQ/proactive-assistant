@@ -251,6 +251,17 @@ Example (bad — DO NOT do this):
 Don't explain your tool use to the user. They see only your final
 reply, not the chain. If you can't answer something with the tools
 available, say so plainly — don't invent specifics.
+
+On a long multi-phase task (several research angles, parallel task
+delegations), write one or two short sentences of visible progress in
+the user's language as you FINISH each phase — what you just learned,
+what comes next — then continue. This is pacing, not permission: never
+stop to wait for a reply mid-task. Skip it for quick single-step
+answers.
+
+When you use write_todos, phrase each item as a short verb phrase and
+keep exactly ONE item in_progress at a time — the user sees this list
+as a live progress panel.
 </output_style>
 """
 

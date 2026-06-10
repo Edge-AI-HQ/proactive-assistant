@@ -39,6 +39,7 @@ from ...agents.proactive import make_proactive_agent
 from ...auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
 from ...harness.compaction import compact_thread
 from ...harness.ctx import ClientHints, run_context
+from ...harness.group_title import make_group_title_fn
 from ...harness.session import (
     apply_message_updates,
     make_resume_input,
@@ -321,6 +322,12 @@ async def _stream(
         yield chat_done()
         return
 
+    # Language anchor for async work-group titles — the user's own words
+    # (thinking drifts to English; the title must not). Stays empty on pure
+    # regenerate / HITL resume turns: those degrade to the frontend's
+    # deterministic fallback label by design.
+    title_user_text = ""
+
     # ── regenerate / edit state surgery (optional) ──
     # `regenerate=True` covers two frontend flows:
     #
@@ -400,6 +407,10 @@ async def _stream(
                 is_edit,
             )
 
+        # Either way the adapter sent the (current or edited) last-user text in
+        # req.message — a valid language anchor for this rerun's group titles.
+        title_user_text = new_text
+
         # If edit, add the replacement HumanMessage; if pure regen, leave
         # input_messages empty so LangGraph reruns from the popped state.
         if is_edit:
@@ -415,6 +426,7 @@ async def _stream(
             yield chat_error("message(s) required when not regenerating")
             yield chat_done()
             return
+        title_user_text = user_texts[-1]
         # Only card threads need the (async) first-turn probe; main threads
         # inject per-turn so we skip the checkpoint read for them.
         is_first_turn = await _is_first_turn(agent, req.session_key) if is_card_thread else False
@@ -479,12 +491,21 @@ async def _stream(
             else {"messages": input_messages}
         )
         events = stream_events(agent, stream_input, config)
+        title_fn = (
+            make_group_title_fn(virtual_key=virtual_key, user_text=title_user_text)
+            if title_user_text.strip()
+            else None
+        )
         try:
             # trace_id stamps every frame's traceId with this run's id — the
             # FE classifies proactive tick turns by it, and web's /history
             # locates the in-flight turn's frames in the Redis stream by it
             # (refresh replay).
-            async for chunk in langgraph_to_sse(events, trace_id=principal.run_id):
+            async for chunk in langgraph_to_sse(
+                events,
+                trace_id=principal.run_id,
+                group_title_fn=title_fn,
+            ):
                 yield chunk
             # Maintain the thread's working context once the turn finishes
             # (card threads are short-lived — skip). Best-effort: a failure

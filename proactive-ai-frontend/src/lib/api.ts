@@ -1336,6 +1336,15 @@ export interface ConversationHistoryToolCallPart {
   argsPreview?: string;
   pinCommand?: string;
   args?: unknown;
+  /** Subagent attribution: the `task` tool-call id this nested call belongs
+   *  to. Absent on the orchestrator's own calls — renderer falls back to the
+   *  flat stream. */
+  parentTaskId?: string;
+  agentName?: string;
+  /** Async LLM title backfilled onto a work group's first tool-call part. */
+  groupTitle?: string;
+  /** Structured sources from web-search tools (favicon+title rows). */
+  links?: { title: string; url: string }[];
 }
 
 export type ConversationHistoryPart =

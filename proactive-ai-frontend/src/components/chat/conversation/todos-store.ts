@@ -1,9 +1,13 @@
 /**
  * Module-level store for `write_todos` plans, keyed by chat sessionKey.
  *
- * The chat agent's `write_todos` tool emits a structured `args.todos` array
- * on `chat:tool:start`. We capture it here so ConversationView's TodoPanel can
- * subscribe without prop-drilling through the conversation runtime.
+ * A plan is TURN-SCOPED: it belongs to the run (traceId) that wrote it and
+ * ends with that turn. `chat:done` finalizes it — the panel shows a brief
+ * "done" beat when everything completed, then retires either way; the next
+ * turn's first write_todos replaces it. This kills the two long-running-task
+ * bugs: stale plans surviving into unrelated conversations, and (with the
+ * backend now suppressing subagent write_todos frames) parallel subagents
+ * flickering the panel.
  *
  * Module-level (not React context) because:
  *   - Writer (SSE adapter inside useConversationRuntime) and reader
@@ -16,9 +20,9 @@
  *     pattern for external stores, no extra deps (no Redux/Zustand, per
  *     project convention).
  *
- * Page refresh wipes the store — todos are not persisted client-side. v1
- * accepts this: the planned "refresh-resume partial results" PR will hydrate
- * todos alongside the rest of the in-flight stream state.
+ * Page refresh wipes the store — an in-flight turn's plan re-hydrates via
+ * the replayFrom frame replay (the same path as live frames); finished
+ * turns' plans are retired by definition and never re-hydrate.
  */
 import { useCallback, useSyncExternalStore } from "react";
 
@@ -27,17 +31,40 @@ export interface Todo {
   status: "pending" | "in_progress" | "completed";
 }
 
-const EMPTY_TODOS: readonly Todo[] = Object.freeze([]);
+export interface TodoPlan {
+  todos: readonly Todo[];
+  /** traceId (run id) of the turn that wrote this plan. */
+  turnId: string;
+  /** The owning turn finished (chat:done) — the panel retires the plan. */
+  done: boolean;
+}
 
-const todosBySession = new Map<string, readonly Todo[]>();
+const plansBySession = new Map<string, TodoPlan>();
 const subscribers = new Map<string, Set<() => void>>();
 
-export function setTodos(sessionKey: string, todos: Todo[]): void {
-  todosBySession.set(sessionKey, Object.freeze(todos.slice()));
+function notify(sessionKey: string): void {
   const subs = subscribers.get(sessionKey);
   if (subs) {
     for (const fn of subs) fn();
   }
+}
+
+export function setTodos(sessionKey: string, todos: Todo[], turnId: string): void {
+  plansBySession.set(sessionKey, {
+    todos: Object.freeze(todos.slice()),
+    turnId,
+    done: false,
+  });
+  notify(sessionKey);
+}
+
+/** Mark the turn's plan finished. No-op when a newer turn already owns the
+ *  panel (out-of-order done after a fast next send). */
+export function finalizePlanTurn(sessionKey: string, turnId: string): void {
+  const plan = plansBySession.get(sessionKey);
+  if (!plan || plan.done || (turnId && plan.turnId !== turnId)) return;
+  plansBySession.set(sessionKey, { ...plan, done: true });
+  notify(sessionKey);
 }
 
 function subscribe(sessionKey: string, listener: () => void): () => void {
@@ -55,11 +82,11 @@ function subscribe(sessionKey: string, listener: () => void): () => void {
   };
 }
 
-function getSnapshot(sessionKey: string): readonly Todo[] {
-  return todosBySession.get(sessionKey) ?? EMPTY_TODOS;
+function getSnapshot(sessionKey: string): TodoPlan | null {
+  return plansBySession.get(sessionKey) ?? null;
 }
 
-export function useTodos(sessionKey: string): readonly Todo[] {
+export function useTodoPlan(sessionKey: string): TodoPlan | null {
   const subscribeFn = useCallback(
     (listener: () => void) => subscribe(sessionKey, listener),
     [sessionKey],

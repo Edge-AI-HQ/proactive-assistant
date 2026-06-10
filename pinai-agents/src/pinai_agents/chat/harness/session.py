@@ -21,11 +21,30 @@ from __future__ import annotations
 
 from typing import Any
 
+from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
 
 def _thread_config(session_key: str) -> dict[str, Any]:
     return {"configurable": {"thread_id": session_key}}
+
+
+def command_tool_message(output: Any) -> ToolMessage | None:
+    """The ToolMessage embedded in a `Command` tool output, else None.
+
+    Tools that update graph state (task, write_todos) return a langgraph
+    `Command` whose user-facing payload is the ToolMessage inside
+    `update["messages"]` — for `task`, the subagent's final answer. Keeping
+    the Command unwrap here lets transport read tool results without
+    importing langgraph (facade 铁律, see module docstring).
+    """
+    if isinstance(output, Command) and isinstance(output.update, dict):
+        raw = output.update.get("messages")
+        if isinstance(raw, list):
+            msgs = [m for m in raw if isinstance(m, ToolMessage)]
+            if msgs:
+                return msgs[-1]
+    return None
 
 
 async def read_state_messages(agent: Any, session_key: str) -> list[Any]:

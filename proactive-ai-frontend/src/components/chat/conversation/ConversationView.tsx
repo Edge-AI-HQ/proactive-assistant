@@ -4,8 +4,10 @@
  * session key + props, not by component. Driven by `useConversationRuntime`:
  *   - heartbeats       → muted "system" entries (a proactive tick's input)
  *   - user messages    → right-aligned dark bubble
- *   - assistant turns  → reasoning (collapsible) + tool chips + markdown text
- *                        (ReasoningBlock / ChatToolGroup / MarkdownContent).
+ *   - assistant turns  → text segments as the narrative spine; the
+ *                        reasoning/tool/task runs between them as collapsible
+ *                        WorkGroup rails (work-group.ts / WorkGroup / TaskCard
+ *                        / MarkdownContent).
  *   - notify_user      → the agent's proactive outreach, rendered with its
  *                        own "Notify you" chrome (NotifyCard); always shown
  *                        (even in a debug-hidden heartbeat turn).
@@ -31,15 +33,14 @@ import { Virtuoso } from "react-virtuoso";
 import { AlertCircle, ArrowLeft, Check, ChevronDown, Copy, Loader2, Mic, Pencil, Radio, RotateCcw, Send, Sparkles, Square, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import bgGradient from "@/assets/bg-gradient.jpg";
 import { cn } from "@/lib/utils";
-import ChatToolGroup, {
-  type ChatToolGroupItem,
-} from "@/components/chat/conversation/ChatToolGroup";
 import MarkdownContent from "@/components/chat/conversation/MarkdownContent";
 import { buildAssistantMessageFeedbackBody } from "@/components/chat/conversation/feedback";
 // The shared animated orb — looping video with a buffering reveal so the
 // landing hero doesn't flash dark when the Ask PIN AI sheet opens.
 import AiSphere from "@/components/now/AiSphere";
-import ReasoningBlock, { ShimmerText } from "@/components/chat/conversation/ReasoningBlock";
+import { ShimmerText } from "@/components/chat/conversation/ReasoningBlock";
+import WorkGroup from "@/components/chat/conversation/WorkGroup";
+import { segmentAssistantParts } from "@/components/chat/conversation/work-group";
 import ProposeActionCard from "@/components/chat/conversation/ProposeActionCard";
 import { HitlApprovalCard, type HitlRequiresAction } from "@/components/chat/conversation/HitlApprovalCard";
 import TodoPanel from "@/components/chat/conversation/TodoPanel";
@@ -374,9 +375,10 @@ function NotifyCard({ text }: { text: string }) {
 }
 
 /**
- * Renders an assistant turn's ordered parts, grouping consecutive tool-call
- * parts into one ChatToolGroup — the same grouping invariant ConversationView's
- * AssistantContent relies on (enforced by LiveContentBuilder).
+ * Renders an assistant turn's ordered parts under the work-group model:
+ * text segments are the narrative spine; the reasoning/tool/task runs
+ * between them render as collapsible WorkGroup rails (segmentation lives
+ * in work-group.ts so the invariants stay unit-testable).
  */
 function AssistantEntry({
   entry,
@@ -402,73 +404,45 @@ function AssistantEntry({
   const { parts, running } = entry;
   // Heartbeat-triggered turn with Debug off → surface only notify_user.
   const debugHidden = !!entry.debug && !debugEnabled;
+  const visibleParts: ConversationContentPart[] = debugHidden
+    ? parts.filter((p) => p.type === "tool-call" && p.toolName === "notify_user")
+    : parts;
+  const segments = segmentAssistantParts(visibleParts);
   const blocks: ReactNode[] = [];
-  let toolBuffer: ChatToolGroupItem[] = [];
-  let groupKey = 0;
-
-  const flushTools = () => {
-    if (toolBuffer.length === 0) return;
-    blocks.push(<ChatToolGroup key={`group-${groupKey++}`} tools={toolBuffer} />);
-    toolBuffer = [];
-  };
-
-  for (let i = 0; i < parts.length; i++) {
-    const part: ConversationContentPart = parts[i];
-    const isLast = i === parts.length - 1;
-    // In a hidden debug turn, notify_user is the only thing that surfaces.
-    if (
-      debugHidden &&
-      !(part.type === "tool-call" && part.toolName === "notify_user")
-    ) {
-      continue;
+  segments.forEach((seg, idx) => {
+    if (seg.kind === "text") {
+      blocks.push(<MarkdownContent key={seg.key} text={seg.text} />);
+      return;
     }
-    if (part.type === "tool-call") {
-      if (part.toolName === "propose_action") {
-        // HITL pause panel — never grouped. Flush preceding tools first so it
-        // sits at the right ordinal. Reply chips / Continue route through the
-        // runtime's sendMessage (onReply); the agent picks it up next turn.
-        flushTools();
+    if (seg.kind === "special") {
+      if (seg.part.toolName === "propose_action") {
+        // HITL pause panel — never inside a work group. Reply chips /
+        // Continue route through the runtime's sendMessage (onReply).
         blocks.push(
           <ProposeActionCard
-            key={`pa-${part.toolCallId}`}
-            args={part.args}
+            key={seg.key}
+            args={seg.part.args}
             onReply={onReply}
             busy={busy}
           />,
         );
-      } else if (part.toolName === "notify_user") {
-        // The agent's proactive outreach — render with its own "Notify you"
-        // chrome (NotifyCard) so it reads as the AI reaching out, not a reply.
-        flushTools();
-        const msg = notifyUserText(part.args);
-        if (msg) {
-          blocks.push(<NotifyCard key={`notify-${part.toolCallId}`} text={msg} />);
-        }
-      } else {
-        toolBuffer.push({
-          toolCallId: part.toolCallId,
-          toolName: part.toolName,
-          args: part.args as ChatToolGroupItem["args"],
-          result: part.result,
-          isError: part.isError,
-        });
+        return;
       }
-    } else if (part.type === "reasoning") {
-      flushTools();
-      blocks.push(
-        <ReasoningBlock
-          key={`r-${i}`}
-          text={part.text}
-          shimmer={running}
-          appending={running && isLast}
-        />,
-      );
-    } else if (part.type === "text") {
-      flushTools();
-      blocks.push(<MarkdownContent key={`t-${i}`} text={part.text} />);
+      // notify_user — the agent's proactive outreach, with its own chrome.
+      const msg = notifyUserText(seg.part.args);
+      if (msg) blocks.push(<NotifyCard key={seg.key} text={msg} />);
+      return;
     }
-  }
-  flushTools();
+    // A work group streams while it's the turn's live tail; the moment text
+    // (or any later segment) lands after it, it settles and collapses.
+    blocks.push(
+      <WorkGroup
+        key={seg.key}
+        group={seg.group}
+        streaming={running && idx === segments.length - 1}
+      />,
+    );
+  });
 
   // First-token-pending: turn is running but nothing has streamed yet. A
   // hidden debug turn never shows the pill (it's a background heartbeat turn).

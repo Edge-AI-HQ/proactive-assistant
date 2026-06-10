@@ -1,31 +1,31 @@
 /**
  * Collapsible plan panel rendered above the chat composer.
  *
- * Reads from the module-level todos-store, keyed by sessionKey. When the
- * agent calls `write_todos`, useConversationRuntime's SSE handler writes
- * the full plan into the store; this panel subscribes via useSyncExternalStore
- * and re-renders. Read-only — users can't edit, only the agent can.
+ * Reads the TURN-SCOPED plan from todos-store (keyed by sessionKey). The
+ * agent's write_todos updates it during a turn; chat:done retires it:
+ * fully-completed plans linger briefly as a "Plan done" beat, unfinished
+ * ones (cancelled / errored turns) hide immediately — either way the panel
+ * never haunts the next conversation. The next turn's first write_todos
+ * starts a fresh plan.
  *
- * Three-state visibility:
- *   - dismissed: panel completely hidden (user clicked X). Next write_todos
- *     clears this state so a fresh plan resurfaces.
- *   - collapsed: only the header row ("Plan · X/Y done") is visible.
- *     Reached by the user clicking the chevron, or automatically when the
- *     composer takes focus (mobile keyboard up).
- *   - expanded: header + full todo list (max-h-[200px], scrollable).
- *
- * Body caps at max-h-[200px] with internal scroll so a long plan never
- * pushes the composer off-screen.
+ * Per-turn interaction state:
+ *   - dismissed (X): silences THIS turn's plan only; a new turn resurfaces.
+ *   - expanded: reset on a new turn's plan; later updates within the same
+ *     turn keep the user's choice (no more re-expanding on every update).
+ *     Composer focus still collapses it so the keyboard gets the height.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Circle, Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useTodos, type Todo } from "@/components/chat/conversation/todos-store";
+import { useTodoPlan, type Todo } from "@/components/chat/conversation/todos-store";
 
 interface TodoPanelProps {
   sessionKey: string;
   composerFocused: boolean;
 }
+
+/** How long a fully-completed plan stays visible after its turn ends. */
+const DONE_LINGER_MS = 2000;
 
 function statusIcon(status: Todo["status"]) {
   if (status === "completed") {
@@ -38,44 +38,78 @@ function statusIcon(status: Todo["status"]) {
 }
 
 export default function TodoPanel({ sessionKey, composerFocused }: TodoPanelProps) {
-  const todos = useTodos(sessionKey);
+  const plan = useTodoPlan(sessionKey);
   const [expanded, setExpanded] = useState(true);
-  const [dismissed, setDismissed] = useState(false);
+  const [dismissedTurnId, setDismissedTurnId] = useState<string | null>(null);
+  const [retired, setRetired] = useState(false);
+  const seenTurnRef = useRef<string | null>(null);
+  const lingerRef = useRef<number | null>(null);
 
-  // A new write_todos call (todos ref changed) clears the X-dismissed state
-  // and re-expands the panel — fresh agent activity always resurfaces. If
-  // the composer is focused at that moment we keep it collapsed so a typing
-  // user isn't interrupted; the header still shows the progress chip.
+  const turnId = plan?.turnId ?? null;
+  const completed = plan ? plan.todos.filter((t) => t.status === "completed").length : 0;
+  const allDone = plan ? completed === plan.todos.length && plan.todos.length > 0 : false;
+
+  // Focus mirrored into a ref: the turn-boundary effect reads it once
+  // without depending on it (live focus → collapse is the next effect's job).
+  const composerFocusedRef = useRef(composerFocused);
   useEffect(() => {
-    setDismissed(false);
-    setExpanded(!composerFocused);
-    // Intentionally NOT watching composerFocused here — that's handled by
-    // the second effect. We only want a write_todos to trigger this reset.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [todos]);
+    composerFocusedRef.current = composerFocused;
+  }, [composerFocused]);
+
+  // A NEW turn's plan resets the per-turn interaction state and resurfaces
+  // the panel; later write_todos updates within the same turn change nothing
+  // here (the user's collapse/dismiss choices stick).
+  useEffect(() => {
+    if (turnId === null || seenTurnRef.current === turnId) return;
+    seenTurnRef.current = turnId;
+    setRetired(false);
+    setExpanded(!composerFocusedRef.current);
+    setDismissedTurnId(null);
+  }, [turnId]);
 
   // Composer focus → collapse so the typing area gets the height. Blur
-  // alone does not auto-expand; we wait for the next write_todos.
+  // alone does not auto-expand; the next turn's plan does.
   useEffect(() => {
     if (composerFocused) setExpanded(false);
   }, [composerFocused]);
 
-  if (todos.length === 0 || dismissed) return null;
+  // Turn finished → retire the plan. Fully-done plans linger briefly so the
+  // user sees the ✓ beat; unfinished ones hide immediately.
+  useEffect(() => {
+    if (!plan?.done || retired) return;
+    if (!allDone) {
+      setRetired(true);
+      return;
+    }
+    if (lingerRef.current !== null) return;
+    lingerRef.current = window.setTimeout(() => {
+      lingerRef.current = null;
+      setRetired(true);
+    }, DONE_LINGER_MS);
+    return () => {
+      if (lingerRef.current !== null) {
+        window.clearTimeout(lingerRef.current);
+        lingerRef.current = null;
+      }
+    };
+  }, [plan?.done, allDone, retired]);
 
-  const completed = todos.filter((t) => t.status === "completed").length;
-  const allDone = completed === todos.length;
+  if (!plan || plan.todos.length === 0 || retired) return null;
+  if (dismissedTurnId !== null && dismissedTurnId === plan.turnId) return null;
 
   return (
     <div className="mx-2 mb-1 rounded-xl border border-foreground/10 bg-white/70 backdrop-blur-sm shadow-sm overflow-hidden">
       <div className="flex items-center gap-2 px-3 py-2">
-        <span className="text-[13px] font-medium text-foreground/80">Plan</span>
+        <span className="text-[13px] font-medium text-foreground/80">
+          {plan.done && allDone ? "Plan done" : "Plan"}
+        </span>
         <span
           className={cn(
             "text-[12px]",
             allDone ? "text-emerald-600" : "text-foreground/45",
           )}
         >
-          · {completed}/{todos.length} done
+          · {completed}/{plan.todos.length} done
         </span>
         <div className="ml-auto flex items-center gap-0.5">
           <button
@@ -95,7 +129,7 @@ export default function TodoPanel({ sessionKey, composerFocused }: TodoPanelProp
           </button>
           <button
             type="button"
-            onClick={() => setDismissed(true)}
+            onClick={() => setDismissedTurnId(plan.turnId)}
             aria-label="Close plan"
             className="p-1 rounded-md text-foreground/50 hover:text-foreground/80 hover:bg-foreground/10 transition-colors"
           >
@@ -106,7 +140,7 @@ export default function TodoPanel({ sessionKey, composerFocused }: TodoPanelProp
 
       {expanded && (
         <ul className="max-h-[200px] overflow-y-auto px-3 pb-2 pt-0.5 space-y-1.5">
-          {todos.map((todo, i) => (
+          {plan.todos.map((todo, i) => (
             <li
               key={`${i}-${todo.content}`}
               className="flex items-start gap-2 text-[13px] leading-snug"

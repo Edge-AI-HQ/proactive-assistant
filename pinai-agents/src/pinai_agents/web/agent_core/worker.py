@@ -34,6 +34,7 @@ from psycopg_pool import AsyncConnectionPool
 from ..db.repositories.chat_messages import ChatMessagesRepository, Role, Trigger
 from ..db.rls import service_tx, user_scoped_tx
 from ..services.chat_turn_recorder import ChatTurnRecorder
+from ..services.push_notifier import notify_turn_completed
 from .bus import AgentBus, notify_run_status
 from .client import ChatRunClient, ChatRunError
 from .framebus import Frame, FrameBus
@@ -52,6 +53,9 @@ logger = logging.getLogger(__name__)
 # worker in.
 _LEASE_TTL = 900
 _POLL_INTERVAL = 5  # interval-fallback scan cadence (correctness backstop)
+# Turns running past this get a completion push on finalize — short turns
+# finish while the user is still watching; long ones (deep research) don't.
+_LONG_TURN_NOTIFY_S = 120.0
 _REAPER_INTERVAL = 60
 _RUN_STALE_TTL = 1200  # a `running` run untouched this long → reaped (crash)
 _REFRESH_EVERY = 50  # frames between fencing lease refreshes during relay
@@ -324,6 +328,7 @@ class AgentRunWorker:
         # and _finalize_turn mirrors that on pai_chat_messages (pop + rewrite).
         # Only honored for a single message; a merged batch is a normal turn.
         regenerate = len(msgs) == 1 and bool((msgs[0].meta or {}).get("regenerate"))
+        run_started = time.monotonic()
 
         async with user_scoped_tx(self._pool, user_id) as conn:
             run_id = await RunRepository(user_id, conn).create(
@@ -377,6 +382,12 @@ class AgentRunWorker:
                 regenerate=regenerate,
                 input_rows=_input_rows(msgs),
             )
+            # A turn that ran this long has almost certainly outlived the
+            # user's attention — pull them back. Proactive has its own
+            # notify_user push; HITL resumes skip this (the user was just
+            # here approving). notify_turn_completed never raises.
+            if time.monotonic() - run_started >= _LONG_TURN_NOTIFY_S:
+                await notify_turn_completed(self._pool, user_id=user_id, session_key=session_id)
 
     async def _resume_run(
         self,
