@@ -76,6 +76,15 @@ class WebSettings(_BaseAppSettings):
     # Per-task lease window. Renewed by heartbeat; reaper resets stale.
     scheduler_lease_seconds: int = 60
 
+    # ── 用户自建定时任务护栏(reminder.card / generator.scheduled)──
+    # reminder 到点零 LLM,可以高频;generate 每次跑一轮 LLM(lease 600s),
+    # 间隔太密会重叠且烧钱。gap 校验对 interval 和 cron 统一生效
+    # (cron 按相邻两次触发的间隔算,防 "* * * * *" 绕过)。
+    scheduled_reminder_min_gap_seconds: int = 60
+    scheduled_generate_min_gap_seconds: int = 1800
+    scheduled_tasks_max_active_per_user: int = 20
+    scheduled_once_max_days_ahead: int = 370
+
     # ── Supabase Auth ──
     # Token verification calls `${SUPABASE_URL}/auth/v1/user` with the
     # publishable key as `apikey` header. Vite requires the `VITE_`
