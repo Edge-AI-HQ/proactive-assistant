@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { PopupBlockedError, openOAuthAndAwaitClose } from "./oauth-popup";
+import {
+  PopupBlockedError,
+  closeOAuthSurface,
+  openOAuthAndAwaitClose,
+} from "./oauth-popup";
 
 // `isNative` is read at module init; for web-path tests it's false in
 // the vitest jsdom env, which is what we want.
@@ -41,5 +45,26 @@ describe("openOAuthAndAwaitClose (web)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("closeOAuthSurface (web)", () => {
+  test("closes the popup opened by openOAuthAndAwaitClose", async () => {
+    // After the backend confirms ACTIVE, the caller closes the surface
+    // itself — Composio's hosted success page has no app deep-link to
+    // dismiss it. On web that means closing the popup window we opened.
+    const close = vi.fn();
+    const fakeWin = { closed: false, close } as unknown as Window;
+    vi.spyOn(window, "open").mockReturnValue(fakeWin);
+
+    // Open (don't await — the close-promise only settles on dismiss).
+    void openOAuthAndAwaitClose("https://example.com/oauth");
+    await closeOAuthSurface();
+
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  test("is a no-op when no popup is open", async () => {
+    await expect(closeOAuthSurface()).resolves.toBeUndefined();
   });
 });
