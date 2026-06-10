@@ -42,16 +42,21 @@ class ChatMessagesRepository(UserScopedRepository):
         role: Role,
         parts: list[dict[str, Any]],
         trigger: Trigger = "user",
+        client_msg_id: str | None = None,
     ) -> int:
-        """Append one turn. Returns the new row id (== conversation order)."""
+        """Append one turn. Returns the new row id (== conversation order).
+        `client_msg_id` is the producer's idempotency key (the FE's client
+        message id for a user turn) — stamped so the FE reconciles its
+        optimistic bubble by identity; None for assistant/heartbeat rows."""
         async with self.conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 """
-                INSERT INTO pai_chat_messages (user_id, thread_id, role, parts, trigger)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO pai_chat_messages
+                  (user_id, thread_id, role, parts, trigger, client_msg_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
-                (self.user_id, thread_id, role, Jsonb(parts), trigger),
+                (self.user_id, thread_id, role, Jsonb(parts), trigger, client_msg_id),
             )
             row = await cur.fetchone()
             if row is None:  # INSERT ... RETURNING id always yields a row
@@ -101,7 +106,8 @@ class ChatMessagesRepository(UserScopedRepository):
     ) -> list[dict[str, Any]]:
         """Newest-first page of turns. `before_id` is an exclusive cursor for
         "load older" (pass the smallest id from the previous page). Returns
-        rows with id / role / parts / trigger / created_at, newest first.
+        rows with id / role / parts / trigger / created_at / client_msg_id,
+        newest first.
 
         `include_debug=False` drops proactive debug-only rows so the default
         (non-Debug) view matches the live transcript: heartbeat input rows and
@@ -129,7 +135,7 @@ class ChatMessagesRepository(UserScopedRepository):
             if before_id is None:
                 await cur.execute(
                     f"""
-                    SELECT id, role, parts, trigger, created_at
+                    SELECT id, role, parts, trigger, created_at, client_msg_id
                     FROM pai_chat_messages
                     WHERE user_id = %s AND thread_id = %s{debug_clause}
                     ORDER BY id DESC
@@ -140,7 +146,7 @@ class ChatMessagesRepository(UserScopedRepository):
             else:
                 await cur.execute(
                     f"""
-                    SELECT id, role, parts, trigger, created_at
+                    SELECT id, role, parts, trigger, created_at, client_msg_id
                     FROM pai_chat_messages
                     WHERE user_id = %s AND thread_id = %s AND id < %s{debug_clause}
                     ORDER BY id DESC

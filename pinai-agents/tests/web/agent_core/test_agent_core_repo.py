@@ -82,9 +82,11 @@ async def test_mailbox_merge_and_idempotency(pool, user_ids):
             await m.enqueue(session_id=sid, source="user", content="c", idempotency_key="k1")
             is None
         )
-        # claim_pending MERGES all pending, FIFO
+        # claim_pending MERGES all pending, FIFO; each message carries its
+        # idempotency_key (the FE's client message id) for history stamping.
         msgs = await m.claim_pending(session_id=sid)
         assert [x.content for x in msgs] == ["a", "b", "c"]
+        assert [x.idempotency_key for x in msgs] == [None, None, "k1"]
         # after consume, nothing pending
         await m.mark_consumed(message_ids=[x.id for x in msgs], run_id=str(uuid.uuid4()))
         assert await m.claim_pending(session_id=sid) == []

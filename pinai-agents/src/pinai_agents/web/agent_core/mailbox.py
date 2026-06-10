@@ -32,6 +32,12 @@ class Message:
     content: str | None
     meta: dict[str, Any] | None
     enqueued_at: datetime
+    # The producer's dedupe key, doubling as the message's identity across
+    # views: the FE sends its client message id here, and it flows through to
+    # pai_chat_messages.client_msg_id + /history `active.userEntries` so the
+    # optimistic bubble reconciles by id, not text. Internal producers use
+    # their own keys (card-bootstrap-<id>); None when the producer sent none.
+    idempotency_key: str | None = None
 
 
 class MailboxRepository(UserScopedRepository):
@@ -78,7 +84,8 @@ class MailboxRepository(UserScopedRepository):
         async with self._conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 """
-                SELECT id, session_id, role, source, content, meta, enqueued_at
+                SELECT id, session_id, role, source, content, meta, enqueued_at,
+                       idempotency_key
                 FROM pai_agent_messages
                 WHERE session_id = %s AND user_id = %s AND consumed_at IS NULL
                 ORDER BY id ASC
@@ -95,6 +102,7 @@ class MailboxRepository(UserScopedRepository):
                 content=r.get("content"),
                 meta=r.get("meta"),
                 enqueued_at=r["enqueued_at"],
+                idempotency_key=r.get("idempotency_key"),
             )
             for r in rows
         ]

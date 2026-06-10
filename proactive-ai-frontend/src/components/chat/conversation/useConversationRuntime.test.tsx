@@ -35,6 +35,7 @@ import {
   partsHaveNotifyUser,
   useConversationRuntime,
   type ConversationAssistantEntry,
+  type ConversationUserEntry,
 } from "@/components/chat/conversation/useConversationRuntime";
 
 const fetchHistoryMock = conversationHistory as unknown as ReturnType<
@@ -270,11 +271,14 @@ describe("useConversationRuntime.regenerateLast", () => {
     // Stale assistant turn dropped locally; the user turn stays put.
     expect(result.current.transcript.map((e) => e.id)).toEqual(["u-1"]);
     // Backend re-run with the regenerate flag + the latest user text (it diffs
-    // `message`, not `messages`, then pops the stale AIMessage).
+    // `message`, not `messages`, then pops the stale AIMessage). clientMsgId
+    // rides along so a retried-after-timeout regenerate can't double-enqueue.
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(sendMock).toHaveBeenCalledWith("card-thread-z", "summarize this", {
-      regenerate: true,
-    });
+    expect(sendMock).toHaveBeenCalledWith(
+      "card-thread-z",
+      "summarize this",
+      expect.objectContaining({ regenerate: true, clientMsgId: expect.any(String) }),
+    );
   });
 
   test("no-ops when there is no user turn to regenerate", async () => {
@@ -404,5 +408,322 @@ describe("useConversationRuntime Debug toggle", () => {
         expect.objectContaining({ includeDebug: true }),
       ),
     );
+  });
+});
+
+// ─── In-flight user bubble merge ──────────────────────────────────────
+
+
+describe("useConversationRuntime in-flight user bubble merge", () => {
+  beforeEach(() => {
+    fetchHistoryMock.mockReset();
+    streamMock.mockReset();
+    streamMock.mockImplementation(() => emptyStream());
+    sendMock.mockReset();
+    sendMock.mockResolvedValue(undefined);
+  });
+
+  const userEntries = (entries: { kind: string }[]) =>
+    entries.filter((e): e is ConversationUserEntry => e.kind === "user");
+
+  test("a history refetch mid-turn does not duplicate the just-sent bubble", async () => {
+    // Regression: until the turn finalizes into pai_chat_messages, the sent
+    // message exists BOTH as the local optimistic bubble and as
+    // `page.active.userTexts` (the unconsumed mailbox row). A refetch in that
+    // window (resync / debug toggle / reconnect before the first frame) used
+    // to render both copies.
+    fetchHistoryMock.mockResolvedValueOnce(page([]));
+    const { result, rerender } = renderHook(
+      ({ debug }) =>
+        useConversationRuntime({ session: "main-1", debugEnabled: debug }),
+      { initialProps: { debug: false } },
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    await act(async () => {
+      await result.current.sendMessage("你是kimi 2.6吗");
+    });
+    expect(userEntries(result.current.transcript)).toHaveLength(1);
+
+    fetchHistoryMock.mockResolvedValueOnce(
+      page(
+        [{ id: "a-0", role: "assistant", parts: [{ type: "text", text: "earlier reply" }] }],
+        { active: { userTexts: ["你是kimi 2.6吗"], replayFrom: null } },
+      ),
+    );
+    rerender({ debug: true });
+    // `a-0` landing proves the refetched rebuild has been applied.
+    await waitFor(() =>
+      expect(result.current.transcript.some((e) => e.id === "a-0")).toBe(true),
+    );
+
+    const users = userEntries(result.current.transcript);
+    expect(users).toHaveLength(1);
+    expect(users[0].text).toBe("你是kimi 2.6吗");
+  });
+
+  test("restores the in-flight bubble from userTexts when no local bubble survives (reload)", async () => {
+    fetchHistoryMock.mockResolvedValueOnce(
+      page(
+        [{ id: "a-0", role: "assistant", parts: [{ type: "text", text: "earlier reply" }] }],
+        { active: { userTexts: ["resumed question"], replayFrom: null } },
+      ),
+    );
+    const { result } = renderHook(() =>
+      useConversationRuntime({ session: "main-2" }),
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    const users = userEntries(result.current.transcript);
+    expect(users).toHaveLength(1);
+    expect(users[0].text).toBe("resumed question");
+    // The restored bubble renders after the persisted history rows.
+    expect(result.current.transcript.map((e) => e.kind)).toEqual([
+      "assistant", "user",
+    ]);
+  });
+
+  test("repeated identical sends stay distinct across a refetch", async () => {
+    fetchHistoryMock.mockResolvedValueOnce(page([]));
+    const { result, rerender } = renderHook(
+      ({ debug }) =>
+        useConversationRuntime({ session: "main-3", debugEnabled: debug }),
+      { initialProps: { debug: false } },
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    await act(async () => {
+      await result.current.sendMessage("again");
+    });
+    await act(async () => {
+      await result.current.sendMessage("again");
+    });
+    expect(userEntries(result.current.transcript)).toHaveLength(2);
+
+    fetchHistoryMock.mockResolvedValueOnce(
+      page(
+        [{ id: "a-0", role: "assistant", parts: [{ type: "text", text: "earlier" }] }],
+        { active: { userTexts: ["again", "again"], replayFrom: null } },
+      ),
+    );
+    rerender({ debug: true });
+    await waitFor(() =>
+      expect(result.current.transcript.some((e) => e.id === "a-0")).toBe(true),
+    );
+    // Each pending text claims one local bubble — exactly two, not one, not four.
+    expect(userEntries(result.current.transcript)).toHaveLength(2);
+  });
+
+  test("sends carry a clientMsgId and a retry reuses the same one (idempotent resend)", async () => {
+    fetchHistoryMock.mockResolvedValueOnce(page([]));
+    const { result } = renderHook(() =>
+      useConversationRuntime({ session: "main-5" }),
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    sendMock.mockRejectedValueOnce(new Error("timeout"));
+    await act(async () => {
+      await result.current.sendMessage("hello");
+    });
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    const firstOpts = sendMock.mock.calls[0][2] as { clientMsgId?: string };
+    expect(firstOpts.clientMsgId).toBeTruthy();
+
+    const bubble = userEntries(result.current.transcript)[0];
+    expect(bubble.failed).toBe(true);
+    expect(bubble.clientId).toBe(firstOpts.clientMsgId);
+
+    // Retry rides the entry id — which IS the client message id — so the
+    // backend's idempotent enqueue dedupes a timed-out-but-landed first POST.
+    await act(async () => {
+      await result.current.retryMessage(bubble.id, bubble.text);
+    });
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    const retryOpts = sendMock.mock.calls[1][2] as { clientMsgId?: string };
+    expect(retryOpts.clientMsgId).toBe(firstOpts.clientMsgId);
+  });
+
+  test("reconciles by clientId when the backend reports userEntries", async () => {
+    fetchHistoryMock.mockResolvedValueOnce(page([]));
+    const { result, rerender } = renderHook(
+      ({ debug }) =>
+        useConversationRuntime({ session: "main-6", debugEnabled: debug }),
+      { initialProps: { debug: false } },
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    await act(async () => {
+      await result.current.sendMessage("ping");
+    });
+    const sent = userEntries(result.current.transcript)[0];
+    expect(sent.clientId).toBeTruthy();
+
+    fetchHistoryMock.mockResolvedValueOnce(
+      page(
+        [{ id: "a-0", role: "assistant", parts: [{ type: "text", text: "earlier" }] }],
+        {
+          active: {
+            userTexts: ["ping"],
+            userEntries: [{ text: "ping", clientId: sent.clientId! }],
+            replayFrom: null,
+          },
+        },
+      ),
+    );
+    rerender({ debug: true });
+    await waitFor(() =>
+      expect(result.current.transcript.some((e) => e.id === "a-0")).toBe(true),
+    );
+    expect(userEntries(result.current.transcript)).toHaveLength(1);
+  });
+
+  test("same text, different message: a history row with another clientId does not swallow the new bubble", async () => {
+    // The text heuristic's blind spot: the user said "继续" last turn (already
+    // persisted) and says "继续" again now. Identity reconciliation must keep
+    // the new optimistic bubble while a text-keyed carry would drop it.
+    fetchHistoryMock.mockResolvedValueOnce(page([]));
+    const { result, rerender } = renderHook(
+      ({ debug }) =>
+        useConversationRuntime({ session: "main-7", debugEnabled: debug }),
+      { initialProps: { debug: false } },
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    await act(async () => {
+      await result.current.sendMessage("继续");
+    });
+    const sent = userEntries(result.current.transcript)[0];
+
+    fetchHistoryMock.mockResolvedValueOnce(
+      page(
+        [
+          {
+            id: "u-old",
+            role: "user",
+            parts: [{ type: "text", text: "继续" }],
+            clientMsgId: "earlier-uuid",
+          },
+          { id: "a-old", role: "assistant", parts: [{ type: "text", text: "done" }] },
+        ],
+        {
+          active: {
+            userTexts: ["继续"],
+            userEntries: [{ text: "继续", clientId: sent.clientId! }],
+            replayFrom: null,
+          },
+        },
+      ),
+    );
+    rerender({ debug: true });
+    await waitFor(() =>
+      expect(result.current.transcript.some((e) => e.id === "u-old")).toBe(true),
+    );
+    // Two bubbles: last turn's persisted one + this turn's in-flight one.
+    const users = userEntries(result.current.transcript);
+    expect(users).toHaveLength(2);
+    expect(users.map((u) => u.clientId)).toEqual(["earlier-uuid", sent.clientId]);
+  });
+
+  test("an id-bearing pending entry never text-claims a different message's bubble (two tabs, same text)", async () => {
+    // Tab A's bubble (uuid-1, POST in flight) and tab B's pending send
+    // (uuid-2, same text) are DIFFERENT messages. Identity reconciliation
+    // must restore uuid-2 as its own bubble, not swallow it into uuid-1 via
+    // the text-claim fallback (which is reserved for id-less entries from
+    // older backends).
+    fetchHistoryMock.mockResolvedValueOnce(page([]));
+    const { result, rerender } = renderHook(
+      ({ debug }) =>
+        useConversationRuntime({ session: "main-9", debugEnabled: debug }),
+      { initialProps: { debug: false } },
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    await act(async () => {
+      await result.current.sendMessage("hello");
+    });
+    const local = userEntries(result.current.transcript)[0];
+
+    fetchHistoryMock.mockResolvedValueOnce(
+      page([], {
+        active: {
+          userTexts: ["hello"],
+          userEntries: [{ text: "hello", clientId: "other-tab-uuid" }],
+          replayFrom: null,
+        },
+      }),
+    );
+    rerender({ debug: true });
+    await waitFor(() =>
+      expect(userEntries(result.current.transcript)).toHaveLength(2),
+    );
+    const ids = userEntries(result.current.transcript).map((e) => e.clientId);
+    expect(ids).toContain(local.clientId);
+    expect(ids).toContain("other-tab-uuid");
+  });
+
+  test("clears a stale failed flag when the mailbox proves the send landed", async () => {
+    fetchHistoryMock.mockResolvedValueOnce(page([]));
+    const { result, rerender } = renderHook(
+      ({ debug }) =>
+        useConversationRuntime({ session: "main-8", debugEnabled: debug }),
+      { initialProps: { debug: false } },
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    // POST times out client-side but actually landed server-side.
+    sendMock.mockRejectedValueOnce(new Error("timeout"));
+    await act(async () => {
+      await result.current.sendMessage("hello");
+    });
+    const bubble = userEntries(result.current.transcript)[0];
+    expect(bubble.failed).toBe(true);
+
+    fetchHistoryMock.mockResolvedValueOnce(
+      page([], {
+        active: {
+          userTexts: ["hello"],
+          userEntries: [{ text: "hello", clientId: bubble.clientId! }],
+          replayFrom: null,
+        },
+      }),
+    );
+    rerender({ debug: true });
+    await waitFor(() => {
+      const users = userEntries(result.current.transcript);
+      expect(users).toHaveLength(1);
+      expect(users[0].failed).toBe(false);
+    });
+  });
+
+  test("a failed bubble does not absorb a pending text (failed sends never reached the mailbox)", async () => {
+    fetchHistoryMock.mockResolvedValueOnce(page([]));
+    const { result, rerender } = renderHook(
+      ({ debug }) =>
+        useConversationRuntime({ session: "main-4", debugEnabled: debug }),
+      { initialProps: { debug: false } },
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    sendMock.mockRejectedValueOnce(new Error("boom"));
+    await act(async () => {
+      await result.current.sendMessage("hello");
+    });
+    const afterFail = userEntries(result.current.transcript);
+    expect(afterFail).toHaveLength(1);
+    expect(afterFail[0].failed).toBe(true);
+
+    // The server reports an EARLIER send of the same text still in flight
+    // (e.g. sent before a reload). The failed bubble must not claim it —
+    // both the retryable bubble and the pending one render.
+    fetchHistoryMock.mockResolvedValueOnce(
+      page([], { active: { userTexts: ["hello"], replayFrom: null } }),
+    );
+    rerender({ debug: true });
+    await waitFor(() =>
+      expect(userEntries(result.current.transcript)).toHaveLength(2),
+    );
+    const users = userEntries(result.current.transcript);
+    expect(users.some((e) => e.failed)).toBe(true);
+    expect(users.some((e) => !e.failed)).toBe(true);
   });
 });

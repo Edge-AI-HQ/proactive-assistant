@@ -11,7 +11,11 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-from pinai_agents.web.routes.ui.conversation import _AGENT_KIND_BY_THREAD, _classify
+from pinai_agents.web.routes.ui.conversation import (
+    _AGENT_KIND_BY_THREAD,
+    _classify,
+    _row_to_message,
+)
 
 
 def test_classify_card_thread() -> None:
@@ -67,3 +71,14 @@ def test_agent_kind_mapping_covers_all_conversational_kinds() -> None:
         "card": "card_execution",
         "proactive": "proactive",
     }
+
+
+def test_row_to_message_echoes_client_msg_id() -> None:
+    # The send's clientMsgId (stamped on the row via the mailbox) rides back as
+    # `clientMsgId` so the FE reconciles its optimistic bubble by identity;
+    # NULL (assistant rows, pre-089 rows, id-less sends) omits the field.
+    parts = [{"type": "text", "text": "hi"}]
+    with_id = _row_to_message({"id": 7, "role": "user", "parts": parts, "client_msg_id": "u-1"})
+    assert with_id["clientMsgId"] == "u-1"
+    without = _row_to_message({"id": 8, "role": "assistant", "parts": parts, "client_msg_id": None})
+    assert "clientMsgId" not in without

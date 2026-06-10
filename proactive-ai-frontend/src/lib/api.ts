@@ -1353,6 +1353,11 @@ export interface ConversationHistoryMessage {
   /** Assistant turns only: how the turn was triggered. "tick" → heartbeat-driven
    *  (debug-only); "user" / undefined → user-driven (always shown). */
   trigger?: "tick" | "user";
+  /** User turns only: the client message id the send carried (clientMsgId on
+   *  POST /send), echoed back so the optimistic bubble reconciles by identity
+   *  instead of text. Absent on assistant rows, pre-089 rows, and sends that
+   *  didn't supply one. */
+  clientMsgId?: string;
 }
 
 /** Whether the proactive heartbeat is on. Stored in
@@ -1423,12 +1428,19 @@ export async function conversationSend(
     /** Re-run the latest user turn: the backend pops the stale assistant
      *  reply from state and regenerates (diffs `message`, not `messages`). */
     regenerate?: boolean;
+    /** Client-generated message id (crypto.randomUUID). The backend uses it
+     *  as the mailbox idempotency key (a retried POST can't enqueue twice)
+     *  and echoes it on /history rows + `active.userEntries` so the
+     *  optimistic bubble reconciles by identity. Reuse the SAME id when
+     *  retrying a failed send. */
+    clientMsgId?: string;
     signal?: AbortSignal;
   }
 ): Promise<void> {
   const body: Record<string, unknown> = { session_key: sessionKey, message };
   if (opts?.cardContext) body.cardContext = opts.cardContext;
   if (opts?.regenerate) body.regenerate = true;
+  if (opts?.clientMsgId) body.clientMsgId = opts.clientMsgId;
   const res = await proxyPost("/conversation/send", body, opts?.signal);
   if (!res.ok) throw new Error(`/conversation/send failed: ${res.status}`);
 }
@@ -1518,8 +1530,19 @@ export interface ConversationAwaiting {
  *  cursor to open /stream from so the agent's frames replay and rebuild the
  *  assistant bubble; null when the turn hasn't produced frames yet (just
  *  sent — the live tail carries them). */
+/** One in-flight input as the server sees it (an unconsumed mailbox row).
+ *  `clientId` is the send's clientMsgId (null for sends that carried none),
+ *  letting the FE reconcile against its optimistic bubble by identity. */
+export interface ConversationActiveEntry {
+  text: string;
+  clientId: string | null;
+}
+
 export interface ConversationActive {
   userTexts: string[];
+  /** Same list as `userTexts` with each input's client message id. Optional
+   *  while older backends may omit it — fall back to `userTexts`. */
+  userEntries?: ConversationActiveEntry[];
   replayFrom: string | null;
 }
 

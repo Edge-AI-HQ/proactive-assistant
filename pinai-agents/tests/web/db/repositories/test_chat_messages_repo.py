@@ -37,6 +37,26 @@ async def test_append_returns_increasing_ids_and_get_page_newest_first(pool, use
 
 
 @pytest.mark.asyncio
+async def test_append_turn_stamps_client_msg_id(pool, user_ids):
+    # client_msg_id (the send's clientMsgId, ridden through the mailbox as
+    # idempotency_key) is stamped on the user row and read back by get_page so
+    # the FE reconciles its optimistic bubble by identity. Assistant rows and
+    # id-less sends stay NULL.
+    user_a, _ = user_ids
+    tid = f"main-{user_a}-cmid"
+    async with user_scoped_tx(pool, user_a) as conn:
+        repo = ChatMessagesRepository(user_a, conn)
+        await repo.append_turn(
+            thread_id=tid, role="user", parts=_text("hi"), client_msg_id="uuid-1"
+        )
+        await repo.append_turn(thread_id=tid, role="assistant", parts=_text("hello"))
+        await repo.append_turn(thread_id=tid, role="user", parts=_text("legacy send"))
+    async with user_scoped_tx(pool, user_a) as conn:
+        rows = await ChatMessagesRepository(user_a, conn).get_page(thread_id=tid)
+    assert [r["client_msg_id"] for r in rows] == [None, None, "uuid-1"]  # newest first
+
+
+@pytest.mark.asyncio
 async def test_latest_id_none_then_value(pool, user_ids):
     user_a, _ = user_ids
     tid = f"main-{user_a}-m2"
