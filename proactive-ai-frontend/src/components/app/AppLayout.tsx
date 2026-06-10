@@ -21,7 +21,7 @@ import AiSphere from "@/components/now/AiSphere";
 import ConnectPanel from "@/components/connect/ConnectPanel";
 import { type TimelineEntry as AmbientTimelineEntry } from "@/components/ambient/AmbientView";
 import { type ChatCard, brandSvg, detectToolIcon } from "@/components/chat/ChatDetailView";
-import CardChat from "@/components/chat/CardChat";
+import CardChatOverlay from "@/components/chat/CardChatOverlay";
 import { deleteAccount, DeleteAccountError } from "@/lib/api";
 import DebugPanel from "@/components/common/DebugPanel";
 import AgentRunIndicator from "@/components/common/AgentRunIndicator";
@@ -529,9 +529,8 @@ export default function AppLayout() {
       return;
     }
     recordChatEntryView();
-    // Real /api/cards path: drive our existing chat runtime (POST /feedback
-    // → MainChatView SSE). cardActions.confirm calls onOpenChat which sets
-    // chatTarget; the render branches on chatTarget to mount CardChat.
+    // Real /api/cards path: cardActions.confirm calls onOpenChat which sets
+    // chatTarget; CardChatOverlay mounts the card-chat sheet from it.
     if (card.originalId) {
       const real = cardsState.cards.find((c) => c.card.id === card.originalId)?.card;
       if (real) {
@@ -557,8 +556,8 @@ export default function AppLayout() {
   }, [activeView, cardActions, cardsState.cards, recordChatEntryView]);
 
   /** Ambient Action handoff (B+ MVP, web-only).
-   *  Wraps an AmbientTimelineEntry into a virtual IntentCard so the existing
-   *  CardChat → MainChatView SSE runtime can carry the event into the cloud
+   *  Wraps an AmbientTimelineEntry into a virtual IntentCard so the card-chat
+   *  conversation runtime can carry the event into the cloud
    *  chat agent. sessionKey resolves to `card-thread-ambient-<entry.id>`,
    *  which keeps the backend on its existing card-mode prompt path without
    *  any server change. */
@@ -672,15 +671,15 @@ export default function AppLayout() {
     }
   };
 
-  // Card execution (chatTarget / legacy activeChat) and the proactive agent
-  // view both mount the full-screen ConversationView *inside* this layout's
-  // content area. Unlike main chat — a portal overlay (MainChatOverlay) that
-  // covers the whole layout — these surfaces don't hide the layout's own
-  // floating chrome. ConversationView already carries its own aurora
-  // background, header and back button, so the top-right menu bar and the
-  // bottom ASK PIN AI entry must step aside or they overlap that surface.
-  const inFullscreenChat =
-    chatTarget != null || activeChat != null || activeView === "proactive";
+  // Legacy mock card chat (activeChat) and the proactive agent view both
+  // mount the full-screen ConversationView *inside* this layout's content
+  // area. Unlike the two real chats — portal sheets (MainChatOverlay /
+  // CardChatOverlay) that cover the whole layout — these surfaces don't hide
+  // the layout's own floating chrome. ConversationView already carries its
+  // own aurora background, header and back button, so the top-right menu bar
+  // and the bottom ASK PIN AI entry must step aside or they overlap that
+  // surface.
+  const inFullscreenChat = activeChat != null || activeView === "proactive";
 
   return (
     <CardStateProvider value={{ cardsState, cardActions }}>
@@ -759,10 +758,8 @@ export default function AppLayout() {
 
         {/* Main content area */}
         <ViewRouter
-          chatTarget={chatTarget}
           activeChat={activeChat}
           activeView={activeView}
-          cardActions={cardActions}
           composio={composio}
           onCardChatBack={() => closeCardChat()}
           onProactiveBack={() => navigateTo("now")}
@@ -853,6 +850,15 @@ export default function AppLayout() {
 
       {/* Main chat overlay. Opened by the bottom-center ASK PIN AI button. */}
       <MainChatOverlay open={mainChatOpen} onBack={() => closeMainChat()} />
+
+      {/* Card chat overlay — same sheet idiom as main chat (left-edge swipe
+          sinks the panel down, revealing the live view beneath). */}
+      <CardChatOverlay
+        target={chatTarget}
+        onBack={() => closeCardChat()}
+        onDismissBackend={(card) => cardActions.dismiss(card)}
+        onDoneBackend={(card) => cardActions.complete(card)}
+      />
 
       {/* Hamburger side menu overlay */}
       <SideMenu
