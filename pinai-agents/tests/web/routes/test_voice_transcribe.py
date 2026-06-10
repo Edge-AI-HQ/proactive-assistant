@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import httpx
 import pytest
 
@@ -22,6 +24,38 @@ def _user(user_id: int = 123) -> User:
         litellm_virtual_key=None,
         browserbase_context_id=None,
     )
+
+
+@pytest.mark.asyncio
+async def test_voice_stream_dev_auth_does_not_require_db_pool(monkeypatch):
+    monkeypatch.setattr(
+        voice_routes,
+        "get_web_settings",
+        lambda: SimpleNamespace(deploy_env="dev"),
+    )
+    websocket = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+
+    user = await voice_routes._current_user_for_voice_websocket(
+        websocket,
+        token=None,
+        dev_auth="pinai-local-dev-user",
+    )
+
+    assert user.id == 0
+    assert user.supabase_user_id == "00000000-0000-0000-0000-00000000d0d0"
+
+
+@pytest.mark.asyncio
+async def test_voice_stream_auth_is_read_from_first_websocket_frame():
+    async def receive_json():
+        return {"type": "auth", "token": " token-a ", "dev_auth": " dev-a "}
+
+    websocket = SimpleNamespace(receive_json=receive_json)
+
+    auth = await voice_routes._read_voice_stream_auth(websocket)
+
+    assert auth.token == "token-a"
+    assert auth.dev_auth == "dev-a"
 
 
 async def _client() -> httpx.AsyncClient:

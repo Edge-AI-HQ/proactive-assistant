@@ -164,6 +164,15 @@ class WebSettings(_BaseAppSettings):
     litellm_base_url: str = "http://litellm:4000/v1"
     litellm_master_key: str | None = None
 
+    # ── Voice input streaming ASR (ByteDance / Volcengine) ──
+    # Main Chat uses this for live partial transcription. Keep browser-native
+    # SpeechRecognition out of the default path so quality regressions surface
+    # during testing instead of being hidden by a weaker fallback.
+    bytedance_asr_app_key: str | None = None
+    bytedance_asr_access_key: str | None = None
+    bytedance_asr_endpoint: str = "wss://voice.ap-southeast-1.bytepluses.com/api/v3/sauc/bigmodel"
+    bytedance_asr_resource_id: str = "volc.bigasr.sauc.duration"
+
     # Per-user virtual key provisioning. `default_budget_usd` is the cap
     # we burn through a budget cycle; `default_budget_duration` is the
     # rolling reset window LiteLLM enforces (e.g. "30d", "7d"); allowed
