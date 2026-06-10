@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { ChevronRight, Loader2 } from "lucide-react";
 import AmbientSourceControlsPanel from "@/components/ambient/AmbientSourceControlsPanel";
+import VoiceIdentitySettings from "@/components/account/VoiceIdentitySettings";
 import AmbientModelSetupStep from "./AmbientModelSetupStep";
 import DataConnections from "@/components/connect/DataConnections";
 import { useComposio } from "@/hooks/useComposio";
@@ -90,15 +91,16 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
             <>
               <StepHeader
                 step={1}
-                title="Ambient permissions"
+                title="Ambient setup"
                 subtitle={
                   isNative
-                    ? "Turn on the sensors PIN AI may observe. Each one stays off until you flip it; you can change this any time in Control Center."
-                    : "Ambient sensors run on the iOS app. You can skip this step here and enable them later from your phone."
+                    ? "Turn on ambient sources and record a short self voice sample. You can change both any time in Control Center."
+                    : "Ambient sensors run on the iOS app. You can skip this step here and finish ambient setup later from your phone."
                 }
               />
-              <div className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto">
+              <div className="scrollbar-hidden min-h-0 flex-1 space-y-3 overflow-y-auto">
                 <AmbientSourceControlsPanel />
+                <VoiceIdentitySettings />
               </div>
             </>
           ) : step === 2 ? (
