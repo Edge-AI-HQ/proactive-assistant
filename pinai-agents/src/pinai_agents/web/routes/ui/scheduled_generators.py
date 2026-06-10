@@ -21,6 +21,7 @@ from ...auth.deps import AgentRun, User, current_agent_run, current_user, get_po
 from ...services.scheduled_generators import (
     ScheduledGeneratorNotFoundError,
     ScheduledGeneratorValidationError,
+    create_once_scheduled_task,
     create_scheduled_generator,
     delete_scheduled_generator,
     list_scheduled_generators,
@@ -87,6 +88,15 @@ class ScheduledGeneratorCreateRequest(_CamelModel):
     confirmed_brief: dict[str, Any] | None = None
     duplicate_ack: bool = False
     similar_task_ids_seen: list[str] = Field(default_factory=list)
+
+
+class ScheduledGeneratorOnceRequest(_CamelModel):
+    original_request: str = Field(min_length=1, max_length=2000)
+    timezone: str = Field(min_length=1, max_length=100)
+    schedule: ScheduleSpecModel
+    mode: Literal["reminder", "generate"] = "reminder"
+    topic: str | None = Field(default=None, max_length=200)
+    reminder: ReminderModel | None = None
 
 
 async def _call_dependency(fn, **kwargs):
@@ -215,6 +225,31 @@ async def create(
     return JSONResponse(
         status_code=status.HTTP_201_CREATED if result.created else status.HTTP_200_OK,
         content=_dump({"task": serialize_task(result.task)}),
+    )
+
+
+@router.post("/once")
+async def create_once(
+    req: ScheduledGeneratorOnceRequest,
+    principal: _ScheduledGeneratorPrincipal = Depends(scheduled_generator_principal),
+    pool: AsyncConnectionPool = Depends(get_pool),
+):
+    try:
+        task = await create_once_scheduled_task(
+            pool,
+            user_id=principal.user_id,
+            original_request=req.original_request,
+            timezone=req.timezone,
+            schedule=req.schedule.model_dump(exclude_none=True),
+            mode=req.mode,
+            topic=req.topic,
+            reminder=req.reminder.model_dump() if req.reminder else None,
+        )
+    except ScheduledGeneratorValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content=_dump({"task": serialize_task(task)}),
     )
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -65,6 +65,31 @@ def _agent_auth(user_id: int) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+_DAILY_PREVIEW_BODY = {
+    "originalRequest": "每天 9 点给我推一些 AI 新闻",
+    "timezone": "America/Los_Angeles",
+    "schedule": {"type": "cron", "frequency": "daily", "localTime": "09:00"},
+    "topic": "AI 新闻",
+}
+
+_ONCE_REMINDER_BODY = {
+    "originalRequest": "5 分钟后提醒我喝水",
+    "timezone": "Asia/Shanghai",
+    "schedule": {"type": "once", "inMinutes": 5},
+    "mode": "reminder",
+    "reminder": {"title": "喝水", "message": "该喝水了"},
+}
+
+
+def _daily_create_body(preview_body: dict) -> dict:
+    return {
+        **_DAILY_PREVIEW_BODY,
+        "previewId": preview_body["previewId"],
+        "semanticSignature": preview_body["semanticSignature"],
+        "confirmedBrief": preview_body["confirmedBrief"],
+    }
+
+
 def test_scheduled_generator_routes_are_mounted() -> None:
     app = create_app()
     routes = {
@@ -74,30 +99,29 @@ def test_scheduled_generator_routes_are_mounted() -> None:
     assert ("/api/scheduled-generators/preview", "POST") in routes
     assert ("/api/scheduled-generators", "GET") in routes
     assert ("/api/scheduled-generators", "POST") in routes
+    assert ("/api/scheduled-generators/once", "POST") in routes
     assert ("/api/scheduled-generators/{task_id}/pause", "POST") in routes
     assert ("/api/scheduled-generators/{task_id}/resume", "POST") in routes
     assert ("/api/scheduled-generators/{task_id}", "DELETE") in routes
 
 
 @pytest.mark.asyncio
-async def test_agent_preview_and_create_write_generator_scheduled_task(client, user_ids, pool):
+async def test_preview_and_create_daily_generate(client, user_ids, pool):
     user_a, _ = user_ids
     headers = _agent_auth(user_a)
 
     preview = await client.post(
         "/api/scheduled-generators/preview",
         headers=headers,
-        json={
-            "originalRequest": "每天 9 点给我推一些 AI 新闻",
-            "timezone": "America/Los_Angeles",
-        },
+        json=_DAILY_PREVIEW_BODY,
     )
 
     assert preview.status_code == 200, preview.text
     preview_body = preview.json()
     assert preview_body["previewId"].startswith("sgprev_")
-    assert preview_body["parsedIntent"]["frequency"] == "daily"
-    assert preview_body["parsedIntent"]["localTime"] == "09:00"
+    assert preview_body["scheduleLabel"] == "每天 09:00"
+    assert preview_body["parsedIntent"]["schedule"]["frequency"] == "daily"
+    assert preview_body["parsedIntent"]["schedule"]["localTime"] == "09:00"
     assert preview_body["parsedIntent"]["timezone"] == "America/Los_Angeles"
     assert preview_body["parsedIntent"]["topic"] == "AI 新闻"
     assert preview_body["confirmedBrief"]["topic"] == "AI 新闻"
@@ -106,13 +130,7 @@ async def test_agent_preview_and_create_write_generator_scheduled_task(client, u
     created = await client.post(
         "/api/scheduled-generators",
         headers=headers,
-        json={
-            "previewId": preview_body["previewId"],
-            "semanticSignature": preview_body["semanticSignature"],
-            "originalRequest": "每天 9 点给我推一些 AI 新闻",
-            "parsedIntent": preview_body["parsedIntent"],
-            "confirmedBrief": preview_body["confirmedBrief"],
-        },
+        json=_daily_create_body(preview_body),
     )
 
     assert created.status_code == 201, created.text
@@ -121,6 +139,8 @@ async def test_agent_preview_and_create_write_generator_scheduled_task(client, u
     assert created_body["task"]["kind"] == "generator.scheduled"
     assert created_body["task"]["status"] == "active"
     assert created_body["task"]["cronExpr"] == "0 9 * * *"
+    assert created_body["task"]["triggerKind"] == "schedule"
+    assert created_body["task"]["scheduleLabel"] == "每天 09:00"
     assert created_body["task"]["timezone"] == "America/Los_Angeles"
 
     async with service_tx(pool) as conn:
@@ -143,61 +163,150 @@ async def test_agent_preview_and_create_write_generator_scheduled_task(client, u
     assert row["next_run_at"] is not None
     assert row["payload"]["preview_id"] == preview_body["previewId"]
     assert row["payload"]["confirmed_brief"]["topic"] == "AI 新闻"
+    assert row["payload"]["schedule_label"] == "每天 09:00"
     assert row["payload"]["trigger"] == "scheduled"
 
 
 @pytest.mark.asyncio
-async def test_supabase_override_can_list_pause_resume_and_delete(client):
-    preview = await client.post(
-        "/api/scheduled-generators/preview",
-        json={
-            "originalRequest": "每天 9 点给我推一些 AI 新闻",
-            "timezone": "America/Los_Angeles",
-        },
-    )
+async def test_once_reminder_direct_create(client, user_ids, pool):
+    user_a, _ = user_ids
+
+    created = await client.post("/api/scheduled-generators/once", json=_ONCE_REMINDER_BODY)
+
+    assert created.status_code == 201, created.text
+    task = created.json()["task"]
+    assert task["id"].startswith("sched.once.")
+    assert task["kind"] == "reminder.card"
+    assert task["triggerKind"] == "once"
+    assert task["scheduleLabel"].startswith("一次 ·")
+    assert task["nextRunAt"] is not None
+
+    async with service_tx(pool) as conn:
+        cur = await conn.execute(
+            """
+            SELECT trigger_kind, next_run_at, payload
+            FROM pai_scheduled_tasks
+            WHERE user_id = %s AND id = %s
+            """,
+            (user_a, task["id"]),
+        )
+        row = await cur.fetchone()
+
+    assert row is not None
+    assert row["trigger_kind"] == "once"
+    assert row["next_run_at"] is not None
+    assert row["payload"]["reminder"]["title"] == "喝水"
+
+
+@pytest.mark.asyncio
+async def test_interval_reminder_via_preview_create(client, user_ids, pool):
+    user_a, _ = user_ids
+    body = {
+        "originalRequest": "每 5 分钟提醒我喝水",
+        "timezone": "UTC",
+        "schedule": {"type": "interval", "everySeconds": 300},
+        "mode": "reminder",
+        "reminder": {"title": "喝水", "message": "该喝水了"},
+    }
+
+    preview = await client.post("/api/scheduled-generators/preview", json=body)
     assert preview.status_code == 200, preview.text
     preview_body = preview.json()
 
     created = await client.post(
         "/api/scheduled-generators",
         json={
+            **body,
             "previewId": preview_body["previewId"],
             "semanticSignature": preview_body["semanticSignature"],
-            "originalRequest": "每天 9 点给我推一些 AI 新闻",
-            "parsedIntent": preview_body["parsedIntent"],
-            "confirmedBrief": preview_body["confirmedBrief"],
         },
     )
+
     assert created.status_code == 201, created.text
-    task_id = created.json()["task"]["id"]
+    task = created.json()["task"]
+    assert task["kind"] == "reminder.card"
+    assert task["intervalSeconds"] == 300
 
-    listed = await client.get("/api/scheduled-generators")
-    assert listed.status_code == 200, listed.text
-    assert [item["id"] for item in listed.json()["items"]] == [task_id]
+    async with service_tx(pool) as conn:
+        cur = await conn.execute(
+            """
+            SELECT interval_seconds, cron_expr
+            FROM pai_scheduled_tasks
+            WHERE user_id = %s AND id = %s
+            """,
+            (user_a, task["id"]),
+        )
+        row = await cur.fetchone()
 
-    paused = await client.post(f"/api/scheduled-generators/{task_id}/pause")
+    assert row is not None
+    assert row["interval_seconds"] == 300
+    assert row["cron_expr"] is None
+
+
+@pytest.mark.asyncio
+async def test_generate_interval_below_guardrail_rejected(client):
+    resp = await client.post(
+        "/api/scheduled-generators/preview",
+        json={
+            "originalRequest": "每 5 分钟推新闻",
+            "timezone": "UTC",
+            "schedule": {"type": "interval", "everySeconds": 300},
+            "mode": "generate",
+        },
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "1800" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_once_resume_restores_fire(client, user_ids, pool):
+    user_a, _ = user_ids
+
+    async with user_scoped_tx(pool, user_a) as conn:
+        await ScheduledTasksRepository(user_a, conn).upsert(
+            id="sched.once.existing",
+            kind="reminder.card",
+            trigger_kind="once",
+            next_run_at=datetime.now(UTC) + timedelta(hours=1),
+            timezone="Asia/Shanghai",
+            payload={
+                "reminder": {"title": "喝水", "message": "该喝水了"},
+                "schedule_label": "一次 · 06-09 18:00",
+            },
+        )
+
+    paused = await client.post("/api/scheduled-generators/sched.once.existing/pause")
     assert paused.status_code == 200, paused.text
     assert paused.json()["task"]["status"] == "paused"
 
-    resumed = await client.post(f"/api/scheduled-generators/{task_id}/resume")
+    resumed = await client.post("/api/scheduled-generators/sched.once.existing/resume")
     assert resumed.status_code == 200, resumed.text
     assert resumed.json()["task"]["status"] == "active"
     assert resumed.json()["task"]["nextRunAt"] is not None
 
-    deleted = await client.delete(f"/api/scheduled-generators/{task_id}")
-    assert deleted.status_code == 200, deleted.text
-    assert deleted.json()["task"]["status"] == "archived"
+
+@pytest.mark.asyncio
+async def test_list_returns_both_kinds(client):
+    preview = await client.post("/api/scheduled-generators/preview", json=_DAILY_PREVIEW_BODY)
+    assert preview.status_code == 200, preview.text
+
+    created = await client.post(
+        "/api/scheduled-generators",
+        json=_daily_create_body(preview.json()),
+    )
+    assert created.status_code == 201, created.text
+    generator_id = created.json()["task"]["id"]
+
+    once = await client.post("/api/scheduled-generators/once", json=_ONCE_REMINDER_BODY)
+    assert once.status_code == 201, once.text
+    once_id = once.json()["task"]["id"]
 
     listed = await client.get("/api/scheduled-generators")
     assert listed.status_code == 200, listed.text
-    assert listed.json()["items"] == []
-
-    listed_with_archived = await client.get(
-        "/api/scheduled-generators",
-        params={"includeArchived": "true"},
-    )
-    assert listed_with_archived.status_code == 200, listed_with_archived.text
-    assert listed_with_archived.json()["items"][0]["status"] == "archived"
+    items = {item["id"]: item for item in listed.json()["items"]}
+    assert set(items) == {generator_id, once_id}
+    assert items[once_id]["scheduleLabel"].startswith("一次 ·")
 
 
 @pytest.mark.asyncio
@@ -208,20 +317,11 @@ async def test_create_is_idempotent_for_same_preview(client, user_ids, pool):
     preview = await client.post(
         "/api/scheduled-generators/preview",
         headers=headers,
-        json={
-            "originalRequest": "每天 9 点给我推一些 AI 新闻",
-            "timezone": "America/Los_Angeles",
-        },
+        json=_DAILY_PREVIEW_BODY,
     )
     assert preview.status_code == 200, preview.text
     preview_body = preview.json()
-    body = {
-        "previewId": preview_body["previewId"],
-        "semanticSignature": preview_body["semanticSignature"],
-        "originalRequest": "每天 9 点给我推一些 AI 新闻",
-        "parsedIntent": preview_body["parsedIntent"],
-        "confirmedBrief": preview_body["confirmedBrief"],
-    }
+    body = _daily_create_body(preview_body)
 
     first = await client.post("/api/scheduled-generators", headers=headers, json=body)
     second = await client.post("/api/scheduled-generators", headers=headers, json=body)
@@ -251,6 +351,16 @@ async def test_create_requires_ack_when_new_similar_task_exists(client, user_ids
     user_a, _ = user_ids
     headers = _agent_auth(user_a)
 
+    # The create path recomputes the semantic signature server-side, so seed
+    # the pre-existing row with the signature preview computes for this body.
+    first_preview = await client.post(
+        "/api/scheduled-generators/preview",
+        headers=headers,
+        json=_DAILY_PREVIEW_BODY,
+    )
+    assert first_preview.status_code == 200, first_preview.text
+    semantic_signature = first_preview.json()["semanticSignature"]
+
     async with user_scoped_tx(pool, user_a) as conn:
         await ScheduledTasksRepository(user_a, conn).upsert(
             id="sched.gen.existing",
@@ -260,24 +370,22 @@ async def test_create_requires_ack_when_new_similar_task_exists(client, user_ids
             next_run_at=datetime(2026, 6, 8, 16, 0, tzinfo=UTC),
             timezone="America/Los_Angeles",
             payload={
+                "semantic_signature": semantic_signature,
                 "parsed_intent": {
-                    "frequency": "daily",
-                    "local_time": "09:00",
+                    "schedule": {"type": "cron", "frequency": "daily", "local_time": "09:00"},
                     "timezone": "America/Los_Angeles",
                     "topic": "AI 新闻",
+                    "mode": "generate",
                 },
                 "confirmed_brief": {"topic": "AI 新闻", "title": "AI 新闻卡片"},
-                "semantic_signature": "daily|09:00|America/Los_Angeles|ai-news",
+                "schedule_label": "每天 09:00",
             },
         )
 
     preview = await client.post(
         "/api/scheduled-generators/preview",
         headers=headers,
-        json={
-            "originalRequest": "每天 9 点给我推一些 AI 新闻",
-            "timezone": "America/Los_Angeles",
-        },
+        json=_DAILY_PREVIEW_BODY,
     )
     assert preview.status_code == 200, preview.text
     preview_body = preview.json()
@@ -286,13 +394,7 @@ async def test_create_requires_ack_when_new_similar_task_exists(client, user_ids
     create_without_ack = await client.post(
         "/api/scheduled-generators",
         headers=headers,
-        json={
-            "previewId": preview_body["previewId"],
-            "semanticSignature": preview_body["semanticSignature"],
-            "originalRequest": "每天 9 点给我推一些 AI 新闻",
-            "parsedIntent": preview_body["parsedIntent"],
-            "confirmedBrief": preview_body["confirmedBrief"],
-        },
+        json=_daily_create_body(preview_body),
     )
     assert create_without_ack.status_code == 409, create_without_ack.text
     assert create_without_ack.json()["requiresConfirmation"] is True
@@ -304,11 +406,7 @@ async def test_create_requires_ack_when_new_similar_task_exists(client, user_ids
         "/api/scheduled-generators",
         headers=headers,
         json={
-            "previewId": preview_body["previewId"],
-            "semanticSignature": preview_body["semanticSignature"],
-            "originalRequest": "每天 9 点给我推一些 AI 新闻",
-            "parsedIntent": preview_body["parsedIntent"],
-            "confirmedBrief": preview_body["confirmedBrief"],
+            **_daily_create_body(preview_body),
             "duplicateAck": True,
             "similarTaskIdsSeen": ["sched.gen.existing"],
         },
