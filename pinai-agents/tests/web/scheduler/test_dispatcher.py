@@ -225,7 +225,7 @@ async def test_reminder_card_dispatch_writes_card_and_notifies(pool, user_ids, m
             id="sched.once.remtest",
             kind="reminder.card",
             trigger_kind="once",
-            next_run_at=datetime.now(UTC),
+            next_run_at=datetime.now(UTC) + timedelta(hours=1),  # 不可被真容器认领
             timezone="Asia/Shanghai",
             payload={
                 "reminder": {"title": "喝水", "message": "该喝水了"},
@@ -264,14 +264,6 @@ async def test_reminder_card_dispatch_writes_card_and_notifies(pool, user_ids, m
     ]
 
 
-@pytest.mark.xfail(
-    reason="flaky: heartbeat count is order/DB-state dependent — passes alone "
-    "or within test_dispatcher.py, varies under broader runs. Pre-existing, "
-    "NOT introduced by the DB-test CI work. Needs a dedicated look: test "
-    "isolation gap, or a real dispatch bug (duplicate heartbeat) worth ruling "
-    "out given the proactive checkpoint-growth history.",
-    strict=False,
-)
 @pytest.mark.asyncio
 async def test_proactive_tick_archives_and_skips_when_disabled(
     pool,
@@ -290,7 +282,9 @@ async def test_proactive_tick_archives_and_skips_when_disabled(
             kind="proactive.tick",
             trigger_kind="schedule",
             interval_seconds=30,
-            next_run_at=datetime.now(UTC),
+            # 未来时刻:本地真容器的 scheduler 不会认领这行(历史 flaky 根因
+            # 是测试与 make up 栈共库,到期行被真 dispatcher 抢跑、重复计数)
+            next_run_at=datetime.now(UTC) + timedelta(hours=1),
             status="active",
         )
     task.last_run_at = datetime.now(UTC)
@@ -326,12 +320,6 @@ async def test_proactive_tick_archives_and_skips_when_disabled(
     assert msgs["n"] == 0
 
 
-@pytest.mark.xfail(
-    reason="flaky: see test_proactive_tick_archives_and_skips_when_disabled — "
-    "heartbeat count is order/DB-state dependent, pre-existing, needs a "
-    "dedicated look (isolation gap vs real duplicate-heartbeat bug).",
-    strict=False,
-)
 @pytest.mark.asyncio
 async def test_proactive_tick_enqueues_when_enabled(
     pool,
@@ -351,7 +339,7 @@ async def test_proactive_tick_enqueues_when_enabled(
             kind="proactive.tick",
             trigger_kind="schedule",
             interval_seconds=300,
-            next_run_at=now,
+            next_run_at=now + timedelta(hours=1),  # 不可被真容器认领,见上一测试注释
             status="active",
         )
     task.last_run_at = now
