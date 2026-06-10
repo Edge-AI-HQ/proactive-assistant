@@ -7,16 +7,26 @@ import io
 import logging
 import wave
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, WebSocket, status
 
-from ...auth.deps import User, current_user, get_pool
+from ....config import get_web_settings
+from ...auth.deps import User, _dev_auth_identity, _maybe_dev_bypass_marker, current_user, get_pool
+from ...auth.supabase_jwt import JWTVerifyError, verify_supabase_jwt
+from ...auth.user_service import upsert_user_by_supabase_id
+from ...db.repositories.provider_usage import ProviderUsageEventInput, ProviderUsageRepository
 from ...db.repositories.voice_identity import (
     VoiceIdentityProfileRow,
     VoiceIdentityRepository,
 )
 from ...db.rls import user_scoped_tx
 from ...litellm.client import LiteLLMError
+from ...services.bytedance_asr import (
+    ByteDanceAsrConfig,
+    ByteDanceAsrSessionUsage,
+    proxy_bytedance_asr,
+)
 from ...services.litellm_provisioning import ensure_user_litellm_key
+from ...services.provider_usage import estimate_bytedance_streaming_asr_charge
 from ...services.voice_transcription import (
     ALLOWED_TRANSCRIPTION_MODELS,
     DEFAULT_TRANSCRIPTION_MODEL,
@@ -218,6 +228,64 @@ async def transcribe_voice_input(
     return {"ok": True, "text": text, "model": model}
 
 
+@router.websocket("/transcribe-stream")
+async def transcribe_voice_input_stream(
+    websocket: WebSocket,
+    language: str | None = Query(default=None),
+) -> None:
+    await websocket.accept()
+    try:
+        language_hint = normalize_transcription_language(language)
+        auth = await _read_voice_stream_auth(websocket)
+        user = await _current_user_for_voice_websocket(
+            websocket,
+            token=auth.token,
+            dev_auth=auth.dev_auth,
+        )
+    except ValueError as exc:
+        await websocket.send_json({"type": "error", "message": str(exc)})
+        await websocket.close(code=1008)
+        return
+    except HTTPException as exc:
+        await websocket.send_json({"type": "error", "message": exc.detail})
+        await websocket.close(code=1008)
+        return
+
+    settings = get_web_settings()
+    if not settings.bytedance_asr_app_key or not settings.bytedance_asr_access_key:
+        await websocket.send_json(
+            {
+                "type": "error",
+                "message": "ByteDance streaming ASR is not configured",
+            }
+        )
+        await websocket.close(code=1011)
+        return
+
+    logger.info(
+        "voice streaming transcription request user=%s language=%s endpoint=%s",
+        user.id,
+        language_hint or "auto",
+        settings.bytedance_asr_endpoint,
+    )
+    usage = await proxy_bytedance_asr(
+        websocket,
+        ByteDanceAsrConfig(
+            app_key=settings.bytedance_asr_app_key,
+            access_key=settings.bytedance_asr_access_key,
+            endpoint=settings.bytedance_asr_endpoint,
+            resource_id=settings.bytedance_asr_resource_id,
+            user_id=user.supabase_user_id,
+        ),
+    )
+    await _record_bytedance_stream_usage(
+        websocket,
+        user=user,
+        usage=usage,
+        language_hint=language_hint,
+    )
+
+
 @router.post("/transcribe-diarized")
 async def transcribe_voice_input_diarized(
     request: Request,
@@ -321,6 +389,131 @@ async def transcribe_voice_input_diarized(
 def _is_supported_audio_content_type(content_type: str) -> bool:
     media_type = _media_type(content_type)
     return media_type.startswith("audio/") or media_type in SUPPORTED_AUDIO_CONTENT_TYPES
+
+
+class _VoiceStreamAuth:
+    def __init__(self, *, token: str | None, dev_auth: str | None) -> None:
+        self.token = token
+        self.dev_auth = dev_auth
+
+
+async def _read_voice_stream_auth(websocket: WebSocket) -> _VoiceStreamAuth:
+    try:
+        message = await websocket.receive_json()
+    except Exception as exc:
+        raise HTTPException(status_code=1008, detail="voice stream auth frame missing") from exc
+    if not isinstance(message, dict) or message.get("type") != "auth":
+        raise HTTPException(status_code=1008, detail="voice stream auth frame missing")
+    token = message.get("token")
+    dev_auth = message.get("dev_auth")
+    return _VoiceStreamAuth(
+        token=token.strip() if isinstance(token, str) and token.strip() else None,
+        dev_auth=dev_auth.strip() if isinstance(dev_auth, str) and dev_auth.strip() else None,
+    )
+
+
+async def _current_user_for_voice_websocket(
+    websocket: WebSocket,
+    *,
+    token: str | None,
+    dev_auth: str | None,
+) -> User:
+    settings = get_web_settings()
+    identity = _dev_auth_identity(_maybe_dev_bypass_marker(dev_auth))
+    if settings.deploy_env == "dev" and identity is not None:
+        logger.info("dev auth bypass active for voice stream role=%s", identity.role)
+        pool = getattr(websocket.app.state, "pool", None)
+        if pool is None:
+            return User(
+                id=0,
+                supabase_user_id=identity.supabase_user_id,
+                email=identity.email,
+                litellm_virtual_key=None,
+                browserbase_context_id=None,
+            )
+        return await upsert_user_by_supabase_id(
+            pool,
+            supabase_user_id=identity.supabase_user_id,
+            email=identity.email,
+        )
+
+    pool = getattr(websocket.app.state, "pool", None)
+    if pool is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="DB pool not initialized",
+        )
+
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="voice stream auth token missing",
+        )
+    try:
+        claims = await verify_supabase_jwt(token)
+    except JWTVerifyError as exc:
+        logger.info("Supabase JWT verify failed for voice stream: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid Supabase token",
+        ) from exc
+
+    return await upsert_user_by_supabase_id(
+        pool,
+        supabase_user_id=claims.sub,
+        email=claims.email,
+    )
+
+
+async def _record_bytedance_stream_usage(
+    websocket: WebSocket,
+    *,
+    user: User,
+    usage: ByteDanceAsrSessionUsage,
+    language_hint: str | None,
+) -> None:
+    logger.info(
+        "voice streaming transcription finished user=%s audio_bytes=%s duration=%.3fs latest_text_len=%s",
+        user.id,
+        usage.audio_bytes,
+        usage.duration_seconds,
+        len(usage.latest_text or ""),
+    )
+    if user.id <= 0 or usage.audio_bytes <= 0:
+        return
+    pool = getattr(websocket.app.state, "pool", None)
+    if pool is None:
+        return
+    charge = estimate_bytedance_streaming_asr_charge(
+        audio_bytes=usage.audio_bytes,
+        source="main_chat_voice",
+        metadata={
+            "language": language_hint or "auto",
+            "latest_text_len": len(usage.latest_text or ""),
+            **({"error_message": usage.error_message} if usage.error_message else {}),
+            **({"error_code": usage.error_code} if usage.error_code is not None else {}),
+        },
+        status=usage.status,
+    )
+    try:
+        async with user_scoped_tx(pool, user.id) as conn:
+            await ProviderUsageRepository(user.id, conn).record_event(
+                ProviderUsageEventInput(
+                    supabase_user_id=user.supabase_user_id,
+                    provider=charge.provider,
+                    product=charge.product,
+                    source=charge.source,
+                    quantity_seconds=charge.quantity_seconds,
+                    cost_usd=charge.cost_usd,
+                    currency=charge.currency,
+                    status=charge.status,
+                    metadata=charge.metadata or {},
+                    started_at=usage.started_at,
+                    ended_at=usage.ended_at,
+                )
+            )
+    except Exception as exc:
+        logger.warning("failed to record ByteDance ASR usage user=%s: %s", user.id, exc)
 
 
 def _safe_audio_filename(filename: str | None, content_type: str) -> str:

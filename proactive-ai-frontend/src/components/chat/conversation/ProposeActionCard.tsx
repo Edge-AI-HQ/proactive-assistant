@@ -22,7 +22,7 @@
  * tool-call args. Keeping the conversation scrollback focused on
  * (message + drafts + reply) keeps the surface readable.
  */
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowRight,
@@ -31,9 +31,11 @@ import {
   Loader2,
   FileText,
   Mail,
+  Mic,
   MessageSquare,
+  X,
 } from "lucide-react";
-import { VoiceButton } from "@/components/voice";
+import { useVoiceInput, Waveform, appendVoiceTranscript } from "@/components/voice";
 import { cn } from "@/lib/utils";
 
 interface ProposeActionArtifact {
@@ -97,6 +99,12 @@ const ARTIFACT_LABEL: Record<ProposeActionArtifact["kind"], string> = {
   doc: "Document",
   other: "Draft",
 };
+
+function formatRecordDuration(totalSec: number): string {
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
 
 function DraftItem({ artifact, index }: { artifact: ProposeActionArtifact; index: number }) {
   // First artifact expanded by default so the user sees content
@@ -175,6 +183,13 @@ export default function ProposeActionCard({
   const [inputValue, setInputValue] = useState("");
   const [selectedOption, setSelectedOption] = useState(0);
   const [submitting, setSubmitting] = useState(false);
+  const { startCapture, stopCapture, captureStatus } = useVoiceInput();
+  const [recording, setRecording] = useState(false);
+  const [voiceTranscript, setVoiceTranscript] = useState("");
+  const [voiceFinalizing, setVoiceFinalizing] = useState(false);
+  const [recordSec, setRecordSec] = useState(0);
+  const recordingRef = useRef(false);
+  const initialInputRef = useRef("");
   // Once the user replies to THIS pause, lock the panel: re-replying to an
   // already-answered propose_action makes no sense and would double-send in
   // the window between the POST returning and the next turn streaming.
@@ -183,17 +198,21 @@ export default function ProposeActionCard({
   // Reset when the agent's question changes — keyed off the message text so
   // each fresh propose_action gets a clean, un-sent default.
   useEffect(() => {
+    if (recordingRef.current) void stopCapture(false);
     setSelectedOption(0);
     setInputValue("");
+    setRecording(false);
+    setVoiceTranscript("");
+    setVoiceFinalizing(false);
+    setRecordSec(0);
     setSent(false);
-  }, [parsed?.message]);
+  }, [parsed?.message, stopCapture]);
 
-  if (!parsed) return null;
-
-  const options = parsed.options ?? [];
-  const drafts = parsed.drafts ?? [];
+  const options = parsed?.options ?? [];
+  const drafts = parsed?.drafts ?? [];
   const isRunning = busy || submitting;
   const locked = isRunning || sent;
+  const voiceConnecting = recording && captureStatus === "connecting";
 
   const submitReply = async () => {
     const typed = inputValue.trim();
@@ -208,6 +227,65 @@ export default function ProposeActionCard({
       setSubmitting(false);
     }
   };
+
+  const startRecording = useCallback(() => {
+    if (locked) return;
+    initialInputRef.current = inputValue;
+    setVoiceTranscript("");
+    setVoiceFinalizing(false);
+    setRecordSec(0);
+    setRecording(true);
+    startCapture({
+      inline: true,
+      prefill: inputValue,
+      onUpdate: (text) => {
+        setVoiceTranscript(text);
+        setInputValue(appendVoiceTranscript(initialInputRef.current, text));
+      },
+      onError: setVoiceTranscript,
+      onResult: (final) => {
+        setInputValue(appendVoiceTranscript(initialInputRef.current, final));
+        setRecording(false);
+        setVoiceFinalizing(false);
+        setVoiceTranscript("");
+      },
+    });
+  }, [inputValue, locked, startCapture]);
+
+  const cancelRecording = useCallback(() => {
+    void stopCapture(false);
+    setInputValue(initialInputRef.current);
+    setRecording(false);
+    setVoiceFinalizing(false);
+    setVoiceTranscript("");
+  }, [stopCapture]);
+
+  const confirmRecording = useCallback(() => {
+    setVoiceFinalizing(true);
+    void stopCapture(true);
+  }, [stopCapture]);
+
+  useEffect(() => {
+    if (!recording) return;
+    const startedAt = Date.now();
+    const t = window.setInterval(
+      () => setRecordSec(Math.floor((Date.now() - startedAt) / 1000)),
+      250,
+    );
+    return () => window.clearInterval(t);
+  }, [recording]);
+
+  useEffect(() => {
+    recordingRef.current = recording;
+  }, [recording]);
+
+  useEffect(() => {
+    return () => {
+      if (recordingRef.current) void stopCapture(false);
+    };
+  }, [stopCapture]);
+
+  if (!parsed) return null;
 
   // The chip+input panel always renders interactive. While the thread
   // is running, the Continue button is disabled and chips are visually
@@ -304,32 +382,93 @@ export default function ProposeActionCard({
         )}
 
         {/* Permanent free-text input slot */}
-        <div
-          className="mt-2.5 px-3 py-2 rounded-xl border border-foreground/10 flex items-center gap-2"
-          style={{ background: "rgba(255,255,255,0.55)" }}
-        >
-          <input
-            type="text"
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                void submitReply();
+        {recording ? (
+          <div
+            className="mt-2.5 flex flex-col gap-2 rounded-xl border border-foreground/10 px-3 py-2.5"
+            style={{ background: "rgba(255,255,255,0.55)" }}
+          >
+            <p className="flex min-h-[18px] items-center gap-1.5 text-[13px] italic leading-snug text-foreground/55">
+              {voiceConnecting && !voiceFinalizing && !voiceTranscript && (
+                <Loader2 size={13} strokeWidth={2} className="shrink-0 animate-spin" />
+              )}
+              <span className="min-w-0 truncate">
+                {voiceFinalizing
+                  ? "Polishing…"
+                  : voiceTranscript || (voiceConnecting ? "Connecting…" : "Listening…")}
+              </span>
+            </p>
+            <div className="flex items-center gap-2.5">
+              <span className="w-[36px] shrink-0 text-[11px] font-medium tabular-nums text-foreground/55">
+                {formatRecordDuration(recordSec)}
+              </span>
+              {voiceConnecting ? (
+                <div className="flex min-w-0 flex-1 items-center justify-center">
+                  <Loader2 size={18} strokeWidth={2} className="animate-spin text-foreground/50" />
+                </div>
+              ) : (
+                <Waveform className="min-w-0 flex-1" />
+              )}
+              <button
+                type="button"
+                onClick={cancelRecording}
+                disabled={voiceFinalizing}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-foreground/[0.06] text-foreground/55 transition-colors hover:bg-foreground/10 disabled:opacity-40"
+                aria-label="Cancel recording"
+              >
+                <X size={15} strokeWidth={2} />
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmRecording()}
+                disabled={voiceFinalizing || voiceConnecting}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-background transition-transform active:scale-95 disabled:opacity-60"
+                style={{
+                  background:
+                    "linear-gradient(135deg, hsl(292 78% 63%) 0%, hsl(330 80% 65%) 100%)",
+                  boxShadow: "0 4px 12px hsl(292 78% 63% / 0.35)",
+                }}
+                aria-label="Use transcript"
+              >
+                <Check size={15} strokeWidth={2.5} />
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div
+            className="mt-2.5 flex items-center gap-2 rounded-xl border border-foreground/10 px-3 py-2"
+            style={{ background: "rgba(255,255,255,0.55)" }}
+          >
+            <input
+              type="text"
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void submitReply();
+                }
+              }}
+              placeholder={
+                sent
+                  ? "Reply sent"
+                  : options.length > 0
+                    ? "Or type your own reply..."
+                    : "Type your reply..."
               }
-            }}
-            placeholder={
-              sent
-                ? "Reply sent"
-                : options.length > 0
-                  ? "Or type your own reply..."
-                  : "Type your reply..."
-            }
-            disabled={locked}
-            className="flex-1 bg-transparent text-[13px] text-foreground placeholder:text-foreground/35 outline-none disabled:opacity-50"
-          />
-          <VoiceButton prefill={inputValue} onUpdate={setInputValue} />
-        </div>
+              disabled={locked}
+              className="min-w-0 flex-1 bg-transparent text-[13px] text-foreground placeholder:text-foreground/35 outline-none disabled:opacity-50"
+            />
+            <button
+              type="button"
+              onClick={startRecording}
+              disabled={locked}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-foreground/10 text-foreground/60 transition-colors hover:bg-foreground/15 hover:text-foreground disabled:opacity-40"
+              aria-label="Voice input"
+            >
+              <Mic size={17} strokeWidth={2} />
+            </button>
+          </div>
+        )}
 
         <button
           type="button"

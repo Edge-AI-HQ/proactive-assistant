@@ -64,7 +64,7 @@ flowchart LR
 
 ### web :8000
 
-- `/api/*` — 前端面向接口,Supabase JWT 鉴权。路由模块在 `pinai-agents/src/pinai_agents/web/routes/ui/`:`conversation`(`/api/conversation/*`)、`generate`、`memory`、`signals`、`profile`、`devices`、`feedback`、`reward_dashboard`、`composio`、`tasks`、`raw`、`runs_and_cards`、`dreaming`、`skills`、`browser`、`agent_runs`、`crystallize`、`jwt_revoke`、`payment`(独立 prefix)。
+- `/api/*` — 前端面向接口,Supabase JWT 鉴权。路由模块在 `pinai-agents/src/pinai_agents/web/routes/ui/`:`conversation`(`/api/conversation/*`)、`generate`、`memory`、`signals`、`profile`、`devices`、`feedback`、`reward_dashboard`、`composio`、`tasks`、`raw`、`runs_and_cards`、`dreaming`、`skills`、`browser`、`voice`(`/api/voice/*`,含 Main Chat ByteDance 流式 ASR 代理和 Ambient/OpenAI stop-time 转录)、`agent_runs`、`crystallize`、`jwt_revoke`、`payment`(独立 prefix)。
 - `/api/agent/*` — sandbox 内 `pinai_sdk` 回连接口,phantom token 鉴权。模块在 `web/routes/agent/`:`memory`、`signals`、`world`、`state`、`profile`、`skills`、`composio`、`raw`、`cards`、`feedback`、`evolution`、`pipeline`、`sandbox_phantom`。
 - `/health` — 含一次 `SELECT 1` 探活;DB 异常返回 `db: error` 但不翻 HTTP 状态码,交给 readiness probe 严控。
 - 中间件:`CORSMiddleware`(origin allowlist 来自 `CORS_ALLOWED_ORIGINS`)、`AgentAuditMiddleware`(只在 `/api/agent/*` 路径下记录 audit log)。
@@ -193,6 +193,19 @@ make env-local                                           # 强制重 decrypt
 
 CI 把 `DOTENV_PRIVATE_KEY_TEST` / `DOTENV_PRIVATE_KEY_PROD` 当 GitHub secret;deploy workflow 用 dotenvx 解密 `.env.test` / `.env.production`,再用 `scripts/sync_fly_secrets.py` 注入 fly app secrets(按 process group 剥离 FORBIDDEN_ENVS)。
 
+Main Chat 语音输入优先走 web 进程代理 ByteDance / Volcengine 流式 ASR,密钥只放后端:
+
+```bash
+BYTEDANCE_ASR_APP_KEY=...
+BYTEDANCE_ASR_ACCESS_KEY=...
+BYTEDANCE_ASR_ENDPOINT=wss://voice.ap-southeast-1.bytepluses.com/api/v3/sauc/bigmodel
+BYTEDANCE_ASR_RESOURCE_ID=volc.bigasr.sauc.duration
+```
+
+前端只连 `/api/voice/transcribe-stream` WebSocket 并上传 16 kHz mono PCM 分片;默认不启用 browser-native fallback,这样本地和真机测试能直接暴露 ByteDance 配置或上游问题。
+
+ByteDance / Volcengine ASR 是直接 provider 调用,不进入 LiteLLM token 账。web 进程在流式会话结束后按 PCM 字节数估算秒数,写入 `pai_provider_usage_events`;后续 ByteDance 文件转录也走同一张 provider usage ledger。
+
 ## 数据库与迁移
 
 - Postgres,本地 compose 用 `pgvector/pgvector:pg15`,prod 用 Supabase。
@@ -247,6 +260,8 @@ make deploy-litellm-prod
 ## Billing
 
 - Stripe 管订阅,LiteLLM 管 token budget。
+- LiteLLM 只统计 LLM/token 类调用;ByteDance ASR 这种直接 provider 调用写 `pai_provider_usage_events` 单独按秒记账,再由我们自己的 billing/report 层汇总。
+- ByteDance ASR PAYG 当前按官方单价估算:Streaming ASR `$0.15/hour`,Audio File ASR `$0.12/hour`,Audio File ASR Fast Mode `$0.36/hour`。默认并发额度不单独入账;额外并发包后续需要作为固定月费项补充。
 - 代码:`pinai-agents/src/pinai_agents/web/payment/`(`stripe_client.py`、`subscriptions.py`、`plans.py`、`guard.py`、`webhook.py`、`routes.py`)。
 - `invoice.paid` 是唯一触发 LiteLLM budget reset + `max_budget` 设置的事件。
 - 升级:取消旧订阅不退款,新套餐立即生效新账期。

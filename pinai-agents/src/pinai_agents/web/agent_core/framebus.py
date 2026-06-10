@@ -27,6 +27,7 @@ from collections.abc import AsyncIterator
 from typing import Any, Protocol, cast, runtime_checkable
 
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
 
 logger = logging.getLogger(__name__)
 
@@ -142,10 +143,14 @@ class RedisFrameBus:
         key = self._key(session_id)
         cursor = last_id
         while True:
-            resp = cast(
-                "_XReadResp | None",
-                await self._redis.xread({key: cursor}, block=self._block_ms, count=200),
-            )
+            try:
+                resp = cast(
+                    "_XReadResp | None",
+                    await self._redis.xread({key: cursor}, block=self._block_ms, count=200),
+                )
+            except RedisError as exc:
+                logger.warning("frame stream disconnected session=%s: %s", session_id, exc)
+                return
             if not resp:
                 yield None  # BLOCK window elapsed — keepalive tick, stream stays open
                 continue

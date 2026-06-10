@@ -9,8 +9,12 @@ Covers the two properties the resumable SSE stream rests on:
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 from fakeredis import FakeAsyncRedis
+from redis.asyncio import Redis
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 from pinai_agents.web.agent_core.framebus import Frame, RedisFrameBus
 
@@ -70,6 +74,19 @@ async def test_keepalive_tick_when_idle_keeps_stream_open() -> None:
     assert await agen.__anext__() is None
     assert await agen.__anext__() is None  # still ticking, not StopAsyncIteration
     await agen.aclose()
+
+
+@pytest.mark.asyncio
+async def test_subscribe_ends_cleanly_when_redis_disconnects() -> None:
+    class DisconnectingRedis:
+        async def xread(self, *args: object, **kwargs: object) -> object:
+            raise RedisConnectionError("Connection closed by server.")
+
+    bus = RedisFrameBus(cast(Redis, DisconnectingRedis()), block_ms=50)
+    agen = bus.subscribe("sse-noise", last_id="$")
+
+    with pytest.raises(StopAsyncIteration):
+        await agen.__anext__()
 
 
 @pytest.mark.asyncio

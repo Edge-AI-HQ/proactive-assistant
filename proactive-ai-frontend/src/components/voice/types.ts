@@ -4,6 +4,7 @@ export interface VoiceEngineCallbacks {
   onPartial(text: string): void;
   onFinal(text: string): void;
   onError(err: unknown): void;
+  onReady?(): void;
 }
 
 export interface VoiceEngineHandle {
@@ -11,12 +12,15 @@ export interface VoiceEngineHandle {
   cancel?(): void | Promise<void>;
 }
 
-// Swappable speech-to-text runtime. The default engine uses browser-native
-// SpeechRecognition; the GPT transcription engine is kept available for
-// callers that explicitly inject it.
+// Swappable speech-to-text runtime. The default engine uses backend-proxied
+// ByteDance streaming ASR. Browser-native SpeechRecognition is available only
+// when a caller explicitly injects it as a fallback engine.
 export interface VoiceEngine {
+  reportsReady?: boolean;
   start(callbacks: VoiceEngineCallbacks): VoiceEngineHandle | Promise<VoiceEngineHandle>;
 }
+
+export type VoiceCaptureStatus = "idle" | "connecting" | "listening";
 
 export interface StartCaptureOptions {
   // Text already present in the target input when capture starts. The overlay
@@ -24,6 +28,8 @@ export interface StartCaptureOptions {
   prefill?: string;
   // Fires on every transcript update (partial or final). Bind to input state for live transcription.
   onUpdate?(text: string): void;
+  // Fires when the speech engine fails before usable transcript arrives.
+  onError?(message: string): void;
   // Fires once when the user clicks "Done". Use for the commit step.
   // Not called on Cancel or backdrop dismiss.
   onResult?(text: string): void;
@@ -39,11 +45,12 @@ export interface VoiceContextValue {
   // an inline caller drive its own Done / Cancel buttons.
   stopCapture(commit: boolean): void;
   isCapturing: boolean;
+  captureStatus: VoiceCaptureStatus;
 }
 
 export interface VoiceProviderProps {
   children: ReactNode;
-  // Defaults to browser-native SpeechRecognition.
+  // Defaults to ByteDance streaming ASR without browser-native fallback.
   engine?: VoiceEngine;
   // User-preferred generation language. Voice transcription maps this to
   // browser BCP-47 hints; missing/unknown means Chinese.
