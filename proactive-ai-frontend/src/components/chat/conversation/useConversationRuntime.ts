@@ -356,6 +356,9 @@ export function useConversationRuntime(
   // without re-subscribing, then flush to React state on each change.
   const builderRef = useRef<LiveContentBuilder | null>(null);
   const turnIdRef = useRef<string | null>(null);
+  // The send-time optimistic placeholder's turn id while it's still UNCLAIMED
+  // (no user-turn frame has adopted it). See createTurnPlaceholder.
+  const placeholderTurnIdRef = useRef<string | null>(null);
   // Cached index of the current turn's entry in the transcript array, so a
   // per-delta flush is O(1) instead of scanning the whole transcript every
   // token. Other appends (ticks / user messages) always go to the end and
@@ -434,7 +437,43 @@ export function useConversationRuntime(
     builderRef.current = null;
     turnIdRef.current = null;
     turnPosRef.current = -1;
+    placeholderTurnIdRef.current = null;
   }, [flushTurn]);
+
+  // Optimistic turn placeholder: open the assistant entry (whose in-entry
+  // "Thinking…" pill shows while parts are empty) the moment the user sends,
+  // so the reply slot exists immediately — the send anchor scrolls against it
+  // and the pill never pops in later. The real turn's frames continue into
+  // the same builder (ensureTurn is idempotent). Skipped when a foreign turn
+  // (heartbeat tick) is mid-stream — that builder isn't ours to reuse; the
+  // send's turn opens via its own chat:thinking after it.
+  //
+  // `placeholderTurnIdRef` marks the placeholder as UNCLAIMED until a
+  // user-turn frame adopts it. A tick turn that starts only after the send
+  // must not adopt it either — the debug gate would then swallow every flush
+  // and strand the entry as an eternal running/empty pill. The classifier in
+  // handleEnvelope drops a still-idle placeholder the moment a debug frame
+  // shows up, so the tick opens its own (gated) turn instead.
+  const createTurnPlaceholder = useCallback((): string | null => {
+    if (builderRef.current) return null;
+    turnDebugRef.current = false; // user-initiated — never a debug turn
+    ensureTurn();
+    flushTurn(true);
+    placeholderTurnIdRef.current = turnIdRef.current;
+    return turnIdRef.current;
+  }, [ensureTurn, flushTurn]);
+
+  // Drop a still-empty placeholder (send failed / nothing ever streamed into
+  // it). Guarded so a real turn that already adopted the builder is untouched.
+  const dropIdlePlaceholder = useCallback(
+    (placeholderId: string | null) => {
+      if (!placeholderId) return;
+      if (turnIdRef.current === placeholderId && builderRef.current?.isEmpty()) {
+        finalizeTurn();
+      }
+    },
+    [finalizeTurn],
+  );
 
   const handleEnvelope = useCallback(
     (env: SseEnvelope) => {
@@ -444,6 +483,22 @@ export function useConversationRuntime(
       // a turn's events share one traceId, so this is stable within a turn.
       if (env.type.startsWith("chat:") && env.traceId) {
         turnDebugRef.current = tickRunIdsRef.current.has(env.traceId);
+        if (turnDebugRef.current) {
+          // A tick turn opening against an unclaimed send placeholder: drop
+          // the placeholder (still empty → finalizeTurn deletes the entry)
+          // so the tick builds its own turn and the debug gate can't strand
+          // a running/empty entry. The user turn re-opens via its own
+          // chat:thinking afterwards.
+          if (
+            placeholderTurnIdRef.current !== null
+            && placeholderTurnIdRef.current === turnIdRef.current
+            && builderRef.current?.isEmpty()
+          ) {
+            finalizeTurn();
+          }
+        } else {
+          placeholderTurnIdRef.current = null; // claimed by the user turn
+        }
       }
       switch (env.type) {
         case "conversation:hello": {
@@ -923,7 +978,7 @@ export function useConversationRuntime(
   // Never throws — send failures are surfaced on the bubble, not as an
   // unhandled rejection in the composer.
   const postUserMessage = useCallback(
-    async (id: string, text: string) => {
+    async (id: string, text: string, placeholderId: string | null) => {
       // Awaiting a turn from here on → composer flips to Stop + gates sends
       // immediately, before the (possibly slow first-turn) stream even starts.
       setBusy(true);
@@ -948,6 +1003,7 @@ export function useConversationRuntime(
       } catch (err) {
         console.warn("[proactive] send failed:", err);
         setBusy(false); // no turn is coming; unblock the composer
+        dropIdlePlaceholder(placeholderId); // no reply is coming either
         setTranscript((prev) =>
           prev.map((e) =>
             e.kind === "user" && e.id === id ? { ...e, failed: true } : e,
@@ -955,7 +1011,7 @@ export function useConversationRuntime(
         );
       }
     },
-    [session],
+    [session, dropIdlePlaceholder],
   );
 
   const sendMessage = useCallback(
@@ -971,9 +1027,10 @@ export function useConversationRuntime(
         ...prev,
         { kind: "user", id, ts: Date.now(), text: trimmed, clientId: id },
       ]);
-      await postUserMessage(id, trimmed);
+      const placeholderId = createTurnPlaceholder();
+      await postUserMessage(id, trimmed, placeholderId);
     },
-    [postUserMessage],
+    [postUserMessage, createTurnPlaceholder],
   );
 
   const retryMessage = useCallback(
@@ -983,9 +1040,10 @@ export function useConversationRuntime(
           e.kind === "user" && e.id === id ? { ...e, failed: false } : e,
         ),
       );
-      await postUserMessage(id, text);
+      const placeholderId = createTurnPlaceholder();
+      await postUserMessage(id, text, placeholderId);
     },
-    [postUserMessage],
+    [postUserMessage, createTurnPlaceholder],
   );
 
   // Regenerate the latest assistant turn: drop it locally, then re-send the
@@ -1014,6 +1072,9 @@ export function useConversationRuntime(
       }
       return lastAssistantIdx >= 0 ? prev.slice(0, lastAssistantIdx) : prev;
     });
+    // Same optimistic placeholder as a send — the pill replaces the dropped
+    // turn immediately instead of popping in on the first frame.
+    const placeholderId = createTurnPlaceholder();
     setBusy(true);
     setAwaitingDecision(null);
     try {
@@ -1030,8 +1091,9 @@ export function useConversationRuntime(
     } catch (err) {
       console.warn("[proactive] regenerate failed:", err);
       setBusy(false);
+      dropIdlePlaceholder(placeholderId);
     }
-  }, [busy, transcript, session]);
+  }, [busy, transcript, session, createTurnPlaceholder, dropIdlePlaceholder]);
 
   const stop = useCallback(async () => {
     // Optimistic: close the in-flight turn locally so the shimmer + Stop button

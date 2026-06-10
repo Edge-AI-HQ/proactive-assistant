@@ -256,6 +256,10 @@ Browserbase context(`ensure_browserbase_context`)在 onboarding 完成时(`profi
 
 history 真相是 `pai_chat_messages`(worker finalize 写入,`/api/conversation/history` 直接分页读,O(page))。`chat/transport/routes/history.py:GET /agent/chat/history` 仍保留:web 的 `call_chat_history` 在 pre-kernel 老线程首读时从 checkpoint 一次性 backfill,proactive 分页也走它;它从 LangGraph checkpointer 拉 message,过滤 SystemMessage(card_context 不暴露给前端)。
 
+### Transcript 滚动(前端,阅读优先)
+
+`ConversationView` 的 Virtuoso 是纯虚拟列表(`followOutput={false}`,内建自动滚动全关),滚动决策唯一 owner 是 `conversation/scroll/useChatScroll.ts` 的 `following`/`free` 状态机:发送时乐观开 placeholder turn + runway spacer 撑底 + 用户消息锚到视口顶(流式期间阅读位置零移动,Claude/ChatGPT 模型);断开跟随只认用户手势(`scroll-intent.ts`),恢复只认回底 transition;不在底部时浮 `JumpToLatest` ⬇。HITL 审批卡渲染在暂停 turn 的 entry 内(Footer 只剩 debug-隐藏 turn 的 fallback)。硬约定:`scrollTo*` 只允许出现在 `scroll/` 内。设计依据与验收清单见相关 AI Plans。
+
 ## 开发入口
 
 | 改动 | 先看 |
@@ -350,3 +354,4 @@ make logs-pinai-chat | grep -E "/agent/chat|chat:tool|browser:"
 ## 相关 AI Plans
 
 - [长任务 / 多 Agent 对话体验优化（P0-P4）](../plans/2026-06-09-long-task-agent-ux):summarization 泄漏过滤、subagent 工具事件归属（`chat:tool:*` 帧 `parentTaskId`/`agentName`）、`chat:group:title` 组标题帧（Haiku 异步生成）、前端 work group + 垂直 rail 渲染体系（TaskCard 子 rail / thinking 滚动窗口 / web 搜索结果列表）、TodoPanel turn 级生命周期。改 `chat/transport/sse.py` 事件过滤/归属、`chat_turn_recorder`、前端 conversation 渲染体系前必读。
+- [Chat 滚动策略:阅读优先](../plans/2026-06-10-chat-scroll-reading-first):transcript 滚动状态机的设计 SSOT — 为什么弃用 virtuoso followOutput 内建启发式、发送锚顶 + runway、手势断开/位置恢复不对称滞回、乐观 placeholder turn、验收清单。改 `conversation/scroll/`、TranscriptView 滚动接线、ConversationView 发送链路前必读。

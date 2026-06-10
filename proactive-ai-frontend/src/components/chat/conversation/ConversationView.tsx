@@ -29,7 +29,7 @@ import {
   type ReactNode,
 } from "react";
 import { motion } from "framer-motion";
-import { Virtuoso } from "react-virtuoso";
+import { Virtuoso, type Components } from "react-virtuoso";
 import { AlertCircle, ArrowLeft, Check, ChevronDown, Copy, Loader2, Mic, Pencil, Radio, RotateCcw, Send, Sparkles, Square, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import bgGradient from "@/assets/bg-gradient.jpg";
 import { cn } from "@/lib/utils";
@@ -43,6 +43,8 @@ import WorkGroup from "@/components/chat/conversation/WorkGroup";
 import { segmentAssistantParts } from "@/components/chat/conversation/work-group";
 import ProposeActionCard from "@/components/chat/conversation/ProposeActionCard";
 import { HitlApprovalCard, type HitlRequiresAction } from "@/components/chat/conversation/HitlApprovalCard";
+import { useChatScroll, type ChatScrollApi } from "@/components/chat/conversation/scroll/useChatScroll";
+import JumpToLatest from "@/components/chat/conversation/scroll/JumpToLatest";
 import TodoPanel from "@/components/chat/conversation/TodoPanel";
 import BrowserPanel from "@/components/browser/BrowserPanel";
 import type { SheetStage } from "@/components/browser/BrowserView";
@@ -387,6 +389,8 @@ function AssistantEntry({
   debugEnabled,
   isLast,
   onRegenerate,
+  hitlAction,
+  onDecide,
 }: {
   entry: ConversationAssistantEntry;
   /** Wired to the runtime's sendMessage for propose_action replies. */
@@ -400,6 +404,10 @@ function AssistantEntry({
   isLast?: boolean;
   /** Drop this turn and re-run the latest user message (regenerate=true). */
   onRegenerate?: () => void;
+  /** This turn paused on a HITL approval → render the gate where the
+   *  stream stopped (after the turn's streamed parts). */
+  hitlAction?: HitlRequiresAction | null;
+  onDecide?: (decision: "approve" | "reject", message?: string) => void;
 }) {
   const { parts, running } = entry;
   // Heartbeat-triggered turn with Debug off → surface only notify_user.
@@ -444,12 +452,14 @@ function AssistantEntry({
     );
   });
 
+  const showHitl = !!hitlAction && !!onDecide;
   // First-token-pending: turn is running but nothing has streamed yet. A
-  // hidden debug turn never shows the pill (it's a background heartbeat turn).
-  const showThinkingPill = running && parts.length === 0 && !debugHidden;
+  // hidden debug turn never shows the pill (it's a background heartbeat
+  // turn), and neither does a HITL pause — a paused run isn't "thinking".
+  const showThinkingPill = running && parts.length === 0 && !debugHidden && !showHitl;
   // Hidden debug turn that produced no notify_user → render nothing (no empty
   // bubble taking vertical space).
-  if (blocks.length === 0 && !showThinkingPill) return null;
+  if (blocks.length === 0 && !showThinkingPill && !showHitl) return null;
 
   return (
     <motion.div
@@ -478,6 +488,11 @@ function AssistantEntry({
             ) : null}
           </>
         )}
+        {hitlAction && onDecide ? (
+          <div className="pt-1">
+            <HitlApprovalCard action={hitlAction} disabled={busy} onDecide={onDecide} />
+          </div>
+        ) : null}
       </div>
     </motion.div>
   );
@@ -493,6 +508,8 @@ function TranscriptEntry({
   isLastAssistant,
   busy,
   debugEnabled,
+  hitlAction,
+  onDecide,
 }: {
   entry: ConversationEntry;
   onReply: (text: string) => Promise<void>;
@@ -503,6 +520,9 @@ function TranscriptEntry({
   isLastAssistant: boolean;
   busy: boolean;
   debugEnabled: boolean;
+  /** Set on the paused HITL turn's entry only (see TranscriptView). */
+  hitlAction?: HitlRequiresAction | null;
+  onDecide?: (decision: "approve" | "reject", message?: string) => void;
 }) {
   // Heartbeats are debug-only. When shown, they're just the input that
   // triggered the turn → render as a plain user bubble (no special UI).
@@ -531,6 +551,8 @@ function TranscriptEntry({
       debugEnabled={debugEnabled}
       isLast={isLastAssistant}
       onRegenerate={onRegenerate}
+      hitlAction={hitlAction}
+      onDecide={onDecide}
     />
   );
 }
@@ -542,28 +564,74 @@ interface TranscriptViewProps {
   busy: boolean;
   hasRunningTurn: boolean;
   debugEnabled: boolean;
-  firstItemIndex: number;
+  /** Scroll policy owner (state machine + commands) — see scroll/useChatScroll. */
+  scroll: ChatScrollApi;
   hasMoreHistory: boolean;
   loadMoreHistory: () => Promise<void>;
   sendMessage: (text: string) => Promise<void>;
   retryMessage: (id: string, text: string) => void;
   onEdit: (text: string) => void;
   onRegenerate: () => void;
-  /** Paused HITL run → render the approval gate inline at the transcript end. */
+  /** Paused HITL run → render the approval gate inline on the paused turn. */
   awaitingDecision: HitlRequiresAction | null;
   onDecide: (decision: "approve" | "reject", message?: string) => void;
 }
+
+/** Variable data for the (identity-stable) Virtuoso Footer, passed via the
+ *  `context` prop so changes update props instead of remounting the Footer
+ *  subtree — a remount would drop the fallback HitlApprovalCard's local
+ *  input state. */
+interface TranscriptFooterContext {
+  busy: boolean;
+  hasRunningTurn: boolean;
+  awaitingDecision: HitlRequiresAction | null;
+  hitlHostId: string | null;
+  onDecide: (decision: "approve" | "reject", message?: string) => void;
+  runwayPx: number;
+}
+
+/** Footer = the HITL fallback for host-less pauses (a debug-hidden turn never
+ *  flushed an entry), the pre-stream "Thinking…" pill (only reachable when a
+ *  send couldn't open its optimistic placeholder — a foreign heartbeat turn
+ *  held the builder), and the runway spacer the send anchor scrolls against
+ *  (see useChatScroll). */
+function TranscriptFooter({ context }: { context?: TranscriptFooterContext }) {
+  if (!context) return null;
+  const { busy, hasRunningTurn, awaitingDecision, hitlHostId, onDecide, runwayPx } = context;
+  return (
+    <>
+      {awaitingDecision && !hitlHostId ? (
+        <div className="mb-5 px-4 pt-1">
+          <HitlApprovalCard action={awaitingDecision} disabled={busy} onDecide={onDecide} />
+        </div>
+      ) : null}
+      {!awaitingDecision && busy && !hasRunningTurn ? (
+        <div className="mb-5 px-4 pt-1">
+          <div className="inline-flex items-center -ml-2 rounded-lg px-2 py-1 text-[12.5px] font-medium text-foreground/65">
+            <ShimmerText>Thinking…</ShimmerText>
+          </div>
+        </div>
+      ) : null}
+      <div style={{ height: runwayPx }} aria-hidden="true" />
+    </>
+  );
+}
+
+const TRANSCRIPT_COMPONENTS: Components<ConversationEntry, TranscriptFooterContext> = {
+  Footer: TranscriptFooter,
+};
 
 /** Transcript viewport (react-virtuoso). Three render modes share the
  *  flex-1 slot below the header:
  *    - !ready                       → loading placeholder
  *    - ready & transcript empty     → landing (main thread) or radio prompt
  *    - ready & transcript non-empty → virtualized list of TranscriptEntry
- *  Virtuoso owns scroll: `followOutput="auto"` keeps the view pinned to
- *  bottom on new live events when the user is already there, and
- *  `startReached` triggers an older-page load when the user pulls up.
- *  `firstItemIndex` (managed by the parent) preserves visual position when
- *  older entries prepend. */
+ *  Virtuoso is a pure virtualized list here — `followOutput={false}` and all
+ *  scrolling (send anchor, follow pin, jump) goes through `scroll`
+ *  (useChatScroll), which reads back `atBottomStateChange` /
+ *  `totalListHeightChanged` / `scrollerRef`. `startReached` still triggers an
+ *  older-page load when the user pulls up, with `firstItemIndex` (managed
+ *  below) preserving the visual position when the page prepends. */
 function TranscriptView({
   ready,
   isProactive,
@@ -571,7 +639,7 @@ function TranscriptView({
   busy,
   hasRunningTurn,
   debugEnabled,
-  firstItemIndex,
+  scroll,
   hasMoreHistory,
   loadMoreHistory,
   sendMessage,
@@ -581,30 +649,51 @@ function TranscriptView({
   awaitingDecision,
   onDecide,
 }: TranscriptViewProps) {
-  // Pre-stream "Thinking…" pill. Sits in Virtuoso's Footer slot so it
-  // stays anchored to the bottom regardless of transcript length.
-  const Footer = useMemo(() => {
-    return function VirtuosoFooter() {
-      // HITL gate renders inline at the transcript end when a run is paused. It
-      // takes precedence over the thinking pill (a paused run isn't "thinking").
-      if (awaitingDecision) {
-        return (
-          <div className="mb-5 px-4 pt-1">
-            <HitlApprovalCard action={awaitingDecision} disabled={busy} onDecide={onDecide} />
-          </div>
-        );
-      }
-      if (!(busy && !hasRunningTurn)) return null;
-      return (
-        <div className="mb-5 px-4 pt-1">
-          <div className="inline-flex items-center -ml-2 rounded-lg px-2 py-1 text-[12.5px] font-medium text-foreground/65">
-            <ShimmerText>Thinking…</ShimmerText>
-          </div>
-        </div>
-      );
-    };
-  }, [busy, hasRunningTurn, awaitingDecision, onDecide]);
-  const components = useMemo(() => ({ Footer }), [Footer]);
+  // `firstItemIndex` is a virtual offset that lets prepended history pages
+  // keep their visual position. Start high and decrement by the number of
+  // items prepended (detected by head id change + growth; appends and
+  // in-place turn updates leave it alone).
+  const VIRTUOSO_START_INDEX = 1_000_000_000;
+  const [firstItemIndex, setFirstItemIndex] = useState(VIRTUOSO_START_INDEX);
+  const headIdRef = useRef<string | null>(null);
+  const lenRef = useRef(0);
+  useLayoutEffect(() => {
+    const head = transcript[0]?.id ?? null;
+    if (
+      headIdRef.current
+      && head !== headIdRef.current
+      && transcript.length > lenRef.current
+    ) {
+      const prepended = transcript.length - lenRef.current;
+      setFirstItemIndex((prev) => prev - prepended);
+    }
+    headIdRef.current = head;
+    lenRef.current = transcript.length;
+  }, [transcript]);
+
+  // The paused HITL turn hosts its approval card inline (right where the
+  // stream stopped). Host = the last assistant entry, still running. A turn
+  // hidden by the Debug filter never flushed an entry → Footer fallback.
+  const hitlHostId = useMemo(() => {
+    if (!awaitingDecision) return null;
+    for (let i = transcript.length - 1; i >= 0; i--) {
+      const e = transcript[i];
+      if (e.kind === "assistant") return e.running ? e.id : null;
+    }
+    return null;
+  }, [awaitingDecision, transcript]);
+
+  const footerContext = useMemo<TranscriptFooterContext>(
+    () => ({
+      busy,
+      hasRunningTurn,
+      awaitingDecision,
+      hitlHostId,
+      onDecide,
+      runwayPx: scroll.runwayPx,
+    }),
+    [busy, hasRunningTurn, awaitingDecision, hitlHostId, onDecide, scroll.runwayPx],
+  );
   const onStartReached = useCallback(() => {
     if (hasMoreHistory) void loadMoreHistory();
   }, [hasMoreHistory, loadMoreHistory]);
@@ -651,14 +740,15 @@ function TranscriptView({
   }
   return (
     <Virtuoso
+      ref={scroll.virtuosoRef}
       className="scrollbar-hidden"
       style={{ flex: 1 }}
       data={transcript}
       firstItemIndex={firstItemIndex}
-      initialTopMostItemIndex={transcript.length - 1}
+      initialTopMostItemIndex={{ index: transcript.length - 1, align: "end" }}
       computeItemKey={(_index, entry) => entry.id}
       itemContent={(_index, entry) => (
-        <div className="px-4">
+        <div className="px-4" data-entry-id={entry.id}>
           <TranscriptEntry
             entry={entry}
             onReply={sendMessage}
@@ -669,13 +759,20 @@ function TranscriptView({
             isLastAssistant={entry.id === lastAssistantId}
             busy={busy}
             debugEnabled={debugEnabled}
+            hitlAction={entry.id === hitlHostId ? awaitingDecision : null}
+            onDecide={onDecide}
           />
         </div>
       )}
       startReached={onStartReached}
-      followOutput="auto"
+      followOutput={false}
+      atBottomThreshold={48}
+      atBottomStateChange={scroll.handleAtBottomChange}
+      totalListHeightChanged={scroll.handleTotalHeightChange}
+      scrollerRef={scroll.handleScrollerRef}
       increaseViewportBy={400}
-      components={components}
+      context={footerContext}
+      components={TRANSCRIPT_COMPONENTS}
     />
   );
 }
@@ -826,35 +923,31 @@ export default function ConversationView({
   const [browserStage, setBrowserStage] = useState<SheetStage | "closed">("closed");
   const [composerFocused, setComposerFocused] = useState(false);
 
-  // Virtuoso owns the transcript scroll viewport. Two integration details
-  // it needs from us:
-  //
-  //   1. `firstItemIndex` is a virtual offset that lets prepended pages keep
-  //      their visual position. We start at a large number and decrement by
-  //      the number of items prepended on each `loadMoreHistory` (detected
-  //      below by watching the transcript's head id + length).
-  //   2. Pin-to-bottom on new live events is handled by `followOutput="auto"`
-  //      — no manual scrollTop bookkeeping needed.
-  const VIRTUOSO_START_INDEX = 1_000_000_000;
-  const [firstItemIndex, setFirstItemIndex] = useState(VIRTUOSO_START_INDEX);
-  const headIdRef = useRef<string | null>(null);
-  const lenRef = useRef(0);
-  useLayoutEffect(() => {
-    const head = transcript[0]?.id ?? null;
-    // A prepend changes the head id AND grows the array. Any other transcript
-    // mutation (append on live event, in-place turn update, head unchanged)
-    // is a no-op for `firstItemIndex`.
-    if (
-      headIdRef.current
-      && head !== headIdRef.current
-      && transcript.length > lenRef.current
-    ) {
-      const prepended = transcript.length - lenRef.current;
-      setFirstItemIndex((prev) => prev - prepended);
-    }
-    headIdRef.current = head;
-    lenRef.current = transcript.length;
-  }, [transcript]);
+  // Scroll policy (reading-first): useChatScroll owns the follow/free state
+  // machine, the send anchor and the jump affordance; TranscriptView wires it
+  // into Virtuoso. Sends route through anchorToSend so the new user message
+  // lands at the viewport top with the reply streaming into the runway below.
+  const scroll = useChatScroll({ session: sessionKey, transcript });
+  const { anchorToSend } = scroll;
+  const sendAndAnchor = useCallback(
+    (text: string) => {
+      const p = sendMessage(text); // appends the optimistic bubble synchronously
+      anchorToSend();
+      return p;
+    },
+    [sendMessage, anchorToSend],
+  );
+  const retryAndAnchor = useCallback(
+    (id: string, text: string) => {
+      void retryMessage(id, text);
+      anchorToSend();
+    },
+    [retryMessage, anchorToSend],
+  );
+  const handleDecide = useCallback(
+    (d: "approve" | "reject", message?: string) => void submitDecision(d, message),
+    [submitDecision],
+  );
 
   // On foreground return, iOS may pause the Live View WebSocket + expire its
   // signed iframe URL. Refresh the URL then bump the iframe key (don't remount
@@ -1053,34 +1146,41 @@ export default function ConversationView({
               transition: "padding-top 200ms ease-out",
             }}
           >
-            {/* Transcript */}
-            <FeedbackChannelContext.Provider value={feedbackChannel}>
-              <TranscriptView
-                ready={ready}
-                isProactive={isProactive}
-                transcript={transcript}
-                busy={busy}
-                hasRunningTurn={hasRunningTurn}
-                debugEnabled={debugEnabled}
-                firstItemIndex={firstItemIndex}
-                hasMoreHistory={hasMoreHistory}
-                loadMoreHistory={loadMoreHistory}
-                sendMessage={sendMessage}
-                retryMessage={retryMessage}
-                onEdit={handleEditEntry}
-                onRegenerate={regenerateLast}
-                awaitingDecision={awaitingDecision}
-                onDecide={(d, message) => void submitDecision(d, message)}
+            {/* Transcript + the floating jump-to-latest affordance. */}
+            <div className="relative flex min-h-0 flex-1 flex-col">
+              <FeedbackChannelContext.Provider value={feedbackChannel}>
+                <TranscriptView
+                  ready={ready}
+                  isProactive={isProactive}
+                  transcript={transcript}
+                  busy={busy}
+                  hasRunningTurn={hasRunningTurn}
+                  debugEnabled={debugEnabled}
+                  scroll={scroll}
+                  hasMoreHistory={hasMoreHistory}
+                  loadMoreHistory={loadMoreHistory}
+                  sendMessage={sendAndAnchor}
+                  retryMessage={retryAndAnchor}
+                  onEdit={handleEditEntry}
+                  onRegenerate={regenerateLast}
+                  awaitingDecision={awaitingDecision}
+                  onDecide={handleDecide}
+                />
+              </FeedbackChannelContext.Provider>
+              <JumpToLatest
+                visible={scroll.showJump}
+                attention={scroll.hasNewBelow || (!!awaitingDecision && scroll.mode === "free")}
+                onClick={scroll.jumpToLatest}
               />
-            </FeedbackChannelContext.Provider>
+            </div>
 
             {/* Footer: agent plan + composer. The HITL approval gate renders
-                inline at the transcript end (TranscriptView Footer), not here. */}
+                inline on the paused turn (TranscriptView), not here. */}
             <div className="relative shrink-0">
               <TodoPanel sessionKey={browserSessionKey} composerFocused={composerFocused} />
               <Composer
                 ref={composerRef}
-                onSend={sendMessage}
+                onSend={sendAndAnchor}
                 onFocusChange={setComposerFocused}
                 placeholder={placeholder}
                 streaming={busy}

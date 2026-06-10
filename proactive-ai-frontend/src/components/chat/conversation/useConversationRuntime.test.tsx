@@ -268,8 +268,17 @@ describe("useConversationRuntime.regenerateLast", () => {
       await result.current.regenerateLast();
     });
 
-    // Stale assistant turn dropped locally; the user turn stays put.
-    expect(result.current.transcript.map((e) => e.id)).toEqual(["u-1"]);
+    // Stale assistant turn dropped locally; the user turn stays put and an
+    // optimistic placeholder (running, empty) takes the dropped turn's place
+    // so the pill shows without waiting for the first frame.
+    expect(result.current.transcript.map((e) => e.kind)).toEqual([
+      "user", "assistant",
+    ]);
+    expect(result.current.transcript[0].id).toBe("u-1");
+    const placeholder = result.current.transcript[1] as ConversationAssistantEntry;
+    expect(placeholder.id).not.toBe("a-1");
+    expect(placeholder.running).toBe(true);
+    expect(placeholder.parts).toEqual([]);
     // Backend re-run with the regenerate flag + the latest user text (it diffs
     // `message`, not `messages`, then pops the stale AIMessage). clientMsgId
     // rides along so a retried-after-timeout regenerate can't double-enqueue.
@@ -727,3 +736,166 @@ describe("useConversationRuntime in-flight user bubble merge", () => {
     expect(users.some((e) => !e.failed)).toBe(true);
   });
 });
+
+// ─── Optimistic turn placeholder ──────────────────────────────────────
+
+
+describe("useConversationRuntime optimistic turn placeholder", () => {
+  beforeEach(() => {
+    fetchHistoryMock.mockReset();
+    streamMock.mockReset();
+    streamMock.mockImplementation(() => emptyStream());
+    sendMock.mockReset();
+    sendMock.mockResolvedValue(undefined);
+  });
+
+  const assistantEntries = (entries: { kind: string }[]) =>
+    entries.filter(
+      (e): e is ConversationAssistantEntry => e.kind === "assistant",
+    );
+
+  test("a send opens a running placeholder turn immediately", async () => {
+    fetchHistoryMock.mockResolvedValueOnce(page([]));
+    const { result } = renderHook(() =>
+      useConversationRuntime({ session: "main-p1" }),
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    await act(async () => {
+      await result.current.sendMessage("hello");
+    });
+    expect(result.current.transcript.map((e) => e.kind)).toEqual([
+      "user", "assistant",
+    ]);
+    const turn = assistantEntries(result.current.transcript)[0];
+    expect(turn.running).toBe(true);
+    expect(turn.parts).toEqual([]);
+    expect(turn.debug).toBe(false);
+  });
+
+  test("a failed send drops the idle placeholder, keeping the failed bubble", async () => {
+    fetchHistoryMock.mockResolvedValueOnce(page([]));
+    const { result } = renderHook(() =>
+      useConversationRuntime({ session: "main-p2" }),
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    sendMock.mockRejectedValueOnce(new Error("boom"));
+    await act(async () => {
+      await result.current.sendMessage("hello");
+    });
+    expect(result.current.transcript.map((e) => e.kind)).toEqual(["user"]);
+    expect(userEntriesOf(result.current.transcript)[0].failed).toBe(true);
+    expect(result.current.busy).toBe(false);
+  });
+
+  test("the placeholder is skipped while a foreign turn is mid-stream", async () => {
+    fetchHistoryMock.mockResolvedValueOnce(page([]));
+    // A heartbeat-triggered turn is already streaming when the user sends:
+    // its builder isn't ours to reuse, so the send must NOT open a second
+    // assistant entry.
+    streamMock.mockImplementation(() =>
+      (async function* () {
+        yield {
+          event: { type: "chat:thinking", traceId: "run-1", data: {} },
+          lastEventId: "1",
+        };
+        // Hold the stream open so the foreign turn never finalizes.
+        await new Promise(() => {});
+      })(),
+    );
+    const { result } = renderHook(() =>
+      useConversationRuntime({ session: "proactive-p3" }),
+    );
+    await waitFor(() =>
+      expect(assistantEntries(result.current.transcript)).toHaveLength(1),
+    );
+
+    await act(async () => {
+      await result.current.sendMessage("hi");
+    });
+    expect(assistantEntries(result.current.transcript)).toHaveLength(1);
+  });
+
+  test("a tick turn arriving after the send drops the idle placeholder instead of adopting it", async () => {
+    fetchHistoryMock.mockResolvedValueOnce(page([]));
+    // Controllable stream: frames are pushed mid-test, AFTER the send has
+    // already created the optimistic placeholder.
+    const queue: { event: Record<string, unknown>; lastEventId: string }[] = [];
+    let notify: (() => void) | null = null;
+    const push = (event: Record<string, unknown>) => {
+      queue.push({ event, lastEventId: String(queue.length + 1) });
+      notify?.();
+    };
+    streamMock.mockImplementation(() =>
+      (async function* () {
+        while (true) {
+          while (queue.length === 0) {
+            await new Promise<void>((resolve) => {
+              notify = resolve;
+            });
+          }
+          yield queue.shift();
+        }
+      })(),
+    );
+
+    const { result } = renderHook(() =>
+      useConversationRuntime({ session: "proactive-p5", debugEnabled: false }),
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    await act(async () => {
+      await result.current.sendMessage("hi");
+    });
+    expect(assistantEntries(result.current.transcript)).toHaveLength(1);
+
+    // A heartbeat tick's turn starts BEFORE the user's turn. Its frames must
+    // not adopt the placeholder builder: with Debug off the gate would
+    // swallow every flush and strand a running/empty entry forever.
+    await act(async () => {
+      push({ type: "proactive:tick", traceId: "run-tick", data: { text: "[heartbeat]", windowEnd: "w" } });
+      push({ type: "chat:thinking", traceId: "run-tick", data: {} });
+      push({ type: "chat:delta", traceId: "run-tick", data: { delta: "silent work" } });
+      push({ type: "chat:done", traceId: "run-tick", data: {} });
+    });
+    await waitFor(() =>
+      expect(assistantEntries(result.current.transcript)).toHaveLength(0),
+    );
+
+    // The user's own turn then opens normally.
+    await act(async () => {
+      push({ type: "chat:thinking", traceId: "run-user", data: {} });
+      push({ type: "chat:delta", traceId: "run-user", data: { delta: "answer" } });
+    });
+    await waitFor(() => {
+      const turns = assistantEntries(result.current.transcript);
+      expect(turns).toHaveLength(1);
+      expect(turns[0].parts).toEqual([{ type: "text", text: "answer" }]);
+    });
+  });
+
+  test("stop drops a placeholder that never streamed", async () => {
+    fetchHistoryMock.mockResolvedValueOnce(page([]));
+    const { result } = renderHook(() =>
+      useConversationRuntime({ session: "main-p4" }),
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    await act(async () => {
+      await result.current.sendMessage("hello");
+    });
+    expect(assistantEntries(result.current.transcript)).toHaveLength(1);
+    await act(async () => {
+      await result.current.stop();
+    });
+    expect(assistantEntries(result.current.transcript)).toHaveLength(0);
+    expect(result.current.busy).toBe(false);
+  });
+});
+
+function userEntriesOf(entries: { kind: string }[]) {
+  return entries.filter(
+    (e): e is ConversationUserEntry => e.kind === "user",
+  );
+}

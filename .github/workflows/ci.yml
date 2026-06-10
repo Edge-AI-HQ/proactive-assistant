@@ -133,7 +133,11 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          # 22 (= local dev + build-ios.yml): @supabase/realtime-js treats
+          # Node <22 as "no native WebSocket" unconditionally, so importing
+          # src/lib/supabase.ts under vitest on Node 20 raises an async
+          # rejection that lands at a random point in teardown — a flaky red.
+          node-version: 22
           cache: npm
 
       - run: npm ci

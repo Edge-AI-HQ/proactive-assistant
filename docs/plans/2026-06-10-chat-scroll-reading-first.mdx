@@ -1,0 +1,62 @@
+---
+title: "Chat 滚动策略:阅读优先(reading-first)"
+description: "对话 transcript 的滚动状态机设计:发送锚顶 + runway、手势断开/位置恢复的不对称滞回、jump-to-latest。替代 virtuoso followOutput 内建启发式。"
+---
+
+# Chat 滚动策略:阅读优先(reading-first)
+
+状态:已实施(ConversationView + scroll/ 模块)。
+
+## 为什么不能用 virtuoso 自带的 followOutput
+
+`react-virtuoso@4.18` 的 `followOutput="auto"` 由两套内部位置启发式驱动,对流式 agent 回复(单 entry 原地长高,~20 次/s)有两个结构性 bug(dist 源码核实):
+
+1. **抢滚动(fight)**:atBottom 状态机判定"为什么不在底部"时 `SIZE_INCREASED` 优先级高于 `SCROLLING_UPWARDS`。流式期间 scrollHeight 持续增长,用户上滑那一帧几乎必然同时有增高 → 被误判为"内容变高"→ 自动 scrollToIndex(LAST) 拽回底部。
+2. **静默断跟随(slip)**:atBottom 阈值仅 4px,任何非增高扰动(Footer 内容切换、action bar mount、图片晚加载、iOS 弹性滚动)让位置离底 >4px 后,跟随静默停止且无 UI 可恢复。
+
+结论:位置启发式和用户意图必然 race。方案不是调参,而是 `followOutput={false}` 永久关闭 virtuoso 全部自动滚动,决策权收回到单一 owner。
+
+## 策略(对标 Claude/ChatGPT 的阅读优先模型)
+
+一个显式状态机:`following`(贴底跟随)/ `free`(自由阅读),加不对称滞回:
+
+| 事件 | 行为 |
+|---|---|
+| 会话 mount / 切换 | 无动画落底,`following` |
+| 用户发送 | runway 撑底 → smooth 锚用户消息到视口顶 → **`free`**(流式期间默认零滚动,阅读位置绝对静止) |
+| 流式中 `following` | 内容增高 rAF 节流贴底(`behavior:auto`,绝不 smooth) |
+| 流式中 `free` | 完全不动;⬇ 按钮浮现 |
+| 手势向上(wheel↑ / touch 拖↑ / PgUp/Home / 滚动条上拖) | `following → free`,**断开只认输入事件,绝不用位置判定** |
+| 用户滚回离底 ≤48px 且手指已离开 | `free → following`(只认 not-at-bottom → at-bottom **transition**),同时 runway 塌缩 |
+| 点 ⬇ | instant 落底 + `following` + runway 塌缩 |
+| proactive 新 turn 且不在底 | 不滚,⬇ 带 unread 圆点 |
+| 流结束 / HITL 出现 | 无滚动 |
+
+关键不对称:断开靠**原始输入事件**(天然区分程序化滚动),恢复靠**位置 transition**(锚定位置本身就在底部、永不产生 transition,所以阅读永远不会被意外劫持)。程序化滚动期间(`PROGRAMMATIC_SETTLE_MS` 滚动静默窗)忽略 atBottom 信号,防锚定动画落底被误判为用户回底。
+
+## 关键机制
+
+- **Runway = Virtuoso Footer 里的纯 spacer div**(非 entry min-height):发送时一次性按 `视口高 − 用户气泡高` 计算,天然在一切内容之下,对 entry 形态(debug 隐藏 turn、regenerate 删 entry)免疫。spacer 定高,回复增长会 1:1 增加 scrollHeight,但增长全部发生在视口下方、scrollTop 不动 → 锚定的阅读位置零移动;尾部空白在用户进入跟随(回底/点 ⬇)时塌缩。气泡测不到(从深历史发送、jsdom)时回退整视口——超配只是折叠线下多空白,欠配才会让锚定 clamp 不到位。随内容填充收缩的 runway(ChatGPT 形态)留 backlog。
+- **乐观 placeholder turn**(`useConversationRuntime.createTurnPlaceholder`):发送即在 transcript 开出 running 空 turn,entry 内 pill 立即可见、锚定有真实目标;真 turn 的帧经幂等 `ensureTurn` 续进同一 entry。心跳 turn 占着 builder 时跳过(builder 不是我们的);**发送后才开播的 tick turn 也不许收养它**——`placeholderTurnIdRef` 标记"未认领",handleEnvelope 的 traceId classifier 一看到 debug 帧就把仍空的 placeholder finalize 掉,否则 debug gate 会吞掉所有 flush、留下永远 Thinking 的孤儿 entry;send 失败 / stop / 静默结束由 `dropIdlePlaceholder`/`finalizeTurn` 收掉空 entry。连带消灭了旧 Footer pill ↔ 首帧交换的底部跳变。
+- **HITL 卡进 entry**:审批卡渲染在暂停 turn 的 entry 内(流停在哪、卡在哪),Footer 只留 debug-隐藏 turn 的 fallback。
+- **发送锚定编舞**(`useChatScroll.anchorToSend`):tick 驱动两阶段(sizing → scroll),不依赖"恰好有状态变化"触发 re-render;>2 视口距离改 instant。
+- **手势解析**(`scroll-intent.ts`):wheel deltaY<0、touch 拖动向下(8px slop + 方向重锚)、PgUp/Home/ArrowUp(仅 scroller 自身聚焦)、鼠标按住 + scrollTop 上移(滚动条拖拽)。
+- **键盘/视口变化**:scroller ResizeObserver → following 补 pin;free 不动(浏览器保 scrollTop,顶部锚定天然稳定)。
+
+## 实施位置
+
+- `proactive-ai-frontend/src/components/chat/conversation/scroll/`:`useChatScroll.ts`(状态机,唯一 scroll owner)、`scroll-intent.ts`、`JumpToLatest.tsx`,均有单测。
+- `ConversationView.tsx`:TranscriptView 接线(followOutput=false / atBottomThreshold=48 / scrollerRef / totalListHeightChanged / firstItemIndex prepend 簿记)、HITL host 判定、发送路由 `sendAndAnchor`。
+- 硬约定:`scrollTo*`/`scrollIntoView` 只允许出现在 `scroll/` 内。
+
+## 验收清单(真机/浏览器手工过)
+
+1. 发送后问题在视口顶、回答向下铺、视口零跳动;2. 长 turn 流式数分钟不滚不跳,⬇ 出现;3. 点 ⬇ 贴底且持续跟随无抖动;4. 贴底中上滑一次立即断、绝无回拽;5. 滚回底自动恢复跟随;6. 工具卡更新/图片加载不动上方内容;7. 上拉加载历史位置不变;8. 键盘弹出贴底者仍贴底、阅读者不动;9. proactive 新消息不强拽、⬇ 带圆点;10. 重进会话直接落底。
+
+## 已知调参点(v1 留白)
+
+- 恢复阈值用"绝对底 48px";流式早期 runway 空白大时"内容底"语义更准,需测量流式 entry 实际内容高,体感有问题再做。
+- 锚定 scrollToIndex 在 Footer spacer 异步测量下可能短暂 under-shoot,依赖 virtuoso scrollToIndex 内部重试;如观察到不到位,在 programmatic 窗口内对 totalListHeightChanged 补一次校正。
+- `flushTurn` 未做 rAF 合帧(后端 DeltaChannel 已 50ms 批,边际收益小、动 runtime 热路径 + 测试面大);移动端若仍有渲染压力再做。
+- 尾部 runway 空白不随内容填充收缩(完成后的短回复下方留白,与 ChatGPT 的收缩式 runway 不同);进入跟随时塌缩。体感有问题再做收缩式。
+- **既有(非本 PR 引入)**:debug 隐藏的 tick turn 完成时后端仍发 `chat:persisted`,前端按"最后一个 assistant entry"采纳 message id,会把 tick 的 id 错贴到上一个可见 turn 上(影响该条 👍/👎 的 join)。修法在 runtime 按 traceId 关联而非取尾,待独立小 PR。
