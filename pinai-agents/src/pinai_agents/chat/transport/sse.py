@@ -45,8 +45,11 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
+
+from langchain_core.messages import AIMessage
 
 from ...shared.sse_envelope import (
     EV_CHAT_DELTA,
@@ -60,6 +63,7 @@ from ...shared.sse_envelope import (
     EV_CHAT_TOOL_START,
     emit,
 )
+from ..harness.compaction import is_empty_ai_message
 from ..harness.group_title import GroupTitleFn
 from ..harness.reasoning import extract_reasoning_text
 from ..harness.session import command_tool_message
@@ -388,11 +392,41 @@ _TITLE_FLUSH_TIMEOUT_S = 3.0
 _GROUP_REASONING_CAP = 600
 
 
+@dataclass
+class TurnStats:
+    """What the translator observed about the turn, for the post-turn pass.
+
+    Lets chat.py decide "does this turn even need a compaction / state read?"
+    from numbers already on the wire instead of an extra full `aget_state`
+    (which on a long thread costs seconds and runs while the session lease is
+    still held, delaying a follow-up message).
+
+      * last_input_tokens — provider-reported input+output of the LAST
+        orchestrator model call (same accounting as compaction's
+        `_reported_input_tokens`); None if the provider attached no usage.
+      * last_msg_count — message-list length fed to that call (≈ state's
+        `messages` length; the few trailing messages appended after it don't
+        matter against the coarse message trigger).
+      * interrupted — the turn ended paused on a HITL interrupt; equivalent to
+        a thread-paused-on-interrupt state read, since an interrupt ends the
+        stream.
+      * saw_empty_ai_message — some orchestrator model call finished with an
+        empty reply (same predicate the scrub uses), i.e. this turn persisted
+        a message `scrub_empty_ai_messages` would remove.
+    """
+
+    last_input_tokens: int | None = None
+    last_msg_count: int | None = None
+    interrupted: bool = False
+    saw_empty_ai_message: bool = False
+
+
 async def langgraph_to_sse(
     events: AsyncIterator[dict[str, Any]],
     *,
     trace_id: str | None = None,
     group_title_fn: GroupTitleFn | None = None,
+    stats: TurnStats | None = None,
 ) -> AsyncIterator[bytes]:
     """Translate `agent.astream_events(version='v2')` to chat:* SSE bytes.
 
@@ -404,6 +438,9 @@ async def langgraph_to_sse(
     title, emitted as chat:group:title anchored to the group's first
     tool-call id. Titles never block the stream: they're scheduled on group
     close, drained between events, and flushed (bounded) before chat:done.
+
+    `stats`, when given, is filled in-place with turn observations (see
+    TurnStats) for the caller's post-turn pass.
     """
     yield chat_thinking(trace_id=trace_id)
     streamed_text_run_ids: set[str] = set()
@@ -477,7 +514,19 @@ async def langgraph_to_sse(
             etype = event.get("event", "")
             data = event.get("data", {}) or {}
 
-            if etype == "on_chat_model_stream":
+            if etype == "on_chat_model_start":
+                # Not forwarded — observed only for TurnStats. Input shape is
+                # {"messages": [[BaseMessage, ...]]} (batch of one).
+                if (
+                    stats is not None
+                    and not _is_summarization_model_event(event)
+                    and not _is_nested_event(event)
+                ):
+                    batches = (data.get("input") or {}).get("messages")
+                    if isinstance(batches, list) and batches and isinstance(batches[0], list):
+                        stats.last_msg_count = len(batches[0])
+
+            elif etype == "on_chat_model_stream":
                 if _is_summarization_model_event(event) or _is_nested_event(event):
                     continue
                 run_id = event.get("run_id")
@@ -514,6 +563,15 @@ async def langgraph_to_sse(
                 output = data.get("output")
                 if output is None:
                     continue
+                if stats is not None:
+                    usage = getattr(output, "usage_metadata", None)
+                    if usage:
+                        total = int(usage.get("input_tokens", 0)) + int(
+                            usage.get("output_tokens", 0)
+                        )
+                        stats.last_input_tokens = total if total > 0 else None
+                    if isinstance(output, AIMessage) and is_empty_ai_message(output):
+                        stats.saw_empty_ai_message = True
                 reasoning = _extract_chunk_reasoning(output)
                 if reasoning and not (
                     isinstance(run_id, str) and run_id in streamed_reasoning_run_ids
@@ -603,6 +661,8 @@ async def langgraph_to_sse(
                     # The turn pauses mid-group; the resume stream re-opens
                     # it, so don't close (and title) a half-finished group.
                     saw_interrupt = True
+                    if stats is not None:
+                        stats.interrupted = True
                     val = getattr(intr, "value", None) or {}
                     reqs = val.get("action_requests") or []
                     if len(reqs) > 1:
@@ -641,9 +701,9 @@ async def langgraph_to_sse(
                             allowed_decisions=allowed,
                             trace_id=trace_id,
                         )
-            # Everything else (other on_chain_*, on_chat_model_start,
-            # on_prompt_*, etc.) is intentionally ignored — they're either
-            # redundant with chat:delta / chat:tool:* or not user-visible.
+            # Everything else (other on_chain_*, on_prompt_*, etc.) is
+            # intentionally ignored — they're either redundant with
+            # chat:delta / chat:tool:* or not user-visible.
     except Exception as e:
         logger.exception("langgraph_to_sse failed mid-stream")
         yield chat_error(f"{type(e).__name__}: {e}", trace_id=trace_id)

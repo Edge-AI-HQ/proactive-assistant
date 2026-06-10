@@ -37,7 +37,11 @@ from ...agents.card_execution import make_card_execution_agent
 from ...agents.main_chat import make_main_chat_agent
 from ...agents.proactive import make_proactive_agent
 from ...auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
-from ...harness.compaction import compact_thread, scrub_empty_ai_messages
+from ...harness.compaction import (
+    compact_thread,
+    scrub_empty_ai_messages,
+    should_attempt_compaction,
+)
 from ...harness.ctx import ClientHints, run_context
 from ...harness.group_title import make_group_title_fn
 from ...harness.session import (
@@ -45,7 +49,6 @@ from ...harness.session import (
     make_resume_input,
     read_state_messages,
     stream_events,
-    thread_has_pending_interrupt,
 )
 from ...tools.code_mode.lazy_sandbox import LazyThreadSandbox
 from ...tools.code_mode.local_sandbox import (
@@ -54,7 +57,7 @@ from ...tools.code_mode.local_sandbox import (
     use_local_sandbox,
 )
 from ...tools.code_mode.sandbox import evict_thread
-from ..sse import chat_done, chat_error, langgraph_to_sse
+from ..sse import TurnStats, chat_done, chat_error, langgraph_to_sse
 from ._session_auth import assert_session_key_principal
 
 logger = logging.getLogger(__name__)
@@ -501,10 +504,12 @@ async def _stream(
             # FE classifies proactive tick turns by it, and web's /history
             # locates the in-flight turn's frames in the Redis stream by it
             # (refresh replay).
+            stats = TurnStats()
             async for chunk in langgraph_to_sse(
                 events,
                 trace_id=principal.run_id,
                 group_title_fn=title_fn,
+                stats=stats,
             ):
                 yield chunk
             # Maintain the thread once the turn finishes. Best-effort: a
@@ -516,11 +521,18 @@ async def _stream(
             # which awaits the whole chat stream — can't start the next turn
             # until maintenance commits: the in-place rewrites are never
             # concurrent with another turn on this session.
-            try:
-                if not await thread_has_pending_interrupt(agent, req.session_key):
-                    # Every thread kind, cards included: a 0-token final reply
-                    # persisted into the state breaks all later turns on strict
-                    # providers (Moonshot empty-assistant 400) — scrub it out.
+            # Whether maintenance is needed at all comes from stream
+            # observations (TurnStats), NOT from state reads — on a long
+            # thread one `aget_state` costs seconds while the session lease
+            # is still held, so the common clean turn must skip straight out.
+            if not stats.interrupted:
+                # Every thread kind, cards included: a 0-token final reply
+                # persisted into the state breaks all later turns on strict
+                # providers (Moonshot empty-assistant 400) — scrub it out.
+                # Only when this turn actually produced one (same predicate
+                # the scrub applies); request-path guards in harness/llm.py
+                # keep any pre-existing stragglers harmless until then.
+                if stats.saw_empty_ai_message:
                     try:
                         await scrub_empty_ai_messages(agent, thread_id=req.session_key)
                     except Exception:
@@ -528,27 +540,23 @@ async def _stream(
                             "empty-message scrub failed session_key=%s",
                             req.session_key,
                         )
-                    # Working-context compaction (card threads are short-lived —
-                    # skip). main + proactive share one path.
-                    if not is_card_thread:
-                        try:
-                            await compact_thread(
-                                agent,
-                                thread_id=req.session_key,
-                                virtual_key=virtual_key,
-                            )
-                        except Exception:
-                            logger.exception(
-                                "context compaction failed session_key=%s",
-                                req.session_key,
-                            )
-            except Exception:
-                # The pending-interrupt read itself failed — the reply already
-                # streamed, so maintenance is skipped this turn, never raised.
-                logger.exception(
-                    "post-turn maintenance skipped session_key=%s",
-                    req.session_key,
-                )
+                # Working-context compaction (card threads are short-lived —
+                # skip). main + proactive share one path.
+                if not is_card_thread and should_attempt_compaction(
+                    input_tokens=stats.last_input_tokens,
+                    message_count=stats.last_msg_count,
+                ):
+                    try:
+                        await compact_thread(
+                            agent,
+                            thread_id=req.session_key,
+                            virtual_key=virtual_key,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "context compaction failed session_key=%s",
+                            req.session_key,
+                        )
         except BaseException as e:
             saw_failure = e
             raise

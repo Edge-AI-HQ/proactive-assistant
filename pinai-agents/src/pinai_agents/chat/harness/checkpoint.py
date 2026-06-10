@@ -75,7 +75,9 @@ async def _ensure_schema(pool: AsyncConnectionPool, schema: str) -> None:
         await conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
 
 
-async def _open_pool(*, max_size: int, timeout: float, options: str) -> AsyncConnectionPool:
+async def _open_pool(
+    *, max_size: int, timeout: float, options: str, min_size: int = 0
+) -> AsyncConnectionPool:
     """Open one connection pool with the shared stale-connection hardening.
 
     Stale-connection protection — three independent layers because
@@ -86,8 +88,15 @@ async def _open_pool(*, max_size: int, timeout: float, options: str) -> AsyncCon
          any pool op on a dead socket bubbles up within 10s, not a multi-minute
          hang.
       3. max_idle=60: proactively recycle conns idle > 60s, shorter than the
-         typical fly-NAT idle window; min_size=0 avoids re-warming idle conns
-         that immediately re-stale.
+         typical fly-NAT idle window. The pool never shrinks below min_size
+         (psycopg_pool ShrinkPool), so a min_size conn is NOT recycled.
+    `min_size=1` (interactive) keeps one warm connection so a turn after an
+    idle gap doesn't pay TLS setup (~130ms measured). That long-lived conn is
+    kept alive by layer 1 (keepalive probes also refresh the NAT flow); if it
+    still dies, the `check=` borrow guard below discards it and dials fresh —
+    i.e. the worst case equals today's cold dial, never a hung turn.
+    `min_size=0` (background) skips the always-on conn where latency doesn't
+    matter.
     `timeout` caps how long getconn waits for a free connection before raising
     PoolTimeout — the fast-fail that stops a starved pool from hanging a turn.
     `check=` is a final SELECT-1 borrow guard.
@@ -95,7 +104,7 @@ async def _open_pool(*, max_size: int, timeout: float, options: str) -> AsyncCon
     assert settings.database_url
     pool = AsyncConnectionPool(
         conninfo=settings.database_url,
-        min_size=0,
+        min_size=min_size,
         max_size=max_size,
         max_idle=60,
         timeout=timeout,
@@ -145,7 +154,10 @@ async def init_checkpointer() -> AsyncPostgresSaver:
     # Interactive pool first: it owns schema creation + saver.setup() (the DDL
     # that creates the shared checkpoint tables).
     _interactive_pool = await _open_pool(
-        max_size=_INTERACTIVE_MAX_SIZE, timeout=_INTERACTIVE_TIMEOUT, options=options
+        max_size=_INTERACTIVE_MAX_SIZE,
+        timeout=_INTERACTIVE_TIMEOUT,
+        options=options,
+        min_size=1,
     )
     await _ensure_schema(_interactive_pool, schema)
     # The pool yields dict rows (kwargs row_factory=dict_row) — the type

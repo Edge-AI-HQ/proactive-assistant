@@ -76,14 +76,6 @@ def make_resume_input(decisions: list[dict[str, Any]]) -> Command:
     return Command(resume={"decisions": decisions})
 
 
-async def thread_has_pending_interrupt(agent: Any, session_key: str) -> bool:
-    """True if the thread is paused on an interrupt (the graph has a `next`
-    node). The send path skips post-turn context trimming while a HITL
-    decision is pending — the turn isn't finished."""
-    snapshot = await agent.aget_state(_thread_config(session_key))
-    return bool(snapshot is not None and snapshot.next)
-
-
 async def apply_message_updates(agent: Any, session_key: str, updates: list[Any]) -> None:
     """Apply a `messages`-channel state update via `agent.aupdate_state`.
 

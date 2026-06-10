@@ -321,3 +321,33 @@ async def test_scrub_noop_on_empty_thread() -> None:
 
     assert removed == 0
     agent.aupdate_state.assert_not_awaited()
+
+
+# ── should_attempt_compaction (stream-observed pre-check) ────────────
+
+
+def test_pre_check_unknown_usage_is_conservative() -> None:
+    # No provider usage → can't rule the token trigger out → full check.
+    assert compaction.should_attempt_compaction(input_tokens=None, message_count=5)
+    assert compaction.should_attempt_compaction(input_tokens=None, message_count=None)
+
+
+def test_pre_check_token_trigger() -> None:
+    assert compaction.should_attempt_compaction(
+        input_tokens=compaction.DEFAULT_TOKEN_TRIGGER + 1, message_count=10
+    )
+    assert not compaction.should_attempt_compaction(
+        input_tokens=compaction.DEFAULT_TOKEN_TRIGGER, message_count=10
+    )
+
+
+def test_pre_check_message_trigger() -> None:
+    assert compaction.should_attempt_compaction(
+        input_tokens=1_000, message_count=compaction.DEFAULT_MESSAGE_TRIGGER + 1
+    )
+    assert not compaction.should_attempt_compaction(
+        input_tokens=1_000, message_count=compaction.DEFAULT_MESSAGE_TRIGGER
+    )
+    # Tokens known-small + message count unobserved → skip (count only exists
+    # when a model call happened, which also carries usage on this provider).
+    assert not compaction.should_attempt_compaction(input_tokens=1_000, message_count=None)

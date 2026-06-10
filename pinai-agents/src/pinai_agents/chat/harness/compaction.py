@@ -128,6 +128,30 @@ def _split_at_turn_boundary(messages: list[Any], *, keep_recent_turns: int) -> i
     return turn_starts[len(turn_starts) - keep_recent_turns]
 
 
+def should_attempt_compaction(
+    *,
+    input_tokens: int | None,
+    message_count: int | None,
+    token_trigger: int = DEFAULT_TOKEN_TRIGGER,
+    message_trigger: int = DEFAULT_MESSAGE_TRIGGER,
+) -> bool:
+    """Cheap pre-check from stream-observed numbers (TurnStats), deciding
+    whether the post-turn pass needs to touch state at all. Mirrors
+    `compact_thread`'s trigger. The token side is exact (same provider-reported
+    accounting); the message side is observed a few trailing messages early, so
+    against the coarse trigger a borderline turn fires one turn later — the
+    token trigger, the primary bound, is unaffected. Conservative: when the
+    provider attached no usage (`input_tokens` None) we can't rule the token
+    trigger out, so fall through to the full check (which has the
+    approximate-count fallback).
+    """
+    if input_tokens is None:
+        return True
+    if input_tokens > token_trigger:
+        return True
+    return message_count is not None and message_count > message_trigger
+
+
 def _reported_input_tokens(messages: list[Any]) -> int:
     """Best estimate of the next turn's input size. Prefers the provider's
     reported usage on the latest AIMessage — exact, and it already counts the
@@ -242,7 +266,7 @@ async def compact_thread(
     return len(old)
 
 
-def _is_empty_ai_message(message: AIMessage) -> bool:
+def is_empty_ai_message(message: AIMessage) -> bool:
     """True when the message carries nothing replayable or renderable: no tool
     calls and no non-blank text or non-text block. A reasoning-only message is
     NOT empty — its thinking block still renders in history (the request path
@@ -294,7 +318,7 @@ async def scrub_empty_ai_messages(agent: Any, *, thread_id: str) -> int:
     removals = [
         RemoveMessage(id=m.id)
         for m in messages
-        if isinstance(m, AIMessage) and m.id and _is_empty_ai_message(m)
+        if isinstance(m, AIMessage) and m.id and is_empty_ai_message(m)
     ]
     if not removals:
         return 0

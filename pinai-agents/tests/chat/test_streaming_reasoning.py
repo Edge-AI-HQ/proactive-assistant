@@ -195,3 +195,137 @@ async def test_streamed_chat_model_end_keeps_final_only_reasoning() -> None:
     ]
     assert payloads[1]["data"]["delta"] == "Already streamed."
     assert payloads[2]["data"]["delta"] == "Final-only reasoning summary."
+
+
+@pytest.mark.asyncio
+async def test_turn_stats_collects_last_orchestrator_call_and_skips_subagents() -> None:
+    from pinai_agents.chat.transport.sse import TurnStats
+
+    def _model_call(
+        run_id: str,
+        *,
+        n_msgs: int,
+        tokens: int,
+        ns: str = "model:x",
+        extra_meta: dict | None = None,
+    ) -> list:
+        # `langgraph_checkpoint_ns` is the key _event_ns_segments reads.
+        meta = {"langgraph_checkpoint_ns": ns, **(extra_meta or {})}
+        return [
+            {
+                "event": "on_chat_model_start",
+                "run_id": run_id,
+                "metadata": meta,
+                "data": {"input": {"messages": [[SimpleNamespace()] * n_msgs]}},
+            },
+            {
+                "event": "on_chat_model_end",
+                "run_id": run_id,
+                "metadata": meta,
+                "data": {
+                    "output": SimpleNamespace(
+                        content="ok",
+                        usage_metadata={"input_tokens": tokens, "output_tokens": 10},
+                    )
+                },
+            },
+        ]
+
+    async def events():
+        # Filtered calls come AFTER the last orchestrator call with bigger
+        # numbers, so a broken filter overwrites the expectation and fails
+        # the assertions (last-write-wins would otherwise mask it).
+        for ev in [
+            *_model_call("m1", n_msgs=5, tokens=100),
+            *_model_call("m2", n_msgs=9, tokens=300),
+            *_model_call("sub", n_msgs=400, tokens=999_999, ns="tools:task|model:y"),
+            *_model_call(
+                "summ",
+                n_msgs=500,
+                tokens=888_888,
+                extra_meta={"lc_source": "summarization"},
+            ),
+        ]:
+            yield ev
+
+    stats = TurnStats()
+    async for _ in langgraph_to_sse(events(), trace_id="trace-1", stats=stats):
+        pass
+
+    assert stats.last_msg_count == 9
+    assert stats.last_input_tokens == 310  # input+output of the LAST orchestrator call
+    assert stats.interrupted is False
+    assert stats.saw_empty_ai_message is False
+
+
+@pytest.mark.asyncio
+async def test_turn_stats_flags_empty_final_reply() -> None:
+    from langchain_core.messages import AIMessageChunk
+
+    from pinai_agents.chat.transport.sse import TurnStats
+
+    async def events():
+        # The poisoned-thread shape: a streamed turn whose aggregated final
+        # output is AIMessageChunk(content=[]) — what scrub removes.
+        yield {
+            "event": "on_chat_model_end",
+            "run_id": "m1",
+            "data": {"output": AIMessageChunk(content=[])},
+        }
+
+    stats = TurnStats()
+    async for _ in langgraph_to_sse(events(), trace_id="trace-1", stats=stats):
+        pass
+
+    assert stats.saw_empty_ai_message is True
+
+
+@pytest.mark.asyncio
+async def test_turn_stats_no_usage_leaves_tokens_none() -> None:
+    from pinai_agents.chat.transport.sse import TurnStats
+
+    async def events():
+        yield {
+            "event": "on_chat_model_end",
+            "run_id": "m1",
+            "data": {"output": SimpleNamespace(content="ok", usage_metadata=None)},
+        }
+
+    stats = TurnStats()
+    async for _ in langgraph_to_sse(events(), trace_id="trace-1", stats=stats):
+        pass
+
+    assert stats.last_input_tokens is None
+
+
+@pytest.mark.asyncio
+async def test_turn_stats_marks_interrupt() -> None:
+    from pinai_agents.chat.transport.sse import TurnStats
+
+    async def events():
+        yield {
+            "event": "on_chain_stream",
+            "run_id": "c1",
+            "data": {
+                "chunk": {
+                    "__interrupt__": (
+                        SimpleNamespace(
+                            id="intr-1",
+                            value={
+                                "action_requests": [{"name": "send_email", "args": {}}],
+                                "review_configs": [],
+                            },
+                        ),
+                    )
+                }
+            },
+        }
+
+    stats = TurnStats()
+    payloads = [
+        _decode_sse_event(raw)
+        async for raw in langgraph_to_sse(events(), trace_id="trace-1", stats=stats)
+    ]
+
+    assert stats.interrupted is True
+    assert "chat:requires_action" in [p["type"] for p in payloads]
