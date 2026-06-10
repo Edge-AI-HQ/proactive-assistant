@@ -27,7 +27,7 @@ import type { ComposioState, Connection } from "@/hooks/useComposio";
 import { buildConnectorInitTaskId } from "@/hooks/useComposio";
 import { useInitTask, isInitTaskFresh } from "@/hooks/useInitTask";
 import { resolveComposioConnectionIdentity } from "@/lib/composio-display-identity";
-import { openOAuthAndAwaitClose } from "@/lib/oauth-popup";
+import { closeOAuthSurface, openOAuthAndAwaitClose } from "@/lib/oauth-popup";
 
 /**
  * Small inline chip that polls a connector.init task and renders a
@@ -305,8 +305,16 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
           return { connected: false };
         }),
       ]);
-      if (!raceResult.connected && !cancelledRef.current)
+      if (raceResult.connected) {
+        // Backend confirmed ACTIVE before the user dismissed the OAuth
+        // surface. Composio's hosted success page doesn't deep-link back
+        // to the app, so close it ourselves — otherwise the in-app browser
+        // (mobile) / popup (web) sits open on the "you can close this"
+        // page after linking finishes.
+        await closeOAuthSurface();
+      } else if (!cancelledRef.current) {
         setConnectError("Connection not confirmed — please try again");
+      }
       // No need to thread initTaskId — the chip rebuilds it from
       // (toolkit, connectedAccountId) and polls on mount once the
       // connection appears in `connections`.
