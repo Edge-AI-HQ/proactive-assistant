@@ -66,7 +66,7 @@ async def preview_scheduled_generator(
     async with user_scoped_tx(pool, user_id) as conn:
         repo = ScheduledTasksRepository(user_id, conn)
         similar = _find_similar(
-            await repo.list_by_kind(kind=SCHEDULED_GENERATOR_KIND),
+            await repo.list_by_kinds(kinds=(SCHEDULED_GENERATOR_KIND,)),
             parsed_intent=parsed_intent,
             confirmed_brief=confirmed_brief,
         )
@@ -88,8 +88,8 @@ async def list_scheduled_generators(
 ) -> list[ScheduledTaskRow]:
     async with user_scoped_tx(pool, user_id) as conn:
         repo = ScheduledTasksRepository(user_id, conn)
-        return await repo.list_by_kind(
-            kind=SCHEDULED_GENERATOR_KIND,
+        return await repo.list_by_kinds(
+            kinds=(SCHEDULED_GENERATOR_KIND,),
             include_archived=include_archived,
         )
 
@@ -120,9 +120,9 @@ async def create_scheduled_generator(
             (f"scheduled-generator:{user_id}:{semantic_signature}",),
         )
         repo = ScheduledTasksRepository(user_id, conn)
-        existing = await repo.get_by_id_and_kind(
+        existing = await repo.get_by_id_and_kinds(
             task_id=task_id,
-            kind=SCHEDULED_GENERATOR_KIND,
+            kinds=(SCHEDULED_GENERATOR_KIND,),
         )
         if existing is not None:
             return CreateScheduledGeneratorResult(
@@ -133,7 +133,7 @@ async def create_scheduled_generator(
             )
 
         similar = _find_similar(
-            await repo.list_by_kind(kind=SCHEDULED_GENERATOR_KIND),
+            await repo.list_by_kinds(kinds=(SCHEDULED_GENERATOR_KIND,)),
             parsed_intent=parsed_intent,
             confirmed_brief=confirmed_brief,
         )
@@ -192,10 +192,12 @@ async def pause_scheduled_generator(
 ) -> ScheduledTaskRow:
     async with user_scoped_tx(pool, user_id) as conn:
         repo = ScheduledTasksRepository(user_id, conn)
-        task = await repo.pause_by_kind(task_id=task_id, kind=SCHEDULED_GENERATOR_KIND)
+        task = await repo.pause_by_kinds(task_id=task_id, kinds=(SCHEDULED_GENERATOR_KIND,))
         if task is not None:
             return task
-        existing = await repo.get_by_id_and_kind(task_id=task_id, kind=SCHEDULED_GENERATOR_KIND)
+        existing = await repo.get_by_id_and_kinds(
+            task_id=task_id, kinds=(SCHEDULED_GENERATOR_KIND,)
+        )
     if existing is None:
         raise ScheduledGeneratorNotFoundError(task_id)
     return existing
@@ -209,7 +211,9 @@ async def resume_scheduled_generator(
 ) -> ScheduledTaskRow:
     async with user_scoped_tx(pool, user_id) as conn:
         repo = ScheduledTasksRepository(user_id, conn)
-        existing = await repo.get_by_id_and_kind(task_id=task_id, kind=SCHEDULED_GENERATOR_KIND)
+        existing = await repo.get_by_id_and_kinds(
+            task_id=task_id, kinds=(SCHEDULED_GENERATOR_KIND,)
+        )
         if existing is None:
             raise ScheduledGeneratorNotFoundError(task_id)
         next_run_at = next_fire(
@@ -219,9 +223,9 @@ async def resume_scheduled_generator(
             timezone=existing.timezone,
             after=datetime.now(UTC),
         )
-        task = await repo.resume_by_kind(
+        task = await repo.resume_by_kinds(
             task_id=task_id,
-            kind=SCHEDULED_GENERATOR_KIND,
+            kinds=(SCHEDULED_GENERATOR_KIND,),
             next_run_at=next_run_at,
         )
     return task or existing
@@ -235,10 +239,12 @@ async def delete_scheduled_generator(
 ) -> ScheduledTaskRow:
     async with user_scoped_tx(pool, user_id) as conn:
         repo = ScheduledTasksRepository(user_id, conn)
-        task = await repo.archive_by_kind(task_id=task_id, kind=SCHEDULED_GENERATOR_KIND)
+        task = await repo.archive_by_kinds(task_id=task_id, kinds=(SCHEDULED_GENERATOR_KIND,))
         if task is not None:
             return task
-        existing = await repo.get_by_id_and_kind(task_id=task_id, kind=SCHEDULED_GENERATOR_KIND)
+        existing = await repo.get_by_id_and_kinds(
+            task_id=task_id, kinds=(SCHEDULED_GENERATOR_KIND,)
+        )
     if existing is None:
         raise ScheduledGeneratorNotFoundError(task_id)
     return existing
