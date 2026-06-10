@@ -293,6 +293,27 @@ async def test_scrub_keeps_tool_call_and_reasoning_messages() -> None:
     agent.aupdate_state.assert_not_awaited()
 
 
+async def test_scrub_keeps_legacy_reasoning_content_messages() -> None:
+    # Pre-v1 threads persisted thinking in additional_kwargs.reasoning_content
+    # with empty content; the history reader still renders it — must survive.
+    agent = _mock_agent(
+        [
+            HumanMessage(content="q1", id="h1"),
+            AIMessage(
+                content="",
+                id="a1",
+                additional_kwargs={"reasoning_content": "old-style thinking"},
+            ),
+            AIMessage(content="ans", id="a2"),
+        ]
+    )
+
+    removed = await scrub_empty_ai_messages(agent, thread_id="main-1")
+
+    assert removed == 0
+    agent.aupdate_state.assert_not_awaited()
+
+
 async def test_scrub_noop_on_empty_thread() -> None:
     agent = _mock_agent([])
 

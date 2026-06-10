@@ -495,31 +495,39 @@ async def _stream(
             # which awaits the whole chat stream — can't start the next turn
             # until maintenance commits: the in-place rewrites are never
             # concurrent with another turn on this session.
-            if not await thread_has_pending_interrupt(agent, req.session_key):
-                # Every thread kind, cards included: a 0-token final reply
-                # persisted into the state breaks all later turns on strict
-                # providers (Moonshot empty-assistant 400) — scrub it out.
-                try:
-                    await scrub_empty_ai_messages(agent, thread_id=req.session_key)
-                except Exception:
-                    logger.exception(
-                        "empty-message scrub failed session_key=%s",
-                        req.session_key,
-                    )
-                # Working-context compaction (card threads are short-lived —
-                # skip). main + proactive share one path.
-                if not is_card_thread:
+            try:
+                if not await thread_has_pending_interrupt(agent, req.session_key):
+                    # Every thread kind, cards included: a 0-token final reply
+                    # persisted into the state breaks all later turns on strict
+                    # providers (Moonshot empty-assistant 400) — scrub it out.
                     try:
-                        await compact_thread(
-                            agent,
-                            thread_id=req.session_key,
-                            virtual_key=virtual_key,
-                        )
+                        await scrub_empty_ai_messages(agent, thread_id=req.session_key)
                     except Exception:
                         logger.exception(
-                            "context compaction failed session_key=%s",
+                            "empty-message scrub failed session_key=%s",
                             req.session_key,
                         )
+                    # Working-context compaction (card threads are short-lived —
+                    # skip). main + proactive share one path.
+                    if not is_card_thread:
+                        try:
+                            await compact_thread(
+                                agent,
+                                thread_id=req.session_key,
+                                virtual_key=virtual_key,
+                            )
+                        except Exception:
+                            logger.exception(
+                                "context compaction failed session_key=%s",
+                                req.session_key,
+                            )
+            except Exception:
+                # The pending-interrupt read itself failed — the reply already
+                # streamed, so maintenance is skipped this turn, never raised.
+                logger.exception(
+                    "post-turn maintenance skipped session_key=%s",
+                    req.session_key,
+                )
         except BaseException as e:
             saw_failure = e
             raise

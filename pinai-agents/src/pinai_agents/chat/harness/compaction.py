@@ -246,12 +246,17 @@ def _is_empty_ai_message(message: AIMessage) -> bool:
     """True when the message carries nothing replayable or renderable: no tool
     calls and no non-blank text or non-text block. A reasoning-only message is
     NOT empty — its thinking block still renders in history (the request path
-    in harness/llm.py handles its replay)."""
+    in harness/llm.py handles its replay). That covers both the v1 reasoning
+    content block and the legacy `additional_kwargs.reasoning_content` shape
+    persisted by pre-v1 threads (the history reader falls back to it)."""
     if message.tool_calls or message.invalid_tool_calls:
         return False
     if message.additional_kwargs.get("tool_calls") or message.additional_kwargs.get(
         "function_call"
     ):
+        return False
+    legacy_reasoning = message.additional_kwargs.get("reasoning_content")
+    if isinstance(legacy_reasoning, str) and legacy_reasoning.strip():
         return False
     content = message.content
     if isinstance(content, str):
