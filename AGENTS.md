@@ -314,7 +314,7 @@ make deploy-litellm-prod    # LiteLLM → prod
 ## 踩坑速查
 1. **chat 进程拿到 master credential 会启动失败**：`chat/asgi.py` 的 fail-fast assert 会直接 exit，看 log 第一行就能定位是哪个 forbidden var 漏过来了。
 2. **Daytona sandbox 回连 web 必须用公网 URL**：compose 内部 DNS 在 cloud sandbox 里解析不到，本地必须 `make tunnel-up` 起 ngrok，否则 `python_exec` 报 ConnectError。
-3. **`make restart` 只重建 pinai-web/pinai-chat**：动了 frontend 用 `make restart-frontend`，动了 LiteLLM 配置要 `make up` 全栈。
+3. **`make restart` 只重建 pinai-web/pinai-chat**：动了 frontend 用 `make restart-frontend`，动了 LiteLLM 配置要 `make up` 全栈。restart 带 `--no-deps`，**不会创建合并 main 后 compose 新增的服务**（例：redis）——拉完 main 先 `make up` 一次再回到 restart 循环，否则新代码会依赖一个根本没起来的服务（实例：缺 redis 时消息无人消费、会话页 500，2026-06-10 踩过）。
 4. **本机全局代理会导致 `flyctl` 失败**：Makefile 已在 deploy 命令内置 `env -u`，但如果直接跑 `flyctl deploy` 要自己 unset。
 5. **`.env.chat` 不会自动跟 `.env` 同步**：手动改 `.env` 后，`make ensure-env-pinai-agents` 才会重新派生 `.env.chat`；直接 docker compose up 不会触发，必要时 `make env-local` 强制重新解密。
 6. **`apis/` / `pinai-openclaw/` / `miniapp/` 是退役时代的路径**：如果旧脚本、旧文档或本地残留目录提到它们，不要复活旧服务；当前后端事实以 `pinai-agents/` 为准，用户产品前端类型检查走 `cd proactive-ai-frontend && npm run type-check`。
