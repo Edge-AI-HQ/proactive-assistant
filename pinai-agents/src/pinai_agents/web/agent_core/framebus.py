@@ -27,6 +27,7 @@ from collections.abc import AsyncIterator
 from typing import Any, Protocol, cast, runtime_checkable
 
 from redis.asyncio import Redis
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -142,10 +143,19 @@ class RedisFrameBus:
         key = self._key(session_id)
         cursor = last_id
         while True:
-            resp = cast(
-                "_XReadResp | None",
-                await self._redis.xread({key: cursor}, block=self._block_ms, count=200),
-            )
+            try:
+                resp = cast(
+                    "_XReadResp | None",
+                    await self._redis.xread({key: cursor}, block=self._block_ms, count=200),
+                )
+            except RedisTimeoutError:
+                # redis-py 8.x enforces a ~5s default read timeout even with
+                # socket_timeout=None, so a quiet BLOCK window longer than that
+                # surfaces as TimeoutError instead of an empty read. Treat it
+                # exactly like one — keepalive tick, stream stays open. Real
+                # outages raise ConnectionError and still propagate.
+                yield None
+                continue
             if not resp:
                 yield None  # BLOCK window elapsed — keepalive tick, stream stays open
                 continue
