@@ -13,9 +13,9 @@ description: "pai_scheduled_tasks 队列 + tick loop + dispatcher 的当前事�
 
 框架本身只管调度(claim、lease、retry、reaper、PG NOTIFY 唤醒),具体业务在各 kind 的 handler 里。多 replica 安全靠 `FOR UPDATE SKIP LOCKED`,不需要单进程 mutex。
 
-目前 dispatcher 路由 9 个 `kind`,分**两类执行模型**:
+目前 dispatcher 路由 12 个 `kind`,分**两类执行模型**:
 
-- **execution kind**(`generator.manual` / `generator.auto` / `connector.init` / `connector.sync` / `connector.evolve` / `auto.dreaming` / `user.prompt`)— 真实执行(跑 LLM 或拉外部数据,可能长跑 / 会崩 / 需重试 / 需 progress),走完整 per-run ledger:`insert_run` → handler → `complete_run`,带 lease / backoff / reaper。`crystallize` 有路由但当前没 producer 入队(见下方"Crystallize 当前不走这套队列"段)。
+- **execution kind**(`generator.manual` / `generator.auto` / `generator.chat` / `generator.scheduled` / `connector.init` / `connector.sync` / `connector.evolve` / `auto.dreaming` / `user.prompt` / `reminder.card`)— 真实执行(跑 LLM、拉外部数据或直接写卡,可能长跑 / 会崩 / 需重试 / 需 progress),走完整 per-run ledger:`insert_run` → handler → `complete_run`,带 lease / backoff / reaper。`crystallize` 有路由但当前没 producer 入队(见下方"Crystallize 当前不走这套队列"段)。
 - **producer kind**(`proactive.tick`)— 纯生产者,只把一条 `source=heartbeat` 消息 enqueue 到 actor mailbox(真正的 proactive agent 执行在 `AgentRunWorker` + `pai_agent_runs`)。走轻量 `_dispatch_producer` 路径:**跳过 per-run ledger**(不写 `pai_scheduled_task_runs`),只翻 task 的 recurring success/failure 状态(给 backoff + `/api/tasks`)。多 replica 去重仍靠 `claim_due_tasks` 的 SKIP LOCKED + `next_run_at` 推进,所以省掉 `insert_run` 的 UNIQUE 也安全。
 
 > 这条 producer/execution 分层是有意的:业界统一调度的 convention 是"统一触发层 + per-task 执行语义"(K8s CronJob / Celery Beat / Airflow 都如此),而不是强迫所有任务共用同一套 run-ledger。proactive 心跳是 per-user 定时任务(该和其它定时任务一样在这套 scheduler 里,统一管理 / 监控),但它是生产者、不需要 run-ledger,所以走 producer 路径而非独立循环。global 的 world_ingest 因为 `pai_scheduled_tasks.user_id NOT NULL` 容不下,才单独跑 asyncio loop。
@@ -94,7 +94,7 @@ sequenceDiagram
 | 列 | 含义 |
 |---|---|
 | `(user_id, id)` | 复合 PK,所有任务 user-scoped。 |
-| `kind` | open enum(dispatcher 按字符串路由,不在 schema 里 CHECK,加 kind 无需迁移)。当前:`generator.manual` / `generator.auto` / `connector.init` / `connector.sync` / `connector.evolve` / `auto.dreaming` / `crystallize` / `user.prompt`。 |
+| `kind` | open enum(dispatcher 按字符串路由,不在 schema 里 CHECK,加 kind 无需迁移)。当前:`generator.manual` / `generator.auto` / `generator.chat` / `generator.scheduled` / `connector.init` / `connector.sync` / `connector.evolve` / `auto.dreaming` / `crystallize` / `user.prompt` / `reminder.card` / `proactive.tick`。 |
 | `trigger_kind` | `schedule` / `event` / `once`(CHECK)。 |
 | `cron_expr`, `interval_seconds`, `timezone` | `schedule` 触发计算输入,timezone 默认 `UTC`。 |
 | `event_filter` JSONB | `event` 触发专用,目前没在用。 |
@@ -143,15 +143,18 @@ reaper 索引:`idx_pai_schedrun_lease (status, lease_expires_at) WHERE status='r
 |---|---|---|---|
 | `generator.manual` | in-process `_run_generator` → HTTP POST `/agent/generate` | **600s** | `/api/generate` 入队;用户可见链路,默认/上限 8 张,超过 10 分钟无结果就失败;手动生成不自动 retry。 |
 | `generator.auto` | 同上 | **600s** | 自动循环生成,由前端 settings 调 profile route 写 `interval_seconds`(默认从 migration `038_auto_generate_default_on.sql`),每批最多 8 张。 |
+| `generator.chat` | 同上 | **600s** | Main Chat agent 的 `generate_card` 工具经 `POST /api/agent/generate` 入队;不按 focus 去重,但 per-user 最多 3 个 in-flight。 |
+| `generator.scheduled` | 同上 | **600s** | 用户自建定时生成(`/api/scheduled-generators`);payload 的 `confirmed_brief` / `parsed_intent` 注入 generator 请求。 |
 | `connector.init` | in-process `connector_ingest.run` | 60s | 拉一批 Composio 数据写 `pai_raw_*` + `pai_personal_signals` + 一次 `connector.evolve` once-shot。 |
 | `connector.sync` | 同上 | 60s | 增量拉取,用 cursor;成功才前推 cursor + 入 evolve。`connector.init` 跑完会保证一行 sync schedule(`cron */30 * * * *`)。 |
 | `connector.evolve` | HTTP POST `/agent/run/evolve` | **600s**(long-running) | chat 端 DeepAgents 把刚拉的 raw / signal 沉淀成 memory / skill。 |
 | `auto.dreaming` | HTTP POST `/agent/run/dream`(`_dispatch_dream` wrap) | **600s** | 包 `pai_evolution_runs` 行的 lifecycle,web 进程持有 run row 的生死;chat 进程跑 LLM。 |
 | `crystallize` | HTTP POST `/agent/run/crystallize` | 60s | dispatcher 路由已就位,但**当前没有 producer 入队** — `dispatcher.py` 顶部注释明说 "crystallize → not scheduled (chat worker fires inline)"。今天 crystallize 走 chat 端 inline 调用,不走这套队列。 |
 | `user.prompt` | HTTP POST `/agent/run/dream`(复用 dream entry) | **600s** | 后续的 synthetic-prompt 通道,目前 placeholder。 |
+| `reminder.card` | in-process `services/reminder_cards.fire_reminder`(写卡+推送,零 LLM) | 60s | 用户自建提醒;once/interval/cron 三种触发,`payload.reminder` 携带文案。 |
 | `proactive.tick` | **producer** `_dispatch_producer` → in-process build heartbeat → enqueue actor mailbox + notify worker | —(无 per-run ledger) | per-user 心跳;interval 由 `pai_user_settings.proactive_interval_seconds`(60/300/1800)经 profile route 同步进 task。**不写 `pai_scheduled_task_runs`**,真实执行在 worker(`pai_agent_runs`)。详见 [Execution](./execution) proactive 段。 |
 
-`_GENERATOR_KINDS = {generator.manual, generator.auto}` 走 `_GENERATOR_LEASE_SECONDS=600`;web→chat `/agent/generate` read timeout 和 chat route 内部 timeout 也都是 600s。`_LONG_RUNNING_KINDS = {auto.dreaming, connector.evolve, user.prompt}` 走 `_LONG_LEASE_SECONDS=600`,跟普通 60s 区分,防止 LLM 中段被 reaper 误判 crash。generator 虽然也是 LLM 链路,但产品上是即时生成,所以 10 分钟是硬失败边界。`_PRODUCER_KINDS = {proactive.tick}` 完全不走 lease / ledger —— `_dispatch_producer` 只跑 handler + `record_recurring_success` / `record_failure_and_decide`,per-run 账本由 worker 的 `pai_agent_runs` 持有(见上表 proactive.tick 行)。
+`_GENERATOR_KINDS = {generator.manual, generator.auto, generator.chat, generator.scheduled}` 走 `_GENERATOR_LEASE_SECONDS=600`;web→chat `/agent/generate` read timeout 和 chat route 内部 timeout 也都是 600s。`_LONG_RUNNING_KINDS = {auto.dreaming, connector.evolve, user.prompt}` 走 `_LONG_LEASE_SECONDS=600`,跟普通 60s 区分,防止 LLM 中段被 reaper 误判 crash。generator 虽然也是 LLM 链路,但产品上是即时生成,所以 10 分钟是硬失败边界。`_PRODUCER_KINDS = {proactive.tick}` 完全不走 lease / ledger —— `_dispatch_producer` 只跑 handler + `record_recurring_success` / `record_failure_and_decide`,per-run 账本由 worker 的 `pai_agent_runs` 持有(见上表 proactive.tick 行)。
 
 dispatcher 调用 chat 走 EdDSA 每 run JWT(`web/auth/agent_jwt.py`),凭证不跨 run 复用。chat 验签 + check `pai_jti_revocations` 黑名单(`chat/auth/run_jwt.py`)。
 
@@ -162,6 +165,8 @@ dispatcher 调用 chat 走 EdDSA 每 run JWT(`web/auth/agent_jwt.py`),凭证不�
 | 入口 | kind | 触发 |
 |---|---|---|
 | `POST /api/generate`(`web/routes/ui/generate.py`) | `generator.manual` | 前端手动 generate。一个用户同时只能有一个 active generator,duplicate 直接返回既有 taskId。 |
+| `POST /api/agent/generate`(`web/routes/agent/generate.py`)| `generator.chat` | Main Chat agent 的 `generate_card` 工具触发即时生成;per-user 最多 3 个 active。 |
+| `POST /api/scheduled-generators[/once]`(`web/routes/ui/scheduled_generators.py`)| `generator.scheduled` / `reminder.card` | Main Chat 工具或前端;once 直接创建,recurring 走 preview+confirm。 |
 | Profile settings `auto_generate=true`(`web/routes/ui/profile.py`)| `generator.auto` | `_sync_auto_generate_schedule` upsert,`interval_seconds = auto_generate_interval_minutes * 60`,关掉切 `status='archived'`。 |
 | Profile settings `auto_dreaming=true`(`web/routes/ui/profile.py`)| `auto.dreaming` | `_sync_auto_dreaming_schedule` upsert,每天用户 profile timezone 的 06:00 触发,关掉切 `status='archived'`。 |
 | `POST /api/composio/wait`(`web/routes/ui/composio.py`)| `connector.init` | OAuth ACTIVE 回调,`enqueue_once` 幂等。 |
