@@ -60,8 +60,8 @@ async def client(pool, user_ids):
         yield c
 
 
-def _agent_auth(user_id: int) -> dict[str, str]:
-    token, _ = sign_agent_run_jwt(user_id=user_id, run_id="run_scheduled_generator_test")
+def _agent_auth(user_id: int, run_id: str = "run_scheduled_generator_test") -> dict[str, str]:
+    token, _ = sign_agent_run_jwt(user_id=user_id, run_id=run_id)
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -109,6 +109,8 @@ def test_scheduled_generator_routes_are_mounted() -> None:
 async def test_preview_and_create_daily_generate(client, user_ids, pool):
     user_a, _ = user_ids
     headers = _agent_auth(user_a)
+    # 同轮硬闸:create 必须发生在用户确认后的下一轮,用不同 run JWT 模拟
+    confirm_headers = _agent_auth(user_a, run_id="run_confirm_turn")
 
     preview = await client.post(
         "/api/scheduled-generators/preview",
@@ -129,7 +131,7 @@ async def test_preview_and_create_daily_generate(client, user_ids, pool):
 
     created = await client.post(
         "/api/scheduled-generators",
-        headers=headers,
+        headers=confirm_headers,
         json=_daily_create_body(preview_body),
     )
 
@@ -313,6 +315,7 @@ async def test_list_returns_both_kinds(client):
 async def test_create_is_idempotent_for_same_preview(client, user_ids, pool):
     user_a, _ = user_ids
     headers = _agent_auth(user_a)
+    confirm_headers = _agent_auth(user_a, run_id="run_confirm_turn")
 
     preview = await client.post(
         "/api/scheduled-generators/preview",
@@ -323,8 +326,8 @@ async def test_create_is_idempotent_for_same_preview(client, user_ids, pool):
     preview_body = preview.json()
     body = _daily_create_body(preview_body)
 
-    first = await client.post("/api/scheduled-generators", headers=headers, json=body)
-    second = await client.post("/api/scheduled-generators", headers=headers, json=body)
+    first = await client.post("/api/scheduled-generators", headers=confirm_headers, json=body)
+    second = await client.post("/api/scheduled-generators", headers=confirm_headers, json=body)
 
     assert first.status_code == 201, first.text
     assert second.status_code == 200, second.text
@@ -350,6 +353,7 @@ async def test_create_is_idempotent_for_same_preview(client, user_ids, pool):
 async def test_create_requires_ack_when_new_similar_task_exists(client, user_ids, pool):
     user_a, _ = user_ids
     headers = _agent_auth(user_a)
+    confirm_headers = _agent_auth(user_a, run_id="run_confirm_turn")
 
     # The create path recomputes the semantic signature server-side, so seed
     # the pre-existing row with the signature preview computes for this body.
@@ -393,7 +397,7 @@ async def test_create_requires_ack_when_new_similar_task_exists(client, user_ids
 
     create_without_ack = await client.post(
         "/api/scheduled-generators",
-        headers=headers,
+        headers=confirm_headers,
         json=_daily_create_body(preview_body),
     )
     assert create_without_ack.status_code == 409, create_without_ack.text
@@ -404,7 +408,7 @@ async def test_create_requires_ack_when_new_similar_task_exists(client, user_ids
 
     create_with_ack = await client.post(
         "/api/scheduled-generators",
-        headers=headers,
+        headers=confirm_headers,
         json={
             **_daily_create_body(preview_body),
             "duplicateAck": True,
@@ -413,3 +417,36 @@ async def test_create_requires_ack_when_new_similar_task_exists(client, user_ids
     )
     assert create_with_ack.status_code == 201, create_with_ack.text
     assert create_with_ack.json()["task"]["id"] != "sched.gen.existing"
+
+
+@pytest.mark.asyncio
+async def test_same_turn_create_is_rejected_by_confirmation_gate(client, user_ids):
+    """preview 和 create 带同一个 run JWT(= 模型在同一轮里没等用户确认就
+    create)必须 400。这是确认流程的服务端硬闸——提示词约束失守时的兜底,
+    回归自 2026-06-10 本地验收(agent 自行确认创建)。"""
+    user_a, _ = user_ids
+    same_turn = _agent_auth(user_a, run_id="run_same_turn")
+
+    preview = await client.post(
+        "/api/scheduled-generators/preview",
+        headers=same_turn,
+        json=_DAILY_PREVIEW_BODY,
+    )
+    assert preview.status_code == 200, preview.text
+    preview_body = preview.json()
+
+    blocked = await client.post(
+        "/api/scheduled-generators",
+        headers=same_turn,
+        json=_daily_create_body(preview_body),
+    )
+    assert blocked.status_code == 400, blocked.text
+    assert "confirmation gate" in blocked.json()["detail"]
+
+    # 换一轮(用户确认后的新 run)就放行
+    confirmed = await client.post(
+        "/api/scheduled-generators",
+        headers=_agent_auth(user_a, run_id="run_next_turn"),
+        json=_daily_create_body(preview_body),
+    )
+    assert confirmed.status_code == 201, confirmed.text

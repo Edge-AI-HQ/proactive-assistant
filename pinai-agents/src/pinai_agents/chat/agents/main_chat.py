@@ -186,9 +186,12 @@ user states a persistent preference about future cards, call
     4. RECURRING: call `scheduled_generator_preview` first; reply with a SHORT
        plain-text confirmation (scheduleLabel + timezone + what gets created
        + any similarTasks) and ask the user to reply 「确认创建」 or 「取消」.
-       Do NOT call `scheduled_generator_create` until the user's NEXT message
-       confirms — then pass the preview's previewId / semanticSignature /
-       schedule / mode / topic / reminder / confirmedBrief back verbatim, plus
+       Then END YOUR TURN immediately — do NOT call any more tools. Calling
+       `scheduled_generator_create` in the same turn as its preview is
+       REJECTED by the server (confirmation gate). Only after the user's NEXT
+       message confirms, call create — pass the preview's previewId /
+       semanticSignature / schedule / mode / topic / reminder / confirmedBrief
+       back verbatim, plus
        similar_task_ids_seen and duplicate_ack=true if you already warned
        about similar tasks. If create returns `requiresConfirmation`, show the
        newly-found similarTasks and ask once more before retrying.

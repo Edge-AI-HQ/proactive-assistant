@@ -34,7 +34,8 @@ def test_main_chat_prompt_routes_scheduled_requests():
     assert "scheduled_generator_preview" in lower
     assert "scheduled_generator_create" in lower
     # Confirmation is reply-gated and explicitly held back until the user replies.
-    assert "do not call `scheduled_generator_create`" in lower
+    assert "end your turn" in lower  # 展示预览后必须结束本轮
+    assert "rejected by the server" in lower  # 同轮 create 有服务端硬闸
     assert "确认创建" in prompt
     # The 409 re-confirmation path is taught.
     assert "requiresconfirmation" in lower
@@ -48,7 +49,8 @@ def test_main_chat_prompt_routes_one_off_and_recurring():
     assert 'mode="reminder"' in lower or 'mode="reminder"' in prompt
     assert "do not refuse" in lower  # 不再出现截图式拒绝
     # 既有断言继续成立:
-    assert "do not call `scheduled_generator_create`" in lower
+    assert "end your turn" in lower  # 展示预览后必须结束本轮
+    assert "rejected by the server" in lower  # 同轮 create 有服务端硬闸
     assert "确认创建" in prompt
     assert "requiresconfirmation" in lower
 

@@ -130,6 +130,7 @@ async def preview_scheduled_generator(
     topic: str | None = None,
     reminder: dict[str, Any] | None = None,
     conversation_id: str | None = None,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     if not original_request.strip():
         raise ScheduledGeneratorValidationError("original_request is required")
@@ -144,6 +145,7 @@ async def preview_scheduled_generator(
         original_request=original_request,
         timezone=timezone,
         semantic_signature=semantic_signature,
+        issued_run_id=run_id or "",
     )
     parsed_intent = {
         "schedule": _normalize_payload_keys(schedule),
@@ -214,6 +216,7 @@ async def create_scheduled_generator(
     confirmed_brief: dict[str, Any] | None = None,
     duplicate_ack: bool = False,
     similar_task_ids_seen: list[str] | None = None,
+    caller_run_id: str | None = None,
 ) -> CreateScheduledGeneratorResult:
     if not original_request.strip():
         raise ScheduledGeneratorValidationError("original_request is required")
@@ -228,6 +231,24 @@ async def create_scheduled_generator(
     # Recompute server-side — the client-echoed semantic_signature is part of
     # the request contract but never trusted for matching or locking.
     semantic_signature = "|".join([mode, resolved.schedule_key, timezone, _topic_key(topic_clean)])
+    # 同轮硬闸:preview_id 的指纹混入了发出它的 run_id。create 在同一轮
+    # (同一 run JWT)带着本轮刚发的 preview_id 回来 = 模型没等用户确认
+    # 就自行创建 → 服务端直接拒绝。提示词失守时这里兜底。
+    if caller_run_id:
+        same_turn_preview = _preview_id(
+            user_id=user_id,
+            original_request=original_request,
+            timezone=timezone,
+            semantic_signature=semantic_signature,
+            issued_run_id=caller_run_id,
+        )
+        if preview_id == same_turn_preview:
+            raise ScheduledGeneratorValidationError(
+                "confirmation gate: this preview was issued in the SAME agent "
+                "turn. Show the preview to the user, END your turn, and call "
+                "create only after the user explicitly confirms in their NEXT "
+                "message."
+            )
     kind = _MODE_TO_KIND[mode]
     task_id = _task_id_for_preview(preview_id)
     seen_ids = set(similar_task_ids_seen or [])
@@ -503,9 +524,13 @@ def _preview_id(
     original_request: str,
     timezone: str,
     semantic_signature: str,
+    issued_run_id: str = "",
 ) -> str:
+    """preview 指纹。混入发出它的 agent run_id(来自已认证 JWT,模型无法
+    伪造)——create 端据此识别「同一轮里 preview 完立刻 create」并拒绝,
+    这是确认流程的服务端硬闸,不依赖提示词自觉。"""
     digest = hashlib.sha256(
-        f"{user_id}|{original_request}|{timezone}|{semantic_signature}".encode()
+        f"{user_id}|{original_request}|{timezone}|{semantic_signature}|{issued_run_id}".encode()
     ).hexdigest()
     return f"sgprev_{digest[:20]}"
 

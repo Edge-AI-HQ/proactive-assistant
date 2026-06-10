@@ -49,6 +49,8 @@ def _to_camel(snake: str) -> str:
 class _ScheduledGeneratorPrincipal(BaseModel):
     user_id: int
     source: str
+    # agent 来源时 = 本轮 run JWT 的 run_id;同轮确认硬闸的输入。
+    run_id: str | None = None
 
 
 class ScheduleSpecModel(_CamelModel):
@@ -126,7 +128,9 @@ async def scheduled_generator_principal(
         else:
             agent = await current_agent_run(authorization=authorization, pool=pool)
         if isinstance(agent, AgentRun):
-            return _ScheduledGeneratorPrincipal(user_id=agent.user_id, source="agent")
+            return _ScheduledGeneratorPrincipal(
+                user_id=agent.user_id, source="agent", run_id=agent.run_id
+            )
     except HTTPException as e:
         agent_error = e
 
@@ -166,6 +170,7 @@ async def preview(
             topic=req.topic,
             reminder=req.reminder.model_dump() if req.reminder else None,
             conversation_id=req.conversation_id,
+            run_id=principal.run_id,
         )
     except ScheduledGeneratorValidationError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -207,6 +212,7 @@ async def create(
             confirmed_brief=req.confirmed_brief,
             duplicate_ack=req.duplicate_ack,
             similar_task_ids_seen=req.similar_task_ids_seen,
+            caller_run_id=principal.run_id,
         )
     except ScheduledGeneratorValidationError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
