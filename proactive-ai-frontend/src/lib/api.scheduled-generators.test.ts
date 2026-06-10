@@ -61,6 +61,7 @@ describe("scheduledGeneratorPreview", () => {
     const preview = await scheduledGeneratorPreview({
       originalRequest: "每天 9 点给我推 AI 新闻",
       timezone: "UTC",
+      schedule: { type: "cron", frequency: "daily", localTime: "09:00" },
     });
 
     expect(preview.previewId).toBe("pv_1");
@@ -84,7 +85,8 @@ describe("scheduledGeneratorCreate", () => {
       previewId: "pv_1",
       semanticSignature: "sig",
       originalRequest: "x",
-      parsedIntent: { frequency: "daily", localTime: "09:00", timezone: "UTC" },
+      timezone: "UTC",
+      schedule: { type: "cron", frequency: "daily", localTime: "09:00" },
       confirmedBrief: { topic: "AI" },
     });
 
@@ -94,7 +96,7 @@ describe("scheduledGeneratorCreate", () => {
     }
     const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string);
     expect(body.previewId).toBe("pv_1");
-    expect(body.parsedIntent.localTime).toBe("09:00");
+    expect(body.schedule.localTime).toBe("09:00");
   });
 
   test("surfaces 409 requiresConfirmation as a non-thrown result", async () => {
@@ -109,8 +111,8 @@ describe("scheduledGeneratorCreate", () => {
       previewId: "pv_1",
       semanticSignature: "sig",
       originalRequest: "x",
-      parsedIntent: {},
-      confirmedBrief: {},
+      timezone: "UTC",
+      schedule: { type: "interval", everySeconds: 300 },
     });
 
     expect(result.ok).toBe(false);

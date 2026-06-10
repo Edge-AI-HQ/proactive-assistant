@@ -8,6 +8,7 @@ Per-kind routing:
                         routes by task.kind internally)
   crystallize        → not scheduled (chat worker fires inline)
   user.prompt        → HTTP POST chat-worker /agent/chat (synthetic message)
+  reminder.card      → in-process reminder card write (services/reminder_cards)
 
 Once-shot task lifecycle (after migration 031):
   tick_loop._persist_next archives once tasks immediately on claim
@@ -430,6 +431,12 @@ class DefaultDispatcher:
                 run_id,
                 extra={"session_key": (task.payload or {}).get("session_key", "")},
             )
+        elif kind == "reminder.card":
+            # 用户自建提醒:web 进程直接写卡 + 推送,零 LLM。默认 60s
+            # lease 足够(纯 DB 写),不进 _AGENT_RUN_KIND(不是 agent run)。
+            from ..services.reminder_cards import fire_reminder  # noqa: PLC0415
+
+            await fire_reminder(self._pool, task, run_id)
         elif kind in _GENERATOR_KINDS:
             # manual / auto / chat / scheduled → same handler. The kind name is
             # the only place the source distinction lives; _run_generator stays
@@ -629,13 +636,13 @@ class DefaultDispatcher:
             UserFingerprintRepository,
         )
         from ..db.rls import user_scoped_tx  # noqa: PLC0415
-        from ..routes.ui.generate import persist_generator_run  # noqa: PLC0415
         from ..services.chat_proxy import call_generate  # noqa: PLC0415
         from ..services.litellm_provisioning import (  # noqa: PLC0415
             ensure_user_litellm_key,
         )
         from ..services.pattern_matcher import match_patterns  # noqa: PLC0415
         from ..services.phase1_seed import build_phase1_seed  # noqa: PLC0415
+        from ..services.pipeline_persistence import persist_generator_run  # noqa: PLC0415
 
         # Lazy-provision the LiteLLM key. The manual /generate path uses
         # `_ensure_virtual_key` for this — without mirroring it here,

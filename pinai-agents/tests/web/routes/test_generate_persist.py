@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from pinai_agents.web.db.rls import service_tx, user_scoped_tx
-from pinai_agents.web.routes.ui.generate import persist_generator_run
+from pinai_agents.web.services.pipeline_persistence import persist_generator_run
 
 
 @pytest.mark.asyncio

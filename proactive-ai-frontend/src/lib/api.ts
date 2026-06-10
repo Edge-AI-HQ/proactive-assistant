@@ -1910,6 +1910,10 @@ export interface ScheduledGeneratorTask {
   localTime: string | null;
   timezone: string;
   cronExpr: string | null;
+  /** "once" | "schedule"; optional so tasks from older backends still parse. */
+  triggerKind?: string | null;
+  intervalSeconds?: number | null;
+  scheduleLabel?: string | null;
   nextRunAt: string | null;
   lastRunAt: string | null;
   lastRunStatus: string | null;
@@ -1917,18 +1921,53 @@ export interface ScheduledGeneratorTask {
   payload: Record<string, unknown>;
 }
 
+export interface ScheduledGeneratorSchedule {
+  type: "once" | "interval" | "cron";
+  inMinutes?: number;
+  atLocal?: string;
+  everySeconds?: number;
+  frequency?: "daily" | "weekly";
+  localTime?: string;
+  /** ISO weekday numbers, 1=Monday … 7=Sunday */
+  daysOfWeek?: number[];
+}
+
+export interface ScheduledGeneratorReminder {
+  title: string;
+  message: string;
+}
+
+/** Preview's similarTasks items are a summary subset (backend _task_summary),
+ *  NOT full tasks — create's 409 branch is the one that returns full tasks. */
+export interface ScheduledGeneratorTaskSummary {
+  id: string;
+  title: string;
+  status: "active" | "paused" | "archived";
+  frequency: string | null;
+  localTime: string | null;
+  timezone: string;
+  scheduleLabel: string | null;
+}
+
 export interface ScheduledGeneratorPreview {
   previewId: string;
   parsedIntent: ScheduledGeneratorParsedIntent;
   confirmedBrief: ScheduledGeneratorConfirmedBrief;
   semanticSignature: string;
-  similarTasks: ScheduledGeneratorTask[];
+  similarTasks: ScheduledGeneratorTaskSummary[];
   conversationId: string | null;
+  scheduleLabel: string;
+  mode: string;
+  reminder: ScheduledGeneratorReminder | null;
 }
 
 export interface ScheduledGeneratorPreviewRequest {
   originalRequest: string;
   timezone: string;
+  schedule: ScheduledGeneratorSchedule;
+  mode?: "reminder" | "generate";
+  topic?: string | null;
+  reminder?: ScheduledGeneratorReminder | null;
   conversationId?: string | null;
 }
 
@@ -1936,8 +1975,12 @@ export interface ScheduledGeneratorCreateRequest {
   previewId: string;
   semanticSignature: string;
   originalRequest: string;
-  parsedIntent: ScheduledGeneratorParsedIntent;
-  confirmedBrief: ScheduledGeneratorConfirmedBrief;
+  timezone: string;
+  schedule: ScheduledGeneratorSchedule;
+  mode?: "reminder" | "generate";
+  topic?: string | null;
+  reminder?: ScheduledGeneratorReminder | null;
+  confirmedBrief?: ScheduledGeneratorConfirmedBrief | null;
   duplicateAck?: boolean;
   similarTaskIdsSeen?: string[];
 }

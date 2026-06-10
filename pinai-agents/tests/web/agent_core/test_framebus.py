@@ -124,3 +124,34 @@ async def test_history_reads_full_stream_oldest_first() -> None:
 async def test_history_empty_stream_is_empty_list() -> None:
     bus = _bus()
     assert await bus.history("nope") == []
+
+
+@pytest.mark.asyncio
+async def test_redis_read_timeout_is_a_keepalive_not_a_crash() -> None:
+    # redis-py 8.x applies a ~5s default read timeout even when
+    # socket_timeout=None, so a quiet XREAD BLOCK window longer than that
+    # raises TimeoutError instead of returning an empty read. The subscribe
+    # loop must surface it as a keepalive tick — the resumable SSE stream
+    # must NOT die every quiet window (regression: 2026-06-10 local stack,
+    # stream died every ~5s and the client reconnect-looped).
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    bus = _bus()
+    await bus.publish("s-timeout", {"type": "chat:done"})
+
+    calls = {"n": 0}
+    real_xread = bus._redis.xread
+
+    async def flaky_xread(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RedisTimeoutError("Timeout reading from redis:6379")
+        return await real_xread(*args, **kwargs)
+
+    bus._redis.xread = flaky_xread
+
+    gen = bus.subscribe("s-timeout", last_id="0")
+    first = await anext(gen)
+    assert first is None  # the timeout became a keepalive, not an exception
+    second = await anext(gen)
+    assert second is not None and second[1]["type"] == "chat:done"

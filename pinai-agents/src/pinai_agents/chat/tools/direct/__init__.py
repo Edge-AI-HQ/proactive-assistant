@@ -43,6 +43,7 @@ from .profile import (
 from .raw import raw_gcal_today, raw_gcal_week, raw_gmail_recent, raw_list
 from .scheduled_generators import (
     scheduled_generator_create,
+    scheduled_generator_create_once,
     scheduled_generator_delete,
     scheduled_generator_list,
     scheduled_generator_pause,
@@ -101,9 +102,12 @@ ALL_TOOLS = [
     # Scheduled generators — user-created recurring card generation. preview
     # builds a confirmable draft; create writes it only AFTER the user replies
     # to confirm (reply-gated, so deliberately NOT in SIDE_EFFECT_TOOL_NAMES);
-    # list / pause / resume / delete manage existing tasks.
+    # create_once writes ONE-OFF tasks directly (low-risk, instantly undoable,
+    # so no confirmation round); list / pause / resume / delete manage
+    # existing tasks.
     scheduled_generator_preview,
     scheduled_generator_create,
+    scheduled_generator_create_once,
     scheduled_generator_list,
     scheduled_generator_pause,
     scheduled_generator_resume,
@@ -186,6 +190,7 @@ __all__ = [
     "raw_gmail_recent",
     "raw_list",
     "scheduled_generator_create",
+    "scheduled_generator_create_once",
     "scheduled_generator_delete",
     "scheduled_generator_list",
     "scheduled_generator_pause",

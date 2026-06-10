@@ -8,9 +8,11 @@ import {
   type ScheduledGeneratorTask,
 } from "@/lib/api";
 
-// "daily · 09:00 · America/Los_Angeles" — drop empty parts so a task
-// missing a field doesn't render stray separators.
+// Server-rendered label ("每 5 分钟" / "一次 · 06-10 15:00") wins; legacy tasks
+// without scheduleLabel fall back to joining the cron fields, dropping empty
+// parts so a missing field doesn't render stray separators.
 function formatSchedule(task: ScheduledGeneratorTask): string {
+  if (task.scheduleLabel) return task.scheduleLabel;
   return [task.frequency, task.localTime, task.timezone].filter(Boolean).join(" · ");
 }
 

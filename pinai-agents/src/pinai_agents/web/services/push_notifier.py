@@ -376,3 +376,43 @@ async def notify_proactive_message(
     except Exception:
         logger.exception("push.proactive_dispatch_failed user=%s", user_id)
         return 0
+
+
+def _build_reminder_payload(*, title: str, message: str, task_id: str) -> PushPayload:
+    # 同一任务的重复提醒折叠成一条 banner;不同任务互不折叠。
+    return PushPayload(
+        title=title[:80],
+        body=message[:240],
+        deep_link="app://cards",
+        collapse_key=f"reminder_{task_id}",
+    )
+
+
+async def notify_reminder(
+    pool,
+    *,
+    user_id: int,
+    title: str,
+    message: str,
+    task_id: str,
+) -> int:
+    """用户显式创建的提醒 — 不受 notify_new_cards 开关约束(那是系统
+    广播的 opt-in;这是用户自己要求的打扰),与 notify_proactive_message
+    同一豁免逻辑。卡片已落库,push 失败不重试任务,所以永不上抛。"""
+    if not message.strip():
+        return 0
+    try:
+        async with user_scoped_tx(pool, user_id) as conn:
+            targets = await DevicesRepository(user_id, conn).find_push_targets()
+        if not targets:
+            logger.info("push.skip user=%s reason=no_targets kind=reminder", user_id)
+            return 0
+        return await _send_to_targets(
+            pool,
+            user_id=user_id,
+            targets=targets,
+            payload=_build_reminder_payload(title=title, message=message, task_id=task_id),
+        )
+    except Exception:
+        logger.exception("push.reminder_dispatch_failed user=%s", user_id)
+        return 0

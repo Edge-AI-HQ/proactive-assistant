@@ -10,7 +10,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
@@ -21,6 +21,7 @@ from ...auth.deps import AgentRun, User, current_agent_run, current_user, get_po
 from ...services.scheduled_generators import (
     ScheduledGeneratorNotFoundError,
     ScheduledGeneratorValidationError,
+    create_once_scheduled_task,
     create_scheduled_generator,
     delete_scheduled_generator,
     list_scheduled_generators,
@@ -48,11 +49,32 @@ def _to_camel(snake: str) -> str:
 class _ScheduledGeneratorPrincipal(BaseModel):
     user_id: int
     source: str
+    # agent 来源时 = 本轮 run JWT 的 run_id;同轮确认硬闸的输入。
+    run_id: str | None = None
+
+
+class ScheduleSpecModel(_CamelModel):
+    type: Literal["once", "interval", "cron"]
+    in_minutes: int | None = Field(default=None, ge=1)
+    at_local: str | None = Field(default=None, max_length=20)
+    every_seconds: int | None = Field(default=None, ge=1)
+    frequency: Literal["daily", "weekly"] | None = None
+    local_time: str | None = Field(default=None, max_length=5)
+    days_of_week: list[int] | None = None
+
+
+class ReminderModel(_CamelModel):
+    title: str = Field(min_length=1, max_length=80)
+    message: str = Field(min_length=1, max_length=500)
 
 
 class ScheduledGeneratorPreviewRequest(_CamelModel):
     original_request: str = Field(min_length=1, max_length=2000)
     timezone: str = Field(min_length=1, max_length=100)
+    schedule: ScheduleSpecModel
+    mode: Literal["reminder", "generate"] = "generate"
+    topic: str | None = Field(default=None, max_length=200)
+    reminder: ReminderModel | None = None
     conversation_id: str | None = Field(default=None, max_length=200)
 
 
@@ -60,10 +82,23 @@ class ScheduledGeneratorCreateRequest(_CamelModel):
     preview_id: str = Field(min_length=1, max_length=80)
     semantic_signature: str = Field(min_length=1, max_length=300)
     original_request: str = Field(min_length=1, max_length=2000)
-    parsed_intent: dict[str, Any]
-    confirmed_brief: dict[str, Any]
+    timezone: str = Field(min_length=1, max_length=100)
+    schedule: ScheduleSpecModel
+    mode: Literal["reminder", "generate"] = "generate"
+    topic: str | None = Field(default=None, max_length=200)
+    reminder: ReminderModel | None = None
+    confirmed_brief: dict[str, Any] | None = None
     duplicate_ack: bool = False
     similar_task_ids_seen: list[str] = Field(default_factory=list)
+
+
+class ScheduledGeneratorOnceRequest(_CamelModel):
+    original_request: str = Field(min_length=1, max_length=2000)
+    timezone: str = Field(min_length=1, max_length=100)
+    schedule: ScheduleSpecModel
+    mode: Literal["reminder", "generate"] = "reminder"
+    topic: str | None = Field(default=None, max_length=200)
+    reminder: ReminderModel | None = None
 
 
 async def _call_dependency(fn, **kwargs):
@@ -93,7 +128,9 @@ async def scheduled_generator_principal(
         else:
             agent = await current_agent_run(authorization=authorization, pool=pool)
         if isinstance(agent, AgentRun):
-            return _ScheduledGeneratorPrincipal(user_id=agent.user_id, source="agent")
+            return _ScheduledGeneratorPrincipal(
+                user_id=agent.user_id, source="agent", run_id=agent.run_id
+            )
     except HTTPException as e:
         agent_error = e
 
@@ -128,7 +165,12 @@ async def preview(
             user_id=principal.user_id,
             original_request=req.original_request,
             timezone=req.timezone,
+            schedule=req.schedule.model_dump(exclude_none=True),
+            mode=req.mode,
+            topic=req.topic,
+            reminder=req.reminder.model_dump() if req.reminder else None,
             conversation_id=req.conversation_id,
+            run_id=principal.run_id,
         )
     except ScheduledGeneratorValidationError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -162,10 +204,15 @@ async def create(
             preview_id=req.preview_id,
             semantic_signature=req.semantic_signature,
             original_request=req.original_request,
-            parsed_intent=req.parsed_intent,
+            timezone=req.timezone,
+            schedule=req.schedule.model_dump(exclude_none=True),
+            mode=req.mode,
+            topic=req.topic,
+            reminder=req.reminder.model_dump() if req.reminder else None,
             confirmed_brief=req.confirmed_brief,
             duplicate_ack=req.duplicate_ack,
             similar_task_ids_seen=req.similar_task_ids_seen,
+            caller_run_id=principal.run_id,
         )
     except ScheduledGeneratorValidationError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -184,6 +231,31 @@ async def create(
     return JSONResponse(
         status_code=status.HTTP_201_CREATED if result.created else status.HTTP_200_OK,
         content=_dump({"task": serialize_task(result.task)}),
+    )
+
+
+@router.post("/once")
+async def create_once(
+    req: ScheduledGeneratorOnceRequest,
+    principal: _ScheduledGeneratorPrincipal = Depends(scheduled_generator_principal),
+    pool: AsyncConnectionPool = Depends(get_pool),
+):
+    try:
+        task = await create_once_scheduled_task(
+            pool,
+            user_id=principal.user_id,
+            original_request=req.original_request,
+            timezone=req.timezone,
+            schedule=req.schedule.model_dump(exclude_none=True),
+            mode=req.mode,
+            topic=req.topic,
+            reminder=req.reminder.model_dump() if req.reminder else None,
+        )
+    except ScheduledGeneratorValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content=_dump({"task": serialize_task(task)}),
     )
 
 

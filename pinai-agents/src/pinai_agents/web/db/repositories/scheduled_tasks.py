@@ -22,6 +22,7 @@ through UserScopedRepository.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -212,10 +213,10 @@ class ScheduledTasksRepository(UserScopedRepository):
             rows = await cur.fetchall()
         return [ScheduledTaskRow.from_record(r) for r in rows]
 
-    async def list_by_kind(
+    async def list_by_kinds(
         self,
         *,
-        kind: str,
+        kinds: Sequence[str],
         include_archived: bool = False,
     ) -> list[ScheduledTaskRow]:
         async with self._conn.cursor() as cur:
@@ -223,29 +224,39 @@ class ScheduledTasksRepository(UserScopedRepository):
                 """
                 SELECT * FROM pai_scheduled_tasks
                 WHERE user_id = %s
-                  AND kind = %s
+                  AND kind = ANY(%s)
                   AND (%s OR status <> 'archived')
                 ORDER BY created_at DESC
                 """,
-                (self._user_id, kind, include_archived),
+                (self._user_id, list(kinds), include_archived),
             )
             rows = await cur.fetchall()
         return [ScheduledTaskRow.from_record(r) for r in rows]
 
-    async def get_by_id_and_kind(
-        self,
-        *,
-        task_id: str,
-        kind: str,
+    async def count_by_kinds(self, *, kinds: Sequence[str]) -> int:
+        """active+paused 任务数(护栏用);archived 不计。"""
+        async with self._conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT COUNT(*) AS n FROM pai_scheduled_tasks
+                WHERE user_id = %s AND kind = ANY(%s) AND status <> 'archived'
+                """,
+                (self._user_id, list(kinds)),
+            )
+            row = await cur.fetchone()
+        return int(row["n"]) if row else 0
+
+    async def get_by_id_and_kinds(
+        self, *, task_id: str, kinds: Sequence[str]
     ) -> ScheduledTaskRow | None:
         async with self._conn.cursor() as cur:
             await cur.execute(
                 """
                 SELECT * FROM pai_scheduled_tasks
-                WHERE user_id = %s AND id = %s AND kind = %s
+                WHERE user_id = %s AND id = %s AND kind = ANY(%s)
                 LIMIT 1
                 """,
-                (self._user_id, task_id, kind),
+                (self._user_id, task_id, list(kinds)),
             )
             row = await cur.fetchone()
         return ScheduledTaskRow.from_record(row) if row is not None else None
@@ -261,16 +272,18 @@ class ScheduledTasksRepository(UserScopedRepository):
             )
             return (cur.rowcount or 0) > 0
 
-    async def pause_by_kind(self, *, task_id: str, kind: str) -> ScheduledTaskRow | None:
+    async def pause_by_kinds(
+        self, *, task_id: str, kinds: Sequence[str]
+    ) -> ScheduledTaskRow | None:
         async with self._conn.cursor() as cur:
             await cur.execute(
                 """
                 UPDATE pai_scheduled_tasks
                 SET status = 'paused', updated_at = NOW()
-                WHERE user_id = %s AND id = %s AND kind = %s AND status = 'active'
+                WHERE user_id = %s AND id = %s AND kind = ANY(%s) AND status = 'active'
                 RETURNING *
                 """,
-                (self._user_id, task_id, kind),
+                (self._user_id, task_id, list(kinds)),
             )
             row = await cur.fetchone()
         return ScheduledTaskRow.from_record(row) if row is not None else None
@@ -287,11 +300,11 @@ class ScheduledTasksRepository(UserScopedRepository):
             )
             return (cur.rowcount or 0) > 0
 
-    async def resume_by_kind(
+    async def resume_by_kinds(
         self,
         *,
         task_id: str,
-        kind: str,
+        kinds: Sequence[str],
         next_run_at: datetime | None,
     ) -> ScheduledTaskRow | None:
         async with self._conn.cursor() as cur:
@@ -299,15 +312,17 @@ class ScheduledTasksRepository(UserScopedRepository):
                 """
                 UPDATE pai_scheduled_tasks
                 SET status = 'active', next_run_at = %s, updated_at = NOW()
-                WHERE user_id = %s AND id = %s AND kind = %s AND status = 'paused'
+                WHERE user_id = %s AND id = %s AND kind = ANY(%s) AND status = 'paused'
                 RETURNING *
                 """,
-                (next_run_at, self._user_id, task_id, kind),
+                (next_run_at, self._user_id, task_id, list(kinds)),
             )
             row = await cur.fetchone()
         return ScheduledTaskRow.from_record(row) if row is not None else None
 
-    async def archive_by_kind(self, *, task_id: str, kind: str) -> ScheduledTaskRow | None:
+    async def archive_by_kinds(
+        self, *, task_id: str, kinds: Sequence[str]
+    ) -> ScheduledTaskRow | None:
         async with self._conn.cursor() as cur:
             await cur.execute(
                 """
@@ -315,11 +330,11 @@ class ScheduledTasksRepository(UserScopedRepository):
                 SET status = 'archived', next_run_at = NULL, updated_at = NOW()
                 WHERE user_id = %s
                   AND id = %s
-                  AND kind = %s
+                  AND kind = ANY(%s)
                   AND status <> 'archived'
                 RETURNING *
                 """,
-                (self._user_id, task_id, kind),
+                (self._user_id, task_id, list(kinds)),
             )
             row = await cur.fetchone()
         return ScheduledTaskRow.from_record(row) if row is not None else None

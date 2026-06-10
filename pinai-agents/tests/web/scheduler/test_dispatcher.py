@@ -23,6 +23,11 @@ def test_generator_tasks_use_ten_minute_lease():
     assert dispatcher._lease_for("auto.dreaming") == 600
 
 
+def test_reminder_card_uses_default_lease():
+    dispatcher = DefaultDispatcher(pool=cast(Any, None), lease_seconds=60)
+    assert dispatcher._lease_for("reminder.card") == 60
+
+
 def test_scheduled_generator_maps_to_existing_generator_agent_kind():
     assert _AGENT_RUN_KIND["generator.scheduled"] == "generator"
 
@@ -202,14 +207,63 @@ async def test_dream_dispatch_persists_summary_and_output_counts(
     assert task_run["status"] == "success"
 
 
-@pytest.mark.xfail(
-    reason="flaky: heartbeat count is order/DB-state dependent — passes alone "
-    "or within test_dispatcher.py, varies under broader runs. Pre-existing, "
-    "NOT introduced by the DB-test CI work. Needs a dedicated look: test "
-    "isolation gap, or a real dispatch bug (duplicate heartbeat) worth ruling "
-    "out given the proactive checkpoint-growth history.",
-    strict=False,
-)
+@pytest.mark.asyncio
+async def test_reminder_card_dispatch_writes_card_and_notifies(pool, user_ids, monkeypatch):
+    user_a, _ = user_ids
+    pushed: list[dict] = []
+
+    async def fake_notify(pool_, *, user_id, title, message, task_id):
+        pushed.append({"user_id": user_id, "title": title, "message": message, "task_id": task_id})
+        return 1
+
+    from pinai_agents.web.services import push_notifier
+
+    monkeypatch.setattr(push_notifier, "notify_reminder", fake_notify)
+
+    async with user_scoped_tx(pool, user_a) as conn:
+        task = await ScheduledTasksRepository(user_a, conn).upsert(
+            id="sched.once.remtest",
+            kind="reminder.card",
+            trigger_kind="once",
+            next_run_at=datetime.now(UTC) + timedelta(hours=1),  # 不可被真容器认领
+            timezone="Asia/Shanghai",
+            payload={
+                "reminder": {"title": "喝水", "message": "该喝水了"},
+                "schedule_label": "一次 · 06-09 18:05",
+                "trigger": "reminder",
+            },
+        )
+    task.last_run_at = datetime.now(UTC)
+
+    dispatcher = DefaultDispatcher(pool=pool, lease_seconds=60, owner="test")
+    await dispatcher.dispatch(task)
+
+    async with service_tx(pool) as conn:
+        cur = await conn.execute(
+            """
+            SELECT trigger, final_cards FROM pai_pipeline_runs
+            WHERE user_id = %s AND id LIKE 'sched.once.remtest.%%'
+            """,
+            (user_a,),
+        )
+        run = await cur.fetchone()
+        cur = await conn.execute(
+            "SELECT status FROM pai_scheduled_task_runs "
+            "WHERE user_id = %s AND task_id = 'sched.once.remtest'",
+            (user_a,),
+        )
+        task_run = await cur.fetchone()
+
+    assert run is not None and run["trigger"] == "reminder"
+    card = run["final_cards"][0]
+    assert card["title"] == "喝水"
+    assert card["sourceKind"] == "scheduled" and card["sourceLabel"] == "喝水"
+    assert task_run is not None and task_run["status"] == "success"
+    assert pushed == [
+        {"user_id": user_a, "title": "喝水", "message": "该喝水了", "task_id": "sched.once.remtest"}
+    ]
+
+
 @pytest.mark.asyncio
 async def test_proactive_tick_archives_and_skips_when_disabled(
     pool,
@@ -228,7 +282,9 @@ async def test_proactive_tick_archives_and_skips_when_disabled(
             kind="proactive.tick",
             trigger_kind="schedule",
             interval_seconds=30,
-            next_run_at=datetime.now(UTC),
+            # 未来时刻:本地真容器的 scheduler 不会认领这行(历史 flaky 根因
+            # 是测试与 make up 栈共库,到期行被真 dispatcher 抢跑、重复计数)
+            next_run_at=datetime.now(UTC) + timedelta(hours=1),
             status="active",
         )
     task.last_run_at = datetime.now(UTC)
@@ -264,12 +320,6 @@ async def test_proactive_tick_archives_and_skips_when_disabled(
     assert msgs["n"] == 0
 
 
-@pytest.mark.xfail(
-    reason="flaky: see test_proactive_tick_archives_and_skips_when_disabled — "
-    "heartbeat count is order/DB-state dependent, pre-existing, needs a "
-    "dedicated look (isolation gap vs real duplicate-heartbeat bug).",
-    strict=False,
-)
 @pytest.mark.asyncio
 async def test_proactive_tick_enqueues_when_enabled(
     pool,
@@ -289,7 +339,7 @@ async def test_proactive_tick_enqueues_when_enabled(
             kind="proactive.tick",
             trigger_kind="schedule",
             interval_seconds=300,
-            next_run_at=now,
+            next_run_at=now + timedelta(hours=1),  # 不可被真容器认领,见上一测试注释
             status="active",
         )
     task.last_run_at = now
