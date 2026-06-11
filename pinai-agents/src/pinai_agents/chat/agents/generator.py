@@ -708,6 +708,42 @@ def _citation_for(source_type: str, source_id: str, title: str, snippet: str) ->
     return f"{source_type} id={source_id}, text={_truncate(snippet or title, 160)}"
 
 
+# Maps the first token of a citation prefix (text before " id=") to the
+# user-facing app slug stamped onto card["sourceApps"]. Must stay in sync
+# with _citation_for above — that template is the only producer of the
+# citation strings this parses.
+_CITATION_TOKEN_TO_APP = {
+    "signal": "device",
+    "memory": "memory",
+    "gmail": "gmail",
+    "gcal": "gcal",
+    "world": "web",
+    "profile": "profile",
+    "goal": "goal",
+    "preference": "preference",
+}
+
+_CITATION_PREFIX_RE = re.compile(r"^\s*([a-z0-9_-]+)(?:\s+[a-z0-9_-]+)*\s+id=", re.IGNORECASE)
+
+
+def derive_source_apps(sources: list[str]) -> list[str]:
+    """Deterministic user-facing app slugs for a card's citation list.
+
+    Unknown / garbled citations are dropped rather than guessed — the
+    audit string itself must never leak to the UI (the old behaviour the
+    frontend is moving away from)."""
+    apps: list[str] = []
+    for citation in sources:
+        match = _CITATION_PREFIX_RE.match(citation)
+        if not match:
+            continue
+        token = match.group(1).lower()
+        app = _CITATION_TOKEN_TO_APP.get(token, token)
+        if app not in apps:
+            apps.append(app)
+    return apps
+
+
 def _source_record(source_type: str, row: dict[str, Any], idx: int) -> dict[str, Any]:
     source_id = _source_id(row, source_type, idx)
     title = _first_text(
