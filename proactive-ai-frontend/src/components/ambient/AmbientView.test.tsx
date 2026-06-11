@@ -291,6 +291,68 @@ describe("AmbientView ambient toggle", () => {
     });
   });
 
+  test("turns off when runtime is already listening but settings are stale", async () => {
+    runtimeMock.status.mockReturnValue({
+      ...makeStatus(),
+      sources: ALL_SOURCE_KEYS.map((key) => ({
+        key,
+        label: key,
+        enabled: key === "sound_classifier",
+        lastEvent: null,
+        ingestedCount: 0,
+        lastError: null,
+      })),
+    });
+    patchMock.mockResolvedValue({
+      ambientSources: Object.fromEntries(
+        ALL_SOURCE_KEYS.map((key) => [key, { enabled: false }]),
+      ),
+      generationLanguage: "zh-Hans",
+    });
+
+    render(<AmbientView />);
+    fireEvent.click(screen.getByRole("button", { name: "Toggle ambient" }));
+
+    await waitFor(() => {
+      expect(patchMock).toHaveBeenCalledWith({
+        ambientSources: Object.fromEntries(
+          ALL_SOURCE_KEYS.map((key) => [key, { enabled: false }]),
+        ),
+      });
+      expect(stopAmbientUploadMock).toHaveBeenCalled();
+      expect(startAmbientUploadMock).not.toHaveBeenCalled();
+    });
+  });
+
+  test("stops local capture when turning off even if settings patch fails", async () => {
+    localStorage.setItem("pin.ambient.enabled", "1");
+    runtimeMock.status.mockReturnValue({
+      ...makeStatus(),
+      sources: ALL_SOURCE_KEYS.map((key) => ({
+        key,
+        label: key,
+        enabled: key === "sound_classifier",
+        lastEvent: null,
+        ingestedCount: 0,
+        lastError: null,
+      })),
+    });
+    patchMock.mockResolvedValue(null);
+
+    render(<AmbientView />);
+    fireEvent.click(screen.getByRole("button", { name: "Toggle ambient" }));
+
+    await waitFor(() => {
+      expect(stopAmbientUploadMock).toHaveBeenCalled();
+      expect(getPersistedAmbientEnabled()).toBe(false);
+      expect(patchMock).toHaveBeenCalledWith({
+        ambientSources: Object.fromEntries(
+          ALL_SOURCE_KEYS.map((key) => [key, { enabled: false }]),
+        ),
+      });
+    });
+  });
+
   test("renders dismissible ambient live session", async () => {
     runtimeMock.status.mockReturnValue(makeStatus());
 

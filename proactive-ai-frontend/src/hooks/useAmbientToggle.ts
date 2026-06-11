@@ -5,7 +5,7 @@ import {
   setPersistedAmbientEnabled,
 } from "@/services/ambient/enabled-state";
 import { ALL_SOURCE_KEYS, type SourceKey } from "@/services/ambient/keys";
-import type { RuntimeStatus } from "@/services/ambient";
+import { getExistingAmbientRuntime, type RuntimeStatus } from "@/services/ambient";
 import { useUserSettings } from "./useUserSettings";
 
 export interface UseAmbientToggleResult {
@@ -62,42 +62,42 @@ export function useAmbientToggle(): UseAmbientToggleResult {
 
   const toggle = useCallback(async () => {
     if (togglePending) return;
-    const next = !ambientOn;
+    const next = !(ambientOn || hasEnabledRuntimeSource());
     setTogglePending(true);
     try {
-      if (next) {
-        setPersistedAmbientEnabled(true);
-      }
       const consentPatch = Object.fromEntries(
         ALL_SOURCE_KEYS.map((key) => [key, { enabled: next }]),
       );
-      const updated = await patch({ ambientSources: consentPatch });
-      if (!updated) {
-        if (next) setPersistedAmbientEnabled(false);
-        return;
-      }
+
       if (!next) {
         setPersistedAmbientEnabled(false);
+        if (isNative) {
+          const lifecycle = await import("@/services/ambient/lifecycle");
+          await lifecycle.stopAmbientUpload();
+        }
+        await patch({ ambientSources: consentPatch });
+        return;
+      }
+
+      setPersistedAmbientEnabled(true);
+      const updated = await patch({ ambientSources: consentPatch });
+      if (!updated) {
+        setPersistedAmbientEnabled(false);
+        return;
       }
       if (!isNative) return;
       const lifecycle = await import("@/services/ambient/lifecycle");
-      if (next) {
-        const enabledSources = updated
-          ? (Object.entries(updated.ambientSources ?? {})
-              .filter(([, v]) => v?.enabled === true)
-              .map(([k]) => k as SourceKey))
-          : ALL_SOURCE_KEYS;
-        const desiredSources = enabledSources.length > 0 ? enabledSources : ALL_SOURCE_KEYS;
-        const status = await lifecycle.startAmbientUpload({
-          enabledSources: desiredSources,
-          transcriptionLanguage:
-            updated?.generationLanguage ?? settings?.generationLanguage ?? null,
-        });
-        if (hasMissingCoreSource(status, desiredSources)) {
-          setPersistedAmbientEnabled(false);
-          await lifecycle.stopAmbientUpload();
-        }
-      } else {
+      const enabledSources = Object.entries(updated.ambientSources ?? {})
+        .filter(([, v]) => v?.enabled === true)
+        .map(([k]) => k as SourceKey);
+      const desiredSources = enabledSources.length > 0 ? enabledSources : ALL_SOURCE_KEYS;
+      const status = await lifecycle.startAmbientUpload({
+        enabledSources: desiredSources,
+        transcriptionLanguage:
+          updated.generationLanguage ?? settings?.generationLanguage ?? null,
+      });
+      if (hasMissingCoreSource(status, desiredSources)) {
+        setPersistedAmbientEnabled(false);
         await lifecycle.stopAmbientUpload();
       }
     } finally {
@@ -106,6 +106,17 @@ export function useAmbientToggle(): UseAmbientToggleResult {
   }, [ambientOn, patch, settings?.generationLanguage, togglePending]);
 
   return { ambientOn, togglePending, toggle };
+}
+
+function hasEnabledRuntimeSource(): boolean {
+  try {
+    return getExistingAmbientRuntime()
+      ?.status()
+      .sources
+      .some((source) => source.enabled) === true;
+  } catch {
+    return false;
+  }
 }
 
 function hasMissingCoreSource(
