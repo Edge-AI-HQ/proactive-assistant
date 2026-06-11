@@ -5,7 +5,7 @@ description: "基于对 proactive-ai-frontend 全量扫描（~59.5k 行）的分
 
 # 前端分层架构方案（2026-06-10 起草，2026-06-11 更新三端格局）
 
-> **状态**：方案已评审，关键决策全部拍板（见 §1.1），实施未开始。本文是设计 SSOT，实施时按 Phase 拆 PR。
+> **状态**（2026-06-11 更新）：**Phase 0-3 全部落地**——Phase 0 地基 + research（#90）、Phase 1 API 下沉（#91）、Phase 2 TQ 全量迁移（#92）、React 19（#93）、Phase 3a+3b 状态机提纯（#94）、Phase 3c conversation 收官（#95）。成果：`packages/core`（transport/api/domain/machines/ports/sync）+ `packages/state`（queries/stores），5 个业务状态机 48 个回放测试，边界 lint 进 CI。**Phase 4（壳收口/组件去业务化/isNative 组装收敛）是持续项**，跟 UI 迭代合并做，不整体立项。本文保留为设计 SSOT；§2 的扫描数字是 2026-06-10 快照。
 
 ## 1. 背景与目标
 

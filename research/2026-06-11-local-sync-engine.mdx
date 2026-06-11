@@ -5,7 +5,8 @@ description: "为 web/Electron/Expo RN 三端设计本地缓存+同步引擎的�
 
 # 本地-云端同步引擎：调研与方案（2026-06-11）
 
-> **状态**：调研完成，方案待评审。前置依赖：[前端分层架构](./2026-06-10-frontend-layering.mdx)的 `@pin-ai/core`（transport/ports）。事实基线已对 main 8874a5e6（2026-06-11 pull）复核：本文引用的 outbox / timeline store / history 游标接口 / SSE envelope / `pai_chat_messages` 均未被该批改动触碰，结论不变。
+> **状态**（2026-06-11 更新）：**Sync-A 与 Sync-B1/B2 已落地**——Sync-A persister 白名单持久化（#97）、B1 后端 delta 协议（#98，`/api/sync/messages|threads` + migration 093）、B2 引擎影子模式（#99，Database port 首落地 + Capacitor driver + 登录后后台同步）。**Sync-B 切片顺序已拍板**：B1 协议 → B2 影子 → B3 读路径切换；B2 driver 端选 Capacitor iOS；域范围 messages 为主 + threads 顺带。
+> **B3 的前置是真机影子验证**（见 §5.1 checklist）：影子引擎只写不读，`[sync:shadow]` stats 与服务端比对一致后才切读路径——它是同步引擎唯一碰用户体验的步骤。
 > **决策输入**（2026-06-11，用户拍板）：服务端列加密工程可为同步让步（"当前可以不需要"）；后端 schema/接口可改造，都 flexible。本方案的最终推荐**不需要动用这个让步**（见 §4.3），加密兼容性作为免费保留项。
 
 ## 1. 需求与数据形状
@@ -163,6 +164,24 @@ TQ 仍是 UI 的数据接口，但 queryFn 的语义从「打网络」变成「�
 | **Sync-D（可选观察项）** | web 端升级 sqlite-wasm + 选主；TanStack DB（等 v1）作本地 reactive 查询层 | Sync-B/C 稳定 | web 端对齐 native 体验 |
 
 ambient 现有 outbox/store **不动**——它已经是这个架构在 ambient 域的特化实现；待通用引擎稳定后再评估收编（避免一开始就大一统）。
+
+### 5.1 Sync-B 实施细则（2026-06-11 拍板并部分落地）
+
+**切片**：B1 后端协议（#98 已合）→ B2 引擎影子模式（#99 已合）→ B3 读路径切换（待真机验证后）。
+
+**真机影子验证 checklist（B3 的硬前置，需 Capacitor 真机）**：
+1. `make ios`（本 worktree 自带 tunnel）装真机，登录后看 Xcode console；
+2. 应出现 `[sync:shadow] pass done { threadsPulled, messagesPulled, stats }`——首轮 bootstrap 拉全量，5 分钟后第二轮应 `pulled: 0`（增量空页）；
+3. 在 main chat 发一条消息等回复，下一轮影子 pass 的 `messagesPulled` 应 ≥2（user + assistant 行）；
+4. stats 的 `messages` 计数与 `/api/conversation/history` 的行数比对一致；
+5. 杀 app 重开：游标续传（console 无重复 bootstrap 的大 pulled 值）。
+   任何一步不符 → 修引擎，不进 B3。
+
+**B3 设计要点（验证通过后实施）**：
+- **门铃 ingest 替代轮询**：conversation runtime 的 `chat:done`/`chat:persisted` 后触发对应 thread 的 `syncMessages`（拉刚 finalize 的行）——**通知拉取分离**，客户端不把 SSE 帧自行拼成行（避免重新实现后端 finalize 逻辑）；5min 影子轮询退役为兜底（30min 级）。
+- **读路径切换（唯一碰 UI 的步骤）**：`conversationHistory` 的首屏读改「本地优先 + 网络 race」（Notion 模式）：本地库有行即先渲染、后台 delta 补齐 invalidate；本地空（冷库/新设备）直接走网络不等引擎。`loadMoreHistory` 向旧翻页仍走网络（历史 gap 按需 hydrate 后入库）。
+- **card threads 按访问驱动**：打开 card thread 时触发该 thread 的 `syncMessages`（lazy incomplete model），不全量扫。
+- **回归面控制**：复用 Phase 3c 的 envelope/merge 回放测试基建；读切换灰度顺序 = 先 card drawer（读面窄）后 main chat。
 
 ## 6. 风险清单
 
