@@ -37,6 +37,36 @@ export function isMainChatEntrySwipeUp(
   );
 }
 
+/** The whole lower half of the NOW screen accepts the swipe-up into main
+ *  chat, not just the ASK PIN AI button. The sphere only responds to
+ *  HORIZONTAL drags (pitch is locked), so a vertical swipe there is an
+ *  otherwise-dead gesture we can claim without stealing anything. */
+const MAIN_CHAT_SURFACE_SWIPE_THRESHOLD_PX = 56;
+
+/** True when the pointer started in the lower half of the screen. */
+export function isFromLowerHalfOfScreen(
+  clientY: number,
+  screenHeight: number,
+): boolean {
+  return clientY >= screenHeight / 2;
+}
+
+/** Swipe-up detector for the lower-screen surface. Deliberately a HIGHER
+ *  threshold than the button's own (56px vs 36px): a half-screen hot zone
+ *  needs a more deliberate gesture to stay clear of accidental flicks. */
+export function isMainChatSurfaceSwipeUp(
+  start: TouchPoint | null,
+  end: TouchPoint,
+): boolean {
+  if (!start) return false;
+  const verticalTravel = start.y - end.y;
+  const horizontalTravel = Math.abs(end.x - start.x);
+  return (
+    verticalTravel >= MAIN_CHAT_SURFACE_SWIPE_THRESHOLD_PX
+    && verticalTravel > horizontalTravel
+  );
+}
+
 /**
  * Mirror of isMainChatEntrySwipeUp for the exit direction: vertical
  * downward travel exceeding the threshold (and dominating any horizontal

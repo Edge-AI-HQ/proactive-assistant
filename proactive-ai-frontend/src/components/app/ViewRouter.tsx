@@ -8,8 +8,7 @@ import SwipeBackLayer from "@/components/app/SwipeBackLayer";
 import RealGoalsView from "@/components/profile/GoalsView";
 import RealControlPanel from "@/components/connect/ControlPanel";
 import CardTimeline from "@/components/tasks/CardTimeline";
-import { realIntentToChatCard, type Intent } from "@/components/now/card-model";
-import type { CardActions } from "@/components/card/CardStateContext";
+import type { Intent } from "@/components/now/card-model";
 import type { MenuId, SettingsSubPage } from "@/components/app/useAppNavigation";
 import type { WeatherData } from "@/hooks/useWeather";
 import type { ComposioState } from "@/hooks/useComposio";
@@ -19,13 +18,13 @@ import type { LiveSession } from "@/services/ambient/live-session";
 
 interface ViewRouterProps {
   // ── routing state ──
-  chatTarget: { card: IntentCard; bootstrap?: string } | null;
+  // (real card chat is a portal sheet now — CardChatOverlay in AppLayout —
+  //  so only the legacy mock activeChat path still routes through here)
   activeChat: ChatCard | null;
   activeView: MenuId;
   // ── shared backend handles ──
-  cardActions: CardActions;
   composio: ComposioState;
-  // ── card chat (chatTarget + legacy activeChat branches) ──
+  // ── card chat (legacy activeChat branch) ──
   onCardChatBack: () => void;
   // ── PROACTIVE view (full-screen ConversationView, kind="proactive") ──
   onProactiveBack: () => void;
@@ -63,16 +62,16 @@ interface ViewRouterProps {
 
 /**
  * Main content router. The single AnimatePresence + keyed motion.div that
- * cross-fades between the active full-screen surface: card chat (real
- * `chatTarget` or legacy `activeChat`), then the 6 top-level views keyed by
- * `activeView`. Purely a dispatcher — every action it fires arrives as a
- * prop, so AppLayout keeps ownership of all state + side effects.
+ * cross-fades between the active full-screen surface: legacy mock card chat
+ * (`activeChat`), then the 6 top-level views keyed by `activeView`. Purely a
+ * dispatcher — every action it fires arrives as a prop, so AppLayout keeps
+ * ownership of all state + side effects. The REAL card chat no longer routes
+ * through here: it's a portal sheet (CardChatOverlay) mounted by AppLayout,
+ * so the view underneath stays live while the sheet covers it.
  */
 export default function ViewRouter({
-  chatTarget,
   activeChat,
   activeView,
-  cardActions,
   composio,
   onCardChatBack,
   onProactiveBack,
@@ -106,45 +105,14 @@ export default function ViewRouter({
   return (
     <AnimatePresence mode="wait" initial={false}>
       <motion.div
-        key={
-          chatTarget
-            ? `card-chat-${chatTarget.card.id}`
-            : activeChat
-              ? `chat-detail-${activeChat.id}`
-              : activeView
-        }
+        key={activeChat ? `chat-detail-${activeChat.id}` : activeView}
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         transition={{ duration: 0.2 }}
         className="flex-1 overflow-hidden"
       >
-        {chatTarget ? (
-          /* Real card chat: ChatDetailView now wraps MainChatView with
-             session_key = `card-thread-<cardId>`. `bootstrap` is the
-             Confirm-path's primaryAction text; the shared chat runtime
-             auto-fires it only when the thread is empty. */
-          <SwipeBackLayer onBack={onCardChatBack} className="h-full">
-            <ChatDetailView
-              card={realIntentToChatCard(chatTarget.card)}
-              runId={chatTarget.card.id}
-              bootstrap={chatTarget.bootstrap}
-              onBack={onCardChatBack}
-              // Sphere → TASKS lifecycle: Dismiss / Done in the
-              // chat toolbar must POST /feedback so the card moves
-              // off the sphere (dismissedIds / doneIds filter) and
-              // shows as Dismissed / Completed in the TASKS view.
-              // Without these the hook's cancel/confirmDone are
-              // purely local UI flips.
-              onDismissBackend={() => {
-                return cardActions.dismiss(chatTarget.card);
-              }}
-              onDoneBackend={() => {
-                return cardActions.complete(chatTarget.card);
-              }}
-            />
-          </SwipeBackLayer>
-        ) : activeChat ? (
+        {activeChat ? (
           /* Legacy mock-card path. Kept so type-checking stays honest
              if mock data is reintroduced for demos. */
           <SwipeBackLayer onBack={onCardChatBack} className="h-full">

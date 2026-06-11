@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { LucideIcon } from "lucide-react";
-import { isNative } from "@/lib/platform";
 
 export type SphereCardStatus = "normal" | "new" | "processing" | "done";
 
@@ -47,6 +46,64 @@ export function getSphereCardPresentation(depth: number) {
   return {
     opacity: 0.32 + depth * 0.68,
     visible: true,
+  };
+}
+
+export interface SphereCardStyle {
+  depth: number;
+  transform: string;
+  opacity: number;
+  zIndex: number;
+  background: string;
+  boxShadow: string;
+  pointerEvents: "none" | "auto";
+}
+
+/**
+ * Single source for every depth-driven style value of one card. The rAF
+ * loop writes these straight into the DOM (bypassing React) and render
+ * uses the same function, so the two paths can never disagree on what a
+ * frame looks like.
+ */
+export function computeCardStyle(
+  p: { x: number; y: number; z: number },
+  yawDeg: number,
+  pitchDeg: number,
+  rx: number,
+  ry: number,
+): SphereCardStyle {
+  // Yaw/pitch rotation of the unit vector.
+  const yaw = (yawDeg * Math.PI) / 180;
+  const pitch = (pitchDeg * Math.PI) / 180;
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  const x0 = p.x * cy + p.z * sy;
+  const z0 = -p.x * sy + p.z * cy;
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const y1 = p.y * cp - z0 * sp;
+  const z1 = p.y * sp + z0 * cp;
+  // Ellipsoid: separate horizontal & vertical radii so the sphere fills
+  // the container without escaping its bounds. Depth uses the smaller axis
+  // so scale/opacity stay perceptually consistent.
+  const rDepth = Math.min(rx, ry);
+  const x = x0 * rx;
+  const y = y1 * ry;
+  const z = z1 * rDepth;
+  const depth = (z + rDepth) / (2 * rDepth); // 0..1 (1 = front)
+  const scale = 0.6 + depth * 0.65;
+  // Front-most cards get a brighter, more opaque surface for readability
+  const frontBoost = Math.max(0, depth - 0.6) / 0.4; // 0..1 for depth 0.6..1
+  const surfaceAlpha = 0.55 + frontBoost * 0.4; // 0.55 → 0.95
+  return {
+    depth,
+    // Offsets center the fixed 160×68 card box on the projected point.
+    // Keep subpixel translation (rounding causes 1px jumps when velocity
+    // < 1px/frame).
+    transform: `translate3d(${(x - 80).toFixed(2)}px, ${(y - 34).toFixed(2)}px, 0) scale(${scale.toFixed(3)})`,
+    opacity: Math.round(getSphereCardPresentation(depth).opacity * 100) / 100,
+    zIndex: Math.round(1000 + z),
+    background: `hsl(var(--card) / ${surfaceAlpha.toFixed(2)})`,
+    boxShadow: z > 0 ? "0 4px 18px rgba(0,0,0,0.12)" : "none",
+    pointerEvents: depth < 0.25 ? "none" : "auto",
   };
 }
 
@@ -138,7 +195,7 @@ const Sphere3DCards = ({
   const rx = radius ?? autoRx;
   const ry = radius ?? autoRy;
 
-  // Restore from cache if available, otherwise start at default pose.
+  // Restore the POSE from cache if available, otherwise start at defaults.
   const initial = (cacheKey && rotationCache.get(cacheKey)) || {
     yaw: 0,
     pitch: -10,
@@ -146,11 +203,20 @@ const Sphere3DCards = ({
     velPitch: 0,
   };
   const rotRef = useRef({ yaw: initial.yaw, pitch: initial.pitch });
-  const velRef = useRef({ yaw: initial.velYaw, pitch: initial.velPitch });
+  // Velocity deliberately does NOT come from the cache: a remount resumes at
+  // the base spin speed. Restoring the live velocity replayed minutes-old
+  // fling inertia on re-entering the tab — after a leftward fling the sphere
+  // visibly spun the wrong way first, then decayed back to the idle drift.
+  const velRef = useRef({ yaw: 0.05, pitch: 0 });
   const draggingRef = useRef(false);
   const lastPointer = useRef({ x: 0, y: 0, t: 0 });
-  const [, force] = useState(0);
-  const idleAnimationPaused = isNative;
+  // Card DOM nodes + the styles last written to them. The rAF loop writes
+  // styles imperatively (no per-frame React render); lastStyles lets it
+  // skip writes whose quantized value didn't change, so paint-invalidating
+  // properties (background/shadow/zIndex) only touch the DOM on the frame
+  // they actually cross a step.
+  const cardEls = useRef(new Map<number, HTMLButtonElement>());
+  const lastStyles = useRef(new Map<number, SphereCardStyle>());
 
   // Map id -> stable point index so adding/removing cards doesn't reshuffle
   // the whole sphere. Points are assigned in id order on first sight.
@@ -190,12 +256,13 @@ const Sphere3DCards = ({
     });
   }, [cacheKey]);
 
-  // Animation loop — paused on native to avoid continuous WebKit/GPU work.
+  // Animation loop — runs on every platform. The original loop forced a
+  // React re-render per frame (60–120/s) which kept the CPU pegged and made
+  // iPhones run hot, so 035b825d paused it on native as a stopgap. Same
+  // per-frame math and visuals here, but styles go straight into the DOM:
+  // React still owns structure (mounting cards, titles, badges); this loop
+  // only touches the depth-driven style properties.
   useEffect(() => {
-    if (idleAnimationPaused) {
-      persistRotation();
-      return;
-    }
     let raf = 0;
     const tick = () => {
       if (!draggingRef.current) {
@@ -208,12 +275,43 @@ const Sphere3DCards = ({
       if (rotRef.current.pitch < -55) rotRef.current.pitch = -55;
 
       persistRotation();
-      force((n) => (n + 1) % 1000000);
+
+      // box-shadow only — opacity is driven frame-by-frame by this loop, and
+      // layering a CSS transition on top meant every write killed and
+      // restarted a 0.2s transition. At idle speed that's ~1 restart/s, but
+      // during a drag-release glide it's every frame, which strobed the
+      // dimmer (upper/back) cards. The per-frame opacity steps are ≤0.01 so
+      // they need no smoothing of their own.
+      const transition = draggingRef.current ? "none" : "box-shadow 0.2s";
+      for (const [id, el] of cardEls.current) {
+        const idx = idToPointIdx.current.get(id);
+        const p = idx === undefined ? undefined : pointsRef.current[idx];
+        if (!p) continue;
+        const s = computeCardStyle(
+          p,
+          rotRef.current.yaw,
+          rotRef.current.pitch,
+          rx,
+          ry,
+        );
+        // A React render (items/props change) may overwrite these styles
+        // with values one frame off; the next tick's writes re-sync, so no
+        // bookkeeping is needed for that case.
+        const prev = lastStyles.current.get(id);
+        if (!prev || prev.transform !== s.transform) el.style.transform = s.transform;
+        if (!prev || prev.opacity !== s.opacity) el.style.opacity = String(s.opacity);
+        if (!prev || prev.zIndex !== s.zIndex) el.style.zIndex = String(s.zIndex);
+        if (!prev || prev.background !== s.background) el.style.background = s.background;
+        if (!prev || prev.boxShadow !== s.boxShadow) el.style.boxShadow = s.boxShadow;
+        if (!prev || prev.pointerEvents !== s.pointerEvents) el.style.pointerEvents = s.pointerEvents;
+        if (el.style.transition !== transition) el.style.transition = transition;
+        lastStyles.current.set(id, s);
+      }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [idleAnimationPaused, persistRotation]);
+  }, [persistRotation, rx, ry]);
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     draggingRef.current = true;
@@ -232,34 +330,12 @@ const Sphere3DCards = ({
     rotRef.current.yaw += dx * 0.3;
     velRef.current.yaw = velRef.current.yaw * 0.7 + dx * 0.3 * 0.3;
     lastPointer.current = { x: e.clientX, y: e.clientY, t: performance.now() };
-    if (idleAnimationPaused) {
-      persistRotation();
-      force((n) => (n + 1) % 1000000);
-    }
-  }, [idleAnimationPaused, persistRotation]);
+  }, []);
 
   const onPointerUp = useCallback((e: React.PointerEvent) => {
     draggingRef.current = false;
-    if (idleAnimationPaused) {
-      persistRotation();
-      force((n) => (n + 1) % 1000000);
-    }
     (e.target as Element).releasePointerCapture?.(e.pointerId);
-  }, [idleAnimationPaused, persistRotation]);
-
-  // Apply yaw/pitch rotation to a unit vector
-  const rotate = (p: { x: number; y: number; z: number }) => {
-    const yaw = (rotRef.current.yaw * Math.PI) / 180;
-    const pitch = (rotRef.current.pitch * Math.PI) / 180;
-    const cy = Math.cos(yaw), sy = Math.sin(yaw);
-    const x = p.x * cy + p.z * sy;
-    const z = -p.x * sy + p.z * cy;
-    const y = p.y;
-    const cp = Math.cos(pitch), sp = Math.sin(pitch);
-    const y2 = y * cp - z * sp;
-    const z2 = y * sp + z * cp;
-    return { x, y: y2, z: z2 };
-  };
+  }, []);
 
   const totalDragMoved = useRef(0);
   const dragStartXY = useRef({ x: 0, y: 0 });
@@ -305,22 +381,15 @@ const Sphere3DCards = ({
           if (ptIdx === undefined) return null;
           const p = pointsRef.current[ptIdx];
           if (!p) return null;
-          const rp = rotate(p);
-          // Ellipsoid: separate horizontal & vertical radii so the sphere
-          // fills the container without escaping its bounds. Depth uses the
-          // smaller axis so scale/opacity stay perceptually consistent.
-          const rDepth = Math.min(rx, ry);
-          const x = rp.x * rx;
-          const y = rp.y * ry;
-          const z = rp.z * rDepth;
-          const depth = (z + rDepth) / (2 * rDepth); // 0..1 (1 = front)
-          const scale = 0.6 + depth * 0.65;
-          const presentation = getSphereCardPresentation(depth);
-          // Front-most cards get a brighter, more opaque surface for readability
-          const frontBoost = Math.max(0, depth - 0.6) / 0.4; // 0..1 for depth 0.6..1
-          const surfaceAlpha = 0.55 + frontBoost * 0.4; // 0.55 → 0.95
+          const s = computeCardStyle(
+            p,
+            rotRef.current.yaw,
+            rotRef.current.pitch,
+            rx,
+            ry,
+          );
+          const presentation = getSphereCardPresentation(s.depth);
           const Icon = item.icon;
-          const isFront = z > 0;
           const status = item.status ?? "normal";
           const isNew = status === "new";
           const isProcessing = status === "processing";
@@ -335,6 +404,14 @@ const Sphere3DCards = ({
           return (
             <button
               key={item.id}
+              ref={(el) => {
+                if (el) {
+                  cardEls.current.set(item.id, el);
+                } else {
+                  cardEls.current.delete(item.id);
+                  lastStyles.current.delete(item.id);
+                }
+              }}
               aria-hidden={!presentation.visible}
               tabIndex={presentation.visible ? 0 : -1}
               onClick={() => {
@@ -345,18 +422,18 @@ const Sphere3DCards = ({
                 left: 0,
                 top: 0,
                 width: 160,
-                background: `hsl(var(--card) / ${surfaceAlpha.toFixed(2)})`,
-                // Keep subpixel translation (rounding causes 1px jumps when
-                // velocity < 1px/frame). Force a stable GPU layer so text
-                // stays cached and doesn't re-rasterize each frame.
-                transform: `translate3d(${(x - 80).toFixed(2)}px, ${(y - 34).toFixed(2)}px, 0) scale(${scale.toFixed(3)})`,
-                opacity: Math.round(presentation.opacity * 100) / 100,
-                zIndex: Math.round(1000 + z),
-                pointerEvents: depth < 0.25 ? "none" : "auto",
+                background: s.background,
+                // Force a stable GPU layer so text stays cached and doesn't
+                // re-rasterize each frame (willChange below).
+                transform: s.transform,
+                opacity: s.opacity,
+                zIndex: s.zIndex,
+                pointerEvents: s.pointerEvents,
                 borderRadius: 14,
-                boxShadow: isFront ? "0 4px 18px rgba(0,0,0,0.12)" : "none",
-                transition: draggingRef.current ? "none" : "box-shadow 0.2s, opacity 0.2s",
-                willChange: idleAnimationPaused ? "auto" : "transform",
+                boxShadow: s.boxShadow,
+                // box-shadow only; opacity is rAF-driven (see the tick loop).
+                transition: draggingRef.current ? "none" : "box-shadow 0.2s",
+                willChange: "transform",
                 backfaceVisibility: "hidden",
                 WebkitBackfaceVisibility: "hidden",
                 transformStyle: "preserve-3d",

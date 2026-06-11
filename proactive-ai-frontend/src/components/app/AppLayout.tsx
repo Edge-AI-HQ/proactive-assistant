@@ -21,7 +21,7 @@ import AiSphere from "@/components/now/AiSphere";
 import ConnectPanel from "@/components/connect/ConnectPanel";
 import { type TimelineEntry as AmbientTimelineEntry } from "@/components/ambient/AmbientView";
 import { type ChatCard, brandSvg, detectToolIcon } from "@/components/chat/ChatDetailView";
-import CardChat from "@/components/chat/CardChat";
+import CardChatOverlay from "@/components/chat/CardChatOverlay";
 import { deleteAccount, DeleteAccountError } from "@/lib/api";
 import DebugPanel from "@/components/common/DebugPanel";
 import AgentRunIndicator from "@/components/common/AgentRunIndicator";
@@ -47,8 +47,10 @@ import { useAmbientToggle } from "@/hooks/useAmbientToggle";
 import { bindSystemShortcutActions } from "@/services/system-shortcuts";
 import type { LiveSession } from "@/services/ambient/live-session";
 import {
+  isFromLowerHalfOfScreen,
   isFromRightEdgeOfScreen,
   isMainChatEntrySwipeUp,
+  isMainChatSurfaceSwipeUp,
   isMainMenuSwipeLeft,
   shouldIgnoreMainMenuSwipeTarget,
   type TouchPoint,
@@ -392,6 +394,20 @@ export default function AppLayout() {
     && !paywallCard
     && !liveOverlay
   );
+  // Swipe-up-into-main-chat from the lower half of the NOW screen. Stricter
+  // than the menu gate: chats / lists handle their own vertical swipes
+  // (scrolling), so this only arms on the NOW view with nothing covering it.
+  const canOpenChatFromMainSwipe = (
+    activeView === "now"
+    && !menuOpen
+    && !mainChatOpen
+    && chatTarget == null
+    && activeChat == null
+    && !drawerOpen
+    && !paywallCard
+    && !liveOverlay
+  );
+  const mainChatSurfaceSwipeStartRef = useRef<TouchPoint | null>(null);
 
   const openMenuFromMainSwipe = useCallback((
     end: TouchPoint,
@@ -407,6 +423,19 @@ export default function AppLayout() {
     event.preventDefault();
     setMenuOpen(true);
   }, [canOpenMenuFromMainSwipe]);
+  const openChatFromMainSwipe = useCallback((
+    end: TouchPoint,
+    event: { preventDefault: () => void },
+  ) => {
+    if (!canOpenChatFromMainSwipe) {
+      mainChatSurfaceSwipeStartRef.current = null;
+      return;
+    }
+    if (!isMainChatSurfaceSwipeUp(mainChatSurfaceSwipeStartRef.current, end)) return;
+    mainChatSurfaceSwipeStartRef.current = null;
+    event.preventDefault();
+    openMainChat();
+  }, [canOpenChatFromMainSwipe, openMainChat]);
   const handleMainSurfacePointerDown = useCallback((event: PointerEvent<HTMLDivElement>) => {
     if (!canOpenMenuFromMainSwipe) return;
     // Edge-gesture-only model (iOS-style): only swipes starting in the
@@ -422,8 +451,17 @@ export default function AppLayout() {
     if (!isFromRightEdgeOfScreen(event.clientX, screenWidth)) {
       // Not an edge gesture — let the event continue propagating to the
       // sphere (or whatever child is under the finger) so they can do
-      // their normal drag handling.
+      // their normal drag handling. Lower-half origins additionally arm the
+      // swipe-up-into-chat tracker — purely observational (no
+      // stopPropagation, no capture), so sphere drags / taps are untouched;
+      // the sphere ignores vertical travel anyway (pitch locked).
       mainMenuSwipeStartRef.current = null;
+      const screenHeight = typeof window === "undefined" ? 0 : window.innerHeight;
+      mainChatSurfaceSwipeStartRef.current =
+        canOpenChatFromMainSwipe
+        && isFromLowerHalfOfScreen(event.clientY, screenHeight)
+          ? { x: event.clientX, y: event.clientY }
+          : null;
       return;
     }
     // Edge gesture: STOP the event here. The sphere's onPointerDown will
@@ -436,24 +474,34 @@ export default function AppLayout() {
     } catch {
       /* setPointerCapture may throw in unusual env (jsdom etc.); ignore */
     }
+    mainChatSurfaceSwipeStartRef.current = null;
     mainMenuSwipeStartRef.current = {
       x: event.clientX,
       y: event.clientY,
     };
-  }, [canOpenMenuFromMainSwipe]);
+  }, [canOpenMenuFromMainSwipe, canOpenChatFromMainSwipe]);
   const handleMainSurfacePointerMove = useCallback((event: PointerEvent<HTMLDivElement>) => {
     openMenuFromMainSwipe({
       x: event.clientX,
       y: event.clientY,
     }, event);
-  }, [openMenuFromMainSwipe]);
+    openChatFromMainSwipe({
+      x: event.clientX,
+      y: event.clientY,
+    }, event);
+  }, [openMenuFromMainSwipe, openChatFromMainSwipe]);
   const handleMainSurfacePointerUp = useCallback((event: PointerEvent<HTMLDivElement>) => {
     openMenuFromMainSwipe({
       x: event.clientX,
       y: event.clientY,
     }, event);
+    openChatFromMainSwipe({
+      x: event.clientX,
+      y: event.clientY,
+    }, event);
     mainMenuSwipeStartRef.current = null;
-  }, [openMenuFromMainSwipe]);
+    mainChatSurfaceSwipeStartRef.current = null;
+  }, [openMenuFromMainSwipe, openChatFromMainSwipe]);
   const handleMainSurfaceTouchStart = useCallback((event: TouchEvent<HTMLDivElement>) => {
     if (!canOpenMenuFromMainSwipe) return;
     const touch = event.touches[0];
@@ -464,15 +512,24 @@ export default function AppLayout() {
     const screenWidth = typeof window === "undefined" ? Infinity : window.innerWidth;
     if (!isFromRightEdgeOfScreen(touch.clientX, screenWidth)) {
       mainMenuSwipeStartRef.current = null;
+      // See handleMainSurfacePointerDown: lower-half origins arm the
+      // observational swipe-up-into-chat tracker.
+      const screenHeight = typeof window === "undefined" ? 0 : window.innerHeight;
+      mainChatSurfaceSwipeStartRef.current =
+        canOpenChatFromMainSwipe
+        && isFromLowerHalfOfScreen(touch.clientY, screenHeight)
+          ? { x: touch.clientX, y: touch.clientY }
+          : null;
       return;
     }
     // Edge gesture: stop here so the sphere doesn't receive touchstart.
     event.stopPropagation();
+    mainChatSurfaceSwipeStartRef.current = null;
     mainMenuSwipeStartRef.current = {
       x: touch.clientX,
       y: touch.clientY,
     };
-  }, [canOpenMenuFromMainSwipe]);
+  }, [canOpenMenuFromMainSwipe, canOpenChatFromMainSwipe]);
   const handleMainSurfaceTouchMove = useCallback((event: TouchEvent<HTMLDivElement>) => {
     const touch = event.touches[0];
     if (!touch) return;
@@ -480,21 +537,32 @@ export default function AppLayout() {
       x: touch.clientX,
       y: touch.clientY,
     }, event);
-  }, [openMenuFromMainSwipe]);
+    openChatFromMainSwipe({
+      x: touch.clientX,
+      y: touch.clientY,
+    }, event);
+  }, [openMenuFromMainSwipe, openChatFromMainSwipe]);
   const handleMainSurfaceTouchEnd = useCallback((event: TouchEvent<HTMLDivElement>) => {
     const touch = event.changedTouches[0];
     if (!touch) {
       mainMenuSwipeStartRef.current = null;
+      mainChatSurfaceSwipeStartRef.current = null;
       return;
     }
     openMenuFromMainSwipe({
       x: touch.clientX,
       y: touch.clientY,
     }, event);
+    openChatFromMainSwipe({
+      x: touch.clientX,
+      y: touch.clientY,
+    }, event);
     mainMenuSwipeStartRef.current = null;
+    mainChatSurfaceSwipeStartRef.current = null;
   }, [openMenuFromMainSwipe]);
   const resetMainMenuSwipe = useCallback(() => {
     mainMenuSwipeStartRef.current = null;
+    mainChatSurfaceSwipeStartRef.current = null;
   }, []);
 
   // Sphere card status is driven entirely by the real backend now:
@@ -529,9 +597,8 @@ export default function AppLayout() {
       return;
     }
     recordChatEntryView();
-    // Real /api/cards path: drive our existing chat runtime (POST /feedback
-    // → MainChatView SSE). cardActions.confirm calls onOpenChat which sets
-    // chatTarget; the render branches on chatTarget to mount CardChat.
+    // Real /api/cards path: cardActions.confirm calls onOpenChat which sets
+    // chatTarget; CardChatOverlay mounts the card-chat sheet from it.
     if (card.originalId) {
       const real = cardsState.cards.find((c) => c.card.id === card.originalId)?.card;
       if (real) {
@@ -557,8 +624,8 @@ export default function AppLayout() {
   }, [activeView, cardActions, cardsState.cards, recordChatEntryView]);
 
   /** Ambient Action handoff (B+ MVP, web-only).
-   *  Wraps an AmbientTimelineEntry into a virtual IntentCard so the existing
-   *  CardChat → MainChatView SSE runtime can carry the event into the cloud
+   *  Wraps an AmbientTimelineEntry into a virtual IntentCard so the card-chat
+   *  conversation runtime can carry the event into the cloud
    *  chat agent. sessionKey resolves to `card-thread-ambient-<entry.id>`,
    *  which keeps the backend on its existing card-mode prompt path without
    *  any server change. */
@@ -672,15 +739,15 @@ export default function AppLayout() {
     }
   };
 
-  // Card execution (chatTarget / legacy activeChat) and the proactive agent
-  // view both mount the full-screen ConversationView *inside* this layout's
-  // content area. Unlike main chat — a portal overlay (MainChatOverlay) that
-  // covers the whole layout — these surfaces don't hide the layout's own
-  // floating chrome. ConversationView already carries its own aurora
-  // background, header and back button, so the top-right menu bar and the
-  // bottom ASK PIN AI entry must step aside or they overlap that surface.
-  const inFullscreenChat =
-    chatTarget != null || activeChat != null || activeView === "proactive";
+  // Legacy mock card chat (activeChat) and the proactive agent view both
+  // mount the full-screen ConversationView *inside* this layout's content
+  // area. Unlike the two real chats — portal sheets (MainChatOverlay /
+  // CardChatOverlay) that cover the whole layout — these surfaces don't hide
+  // the layout's own floating chrome. ConversationView already carries its
+  // own aurora background, header and back button, so the top-right menu bar
+  // and the bottom ASK PIN AI entry must step aside or they overlap that
+  // surface.
+  const inFullscreenChat = activeChat != null || activeView === "proactive";
 
   return (
     <CardStateProvider value={{ cardsState, cardActions }}>
@@ -759,10 +826,8 @@ export default function AppLayout() {
 
         {/* Main content area */}
         <ViewRouter
-          chatTarget={chatTarget}
           activeChat={activeChat}
           activeView={activeView}
-          cardActions={cardActions}
           composio={composio}
           onCardChatBack={() => closeCardChat()}
           onProactiveBack={() => navigateTo("now")}
@@ -853,6 +918,15 @@ export default function AppLayout() {
 
       {/* Main chat overlay. Opened by the bottom-center ASK PIN AI button. */}
       <MainChatOverlay open={mainChatOpen} onBack={() => closeMainChat()} />
+
+      {/* Card chat overlay — same sheet idiom as main chat (left-edge swipe
+          sinks the panel down, revealing the live view beneath). */}
+      <CardChatOverlay
+        target={chatTarget}
+        onBack={() => closeCardChat()}
+        onDismissBackend={(card) => cardActions.dismiss(card)}
+        onDoneBackend={(card) => cardActions.complete(card)}
+      />
 
       {/* Hamburger side menu overlay */}
       <SideMenu
