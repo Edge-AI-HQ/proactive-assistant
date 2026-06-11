@@ -40,3 +40,8 @@ export * from "./machines/card-execution";
 export * from "./machines/conversation";
 export * from "./machines/pipeline";
 export * from "./machines/tool-steps";
+
+export * from "./ports/database";
+
+export * from "./sync/engine";
+export * from "./sync/schema";

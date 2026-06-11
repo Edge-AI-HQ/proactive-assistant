@@ -106,6 +106,16 @@ export default function App() {
     };
   }, [user?.id]);
 
+  // Sync-B2 影子模式：登录后在 native 端后台同步 threads + main thread
+  // messages 进本地 SQLite（UI 不读，仅真机验证引擎——B3 才切读路径）。
+  // 动态 import 保持 web bundle 干净；幂等（内部 started gate）。
+  useEffect(() => {
+    if (!isNative || !user) return;
+    void import("@/lib/sync/sync-bootstrap").then(({ startShadowSync }) => {
+      startShadowSync();
+    });
+  }, [user?.id]);
+
   useEffect(() => {
     if (!isNative || !user || enabledKey === null) return;
     const enabled = enabledKey ? enabledKey.split(",") as SourceKey[] : [];
