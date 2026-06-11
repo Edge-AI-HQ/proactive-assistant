@@ -15,7 +15,9 @@ export { pinaiFetch, proxyFetch, proxyPost } from "./transport/http";
 export { proxySSE, proxyGetSSE } from "./transport/sse";
 
 export * from "./api/account";
+export * from "./api/agent-runs";
 export * from "./api/ambient";
+export * from "./api/cards";
 export * from "./api/conversation";
 export * from "./api/crystallize";
 export * from "./api/devices";
@@ -28,4 +30,5 @@ export * from "./api/reward";
 export * from "./api/scheduled-generators";
 export * from "./api/skills";
 
+export * from "./domain/cards";
 export * from "./domain/intent-card";

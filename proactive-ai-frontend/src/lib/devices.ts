@@ -10,8 +10,9 @@
  */
 import { Capacitor } from "@capacitor/core";
 import { KeychainAccess, SecureStorage } from "@aparajita/capacitor-secure-storage";
+import { userDevicesKeys } from "@pin-ai/state";
 import { authHeaders } from "./api";
-import { DEVICE_REGISTERED_EVENT } from "./device-events";
+import { queryClient } from "./query-client";
 import {
   isPinLocalDevAuthEnabled,
   PIN_LOCAL_DEV_AUTH_USER_ID,
@@ -331,13 +332,11 @@ async function isCurrentOwner(ownerUserId: string): Promise<boolean> {
   }
 }
 
-function emitDeviceRegistered(creds: DeviceCredentials): void {
-  if (typeof window === "undefined") return;
-  window.dispatchEvent(
-    new CustomEvent(DEVICE_REGISTERED_EVENT, {
-      detail: { deviceId: creds.deviceId, platform: creds.platform },
-    }),
-  );
+function emitDeviceRegistered(_creds: DeviceCredentials): void {
+  // 设备注册后让所有 useUserDevices 实例重拉。迁移前靠 window 的
+  // DEVICE_REGISTERED_EVENT 自制事件广播；TQ cache 共享后 invalidate
+  // 即全员同步（分层 Phase 2，事件机制随 device-events.ts 一并删除）。
+  void queryClient.invalidateQueries({ queryKey: userDevicesKeys.all });
 }
 
 async function registerDeviceForUser(

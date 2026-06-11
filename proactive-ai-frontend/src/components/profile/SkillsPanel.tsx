@@ -21,7 +21,7 @@ import {
   Save,
   X,
 } from "lucide-react";
-import { useSkills } from "@/hooks/useSkills";
+import { useSkills } from "@pin-ai/state";
 import { fetchSkill, type Skill, type SkillStatus } from "@/lib/api";
 import { cn } from "@/lib/utils";
 

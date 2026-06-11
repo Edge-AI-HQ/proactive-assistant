@@ -1,115 +1,34 @@
 /**
- * Cross-run card history for ChatTimeline + NOW view.
+ * Phase 2 薄壳 —— TQ 核心已迁 @pin-ai/state（queries/cards.ts）；本文件只剩
+ * web 平台的 sessionStorage 预填（F5 后 cards 区不闪空）：读缓存作 initialData
+ * 注入、数据更新后回写。平台存储不进 state 包；本地同步引擎落地后由 TQ
+ * persister 统一接管（research/2026-06-11-local-sync-engine.mdx Sync-A），
+ * 届时删除本壳。
  *
- * Backs the `GET /cards` endpoint (see plugins/proactive-ai/routes/runs.ts).
- * The pre-existing `/runs` endpoint only returns the latest completed run,
- * which made every new generation appear to "kick out" prior cards from the
- * frontend even though the database always kept them. This hook is the
- * single read path for the full history.
- *
- * Refresh strategy:
- *   - On mount.
- *   - On tab visibility change (so a backgrounded tab catches up the moment
- *     it returns).
- *   - On a 30s interval (kept aligned with the previous ChatTimeline polling
- *     cadence so we don't quietly raise traffic).
- *   - On explicit refresh() (callers wire this to "generate just finished").
- *
- * No internal dedup. Each consumer decides:
- *   - ChatTimeline shows every entry as a history row.
- *   - NOW view dedups by intentKey so the same intent regenerated across
- *     runs only floats once.
+ * 纯函数与类型（parseEntries / outcome helpers / VisibleCardEntry）已提纯进
+ * @pin-ai/core 的 domain/cards，此处 re-export 兼容旧 import 路径。
  */
+import { useEffect, useMemo } from "react";
+import { useCardsQuery } from "@pin-ai/state";
+import { parseEntries, type VisibleCardEntry } from "@pin-ai/core";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { proxyFetch } from "@/lib/api";
-import {
-  normalizeIntentCard,
-  type IntentCard,
-} from "@/types/intent-card";
+export {
+  isCompletedCardOutcome,
+  isHiddenCardOutcome,
+  parseEntries,
+  type CardOutcome,
+  type CardScore,
+  type VisibleCardEntry,
+} from "@pin-ai/core";
 
-const POLL_INTERVAL_MS = 30_000;
-const DEFAULT_LIMIT = 200;
-export const CARDS_CACHE_PREFIX = "pinai.cards.v1";
-
-export interface CardScore {
-  overall: number;
-  pass: boolean;
-}
-
-export type CardOutcome = "confirm" | "modify" | "dismiss" | "snooze" | "complete";
-
-const CARD_OUTCOMES = new Set<CardOutcome>([
-  "confirm",
-  "modify",
-  "dismiss",
-  "snooze",
-  "complete",
-]);
-
-function parseCardOutcome(value: unknown): CardOutcome | null {
-  return typeof value === "string" && CARD_OUTCOMES.has(value as CardOutcome)
-    ? value as CardOutcome
-    : null;
-}
-
-export function isCompletedCardOutcome(outcome: CardOutcome | null | undefined): boolean {
-  return outcome === "complete";
-}
-
-export function isHiddenCardOutcome(outcome: CardOutcome | null | undefined): boolean {
-  return outcome === "complete" || outcome === "dismiss" || outcome === "snooze";
-}
-
-export interface VisibleCardEntry {
-  card: IntentCard;
-  runId: string;
-  runCompletedAt: string;
-  score: CardScore | null;
-  latestOutcome: CardOutcome | null;
-  outcomeAt: string | null;
-}
+// v2: 缓存体从 raw /cards payload 改为 parsed VisibleCardEntry[]（解析一次，
+// 读侧免重复 parse）。v1 旧条目 parse 不出（形状不符）自然失效重拉，无害。
+export const CARDS_CACHE_PREFIX = "pinai.cards.v2";
 
 export interface UseCardsState {
   loading: boolean;
   cards: VisibleCardEntry[];
   error: string | null;
-}
-
-interface CardsResponseEntry {
-  card?: unknown;
-  runId?: unknown;
-  runCompletedAt?: unknown;
-  score?: unknown;
-  latestOutcome?: unknown;
-  outcomeAt?: unknown;
-}
-
-function parseScore(value: unknown): CardScore | null {
-  if (!value || typeof value !== "object") return null;
-  const r = value as Record<string, unknown>;
-  if (typeof r.overall !== "number" || typeof r.pass !== "boolean") return null;
-  return { overall: r.overall, pass: r.pass };
-}
-
-export function parseEntries(payload: unknown): VisibleCardEntry[] {
-  if (!payload || typeof payload !== "object") return [];
-  const list = (payload as { cards?: unknown }).cards;
-  if (!Array.isArray(list)) return [];
-  const out: VisibleCardEntry[] = [];
-  for (const raw of list as CardsResponseEntry[]) {
-    if (!raw || typeof raw !== "object") continue;
-    if (typeof raw.runId !== "string" || typeof raw.runCompletedAt !== "string") continue;
-    out.push({
-      card: normalizeIntentCard(raw.card),
-      runId: raw.runId,
-      runCompletedAt: raw.runCompletedAt,
-      score: parseScore(raw.score),
-      latestOutcome: parseCardOutcome(raw.latestOutcome),
-      outcomeAt: typeof raw.outcomeAt === "string" ? raw.outcomeAt : null,
-    });
-  }
-  return out;
 }
 
 export function cardsCacheKey(limit: number, cacheScope: string): string {
@@ -130,18 +49,19 @@ export function readCachedCards(limit: number, cacheScope: string): VisibleCardE
   try {
     const raw = storage.getItem(cardsCacheKey(limit, cacheScope));
     if (!raw) return null;
-    const cards = parseEntries(JSON.parse(raw));
+    // 复用 parseEntries 做形状校验（容忍手工篡改/版本漂移的缓存）。
+    const cards = parseEntries({ cards: JSON.parse(raw) });
     return cards.length > 0 ? cards : null;
   } catch {
     return null;
   }
 }
 
-export function writeCardsCache(limit: number, cacheScope: string, payload: unknown): void {
+export function writeCardsCache(limit: number, cacheScope: string, cards: VisibleCardEntry[]): void {
   const storage = sessionStorageOrNull();
   if (!storage) return;
   try {
-    storage.setItem(cardsCacheKey(limit, cacheScope), JSON.stringify(payload));
+    storage.setItem(cardsCacheKey(limit, cacheScope), JSON.stringify(cards));
   } catch {
     // Cache writes are best-effort; the live /cards response remains source of truth.
   }
@@ -150,79 +70,20 @@ export function writeCardsCache(limit: number, cacheScope: string, payload: unkn
 export function useCards(opts?: { limit?: number; cacheScope?: string | null }): UseCardsState & {
   refresh: () => Promise<void>;
 } {
-  const limit = opts?.limit ?? DEFAULT_LIMIT;
+  const limit = opts?.limit ?? 200;
   const cacheScope = opts?.cacheScope ?? null;
-  const [state, setState] = useState<UseCardsState>(() => ({
-    loading: true,
-    cards: cacheScope ? readCachedCards(limit, cacheScope) ?? [] : [],
-    error: null,
-  }));
-  const inFlightRef = useRef<{ signal: AbortSignal | null } | null>(null);
 
-  const load = useCallback(
-    async (signal?: AbortSignal): Promise<void> => {
-      const currentRequest = inFlightRef.current;
-      if (currentRequest && !(currentRequest.signal?.aborted ?? false)) return;
-      const request = { signal: signal ?? null };
-      inFlightRef.current = request;
-      try {
-        const res = await proxyFetch(`/cards?limit=${encodeURIComponent(limit)}`, { signal });
-        if (signal?.aborted) return;
-        if (!res.ok) {
-          setState((prev) => ({ ...prev, loading: false, error: `HTTP ${res.status}` }));
-          return;
-        }
-        const data = await res.json();
-        if (signal?.aborted) return;
-        const parsed = parseEntries(data);
-        if (cacheScope) writeCardsCache(limit, cacheScope, data);
-        setState({ loading: false, cards: parsed, error: null });
-      } catch (err) {
-        if (signal?.aborted) return;
-        const msg = err instanceof Error ? err.message : String(err);
-        // Don't blank out previously-loaded cards on a transient error.
-        setState((prev) => ({ ...prev, loading: false, error: msg }));
-      } finally {
-        if (inFlightRef.current === request) {
-          inFlightRef.current = null;
-        }
-      }
-    },
+  const initialData = useMemo(
+    () => (cacheScope ? readCachedCards(limit, cacheScope) ?? undefined : undefined),
     [cacheScope, limit],
   );
 
-  useEffect(() => {
-    if (!cacheScope) return;
-    const cached = readCachedCards(limit, cacheScope);
-    if (!cached) return;
-    setState((prev) => ({ ...prev, cards: cached, error: null }));
-  }, [cacheScope, limit]);
+  const query = useCardsQuery({ limit, initialData });
 
   useEffect(() => {
-    const controller = new AbortController();
-    void load(controller.signal);
-    const interval = window.setInterval(() => {
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      void load(controller.signal);
-    }, POLL_INTERVAL_MS);
+    if (!cacheScope || query.cards.length === 0) return;
+    writeCardsCache(limit, cacheScope, query.cards);
+  }, [cacheScope, limit, query.cards]);
 
-    function onVisibility() {
-      if (typeof document !== "undefined" && document.visibilityState === "visible") {
-        void load(controller.signal);
-      }
-    }
-    document.addEventListener("visibilitychange", onVisibility);
-
-    return () => {
-      controller.abort();
-      window.clearInterval(interval);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [load]);
-
-  const refresh = useCallback(async () => {
-    await load();
-  }, [load]);
-
-  return { ...state, refresh };
+  return query;
 }

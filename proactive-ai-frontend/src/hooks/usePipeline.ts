@@ -11,7 +11,8 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { proxyFetch } from "@/lib/api";
-import { useActiveAgentRuns, type ActiveAgentRun } from "@/hooks/useActiveAgentRuns";
+import { useActiveAgentRuns } from "@pin-ai/state";
+import type { ActiveAgentRun } from "@pin-ai/core";
 import {
   normalizeIntentCards,
   type IntentCard,

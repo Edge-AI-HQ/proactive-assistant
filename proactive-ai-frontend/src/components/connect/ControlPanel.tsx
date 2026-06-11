@@ -13,7 +13,7 @@ interface ControlPanelProps {
 export default function ControlPanel({ composio }: ControlPanelProps) {
   const [meshExpanded, setMeshExpanded] = useState(false);
 
-  // Same hook as DeviceConnections; both auto-refresh on DEVICE_REGISTERED_EVENT,
+  // Same hook as DeviceConnections; both auto-refresh via the shared TQ cache
   // so the count here stays in sync on register. Revoke is rare enough to accept
   // the brief drift until next refresh / mount.
   const { devices } = useUserDevices(true);

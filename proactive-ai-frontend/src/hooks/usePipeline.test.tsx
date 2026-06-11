@@ -1,4 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 vi.mock("@/lib/api", () => ({
@@ -9,6 +11,17 @@ import * as api from "@/lib/api";
 import { usePipeline } from "./usePipeline";
 
 const mockProxyFetch = vi.mocked(api.proxyFetch);
+
+// usePipeline 内部的 useActiveAgentRuns 是 TQ hook（@pin-ai/state），需要
+// Provider。本测试 mock 掉 "@/lib/api"（含 transport bootstrap），agent-runs
+// 的 queryFn 会因 transport 未配置而失败 → runs=[]，与迁移前 mock 响应不含
+// runs 字段时的行为一致；retry 关掉避免 fake-timers 下的重试噪音。
+function wrapper({ children }: { children: ReactNode }) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+}
 
 const jsonResponse = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), {
@@ -72,7 +85,7 @@ describe("usePipeline run-state recovery", () => {
       throw new Error(`unexpected proxy path ${path}`);
     });
 
-    const { result, unmount } = renderHook(() => usePipeline());
+    const { result, unmount } = renderHook(() => usePipeline(), { wrapper });
     await flushAsyncWork();
 
     expect(result.current.run.status).toBe("complete");
@@ -119,7 +132,7 @@ describe("usePipeline run-state recovery", () => {
       throw new Error(`unexpected proxy path ${path}`);
     });
 
-    const { result, unmount } = renderHook(() => usePipeline());
+    const { result, unmount } = renderHook(() => usePipeline(), { wrapper });
     await flushAsyncWork();
 
     expect(result.current.run.status).toBe("error");

@@ -13,12 +13,8 @@
  */
 import { useEffect, useState } from "react";
 import { Loader2, CheckCircle2, XCircle, ChevronDown } from "lucide-react";
-import {
-  useActiveAgentRuns,
-  type ActiveAgentRun,
-  type AgentRunKind,
-  type AgentRunStatus,
-} from "@/hooks/useActiveAgentRuns";
+import { useActiveAgentRuns } from "@pin-ai/state";
+import type { ActiveAgentRun, AgentRunKind, AgentRunStatus } from "@pin-ai/core";
 
 const KIND_LABEL: Record<AgentRunKind, string> = {
   "auto.dreaming": "Dreaming",

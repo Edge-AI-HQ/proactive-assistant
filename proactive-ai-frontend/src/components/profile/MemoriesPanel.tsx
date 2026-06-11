@@ -23,7 +23,7 @@ import {
   X,
   GitBranch,
 } from "lucide-react";
-import { useMemories } from "@/hooks/useMemories";
+import { useMemories } from "@pin-ai/state";
 import type { Memory, MemoryStatus } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
