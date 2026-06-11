@@ -13,17 +13,12 @@
  */
 import { useState } from "react";
 import { Check, X } from "lucide-react";
+import type { HitlRequiresAction } from "@pin-ai/core";
 import { cn } from "@/lib/utils";
 
-export interface HitlRequiresAction {
-  /** = the frame's `interruptId`; matched to the awaiting run's pending_action
-   *  on the backend (worker `_find_decision_message`). */
-  toolUseId: string;
-  toolName: string;
-  argsPreview?: string;
-  /** Backend-advertised allowed decisions; empty → default [approve, reject]. */
-  allowedDecisions: string[];
-}
+// Phase 3：HitlRequiresAction 类型已迁 @pin-ai/core（envelope 域形状，
+// machines/conversation.ts）；此处 re-export 保持旧 import 路径兼容。
+export type { HitlRequiresAction } from "@pin-ai/core";
 
 export interface HitlApprovalCardProps {
   action: HitlRequiresAction;

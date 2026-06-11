@@ -1,10 +1,11 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import {
   finalizePlanTurn,
   parseTodosFromArgs,
   setTodos,
   useTodoPlan,
-} from "@/components/chat/conversation/todos-store";
+} from "./todos";
 import { renderHook, act } from "@testing-library/react";
 
 let seq = 0;

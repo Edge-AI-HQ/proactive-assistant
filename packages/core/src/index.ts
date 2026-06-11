@@ -37,4 +37,6 @@ export * from "./domain/cards";
 export * from "./domain/intent-card";
 
 export * from "./machines/card-execution";
+export * from "./machines/conversation";
 export * from "./machines/pipeline";
+export * from "./machines/tool-steps";

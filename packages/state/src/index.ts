@@ -25,6 +25,19 @@ export {
   type UseCardsQueryResult,
 } from "./queries/cards";
 export {
+  useConversationRuntime,
+  type ConversationRuntimeOpts,
+  type UseConversationRuntimeResult,
+} from "./queries/conversation";
+export {
+  finalizePlanTurn,
+  parseTodosFromArgs,
+  setTodos,
+  useTodoPlan,
+  type Todo,
+  type TodoPlan,
+} from "./stores/todos";
+export {
   memoriesKeys,
   useMemories,
   type UseMemoriesResult,

@@ -11,25 +11,30 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { ConversationContentPart } from "@/components/chat/conversation/tool-steps";
 import type { ConversationHistoryPage, ConversationHistoryMessage } from "@/lib/api";
 
-// `@/lib/api` is mocked: history is the only thing tested here so the
-// stream is a no-op async iterator and the enabled-toggle resolves false.
-vi.mock("@/lib/api", () => ({
-  conversationHistory: vi.fn(),
-  // Yield nothing then return so the stream loop exits and the hook idles.
-  conversationStream: vi.fn(() => (async function* () {})()),
-  conversationSend: vi.fn(async () => {}),
-  conversationCancel: vi.fn(async () => {}),
-  conversationDecision: vi.fn(async () => {}),
-  conversationInit: vi.fn(async () => ({
-    sessionKey: "proactive-1",
-    kind: "proactive",
-    existing: false,
-  })),
-  fetchProactiveEnabled: vi.fn(async () => false),
-  setProactiveEnabled: vi.fn(async (next: boolean) => next),
-}));
+// Phase 3 后 hook 在 @pin-ai/state、HTTP 走 @pin-ai/core——partial-mock core
+// 包（保留 historyToEntries 等纯函数），history 是主要被测面；stream 是
+// no-op async iterator 让循环退出、hook 空转。
+vi.mock("@pin-ai/core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@pin-ai/core")>();
+  return {
+    ...actual,
+    conversationHistory: vi.fn(),
+    // Yield nothing then return so the stream loop exits and the hook idles.
+    conversationStream: vi.fn(() => (async function* () {})()),
+    conversationSend: vi.fn(async () => {}),
+    conversationCancel: vi.fn(async () => {}),
+    conversationDecision: vi.fn(async () => {}),
+    conversationInit: vi.fn(async () => ({
+      sessionKey: "proactive-1",
+      kind: "proactive",
+      existing: false,
+    })),
+    fetchProactiveEnabled: vi.fn(async () => false),
+    setProactiveEnabled: vi.fn(async (next: boolean) => next),
+  };
+});
 
-import { conversationHistory, conversationSend, conversationStream } from "@/lib/api";
+import { conversationHistory, conversationSend, conversationStream } from "@pin-ai/core";
 import {
   historyToEntries,
   partsHaveNotifyUser,
