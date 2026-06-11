@@ -28,6 +28,10 @@ _RAW_SOURCE_BY_TOOLKIT: dict[str, tuple[str, str]] = {
     "gcal": ("gcal", "events"),
     "googledrive": ("gdrive", "files"),
     "gdrive": ("gdrive", "files"),
+    "googledocs": ("googledocs", "documents"),
+    "gdocs": ("googledocs", "documents"),
+    "googlesheets": ("googlesheets", "spreadsheets"),
+    "gsheets": ("googlesheets", "spreadsheets"),
     "slack": ("slack", "messages"),
     "github": ("github", "issues"),
     "calendly": ("calendly", "events"),
@@ -168,12 +172,28 @@ def _raw_sources_from_connections(connections: list[dict[str, Any]]) -> list[tup
     sources = list(_BASE_RAW_SOURCES)
     seen = set(sources)
     for connection in connections:
-        toolkit_slug = _connection_toolkit(connection)
-        source = _RAW_SOURCE_BY_TOOLKIT.get(toolkit_slug or "")
-        if source is None or source in seen:
-            continue
-        seen.add(source)
-        sources.append(source)
+        # Server-provided rawSources covers generic + fanout toolkits
+        # (googlesuper expands to gmail/gcal/gdrive); static map stays
+        # as fallback for payloads without it.
+        connection_sources: list[tuple[str, str]] = []
+        raw_sources = connection.get("rawSources")
+        if isinstance(raw_sources, list):
+            for raw_source in raw_sources:
+                if not isinstance(raw_source, dict):
+                    continue
+                tk, ent = raw_source.get("toolkit"), raw_source.get("entity")
+                if isinstance(tk, str) and isinstance(ent, str) and tk and ent:
+                    connection_sources.append((tk, ent))
+        if not connection_sources and not isinstance(raw_sources, list):
+            toolkit_slug = _connection_toolkit(connection)
+            fallback = _RAW_SOURCE_BY_TOOLKIT.get(toolkit_slug or "")
+            if fallback is not None:
+                connection_sources.append(fallback)
+        for source in connection_sources:
+            if source in seen:
+                continue
+            seen.add(source)
+            sources.append(source)
     return sources
 
 

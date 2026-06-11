@@ -5,6 +5,7 @@ import type { ComposioState } from "@/hooks/useComposio";
 
 vi.mock("@/components/connect/DataConnections", () => ({
   default: () => <div data-testid="data-connections" />,
+  isDataSourceConnected: () => false,
   INPUT_CATEGORIES: [
     {
       name: "Work",
@@ -46,12 +47,16 @@ function makeComposioState(loadConnections: ComposioState["loadConnections"]): C
     loadingConns: false,
     loadStatus: vi.fn(async () => undefined),
     loadConnections,
+    loadCatalog: vi.fn(async () => ({ ok: true, page: { items: [], nextCursor: null, totalCount: null } })),
     connectToolkit: vi.fn(async () => ({ ok: true })),
     disconnectAccount: vi.fn(async () => ({ ok: true })),
     waitForToolkit: vi.fn(async () => ({ connected: true })),
     cancelWait: vi.fn(),
     isToolkitConnected: vi.fn(() => false),
     reconnectAccount: vi.fn(async () => ({ ok: true })),
+    createCustomMcpConnector: vi.fn(async () => ({ ok: true })),
+    updateCustomMcpConnector: vi.fn(async () => ({ ok: true })),
+    deleteCustomMcpConnector: vi.fn(async () => ({ ok: true })),
   };
 }
 

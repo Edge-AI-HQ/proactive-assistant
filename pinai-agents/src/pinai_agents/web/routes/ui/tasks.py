@@ -206,6 +206,11 @@ def _result_from_progress(
         "rawInserted": int(progress.get("rawInserted") or progress.get("inserted") or 0),
         "memoriesWritten": int(progress.get("memoriesWritten") or 0),
         "skillsAdded": int(progress.get("skillsAdded") or 0),
+        **(
+            {"perToolkit": progress["perToolkit"]}
+            if isinstance(progress.get("perToolkit"), dict)
+            else {}
+        ),
     }
 
 

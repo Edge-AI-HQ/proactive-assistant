@@ -35,6 +35,8 @@ from pydantic import BaseModel, Field
 from ... import composio_service as cs
 from ...auth.deps import AgentRun, current_agent_run, get_pool
 from ...auth.user_service import User, load_user_by_id
+from ...services import custom_mcp
+from .raw import raw_sources_for_composio_toolkit
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/agent/composio", tags=["agent-composio"])
@@ -125,12 +127,28 @@ async def meta_call(
 @router.get("/connections")
 async def list_connections(
     user: User = Depends(_agent_user),
+    pool=Depends(get_pool),
 ) -> dict[str, Any]:
     try:
         items = await cs.list_connections(user)
     except cs.ComposioError as e:
         raise _map_error(e) from e
-    return {"items": [c.model_dump() for c in items]}
+    out = []
+    for c in items:
+        d = c.model_dump()
+        # Where this connection's ingested data is readable
+        # (/api/agent/raw/{toolkit}/{entity}) — lets the chat process
+        # discover generic + fanout raw sources without a static map.
+        d["rawSources"] = [
+            {"toolkit": tk, "entity": ent}
+            for tk, ent in raw_sources_for_composio_toolkit(c.toolkit)
+        ]
+        out.append(d)
+    for connector in await custom_mcp.list_custom_mcp_connectors(pool, user.id):
+        d = custom_mcp.connector_to_connection_payload(connector)
+        d["rawSources"] = connector.raw_sources
+        out.append(d)
+    return {"items": out}
 
 
 class _SearchBody(BaseModel):

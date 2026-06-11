@@ -132,9 +132,7 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
                 subtitle="Pick the apps PIN AI can read from. You can connect more (or disconnect) any time from Control Center."
               />
               <div className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto">
-                <section className="glass-card-strong p-4">
-                  <DataConnections composio={composio} />
-                </section>
+                <DataConnections composio={composio} />
               </div>
             </>
           )}

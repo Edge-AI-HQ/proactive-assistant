@@ -77,6 +77,7 @@ async def post_run_evolve(
         run_id=run_id,
         run_jwt=run_jwt,
         connector=body.get("connector", "unknown"),
+        raw_sources=body.get("raw_sources"),
         model=body.get("model"),
     )
     return summary

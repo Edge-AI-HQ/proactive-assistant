@@ -23,6 +23,41 @@ export function buildConnectorInitTaskId(toolkit: string, connectedAccountId: st
   return `init.${toolkit.toLowerCase()}.${connectedAccountId}`;
 }
 
+const TOOLKIT_FANOUT: Record<string, string[]> = {
+  googlesuper: ["gmail", "googlecalendar", "googledrive", "googledocs", "googlesheets"],
+};
+
+export function normalizeComposioToolkit(toolkit: string): string {
+  return toolkit.trim().toLowerCase().replace(/[-_\s]/g, "");
+}
+
+export function composioToolkitCovers(connectionToolkit: string, targetToolkit: string): boolean {
+  const connection = normalizeComposioToolkit(connectionToolkit);
+  const target = normalizeComposioToolkit(targetToolkit);
+  return connection === target || (TOOLKIT_FANOUT[connection] ?? []).includes(target);
+}
+
+export function getComposioConnectionsForToolkit<T extends { toolkit: string; status?: string }>(
+  connections: T[],
+  toolkit: string,
+): T[] {
+  const target = normalizeComposioToolkit(toolkit);
+  return connections
+    .filter((conn) => conn.status === "ACTIVE" && composioToolkitCovers(conn.toolkit, target))
+    .sort((a, b) => {
+      const aExact = normalizeComposioToolkit(a.toolkit) === target ? 0 : 1;
+      const bExact = normalizeComposioToolkit(b.toolkit) === target ? 0 : 1;
+      return aExact - bExact;
+    });
+}
+
+export function isComposioToolkitConnected<T extends { toolkit: string; status?: string }>(
+  connections: T[],
+  toolkit: string,
+): boolean {
+  return getComposioConnectionsForToolkit(connections, toolkit).length > 0;
+}
+
 export interface Connection {
   toolkit: string;
   status: string;
@@ -42,6 +77,49 @@ export interface ComposioStatus {
   keyPrefix?: string;
 }
 
+export interface ComposioCatalogItem {
+  slug: string;
+  name: string;
+  logo: string | null;
+  categories: string[];
+  auth_schemes: string[];
+  is_composio_managed: boolean;
+}
+
+export interface ComposioCatalogPage {
+  items: ComposioCatalogItem[];
+  nextCursor: string | null;
+  totalCount: number | null;
+}
+
+export type ComposioCustomAuthScheme = "OAUTH2" | "API_KEY" | "BEARER_TOKEN" | "BASIC";
+
+export interface ComposioCustomAuthConfig {
+  authScheme: ComposioCustomAuthScheme;
+  credentials: Record<string, string>;
+}
+
+export interface ConnectToolkitOptions {
+  authConfig?: ComposioCustomAuthConfig;
+}
+
+export interface CustomMcpConnector {
+  id: string;
+  slug: string;
+  name: string;
+  url: string;
+  rawSources?: Array<{ toolkit: string; entity: string }>;
+}
+
+export interface CustomMcpConnectorResult {
+  ok: boolean;
+  connector?: CustomMcpConnector;
+  fetched?: number;
+  rawInserted?: number;
+  evolveTaskId?: string;
+  error?: string;
+}
+
 export interface ComposioState {
   keyStatus: ComposioStatus | null;
   connections: Connection[];
@@ -49,7 +127,8 @@ export interface ComposioState {
   loadingConns: boolean;
   loadStatus: () => Promise<void>;
   loadConnections: () => Promise<Connection[]>;
-  connectToolkit: (toolkit: string) => Promise<{ ok: boolean; redirectUrl?: string; connectedAccountId?: string; error?: string }>;
+  loadCatalog: (opts?: { category?: string; query?: string; cursor?: string; limit?: number }) => Promise<{ ok: boolean; page?: ComposioCatalogPage; error?: string }>;
+  connectToolkit: (toolkit: string, options?: ConnectToolkitOptions) => Promise<{ ok: boolean; redirectUrl?: string; connectedAccountId?: string; error?: string }>;
   disconnectAccount: (connectedAccountId: string) => Promise<{ ok: boolean; error?: string }>;
   waitForToolkit: (connectedAccountId: string) => Promise<{ connected: boolean; initTaskId?: string }>;
   cancelWait: () => void;
@@ -60,6 +139,15 @@ export interface ComposioState {
    * Existing raw / signal rows are NOT deleted — dedupe absorbs.
    * Returns the new task id so the caller can poll progress. */
   reconnectAccount: (toolkit: string, connectedAccountId: string) => Promise<{ ok: boolean; initTaskId?: string; error?: string }>;
+  createCustomMcpConnector: (input: {
+    name: string;
+    url: string;
+  }) => Promise<CustomMcpConnectorResult>;
+  updateCustomMcpConnector: (connectorId: string, input: {
+    name: string;
+    url: string;
+  }) => Promise<CustomMcpConnectorResult>;
+  deleteCustomMcpConnector: (connectorId: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
 export function useComposio(): ComposioState {
@@ -102,11 +190,48 @@ export function useComposio(): ComposioState {
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
 
-  const connectToolkit = useCallback(async (toolkit: string): Promise<{ ok: boolean; redirectUrl?: string; connectedAccountId?: string; error?: string }> => {
+  const loadCatalog = useCallback(async (
+    opts: { category?: string; query?: string; cursor?: string; limit?: number } = {},
+  ): Promise<{ ok: boolean; page?: ComposioCatalogPage; error?: string }> => {
     try {
-      const res = await proxyPost("/composio/connect", { toolkit });
+      const params = new URLSearchParams();
+      if (opts.category) params.set("category", opts.category);
+      if (opts.query) params.set("query", opts.query);
+      if (opts.cursor) params.set("cursor", opts.cursor);
+      if (opts.limit) params.set("limit", String(opts.limit));
+      const query = params.toString();
+      const res = await proxyFetch(`/composio/catalog${query ? `?${query}` : ""}`);
+      const data = await res.json();
+      if (!res.ok) {
+        return { ok: false, error: data.detail ?? data.error?.message ?? data.error ?? `Catalog failed (${res.status})` };
+      }
+      return {
+        ok: true,
+        page: {
+          items: data.items ?? [],
+          nextCursor: data.nextCursor ?? null,
+          totalCount: typeof data.totalCount === "number" ? data.totalCount : null,
+        },
+      };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }, []);
+
+  const connectToolkit = useCallback(async (
+    toolkit: string,
+    options: ConnectToolkitOptions = {},
+  ): Promise<{ ok: boolean; redirectUrl?: string; connectedAccountId?: string; error?: string }> => {
+    try {
+      const res = await proxyPost("/composio/connect", {
+        toolkit,
+        ...(options.authConfig ? { authConfig: options.authConfig } : {}),
+      });
       const data = await res.json();
       const connectedAccountId = data.connectedAccountId ?? undefined;
+      if (!res.ok) {
+        return { ok: false, error: data.detail ?? data.error?.message ?? data.error ?? `Connect failed (${res.status})` };
+      }
       if (data.status === "ACTIVE") {
         await loadConnections();
         return { ok: true, connectedAccountId };
@@ -167,9 +292,7 @@ export function useComposio(): ComposioState {
   }, []);
 
   const isToolkitConnected = useCallback((toolkit: string): boolean => {
-    return connections.some(
-      c => c.toolkit.toLowerCase() === toolkit.toLowerCase() && c.status === "ACTIVE",
-    );
+    return isComposioToolkitConnected(connections, toolkit);
   }, [connections]);
 
   const reconnectAccount = useCallback(async (
@@ -190,5 +313,71 @@ export function useComposio(): ComposioState {
     }
   }, []);
 
-  return { keyStatus, connections, statusLoading, loadingConns, loadStatus, loadConnections, connectToolkit, disconnectAccount, waitForToolkit, cancelWait, isToolkitConnected, reconnectAccount };
+  const createCustomMcpConnector = useCallback(async (input: {
+    name: string;
+    url: string;
+  }): Promise<CustomMcpConnectorResult> => {
+    try {
+      const res = await proxyPost("/composio/custom-mcp", input);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { ok: false, error: data.detail ?? data.error?.message ?? data.error ?? `Custom connector failed (${res.status})` };
+      }
+      await loadConnections();
+      return {
+        ok: true,
+        connector: data.connector,
+        fetched: typeof data.fetched === "number" ? data.fetched : undefined,
+        rawInserted: typeof data.rawInserted === "number" ? data.rawInserted : undefined,
+        evolveTaskId: typeof data.evolveTaskId === "string" ? data.evolveTaskId : undefined,
+      };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }, [loadConnections]);
+
+  const updateCustomMcpConnector = useCallback(async (connectorId: string, input: {
+    name: string;
+    url: string;
+  }): Promise<CustomMcpConnectorResult> => {
+    try {
+      const res = await proxyFetch(`/composio/custom-mcp/${encodeURIComponent(connectorId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { ok: false, error: data.detail ?? data.error?.message ?? data.error ?? `Custom connector update failed (${res.status})` };
+      }
+      await loadConnections();
+      return {
+        ok: true,
+        connector: data.connector,
+        fetched: typeof data.fetched === "number" ? data.fetched : undefined,
+        rawInserted: typeof data.rawInserted === "number" ? data.rawInserted : undefined,
+        evolveTaskId: typeof data.evolveTaskId === "string" ? data.evolveTaskId : undefined,
+      };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }, [loadConnections]);
+
+  const deleteCustomMcpConnector = useCallback(async (connectorId: string): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await proxyFetch(`/composio/custom-mcp/${encodeURIComponent(connectorId)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        return { ok: false, error: data.detail ?? data.error?.message ?? data.error ?? `Delete failed (${res.status})` };
+      }
+      await loadConnections();
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }, [loadConnections]);
+
+  return { keyStatus, connections, statusLoading, loadingConns, loadStatus, loadConnections, loadCatalog, connectToolkit, disconnectAccount, waitForToolkit, cancelWait, isToolkitConnected, reconnectAccount, createCustomMcpConnector, updateCustomMcpConnector, deleteCustomMcpConnector };
 }

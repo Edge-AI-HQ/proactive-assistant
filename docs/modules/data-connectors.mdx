@@ -67,13 +67,15 @@ flowchart LR
 
 ## 当前 Composio toolkit 状态
 
-`pinai-agents/db/ingest_recipes/` 下有 9 个 recipe yaml,全部端到端 live(recipe + raw 表 + `_UPSERTERS` mapper 三者齐全)。前端 `DataConnections.tsx` 的 connect 列表与此一一对应,不再列没有后端的 toolkit。
+`pinai-agents/db/ingest_recipes/` 下的老 typed toolkit 仍是 recipe + raw 表 + `_UPSERTERS` mapper 三者齐全;新增/长尾 toolkit 默认只需要 recipe,数据落 `pai_raw_events`。前端 `DataConnections.tsx` 只把产品主推源列在首屏,全量目录走 catalog。
 
 | Toolkit | Composio action(来自 recipe) | raw 表 | 状态 |
 |---|---|---|---|
 | `gmail` | `GMAIL_FETCH_EMAILS`(`verbose=false`,`include_payload=true`) | `pai_raw_gmail_messages` | ✅ live(`_upsert_gmail`) |
 | `googlecalendar` | `GOOGLECALENDAR_EVENTS_LIST` | `pai_raw_gcal_events` | ✅ live(`_upsert_gcal`) |
 | `googledrive` | `GOOGLEDRIVE_FIND_FILE` | `pai_raw_gdrive_files` | ✅ live(`_upsert_gdrive_files`) |
+| `googledocs` | `GOOGLEDOCS_SEARCH_DOCUMENTS` | `pai_raw_events`(`toolkit='googledocs', entity_type='documents'`) | ✅ live(generic storage, latest 100) |
+| `googlesheets` | `GOOGLESHEETS_SEARCH_SPREADSHEETS` | `pai_raw_events`(`toolkit='googlesheets', entity_type='spreadsheets'`) | ✅ live(generic storage, latest 100) |
 | `slack` | `SLACK_SEARCH_MESSAGES` | `pai_raw_slack_messages` | ✅ live(`_upsert_slack_messages`) |
 | `github` | `GITHUB_LIST_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER` | `pai_raw_github_issues` | ✅ live(`_upsert_github_issues`) |
 | `calendly` | `CALENDLY_LIST_SCHEDULED_EVENTS` | `pai_raw_calendly_events` | ✅ live(`_upsert_calendly_events`) |
@@ -81,7 +83,21 @@ flowchart LR
 | `stripe` | `STRIPE_LIST_INVOICES` | `pai_raw_stripe_invoices` | ✅ live(`_upsert_stripe_invoices`) |
 | `youtube` | `YOUTUBE_LIST_USER_SUBSCRIPTIONS` | `pai_raw_youtube_subscriptions` | ✅ live(`_upsert_youtube_subscriptions`) |
 
-加新 toolkit 步骤:1)recipe yaml 2)在 `connector_ingest.py` 加 `_map_<tk>` + `_upsert_<tk>` 3)注册到 `_UPSERTERS` dict 4)如有需要新建 raw 表 migration。
+**加新 toolkit 的默认路径已经变了(2026-06 generic 存储上线)**:新 toolkit 一律走通用存储 `pai_raw_events`(见下节),只需一份 recipe yaml(甚至没有 yaml 也能靠推断跑),**不再**写 `_map_<tk>` / `_upsert_<tk>` / 注册 dict。上表 9 个老 toolkit 维持 typed 表不迁移;一个 toolkit 的存储归属是二选一、全局唯一(routing 真相 = `web/routes/agent/raw.py:_RAW_TABLES`),绝不混。
+
+## Generic 存储与全量 connector(2026-06)
+
+9 个 typed toolkit 之外的所有 connector(Composio 全量目录 + 自定义)落 **`pai_raw_events`**(migration `089`):统一信封列(`user_id/id/toolkit/entity_type/external_id/occurred_at/ingested_at/dedupe_key` + reference 三元组)+ 可选展示列 `title`/`snippet` + 原始 item 全量 `payload JSONB`。要点:
+
+- **通用 mapper/upserter**:`web/services/generic_ingest.py`。dedupe_key = `<toolkit>:<entity>:<external_id>`(recipe `id_field`),无 id 时退化 payload sha256;`ON CONFLICT DO UPDATE` 刷新 payload(长尾多为可变实体);无 `timestamp_path` 的行 occurred_at 落 NOW() 且冲突更新时**不**前推(防止永远占住生成 24h 窗口)。
+- **接入点**:`connector_ingest._resolve_upserter` — typed `_UPSERTERS` 命中优先,miss 走 generic。init/sync 主体、cursor、evolve 入队全复用。
+- **sync 节奏**:typed 维持 `*/30` cron;generic 按 recipe `sync_interval_hours` 派生(默认 12h,`_cron_for_interval`),防全量目录打爆 Composio 配额。
+- **读取单一分支点**:`web/routes/agent/raw.py:list_raw` — `_RAW_TABLES` 命中查 typed 表,miss 时按 (toolkit, entity_type) 参数化查 `pai_raw_events`,信封同形,evolve(Code Mode 读 `client.raw.<tk>.<entity>`)与 generation 零感知。SDK `Raw.list` 对未知 toolkit 透传(服务端 enforcer)。
+- **raw 源发现**:`/api/agent/composio/connections` 每项带 `rawSources`(web 读 recipe 算出,fanout 展开),chat 的 `generation_context` 优先消费、静态 map 兜底——不破 web/chat trust boundary。
+- **recipe 推断**:`web/services/recipe_infer.py`。无 yaml 的 toolkit 在首次 `connector.init` 时从 Composio tool schema 推断(挑无副作用 list action、推 result_path/id_field/timestamp_path),置信度 high(直接跑)/ mid(dedupe 退化 hash,标记补 yaml)/ 无可读 action → connect_only 降级。手写 yaml 永远优先;进程内缓存,sync 不重复打 meta API。
+- **googlesuper 一键连**:`db/ingest_recipes/googlesuper.yaml` 声明 `fanout: [gmail, googlecalendar, googledrive, googledocs, googlesheets]`——一次 OAuth、一个 cid,init/sync 内部扇出跑五个 sub recipe。Gmail/Calendar/Drive 复用 typed 表,Docs/Sheets 走 `pai_raw_events`;cursor 按 **sub** toolkit 各自推进,sync schedule 只有一条 `sync.googlesuper.<cid>`,单 sub 失败不拖垮其余。identity 复用 `GMAIL_GET_PROFILE`。与单独连 sub-toolkit 共存,dedupe 天然去重。Slides 目前通过 Drive 文件元数据覆盖,因为 Composio Google Slides 没有批量 list/search action。
+- **全量目录 + 自定义 auth**:`GET /api/composio/catalog`(分页浏览 1000+ toolkit;`connect` 本来就接受任意 slug);`POST /connect` 带 `authConfig: {authScheme, credentials}` 走 `use_custom_auth`(用户自带 OAuth client / API key)。
+- **命令行验收**:`pinai-agents/scripts/collector_cli.py` — `catalog`/`infer`/`connect`/`connections`/`ingest`(伪造 task 直调 `connector_ingest.run()`,绕过 scheduler)/`raw`/`evolve`(入队+轮询)/`signals`/`memory`/`pipeline`(一条龙)。后台链路全程不依赖前端。
 
 migration 历史:
 - `036_drop_unused_raw_tables.sql` 把 `pai_raw_gdocs_*` / `pai_raw_outlook_*` / `pai_raw_notion_*` / `pai_raw_asana_*` / `pai_raw_zoom_*` / `pai_raw_clickup_*` 等不在主线上的 raw 表删除。
@@ -255,12 +271,12 @@ sync_interval_hours: 12
 
 `web/services/ingest_runner.py:Recipe.load_recipe()` 读、`run_fetch(user_id, toolkit, cid, limit, since)` 执行。校验脚本:`pinai-agents/scripts/validate_ingest_recipe.py`。
 
-加新 toolkit 步骤:
-1. 加 raw 表 migration(参考 016–019 的命名约定 `pai_raw_<toolkit>_<entity>`,必须含 `dedupe_key UNIQUE`、reference 三元组、`occurred_at`、`ingested_at`)。
-2. 加 `db/ingest_recipes/<toolkit>.yaml`。
-3. 在 `connector_ingest.py` 加 `_map_<tk>(items) -> raw_rows` + `_upsert_<tk>(conn, rows)`(参考 `_upsert_gmail`)+ signal builder(`_build_signal_<tk>`)。
-4. 注册到 `_UPSERTERS` dict。
-5. 加测试:`tests/web/services/test_connector_<tk>.py`。
+加新 toolkit 步骤(generic 路径,当前默认):
+1. 加 `db/ingest_recipes/<toolkit>.yaml`,声明 `entity_type` + `id_field` + `timestamp_path`(可选 `title_path`/`snippet_path`)。没有 yaml 也能跑——首次 init 会走 `recipe_infer` 自动推断,yaml 是推断不准时的覆盖手段(`collector_cli infer <tk> --dump-yaml` 可生成草稿)。
+2. 用 `collector_cli pipeline <tk> --cid <cid>` 命令行验收(连接→ingest→raw→evolve→signals)。
+3. 不写 mapper/upserter、不建表、不注册 dict——数据落 `pai_raw_events`。
+
+(老 typed 路径仅维护存量 9 个 toolkit:`_map_<tk>` + `_upsert_<tk>` + `_UPSERTERS` 注册 + 专属 raw 表,新 toolkit 不再走。)
 
 ### Raw 表共用结构
 

@@ -48,7 +48,7 @@ import {
   type UserDevice,
 } from "@/lib/api";
 import { basketMeta } from "@/lib/basket-meta";
-import type { ComposioState } from "@/hooks/useComposio";
+import { isComposioToolkitConnected, type ComposioState } from "@/hooks/useComposio";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -332,6 +332,8 @@ const RAW_SOURCE_CONFIG: Array<{
 const COUNTABLE_GENERIC_RAW_TABLES = new Set([
   "slack_messages",
   "gdrive_files",
+  "gdocs_documents",
+  "gsheets_spreadsheets",
   "github_issues",
   "calendly_events",
   "stripe_invoices",
@@ -489,10 +491,6 @@ function isSpecializedRawPanel(panel: RawPanel): boolean {
   return SPECIALIZED_RAW_PANELS.has(panel) || deviceIdFromPanel(panel) !== null;
 }
 
-function normalizeToolkit(toolkit: string): string {
-  return toolkit.trim().toLowerCase().replace(/[-_\s]/g, "");
-}
-
 function formatDeviceSourceLabel(deviceId: string, device: UserDevice | null | undefined): string {
   const name = device?.display_name?.trim() || device?.model?.trim();
   const platform = device?.platform ? device.platform.toUpperCase() : "DEVICE";
@@ -506,16 +504,12 @@ function buildRawSourceOptions(
   genericCounts: Record<string, number>,
   connections: ComposioState["connections"],
 ): RawSourceOption[] {
-  const connectedToolkits = new Set(
-    connections
-      .filter((conn) => conn.status === "ACTIVE")
-      .map((conn) => normalizeToolkit(conn.toolkit)),
-  );
-
   const connectorSources = RAW_SOURCE_CONFIG
     .map((source) => {
       const count = rawCount(raw, generic, genericCounts, source.id);
-      const connected = (source.connectorToolkits ?? []).some((toolkit) => connectedToolkits.has(normalizeToolkit(toolkit)));
+      const connected = (source.connectorToolkits ?? []).some((toolkit) =>
+        isComposioToolkitConnected(connections, toolkit),
+      );
       const latestAt = latestConnectorRawTime(source.id, raw, generic[source.id]?.rows ?? []);
 
       return {

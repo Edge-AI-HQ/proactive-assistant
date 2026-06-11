@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronDown, ChevronUp, Smartphone } from "lucide-react";
-import DataConnections, { INPUT_CATEGORIES } from "@/components/connect/DataConnections";
+import DataConnections, { INPUT_CATEGORIES, isDataSourceConnected } from "@/components/connect/DataConnections";
 import DeviceConnections from "@/components/connect/DeviceConnections";
 import { useUserDevices } from "@/hooks/useUserDevices";
 import type { ComposioState } from "@/hooks/useComposio";
@@ -27,14 +27,6 @@ export default function ControlPanel({ composio }: ControlPanelProps) {
     [devices],
   );
 
-  const activeToolkits = useMemo(() => {
-    const set = new Set<string>();
-    for (const c of composio.connections) {
-      if (c.status === "ACTIVE") set.add(c.toolkit.toLowerCase());
-    }
-    return set;
-  }, [composio.connections]);
-
   const dataSourceTotal = useMemo(
     () =>
       INPUT_CATEGORIES.reduce(
@@ -48,13 +40,11 @@ export default function ControlPanel({ composio }: ControlPanelProps) {
     let n = 0;
     for (const cat of INPUT_CATEGORIES) {
       for (const src of cat.sources) {
-        if (src.composioId && activeToolkits.has(src.composioId.toLowerCase())) {
-          n++;
-        }
+        if (isDataSourceConnected(src, composio.connections)) n++;
       }
     }
     return n;
-  }, [activeToolkits]);
+  }, [composio.connections]);
 
   return (
     <div

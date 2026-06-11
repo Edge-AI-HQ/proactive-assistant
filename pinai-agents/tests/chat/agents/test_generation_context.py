@@ -6,9 +6,42 @@ from typing import Any
 import pytest
 
 from pinai_agents.chat.agents.generation_context import (
+    _raw_sources_from_connections,
     build_generation_context,
     compute_context_window,
 )
+
+
+def test_raw_sources_prefer_server_raw_sources_over_static_map():
+    connections = [
+        # Generic toolkit — only discoverable via the server-provided field.
+        {"toolkit": "notion", "rawSources": [{"toolkit": "notion", "entity": "pages"}]},
+        # Fanout toolkit — one connection expands to several sources.
+        {
+            "toolkit": "googlesuper",
+            "rawSources": [
+                {"toolkit": "gmail", "entity": "messages"},
+                {"toolkit": "gcal", "entity": "events"},
+                {"toolkit": "gdrive", "entity": "files"},
+                {"toolkit": "googledocs", "entity": "documents"},
+                {"toolkit": "googlesheets", "entity": "spreadsheets"},
+            ],
+        },
+        # Older payload without rawSources — static map fallback.
+        {"toolkit": "github"},
+        # connect_only — server sends [], static map has no entry either.
+        {"toolkit": "discord", "rawSources": []},
+    ]
+    sources = _raw_sources_from_connections(connections)
+    assert ("notion", "pages") in sources
+    assert ("gdrive", "files") in sources
+    assert ("googledocs", "documents") in sources
+    assert ("googlesheets", "spreadsheets") in sources
+    assert ("gcal", "events") in sources
+    assert ("github", "issues") in sources
+    assert all(tk != "discord" for tk, _ in sources)
+    # No duplicates even though gmail comes from both _BASE and googlesuper.
+    assert sources.count(("gmail", "messages")) == 1
 
 
 def test_context_window_keeps_at_least_24h_when_last_success_is_recent():

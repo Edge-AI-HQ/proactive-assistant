@@ -1,0 +1,22 @@
+toolkit: googlesheets
+slug: GOOGLESHEETS_SEARCH_SPREADSHEETS
+args_template:
+  query: ""
+  order_by: "modifiedTime desc"
+  max_results: 100
+  search_type: "both"
+since_param: modified_after
+since_format: iso
+result_path: [spreadsheets]
+id_field: id
+entity_type: spreadsheets
+timestamp_path: [modifiedTime]
+title_path: [name]
+snippet_path: []
+sync_interval_hours: 12
+description: "User's recently modified Google Sheets spreadsheets (generic pai_raw_events storage)."
+notes: |
+  - Stores SpreadsheetFile metadata from GOOGLESHEETS_SEARCH_SPREADSHEETS in pai_raw_events.
+  - The action accepts `modified_after`, so sync uses the shared connector cursor.
+  - Spreadsheet cell contents are intentionally not pulled in bulk; evolve can use
+    metadata and later fetch/query specific sheets through Composio tools.

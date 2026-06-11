@@ -34,7 +34,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from composio import Composio
 from composio.exceptions import ComposioError as _SDKComposioError
@@ -50,12 +50,20 @@ from composio.exceptions import HTTPError as _SDKHTTPError
 # for non-HTTP failures.
 from composio_client import APIError as _SDKClientAPIError
 from composio_client import APIStatusError as _SDKClientStatusError
+from composio_client._types import omit
+from composio_client.types.auth_config_create_params import (
+    AuthConfigUnionMember1,
+    AuthConfigUnionMember1Credentials,
+)
 from pydantic import BaseModel, Field
 
 from ..config import get_web_settings
 from .auth.user_service import User
 
 logger = logging.getLogger(__name__)
+
+# Subset of the SDK's auth_scheme Literal we accept for custom auth.
+_CustomAuthScheme = Literal["OAUTH2", "API_KEY", "BEARER_TOKEN", "BASIC"]
 
 
 # ── Models ─────────────────────────────────────────────────────────────
@@ -280,6 +288,10 @@ def _first_str(*values: Any) -> str | None:
 
 _IDENTITY_SPECS: dict[str, _IdentitySpec] = {
     "gmail": _IdentitySpec("GMAIL_GET_PROFILE", {}, _gmail_label),
+    # googlesuper bundles gmail/gcal/gdrive behind one OAuth account; the
+    # gmail profile action works on its token and yields the Google email
+    # the fanned-out sub-sources share as their display identity.
+    "googlesuper": _IdentitySpec("GMAIL_GET_PROFILE", {}, _gmail_label),
     "slack": _IdentitySpec("SLACK_RETRIEVE_A_USER_S_IDENTITY_DETAILS", {}, _slack_label),
     "github": _IdentitySpec("GITHUB_GET_THE_AUTHENTICATED_USER", {}, _github_label),
     "linkedin": _IdentitySpec("LINKEDIN_GET_MY_INFO", {}, _linkedin_label),
@@ -556,6 +568,146 @@ async def connect(user: User, toolkit: str) -> ConnectInit:
         connectedAccountId=cid,
         redirectUrl=redirect,
     )
+
+
+async def connect_custom(
+    user: User,
+    toolkit: str,
+    *,
+    auth_scheme: str,
+    credentials: dict[str, str],
+) -> ConnectInit:
+    """Custom-auth connect: the user supplies their own OAuth client /
+    API key instead of Composio's managed app. Creates a fresh
+    use_custom_auth config (never reused across users — credentials are
+    caller-scoped) and links the same way as `connect`."""
+    toolkit = toolkit.strip().lower()
+    if not toolkit:
+        msg = "toolkit required"
+        raise ValueError(msg)
+    scheme = auth_scheme.strip().upper()
+    if scheme not in ("OAUTH2", "API_KEY", "BEARER_TOKEN", "BASIC"):
+        msg = f"unsupported auth_scheme: {auth_scheme}"
+        raise ValueError(msg)
+    if not credentials:
+        msg = "credentials required for custom auth"
+        raise ValueError(msg)
+    cx_user = composio_user_id(user)
+
+    def _create_cfg() -> Any:
+        # The SDK's options TypedDict declares auth_scheme as a Literal and
+        # credentials as a sparse (total=False) TypedDict that runtime-wise
+        # accepts arbitrary credential keys (client_id / api_key / ...).
+        # Both casts are backed by the validation above.
+        options: AuthConfigUnionMember1 = {
+            "type": "use_custom_auth",
+            "auth_scheme": cast("_CustomAuthScheme", scheme),
+            "credentials": cast("AuthConfigUnionMember1Credentials", dict(credentials)),
+        }
+        return _composio().auth_configs.create(
+            toolkit=toolkit,
+            options=options,
+        )
+
+    created = await _to_thread(_create_cfg)
+    d = created.model_dump() if hasattr(created, "model_dump") else dict(created)
+    auth_config_id = d.get("id") or (d.get("auth_config") or {}).get("id")
+    if not auth_config_id:
+        msg = f"failed to create custom auth_config for {toolkit}"
+        raise ComposioError(500, msg)
+
+    def _link() -> Any:
+        return _composio().connected_accounts.link(
+            user_id=cx_user,
+            auth_config_id=auth_config_id,
+            allow_multiple=True,
+        )
+
+    link = await _to_thread(_link)
+    cid = getattr(link, "id", None)
+    redirect = getattr(link, "redirect_url", None)
+    if not cid:
+        msg = "link response missing id"
+        raise ComposioError(500, msg)
+    return ConnectInit(
+        toolkit=toolkit,
+        connectedAccountId=cid,
+        # API_KEY-style schemes can come back ACTIVE without a redirect;
+        # surface an empty URL and let the caller's wait_active confirm.
+        redirectUrl=redirect or "",
+    )
+
+
+class CatalogItem(BaseModel):
+    slug: str
+    name: str
+    logo: str | None = None
+    categories: list[str] = []
+    auth_schemes: list[str] = []
+    is_composio_managed: bool = False
+
+
+class CatalogPage(BaseModel):
+    items: list[CatalogItem]
+    next_cursor: str | None = None
+    total_count: int | None = None
+
+
+async def list_catalog(
+    *,
+    category: str | None = None,
+    query: str | None = None,
+    cursor: str | None = None,
+    limit: int = 50,
+) -> CatalogPage:
+    """Page through Composio's full toolkit directory (1000+). Read-only
+    browse for the connector catalog UI / CLI; `connect` already accepts
+    any slug, so this is purely discovery."""
+
+    def _list() -> Any:
+        return _composio().client.toolkits.list(
+            category=category or omit,
+            search=query or omit,
+            cursor=cursor or omit,
+            limit=float(limit),
+            sort_by="usage",
+        )
+
+    resp = await _to_thread(_list)
+    raw_items = getattr(resp, "items", None) or []
+    items: list[CatalogItem] = []
+    for it in raw_items:
+        d = it.model_dump() if hasattr(it, "model_dump") else dict(it)
+        slug = str(d.get("slug") or "").lower()
+        if not slug:
+            continue
+        meta = d.get("meta") or {}
+        auth = d.get("auth_schemes") or d.get("composio_managed_auth_schemes") or []
+        items.append(
+            CatalogItem(
+                slug=slug,
+                name=str(d.get("name") or slug),
+                logo=(meta.get("logo") if isinstance(meta, dict) else None) or d.get("logo"),
+                categories=[
+                    str(c.get("name") if isinstance(c, dict) else c)
+                    for c in (
+                        (meta.get("categories") if isinstance(meta, dict) else None)
+                        or d.get("categories")
+                        or []
+                    )
+                ],
+                auth_schemes=[str(a) for a in auth],
+                is_composio_managed=bool(d.get("is_composio_managed")),
+            )
+        )
+    next_cursor = getattr(resp, "next_cursor", None)
+    raw_total = (
+        getattr(resp, "total_count", None)
+        or getattr(resp, "total", None)
+        or getattr(resp, "count", None)
+    )
+    total_count = int(raw_total) if isinstance(raw_total, (int, float)) else None
+    return CatalogPage(items=items, next_cursor=next_cursor, total_count=total_count)
 
 
 async def wait_active(

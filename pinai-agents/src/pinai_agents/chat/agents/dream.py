@@ -26,6 +26,8 @@ _DREAM_RAW_SOURCES = (
     "gmail/messages",
     "gcal/events",
     "gdrive/files",
+    "googledocs/documents",
+    "googlesheets/spreadsheets",
     "slack/messages",
     "github/issues",
     "calendly/events",

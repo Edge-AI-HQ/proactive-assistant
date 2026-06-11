@@ -49,7 +49,7 @@ from ..db.repositories.scheduled_tasks import (
 )
 from ..db.repositories.timeline import IngestTimelineEvent, TimelineRepository
 from ..db.rls import user_scoped_tx
-from . import ingest_runner
+from . import generic_ingest, ingest_runner, recipe_infer
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +59,9 @@ _MAX_LIMIT = 500
 # After init succeeds, we schedule a periodic connector.sync for the same
 # (toolkit, cid). 30 minutes balances freshness (chat answers feel current)
 # vs. Composio API quota (7 connectors × N users × 48 syncs/day).
-# Per-toolkit override is in the recipe's `sync_interval_hours` field —
-# but the cron itself is fixed; future versions can render the cron from
-# the recipe.
+# Typed toolkits use this fixed cadence; generic (pai_raw_events) toolkits
+# render their cron from the recipe's `sync_interval_hours` instead — see
+# _cron_for_interval.
 _SYNC_CRON_EXPR = "*/30 * * * *"
 
 # First sync after init: cursor doesn't exist yet, so we look back this
@@ -82,6 +82,71 @@ Upserter = Callable[
 
 # Populated below after upsert defs (forward-ref dance).
 _UPSERTERS: dict[str, Upserter] = {}
+
+
+def _make_generic_upserter(toolkit: str, recipe: ingest_runner.Recipe) -> Upserter:
+    """Adapter: bind (toolkit, recipe) so the generic pai_raw_events
+    upserter matches the registry's Upserter signature. Used when a
+    toolkit has no typed table — typed upserters always win."""
+    entity_type = recipe.entity_type or "items"
+
+    async def _upsert(
+        conn: AsyncConnection[DictRow],
+        user_id: int,
+        items: list[dict[str, Any]],
+    ) -> int:
+        return await generic_ingest.upsert_generic(
+            conn,
+            user_id,
+            toolkit,
+            entity_type,
+            recipe,
+            items,
+        )
+
+    return _upsert
+
+
+def _resolve_upserter(toolkit: str, recipe: ingest_runner.Recipe) -> Upserter:
+    """Typed upserter if registered, else the generic fallback."""
+    return _UPSERTERS.get(toolkit) or _make_generic_upserter(toolkit, recipe)
+
+
+def _resolve_subs(
+    toolkit: str,
+    recipe: ingest_runner.Recipe,
+) -> list[tuple[str, ingest_runner.Recipe, Upserter]]:
+    """Expand a fanout recipe (googlesuper) into its sub-toolkits' own
+    (recipe, upserter) pairs; plain recipes resolve to themselves. Subs
+    that are missing/non-ingestable/nested-fanout are dropped with a
+    warning — the connection still works through the remaining subs."""
+    if not recipe.fanout:
+        return [(toolkit, recipe, _resolve_upserter(toolkit, recipe))]
+    out: list[tuple[str, ingest_runner.Recipe, Upserter]] = []
+    for sub in recipe.fanout:
+        sub_tk = sub.strip().lower()
+        sub_recipe = ingest_runner.load_recipe(sub_tk)
+        if sub_recipe is None or not sub_recipe.is_ingestable() or sub_recipe.fanout:
+            logger.warning(
+                "[connector] fanout %s: sub-toolkit %s unsupported — skipped",
+                toolkit,
+                sub_tk,
+            )
+            continue
+        out.append((sub_tk, sub_recipe, _resolve_upserter(sub_tk, sub_recipe)))
+    return out
+
+
+def _cron_for_interval(hours: int) -> str:
+    """Render a sync cron from the recipe's sync_interval_hours. Generic
+    long-tail toolkits default to 12h — polling 1000+ toolkits at the
+    typed 30-minute cadence would burn Composio quota for no freshness
+    gain. >= 24h collapses to daily at 06:00 UTC."""
+    h = max(1, hours)
+    if h >= 24:
+        return "0 6 * * *"
+    return f"0 */{h} * * *"
+
 
 # Timeline dual-write: the SAME fetched items are also projected into
 # pai_timeline_events (alongside the raw tables) so the proactive agent sees
@@ -207,6 +272,7 @@ async def _ensure_sync_schedule(
     user_id: int,
     toolkit: str,
     cid: str,
+    cron_expr: str = _SYNC_CRON_EXPR,
 ) -> None:
     """After init succeeds, ensure a recurring connector.sync schedule
     for this (toolkit, cid). Idempotent — re-running init for the same
@@ -230,7 +296,7 @@ async def _ensure_sync_schedule(
             (
                 user_id,
                 sync_task_id,
-                _SYNC_CRON_EXPR,
+                cron_expr,
                 first_fire,
                 json.dumps({"toolkit": toolkit, "connectedAccountId": cid}),
             ),
@@ -247,11 +313,19 @@ async def _run_init(
     toolkit_raw, cid, limit = _validate_payload(task)
     user_id = task.user_id
 
-    upserter = _UPSERTERS.get(toolkit_raw)
     recipe = ingest_runner.load_recipe(toolkit_raw)
-    if upserter is None or recipe is None or not recipe.is_ingestable():
+    if recipe is None:
+        # No handwritten yaml — infer from Composio tool schemas (cached
+        # per process; handwritten yaml always wins when present).
+        recipe = await recipe_infer.ainfer_recipe(toolkit_raw)
+    if recipe is None or not recipe.is_ingestable():
         await _mark_skipped(pool, task, toolkit_raw, log_prefix="[connector.init]")
         return
+    subs = _resolve_subs(toolkit_raw, recipe)
+    if not subs:
+        await _mark_skipped(pool, task, toolkit_raw, log_prefix="[connector.init]")
+        return
+    is_fanout = bool(recipe.fanout)
 
     user = await load_user_by_id(pool, user_id)
     if user is None:
@@ -263,39 +337,83 @@ async def _run_init(
             conn,
             user_id=user_id,
             task_id=task.id,
-            progress={"stage": "fetch", "toolkit": toolkit_raw, "limit": limit},
+            progress={
+                "stage": "fetch",
+                "toolkit": toolkit_raw,
+                "limit": limit,
+                **({"subToolkits": [s for s, _, _ in subs]} if is_fanout else {}),
+            },
         )
 
     # Init mode: since=None — recipe omits the cursor arg; toolkit's
-    # natural default window applies.
-    items = await ingest_runner.run_fetch(
-        user,
-        toolkit_raw,
-        cid,
-        limit=limit,
-        since=None,
-    )
+    # natural default window applies. Fanout: one sub failing must not
+    # sink the others; all-failed still raises for dispatcher retry.
+    items_by_sub: dict[str, list[dict[str, Any]]] = {}
+    fetch_errors: dict[str, str] = {}
+    for sub_tk, _, _ in subs:
+        try:
+            items_by_sub[sub_tk] = await ingest_runner.run_fetch(
+                user,
+                sub_tk,
+                cid,
+                limit=limit,
+                since=None,
+            )
+        except Exception as e:
+            if not is_fanout:
+                raise
+            logger.warning("[connector.init] fanout sub=%s fetch failed: %s", sub_tk, e)
+            fetch_errors[sub_tk] = f"{type(e).__name__}: {e}"[:300]
+    if fetch_errors and len(fetch_errors) == len(subs):
+        msg = f"connector.init: all fanout subs failed: {fetch_errors}"
+        raise RuntimeError(msg)
+    total_fetched = sum(len(v) for v in items_by_sub.values())
 
+    per_toolkit: dict[str, dict[str, Any]] = {}
+    total_inserted = 0
+    evolve_task_id = None
     async with user_scoped_tx(pool, user_id) as conn:
         await update_progress(
             conn,
             user_id=user_id,
             task_id=task.id,
-            progress={"stage": "raw", "toolkit": toolkit_raw, "fetched": len(items)},
+            progress={"stage": "raw", "toolkit": toolkit_raw, "fetched": total_fetched},
         )
-        inserted = await upserter(conn, user_id, items)
-
-        evolve_task_id = await _enqueue_evolve(
-            conn,
-            user_id=user_id,
-            toolkit=toolkit_raw,
-            cid=cid,
+        for sub_tk, _, sub_upserter in subs:
+            if sub_tk not in items_by_sub:
+                per_toolkit[sub_tk] = {"error": fetch_errors.get(sub_tk, "fetch failed")}
+                continue
+            sub_items = items_by_sub[sub_tk]
+            sub_inserted = await sub_upserter(conn, user_id, sub_items)
+            total_inserted += sub_inserted
+            # Evolve is per sub-connector: the evolve agent reads raw by
+            # the SUB toolkit, so each sub gets its own task.
+            evolve_task_id = await _enqueue_evolve(
+                conn,
+                user_id=user_id,
+                toolkit=sub_tk,
+                cid=cid,
+            )
+            per_toolkit[sub_tk] = {
+                "fetched": len(sub_items),
+                "rawInserted": sub_inserted,
+                "evolveTaskId": evolve_task_id,
+            }
+        # Typed toolkits keep the legacy 30-minute cadence; generic
+        # long-tail toolkits poll at the recipe's interval (default 12h).
+        # Fanout schedules ONE sync for the aggregate toolkit; it fans
+        # out again at fire time.
+        sync_cron = (
+            _SYNC_CRON_EXPR
+            if toolkit_raw in _UPSERTERS
+            else _cron_for_interval(recipe.sync_interval_hours)
         )
         await _ensure_sync_schedule(
             conn,
             user_id=user_id,
             toolkit=toolkit_raw,
             cid=cid,
+            cron_expr=sync_cron,
         )
         await update_progress(
             conn,
@@ -304,28 +422,31 @@ async def _run_init(
             progress={
                 "stage": "evolve",
                 "toolkit": toolkit_raw,
-                "fetched": len(items),
-                "rawInserted": inserted,
+                "fetched": total_fetched,
+                "rawInserted": total_inserted,
                 "evolveTaskId": evolve_task_id,
+                **({"perToolkit": per_toolkit} if is_fanout else {}),
             },
         )
 
     # Additive proactive feed (separate tx, best-effort — see helper).
-    tl_written = await _dual_write_timeline(
-        pool,
-        user_id,
-        items,
-        toolkit=toolkit_raw,
-        cid=cid,
-    )
+    tl_written = 0
+    for sub_tk, sub_items in items_by_sub.items():
+        tl_written += await _dual_write_timeline(
+            pool,
+            user_id,
+            sub_items,
+            toolkit=sub_tk,
+            cid=cid,
+        )
 
     logger.info(
         "[connector.init] done user=%d toolkit=%s fetched=%d inserted=%d "
         "timeline=%d evolve_task=%s sync_schedule=sync.%s.%s",
         user_id,
         toolkit_raw,
-        len(items),
-        inserted,
+        total_fetched,
+        total_inserted,
         tl_written,
         evolve_task_id,
         toolkit_raw,
@@ -346,24 +467,46 @@ async def _run_sync(
     user_id = task.user_id
     started_at = datetime.now(UTC)  # cursor advances to this on success
 
-    upserter = _UPSERTERS.get(toolkit_raw)
     recipe = ingest_runner.load_recipe(toolkit_raw)
-    if upserter is None or recipe is None or not recipe.is_ingestable():
+    if recipe is None:
+        recipe = await recipe_infer.ainfer_recipe(toolkit_raw)
+    if recipe is None or not recipe.is_ingestable():
         await _mark_skipped(pool, task, toolkit_raw, log_prefix="[connector.sync]")
         return
+    subs = _resolve_subs(toolkit_raw, recipe)
+    if not subs:
+        await _mark_skipped(pool, task, toolkit_raw, log_prefix="[connector.sync]")
+        return
+    is_fanout = bool(recipe.fanout)
 
     user = await load_user_by_id(pool, user_id)
     if user is None:
         msg = f"connector.sync: user {user_id} not found"
         raise RuntimeError(msg)
 
-    # ── Stage: read cursor ──
+    # ── Stage: read cursors (per sub — each sub-toolkit advances its
+    # own (user, sub, cid) cursor, so a failing sub re-pulls its own
+    # window without disturbing the others) ──
+    since_by_sub: dict[str, datetime | None] = {}
     async with user_scoped_tx(pool, user_id) as conn:
-        cursor = await ConnectorsRepository(user_id, conn).get_cursor(
-            toolkit=toolkit_raw,
-            connected_account_id=cid,
-        )
-    since = cursor.last_synced_at if cursor is not None else started_at - _BOOTSTRAP_LOOKBACK
+        repo = ConnectorsRepository(user_id, conn)
+        for sub_tk, _, _ in subs:
+            cursor = await repo.get_cursor(
+                toolkit=sub_tk,
+                connected_account_id=cid,
+            )
+            if cursor is not None:
+                since_by_sub[sub_tk] = cursor.last_synced_at
+            elif is_fanout:
+                # Existing aggregate connections can gain new fanout subs
+                # after deploy. No cursor means this sub never had its latest
+                # 100 init pull, so omit `since` and let the recipe defaults
+                # fetch the newest page.
+                since_by_sub[sub_tk] = None
+            else:
+                since_by_sub[sub_tk] = started_at - _BOOTSTRAP_LOOKBACK
+    since_values = [dt for dt in since_by_sub.values() if dt is not None]
+    since_min = min(since_values) if since_values else None
 
     # ── Stage: fetch ──
     async with user_scoped_tx(pool, user_id) as conn:
@@ -375,47 +518,75 @@ async def _run_sync(
                 "stage": "fetch",
                 "toolkit": toolkit_raw,
                 "limit": limit,
-                "since": since.isoformat(),
+                "since": since_min.isoformat() if since_min is not None else None,
+                **({"subToolkits": [s for s, _, _ in subs]} if is_fanout else {}),
             },
         )
 
-    items = await ingest_runner.run_fetch(
-        user,
-        toolkit_raw,
-        cid,
-        limit=limit,
-        since=since,
-    )
+    items_by_sub: dict[str, list[dict[str, Any]]] = {}
+    fetch_errors: dict[str, str] = {}
+    for sub_tk, _, _ in subs:
+        try:
+            items_by_sub[sub_tk] = await ingest_runner.run_fetch(
+                user,
+                sub_tk,
+                cid,
+                limit=limit,
+                since=since_by_sub[sub_tk],
+            )
+        except Exception as e:
+            if not is_fanout:
+                raise
+            logger.warning("[connector.sync] fanout sub=%s fetch failed: %s", sub_tk, e)
+            fetch_errors[sub_tk] = f"{type(e).__name__}: {e}"[:300]
+    if fetch_errors and len(fetch_errors) == len(subs):
+        msg = f"connector.sync: all fanout subs failed: {fetch_errors}"
+        raise RuntimeError(msg)
+    total_fetched = sum(len(v) for v in items_by_sub.values())
 
     # ── Stage: raw + cursor ──
+    per_toolkit: dict[str, dict[str, Any]] = {}
+    total_inserted = 0
+    evolve_task_id = None
     async with user_scoped_tx(pool, user_id) as conn:
         await update_progress(
             conn,
             user_id=user_id,
             task_id=task.id,
-            progress={"stage": "raw", "toolkit": toolkit_raw, "fetched": len(items)},
+            progress={"stage": "raw", "toolkit": toolkit_raw, "fetched": total_fetched},
         )
-        inserted = await upserter(conn, user_id, items)
-        # Advance cursor to started_at (NOT now()) — captures the lower
-        # bound for the *next* sync. Using now() would skip events created
-        # during this run.
-        await ConnectorsRepository(user_id, conn).set_cursor(
-            toolkit=toolkit_raw,
-            connected_account_id=cid,
-            last_synced_at=started_at,
-        )
-
-        # Only enqueue evolve if we actually inserted something — empty
-        # syncs are common (cron fires every 30min) and don't need an LLM.
-        if inserted > 0:
-            evolve_task_id = await _enqueue_evolve(
-                conn,
-                user_id=user_id,
-                toolkit=toolkit_raw,
-                cid=cid,
+        repo = ConnectorsRepository(user_id, conn)
+        for sub_tk, _, sub_upserter in subs:
+            if sub_tk not in items_by_sub:
+                # Fetch failed: cursor stays put so the next sync re-pulls
+                # this sub's window; raw dedupe absorbs the overlap.
+                per_toolkit[sub_tk] = {"error": fetch_errors.get(sub_tk, "fetch failed")}
+                continue
+            sub_items = items_by_sub[sub_tk]
+            sub_inserted = await sub_upserter(conn, user_id, sub_items)
+            total_inserted += sub_inserted
+            # Advance cursor to started_at (NOT now()) — captures the lower
+            # bound for the *next* sync. Using now() would skip events created
+            # during this run.
+            await repo.set_cursor(
+                toolkit=sub_tk,
+                connected_account_id=cid,
+                last_synced_at=started_at,
             )
-        else:
-            evolve_task_id = None
+            # Only enqueue evolve if we actually inserted something — empty
+            # syncs are common and don't need an LLM.
+            if sub_inserted > 0:
+                evolve_task_id = await _enqueue_evolve(
+                    conn,
+                    user_id=user_id,
+                    toolkit=sub_tk,
+                    cid=cid,
+                )
+            per_toolkit[sub_tk] = {
+                "fetched": len(sub_items),
+                "rawInserted": sub_inserted,
+                **({"evolveTaskId": evolve_task_id} if sub_inserted > 0 else {}),
+            }
 
         await update_progress(
             conn,
@@ -424,34 +595,37 @@ async def _run_sync(
             progress={
                 "stage": "done",
                 "toolkit": toolkit_raw,
-                "fetched": len(items),
-                "rawInserted": inserted,
-                "since": since.isoformat(),
+                "fetched": total_fetched,
+                "rawInserted": total_inserted,
+                "since": since_min.isoformat() if since_min is not None else None,
                 "syncedThrough": started_at.isoformat(),
                 **({"evolveTaskId": evolve_task_id} if evolve_task_id else {}),
+                **({"perToolkit": per_toolkit} if is_fanout else {}),
             },
         )
 
     # Additive proactive feed (separate tx, best-effort — see helper). Runs
     # on every non-empty sync (idempotent upsert self-heals prior failures),
     # independent of the inserted>0 gate the raw-evolve enqueue uses.
-    tl_written = await _dual_write_timeline(
-        pool,
-        user_id,
-        items,
-        toolkit=toolkit_raw,
-        cid=cid,
-    )
+    tl_written = 0
+    for sub_tk, sub_items in items_by_sub.items():
+        tl_written += await _dual_write_timeline(
+            pool,
+            user_id,
+            sub_items,
+            toolkit=sub_tk,
+            cid=cid,
+        )
 
     logger.info(
         "[connector.sync] done user=%d toolkit=%s fetched=%d inserted=%d "
         "timeline=%d since=%s synced_through=%s",
         user_id,
         toolkit_raw,
-        len(items),
-        inserted,
+        total_fetched,
+        total_inserted,
         tl_written,
-        since.isoformat(),
+        since_min.isoformat() if since_min is not None else None,
         started_at.isoformat(),
     )
 

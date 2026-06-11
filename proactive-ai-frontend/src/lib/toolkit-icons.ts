@@ -19,6 +19,8 @@ import {
   Video,
   CreditCard,
   FolderOpen,
+  FileText,
+  Table2,
   type LucideIcon,
 } from "lucide-react";
 
@@ -38,7 +40,10 @@ const CANONICAL: Record<string, ToolkitMeta> = {
   googlecalendar: { canonicalSlug: "googlecalendar", label: "Calendar", icon: Calendar },
   slack: { canonicalSlug: "slack", label: "Slack", icon: MessageSquare },
   github: { canonicalSlug: "github", label: "GitHub", icon: Code },
+  googlesuper: { canonicalSlug: "googlesuper", label: "Google Workspace", icon: FolderOpen },
   googledrive: { canonicalSlug: "googledrive", label: "Drive", icon: FolderOpen },
+  googledocs: { canonicalSlug: "googledocs", label: "Docs", icon: FileText },
+  googlesheets: { canonicalSlug: "googlesheets", label: "Sheets", icon: Table2 },
   calendly: { canonicalSlug: "calendly", label: "Calendly", icon: Calendar },
   linkedin: { canonicalSlug: "linkedin", label: "LinkedIn", icon: Users },
   stripe: { canonicalSlug: "stripe", label: "Stripe", icon: CreditCard },
@@ -52,6 +57,13 @@ const ALIASES: Record<string, string> = {
   gcal: "googlecalendar",
   google_drive: "googledrive",
   gdrive: "googledrive",
+  google_docs: "googledocs",
+  gdocs: "googledocs",
+  google_sheets: "googlesheets",
+  gsheets: "googlesheets",
+  google_workspace: "googlesuper",
+  google: "googlesuper",
+  workspace: "googlesuper",
 };
 
 /**

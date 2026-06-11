@@ -127,12 +127,16 @@ function makeComposioState(connections: ComposioState["connections"] = [
     loadingConns: false,
     loadStatus: vi.fn(async () => undefined),
     loadConnections: vi.fn(async () => []),
+    loadCatalog: vi.fn(async () => ({ ok: true, page: { items: [], nextCursor: null, totalCount: null } })),
     connectToolkit: vi.fn(async () => ({ ok: true })),
     disconnectAccount: vi.fn(async () => ({ ok: true })),
     waitForToolkit: vi.fn(async () => ({ connected: true })),
     cancelWait: vi.fn(),
     isToolkitConnected: vi.fn((toolkit: string) => toolkit === "slack"),
     reconnectAccount: vi.fn(async () => ({ ok: true })),
+    createCustomMcpConnector: vi.fn(async () => ({ ok: true })),
+    updateCustomMcpConnector: vi.fn(async () => ({ ok: true })),
+    deleteCustomMcpConnector: vi.fn(async () => ({ ok: true })),
   };
 }
 
@@ -178,6 +182,16 @@ describe("GoalsView", () => {
     await waitFor(() => {
       expect(mockFetchRawTable).toHaveBeenCalledWith(
         "slack_messages",
+        expect.objectContaining({ until: expect.any(String), limit: 1 }),
+        expect.any(AbortSignal),
+      );
+      expect(mockFetchRawTable).toHaveBeenCalledWith(
+        "gdocs_documents",
+        expect.objectContaining({ until: expect.any(String), limit: 1 }),
+        expect.any(AbortSignal),
+      );
+      expect(mockFetchRawTable).toHaveBeenCalledWith(
+        "gsheets_spreadsheets",
         expect.objectContaining({ until: expect.any(String), limit: 1 }),
         expect.any(AbortSignal),
       );

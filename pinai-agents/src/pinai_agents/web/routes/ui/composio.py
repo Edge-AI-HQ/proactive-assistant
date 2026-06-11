@@ -27,10 +27,12 @@ from ...composio_service import (
     ComposioError,
     _get_connection,
     connect,
+    connect_custom,
     delete_label,
     disconnect,
     evict_session,
     fallback_label,
+    list_catalog,
     list_connections,
     resolve_and_persist_label,
     wait_active,
@@ -41,6 +43,7 @@ from ...db.repositories.scheduled_tasks import (
     requeue_once,
 )
 from ...db.rls import user_scoped_tx
+from ...services import custom_mcp
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/composio", tags=["composio"])
@@ -112,7 +115,117 @@ async def composio_connections(
             }
         )
 
+    if pool is not None:
+        for connector in await custom_mcp.list_custom_mcp_connectors(pool, user.id):
+            out.append(custom_mcp.connector_to_connection_payload(connector))
+
     return {"connections": out}
+
+
+@router.post("/custom-mcp")
+async def composio_custom_mcp_connect(
+    body: dict,
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+) -> dict:
+    name = str(body.get("name") or "").strip()
+    url = str(body.get("url") or "").strip()
+    try:
+        result = await custom_mcp.create_custom_mcp_connector(
+            pool,
+            user,
+            name=name,
+            url=url,
+        )
+    except custom_mcp.CustomMcpError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
+    return {
+        "ok": True,
+        "connector": {
+            "id": result.connector.id,
+            "slug": result.connector.slug,
+            "name": result.connector.name,
+            "url": result.connector.url,
+            "rawSources": result.connector.raw_sources,
+        },
+        "fetched": result.fetched,
+        "rawInserted": result.raw_inserted,
+        "evolveTaskId": result.evolve_task_id,
+    }
+
+
+@router.patch("/custom-mcp/{connector_id}")
+async def composio_custom_mcp_update(
+    connector_id: str,
+    body: dict,
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+) -> dict:
+    name = str(body.get("name") or "").strip()
+    url = str(body.get("url") or "").strip()
+    try:
+        result = await custom_mcp.update_custom_mcp_connector(
+            pool,
+            user,
+            connector_id,
+            name=name,
+            url=url,
+        )
+    except custom_mcp.CustomMcpError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
+    return {
+        "ok": True,
+        "connector": {
+            "id": result.connector.id,
+            "slug": result.connector.slug,
+            "name": result.connector.name,
+            "url": result.connector.url,
+            "rawSources": result.connector.raw_sources,
+        },
+        "fetched": result.fetched,
+        "rawInserted": result.raw_inserted,
+        "evolveTaskId": result.evolve_task_id,
+    }
+
+
+@router.delete("/custom-mcp/{connector_id}", status_code=http_status.HTTP_204_NO_CONTENT)
+async def composio_custom_mcp_delete(
+    connector_id: str,
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+) -> None:
+    deleted = await custom_mcp.delete_custom_mcp_connector(pool, user.id, connector_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Custom connector not found")
+    await evict_session(user)
+    return None
+
+
+@router.get("/catalog")
+async def composio_catalog(
+    category: str | None = None,
+    query: str | None = None,
+    cursor: str | None = None,
+    limit: int = 50,
+    user: User = Depends(current_user),
+) -> dict:
+    """Browse Composio's full toolkit directory (paged). Discovery only —
+    /connect already accepts any slug."""
+    _ = user  # auth gate; catalog content is not user-specific
+    try:
+        page = await list_catalog(
+            category=category,
+            query=query,
+            cursor=cursor,
+            limit=max(1, min(limit, 200)),
+        )
+    except ComposioError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    return {
+        "items": [i.model_dump() for i in page.items],
+        "nextCursor": page.next_cursor,
+        "totalCount": page.total_count,
+    }
 
 
 @router.post("/connect")
@@ -120,8 +233,28 @@ async def composio_connect(body: dict, user: User = Depends(current_user)) -> di
     toolkit = str(body.get("toolkit") or "").strip().lower()
     if not toolkit:
         raise HTTPException(status_code=400, detail="Missing toolkit")
+    # Optional custom auth: {"authConfig": {"authScheme": "OAUTH2"|"API_KEY"|...,
+    # "credentials": {...}}} — user-supplied OAuth client / API key.
+    auth_config = body.get("authConfig")
     try:
-        init = await connect(user, toolkit)
+        if isinstance(auth_config, dict) and auth_config:
+            scheme = str(auth_config.get("authScheme") or "").strip()
+            credentials = auth_config.get("credentials")
+            if not scheme or not isinstance(credentials, dict) or not credentials:
+                raise HTTPException(
+                    status_code=400,
+                    detail="authConfig requires authScheme + credentials",
+                )
+            init = await connect_custom(
+                user,
+                toolkit,
+                auth_scheme=scheme,
+                credentials={str(k): str(v) for k, v in credentials.items()},
+            )
+        else:
+            init = await connect(user, toolkit)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except ComposioError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
     return {
@@ -141,6 +274,14 @@ async def composio_disconnect(
     cid = str(body.get("connectedAccountId") or "").strip()
     if not cid:
         raise HTTPException(status_code=400, detail="Missing connectedAccountId")
+    if cid.startswith("custom_mcp_"):
+        if pool is None:
+            raise HTTPException(status_code=503, detail="Database unavailable")
+        deleted = await custom_mcp.delete_custom_mcp_connector(pool, user.id, cid)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Custom connector not found")
+        await evict_session(user)
+        return None
     try:
         await disconnect(cid)
     except ComposioError as e:

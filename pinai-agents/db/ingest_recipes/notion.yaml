@@ -1,0 +1,25 @@
+toolkit: notion
+slug: NOTION_SEARCH_NOTION_PAGE
+args_template:
+  page_size: 100
+since_param: null
+since_format: null
+result_path: [results]
+id_field: id
+entity_type: pages
+timestamp_path: [last_edited_time]
+title_path: []
+snippet_path: []
+sync_interval_hours: 12
+description: "Recently edited Notion pages/databases the integration can see (generic pai_raw_events storage)."
+notes: |
+  - First generic-storage recipe: no typed table, no _upsert_notion — items
+    land in pai_raw_events keyed notion:pages:<page_id>.
+  - Notion search has no modified-since filter → no since_param; every sync
+    re-pulls the recent window, dedupe (DO UPDATE) absorbs and refreshes.
+  - Page title lives in nested properties (varies per database schema), not
+    reachable with a simple path — title/snippet stay NULL, evolve reads the
+    full payload JSONB.
+  - result_path/arg names follow the Notion public API via Composio; verify
+    with `collector_cli ingest notion --cid <cid>` once a valid
+    COMPOSIO_API_KEY is in .env (dev key was 401-invalid at authoring time).

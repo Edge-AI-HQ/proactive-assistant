@@ -57,6 +57,11 @@ _GENERIC_RAW_SLUGS: frozenset[str] = frozenset(
     }
 )
 
+_RAW_EVENTS_SLUGS: dict[str, tuple[str, str]] = {
+    "gdocs_documents": ("googledocs", "documents"),
+    "gsheets_spreadsheets": ("googlesheets", "spreadsheets"),
+}
+
 
 def _row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
     """ISO-format datetime/date columns; pass everything else verbatim."""
@@ -333,11 +338,44 @@ async def list_generic(
     404. The typed endpoints above (gmail / gcal / device-*) take
     precedence when the path matches — FastAPI matches static routes
     before parametric ones."""
-    if slug not in _GENERIC_RAW_SLUGS:
+    raw_events_source = _RAW_EVENTS_SLUGS.get(slug)
+    if slug not in _GENERIC_RAW_SLUGS and raw_events_source is None:
         raise HTTPException(
             status_code=404,
             detail=f"unknown raw slug: {slug}",
         )
+    if raw_events_source is not None:
+        toolkit, entity_type = raw_events_source
+        async with user_scoped_tx(pool, user.id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM pai_raw_events
+                WHERE user_id = %s
+                  AND toolkit = %s
+                  AND entity_type = %s
+                  AND (%s::timestamptz IS NULL OR occurred_at >= %s)
+                  AND (%s::timestamptz IS NULL OR occurred_at <= %s)
+                ORDER BY occurred_at DESC
+                LIMIT %s
+                """,
+                (user.id, toolkit, entity_type, since, since, until, until, limit),
+            )
+            rows = [_row_to_dict(r) for r in await cur.fetchall()]
+            cur = await conn.execute(
+                """
+                SELECT COUNT(*) AS n FROM pai_raw_events
+                WHERE user_id = %s
+                  AND toolkit = %s
+                  AND entity_type = %s
+                  AND (%s::timestamptz IS NULL OR occurred_at >= %s)
+                  AND (%s::timestamptz IS NULL OR occurred_at <= %s)
+                """,
+                (user.id, toolkit, entity_type, since, since, until, until),
+            )
+            count_row = await cur.fetchone()
+        total = int((count_row or {}).get("n") or 0)
+        return {"ok": True, "rows": rows, "total": total, "table": "pai_raw_events"}
+
     table = f"pai_raw_{slug}"
     rows, total = await _select_recent(
         pool,

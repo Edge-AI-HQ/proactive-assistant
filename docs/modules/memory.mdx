@@ -55,7 +55,7 @@ flowchart LR
 
 | Tier | 表 | 作用 |
 |---|---|---|
-| 0 raw | `pai_raw_gmail_messages` / `pai_raw_gcal_events` / `pai_raw_gdrive_files` / `pai_raw_slack_messages` / `pai_raw_github_issues` / `pai_raw_calendly_events` / `pai_raw_stripe_invoices` / `pai_raw_twitter_bookmarks` / `pai_raw_youtube_subscriptions` / `pai_raw_linkedin_profile` / `pai_raw_device_apps_snapshot` / `pai_raw_device_contacts_snapshot` / `pai_raw_device_health_observations` | 字段化批量数据。每个 Composio toolkit 或 device source 一张 typed 表。`016`–`019` 起 schema,`036` 清掉未上线的 toolkit 表。 |
+| 0 raw | `pai_raw_gmail_messages` / `pai_raw_gcal_events` / `pai_raw_gdrive_files` / `pai_raw_slack_messages` / `pai_raw_github_issues` / `pai_raw_calendly_events` / `pai_raw_stripe_invoices` / `pai_raw_twitter_bookmarks` / `pai_raw_youtube_subscriptions` / `pai_raw_linkedin_profile` / `pai_raw_events` / `pai_raw_device_apps_snapshot` / `pai_raw_device_contacts_snapshot` / `pai_raw_device_health_observations` | 字段化批量数据。老 connector 保留 typed 表;长尾 / generic connector 统一落 `pai_raw_events`(`toolkit`,`entity_type`,`payload`);device source 仍按 policy 落 typed 表或 signal。 |
 | 1 signals | `pai_personal_signals` / `pai_world_signals`(+ `pai_world_signal_user_view`) | 短期观察,先给 pipeline / evolution 消费。 |
 | 2 memory | `pai_memory` | evolution / manual 沉淀出的长期事实,带 `quality` / `confidence` / `status` / `superseded_by`。 |
 | 3 profile / skill | `pai_profile` / `pai_goals` / `pai_skill_index` | 高浓缩画像、长期目标、可执行 skill。 |

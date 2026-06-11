@@ -79,11 +79,15 @@ client.raw                                           # canonical entry: .list(to
   #                 .list("gdrive","files"), .list("calendly","events"), ...
   # client.raw.slack / .github / etc DO NOT EXIST — use .list(...)
 
-Supported (toolkit, entity) for raw.list:
+Typed (toolkit, entity) for raw.list:
   gmail/messages, gcal/events, gdrive/files, slack/messages,
   github/issues, calendly/events, stripe/invoices,
   youtube/subscriptions, linkedin/profile,
   device/{apps,contacts,health}
+Any other connected toolkit reads the generic event store — call
+.list("<toolkit>", "<entity>") with the recipe's entity_type (e.g.
+.list("notion", "pages")); rows carry title/snippet plus the full
+source item in `payload`.
 
 client.composio                                      # live SaaS access via Composio Tool Router
   .connections() -> list                             # ACTIVE connected toolkits for the user

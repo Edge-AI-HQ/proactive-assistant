@@ -203,6 +203,41 @@ def test_stripe_has_no_identity_spec():
     assert "stripe" not in cs._IDENTITY_SPECS
 
 
+# ── list_catalog ───────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_list_catalog_passes_search_and_category(mock_sdk):
+    mock_sdk.client.toolkits.list.return_value = SimpleNamespace(
+        items=[
+            {
+                "slug": "googledrive",
+                "name": "Google Drive",
+                "meta": {"categories": ["file management & storage"]},
+                "auth_schemes": ["OAUTH2"],
+            }
+        ],
+        next_cursor="next",
+        total_count=1234,
+    )
+
+    out = await cs.list_catalog(
+        category="file management & storage",
+        query="drive",
+        cursor="cursor-1",
+        limit=40,
+    )
+
+    call = mock_sdk.client.toolkits.list.call_args
+    assert call.kwargs["category"] == "file management & storage"
+    assert call.kwargs["search"] == "drive"
+    assert call.kwargs["cursor"] == "cursor-1"
+    assert call.kwargs["limit"] == 40.0
+    assert out.items[0].slug == "googledrive"
+    assert out.next_cursor == "next"
+    assert out.total_count == 1234
+
+
 # ── search_tools ────────────────────────────────────────────────────────
 
 

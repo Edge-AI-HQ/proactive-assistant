@@ -1,0 +1,19 @@
+toolkit: googlesuper
+fanout: [gmail, googlecalendar, googledrive, googledocs, googlesheets]
+sync_interval_hours: 12
+description: "Google one-click connect: a single OAuth account drives Gmail, Calendar, Drive, Docs, and Sheets ingest recipes."
+notes: |
+  - Composio's GOOGLESUPER toolkit bundles Gmail/Drive/Calendar/Sheets/...
+    behind one OAuth. After connecting, data still flows through the
+    sub-services' own actions (GMAIL_FETCH_EMAILS etc.) sharing the token.
+  - No slug here: connector.init/sync see `fanout` and loop the listed
+    sub-toolkits' recipes against the SAME connected_account_id. Each sub
+    keeps its own cursor (cursor PK is (user_id, toolkit, cid) with the
+    SUB toolkit as key) and typed raw table.
+  - One sync schedule (sync.googlesuper.<cid>) fans out internally — not
+    three schedules.
+  - Docs and Sheets land in generic pai_raw_events; Gmail/Calendar/Drive keep
+    their typed tables. Slides are covered as Drive file metadata because
+    Composio's Google Slides toolkit does not expose a batch list/search action.
+  - Coexists with individually-connected sub-toolkits: same storage route,
+    same dedupe keys → overlapping items dedupe naturally.

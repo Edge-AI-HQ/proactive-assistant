@@ -54,6 +54,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import daytona
 import httpx
@@ -409,12 +410,7 @@ def _pinai_image() -> daytona.Image:
     so a downstream surprise pip resolver doesn't drift the image
     silently — bump explicitly when pinai_sdk needs newer deps.
     """
-    sdk_dir = os.environ.get("PINAI_SDK_LOCAL_DIR")
-    if not sdk_dir:
-        # Default: packages/pinai_sdk relative to the chat process working dir.
-        # Dockerfile copies / docker-compose mounts pinai-agents/ as /app, so
-        # /app/packages/pinai_sdk is where the SDK ends up at runtime.
-        sdk_dir = "/app/packages/pinai_sdk"
+    sdk_dir = _pinai_sdk_local_dir()
     return (
         daytona.Image.debian_slim("3.12")
         .pip_install(
@@ -438,6 +434,20 @@ def _pinai_image() -> daytona.Image:
             "python3 -c 'from pinai_sdk import client; print(\"pinai_sdk preinstalled\")'",
         )
     )
+
+
+def _pinai_sdk_local_dir() -> str:
+    configured = os.environ.get("PINAI_SDK_LOCAL_DIR")
+    if configured:
+        return configured
+    docker_path = Path("/app/packages/pinai_sdk")
+    if docker_path.exists():
+        return str(docker_path)
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "packages" / "pinai_sdk"
+        if candidate.exists():
+            return str(candidate)
+    return str(docker_path)
 
 
 def _delete_blocking(raw: daytona.Sandbox) -> None:

@@ -412,11 +412,15 @@ class DefaultDispatcher:
         if kind == "auto.dreaming":
             await self._dispatch_dream(task, run_id)
         elif kind == "connector.evolve":
+            raw_sources = (task.payload or {}).get("rawSources")
             await self._call_chat(
                 "/agent/run/evolve",
                 task,
                 run_id,
-                extra={"connector": (task.payload or {}).get("connector", "unknown")},
+                extra={
+                    "connector": (task.payload or {}).get("connector", "unknown"),
+                    **({"raw_sources": raw_sources} if isinstance(raw_sources, list) else {}),
+                },
             )
         elif kind == "user.prompt":
             await self._call_chat(

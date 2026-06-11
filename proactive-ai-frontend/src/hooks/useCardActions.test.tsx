@@ -16,12 +16,16 @@ function stubComposio(): ComposioState {
     loadingConns: false,
     loadStatus: vi.fn(async () => undefined),
     loadConnections: vi.fn(async () => []),
+    loadCatalog: vi.fn(async () => ({ ok: true, page: { items: [], nextCursor: null, totalCount: null } })),
     connectToolkit: vi.fn(async () => ({ ok: true })),
     disconnectAccount: vi.fn(async () => ({ ok: true })),
     waitForToolkit: vi.fn(async () => ({ connected: true })),
     cancelWait: vi.fn(),
     isToolkitConnected: vi.fn(() => false),
     reconnectAccount: vi.fn(async () => ({ ok: true })),
+    createCustomMcpConnector: vi.fn(async () => ({ ok: true })),
+    updateCustomMcpConnector: vi.fn(async () => ({ ok: true })),
+    deleteCustomMcpConnector: vi.fn(async () => ({ ok: true })),
   };
 }
 

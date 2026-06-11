@@ -31,10 +31,11 @@ from typing import Any
 
 import httpx
 
-# Toolkit + entity allowlist, mirroring `web/routes/agent/raw.py:_RAW_TABLES`.
-# Stays SDK-side as documentation: agents reading the SDK see exactly what
-# raw sources exist instead of probing. Server still enforces; this is
-# advisory.
+# Typed raw sources, mirroring `web/routes/agent/raw.py:_RAW_TABLES`.
+# Documentation, not a gate: toolkits NOT listed here are still readable —
+# they live in the generic pai_raw_events store and `Raw.list` passes them
+# through to the server (which routes typed vs generic). Listed toolkits
+# get client-side entity validation as a fast-fail convenience.
 SUPPORTED_RAW_SOURCES: dict[str, tuple[str, ...]] = {
     # Composio toolkits (Discord is connect_only — no raw table)
     "gmail": ("messages",),
@@ -710,9 +711,11 @@ class World(_Endpoint):
 
 class Raw:
     """Generic raw-row access. `list(toolkit, entity, ...)` is the
-    canonical entry — works for every (toolkit, entity) in
-    `SUPPORTED_RAW_SOURCES`. The `gmail` / `gcal` properties exist as
-    convenience wrappers; everything else goes through `list()`.
+    canonical entry — typed sources are listed in `SUPPORTED_RAW_SOURCES`;
+    any other connected toolkit reads the generic pai_raw_events store
+    (rows carry title/snippet + the full source item in `payload`). The
+    `gmail` / `gcal` properties exist as convenience wrappers; everything
+    else goes through `list()`.
 
     Important: there is NO `__getattr__` magic here. `client.raw.slack`
     does NOT exist — use `client.raw.list("slack", "messages", ...)`.
@@ -736,7 +739,8 @@ class Raw:
         offset: int = 0,
         dedupe_key: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Read recent rows from a typed raw source.
+        """Read recent rows from a raw source (typed table or the
+        generic event store — the server routes by toolkit).
 
         Time window: pass `hours=N` for the last N hours, OR `since=` /
         `until=` for an absolute range. `hours` is translated to
@@ -747,12 +751,11 @@ class Raw:
         Returns rows ordered by `occurred_at DESC`, capped at `limit`.
         Use `offset` for deterministic paging.
         """
-        # Validate (toolkit, entity) early — saves a round-trip + gives
-        # a clearer error than the server's 404. Server still enforces.
-        if toolkit not in SUPPORTED_RAW_SOURCES:
-            msg = f"unknown raw toolkit: {toolkit!r}. Supported: {sorted(SUPPORTED_RAW_SOURCES)}"
-            raise ValueError(msg)
-        if entity not in SUPPORTED_RAW_SOURCES[toolkit]:
+        # Typed toolkits get early entity validation (clearer error than
+        # the server's). Unknown toolkits pass through — they read the
+        # generic pai_raw_events store server-side; the server is the
+        # enforcer either way.
+        if toolkit in SUPPORTED_RAW_SOURCES and entity not in SUPPORTED_RAW_SOURCES[toolkit]:
             msg = (
                 f"unknown raw entity for {toolkit!r}: {entity!r}. "
                 f"Supported: {SUPPORTED_RAW_SOURCES[toolkit]}"
@@ -1109,11 +1112,15 @@ client.raw                                           # canonical entry: .list(to
   #                 .list("gdrive","files"), .list("calendly","events"), ...
   # client.raw.slack / .github / etc DO NOT EXIST — use .list(...)
 
-Supported (toolkit, entity) for raw.list:
+Typed (toolkit, entity) for raw.list:
   gmail/messages, gcal/events, gdrive/files, slack/messages,
   github/issues, calendly/events, stripe/invoices,
   youtube/subscriptions, linkedin/profile,
   device/{apps,contacts,health}
+Any other connected toolkit reads the generic event store — call
+.list("<toolkit>", "<entity>") with the recipe's entity_type (e.g.
+.list("notion", "pages")); rows carry title/snippet plus the full
+source item in `payload`.
 
 client.composio                                      # live SaaS access via Composio Tool Router
   .connections() -> list                             # ACTIVE connected toolkits for the user

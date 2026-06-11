@@ -94,6 +94,7 @@ async def raw_gcal_week(hours: int, limit: int):
 # invalid pairs as the real gate.
 _RAW_VALID_PAIRS = (
     "gmail/messages, gcal/events, gdrive/files, slack/messages, "
+    "googledocs/documents, googlesheets/spreadsheets, "
     "github/issues, calendly/events, stripe/invoices, "
     "youtube/subscriptions, linkedin/profile, "
     "device/apps, device/contacts, device/health"

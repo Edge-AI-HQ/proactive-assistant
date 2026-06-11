@@ -57,14 +57,18 @@ def stub_execute(monkeypatch):
 
 
 def test_all_recipes_load():
-    """All 9 live yaml files parse into Recipe."""
+    """All live yaml files parse into Recipe."""
     expected = {
         "calendly",
         "github",
         "gmail",
         "googlecalendar",
+        "googledocs",
         "googledrive",
+        "googlesheets",
+        "googlesuper",
         "linkedin",
+        "notion",
         "slack",
         "stripe",
         "youtube",

@@ -19,7 +19,9 @@ window.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from typing import Any
 
 from ..harness.factory import build_agent
@@ -28,6 +30,7 @@ from ..tools.code_mode.sandbox import create_oneshot_sandbox, delete_sandbox_now
 from .prompts import CODE_MODE_GUIDANCE, GROUNDING_POLICY, SANDBOX_PREAMBLE
 
 logger = logging.getLogger(__name__)
+_DEFAULT_EVOLVE_MODEL = "claude-sonnet-4-6"
 
 
 # Order: identity → trigger → goal → SANDBOX → CODE_MODE → GROUNDING →
@@ -37,7 +40,10 @@ _EVOLVE_SYSTEM_PROMPT = f"""You are the Pin AI **connector.evolve** agent.
 <trigger>
 Fires after one connector (Gmail / GCal / Slack / etc.) finishes an
 ingest sweep. The newly-ingested raw rows are available via
-`client.raw.<toolkit>.<entity>`.
+`client.raw.<toolkit>.<entity>`. Long-tail connectors use generic
+storage: rows carry optional `title`/`snippet` projections plus the
+complete source item in `payload` (JSONB) — treat `payload` as the
+source of truth and read whatever fields it actually has.
 </trigger>
 
 <goal>
@@ -111,6 +117,7 @@ async def run_evolve(
     run_id: str,
     connector: str,
     run_jwt: str | None = None,
+    raw_sources: Any | None = None,
     model: str | None = None,
 ) -> dict[str, Any]:
     # run_jwt is forwarded into create_oneshot_sandbox so it can mint a
@@ -121,8 +128,14 @@ async def run_evolve(
         scope_label=f"evolve:{connector}",
     )
     try:
+        model_name = model or os.environ.get("CONNECTOR_EVOLVE_MODEL") or _DEFAULT_EVOLVE_MODEL
+        raw_sources_hint = _raw_sources_hint(connector, raw_sources)
         agent = build_agent(
-            model=make_chat_model(virtual_key=virtual_key, model=model, thinking_budget=6000),
+            model=make_chat_model(
+                virtual_key=virtual_key,
+                model=model_name,
+                enable_thinking=False,
+            ),
             system_prompt=_EVOLVE_SYSTEM_PROMPT,
             backend=backend,
         )
@@ -135,7 +148,7 @@ async def run_evolve(
                             f"Run evolve for user_id={user_id} run_id={run_id} "
                             f"connector={connector}. Distill the latest raw window "
                             f"into signals, memory, profile, and goal updates per "
-                            f"the goal block + hard_rules."
+                            f"the goal block + hard_rules.\n\n{raw_sources_hint}"
                         ),
                     }
                 ],
@@ -151,3 +164,27 @@ async def run_evolve(
         else (final or {}).get("content")
     ) or ""
     return {"summary": str(final_text)[:2000], "connector": connector}
+
+
+def _raw_sources_hint(connector: str, raw_sources: Any) -> str:
+    if isinstance(raw_sources, list):
+        cleaned: list[dict[str, str]] = []
+        for item in raw_sources:
+            if not isinstance(item, dict):
+                continue
+            toolkit = item.get("toolkit")
+            entity = item.get("entity")
+            if isinstance(toolkit, str) and isinstance(entity, str) and toolkit and entity:
+                cleaned.append({"toolkit": toolkit, "entity": entity})
+        if cleaned:
+            return (
+                "Raw sources for this evolve run are:\n"
+                f"{json.dumps(cleaned, ensure_ascii=False)}\n"
+                "Read them with client.raw.list(toolkit, entity, limit=100). "
+                "Do not use dynamic client.raw.<toolkit> attributes."
+            )
+    return (
+        "Use client.raw.list(connector, entity, limit=100) for long-tail or "
+        f"custom connectors. If connector {connector!r} is a custom MCP connector, "
+        "the entity is usually 'items'. Do not use dynamic client.raw.<toolkit> attributes."
+    )

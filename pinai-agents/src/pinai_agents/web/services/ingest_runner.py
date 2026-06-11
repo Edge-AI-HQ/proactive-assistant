@@ -61,11 +61,25 @@ class Recipe(BaseModel):
     prereqs: list[Prereq] = Field(default_factory=list)
     description: str = ""
     notes: str = ""
+    # Generic-storage fields: toolkits without a typed pai_raw_* table land
+    # in pai_raw_events; these drive the generic mapper (generic_ingest).
+    entity_type: str | None = None
+    timestamp_path: list[str] = Field(default_factory=list)
+    title_path: list[str] = Field(default_factory=list)
+    snippet_path: list[str] = Field(default_factory=list)
+    # Inferred-recipe confidence (recipe_infer writes mid/low; handwritten
+    # yaml defaults to high).
+    confidence: str = "high"
+    # Aggregate toolkits (googlesuper): one OAuth account drives the listed
+    # sub-toolkits' ingest instead of running a slug of its own.
+    fanout: list[str] = Field(default_factory=list)
 
     def is_ingestable(self) -> bool:
         """Connect-only recipes (e.g. Discord) deliberately skip ingest;
-        runner short-circuits to a no-op for them."""
-        return not self.connect_only and self.slug is not None
+        runner short-circuits to a no-op for them. Fanout recipes
+        (googlesuper) have no slug of their own — their sub-toolkits do
+        the fetching."""
+        return not self.connect_only and (self.slug is not None or bool(self.fanout))
 
 
 # ── Recipe loader ──────────────────────────────────────────────────────

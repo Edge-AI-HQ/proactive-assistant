@@ -1,0 +1,21 @@
+toolkit: googledocs
+slug: GOOGLEDOCS_SEARCH_DOCUMENTS
+args_template:
+  query: ""
+  order_by: "modifiedTime desc"
+  max_results: 100
+since_param: modified_after
+since_format: iso
+result_path: [files]
+id_field: id
+entity_type: documents
+timestamp_path: [modified_time]
+title_path: [name]
+snippet_path: [description]
+sync_interval_hours: 12
+description: "User's recently modified Google Docs documents (generic pai_raw_events storage)."
+notes: |
+  - Stores DriveFile metadata from GOOGLEDOCS_SEARCH_DOCUMENTS in pai_raw_events.
+  - The action accepts `modified_after`, so sync uses the shared connector cursor.
+  - Full document text is intentionally not pulled here; evolve can use metadata
+    and later fetch specific documents through Composio tools when needed.
