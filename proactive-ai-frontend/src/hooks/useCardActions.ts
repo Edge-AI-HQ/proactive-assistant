@@ -2,6 +2,14 @@ import { useCallback, useEffect, useState } from "react";
 
 import { proxyFetch, proxyPost } from "@/lib/api";
 import {
+  cardActionFeedbackBody,
+  confirmBootstrap,
+  dismissFeedbackBody,
+  snoozeFeedbackBody,
+  steerBootstrap,
+  textFeedbackBody,
+} from "@pin-ai/core";
+import {
   canonicalConnectorSlugFromIntentKey,
   openPreparedConnectorOAuth,
   prepareConnectorOAuth,
@@ -161,14 +169,7 @@ export function useCardActions({ onOpenChat, composio }: UseCardActionsOptions) 
           return;
         }
         try {
-          await proxyPost("/feedback", {
-            kind: "card_action",
-            action: "complete",
-            intentCardId: cardId,
-            intentKey: card.intentKey,
-            basket: card.goalBasket,
-            channel: "web",
-          });
+          await proxyPost("/feedback", cardActionFeedbackBody("complete", card));
         } catch {
           /* swallow; UI already optimistic */
         }
@@ -185,25 +186,11 @@ export function useCardActions({ onOpenChat, composio }: UseCardActionsOptions) 
       setProcessingIds((s) => new Set(s).add(cardId));
       persistChatted(cardId);
       try {
-        await proxyPost("/feedback", {
-          kind: "card_action",
-          action: "confirm",
-          intentCardId: cardId,
-          intentKey: card.intentKey,
-          basket: card.goalBasket,
-          channel: "web",
-        });
+        await proxyPost("/feedback", cardActionFeedbackBody("confirm", card));
       } catch {
         /* swallow; UI already optimistic */
       }
-      // Prefer the agent task spec (agentPrompt) over the short button label.
-      // Older cards lack agentPrompt → fall back to label / title.
-      const bootstrap =
-        (card.primaryAction?.agentPrompt
-          || card.primaryAction?.label
-          || card.title
-          || "").trim();
-      onOpenChat(card, bootstrap);
+      onOpenChat(card, confirmBootstrap(card));
     },
     [composio, onOpenChat, persistChatted],
   );
@@ -211,13 +198,7 @@ export function useCardActions({ onOpenChat, composio }: UseCardActionsOptions) 
   const dismiss = useCallback(async (card: IntentCard) => {
     setDismissedIds((s) => new Set(s).add(card.id));
     try {
-      await proxyPost("/feedback", {
-        kind: "dismiss",
-        intentCardId: card.id,
-        intentKey: card.intentKey,
-        basket: card.goalBasket,
-        channel: "web",
-      });
+      await proxyPost("/feedback", dismissFeedbackBody(card));
     } catch {
       /* swallow */
     }
@@ -226,13 +207,7 @@ export function useCardActions({ onOpenChat, composio }: UseCardActionsOptions) 
   const snooze = useCallback(async (card: IntentCard) => {
     setDismissedIds((s) => new Set(s).add(card.id));
     try {
-      await proxyPost("/feedback", {
-        kind: "snooze",
-        intentCardId: card.id,
-        intentKey: card.intentKey,
-        basket: card.goalBasket,
-        channel: "web",
-      });
+      await proxyPost("/feedback", snoozeFeedbackBody(card));
     } catch {
       /* swallow */
     }
@@ -243,27 +218,11 @@ export function useCardActions({ onOpenChat, composio }: UseCardActionsOptions) 
       setProcessingIds((s) => new Set(s).add(card.id));
       persistChatted(card.id);
       try {
-        await proxyPost("/feedback", {
-          kind: "card_action",
-          action: "modify",
-          intentCardId: card.id,
-          intentKey: card.intentKey,
-          basket: card.goalBasket,
-          channel: "web",
-        });
+        await proxyPost("/feedback", cardActionFeedbackBody("modify", card));
       } catch {
         /* swallow */
       }
-      // Steer bootstrap: tell card_execution agent the user wants to
-      // adjust direction BEFORE acting. ChatDetailView now uses the
-      // shared MainChatView composer, but this bootstrap still preserves
-      // the old "modify means ask me before acting" business intent.
-      const originalPlan =
-        card.primaryAction?.label?.trim() || card.title.trim();
-      const steerBootstrap = originalPlan
-        ? `I want to steer this before you act. Original plan: ${originalPlan}. Ask me how I'd like to adjust it (recipient, tone, scope, timing, anything else) and wait for my reply before executing.`
-        : "I want to steer this card before you act. Ask me how I'd like to adjust it and wait for my reply before executing.";
-      onOpenChat(card, steerBootstrap);
+      onOpenChat(card, steerBootstrap(card));
     },
     [onOpenChat, persistChatted],
   );
@@ -280,14 +239,7 @@ export function useCardActions({ onOpenChat, composio }: UseCardActionsOptions) 
     // silently no-ops with no visible feedback to the user.
     let persisted = false;
     try {
-      const res = await proxyPost("/feedback", {
-        kind: "card_action",
-        action: "complete",
-        intentCardId: card.id,
-        intentKey: card.intentKey,
-        basket: card.goalBasket,
-        channel: "web",
-      });
+      const res = await proxyPost("/feedback", cardActionFeedbackBody("complete", card));
       persisted = res.ok;
       if (!res.ok) {
         console.warn(
@@ -323,14 +275,7 @@ export function useCardActions({ onOpenChat, composio }: UseCardActionsOptions) 
     const trimmed = text.trim();
     if (!trimmed) return;
     try {
-      await proxyPost("/feedback", {
-        kind: "text_feedback",
-        intentCardId: card.id,
-        intentKey: card.intentKey,
-        basket: card.goalBasket,
-        channel: "web",
-        text: trimmed,
-      });
+      await proxyPost("/feedback", textFeedbackBody(card, trimmed));
     } catch {
       /* swallow */
     }

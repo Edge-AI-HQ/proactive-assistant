@@ -3,19 +3,21 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-vi.mock("@/lib/api", () => ({
-  proxyFetch: vi.fn(),
-}));
+// Phase 3 后 hook 本体在 @pin-ai/state、HTTP 走 @pin-ai/core 的 proxyFetch，
+// 所以 partial-mock core 包（保留状态机纯函数等其它导出）。
+vi.mock("@pin-ai/core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@pin-ai/core")>();
+  return { ...actual, proxyFetch: vi.fn() };
+});
 
-import * as api from "@/lib/api";
+import * as core from "@pin-ai/core";
 import { usePipeline } from "./usePipeline";
 
-const mockProxyFetch = vi.mocked(api.proxyFetch);
+const mockProxyFetch = vi.mocked(core.proxyFetch);
 
 // usePipeline 内部的 useActiveAgentRuns 是 TQ hook（@pin-ai/state），需要
-// Provider。本测试 mock 掉 "@/lib/api"（含 transport bootstrap），agent-runs
-// 的 queryFn 会因 transport 未配置而失败 → runs=[]，与迁移前 mock 响应不含
-// runs 字段时的行为一致；retry 关掉避免 fake-timers 下的重试噪音。
+// Provider。agent-runs 的 queryFn 与 /status 共用被 mock 的 proxyFetch（
+// 按 path 分支返回）；retry 关掉避免 fake-timers 下的重试噪音。
 function wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },

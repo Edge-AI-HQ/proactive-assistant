@@ -15,6 +15,11 @@ export {
   type UseActiveAgentRunsState,
 } from "./queries/agent-runs";
 export {
+  useCardExecutionRun,
+  type UseCardExecutionRun,
+  type UseCardExecutionRunOptions,
+} from "./queries/card-execution";
+export {
   cardsKeys,
   useCardsQuery,
   type UseCardsQueryResult,
@@ -24,6 +29,11 @@ export {
   useMemories,
   type UseMemoriesResult,
 } from "./queries/memories";
+export {
+  usePipeline,
+  type PipelinePersist,
+  type UsePipelineOptions,
+} from "./queries/pipeline";
 export {
   skillsKeys,
   useSkills,
