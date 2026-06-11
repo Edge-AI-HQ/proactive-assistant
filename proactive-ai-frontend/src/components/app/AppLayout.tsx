@@ -47,8 +47,10 @@ import { useAmbientToggle } from "@/hooks/useAmbientToggle";
 import { bindSystemShortcutActions } from "@/services/system-shortcuts";
 import type { LiveSession } from "@/services/ambient/live-session";
 import {
+  isFromLowerHalfOfScreen,
   isFromRightEdgeOfScreen,
   isMainChatEntrySwipeUp,
+  isMainChatSurfaceSwipeUp,
   isMainMenuSwipeLeft,
   shouldIgnoreMainMenuSwipeTarget,
   type TouchPoint,
@@ -392,6 +394,20 @@ export default function AppLayout() {
     && !paywallCard
     && !liveOverlay
   );
+  // Swipe-up-into-main-chat from the lower half of the NOW screen. Stricter
+  // than the menu gate: chats / lists handle their own vertical swipes
+  // (scrolling), so this only arms on the NOW view with nothing covering it.
+  const canOpenChatFromMainSwipe = (
+    activeView === "now"
+    && !menuOpen
+    && !mainChatOpen
+    && chatTarget == null
+    && activeChat == null
+    && !drawerOpen
+    && !paywallCard
+    && !liveOverlay
+  );
+  const mainChatSurfaceSwipeStartRef = useRef<TouchPoint | null>(null);
 
   const openMenuFromMainSwipe = useCallback((
     end: TouchPoint,
@@ -407,6 +423,19 @@ export default function AppLayout() {
     event.preventDefault();
     setMenuOpen(true);
   }, [canOpenMenuFromMainSwipe]);
+  const openChatFromMainSwipe = useCallback((
+    end: TouchPoint,
+    event: { preventDefault: () => void },
+  ) => {
+    if (!canOpenChatFromMainSwipe) {
+      mainChatSurfaceSwipeStartRef.current = null;
+      return;
+    }
+    if (!isMainChatSurfaceSwipeUp(mainChatSurfaceSwipeStartRef.current, end)) return;
+    mainChatSurfaceSwipeStartRef.current = null;
+    event.preventDefault();
+    openMainChat();
+  }, [canOpenChatFromMainSwipe, openMainChat]);
   const handleMainSurfacePointerDown = useCallback((event: PointerEvent<HTMLDivElement>) => {
     if (!canOpenMenuFromMainSwipe) return;
     // Edge-gesture-only model (iOS-style): only swipes starting in the
@@ -422,8 +451,17 @@ export default function AppLayout() {
     if (!isFromRightEdgeOfScreen(event.clientX, screenWidth)) {
       // Not an edge gesture — let the event continue propagating to the
       // sphere (or whatever child is under the finger) so they can do
-      // their normal drag handling.
+      // their normal drag handling. Lower-half origins additionally arm the
+      // swipe-up-into-chat tracker — purely observational (no
+      // stopPropagation, no capture), so sphere drags / taps are untouched;
+      // the sphere ignores vertical travel anyway (pitch locked).
       mainMenuSwipeStartRef.current = null;
+      const screenHeight = typeof window === "undefined" ? 0 : window.innerHeight;
+      mainChatSurfaceSwipeStartRef.current =
+        canOpenChatFromMainSwipe
+        && isFromLowerHalfOfScreen(event.clientY, screenHeight)
+          ? { x: event.clientX, y: event.clientY }
+          : null;
       return;
     }
     // Edge gesture: STOP the event here. The sphere's onPointerDown will
@@ -436,24 +474,34 @@ export default function AppLayout() {
     } catch {
       /* setPointerCapture may throw in unusual env (jsdom etc.); ignore */
     }
+    mainChatSurfaceSwipeStartRef.current = null;
     mainMenuSwipeStartRef.current = {
       x: event.clientX,
       y: event.clientY,
     };
-  }, [canOpenMenuFromMainSwipe]);
+  }, [canOpenMenuFromMainSwipe, canOpenChatFromMainSwipe]);
   const handleMainSurfacePointerMove = useCallback((event: PointerEvent<HTMLDivElement>) => {
     openMenuFromMainSwipe({
       x: event.clientX,
       y: event.clientY,
     }, event);
-  }, [openMenuFromMainSwipe]);
+    openChatFromMainSwipe({
+      x: event.clientX,
+      y: event.clientY,
+    }, event);
+  }, [openMenuFromMainSwipe, openChatFromMainSwipe]);
   const handleMainSurfacePointerUp = useCallback((event: PointerEvent<HTMLDivElement>) => {
     openMenuFromMainSwipe({
       x: event.clientX,
       y: event.clientY,
     }, event);
+    openChatFromMainSwipe({
+      x: event.clientX,
+      y: event.clientY,
+    }, event);
     mainMenuSwipeStartRef.current = null;
-  }, [openMenuFromMainSwipe]);
+    mainChatSurfaceSwipeStartRef.current = null;
+  }, [openMenuFromMainSwipe, openChatFromMainSwipe]);
   const handleMainSurfaceTouchStart = useCallback((event: TouchEvent<HTMLDivElement>) => {
     if (!canOpenMenuFromMainSwipe) return;
     const touch = event.touches[0];
@@ -464,15 +512,24 @@ export default function AppLayout() {
     const screenWidth = typeof window === "undefined" ? Infinity : window.innerWidth;
     if (!isFromRightEdgeOfScreen(touch.clientX, screenWidth)) {
       mainMenuSwipeStartRef.current = null;
+      // See handleMainSurfacePointerDown: lower-half origins arm the
+      // observational swipe-up-into-chat tracker.
+      const screenHeight = typeof window === "undefined" ? 0 : window.innerHeight;
+      mainChatSurfaceSwipeStartRef.current =
+        canOpenChatFromMainSwipe
+        && isFromLowerHalfOfScreen(touch.clientY, screenHeight)
+          ? { x: touch.clientX, y: touch.clientY }
+          : null;
       return;
     }
     // Edge gesture: stop here so the sphere doesn't receive touchstart.
     event.stopPropagation();
+    mainChatSurfaceSwipeStartRef.current = null;
     mainMenuSwipeStartRef.current = {
       x: touch.clientX,
       y: touch.clientY,
     };
-  }, [canOpenMenuFromMainSwipe]);
+  }, [canOpenMenuFromMainSwipe, canOpenChatFromMainSwipe]);
   const handleMainSurfaceTouchMove = useCallback((event: TouchEvent<HTMLDivElement>) => {
     const touch = event.touches[0];
     if (!touch) return;
@@ -480,21 +537,32 @@ export default function AppLayout() {
       x: touch.clientX,
       y: touch.clientY,
     }, event);
-  }, [openMenuFromMainSwipe]);
+    openChatFromMainSwipe({
+      x: touch.clientX,
+      y: touch.clientY,
+    }, event);
+  }, [openMenuFromMainSwipe, openChatFromMainSwipe]);
   const handleMainSurfaceTouchEnd = useCallback((event: TouchEvent<HTMLDivElement>) => {
     const touch = event.changedTouches[0];
     if (!touch) {
       mainMenuSwipeStartRef.current = null;
+      mainChatSurfaceSwipeStartRef.current = null;
       return;
     }
     openMenuFromMainSwipe({
       x: touch.clientX,
       y: touch.clientY,
     }, event);
+    openChatFromMainSwipe({
+      x: touch.clientX,
+      y: touch.clientY,
+    }, event);
     mainMenuSwipeStartRef.current = null;
+    mainChatSurfaceSwipeStartRef.current = null;
   }, [openMenuFromMainSwipe]);
   const resetMainMenuSwipe = useCallback(() => {
     mainMenuSwipeStartRef.current = null;
+    mainChatSurfaceSwipeStartRef.current = null;
   }, []);
 
   // Sphere card status is driven entirely by the real backend now:
