@@ -41,6 +41,8 @@ def stub_execute(monkeypatch):
             data = {"collection": [{"uri": "evt-1"}, {"uri": "evt-2"}]}
         elif slug == "GMAIL_FETCH_EMAILS":
             data = {"messages": [{"messageId": "m1"}, {"messageId": "m2"}]}
+        elif slug == "GOOGLECALENDAR_EVENTS_LIST":
+            data = {"items": [{"id": "evt-1"}, {"id": "evt-2"}]}
         elif slug == "STRIPE_LIST_INVOICES":
             data = {"object": "list", "data": [{"id": "in_1"}]}
         elif slug == "LINKEDIN_GET_MY_INFO":
@@ -194,6 +196,14 @@ async def test_run_fetch_gmail_uses_query_after_unix(stub_execute):
     assert args["query"] == f"after:{int(since.timestamp())}"
     assert args["max_results"] == 100  # from args_template
     assert args["verbose"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_fetch_googlecalendar_uses_100_item_window(stub_execute):
+    items = await ir.run_fetch(_user(), "googlecalendar", "ca_cal")
+    assert len(items) == 2
+    args = stub_execute[0][1]
+    assert args["maxResults"] == 100
 
 
 @pytest.mark.asyncio

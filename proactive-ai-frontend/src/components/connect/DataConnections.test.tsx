@@ -97,8 +97,9 @@ describe("DataConnections", () => {
     window.localStorage.clear();
   });
 
-  test("shows Google sub-connectors as connected when googlesuper is active", () => {
-    render(<DataConnections composio={makeComposioState()} />);
+  test("shows Google sub-connectors as connected when googlesuper is active", async () => {
+    const state = makeComposioState();
+    render(<DataConnections composio={state} />);
 
     expect(screen.getByRole("button", { name: /Recommended.*1\s+\/\s+7/i })).toBeTruthy();
     expect(screen.getByText("Google Workspace")).toBeTruthy();
@@ -109,6 +110,10 @@ describe("DataConnections", () => {
     expect(screen.getByText("Sheets")).toBeTruthy();
     expect(screen.getByText("Slides")).toBeTruthy();
     expect(screen.getByText("user@example.com")).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Add Gmail account" }));
+    });
+    expect(state.connectToolkit).toHaveBeenCalledWith("gmail");
   });
 
   test("shows fanout sub-toolkit init counts instead of aggregate count", () => {
@@ -119,8 +124,8 @@ describe("DataConnections", () => {
       payload: { toolkit: "googlesuper", limit: 100 },
       progress: {
         perToolkit: {
-          gmail: { fetched: 100, rawInserted: 100 },
-          googlecalendar: { fetched: 150, rawInserted: 150 },
+          gmail: { fetched: 100, rawInserted: 1 },
+          googlecalendar: { fetched: 150, rawInserted: 0 },
           googledrive: { fetched: 200, rawInserted: 200 },
           googledocs: { fetched: 80, rawInserted: 80 },
           googlesheets: { fetched: 60, rawInserted: 60 },

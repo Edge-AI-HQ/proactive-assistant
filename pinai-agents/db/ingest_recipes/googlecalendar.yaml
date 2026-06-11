@@ -3,7 +3,7 @@ slug: GOOGLECALENDAR_EVENTS_LIST
 args_template:
   calendarId: "primary"
   singleEvents: true
-  maxResults: 250
+  maxResults: 100
 since_param: updatedMin
 since_format: iso
 result_path: [items]

@@ -115,7 +115,7 @@ function InitTaskChip({
       const displayResult = getInitTaskResult(taskResult, toolkit, sourceToolkit);
       const memoriesWritten = resultNumber(displayResult?.memoriesWritten);
       const skillsAdded = resultNumber(displayResult?.skillsAdded);
-      const rawInserted = resultNumber(displayResult?.rawInserted);
+      const fetched = finiteNumber(displayResult?.fetched) ?? resultNumber(displayResult?.rawInserted);
       const skipped = Boolean(task.result?.skipped);
       if (skipped) {
         const reason = String(task.result?.reason ?? "skipped");
@@ -127,7 +127,7 @@ function InitTaskChip({
       }
       return (
         <p className="text-[10px] text-emerald-600/80 truncate">
-          Initialized · {rawInserted} fetched{memoriesWritten > 0 ? ` · ${memoriesWritten} memories` : ""}{skillsAdded > 0 ? ` · ${skillsAdded} skills` : ""}
+          Initialized · {fetched} fetched{memoriesWritten > 0 ? ` · ${memoriesWritten} memories` : ""}{skillsAdded > 0 ? ` · ${skillsAdded} skills` : ""}
         </p>
       );
     }
@@ -1090,6 +1090,8 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                             !!childAccount?.connectedAccountId &&
                                             childAccount.toolkit.toLowerCase() ===
                                               child.composioId?.toLowerCase();
+                                          const childCanAddAccount =
+                                            childHasComposio && !child.coverageNote;
                                           return (
                                             <div key={child.name} className="space-y-0.5">
                                               <div
@@ -1140,38 +1142,68 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                     )}
                                                 </div>
                                                 {childIsConnected ? (
-                                                  childCanDisconnect ? (
-                                                    <button
-                                                      onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        handleDisconnect(childAccount.connectedAccountId!);
-                                                      }}
-                                                      disabled={
-                                                        disconnectingId === childAccount.connectedAccountId
-                                                      }
-                                                      className="text-[10px] font-medium rounded-lg px-2 py-0.5 transition-colors disabled:opacity-40 text-emerald-600 hover:text-red-500 hover:bg-red-500/[0.08]"
-                                                    >
-                                                      {disconnectingId === childAccount.connectedAccountId ? (
-                                                        <Loader2
-                                                          size={10}
-                                                          className="animate-spin text-red-500"
-                                                        />
-                                                      ) : (
-                                                        <span>
-                                                          <span className="group-hover/child:hidden">
+                                                  <div className="flex flex-shrink-0 items-center gap-1.5">
+                                                    {childIsConnecting ? (
+                                                      <button
+                                                        onClick={(e) => {
+                                                          e.stopPropagation();
+                                                          handleCancel();
+                                                        }}
+                                                        className="text-[10px] font-medium text-foreground/50 bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 flex items-center gap-1"
+                                                      >
+                                                        <Loader2 size={10} className="animate-spin" />
+                                                        Cancel
+                                                      </button>
+                                                    ) : (
+                                                      <>
+                                                        {childCanDisconnect ? (
+                                                          <button
+                                                            onClick={(e) => {
+                                                              e.stopPropagation();
+                                                              handleDisconnect(childAccount.connectedAccountId!);
+                                                            }}
+                                                            disabled={
+                                                              disconnectingId === childAccount.connectedAccountId
+                                                            }
+                                                            className="text-[10px] font-medium rounded-lg px-2 py-0.5 transition-colors disabled:opacity-40 text-emerald-600 hover:text-red-500 hover:bg-red-500/[0.08]"
+                                                          >
+                                                            {disconnectingId === childAccount.connectedAccountId ? (
+                                                              <Loader2
+                                                                size={10}
+                                                                className="animate-spin text-red-500"
+                                                              />
+                                                            ) : (
+                                                              <span>
+                                                                <span className="group-hover/child:hidden">
+                                                                  Connected
+                                                                </span>
+                                                                <span className="hidden group-hover/child:inline">
+                                                                  Disconnect
+                                                                </span>
+                                                              </span>
+                                                            )}
+                                                          </button>
+                                                        ) : (
+                                                          <span className="text-[10px] font-medium text-emerald-600">
                                                             Connected
                                                           </span>
-                                                          <span className="hidden group-hover/child:inline">
-                                                            Disconnect
-                                                          </span>
-                                                        </span>
-                                                      )}
-                                                    </button>
-                                                  ) : (
-                                                    <span className="text-[10px] font-medium text-emerald-600">
-                                                      Connected
-                                                    </span>
-                                                  )
+                                                        )}
+                                                        {childCanAddAccount && (
+                                                          <button
+                                                            aria-label={`Add ${child.name} account`}
+                                                            onClick={(e) => {
+                                                              e.stopPropagation();
+                                                              handleConnect(child.composioId!);
+                                                            }}
+                                                            className="inline-flex items-center gap-1 text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.1] transition-colors"
+                                                          >
+                                                            <Plus size={10} />
+                                                            Add
+                                                          </button>
+                                                        )}
+                                                      </>
+                                                    )}
+                                                  </div>
                                                 ) : childHasComposio ? (
                                                   child.coverageNote ? (
                                                     <span className="text-[10px] font-medium text-foreground/30">
