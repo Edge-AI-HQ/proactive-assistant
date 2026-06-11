@@ -17,6 +17,8 @@ function makeCard(overrides: Partial<IntentCard> = {}): IntentCard {
     urgency: 0.5,
     importance: 0.6,
     sources: ["gmail", "calendar"],
+    sourceApps: [],
+    reasoningSteps: [],
     agentChain: [],
     createdAt: "",
     ...overrides,

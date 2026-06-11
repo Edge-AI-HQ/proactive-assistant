@@ -645,6 +645,8 @@ export default function AppLayout() {
       urgency: 0.5,
       importance: 0.6,
       sources: [entry.device.name, ...entry.tags],
+      sourceApps: [],
+      reasoningSteps: [],
       agentChain: ["ambient"],
       createdAt: new Date().toISOString(),
     };
