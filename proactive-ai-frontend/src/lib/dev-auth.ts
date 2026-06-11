@@ -5,7 +5,15 @@ export const PIN_LOCAL_DEV_AUTH_USER_ID = "00000000-0000-0000-0000-00000000d0d0"
 export const PIN_LOCAL_DEV_AUTH_EMAIL = "dev-user@local.invalid";
 
 export function isPinLocalDevAuthEnabled(): boolean {
-  return import.meta.env.VITE_PIN_LOCAL_DEV_AUTH === "1";
+  // Local-dev auth is a convenience for the local web dev server only (Local
+  // Hot mode, `npm run dev`). It must never activate in a built artifact —
+  // a native Capacitor bundle (TestFlight / App Store) or a production web
+  // build always uses real Supabase auth. `import.meta.env.DEV` is true only
+  // on the Vite dev server and false for every `vite build` output, so this
+  // guard keeps a stray VITE_PIN_LOCAL_DEV_AUTH=1 (e.g. leaked from a polluted
+  // shell during a local build-ios.sh upload) from shipping the synthetic
+  // "Local Dev User" into a distributed app.
+  return import.meta.env.VITE_PIN_LOCAL_DEV_AUTH === "1" && import.meta.env.DEV;
 }
 
 export function pinLocalDevAuthHeaders(): Record<string, string> {
