@@ -32,6 +32,13 @@ RUN node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('capacito
 RUN npm install --no-audit --no-fund --legacy-peer-deps --ignore-scripts
 
 COPY ${WORKDIR}/ .
+# 共用层源码直引（分层 Phase 0+）：vite alias 把 @pin-ai/core|state 指到
+# `__dirname/../packages/*/src`，容器内 __dirname=/app → /packages。包是
+# 纯 TS 源码（Vite 直接转译），无各自 install/build 步骤。/node_modules
+# symlink 让 /packages/** 里的裸 import（react、@tanstack/*）按 Node
+# resolution 向上命中 /app 的依赖树——等价于本地 monorepo 的 root hoisting。
+COPY packages/ /packages/
+RUN ln -s /app/node_modules /node_modules
 RUN npm run build
 
 # ── Stage 2: runtime ──
