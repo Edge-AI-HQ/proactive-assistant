@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type JSX } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronDown, Zap, FileText, AlertTriangle, Loader2 } from "lucide-react";
 import { brandSvg, detectToolIcon, ArtifactItem, matchSideEffect, type Artifact } from "@/components/chat/ChatDetailView";

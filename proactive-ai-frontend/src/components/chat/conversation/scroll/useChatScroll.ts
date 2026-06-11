@@ -54,7 +54,7 @@ interface UseChatScrollOptions {
 }
 
 export interface ChatScrollApi {
-  virtuosoRef: RefObject<VirtuosoHandle>;
+  virtuosoRef: RefObject<VirtuosoHandle | null>;
   mode: ScrollMode;
   /** Footer spacer height — the runway the streaming reply grows into. */
   runwayPx: number;

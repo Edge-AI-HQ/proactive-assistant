@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, type JSX } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Check, ChevronUp, Sprout, Briefcase, TrendingUp, Heart, BookOpen, Sparkles, Globe, FileSearch, Settings, Hand, Database, Bell, DollarSign, Users, Search, Brain, Lock, type LucideIcon } from "lucide-react";
 import { DrawerDetailBody } from "@/components/card/CardDrawerBody";
