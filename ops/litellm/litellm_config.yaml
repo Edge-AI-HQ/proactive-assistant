@@ -190,6 +190,18 @@ model_list:
       model: moonshot/kimi-k2.6
       api_key: os.environ/MOONSHOT_API_KEY
 
+  # Zhipu / Z.AI
+  # 不在 v1.86.2 内置 cost map，手工带上官方价（docs.z.ai/guides/overview/pricing）
+  # 否则 spend tracking 记 0，用户用 glm-5.1 不消耗 credits。
+  - model_name: glm-5.1
+    litellm_params:
+      model: zai/glm-5.1
+      api_key: os.environ/ZAI_API_KEY
+    model_info:
+      input_cost_per_token: 0.0000014
+      output_cost_per_token: 0.0000044
+      cache_read_input_token_cost: 0.00000026
+
   # Perplexity (search-grounded)
   - model_name: sonar-pro
     litellm_params:
