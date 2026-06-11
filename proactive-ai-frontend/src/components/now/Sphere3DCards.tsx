@@ -195,7 +195,7 @@ const Sphere3DCards = ({
   const rx = radius ?? autoRx;
   const ry = radius ?? autoRy;
 
-  // Restore from cache if available, otherwise start at default pose.
+  // Restore the POSE from cache if available, otherwise start at defaults.
   const initial = (cacheKey && rotationCache.get(cacheKey)) || {
     yaw: 0,
     pitch: -10,
@@ -203,7 +203,11 @@ const Sphere3DCards = ({
     velPitch: 0,
   };
   const rotRef = useRef({ yaw: initial.yaw, pitch: initial.pitch });
-  const velRef = useRef({ yaw: initial.velYaw, pitch: initial.velPitch });
+  // Velocity deliberately does NOT come from the cache: a remount resumes at
+  // the base spin speed. Restoring the live velocity replayed minutes-old
+  // fling inertia on re-entering the tab — after a leftward fling the sphere
+  // visibly spun the wrong way first, then decayed back to the idle drift.
+  const velRef = useRef({ yaw: 0.05, pitch: 0 });
   const draggingRef = useRef(false);
   const lastPointer = useRef({ x: 0, y: 0, t: 0 });
   // Card DOM nodes + the styles last written to them. The rAF loop writes
@@ -272,9 +276,13 @@ const Sphere3DCards = ({
 
       persistRotation();
 
-      const transition = draggingRef.current
-        ? "none"
-        : "box-shadow 0.2s, opacity 0.2s";
+      // box-shadow only — opacity is driven frame-by-frame by this loop, and
+      // layering a CSS transition on top meant every write killed and
+      // restarted a 0.2s transition. At idle speed that's ~1 restart/s, but
+      // during a drag-release glide it's every frame, which strobed the
+      // dimmer (upper/back) cards. The per-frame opacity steps are ≤0.01 so
+      // they need no smoothing of their own.
+      const transition = draggingRef.current ? "none" : "box-shadow 0.2s";
       for (const [id, el] of cardEls.current) {
         const idx = idToPointIdx.current.get(id);
         const p = idx === undefined ? undefined : pointsRef.current[idx];
@@ -423,7 +431,8 @@ const Sphere3DCards = ({
                 pointerEvents: s.pointerEvents,
                 borderRadius: 14,
                 boxShadow: s.boxShadow,
-                transition: draggingRef.current ? "none" : "box-shadow 0.2s, opacity 0.2s",
+                // box-shadow only; opacity is rAF-driven (see the tick loop).
+                transition: draggingRef.current ? "none" : "box-shadow 0.2s",
                 willChange: "transform",
                 backfaceVisibility: "hidden",
                 WebkitBackfaceVisibility: "hidden",
