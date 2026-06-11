@@ -406,6 +406,22 @@ def test_evaluator_prompt_audits_reasoning_steps_and_action_first_title() -> Non
     assert "reasoningSteps` are audited the same way" in _EVALUATOR_PROMPT
     assert "action-first formula" in _EVALUATOR_PROMPT
     assert "concrete fact / number / time + human stake" not in _EVALUATOR_PROMPT
+
+
+def test_card_generator_prompt_has_good_bad_title_examples() -> None:
+    rendered = _render_prompt(_CARD_GENERATOR_PROMPT, lang_clause="x")
+    assert "Review your tech concentration — chip stocks fell 3%" in rendered
+    assert "帮你复查科技股持仓集中度" in rendered
+    assert "(fact-first)" in rendered
+
+
+def test_why_now_adds_context_beyond_title() -> None:
+    rendered = _render_prompt(_CARD_GENERATOR_PROMPT, lang_clause="x")
+    assert "never restate the title" in rendered
+
+
+def test_evaluator_caps_actionability_for_fact_first_titles() -> None:
+    assert "caps actionability" in _EVALUATOR_PROMPT
 ```
 
 - [ ] **Step 4.2: 跑测试确认失败**
@@ -431,14 +447,18 @@ cd pinai-agents && TAVILY_API_KEY=dummy-local-test uv run pytest tests/chat/agen
 新:
 ```text
 - title: ≤ 70 chars, ACTION-FIRST. Open with the action you can take
-  for the user or already took (verb + object, e.g. "Review your tech
-  concentration"), then " — " + the concrete trigger fact / number /
-  time (e.g. "— chip stocks fell 3% for a 2nd day"). NEVER open with
-  the news fact or number itself. If the matched pattern has
+  for the user or already took (verb + object), then " — " + the
+  concrete trigger fact / number / time. NEVER open with the news fact
+  or number itself. If the matched pattern has
   `cardSkeleton.title_strategy.example`, use it to calibrate the
   trigger clause, not as copy text, keeping the action-first shape.
   Avoid generic "I noticed..." / "you may like..." / "need help?"
   titles.
+    GOOD: "Review your tech concentration — chip stocks fell 3% for a 2nd day"
+    GOOD: "Prep tomorrow's 1:1 with Sam — 3 unresolved threads since Monday"
+    GOOD (zh-Hans): "帮你复查科技股持仓集中度 — 芯片股连跌两天"
+    BAD : "Nasdaq -3% on Jun 9: chip selloff day 2 — Micron up 174% YTD" (fact-first)
+    BAD : "Check your portfolio — something changed" (vague trigger)
 ```
 
 (b) `_CARD_GENERATOR_PROMPT` sources 规则之后(387 行 `auto-consume identifies...` 之后、388 行 `- ambient transcript...` 之前)插入新 bullet:
@@ -487,6 +507,28 @@ look plausibly extractable from a real data source — flag fabrications
 by failing; `reasoningSteps` are audited the same way: a step that
 references data not evidenced in `sources[]` is a grounding violation)
 AND (pattern_id is null OR pattern_grounding >= 5).
+```
+
+(e) `_CARD_GENERATOR_PROMPT` whyNow 规则,370 行,替换(防和新标题的触发短句重复):
+
+旧:
+```text
+- whyNow: one sentence with a CONCRETE trigger (date / number / event)
+```
+
+新:
+```text
+- whyNow: one sentence with a CONCRETE trigger (date / number / event).
+  It must ADD context beyond the title's trigger clause (scale, history,
+  what changed) — never restate the title.
+```
+
+(f) `_EVALUATOR_PROMPT` 的 `<calibration>` 区第一条("Resist generosity"那条)之后插入(堵住非 pattern 卡标题无人审的盲区):
+
+```text
+- Titles are action-first by contract. A title that opens with a news
+  fact / number instead of the user-facing action caps actionability
+  at 6 — note it in feedback.
 ```
 
 连接器引导卡 title 规则(468-472 行)与 `<workflow>` step 3(352-357 行)**不动**——前者已是 outcome-led,后者的 title angle 选择与新公式兼容。

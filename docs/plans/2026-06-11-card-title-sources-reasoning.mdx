@@ -35,6 +35,7 @@ description: "三个用户可见问题一起修:标题改为动作开头两行�
   - 明确禁止以新闻事实、数字罗列开头;`title_strategy.example` 仍作风格校准但服从动作先行结构。
   - 例:`Review your tech concentration — chip stocks fell 3% for a 2nd day`。
 - evaluator prompt 里审 title 的措辞(pattern_grounding 维度对 `title_strategy` 公式的描述)同步改为动作先行公式,避免生成与评分互相打架。
+- 三条搭车正向优化(2026-06-11 用户确认追加):(1) title 规则附 GOOD/BAD 对照例,含一条 zh-Hans 例,钉死公式的中文形态;(2) whyNow 规则补"必须提供标题触发短句之外的上下文,禁止复述标题"(新公式下标题已带触发原因,防两者重复);(3) evaluator `<calibration>` 加对**所有卡**生效的动作先行检查——fact-first 标题把 actionability 封顶 6 分并写进 feedback(原本只有 pattern 命中卡才审标题公式)。
 - **不动**:连接器引导卡 title 规则(≤60、outcome-led,本来就是动作先行);`GeneratedCard.title` schema `max_length=120`(留作截断安全网);语言跟随用户语言的 `{lang_clause}` 机制。
 
 ### 前端(`proactive-ai-frontend`)
