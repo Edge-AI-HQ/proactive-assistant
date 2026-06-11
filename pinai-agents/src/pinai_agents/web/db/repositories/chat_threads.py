@@ -14,7 +14,7 @@ app.user_id = $uid) so RLS pins reads/writes to one user.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from psycopg.rows import dict_row
 
@@ -86,7 +86,8 @@ class ChatThreadsRepository(UserScopedRepository):
                 """
                 UPDATE pai_chat_threads
                 SET last_message_at = NOW(),
-                    message_count = message_count + 1
+                    message_count = message_count + 1,
+                    updated_at = NOW()
                 WHERE user_id = %s AND thread_id = %s
                 RETURNING message_count
                 """,
@@ -96,3 +97,44 @@ class ChatThreadsRepository(UserScopedRepository):
             if row is None:
                 return None
             return int(row["message_count"])
+
+    async def list_since(
+        self,
+        *,
+        updated_after: str | None = None,
+        after_thread_id: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Delta page for the local sync engine (`/api/sync/threads`):
+        threads changed since the composite cursor (updated_at, thread_id),
+        oldest-change first. Soft state (archived) is just another column on
+        the upserted row — no tombstones (migration 093). Bootstrap read
+        passes no cursor. Ties on updated_at are broken by thread_id so a
+        page boundary never skips or repeats a row."""
+        async with self.conn.cursor(row_factory=dict_row) as cur:
+            if updated_after is None:
+                await cur.execute(
+                    """
+                    SELECT thread_id, kind, card_id, archived, message_count,
+                           last_message_at, created_at, updated_at
+                    FROM pai_chat_threads
+                    WHERE user_id = %s
+                    ORDER BY updated_at ASC, thread_id ASC
+                    LIMIT %s
+                    """,
+                    (self.user_id, limit),
+                )
+            else:
+                await cur.execute(
+                    """
+                    SELECT thread_id, kind, card_id, archived, message_count,
+                           last_message_at, created_at, updated_at
+                    FROM pai_chat_threads
+                    WHERE user_id = %s
+                      AND (updated_at, thread_id) > (%s::timestamptz, %s)
+                    ORDER BY updated_at ASC, thread_id ASC
+                    LIMIT %s
+                    """,
+                    (self.user_id, updated_after, after_thread_id or "", limit),
+                )
+            return await cur.fetchall()

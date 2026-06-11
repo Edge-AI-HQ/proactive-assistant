@@ -32,6 +32,24 @@ Role = Literal["user", "assistant", "heartbeat"]
 Trigger = Literal["user", "tick"]
 
 
+def row_to_history_message(row: dict[str, Any]) -> dict[str, Any]:
+    """A pai_chat_messages row → the frontend HistoryMessage shape. `trigger`
+    rides along so the proactive page can mark tick-triggered assistant turns
+    (absent / 'user' for main + card). Shared by /api/conversation/history and
+    /api/sync/messages — one resource, one shape."""
+    out: dict[str, Any] = {"id": str(row["id"]), "role": row["role"], "parts": row["parts"]}
+    trigger = row.get("trigger")
+    if trigger and trigger != "user":
+        out["trigger"] = trigger
+    created = row.get("created_at")
+    if created is not None:
+        out["createdAt"] = int(created.timestamp() * 1000)
+    client_msg_id = row.get("client_msg_id")
+    if client_msg_id:
+        out["clientMsgId"] = client_msg_id
+    return out
+
+
 class ChatMessagesRepository(UserScopedRepository):
     """CRUD for pai_chat_messages. Append-only per (user, thread)."""
 
@@ -154,6 +172,32 @@ class ChatMessagesRepository(UserScopedRepository):
                     """,
                     (self.user_id, thread_id, before_id, limit),
                 )
+            return await cur.fetchall()
+
+    async def get_since(
+        self,
+        *,
+        thread_id: str,
+        since_id: int = 0,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Delta page for the local sync engine (`/api/sync/messages`):
+        rows with id > since_id, OLDEST first so the client applies them in
+        append order. `since_id=0` is the bootstrap read. Rows are immutable
+        (append-only log), so a monotonically advancing id cursor replays the
+        thread exactly once — no tombstones, no updated_at needed. Uses the
+        same (user_id, thread_id, id) index as get_page, scanned ascending."""
+        async with self.conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                SELECT id, role, parts, trigger, created_at, client_msg_id
+                FROM pai_chat_messages
+                WHERE user_id = %s AND thread_id = %s AND id > %s
+                ORDER BY id ASC
+                LIMIT %s
+                """,
+                (self.user_id, thread_id, since_id, limit),
+            )
             return await cur.fetchall()
 
     async def latest_id(self, *, thread_id: str) -> int | None:

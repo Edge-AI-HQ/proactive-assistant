@@ -42,7 +42,7 @@ from psycopg.types.json import Jsonb
 from ...agent_core.mailbox import MailboxRepository
 from ...agent_core.runs import RunRepository
 from ...auth.deps import User, current_user, get_pool
-from ...db.repositories.chat_messages import ChatMessagesRepository
+from ...db.repositories.chat_messages import ChatMessagesRepository, row_to_history_message
 from ...db.repositories.chat_threads import ChatThreadsRepository, ThreadKind
 from ...db.rls import user_scoped_tx
 from ...services.chat_proxy import call_chat_history
@@ -346,21 +346,10 @@ async def stream(
     )
 
 
-def _row_to_message(row: dict[str, Any]) -> dict[str, Any]:
-    """A pai_chat_messages row → the frontend HistoryMessage shape. `trigger`
-    rides along so the proactive page can mark tick-triggered assistant turns
-    (absent / 'user' for main + card)."""
-    out: dict[str, Any] = {"id": str(row["id"]), "role": row["role"], "parts": row["parts"]}
-    trigger = row.get("trigger")
-    if trigger and trigger != "user":
-        out["trigger"] = trigger
-    created = row.get("created_at")
-    if created is not None:
-        out["createdAt"] = int(created.timestamp() * 1000)
-    client_msg_id = row.get("client_msg_id")
-    if client_msg_id:
-        out["clientMsgId"] = client_msg_id
-    return out
+# HistoryMessage 序列化与数据获取同处（repositories/chat_messages.py 的
+# row_to_history_message）——/api/sync/messages 与本路由共享同一行形状，
+# 避免「同一资源两种 shape」（sync 引擎文档 §6.4 的协议演进纪律）。
+_row_to_message = row_to_history_message
 
 
 async def _replay_cursor(service: Any, session: str, run_id: str) -> str | None:

@@ -82,6 +82,7 @@ from .routes.ui.skills import router as ui_skills_router
 from .routes.ui.stubs import (
     crystallize_router as ui_crystallize_router,
 )
+from .routes.ui.sync import router as ui_sync_router
 from .routes.ui.tasks import router as ui_tasks_router
 from .routes.ui.voice import router as ui_voice_router
 from .scheduler.tick_loop import tick_loop
@@ -209,6 +210,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_settings_router)
     app.include_router(ui_runs_router)
     app.include_router(ui_conversation_router)
+    app.include_router(ui_sync_router)
     app.include_router(ui_generate_router)
     app.include_router(ui_skills_router)
     app.include_router(ui_feedback_router)
