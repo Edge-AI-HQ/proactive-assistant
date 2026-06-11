@@ -258,7 +258,11 @@ async def _persist_evaluations(
     cards: list[dict[str, Any]],
     evaluations: list[dict[str, Any]],
 ) -> None:
-    """Insert one pai_card_evaluations row per (cardId, dimensions) entry.
+    """Insert one pai_card_evaluations row per evaluation entry.
+
+    Each entry is a CardEvaluation serialized with model_dump(by_alias=True):
+    the five dimension scores sit flat at the top level in camelCase
+    (relevance / actionability / whyNowClarity / novelty / decisionCompression).
 
     Best-effort within the same RLS-scoped transaction; if the rows are
     malformed we log and skip the bad ones rather than rolling the whole
@@ -284,9 +288,6 @@ async def _persist_evaluations(
         card_id = ev.get("cardId") or ev.get("card_id")
         if not isinstance(card_id, str) or not card_id:
             continue
-        dims = ev.get("dimensions") or {}
-        if not isinstance(dims, dict):
-            dims = {}
         try:
             await conn.execute(
                 """
@@ -317,11 +318,11 @@ async def _persist_evaluations(
                     card_id,
                     run_id,
                     basket_by_card.get(card_id),
-                    dims.get("relevance"),
-                    dims.get("actionability"),
-                    dims.get("whyNowClarity"),
-                    dims.get("novelty"),
-                    dims.get("decisionCompression"),
+                    ev.get("relevance"),
+                    ev.get("actionability"),
+                    ev.get("whyNowClarity"),
+                    ev.get("novelty"),
+                    ev.get("decisionCompression"),
                     ev.get("overall"),
                     bool(ev.get("pass")),
                     ev.get("feedback"),
