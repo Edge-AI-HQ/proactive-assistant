@@ -1156,6 +1156,20 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                       </button>
                                                     ) : (
                                                       <>
+                                                        {childCanAddAccount && (
+                                                          <button
+                                                            aria-label={`Add ${child.name} account`}
+                                                            onClick={(e) => {
+                                                              e.stopPropagation();
+                                                              handleConnect(child.composioId!);
+                                                            }}
+                                                            className="inline-flex items-center gap-1 text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.1] transition-all opacity-0 group-hover/child:opacity-100"
+                                                          >
+                                                            <Plus size={10} />
+                                                            Add
+                                                          </button>
+                                                        )}
+                                                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
                                                         {childCanDisconnect ? (
                                                           <button
                                                             onClick={(e) => {
@@ -1187,19 +1201,6 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                           <span className="text-[10px] font-medium text-emerald-600">
                                                             Connected
                                                           </span>
-                                                        )}
-                                                        {childCanAddAccount && (
-                                                          <button
-                                                            aria-label={`Add ${child.name} account`}
-                                                            onClick={(e) => {
-                                                              e.stopPropagation();
-                                                              handleConnect(child.composioId!);
-                                                            }}
-                                                            className="inline-flex items-center gap-1 text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.1] transition-colors"
-                                                          >
-                                                            <Plus size={10} />
-                                                            Add
-                                                          </button>
                                                         )}
                                                       </>
                                                     )}

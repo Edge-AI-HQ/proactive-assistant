@@ -110,6 +110,7 @@ describe("DataConnections", () => {
     expect(screen.getByText("Sheets")).toBeTruthy();
     expect(screen.getByText("Slides")).toBeTruthy();
     expect(screen.getByText("user@example.com")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add Gmail account" }).className).toContain("opacity-0");
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Add Gmail account" }));
     });
