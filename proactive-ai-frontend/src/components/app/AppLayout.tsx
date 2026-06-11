@@ -203,7 +203,7 @@ export default function AppLayout() {
   const avatarLetter = (firstName || emailPrefix || "?").slice(0, 1).toUpperCase();
 
   // ── Real-backend integration (preserved card execution path) ──
-  const cardsState = useCards({ cacheScope: user?.id ?? null });
+  const cardsState = useCards();
   const refreshCards = cardsState.refresh;
   const composio = useComposio();
   // Empty-state nudges (NowView): count ACTIVE connectors + read mic
