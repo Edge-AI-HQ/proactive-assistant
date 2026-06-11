@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    // 与 @pin-ai/core 同理：DOM lib 只为标准类型，浏览器 globals 由 eslint 禁止。
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "types": [],
+    "paths": {
+      "@pin-ai/core": ["../core/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}

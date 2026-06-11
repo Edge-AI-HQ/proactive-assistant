@@ -1,0 +1,178 @@
+---
+title: "本地-云端同步引擎调研与方案：三端秒开的本地数据层"
+description: "为 web/Electron/Expo RN 三端设计本地缓存+同步引擎的调研结论：业界头部 chat/AI 产品全部自研轻量同步（零框架实证）；WAL 复制系（PowerSync/Electric/Zero）与数据形状错配且只解决读路径；推荐自研 cursor delta + 本地 SQLite + 通用 outbox + SSE ingest，复用已有 resumable SSE 与 ambient outbox。含三端存储选型、后端改造清单、分阶段路径。"
+---
+
+# 本地-云端同步引擎：调研与方案（2026-06-11）
+
+> **状态**：调研完成，方案待评审。前置依赖：[前端分层架构](./2026-06-10-frontend-layering.mdx)的 `@pin-ai/core`（transport/ports）。事实基线已对 main 8874a5e6（2026-06-11 pull）复核：本文引用的 outbox / timeline store / history 游标接口 / SSE envelope / `pai_chat_messages` 均未被该批改动触碰，结论不变。
+> **决策输入**（2026-06-11，用户拍板）：服务端列加密工程可为同步让步（"当前可以不需要"）；后端 schema/接口可改造，都 flexible。本方案的最终推荐**不需要动用这个让步**（见 §4.3），加密兼容性作为免费保留项。
+
+## 1. 需求与数据形状
+
+**需求**：用户打开 app（任一端）不再全量等云端——先渲染本地数据（秒开），后台增量同步，SSE 实时增量；对话与 agent 结果可本地全文搜索。对标 Claude/ChatGPT/Notion 的客户端体验。
+
+**数据形状决定方案**（按写权威分类）：
+
+| 类别 | 数据 | 特性 | 同步需求 |
+|---|---|---|---|
+| server-authoritative，append-mostly | 对话消息、agent runs、卡片、feedback events | 服务端单一写者定序，**天然无冲突** | cursor 增量拉 + SSE 实时 append |
+| server-authoritative，小体量可变 | settings、memory、skills、profile、threads 元数据 | 低频改，LWW 足够 | `updated_at` delta + tombstone |
+| client-authoritative 上行 | ambient 设备采集 | 客户端产生 | **已有** outbox（SQLite + dedupe + 退避重试） |
+| 命令型写 | 发消息、卡片反馈、设置修改 | 需可靠投递 + 乐观 UI | 通用 mutation outbox（泛化 ambient outbox） |
+
+关键判断：这是「消息流类」形状，不是 Linear/Figma/Notion 富文本那种「客户端先行写 + 冲突合并」形状。**两类产品的同步引擎复杂度差一个数量级**，套错类别就是过度设计。
+
+## 2. 业界调研结论
+
+### 2.1 头部产品实证：零框架，全部自研轻量同步
+
+| 产品 | 本地存储 | 同步机制 | 来源 |
+|---|---|---|---|
+| ChatGPT（iOS/mac） | iOS 每会话一个 JSON 文件；mac native app 本地全量会话缓存（曾明文，后加密+Keychain） | offset/limit 分页 + 详情按需 + 本地缓存兜底，无 delta 协议 | [取证分析](https://blogs.dsu.edu/digforce/2023/06/23/forensic-analysis-of-chatgpt-for-mobile-devices/)、[PVIEITO](https://pvieito.com/2024/07/chatgpt-unprotected-conversations) |
+| Claude Desktop（Electron） | TQ `persistQueryClient` → 单 IndexedDB blob（**反面教材**，见 §2.2） | 纯服务端权威，清缓存后全量 rehydrate | [issue #58799](https://github.com/anthropics/claude-code/issues/58799) |
+| Slack | Redux store 快照 → IndexedDB；「warm boot 用快照渲染，online 后 fetch fresh」 | 放弃全量快照（rtm.start 教训）→ lazy incomplete model + Flannel 边缘缓存 | [Service Workers at Slack](https://slack.engineering/service-workers-at-slack-our-quest-for-faster-boot-times-and-offline-support/)、[Flannel](https://slack.engineering/flannel-an-application-level-edge-cache-to-make-slack-scale/) |
+| Notion | 三端 SQLite（web 用 wasm+OPFS，SharedWorker 选主）；SQLite 读与 API 请求**赛跑** | 页级 channel 推送 + `lastDownloadedTimestamp` vs `lastUpdatedTime` 增量 | [WASM SQLite](https://www.notion.com/blog/how-we-sped-up-notion-in-the-browser-with-wasm-sqlite)、[offline](https://www.notion.com/blog/how-we-made-notion-available-offline) |
+| Telegram | SQLite（Postbox，SQLCipher + FTS5） | **pts 序列号**：`local_pts + pts_count == pts` 纯算术检洞，有洞调 `getDifference` 补差——cursor 增量同步的教科书 | [updates 协议](https://core.telegram.org/api/updates) |
+| Linear（对照组，client-first） | IndexedDB + MobX 对象池 | 全局 `lastSyncId` + delta packets + 事务变基——**协作编辑类才需要的重型引擎** | [逆向分析](https://github.com/wzhudev/reverse-linear-sync-engine) |
+| Cursor | 裸 SQLite（state.vscdb，每消息一行） | 本地优先，跨机不自动同步 | [分析](https://vibe-replay.com/blog/cursor-local-storage/) |
+| T3 Chat | Dexie（IndexedDB）+ 自研 sync | **评估 Zero/Jazz 后放弃，自研**（"通用方案不合 chat 的 source-of-truth 模型"） | [复盘](https://www.troublefreeai.com/blog/software-engineering/how-theo-t3-gg-built-ai-chat-in-5-days) |
+
+**没有发现任何头部 chat / AI assistant 产品使用现成同步框架。** 共性模式五条：① 服务端唯一权威、本地是可丢弃缓存副本；② 瘦启动 + 按需加载，拒绝全量快照；③ 「先本地后网络」是标配渲染策略；④ 实时通道与缓存解耦，断线用 cursor 只补 gap（Telegram pts ≈ 我们的 Redis Streams entry id）；⑤ 离线写走 outbox 重放，server-authoritative 数据冲突几乎不存在。
+
+### 2.2 反面教材：Claude Desktop 的 persistQueryClient 事故
+
+实测：1781 个会话（含全量消息体、base64 附件）作为**单个 44.7MB IndexedDB blob** 持久化，每次 cache mutation 整 blob 重写——idle 时 ~5MB/s 持续写、4 小时写 67.9GB。**教训：TQ persist 只适合小数据（settings、列表 metadata）；消息体必须分行存储、metadata 与 body 分离、body 懒加载。** 这直接框定了我们 Phase A/B 的边界（§5）。
+
+### 2.3 同步框架谱系（2026-06 实测状态）
+
+**WAL/逻辑复制系——与我们错配**：
+
+| 框架 | 状态 | 关键事实 |
+|---|---|---|
+| PowerSync | SDK GA（Node SDK beta），商业最稳 | Postgres 逻辑复制 → Service（bucket）→ 客户端 SQLite。**写路径仍是你自己的 API**（uploadData）。多一个 Service 运维件（FSL self-host 或 cloud 计费） |
+| ElectricSQL | sync-service 活跃，但公司 2026-04 转型 agent 平台（electric.ax） | 只做读路径（官方明示 "does not do write-path sync"），shape 同步押注 CDN 共享缓存 |
+| Zero (Rocicorp) | 1.0 GA（2026-03），RN 一等支持 | zero-cache 维护 Postgres 的 SQLite 副本；写走你的 mutate endpoint；Supabase 仅 "partial support" |
+| Replicache | **维护模式**（免费化，官方导向 Zero） | push/pull/rebase 协议是自研 delta sync 的最佳蓝本之一 |
+
+共同问题：① 为「客户端可写 + 冲突解决」设计，我们的 server-authoritative 数据用不上最贵的能力；② **读路径直通 Postgres 复制流，绕过应用层**——若未来恢复服务端列加密（密文原样下发，三家验证均无服务端解密钩子）则全部失效；③ 写路径横竖都要自己做。
+
+**应用层协议系——协议可抄，库不押注**：WatermelonDB（`pullChanges/pushChanges` since `lastPulledAt`，但 2026 年零 commit 事实停滞）、RxDB（协议灵活但好存储全 premium，€1300+/年）、Legend-State v3（beta 22 个月，单人且注意力转移）、LiveStore（event-sourcing 概念同构但 beta + Electron 无原生 adapter）。
+
+**TanStack DB**（beta 0.6，TanStack+Electric 共同开发）：客户端 reactive collections + 差分数据流 live query，query collection 建在 TQ 上、写路径是你的 API、三端持久化适配器齐全（含 Electron/RN）。**不是同步引擎而是本地 reactive 查询层**——与自研 delta 协议互补而非互斥，作为 Phase C 的可选增强观察（等 v1）。
+
+### 2.4 三端本地存储选型（2026-06 验证）
+
+| 端 | 推荐 driver | 关键事实 |
+|---|---|---|
+| **web** | 官方 `@sqlite.org/sqlite-wasm` + `opfs-sahpool` VFS + dedicated Worker + **Web Locks 选主**（多 tab） | sahpool 性能最高且免 COOP/COEP header；多 tab 独占需选主（Notion 生产同款：SharedWorker 协调 + Web Locks 探测 tab 死亡）。FTS5 内建。**Safari ITP 7 天无交互清空全部存储（persist() 不豁免，加主屏 PWA 豁免）→ web 本地库只能定位为可全量重建的缓存** |
+| **Electron** | main/utilityProcess 持 `better-sqlite3`（加密则 better-sqlite3-multiple-ciphers；起步可用 node:sqlite 零原生依赖）+ IPC 给 renderer | sandboxed renderer 无 Node，原生库只能在 main 侧（Signal/Notion 同构）。注意 better-sqlite3 对 Electron 42 prebuild 暂回滚需自编。真实文件路径可备份——OPFS 给不了 |
+| **Expo RN** | `expo-sqlite`（SDK 52+ 官方内置 SQLCipher + FTS5 默认开，CNG 零摩擦） | op-sqlite 留作性能逃生门（活跃但 bus factor=1）；expo-sqlite 的 web 支持是 alpha，不要拿它统一 web |
+| **统一层** | **手写 SQL migration（编号字符串数组 + `PRAGMA user_version`）+ 薄 Database port（`execute`/`transaction` 两方法）**，可选配 Kysely 做类型安全 | **不用 Drizzle**：web 端无官方 sqlite-wasm driver（[#193](https://github.com/drizzle-team/drizzle-orm/issues/193) 开了三年）+ migration 三端不对称。Evolu/PowerSync/Zero 内部全是「薄 port + 手写 SQL」形态，没有任何 sync engine 拿 ORM 当跨端抽象 |
+
+PGlite 排除（RN 跑不了）；cr-sqlite 停滞排除。
+
+## 3. 已有资产盘点（codebase 扫描，2026-06-11）
+
+| 资产 | 现状 | 对同步引擎的价值 |
+|---|---|---|
+| **Resumable SSE**（PR#56） | Redis Streams entry id 作 SSE `id:` 行 → `lastEventId` 游标，断线 replay-gap-only | 实时增量通道**已是终态形态**（Telegram pts 同构物），chat 域直接复用 |
+| **ambient outbox**（`services/ambient/outbox.ts`，839 行） | SQLite 表 + `dedupe_key` UNIQUE 幂等 + pending/synced/failed 三态 + 指数退避（5s→15min cap）+ 按 owner/backend 作用域 + TTL 清理 | **通用 mutation outbox 的现成蓝本**，泛化即用 |
+| **ambient timeline store** | 三张本地 SQLite 表，UPSERT ON CONFLICT(dedupe_key)，`sync_status` 列 | 本地表 + 同步位点的实践经验 |
+| `pai_chat_messages` | `id BIGINT IDENTITY` 单调主键，append-only 不可变 | **天然增量 cursor**，messages 域零后端改造 |
+| `/agent/chat/history` | `before` 游标分页（向旧翻页） | 按需 hydrate 历史的现成接口 |
+| TQ + zustand（分层方案已拍板） | — | 读路径的内存层 |
+
+**后端差距**（用户已确认可改）：
+
+1. `pai_chat_threads` / `pai_memory` / cards 相关表缺 `updated_at`（messages 不需要，不可变）；
+2. 列表接口全量拉，无 `since` 增量参数（仅 signals 有）；删除靠 status/archived 软删风格——增量协议可直接用「status 变化也是 upsert」来覆盖，硬删的表才需要 tombstone；
+3. SSE 事件只覆盖 chat 域（chat:*/browser:*/task:*），无 cards/memory/settings 变更事件；
+4. `/settings` 是首屏阻塞项（12s 超时 + 3 次重试）——本地缓存的第一个直接受益者。
+
+## 4. 方案：自研轻量同步引擎（业界 convention 本身）
+
+### 4.1 为什么自研而不是买
+
+1. **convention 实证**：§2.1 零框架——这类产品的「成熟业界方案」就是自研轻量；
+2. **数据形状**：server-authoritative + append-mostly，框架最贵的能力（离线写冲突合并）用不上；
+3. **买也只买到半个**：WAL 系写路径横竖要自己做，而读路径（delta pull 协议）恰是最薄的一层（每域一个 since 端点）；
+4. **零件已有 60%**：resumable SSE、outbox 蓝本、单调 id cursor、TQ 读层；
+5. **零运维新增**：不引 PowerSync Service / zero-cache 这类常驻件；
+6. **加密保留项**：应用层协议天然兼容「未来恢复服务端列加密」（API 出明文即可），WAL 系则要求 DB 明文直通客户端——虽然用户已表态加密可让步，但推荐方案不需要消费这个让步。
+
+### 4.2 架构（核心引擎进 `@pin-ai/core/sync`，纯 TS 三端共用）
+
+```
+@pin-ai/core
+  src/sync/
+    engine.ts        # 调度：bootstrap / delta 拉取 / SSE ingest / 退避，per-domain 游标管理
+    protocol.ts      # delta 协议类型：{ upserts, tombstones, cursor, hasMore }
+    outbox.ts        # 通用 mutation outbox（泛化 ambient outbox：dedupe_key/三态/退避）
+    schema.ts        # 本地库 migrations（编号 SQL 数组 + PRAGMA user_version，三端同一套）
+    domains/         # 每域的表映射与合并逻辑（threads/messages/cards/settings/memory）
+  src/ports/database.ts   # { execute(sql, params), transaction(fn) } —— 三端注入
+apps 各端注入 driver：web=sqlite-wasm(sahpool)+Worker+Web Locks 选主；
+                     Electron=main 进程 better-sqlite3 经 IPC；RN=expo-sqlite
+```
+
+**本地 schema 草图**（镜像服务端形状但不必 1:1 全列）：
+
+```sql
+sync_state(domain TEXT PRIMARY KEY, cursor TEXT, synced_at INTEGER);
+threads(thread_id TEXT PRIMARY KEY, kind, title, archived, last_message_at, updated_at);
+messages(id INTEGER PRIMARY KEY, thread_id, role, parts_json, created_at);  -- append-only
+cards(card_id TEXT PRIMARY KEY, payload_json, run_id, status, updated_at);
+settings(key TEXT PRIMARY KEY, value_json, updated_at);
+outbox(id TEXT PRIMARY KEY, kind, payload_json, dedupe_key TEXT UNIQUE,
+       status, attempt_count, last_error, next_retry_at, created_at);
+messages_fts(...)  -- FTS5, content=messages（本地全文搜索，三端可用）
+```
+
+**同步协议**（后端每域一个端点，WatermelonDB/Replicache 协议形状的精简版）：
+
+```
+GET /api/sync/<domain>?since=<cursor>&limit=500
+→ { "upserts": [...], "tombstones": ["id1", ...], "cursor": "...", "hasMore": false }
+```
+
+- cursor：messages 域用单调 `id`（已有）；可变域用 `(updated_at, id)` 复合游标（同毫秒 tie-break）；bootstrap = since 为空的首拉 + hasMore 翻页；
+- **lazy incomplete model（Slack 教训）**：不全量同步所有消息——threads 列表全量（小）、消息只同步「打开过的 thread + 最近活跃」，历史 gap 用现有 `before` 分页按需 hydrate 后入库；本地模型允许不完整；
+- 实时：chat 域 SSE 帧（已带 lastEventId 游标）直接 ingest 进本地库；其它域先靠「TQ 轮询触发 delta 拉取」，后续在 SSE envelope 上加跨域变更事件（`sync:changed {domain}`，提示客户端拉 delta——**通知拉取分离**，推送只当门铃）；
+- 冲突：server-authoritative，本地库永远可全删重建（这也是 web 端 Safari eviction 的兜底语义）；
+- 写：UI 乐观更新（TQ mutation）→ outbox 入队 → 后台投递（幂等 dedupe_key）→ 服务端回执后以 delta 回流为准。
+
+### 4.3 读路径与 TQ 的关系
+
+TQ 仍是 UI 的数据接口，但 queryFn 的语义从「打网络」变成「读本地库」：同步引擎独立循环（delta + SSE）写库 → 写完按域 invalidate TQ query → UI 刷新。打开 app 的体验序：本地库渲染（0 网络）→ 后台 delta 补差 → SSE 接上实时。Notion 的「SQLite 与 API 赛跑」可作为冷库时的优化（本地空则直接走网络，不等引擎）。
+
+### 4.4 后端改造清单（配合项，均为小改）
+
+1. `pai_chat_threads`、cards、memory 等可变域补 `updated_at`（触发器或应用层写入）+ 建 `(user_id, updated_at, id)` 索引；
+2. 每域加 `/api/sync/<domain>` delta 端点（读 repo 层现成查询，加 since 条件）；
+3. 硬删场景补 tombstone 语义（软删域用 status 变化即 upsert，零改造）；
+4. SSE envelope 增加跨域 `sync:changed` 事件类型（可后置）。
+
+## 5. 分阶段路径（与分层方案 Phase 对齐）
+
+| 阶段 | 内容 | 依赖 | 收益 |
+|---|---|---|---|
+| **Sync-A：TQ persist 止血** | settings / threads 列表 / cards 列表 metadata 用 TQ persister 落各端 KV（web IndexedDB / RN AsyncStorage）。**严格限小数据，消息体禁入**（Claude Desktop 教训） | 分层 Phase 2（TQ 立起来） | 打开 app 不再白屏等 `/settings`；改动极小，先到先得 |
+| **Sync-B：本地库 + chat 域** | Database port 三端 driver（web 可先只做 Electron/RN，web 暂留 Sync-A 形态）；本地 schema + migration runner；messages（id cursor）+ threads（updated_at）delta；SSE ingest 进库；conversation 读路径切本地库 | 分层 Phase 1（core/transport）+ 后端改造 1-2 | **核心体验**：对话秒开、离线可读、弱网不抖 |
+| **Sync-C：全域 + 写路径 + 搜索** | 泛化 outbox（卡片反馈/设置修改走队列）；cards/memory/settings 域接入；FTS5 本地全文搜索；`sync:changed` SSE 门铃 | Sync-B | 全离线读 + 可靠写投递 + 本地搜索（agent app 差异化体验） |
+| **Sync-D（可选观察项）** | web 端升级 sqlite-wasm + 选主；TanStack DB（等 v1）作本地 reactive 查询层 | Sync-B/C 稳定 | web 端对齐 native 体验 |
+
+ambient 现有 outbox/store **不动**——它已经是这个架构在 ambient 域的特化实现；待通用引擎稳定后再评估收编（避免一开始就大一统）。
+
+## 6. 风险清单
+
+1. **web 端 durability 是假的**（Safari ITP 7 天清空、persist() 不豁免）：设计上本地库必须可全删重建（server-authoritative 天然满足）；web 端优先级放最后（Sync-D），先吃 Electron/RN 的稳价值。
+2. **多 tab（web）**：opfs-sahpool 独占，必须 Web Locks 选主 + tab 死亡 failover（Notion 模式）——这是 web driver 复杂度的主要来源，也是把 web 放 Sync-D 的理由。
+3. **写放大/单 blob 反模式**：Sync-A 阶段严守「persist 只盖 metadata」红线。
+4. **协议演进纪律**：delta 端点的 upsert 形状 = API 现有返回形状的子集，避免出现「同一资源两种 shape」；服务端字段演进时本地 schema 加 migration。
+5. **范围蔓延**：引擎只做「缓存 + 增量 + outbox」，不做跨端冲突合并、不做 client-first 写——一旦未来出现真正的客户端协作编辑需求（如笔记类功能），单独评估，不要把本引擎升级成 Linear。
+6. **加密回归**（保留项）：若加密工程恢复，本方案零改动（API 层出明文）；唯一前提是期间不引入任何 WAL 直通方案。
+
+## 7. 结论
+
+业界 convention 明确：**这类产品的同步引擎就是「本地 SQLite + cursor 增量 + outbox + 实时通道补 gap」的自研轻量形态**，且你们已有 resumable SSE、ambient outbox、单调 id 三块核心零件。不引入重型同步框架（解决的是我们没有的冲突问题），不引入新运维件；后端配合补 `updated_at` + delta 端点即可。分四个阶段渐进，Sync-A 立刻可做（解决打开白屏），Sync-B 落地「对话秒开 + 离线可读」的核心体验。

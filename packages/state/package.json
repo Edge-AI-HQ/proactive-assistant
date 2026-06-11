@@ -1,0 +1,26 @@
+{
+  "name": "@pin-ai/state",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "跨端 React hooks 层（web/Electron/RN 共用）：TQ queries、zustand stores、业务编排 hooks、auth glue。禁止 react-dom / capacitor / electron / 浏览器 API（eslint 边界规则强制）。",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "type-check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@pin-ai/core": "*"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "react": "^18.3.1",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.4"
+  }
+}

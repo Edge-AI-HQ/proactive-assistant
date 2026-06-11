@@ -7,11 +7,14 @@
   },
   "workspaces": [
     "proactive-ai-frontend",
-    "capacitor-plugins/*"
+    "capacitor-plugins/*",
+    "packages/*"
   ],
   "scripts": {
     "postinstall": "patch-package",
     "type-check": "npm run type-check --workspace=@pin-ai/proactive-ai-frontend",
+    "lint:packages": "eslint packages",
+    "check:packages": "npm run lint:packages && npm run type-check --workspace=@pin-ai/core --workspace=@pin-ai/state && npm test --workspace=@pin-ai/core --workspace=@pin-ai/state",
     "build": "npm run build --workspace=@pin-ai/proactive-ai-frontend",
     "mobile-sync:ngrok": "node scripts/mobile-sync-ngrok.mjs",
     "litellm:up": "bash ops/litellm/litellm.sh up",
@@ -19,5 +22,9 @@
     "litellm:logs": "bash ops/litellm/litellm.sh logs",
     "litellm:cleanup-local-db": "bash ops/litellm/litellm.sh cleanup-local-db",
     "litellm:verify-db-env": "bash ops/litellm/litellm.sh verify-db-env"
+  },
+  "devDependencies": {
+    "eslint": "^10.4.1",
+    "typescript-eslint": "^8.61.0"
   }
 }

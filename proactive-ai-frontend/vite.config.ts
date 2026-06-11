@@ -62,6 +62,10 @@ export default defineConfig(({ mode }) => {
       dedupe: ["react", "react-dom"],
       alias: {
         "@": path.resolve(__dirname, "src"),
+        // 共用层包源码直引（无 build 步骤，HMR 直通），与 tsconfig paths 对应。
+        // 架构见 research/2026-06-10-frontend-layering.mdx §3.2。
+        "@pin-ai/core": path.resolve(__dirname, "../packages/core/src/index.ts"),
+        "@pin-ai/state": path.resolve(__dirname, "../packages/state/src/index.ts"),
         ...nativePluginAliases,
       },
     },

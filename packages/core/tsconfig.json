@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    // DOM lib 只为 fetch / ReadableStream / TextDecoder / AbortController 的类型；
+    // 浏览器 globals（window/document/localStorage 等）由根 eslint.config.mjs 的
+    // no-restricted-globals 禁止，三端（web/Electron/RN）注入各自实现。
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "types": []
+  },
+  "include": ["src"]
+}

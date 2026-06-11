@@ -1,0 +1,18 @@
+{
+  "name": "@pin-ai/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "纯 TS 共用层：transport(+SSE)、API 域函数、域类型、纯状态机、平台 ports 接口。禁止 react / capacitor / electron / 浏览器 globals（eslint 边界规则强制）。",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "type-check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.4"
+  }
+}
