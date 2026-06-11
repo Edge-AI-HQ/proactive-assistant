@@ -111,6 +111,13 @@ apps/mobile/             # 未来 Expo RN：RN UI + expo adapters
 
 **DOM UI 的复用形式**（web ↔ Electron）：目标是「一套 React DOM UI、两个壳」。具体形式（Electron renderer 直接 import `proactive-ai-frontend` 的根组件 vs 把 DOM UI 提成独立包）是 Electron 立项时的决策，现在不预建。**现在唯一要做的前置**是 §4.5 的组装纪律：平台能力在入口处注入，UI 不内嵌平台分支——做到这一点，两种复用形式都只是壳工程。
 
+**Monorepo 顶层目录规则**（2026-06-11 拍板）：
+
+1. **`packages/` 只放库，不放 app**——core/state 是被 apps 消费的共用层（无入口、不可部署）。UI 组件、路由、平台 adapter 这些 app 级的东西不进 `packages/`，否则共用层被单端污染。
+2. **新 app 一律进 `apps/`**（业界标准 apps/ + packages/ 形态）：Electron → `apps/desktop`、Expo RN → `apps/mobile`。不再在顶层新增平铺的 app 目录。
+3. **`proactive-ai-frontend` 顶层平铺是历史债，现在不搬**。搬成 `apps/web` 只买到命名一致性，代价是 iOS 工程路径（pbxproj / SPM 相对路径 / build-ios 签名链）+ 四个 deploy workflow + Dockerfile/Makefile 全要动——纯审美收益不值这个险。**搬迁挂在 Capacitor 壳退役的时间点**：RN 切换完成时 iOS 工程与 `capacitor-plugins/` 本来就要整体拆除，那时迁目录边际成本接近零（顺势可一并收编 `internal-reward-dashboard` → `apps/`）。
+4. `pinai-agents`（Python/uv）等非 npm 生态项目保持顶层平铺——polyglot monorepo 各语言生态各自组织，不硬塞 npm workspace 目录学。
+
 工程决策：**内部包不打包、源码直引**——vite alias 指到 `packages/*/src`，未来 Metro 走 Expo 官方 monorepo 支持（SDK 52+ 自动处理 workspace），Electron renderer 走 vite 同构。没有 build 步骤、HMR 直通。暂不需要 turborepo/nx：各端构建（vite / electron-builder / EAS）相互独立，没有交叉产物依赖；若将来 CI 时长成为问题再引入，决策点后置。每包独立 `tsc --noEmit` + vitest 进 CI。
 
 ## 4. 关键技术决策与理由
