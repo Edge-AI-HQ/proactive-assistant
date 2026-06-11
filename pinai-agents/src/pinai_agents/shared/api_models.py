@@ -13,7 +13,7 @@ import logging
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -564,6 +564,26 @@ class PlanOutput(_AgentModel):
     )
 
 
+class ReasoningStep(_AgentModel):
+    """One user-visible step of the card's "How I reasoned" trace.
+
+    Written by the card-generator LLM in the same structured call that
+    writes the card; the evaluator audits each detail against sources[]
+    (a step referencing un-cited data is a grounding violation)."""
+
+    label: Literal["observed", "cross_referenced", "pattern_matched", "flagged", "decided"]
+    detail: str = Field(min_length=1, max_length=200)
+
+    @field_validator("label", mode="before")
+    @classmethod
+    def _normalize_label(cls, value: Any) -> Any:
+        # LLM 偶发 "Cross-referenced" / "Pattern matched" 变体;归一化到
+        # 枚举形,避免一个 label 大小写让整张卡验证失败重试。
+        if isinstance(value, str):
+            return value.strip().lower().replace("-", "_").replace(" ", "_")
+        return value
+
+
 class CardAction(_AgentModel):
     label: str = Field(min_length=1, max_length=80)
     type: Literal["confirm", "modify", "snooze", "dismiss"] = "confirm"
@@ -591,6 +611,10 @@ class GeneratedCard(_AgentModel):
     sources: list[str] = Field(
         min_length=1,
         description="Verbatim citations from phase 1 data: 'signal id=..., title=...', 'memory id=..., text=...', 'gmail message id=..., subject=...', 'slack message id=..., text=...', 'gdrive file id=..., name=...', etc. min_length=1 enforces grounding at the schema layer.",
+    )
+    reasoning_steps: list[ReasoningStep] = Field(
+        default_factory=list,
+        description="2-4 user-visible steps narrating how this card came to be, in order: observed -> cross_referenced -> decided. Each detail must reference data already cited in sources[]. Serializes to camelCase reasoningSteps.",
     )
 
 
