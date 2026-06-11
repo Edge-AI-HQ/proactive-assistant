@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib.util
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -677,3 +678,106 @@ def test_run_generator_threads_focus_into_planner_content():
     assert "if focus" in source
     # And the value actually interpolates the caller-supplied focus string.
     assert "{focus}" in source
+
+
+# ── connector intent_key canonicalization + final-slot reservation ──────────
+# The planner/writer/evaluator routinely slugify "connect:slack" into
+# "connect-slack"; every connector code path keys off the "connect:" prefix, so
+# the malformed key silently degrades the card. These assert the boundary
+# normalization and the reserved final slot that keep one connector nudge alive.
+
+
+def test_canonicalize_connector_intent_key_rewrites_dash_forms_only_for_real_connectors():
+    canon = generator_module._canonicalize_connector_intent_key
+    assert canon("connect-slack") == "connect:slack"
+    assert canon("connect_slack") == "connect:slack"
+    assert canon("connect-google-calendar") == "connect:google_calendar"
+    assert canon("connect-gcal") == "connect:google_calendar"
+    assert canon("connect-googledrive") == "connect:google_drive"
+    assert canon("connect:slack") == "connect:slack"  # already canonical → no-op
+    # non-connector keys (and unknown slugs) are left untouched
+    assert canon("connect-the-dots") == "connect-the-dots"
+    assert canon("rsu-vest-june-15-plan") == "rsu-vest-june-15-plan"
+    assert canon(None) is None
+
+
+def test_filter_canonicalizes_dash_connector_keys_in_place():
+    filter_items = generator_module._filter_connector_guidance_plan_items
+    # Slack ACTIVE: a dash-form "connect-slack" must be recognized and dropped —
+    # only possible once it is canonicalized to "connect:slack".
+    items = [
+        PlanItem(
+            intent_key="connect-slack",
+            goal_basket="work",
+            decision="Connect Slack.",
+            why_now_trigger="Slack context would help.",
+        ),
+        PlanItem(
+            intent_key="regular-work-card",
+            goal_basket="work",
+            decision="Review the real work item.",
+            why_now_trigger="A real signal changed today.",
+        ),
+    ]
+    all_active = {
+        "connections_summary": [
+            {"toolkit": s, "status": "ACTIVE"}
+            for s in ("gmail", "google_calendar", "slack", "github", "google_drive")
+        ],
+    }
+    assert [i.intent_key for i in filter_items(items, compact_phase1=all_active)] == [
+        "regular-work-card",
+    ]
+    # When kept (slack NOT active), the surviving plan item carries the
+    # canonical key so the downstream writer/frontend recognize it.
+    kept = filter_items(
+        [
+            PlanItem(
+                intent_key="connect-slack",
+                goal_basket="work",
+                decision="Connect Slack.",
+                why_now_trigger="Slack context would help.",
+            )
+        ],
+        compact_phase1={"connections_summary": [{"toolkit": "gmail", "status": "ACTIVE"}]},
+    )
+    assert [i.intent_key for i in kept] == ["connect:slack"]
+
+
+def test_ensure_connector_card_present_reserves_a_slot():
+    ensure = generator_module._ensure_connector_card_present
+    content = [SimpleNamespace(intent_key=f"work-{i}") for i in range(3)]
+    connector = SimpleNamespace(intent_key="connect:slack")
+    evals = [
+        SimpleNamespace(intent_key="work-0", pass_=True, overall=8.8),
+        SimpleNamespace(intent_key="work-1", pass_=True, overall=8.6),
+        SimpleNamespace(intent_key="work-2", pass_=True, overall=8.4),
+        SimpleNamespace(intent_key="connect:slack", pass_=True, overall=8.3),
+    ]
+    # connector was out-ranked and cut from the top-3
+    result = ensure(
+        ranked=list(content), all_cards=content + [connector], evaluations=evals, limit=3
+    )
+    keys = [c.intent_key for c in result]
+    assert "connect:slack" in keys
+    assert len(result) == 3
+    assert "work-2" not in keys  # lowest-ranked content card swapped out
+
+
+def test_ensure_connector_card_present_noops():
+    ensure = generator_module._ensure_connector_card_present
+    # already present → returns the same list untouched
+    connector = SimpleNamespace(intent_key="connect:slack")
+    ranked = [connector, SimpleNamespace(intent_key="work-0")]
+    evals = [SimpleNamespace(intent_key="connect:slack", pass_=True, overall=8.3)]
+    assert ensure(ranked=ranked, all_cards=ranked, evaluations=evals, limit=2) is ranked
+    # connector failed eval → not injected
+    content = [SimpleNamespace(intent_key="work-0"), SimpleNamespace(intent_key="work-1")]
+    failed = [SimpleNamespace(intent_key="connect:slack", pass_=False, overall=4.0)]
+    result = ensure(
+        ranked=content,
+        all_cards=content + [SimpleNamespace(intent_key="connect:slack")],
+        evaluations=failed,
+        limit=2,
+    )
+    assert [c.intent_key for c in result] == ["work-0", "work-1"]

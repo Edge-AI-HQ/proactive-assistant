@@ -912,6 +912,65 @@ def _connector_intent_key(intent_key: str | None) -> str | None:
     return f"{_CONNECT_INTENT_PREFIX}{slug}" if slug else None
 
 
+# Connector slugs the planner is allowed to nudge (mirrors the valid-slug list
+# in _PLANNER_PROMPT). Only these get rewritten to the canonical "connect:"
+# form below — an arbitrary "connect-the-dots" content card is left alone. The
+# high-value five are reused from _HIGH_VALUE_CONNECTOR_SLUGS so the two in-code
+# lists can't drift; only the non-high-value extras are spelled out here. (The
+# prompt copies stay separate prose — keep all in sync when adding a connector.)
+_VALID_CONNECTOR_SLUGS: frozenset[str] = frozenset(_HIGH_VALUE_CONNECTOR_SLUGS) | {
+    "calendly",
+    "linkedin",
+    "stripe",
+    "youtube",
+}
+
+# The planner/writer/evaluator are told to key connector cards as
+# "connect:<slug>", but the LLM routinely slugifies the WHOLE intent_key (every
+# other intent_key in the prompts is a dash-slug) and emits "connect-slack" /
+# "connect-google-calendar" / "connect_slack" instead. Every connector code
+# path keys off the literal "connect:" prefix — this module's
+# filter/gap-fill (_CONNECT_INTENT_PREFIX) and the frontend OAuth short-circuit
+# (connectorSlugFromIntentKey) — so a non-colon key silently degrades the card
+# into an ordinary one: it is neither capped/protected here nor rendered as a
+# Connect/OAuth card on the client. Canonicalize the fuzzy LLM output back to
+# "connect:<slug>" at each stage boundary.
+_CONNECTOR_KEY_RE = re.compile(r"^connect[:_-](.+)$")
+
+
+def _canonicalize_connector_intent_key(intent_key: str | None) -> str | None:
+    """Rewrite a connector card's intent_key to the canonical "connect:<slug>".
+
+    Accepts the colon form plus the dash/underscore forms the LLM tends to emit
+    ("connect-slack", "connect_slack", "connect-google-calendar"). Only rewrites
+    when the slug resolves to a real connector (_VALID_CONNECTOR_SLUGS); every
+    other key — including non-connector "connect-…" content keys — is returned
+    unchanged. ``None`` in, ``None`` out.
+    """
+    if not intent_key:
+        return intent_key
+    match = _CONNECTOR_KEY_RE.match(intent_key.strip().lower())
+    if not match:
+        return intent_key
+    slug = _normalize_connector_prompt_slug(match.group(1).replace("-", "_"))
+    if slug in _VALID_CONNECTOR_SLUGS:
+        return f"{_CONNECT_INTENT_PREFIX}{slug}"
+    return intent_key
+
+
+def _canonicalize_connector_keys_in_place(items: list[Any]) -> None:
+    """Normalize the connector intent_key of each plan item / card / evaluation
+    in place (see _canonicalize_connector_intent_key). Used at every generator
+    stage boundary so the planner's fuzzy "connect-…" keys never reach the
+    connector filter, the final card, or the frontend in a non-canonical form.
+    """
+    for item in items:
+        raw = getattr(item, "intent_key", None)
+        canonical = _canonicalize_connector_intent_key(raw)
+        if canonical != raw:
+            item.intent_key = canonical
+
+
 def _feedback_outcome(row: dict[str, Any]) -> str:
     return (
         str(
@@ -933,6 +992,11 @@ def _filter_connector_guidance_plan_items(
     existing_intent_keys: list[str] | None = None,
 ) -> list[Any]:
     """Enforce connector-card product limits outside the LLM prompt."""
+    # Canonicalize "connect-slack" -> "connect:slack" first, otherwise the
+    # cap/suppress logic below (which keys off the "connect:" prefix) is blind
+    # to the connector cards the planner just produced. Mutates in place so the
+    # downstream card writer sees the canonical key too.
+    _canonicalize_connector_keys_in_place(items)
     active_toolkits: set[str] = set()
     for conn in compact_phase1.get("connections_summary") or []:
         if not isinstance(conn, dict):
@@ -1375,6 +1439,56 @@ def _apply_final_selection(
     return selected
 
 
+def _ensure_connector_card_present(
+    *,
+    ranked: list[Any],
+    all_cards: list[Any],
+    evaluations: list[Any],
+    limit: int,
+) -> list[Any]:
+    """Guarantee one connector nudge survives final ranking when the planner
+    produced a passing one.
+
+    The connector-guidance design surfaces one connect card per run while the
+    user is light on high-value connectors, but a single low-urgency nudge is
+    reliably out-ranked by content cards and cut from the top-``limit`` (it
+    competes purely on eval score). Reserve a slot for it: drop the
+    lowest-ranked content card and append the best passing connector card.
+
+    No-op when a connector card is already in ``ranked``, when none passed eval,
+    or when there is no content card to swap out.
+    """
+    if any(_connector_slug_from_intent_key(getattr(c, "intent_key", "")) for c in ranked):
+        return ranked
+    eval_by_intent = _evaluation_by_intent(evaluations)
+    candidates = [
+        c
+        for c in all_cards
+        if _connector_slug_from_intent_key(getattr(c, "intent_key", ""))
+        and bool(getattr(eval_by_intent.get(str(getattr(c, "intent_key", ""))), "pass_", False))
+    ]
+    if not candidates:
+        return ranked
+    best = max(
+        candidates,
+        key=lambda c: float(
+            getattr(eval_by_intent.get(str(getattr(c, "intent_key", ""))), "overall", 0.0) or 0.0
+        ),
+    )
+    result = list(ranked)
+    if len(result) >= limit:
+        # Drop the lowest-ranked content card (ranked is best-first) to make
+        # room without exceeding the card budget.
+        for i in range(len(result) - 1, -1, -1):
+            if not _connector_slug_from_intent_key(getattr(result[i], "intent_key", "")):
+                result.pop(i)
+                break
+        else:
+            return ranked  # nothing but connector cards — leave as-is
+    result.append(best)
+    return result[:limit]
+
+
 async def _invoke_stage(
     agent: Any,
     *,
@@ -1662,6 +1776,11 @@ async def run_generator(
                                 )
                                 raise ValueError(msg)
                             cards = list(cards_list.cards[:1])
+                            # The writer re-emits the intent_key and re-slugifies
+                            # "connect:slack" -> "connect-slack" again; canonicalize
+                            # before it becomes the source_bundles key (and the
+                            # evaluator/final-card/frontend join key).
+                            _canonicalize_connector_keys_in_place(cards)
                             for card in cards:
                                 source_bundles[getattr(card, "intent_key", f"card-{idx}")] = bundle
                             return cards
@@ -1751,7 +1870,11 @@ async def run_generator(
                                     f"got {type(eval_report).__name__}. run_id={run_id}."
                                 )
                                 raise ValueError(msg)
-                            return list(eval_report.evaluations)
+                            evals = list(eval_report.evaluations)
+                            # Keep the eval's intent_key canonical so it joins
+                            # back to the card in _rank_cards / final selection.
+                            _canonicalize_connector_keys_in_place(evals)
+                            return evals
 
                     async def _eval_cards(items: list[Any], *, stage_prefix: str) -> list[Any]:
                         eval_results = await asyncio.gather(
@@ -1939,6 +2062,12 @@ async def run_generator(
                                     run_id,
                                     e,
                                 )
+                        ranked_cards = _ensure_connector_card_present(
+                            ranked=ranked_cards,
+                            all_cards=generated_cards,
+                            evaluations=evaluations,
+                            limit=target_cards,
+                        )
                         result = {
                             "structured_response": GeneratorOutput(
                                 reasoning=(
