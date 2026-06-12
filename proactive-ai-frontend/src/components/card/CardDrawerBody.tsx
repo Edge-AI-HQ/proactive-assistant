@@ -1,7 +1,9 @@
 import { useState, type JSX } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronDown, Zap, FileText, AlertTriangle, Loader2 } from "lucide-react";
+import { Brain, ChevronDown, Zap, FileText, AlertTriangle, Loader2 } from "lucide-react";
 import { brandSvg, detectToolIcon, ArtifactItem, matchSideEffect, type Artifact } from "@/components/chat/ChatDetailView";
+import { reasoningStepLabel, sourceAppDisplay } from "@/components/card/source-app-display";
+import type { ReasoningStep } from "@/types/intent-card";
 import type {
   DangerousAction,
   ExecuteArtifact,
@@ -20,63 +22,83 @@ export interface DrawerDetailCard {
   /** Generator-side rationale for why this card surfaced now. Optional
    *  because the legacy Lovable mock cards don't carry it. */
   whyNow?: string;
+  /** Structured source app slugs (from IntentCard.sourceApps). When absent
+   *  (legacy mock cards) the Sources section is hidden. */
+  sourceApps?: string[];
+  reasoningSteps?: ReasoningStep[];
   detail?: {
     executionPlan: { text: string; tool: string }[];
     artifacts?: Artifact[];
   };
 }
 
-/* ── Source label → brand icon mapping ── */
-function sourceToIcon(label: string) {
-  const l = label.toLowerCase();
-  if (l.includes("gmail") || l.includes("email")) return { brand: "gmail" as const, label: "Gmail" };
-  if (l.includes("calendar") || l.includes("gcal")) return { brand: "gcal" as const, label: "Calendar" };
-  if (l.includes("slack")) return { brand: "slack" as const, label: "Slack" };
-  if (l.includes("notion")) return { brand: "notion" as const, label: "Notion" };
-  if (l.includes("drive")) return { brand: "gdrive" as const, label: "Drive" };
-  if (l.includes("doc")) return { brand: "gdocs" as const, label: "Docs" };
-  if (l.includes("sheet")) return { brand: "gsheets" as const, label: "Sheets" };
-  if (l.includes("linear")) return { brand: "linear" as const, label: "Linear" };
-  if (l.includes("brex")) return { brand: null, label: "Brex" };
-  if (l.includes("whoop")) return { brand: null, label: "Whoop" };
-  if (l.includes("apple health")) return { brand: null, label: "Apple Health" };
-  if (l.includes("web")) return { brand: null, label: "Web" };
-  return { brand: null, label: label.split("·")[0].trim().split("—")[0].trim() };
-}
-
-export function parseSources(line2: string): string[] {
-  const cleaned = line2.replace(/^sources:\s*/i, "");
-  return Array.from(new Set(cleaned.split(/[·,]/).map((s) => s.trim()).filter(Boolean)));
-}
-
-/* "How generated" — short reasoning chips */
-function howGenerated(card: DrawerDetailCard): string[] {
-  const sources = parseSources(card.line2);
-  const reasons: string[] = [];
-  if (card.tag === "Urgent") reasons.push("Urgent flag");
-  if (card.tag === "Alert") reasons.push("Time-sensitive");
-  if (sources.some((s) => /gmail|email/i.test(s))) reasons.push("Email signal");
-  if (sources.some((s) => /slack/i.test(s))) reasons.push("Slack mention");
-  if (sources.some((s) => /calendar|gcal/i.test(s))) reasons.push("Upcoming event");
-  if (sources.some((s) => /notion/i.test(s))) reasons.push("Notion context");
-  if (sources.some((s) => /web/i.test(s))) reasons.push("Web trend");
-  if (sources.some((s) => /whoop|apple health/i.test(s))) reasons.push("Health data");
-  if (card.tag?.includes("Signal")) reasons.push("Pattern match");
-  return Array.from(new Set(reasons)).slice(0, 4);
-}
-
-function SourcePill({ source }: { source: string }) {
-  const info = sourceToIcon(source);
+function SourcePill({ slug }: { slug: string }) {
+  const info = sourceAppDisplay(slug);
   return (
     <div className="inline-flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-full bg-foreground/[0.05] border border-foreground/[0.06]">
       <span className="w-5 h-5 rounded-md bg-white flex items-center justify-center overflow-hidden shrink-0">
         {info.brand ? (
           <span className="w-3.5 h-3.5">{brandSvg(info.brand)}</span>
+        ) : info.Icon ? (
+          <info.Icon size={12} className="text-foreground/70" />
         ) : (
           <span className="text-[9px] font-bold text-foreground/70">{info.label.slice(0, 1)}</span>
         )}
       </span>
       <span className="text-[12px] font-medium text-foreground/70">{info.label}</span>
+    </div>
+  );
+}
+
+/* Collapsible "How I reasoned" — LLM-written reasoning steps, default collapsed */
+export function HowGeneratedSection({ steps }: { steps: ReasoningStep[] }) {
+  const [open, setOpen] = useState(false);
+  if (steps.length === 0) return null;
+  return (
+    <div className="mb-1 rounded-2xl border border-foreground/10 overflow-hidden bg-foreground/[0.02]">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-3.5 py-2.5"
+      >
+        <div className="flex items-center gap-1.5">
+          <Brain size={13} strokeWidth={2.2} className="text-foreground/55" />
+          <span className="text-[11px] font-bold uppercase tracking-wider text-foreground/55">
+            How I reasoned
+          </span>
+          <span className="text-[11px] font-medium text-foreground/40">· {steps.length} steps</span>
+        </div>
+        <ChevronDown
+          size={16}
+          className={`text-foreground/40 transition-transform ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            <ol className="px-3.5 pb-3 pt-0.5 flex flex-col gap-2">
+              {steps.map((s, i) => (
+                <li key={i} className="flex items-start gap-2.5">
+                  <span className="shrink-0 mt-[1px] w-4 h-4 rounded-full bg-foreground/8 text-[10px] font-bold text-foreground/55 flex items-center justify-center">
+                    {i + 1}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[10px] uppercase tracking-wide font-semibold text-foreground/45 mb-0.5">
+                      {reasoningStepLabel(s.label)}
+                    </div>
+                    <p className="text-[12.5px] text-foreground/75 leading-snug">{s.detail}</p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -299,23 +321,11 @@ export function DrawerDetailBody({
   const [planOpen, setPlanOpen] = useState(true);
   const [draftsOpen, setDraftsOpen] = useState(true);
   const [dangerousOpen, setDangerousOpen] = useState(true);
-  const sources = parseSources(card.line2);
-  const reasons = howGenerated(card);
+  const sources = card.sourceApps ?? [];
 
   // Status banner — surface preparing / resuming / error / cancelled so the
   // user understands why the buttons may not match the prior shape.
   const statusBanner = renderStatusBanner(runSnapshot ?? null, !!cached);
-
-  // Join reasons into a single sentence
-  const reasonSentence = (() => {
-    if (reasons.length === 0) return null;
-    const lower = reasons.map((r) => r.toLowerCase());
-    let body: string;
-    if (lower.length === 1) body = lower[0];
-    else if (lower.length === 2) body = `${lower[0]} and ${lower[1]}`;
-    else body = `${lower.slice(0, -1).join(", ")}, and ${lower[lower.length - 1]}`;
-    return `Generated from ${body}.`;
-  })();
 
   const whyNowText = card.whyNow?.trim();
 
@@ -505,18 +515,13 @@ export function DrawerDetailBody({
         <div className="mb-3">
           <div className="text-[11px] font-bold text-foreground/55 uppercase tracking-wider mb-1.5">Sources</div>
           <div className="flex flex-wrap gap-1.5">
-            {sources.map((s, i) => <SourcePill key={i} source={s} />)}
+            {sources.map((s) => <SourcePill key={s} slug={s} />)}
           </div>
         </div>
       )}
 
-      {/* How generated — last */}
-      {reasonSentence && (
-        <div className="mb-1">
-          <div className="text-[11px] font-bold text-foreground/55 uppercase tracking-wider mb-1">How generated</div>
-          <p className="text-[12.5px] text-foreground/65 leading-snug">{reasonSentence}</p>
-        </div>
-      )}
+      {/* How I reasoned — collapsible LLM reasoning trace */}
+      <HowGeneratedSection steps={card.reasoningSteps ?? []} />
     </>
   );
 }
