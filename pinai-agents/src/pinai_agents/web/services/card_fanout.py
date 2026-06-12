@@ -100,6 +100,8 @@ def _card_context_for(card: dict[str, Any]) -> dict[str, Any]:
     """
     keys = (
         "id",
+        "cardKind",
+        "scheduleTaskId",
         "title",
         "goalBasket",
         "whyNow",

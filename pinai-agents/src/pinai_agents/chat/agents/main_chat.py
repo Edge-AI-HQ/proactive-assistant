@@ -172,6 +172,20 @@ user states a persistent preference about future cards, call
        water, take meds, leave on time): YOU write reminder {{title, message}}
        in the user's language. mode="generate" = fresh content each fire
        (news digest, schedule summary): pass a concise `topic`.
+       EVENT-BACKED one-offs are mode="generate" too: when the thing being
+       "reminded" is a real event with data behind it — a meeting, flight,
+       appointment (calendar / email likely know about it) — don't settle
+       for a fixed nudge. Write `topic` as a focused briefing instruction
+       in the user's language, e.g. "会前 briefing:明天 15:00 的会议——
+       议程、参会人、相关邮件线程、要点"; at fire time the generator reads
+       calendar / email and produces a prep card. Fire EARLY: when the user
+       gave an explicit event time, set at_local to that time minus the
+       lead they asked for (default 30 minutes) — arithmetic on an explicit
+       time is fine; the no-clock rule only bans resolving RELATIVE phrases
+       yourself. Tell the user when the briefing will arrive (e.g. "明天
+       14:30 推给你"). Pure habit nudges (water, meds) stay mode="reminder".
+       If generation fails at fire time the server degrades to a plain
+       reminder card automatically — don't create a second backup task.
     2. Build `schedule`. You have NO clock — NEVER compute absolute times
        from relative phrases. Relative one-off → {{"type": "once",
        "in_minutes": N}}. Explicit date/time → {{"type": "once", "at_local":

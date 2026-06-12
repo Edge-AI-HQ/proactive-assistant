@@ -258,10 +258,103 @@ async def test_reminder_card_dispatch_writes_card_and_notifies(pool, user_ids, m
     card = run["final_cards"][0]
     assert card["title"] == "喝水"
     assert card["sourceKind"] == "scheduled" and card["sourceLabel"] == "喝水"
+    # Explicit type + owning-task ref: the FE switches the drawer on cardKind
+    # (no Approve for reminders) and the chat agent edits the schedule via
+    # scheduleTaskId — both stamped at birth, never inferred.
+    assert card["cardKind"] == "reminder"
+    assert card["scheduleTaskId"] == "sched.once.remtest"
     assert task_run is not None and task_run["status"] == "success"
     assert pushed == [
         {"user_id": user_a, "title": "喝水", "message": "该喝水了", "task_id": "sched.once.remtest"}
     ]
+
+
+@pytest.mark.asyncio
+async def test_generator_scheduled_final_failure_fires_fallback_reminder(
+    pool, user_ids, monkeypatch
+):
+    """Event-briefing once task: when the generator burns its LAST retry the
+    dispatcher degrades to the payload's fallback_reminder (zero-LLM card +
+    ungated push) — and does NOT fire it while retries remain."""
+    user_a, _ = user_ids
+    pushed: list[dict] = []
+
+    async def fake_notify(pool_, *, user_id, title, message, task_id):
+        pushed.append({"user_id": user_id, "title": title, "task_id": task_id})
+        return 1
+
+    from pinai_agents.web.services import push_notifier
+
+    monkeypatch.setattr(push_notifier, "notify_reminder", fake_notify)
+
+    async def boom(self, task, run_id):
+        msg = "generator exploded"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(DefaultDispatcher, "_handle_kind", boom)
+
+    payload = {
+        "confirmed_brief": {"title": "会前 briefing", "topic": "明天 15:00 的会议"},
+        "fallback_reminder": {"title": "开会提醒", "message": "明天 3 点开会"},
+        "schedule_label": "一次 · 06-12 14:30",
+        "trigger": "scheduled",
+    }
+    async with user_scoped_tx(pool, user_a) as conn:
+        repo = ScheduledTasksRepository(user_a, conn)
+        fresh = await repo.upsert(
+            id="sched.once.brief.fresh",
+            kind="generator.scheduled",
+            trigger_kind="once",
+            next_run_at=datetime.now(UTC) + timedelta(hours=1),
+            timezone="Asia/Shanghai",
+            payload=payload,
+        )
+        final = await repo.upsert(
+            id="sched.once.brief.final",
+            kind="generator.scheduled",
+            trigger_kind="once",
+            next_run_at=datetime.now(UTC) + timedelta(hours=1),
+            timezone="Asia/Shanghai",
+            payload=payload,
+        )
+        # `final` is one failure away from archiving (the decision is
+        # SQL-side on the row's attempts/max_attempts).
+        await conn.execute(
+            "UPDATE pai_scheduled_tasks SET attempts = max_attempts - 1 "
+            "WHERE user_id = %s AND id = %s",
+            (user_a, final.id),
+        )
+    fresh.last_run_at = datetime.now(UTC)
+    final.last_run_at = datetime.now(UTC)
+
+    dispatcher = DefaultDispatcher(pool=pool, lease_seconds=60, owner="test")
+
+    # Retries remain → no fallback card, no push.
+    await dispatcher.dispatch(fresh)
+    async with service_tx(pool) as conn:
+        cur = await conn.execute(
+            "SELECT 1 FROM pai_pipeline_runs "
+            "WHERE user_id = %s AND id LIKE 'sched.once.brief.fresh.%%.fb'",
+            (user_a,),
+        )
+        assert await cur.fetchone() is None
+    assert pushed == []
+
+    # Last retry burned → fallback reminder card lands + push fires.
+    await dispatcher.dispatch(final)
+    async with service_tx(pool) as conn:
+        cur = await conn.execute(
+            "SELECT trigger, final_cards FROM pai_pipeline_runs "
+            "WHERE user_id = %s AND id LIKE 'sched.once.brief.final.%%.fb'",
+            (user_a,),
+        )
+        run = await cur.fetchone()
+    assert run is not None and run["trigger"] == "reminder"
+    card = run["final_cards"][0]
+    assert card["title"] == "开会提醒"
+    assert card["cardKind"] == "reminder"
+    assert card["scheduleTaskId"] == "sched.once.brief.final"
+    assert pushed == [{"user_id": user_a, "title": "开会提醒", "task_id": "sched.once.brief.final"}]
 
 
 @pytest.mark.asyncio
