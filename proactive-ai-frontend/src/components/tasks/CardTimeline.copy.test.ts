@@ -28,4 +28,15 @@ describe("ChatTimeline minimalist copy", () => {
     expect(source).toContain("useCardState()");
     expect(source).not.toContain("useCards(");
   });
+
+  test("title wraps to two lines and raw citations never reach the subtitle", () => {
+    const source = readFileSync(join(__dirname, "..", "tasks", "CardTimeline.tsx"), "utf8");
+
+    expect(source).toContain("line-clamp-2");
+    // 标题行不再单行截断
+    expect(source).not.toMatch(/leading-snug truncate flex-1/);
+    // 副标题 fallback 不再裸 join 审计引文
+    expect(source).not.toContain("card.sources.join");
+    expect(source).toContain("sourceAppDisplay");
+  });
 });
