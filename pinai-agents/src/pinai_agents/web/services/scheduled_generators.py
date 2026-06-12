@@ -20,6 +20,7 @@ from typing import Any
 from psycopg_pool import AsyncConnectionPool
 
 from ...config import get_web_settings
+from ..db.repositories.profile import ProfileRepository
 from ..db.repositories.scheduled_tasks import ScheduledTaskRow, ScheduledTasksRepository
 from ..db.rls import user_scoped_tx
 from ..scheduler.cron import next_fire
@@ -109,6 +110,58 @@ def _resolve_and_guard(
     return resolved
 
 
+async def _follow_device_timezone(pool: AsyncConnectionPool, *, user_id: int, supplied: str) -> str:
+    """永远跟手机:profile.timezone(由前端 X-Pin-Client-Timezone 头跟随设备,
+    见 routes/ui/profile.py)是时区的事实源;agent 传入的时区只在用户还没有
+    档案时兜底。服务端把这个事实拿回来,任务时区不再依赖 LLM 选对(实测它在
+    没有来源时会按用户语言猜,中文 → Asia/Shanghai)。"""
+    async with user_scoped_tx(pool, user_id) as conn:
+        profile = await ProfileRepository(user_id, conn).get_profile()
+    stored = (profile.timezone or "").strip() if profile else ""
+    return stored or supplied
+
+
+async def retime_user_cron_tasks(conn: Any, *, user_id: int, timezone: str) -> int:
+    """设备时区变了 → 周期任务跟着走:cron 任务(每天/每周 X 点)改写 timezone
+    并按新时区重算 next_run_at("每天 9 点"永远是用户当地 9 点);interval
+    任务只同步 timezone 字段(触发间隔与时区无关);once 任务不动(创建时已
+    定格为绝对时刻)。paused 任务也改写:retime 是边沿触发(只在漂移那一次
+    跑),暂停中错过就永远错过——resume 用行上的 timezone 重算 next_fire,
+    留旧值会让"每天 9 点"恢复成旧时区的 9 点(paused 行的 next_run_at
+    无所谓:tick loop 不捡、resume 重算)。在调用方的 user_scoped_tx 上
+    执行,返回改写行数。"""
+    now = datetime.now(UTC)
+    cur = await conn.execute(
+        """
+        SELECT id, cron_expr FROM pai_scheduled_tasks
+        WHERE user_id = %s AND status IN ('active', 'paused')
+          AND trigger_kind = 'schedule' AND timezone <> %s
+        """,
+        (user_id, timezone),
+    )
+    rows = await cur.fetchall()
+    for row in rows:
+        if row["cron_expr"]:
+            nxt = next_fire(
+                trigger_kind="schedule",
+                cron_expr=row["cron_expr"],
+                interval_seconds=None,
+                timezone=timezone,
+                after=now,
+            )
+            await conn.execute(
+                "UPDATE pai_scheduled_tasks SET timezone = %s, next_run_at = %s "
+                "WHERE user_id = %s AND id = %s",
+                (timezone, nxt, user_id, row["id"]),
+            )
+        else:
+            await conn.execute(
+                "UPDATE pai_scheduled_tasks SET timezone = %s WHERE user_id = %s AND id = %s",
+                (timezone, user_id, row["id"]),
+            )
+    return len(rows)
+
+
 async def _guard_max_active(repo: ScheduledTasksRepository) -> None:
     settings = get_web_settings()
     count = await repo.count_by_kinds(kinds=USER_TASK_KINDS)
@@ -134,6 +187,7 @@ async def preview_scheduled_generator(
 ) -> dict[str, Any]:
     if not original_request.strip():
         raise ScheduledGeneratorValidationError("original_request is required")
+    timezone = await _follow_device_timezone(pool, user_id=user_id, supplied=timezone)
     resolved = _resolve_and_guard(
         schedule=schedule, timezone=timezone, mode=mode, original_request=original_request
     )
@@ -223,6 +277,7 @@ async def create_scheduled_generator(
     schedule_norm = _normalize_payload_keys(schedule)
     if str(schedule_norm.get("type") or "") == "once":
         raise ScheduledGeneratorValidationError("use the once endpoint for one-off tasks")
+    timezone = await _follow_device_timezone(pool, user_id=user_id, supplied=timezone)
     resolved = _resolve_and_guard(
         schedule=schedule, timezone=timezone, mode=mode, original_request=original_request
     )
@@ -347,6 +402,7 @@ async def create_once_scheduled_task(
 ) -> ScheduledTaskRow:
     if not original_request.strip():
         raise ScheduledGeneratorValidationError("original_request is required")
+    timezone = await _follow_device_timezone(pool, user_id=user_id, supplied=timezone)
     resolved = _resolve_and_guard(
         schedule=schedule, timezone=timezone, mode=mode, original_request=original_request
     )
@@ -381,6 +437,14 @@ async def create_once_scheduled_task(
         payload["output_language"] = _output_language_for(original_request)
         payload["trigger"] = "scheduled"
         name = str(payload["confirmed_brief"]["title"])
+        # Once-shot generate = usually an event briefing (meeting / flight).
+        # Carry a zero-LLM fallback nudge: if the generator burns all its
+        # retries at fire time, the dispatcher degrades to a plain reminder
+        # card so the user is still pinged about the event itself.
+        payload["fallback_reminder"] = {
+            "title": _title_for_topic(topic_clean),
+            "message": original_request.strip(),
+        }
     async with user_scoped_tx(pool, user_id) as conn:
         repo = ScheduledTasksRepository(user_id, conn)
         await _guard_max_active(repo)

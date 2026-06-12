@@ -55,6 +55,19 @@ def test_main_chat_prompt_routes_one_off_and_recurring():
     assert "requiresconfirmation" in lower
 
 
+def test_main_chat_prompt_routes_event_backed_reminders_to_generate():
+    """开会/航班这类有数据可读的一次性提醒应分类成 mode=generate(到点生成
+    会前 briefing 卡),并提前量触发;纯习惯 nudge 留在 mode=reminder。"""
+    prompt = _INSTRUCTIONS
+    lower = prompt.lower()
+    assert "event-backed" in lower
+    assert "briefing" in lower
+    # 提前量规则:对显式事件时间做减法是允许的(no-clock 只禁相对短语)。
+    assert "minus the" in lower and "30 minutes" in lower
+    # 失败兜底是服务端的事,agent 不要建第二个备份任务。
+    assert "degrades to a plain" in lower
+
+
 def test_create_once_tool_registered_and_not_hitl():
     tool_names = {tool.name for tool in ALL_TOOLS}
     assert "scheduled_generator_create_once" in tool_names

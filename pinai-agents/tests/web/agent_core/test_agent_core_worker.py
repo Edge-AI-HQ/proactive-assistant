@@ -6,15 +6,20 @@ cases (plan §十六) that live in plain functions:
   * decision matching by interrupt_id + source.
   * _decisions_from — approve / reject(+message) / safe default.
   * _pick_trigger — source priority on a merged batch.
+  * _publish_terminal_frames — failure/cancel terminal frames to the FrameBus.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
+from pinai_agents.web.agent_core.framebus import Frame, publish_terminal_frames
 from pinai_agents.web.agent_core.mailbox import Message
 from pinai_agents.web.agent_core.runs import Run
 from pinai_agents.web.agent_core.worker import (
+    AgentRunWorker,
     InputRow,
     _decisions_from,
     _find_decision_message,
@@ -132,3 +137,117 @@ def test_input_rows_split_by_source_and_carry_client_msg_id():
         InputRow("heartbeat", "[heartbeat] 10:00", None),
         InputRow("user", "legacy send", None),
     ]
+
+
+# ── publish_terminal_frames (framebus 共享 helper：worker 终止路径 + service.cancel) ──
+
+
+class _FakeFrameBus:
+    def __init__(self, *, fail_types: set[str] | None = None) -> None:
+        self.published: list[tuple[str, Frame]] = []
+        self._fail_types = fail_types or set()
+
+    async def publish(self, session_id: str, frame: Frame) -> None:
+        if "*" in self._fail_types or frame.get("type") in self._fail_types:
+            msg = "redis down"
+            raise RuntimeError(msg)
+        self.published.append((session_id, frame))
+
+
+def _worker_with(framebus: _FakeFrameBus) -> AgentRunWorker:
+    # The helper only touches self._framebus; the other deps are never
+    # dereferenced in these unit tests (no DB / bus / chat client).
+    return AgentRunWorker(pool=None, framebus=framebus, bus=None, chat_client=None)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_publish_terminal_frames_error_then_done():
+    bus = _FakeFrameBus()
+    await publish_terminal_frames(bus, "card-thread-x", "run-1", error="boom")
+    assert [(s, f["type"]) for s, f in bus.published] == [
+        ("card-thread-x", "chat:error"),
+        ("card-thread-x", "chat:done"),
+    ]
+    err, done = (f for _, f in bus.published)
+    assert err["data"] == {"error": "boom"}
+    # traceId = run_id on every frame — the FE correlates the turn by it.
+    assert err["traceId"] == "run-1" and done["traceId"] == "run-1"
+
+
+@pytest.mark.asyncio
+async def test_publish_terminal_frames_cancel_emits_done_only():
+    bus = _FakeFrameBus()
+    await publish_terminal_frames(bus, "card-thread-x", "run-2")
+    assert [(s, f["type"]) for s, f in bus.published] == [("card-thread-x", "chat:done")]
+
+
+@pytest.mark.asyncio
+async def test_publish_terminal_frames_swallows_publish_failure():
+    # Frames are best-effort UX on top of already-committed terminal DB state;
+    # a Redis blip must not propagate into the worker's failure handling.
+    await publish_terminal_frames(
+        _FakeFrameBus(fail_types={"*"}), "card-thread-x", "run-3", error="boom"
+    )
+
+
+@pytest.mark.asyncio
+async def test_publish_terminal_frames_done_survives_error_publish_failure():
+    # chat:done is what stops the client spinner — a failed chat:error publish
+    # must not abort it.
+    bus = _FakeFrameBus(fail_types={"chat:error"})
+    await publish_terminal_frames(bus, "card-thread-x", "run-4", error="boom")
+    assert [(s, f["type"]) for s, f in bus.published] == [("card-thread-x", "chat:done")]
+
+
+# ── _relay_frames in-stream chat:error detection ───────────────────────
+
+
+async def _frames(*frames: Frame):
+    for f in frames:
+        yield f
+
+
+@pytest.mark.asyncio
+async def test_relay_frames_surfaces_in_stream_chat_error():
+    # chat's SSE layer swallows agent exceptions into chat:error + a finally
+    # chat:done — the stream ends 'done' but the run must NOT land succeeded
+    # (it's the /cards runStatus truth). _relay_frames reports the error; the
+    # finalize path records the run as failed.
+    bus = _FakeFrameBus()
+    _, outcome, stream_error = await _worker_with(bus)._relay_frames(
+        session_id="card-thread-x",
+        user_id=1,
+        owner="w1",
+        run_id="run-1",
+        frames=_frames(
+            {"type": "chat:thinking", "ts": 1, "traceId": "run-1", "data": {}},
+            {
+                "type": "chat:error",
+                "ts": 2,
+                "traceId": "run-1",
+                "data": {"error": "DaytonaError: boom"},
+            },
+            {"type": "chat:done", "ts": 3, "traceId": "run-1", "data": {}},
+        ),
+    )
+    assert outcome == "done"
+    assert stream_error == "DaytonaError: boom"
+    # All frames still relayed to the FrameBus untouched.
+    assert [f["type"] for _, f in bus.published] == ["chat:thinking", "chat:error", "chat:done"]
+
+
+@pytest.mark.asyncio
+async def test_relay_frames_clean_stream_has_no_error():
+    bus = _FakeFrameBus()
+    _, outcome, stream_error = await _worker_with(bus)._relay_frames(
+        session_id="card-thread-x",
+        user_id=1,
+        owner="w1",
+        run_id="run-2",
+        frames=_frames(
+            {"type": "chat:delta", "ts": 1, "traceId": "run-2", "data": {"delta": "hi"}},
+            {"type": "chat:done", "ts": 2, "traceId": "run-2", "data": {}},
+        ),
+    )
+    assert outcome == "done"
+    assert stream_error is None

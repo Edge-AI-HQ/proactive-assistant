@@ -13,6 +13,7 @@ from pinai_agents.web.app import create_app
 from pinai_agents.web.auth.agent_jwt import sign_agent_run_jwt
 from pinai_agents.web.auth.deps import current_user
 from pinai_agents.web.auth.user_service import User
+from pinai_agents.web.db.repositories.profile import ProfileRepository
 from pinai_agents.web.db.repositories.scheduled_tasks import ScheduledTasksRepository
 from pinai_agents.web.db.rls import service_tx, user_scoped_tx
 
@@ -198,6 +199,68 @@ async def test_once_reminder_direct_create(client, user_ids, pool):
     assert row["trigger_kind"] == "once"
     assert row["next_run_at"] is not None
     assert row["payload"]["reminder"]["title"] == "喝水"
+
+
+@pytest.mark.asyncio
+async def test_once_create_timezone_follows_profile_not_agent(client, user_ids, pool):
+    """建任务时区永远跟手机:服务端用 profile 时区(由设备头维护)覆盖 agent
+    传入的值——LLM 没有来源时会按语言瞎猜(中文 → Asia/Shanghai),不能再
+    影响任务何时触发。"""
+    user_a, _ = user_ids
+    async with user_scoped_tx(pool, user_a) as conn:
+        await ProfileRepository(user_a, conn).upsert_profile(timezone="America/Los_Angeles")
+
+    created = await client.post(
+        "/api/scheduled-generators/once",
+        json={**_ONCE_REMINDER_BODY, "timezone": "Asia/Shanghai"},
+    )
+    assert created.status_code == 201, created.text
+    task = created.json()["task"]
+
+    async with service_tx(pool) as conn:
+        cur = await conn.execute(
+            "SELECT timezone FROM pai_scheduled_tasks WHERE user_id = %s AND id = %s",
+            (user_a, task["id"]),
+        )
+        row = await cur.fetchone()
+    assert row is not None and row["timezone"] == "America/Los_Angeles"
+
+
+@pytest.mark.asyncio
+async def test_once_generate_carries_fallback_reminder(client, user_ids, pool):
+    """Event-briefing once tasks (mode=generate) must carry a zero-LLM
+    fallback nudge — the dispatcher degrades to it when the generator burns
+    its last retry, so the user is still pinged about the event."""
+    user_a, _ = user_ids
+
+    created = await client.post(
+        "/api/scheduled-generators/once",
+        json={
+            "originalRequest": "明天 3 点我要开会,提前半小时提醒我",
+            "timezone": "Asia/Shanghai",
+            "schedule": {"type": "once", "inMinutes": 60},
+            "mode": "generate",
+            "topic": "会前 briefing:明天 15:00 的会议——议程、参会人、相关邮件、要点",
+        },
+    )
+
+    assert created.status_code == 201, created.text
+    task = created.json()["task"]
+    assert task["kind"] == "generator.scheduled"
+
+    async with service_tx(pool) as conn:
+        cur = await conn.execute(
+            "SELECT payload FROM pai_scheduled_tasks WHERE user_id = %s AND id = %s",
+            (user_a, task["id"]),
+        )
+        row = await cur.fetchone()
+
+    assert row is not None
+    payload = row["payload"]
+    assert payload["confirmed_brief"]["topic"].startswith("会前 briefing")
+    fallback = payload["fallback_reminder"]
+    assert fallback["title"]
+    assert fallback["message"] == "明天 3 点我要开会,提前半小时提醒我"
 
 
 @pytest.mark.asyncio

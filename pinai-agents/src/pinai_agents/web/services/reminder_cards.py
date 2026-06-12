@@ -33,6 +33,17 @@ def _reminder_card(task: ScheduledTaskRow, *, card_id: str, now: datetime) -> di
     message = str(reminder.get("message") or title).strip()
     return {
         "id": card_id,
+        # Explicit card type, stamped at birth (the FE must not infer it):
+        # reminder cards are acknowledge-only — the drawer renders
+        # Dismiss / Chat / Done instead of the execute (Approve) flow, and
+        # the card-execution agent switches to reminder behavior. Older
+        # persisted cards lack this field; the FE falls back to the
+        # card-rem- id prefix (lib/reminder-card.ts).
+        "cardKind": "reminder",
+        # The owning pai_scheduled_tasks row — rides into card_context so the
+        # chat agent can target THIS reminder with the scheduled_generator_*
+        # tools ("change it to 3 times a day" → update/delete the right task).
+        "scheduleTaskId": task.id,
         "goalBasket": "life",
         "title": title,
         "whyNow": message,

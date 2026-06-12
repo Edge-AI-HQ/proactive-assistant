@@ -22,8 +22,8 @@ from psycopg_pool import AsyncConnectionPool
 
 from ...shared.agent_run import AgentKind, MessageSource
 from ..db.rls import user_scoped_tx
-from .bus import notify_cancel, notify_message
-from .framebus import Frame, FrameBus, SubItem
+from .bus import notify_cancel, notify_message, notify_run_status
+from .framebus import Frame, FrameBus, SubItem, publish_terminal_frames
 from .mailbox import MailboxRepository
 from .runs import RunRepository
 from .sessions import SessionRepository
@@ -117,12 +117,26 @@ class AgentRunService:
         """Stop the session's active run for real: mark it cancelled in DB +
         signal whichever web instance holds the in-flight run to abort the
         chat HTTP (plan §十一 cancel 真停). A pending-but-unstarted turn has
-        no in-flight task; the DB mark stops the worker from starting it."""
+        no in-flight task; the DB mark stops the worker from starting it.
+
+        A run parked on awaiting_input (HITL pause) or pending has NO
+        in-flight relay on ANY instance (the worker returned at the pause;
+        the chat HTTP is over), so notify_cancel finds no holder and
+        worker._mark_cancelled — the usual terminal-frame emitter — never
+        runs. Emit the terminal frame here instead, so another device
+        tailing this session's SSE drops its approval card / spinner now
+        rather than on the next poll. 'running' runs stay the holder's job
+        (its _mark_cancelled emits) — no double-publish."""
         async with user_scoped_tx(self._pool, user_id) as conn:
             run = await RunRepository(user_id, conn).get_active(session_id=session_id)
             if run is not None:
                 await RunRepository(user_id, conn).cancel(run_id=run.id, reason=reason)
         await notify_cancel(self._pool, session_id)
+        if run is not None and run.status in ("awaiting_input", "pending"):
+            await notify_run_status(
+                self._pool, session_id=session_id, run_id=run.id, status="cancelled"
+            )
+            await publish_terminal_frames(self._framebus, session_id, run.id)
 
     async def interrupt(
         self,

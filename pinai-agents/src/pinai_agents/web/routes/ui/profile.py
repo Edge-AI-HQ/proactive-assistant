@@ -19,11 +19,12 @@ from ....shared.api_models import (
     SettingsUpdateRequest,
 )
 from ...auth.deps import User, current_user, get_pool
-from ...db.repositories.profile import ProfileRepository, UserSettingsRow
+from ...db.repositories.profile import ProfileRepository, ProfileRow, UserSettingsRow
 from ...db.repositories.scheduled_tasks import ScheduledTasksRepository
 from ...db.rls import user_scoped_tx
 from ...services.browserbase_provisioning import ensure_browserbase_context
 from ...services.litellm_provisioning import ensure_user_litellm_key
+from ...services.scheduled_generators import retime_user_cron_tasks
 
 
 def _auto_generate_task_id(user_id: int) -> str:
@@ -361,6 +362,46 @@ def _clean_client_timezone(value: str | None) -> str | None:
     return cleaned
 
 
+# 时区头的采信分级:只有手机是"跟随"事实源。X-Pin-Client-Platform 缺失
+# (在野老 App 不发这个头)视为手机 — 旧客户端零感知。
+_TZ_TRUSTED_PLATFORMS = frozenset({"ios", "android"})
+
+
+async def _sync_device_timezone(
+    conn: AsyncConnection[DictRow],
+    *,
+    user_id: int,
+    timezone_hint: str | None,
+    platform_hint: str | None = None,
+) -> ProfileRow | None:
+    """永远跟手机:有效的设备时区(X-Pin-Client-Timezone)是时区事实源 —
+    没有档案就建档,漂了就更新(旅行/搬家自动跟随),并把周期任务的
+    "每天 X 点"重排到新时区。返回更新后的 profile(没动则 None)。
+
+    平台分级(防多客户端互搏):手机(ios/android,或没发 platform 头的
+    在野老 App)完整跟随 + retime;web/desktop(X-Pin-Client-Platform:
+    web)只允许 seed 还没确立的时区(行缺失或仍是建行默认值 'UTC'),
+    **永远不能覆盖**手机已确立的时区 — 否则人在 LA、家里桌面端还在上海,
+    两端轮询会让 profile 和所有 cron 任务的 next_run_at 反复横跳。
+    已知边界:真在 UTC 时区的手机建立的 'UTC' 与建行默认值不可区分,
+    可能被异地 web 端 seed 一次,手机下次请求即翻回(单次往返,非持续)。
+
+    挂在 /api/profile 和 /api/settings 两个 GET 上 — App 冷启动实际只打
+    /api/settings(useUserSettings),只挂 /api/profile 的话引导永远不跑。"""
+    if not timezone_hint:
+        return None
+    repo = ProfileRepository(user_id, conn)
+    profile = await repo.get_profile()
+    if profile is not None and profile.timezone == timezone_hint:
+        return None
+    trusted = platform_hint is None or platform_hint.strip().lower() in _TZ_TRUSTED_PLATFORMS
+    if not trusted and profile is not None and profile.timezone != "UTC":
+        return None  # web/desktop 不得覆盖已确立的时区
+    updated = await repo.upsert_profile(timezone=timezone_hint)
+    await retime_user_cron_tasks(conn, user_id=user_id, timezone=timezone_hint)
+    return updated
+
+
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 
 
@@ -368,6 +409,7 @@ router = APIRouter(prefix="/api/profile", tags=["profile"])
 async def get_profile_snapshot(
     x_pin_client_locale: str | None = Header(default=None, alias="X-Pin-Client-Locale"),
     x_pin_client_timezone: str | None = Header(default=None, alias="X-Pin-Client-Timezone"),
+    x_pin_client_platform: str | None = Header(default=None, alias="X-Pin-Client-Platform"),
     user: User = Depends(current_user),
     pool=Depends(get_pool),
 ):
@@ -384,19 +426,16 @@ async def get_profile_snapshot(
             and locale_hint != profile.locale
             else None
         )
-        timezone_patch = (
-            timezone_hint
-            if profile
-            and profile.timezone == "UTC"
-            and timezone_hint
-            and timezone_hint != profile.timezone
-            else None
+        if locale_patch:
+            profile = await repo.upsert_profile(locale=locale_patch)
+        synced = await _sync_device_timezone(
+            conn,
+            user_id=user.id,
+            timezone_hint=timezone_hint,
+            platform_hint=x_pin_client_platform,
         )
-        if locale_patch or timezone_patch:
-            profile = await repo.upsert_profile(
-                locale=locale_patch,
-                timezone=timezone_patch,
-            )
+        if synced is not None:
+            profile = synced
         goals = await repo.list_goals()
         settings = await repo.get_settings(
             initial_generation_language=_initial_generation_language_from_locale(locale_hint),
@@ -460,6 +499,8 @@ settings_router = APIRouter(prefix="/api/settings", tags=["settings"])
 @settings_router.get("", response_model=SettingsResponse)
 async def get_settings(
     x_pin_client_locale: str | None = Header(default=None, alias="X-Pin-Client-Locale"),
+    x_pin_client_timezone: str | None = Header(default=None, alias="X-Pin-Client-Timezone"),
+    x_pin_client_platform: str | None = Header(default=None, alias="X-Pin-Client-Platform"),
     user: User = Depends(current_user),
     pool=Depends(get_pool),
 ):
@@ -471,6 +512,14 @@ async def get_settings(
     also routes here.
     """
     async with user_scoped_tx(pool, user.id) as conn:
+        # App 冷启动只打这个接口(不打 /api/profile),设备时区引导必须在
+        # 这里跑 — 前端本来就在 settings 请求上带了时区头。
+        await _sync_device_timezone(
+            conn,
+            user_id=user.id,
+            timezone_hint=_clean_client_timezone(x_pin_client_timezone),
+            platform_hint=x_pin_client_platform,
+        )
         s = await ProfileRepository(user.id, conn).get_settings(
             initial_generation_language=_initial_generation_language_from_locale(
                 x_pin_client_locale,

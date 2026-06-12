@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import AsyncIterator
 from typing import Any, Protocol, cast, runtime_checkable
 
@@ -62,6 +63,39 @@ class FrameBus(Protocol):
     async def stream_exists(self, session_id: str) -> bool: ...
 
     async def history(self, session_id: str) -> list[tuple[str, Frame]]: ...
+
+
+async def publish_terminal_frames(
+    bus: FrameBus, session_id: str, run_id: str, *, error: str | None = None
+) -> None:
+    """Terminal frames for runs that never get them from the chat stream.
+
+    The happy path's `chat:done` rides the agent stream itself (chat's
+    SSE layer emits it in a finally), but when no relay ever delivers a
+    stream end — ChatRunError, user cancel, shutdown, reaped crash, or a
+    cancel of an awaiting_input (HITL-paused) run that has NO in-flight
+    relay anywhere — no terminal frame reaches the FrameBus and a connected
+    client's spinner/approval card leaks until it re-polls. DB state is
+    already terminal when this runs; the frames are best-effort UX, so
+    publish failures only log. Shared by the worker (fail/cancel/reaper)
+    and AgentRunService.cancel (awaiting-input cancel)."""
+    ts = int(time.time() * 1000)
+    frames: list[Frame] = []
+    if error is not None:
+        frames.append({"type": "chat:error", "ts": ts, "traceId": run_id, "data": {"error": error}})
+    frames.append({"type": "chat:done", "ts": ts, "traceId": run_id, "data": {}})
+    for frame in frames:
+        try:
+            await bus.publish(session_id, frame)
+        except Exception:
+            # Keep trying the rest — chat:done matters more than chat:error
+            # (it's what stops the client spinner).
+            logger.warning(
+                "terminal frame publish failed session=%s run=%s type=%s",
+                session_id,
+                run_id,
+                frame.get("type"),
+            )
 
 
 class RedisFrameBus:

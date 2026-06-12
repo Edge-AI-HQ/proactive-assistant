@@ -337,13 +337,18 @@ class DefaultDispatcher:
                     status="failed",
                     error=err[:1000],
                 )
-                await record_failure_and_decide(
+                _, new_status = await record_failure_and_decide(
                     conn,
                     user_id=task.user_id,
                     task_id=task.id,
                     last_error=err,
                     retry_backoff_seconds=backoff,
                 )
+            # 'archived' = a once task just burned its LAST retry. Event
+            # briefings (once generator.scheduled) carry a fallback nudge —
+            # fire it so the user is still pinged about the event itself.
+            if new_status == "archived":
+                await self._fire_generator_fallback(task, run_id)
             return
 
         if agent_run_id is not None and self._service is not None:
@@ -373,6 +378,35 @@ class DefaultDispatcher:
                     user_id=task.user_id,
                     task_id=task.id,
                 )
+
+    async def _fire_generator_fallback(self, task: ScheduledTaskRow, run_id: str) -> None:
+        """A once generator.scheduled task (event briefing) burned its last
+        retry — degrade to the zero-LLM reminder card carried in
+        payload.fallback_reminder, so the user is still pinged about the
+        event itself even though the briefing failed to generate. Reuses
+        fire_reminder wholesale (card shape incl. cardKind/scheduleTaskId,
+        strict persist, notify_reminder push — deliberately the UNGATED push
+        channel, a fallback nudge must not be silently dropped). Best-effort:
+        we're already on the failure path, never raise."""
+        if task.kind != "generator.scheduled":
+            return
+        payload = task.payload or {}
+        fallback = payload.get("fallback_reminder")
+        if not isinstance(fallback, dict) or not fallback.get("title"):
+            return
+        from dataclasses import replace  # noqa: PLC0415
+
+        from ..services.reminder_cards import fire_reminder  # noqa: PLC0415
+
+        try:
+            stand_in = replace(task, payload={**payload, "reminder": fallback})
+            await fire_reminder(self._pool, stand_in, f"{run_id}.fb")
+        except Exception:
+            logger.exception(
+                "generator fallback reminder failed user=%d task=%s",
+                task.user_id,
+                task.id,
+            )
 
     async def _dispatch_producer(self, task: ScheduledTaskRow, run_id: str) -> None:
         """Lightweight dispatch for producer kinds (see _PRODUCER_KINDS): run the
