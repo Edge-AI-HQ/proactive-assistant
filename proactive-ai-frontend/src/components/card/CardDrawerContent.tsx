@@ -1,4 +1,4 @@
-import { X, Pencil, Check, Lock as LockIcon, Loader2 } from "lucide-react";
+import { X, Check, Lock as LockIcon, Loader2, MessageCircle } from "lucide-react";
 import { useCardExecutionRun } from "@/hooks/useCardExecutionRun";
 import { DrawerDetailBody } from "@/components/card/CardDrawerBody";
 import { CATEGORIES, type Intent } from "@/components/now/card-model";
@@ -20,16 +20,21 @@ export default function CardDrawerContent({
   pending,
   onExecute,
   onClose,
-  onModify,
   onDismiss,
+  onComplete,
+  onChat,
 }: {
   card: Intent;
   completed: boolean;
   pending: boolean;
   onExecute: (card: Intent) => void;
   onClose: () => void;
-  onModify: (card: Intent) => void;
   onDismiss: (card: Intent) => void;
+  /** Done = acknowledge + retire the card (POST complete) — present on
+   *  every card type. Chat = open the card thread plainly (reminder cards'
+   *  primary action; no execute bootstrap). */
+  onComplete: (card: Intent) => void;
+  onChat: (card: Intent) => void;
 }) {
   const cat = CATEGORIES[card.category];
   const Icon = cat.icon;
@@ -67,9 +72,11 @@ export default function CardDrawerContent({
       {/* Title */}
       <h3 className="text-display text-[18px] leading-snug text-foreground mb-1.5 font-semibold">{card.title}</h3>
 
-      {/* Concise "what to do" summary (gray, action-oriented) */}
+      {/* Concise "what to do" summary (gray, action-oriented). Reminder
+          cards have no action — willExecute is just the button label
+          ("Done"), so show the reminder message instead. */}
       <p className="text-[13.5px] text-foreground/55 leading-snug mb-3">
-        {card.detail?.willExecute || card.line1}
+        {card.reminder ? card.line1 : card.detail?.willExecute || card.line1}
       </p>
 
       {/* Detail sections — DrawerDetailBody reads the latest
@@ -96,6 +103,14 @@ export default function CardDrawerContent({
             Close
           </button>
         ) : (
+          // Unified action row for every card type:
+          //   [Dismiss] [Done] [Chat | Approve]
+          // Done (middle, always present) acknowledges + retires the card —
+          // the user can close out any card without entering a chat. The
+          // primary slot is the card-type action: reminder → Chat (open the
+          // thread plainly; nothing to execute), actionable → Approve
+          // (execute via the agent). Steer is gone — steering happens in
+          // the chat itself.
           <>
             <button
               onClick={() => onDismiss(card)}
@@ -104,28 +119,36 @@ export default function CardDrawerContent({
             >
               <X size={13} strokeWidth={2} /> Dismiss
             </button>
-            {!card.locked && (
+            <button
+              onClick={() => onComplete(card)}
+              disabled={pending}
+              className="flex items-center justify-center gap-1 px-3 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[12px] font-medium text-foreground/55 disabled:opacity-45 disabled:cursor-default"
+            >
+              <Check size={12} strokeWidth={2.5} /> Done
+            </button>
+            {card.reminder ? (
               <button
-                onClick={() => onModify(card)}
+                onClick={() => onChat(card)}
                 disabled={pending}
-                className="flex items-center justify-center gap-1 px-3 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[12px] font-medium text-foreground/55 disabled:opacity-45 disabled:cursor-default"
+                className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground text-background text-[13px] font-semibold hover:bg-foreground/85 transition-colors disabled:opacity-70 disabled:cursor-default"
               >
-                <Pencil size={11} strokeWidth={2} /> Steer
+                <MessageCircle size={13} strokeWidth={2} /> Chat
+              </button>
+            ) : (
+              <button
+                onClick={() => onExecute(card)}
+                disabled={pending}
+                className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground text-background text-[13px] font-semibold hover:bg-foreground/85 transition-colors disabled:opacity-70 disabled:cursor-default"
+              >
+                {pending ? (
+                  <><Loader2 size={13} className="animate-spin" /> Opening...</>
+                ) : card.locked ? (
+                  <><LockIcon size={13} strokeWidth={2.5} /> Approve</>
+                ) : (
+                  <><Check size={13} strokeWidth={2.5} /> Approve</>
+                )}
               </button>
             )}
-            <button
-              onClick={() => onExecute(card)}
-              disabled={pending}
-              className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground text-background text-[13px] font-semibold hover:bg-foreground/85 transition-colors disabled:opacity-70 disabled:cursor-default"
-            >
-              {pending ? (
-                <><Loader2 size={13} className="animate-spin" /> Opening...</>
-              ) : card.locked ? (
-                <><LockIcon size={13} strokeWidth={2.5} /> Approve</>
-              ) : (
-                <><Check size={13} strokeWidth={2.5} /> Approve</>
-              )}
-            </button>
           </>
         )}
       </div>

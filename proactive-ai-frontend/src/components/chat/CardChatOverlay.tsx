@@ -22,6 +22,13 @@ interface CardChatOverlayProps {
    *  these the hook's cancel/confirmDone are purely local UI flips. */
   onDismissBackend: (card: IntentCard) => void | Promise<void>;
   onDoneBackend: (card: IntentCard) => boolean | void | Promise<boolean | void>;
+  /** Fired on every chat:done of this card's thread (agent turn ended).
+   *  AppLayout wires it to clear the optimistic spinner + refetch /cards so
+   *  the sphere/timeline flips to ready/failed immediately. */
+  onAgentTurnDone?: (card: IntentCard) => void;
+  /** Result-bar Comment: persists free-text feedback on the card
+   *  (kind=text_feedback). AppLayout wires it to cardActions.textFeedback. */
+  onCommentBackend: (card: IntentCard, text: string) => void | Promise<void>;
 }
 
 /**
@@ -36,6 +43,8 @@ export default function CardChatOverlay({
   onBack,
   onDismissBackend,
   onDoneBackend,
+  onAgentTurnDone,
+  onCommentBackend,
 }: CardChatOverlayProps) {
   // Latch the last non-null target: `target` is cleared when the sheet has
   // already sunk off-screen, but the exit fade still renders one last frame —
@@ -55,6 +64,10 @@ export default function CardChatOverlay({
             onBack={dismiss}
             onDismissBackend={() => onDismissBackend(shown.card)}
             onDoneBackend={() => onDoneBackend(shown.card)}
+            onTurnDone={
+              onAgentTurnDone ? () => onAgentTurnDone(shown.card) : undefined
+            }
+            onCommentBackend={(text) => onCommentBackend(shown.card, text)}
           />
         ) : null
       }

@@ -13,6 +13,10 @@ export function buildAssistantMessageFeedbackBody(
   messageId: string,
   feedback: AssistantFeedback | null,
   channel: string,
+  // Which UI element fired it — the per-message action bar (default) or the
+  // card result bar. Same event kind either way; analytics tells them apart
+  // (and can dedupe a double-rating of the final message) by this tag.
+  surface: string = "assistant_message_action_bar",
 ): Record<string, unknown> | null {
   if (!feedback) return null;
   return {
@@ -21,7 +25,7 @@ export function buildAssistantMessageFeedbackBody(
     messageId,
     channel,
     metadata: {
-      surface: "assistant_message_action_bar",
+      surface,
     },
   };
 }

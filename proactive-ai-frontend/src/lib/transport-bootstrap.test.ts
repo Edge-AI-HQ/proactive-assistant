@@ -51,3 +51,15 @@ describe("authHeaders", () => {
     });
   });
 });
+
+describe("profileClientHintHeaders", () => {
+  test("sends the platform hint so the server can tier timezone trust", async () => {
+    const { profileClientHintHeaders } = await import("./transport-bootstrap");
+    const headers = profileClientHintHeaders();
+    // Under vitest/jsdom Capacitor resolves to its web implementation — the
+    // same value an Electron/browser client sends. The server lets "web"
+    // seed an unset timezone but never override the phone's.
+    expect(headers["X-Pin-Client-Platform"]).toBe("web");
+    expect(headers["X-Pin-Client-Timezone"]).toBeTruthy();
+  });
+});

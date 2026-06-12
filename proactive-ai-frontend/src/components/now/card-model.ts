@@ -8,6 +8,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { GoalBasket, IntentCard } from "@pin-ai/core";
+import { isReminderCard, REMINDER_CARD_KIND } from "@pin-ai/core";
 import type { ChatCard } from "@/components/chat/ChatDetailView";
 
 /** Stable string→number hash so real card.id (string) gets a numeric id for
@@ -46,7 +47,18 @@ export interface DetailData {
   result?: string;
   artifacts?: Artifact[];
 }
-export type CardStatus = "normal" | "new" | "processing" | "done";
+/** Sphere/timeline card status. "processing" = agent working,
+ *  "needs_input" = run paused on an approval, "ready" = agent finished and
+ *  the result awaits the user's review, "failed" = last run errored,
+ *  "done" = the user explicitly completed the card. */
+export type CardStatus =
+  | "normal"
+  | "new"
+  | "processing"
+  | "needs_input"
+  | "ready"
+  | "failed"
+  | "done";
 export interface Intent {
   id: number;
   category: string;
@@ -66,6 +78,9 @@ export interface Intent {
   /** Set when the card came from real /api/cards (string id). handleExecute
    *  uses it to look up the real IntentCard and feed our MainChatView runtime. */
   originalId?: string;
+  /** Acknowledge-only reminder card (lib/reminder-card.ts) — the drawer
+   *  renders Dismiss/Chat/Done instead of the execute (Approve) flow. */
+  reminder?: boolean;
 }
 
 /** Real IntentCard (from /api/cards) → ChatDetailView's ChatCard shape
@@ -80,6 +95,17 @@ export function realIntentToChatCard(card: IntentCard): ChatCard {
     id: djb2(card.id),
     category: basketToLovableCategory(card.goalBasket),
     tag: card.urgency >= 0.85 ? "Urgent" : undefined,
+    // Derive (not just copy) the kind: legacy reminder cards predate the
+    // cardKind field and are only recognizable by their card-rem- id — the
+    // string id is lost past this projection (ChatCard.id is numeric), so
+    // this is the last place the fallback can apply. Without it the drawer
+    // and the chat agent would disagree about what kind of card this is.
+    ...(isReminderCard(card)
+      ? { cardKind: REMINDER_CARD_KIND }
+      : card.cardKind
+        ? { cardKind: card.cardKind }
+        : {}),
+    ...(card.scheduleTaskId ? { scheduleTaskId: card.scheduleTaskId } : {}),
     title: card.title,
     line1: card.whyNow || card.summary,
     line2:
@@ -115,6 +141,7 @@ export function realCardToLovableIntent(card: IntentCard, status: CardStatus): I
     originalId: card.id,
     category: basketToLovableCategory(card.goalBasket),
     tag: card.urgency >= 0.85 ? "Urgent" : undefined,
+    ...(isReminderCard(card) ? { reminder: true } : {}),
     title: card.title,
     line1: card.whyNow || card.summary,
     line2:

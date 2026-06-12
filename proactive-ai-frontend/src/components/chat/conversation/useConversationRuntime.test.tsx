@@ -890,6 +890,66 @@ describe("useConversationRuntime optimistic turn placeholder", () => {
     expect(assistantEntries(result.current.transcript)).toHaveLength(0);
     expect(result.current.busy).toBe(false);
   });
+
+  test("chat:done fires onTurnDone so the card layer can sync its status", async () => {
+    fetchHistoryMock.mockResolvedValueOnce(page([]));
+    const queue: { event: Record<string, unknown>; lastEventId: string }[] = [];
+    let notify: (() => void) | null = null;
+    const push = (event: Record<string, unknown>) => {
+      queue.push({ event, lastEventId: String(queue.length + 1) });
+      notify?.();
+    };
+    streamMock.mockImplementation(() =>
+      (async function* () {
+        while (true) {
+          while (queue.length === 0) {
+            await new Promise<void>((resolve) => {
+              notify = resolve;
+            });
+          }
+          yield queue.shift();
+        }
+      })(),
+    );
+
+    const onTurnDone = vi.fn();
+    const { result } = renderHook(() =>
+      useConversationRuntime({ session: "card-thread-td", onTurnDone }),
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    await act(async () => {
+      push({ type: "chat:thinking", traceId: "run-1", data: {} });
+      push({ type: "chat:delta", traceId: "run-1", data: { delta: "result" } });
+    });
+    expect(onTurnDone).not.toHaveBeenCalled();
+    await act(async () => {
+      push({ type: "chat:done", traceId: "run-1", data: {} });
+    });
+    await waitFor(() => expect(onTurnDone).toHaveBeenCalledTimes(1));
+
+    // A HITL pause settles the turn for the card layer too (needs_input).
+    await act(async () => {
+      push({ type: "chat:thinking", traceId: "run-2", data: {} });
+      push({
+        type: "chat:requires_action",
+        traceId: "run-2",
+        data: { interruptId: "int-1", toolName: "send_email", allowedDecisions: ["approve"] },
+      });
+    });
+    await waitFor(() => expect(onTurnDone).toHaveBeenCalledTimes(2));
+    expect(result.current.awaitingDecision).not.toBeNull();
+
+    // chat:done clears the parked approval card: it can only mean the turn
+    // moved on without this device's decision — another device approved (the
+    // resume's own done) or the run was cancelled while paused (the
+    // service-published terminal frame). The bus never carries a done for a
+    // turn still paused (the worker stops relaying at the pause frame).
+    await act(async () => {
+      push({ type: "chat:done", traceId: "run-2", data: {} });
+    });
+    await waitFor(() => expect(result.current.awaitingDecision).toBeNull());
+  });
 });
 
 function userEntriesOf(entries: { kind: string }[]) {

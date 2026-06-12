@@ -1,6 +1,7 @@
-import { Loader2, CheckCircle2, Circle, Sparkles } from "lucide-react";
-import type { IntentCard, CardScore } from "@pin-ai/core";
+import { Loader2, CheckCircle2, Circle, CircleAlert, XCircle, Sparkles, Bell } from "lucide-react";
+import type { IntentCard, CardScore, CardOutcome, CardRunStatus } from "@pin-ai/core";
 import { basketMeta } from "@/lib/basket-meta";
+import { deriveCardUiStatus, isReminderCard } from "@pin-ai/core";
 import { connectorSlugFromIntentKey } from "@/lib/connector-card";
 import { getToolkit } from "@/lib/toolkit-icons";
 import { useCardState } from "@/components/card/CardStateContext";
@@ -9,6 +10,8 @@ type TimelineCard = IntentCard & {
   runId: string;
   runDate: string;
   score: CardScore | null;
+  runStatus: CardRunStatus | null;
+  latestOutcome: CardOutcome | null;
 };
 
 interface CardTimelineProps {
@@ -62,6 +65,8 @@ export default function CardTimeline({
     runId: entry.runId,
     runDate: entry.runCompletedAt,
     score: entry.score,
+    runStatus: entry.runStatus,
+    latestOutcome: entry.latestOutcome,
   }));
 
   const grouped = new Map<string, TimelineCard[]>();
@@ -99,26 +104,47 @@ export default function CardTimeline({
               // reads as "this is a Gmail/Calendar/… nudge" at a glance.
               const connectorSlug = connectorSlugFromIntentKey(card.intentKey);
               const toolkit = connectorSlug ? getToolkit(connectorSlug) : null;
-              const CatIcon = toolkit?.icon ?? meta.icon;
+              // Reminder cards read as "this is a nudge" at a glance — bell
+              // icon, same idiom as the connector toolkit swap above.
+              const reminder = isReminderCard(card);
+              const CatIcon = toolkit?.icon ?? (reminder ? Bell : meta.icon);
               const actionCount = card.secondaryActions?.length ?? 0;
               const isDismissed = dismissedIds.has(card.id);
               const isConfirmed = confirmedIds.has(card.id);
               const isProcessing = processingIds.has(card.id);
               const isDone = doneIds.has(card.id);
               const isChatted = chattedIds.has(card.id);
-              const isActiveProcessing = isProcessing && !isDone && !isDismissed;
               const isResolved = isDismissed || isDone;
-
+              // Execution state: server runStatus first (survives relaunch),
+              // optimistic processingIds only as the send → run-row bridge.
+              const runUi = isResolved
+                ? "normal"
+                : deriveCardUiStatus({
+                    runStatus: card.runStatus,
+                    latestOutcome: card.latestOutcome,
+                    optimisticProcessing: isProcessing,
+                    chatted: isChatted,
+                  });
               const previewText = isDone
                 ? "Completed"
                 : isDismissed
                 ? "Dismissed"
-                : isActiveProcessing
+                : runUi === "processing"
                 ? "Processing..."
+                : runUi === "needs_input"
+                ? "Waiting for your input"
+                : runUi === "ready"
+                ? "Ready for review"
+                : runUi === "failed"
+                ? "Failed"
                 : isChatted
                 ? "In conversation"
                 : isConfirmed
                 ? "Confirmed"
+                : reminder
+                // A reminder has no operations — show the nudge itself, not
+                // "2 operations · Done".
+                ? card.summary
                 : card.primaryAction
                 ? `${actionCount + 1} operations · ${card.primaryAction.label}`
                 : card.sources.join(" · ");
@@ -128,7 +154,7 @@ export default function CardTimeline({
                   key={`${card.runId}-${card.id}`}
                   className="glass-card px-3.5 py-4 w-full text-left cursor-pointer active:scale-[0.98] transition-transform"
                   onClick={() =>
-                    isActiveProcessing || isChatted
+                    runUi !== "normal" || isChatted
                       ? onOpenChat(card)
                       : onOpenCardDetail(card)
                   }
@@ -145,8 +171,14 @@ export default function CardTimeline({
                         <span className="shrink-0 w-[18px] h-[18px] inline-flex items-center justify-center">
                           {isResolved ? (
                             <CheckCircle2 size={15} className="text-green-500/60" />
-                          ) : isActiveProcessing || isChatted ? (
+                          ) : runUi === "processing" ? (
                             <Loader2 size={15} className="text-amber-500 animate-spin" />
+                          ) : runUi === "needs_input" ? (
+                            <CircleAlert size={15} className="text-amber-500 animate-pulse" />
+                          ) : runUi === "ready" ? (
+                            <CheckCircle2 size={15} className="text-green-500" />
+                          ) : runUi === "failed" ? (
+                            <XCircle size={15} className="text-rose-500" />
                           ) : (
                             <Circle size={15} className="text-rose-400" fill="currentColor" />
                           )}

@@ -34,6 +34,16 @@ export interface IntentCard {
    *  manual / auto-generated cards. */
   sourceKind?: string;
   sourceLabel?: string;
+  /** Explicit card type stamped at creation (server-side). "reminder" =
+   *  acknowledge-only nudge card (zero-LLM reminder subsystem) — the drawer
+   *  renders Dismiss/Chat/Done instead of the execute flow. Absent on
+   *  generator cards. Prefer `isReminderCard` (domain/reminder-card.ts) over
+   *  reading this directly — it also covers older cards via the id prefix. */
+  cardKind?: string;
+  /** The owning pai_scheduled_tasks id for reminder cards — rides into
+   *  card_context so the chat agent can edit/delete THIS reminder's
+   *  schedule with the scheduled_generator_* tools. */
+  scheduleTaskId?: string;
 }
 
 export interface EvaluationScore {
@@ -159,6 +169,12 @@ export function normalizeIntentCard(card: unknown): IntentCard {
       : {}),
     ...(typeof record.sourceLabel === "string" && record.sourceLabel.trim().length > 0
       ? { sourceLabel: record.sourceLabel.trim() }
+      : {}),
+    ...(typeof record.cardKind === "string" && record.cardKind.trim().length > 0
+      ? { cardKind: record.cardKind.trim() }
+      : {}),
+    ...(typeof record.scheduleTaskId === "string" && record.scheduleTaskId.trim().length > 0
+      ? { scheduleTaskId: record.scheduleTaskId.trim() }
       : {}),
   };
 }

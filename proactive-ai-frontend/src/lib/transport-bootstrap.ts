@@ -8,6 +8,7 @@
  * / vi.mock("./platform") 模块拦截也照常生效。
  * 设计 SSOT：research/2026-06-10-frontend-layering.mdx §4.2-§4.3。
  */
+import { Capacitor } from "@capacitor/core";
 import { configureTransport } from "@pin-ai/core";
 
 import { isPinLocalDevAuthEnabled, pinLocalDevAuthHeaders } from "./dev-auth";
@@ -32,6 +33,11 @@ export function profileClientHintHeaders(): Record<string, string> {
   } catch {
     // Browser/runtime did not expose Intl timezone; server keeps its value.
   }
+
+  // 时区头的采信分级靠它：服务端只让手机(ios/android)完整跟随+retime,
+  // web/Electron(Capacitor 非原生 → "web")只能 seed 未确立的时区——
+  // 防止出差时家里桌面端把时区翻回去(_sync_device_timezone 的平台分级)。
+  headers["X-Pin-Client-Platform"] = Capacitor.getPlatform();
 
   return headers;
 }

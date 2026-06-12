@@ -36,3 +36,31 @@ describe("realIntentToChatCard scheduled provenance", () => {
     expect(chatCard.line2).toBe("Sources: gmail · calendar");
   });
 });
+
+describe("realIntentToChatCard card kind", () => {
+  test("stamps cardKind for legacy reminder cards (card-rem- id, no cardKind)", () => {
+    // Cards persisted before the cardKind field existed are only
+    // recognizable by their id prefix; the string id is lost past this
+    // projection (ChatCard.id is numeric), so the kind must be derived
+    // here or the chat agent treats the nudge as executable.
+    const chatCard = realIntentToChatCard(makeCard({ id: "card-rem-a4bbf49040c6" }));
+    expect(chatCard.cardKind).toBe("reminder");
+  });
+
+  test("passes scheduleTaskId through for new reminder cards", () => {
+    const chatCard = realIntentToChatCard(
+      makeCard({
+        id: "card-rem-bb1122334455",
+        cardKind: "reminder",
+        scheduleTaskId: "sched.once.x",
+      }),
+    );
+    expect(chatCard.cardKind).toBe("reminder");
+    expect(chatCard.scheduleTaskId).toBe("sched.once.x");
+  });
+
+  test("leaves generator cards untyped", () => {
+    const chatCard = realIntentToChatCard(makeCard({ id: "gen.auto.1.abc_card_00" }));
+    expect(chatCard.cardKind).toBeUndefined();
+  });
+});

@@ -88,6 +88,14 @@ export interface ConversationRuntimeOpts {
    *  and the live stream is gated locally so transcript stays clean.
    *  Flipping this triggers a full history refetch + stream reconnect. */
   debugEnabled?: boolean;
+  /** Fired when the turn settles: on every `chat:done` (turn ended — clean,
+   *  errored or cancelled) and on `chat:requires_action` (HITL pause). Card
+   *  chat wires this back to the card layer so the sphere/timeline status
+   *  updates the moment the agent finishes/pauses instead of waiting for
+   *  the next /cards poll. Distinct from `onTurnPersisted` (the local-sync
+   *  doorbell). Best-effort — a dropped stream means no call, so consumers
+   *  keep their own polling as the backstop. */
+  onTurnDone?: () => void;
 }
 
 export interface UseConversationRuntimeResult {
@@ -158,6 +166,11 @@ export function useConversationRuntime(
   useEffect(() => {
     localHistoryRef.current = opts?.localHistory;
   }, [opts?.localHistory]);
+  // 卡片层门铃同款 ref 化:回调身份变化不重订阅 SSE。
+  const onTurnDoneRef = useRef(opts?.onTurnDone);
+  useEffect(() => {
+    onTurnDoneRef.current = opts?.onTurnDone;
+  }, [opts?.onTurnDone]);
   // Card context is sent on the first message only, then cleared.
   const cardCtxRef = useRef<Record<string, unknown> | null>(opts?.cardContext ?? null);
   const bootstrappedRef = useRef(false);
@@ -479,6 +492,9 @@ export function useConversationRuntime(
               : [],
           });
           setBusy(false);
+          // HITL pause settles the turn for the card layer too — the card
+          // should flip to needs_input now, not on the next 30s poll.
+          onTurnDoneRef.current?.();
           break;
         }
         case "chat:done": {
@@ -489,7 +505,14 @@ export function useConversationRuntime(
             finalizePlanTurn(threadIdRef.current, str(env.traceId));
             onTurnPersistedRef.current?.(threadIdRef.current);
           }
+          // done 也清审批卡：总线上 requires_action 永不被同一暂停 turn 的
+          // done 跟随(worker 在暂停帧处提前 return,chat 流剩余帧不上桥),
+          // 所以这里清是安全的。覆盖两个多设备缺口:另一台设备 approve 后
+          // 的 resume 完成、以及 awaiting 中被取消(service.cancel 补发的
+          // 终止帧)——否则本设备的审批卡无限期残留。
+          setAwaitingDecision(null);
           setBusy(false);
+          onTurnDoneRef.current?.();
           break;
         }
         case "chat:persisted": {
@@ -871,6 +894,8 @@ export function useConversationRuntime(
     // clear at once (the backend's terminal chat:done then finalizes a no-op).
     finalizeTurn();
     setBusy(false);
+    // 取消即放弃待审批动作——本地立即清(断流收不到补发 done 帧的兜底)。
+    setAwaitingDecision(null);
     try {
       await conversationCancel(session);
     } catch (err) {

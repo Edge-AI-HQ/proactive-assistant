@@ -159,11 +159,15 @@ describe("AppLayout menu order", () => {
     expect(source).not.toContain("<MessageCircle");
   });
 
-  test("opens Steer as the card feedback conversation without auto voice", () => {
+  test("drawer uses the unified Done model (Steer retired) without auto voice", () => {
     const source = readFileSync(join(__dirname, "AppLayout.tsx"), "utf8");
 
     expect(source).not.toContain('autoStartVoice: mode === "steer"');
     expect(source).not.toMatch(/<ChatDetailView[\s\S]*autoStartVoice=/);
-    expect(source).toMatch(/onModify=\{\(card\) => \{[\s\S]*void cardActions\.modify\(real\);/);
+    // Steer is gone from the drawer — every card retires via Done (complete);
+    // reminder cards open their thread via Chat. Steering happens in chat.
+    expect(source).not.toContain("onModify={");
+    expect(source).toMatch(/onComplete=\{\(card\) => \{[\s\S]*void cardActions\.complete\(real\);/);
+    expect(source).toMatch(/onChat=\{\(card\) => \{[\s\S]*openCardChat\(real\);/);
   });
 });
