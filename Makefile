@@ -450,6 +450,11 @@ rn: install ensure-env-pinai-agents ## Run Expo RN on your iPhone vs this worktr
 	fi; \
 	export EXPO_PUBLIC_SUPABASE_URL="$${EXPO_PUBLIC_SUPABASE_URL:-$$VITE_SUPABASE_URL}"; \
 	export EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY="$${EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY:-$$VITE_SUPABASE_PUBLISHABLE_KEY}"; \
+	OLD_METRO=$$(lsof -ti:8081 2>/dev/null); \
+	if [ -n "$$OLD_METRO" ]; then \
+		echo "→ killing stale Metro on :8081 (EXPO_PUBLIC_* 在 Metro 打包时 inline，旧 Metro 会沿用旧后端 URL)"; \
+		kill -9 $$OLD_METRO 2>/dev/null || true; sleep 1; \
+	fi; \
 	if [ "$(SIM)" = "1" ]; then \
 		EXPO_PUBLIC_PIN_API_URL="$$TARGET" npm run ios --workspace=@pin-ai/mobile; \
 	else \
