@@ -48,6 +48,15 @@ class _BaseAppSettings(BaseSettings):
     # short call per closed tool group. Override via GROUP_TITLE_MODEL.
     group_title_model: str = "claude-haiku-4-5"
 
+    # Full-pipeline budget (seconds) for /agent/generate. The chat route's
+    # asyncio.timeout guard uses it directly; web's httpx read timeout adds
+    # +30s and the generator task lease adds +120s so each outer layer
+    # outlives the inner one (chat's own 504 wins the race, the lease
+    # covers the whole run). Default keeps today's behaviour; raise via env
+    # GENERATE_TIMEOUT_SECONDS for local dev where real-account context +
+    # local LLM latency overflow 600s (docker-compose.override.yml).
+    generate_timeout_seconds: float = 600.0
+
 
 class WebSettings(_BaseAppSettings):
     """Web process settings."""

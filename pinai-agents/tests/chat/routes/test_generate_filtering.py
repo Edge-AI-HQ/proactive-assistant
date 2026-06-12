@@ -6,6 +6,7 @@ import pytest
 
 from pinai_agents.chat.transport.routes import generate as generate_route
 from pinai_agents.chat.transport.routes.generate import _serialize_passing_cards
+from pinai_agents.config import ChatSettings
 from pinai_agents.shared.api_models import (
     CardAction,
     CardEvaluation,
@@ -216,8 +217,11 @@ def test_generate_route_rejects_infrastructure_tombstone_cards() -> None:
         _serialize_passing_cards(parsed, run_id="run_filter", max_cards=10)
 
 
-def test_generate_route_caps_agent_runtime_to_ten_minutes() -> None:
+def test_generate_route_caps_agent_runtime_to_configured_budget() -> None:
     source = inspect.getsource(generate_route.generate)
 
-    assert generate_route._GENERATE_AGENT_TIMEOUT_SECONDS == 600.0
-    assert "asyncio.timeout(_GENERATE_AGENT_TIMEOUT_SECONDS)" in source
+    # 默认预算仍是十分钟;本地可经 env GENERATE_TIMEOUT_SECONDS 放宽
+    # (config.generate_timeout_seconds,见 _BaseAppSettings 注释)。
+    assert ChatSettings().generate_timeout_seconds == 600.0
+    assert "asyncio.timeout(timeout_seconds)" in source
+    assert "get_chat_settings().generate_timeout_seconds" in source
