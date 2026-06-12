@@ -133,6 +133,16 @@ run_generator()
 | final-selection | 小的 card/eval summaries | 结构化 `FinalSelection`,只输出 intent key 顺序和 rejection notes,用于最终编辑精选;失败时回退规则排序。 |
 | rank/fill | cards + evaluations + final selection | 去重同 intent,优先 `pass=true` / high overall / high importance / high urgency,并按 final-selection 顺序补齐 top N。 |
 
+### 卡面字段:title 公式 / reasoningSteps / sourceApps
+
+| 字段 | 当前事实 |
+|---|---|
+| `title` | 动作先行公式(`_CARD_GENERATOR_PROMPT` card_quality_rules):动作开头(verb + object,「我能帮你做什么 / 我已经做了什么」)+ ` — ` + 具体触发(事实 / 数字 / 时间),总长 ≤70 字符,禁止以新闻事实或数字开头。prompt 内置 GOOD/BAD 对照例(含一条 zh-Hans):GOOD `Review your tech concentration — chip stocks fell 3% for a 2nd day`,BAD `Nasdaq -3% on Jun 9: chip selloff day 2 — Micron up 174% YTD`(fact-first)。配套约束:`whyNow` 必须提供标题触发短句之外的上下文,禁止复述标题;evaluator `<calibration>` 对**所有卡**审标题,fact-first 标题把 actionability 封顶 6 分并写进 feedback。schema `max_length=120` 留作截断安全网。连接器引导卡的 title 规则(≤60、outcome-led)不在此列。 |
+| `reasoningSteps` | LLM 生成的分步推理,与卡片同一次结构化调用输出。schema 在 `shared/api_models.py:ReasoningStep`:`label` ∈ `observed / cross_referenced / pattern_matched / flagged / decided`,`detail` ≤200 字符,2-4 步。evaluator 按 `sources[]` 审计每步 detail:引用 sources 之外的数据 = grounding violation,直接 fail(复用现有 hard-fail 机制)。`GeneratedCard.reasoning_steps` 是 `default_factory=list`,旧 artifact 回放不挂。 |
+| `sourceApps` | Python 确定性派生,LLM 不参与,**不在** `GeneratedCard` schema 里。`generator.py:derive_source_apps` 对 `sources[]` 引文做前缀解析(`_CITATION_TOKEN_TO_APP` 紧邻 `_citation_for` 维护:`world`→`web`、`signal`→`device`,`gmail`/`gcal`/`memory` 等同名;表外 token 原样透传,前缀不匹配的引文丢弃不猜),`chat/transport/routes/generate.py:_serialize_passing_cards` 在卡片 dump 成 dict 后注入(与 card id 重写同处),去重保序。 |
+
+三个字段都随 `pai_pipeline_runs.final_cards` JSONB 持久化、`/api/cards` 原样透传,零 migration。旧卡(注入前生成)不回填:前端 `normalizeIntentCard` 降级——`sourceApps` 缺失时客户端从引文前缀派生,`reasoningSteps` 缺省 `[]` 隐藏区块(渲染细节见 [Execution](./execution))。
+
 ### 选卡规则
 
 - `pass==true` 的卡优先进最终响应,chat route 再按请求的 `cards_to_generate` 硬截断;当前用户可见生成默认/上限是 8 张。
@@ -141,7 +151,7 @@ run_generator()
 - 如果 evaluator 把所有真实候选都判 fail,chat route 保留最高 `overall` 的 1 张候选,同时把 failed evaluation 保留做审计,避免整轮生成 502。
 - connector guidance(`intentKey="connect:<slug>"`)在 planner 后有确定性过滤:已 ACTIVE 的 toolkit 不再推,最近已出现或用户 dismiss/snooze 过的同 slug 不再推,并且初始规划 + top-up 合计每轮最多 1 张连接建议卡。
 - infra tombstone / error card 不允许进入卡流:空 `GeneratorOutput` 或只有 `ConnectError` / `_error` / `no-grounded-source-fallback` 的候选会变成失败 run,不会持久化为 `pai_pipeline_runs.final_cards`。
-- card id 在 web 侧重写:`f"{run_id}_card_{i:02d}"`(`chat/routes/generate.py:121`),evaluation 的 cardId 按 `intentKey` 匹配 + 重 map(`:130`)。
+- card id 在 chat 侧选卡序列化时重写:`f"{run_id}_card_{i:02d}"`(`chat/transport/routes/generate.py` 的 `_serialize_passing_cards`,同处注入 `sourceApps`),evaluation 的 cardId 按 `intentKey` 匹配 + 重 map。
 
 ### Cache boundary
 

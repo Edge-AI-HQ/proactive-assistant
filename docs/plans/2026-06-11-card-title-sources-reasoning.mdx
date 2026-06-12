@@ -47,8 +47,8 @@ description: "三个用户可见问题一起修:标题改为动作开头两行�
 
 ### 后端:新字段 `sourceApps`(确定性派生,LLM 不参与)
 
-- 派生位置:`generator.py` 内(source index 只在 `run_generator` 作用域可得),在卡片 `model_dump(by_alias=True)` 成 dict 后注入 key。与 `id` / `sourceKind`(在 `chat/transport/routes/generate.py` 注入)同属"dump 后 dict 注入"层,但发生在 generator 侧。**不要加进 `GeneratedCard` schema**——那是 LLM 结构化输出 schema,加进去 LLM 会试图自己填。
-- 派生规则:对卡片 `sources[]` 的每条 citation,在 source index(`_build_source_index` 产物,citation 字符串与 record 一一对应)反查 `source_type`,映射成 app slug:
+- 派生位置(实施事实回写,2026-06-11):派生函数 = `generator.py` 的 `derive_source_apps`,**纯引文前缀解析,无需 source index**。理由:`_citation_for` 是引文字符串的唯一生产者,`source_type` 已确定性编码在前缀里(`signal id=` / `gmail message id=` / `world id=`…),source index 反查不提供任何额外信息;映射表 `_CITATION_TOKEN_TO_APP` 与 `_citation_for` 同文件相邻维护,模板改了映射跟着改。注入点 = `chat/transport/routes/generate.py` 的 `_serialize_passing_cards`,与 card `id` 重写同处"`model_dump` 后 dict 注入"层。**不要加进 `GeneratedCard` schema**——那是 LLM 结构化输出 schema,加进去 LLM 会试图自己填。
+- 派生规则:对卡片 `sources[]` 的每条 citation,用前缀正则取 ` id=` 前的首个 token(即 source_type),查表映射成 app slug:
 
   | source_type | app slug | 备注 |
   |---|---|---|
@@ -59,15 +59,15 @@ description: "三个用户可见问题一起修:标题改为动作开头两行�
   | signal | `device` | 当前 personal signal 均为 device ambient(sound/transcript/motion);未来 signal 带 app 来源再细化 |
   | memory / profile / goal / preference | 同名 | 内部层 |
 
-- citation 反查失配兜底(LLM 复制时改写了字符串):按 citation 前缀正则(`signal id=` / `memory id=` / `gmail message id=` / `gcal event id=` / `world id=` / `profile id=` / `goal id=` / `preference id=`)推断 source_type。
+- 表外 token(slack/notion 等 toolkit 名)原样透传作 slug;前缀不匹配的 citation(LLM 改写得连 ` id=` 形态都没了)直接丢弃不猜——审计字符串永远不允许漏到 UI。
 - 结果去重保序,字段形态 `sourceApps: list[str]`(可为空)。
-- `web/services/reminder_cards.py` 手工卡:`sourceApps=[]`(drawer 的 `Scheduled · label` 分支已绕开 Sources 区块)。
+- `web/services/reminder_cards.py` 手工卡:**不需要改代码**——它不经过 `_serialize_passing_cards` 注入路径,卡面 `sources=["scheduled-reminder"]`;前端降级派生对这个字符串解析为 `[]`(没有 ` id=` 前缀),Sources 区块自然隐藏。
 - **不动**:`sources[]` 字段的格式与用途(evaluator grounding hard-fail、`_auto_consume_world_signals` 正则消费都依赖它)。
 
 ### 前端
 
 - `packages/core/src/domain/intent-card.ts`:`IntentCard` 加 `sourceApps: string[]`,`normalizeIntentCard` 用 `toStringArray` 防御,缺省 `[]`。
-- 从设计稿 port:`SourcePill` + `SectionLabel`(设计仓 `src/components/CardDrawerDetail.tsx`)+ `brandSvg` 8 个内联品牌 SVG(设计仓 `src/components/ChatDetailView.tsx:11-82`)。
+- `SourcePill` / `SectionLabel` 无需从设计稿 port——线上仓早已存在(`SourcePill` 在 `CardDrawerBody.tsx`,SectionLabel 等效样式 inline,`brandSvg` 8 个品牌 SVG 在 `ChatDetailView.tsx`)。实际改动是 `SourcePill` 输入 slug 化:接 `sourceApps` 的 slug,经新增的 `card/source-app-display.ts` 查表渲染 logo / label。
 - slug → 展示映射(确定性查表,替换现有关键词猜测):`gmail`→Gmail logo、`gcal`→Calendar logo、`slack`/`notion`/`gdrive`/`gdocs`/`gsheets`/`linear`→各自 logo;`web`→Globe 图标 "Web"、`memory`→Brain "Memory"、`device`→Smartphone "Phone"、`profile`→"Profile";未知 slug→首字母 chip(设计稿 fallback 行为)。
 - **展示层一律吃结构化 `sourceApps`,`line2` 不再承载 sources 数据**:
   - drawer(`CardDrawerBody.tsx`)Sources 区块改为接 `sourceApps` prop,废除从 `line2` 反向 `parseSources`;

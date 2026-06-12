@@ -429,7 +429,7 @@ def test_evaluator_caps_actionability_for_fact_first_titles() -> None:
 ```bash
 cd pinai-agents && TAVILY_API_KEY=dummy-local-test uv run pytest tests/chat/agents/test_generator_prompts.py -v
 ```
-预期:新增 3 个 FAIL(断言不成立),旧测试 PASS。
+预期:新增 6 个 FAIL(断言不成立),旧测试 PASS。(原写 3 个;追加三条搭车 prompt 优化后,执行时实测新增 6 个测试)
 
 - [ ] **Step 4.3: 改 prompt(四处替换,逐字)**
 
