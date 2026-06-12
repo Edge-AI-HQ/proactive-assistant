@@ -125,9 +125,7 @@ async def test_interrupt_cancels_active_run_and_enqueues_new_message_identity(po
     bus = _FakeFrameBus()
     service = AgentRunService(pool, bus)  # type: ignore[arg-type]
     async with user_scoped_tx(pool, user_a) as conn:
-        await SessionRepository(user_a, conn).ensure_session(
-            session_id=sid, agent_kind="main_chat"
-        )
+        await SessionRepository(user_a, conn).ensure_session(session_id=sid, agent_kind="main_chat")
         rid = await RunRepository(user_a, conn).create(
             session_id=sid, agent_kind="main_chat", trigger="user"
         )
