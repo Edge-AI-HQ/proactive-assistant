@@ -426,15 +426,6 @@ function cardThreadSessionKey(card: ChatCard, runId?: string): string {
   return raw.startsWith("card-thread-") ? raw : `card-thread-${raw}`;
 }
 
-function parseSources(line2: string): string[] {
-  return line2
-    .replace("Sources:", "")
-    .replace("Sources: ", "")
-    .split("·")
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
 function buildCardContext(card: ChatCard): Record<string, unknown> {
   return {
     title: card.title,
@@ -446,7 +437,7 @@ function buildCardContext(card: ChatCard): Record<string, unknown> {
     ...(card.scheduleTaskId ? { scheduleTaskId: card.scheduleTaskId } : {}),
     summary: card.line1,
     whyNow: card.whyNow ?? card.line1,
-    sources: parseSources(card.line2),
+    sources: card.sourceApps ?? [],
     primaryAction: card.detail?.willExecute
       ? { label: card.detail.willExecute, type: "confirm" }
       : undefined,
@@ -543,7 +534,6 @@ export default function ChatDetailView({
     [card, runId],
   );
   const cardContext = useMemo(() => buildCardContext(card), [card]);
-  const sources = useMemo(() => parseSources(card.line2), [card.line2]);
 
   return (
     <>
@@ -586,10 +576,7 @@ export default function ChatDetailView({
             <DrawerTitle>{card.title}</DrawerTitle>
             <DrawerDescription>Card detail view</DrawerDescription>
           </DrawerHeader>
-          <ChatCardDrawerBody
-            card={card}
-            sources={sources}
-          />
+          <ChatCardDrawerBody card={card} />
           {/* Dismiss / Done are reachable from EVERY drawer (unified action
               model): both retire the card (negative / positive feedback),
               then close drawer + chat. */}
@@ -651,7 +638,6 @@ function ChatCardDrawerBody({
   sideEffects = [],
 }: {
   card: ChatCard;
-  sources: string[];
   runSnapshot?: RunSnapshot | null;
   lastMessagePayload?: LastMessagePayload | null;
   sideEffects?: SideEffect[];
