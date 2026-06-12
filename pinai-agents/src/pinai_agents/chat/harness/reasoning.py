@@ -58,6 +58,15 @@ def is_kimi_model(model: str | None) -> bool:
     return normalized.startswith("kimi")
 
 
+def is_zai_model(model: str | None) -> bool:
+    """Return true for Z.AI GLM aliases (e.g. ``glm-5.1``)."""
+
+    if not model:
+        return False
+    normalized = model.lower().removeprefix("zai/")
+    return normalized.startswith("glm")
+
+
 def build_reasoning_options(
     *,
     model: str | None,
@@ -112,6 +121,28 @@ def build_reasoning_options(
                 "type": "enabled",
                 "budget_tokens": thinking_budget,
             }
+    elif is_zai_model(model):
+        # GLM thinking defaults ON server-side and, unlike Moonshot, Z.AI
+        # honors an explicit disable (verified 2026-06-12: the generator's
+        # real ~32k-token planner prompt went 714s/8.9k-token thinking →
+        # 38s/zero reasoning). Without this signal enable_thinking=False is
+        # a silent no-op on glm and one planner call eats the whole 600s
+        # generate budget. Effort/budget grading (reasoning_effort,
+        # budget_tokens) is silently ignored by Z.AI — on/off is the only
+        # control.
+        #
+        # Double-nested on purpose. The outer extra_body merges into the
+        # proxy request's top level, so the wire JSON carries
+        # `"extra_body": {"thinking": ...}` — LiteLLM's provider-specific
+        # passthrough, which lands `thinking` in the upstream zai body.
+        # A top-level `thinking` does NOT work for zai: the proxy's
+        # drop_params:true silently strips it, and allowlisting it via
+        # `allowed_openai_params` makes LiteLLM pass it as an SDK kwarg
+        # that the OpenAI-compatible client rejects
+        # ("unexpected keyword argument 'thinking'"; both verified on
+        # v1.86.2). Claude's branch above is different because `thinking`
+        # is a first-class LiteLLM param for Anthropic.
+        extra_body["extra_body"] = {"thinking": {"type": "disabled"}}
 
     return ReasoningOptions(
         extra_body=extra_body,

@@ -211,6 +211,55 @@ def test_kimi_model_forces_temperature_one_even_without_thinking() -> None:
         assert options.reasoning is None
 
 
+def test_zai_model_sends_thinking_disable_when_thinking_off() -> None:
+    try:
+        module = import_module("pinai_agents.chat.harness.reasoning")
+    except ModuleNotFoundError as exc:
+        pytest.fail(f"reasoning adapter module is missing: {exc}")
+
+    build_reasoning_options = getattr(module, "build_reasoning_options", None)
+    assert callable(build_reasoning_options)
+
+    # GLM thinking defaults ON server-side; Z.AI honors an explicit disable
+    # (unlike Moonshot, which drops every off-switch). enable_thinking=False
+    # must therefore turn into thinking:{"type":"disabled"} on the wire or
+    # the generator's planner runs at full-thinking latency. Double-nested:
+    # the outer key surfaces as a literal `extra_body` field in the proxy
+    # request — LiteLLM's provider-specific passthrough (a top-level
+    # `thinking` is dropped or rejected for zai; see build_reasoning_options).
+    options = build_reasoning_options(
+        model="glm-5.1",
+        enable_prompt_cache=True,
+        enable_thinking=False,
+        thinking_budget=5000,
+    )
+    assert options.extra_body == {"extra_body": {"thinking": {"type": "disabled"}}}
+    assert options.force_temperature_one is False
+    assert options.use_responses_api is False
+    assert options.reasoning is None
+
+    # With thinking requested we leave the provider default (ON) untouched:
+    # no thinking key at all, so reasoning_content keeps flowing as today.
+    options = build_reasoning_options(
+        model="glm-5.1",
+        enable_prompt_cache=True,
+        enable_thinking=True,
+        thinking_budget=5000,
+    )
+    assert options.extra_body == {}
+    assert options.force_temperature_one is False
+
+    # Other non-claude/non-openai models (e.g. kimi) must NOT receive the
+    # zai disable payload.
+    options = build_reasoning_options(
+        model="kimi-k2.6",
+        enable_prompt_cache=True,
+        enable_thinking=False,
+        thinking_budget=5000,
+    )
+    assert options.extra_body == {}
+
+
 def test_openai_responses_reasoning_keeps_streaming_enabled() -> None:
     try:
         module = import_module("pinai_agents.chat.harness.reasoning")
