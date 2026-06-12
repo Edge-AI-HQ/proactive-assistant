@@ -132,3 +132,39 @@ async def test_structured_stage_retries_prose_answer(
     )
     assert calls["n"] == 2
     assert result == _Probe(value=1)
+
+
+def test_card_generator_prompt_title_is_action_first() -> None:
+    rendered = _render_prompt(_CARD_GENERATOR_PROMPT, lang_clause="x")
+    assert "ACTION-FIRST" in rendered
+    assert "70 chars" in rendered
+    # 旧"事实先行"公式必须从生成规则里消失
+    assert 'built as "concrete fact / number / time' not in rendered
+
+
+def test_card_generator_prompt_requires_reasoning_steps() -> None:
+    rendered = _render_prompt(_CARD_GENERATOR_PROMPT, lang_clause="x")
+    assert "reasoningSteps" in rendered
+    assert "`observed` /" in rendered
+
+
+def test_evaluator_prompt_audits_reasoning_steps_and_action_first_title() -> None:
+    assert "reasoningSteps` are audited the same way" in _EVALUATOR_PROMPT
+    assert "action-first formula" in _EVALUATOR_PROMPT
+    assert "concrete fact / number / time + human stake" not in _EVALUATOR_PROMPT
+
+
+def test_card_generator_prompt_has_good_bad_title_examples() -> None:
+    rendered = _render_prompt(_CARD_GENERATOR_PROMPT, lang_clause="x")
+    assert "Review your tech concentration — chip stocks fell 3%" in rendered
+    assert "帮你复查科技股持仓集中度" in rendered
+    assert "(fact-first)" in rendered
+
+
+def test_why_now_adds_context_beyond_title() -> None:
+    rendered = _render_prompt(_CARD_GENERATOR_PROMPT, lang_clause="x")
+    assert "never restate the title" in rendered
+
+
+def test_evaluator_caps_actionability_for_fact_first_titles() -> None:
+    assert "caps actionability" in _EVALUATOR_PROMPT
