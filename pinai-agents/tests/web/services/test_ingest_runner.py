@@ -195,7 +195,11 @@ async def test_run_fetch_gmail_uses_query_after_unix(stub_execute):
     args = stub_execute[0][1]
     assert args["query"] == f"after:{int(since.timestamp())}"
     assert args["max_results"] == 100  # from args_template
-    assert args["verbose"] is False
+    # verbose=true is what makes Composio return the decoded full body
+    # (messageText → body column); include_payload=false drops the giant
+    # raw MIME payload that would otherwise 413 at ~100 msgs.
+    assert args["verbose"] is True
+    assert args["include_payload"] is False
 
 
 @pytest.mark.asyncio

@@ -811,9 +811,12 @@ async def _upsert_gmail(
     user_id: int,
     items: list[dict[str, Any]],
 ) -> int:
-    """ON CONFLICT (user_id, message_id) DO NOTHING. Composio re-fetches
-    the same Gmail thread on subsequent inits — we keep the first row,
-    skip the rest. Returns count newly inserted."""
+    """ON CONFLICT (user_id, message_id) — keep the existing row, except
+    heal an empty body. Gmail messages are immutable, so a re-fetch of the
+    same id is normally a no-op; but rows ingested before the recipe fix
+    (verbose=false stored an empty body) get backfilled when a re-fetch now
+    carries the decoded full body. The WHERE guard means good rows are never
+    rewritten. Returns count of rows inserted-or-healed."""
     inserted = 0
     for item in items:
         mapped = _map_gmail_message(item)
@@ -833,7 +836,11 @@ async def _upsert_gmail(
                   %s::jsonb, %s::jsonb, %s, %s, %s, %s::jsonb,
                   %s, %s, %s
                 )
-                ON CONFLICT (user_id, message_id) DO NOTHING
+                ON CONFLICT (user_id, message_id) DO UPDATE SET
+                  body = EXCLUDED.body,
+                  snippet = COALESCE(EXCLUDED.snippet, pai_raw_gmail_messages.snippet)
+                WHERE COALESCE(pai_raw_gmail_messages.body, '') = ''
+                  AND COALESCE(EXCLUDED.body, '') <> ''
                 """,
                 (
                     user_id,

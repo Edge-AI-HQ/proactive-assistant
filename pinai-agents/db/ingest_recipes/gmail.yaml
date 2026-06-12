@@ -2,17 +2,23 @@ toolkit: gmail
 slug: GMAIL_FETCH_EMAILS
 args_template:
   max_results: 100
-  verbose: false
-  include_payload: true
+  verbose: true
+  include_payload: false
 since_param: query
 since_format: gmail_query
 result_path: [messages]
 id_field: messageId
 sync_interval_hours: 12
-description: "User's recent inbox / sent / labelled email, payload included for evolve."
+description: "User's recent inbox / sent / labelled email, decoded full body (messageText) included."
 notes: |
   - Results NOT sorted by recency; downstream sorts by internalDate (ms epoch).
-  - verbose=false + include_payload=true is the stable combo for ~100 msgs (verbose=true blows up the payload).
+  - verbose=true returns the decoded full body in `messageText` (mapped → body column);
+    verbose=false returns messageText="" — only the short preview snippet survives, so the
+    stored body was empty (this was the cause of truncated emails, fixed 2026-06).
+  - include_payload=false is deliberate: the raw MIME payload carries the full base64 HTML
+    part (~100KB/msg) and is what triggers Composio 413 at ~100 msgs — NOT verbose. We never
+    consume the raw payload body (only payload.headers, redundant with top-level fields under
+    verbose=true), so dropping it keeps the response small while body stays complete.
   - `after:` accepts unix seconds (avoids YYYY/MM/DD timezone day-boundary off-by-ones).
   - Pagination via nextPageToken; concurrent calls >10 trigger 403 userRateLimitExceeded.
   - GMAIL_LIST_MESSAGES is deprecated; GMAIL_FETCH_EMAILS is canonical.
