@@ -220,6 +220,8 @@ export function useConversationRuntime(
   // The send-time optimistic placeholder's turn id while it's still UNCLAIMED
   // (no user-turn frame has adopted it). See createTurnPlaceholder.
   const placeholderTurnIdRef = useRef<string | null>(null);
+  /** 当前开放 turn 的 traceId——turn 边界检测用（见 handleEnvelope 头部）。 */
+  const turnTraceRef = useRef<string | null>(null);
   // Cached index of the current turn's entry in the transcript array, so a
   // per-delta flush is O(1) instead of scanning the whole transcript every
   // token. Other appends (ticks / user messages) always go to the end and
@@ -343,6 +345,20 @@ export function useConversationRuntime(
       // on a proactive:tick belongs to a heartbeat-triggered (debug) turn. All
       // a turn's events share one traceId, so this is stable within a turn.
       if (env.type.startsWith("chat:") && env.traceId) {
+        // Turn 边界兜底：一个 turn 的所有帧共享 traceId；traceId 变化说明
+        // 新 turn 已开流而旧 turn 没收到 chat:done（HITL 暂停期间用户插话
+        // → 后端取消旧 run 的场景）。不闭旧 turn 的话 ensureTurn 会把新
+        // turn 的内容续进老 entry（渲染在历史中段——"新 thinking 出现在
+        // 老回复前面"的真机实测 bug）。旧 turn 的待审批卡随之作废。
+        if (
+          turnIdRef.current
+          && turnTraceRef.current
+          && turnTraceRef.current !== env.traceId
+        ) {
+          finalizeTurn();
+          setAwaitingDecision(null);
+        }
+        turnTraceRef.current = env.traceId;
         turnDebugRef.current = tickRunIdsRef.current.has(env.traceId);
         if (turnDebugRef.current) {
           // A tick turn opening against an unclaimed send placeholder: drop

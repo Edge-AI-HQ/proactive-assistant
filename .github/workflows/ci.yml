@@ -165,6 +165,9 @@ jobs:
       - name: Type check (Desktop shell)
         run: npm run type-check --workspace=@pin-ai/desktop
 
+      - name: Type check (Mobile / Expo RN)
+        run: npm run type-check --workspace=@pin-ai/mobile
+
       - name: iOS signing check (canonical DEVELOPMENT_TEAM)
         run: bash proactive-ai-frontend/scripts/check-ios-signing.sh
 

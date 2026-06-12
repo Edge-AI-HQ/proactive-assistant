@@ -5,7 +5,7 @@
 .PHONY: migrate reset clean
 .PHONY: deploy-pinai-dev deploy-pinai-prod deploy-frontend-dev deploy-frontend-prod deploy-reward-dashboard-dev
 .PHONY: deploy-litellm-dev deploy-litellm-prod
-.PHONY: ios android macos ngrok githooks install
+.PHONY: ios android macos rn ngrok githooks install
 .PHONY: tunnel-up tunnel-down tunnel-status
 
 # Running stack: postgres + litellm + pinai-agents (web + chat) +
@@ -422,3 +422,36 @@ macos: install ensure-env-pinai-agents ## Run the Electron desktop shell (this w
 		echo "→ Electron vs this worktree's backend ($$TARGET)"; \
 	fi; \
 	VITE_PIN_API_PROXY_TARGET="$$TARGET" npm run dev --workspace=@pin-ai/desktop
+
+rn: install ensure-env-pinai-agents ## Run the Expo RN iOS app on simulator (this worktree's backend; DEV=1 fly dev, PROD=1 fly prod)
+	@set -e; \
+	set -a && . ./pinai-agents/.env && set +a; \
+	if [ "$(PROD)" = "1" ]; then \
+		TARGET=$$(npx -y @dotenvx/dotenvx get VITE_PIN_API_URL -f pinai-agents/.env.production 2>/dev/null); \
+		[ -z "$$TARGET" ] && { echo "VITE_PIN_API_URL missing in prod env"; exit 1; }; \
+		export EXPO_PUBLIC_SUPABASE_URL=$$(npx -y @dotenvx/dotenvx get VITE_SUPABASE_URL -f pinai-agents/.env.production 2>/dev/null); \
+		export EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=$$(npx -y @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f pinai-agents/.env.production 2>/dev/null); \
+		echo "→ RN vs fly prod ($$TARGET) + prod Supabase"; \
+	elif [ "$(DEV)" = "1" ]; then \
+		TARGET="$$VITE_PIN_API_URL"; \
+		echo "→ RN vs fly dev ($$TARGET)"; \
+	else \
+		PORT=$$($(COMPOSE) port pinai-web 8000 2>/dev/null | cut -d: -f2); \
+		[ -z "$$PORT" ] && { echo "pinai-web not running in this worktree — run 'make up' first, or use DEV=1 / PROD=1."; exit 1; }; \
+		if [ "$(DEVICE)" = "1" ]; then \
+			LAN_IP=$$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1); \
+			[ -z "$$LAN_IP" ] && { echo "no LAN IP — use DEV=1 for fly dev on device"; exit 1; }; \
+			TARGET="http://$$LAN_IP:$$PORT"; \
+			echo "→ RN (device) vs this worktree's backend ($$TARGET, 真机需与 Mac 同 WiFi)"; \
+		else \
+			TARGET="http://127.0.0.1:$$PORT"; \
+			echo "→ RN (simulator) vs this worktree's backend ($$TARGET)"; \
+		fi; \
+	fi; \
+	export EXPO_PUBLIC_SUPABASE_URL="$${EXPO_PUBLIC_SUPABASE_URL:-$$VITE_SUPABASE_URL}"; \
+	export EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY="$${EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY:-$$VITE_SUPABASE_PUBLISHABLE_KEY}"; \
+	if [ "$(DEVICE)" = "1" ]; then \
+		EXPO_PUBLIC_PIN_API_URL="$$TARGET" npm run ios --workspace=@pin-ai/mobile -- --device; \
+	else \
+		EXPO_PUBLIC_PIN_API_URL="$$TARGET" npm run ios --workspace=@pin-ai/mobile; \
+	fi

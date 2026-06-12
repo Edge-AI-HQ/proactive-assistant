@@ -1,0 +1,50 @@
+{
+  "expo": {
+    "name": "PIN AI Dev",
+    "slug": "pin-ai",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "ai.pin.proactive.development",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": {
+      "bundleIdentifier": "ai.pin.proactive.development",
+      "supportsTablet": false,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSLocationWhenInUseUsageDescription": "PIN AI uses your location to understand context for proactive suggestions.",
+        "NSCalendarsUsageDescription": "PIN AI reads upcoming events to prepare timely cards.",
+        "NSCalendarsFullAccessUsageDescription": "PIN AI reads upcoming events to prepare timely cards.",
+        "NSHealthShareUsageDescription": "PIN AI reads steps, heart rate and sleep to understand your day.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "PIN AI detects place arrivals and departures in the background to understand your day.",
+        "NSMotionUsageDescription": "PIN AI uses motion activity (walking, driving) to understand context.",
+        "NSMicrophoneUsageDescription": "PIN AI listens for ambient sounds and conversations (on-device gated) to understand context.",
+        "NSSpeechRecognitionUsageDescription": "PIN AI transcribes ambient speech on-device to capture useful moments.",
+        "UIBackgroundModes": [
+          "audio"
+        ]
+      },
+      "appleTeamId": "7T7C9L7H8F"
+    },
+    "platforms": [
+      "ios"
+    ],
+    "experiments": {
+      "typedRoutes": false
+    },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "17.0"
+          }
+        }
+      ],
+      "expo-secure-store",
+      "expo-notifications",
+      "@kingstinct/react-native-healthkit",
+      "expo-build-properties"
+    ]
+  }
+}

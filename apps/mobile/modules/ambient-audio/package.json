@@ -1,0 +1,6 @@
+{
+  "name": "ambient-audio",
+  "version": "0.1.0",
+  "description": "PIN AI ambient audio capture / Silero VAD / SoundAnalysis classification / cloud-refine transcription — Expo local module, Swift core migrated from capacitor-plugins/ambient-ai",
+  "main": "index.ts"
+}

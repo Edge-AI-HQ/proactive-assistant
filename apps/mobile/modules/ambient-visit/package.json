@@ -1,0 +1,6 @@
+{
+  "name": "ambient-visit",
+  "version": "0.1.0",
+  "description": "PIN AI visit monitoring + activity recognition (CLVisit / CMMotionActivity) — Expo local module, Swift core migrated from capacitor-plugins/ambient-ai",
+  "main": "index.ts"
+}

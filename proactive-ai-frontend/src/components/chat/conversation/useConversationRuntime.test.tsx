@@ -1019,3 +1019,47 @@ describe("useConversationRuntime B3b local-first read", () => {
     expect(localHistory).toHaveBeenCalled();
   });
 });
+
+describe("turn boundary on traceId change", () => {
+  test("a cancelled HITL turn is closed when the next turn starts streaming", async () => {
+    // 场景（真机实测 bug）：turn1 暂停在 requires_action（无 chat:done），
+    // 用户插话 → 后端取消 turn1、turn2 直接开流。修复前 turn2 的帧全部
+    // 续进 turn1 的 entry（渲染在历史中段）；修复后 traceId 变化触发
+    // finalize，turn2 是独立的末尾 entry，作废的审批卡被清掉。
+    fetchHistoryMock.mockResolvedValue(page([]));
+    const frames = [
+      { type: "chat:thinking", traceId: "t1", data: {} },
+      { type: "chat:reasoning:delta", traceId: "t1", data: { delta: "old thinking" } },
+      { type: "chat:delta", traceId: "t1", data: { delta: "old text" } },
+      {
+        type: "chat:requires_action",
+        traceId: "t1",
+        data: { interruptId: "i1", toolName: "GMAIL_SEND_DRAFT" },
+      },
+      { type: "chat:thinking", traceId: "t2", data: {} },
+      { type: "chat:reasoning:delta", traceId: "t2", data: { delta: "new thinking" } },
+      { type: "chat:done", traceId: "t2", data: {} },
+    ];
+    streamMock.mockReturnValue(
+      (async function* () {
+        for (const [i, event] of frames.entries()) {
+          yield { event, lastEventId: String(i + 1) };
+        }
+      })(),
+    );
+
+    const { result } = renderHook(() => useConversationRuntime({ session: "main-1" }));
+    await waitFor(() => {
+      expect(result.current.transcript.filter((e) => e.kind === "assistant")).toHaveLength(2);
+    });
+    const assistants = result.current.transcript.filter(
+      (e): e is ConversationAssistantEntry => e.kind === "assistant",
+    );
+    const hasNewThinking = (e: ConversationAssistantEntry) =>
+      e.parts.some((p) => p.type === "reasoning" && p.text.includes("new thinking"));
+    expect(assistants[0].running).toBe(false);
+    expect(hasNewThinking(assistants[0])).toBe(false);
+    expect(hasNewThinking(assistants[1])).toBe(true);
+    expect(result.current.awaitingDecision).toBeNull();
+  });
+});

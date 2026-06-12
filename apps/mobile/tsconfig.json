@@ -1,0 +1,13 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "paths": {
+      "@pin-ai/core": ["../../packages/core/src/index.ts"],
+      "@pin-ai/state": ["../../packages/state/src/index.ts"]
+    }
+  },
+  "include": ["index.ts", "src/**/*"]
+}
