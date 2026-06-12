@@ -2,6 +2,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import typography from "@tailwindcss/typography";
+// 设计 token SSOT（与 apps/mobile 的 NativeWind 共享）。相对路径直引而非
+// 包名：docker build 的容器里 /app（本目录）的 npm install 不含 workspace
+// 包（@pin-ai/design 靠 root hoisting），而 ../packages 在两种结构下都
+// 成立（本地 monorepo 平级 / 容器 COPY packages/ → /packages）。
+import { colors as sharedColors, borderRadius as sharedRadius } from "../packages/design/tokens.cjs";
 
 // content 用绝对路径：Tailwind v3 按 process.cwd() 解析相对 glob，web 构建
 // （cwd=本目录）下没问题，但 Electron renderer（apps/desktop 为 cwd、root
@@ -17,29 +22,8 @@ export default {
   ],
   theme: {
     extend: {
-      colors: {
-        background: "hsl(var(--background))",
-        foreground: "hsl(var(--foreground))",
-        card: {
-          DEFAULT: "hsl(var(--card))",
-          foreground: "hsl(var(--card-foreground))",
-        },
-        primary: {
-          DEFAULT: "hsl(var(--primary))",
-          foreground: "hsl(var(--primary-foreground))",
-        },
-        muted: {
-          DEFAULT: "hsl(var(--muted))",
-          foreground: "hsl(var(--muted-foreground))",
-        },
-        border: "hsl(var(--border))",
-        ring: "hsl(var(--ring))",
-      },
-      borderRadius: {
-        lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
-      },
+      colors: sharedColors,
+      borderRadius: sharedRadius,
       keyframes: {
         // Subtle color breathing — text drifts toward purple and cools back
         // to neutral. Signals "ambient sensing active" without animating

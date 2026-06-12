@@ -16,6 +16,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { Mic, SendHorizontal, Square } from "lucide-react-native";
 import {
   conversationInit,
   partsHaveNotifyUser,
@@ -26,6 +27,7 @@ import {
 import { useConversationRuntime } from "@pin-ai/state";
 
 import MarkdownText from "../components/chat/MarkdownText";
+import MessageActions from "../components/chat/MessageActions";
 import ReasoningBlock from "../components/chat/ReasoningBlock";
 import TodoStrip from "../components/chat/TodoStrip";
 import ToolRow from "../components/chat/ToolRow";
@@ -53,10 +55,14 @@ function Part({
 
 function Entry({
   entry,
+  isLastAssistant,
   onRetry,
+  onRegenerate,
 }: {
   entry: ConversationEntry;
+  isLastAssistant: boolean;
   onRetry: (id: string, text: string) => void;
+  onRegenerate: () => void;
 }) {
   if (entry.kind === "user") {
     return (
@@ -69,10 +75,16 @@ function Entry({
           <Text style={styles.userText}>{entry.text}</Text>
           {entry.failed ? <Text style={styles.failed}>failed — tap to retry</Text> : null}
         </Pressable>
+        <Text style={styles.timestamp}>
+          {new Date(entry.ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+        </Text>
       </View>
     );
   }
   if (entry.kind === "assistant") {
+    const fullText = entry.parts
+      .flatMap((p) => (p.type === "text" ? [p.text] : []))
+      .join("\n");
     return (
       <View style={styles.assistantRow}>
         {entry.parts.map((p, i) => (
@@ -85,6 +97,13 @@ function Entry({
         ))}
         {entry.running && entry.parts.length === 0 ? (
           <ActivityIndicator size="small" color="#71717a" style={styles.spinner} />
+        ) : null}
+        {!entry.running && fullText ? (
+          <MessageActions
+            text={fullText}
+            canRegenerate={isLastAssistant}
+            onRegenerate={onRegenerate}
+          />
         ) : null}
       </View>
     );
@@ -200,6 +219,7 @@ function Conversation({
     stop,
     connection,
     retryMessage,
+    regenerateLast,
     awaitingDecision,
     submitDecision,
     threadId,
@@ -243,8 +263,16 @@ function Conversation({
         contentContainerStyle={styles.listContent}
         data={visible}
         keyExtractor={(e) => `${e.kind}-${e.id}`}
-        renderItem={({ item }) => (
-          <Entry entry={item} onRetry={(id, text) => void retryMessage(id, text)} />
+        renderItem={({ item, index }) => (
+          <Entry
+            entry={item}
+            isLastAssistant={
+              item.kind === "assistant"
+              && index === visible.length - 1
+            }
+            onRetry={(id, text) => void retryMessage(id, text)}
+            onRegenerate={() => void regenerateLast()}
+          />
         )}
         onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
         ListEmptyComponent={
@@ -273,12 +301,19 @@ function Conversation({
           multiline
           editable
         />
-        <Pressable
-          style={({ pressed }) => [styles.sendButton, pressed && { opacity: 0.7 }]}
-          onPress={busy ? () => void stop() : send}
-        >
-          <Text style={styles.sendText}>{busy ? "Stop" : "Send"}</Text>
-        </Pressable>
+        <View style={styles.composerIcons}>
+          <Mic size={18} color="#a1a1aa" strokeWidth={1.8} />
+          <Pressable
+            style={({ pressed }) => [styles.sendButton, pressed && { opacity: 0.7 }]}
+            onPress={busy ? () => void stop() : send}
+          >
+            {busy ? (
+              <Square size={14} color="#fff" fill="#fff" />
+            ) : (
+              <SendHorizontal size={16} color="#fff" strokeWidth={2} />
+            )}
+          </Pressable>
+        </View>
       </View>
     </KeyboardAvoidingView>
   );
@@ -330,11 +365,14 @@ const styles = StyleSheet.create({
   },
   sendButton: {
     backgroundColor: "#1a1a1a",
-    borderRadius: 20,
-    paddingHorizontal: 18,
-    paddingVertical: 10,
+    borderRadius: 19,
+    width: 38,
+    height: 38,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  sendText: { color: "#fff", fontSize: 15, fontWeight: "600" },
+  composerIcons: { flexDirection: "row", alignItems: "center", gap: 10 },
+  timestamp: { marginTop: 3, fontSize: 10, color: "#a1a1aa", textAlign: "right" },
   hitlBar: {
     marginHorizontal: 12,
     marginBottom: 4,

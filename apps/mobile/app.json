@@ -44,7 +44,8 @@
       "expo-secure-store",
       "expo-notifications",
       "@kingstinct/react-native-healthkit",
-      "expo-build-properties"
+      "expo-build-properties",
+      "expo-font"
     ]
   }
 }

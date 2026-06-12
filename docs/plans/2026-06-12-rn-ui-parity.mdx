@@ -1,0 +1,51 @@
+---
+title: "RN iOS 完全复刻 web UI 计划"
+description: "apps/mobile 与 web 端逐页 UI/UX 对齐的实施蓝图：复用机制（NativeWind+lucide+moti）、全局框架先行、六页逐刀复刻、chat 细节收口。调研双源 = dev 站八面实拍 + proactive-ai-frontend 代码解剖。"
+---
+
+# RN iOS 完全复刻 web UI（2026-06-12 拍板）
+
+> 状态：已拍板开工。执行分支 `feat/rn-ui-chat`（PR #117 扩展为伞 PR）。
+> 每刀一个 commit，真机热更/重装逐刀验收。
+
+## 已拍板决策（2026-06-12，用户确认）
+
+1. **复用机制 = NativeWind 4 + 共享 tailwind 设计 token + lucide-react-native（图标同名）+ moti（动效 props 形似 framer-motion）**。组件本体无法跨平台 import（RN 无 DOM/CSS 引擎——这是 Electron 能 100% 复用而 RN 不能的本质），但该组合把逐页翻译降为机械流程：`div→View`、className ~90% 照抄、图标/动效声明照搬。
+2. **导航完全照 web**：删 bottom tab；右上 齿轮+汉堡 双圆钮、右侧滑出抽屉（六项大写菜单 + 整页模糊 + 右缘滑入手势）、chat 走底部 ASK PIN AI 上拉（不在菜单）。
+3. **Setting 支付页 dev 期全量复刻**（含 Stripe 管理）；上线 App Store 前按审核政策再改。
+4. **球面迭代式逼近**：第一版 = 景深+漂浮的玻璃卡片云，随真机反馈逐轮调，最终目标「和网页的感觉一样」。
+
+## 调研结论（双源：dev 站八面实拍 + 代码解剖）
+
+全局骨架：aurora 多彩流动背景（粉/紫/桃 60s 动画；web 已有
+`native-power-save` 降级先例）｜页头 = 大标题+灰副标题+右上双圆钮｜
+玻璃卡片两级（`glass-card`/`-strong`）｜Inter 全局 + Geist（chat 面）。
+
+| 页 | 功能区块（实拍逐块） | 代码源（实施前必精读） |
+|---|---|---|
+| NOW | "Hi, *Name*"（粉渐变）+ "N cards today" → Ambient 状态卡（toggle）→ 3D 球面卡片云（basket 标签/READY 徽/景深漂浮）→ ASK PIN AI 上拉 | NowView 182 + Sphere3DCards 515 + HomeEmptyState + useWeather |
+| AMBIENT | "2 devices · on-device TEE" → 开关卡 → 设备 avatar 行 → TODAY·NARRATIVE SUMMARY 叙事卡 → 时间线（来源标签/#tags/TRIGGERED THIS CARD 联动） | AmbientView 1303 + LiveSessionCard + 摘要面板 |
+| TASKS | "AI is running these for you" → 日期分组 → 行=basket 图标+标题+状态副文（🔴 N operations·下一步 / ✅ Ready / 划线 Dismissed）+时间 | CardTimeline 217 |
+| CONNECT | 双统计卡（2 of 7·All synced / 2 paired）→ AMBIENT SOURCES（Devices 2 active 可展开）→ Recommended 2/7 折叠组（品牌真 logo + Connected 绿点/Connect 黑 pill + Gmail 账户列表）→ More data connectors（1000+）catalog | DataConnections 1671 + ConnectPanel 327 + DeviceTimeline |
+| PROFILE | Identity/Goals 双 tab（黑胶囊）→ IDENTITY 摘要卡 → PROFILE/MEMORY(N) 统计卡切面板 → Facts/Preferences/Constraints 折叠组 + Memory 列表 + Goals 视图 | GoalsView 2294 + MemoriesPanel 580 + SkillsPanel 450 |
+| SETTING | 账号卡（avatar+Sign out）→ 四子页行（Subscription&Billing PRO 徽 / Preferences / Push Notifications / Ambient） | AccountPanel 1040 + AutoDreaming 838 + PlanPaymentForm + VoiceIdentity 等子页组件 |
+| CHAT | 收起箭头 → 完整 markdown → 回复操作行（复制/👍/👎/🔄）→ 用户气泡（时间戳+编辑）→ "✓ Thought" 整行折叠胶囊 → composer（🎤+纸飞机） | MainChat + ConversationView 1424 + ChatDetailView 701 |
+
+**截图死角（对应刀实施时补拍）**：Setting 四个子页内部、Profile 的
+Goals tab 与 Memory 面板、Connect 的 catalog 展开、NOW 卡片详情 drawer。
+
+## 分刀表
+
+| 刀 | 内容 | 量级 |
+|---|---|---|
+| 0 基建 | NativeWind 4 + token 共享 + lucide-react-native + moti + Inter/Geist 字体 | 0.5d |
+| 1 框架 | aurora 背景、抽屉菜单（模糊+手势）、PageHeader、删 bottom tab、ASK PIN AI 上拉容器 | 1d |
+| 2 NOW | 问候/Ambient 卡/球面 v1/空态 | 1d+迭代 |
+| 3 TASKS | 日期分组/状态环/行→card chat | 0.5d |
+| 4 CONNECT | 统计卡/品牌行/折叠组/catalog | 1d |
+| 5 AMBIENT | 开关/设备行/叙事摘要/时间线全量 | 1d |
+| 6 PROFILE | 双 tab/统计切换/折叠组/Memory/Goals | 1d |
+| 7 SETTING | 账号卡/四子页全量（含 Stripe，dev 期） | 1d |
+| 8 CHAT | Thought 胶囊/操作行/composer 终态/转场 | 0.5d |
+
+每刀流程：精读该页 web 代码 + 补拍子状态 → 翻译实施 → 真机验收 → commit。

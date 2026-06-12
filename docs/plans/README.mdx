@@ -24,6 +24,7 @@ description: "AI coding 过程中保留的设计和实施计划。"
 
 | Plan | 状态 | 什么时候看 |
 |---|---|---|
+| [2026-06-12-rn-ui-parity](./2026-06-12-rn-ui-parity.mdx) | 已定稿 | 改 apps/mobile UI、做 web↔RN 视觉对齐时 |
 | [RLS role 模型修复](./2026-06-08-rls-role-model) | brainstorm 草稿 | **安全**:RLS policy 写齐但**从未生效**(生产 postgres superuser + `user_scoped_tx` 不 `SET ROLE` → bypass;且 prod/本地 `service_role` 行为相反)。用户隔离当前只靠 repo 显式 `WHERE user_id`。改 `user_scoped_tx` / DB 连接 role / RLS policy,或排查跨用户数据隔离前必读。 |
 | [Memory Architecture](./memory-architecture) | 已定稿 | 改 memory / profile / skill / signals / evolution / raw.db 相关代码,需要理解 v3 设计取舍和 schema 细节时。 |
 | [Device Ingest Policy + Health Raw](./2026-04-30-device-ingest-policy-and-health-raw) | 实施中 | 改 `/devices/ingest`、端侧 `kind` 路由、`sync_mode`、unknown fallback signal、健康 raw 表时必读。 |

@@ -6,7 +6,7 @@ export default function LoginScreen({ onSignIn }: { onSignIn: () => Promise<void
   return (
     <View style={styles.root}>
       <Text style={styles.logo}>PIN AI</Text>
-      <Text style={styles.tagline}>Your proactive personal agent</Text>
+      <Text className="mt-2 mb-12 text-[15px] text-muted-foreground font-sans" style={styles.taglineSpacing}>Your proactive personal agent</Text>
       <Pressable
         style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
         disabled={busy}
@@ -36,7 +36,7 @@ const styles = StyleSheet.create({
     padding: 32,
   },
   logo: { fontSize: 34, fontWeight: "700", color: "#1a1a1a", letterSpacing: 1 },
-  tagline: { marginTop: 8, marginBottom: 48, fontSize: 15, color: "#71717a" },
+  taglineSpacing: { marginBottom: 48 },
   button: {
     backgroundColor: "#1a1a1a",
     borderRadius: 14,

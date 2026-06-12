@@ -11,8 +11,11 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
+    "@expo-google-fonts/geist": "^0.4.2",
+    "@expo-google-fonts/inter": "^0.4.2",
     "@kingstinct/react-native-healthkit": "^14.0.2",
     "@pin-ai/core": "*",
+    "@pin-ai/design": "*",
     "@pin-ai/state": "*",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@supabase/supabase-js": "^2.49.1",
@@ -22,9 +25,11 @@
     "expo-blur": "~56.0.3",
     "expo-build-properties": "~56.0.18",
     "expo-calendar": "~56.0.8",
+    "expo-clipboard": "~56.0.4",
     "expo-constants": "*",
     "expo-crypto": "~56.0.4",
     "expo-device": "~56.0.4",
+    "expo-font": "~56.0.6",
     "expo-haptics": "~56.0.3",
     "expo-linear-gradient": "~56.0.4",
     "expo-linking": "*",
@@ -35,6 +40,9 @@
     "expo-status-bar": "*",
     "expo-web-browser": "*",
     "fast-text-encoding": "^1.0.6",
+    "lucide-react-native": "^1.17.0",
+    "moti": "^0.30.0",
+    "nativewind": "^4.2.5",
     "react": "19.2.3",
     "react-native": "0.85.3",
     "react-native-gesture-handler": "~2.31.1",
@@ -42,10 +50,12 @@
     "react-native-nitro-modules": "^0.35.9",
     "react-native-reanimated": "4.3.1",
     "react-native-safe-area-context": "~5.7.0",
+    "react-native-svg": "^15.15.5",
     "react-native-url-polyfill": "^2.0.0"
   },
   "devDependencies": {
     "@types/react": "~19.2.14",
+    "tailwindcss": "^3.4.19",
     "typescript": "~6.0.3"
   }
 }

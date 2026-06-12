@@ -9,10 +9,14 @@ SyncScheduler）。
 ## 本地开发（simulator）
 
 ```bash
-make rn          # 连本 worktree compose 后端（simulator 与 host 共网直达）
+make rn          # 默认：你的 iPhone + 本 worktree compose 后端（同 make ios 工作流：make reset && make up && make rn）
+make rn SIM=1    # simulator（127.0.0.1 直达）
 make rn DEV=1    # 连 fly dev
 make rn PROD=1   # 连 fly prod（连 Supabase 一起切）
 ```
+
+真机默认档自动探测连接的 iPhone（USB/WiFi 调试），本地后端走 Mac 的
+LAN IP（手机需与 Mac 同 WiFi）。
 
 首次会 `expo prebuild`（CNG：`ios/` 是生成产物，gitignore）+ pod install +
 xcodebuild，之后增量秒级。裸启动：source `pinai-agents/.env` 后把 `VITE_*`
@@ -63,8 +67,22 @@ RN 侧管道（`src/ambient/`）：AmbientSource 接口/SIGNAL_KINDS/ingest wire
 outbox 接 DatabasePort 是后续）；开关 = per-device 本地 opt-in（Me 页，
 默认关，与 Capacitor 版隐私不变量一致）。
 
-## 后续刀（Capacitor 退役的前提）
+## UI 复刻状态（docs/plans/2026-06-12-rn-ui-parity.mdx）
 
-health 源（healthkit 库 + entitlement）→ Swift 残留件 Expo Module 化
-（audio 全家 / visit / 小件 / 端上模型）→ EAS/CI 构建链 → 删
-`capacitor-plugins/` + frontend 的 native 分支。
+刀 0-8 已落地：NativeWind 基建（packages/design token SSOT）、全局框架
+（aurora/抽屉/页头/ASK PIN AI 上拉，无 bottom tab）、六页全量
+（NOW 球面/TASKS/CONNECT/AMBIENT/PROFILE/SETTING 四子页）、chat 细节
+（Thought 胶囊/操作行/composer）。
+
+**视觉迭代清单（真机反馈驱动）**：
+- 3D 球面手感细调（自转速度/拖拽阻尼/卡密度）
+- AMBIENT 的 NARRATIVE SUMMARY 叙事卡（依赖 timeline 汇总管道 RN 落地）
+- 消息级 thumbs 的后端上报端点接入
+- Subscription plan 变更（dev 期走 web，上线前按审核政策定稿）
+- TRIGGERED THIS CARD 信号→卡片联动链接
+
+## 剩余工程刀
+
+frontend 去 Capacitor 化 follow-up（删 services/ambient/sources/* 等
+native 源 + capacitor-plugins/ 物理删除，见 README-RETIRED）；Android
+（make rn 扩展）。

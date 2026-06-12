@@ -423,7 +423,7 @@ macos: install ensure-env-pinai-agents ## Run the Electron desktop shell (this w
 	fi; \
 	VITE_PIN_API_PROXY_TARGET="$$TARGET" npm run dev --workspace=@pin-ai/desktop
 
-rn: install ensure-env-pinai-agents ## Run the Expo RN iOS app on simulator (this worktree's backend; DEV=1 fly dev, PROD=1 fly prod)
+rn: install ensure-env-pinai-agents ## Run Expo RN on your iPhone vs this worktree's backend (SIM=1 simulator, DEV=1 fly dev, PROD=1 fly prod)
 	@set -e; \
 	set -a && . ./pinai-agents/.env && set +a; \
 	if [ "$(PROD)" = "1" ]; then \
@@ -438,20 +438,23 @@ rn: install ensure-env-pinai-agents ## Run the Expo RN iOS app on simulator (thi
 	else \
 		PORT=$$($(COMPOSE) port pinai-web 8000 2>/dev/null | cut -d: -f2); \
 		[ -z "$$PORT" ] && { echo "pinai-web not running in this worktree — run 'make up' first, or use DEV=1 / PROD=1."; exit 1; }; \
-		if [ "$(DEVICE)" = "1" ]; then \
-			LAN_IP=$$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1); \
-			[ -z "$$LAN_IP" ] && { echo "no LAN IP — use DEV=1 for fly dev on device"; exit 1; }; \
-			TARGET="http://$$LAN_IP:$$PORT"; \
-			echo "→ RN (device) vs this worktree's backend ($$TARGET, 真机需与 Mac 同 WiFi)"; \
-		else \
+		if [ "$(SIM)" = "1" ]; then \
 			TARGET="http://127.0.0.1:$$PORT"; \
 			echo "→ RN (simulator) vs this worktree's backend ($$TARGET)"; \
+		else \
+			LAN_IP=$$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1); \
+			[ -z "$$LAN_IP" ] && { echo "no LAN IP — use SIM=1 or DEV=1"; exit 1; }; \
+			TARGET="http://$$LAN_IP:$$PORT"; \
+			echo "→ RN (iPhone) vs this worktree's backend ($$TARGET, 手机需与 Mac 同 WiFi)"; \
 		fi; \
 	fi; \
 	export EXPO_PUBLIC_SUPABASE_URL="$${EXPO_PUBLIC_SUPABASE_URL:-$$VITE_SUPABASE_URL}"; \
 	export EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY="$${EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY:-$$VITE_SUPABASE_PUBLISHABLE_KEY}"; \
-	if [ "$(DEVICE)" = "1" ]; then \
-		EXPO_PUBLIC_PIN_API_URL="$$TARGET" npm run ios --workspace=@pin-ai/mobile -- --device; \
-	else \
+	if [ "$(SIM)" = "1" ]; then \
 		EXPO_PUBLIC_PIN_API_URL="$$TARGET" npm run ios --workspace=@pin-ai/mobile; \
+	else \
+		UDID=$$(xcrun xctrace list devices 2>/dev/null | grep -E "iPhone" | grep -v Simulator | head -1 | grep -oE "[0-9A-F]{8}-[0-9A-F]{16}"); \
+		[ -z "$$UDID" ] && { echo "未检测到连接的 iPhone（USB/WiFi 调试）。插线解锁后重试，或 SIM=1 用模拟器。"; exit 1; }; \
+		echo "→ device $$UDID"; \
+		EXPO_PUBLIC_PIN_API_URL="$$TARGET" npm run ios --workspace=@pin-ai/mobile -- --device "$$UDID"; \
 	fi
