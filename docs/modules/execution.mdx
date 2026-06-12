@@ -260,6 +260,14 @@ history 真相是 `pai_chat_messages`(worker finalize 写入,`/api/conversation/
 
 `ConversationView` 的 Virtuoso 是纯虚拟列表(`followOutput={false}`,内建自动滚动全关),滚动决策唯一 owner 是 `conversation/scroll/useChatScroll.ts` 的 `following`/`free` 状态机:发送时乐观开 placeholder turn + runway spacer 撑底 + 用户消息锚到视口顶(流式期间阅读位置零移动,Claude/ChatGPT 模型);断开跟随只认用户手势(`scroll-intent.ts`),恢复只认回底 transition;不在底部时浮 `JumpToLatest` ⬇。HITL 审批卡渲染在暂停 turn 的 entry 内(Footer 只剩 debug-隐藏 turn 的 fallback)。硬约定:`scrollTo*` 只允许出现在 `scroll/` 内。设计依据与验收清单见相关 AI Plans。
 
+### Card drawer:Sources / How I reasoned(前端)
+
+卡片抽屉的 Sources 和 How I reasoned 两个区块吃 `IntentCard` 的结构化字段(`components/card/CardDrawerBody.tsx` 的 `DrawerDetailBody`,chat 侧 `ChatDetailView` 复用同一组件),不再从展示文本反向解析:
+
+- **Sources**:接 `IntentCard.sourceApps`(generation 侧确定性派生的 app slug 数组,派生与注入见 [Generation](./generation)),每个 slug 经 `card/source-app-display.ts` 查表渲染 `SourcePill`(品牌 logo / 图标 / 首字母 fallback)。`line2` 不再承载 sources 数据:`now/card-model.ts` 只保留 `Scheduled · label` 分支,旧的 `Sources: …` 拼接和 drawer 端 `parseSources` 反向解析已删除。
+- **How I reasoned**:`HowGeneratedSection` 接 `IntentCard.reasoningSteps`(LLM 生成的分步推理,`label` + `detail`),默认收起,展开为编号步骤列表;`steps` 为空(旧卡 / 提醒卡)时区块整体隐藏。
+- **旧卡降级**:后端注入 `sourceApps` 之前生成的卡,由 `packages/core` 的 `normalizeIntentCard` 客户端兜底——`sourceApps` 缺失时用 `deriveSourceAppsFromCitations` 从 `sources[]` 引文前缀推断 slug,审计引文不裸渲染到 UI。
+
 ## 开发入口
 
 | 改动 | 先看 |
@@ -284,6 +292,7 @@ history 真相是 `pai_chat_messages`(worker finalize 写入,`/api/conversation/
 | 前端 chat runtime | `proactive-ai-frontend/src/components/chat/conversation/useConversationRuntime.ts` |
 | 共享 chat 视图 | `proactive-ai-frontend/src/components/chat/conversation/ConversationView.tsx`、`chat/MainChat.tsx`、`chat/CardChat.tsx` |
 | 工具活动行 | `proactive-ai-frontend/src/components/chat/tool-steps.ts`、`main-chat/ToolActivityCard.tsx` |
+| Card drawer Sources / How I reasoned | `proactive-ai-frontend/src/components/card/CardDrawerBody.tsx`、`card/source-app-display.ts`、`packages/core/src/domain/intent-card.ts`(`normalizeIntentCard` / `deriveSourceAppsFromCitations`) |
 | 浏览器子视图 | `proactive-ai-frontend/src/components/browser-view/`、`hooks/useBrowserSession.ts` |
 
 ## 验证方式

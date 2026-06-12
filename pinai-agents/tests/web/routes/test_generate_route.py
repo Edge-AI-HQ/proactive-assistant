@@ -4,15 +4,17 @@ import uuid
 
 import pytest
 
+from pinai_agents.config import WebSettings
 from pinai_agents.shared.api_models import GenerateRequest
 from pinai_agents.web.auth.user_service import User
 from pinai_agents.web.db.rls import service_tx
 from pinai_agents.web.routes.ui import generate as generate_route
-from pinai_agents.web.services.chat_proxy import _GENERATE_READ_TIMEOUT_SECONDS
 
 
-def test_generate_proxy_read_timeout_is_ten_minutes() -> None:
-    assert _GENERATE_READ_TIMEOUT_SECONDS == 600.0
+def test_generate_proxy_read_timeout_defaults_to_ten_minutes() -> None:
+    # web 读超时 = generate_timeout_seconds + 30s buffer(chat 自己的 504 先到);
+    # 预算经 env GENERATE_TIMEOUT_SECONDS 可调,默认仍十分钟。
+    assert WebSettings().generate_timeout_seconds == 600.0
 
 
 @pytest.mark.asyncio

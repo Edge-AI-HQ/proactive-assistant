@@ -3,6 +3,7 @@ from typing import Any, cast
 
 import pytest
 
+from pinai_agents.config import WebSettings
 from pinai_agents.web.db.repositories.profile import ProfileRepository
 from pinai_agents.web.db.repositories.scheduled_tasks import ScheduledTasksRepository
 from pinai_agents.web.db.rls import service_tx, user_scoped_tx
@@ -14,12 +15,16 @@ from pinai_agents.web.scheduler.dispatcher import (
 )
 
 
-def test_generator_tasks_use_ten_minute_lease():
+def test_generator_tasks_lease_covers_generate_budget():
     dispatcher = DefaultDispatcher(pool=cast(Any, None), lease_seconds=60)
 
-    assert dispatcher._lease_for("generator.manual") == 600
-    assert dispatcher._lease_for("generator.auto") == 600
-    assert dispatcher._lease_for("generator.scheduled") == 600
+    # generator lease = generate_timeout_seconds + 120s buffer(默认 600+120),
+    # 跟随 env GENERATE_TIMEOUT_SECONDS 同步放大,防长跑 run 被 tick 回收。
+    expected = int(WebSettings().generate_timeout_seconds) + 120
+    assert dispatcher._lease_for("generator.manual") == expected
+    assert dispatcher._lease_for("generator.auto") == expected
+    assert dispatcher._lease_for("generator.scheduled") == expected
+    # auto.dreaming 不是 generator kind,走 _LONG_LEASE_SECONDS(600)。
     assert dispatcher._lease_for("auto.dreaming") == 600
 
 

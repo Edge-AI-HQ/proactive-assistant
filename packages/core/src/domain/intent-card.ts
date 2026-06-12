@@ -14,6 +14,11 @@ export interface IntentCardAction {
   agentPrompt?: string;
 }
 
+export interface ReasoningStep {
+  label: string;
+  detail: string;
+}
+
 export interface IntentCard {
   id: string;
   intentKey?: string;
@@ -27,6 +32,13 @@ export interface IntentCard {
   urgency: number;
   importance: number;
   sources: string[];
+  /** Deterministic user-facing app slugs (gmail / gcal / web / device / …)
+   *  stamped by the backend; legacy cards get them derived client-side
+   *  from the audit citations in `sources`. Always present (possibly []). */
+  sourceApps: string[];
+  /** LLM-written "How I reasoned" steps, audited against sources[] by the
+   *  evaluator. Empty for legacy / reminder cards — UI hides the section. */
+  reasoningSteps: ReasoningStep[];
   agentChain: string[];
   createdAt: string;
   /** Provenance for cards produced by a user's scheduled generator task —
@@ -98,6 +110,47 @@ function toStringArray(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
 }
 
+const CITATION_TOKEN_TO_APP: Record<string, string> = {
+  signal: "device",
+  memory: "memory",
+  gmail: "gmail",
+  gcal: "gcal",
+  world: "web",
+  profile: "profile",
+  goal: "goal",
+  preference: "preference",
+};
+
+const CITATION_PREFIX_RE = /^\s*([a-z0-9_-]+)(?:\s+[a-z0-9_-]+)*\s+id=/i;
+
+/** Mirror of the backend's derive_source_apps (generator.py) for cards
+ *  persisted before the backend stamped sourceApps. Unknown shapes are
+ *  dropped so raw audit strings never reach the UI. */
+export function deriveSourceAppsFromCitations(sources: string[]): string[] {
+  const apps: string[] = [];
+  for (const citation of sources) {
+    const match = CITATION_PREFIX_RE.exec(citation);
+    if (!match) continue;
+    const token = match[1].toLowerCase();
+    const app = CITATION_TOKEN_TO_APP[token] ?? token;
+    if (!apps.includes(app)) apps.push(app);
+  }
+  return apps;
+}
+
+function normalizeReasoningSteps(value: unknown): ReasoningStep[] {
+  if (!Array.isArray(value)) return [];
+  const steps: ReasoningStep[] = [];
+  for (const item of value) {
+    if (!isRecord(item)) continue;
+    const label = typeof item.label === "string" ? item.label.trim() : "";
+    const detail = typeof item.detail === "string" ? item.detail.trim() : "";
+    if (!label || !detail) continue;
+    steps.push({ label, detail });
+  }
+  return steps;
+}
+
 function toFiniteNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
@@ -128,6 +181,8 @@ export function normalizeIntentCard(card: unknown): IntentCard {
   const goalBasket = typeof record.goalBasket === "string" && VALID_GOAL_BASKETS.has(record.goalBasket as GoalBasket)
     ? record.goalBasket as GoalBasket
     : "life";
+  const sources = toStringArray(record.sources);
+  const sourceApps = toStringArray(record.sourceApps);
 
   return {
     id: typeof record.id === "string" && record.id.trim().length > 0
@@ -161,7 +216,9 @@ export function normalizeIntentCard(card: unknown): IntentCard {
     confidence: toFiniteNumber(record.confidence, 0.5),
     urgency: toFiniteNumber(record.urgency, 0.5),
     importance: toFiniteNumber(record.importance, 0.5),
-    sources: toStringArray(record.sources),
+    sources,
+    sourceApps: sourceApps.length > 0 ? sourceApps : deriveSourceAppsFromCitations(sources),
+    reasoningSteps: normalizeReasoningSteps(record.reasoningSteps),
     agentChain: toStringArray(record.agentChain),
     createdAt: typeof record.createdAt === "string" ? record.createdAt : "",
     ...(typeof record.sourceKind === "string" && record.sourceKind.trim().length > 0

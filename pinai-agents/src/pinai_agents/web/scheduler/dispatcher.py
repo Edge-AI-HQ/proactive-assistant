@@ -178,7 +178,6 @@ def _generation_request_from_task(task: ScheduledTaskRow) -> dict[str, Any] | No
 
 
 _LONG_LEASE_SECONDS = 600
-_GENERATOR_LEASE_SECONDS = 600
 
 # Scheduler task.kind → unified pai_agent_runs agent_kind (RC-3). Batch agents
 # get a ledger row alongside conversational agents so every agent run lives in
@@ -233,7 +232,14 @@ class DefaultDispatcher:
 
     def _lease_for(self, kind: str) -> int:
         if kind in _GENERATOR_KINDS:
-            return max(self._lease_seconds, _GENERATOR_LEASE_SECONDS)
+            # Lease must outlive the whole generate budget (chat guard + web
+            # read buffer) or the tick loop reclaims a mid-flight run.
+            from ...config import get_web_settings  # noqa: PLC0415
+
+            return max(
+                self._lease_seconds,
+                int(get_web_settings().generate_timeout_seconds) + 120,
+            )
         if kind in _LONG_RUNNING_KINDS:
             return max(self._lease_seconds, _LONG_LEASE_SECONDS)
         return self._lease_seconds

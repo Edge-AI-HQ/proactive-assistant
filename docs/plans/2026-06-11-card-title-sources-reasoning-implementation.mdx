@@ -1,0 +1,1293 @@
+---
+title: "Card 标题 + Sources + Reasoning 实施计划"
+description: "2026-06-11 设计的 file-level 拆解:12 个任务,每个任务 = 失败测试 → 最小实现 → 验证 → commit。零上下文工程师可按序执行。"
+---
+
+# Card 标题 + Sources + Reasoning 实施计划
+
+> 设计 SSOT:[`2026-06-11-card-title-sources-reasoning`](./2026-06-11-card-title-sources-reasoning)。本计划按 checkbox(`- [ ]`)逐步执行,TDD,每任务一个 commit。
+
+**目标:** 标题动作先行(≤70 字符,列表 2 行)+ drawer Sources 显示 app chip + How I reasoned 显示 LLM 生成的分步真实推理。
+
+**架构:** 后端在 `GeneratedCard` 加 LLM 字段 `reasoningSteps`、在卡片 dict 序列化时注入确定性派生的 `sourceApps`(纯前缀解析,无 migration);前端 `normalizeIntentCard` 保证两字段恒存在(旧卡客户端派生降级),drawer 改吃结构化数据,废除 line2 字符串反向 parse。
+
+**对设计的一处实施修正:** 设计稿写"sourceApps 在 source index 反查 + 前缀兜底"。实查 `_citation_for`(generator.py:690-708)是引文唯一生产者,source_type 已确定性编码在前缀里(`signal id=` / `gmail message id=` / `world id=`…),index 反查不提供任何额外信息。**实施为纯前缀解析**,函数放 `generator.py` 紧邻 `_citation_for`(保持映射表与模板同文件同步),注入点在 `chat/transport/routes/generate.py` 的 `_serialize_passing_cards`(卡片在那里才变成 dict)。已同步回写设计文档(Task 11)。
+
+**测试环境(后端):** 纯 schema/纯函数/prompt 测试不需要 DB。涉及 DB 的测试按 `tests/conftest.py` 用 `TEST_DATABASE_URL`(本 worktree:`postgresql://postgres:postgres@localhost:57080/postgres`,postgres 容器已起、迁移已应用;若环境重建,流程见 AGENTS.md 与 memory `worktree-db-test-flow`)。chat 侧测试 import 需要 `TAVILY_API_KEY=dummy-local-test`。
+
+---
+
+## Task 1: 后端 schema — `ReasoningStep` + `GeneratedCard.reasoning_steps`
+
+**Files:**
+- Modify: `pinai-agents/src/pinai_agents/shared/api_models.py`(`GeneratedCard` 在 577 行,`CardAction` 上方插入新类)
+- Test: `pinai-agents/tests/shared/test_reasoning_steps.py`(新建)
+
+- [ ] **Step 1.1: 写失败测试**
+
+```python
+"""ReasoningStep / GeneratedCard.reasoning_steps — LLM 输出的分步推理 schema。
+
+详见 docs/plans/2026-06-11-card-title-sources-reasoning.mdx C 节:
+label 小枚举(归一化大小写/连字符),detail ≤200 截断(_AgentModel clip),
+缺省 [](旧 artifact / 测试 fixture 兼容)。
+"""
+
+from __future__ import annotations
+
+from pinai_agents.shared.api_models import GeneratedCard, ReasoningStep
+
+
+def _card_payload(**overrides: object) -> dict:
+    payload: dict = {
+        "intentKey": "k",
+        "goalBasket": "work",
+        "title": "t",
+        "whyNow": "w",
+        "summary": "s",
+        "primaryAction": {"label": "Do it", "type": "confirm"},
+        "confidence": 0.5,
+        "urgency": 0.5,
+        "importance": 0.5,
+        "sources": ["signal id=1, title=x"],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_reasoning_steps_parse_camelcase() -> None:
+    card = GeneratedCard.model_validate(
+        _card_payload(
+            reasoningSteps=[
+                {"label": "observed", "detail": "saw a signal"},
+                {"label": "decided", "detail": "surfaced the card"},
+            ]
+        )
+    )
+    assert [s.label for s in card.reasoning_steps] == ["observed", "decided"]
+    dumped = card.model_dump(by_alias=True)
+    assert dumped["reasoningSteps"][0] == {"label": "observed", "detail": "saw a signal"}
+
+
+def test_reasoning_steps_default_empty() -> None:
+    card = GeneratedCard.model_validate(_card_payload())
+    assert card.reasoning_steps == []
+
+
+def test_reasoning_step_label_normalized() -> None:
+    # LLM 偶发 "Cross-referenced" / "Pattern matched" 大小写连字符变体,
+    # before-validator 归一化而不是让整张卡验证失败。
+    step = ReasoningStep.model_validate({"label": "Cross-referenced", "detail": "d"})
+    assert step.label == "cross_referenced"
+    step2 = ReasoningStep.model_validate({"label": "Pattern matched", "detail": "d"})
+    assert step2.label == "pattern_matched"
+
+
+def test_reasoning_step_detail_clipped_not_rejected() -> None:
+    step = ReasoningStep.model_validate({"label": "observed", "detail": "x" * 500})
+    assert len(step.detail) == 200
+```
+
+- [ ] **Step 1.2: 跑测试确认失败**
+
+```bash
+cd pinai-agents && uv run pytest tests/shared/test_reasoning_steps.py -v
+```
+预期:FAIL,`ImportError: cannot import name 'ReasoningStep'`。
+
+- [ ] **Step 1.3: 最小实现**
+
+在 `api_models.py` 顶部 import 区确认有 `field_validator`(现有 `model_validator` 同来源,没有就在同一行加):
+
+```python
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+```
+
+在 `class CardAction(_AgentModel):`(567 行)上方插入:
+
+```python
+class ReasoningStep(_AgentModel):
+    """One user-visible step of the card's "How I reasoned" trace.
+
+    Written by the card-generator LLM in the same structured call that
+    writes the card; the evaluator audits each detail against sources[]
+    (a step referencing un-cited data is a grounding violation)."""
+
+    label: Literal["observed", "cross_referenced", "pattern_matched", "flagged", "decided"]
+    detail: str = Field(min_length=1, max_length=200)
+
+    @field_validator("label", mode="before")
+    @classmethod
+    def _normalize_label(cls, value: Any) -> Any:
+        # LLM 偶发 "Cross-referenced" / "Pattern matched" 变体;归一化到
+        # 枚举形,避免一个 label 大小写让整张卡验证失败重试。
+        if isinstance(value, str):
+            return value.strip().lower().replace("-", "_").replace(" ", "_")
+        return value
+```
+
+在 `GeneratedCard` 的 `sources` 字段(591-594 行)后追加:
+
+```python
+    reasoning_steps: list[ReasoningStep] = Field(
+        default_factory=list,
+        description="2-4 user-visible steps narrating how this card came to be, in order: observed -> cross_referenced -> decided. Each detail must reference data already cited in sources[]. Serializes to camelCase reasoningSteps.",
+    )
+```
+
+说明:用 `default_factory=list` 而不是必填——本仓哲学是"软上限不弃卡"(见 `_clip_overlong_strings` docstring);必填会让一次 LLM 漏填毁掉整张卡,缺省空数组前端会隐藏区块。生成可靠性靠 Task 4 的 prompt 规则。
+
+- [ ] **Step 1.4: 跑测试确认通过 + 不破坏现有**
+
+```bash
+cd pinai-agents && uv run pytest tests/shared/ -q && uv run ruff check && uv run mypy src
+```
+预期:全部 PASS(`test_agent_model_clip.py` 的 `_full_card` fixture 不带 reasoningSteps,因 default 不受影响)。
+
+- [ ] **Step 1.5: Commit**
+
+```bash
+git add pinai-agents/src/pinai_agents/shared/api_models.py pinai-agents/tests/shared/test_reasoning_steps.py
+git commit -m "feat(generation): GeneratedCard 增加 reasoningSteps 结构化推理字段"
+```
+
+---
+
+## Task 2: 后端 `derive_source_apps` 纯函数
+
+**Files:**
+- Modify: `pinai-agents/src/pinai_agents/chat/agents/generator.py`(紧跟 `_citation_for`,708 行后)
+- Test: `pinai-agents/tests/chat/agents/test_source_apps.py`(新建)
+
+- [ ] **Step 2.1: 写失败测试**
+
+```python
+"""derive_source_apps — 引文前缀 → 用户可见 app slug 的确定性映射。
+
+引文唯一生产者是 _citation_for;前缀首词即 source_type。解析不出
+前缀的字符串(LLM 大幅改写 / "scheduled-reminder")直接丢弃——审计
+串永远不该泄漏进 UI。chat 测试 import 需要 TAVILY_API_KEY,见 conftest。
+"""
+
+from __future__ import annotations
+
+from pinai_agents.chat.agents.generator import derive_source_apps
+
+
+def test_each_known_prefix_maps() -> None:
+    assert derive_source_apps(["signal id=sig_1, title=t"]) == ["device"]
+    assert derive_source_apps(["memory id=mem_1, text=t"]) == ["memory"]
+    assert derive_source_apps(["gmail message id=abc, subject=s"]) == ["gmail"]
+    assert derive_source_apps(["gcal event id=e1, title=t"]) == ["gcal"]
+    assert derive_source_apps(["world id=world_1, title=t"]) == ["web"]
+    assert derive_source_apps(["profile id=primary, summary=s"]) == ["profile"]
+    assert derive_source_apps(["goal id=g1, title=t"]) == ["goal"]
+    assert derive_source_apps(["preference id=p1, statement=s"]) == ["preference"]
+
+
+def test_generic_connected_raw_prefix_passes_through() -> None:
+    # _citation_for 的 generic 分支:f"{source_type} id=..."
+    assert derive_source_apps(["slack id=m1, text=t"]) == ["slack"]
+    # prompt 示例风格 "slack message id=" 的首词同样命中
+    assert derive_source_apps(["slack message id=m1, user=u, text=t"]) == ["slack"]
+    assert derive_source_apps(["gdrive file id=f1, name=n"]) == ["gdrive"]
+
+
+def test_dedupe_keeps_first_seen_order() -> None:
+    assert derive_source_apps(
+        [
+            "world id=w1, title=a",
+            "gmail message id=m1, subject=b",
+            "world id=w2, title=c",
+        ]
+    ) == ["web", "gmail"]
+
+
+def test_unparseable_citations_dropped() -> None:
+    assert derive_source_apps(["scheduled-reminder"]) == []
+    assert derive_source_apps(["totally rewritten by the llm"]) == []
+    assert derive_source_apps([]) == []
+```
+
+- [ ] **Step 2.2: 跑测试确认失败**
+
+```bash
+cd pinai-agents && TAVILY_API_KEY=dummy-local-test uv run pytest tests/chat/agents/test_source_apps.py -v
+```
+预期:FAIL,`ImportError: cannot import name 'derive_source_apps'`。
+
+- [ ] **Step 2.3: 最小实现**
+
+确认 `generator.py` 已有 `import re`(`_auto_consume_world_signals` 用到;没有就加)。在 `_citation_for`(708 行)之后插入:
+
+```python
+# Maps the first token of a citation prefix (text before " id=") to the
+# user-facing app slug stamped onto card["sourceApps"]. Must stay in sync
+# with _citation_for above — that template is the only producer of the
+# citation strings this parses.
+_CITATION_TOKEN_TO_APP = {
+    "signal": "device",
+    "memory": "memory",
+    "gmail": "gmail",
+    "gcal": "gcal",
+    "world": "web",
+    "profile": "profile",
+    "goal": "goal",
+    "preference": "preference",
+}
+
+_CITATION_PREFIX_RE = re.compile(r"^\s*([a-z0-9_-]+)(?:\s+[a-z0-9_-]+)*\s+id=", re.IGNORECASE)
+
+
+def derive_source_apps(sources: list[str]) -> list[str]:
+    """Deterministic user-facing app slugs for a card's citation list.
+
+    Unknown / garbled citations are dropped rather than guessed — the
+    audit string itself must never leak to the UI (the old behaviour the
+    frontend is moving away from)."""
+    apps: list[str] = []
+    for citation in sources:
+        match = _CITATION_PREFIX_RE.match(citation)
+        if not match:
+            continue
+        token = match.group(1).lower()
+        app = _CITATION_TOKEN_TO_APP.get(token, token)
+        if app not in apps:
+            apps.append(app)
+    return apps
+```
+
+- [ ] **Step 2.4: 跑测试确认通过**
+
+```bash
+cd pinai-agents && TAVILY_API_KEY=dummy-local-test uv run pytest tests/chat/agents/test_source_apps.py -v && uv run ruff check && uv run mypy src
+```
+预期:PASS。
+
+- [ ] **Step 2.5: Commit**
+
+```bash
+git add pinai-agents/src/pinai_agents/chat/agents/generator.py pinai-agents/tests/chat/agents/test_source_apps.py
+git commit -m "feat(generation): 引文前缀确定性派生 sourceApps 纯函数"
+```
+
+---
+
+## Task 3: 注入 `sourceApps` 到卡片 dict
+
+**Files:**
+- Modify: `pinai-agents/src/pinai_agents/chat/transport/routes/generate.py`(import 区 21 行附近;`_serialize_passing_cards` 175-176 行)
+- Test: `pinai-agents/tests/chat/routes/test_source_apps_injection.py`(新建)
+
+- [ ] **Step 3.1: 写失败测试**
+
+```python
+"""_serialize_passing_cards 给每张选中卡注入 sourceApps(确定性,非 LLM)。"""
+
+from __future__ import annotations
+
+from pinai_agents.chat.transport.routes.generate import _serialize_passing_cards
+from pinai_agents.shared.api_models import (
+    CardEvaluation,
+    GeneratedCard,
+    GeneratorOutput,
+)
+
+
+def _output_with_one_card() -> GeneratorOutput:
+    card = GeneratedCard.model_validate(
+        {
+            "intentKey": "k1",
+            "goalBasket": "work",
+            "title": "t",
+            "whyNow": "w",
+            "summary": "s",
+            "primaryAction": {"label": "Do", "type": "confirm"},
+            "confidence": 0.5,
+            "urgency": 0.5,
+            "importance": 0.5,
+            "sources": [
+                "world id=w1, title=news",
+                "gmail message id=m1, subject=s",
+            ],
+        }
+    )
+    evaluation = CardEvaluation.model_validate(
+        {
+            "intentKey": "k1",
+            "relevance": 7,
+            "actionability": 7,
+            "whyNowClarity": 7,
+            "novelty": 7,
+            "decisionCompression": 7,
+            "overall": 7,
+            "pass": True,
+            "feedback": "ok",
+        }
+    )
+    return GeneratorOutput.model_validate(
+        {"reasoning": "r", "cards": [card], "evaluations": [evaluation], "batchFeedback": "b"}
+    )
+
+
+def test_serialize_stamps_source_apps() -> None:
+    cards, _evals = _serialize_passing_cards(
+        _output_with_one_card(), run_id="run1", max_cards=1
+    )
+    assert cards[0]["sourceApps"] == ["web", "gmail"]
+    assert cards[0]["id"] == "run1_card_00"
+```
+
+- [ ] **Step 3.2: 跑测试确认失败**
+
+```bash
+cd pinai-agents && TAVILY_API_KEY=dummy-local-test uv run pytest tests/chat/routes/test_source_apps_injection.py -v
+```
+预期:FAIL,`KeyError: 'sourceApps'`。
+
+- [ ] **Step 3.3: 最小实现**
+
+`generate.py` import 区(21 行)改:
+
+```python
+from ...agents.generator import derive_source_apps, run_generator
+```
+
+`_serialize_passing_cards` 的 id 重写循环(175-176 行)改为:
+
+```python
+    for i, card in enumerate(cards):
+        card["id"] = f"{run_id}_card_{i:02d}"
+        card["sourceApps"] = derive_source_apps(card.get("sources") or [])
+```
+
+提醒卡(`web/services/reminder_cards.py`)不需要改:它不经过此函数,`sources=["scheduled-reminder"]` 在前端降级派生时解析不出前缀 → `sourceApps=[]` → Sources 区块自然隐藏(drawer 已有 `Scheduled · label` 标记)。
+
+- [ ] **Step 3.4: 跑测试确认通过 + 回归**
+
+```bash
+cd pinai-agents && TAVILY_API_KEY=dummy-local-test uv run pytest tests/chat/routes/ tests/chat/agents/test_source_apps.py -q && uv run ruff check && uv run mypy src
+```
+预期:新测试 PASS;`tests/chat/routes/` 既有测试不回归。
+
+- [ ] **Step 3.5: Commit**
+
+```bash
+git add pinai-agents/src/pinai_agents/chat/transport/routes/generate.py pinai-agents/tests/chat/routes/test_source_apps_injection.py
+git commit -m "feat(generation): 选卡序列化时注入确定性 sourceApps"
+```
+
+---
+
+## Task 4: 后端 prompt — 标题公式 + reasoningSteps 规则 + evaluator 同步
+
+**Files:**
+- Modify: `pinai-agents/src/pinai_agents/chat/agents/generator.py`(`_CARD_GENERATOR_PROMPT` 365-369、387 后;`_EVALUATOR_PROMPT` 540-544、557-559)
+- Test: `pinai-agents/tests/chat/agents/test_generator_prompts.py`(追加)
+
+- [ ] **Step 4.1: 写失败测试**(追加到 `test_generator_prompts.py` 末尾;import 区按需补 `_EVALUATOR_PROMPT`)
+
+```python
+def test_card_generator_prompt_title_is_action_first() -> None:
+    rendered = _render_prompt(_CARD_GENERATOR_PROMPT, lang_clause="x")
+    assert "ACTION-FIRST" in rendered
+    assert "70 chars" in rendered
+    # 旧"事实先行"公式必须从生成规则里消失
+    assert 'built as "concrete fact / number / time' not in rendered
+
+
+def test_card_generator_prompt_requires_reasoning_steps() -> None:
+    rendered = _render_prompt(_CARD_GENERATOR_PROMPT, lang_clause="x")
+    assert "reasoningSteps" in rendered
+    assert "`observed` /" in rendered
+
+
+def test_evaluator_prompt_audits_reasoning_steps_and_action_first_title() -> None:
+    assert "reasoningSteps` are audited the same way" in _EVALUATOR_PROMPT
+    assert "action-first formula" in _EVALUATOR_PROMPT
+    assert "concrete fact / number / time + human stake" not in _EVALUATOR_PROMPT
+
+
+def test_card_generator_prompt_has_good_bad_title_examples() -> None:
+    rendered = _render_prompt(_CARD_GENERATOR_PROMPT, lang_clause="x")
+    assert "Review your tech concentration — chip stocks fell 3%" in rendered
+    assert "帮你复查科技股持仓集中度" in rendered
+    assert "(fact-first)" in rendered
+
+
+def test_why_now_adds_context_beyond_title() -> None:
+    rendered = _render_prompt(_CARD_GENERATOR_PROMPT, lang_clause="x")
+    assert "never restate the title" in rendered
+
+
+def test_evaluator_caps_actionability_for_fact_first_titles() -> None:
+    assert "caps actionability" in _EVALUATOR_PROMPT
+```
+
+- [ ] **Step 4.2: 跑测试确认失败**
+
+```bash
+cd pinai-agents && TAVILY_API_KEY=dummy-local-test uv run pytest tests/chat/agents/test_generator_prompts.py -v
+```
+预期:新增 6 个 FAIL(断言不成立),旧测试 PASS。(原写 3 个;追加三条搭车 prompt 优化后,执行时实测新增 6 个测试)
+
+- [ ] **Step 4.3: 改 prompt(四处替换,逐字)**
+
+(a) `_CARD_GENERATOR_PROMPT` title 规则,365-369 行,整段替换:
+
+旧:
+```text
+- title: ≤ 80 chars, specific, and built as "concrete fact / number / time
+  + human stake + immediate action". If the matched pattern has
+  `cardSkeleton.title_strategy.example`, use it as style calibration, not as
+  copy text. Avoid generic "I noticed..." / "you may like..." / "need help?"
+  titles.
+```
+
+新:
+```text
+- title: ≤ 70 chars, ACTION-FIRST. Open with the action you can take
+  for the user or already took (verb + object), then " — " + the
+  concrete trigger fact / number / time. NEVER open with the news fact
+  or number itself. If the matched pattern has
+  `cardSkeleton.title_strategy.example`, use it to calibrate the
+  trigger clause, not as copy text, keeping the action-first shape.
+  Avoid generic "I noticed..." / "you may like..." / "need help?"
+  titles.
+    GOOD: "Review your tech concentration — chip stocks fell 3% for a 2nd day"
+    GOOD: "Prep tomorrow's 1:1 with Sam — 3 unresolved threads since Monday"
+    GOOD (zh-Hans): "帮你复查科技股持仓集中度 — 芯片股连跌两天"
+    BAD : "Nasdaq -3% on Jun 9: chip selloff day 2 — Micron up 174% YTD" (fact-first)
+    BAD : "Check your portfolio — something changed" (vague trigger)
+```
+
+(b) `_CARD_GENERATOR_PROMPT` sources 规则之后(387 行 `auto-consume identifies...` 之后、388 行 `- ambient transcript...` 之前)插入新 bullet:
+
+```text
+- reasoningSteps: 2-4 user-visible steps narrating how this card came
+  to be, in order — what you observed, what you cross-referenced, why
+  you decided to surface it. Each step's `detail` must point at data
+  already cited in `sources[]`; referencing anything else is a
+  grounding violation. `label` must be one of `observed` /
+  `cross_referenced` / `pattern_matched` / `flagged` / `decided`.
+```
+
+(reasoningSteps 的语言无需单独说明:392 行 `{lang_clause}` 已约束 "all user-visible text fields"。)
+
+(c) `_EVALUATOR_PROMPT` pattern_grounding 维度,540-545 行,替换其中两句:
+
+旧:
+```text
+  `cardSkeleton.title_strategy`, judge whether the title follows its
+  formula/example style: concrete fact / number / time + human stake +
+  immediate action. Score 0 = the card claims a pattern but
+```
+
+新:
+```text
+  `cardSkeleton.title_strategy`, judge whether the title follows the
+  action-first formula: action for the user + " — " + concrete trigger
+  (fact / number / time), with `title_strategy` calibrating the trigger
+  clause style. Score 0 = the card claims a pattern but
+```
+
+(d) `_EVALUATOR_PROMPT` pass 判定,557-559 行,替换:
+
+旧:
+```text
+pass = overall >= 5.0 AND no grounding violation (every cited id must
+look plausibly extractable from a real data source — flag fabrications
+by failing) AND (pattern_id is null OR pattern_grounding >= 5).
+```
+
+新:
+```text
+pass = overall >= 5.0 AND no grounding violation (every cited id must
+look plausibly extractable from a real data source — flag fabrications
+by failing; `reasoningSteps` are audited the same way: a step that
+references data not evidenced in `sources[]` is a grounding violation)
+AND (pattern_id is null OR pattern_grounding >= 5).
+```
+
+(e) `_CARD_GENERATOR_PROMPT` whyNow 规则,370 行,替换(防和新标题的触发短句重复):
+
+旧:
+```text
+- whyNow: one sentence with a CONCRETE trigger (date / number / event)
+```
+
+新:
+```text
+- whyNow: one sentence with a CONCRETE trigger (date / number / event).
+  It must ADD context beyond the title's trigger clause (scale, history,
+  what changed) — never restate the title.
+```
+
+(f) `_EVALUATOR_PROMPT` 的 `<calibration>` 区第一条("Resist generosity"那条)之后插入(堵住非 pattern 卡标题无人审的盲区):
+
+```text
+- Titles are action-first by contract. A title that opens with a news
+  fact / number instead of the user-facing action caps actionability
+  at 6 — note it in feedback.
+```
+
+连接器引导卡 title 规则(468-472 行)与 `<workflow>` step 3(352-357 行)**不动**——前者已是 outcome-led,后者的 title angle 选择与新公式兼容。
+
+- [ ] **Step 4.4: 跑测试确认通过**
+
+```bash
+cd pinai-agents && TAVILY_API_KEY=dummy-local-test uv run pytest tests/chat/agents/test_generator_prompts.py -v && uv run ruff check && uv run mypy src
+```
+预期:全部 PASS。
+
+- [ ] **Step 4.5: Commit**
+
+```bash
+git add pinai-agents/src/pinai_agents/chat/agents/generator.py pinai-agents/tests/chat/agents/test_generator_prompts.py
+git commit -m "feat(generation): 标题动作先行公式 + reasoningSteps 生成与审计规则"
+```
+
+---
+
+## Task 5: packages/core — `IntentCard` 新字段 + 客户端派生降级
+
+**Files:**
+- Modify: `packages/core/src/domain/intent-card.ts`
+- Modify: `proactive-ai-frontend/src/types/intent-card.ts`(shim 补 re-export)
+- Test: `packages/core/src/domain/intent-card.test.ts`(新建)
+
+前置:前端命令需要 `export PATH="/usr/local/opt/node@22/bin:$PATH"`(本机 Bash 无 node,见 memory)。
+
+- [ ] **Step 5.1: 写失败测试**
+
+```ts
+import { describe, expect, test } from "vitest";
+
+import {
+  deriveSourceAppsFromCitations,
+  normalizeIntentCard,
+} from "./intent-card";
+
+describe("deriveSourceAppsFromCitations", () => {
+  test("maps citation prefixes to app slugs, deduped in order", () => {
+    expect(
+      deriveSourceAppsFromCitations([
+        "world id=w1, title=a",
+        "gmail message id=m1, subject=b",
+        "world id=w2, title=c",
+        "signal id=sig_1, title=d",
+      ]),
+    ).toEqual(["web", "gmail", "device"]);
+  });
+
+  test("passes unknown connected_raw types through and drops garbage", () => {
+    expect(deriveSourceAppsFromCitations(["slack id=m1, text=t"])).toEqual(["slack"]);
+    expect(deriveSourceAppsFromCitations(["scheduled-reminder"])).toEqual([]);
+    expect(deriveSourceAppsFromCitations([])).toEqual([]);
+  });
+});
+
+describe("normalizeIntentCard sourceApps / reasoningSteps", () => {
+  const base = {
+    id: "c1",
+    goalBasket: "work",
+    title: "t",
+    whyNow: "w",
+    summary: "s",
+    primaryAction: { label: "Do", type: "confirm" },
+    sources: ["world id=w1, title=a"],
+  };
+
+  test("uses backend sourceApps when present", () => {
+    const card = normalizeIntentCard({ ...base, sourceApps: ["gmail", "web"] });
+    expect(card.sourceApps).toEqual(["gmail", "web"]);
+  });
+
+  test("derives sourceApps from citations for legacy cards", () => {
+    const card = normalizeIntentCard(base);
+    expect(card.sourceApps).toEqual(["web"]);
+  });
+
+  test("keeps well-formed reasoningSteps and drops malformed entries", () => {
+    const card = normalizeIntentCard({
+      ...base,
+      reasoningSteps: [
+        { label: "observed", detail: "saw it" },
+        { label: "", detail: "no label" },
+        { label: "decided", detail: "" },
+        "not-a-record",
+        { label: "decided", detail: "surfaced" },
+      ],
+    });
+    expect(card.reasoningSteps).toEqual([
+      { label: "observed", detail: "saw it" },
+      { label: "decided", detail: "surfaced" },
+    ]);
+  });
+
+  test("defaults reasoningSteps to [] for legacy cards", () => {
+    expect(normalizeIntentCard(base).reasoningSteps).toEqual([]);
+  });
+});
+```
+
+- [ ] **Step 5.2: 跑测试确认失败**
+
+```bash
+cd packages/core && npm test
+```
+预期:FAIL(`deriveSourceAppsFromCitations` 不存在)。
+
+- [ ] **Step 5.3: 最小实现**(`intent-card.ts`)
+
+(a) `IntentCard` interface(`sources: string[];` 之后,29 行)加:
+
+```ts
+  /** Deterministic user-facing app slugs (gmail / gcal / web / device / …)
+   *  stamped by the backend; legacy cards get them derived client-side
+   *  from the audit citations in `sources`. Always present (possibly []). */
+  sourceApps: string[];
+  /** LLM-written "How I reasoned" steps, audited against sources[] by the
+   *  evaluator. Empty for legacy / reminder cards — UI hides the section. */
+  reasoningSteps: ReasoningStep[];
+```
+
+(b) interface 区(`IntentCardAction` 旁)加:
+
+```ts
+export interface ReasoningStep {
+  label: string;
+  detail: string;
+}
+```
+
+(c) helpers 区(`toStringArray` 之后)加:
+
+```ts
+const CITATION_TOKEN_TO_APP: Record<string, string> = {
+  signal: "device",
+  memory: "memory",
+  gmail: "gmail",
+  gcal: "gcal",
+  world: "web",
+  profile: "profile",
+  goal: "goal",
+  preference: "preference",
+};
+
+const CITATION_PREFIX_RE = /^\s*([a-z0-9_-]+)(?:\s+[a-z0-9_-]+)*\s+id=/i;
+
+/** Mirror of the backend's derive_source_apps (generator.py) for cards
+ *  persisted before the backend stamped sourceApps. Unknown shapes are
+ *  dropped so raw audit strings never reach the UI. */
+export function deriveSourceAppsFromCitations(sources: string[]): string[] {
+  const apps: string[] = [];
+  for (const citation of sources) {
+    const match = CITATION_PREFIX_RE.exec(citation);
+    if (!match) continue;
+    const token = match[1].toLowerCase();
+    const app = CITATION_TOKEN_TO_APP[token] ?? token;
+    if (!apps.includes(app)) apps.push(app);
+  }
+  return apps;
+}
+
+function normalizeReasoningSteps(value: unknown): ReasoningStep[] {
+  if (!Array.isArray(value)) return [];
+  const steps: ReasoningStep[] = [];
+  for (const item of value) {
+    if (!isRecord(item)) continue;
+    const label = typeof item.label === "string" ? item.label.trim() : "";
+    const detail = typeof item.detail === "string" ? item.detail.trim() : "";
+    if (!label || !detail) continue;
+    steps.push({ label, detail });
+  }
+  return steps;
+}
+```
+
+(d) `normalizeIntentCard` 里把 `sources: toStringArray(record.sources),` 一带改为(函数开头先取一次):
+
+```ts
+  const sources = toStringArray(record.sources);
+  const sourceApps = toStringArray(record.sourceApps);
+```
+
+return 对象中:
+
+```ts
+    sources,
+    sourceApps: sourceApps.length > 0 ? sourceApps : deriveSourceAppsFromCitations(sources),
+    reasoningSteps: normalizeReasoningSteps(record.reasoningSteps),
+```
+
+(e) `proactive-ai-frontend/src/types/intent-card.ts` shim 的 export 清单加 `type ReasoningStep,`(以及 `deriveSourceAppsFromCitations` 如有组件需要;默认只加类型)。
+
+- [ ] **Step 5.4: 跑测试确认通过**
+
+```bash
+cd packages/core && npm test && npm run type-check
+cd ../../proactive-ai-frontend && npm run type-check
+```
+预期:core 测试 PASS;**前端 type-check 此时可能因 `IntentCard` 新必填字段在测试 fixture 缺失而报错**——只修测试 fixture(`makeCard` 加 `sourceApps: [], reasoningSteps: []`),不要把字段改成可选。
+
+- [ ] **Step 5.5: Commit**
+
+```bash
+git add packages/core/src/domain/intent-card.ts packages/core/src/domain/intent-card.test.ts proactive-ai-frontend/src/types/intent-card.ts
+# 如有 fixture 修复一并 add
+git commit -m "feat(core): IntentCard 增加 sourceApps/reasoningSteps + 旧卡客户端派生"
+```
+
+---
+
+## Task 6: 前端显示映射表 `source-app-display.ts`
+
+**Files:**
+- Create: `proactive-ai-frontend/src/components/card/source-app-display.ts`
+- Test: `proactive-ai-frontend/src/components/card/source-app-display.test.ts`(新建)
+
+- [ ] **Step 6.1: 写失败测试**
+
+```ts
+import { describe, expect, test } from "vitest";
+
+import { reasoningStepLabel, sourceAppDisplay } from "./source-app-display";
+
+describe("sourceAppDisplay", () => {
+  test("known brand slugs map to brand + label", () => {
+    expect(sourceAppDisplay("gmail")).toMatchObject({ brand: "gmail", label: "Gmail" });
+    expect(sourceAppDisplay("gcal")).toMatchObject({ brand: "gcal", label: "Calendar" });
+  });
+
+  test("internal layers map to mono icon + label", () => {
+    expect(sourceAppDisplay("web").label).toBe("Web");
+    expect(sourceAppDisplay("web").brand).toBeNull();
+    expect(sourceAppDisplay("web").Icon).toBeDefined();
+    expect(sourceAppDisplay("device").label).toBe("Phone");
+    expect(sourceAppDisplay("memory").label).toBe("Memory");
+  });
+
+  test("unknown slug falls back to capitalized first-letter chip", () => {
+    expect(sourceAppDisplay("brex")).toEqual({ brand: null, label: "Brex" });
+  });
+});
+
+describe("reasoningStepLabel", () => {
+  test("maps known enum labels to display text", () => {
+    expect(reasoningStepLabel("observed")).toBe("Observed");
+    expect(reasoningStepLabel("cross_referenced")).toBe("Cross-referenced");
+    expect(reasoningStepLabel("pattern_matched")).toBe("Pattern matched");
+  });
+
+  test("falls back to prettified unknown label", () => {
+    expect(reasoningStepLabel("looked_up")).toBe("Looked up");
+  });
+});
+```
+
+- [ ] **Step 6.2: 跑测试确认失败**
+
+```bash
+cd proactive-ai-frontend && npx vitest run src/components/card/source-app-display.test.ts
+```
+预期:FAIL(模块不存在)。
+
+- [ ] **Step 6.3: 最小实现**(新文件 `source-app-display.ts`)
+
+```ts
+import {
+  Brain,
+  Globe,
+  SlidersHorizontal,
+  Smartphone,
+  Target,
+  UserRound,
+  type LucideIcon,
+} from "lucide-react";
+
+/* slug → 展示信息。brand 命中 ChatDetailView.brandSvg 的 8 个品牌;
+ * 内部层(web/memory/device/…)用 lucide mono 图标;未知 slug 首字母 chip。
+ * slug 表与后端 generator.py 的 _CITATION_TOKEN_TO_APP 同源。 */
+export interface SourceAppDisplay {
+  brand:
+    | "gmail"
+    | "gcal"
+    | "gdrive"
+    | "gdocs"
+    | "gsheets"
+    | "slack"
+    | "notion"
+    | "linear"
+    | null;
+  label: string;
+  Icon?: LucideIcon;
+}
+
+const SOURCE_APP_DISPLAY: Record<string, SourceAppDisplay> = {
+  gmail: { brand: "gmail", label: "Gmail" },
+  gcal: { brand: "gcal", label: "Calendar" },
+  slack: { brand: "slack", label: "Slack" },
+  notion: { brand: "notion", label: "Notion" },
+  gdrive: { brand: "gdrive", label: "Drive" },
+  gdocs: { brand: "gdocs", label: "Docs" },
+  gsheets: { brand: "gsheets", label: "Sheets" },
+  linear: { brand: "linear", label: "Linear" },
+  web: { brand: null, label: "Web", Icon: Globe },
+  memory: { brand: null, label: "Memory", Icon: Brain },
+  device: { brand: null, label: "Phone", Icon: Smartphone },
+  profile: { brand: null, label: "Profile", Icon: UserRound },
+  goal: { brand: null, label: "Goal", Icon: Target },
+  preference: { brand: null, label: "Preference", Icon: SlidersHorizontal },
+};
+
+export function sourceAppDisplay(slug: string): SourceAppDisplay {
+  const known = SOURCE_APP_DISPLAY[slug];
+  if (known) return known;
+  return { brand: null, label: slug.charAt(0).toUpperCase() + slug.slice(1) };
+}
+
+const REASONING_STEP_LABELS: Record<string, string> = {
+  observed: "Observed",
+  cross_referenced: "Cross-referenced",
+  pattern_matched: "Pattern matched",
+  flagged: "Flagged",
+  decided: "Decided",
+};
+
+export function reasoningStepLabel(label: string): string {
+  return (
+    REASONING_STEP_LABELS[label] ??
+    label.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())
+  );
+}
+```
+
+- [ ] **Step 6.4: 跑测试确认通过**
+
+```bash
+cd proactive-ai-frontend && npx vitest run src/components/card/source-app-display.test.ts && npm run type-check
+```
+
+- [ ] **Step 6.5: Commit**
+
+```bash
+git add proactive-ai-frontend/src/components/card/source-app-display.ts proactive-ai-frontend/src/components/card/source-app-display.test.ts
+git commit -m "feat(frontend): sourceApps slug 展示映射表 + reasoning label 文案"
+```
+
+---
+
+## Task 7: 数据通路 — builders / `Intent` / `ChatCard` 线缆 + line2 去 sources 化
+
+**Files:**
+- Modify: `proactive-ai-frontend/src/components/now/card-model.ts`(interface 291-310;两个 builder 71-149)
+- Modify: `proactive-ai-frontend/src/components/chat/ChatDetailView.tsx`(`ChatCard` interface 156-177)
+- Test: `proactive-ai-frontend/src/components/now/card-model.test.ts`(改 + 增)
+
+- [ ] **Step 7.1: 改测试(先红)**
+
+`card-model.test.ts` 的 `makeCard` 加 `sourceApps: ["gmail", "gcal"], reasoningSteps: []`(Task 5 后 IntentCard 必填)。替换旧的 line2 fallback 断言并新增线缆断言:
+
+```ts
+  test("no longer leaks raw sources into line2 for non-scheduled cards", () => {
+    const chatCard = realIntentToChatCard(makeCard());
+    expect(chatCard.line2).toBe("");
+  });
+
+  test("threads sourceApps and reasoningSteps through to the chat card", () => {
+    const chatCard = realIntentToChatCard(
+      makeCard({
+        sourceApps: ["web"],
+        reasoningSteps: [{ label: "observed", detail: "d" }],
+      }),
+    );
+    expect(chatCard.sourceApps).toEqual(["web"]);
+    expect(chatCard.reasoningSteps).toEqual([{ label: "observed", detail: "d" }]);
+  });
+```
+
+(`Scheduled · <label>` 的既有断言保留不动。)
+
+- [ ] **Step 7.2: 跑测试确认失败**
+
+```bash
+cd proactive-ai-frontend && npx vitest run src/components/now/card-model.test.ts
+```
+预期:新断言 FAIL(line2 仍是 `Sources: …`;ChatCard 无新字段)。
+
+- [ ] **Step 7.3: 最小实现**
+
+(a) `card-model.ts` `Intent` interface(`whyNow?: string;` 之后)加:
+
+```ts
+  /** Structured source app slugs threaded from IntentCard.sourceApps;
+   *  optional because legacy Lovable mock entries don't carry them. */
+  sourceApps?: string[];
+  reasoningSteps?: { label: string; detail: string }[];
+```
+
+(b) 两个 builder(`realIntentToChatCard` 与 `realCardToLovableIntent`)同样修改:line2 的 sources 分支删掉(scheduled 分支保留),并线缆新字段。以 `realCardToLovableIntent` 为例(`realIntentToChatCard` 同形):
+
+```ts
+    line2:
+      card.sourceKind === "scheduled" && card.sourceLabel
+        ? `Scheduled · ${card.sourceLabel}`
+        : "",
+    sourceApps: card.sourceApps,
+    reasoningSteps: card.reasoningSteps,
+```
+
+(c) `ChatDetailView.tsx` `ChatCard` interface(`whyNow?: string;` 之后)加:
+
+```ts
+  sourceApps?: string[];
+  reasoningSteps?: { label: string; detail: string }[];
+```
+
+(d) 全仓查 line2 的其余渲染点,确认没有别处把 `Sources: …` 当 UI 文案依赖:
+
+```bash
+cd proactive-ai-frontend && grep -rn "line2" src/ --include="*.ts*" | grep -v "test"
+```
+预期:命中只剩 interface 定义、builder 赋值、`CardDrawerBody`/`ChatDetailView` 的 parseSources(Task 8/9 处理)。若发现其他渲染点,停下评估再继续。
+
+- [ ] **Step 7.4: 跑测试确认通过**
+
+```bash
+cd proactive-ai-frontend && npx vitest run src/components/now/card-model.test.ts && npm run type-check
+```
+
+- [ ] **Step 7.5: Commit**
+
+```bash
+git add proactive-ai-frontend/src/components/now/card-model.ts proactive-ai-frontend/src/components/now/card-model.test.ts proactive-ai-frontend/src/components/chat/ChatDetailView.tsx
+git commit -m "feat(frontend): 卡片视图模型线缆 sourceApps/reasoningSteps,line2 去 sources 化"
+```
+
+---
+
+## Task 8: drawer — Sources 区块结构化 + `HowGeneratedSection`
+
+**Files:**
+- Modify: `proactive-ai-frontend/src/components/card/CardDrawerBody.tsx`
+- Test: `proactive-ai-frontend/src/components/card/HowGeneratedSection.test.tsx`(新建)
+
+- [ ] **Step 8.1: 写失败测试**
+
+```tsx
+import { describe, expect, test } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+
+import { HowGeneratedSection } from "./CardDrawerBody";
+
+describe("HowGeneratedSection", () => {
+  test("renders nothing when there are no steps", () => {
+    const { container } = render(<HowGeneratedSection steps={[]} />);
+    expect(container.firstChild).toBeNull();
+  });
+
+  test("shows header count and numbered steps with display labels", async () => {
+    render(
+      <HowGeneratedSection
+        steps={[
+          { label: "observed", detail: "Saw the selloff signal." },
+          { label: "decided", detail: "Surfaced this card." },
+        ]}
+      />,
+    );
+    expect(screen.getByText("How I reasoned")).toBeInTheDocument();
+    expect(screen.getByText("· 2 steps")).toBeInTheDocument();
+    // 默认收起;点开后步骤可见(渲染风格对齐 HitlApprovalCard.test.tsx)
+    fireEvent.click(screen.getByRole("button"));
+    expect(await screen.findByText("Observed")).toBeInTheDocument();
+    expect(await screen.findByText("Saw the selloff signal.")).toBeInTheDocument();
+  });
+});
+```
+
+(`@testing-library/react` 已在 devDependencies,jsdom 环境在 vite.config.ts test 段配置好了。)
+
+- [ ] **Step 8.2: 跑测试确认失败**
+
+```bash
+cd proactive-ai-frontend && npx vitest run src/components/card/HowGeneratedSection.test.tsx
+```
+预期:FAIL(`HowGeneratedSection` 未导出)。
+
+- [ ] **Step 8.3: 实现(CardDrawerBody.tsx 五处)**
+
+(a) import 区:`lucide-react` 行加 `Brain`;新增:
+
+```tsx
+import { reasoningStepLabel, sourceAppDisplay } from "@/components/card/source-app-display";
+import type { ReasoningStep } from "@/types/intent-card";
+```
+
+(b) `DrawerDetailCard` interface 加:
+
+```tsx
+  /** Structured source app slugs (from IntentCard.sourceApps). When absent
+   *  (legacy mock cards) the Sources section is hidden. */
+  sourceApps?: string[];
+  reasoningSteps?: ReasoningStep[];
+```
+
+(c) 删除 `sourceToIcon`(29-44 行)、`parseSources`(46-50 行)、`howGenerated`(52-65 行)整段;`SourcePill` 改为按 slug 查表:
+
+```tsx
+function SourcePill({ slug }: { slug: string }) {
+  const info = sourceAppDisplay(slug);
+  return (
+    <div className="inline-flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-full bg-foreground/[0.05] border border-foreground/[0.06]">
+      <span className="w-5 h-5 rounded-md bg-white flex items-center justify-center overflow-hidden shrink-0">
+        {info.brand ? (
+          <span className="w-3.5 h-3.5">{brandSvg(info.brand)}</span>
+        ) : info.Icon ? (
+          <info.Icon size={12} className="text-foreground/70" />
+        ) : (
+          <span className="text-[9px] font-bold text-foreground/70">{info.label.slice(0, 1)}</span>
+        )}
+      </span>
+      <span className="text-[12px] font-medium text-foreground/70">{info.label}</span>
+    </div>
+  );
+}
+```
+
+注意:`parseSources` 当前是 export——先确认无其他 import(`grep -rn "parseSources" src/`,Task 9 会清掉 ChatDetailView 自己那份),再删。
+
+(d) 同文件加设计稿 port 的 `HowGeneratedSection`(label 行改用 `reasoningStepLabel`):
+
+```tsx
+/* Collapsible "How I reasoned" — LLM-written reasoning steps, default collapsed */
+export function HowGeneratedSection({ steps }: { steps: ReasoningStep[] }) {
+  const [open, setOpen] = useState(false);
+  if (steps.length === 0) return null;
+  return (
+    <div className="mb-1 rounded-2xl border border-foreground/10 overflow-hidden bg-foreground/[0.02]">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-3.5 py-2.5"
+      >
+        <div className="flex items-center gap-1.5">
+          <Brain size={13} strokeWidth={2.2} className="text-foreground/55" />
+          <span className="text-[11px] font-bold uppercase tracking-wider text-foreground/55">
+            How I reasoned
+          </span>
+          <span className="text-[11px] font-medium text-foreground/40">· {steps.length} steps</span>
+        </div>
+        <ChevronDown
+          size={16}
+          className={`text-foreground/40 transition-transform ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            <ol className="px-3.5 pb-3 pt-0.5 flex flex-col gap-2">
+              {steps.map((s, i) => (
+                <li key={i} className="flex items-start gap-2.5">
+                  <span className="shrink-0 mt-[1px] w-4 h-4 rounded-full bg-foreground/8 text-[10px] font-bold text-foreground/55 flex items-center justify-center">
+                    {i + 1}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[10px] uppercase tracking-wide font-semibold text-foreground/45 mb-0.5">
+                      {reasoningStepLabel(s.label)}
+                    </div>
+                    <p className="text-[12.5px] text-foreground/75 leading-snug">{s.detail}</p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+```
+
+(e) `DrawerDetailBody` 内:
+
+- `const sources = parseSources(card.line2);` → `const sources = card.sourceApps ?? [];`
+- 删 `const reasons = howGenerated(card);` 与 `reasonSentence` 整段(502-510 行)。
+- JSX:Sources 区块 `<SourcePill key={i} source={s} />` → `<SourcePill key={s} slug={s} />`;"How generated" 区块(528-534 行)整段替换为:
+
+```tsx
+      {/* How I reasoned — collapsible LLM reasoning trace */}
+      <HowGeneratedSection steps={card.reasoningSteps ?? []} />
+```
+
+- [ ] **Step 8.4: 跑测试确认通过 + 回归**
+
+```bash
+cd proactive-ai-frontend && npx vitest run src/components/card/ && npm run type-check
+```
+
+- [ ] **Step 8.5: Commit**
+
+```bash
+git add proactive-ai-frontend/src/components/card/CardDrawerBody.tsx proactive-ai-frontend/src/components/card/HowGeneratedSection.test.tsx
+git commit -m "feat(frontend): drawer Sources 吃结构化 sourceApps + How I reasoned 分步组件"
+```
+
+---
+
+## Task 9: chat 侧镜像清理 — 第二份 `parseSources` / 未用 prop
+
+**Files:**
+- Modify: `proactive-ai-frontend/src/components/chat/ChatDetailView.tsx`(408-415 的 parseSources、553 的调用点、`ChatCardDrawerBody` 569-590)
+
+- [ ] **Step 9.1: 实施**(纯删减,先跑 grep 看全部用点再动手)
+
+```bash
+cd proactive-ai-frontend && grep -n "parseSources\|sources=" src/components/chat/ChatDetailView.tsx
+```
+
+- `ChatCardDrawerBody` 的 props 里 `sources: string[];` 是声明了但 body 从未使用 → 删掉该 prop 及调用点 `sources={sources}`(553 行附近)。
+- 文件内 `parseSources` 函数(408-415)及其所有调用(喂给上面 prop 的 `const sources = …`)删除;若有其他调用点改用 `card.sourceApps ?? []`。
+- `DrawerDetailBody` 在 chat 侧收到的 `card`(ChatCard)经 Task 7 已带 `sourceApps`/`reasoningSteps`,无需其他改动。
+
+- [ ] **Step 9.2: 验证**
+
+```bash
+cd proactive-ai-frontend && grep -rn "parseSources" src/ ; npm run type-check && npm test
+```
+预期:`parseSources` 零命中;type-check / 全部单测通过(`ChatDetailView.source.test.ts` 若测的是旧 parse 行为,按新结构化语义改写断言,不删测试)。
+
+- [ ] **Step 9.3: Commit**
+
+```bash
+git add proactive-ai-frontend/src/components/chat/ChatDetailView.tsx
+# 如有 ChatDetailView.source.test.ts 改动一并 add
+git commit -m "refactor(frontend): 删除 line2 反向 parse,chat 侧 drawer 同吃结构化 sources"
+```
+
+---
+
+## Task 10: Tasks 列表 — 标题 2 行 + 副标题 fallback 去引文化
+
+**Files:**
+- Modify: `proactive-ai-frontend/src/components/tasks/CardTimeline.tsx`(125 行 fallback;143 行标题 class)
+- Test: `proactive-ai-frontend/src/components/tasks/CardTimeline.copy.test.ts`(追加)
+
+- [ ] **Step 10.1: 写失败测试**(追加进 `CardTimeline.copy.test.ts` 的 describe)
+
+```ts
+  test("title wraps to two lines and raw citations never reach the subtitle", () => {
+    const source = readFileSync(join(__dirname, "..", "tasks", "CardTimeline.tsx"), "utf8");
+
+    expect(source).toContain("line-clamp-2");
+    // 标题行不再单行截断
+    expect(source).not.toMatch(/leading-snug truncate flex-1/);
+    // 副标题 fallback 不再裸 join 审计引文
+    expect(source).not.toContain("card.sources.join");
+    expect(source).toContain("sourceAppDisplay");
+  });
+```
+
+- [ ] **Step 10.2: 跑测试确认失败**
+
+```bash
+cd proactive-ai-frontend && npx vitest run src/components/tasks/CardTimeline.copy.test.ts
+```
+
+- [ ] **Step 10.3: 最小实现**
+
+(a) import 加:
+
+```tsx
+import { sourceAppDisplay } from "@/components/card/source-app-display";
+```
+
+(b) 125 行 previewText 的最后 fallback:
+
+```tsx
+                : card.sourceApps.map((slug) => sourceAppDisplay(slug).label).join(" · ");
+```
+
+(c) 143 行标题 class:`truncate` 换 `line-clamp-2`:
+
+```tsx
+                        <p className={`text-[13px] font-medium leading-snug line-clamp-2 flex-1 ${isResolved ? "text-foreground/35 line-through" : "text-foreground"}`}>
+```
+
+(状态图标在标题右侧 `items-center` 行内,2 行标题时居中即可,不需要改容器。)
+
+- [ ] **Step 10.4: 跑测试确认通过 + 全量前端验证**
+
+```bash
+cd proactive-ai-frontend && npm test && npm run type-check
+```
+
+- [ ] **Step 10.5: Commit**
+
+```bash
+git add proactive-ai-frontend/src/components/tasks/CardTimeline.tsx proactive-ai-frontend/src/components/tasks/CardTimeline.copy.test.ts
+git commit -m "feat(frontend): Tasks 列表标题 2 行展示,副标题 fallback 用可读 app 标签"
+```
+
+---
+
+## Task 11: 文档同步
+
+**Files:**
+- Modify: `docs/plans/2026-06-11-card-title-sources-reasoning.mdx`(B 节"派生位置"段)
+- Modify: `docs/modules/generation.mdx`、`docs/modules/execution.mdx`
+
+- [ ] **Step 11.1:** spec B 节回写三处实施事实:(1) "派生位置"句替换:派生 = `generator.py` 的 `derive_source_apps`(纯引文前缀解析,无需 source index,理由:`_citation_for` 是引文唯一生产者且前缀已编码 source_type),注入点 = `chat/transport/routes/generate.py` `_serialize_passing_cards`;(2) reminder_cards 不需要改代码——它不经过注入路径,前端降级派生对 `"scheduled-reminder"` 解析为 `[]` 自然隐藏区块;(3) SourcePill / SectionLabel 无需 port——线上仓早已存在(SourcePill 在 CardDrawerBody,SectionLabel 等效样式 inline),实际改动是 SourcePill 输入 slug 化。
+- [ ] **Step 11.2:** `generation.mdx`:title 公式新规则、`reasoningSteps` 字段与审计、`sourceApps` 派生与注入位置。`execution.mdx`:drawer Sources / How I reasoned 的数据来源(结构化字段,line2 不再承载)。
+- [ ] **Step 11.3: Commit**
+
+```bash
+git add docs/plans/2026-06-11-card-title-sources-reasoning.mdx docs/modules/generation.mdx docs/modules/execution.mdx
+git commit -m "docs: card 标题/sources/reasoning 实施后文档同步"
+```
+
+---
+
+## Task 12: e2e 真跑验证
+
+- [ ] **Step 12.1:** 起栈 + 隧道(generate 的 sandbox 回连需要公网):
+
+```bash
+make up && make tunnel-up && make urls
+```
+
+- [ ] **Step 12.2:** 用前端(`make urls` 给的本地地址)登录后触发一次 generate(或 `POST /api/generate`),完成后查库:
+
+```bash
+docker compose exec postgres psql -U postgres -d postgres -c \
+  "SELECT jsonb_pretty(final_cards) FROM pai_pipeline_runs ORDER BY completed_at DESC NULLS LAST LIMIT 1;"
+```
+
+逐项核对每张卡:
+- `title` 动作开头、含 ` — `、≤70 字符;
+- `sourceApps` 是 `["web","gmail",…]` 这类 slug 数组,与 `sources` 引文层一致;
+- `reasoningSteps` 2-4 步、label 在枚举内、detail 指向 sources 已引用的数据(抽 1-2 张卡和 `sources` 对读)。
+
+- [ ] **Step 12.3:** LangSmith 抽查该 run 的 card-generator stage(`langsmith trace list --project pinai-agents-dev --format pretty`),确认新 prompt 已生效、无异常重试。
+- [ ] **Step 12.4:** 前端 `npm run dev` 打开 Tasks 列表与 drawer,确认:2 行标题、Sources chip 带 logo、How I reasoned 折叠步骤、旧卡(改动前生成的)Sources 显示推断 chip 且无乱码、How I reasoned 区块隐藏。
+- [ ] **Step 12.5:** 按 proactive-frontend skill 流程出 iPhone build,**UI 效果由用户真机验收**。
+
+**测试-修复 loop 边界(AGENTS 规则):失败先看 log 找根因,最多 2 轮仍不通就停下来报告。**
+
+---
+
+## 任务依赖
+
+```
+Task 1 ─┐
+Task 2 ─┼→ Task 3 → Task 4 ─┐
+        │                    ├→ Task 12
+Task 5 → Task 6 → Task 7 → Task 8 → Task 9 → Task 10 → Task 11 ─┘
+```
+
+后端(1-4)与前端(5-10)两条线可并行;Task 12 需要全部完成。

@@ -72,6 +72,10 @@ export interface Intent {
    *  in CardDrawerContent → DrawerDetailBody. Optional because legacy
    *  Lovable mock entries don't carry it. */
   whyNow?: string;
+  /** Structured source app slugs threaded from IntentCard.sourceApps;
+   *  optional because legacy Lovable mock entries don't carry them. */
+  sourceApps?: string[];
+  reasoningSteps?: { label: string; detail: string }[];
   detail?: DetailData;
   status: CardStatus;
   statusTimestamp?: number; // when status was set
@@ -111,13 +115,13 @@ export function realIntentToChatCard(card: IntentCard): ChatCard {
     line2:
       card.sourceKind === "scheduled" && card.sourceLabel
         ? `Scheduled · ${card.sourceLabel}`
-        : card.sources.length > 0
-          ? `Sources: ${card.sources.join(" · ")}`
-          : "",
+        : "",
     whyNow:
       card.whyNow && card.whyNow.trim() && card.whyNow !== card.summary
         ? card.whyNow
         : undefined,
+    sourceApps: card.sourceApps,
+    reasoningSteps: card.reasoningSteps,
     detail: {
       scores: [
         { label: "Confidence", value: Math.round(card.confidence * 100) },
@@ -147,9 +151,7 @@ export function realCardToLovableIntent(card: IntentCard, status: CardStatus): I
     line2:
       card.sourceKind === "scheduled" && card.sourceLabel
         ? `Scheduled · ${card.sourceLabel}`
-        : card.sources.length > 0
-          ? `Sources: ${card.sources.join(" · ")}`
-          : "",
+        : "",
     // Preserved separately from line1 (which collapses whyNow / summary
     // into a single headline) so the drawer can render a dedicated
     // "WHY NOW" block — only fill when both fields exist AND differ, so
@@ -158,6 +160,8 @@ export function realCardToLovableIntent(card: IntentCard, status: CardStatus): I
       card.whyNow && card.whyNow.trim() && card.whyNow !== card.summary
         ? card.whyNow
         : undefined,
+    sourceApps: card.sourceApps,
+    reasoningSteps: card.reasoningSteps,
     detail: {
       scores: [
         { label: "Confidence", value: Math.round(card.confidence * 100) },

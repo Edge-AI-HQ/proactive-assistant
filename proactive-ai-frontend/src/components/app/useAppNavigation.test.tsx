@@ -17,6 +17,8 @@ const fakeCard: IntentCard = {
   urgency: 0.9,
   importance: 0.9,
   sources: [],
+  sourceApps: [],
+  reasoningSteps: [],
   agentChain: [],
   createdAt: "",
 };

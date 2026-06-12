@@ -19,11 +19,11 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Header, HTTPException, status
 from pydantic import BaseModel, Field, StrictInt
 
-from ...agents.generator import run_generator
+from ....config import get_chat_settings
+from ...agents.generator import derive_source_apps, run_generator
 from ...auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
 
 logger = logging.getLogger(__name__)
-_GENERATE_AGENT_TIMEOUT_SECONDS = 600.0
 router = APIRouter()
 
 
@@ -180,6 +180,7 @@ def _serialize_passing_cards(
     cards = cards[:max_cards]
     for i, card in enumerate(cards):
         card["id"] = f"{run_id}_card_{i:02d}"
+        card["sourceApps"] = derive_source_apps(card.get("sources") or [])
     intent_to_id = {c["intentKey"]: c["id"] for c in cards}
     for ev in evals:
         ev["cardId"] = intent_to_id.get(ev["intentKey"])
@@ -246,8 +247,9 @@ async def generate(
     # Guarded by _verify_principal — virtual_key is non-None here.
     virtual_key = principal.virtual_key
     assert virtual_key is not None
+    timeout_seconds = get_chat_settings().generate_timeout_seconds
     try:
-        async with asyncio.timeout(_GENERATE_AGENT_TIMEOUT_SECONDS):
+        async with asyncio.timeout(timeout_seconds):
             parsed = await run_generator(
                 virtual_key=virtual_key,
                 current_date=current_date,
@@ -266,11 +268,11 @@ async def generate(
         logger.warning(
             "generator timed out run_id=%s after %ss",
             run_id,
-            int(_GENERATE_AGENT_TIMEOUT_SECONDS),
+            int(timeout_seconds),
         )
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail=f"generator timed out after {int(_GENERATE_AGENT_TIMEOUT_SECONDS)}s",
+            detail=f"generator timed out after {int(timeout_seconds)}s",
         ) from e
     except ValueError as e:
         # Bad output shape from the model — distinct from infra failure.

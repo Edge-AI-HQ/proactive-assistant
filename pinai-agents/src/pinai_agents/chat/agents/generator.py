@@ -362,12 +362,22 @@ You are the ONLY stage that produces user-facing card text.
 
 <card_quality_rules>
 Every card must meet ALL:
-- title: ≤ 80 chars, specific, and built as "concrete fact / number / time
-  + human stake + immediate action". If the matched pattern has
-  `cardSkeleton.title_strategy.example`, use it as style calibration, not as
-  copy text. Avoid generic "I noticed..." / "you may like..." / "need help?"
+- title: ≤ 70 chars, ACTION-FIRST. Open with the action you can take
+  for the user or already took (verb + object), then " — " + the
+  concrete trigger fact / number / time. NEVER open with the news fact
+  or number itself. If the matched pattern has
+  `cardSkeleton.title_strategy.example`, use it to calibrate the
+  trigger clause, not as copy text, keeping the action-first shape.
+  Avoid generic "I noticed..." / "you may like..." / "need help?"
   titles.
-- whyNow: one sentence with a CONCRETE trigger (date / number / event)
+    GOOD: "Review your tech concentration — chip stocks fell 3% for a 2nd day"
+    GOOD: "Prep tomorrow's 1:1 with Sam — 3 unresolved threads since Monday"
+    GOOD (zh-Hans): "帮你复查科技股持仓集中度 — 芯片股连跌两天"
+    BAD : "Nasdaq -3% on Jun 9: chip selloff day 2 — Micron up 174% YTD" (fact-first)
+    BAD : "Check your portfolio — something changed" (vague trigger)
+- whyNow: one sentence with a CONCRETE trigger (date / number / event).
+  It must ADD context beyond the title's trigger clause (scale, history,
+  what changed) — never restate the title.
 - summary: 2-4 sentences of compressed context — enough to decide
 - primary_action: concrete verb + object button label
 - primary_action.agent_prompt: the full task the Card Execution agent runs on
@@ -385,6 +395,14 @@ Every card must meet ALL:
   The reader (evaluator stage) MUST be able to find each cited id
   back in phase1.json. World-signal citations are how downstream
   auto-consume identifies which news items the run actually used.
+- reasoningSteps: 2-4 user-visible steps narrating how this card came
+  to be, in order — what you observed, what you cross-referenced, why
+  you decided to surface it. Each step's `detail` must point at data
+  already cited in `sources[]`; referencing anything else is a
+  grounding violation. `label` must be one of `observed` /
+  `cross_referenced` / `pattern_matched` / `flagged` / `decided`.
+  Keep each `detail` under 25 words — longer text gets hard-clipped
+  at 200 chars mid-sentence in the UI.
 - ambient transcript citations must preserve attribution. `self:` or
   `payload.self_text` can support user intent; non-self speaker labels
   can support context only. Do not write "you said" unless the cited
@@ -539,9 +557,10 @@ Score each on a 0.0-10.0 scale:
   `sources[]` with a verbatim citation. The combination of signals must
   also be visible in the card copy — not just listed in `sources[]`. When
   the pattern includes
-  `cardSkeleton.title_strategy`, judge whether the title follows its
-  formula/example style: concrete fact / number / time + human stake +
-  immediate action. Score 0 = the card claims a pattern but
+  `cardSkeleton.title_strategy`, judge whether the title follows the
+  action-first formula: action for the user + " — " + concrete trigger
+  (fact / number / time), with `title_strategy` calibrating the trigger
+  clause style. Score 0 = the card claims a pattern but
   fails to cite the required combination; 10 = full skeleton compliance.
   Score 0 (with `pattern_grounding_ok = false`) when the card has no
   `pattern_id` so this dimension doesn't pull the overall down — set
@@ -552,7 +571,9 @@ overall = average of the dimensions you actually scored (5 when
 pattern_grounding doesn't apply, 6 when it does).
 pass = overall >= 5.0 AND no grounding violation (every cited id must
 look plausibly extractable from a real data source — flag fabrications
-by failing) AND (pattern_id is null OR pattern_grounding >= 5).
+by failing; `reasoningSteps` are audited the same way: a step that
+references data not evidenced in `sources[]` is a grounding violation)
+AND (pattern_id is null OR pattern_grounding >= 5).
 Set `pattern_grounding_ok = true` when pattern_id is set AND
 pattern_grounding >= 5.
 </scoring_dimensions>
@@ -560,6 +581,9 @@ pattern_grounding >= 5.
 <calibration>
 - The card-generator is a sibling agent that wants its work to ship.
   Resist generosity. A card you naturally rate 8.5 is probably 7.5.
+- Titles are action-first by contract. A title that opens with a news
+  fact / number instead of the user-facing action caps actionability
+  at 6 — note it in feedback.
 - Score by the EVIDENCE in `sources`, not by how well-written the
   prose is. A beautifully written card with weak sources fails on
   relevance / why_now_clarity.
@@ -706,6 +730,42 @@ def _citation_for(source_type: str, source_id: str, title: str, snippet: str) ->
     if source_type == "preference":
         return f"preference id={source_id}, statement={_truncate(snippet or title, 160)}"
     return f"{source_type} id={source_id}, text={_truncate(snippet or title, 160)}"
+
+
+# Maps the first token of a citation prefix (text before " id=") to the
+# user-facing app slug stamped onto card["sourceApps"]. Must stay in sync
+# with _citation_for above — that template is the only producer of the
+# citation strings this parses.
+_CITATION_TOKEN_TO_APP = {
+    "signal": "device",
+    "memory": "memory",
+    "gmail": "gmail",
+    "gcal": "gcal",
+    "world": "web",
+    "profile": "profile",
+    "goal": "goal",
+    "preference": "preference",
+}
+
+_CITATION_PREFIX_RE = re.compile(r"^\s*([a-z0-9_-]+)(?:\s+[a-z0-9_-]+)*\s+id=", re.IGNORECASE)
+
+
+def derive_source_apps(sources: list[str]) -> list[str]:
+    """Deterministic user-facing app slugs for a card's citation list.
+
+    Unknown / garbled citations are dropped rather than guessed — the
+    audit string itself must never leak to the UI (the old behaviour the
+    frontend is moving away from)."""
+    apps: list[str] = []
+    for citation in sources:
+        match = _CITATION_PREFIX_RE.match(citation)
+        if not match:
+            continue
+        token = match.group(1).lower()
+        app = _CITATION_TOKEN_TO_APP.get(token, token)
+        if app not in apps:
+            apps.append(app)
+    return apps
 
 
 def _source_record(source_type: str, row: dict[str, Any], idx: int) -> dict[str, Any]:

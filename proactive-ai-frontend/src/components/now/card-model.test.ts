@@ -17,13 +17,15 @@ function makeCard(overrides: Partial<IntentCard> = {}): IntentCard {
     urgency: 0.5,
     importance: 0.6,
     sources: ["gmail", "calendar"],
+    sourceApps: ["gmail", "gcal"],
+    reasoningSteps: [],
     agentChain: [],
     createdAt: "",
     ...overrides,
   };
 }
 
-describe("realIntentToChatCard scheduled provenance", () => {
+describe("realIntentToChatCard", () => {
   test("shows 'Scheduled · <label>' in line2 for scheduled cards", () => {
     const chatCard = realIntentToChatCard(
       makeCard({ sourceKind: "scheduled", sourceLabel: "AI 新闻卡片" }),
@@ -31,9 +33,20 @@ describe("realIntentToChatCard scheduled provenance", () => {
     expect(chatCard.line2).toBe("Scheduled · AI 新闻卡片");
   });
 
-  test("falls back to the sources line for non-scheduled cards", () => {
+  test("no longer leaks raw sources into line2 for non-scheduled cards", () => {
     const chatCard = realIntentToChatCard(makeCard());
-    expect(chatCard.line2).toBe("Sources: gmail · calendar");
+    expect(chatCard.line2).toBe("");
+  });
+
+  test("threads sourceApps and reasoningSteps through to the chat card", () => {
+    const chatCard = realIntentToChatCard(
+      makeCard({
+        sourceApps: ["web"],
+        reasoningSteps: [{ label: "observed", detail: "d" }],
+      }),
+    );
+    expect(chatCard.sourceApps).toEqual(["web"]);
+    expect(chatCard.reasoningSteps).toEqual([{ label: "observed", detail: "d" }]);
   });
 });
 

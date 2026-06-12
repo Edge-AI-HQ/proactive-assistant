@@ -21,6 +21,8 @@ const card: IntentCard = {
   urgency: 0.8,
   importance: 0.7,
   sources: [],
+  sourceApps: [],
+  reasoningSteps: [],
   agentChain: [],
   createdAt: "2026-05-18T19:00:00Z",
 };

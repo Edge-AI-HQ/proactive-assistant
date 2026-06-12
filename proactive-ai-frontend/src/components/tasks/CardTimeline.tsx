@@ -1,5 +1,6 @@
 import { Loader2, CheckCircle2, Circle, CircleAlert, XCircle, Sparkles, Bell } from "lucide-react";
 import type { IntentCard, CardScore, CardOutcome, CardRunStatus } from "@pin-ai/core";
+import { sourceAppDisplay } from "@/components/card/source-app-display";
 import { basketMeta } from "@/lib/basket-meta";
 import { deriveCardUiStatus, isReminderCard } from "@pin-ai/core";
 import { connectorSlugFromIntentKey } from "@/lib/connector-card";
@@ -147,7 +148,7 @@ export default function CardTimeline({
                 ? card.summary
                 : card.primaryAction
                 ? `${actionCount + 1} operations · ${card.primaryAction.label}`
-                : card.sources.join(" · ");
+                : card.sourceApps.map((slug) => sourceAppDisplay(slug).label).join(" · ");
 
               return (
                 <div
@@ -165,7 +166,7 @@ export default function CardTimeline({
                     </span>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5">
-                        <p className={`text-[13px] font-medium leading-snug truncate flex-1 ${isResolved ? "text-foreground/35 line-through" : "text-foreground"}`}>
+                        <p className={`text-[13px] font-medium leading-snug line-clamp-2 flex-1 ${isResolved ? "text-foreground/35 line-through" : "text-foreground"}`}>
                           {card.title}
                         </p>
                         <span className="shrink-0 w-[18px] h-[18px] inline-flex items-center justify-center">

@@ -17,11 +17,10 @@ from typing import Any
 import httpx
 from fastapi import HTTPException, status
 
+from ...config import get_web_settings
 from ..auth.agent_jwt import sign_agent_run_jwt
 
 logger = logging.getLogger(__name__)
-
-_GENERATE_READ_TIMEOUT_SECONDS = 600.0
 
 
 def _chat_internal_url() -> str:
@@ -203,9 +202,12 @@ async def call_generate(
         # date instead of bare UTC.
         body["timezone"] = timezone
     url = f"{_chat_internal_url()}/agent/generate"
+    # +30s over the chat-side guard so chat's own 504 (with run context)
+    # arrives before this read timeout severs the connection.
+    read_timeout_seconds = get_web_settings().generate_timeout_seconds + 30.0
     timeout = httpx.Timeout(
         connect=5.0,
-        read=_GENERATE_READ_TIMEOUT_SECONDS,
+        read=read_timeout_seconds,
         write=10.0,
         pool=10.0,
     )
@@ -220,13 +222,13 @@ async def call_generate(
             logger.exception(
                 "generate worker timed out run=%s read_timeout_seconds=%d",
                 outbound_run_id,
-                int(_GENERATE_READ_TIMEOUT_SECONDS),
+                int(read_timeout_seconds),
             )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=(
                     "chat worker timed out after "
-                    f"{int(_GENERATE_READ_TIMEOUT_SECONDS)}s waiting for /agent/generate"
+                    f"{int(read_timeout_seconds)}s waiting for /agent/generate"
                 ),
             ) from e
         except httpx.RequestError as e:
