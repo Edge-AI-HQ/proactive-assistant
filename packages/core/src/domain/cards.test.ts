@@ -53,6 +53,19 @@ describe("parseEntries", () => {
     });
     expect(entries[0].latestOutcome).toBeNull();
   });
+
+  test("runStatus parses the pai_agent_runs enum; absent/unknown → null", () => {
+    const entries = parseEntries({
+      cards: [
+        { ...livePayload.cards[0], runStatus: "awaiting_input" },
+        { ...livePayload.cards[0], card: { id: "card_3" }, runStatus: "done" },
+        { ...livePayload.cards[0], card: { id: "card_4" } },
+      ],
+    });
+    expect(entries[0].runStatus).toBe("awaiting_input");
+    expect(entries[1].runStatus).toBeNull();
+    expect(entries[2].runStatus).toBeNull();
+  });
 });
 
 describe("outcome helpers", () => {

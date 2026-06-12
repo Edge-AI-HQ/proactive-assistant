@@ -23,7 +23,7 @@ import { type TimelineEntry as AmbientTimelineEntry } from "@/components/ambient
 import { type ChatCard, brandSvg, detectToolIcon } from "@/components/chat/ChatDetailView";
 import CardChatOverlay from "@/components/chat/CardChatOverlay";
 import { useCardsQuery, useUserSettings } from "@pin-ai/state";
-import { deleteAccount, DeleteAccountError, isCompletedCardOutcome, isHiddenCardOutcome, type GoalBasket, type IntentCard } from "@pin-ai/core";
+import { deleteAccount, DeleteAccountError, deriveCardUiStatus, isCompletedCardOutcome, isHiddenCardOutcome, type GoalBasket, type IntentCard } from "@pin-ai/core";
 import DebugPanel from "@/components/common/DebugPanel";
 import AgentRunIndicator from "@/components/common/AgentRunIndicator";
 import { CardStateProvider } from "@/components/card/CardStateContext";
@@ -337,8 +337,10 @@ export default function AppLayout() {
   const [sphereCards, setSphereCards] = useState<Intent[]>([]);
 
   // Mirror real /api/cards into sphereCards (one-way sync). Replaces the
-  // Lovable mock initial seed + the legacy add-new ticker. Status reflects
-  // useCardActions' optimistic processing/done state.
+  // Lovable mock initial seed + the legacy add-new ticker. Status combines
+  // the server-side run state (entry.runStatus — survives relaunch) with
+  // useCardActions' optimistic processing state (bridges the send → run-row
+  // gap); see deriveCardUiStatus.
   useEffect(() => {
     // De-dup by intentKey so the same intent regenerated across runs only
     // floats onto the sphere once. useCards is cross-run history with no
@@ -361,9 +363,12 @@ export default function AppLayout() {
       })
       .slice(0, 14)
       .map((c) => {
-        const status: CardStatus = cardActions.processingIds.has(c.card.id)
-          ? "processing"
-          : "normal";
+        const status: CardStatus = deriveCardUiStatus({
+          runStatus: c.runStatus,
+          latestOutcome: c.latestOutcome,
+          optimisticProcessing: cardActions.processingIds.has(c.card.id),
+          chatted: cardActions.chattedIds.has(c.card.id),
+        });
         return realCardToLovableIntent(c.card, status);
       });
     setSphereCards(next);
@@ -372,6 +377,7 @@ export default function AppLayout() {
     cardActions.dismissedIds,
     cardActions.doneIds,
     cardActions.processingIds,
+    cardActions.chattedIds,
   ]);
 
   // Chat state
@@ -702,7 +708,13 @@ export default function AppLayout() {
   const handleSphereCardTap = (id: number) => {
     const card = sphereCards.find((c) => c.id === id);
     if (!card) return;
-    if (card.status === "processing" || card.status === "done") {
+    if (
+      card.status === "processing"
+      || card.status === "needs_input"
+      || card.status === "ready"
+      || card.status === "failed"
+      || card.status === "done"
+    ) {
       // Real /api/cards path: route through `chatTarget` so
       // ChatDetailView receives `runId={card.id}` and
       // `useCardExecutionRun` actually fetches the thread history.
@@ -920,6 +932,18 @@ export default function AppLayout() {
         onBack={() => closeCardChat()}
         onDismissBackend={(card) => cardActions.dismiss(card)}
         onDoneBackend={(card) => cardActions.complete(card)}
+        onCommentBackend={(card, text) => cardActions.textFeedback(card, text)}
+        onAgentTurnDone={(card) => {
+          // Agent turn settled (chat:done / HITL pause): retire the
+          // optimistic spinner and refetch /cards so runStatus flips the
+          // sphere/timeline now instead of on the next 30s poll.
+          cardActions.clearProcessing(card.id);
+          void refreshCards();
+          // chat:done rides the agent stream AHEAD of the worker's finalize
+          // commit, so the immediate refetch can still read 'running' — one
+          // trailing refetch covers that race (worker._finalize_turn).
+          window.setTimeout(() => void refreshCards(), 1500);
+        }}
       />
 
       {/* Hamburger side menu overlay */}
@@ -967,29 +991,37 @@ export default function AppLayout() {
             }
           }
         }}
-        onModify={(card) => {
+        onComplete={(card) => {
+          // Done (every card type): acknowledge + retire the card. No chat,
+          // no agent run — POST /feedback action=complete is the gesture.
+          setDrawerOpen(false);
+          setSelectedCard(null);
+          if (card.originalId) {
+            const real = cardsState.cards.find(
+              (c) => c.card.id === card.originalId,
+            )?.card;
+            if (real) void cardActions.complete(real);
+          }
+        }}
+        onChat={(card) => {
+          // Reminder Chat: open the card thread plainly — no confirm POST,
+          // no execute bootstrap, no optimistic spinner (nothing is running
+          // yet; the agent's <reminder_cards> prompt branch handles the
+          // talk). DO mark chatted: the timeline then shows "In
+          // conversation" and routes back to this thread, and once the user
+          // sends, the run state surfaces via runStatus on the next poll.
           setDrawerOpen(false);
           setSelectedCard(null);
           recordChatEntryView();
-          // Real card → POST /feedback kind=card_action action=modify
-          // and open the card-thread as the feedback / steer surface.
           if (card.originalId) {
             const real = cardsState.cards.find(
               (c) => c.card.id === card.originalId,
             )?.card;
             if (real) {
-              void cardActions.modify(real);
-              return;
+              cardActions.markChatted(real.id);
+              openCardChat(real);
             }
           }
-          const chatCard = card as ChatCard;
-          setCardChats((prev) => {
-            if (prev.find((c) => c.id === chatCard.id)) return prev;
-            return [chatCard, ...prev];
-          });
-          setChatMode("steer");
-          navigateTo("chat");
-          setActiveChat(chatCard);
         }}
       />
 

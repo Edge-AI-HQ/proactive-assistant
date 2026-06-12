@@ -1,6 +1,6 @@
 import { useState, useMemo, type JSX } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Check, ChevronUp, Sprout, Briefcase, TrendingUp, Heart, BookOpen, Sparkles, Globe, FileSearch, Settings, Hand, Database, Bell, DollarSign, Users, Search, Brain, Lock, type LucideIcon } from "lucide-react";
+import { Check, ChevronUp, Sprout, Briefcase, TrendingUp, Heart, BookOpen, Sparkles, Globe, FileSearch, Settings, Hand, Database, Bell, DollarSign, Users, Search, Brain, Lock, X, type LucideIcon } from "lucide-react";
 import { DrawerDetailBody } from "@/components/card/CardDrawerBody";
 import ConversationView from "@/components/chat/conversation/ConversationView";
 import type {
@@ -158,6 +158,12 @@ export interface ChatCard {
   category: string;
   tag?: string;
   complexity?: "simple"; // marks quick-approve tasks (low risk, few steps)
+  /** Explicit card type ("reminder" = acknowledge-only nudge). Rides into
+   *  card_context so the agent switches behavior — see lib/reminder-card.ts. */
+  cardKind?: string;
+  /** Owning pai_scheduled_tasks id (reminder cards) — lets the agent edit
+   *  this reminder's schedule via the scheduled_generator_* tools. */
+  scheduleTaskId?: string;
   title: string;
   line1: string;
   line2: string;
@@ -222,6 +228,19 @@ interface ChatDetailViewProps {
    * action=complete so the card moves from sphere → TASKS as Completed.
    */
   onDoneBackend?: () => boolean | void | Promise<boolean | void>;
+  /**
+   * Fired on every chat:done (agent turn ended). Parent wires this to the
+   * card layer so the sphere/timeline status flips the moment the agent
+   * finishes instead of waiting for the next /cards poll.
+   */
+  onTurnDone?: () => void;
+  /**
+   * Result-bar Comment hook: persists the user's free-text feedback on this
+   * card (POST /feedback kind=text_feedback — learning signal for the next
+   * generation run, never messages the agent). Parent wires this to
+   * `cardActions.textFeedback(realIntentCard, text)`.
+   */
+  onCommentBackend?: (text: string) => void | Promise<void>;
 }
 
 /* ── Artifact panel: shows generated drafts (emails / notes / messages) ── */
@@ -419,6 +438,10 @@ function buildCardContext(card: ChatCard): Record<string, unknown> {
     title: card.title,
     category: card.category,
     tag: card.tag,
+    // Card type + owning schedule task: the agent's <reminder_cards> prompt
+    // branch keys on these (don't "execute" a nudge; edit the right task).
+    ...(card.cardKind ? { cardKind: card.cardKind } : {}),
+    ...(card.scheduleTaskId ? { scheduleTaskId: card.scheduleTaskId } : {}),
     summary: card.line1,
     whyNow: card.whyNow ?? card.line1,
     sources: parseSources(card.line2),
@@ -456,7 +479,11 @@ function CardContextHeaderSlot({
               Context
             </p>
             <p className="text-[13px] text-foreground/80 leading-relaxed line-clamp-2">
-              {card.detail?.willExecute || card.line1}
+              {/* Reminder cards have no action — willExecute is just the
+                  button label ("Done"); show the nudge itself. */}
+              {card.cardKind === "reminder"
+                ? card.line1
+                : card.detail?.willExecute || card.line1}
             </p>
             {plan.length > 0 && (
               <div className="mt-2 flex flex-col gap-1">
@@ -503,6 +530,10 @@ export default function ChatDetailView({
   runId,
   onBack,
   bootstrap,
+  onTurnDone,
+  onDismissBackend,
+  onDoneBackend,
+  onCommentBackend,
 }: ChatDetailViewProps) {
   const [cardDrawerOpen, setCardDrawerOpen] = useState(false);
   const sessionKey = useMemo(
@@ -521,6 +552,12 @@ export default function ChatDetailView({
         title={card.title}
         onBack={onBack}
         backIcon="left"
+        onTurnDone={onTurnDone}
+        cardFeedback={
+          onDoneBackend && onCommentBackend
+            ? { onDone: onDoneBackend, onComment: onCommentBackend }
+            : undefined
+        }
         placeholder="Message about this card..."
         headerSlot={
           <CardContextHeaderSlot
@@ -551,6 +588,37 @@ export default function ChatDetailView({
             card={card}
             sources={sources}
           />
+          {/* Dismiss / Done are reachable from EVERY drawer (unified action
+              model): both retire the card (negative / positive feedback),
+              then close drawer + chat. */}
+          {(onDismissBackend || onDoneBackend) && (
+            <div className="flex items-center gap-2 px-5 pb-6 pt-1">
+              {onDismissBackend && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCardDrawerOpen(false);
+                    void Promise.resolve(onDismissBackend()).finally(() => onBack());
+                  }}
+                  className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[13px] font-medium text-foreground/55"
+                >
+                  <X size={13} strokeWidth={2} /> Dismiss
+                </button>
+              )}
+              {onDoneBackend && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCardDrawerOpen(false);
+                    void Promise.resolve(onDoneBackend()).finally(() => onBack());
+                  }}
+                  className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground text-background text-[13px] font-semibold hover:bg-foreground/85 transition-colors"
+                >
+                  <Check size={13} strokeWidth={2.5} /> Done
+                </button>
+              )}
+            </div>
+          )}
         </DrawerContent>
       </Drawer>
     </>

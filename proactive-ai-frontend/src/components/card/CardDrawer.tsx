@@ -24,7 +24,10 @@ interface CardDrawerProps {
   onExecute: (card: Intent) => void;
   onClose: () => void;
   onDismiss: (card: Intent) => void;
-  onModify: (card: Intent) => void;
+  /** Done = acknowledge + retire (every card type); Chat = reminder cards'
+   *  plain thread open. */
+  onComplete: (card: Intent) => void;
+  onChat: (card: Intent) => void;
 }
 
 /** Horizontal travel (px) after which the pointer locks into the swipe and
@@ -61,7 +64,8 @@ export default function CardDrawer({
   onExecute,
   onClose,
   onDismiss,
-  onModify,
+  onComplete,
+  onChat,
 }: CardDrawerProps) {
   const gestureRef = useRef<{
     startX: number;
@@ -269,7 +273,8 @@ export default function CardDrawer({
               onExecute={onExecute}
               onClose={onClose}
               onDismiss={onDismiss}
-              onModify={onModify}
+              onComplete={onComplete}
+              onChat={onChat}
             />
           </div>
         )}

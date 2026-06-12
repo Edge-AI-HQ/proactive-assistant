@@ -2,6 +2,7 @@
  * Cards 域：/cards 响应的解析与 outcome 语义（从 hooks/useCards.ts 提纯）。
  * 纯 TS，三端共用。
  */
+import { parseCardRunStatus, type CardRunStatus } from "./card-run-status";
 import { normalizeIntentCard, type IntentCard } from "./intent-card";
 
 export interface CardScore {
@@ -35,11 +36,16 @@ export function isHiddenCardOutcome(outcome: CardOutcome | null | undefined): bo
 
 export interface VisibleCardEntry {
   card: IntentCard;
+  /** GENERATION pipeline run that produced this card (pai_pipeline_runs) —
+   *  unrelated to runStatus, which tracks the card's EXECUTION thread. */
   runId: string;
   runCompletedAt: string;
   score: CardScore | null;
   latestOutcome: CardOutcome | null;
   outcomeAt: string | null;
+  /** Latest execution-run status of the card's thread (pai_agent_runs);
+   *  null = never ran. Survives app relaunch, unlike optimistic local sets. */
+  runStatus: CardRunStatus | null;
 }
 
 interface CardsResponseEntry {
@@ -49,6 +55,7 @@ interface CardsResponseEntry {
   score?: unknown;
   latestOutcome?: unknown;
   outcomeAt?: unknown;
+  runStatus?: unknown;
 }
 
 function parseScore(value: unknown): CardScore | null {
@@ -73,6 +80,7 @@ export function parseEntries(payload: unknown): VisibleCardEntry[] {
       score: parseScore(raw.score),
       latestOutcome: parseCardOutcome(raw.latestOutcome),
       outcomeAt: typeof raw.outcomeAt === "string" ? raw.outcomeAt : null,
+      runStatus: parseCardRunStatus(raw.runStatus),
     });
   }
   return out;

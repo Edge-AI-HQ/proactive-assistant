@@ -30,7 +30,7 @@ import {
 } from "react";
 import { motion } from "framer-motion";
 import { Virtuoso, type Components } from "react-virtuoso";
-import { AlertCircle, ArrowLeft, Check, ChevronDown, Copy, Loader2, Mic, Pencil, Radio, RotateCcw, Send, Sparkles, Square, ThumbsDown, ThumbsUp, X } from "lucide-react";
+import { AlertCircle, ArrowLeft, Check, ChevronDown, Copy, Loader2, MessageSquarePlus, Mic, Pencil, Radio, RotateCcw, Send, Sparkles, Square, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import bgGradient from "@/assets/bg-gradient.jpg";
 import { cn } from "@/lib/utils";
 import { notifyThreadActivity, readLocalHistory } from "@/lib/sync/sync-bootstrap";
@@ -83,6 +83,18 @@ interface ConversationViewProps {
    *  go-back semantic, per the design). Main chat / proactive keep "down"
    *  (ChevronDown, the dismiss-the-sheet semantic). */
   backIcon?: "down" | "left";
+  /** Fired on every chat:done (agent turn ended). Card chat uses it to sync
+   *  the card's sphere/timeline status the moment the agent finishes. */
+  onTurnDone?: () => void;
+  /** Card chat: enables the result feedback bar (design's "done" toolbar)
+   *  above the composer once the agent's final result is in. Thumbs write
+   *  chat_message_feedback themselves; `onComment` persists a text_feedback
+   *  (pure learning signal — it does NOT message the agent; steering stays in
+   *  the composer); `onDone` completes the card, then the chat closes. */
+  cardFeedback?: {
+    onDone: () => boolean | void | Promise<boolean | void>;
+    onComment: (text: string) => void | Promise<void>;
+  };
 }
 
 /** Extract the agent's outreach text from a `notify_user` tool-call part's
@@ -270,6 +282,151 @@ function AssistantActionBar({
           <RotateCcw size={13} strokeWidth={1.6} />
         </button>
       ) : null}
+    </div>
+  );
+}
+
+/** Card chat result bar — ported from the design repo's ChatDetailView "done"
+ *  toolbar ("Was this helpful?" + 👍/👎 + Comment), plus a Done pill (the
+ *  product needs an explicit accept action to retire the card; the design
+ *  left it implicit). All three write REAL feedback:
+ *    👍/👎  → /feedback chat_message_feedback on the final assistant message
+ *            (same pipe as AssistantActionBar; disabled until the message id
+ *            arrives via chat:persisted)
+ *    Comment → `onComment` → /feedback text_feedback on the card (learning
+ *            signal for the next generation run — never messages the agent)
+ *    Done   → completes the card (latestOutcome=complete) + closes the chat */
+function CardResultFeedbackBar({
+  messageId,
+  channel,
+  onComment,
+  onDone,
+  doneBusy,
+}: {
+  messageId: string | null;
+  /** Passed explicitly (not via FeedbackChannelContext) — the bar renders in
+   *  the footer, outside the transcript's provider. */
+  channel: string;
+  onComment: (text: string) => void | Promise<void>;
+  onDone: () => void;
+  doneBusy: boolean;
+}) {
+  const [feedback, setFeedback] = useState<"up" | "down" | null>(null);
+  const [commentOpen, setCommentOpen] = useState(false);
+  const [commentText, setCommentText] = useState("");
+  const [commentSent, setCommentSent] = useState(false);
+
+  const sendThumbs = useCallback(
+    (next: "up" | "down") => {
+      if (!messageId) return;
+      const effective = feedback === next ? null : next;
+      setFeedback(effective);
+      const body = buildAssistantMessageFeedbackBody(
+        messageId,
+        effective,
+        channel,
+        "card_result_bar",
+      );
+      if (!body) return;
+      void proxyPost("/feedback", body).catch(() => {});
+    },
+    [feedback, messageId, channel],
+  );
+
+  const submitComment = useCallback(() => {
+    const text = commentText.trim();
+    if (!text) return;
+    void Promise.resolve(onComment(text)).catch(() => {});
+    setCommentText("");
+    setCommentOpen(false);
+    setCommentSent(true);
+  }, [commentText, onComment]);
+
+  return (
+    <div className="px-4 pb-2">
+      <div
+        className="flex items-center justify-between gap-2 rounded-2xl border border-foreground/8 px-3 py-2"
+        style={{ background: "rgba(255,255,255,0.5)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)" }}
+      >
+        <span className="whitespace-nowrap text-[12px] font-medium text-foreground/55">
+          Helpful?
+        </span>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => sendThumbs("up")}
+            disabled={!messageId}
+            aria-label="Helpful"
+            className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${feedback === "up" ? "bg-green-500/20 text-green-600" : "bg-foreground/5 text-foreground/55 hover:bg-foreground/10"}`}
+          >
+            <ThumbsUp size={13} strokeWidth={2} />
+          </button>
+          <button
+            type="button"
+            onClick={() => sendThumbs("down")}
+            disabled={!messageId}
+            aria-label="Not helpful"
+            className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${feedback === "down" ? "bg-red-500/20 text-red-600" : "bg-foreground/5 text-foreground/55 hover:bg-foreground/10"}`}
+          >
+            <ThumbsDown size={13} strokeWidth={2} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setCommentOpen((v) => !v)}
+            disabled={commentSent}
+            className="ml-0.5 flex h-8 items-center gap-1 whitespace-nowrap rounded-full bg-foreground/5 px-2.5 text-[12px] font-medium text-foreground/65 transition-colors hover:bg-foreground/10 disabled:opacity-60"
+          >
+            {commentSent ? (
+              <>
+                <Check size={12} strokeWidth={2.5} /> Sent
+              </>
+            ) : (
+              <>
+                <MessageSquarePlus size={12} strokeWidth={2} /> Comment
+              </>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={onDone}
+            disabled={doneBusy}
+            className="flex h-8 items-center gap-1 whitespace-nowrap rounded-full bg-foreground px-3 text-[12px] font-semibold text-background transition-colors hover:bg-foreground/85 disabled:opacity-40"
+          >
+            {doneBusy ? (
+              <Loader2 size={12} className="animate-spin" />
+            ) : (
+              <Check size={13} strokeWidth={2.5} />
+            )}{" "}
+            Done
+          </button>
+        </div>
+      </div>
+      {commentOpen && (
+        <div className="mt-2 flex items-center gap-2">
+          <input
+            value={commentText}
+            onChange={(e) => setCommentText(e.target.value)}
+            onKeyDown={(e) => {
+              // IME composition guard (same idiom as the main Composer):
+              // confirming a candidate with Enter must not submit half-typed
+              // text as a feedback event.
+              if (e.nativeEvent.isComposing) return;
+              if (e.key === "Enter") submitComment();
+            }}
+            placeholder="Feedback on this card (won't message the agent)…"
+            className="h-9 flex-1 rounded-full border border-foreground/10 bg-white/60 px-4 text-[13px] text-foreground placeholder:text-foreground/35 focus:outline-none"
+          />
+          <button
+            type="button"
+            onClick={submitComment}
+            disabled={!commentText.trim()}
+            aria-label="Send feedback"
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-foreground text-background disabled:opacity-40"
+          >
+            <Send size={14} strokeWidth={2} />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -817,6 +974,8 @@ export default function ConversationView({
   onDone,
   onDismiss,
   backIcon = "down",
+  onTurnDone,
+  cardFeedback,
 }: ConversationViewProps) {
   // Debug message visibility: heartbeats + heartbeat-triggered turns (except
   // notify_user). A dev aid; persisted in localStorage so it survives reload.
@@ -871,6 +1030,8 @@ export default function ConversationView({
     onTurnPersisted: notifyThreadActivity,
     // B3b 读路径：本地优先首屏（引擎未启动时返回 null → 纯网络现状）。
     localHistory: readLocalHistory,
+    // 卡片层门铃：chat:done / HITL 暂停时立即回传，球面/Tasks 状态不等轮询。
+    onTurnDone,
   });
   // 访问驱动同步（lazy incomplete model）：打开任何 thread 拉一次增量，
   // card threads 由此按需进入本地库（不全量扫）。
@@ -910,6 +1071,23 @@ export default function ConversationView({
     : sessionKey.startsWith("card-thread-")
       ? "card_execution"
       : "main_chat";
+
+  // Card result bar visibility: the turn is settled (not busy, no HITL gate)
+  // and the LAST entry is a finalized assistant turn with visible text and no
+  // propose_action — a proposal means "needs your decision", not a result.
+  // undefined = hide the bar; null = show it, thumbs disabled until the
+  // backend message id lands (chat:persisted); string = show fully armed.
+  const cardResultMessageId: string | null | undefined = useMemo(() => {
+    if (!cardFeedback || busy || awaitingDecision) return undefined;
+    const last = transcript[transcript.length - 1];
+    if (!last || last.kind !== "assistant" || last.running) return undefined;
+    const hasText = last.parts.some((p) => p.type === "text" && p.text.trim().length > 0);
+    const hasProposal = last.parts.some(
+      (p) => p.type === "tool-call" && p.toolName === "propose_action",
+    );
+    if (!hasText || hasProposal) return undefined;
+    return /^\d+$/.test(last.id) ? last.id : null;
+  }, [cardFeedback, busy, awaitingDecision, transcript]);
 
   // Message Edit prefills the composer (imperative — the composer owns its
   // draft state, which also absorbs voice-transcript appends).
@@ -1188,6 +1366,19 @@ export default function ConversationView({
                 inline on the paused turn (TranscriptView), not here. */}
             <div className="relative shrink-0">
               <TodoPanel sessionKey={browserSessionKey} composerFocused={composerFocused} />
+              {cardFeedback && cardResultMessageId !== undefined && (
+                <CardResultFeedbackBar
+                  messageId={cardResultMessageId}
+                  channel={feedbackChannel}
+                  onComment={cardFeedback.onComment}
+                  onDone={() =>
+                    void runLifecycle("done", async () => {
+                      await cardFeedback.onDone();
+                    })
+                  }
+                  doneBusy={lifecycleBusy === "done"}
+                />
+              )}
               <Composer
                 ref={composerRef}
                 onSend={sendAndAnchor}

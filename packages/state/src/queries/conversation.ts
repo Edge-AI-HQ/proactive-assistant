@@ -88,6 +88,14 @@ export interface ConversationRuntimeOpts {
    *  and the live stream is gated locally so transcript stays clean.
    *  Flipping this triggers a full history refetch + stream reconnect. */
   debugEnabled?: boolean;
+  /** Fired when the turn settles: on every `chat:done` (turn ended — clean,
+   *  errored or cancelled) and on `chat:requires_action` (HITL pause). Card
+   *  chat wires this back to the card layer so the sphere/timeline status
+   *  updates the moment the agent finishes/pauses instead of waiting for
+   *  the next /cards poll. Distinct from `onTurnPersisted` (the local-sync
+   *  doorbell). Best-effort — a dropped stream means no call, so consumers
+   *  keep their own polling as the backstop. */
+  onTurnDone?: () => void;
 }
 
 export interface UseConversationRuntimeResult {
@@ -158,6 +166,11 @@ export function useConversationRuntime(
   useEffect(() => {
     localHistoryRef.current = opts?.localHistory;
   }, [opts?.localHistory]);
+  // 卡片层门铃同款 ref 化:回调身份变化不重订阅 SSE。
+  const onTurnDoneRef = useRef(opts?.onTurnDone);
+  useEffect(() => {
+    onTurnDoneRef.current = opts?.onTurnDone;
+  }, [opts?.onTurnDone]);
   // Card context is sent on the first message only, then cleared.
   const cardCtxRef = useRef<Record<string, unknown> | null>(opts?.cardContext ?? null);
   const bootstrappedRef = useRef(false);
@@ -479,6 +492,9 @@ export function useConversationRuntime(
               : [],
           });
           setBusy(false);
+          // HITL pause settles the turn for the card layer too — the card
+          // should flip to needs_input now, not on the next 30s poll.
+          onTurnDoneRef.current?.();
           break;
         }
         case "chat:done": {
@@ -490,6 +506,7 @@ export function useConversationRuntime(
             onTurnPersistedRef.current?.(threadIdRef.current);
           }
           setBusy(false);
+          onTurnDoneRef.current?.();
           break;
         }
         case "chat:persisted": {

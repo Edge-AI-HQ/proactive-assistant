@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { LucideIcon } from "lucide-react";
 
-export type SphereCardStatus = "normal" | "new" | "processing" | "done";
+export type SphereCardStatus =
+  | "normal"
+  | "new"
+  | "processing"
+  | "needs_input"
+  | "ready"
+  | "failed"
+  | "done";
 
 export interface Sphere3DCardItem {
   id: number;
@@ -393,12 +400,19 @@ const Sphere3DCards = ({
           const status = item.status ?? "normal";
           const isNew = status === "new";
           const isProcessing = status === "processing";
+          const isNeedsInput = status === "needs_input";
+          const isReady = status === "ready";
+          const isFailed = status === "failed";
           const isDone = status === "done";
 
           const ringClass = isNew
             ? "ring-1 ring-pink-400/50"
-            : isDone
+            : isNeedsInput
+            ? "ring-1 ring-amber-400/60"
+            : isReady || isDone
             ? "ring-1 ring-green-400/50"
+            : isFailed
+            ? "ring-1 ring-rose-400/50"
             : "";
 
           return (
@@ -465,6 +479,21 @@ const Sphere3DCards = ({
                 )}
                 {isProcessing && (
                   <span className="ml-auto shrink-0 w-2.5 h-2.5 rounded-full border-[1.5px] border-amber-400 border-t-transparent animate-spin" />
+                )}
+                {isNeedsInput && (
+                  <span className="text-[10px] font-bold text-amber-500 uppercase tracking-wider ml-auto animate-pulse">
+                    input
+                  </span>
+                )}
+                {isReady && (
+                  <span className="text-[10px] font-bold text-green-500 uppercase tracking-wider ml-auto">
+                    ready
+                  </span>
+                )}
+                {isFailed && (
+                  <span className="text-[10px] font-bold text-rose-500 uppercase tracking-wider ml-auto">
+                    failed
+                  </span>
                 )}
                 {isDone && (
                   <span className="text-[10px] font-bold text-green-500 uppercase tracking-wider ml-auto">
