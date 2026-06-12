@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Header, HTTPException, status
 from pydantic import BaseModel, Field, StrictInt
 
-from ...agents.generator import run_generator
+from ...agents.generator import derive_source_apps, run_generator
 from ...auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
 
 logger = logging.getLogger(__name__)
@@ -180,6 +180,7 @@ def _serialize_passing_cards(
     cards = cards[:max_cards]
     for i, card in enumerate(cards):
         card["id"] = f"{run_id}_card_{i:02d}"
+        card["sourceApps"] = derive_source_apps(card.get("sources") or [])
     intent_to_id = {c["intentKey"]: c["id"] for c in cards}
     for ev in evals:
         ev["cardId"] = intent_to_id.get(ev["intentKey"])
