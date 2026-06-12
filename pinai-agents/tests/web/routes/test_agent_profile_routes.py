@@ -265,3 +265,58 @@ async def test_profile_upsert_isolated_across_users(client, user_ids):
     body = r.json()
     assert body["profile"] is None
     assert body["goals"] == []
+
+
+@pytest.mark.asyncio
+async def test_profile_upsert_rejects_invalid_timezone(client, user_ids):
+    user_a, _ = user_ids
+    res = await client.post(
+        "/api/agent/profile/upsert",
+        json={"timezone": "Mars/OlympusMons"},
+        headers=_auth(user_a),
+    )
+    assert res.status_code == 400
+    assert "invalid IANA timezone" in res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_profile_upsert_timezone_change_retimes_cron_tasks(client, user_ids, pool):
+    """agent 改时区要和设备头通道同语义:既有 cron 任务的"每天 X 点"跟着
+    重排,否则改完时区任务仍按旧时区触发。"""
+    from datetime import UTC, datetime
+    from zoneinfo import ZoneInfo
+
+    from pinai_agents.web.db.repositories.scheduled_tasks import ScheduledTasksRepository
+    from pinai_agents.web.db.rls import user_scoped_tx
+
+    _, user_b = user_ids
+    # 种一个东京时区的"每天 9 点"任务。
+    async with user_scoped_tx(pool, user_b) as conn:
+        await ScheduledTasksRepository(user_b, conn).upsert(
+            id="sched.agenttz.cron",
+            kind="generator.scheduled",
+            trigger_kind="schedule",
+            cron_expr="0 9 * * *",
+            next_run_at=datetime.now(UTC),
+            timezone="Asia/Tokyo",
+            payload={},
+        )
+
+    res = await client.post(
+        "/api/agent/profile/upsert",
+        json={"timezone": "Europe/Paris"},
+        headers=_auth(user_b),
+    )
+    assert res.status_code == 200
+    assert res.json()["timezone"] == "Europe/Paris"
+
+    async with user_scoped_tx(pool, user_b) as conn:
+        cur = await conn.execute(
+            "SELECT timezone, next_run_at FROM pai_scheduled_tasks "
+            "WHERE user_id = %s AND id = 'sched.agenttz.cron'",
+            (user_b,),
+        )
+        row = await cur.fetchone()
+    assert row is not None and row["timezone"] == "Europe/Paris"
+    local = row["next_run_at"].astimezone(ZoneInfo("Europe/Paris"))
+    assert (local.hour, local.minute) == (9, 0)
