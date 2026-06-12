@@ -122,6 +122,9 @@ export async function conversationSend(
      *  optimistic bubble reconciles by identity. Reuse the SAME id when
      *  retrying a failed send. */
     clientMsgId?: string;
+    /** Cancel the current in-flight run and make this message the next user
+     *  input. Used by queued-message "send now". */
+    interrupt?: boolean;
     signal?: AbortSignal;
   },
 ): Promise<void> {
@@ -129,8 +132,45 @@ export async function conversationSend(
   if (opts?.cardContext) body.cardContext = opts.cardContext;
   if (opts?.regenerate) body.regenerate = true;
   if (opts?.clientMsgId) body.clientMsgId = opts.clientMsgId;
+  if (opts?.interrupt) body.interrupt = true;
   const res = await proxyPost("/conversation/send", body, opts?.signal);
   if (!res.ok) throw new Error(`/conversation/send failed: ${res.status}`);
+}
+
+export async function conversationUpdateMessage(
+  sessionKey: string,
+  clientMsgId: string,
+  message: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await proxyFetch("/conversation/message", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_key: sessionKey,
+      clientMsgId,
+      message,
+    }),
+    signal,
+  });
+  if (!res.ok) throw new Error(`/conversation/message PATCH failed: ${res.status}`);
+}
+
+export async function conversationDeleteMessage(
+  sessionKey: string,
+  clientMsgId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await proxyFetch("/conversation/message", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_key: sessionKey,
+      clientMsgId,
+    }),
+    signal,
+  });
+  if (!res.ok) throw new Error(`/conversation/message DELETE failed: ${res.status}`);
 }
 
 /** HITL: resolve a paused tool call (a chat:requires_action frame). The
@@ -213,6 +253,8 @@ export interface ConversationAwaiting {
 export interface ConversationActiveEntry {
   text: string;
   clientId: string | null;
+  /** True when this input is waiting behind an already-running agent turn. */
+  queued?: boolean;
 }
 
 /** The in-flight turn, surfaced on the newest page so a REFRESH mid-turn can

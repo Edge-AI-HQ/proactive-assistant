@@ -48,6 +48,9 @@ export interface ConversationUserEntry {
    *  rebuilds reconcile bubbles by this — same text ≠ same message. Absent
    *  on pre-clientMsgId rows, where reconciliation falls back to text. */
   clientId?: string;
+  /** True while the message is waiting behind an already-running agent turn.
+   *  This is client-local UI state; persisted history never carries it. */
+  queued?: boolean;
 }
 
 export interface ConversationAssistantEntry {
@@ -250,10 +253,10 @@ export function mergeTranscriptOnResync(
   );
   // Identity pass: pending inputs whose clientId matches a local bubble.
   // (Also proof a "failed" bubble's POST actually landed — flag cleared below.)
-  const confirmedIds = new Set<string>();
+  const confirmedById = new Map<string, ConversationActiveEntry>();
   for (const s of serverEntries) {
     if (s.clientId && carriedIds.has(s.clientId)) {
-      confirmedIds.add(s.clientId);
+      confirmedById.set(s.clientId, s);
     }
   }
   // Text-claim pool for the rest: non-failed bubbles not already claimed by
@@ -261,7 +264,7 @@ export function mergeTranscriptOnResync(
   // (older backend) must still match the bubble of a send that DID carry one.
   const claimableTexts = new Map<string, number>();
   for (const e of carry) {
-    if (e.failed || (e.clientId && confirmedIds.has(e.clientId))) {
+    if (e.failed || (e.clientId && confirmedById.has(e.clientId))) {
       continue;
     }
     const key = e.text.trim();
@@ -274,7 +277,7 @@ export function mergeTranscriptOnResync(
       // rendered; unmatched → a send this client has no bubble for (another
       // tab/device, or pre-reload). Claiming by text here would swallow a
       // DIFFERENT same-text message — e.g. two tabs both sending "hello".
-      if (confirmedIds.has(s.clientId)) continue;
+      if (confirmedById.has(s.clientId)) continue;
     } else {
       const key = s.text.trim();
       const claims = claimableTexts.get(key) ?? 0;
@@ -291,12 +294,17 @@ export function mergeTranscriptOnResync(
       ts: Date.now(),
       text: s.text,
       ...(s.clientId ? { clientId: s.clientId } : {}),
+      ...(s.queued ? { queued: true } : {}),
     });
   }
-  const carried = carry.map((e) =>
-    e.failed && e.clientId && confirmedIds.has(e.clientId)
-      ? { ...e, failed: false }
-      : e,
-  );
+  const carried = carry.map((e) => {
+    if (!e.clientId) return e;
+    const confirmed = confirmedById.get(e.clientId);
+    if (!confirmed) return e;
+    const next = e.failed ? { ...e, failed: false } : { ...e };
+    if (confirmed.queued) next.queued = true;
+    else delete next.queued;
+    return next;
+  });
   return [...history, ...carried, ...inflight];
 }

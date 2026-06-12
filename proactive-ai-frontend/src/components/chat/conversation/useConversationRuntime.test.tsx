@@ -22,6 +22,8 @@ vi.mock("@pin-ai/core", async (importOriginal) => {
     // Yield nothing then return so the stream loop exits and the hook idles.
     conversationStream: vi.fn(() => (async function* () {})()),
     conversationSend: vi.fn(async () => {}),
+    conversationUpdateMessage: vi.fn(async () => {}),
+    conversationDeleteMessage: vi.fn(async () => {}),
     conversationCancel: vi.fn(async () => {}),
     conversationDecision: vi.fn(async () => {}),
     conversationInit: vi.fn(async () => ({
@@ -34,13 +36,15 @@ vi.mock("@pin-ai/core", async (importOriginal) => {
   };
 });
 
-import { conversationHistory, conversationSend, conversationStream } from "@pin-ai/core";
+import { conversationDeleteMessage, conversationHistory, conversationSend, conversationStream, conversationUpdateMessage } from "@pin-ai/core";
 
 const fetchHistoryMock = conversationHistory as unknown as ReturnType<
   typeof vi.fn
 >;
 const streamMock = conversationStream as unknown as ReturnType<typeof vi.fn>;
 const sendMock = conversationSend as unknown as ReturnType<typeof vi.fn>;
+const updateMessageMock = conversationUpdateMessage as unknown as ReturnType<typeof vi.fn>;
+const deleteMessageMock = conversationDeleteMessage as unknown as ReturnType<typeof vi.fn>;
 
 function page(
   messages: ConversationHistoryMessage[],
@@ -487,6 +491,34 @@ describe("useConversationRuntime in-flight user bubble merge", () => {
     // The restored bubble renders after the persisted history rows.
     expect(result.current.transcript.map((e) => e.kind)).toEqual([
       "assistant", "user",
+    ]);
+  });
+
+  test("restores queued user entries from active history after reload", async () => {
+    fetchHistoryMock.mockResolvedValueOnce(
+      page(
+        [{ id: "a-0", role: "assistant", parts: [{ type: "text", text: "earlier reply" }] }],
+        {
+          active: {
+            userTexts: ["current run", "queued follow-up"],
+            userEntries: [
+              { text: "current run", clientId: "run-1" },
+              { text: "queued follow-up", clientId: "queue-1", queued: true },
+            ],
+            replayFrom: null,
+          },
+        },
+      ),
+    );
+    const { result } = renderHook(() =>
+      useConversationRuntime({ session: "main-queued-reload" }),
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    const users = userEntries(result.current.transcript);
+    expect(users.map((u) => [u.text, !!u.queued])).toEqual([
+      ["current run", false],
+      ["queued follow-up", true],
     ]);
   });
 
@@ -949,6 +981,97 @@ describe("useConversationRuntime optimistic turn placeholder", () => {
       push({ type: "chat:done", traceId: "run-2", data: {} });
     });
     await waitFor(() => expect(result.current.awaitingDecision).toBeNull());
+  });
+});
+
+describe("useConversationRuntime queued user messages", () => {
+  beforeEach(() => {
+    fetchHistoryMock.mockReset();
+    streamMock.mockReset();
+    streamMock.mockImplementation(() => emptyStream());
+    sendMock.mockReset();
+    sendMock.mockResolvedValue(undefined);
+    updateMessageMock.mockReset();
+    updateMessageMock.mockResolvedValue(undefined);
+    deleteMessageMock.mockReset();
+    deleteMessageMock.mockResolvedValue(undefined);
+  });
+
+  async function renderWithTwoSends(session = "main-q1") {
+    fetchHistoryMock.mockResolvedValueOnce(page([]));
+    const rendered = renderHook(() => useConversationRuntime({ session }));
+    await waitFor(() => expect(rendered.result.current.ready).toBe(true));
+    await act(async () => {
+      await rendered.result.current.sendMessage("first");
+    });
+    await act(async () => {
+      await rendered.result.current.sendMessage("second");
+    });
+    return rendered;
+  }
+
+  test("a send while busy is marked queued and does not open another assistant placeholder", async () => {
+    const { result } = await renderWithTwoSends("main-q1");
+
+    const users = userEntriesOf(result.current.transcript);
+    expect(users.map((u) => [u.text, !!u.queued])).toEqual([
+      ["first", false],
+      ["second", true],
+    ]);
+    const assistants = result.current.transcript.filter(
+      (e): e is ConversationAssistantEntry => e.kind === "assistant",
+    );
+    expect(assistants).toHaveLength(1);
+    expect(sendMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("updates a queued message locally and on the backend", async () => {
+    const { result } = await renderWithTwoSends("main-q2");
+    const queued = userEntriesOf(result.current.transcript)[1];
+
+    await act(async () => {
+      await result.current.updateQueuedMessage(queued.id, "edited second");
+    });
+
+    expect(updateMessageMock).toHaveBeenCalledWith(
+      "main-q2",
+      queued.clientId,
+      "edited second",
+    );
+    const users = userEntriesOf(result.current.transcript);
+    expect(users[1].text).toBe("edited second");
+    expect(users[1].queued).toBe(true);
+  });
+
+  test("deletes a queued message locally and on the backend", async () => {
+    const { result } = await renderWithTwoSends("main-q3");
+    const queued = userEntriesOf(result.current.transcript)[1];
+
+    await act(async () => {
+      await result.current.deleteQueuedMessage(queued.id);
+    });
+
+    expect(deleteMessageMock).toHaveBeenCalledWith("main-q3", queued.clientId);
+    expect(userEntriesOf(result.current.transcript).map((u) => u.text)).toEqual(["first"]);
+  });
+
+  test("force-sending a queued message interrupts the current run with the same client id", async () => {
+    const { result } = await renderWithTwoSends("main-q4");
+    const queued = userEntriesOf(result.current.transcript)[1];
+
+    await act(async () => {
+      await result.current.interruptQueuedMessage(queued.id);
+    });
+
+    expect(sendMock).toHaveBeenLastCalledWith(
+      "main-q4",
+      "second",
+      expect.objectContaining({
+        clientMsgId: queued.clientId,
+        interrupt: true,
+      }),
+    );
+    expect(userEntriesOf(result.current.transcript)[1].queued).toBe(false);
   });
 });
 

@@ -111,3 +111,40 @@ async def test_cancel_before_run_row_consumes_pending_messages(pool, user_ids):
     async with user_scoped_tx(pool, user_a) as conn:
         remaining = await MailboxRepository(user_a, conn).claim_pending(session_id=sid2)
     assert [m.content for m in remaining] == ["first"]
+
+
+@pytest.mark.asyncio
+async def test_interrupt_cancels_active_run_and_enqueues_new_message_identity(pool, user_ids):
+    """Force-send: cancel the active run and put the user's chosen queued
+    message at the front door with its clientMsgId so retries stay idempotent."""
+
+    from pinai_agents.web.agent_core.mailbox import MailboxRepository
+
+    user_a, _ = user_ids
+    sid = _sid()
+    bus = _FakeFrameBus()
+    service = AgentRunService(pool, bus)  # type: ignore[arg-type]
+    async with user_scoped_tx(pool, user_a) as conn:
+        await SessionRepository(user_a, conn).ensure_session(
+            session_id=sid, agent_kind="main_chat"
+        )
+        rid = await RunRepository(user_a, conn).create(
+            session_id=sid, agent_kind="main_chat", trigger="user"
+        )
+
+    await service.interrupt(
+        sid,
+        user_id=user_a,
+        agent_kind="main_chat",
+        new_message="urgent follow-up",
+        idempotency_key="queued-urgent",
+    )
+
+    async with user_scoped_tx(pool, user_a) as conn:
+        run = await RunRepository(user_a, conn).get(run_id=rid)
+        pending = await MailboxRepository(user_a, conn).claim_pending(session_id=sid)
+
+    assert run is not None and run.status == "cancelled"
+    assert [(m.content, m.idempotency_key) for m in pending] == [
+        ("urgent follow-up", "queued-urgent")
+    ]

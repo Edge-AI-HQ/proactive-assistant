@@ -160,6 +160,8 @@ class AgentRunService:
         user_id: int,
         agent_kind: AgentKind,
         new_message: str,
+        meta: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
     ) -> None:
         """Double-text on a busy session: cancel the running turn (keeping its
         partial — reason=user_interrupt) then enqueue the new message, as one
@@ -171,6 +173,8 @@ class AgentRunService:
             agent_kind=agent_kind,
             source="user",
             content=new_message,
+            meta=meta,
+            idempotency_key=idempotency_key,
         )
 
     async def start_run(

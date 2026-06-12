@@ -18,10 +18,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   awaitingPartialEntry,
   conversationCancel,
+  conversationDeleteMessage,
   conversationDecision,
   conversationHistory,
   conversationSend,
   conversationStream,
+  conversationUpdateMessage,
   fetchProactiveEnabled,
   historyToEntries,
   mergeTranscriptOnResync,
@@ -115,6 +117,12 @@ export interface UseConversationRuntimeResult {
   /** Stop the in-flight agent turn. Finalizes the current turn locally for
    *  instant feedback, then asks the backend to cancel it. */
   stop: () => Promise<void>;
+  /** Edit a queued user message before the worker claims it. */
+  updateQueuedMessage: (id: string, text: string) => Promise<void>;
+  /** Remove a queued user message before the worker claims it. */
+  deleteQueuedMessage: (id: string) => Promise<void>;
+  /** Cancel the current run and promote a queued message to run next. */
+  interruptQueuedMessage: (id: string) => Promise<void>;
   /** Regenerate the latest assistant turn: drops it locally and re-runs the
    *  latest user message with regenerate=true (backend pops the stale reply). */
   regenerateLast: () => Promise<void>;
@@ -196,8 +204,16 @@ export function useConversationRuntime(
   // Background heartbeat turns DON'T set it, so the composer doesn't flicker to
   // Stop on every idle tick.
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
   const [awaitingDecision, setAwaitingDecision] =
     useState<HitlRequiresAction | null>(null);
+  const awaitingDecisionRef = useRef<HitlRequiresAction | null>(null);
+  useEffect(() => {
+    awaitingDecisionRef.current = awaitingDecision;
+  }, [awaitingDecision]);
   const [enabled, setEnabledState] = useState<boolean | null>(null);
   // The card session id is known up front; the main thread id arrives in the
   // stream's hello event. Mirrored into a ref so the SSE handler can key the
@@ -515,6 +531,9 @@ export function useConversationRuntime(
         }
         case "chat:done": {
           finalizeTurn();
+          setTranscript((prev) =>
+            prev.map((e) => (e.kind === "user" && e.queued ? { ...e, queued: false } : e)),
+          );
           // Retire this turn's plan (turn-scoped todos): the panel shows its
           // done beat and hides; the next turn's write_todos starts fresh.
           if (threadIdRef.current) {
@@ -828,6 +847,7 @@ export function useConversationRuntime(
     async (text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
+      const queued = busyRef.current || awaitingDecisionRef.current !== null;
       // Optimistic: the reply does NOT come back on this POST — it arrives over
       // /stream — so we render the user's message locally immediately. One
       // uuid serves as entry id AND client message id (clientId), so a retry
@@ -835,7 +855,14 @@ export function useConversationRuntime(
       const id = crypto.randomUUID();
       setTranscript((prev) => [
         ...prev,
-        { kind: "user", id, ts: Date.now(), text: trimmed, clientId: id },
+        {
+          kind: "user",
+          id,
+          ts: Date.now(),
+          text: trimmed,
+          clientId: id,
+          ...(queued ? { queued: true } : {}),
+        },
       ]);
       const placeholderId = createTurnPlaceholder();
       await postUserMessage(id, trimmed, placeholderId);
@@ -854,6 +881,91 @@ export function useConversationRuntime(
       await postUserMessage(id, text, placeholderId);
     },
     [postUserMessage, createTurnPlaceholder],
+  );
+
+  const updateQueuedMessage = useCallback(
+    async (id: string, text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      const previous = transcript.find(
+        (e): e is ConversationUserEntry =>
+          e.kind === "user" && e.id === id && !!e.queued && !!e.clientId,
+      );
+      if (!previous) return;
+      const clientMsgId = previous.clientId;
+      if (!clientMsgId) return;
+      setTranscript((prev) =>
+        prev.map((e) => (e.kind === "user" && e.id === id ? { ...e, text: trimmed } : e)),
+      );
+      try {
+        await conversationUpdateMessage(session, clientMsgId, trimmed);
+      } catch (err) {
+        console.warn("[proactive] queued message update failed:", err);
+        const rollback = previous;
+        setTranscript((prev) =>
+          prev.map((e) => (e.kind === "user" && e.id === rollback.id ? rollback : e)),
+        );
+      }
+    },
+    [session, transcript],
+  );
+
+  const deleteQueuedMessage = useCallback(
+    async (id: string) => {
+      const removedIndex = transcript.findIndex(
+        (e) => e.kind === "user" && e.id === id && !!e.queued && !!e.clientId,
+      );
+      if (removedIndex < 0) return;
+      const removed = transcript[removedIndex] as ConversationUserEntry;
+      const clientMsgId = removed.clientId;
+      if (!clientMsgId) return;
+      setTranscript((prev) => prev.filter((e) => !(e.kind === "user" && e.id === id)));
+      try {
+        await conversationDeleteMessage(session, clientMsgId);
+      } catch (err) {
+        console.warn("[proactive] queued message delete failed:", err);
+        const rollback = removed;
+        const idx = removedIndex;
+        setTranscript((prev) => {
+          if (prev.some((e) => e.kind === "user" && e.id === rollback.id)) return prev;
+          const insertAt = idx >= 0 ? Math.min(idx, prev.length) : prev.length;
+          return [...prev.slice(0, insertAt), rollback, ...prev.slice(insertAt)];
+        });
+      }
+    },
+    [session, transcript],
+  );
+
+  const interruptQueuedMessage = useCallback(
+    async (id: string) => {
+      const target = transcript.find(
+        (e): e is ConversationUserEntry =>
+          e.kind === "user" && e.id === id && !!e.queued && !!e.clientId,
+      );
+      if (!target) return;
+      setTranscript((prev) =>
+        prev.map((e) => (e.kind === "user" && e.id === id ? { ...e, queued: false } : e)),
+      );
+      finalizeTurn();
+      setBusy(true);
+      setAwaitingDecision(null);
+      try {
+        await conversationSend(session, target.text, {
+          clientMsgId: target.clientId,
+          interrupt: true,
+        });
+      } catch (err) {
+        console.warn("[proactive] queued message interrupt failed:", err);
+        setBusy(false);
+        const rollback = target;
+        setTranscript((prev) =>
+          prev.map((e) =>
+            e.kind === "user" && e.id === rollback.id ? { ...e, queued: true } : e,
+          ),
+        );
+      }
+    },
+    [session, finalizeTurn, transcript],
   );
 
   // Regenerate the latest assistant turn: drop it locally, then re-send the
@@ -985,6 +1097,7 @@ export function useConversationRuntime(
 
   return {
     transcript, connection, ready, sendMessage, busy, retryMessage, stop,
+    updateQueuedMessage, deleteQueuedMessage, interruptQueuedMessage,
     regenerateLast,
     enabled, setEnabled, threadId,
     hasMoreHistory, loadMoreHistory,

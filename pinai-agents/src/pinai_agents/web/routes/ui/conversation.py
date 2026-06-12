@@ -39,7 +39,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from psycopg.types.json import Jsonb
 
-from ...agent_core.mailbox import MailboxRepository
+from ...agent_core.mailbox import MailboxRepository, Message
 from ...agent_core.runs import RunRepository
 from ...auth.deps import User, current_user, get_pool
 from ...db.repositories.chat_messages import ChatMessagesRepository, row_to_history_message
@@ -66,6 +66,40 @@ _AGENT_KIND_BY_THREAD: dict[ThreadKind, str] = {
 
 _DecisionT = Literal["approve", "reject", "edit", "respond"]
 _VALID_DECISIONS = get_args(_DecisionT)
+
+
+def _client_msg_id_from_body(body: dict) -> str:
+    client_msg_id = body.get("clientMsgId")
+    if not isinstance(client_msg_id, str) or not client_msg_id.strip():
+        raise HTTPException(status_code=400, detail="clientMsgId required")
+    client_msg_id = client_msg_id.strip()
+    if len(client_msg_id) > 128:
+        raise HTTPException(status_code=400, detail="clientMsgId must be ≤128 chars")
+    return client_msg_id
+
+
+def _active_user_entries(
+    pending: list[Message],
+    *,
+    has_running_run: bool,
+) -> list[dict[str, Any]]:
+    """User-visible unconsumed mailbox rows for /history active rebuild.
+
+    When a run is already streaming, rows that still have run_id=NULL are
+    queued behind it and can still be edited/deleted by clientMsgId.
+    """
+    entries: list[dict[str, Any]] = []
+    for msg in pending:
+        if msg.source != "user" or not msg.content or (msg.meta or {}).get("regenerate"):
+            continue
+        entry: dict[str, Any] = {
+            "text": msg.content,
+            "clientId": msg.idempotency_key,
+        }
+        if has_running_run and msg.run_id is None:
+            entry["queued"] = True
+        entries.append(entry)
+    return entries
 
 
 def _classify(session_key: str, user_id: int) -> tuple[ThreadKind, str | None]:
@@ -220,21 +254,85 @@ async def send(
         meta["card_context"] = card_context
     if regenerate:
         meta["regenerate"] = True
-    await request.app.state.agent_service.post_message(
-        session_key,
-        user_id=user.id,
-        agent_kind=_AGENT_KIND_BY_THREAD[kind],
-        source="user",
-        content=message or None,
-        meta=meta or None,
-        idempotency_key=client_msg_id,
-    )
+    if body.get("interrupt") is True:
+        await request.app.state.agent_service.interrupt(
+            session_key,
+            user_id=user.id,
+            agent_kind=_AGENT_KIND_BY_THREAD[kind],
+            new_message=message,
+            meta=meta or None,
+            idempotency_key=client_msg_id,
+        )
+    else:
+        await request.app.state.agent_service.post_message(
+            session_key,
+            user_id=user.id,
+            agent_kind=_AGENT_KIND_BY_THREAD[kind],
+            source="user",
+            content=message or None,
+            meta=meta or None,
+            idempotency_key=client_msg_id,
+        )
     # Best-effort thread-list freshness; never blocks the send.
     try:
         async with user_scoped_tx(pool, user.id) as conn:
             await ChatThreadsRepository(user.id, conn).bump_after_send(thread_id=session_key)
     except Exception:
         logger.exception("bump_after_send failed user=%d thread=%s", user.id, session_key)
+    return {"ok": True}
+
+
+@router.patch("/message")
+async def update_message(
+    body: dict,
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+) -> dict[str, Any]:
+    """Edit a queued user message before the worker claims it for a run."""
+    session_key = (body.get("session_key") or "").strip()
+    if not session_key:
+        raise HTTPException(status_code=400, detail="session_key required")
+    client_msg_id = _client_msg_id_from_body(body)
+    message = (body.get("message") or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message required")
+    async with user_scoped_tx(pool, user.id) as conn:
+        await _resolve_owned(session_key, user.id, conn)
+        updated = await MailboxRepository(user.id, conn).update_pending_user_message(
+            session_id=session_key,
+            client_msg_id=client_msg_id,
+            content=message,
+        )
+    if not updated:
+        raise HTTPException(
+            status_code=409,
+            detail="message is already processing or is not queued",
+        )
+    return {"ok": True}
+
+
+@router.delete("/message")
+async def delete_message(
+    body: dict,
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+) -> dict[str, Any]:
+    """Delete a queued user message before the worker claims it for a run."""
+    session_key = (body.get("session_key") or "").strip()
+    if not session_key:
+        raise HTTPException(status_code=400, detail="session_key required")
+    client_msg_id = _client_msg_id_from_body(body)
+    async with user_scoped_tx(pool, user.id) as conn:
+        await _resolve_owned(session_key, user.id, conn)
+        deleted = await MailboxRepository(user.id, conn).delete_pending_user_message(
+            session_id=session_key,
+            client_msg_id=client_msg_id,
+        )
+    if not deleted:
+        raise HTTPException(
+            status_code=409,
+            detail="message is already processing or is not queued",
+        )
     return {"ok": True}
 
 
@@ -439,17 +537,16 @@ async def history(
                 # agent's frames from. A regenerate message renders no bubble —
                 # its user turn is already in history.
                 pending = await MailboxRepository(user.id, conn).peek_pending(session_id=session)
+                running = await RunRepository(user.id, conn).get_active(session_id=session)
                 # `userEntries` carries each pending input's client message id
                 # (the send's clientMsgId, ridden as the mailbox
                 # idempotency_key) so the FE reconciles by identity;
                 # `userTexts` is the same list id-less for older clients.
-                user_entries = [
-                    {"text": m.content, "clientId": m.idempotency_key}
-                    for m in pending
-                    if m.source == "user" and m.content and not (m.meta or {}).get("regenerate")
-                ]
+                user_entries = _active_user_entries(
+                    pending,
+                    has_running_run=running is not None and running.status == "running",
+                )
                 user_texts = [e["text"] for e in user_entries]
-                running = await RunRepository(user.id, conn).get_active(session_id=session)
                 if running is not None and running.status == "running":
                     active = {
                         "userTexts": user_texts,

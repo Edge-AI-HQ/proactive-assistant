@@ -93,6 +93,66 @@ async def test_mailbox_merge_and_idempotency(pool, user_ids):
 
 
 @pytest.mark.asyncio
+async def test_mailbox_updates_and_deletes_only_unclaimed_user_messages(pool, user_ids):
+    user_a, _ = user_ids
+    sid = _sid()
+    async with user_scoped_tx(pool, user_a) as conn:
+        s = SessionRepository(user_a, conn)
+        m = MailboxRepository(user_a, conn)
+        await s.ensure_session(session_id=sid, agent_kind="main_chat")
+        unlocked_id = await m.enqueue(
+            session_id=sid,
+            source="user",
+            content="original",
+            idempotency_key="queued-1",
+        )
+        assert unlocked_id is not None
+
+        assert await m.update_pending_user_message(
+            session_id=sid,
+            client_msg_id="queued-1",
+            content="edited",
+        )
+        edited = await m.claim_pending(session_id=sid)
+        assert [x.content for x in edited] == ["edited"]
+
+        deletable_id = await m.enqueue(
+            session_id=sid,
+            source="user",
+            content="delete me",
+            idempotency_key="queued-2",
+        )
+        assert deletable_id is not None
+        assert await m.delete_pending_user_message(
+            session_id=sid,
+            client_msg_id="queued-2",
+        )
+        remaining = await m.claim_pending(session_id=sid)
+        assert [x.idempotency_key for x in remaining] == ["queued-1"]
+
+        locked_id = await m.enqueue(
+            session_id=sid,
+            source="user",
+            content="already processing",
+            idempotency_key="locked-1",
+        )
+        assert locked_id is not None
+        await m.mark_claimed(message_ids=[locked_id], run_id=str(uuid.uuid4()))
+
+        assert not await m.update_pending_user_message(
+            session_id=sid,
+            client_msg_id="locked-1",
+            content="too late",
+        )
+        assert not await m.delete_pending_user_message(
+            session_id=sid,
+            client_msg_id="locked-1",
+        )
+        locked = [m for m in await m.claim_pending(session_id=sid) if m.id == locked_id][0]
+        assert locked.content == "already processing"
+
+
+@pytest.mark.asyncio
 async def test_run_lifecycle_and_hitl(pool, user_ids):
     user_a, _ = user_ids
     sid = _sid()

@@ -349,6 +349,9 @@ class AgentRunWorker:
             run_id = await RunRepository(user_id, conn).create(
                 session_id=session_id, agent_kind=agent_kind, trigger=trigger
             )
+            await MailboxRepository(user_id, conn).mark_claimed(
+                message_ids=msg_ids, run_id=run_id
+            )
             # Same-tx profile read: the user's timezone rides to chat so it
             # can anchor a <current_datetime> note (chat has no DB and must
             # not guess dates — the at_local date-guess bug).

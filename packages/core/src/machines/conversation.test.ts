@@ -205,4 +205,17 @@ describe("mergeTranscriptOnResync", () => {
     );
     expect(restored?.text).toBe("from before reload");
   });
+
+  test("preserves queued state from active userEntries across resync", () => {
+    const prev: ConversationEntry[] = [
+      bubble({ text: "queued follow-up", clientId: "cid-queued", queued: true }),
+    ];
+    const merged = mergeTranscriptOnResync(prev, history, [
+      { text: "queued follow-up", clientId: "cid-queued", queued: true },
+      { text: "queued after reload", clientId: "cid-reload", queued: true },
+    ]);
+    const users = merged.filter((e): e is ConversationUserEntry => e.kind === "user");
+    const queued = users.filter((u) => u.queued);
+    expect(queued.map((u) => u.clientId)).toEqual(["cid-queued", "cid-reload"]);
+  });
 });
