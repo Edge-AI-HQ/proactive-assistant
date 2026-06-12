@@ -41,7 +41,13 @@ class ProfileUpsertInput(BaseModel):
     timezone: str | None = Field(
         default=None,
         max_length=64,
-        description="IANA timezone, e.g. 'America/Los_Angeles', 'Asia/Shanghai'. Set when the user states their location/timezone.",
+        description=(
+            "IANA timezone, e.g. 'America/Los_Angeles', 'Asia/Shanghai'. Set "
+            "when the user states their location/timezone. Invalid names are "
+            "rejected (400). Note: the phone's device timezone is the source "
+            "of truth — a value written here is overridden by the next device "
+            "sync, so only set it when the user explicitly asks."
+        ),
     )
     summary: str | None = Field(
         default=None,
