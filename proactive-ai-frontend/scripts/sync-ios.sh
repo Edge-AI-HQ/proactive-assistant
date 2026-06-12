@@ -28,10 +28,14 @@ fi
 
 echo "==> Building frontend with VITE_PIN_API_URL=$VITE_PIN_API_URL"
 cd "$FRONTEND_DIR"
+# OAuth scheme must equal the bundle id the native app is built with, or the
+# deep-link callback opens the wrong app. CI (build-ios.sh) always passes it
+# explicitly; the local-Xcode default below must stay in sync with the
+# checked-in PRODUCT_BUNDLE_IDENTIFIER in App.xcodeproj/project.pbxproj.
 VITE_CAPACITOR=1 \
   VITE_PIN_API_URL="$VITE_PIN_API_URL" \
   VITE_API_BASE_URL="$VITE_PIN_API_URL" \
-  VITE_OAUTH_SCHEME="${VITE_OAUTH_SCHEME:-}" \
+  VITE_OAUTH_SCHEME="${VITE_OAUTH_SCHEME:-ai.pin.proactive.development}" \
   npx vite build
 
 echo "==> Syncing iOS..."
