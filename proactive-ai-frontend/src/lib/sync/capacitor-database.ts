@@ -2,17 +2,18 @@
  * @pin-ai/core Database port 的 Capacitor 实现（Sync-B2 第一个 driver）。
  *
  * 连接管理照 ambient timeline store 的既有惯例（动态 import + isConnection
- * 探测 + retrieve/create + open 检查）；独立 DB 文件 `pinai_sync`，与
- * ambient 的库隔离生命周期。调用方（sync-bootstrap）负责 isNative gate——
- * web build 里本模块经 vite alias 指向 native-plugin-stub，永不真调。
+ * 探测 + retrieve/create + open 检查）；**per-user DB 文件**
+ * `pinai_sync_<supabase_user_id>`（业界 per-account database 惯例：换账号
+ * 登录数据/游标/outbox 天然隔离，不依赖登出清理；同账号重登录秒恢复），
+ * 与 ambient 的库隔离生命周期。调用方（sync-bootstrap）负责 isNative
+ * gate——web build 里 `@capacitor-community/sqlite` 经 vite alias 指向
+ * native-plugin-stub（调用即 throw），但 gate 保证永不触发。
  *
  * 事务：显式 BEGIN/COMMIT/ROLLBACK 语句，每句 run 的 transaction 参数传
  * false（关掉 plugin 的逐句自动事务，避免与显式事务嵌套冲突）。引擎是
  * 单实例顺序跑（sync-bootstrap 串行调度），连接无并发写者。
  */
 import type { DatabasePort, DatabaseTx, SqlParam } from "@pin-ai/core";
-
-const DB_NAME = "pinai_sync";
 
 interface SqliteConnection {
   open(): Promise<void>;
@@ -42,48 +43,48 @@ interface SqliteModule {
   SQLiteConnection?: new (sqlite: unknown) => SqliteConnectionFactory;
 }
 
-let connPromise: Promise<SqliteConnection> | null = null;
+const connPromises = new Map<string, Promise<SqliteConnection>>();
 
-async function openConnection(): Promise<SqliteConnection> {
+async function openConnection(dbName: string): Promise<SqliteConnection> {
   const mod = (await import("@capacitor-community/sqlite")) as SqliteModule;
   if (!mod.CapacitorSQLite || !mod.SQLiteConnection) {
     throw new Error("@capacitor-community/sqlite plugin not available");
   }
   const sqlite = new mod.SQLiteConnection(mod.CapacitorSQLite);
-  const probe = await sqlite.isConnection(DB_NAME, false).catch(() => ({ result: false }));
+  const probe = await sqlite.isConnection(dbName, false).catch(() => ({ result: false }));
   const conn = probe.result
-    ? await sqlite.retrieveConnection(DB_NAME, false)
-    : await sqlite.createConnection(DB_NAME, false, "no-encryption", 1, false);
+    ? await sqlite.retrieveConnection(dbName, false)
+    : await sqlite.createConnection(dbName, false, "no-encryption", 1, false);
   const open = await conn.isDBOpen?.().catch(() => ({ result: false }));
   if (open?.result !== true) await conn.open();
   return conn;
 }
 
-function db(): Promise<SqliteConnection> {
-  if (!connPromise) {
-    connPromise = openConnection().catch((err) => {
-      connPromise = null; // 失败可重试（下次调用重新建连）
+function db(dbName: string): Promise<SqliteConnection> {
+  let p = connPromises.get(dbName);
+  if (!p) {
+    p = openConnection(dbName).catch((err) => {
+      connPromises.delete(dbName); // 失败可重试（下次调用重新建连）
       throw err;
     });
+    connPromises.set(dbName, p);
   }
-  return connPromise;
+  return p;
 }
 
-async function run(sql: string, params: SqlParam[] = []): Promise<void> {
-  const conn = await db();
-  await conn.run(sql, params, false);
-}
-
-async function query(
-  sql: string,
-  params: SqlParam[] = [],
-): Promise<Record<string, unknown>[]> {
-  const conn = await db();
-  const out = await conn.query(sql, params);
-  return out.values ?? [];
-}
-
-export function createCapacitorDatabase(): DatabasePort {
+export function createCapacitorDatabase(dbName: string): DatabasePort {
+  const run = async (sql: string, params: SqlParam[] = []): Promise<void> => {
+    const conn = await db(dbName);
+    await conn.run(sql, params, false);
+  };
+  const query = async (
+    sql: string,
+    params: SqlParam[] = [],
+  ): Promise<Record<string, unknown>[]> => {
+    const conn = await db(dbName);
+    const out = await conn.query(sql, params);
+    return out.values ?? [];
+  };
   const tx: DatabaseTx = { run, query };
   return {
     ...tx,

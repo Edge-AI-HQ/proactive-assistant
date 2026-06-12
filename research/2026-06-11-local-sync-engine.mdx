@@ -5,7 +5,7 @@ description: "为 web/Electron/Expo RN 三端设计本地缓存+同步引擎的�
 
 # 本地-云端同步引擎：调研与方案（2026-06-11）
 
-> **状态**（2026-06-11 更新）：**Sync-A 与 Sync-B1/B2 已落地**——Sync-A persister 白名单持久化（#97）、B1 后端 delta 协议（#98，`/api/sync/messages|threads` + migration 093）、B2 引擎影子模式（#99，Database port 首落地 + Capacitor driver + 登录后后台同步）。**Sync-B 切片顺序已拍板**：B1 协议 → B2 影子 → B3 读路径切换；B2 driver 端选 Capacitor iOS；域范围 messages 为主 + threads 顺带。
+> **状态**（2026-06-11 更新）：**Sync-A / B / C 全部落地**——Sync-A persister 白名单持久化（#97）、B1 后端 delta 协议（#98，`/api/sync/messages|threads` + migration 093）、B2 引擎影子模式（#99，Database port 首落地 + Capacitor driver + 登录后后台同步，真机验证过）、B3 门铃 ingest + 读路径本地优先（#103）、**Sync-C 泛化 outbox + cards 镜像 + FTS5 全文搜索（#103，范围按 §5.2 收窄）**。剩余只有 Sync-D（web sqlite-wasm，观察项）。「买 vs 自研」在 Sync-C 期间按已落地代码量复核过一轮（§4.1 末尾），结论不变。
 > **B3 的前置是真机影子验证**（见 §5.1 checklist）：影子引擎只写不读，`[sync:shadow]` stats 与服务端比对一致后才切读路径——它是同步引擎唯一碰用户体验的步骤。
 > **决策输入**（2026-06-11，用户拍板）：服务端列加密工程可为同步让步（"当前可以不需要"）；后端 schema/接口可改造，都 flexible。本方案的最终推荐**不需要动用这个让步**（见 §4.3），加密兼容性作为免费保留项。
 
@@ -102,6 +102,8 @@ PGlite 排除（RN 跑不了）；cr-sqlite 停滞排除。
 5. **零运维新增**：不引 PowerSync Service / zero-cache 这类常驻件；
 6. **加密保留项**：应用层协议天然兼容「未来恢复服务端列加密」（API 出明文即可），WAL 系则要求 DB 明文直通客户端——虽然用户已表态加密可让步，但推荐方案不需要消费这个让步。
 
+**事后复核（2026-06-11，Sync-C 完成时）**：全部落地代码 ≈ 1500 行（core 引擎 + 测试 ≈ 1000、Capacitor driver + app 接线 ≈ 280、后端 migration + delta 端点 ≈ 160），无新增运维件。对照切换成本：PowerSync 等 WAL 系要新增常驻 Service + Postgres 逻辑复制 slot + 把 API 层投影（parts 形状、trigger 过滤、card 可见性）搬到客户端重写，且我们 RLS 实际处于 superuser bypass 状态（见 db gate 调研），裸表直通 sync service 不可接受——切换是负收益。**重估触发条件**（满足其一再回头看 PowerSync）：① 出现多端双向编辑/协作数据；② 同步域膨胀到 10+ 张表、每张都要手写 delta 端点；③ 离线写场景从「反馈类幂等 POST」扩到复杂 mutation 链。
+
 ### 4.2 架构（核心引擎进 `@pin-ai/core/sync`，纯 TS 三端共用）
 
 ```
@@ -182,6 +184,23 @@ ambient 现有 outbox/store **不动**——它已经是这个架构在 ambient 
 - **读路径切换（唯一碰 UI 的步骤）**：`conversationHistory` 的首屏读改「本地优先 + 网络 race」（Notion 模式）：本地库有行即先渲染、后台 delta 补齐 invalidate；本地空（冷库/新设备）直接走网络不等引擎。`loadMoreHistory` 向旧翻页仍走网络（历史 gap 按需 hydrate 后入库）。
 - **card threads 按访问驱动**：打开 card thread 时触发该 thread 的 `syncMessages`（lazy incomplete model），不全量扫。
 - **回归面控制**：复用 Phase 3c 的 envelope/merge 回放测试基建；读切换灰度顺序 = 先 card drawer（读面窄）后 main chat。
+
+### 5.2 Sync-C 实施细则（2026-06-11 落地，范围带理由收窄）
+
+原表中 Sync-C 的「cards/memory/settings 域接入 + 设置修改走队列」按实际数据形状收窄，落地为：
+
+- **cards 进本地库只为 FTS**：`/cards` 是「最新 200 张」的有界投影（outcome 可变、join 自 feedback），delta 化不值得——`syncCards` 全量拉 + 事务内全表替换 + `cards_fts` 重建。**读路径不切**：卡片读仍走 TQ + persister（Sync-A），本地表的用途是搜索索引源。
+- **settings / memory 不接**：persister 已盖（小 KV 形状），进同步库零收益、平添两套 delta 端点。
+- **outbox 只接「静默吞」写点**：`useCardActions` 六个 catch-swallow 的 `/feedback` POST（confirm/modify/dismiss/snooze/connector-complete/text_feedback）失败时入队，pass + 门铃驱动重放；dedupe key = `fb:<outcome>:<cardId>`（text_feedback 不去重——不同文本是不同 mutation）。**有可见失败语义的写点不接**：terminal `complete`（spinner 清理 + `persisted` 返回值让用户可重试）、settings patch（UI 报错）——入队会造成「界面说失败、后台又成功」的双写歧义。
+- **FTS 做到 API 层为止**：`messages_fts`（syncMessages 事务内 delete+insert，文本提取自 text/reasoning parts）+ `cards_fts`；`searchLocal()` 已导出，搜索 UI 是后续产品迭代。
+- **`sync:changed` SSE 门铃不做**：B3a 的 turn-finalize 门铃 + 30min 兜底轮询已覆盖 main chat 实时性；服务端推送门铃等出现「非本设备触发的数据变更需要实时进库」的场景再加。
+
+**Review 修正（2026-06-11，落地前自查抓出三处）**：
+
+- **per-user 本地库**：库名 `pinai_sync_<supabase_user_id>`（业界 per-account database 惯例，Telegram/Slack 同形）。全局单库在同设备换账号时有三个串号面：FTS 全库搜索跨账号可见、threads 复合游标延续导致 B 的旧 thread 被增量条件跳过、**A 积压的 outbox 用 B 的 JWT 投递**。per-user 库按构造隔离，不依赖每条登出路径记得清理；同账号重登录本地缓存秒恢复。
+- **全局串行队列**：pass / 门铃 / drain 的每个引擎操作经 sync-bootstrap 的 `serialize()` 排队——Capacitor 是单连接显式 BEGIN，并发事务会嵌套交错，且 drain 的 DELETE 会混入他人事务、随对方 ROLLBACK 复活已投递行（= feedback 重复投递，服务端无幂等键）。粒度是单个 engine 调用而非整个 pass，门铃可插进 pass 间隙不损实时性。引擎本体保持「调用方负责串行」契约（engine.ts/capacitor-database.ts 头注释）。
+- **push-then-pull**：pass 顺序 drain → threads → messages → cards（业界 convention：先投递本地写，本轮拉取即带回写的效果，如 dismiss 后的 card outcome）。
+- outbox 无状态列：行存在即待投递，成功/永久放弃（4xx、7d TTL）即删行——本地端没有查「失败尸体」的消费方，删行即表大小控制。
 
 ## 6. 风险清单
 

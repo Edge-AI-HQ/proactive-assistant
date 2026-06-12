@@ -44,4 +44,7 @@ export * from "./machines/tool-steps";
 export * from "./ports/database";
 
 export * from "./sync/engine";
+export * from "./sync/local-read";
+export * from "./sync/outbox";
+export * from "./sync/search";
 export * from "./sync/schema";

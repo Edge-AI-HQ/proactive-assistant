@@ -23,6 +23,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 
 import {
   buildCardThreadTextFeedbackBody,
+  type ConversationHistoryPage,
   cardSessionKeyFor,
   chatHistoryToSnapshot,
   conversationHistory,
@@ -148,13 +149,24 @@ export interface UseCardExecutionRunOptions {
    *  backend deployments and existing threads still know which card
    *  the user means when they say "this card". */
   cardContext?: Record<string, unknown>;
+  /** Sync-B3b：本地同步库读取（注入与 conversation runtime 同构）。
+   *  注入时 drawer 首帧用本地 snapshot 秒开；网络轮询照旧并立即校正
+   *  （awaiting/active 只有网络有，HITL 等状态以网络为准）。 */
+  localHistory?: (
+    threadId: string,
+    limit: number,
+  ) => Promise<ConversationHistoryPage | null>;
 }
 
 export function useCardExecutionRun(
   runId: string | null,
   options: UseCardExecutionRunOptions = {},
 ): UseCardExecutionRun {
-  const { bootstrap, cardContext } = options;
+  const { bootstrap, cardContext, localHistory } = options;
+  const localHistoryRef = useRef(localHistory);
+  useEffect(() => {
+    localHistoryRef.current = localHistory;
+  }, [localHistory]);
   const [state, dispatch] = useReducer(reducer, NULL_STATE);
   // Track which session_keys we've already fired a bootstrap into so
   // a parent re-render or a polling tick can't double-send the same
@@ -231,6 +243,23 @@ export function useCardExecutionRun(
     if (!snapshotRef.current) dispatch({ kind: "loading" });
 
     (async () => {
+      // ── B3b 本地首帧：drawer 秒开。网络轮询紧随其后覆盖（HITL 的
+      // awaiting/active 只有网络有，状态以网络 snapshot 为准）。
+      if (!snapshotRef.current) {
+        try {
+          const session = cardSessionKeyFor(runId);
+          const localPage = await localHistoryRef.current?.(session, 200);
+          if (localPage && !abort && !snapshotRef.current) {
+            dispatch({
+              kind: "snapshot",
+              snapshot: chatHistoryToSnapshot(session, localPage),
+            });
+          }
+        } catch {
+          /* best-effort */
+        }
+      }
+      if (abort) return;
       while (!abort) {
         try {
           const snap = await fetchSnapshot(runId);

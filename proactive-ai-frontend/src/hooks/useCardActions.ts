@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { proxyFetch, proxyPost } from "@/lib/api";
+import { enqueueFeedback } from "@/lib/sync/sync-bootstrap";
 import {
   cardActionFeedbackBody,
   confirmBootstrap,
@@ -171,7 +172,8 @@ export function useCardActions({ onOpenChat, composio }: UseCardActionsOptions) 
         try {
           await proxyPost("/feedback", cardActionFeedbackBody("complete", card));
         } catch {
-          /* swallow; UI already optimistic */
+          /* UI already optimistic; offline → outbox replays on reconnect */
+          void enqueueFeedback(cardActionFeedbackBody("complete", card), `fb:complete:${cardId}`);
         }
         await openPreparedConnectorOAuth(preparedOAuth, { awaitClose: false });
         setProcessingIds((s) => {
@@ -188,7 +190,7 @@ export function useCardActions({ onOpenChat, composio }: UseCardActionsOptions) 
       try {
         await proxyPost("/feedback", cardActionFeedbackBody("confirm", card));
       } catch {
-        /* swallow; UI already optimistic */
+        void enqueueFeedback(cardActionFeedbackBody("confirm", card), `fb:confirm:${cardId}`);
       }
       onOpenChat(card, confirmBootstrap(card));
     },
@@ -200,7 +202,7 @@ export function useCardActions({ onOpenChat, composio }: UseCardActionsOptions) 
     try {
       await proxyPost("/feedback", dismissFeedbackBody(card));
     } catch {
-      /* swallow */
+      void enqueueFeedback(dismissFeedbackBody(card), `fb:dismiss:${card.id}`);
     }
   }, []);
 
@@ -209,7 +211,7 @@ export function useCardActions({ onOpenChat, composio }: UseCardActionsOptions) 
     try {
       await proxyPost("/feedback", snoozeFeedbackBody(card));
     } catch {
-      /* swallow */
+      void enqueueFeedback(snoozeFeedbackBody(card), `fb:snooze:${card.id}`);
     }
   }, []);
 
@@ -220,7 +222,7 @@ export function useCardActions({ onOpenChat, composio }: UseCardActionsOptions) 
       try {
         await proxyPost("/feedback", cardActionFeedbackBody("modify", card));
       } catch {
-        /* swallow */
+        void enqueueFeedback(cardActionFeedbackBody("modify", card), `fb:modify:${card.id}`);
       }
       onOpenChat(card, steerBootstrap(card));
     },
@@ -277,7 +279,7 @@ export function useCardActions({ onOpenChat, composio }: UseCardActionsOptions) 
     try {
       await proxyPost("/feedback", textFeedbackBody(card, trimmed));
     } catch {
-      /* swallow */
+      void enqueueFeedback(textFeedbackBody(card, trimmed));
     }
   }, []);
 

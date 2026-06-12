@@ -106,13 +106,14 @@ export default function App() {
     };
   }, [user?.id]);
 
-  // Sync-B2 影子模式：登录后在 native 端后台同步 threads + main thread
-  // messages 进本地 SQLite（UI 不读，仅真机验证引擎——B3 才切读路径）。
+  // 同步引擎：登录后在 native 端后台同步 threads/messages/cards 进
+  // per-user 本地 SQLite（库名带 supabase user id，换账号天然隔离）。
   // 动态 import 保持 web bundle 干净；幂等（内部 started gate）。
   useEffect(() => {
-    if (!isNative || !user) return;
+    const uid = user?.id;
+    if (!isNative || !uid) return;
     void import("@/lib/sync/sync-bootstrap").then(({ startShadowSync }) => {
-      startShadowSync();
+      startShadowSync(uid);
     });
   }, [user?.id]);
 

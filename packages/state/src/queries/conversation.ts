@@ -33,6 +33,7 @@ import {
   type ConversationAssistantEntry,
   type ConversationConnectionState,
   type ConversationEntry,
+  type ConversationHistoryPage,
   type ConversationSseEnvelope,
   type ConversationUserEntry,
   type HitlRequiresAction,
@@ -71,6 +72,16 @@ export interface ConversationRuntimeOpts {
   /** Auto-fired first user message when the thread has no history yet (e.g. a
    *  card's primaryAction label, mirroring the server-side fanout bootstrap). */
   bootstrap?: string;
+  /** Sync-B3 门铃：本 thread 的一个 turn 已被后端 finalize/persist——
+   *  调用方触发该 thread 的本地增量同步（拉刚落库的行）。通知拉取分离：
+   *  客户端不把 SSE 帧自行拼成行。chat:persisted 与 chat:done 都会触发，
+   *  幂等/节流由实现方负责。 */
+  onTurnPersisted?: (threadId: string) => void;
+  /** Sync-B3b 读路径：本地同步库的 history page 读取（无 driver/空库返回
+   *  null）。注入时首屏「本地优先 + 网络校正」：本地页立即渲染（ready
+   *  提前、离线可读），网络页随后整体重建校正（awaiting/active/replayFrom
+   *  只有网络有）。向旧翻页（loadMoreHistory）仍走网络。 */
+  localHistory?: (threadId: string, limit: number) => Promise<ConversationHistoryPage | null>;
   /** When true, fetch the debug-visible history (heartbeats + silent
    *  tick-triggered turns) and let live heartbeat events through.
    *  When false (default), the backend filters those out at the source
@@ -138,6 +149,15 @@ export function useConversationRuntime(
   const isProactive = session.startsWith("proactive-");
   const bootstrap = opts?.bootstrap;
   const debugEnabled = !!opts?.debugEnabled;
+  // 门铃回调进 ref：SSE 处理器不因回调身份变化重建/重订阅。
+  const onTurnPersistedRef = useRef(opts?.onTurnPersisted);
+  useEffect(() => {
+    onTurnPersistedRef.current = opts?.onTurnPersisted;
+  }, [opts?.onTurnPersisted]);
+  const localHistoryRef = useRef(opts?.localHistory);
+  useEffect(() => {
+    localHistoryRef.current = opts?.localHistory;
+  }, [opts?.localHistory]);
   // Card context is sent on the first message only, then cleared.
   const cardCtxRef = useRef<Record<string, unknown> | null>(opts?.cardContext ?? null);
   const bootstrappedRef = useRef(false);
@@ -467,6 +487,7 @@ export function useConversationRuntime(
           // done beat and hides; the next turn's write_todos starts fresh.
           if (threadIdRef.current) {
             finalizePlanTurn(threadIdRef.current, str(env.traceId));
+            onTurnPersistedRef.current?.(threadIdRef.current);
           }
           setBusy(false);
           break;
@@ -480,6 +501,9 @@ export function useConversationRuntime(
           // it).
           const mid = str(payload.messageId);
           if (!mid) break;
+          if (threadIdRef.current) {
+            onTurnPersistedRef.current?.(threadIdRef.current);
+          }
           setTranscript((prev) => {
             for (let i = prev.length - 1; i >= 0; i--) {
               if (prev[i].kind === "assistant") {
@@ -537,6 +561,23 @@ export function useConversationRuntime(
       // filtered view.
       const isResume = lastEventIdRef.current !== null;
       if (!isResume) {
+        // ── B3b 本地优先：本地同步库有此 thread 即先渲染（0 网络首屏、
+        // 离线可读），网络页随后到达走下方现有 merge 整体重建校正——
+        // 本地条目与网络 history 同源同 id，merge 语义天然去重。本地
+        // 读失败/空库静默跳过，行为与切换前完全一致。
+        try {
+          const localPage = await localHistoryRef.current?.(session, HISTORY_PAGE_SIZE);
+          if (localPage && !cancelled) {
+            const localEntries = historyToEntries(localPage.messages);
+            setTranscript((prev) => mergeTranscriptOnResync(prev, localEntries, []));
+            setHasMoreHistory(localPage.nextCursor !== null);
+            oldestCursorRef.current = localPage.nextCursor;
+            setReady(true);
+          }
+        } catch {
+          /* local read is best-effort; network path below is authoritative */
+        }
+        if (cancelled) return;
         try {
           const page = await conversationHistory(session, {
             signal,

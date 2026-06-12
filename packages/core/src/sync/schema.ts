@@ -35,6 +35,38 @@ const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX IF NOT EXISTS ix_messages_thread ON messages (thread_id, id);
   `,
+  // v2 — Sync-C：cards 镜像（FTS 索引源，读路径仍走 TQ+persister）、
+  // 通用 outbox（静默吞写点的可靠投递）、FTS5 全文索引（独立表而非
+  // external-content：可检索文本要从 parts_json 提取，无法列对齐）。
+  `
+  CREATE TABLE IF NOT EXISTS cards (
+    card_id TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    run_id TEXT,
+    run_completed_at TEXT,
+    score_json TEXT,
+    latest_outcome TEXT,
+    outcome_at TEXT,
+    synced_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS outbox (
+    id TEXT PRIMARY KEY,
+    path TEXT NOT NULL,
+    body_json TEXT NOT NULL,
+    dedupe_key TEXT UNIQUE,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    next_retry_at INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS ix_outbox_due ON outbox (next_retry_at);
+  CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+    text, thread_id UNINDEXED, message_id UNINDEXED
+  );
+  CREATE VIRTUAL TABLE IF NOT EXISTS cards_fts USING fts5(
+    text, card_id UNINDEXED
+  );
+  `,
 ];
 
 async function userVersion(db: DatabaseTx): Promise<number> {

@@ -4,11 +4,26 @@
  * 生命周期编排（reducer/轮询/bootstrap）在 @pin-ai/state 的
  * queries/card-execution.ts。旧 import 路径零改动；分层 Phase 4 统一清理。
  */
-export {
-  useCardExecutionRun,
+import {
+  useCardExecutionRun as useCardExecutionRunBase,
   type UseCardExecutionRun,
   type UseCardExecutionRunOptions,
 } from "@pin-ai/state";
+import { readLocalHistory } from "@/lib/sync/sync-bootstrap";
+
+export type { UseCardExecutionRun, UseCardExecutionRunOptions };
+
+/** B3b：壳层注入本地读（4 个组件消费者零改动）；引擎未启动时
+ *  readLocalHistory 返回 null → 行为与纯网络一致。 */
+export function useCardExecutionRun(
+  runId: string | null,
+  options: UseCardExecutionRunOptions = {},
+): UseCardExecutionRun {
+  return useCardExecutionRunBase(runId, {
+    localHistory: readLocalHistory,
+    ...options,
+  });
+}
 export {
   type DangerousAction,
   type ExecuteArtifact,

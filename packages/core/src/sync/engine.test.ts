@@ -8,35 +8,9 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { configureTransport } from "../transport/config";
-import type { DatabasePort, DatabaseTx, SqlParam } from "../ports/database";
 import { ensureSyncSchema, SYNC_SCHEMA_VERSION } from "./schema";
 import { SyncEngine } from "./engine";
-
-function betterSqliteDriver(db: Database.Database): DatabasePort {
-  const tx: DatabaseTx = {
-    run: async (sql: string, params: SqlParam[] = []) => {
-      db.prepare(sql).run(...params);
-    },
-    query: async (sql: string, params: SqlParam[] = []) =>
-      db.prepare(sql).all(...params) as Record<string, unknown>[],
-  };
-  return {
-    ...tx,
-    transaction: async (fn) => {
-      // better-sqlite3 的内置 transaction 不支持 async fn；引擎事务体内
-      // 只有顺序 await 的本地语句，手动 BEGIN/COMMIT 等价且足够。
-      db.prepare("BEGIN").run();
-      try {
-        const out = await fn(tx);
-        db.prepare("COMMIT").run();
-        return out;
-      } catch (err) {
-        db.prepare("ROLLBACK").run();
-        throw err;
-      }
-    },
-  };
-}
+import { betterSqliteDriver, jsonResponse } from "./test-driver";
 
 const fetchMock = vi.fn();
 
@@ -46,10 +20,6 @@ function configure() {
     getAuthHeaders: async () => ({}),
     fetchImpl: fetchMock as unknown as typeof fetch,
   });
-}
-
-function jsonResponse(body: unknown): Response {
-  return { ok: true, status: 200, json: async () => body } as unknown as Response;
 }
 
 function msg(id: number, text: string) {
@@ -157,6 +127,106 @@ describe("syncMessages", () => {
     );
     await engine.syncMessages("main-1");
     expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(50);
+  });
+});
+
+describe("messages FTS (Sync-C)", () => {
+  it("indexes text/reasoning parts in the same transaction and stays duplicate-free on replay", async () => {
+    configure();
+    const raw = new Database(":memory:");
+    const engine = new SyncEngine({ db: betterSqliteDriver(raw) });
+    const page = {
+      ok: true,
+      rows: [
+        {
+          id: "1",
+          role: "assistant",
+          parts: [
+            { type: "reasoning", text: "thinking about flights" },
+            { type: "text", text: "Booked the Tokyo flight" },
+            { type: "toolCall", toolName: "browser", state: "done" },
+          ],
+        },
+      ],
+      cursor: 1,
+      hasMore: false,
+    };
+    fetchMock.mockResolvedValue(jsonResponse(page));
+    await engine.syncMessages("main-1");
+    // 重放同一页（游标丢失场景）——FTS 行不得翻倍。
+    raw.prepare("DELETE FROM sync_state").run();
+    await engine.syncMessages("main-1");
+
+    const hits = raw
+      .prepare("SELECT message_id, thread_id FROM messages_fts WHERE messages_fts MATCH 'tokyo'")
+      .all() as Array<{ message_id: string; thread_id: string }>;
+    expect(hits).toEqual([{ message_id: "1", thread_id: "main-1" }]);
+    // reasoning part 同样可检索；toolCall 不入索引（无 text 可索）。
+    expect(
+      raw.prepare("SELECT COUNT(*) AS n FROM messages_fts WHERE messages_fts MATCH 'thinking'").get(),
+    ).toEqual({ n: 1 });
+  });
+});
+
+describe("syncCards", () => {
+  function cardEntry(id: string, title: string, summary: string) {
+    return {
+      card: {
+        id,
+        goalBasket: "personal",
+        title,
+        whyNow: "deadline approaching",
+        summary,
+        primaryAction: { label: "Go", type: "confirm" },
+        secondaryActions: [],
+        confidence: 0.9,
+        urgency: 0.5,
+        importance: 0.5,
+        sources: [],
+        agentChain: [],
+        createdAt: "2026-06-11T00:00:00+00:00",
+      },
+      runId: `run-${id}`,
+      runCompletedAt: "2026-06-11T00:00:00+00:00",
+      score: { overall: 0.8, pass: true },
+      latestOutcome: null,
+      outcomeAt: null,
+    };
+  }
+
+  it("full-upserts the bounded projection and rebuilds the FTS index", async () => {
+    configure();
+    const raw = new Database(":memory:");
+    const engine = new SyncEngine({ db: betterSqliteDriver(raw) });
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        cards: [cardEntry("c1", "Renew passport", "expires soon"), cardEntry("c2", "Book hotel", "trip to Osaka")],
+      }),
+    );
+    expect((await engine.syncCards()).pulled).toBe(2);
+    expect(fetchMock.mock.calls[0][0]).toContain("/cards?limit=200");
+
+    // 第二轮：c2 掉出投影（outcome 隐藏）、c1 标题变 —— 全量替换语义：
+    // 本地表精确镜像最新响应，旧行不残留、FTS 跟着重建。
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ cards: [cardEntry("c1", "Renew passport NOW", "expires soon")] }),
+    );
+    expect((await engine.syncCards()).pulled).toBe(1);
+
+    const rows = raw.prepare("SELECT card_id, payload_json FROM cards").all() as Array<{
+      card_id: string;
+      payload_json: string;
+    }>;
+    expect(rows.map((r) => r.card_id)).toEqual(["c1"]);
+    expect(JSON.parse(rows[0].payload_json).title).toBe("Renew passport NOW");
+    const hits = raw
+      .prepare("SELECT card_id FROM cards_fts WHERE cards_fts MATCH 'passport'")
+      .all() as Array<{ card_id: string }>;
+    expect(hits).toEqual([{ card_id: "c1" }]);
+    expect(
+      raw.prepare("SELECT COUNT(*) AS n FROM cards_fts WHERE cards_fts MATCH 'osaka'").get(),
+    ).toEqual({ n: 0 });
   });
 });
 

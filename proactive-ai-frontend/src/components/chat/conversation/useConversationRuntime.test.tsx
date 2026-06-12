@@ -904,3 +904,65 @@ function userEntriesOf(entries: { kind: string }[]) {
     (e): e is ConversationUserEntry => e.kind === "user",
   );
 }
+
+describe("useConversationRuntime B3b local-first read", () => {
+  beforeEach(() => {
+    fetchHistoryMock.mockReset();
+    streamMock.mockReset();
+    streamMock.mockImplementation(() => emptyStream());
+  });
+
+  test("renders the local page immediately (ready before network), then the network page corrects", async () => {
+    const localHistory = vi.fn(async () =>
+      page(
+        [{ id: "1", role: "user" as const, parts: [{ type: "text" as const, text: "from local" }] }],
+        { nextCursor: null },
+      ),
+    );
+    // 网络页慢到：本地页先渲染（ready），网络到达后整体重建为权威数据。
+    let resolveNetwork: (p: ConversationHistoryPage) => void = () => {};
+    fetchHistoryMock.mockImplementationOnce(
+      () => new Promise<ConversationHistoryPage>((r) => (resolveNetwork = r)),
+    );
+
+    const { result } = renderHook(() =>
+      useConversationRuntime({ session: "main-1", localHistory }),
+    );
+
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    expect(result.current.transcript.map((e) => e.kind === "user" && e.text)).toContain(
+      "from local",
+    );
+
+    await act(async () => {
+      resolveNetwork(
+        page([
+          { id: "1", role: "user", parts: [{ type: "text", text: "from local" }] },
+          { id: "2", role: "assistant", parts: [{ type: "text", text: "network reply" }] },
+        ]),
+      );
+    });
+    await waitFor(() =>
+      expect(
+        result.current.transcript.some(
+          (e) => e.kind === "assistant" && e.parts.some((p) => p.type === "text" && p.text === "network reply"),
+        ),
+      ).toBe(true),
+    );
+    // 本地与网络同源同 id —— 不重复。
+    expect(result.current.transcript).toHaveLength(2);
+  });
+
+  test("null local page (cold/no driver) falls straight through to network", async () => {
+    const localHistory = vi.fn(async () => null);
+    fetchHistoryMock.mockResolvedValueOnce(
+      page([{ id: "1", role: "user", parts: [{ type: "text", text: "net only" }] }]),
+    );
+    const { result } = renderHook(() =>
+      useConversationRuntime({ session: "main-1", localHistory }),
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    expect(result.current.transcript).toHaveLength(1);
+    expect(localHistory).toHaveBeenCalled();
+  });
+});

@@ -33,6 +33,7 @@ import { Virtuoso, type Components } from "react-virtuoso";
 import { AlertCircle, ArrowLeft, Check, ChevronDown, Copy, Loader2, Mic, Pencil, Radio, RotateCcw, Send, Sparkles, Square, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import bgGradient from "@/assets/bg-gradient.jpg";
 import { cn } from "@/lib/utils";
+import { notifyThreadActivity, readLocalHistory } from "@/lib/sync/sync-bootstrap";
 import MarkdownContent from "@/components/chat/conversation/MarkdownContent";
 import { buildAssistantMessageFeedbackBody } from "@/components/chat/conversation/feedback";
 // The shared animated orb — looping video with a buffering reveal so the
@@ -866,7 +867,22 @@ export default function ConversationView({
     enabled, setEnabled, threadId,
     hasMoreHistory, loadMoreHistory,
     awaitingDecision, submitDecision,
-  } = useConversationRuntime({ session: sessionKey, cardContext, bootstrap, debugEnabled });
+  } = useConversationRuntime({
+    session: sessionKey,
+    cardContext,
+    bootstrap,
+    debugEnabled,
+    // Sync-B3a 门铃：turn 落库（chat:persisted/done）后立即增量同步该
+    // thread 进本地库（native 引擎未启动时 no-op）。读切换是 B3b。
+    onTurnPersisted: notifyThreadActivity,
+    // B3b 读路径：本地优先首屏（引擎未启动时返回 null → 纯网络现状）。
+    localHistory: readLocalHistory,
+  });
+  // 访问驱动同步（lazy incomplete model）：打开任何 thread 拉一次增量，
+  // card threads 由此按需进入本地库（不全量扫）。
+  useEffect(() => {
+    if (sessionKey) notifyThreadActivity(sessionKey);
+  }, [sessionKey]);
   // Card-chat lifecycle (Done / Dismiss) — POSTs feedback then closes the chat.
   // `busy` guards against double-taps while the POST is in flight.
   const [lifecycleBusy, setLifecycleBusy] = useState<null | "done" | "dismiss">(null);
