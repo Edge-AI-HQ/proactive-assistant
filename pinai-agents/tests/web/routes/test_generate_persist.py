@@ -185,6 +185,7 @@ async def test_persist_tolerates_unknown_pattern_id(pool, user_ids) -> None:
             (user_a, run_id),
         )
 
+
 @pytest.mark.asyncio
 async def test_persist_evaluations_fills_dims_from_flat_camelcase(pool, user_ids) -> None:
     """Chat serializes CardEvaluation via model_dump(by_alias=True): the five

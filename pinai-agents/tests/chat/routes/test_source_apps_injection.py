@@ -47,8 +47,6 @@ def _output_with_one_card() -> GeneratorOutput:
 
 
 def test_serialize_stamps_source_apps() -> None:
-    cards, _evals = _serialize_passing_cards(
-        _output_with_one_card(), run_id="run1", max_cards=1
-    )
+    cards, _evals = _serialize_passing_cards(_output_with_one_card(), run_id="run1", max_cards=1)
     assert cards[0]["sourceApps"] == ["web", "gmail"]
     assert cards[0]["id"] == "run1_card_00"
