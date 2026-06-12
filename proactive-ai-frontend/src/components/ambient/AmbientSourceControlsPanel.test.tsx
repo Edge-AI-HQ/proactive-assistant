@@ -36,8 +36,12 @@ const ALL_AMBIENT_SOURCE_KEYS = [
   "device_state",
 ];
 
-vi.mock("@/lib/platform", () => ({ isNative: true }));
-vi.mock("@/hooks/useUserSettings", () => ({
+vi.mock("@/lib/platform", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  isNative: true,
+}));
+vi.mock("@pin-ai/state", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   useUserSettings: () => ({
     settings: {
       ambientSources: {

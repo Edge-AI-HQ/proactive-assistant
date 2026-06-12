@@ -1,4 +1,4 @@
-import { authHeaders } from "@/lib/api";
+import { authHeaders } from "@/lib/transport-bootstrap";
 import { PIN_API_BASE } from "@/lib/platform";
 
 export interface BuildVoiceStreamUrlOptions {

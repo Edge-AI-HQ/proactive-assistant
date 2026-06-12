@@ -15,10 +15,14 @@ vi.mock("@/services/ambient", () => ({
     subscribe: () => () => {},
   }),
 }));
-vi.mock("@/lib/api", () => ({
+vi.mock("@pin-ai/core", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   summarizeAmbientWithCloud: vi.fn(),
 }));
-vi.mock("@/lib/platform", () => ({ isNative: true }));
+vi.mock("@/lib/platform", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  isNative: true,
+}));
 vi.mock("@/hooks/useAuth", () => ({
   useAuth: () => ({
     loading: false,
@@ -26,7 +30,8 @@ vi.mock("@/hooks/useAuth", () => ({
     signInWithGoogle: vi.fn(),
   }),
 }));
-vi.mock("@/hooks/useUserSettings", () => ({
+vi.mock("@pin-ai/state", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   useUserSettings: () => useUserSettingsMock(),
 }));
 vi.mock("@/components/auth/LoginPage", () => ({

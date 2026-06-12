@@ -8,7 +8,7 @@ import {
   DrawerDescription,
 } from "@/components/ui/drawer";
 import { PlanPaymentForm, PLANS, type PlanId, type PayMethod, type CardInfo } from "@/components/account/PlanPaymentForm";
-import { createCheckout } from "@/lib/api";
+import { createCheckout } from "@pin-ai/core";
 import type { Intent } from "@/components/now/card-model";
 
 interface PaywallDrawerProps {

@@ -8,8 +8,8 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import type { ConversationContentPart } from "@/components/chat/conversation/tool-steps";
-import type { ConversationHistoryPage, ConversationHistoryMessage } from "@/lib/api";
+import { useConversationRuntime } from "@pin-ai/state";
+import { type ConversationContentPart, type ConversationHistoryPage, type ConversationHistoryMessage, historyToEntries, partsHaveNotifyUser, type ConversationAssistantEntry, type ConversationUserEntry } from "@pin-ai/core";
 
 // Phase 3 后 hook 在 @pin-ai/state、HTTP 走 @pin-ai/core——partial-mock core
 // 包（保留 historyToEntries 等纯函数），history 是主要被测面；stream 是
@@ -35,13 +35,6 @@ vi.mock("@pin-ai/core", async (importOriginal) => {
 });
 
 import { conversationHistory, conversationSend, conversationStream } from "@pin-ai/core";
-import {
-  historyToEntries,
-  partsHaveNotifyUser,
-  useConversationRuntime,
-  type ConversationAssistantEntry,
-  type ConversationUserEntry,
-} from "@/components/chat/conversation/useConversationRuntime";
 
 const fetchHistoryMock = conversationHistory as unknown as ReturnType<
   typeof vi.fn

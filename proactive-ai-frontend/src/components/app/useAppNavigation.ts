@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import type { IntentCard } from "@/types/intent-card";
+import type { IntentCard } from "@pin-ai/core";
 import type { LiveSession } from "@/services/ambient/live-session";
 import type { ChatCard } from "@/components/chat/ChatDetailView";
 

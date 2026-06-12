@@ -4,10 +4,9 @@ import { describe, expect, test, vi } from "vitest";
 import AmbientView from "@/components/ambient/AmbientView";
 
 vi.mock("@/lib/platform", () => ({ isNative: true }));
-vi.mock("@/hooks/useUserSettings", () => ({
+vi.mock("@pin-ai/state", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   useUserSettings: () => ({ settings: null, patch: vi.fn() }),
-}));
-vi.mock("@/hooks/useUserDevices", () => ({
   useUserDevices: () => ({ devices: [], loading: false, error: null }),
 }));
 vi.mock("@/hooks/useAmbientLiveSession", () => ({

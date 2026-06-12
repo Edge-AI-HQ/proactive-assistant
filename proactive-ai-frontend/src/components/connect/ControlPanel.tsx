@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { ChevronDown, ChevronUp, Smartphone } from "lucide-react";
 import DataConnections, { INPUT_CATEGORIES, isDataSourceConnected } from "@/components/connect/DataConnections";
 import DeviceConnections from "@/components/connect/DeviceConnections";
-import { useUserDevices } from "@/hooks/useUserDevices";
+import { useUserDevices } from "@pin-ai/state";
 import type { ComposioState } from "@/hooks/useComposio";
 
 interface ControlPanelProps {

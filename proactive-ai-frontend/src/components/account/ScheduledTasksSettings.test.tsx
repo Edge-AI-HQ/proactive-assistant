@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import type { ScheduledGeneratorTask } from "@/lib/api";
+import type { ScheduledGeneratorTask } from "@pin-ai/core";
 
 const apiMock = vi.hoisted(() => ({
   listScheduledGenerators: vi.fn(),
@@ -10,7 +10,10 @@ const apiMock = vi.hoisted(() => ({
   deleteScheduledGenerator: vi.fn(),
 }));
 
-vi.mock("@/lib/api", () => apiMock);
+vi.mock("@pin-ai/core", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...apiMock,
+}));
 
 function makeTask(overrides: Partial<ScheduledGeneratorTask> = {}): ScheduledGeneratorTask {
   return {

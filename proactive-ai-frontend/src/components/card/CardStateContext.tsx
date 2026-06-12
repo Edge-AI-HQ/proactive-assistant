@@ -1,11 +1,11 @@
 import { createContext, useContext, type ReactNode } from "react";
-import type { UseCardsState } from "@/hooks/useCards";
+import type { UseCardsQueryResult } from "@pin-ai/state";
 import { useCardActions } from "@/hooks/useCardActions";
 
 export type CardActions = ReturnType<typeof useCardActions>;
 
 export interface CardStateValue {
-  cardsState: UseCardsState;
+  cardsState: UseCardsQueryResult;
   cardActions: CardActions;
 }
 

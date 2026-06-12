@@ -7,7 +7,7 @@ import {
   Sparkles,
   type LucideIcon,
 } from "lucide-react";
-import type { GoalBasket, IntentCard } from "@/types/intent-card";
+import type { GoalBasket, IntentCard } from "@pin-ai/core";
 import type { ChatCard } from "@/components/chat/ChatDetailView";
 
 /** Stable string→number hash so real card.id (string) gets a numeric id for

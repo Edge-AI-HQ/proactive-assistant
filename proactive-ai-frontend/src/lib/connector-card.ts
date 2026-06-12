@@ -14,7 +14,7 @@
  * confirm flow).
  */
 import type { ComposioState } from "@/hooks/useComposio";
-import type { IntentCard } from "@/types/intent-card";
+import type { IntentCard } from "@pin-ai/core";
 
 import { openOAuthAndAwaitClose } from "./oauth-popup";
 import { getToolkit } from "./toolkit-icons";

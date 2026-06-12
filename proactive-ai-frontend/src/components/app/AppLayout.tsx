@@ -22,26 +22,20 @@ import ConnectPanel from "@/components/connect/ConnectPanel";
 import { type TimelineEntry as AmbientTimelineEntry } from "@/components/ambient/AmbientView";
 import { type ChatCard, brandSvg, detectToolIcon } from "@/components/chat/ChatDetailView";
 import CardChatOverlay from "@/components/chat/CardChatOverlay";
-import { deleteAccount, DeleteAccountError } from "@/lib/api";
+import { useCardsQuery, useUserSettings } from "@pin-ai/state";
+import { deleteAccount, DeleteAccountError, isCompletedCardOutcome, isHiddenCardOutcome, type GoalBasket, type IntentCard } from "@pin-ai/core";
 import DebugPanel from "@/components/common/DebugPanel";
 import AgentRunIndicator from "@/components/common/AgentRunIndicator";
 import { CardStateProvider } from "@/components/card/CardStateContext";
 import { useAuth } from "@/hooks/useAuth";
 import { useCardActions } from "@/hooks/useCardActions";
-import {
-  isCompletedCardOutcome,
-  isHiddenCardOutcome,
-  useCards,
-} from "@/hooks/useCards";
 import { useComposio } from "@/hooks/useComposio";
 import { useVoicePermission } from "@/hooks/useVoicePermission";
 import { usePipeline } from "@/hooks/usePipeline";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
-import { useUserSettings } from "@/hooks/useUserSettings";
 import { useWeather } from "@/hooks/useWeather";
 import { PreNotificationPrompt } from "@/components/common/PreNotificationPrompt";
 import { isNative } from "@/lib/platform";
-import type { GoalBasket, IntentCard } from "@/types/intent-card";
 import { useAmbientLiveSession } from "@/hooks/useAmbientLiveSession";
 import { useAmbientToggle } from "@/hooks/useAmbientToggle";
 import { bindSystemShortcutActions } from "@/services/system-shortcuts";
@@ -203,7 +197,7 @@ export default function AppLayout() {
   const avatarLetter = (firstName || emailPrefix || "?").slice(0, 1).toUpperCase();
 
   // ── Real-backend integration (preserved card execution path) ──
-  const cardsState = useCards();
+  const cardsState = useCardsQuery();
   const refreshCards = cardsState.refresh;
   const composio = useComposio();
   // Empty-state nudges (NowView): count ACTIVE connectors + read mic

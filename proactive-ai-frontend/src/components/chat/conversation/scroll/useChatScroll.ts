@@ -34,7 +34,7 @@ import type { RefObject } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 
 import { attachScrollIntentListeners } from "@/components/chat/conversation/scroll/scroll-intent";
-import type { ConversationEntry } from "@/components/chat/conversation/useConversationRuntime";
+import type { ConversationEntry } from "@pin-ai/core";
 
 export type ScrollMode = "following" | "free";
 

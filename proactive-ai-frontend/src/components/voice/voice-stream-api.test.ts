@@ -4,11 +4,13 @@ const { authHeadersMock } = vi.hoisted(() => ({
   authHeadersMock: vi.fn(),
 }));
 
-vi.mock("@/lib/api", () => ({
+vi.mock("@/lib/transport-bootstrap", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   authHeaders: authHeadersMock,
 }));
 
-vi.mock("@/lib/platform", () => ({
+vi.mock("@/lib/platform", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   PIN_API_BASE: "https://api.example.test",
 }));
 

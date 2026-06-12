@@ -4,7 +4,7 @@ import {
   taskDescription,
   type ToolCallPart,
 } from "@/components/chat/conversation/work-group";
-import type { ConversationContentPart } from "@/components/chat/conversation/tool-steps";
+import type { ConversationContentPart } from "@pin-ai/core";
 
 function tool(
   id: string,

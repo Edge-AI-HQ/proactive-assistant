@@ -28,7 +28,8 @@ vi.mock("@/components/connect/DeviceConnections", () => ({
   default: () => <div data-testid="device-connections" />,
 }));
 
-vi.mock("@/hooks/useUserDevices", () => ({
+vi.mock("@pin-ai/state", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   useUserDevices: () => ({
     devices: [],
     loading: false,

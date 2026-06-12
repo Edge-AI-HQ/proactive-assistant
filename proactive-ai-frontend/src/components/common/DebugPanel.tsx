@@ -11,7 +11,7 @@ import {
   X, Zap, RefreshCw, Plug, Loader2, Bell, Trash2,
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
-import { scheduleTestPush, fetchHealth } from "@/lib/api";
+import { scheduleTestPush, fetchHealth } from "@pin-ai/core";
 import { useInitTask, isInitTaskFresh } from "@/hooks/useInitTask";
 import { buildConnectorInitTaskId } from "@/hooks/useComposio";
 import {

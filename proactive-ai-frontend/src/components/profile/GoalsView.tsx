@@ -24,29 +24,7 @@ import {
   DrawerTitle,
   DrawerDescription,
 } from "@/components/ui/drawer";
-import {
-  fetchRawDeviceApps,
-  fetchRawDeviceContacts,
-  fetchRawDeviceHealth,
-  fetchRawGcal,
-  fetchRawGmail,
-  fetchRawTable,
-  fetchMemories,
-  fetchProfileSnapshot,
-  fetchSignals,
-  listUserDevices,
-  type DeviceAppRaw,
-  type DeviceContactRaw,
-  type DeviceHealthRaw,
-  type GcalEvent,
-  type GmailMessage,
-  type Goal,
-  type Memory,
-  type PersonalSignal,
-  type ProfileSnapshot,
-  type RawTableRow,
-  type UserDevice,
-} from "@/lib/api";
+import { fetchRawDeviceApps, fetchRawDeviceContacts, fetchRawDeviceHealth, fetchRawGcal, fetchRawGmail, fetchRawTable, fetchMemories, fetchProfileSnapshot, fetchSignals, listUserDevices, type DeviceAppRaw, type DeviceContactRaw, type DeviceHealthRaw, type GcalEvent, type GmailMessage, type Goal, type Memory, type PersonalSignal, type ProfileSnapshot, type RawTableRow, type UserDevice } from "@pin-ai/core";
 import { basketMeta } from "@/lib/basket-meta";
 import { isComposioToolkitConnected, type ComposioState } from "@/hooks/useComposio";
 

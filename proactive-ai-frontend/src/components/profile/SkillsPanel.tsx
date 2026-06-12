@@ -22,7 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { useSkills } from "@pin-ai/state";
-import { fetchSkill, type Skill, type SkillStatus } from "@/lib/api";
+import { fetchSkill, type Skill, type SkillStatus } from "@pin-ai/core";
 import { cn } from "@/lib/utils";
 
 interface SkillsPanelProps {

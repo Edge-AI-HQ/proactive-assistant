@@ -51,14 +51,8 @@ import BrowserPanel from "@/components/browser/BrowserPanel";
 import type { SheetStage } from "@/components/browser/BrowserView";
 import { useBrowserSession } from "@/hooks/useBrowserSession";
 import { useVoiceInput, Waveform, appendVoiceTranscript } from "@/components/voice";
-import {
-  useConversationRuntime,
-  type ConversationAssistantEntry,
-  type ConversationEntry,
-  type ConversationUserEntry,
-} from "@/components/chat/conversation/useConversationRuntime";
-import type { ConversationContentPart } from "@/components/chat/conversation/tool-steps";
-import { conversationInit, proxyPost } from "@/lib/api";
+import { useConversationRuntime } from "@pin-ai/state";
+import { type ConversationAssistantEntry, type ConversationEntry, type ConversationUserEntry, type ConversationContentPart, conversationInit, proxyPost } from "@pin-ai/core";
 
 interface ConversationViewProps {
   onBack: () => void;

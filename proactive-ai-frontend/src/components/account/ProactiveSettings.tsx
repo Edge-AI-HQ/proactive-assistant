@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
-import { useUserSettings } from "@/hooks/useUserSettings";
+import { useUserSettings } from "@pin-ai/state";
 
 // The three heartbeat cadence buckets surfaced in the UI. Server enforces the
 // set via a Pydantic Literal + DB CHECK (60/300/1800); this list is UX only.

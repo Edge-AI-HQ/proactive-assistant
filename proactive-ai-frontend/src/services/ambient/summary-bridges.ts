@@ -1,4 +1,4 @@
-import { summarizeAmbientWithCloud } from "@/lib/api";
+import { summarizeAmbientWithCloud } from "@pin-ai/core";
 import type { AmbientSummaryContext } from "./timeline/summary-context";
 import { ambientTimelineModels } from "./timeline/models";
 import type { AmbientSummaryModelBridge } from "./timeline/scheduled-summary";

@@ -16,7 +16,10 @@ const userSettingsMock = vi.hoisted(() => ({
 
 vi.mock("@/services/voice-identity-api", () => voiceApiMock);
 vi.mock("@/components/voice/pcm-recorder", () => recorderMock);
-vi.mock("@/hooks/useUserSettings", () => userSettingsMock);
+vi.mock("@pin-ai/state", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...userSettingsMock,
+}));
 
 describe("VoiceIdentitySettings", () => {
   beforeEach(() => {

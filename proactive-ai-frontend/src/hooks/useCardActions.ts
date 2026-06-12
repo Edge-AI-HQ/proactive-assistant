@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { proxyFetch, proxyPost } from "@/lib/api";
+import { proxyFetch, proxyPost, type IntentCard } from "@pin-ai/core";
 import { enqueueFeedback } from "@/lib/sync/sync-bootstrap";
 import {
   cardActionFeedbackBody,
@@ -16,7 +16,6 @@ import {
   prepareConnectorOAuth,
 } from "@/lib/connector-card";
 import type { ComposioState } from "@/hooks/useComposio";
-import type { IntentCard } from "@/types/intent-card";
 
 const CHATTED_KEY = "proactive-ai:chattedCardIds";
 

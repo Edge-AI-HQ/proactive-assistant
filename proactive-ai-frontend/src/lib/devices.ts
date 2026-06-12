@@ -11,7 +11,7 @@
 import { Capacitor } from "@capacitor/core";
 import { KeychainAccess, SecureStorage } from "@aparajita/capacitor-secure-storage";
 import { userDevicesKeys } from "@pin-ai/state";
-import { authHeaders } from "./api";
+import { authHeaders } from "./transport-bootstrap";
 import { queryClient } from "./query-client";
 import {
   isPinLocalDevAuthEnabled,

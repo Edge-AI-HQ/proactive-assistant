@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 const summarizeAmbientWithCloudMock = vi.hoisted(() => vi.fn());
 const localGenerateMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@/lib/api", () => ({
+vi.mock("@pin-ai/core", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   summarizeAmbientWithCloud: summarizeAmbientWithCloudMock,
 }));
 

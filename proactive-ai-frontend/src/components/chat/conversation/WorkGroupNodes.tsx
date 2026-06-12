@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 import MarkdownContent from "@/components/chat/conversation/MarkdownContent";
 import { resolveToolPresentation } from "@/components/chat/conversation/tool-presentation";
 import { toolStatus, type ToolCallPart } from "@/components/chat/conversation/work-group";
-import type { ToolResultLink } from "@/components/chat/conversation/tool-steps";
+import type { ToolResultLink } from "@pin-ai/core";
 
 function faviconUrl(url: string): string | null {
   try {

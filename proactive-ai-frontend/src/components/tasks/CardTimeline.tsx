@@ -1,9 +1,8 @@
 import { Loader2, CheckCircle2, Circle, Sparkles } from "lucide-react";
-import type { IntentCard } from "@/types/intent-card";
+import type { IntentCard, CardScore } from "@pin-ai/core";
 import { basketMeta } from "@/lib/basket-meta";
 import { connectorSlugFromIntentKey } from "@/lib/connector-card";
 import { getToolkit } from "@/lib/toolkit-icons";
-import type { CardScore } from "@/hooks/useCards";
 import { useCardState } from "@/components/card/CardStateContext";
 
 type TimelineCard = IntentCard & {

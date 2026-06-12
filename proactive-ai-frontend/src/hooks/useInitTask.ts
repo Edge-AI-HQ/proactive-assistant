@@ -16,7 +16,7 @@
  * - When taskId is null, the hook is fully idle (no fetches).
  */
 import { useEffect, useRef, useState } from "react";
-import { proxyFetch } from "@/lib/api";
+import { proxyFetch } from "@pin-ai/core";
 import { isNative } from "@/lib/platform";
 
 type TerminalStatus = "succeeded" | "failed" | "timed_out" | "cancelled" | "lost" | "skipped";

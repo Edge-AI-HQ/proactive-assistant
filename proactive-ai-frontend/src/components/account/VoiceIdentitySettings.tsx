@@ -9,7 +9,7 @@ import {
   uploadVoiceIdentityReference,
   type VoiceIdentityProfile,
 } from "@/services/voice-identity-api";
-import { useUserSettings } from "@/hooks/useUserSettings";
+import { useUserSettings } from "@pin-ai/state";
 
 const TARGET_DURATION_MS = 5_000;
 const MIN_DURATION_MS = 2_000;

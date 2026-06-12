@@ -2,7 +2,7 @@ import { useRef } from "react";
 import ChatSheetOverlay from "@/components/chat/ChatSheetOverlay";
 import ChatDetailView from "@/components/chat/ChatDetailView";
 import { realIntentToChatCard } from "@/components/now/card-model";
-import type { IntentCard } from "@/types/intent-card";
+import type { IntentCard } from "@pin-ai/core";
 
 export interface CardChatTarget {
   card: IntentCard;

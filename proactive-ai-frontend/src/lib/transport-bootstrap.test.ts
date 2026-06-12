@@ -32,7 +32,7 @@ describe("authHeaders", () => {
 
   test("returns the local dev auth header when explicitly enabled", async () => {
     vi.stubEnv("VITE_PIN_LOCAL_DEV_AUTH", "1");
-    const { authHeaders } = await import("./api");
+    const { authHeaders } = await import("./transport-bootstrap");
 
     await expect(authHeaders()).resolves.toEqual({
       "X-Dev-Auth": "pinai-local-dev-user",
@@ -44,7 +44,7 @@ describe("authHeaders", () => {
     getSessionMock.mockResolvedValue({
       data: { session: { access_token: "token-a" } },
     });
-    const { authHeaders } = await import("./api");
+    const { authHeaders } = await import("./transport-bootstrap");
 
     await expect(authHeaders()).resolves.toEqual({
       Authorization: "Bearer token-a",

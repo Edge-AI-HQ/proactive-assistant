@@ -1,4 +1,4 @@
-import { proxyFetch } from "@/lib/api";
+import { proxyFetch } from "@pin-ai/core";
 
 export interface TranscribeVoiceAudioOptions {
   model?: string;

@@ -1,10 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Loader2 } from "lucide-react";
-import { useUserSettings } from "@/hooks/useUserSettings";
-import {
-  GENERATION_LANGUAGE_OPTIONS,
-  type SupportedGenerationLanguage,
-} from "@/types/intent-card";
+import { useUserSettings } from "@pin-ai/state";
+import { GENERATION_LANGUAGE_OPTIONS, type SupportedGenerationLanguage } from "@pin-ai/core";
 
 export default function GenerationLanguageSettings() {
   const { settings, loading, saving, error, patch } = useUserSettings();

@@ -85,7 +85,8 @@ vi.mock("@/components/ui/drawer", async () => {
   };
 });
 
-vi.mock("@/lib/api", () => ({
+vi.mock("@pin-ai/core", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   fetchMemories: vi.fn(),
   fetchProfileSnapshot: vi.fn(),
   fetchRawDeviceApps: vi.fn(),
@@ -98,7 +99,7 @@ vi.mock("@/lib/api", () => ({
   listUserDevices: vi.fn(),
 }));
 
-import * as api from "@/lib/api";
+import * as api from "@pin-ai/core";
 
 const mockFetchMemories = vi.mocked(api.fetchMemories);
 const mockFetchProfileSnapshot = vi.mocked(api.fetchProfileSnapshot);

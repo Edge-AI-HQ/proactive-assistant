@@ -11,8 +11,8 @@ import {
   NotebookPen,
   type LucideIcon,
 } from "lucide-react";
-import { useUserSettings } from "@/hooks/useUserSettings";
-import { useUserDevices } from "@/hooks/useUserDevices";
+import { useUserSettings, useUserDevices } from "@pin-ai/state";
+import type { UserDevice, UserDevicePlatform } from "@pin-ai/core";
 import { useAmbientTimeline } from "@/hooks/useAmbientTimeline";
 import { useAmbientLiveSession } from "@/hooks/useAmbientLiveSession";
 import { useAmbientToggle } from "@/hooks/useAmbientToggle";
@@ -30,7 +30,6 @@ import type {
 import type { RuntimeStatus } from "@/services/ambient";
 import type { LiveAssistItem, LiveSession } from "@/services/ambient/live-session";
 import { transcriptTextOnly } from "@/services/ambient/timeline/utils";
-import type { UserDevice, UserDevicePlatform } from "@/lib/api";
 
 /* ──────────────── TIMELINE (today's narrative) ──────────────── */
 

@@ -13,7 +13,9 @@ import {
   resumeScheduledGenerator,
   scheduledGeneratorCreate,
   scheduledGeneratorPreview,
-} from "./api";
+} from "@pin-ai/core";
+
+import "./transport-bootstrap";
 
 vi.mock("./supabase", () => ({
   supabase: {

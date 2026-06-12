@@ -1,13 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  fetchCrystallizeState,
-  forceCrystallizeRun,
-  patchCrystallizeConfig,
-  setAutoCrystallize,
-  type CrystallizeRunResponse,
-  type CrystallizeStateResponse,
-  type TunableCrystallizeKey,
-} from "@/lib/api";
+import { fetchCrystallizeState, forceCrystallizeRun, patchCrystallizeConfig, setAutoCrystallize, type CrystallizeRunResponse, type CrystallizeStateResponse, type TunableCrystallizeKey } from "@pin-ai/core";
 
 export interface UseCrystallizeResult {
   state: CrystallizeStateResponse | null;

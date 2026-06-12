@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { proxyFetch, proxyPost } from "@/lib/api";
-import { useUserSettings } from "@/hooks/useUserSettings";
+import { useUserSettings } from "@pin-ai/state";
+import { proxyFetch, proxyPost } from "@pin-ai/core";
 
 // Auto-dreaming runs daily at 06:00 in the user's profile timezone. The
 // cadence is fixed in the backend scheduler for now, so the UI only

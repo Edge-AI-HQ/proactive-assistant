@@ -1,13 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Activity, Loader2 } from "lucide-react";
-import {
-  deviceMediaUrl,
-  fetchDeviceTimeline,
-  type DeviceHealthObservation,
-  type DeviceTimelineItem,
-  type PersonalSignal,
-  type UserDevice,
-} from "@/lib/api";
+import { deviceMediaUrl, fetchDeviceTimeline, type DeviceHealthObservation, type DeviceTimelineItem, type PersonalSignal, type UserDevice } from "@pin-ai/core";
 import {
   DEVICE_TIMELINE_QUICK_FILTERS,
   formatLocalDateInput,

@@ -16,7 +16,7 @@
  * Kept free of React so the grouping invariants are unit-testable.
  */
 
-import type { ConversationContentPart } from "@/components/chat/conversation/tool-steps";
+import type { ConversationContentPart } from "@pin-ai/core";
 
 export type ToolCallPart = Extract<ConversationContentPart, { type: "tool-call" }>;
 

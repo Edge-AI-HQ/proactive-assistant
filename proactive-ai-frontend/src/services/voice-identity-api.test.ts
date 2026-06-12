@@ -4,7 +4,8 @@ const { proxyFetchMock } = vi.hoisted(() => ({
   proxyFetchMock: vi.fn(),
 }));
 
-vi.mock("@/lib/api", () => ({
+vi.mock("@pin-ai/core", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   proxyFetch: proxyFetchMock,
 }));
 

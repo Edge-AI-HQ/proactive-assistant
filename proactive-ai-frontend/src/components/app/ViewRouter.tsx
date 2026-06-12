@@ -13,7 +13,7 @@ import type { MenuId, SettingsSubPage } from "@/components/app/useAppNavigation"
 import type { WeatherData } from "@/hooks/useWeather";
 import type { ComposioState } from "@/hooks/useComposio";
 import type { VoicePermissionState } from "@/hooks/useVoicePermission";
-import type { IntentCard } from "@/types/intent-card";
+import type { IntentCard } from "@pin-ai/core";
 import type { LiveSession } from "@/services/ambient/live-session";
 
 interface ViewRouterProps {

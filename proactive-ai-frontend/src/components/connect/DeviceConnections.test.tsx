@@ -2,7 +2,8 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import DeviceConnections from "@/components/connect/DeviceConnections";
 
-vi.mock("@/lib/api", () => ({
+vi.mock("@pin-ai/core", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   claimPairCode: vi.fn(),
 }));
 
@@ -12,7 +13,8 @@ const { devicesState, refreshMock, ensureDeviceMock } = vi.hoisted(() => ({
   ensureDeviceMock: vi.fn(),
 }));
 
-vi.mock("@/hooks/useUserDevices", () => ({
+vi.mock("@pin-ai/state", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   useUserDevices: () => ({
     devices: devicesState.devices,
     loading: false,

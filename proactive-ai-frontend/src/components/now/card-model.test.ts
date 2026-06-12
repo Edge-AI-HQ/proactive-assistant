@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import type { IntentCard } from "@/types/intent-card";
+import type { IntentCard } from "@pin-ai/core";
 
 import { realIntentToChatCard } from "./card-model";
 

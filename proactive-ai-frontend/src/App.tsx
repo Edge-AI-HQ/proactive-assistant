@@ -6,7 +6,7 @@ import AppLayout from "@/components/app/AppLayout";
 import { VoiceProvider } from "@/components/voice";
 import OnboardingFlow from "@/components/onboarding/OnboardingFlow";
 import { isNative } from "@/lib/platform";
-import { useUserSettings } from "@/hooks/useUserSettings";
+import { useUserSettings } from "@pin-ai/state";
 import { getPersistedAmbientEnabled } from "@/services/ambient/enabled-state";
 import { type SourceKey } from "@/services/ambient/keys";
 

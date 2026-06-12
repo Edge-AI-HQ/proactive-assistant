@@ -10,8 +10,8 @@ import {
   Trash2,
   Watch,
 } from "lucide-react";
-import { useUserDevices } from "@/hooks/useUserDevices";
-import { type UserDevice, type UserDevicePlatform } from "@/lib/api";
+import { useUserDevices } from "@pin-ai/state";
+import type { UserDevice, UserDevicePlatform } from "@pin-ai/core";
 import DeviceTimeline from "@/components/connect/DeviceTimeline";
 
 /**

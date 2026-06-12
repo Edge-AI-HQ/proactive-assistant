@@ -16,14 +16,15 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-vi.mock("@/lib/api", () => ({
+vi.mock("@pin-ai/core", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   proxyFetch: vi.fn(),
 }));
 vi.mock("@/lib/platform", () => ({
   isNative: false,  // forces 5s interval for deterministic timing
 }));
 
-import * as api from "@/lib/api";
+import * as api from "@pin-ai/core";
 import { useInitTask } from "./useInitTask";
 
 const mockProxyFetch = vi.mocked(api.proxyFetch);

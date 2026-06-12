@@ -6,7 +6,7 @@ import {
 } from "@/services/ambient/enabled-state";
 import { ALL_SOURCE_KEYS, type SourceKey } from "@/services/ambient/keys";
 import { getExistingAmbientRuntime, type RuntimeStatus } from "@/services/ambient";
-import { useUserSettings } from "./useUserSettings";
+import { useUserSettings } from "@pin-ai/state";
 
 export interface UseAmbientToggleResult {
   /** True when the master ambient switch is on. Derived from server-side

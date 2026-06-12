@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const ambientSummaryBridgeCalls = vi.hoisted(() => ({ local: 0, cloud: 0 }));
 
-vi.mock("@/lib/api", () => ({
+vi.mock("@pin-ai/core", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   summarizeAmbientWithCloud: vi.fn(),
 }));
 

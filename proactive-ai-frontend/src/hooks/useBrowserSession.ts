@@ -17,7 +17,7 @@
  * URL first so the new iframe gets a fresh signed token).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { proxyFetch, proxyPost } from "@/lib/api";
+import { proxyFetch, proxyPost } from "@pin-ai/core";
 
 export type BrowserControlMode = "ai" | "user";
 export type BrowserDeviceKind = "mobile" | "tablet" | "desktop";

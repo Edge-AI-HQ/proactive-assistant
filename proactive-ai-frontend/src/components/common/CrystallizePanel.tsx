@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Sparkles, ChevronDown, Play, Loader2, RefreshCw } from "lucide-react";
 import { useCrystallize } from "@/hooks/useCrystallize";
-import type { TunableCrystallizeKey } from "@/lib/api";
+import type { TunableCrystallizeKey } from "@pin-ai/core";
 import { cn } from "@/lib/utils";
 
 interface CrystallizePanelProps {

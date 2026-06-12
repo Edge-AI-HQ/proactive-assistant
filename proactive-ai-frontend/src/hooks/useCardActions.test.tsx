@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { useCardActions } from "./useCardActions";
 import type { ComposioState } from "@/hooks/useComposio";
-import type { IntentCard } from "@/types/intent-card";
+import { type IntentCard, proxyFetch, proxyPost } from "@pin-ai/core";
 
 // Minimal ComposioState stub. useCardActions only consults it via
 // tryHandleConnectorCard for the connect:* short-circuit, which never
@@ -29,7 +29,8 @@ function stubComposio(): ComposioState {
   };
 }
 
-vi.mock("@/lib/api", () => ({
+vi.mock("@pin-ai/core", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   proxyPost: vi.fn(async () => new Response("{}", { status: 200 })),
   // Default: both init endpoints return empty lists. Individual tests
   // override per-URL via mockImplementation when they need seeded data.
@@ -47,7 +48,6 @@ vi.mock("@/lib/api", () => ({
   }),
 }));
 
-import { proxyFetch, proxyPost } from "@/lib/api";
 
 const baseCard: IntentCard = {
   id: "c1",

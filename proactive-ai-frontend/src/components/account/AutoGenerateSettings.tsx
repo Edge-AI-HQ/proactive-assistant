@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
-import { useUserSettings } from "@/hooks/useUserSettings";
+import { useUserSettings } from "@pin-ai/state";
 
 // Preset interval buckets surfaced in the UI. Server enforces 15–1440min
 // via Pydantic / DB CHECK; the bucket list here is purely UX.

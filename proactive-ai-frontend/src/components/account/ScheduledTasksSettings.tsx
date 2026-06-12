@@ -1,12 +1,6 @@
 import { useEffect, useState } from "react";
 
-import {
-  deleteScheduledGenerator,
-  listScheduledGenerators,
-  pauseScheduledGenerator,
-  resumeScheduledGenerator,
-  type ScheduledGeneratorTask,
-} from "@/lib/api";
+import { deleteScheduledGenerator, listScheduledGenerators, pauseScheduledGenerator, resumeScheduledGenerator, type ScheduledGeneratorTask } from "@pin-ai/core";
 
 // Server-rendered label ("每 5 分钟" / "一次 · 06-10 15:00") wins; legacy tasks
 // without scheduleLabel fall back to joining the cron fields, dropping empty

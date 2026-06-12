@@ -14,14 +14,8 @@ import VoiceIdentitySettings from "@/components/account/VoiceIdentitySettings";
 import ProactiveSettings from "@/components/account/ProactiveSettings";
 import { isNative } from "@/lib/platform";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
-import { useUserSettings } from "@/hooks/useUserSettings";
-import {
-  cancelCurrentSubscription, createCheckout, getCurrentSubscription,
-  getCustomerPortalUrl, getUsage, listInvoices, listPaymentMethods,
-  reconcileSubscription,
-  type InvoiceEntry, type PaymentMethodEntry,
-  type PlanCode, type SubscriptionState, type UsageInfo,
-} from "@/lib/api";
+import { useUserSettings } from "@pin-ai/state";
+import { cancelCurrentSubscription, createCheckout, getCurrentSubscription, getCustomerPortalUrl, getUsage, listInvoices, listPaymentMethods, reconcileSubscription, type InvoiceEntry, type PaymentMethodEntry, type PlanCode, type SubscriptionState, type UsageInfo } from "@pin-ai/core";
 import { PLANS } from "@/components/account/PlanPaymentForm";
 import SwipeBackLayer from "@/components/app/SwipeBackLayer";
 

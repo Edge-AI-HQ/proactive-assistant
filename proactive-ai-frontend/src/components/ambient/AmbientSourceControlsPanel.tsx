@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckCircle2, Radio, ShieldCheck } from "lucide-react";
 import { isNative } from "@/lib/platform";
-import { useUserSettings, type AmbientSourceConsent } from "@/hooks/useUserSettings";
+import { useUserSettings, type AmbientSourceConsent } from "@pin-ai/state";
 import { setPersistedAmbientEnabled } from "@/services/ambient/enabled-state";
 import {
   ALL_SOURCE_KEYS,

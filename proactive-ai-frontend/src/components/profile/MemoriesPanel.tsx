@@ -24,7 +24,7 @@ import {
   GitBranch,
 } from "lucide-react";
 import { useMemories } from "@pin-ai/state";
-import type { Memory, MemoryStatus } from "@/lib/api";
+import type { Memory, MemoryStatus } from "@pin-ai/core";
 import { cn } from "@/lib/utils";
 
 interface MemoriesPanelProps {

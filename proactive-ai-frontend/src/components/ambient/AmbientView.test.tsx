@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import AmbientView, { LiveFullscreen } from "@/components/ambient/AmbientView";
 import { getPersistedAmbientEnabled } from "@/services/ambient/enabled-state";
 import { ALL_SOURCE_KEYS } from "@/services/ambient/keys";
-import type { UserDevice } from "@/lib/api";
+import type { UserDevice } from "@pin-ai/core";
 import type { LiveSession } from "@/services/ambient/live-session";
 
 type MockElementProps = { children?: ReactNode } & Record<string, unknown>;
@@ -85,13 +85,12 @@ vi.mock("framer-motion", async () => {
   };
 });
 vi.mock("@/lib/platform", () => ({ isNative: true }));
-vi.mock("@/hooks/useUserSettings", () => ({
+vi.mock("@pin-ai/state", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   useUserSettings: () => ({
     settings: { ambientSources: {}, generationLanguage: "zh-Hans" },
     patch: patchMock,
   }),
-}));
-vi.mock("@/hooks/useUserDevices", () => ({
   useUserDevices: () => userDevicesMock,
 }));
 vi.mock("@/hooks/useAmbientLiveSession", () => ({

@@ -5,7 +5,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { proxyFetch, proxyPost } from "@/lib/api";
+import { proxyFetch, proxyPost } from "@pin-ai/core";
 
 /**
  * Backend-stable id of the per-(toolkit, connectedAccount) connector.init

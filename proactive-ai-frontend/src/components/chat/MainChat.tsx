@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { conversationInit } from "@/lib/api";
+import { conversationInit } from "@pin-ai/core";
 import ConversationView from "./conversation/ConversationView";
 import MinimalistLanding from "./conversation/MinimalistLanding";
 

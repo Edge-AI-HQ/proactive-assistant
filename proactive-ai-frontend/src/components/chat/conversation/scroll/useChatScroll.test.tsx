@@ -14,7 +14,7 @@ import type { MutableRefObject } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 
 import { useChatScroll } from "@/components/chat/conversation/scroll/useChatScroll";
-import type { ConversationEntry } from "@/components/chat/conversation/useConversationRuntime";
+import type { ConversationEntry } from "@pin-ai/core";
 
 function userEntry(id: string): ConversationEntry {
   return { kind: "user", id, ts: 1, text: "hi" };

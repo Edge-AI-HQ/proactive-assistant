@@ -6,7 +6,7 @@ import {
   type PermissionStatus,
 } from "@capacitor/push-notifications";
 import { ensureDevice } from "@/lib/devices";
-import { setDevicePushToken } from "@/lib/api";
+import { setDevicePushToken } from "@pin-ai/core";
 import { isNative } from "@/lib/platform";
 
 /**

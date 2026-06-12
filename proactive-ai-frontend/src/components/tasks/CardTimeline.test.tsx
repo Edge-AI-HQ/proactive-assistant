@@ -1,12 +1,12 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
-import type { IntentCard } from "@/types/intent-card";
+import type { UseCardsQueryResult } from "@pin-ai/state";
+import type { IntentCard } from "@pin-ai/core";
 import {
   CardStateProvider,
   type CardActions,
   type CardStateValue,
 } from "@/components/card/CardStateContext";
-import type { UseCardsState } from "@/hooks/useCards";
 import CardTimeline from "./CardTimeline";
 
 const card: IntentCard = {
@@ -42,7 +42,7 @@ const mockCardState: CardStateValue = {
     ],
     loading: false,
     error: null,
-  } as unknown as UseCardsState,
+  } as unknown as UseCardsQueryResult,
   cardActions: {
     dismissedIds: new Set<string>(),
     confirmedIds: new Set<string>(),

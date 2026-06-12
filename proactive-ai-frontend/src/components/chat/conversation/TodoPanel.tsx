@@ -17,7 +17,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Circle, Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useTodoPlan, type Todo } from "@/components/chat/conversation/todos-store";
+import { useTodoPlan, type Todo } from "@pin-ai/state";
 
 interface TodoPanelProps {
   sessionKey: string;
