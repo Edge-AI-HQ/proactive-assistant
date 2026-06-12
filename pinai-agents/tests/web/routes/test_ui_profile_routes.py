@@ -638,3 +638,45 @@ async def test_onboarding_blocked_when_litellm_provisioning_fails(
     async with user_scoped_tx(pool, user_a) as conn:
         settings = await ProfileRepository(user_a, conn).get_settings()
     assert settings.onboarding_completed_at is None
+
+
+@pytest.mark.asyncio
+async def test_web_platform_seeds_but_never_overrides_timezone(pool, user_ids):
+    """平台分级:web/desktop(X-Pin-Client-Platform: web)只能 seed 还没
+    确立的时区(行缺失或建行默认 'UTC'),不能覆盖手机已确立的时区 —
+    否则出差场景下手机和家里桌面端会让时区反复横跳。缺 platform 头 =
+    在野老 App,保持完整跟随。"""
+    _, user_b = user_ids
+
+    app = create_app()
+    app.state.pool = pool
+    app.dependency_overrides[current_user] = lambda: _user(user_b)
+    transport = httpx.ASGITransport(app=app)
+
+    async def settings_get(headers: dict[str, str]) -> None:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            res = await client.get("/api/settings", headers=headers)
+        assert res.status_code == 200, res.text
+
+    async def stored_tz() -> str | None:
+        async with user_scoped_tx(pool, user_b) as conn:
+            prof = await ProfileRepository(user_b, conn).get_profile()
+        return prof.timezone if prof else None
+
+    # ① 无档案时 web 端可以 seed(首日 onboarding 不退化到 UTC)。
+    await settings_get({"X-Pin-Client-Timezone": "Europe/Berlin", "X-Pin-Client-Platform": "web"})
+    assert await stored_tz() == "Europe/Berlin"
+
+    # ② 手机确立时区(缺 platform 头 = 老 App,同样完整跟随)。
+    await settings_get({"X-Pin-Client-Timezone": "Asia/Shanghai"})
+    assert await stored_tz() == "Asia/Shanghai"
+
+    # ③ web 端不同时区轮询 → 不得覆盖,不 retime。
+    await settings_get({"X-Pin-Client-Timezone": "Europe/Berlin", "X-Pin-Client-Platform": "web"})
+    assert await stored_tz() == "Asia/Shanghai"
+
+    # ④ 手机(显式 ios 平台头)漂移 → 照常跟随。
+    await settings_get(
+        {"X-Pin-Client-Timezone": "America/Los_Angeles", "X-Pin-Client-Platform": "ios"}
+    )
+    assert await stored_tz() == "America/Los_Angeles"
