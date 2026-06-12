@@ -505,6 +505,12 @@ export function useConversationRuntime(
             finalizePlanTurn(threadIdRef.current, str(env.traceId));
             onTurnPersistedRef.current?.(threadIdRef.current);
           }
+          // done 也清审批卡：总线上 requires_action 永不被同一暂停 turn 的
+          // done 跟随(worker 在暂停帧处提前 return,chat 流剩余帧不上桥),
+          // 所以这里清是安全的。覆盖两个多设备缺口:另一台设备 approve 后
+          // 的 resume 完成、以及 awaiting 中被取消(service.cancel 补发的
+          // 终止帧)——否则本设备的审批卡无限期残留。
+          setAwaitingDecision(null);
           setBusy(false);
           onTurnDoneRef.current?.();
           break;
@@ -888,6 +894,8 @@ export function useConversationRuntime(
     // clear at once (the backend's terminal chat:done then finalizes a no-op).
     finalizeTurn();
     setBusy(false);
+    // 取消即放弃待审批动作——本地立即清(断流收不到补发 done 帧的兜底)。
+    setAwaitingDecision(null);
     try {
       await conversationCancel(session);
     } catch (err) {

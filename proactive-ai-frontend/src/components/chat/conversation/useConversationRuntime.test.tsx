@@ -938,6 +938,17 @@ describe("useConversationRuntime optimistic turn placeholder", () => {
       });
     });
     await waitFor(() => expect(onTurnDone).toHaveBeenCalledTimes(2));
+    expect(result.current.awaitingDecision).not.toBeNull();
+
+    // chat:done clears the parked approval card: it can only mean the turn
+    // moved on without this device's decision — another device approved (the
+    // resume's own done) or the run was cancelled while paused (the
+    // service-published terminal frame). The bus never carries a done for a
+    // turn still paused (the worker stops relaying at the pause frame).
+    await act(async () => {
+      push({ type: "chat:done", traceId: "run-2", data: {} });
+    });
+    await waitFor(() => expect(result.current.awaitingDecision).toBeNull());
   });
 });
 
