@@ -13,7 +13,23 @@ import ErrorBoundary from "@/components/app/ErrorBoundary";
 import App from "./App";
 import "./index.css";
 
-createRoot(document.getElementById("root")!).render(
+createRoot(document.getElementById("root")!, {
+  // React 19 的生产环境错误诊断：componentStack 在 minified build 里也有。
+  // iOS 真机出现过间歇性 React #185（无限渲染循环，web 端不复现）——
+  // 这两个钩子把循环组件的栈打进 Xcode console，定位后可移除或降噪。
+  onUncaughtError: (error, errorInfo) => {
+    console.error(
+      "[react] uncaught error:", String(error),
+      "\ncomponent stack:", errorInfo.componentStack ?? "(none)",
+    );
+  },
+  onCaughtError: (error, errorInfo) => {
+    console.error(
+      "[react] caught by boundary:", String(error),
+      "\ncomponent stack:", errorInfo.componentStack ?? "(none)",
+    );
+  },
+}).render(
   <StrictMode>
     <ErrorBoundary>
       {/* Sync-A：同步 persister 在首帧前恢复白名单缓存（settings/cards），
