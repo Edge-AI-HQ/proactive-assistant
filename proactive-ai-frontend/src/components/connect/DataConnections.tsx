@@ -322,6 +322,39 @@ function formatCount(value: number): string {
   return new Intl.NumberFormat("en-US").format(value);
 }
 
+function getComposioLogoUrl(toolkit: string | undefined): string | null {
+  if (!toolkit) return null;
+  return `https://logos.composio.dev/api/${normalizeComposioToolkit(toolkit)}`;
+}
+
+function ConnectorIconSlot({
+  logo,
+  Icon,
+  iconClassName,
+  size = 14,
+}: {
+  logo: string | null;
+  Icon: LucideIcon;
+  iconClassName: string;
+  size?: number;
+}) {
+  const [logoFailed, setLogoFailed] = useState(false);
+  return (
+    <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center">
+      {logo && !logoFailed ? (
+        <img
+          src={logo}
+          alt=""
+          className="h-5 w-5 rounded-md"
+          onError={() => setLogoFailed(true)}
+        />
+      ) : (
+        <Icon size={size} strokeWidth={1.5} className={iconClassName} />
+      )}
+    </span>
+  );
+}
+
 interface CustomConnector {
   id: string;
   slug: string;
@@ -818,15 +851,15 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                             : "bg-foreground/[0.02]"
                                         }`}
                                       >
-                                        <SrcIcon
-                                          size={14}
-                                          strokeWidth={1.5}
-                                          className={
+                                        <ConnectorIconSlot
+                                          logo={getComposioLogoUrl(source.composioId)}
+                                          Icon={SrcIcon}
+                                          iconClassName={
                                             isConnected
-                                              ? "text-emerald-600 flex-shrink-0"
+                                              ? "text-emerald-600"
                                               : hasComposio
-                                                ? "text-foreground/30 flex-shrink-0"
-                                                : "text-foreground/15 flex-shrink-0"
+                                                ? "text-foreground/30"
+                                                : "text-foreground/15"
                                           }
                                         />
                                         <div className="flex-1 min-w-0">
@@ -972,10 +1005,10 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                     {multiAccounts && (
                                       <>
                                         <div className="flex items-center gap-2.5 rounded-xl px-3 py-2 bg-emerald-500/[0.06]">
-                                          <SrcIcon
-                                            size={14}
-                                            strokeWidth={1.5}
-                                            className="text-emerald-600 flex-shrink-0"
+                                          <ConnectorIconSlot
+                                            logo={getComposioLogoUrl(source.composioId)}
+                                            Icon={SrcIcon}
+                                            iconClassName="text-emerald-600"
                                           />
                                           <span className="text-xs text-foreground font-medium flex-1">
                                             {source.name}
@@ -1101,15 +1134,16 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                     : "bg-foreground/[0.015]"
                                                 }`}
                                               >
-                                                <ChildIcon
+                                                <ConnectorIconSlot
+                                                  logo={getComposioLogoUrl(child.composioId)}
+                                                  Icon={ChildIcon}
                                                   size={12}
-                                                  strokeWidth={1.5}
-                                                  className={
+                                                  iconClassName={
                                                     childIsConnected
-                                                      ? "text-emerald-600 flex-shrink-0"
+                                                      ? "text-emerald-600"
                                                       : childHasComposio
-                                                        ? "text-foreground/25 flex-shrink-0"
-                                                        : "text-foreground/15 flex-shrink-0"
+                                                        ? "text-foreground/25"
+                                                        : "text-foreground/15"
                                                   }
                                                 />
                                                 <div className="min-w-0 flex-1">
@@ -1365,61 +1399,69 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                         className="max-h-72 overflow-y-auto pr-1 space-y-1"
                       >
                         {catalogDisplayItems.map((item) => {
-                            const isConnecting = connectingToolkit === item.slug;
-                            const itemAccounts = getComposioConnectionsForToolkit(connections, item.slug);
-                            const primaryAccount = itemAccounts[0];
-                            const isConnected = itemAccounts.length > 0;
-                            return (
-                              <div key={item.slug} className={`flex items-center gap-2.5 rounded-xl px-3 py-2 ${isConnected ? "bg-emerald-500/[0.06]" : "bg-foreground/[0.02]"}`}>
-                                {item.logo ? (
-                                  <img src={item.logo} alt="" className="h-5 w-5 rounded-md flex-shrink-0" />
-                                ) : (
-                                  <Globe2 size={14} className="text-foreground/35 flex-shrink-0" />
-                                )}
-                                <div className="min-w-0 flex-1">
-                                  <div className="flex items-center gap-1.5">
-                                    <span className="truncate text-xs font-medium text-foreground/75">{item.name || item.slug}</span>
-                                  </div>
-                                  <p className="text-[10px] text-foreground/35 truncate">
-                                    {item.auth_schemes.length > 0 ? item.auth_schemes.join(", ") : "auth"}{item.categories.length > 0 ? ` · ${item.categories.join(", ")}` : ""}
-                                  </p>
-                                  {primaryAccount?.connectedAccountId && (
-                                    <InitTaskChip
-                                      toolkit={primaryAccount.toolkit}
-                                      connectedAccountId={primaryAccount.connectedAccountId}
-                                      sourceToolkit={item.slug}
-                                    />
-                                  )}
+                          const isConnecting = connectingToolkit === item.slug;
+                          const itemAccounts = getComposioConnectionsForToolkit(
+                            connections,
+                            item.slug,
+                          );
+                          const primaryAccount = itemAccounts[0];
+                          const isConnected = itemAccounts.length > 0;
+                          return (
+                            <div
+                              key={item.slug}
+                              className={`group flex items-center gap-2.5 rounded-xl px-3 py-2 ${
+                                isConnected ? "bg-emerald-500/[0.06]" : "bg-foreground/[0.02]"
+                              }`}
+                            >
+                              <ConnectorIconSlot
+                                logo={item.logo ?? getComposioLogoUrl(item.slug)}
+                                Icon={Globe2}
+                                iconClassName="text-foreground/35"
+                              />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="truncate text-xs font-medium text-foreground/75">{item.name || item.slug}</span>
                                 </div>
-                                {isConnecting ? (
-                                  <button
-                                    onClick={handleCancel}
-                                    className="text-[10px] font-medium text-foreground/50 bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5"
-                                  >
-                                    Cancel
-                                  </button>
-                                ) : isConnected ? (
-                                  <div className="flex flex-shrink-0 items-center gap-1.5">
-                                    <span className="text-[10px] font-medium text-emerald-600">Connected</span>
-                                    <button
-                                      onClick={() => void handleConnect(item.slug)}
-                                      className="inline-flex items-center gap-1 text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.1]"
-                                    >
-                                      <Plus size={10} />
-                                      Add
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <button
-                                    onClick={() => void handleConnect(item.slug)}
-                                    className="text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1]"
-                                  >
-                                    Connect
-                                  </button>
+                                <p className="text-[10px] text-foreground/35 truncate">
+                                  {item.auth_schemes.length > 0 ? item.auth_schemes.join(", ") : "auth"}{item.categories.length > 0 ? ` · ${item.categories.join(", ")}` : ""}
+                                </p>
+                                {primaryAccount?.connectedAccountId && (
+                                  <InitTaskChip
+                                    toolkit={primaryAccount.toolkit}
+                                    connectedAccountId={primaryAccount.connectedAccountId}
+                                    sourceToolkit={item.slug}
+                                  />
                                 )}
                               </div>
-                            );
-                          })}
+                              {isConnecting ? (
+                                <button
+                                  onClick={handleCancel}
+                                  className="text-[10px] font-medium text-foreground/50 bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5"
+                                >
+                                  Cancel
+                                </button>
+                              ) : isConnected ? (
+                                <div className="flex flex-shrink-0 items-center gap-1.5">
+                                  <button
+                                    onClick={() => void handleConnect(item.slug)}
+                                    className="inline-flex items-center gap-1 text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.1] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-all"
+                                  >
+                                    <Plus size={10} />
+                                    Add
+                                  </button>
+                                  <span className="text-[10px] font-medium text-emerald-600">Connected</span>
+                                </div>
+                              ) : (
+                                <button
+                                  onClick={() => void handleConnect(item.slug)}
+                                  className="text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1]"
+                                >
+                                  Connect
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                       <div className="flex items-center justify-end gap-2">
                         {catalogCursor && (
