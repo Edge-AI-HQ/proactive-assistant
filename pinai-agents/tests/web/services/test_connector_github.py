@@ -50,6 +50,9 @@ def test_map_github_issue_basic():
     assert mapped["is_pull_request"] is False
     assert mapped["labels"] == ["bug", "p1", "stringy-label"]
     assert mapped["assignees"] == ["alice", "bob"]
+    # Full body is stored untruncated; body_preview stays a short summary.
+    assert mapped["body"] == raw["body"]
+    assert len(mapped["body"]) > 800
     assert len(mapped["body_preview"]) <= 800
     assert mapped["created_at_remote"].year == 2026
     assert mapped["updated_at_remote"].month == 4

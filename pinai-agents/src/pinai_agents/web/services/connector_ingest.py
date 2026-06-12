@@ -956,6 +956,7 @@ def _map_github_issue(issue: dict[str, Any]) -> dict[str, Any] | None:
                 repo_full_name = full
 
     body = issue.get("body")
+    body_full = body if isinstance(body, str) else None
     body_preview = body[:800] if isinstance(body, str) else None
 
     # Labels: GitHub sends [{name: 'bug', ...}, ...] but sometimes strings.
@@ -991,6 +992,7 @@ def _map_github_issue(issue: dict[str, Any]) -> dict[str, Any] | None:
         "number": issue.get("number") if isinstance(issue.get("number"), int) else None,
         "repo_full_name": repo_full_name,
         "title": issue.get("title") if isinstance(issue.get("title"), str) else None,
+        "body": body_full,
         "body_preview": body_preview,
         "state": issue.get("state") if isinstance(issue.get("state"), str) else None,
         "html_url": issue.get("html_url") if isinstance(issue.get("html_url"), str) else None,
@@ -1024,13 +1026,13 @@ async def _upsert_github_issues(
                 """
                 INSERT INTO pai_raw_github_issues (
                   user_id, id, issue_id, number, repo_full_name,
-                  title, body_preview, state, html_url, is_pull_request,
+                  title, body, body_preview, state, html_url, is_pull_request,
                   labels, assignees,
                   created_at_remote, updated_at_remote, occurred_at,
                   dedupe_key
                 ) VALUES (
                   %s, %s, %s, %s, %s,
-                  %s, %s, %s, %s, %s,
+                  %s, %s, %s, %s, %s, %s,
                   %s::jsonb, %s::jsonb,
                   %s, %s, %s,
                   %s
@@ -1038,6 +1040,7 @@ async def _upsert_github_issues(
                 ON CONFLICT (user_id, issue_id) DO UPDATE SET
                   state = EXCLUDED.state,
                   title = EXCLUDED.title,
+                  body = EXCLUDED.body,
                   body_preview = EXCLUDED.body_preview,
                   labels = EXCLUDED.labels,
                   assignees = EXCLUDED.assignees,
@@ -1051,6 +1054,7 @@ async def _upsert_github_issues(
                     mapped["number"],
                     mapped["repo_full_name"],
                     mapped["title"],
+                    mapped["body"],
                     mapped["body_preview"],
                     mapped["state"],
                     mapped["html_url"],
@@ -2012,7 +2016,7 @@ def _tl_github(mapped: dict[str, Any], *, toolkit: str, cid: str) -> IngestTimel
         source="github",
         event_type="commit",
         title=_clip(f"{repo}: {title}" if repo else title),
-        body=mapped["body_preview"],
+        body=mapped["body"] or mapped["body_preview"],
         participants=[{"identifier": a} for a in mapped["assignees"]],
         metadata=_clean(
             {
