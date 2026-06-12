@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Brain, ChevronDown, Zap, FileText, AlertTriangle, Loader2 } from "lucide-react";
 import { brandSvg, detectToolIcon, ArtifactItem, matchSideEffect, type Artifact } from "@/components/chat/ChatDetailView";
 import { reasoningStepLabel, sourceAppDisplay } from "@/components/card/source-app-display";
-import type { ReasoningStep } from "@/types/intent-card";
+import type { ReasoningStep } from "@pin-ai/core";
 import type {
   DangerousAction,
   ExecuteArtifact,
