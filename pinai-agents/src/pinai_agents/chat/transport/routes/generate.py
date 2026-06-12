@@ -14,6 +14,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Header, HTTPException, status
 from pydantic import BaseModel, Field, StrictInt
@@ -44,6 +45,11 @@ class GenerateRequest(BaseModel):
     context_since: datetime | None = Field(default=None)
     context_until: datetime | None = Field(default=None)
     generation_request: dict[str, Any] | None = Field(default=None)
+    # User's IANA timezone (profile truth, web-resolved — chat has no DB).
+    # "Today is …" in the generator prompt is computed in THIS timezone:
+    # with bare UTC an Asia/Shanghai user generating between local
+    # 00:00-07:59 gets yesterday's date and date-sensitive cards drift.
+    timezone: str | None = Field(default=None, max_length=64)
 
 
 class GenerateResponse(BaseModel):
@@ -214,6 +220,16 @@ def _verify_principal(token: str) -> RunPrincipal:
     return principal
 
 
+def _local_date(moment: datetime, tz_name: str | None) -> str:
+    """The user-local calendar date for the generator's "Today is …" prompt.
+    Invalid/absent timezone falls back to UTC (the old behavior)."""
+    try:
+        tz = ZoneInfo(tz_name) if tz_name else UTC
+    except Exception:
+        tz = UTC
+    return moment.astimezone(tz).strftime("%Y-%m-%d")
+
+
 @router.post("/agent/generate", response_model=GenerateResponse)
 async def generate(
     req: GenerateRequest,
@@ -225,7 +241,7 @@ async def generate(
     # a fresh one (legacy sync /api/generate path).
     run_id = req.run_id or f"run_{uuid.uuid4().hex[:16]}"
     context_until = req.context_until or datetime.now(UTC)
-    current_date = context_until.strftime("%Y-%m-%d")
+    current_date = _local_date(context_until, req.timezone)
     t0 = time.perf_counter()
     # Guarded by _verify_principal — virtual_key is non-None here.
     virtual_key = principal.virtual_key

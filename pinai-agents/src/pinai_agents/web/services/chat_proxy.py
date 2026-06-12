@@ -158,6 +158,7 @@ async def call_generate(
     context_since: datetime | None = None,
     context_until: datetime | None = None,
     generation_request: dict[str, Any] | None = None,
+    timezone: str | None = None,
 ) -> dict[str, Any]:
     """One-shot proxy to chat worker /agent/generate. JSON in / JSON out.
 
@@ -197,6 +198,10 @@ async def call_generate(
         body["context_until"] = context_until.isoformat()
     if generation_request is not None:
         body["generation_request"] = generation_request
+    if timezone:
+        # Profile timezone → chat computes "Today is …" as the user-local
+        # date instead of bare UTC.
+        body["timezone"] = timezone
     url = f"{_chat_internal_url()}/agent/generate"
     timeout = httpx.Timeout(
         connect=5.0,
