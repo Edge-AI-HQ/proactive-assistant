@@ -71,6 +71,7 @@ from .routes.ui.generate import router as ui_generate_router
 from .routes.ui.impersonation import router as ui_impersonation_router
 from .routes.ui.jwt_revoke import router as ui_jwt_revoke_router
 from .routes.ui.memory import router as ui_memory_router
+from .routes.ui.onboarding import router as ui_onboarding_router
 from .routes.ui.profile import router as ui_profile_router
 from .routes.ui.profile import settings_router as ui_settings_router
 from .routes.ui.raw import router as ui_raw_router
@@ -205,6 +206,7 @@ def create_app() -> FastAPI:
 
     # ── /api/* (frontend, Supabase JWT) ──
     app.include_router(ui_memory_router)
+    app.include_router(ui_onboarding_router)
     app.include_router(ui_signals_router)
     app.include_router(ui_profile_router)
     app.include_router(ui_settings_router)
