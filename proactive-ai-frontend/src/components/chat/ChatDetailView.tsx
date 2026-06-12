@@ -170,6 +170,8 @@ export interface ChatCard {
   /** Generator-side rationale; rendered as a dedicated "WHY NOW" block
    *  in the chat-side drawer mirror (ChatCardDrawerBody). */
   whyNow?: string;
+  sourceApps?: string[];
+  reasoningSteps?: { label: string; detail: string }[];
   detail?: {
     scores: { label: string; value: number }[];
     willExecute: string;
