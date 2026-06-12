@@ -25,42 +25,18 @@ from ... import composio_service as cs
 from ...auth.deps import AgentRun, current_agent_run, get_pool
 from ...auth.user_service import load_user_by_id
 from ...db.rls import user_scoped_tx
-from ...services import custom_mcp, ingest_runner, recipe_infer
+from ...services import custom_mcp, ingest_runner, raw_sources, recipe_infer
 
 router = APIRouter(prefix="/api/agent/raw", tags=["agent-raw"])
 
 
 # (toolkit, entity) → physical table name. Only entries listed here are
-# readable; everything else 404s. Sourced from db/migrations/016-019 +
-# trimmed by 036 / 045 to the live toolkit set.
-_RAW_TABLES: dict[tuple[str, str], str] = {
-    # Composio toolkits
-    ("gmail", "messages"): "pai_raw_gmail_messages",
-    ("gcal", "events"): "pai_raw_gcal_events",
-    ("gdrive", "files"): "pai_raw_gdrive_files",
-    ("slack", "messages"): "pai_raw_slack_messages",
-    ("github", "issues"): "pai_raw_github_issues",
-    ("calendly", "events"): "pai_raw_calendly_events",
-    ("stripe", "invoices"): "pai_raw_stripe_invoices",
-    ("youtube", "subscriptions"): "pai_raw_youtube_subscriptions",
-    ("linkedin", "profile"): "pai_raw_linkedin_profile",
-    # Device (mobile sync)
-    ("device", "apps"): "pai_raw_device_apps_snapshot",
-    ("device", "contacts"): "pai_raw_device_contacts_snapshot",
-    ("device", "health"): "pai_raw_device_health_observations",
-}
+# readable; everything else 404s. Derived from the raw_sources registry
+# (the single source of truth for storage routing) so this allowlist and
+# the UI/dashboard enumerations can't drift apart.
+_RAW_TABLES: dict[tuple[str, str], str] = raw_sources.typed_path_table_map()
 
-_RAW_CONNECTOR_TOOLKITS: dict[tuple[str, str], str] = {
-    ("gmail", "messages"): "gmail",
-    ("gcal", "events"): "googlecalendar",
-    ("gdrive", "files"): "googledrive",
-    ("slack", "messages"): "slack",
-    ("github", "issues"): "github",
-    ("calendly", "events"): "calendly",
-    ("stripe", "invoices"): "stripe",
-    ("youtube", "subscriptions"): "youtube",
-    ("linkedin", "profile"): "linkedin",
-}
+_RAW_CONNECTOR_TOOLKITS: dict[tuple[str, str], str] = raw_sources.typed_path_composio_map()
 
 
 def _raw_key(toolkit: str, entity: str) -> tuple[str, str]:

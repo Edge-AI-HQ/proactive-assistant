@@ -29,38 +29,25 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ...auth.deps import User, current_user, get_pool
 from ...db.rls import user_scoped_tx
+from ...services import raw_sources
 
 router = APIRouter(prefix="/api/raw", tags=["raw"])
 
+# The /raw/<slug> fallback's accepted slugs + their storage come from the
+# raw_sources registry (single source of truth). Frontend `fetchRawTable`
+# (proactive-ai-frontend GoalsView RAW_SOURCE_CONFIG) is the naming
+# authority for these slugs — keep registry ui_slug values in sync with it.
 
-# Generic /raw/<slug> fallback only accepts these slugs. Slug = the
-# physical table name with the `pai_raw_` prefix dropped — keeps the
-# public API hiding the internal table-name convention. Frontend
-# `fetchRawTable` (proactive-ai-frontend GoalsView RAW_SOURCE_CONFIG)
-# is the source of truth for these slugs.
-_GENERIC_RAW_SLUGS: frozenset[str] = frozenset(
-    {
-        # Composio toolkits
-        "gmail_messages",
-        "gcal_events",
-        "gdrive_files",
-        "slack_messages",
-        "github_issues",
-        "calendly_events",
-        "stripe_invoices",
-        "youtube_subscriptions",
-        "linkedin_profile",
-        # Device (mobile sync)
-        "device_apps_snapshot",
-        "device_contacts_snapshot",
-        "device_health_observations",
-    }
-)
 
-_RAW_EVENTS_SLUGS: dict[str, tuple[str, str]] = {
-    "gdocs_documents": ("googledocs", "documents"),
-    "gsheets_spreadsheets": ("googlesheets", "spreadsheets"),
-}
+def _typed_table(toolkit: str, entity: str) -> str:
+    """Physical table for a typed source, from the registry — so the
+    dedicated endpoints below don't re-hardcode table names that the
+    registry already owns."""
+    source = raw_sources.by_path(toolkit, entity)
+    assert source is not None and source.table is not None, (
+        f"not a typed source: {toolkit}/{entity}"
+    )
+    return source.table
 
 
 def _row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
@@ -133,7 +120,7 @@ async def list_gmail(
     rows, total = await _select_recent(
         pool,
         user_id=user.id,
-        table="pai_raw_gmail_messages",
+        table=_typed_table("gmail", "messages"),
         extra_where=extra_where,
         extra_params=extra_params,
         since=since,
@@ -160,7 +147,7 @@ async def list_gcal(
     rows, total = await _select_recent(
         pool,
         user_id=user.id,
-        table="pai_raw_gcal_events",
+        table=_typed_table("gcal", "events"),
         extra_where=extra_where,
         extra_params=extra_params,
         since=since,
@@ -184,7 +171,7 @@ async def list_device_apps(
     rows, total = await _device_snapshot_query(
         pool,
         user_id=user.id,
-        table="pai_raw_device_apps_snapshot",
+        table=_typed_table("device", "apps"),
         device_id=deviceId,
         snapshot_id=snapshotId,
         latest_only=latestSnapshotOnly,
@@ -220,7 +207,7 @@ async def list_device_contacts(
     rows, total = await _device_snapshot_query(
         pool,
         user_id=user.id,
-        table="pai_raw_device_contacts_snapshot",
+        table=_typed_table("device", "contacts"),
         device_id=deviceId,
         snapshot_id=snapshotId,
         latest_only=latestSnapshotOnly,
@@ -250,7 +237,7 @@ async def list_device_health(
     rows, total = await _select_recent(
         pool,
         user_id=user.id,
-        table="pai_raw_device_health_observations",
+        table=_typed_table("device", "health"),
         extra_where=extra_where,
         extra_params=extra_params,
         since=since,
@@ -334,18 +321,17 @@ async def list_generic(
     endpoints. Allowlist-gated by slug — physical table is `pai_raw_<slug>`.
 
     Frontend `fetchRawTable` (GoalsView RAW_SOURCE_CONFIG) calls this
-    with the slug only (eg `slack_messages`). Slugs not on the allowlist
-    404. The typed endpoints above (gmail / gcal / device-*) take
+    with the slug only (eg `slack_messages`). Slugs not in the raw_sources
+    registry 404. The typed endpoints above (gmail / gcal / device-*) take
     precedence when the path matches — FastAPI matches static routes
     before parametric ones."""
-    raw_events_source = _RAW_EVENTS_SLUGS.get(slug)
-    if slug not in _GENERIC_RAW_SLUGS and raw_events_source is None:
+    source = raw_sources.by_ui_slug(slug)
+    if source is None:
         raise HTTPException(
             status_code=404,
             detail=f"unknown raw slug: {slug}",
         )
-    if raw_events_source is not None:
-        toolkit, entity_type = raw_events_source
+    if source.store == "events":
         async with user_scoped_tx(pool, user.id) as conn:
             cur = await conn.execute(
                 """
@@ -358,7 +344,7 @@ async def list_generic(
                 ORDER BY occurred_at DESC
                 LIMIT %s
                 """,
-                (user.id, toolkit, entity_type, since, since, until, until, limit),
+                (user.id, source.path_toolkit, source.entity, since, since, until, until, limit),
             )
             rows = [_row_to_dict(r) for r in await cur.fetchall()]
             cur = await conn.execute(
@@ -370,19 +356,19 @@ async def list_generic(
                   AND (%s::timestamptz IS NULL OR occurred_at >= %s)
                   AND (%s::timestamptz IS NULL OR occurred_at <= %s)
                 """,
-                (user.id, toolkit, entity_type, since, since, until, until),
+                (user.id, source.path_toolkit, source.entity, since, since, until, until),
             )
             count_row = await cur.fetchone()
         total = int((count_row or {}).get("n") or 0)
         return {"ok": True, "rows": rows, "total": total, "table": "pai_raw_events"}
 
-    table = f"pai_raw_{slug}"
+    assert source.table is not None  # typed store always has a table
     rows, total = await _select_recent(
         pool,
         user_id=user.id,
-        table=table,
+        table=source.table,
         since=since,
         until=until,
         limit=limit,
     )
-    return {"ok": True, "rows": rows, "total": total, "table": table}
+    return {"ok": True, "rows": rows, "total": total, "table": source.table}

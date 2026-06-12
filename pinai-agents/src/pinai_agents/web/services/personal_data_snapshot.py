@@ -15,6 +15,8 @@ from typing import Any, Literal
 from psycopg import AsyncConnection
 from psycopg.rows import DictRow
 
+from . import raw_sources
+
 PersonalDataCategory = Literal[
     "all",
     "profile",
@@ -57,129 +59,6 @@ SENSITIVE_VALUE_LABEL_KEYS = {
     "name",
     "property",
 }
-
-RAW_SOURCES: tuple[dict[str, str], ...] = (
-    {
-        "key": "gmail",
-        "label": "Gmail",
-        "table": "pai_raw_gmail_messages",
-        "title": "COALESCE(NULLIF(r.subject, ''), '无主题邮件')",
-        "subtitle": "r.from_addr",
-        "summary": "COALESCE(NULLIF(r.snippet, ''), LEFT(COALESCE(r.body, ''), 260))",
-        "status": "NULL",
-        "chips": "jsonb_build_array(r.thread_id)",
-    },
-    {
-        "key": "gcal",
-        "label": "Google Calendar",
-        "table": "pai_raw_gcal_events",
-        "title": "COALESCE(NULLIF(r.title, ''), '未命名日历事件')",
-        "subtitle": "r.location",
-        "summary": "LEFT(COALESCE(r.description, ''), 260)",
-        "status": "r.status",
-        "chips": "jsonb_build_array(r.calendar_id)",
-    },
-    {
-        "key": "gdrive",
-        "label": "Google Drive",
-        "table": "pai_raw_gdrive_files",
-        "title": "COALESCE(NULLIF(r.name, ''), '未命名文件')",
-        "subtitle": "r.mime_type",
-        "summary": "COALESCE(r.web_view_link, '')",
-        "status": "CASE WHEN r.trashed THEN 'trashed' ELSE 'active' END",
-        "chips": "jsonb_build_array(r.file_id)",
-    },
-    {
-        "key": "slack",
-        "label": "Slack",
-        "table": "pai_raw_slack_messages",
-        "title": "COALESCE(NULLIF(r.channel_name, ''), 'Slack 消息')",
-        "subtitle": "r.slack_user_name",
-        "summary": "LEFT(COALESCE(r.text, ''), 280)",
-        "status": "NULL",
-        "chips": "jsonb_build_array(r.channel_id)",
-    },
-    {
-        "key": "github",
-        "label": "GitHub",
-        "table": "pai_raw_github_issues",
-        "title": "COALESCE(NULLIF(r.title, ''), 'GitHub issue')",
-        "subtitle": "CONCAT_WS('#', r.repo_full_name, r.number::text)",
-        "summary": "LEFT(COALESCE(r.body_preview, ''), 280)",
-        "status": "r.state",
-        "chips": "jsonb_build_array(CASE WHEN r.is_pull_request THEN 'PR' ELSE 'Issue' END)",
-    },
-    {
-        "key": "calendly",
-        "label": "Calendly",
-        "table": "pai_raw_calendly_events",
-        "title": "COALESCE(NULLIF(r.name, ''), 'Calendly 事件')",
-        "subtitle": "r.location_value",
-        "summary": "COALESCE(r.meeting_url, '')",
-        "status": "r.status",
-        "chips": "jsonb_build_array(r.location_type)",
-    },
-    {
-        "key": "stripe",
-        "label": "Stripe",
-        "table": "pai_raw_stripe_invoices",
-        "title": "COALESCE(NULLIF(r.number, ''), r.invoice_id, 'Stripe invoice')",
-        "subtitle": "r.customer_email",
-        "summary": "CONCAT_WS(' ', r.amount_due::text, r.currency, r.hosted_invoice_url)",
-        "status": "r.status",
-        "chips": "jsonb_build_array(r.collection_method)",
-    },
-    {
-        "key": "youtube",
-        "label": "YouTube",
-        "table": "pai_raw_youtube_subscriptions",
-        "title": "COALESCE(NULLIF(r.channel_title, ''), 'YouTube 订阅')",
-        "subtitle": "r.channel_id",
-        "summary": "LEFT(COALESCE(r.channel_description, ''), 280)",
-        "status": "NULL",
-        "chips": "jsonb_build_array(r.subscription_id)",
-    },
-    {
-        "key": "linkedin",
-        "label": "LinkedIn",
-        "table": "pai_raw_linkedin_profile",
-        "title": "COALESCE(NULLIF(r.localized_name, ''), CONCAT_WS(' ', r.first_name, r.last_name), 'LinkedIn profile')",
-        "subtitle": "r.vanity_name",
-        "summary": "COALESCE(r.headline, r.profile_url, '')",
-        "status": "NULL",
-        "chips": "jsonb_build_array(r.linkedin_id)",
-    },
-    {
-        "key": "device_apps",
-        "label": "设备应用",
-        "table": "pai_raw_device_apps_snapshot",
-        "title": "COALESCE(NULLIF(r.app_name, ''), r.bundle_id, '设备应用')",
-        "subtitle": "r.device_id",
-        "summary": "CONCAT_WS(' ', r.bundle_id, r.version)",
-        "status": "NULL",
-        "chips": "jsonb_build_array(r.snapshot_id)",
-    },
-    {
-        "key": "device_contacts",
-        "label": "设备联系人",
-        "table": "pai_raw_device_contacts_snapshot",
-        "title": "COALESCE(NULLIF(r.display_name, ''), '设备联系人')",
-        "subtitle": "r.device_id",
-        "summary": "LEFT(CONCAT_WS(' ', r.emails::text, r.phones::text), 280)",
-        "status": "NULL",
-        "chips": "jsonb_build_array(r.snapshot_id)",
-    },
-    {
-        "key": "device_health",
-        "label": "设备健康",
-        "table": "pai_raw_device_health_observations",
-        "title": "COALESCE(NULLIF(r.metric, ''), r.observation_type, '健康数据')",
-        "subtitle": "r.device_id",
-        "summary": "CONCAT_WS(' ', r.value::text, r.unit, r.source_app)",
-        "status": "NULL",
-        "chips": "jsonb_build_array(r.local_date::text)",
-    },
-)
 
 
 def _iso(value: Any) -> Any:
@@ -781,33 +660,17 @@ class PersonalDataSnapshotService:
         like = f"%{query}%" if query else None
         limit = kwargs.get("limit")
         offset = kwargs.get("offset")
+        # One UNION-ALL branch per registered raw source — typed tables and
+        # the generic pai_raw_events store alike (registry is the single
+        # source of truth, so generic sources show up here too).
         selects = []
         params: list[Any] = []
-        for source in RAW_SOURCES:
-            selects.append(
-                f"""
-                SELECT
-                  'raw' AS category,
-                  r.id AS item_id,
-                  '{source["key"]}' AS source_key,
-                  '{source["label"]}' AS source_label,
-                  '{source["key"]}' AS kind,
-                  {source["title"]} AS title,
-                  {source["subtitle"]} AS subtitle,
-                  {source["summary"]} AS summary,
-                  {source["status"]} AS status,
-                  NULL::float AS score,
-                  r.occurred_at,
-                  r.ingested_at AS updated_at,
-                  {source["chips"]} AS chips,
-                  to_jsonb(r) - 'user_id' AS payload
-                FROM {source["table"]} r
-                WHERE r.user_id = %s
-                  AND (%s::timestamptz IS NULL OR r.occurred_at >= %s)
-                  AND (%s::timestamptz IS NULL OR r.occurred_at <= %s)
-                """,
+        for source in raw_sources.ALL_SOURCES:
+            fragment, frag_params = raw_sources.snapshot_fragment(
+                source, self._user_id, since, until
             )
-            params.extend([self._user_id, since, since, until, until])
+            selects.append(fragment)
+            params.extend(frag_params)
 
         sql = f"""
             SELECT *, COUNT(*) OVER() AS total
