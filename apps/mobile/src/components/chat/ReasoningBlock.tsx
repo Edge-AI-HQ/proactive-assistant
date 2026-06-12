@@ -1,11 +1,13 @@
 /**
  * "Thought" 折叠胶囊条——web ChatDetailView 的整行胶囊样式（✓ Thought
- * + chevron，玻璃条）：流式中标签 "Thinking…"（脉冲），完成态
- * "✓ Thought"；点击展开灰斜体思考全文。
+ * + chevron，玻璃条）：流式中标签 "Thinking…"（shimmer 扫光，web
+ * ShimmerText 同款），完成态 "✓ Thought"；点击展开灰斜体思考全文。
  */
-import { useEffect, useRef, useState } from "react";
-import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
+import { useState } from "react";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Check, ChevronDown, ChevronUp } from "lucide-react-native";
+
+import { ShimmerText } from "../../ui/ShimmerText";
 
 export default function ReasoningBlock({
   text,
@@ -15,30 +17,16 @@ export default function ReasoningBlock({
   streaming: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const pulse = useRef(new Animated.Value(0.45)).current;
-
-  useEffect(() => {
-    if (!streaming) {
-      pulse.setValue(1);
-      return;
-    }
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, { toValue: 1, duration: 700, useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 0.45, duration: 700, useNativeDriver: true }),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [streaming, pulse]);
 
   return (
     <View style={styles.wrap}>
       <Pressable onPress={() => setExpanded((v) => !v)} style={styles.pill}>
         {streaming ? null : <Check size={13} color="#71717a" strokeWidth={2.2} />}
-        <Animated.Text style={[styles.label, { opacity: streaming ? pulse : 1 }]}>
-          {streaming ? "Thinking…" : "Thought"}
-        </Animated.Text>
+        {streaming ? (
+          <ShimmerText text="Thinking…" style={styles.label} />
+        ) : (
+          <Text style={styles.label}>Thought</Text>
+        )}
         <View style={styles.spacer} />
         {expanded ? (
           <ChevronUp size={14} color="#a1a1aa" strokeWidth={1.8} />

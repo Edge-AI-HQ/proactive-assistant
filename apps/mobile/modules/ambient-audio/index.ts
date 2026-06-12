@@ -4,7 +4,7 @@
  * Swift 核心 9 类原样迁移自 capacitor-plugins/ambient-ai（零 Capacitor
  * 依赖），方法面与原 AudioCapturePlugin 1:1。
  */
-import { requireNativeModule, type EventSubscription } from "expo-modules-core";
+import { requireOptionalNativeModule, type EventSubscription } from "expo-modules-core";
 
 export interface SoundClassificationEvent {
   classifications: { label: string; confidence: number }[];
@@ -103,4 +103,16 @@ interface AmbientAudioModuleType {
   addListener(eventName: AudioEventName, listener: (event: never) => void): EventSubscription;
 }
 
-export const AmbientAudio = requireNativeModule<AmbientAudioModuleType>("AmbientAudio");
+// 同 ambient-visit：Swift 未链接的 build 里 import 安全，调用时才抛。
+export const AmbientAudio =
+  requireOptionalNativeModule<AmbientAudioModuleType>("AmbientAudio") ??
+  (new Proxy(
+    {},
+    {
+      get(_t, prop) {
+        throw new Error(
+          `AmbientAudio native module unavailable (Swift core not linked in this build): ${String(prop)}`,
+        );
+      },
+    },
+  ) as AmbientAudioModuleType);

@@ -8,16 +8,20 @@
 import { fetch as expoFetch } from "expo/fetch";
 import { configureTransport } from "@pin-ai/core";
 
+import { isPinLocalDevAuthEnabled, pinLocalDevAuthHeaders } from "./dev-auth";
 import { ENV } from "./env";
 import { supabase } from "./supabase";
 
 async function authHeaders(): Promise<Record<string, string>> {
+  // 本地 dev 旁路（web transport-bootstrap 同构）：X-Dev-Auth 替代 Bearer。
+  if (isPinLocalDevAuthEnabled()) return pinLocalDevAuthHeaders();
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 async function refreshAuth(): Promise<string | null> {
+  if (isPinLocalDevAuthEnabled()) return null;
   const { data, error } = await supabase.auth.refreshSession();
   if (error || !data.session) return null;
   return data.session.access_token;

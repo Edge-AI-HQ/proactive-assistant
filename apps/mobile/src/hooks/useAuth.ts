@@ -9,6 +9,7 @@ import type { Session, User } from "@supabase/supabase-js";
 import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
 
+import { isPinLocalDevAuthEnabled, pinLocalDevAuthUser } from "../lib/dev-auth";
 import { supabase } from "../lib/supabase";
 
 interface AuthState {
@@ -21,6 +22,11 @@ export function useAuth() {
   const [state, setState] = useState<AuthState>({ loading: true, session: null, user: null });
 
   useEffect(() => {
+    // 本地 dev 旁路（web useAuth 同构）：跳过 Supabase，直接合成用户。
+    if (isPinLocalDevAuthEnabled()) {
+      setState({ loading: false, session: null, user: pinLocalDevAuthUser() });
+      return;
+    }
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {

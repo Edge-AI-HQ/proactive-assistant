@@ -11,7 +11,6 @@ import { ActivityIndicator, Modal, StyleSheet, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useFonts, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold } from "@expo-google-fonts/inter";
 import { Geist_400Regular, Geist_500Medium, Geist_600SemiBold } from "@expo-google-fonts/geist";
-import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -80,9 +79,10 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#f6f4f0" },
+  // token --background: 220 30% 96%（web bg-background 同源）。
+  safe: { flex: 1, backgroundColor: "#f2f4f8" },
   safeTransparent: { flex: 1 },
-  center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#f6f4f0" },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#f2f4f8" },
   shell: { flex: 1 },
   screen: { flex: 1 },
   // 保 mount 的隐藏（不卸载——main chat 的 SSE 在后台 tab 持续）。

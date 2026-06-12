@@ -32,7 +32,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#f6f4f0",
+    // 透明：App 根部的 AuroraBackground 透出（web MinimalistLanding 同款氛围底）。
     padding: 32,
   },
   logo: { fontSize: 34, fontWeight: "700", color: "#1a1a1a", letterSpacing: 1 },

@@ -1,0 +1,185 @@
+---
+title: "Web → React Native UI/UX 高保真复刻：路线深度调研"
+description: "四路调研（业界路线全景 / 顶级 agent app 真实栈 / RN 高保真视觉硬技术 / 本仓库 RN 复刻差距审计）的综合报告。结论：架构方向（core/state 共享 + RN UI 独立）是 2026 业界正解，差的根因是渲染介质错配 + 实现深度不足 + 缺机器可校验的 parity 回路；给出介质替换映射表、截图回归工作流和对现有 plan 的修正点。"
+---
+
+# Web → RN UI/UX 高保真复刻调研（2026-06-12）
+
+> 背景：`docs/plans/2026-06-12-rn-ui-parity.mdx` 的「NativeWind + token 共享 + 逐页人肉翻译」方案已执行（PR #120 刀 0-8），真机效果与 web 差距明显。本调研回答：**web TypeScript UI/UX 复刻到 RN，业界最佳、最 robust 的方法是什么**。
+> 调研方法：四路并行——①跨平台路线全景（2024-2026 一手资料）②顶级 AI chat/agent app 真实技术栈（招聘 JD / APK 二进制检测 / 官方工程博客）③RN 高保真视觉硬技术现状（Expo 56 / RN 0.85 基线）④本仓库 web 原版 vs RN 复刻版逐项代码审计。关键出处 URL 内联。
+
+## 0. 结论速览
+
+1. **方向没错，方法错了一半**。「core/state 共享 + RN UI 独立实现」正是 2026 业界共识——universal rendering（一套组件渲染所有端）在 2025-2026 明显退潮：Solito 5 转 web-first、react-native-web 进入半维护、Meta 把方向反转成 react-strict-dom（web 标准跑在 RN 上，仍 0.0.x）。**不需要换架构、不需要引入 Tamagui/RNW**。
+2. **「效果差」的根因不是翻译不够细，是三层缺失**：
+   - **渲染介质错配**：NativeWind 只对齐 token/类名语法，不对齐渲染能力。web 视觉三大支柱——`backdrop-filter` 玻璃、aurora 多层混合模糊渐变、framer-motion 物理动效——在 RN 各自需要 expo-blur、Skia、Reanimated 这些**原生介质**，className 翻译永远拿不到它们。
+   - **实现深度不足**（差距审计实锤）：expo-blur 装了只用 1 处、`bg-gradient.jpg` 底图没搬、aurora 6 斑缩成 2 个假 blob、动效密度 34:6、Geist 加载了没应用、球面卡 6 态徽章全缺。
+   - **没有机器可校验的 parity 反馈**：「像不像」靠人眼，AI 翻译没有回归信号，每刀验收凭感觉。
+3. **「世界顶尖 agent app」的硬事实**：ChatGPT/Claude/Gemini/Grok/Perplexity 移动端 100% 原生双端（JD+二进制证据）。RN 阵营天花板（Discord/Shopify/Bluesky/Expensify）证明 RN 能到 90-95 分，但靠的是「**原生介质堆叠 + 热点下沉原生**」，不是共享 web 代码。RN 选型可以保留（换来三端逻辑共享 + AI 迭代速度），但要按这个纪律做。
+4. **立即修正项**：弃 moti（停滞 15 个月）→ Reanimated 4 CSS API；玻璃 → expo-blur + inset boxShadow；aurora → Skia；渐变字 → MaskedView；流式 markdown → 盯 react-native-streamdown（SWM）或 block-memo 手工方案；**建 Maestro/模拟器截图基线，把 AI 翻译放进「截图 diff → 改码 → 重截」回路**。
+
+---
+
+## 1. 现状差距审计（为什么差：本仓库实锤）
+
+逐项对比 `proactive-ai-frontend/src` 与 `apps/mobile/src`（详细行号见审计正文，此处摘要）：
+
+| # | 特性 | Web 实现 | RN 现状 | 严重度 |
+|---|---|---|---|---|
+| 1 | 玻璃卡 backdrop blur+saturate | `blur(32/48px) saturate(1.3/1.5)`（`index.css:102-120`） | 无 blur，靠提高不透明度（白纸板） | **高** |
+| 2 | 玻璃卡 inset 顶部内发光 | `inset 0 1px 0 white/30-40` | 无 | 中 |
+| 3 | Aurora 底图 | `bg-gradient.jpg` 39KB @60% | 资产未搬运 | **高** |
+| 4 | Aurora 色斑 | 6 个 radial 斑 + `blur(60px)` + `mix-blend-mode:screen` + 三相位漂移 | 2 个 LinearGradient 假 blob（有硬边），无 blur 无混合 | **高** |
+| 5 | chat 面背景 | 同款 5 层 aurora | 不透明纯色 | **高** |
+| 6 | 球面卡材质/状态 | glass-strong + 6 态徽章 + 彩 ring + spinner + 深度阴影切换 | 白卡 + 仅 READY 字 + 恒定阴影 | **高** |
+| 7 | 渐变问候名 | `bg-clip-text` 品红→粉 | 纯色 + 名字硬编码 "Boliang" | **高** |
+| 8 | 页面转场 | AnimatePresence 0.2s 交叉淡入 | 直切零转场 | 中 |
+| 9 | sheet 手势 | 左缘拖拽下沉 + spring + commit 阈值 | timing 滑动无手势 | 中 |
+| 10 | Geist chat 字体 | `.font-native` + ss01/cv11 | 已加载零消费（落系统字体） | 中 |
+| 11 | Shimmer thinking | 渐变扫光 2.4s | opacity 脉冲 | 中 |
+| 12 | 彩色阴影/glow/呼吸 halo | 品红按钮影、halo 呼吸动画 | 无；系统 Switch | 中 |
+| 13 | 标题负字距 | tracking-tight（-0.025em，相对 em） | 无（且 RN letterSpacing 是绝对 pt，需换算） | 低 |
+
+**最伤观感 Top 5 根因**：①玻璃拟态体系整体降级成「白卡体系」（web 15+ 处 backdrop 玻璃，RN 全换不透明白底）；②aurora 缩水 1/3 且玻璃没东西可透——「彩斑透过磨砂」的两个前提都没了，互相放大；③动效密度 34:6（无转场/手势/入场/shimmer/呼吸）；④文字气质丢失（渐变名、Geist、负字距、300 字重）；⑤球面卡数学同源但只剩骨架（状态系统全缺）。
+
+**已装未用的存量**：`expo-blur`（仅 MenuDrawer 遮罩 1 处）、`react-native-svg`（RadialGradient 能力闲置）。未装的关键件：`@react-native-masked-view/masked-view`、`@shopify/react-native-skia`。
+
+> 启示：这份清单本身证明「逐页翻译」不是死路——**数学（球面投影）、布局、token 都翻对了**，塌方集中在「RN 没有的 CSS 能力」上。方法论问题，不是路线问题。
+
+## 2. 业界路线全景（8 条路线，2026-06 视角）
+
+三个风向标事件先行：**(a)** Solito 5（2025-10）把 react-native-web 移出核心依赖转 web-first（[solito.dev](https://solito.dev/)）；**(b)** react-native-web 维护者 necolas 公开表态只合 fix 不再投入开发，征集接盘（[Discussion #2816](https://github.com/necolas/react-native-web/discussions/2816)）；**(c)** Meta 方向反转为 react-strict-dom——web 标准 API 跑在 RN 上（React Conf 2025）。**业界共识收敛为：共享逻辑/导航/设计语义，渲染层各平台用各自最优介质。**
+
+| 路线 | 2026-06 状态 | 与本场景匹配度 | 一句话判断 |
+|---|---|---|---|
+| 1. react-native-web universal（Bluesky 模式） | 技术成熟但 RNW 半维护；Expo universal RSC 仍 beta | **低** | RN-first 路线，要用 RN 反向重写已打磨好的 web，作废资产 |
+| 2. Solito + Tamagui | Tamagui v2（2026-02）质量回升但 bus factor ≈ 1；Solito 已转 web-first | **低** | 两端都要迁 styled DSL，等于为共享重写两端 |
+| 3. NativeWind 4/5（现状路线） | v4 stable；v5 仍 preview（要求 Tailwind 4.1 + Reanimated 4） | **中** | 当 token/类名层合理（与 Bluesky 自研 ALF 同构），**错在被当成视觉还原的全部** |
+| 4. react-strict-dom（Meta） | 0.0.55；Meta 内部生产（FB/IG VR 数百组件），外部案例≈0 | **低（暂时）** | 哲学最契合 web-first，但 StyleX≠Tailwind、子集+overhead；12-24 个月观察名单 |
+| 5. Expo DOM components（`'use dom'`） | 可用；官方自我定位=迁移工具/岛屿，「尽可能用真原生视图」 | **战术中** | 异步序列化桥+无 children——chat 主界面禁用；**3D 球面云这类 RN 生态短板可做岛屿**（web three.js 直嵌） |
+| 6. 保留 Capacitor 壳 | Capacitor 8 健康；视觉 100% 还原 | 过渡保险 | 键盘（Ionic 官方自认 constant pain）/长列表流式/滚动物理是 chat app 硬天花板，到不了「世界顶尖 iOS」 |
+| 7. 设计系统对齐而非代码共享 | DTCG token 规范 2025-10 首个稳定版；Lyft/Spotify/Airbnb 全走这条 | **高** | 大厂主流正解；你们已完成最难的业务层共享，缺的是「平台原生视觉实现 + 截图回归把关」 |
+| 8. LLM/AI 辅助移植工作流 | 无一键转换器；agentic workflow + 回归信号是 2025-2026 实践共识 | **高** | Money Forward/Callstack/Cars24 案例：AI 移植瓶颈不在写代码，在**缺机器可校验的 parity 反馈** |
+
+**排序结论**：主路线 = **7 + 8 + 3 组合**（token 层保留 NativeWind，视觉表现层换正确介质，AI 在截图回归回路里迭代）；战术补充 = 5（3D 岛屿）；保底 = 6（Capacitor 双轨过渡）。不推荐 1/2/4。
+
+关键出处：[Bluesky social-app](https://github.com/bluesky-social/social-app)（RN 0.81 + Expo 54，自研 ALF token 系统，质感全靠 expo-blur/glass-effect/reanimated/keyboard-controller 原生库堆叠）、[Tamagui v2](https://tamagui.dev/blog/version-two)、[NativeWind v5](https://www.nativewind.dev/blog/v5-migration-guide)、[react-strict-dom #270](https://github.com/facebook/react-strict-dom/discussions/270)、[Expo DOM components](https://docs.expo.dev/guides/dom-components/)、[Spotify Encore](https://www.figma.com/blog/creating-coherence-how-spotifys-design-system-goes-beyond-platforms/)、[Maestro visual testing](https://maestro.dev/blog/visual-testing)、[Money Forward AI 迁移](https://global.moneyforward-dev.jp/2025/06/24/how-to-utilize-ai-agents-to-accelerate-frontend-code-migration/)。
+
+## 3. 顶级 agent/chat app 的真实栈（证据等级标注）
+
+| App | 移动端栈 | 证据 |
+|---|---|---|
+| ChatGPT | 原生 SwiftUI / Jetpack Compose；数百工程师共建 Swift 平台（ChatGPT/Atlas/Sora 共用） | [Emerge Tools 官方访谈](https://www.emergetools.com/blog/posts/openai-on-mobile-development-previews-and-snapshot-testing)+JD（最高） |
+| Claude | 原生 Swift(UIKit+SwiftUI) / Kotlin+Compose；artifacts 局部 webview | [iOS JD](https://job-boards.greenhouse.io/anthropic/jobs/4572744008)+[APK SDK 扫描](https://appgoblin.info/apps/com.anthropic.claude/sdks)（高） |
+| Gemini / Grok / Perplexity | 全原生 Swift（Grok JD 直接写 GPU/memory 性能优化） | 各家 JD（高） |
+| Microsoft Copilot | React Native（"parts of"，微软全公司 RN 战略延续） | [RN 官方 showcase](https://reactnative.dev/showcase)（高） |
+| Manus | **Flutter**（+ RevenueCat/Adjust），agent 回放本质是 web 内容渲染 | [APK 扫描](https://appgoblin.info/apps/tech.butterfly.app)（高） |
+| Linear | 原生 Swift/Kotlin（官方页原话 "built with native Swift and Kotlin"） | [linear.app/mobile](https://linear.app/mobile)（最高） |
+| Notion | Cordova 起家→2019 起原生化，**editor 至今仍是 web**；从未大规模用 RN | [Pragmatic Engineer 深访](https://newsletter.pragmaticengineer.com/p/notion-going-native-on-ios-and-android)（最高） |
+
+**RN 阵营天花板的方法论**（这部分对我们最有操作价值）：
+- **Discord**（iOS RN 近十年、亿级用户聊天主场景）：chat 视图回收池、自研 FastList 包原生 RecyclerView、**emoji picker RN 做不动最终原生重写**、2025 起核心 store 迁 Rust——「RN 做底 + 撑不住的组件逐个下沉原生」（[官方博客](https://discord.com/blog/supercharging-discord-mobile-our-journey-to-a-faster-app)）。
+- **Bluesky** 工程师一手清单《React Native and "the native feel"》（[mozzius.dev](https://mozzius.dev/post/3l777nhz4h32w)）：坦言初期 app「纸面原生但感觉不原生」，改进项=PressableScale 按压缩放、`StyleSheet.hairlineWidth`、iOS 系统 `pageSheet`、自研原生 bottom sheet、Reanimated layout animations——**没有银弹，是细节的累积效应**。
+- **Expensify**：为聊天输入专造 [react-native-live-markdown](https://github.com/Expensify/react-native-live-markdown)（解析器以 worklet 跑在 UI 线程 + 原生层应用样式）——「RN 体验瓶颈用原生层解决」的教科书。
+- **OpenAI 的质量基建**（虽是原生，方法论通用）：preview-first 开发 + **数千 UI snapshot test，仅代码块组件就 36 个变体逐 build 快照**——顶级手感的本质是回归测试覆盖，不是单点技巧。
+
+**可行性判断**：RN 追顶级 chat 体验能到 90-95 分（Discord/Shopify sub-500ms P75 实证），公开世界尚无「媲美 Claude app」的纯 RN AI chat 成品；最后 5-10 分（满帧 ProMotion、超长会话流式不掉帧、系统级文本手感）要按 Discord 模式把热点下沉原生偿还。对我们：**RN 选型保留**（三端逻辑共享 + AI 迭代速度是我们的结构优势），但接受「热点可下沉原生」是这条路的一部分，输入框/消息列表最可能先到。
+
+## 4. RN 高保真视觉硬技术：三档能力分类（Expo 56 / RN 0.85 基线）
+
+**硬事实前提**：RN core 没有 `backdrop-filter`；`filter` 在 iOS 只支持 `brightness/opacity` 两个函数（blur/saturate 全是 Android only）——玻璃在 iOS 的唯一正解是 UIVisualEffectView 包装（= expo-blur）。`boxShadow`（含 **inset**）0.76+ 双平台稳定，`mix-blend-mode` 0.77+ 转正。RN transform 有 perspective/rotateX/rotateY 但**无 translateZ、无 depth sorting**（z 遮挡要手动排序）。出处：[View Style Props](https://reactnative.dev/docs/view-style-props)、[RN 0.76](https://reactnative.dev/blog/2024/10/23/release-0.76-new-architecture)、[RN Transforms](https://reactnative.dev/docs/transforms)。
+
+### 直通档（装包即得，对应差距清单的大半）
+
+| Web 特性 | RN 正确介质 | 备注 |
+|---|---|---|
+| `backdrop-filter: blur+saturate` 玻璃 | **expo-blur**（iOS 真 UIVisualEffectView） | iOS material tint **内部自带 saturation boost**——web 写 `saturate(180%)` 本来就是在模仿 iOS 材质，选对 `tint` 即免费等效；`borderRadius` 配 `overflow:'hidden'`；**常驻 blur 控制在个位数/屏** |
+| inset 顶部内发光 / 多层阴影 | RN 0.76+ `boxShadow`（支持 inset、多层、彩色） | 直接抄 web 的 box-shadow 值 |
+| 渐变细边框 | 绝对定位 LinearGradient + MaskedView 抠环 | 社区成熟 pattern |
+| `bg-clip-text` 渐变文字 | `@react-native-masked-view/masked-view` + LinearGradient | 需安装 |
+| radial-gradient 色斑/角光 | react-native-svg RadialGradient（**已装**）或 Skia | — |
+| framer-motion spring/transition/entrance | **Reanimated 4 CSS Animations/Transitions API**（2025-07 stable） | spring 与 framer 同物理模型、参数同名（stiffness/damping/mass）——**web 调好的参数原样搬** |
+| 字体排版 | em→pt 换算层 + 显式 lineHeight + static instances | Tailwind `tracking-tight`=-0.025em → RN `fontSize×(-0.025)` pt；Inter ss01/cv11 stylistic sets RN 开不了，要 pyftfeatfreeze 烘焙进字体文件 |
+| iOS 26 Liquid Glass（可选增强） | expo-glass-effect（`isLiquidGlassAvailable()` 探测 + fallback） | 这是「比 web 玻璃更高级」的原生质感，Bluesky 已生产使用 |
+
+### Skia 级投入档（视觉天花板，按周计）
+
+| 特性 | 方案 | 量级 |
+|---|---|---|
+| Aurora 流动背景 | **@shopify/react-native-skia**：声明式 blob（Circle+RadialGradient+Blur image filter，Reanimated shared value 直驱原生重绘）或 RuntimeEffect SkSL shader；内建 FractalNoise/Turbulence 当 noise 纹理 | 声明式 150-300 行 1-3 天；**全项目最高 ROI 的 Skia 投入**。中庸方案：blob 烘焙成 3-4 张大模糊 PNG + 纯 transform 漂移（GPU 合成零 shader 成本，可达 8 成） |
+| mix-blend screen 多层叠加 | Skia Blend / RN 0.77 mixBlendMode | aurora 层间叠加发亮 |
+| conic gradient / 文字渐变高级版 | Skia SweepGradient / Paragraph | 按需 |
+| 3D 球面云满血版 | Skia processTransform3d + 手动 z 排序 + 逐卡景深 Blur | 1-2 周；丢原生触摸/无障碍要自做命中检测 |
+| 性能红线 | shader 每帧每像素成本×ProMotion 120Hz；老机型热节流 | 动画降速、按需重绘、避免每帧建对象 |
+
+### 设计适配档（别硬抄，改设计语言）
+
+1. **任意内容之上的 web 式 backdrop 玻璃**——iOS view 级 filter 不存在，改用 expo-blur material 语言或 Liquid Glass。
+2. **framer `layoutId` 共享元素转场**——Reanimated SET 4.2 仍躲在 feature flag 后官方明言勿上生产；改普通转场 + 手工 overlay。
+3. **react-three-fiber 真 3D**——expo-gl 版本错配 + New Arch issue，2026 生产不可用级；装饰性 3D 用 2.5D billboard（现有手算投影方向就是对的）或 `'use dom'` 岛屿直嵌 web three.js。
+4. **Android 大面积 blur**——RenderNode 仅 API 31+ 且贵，准备「无 blur 实色降级皮肤」（web 已有 `native-power-save` 降级先例，同构）。
+5. **球面云的真深度遮挡**——无 z-buffer，两卡交叉不会正确穿插；按 z 动态排序渲染数组即可，视觉损失小。
+
+## 5. 流式 chat 渲染专项（agent app 的命门）
+
+- **坑的定性**：每 token setState → 整棵 markdown 重 parse + React 树 diff，长消息流式肉眼可见 jank；`react-native-render-html` 被社区点名流式必卡。
+- **2026 正解已成型**：[react-native-streamdown](https://github.com/software-mansion-labs/react-native-streamdown)（Software Mansion，v0.2.0 2026-05）——md4c C parser + **原生 text 组件渲染**（自带原生文本选择/VoiceOver/GFM/LaTeX）+ remend 修补流式截断 + react-native-worklets Bundle Mode 把 parse 放后台线程。代价：版本年轻 + Babel/Metro 配置侵入深，要留退路。
+- **保守备选**（web 端 Vercel streamdown 的同构策略，手工 200-400 行）：按块分割、**完成块 memo 永不重渲、只让最后一个未闭合块吃更新**、token 攒批 30-60ms flush。现有 `react-native-markdown-display` 可先套这层策略。
+- 网络流缓冲与渲染解耦（按帧合批）；消息列表 FlashList；输入框若做富文本参照 Expensify live-markdown。
+
+## 6. 推荐方法论（综合拍板建议）
+
+### 6.1 架构层：不动
+
+core/state 共享 + RN UI 独立实现维持原判（frontend-layering 的决策被本次调研独立验证）。NativeWind 4 继续当 token/类名层。**不引入** Tamagui/RNW/react-strict-dom；react-strict-dom 入 12-24 个月观察名单。
+
+### 6.2 介质层：系统性替换（修复差距的主体）
+
+```
+弃用 moti（停滞 15 个月）────────→ Reanimated 4 CSS Animations/Transitions + entering/exiting
+GlassCard 白卡实现 ──────────────→ expo-blur(tint=systemMaterial 系) + boxShadow inset 高光 + 渐变边
+AuroraBackground LinearGradient ─→ Skia blob+Blur+FractalNoise（或烘焙 PNG+transform 的 8 成方案）
+                                    + 搬运 bg-gradient.jpg + chat 面铺同款背景
+渐变问候名/shimmer ──────────────→ MaskedView + LinearGradient（+修名字硬编码 bug）
+球面卡 ──────────────────────────→ 保留手算投影，补 glass 材质/6 态徽章/彩 ring/深度阴影/z 排序
+页面转场/sheet 手势 ─────────────→ Reanimated entering/exiting + Gesture Handler 拖拽 dismiss
+                                    （spring 参数从 web framer-motion 原样搬）
+chat 流式 markdown ──────────────→ block-memo 策略先行，streamdown 栈跟进评估
+字体 ────────────────────────────→ typography.ts 换算层（em→pt、显式 lineHeight）+ Geist 接上
+                                    + Inter Light + feature 烘焙
+```
+
+### 6.3 工作流层：把「像不像」变成机器信号（AI-native 团队的关键杠杆）
+
+这是和「逐页人肉翻译」的本质区别。AI 移植的瓶颈从来不是写 RN 代码，而是缺 parity 反馈信号（Money Forward/Callstack 实践共识）：
+
+1. **双基线 + token 单源**：web 用 Playwright 截图自回归，RN 用 Maestro v2.2 `assertScreenshot`（`cropOn` 裁动态区 + thresholdPercentage）自回归；「web vs RN」环节用**并排拼图人审**（脚本把两端同名场景截图拼一张图）——直接像素 diff 判不可行（字体抗锯齿/行高模型/DPR/blur 实现两端永远不同）。
+2. **AI 自主迭代回路**：本地已有 XcodeBuildMCP（build_run_sim + screenshot + snapshot_ui），AI 改完代码 → 模拟器截图 → 与 web 基准并排对照 → 继续改。每刀验收从「真机凭感觉」变成「截图对照清单」。
+3. **组件变体快照**（学 OpenAI 36 变体代码块）：markdown 渲染、卡片状态、玻璃层级这些高变体组件建 RN Storybook/Sherlo 或最小化的截图矩阵。
+
+### 6.4 对现有 plan（docs/plans/2026-06-12-rn-ui-parity.mdx）的修正点
+
+| 原 plan 决策 | 修正 |
+|---|---|
+| 复用机制 = NativeWind + token + lucide + **moti** | NativeWind/token/lucide 保留；**moti 移除**，动效全部 Reanimated 4 |
+| 「className ~90% 照抄、逐页翻译降为机械流程」 | 布局/间距/排版类 className 照抄成立；**视觉表现层（玻璃/渐变/阴影/动效）不走 className，走介质映射表**（§6.2） |
+| 刀 0 基建 = NativeWind+token+字体 | 基建追加：Skia + MaskedView 安装、GlassCard/Aurora 介质重写、typography 换算层、`bg-gradient.jpg` 等资产搬运、Maestro/截图回路 |
+| 每刀验收 = 真机热更逐刀验收 | 追加截图对照基线（§6.3），验收有据可查 |
+| 「球面迭代式逼近，最终和网页感觉一样」 | 方向保留；明确 100% 像素一致不可达也不必要（两端渲染器差异），**目标改为「度量一致（token/字距/动效参数）+ 介质等效（blur/渐变/物理）」**，个别点（Liquid Glass）允许比 web 更好 |
+
+### 6.5 落地分刀概要（待拍板后细化进 plan）
+
+1. **介质基建刀**（最高优先）：装 Skia/MaskedView → 重写 GlassCard（blur+inset+渐变边）→ 重写 AuroraBackground（含资产搬运、chat 面铺底）→ moti→Reanimated 4 → typography 换算层。这一刀做完，**全 app 每个页面同时变好**（玻璃和背景是设计语言级的，1 处实现 N 处生效）。
+2. **动效补课刀**：页面转场、sheet/抽屉手势 dismiss（spring 参数照搬 web）、入场动画、shimmer、呼吸 halo。
+3. **逐页状态补全刀**：球面卡 6 态系统、渐变名修复、Geist 接上、各页细节——此时才回到「逐页翻译」，但手里已有正确介质和截图回路。
+4. **chat 流式专项刀**：block-memo markdown + 列表性能 + composer 手感。
+5. **持续**：截图基线扩面；Android 降级皮肤；热点下沉原生的评估清单（输入框/消息列表优先）。
+
+---
+
+## 附：本次调研未展开、后续可单独深挖的点
+
+- react-native-streamdown 生产成熟度实测（v0.2 太年轻，3-6 个月后复评）。
+- iOS 26 Liquid Glass 设计语言与自家玻璃拟态的融合策略（用系统材质还是自绘保品牌一致）。
+- 热点下沉原生的具体时机与成本（Discord 模式），等 RN 版主链路稳定后再评。
+- react-strict-dom 观察（Meta 外生产案例出现时复评）。

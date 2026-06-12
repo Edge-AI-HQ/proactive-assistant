@@ -3,9 +3,11 @@
  * 右侧白面板（× 关闭 + 六项大写菜单，激活项黑色高亮）+ 滑入弹簧动画。
  * 图标与 web 同名（lucide）。
  */
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { BlurView } from "expo-blur";
+import { LinearGradient } from "expo-linear-gradient";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import {
   CircleUserRound,
   ListChecks,
@@ -16,6 +18,7 @@ import {
   Zap,
 } from "lucide-react-native";
 import Animated, {
+  runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
@@ -23,6 +26,14 @@ import Animated, {
 } from "react-native-reanimated";
 
 export type MenuId = "now" | "ambient" | "tasks" | "connect" | "profile" | "setting";
+
+const styles = StyleSheet.create({
+  panel: {
+    overflow: "hidden",
+    borderLeftWidth: 1,
+    borderLeftColor: "rgba(255,255,255,0.5)",
+  },
+});
 
 const ITEMS: { id: MenuId; label: string; Icon: typeof Zap }[] = [
   { id: "now", label: "NOW", Icon: Zap },
@@ -48,11 +59,20 @@ export default function MenuDrawer({
 }) {
   const { height } = useWindowDimensions();
   const progress = useSharedValue(0);
+  // 退场动画播完再卸载（open=false 即 return null 会让 180ms 退场瞬切）。
+  const [mounted, setMounted] = useState(open);
 
   useEffect(() => {
-    progress.value = open
-      ? withSpring(1, { damping: 22, stiffness: 220 })
-      : withTiming(0, { duration: 180 });
+    if (open) {
+      setMounted(true);
+      // web SideMenu 同款 spring 参数；overshootClamping 截掉过冲——
+      // 不然 d28/s300（阻尼比≈0.81）会把面板弹出左缘再回弹（弹跳感）。
+      progress.value = withSpring(1, { damping: 28, stiffness: 300, overshootClamping: true });
+    } else {
+      progress.value = withTiming(0, { duration: 180 }, (finished) => {
+        if (finished) runOnJS(setMounted)(false);
+      });
+    }
   }, [open, progress]);
 
   const panelStyle = useAnimatedStyle(() => ({
@@ -60,7 +80,21 @@ export default function MenuDrawer({
   }));
   const dimStyle = useAnimatedStyle(() => ({ opacity: progress.value }));
 
-  if (!open) return null;
+  // web SideMenu 同款：面板上右滑关闭（跟手，progress 直接吃手指位移）。
+  const swipeClose = Gesture.Pan()
+    .activeOffsetX(10)
+    .onUpdate((e) => {
+      progress.value = Math.min(1, Math.max(0, 1 - e.translationX / PANEL_WIDTH));
+    })
+    .onEnd((e) => {
+      if (e.translationX > PANEL_WIDTH / 3 || e.velocityX > 500) {
+        runOnJS(onClose)();
+      } else {
+        progress.value = withSpring(1, { damping: 28, stiffness: 300, overshootClamping: true });
+      }
+    });
+
+  if (!mounted) return null;
 
   return (
     <View style={StyleSheet.absoluteFill}>
@@ -69,10 +103,17 @@ export default function MenuDrawer({
           <BlurView intensity={26} tint="light" style={StyleSheet.absoluteFill} />
         </Pressable>
       </Animated.View>
+      <GestureDetector gesture={swipeClose}>
       <Animated.View
-        className="absolute right-0 top-0 bg-white/95"
-        style={[{ width: PANEL_WIDTH, height }, panelStyle]}
+        className="absolute right-0 top-0"
+        style={[styles.panel, { width: PANEL_WIDTH, height }, panelStyle]}
       >
+        {/* web 面板介质：blur(48px) + 白渐变 180°(0.85→0.95) + 左缘 white/50 边。 */}
+        <BlurView intensity={75} tint="light" style={StyleSheet.absoluteFill} />
+        <LinearGradient
+          colors={["rgba(255,255,255,0.85)", "rgba(255,255,255,0.95)"]}
+          style={StyleSheet.absoluteFill}
+        />
         <Pressable onPress={onClose} hitSlop={10} className="mt-16 ml-8">
           <X size={20} color="#71717a" strokeWidth={1.8} />
         </Pressable>
@@ -83,6 +124,8 @@ export default function MenuDrawer({
               <Pressable
                 key={id}
                 onPress={() => onNavigate(id)}
+                accessibilityRole="button"
+                accessibilityLabel={label}
                 className="flex-row items-center gap-3 px-8 py-3.5"
               >
                 <Icon
@@ -101,6 +144,7 @@ export default function MenuDrawer({
           })}
         </View>
       </Animated.View>
+      </GestureDetector>
     </View>
   );
 }

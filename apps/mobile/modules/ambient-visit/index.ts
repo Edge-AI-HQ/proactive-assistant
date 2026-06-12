@@ -3,7 +3,7 @@
  * drain/ack 队列）+ CMMotionActivity 识别。Swift 核心迁移自
  * capacitor-plugins/ambient-ai 的 VisitMonitorPlugin。
  */
-import { requireNativeModule, type EventSubscription } from "expo-modules-core";
+import { requireOptionalNativeModule, type EventSubscription } from "expo-modules-core";
 
 export interface VisitEvent {
   id: string;
@@ -57,4 +57,17 @@ interface AmbientVisitModuleType {
   addListener(eventName: "focus", listener: (event: FocusEvent) => void): EventSubscription;
 }
 
-export const AmbientVisit = requireNativeModule<AmbientVisitModuleType>("AmbientVisit");
+// Swift 核心未链接的 build（模块 ios/ 源不在该机器）里不让 import 即炸——
+// 调用时才抛清晰错误（web 端 native-plugin-stub Proxy 同款 pattern）。
+export const AmbientVisit =
+  requireOptionalNativeModule<AmbientVisitModuleType>("AmbientVisit") ??
+  (new Proxy(
+    {},
+    {
+      get(_t, prop) {
+        throw new Error(
+          `AmbientVisit native module unavailable (Swift core not linked in this build): ${String(prop)}`,
+        );
+      },
+    },
+  ) as AmbientVisitModuleType);

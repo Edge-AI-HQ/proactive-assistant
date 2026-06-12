@@ -159,6 +159,9 @@ services:
       REDIS_URL: redis://redis:6379/0
       # web → chat HTTP proxy target.
       CHAT_INTERNAL_URL: http://pinai-chat:8001
+      # 本 worktree 的 git 分支名（Makefile export）→ /health dev_label，
+      # DebugPanel 的 Connected backend 卡靠它分辨手机连的是哪个 worktree。
+      PINAI_DEV_LABEL: ${PINAI_DEV_LABEL:-}
     ports:
       - "8000"
     healthcheck:

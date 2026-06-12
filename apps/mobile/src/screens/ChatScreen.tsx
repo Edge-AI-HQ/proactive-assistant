@@ -4,7 +4,7 @@
  * 重连游标、HITL 状态全部共用），本文件只有 RN 渲染层（FlatList +
  * composer），不重新实现任何协议逻辑。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -17,6 +17,9 @@ import {
   View,
 } from "react-native";
 import { Mic, SendHorizontal, Square } from "lucide-react-native";
+import { BlurView } from "expo-blur";
+import { LinearGradient } from "expo-linear-gradient";
+import Animated, { FadeInDown } from "react-native-reanimated";
 import {
   conversationInit,
   partsHaveNotifyUser,
@@ -26,6 +29,7 @@ import {
 } from "@pin-ai/core";
 import { useConversationRuntime } from "@pin-ai/state";
 
+import AiSphere from "../ui/AiSphere";
 import MarkdownText from "../components/chat/MarkdownText";
 import MessageActions from "../components/chat/MessageActions";
 import ReasoningBlock from "../components/chat/ReasoningBlock";
@@ -53,7 +57,9 @@ function Part({
   return <ToolRow part={part} running={running} />;
 }
 
-function Entry({
+/** memo 边界：流式时只有正在更新的 entry 重渲（runtime reducer 不可变
+ *  更新，未变 entry 保持引用同一；回调用 ref-latest 保持身份稳定）。 */
+const Entry = memo(function Entry({
   entry,
   isLastAssistant,
   onRetry,
@@ -64,9 +70,10 @@ function Entry({
   onRetry: (id: string, text: string) => void;
   onRegenerate: () => void;
 }) {
+  // 行入场 = web 消息卡 initial{opacity:0,y:6} 0.26s 的对应物。
   if (entry.kind === "user") {
     return (
-      <View style={styles.userRow}>
+      <Animated.View style={styles.userRow} entering={FadeInDown.duration(260)}>
         <Pressable
           style={styles.userBubble}
           disabled={!entry.failed}
@@ -78,7 +85,7 @@ function Entry({
         <Text style={styles.timestamp}>
           {new Date(entry.ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
         </Text>
-      </View>
+      </Animated.View>
     );
   }
   if (entry.kind === "assistant") {
@@ -86,7 +93,7 @@ function Entry({
       .flatMap((p) => (p.type === "text" ? [p.text] : []))
       .join("\n");
     return (
-      <View style={styles.assistantRow}>
+      <Animated.View style={styles.assistantRow} entering={FadeInDown.duration(260)}>
         {entry.parts.map((p, i) => (
           <Part
             key={i}
@@ -105,11 +112,11 @@ function Entry({
             onRegenerate={onRegenerate}
           />
         ) : null}
-      </View>
+      </Animated.View>
     );
   }
   return null; // heartbeat：debug-only，不渲染
-}
+});
 
 export interface ChatScreenProps {
   /** main = 用户单例主对话；card = 卡片执行 thread。 */
@@ -249,6 +256,19 @@ function Conversation({
     void sendMessage(text);
   }, [draft, busy, sendMessage, setDraft]);
 
+  // ref-latest：给 memo(Entry) 稳定的回调身份（runtime 返回的函数身份
+  // 不保证稳定，inline lambda 则每 render 必击穿 memo）。
+  const retryRef = useRef(retryMessage);
+  retryRef.current = retryMessage;
+  const regenRef = useRef(regenerateLast);
+  regenRef.current = regenerateLast;
+  const handleRetry = useCallback((id: string, text: string) => {
+    void retryRef.current(id, text);
+  }, []);
+  const handleRegenerate = useCallback(() => {
+    void regenRef.current();
+  }, []);
+
   return (
     <KeyboardAvoidingView
       style={styles.root}
@@ -270,14 +290,18 @@ function Conversation({
               item.kind === "assistant"
               && index === visible.length - 1
             }
-            onRetry={(id, text) => void retryMessage(id, text)}
-            onRegenerate={() => void regenerateLast()}
+            onRetry={handleRetry}
+            onRegenerate={handleRegenerate}
           />
         )}
         onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
         ListEmptyComponent={
           ready ? (
-            <Text style={styles.empty}>Ask PIN AI anything.</Text>
+            // web MinimalistLanding 同构：水晶球 + 引导文案。
+            <View style={styles.emptyWrap}>
+              <AiSphere size={216} mode="idle" />
+              <Text style={styles.empty}>Ask PIN AI anything.</Text>
+            </View>
           ) : (
             <ActivityIndicator color="#71717a" style={{ marginTop: 48 }} />
           )
@@ -292,6 +316,9 @@ function Conversation({
         />
       ) : null}
       <View style={styles.composer}>
+        {/* web composer 玻璃条（blur 16-20px + 半透底）的 RN 介质版。 */}
+        <BlurView intensity={40} tint="light" style={StyleSheet.absoluteFill} />
+        <View style={[StyleSheet.absoluteFill, styles.composerTint]} />
         <TextInput
           style={styles.input}
           value={draft}
@@ -306,7 +333,16 @@ function Conversation({
           <Pressable
             style={({ pressed }) => [styles.sendButton, pressed && { opacity: 0.7 }]}
             onPress={busy ? () => void stop() : send}
+            accessibilityRole="button"
+            accessibilityLabel={busy ? "Stop" : "Send"}
           >
+            {/* web 同款品红渐变 135° + 彩影（ConversationView 发送钮）。 */}
+            <LinearGradient
+              colors={["hsl(292, 78%, 63%)", "hsl(330, 80%, 65%)"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={StyleSheet.absoluteFill}
+            />
             {busy ? (
               <Square size={14} color="#fff" fill="#fff" />
             ) : (
@@ -321,11 +357,13 @@ function Conversation({
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#f6f4f0" },
+  // 透明：aurora 从容器透出（加载态短暂可见）。
+  center: { flex: 1, alignItems: "center", justifyContent: "center" },
   connection: { textAlign: "center", paddingVertical: 4, fontSize: 12, color: "#a16207" },
   list: { flex: 1 },
   listContent: { padding: 16, paddingBottom: 8 },
-  empty: { textAlign: "center", marginTop: 64, color: "#a1a1aa", fontSize: 15 },
+  emptyWrap: { alignItems: "center", marginTop: 48 },
+  empty: { textAlign: "center", marginTop: 8, color: "#a1a1aa", fontSize: 15 },
   userRow: { alignItems: "flex-end", marginVertical: 6 },
   userBubble: {
     backgroundColor: "#1a1a1a",
@@ -335,10 +373,17 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     maxWidth: "84%",
   },
-  userText: { color: "#fff", fontSize: 16, lineHeight: 22 },
+  // web .font-native：chat 面整体 Geist（Söhne 开源近似）。
+  userText: { color: "#fff", fontSize: 16, lineHeight: 22, fontFamily: "Geist_400Regular" },
   failed: { color: "#fca5a5", fontSize: 12, marginTop: 4 },
   assistantRow: { marginVertical: 6, maxWidth: "92%" },
-  assistantText: { color: "#1a1a1a", fontSize: 16, lineHeight: 23, marginTop: 4 },
+  assistantText: {
+    color: "#1a1a1a",
+    fontSize: 16,
+    lineHeight: 23,
+    marginTop: 4,
+    fontFamily: "Geist_400Regular",
+  },
   reasoning: { color: "#a1a1aa", fontSize: 13, fontStyle: "italic", lineHeight: 18, marginTop: 4 },
   toolCall: { color: "#71717a", fontSize: 13, marginTop: 4 },
   spinner: { alignSelf: "flex-start", marginTop: 6 },
@@ -348,9 +393,10 @@ const styles = StyleSheet.create({
     padding: 12,
     gap: 8,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#e4e4e7",
-    backgroundColor: "#faf9f7",
+    borderTopColor: "rgba(228,228,231,0.6)",
+    overflow: "hidden",
   },
+  composerTint: { backgroundColor: "rgba(250,249,247,0.55)" },
   input: {
     flex: 1,
     minHeight: 40,
@@ -362,14 +408,16 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
     fontSize: 16,
     color: "#1a1a1a",
+    fontFamily: "Geist_400Regular",
   },
   sendButton: {
-    backgroundColor: "#1a1a1a",
     borderRadius: 19,
     width: 38,
     height: 38,
     alignItems: "center",
     justifyContent: "center",
+    overflow: "hidden",
+    boxShadow: "0 4px 12px hsla(292, 78%, 63%, 0.35)",
   },
   composerIcons: { flexDirection: "row", alignItems: "center", gap: 10 },
   timestamp: { marginTop: 3, fontSize: 10, color: "#a1a1aa", textAlign: "right" },

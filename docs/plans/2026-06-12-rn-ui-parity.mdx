@@ -5,12 +5,45 @@ description: "apps/mobile 与 web 端逐页 UI/UX 对齐的实施蓝图：复用
 
 # RN iOS 完全复刻 web UI（2026-06-12 拍板）
 
-> 状态：已拍板开工。执行分支 `feat/rn-ui-chat`（PR #117 扩展为伞 PR）。
+> 状态：刀 0-8 已 merge（PR #120）；真机验收发现效果差距明显，深度调研后**修正方法论进入第二轮（介质修复）**，见下「2026-06-12 晚调研修正」。调研报告 SSOT = [`research/2026-06-12-web-to-rn-ui-parity.mdx`](../../research/2026-06-12-web-to-rn-ui-parity.mdx)。
 > 每刀一个 commit，真机热更/重装逐刀验收。
+
+## 2026-06-12 晚调研修正（用户拍板）
+
+四路调研（业界路线 / 顶级 app 栈 / RN 视觉硬技术 / 本仓库差距审计）结论：**架构方向不动**（core/state 共享 + RN UI 独立 = 2026 业界正解，不引入 Tamagui/RNW/react-strict-dom），「效果差」根因 = **渲染介质错配**——NativeWind 只对齐 token/类名语法，对齐不了渲染能力（RN 无 backdrop-filter、iOS filter 只有 brightness/opacity）。修正三条：
+
+1. **介质映射替代 className 直译**（视觉表现层不走类名翻译）：
+
+   | Web 介质 | RN 正确介质 |
+   |---|---|
+   | `backdrop-filter: blur+saturate` 玻璃 | expo-blur（iOS UIVisualEffectView，light/material tint 自带 saturate 增益）+ RN 0.76+ `boxShadow`（含 inset 高光） |
+   | aurora 多层 radial 斑 + blur(60) + mix-blend screen | Skia 静态画斑（带 Blur）+ Reanimated transform 漂移 + RN 0.77+ `mixBlendMode:'screen'`；`bg-gradient.jpg` 资产搬运 |
+   | `bg-clip-text` 渐变文字 / shimmer | `@react-native-masked-view/masked-view` + LinearGradient |
+   | framer-motion 动效 | **弃 moti（停滞 15 个月，实际零使用，删依赖）**→ Reanimated 4（spring 与 framer 同物理模型、参数同名可直搬） |
+   | 流式 markdown | block-memo 策略（完成块永不重渲）；react-native-streamdown 太年轻先观察 |
+   | 真 3D（r3f） | 不用（expo-gl 错配 + New Arch issue）；球面云保留手算投影 + z 排序 |
+
+2. **验收从凭感觉改为截图对照**：XcodeBuildMCP 模拟器截图 vs web 基准并排对照；后续建 Maestro `assertScreenshot` 基线。web↔RN 直接像素 diff 不可行（渲染器差异），用并排拼图人审。
+3. **目标校准**：100% 像素一致不可达也不必要，目标 =「度量一致（token/字距/动效参数）+ 介质等效（blur/渐变/物理）」；个别点（iOS 26 Liquid Glass）允许比 web 更好。Android blur 贵，准备实色降级皮肤（web 已有 `native-power-save` 同构先例）。
+
+### 第二轮分刀（全部走伞 PR #127，用户 merge）
+
+| 刀 | 内容 | 状态 |
+|---|---|---|
+| 9 介质基建 | Skia+MaskedView 安装、GlassCard 重写（blur+inset 高光）、AuroraBackground 重写（jpg 资产+Skia 斑+screen 混合+三相位漂移）、chat 面铺底、GradientText（修问候名硬编码）、typography 换算层+Geist 接上、删 moti | ✅ 2d76d964 |
+| 10 动效补课 | 页面转场（FadeIn/Out 200ms）、ChatSheet spring(320/32/.9)+左缘跟手下沉 dismiss、抽屉右滑关闭+退场修复、ShimmerText 扫光、消息行入场、AmbientStatusCard 按 web 真源重做（呼吸 halo+自绘 toggle） | ✅ 309590bd |
+| 11 球面卡 6 态 | deriveCardUiStatus（core 共享）+engaged 乐观集、彩 ring/徽章/spinner/category 图标、深度阴影、背面 pointerEvents 门控、姿态记忆、排版对齐 | ✅ 05660bd8 |
+| 12 chat 流式 | MarkdownText block-memo（fence-aware 切块，完成块永不重 parse）、memo(Entry)+ref-latest 回调 | ✅ 58060cbd |
+
+**刀 13（差距清单收尾 + 模拟器验收回路）**：dev-auth 旁路（镜像 web，模拟器无 OAuth 全链路可验）+ 核心交互 accessibility（自动化前提）+ CardDetailSheet 玻璃化（web vaul 介质版：in-tree blur 面板 + 下拉 dismiss，替代系统 pageSheet）+ AiSphere 水晶球（webm→H.264 + expo-video + mixBlendMode multiply + svg 径向羽化 mask，chat 空态接入）+ composer 玻璃条 + spring 全面 overshootClamping（修弹跳）。
+
+差距清单 #18 顶部留白：经度量关闭——web `max(72px, safe+12)` vs RN `safe+16`，现代 iPhone（safe≥59）两者差 ≤4px，不改。#19 global.css glass/glow 变量块：mobile 端无消费者（组件用显式值），按低冗余原则不加死变量。
+
+待真机验收的遗留：blur intensity/底色初值校准（代码已注释校准点）、token 攒批与 FlashList（动共享层/列表内核，单独拍板）、Maestro assertScreenshot 基线落 CI、ambient Swift 源 checkin（原作者）。
 
 ## 已拍板决策（2026-06-12，用户确认）
 
-1. **复用机制 = NativeWind 4 + 共享 tailwind 设计 token + lucide-react-native（图标同名）+ moti（动效 props 形似 framer-motion）**。组件本体无法跨平台 import（RN 无 DOM/CSS 引擎——这是 Electron 能 100% 复用而 RN 不能的本质），但该组合把逐页翻译降为机械流程：`div→View`、className ~90% 照抄、图标/动效声明照搬。
+1. **复用机制 = NativeWind 4 + 共享 tailwind 设计 token + lucide-react-native（图标同名）**。~~+ moti~~（调研后弃用，动效改 Reanimated 4——见上修正）。组件本体无法跨平台 import（RN 无 DOM/CSS 引擎——这是 Electron 能 100% 复用而 RN 不能的本质），布局/排版类 className 照抄成立；**视觉表现层（玻璃/渐变/阴影/动效）走介质映射表，不走 className 直译**。
 2. **导航完全照 web**：删 bottom tab；右上 齿轮+汉堡 双圆钮、右侧滑出抽屉（六项大写菜单 + 整页模糊 + 右缘滑入手势）、chat 走底部 ASK PIN AI 上拉（不在菜单）。
 3. **Setting 支付页 dev 期全量复刻**（含 Stripe 管理）；上线 App Store 前按审核政策再改。
 4. **球面迭代式逼近**：第一版 = 景深+漂浮的玻璃卡片云，随真机反馈逐轮调，最终目标「和网页的感觉一样」。

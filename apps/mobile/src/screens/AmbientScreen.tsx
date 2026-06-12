@@ -26,7 +26,7 @@ import { isAmbientEnabled, startAmbient, stopAmbient } from "../ambient/runtime"
 import { supabase } from "../lib/supabase";
 
 export interface HeaderProps {
-  onOpenSettings: () => void;
+  onOpenDebug: () => void;
   onOpenMenu: () => void;
 }
 
