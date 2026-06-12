@@ -56,7 +56,7 @@ export default function TasksScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#f6f4f0" },
+  root: { flex: 1 },
   content: { padding: 16, gap: 8 },
   empty: { textAlign: "center", marginTop: 80, color: "#a1a1aa" },
   row: {

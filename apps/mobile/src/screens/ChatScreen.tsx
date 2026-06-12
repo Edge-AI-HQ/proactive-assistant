@@ -25,17 +25,30 @@ import {
 } from "@pin-ai/core";
 import { useConversationRuntime } from "@pin-ai/state";
 
+import MarkdownText from "../components/chat/MarkdownText";
+import ReasoningBlock from "../components/chat/ReasoningBlock";
+import TodoStrip from "../components/chat/TodoStrip";
+import ToolRow from "../components/chat/ToolRow";
+
 import { notifyThreadActivity, readLocalHistory } from "../lib/sync/sync-bootstrap";
 
-function Part({ part }: { part: ConversationContentPart }) {
+function Part({
+  part,
+  isTail,
+  running,
+}: {
+  part: ConversationContentPart;
+  /** 该 part 是 entry 的最后一个（流式追加的活跃尾部）。 */
+  isTail: boolean;
+  running: boolean;
+}) {
   if (part.type === "text") {
-    return part.text ? <Text style={styles.assistantText}>{part.text}</Text> : null;
+    return part.text ? <MarkdownText text={part.text} /> : null;
   }
   if (part.type === "reasoning") {
-    return part.text ? <Text style={styles.reasoning}>{part.text}</Text> : null;
+    return part.text ? <ReasoningBlock text={part.text} streaming={running && isTail} /> : null;
   }
-  // tool-call：一行工具名（完整 tool steps UI 是后续刀）。
-  return <Text style={styles.toolCall}>⚙ {part.toolName}</Text>;
+  return <ToolRow part={part} running={running} />;
 }
 
 function Entry({
@@ -63,9 +76,16 @@ function Entry({
     return (
       <View style={styles.assistantRow}>
         {entry.parts.map((p, i) => (
-          <Part key={i} part={p} />
+          <Part
+            key={i}
+            part={p}
+            isTail={i === entry.parts.length - 1}
+            running={entry.running}
+          />
         ))}
-        {entry.running ? <ActivityIndicator size="small" color="#71717a" style={styles.spinner} /> : null}
+        {entry.running && entry.parts.length === 0 ? (
+          <ActivityIndicator size="small" color="#71717a" style={styles.spinner} />
+        ) : null}
       </View>
     );
   }
@@ -182,6 +202,7 @@ function Conversation({
     retryMessage,
     awaitingDecision,
     submitDecision,
+    threadId,
   } = useConversationRuntime({
     session: sessionKey,
     bootstrap,
@@ -234,6 +255,7 @@ function Conversation({
           )
         }
       />
+      {threadId ? <TodoStrip sessionKey={threadId} /> : null}
       {awaitingDecision ? (
         <HitlBar
           key={awaitingDecision.toolUseId}
@@ -263,7 +285,7 @@ function Conversation({
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#f6f4f0" },
+  root: { flex: 1 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#f6f4f0" },
   connection: { textAlign: "center", paddingVertical: 4, fontSize: 12, color: "#a16207" },
   list: { flex: 1 },

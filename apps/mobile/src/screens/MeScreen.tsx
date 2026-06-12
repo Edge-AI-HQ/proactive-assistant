@@ -73,7 +73,7 @@ export default function MeScreen({
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#f6f4f0" },
+  root: { flex: 1 },
   content: { padding: 16, paddingBottom: 40 },
   card: { backgroundColor: "#fff", borderRadius: 16, padding: 16 },
   row: {

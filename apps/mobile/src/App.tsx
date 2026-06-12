@@ -7,6 +7,8 @@ import "../src/lib/transport-bootstrap";
 
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Modal, StyleSheet, View } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -103,19 +105,29 @@ function Root() {
 
 export default function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <SafeAreaProvider>
-        <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
-          <StatusBar style="dark" />
-          <Root />
-        </SafeAreaView>
-      </SafeAreaProvider>
-    </QueryClientProvider>
+    <GestureHandlerRootView style={styles.safe}>
+      <QueryClientProvider client={queryClient}>
+        <SafeAreaProvider>
+          {/* 品牌渐变底（web 的 bg-gradient 对应物）。 */}
+          <LinearGradient
+            colors={["#f8f5ef", "#f3eee6", "#eef0f4"]}
+            start={{ x: 0.1, y: 0 }}
+            end={{ x: 0.9, y: 1 }}
+            style={StyleSheet.absoluteFill}
+          />
+          <SafeAreaView style={styles.safeTransparent} edges={["top", "bottom"]}>
+            <StatusBar style="dark" />
+            <Root />
+          </SafeAreaView>
+        </SafeAreaProvider>
+      </QueryClientProvider>
+    </GestureHandlerRootView>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#f6f4f0" },
+  safeTransparent: { flex: 1 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#f6f4f0" },
   shell: { flex: 1 },
   screen: { flex: 1 },

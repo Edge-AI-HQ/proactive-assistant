@@ -130,7 +130,7 @@ export default function ConnectScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#f6f4f0" },
+  root: { flex: 1 },
   content: { padding: 16, paddingBottom: 32 },
   section: {
     fontSize: 13,
