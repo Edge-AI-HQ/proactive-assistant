@@ -401,6 +401,8 @@ Every card must meet ALL:
   already cited in `sources[]`; referencing anything else is a
   grounding violation. `label` must be one of `observed` /
   `cross_referenced` / `pattern_matched` / `flagged` / `decided`.
+  Keep each `detail` under 25 words — longer text gets hard-clipped
+  at 200 chars mid-sentence in the UI.
 - ambient transcript citations must preserve attribution. `self:` or
   `payload.self_text` can support user intent; non-self speaker labels
   can support context only. Do not write "you said" unless the cited
