@@ -231,9 +231,20 @@ class AgentRunWorker:
             try:
                 await asyncio.sleep(_REAPER_INTERVAL)
                 async with service_tx(self._pool) as conn:
-                    n = await reap_stale_runs(conn, ttl_seconds=_RUN_STALE_TTL, limit=100)
-                if n:
-                    logger.info("agent worker reaped %d stale run(s)", n)
+                    reaped = await reap_stale_runs(conn, ttl_seconds=_RUN_STALE_TTL, limit=100)
+                if reaped:
+                    logger.info("agent worker reaped %d stale run(s)", len(reaped))
+                # A reaped run's producer crashed before it could emit any
+                # terminal frame — close the loop for clients still tailing.
+                # Superseded runs (is_latest=False) stay silent: their pending
+                # messages were already replayed by a newer run that emitted
+                # its own terminal frames — erroring now would drop a ghost
+                # '_Error: run lease expired_' bubble after the real answer.
+                for run_id, session_id, is_latest in reaped:
+                    if session_id and is_latest:
+                        await self._publish_terminal_frames(
+                            session_id, run_id, error="run lease expired (worker crashed)"
+                        )
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -351,7 +362,7 @@ class AgentRunWorker:
             run_id=run_id,
         )
         try:
-            recorder, outcome = await self._relay_frames(
+            recorder, outcome, stream_error = await self._relay_frames(
                 session_id=session_id, user_id=user_id, owner=owner, run_id=run_id, frames=frames
             )
         except asyncio.CancelledError:
@@ -371,7 +382,9 @@ class AgentRunWorker:
             await self._persist_user_turns(session_id, user_id, run_id, msg_ids, msgs)
             return
         if agent_kind == "proactive":
-            await self._proactive_finalize(session_id, user_id, run_id, msg_ids, msgs, recorder)
+            await self._proactive_finalize(
+                session_id, user_id, run_id, msg_ids, msgs, recorder, error=stream_error
+            )
         else:
             await self._finalize_turn(
                 session_id,
@@ -381,6 +394,7 @@ class AgentRunWorker:
                 recorder,
                 regenerate=regenerate,
                 input_rows=_input_rows(msgs),
+                error=stream_error,
             )
             # A turn that ran this long has almost certainly outlived the
             # user's attention — pull them back. Proactive has its own
@@ -417,7 +431,7 @@ class AgentRunWorker:
             run_id=awaiting.id,
         )
         try:
-            recorder, outcome = await self._relay_frames(
+            recorder, outcome, stream_error = await self._relay_frames(
                 session_id=session_id,
                 user_id=user_id,
                 owner=owner,
@@ -445,7 +459,13 @@ class AgentRunWorker:
         # the decision, complete the run.
         partial = (awaiting.pending_action or {}).get("partial_parts") or []
         await self._finalize_turn(
-            session_id, user_id, awaiting.id, dmsg_ids, recorder, partial_parts=partial
+            session_id,
+            user_id,
+            awaiting.id,
+            dmsg_ids,
+            recorder,
+            partial_parts=partial,
+            error=stream_error,
         )
 
     async def _relay_frames(
@@ -456,15 +476,20 @@ class AgentRunWorker:
         owner: str,
         run_id: str,
         frames: AsyncIterator[Frame],
-    ) -> tuple[ChatTurnRecorder, str]:
+    ) -> tuple[ChatTurnRecorder, str, str | None]:
         """Relay one execution's frame stream: publish (FrameBus) + record
         (history) + periodic fencing refresh + detect a HITL pause. Returns
-        (recorder, outcome) where outcome is 'done' | 'awaiting' | 'stolen' —
-        the caller writes terminal DB state. On requires_action it captures the
-        run's pending_action here (so the frame isn't lost) + returns
-        'awaiting'."""
+        (recorder, outcome, stream_error) where outcome is 'done' | 'awaiting'
+        | 'stolen' — the caller writes terminal DB state. On requires_action it
+        captures the run's pending_action here (so the frame isn't lost) +
+        returns 'awaiting'. stream_error is the chat:error payload when the
+        agent failed INSIDE the stream (chat's SSE layer swallows the exception
+        into chat:error + a finally chat:done, so the stream still ends
+        'done') — the caller must then record the run as failed, or /cards
+        runStatus would resurrect the errored turn as succeeded."""
         recorder = ChatTurnRecorder()
         count = 0
+        stream_error: str | None = None
         async for frame in frames:
             await self._framebus.publish(session_id, frame)
             recorder.consume_event(frame)
@@ -475,7 +500,9 @@ class AgentRunWorker:
                         session_id=session_id, owner=owner, ttl_seconds=_LEASE_TTL
                     ):
                         logger.warning("lease stolen during relay session=%s; aborting", session_id)
-                        return recorder, "stolen"
+                        return recorder, "stolen", stream_error
+            if frame.get("type") == "chat:error" and stream_error is None:
+                stream_error = str((frame.get("data") or {}).get("error") or "chat stream error")
             if frame.get("type") == _EV_REQUIRES_ACTION:
                 # Capture what the agent streamed BEFORE the pause (reasoning /
                 # text) onto the run so resume can prepend it to the assistant
@@ -483,8 +510,8 @@ class AgentRunWorker:
                 await self._set_awaiting(
                     session_id, user_id, run_id, frame, partial_parts=recorder.parts()
                 )
-                return recorder, "awaiting"
-        return recorder, "done"
+                return recorder, "awaiting", stream_error
+        return recorder, "done", stream_error
 
     async def _persist_user_turns(
         self,
@@ -546,6 +573,8 @@ class AgentRunWorker:
         msg_ids: list[int],
         msgs: list[Message],
         recorder: ChatTurnRecorder,
+        *,
+        error: str | None = None,
     ) -> None:
         """proactive clean finish — persisted to pai_chat_messages like any turn
         so a reconnect / Debug-toggle rebuilds the transcript from the table:
@@ -564,9 +593,41 @@ class AgentRunWorker:
             recorder,
             input_rows=_input_rows(msgs),
             assistant_trigger="tick" if all_heartbeat else "user",
+            error=error,
         )
 
     # ── terminal transitions ─────────────────────────────────────────
+    async def _publish_terminal_frames(
+        self, session_id: str, run_id: str, *, error: str | None = None
+    ) -> None:
+        """Terminal frames for runs that never get them from the chat stream.
+
+        The happy path's `chat:done` rides the agent stream itself (chat's
+        SSE layer emits it in a finally), but when the worker never relays a
+        stream end — ChatRunError, user cancel, shutdown, reaped crash — no
+        terminal frame reaches the FrameBus and a connected client's spinner
+        leaks until it re-polls. DB state is already terminal when this runs;
+        the frames are best-effort UX, so publish failures only log."""
+        ts = int(time.time() * 1000)
+        frames: list[Frame] = []
+        if error is not None:
+            frames.append(
+                {"type": "chat:error", "ts": ts, "traceId": run_id, "data": {"error": error}}
+            )
+        frames.append({"type": "chat:done", "ts": ts, "traceId": run_id, "data": {}})
+        for frame in frames:
+            try:
+                await self._framebus.publish(session_id, frame)
+            except Exception:
+                # Keep trying the rest — chat:done matters more than chat:error
+                # (it's what stops the client spinner).
+                logger.warning(
+                    "terminal frame publish failed session=%s run=%s type=%s",
+                    session_id,
+                    run_id,
+                    frame.get("type"),
+                )
+
     async def _finalize_turn(
         self,
         session_id: str,
@@ -579,6 +640,7 @@ class AgentRunWorker:
         regenerate: bool = False,
         input_rows: list[InputRow] | None = None,
         assistant_trigger: Trigger = "user",
+        error: str | None = None,
     ) -> None:
         """Clean finish: complete the run, consume the batch, record history.
         `input_rows` is the input turns to write (built from the mailbox batch
@@ -588,13 +650,20 @@ class AgentRunWorker:
         before a HITL pause (CC1), prepended to the assistant parts.
         `assistant_trigger` tags the assistant turn ('tick' for a
         heartbeat-triggered proactive turn) so a reload matches the live Debug
-        classification."""
+        classification. `error` is the in-stream chat:error payload (the agent
+        failed but chat's SSE layer still ended the stream cleanly): history
+        is recorded the same — the user watched those parts stream — but the
+        run lands 'failed' so /cards runStatus tells the truth after a
+        relaunch. No terminal frames here: the stream already carried its own
+        chat:error + chat:done."""
         assistant_parts = [*(partial_parts or []), *recorder.parts()]
         assistant_msg_id: int | None = None
         async with user_scoped_tx(self._pool, user_id) as conn:
-            await RunRepository(user_id, conn).complete(
-                run_id=run_id, result={"recorded_parts": len(assistant_parts)}
-            )
+            runs = RunRepository(user_id, conn)
+            if error is not None:
+                await runs.fail(run_id=run_id, error=error)
+            else:
+                await runs.complete(run_id=run_id, result={"recorded_parts": len(assistant_parts)})
             await MailboxRepository(user_id, conn).mark_consumed(message_ids=msg_ids, run_id=run_id)
             chat_msgs = ChatMessagesRepository(user_id=user_id, conn=conn)
             if regenerate:
@@ -652,7 +721,10 @@ class AgentRunWorker:
                 },
             )
         await notify_run_status(
-            self._pool, session_id=session_id, run_id=run_id, status="succeeded"
+            self._pool,
+            session_id=session_id,
+            run_id=run_id,
+            status="failed" if error is not None else "succeeded",
         )
 
     async def _fail(
@@ -670,6 +742,9 @@ class AgentRunWorker:
             await RunRepository(user_id, conn).fail(run_id=run_id, error=error)
             await MailboxRepository(user_id, conn).mark_consumed(message_ids=msg_ids, run_id=run_id)
         await notify_run_status(self._pool, session_id=session_id, run_id=run_id, status="failed")
+        # The chat stream never delivered its terminal frame (that's why we're
+        # here) — emit one so the FE stops its spinner without re-polling.
+        await self._publish_terminal_frames(session_id, run_id, error=error)
 
     async def _mark_cancelled(
         self, session_id: str, user_id: int, run_id: str, msg_ids: list[int]
@@ -697,6 +772,11 @@ class AgentRunWorker:
             await notify_run_status(
                 self._pool, session_id=session_id, run_id=run_id, status="cancelled"
             )
+        # Cancelled relays end without a chat-stream terminal frame; close the
+        # turn for any other client tailing this session (the canceller's own
+        # UI already flipped locally). Shutdown included: frames live in
+        # Redis, so an SSE held by another instance still benefits.
+        await self._publish_terminal_frames(session_id, run_id)
 
     async def _set_awaiting(
         self,

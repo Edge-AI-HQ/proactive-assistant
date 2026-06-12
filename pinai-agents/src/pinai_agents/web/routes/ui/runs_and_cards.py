@@ -6,7 +6,8 @@ proactive-ai-frontend (`hooks/usePipeline.ts`, `useCards.ts`,
 
 - /runs/active → { ok, run } where run is the row in camelCase or null
 - /runs/{id}   → { ok, run } where run carries finalCards / batchFeedback
-- /cards       → { cards: [{ card, runId, runCompletedAt, score, latestOutcome, outcomeAt }] }
+- /cards       → { cards: [{ card, runId, runCompletedAt, score, latestOutcome,
+                  outcomeAt, runStatus }] }
 - /status      → { pipelineRunning, latestRun, lastResult, asOf }
 
 Direct SQL (no Repository) intentionally — the table's other readers /
@@ -25,6 +26,13 @@ from ...auth.deps import User, current_user, get_pool
 from ...db.rls import user_scoped_tx
 
 router = APIRouter(prefix="/api", tags=["runs"])
+
+# pai_agent_runs.status values (083_pai_agent_core.sql CHECK constraint).
+# /cards re-validates against this set so a future enum addition can't leak
+# an unknown literal to the TS contract unnoticed.
+_AGENT_RUN_STATUSES = frozenset(
+    {"pending", "running", "awaiting_input", "succeeded", "failed", "cancelled"}
+)
 
 
 # ── helpers ──
@@ -218,13 +226,23 @@ async def list_cards(
     """Flat card list across recent runs.
 
     Wire shape (TS contract `useCards.parseEntries`):
-      { cards: [{ card, runId, runCompletedAt, score }] }
+      { cards: [{ card, runId, runCompletedAt, score, latestOutcome,
+                  outcomeAt, runStatus }] }
       score: { overall: number, pass: boolean } | null
+      runStatus: pai_agent_runs.status | null
 
     Per-card score comes from pai_card_evaluations (1:1 with card_id).
     Latest user outcome comes from pai_feedback_events, so cold-started
     clients do not need to race /feedback/{dismissed,completed} against
     /cards before deciding whether a card is still actionable.
+
+    `runStatus` is the latest pai_agent_runs row of the card's execution
+    thread (session_id = 'card-thread-<card_id>'), so a relaunched client
+    can tell running / awaiting_input / succeeded / failed apart instead of
+    keeping that state in memory. null = the card's thread never ran. Note
+    the generator fanout pre-runs top cards on the same path, so a terminal
+    runStatus alone does NOT imply the user started the card — the FE gates
+    on its own engagement signals (latestOutcome / local action state).
     """
     async with user_scoped_tx(pool, user.id) as conn:
         cur = await conn.execute(
@@ -259,6 +277,21 @@ async def list_cards(
                 '{}'::jsonb
               ) AS outcomes
               FROM latest_feedback
+            ),
+            -- Latest execution-run status per card thread. substr strips the
+            -- 'card-thread-' prefix (12 chars) so the map is keyed by card_id,
+            -- same as evals / outcomes.
+            card_run_map AS (
+              SELECT COALESCE(
+                jsonb_object_agg(substr(session_id, 13), status),
+                '{}'::jsonb
+              ) AS run_statuses
+              FROM (
+                SELECT DISTINCT ON (session_id) session_id, status
+                FROM pai_agent_runs
+                WHERE user_id = %s AND session_id LIKE 'card-thread-%%'
+                ORDER BY session_id, created_at DESC
+              ) latest_runs
             )
             SELECT
               r.id,
@@ -272,20 +305,23 @@ async def list_cards(
                 ) FILTER (WHERE e.card_id IS NOT NULL),
                 '{}'::jsonb
               ) AS evals,
-              fm.outcomes
+              fm.outcomes,
+              crm.run_statuses
             FROM pai_pipeline_runs r
             LEFT JOIN pai_card_evaluations e
               ON e.user_id = r.user_id AND e.run_id = r.run_id
             CROSS JOIN feedback_map fm
+            CROSS JOIN card_run_map crm
             WHERE r.user_id = %s
               AND r.status = 'completed'
               AND r.final_cards IS NOT NULL
               AND r.completed_at IS NOT NULL
-            GROUP BY r.id, r.run_id, r.completed_at, r.final_cards, fm.outcomes
+            GROUP BY r.id, r.run_id, r.completed_at, r.final_cards,
+                     fm.outcomes, crm.run_statuses
             ORDER BY r.completed_at DESC
             LIMIT %s
             """,
-            (user.id, user.id, limit),
+            (user.id, user.id, user.id, limit),
         )
         rows = await cur.fetchall()
 
@@ -296,6 +332,7 @@ async def list_cards(
         run_completed_at = r["completed_at"].isoformat()
         evals = r.get("evals") or {}
         outcomes = r.get("outcomes") or {}
+        run_statuses = r.get("run_statuses") or {}
         for c in r.get("final_cards") or []:
             if not isinstance(c, dict):
                 continue
@@ -321,6 +358,12 @@ async def list_cards(
                 raw_at = outcome_raw.get("outcomeAt")
                 latest_outcome = raw_outcome if isinstance(raw_outcome, str) else None
                 outcome_at = raw_at if isinstance(raw_at, str) else None
+            run_status_raw = (
+                run_statuses.get(card_id)
+                if isinstance(card_id, str) and isinstance(run_statuses, dict)
+                else None
+            )
+            run_status = run_status_raw if run_status_raw in _AGENT_RUN_STATUSES else None
             out.append(
                 {
                     "card": c,
@@ -329,6 +372,7 @@ async def list_cards(
                     "score": score,
                     "latestOutcome": latest_outcome,
                     "outcomeAt": outcome_at,
+                    "runStatus": run_status,
                 }
             )
             if len(out) >= limit:

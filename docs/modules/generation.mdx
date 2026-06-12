@@ -98,7 +98,7 @@ sequenceDiagram
 | 持久化 | `persist_generator_run`:`pai_pipeline_runs` 一行(`id=run_id`,`run_id=run_id` 两列同值,`status='completed'`,`final_cards JSONB`,`iterations JSONB`,`trigger`,`started_at`,`completed_at`);`_persist_evaluations`:返回给 web 的卡对应评价写一行 `pai_card_evaluations`(ON CONFLICT (user_id, card_id) DO UPDATE),全部候选都未 pass 时会保留最高分候选及其 failed 评价。 |
 | Reward review | 内部 review 不改 generation 主链路。`/api/reward-dashboard/*` 只读 `pai_pipeline_runs.final_cards` + `pai_card_evaluations`,把用户 open / score 和 reviewer score 追加到 `pai_card_reward_events`,案例库写 `pai_card_casebook`,trace artifact 写 `pai_trace_artifacts`。 |
 | LangSmith metadata | generator 每个固定 stage invocation 带 `metadata={pinai_run_id, pinai_user_id, pinai_agent:'generator', pinai_generator_stage}` 和 `tags=['pinai','generator','stage:...']`,reward dashboard 用这个稳定绑定 trace,不靠时间窗口猜。 |
-| 前端轮询 | `usePipeline.ts` 用 sessionStorage 恢复 run state;`useActiveAgentRuns.ts` 轮询 `/api/agent-runs/active`;`useGenerationStatus.ts` 取 `pai_scheduled_task_runs` 状态;成功后 `useCards.ts` 拉 `/api/cards`。`/api/cards` 除了 `card/runId/score` 还带 `latestOutcome/outcomeAt`,让 cold-start 后的 sphere/drawer 直接按用户已完成或已隐藏状态恢复。 |
+| 前端轮询 | `usePipeline.ts` 用 sessionStorage 恢复 run state;`useActiveAgentRuns.ts` 轮询 `/api/agent-runs/active`;`useGenerationStatus.ts` 取 `pai_scheduled_task_runs` 状态;成功后 cards query(`packages/state/src/queries/cards.ts` 的 `useCardsQuery`)拉 `/api/cards`。`/api/cards` 除了 `card/runId/score` 还带 `latestOutcome/outcomeAt`(用户处置)和 `runStatus`(卡片执行线程 `card-thread-<card_id>` 最新一条 `pai_agent_runs.status`,null=没跑过),让 cold-start 后的 sphere/drawer 同时恢复用户处置和执行中/待输入/已完成/失败状态。前端用 `latestOutcome`/本地参与信号做门槛(fanout 预跑的卡不能只凭 runStatus 显示完成态),派生逻辑在 `packages/core/src/domain/card-run-status.ts`。 |
 
 ## chat 端 generator agent
 

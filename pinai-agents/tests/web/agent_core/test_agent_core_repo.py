@@ -108,8 +108,21 @@ async def test_run_lifecycle_and_hitl(pool, user_ids):
         aw = await r.get_awaiting(session_id=sid)
         assert aw is not None and aw.id == rid and aw.stop_reason == "requires_action"
         assert aw.pending_action == {"tool_use_id": "t1", "tool_name": "send_email"}
+        # Backdate started_at past any reap TTL: resume must reset it, or a
+        # long human pause would get the resumed LIVE run reaped within a tick.
+        await conn.execute(
+            "UPDATE pai_agent_runs SET started_at = NOW() - INTERVAL '1 hour' WHERE id = %s",
+            (rid,),
+        )
         # resume → complete
         await r.resume_running(run_id=rid)
+        cur = await conn.execute(
+            "SELECT started_at > NOW() - INTERVAL '1 minute' AS fresh "
+            "FROM pai_agent_runs WHERE id = %s",
+            (rid,),
+        )
+        row = await cur.fetchone()
+        assert row is not None and row["fresh"] is True
         await r.complete(run_id=rid, result={"ok": True})
         done = await r.get(run_id=rid)
         assert done is not None and done.status == "succeeded" and done.result == {"ok": True}
@@ -135,10 +148,61 @@ async def test_scan_and_reap(pool, user_ids):
         )
     async with service_tx(pool) as conn:
         reaped = await reap_stale_runs(conn, ttl_seconds=-1, limit=100)
-    assert reaped >= 1
+    # Returns (run_id, session_id, is_latest) triples so the reaper can
+    # publish terminal frames; ttl=-1 may sweep other tests' runs too, so
+    # check membership. This run is its session's only run → is_latest.
+    assert (rid, sid, True) in reaped
     async with user_scoped_tx(pool, user_a) as conn:
         run = await RunRepository(user_a, conn).get(run_id=rid)
     assert run is not None and run.status == "failed"
+    # A run whose session lease is HELD is alive (the relay keeps refreshing
+    # it) — the reaper must skip it, or it would fail a live run and publish
+    # phantom terminal frames into its stream.
+    sid_live = _sid()
+    async with user_scoped_tx(pool, user_a) as conn:
+        s2 = SessionRepository(user_a, conn)
+        await s2.ensure_session(session_id=sid_live, agent_kind="main_chat")
+        assert await s2.acquire_lease(session_id=sid_live, owner="w1", ttl_seconds=600)
+        rid_live = await RunRepository(user_a, conn).create(
+            session_id=sid_live, agent_kind="main_chat", trigger="user"
+        )
+    async with service_tx(pool) as conn:
+        reaped2 = await reap_stale_runs(conn, ttl_seconds=-1, limit=100)
+    assert all(r_id != rid_live for r_id, _, _ in reaped2)
+    async with user_scoped_tx(pool, user_a) as conn:
+        live = await RunRepository(user_a, conn).get(run_id=rid_live)
+    assert live is not None and live.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_reap_marks_superseded_run_not_latest(pool, user_ids):
+    """A crashed run whose messages were already replayed by a newer run on
+    the same session must come back is_latest=False — the reaper still fails
+    the row (DB truth) but must NOT publish terminal frames, or the live
+    stream gets a ghost '_Error: run lease expired_' bubble minutes after the
+    replay's real answer."""
+    user_a, _ = user_ids
+    sid = _sid()
+    async with user_scoped_tx(pool, user_a) as conn:
+        await SessionRepository(user_a, conn).ensure_session(session_id=sid, agent_kind="main_chat")
+        rid_crashed = await RunRepository(user_a, conn).create(
+            session_id=sid, agent_kind="main_chat", trigger="user"
+        )
+    # The replay: a newer run on the same session that finished cleanly.
+    # Separate transaction — created_at defaults to the tx timestamp, and the
+    # is_latest comparison needs the replay to be strictly newer.
+    async with user_scoped_tx(pool, user_a) as conn:
+        r = RunRepository(user_a, conn)
+        rid_replay = await r.create(session_id=sid, agent_kind="main_chat", trigger="user")
+        await r.complete(run_id=rid_replay)
+    async with service_tx(pool) as conn:
+        reaped = await reap_stale_runs(conn, ttl_seconds=-1, limit=100)
+    assert (rid_crashed, sid, False) in reaped
+    async with user_scoped_tx(pool, user_a) as conn:
+        crashed = await RunRepository(user_a, conn).get(run_id=rid_crashed)
+        replay = await RunRepository(user_a, conn).get(run_id=rid_replay)
+    assert crashed is not None and crashed.status == "failed"
+    assert replay is not None and replay.status == "succeeded"
 
 
 @pytest.mark.asyncio

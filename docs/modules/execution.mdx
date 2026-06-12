@@ -246,7 +246,7 @@ Browserbase context(`ensure_browserbase_context`)在 onboarding 完成时(`profi
 | `chat:group:title` | work group 异步标题(Haiku 生成,组封口时调度,done 前 flush≤3s) | `anchorToolCallId`(组首 tool-call,前端/recorder 回填 `groupTitle`)、`title` |
 | `chat:requires_action` | HITL:side-effect 工具等审批 | `interruptId`、`toolName`、`args`、`allowedDecisions` |
 | `chat:error` | agent / 系统错误 | `error` |
-| `chat:done` | turn 结束(finally 保证发出) | — |
+| `chat:done` | turn 结束(chat 流 finally 保证发出;chat 流没送达的终止——worker `_fail`/cancel/reaper——由 worker `_publish_terminal_frames` 补发 `chat:error`+`chat:done` 到 FrameBus,best-effort) | — |
 | `chat:persisted` | finalize 后回填真实 message id | `messageId` |
 | `proactive:tick` | 心跳输入(proactive 线程) | `text`、`windowStart/End` |
 

@@ -128,12 +128,18 @@ class RunRepository(UserScopedRepository):
             )
 
     async def resume_running(self, *, run_id: str) -> None:
-        """Move a paused run back to running on resume (Command(resume=))."""
+        """Move a paused run back to running on resume (Command(resume=)).
+
+        Resets started_at: the reaper's stale-TTL clock keys on it, and a
+        human can legitimately sit on an approval for longer than the TTL —
+        without the reset the resumed LIVE run would be reaped (and its
+        session spammed with phantom chat:error frames) within a minute."""
         async with self._conn.cursor() as cur:
             await cur.execute(
                 """
                 UPDATE pai_agent_runs
-                SET status = 'running', stop_reason = NULL, pending_action = NULL
+                SET status = 'running', stop_reason = NULL, pending_action = NULL,
+                    started_at = NOW()
                 WHERE id = %s AND user_id = %s AND status = 'awaiting_input'
                 """,
                 (run_id, self._user_id),
@@ -181,11 +187,26 @@ class RunRepository(UserScopedRepository):
 
 async def reap_stale_runs(
     conn: AsyncConnection[DictRow], *, ttl_seconds: int, limit: int = 100
-) -> int:
+) -> list[tuple[str, str | None, bool]]:
     """Fail `running` rows whose start is older than ttl (worker crashed
-    mid-relay). service_tx, cross-user. Returns count reaped. Mirrors
-    scheduled_tasks.reap_stale_runs. Does NOT touch awaiting_input (those
-    are legitimately paused on a human)."""
+    mid-relay). service_tx, cross-user. Returns the reaped (run_id,
+    session_id, is_latest) triples so the reaper can publish terminal frames
+    for any client still tailing those sessions' streams (session_id is None
+    for batch one-shot runs). is_latest=False means a NEWER run exists on the
+    same session: the crashed run's messages stayed pending and were already
+    replayed by another drain, so the session moved on — terminal frames for
+    the dead run would land a ghost error AFTER the replay's real answer, and
+    the reaper must stay silent for it. Mirrors
+    scheduled_tasks.reap_stale_runs. Does NOT touch awaiting_input (those are
+    legitimately paused on a human).
+
+    A run whose session lease is still held is skipped: the relay refreshes
+    the lease while frames flow, so lease-held = relay alive — a long
+    streaming turn must not be reaped (and its live stream must not get
+    phantom terminal frames). A crashed worker stops refreshing, the lease
+    expires (≤900s), and the run becomes reapable. The outer `status =
+    'running'` recheck keeps a concurrent reaper on another instance from
+    double-failing (and double-publishing for) the same run."""
     async with conn.cursor(row_factory=dict_row) as cur:
         await cur.execute(
             """
@@ -193,12 +214,25 @@ async def reap_stale_runs(
             SET status = 'failed', stop_reason = 'error',
                 error = 'run lease expired (worker crashed)', ended_at = NOW()
             WHERE id IN (
-              SELECT id FROM pai_agent_runs
-              WHERE status = 'running'
-                AND started_at < NOW() - (%s::int * INTERVAL '1 second')
+              SELECT r.id FROM pai_agent_runs r
+              WHERE r.status = 'running'
+                AND r.started_at < NOW() - (%s::int * INTERVAL '1 second')
+                AND NOT EXISTS (
+                  SELECT 1 FROM pai_agent_sessions s
+                  WHERE s.session_id = r.session_id
+                    AND s.lease_expires_at > NOW()
+                )
               LIMIT %s
             )
+            AND status = 'running'
+            RETURNING id, session_id,
+              NOT EXISTS (
+                SELECT 1 FROM pai_agent_runs n
+                WHERE n.session_id = pai_agent_runs.session_id
+                  AND n.created_at > pai_agent_runs.created_at
+              ) AS is_latest
             """,
             (ttl_seconds, limit),
         )
-        return cur.rowcount or 0
+        rows = await cur.fetchall()
+    return [(str(r["id"]), r.get("session_id"), bool(r["is_latest"])) for r in rows]
