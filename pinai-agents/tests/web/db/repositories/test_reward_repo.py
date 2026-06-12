@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -45,8 +45,10 @@ async def _insert_run(conn, user_id: int, run_id: str, cards: list[dict]) -> Non
             run_id,
             run_id,
             json.dumps(cards),
-            datetime(2026, 5, 13, 8, 0, tzinfo=UTC),
-            datetime(2026, 5, 13, 8, 1, tzinfo=UTC),
+            # 相对时间:写死日历日期会在它滑出 metrics(days=30) 窗口那天让
+            # 全仓 CI 集体变红(2026-06-12 实爆过)。
+            datetime.now(UTC) - timedelta(days=1),
+            datetime.now(UTC) - timedelta(days=1, minutes=-1),
         ),
     )
     for card in cards:
