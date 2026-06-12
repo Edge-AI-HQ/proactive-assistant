@@ -35,6 +35,8 @@ const card = {
   urgency: 0.5,
   importance: 0.7,
   sources: [],
+  sourceApps: [],
+  reasoningSteps: [],
   agentChain: [],
   createdAt: "",
 };
