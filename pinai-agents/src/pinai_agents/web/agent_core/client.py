@@ -58,6 +58,7 @@ class ChatRunClient:
         card_context: dict[str, Any] | None = None,
         regenerate: bool = False,
         run_id: str | None = None,
+        timezone: str | None = None,
     ) -> AsyncIterator[Frame]:
         """Execute on chat and yield parsed SSE Frames.
 
@@ -80,6 +81,9 @@ class ChatRunClient:
             "messages": messages,
             "card_context": card_context,
             "regenerate": regenerate,
+            # User's IANA timezone (profile truth, web-resolved — chat has no
+            # DB): chat injects a <current_datetime> anchor per send turn.
+            "timezone": timezone,
         }
         if regenerate:
             # chat's regenerate path diffs `message` (not `messages`) against the

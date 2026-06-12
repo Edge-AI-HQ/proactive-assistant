@@ -55,20 +55,20 @@ class ScheduleSpecInput(BaseModel):
         default=None,
         ge=1,
         description=(
-            "type=once with a RELATIVE time: minutes from now, e.g. 用户说 "
-            "'5 分钟后' → 5. NEVER compute absolute times yourself — you "
-            "have no clock; pass the relative offset and let the backend "
-            "resolve it."
+            "type=once with a SHORT RELATIVE time: minutes from now, e.g. "
+            "用户说 '5 分钟后' → 5. Preferred over at_local for durations — "
+            "the backend clock resolves it exactly."
         ),
     )
     at_local: str | None = Field(
         default=None,
         max_length=20,
         description=(
-            "type=once with an EXPLICIT date/time the user named: local "
-            "'YYYY-MM-DDTHH:MM' in the task timezone. ONLY when the user "
-            "named an explicit date/time — for relative phrases use "
-            "in_minutes instead."
+            "type=once at a specific local date+time: 'YYYY-MM-DDTHH:MM' in "
+            "the task timezone. Resolve the date from the user's words "
+            "against the conversation's <current_datetime> note (e.g. 明天 "
+            "= its date + 1) — never guess today's date. For bare durations "
+            "('5 分钟后') use in_minutes instead."
         ),
     )
     every_seconds: int | None = Field(

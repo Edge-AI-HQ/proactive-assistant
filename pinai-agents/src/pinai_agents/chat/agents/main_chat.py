@@ -180,16 +180,20 @@ user states a persistent preference about future cards, call
        议程、参会人、相关邮件线程、要点"; at fire time the generator reads
        calendar / email and produces a prep card. Fire EARLY: when the user
        gave an explicit event time, set at_local to that time minus the
-       lead they asked for (default 30 minutes) — arithmetic on an explicit
-       time is fine; the no-clock rule only bans resolving RELATIVE phrases
-       yourself. Tell the user when the briefing will arrive (e.g. "明天
-       14:30 推给你"). Pure habit nudges (water, meds) stay mode="reminder".
+       lead they asked for (default 30 minutes). Resolve the DATE part
+       ("明天", "下周三") against the <current_datetime> note in this
+       conversation — never guess it. Tell the user when the briefing
+       will arrive (e.g. "明天 14:30 推给你"). Pure habit nudges (water, meds) stay mode="reminder".
        If generation fails at fire time the server degrades to a plain
        reminder card automatically — don't create a second backup task.
-    2. Build `schedule`. You have NO clock — NEVER compute absolute times
-       from relative phrases. Relative one-off → {{"type": "once",
-       "in_minutes": N}}. Explicit date/time → {{"type": "once", "at_local":
-       "YYYY-MM-DDTHH:MM"}}. "every N minutes/hours" → {{"type": "interval",
+    2. Build `schedule`. Your only time anchor is the <current_datetime>
+       note injected into this conversation (latest one wins) — NEVER
+       infer "today" from anything else. Short relative one-off ("5 分钟
+       后", "in 2 hours") → {{"type": "once", "in_minutes": N}} (the
+       backend clock resolves it — preferred over computing at_local).
+       Explicit or relative DATE + time ("明天 15:00", "6 月 20 日 9 点")
+       → {{"type": "once", "at_local": "YYYY-MM-DDTHH:MM"}}, date resolved
+       against <current_datetime>. "every N minutes/hours" → {{"type": "interval",
        "every_seconds": N}}. Daily/weekly local times → {{"type": "cron",
        "frequency": "daily"|"weekly", "local_time": "HH:MM", "days_of_week":
        [ISO 1=Monday … 7=Sunday]}}. Timezone: device timezone when known,

@@ -32,12 +32,13 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from ..db.repositories.chat_messages import ChatMessagesRepository, Role, Trigger
+from ..db.repositories.profile import ProfileRepository
 from ..db.rls import service_tx, user_scoped_tx
 from ..services.chat_turn_recorder import ChatTurnRecorder
 from ..services.push_notifier import notify_turn_completed
 from .bus import AgentBus, notify_run_status
 from .client import ChatRunClient, ChatRunError
-from .framebus import Frame, FrameBus
+from .framebus import Frame, FrameBus, publish_terminal_frames
 from .mailbox import MailboxRepository, Message
 from .runs import Run, RunRepository, reap_stale_runs
 from .sessions import (
@@ -242,8 +243,11 @@ class AgentRunWorker:
                 # '_Error: run lease expired_' bubble after the real answer.
                 for run_id, session_id, is_latest in reaped:
                     if session_id and is_latest:
-                        await self._publish_terminal_frames(
-                            session_id, run_id, error="run lease expired (worker crashed)"
+                        await publish_terminal_frames(
+                            self._framebus,
+                            session_id,
+                            run_id,
+                            error="run lease expired (worker crashed)",
                         )
             except asyncio.CancelledError:
                 raise
@@ -345,6 +349,11 @@ class AgentRunWorker:
             run_id = await RunRepository(user_id, conn).create(
                 session_id=session_id, agent_kind=agent_kind, trigger=trigger
             )
+            # Same-tx profile read: the user's timezone rides to chat so it
+            # can anchor a <current_datetime> note (chat has no DB and must
+            # not guess dates — the at_local date-guess bug).
+            prof = await ProfileRepository(user_id, conn).get_profile()
+        timezone = (prof.timezone if prof and prof.timezone else None) or "UTC"
         # proactive: surface each heartbeat input to the FE (it has no copy —
         # the user's own messages it already shows). plan §十七.
         if agent_kind == "proactive":
@@ -360,6 +369,7 @@ class AgentRunWorker:
             card_context=card_context,
             regenerate=regenerate,
             run_id=run_id,
+            timezone=timezone,
         )
         try:
             recorder, outcome, stream_error = await self._relay_frames(
@@ -597,37 +607,6 @@ class AgentRunWorker:
         )
 
     # ── terminal transitions ─────────────────────────────────────────
-    async def _publish_terminal_frames(
-        self, session_id: str, run_id: str, *, error: str | None = None
-    ) -> None:
-        """Terminal frames for runs that never get them from the chat stream.
-
-        The happy path's `chat:done` rides the agent stream itself (chat's
-        SSE layer emits it in a finally), but when the worker never relays a
-        stream end — ChatRunError, user cancel, shutdown, reaped crash — no
-        terminal frame reaches the FrameBus and a connected client's spinner
-        leaks until it re-polls. DB state is already terminal when this runs;
-        the frames are best-effort UX, so publish failures only log."""
-        ts = int(time.time() * 1000)
-        frames: list[Frame] = []
-        if error is not None:
-            frames.append(
-                {"type": "chat:error", "ts": ts, "traceId": run_id, "data": {"error": error}}
-            )
-        frames.append({"type": "chat:done", "ts": ts, "traceId": run_id, "data": {}})
-        for frame in frames:
-            try:
-                await self._framebus.publish(session_id, frame)
-            except Exception:
-                # Keep trying the rest — chat:done matters more than chat:error
-                # (it's what stops the client spinner).
-                logger.warning(
-                    "terminal frame publish failed session=%s run=%s type=%s",
-                    session_id,
-                    run_id,
-                    frame.get("type"),
-                )
-
     async def _finalize_turn(
         self,
         session_id: str,
@@ -744,7 +723,7 @@ class AgentRunWorker:
         await notify_run_status(self._pool, session_id=session_id, run_id=run_id, status="failed")
         # The chat stream never delivered its terminal frame (that's why we're
         # here) — emit one so the FE stops its spinner without re-polling.
-        await self._publish_terminal_frames(session_id, run_id, error=error)
+        await publish_terminal_frames(self._framebus, session_id, run_id, error=error)
 
     async def _mark_cancelled(
         self, session_id: str, user_id: int, run_id: str, msg_ids: list[int]
@@ -776,7 +755,7 @@ class AgentRunWorker:
         # turn for any other client tailing this session (the canceller's own
         # UI already flipped locally). Shutdown included: frames live in
         # Redis, so an SSE held by another instance still benefits.
-        await self._publish_terminal_frames(session_id, run_id)
+        await publish_terminal_frames(self._framebus, session_id, run_id)
 
     async def _set_awaiting(
         self,
