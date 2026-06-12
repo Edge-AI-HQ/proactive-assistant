@@ -19,7 +19,10 @@ vi.mock("@/lib/supabase", () => ({
   },
 }));
 
-vi.mock("@/lib/platform", () => ({ isNative: false }));
+vi.mock("@/lib/platform", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  isNative: false,
+}));
 vi.mock("@/lib/devices", () => ({ clearDeviceCredentials: vi.fn() }));
 vi.mock("@capacitor/browser", () => ({ Browser: { open: vi.fn(), close: vi.fn() } }));
 vi.mock("@capacitor/app", () => ({ App: { addListener: vi.fn() } }));

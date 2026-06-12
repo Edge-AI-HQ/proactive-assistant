@@ -1,0 +1,18 @@
+# 打包配置（MVP：未签名本地 dmg；签名/公证/自动更新是后续刀）。
+appId: ai.pin.proactive.desktop
+productName: PIN AI
+directories:
+  output: release
+files:
+  - out/**
+  - package.json
+extraResources:
+  - resources/tray-icon.png
+mac:
+  category: public.app-category.productivity
+  target:
+    - dmg
+protocols:
+  - name: PIN AI Desktop OAuth
+    schemes:
+      - ai.pin.proactive.desktop

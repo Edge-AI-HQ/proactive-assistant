@@ -1,7 +1,8 @@
 /**
  * 同步引擎启动与调度（Sync-B2 影子 → B3 门铃 → C outbox/搜索）。
  *
- * - startShadowSync(userId)：isNative + 登录后由 App 调。**per-user 本地库**
+ * - startShadowSync(userId)：native / Electron + 登录后由 App 调（driver
+ *   按平台注入：Capacitor 插件 vs node:sqlite over IPC）。**per-user 本地库**
  *   `pinai_sync_<uid>`（业界 per-account database 惯例）——换账号登录时数据/
  *   游标/outbox 天然隔离：FTS 搜不到别人的消息、threads 游标不串、A 积压的
  *   outbox 绝不会用 B 的 JWT 投递。进程内不换号（signOut 走 full reload），
@@ -32,8 +33,10 @@ import {
   type DatabasePort,
   type MessageSearchHit,
 } from "@pin-ai/core";
-import { isNative } from "../platform";
+import { isElectron, isNative } from "../platform";
 import { createCapacitorDatabase } from "./capacitor-database";
+import { createElectronDatabase } from "./electron-database";
+import { notifyNewCards } from "./desktop-notifications";
 
 const FALLBACK_INTERVAL_MS = 30 * 60 * 1000;
 
@@ -94,12 +97,19 @@ async function runFullPass(): Promise<void> {
       pulled += (await serialize(() => e.syncMessages(tid))).pulled;
     }
     const cards = await serialize(() => e.syncCards());
-    console.log("[sync:shadow] pass done", {
-      threadsPulled: threads.pulled,
-      messagesPulled: pulled,
-      cardsPulled: cards.pulled,
-      stats: await e.stats(),
-    });
+    // 桌面端：新卡（相对本地镜像的增量，bootstrap 轮为空）推系统通知。
+    // notifyNewCards 自带 isElectron gate，native 上 no-op。
+    void notifyNewCards(db, cards.newCardIds);
+    console.log(
+      "[sync:shadow] pass done",
+      JSON.stringify({
+        threadsPulled: threads.pulled,
+        messagesPulled: pulled,
+        cardsPulled: cards.pulled,
+        newCards: cards.newCardIds.length,
+        stats: await e.stats(),
+      }),
+    );
   } catch (err) {
     console.warn("[sync:shadow] pass failed (shadow-only, ignored):", err);
   } finally {
@@ -200,7 +210,7 @@ export async function searchLocal(
 }
 
 export function startShadowSync(userId: string): void {
-  if (!isNative || !userId) return;
+  if ((!isNative && !isElectron) || !userId) return;
   if (startedForUser) {
     if (startedForUser !== userId) {
       // signOut 走 full reload，进程内换号不应发生——真发生宁可不同步，
@@ -210,10 +220,11 @@ export function startShadowSync(userId: string): void {
     return;
   }
   startedForUser = userId;
-  db = createCapacitorDatabase(`pinai_sync_${userId.replace(/[^A-Za-z0-9]/g, "_")}`);
+  const dbName = `pinai_sync_${userId.replace(/[^A-Za-z0-9]/g, "_")}`;
+  db = isNative ? createCapacitorDatabase(dbName) : createElectronDatabase(dbName);
   engine = new SyncEngine({
     db,
-    log: (msg, extra) => console.log(`[sync] ${msg}`, extra ?? {}),
+    log: (msg, extra) => console.log(`[sync] ${msg}`, JSON.stringify(extra ?? {})),
   });
   void runFullPass();
   setInterval(() => void runFullPass(), FALLBACK_INTERVAL_MS);

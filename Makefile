@@ -5,7 +5,7 @@
 .PHONY: migrate reset clean
 .PHONY: deploy-pinai-dev deploy-pinai-prod deploy-frontend-dev deploy-frontend-prod deploy-reward-dashboard-dev
 .PHONY: deploy-litellm-dev deploy-litellm-prod
-.PHONY: ios android ngrok githooks install
+.PHONY: ios android macos ngrok githooks install
 .PHONY: tunnel-up tunnel-down tunnel-status
 
 # Running stack: postgres + litellm + pinai-agents (web + chat) +
@@ -402,3 +402,23 @@ android: install ensure-env ## Build frontend, sync Android, install on USB devi
 		npx vite build && npx cap sync android && \
 		cd android && ./gradlew installDebug && \
 		adb shell am start -n ai.pin.proactive.dev/.MainActivity
+
+macos: install ensure-env-pinai-agents ## Run the Electron desktop shell (this worktree's backend; DEV=1 fly dev, PROD=1 fly prod)
+	@set -e; \
+	set -a && . ./pinai-agents/.env && set +a; \
+	if [ "$(PROD)" = "1" ]; then \
+		TARGET=$$(npx -y @dotenvx/dotenvx get VITE_PIN_API_URL -f pinai-agents/.env.production 2>/dev/null); \
+		[ -z "$$TARGET" ] && { echo "VITE_PIN_API_URL missing in prod env"; exit 1; }; \
+		export VITE_SUPABASE_URL=$$(npx -y @dotenvx/dotenvx get VITE_SUPABASE_URL -f pinai-agents/.env.production 2>/dev/null); \
+		export VITE_SUPABASE_PUBLISHABLE_KEY=$$(npx -y @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f pinai-agents/.env.production 2>/dev/null); \
+		echo "→ Electron vs fly prod ($$TARGET) + prod Supabase"; \
+	elif [ "$(DEV)" = "1" ]; then \
+		TARGET="$$VITE_PIN_API_URL"; \
+		echo "→ Electron vs fly dev ($$TARGET)"; \
+	else \
+		PORT=$$($(COMPOSE) port pinai-web 8000 2>/dev/null | cut -d: -f2); \
+		[ -z "$$PORT" ] && { echo "pinai-web not running in this worktree — run 'make up' first, or use DEV=1 / PROD=1."; exit 1; }; \
+		TARGET="http://127.0.0.1:$$PORT"; \
+		echo "→ Electron vs this worktree's backend ($$TARGET)"; \
+	fi; \
+	VITE_PIN_API_PROXY_TARGET="$$TARGET" npm run dev --workspace=@pin-ai/desktop

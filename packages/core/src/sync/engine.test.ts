@@ -204,21 +204,31 @@ describe("syncCards", () => {
         cards: [cardEntry("c1", "Renew passport", "expires soon"), cardEntry("c2", "Book hotel", "trip to Osaka")],
       }),
     );
-    expect((await engine.syncCards()).pulled).toBe(2);
+    // 首轮（空镜像）：全部入库但不算「新」——桌面通知不被 bootstrap 轰炸。
+    const first = await engine.syncCards();
+    expect(first.pulled).toBe(2);
+    expect(first.newCardIds).toEqual([]);
     expect(fetchMock.mock.calls[0][0]).toContain("/cards?limit=200");
 
-    // 第二轮：c2 掉出投影（outcome 隐藏）、c1 标题变 —— 全量替换语义：
-    // 本地表精确镜像最新响应，旧行不残留、FTS 跟着重建。
+    // 第二轮：c2 掉出投影（outcome 隐藏）、c1 标题变、c3 新出现 —— 全量
+    // 替换语义：本地表精确镜像最新响应；增量判定只认 c3。
     fetchMock.mockResolvedValueOnce(
-      jsonResponse({ cards: [cardEntry("c1", "Renew passport NOW", "expires soon")] }),
+      jsonResponse({
+        cards: [
+          cardEntry("c1", "Renew passport NOW", "expires soon"),
+          cardEntry("c3", "Pay rent", "due friday"),
+        ],
+      }),
     );
-    expect((await engine.syncCards()).pulled).toBe(1);
+    const second = await engine.syncCards();
+    expect(second.pulled).toBe(2);
+    expect(second.newCardIds).toEqual(["c3"]);
 
-    const rows = raw.prepare("SELECT card_id, payload_json FROM cards").all() as Array<{
+    const rows = raw.prepare("SELECT card_id, payload_json FROM cards ORDER BY card_id").all() as Array<{
       card_id: string;
       payload_json: string;
     }>;
-    expect(rows.map((r) => r.card_id)).toEqual(["c1"]);
+    expect(rows.map((r) => r.card_id)).toEqual(["c1", "c3"]);
     expect(JSON.parse(rows[0].payload_json).title).toBe("Renew passport NOW");
     const hits = raw
       .prepare("SELECT card_id FROM cards_fts WHERE cards_fts MATCH 'passport'")

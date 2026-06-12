@@ -1,11 +1,19 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import typography from "@tailwindcss/typography";
+
+// content 用绝对路径：Tailwind v3 按 process.cwd() 解析相对 glob，web 构建
+// （cwd=本目录）下没问题，但 Electron renderer（apps/desktop 为 cwd、root
+// 指到这里）会解析到错误目录 → content 为空、样式全丢。
+const here = path.dirname(fileURLToPath(import.meta.url));
 
 /** @type {import('tailwindcss').Config} */
 export default {
   content: [
-    "./index.html",
-    "./src/**/*.{ts,tsx}",
-    "./node_modules/@assistant-ui/react/**/*.{js,mjs}",
+    path.join(here, "index.html"),
+    path.join(here, "src/**/*.{ts,tsx}"),
+    path.join(here, "node_modules/@assistant-ui/react/**/*.{js,mjs}"),
   ],
   theme: {
     extend: {

@@ -15,6 +15,7 @@
  */
 import { proxyPost } from "../transport/http";
 import type { DatabasePort } from "../ports/database";
+import { ensureSyncSchema } from "./schema";
 
 const BACKOFF_BASE_MS = 5_000;
 const BACKOFF_MAX_MS = 15 * 60 * 1000;
@@ -35,6 +36,9 @@ export async function enqueueOutbox(
   body: unknown,
   dedupeKey?: string,
 ): Promise<void> {
+  // 独立于 engine 的入口要自洽：pass 的 push-then-pull 顺序让 drain 先于
+  // engine.ensureReady 跑，schema 必须在这里兜底（幂等，一次 PRAGMA）。
+  await ensureSyncSchema(db);
   await db.run(
     `INSERT OR IGNORE INTO outbox (id, path, body_json, dedupe_key, created_at)
      VALUES (?, ?, ?, ?, ?)`,
@@ -47,6 +51,7 @@ export async function enqueueOutbox(
 export async function drainOutbox(
   db: DatabasePort,
 ): Promise<{ sent: number; failed: number; dropped: number }> {
+  await ensureSyncSchema(db);
   const now = Date.now();
   const rows = await db.query(
     `SELECT id, path, body_json, attempt_count, created_at FROM outbox

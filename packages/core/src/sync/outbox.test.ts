@@ -26,6 +26,22 @@ async function setup() {
 
 afterEach(() => fetchMock.mockReset());
 
+describe("cold database (schema not yet applied)", () => {
+  it("drain and enqueue bootstrap the schema themselves", async () => {
+    configureTransport({
+      baseUrl: "",
+      getAuthHeaders: async () => ({}),
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const db = betterSqliteDriver(new Database(":memory:"));
+    // 不跑 ensureSyncSchema——push-then-pull 下 drain 先于 engine 初始化。
+    await expect(drainOutbox(db)).resolves.toEqual({ sent: 0, failed: 0, dropped: 0 });
+    await enqueueOutbox(db, "/feedback", { a: 1 }, "k1");
+    fetchMock.mockResolvedValueOnce(jsonResponse({ ok: true }));
+    await expect(drainOutbox(db)).resolves.toEqual({ sent: 1, failed: 0, dropped: 0 });
+  });
+});
+
 describe("enqueueOutbox", () => {
   it("is idempotent per dedupe key; null keys never collide", async () => {
     const { raw, db } = await setup();

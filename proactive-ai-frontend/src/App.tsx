@@ -5,7 +5,7 @@ import LoginPage from "@/components/auth/LoginPage";
 import AppLayout from "@/components/app/AppLayout";
 import { VoiceProvider } from "@/components/voice";
 import OnboardingFlow from "@/components/onboarding/OnboardingFlow";
-import { isNative } from "@/lib/platform";
+import { isElectron, isNative } from "@/lib/platform";
 import { useUserSettings } from "@pin-ai/state";
 import { getPersistedAmbientEnabled } from "@/services/ambient/enabled-state";
 import { type SourceKey } from "@/services/ambient/keys";
@@ -106,12 +106,13 @@ export default function App() {
     };
   }, [user?.id]);
 
-  // 同步引擎：登录后在 native 端后台同步 threads/messages/cards 进
-  // per-user 本地 SQLite（库名带 supabase user id，换账号天然隔离）。
-  // 动态 import 保持 web bundle 干净；幂等（内部 started gate）。
+  // 同步引擎：登录后在 native / Electron 端后台同步 threads/messages/
+  // cards 进 per-user 本地 SQLite（库名带 supabase user id，换账号天然
+  // 隔离；driver 按平台注入）。动态 import 保持 web bundle 干净；幂等
+  // （内部 started gate）。
   useEffect(() => {
     const uid = user?.id;
-    if (!isNative || !uid) return;
+    if ((!isNative && !isElectron) || !uid) return;
     void import("@/lib/sync/sync-bootstrap").then(({ startShadowSync }) => {
       startShadowSync(uid);
     });

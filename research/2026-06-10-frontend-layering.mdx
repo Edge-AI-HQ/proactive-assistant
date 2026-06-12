@@ -5,7 +5,7 @@ description: "基于对 proactive-ai-frontend 全量扫描（~59.5k 行）的分
 
 # 前端分层架构方案（2026-06-10 起草，2026-06-11 更新三端格局）
 
-> **状态**（2026-06-11 更新）：**Phase 0-4 全部落地**——Phase 0 地基 + research（#90）、Phase 1 API 下沉（#91）、Phase 2 TQ 全量迁移（#92）、React 19（#93）、Phase 3a+3b 状态机提纯（#94）、Phase 3c conversation 收官（#95）、**Phase 4 壳收口**（清 8 个纯转发 shim：`lib/api.ts`、`types/intent-card.ts`、conversation 三件套、`useCards`/`useUserDevices`/`useUserSettings`；~52 个文件 import 直指 `@pin-ai/core`/`@pin-ai/state`，19 处测试 vi.mock 迁 partial-mock 包路径；CI 加 frontend Docker build gate）。**保留的壳是「平台注入层」不是债**：`usePipeline`（sessionStorage 持久化注入）、`useCardExecutionRun`（本地同步库 localHistory 注入）、`lib/transport-bootstrap`（auth/baseUrl/平台 headers）——新端各写自己的对应物。成果：`packages/core`（transport/api/domain/machines/ports/sync）+ `packages/state`（queries/stores），5 个业务状态机 48 个回放测试，边界 lint 进 CI。组件去业务化/isNative ports 化收敛仍是持续项，跟 UI 迭代合并做。本文保留为设计 SSOT；§2 的扫描数字是 2026-06-10 快照。
+> **状态**（2026-06-11 更新）：**Phase 0-4 全部落地**——Phase 0 地基 + research（#90）、Phase 1 API 下沉（#91）、Phase 2 TQ 全量迁移（#92）、React 19（#93）、Phase 3a+3b 状态机提纯（#94）、Phase 3c conversation 收官（#95）、**Phase 4 壳收口**（#104：清 8 个纯转发 shim：`lib/api.ts`、`types/intent-card.ts`、conversation 三件套、`useCards`/`useUserDevices`/`useUserSettings`；~52 个文件 import 直指 `@pin-ai/core`/`@pin-ai/state`，19 处测试 vi.mock 迁 partial-mock 包路径；CI 加 frontend Docker build gate）。**保留的壳是「平台注入层」不是债**：`usePipeline`（sessionStorage 持久化注入）、`useCardExecutionRun`（本地同步库 localHistory 注入）、`lib/transport-bootstrap`（auth/baseUrl/平台 headers）——新端各写自己的对应物。**Electron 壳已立项落地**（#106 apps/desktop：electron-vite 三进程、renderer 直接复用 proactive-ai-frontend 的 Vite root、PKCE OAuth 走内嵌登录窗 + localhost loopback、dev 模式 /api 同源 proxy 零 CORS、打包走 privileged scheme `pinai://desktop`）——「DOM UI 复用形式」二选一就此拍板为 renderer 直引 web root，不提独立 UI 包。成果：`packages/core`（transport/api/domain/machines/ports/sync）+ `packages/state`（queries/stores），5 个业务状态机 48 个回放测试，边界 lint 进 CI。组件去业务化/isNative ports 化收敛仍是持续项，跟 UI 迭代合并做。本文保留为设计 SSOT；§2 的扫描数字是 2026-06-10 快照。
 
 ## 1. 背景与目标
 
@@ -105,7 +105,7 @@ packages/
     src/auth/         # supabase client 注入式 glue
 proactive-ai-frontend/   # web app：DOM UI + web/capacitor adapters（Capacitor 壳退役前继续兼任 iOS）
 capacitor-plugins/       # 不变（RN 切换完成后随 Capacitor 壳一起退役）
-apps/desktop/            # 未来 Electron：main process + adapters + 薄 renderer 壳（复用 DOM UI，见 §5 衔接）
+apps/desktop/            # Electron（已落地）：main + preload 两文件壳，renderer 直接复用 proactive-ai-frontend 的 Vite root
 apps/mobile/             # 未来 Expo RN：RN UI + expo adapters
 ```
 

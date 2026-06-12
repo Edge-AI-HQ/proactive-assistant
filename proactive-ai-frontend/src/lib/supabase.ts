@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import { isNative } from "./platform";
+import { isElectron, isNative } from "./platform";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
 const supabasePublishableKey = import.meta.env
@@ -12,9 +12,12 @@ if (!supabaseUrl || !supabasePublishableKey) {
 }
 
 // Defaults from supabase-js (autoRefreshToken / persistSession /
-// detectSessionInUrl all true) cover the SPA flow. Native overrides
-// to PKCE so the OAuth code exchange happens server-side and tokens
-// never appear in the deep-link URL.
+// detectSessionInUrl all true) cover the SPA flow. Native and the
+// Electron desktop shell override to PKCE so the deep-link callback
+// carries `?code=` (exchanged in-app via exchangeCodeForSession) and
+// tokens never appear in the URL — implicit flow would put
+// `#access_token` in the callback, which the deep-link handler can't
+// consume (it never reaches detectSessionInUrl in another window).
 export const supabase = createClient(supabaseUrl, supabasePublishableKey, {
-  ...(isNative && { auth: { flowType: "pkce" as const } }),
+  ...((isNative || isElectron) && { auth: { flowType: "pkce" as const } }),
 });

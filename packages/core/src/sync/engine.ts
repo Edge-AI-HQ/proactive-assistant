@@ -183,10 +183,20 @@ export class SyncEngine {
    *  可变、join 自 feedback），delta 化投影不值得——全量 upsert 小表 +
    *  FTS 全量重建（几十 KB 级）。读路径仍走 TQ+persister（Sync-A），
    *  本表的用途是 FTS 索引源与未来更大容量。 */
-  async syncCards(limit = 200): Promise<{ pulled: number }> {
+  async syncCards(limit = 200): Promise<{ pulled: number; newCardIds: string[] }> {
     await this.ensureReady();
     const entries = await fetchCards(limit);
+    let newCardIds: string[] = [];
     await this.db.transaction(async (tx) => {
+      const existing = new Set(
+        (await tx.query("SELECT card_id FROM cards")).map((r) => String(r.card_id)),
+      );
+      // 「新卡」= 相对已有镜像的增量；空镜像（首轮 bootstrap）没有增量
+      // 语义——全部判旧，消费方（桌面通知）天然不被首轮轰炸。
+      newCardIds =
+        existing.size === 0
+          ? []
+          : entries.map((e) => e.card.id).filter((id) => !existing.has(id));
       await tx.run("DELETE FROM cards");
       await tx.run("DELETE FROM cards_fts");
       for (const e of entries) {
@@ -217,8 +227,8 @@ export class SyncEngine {
         }
       }
     });
-    this.log("sync:cards done", { pulled: entries.length });
-    return { pulled: entries.length };
+    this.log("sync:cards done", { pulled: entries.length, new: newCardIds.length });
+    return { pulled: entries.length, newCardIds };
   }
 
   /** 影子模式的可观测快照：本地库各表行数 + 游标（与服务端人工比对）。 */

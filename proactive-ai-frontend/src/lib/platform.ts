@@ -3,6 +3,11 @@ import { Capacitor } from "@capacitor/core";
 /** Whether the app is running inside a native shell (iOS / Android). */
 export const isNative = Capacitor.isNativePlatform();
 
+/** Whether the app is running inside the Electron desktop shell
+ *  (apps/desktop) — detected via the preload-injected bridge. */
+export const isElectron =
+  typeof window !== "undefined" && !!window.pinaiDesktop;
+
 /**
  * Base URL for the pinai-agents backend. Single backend for the product —
  * chat / generate / memory / signals / profile / devices / payment all
@@ -11,10 +16,13 @@ export const isNative = Capacitor.isNativePlatform();
  * Web: empty string (same-origin, routed via Vite dev proxy or production
  * reverse proxy).
  * Native: absolute cloud URL via VITE_PIN_API_URL.
+ * Electron: dev 跑在 electron-vite dev server 上（/api 同源 proxy，同
+ * web）；打包件无同源后端，与 native 一样要求 VITE_PIN_API_URL。
  */
-export const PIN_API_BASE: string = isNative
-  ? (import.meta.env.VITE_PIN_API_URL as string)
-  : "";
+export const PIN_API_BASE: string =
+  isNative || (isElectron && import.meta.env.PROD)
+    ? (import.meta.env.VITE_PIN_API_URL as string)
+    : "";
 
 function isNgrokUrl(url: string): boolean {
   try {

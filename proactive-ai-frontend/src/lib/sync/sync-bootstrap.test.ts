@@ -29,7 +29,7 @@ const createCapacitorDatabaseMock = vi.hoisted(() =>
   })),
 );
 
-vi.mock("@/lib/platform", () => ({ isNative: true }));
+vi.mock("@/lib/platform", () => ({ isNative: true, isElectron: false }));
 vi.mock("@/lib/sync/capacitor-database", () => ({
   createCapacitorDatabase: createCapacitorDatabaseMock,
 }));
@@ -38,7 +38,7 @@ vi.mock("@pin-ai/core", async (importOriginal) => ({
   SyncEngine: class {
     syncThreads = () => tracker.track("threads", { pulled: 0 });
     syncMessages = (tid: string) => tracker.track(`messages:${tid}`, { pulled: 1 });
-    syncCards = () => tracker.track("cards", { pulled: 0 });
+    syncCards = () => tracker.track("cards", { pulled: 0, newCardIds: [] });
     stats = async () => ({});
   },
   drainOutbox: () => tracker.track("drain", { sent: 0, failed: 0, dropped: 0 }),
