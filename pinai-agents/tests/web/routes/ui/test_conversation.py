@@ -8,11 +8,15 @@ _assert_card_owned (needs a DB) — these cover the pure prefix logic.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 from fastapi import HTTPException
 
+from pinai_agents.web.agent_core.mailbox import Message
 from pinai_agents.web.routes.ui.conversation import (
     _AGENT_KIND_BY_THREAD,
+    _active_user_entries,
     _classify,
     _row_to_message,
 )
@@ -82,3 +86,39 @@ def test_row_to_message_echoes_client_msg_id() -> None:
     assert with_id["clientMsgId"] == "u-1"
     without = _row_to_message({"id": 8, "role": "assistant", "parts": parts, "client_msg_id": None})
     assert "clientMsgId" not in without
+
+
+def test_active_user_entries_marks_only_unclaimed_rows_as_queued() -> None:
+    now = datetime.now(UTC)
+    entries = _active_user_entries(
+        [
+            Message(
+                id=1,
+                session_id="main-31-a",
+                role="user",
+                source="user",
+                content="current run",
+                meta=None,
+                enqueued_at=now,
+                idempotency_key="run-1",
+                run_id="active-run",
+            ),
+            Message(
+                id=2,
+                session_id="main-31-a",
+                role="user",
+                source="user",
+                content="queued follow-up",
+                meta=None,
+                enqueued_at=now,
+                idempotency_key="queue-1",
+                run_id=None,
+            ),
+        ],
+        has_running_run=True,
+    )
+
+    assert entries == [
+        {"text": "current run", "clientId": "run-1"},
+        {"text": "queued follow-up", "clientId": "queue-1", "queued": True},
+    ]

@@ -30,7 +30,7 @@ import {
 } from "react";
 import { motion } from "framer-motion";
 import { Virtuoso, type Components } from "react-virtuoso";
-import { AlertCircle, ArrowLeft, Check, ChevronDown, Copy, Loader2, MessageSquarePlus, Mic, Pencil, Radio, RotateCcw, Send, Sparkles, Square, ThumbsDown, ThumbsUp, X } from "lucide-react";
+import { AlertCircle, ArrowLeft, Check, ChevronDown, Copy, Loader2, MessageSquarePlus, Mic, Pencil, Radio, RotateCcw, Send, Sparkles, Square, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
 import bgGradient from "@/assets/bg-gradient.jpg";
 import { cn } from "@/lib/utils";
 import { notifyThreadActivity, readLocalHistory } from "@/lib/sync/sync-bootstrap";
@@ -436,6 +436,9 @@ function UserEntry({
   onRetry,
   isLast,
   onEdit,
+  onUpdateQueued,
+  onDeleteQueued,
+  onInterruptQueued,
 }: {
   entry: ConversationUserEntry;
   onRetry: (id: string, text: string) => void;
@@ -444,8 +447,51 @@ function UserEntry({
   /** Prefill the composer with this turn's text for the user to revise and
    *  re-send as a NEW turn (the original bubble stays as-is). */
   onEdit?: (text: string) => void;
+  onUpdateQueued?: (id: string, text: string) => Promise<void>;
+  onDeleteQueued?: (id: string) => Promise<void>;
+  onInterruptQueued?: (id: string) => Promise<void>;
 }) {
+  const [copied, setCopied] = useState(false);
+  const [editingQueued, setEditingQueued] = useState(false);
+  const [draft, setDraft] = useState(entry.text);
+  const [queueBusy, setQueueBusy] = useState<null | "edit" | "delete" | "send">(null);
   const clockLabel = formatClockTime(entry.ts);
+  const isQueued = !!entry.queued;
+
+  useEffect(() => {
+    if (!editingQueued) setDraft(entry.text);
+  }, [entry.text, editingQueued]);
+
+  const copy = useCallback(() => {
+    if (!entry.text) return;
+    void navigator.clipboard?.writeText(entry.text).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    });
+  }, [entry.text]);
+
+  const saveQueuedEdit = useCallback(() => {
+    const trimmed = draft.trim();
+    if (!trimmed || !onUpdateQueued) return;
+    setQueueBusy("edit");
+    void onUpdateQueued(entry.id, trimmed).finally(() => {
+      setQueueBusy(null);
+      setEditingQueued(false);
+    });
+  }, [draft, entry.id, onUpdateQueued]);
+
+  const deleteQueued = useCallback(() => {
+    if (!onDeleteQueued) return;
+    setQueueBusy("delete");
+    void onDeleteQueued(entry.id).finally(() => setQueueBusy(null));
+  }, [entry.id, onDeleteQueued]);
+
+  const sendQueuedNow = useCallback(() => {
+    if (!onInterruptQueued) return;
+    setQueueBusy("send");
+    void onInterruptQueued(entry.id).finally(() => setQueueBusy(null));
+  }, [entry.id, onInterruptQueued]);
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 4 }}
@@ -457,9 +503,31 @@ function UserEntry({
         className={cn(
           "max-w-[82%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-foreground/90 px-4 py-2.5 text-[13px] leading-relaxed text-background",
           entry.failed && "opacity-50",
+          editingQueued && "w-[82%]",
         )}
       >
-        {entry.text}
+        {editingQueued ? (
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing) return;
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                saveQueuedEdit();
+              }
+              if (e.key === "Escape") {
+                setDraft(entry.text);
+                setEditingQueued(false);
+              }
+            }}
+            rows={2}
+            className="max-h-28 min-h-[44px] w-full resize-none bg-transparent text-background outline-none placeholder:text-background/50"
+            autoFocus
+          />
+        ) : (
+          entry.text
+        )}
       </div>
       {entry.failed ? (
         <button
@@ -474,25 +542,291 @@ function UserEntry({
           Retry
         </button>
       ) : (
-        <div className="mt-1 flex items-center gap-2 pr-0.5">
-          {clockLabel ? (
+        <div className="mt-1 flex items-center gap-1 pr-0.5">
+          {isQueued ? (
+            <span className="mr-1 rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[11px] font-medium text-foreground/45">
+              Queued
+            </span>
+          ) : clockLabel ? (
             <span className="text-[11px] font-medium tabular-nums text-foreground/40">
               {clockLabel}
             </span>
           ) : null}
-          {isLast && onEdit ? (
+          {!isQueued ? (
+            <button type="button" onClick={copy} className={ACTION_BTN} aria-label="Copy message" title="Copy">
+              {copied ? (
+                <Check size={13} strokeWidth={2} className="text-emerald-500" />
+              ) : (
+                <Copy size={13} strokeWidth={1.6} />
+              )}
+            </button>
+          ) : null}
+          {isQueued && editingQueued ? (
+            <>
+              <button
+                type="button"
+                onClick={saveQueuedEdit}
+                disabled={queueBusy !== null || !draft.trim()}
+                className={ACTION_BTN}
+                aria-label="Save queued message"
+                title="Save"
+              >
+                {queueBusy === "edit" ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : (
+                  <Check size={13} strokeWidth={2} />
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setDraft(entry.text);
+                  setEditingQueued(false);
+                }}
+                disabled={queueBusy !== null}
+                className={ACTION_BTN}
+                aria-label="Cancel queued edit"
+                title="Cancel"
+              >
+                <X size={13} strokeWidth={1.8} />
+              </button>
+            </>
+          ) : isQueued ? (
+            <>
+              <button
+                type="button"
+                onClick={() => setEditingQueued(true)}
+                disabled={queueBusy !== null}
+                className={ACTION_BTN}
+                aria-label="Edit queued message"
+                title="Edit"
+              >
+                <Pencil size={13} strokeWidth={1.8} />
+              </button>
+              <button
+                type="button"
+                onClick={sendQueuedNow}
+                disabled={queueBusy !== null}
+                className={ACTION_BTN}
+                aria-label="Send now"
+                title="Send now"
+              >
+                {queueBusy === "send" ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : (
+                  <Send size={13} strokeWidth={1.8} />
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={deleteQueued}
+                disabled={queueBusy !== null}
+                className={ACTION_BTN}
+                aria-label="Delete queued message"
+                title="Delete"
+              >
+                {queueBusy === "delete" ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : (
+                  <Trash2 size={13} strokeWidth={1.8} />
+                )}
+              </button>
+            </>
+          ) : isLast && onEdit ? (
             <button
               type="button"
               onClick={() => onEdit(entry.text)}
-              className="flex items-center gap-1 text-[11px] font-medium text-foreground/40 transition-colors hover:text-foreground/70"
+              className={ACTION_BTN}
               aria-label="Edit message"
+              title="Edit"
             >
-              <Pencil size={12} strokeWidth={2} />
+              <Pencil size={13} strokeWidth={1.8} />
             </button>
           ) : null}
         </div>
       )}
     </motion.div>
+  );
+}
+
+function QueuedMessagesPanel({
+  entries,
+  onUpdateQueued,
+  onDeleteQueued,
+  onInterruptQueued,
+}: {
+  entries: ConversationUserEntry[];
+  onUpdateQueued: (id: string, text: string) => Promise<void>;
+  onDeleteQueued: (id: string) => Promise<void>;
+  onInterruptQueued: (id: string) => Promise<void>;
+}) {
+  if (entries.length === 0) return null;
+  return (
+    <div className="px-8">
+      <div
+        role="region"
+        aria-label="Queued messages"
+        className="mb-[-1px] overflow-hidden rounded-t-[22px] rounded-b-none border border-foreground/[0.10] bg-white/56 shadow-[0_1px_14px_hsl(0_0%_0%/0.03)] backdrop-blur-[20px]"
+      >
+        <div className="divide-y divide-foreground/[0.06]">
+          {entries.map((entry) => (
+            <QueuedMessageRow
+              key={entry.id}
+              entry={entry}
+              onUpdateQueued={onUpdateQueued}
+              onDeleteQueued={onDeleteQueued}
+              onInterruptQueued={onInterruptQueued}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function QueuedMessageRow({
+  entry,
+  onUpdateQueued,
+  onDeleteQueued,
+  onInterruptQueued,
+}: {
+  entry: ConversationUserEntry;
+  onUpdateQueued: (id: string, text: string) => Promise<void>;
+  onDeleteQueued: (id: string) => Promise<void>;
+  onInterruptQueued: (id: string) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(entry.text);
+  const [busy, setBusy] = useState<null | "edit" | "delete" | "send">(null);
+
+  useEffect(() => {
+    if (!editing) setDraft(entry.text);
+  }, [entry.text, editing]);
+
+  const save = useCallback(() => {
+    const trimmed = draft.trim();
+    if (!trimmed) return;
+    setBusy("edit");
+    void onUpdateQueued(entry.id, trimmed).finally(() => {
+      setBusy(null);
+      setEditing(false);
+    });
+  }, [draft, entry.id, onUpdateQueued]);
+
+  const remove = useCallback(() => {
+    setBusy("delete");
+    void onDeleteQueued(entry.id).finally(() => setBusy(null));
+  }, [entry.id, onDeleteQueued]);
+
+  const sendNow = useCallback(() => {
+    setBusy("send");
+    void onInterruptQueued(entry.id).finally(() => setBusy(null));
+  }, [entry.id, onInterruptQueued]);
+
+  return (
+    <div className="flex min-h-[48px] items-center gap-2 px-4 py-2.5">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <Send size={14} strokeWidth={1.7} className="shrink-0 text-foreground/35" />
+        {editing ? (
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing) return;
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                save();
+              }
+              if (e.key === "Escape") {
+                setDraft(entry.text);
+                setEditing(false);
+              }
+            }}
+            rows={1}
+            className="max-h-20 min-h-7 flex-1 resize-none bg-transparent py-1 text-[14px] leading-5 text-foreground/70 outline-none placeholder:text-foreground/35"
+            autoFocus
+          />
+        ) : (
+          <span className="min-w-0 truncate text-[14px] font-medium leading-5 text-foreground/62">
+            {entry.text}
+          </span>
+        )}
+      </div>
+      <div className="flex shrink-0 items-center gap-1">
+        {editing ? (
+          <>
+            <button
+              type="button"
+              onClick={save}
+              disabled={busy !== null || !draft.trim()}
+              className={ACTION_BTN}
+              aria-label="Save queued message"
+              title="Save"
+            >
+              {busy === "edit" ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : (
+                <Check size={13} strokeWidth={2} />
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setDraft(entry.text);
+                setEditing(false);
+              }}
+              disabled={busy !== null}
+              className={ACTION_BTN}
+              aria-label="Cancel queued edit"
+              title="Cancel"
+            >
+              <X size={13} strokeWidth={1.8} />
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              disabled={busy !== null}
+              className={ACTION_BTN}
+              aria-label="Edit queued message"
+              title="Edit"
+            >
+              <Pencil size={13} strokeWidth={1.8} />
+            </button>
+            <button
+              type="button"
+              onClick={sendNow}
+              disabled={busy !== null}
+              className={ACTION_BTN}
+              aria-label="Send now"
+              title="Send now"
+            >
+              {busy === "send" ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : (
+                <Send size={13} strokeWidth={1.8} />
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={remove}
+              disabled={busy !== null}
+              className={ACTION_BTN}
+              aria-label="Delete queued message"
+              title="Delete"
+            >
+              {busy === "delete" ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : (
+                <Trash2 size={13} strokeWidth={1.8} />
+              )}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -655,6 +989,9 @@ function TranscriptEntry({
   onReply,
   onRetry,
   onEdit,
+  onUpdateQueued,
+  onDeleteQueued,
+  onInterruptQueued,
   onRegenerate,
   isLastUser,
   isLastAssistant,
@@ -667,6 +1004,9 @@ function TranscriptEntry({
   onReply: (text: string) => Promise<void>;
   onRetry: (id: string, text: string) => void;
   onEdit: (text: string) => void;
+  onUpdateQueued: (id: string, text: string) => Promise<void>;
+  onDeleteQueued: (id: string) => Promise<void>;
+  onInterruptQueued: (id: string) => Promise<void>;
   onRegenerate: () => void;
   isLastUser: boolean;
   isLastAssistant: boolean;
@@ -693,6 +1033,9 @@ function TranscriptEntry({
         onRetry={onRetry}
         isLast={isLastUser}
         onEdit={onEdit}
+        onUpdateQueued={onUpdateQueued}
+        onDeleteQueued={onDeleteQueued}
+        onInterruptQueued={onInterruptQueued}
       />
     );
   return (
@@ -723,6 +1066,9 @@ interface TranscriptViewProps {
   sendMessage: (text: string) => Promise<void>;
   retryMessage: (id: string, text: string) => void;
   onEdit: (text: string) => void;
+  onUpdateQueued: (id: string, text: string) => Promise<void>;
+  onDeleteQueued: (id: string) => Promise<void>;
+  onInterruptQueued: (id: string) => Promise<void>;
   onRegenerate: () => void;
   /** Paused HITL run → render the approval gate inline on the paused turn. */
   awaitingDecision: HitlRequiresAction | null;
@@ -797,6 +1143,9 @@ function TranscriptView({
   sendMessage,
   retryMessage,
   onEdit,
+  onUpdateQueued,
+  onDeleteQueued,
+  onInterruptQueued,
   onRegenerate,
   awaitingDecision,
   onDecide,
@@ -906,6 +1255,9 @@ function TranscriptView({
             onReply={sendMessage}
             onRetry={retryMessage}
             onEdit={onEdit}
+            onUpdateQueued={onUpdateQueued}
+            onDeleteQueued={onDeleteQueued}
+            onInterruptQueued={onInterruptQueued}
             onRegenerate={onRegenerate}
             isLastUser={entry.id === lastUserId}
             isLastAssistant={entry.id === lastAssistantId}
@@ -1017,6 +1369,7 @@ export default function ConversationView({
   }, [session, kind]);
   const {
     transcript, ready, sendMessage, busy, retryMessage, stop, regenerateLast,
+    updateQueuedMessage, deleteQueuedMessage, interruptQueuedMessage,
     enabled, setEnabled, threadId,
     hasMoreHistory, loadMoreHistory,
     awaitingDecision, submitDecision,
@@ -1060,7 +1413,16 @@ export default function ConversationView({
   // instant the user sends (not only once `chat:thinking` lands). A separate
   // `hasRunningTurn` (a turn actually streaming in the transcript) gates the
   // pending "Thinking…" pill, which only fills the pre-stream cold-start gap.
-  const hasRunningTurn = transcript.some((e) => e.kind === "assistant" && e.running);
+  const { visibleTranscript, queuedEntries } = useMemo(() => {
+    const visible: ConversationEntry[] = [];
+    const queued: ConversationUserEntry[] = [];
+    for (const entry of transcript) {
+      if (entry.kind === "user" && entry.queued) queued.push(entry);
+      else visible.push(entry);
+    }
+    return { visibleTranscript: visible, queuedEntries: queued };
+  }, [transcript]);
+  const hasRunningTurn = visibleTranscript.some((e) => e.kind === "assistant" && e.running);
   // Heartbeat / listening toggle only applies to the proactive thread; main +
   // card threads are purely user-driven.
   const isProactive = sessionKey.startsWith("proactive-");
@@ -1079,7 +1441,7 @@ export default function ConversationView({
   // backend message id lands (chat:persisted); string = show fully armed.
   const cardResultMessageId: string | null | undefined = useMemo(() => {
     if (!cardFeedback || busy || awaitingDecision) return undefined;
-    const last = transcript[transcript.length - 1];
+    const last = visibleTranscript[visibleTranscript.length - 1];
     if (!last || last.kind !== "assistant" || last.running) return undefined;
     const hasText = last.parts.some((p) => p.type === "text" && p.text.trim().length > 0);
     const hasProposal = last.parts.some(
@@ -1087,7 +1449,7 @@ export default function ConversationView({
     );
     if (!hasText || hasProposal) return undefined;
     return /^\d+$/.test(last.id) ? last.id : null;
-  }, [cardFeedback, busy, awaitingDecision, transcript]);
+  }, [cardFeedback, busy, awaitingDecision, visibleTranscript]);
 
   // Message Edit prefills the composer (imperative — the composer owns its
   // draft state, which also absorbs voice-transcript appends).
@@ -1115,15 +1477,15 @@ export default function ConversationView({
   // machine, the send anchor and the jump affordance; TranscriptView wires it
   // into Virtuoso. Sends route through anchorToSend so the new user message
   // lands at the viewport top with the reply streaming into the runway below.
-  const scroll = useChatScroll({ session: sessionKey, transcript });
+  const scroll = useChatScroll({ session: sessionKey, transcript: visibleTranscript });
   const { anchorToSend } = scroll;
   const sendAndAnchor = useCallback(
     (text: string) => {
       const p = sendMessage(text); // appends the optimistic bubble synchronously
-      anchorToSend();
+      if (!busy) anchorToSend();
       return p;
     },
-    [sendMessage, anchorToSend],
+    [sendMessage, busy, anchorToSend],
   );
   const retryAndAnchor = useCallback(
     (id: string, text: string) => {
@@ -1340,7 +1702,7 @@ export default function ConversationView({
                 <TranscriptView
                   ready={ready}
                   isProactive={isProactive}
-                  transcript={transcript}
+                  transcript={visibleTranscript}
                   busy={busy}
                   hasRunningTurn={hasRunningTurn}
                   debugEnabled={debugEnabled}
@@ -1350,6 +1712,9 @@ export default function ConversationView({
                   sendMessage={sendAndAnchor}
                   retryMessage={retryAndAnchor}
                   onEdit={handleEditEntry}
+                  onUpdateQueued={updateQueuedMessage}
+                  onDeleteQueued={deleteQueuedMessage}
+                  onInterruptQueued={interruptQueuedMessage}
                   onRegenerate={regenerateLast}
                   awaitingDecision={awaitingDecision}
                   onDecide={handleDecide}
@@ -1379,6 +1744,12 @@ export default function ConversationView({
                   doneBusy={lifecycleBusy === "done"}
                 />
               )}
+              <QueuedMessagesPanel
+                entries={queuedEntries}
+                onUpdateQueued={updateQueuedMessage}
+                onDeleteQueued={deleteQueuedMessage}
+                onInterruptQueued={interruptQueuedMessage}
+              />
               <Composer
                 ref={composerRef}
                 onSend={sendAndAnchor}
@@ -1485,7 +1856,7 @@ const Composer = forwardRef<
 
   const submit = useCallback(async () => {
     const trimmed = text.trim();
-    if (!trimmed || sending || streaming) return;
+    if (!trimmed || sending) return;
     setText("");
     setSending(true);
     try {
@@ -1495,7 +1866,7 @@ const Composer = forwardRef<
     } finally {
       setSending(false);
     }
-  }, [text, sending, streaming, onSend]);
+  }, [text, sending, onSend]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return;
@@ -1694,7 +2065,8 @@ const Composer = forwardRef<
           >
             <Square size={12} strokeWidth={2} fill="currentColor" />
           </button>
-        ) : (
+        ) : null}
+        {streaming && !canSend ? null : (
           <button
             type="button"
             onClick={() => void submit()}
@@ -1713,7 +2085,8 @@ const Composer = forwardRef<
                     color: "hsl(var(--foreground) / 0.35)",
                   }
             }
-            aria-label="Send"
+            aria-label={streaming ? "Queue message" : "Send"}
+            title={streaming ? "Queue message" : "Send"}
           >
             <Send size={15} strokeWidth={2} />
           </button>

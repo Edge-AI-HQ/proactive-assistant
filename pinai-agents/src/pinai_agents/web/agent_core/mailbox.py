@@ -38,6 +38,9 @@ class Message:
     # optimistic bubble reconciles by id, not text. Internal producers use
     # their own keys (card-bootstrap-<id>); None when the producer sent none.
     idempotency_key: str | None = None
+    # Set when a worker has claimed this row for a run. Unconsumed rows with
+    # run_id=None are still editable queued inputs.
+    run_id: str | None = None
 
 
 class MailboxRepository(UserScopedRepository):
@@ -85,7 +88,7 @@ class MailboxRepository(UserScopedRepository):
             await cur.execute(
                 """
                 SELECT id, session_id, role, source, content, meta, enqueued_at,
-                       idempotency_key
+                       idempotency_key, run_id
                 FROM pai_agent_messages
                 WHERE session_id = %s AND user_id = %s AND consumed_at IS NULL
                 ORDER BY id ASC
@@ -103,6 +106,7 @@ class MailboxRepository(UserScopedRepository):
                 meta=r.get("meta"),
                 enqueued_at=r["enqueued_at"],
                 idempotency_key=r.get("idempotency_key"),
+                run_id=r.get("run_id"),
             )
             for r in rows
         ]
@@ -131,3 +135,72 @@ class MailboxRepository(UserScopedRepository):
                 """,
                 (run_id, self._user_id, message_ids),
             )
+
+    async def mark_claimed(self, *, message_ids: list[int], run_id: str) -> None:
+        """Stamp the run that has claimed these mailbox rows before the chat
+        call starts. The rows stay unconsumed until the run finishes, so crash
+        replay still works; queued-message edits/deletes can use run_id IS
+        NULL to avoid touching input that is already inside the active run."""
+        if not message_ids:
+            return
+        async with self._conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE pai_agent_messages
+                SET run_id = %s
+                WHERE user_id = %s AND id = ANY(%s) AND consumed_at IS NULL
+                """,
+                (run_id, self._user_id, message_ids),
+            )
+
+    async def update_pending_user_message(
+        self,
+        *,
+        session_id: str,
+        client_msg_id: str,
+        content: str,
+    ) -> bool:
+        """Edit a user-authored queued message that has not been claimed by a
+        run yet. Returns False when the message is absent, already processing,
+        consumed, or not a user message."""
+        async with self._conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                UPDATE pai_agent_messages
+                SET content = %s
+                WHERE session_id = %s
+                  AND user_id = %s
+                  AND source = 'user'
+                  AND idempotency_key = %s
+                  AND consumed_at IS NULL
+                  AND run_id IS NULL
+                RETURNING id
+                """,
+                (content, session_id, self._user_id, client_msg_id),
+            )
+            row = await cur.fetchone()
+        return row is not None
+
+    async def delete_pending_user_message(
+        self,
+        *,
+        session_id: str,
+        client_msg_id: str,
+    ) -> bool:
+        """Delete a user-authored queued message before a run claims it."""
+        async with self._conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                DELETE FROM pai_agent_messages
+                WHERE session_id = %s
+                  AND user_id = %s
+                  AND source = 'user'
+                  AND idempotency_key = %s
+                  AND consumed_at IS NULL
+                  AND run_id IS NULL
+                RETURNING id
+                """,
+                (session_id, self._user_id, client_msg_id),
+            )
+            row = await cur.fetchone()
+        return row is not None
