@@ -670,6 +670,7 @@ class DefaultDispatcher:
         """
         from ..auth.user_service import User  # noqa: PLC0415
         from ..db.repositories.patterns import PatternsRepository  # noqa: PLC0415
+        from ..db.repositories.profile import ProfileRepository  # noqa: PLC0415
         from ..db.repositories.user_fingerprint import (  # noqa: PLC0415
             UserFingerprintRepository,
         )
@@ -753,6 +754,13 @@ class DefaultDispatcher:
                 run_id,
             )
 
+        # Profile timezone → generator's "Today is …" uses the user-local
+        # date (bare UTC shows yesterday to an Asia/Shanghai user before
+        # 08:00 local).
+        async with user_scoped_tx(self._pool, task.user_id) as conn:
+            prof = await ProfileRepository(task.user_id, conn).get_profile()
+        user_timezone = (prof.timezone if prof and prof.timezone else None) or "UTC"
+
         context_until = datetime.now(UTC)
         context_since = context_until - timedelta(hours=24)
         try:
@@ -792,6 +800,7 @@ class DefaultDispatcher:
             context_since=context_since,
             context_until=context_until,
             generation_request=_generation_request_from_task(task),
+            timezone=user_timezone,
         )
         # Persist into pai_pipeline_runs / pai_card_evaluations using the
         # same id the task / FE polled with — `run_id` here equals

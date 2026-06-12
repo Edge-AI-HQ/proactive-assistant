@@ -79,3 +79,35 @@ async def test_cancel_running_run_leaves_frames_to_the_relay_holder(pool, user_i
     # holder from a crashed one — only parked statuses are provably orphan).
     assert run is not None and run.status == "cancelled"
     assert bus.published == []
+
+
+@pytest.mark.asyncio
+async def test_cancel_before_run_row_consumes_pending_messages(pool, user_ids):
+    """Stop 赶在 run 行创建前(消息已 enqueue、worker 未 drain):取消必须
+    消费 pending 消息,否则 worker 之后照常起跑、用户的取消被静默吞掉。
+    user_interrupt(双发)保持旧语义——旧 pending 并入新消息的 turn。"""
+    from pinai_agents.web.agent_core.mailbox import MailboxRepository
+
+    user_a, _ = user_ids
+    bus = _FakeFrameBus()
+    service = AgentRunService(pool, bus)  # type: ignore[arg-type]
+
+    # user_cancel:pending 被消费,worker 无可跑。
+    sid = _sid()
+    await service.post_message(
+        sid, user_id=user_a, agent_kind="main_chat", source="user", content="hello"
+    )
+    await service.cancel(sid, user_id=user_a)
+    async with user_scoped_tx(pool, user_a) as conn:
+        assert await MailboxRepository(user_a, conn).claim_pending(session_id=sid) == []
+    assert bus.published == []  # 没有 run,无帧可发
+
+    # user_interrupt:pending 保留(将与新消息合并成一个 turn)。
+    sid2 = _sid()
+    await service.post_message(
+        sid2, user_id=user_a, agent_kind="main_chat", source="user", content="first"
+    )
+    await service.cancel(sid2, user_id=user_a, reason="user_interrupt")
+    async with user_scoped_tx(pool, user_a) as conn:
+        remaining = await MailboxRepository(user_a, conn).claim_pending(session_id=sid2)
+    assert [m.content for m in remaining] == ["first"]

@@ -126,11 +126,26 @@ class AgentRunService:
         runs. Emit the terminal frame here instead, so another device
         tailing this session's SSE drops its approval card / spinner now
         rather than on the next poll. 'running' runs stay the holder's job
-        (its _mark_cancelled emits) — no double-publish."""
+        (its _mark_cancelled emits) — no double-publish.
+
+        No active run at all + reason=user_cancel (the Stop button) = the
+        cancel raced ahead of the run row (message enqueued, worker hasn't
+        drained yet). The user said stop: consume the pending mailbox
+        messages so the worker doesn't start the turn anyway — without
+        this the cancel is silently swallowed and the turn runs. A drain
+        that already claimed the batch wins the race (same as a cancel
+        arriving mid-turn today). user_interrupt (double-text) keeps
+        today's semantics — the old pending texts merge into the new
+        message's turn instead of being dropped."""
         async with user_scoped_tx(self._pool, user_id) as conn:
             run = await RunRepository(user_id, conn).get_active(session_id=session_id)
             if run is not None:
                 await RunRepository(user_id, conn).cancel(run_id=run.id, reason=reason)
+            elif reason == "user_cancel":
+                mailbox = MailboxRepository(user_id, conn)
+                pending = await mailbox.claim_pending(session_id=session_id)
+                if pending:
+                    await mailbox.mark_consumed(message_ids=[m.id for m in pending], run_id=None)
         await notify_cancel(self._pool, session_id)
         if run is not None and run.status in ("awaiting_input", "pending"):
             await notify_run_status(

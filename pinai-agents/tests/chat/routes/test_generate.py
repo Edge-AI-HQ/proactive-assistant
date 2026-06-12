@@ -108,3 +108,40 @@ async def test_generate_route_leaves_cards_unstamped_for_non_scheduled_runs(monk
 
     assert "sourceKind" not in resp.cards[0]
     assert "sourceLabel" not in resp.cards[0]
+
+
+@pytest.mark.asyncio
+async def test_generate_route_computes_today_in_user_timezone(monkeypatch):
+    """ "Today is …" must be the USER-local date: with bare UTC an
+    Asia/Shanghai user generating between local 00:00-07:59 gets
+    yesterday's date and date-sensitive cards ("today's meetings") drift."""
+    from datetime import UTC, datetime
+
+    captured: dict[str, Any] = {}
+
+    async def fake_run_generator(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(reasoning=None, batch_feedback=None)
+
+    monkeypatch.setattr(generate_route, "_extract_bearer", lambda authorization: "raw-jwt")
+    monkeypatch.setattr(
+        generate_route,
+        "_verify_principal",
+        lambda token: SimpleNamespace(user_id=1, virtual_key="sk-test"),
+    )
+    monkeypatch.setattr(generate_route, "run_generator", fake_run_generator)
+    monkeypatch.setattr(
+        generate_route,
+        "_serialize_passing_cards",
+        lambda parsed, *, run_id, max_cards: ([], []),
+    )
+
+    # 2026-06-11 22:30 UTC = 2026-06-12 06:30 in Asia/Shanghai.
+    moment = datetime(2026, 6, 11, 22, 30, tzinfo=UTC)
+    req = generate_route.GenerateRequest(context_until=moment, timezone="Asia/Shanghai")
+    await generate_route.generate(req, authorization="Bearer token")
+    assert captured["current_date"] == "2026-06-12"
+
+    # Absent / invalid timezone falls back to the old UTC behavior.
+    assert generate_route._local_date(moment, None) == "2026-06-11"
+    assert generate_route._local_date(moment, "Not/AZone") == "2026-06-11"
