@@ -86,6 +86,7 @@ export default defineConfig(({ mode }) => {
         // 架构见 research/2026-06-10-frontend-layering.mdx §3.2。
         "@pin-ai/core": path.resolve(__dirname, "../packages/core/src/index.ts"),
         "@pin-ai/state": path.resolve(__dirname, "../packages/state/src/index.ts"),
+        "@pin-ai/ui-web": path.resolve(__dirname, "../packages/ui-web/src/index.ts"),
         ...nativePluginAliases,
       },
     },

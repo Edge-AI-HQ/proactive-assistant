@@ -1,0 +1,168 @@
+import { motion } from "framer-motion";
+import { Loader2, Radio } from "lucide-react";
+import {
+  CATEGORIES,
+  Sphere3DCards,
+  type Intent,
+  type WeatherData,
+} from "@pin-ai/ui-web";
+
+/**
+ * Desktop (zebra) NOW view — the iOS Now screen rescaled for a wide canvas.
+ * Greeting + ambient pill sit top-left, the 3D card sphere fills the rest,
+ * and the swipe-up "Ask PIN AI" hint becomes a centered command bar (⌘K).
+ *
+ * 数据全部来自真实后端：sphereCards = /api/cards 的投影（Shell 负责），
+ * ambient pill = /api/settings 的 ambientSources consent + Open-Meteo 天气。
+ */
+export default function ZebraNow({
+  displayName,
+  sphereCards,
+  cardsLoading,
+  ambientOn,
+  ambientBusy,
+  onToggleAmbient,
+  weather,
+  onAskPinAi,
+  onCardTap,
+}: {
+  displayName: string;
+  sphereCards: Intent[];
+  cardsLoading: boolean;
+  ambientOn: boolean;
+  ambientBusy: boolean;
+  onToggleAmbient: () => void;
+  weather: WeatherData | null;
+  onAskPinAi: () => void;
+  onCardTap: (card: Intent) => void;
+}) {
+  const subtitle = ambientOn
+    ? weather
+      ? `${weather.city ? `${weather.city} · ` : ""}${weather.label} · ${weather.temp}°`
+      : "Sensing context"
+    : "Turn on to start sensing context";
+
+  return (
+    // Content column is capped and centered (industry convention) — on ultra-
+    // wide windows the sphere stops growing and the ambient background fills
+    // the margins; below the cap everything shrinks fluidly with the window.
+    <div className="relative flex flex-col h-full w-full max-w-[1160px] mx-auto">
+      {/* Greeting + Ambient pill */}
+      <div className="relative z-20 px-10 pt-10 pb-2">
+        <h2 className="text-[34px] font-semibold tracking-tight text-foreground leading-[1.05]">
+          Hi,{" "}
+          <span className="bg-gradient-to-r from-[hsl(292,78%,63%)] to-[hsl(330,80%,65%)] bg-clip-text text-transparent">
+            {displayName}
+          </span>
+        </h2>
+        <p className="mt-1.5 text-[13px] text-foreground/50 leading-snug">
+          Your proactive feed · {sphereCards.length} cards today
+        </p>
+
+        <div className="mt-4 max-w-sm rounded-2xl bg-foreground/[0.04] border border-foreground/[0.06] shadow-sm px-3 py-2.5 flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-1 min-w-0 text-left">
+            <span className={`relative shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
+              ambientOn ? "bg-foreground animate-ambient-icon-breathe" : "bg-foreground/30"
+            }`}>
+              <Radio
+                size={14}
+                strokeWidth={2}
+                className={ambientOn ? "text-background" : "text-background/60"}
+              />
+              {ambientOn && (
+                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-background" />
+              )}
+            </span>
+            <div className="flex-1 min-w-0">
+              <div className={`text-[14px] font-semibold leading-tight ${ambientOn ? "text-foreground" : "text-foreground/70"}`}>
+                {ambientOn ? "Ambient is on" : "Ambient is off"}
+              </div>
+              <div className="text-[12px] text-foreground/50 leading-snug truncate mt-0.5">
+                {subtitle}
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={onToggleAmbient}
+            disabled={ambientBusy}
+            className={`relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-60 ${
+              ambientOn ? "bg-foreground animate-ambient-toggle-breathe" : "bg-foreground/20"
+            }`}
+            aria-label="Toggle ambient"
+          >
+            <motion.span
+              layout
+              transition={{ type: "tween", duration: 0.2, ease: "easeInOut" }}
+              className={`absolute top-0.5 w-5 h-5 rounded-full bg-background shadow-sm ${ambientOn ? "left-[22px]" : "left-0.5"}`}
+            />
+          </button>
+        </div>
+      </div>
+
+      {/* 3D sphere of all cards — drag to rotate; auto-fits the wide canvas */}
+      <div className="flex-1 relative overflow-hidden">
+        {sphereCards.length === 0 ? (
+          <div className="h-full flex items-center justify-center">
+            <div className="glass-card px-6 py-4 flex items-center gap-2.5">
+              {cardsLoading ? (
+                <>
+                  <Loader2 size={14} className="animate-spin text-foreground/45" />
+                  <span className="text-[13px] text-foreground/55">Loading your cards…</span>
+                </>
+              ) : (
+                <span className="text-[13px] text-foreground/55">
+                  No cards yet — they surface here as PIN AI learns your context.
+                </span>
+              )}
+            </div>
+          </div>
+        ) : (
+          <Sphere3DCards
+            cacheKey="zebra-now-sphere"
+            cardWidth={160}
+            cardHeight={68}
+            items={sphereCards.map((c) => ({
+              id: c.id,
+              category: c.category,
+              title: c.title,
+              icon: (CATEGORIES[c.category] ?? CATEGORIES.life).icon,
+              categoryLabel: (CATEGORIES[c.category] ?? CATEGORIES.life).label,
+              complexity: c.complexity,
+              status: c.status,
+            }))}
+            onCardTap={(id) => {
+              const card = sphereCards.find((c) => c.id === id);
+              if (card) onCardTap(card);
+            }}
+          />
+        )}
+      </div>
+
+      {/* Ask PIN AI — desktop command bar (click or ⌘K) */}
+      <div className="shrink-0 pb-8 px-10 flex justify-center">
+        <button
+          onClick={onAskPinAi}
+          className="group w-full max-w-xl flex items-center gap-3 pl-5 pr-3 py-3 rounded-3xl border border-foreground/[0.08] hover:border-foreground/[0.16] transition-colors text-left"
+          style={{
+            background: "rgba(255,255,255,0.6)",
+            backdropFilter: "blur(20px) saturate(1.5)",
+            WebkitBackdropFilter: "blur(20px) saturate(1.5)",
+            boxShadow: "0 4px 24px hsl(0 0% 0% / 0.04)",
+          }}
+          aria-label="Ask PIN AI"
+        >
+          <span
+            className="w-2 h-2 rounded-full shrink-0"
+            style={{ background: "linear-gradient(135deg, hsl(292 78% 63%) 0%, hsl(330 80% 65%) 100%)" }}
+          />
+          <span className="flex-1 text-[14px] text-foreground/40 group-hover:text-foreground/60 transition-colors">
+            Ask PIN AI…
+          </span>
+          <kbd className="shrink-0 px-2 py-1 rounded-lg bg-foreground/[0.05] border border-foreground/[0.08] text-[11px] font-medium text-foreground/45 tracking-wide">
+            ⌘K
+          </kbd>
+        </button>
+      </div>
+    </div>
+  );
+}

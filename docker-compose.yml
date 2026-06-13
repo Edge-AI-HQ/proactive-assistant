@@ -256,6 +256,29 @@ services:
       pinai-web:
         condition: service_healthy
 
+  # apps/web — zebra 桌面 web 端，与 frontend 并存的独立 SPA（同一份 nginx
+  # 机制：same-origin /api 反代 pinai-web:8000，见 apps/web/Dockerfile）。
+  # apps/web 是 same-origin，web build 用空 base，不需要 VITE_PIN_API_URL。
+  # host 端口随机（容器内同样 8080，与 frontend 不冲突），`make urls` 查 Web 行。
+  web:
+    build:
+      context: .
+      dockerfile: ./apps/web/Dockerfile
+      args:
+        WORKDIR: apps/web
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
+        VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY:-}
+    image: proactive-ai-web:latest
+    restart: unless-stopped
+    environment:
+      NGINX_RESOLVER: "127.0.0.11 ipv6=off"
+      NGINX_UPSTREAM_URL: "http://pinai-web:8000"
+    ports:
+      - "8080"
+    depends_on:
+      pinai-web:
+        condition: service_healthy
+
   # ── ngrok tunnel (opt-in via --profile tunnel) ──
   # Exposes pinai-web:8000 to the public internet so Daytona cloud
   # sandboxes can reach the SDK endpoints (/api/agent/*). Only needed

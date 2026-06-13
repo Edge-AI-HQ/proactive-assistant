@@ -72,7 +72,12 @@ describe("AppLayout menu order", () => {
   });
 
   test("ignores menu swipes that start inside the 3D card sphere", () => {
-    const source = readFileSync(join(__dirname, "..", "now", "Sphere3DCards.tsx"), "utf8");
+    // Sphere3DCards 实现已下沉 @pin-ai/ui-web（旧路径是 re-export shim），
+    // 源码断言跟着指真实文件。
+    const source = readFileSync(
+      join(__dirname, "..", "..", "..", "..", "packages", "ui-web", "src", "now", "Sphere3DCards.tsx"),
+      "utf8",
+    );
     expect(source).toContain('data-main-menu-swipe-ignore="true"');
 
     const sphere = document.createElement("div");
@@ -92,10 +97,13 @@ describe("AppLayout menu order", () => {
     const nowViewSource = readFileSync(join(__dirname, "..", "now", "NowView.tsx"), "utf8");
     const ambientSource = readFileSync(join(__dirname, "..", "ambient", "AmbientView.tsx"), "utf8");
     const tasksSource = readFileSync(join(__dirname, "..", "tasks", "CardTimeline.tsx"), "utf8");
-    const connectSource = readFileSync(join(__dirname, "..", "connect", "ControlPanel.tsx"), "utf8");
-    const profileSource = readFileSync(join(__dirname, "..", "profile", "GoalsView.tsx"), "utf8");
+    // ControlPanel / GoalsView / platform 实现已下沉 @pin-ai/ui-web（旧路径
+    // 是 re-export shim），源码断言跟着指真实文件。
+    const UIWEB = join(__dirname, "..", "..", "..", "..", "packages", "ui-web", "src");
+    const connectSource = readFileSync(join(UIWEB, "connect", "ControlPanel.tsx"), "utf8");
+    const profileSource = readFileSync(join(UIWEB, "profile", "GoalsView.tsx"), "utf8");
     const settingSource = readFileSync(join(__dirname, "..", "account", "AccountPanel.tsx"), "utf8");
-    const platformSource = readFileSync(join(__dirname, "..", "..", "lib", "platform.ts"), "utf8");
+    const platformSource = readFileSync(join(UIWEB, "auth", "platform.ts"), "utf8");
 
     expect(layoutSource).toContain("--constellation-header-top");
     expect(layoutSource).toContain(

@@ -7,11 +7,29 @@ import { StatusBar, Style } from "@capacitor/status-bar";
 // `@/lib/api` shim 也会触发同一配置；这里显式 import 保证未来直接消费
 // @pin-ai/core 的代码（Phase 2+ 的 state 层）不依赖 shim 的加载顺序。
 import "./lib/transport-bootstrap";
+import { registerExternalMicAcquirer, registerFeedbackOutbox, registerLocalThreadStore, registerSignOutCleanup } from "@pin-ai/ui-web";
 import { persistOptions, queryClient } from "./lib/query-client";
 import { isNative } from "./lib/platform";
+import { clearDeviceCredentials } from "./lib/devices";
+import { enqueueFeedback, notifyThreadActivity, readLocalHistory } from "./lib/sync/sync-bootstrap";
 import ErrorBoundary from "@/components/app/ErrorBoundary";
 import App from "./App";
 import "./index.css";
+
+// signOut 的 native 清理：useAuth 下沉 @pin-ai/ui-web 后不再硬依赖
+// lib/devices（secure storage / device token），由 composition root 注册。
+// devices.ts 本就被旧 useAuth 静态引入，这里改显式注册，bundle 形态不变。
+registerSignOutCleanup(() => clearDeviceCredentials());
+// /feedback 离线 outbox：useCardActions 下沉后不再硬依赖 lib/sync，
+// 由这里注册（native/Electron 本地重放；纯 web 失败仅记 log）。
+registerFeedbackOutbox((body, key) => enqueueFeedback(body, key));
+// 本地同步引擎触点（ConversationView / 卡执行的本地 history + 活跃通知）。
+registerLocalThreadStore({ notifyThreadActivity, readLocalHistory });
+// voice 录音与 ambient 采集的麦克风互斥：保持 dynamic import，web bundle
+// 不带 native 代码（与下沉前 VoiceProvider 内的写法一致）。
+registerExternalMicAcquirer(() =>
+  import("./services/ambient/external-mic").then((m) => m.acquireExternalMic()),
+);
 
 createRoot(document.getElementById("root")!, {
   // React 19 的生产环境错误诊断：componentStack 在 minified build 里也有。

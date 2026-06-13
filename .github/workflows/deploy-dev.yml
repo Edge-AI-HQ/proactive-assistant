@@ -16,6 +16,8 @@ on:
       - 'pinai-agents/**'
       - 'ops/litellm/**'
       - 'proactive-ai-frontend/**'
+      - 'apps/web/**'
+      - 'packages/**'
 
 concurrency:
   group: deploy-dev
@@ -33,5 +35,6 @@ jobs:
       agents_toml: fly.dev.toml
       litellm_toml: fly.litellm-dev.toml
       frontend_toml: proactive-ai-frontend/fly.toml
+      web_toml: apps/web/fly.toml
       daytona_version: dev
       run_filter: ${{ github.event_name == 'push' }}

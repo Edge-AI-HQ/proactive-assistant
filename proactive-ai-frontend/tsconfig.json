@@ -14,7 +14,8 @@
       "@/*": ["./src/*"],
       "@pin/capacitor-ambient-ai": ["../capacitor-plugins/ambient-ai/src/index.ts"],
       "@pin-ai/core": ["../packages/core/src/index.ts"],
-      "@pin-ai/state": ["../packages/state/src/index.ts"]
+      "@pin-ai/state": ["../packages/state/src/index.ts"],
+      "@pin-ai/ui-web": ["../packages/ui-web/src/index.ts"]
     },
     "types": ["vite/client", "vitest/globals"]
   },

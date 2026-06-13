@@ -151,16 +151,22 @@ jobs:
         run: npm run lint:packages
 
       - name: Type check (packages)
-        run: npm run type-check --workspace=@pin-ai/core --workspace=@pin-ai/state
+        run: npm run type-check --workspace=@pin-ai/core --workspace=@pin-ai/state --workspace=@pin-ai/ui-web
 
       - name: Unit tests (packages)
-        run: npm test --workspace=@pin-ai/core --workspace=@pin-ai/state
+        run: npm test --workspace=@pin-ai/core --workspace=@pin-ai/state --workspace=@pin-ai/ui-web
 
       - name: Type check (Frontend)
         run: npm run type-check --workspace=@pin-ai/proactive-ai-frontend
 
       - name: Unit tests (Frontend)
         run: npm test --workspace=@pin-ai/proactive-ai-frontend
+
+      - name: Type check (Web / zebra desktop)
+        run: npm run type-check --workspace=@pin-ai/web
+
+      - name: Unit tests (Web / zebra desktop)
+        run: npm test --workspace=@pin-ai/web
 
       - name: Type check (Desktop shell)
         run: npm run type-check --workspace=@pin-ai/desktop

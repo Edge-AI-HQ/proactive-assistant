@@ -55,6 +55,10 @@ on:
       frontend_toml:
         type: string
         required: true
+      web_toml:
+        description: apps/web (zebra) per-env fly toml；空 = 该环境不部署 web（如 test）
+        type: string
+        default: ''
       daytona_version:
         description: Daytona snapshot version tag (dev / test / production)
         type: string
@@ -77,6 +81,7 @@ jobs:
       agents: ${{ steps.filter.outputs.agents }}
       litellm: ${{ steps.filter.outputs.litellm }}
       frontend: ${{ steps.filter.outputs.frontend }}
+      web: ${{ steps.filter.outputs.web }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v4
@@ -89,6 +94,11 @@ jobs:
               - 'ops/litellm/**'
             frontend:
               - 'proactive-ai-frontend/**'
+              - 'packages/**'
+              - 'pinai-agents/.env.dev'
+            web:
+              - 'apps/web/**'
+              - 'packages/**'
               - 'pinai-agents/.env.dev'
 
   build-daytona-snapshot:
@@ -231,6 +241,52 @@ jobs:
             --remote-only \
             --build-arg WORKDIR=proactive-ai-frontend \
             --build-arg VITE_PIN_API_URL="$VITE_PIN_API_URL" \
+            --build-arg VITE_SUPABASE_URL="$VITE_SUPABASE_URL" \
+            --build-arg VITE_SUPABASE_PUBLISHABLE_KEY="$VITE_SUPABASE_PUBLISHABLE_KEY"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  deploy-web:
+    needs: changes
+    # web_toml 空（如 test 未传）= 该环境不部署 apps/web。dev/prod 各传自己
+    # 的 per-env toml；机制与 deploy-frontend 一致（same-origin SPA，apps/web
+    # 不需要 VITE_PIN_API_URL，只要两把 Supabase 公开 key）。
+    if: ${{ always() && inputs.web_toml != '' && (!inputs.run_filter || needs.changes.outputs.web == 'true') }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment != '' && inputs.environment || null }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+
+      - uses: superfly/flyctl-actions/setup-flyctl@v1
+
+      - name: Extract VITE_* build args from ${{ inputs.env_file }}
+        env:
+          DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
+          DOTENV_PRIVATE_KEY_TEST: ${{ secrets.DOTENV_PRIVATE_KEY_TEST }}
+          DOTENV_PRIVATE_KEY_PRODUCTION: ${{ secrets.DOTENV_PRIVATE_KEY_PRODUCTION }}
+        run: |
+          envf="pinai-agents/${{ inputs.env_file }}"
+          {
+            echo "VITE_SUPABASE_URL=$(npx @dotenvx/dotenvx get VITE_SUPABASE_URL -f "$envf")"
+            echo "VITE_SUPABASE_PUBLISHABLE_KEY=$(npx @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f "$envf")"
+          } >> "$GITHUB_ENV"
+
+      # Build context = repo root so the Dockerfile's `COPY packages/` picks up
+      # the shared layer (@pin-ai/core|state|ui-web|design). Mirrors
+      # docker-compose.yml's web service + apps/web/fly.toml.
+      - name: Deploy apps/web to ${{ inputs.daytona_version }}
+        run: |
+          flyctl deploy . \
+            --config ${{ inputs.web_toml }} \
+            --dockerfile apps/web/Dockerfile \
+            --remote-only \
+            --build-arg WORKDIR=apps/web \
             --build-arg VITE_SUPABASE_URL="$VITE_SUPABASE_URL" \
             --build-arg VITE_SUPABASE_PUBLISHABLE_KEY="$VITE_SUPABASE_PUBLISHABLE_KEY"
         env:

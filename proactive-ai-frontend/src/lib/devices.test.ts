@@ -46,7 +46,9 @@ const {
   },
 }));
 
-vi.mock("./api", () => ({
+// devices.ts 实际 import 的是 "./transport-bootstrap"（authHeaders 实现已
+// 下沉 @pin-ai/ui-web，旧的 "./supabase" 深层拦截不再穿透 shim 链）。
+vi.mock("./transport-bootstrap", () => ({
   authHeaders: vi.fn(async () => (
     authState.accessToken ? { Authorization: `Bearer ${authState.accessToken}` } : {}
   )),
@@ -78,7 +80,12 @@ vi.mock("./platform", () => ({
   },
 }));
 vi.mock("@capacitor/core", () => ({
-  Capacitor: { getPlatform: () => platformState.platform },
+  Capacitor: {
+    getPlatform: () => platformState.platform,
+    // @pin-ai/ui-web 的 platform.ts 经 shim barrel 真实加载，模块顶层会调
+    // isNativePlatform()——部分 mock 缺它会在 import 期 TypeError。
+    isNativePlatform: () => platformState.isNative,
+  },
 }));
 vi.mock("@capacitor/device", () => ({
   Device: {

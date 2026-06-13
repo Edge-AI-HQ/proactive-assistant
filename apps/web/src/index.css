@@ -1,0 +1,238 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* zebra 桌面设计的 token 体系（与原型仓 src/index.css 对齐；:root 变量须
+   与 packages/design/tokens.cjs 的 cssVariables 保持一致）。 */
+@layer base {
+  :root {
+    --background: 220 30% 96%;
+    --foreground: 230 25% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 230 25% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 230 25% 15%;
+
+    --primary: 292 78% 63%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 20% 92%;
+    --secondary-foreground: 230 25% 15%;
+
+    --muted: 220 15% 90%;
+    --muted-foreground: 220 10% 50%;
+
+    --accent: 292 78% 63%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 72% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 20% 88%;
+    --input: 220 20% 88%;
+    --ring: 292 78% 63%;
+
+    --radius: 1.25rem;
+
+    /* Custom glass tokens */
+    --glass-bg: 0 0% 100% / 0.55;
+    --glass-border: 0 0% 100% / 0.6;
+    --glass-shadow: 280 20% 60% / 0.06;
+    --glow-primary: 292 78% 63%;
+    --glow-success: 145 60% 50%;
+    --glow-warning: 35 90% 55%;
+    --glow-alert: 0 72% 60%;
+
+    /* Cherub brand. --primary is the canonical magenta; --cherub-end is its
+       gradient companion (used together for the "Cherub" diagonal sweep). */
+    --cherub-end: 330 80% 65%;
+
+    /* 下沉的 production 视图（ControlPanel / GoalsView / CardTimeline …）用
+       这个 var 做页顶对齐（移动端 = safe-area 推导）；桌面固定阅读间距。 */
+    --constellation-header-top: 2.5rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    background: hsl(var(--background));
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+
+  #root {
+    height: 100vh;
+    height: 100dvh;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply rounded-3xl;
+    background: hsla(0, 0%, 100%, 0.45);
+    border: 1px solid hsla(0, 0%, 100%, 0.5);
+    backdrop-filter: blur(32px) saturate(1.3);
+    -webkit-backdrop-filter: blur(32px) saturate(1.3);
+    box-shadow: 0 4px 24px hsla(var(--glass-shadow)),
+                inset 0 1px 0 hsla(0, 0%, 100%, 0.3);
+  }
+
+  .glass-card-strong {
+    @apply rounded-3xl;
+    background: hsla(0, 0%, 100%, 0.6);
+    border: 1px solid hsla(0, 0%, 100%, 0.65);
+    backdrop-filter: blur(48px) saturate(1.5);
+    -webkit-backdrop-filter: blur(48px) saturate(1.5);
+    box-shadow: 0 4px 20px hsla(var(--glass-shadow)),
+                inset 0 1px 0 hsla(0, 0%, 100%, 0.4);
+  }
+
+  .glow-primary {
+    box-shadow: 0 0 20px hsla(var(--glow-primary) / 0.3),
+                0 0 60px hsla(var(--glow-primary) / 0.1);
+  }
+
+  .glow-success {
+    box-shadow: 0 0 12px hsla(var(--glow-success) / 0.3);
+  }
+
+  .glow-warning {
+    box-shadow: 0 0 12px hsla(var(--glow-warning) / 0.3);
+  }
+
+  .glow-alert {
+    box-shadow: 0 0 12px hsla(var(--glow-alert) / 0.3);
+  }
+
+  .text-display {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+
+  .breathing {
+    animation: breathe 4s ease-in-out infinite;
+  }
+
+  .pulse-dot {
+    animation: pulse-glow 2s ease-in-out infinite;
+  }
+}
+
+@keyframes breathe {
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  50% { transform: scale(1.02); opacity: 1; }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 4px hsla(var(--glow-primary) / 0.6); }
+  50% { box-shadow: 0 0 12px hsla(var(--glow-primary) / 0.9), 0 0 24px hsla(var(--glow-primary) / 0.4); }
+}
+
+@keyframes float-up {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-float-up {
+  animation: float-up 0.5s ease-out forwards;
+}
+
+@keyframes bg-flow {
+  0% {
+    background-position: 0% 0%;
+    background-size: 400% 400%;
+  }
+  25% {
+    background-position: 100% 50%;
+    background-size: 400% 400%;
+  }
+  50% {
+    background-position: 50% 100%;
+    background-size: 400% 400%;
+  }
+  75% {
+    background-position: 0% 50%;
+    background-size: 400% 400%;
+  }
+  100% {
+    background-position: 0% 0%;
+    background-size: 400% 400%;
+  }
+}
+
+.animate-bg-flow {
+  background: linear-gradient(
+    135deg,
+    hsl(220 30% 94%) 0%,
+    hsl(280 30% 90%) 15%,
+    hsl(320 28% 92%) 30%,
+    hsl(210 32% 93%) 45%,
+    hsl(250 28% 91%) 60%,
+    hsl(200 30% 92%) 75%,
+    hsl(290 28% 91%) 90%,
+    hsl(220 30% 94%) 100%
+  );
+  background-size: 400% 400%;
+  animation: bg-flow 60s ease-in-out infinite;
+}
+
+/* Aurora — slow drifting color blobs using the existing pastel palette */
+@keyframes aurora-drift-1 {
+  0%   { transform: translate3d(-8%, -6%, 0) scale(1.1) rotate(0deg); }
+  50%  { transform: translate3d(10%, 8%, 0) scale(1.25) rotate(8deg); }
+  100% { transform: translate3d(-8%, -6%, 0) scale(1.1) rotate(0deg); }
+}
+@keyframes aurora-drift-2 {
+  0%   { transform: translate3d(12%, 10%, 0) scale(1.2) rotate(0deg); }
+  50%  { transform: translate3d(-10%, -8%, 0) scale(1.05) rotate(-10deg); }
+  100% { transform: translate3d(12%, 10%, 0) scale(1.2) rotate(0deg); }
+}
+@keyframes aurora-drift-3 {
+  0%   { transform: translate3d(-6%, 12%, 0) scale(1.15) rotate(0deg); }
+  50%  { transform: translate3d(8%, -10%, 0) scale(1.3) rotate(6deg); }
+  100% { transform: translate3d(-6%, 12%, 0) scale(1.15) rotate(0deg); }
+}
+
+.aurora-layer {
+  pointer-events: none;
+  filter: blur(60px) saturate(1.1);
+  mix-blend-mode: screen;
+  will-change: transform;
+}
+
+.aurora-layer-1 {
+  background:
+    radial-gradient(ellipse 60% 50% at 25% 30%, hsl(280 70% 78% / 0.55) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 45% at 75% 20%, hsl(320 65% 80% / 0.45) 0%, transparent 60%);
+  animation: aurora-drift-1 38s ease-in-out infinite;
+}
+
+.aurora-layer-2 {
+  background:
+    radial-gradient(ellipse 55% 50% at 80% 70%, hsl(210 70% 82% / 0.5) 0%, transparent 60%),
+    radial-gradient(ellipse 45% 40% at 20% 80%, hsl(250 60% 82% / 0.45) 0%, transparent 60%);
+  animation: aurora-drift-2 52s ease-in-out infinite;
+}
+
+.aurora-layer-3 {
+  background:
+    radial-gradient(ellipse 50% 45% at 50% 50%, hsl(200 70% 85% / 0.4) 0%, transparent 60%),
+    radial-gradient(ellipse 40% 35% at 60% 90%, hsl(290 60% 82% / 0.4) 0%, transparent 60%);
+  animation: aurora-drift-3 64s ease-in-out infinite;
+}

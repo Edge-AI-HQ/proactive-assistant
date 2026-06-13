@@ -1,0 +1,189 @@
+---
+title: "Zebra 桌面 Web 端移植（apps/web + packages/ui-web）"
+description: "把 Lovable 原型仓的 zebra 桌面设计移植成生产 web 端：新建 apps/web 装 zebra 壳与桌面皮肤，新建 packages/ui-web 沉淀 Capacitor iOS 与 web 双端共享的 React DOM 层（聊天栈/球面/auth/card actions），每页接 proactive-ai-frontend 的真实功能。改 apps/web、packages/ui-web，或从 proactive-ai-frontend 下沉组件前必读。"
+---
+
+# Zebra 桌面 Web 端移植（2026-06-12 拍板）
+
+> 状态：**已实施（M0-M5 全部完成，2026-06-12，分支 `feat/zebra-web-port`）**。设计基线 = 原型仓 `proactive-pin-ai-c7be7ecc` main `19c2f9f`。
+> dev 已上线：<https://proactive-ai-web-dev.fly.dev>（CI：`.github/workflows/proactive-ai-web-dev.yml`，本地备用 `make deploy-web-dev`）。
+
+## 实施结果与偏差（2026-06-12）
+
+- M0-M5 按计划完成；用户中途拍板把「纯复制」改回「下沉共享」，最终形态 = `packages/ui-web`（~40 个模块下沉，frontend 全部留 shim 旧路径不变）+ `apps/web`（zebra 壳）。
+- **注册点模式**（composition root 注入，替代 props 改造）：`registerSignOutCleanup`（devices 清理）/ `registerFeedbackOutbox`（离线 outbox）/ `registerLocalThreadStore`（本地同步 history/notify）/ `registerExternalMicAcquirer`（ambient 麦克风互斥）。frontend main.tsx 注册 native 实现，apps/web 不注册 = 纯网络路径。
+- **实施偏差（均按「frontend 为真源」仲裁）**：
+  - CONNECT / MIRROR / SETTING 用 production 全功能件（ControlPanel / GoalsView / settings sections + 从 AccountPanel 抽出的 SubscriptionPanel）装进 zebra 阅读列；zebra 原型的桌面 grid/并排重排留给视觉迭代轮。
+  - zebra 的 paywall 面板（Apple Pay mock）没有移植——真实订阅 = SubscriptionPanel（Stripe checkout/portal/cancel/invoices）。`Intent.locked` 真卡不会置位，paywall 路径自然不触发。
+  - zebra 的 reflection 卡分支是 mock 设计（真实 IntentCard 无此 kind），不移植。
+  - AMBIENT 只读 = consent 状态卡 + `DeviceConnections`（设备 registry + 云端 timeline，与 CONNECT 同源组件）；不下沉 AmbientView（深耦合 native 采集链）。
+  - TASKS 右 pane 自治：在 /tasks 上下文 approve/chat 落在右 pane（onOpenChat 路由），其余场景全局 560px slide-over。
+- **测试迁移**：源码断言测试（readFileSync）路径已指向 ui-web 真实文件；ui-web 自带 vitest 配置（jsdom + frontend 同款 setup）。
+
+## 遗留（视觉迭代轮 / 后续）
+
+- zebra 原型的桌面重排：ZebraConnect tiered grid、ZebraMirror Profile&Memory 并排、ZebraGoals 三列网格 + 居中 popup。
+- ConversationView 在 560px panel 的桌面化精修（顶栏与 panel chrome 合并、focus mode 布局）。
+- Google Fonts (Inter) 本地化、背景视频压缩/CDN 化、bundle code-split（首包 ~750KB gz 222KB）。
+- VoiceProvider transcriptionLanguage 接 settings.generationLanguage（现传 null）。
+- onboarding / Web Push / voice 声纹 / ambient 采集（拍板范围外）。
+- **dev + prod 已并入前端统一部署管道**（`_deploy.yml` 的 `deploy-web` job + `web_toml`，dev 跟 main push、prod 跟 `v*` tag；prod app `proactive-ai-web-prod` 已建）；test 环境暂不部署 web（caller 不传 `web_toml`，job 跳过）。剩 `proactive-ai-frontend-dev` 流量入口切换时点。
+- **用户操作**：Supabase dev project Auth → Redirect URLs 加 `https://proactive-ai-web-dev.fly.dev/**` 与 `http://localhost:3005/**`。
+
+> 原计划正文如下（执行参照）。一个 milestone 一个 PR 改为单分支多 commit（用户拍板）。
+
+## 背景与端形态战略
+
+- **web 端**：本计划的产物 `apps/web`，zebra 桌面设计 + 真实功能，长期保留。
+- **iOS**：当下继续走 Capacitor（`proactive-ai-frontend`）；等 React Native 方案（`apps/mobile`，PR#127 一线）成熟后下线 Capacitor。
+- **macOS**：`apps/desktop`（Electron）目前 renderer 复用 proactive-ai-frontend；未来切到以 apps/web 为基础，**本计划不做**。
+- zebra 设计稿在独立原型仓 `proactive-pin-ai-c7be7ecc`（Lovable 导出，Vite + React 18 + shadcn/ui），全部数据是 mock。本计划只取它的**视觉与布局**，功能行为一律以 proactive-ai-frontend 现有实现为真源。
+
+## 已拍板决策（2026-06-12，用户确认）
+
+1. **共享策略 = 下沉到独立共享包**：新建 `packages/ui-web`（`@pin-ai/ui-web`），存放 Capacitor iOS（proactive-ai-frontend）与 apps/web 双端共享的 React DOM 组件和平台 hooks。**独立 folder，不与 core/state 混放**；core/state 维持纯协议层/纯 query 层定位不变。两端尽可能复用能复用的模块。
+2. **下沉方式 = move 不是 copy**：模块从 `proactive-ai-frontend/src/` 移入 `packages/ui-web/src/`，frontend 改 import 路径。按里程碑按需下沉，不搞一次性大迁移。
+3. **v1 范围裁剪**：AMBIENT 只读（看云端已上传的 timeline，web 不采集）、voice 声纹砍掉、push 不做。onboarding 砍掉，登录直接进主界面。
+4. **部署 = 新 fly app 并存**：`proactive-ai-web-dev` 与 `proactive-ai-frontend-dev` 并存；以后再把 web 流量入口切到 apps/web，时点另定。
+5. **设计基线 = 原型仓 main `19c2f9f`**（含 ZebraLogin / ZebraBackdrop / ZebraGoals）；设计后续迭代按视觉 diff 跟进。
+6. **路由模型 = URL 路由**（react-router，zebra 的模式），替代 production 移动端的 state-based `activeView` 导航；桌面 web 需要 deep-link。
+7. **冲突仲裁 = proactive-ai-frontend 为准**：zebra 设计与 frontend 现有实现在 UI 语义或功能行为上冲突时，一律以 proactive-ai-frontend 为准。zebra 只供视觉/布局；不为贴合设计稿发明新功能、改变现有行为或数据语义。
+
+## 现状盘点
+
+### zebra 设计稿（原型仓 main `19c2f9f`）
+
+`src/components/zebra/` 共 11 个文件 ~3.6k 行 + 路由挂在 `src/App.tsx`：
+
+- **ZebraShell**（layout route，常驻不卸载）：玻璃 sidebar 216px⇄64px（⌘B 手动、<1100px 自动收）、导航六项 NOW / AMBIENT / TASKS / CONNECT / MIRROR / SETTING + 底部用户卡；右侧 slide-over 互斥面板体系——card detail（440px）/ paywall（440px）/ card chat（560px）/ conversation（560px，可展开全屏 focus mode）；panel 打开时主区 parallax 左移；Escape 分层关闭；sonner toast。
+- **ZebraBackdrop**：四层背景（白底 / 渐变图 / aurora×3 / 0.5x 慢放循环视频，视频载入前 aurora 兜底）。视频资产在 Lovable CDN（`/__l5e/assets-v1/...`，3.87MB mp4），可下载打包。
+- **ZebraLogin**（`/zebra-login`）：星云背景 + 单个 "Continue with Google" 按钮 + Terms/Privacy，登录是 mock。
+- **ZebraNow**：greeting + ambient pill + `Sphere3DCards` 球面（卡 160×68）+ 底部 "Ask PIN AI" 命令条（⌘K）；内容列 max-w-1160 居中。
+- **ZebraConversation**（979 行）：主聊天面板，thinking / tools / streaming 全部是 mock 状态机。
+- **ZebraTasksSplit**：Linear 风格左列表 + 右执行面板。
+- **ZebraCardDetailPanel / ZebraPaywallPanel**：卡详情（scores / execution plan / data sources / impact）与订阅 paywall。
+- **ZebraConnect / ZebraMirror（含 ZebraGoals）/ ZebraSettings（Setting + Subscription + Notifications + Preferences 四件）**。
+- **ZebraCommandPalette**：⌘K，导航 + 卡片搜索 + 动作（toggle ambient / sidebar）。
+- 路由机制：`/zebra-*` 子路由全部 `element={null}`，Shell 内部按 pathname switch 渲染；conversation 是 overlay，记 `lastMainPath` 让主视图留在底下。
+- mock：卡片生命周期假计时器（10s 步进 new→normal→processing→done→移除，7–11s 随机冒新卡上限 14）；zebra 还直接 import 原型仓的 `Sphere3DCards` / `ChatDetailView` / `AmbientView` / `ConstellationLayout`（INTENTS mock 池）/ `PlanPaymentForm`。
+
+### production 前端（proactive-ai-frontend）
+
+- 导航 state-based：`AppLayout` 持全部状态，`ViewRouter` 按 `activeView: MenuId` 调度六视图——与 zebra 六项导航一一对应：NOW=`NowView`+`Sphere3DCards`、TASKS=`CardTimeline`、AMBIENT=`AmbientView`、CONNECT=`ControlPanel`、MIRROR=`GoalsView`(profile)、SETTING=`AccountPanel`。
+- overlay：`MainChatOverlay`（主聊天）、`CardChatOverlay`（card chat portal sheet）、`CardDrawer`（卡详情）。
+- 聊天栈：`components/chat/conversation/` ~20 文件——`ConversationView` + `useConversationRuntime` + `work-group` + `tool-presentation` + `scroll/` 状态机 + `MarkdownContent` + HITL/ProposeAction 卡 + `TodoPanel`，消费 agent_core frames SSE（Redis Streams 可续传，`id:`/lastEventId 游标）。
+- auth：Google-only，`hooks/useAuth.ts` `signInWithGoogle`（Supabase OAuth，web redirect / native 两分支）。
+- 已消费共享包：`@pin-ai/core` 63 处 + `@pin-ai/state` 26 处 import。
+- 真实卡模型适配：`components/now/card-model.ts`（`djb2` string→number id、`basketToLovableCategory`），CardStatus 七态 `normal/new/processing/needs_input/ready/failed/done`。
+- 它本身就是 web 形态运行的 app（dev 3003 / fly web app），全部代码 web 兼容；Capacitor 原生插件均有 web stub / platform 检测。
+
+### 共享包现状
+
+- `@pin-ai/core`：纯 TS 协议层——`transport/`（http + SSE + config）、`api/` 17 个域（cards / conversation / payment / composio / ambient / profile / memory / devices / agent-runs / …）、`domain/`（卡片状态机，带测试）、`machines/`、`sync/`。平台无关。
+- `@pin-ai/state`：react-query hooks（cards / conversation / card-execution / pipeline / user-settings / user-devices / agent-runs / memories / skills）+ zustand stores（todos）。平台无关。
+- `@pin-ai/design`：design token SSOT（`tokens.cjs`，web Tailwind 与 RN NativeWind 共用）。
+- `apps/mobile`（RN）消费 core/state 的装配模式（transport bootstrap 注入 fetch）即 apps/web 的参考；web 更简单，原生 fetch/EventSource 直接可用。
+
+## 目标架构
+
+```
+packages/
+  core      （不动）纯协议层：transport / api / domain
+  state     （不动）react-query hooks + stores
+  design    （不动）design tokens
+  ui-web    （新增）web 介质共享层：React DOM 组件 + 平台 hooks，双端消费
+proactive-ai-frontend   Capacitor iOS 壳 + 移动端皮肤（AppLayout/ViewRouter/手势）
+apps/
+  web       （新增）zebra 桌面壳 + 桌面皮肤（ZebraShell/panels/⌘K/路由）
+  mobile    （不动）RN 线
+  desktop   （不动）Electron，未来另行切到 apps/web
+```
+
+依赖方向：`apps/web` 与 `proactive-ai-frontend` 都依赖 `ui-web + core + state + design`；`ui-web` 只依赖 `core/state/design`，**禁止反向 import 两个 app**。
+
+### packages/ui-web 设计
+
+- **定位**：双端共享的 React DOM 层。放「与壳无关」的功能组件和 hooks：聊天栈、球面、卡详情内容区、card actions、auth hook、connect/profile/settings 的功能区块。**壳留在各 app**：移动壳（AppLayout / ViewRouter / SwipeBackLayer / 手势）留 frontend，桌面壳（ZebraShell / panel 体系 / ZebraCommandPalette / ZebraBackdrop）留 apps/web。
+- **目录**：按域分目录 `src/{auth,conversation,now,card,tasks,connect,profile,account,ambient}/`，子路径 export。
+- **依赖规则**：硬标准 =「纯 web 环境可运行」。`@capacitor/core` 的 platform 检测（web 上 `isNativePlatform()` 返回 false）和带 web-stub 的自家插件**允许保留**——frontend 本来就以 web 形态跑，现有代码全部满足该标准。重 native 模块（ambient 采集、push、voice 录制）不进 ui-web。下沉某模块时若有 native 触点且无 web stub，触点通过 props 注入，native 实现留 frontend。
+- **样式**：组件用 Tailwind 类 + 设计 token。两个消费 app 的 `tailwind.config` content glob 必须加 `../packages/ui-web/src/**/*.{ts,tsx}`（frontend 的相对路径按实际层级），preset 挂 `@pin-ai/design`。aurora / 玻璃等共享 keyframes/classes 收进 `ui-web/styles.css`，两 app import。
+- **包内 import**：去掉 `@/` alias（那是 app 内 alias），包内用相对路径；对外子路径导出。
+- **测试随行**：模块的 `*.test.ts(x)` 一起 move。注意 frontend 有**源码断言测试**（readFileSync + 正则锁组件结构，如 `ChatDetailView.source.test.ts`），文件 move 后断言里的路径/结构引用必须同步迁，否则 CI 红。
+- **下沉操作模板**（每次相同）：move 文件 → 修包内相对 import → frontend 改 import 指向 `@pin-ai/ui-web/<域>` → 跑 frontend `npm run type-check` + `npm test` → 本地 dev 手点回归。
+
+## 页面映射表（zebra 视觉 → 下沉模块 → 数据源）
+
+| zebra 路由/面板 | zebra 皮肤（进 apps/web） | 下沉到 ui-web（来自 frontend） | 数据源（core/state） |
+|---|---|---|---|
+| `/login` | ZebraLogin + ZebraBackdrop | `useAuth` | Supabase OAuth（Google-only，对齐设计） |
+| `/now` | ZebraNow | `Sphere3DCards`、`card-model`、`useCardActions` | cards query + 卡状态 SSE |
+| conversation 面板 | ZebraConversation（**只取视觉**） | `conversation/` 全栈（ConversationView、useConversationRuntime、work-group、tool-presentation、scroll/、MarkdownContent、HITL 卡、TodoPanel） | conversation API + agent_core frames SSE |
+| card detail 面板 | ZebraCardDetailPanel | CardDrawer 内容区（CardDrawerBody/Content、HowGeneratedSection、source-app-display）、`useCardActions` | cards API（confirm/dismiss/snooze/feedback） |
+| paywall 面板 | ZebraPaywallPanel | 订阅/支付表单逻辑（Stripe；替掉 zebra 里的 Apple Pay 选项） | payment API |
+| `/tasks` | ZebraTasksSplit | `CardTimeline`、`ChatDetailView`（card chat） | cards / agent-runs queries |
+| `/connect` | ZebraConnect | `ControlPanel` 功能区块、`useComposio` | composio / devices API |
+| `/mirror` | ZebraMirror + ZebraGoals | `GoalsView` / profile sections | profile / memory API |
+| `/setting` + 3 子页 | ZebraSettings 四件 | `AccountPanel` 各 section | settings / payment API |
+| `/ambient` | （CenterColumn 包裹） | `AmbientView` cloud-only 只读形态、`useAmbientTimeline` | ambient API（见 2026-05-17 web-cloud-data-self-sufficient） |
+| ⌘K palette | ZebraCommandPalette（新能力，无 frontend 对应） | — | cards query + 路由表（本地） |
+
+apps/web 路由用干净路径（`/now`、`/tasks`…），不带 `zebra-` 前缀；zebra 前缀是原型仓里与 mobile 原型并存的产物。
+
+## 里程碑（一个 milestone 一个 PR）
+
+### M0 — 脚手架 + 壳 + 登录 + 部署管道
+- 新建 `apps/web`（Vite + React 19 对齐 workspace + Tailwind + react-router）、`packages/ui-web` 空壳，root workspaces 已含 `apps/*`/`packages/*` 无需改。
+- ZebraShell / ZebraBackdrop / ZebraLogin / ZebraCommandPalette 搬入 apps/web（React 18→19 适配，依赖版本全部对齐 workspace；mock 计时器删除，球面先空数据）。
+- 背景视频从 Lovable CDN 下载打包（保留 videoReady fade-in + aurora 兜底）。
+- 下沉 `useAuth`；ZebraLogin 接真实 Google OAuth（web redirect 分支），auth guard + 登录态进壳。
+- 部署：fly app `proactive-ai-web-dev`（nginx same-origin `/api` 反代 pinai-agents，照抄 frontend 模式）+ 独立 CI workflow（PR：type-check/test/build；main push 且 `apps/web/**` / `packages/ui-web/**` 变化才 deploy，仿 `internal-reward-dashboard-dev.yml`）。
+- 验收：dev 域名打开 → Google 登录 → 进壳，六项导航切换、⌘K/⌘B/Esc 可用，背景视频播放。
+
+### M1 — NOW + card detail（最薄真实链路）
+- 下沉 `Sphere3DCards`、`card-model`、`useCardActions`、CardDrawer 内容区。
+- ZebraNow 接 cards query 真数据（球面卡=真实 IntentCard，状态七态全接）；ambient pill 接真实 ambient 开关状态（只读展示 + toggle）。
+- ZebraCardDetailPanel 接真卡 detail + confirm/dismiss/snooze/feedback；zebra 假计时器换成真实状态流，sonner toast 接真实卡完成事件。
+- 验收：dev 真账号登录，球面显示真卡，detail 面板四个动作落库（pai_feedback_events）。
+
+### M2 — conversation（最大件）
+- 下沉 `conversation/` 全栈（~20 文件，含 scroll 状态机与源码断言测试同迁）。
+- apps/web 的 conversation 面板装配：560px slide-over + focus mode 全屏两形态；ZebraConversation 仅作视觉参考，运行时 = useConversationRuntime + frames SSE。
+- 验收：发消息 → streaming → tool/work group 展示 → HITL 批准卡 → 断线重连（lastEventId replay）全链路；frontend 回归（聊天功能不变）。
+
+### M3 — TASKS + card chat
+- 下沉 `CardTimeline`、`ChatDetailView`。
+- ZebraTasksSplit 接真卡历史：左列表 = CardTimeline 数据，右面板 = 卡执行/卡聊天；sidebar TASKS badge 接真实 running 数。
+- 验收：真卡历史分栏浏览，card chat 可发消息续聊。
+
+### M4 — CONNECT / MIRROR / SETTING
+- 下沉 `ControlPanel` 区块 + `useComposio`、`GoalsView`/profile sections、`AccountPanel` sections、支付表单。
+- ZebraConnect 接 Composio OAuth 连接流 + device registry；ZebraMirror/ZebraGoals 接 profile/goals/memory；ZebraSettings 四件接 settings/订阅（Stripe web checkout，去掉 Apple Pay 选项）。
+- 验收：dev 上连一个真实 connector、改一项偏好、走一次 Stripe 测试支付。
+
+### M5 — AMBIENT 只读 + polish
+- 下沉 `AmbientView` cloud-only 形态 + `useAmbientTimeline`（web 无采集，入口文案与 toggle 行为按只读语义调整）。
+- ⌘K palette 接真卡搜索；空态 / loading / error 全页补齐；视觉 diff 一轮（对照设计稿逐页）。
+- 验收：手机采集的 ambient timeline 在 web 可浏览；全页面无 mock 残留。
+
+## 风险与对策
+
+1. **ZebraConversation 的 mock 状态机 ≠ 真实帧协议**：功能行为以 production `ConversationView` 为真源，zebra 只取布局/视觉；不要按 zebra 的 mock 行为实现任何逻辑。
+2. **卡状态域不齐**：zebra 只画了 new/normal/processing/done 四态，production 有七态（多 needs_input/ready/failed）。缺的三态沿 production 现有形态补设计，不阻塞接入。
+3. **源码断言测试失配**：frontend 的 readFileSync+正则测试锁组件结构，下沉 move 必须同迁测试并改路径；每个下沉 commit 后必跑 frontend vitest（type-check 抓不到这类失配）。
+4. **React 18→19 与依赖版本**：zebra 代码生在 React 18 + framer-motion 11；搬入后统一对齐 workspace（root overrides @types/react 19）与 frontend 的依赖版本；Sphere3DCards 用 production 带测试的版本（已适配真数据），zebra 的视觉参数（cardWidth/cardHeight/cacheKey）作 props 传入。
+5. **Tailwind content 扫描**：ui-web 的类名必须被两个 app 的 content glob 覆盖，否则样式静默丢失；M0 配好并在两端各渲染一个 ui-web 组件验证。
+6. **下沉造成 frontend 回归**：import 路径改动是机械的，但每次下沉后跑 frontend type-check + vitest + dev 手点该模块；Capacitor iOS 不受 bundle 形态影响（仍是同一份 web 产物）。
+7. **视频资产**：3.87MB mp4 打包偏大但可接受；保留 aurora 兜底 + fade-in，后续可压缩或转 CDN。
+8. **web 缺原生能力的降级**：push/voice/ambient 采集在 web 端 UI 上不留死按钮——相关入口隐藏或改只读文案。
+
+## 范围外（本计划不做）
+
+- onboarding 流程、voice 声纹录入、Web Push、web 端 ambient 采集。
+- `apps/desktop` renderer 切到 apps/web；Capacitor 下线；`proactive-ai-frontend-dev` 流量入口切换。
+- zebra 设计稿后续迭代的跟进（按视觉 diff 另行排）。
+
+## 验证方式
+
+- 每个 PR：`cd apps/web && npm run type-check && npm test`；动了 ui-web/frontend 时加 `cd proactive-ai-frontend && npm run type-check && npm test`。
+- 本地联调：`make up` 起后端，apps/web `npm run dev`（vite proxy `/api` 到本 worktree 的 pinai-web 随机端口，`make urls` 查）。
+- 每个 milestone 在 `proactive-ai-web-dev` 上用真实 dev 账号过一遍该页验收清单。

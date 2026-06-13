@@ -1,0 +1,29 @@
+# apps/web（zebra 桌面 web 端）on Fly.io — dev 环境。
+#
+# Static SPA served by nginx（见 Dockerfile）。Build-time VITE_* 经
+# `flyctl deploy --build-arg` 注入（CI: .github/workflows/proactive-ai-web-dev.yml；
+# 本地备用: `make deploy-web-dev`）。与 proactive-ai-frontend-dev 并存——
+# 流量入口切换另行（docs/plans/2026-06-12-zebra-web-app-port.mdx 拍板 4）。
+
+app = "proactive-ai-web-dev"
+primary_region = "ord"
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Runtime nginx config — envsubst'd by nginx:alpine's template mechanism.
+[env]
+  NGINX_RESOLVER = "[fdaa::3]"
+  NGINX_UPSTREAM_URL = "https://proactive-ai-agents-dev.fly.dev"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "256mb"

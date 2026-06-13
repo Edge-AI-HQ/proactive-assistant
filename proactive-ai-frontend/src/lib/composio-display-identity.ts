@@ -1,13 +1,12 @@
 /**
- * Composio userInfo → short label — re-exported from @pin-ai/core
- * (domain/composio-identity, the shared SSOT). Kept at this path so existing
- * `@/lib/composio-display-identity` importers keep working.
+ * 过渡 shim —— 实现已下沉 @pin-ai/ui-web（connect/composio-display-identity，
+ * 测试随迁）。旧路径保持可用。
  */
 export {
   extractComposioDisplayIdentity,
-  formatComposioConnectionIdentity,
   formatComposioToolkitName,
-  formatOptionalComposioConnectionIdentity,
   resolveComposioConnectionIdentity,
+  formatComposioConnectionIdentity,
+  formatOptionalComposioConnectionIdentity,
   type ComposioIdentityConnection,
-} from "@pin-ai/core";
+} from "@pin-ai/ui-web";

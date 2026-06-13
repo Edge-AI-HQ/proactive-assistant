@@ -66,3 +66,33 @@ export {
   type UserSettingsPatch,
   type UseUserSettingsResult,
 } from "./queries/user-settings";
+export {
+  useComposio,
+  buildConnectorInitTaskId,
+  buildConnectorPreviewTaskId,
+  normalizeComposioToolkit,
+  composioToolkitCovers,
+  getComposioConnectionsForToolkit,
+  isComposioToolkitConnected,
+  type ComposioState,
+  type ComposioStatus,
+  type Connection,
+  type ComposioCatalogItem,
+  type ComposioCatalogPage,
+  type ComposioCustomAuthScheme,
+  type ComposioCustomAuthConfig,
+  type ConnectToolkitOptions,
+  type CustomMcpConnector,
+  type CustomMcpConnectorResult,
+} from "./queries/composio";
+export {
+  useCrystallize,
+  type UseCrystallizeResult,
+} from "./queries/crystallize";
+export {
+  useInitTask,
+  isInitTaskFresh,
+  type InitTaskRow,
+  type UseInitTaskState,
+  type TaskStatus,
+} from "./queries/init-task";

@@ -19,6 +19,8 @@
 
 Proactive AI 后端整体收敛到 **pinai-agents**（Python / FastAPI / LangChain + DeepAgents），用户产品前端是 **proactive-ai-frontend**（React SPA，Vite + Tailwind + Capacitor，登录走 Supabase Auth），内部卡片 review 工具是 **internal-reward-dashboard**（独立 Vite React app，登录也走 Supabase Auth）。LLM 统一经 **LiteLLM** 路由。
 
+桌面 web 端是 **apps/web**（zebra 设计的独立 Vite React app，React 19 + react-router URL 路由），与 proactive-ai-frontend（Capacitor iOS 路线）并行；双端共享的 React DOM 层沉在 **packages/ui-web**（`@pin-ai/ui-web`：auth/聊天栈/球面/卡片/connect/voice/browser/设置 sections），逻辑层共享 `@pin-ai/core` + `@pin-ai/state`。设计 SSOT：[`docs/plans/2026-06-12-zebra-web-app-port.mdx`](docs/plans/2026-06-12-zebra-web-app-port.mdx)。
+
 `apis/`（Node 后端 + 容器编排 + gateway）、`pinai-openclaw/`（用户容器镜像 + plugin）、`miniapp/`（Telegram mini app）三个老仓目录已经移除，所有职责都搬到 pinai-agents：
 
 - 控制面（auth / device / connector / payment / scheduler / migrations）→ `pinai-agents` 的 **web 进程**。
@@ -39,11 +41,11 @@ pinai-agents 在同一 codebase 里跑两个进程，**单一信任边界**：
 
 ## 环境拓扑
 
-| 环境 | pinai-agents (web+chat) | Frontend | Internal reward dashboard | LiteLLM |
-|------|--------------------------|----------|---------------------------|---------|
-| dev | `proactive-ai-agents-dev` | `proactive-ai-frontend-dev` | `proactive-ai-reward-dashboard-dev` | `proactive-ai-litellm-dev` |
-| test | `proactive-ai-agents-test` | `proactive-ai-frontend-test` | 暂无独立 app | `proactive-ai-litellm-test` |
-| prod | `proactive-ai-agents-prod` | `proactive-ai-frontend-prod` | 暂无独立 app | `proactive-ai-litellm-prod` |
+| 环境 | pinai-agents (web+chat) | Frontend | Web (zebra) | Internal reward dashboard | LiteLLM |
+|------|--------------------------|----------|-------------|---------------------------|---------|
+| dev | `proactive-ai-agents-dev` | `proactive-ai-frontend-dev` | `proactive-ai-web-dev` | `proactive-ai-reward-dashboard-dev` | `proactive-ai-litellm-dev` |
+| test | `proactive-ai-agents-test` | `proactive-ai-frontend-test` | 暂无（CI 跳过） | 暂无独立 app | `proactive-ai-litellm-test` |
+| prod | `proactive-ai-agents-prod` | `proactive-ai-frontend-prod` | `proactive-ai-web-prod` | 暂无独立 app | `proactive-ai-litellm-prod` |
 
 所有 fly app 都在 `iad` / `ord` region。Daytona sandbox 是 chat 进程的远端执行环境（python_exec、browser tool 跑在那里），不算 fly app。
 
@@ -81,6 +83,8 @@ pinai-agents/.env / pinai-agents/.env.chat / ops/litellm/.env / ./.env  # 本地
 - `pinai-agents/infra/daytona/`：Daytona snapshot 构建脚本。
 - `pinai-agents/scripts/`：`sync_fly_secrets.py`（trust boundary 守护）、`regen_sdk.py`、`check_trust_boundary.sh`、`validate_ingest_recipe.py`。
 - `proactive-ai-frontend/src/`：React SPA（Vite + Tailwind + Capacitor，支持 Web/iOS/Android）。
+- `apps/web/src/`：zebra 桌面 web 端（独立 Vite app；壳=ZebraShell/panels/⌘K，功能=共享层）。部署随前端走统一管道（`deploy-{dev,prod}.yml` → `_deploy.yml` 的 `deploy-web` job），dev 跟 main push、prod 跟 `v*` tag。
+- `packages/ui-web/src/`：web 介质共享层（proactive-ai-frontend 与 apps/web 双端消费的 React DOM 组件 + 平台 hooks）。依赖硬标准「纯 web 可运行」，重 native 模块经注册点注入（registerSignOutCleanup / registerFeedbackOutbox / registerLocalThreadStore / registerExternalMicAcquirer）。
 - `internal-reward-dashboard/src/`：内部 reward review app（`/runs`、`/cards/:cardId`、`/casebook`、`/traces/:runId`、`/personal-data`），本地端口 `3004`，不要混进主产品前端。
 - `ops/litellm/`：LiteLLM 配置 + fly toml + 部署脚本。
 
@@ -185,6 +189,8 @@ cd proactive-ai-frontend && npm run type-check     # 前端类型检查
 cd proactive-ai-frontend && npm test               # 前端单测（vitest）
 cd internal-reward-dashboard && npm run type-check  # 内部 review app 类型检查
 cd internal-reward-dashboard && npm test            # 内部 review app 单测
+cd apps/web && npm run type-check && npm test       # zebra web 端
+npm run check:packages                              # core/state/ui-web 边界 lint + 类型 + 单测
 ```
 
 改完怎么验证（按改动范围选最轻的）：
@@ -192,6 +198,7 @@ cd internal-reward-dashboard && npm test            # 内部 review app 单测
 - 改 `pinai-agents/src/pinai_agents/web/` → `make restart`，看 `make logs-pinai-web` 起得来 + 打目标接口（端口随机，`make urls` 查）
 - 改 `pinai-agents/src/pinai_agents/chat/` → `make restart`，看 `make logs-pinai-chat` + 用前端发一条消息验证
 - 改前端 → `npm run dev`（端口 3003）在浏览器点；或 `make restart-frontend` 看容器版本
+- 改 `apps/web/` 或 `packages/ui-web/` → `cd apps/web && npm run dev`（端口 3005）+ `npm run check:packages`；动了 ui-web 还要跑 frontend type-check/test（shim 双端共享）
 - 改 `internal-reward-dashboard/` → `npm run type-check` + `npm test` + `npm run dev -- --host 127.0.0.1 --port 3004`，在 `/runs` / `/traces/:runId` 点真实流程
 - 改 `/api/reward-dashboard/*` 或 reward schema → `uv run ruff check .` + `uv run pytest tests/web/db/repositories/test_reward_repo.py tests/web/routes/test_reward_dashboard.py tests/web/services/test_trace_artifacts.py`
 - 改 db migration → `make migrate`，确认 schema 应用成功
@@ -262,10 +269,13 @@ Snapshot 构建脚本在 `pinai-agents/infra/daytona/`，CI（`deploy-test.yml` 
 **分支模型**：`main` 是唯一长期主干，受 ruleset 保护——**禁止直接 push**，所有改动走 PR + CI gate（`pinai-agents-checks` / `frontend-check` 必须绿）才能 merge。功能分支从 `main` 切、PR base 填 `main`。老 `main` 已归档为 `main-legacy`。
 
 ### Dev 环境
-push 到 `main` 后按改动范围自动部署（CI workflow：`.github/workflows/deploy-dev.yml`）：
+push 到 `main` 后按改动范围自动部署（CI workflow：`.github/workflows/deploy-dev.yml` → 复用 `_deploy.yml`）：
 - 改 `pinai-agents/` 或 `proactive-ai-frontend/` → 部署 pinai-agents + 前端
+- 改 `apps/web/` 或 `packages/`（共用层）→ 部署 apps/web（zebra）；改 `packages/` 同时触发前端重部署
 - 改 `ops/litellm/` → 部署 LiteLLM
 - Daytona snapshot 跟随 pinai-agents 部署刷新
+
+`apps/web`（zebra 桌面 web 端）与前端走**同一套统一部署管道**（`_deploy.yml` 的 `deploy-web` job + `web_toml` input），dev 跟 main push、prod 跟 `v*` tag——和前端机制完全一致。test 环境暂不部署 web（caller 不传 `web_toml`，job 自动跳过）；PR 上 apps/web + ui-web 的 type-check/test 由 `ci.yml` 的 frontend-check 覆盖。
 
 `internal-reward-dashboard/` 使用独立 workflow `.github/workflows/internal-reward-dashboard-dev.yml`：PR 只跑 type-check / test / build；push 到 `main` 且该目录变化时，部署到 Fly dev app `proactive-ai-reward-dashboard-dev`（默认地址 `https://proactive-ai-reward-dashboard-dev.fly.dev`）。
 
@@ -285,6 +295,8 @@ make deploy-pinai-prod      # pinai-agents → prod
 make deploy-frontend-dev    # 前端 → dev
 make deploy-frontend-prod   # 前端 → prod
 make deploy-reward-dashboard-dev  # 内部 reward dashboard → dev
+make deploy-web-dev         # apps/web (zebra) → dev
+make deploy-web-prod        # apps/web (zebra) → prod
 make deploy-litellm-dev     # LiteLLM → dev
 make deploy-litellm-prod    # LiteLLM → prod
 ```

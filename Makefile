@@ -1,9 +1,9 @@
 .PHONY: help init env-local ensure-env ensure-env-litellm ensure-env-pinai-agents ensure-env-root
-.PHONY: up down build build-pinai-agents build-frontend restart restart-frontend status urls
+.PHONY: up down build build-pinai-agents build-frontend build-web restart restart-frontend restart-web status urls
 .PHONY: local local-stop local-status
-.PHONY: logs logs-litellm logs-postgres logs-pinai-agents logs-pinai-web logs-pinai-chat logs-frontend
+.PHONY: logs logs-litellm logs-postgres logs-pinai-agents logs-pinai-web logs-pinai-chat logs-frontend logs-web
 .PHONY: migrate reset clean
-.PHONY: deploy-pinai-dev deploy-pinai-prod deploy-frontend-dev deploy-frontend-prod deploy-reward-dashboard-dev
+.PHONY: deploy-pinai-dev deploy-pinai-prod deploy-frontend-dev deploy-frontend-prod deploy-reward-dashboard-dev deploy-web-dev deploy-web-prod
 .PHONY: deploy-litellm-dev deploy-litellm-prod
 .PHONY: ios android macos rn ngrok githooks install
 .PHONY: tunnel-up tunnel-down tunnel-status
@@ -141,14 +141,17 @@ init: ## First-time setup: install deps and show next steps
 
 # ── Build ──
 
-build: ensure-env ## Build all images (pinai-agents + frontend)
-	$(export_vite) && $(COMPOSE) build pinai-web pinai-chat frontend
+build: ensure-env ## Build all images (pinai-agents + frontend + web)
+	$(export_vite) && $(COMPOSE) build pinai-web pinai-chat frontend web
 
 build-pinai-agents: ensure-env-pinai-agents ## Build only pinai-agents image (shared by web + chat + db-migrate)
 	$(COMPOSE) build pinai-web
 
 build-frontend: ensure-env-pinai-agents ## Build only frontend image
 	$(export_vite) && $(COMPOSE) build frontend
+
+build-web: ensure-env-pinai-agents ## Build only apps/web (zebra) image
+	$(export_vite) && $(COMPOSE) build web
 
 # ── Run ──
 
@@ -173,12 +176,17 @@ restart-frontend: ensure-env-pinai-agents ## Rebuild + recreate frontend contain
 	$(export_vite) && $(COMPOSE) build frontend
 	$(COMPOSE) up -d --force-recreate --no-deps frontend
 
+restart-web: ensure-env-pinai-agents ## Rebuild + recreate apps/web (zebra) container
+	$(export_vite) && $(COMPOSE) build web
+	$(COMPOSE) up -d --force-recreate --no-deps web
+
 status: ## Show running containers
 	$(COMPOSE) ps
 
 urls: ## Show this group's project name + live host ports
 	@echo "Project:  $(COMPOSE_PROJECT_NAME)"
 	@echo "Frontend: http://localhost:$$($(COMPOSE) port frontend 8080 2>/dev/null | cut -d: -f2)"
+	@echo "Web(zebra): http://localhost:$$($(COMPOSE) port web 8080 2>/dev/null | cut -d: -f2)"
 	@echo "API:      http://localhost:$$($(COMPOSE) port pinai-web 8000 2>/dev/null | cut -d: -f2)"
 	@echo "Postgres: localhost:$$($(COMPOSE) port postgres 5432 2>/dev/null | cut -d: -f2)"
 	@echo "LiteLLM:  http://localhost:$$($(COMPOSE) port litellm 4000 2>/dev/null | cut -d: -f2)"
@@ -217,6 +225,9 @@ logs-pinai-chat: ## Tail pinai-chat (LLM-loop process) logs
 
 logs-frontend: ## Tail frontend (nginx) logs
 	$(COMPOSE) logs -f frontend
+
+logs-web: ## Tail apps/web (zebra nginx) logs
+	$(COMPOSE) logs -f web
 
 # ── Database ──
 
@@ -298,6 +309,22 @@ deploy-reward-dashboard-dev: ## Deploy internal reward dashboard to dev (Fly ngi
 	cd internal-reward-dashboard && env -u all_proxy -u http_proxy -u https_proxy \
 		flyctl deploy --config fly.toml --remote-only \
 		$(call extract_reward_dashboard_vite_args,dev)
+
+deploy-web-dev: ## Deploy apps/web (zebra 桌面 web 端) to dev (Fly nginx)
+	# Build context = repo root：Dockerfile 要 COPY packages/ 共用层源码。
+	# VITE 提取复用 reward dashboard 的两 key 版（同为 static SPA，所需一致）。
+	env -u all_proxy -u http_proxy -u https_proxy \
+		flyctl deploy . --config apps/web/fly.toml --dockerfile apps/web/Dockerfile \
+		--remote-only --build-arg WORKDIR=apps/web \
+		$(call extract_reward_dashboard_vite_args,dev)
+
+deploy-web-prod: ## Deploy apps/web (zebra) to prod (Fly nginx) — CI/CD 优先，本地备用
+	@echo "Deploying apps/web to PRODUCTION. Ctrl+C to cancel."
+	@sleep 3
+	env -u all_proxy -u http_proxy -u https_proxy \
+		flyctl deploy . --config apps/web/fly.prod.toml --dockerfile apps/web/Dockerfile \
+		--remote-only --build-arg WORKDIR=apps/web \
+		$(call extract_reward_dashboard_vite_args,production)
 
 deploy-litellm-dev: ## Deploy LiteLLM to dev
 	cd ops/litellm && env -u all_proxy -u http_proxy -u https_proxy \
