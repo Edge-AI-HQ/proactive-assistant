@@ -22,7 +22,12 @@ dependencies = [
     # LangGraph Postgres checkpointer (Step 1.4) — thread state persists
     # across pinai-agents restarts. Schema isolated under `langgraph` schema
     # in the same Supabase instance as pai_* tables (Step 2).
-    "langgraph-checkpoint-postgres>=2.0.0",
+    # >=3.1.0: ships the AsyncPostgresSaver fast-path override of
+    # `aget_delta_channel_history` (two-stage batched SQL). 3.0.5 lacked it
+    # and fell back to the base per-ancestor walk — one get_tuple roundtrip
+    # per superstep — making aget_state O(thread history): ~6s to rehydrate a
+    # 451-checkpoint main thread, the dominant main-chat TTFT cost.
+    "langgraph-checkpoint-postgres>=3.1.0,<4",
     "psycopg[binary]>=3.2.0",
     "psycopg-pool>=3.2.0",
     # Migration runner — pure SQL, no ORM. Used by fly release_command in
