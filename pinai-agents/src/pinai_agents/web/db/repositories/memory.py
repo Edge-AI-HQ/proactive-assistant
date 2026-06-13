@@ -73,6 +73,19 @@ class MemoryRow:
         )
 
 
+# Explicit read column list — mirrors MemoryRow.from_record exactly, so adding
+# a column to one means adding it to the other. Deliberately omits the pgvector
+# `embedding` column (1536 floats / ~6 KB per row, migration 029): list/get
+# views never use it, yet `SELECT *` dragged it through every Sort + WindowAgg,
+# spilling large result sets to disk. Semantic search selects embedding in its
+# own query where it's actually needed.
+_READ_COLUMNS = (
+    "id, text, source, source_run_id, subject, quality, confidence, "
+    "status, superseded_by, occurred_at, created_at, tags, "
+    "related_memory_ids, reference_count, last_referenced_at, referenced_by_runs"
+)
+
+
 @dataclass(slots=True)
 class AddMemoryInput:
     id: str
@@ -192,9 +205,11 @@ class MemoryRepository(UserScopedRepository):
         """List status='active' memories with common filters.
 
         Returns `(rows, total)` where `total` is the count of all rows
-        matching the filters BEFORE limit/offset (via `COUNT(*) OVER()`),
-        so callers can paginate without a second query and without filter
-        drift between the page query and the count query.
+        matching the filters BEFORE limit/offset. Count and page are two
+        queries sharing one WHERE inside the caller's transaction (one MVCC
+        snapshot), so they can't drift; the page projects narrow columns
+        (no embedding) instead of pulling every matching row through a
+        window function just to attach a total.
 
         order_by accepts: 'created_at_desc' (default) | 'quality_desc' |
         'last_referenced_desc'. Other values raise ValueError to prevent
@@ -209,9 +224,11 @@ class MemoryRepository(UserScopedRepository):
             msg = f"unsupported order_by: {order_by!r}"
             raise ValueError(msg)
 
-        sql = (
-            """
-            SELECT *, COUNT(*) OVER () AS total_count
+        # Shared WHERE so the count and the page can't drift. Both run inside
+        # the same user_scoped_tx → same MVCC snapshot, so splitting the old
+        # single `SELECT *, COUNT(*) OVER ()` into two queries is exact, not
+        # just "close enough".
+        where_sql = """
             FROM pai_memory
             WHERE user_id = %s
               AND status = 'active'
@@ -220,36 +237,34 @@ class MemoryRepository(UserScopedRepository):
               AND (%s::text IS NULL OR subject LIKE %s)
               AND (%s::timestamptz IS NULL OR created_at >= %s)
         """
-            + order_clause
-            + " LIMIT %s OFFSET %s"
-        )
-
         prefix_pat = f"{subject_prefix}%" if subject_prefix else None
+        where_params = (
+            self._user_id,
+            min_quality,
+            subject,
+            subject,
+            subject_prefix,
+            prefix_pat,
+            since,
+            since,
+        )
         async with self._conn.cursor() as cur:
+            # Count via a dedicated query — index-only on
+            # idx_pai_memory_status_quality, no heap fetch. The old
+            # `COUNT(*) OVER ()` forced every matching row's wide columns
+            # (incl. the embedding) through a WindowAgg just to produce one
+            # number, which is what made large memory sets crawl.
+            await cur.execute(f"SELECT count(*) AS total {where_sql}", where_params)
+            count_row = await cur.fetchone()
+            total = int(count_row["total"]) if count_row else 0
+            if total == 0:
+                return [], 0
+            # Page: narrow column list (no embedding) + index-ordered top-N.
             await cur.execute(
-                sql,
-                (
-                    self._user_id,
-                    min_quality,
-                    subject,
-                    subject,
-                    subject_prefix,
-                    prefix_pat,
-                    since,
-                    since,
-                    limit,
-                    offset,
-                ),
+                f"SELECT {_READ_COLUMNS} {where_sql} {order_clause} LIMIT %s OFFSET %s",
+                (*where_params, limit, offset),
             )
             rows = await cur.fetchall()
-        # Empty page → total=0. This is technically wrong only in the
-        # "offset past end of filtered set" edge case; not worth a second
-        # query (would re-introduce filter-drift surface). Frontend
-        # paginators clamp to page 0 when total is 0, which recovers on
-        # the next refetch.
-        if not rows:
-            return [], 0
-        total = int(rows[0]["total_count"])
         return [MemoryRow.from_record(r) for r in rows], total
 
     async def archive(self, memory_id: str) -> MemoryRow | None:

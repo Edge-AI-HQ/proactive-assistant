@@ -80,6 +80,22 @@ class PersonalSignalRow:
         )
 
 
+# Explicit read column list — mirrors PersonalSignalRow.from_record exactly.
+# Includes `updated_at` (migration 049): from_record reads it, so dropping it
+# from the projection would silently fall back to ingested_at. Deliberately
+# omits the pgvector `embedding` column (migration 029): list/get views never
+# use it, and signals are the largest per-user table, so `SELECT *` dragging a
+# 1536-d vector through every page is where it hurt most. (last_referenced_at /
+# referenced_by_runs are intentionally absent — the Row dataclass doesn't carry
+# them either.)
+_READ_COLUMNS = (
+    "id, kind, title, summary, payload, salience, confidence, dedupe_key, "
+    "occurred_at, available_at, expires_at, source, device_id, subject, "
+    "source_raw_table, source_raw_ids, status, consumed_by_run_id, "
+    "ingested_at, reference_count, updated_at"
+)
+
+
 @dataclass(slots=True)
 class IngestSignalInput:
     id: str
@@ -478,54 +494,58 @@ class PersonalSignalsRepository(UserScopedRepository):
         to scan everything.
 
         Returns `(rows, total)` where `total` is the count of all rows
-        matching the filters BEFORE limit/offset (via `COUNT(*) OVER()`),
-        so callers can paginate without a second query and without filter
-        drift between the page query and the count query.
+        matching the filters BEFORE limit/offset. Count and page are two
+        queries sharing one WHERE inside the caller's transaction (one MVCC
+        snapshot), so they can't drift; the page projects narrow columns
+        (no embedding) instead of pulling every matching row through a
+        window function just to attach a total.
         """
+        # Shared WHERE so the count and the page can't drift — both run inside
+        # the same user_scoped_tx (one MVCC snapshot), so splitting the old
+        # single `SELECT *, COUNT(*) OVER ()` into two queries stays exact.
+        where_sql = """
+            FROM pai_personal_signals
+            WHERE user_id = %s
+              AND (%s::text IS NULL OR status = %s)
+              AND (%s::text IS NULL OR kind = %s)
+              AND (%s::text IS NULL OR source = %s)
+              AND (%s::text IS NULL OR device_id = %s)
+              AND (%s::timestamptz IS NULL OR occurred_at >= %s)
+              AND (%s::timestamptz IS NULL OR occurred_at < %s)
+              AND (%s::real IS NULL OR salience >= %s)
+        """
+        where_params = (
+            self._user_id,
+            status,
+            status,
+            kind,
+            kind,
+            source,
+            source,
+            device_id,
+            device_id,
+            since,
+            since,
+            before,
+            before,
+            min_salience,
+            min_salience,
+        )
         async with self._conn.cursor() as cur:
+            # Count separately — index-only on idx_pai_psignals_status_time
+            # instead of dragging every matching row (payload JSONB + 1536-d
+            # embedding) through a WindowAgg.
+            await cur.execute(f"SELECT count(*) AS total {where_sql}", where_params)
+            count_row = await cur.fetchone()
+            total = int(count_row["total"]) if count_row else 0
+            if total == 0:
+                return [], 0
+            # Page: narrow column list (no embedding), index-ordered top-N.
             await cur.execute(
-                """
-                SELECT *, COUNT(*) OVER () AS total_count
-                FROM pai_personal_signals
-                WHERE user_id = %s
-                  AND (%s::text IS NULL OR status = %s)
-                  AND (%s::text IS NULL OR kind = %s)
-                  AND (%s::text IS NULL OR source = %s)
-                  AND (%s::text IS NULL OR device_id = %s)
-                  AND (%s::timestamptz IS NULL OR occurred_at >= %s)
-                  AND (%s::timestamptz IS NULL OR occurred_at < %s)
-                  AND (%s::real IS NULL OR salience >= %s)
-                ORDER BY occurred_at DESC
-                LIMIT %s OFFSET %s
-                """,
-                (
-                    self._user_id,
-                    status,
-                    status,
-                    kind,
-                    kind,
-                    source,
-                    source,
-                    device_id,
-                    device_id,
-                    since,
-                    since,
-                    before,
-                    before,
-                    min_salience,
-                    min_salience,
-                    limit,
-                    offset,
-                ),
+                f"SELECT {_READ_COLUMNS} {where_sql} ORDER BY occurred_at DESC LIMIT %s OFFSET %s",
+                (*where_params, limit, offset),
             )
             rows = await cur.fetchall()
-        # Empty page → total=0. Same trade-off as MemoryRepository.list_active:
-        # accepting the "offset past end of filtered set" edge case (frontend
-        # paginators clamp on next refetch) avoids re-introducing a second
-        # query whose WHERE clause could drift from this one.
-        if not rows:
-            return [], 0
-        total = int(rows[0]["total_count"])
         return [PersonalSignalRow.from_record(r) for r in rows], total
 
     async def list_kinds(
