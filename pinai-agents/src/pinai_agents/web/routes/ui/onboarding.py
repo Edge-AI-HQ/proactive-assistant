@@ -195,39 +195,8 @@ async def prewarm_connector_summary_for_onboarding(
     user: User = Depends(current_user),
     pool=Depends(get_pool),
 ) -> ConnectorSummaryPrewarmResponse:
-    if pool is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable"
-        )
-
-    try:
-        user = await ensure_user_litellm_key(
-            pool,
-            user,
-            required_models={DEFAULT_CONNECTOR_SUMMARY_MODEL},
-        )
-        if not user.litellm_virtual_key:
-            logger.info(
-                "onboarding connector summary prewarm skipped user=%s: LiteLLM key missing", user.id
-            )
-            return ConnectorSummaryPrewarmResponse(
-                ok=False, modelId=DEFAULT_CONNECTOR_SUMMARY_MODEL
-            )
-        await prewarm_onboarding_connector_summary(
-            bearer_token=user.litellm_virtual_key,
-            model=DEFAULT_CONNECTOR_SUMMARY_MODEL,
-        )
-    except Exception as exc:
-        logger.info(
-            "onboarding connector summary prewarm failed user=%s toolkit=%s: %s",
-            user.id,
-            _summary_source_toolkit(_normalize_toolkit(req.toolkit)),
-            exc,
-        )
-        return ConnectorSummaryPrewarmResponse(ok=False, modelId=DEFAULT_CONNECTOR_SUMMARY_MODEL)
-
     logger.info(
-        "onboarding connector summary prewarmed user=%s toolkit=%s",
+        "onboarding connector summary prewarm no-op user=%s toolkit=%s",
         user.id,
         _summary_source_toolkit(_normalize_toolkit(req.toolkit)),
     )
@@ -244,30 +213,51 @@ async def summarize_connector_for_onboarding(
     user: User = Depends(current_user),
     pool=Depends(get_pool),
 ) -> ConnectorSummaryResponse:
-    started_at = monotonic()
     if pool is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable"
         )
 
-    toolkit = _normalize_toolkit(req.toolkit)
+    return await build_connector_summary_for_onboarding(
+        pool,
+        user=user,
+        toolkit=req.toolkit,
+        connected_account_id=req.connected_account_id,
+        connector_label=req.connector_label,
+        connector_user_info=req.connector_user_info,
+        limit=req.limit,
+    )
+
+
+async def build_connector_summary_for_onboarding(
+    pool,
+    *,
+    user: User,
+    toolkit: str,
+    connected_account_id: str | None,
+    connector_label: str | None = None,
+    connector_user_info: dict[str, Any] | None = None,
+    limit: int = MAX_CONNECTOR_SUMMARY_ITEMS,
+) -> ConnectorSummaryResponse:
+    started_at = monotonic()
+    toolkit = _normalize_toolkit(toolkit)
     summary_toolkit = _summary_source_toolkit(toolkit)
     items = await collect_connector_summary_items(
         pool,
         user_id=user.id,
         toolkit=summary_toolkit,
-        limit=req.limit,
+        limit=limit,
     )
     collect_elapsed_ms = int((monotonic() - started_at) * 1000)
     source = ConnectorSummarySource(
         toolkit=summary_toolkit,
-        connectedAccountId=req.connected_account_id,
+        connectedAccountId=connected_account_id,
         itemCount=len(items),
     )
     identity = _build_identity_hints(
         user=user,
-        connector_label=req.connector_label,
-        connector_user_info=req.connector_user_info,
+        connector_label=connector_label,
+        connector_user_info=connector_user_info,
     )
     if not items:
         total_elapsed_ms = int((monotonic() - started_at) * 1000)
@@ -282,7 +272,7 @@ async def summarize_connector_for_onboarding(
             pool,
             user_id=user.id,
             toolkit=summary_toolkit,
-            connected_account_id=req.connected_account_id,
+            connected_account_id=connected_account_id,
             model=DEFAULT_CONNECTOR_SUMMARY_MODEL,
             item_count=0,
             collect_ms=collect_elapsed_ms,
@@ -300,7 +290,7 @@ async def summarize_connector_for_onboarding(
     cache_key = _summary_cache_key(
         model=DEFAULT_CONNECTOR_SUMMARY_MODEL,
         toolkit=summary_toolkit,
-        connected_account_id=req.connected_account_id,
+        connected_account_id=connected_account_id,
         raw_fingerprint=raw_fingerprint,
     )
     context = _build_summary_context(toolkit=summary_toolkit, items=items, identity=identity)
@@ -319,7 +309,7 @@ async def summarize_connector_for_onboarding(
             pool,
             user_id=user.id,
             toolkit=summary_toolkit,
-            connected_account_id=req.connected_account_id,
+            connected_account_id=connected_account_id,
             model=DEFAULT_CONNECTOR_SUMMARY_MODEL,
             item_count=len(items),
             collect_ms=collect_elapsed_ms,
@@ -374,7 +364,7 @@ async def summarize_connector_for_onboarding(
             pool,
             user_id=user.id,
             toolkit=summary_toolkit,
-            connected_account_id=req.connected_account_id,
+            connected_account_id=connected_account_id,
             model=DEFAULT_CONNECTOR_SUMMARY_MODEL,
             item_count=len(items),
             collect_ms=collect_elapsed_ms,
@@ -401,7 +391,7 @@ async def summarize_connector_for_onboarding(
         pool,
         user_id=user.id,
         toolkit=summary_toolkit,
-        connected_account_id=req.connected_account_id,
+        connected_account_id=connected_account_id,
         model=DEFAULT_CONNECTOR_SUMMARY_MODEL,
         item_count=len(items),
         collect_ms=collect_elapsed_ms,
@@ -414,7 +404,7 @@ async def summarize_connector_for_onboarding(
         user_id=user.id,
         cache_key=cache_key,
         toolkit=summary_toolkit,
-        connected_account_id=req.connected_account_id,
+        connected_account_id=connected_account_id,
         model=DEFAULT_CONNECTOR_SUMMARY_MODEL,
         raw_fingerprint=raw_fingerprint,
         item_count=len(items),
@@ -801,52 +791,6 @@ async def generate_onboarding_connector_summary(
     if content is None:
         raise LiteLLMError(502, "/chat/completions response missing content")
     return _parse_summary_payload(content)
-
-
-async def prewarm_onboarding_connector_summary(
-    *,
-    bearer_token: str,
-    model: str = DEFAULT_CONNECTOR_SUMMARY_MODEL,
-) -> None:
-    settings = get_web_settings()
-    base_url = (settings.litellm_base_url or "").rstrip("/")
-    if base_url and not base_url.endswith("/v1"):
-        base_url = f"{base_url}/v1"
-    if not base_url:
-        raise LiteLLMError(500, "LITELLM_BASE_URL not configured")
-    if not bearer_token:
-        raise LiteLLMError(500, "LiteLLM virtual key not configured")
-
-    body = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": "Return compact JSON only."},
-            {"role": "user", "content": '{"ok":true}'},
-        ],
-        "temperature": 0.1,
-        "response_format": {"type": "json_object"},
-        "reasoning_effort": "minimal",
-        "max_completion_tokens": 8,
-    }
-    headers = {
-        "Authorization": f"Bearer {bearer_token}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }
-    timeout = httpx.Timeout(connect=5.0, read=20.0, write=10.0, pool=5.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        try:
-            response = await client.post(f"{base_url}/chat/completions", json=body, headers=headers)
-        except httpx.RequestError as exc:
-            raise LiteLLMError(
-                502, f"onboarding connector summary prewarm failed: {type(exc).__name__}"
-            ) from exc
-    if not response.is_success:
-        try:
-            parsed = response.json()
-        except ValueError:
-            parsed = {"message": response.text}
-        raise LiteLLMError(response.status_code, _error_message(parsed) or response.text[:300])
 
 
 def _parse_summary_payload(content: str) -> OnboardingConnectorSummary:

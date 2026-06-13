@@ -6,7 +6,7 @@ import DataConnections from "./DataConnections";
 import type { ComposioState } from "@/hooks/useComposio";
 import type { InitTaskRow } from "@/hooks/useInitTask";
 
-const { initTaskState, summaryState } = vi.hoisted(() => ({
+const { initTaskState, summaryState, oauthState } = vi.hoisted(() => ({
   initTaskState: {
     task: null as InitTaskRow | null,
     tasks: {} as Record<string, InitTaskRow | null>,
@@ -43,6 +43,10 @@ const { initTaskState, summaryState } = vi.hoisted(() => ({
       modelId: "claude-sonnet-4-6",
     },
   },
+  oauthState: {
+    open: vi.fn(async (_url: string) => undefined),
+    close: vi.fn(async () => undefined),
+  },
 }));
 
 vi.mock("@/hooks/useInitTask", async () => {
@@ -54,7 +58,7 @@ vi.mock("@/hooks/useInitTask", async () => {
       const task = taskId
         ? hasTask
           ? initTaskState.tasks[taskId]
-          : taskId.startsWith("init.")
+          : taskId.startsWith("init.") || taskId.startsWith("preview.")
             ? initTaskState.task
             : null
         : null;
@@ -77,6 +81,11 @@ vi.mock("@pin-ai/core", async (importOriginal) => ({
       headers: { "Content-Type": "application/json" },
     });
   }),
+}));
+
+vi.mock("@/lib/oauth-popup", () => ({
+  closeOAuthSurface: () => oauthState.close(),
+  openOAuthAndAwaitClose: (url: string) => oauthState.open(url),
 }));
 
 function makeComposioState(
@@ -138,12 +147,20 @@ function connectorSummaryRequests() {
   return summaryState.requests.filter((request) => request.path === "/onboarding/connector-summary");
 }
 
+function connectorSummaryPrewarmRequests() {
+  return summaryState.requests.filter((request) => request.path === "/onboarding/connector-summary/prewarm");
+}
+
 describe("DataConnections", () => {
   beforeEach(() => {
     initTaskState.task = null;
     initTaskState.tasks = {};
     summaryState.requests = [];
     summaryState.status = 200;
+    oauthState.open.mockReset();
+    oauthState.open.mockResolvedValue(undefined);
+    oauthState.close.mockReset();
+    oauthState.close.mockResolvedValue(undefined);
     window.localStorage.clear();
   });
 
@@ -165,6 +182,31 @@ describe("DataConnections", () => {
       fireEvent.click(screen.getByRole("button", { name: "Add Gmail account" }));
     });
     expect(state.connectToolkit).toHaveBeenCalledWith("gmail");
+  });
+
+  test("does not block connector UI on Composio ACTIVE wait after OAuth closes", async () => {
+    const state = makeComposioState([]);
+    state.connectToolkit = vi.fn(async () => ({
+      ok: true,
+      redirectUrl: "https://oauth.local",
+      connectedAccountId: "google-workspace-account",
+    }));
+    state.waitForToolkit = vi.fn(
+      () => new Promise<{ connected: boolean }>(() => undefined),
+    );
+
+    render(<DataConnections composio={state} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "Connect" })[0]);
+    });
+
+    await waitFor(() => {
+      expect(oauthState.open).toHaveBeenCalledWith("https://oauth.local");
+      expect(state.waitForToolkit).toHaveBeenCalledWith("google-workspace-account");
+    });
+    expect(state.cancelWait).not.toHaveBeenCalled();
+    expect(screen.queryByText("Connection not confirmed — please try again")).toBeNull();
   });
 
   test("shows fanout sub-toolkit init counts instead of aggregate count", () => {
@@ -254,6 +296,114 @@ describe("DataConnections", () => {
     expect(screen.getByText("Boliang Zhang")).toBeTruthy();
     expect(screen.getByText("Key People & Accounts")).toBeTruthy();
     expect(screen.getByText("Works with the PIN AI onboarding team.")).toBeTruthy();
+  });
+
+  test("shows onboarding connector summary after a fresh preview succeeds", async () => {
+    initTaskState.tasks = {
+      "preview.gmail.gmail-account": {
+        id: "preview.gmail.gmail-account",
+        type: "connector.preview",
+        status: "succeeded",
+        payload: { toolkit: "gmail", limit: 50 },
+        progress: {},
+        result: {
+          summaryItemCount: 50,
+        },
+        attempts: 1,
+        max_attempts: 1,
+        last_error_code: null,
+        last_error_message: null,
+        started_at: "2026-06-12T10:00:00.000Z",
+        completed_at: new Date().toISOString(),
+      },
+    };
+    const state = makeComposioState([
+      {
+        toolkit: "gmail",
+        status: "ACTIVE",
+        connectedAccountId: "gmail-account",
+        label: "user@example.com",
+        userInfo: null,
+      },
+    ]);
+
+    render(<ConnectorOnboardingInsight connections={state.connections} />);
+
+    await waitFor(() => {
+      expect(connectorSummaryRequests()).toHaveLength(1);
+    });
+    expect(connectorSummaryPrewarmRequests()).toHaveLength(0);
+    expect(connectorSummaryRequests()[0]).toEqual({
+      path: "/onboarding/connector-summary",
+      body: {
+        toolkit: "gmail",
+        connectedAccountId: "gmail-account",
+        connectorLabel: "user@example.com",
+        connectorUserInfo: null,
+      },
+    });
+  });
+
+  test("does not summarize init fallback while preview is still running", async () => {
+    initTaskState.tasks = {
+      "preview.gmail.gmail-account": {
+        id: "preview.gmail.gmail-account",
+        type: "connector.preview",
+        status: "running",
+        payload: { toolkit: "gmail", limit: 50 },
+        progress: { stage: "summary" },
+        result: null,
+        attempts: 1,
+        max_attempts: 1,
+        last_error_code: null,
+        last_error_message: null,
+        started_at: new Date().toISOString(),
+        completed_at: null,
+      },
+      "init.gmail.gmail-account": {
+        id: "init.gmail.gmail-account",
+        type: "connector.init",
+        status: "succeeded",
+        payload: { toolkit: "gmail", limit: 100 },
+        progress: {},
+        result: {
+          rawInserted: 100,
+          memoriesWritten: 0,
+          skillsAdded: 0,
+        },
+        attempts: 1,
+        max_attempts: 1,
+        last_error_code: null,
+        last_error_message: null,
+        started_at: "2026-06-12T10:00:00.000Z",
+        completed_at: new Date().toISOString(),
+      },
+    };
+    const onStatusChange = vi.fn();
+
+    render(
+      <ConnectorOnboardingInsight
+        connections={[
+          {
+            toolkit: "gmail",
+            status: "ACTIVE",
+            connectedAccountId: "gmail-account",
+            label: "user@example.com",
+            userInfo: null,
+          },
+        ]}
+        mode="watcher"
+        onStatusChange={onStatusChange}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onStatusChange).toHaveBeenCalledWith(
+        "pending",
+        expect.stringContaining("gmail:gmail-account:"),
+      );
+    });
+    expect(connectorSummaryRequests()).toHaveLength(0);
   });
 
   test("summarizes one grouped connector when several init tasks finish together", async () => {

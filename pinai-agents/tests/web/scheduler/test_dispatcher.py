@@ -24,8 +24,9 @@ def test_generator_tasks_lease_covers_generate_budget():
     assert dispatcher._lease_for("generator.manual") == expected
     assert dispatcher._lease_for("generator.auto") == expected
     assert dispatcher._lease_for("generator.scheduled") == expected
-    # auto.dreaming 不是 generator kind,走 _LONG_LEASE_SECONDS(600)。
+    # These are not generator kinds, but can run past the default 60s lease.
     assert dispatcher._lease_for("auto.dreaming") == 600
+    assert dispatcher._lease_for("connector.preview") == 600
 
 
 def test_reminder_card_uses_default_lease():

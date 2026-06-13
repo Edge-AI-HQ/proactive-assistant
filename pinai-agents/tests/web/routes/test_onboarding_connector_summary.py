@@ -375,19 +375,11 @@ async def test_connector_summary_posts_recent_items_to_litellm(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_connector_summary_prewarm_uses_user_litellm_key(monkeypatch):
-    captured: dict[str, object] = {}
+async def test_connector_summary_prewarm_is_noop(monkeypatch):
+    async def fail_ensure_user_litellm_key(*_args, **_kwargs):
+        raise AssertionError("prewarm should not provision LiteLLM keys")
 
-    async def fake_ensure_user_litellm_key(_pool, user, *, required_models=None):
-        captured["required_models"] = required_models
-        user.litellm_virtual_key = "sk-test-onboarding"
-        return user
-
-    async def fake_prewarm(**kwargs):
-        captured.update(kwargs)
-
-    monkeypatch.setattr(onboarding_routes, "ensure_user_litellm_key", fake_ensure_user_litellm_key)
-    monkeypatch.setattr(onboarding_routes, "prewarm_onboarding_connector_summary", fake_prewarm)
+    monkeypatch.setattr(onboarding_routes, "ensure_user_litellm_key", fail_ensure_user_litellm_key)
 
     client = await _client()
     async with client:
@@ -401,9 +393,6 @@ async def test_connector_summary_prewarm_uses_user_litellm_key(monkeypatch):
         "ok": True,
         "modelId": onboarding_routes.DEFAULT_CONNECTOR_SUMMARY_MODEL,
     }
-    assert captured["bearer_token"] == "sk-test-onboarding"
-    assert captured["model"] == onboarding_routes.DEFAULT_CONNECTOR_SUMMARY_MODEL
-    assert captured["required_models"] == {onboarding_routes.DEFAULT_CONNECTOR_SUMMARY_MODEL}
 
 
 @pytest.mark.asyncio
