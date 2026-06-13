@@ -7,7 +7,7 @@
  * is the write side.
  *
  * Design choices:
- * - Polling interval is fixed at 5s (web) / 10s (native via Capacitor).
+ * - Polling interval is fixed at 1s (web) / 10s (native via Capacitor).
  *   No exponential backoff — connector init is short-lived (seconds to
  *   a couple of minutes) and the user is staring at the chip waiting
  *   for it to flip.
@@ -50,7 +50,7 @@ export interface UseInitTaskState {
   terminal: boolean;
 }
 
-const POLL_INTERVAL_MS = isNative ? 10_000 : 5_000;
+const POLL_INTERVAL_MS = isNative ? 10_000 : 1_000;
 const FRESH_WINDOW_MS = 60 * 60 * 1000; // 1h
 
 /**

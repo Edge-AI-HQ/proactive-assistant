@@ -1278,14 +1278,38 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                   <div className="ml-4 space-y-0.5">
                                                     {childAccounts.map((conn, idx) => {
                                                       const identity = resolveIdentity(conn, connections);
+                                                      const isDisconnecting =
+                                                        disconnectingId === conn.connectedAccountId;
                                                       return (
                                                         <div
                                                           key={conn.connectedAccountId ?? `${child.name}-${idx}`}
                                                           className="rounded-lg bg-emerald-500/[0.02] px-2 py-1"
                                                         >
-                                                          <p className="truncate text-[10px] text-foreground/45">
-                                                            {identity ?? `${child.name} #${idx + 1}`}
-                                                          </p>
+                                                          <div className="flex items-center gap-2">
+                                                            <p className="min-w-0 flex-1 truncate text-[10px] text-foreground/45">
+                                                              {identity ?? `${child.name} #${idx + 1}`}
+                                                            </p>
+                                                            {conn.connectedAccountId && (
+                                                              <button
+                                                                type="button"
+                                                                onClick={(e) => {
+                                                                  e.stopPropagation();
+                                                                  handleDisconnect(conn.connectedAccountId!);
+                                                                }}
+                                                                disabled={isDisconnecting}
+                                                                className="text-[10px] font-medium rounded-lg px-2 py-0.5 transition-colors disabled:opacity-40 text-foreground/35 hover:text-red-500 hover:bg-red-500/[0.08]"
+                                                              >
+                                                                {isDisconnecting ? (
+                                                                  <Loader2
+                                                                    size={10}
+                                                                    className="animate-spin text-red-500"
+                                                                  />
+                                                                ) : (
+                                                                  "Disconnect"
+                                                                )}
+                                                              </button>
+                                                            )}
+                                                          </div>
                                                           {conn.connectedAccountId && (
                                                             <InitTaskChip
                                                               toolkit={conn.toolkit}

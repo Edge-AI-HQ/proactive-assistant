@@ -1,9 +1,12 @@
-import { useCallback, useState } from "react";
-import { ChevronRight, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { CheckCircle2, ChevronRight, Database, Loader2, Sparkles, UserRound } from "lucide-react";
 import AmbientSourceControlsPanel from "@/components/ambient/AmbientSourceControlsPanel";
 import VoiceIdentitySettings from "@/components/account/VoiceIdentitySettings";
 import AmbientModelSetupStep from "./AmbientModelSetupStep";
 import DataConnections from "@/components/connect/DataConnections";
+import ConnectorOnboardingInsight, {
+  type ConnectorInsightStatus,
+} from "@/components/connect/ConnectorOnboardingInsight";
 import { useComposio } from "@/hooks/useComposio";
 import { isNative } from "@/lib/platform";
 
@@ -28,6 +31,9 @@ interface OnboardingFlowProps {
 }
 
 type Step = 1 | 2 | 3;
+type ExitStage = "flow" | "waiting" | "summary";
+
+const INSIGHT_WAIT_GRACE_MS = 800;
 
 interface StepHeaderProps {
   step: Step;
@@ -61,11 +67,117 @@ function StepHeader({ step, title, subtitle }: StepHeaderProps) {
   );
 }
 
+function InsightWaitPage() {
+  const steps = [
+    {
+      label: "Reading recent items",
+      detail: "Pulling the newest connector records into a small working set.",
+      icon: Database,
+    },
+    {
+      label: "Finding useful signals",
+      detail: "Looking for work patterns, collaborators, tools, and writing style.",
+      icon: Sparkles,
+    },
+    {
+      label: "Composing your preview",
+      detail: "Turning the first pull into a short profile you can review.",
+      icon: UserRound,
+    },
+  ];
+
+  return (
+    <section className="glass-card-strong flex min-h-0 flex-1 flex-col overflow-hidden border border-foreground/[0.08]">
+      <div className="flex flex-shrink-0 items-start gap-3 px-5 pb-4 pt-5 sm:px-6 sm:pt-6">
+        <div className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-emerald-500/[0.08] text-emerald-600">
+          <Loader2 size={15} className="animate-spin" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-foreground/34">
+            Connector preview
+          </p>
+          <h1 className="max-w-[18rem] text-[24px] font-semibold leading-[1.08] tracking-tight text-foreground">
+            PIN AI is getting to know your work context
+          </h1>
+          <p className="mt-3 max-w-sm text-[13px] leading-5 text-foreground/55">
+            We are turning your first connector pull into a concise profile preview.
+          </p>
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 px-5 pb-5 sm:px-6">
+        <div className="rounded-[24px] border border-foreground/[0.07] bg-white/45 p-4">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground/42">
+              First data pull
+            </span>
+            <span className="rounded-full bg-foreground/[0.055] px-2.5 py-1 text-[10px] font-medium leading-none text-foreground/45">
+              Live
+            </span>
+          </div>
+
+          <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-foreground/[0.06]">
+            <div className="h-full w-2/3 animate-pulse rounded-full bg-foreground/70" />
+          </div>
+
+          <div className="mt-5 space-y-4">
+            {steps.map((step) => {
+              const Icon = step.icon;
+              return (
+                <div
+                  key={step.label}
+                  className="grid grid-cols-[2rem_1fr_auto] items-start gap-3"
+                >
+                  <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-foreground/[0.045] text-foreground/50">
+                    <Icon size={15} strokeWidth={1.8} />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-[13px] font-semibold leading-5 text-foreground/76">
+                      {step.label}
+                    </span>
+                    <span className="mt-0.5 block text-[11.5px] leading-4 text-foreground/45">
+                      {step.detail}
+                    </span>
+                  </span>
+                  <span className="mt-1 flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500/[0.10] text-emerald-600">
+                    <Loader2 size={11} className="animate-spin" />
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-shrink-0 gap-2.5 border-t border-foreground/[0.06] px-5 py-4 text-[11.5px] leading-4 text-foreground/48 sm:px-6">
+        <CheckCircle2 size={14} className="mt-0.5 flex-shrink-0 text-foreground/45" />
+        <div>
+          You will review this preview before entering PIN AI. The result page replaces this state as soon as it is ready.
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
   const [step, setStep] = useState<Step>(1);
   const [finishing, setFinishing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [exitStage, setExitStage] = useState<ExitStage>("flow");
+  const [activeInsightKey, setActiveInsightKey] = useState<string | null>(null);
+  const [insightStatus, setInsightStatus] = useState<ConnectorInsightStatus>("hidden");
+  const waitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const awaitingInsightExitRef = useRef(false);
   const composio = useComposio();
+
+  const clearWaitTimer = useCallback(() => {
+    if (waitTimerRef.current) {
+      clearTimeout(waitTimerRef.current);
+      waitTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => clearWaitTimer, [clearWaitTimer]);
 
   const finish = useCallback(async () => {
     setFinishing(true);
@@ -81,16 +193,92 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
     }
   }, [onComplete]);
 
+  const handleInsightStatus = useCallback((status: ConnectorInsightStatus, insightKey: string | null) => {
+    setInsightStatus(status);
+    setActiveInsightKey(insightKey);
+    if (status === "hidden") {
+      const shouldFinish = awaitingInsightExitRef.current;
+      awaitingInsightExitRef.current = false;
+      clearWaitTimer();
+      if (shouldFinish) {
+        void finish();
+      }
+      return;
+    }
+    if (status === "ready" || status === "error") {
+      if (awaitingInsightExitRef.current) {
+        awaitingInsightExitRef.current = false;
+        clearWaitTimer();
+        setExitStage("summary");
+        return;
+      }
+      setExitStage((current) => (current === "waiting" ? "summary" : current));
+    }
+  }, [clearWaitTimer, finish]);
+
+  const continueFromInsight = useCallback(() => {
+    void finish();
+  }, [finish]);
+
+  const finishOrShowInsight = useCallback(() => {
+    setError(null);
+    clearWaitTimer();
+    if (!activeInsightKey || insightStatus === "hidden") {
+      awaitingInsightExitRef.current = false;
+      void finish();
+      return;
+    }
+
+    if (insightStatus === "ready" || insightStatus === "error") {
+      awaitingInsightExitRef.current = false;
+      setExitStage("summary");
+      return;
+    }
+
+    awaitingInsightExitRef.current = true;
+    waitTimerRef.current = setTimeout(() => {
+      setExitStage((current) => (current === "summary" ? current : "waiting"));
+    }, INSIGHT_WAIT_GRACE_MS);
+  }, [activeInsightKey, clearWaitTimer, finish, insightStatus]);
+
+  const showInsightPage = exitStage === "summary";
+  const showWaitingPage = exitStage === "waiting";
+
   return (
     <div className="relative flex h-full w-full items-stretch justify-center overflow-hidden">
       <div className="absolute inset-0 animate-bg-flow opacity-60" />
       <div className="absolute inset-0 bg-white/30" />
-      <div className="relative z-10 flex w-full max-w-xl flex-col px-5 pt-safe-top pb-safe-bottom">
-        <div className="flex min-h-0 flex-1 flex-col py-6">
-          {step === 1 ? (
+      <div
+        className={`relative z-10 flex min-h-0 w-full flex-col px-5 pt-safe-top ${
+          showInsightPage ? "max-w-2xl" : "max-w-xl"
+        }`}
+      >
+        <div className="flex min-h-0 flex-1 flex-col pb-3 pt-6">
+          <ConnectorOnboardingInsight
+            connections={composio.connections}
+            mode={showInsightPage ? "page" : "watcher"}
+            onStatusChange={handleInsightStatus}
+            onContinue={continueFromInsight}
+            continueLabel="Enter PIN AI"
+          />
+
+          {showWaitingPage ? (
+            <InsightWaitPage />
+          ) : !showInsightPage && step === 1 ? (
             <>
               <StepHeader
                 step={1}
+                title="Connect your data"
+                subtitle="Pick the apps PIN AI can read from. We'll summarize the first pull while you keep setting up."
+              />
+              <div className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto">
+                <DataConnections composio={composio} />
+              </div>
+            </>
+          ) : !showInsightPage && step === 2 ? (
+            <>
+              <StepHeader
+                step={2}
                 title="Ambient setup"
                 subtitle={
                   isNative
@@ -103,10 +291,10 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
                 <VoiceIdentitySettings />
               </div>
             </>
-          ) : step === 2 ? (
+          ) : !showInsightPage ? (
             <>
               <StepHeader
-                step={2}
+                step={3}
                 title="On-device AI model"
                 subtitle={
                   isNative
@@ -124,70 +312,61 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
                 )}
               </div>
             </>
-          ) : (
-            <>
-              <StepHeader
-                step={3}
-                title="Connect your data"
-                subtitle="Pick the apps PIN AI can read from. You can connect more (or disconnect) any time from Control Center."
-              />
-              <div className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto">
-                <DataConnections composio={composio} />
-              </div>
-            </>
-          )}
+          ) : null}
         </div>
 
-        <div className="flex-shrink-0 pt-3">
-          {error && (
-            <p className="mb-2 text-right text-[12px] leading-snug text-red-500">
-              {error}
-            </p>
-          )}
-          <div className="flex items-center justify-end gap-2">
-            {step < 3 ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setStep((step + 1) as Step)}
-                  className="min-h-11 rounded-full px-4 text-[13px] font-medium text-foreground/55 transition-colors hover:bg-foreground/[0.06]"
-                >
-                  Skip
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setStep((step + 1) as Step)}
-                  className="inline-flex min-h-11 items-center gap-1.5 rounded-full bg-foreground px-5 text-[13px] font-semibold text-background transition-opacity hover:opacity-90"
-                >
-                  Next
-                  <ChevronRight size={15} strokeWidth={2} />
-                </button>
-              </>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setStep(2)}
-                  disabled={finishing}
-                  className="min-h-11 rounded-full px-4 text-[13px] font-medium text-foreground/55 transition-colors hover:bg-foreground/[0.06] disabled:opacity-40"
-                >
-                  Back
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void finish()}
-                  disabled={finishing}
-                  className="inline-flex min-h-11 items-center gap-1.5 rounded-full bg-foreground px-5 text-[13px] font-semibold text-background transition-opacity hover:opacity-90 disabled:opacity-50"
-                >
-                  {finishing ? (
-                    <Loader2 size={14} className="animate-spin" />
-                  ) : null}
-                  Done
-                </button>
-              </>
+        {!showInsightPage && !showWaitingPage && (
+          <div className="flex-shrink-0 pb-[max(env(safe-area-inset-bottom,0px),var(--safe-bottom,12px),1.5rem)] pt-3">
+            {error && (
+              <p className="mb-2 text-right text-[12px] leading-snug text-red-500">
+                {error}
+              </p>
             )}
+            <div className="flex items-center justify-end gap-2">
+              {step < 3 ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setStep((step + 1) as Step)}
+                    className="min-h-11 rounded-full px-4 text-[13px] font-medium text-foreground/55 transition-colors hover:bg-foreground/[0.06]"
+                  >
+                    Skip
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStep((step + 1) as Step)}
+                    className="inline-flex min-h-11 items-center gap-1.5 rounded-full bg-foreground px-5 text-[13px] font-semibold text-background transition-opacity hover:opacity-90"
+                  >
+                    Next
+                    <ChevronRight size={15} strokeWidth={2} />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setStep(2)}
+                    disabled={finishing}
+                    className="min-h-11 rounded-full px-4 text-[13px] font-medium text-foreground/55 transition-colors hover:bg-foreground/[0.06] disabled:opacity-40"
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="button"
+                    onClick={finishOrShowInsight}
+                    disabled={finishing}
+                    className="inline-flex min-h-11 items-center gap-1.5 rounded-full bg-foreground px-5 text-[13px] font-semibold text-background transition-opacity hover:opacity-90 disabled:opacity-50"
+                  >
+                    {finishing ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : null}
+                    Done
+                  </button>
+                </>
+              )}
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

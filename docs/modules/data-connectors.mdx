@@ -126,7 +126,7 @@ sequenceDiagram
   Route->>Composio: poll until ACTIVE
   Route->>Q: enqueue_once(kind=connector.init, id=init.<toolkit>.<cid>)
   Route-->>UI: {status:'ACTIVE', initTaskId}
-  UI->>UI: useInitTask(initTaskId) polls /api/tasks/{id} every 5s
+  UI->>UI: useInitTask(initTaskId) polls /api/tasks/{id} every 1s on web
   Sched->>Q: claim due task (SKIP LOCKED)
   Sched->>H: connector_ingest.run(pool, task, run_id)
   H->>Composio: ingest_runner.run_fetch(toolkit, cid, limit, since=None)
@@ -136,6 +136,18 @@ sequenceDiagram
 ```
 
 前端 `useInitTask` 用确定性 `init.<toolkit-lower>.<cid>` 重建 taskId,reload 也能继续轮询。
+
+### Onboarding 即时总结
+
+Onboarding 会先进入 Connect data,并在 flow 顶层挂一个轻量反馈 watcher:前端看到 ACTIVE connector 后先 fire-and-forget 调 `POST /api/onboarding/connector-summary/prewarm` 预热用户的 LiteLLM `gpt-5-nano` 链路;当某个 `connector.init` 的新鲜任务已 `succeeded` 后,再调用 `POST /api/onboarding/connector-summary`。web 进程从当前用户对应 raw 表或 `pai_raw_events` 读取最近最多 50 条可读记录,同时带上 connector label / userInfo / 登录邮箱整理出的 identity hints,先蒸馏成一个小的 signal pack(`identity` / `sourceCounts` / `topContacts` / `topTerms` / `dateRange` + 10 条样例),再用 LiteLLM `gpt-5-nano` 生成结构化的 "Here's what we know about you" 页面。Gmail 的 `topContacts` 会显式读取 `from_addr` / `to_addrs` / `cc_addrs`,过滤 self、noreply、bot、mailing-list、路径噪声,并把真实人名 pin 到第一段第一条,避免模型只讲 repo 或 workflow。summary 固定三段:先展示 `Key People & Accounts`,再展示 `Professional Identity`,最后展示 `Communication Style`,每段 2 条,优先把用户最容易感知的人、团队、账号放到最前。`googlesuper`(Google Workspace) 是例外:请求来自 Workspace init task,但 summary 有效数据源固定归一到 `gmail`,因为 Gmail 的正文/联系人/主题信号比 Calendar / Drive 元数据更适合做首轮个人画像。
+
+展示时机是**中间不打断,结束前拦一下**:用户连完 connector 后可以继续 Ambient / 本地模型步骤;summary 在后台生成。用户点最后 Done 时,如果 summary 已生成,先展示结果页;如果还没生成,留在 onboarding 的等待页("PIN AI is learning your context")直到结果回来。用户看完结果页点 Enter PIN AI 后,才调用 `onComplete` 进入主页面。
+
+展示规则是**一次连接动作只打断一次**:前端会先收集当前 ACTIVE connector 的 init task 状态,再选一个 insight 展示。`googlesuper` 作为 Google Workspace 整体优先展示,不会因为 Gmail / Calendar / Drive / Docs / Sheets fanout 跳出多张页面;真正生成 summary 时服务端只读 Gmail raw rows,返回 source 也标记为 `gmail`。如果用户很快连了多个 connector,也只进入一个 insight 页面。
+
+服务端有一层 summary cache:cache key = `schema version + model + toolkit + connected_account_id + raw fingerprint`。同一批 raw 数据重复进入 onboarding / 刷新 / 前端重复触发时,直接返回 `pai_onboarding_connector_summary_cache.summary`,不再打 LLM。每次请求都会写 `pai_onboarding_connector_summary_runs`,记录 `item_count / collect_ms / llm_ms / total_ms / status(empty|cached|succeeded|failed)` 便于持续观察首轮生成是否能压到 5-6 秒。
+
+这条链路只负责**用户可见的 onboarding 反馈**:不写 memory / profile / skill,也不替代后台 `connector.evolve`。长期沉淀仍由 `connector.init` 入队的 `connector.evolve` 完成。
 
 ### `connector.sync` 增量
 
