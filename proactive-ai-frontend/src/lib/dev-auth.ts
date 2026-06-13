@@ -1,8 +1,15 @@
 import type { Session, User } from "@supabase/supabase-js";
+import {
+  PIN_LOCAL_DEV_AUTH_EMAIL,
+  PIN_LOCAL_DEV_AUTH_HEADER_VALUE,
+  PIN_LOCAL_DEV_AUTH_USER_ID,
+  pinLocalDevAuthUserFields,
+} from "@pin-ai/core";
 
-export const PIN_LOCAL_DEV_AUTH_HEADER_VALUE = "pinai-local-dev-user";
-export const PIN_LOCAL_DEV_AUTH_USER_ID = "00000000-0000-0000-0000-00000000d0d0";
-export const PIN_LOCAL_DEV_AUTH_EMAIL = "dev-user@local.invalid";
+// Protocol constants are the three-end SSOT in @pin-ai/core (web / RN /
+// backend auth/deps.py); re-exported here so `@/lib/dev-auth` importers keep
+// working. The enable guard and Supabase casts below are web-specific and stay.
+export { PIN_LOCAL_DEV_AUTH_EMAIL, PIN_LOCAL_DEV_AUTH_HEADER_VALUE, PIN_LOCAL_DEV_AUTH_USER_ID };
 
 export function isPinLocalDevAuthEnabled(): boolean {
   // Local-dev auth is a convenience for the local web dev server only (Local
@@ -23,15 +30,7 @@ export function pinLocalDevAuthHeaders(): Record<string, string> {
 }
 
 export function pinLocalDevAuthUser(): User {
-  return {
-    id: PIN_LOCAL_DEV_AUTH_USER_ID,
-    email: PIN_LOCAL_DEV_AUTH_EMAIL,
-    aud: "authenticated",
-    role: "authenticated",
-    app_metadata: { provider: "local-dev" },
-    user_metadata: { full_name: "Local Dev User" },
-    created_at: "2026-06-05T00:00:00.000Z",
-  } as User;
+  return pinLocalDevAuthUserFields() as User;
 }
 
 export function pinLocalDevAuthSession(): Session {

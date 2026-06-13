@@ -20,6 +20,8 @@ import { useQuery } from "@tanstack/react-query";
 import {
   connectComposioToolkit,
   fetchComposioConnections,
+  getComposioConnectionsForToolkit,
+  isComposioToolkitConnected,
   type ComposioConnection,
 } from "@pin-ai/core";
 import { useUserDevices } from "@pin-ai/state";
@@ -104,9 +106,9 @@ function SourceRow({
   connecting: string | null;
   onConnect: (toolkit: string) => void;
 }) {
-  const matched = connections.filter(
-    (c) => c.toolkit === def.toolkit && c.status === "ACTIVE",
-  );
+  // fanout-aware（与 web 同一套 @pin-ai/core 匹配）：一个 googlesuper 聚合
+  // 账户能覆盖 gmail/gcal 等子 toolkit，精确匹配会漏。
+  const matched = getComposioConnectionsForToolkit(connections, def.toolkit);
   const connected = matched.length > 0;
   return (
     <View>
@@ -155,13 +157,10 @@ export default function ConnectScreen({ headerProps }: { headerProps: HeaderProp
   const [error, setError] = useState<string | null>(null);
 
   const connections = connectionsQuery.data ?? [];
-  const activeToolkits = new Set(
-    connections.filter((c) => c.status === "ACTIVE").map((c) => c.toolkit),
-  );
   const connectedTop = RECOMMENDED.filter((s) =>
     s.children
-      ? s.children.some((c) => activeToolkits.has(c.toolkit))
-      : activeToolkits.has(s.toolkit),
+      ? s.children.some((c) => isComposioToolkitConnected(connections, c.toolkit))
+      : isComposioToolkitConnected(connections, s.toolkit),
   ).length;
   const activeDevices = devices.filter((d) => d.status === "active");
 

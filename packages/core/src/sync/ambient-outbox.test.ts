@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest";
 
-import type { PersonalSignalInput } from "@/lib/devices";
-import { MemoryOutboxStore } from "./outbox";
-import { stableHash } from "./timeline/utils";
+import type { PersonalSignalInput } from "../domain/signals";
+import { MemoryOutboxStore } from "./ambient-outbox";
+import { stableHash } from "../domain/ambient/utils";
 
 const now = Date.parse("2026-05-11T12:00:00.000Z");
 

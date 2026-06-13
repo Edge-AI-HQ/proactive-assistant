@@ -31,13 +31,19 @@ export * from "./api/reward";
 export * from "./api/scheduled-generators";
 export * from "./api/skills";
 
+export * from "./domain/ambient";
 export * from "./domain/card-actions";
 export * from "./domain/card-chat-session";
 export * from "./domain/card-feedback";
 export * from "./domain/card-run-status";
 export * from "./domain/cards";
+export * from "./domain/composio";
+export * from "./domain/composio-identity";
+export * from "./domain/dev-auth";
 export * from "./domain/intent-card";
+export * from "./domain/markdown-blocks";
 export * from "./domain/reminder-card";
+export * from "./domain/signals";
 
 export * from "./machines/card-execution";
 export * from "./machines/conversation";
@@ -46,6 +52,7 @@ export * from "./machines/tool-steps";
 
 export * from "./ports/database";
 
+export * from "./sync/ambient-outbox";
 export * from "./sync/engine";
 export * from "./sync/local-read";
 export * from "./sync/outbox";

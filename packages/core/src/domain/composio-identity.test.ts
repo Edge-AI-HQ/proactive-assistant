@@ -1,22 +1,26 @@
 import { describe, expect, test } from "vitest";
+
 import {
   extractComposioDisplayIdentity,
   formatComposioConnectionIdentity,
-  formatOptionalComposioConnectionIdentity,
   formatComposioToolkitName,
+  formatOptionalComposioConnectionIdentity,
   resolveComposioConnectionIdentity,
-} from "./composio-display-identity";
+  type ComposioIdentityConnection,
+} from "./composio-identity";
 
 describe("composio display identity", () => {
   test("extracts Gmail profile emailAddress", () => {
-    expect(extractComposioDisplayIdentity({
-      emailAddress: "smile@pinai.io",
-      historyId: "833407",
-    })).toBe("smile@pinai.io");
+    expect(
+      extractComposioDisplayIdentity({
+        emailAddress: "smile@pinai.io",
+        historyId: "833407",
+      }),
+    ).toBe("smile@pinai.io");
   });
 
   test("reuses Gmail identity for Google-family connectors with empty userInfo", () => {
-    const connections = [
+    const connections: ComposioIdentityConnection[] = [
       {
         toolkit: "gmail",
         status: "ACTIVE",
@@ -31,25 +35,35 @@ describe("composio display identity", () => {
       },
     ];
 
-    expect(resolveComposioConnectionIdentity(connections[1], connections)).toBe("smile@pinai.io");
+    expect(resolveComposioConnectionIdentity(connections[1]!, connections)).toBe("smile@pinai.io");
   });
 
   test("does not expose connected account ids as fallback identity", () => {
-    expect(formatComposioConnectionIdentity({
-      toolkit: "zoom",
-      status: "ACTIVE",
-      connectedAccountId: "ca_E__73kQVgI0v",
-      userInfo: null,
-    }, [])).toBe("Account details unavailable");
+    expect(
+      formatComposioConnectionIdentity(
+        {
+          toolkit: "zoom",
+          status: "ACTIVE",
+          connectedAccountId: "ca_E__73kQVgI0v",
+          userInfo: null,
+        },
+        [],
+      ),
+    ).toBe("Account details unavailable");
   });
 
   test("optional identity returns null for unavailable account details", () => {
-    expect(formatOptionalComposioConnectionIdentity({
-      toolkit: "zoom",
-      status: "ACTIVE",
-      connectedAccountId: "ca_E__73kQVgI0v",
-      userInfo: null,
-    }, [])).toBeNull();
+    expect(
+      formatOptionalComposioConnectionIdentity(
+        {
+          toolkit: "zoom",
+          status: "ACTIVE",
+          connectedAccountId: "ca_E__73kQVgI0v",
+          userInfo: null,
+        },
+        [],
+      ),
+    ).toBeNull();
   });
 
   test("formats toolkit slugs as readable connector names", () => {

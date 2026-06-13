@@ -1,32 +1,13 @@
 /**
- * RN ambient 采集的共用形状——与 web（services/ambient/sources/types.ts +
- * lib/devices.ts）同协议：PersonalSignalInput 的 wire 字段、kind 常量、
- * AmbientSource 接口一字不差，后端 ingest/normalize 管道无感知客户端差异。
+ * RN ambient 采集的共用形状。wire 协议（PersonalSignalInput / SIGNAL_KINDS）
+ * 现在从 @pin-ai/core 取——三端 SSOT，不再各端手抄（旧版本 RN 把
+ * SIGNAL_KINDS 缩成 5-key 子集，已是漂移开端）。SourceContext / AmbientSource
+ * 是 RN 采集层的本地接口（与 web sources/types.ts 形状不同），各端自留。
  */
-export interface PersonalSignalInput {
-  id?: string;
-  source?: string;
-  kind: string;
-  sync_mode?: "incremental" | "full";
-  title: string;
-  summary: string;
-  payload?: Record<string, unknown>;
-  occurred_at?: string;
-  available_at?: string;
-  expires_at?: string;
-  salience?: number;
-  confidence?: number;
-  dedupe_key?: string;
-}
+import type { PersonalSignalInput, SignalKind } from "@pin-ai/core";
 
-/** 与 web services/ambient/kinds.ts 对齐（只列 RN 已实现的源）。 */
-export const SIGNAL_KINDS = {
-  location: "device.location",
-  calendarEvent: "device.calendar_event",
-  deviceState: "device.device_state",
-  visit: "device.visit",
-  activity: "device.activity",
-} as const;
+export { SIGNAL_KINDS } from "@pin-ai/core";
+export type { PersonalSignalInput, SignalKind };
 
 export interface SourceContext {
   push: (item: PersonalSignalInput) => void;

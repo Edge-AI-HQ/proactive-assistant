@@ -6,7 +6,7 @@ import typography from "@tailwindcss/typography";
 // 包名：docker build 的容器里 /app（本目录）的 npm install 不含 workspace
 // 包（@pin-ai/design 靠 root hoisting），而 ../packages 在两种结构下都
 // 成立（本地 monorepo 平级 / 容器 COPY packages/ → /packages）。
-import { colors as sharedColors, borderRadius as sharedRadius } from "../packages/design/tokens.cjs";
+import { colors as sharedColors, borderRadius as sharedRadius, letterSpacingEm as sharedLetterSpacingEm } from "../packages/design/tokens.cjs";
 
 // content 用绝对路径：Tailwind v3 按 process.cwd() 解析相对 glob，web 构建
 // （cwd=本目录）下没问题，但 Electron renderer（apps/desktop 为 cwd、root
@@ -24,6 +24,12 @@ export default {
     extend: {
       colors: sharedColors,
       borderRadius: sharedRadius,
+      // 字距 SSOT 来自 @pin-ai/design（与 RN typography 共享）。tracking-display
+      // 对应 .text-display 的 -0.02em；tracking-tight 覆盖内置同值，保持单一真源。
+      letterSpacing: {
+        tight: `${sharedLetterSpacingEm.tight}em`,
+        display: `${sharedLetterSpacingEm.display}em`,
+      },
       keyframes: {
         // Subtle color breathing — text drifts toward purple and cools back
         // to neutral. Signals "ambient sensing active" without animating

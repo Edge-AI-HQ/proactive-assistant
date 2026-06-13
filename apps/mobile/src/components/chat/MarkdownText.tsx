@@ -10,26 +10,7 @@
 import { memo } from "react";
 import { StyleSheet } from "react-native";
 import Markdown from "react-native-markdown-display";
-
-/** 按块切分：空行为界，``` / ~~~ fence 内不切。 */
-function splitBlocks(text: string): string[] {
-  const lines = text.split("\n");
-  const blocks: string[] = [];
-  let cur: string[] = [];
-  let inFence = false;
-  const flush = () => {
-    const joined = cur.join("\n");
-    if (joined.trim()) blocks.push(joined);
-    cur = [];
-  };
-  for (const line of lines) {
-    if (/^(```|~~~)/.test(line.trimStart())) inFence = !inFence;
-    cur.push(line);
-    if (!inFence && line.trim() === "") flush();
-  }
-  flush();
-  return blocks;
-}
+import { splitBlocks } from "@pin-ai/core";
 
 /** memo 边界：text 不变（= 已完成的块）跳过整棵 parse + render。 */
 const Block = memo(function Block({ text }: { text: string }) {

@@ -50,4 +50,12 @@ const cssVariables = `
   --glow-alert: 0 72% 60%;
 `;
 
-module.exports = { colors, borderRadius, cssVariables };
+// 自定义字距（em，相对字号）SSOT。web .text-display = -0.02em；tailwind
+// tracking-tight 内置 -0.025em。RN letterSpacing 是绝对 pt，换算需要数值，
+// 所以这里存数值，由 web tailwind（转 em 字符串）与 RN typography（直接用）共享。
+const letterSpacingEm = {
+  tight: -0.025,
+  display: -0.02,
+};
+
+module.exports = { colors, borderRadius, cssVariables, letterSpacingEm };

@@ -3,20 +3,12 @@
  * 的 useComposio 下沉（RN Connect 视图共用协议）。catalog 浏览、自定义
  * MCP、disconnect 等扩展面仍在 web hook，需要时再下沉。
  */
+import type { ComposioConnection, ComposioStatus } from "../domain/composio";
 import { proxyFetch, proxyPost } from "../transport/http";
 
-export interface ComposioStatus {
-  configured: boolean;
-}
-
-export interface ComposioConnection {
-  toolkit: string;
-  status: string;
-  connectedAccountId: string | null;
-  /** Backend-resolved display label (email / username / etc.). */
-  label: string | null;
-  userInfo: Record<string, unknown> | null;
-}
+// ComposioStatus / ComposioConnection are the shared SSOT in domain/composio
+// (re-exported via the package index); this api module only imports them for
+// its function signatures.
 
 export async function fetchComposioStatus(signal?: AbortSignal): Promise<ComposioStatus> {
   const res = await proxyFetch("/composio/status", { signal });

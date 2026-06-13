@@ -5,10 +5,10 @@ import {
   getComposioConnectionsForToolkit,
   isComposioToolkitConnected,
   normalizeComposioToolkit,
-  type Connection,
-} from "./useComposio";
+  type ComposioConnection,
+} from "./composio";
 
-const googleWorkspace: Connection = {
+const googleWorkspace: ComposioConnection = {
   toolkit: "googlesuper",
   status: "ACTIVE",
   connectedAccountId: "google-workspace-account",

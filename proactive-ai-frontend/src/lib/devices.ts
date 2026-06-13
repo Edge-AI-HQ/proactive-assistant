@@ -10,6 +10,12 @@
  */
 import { Capacitor } from "@capacitor/core";
 import { KeychainAccess, SecureStorage } from "@aparajita/capacitor-secure-storage";
+import type {
+  IngestItemResult,
+  IngestItemStatus,
+  IngestResult,
+  PersonalSignalInput,
+} from "@pin-ai/core";
 import { userDevicesKeys } from "@pin-ai/state";
 import { authHeaders } from "./transport-bootstrap";
 import { queryClient } from "./query-client";
@@ -461,56 +467,10 @@ export async function clearDeviceCredentials(): Promise<void> {
 
 // ── Ingest signals ───────────────────────────────────────────────────────
 
-/**
- * One PersonalSignal in the wire format the server expects.
- * `id` and `occurred_at` will be filled in if the caller doesn't supply
- * them — most code paths just want to push a kind + summary and move on.
- */
-export interface PersonalSignalInput {
-  id?: string;
-  source?: string;            // defaults to "device:<creds.deviceId>"
-  kind: string;
-  sync_mode?: "incremental" | "full";
-  title: string;
-  summary: string;
-  payload?: Record<string, unknown>;
-  occurred_at?: string;       // ISO 8601, defaults to now()
-  available_at?: string;
-  expires_at?: string;
-  salience?: number;
-  confidence?: number;
-  dedupe_key?: string;
-}
-
-/**
- * Server-side per-item status. Five states; outbox must handle each:
- *   inserted | duplicate     → success, drop from queue
- *   rejected | parse_failed  → permanent failure, drop + log
- *   retryable_failed         → transient server-side failure, keep + retry
- * Contract owner: pinai-agents `/api/devices/ingest`. See
- * docs/plans/2026-05-12-v2-to-v3-migration.mdx for rationale.
- */
-export type IngestItemStatus =
-  | "inserted"
-  | "duplicate"
-  | "rejected"
-  | "parse_failed"
-  | "retryable_failed";
-
-export interface IngestItemResult {
-  id: string;
-  dedupeKey: string | null;
-  status: IngestItemStatus;
-  reason?: string;
-}
-
-export interface IngestResult {
-  ok: boolean;
-  accepted: number;
-  inserted: number;
-  ignored: number;
-  results?: IngestItemResult[];
-}
+// Wire types (PersonalSignalInput / Ingest*) now live in @pin-ai/core — the
+// front-end SSOT, imported above. Re-exported here so existing `@/lib/devices`
+// importers keep working.
+export type { IngestItemResult, IngestItemStatus, IngestResult, PersonalSignalInput };
 
 /**
  * Push a batch of PersonalSignals from this client up to pinai-agents.
