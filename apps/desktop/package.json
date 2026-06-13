@@ -2,7 +2,7 @@
   "name": "@pin-ai/desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "PIN AI macOS desktop shell (Electron) — renderer reuses the proactive-ai-frontend React DOM UI",
+  "description": "PIN AI macOS desktop shell (Electron) — renderer reuses the apps/web (zebra) React UI",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -11,8 +11,10 @@
     "package": "electron-vite build && electron-builder --mac --config electron-builder.yml"
   },
   "devDependencies": {
+    "autoprefixer": "^10.4.20",
     "electron": "^36.4.0",
     "electron-builder": "^26.0.12",
-    "electron-vite": "^3.1.0"
+    "electron-vite": "^3.1.0",
+    "tailwindcss": "^3.4.17"
   }
 }

@@ -181,7 +181,22 @@ void app.whenReady().then(() => {
     if (!target.startsWith(RENDERER_DIR)) {
       return new Response("forbidden", { status: 403 });
     }
-    return net.fetch(pathToFileURL(target).toString());
+    if (fs.existsSync(target)) {
+      return net.fetch(pathToFileURL(target).toString());
+    }
+    // 文件不存在——区分静态资源与客户端路由：
+    //   - 有扩展名（.png/.js/.css…）= 静态资源 → 真 404。若静默回退
+    //     index.html，<img>/<script src> 会拿到一坨 HTML 而静默裂掉（apps/web
+    //     缺 goal-*.png 时 mirror 图片不显示就是被这么掩盖的）；404 才能在
+    //     devtools network 里看见，可诊断。
+    //   - 无扩展名 = BrowserRouter 的路由路径（/now、/mirror…）→ SPA fallback
+    //     到 index.html，React Router 客户端接管（等价 nginx try_files $uri
+    //     /index.html）。刷新/深链/scheme 重载不白屏。proactive-ai-frontend
+    //     时代用 MemoryRouter 无需此项，切 apps/web 后必需。
+    if (path.extname(rel)) {
+      return new Response("not found", { status: 404 });
+    }
+    return net.fetch(pathToFileURL(path.join(RENDERER_DIR, "index.html")).toString());
   });
 
   // OAuth loopback：renderer 起跳前调用，起一次性 HTTP server 接 Supabase

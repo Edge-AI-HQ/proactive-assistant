@@ -3,6 +3,7 @@ import { Toaster } from "sonner";
 import { useAuth, VoiceProvider } from "@pin-ai/ui-web";
 import ZebraShell from "@/components/zebra/ZebraShell";
 import ZebraLogin from "@/components/zebra/ZebraLogin";
+import DesktopTitleBar from "@/components/DesktopTitleBar";
 
 /**
  * apps/web 顶层路由（URL 路由，桌面 deep-link 约定）：
@@ -26,6 +27,9 @@ export default function App() {
 
   return (
     <>
+      {/* Electron 桌面壳的隐藏拖拽标题栏(web 下不渲染)。顶层 overlay,
+          login / shell 两态都覆盖。 */}
+      <DesktopTitleBar />
       {/* ConversationView 的语音输入（useVoiceInput）需要 VoiceProvider。
           转写语言 M4 接 settings 后传 generationLanguage。 */}
       <VoiceProvider transcriptionLanguage={null}>

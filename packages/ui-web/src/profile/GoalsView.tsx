@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, animate, motion, useMotionValue, type PanInfo } from "framer-motion";
 import {
   ArrowRightCircle,
@@ -26,6 +27,7 @@ import {
 } from "../ui/drawer";
 import { fetchRawDeviceApps, fetchRawDeviceContacts, fetchRawDeviceHealth, fetchRawGcal, fetchRawGmail, fetchRawTable, fetchMemories, fetchProfileSnapshot, fetchSignals, listUserDevices, type DeviceAppRaw, type DeviceContactRaw, type DeviceHealthRaw, type GcalEvent, type GmailMessage, type Goal, type Memory, type PersonalSignal, type ProfileSnapshot, type RawTableRow, type UserDevice } from "@pin-ai/core";
 import { basketMeta } from "../card/basket-meta";
+import { useMediaQuery } from "../lib/use-media-query";
 import { isComposioToolkitConnected, type ComposioState } from "@pin-ai/state";
 
 // ---------------------------------------------------------------------------
@@ -1928,6 +1930,11 @@ export default function GoalsView({ composio }: GoalsViewProps) {
   const selectedVisual = selectedApiGoal ? getVisualMeta(selectedApiGoal.key) : null;
   const selectedBasket = selectedApiGoal ? basketMeta(selectedApiGoal.key) : null;
   const selectedStatus = selectedApiGoal ? priorityToStatus(selectedApiGoal.priority) : "Normal";
+
+  // 宽屏（桌面：apps/web、frontend web）goal 详情用居中玻璃 popup，窄屏
+  // （iOS、手机浏览器）保持底部 Drawer——同一份 GoalDetailBody，两种容器。
+  const isWideViewport = useMediaQuery("(min-width: 1024px)");
+
   const rawTotal = rawSources.reduce((sum, source) => sum + source.count, 0);
   const profileFieldCount = countProfileFields(profile);
 
@@ -2187,108 +2194,247 @@ export default function GoalsView({ composio }: GoalsViewProps) {
         </div>
       )}
 
-      {/* Gateway grid detail Drawer */}
-      <Drawer open={!!expandedGoal} onOpenChange={(open) => { if (!open) setExpandedGoal(null); }}>
-        <DrawerContent
-          className="max-h-[85vh] border-t-0 !bg-transparent"
-          style={{
-            background: "linear-gradient(180deg, hsla(0, 0%, 100%, 0.5) 0%, hsla(0, 0%, 100%, 0.7) 100%)",
-            backdropFilter: "blur(40px) saturate(1.5)",
-            WebkitBackdropFilter: "blur(40px) saturate(1.5)",
-            border: "1px solid hsla(0, 0%, 100%, 0.4)",
-            borderBottom: "none",
-            borderRadius: "1.5rem 1.5rem 0 0",
-          }}
-          overlayClassName="!bg-foreground/5 backdrop-blur-[2px]"
-        >
-          <DrawerHeader className="sr-only">
-            <DrawerTitle>{selectedBasket?.label || "Goal"}</DrawerTitle>
-            <DrawerDescription>Goal detail view</DrawerDescription>
-          </DrawerHeader>
-
-          {selectedApiGoal && selectedVisual && selectedBasket && (
-            <div className="px-5 pb-6 pt-2 overflow-y-auto max-h-[75vh]">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-3">
-                  <img src={selectedVisual.image} alt={selectedBasket.label} width={32} height={32} className="w-8 h-8 object-contain" />
-                  <span className="text-display text-lg text-foreground font-semibold">{selectedBasket.label}</span>
-                  <span className={`text-[11px] font-medium px-2.5 py-0.5 rounded-full ${
-                    selectedStatus === "Alert" ? "bg-rose-50 text-rose-400"
-                    : selectedStatus === "Watch" ? "bg-amber-50 text-amber-500"
-                    : "bg-emerald-50 text-emerald-500"
-                  }`}>{selectedStatus}</span>
-                </div>
-                <span className={`text-display text-lg font-semibold ${
-                  selectedStatus === "Alert" ? "text-rose-400"
-                  : selectedStatus === "Watch" ? "text-amber-500"
-                  : "text-emerald-500"
-                }`}>{selectedVisual.pct}%</span>
-              </div>
-
-              <div className="w-full h-2 rounded-full bg-foreground/5 mb-4 overflow-hidden">
-                <motion.div
-                  className={`h-full rounded-full ${statusBarColor[selectedStatus]}`}
-                  initial={{ width: 0 }}
-                  animate={{ width: `${selectedVisual.pct}%` }}
-                  transition={{ duration: 0.6, ease: "easeOut" }}
+      {/* Gateway grid detail —— 宽屏居中玻璃 popup / 窄屏底部 Drawer（同一份
+          GoalDetailBody）。zebra 桌面层语言：聚焦型检视用居中 popup；iOS 的
+          横贯底部抽屉在宽屏违和。 */}
+      {isWideViewport ? (
+        <GoalDetailPopup
+          apiGoal={selectedApiGoal ?? null}
+          visual={selectedVisual}
+          basket={selectedBasket}
+          status={selectedStatus}
+          onClose={() => setExpandedGoal(null)}
+        />
+      ) : (
+        <Drawer open={!!expandedGoal} onOpenChange={(open) => { if (!open) setExpandedGoal(null); }}>
+          <DrawerContent
+            className="max-h-[85vh] border-t-0 !bg-transparent"
+            style={{
+              background: "linear-gradient(180deg, hsla(0, 0%, 100%, 0.5) 0%, hsla(0, 0%, 100%, 0.7) 100%)",
+              backdropFilter: "blur(40px) saturate(1.5)",
+              WebkitBackdropFilter: "blur(40px) saturate(1.5)",
+              border: "1px solid hsla(0, 0%, 100%, 0.4)",
+              borderBottom: "none",
+              borderRadius: "1.5rem 1.5rem 0 0",
+            }}
+            overlayClassName="!bg-foreground/5 backdrop-blur-[2px]"
+          >
+            <DrawerHeader className="sr-only">
+              <DrawerTitle>{selectedBasket?.label || "Goal"}</DrawerTitle>
+              <DrawerDescription>Goal detail view</DrawerDescription>
+            </DrawerHeader>
+            {selectedApiGoal && selectedVisual && selectedBasket && (
+              <div className="px-5 pb-6 pt-2 overflow-y-auto max-h-[75vh]">
+                <GoalDetailBody
+                  apiGoal={selectedApiGoal}
+                  visual={selectedVisual}
+                  basket={selectedBasket}
+                  status={selectedStatus}
                 />
               </div>
-
-              <p className="text-sm text-foreground/80 mb-4">
-                {selectedApiGoal.summary || selectedApiGoal.title}
-              </p>
-
-              <div className="w-full h-px bg-foreground/10 mb-4" />
-
-              <h3 className="text-xs font-semibold text-emerald-500 uppercase tracking-wider mb-3">
-                AI Weekly Actions
-              </h3>
-              <div className="space-y-2.5 mb-5">
-                {selectedVisual.weeklyActions.map((action, i) => (
-                  <div key={i} className="flex items-start gap-2.5">
-                    <Check size={14} className="text-emerald-500 mt-0.5 shrink-0" />
-                    <span className="text-sm text-foreground/80 leading-snug">{action}</span>
-                  </div>
-                ))}
-              </div>
-
-              <h3 className="text-xs font-semibold text-amber-500 uppercase tracking-wider mb-3">
-                Monitoring
-              </h3>
-              <div className="space-y-2.5 mb-5">
-                {selectedVisual.monitoring.map((item, i) => (
-                  <div key={i} className="flex items-start gap-2.5">
-                    <div className="w-2.5 h-2.5 rounded-full bg-amber-400 mt-1 shrink-0 animate-pulse" />
-                    <span className="text-sm text-foreground/75 leading-snug">{item}</span>
-                  </div>
-                ))}
-              </div>
-
-              <h3 className="text-xs font-semibold text-foreground/50 uppercase tracking-wider mb-3">
-                AI wants to know
-              </h3>
-              <div className="space-y-2.5 mb-5">
-                {selectedVisual.aiQuestions.map((q, i) => (
-                  <button
-                    key={i}
-                    className="w-full flex items-center gap-3 p-3.5 rounded-2xl border border-foreground/10 bg-foreground/[0.03] hover:bg-foreground/[0.07] active:bg-foreground/[0.1] transition-all text-left group"
-                  >
-                    <div className="w-8 h-8 rounded-full bg-foreground flex items-center justify-center shrink-0">
-                      <Mic size={14} className="text-background" />
-                    </div>
-                    <span className="text-sm text-foreground/80 leading-snug flex-1">{q}</span>
-                    <ArrowRightCircle size={14} className="text-foreground shrink-0" />
-                  </button>
-                ))}
-              </div>
-
-              <button className="w-full py-3.5 rounded-2xl bg-foreground/[0.04] text-sm text-foreground/50 font-medium hover:bg-foreground/[0.07] transition-colors">
-                Lock Goals — AI watches only, no modify
-              </button>
-            </div>
-          )}
-        </DrawerContent>
-      </Drawer>
+            )}
+          </DrawerContent>
+        </Drawer>
+      )}
     </div>
+  );
+}
+
+/**
+ * Goal 详情正文（header / 进度 / summary / AI Weekly Actions / Monitoring /
+ * AI wants to know / Lock）——宽屏居中 popup 与窄屏底部 Drawer 共用同一份，
+ * 数据全真实（getVisualMeta + activeGoals）。hideHeaderImage：popup 顶部已有
+ * hero 配图横幅，header 行不再重复小图。
+ */
+function GoalDetailBody({
+  apiGoal,
+  visual,
+  basket,
+  status,
+  hideHeaderImage,
+}: {
+  apiGoal: Goal;
+  visual: GoalVisualMeta;
+  basket: ReturnType<typeof basketMeta>;
+  status: VisualStatus;
+  hideHeaderImage?: boolean;
+}) {
+  return (
+    <>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-3">
+          {!hideHeaderImage && (
+            <img src={visual.image} alt={basket.label} width={32} height={32} className="w-8 h-8 object-contain" />
+          )}
+          <span className="text-display text-lg text-foreground font-semibold">{basket.label}</span>
+          <span className={`text-[11px] font-medium px-2.5 py-0.5 rounded-full ${
+            status === "Alert" ? "bg-rose-50 text-rose-400"
+            : status === "Watch" ? "bg-amber-50 text-amber-500"
+            : "bg-emerald-50 text-emerald-500"
+          }`}>{status}</span>
+        </div>
+        <span className={`text-display text-lg font-semibold ${
+          status === "Alert" ? "text-rose-400"
+          : status === "Watch" ? "text-amber-500"
+          : "text-emerald-500"
+        }`}>{visual.pct}%</span>
+      </div>
+
+      <div className="w-full h-2 rounded-full bg-foreground/5 mb-4 overflow-hidden">
+        <motion.div
+          className={`h-full rounded-full ${statusBarColor[status]}`}
+          initial={{ width: 0 }}
+          animate={{ width: `${visual.pct}%` }}
+          transition={{ duration: 0.6, ease: "easeOut" }}
+        />
+      </div>
+
+      <p className="text-sm text-foreground/80 mb-4">
+        {apiGoal.summary || apiGoal.title}
+      </p>
+
+      <div className="w-full h-px bg-foreground/10 mb-4" />
+
+      <h3 className="text-xs font-semibold text-emerald-500 uppercase tracking-wider mb-3">
+        AI Weekly Actions
+      </h3>
+      <div className="space-y-2.5 mb-5">
+        {visual.weeklyActions.map((action, i) => (
+          <div key={i} className="flex items-start gap-2.5">
+            <Check size={14} className="text-emerald-500 mt-0.5 shrink-0" />
+            <span className="text-sm text-foreground/80 leading-snug">{action}</span>
+          </div>
+        ))}
+      </div>
+
+      <h3 className="text-xs font-semibold text-amber-500 uppercase tracking-wider mb-3">
+        Monitoring
+      </h3>
+      <div className="space-y-2.5 mb-5">
+        {visual.monitoring.map((item, i) => (
+          <div key={i} className="flex items-start gap-2.5">
+            <div className="w-2.5 h-2.5 rounded-full bg-amber-400 mt-1 shrink-0 animate-pulse" />
+            <span className="text-sm text-foreground/75 leading-snug">{item}</span>
+          </div>
+        ))}
+      </div>
+
+      <h3 className="text-xs font-semibold text-foreground/50 uppercase tracking-wider mb-3">
+        AI wants to know
+      </h3>
+      <div className="space-y-2.5 mb-5">
+        {visual.aiQuestions.map((q, i) => (
+          <button
+            key={i}
+            className="w-full flex items-center gap-3 p-3.5 rounded-2xl border border-foreground/10 bg-foreground/[0.03] hover:bg-foreground/[0.07] active:bg-foreground/[0.1] transition-all text-left group"
+          >
+            <div className="w-8 h-8 rounded-full bg-foreground flex items-center justify-center shrink-0">
+              <Mic size={14} className="text-background" />
+            </div>
+            <span className="text-sm text-foreground/80 leading-snug flex-1">{q}</span>
+            <ArrowRightCircle size={14} className="text-foreground shrink-0" />
+          </button>
+        ))}
+      </div>
+
+      <button className="w-full py-3.5 rounded-2xl bg-foreground/[0.04] text-sm text-foreground/50 font-medium hover:bg-foreground/[0.07] transition-colors">
+        Lock Goals — AI watches only, no modify
+      </button>
+    </>
+  );
+}
+
+/**
+ * Goal 详情的桌面居中玻璃 popup（宽屏；窄屏走底部 Drawer）。经 Portal 渲染到
+ * document.body——ZebraShell 的 motion.main 有 transform（x 动画）会成为 fixed
+ * 定位的 containing block，不 Portal 的话 popup 会相对 main 而非 viewport 居中、
+ * scrim 也盖不满全屏。Esc / 点击遮罩关闭；hero 横幅放大 goal 配图，正文复用
+ * GoalDetailBody（hideHeaderImage，避免与 hero 重复出图）。
+ */
+function GoalDetailPopup({
+  apiGoal,
+  visual,
+  basket,
+  status,
+  onClose,
+}: {
+  apiGoal: Goal | null;
+  visual: GoalVisualMeta | null;
+  basket: ReturnType<typeof basketMeta> | null;
+  status: VisualStatus;
+  onClose: () => void;
+}) {
+  const open = !!(apiGoal && visual && basket);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  return createPortal(
+    <AnimatePresence>
+      {apiGoal && visual && basket && (
+        <>
+          <motion.div
+            key="goal-scrim"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="fixed inset-0 z-[70] bg-foreground/10 backdrop-blur-sm"
+            onClick={onClose}
+          />
+          {/* 居中用 flex 静止容器；卡片入场用纯 opacity fade（最便宜的动效，
+              也是 Dialog 的业界 convention）。backdrop-filter blur(48px) 模糊
+              ZebraBackdrop 的常驻视频本就逐帧重算，任何改几何的入场动画
+              （scale 重光栅、translateY 平移也要按新位置重采样动态背景）在
+              Electron(macOS)都会卡；纯 fade 几何不动、只做 alpha 合成最省。 */}
+          <div className="fixed inset-0 z-[71] flex items-center justify-center p-4 pointer-events-none">
+            <motion.div
+              key={`goal-popup-${apiGoal.key}`}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.16, ease: "easeOut" }}
+              role="dialog"
+              aria-label={`${basket.label} goal detail`}
+              className="pointer-events-auto w-[600px] max-w-full max-h-[82vh] rounded-3xl overflow-hidden flex flex-col"
+              style={{
+                background: "linear-gradient(180deg, hsla(0, 0%, 100%, 0.75) 0%, hsla(0, 0%, 100%, 0.92) 100%)",
+                backdropFilter: "blur(48px) saturate(1.5)",
+                WebkitBackdropFilter: "blur(48px) saturate(1.5)",
+                border: "1px solid hsla(0, 0%, 100%, 0.55)",
+                boxShadow: "0 24px 80px hsl(280 20% 40% / 0.25)",
+              }}
+            >
+              {/* Hero banner —— 桌面有空间放大 goal 配图 */}
+              <div className="relative shrink-0 h-36 bg-foreground/[0.03] flex items-center justify-center overflow-hidden">
+                <img src={visual.image} alt={basket.label} className="w-auto h-[88%] object-contain" />
+                <button
+                  onClick={onClose}
+                  className="absolute top-3 right-3 p-2 rounded-full bg-white/60 hover:bg-white/85 backdrop-blur-md transition-colors"
+                  aria-label="Close goal"
+                >
+                  <X size={16} strokeWidth={1.8} className="text-foreground/65" />
+                </button>
+              </div>
+              <div className="px-6 pb-6 pt-4 overflow-y-auto">
+                <GoalDetailBody
+                  apiGoal={apiGoal}
+                  visual={visual}
+                  basket={basket}
+                  status={status}
+                  hideHeaderImage
+                />
+              </div>
+            </motion.div>
+          </div>
+        </>
+      )}
+    </AnimatePresence>,
+    document.body,
   );
 }

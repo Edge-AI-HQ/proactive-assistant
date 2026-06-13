@@ -72,10 +72,15 @@ export default function ZebraCommandPalette({
           />
           <motion.div
             key="palette"
-            initial={{ opacity: 0, y: -10, x: "-50%", scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, x: "-50%", scale: 1 }}
-            exit={{ opacity: 0, y: -8, x: "-50%", scale: 0.98 }}
-            transition={{ duration: 0.22, ease: [0.32, 0.72, 0, 1] }}
+            // 入场用纯 opacity fade（最便宜的动效，Dialog 业界 convention）——
+            // backdrop-filter blur(48px) 模糊 ZebraBackdrop 常驻视频本就逐帧重算，
+            // 改几何的入场动画(scale 重光栅、translateY 平移也要按新位置重采样
+            // 动态背景)在 Electron(macOS)都会卡；纯 fade 几何不动只 alpha 合成
+            // 最省（x:-50% 是静态水平居中、非动画）。
+            initial={{ opacity: 0, x: "-50%" }}
+            animate={{ opacity: 1, x: "-50%" }}
+            exit={{ opacity: 0, x: "-50%" }}
+            transition={{ duration: 0.16, ease: "easeOut" }}
             className="fixed left-1/2 top-[16%] z-[71] w-[600px] max-w-[calc(100vw-2rem)] rounded-3xl overflow-hidden"
             style={{
               background: "linear-gradient(180deg, hsla(0, 0%, 100%, 0.75) 0%, hsla(0, 0%, 100%, 0.92) 100%)",

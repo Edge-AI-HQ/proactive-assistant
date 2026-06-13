@@ -1,9 +1,12 @@
 /**
  * Preload —— renderer 可用的桌面能力白名单（contextBridge）。
  *
- * 形状即 `window.pinaiDesktop`（类型声明在
- * proactive-ai-frontend/src/types/desktop-shell.d.ts，web/Capacitor 构建下
- * 该对象不存在 → `isElectron` 探测为 false，所有桌面分支天然关闭）。
+ * 形状即 `window.pinaiDesktop`。renderer 侧的契约真源是 renderer（apps/web）
+ * 经 @pin-ai/ui-web 消费的 packages/ui-web/src/auth/desktop-bridge.ts 的
+ * `PinaiDesktopBridge`——web/Capacitor 构建下该对象不存在 → `isElectron`
+ * 探测为 false，所有桌面分支天然关闭。改这里的契约要同步那个 interface
+ * （proactive-ai-frontend/src/types/desktop-shell.d.ts 是 frontend 自用的
+ * 同形副本，给它的 desktop-notifications 用，一并对齐）。
  * 能力面：OAuth（登录窗 + loopback）、同步引擎 db IPC（node:sqlite，
  * per-user 库）、窗口唤起（通知点击/快捷键）。
  */

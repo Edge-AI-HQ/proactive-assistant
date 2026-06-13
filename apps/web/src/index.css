@@ -236,3 +236,16 @@
     radial-gradient(ellipse 40% 35% at 60% 90%, hsl(290 60% 82% / 0.4) 0%, transparent 60%);
   animation: aurora-drift-3 64s ease-in-out infinite;
 }
+
+/* Electron 桌面壳(apps/desktop)的标题栏拖拽。main 进程用 titleBarStyle:
+   "hiddenInset"(traffic lights 浮在左上),renderer 顶部默认不可拖——这两个
+   工具类提供业界 convention 的 -webkit-app-region 拖拽区。drag 区内的可点击
+   元素须叠加 .desktop-no-drag,否则点不动(整片 drag 会吞掉点击)。web /
+   Capacitor 构建下不渲染对应元素(DesktopTitleBar 的 isElectron gate),纯
+   惰性规则,无副作用。 */
+.desktop-drag-region {
+  -webkit-app-region: drag;
+}
+.desktop-no-drag {
+  -webkit-app-region: no-drag;
+}
