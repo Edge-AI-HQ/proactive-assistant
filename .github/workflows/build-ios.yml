@@ -18,6 +18,8 @@ on:
     paths:
       - 'proactive-ai-frontend/**'
       - 'capacitor-plugins/**'
+      # 共享逻辑/UI 层（@pin-ai/core·@pin-ai/state·@pin-ai/ui-web）变化也要重建 Capacitor app
+      - 'packages/**'
       - '.github/workflows/build-ios.yml'
 
 # Newer push cancels an in-flight dev build so TestFlight isn't flooded.

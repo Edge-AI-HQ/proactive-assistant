@@ -3,17 +3,19 @@
 # (ai.pin.proactive.development)，现有 dev distribution profile + ASC API
 # key 直接可用。
 #
-# 触发：apps/mobile/** 或 packages/** 变化的 main push（dev TestFlight），
-# 或手动 dispatch。
+# 触发：暂时停用 main push 自动触发（CICD 不自动 build RN iOS），仅保留手动
+# dispatch。RN iOS 链路尚未就绪，恢复时取消下面 push 块的注释即可。
 name: Build RN iOS (dev)
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "apps/mobile/**"
-      - "packages/**"
-      - ".github/workflows/build-rn-ios.yml"
+  # 暂时移除 CICD 自动触发：先不在 main push 时 build RN iOS。
+  # 恢复：取消下面 push 块的注释。
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "apps/mobile/**"
+  #     - "packages/**"
+  #     - ".github/workflows/build-rn-ios.yml"
   workflow_dispatch:
 
 concurrency:
