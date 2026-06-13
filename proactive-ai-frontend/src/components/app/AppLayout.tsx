@@ -15,7 +15,7 @@ import {
   ArrowRight, ChevronDown, Check, Cloud,
   MapPin, Sun, Activity, Users, ChevronUp, Target,
 } from "lucide-react";
-import bgGradient from "@/assets/bg-gradient.jpg";
+import VideoBackdrop from "@/components/app/VideoBackdrop";
 import AiSphere from "@/components/now/AiSphere";
 
 import ConnectPanel from "@/components/connect/ConnectPanel";
@@ -41,8 +41,8 @@ import { useAmbientToggle } from "@/hooks/useAmbientToggle";
 import { bindSystemShortcutActions } from "@/services/system-shortcuts";
 import type { LiveSession } from "@/services/ambient/live-session";
 import {
-  isFromLowerHalfOfScreen,
   isFromRightEdgeOfScreen,
+  isInMainChatSurfaceZone,
   isMainChatEntrySwipeUp,
   isMainChatSurfaceSwipeUp,
   isMainMenuSwipeLeft,
@@ -451,7 +451,8 @@ export default function AppLayout() {
     if (!isFromRightEdgeOfScreen(event.clientX, screenWidth)) {
       // Not an edge gesture — let the event continue propagating to the
       // sphere (or whatever child is under the finger) so they can do
-      // their normal drag handling. Lower-half origins additionally arm the
+      // their normal drag handling. Surface-zone origins (lower half minus
+      // the bottom home-indicator strip) additionally arm the
       // swipe-up-into-chat tracker — purely observational (no
       // stopPropagation, no capture), so sphere drags / taps are untouched;
       // the sphere ignores vertical travel anyway (pitch locked).
@@ -459,7 +460,7 @@ export default function AppLayout() {
       const screenHeight = typeof window === "undefined" ? 0 : window.innerHeight;
       mainChatSurfaceSwipeStartRef.current =
         canOpenChatFromMainSwipe
-        && isFromLowerHalfOfScreen(event.clientY, screenHeight)
+        && isInMainChatSurfaceZone(event.clientY, screenHeight)
           ? { x: event.clientX, y: event.clientY }
           : null;
       return;
@@ -512,12 +513,12 @@ export default function AppLayout() {
     const screenWidth = typeof window === "undefined" ? Infinity : window.innerWidth;
     if (!isFromRightEdgeOfScreen(touch.clientX, screenWidth)) {
       mainMenuSwipeStartRef.current = null;
-      // See handleMainSurfacePointerDown: lower-half origins arm the
+      // See handleMainSurfacePointerDown: surface-zone origins arm the
       // observational swipe-up-into-chat tracker.
       const screenHeight = typeof window === "undefined" ? 0 : window.innerHeight;
       mainChatSurfaceSwipeStartRef.current =
         canOpenChatFromMainSwipe
-        && isFromLowerHalfOfScreen(touch.clientY, screenHeight)
+        && isInMainChatSurfaceZone(touch.clientY, screenHeight)
           ? { x: touch.clientX, y: touch.clientY }
           : null;
       return;
@@ -771,12 +772,10 @@ export default function AppLayout() {
       onTouchEnd={handleMainSurfaceTouchEnd}
       onTouchCancel={resetMainMenuSwipe}
     >
-      {/* Background — aurora flow using existing palette */}
-      <img src={bgGradient} alt="" className="absolute inset-0 w-full h-full object-cover opacity-60" aria-hidden="true" />
-      <div className="absolute inset-0 aurora-layer aurora-layer-1" aria-hidden="true" />
-      <div className="absolute inset-0 aurora-layer aurora-layer-2" aria-hidden="true" />
-      <div className="absolute inset-0 aurora-layer aurora-layer-3" aria-hidden="true" />
-      <div className="absolute inset-0 bg-white/35" />
+      {/* Background — subtly-animated video (NOW home + every menu sub-page
+          share this shell bg). Ask PIN AI surfaces + onboarding keep the
+          static aurora bg. */}
+      <VideoBackdrop />
 
       <div className="relative z-10 flex flex-col h-full">
         {/* Top bar — AgentRunIndicator + Chat (MainChat) + DebugPanel (gear)
@@ -907,9 +906,9 @@ export default function AppLayout() {
               transition={{ duration: 2.2, repeat: Infinity, ease: "easeInOut" }}
               className="flex items-center justify-center"
             >
-              <ChevronUp size={18} strokeWidth={1.6} className="text-foreground/55 group-hover:text-foreground/80 transition-colors" />
+              <ChevronUp size={18} strokeWidth={2} className="text-foreground/60 group-hover:text-foreground transition-colors" />
             </motion.div>
-            <span className="text-[10px] tracking-[0.18em] uppercase text-foreground/35 group-hover:text-foreground/60 transition-colors font-medium">
+            <span className="text-[10px] tracking-[0.18em] uppercase text-foreground/60 group-hover:text-foreground transition-colors font-semibold">
               Ask PIN AI
             </span>
           </button>

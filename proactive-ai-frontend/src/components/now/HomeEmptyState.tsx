@@ -78,7 +78,7 @@ export default function HomeEmptyState({
 
   if (!needVoice && !needConnect) {
     return (
-      <div className="flex h-full flex-col items-center justify-center px-8 text-center">
+      <div className="flex h-full flex-col items-center justify-center px-8 pb-40 text-center">
         <p className="text-[15px] font-semibold text-foreground/80">
           Your feed is warming up
         </p>

@@ -1,9 +1,10 @@
 import { describe, expect, test } from "vitest";
 import {
   isFromLeftEdgeOfScreen,
-  isFromLowerHalfOfScreen,
+  isInMainChatSurfaceZone,
   isMainChatSurfaceSwipeUp,
   LEFT_EDGE_BACK_THRESHOLD_PX,
+  MAIN_CHAT_SURFACE_BOTTOM_EXCLUSION_PX,
 } from "@/components/chat/main-chat-entry-gesture";
 
 describe("isFromLeftEdgeOfScreen", () => {
@@ -17,14 +18,19 @@ describe("isFromLeftEdgeOfScreen", () => {
   });
 });
 
-describe("isFromLowerHalfOfScreen", () => {
-  test("true at and below the vertical midpoint", () => {
-    expect(isFromLowerHalfOfScreen(400, 800)).toBe(true);
-    expect(isFromLowerHalfOfScreen(799, 800)).toBe(true);
+describe("isInMainChatSurfaceZone", () => {
+  test("true from the vertical midpoint down to the bottom exclusion line", () => {
+    expect(isInMainChatSurfaceZone(400, 800)).toBe(true);
+    expect(isInMainChatSurfaceZone(800 - MAIN_CHAT_SURFACE_BOTTOM_EXCLUSION_PX, 800)).toBe(true);
   });
   test("false above the midpoint", () => {
-    expect(isFromLowerHalfOfScreen(399, 800)).toBe(false);
-    expect(isFromLowerHalfOfScreen(0, 800)).toBe(false);
+    expect(isInMainChatSurfaceZone(399, 800)).toBe(false);
+    expect(isInMainChatSurfaceZone(0, 800)).toBe(false);
+  });
+  test("false in the bottom exclusion strip(iOS home-indicator 上滑退出区,不能抢)", () => {
+    expect(isInMainChatSurfaceZone(800 - MAIN_CHAT_SURFACE_BOTTOM_EXCLUSION_PX + 1, 800)).toBe(false);
+    expect(isInMainChatSurfaceZone(799, 800)).toBe(false);
+    expect(isInMainChatSurfaceZone(800, 800)).toBe(false);
   });
 });
 

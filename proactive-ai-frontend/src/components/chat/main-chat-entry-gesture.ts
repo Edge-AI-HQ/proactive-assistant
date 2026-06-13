@@ -37,18 +37,34 @@ export function isMainChatEntrySwipeUp(
   );
 }
 
-/** The whole lower half of the NOW screen accepts the swipe-up into main
- *  chat, not just the ASK PIN AI button. The sphere only responds to
- *  HORIZONTAL drags (pitch is locked), so a vertical swipe there is an
- *  otherwise-dead gesture we can claim without stealing anything. */
+/** The lower half of the NOW screen (minus the bottom strip below) accepts
+ *  the swipe-up into main chat, not just the ASK PIN AI button. The sphere
+ *  only responds to HORIZONTAL drags (pitch is locked), so a vertical swipe
+ *  there is an otherwise-dead gesture we can claim without stealing anything. */
 const MAIN_CHAT_SURFACE_SWIPE_THRESHOLD_PX = 56;
 
-/** True when the pointer started in the lower half of the screen. */
-export function isFromLowerHalfOfScreen(
+/** Bottom strip (px) excluded from the surface hot zone. A swipe starting
+ *  here is almost always the iOS home-indicator gesture (exit app / app
+ *  switcher) leaking its first touches into the WebView, not chat-entry
+ *  intent — claiming it meant "swipe up to leave the app" reopened main
+ *  chat. 34px covers the Face-ID safe-area inset; the rest is buffer for
+ *  where WKWebView actually reports a system swipe's touchstart — real-device
+ *  testing showed sloppy/fast exit swipes register well above the bezel, so
+ *  the strip is deliberately deep (2026-06-12 user acceptance: 64 was not
+ *  enough). The ASK PIN AI button keeps its own swipe handler, so gestures
+ *  starting on the button are unaffected. */
+export const MAIN_CHAT_SURFACE_BOTTOM_EXCLUSION_PX = 120;
+
+/** True when the pointer started in the surface hot zone: lower half of
+ *  the screen, minus the bottom exclusion strip. */
+export function isInMainChatSurfaceZone(
   clientY: number,
   screenHeight: number,
 ): boolean {
-  return clientY >= screenHeight / 2;
+  return (
+    clientY >= screenHeight / 2
+    && clientY <= screenHeight - MAIN_CHAT_SURFACE_BOTTOM_EXCLUSION_PX
+  );
 }
 
 /** Swipe-up detector for the lower-screen surface. Deliberately a HIGHER
