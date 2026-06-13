@@ -44,6 +44,7 @@ from ..auth.user_service import load_user_by_id
 from ..db.repositories.connectors import ConnectorsRepository
 from ..db.repositories.scheduled_tasks import (
     ScheduledTaskRow,
+    enqueue_once,
     requeue_once,
     update_progress,
 )
@@ -183,6 +184,8 @@ async def run(
     run_id: str,
 ) -> None:
     """Entry point invoked by the dispatcher. Routes by `task.kind`:
+      * connector.preview — onboarding-only first pull: wait for ACTIVE,
+        fetch a small source window, cache the summary, then let init continue.
       * connector.init — bootstrap pull, no cursor read, ensures a
         recurring sync schedule on success.
       * connector.sync — incremental pull driven by the cursor's
@@ -196,7 +199,9 @@ async def run(
 
     Resolves the right adapter via `_ADAPTERS[toolkit]`. Unknown toolkits
     short-circuit to "skipped (unsupported_v0)"."""
-    if task.kind == "connector.sync":
+    if task.kind == "connector.preview":
+        await _run_preview(pool, task, run_id)
+    elif task.kind == "connector.sync":
         await _run_sync(pool, task, run_id)
     else:  # connector.init or backward-compat (caller routed here)
         await _run_init(pool, task, run_id)
@@ -243,6 +248,37 @@ async def _mark_skipped(
         log_prefix,
         task.user_id,
         toolkit,
+    )
+
+
+async def _mark_preview_not_active(
+    pool: AsyncConnectionPool,
+    task: ScheduledTaskRow,
+    toolkit: str,
+    *,
+    connected_account_id: str,
+    status: str,
+) -> None:
+    """Skip abandoned OAuth accounts without retrying the onboarding preview."""
+    async with user_scoped_tx(pool, task.user_id) as conn:
+        await update_progress(
+            conn,
+            user_id=task.user_id,
+            task_id=task.id,
+            progress={
+                "stage": "skipped",
+                "reason": "connection_not_active",
+                "toolkit": toolkit,
+                "connectedAccountId": connected_account_id,
+                "status": status,
+            },
+        )
+    logger.info(
+        "[connector.preview] skipped user=%d toolkit=%s cid=%s status=%s",
+        task.user_id,
+        toolkit,
+        connected_account_id,
+        status,
     )
 
 
@@ -301,6 +337,218 @@ async def _ensure_sync_schedule(
                 json.dumps({"toolkit": toolkit, "connectedAccountId": cid}),
             ),
         )
+
+
+async def _enqueue_full_init_after_preview(
+    conn: AsyncConnection[DictRow],
+    *,
+    user_id: int,
+    toolkit: str,
+    cid: str,
+) -> str:
+    task_id = f"init.{toolkit}.{cid}"
+    await enqueue_once(
+        conn,
+        user_id=user_id,
+        task_id=task_id,
+        kind="connector.init",
+        payload={
+            "toolkit": toolkit,
+            "connectedAccountId": cid,
+            "reason": "connector_preview",
+            "limit": _DEFAULT_LIMIT,
+        },
+        max_attempts=3,
+    )
+    return task_id
+
+
+async def _run_preview(
+    pool: AsyncConnectionPool,
+    task: ScheduledTaskRow,
+    run_id: str,
+) -> None:
+    """Onboarding fast path.
+
+    This task owns the slow parts that used to sit behind the OAuth UI:
+    Composio ACTIVE wait, a 50-item preview fetch, and summary generation.
+    Full connector.init is enqueued after the preview summary is cached so
+    the full pull does not compete with the first user-visible summary.
+    """
+    toolkit_raw, cid, limit = _validate_payload(task)
+    user_id = task.user_id
+
+    async with user_scoped_tx(pool, user_id) as conn:
+        await update_progress(
+            conn,
+            user_id=user_id,
+            task_id=task.id,
+            progress={"stage": "waiting_active", "toolkit": toolkit_raw, "limit": limit},
+        )
+
+    from ..composio_service import ComposioError, wait_active  # noqa: PLC0415
+    from ..routes.ui import onboarding as onboarding_routes  # noqa: PLC0415
+
+    try:
+        active = await wait_active(cid)
+    except ComposioError as exc:
+        if "timeout while waiting for connection" not in str(exc).lower():
+            raise
+        await _mark_preview_not_active(
+            pool,
+            task,
+            toolkit_raw,
+            connected_account_id=cid,
+            status="TIMEOUT",
+        )
+        return
+    if active.status != "ACTIVE":
+        await _mark_preview_not_active(
+            pool,
+            task,
+            toolkit_raw,
+            connected_account_id=cid,
+            status=active.status,
+        )
+        return
+
+    active_toolkit = str(active.toolkit or toolkit_raw).strip().lower()
+    if not active_toolkit or active_toolkit == "unknown":
+        active_toolkit = toolkit_raw
+    preview_limit = max(1, min(limit, onboarding_routes.MAX_CONNECTOR_SUMMARY_ITEMS))
+    summary_toolkit = onboarding_routes._summary_source_toolkit(active_toolkit)
+
+    async with user_scoped_tx(pool, user_id) as conn:
+        await update_progress(
+            conn,
+            user_id=user_id,
+            task_id=task.id,
+            progress={
+                "stage": "fetch",
+                "toolkit": active_toolkit,
+                "sourceToolkit": summary_toolkit,
+                "limit": preview_limit,
+            },
+        )
+
+    recipe = ingest_runner.load_recipe(summary_toolkit)
+    if recipe is None:
+        recipe = await recipe_infer.ainfer_recipe(summary_toolkit)
+    if recipe is None or not recipe.is_ingestable():
+        await _mark_skipped(pool, task, summary_toolkit, log_prefix="[connector.preview]")
+        async with user_scoped_tx(pool, user_id) as conn:
+            await _enqueue_full_init_after_preview(
+                conn,
+                user_id=user_id,
+                toolkit=active_toolkit,
+                cid=cid,
+            )
+        return
+    subs = _resolve_subs(summary_toolkit, recipe)
+    if not subs:
+        await _mark_skipped(pool, task, summary_toolkit, log_prefix="[connector.preview]")
+        async with user_scoped_tx(pool, user_id) as conn:
+            await _enqueue_full_init_after_preview(
+                conn,
+                user_id=user_id,
+                toolkit=active_toolkit,
+                cid=cid,
+            )
+        return
+
+    user = await load_user_by_id(pool, user_id)
+    if user is None:
+        msg = f"connector.preview: user {user_id} not found"
+        raise RuntimeError(msg)
+
+    preview_items_by_sub: dict[str, list[dict[str, Any]]] = {}
+    for sub_tk, _, _ in subs:
+        preview_items_by_sub[sub_tk] = await ingest_runner.run_fetch(
+            user,
+            sub_tk,
+            cid,
+            limit=preview_limit,
+            since=None,
+        )
+    total_fetched = sum(len(items) for items in preview_items_by_sub.values())
+
+    per_toolkit: dict[str, dict[str, Any]] = {}
+    total_inserted = 0
+    async with user_scoped_tx(pool, user_id) as conn:
+        await update_progress(
+            conn,
+            user_id=user_id,
+            task_id=task.id,
+            progress={
+                "stage": "raw",
+                "toolkit": active_toolkit,
+                "sourceToolkit": summary_toolkit,
+                "fetched": total_fetched,
+                "limit": preview_limit,
+            },
+        )
+        for sub_tk, _, sub_upserter in subs:
+            sub_items = preview_items_by_sub[sub_tk]
+            sub_inserted = await sub_upserter(conn, user_id, sub_items)
+            total_inserted += sub_inserted
+            per_toolkit[sub_tk] = {
+                "fetched": len(sub_items),
+                "rawInserted": sub_inserted,
+            }
+        await update_progress(
+            conn,
+            user_id=user_id,
+            task_id=task.id,
+            progress={
+                "stage": "summary",
+                "toolkit": active_toolkit,
+                "sourceToolkit": summary_toolkit,
+                "fetched": total_fetched,
+                "rawInserted": total_inserted,
+                **({"perToolkit": per_toolkit} if len(per_toolkit) > 1 else {}),
+            },
+        )
+
+    summary = await onboarding_routes.build_connector_summary_for_onboarding(
+        pool,
+        user=user,
+        toolkit=active_toolkit,
+        connected_account_id=cid,
+        limit=preview_limit,
+    )
+
+    async with user_scoped_tx(pool, user_id) as conn:
+        init_task_id = await _enqueue_full_init_after_preview(
+            conn,
+            user_id=user_id,
+            toolkit=active_toolkit,
+            cid=cid,
+        )
+        await update_progress(
+            conn,
+            user_id=user_id,
+            task_id=task.id,
+            progress={
+                "stage": "done",
+                "toolkit": active_toolkit,
+                "sourceToolkit": summary_toolkit,
+                "fetched": total_fetched,
+                "rawInserted": total_inserted,
+                "summaryItemCount": summary.source.item_count,
+                "initTaskId": init_task_id,
+            },
+        )
+
+    logger.info(
+        "[connector.preview] done user=%d toolkit=%s source=%s fetched=%d inserted=%d summary_items=%d run=%s",
+        user_id,
+        active_toolkit,
+        summary_toolkit,
+        total_fetched,
+        total_inserted,
+        summary.source.item_count,
+        run_id,
+    )
 
 
 async def _run_init(

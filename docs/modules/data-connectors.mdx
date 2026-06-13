@@ -1,6 +1,6 @@
 ---
 title: "Data Connectors"
-description: "Composio、device 注册、mobile ingest 与 connector.init/sync 后台拉取的当前事实。"
+description: "Composio、device 注册、mobile ingest 与 connector.preview/init/sync 后台拉取的当前事实。"
 ---
 
 # Data Connectors
@@ -9,14 +9,18 @@ description: "Composio、device 注册、mobile ingest 与 connector.init/sync �
 
 Data Connectors 负责"数据源怎么接进来",不负责后续记忆提炼。两条主链路:
 
-- **Composio**:用户在前端 OAuth 连 SaaS 账号 → `/api/composio/wait` 轮询到 ACTIVE 后入队 `connector.init` 任务(`pai_scheduled_tasks`,kind=`connector.init`)→ scheduler 把它派给 `web/services/connector_ingest.py` in-process handler → handler 从 Composio 拉一批数据写到 `pai_raw_<toolkit>` typed 表 + `pai_personal_signals` → 同时入一次 once-shot `connector.evolve`(LLM 沉淀)和一行 recurring `connector.sync`(cron `*/30 * * * *`)。`connector.sync` 用 `pai_connector_sync_cursors.last_synced_at` 当 since 下界做增量。
+- **Composio**:用户在前端 OAuth 连 SaaS 账号 → `/api/composio/connect` 立即入队 `connector.preview`(onboarding 快速反馈,后台等 ACTIVE 后只拉最多 50 条并生成 summary cache)→ preview 完成后再入队 `connector.init` → scheduler 派给 `web/services/connector_ingest.py` in-process handler → handler 从 Composio 拉一批数据写到 `pai_raw_<toolkit>` typed 表 + `pai_personal_signals` → 同时入一次 once-shot `connector.evolve`(LLM 沉淀)和一行 recurring `connector.sync`(cron `*/30 * * * *`)。`connector.sync` 用 `pai_connector_sync_cursors.last_synced_at` 当 since 下界做增量。
 - **Device / mobile**:用户在前端注册设备拿一次性 token(bcrypt 存 `pai_user_devices`),后续走 `POST /api/devices/ingest`(`X-Device-Id` + `X-Device-Token` 鉴权)写入 `pai_personal_signals` 或 `pai_raw_device_*`。落点由 `web/device_ingest/policies.py:DEVICE_INGEST_POLICIES` 决定,unknown kind 默认 fallback 到 signal。
 
 ```mermaid
 flowchart LR
   UI["DataConnections UI"] --> Composio["/api/composio/*"]
-  Composio --> Wait["/api/composio/wait ACTIVE"]
-  Wait --> Q[("pai_scheduled_tasks (connector.init)")]
+  Composio --> PreviewQ[("pai_scheduled_tasks (connector.preview)")]
+  PreviewQ --> PreviewH["connector_ingest.run (_run_preview)"]
+  PreviewH --> Summary[("onboarding summary cache")]
+  PreviewH --> Q[("pai_scheduled_tasks (connector.init)")]
+  Composio --> Wait["/api/composio/wait ACTIVE (compat)"]
+  Wait --> Q
   Q --> Sched["web tick_loop"]
   Sched --> InitH["connector_ingest.run (_run_init)"]
   InitH --> Raw[("pai_raw_<toolkit>")]
@@ -39,8 +43,8 @@ flowchart LR
 
 包含:
 
-- Composio API key 状态、连接、断开、reconnect、`/composio/wait` ACTIVE 入队。
-- `connector.init` / `connector.sync` 两个 handler 的拉数据→写 raw / signal → 入 evolve / sync schedule 链路。
+- Composio API key 状态、连接、断开、reconnect、`/composio/connect` onboarding preview 入队、`/composio/wait` ACTIVE 入队。
+- `connector.preview` / `connector.init` / `connector.sync` 三个 handler 的拉数据→写 raw / signal → 入 evolve / sync schedule 链路。
 - `pai_connector_sync_cursors` 游标推进语义。
 - `web/services/ingest_runner.py` + `db/ingest_recipes/*.yaml` 的 recipe 机制。
 - 当前真正能 ingest 的 toolkit 矩阵。
@@ -59,7 +63,8 @@ flowchart LR
 
 | 来源 | 当前作用 | 代码入口 | 数据落点 |
 |---|---|---|---|
-| Composio(`/api/composio/*`) | OAuth、ACTIVE 状态、label 展示、入队 connector.init | `web/routes/ui/composio.py`、`web/composio_service.py`、`useComposio.ts` | 状态来自 Composio API;label 持久化在 `pai_connector_labels`(eager resolve on /wait,lazy retry on /connections);ACTIVE 入队 `connector.init`;支持多账号(`allow_multiple=True`) |
+| Composio(`/api/composio/*`) | OAuth、ACTIVE 状态、label 展示、入队 connector.preview / connector.init | `web/routes/ui/composio.py`、`web/composio_service.py`、`useComposio.ts` | 状态来自 Composio API;label 持久化在 `pai_connector_labels`(eager resolve on /wait,lazy retry on /connections);`/connect` 入队 `connector.preview`;preview 完成后入队 `connector.init`;旧连接 / 无 preview 时 `/wait` 仍会 ACTIVE 入队 init;支持多账号(`allow_multiple=True`) |
+| `connector.preview` handler | onboarding 独立快速反馈 | `web/services/connector_ingest.py:_run_preview` | 后台等 ACTIVE,只拉 summary source 最多 50 条,写 raw 后生成 `pai_onboarding_connector_summary_cache`;同时保证 `connector.init` 入队 |
 | `connector.init` handler | ACTIVE 后首次拉一批 | `web/services/connector_ingest.py:_run_init` | `pai_raw_<toolkit>` + `pai_personal_signals` + 入 `connector.evolve` + 建立 `connector.sync` schedule |
 | `connector.sync` handler | 周期增量拉取(cron `*/30 * * * *`) | `web/services/connector_ingest.py:_run_sync` | 同上 raw / signals;成功才前推 `pai_connector_sync_cursors.last_synced_at` |
 | Device registry | 给 web / iOS / Android / wearable 等设备发 token | `web/routes/ui/devices.py`、`web/db/repositories/devices.py` | `pai_user_devices`(`device_token_hash` 是 bcrypt rounds=10) |
@@ -107,7 +112,7 @@ migration 历史:
 
 ## 核心链路
 
-### Composio OAuth + 后台 init
+### Composio OAuth + 后台 preview/init
 
 ```mermaid
 sequenceDiagram
@@ -121,12 +126,13 @@ sequenceDiagram
   UI->>Route: POST /connect (toolkit)
   Route->>Composio: auth_configs + connected_accounts/link
   Composio-->>Route: {redirectUrl, connectedAccountId}
+  Route->>Q: enqueue_once(kind=connector.preview, id=preview.<toolkit>.<cid>, limit=50)
+  Route-->>UI: {redirectUrl, connectedAccountId}
   UI->>Composio: user completes OAuth in browser
-  UI->>Route: POST /wait (connectedAccountId)
+  UI->>Route: POST /wait (connectedAccountId) fire-and-forget
   Route->>Composio: poll until ACTIVE
-  Route->>Q: enqueue_once(kind=connector.init, id=init.<toolkit>.<cid>)
+  Route->>Q: enqueue_once(kind=connector.init) only if no preview owns init
   Route-->>UI: {status:'ACTIVE', initTaskId}
-  UI->>UI: useInitTask(initTaskId) polls /api/tasks/{id} every 1s on web
   Sched->>Q: claim due task (SKIP LOCKED)
   Sched->>H: connector_ingest.run(pool, task, run_id)
   H->>Composio: ingest_runner.run_fetch(toolkit, cid, limit, since=None)
@@ -135,15 +141,15 @@ sequenceDiagram
   H-->>Sched: succeeded
 ```
 
-前端 `useInitTask` 用确定性 `init.<toolkit-lower>.<cid>` 重建 taskId,reload 也能继续轮询。
+前端连接后不再等待 `/composio/wait` 的返回才继续;popup 关闭后 UI 先回到 onboarding,后台 wait 成功后刷新连接列表。进度轮询用确定性 `preview.<toolkit-lower>.<cid>` / `init.<toolkit-lower>.<cid>` 重建 taskId,reload 也能继续轮询。
 
 ### Onboarding 即时总结
 
-Onboarding 会先进入 Connect data,并在 flow 顶层挂一个轻量反馈 watcher:前端看到 ACTIVE connector 后先 fire-and-forget 调 `POST /api/onboarding/connector-summary/prewarm` 预热用户的 LiteLLM `gpt-5-nano` 链路;当某个 `connector.init` 的新鲜任务已 `succeeded` 后,再调用 `POST /api/onboarding/connector-summary`。web 进程从当前用户对应 raw 表或 `pai_raw_events` 读取最近最多 50 条可读记录,同时带上 connector label / userInfo / 登录邮箱整理出的 identity hints,先蒸馏成一个小的 signal pack(`identity` / `sourceCounts` / `topContacts` / `topTerms` / `dateRange` + 10 条样例),再用 LiteLLM `gpt-5-nano` 生成结构化的 "Here's what we know about you" 页面。Gmail 的 `topContacts` 会显式读取 `from_addr` / `to_addrs` / `cc_addrs`,过滤 self、noreply、bot、mailing-list、路径噪声,并把真实人名 pin 到第一段第一条,避免模型只讲 repo 或 workflow。summary 固定三段:先展示 `Key People & Accounts`,再展示 `Professional Identity`,最后展示 `Communication Style`,每段 2 条,优先把用户最容易感知的人、团队、账号放到最前。`googlesuper`(Google Workspace) 是例外:请求来自 Workspace init task,但 summary 有效数据源固定归一到 `gmail`,因为 Gmail 的正文/联系人/主题信号比 Calendar / Drive 元数据更适合做首轮个人画像。
+Onboarding 会先进入 Connect data,并在 `/api/composio/connect` 返回时立刻排一个独立 `connector.preview` once task。这个任务后台等 Composio ACTIVE,然后只拉 summary source 的最近最多 50 条,写 raw 后直接生成 `pai_onboarding_connector_summary_cache`;前端 watcher 看到新鲜 `connector.preview` 成功后调用 `POST /api/onboarding/connector-summary`,通常命中 cache。web 进程从当前用户对应 raw 表或 `pai_raw_events` 读取最近最多 50 条可读记录,同时带上 connector label / userInfo / 登录邮箱整理出的 identity hints,先蒸馏成一个小的 signal pack(`identity` / `sourceCounts` / `topContacts` / `topTerms` / `dateRange` + 10 条样例),再用 LiteLLM `gpt-5-nano` 生成结构化的 "Here's what we know about you" 页面。Gmail 的 `topContacts` 会显式读取 `from_addr` / `to_addrs` / `cc_addrs`,过滤 self、noreply、bot、mailing-list、路径噪声,并把真实人名 pin 到第一段第一条,避免模型只讲 repo 或 workflow。summary 固定三段:先展示 `Key People & Accounts`,再展示 `Professional Identity`,最后展示 `Communication Style`,每段 2 条,优先把用户最容易感知的人、团队、账号放到最前。`googlesuper`(Google Workspace) 是例外:preview 和 summary 有效数据源固定归一到 `gmail`,其他 Calendar / Drive / Docs / Sheets 仍由后续 `connector.init` fanout 自己拉,不会阻塞 summary。
 
 展示时机是**中间不打断,结束前拦一下**:用户连完 connector 后可以继续 Ambient / 本地模型步骤;summary 在后台生成。用户点最后 Done 时,如果 summary 已生成,先展示结果页;如果还没生成,留在 onboarding 的等待页("PIN AI is learning your context")直到结果回来。用户看完结果页点 Enter PIN AI 后,才调用 `onComplete` 进入主页面。
 
-展示规则是**一次连接动作只打断一次**:前端会先收集当前 ACTIVE connector 的 init task 状态,再选一个 insight 展示。`googlesuper` 作为 Google Workspace 整体优先展示,不会因为 Gmail / Calendar / Drive / Docs / Sheets fanout 跳出多张页面;真正生成 summary 时服务端只读 Gmail raw rows,返回 source 也标记为 `gmail`。如果用户很快连了多个 connector,也只进入一个 insight 页面。
+展示规则是**一次连接动作只打断一次**:前端会先收集当前 ACTIVE connector 的 preview task 状态,再选一个 insight 展示;没有 preview 的旧连接才 fallback 到新鲜 init task。`googlesuper` 作为 Google Workspace 整体优先展示,不会因为 Gmail / Calendar / Drive / Docs / Sheets fanout 跳出多张页面;真正生成 summary 时服务端只读 Gmail raw rows,返回 source 也标记为 `gmail`。如果用户很快连了多个 connector,也只进入一个 insight 页面。
 
 服务端有一层 summary cache:cache key = `schema version + model + toolkit + connected_account_id + raw fingerprint`。同一批 raw 数据重复进入 onboarding / 刷新 / 前端重复触发时,直接返回 `pai_onboarding_connector_summary_cache.summary`,不再打 LLM。每次请求都会写 `pai_onboarding_connector_summary_runs`,记录 `item_count / collect_ms / llm_ms / total_ms / status(empty|cached|succeeded|failed)` 便于持续观察首轮生成是否能压到 5-6 秒。
 

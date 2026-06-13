@@ -23,6 +23,14 @@ export function buildConnectorInitTaskId(toolkit: string, connectedAccountId: st
   return `init.${toolkit.toLowerCase()}.${connectedAccountId}`;
 }
 
+/**
+ * Backend-stable id of the onboarding-only connector.preview row. Unlike
+ * connector.init, this task owns just the first small pull + summary cache.
+ */
+export function buildConnectorPreviewTaskId(toolkit: string, connectedAccountId: string): string {
+  return `preview.${toolkit.toLowerCase()}.${connectedAccountId}`;
+}
+
 const TOOLKIT_FANOUT: Record<string, string[]> = {
   googlesuper: ["gmail", "googlecalendar", "googledrive", "googledocs", "googlesheets"],
 };

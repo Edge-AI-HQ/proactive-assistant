@@ -8,9 +8,10 @@ user's Supabase UUID (mapped to `pai-{supabase_user_id}`) as the SDK's
 Frontend flow:
   GET  /status      → has the env-level master key been configured?
   GET  /connections → list ACTIVE connections + user_info
-  POST /connect     → kick off OAuth, returns redirectUrl
+  POST /connect     → kick off OAuth, returns redirectUrl, enqueue onboarding
+                      connector.preview in the background
   POST /wait        → poll until ACTIVE (or 120s timeout); enqueue
-                      connector.init when newly active so we backfill.
+                      connector.init only when preview is not owning init.
   POST /reconnect   → re-init existing account (Composio re-runs OAuth).
   POST /disconnect  → revoke.
 """
@@ -229,7 +230,11 @@ async def composio_catalog(
 
 
 @router.post("/connect")
-async def composio_connect(body: dict, user: User = Depends(current_user)) -> dict:
+async def composio_connect(
+    body: dict,
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+) -> dict:
     toolkit = str(body.get("toolkit") or "").strip().lower()
     if not toolkit:
         raise HTTPException(status_code=400, detail="Missing toolkit")
@@ -257,6 +262,13 @@ async def composio_connect(body: dict, user: User = Depends(current_user)) -> di
         raise HTTPException(status_code=400, detail=str(e)) from e
     except ComposioError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
+    if init.connected_account_id and init.toolkit and init.toolkit != "unknown":
+        await _enqueue_connector_preview(
+            pool,
+            user.id,
+            init.toolkit,
+            init.connected_account_id,
+        )
     return {
         "toolkit": init.toolkit,
         "status": init.status,
@@ -321,11 +333,11 @@ async def composio_wait(
         return {"status": result.status, "connectedAccountId": cid}
     # Newly active — enqueue connector.init backfill task + resolve label.
     toolkit = result.toolkit or str(body.get("toolkit") or "").strip().lower()
-    init_task_id = (
-        await _enqueue_connector_init(pool, user.id, toolkit, cid)
-        if toolkit and toolkit != "unknown"
-        else None
-    )
+    init_task_id = None
+    if toolkit and toolkit != "unknown":
+        preview_owns_init = await _preview_owns_connector_init(pool, user.id, toolkit, cid)
+        if not preview_owns_init:
+            init_task_id = await _enqueue_connector_init(pool, user.id, toolkit, cid)
     # Eager label resolution: one extra Composio call here so the
     # subsequent /connections request returns the human label without
     # blocking. Failures get recorded to pai_connector_labels and
@@ -397,6 +409,89 @@ def _init_task_id(toolkit: str, connected_account_id: str) -> str:
     (user_id, id) gives idempotency for free — same toolkit+cid maps to
     the same row across retries / duplicate /wait calls."""
     return f"init.{toolkit}.{connected_account_id}"
+
+
+def _preview_task_id(toolkit: str, connected_account_id: str) -> str:
+    """Stable id for the independent onboarding connector.preview task.
+
+    This task can wait for Composio ACTIVE and generate the first summary
+    without blocking the user-facing OAuth flow.
+    """
+    return f"preview.{toolkit}.{connected_account_id}"
+
+
+async def _enqueue_connector_preview(
+    pool,
+    user_id: int,
+    toolkit: str,
+    connected_account_id: str,
+) -> str | None:
+    if pool is None:
+        return None
+    task_id = _preview_task_id(toolkit, connected_account_id)
+    payload = {
+        "toolkit": toolkit,
+        "connectedAccountId": connected_account_id,
+        "reason": "composio_connect",
+        "limit": 50,
+    }
+    try:
+        async with user_scoped_tx(pool, user_id) as conn:
+            await enqueue_once(
+                conn,
+                user_id=user_id,
+                task_id=task_id,
+                kind="connector.preview",
+                payload=payload,
+                max_attempts=3,
+            )
+        return task_id
+    except Exception as e:
+        logger.warning(
+            "composio: enqueue connector.preview failed user=%s tk=%s: %s",
+            user_id,
+            toolkit,
+            e,
+        )
+        return None
+
+
+async def _preview_owns_connector_init(
+    pool,
+    user_id: int,
+    toolkit: str,
+    connected_account_id: str,
+) -> bool:
+    """True when connector.preview should enqueue full init after summary."""
+    if pool is None:
+        return False
+    task_id = _preview_task_id(toolkit, connected_account_id)
+    try:
+        async with user_scoped_tx(pool, user_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT last_run_status, progress
+                FROM pai_scheduled_tasks
+                WHERE user_id = %s AND id = %s
+                """,
+                (user_id, task_id),
+            )
+            row = await cur.fetchone()
+    except Exception as e:
+        logger.warning(
+            "composio: preview lookup failed user=%s tk=%s: %s",
+            user_id,
+            toolkit,
+            e,
+        )
+        return False
+    if row is None:
+        return False
+    raw_progress = row.get("progress")
+    progress: dict = raw_progress if isinstance(raw_progress, dict) else {}
+    if progress.get("reason") == "connection_not_active":
+        return False
+    return row.get("last_run_status") not in {"failed", "timed_out", "cancelled", "lost"}
 
 
 async def _enqueue_connector_init(

@@ -500,26 +500,23 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
           );
         return;
       }
-      const raceResult = await Promise.race<{ connected: boolean; initTaskId?: string }>([
-        waitForToolkit(result.connectedAccountId),
-        openOAuthAndAwaitClose(result.redirectUrl).then(() => {
-          cancelWait();
-          return { connected: false };
-        }),
-      ]);
-      if (raceResult.connected) {
-        // Backend confirmed ACTIVE before the user dismissed the OAuth
-        // surface. Composio's hosted success page doesn't deep-link back
-        // to the app, so close it ourselves — otherwise the in-app browser
-        // (mobile) / popup (web) sits open on the "you can close this"
-        // page after linking finishes.
-        await closeOAuthSurface();
-      } else if (!cancelledRef.current) {
-        setConnectError("Connection not confirmed — please try again");
+      void waitForToolkit(result.connectedAccountId)
+        .then(async (waitResult) => {
+          if (cancelledRef.current) return;
+          if (waitResult.connected) {
+            // Backend confirmed ACTIVE before the user dismissed the OAuth
+            // surface. Composio's hosted success page doesn't deep-link back
+            // to the app, so close it ourselves when possible.
+            await closeOAuthSurface();
+          }
+          await composio.loadConnections();
+        })
+        .catch(() => undefined);
+
+      await openOAuthAndAwaitClose(result.redirectUrl);
+      if (!cancelledRef.current) {
+        void composio.loadConnections();
       }
-      // No need to thread initTaskId — the chip rebuilds it from
-      // (toolkit, connectedAccountId) and polls on mount once the
-      // connection appears in `connections`.
     } catch (err) {
       if (!cancelledRef.current)
         setConnectError(

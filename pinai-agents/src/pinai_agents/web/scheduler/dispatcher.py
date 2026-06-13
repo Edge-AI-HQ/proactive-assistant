@@ -125,10 +125,13 @@ def _chat_internal_url() -> str:
 #
 # Generator is user-facing: if no cards land within 10 minutes, the run
 # must fail instead of holding the UI in an active state.
-# init / sync are pure HTTP-then-INSERT and stay at the default.
+# connector.preview may wait for Composio ACTIVE and then call LiteLLM, so it
+# also needs the longer lease. init / sync are pure HTTP-then-INSERT and stay
+# at the default.
 _LONG_RUNNING_KINDS: frozenset[str] = frozenset(
     {
         "auto.dreaming",
+        "connector.preview",
         "connector.evolve",
         "user.prompt",
     }
@@ -488,7 +491,7 @@ class DefaultDispatcher:
             # payload (chat) and adds request-scoped generator input for
             # scheduled payloads (migration 039 for chat).
             await self._run_generator(task, run_id)
-        elif kind in ("connector.init", "connector.sync"):
+        elif kind in ("connector.preview", "connector.init", "connector.sync"):
             # In-process Composio ingest. The handler updates progress
             # between fetch / raw / evolve stages so the frontend chip
             # surfaces them. On success:

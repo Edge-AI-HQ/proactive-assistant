@@ -13,7 +13,7 @@ import {
   XCircle,
 } from "lucide-react";
 import type { Connection } from "@/hooks/useComposio";
-import { buildConnectorInitTaskId } from "@/hooks/useComposio";
+import { buildConnectorInitTaskId, buildConnectorPreviewTaskId } from "@/hooks/useComposio";
 import { isInitTaskFresh, useInitTask, type InitTaskRow } from "@/hooks/useInitTask";
 import { proxyPost } from "@pin-ai/core";
 
@@ -55,12 +55,12 @@ type SummaryState =
   | { status: "error"; message: string };
 
 const summaryRequests = new Map<string, Promise<ConnectorSummaryResponse>>();
-const prewarmRequests = new Set<string>();
 const RUNNING_TASK_STATUSES = new Set(["queued", "running"]);
 
 interface InsightCandidate {
   connection: Connection;
   taskId: string;
+  kind: "preview" | "init";
 }
 
 interface TaskReport {
@@ -91,15 +91,32 @@ export default function ConnectorOnboardingInsight({
   onContinue,
   continueLabel = "Continue setup",
 }: ConnectorOnboardingInsightProps) {
+  const activeConnections = useMemo(
+    () =>
+      connections.filter(
+        (conn): conn is Connection & { connectedAccountId: string } =>
+          conn.status === "ACTIVE" && Boolean(conn.connectedAccountId),
+      ),
+    [connections],
+  );
   const candidates = useMemo(
     () =>
-      connections
-        .filter((conn) => conn.status === "ACTIVE" && conn.connectedAccountId)
-        .map((conn) => ({
-          connection: conn,
-          taskId: buildConnectorInitTaskId(conn.toolkit, conn.connectedAccountId as string),
-        })),
-    [connections],
+      activeConnections.flatMap((conn) => {
+        const connectedAccountId = conn.connectedAccountId;
+        return [
+          {
+            connection: conn,
+            taskId: buildConnectorPreviewTaskId(conn.toolkit, connectedAccountId),
+            kind: "preview" as const,
+          },
+          {
+            connection: conn,
+            taskId: buildConnectorInitTaskId(conn.toolkit, connectedAccountId),
+            kind: "init" as const,
+          },
+        ];
+      }),
+    [activeConnections],
   );
   const [reports, setReports] = useState<Record<string, TaskReport>>({});
   const handleReport = useCallback((taskId: string, report: TaskReport) => {
@@ -147,7 +164,7 @@ export default function ConnectorOnboardingInsight({
           key={selected.taskId}
           candidate={selected}
           mode={mode}
-          connectedCount={candidates.length}
+          connectedCount={activeConnections.length}
           onStatusChange={onStatusChange}
           onContinue={onContinue}
           continueLabel={continueLabel}
@@ -200,13 +217,8 @@ function ConnectorInsightCandidate({
   const requestedKeyRef = useRef<string | null>(null);
 
   const freshTask = isInitTaskFresh(task);
-  const taskKey = `${connection.toolkit}:${connectedAccountId}:${task?.completed_at ?? ""}`;
+  const taskKey = `${candidate.taskId}:${task?.completed_at ?? ""}`;
   const label = toolkitLabel(connection.toolkit);
-
-  useEffect(() => {
-    if (!connectedAccountId) return;
-    prewarmConnectorSummary(connection.toolkit, connectedAccountId);
-  }, [connectedAccountId, connection.toolkit]);
 
   useEffect(() => {
     if (!connectedAccountId || !task || !freshTask || task.status !== "succeeded") return;
@@ -622,21 +634,6 @@ async function loadConnectorSummary(
   return request;
 }
 
-function prewarmConnectorSummary(toolkit: string, connectedAccountId: string): void {
-  const key = `${toolkit}:${connectedAccountId}`;
-  if (prewarmRequests.has(key)) return;
-  prewarmRequests.add(key);
-
-  void proxyPost("/onboarding/connector-summary/prewarm", {
-    toolkit,
-    connectedAccountId,
-  }).then((res) => {
-    if (!res.ok) prewarmRequests.delete(key);
-  }).catch(() => {
-    prewarmRequests.delete(key);
-  });
-}
-
 function selectInsightCandidate(
   candidates: InsightCandidate[],
   reports: Record<string, TaskReport>,
@@ -650,16 +647,23 @@ function selectInsightCandidate(
     return null;
   }
 
-  const succeeded = freshReports.filter((report) => report.task?.status === "succeeded");
+  const previewReports = freshReports.filter((report) => report.candidate.kind === "preview");
+  const scopedReports = previewReports.length > 0 ? previewReports : freshReports;
+
+  const succeeded = scopedReports.filter((report) => report.task?.status === "succeeded");
   const active = succeeded.length > 0
     ? succeeded
-    : freshReports.filter((report) => report.task?.status === "queued" || report.task?.status === "running");
-  const pool = active.length > 0 ? active : freshReports;
+    : scopedReports.filter((report) => report.task?.status === "queued" || report.task?.status === "running");
+  const pool = active.length > 0 ? active : scopedReports;
 
   return [...pool].sort(compareTaskReportPriority)[0]?.candidate ?? null;
 }
 
 function compareTaskReportPriority(a: TaskReport, b: TaskReport): number {
+  const aKindScore = a.candidate.kind === "preview" ? 0 : 1;
+  const bKindScore = b.candidate.kind === "preview" ? 0 : 1;
+  if (aKindScore !== bKindScore) return aKindScore - bKindScore;
+
   const aToolkitScore = normalizedToolkit(a.candidate.connection.toolkit) === "googlesuper" ? 0 : 1;
   const bToolkitScore = normalizedToolkit(b.candidate.connection.toolkit) === "googlesuper" ? 0 : 1;
   if (aToolkitScore !== bToolkitScore) return aToolkitScore - bToolkitScore;
