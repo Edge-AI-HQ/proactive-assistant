@@ -13,6 +13,10 @@ export { Text } from "./primitives/Text";
 export { Button } from "./primitives/Button";
 export { Input } from "./primitives/Input";
 export { Surface } from "./primitives/Surface";
+export { Box } from "./primitives/Box";
+export { Stack, VStack, HStack, Spacer } from "./primitives/Stack";
+export { Divider } from "./primitives/Divider";
+export { Icon } from "./primitives/Icon";
 
 // ── auth：supabase client / 平台判定 / dev auth / OAuth hook / transport 注入 ──
 export { supabase } from "./auth/supabase";
