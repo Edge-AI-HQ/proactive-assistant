@@ -4,6 +4,7 @@ import { Check, ChevronDown, Loader2, Mic, Send, X } from "lucide-react";
 import bgGradient from "../../assets/bg-gradient.jpg";
 import AiSphere from "../../now/AiSphere";
 import { useVoiceInput, Waveform, appendVoiceTranscript } from "../../voice";
+import { Text } from "../../primitives/Text";
 
 interface Suggestion {
   label: string;
@@ -242,12 +243,12 @@ export default function MinimalistLanding({
             <div className="mb-7">
               <AiSphere size={216} mode="idle" />
             </div>
-            <h2 className="text-[28px] font-semibold tracking-tight text-foreground leading-[1.05] text-center px-6">
+            <Text as="h2" variant="display" weight="semibold" className="tracking-tight text-center px-6">
               What&apos;s on your mind?
-            </h2>
-            <p className="mt-2 text-[13px] text-foreground/50 leading-snug text-center px-8">
+            </Text>
+            <Text variant="bodySm" className="block mt-2 text-foreground/50 leading-snug text-center px-8">
               Ask anything — I have your context.
-            </p>
+            </Text>
           </div>
 
           <div className="w-full flex flex-col gap-2 px-3">
@@ -271,9 +272,9 @@ export default function MinimalistLanding({
                   WebkitBackdropFilter: "blur(20px) saturate(1.4)",
                 }}
               >
-                <span className="text-[13px] text-foreground/75 leading-snug">
+                <Text variant="bodySm" className="text-foreground/75 leading-snug">
                   {s.label}
-                </span>
+                </Text>
                 <span className="text-foreground/30 group-hover:text-foreground/55 transition-colors shrink-0">
                   →
                 </span>
@@ -308,7 +309,7 @@ export default function MinimalistLanding({
                 boxShadow: "0 4px 24px hsl(0 0% 0% / 0.04)",
               }}
             >
-              <p className="flex min-h-[20px] items-center gap-1.5 text-[14px] italic leading-snug text-foreground/55">
+              <p className="flex min-h-[20px] items-center gap-1.5 text-body italic leading-snug text-foreground/55">
                 {voiceConnecting && !voiceFinalizing && !voiceTranscript && (
                   <Loader2 size={14} strokeWidth={2} className="shrink-0 animate-spin" />
                 )}
@@ -319,9 +320,9 @@ export default function MinimalistLanding({
                 </span>
               </p>
               <div className="flex items-center gap-2.5">
-                <span className="w-[40px] shrink-0 text-[12px] font-medium tabular-nums text-foreground/55">
+                <Text variant="label" weight="medium" className="w-[40px] shrink-0 tabular-nums text-foreground/55">
                   {formatRecordDuration(recordSec)}
-                </span>
+                </Text>
                 {voiceConnecting ? (
                   <div className="flex min-w-0 flex-1 items-center justify-center">
                     <Loader2 size={19} strokeWidth={2} className="animate-spin text-foreground/50" />
@@ -345,8 +346,8 @@ export default function MinimalistLanding({
                   className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-background transition-transform active:scale-95 disabled:opacity-60"
                   style={{
                     background:
-                      "linear-gradient(135deg, hsl(292 78% 63%) 0%, hsl(330 80% 65%) 100%)",
-                    boxShadow: "0 4px 12px hsl(292 78% 63% / 0.35)",
+                      "linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(330 80% 65%) 100%)",
+                    boxShadow: "0 4px 12px hsl(var(--primary) / 0.35)",
                   }}
                   aria-label="Use transcript"
                 >
@@ -371,7 +372,7 @@ export default function MinimalistLanding({
                 onKeyDown={onKeyDown}
                 placeholder="Message PIN AI…"
                 rows={1}
-                className="flex-1 resize-none bg-transparent text-[15px] text-foreground placeholder:text-foreground/35 outline-none leading-[20px] py-2 min-h-9 max-h-[120px]"
+                className="flex-1 resize-none bg-transparent text-body text-foreground placeholder:text-foreground/35 outline-none leading-[20px] py-2 min-h-9 max-h-[120px]"
               />
               <button
                 type="button"
@@ -391,8 +392,8 @@ export default function MinimalistLanding({
                   canSend
                     ? {
                         background:
-                          "linear-gradient(135deg, hsl(292 78% 63%) 0%, hsl(330 80% 65%) 100%)",
-                        boxShadow: "0 4px 12px hsl(292 78% 63% / 0.35)",
+                          "linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(330 80% 65%) 100%)",
+                        boxShadow: "0 4px 12px hsl(var(--primary) / 0.35)",
                         color: "hsl(var(--background))",
                       }
                     : {

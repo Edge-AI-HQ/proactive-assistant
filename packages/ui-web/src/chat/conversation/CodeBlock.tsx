@@ -6,6 +6,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Check, Copy } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { Text } from "../../primitives/Text";
 
 interface CodeBlockProps {
   language: string | null;
@@ -34,14 +35,14 @@ export default function CodeBlock({ language, rawText, children }: CodeBlockProp
   return (
     <div className="my-2 overflow-hidden rounded-lg border border-foreground/10 bg-foreground/[0.04]">
       <div className="flex items-center justify-between px-3 py-1 border-b border-foreground/10 bg-foreground/[0.03]">
-        <span className="text-[11px] font-mono text-foreground/50">
+        <Text variant="caption" className="font-mono text-foreground/50">
           {language ?? "text"}
-        </span>
+        </Text>
         <button
           type="button"
           onClick={copy}
           className={cn(
-            "flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px]",
+            "flex items-center gap-1 px-1.5 py-0.5 rounded text-caption",
             "text-foreground/50 hover:text-foreground/80 hover:bg-foreground/10",
             "transition-colors",
           )}
@@ -59,7 +60,7 @@ export default function CodeBlock({ language, rawText, children }: CodeBlockProp
           )}
         </button>
       </div>
-      <pre className="overflow-x-auto px-3 py-2 text-[12.5px] leading-relaxed font-mono">
+      <pre className="overflow-x-auto px-3 py-2 text-label leading-relaxed font-mono">
         {children}
       </pre>
     </div>

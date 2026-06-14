@@ -88,7 +88,7 @@ export default function MainChat({ onBack, cardContext }: MainChatProps) {
           headerSlot={
             cardContext ? (
               <div className="px-4 pt-1 pb-2">
-                <div className="rounded-2xl border border-foreground/[0.06] bg-white/45 px-3 py-2 text-[12px] leading-snug text-foreground/60 backdrop-blur-xl">
+                <div className="rounded-2xl border border-foreground/[0.06] bg-white/45 px-3 py-2 text-label leading-snug text-foreground/60 backdrop-blur-xl">
                   <span className="font-semibold text-foreground/75">
                     Feedback on this card
                   </span>

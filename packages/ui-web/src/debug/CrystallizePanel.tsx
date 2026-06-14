@@ -10,6 +10,7 @@ import { Sparkles, ChevronDown, Play, Loader2, RefreshCw } from "lucide-react";
 import { useCrystallize } from "@pin-ai/state";
 import type { TunableCrystallizeKey } from "@pin-ai/core";
 import { cn } from "../lib/utils";
+import { Text } from "../primitives/Text";
 
 interface CrystallizePanelProps {
   enabled: boolean;
@@ -116,7 +117,7 @@ export default function CrystallizePanel({ enabled }: CrystallizePanelProps) {
             <RefreshCw size={11} strokeWidth={1.5} className={loading ? "animate-spin" : ""} />
           </button>
           <label className="inline-flex items-center gap-1.5 cursor-pointer select-none">
-            <span className="text-[10px] font-medium text-foreground/40">Auto</span>
+            <Text variant="micro" weight="medium" className="text-foreground/40">Auto</Text>
             <input
               type="checkbox"
               checked={autoEnabled}
@@ -131,11 +132,11 @@ export default function CrystallizePanel({ enabled }: CrystallizePanelProps) {
 
       {/* Diagnostics — last session kind */}
       {state?.diagnostics?.lastSessionKind && (
-        <div className="mb-2 flex items-center gap-1.5 text-[10px] text-foreground/40">
+        <div className="mb-2 flex items-center gap-1.5 text-micro text-foreground/40">
           <span>Last session</span>
           <span
             className={cn(
-              "rounded-md border px-1.5 py-0.5 font-medium uppercase tracking-wide text-[9px]",
+              "rounded-md border px-1.5 py-0.5 font-medium uppercase tracking-wide text-micro",
               state.diagnostics.lastSessionKind === "card" &&
                 "bg-blue-50 text-blue-700 border-blue-200",
               state.diagnostics.lastSessionKind === "main" &&
@@ -160,7 +161,7 @@ export default function CrystallizePanel({ enabled }: CrystallizePanelProps) {
 
       {/* Progress */}
       <div>
-        <div className="flex items-baseline justify-between text-[10px] text-foreground/40 mb-1">
+        <div className="flex items-baseline justify-between text-micro text-foreground/40 mb-1">
           <span>Turns</span>
           <span className="tabular-nums font-mono">
             {turnCount} / {threshold}
@@ -177,7 +178,7 @@ export default function CrystallizePanel({ enabled }: CrystallizePanelProps) {
             )}
           />
         </div>
-        <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px] text-foreground/40 mt-2">
+        <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-micro text-foreground/40 mt-2">
           <span>Last bumped</span>
           <span className="tabular-nums text-right">{relativeTime(state?.state.last_message_at)}</span>
           <span>Last learned</span>
@@ -187,7 +188,7 @@ export default function CrystallizePanel({ enabled }: CrystallizePanelProps) {
 
       {/* Skills counters + Run Now */}
       <div className="flex items-center gap-2 mt-3">
-        <div className="flex items-center gap-1 text-[10px] text-foreground/40 flex-1">
+        <div className="flex items-center gap-1 text-micro text-foreground/40 flex-1">
           <span className="font-medium">Skills:</span>
           <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-md">
             active {state?.skillCounts.active ?? 0}
@@ -201,7 +202,7 @@ export default function CrystallizePanel({ enabled }: CrystallizePanelProps) {
         <button
           onClick={() => void forceRun()}
           disabled={!state || running || !enabled}
-          className="inline-flex items-center gap-1 rounded-lg bg-foreground text-background text-[10px] font-semibold px-2.5 py-1 transition-colors hover:bg-foreground/85 disabled:opacity-40 disabled:cursor-not-allowed"
+          className="inline-flex items-center gap-1 rounded-lg bg-foreground text-background text-micro font-semibold px-2.5 py-1 transition-colors hover:bg-foreground/85 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {running ? <Loader2 size={10} className="animate-spin" /> : <Play size={10} strokeWidth={2} />}
           {running ? "Running…" : "Run now"}
@@ -209,7 +210,7 @@ export default function CrystallizePanel({ enabled }: CrystallizePanelProps) {
       </div>
 
       {lastRun && (
-        <div className="mt-2 rounded-lg border border-foreground/10 bg-white/50 px-2 py-1.5 text-[10px] text-foreground/60 leading-snug">
+        <div className="mt-2 rounded-lg border border-foreground/10 bg-white/50 px-2 py-1.5 text-micro text-foreground/60 leading-snug">
           {lastRun.skipped ? (
             <>
               <span className="font-medium text-foreground/50">skipped</span>
@@ -240,7 +241,7 @@ export default function CrystallizePanel({ enabled }: CrystallizePanelProps) {
       {/* Tunables (collapsible) */}
       <button
         onClick={() => setTunablesOpen((v) => !v)}
-        className="w-full flex items-center justify-between mt-3 text-[10px] font-medium text-foreground/40 hover:text-foreground/60"
+        className="w-full flex items-center justify-between mt-3 text-micro font-medium text-foreground/40 hover:text-foreground/60"
       >
         <span>Tunables</span>
         <ChevronDown
@@ -258,7 +259,7 @@ export default function CrystallizePanel({ enabled }: CrystallizePanelProps) {
             transition={{ duration: 0.2 }}
             className="overflow-hidden"
           >
-            <div className="grid grid-cols-[auto_1fr_auto] items-center gap-x-2 gap-y-1.5 mt-2 text-[10px]">
+            <div className="grid grid-cols-[auto_1fr_auto] items-center gap-x-2 gap-y-1.5 mt-2 text-micro">
               <TunableRow
                 label="Threshold"
                 unit="turns"
@@ -305,7 +306,7 @@ export default function CrystallizePanel({ enabled }: CrystallizePanelProps) {
               <button
                 onClick={() => void resetAll()}
                 disabled={mutating}
-                className="mt-2 text-[10px] text-foreground/40 hover:text-foreground/70 underline disabled:opacity-40"
+                className="mt-2 text-micro text-foreground/40 hover:text-foreground/70 underline disabled:opacity-40"
               >
                 Reset all to default
               </button>
@@ -317,9 +318,9 @@ export default function CrystallizePanel({ enabled }: CrystallizePanelProps) {
       {/* Recent decisions */}
       {state && state.recentDecisions.length > 0 && (
         <div className="mt-3">
-          <span className="text-[10px] font-medium text-foreground/40 uppercase tracking-wider block mb-1.5">
+          <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider block mb-1.5">
             Recent decisions
-          </span>
+          </Text>
           <div className="space-y-1">
             {state.recentDecisions.map((d, i) => (
               <div
@@ -328,14 +329,14 @@ export default function CrystallizePanel({ enabled }: CrystallizePanelProps) {
               >
                 <span
                   className={cn(
-                    "shrink-0 rounded-md border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide",
+                    "shrink-0 rounded-md border px-1.5 py-0.5 text-micro font-semibold uppercase tracking-wide",
                     DECISION_STYLES[d.decision] ?? DECISION_STYLES.discard,
                   )}
                 >
                   {d.decision}
                 </span>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5 text-[10px] text-foreground/40">
+                  <div className="flex items-center gap-1.5 text-micro text-foreground/40">
                     {typeof d.salience === "number" && (
                       <span className="tabular-nums font-mono">s={d.salience.toFixed(2)}</span>
                     )}
@@ -344,9 +345,9 @@ export default function CrystallizePanel({ enabled }: CrystallizePanelProps) {
                     {d.skillId && <span className="text-foreground/30">· skill</span>}
                   </div>
                   {d.summary && (
-                    <p className="text-[10px] text-foreground/60 leading-snug line-clamp-2 mt-0.5">
+                    <Text variant="micro" className="block text-foreground/60 leading-snug line-clamp-2 mt-0.5">
                       {d.summary}
-                    </p>
+                    </Text>
                   )}
                 </div>
               </div>
@@ -356,7 +357,7 @@ export default function CrystallizePanel({ enabled }: CrystallizePanelProps) {
       )}
 
       {error && (
-        <p className="mt-2 text-[10px] text-red-500 leading-snug">{error}</p>
+        <Text variant="micro" className="block mt-2 text-red-500 leading-snug">{error}</Text>
       )}
     </div>
   );
@@ -396,9 +397,9 @@ function TunableRow({ label, unit, draft, step, bounds, overridden, onChange, on
         onKeyDown={(e) => {
           if (e.key === "Enter") (e.target as HTMLInputElement).blur();
         }}
-        className="rounded-md bg-white/60 border border-foreground/10 px-2 py-0.5 text-[10px] text-foreground font-mono tabular-nums w-full focus:outline-none focus:ring-1 focus:ring-primary/30"
+        className="rounded-md bg-white/60 border border-foreground/10 px-2 py-0.5 text-micro text-foreground font-mono tabular-nums w-full focus:outline-none focus:ring-1 focus:ring-primary/30"
       />
-      <span className="text-[10px] text-foreground/30 whitespace-nowrap">{unit}</span>
+      <Text variant="micro" className="text-foreground/30 whitespace-nowrap">{unit}</Text>
     </>
   );
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useUserSettings } from "@pin-ai/state";
 import { proxyFetch, proxyPost } from "@pin-ai/core";
+import { Text } from "../primitives/Text";
 
 // Auto-dreaming runs daily at 06:00 in the user's profile timezone. The
 // cadence is fixed in the backend scheduler for now, so the UI only
@@ -428,19 +429,19 @@ export default function AutoDreamingSettings() {
                 <div className="flex items-center justify-between gap-2">
                   <div>
                     <div className="text-xs font-medium text-foreground">{group.day}</div>
-                    <div className="text-[10px] text-foreground/45">{group.runs.length} run(s)</div>
+                    <div className="text-micro text-foreground/45">{group.runs.length} run(s)</div>
                   </div>
                   <button
                     type="button"
                     onClick={() => toggleGroup(`history:${group.day}`)}
-                    className="text-[10px] text-foreground/55 hover:text-foreground/80 transition-colors"
+                    className="text-micro text-foreground/55 hover:text-foreground/80 transition-colors"
                   >
                     {expanded ? "Collapse" : "Expand"}
                   </button>
                 </div>
                 {expanded && (
                   <div className="space-y-2">
-                    <div className="flex items-center justify-between gap-2 text-[10px] text-foreground/45">
+                    <div className="flex items-center justify-between gap-2 text-micro text-foreground/45">
                       <span>
                         {group.runs.length > DEFAULT_VISIBLE_RUNS_PER_DAY && !isHistoryDayShowingAll(group.day)
                           ? `Showing latest ${DEFAULT_VISIBLE_RUNS_PER_DAY} of ${group.runs.length}`
@@ -450,7 +451,7 @@ export default function AutoDreamingSettings() {
                         <button
                           type="button"
                           onClick={() => toggleGroup(`history-all:${group.day}`)}
-                          className="text-[10px] text-foreground/55"
+                          className="text-micro text-foreground/55"
                         >
                           {isHistoryDayShowingAll(group.day) ? "Show latest only" : "Show all runs"}
                         </button>
@@ -468,15 +469,15 @@ export default function AutoDreamingSettings() {
                         >
                           <div className="flex items-center justify-between gap-2">
                             <div className="text-xs font-medium text-foreground">{formatDreamRunTitle(run)}</div>
-                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${statusTone(run.status)}`}>
+                            <span className={`rounded-full px-2 py-0.5 text-micro font-medium ${statusTone(run.status)}`}>
                               {formatStatusLabel(run.status)}
                             </span>
                           </div>
-                          <div className="text-[10px] text-foreground/35">{run.id}</div>
-                          <div className="text-[11px] text-foreground/55">
+                          <Text variant="micro" className="block text-foreground/35">{run.id}</Text>
+                          <Text variant="caption" className="block text-foreground/55">
                             {run.summary?.text ?? "No summary yet"}
-                          </div>
-                          <div className="flex flex-wrap gap-2 text-[10px] text-foreground/45">
+                          </Text>
+                          <div className="flex flex-wrap gap-2 text-micro text-foreground/45">
                             <span>{run.trigger ?? "manual"}</span>
                             <span>{formatTimestamp(run.started_at)}</span>
                             <span>{activeSourceCount} active source(s)</span>
@@ -501,7 +502,7 @@ export default function AutoDreamingSettings() {
             </button>
           )}
           {runs.length === 0 && (
-            <p className="text-[11px] text-foreground/45">No dreaming runs yet.</p>
+            <Text variant="caption" className="block text-foreground/45">No dreaming runs yet.</Text>
           )}
         </div>
       </div>
@@ -515,8 +516,8 @@ export default function AutoDreamingSettings() {
         <div className="flex items-center justify-between gap-2">
           <div>
             <h2 className="text-sm font-semibold text-foreground">Dream Run Detail</h2>
-            <p className="text-[11px] text-foreground/45 mt-1">{formatDreamRunTitle(detail.run)}</p>
-            <p className="text-[10px] text-foreground/30 mt-1">{detail.run.id}</p>
+            <Text variant="caption" className="block text-foreground/45 mt-1">{formatDreamRunTitle(detail.run)}</Text>
+            <Text variant="micro" className="block text-foreground/30 mt-1">{detail.run.id}</Text>
           </div>
           <button type="button" onClick={() => setView("history")} className="text-xs text-foreground/60 hover:text-foreground/80 transition-colors">
             Back
@@ -526,12 +527,12 @@ export default function AutoDreamingSettings() {
         <div className="rounded-2xl bg-foreground/[0.04] px-3 py-3 space-y-2">
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-medium text-foreground">Run Status</span>
-            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${statusTone(detail.run.status)}`}>
+            <span className={`rounded-full px-2 py-0.5 text-micro font-medium ${statusTone(detail.run.status)}`}>
               {formatStatusLabel(detail.run.status)}
             </span>
           </div>
           <p className="text-xs text-foreground/70">{detail.detail.summary.text}</p>
-          <div className="flex flex-wrap gap-2 text-[10px] text-foreground/45">
+          <div className="flex flex-wrap gap-2 text-micro text-foreground/45">
             <span>Started {formatTimestamp(detail.run.started_at)}</span>
             <span>Completed {formatTimestamp(detail.run.completed_at)}</span>
             <span>{detail.run.applied_at ? "Profile applied" : "Profile pending apply"}</span>
@@ -542,9 +543,9 @@ export default function AutoDreamingSettings() {
           <h3 className="text-xs font-semibold text-foreground">Dream Journal</h3>
           <div className="rounded-2xl bg-foreground/[0.04] px-3 py-3 space-y-2">
             {detail.detail.dreamMarkdownPath && (
-              <p className="text-[10px] text-foreground/45 break-all">{detail.detail.dreamMarkdownPath}</p>
+              <Text variant="micro" className="block text-foreground/45 break-all">{detail.detail.dreamMarkdownPath}</Text>
             )}
-            <pre className="whitespace-pre-wrap text-[11px] leading-5 text-foreground/75">
+            <pre className="whitespace-pre-wrap text-caption leading-5 text-foreground/75">
               {detail.detail.dreamMarkdown || "No dream journal yet."}
             </pre>
           </div>
@@ -566,7 +567,7 @@ export default function AutoDreamingSettings() {
                       <button
                         type="button"
                         onClick={() => toggleGroup(`normalized:${group.sourceId}`)}
-                        className="text-[10px] text-foreground/55"
+                        className="text-micro text-foreground/55"
                       >
                         {expanded ? "Show less" : `Show all ${group.items.length}`}
                       </button>
@@ -576,21 +577,21 @@ export default function AutoDreamingSettings() {
                     {visibleItems.map((item) => (
                       <div key={item.key} className="rounded-2xl bg-foreground/[0.04] px-3 py-2">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-[11px] font-medium text-foreground">{item.title}</span>
+                          <Text variant="caption" weight="medium" className="text-foreground">{item.title}</Text>
                           {item.connector && (
-                            <span className="rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[10px] text-foreground/55">
+                            <Text variant="micro" className="rounded-full bg-foreground/[0.06] px-2 py-0.5 text-foreground/55">
                               {item.connector}
-                            </span>
+                            </Text>
                           )}
                         </div>
                         {item.meta.length > 0 && (
-                          <div className="mt-1 flex flex-wrap gap-2 text-[10px] text-foreground/40">
+                          <div className="mt-1 flex flex-wrap gap-2 text-micro text-foreground/40">
                             {item.meta.map((metaValue, index) => (
                               <span key={`${item.key}-meta-${index}`}>{metaValue}</span>
                             ))}
                           </div>
                         )}
-                        <div className="mt-1 text-[11px] leading-5 text-foreground/60">{item.summary}</div>
+                        <Text variant="caption" className="block mt-1 leading-5 text-foreground/60">{item.summary}</Text>
                       </div>
                     ))}
                   </div>
@@ -598,7 +599,7 @@ export default function AutoDreamingSettings() {
               );
             })
           ) : (
-            <p className="text-[11px] text-foreground/45">No normalized input items for this run.</p>
+            <Text variant="caption" className="block text-foreground/45">No normalized input items for this run.</Text>
           )}
         </div>
 
@@ -609,24 +610,24 @@ export default function AutoDreamingSettings() {
               <div key={source.sourceId} className="rounded-2xl bg-foreground/[0.04] px-3 py-3 space-y-2">
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-xs font-medium text-foreground">{source.sourceId}</div>
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${statusTone(source.status)}`}>
+                  <span className={`rounded-full px-2 py-0.5 text-micro font-medium ${statusTone(source.status)}`}>
                     {formatStatusLabel(source.status)} · {source.itemCount}
                   </span>
                 </div>
                 {source.reason && (
-                  <p className="text-[11px] text-foreground/55">{source.reason}</p>
+                  <Text variant="caption" className="block text-foreground/55">{source.reason}</Text>
                 )}
                 {source.connectors && source.connectors.length > 0 && (
                   <div className="space-y-1">
                     {source.connectors.map((connector) => (
-                      <div key={`${source.sourceId}-${connector.connectorId}`} className="flex items-start justify-between gap-3 text-[11px]">
+                      <div key={`${source.sourceId}-${connector.connectorId}`} className="flex items-start justify-between gap-3 text-caption">
                         <div>
                           <div className="font-medium text-foreground/80">{connector.connectorId}</div>
                           {connector.reason && (
                             <div className="text-foreground/45">{connector.reason}</div>
                           )}
                         </div>
-                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${statusTone(connector.status)}`}>
+                        <span className={`rounded-full px-2 py-0.5 text-micro font-medium ${statusTone(connector.status)}`}>
                           {formatStatusLabel(connector.status)} · {connector.itemCount}
                         </span>
                       </div>
@@ -636,7 +637,7 @@ export default function AutoDreamingSettings() {
               </div>
             ))}
             {detail.detail.sourceBreakdown.length === 0 && (
-              <p className="text-[11px] text-foreground/45">No source results recorded yet.</p>
+              <Text variant="caption" className="block text-foreground/45">No source results recorded yet.</Text>
             )}
           </div>
         </div>
@@ -647,11 +648,11 @@ export default function AutoDreamingSettings() {
             detail.detail.candidates.map((candidate) => (
               <div key={String(candidate.id)} className="rounded-2xl bg-foreground/[0.04] px-3 py-2">
                 <div className="text-xs font-medium text-foreground">{String(candidate.title ?? candidate.id)}</div>
-                <div className="text-[11px] text-foreground/45 mt-1">{String(candidate.reason ?? "")}</div>
+                <Text variant="caption" className="block text-foreground/45 mt-1">{String(candidate.reason ?? "")}</Text>
               </div>
             ))
           ) : (
-            <p className="text-[11px] text-foreground/45">No candidate cards for this run.</p>
+            <Text variant="caption" className="block text-foreground/45">No candidate cards for this run.</Text>
           )}
         </div>
 
@@ -659,9 +660,9 @@ export default function AutoDreamingSettings() {
           <summary className="cursor-pointer text-xs font-semibold text-foreground">Dreaming Logs</summary>
           <div className="mt-2 space-y-2">
             {detail.detail.logPath && (
-              <p className="text-[10px] text-foreground/45 break-all">{detail.detail.logPath}</p>
+              <Text variant="micro" className="block text-foreground/45 break-all">{detail.detail.logPath}</Text>
             )}
-            <pre className="max-h-48 overflow-auto rounded-2xl bg-foreground/[0.04] p-3 text-[10px] text-foreground/70 whitespace-pre-wrap">
+            <pre className="max-h-48 overflow-auto rounded-2xl bg-foreground/[0.04] p-3 text-micro text-foreground/70 whitespace-pre-wrap">
               {detail.detail.logText || "No run logs yet."}
             </pre>
           </div>
@@ -669,14 +670,14 @@ export default function AutoDreamingSettings() {
 
         <details className="rounded-2xl bg-foreground/[0.04] px-3 py-3">
           <summary className="cursor-pointer text-xs font-semibold text-foreground">Profile Diff</summary>
-          <pre className="mt-2 max-h-48 overflow-auto rounded-2xl bg-foreground/[0.04] p-3 text-[10px] text-foreground/70">
+          <pre className="mt-2 max-h-48 overflow-auto rounded-2xl bg-foreground/[0.04] p-3 text-micro text-foreground/70">
             {JSON.stringify(detail.detail.profileDelta, null, 2)}
           </pre>
         </details>
 
         <details className="rounded-2xl bg-foreground/[0.04] px-3 py-3">
           <summary className="cursor-pointer text-xs font-semibold text-foreground">Goal Diff</summary>
-          <pre className="mt-2 max-h-48 overflow-auto rounded-2xl bg-foreground/[0.04] p-3 text-[10px] text-foreground/70">
+          <pre className="mt-2 max-h-48 overflow-auto rounded-2xl bg-foreground/[0.04] p-3 text-micro text-foreground/70">
             {JSON.stringify(detail.detail.goalDelta, null, 2)}
           </pre>
         </details>
@@ -687,21 +688,21 @@ export default function AutoDreamingSettings() {
             (detail.detail.goalDelta?.changes ?? []).map((change, index) => (
               <div key={`goal-change-${index}`} className="rounded-2xl bg-foreground/[0.04] px-3 py-3 space-y-1">
                 <div className="flex items-center gap-2">
-                  <span className="rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[10px] text-foreground/55">
+                  <Text variant="micro" className="rounded-full bg-foreground/[0.06] px-2 py-0.5 text-foreground/55">
                     {String(change.action ?? "update")}
-                  </span>
+                  </Text>
                   <span className="text-xs font-medium text-foreground">
                     {goalChangeTitle(change, index)}
                   </span>
                 </div>
-                <p className="text-[11px] text-foreground/55">{String(change.reason ?? "")}</p>
-                <pre className="max-h-40 overflow-auto rounded-2xl bg-foreground/[0.04] p-3 text-[10px] text-foreground/70">
+                <Text variant="caption" className="block text-foreground/55">{String(change.reason ?? "")}</Text>
+                <pre className="max-h-40 overflow-auto rounded-2xl bg-foreground/[0.04] p-3 text-micro text-foreground/70">
                   {JSON.stringify({ before: change.before ?? null, after: change.after ?? null }, null, 2)}
                 </pre>
               </div>
             ))
           ) : (
-            <p className="text-[11px] text-foreground/45">No goal changes for this run.</p>
+            <Text variant="caption" className="block text-foreground/45">No goal changes for this run.</Text>
           )}
         </div>
 
@@ -714,7 +715,7 @@ export default function AutoDreamingSettings() {
                   <summary className="cursor-pointer text-xs font-semibold text-foreground">
                     {connector.connectorId} · {connector.itemCount} item(s)
                   </summary>
-                  <pre className="mt-2 max-h-64 overflow-auto rounded-2xl bg-foreground/[0.04] p-3 text-[10px] text-foreground/70">
+                  <pre className="mt-2 max-h-64 overflow-auto rounded-2xl bg-foreground/[0.04] p-3 text-micro text-foreground/70">
                     {JSON.stringify(connector.raw, null, 2)}
                   </pre>
                 </details>
@@ -723,7 +724,7 @@ export default function AutoDreamingSettings() {
           )) : (
             <details className="rounded-2xl bg-foreground/[0.04] px-3 py-3">
               <summary className="cursor-pointer text-xs font-semibold text-foreground">Raw Inputs</summary>
-              <pre className="mt-2 max-h-64 overflow-auto rounded-2xl bg-foreground/[0.04] p-3 text-[10px] text-foreground/70">
+              <pre className="mt-2 max-h-64 overflow-auto rounded-2xl bg-foreground/[0.04] p-3 text-micro text-foreground/70">
                 {JSON.stringify(detail.detail.rawInputs, null, 2)}
               </pre>
             </details>
@@ -770,9 +771,9 @@ export default function AutoDreamingSettings() {
       <div className="flex items-center gap-3">
         <div className="flex-1 min-w-0">
           <h3 className="text-xs font-semibold text-foreground">Auto Dreaming</h3>
-          <p className="text-[11px] text-foreground/42 mt-1">
+          <Text variant="caption" className="block text-foreground/42 mt-1">
             {scheduleLabel(schedule)}
-          </p>
+          </Text>
         </div>
         <button
           type="button"
@@ -801,12 +802,12 @@ export default function AutoDreamingSettings() {
         <div className="rounded-2xl bg-foreground/[0.04] px-3 py-3 space-y-1">
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-medium text-foreground">Latest Dream Run</span>
-            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${statusTone(latestRun.status)}`}>
+            <span className={`rounded-full px-2 py-0.5 text-micro font-medium ${statusTone(latestRun.status)}`}>
               {formatStatusLabel(latestRun.status)}
             </span>
           </div>
-          <p className="text-[11px] text-foreground/60">{latestRun.summary?.text ?? "No summary yet."}</p>
-          <p className="text-[10px] text-foreground/40">{formatTimestamp(latestRun.started_at)}</p>
+          <Text variant="caption" className="block text-foreground/60">{latestRun.summary?.text ?? "No summary yet."}</Text>
+          <Text variant="micro" className="block text-foreground/40">{formatTimestamp(latestRun.started_at)}</Text>
         </div>
       )}
 
@@ -829,10 +830,10 @@ export default function AutoDreamingSettings() {
       </div>
 
       {notice && (
-        <p className="text-[11px] text-emerald-600/90">{notice}</p>
+        <Text variant="caption" className="block text-emerald-600/90">{notice}</Text>
       )}
       {error && (
-        <p className="text-[11px] text-red-500/80">{error}</p>
+        <Text variant="caption" className="block text-red-500/80">{error}</Text>
       )}
     </div>
   );

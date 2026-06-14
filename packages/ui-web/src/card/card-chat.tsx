@@ -7,6 +7,7 @@
  */
 import { ChevronUp } from "lucide-react";
 import { brandSvg, detectToolIcon, type ChatCard } from "./chat-card-presentation";
+import { Text } from "../primitives/Text";
 
 export function cardThreadSessionKey(card: ChatCard, runId?: string): string {
   const raw = (runId ?? String(card.id)).trim();
@@ -55,16 +56,16 @@ export function CardContextHeaderSlot({
       >
         <div className="flex items-start gap-2">
           <div className="flex-1 min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground/40 mb-1">
+            <Text variant="caption" weight="semibold" className="block uppercase tracking-wider text-foreground/40 mb-1">
               Context
-            </p>
-            <p className="text-[13px] text-foreground/80 leading-relaxed line-clamp-2">
+            </Text>
+            <Text variant="bodySm" className="block text-foreground/80 leading-relaxed line-clamp-2">
               {/* Reminder cards have no action — willExecute is just the
                   button label ("Done"); show the nudge itself. */}
               {card.cardKind === "reminder"
                 ? card.line1
                 : card.detail?.willExecute || card.line1}
-            </p>
+            </Text>
             {plan.length > 0 && (
               <div className="mt-2 flex flex-col gap-1">
                 {plan.slice(0, 3).map((step, i) => {
@@ -81,16 +82,16 @@ export function CardContextHeaderSlot({
                           <icon.Icon size={9} strokeWidth={2} className="text-foreground/70" />
                         )}
                       </span>
-                      <span className="text-[11.5px] text-foreground/60 truncate leading-snug">
+                      <Text variant="label" className="text-foreground/60 truncate leading-snug">
                         {step.text}
-                      </span>
+                      </Text>
                     </div>
                   );
                 })}
                 {plan.length > 3 && (
-                  <span className="text-[10.5px] text-foreground/40 pl-[22px]">
+                  <Text variant="caption" className="text-foreground/40 pl-[22px]">
                     +{plan.length - 3} more
-                  </span>
+                  </Text>
                 )}
               </div>
             )}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { deleteScheduledGenerator, listScheduledGenerators, pauseScheduledGenerator, resumeScheduledGenerator, type ScheduledGeneratorTask } from "@pin-ai/core";
+import { Text } from "../primitives/Text";
 
 // Server-rendered label ("每 5 分钟" / "一次 · 06-10 15:00") wins; legacy tasks
 // without scheduleLabel fall back to joining the cron fields, dropping empty
@@ -64,14 +65,14 @@ export default function ScheduledTasksSettings() {
   };
 
   if (loading) {
-    return <p className="text-[11px] text-foreground/45">Loading scheduled tasks…</p>;
+    return <Text variant="caption" className="block text-foreground/45">Loading scheduled tasks…</Text>;
   }
 
   if (tasks.length === 0) {
     return (
-      <p className="text-[11px] text-foreground/45">
+      <Text variant="caption" className="block text-foreground/45">
         No scheduled tasks yet. Create one from chat — for example, ask for a daily news digest.
-      </p>
+      </Text>
     );
   }
 
@@ -87,7 +88,7 @@ export default function ScheduledTasksSettings() {
                 <div className="text-xs font-medium text-foreground truncate">
                   {task.title || "Scheduled task"}
                 </div>
-                <div className="text-[11px] text-foreground/45 mt-0.5">{formatSchedule(task)}</div>
+                <Text variant="caption" className="block text-foreground/45 mt-0.5">{formatSchedule(task)}</Text>
               </div>
               <button
                 type="button"
@@ -113,7 +114,7 @@ export default function ScheduledTasksSettings() {
             </div>
             <div className="flex items-center justify-between gap-2">
               <span
-                className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                className={`rounded-full px-2 py-0.5 text-micro font-medium ${
                   active ? "text-emerald-600 bg-emerald-500/10" : "text-amber-700 bg-amber-500/10"
                 }`}
               >
@@ -123,7 +124,7 @@ export default function ScheduledTasksSettings() {
                 type="button"
                 onClick={() => void handleDelete(task)}
                 disabled={busy}
-                className="text-[11px] text-red-500/80 hover:text-red-500 transition-colors disabled:opacity-40"
+                className="text-caption text-red-500/80 hover:text-red-500 transition-colors disabled:opacity-40"
               >
                 Delete
               </button>
@@ -131,7 +132,7 @@ export default function ScheduledTasksSettings() {
           </div>
         );
       })}
-      {error && <p className="text-[11px] text-red-500/80">{error}</p>}
+      {error && <Text variant="caption" className="block text-red-500/80">{error}</Text>}
     </div>
   );
 }

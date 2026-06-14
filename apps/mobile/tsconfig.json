@@ -10,6 +10,9 @@
       ],
       "@pin-ai/state": [
         "../../packages/state/src/index.ts"
+      ],
+      "@pin-ai/ui-kit": [
+        "../../packages/ui-kit/src/index.ts"
       ]
     }
   },

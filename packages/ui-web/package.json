@@ -12,7 +12,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@pin-ai/core": "*"
+    "@pin-ai/core": "*",
+    "@pin-ai/design": "*",
+    "@pin-ai/ui-kit": "*"
   },
   "peerDependencies": {
     "@capacitor/app": "^8",

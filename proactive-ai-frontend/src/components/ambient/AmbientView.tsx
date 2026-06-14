@@ -30,6 +30,7 @@ import type {
 import type { RuntimeStatus } from "@/services/ambient";
 import type { LiveAssistItem, LiveSession } from "@/services/ambient/live-session";
 import { transcriptTextOnly } from "@/services/ambient/timeline/utils";
+import { Text } from "@pin-ai/ui-web";
 
 /* ──────────────── TIMELINE (today's narrative) ──────────────── */
 
@@ -535,7 +536,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
         <h1 className="text-2xl font-semibold text-foreground tracking-tight leading-tight">
           Ambient
         </h1>
-        <div className="mt-1 flex items-center gap-1.5 text-[13px] text-foreground/60">
+        <div className="mt-1 flex items-center gap-1.5 text-bodySm text-foreground/60">
           <span>{deviceCountLabel}</span>
           <span className="text-foreground/30">·</span>
           <span>on-device TEE</span>
@@ -573,10 +574,10 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
           </div>
 
           <div className="min-w-0">
-            <p className="text-[14px] font-semibold text-foreground leading-tight">
+            <Text variant="bodySm" weight="semibold" className="block text-foreground leading-tight">
               Ambient is {ambientOn ? "on" : "off"}
-            </p>
-            <p className="text-[11px] text-foreground/55 leading-tight mt-0.5 truncate">
+            </Text>
+            <Text variant="caption" className="block text-foreground/55 leading-tight mt-0.5 truncate">
               {!ambientOn
                 ? "AI is paused from sensing your surroundings"
                 : uploadsLocked
@@ -584,7 +585,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                   : firstSourceError
                     ? firstSourceError
                     : "Listening, sensing, understanding context"}
-            </p>
+            </Text>
           </div>
         </div>
 
@@ -666,7 +667,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
             })}
             <div className="relative w-7 h-7 rounded-full bg-foreground/5 border border-dashed border-foreground/25 flex items-center justify-center text-foreground/50">
               {hiddenDeviceCount > 0 ? (
-                <span className="text-[9px] font-semibold leading-none">+{hiddenDeviceCount}</span>
+                <Text variant="micro" weight="semibold" className="leading-none">+{hiddenDeviceCount}</Text>
               ) : (
                 <Plus size={12} strokeWidth={2.2} />
               )}
@@ -674,10 +675,10 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
           </div>
 
           <div className="text-right pr-1 shrink-0">
-            <p className="text-[11px] font-medium text-foreground/75 leading-tight">
+            <Text variant="caption" weight="medium" className="block text-foreground/75 leading-tight">
               {deviceStripSummary(connectedCount, devicesLoading, devicesError, hiddenDeviceCount)}
-            </p>
-            <p className="text-[9px] text-foreground/45 leading-tight mt-0.5 flex items-center gap-0.5 justify-end">
+            </Text>
+            <p className="text-micro text-foreground/45 leading-tight mt-0.5 flex items-center gap-0.5 justify-end">
               Connect in Control <ChevronRight size={9} />
             </p>
           </div>
@@ -694,13 +695,13 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
           }}
         >
           <div className="flex items-center justify-between mb-2">
-            <p className="text-[10px] font-bold tracking-[0.16em] flex items-center gap-1.5">
+            <p className="text-micro font-bold tracking-[0.16em] flex items-center gap-1.5">
               <Sparkles size={11} className="text-[hsl(304_75%_55%)]" />
               <span className="text-[hsl(304_75%_45%)]">TODAY · LOCAL SUMMARY</span>
             </p>
-            <span className="text-[10px] text-foreground/45 font-mono">{timelineEntries.length} entries</span>
+            <Text variant="micro" className="text-foreground/45 font-mono">{timelineEntries.length} entries</Text>
           </div>
-          <p className="text-[13px] leading-relaxed text-foreground/85">{ambientTimeline.narrativeSummary}</p>
+          <Text variant="bodySm" className="block leading-relaxed text-foreground/85">{ambientTimeline.narrativeSummary}</Text>
         </div>
       )}
 
@@ -717,13 +718,13 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
           }}
         >
           <div className="flex items-center justify-between mb-2">
-            <p className="text-[10px] font-bold tracking-[0.16em] flex items-center gap-1.5">
+            <p className="text-micro font-bold tracking-[0.16em] flex items-center gap-1.5">
               <Sparkles size={11} className="text-[hsl(304_75%_55%)]" />
               <span className="text-[hsl(304_75%_45%)]">TODAY · NARRATIVE SUMMARY</span>
             </p>
-            <span className="text-[10px] text-foreground/45 font-mono">{timelineEntries.length} entries</span>
+            <Text variant="micro" className="text-foreground/45 font-mono">{timelineEntries.length} entries</Text>
           </div>
-          <p className="text-[13px] leading-relaxed text-foreground/85">{NARRATIVE_SUMMARY}</p>
+          <Text variant="bodySm" className="block leading-relaxed text-foreground/85">{NARRATIVE_SUMMARY}</Text>
         </div>
       )}
 
@@ -748,20 +749,20 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                 ))}
               </div>
             )}
-            <p className="text-[13px] font-semibold text-foreground/80">
+            <Text variant="bodySm" weight="semibold" className="block text-foreground/80">
               {ambientTimeline.loading ? "Building local timeline…" : "No local timeline events yet"}
-            </p>
-            <p className="mt-1 text-[12px] text-foreground/50 leading-snug">
+            </Text>
+            <Text variant="label" className="block mt-1 text-foreground/50 leading-snug">
               {ambientTimeline.error
                 ? ambientTimeline.error
                 : ambientOn
                   ? "Keep Ambient on while Visit, Location, Motion, and Health collect real signals."
                   : "Turn Ambient on to create timeline events from local signals."}
-            </p>
+            </Text>
             {ambientTimeline.storeStatus?.lastError && (
-              <p className="mt-2 text-[11px] text-red-500">
+              <Text variant="caption" className="block mt-2 text-red-500">
                 {ambientTimeline.storeStatus.lastError}
-              </p>
+              </Text>
             )}
           </div>
         )}
@@ -782,7 +783,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
               {/* Content */}
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-2 mb-0.5">
-                  <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
+                  <div className="flex items-center gap-1.5 flex-wrap text-caption">
                     <span className="font-semibold text-foreground/70">{entry.time}</span>
                     <span className="text-foreground/30">·</span>
                     <span className="inline-flex items-center gap-1 text-[hsl(304_75%_45%)] font-medium">
@@ -827,20 +828,20 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                   )}
                 </div>
 
-                <p className="text-[13.5px] font-semibold text-foreground leading-snug mt-1 mb-1">
+                <Text variant="bodySm" weight="semibold" className="block text-foreground leading-snug mt-1 mb-1">
                   {entry.title}
-                </p>
-                <p className="text-[12.5px] text-foreground/65 leading-snug">{entry.body}</p>
+                </Text>
+                <Text variant="bodySm" className="block text-foreground/65 leading-snug">{entry.body}</Text>
 
                 {/* Tags */}
                 <div className="flex flex-wrap gap-1.5 mt-2">
                   {entry.tags.map((t) => (
-                    <span
+                    <Text variant="micro"
                       key={t}
-                      className="px-2 py-0.5 rounded-full bg-foreground/[0.05] text-[10px] text-foreground/55"
+                      className="px-2 py-0.5 rounded-full bg-foreground/[0.05] text-foreground/55"
                     >
                       #{t}
-                    </span>
+                    </Text>
                   ))}
                 </div>
 
@@ -858,15 +859,15 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                       border: "1px solid hsl(304 75% 63% / 0.18)",
                     }}
                   >
-                    <p className="text-[9.5px] font-bold uppercase tracking-[0.14em] text-[hsl(304_75%_45%)] mb-1 flex items-center gap-1">
+                    <p className="text-micro font-bold uppercase tracking-[0.14em] text-[hsl(304_75%_45%)] mb-1 flex items-center gap-1">
                       → Triggered this card
                     </p>
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1.5 min-w-0">
                         <Sparkles size={11} className="text-[hsl(304_75%_55%)] shrink-0" />
-                        <span className="text-[12px] text-foreground/85 truncate">
+                        <Text variant="label" className="text-foreground/85 truncate">
                           {entry.triggeredCard}
-                        </span>
+                        </Text>
                       </div>
                       <button
                         onClick={
@@ -877,7 +878,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                             }
                             : undefined
                         }
-                        className="text-[11px] font-semibold text-[hsl(304_75%_45%)] shrink-0 flex items-center gap-0.5 hover:text-[hsl(304_75%_35%)]"
+                        className="text-caption font-semibold text-[hsl(304_75%_45%)] shrink-0 flex items-center gap-0.5 hover:text-[hsl(304_75%_35%)]"
                       >
                         Open →
                       </button>
@@ -896,7 +897,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                 timelineEntries.length,
               ));
             }}
-            className="w-full rounded-2xl border border-foreground/[0.08] bg-foreground/[0.035] px-4 py-3 text-[12px] font-semibold text-foreground/65 hover:bg-foreground/[0.06] hover:text-foreground/80 transition-colors"
+            className="w-full rounded-2xl border border-foreground/[0.08] bg-foreground/[0.035] px-4 py-3 text-label font-semibold text-foreground/65 hover:bg-foreground/[0.06] hover:text-foreground/80 transition-colors"
           >
             Load more · {timelineEntries.length - visibleTimelineEntries.length} older
           </button>
@@ -904,7 +905,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
       </div>
 
       {/* Bottom hint */}
-      <div className="mt-5 flex items-center justify-center gap-1.5 text-[10px] text-foreground/40">
+      <div className="mt-5 flex items-center justify-center gap-1.5 text-micro text-foreground/40">
         <Lightbulb size={10} />
         <span>
           {ambientOn
@@ -1084,16 +1085,16 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[hsl(304_75%_70%)] opacity-75" />
             <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[hsl(304_75%_70%)]" />
           </span>
-          <span className="text-[11px] font-bold uppercase tracking-[0.22em] text-[hsl(304_75%_78%)] truncate">
+          <Text variant="caption" weight="bold" className="uppercase tracking-[0.22em] text-[hsl(304_75%_78%)] truncate">
             Live · {session.kind}
-          </span>
-          <span className="text-[11px] tabular-nums text-white/55 font-mono ml-1.5 shrink-0">
+          </Text>
+          <Text variant="caption" className="tabular-nums text-white/55 font-mono ml-1.5 shrink-0">
             {fmt(elapsed)}
-          </span>
+          </Text>
         </div>
         <button
           onClick={onClose}
-          className="shrink-0 px-3.5 h-9 rounded-full text-[13px] font-medium text-white/85 hover:text-white bg-white/[0.06] hover:bg-white/[0.12] border border-white/[0.08] transition-colors flex items-center gap-1.5"
+          className="shrink-0 px-3.5 h-9 rounded-full text-bodySm font-medium text-white/85 hover:text-white bg-white/[0.06] hover:bg-white/[0.12] border border-white/[0.08] transition-colors flex items-center gap-1.5"
           aria-label="Exit fullscreen"
         >
           <Minimize2 size={14} strokeWidth={2.2} />
@@ -1108,10 +1109,10 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
             <SessionIcon size={16} strokeWidth={1.8} />
           </div>
           <div className="min-w-0 flex-1">
-            <h2 className="text-[15px] font-semibold leading-tight tracking-tight truncate">
+            <h2 className="text-body font-semibold leading-tight tracking-tight truncate">
               {session.title}
             </h2>
-            <p className="mt-0.5 text-[11px] text-white/50 flex items-center gap-1 truncate">
+            <p className="mt-0.5 text-caption text-white/50 flex items-center gap-1 truncate">
               <MapPin size={10} className="shrink-0" />
               <span className="truncate">{session.location}</span>
               <span className="text-white/30">·</span>
@@ -1125,7 +1126,7 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
           {session.signals.map((s) => (
             <span
               key={s}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/[0.05] text-[10px] text-white/65 border border-white/[0.06] whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/[0.05] text-micro text-white/65 border border-white/[0.06] whitespace-nowrap shrink-0"
             >
               <Mic size={9} strokeWidth={2} />
               {s}
@@ -1138,12 +1139,12 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
       <div className="relative px-5 md:px-12 max-w-3xl mx-auto w-full">
         <div className="flex items-center gap-2.5 py-2.5 border-y border-white/[0.06]">
           <Sparkles size={11} className="text-[hsl(304_75%_75%)]" />
-          <span className="text-[10px] font-bold uppercase tracking-[0.22em] text-[hsl(304_75%_75%)]">
+          <Text variant="micro" weight="bold" className="uppercase tracking-[0.22em] text-[hsl(304_75%_75%)]">
             Real-time assist
-          </span>
-          <span className="ml-auto text-[10px] text-white/40 font-mono tabular-nums">
+          </Text>
+          <Text variant="micro" className="ml-auto text-white/40 font-mono tabular-nums">
             {visibleCount}/{session.assists.length}
-          </span>
+          </Text>
         </div>
       </div>
 
@@ -1184,7 +1185,7 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 8, scale: 0.96 }}
                 transition={{ duration: 0.22, ease: "easeOut" }}
-                className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-[hsl(304_75%_70%/0.35)] bg-[hsl(0_0%_4%/0.88)] px-3 py-2 text-[12px] font-semibold text-[hsl(304_75%_82%)] shadow-lg backdrop-blur-md"
+                className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-[hsl(304_75%_70%/0.35)] bg-[hsl(0_0%_4%/0.88)] px-3 py-2 text-label font-semibold text-[hsl(304_75%_82%)] shadow-lg backdrop-blur-md"
                 aria-label={`Show ${unseenCount} new live message${unseenCount === 1 ? "" : "s"}`}
               >
                 <ChevronDown size={14} strokeWidth={2.2} />
@@ -1197,7 +1198,7 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
 
       {/* Bottom footer */}
       <div className="absolute bottom-0 left-0 right-0 px-6 py-4 border-t border-white/[0.06] bg-black/40 backdrop-blur-md">
-        <div className="max-w-3xl mx-auto flex items-center justify-between text-[11px] text-white/45">
+        <div className="max-w-3xl mx-auto flex items-center justify-between text-caption text-white/45">
           <span className="flex items-center gap-1.5">
             <Lightbulb size={11} /> Focus mode · messages stream as they happen
           </span>
@@ -1225,29 +1226,29 @@ function LiveFullscreenAssistRow({
   const content = (
     <>
       <span
-        className={`text-[11px] font-mono pt-1 w-14 shrink-0 tabular-nums transition-colors duration-500 ${isNewest ? "text-[hsl(304_75%_70%)]" : "text-white/30"
+        className={`text-caption font-mono pt-1 w-14 shrink-0 tabular-nums transition-colors duration-500 ${isNewest ? "text-[hsl(304_75%_70%)]" : "text-white/30"
           }`}
       >
         {assist.time}
       </span>
       <div className="min-w-0 flex-1">
         {assist.kind === "action" && (
-          <span className="inline-block mb-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-[hsl(304_75%_63%)] text-white">
+          <Text variant="micro" weight="bold" className="inline-block mb-1.5 px-1.5 py-0.5 rounded uppercase tracking-wider bg-[hsl(304_75%_63%)] text-white">
             Action
-          </span>
+          </Text>
         )}
         <p
           className={`leading-snug transition-colors duration-500 ${assist.kind === "action"
-            ? "text-white text-[18px] md:text-[20px] font-medium"
+            ? "text-white text-subheading md:text-heading font-medium"
             : assist.kind === "assist"
-              ? "text-white/90 text-[17px] md:text-[19px]"
-              : "text-white/75 text-[16px] md:text-[18px]"
+              ? "text-white/90 text-subheading md:text-heading"
+              : "text-white/75 text-body md:text-subheading"
             }`}
         >
           {assist.text}
         </p>
         {assist.source && (
-          <p className="text-[11px] text-white/40 mt-1">via {assist.source}</p>
+          <Text variant="caption" className="block text-white/40 mt-1">via {assist.source}</Text>
         )}
       </div>
     </>

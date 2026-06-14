@@ -1,0 +1,28 @@
+{
+  "name": "@pin-ai/ui-kit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "双端设计系统层（design system 大脑）：className 工具 cn、组件契约（TS 类型）、cva variant 配方、motion 预设。平台无关，apps/web 与 apps/mobile 共享同一份。禁止介质实现（DOM / RN / Web API）与 app 反向 import。",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "type-check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@pin-ai/design": "*",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^3.5.0"
+  },
+  "peerDependencies": {
+    "react": ">=19"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.4"
+  }
+}

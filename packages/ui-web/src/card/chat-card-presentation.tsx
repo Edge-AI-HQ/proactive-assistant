@@ -12,6 +12,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { SideEffect } from "@pin-ai/core";
+import { Text } from "../primitives/Text";
 
 /* --------- Tool icon registry: brand logos when available, else mono icons --------- */
 export type ToolIcon =
@@ -270,27 +271,27 @@ export function ArtifactItem({
             // when a matching side_effect proves the action fired.
             if (!sideEffect) {
               return (
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-foreground/40 leading-none mb-1">
+                <Text variant="micro" weight="semibold" className="block uppercase tracking-wider text-foreground/40 leading-none mb-1">
                   {ARTIFACT_KIND_LABEL[artifact.kind]}
-                </p>
+                </Text>
               );
             }
             if (sideEffect.is_error) {
               return (
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-red-600 leading-none mb-1">
+                <Text variant="micro" weight="semibold" className="block uppercase tracking-wider text-red-600 leading-none mb-1">
                   {ARTIFACT_KIND_LABEL[artifact.kind]} · Failed
-                </p>
+                </Text>
               );
             }
             return (
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-green-700 leading-none mb-1">
+              <Text variant="micro" weight="semibold" className="block uppercase tracking-wider text-green-700 leading-none mb-1">
                 {ARTIFACT_KIND_LABEL[artifact.kind]} · {SIDE_EFFECT_VERB[artifact.app]}
-              </p>
+              </Text>
             );
           })()}
-          <p className="text-[13px] font-semibold text-foreground/85 truncate leading-tight">{artifact.title}</p>
+          <Text variant="bodySm" weight="semibold" className="block text-foreground/85 truncate leading-tight">{artifact.title}</Text>
           {artifact.meta && (
-            <p className="text-[11px] text-foreground/45 mt-0.5 truncate">{artifact.meta}</p>
+            <Text variant="caption" className="block text-foreground/45 mt-0.5 truncate">{artifact.meta}</Text>
           )}
         </div>
         <ChevronUp
@@ -312,12 +313,12 @@ export function ArtifactItem({
             <div className="px-3.5 pb-3 pt-0.5 border-t border-foreground/[0.06] relative">
               {locked ? (
                 <div className="relative pt-2.5">
-                  <p className="text-[12.5px] text-foreground/75 leading-relaxed whitespace-pre-line">
+                  <Text variant="bodySm" className="block text-foreground/75 leading-relaxed whitespace-pre-line">
                     {artifact.body.slice(0, Math.floor(artifact.body.length / 2))}
-                  </p>
+                  </Text>
                   <div className="relative mt-1">
                     <p
-                      className="text-[12.5px] text-foreground/75 leading-relaxed whitespace-pre-line select-none pointer-events-none"
+                      className="text-label text-foreground/75 leading-relaxed whitespace-pre-line select-none pointer-events-none"
                       style={{ filter: "blur(5px)" }}
                       aria-hidden="true"
                     >
@@ -331,9 +332,9 @@ export function ArtifactItem({
                   </div>
                 </div>
               ) : (
-                <p className="text-[12.5px] text-foreground/75 leading-relaxed whitespace-pre-line pt-2.5">
+                <Text variant="bodySm" className="block text-foreground/75 leading-relaxed whitespace-pre-line pt-2.5">
                   {artifact.body}
-                </p>
+                </Text>
               )}
               {sideEffect && !sideEffect.is_error && (() => {
                 const url = urlFromMeta(sideEffect.output_meta);
@@ -343,7 +344,7 @@ export function ArtifactItem({
                     href={url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 mt-2 text-[12px] font-medium text-foreground/70 hover:text-foreground transition-colors"
+                    className="inline-flex items-center gap-1 mt-2 text-label font-medium text-foreground/70 hover:text-foreground transition-colors"
                   >
                     Open ↗
                   </a>

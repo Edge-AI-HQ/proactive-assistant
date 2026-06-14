@@ -89,7 +89,7 @@ export function VoiceButton({
     const isConnecting = captureStatus === "connecting";
     return (
       <div className="flex min-w-[13rem] flex-1 flex-col gap-2 rounded-2xl border border-foreground/[0.08] px-3 py-2">
-        <p className="flex min-h-[18px] items-center gap-1.5 truncate text-[13px] italic leading-snug text-foreground/55">
+        <p className="flex min-h-[18px] items-center gap-1.5 truncate text-bodySm italic leading-snug text-foreground/55">
           {isConnecting && !finalizing && !transcript && (
             <Loader2 size={13} strokeWidth={2} className="shrink-0 animate-spin" />
           )}
@@ -121,8 +121,8 @@ export function VoiceButton({
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-background transition-transform active:scale-95 disabled:opacity-60"
             style={{
               background:
-                "linear-gradient(135deg, hsl(292 78% 63%) 0%, hsl(330 80% 65%) 100%)",
-              boxShadow: "0 4px 12px hsl(292 78% 63% / 0.35)",
+                "linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(330 80% 65%) 100%)",
+              boxShadow: "0 4px 12px hsl(var(--primary) / 0.35)",
             }}
             aria-label="Use transcript"
           >

@@ -9,6 +9,7 @@ import {
   CommandList,
   CommandSeparator,
 } from "@/components/ui/command";
+import { Text } from "@pin-ai/ui-web";
 
 export interface PaletteNavItem {
   id: string;
@@ -99,12 +100,12 @@ export default function ZebraCommandPalette({
                   <CommandItem value="ask pin ai conversation chat" onSelect={run(onAskPinAi)}>
                     <span
                       className="mr-2.5 w-6 h-6 rounded-lg flex items-center justify-center shrink-0"
-                      style={{ background: "linear-gradient(135deg, hsl(292 78% 63%) 0%, hsl(330 80% 65%) 100%)" }}
+                      style={{ background: "linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(330 80% 65%) 100%)" }}
                     >
                       <Send size={12} strokeWidth={2.2} className="text-white" />
                     </span>
                     <span className="font-medium">Ask PIN AI</span>
-                    <kbd className="ml-auto text-[10px] font-semibold text-foreground/40 bg-foreground/[0.06] rounded px-1.5 py-0.5">⏎</kbd>
+                    <kbd className="ml-auto text-micro font-semibold text-foreground/40 bg-foreground/[0.06] rounded px-1.5 py-0.5">⏎</kbd>
                   </CommandItem>
                   <CommandItem value="toggle ambient sensing" onSelect={run(onToggleAmbient)}>
                     <span className="mr-2.5 w-6 h-6 rounded-lg bg-foreground/[0.06] flex items-center justify-center shrink-0">
@@ -117,7 +118,7 @@ export default function ZebraCommandPalette({
                       <PanelLeft size={12} strokeWidth={2} className="text-foreground/65" />
                     </span>
                     <span className="font-medium">Toggle sidebar</span>
-                    <kbd className="ml-auto text-[10px] font-semibold text-foreground/40 bg-foreground/[0.06] rounded px-1.5 py-0.5">⌘B</kbd>
+                    <kbd className="ml-auto text-micro font-semibold text-foreground/40 bg-foreground/[0.06] rounded px-1.5 py-0.5">⌘B</kbd>
                   </CommandItem>
                 </CommandGroup>
 
@@ -137,9 +138,9 @@ export default function ZebraCommandPalette({
                               <Icon size={12} strokeWidth={1.8} className="text-foreground/65" />
                             </span>
                             <span className="truncate">{card.title}</span>
-                            <span className="ml-auto pl-3 shrink-0 text-[10px] font-semibold uppercase tracking-wide text-foreground/35">
+                            <Text variant="micro" weight="semibold" className="ml-auto pl-3 shrink-0 uppercase tracking-wide text-foreground/35">
                               {card.categoryLabel}
-                            </span>
+                            </Text>
                           </CommandItem>
                         );
                       })}

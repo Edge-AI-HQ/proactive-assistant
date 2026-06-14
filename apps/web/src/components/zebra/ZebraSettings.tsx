@@ -13,7 +13,7 @@ import {
   ScheduledTasksSettings,
   SubPageHeader,
   SubscriptionPanel,
-  useAuth,
+  useAuth, Text,
 } from "@pin-ai/ui-web";
 import { toast } from "sonner";
 
@@ -90,18 +90,18 @@ export function ZebraSetting() {
       {/* Account card */}
       <div className="glass-card-strong px-4 py-3.5 mb-4 flex items-center gap-3">
         <div
-          className="w-10 h-10 rounded-2xl text-white text-[15px] font-semibold flex items-center justify-center shrink-0"
-          style={{ background: "linear-gradient(135deg, hsl(292 78% 63%) 0%, hsl(330 80% 65%) 100%)" }}
+          className="w-10 h-10 rounded-2xl text-white text-body font-semibold flex items-center justify-center shrink-0"
+          style={{ background: "linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(330 80% 65%) 100%)" }}
         >
           {displayName.charAt(0).toUpperCase()}
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-[14px] font-semibold text-foreground truncate">{displayName}</p>
-          <p className="text-[12px] text-foreground/45 truncate">{user?.email}</p>
+          <Text variant="bodySm" weight="semibold" className="block text-foreground truncate">{displayName}</Text>
+          <Text variant="label" className="block text-foreground/45 truncate">{user?.email}</Text>
         </div>
         <button
           onClick={() => void signOut()}
-          className="inline-flex items-center gap-1.5 rounded-xl border border-foreground/10 bg-white/60 px-3 py-2 text-[12.5px] font-medium text-foreground/70 hover:bg-white/80 transition-colors shrink-0"
+          className="inline-flex items-center gap-1.5 rounded-xl border border-foreground/10 bg-white/60 px-3 py-2 text-label font-medium text-foreground/70 hover:bg-white/80 transition-colors shrink-0"
         >
           <LogOut size={13} strokeWidth={1.8} /> Sign out
         </button>
@@ -120,7 +120,7 @@ export function ZebraSetting() {
             </span>
             <span className="flex-1 min-w-0">
               <p className="text-sm font-semibold text-foreground">{row.title}</p>
-              <p className="text-[11.5px] text-foreground/45 truncate">{row.subtitle}</p>
+              <Text variant="label" className="block text-foreground/45 truncate">{row.subtitle}</Text>
             </span>
             <ChevronRight size={15} className="text-foreground/30 shrink-0" />
           </button>
@@ -133,25 +133,25 @@ export function ZebraSetting() {
           <div>
             <div className="flex items-center gap-2 mb-2">
               <AlertTriangle size={14} className="text-rose-500" />
-              <p className="text-[13px] font-semibold text-rose-600">
+              <Text variant="bodySm" weight="semibold" className="block text-rose-600">
                 Delete account permanently?
-              </p>
+              </Text>
             </div>
-            <p className="text-[12px] text-foreground/55 leading-relaxed mb-3">
+            <Text variant="label" className="block text-foreground/55 leading-relaxed mb-3">
               All your data — cards, conversations, memory, connections — will be removed. This cannot be undone.
-            </p>
+            </Text>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setConfirmingDelete(false)}
                 disabled={deleting}
-                className="px-3.5 py-2 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[12.5px] font-medium text-foreground/60"
+                className="px-3.5 py-2 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-label font-medium text-foreground/60"
               >
                 Keep my account
               </button>
               <button
                 onClick={() => void handleDeleteAccount()}
                 disabled={deleting}
-                className="px-3.5 py-2 rounded-xl bg-rose-600 text-white text-[12.5px] font-semibold hover:bg-rose-700 transition-colors disabled:opacity-60"
+                className="px-3.5 py-2 rounded-xl bg-rose-600 text-white text-label font-semibold hover:bg-rose-700 transition-colors disabled:opacity-60"
               >
                 {deleting ? "Deleting…" : "Delete everything"}
               </button>
@@ -160,7 +160,7 @@ export function ZebraSetting() {
         ) : (
           <button
             onClick={() => setConfirmingDelete(true)}
-            className="flex items-center gap-2 text-[12.5px] font-medium text-rose-500/80 hover:text-rose-600 transition-colors"
+            className="flex items-center gap-2 text-label font-medium text-rose-500/80 hover:text-rose-600 transition-colors"
           >
             <Trash2 size={13} strokeWidth={1.8} /> Delete account
           </button>
@@ -193,13 +193,13 @@ export function ZebraNotifications() {
           <Smartphone size={16} strokeWidth={1.8} className="text-foreground/65" />
         </span>
         <div>
-          <p className="text-[13.5px] font-semibold text-foreground mb-1">
+          <Text variant="bodySm" weight="semibold" className="block text-foreground mb-1">
             Push notifications live on your phone
-          </p>
-          <p className="text-[12.5px] text-foreground/55 leading-relaxed">
+          </Text>
+          <Text variant="bodySm" className="block text-foreground/55 leading-relaxed">
             Card completions and proactive nudges are delivered through the PIN AI
             mobile app. Manage them in Setting → Notifications on your phone.
-          </p>
+          </Text>
         </div>
       </div>
     </SettingsColumn>

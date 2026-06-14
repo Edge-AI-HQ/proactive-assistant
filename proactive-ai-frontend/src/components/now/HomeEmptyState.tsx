@@ -1,5 +1,6 @@
 import { ChevronRight, Mic, Plug } from "lucide-react";
 import type { VoicePermissionState } from "@/hooks/useVoicePermission";
+import { Text } from "@pin-ai/ui-web";
 
 interface HomeEmptyStateProps {
   /** Count of ACTIVE Composio connectors. 0 → show the "Connect" row. */
@@ -36,12 +37,12 @@ function ChecklistRow({ icon: Icon, title, subtitle, onClick }: ChecklistRowProp
         <Icon size={16} strokeWidth={2} className="text-foreground/70" />
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block text-[14px] font-semibold leading-tight text-foreground">
+        <Text variant="bodySm" weight="semibold" className="block leading-tight text-foreground">
           {title}
-        </span>
-        <span className="mt-0.5 block truncate text-[12px] leading-snug text-foreground/50">
+        </Text>
+        <Text variant="label" className="mt-0.5 block truncate leading-snug text-foreground/50">
           {subtitle}
-        </span>
+        </Text>
       </span>
       <ChevronRight size={16} className="shrink-0 text-foreground/30" />
     </button>
@@ -79,22 +80,22 @@ export default function HomeEmptyState({
   if (!needVoice && !needConnect) {
     return (
       <div className="flex h-full flex-col items-center justify-center px-8 pb-40 text-center">
-        <p className="text-[15px] font-semibold text-foreground/80">
+        <Text variant="body" weight="semibold" className="block text-foreground/80">
           Your feed is warming up
-        </p>
-        <p className="mt-1.5 max-w-[18rem] text-[13px] leading-relaxed text-foreground/50">
+        </Text>
+        <Text variant="bodySm" className="block mt-1.5 max-w-[18rem] leading-relaxed text-foreground/50">
           Generating cards can take a few minutes to a few hours. We'll notify
           you the moment they're ready.
-        </p>
+        </Text>
       </div>
     );
   }
 
   return (
     <div className="px-5 pt-3">
-      <p className="mb-2.5 text-[13px] font-medium text-foreground/55">
+      <Text variant="bodySm" weight="medium" className="block mb-2.5 text-foreground/55">
         Let's get your feed going
-      </p>
+      </Text>
       <div className="divide-y divide-foreground/[0.06] overflow-hidden rounded-2xl border border-foreground/[0.06] bg-foreground/[0.04] shadow-sm">
         {needVoice && (
           <ChecklistRow
@@ -117,7 +118,7 @@ export default function HomeEmptyState({
         <button
           type="button"
           onClick={onReviewPermissions}
-          className="mt-3 px-1 text-[12px] text-foreground/45 underline-offset-2 hover:underline"
+          className="mt-3 px-1 text-label text-foreground/45 underline-offset-2 hover:underline"
         >
           Review permissions
         </button>

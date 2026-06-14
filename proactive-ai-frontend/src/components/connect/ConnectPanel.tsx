@@ -10,6 +10,7 @@ import {
   Smartphone as PhoneIcon, Laptop, Watch as WatchIcon, Glasses, Camera,
   type LucideIcon,
 } from "lucide-react";
+import { Text } from "@pin-ai/ui-web";
 
 interface DataSource {
   name: string;
@@ -163,7 +164,7 @@ export default function ConnectPanel() {
 
         <div className="glass-card p-4 flex items-center justify-between">
           <div>
-            <p className="text-[10px] font-semibold text-foreground/50 uppercase tracking-[0.12em] mb-1">Connected</p>
+            <Text variant="micro" weight="semibold" className="block text-foreground/50 uppercase tracking-[0.12em] mb-1">Connected</Text>
             <div className="flex items-baseline gap-1.5">
               <span className="text-2xl font-semibold text-foreground leading-none">{totalConnected}</span>
               <span className="text-sm text-foreground/40 leading-none">of {totalSources}</span>
@@ -171,7 +172,7 @@ export default function ConnectPanel() {
           </div>
           <div className="flex items-center gap-2">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-            <span className="text-[11px] font-medium text-foreground/60">All syncing</span>
+            <Text variant="caption" weight="medium" className="text-foreground/60">All syncing</Text>
           </div>
         </div>
 
@@ -183,7 +184,7 @@ export default function ConnectPanel() {
             <div>
               <div className="flex items-center gap-2 mb-2 px-1">
                 <span className="w-1 h-1 rounded-full bg-[hsl(304_75%_63%)]" />
-                <span className="text-[10px] font-semibold text-[hsl(304_75%_63%)] uppercase tracking-[0.12em]">Your Mesh</span>
+                <Text variant="micro" weight="semibold" className="text-[hsl(304_75%_63%)] uppercase tracking-[0.12em]">Your Mesh</Text>
               </div>
               <motion.div
                 initial={{ opacity: 0, y: 12 }}
@@ -197,9 +198,9 @@ export default function ConnectPanel() {
                   <div className="flex-1 text-left">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold text-foreground">{category.name}</span>
-                      <span className="text-[10px] font-semibold text-[hsl(304_75%_63%)] bg-[hsl(304_75%_63%/0.1)] px-1.5 py-0.5 rounded-md">{category.connectedCount} active</span>
+                      <Text variant="micro" weight="semibold" className="text-[hsl(304_75%_63%)] bg-[hsl(304_75%_63%/0.1)] px-1.5 py-0.5 rounded-md">{category.connectedCount} active</Text>
                     </div>
-                    <p className="text-[11px] text-foreground/50 mt-0.5 leading-snug">{category.description}</p>
+                    <Text variant="caption" className="block text-foreground/50 mt-0.5 leading-snug">{category.description}</Text>
                   </div>
                   <div className="flex-shrink-0 text-foreground/30">
                     {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
@@ -218,7 +219,7 @@ export default function ConnectPanel() {
                             <div key={tier}>
                               <div className="flex items-center gap-2 mb-1.5 mt-2.5">
                                 <span className={`w-1.5 h-1.5 rounded-full ${tier === 0 ? "bg-foreground" : tier === 1 ? "bg-foreground/40" : "bg-foreground/20"}`} />
-                                <span className="text-[10px] font-semibold text-foreground/50 uppercase tracking-wider">Tier {tier} — {tierLabels[tier]}</span>
+                                <Text variant="micro" weight="semibold" className="text-foreground/50 uppercase tracking-wider">Tier {tier} — {tierLabels[tier]}</Text>
                               </div>
                               <div className="space-y-1">
                                 {tierSources.map((source) => {
@@ -228,9 +229,9 @@ export default function ConnectPanel() {
                                       <SrcIcon size={14} strokeWidth={1.5} className="text-[hsl(304_75%_63%)] flex-shrink-0" />
                                       <div className="flex-1 min-w-0">
                                         <p className="text-xs font-medium text-foreground truncate">{source.name}</p>
-                                        <p className="text-[10px] text-foreground/45 truncate">{source.description}</p>
+                                        <Text variant="micro" className="block text-foreground/45 truncate">{source.description}</Text>
                                       </div>
-                                      {source.stats && <span className="text-[10px] font-medium text-foreground/50 flex-shrink-0">{source.stats}</span>}
+                                      {source.stats && <span className="text-micro font-medium text-foreground/50 flex-shrink-0">{source.stats}</span>}
                                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
                                     </div>
                                   );
@@ -239,7 +240,7 @@ export default function ConnectPanel() {
                             </div>
                           );
                         })}
-                        <button className="w-full mt-3 text-[11px] font-medium text-[hsl(304_75%_63%)] border border-[hsl(304_75%_63%/0.3)] rounded-xl py-2 hover:bg-[hsl(304_75%_63%/0.06)] transition-colors">+ Pair device</button>
+                        <button className="w-full mt-3 text-caption font-medium text-[hsl(304_75%_63%)] border border-[hsl(304_75%_63%/0.3)] rounded-xl py-2 hover:bg-[hsl(304_75%_63%/0.06)] transition-colors">+ Pair device</button>
                       </div>
                     </motion.div>
                   )}
@@ -248,7 +249,7 @@ export default function ConnectPanel() {
 
               <div className="flex items-center gap-2 mt-5 mb-2 px-1">
                 <span className="w-1 h-1 rounded-full bg-foreground/40" />
-                <span className="text-[10px] font-semibold text-foreground/50 uppercase tracking-[0.12em]">Data Sources</span>
+                <Text variant="micro" weight="semibold" className="text-foreground/50 uppercase tracking-[0.12em]">Data Sources</Text>
               </div>
             </div>
           );
@@ -268,9 +269,9 @@ export default function ConnectPanel() {
                     <div className="flex-1 text-left">
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-semibold text-foreground">{category.name}</span>
-                        <span className="text-[10px] font-medium text-foreground/40 bg-foreground/[0.06] px-1.5 py-0.5 rounded-md">{category.connectedCount} / {category.totalCount}</span>
+                        <Text variant="micro" weight="medium" className="text-foreground/40 bg-foreground/[0.06] px-1.5 py-0.5 rounded-md">{category.connectedCount} / {category.totalCount}</Text>
                       </div>
-                      <p className="text-[11px] text-foreground/40 mt-0.5 leading-snug">{category.description}</p>
+                      <Text variant="caption" className="block text-foreground/40 mt-0.5 leading-snug">{category.description}</Text>
                     </div>
                     <div className="flex-shrink-0 text-foreground/30">
                       {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
@@ -289,7 +290,7 @@ export default function ConnectPanel() {
                               <div key={tier}>
                                 <div className="flex items-center gap-2 mb-1.5 mt-2.5">
                                   <span className={`w-1.5 h-1.5 rounded-full ${tier === 0 ? "bg-foreground" : tier === 1 ? "bg-foreground/40" : "bg-foreground/20"}`} />
-                                  <span className="text-[10px] font-semibold text-foreground/50 uppercase tracking-wider">Tier {tier} — {tierLabels[tier]}</span>
+                                  <Text variant="micro" weight="semibold" className="text-foreground/50 uppercase tracking-wider">Tier {tier} — {tierLabels[tier]}</Text>
                                 </div>
                                 <div className="space-y-1">
                                   {tierSources.map((source) => {
@@ -301,9 +302,9 @@ export default function ConnectPanel() {
                                         <span className={`text-xs flex-1 ${isConnected ? "text-foreground font-medium" : "text-foreground/45"}`}>{source.name}</span>
                                         <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isConnected ? "bg-emerald-500" : "bg-foreground/10"}`} />
                                         {isConnected ? (
-                                          <button className="text-[10px] font-medium text-foreground/50 border border-foreground/10 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.04] transition-colors">Manage</button>
+                                          <button className="text-micro font-medium text-foreground/50 border border-foreground/10 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.04] transition-colors">Manage</button>
                                         ) : (
-                                          <button className="text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1] transition-colors">Connect</button>
+                                          <button className="text-micro font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1] transition-colors">Connect</button>
                                         )}
                                       </div>
                                     );

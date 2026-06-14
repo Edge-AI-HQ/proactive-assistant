@@ -1,0 +1,263 @@
+---
+title: "双端设计系统与共享 UI 架构（token + ui-kit + primitive 半共享）"
+description: "PIN AI 双端（apps/web + apps/mobile）UI 架构的设计 SSOT：逻辑共享 + UI 分介质 + 设计系统层（design token / ui-kit 契约+cva / motion）双端共享、primitive 实现各端各写。含选型依据（否决 Tamagui / RSD / react-native-web）、物理铁律、共享度梯度、primitive 半共享、终态包结构、web/mobile 现状体检（640 魔法数 / cva=0）、ui-web 三分类梳理、三阶段执行路线（web 工业化 → RN 重构 → frontend sunset）。新建 packages/ui-kit、加厚 packages/design token、下沉 ui-web 逻辑、引入 cva primitive 层、或开始任何双端 UI 重构前必读。"
+---
+
+# 双端设计系统与共享 UI 架构（2026-06-13 拍板）
+
+> 状态：**已定稿（2026-06-13，实施中，分支 `feat/dual-platform-design-system`）**。
+> 目标：把 web 端重构到工业级，同一动作产出双端共享的设计系统层，再投影给 React Native。
+> 关联：[Zebra 桌面 Web 端移植](./2026-06-12-zebra-web-app-port)、[RN UI Parity](./2026-06-12-rn-ui-parity)、[Frontend / UI 做到极致](./2026-06-04-frontend-native-polish)。
+
+## TL;DR
+
+1. **路线**：逻辑共享 + UI 分介质（现状架构正确）。否决 Tamagui / react-native-web；RSD 仅跟踪不押注。
+2. **共享什么**：design token（值，100% 共享）+ ui-kit 的契约/cva 配方/motion（共享）。**primitive 的渲染实现各端各写**（web `<div>` / RN `<View>`）——这是 `div ≠ View` 的物理铁律决定的，不是妥协。
+3. **病灶**：web 端 640 处 `text-[Npx]` 魔法数、`cva=0`、动效四套机制混用、缺整个"设计系统层"；mobile 同病更轻但靠"逐行复刻 web"。
+4. **顺序**：web 工业化（含 ui-web 逻辑下沉）→ RN 重构 → frontend sunset。删 ui-web 在最末端，触发条件 = **RN 成熟接替 iOS**，不是"web 重构完"。
+5. **不变量**：`apps/mobile` 永远只依赖 `packages/*`，从不依赖 `ui-web` / `apps/web`。
+
+---
+
+## 范围与非目标（Non-goals）
+
+**做**：design token 加厚、新建 ui-kit（契约+cva+motion）、ui-web 逻辑下沉、web primitive/component 工业化、动效系统化、按 feature 切片重构、RN 投影。
+
+**不做（划清边界，防 scope creep）**：
+- ❌ 不引入 react-native-web / Tamagui / RSD / 任何 universal 框架。
+- ❌ 不重写 frontend 的 Capacitor 壳、平台桥接、原生插件、`main.tsx`（只跟随被动改 import）。
+- ❌ 不改动 `core`/`state` 现有协议契约与 API 形态（只接收下沉，不重设计）。
+- ❌ 不换 Tailwind、不引入 CSS-in-JS / CSS Modules（继续 utility + cn）。
+- ❌ 不追 pixel-perfect 双端一致：目标是**默认 align + 特化点显式且少**，web/native 交互习惯差异（滚动/手势/键盘）保留各端最优。
+- ❌ 本 plan 不覆盖 onboarding / Web Push / voice 声纹 / ambient 采集（沿用各自现状）。
+
+---
+
+## 一、选型结论（为什么是这个架构）
+
+理解整个领域只需一个维度：**UI 共享到什么粒度 / 介质抽象放哪一层**。
+
+| 路线 | 代表 | 结论 |
+|---|---|---|
+| ① 全共享 UI（write-once-render-both） | Tamagui、React Strict DOM | ❌ 会顶高动效天花板；且都建在 react-native-web 上 |
+| ② 逻辑共享 + UI 分介质 | 自建分层（本项目） | ✅ **选这条**，高品质消费级双端产品的主流答案 |
+| ③ 完全分离 | 两 codebase 只共享 API | ❌ 几乎不共享 |
+
+**逐方案判断（含 2026-06 实测）：**
+
+- **Tamagui**：全共享旗舰 + 自带编译器。动画靠 driver（CSS / RN Animated / Reanimated-via-Moti），只覆盖声明式状态过渡，管不了 aurora / 球面 / 手势 / Skia 级特效。引入 = 换样式引擎 + 重写双端 UI = 回到已否决的 ① 路线。画像不匹配（它适合不追原生质感的工具类 app）。
+- **React Strict DOM（RSD）**：方向 promising（Meta 生产用 + web 标准心智），但 npm `0.0.55`（2026-01），**两年多仍 0.0.x、无 semver、无 1.0 roadmap、Expo 无官方集成**。**跟踪不押注**；重新评估的触发信号 = 出 1.0 + semver / Expo 官方集成。RSD 本身**不含动画系统**（StyleX 样式层），复杂动效仍落 Reanimated。
+- **react-native-web（RNW）**：npm `0.21.2`（2025-10），**2026 进入维护模式，作者 necolas 重心已转 RSD**。对桌面 web（zebra ⌘K / 多面板 / URL 路由）不胜任（RNW 甜区是"RN app 的浏览器版"）。**否决用它统一双端。**
+- **Skia**（`@shopify/react-native-skia`）：绘制层双端一致（web 走 CanvasKit WASM，gzip ~2.9MB 异步加载），**可贴纯 React DOM**，是唯一不要求换 web 介质的方案 → 特效层用它。
+- **Reanimated**：native 一等（UI 线程 worklet）+ **Skia 动效的驱动引擎**（`useClock` + `useDerivedValue`，双端 Skia 动画 API 一致）。web 上是纯 JS 驱动且依赖 RNW，本项目纯 DOM web 端**不用** Reanimated 直接动 DOM（web 用 framer-motion / CSS）。
+
+**为 agent app（Claude / Manus 形态）单独验证**：web（尤其桌面）是这类产品的主力形态；RNW 在长对话列表虚拟化、流式渲染、markdown/代码、桌面交互上都是减分项。Claude / ChatGPT / Manus 的 web 都是纯 web stack，没有用 RNW。→ **web 保持纯 React DOM 是对的。**
+
+**RN vs Swift（mobile 端）**：New Architecture（Fabric/JSI，0.76+ 默认）后常规交互用户基本无感（Shopify 冷启动 +43%）；极致性能 / 深度系统集成 Swift 仍有 edge。在"已有 react web + JS/TS 团队 + chat/agent 产品"前提下，**RN 做 mobile 是明显正确的选择**。
+
+---
+
+## 二、核心原则（不变量，改架构前先对齐）
+
+### 1. 物理铁律
+> 结构层"共享一份代码" ⟺ web 必须跑 react-native-web。
+
+`div ≠ View` 是两套 primitive，要共享渲染代码就得统一到一套 = RNW（已否决）。所有 universal 工具（Tamagui / Expo Router / gluestack / Unistyles）无一例外都建在 RNW 上。**所以本项目选"契约共享 + 实现各写"。**
+
+### 2. 共享度梯度（记住规律，不用逐个记）
+```
+共享度  100% ←──────────────────────────────────→ 0%
+        design token   ui-kit 契约/cva   primitive 实现   feature 编排
+        （纯值）       （配方/类型）      （DOM/RN 渲染）  （布局+业务壳）
+        ✅ 一份代码     ✅ 一份代码         ❌ 各写皮         ❌ 各写
+                                          ↑ 吃共享配方       ↑ 吃共享逻辑(core/state)
+```
+**越靠近"值/逻辑/决策"越共享，越靠近"像素/渲染"越各写。**
+
+### 3. primitive 是"半共享"，命名约定消歧义
+"primitive" 实际是两层：
+- **契约 + cva 配方**（`TextProps` + `textVariants`）→ `packages/ui-kit` → ✅ 双端共享
+- **渲染实现**（`<span>` vs `<RNText>` + 平台投影）→ `ui-web` / `apps/mobile` → ❌ 各端各写
+
+**命名约定（写进规范）**：`ui-kit` 里的不叫 primitive，叫 **contract / variant recipe**；只有能渲染的组件才叫 **primitive**，它永远介质特定、各端各写、消费 ui-kit 的 contract+recipe。
+
+### 4. 依赖不变量
+> `apps/mobile`（RN）永远只依赖 `packages/*`（core·state·design·ui-kit），从不依赖 `ui-web` / `apps/web`。
+
+推论：① RN 不碰 ui-web → ui-web 的 primitive 实现本就不共享给 RN；② ui-web 并入 apps/web 时 RN 零感知。
+
+### 5. 开发哲学（贯穿）
+web 先行立标准，但 **ui-kit 的契约/cva 从第一天就按双端约束设计**（NativeWind class 子集、双端语义 props、逻辑下沉 core），否则 RN 阶段（投影）被迫返工改契约。"设计时就考虑双端落地"的最终落点 = ui-kit 即使在只有 web 消费的阶段，也按双端契约写。
+
+---
+
+## 三、终态包结构
+
+```
+packages/                       ← 一切"平台无关"
+  core      逻辑（纯 TS）
+  state     状态（React hooks / TanStack Query）
+  design    token 值（纯净：零 React / 零 cva，给 tailwind.config require）
+  ui-kit    契约 + cva variant 配方 + motion 预设 + cn（新；设计系统"大脑"，纯 JS）
+  ui-fx     Skia 特效层（双端共享渲染代码：aurora/球面/渐变字；唯一能共享"皮"的 UI）
+apps/
+  web       DOM primitive 实现 + component + feature + 壳（吸收原 ui-web）
+  mobile    RN primitive 实现 + component + screens + 壳
+```
+
+依赖方向（单向，禁止环）：`apps/* → {ui-kit, ui-fx} → design`；`ui-kit → core`（**仅类型**，如 `IntentCard`）；`apps/* → core/state`；**`core` / `state` / `design` 不依赖任何 UI 层**；`ui-kit ↛ apps`。
+
+**为什么 design 与 ui-kit 分两个包**：`tailwind.config.js`（CJS）要 `require("@pin-ai/design")` 拿 token，design 必须保持纯净（零 React / 零 cva），否则 tailwind 配置拖入运行时依赖。ui-kit 才放 cva / 契约 / React 类型。
+
+**cva 双端一致的命门（不补会假共享）**：同一个 `text-base` 要在两端渲染成同值，前提是 **web 与 mobile 的 tailwind / NativeWind `theme` 都从 `@pin-ai/design` token 生成**（同源），且两端 `tailwindcss` 大版本对齐（现均 3.4）。这条不成立，ui-kit 的 cva 配方共享就是假共享。
+
+**为什么 `ui-fx` 独立于 `ui-kit`**：ui-kit 是纯 JS（契约 / cva / className）；ui-fx 带 Skia 原生 / WASM 二进制依赖，性质不同，且它是唯一能**共享渲染代码**的 UI（Skia API 双端一致）——区别于各写实现的 primitive。独立包 vs ui-kit 子模块，实施时定。
+
+### Text 在四个包的落位（一眼看清"半共享"）
+```
+packages/design       fontSize / fontWeight token（值）          ✅ 共享
+packages/ui-kit       TextProps + textVariants(cva)              ✅ 共享 ← "共享 primitive"指这里
+  ├── ui-web .../Text.tsx    <span className={textVariants(p)}>           ❌ web 实现
+  └── apps/mobile .../Text.tsx <RNText className={textVariants(p)} style={投影}>  ❌ RN 实现
+```
+两端实现读同一个 `textVariants` 配方 + `TextProps` 类型。改 variant / 加 prop → 两端同时生效 / 同时被类型约束。各写的只剩"挑元素 + 平台投影"那十几行。
+
+---
+
+## 四、现状体检（病灶，带实测数据）
+
+### web 端（proactive-ai-frontend + ui-web）
+| 维度 | 实测 | 判定 |
+|---|---|---|
+| typography | **640 处 `text-[Npx]`**（[10px]×233 / [11px]×203 / [13px]×71…）vs 仅 175 处 scale | 🔴 78% 字号失控，比 RN 严重 |
+| color | token 语义色 class **1645 处**（好）vs 硬编码 hex43 + rgba42 + 裸 hsl183 | 🟡 大体健康，漏洞：品牌紫 `#E15CE6`×6、glass inline rgba |
+| 动效 | framer-motion 30 + `animate-*` + **6 个散落 CSS `@keyframes`**（aurora-drift/breathe/card-float…）+ inline `style={{}}` 123 处 + **零 motion token** | 🔴 四套机制混用无规范 |
+| 组件分层 | **`cva`=0**（无 variant 体系）· primitive 层=1 文件（drawer）· 只 1 个 radix（slider） | 🔴 缺整个设计系统层 |
+
+**根因**：token（薄）和 feature（厚）之间塌陷 —— **缺 primitive + component 两层**，原始值无处收敛，必然失控。640 个魔法数是一个结构性空洞的 640 个症状。
+
+### mobile 端（apps/mobile）
+- typography token 不存在 → `text-[Npx]` 魔法数 + 内联 `fontFamily: "Inter_600SemiBold"`
+- color token 不全 → 硬编码 hex/rgba（`#a1a1aa`×27 等）
+- 无基础 primitive 契约 → 注释满是"web XXX 对应物 1:1"，**逐行肉眼复刻 web**（逐页翻译）
+- **已做对**：NativeWind className 心智（与 web 一致，王牌）· `ui/typography.ts` 单位换算（`tracking`/`leading`）· Reanimated 动效 · 特效原语（GradientText/AiSphere/Aurora）
+
+---
+
+## 五、ui-web 梳理（三分类）
+
+ui-web 当初作为"web 共享层"，顺手塞入大量平台无关逻辑（**36 个 `.ts`**），但 RN 吃不到（mobile 不依赖 ui-web）→ `buildCardContext` 自称"双端真源"却在 web 包，RN 只能手动复刻。
+
+**判准**：不看"现在在哪个包"，只问"它是平台无关逻辑/决策，还是某介质的实现"。
+
+| 类 | 判准 | 去向 | 例子 |
+|---|---|---|---|
+| **A 纯逻辑** | 无任何 IO | 直接下沉 `core` | basket-meta、source-app-display、now/card-model、tool-presentation、voice/language、connect/composio-display-identity、connector-card（纯映射）、`buildCardContext`/`cardThreadSessionKey`（从 card-chat.tsx 抽出） |
+| **B 业务+IO** | 业务逻辑缠平台 IO | 逻辑→`core/state`，IO→**port 注入** | useCardActions（sessionStorage 抽 port）→state、feedback-outbox（已是 port 模式）→core、voice-stream-api / transcription-api / *Engine（window/录音抽 port）→core、useAuth→state、useWeather→state（走 TQ） |
+| **C 纯介质** | 无业务逻辑，就是 IO/DOM 实现 | 留 `apps/web` | scroll-intent + useChatScroll（DOM）、pcm-recorder（Web Audio）、BrowserSpeechEngine（Web Speech）、supabase 装配（import.meta.env + 平台 flow）、auth/platform、transport-bootstrap、oauth-popup（window）、use-media-query（matchMedia）、local-sync |
+| **特例** | 双端通用工具 | → `ui-kit` | `lib/utils.ts` 的 `cn()`（clsx + tailwind-merge，RN 也用） |
+
+**解耦模式**：B 类不是"剪切粘贴"，是按 **ports & adapters** 拆 —— 逻辑下沉、IO 抽象成 port、各端注册 adapter。本项目已有此模式（`registerFeedbackOutbox` / `registerSignOutCleanup` / `registerLocalThreadStore` / `registerExternalMicAcquirer` 四个注册点），梳理 = 把它系统化推开。
+
+> B/C 边界部分基于命名 + 5 个文件实读推断，执行时逐个确认。
+
+---
+
+## 六、设计系统层详设
+
+### 1. token 加厚（packages/design）
+关键手法：**从现状硬编码归纳 scale**，不凭空定。
+
+| 类目 | 现状 | 补法 |
+|---|---|---|
+| **typography** | 只有 letterSpacingEm | `fontSize` 从实际用值**归纳并做减法**（11+ 个相近值 9/10/11/12/13… 合并成 ~7 档 xs..4xl；合并会带来轻微像素变化，需设计确认容忍度）；`fontWeight` 双端投影；lineHeight ratio |
+| **color** | 7 语义色 | 补灰阶 ramp、状态色 success/warning/danger、收编品牌色 `#E15CE6`→token、收编 apps/web 私有 secondary/destructive/accent/popover/input、glass/glow 结构化 |
+| **spacing** | 靠 NativeWind 默认（巧合一致） | 显式 4pt scale，两端共享不靠默认值碰运气 |
+| **motion** | 无（散在组件 200/2000/2400ms） | `duration{fast,base,slow}` `easing{...}` `spring{...}` + 语义预设 enter/exit/press/sheet |
+| **elevation** | 硬编码 boxShadow | `elevation{sm,md,lg}` → web 投影 boxShadow / RN 投影 shadow*+elevation |
+
+**双端投影**：token 存平台无关数值，两端各取（沿用 `typography.ts` 的 `tracking`/`leading` 模式）。字重是典型陷阱：web `font-semibold`=font-weight:600，RN=换 `fontFamily:"Inter_600SemiBold"`，token 显式声明 `{web, native}`，primitive 消费。
+
+**真源收敛**：① keyframes/animation 现在 frontend + apps/web **重复 paste** → 收进 design；② cssVariables `:root` 块现在 web/mobile 各 paste 一份 → 由 token 生成；③ apps/web 私有色收编 design。
+
+**design 保持纯净**（零 React / 零 cva），给 tailwind.config require。
+
+### 2. primitive 层（最小集，先做覆盖 80% 基础 UI）
+`Text`（最痛先做）· `Box` · `Stack`（VStack/HStack/Spacer）· `Pressable`/`Button` · `Surface`/`Card`（玻璃/elevation）· `Icon` · `Divider`。
+特效原语（AiSphere/Aurora/GradientText/Shimmer）**不进这层** → 走 `packages/ui-fx`（Skia 特效层，双端共享渲染代码，见第三节）。
+
+### 3. component 层 + cva（治 `cva=0`）
+引入 `class-variance-authority`（已有 clsx+tailwind-merge）。variant 配方放 `ui-kit` 共享：语义 → token class 映射。web 渲染 `<button className={buttonVariants(p)}>`，RN 渲染 `<Pressable className={buttonVariants(p)}>` —— 同一份配方。
+
+### 4. 动效系统化（收四套混用为三档）
+- **简单状态过渡**（hover/press/出现消失）→ tailwind `animation`（从 motion token 生成），废散落 inline transition
+- **复杂/手势/编排** → web 用 framer-motion（定为唯一交互动效库）、RN 用 Reanimated
+- **signature 特效**（aurora/球面/渐变字）→ Skia 双端一份
+- **双端契约**：两端动效库不同（各自本端最优），但**共享 motion token + 语义动画名**（`motion.preset.sheet` 两端读同一组参数）
+
+---
+
+## 七、待定边界决策（实施前钉死）
+
+1. **cva 配方的"双端通用 class 子集"**：NativeWind 支持哪些 Tailwind class、哪些 web 专属（`hover:` / `backdrop-filter` / `grid`）**禁止进 ui-kit 配方**（web 特有增强在 apps/web 实现里追加）。这张白名单/黑名单是 ui-kit 能否真共享的成败线。
+2. **平台投影在 contract 里怎么表达**：如 `fontWeight`（web=font-weight / RN=fontFamily）—— contract 暴露语义（`weight="semibold"`）让两端实现各自投影。约定统一写法。
+
+---
+
+## 八、执行路线图（三阶段）
+
+> 粒度：**地基水平先行，然后按 feature 垂直切片**（不是纯水平的"先全下沉→再全 token→再全 codemod"）。一个 feature 一个 PR，端到端工业化。渐进 codemod，web 持续可用。
+
+```
+① web 工业化（frontend 活着，搭便车）
+   Step 0  A 类纯逻辑下沉 core + cn 挪 ui-kit          ← 低风险地基（1 PR）
+   Step 1  P0 token 加厚 + 新建 ui-kit 骨架 + lint 守门  ← 立标准
+   Step 2..N  按 feature 垂直切片（card→chat→now→voice→connect）：
+            每 PR = [B 类解耦↓core/state + primitive 化 + codemod 灭魔法数 + 动效收敛]
+   产出落 core/state/design/ui-kit/ui-web；frontend 零/低改动搭便车，Capacitor iOS 持续 work
+        │
+        ▼
+② RN 重构（frontend 仍活着，Capacitor 仍是现役 iOS）
+   apps/mobile 消费 packages（契约+cva+token+已下沉逻辑）+ 补 View/Reanimated 实现
+   + Skia 特效层双端一份 + 双端视觉回归 CI
+        │
+        ▼
+③ RN 接替 iOS ← frontend sunset 的唯一触发条件（不是"web 重构完"）
+   frontend sunset → ui-web 只剩 apps/web 一个消费者 → 整目录平移并入 apps/web、删包
+```
+
+**关键时序约束**：
+- 删 ui-web 在**最末端**，①②期间 ui-web + frontend 都保留。
+- web 工业化期间，**web 介质实现（primitive/component 的 DOM 版）放 ui-web**（frontend + apps/web 共享）；逻辑下沉 core/state；设计决策新建在 design/ui-kit。
+- frontend 是 ui-web 消费方，**搭便车受益**（ui-web 升级它跟着好，壳/平台代码不动；唯一被动改动 = API/import 路径变化，codemod 处理）。
+- ui-web 在重构期按"将来并进 apps/web"的结构组织（`ui-web/src/primitives`、`/components`），sunset 时整目录平移。
+- **逻辑下沉一律 move + shim**：A/B 类下沉 core/state 后，`ui-web` 留 re-export shim（`export * from "@pin-ai/core/..."`），**frontend import 路径零改**——沿用 zebra 迁移已验证模式，避免一次性改 105 处 import。
+- **frontend 私有 `src/components`**（不在 ui-web 的那部分，也贡献部分 640 魔法数）按剩余寿命权衡：可共享的上移 ui-web（一举两得为 sunset 铺路），纯壳 / 平台代码能 work 即可不深改。
+
+---
+
+## 九、重构策略与守门
+
+- **渐进 codemod**：`text-[10px]→text-xs` 是机械映射，写 codemod 批量迁 640 处，人工只 review 边界。不手改。
+- **lint 守门防回潮**：禁新增 `text-[\d+px]` / tsx 裸 hex / rgba；禁 web-only class 进 ui-kit 配方；feature 层禁原始值。违者 CI 红。
+- **双端视觉回归**：Storybook 双端 + Playwright（web）/ Maestro（native）截图 diff 进 CI。
+- **低冗余纪律**（项目原则⑧）：primitive/component 只建真正复用的（三处重复才抽），不为全覆盖造一次性抽象。
+
+**验收标准（DoD）**：
+- **每个 feature 切片 PR**：该 feature 的 `text-[Npx]` 与裸 hex 清零、改用 primitive+token、动效收敛三档、frontend 该 feature 不回归。
+- **web 工业化阶段完成**：全仓 `text-[Npx]` 归零、lint 守门生效、cva component 体系建立、动效四套→三档、视觉回归基线建立。
+- **RN 阶段完成**：apps/mobile 消费 packages 跑通、基础 UI 与 web 视觉回归 diff 在阈内、Skia 特效层双端一致。
+
+---
+
+## 十、决策记录（拍板项）
+
+1. 路线 ② 逻辑共享 + UI 分介质；否决 Tamagui / RNW；RSD 仅跟踪（触发信号：1.0+semver / Expo 官方集成）。
+2. 设计系统层分包：`design`（纯 token 值）+ `ui-kit`（契约+cva+motion+cn）。
+3. primitive 半共享（契约共享 / 实现各写）；命名约定：ui-kit 里叫 contract/recipe，组件才叫 primitive。
+4. 依赖不变量：apps/mobile 只依赖 packages/*。
+5. 顺序：web 工业化 → RN 重构 → frontend sunset；删 ui-web 绑定 RN 接替 iOS。
+6. 粒度：地基水平 + feature 垂直切片；渐进 codemod + lint 守门。
+7. 动效：motion token + 三档（tailwind animation / framer-motion·Reanimated / Skia）；web 唯一 JS 交互动效库 = framer-motion。
+8. Skia 特效层独立 `packages/ui-fx`（唯一能共享渲染代码的 UI；独立包 vs ui-kit 子模块待定）；cva 双端共享前提 = 两端 tailwind/NativeWind theme 同源 `@pin-ai/design` token。
+9. 逻辑下沉用 move + ui-web re-export shim（frontend import 零改）；frontend 私有组件按剩余寿命权衡。

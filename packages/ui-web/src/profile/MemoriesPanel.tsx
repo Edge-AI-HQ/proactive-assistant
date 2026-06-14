@@ -26,6 +26,7 @@ import {
 import { useMemories } from "@pin-ai/state";
 import type { Memory, MemoryStatus } from "@pin-ai/core";
 import { cn } from "../lib/utils";
+import { Text } from "../primitives/Text";
 
 interface MemoriesPanelProps {
   enabled: boolean;
@@ -110,7 +111,7 @@ export default function MemoriesPanel({ enabled }: MemoriesPanelProps) {
           </button>
           <button
             onClick={() => setCreating((v) => !v)}
-            className="inline-flex items-center gap-1 rounded-md bg-foreground text-background text-[10px] font-semibold px-2 py-1 hover:bg-foreground/85"
+            className="inline-flex items-center gap-1 rounded-md bg-foreground text-background text-micro font-semibold px-2 py-1 hover:bg-foreground/85"
           >
             <Plus size={10} strokeWidth={2} />
             New
@@ -125,7 +126,7 @@ export default function MemoriesPanel({ enabled }: MemoriesPanelProps) {
             key={tab.key}
             onClick={() => setStatus(tab.key)}
             className={cn(
-              "rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors",
+              "rounded-md px-2 py-0.5 text-micro font-medium transition-colors",
               status === tab.key
                 ? "bg-foreground text-background"
                 : "bg-foreground/5 text-foreground/50 hover:bg-foreground/10",
@@ -146,7 +147,7 @@ export default function MemoriesPanel({ enabled }: MemoriesPanelProps) {
             limit: pageSize,
             offset: 0,
           })}
-          className="rounded-md bg-white/60 border border-foreground/10 px-1.5 py-1 text-[10px] focus:outline-none focus:ring-1 focus:ring-primary/30"
+          className="rounded-md bg-white/60 border border-foreground/10 px-1.5 py-1 text-micro focus:outline-none focus:ring-1 focus:ring-primary/30"
         >
           {SUBJECT_PRESETS.map((s) => (
             <option key={s} value={s}>
@@ -154,7 +155,7 @@ export default function MemoriesPanel({ enabled }: MemoriesPanelProps) {
             </option>
           ))}
         </select>
-        <label className="flex items-center gap-1 text-[10px] text-foreground/50">
+        <label className="flex items-center gap-1 text-micro text-foreground/50">
           <span>min q</span>
           <input
             type="number"
@@ -171,12 +172,12 @@ export default function MemoriesPanel({ enabled }: MemoriesPanelProps) {
                 offset: 0,
               });
             }}
-            className="w-14 rounded-md bg-white/60 border border-foreground/10 px-1.5 py-0.5 text-[10px] font-mono focus:outline-none focus:ring-1 focus:ring-primary/30"
+            className="w-14 rounded-md bg-white/60 border border-foreground/10 px-1.5 py-0.5 text-micro font-mono focus:outline-none focus:ring-1 focus:ring-primary/30"
           />
         </label>
-        <span className="text-[10px] text-foreground/40 ml-auto tabular-nums">
+        <Text variant="micro" className="text-foreground/40 ml-auto tabular-nums">
           {total === 0 ? "0 rows" : `${firstVisible}-${lastVisible} of ${total}`}
-        </span>
+        </Text>
       </div>
 
       {/* Create form */}
@@ -204,7 +205,7 @@ export default function MemoriesPanel({ enabled }: MemoriesPanelProps) {
       {/* List */}
       <div className="space-y-1">
         {memories.length === 0 && !loading && (
-          <div className="text-[10px] text-foreground/40 py-3 text-center">No {status} memories.</div>
+          <div className="text-micro text-foreground/40 py-3 text-center">No {status} memories.</div>
         )}
         {memories.map((m) => (
           <MemoryRow
@@ -229,9 +230,9 @@ export default function MemoriesPanel({ enabled }: MemoriesPanelProps) {
       </div>
 
       <div className="mt-2 flex items-center justify-between border-t border-foreground/5 pt-2">
-        <span className="text-[10px] text-foreground/35 tabular-nums">
+        <Text variant="micro" className="text-foreground/35 tabular-nums">
           Page {total === 0 ? 0 : page + 1} / {total === 0 ? 0 : maxPage + 1}
-        </span>
+        </Text>
         <div className="flex items-center gap-1">
           <button
             type="button"
@@ -254,7 +255,7 @@ export default function MemoriesPanel({ enabled }: MemoriesPanelProps) {
         </div>
       </div>
 
-      {error && <p className="mt-2 text-[10px] text-red-500 leading-snug">{error}</p>}
+      {error && <Text variant="micro" className="block mt-2 text-red-500 leading-snug">{error}</Text>}
     </div>
   );
 }
@@ -305,15 +306,15 @@ function MemoryRow({ memory, expanded, mutating, onToggle, onUpdate, onArchive, 
       >
         <span
           className={cn(
-            "shrink-0 rounded-md border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide",
+            "shrink-0 rounded-md border px-1.5 py-0.5 text-micro font-semibold uppercase tracking-wide",
             STATUS_STYLES[memory.status],
           )}
         >
           {memory.status}
         </span>
           <div className="min-w-0 flex-1 overflow-hidden">
-            <p className="text-[11px] text-foreground leading-snug line-clamp-2">{memory.text}</p>
-          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden text-[9px] text-foreground/40">
+            <Text variant="caption" className="block text-foreground leading-snug line-clamp-2">{memory.text}</Text>
+          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden text-micro text-foreground/40">
             {memory.subject && (
               <span className="min-w-0 max-w-[72px] truncate rounded bg-foreground/5 px-1 py-px font-medium">
                 {memory.subject}
@@ -336,11 +337,11 @@ function MemoryRow({ memory, expanded, mutating, onToggle, onUpdate, onArchive, 
                 style={{ width: `${Math.round(memory.quality * 100)}%` }}
               />
             </div>
-            <span className="text-[9px] font-mono tabular-nums text-foreground/50">
+            <Text variant="micro" className="font-mono tabular-nums text-foreground/50">
               {memory.quality.toFixed(2)}
-            </span>
+            </Text>
           </div>
-          <div className="text-[9px] text-foreground/40 tabular-nums">{relativeTime(memory.created_at)}</div>
+          <Text variant="micro" className="block text-foreground/40 tabular-nums">{relativeTime(memory.created_at)}</Text>
         </div>
         <ChevronDown
           size={11}
@@ -360,30 +361,30 @@ function MemoryRow({ memory, expanded, mutating, onToggle, onUpdate, onArchive, 
           >
             <div className="p-2.5 space-y-2">
               <label className="block">
-                <span className="text-[9px] font-medium text-foreground/40 uppercase tracking-wider">Text</span>
+                <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">Text</Text>
                 <textarea
                   value={text}
                   onChange={(e) => setText(e.target.value)}
                   rows={3}
-                  className="w-full mt-0.5 rounded-md bg-white/60 border border-foreground/10 px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-primary/30"
+                  className="w-full mt-0.5 rounded-md bg-white/60 border border-foreground/10 px-2 py-1 text-caption focus:outline-none focus:ring-1 focus:ring-primary/30"
                 />
               </label>
 
               <div className="grid grid-cols-2 gap-2">
                 <label className="block">
-                  <span className="text-[9px] font-medium text-foreground/40 uppercase tracking-wider">Subject</span>
+                  <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">Subject</Text>
                   <input
                     type="text"
                     value={subject}
                     onChange={(e) => setSubject(e.target.value)}
                     placeholder="self / person:alice / topic:coffee"
-                    className="w-full mt-0.5 rounded-md bg-white/60 border border-foreground/10 px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-primary/30"
+                    className="w-full mt-0.5 rounded-md bg-white/60 border border-foreground/10 px-2 py-1 text-caption focus:outline-none focus:ring-1 focus:ring-primary/30"
                   />
                 </label>
                 <label className="block">
-                  <span className="text-[9px] font-medium text-foreground/40 uppercase tracking-wider">
+                  <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">
                     Quality
-                  </span>
+                  </Text>
                   <input
                     type="number"
                     min={0}
@@ -391,20 +392,20 @@ function MemoryRow({ memory, expanded, mutating, onToggle, onUpdate, onArchive, 
                     step={0.05}
                     value={quality}
                     onChange={(e) => setQuality(Number(e.target.value))}
-                    className="w-full mt-0.5 rounded-md bg-white/60 border border-foreground/10 px-2 py-1 text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-primary/30"
+                    className="w-full mt-0.5 rounded-md bg-white/60 border border-foreground/10 px-2 py-1 text-caption font-mono focus:outline-none focus:ring-1 focus:ring-primary/30"
                   />
                 </label>
               </div>
 
               <label className="block">
-                <span className="text-[9px] font-medium text-foreground/40 uppercase tracking-wider">
+                <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">
                   Tags (comma-separated)
-                </span>
+                </Text>
                 <input
                   type="text"
                   value={tagsText}
                   onChange={(e) => setTagsText(e.target.value)}
-                  className="w-full mt-0.5 rounded-md bg-white/60 border border-foreground/10 px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-primary/30"
+                  className="w-full mt-0.5 rounded-md bg-white/60 border border-foreground/10 px-2 py-1 text-caption focus:outline-none focus:ring-1 focus:ring-primary/30"
                 />
               </label>
 
@@ -412,7 +413,7 @@ function MemoryRow({ memory, expanded, mutating, onToggle, onUpdate, onArchive, 
                 <button
                   onClick={() => void save()}
                   disabled={!dirty || mutating}
-                  className="inline-flex items-center gap-1 rounded-md bg-foreground text-background text-[10px] font-semibold px-2 py-1 disabled:opacity-40"
+                  className="inline-flex items-center gap-1 rounded-md bg-foreground text-background text-micro font-semibold px-2 py-1 disabled:opacity-40"
                 >
                   {mutating ? <Loader2 size={10} className="animate-spin" /> : <Save size={10} />}
                   Save
@@ -422,7 +423,7 @@ function MemoryRow({ memory, expanded, mutating, onToggle, onUpdate, onArchive, 
                     <button
                       onClick={() => setSupersedeOpen((v) => !v)}
                       disabled={mutating}
-                      className="inline-flex items-center gap-1 rounded-md border border-foreground/10 bg-white/60 text-foreground/70 text-[10px] font-medium px-2 py-1 hover:bg-foreground/5 disabled:opacity-40"
+                      className="inline-flex items-center gap-1 rounded-md border border-foreground/10 bg-white/60 text-foreground/70 text-micro font-medium px-2 py-1 hover:bg-foreground/5 disabled:opacity-40"
                     >
                       <GitBranch size={10} />
                       Supersede
@@ -430,7 +431,7 @@ function MemoryRow({ memory, expanded, mutating, onToggle, onUpdate, onArchive, 
                     <button
                       onClick={() => void onArchive()}
                       disabled={mutating}
-                      className="inline-flex items-center gap-1 rounded-md border border-foreground/10 bg-white/60 text-foreground/70 text-[10px] font-medium px-2 py-1 hover:bg-red-50 hover:text-red-600 hover:border-red-200 disabled:opacity-40"
+                      className="inline-flex items-center gap-1 rounded-md border border-foreground/10 bg-white/60 text-foreground/70 text-micro font-medium px-2 py-1 hover:bg-red-50 hover:text-red-600 hover:border-red-200 disabled:opacity-40"
                     >
                       <Archive size={10} />
                       Archive
@@ -441,15 +442,15 @@ function MemoryRow({ memory, expanded, mutating, onToggle, onUpdate, onArchive, 
 
               {supersedeOpen && (
                 <div className="rounded-md border border-blue-200 bg-blue-50/50 p-2 space-y-1.5">
-                  <span className="text-[9px] font-medium text-blue-700 uppercase tracking-wider">
+                  <Text variant="micro" weight="medium" className="text-blue-700 uppercase tracking-wider">
                     Replacement text
-                  </span>
+                  </Text>
                   <textarea
                     value={supersedeDraft}
                     onChange={(e) => setSupersedeDraft(e.target.value)}
                     rows={3}
                     placeholder="New, corrected version of this memory"
-                    className="w-full rounded-md bg-white/80 border border-blue-200 px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-300"
+                    className="w-full rounded-md bg-white/80 border border-blue-200 px-2 py-1 text-caption focus:outline-none focus:ring-1 focus:ring-blue-300"
                   />
                   <div className="flex items-center gap-1.5">
                     <button
@@ -462,13 +463,13 @@ function MemoryRow({ memory, expanded, mutating, onToggle, onUpdate, onArchive, 
                         }
                       }}
                       disabled={!supersedeDraft.trim() || mutating}
-                      className="rounded-md bg-blue-600 text-white text-[10px] font-semibold px-2 py-1 disabled:opacity-40"
+                      className="rounded-md bg-blue-600 text-white text-micro font-semibold px-2 py-1 disabled:opacity-40"
                     >
                       Confirm supersede
                     </button>
                     <button
                       onClick={() => setSupersedeOpen(false)}
-                      className="rounded-md border border-blue-200 bg-white/60 text-blue-700 text-[10px] font-medium px-2 py-1 hover:bg-white"
+                      className="rounded-md border border-blue-200 bg-white/60 text-blue-700 text-micro font-medium px-2 py-1 hover:bg-white"
                     >
                       Cancel
                     </button>
@@ -506,27 +507,27 @@ function CreateMemoryForm({ mutating, onCancel, onSubmit }: CreateMemoryFormProp
   return (
     <div className="rounded-lg border border-foreground/10 bg-white/70 p-2.5 space-y-2">
       <label className="block">
-        <span className="text-[9px] font-medium text-foreground/40 uppercase tracking-wider">Text</span>
+        <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">Text</Text>
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
           rows={3}
           placeholder="A fact or sedimented insight about the user"
-          className="w-full mt-0.5 rounded-md bg-white/80 border border-foreground/10 px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-primary/30"
+          className="w-full mt-0.5 rounded-md bg-white/80 border border-foreground/10 px-2 py-1 text-caption focus:outline-none focus:ring-1 focus:ring-primary/30"
         />
       </label>
       <div className="grid grid-cols-2 gap-2">
         <label className="block">
-          <span className="text-[9px] font-medium text-foreground/40 uppercase tracking-wider">Subject</span>
+          <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">Subject</Text>
           <input
             type="text"
             value={subject}
             onChange={(e) => setSubject(e.target.value)}
-            className="w-full mt-0.5 rounded-md bg-white/80 border border-foreground/10 px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-primary/30"
+            className="w-full mt-0.5 rounded-md bg-white/80 border border-foreground/10 px-2 py-1 text-caption focus:outline-none focus:ring-1 focus:ring-primary/30"
           />
         </label>
         <label className="block">
-          <span className="text-[9px] font-medium text-foreground/40 uppercase tracking-wider">Quality</span>
+          <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">Quality</Text>
           <input
             type="number"
             min={0}
@@ -534,19 +535,19 @@ function CreateMemoryForm({ mutating, onCancel, onSubmit }: CreateMemoryFormProp
             step={0.05}
             value={quality}
             onChange={(e) => setQuality(Number(e.target.value))}
-            className="w-full mt-0.5 rounded-md bg-white/80 border border-foreground/10 px-2 py-1 text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-primary/30"
+            className="w-full mt-0.5 rounded-md bg-white/80 border border-foreground/10 px-2 py-1 text-caption font-mono focus:outline-none focus:ring-1 focus:ring-primary/30"
           />
         </label>
       </div>
       <label className="block">
-        <span className="text-[9px] font-medium text-foreground/40 uppercase tracking-wider">
+        <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">
           Tags (comma-separated)
-        </span>
+        </Text>
         <input
           type="text"
           value={tagsText}
           onChange={(e) => setTagsText(e.target.value)}
-          className="w-full mt-0.5 rounded-md bg-white/80 border border-foreground/10 px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-primary/30"
+          className="w-full mt-0.5 rounded-md bg-white/80 border border-foreground/10 px-2 py-1 text-caption focus:outline-none focus:ring-1 focus:ring-primary/30"
         />
       </label>
       <div className="flex items-center gap-1.5">
@@ -561,7 +562,7 @@ function CreateMemoryForm({ mutating, onCancel, onSubmit }: CreateMemoryFormProp
             })
           }
           disabled={disabled}
-          className="inline-flex items-center gap-1 rounded-md bg-foreground text-background text-[10px] font-semibold px-2 py-1 disabled:opacity-40"
+          className="inline-flex items-center gap-1 rounded-md bg-foreground text-background text-micro font-semibold px-2 py-1 disabled:opacity-40"
         >
           {mutating ? <Loader2 size={10} className="animate-spin" /> : <Save size={10} />}
           Create
@@ -569,7 +570,7 @@ function CreateMemoryForm({ mutating, onCancel, onSubmit }: CreateMemoryFormProp
         <button
           onClick={onCancel}
           disabled={mutating}
-          className="inline-flex items-center gap-1 rounded-md border border-foreground/10 bg-white/60 text-foreground/60 text-[10px] font-medium px-2 py-1 hover:bg-foreground/5 disabled:opacity-40"
+          className="inline-flex items-center gap-1 rounded-md border border-foreground/10 bg-white/60 text-foreground/60 text-micro font-medium px-2 py-1 hover:bg-foreground/5 disabled:opacity-40"
         >
           <X size={10} />
           Cancel

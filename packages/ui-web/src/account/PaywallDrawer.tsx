@@ -10,6 +10,7 @@ import {
 import { PlanPaymentForm, PLANS, type PlanId, type PayMethod, type CardInfo } from "./PlanPaymentForm";
 import { createCheckout } from "@pin-ai/core";
 import type { Intent } from "../now/card-model";
+import { Text } from "../primitives/Text";
 
 interface PaywallDrawerProps {
   /** The locked card that triggered the paywall; null keeps the drawer
@@ -53,13 +54,13 @@ export default function PaywallDrawer({ card, onClose }: PaywallDrawerProps) {
           <div className="px-5 pt-3 pb-24 overflow-y-auto flex-1">
             <div className="text-center mb-3">
               <div className="mx-auto w-11 h-11 rounded-2xl flex items-center justify-center mb-3"
-                style={{ background: "linear-gradient(135deg, hsl(292,78%,63%) 0%, hsl(330,80%,65%) 100%)" }}>
+                style={{ background: "linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(330,80%,65%) 100%)" }}>
                 <LockIcon size={18} strokeWidth={2.5} className="text-white" />
               </div>
-              <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-foreground/50 mb-1.5">
+              <Text variant="micro" weight="bold" className="block uppercase tracking-[0.2em] text-foreground/50 mb-1.5">
                 Subscription required
-              </p>
-              <h3 className="text-display text-[19px] leading-tight text-foreground font-semibold max-w-[20rem] mx-auto">
+              </Text>
+              <h3 className="text-display text-heading leading-tight text-foreground font-semibold max-w-[20rem] mx-auto">
                 Pick a plan to approve “{card?.title}”
               </h3>
             </div>
@@ -77,7 +78,7 @@ export default function PaywallDrawer({ card, onClose }: PaywallDrawerProps) {
           >
             <button
               onClick={onClose}
-              className="px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[13px] font-medium text-foreground/55"
+              className="px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-bodySm font-medium text-foreground/55"
             >
               Not now
             </button>
@@ -105,8 +106,8 @@ export default function PaywallDrawer({ card, onClose }: PaywallDrawerProps) {
                   setPaywallPending(false);
                 }
               }}
-              className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl text-background text-[13px] font-semibold transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ background: "linear-gradient(135deg, hsl(292,78%,63%) 0%, hsl(330,80%,65%) 100%)" }}
+              className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl text-background text-bodySm font-semibold transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ background: "linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(330,80%,65%) 100%)" }}
             >
               {paywallPending
                 ? "Loading…"

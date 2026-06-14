@@ -9,6 +9,7 @@ import ConnectorOnboardingInsight, {
 } from "@/components/connect/ConnectorOnboardingInsight";
 import { useComposio } from "@/hooks/useComposio";
 import { isNative } from "@/lib/platform";
+import { Text } from "@pin-ai/ui-web";
 
 /**
  * First-run onboarding — three-step flow shown the first time a user lands
@@ -45,9 +46,9 @@ function StepHeader({ step, title, subtitle }: StepHeaderProps) {
   return (
     <div className="mb-5">
       <div className="mb-3 flex items-center gap-2">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-foreground/40">
+        <Text variant="caption" weight="semibold" className="uppercase tracking-wider text-foreground/40">
           Step {step} of 3
-        </span>
+        </Text>
         <div className="flex flex-1 items-center gap-1.5">
           <span className="h-1 flex-1 rounded-full bg-foreground/15">
             <span
@@ -60,9 +61,9 @@ function StepHeader({ step, title, subtitle }: StepHeaderProps) {
       <h1 className="text-2xl font-semibold text-foreground tracking-tight">
         {title}
       </h1>
-      <p className="mt-1 text-[13px] leading-relaxed text-foreground/55">
+      <Text variant="bodySm" className="block mt-1 leading-relaxed text-foreground/55">
         {subtitle}
-      </p>
+      </Text>
     </div>
   );
 }
@@ -93,27 +94,27 @@ function InsightWaitPage() {
           <Loader2 size={15} className="animate-spin" />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-foreground/34">
+          <Text variant="micro" weight="semibold" className="block mb-1 uppercase tracking-[0.16em] text-foreground/34">
             Connector preview
-          </p>
-          <h1 className="max-w-[18rem] text-[24px] font-semibold leading-[1.08] tracking-tight text-foreground">
+          </Text>
+          <h1 className="max-w-[18rem] text-title font-semibold leading-[1.08] tracking-tight text-foreground">
             PIN AI is getting to know your work context
           </h1>
-          <p className="mt-3 max-w-sm text-[13px] leading-5 text-foreground/55">
+          <Text variant="bodySm" className="block mt-3 max-w-sm leading-5 text-foreground/55">
             We are turning your first connector pull into a concise profile preview.
-          </p>
+          </Text>
         </div>
       </div>
 
       <div className="min-h-0 flex-1 px-5 pb-5 sm:px-6">
         <div className="rounded-[24px] border border-foreground/[0.07] bg-white/45 p-4">
           <div className="flex items-center justify-between gap-3">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground/42">
+            <Text variant="caption" weight="semibold" className="uppercase tracking-[0.12em] text-foreground/42">
               First data pull
-            </span>
-            <span className="rounded-full bg-foreground/[0.055] px-2.5 py-1 text-[10px] font-medium leading-none text-foreground/45">
+            </Text>
+            <Text variant="micro" weight="medium" className="rounded-full bg-foreground/[0.055] px-2.5 py-1 leading-none text-foreground/45">
               Live
-            </span>
+            </Text>
           </div>
 
           <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-foreground/[0.06]">
@@ -132,12 +133,12 @@ function InsightWaitPage() {
                     <Icon size={15} strokeWidth={1.8} />
                   </span>
                   <span className="min-w-0">
-                    <span className="block text-[13px] font-semibold leading-5 text-foreground/76">
+                    <Text variant="bodySm" weight="semibold" className="block leading-5 text-foreground/76">
                       {step.label}
-                    </span>
-                    <span className="mt-0.5 block text-[11.5px] leading-4 text-foreground/45">
+                    </Text>
+                    <Text variant="label" className="mt-0.5 block leading-4 text-foreground/45">
                       {step.detail}
-                    </span>
+                    </Text>
                   </span>
                   <span className="mt-1 flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500/[0.10] text-emerald-600">
                     <Loader2 size={11} className="animate-spin" />
@@ -149,7 +150,7 @@ function InsightWaitPage() {
         </div>
       </div>
 
-      <div className="flex flex-shrink-0 gap-2.5 border-t border-foreground/[0.06] px-5 py-4 text-[11.5px] leading-4 text-foreground/48 sm:px-6">
+      <div className="flex flex-shrink-0 gap-2.5 border-t border-foreground/[0.06] px-5 py-4 text-caption leading-4 text-foreground/48 sm:px-6">
         <CheckCircle2 size={14} className="mt-0.5 flex-shrink-0 text-foreground/45" />
         <div>
           You will review this preview before entering PIN AI. The result page replaces this state as soon as it is ready.
@@ -306,7 +307,7 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
                 {isNative ? (
                   <AmbientModelSetupStep />
                 ) : (
-                  <section className="glass-card-strong p-4 text-[13px] leading-relaxed text-foreground/55">
+                  <section className="glass-card-strong p-4 text-bodySm leading-relaxed text-foreground/55">
                     Gemma 2B setup is available in the native app. Continue here and finish setup later from Ambient on your phone.
                   </section>
                 )}
@@ -318,9 +319,9 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
         {!showInsightPage && !showWaitingPage && (
           <div className="flex-shrink-0 pb-[max(env(safe-area-inset-bottom,0px),var(--safe-bottom,12px),1.5rem)] pt-3">
             {error && (
-              <p className="mb-2 text-right text-[12px] leading-snug text-red-500">
+              <Text variant="label" className="block mb-2 text-right leading-snug text-red-500">
                 {error}
-              </p>
+              </Text>
             )}
             <div className="flex items-center justify-end gap-2">
               {step < 3 ? (
@@ -328,14 +329,14 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
                   <button
                     type="button"
                     onClick={() => setStep((step + 1) as Step)}
-                    className="min-h-11 rounded-full px-4 text-[13px] font-medium text-foreground/55 transition-colors hover:bg-foreground/[0.06]"
+                    className="min-h-11 rounded-full px-4 text-bodySm font-medium text-foreground/55 transition-colors hover:bg-foreground/[0.06]"
                   >
                     Skip
                   </button>
                   <button
                     type="button"
                     onClick={() => setStep((step + 1) as Step)}
-                    className="inline-flex min-h-11 items-center gap-1.5 rounded-full bg-foreground px-5 text-[13px] font-semibold text-background transition-opacity hover:opacity-90"
+                    className="inline-flex min-h-11 items-center gap-1.5 rounded-full bg-foreground px-5 text-bodySm font-semibold text-background transition-opacity hover:opacity-90"
                   >
                     Next
                     <ChevronRight size={15} strokeWidth={2} />
@@ -347,7 +348,7 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
                     type="button"
                     onClick={() => setStep(2)}
                     disabled={finishing}
-                    className="min-h-11 rounded-full px-4 text-[13px] font-medium text-foreground/55 transition-colors hover:bg-foreground/[0.06] disabled:opacity-40"
+                    className="min-h-11 rounded-full px-4 text-bodySm font-medium text-foreground/55 transition-colors hover:bg-foreground/[0.06] disabled:opacity-40"
                   >
                     Back
                   </button>
@@ -355,7 +356,7 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
                     type="button"
                     onClick={finishOrShowInsight}
                     disabled={finishing}
-                    className="inline-flex min-h-11 items-center gap-1.5 rounded-full bg-foreground px-5 text-[13px] font-semibold text-background transition-opacity hover:opacity-90 disabled:opacity-50"
+                    className="inline-flex min-h-11 items-center gap-1.5 rounded-full bg-foreground px-5 text-bodySm font-semibold text-background transition-opacity hover:opacity-90 disabled:opacity-50"
                   >
                     {finishing ? (
                       <Loader2 size={14} className="animate-spin" />

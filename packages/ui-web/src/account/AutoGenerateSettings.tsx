@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
 import { useUserSettings } from "@pin-ai/state";
+import { Text } from "../primitives/Text";
 
 // Preset interval buckets surfaced in the UI. Server enforces 15–1440min
 // via Pydantic / DB CHECK; the bucket list here is purely UX.
@@ -70,23 +71,23 @@ export default function AutoGenerateSettings() {
           }`} />
         </button>
       </div>
-      <p className="text-[11px] text-foreground/40 mt-1">
+      <Text variant="caption" className="block text-foreground/40 mt-1">
         Automatically generate cards based on new data from your connected sources.
-      </p>
+      </Text>
       <div className="mt-2 flex items-center gap-2">
-        <label className="text-[11px] text-foreground/60">Every</label>
+        <label className="text-caption text-foreground/60">Every</label>
         <select
           value={intervalMinutes}
           disabled={loading || saving || !enabled}
           onChange={(e) => void handleIntervalChange(e)}
-          className="text-[11px] bg-background border border-foreground/15 rounded px-2 py-1 disabled:opacity-40"
+          className="text-caption bg-background border border-foreground/15 rounded px-2 py-1 disabled:opacity-40"
         >
           {PRESETS_MINUTES.map((m) => (
             <option key={m} value={m}>{formatPreset(m)}</option>
           ))}
         </select>
       </div>
-      {error && <p className="text-[11px] text-red-500 mt-1">{error}</p>}
+      {error && <Text variant="caption" className="block text-red-500 mt-1">{error}</Text>}
     </div>
   );
 }

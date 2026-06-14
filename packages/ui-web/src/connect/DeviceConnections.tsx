@@ -69,7 +69,7 @@ export default function DeviceConnections() {
       <div className="flex justify-end pt-1">
         <button
           onClick={() => void refresh()}
-          className="text-[10px] text-foreground/40 hover:text-foreground/70 transition"
+          className="text-micro text-foreground/40 hover:text-foreground/70 transition"
         >
           Refresh
         </button>
@@ -108,7 +108,7 @@ function DeviceRow({
         <div className="text-sm font-medium truncate">
           {device.display_name ?? device.device_id}
         </div>
-        <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] text-foreground/40">
+        <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-micro text-foreground/40">
           <span className={`rounded-sm px-1.5 py-0.5 font-medium ${platform.badgeClass}`}>
             {platform.label}
           </span>

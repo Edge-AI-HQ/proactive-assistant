@@ -61,6 +61,7 @@ import {
   type Intent,
   type CardStatus,
 } from "@/components/now/card-model";
+import { Text } from "@pin-ai/ui-web";
 
 
 const CONSTELLATION_HEADER_TOP =
@@ -908,9 +909,9 @@ export default function AppLayout() {
             >
               <ChevronUp size={18} strokeWidth={2} className="text-foreground/60 group-hover:text-foreground transition-colors" />
             </motion.div>
-            <span className="text-[10px] tracking-[0.18em] uppercase text-foreground/60 group-hover:text-foreground transition-colors font-semibold">
+            <Text variant="micro" weight="semibold" className="tracking-[0.18em] uppercase text-foreground/60 group-hover:text-foreground transition-colors">
               Ask PIN AI
-            </span>
+            </Text>
           </button>
         )}
 

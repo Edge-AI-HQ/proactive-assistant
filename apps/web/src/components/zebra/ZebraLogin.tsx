@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
-import { useAuth } from "@pin-ai/ui-web";
+import { useAuth, Text } from "@pin-ai/ui-web";
 import ZebraBackdrop from "./ZebraBackdrop";
 
 const EASE = [0.32, 0.72, 0, 1] as const;
@@ -51,14 +51,14 @@ export default function ZebraLogin() {
             {signingIn ? (
               <>
                 <Loader2 size={18} className="animate-spin text-background/70" />
-                <span className="text-[14.5px] font-medium text-background/80">Signing in…</span>
+                <Text variant="body" weight="medium" className="text-background/80">Signing in…</Text>
               </>
             ) : (
               <>
                 <span className="w-[18px] h-[18px] shrink-0">
                   <GoogleG />
                 </span>
-                <span className="text-[14.5px] font-medium">Continue with Google</span>
+                <Text variant="body" weight="medium" className="">Continue with Google</Text>
               </>
             )}
           </button>
@@ -68,7 +68,7 @@ export default function ZebraLogin() {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 0.6, delay: 0.35, ease: EASE }}
-          className="mt-7 text-[11.5px] text-foreground/40 text-center leading-relaxed"
+          className="mt-7 text-caption text-foreground/40 text-center leading-relaxed"
         >
           By continuing, you agree to PIN AI's{" "}
           <a

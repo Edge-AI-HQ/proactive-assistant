@@ -16,6 +16,7 @@ import MarkdownContent from "./MarkdownContent";
 import { resolveToolPresentation } from "./tool-presentation";
 import { toolStatus, type ToolCallPart } from "@pin-ai/core";
 import type { ToolResultLink } from "@pin-ai/core";
+import { Text } from "../../primitives/Text";
 
 function faviconUrl(url: string): string | null {
   try {
@@ -68,12 +69,12 @@ function LinksList({ links }: { links: ToolResultLink[] }) {
             ) : (
               <span className="h-3.5 w-3.5 rounded-sm bg-foreground/10 shrink-0" />
             )}
-            <span className="min-w-0 flex-1 truncate text-[12px] text-foreground/80">
+            <span className="min-w-0 flex-1 truncate text-label text-foreground/80">
               {link.title}
             </span>
-            <span className="shrink-0 text-[10.5px] text-foreground/40">
+            <Text variant="caption" className="shrink-0 text-foreground/40">
               {domainOf(link.url)}
-            </span>
+            </Text>
           </a>
         );
       })}
@@ -117,7 +118,7 @@ export function ToolNodeRow({
         <span
           className={cn(
             "shrink-0 font-medium text-foreground/80",
-            compact ? "text-[11.5px]" : "text-[12.5px]",
+            compact ? "text-caption" : "text-label",
           )}
         >
           {verb}
@@ -125,15 +126,15 @@ export function ToolNodeRow({
         <span
           className={cn(
             "min-w-0 flex-1 truncate text-foreground/40",
-            compact ? "text-[11px]" : "text-[11.5px]",
+            compact ? "text-caption" : "text-caption",
           )}
         >
           {typeof argsPreview === "string" ? argsPreview : ""}
         </span>
         {part.links && (
-          <span className="shrink-0 text-[10.5px] text-foreground/45">
+          <Text variant="caption" className="shrink-0 text-foreground/45">
             {part.links.length} results
-          </span>
+          </Text>
         )}
         {canExpand && (
           <ChevronDown
@@ -152,7 +153,7 @@ export function ToolNodeRow({
             <LinksList links={part.links} />
           ) : (
             target && (
-              <div className="mt-1 rounded-lg bg-foreground/[0.03] px-2.5 py-2 text-[12px]">
+              <div className="mt-1 rounded-lg bg-foreground/[0.03] px-2.5 py-2 text-label">
                 <MarkdownContent text={String(target)} />
               </div>
             )
@@ -185,7 +186,7 @@ export function ThinkingNode({
     return (
       <div className="flex items-start gap-2 py-1">
         <Clock size={11} strokeWidth={2} className="mt-0.5 shrink-0 text-foreground/35" />
-        <p className="min-w-0 flex-1 text-[11.5px] italic leading-snug text-foreground/45 line-clamp-2 animate-pulse">
+        <p className="min-w-0 flex-1 text-caption italic leading-snug text-foreground/45 line-clamp-2 animate-pulse">
           {tail}
         </p>
       </div>
@@ -200,7 +201,7 @@ export function ThinkingNode({
         className="w-full flex items-center gap-2 py-1 text-left cursor-pointer hover:bg-foreground/[0.02] rounded-md"
       >
         <Clock size={11} strokeWidth={2} className="shrink-0 text-foreground/35" />
-        <span className="min-w-0 flex-1 truncate text-[11.5px] italic text-foreground/45">
+        <span className="min-w-0 flex-1 truncate text-caption italic text-foreground/45">
           {firstLine(text) || "Thought"}
         </span>
         <ChevronDown
@@ -213,9 +214,9 @@ export function ThinkingNode({
         />
       </button>
       {expanded && (
-        <div className="pl-5 pb-1.5 text-[11.5px] italic leading-relaxed text-foreground/50 whitespace-pre-wrap">
+        <Text variant="label" className="block pl-5 pb-1.5 italic leading-relaxed text-foreground/50 whitespace-pre-wrap">
           {text}
-        </div>
+        </Text>
       )}
     </div>
   );

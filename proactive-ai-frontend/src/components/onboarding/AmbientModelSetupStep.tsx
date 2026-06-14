@@ -12,6 +12,7 @@ import {
   RECOMMENDED_AMBIENT_LLM_MODEL_ID,
 } from "@/services/ambient/models-recommendation";
 import { setSelectedAmbientSummaryModelId } from "@/services/ambient/models-selection";
+import { Text } from "@pin-ai/ui-web";
 
 interface AmbientModelSetupStepProps {
   compact?: boolean;
@@ -148,27 +149,27 @@ export default function AmbientModelSetupStep({ compact = false }: AmbientModelS
     <section className={`glass-card-strong ${compact ? "p-3" : "p-4"}`}>
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground/40">Recommended</p>
+          <Text variant="caption" weight="semibold" className="block uppercase tracking-wider text-foreground/40">Recommended</Text>
           <h2 className="mt-1 text-lg font-semibold text-foreground">{RECOMMENDED_AMBIENT_LLM_LABEL}</h2>
-          <p className="mt-1 text-[12px] leading-relaxed text-foreground/55">
+          <Text variant="label" className="block mt-1 leading-relaxed text-foreground/55">
             Download Gemma 2B to turn your motion, location, voice, health, and sound signals into private local summaries.
-          </p>
+          </Text>
         </div>
         {verified ? <CheckCircle2 size={20} className="mt-1 text-emerald-600" /> : null}
       </div>
 
       <div className="mt-3 rounded-xl border border-foreground/10 bg-white/50 p-3">
-        <p className="text-[12px] font-medium text-foreground/75">{recommended.displayName}</p>
-        <p className="mt-0.5 text-[10px] text-foreground/45">
+        <Text variant="label" weight="medium" className="block text-foreground/75">{recommended.displayName}</Text>
+        <Text variant="micro" className="block mt-0.5 text-foreground/45">
           {formatBytes(recommended.approxBytes)} · {recommended.repo}
-        </p>
+        </Text>
         {recommended.notes ? (
-          <p className="mt-1 text-[10px] leading-snug text-foreground/45">{recommended.notes}</p>
+          <Text variant="micro" className="block mt-1 leading-snug text-foreground/45">{recommended.notes}</Text>
         ) : null}
         {downloading && status ? (
-          <p className="mt-2 text-[10px] tabular-nums text-foreground/50">
+          <Text variant="micro" className="block mt-2 tabular-nums text-foreground/50">
             Downloading {formatPercent(status.bytesWritten, status.bytesTotal || recommended.approxBytes)}
-          </p>
+          </Text>
         ) : null}
       </div>
 
@@ -177,16 +178,16 @@ export default function AmbientModelSetupStep({ compact = false }: AmbientModelS
           type="button"
           onClick={present ? verifyAndSelect : handleDownload}
           disabled={busy || downloading}
-          className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-full bg-foreground px-4 text-[13px] font-semibold text-background transition-opacity hover:opacity-90 disabled:opacity-50"
+          className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-full bg-foreground px-4 text-bodySm font-semibold text-background transition-opacity hover:opacity-90 disabled:opacity-50"
         >
           {busy ? <Loader2 size={14} className="animate-spin" /> : null}
           {present ? "Use Gemma 2B" : "Download Gemma 2B"}
         </button>
       </div>
-      <p className="mt-2 text-[10px] leading-snug text-foreground/45">
+      <Text variant="micro" className="block mt-2 leading-snug text-foreground/45">
         You can skip this and download later from Ambient. Without an on-device LLM, Ambient can collect events but cannot create local summary cards.
-      </p>
-      {error ? <p className="mt-2 text-[11px] text-red-500">{error}</p> : null}
+      </Text>
+      {error ? <Text variant="caption" className="block mt-2 text-red-500">{error}</Text> : null}
     </section>
   );
 }

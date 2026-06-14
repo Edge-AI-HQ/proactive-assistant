@@ -15,6 +15,7 @@ import { useEffect, useState } from "react";
 import { Loader2, CheckCircle2, XCircle, ChevronDown } from "lucide-react";
 import { useActiveAgentRuns } from "@pin-ai/state";
 import type { ActiveAgentRun, AgentRunKind, AgentRunStatus } from "@pin-ai/core";
+import { Text } from "@pin-ai/ui-web";
 
 const KIND_LABEL: Record<AgentRunKind, string> = {
   "auto.dreaming": "Dreaming",
@@ -89,7 +90,7 @@ export default function AgentRunIndicator() {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1.5 rounded-full glass-card-strong px-3 py-1.5 text-[11px] font-medium text-foreground/70 transition-colors hover:bg-white/85"
+        className="flex items-center gap-1.5 rounded-full glass-card-strong px-3 py-1.5 text-caption font-medium text-foreground/70 transition-colors hover:bg-white/85"
         aria-label="Active agent runs"
       >
         {statusIcon(primary.status)}
@@ -104,17 +105,17 @@ export default function AgentRunIndicator() {
           />
         )}
         {inflightCount > 0 && runs.length > 1 && (
-          <span className="rounded-full bg-foreground/10 px-1.5 text-[10px] tabular-nums">
+          <Text variant="micro" className="rounded-full bg-foreground/10 px-1.5 tabular-nums">
             {inflightCount}
-          </span>
+          </Text>
         )}
       </button>
 
       {open && runs.length > 0 && (
         <div className="absolute right-0 top-[calc(100%+6px)] z-40 w-72 rounded-2xl glass-card-strong p-2 shadow-lg">
-          <div className="px-2 py-1.5 text-[10px] font-medium uppercase tracking-wide text-foreground/45">
+          <Text variant="micro" weight="medium" className="block px-2 py-1.5 uppercase tracking-wide text-foreground/45">
             Agent runs
-          </div>
+          </Text>
           <div className="space-y-1">
             {runs.map((r) => (
               <RunRow key={r.id} run={r} now={now} />
@@ -140,10 +141,10 @@ function RunRow({ run, now }: { run: ActiveAgentRun; now: number }) {
     >
       <div className="shrink-0">{statusIcon(run.status)}</div>
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[12px] font-medium text-foreground/80">
+        <Text variant="label" weight="medium" className="block truncate text-foreground/80">
           {labelFor(run.kind)}
-        </div>
-        <div className="truncate text-[10px] text-foreground/45">
+        </Text>
+        <div className="truncate text-micro text-foreground/45">
           {isFinal ? run.status : elapsed(run, now)}
           {run.lastError ? ` · ${run.lastError.slice(0, 80)}` : ""}
         </div>

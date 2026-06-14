@@ -21,7 +21,7 @@ import {
   useCardActions,
   useWeather,
   type CardStatus,
-  type Intent,
+  type Intent, Text,
 } from "@pin-ai/ui-web";
 import ZebraBackdrop from "./ZebraBackdrop";
 import ZebraNow from "./ZebraNow";
@@ -362,10 +362,10 @@ export default function ZebraShell() {
         <div className={`flex items-center pt-6 pb-5 ${sidebarCollapsed ? "flex-col gap-3" : "gap-2.5 px-5"}`}>
           <span
             className="w-2.5 h-2.5 rounded-full shrink-0"
-            style={{ background: "linear-gradient(135deg, hsl(292 78% 63%) 0%, hsl(330 80% 65%) 100%)" }}
+            style={{ background: "linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(330 80% 65%) 100%)" }}
           />
           {!sidebarCollapsed && (
-            <span className="text-[13px] font-bold tracking-[0.22em] text-foreground/80 flex-1 whitespace-nowrap">
+            <span className="text-bodySm font-bold tracking-[0.22em] text-foreground/80 flex-1 whitespace-nowrap">
               PIN AI
             </span>
           )}
@@ -410,12 +410,12 @@ export default function ZebraShell() {
                   </span>
                 )}
                 {item.id === "tasks" && runningCount > 0 && !sidebarCollapsed && (
-                  <span className="ml-auto min-w-[18px] h-[18px] px-1 rounded-full bg-amber-500/90 text-white text-[10px] font-bold flex items-center justify-center tabular-nums">
+                  <span className="ml-auto min-w-[18px] h-[18px] px-1 rounded-full bg-amber-500/90 text-white text-micro font-bold flex items-center justify-center tabular-nums">
                     {runningCount}
                   </span>
                 )}
                 {item.id === "tasks" && runningCount > 0 && sidebarCollapsed && (
-                  <span className="absolute top-1 right-1 min-w-[15px] h-[15px] px-0.5 rounded-full bg-amber-500/90 text-white text-[9px] font-bold flex items-center justify-center tabular-nums ring-2 ring-white/80">
+                  <span className="absolute top-1 right-1 min-w-[15px] h-[15px] px-0.5 rounded-full bg-amber-500/90 text-white text-micro font-bold flex items-center justify-center tabular-nums ring-2 ring-white/80">
                     {runningCount}
                   </span>
                 )}
@@ -438,7 +438,7 @@ export default function ZebraShell() {
         >
           <Bug size={17} strokeWidth={1.6} className="shrink-0" />
           {!sidebarCollapsed && (
-            <span className="text-[13px] font-medium tracking-wide">Debug</span>
+            <Text variant="bodySm" weight="medium" className="tracking-wide">Debug</Text>
           )}
         </button>
 
@@ -451,15 +451,15 @@ export default function ZebraShell() {
           }`}
         >
           <div
-            className="w-8 h-8 rounded-xl text-white text-[13px] font-semibold flex items-center justify-center shrink-0"
-            style={{ background: "linear-gradient(135deg, hsl(292 78% 63%) 0%, hsl(330 80% 65%) 100%)" }}
+            className="w-8 h-8 rounded-xl text-white text-bodySm font-semibold flex items-center justify-center shrink-0"
+            style={{ background: "linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(330 80% 65%) 100%)" }}
           >
             {avatarLetter}
           </div>
           {!sidebarCollapsed && (
             <div className="flex-1 min-w-0">
-              <p className="text-[13px] font-semibold text-foreground leading-tight truncate">{displayName}</p>
-              <p className="text-[10px] text-foreground/45 leading-tight truncate">{user?.email}</p>
+              <Text variant="bodySm" weight="semibold" className="block text-foreground leading-tight truncate">{displayName}</Text>
+              <Text variant="micro" className="block text-foreground/45 leading-tight truncate">{user?.email}</Text>
             </div>
           )}
         </div>

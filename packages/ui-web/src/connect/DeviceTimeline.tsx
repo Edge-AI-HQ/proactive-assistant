@@ -7,6 +7,7 @@ import {
   getDeviceTimelineDateRange,
   type DeviceTimelineDayFilter,
 } from "@pin-ai/core";
+import { Text } from "../primitives/Text";
 
 const PAGE_SIZE = 10;
 
@@ -116,7 +117,7 @@ export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) 
           <div className="text-sm font-semibold truncate">
             {device.display_name ?? device.device_id}
           </div>
-          <div className="text-[10px] text-foreground/40 truncate">
+          <div className="text-micro text-foreground/40 truncate">
             {device.platform}
             {device.model ? ` · ${device.model}` : ""}
             {items.length > 0 ? ` · ${items.length}${hasMore ? "+" : ""} loaded` : ""}
@@ -130,7 +131,7 @@ export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) 
             <button
               key={option.value}
               onClick={() => setDayFilter(option.value)}
-              className={`min-h-8 rounded-full border px-3 text-[11px] transition ${
+              className={`min-h-8 rounded-full border px-3 text-caption transition ${
                 dayFilter === option.value
                   ? "border-foreground/80 bg-foreground/85 text-background"
                   : "border-foreground/10 text-foreground/55 hover:border-foreground/25 hover:text-foreground"
@@ -151,7 +152,7 @@ export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) 
             }}
             className="min-h-8 min-w-0 rounded-lg border border-transparent bg-transparent px-2 text-xs text-foreground/70 outline-none transition hover:bg-background/60 focus:border-foreground/20 focus:bg-background/80"
           />
-          <div className="min-w-[72px] shrink-0 text-right text-[10px] leading-tight text-foreground/40">
+          <div className="min-w-[72px] shrink-0 text-right text-micro leading-tight text-foreground/40">
             <div>{dateRange.label}</div>
             <div>{items.length} shown</div>
           </div>
@@ -193,7 +194,7 @@ export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) 
             Load 10 more
           </button>
         ) : items.length > 0 ? (
-          <div className="text-[10px] text-foreground/30">— end —</div>
+          <Text variant="micro" className="block text-foreground/30">— end —</Text>
         ) : null}
       </div>
     </div>
@@ -237,15 +238,15 @@ function SignalRow({ signal }: { signal: PersonalSignal }) {
   return (
     <li className="glass-card p-3 space-y-1.5">
       <div className="flex items-baseline gap-2">
-        <span className="text-[10px] text-foreground/40 tabular-nums shrink-0">{occurred}</span>
-        <span className="text-[10px] text-foreground/60 px-1.5 py-0.5 rounded bg-foreground/5 shrink-0">
+        <Text variant="micro" className="text-foreground/40 tabular-nums shrink-0">{occurred}</Text>
+        <Text variant="micro" className="text-foreground/60 px-1.5 py-0.5 rounded bg-foreground/5 shrink-0">
           {signal.kind}
-        </span>
+        </Text>
         <span className="text-xs font-medium truncate">{signal.title}</span>
       </div>
 
       {signal.summary && (
-        <p className="text-[11px] text-foreground/60 leading-relaxed">{signal.summary}</p>
+        <Text variant="caption" className="block text-foreground/60 leading-relaxed">{signal.summary}</Text>
       )}
 
       {mediaKind === "image" && mediaUrl && (
@@ -280,7 +281,7 @@ function SignalRow({ signal }: { signal: PersonalSignal }) {
           href={mediaUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-[11px] text-primary underline break-all"
+          className="text-caption text-primary underline break-all"
         >
           Download {filePath?.split("/").pop()}
         </a>
@@ -301,8 +302,8 @@ function HealthRow({ obs }: { obs: DeviceHealthObservation }) {
   return (
     <li className="glass-card p-3 space-y-1.5">
       <div className="flex items-baseline gap-2">
-        <span className="text-[10px] text-foreground/40 tabular-nums shrink-0">{occurred}</span>
-        <span className="text-[10px] text-foreground/60 px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-700 shrink-0 flex items-center gap-1">
+        <Text variant="micro" className="text-foreground/40 tabular-nums shrink-0">{occurred}</Text>
+        <span className="text-micro text-foreground/60 px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-700 shrink-0 flex items-center gap-1">
           <Activity size={10} strokeWidth={1.75} /> health.{metric}
         </span>
         <span className="text-xs font-medium tabular-nums">
@@ -310,7 +311,7 @@ function HealthRow({ obs }: { obs: DeviceHealthObservation }) {
           {obs.unit ? <span className="text-foreground/40"> {obs.unit}</span> : null}
         </span>
       </div>
-      <div className="text-[10px] text-foreground/40 leading-snug flex flex-wrap gap-x-3">
+      <div className="text-micro text-foreground/40 leading-snug flex flex-wrap gap-x-3">
         <span>{obs.observation_type}</span>
         {obs.source_app ? <span>{obs.source_app}</span> : null}
         {obs.local_date ? <span>{obs.local_date}</span> : null}

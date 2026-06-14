@@ -24,6 +24,7 @@ import {
 import { useSkills } from "@pin-ai/state";
 import { fetchSkill, type Skill, type SkillStatus } from "@pin-ai/core";
 import { cn } from "../lib/utils";
+import { Text } from "../primitives/Text";
 
 interface SkillsPanelProps {
   enabled: boolean;
@@ -98,7 +99,7 @@ export default function SkillsPanel({ enabled }: SkillsPanelProps) {
           </button>
           <button
             onClick={() => setCreating((v) => !v)}
-            className="inline-flex items-center gap-1 rounded-md bg-foreground text-background text-[10px] font-semibold px-2 py-1 hover:bg-foreground/85"
+            className="inline-flex items-center gap-1 rounded-md bg-foreground text-background text-micro font-semibold px-2 py-1 hover:bg-foreground/85"
           >
             <Plus size={10} strokeWidth={2} />
             New
@@ -113,7 +114,7 @@ export default function SkillsPanel({ enabled }: SkillsPanelProps) {
             key={tab.key}
             onClick={() => setStatus(tab.key)}
             className={cn(
-              "rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors",
+              "rounded-md px-2 py-0.5 text-micro font-medium transition-colors",
               status === tab.key
                 ? "bg-foreground text-background"
                 : "bg-foreground/5 text-foreground/50 hover:bg-foreground/10",
@@ -130,7 +131,7 @@ export default function SkillsPanel({ enabled }: SkillsPanelProps) {
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Search title / description / trigger"
-        className="w-full rounded-md bg-white/60 border border-foreground/10 px-2 py-1 text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-primary/30 mb-2"
+        className="w-full rounded-md bg-white/60 border border-foreground/10 px-2 py-1 text-caption text-foreground focus:outline-none focus:ring-1 focus:ring-primary/30 mb-2"
       />
 
       {/* Create form */}
@@ -158,7 +159,7 @@ export default function SkillsPanel({ enabled }: SkillsPanelProps) {
       {/* List */}
       <div className="space-y-1">
         {skills.length === 0 && !loading && (
-          <div className="text-[10px] text-foreground/40 py-3 text-center">
+          <div className="text-micro text-foreground/40 py-3 text-center">
             No {status} skills.
           </div>
         )}
@@ -175,7 +176,7 @@ export default function SkillsPanel({ enabled }: SkillsPanelProps) {
         ))}
       </div>
 
-      {error && <p className="mt-2 text-[10px] text-red-500 leading-snug">{error}</p>}
+      {error && <Text variant="micro" className="block mt-2 text-red-500 leading-snug">{error}</Text>}
     </div>
   );
 }
@@ -248,19 +249,19 @@ function SkillRow({ skill, expanded, mutating, onToggle, onUpdate, onArchive }: 
       >
         <span
           className={cn(
-            "shrink-0 rounded-md border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide",
+            "shrink-0 rounded-md border px-1.5 py-0.5 text-micro font-semibold uppercase tracking-wide",
             STATUS_STYLES[skill.status],
           )}
         >
           {skill.status}
         </span>
         <div className="flex-1 min-w-0">
-          <div className="text-[11px] font-medium text-foreground truncate">{skill.title}</div>
+          <Text variant="caption" weight="medium" className="block text-foreground truncate">{skill.title}</Text>
           {skill.description && (
-            <div className="text-[10px] text-foreground/50 truncate">{skill.description}</div>
+            <Text variant="micro" className="block text-foreground/50 truncate">{skill.description}</Text>
           )}
         </div>
-        <div className="shrink-0 text-[9px] text-foreground/40 tabular-nums">
+        <div className="shrink-0 text-micro text-foreground/40 tabular-nums">
           r{skill.revision} · {relativeTime(skill.updated_at)}
         </div>
         <ChevronDown
@@ -281,50 +282,50 @@ function SkillRow({ skill, expanded, mutating, onToggle, onUpdate, onArchive }: 
           >
             <div className="p-2.5 space-y-2">
               <label className="block">
-                <span className="text-[9px] font-medium text-foreground/40 uppercase tracking-wider">Title</span>
+                <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">Title</Text>
                 <input
                   type="text"
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  className="w-full mt-0.5 rounded-md bg-white/60 border border-foreground/10 px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-primary/30"
+                  className="w-full mt-0.5 rounded-md bg-white/60 border border-foreground/10 px-2 py-1 text-caption focus:outline-none focus:ring-1 focus:ring-primary/30"
                 />
               </label>
 
               <label className="block">
-                <span className="text-[9px] font-medium text-foreground/40 uppercase tracking-wider">Description</span>
+                <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">Description</Text>
                 <input
                   type="text"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder="optional"
-                  className="w-full mt-0.5 rounded-md bg-white/60 border border-foreground/10 px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-primary/30"
+                  className="w-full mt-0.5 rounded-md bg-white/60 border border-foreground/10 px-2 py-1 text-caption focus:outline-none focus:ring-1 focus:ring-primary/30"
                 />
               </label>
 
               <label className="block">
-                <span className="text-[9px] font-medium text-foreground/40 uppercase tracking-wider">
+                <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">
                   Triggers (one per line)
-                </span>
+                </Text>
                 <textarea
                   value={triggersText}
                   onChange={(e) => setTriggersText(e.target.value)}
                   rows={3}
-                  className="w-full mt-0.5 rounded-md bg-white/60 border border-foreground/10 px-2 py-1 text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-primary/30"
+                  className="w-full mt-0.5 rounded-md bg-white/60 border border-foreground/10 px-2 py-1 text-caption font-mono focus:outline-none focus:ring-1 focus:ring-primary/30"
                 />
               </label>
 
               <label className="block">
-                <span className="text-[9px] font-medium text-foreground/40 uppercase tracking-wider">
+                <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">
                   Body (SKILL.md)
-                </span>
+                </Text>
                 {loadingBody && body === null ? (
-                  <div className="text-[10px] text-foreground/40 py-2">Loading body…</div>
+                  <Text variant="micro" className="block text-foreground/40 py-2">Loading body…</Text>
                 ) : (
                   <textarea
                     value={body ?? ""}
                     onChange={(e) => setBody(e.target.value)}
                     rows={8}
-                    className="w-full mt-0.5 rounded-md bg-white/60 border border-foreground/10 px-2 py-1 text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-primary/30"
+                    className="w-full mt-0.5 rounded-md bg-white/60 border border-foreground/10 px-2 py-1 text-caption font-mono focus:outline-none focus:ring-1 focus:ring-primary/30"
                   />
                 )}
               </label>
@@ -333,7 +334,7 @@ function SkillRow({ skill, expanded, mutating, onToggle, onUpdate, onArchive }: 
                 <button
                   onClick={() => void save()}
                   disabled={!dirty || mutating}
-                  className="inline-flex items-center gap-1 rounded-md bg-foreground text-background text-[10px] font-semibold px-2 py-1 disabled:opacity-40"
+                  className="inline-flex items-center gap-1 rounded-md bg-foreground text-background text-micro font-semibold px-2 py-1 disabled:opacity-40"
                 >
                   {mutating ? <Loader2 size={10} className="animate-spin" /> : <Save size={10} />}
                   Save
@@ -342,7 +343,7 @@ function SkillRow({ skill, expanded, mutating, onToggle, onUpdate, onArchive }: 
                   <button
                     onClick={() => void toggleStatus()}
                     disabled={mutating}
-                    className="rounded-md border border-foreground/10 bg-white/60 text-foreground/70 text-[10px] font-medium px-2 py-1 hover:bg-foreground/5 disabled:opacity-40"
+                    className="rounded-md border border-foreground/10 bg-white/60 text-foreground/70 text-micro font-medium px-2 py-1 hover:bg-foreground/5 disabled:opacity-40"
                   >
                     {skill.status === "enabled" ? "Disable" : "Enable"}
                   </button>
@@ -351,7 +352,7 @@ function SkillRow({ skill, expanded, mutating, onToggle, onUpdate, onArchive }: 
                   <button
                     onClick={() => void onArchive()}
                     disabled={mutating}
-                    className="inline-flex items-center gap-1 rounded-md border border-foreground/10 bg-white/60 text-foreground/70 text-[10px] font-medium px-2 py-1 hover:bg-red-50 hover:text-red-600 hover:border-red-200 disabled:opacity-40"
+                    className="inline-flex items-center gap-1 rounded-md border border-foreground/10 bg-white/60 text-foreground/70 text-micro font-medium px-2 py-1 hover:bg-red-50 hover:text-red-600 hover:border-red-200 disabled:opacity-40"
                   >
                     <Archive size={10} />
                     Archive
@@ -383,42 +384,42 @@ function CreateSkillForm({ mutating, onCancel, onSubmit }: CreateSkillFormProps)
   return (
     <div className="rounded-lg border border-foreground/10 bg-white/70 p-2.5 space-y-2">
       <label className="block">
-        <span className="text-[9px] font-medium text-foreground/40 uppercase tracking-wider">Title</span>
+        <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">Title</Text>
         <input
           type="text"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          className="w-full mt-0.5 rounded-md bg-white/80 border border-foreground/10 px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-primary/30"
+          className="w-full mt-0.5 rounded-md bg-white/80 border border-foreground/10 px-2 py-1 text-caption focus:outline-none focus:ring-1 focus:ring-primary/30"
         />
       </label>
       <label className="block">
-        <span className="text-[9px] font-medium text-foreground/40 uppercase tracking-wider">Description</span>
+        <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">Description</Text>
         <input
           type="text"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          className="w-full mt-0.5 rounded-md bg-white/80 border border-foreground/10 px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-primary/30"
+          className="w-full mt-0.5 rounded-md bg-white/80 border border-foreground/10 px-2 py-1 text-caption focus:outline-none focus:ring-1 focus:ring-primary/30"
         />
       </label>
       <label className="block">
-        <span className="text-[9px] font-medium text-foreground/40 uppercase tracking-wider">
+        <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">
           Triggers (one per line)
-        </span>
+        </Text>
         <textarea
           value={triggersText}
           onChange={(e) => setTriggersText(e.target.value)}
           rows={2}
-          className="w-full mt-0.5 rounded-md bg-white/80 border border-foreground/10 px-2 py-1 text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-primary/30"
+          className="w-full mt-0.5 rounded-md bg-white/80 border border-foreground/10 px-2 py-1 text-caption font-mono focus:outline-none focus:ring-1 focus:ring-primary/30"
         />
       </label>
       <label className="block">
-        <span className="text-[9px] font-medium text-foreground/40 uppercase tracking-wider">Body (SKILL.md)</span>
+        <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">Body (SKILL.md)</Text>
         <textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
           rows={6}
           placeholder="## When to use..."
-          className="w-full mt-0.5 rounded-md bg-white/80 border border-foreground/10 px-2 py-1 text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-primary/30"
+          className="w-full mt-0.5 rounded-md bg-white/80 border border-foreground/10 px-2 py-1 text-caption font-mono focus:outline-none focus:ring-1 focus:ring-primary/30"
         />
       </label>
       <div className="flex items-center gap-1.5">
@@ -432,7 +433,7 @@ function CreateSkillForm({ mutating, onCancel, onSubmit }: CreateSkillFormProps)
             })
           }
           disabled={disabled}
-          className="inline-flex items-center gap-1 rounded-md bg-foreground text-background text-[10px] font-semibold px-2 py-1 disabled:opacity-40"
+          className="inline-flex items-center gap-1 rounded-md bg-foreground text-background text-micro font-semibold px-2 py-1 disabled:opacity-40"
         >
           {mutating ? <Loader2 size={10} className="animate-spin" /> : <Save size={10} />}
           Create
@@ -440,7 +441,7 @@ function CreateSkillForm({ mutating, onCancel, onSubmit }: CreateSkillFormProps)
         <button
           onClick={onCancel}
           disabled={mutating}
-          className="inline-flex items-center gap-1 rounded-md border border-foreground/10 bg-white/60 text-foreground/60 text-[10px] font-medium px-2 py-1 hover:bg-foreground/5 disabled:opacity-40"
+          className="inline-flex items-center gap-1 rounded-md border border-foreground/10 bg-white/60 text-foreground/60 text-micro font-medium px-2 py-1 hover:bg-foreground/5 disabled:opacity-40"
         >
           <X size={10} />
           Cancel

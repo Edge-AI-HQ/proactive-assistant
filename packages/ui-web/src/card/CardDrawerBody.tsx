@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Brain, ChevronDown, Zap, FileText, AlertTriangle, Loader2 } from "lucide-react";
 import { brandSvg, detectToolIcon, ArtifactItem, matchSideEffect, type Artifact } from "./chat-card-presentation";
 import { reasoningStepLabel, sourceAppDisplay } from "./source-app-display";
+import { Text } from "../primitives/Text";
 import type { ReasoningStep } from "@pin-ai/core";
 import type {
   DangerousAction,
@@ -42,10 +43,10 @@ function SourcePill({ slug }: { slug: string }) {
         ) : info.Icon ? (
           <info.Icon size={12} className="text-foreground/70" />
         ) : (
-          <span className="text-[9px] font-bold text-foreground/70">{info.label.slice(0, 1)}</span>
+          <Text variant="micro" weight="bold" className="text-foreground/70">{info.label.slice(0, 1)}</Text>
         )}
       </span>
-      <span className="text-[12px] font-medium text-foreground/70">{info.label}</span>
+      <Text variant="label" weight="medium" className="text-foreground/70">{info.label}</Text>
     </div>
   );
 }
@@ -62,10 +63,10 @@ export function HowGeneratedSection({ steps }: { steps: ReasoningStep[] }) {
       >
         <div className="flex items-center gap-1.5">
           <Brain size={13} strokeWidth={2.2} className="text-foreground/55" />
-          <span className="text-[11px] font-bold uppercase tracking-wider text-foreground/55">
+          <Text variant="caption" weight="bold" className="uppercase tracking-wider text-foreground/55">
             How I reasoned
-          </span>
-          <span className="text-[11px] font-medium text-foreground/40">· {steps.length} steps</span>
+          </Text>
+          <Text variant="caption" weight="medium" className="text-foreground/40">· {steps.length} steps</Text>
         </div>
         <ChevronDown
           size={16}
@@ -84,14 +85,14 @@ export function HowGeneratedSection({ steps }: { steps: ReasoningStep[] }) {
             <ol className="px-3.5 pb-3 pt-0.5 flex flex-col gap-2">
               {steps.map((s, i) => (
                 <li key={i} className="flex items-start gap-2.5">
-                  <span className="shrink-0 mt-[1px] w-4 h-4 rounded-full bg-foreground/8 text-[10px] font-bold text-foreground/55 flex items-center justify-center">
+                  <Text variant="micro" weight="bold" className="shrink-0 mt-[1px] w-4 h-4 rounded-full bg-foreground/8 text-foreground/55 flex items-center justify-center">
                     {i + 1}
-                  </span>
+                  </Text>
                   <div className="flex-1 min-w-0">
-                    <div className="text-[10px] uppercase tracking-wide font-semibold text-foreground/45 mb-0.5">
+                    <Text variant="micro" weight="semibold" className="block uppercase tracking-wide text-foreground/45 mb-0.5">
                       {reasoningStepLabel(s.label)}
-                    </div>
-                    <p className="text-[12.5px] text-foreground/75 leading-snug">{s.detail}</p>
+                    </Text>
+                    <Text variant="bodySm" className="block text-foreground/75 leading-snug">{s.detail}</Text>
                   </div>
                 </li>
               ))}
@@ -120,8 +121,8 @@ function ExecutionStepRow({ step }: { step: { text: string; tool: string } }) {
         </div>
       </div>
       <div className="flex-1 min-w-0 pt-0.5">
-        <div className="text-[13px] text-foreground/85 leading-snug">{step.text}</div>
-        <div className="text-[10px] text-foreground/45 mt-0.5 uppercase tracking-wide font-medium">{step.tool}</div>
+        <Text variant="bodySm" className="block text-foreground/85 leading-snug">{step.text}</Text>
+        <Text variant="micro" weight="medium" className="block text-foreground/45 mt-0.5 uppercase tracking-wide">{step.tool}</Text>
       </div>
     </div>
   );
@@ -232,12 +233,12 @@ function DangerousActionRow({ action }: { action: DangerousAction }) {
         </div>
       </div>
       <div className="flex-1 min-w-0 pt-0.5">
-        <div className="text-[13px] text-foreground/85 leading-snug font-medium">
+        <Text variant="bodySm" weight="medium" className="block text-foreground/85 leading-snug">
           {action.risk_label}
-        </div>
-        <div className="text-[10px] text-foreground/45 mt-0.5 uppercase tracking-wide font-medium">
+        </Text>
+        <Text variant="micro" weight="medium" className="block text-foreground/45 mt-0.5 uppercase tracking-wide">
           {action.slug}
-        </div>
+        </Text>
       </div>
     </div>
   );
@@ -346,10 +347,10 @@ export function DrawerDetailBody({
             borderColor: "rgba(34, 197, 94, 0.22)",
           }}
         >
-          <div className="text-[11px] font-bold uppercase tracking-wider text-green-700/80 mb-1">
+          <Text variant="caption" weight="bold" className="block uppercase tracking-wider text-green-700/80 mb-1">
             Why now
-          </div>
-          <p className="text-[12.5px] text-foreground/75 leading-snug">{whyNowText}</p>
+          </Text>
+          <Text variant="bodySm" className="block text-foreground/75 leading-snug">{whyNowText}</Text>
         </div>
       )}
 
@@ -358,8 +359,8 @@ export function DrawerDetailBody({
         <div
           className="mb-3 rounded-2xl overflow-hidden border"
           style={{
-            background: "linear-gradient(135deg, rgba(225,92,230,0.10) 0%, rgba(225,92,230,0.04) 100%)",
-            borderColor: "hsl(292 78% 63% / 0.22)",
+            background: "linear-gradient(135deg, hsl(var(--primary) / 0.10) 0%, hsl(var(--primary) / 0.04) 100%)",
+            borderColor: "hsl(var(--primary) / 0.22)",
           }}
         >
           <button
@@ -367,15 +368,15 @@ export function DrawerDetailBody({
             className="w-full flex items-center justify-between px-3.5 py-2.5"
           >
             <div className="flex items-center gap-1.5">
-              <Zap size={13} strokeWidth={2.5} color="hsl(292,78%,63%)" />
-              <span className="text-[11px] font-bold uppercase tracking-wider bg-gradient-to-r from-[hsl(292,78%,63%)] to-[hsl(330,80%,65%)] bg-clip-text text-transparent">
+              <Zap size={13} strokeWidth={2.5} color="hsl(var(--primary))" />
+              <Text variant="caption" weight="bold" className="uppercase tracking-wider bg-gradient-to-r from-primary to-[hsl(330,80%,65%)] bg-clip-text text-transparent">
                 Execution Plan
-              </span>
-              <span className="text-[11px] font-medium text-foreground/45">· {plan.length} steps</span>
+              </Text>
+              <Text variant="caption" weight="medium" className="text-foreground/45">· {plan.length} steps</Text>
             </div>
             <ChevronDown
               size={16}
-              className={`text-[hsl(292,78%,63%)]/70 transition-transform ${planOpen ? "rotate-180" : ""}`}
+              className={`text-primary/70 transition-transform ${planOpen ? "rotate-180" : ""}`}
             />
           </button>
           <AnimatePresence initial={false}>
@@ -389,7 +390,7 @@ export function DrawerDetailBody({
               >
                 <div className="px-3.5 pb-2.5 relative">
                   {/* timeline rail */}
-                  <div className="absolute left-[27px] top-1.5 bottom-2 w-px bg-[hsl(292,78%,63%)]/20" />
+                  <div className="absolute left-[27px] top-1.5 bottom-2 w-px bg-primary/20" />
                   <div className="relative">
                     {plan.map((step, i) => (
                       <ExecutionStepRow key={i} step={step} />
@@ -414,10 +415,10 @@ export function DrawerDetailBody({
           >
             <div className="flex items-center gap-1.5">
               <FileText size={13} strokeWidth={2.5} className="text-foreground/60" />
-              <span className="text-[11px] font-bold uppercase tracking-wider text-foreground/60">
+              <Text variant="caption" weight="bold" className="uppercase tracking-wider text-foreground/60">
                 {artifacts.length === 1 ? "Generated draft" : "Generated drafts"}
-              </span>
-              <span className="text-[11px] font-medium text-foreground/45">· {artifacts.length}</span>
+              </Text>
+              <Text variant="caption" weight="medium" className="text-foreground/45">· {artifacts.length}</Text>
             </div>
             <ChevronDown
               size={16}
@@ -465,10 +466,10 @@ export function DrawerDetailBody({
           >
             <div className="flex items-center gap-1.5">
               <AlertTriangle size={13} strokeWidth={2.5} className="text-amber-600" />
-              <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700">
+              <Text variant="caption" weight="bold" className="uppercase tracking-wider text-amber-700">
                 Approving will let agent:
-              </span>
-              <span className="text-[11px] font-medium text-foreground/45">· {dangerousActions.length}</span>
+              </Text>
+              <Text variant="caption" weight="medium" className="text-foreground/45">· {dangerousActions.length}</Text>
             </div>
             <ChevronDown
               size={16}
@@ -498,12 +499,12 @@ export function DrawerDetailBody({
       {/* Risks — one-liner bullets from the agent's plan */}
       {risks.length > 0 && (
         <div className="mb-3">
-          <div className="text-[11px] font-bold text-foreground/55 uppercase tracking-wider mb-1.5">Risks to consider</div>
+          <Text variant="caption" weight="bold" className="block text-foreground/55 uppercase tracking-wider mb-1.5">Risks to consider</Text>
           <ul className="space-y-1">
             {risks.map((r, i) => (
-              <li key={i} className="flex items-start gap-2 text-[12.5px] text-foreground/65 leading-snug">
+              <li key={i} className="flex items-start gap-2">
                 <span className="mt-1.5 w-1 h-1 rounded-full bg-foreground/40 shrink-0" />
-                <span>{r}</span>
+                <Text variant="bodySm" className="text-foreground/65 leading-snug">{r}</Text>
               </li>
             ))}
           </ul>
@@ -513,7 +514,7 @@ export function DrawerDetailBody({
       {/* Sources — second to last */}
       {sources.length > 0 && (
         <div className="mb-3">
-          <div className="text-[11px] font-bold text-foreground/55 uppercase tracking-wider mb-1.5">Sources</div>
+          <Text variant="caption" weight="bold" className="block text-foreground/55 uppercase tracking-wider mb-1.5">Sources</Text>
           <div className="flex flex-wrap gap-1.5">
             {sources.map((s) => <SourcePill key={s} slug={s} />)}
           </div>
@@ -543,11 +544,11 @@ function renderStatusBanner(
           style={{ background: "rgba(255,255,255,0.55)" }}
         >
           <Loader2 size={13} className="text-foreground/55 animate-spin" />
-          <span className="text-[12px] text-foreground/70 font-medium">
+          <Text variant="label" weight="medium" className="text-foreground/70">
             {snapshot.status === "running"
               ? "Agent is preparing the plan — give it a moment."
               : "Resuming…"}
-          </span>
+          </Text>
         </div>
       );
     case "done":
@@ -555,35 +556,35 @@ function renderStatusBanner(
         <div
           className="mb-3 px-3.5 py-2.5 rounded-2xl border"
           style={{
-            background: "linear-gradient(135deg, rgba(225,92,230,0.08) 0%, rgba(225,92,230,0.03) 100%)",
-            borderColor: "rgba(225,92,230,0.2)",
+            background: "linear-gradient(135deg, hsl(var(--primary) / 0.08) 0%, hsl(var(--primary) / 0.03) 100%)",
+            borderColor: "hsl(var(--primary) / 0.2)",
           }}
         >
-          <div className="text-[11px] font-bold uppercase tracking-wider mb-1 bg-gradient-to-r from-[hsl(292,78%,63%)] to-[hsl(330,80%,65%)] bg-clip-text text-transparent">
+          <Text variant="caption" weight="bold" className="block uppercase tracking-wider mb-1 bg-gradient-to-r from-primary to-[hsl(330,80%,65%)] bg-clip-text text-transparent">
             Result
-          </div>
-          <p className="text-[13px] text-foreground/80 leading-relaxed">
+          </Text>
+          <Text variant="bodySm" className="block text-foreground/80 leading-relaxed">
             {snapshot.result?.summary || "Done."}
-          </p>
+          </Text>
         </div>
       );
     case "error":
       return (
         <div className="mb-3 px-3.5 py-2.5 rounded-2xl border border-red-500/30 bg-red-500/[0.04]">
-          <div className="text-[11px] font-bold uppercase tracking-wider text-red-600 mb-1">
+          <Text variant="caption" weight="bold" className="block uppercase tracking-wider text-red-600 mb-1">
             Failed
-          </div>
-          <p className="text-[12.5px] text-foreground/75 leading-snug">
+          </Text>
+          <Text variant="bodySm" className="block text-foreground/75 leading-snug">
             {snapshot.errorMessage || "Run failed."}
-          </p>
+          </Text>
         </div>
       );
     case "cancelled":
       return (
         <div className="mb-3 px-3.5 py-2.5 rounded-2xl border border-foreground/10 bg-foreground/[0.03]">
-          <p className="text-[12.5px] text-foreground/60 leading-snug">
+          <Text variant="bodySm" className="block text-foreground/60 leading-snug">
             Cancelled. Tap Retry to start a fresh run.
-          </p>
+          </Text>
         </div>
       );
     default:

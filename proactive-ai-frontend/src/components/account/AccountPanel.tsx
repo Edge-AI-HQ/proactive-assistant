@@ -17,7 +17,7 @@ import { usePushNotifications } from "@/hooks/usePushNotifications";
 import { useUserSettings } from "@pin-ai/state";
 import { cancelCurrentSubscription, createCheckout, getCurrentSubscription, getCustomerPortalUrl, getUsage, listInvoices, listPaymentMethods, reconcileSubscription, type InvoiceEntry, type PaymentMethodEntry, type PlanCode, type SubscriptionState, type UsageInfo } from "@pin-ai/core";
 import { PLANS } from "@/components/account/PlanPaymentForm";
-import { SubPageHeader, SubscriptionPanel } from "@pin-ai/ui-web";
+import { SubPageHeader, SubscriptionPanel, Text } from "@pin-ai/ui-web";
 import SwipeBackLayer from "@/components/app/SwipeBackLayer";
 
 // AmbientModelsPanel pulls in @pin/capacitor-ambient-ai which is
@@ -108,17 +108,17 @@ export default function AccountPanel({
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-foreground">{userName}</p>
-            <p className="text-[11px] text-foreground/50 truncate">{subtitle}</p>
+            <Text variant="caption" className="block text-foreground/50 truncate">{subtitle}</Text>
           </div>
           {onSignOut ? (
             <button
               onClick={onSignOut}
-              className="text-[11px] font-medium text-foreground border border-foreground/12 rounded-lg px-3 py-1 hover:bg-foreground/[0.04] transition-colors"
+              className="text-caption font-medium text-foreground border border-foreground/12 rounded-lg px-3 py-1 hover:bg-foreground/[0.04] transition-colors"
             >
               Sign out
             </button>
           ) : (
-            <button className="text-[11px] font-medium text-foreground border border-foreground/12 rounded-lg px-3 py-1 hover:bg-foreground/[0.04] transition-colors">
+            <button className="text-caption font-medium text-foreground border border-foreground/12 rounded-lg px-3 py-1 hover:bg-foreground/[0.04] transition-colors">
               Edit
             </button>
           )}
@@ -135,11 +135,11 @@ export default function AccountPanel({
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-foreground">Subscription & Billing</p>
-            <p className="text-[11px] text-foreground/50 mt-0.5">Manage plan, billing, payment</p>
+            <Text variant="caption" className="block text-foreground/50 mt-0.5">Manage plan, billing, payment</Text>
           </div>
-          <span className="text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 rounded-md bg-[hsl(304_75%_63%/0.12)] text-[hsl(304_75%_63%)] shrink-0">
+          <Text variant="micro" weight="bold" className="tracking-wider uppercase px-2 py-0.5 rounded-md bg-[hsl(304_75%_63%/0.12)] text-[hsl(304_75%_63%)] shrink-0">
             Pro
-          </span>
+          </Text>
           <ChevronRight size={16} strokeWidth={1.5} className="text-foreground/35 shrink-0" />
         </button>
 
@@ -153,7 +153,7 @@ export default function AccountPanel({
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-foreground">Preferences</p>
-            <p className="text-[11px] text-foreground/50 mt-0.5">Tone, formatting, defaults</p>
+            <Text variant="caption" className="block text-foreground/50 mt-0.5">Tone, formatting, defaults</Text>
           </div>
           <ChevronRight size={16} strokeWidth={1.5} className="text-foreground/35 shrink-0" />
         </button>
@@ -168,7 +168,7 @@ export default function AccountPanel({
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-foreground">Push Notifications</p>
-            <p className="text-[11px] text-foreground/50 mt-0.5">What gets through — even during quiet hours</p>
+            <Text variant="caption" className="block text-foreground/50 mt-0.5">What gets through — even during quiet hours</Text>
           </div>
           <ChevronRight size={16} strokeWidth={1.5} className="text-foreground/35 shrink-0" />
         </button>
@@ -185,7 +185,7 @@ export default function AccountPanel({
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-foreground">Ambient</p>
-            <p className="text-[11px] text-foreground/50 mt-0.5">Source consents, on-device models, summaries</p>
+            <Text variant="caption" className="block text-foreground/50 mt-0.5">Source consents, on-device models, summaries</Text>
           </div>
           <ChevronRight size={16} strokeWidth={1.5} className="text-foreground/35 shrink-0" />
         </button>
@@ -216,9 +216,9 @@ function PreferencesSubPage({ onBack }: { onBack: () => void }) {
         <section className="glass-card-strong p-4">
           <div className="mb-3">
             <h2 className="text-sm font-semibold text-foreground">Proactive</h2>
-            <p className="text-[11px] text-foreground/42 mt-1">
+            <Text variant="caption" className="block text-foreground/42 mt-1">
               How often your Proactive AI checks in on you.
-            </p>
+            </Text>
           </div>
           <ProactiveSettings />
         </section>
@@ -226,9 +226,9 @@ function PreferencesSubPage({ onBack }: { onBack: () => void }) {
         <section className="glass-card-strong p-4">
           <div className="mb-3">
             <h2 className="text-sm font-semibold text-foreground">Dreaming</h2>
-            <p className="text-[11px] text-foreground/42 mt-1">
+            <Text variant="caption" className="block text-foreground/42 mt-1">
               Review background dreaming runs, profile diffs, and candidate cards.
-            </p>
+            </Text>
           </div>
           <AutoDreamingSettings />
         </section>
@@ -236,9 +236,9 @@ function PreferencesSubPage({ onBack }: { onBack: () => void }) {
         <section className="glass-card-strong p-4">
           <div className="mb-3">
             <h2 className="text-sm font-semibold text-foreground">Generation</h2>
-            <p className="text-[11px] text-foreground/42 mt-1">
+            <Text variant="caption" className="block text-foreground/42 mt-1">
               Tune how cards are generated and shown to you.
-            </p>
+            </Text>
           </div>
           <AutoGenerateSettings />
           <GenerationLanguageSettings />
@@ -247,9 +247,9 @@ function PreferencesSubPage({ onBack }: { onBack: () => void }) {
         <section className="glass-card-strong p-4">
           <div className="mb-3">
             <h2 className="text-sm font-semibold text-foreground">Scheduled Tasks</h2>
-            <p className="text-[11px] text-foreground/42 mt-1">
+            <Text variant="caption" className="block text-foreground/42 mt-1">
               Recurring card generation you set up from chat — pause, resume, or remove.
-            </p>
+            </Text>
           </div>
           <ScheduledTasksSettings />
         </section>
@@ -322,7 +322,7 @@ function NotificationsSubPage({ onBack }: { onBack: () => void }) {
         >
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-foreground">Card generation</p>
-            <p className="text-[11px] text-foreground/50 mt-0.5">
+            <Text variant="caption" className="block text-foreground/50 mt-0.5">
               {unsupported
                 ? "Available only in the iOS app."
                 : denied
@@ -332,7 +332,7 @@ function NotificationsSubPage({ onBack }: { onBack: () => void }) {
                     : granted
                       ? "Paused in PIN AI — tap to resume card alerts."
                       : "Tap to enable system notifications."}
-            </p>
+            </Text>
           </div>
           <span
             className={`relative w-10 h-6 rounded-full shrink-0 transition-colors ${
@@ -394,34 +394,34 @@ function AmbientSubPage({ onBack }: { onBack: () => void }) {
         <section className="glass-card-strong p-4 space-y-3">
           <div>
             <h2 className="text-sm font-semibold text-foreground">On-device models</h2>
-            <p className="text-[11px] text-foreground/42 mt-1 leading-relaxed">
+            <Text variant="caption" className="block text-foreground/42 mt-1 leading-relaxed">
               Manage the on-device models used for offline speech and reasoning.
-            </p>
+            </Text>
           </div>
 
           {isNative ? (
             <Suspense
               fallback={
-                <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-4 text-[11px] text-foreground/45">
+                <Text variant="caption" className="block rounded-xl border border-foreground/10 bg-foreground/[0.03] p-4 text-foreground/45">
                   Loading model manifest…
-                </div>
+                </Text>
               }
             >
               <AmbientModelsPanel />
             </Suspense>
           ) : (
-            <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-4 text-[12px] text-foreground/60 leading-relaxed">
+            <Text variant="label" className="block rounded-xl border border-foreground/10 bg-foreground/[0.03] p-4 text-foreground/60 leading-relaxed">
               On-device models are only available inside the iOS app. Open this
               page in the native build to download, verify, or delete the
               Whisper / local LLM profiles.
-            </div>
+            </Text>
           )}
 
-          <p className="text-[11px] text-foreground/45 leading-snug">
+          <Text variant="caption" className="block text-foreground/45 leading-snug">
             Models are stored locally and never re-uploaded. If a download
             fails, the plugin automatically falls back to the secondary
             mirror.
-          </p>
+          </Text>
         </section>
       </motion.div>
     </div>

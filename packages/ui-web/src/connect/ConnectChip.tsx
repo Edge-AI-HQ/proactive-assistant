@@ -59,7 +59,7 @@ export function ConnectChip({ toolkit }: ConnectChipProps) {
       title={alreadyConnected ? `${meta.label} already connected` : `Connect ${meta.label}`}
       className={cn(
         "inline-flex items-center gap-1 px-2 py-0.5 mx-0.5 rounded-full",
-        "text-[12px] leading-none align-baseline",
+        "text-label leading-none align-baseline",
         "border border-foreground/15 bg-foreground/[0.04]",
         "hover:bg-foreground/[0.08] hover:border-foreground/25",
         "disabled:opacity-50 disabled:cursor-default",

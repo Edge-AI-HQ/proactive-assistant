@@ -2,6 +2,7 @@ import { X, Check, Lock as LockIcon, Loader2, MessageCircle } from "lucide-react
 import { useCardExecutionRun } from "@/hooks/useCardExecutionRun";
 import { DrawerDetailBody } from "@/components/card/CardDrawerBody";
 import { CATEGORIES, type Intent } from "@/components/now/card-model";
+import { Text } from "@pin-ai/ui-web";
 
 /* ── Drawer card detail ──
  *
@@ -53,31 +54,31 @@ export default function CardDrawerContent({
         <Icon size={14} strokeWidth={1.5} className="text-foreground/50" />
         <span className="text-xs font-semibold tracking-wide text-foreground/50 uppercase">{cat.label}</span>
         {card.tag && (
-          <span className="text-[11px] font-bold px-1.5 py-0.5 rounded-full bg-foreground/10 text-foreground/50">
+          <Text variant="caption" weight="bold" className="px-1.5 py-0.5 rounded-full bg-foreground/10 text-foreground/50">
             {card.tag}
-          </span>
+          </Text>
         )}
         {card.complexity === "simple" && (
           <span
-            className="inline-flex items-center gap-1 text-[11px] font-bold px-1.5 py-0.5 rounded-full"
-            style={{ background: "rgba(225,92,230,0.12)", color: "#E15CE6" }}
+            className="inline-flex items-center gap-1 text-caption font-bold px-1.5 py-0.5 rounded-full"
+            style={{ background: "hsl(var(--primary) / 0.12)", color: "hsl(var(--primary))" }}
             title="Low-risk task — usually safe to approve as-is"
           >
-            <span className="w-1.5 h-1.5 rounded-full" style={{ background: "#E15CE6" }} />
+            <span className="w-1.5 h-1.5 rounded-full" style={{ background: "hsl(var(--primary))" }} />
             Quick approve
           </span>
         )}
       </div>
 
       {/* Title */}
-      <h3 className="text-display text-[18px] leading-snug text-foreground mb-1.5 font-semibold">{card.title}</h3>
+      <h3 className="text-display text-subheading leading-snug text-foreground mb-1.5 font-semibold">{card.title}</h3>
 
       {/* Concise "what to do" summary (gray, action-oriented). Reminder
           cards have no action — willExecute is just the button label
           ("Done"), so show the reminder message instead. */}
-      <p className="text-[13.5px] text-foreground/55 leading-snug mb-3">
+      <Text variant="bodySm" className="block text-foreground/55 leading-snug mb-3">
         {card.reminder ? card.line1 : card.detail?.willExecute || card.line1}
-      </p>
+      </Text>
 
       {/* Detail sections — DrawerDetailBody reads the latest
           propose_action's structured args from `lastMessagePayload`
@@ -98,7 +99,7 @@ export default function CardDrawerContent({
         {showCompletedView ? (
           <button
             onClick={onClose}
-            className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[13px] font-medium text-foreground/55"
+            className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-bodySm font-medium text-foreground/55"
           >
             Close
           </button>
@@ -115,14 +116,14 @@ export default function CardDrawerContent({
             <button
               onClick={() => onDismiss(card)}
               disabled={pending}
-              className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[13px] font-medium text-foreground/55 disabled:opacity-45 disabled:cursor-default"
+              className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-bodySm font-medium text-foreground/55 disabled:opacity-45 disabled:cursor-default"
             >
               <X size={13} strokeWidth={2} /> Dismiss
             </button>
             <button
               onClick={() => onComplete(card)}
               disabled={pending}
-              className="flex items-center justify-center gap-1 px-3 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-[12px] font-medium text-foreground/55 disabled:opacity-45 disabled:cursor-default"
+              className="flex items-center justify-center gap-1 px-3 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-label font-medium text-foreground/55 disabled:opacity-45 disabled:cursor-default"
             >
               <Check size={12} strokeWidth={2.5} /> Done
             </button>
@@ -130,7 +131,7 @@ export default function CardDrawerContent({
               <button
                 onClick={() => onChat(card)}
                 disabled={pending}
-                className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground text-background text-[13px] font-semibold hover:bg-foreground/85 transition-colors disabled:opacity-70 disabled:cursor-default"
+                className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground text-background text-bodySm font-semibold hover:bg-foreground/85 transition-colors disabled:opacity-70 disabled:cursor-default"
               >
                 <MessageCircle size={13} strokeWidth={2} /> Chat
               </button>
@@ -138,7 +139,7 @@ export default function CardDrawerContent({
               <button
                 onClick={() => onExecute(card)}
                 disabled={pending}
-                className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground text-background text-[13px] font-semibold hover:bg-foreground/85 transition-colors disabled:opacity-70 disabled:cursor-default"
+                className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground text-background text-bodySm font-semibold hover:bg-foreground/85 transition-colors disabled:opacity-70 disabled:cursor-default"
               >
                 {pending ? (
                   <><Loader2 size={13} className="animate-spin" /> Opening...</>

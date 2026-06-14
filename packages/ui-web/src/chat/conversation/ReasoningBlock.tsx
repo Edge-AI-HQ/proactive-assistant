@@ -74,7 +74,7 @@ export default function ReasoningBlock({
         onClick={() => canExpand && setOpen((v) => !v)}
         disabled={!canExpand}
         aria-expanded={open}
-        className={`inline-flex items-center gap-1.5 px-2 py-1 -ml-2 rounded-lg text-[12.5px] font-medium transition-colors ${
+        className={`inline-flex items-center gap-1.5 px-2 py-1 -ml-2 rounded-lg text-label font-medium transition-colors ${
           canExpand
             ? "text-foreground/65 hover:text-foreground hover:bg-foreground/[0.04] cursor-pointer"
             : "cursor-default text-foreground/65"

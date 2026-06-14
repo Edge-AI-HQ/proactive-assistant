@@ -29,6 +29,7 @@ import { fetchRawDeviceApps, fetchRawDeviceContacts, fetchRawDeviceHealth, fetch
 import { basketMeta } from "../card/basket-meta";
 import { useMediaQuery } from "../lib/use-media-query";
 import { isComposioToolkitConnected, type ComposioState } from "@pin-ai/state";
+import { Text } from "../primitives/Text";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -568,7 +569,7 @@ const PILL_TONE_CLASS: Record<PillTone, string> = {
 
 function Pill({ children, tone = "neutral" }: { children: ReactNode; tone?: PillTone }) {
   return (
-    <span className={`rounded-full px-2 py-1 text-[10px] font-medium ring-1 ${PILL_TONE_CLASS[tone]}`}>
+    <span className={`rounded-full px-2 py-1 text-micro font-medium ring-1 ${PILL_TONE_CLASS[tone]}`}>
       {children}
     </span>
   );
@@ -789,10 +790,10 @@ function MetricCard({
       onClick={onClick}
       className="min-h-20 rounded-2xl bg-white/45 px-3 py-3 text-left ring-1 ring-white/55 transition-colors hover:bg-white/75"
     >
-      <div className="text-[10px] uppercase tracking-[0.16em] text-foreground/35">{label}</div>
+      <Text variant="micro" className="block uppercase tracking-[0.16em] text-foreground/35">{label}</Text>
       <div className="mt-1 flex items-baseline gap-1.5">
         <span className="text-xl font-semibold text-foreground">{value}</span>
-        <span className="text-[11px] font-medium text-foreground/42">{detail}</span>
+        <Text variant="caption" weight="medium" className="text-foreground/42">{detail}</Text>
       </div>
     </button>
   );
@@ -843,7 +844,7 @@ function WorkbenchTabButton({
         active ? "bg-foreground text-background" : ""
       }`}
     >
-      <div className={`text-[10px] uppercase tracking-[0.16em] ${active ? "text-background/60" : "text-foreground/35"}`}>
+      <div className={`text-micro uppercase tracking-[0.16em] ${active ? "text-background/60" : "text-foreground/35"}`}>
         {label}
       </div>
       <div className="mt-1 text-base font-semibold">{value}</div>
@@ -875,9 +876,9 @@ function ProfileGroupCard({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-sm font-semibold text-foreground">{title}</span>
-            <span className="rounded-full bg-foreground/5 px-2 py-0.5 text-[10px] font-medium text-foreground/45">
+            <Text variant="micro" weight="medium" className="rounded-full bg-foreground/5 px-2 py-0.5 text-foreground/45">
               {entries.length}
-            </span>
+            </Text>
           </div>
           <p className="mt-1 text-xs leading-relaxed text-foreground/42">{description}</p>
         </div>
@@ -910,10 +911,10 @@ function ProfileGroupCard({
                       key={key}
                       className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 py-1"
                     >
-                      <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-foreground/45">
+                      <Text variant="micro" weight="semibold" className="uppercase tracking-[0.12em] text-foreground/45">
                         {prettyFieldKey(key)}
-                      </span>
-                      <span className="min-w-[60%] flex-1 whitespace-pre-wrap break-words text-[13px] leading-5 text-foreground/80">
+                      </Text>
+                      <span className="min-w-[60%] flex-1 whitespace-pre-wrap break-words text-bodySm leading-5 text-foreground/80">
                         {formatValue(value)}
                       </span>
                     </div>
@@ -933,9 +934,9 @@ function MemoryItem({ memory }: { memory: Memory }) {
     <div className="rounded-2xl bg-foreground/[0.03] px-4 py-3">
       <div className="flex items-center justify-between gap-3">
         <Pill tone="source">{memory.source}</Pill>
-        <span className="text-[11px] text-foreground/35">
+        <Text variant="caption" className="text-foreground/35">
           {formatDateTime(memory.occurred_at ?? memory.created_at)}
-        </span>
+        </Text>
       </div>
       <p className="mt-2 line-clamp-3 text-sm leading-6 text-foreground/78">{memory.text}</p>
       <div className="mt-3 flex flex-wrap gap-1.5">
@@ -966,7 +967,7 @@ function SignalItem({ signal }: { signal: PersonalSignal }) {
             {signal.device_id ? ` · ${signal.device_id}` : ""}
           </div>
         </div>
-        <span className="shrink-0 text-[11px] text-foreground/35">{formatDateTime(signal.occurred_at)}</span>
+        <Text variant="caption" className="shrink-0 text-foreground/35">{formatDateTime(signal.occurred_at)}</Text>
       </div>
       {signal.summary && (
         <p className="mt-2 text-sm leading-6 text-foreground/70">{signal.summary}</p>
@@ -983,7 +984,7 @@ function SignalItem({ signal }: { signal: PersonalSignal }) {
         )}
       </div>
       {hasObjectKeys(signal.payload) && (
-        <details className="mt-3 rounded-2xl bg-white/55 px-3 py-2 text-[11px] leading-5 text-foreground/62 ring-1 ring-white/60">
+        <details className="mt-3 rounded-2xl bg-white/55 px-3 py-2 text-caption leading-5 text-foreground/62 ring-1 ring-white/60">
           <summary className="cursor-pointer text-foreground/45">Payload</summary>
           <pre className="mt-2 whitespace-pre-wrap break-words">{formatValue(signal.payload)}</pre>
         </details>
@@ -1081,14 +1082,14 @@ function RawRecordItem({
     <div className="rounded-2xl bg-foreground/[0.03] px-4 py-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-foreground/38">{source}</div>
+          <Text variant="micro" weight="medium" className="block uppercase tracking-[0.14em] text-foreground/38">{source}</Text>
           <div className="mt-1 truncate text-sm font-semibold text-foreground">{title}</div>
           {subtitle && <p className="mt-1 line-clamp-2 text-xs leading-5 text-foreground/52">{subtitle}</p>}
         </div>
-        <span className="shrink-0 text-[11px] text-foreground/35">{formatDateTime(time)}</span>
+        <Text variant="caption" className="shrink-0 text-foreground/35">{formatDateTime(time)}</Text>
       </div>
       {payload && hasObjectKeys(payload) && (
-        <details className="mt-3 rounded-2xl bg-white/55 px-3 py-2 text-[11px] leading-5 text-foreground/62 ring-1 ring-white/60">
+        <details className="mt-3 rounded-2xl bg-white/55 px-3 py-2 text-caption leading-5 text-foreground/62 ring-1 ring-white/60">
           <summary className="cursor-pointer text-foreground/45">Raw fields</summary>
           <pre className="mt-2 whitespace-pre-wrap break-words">{formatValue(payload)}</pre>
         </details>
@@ -1223,9 +1224,9 @@ function MirrorPanel({
     <div>
       <div className="mb-3">
         <h2 className="text-sm font-semibold text-foreground">Profile</h2>
-        <p className="mt-1 text-[11px] leading-5 text-foreground/42">
+        <Text variant="caption" className="block mt-1 leading-5 text-foreground/42">
           Facts, preferences, constraints, and metadata — derived from your data.
-        </p>
+        </Text>
       </div>
 
       <div className="space-y-2.5">
@@ -1266,9 +1267,9 @@ function MemoryPanel({
     <div>
       <div className="mb-3">
         <h2 className="text-sm font-semibold text-foreground">Memory</h2>
-        <p className="mt-1 text-[11px] leading-5 text-foreground/42">
+        <Text variant="caption" className="block mt-1 leading-5 text-foreground/42">
           What your AI has noticed and saved. Newest first.
-        </p>
+        </Text>
       </div>
       <div className="space-y-5">
         {memories.length === 0 ? (
@@ -1277,10 +1278,10 @@ function MemoryPanel({
           groups.map((group) => (
             <div key={group.key}>
               <div className="mb-2 flex items-baseline gap-2 px-1">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-foreground/45">
+                <Text variant="micro" weight="semibold" className="uppercase tracking-[0.16em] text-foreground/45">
                   {group.label}
-                </span>
-                <span className="text-[10px] font-medium text-foreground/30">{group.items.length}</span>
+                </Text>
+                <Text variant="micro" weight="medium" className="text-foreground/30">{group.items.length}</Text>
               </div>
               <div className="space-y-3">
                 {group.items.map((memory) => (
@@ -1292,14 +1293,14 @@ function MemoryPanel({
         )}
       </div>
       <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl bg-white/45 px-3 py-2 ring-1 ring-white/60">
-        <div className="text-[11px] text-foreground/45 tabular-nums">
+        <Text variant="caption" className="block text-foreground/45 tabular-nums">
           {total === 0 ? "0 memories" : `${memories.length} of ${total}`}
-        </div>
+        </Text>
         <button
           type="button"
           disabled={!hasMore || loadingMore}
           onClick={onLoadMore}
-          className="flex items-center gap-1.5 rounded-xl bg-foreground/5 px-3 py-1.5 text-[11px] font-medium text-foreground/55 transition-colors hover:bg-foreground/10 disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex items-center gap-1.5 rounded-xl bg-foreground/5 px-3 py-1.5 text-caption font-medium text-foreground/55 transition-colors hover:bg-foreground/10 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {loadingMore ? (
             <>
@@ -1323,11 +1324,11 @@ function MemoryListItem({ memory }: { memory: Memory }) {
   const time = formatClockTime(when);
   return (
     <div>
-      <p className="text-[13.5px] leading-6 text-foreground/85">{memory.text}</p>
-      <p className="mt-1 text-[11px] text-foreground/45">
+      <Text variant="bodySm" className="block leading-6 text-foreground/85">{memory.text}</Text>
+      <Text variant="caption" className="block mt-1 text-foreground/45">
         Inferred from {memory.source}
         {time && ` · ${time}`}
-      </p>
+      </Text>
     </div>
   );
 }
@@ -1412,12 +1413,12 @@ function SignalsPanel({
       <div className="mb-3 flex items-start justify-between gap-4">
         <div>
           <h2 className="text-sm font-semibold text-foreground">Signals</h2>
-          <p className="mt-1 text-[11px] leading-5 text-foreground/42">
+          <Text variant="caption" className="block mt-1 leading-5 text-foreground/42">
             Recent observations that may become memory after the assistant sees enough context.
-          </p>
+          </Text>
         </div>
         <div className="shrink-0 rounded-2xl bg-foreground/5 px-3 py-2 text-right">
-          <div className="text-[10px] uppercase tracking-[0.14em] text-foreground/35">Total</div>
+          <Text variant="micro" className="block uppercase tracking-[0.14em] text-foreground/35">Total</Text>
           <div className="mt-0.5 text-sm font-semibold text-foreground">{total}</div>
         </div>
       </div>
@@ -1466,12 +1467,12 @@ function RawPanelContent({
       <div className="mb-3 space-y-3">
         <div>
           <h2 className="text-sm font-semibold text-foreground">Raw</h2>
-          <p className="mt-1 text-[11px] leading-5 text-foreground/42">
+          <Text variant="caption" className="block mt-1 leading-5 text-foreground/42">
             Source data from connected apps and devices before it becomes memories or profile details.
-          </p>
+          </Text>
         </div>
         <div className="rounded-2xl bg-foreground/5 p-2">
-          <label className="mb-1.5 block text-[10px] uppercase tracking-[0.16em] text-foreground/35">
+          <label className="mb-1.5 block text-micro uppercase tracking-[0.16em] text-foreground/35">
             Data source
           </label>
           <div className="relative">
@@ -1623,9 +1624,15 @@ function RawPanelContent({
 
 interface GoalsViewProps {
   composio: ComposioState;
+  /**
+   * Goal 详情的呈现方式。"auto"（默认）= 宽屏居中 popup / 窄屏底部抽屉（zebra
+   * 桌面 apps/web 用）。"drawer" = 强制底部抽屉（手机场景，frontend：即使桌面 web
+   * viewport 宽，frontend 也是手机列，详情应是与背景列同宽的抽屉而非桌面 popup）。
+   */
+  detailLayout?: "auto" | "drawer";
 }
 
-export default function GoalsView({ composio }: GoalsViewProps) {
+export default function GoalsView({ composio, detailLayout = "auto" }: GoalsViewProps) {
   const [snapshot, setSnapshot] = useState<ProfileSnapshot>(EMPTY_SNAPSHOT);
   const [memories, setMemories] = useState<Memory[]>([]);
   const [memoryTotal, setMemoryTotal] = useState(0);
@@ -2010,7 +2017,7 @@ export default function GoalsView({ composio }: GoalsViewProps) {
       {loading ? (
         <div className="flex items-center justify-center gap-2 py-14">
           <Loader2 size={16} className="animate-spin text-foreground/40" />
-          <span className="text-[13px] text-foreground/40">Loading profile snapshot...</span>
+          <Text variant="bodySm" className="text-foreground/40">Loading profile snapshot...</Text>
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">
@@ -2074,15 +2081,15 @@ export default function GoalsView({ composio }: GoalsViewProps) {
               >
             <>
               <motion.section {...sectionMotion} className="glass-card-strong p-5">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-foreground/45">
+                <Text variant="caption" weight="semibold" className="block uppercase tracking-[0.18em] text-foreground/45">
                   IDENTITY
-                </div>
+                </Text>
                 <h2 className="mt-2 text-xl font-semibold tracking-tight text-foreground">
                   {profile?.display_name?.trim() || "Unnamed user"}
                 </h2>
-                <p className="mt-2 text-[13px] leading-6 text-foreground/65 line-clamp-6">
+                <Text variant="bodySm" className="block mt-2 leading-6 text-foreground/65 line-clamp-6">
                   {profileSummaryText(profile)}
-                </p>
+                </Text>
               </motion.section>
 
               {/* PROFILE / MEMORY sub-tab switcher inside the Identity tab.
@@ -2133,9 +2140,9 @@ export default function GoalsView({ composio }: GoalsViewProps) {
             <motion.section id="profile-section-goals" {...sectionMotion} className="glass-card-strong p-4">
               <div className="mb-3">
                 <h2 className="text-sm font-semibold text-foreground">Goals</h2>
-                <p className="mt-1 text-[11px] leading-5 text-foreground/42">
+                <Text variant="caption" className="block mt-1 leading-5 text-foreground/42">
                   Share your goals — help AI know you. Tap any basket to expand.
-                </p>
+                </Text>
               </div>
               {activeGoals.length === 0 ? (
                 <EmptyState title="No active goals" description="Goals stay as a first-class collection in the mirror layer." />
@@ -2171,14 +2178,14 @@ export default function GoalsView({ composio }: GoalsViewProps) {
                           </div>
                           <div className="mb-2 flex items-center justify-between gap-2">
                             <span className="text-lg font-semibold tabular-nums text-foreground">{visual.pct}%</span>
-                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${statusPillColor[status]}`}>
+                            <span className={`rounded-full px-2 py-0.5 text-micro font-medium ${statusPillColor[status]}`}>
                               {status}
                             </span>
                           </div>
                           <div className="flex items-end justify-between gap-2">
-                            <p className="line-clamp-2 text-[11px] leading-snug text-foreground/55">
+                            <Text variant="caption" className="block line-clamp-2 leading-snug text-foreground/55">
                               {goal.summary || goal.title}
-                            </p>
+                            </Text>
                             <ChevronRight size={14} className="shrink-0 text-foreground/30" />
                           </div>
                         </div>
@@ -2197,7 +2204,7 @@ export default function GoalsView({ composio }: GoalsViewProps) {
       {/* Gateway grid detail —— 宽屏居中玻璃 popup / 窄屏底部 Drawer（同一份
           GoalDetailBody）。zebra 桌面层语言：聚焦型检视用居中 popup；iOS 的
           横贯底部抽屉在宽屏违和。 */}
-      {isWideViewport ? (
+      {detailLayout !== "drawer" && isWideViewport ? (
         <GoalDetailPopup
           apiGoal={selectedApiGoal ?? null}
           visual={selectedVisual}
@@ -2267,7 +2274,7 @@ function GoalDetailBody({
             <img src={visual.image} alt={basket.label} width={32} height={32} className="w-8 h-8 object-contain" />
           )}
           <span className="text-display text-lg text-foreground font-semibold">{basket.label}</span>
-          <span className={`text-[11px] font-medium px-2.5 py-0.5 rounded-full ${
+          <span className={`text-caption font-medium px-2.5 py-0.5 rounded-full ${
             status === "Alert" ? "bg-rose-50 text-rose-400"
             : status === "Watch" ? "bg-amber-50 text-amber-500"
             : "bg-emerald-50 text-emerald-500"

@@ -6,6 +6,7 @@ import { deriveCardUiStatus, isReminderCard } from "@pin-ai/core";
 import { connectorSlugFromIntentKey } from "@/lib/connector-card";
 import { getToolkit } from "@/lib/toolkit-icons";
 import { useCardState } from "@/components/card/CardStateContext";
+import { Text } from "@pin-ai/ui-web";
 
 type TimelineCard = IntentCard & {
   runId: string;
@@ -88,7 +89,7 @@ export default function CardTimeline({
       {cards.loading && cards.cards.length === 0 && (
         <div className="flex items-center justify-center py-8 gap-2">
           <Loader2 size={16} className="animate-spin text-foreground/40" />
-          <span className="text-[13px] text-foreground/40">Loading history...</span>
+          <Text variant="bodySm" className="text-foreground/40">Loading history...</Text>
         </div>
       )}
 
@@ -166,7 +167,7 @@ export default function CardTimeline({
                     </span>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5">
-                        <p className={`text-[13px] font-medium leading-snug line-clamp-2 flex-1 ${isResolved ? "text-foreground/35 line-through" : "text-foreground"}`}>
+                        <p className={`text-bodySm font-medium leading-snug line-clamp-2 flex-1 ${isResolved ? "text-foreground/35 line-through" : "text-foreground"}`}>
                           {card.title}
                         </p>
                         <span className="shrink-0 w-[18px] h-[18px] inline-flex items-center justify-center">
@@ -186,12 +187,12 @@ export default function CardTimeline({
                         </span>
                       </div>
                       <div className="flex items-center gap-1 mt-1.5">
-                        <p className="text-[11px] text-foreground/40 truncate flex-1">
+                        <p className="text-caption text-foreground/40 truncate flex-1">
                           {previewText}
                         </p>
-                        <span className="text-[10px] text-muted-foreground shrink-0">
+                        <Text variant="micro" className="text-muted-foreground shrink-0">
                           {formatTime(card.runDate)}
-                        </span>
+                        </Text>
                       </div>
                     </div>
                   </div>
@@ -207,10 +208,10 @@ export default function CardTimeline({
           <div className="glass-card p-4 rounded-full">
             <Sparkles size={28} strokeWidth={1.5} className="text-foreground/40" />
           </div>
-          <p className="text-display text-[15px] text-foreground/60">No cards yet</p>
-          <p className="text-[13px] text-foreground/40 leading-relaxed max-w-[260px]">
+          <Text variant="body" className="block text-display text-foreground/60">No cards yet</Text>
+          <Text variant="bodySm" className="block text-foreground/40 leading-relaxed max-w-[260px]">
             Generate intent cards from the NOW tab. All cards will appear here.
-          </p>
+          </Text>
         </div>
       )}
     </div>

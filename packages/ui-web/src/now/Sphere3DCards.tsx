@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { LucideIcon } from "lucide-react";
+import { Text } from "../primitives/Text";
 
 export type SphereCardStatus =
   | "normal"
@@ -458,52 +459,52 @@ const Sphere3DCards = ({
               <div className="flex items-center gap-1 mb-1">
                 {item.complexity === "simple" ? (
                   <span
-                    className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-[1px] rounded-full uppercase tracking-wide leading-none"
-                    style={{ background: "rgba(225,92,230,0.15)", color: "#E15CE6" }}
+                    className="inline-flex items-center gap-1 text-micro font-bold px-1.5 py-[1px] rounded-full uppercase tracking-wide leading-none"
+                    style={{ background: "hsl(var(--primary) / 0.15)", color: "hsl(var(--primary))" }}
                   >
-                    <span className="w-1 h-1 rounded-full" style={{ background: "#E15CE6" }} />
+                    <span className="w-1 h-1 rounded-full" style={{ background: "hsl(var(--primary))" }} />
                     Quick
                   </span>
                 ) : (
                   <>
                     <Icon size={12} strokeWidth={1.5} className="text-foreground/60 shrink-0" />
-                    <span className="text-[10px] font-semibold tracking-wide text-foreground/60 uppercase truncate">
+                    <Text variant="micro" weight="semibold" className="tracking-wide text-foreground/60 uppercase truncate">
                       {item.categoryLabel}
-                    </span>
+                    </Text>
                   </>
                 )}
                 {isNew && (
-                  <span className="text-[10px] font-bold text-pink-500 uppercase tracking-wider ml-auto">
+                  <Text variant="micro" weight="bold" className="text-pink-500 uppercase tracking-wider ml-auto">
                     new
-                  </span>
+                  </Text>
                 )}
                 {isProcessing && (
                   <span className="ml-auto shrink-0 w-2.5 h-2.5 rounded-full border-[1.5px] border-amber-400 border-t-transparent animate-spin" />
                 )}
                 {isNeedsInput && (
-                  <span className="text-[10px] font-bold text-amber-500 uppercase tracking-wider ml-auto animate-pulse">
+                  <Text variant="micro" weight="bold" className="text-amber-500 uppercase tracking-wider ml-auto animate-pulse">
                     input
-                  </span>
+                  </Text>
                 )}
                 {isReady && (
-                  <span className="text-[10px] font-bold text-green-500 uppercase tracking-wider ml-auto">
+                  <Text variant="micro" weight="bold" className="text-green-500 uppercase tracking-wider ml-auto">
                     ready
-                  </span>
+                  </Text>
                 )}
                 {isFailed && (
-                  <span className="text-[10px] font-bold text-rose-500 uppercase tracking-wider ml-auto">
+                  <Text variant="micro" weight="bold" className="text-rose-500 uppercase tracking-wider ml-auto">
                     failed
-                  </span>
+                  </Text>
                 )}
                 {isDone && (
-                  <span className="text-[10px] font-bold text-green-500 uppercase tracking-wider ml-auto">
+                  <Text variant="micro" weight="bold" className="text-green-500 uppercase tracking-wider ml-auto">
                     done
-                  </span>
+                  </Text>
                 )}
               </div>
-              <p className="text-[13px] font-medium text-foreground leading-snug line-clamp-3">
+              <Text variant="bodySm" weight="medium" className="block text-foreground leading-snug line-clamp-3">
                 {item.title}
-              </p>
+              </Text>
             </button>
           );
         })}

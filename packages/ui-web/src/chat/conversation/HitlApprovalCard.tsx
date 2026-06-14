@@ -14,7 +14,8 @@
 import { useState } from "react";
 import { Check, X } from "lucide-react";
 import type { HitlRequiresAction } from "@pin-ai/core";
-import { cn } from "../../lib/utils";
+import { Button } from "../../primitives/Button";
+import { Text } from "../../primitives/Text";
 
 // Phase 3：HitlRequiresAction 类型已迁 @pin-ai/core（envelope 域形状，
 // machines/conversation.ts）；此处 re-export 保持旧 import 路径兼容。
@@ -45,23 +46,25 @@ export function HitlApprovalCard({
     <div className="rounded-xl border border-amber-400/30 bg-amber-50/40 overflow-hidden">
       <div className="flex items-center gap-2.5 px-3 py-2.5">
         <div className="w-7 h-7 rounded-lg bg-amber-100 border border-amber-300/50 flex items-center justify-center shrink-0">
-          <span className="text-[13px]" aria-hidden>
+          {/* emoji 装饰：保留 span（text-bodySm 设 emoji 大小，非 typeScale 文本;
+              aria-hidden 不可丢——Text 契约不透传 aria，故用原生 span）。 */}
+          <span className="text-bodySm" aria-hidden>
             ⚠️
           </span>
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-700/70 leading-none mb-1">
+          <Text variant="micro" weight="semibold" className="block uppercase tracking-wider text-amber-700/70 leading-none mb-1">
             Needs your approval
-          </p>
-          <p className="text-[13px] font-semibold text-foreground/85 truncate leading-tight">
+          </Text>
+          <Text variant="bodySm" weight="semibold" className="block text-foreground/85 truncate leading-tight">
             {action.toolName}
-          </p>
+          </Text>
         </div>
       </div>
 
       {action.argsPreview ? (
         <div className="px-3 pb-2">
-          <pre className="text-[11px] text-foreground/60 bg-foreground/[0.03] rounded-lg px-2.5 py-2 overflow-x-auto whitespace-pre-wrap break-words">
+          <pre className="text-caption text-foreground/60 bg-foreground/[0.03] rounded-lg px-2.5 py-2 overflow-x-auto whitespace-pre-wrap break-words">
             {action.argsPreview}
           </pre>
         </div>
@@ -69,7 +72,7 @@ export function HitlApprovalCard({
 
       {readOnly ? (
         <div className="px-3 py-2 border-t border-foreground/8">
-          <p className="text-[11px] text-foreground/40 italic">Resolved earlier</p>
+          <Text variant="caption" className="block text-foreground/40 italic">Resolved earlier</Text>
         </div>
       ) : rejecting ? (
         <div className="px-3 py-2.5 border-t border-foreground/8 space-y-2">
@@ -79,59 +82,53 @@ export function HitlApprovalCard({
             placeholder="Optional: tell the agent why (it continues without running the tool)"
             rows={2}
             disabled={disabled}
-            className="w-full text-[12px] rounded-lg border border-foreground/12 px-2.5 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-foreground/20 disabled:opacity-50"
+            className="w-full text-label rounded-lg border border-foreground/12 px-2.5 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-foreground/20 disabled:opacity-50"
           />
           <div className="flex gap-2 justify-end">
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="sm"
               disabled={disabled}
-              onClick={() => {
+              onPress={() => {
                 setRejecting(false);
                 setReason("");
               }}
-              className="text-[12px] px-3 py-1.5 rounded-lg text-foreground/60 hover:bg-foreground/5 disabled:opacity-50"
             >
               Back
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
               disabled={disabled}
-              onClick={() => onDecide("reject", reason.trim() || undefined)}
-              className="text-[12px] font-semibold px-3 py-1.5 rounded-lg bg-red-500 text-white hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed"
+              onPress={() => onDecide("reject", reason.trim() || undefined)}
             >
               Reject
-            </button>
+            </Button>
           </div>
         </div>
       ) : (
         <div className="flex gap-2 px-3 py-2.5 border-t border-foreground/8 justify-end">
           {canReject ? (
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="sm"
               disabled={disabled}
-              onClick={() => setRejecting(true)}
-              className={cn(
-                "flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-lg",
-                "text-foreground/70 hover:bg-foreground/5 disabled:opacity-50 disabled:cursor-not-allowed",
-              )}
+              onPress={() => setRejecting(true)}
+              leftIcon={<X size={14} strokeWidth={2} />}
             >
-              <X size={14} strokeWidth={2} />
               Reject
-            </button>
+            </Button>
           ) : null}
           {canApprove ? (
-            <button
-              type="button"
+            <Button
+              variant="primary"
+              size="sm"
               disabled={disabled}
-              onClick={() => onDecide("approve")}
-              className={cn(
-                "flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-lg",
-                "bg-foreground text-background hover:bg-foreground/90 disabled:opacity-50 disabled:cursor-not-allowed",
-              )}
+              onPress={() => onDecide("approve")}
+              leftIcon={<Check size={14} strokeWidth={2} />}
             >
-              <Check size={14} strokeWidth={2} />
               Approve
-            </button>
+            </Button>
           ) : null}
         </div>
       )}

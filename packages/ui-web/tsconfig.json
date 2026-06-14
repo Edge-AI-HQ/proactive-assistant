@@ -12,7 +12,9 @@
     "jsx": "react-jsx",
     "types": ["vite/client"],
     "paths": {
-      "@pin-ai/core": ["../core/src/index.ts"]
+      "@pin-ai/core": ["../core/src/index.ts"],
+      "@pin-ai/ui-kit": ["../ui-kit/src/index.ts"],
+      "@pin-ai/design": ["../design/tokens"]
     }
   },
   "include": ["src"]

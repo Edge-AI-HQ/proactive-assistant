@@ -18,6 +18,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Circle, Loader2, X } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useTodoPlan, type Todo } from "@pin-ai/state";
+import { Text } from "../../primitives/Text";
 
 interface TodoPanelProps {
   sessionKey: string;
@@ -100,12 +101,12 @@ export default function TodoPanel({ sessionKey, composerFocused }: TodoPanelProp
   return (
     <div className="mx-2 mb-1 rounded-xl border border-foreground/10 bg-white/70 backdrop-blur-sm shadow-sm overflow-hidden">
       <div className="flex items-center gap-2 px-3 py-2">
-        <span className="text-[13px] font-medium text-foreground/80">
+        <Text variant="bodySm" weight="medium" className="text-foreground/80">
           {plan.done && allDone ? "Plan done" : "Plan"}
-        </span>
+        </Text>
         <span
           className={cn(
-            "text-[12px]",
+            "text-label",
             allDone ? "text-emerald-600" : "text-foreground/45",
           )}
         >
@@ -143,7 +144,7 @@ export default function TodoPanel({ sessionKey, composerFocused }: TodoPanelProp
           {plan.todos.map((todo, i) => (
             <li
               key={`${i}-${todo.content}`}
-              className="flex items-start gap-2 text-[13px] leading-snug"
+              className="flex items-start gap-2 text-bodySm leading-snug"
             >
               <span className="mt-0.5 shrink-0">{statusIcon(todo.status)}</span>
               <span

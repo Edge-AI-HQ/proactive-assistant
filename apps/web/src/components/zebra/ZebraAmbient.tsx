@@ -1,5 +1,5 @@
 import { Radio, Smartphone } from "lucide-react";
-import { DeviceConnections } from "@pin-ai/ui-web";
+import { DeviceConnections, Text } from "@pin-ai/ui-web";
 
 /**
  * Desktop (zebra) AMBIENT — web 端只读语义（设计 SSOT：
@@ -31,16 +31,16 @@ export default function ZebraAmbient({
           )}
         </span>
         <div className="flex-1 min-w-0">
-          <p className="text-[13.5px] font-semibold text-foreground">
+          <Text variant="bodySm" weight="semibold" className="block text-foreground">
             {ambientOn ? "Ambient sensing is on" : "Ambient sensing is off"}
-          </p>
-          <p className="text-[12px] text-foreground/50 leading-snug">
+          </Text>
+          <Text variant="label" className="block text-foreground/50 leading-snug">
             Capture happens on your phone — this page mirrors what it has uploaded.
-          </p>
+          </Text>
         </div>
         <button
           onClick={onConnectMore}
-          className="inline-flex items-center gap-1.5 rounded-xl border border-foreground/10 bg-white/60 px-3 py-2 text-[12px] font-medium text-foreground/70 hover:bg-white/80 transition-colors shrink-0"
+          className="inline-flex items-center gap-1.5 rounded-xl border border-foreground/10 bg-white/60 px-3 py-2 text-label font-medium text-foreground/70 hover:bg-white/80 transition-colors shrink-0"
         >
           <Smartphone size={13} strokeWidth={1.8} /> Manage on phone
         </button>

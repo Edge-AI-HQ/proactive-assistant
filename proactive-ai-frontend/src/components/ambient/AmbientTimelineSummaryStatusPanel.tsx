@@ -8,6 +8,7 @@ import {
   type AmbientTimelineEvent,
   type TimelineStoreStatus,
 } from "@/services/ambient/timeline";
+import { Text } from "@pin-ai/ui-web";
 
 interface SummaryStatusSnapshot {
   storeStatus: TimelineStoreStatus | null;
@@ -137,16 +138,16 @@ export default function AmbientTimelineSummaryStatusPanel() {
             <Sparkles size={15} strokeWidth={1.8} className="text-foreground/55" />
             <h2 className="text-base font-semibold text-foreground">Timeline summaries</h2>
           </div>
-          <p className="text-[12px] text-foreground/55 leading-relaxed">
+          <Text variant="label" className="block text-foreground/55 leading-relaxed">
             Shows whether local LLM summary windows are pending, processing, or already written as Timeline cards.
-          </p>
+          </Text>
         </div>
         <div className="flex items-center gap-1.5">
           <button
             type="button"
             onClick={() => void runSummaryNow()}
             disabled={summaryRunning}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-foreground/10 bg-foreground text-background px-2.5 py-2 text-[11px] font-semibold hover:opacity-90 disabled:opacity-45 disabled:cursor-not-allowed"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-foreground/10 bg-foreground text-background px-2.5 py-2 text-caption font-semibold hover:opacity-90 disabled:opacity-45 disabled:cursor-not-allowed"
             aria-label="Run timeline summary now"
           >
             <Play size={12} strokeWidth={2} />
@@ -170,7 +171,7 @@ export default function AmbientTimelineSummaryStatusPanel() {
         <Metric label="Failed attempts" value={String(snapshot.failed.length)} tone={snapshot.failed.length > 0 ? "error" : "muted"} />
       </div>
 
-      <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-3 space-y-2 text-[11px] text-foreground/55">
+      <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-3 space-y-2 text-caption text-foreground/55">
         <StatusRow icon={<CheckCircle2 size={13} />} label="Summarized windows" value={snapshot.summarized.length} />
         <StatusRow icon={<Clock size={13} />} label="Skipped low-value windows" value={snapshot.skipped.length} />
         <StatusRow icon={<Clock size={13} />} label="Processing windows" value={snapshot.processing.length} />
@@ -214,8 +215,8 @@ function Metric({ label, value, tone }: { label: string; value: string; tone: "o
   }[tone];
   return (
     <div className="rounded-xl border border-foreground/10 bg-white/40 p-3">
-      <div className="text-[10px] uppercase tracking-[0.12em] text-foreground/40 font-semibold">{label}</div>
-      <div className={`inline-flex mt-1 rounded-md px-2 py-0.5 text-[12px] font-semibold ${toneClass}`}>{value}</div>
+      <Text variant="micro" weight="semibold" className="block uppercase tracking-[0.12em] text-foreground/40">{label}</Text>
+      <div className={`inline-flex mt-1 rounded-md px-2 py-0.5 text-label font-semibold ${toneClass}`}>{value}</div>
     </div>
   );
 }

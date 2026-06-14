@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
 import { useUserSettings } from "@pin-ai/state";
+import { Text } from "../primitives/Text";
 
 // The three heartbeat cadence buckets surfaced in the UI. Server enforces the
 // set via a Pydantic Literal + DB CHECK (60/300/1800); this list is UX only.
@@ -46,25 +47,25 @@ export default function ProactiveSettings() {
           {!saving && savedAt && <Check size={12} className="text-emerald-500" />}
         </div>
       </div>
-      <p className="text-[11px] text-foreground/40 mt-1">
+      <Text variant="caption" className="block text-foreground/40 mt-1">
         How often your Proactive AI wakes to check your latest activity. Less
         frequent is calmer and uses fewer resources; turn it on/off on the
         Proactive page.
-      </p>
+      </Text>
       <div className="mt-2 flex items-center gap-2">
-        <label className="text-[11px] text-foreground/60">Every</label>
+        <label className="text-caption text-foreground/60">Every</label>
         <select
           value={intervalSeconds}
           disabled={loading || saving}
           onChange={(e) => void handleIntervalChange(e)}
-          className="text-[11px] bg-background border border-foreground/15 rounded px-2 py-1 disabled:opacity-40"
+          className="text-caption bg-background border border-foreground/15 rounded px-2 py-1 disabled:opacity-40"
         >
           {PRESETS_SECONDS.map((s) => (
             <option key={s} value={s}>{formatPreset(s)}</option>
           ))}
         </select>
       </div>
-      {error && <p className="text-[11px] text-red-500 mt-1">{error}</p>}
+      {error && <Text variant="caption" className="block text-red-500 mt-1">{error}</Text>}
     </div>
   );
 }

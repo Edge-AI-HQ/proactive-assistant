@@ -19,7 +19,7 @@ import {
   realCardToLovableIntent,
   sourceAppDisplay,
   useCardActions,
-  type Intent,
+  type Intent, Text,
 } from "@pin-ai/ui-web";
 import type { VisibleCardEntry } from "@pin-ai/core";
 import ZebraCardChat from "./ZebraCardChat";
@@ -178,7 +178,7 @@ export default function ZebraTasksSplit({
             <button
               key={f.id}
               onClick={() => setFilter(f.id)}
-              className={`px-2.5 py-1 rounded-full text-[11.5px] font-medium transition-colors ${
+              className={`px-2.5 py-1 rounded-full text-caption font-medium transition-colors ${
                 filter === f.id
                   ? "bg-foreground text-background"
                   : "bg-foreground/[0.05] text-foreground/55 hover:bg-foreground/10"
@@ -195,9 +195,9 @@ export default function ZebraTasksSplit({
         <div className="flex-1 overflow-y-auto min-h-0 pr-1 -mr-1">
           {sections.map(([dateLabel, items]) => (
             <div key={dateLabel} className="mb-4">
-              <span className="text-[10.5px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 block">
+              <Text variant="caption" weight="semibold" className="text-muted-foreground uppercase tracking-wider mb-2 block">
                 {dateLabel}
-              </span>
+              </Text>
               <div className="space-y-1.5">
                 {items.map((t) => {
                   const meta = basketMeta(t.card.goalBasket);
@@ -242,7 +242,7 @@ export default function ZebraTasksSplit({
                         </span>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1.5">
-                            <p className={`text-[12.5px] font-medium leading-snug line-clamp-1 flex-1 ${t.resolved ? "text-foreground/35 line-through" : "text-foreground"}`}>
+                            <p className={`text-label font-medium leading-snug line-clamp-1 flex-1 ${t.resolved ? "text-foreground/35 line-through" : "text-foreground"}`}>
                               {t.card.title}
                             </p>
                             <span className="shrink-0 w-[16px] h-[16px] inline-flex items-center justify-center">
@@ -262,8 +262,8 @@ export default function ZebraTasksSplit({
                             </span>
                           </div>
                           <div className="flex items-center gap-1 mt-1">
-                            <p className="text-[10.5px] text-foreground/40 truncate flex-1">{previewText}</p>
-                            <span className="text-[10px] text-muted-foreground shrink-0">{formatTime(t.runDate)}</span>
+                            <p className="text-micro text-foreground/40 truncate flex-1">{previewText}</p>
+                            <Text variant="micro" className="text-muted-foreground shrink-0">{formatTime(t.runDate)}</Text>
                           </div>
                         </div>
                       </div>
@@ -279,10 +279,10 @@ export default function ZebraTasksSplit({
               <div className="glass-card p-4 rounded-full">
                 <ListChecks size={24} strokeWidth={1.5} className="text-foreground/40" />
               </div>
-              <p className="text-display text-[14px] text-foreground/60">No cards yet</p>
-              <p className="text-[12.5px] text-foreground/40 leading-relaxed max-w-[240px]">
+              <Text variant="bodySm" className="block text-display text-foreground/60">No cards yet</Text>
+              <Text variant="bodySm" className="block text-foreground/40 leading-relaxed max-w-[240px]">
                 Cards appear here as PIN AI generates and runs them.
-              </p>
+              </Text>
             </div>
           )}
         </div>
@@ -335,7 +335,7 @@ export default function ZebraTasksSplit({
               <div className="h-full flex items-center justify-center">
                 <div className="text-center px-8">
                   <ListChecks size={28} strokeWidth={1.5} className="text-foreground/25 mx-auto mb-3" />
-                  <p className="text-[13.5px] text-foreground/45">Select a task to see its execution</p>
+                  <Text variant="bodySm" className="block text-foreground/45">Select a task to see its execution</Text>
                 </div>
               </div>
             )}

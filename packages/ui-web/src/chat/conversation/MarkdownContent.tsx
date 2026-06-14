@@ -120,28 +120,28 @@ export default function MarkdownContent({
   const components: Components = {
     p: ({ children }) => (
       <p
-        className={`text-[13px] leading-relaxed my-2 first:mt-0 last:mb-0 ${bodyColor}`}
+        className={`text-bodySm leading-relaxed my-2 first:mt-0 last:mb-0 ${bodyColor}`}
       >
         {transformChildren(children)}
       </p>
     ),
     h1: ({ children }) => (
-      <h1 className="text-display text-[17px] font-semibold text-foreground tracking-tight mt-3.5 mb-1.5 first:mt-0">
+      <h1 className="text-display text-subheading font-semibold text-foreground tracking-tight mt-3.5 mb-1.5 first:mt-0">
         {children}
       </h1>
     ),
     h2: ({ children }) => (
-      <h2 className="text-display text-[15px] font-semibold text-foreground tracking-tight mt-3 mb-1.5 first:mt-0">
+      <h2 className="text-display text-body font-semibold text-foreground tracking-tight mt-3 mb-1.5 first:mt-0">
         {children}
       </h2>
     ),
     h3: ({ children }) => (
-      <h3 className="text-[13.5px] font-semibold text-foreground mt-2.5 mb-1 first:mt-0">
+      <h3 className="text-bodySm font-semibold text-foreground mt-2.5 mb-1 first:mt-0">
         {children}
       </h3>
     ),
     h4: ({ children }) => (
-      <h4 className="text-[11px] font-bold uppercase tracking-[0.12em] text-foreground/55 mt-2.5 mb-1 first:mt-0">
+      <h4 className="text-caption font-bold uppercase tracking-[0.12em] text-foreground/55 mt-2.5 mb-1 first:mt-0">
         {children}
       </h4>
     ),
@@ -156,7 +156,7 @@ export default function MarkdownContent({
       </ol>
     ),
     li: ({ children }) => (
-      <li className={`text-[13px] leading-relaxed pl-0.5 ${bodyColor}`}>
+      <li className={`text-bodySm leading-relaxed pl-0.5 ${bodyColor}`}>
         {transformChildren(children)}
       </li>
     ),
@@ -184,7 +184,7 @@ export default function MarkdownContent({
       if (inline) {
         return (
           <code
-            className="px-1.5 py-0.5 mx-[1px] rounded-md text-[12px] font-mono bg-foreground/[0.06] text-foreground/85 border border-foreground/[0.05]"
+            className="px-1.5 py-0.5 mx-[1px] rounded-md text-label font-mono bg-foreground/[0.06] text-foreground/85 border border-foreground/[0.05]"
             {...rest}
           >
             {children}
@@ -230,7 +230,7 @@ export default function MarkdownContent({
     ),
     table: ({ children }) => (
       <div className="my-3 -mx-0.5 overflow-x-auto first:mt-0 last:mb-0">
-        <table className="w-full text-[12.5px] border-collapse">{children}</table>
+        <table className="w-full text-label border-collapse">{children}</table>
       </div>
     ),
     thead: ({ children }) => <thead>{children}</thead>,

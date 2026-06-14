@@ -4,5 +4,6 @@
   "private": true,
   "description": "跨端设计 token SSOT：tailwind theme（web vite + RN NativeWind 共享）+ CSS 变量块。改色值只改这里。",
   "main": "tokens.cjs",
+  "module": "tokens.mjs",
   "types": "tokens.d.ts"
 }

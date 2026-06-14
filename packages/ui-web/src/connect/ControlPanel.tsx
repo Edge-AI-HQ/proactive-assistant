@@ -5,6 +5,7 @@ import DataConnections, { INPUT_CATEGORIES, isDataSourceConnected } from "./Data
 import DeviceConnections from "./DeviceConnections";
 import { useUserDevices } from "@pin-ai/state";
 import type { ComposioState } from "@pin-ai/state";
+import { Text } from "../primitives/Text";
 
 interface ControlPanelProps {
   composio: ComposioState;
@@ -61,9 +62,9 @@ export default function ControlPanel({ composio }: ControlPanelProps) {
           {/* Top stats — DATA SOURCES + DEVICES */}
           <div className="grid grid-cols-2 gap-2.5">
             <div className="glass-card p-4">
-              <p className="text-[10px] font-semibold text-foreground/50 uppercase tracking-[0.12em] mb-1">
+              <Text variant="micro" weight="semibold" className="block text-foreground/50 uppercase tracking-[0.12em] mb-1">
                 Data Sources
-              </p>
+              </Text>
               <div className="flex items-baseline gap-1.5">
                 <span className="text-2xl font-semibold text-foreground leading-none">
                   {dataSourceConnected}
@@ -74,13 +75,13 @@ export default function ControlPanel({ composio }: ControlPanelProps) {
               </div>
               <div className="flex items-center gap-1.5 mt-2">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                <span className="text-[10px] font-medium text-foreground/60">All synced</span>
+                <Text variant="micro" weight="medium" className="text-foreground/60">All synced</Text>
               </div>
             </div>
             <div className="glass-card p-4">
-              <p className="text-[10px] font-semibold text-foreground/50 uppercase tracking-[0.12em] mb-1">
+              <Text variant="micro" weight="semibold" className="block text-foreground/50 uppercase tracking-[0.12em] mb-1">
                 Devices
-              </p>
+              </Text>
               <div className="flex items-baseline gap-1.5">
                 <span className="text-2xl font-semibold text-foreground leading-none">
                   {peerCount}
@@ -89,7 +90,7 @@ export default function ControlPanel({ composio }: ControlPanelProps) {
               </div>
               <div className="flex items-center gap-1.5 mt-2">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                <span className="text-[10px] font-medium text-foreground/60">All synced</span>
+                <Text variant="micro" weight="medium" className="text-foreground/60">All synced</Text>
               </div>
             </div>
           </div>
@@ -98,9 +99,9 @@ export default function ControlPanel({ composio }: ControlPanelProps) {
           <div>
             <div className="flex items-center gap-2 mb-2 px-1">
               <span className="w-1 h-1 rounded-full bg-[hsl(304_75%_63%)]" />
-              <span className="text-[10px] font-semibold text-[hsl(304_75%_63%)] uppercase tracking-[0.12em]">
+              <Text variant="micro" weight="semibold" className="text-[hsl(304_75%_63%)] uppercase tracking-[0.12em]">
                 Ambient Sources
-              </span>
+              </Text>
             </div>
             <motion.div
               initial={{ opacity: 0, y: 12 }}
@@ -117,13 +118,13 @@ export default function ControlPanel({ composio }: ControlPanelProps) {
                 <div className="flex-1 text-left">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-foreground">Devices</span>
-                    <span className="text-[10px] font-semibold text-[hsl(304_75%_63%)] bg-[hsl(304_75%_63%/0.1)] px-1.5 py-0.5 rounded-md">
+                    <Text variant="micro" weight="semibold" className="text-[hsl(304_75%_63%)] bg-[hsl(304_75%_63%/0.1)] px-1.5 py-0.5 rounded-md">
                       {peerCount} active
-                    </span>
+                    </Text>
                   </div>
-                  <p className="text-[11px] text-foreground/50 mt-0.5 leading-snug">
+                  <Text variant="caption" className="block text-foreground/50 mt-0.5 leading-snug">
                     Phones, laptops, wearables, glasses, cameras — encrypted peer-to-peer
-                  </p>
+                  </Text>
                 </div>
                 <div className="flex-shrink-0 text-foreground/30">
                   {meshExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
@@ -152,9 +153,9 @@ export default function ControlPanel({ composio }: ControlPanelProps) {
           <div>
             <div className="flex items-center gap-2 mb-2 px-1">
               <span className="w-1 h-1 rounded-full bg-foreground/40" />
-              <span className="text-[10px] font-semibold text-foreground/50 uppercase tracking-[0.12em]">
+              <Text variant="micro" weight="semibold" className="text-foreground/50 uppercase tracking-[0.12em]">
                 Data Sources
-              </span>
+              </Text>
             </div>
             <DataConnections composio={composio} />
           </div>

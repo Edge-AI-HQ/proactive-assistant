@@ -5,6 +5,7 @@ import HomeEmptyState from "@/components/now/HomeEmptyState";
 import { CATEGORIES, type Intent } from "@/components/now/card-model";
 import type { WeatherData } from "@/hooks/useWeather";
 import type { VoicePermissionState } from "@/hooks/useVoicePermission";
+import { Text } from "@pin-ai/ui-web";
 
 interface NowViewProps {
   /** First name (or fallback) rendered in the greeting headline. */
@@ -71,15 +72,15 @@ export default function NowView({
         style={{ paddingTop: "var(--constellation-header-top)" }}
       >
         {/* Greeting — generous space, editorial feel */}
-        <h2 className="text-[30px] font-semibold tracking-tight text-foreground leading-[1.05]">
+        <Text as="h2" variant="display" weight="semibold" className="tracking-tight">
           Hi,{" "}
-          <span className="bg-gradient-to-r from-[hsl(292,78%,63%)] to-[hsl(330,80%,65%)] bg-clip-text text-transparent">
+          <span className="bg-gradient-to-r from-primary to-[hsl(330,80%,65%)] bg-clip-text text-transparent">
             {displayName}
           </span>
-        </h2>
-        <p className="mt-1.5 text-[13px] text-foreground/50 leading-snug">
+        </Text>
+        <Text variant="bodySm" className="block mt-1.5 text-foreground/50 leading-snug">
           Your proactive feed · {sphereCards.length} cards today
-        </p>
+        </Text>
 
         {/* Ambient — a prominent card (replaces the old divider + plain text
             row). Left tap opens the Ambient tab; right pill toggles the master
@@ -108,19 +109,19 @@ export default function NowView({
             </span>
             <div className="flex-1 min-w-0">
               <div
-                className={`text-[14px] font-semibold leading-tight ${
+                className={`text-body font-semibold leading-tight ${
                   ambientOn ? "text-foreground" : "text-foreground/70"
                 }`}
               >
                 {ambientOn ? "Ambient is on" : "Ambient is off"}
               </div>
-              <div className="text-[12px] text-foreground/50 leading-snug truncate mt-0.5">
+              <Text variant="label" className="block text-foreground/50 leading-snug truncate mt-0.5">
                 {!ambientOn
                   ? "Tap to start sensing context"
                   : weather
                     ? `${weather.city} · ${weather.label} · ${weather.temp}°`
                     : "Quiet ambient — connect sources to start streaming signals"}
-              </div>
+              </Text>
             </div>
           </button>
           <button

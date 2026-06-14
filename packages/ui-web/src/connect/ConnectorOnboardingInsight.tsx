@@ -16,6 +16,7 @@ import type { Connection } from "@pin-ai/state";
 import { buildConnectorInitTaskId, buildConnectorPreviewTaskId } from "@pin-ai/state";
 import { isInitTaskFresh, useInitTask, type InitTaskRow } from "@pin-ai/state";
 import { proxyPost } from "@pin-ai/core";
+import { Text } from "../primitives/Text";
 
 export type ConnectorInsightStatus = "hidden" | "pending" | "ready" | "error";
 
@@ -278,9 +279,9 @@ function ConnectorInsightCandidate({
         mode={mode}
         onDismiss={() => setDismissed(true)}
       >
-        <p className="text-[12px] leading-5 text-foreground/55">
+        <Text variant="label" className="block leading-5 text-foreground/55">
           {label} is connected. PIN AI is pulling recent data and will summarize it here while you keep setting up.
-        </p>
+        </Text>
       </InsightShell>
     );
   }
@@ -296,9 +297,9 @@ function ConnectorInsightCandidate({
         onContinue={onContinue}
         continueLabel={continueLabel}
       >
-        <p className="text-[12px] leading-5 text-foreground/55">
+        <Text variant="label" className="block leading-5 text-foreground/55">
           The first {label} pull did not finish cleanly yet. You can continue onboarding and try again later.
-        </p>
+        </Text>
       </InsightShell>
     );
   }
@@ -335,9 +336,9 @@ function ConnectorInsightCandidate({
         onContinue={onContinue}
         continueLabel={continueLabel}
       >
-        <p className="text-[12px] leading-5 text-foreground/55">
+        <Text variant="label" className="block leading-5 text-foreground/55">
           {summaryState.message}
-        </p>
+        </Text>
       </InsightShell>
     );
   }
@@ -349,9 +350,9 @@ function ConnectorInsightCandidate({
       mode={mode}
       onDismiss={() => setDismissed(true)}
     >
-      <p className="text-[12px] leading-5 text-foreground/55">
+      <Text variant="label" className="block leading-5 text-foreground/55">
         PIN AI is distilling the recent {label} window into a short profile preview.
-      </p>
+      </Text>
     </InsightShell>
   );
 }
@@ -368,22 +369,22 @@ function ConnectorSummaryContent({
       <div className="space-y-4">
         <div className="border-b border-foreground/[0.06] pb-4">
           {data.summary.displayName && (
-            <h2 className="text-[19px] font-semibold leading-snug text-foreground">
+            <h2 className="text-heading font-semibold leading-snug text-foreground">
               {data.summary.displayName}
             </h2>
           )}
-          <p className="mt-1.5 text-[13px] leading-5 text-foreground/62">
+          <Text variant="bodySm" className="block mt-1.5 leading-5 text-foreground/62">
             {data.summary.headline}
-          </p>
+          </Text>
         </div>
 
         <div className="space-y-5">
           {data.summary.sections.map((section) => (
             <section key={section.title} className="space-y-2">
-              <h3 className="text-[12px] font-semibold uppercase tracking-[0.06em] text-foreground/48">
+              <h3 className="text-label font-semibold uppercase tracking-[0.06em] text-foreground/48">
                 {section.title}
               </h3>
-              <ul className="space-y-2 text-[12.5px] leading-5 text-foreground/64">
+              <ul className="space-y-2 text-label leading-5 text-foreground/64">
                 {section.bullets.map((bullet) => (
                   <li key={bullet} className="flex gap-2">
                     <span className="mt-2 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-500/60" />
@@ -396,7 +397,7 @@ function ConnectorSummaryContent({
         </div>
 
         {data.summary.note && (
-          <div className="flex gap-2 border-t border-foreground/[0.06] pt-3 text-[11px] leading-4 text-foreground/42">
+          <div className="flex gap-2 border-t border-foreground/[0.06] pt-3 text-caption leading-4 text-foreground/42">
             <CheckCircle2 size={12} className="mt-0.5 flex-shrink-0" />
             <span>{data.summary.note}</span>
           </div>
@@ -409,13 +410,13 @@ function ConnectorSummaryContent({
     <div className="space-y-5">
       <div className="border-y border-foreground/[0.06] py-4">
         {data.summary.displayName && (
-          <h2 className="text-[20px] font-semibold leading-snug text-foreground">
+          <h2 className="text-heading font-semibold leading-snug text-foreground">
             {data.summary.displayName}
           </h2>
         )}
-        <p className="mt-1.5 max-w-[34rem] text-[13.5px] leading-6 text-foreground/64">
+        <Text variant="bodySm" className="block mt-1.5 max-w-[34rem] leading-6 text-foreground/64">
           {data.summary.headline}
-        </p>
+        </Text>
       </div>
 
       <div className="space-y-1">
@@ -430,10 +431,10 @@ function ConnectorSummaryContent({
                 <Icon size={15} strokeWidth={1.8} />
               </span>
               <div className="min-w-0">
-                <h3 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground/48">
+                <h3 className="text-caption font-semibold uppercase tracking-[0.12em] text-foreground/48">
                   {section.title}
                 </h3>
-                <ul className="mt-2.5 space-y-2.5 text-[13px] leading-5 text-foreground/68">
+                <ul className="mt-2.5 space-y-2.5 text-bodySm leading-5 text-foreground/68">
                   {section.bullets.map((bullet) => (
                     <li key={bullet} className="flex gap-2.5">
                       <span className="mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full bg-emerald-500/[0.12] text-emerald-600">
@@ -450,7 +451,7 @@ function ConnectorSummaryContent({
       </div>
 
       {data.summary.note && (
-        <div className="flex gap-2.5 rounded-2xl bg-foreground/[0.035] px-3 py-3 text-[11.5px] leading-4 text-foreground/48">
+        <div className="flex gap-2.5 rounded-2xl bg-foreground/[0.035] px-3 py-3 text-caption leading-4 text-foreground/48">
           <ShieldCheck size={14} className="mt-0.5 flex-shrink-0 text-foreground/45" />
           <span>{data.summary.note}</span>
         </div>
@@ -510,21 +511,21 @@ function InsightShell({
             {icon}
           </div>
           <div className="min-w-0 flex-1">
-            <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-foreground/34">
+            <Text variant="micro" weight="semibold" className="block mb-1 uppercase tracking-[0.16em] text-foreground/34">
               Connector preview
-            </p>
-            <h2 className="max-w-[18rem] text-[24px] font-semibold leading-[1.08] tracking-tight text-foreground">
+            </Text>
+            <h2 className="max-w-[18rem] text-title font-semibold leading-[1.08] tracking-tight text-foreground">
               {title}
             </h2>
             {badges && badges.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {badges.map((badge) => (
-                  <span
+                  <Text variant="caption" weight="medium"
                     key={badge}
-                    className="rounded-full bg-foreground/[0.055] px-2.5 py-1 text-[10.5px] font-medium leading-none text-foreground/50"
+                    className="rounded-full bg-foreground/[0.055] px-2.5 py-1 leading-none text-foreground/50"
                   >
                     {badge}
-                  </span>
+                  </Text>
                 ))}
               </div>
             )}
@@ -540,7 +541,7 @@ function InsightShell({
             <button
               type="button"
               onClick={onContinue}
-              className="inline-flex min-h-11 items-center gap-1.5 rounded-full bg-foreground px-5 text-[13px] font-semibold text-background transition-opacity hover:opacity-90"
+              className="inline-flex min-h-11 items-center gap-1.5 rounded-full bg-foreground px-5 text-bodySm font-semibold text-background transition-opacity hover:opacity-90"
             >
               {continueLabel}
               <ChevronRight size={15} strokeWidth={2} />
@@ -565,21 +566,21 @@ function InsightShell({
         </div>
         <div className="min-w-0 flex-1">
           <div>
-            <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-foreground/32">
+            <Text variant="micro" weight="semibold" className="block mb-1 uppercase tracking-[0.12em] text-foreground/32">
               Connector preview
-            </p>
+            </Text>
             <h2 className="truncate text-sm font-semibold text-foreground">
               {title}
             </h2>
             {badges && badges.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {badges.map((badge) => (
-                  <span
+                  <Text variant="micro" weight="medium"
                     key={badge}
-                    className="rounded-full bg-foreground/[0.055] px-2 py-1 text-[10px] font-medium leading-none text-foreground/48"
+                    className="rounded-full bg-foreground/[0.055] px-2 py-1 leading-none text-foreground/48"
                   >
                     {badge}
-                  </span>
+                  </Text>
                 ))}
               </div>
             )}

@@ -8,6 +8,12 @@
 
 export const PIN_AI_UI_WEB = "@pin-ai/ui-web";
 
+// ── primitives：设计系统基础组件（契约在 @pin-ai/ui-kit，此为 web 实现） ──
+export { Text } from "./primitives/Text";
+export { Button } from "./primitives/Button";
+export { Input } from "./primitives/Input";
+export { Surface } from "./primitives/Surface";
+
 // ── auth：supabase client / 平台判定 / dev auth / OAuth hook / transport 注入 ──
 export { supabase } from "./auth/supabase";
 export { isNative, isElectron, PIN_API_BASE, pinApiRequestHeaders } from "./auth/platform";

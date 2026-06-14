@@ -23,6 +23,7 @@ import SkillsPanel from "../profile/SkillsPanel";
 import MemoriesPanel from "../profile/MemoriesPanel";
 import type { RunState, PipelinePhase } from "@pin-ai/core";
 import type { ComposioState } from "@pin-ai/state";
+import { Text } from "../primitives/Text";
 
 interface DebugPanelProps {
   run: RunState;
@@ -175,7 +176,7 @@ function ConnectorReconnectRow({
   return (
     <div className="flex items-center gap-2 py-1.5">
       <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-baseline gap-1.5 text-[11px] font-medium text-foreground/75">
+        <div className="flex min-w-0 items-baseline gap-1.5 text-caption font-medium text-foreground/75">
           <span className="shrink-0">{toolkitLabel}</span>
           {identityLabel && (
             <span
@@ -187,7 +188,7 @@ function ConnectorReconnectRow({
           )}
         </div>
         {chipText && (
-          <span className={`mt-0.5 inline-block rounded-full px-2 py-0.5 text-[10px] font-medium ${chipClass}`}>
+          <span className={`mt-0.5 inline-block rounded-full px-2 py-0.5 text-micro font-medium ${chipClass}`}>
             {chipText}
           </span>
         )}
@@ -197,7 +198,7 @@ function ConnectorReconnectRow({
         onClick={handleClick}
         disabled={!!isWorking}
         title="Re-pull 100 items + re-run evolve. Existing raw rows are preserved."
-        className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-foreground/15 bg-white/55 px-2.5 py-1.5 text-[11px] font-medium text-foreground/65 transition-colors hover:bg-white/85 disabled:opacity-40 disabled:cursor-not-allowed"
+        className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-foreground/15 bg-white/55 px-2.5 py-1.5 text-caption font-medium text-foreground/65 transition-colors hover:bg-white/85 disabled:opacity-40 disabled:cursor-not-allowed"
       >
         {isWorking ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} strokeWidth={1.6} />}
         Reconnect
@@ -250,7 +251,7 @@ function TestPushButton() {
       type="button"
       onClick={() => void handleClick()}
       disabled={status === "scheduling" || status === "scheduled"}
-      className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-foreground/[0.06] text-foreground text-[11px] font-semibold py-1.5 transition-colors hover:bg-foreground/[0.10] disabled:opacity-60 disabled:cursor-not-allowed"
+      className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-foreground/[0.06] text-foreground text-caption font-semibold py-1.5 transition-colors hover:bg-foreground/[0.10] disabled:opacity-60 disabled:cursor-not-allowed"
     >
       <Bell size={12} strokeWidth={2} />
       {label}
@@ -293,7 +294,7 @@ function DeleteAccountButton({ onDeleteAccount }: { onDeleteAccount: () => Promi
         type="button"
         onClick={() => void handleClick()}
         disabled={pending}
-        className={`w-full flex items-center justify-center gap-1.5 rounded-lg border text-[11px] font-medium py-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+        className={`w-full flex items-center justify-center gap-1.5 rounded-lg border text-caption font-medium py-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
           confirming
             ? "border-red-500 bg-red-500 text-white hover:bg-red-600"
             : "border-red-300/60 text-red-500 hover:bg-red-50"
@@ -309,7 +310,7 @@ function DeleteAccountButton({ onDeleteAccount }: { onDeleteAccount: () => Promi
             : "Delete Account"}
       </button>
       {confirming && !pending && (
-        <p className="text-[10px] leading-snug text-foreground/45">
+        <Text variant="micro" className="block leading-snug text-foreground/45">
           Erases your account, connected data, memories, chats, and billing
           across every device. This can't be undone.{" "}
           <button
@@ -319,12 +320,12 @@ function DeleteAccountButton({ onDeleteAccount }: { onDeleteAccount: () => Promi
           >
             Cancel
           </button>
-        </p>
+        </Text>
       )}
       {error && (
-        <p className="text-[10px] leading-snug text-red-500">
+        <Text variant="micro" className="block leading-snug text-red-500">
           Delete failed: {error}
-        </p>
+        </Text>
       )}
     </div>
   );
@@ -446,12 +447,12 @@ export default function DebugPanel({
                   <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 px-3.5 py-2.5 flex items-center gap-2">
                     <Plug size={13} strokeWidth={1.5} className="text-emerald-600 shrink-0" />
                     <div className="min-w-0">
-                      <div className="text-[10px] font-medium text-emerald-700/60 uppercase tracking-wider">
+                      <Text variant="micro" weight="medium" className="block text-emerald-700/60 uppercase tracking-wider">
                         Connected backend
-                      </div>
-                      <div className="text-[12px] font-semibold text-emerald-800 truncate">
+                      </Text>
+                      <Text variant="label" weight="semibold" className="block text-emerald-800 truncate">
                         {devLabel}
-                      </div>
+                      </Text>
                     </div>
                   </div>
                 )}
@@ -464,7 +465,7 @@ export default function DebugPanel({
                   <button
                     onClick={onGenerate}
                     disabled={isRunning}
-                    className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-foreground text-background text-[11px] font-semibold py-1.5 transition-colors hover:bg-foreground/85 disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-foreground text-background text-caption font-semibold py-1.5 transition-colors hover:bg-foreground/85 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <Zap size={12} strokeWidth={2} />
                     {isRunning ? "Running..." : "Generate"}
@@ -475,9 +476,9 @@ export default function DebugPanel({
                 {/* Phase Strip */}
                 <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-3.5">
                   <div className="flex items-center justify-between mb-2.5">
-                    <span className="text-[11px] font-medium text-foreground/40 uppercase tracking-wider">
+                    <Text variant="caption" weight="medium" className="text-foreground/40 uppercase tracking-wider">
                       Pipeline Phases
-                    </span>
+                    </Text>
                     <PhaseTimer isRunning={isRunning} />
                   </div>
                   <div className="flex items-center gap-1.5">
@@ -486,7 +487,7 @@ export default function DebugPanel({
                       return (
                         <span
                           key={phase}
-                          className={`flex-1 text-center text-[10px] font-semibold py-1.5 rounded-full transition-all duration-300 ${
+                          className={`flex-1 text-center text-micro font-semibold py-1.5 rounded-full transition-all duration-300 ${
                             s === "active"
                               ? "bg-blue-500 text-white animate-pulse"
                               : s === "done"
@@ -500,9 +501,9 @@ export default function DebugPanel({
                     })}
                   </div>
                   {isRunning && run.activePhase && (
-                    <p className="text-[11px] text-foreground/40 mt-2.5 italic">
+                    <Text variant="caption" className="block text-foreground/40 mt-2.5 italic">
                       {PHASE_HINTS[run.activePhase] ?? "Processing..."}
-                    </p>
+                    </Text>
                   )}
                 </div>
 
@@ -510,16 +511,16 @@ export default function DebugPanel({
                 <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-3.5 flex flex-col" style={{ maxHeight: 260 }}>
                   <div className="flex items-center gap-2 mb-2.5">
                     <Clock size={12} strokeWidth={1.5} className="text-foreground/40" />
-                    <span className="text-[11px] font-medium text-foreground/40 uppercase tracking-wider">
+                    <Text variant="caption" weight="medium" className="text-foreground/40 uppercase tracking-wider">
                       Event Log
-                    </span>
-                    <span className="text-[10px] text-foreground/30 ml-auto tabular-nums">
+                    </Text>
+                    <Text variant="micro" className="text-foreground/30 ml-auto tabular-nums">
                       {run.logEntries.length} events
-                    </span>
+                    </Text>
                   </div>
                   <div ref={logContainerRef} className="flex-1 overflow-y-auto space-y-0 pr-1">
                     {run.logEntries.length === 0 && (
-                      <p className="text-[11px] text-foreground/30 py-4 text-center">No events yet</p>
+                      <Text variant="caption" className="block text-foreground/30 py-4 text-center">No events yet</Text>
                     )}
                     <AnimatePresence initial={false}>
                       {[...run.logEntries].reverse().map((entry) => (
@@ -533,22 +534,22 @@ export default function DebugPanel({
                         >
                           <div className="absolute left-[-3.5px] top-3 w-[5px] h-[5px] rounded-full bg-foreground/30" />
                           <div className="flex items-baseline gap-2">
-                            <span className="text-[10px] text-foreground/30 tabular-nums font-mono shrink-0">
+                            <Text variant="micro" className="text-foreground/30 tabular-nums font-mono shrink-0">
                               {new Date(entry.timestamp).toLocaleTimeString([], {
                                 hour: "2-digit", minute: "2-digit", second: "2-digit",
                               })}
-                            </span>
-                            <span className="text-[10px] font-medium text-foreground/40 bg-foreground/10 px-1.5 py-0.5 rounded-md shrink-0">
+                            </Text>
+                            <Text variant="micro" weight="medium" className="text-foreground/40 bg-foreground/10 px-1.5 py-0.5 rounded-md shrink-0">
                               {entry.kind}
-                            </span>
+                            </Text>
                           </div>
-                          <p className="text-[12px] text-foreground/70 font-medium leading-snug mt-0.5">
+                          <Text variant="label" weight="medium" className="block text-foreground/70 leading-snug mt-0.5">
                             {entry.title}
-                          </p>
+                          </Text>
                           {entry.detail && (
-                            <p className="text-[11px] text-foreground/40 leading-snug mt-0.5 line-clamp-2">
+                            <Text variant="caption" className="block text-foreground/40 leading-snug mt-0.5 line-clamp-2">
                               {entry.detail}
-                            </p>
+                            </Text>
                           )}
                         </motion.div>
                       ))}
@@ -567,10 +568,10 @@ export default function DebugPanel({
 
                 {/* Run Info */}
                 <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-3.5">
-                  <span className="text-[11px] font-medium text-foreground/40 uppercase tracking-wider block mb-2">
+                  <Text variant="caption" weight="medium" className="text-foreground/40 uppercase tracking-wider block mb-2">
                     Run Info
-                  </span>
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
+                  </Text>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-caption">
                     <span className="text-foreground/40">Status</span>
                     <span className="text-foreground/70 font-medium">{run.status || "\u2014"}</span>
 
@@ -593,7 +594,7 @@ export default function DebugPanel({
                   </div>
                   {run.error && (
                     <div className="mt-2.5 rounded-lg bg-red-50 border border-red-200 px-3 py-2">
-                      <p className="text-[11px] text-red-600 leading-snug">{run.error}</p>
+                      <Text variant="caption" className="block text-red-600 leading-snug">{run.error}</Text>
                     </div>
                   )}
                 </div>
@@ -603,19 +604,19 @@ export default function DebugPanel({
                   <div className="flex items-center gap-2 mb-2.5">
                     <Plug size={14} strokeWidth={1.5} className="text-foreground/40" />
                     <span className="text-xs font-medium text-foreground/50">Connectors</span>
-                    <span className="text-[10px] text-foreground/30 ml-auto tabular-nums">
+                    <Text variant="micro" className="text-foreground/30 ml-auto tabular-nums">
                       {composio.connections.filter((c) => c.status === "ACTIVE").length} active
-                    </span>
+                    </Text>
                   </div>
-                  <p className="text-[10px] leading-relaxed text-foreground/40 mb-2">
+                  <Text variant="micro" className="block leading-relaxed text-foreground/40 mb-2">
                     Reconnect re-pulls 100 items and re-runs evolve for that account. Existing raw rows are kept.
-                  </p>
+                  </Text>
                   {composio.loadingConns && composio.connections.length === 0 ? (
-                    <p className="text-[11px] text-foreground/30 py-2">Loading connections…</p>
+                    <Text variant="caption" className="block text-foreground/30 py-2">Loading connections…</Text>
                   ) : composio.connections.filter((c) => c.status === "ACTIVE").length === 0 ? (
-                    <p className="text-[11px] text-foreground/40 py-2">
+                    <Text variant="caption" className="block text-foreground/40 py-2">
                       No active connections. Visit the Data Connections page to set one up.
-                    </p>
+                    </Text>
                   ) : (
                     <div className="divide-y divide-foreground/5">
                       {composio.connections
@@ -640,13 +641,13 @@ export default function DebugPanel({
 
                 {/* Account */}
                 <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-3.5">
-                  <span className="text-[11px] font-medium text-foreground/40 uppercase tracking-wider block mb-2">
+                  <Text variant="caption" weight="medium" className="text-foreground/40 uppercase tracking-wider block mb-2">
                     Account
-                  </span>
+                  </Text>
                   <button
                     onClick={handleSignOut}
                     disabled={signOutLoading}
-                    className="w-full flex items-center justify-center gap-1.5 rounded-lg border border-foreground/15 text-foreground/60 text-[11px] font-medium py-2 transition-colors hover:bg-foreground/5 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full flex items-center justify-center gap-1.5 rounded-lg border border-foreground/15 text-foreground/60 text-caption font-medium py-2 transition-colors hover:bg-foreground/5 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {signOutLoading ? "Signing out..." : "Sign Out"}
                   </button>

@@ -35,7 +35,10 @@ const DrawerContent = React.forwardRef<
     <DrawerPrimitive.Content
       ref={ref}
       className={cn(
-        "fixed inset-x-0 bottom-0 z-50 mt-24 flex h-auto flex-col rounded-t-[10px] border bg-background",
+        // 手机场景底部抽屉：约束到 app 列宽(max-w-md = AppLayout 的 max-w-md
+        // 手机列)并居中,使桌面 web 下抽屉与背景列同宽、不铺满 viewport。手机上
+        // viewport < 448px,max-w-md 不收缩 → 仍全宽(正确)。
+        "fixed inset-x-0 bottom-0 z-50 mx-auto mt-24 flex h-auto w-full max-w-md flex-col rounded-t-[10px] border bg-background",
         className,
       )}
       {...props}

@@ -10,6 +10,7 @@ import {
   type VoiceIdentityProfile,
 } from "@/services/voice-identity-api";
 import { useUserSettings } from "@pin-ai/state";
+import { Text } from "@pin-ai/ui-web";
 
 const TARGET_DURATION_MS = 5_000;
 const MIN_DURATION_MS = 2_000;
@@ -195,24 +196,24 @@ export default function VoiceIdentitySettings() {
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-foreground">Voice identity</h2>
-          <p className="mt-1 text-[11px] leading-relaxed text-foreground/45">
+          <Text variant="caption" className="block mt-1 leading-relaxed text-foreground/45">
             Save a short sample so Ambient can label your own speech as self.
-          </p>
+          </Text>
         </div>
-        <span className="shrink-0 whitespace-nowrap rounded-full bg-foreground/[0.06] px-2.5 py-1 text-[10px] font-semibold leading-none text-foreground/55">
+        <Text variant="micro" weight="semibold" className="shrink-0 whitespace-nowrap rounded-full bg-foreground/[0.06] px-2.5 py-1 leading-none text-foreground/55">
           {status}
-        </span>
+        </Text>
       </div>
 
       <div className="border-l-2 border-foreground/15 pl-3">
-        <p className="text-[10px] font-semibold text-foreground/35">Read aloud</p>
-        <p className="mt-1 text-[12px] font-medium leading-relaxed text-foreground/75">
+        <Text variant="micro" weight="semibold" className="block text-foreground/35">Read aloud</Text>
+        <Text variant="label" weight="medium" className="block mt-1 leading-relaxed text-foreground/75">
           {referencePrompt}
-        </p>
+        </Text>
       </div>
 
       {profile && (
-        <div className="grid grid-cols-2 gap-2 text-[11px] text-foreground/55">
+        <div className="grid grid-cols-2 gap-2 text-caption text-foreground/55">
           <div>
             <span className="block text-foreground/35">Duration</span>
             <span className="font-medium text-foreground/75">{formatDuration(profile.referenceDurationMs ?? 0)}</span>
@@ -227,13 +228,13 @@ export default function VoiceIdentitySettings() {
       {recording && (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-foreground/10 bg-foreground/[0.03] px-3 py-3">
           <div className="min-w-0">
-            <p className="text-[13px] font-semibold text-foreground">Recording {formatDuration(elapsedMs)}</p>
-            <p className="text-[11px] text-foreground/45">Target {formatDuration(TARGET_DURATION_MS)}, max {formatDuration(MAX_DURATION_MS)}</p>
+            <Text variant="bodySm" weight="semibold" className="block text-foreground">Recording {formatDuration(elapsedMs)}</Text>
+            <Text variant="caption" className="block text-foreground/45">Target {formatDuration(TARGET_DURATION_MS)}, max {formatDuration(MAX_DURATION_MS)}</Text>
           </div>
           <button
             type="button"
             onClick={() => void stopRecording()}
-            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-foreground px-3 text-[11px] font-semibold text-background"
+            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-foreground px-3 text-caption font-semibold text-background"
           >
             <Square size={13} />
             Stop
@@ -244,11 +245,11 @@ export default function VoiceIdentitySettings() {
       {reviewBlob && !recording && (
         <div className="space-y-2 rounded-lg border border-foreground/10 bg-foreground/[0.03] px-3 py-3">
           <div className="flex items-center justify-between gap-3">
-            <p className="text-[13px] font-semibold text-foreground">Review {formatDuration(reviewDurationMs)}</p>
+            <Text variant="bodySm" weight="semibold" className="block text-foreground">Review {formatDuration(reviewDurationMs)}</Text>
             <button
               type="button"
               onClick={() => void startRecording()}
-              className="inline-flex min-h-9 items-center gap-1.5 rounded-lg bg-foreground/[0.08] px-3 text-[11px] font-semibold text-foreground/70"
+              className="inline-flex min-h-9 items-center gap-1.5 rounded-lg bg-foreground/[0.08] px-3 text-caption font-semibold text-foreground/70"
             >
               <RotateCcw size={13} />
               Re-record
@@ -256,13 +257,13 @@ export default function VoiceIdentitySettings() {
           </div>
           {reviewUrl && <audio controls src={reviewUrl} className="w-full" />}
           {reviewTooShort && (
-            <p className="text-[11px] font-medium text-red-500">Record at least 2 seconds before saving.</p>
+            <Text variant="caption" weight="medium" className="block text-red-500">Record at least 2 seconds before saving.</Text>
           )}
           <button
             type="button"
             onClick={() => void saveReview()}
             disabled={busy || reviewTooShort}
-            className="min-h-10 w-full rounded-lg bg-foreground px-3 text-[12px] font-semibold text-background disabled:cursor-not-allowed disabled:opacity-40"
+            className="min-h-10 w-full rounded-lg bg-foreground px-3 text-label font-semibold text-background disabled:cursor-not-allowed disabled:opacity-40"
           >
             Save reference
           </button>
@@ -275,7 +276,7 @@ export default function VoiceIdentitySettings() {
             type="button"
             onClick={() => void startRecording()}
             disabled={busy || loading}
-            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-foreground px-3 text-[12px] font-semibold text-background disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-foreground px-3 text-label font-semibold text-background disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Mic size={14} />
             {profile ? "Re-record" : "Record self reference"}
@@ -285,7 +286,7 @@ export default function VoiceIdentitySettings() {
               type="button"
               onClick={() => void toggleEnabled(true)}
               disabled={busy}
-              className="min-h-10 rounded-lg bg-foreground/[0.08] px-3 text-[12px] font-semibold text-foreground/70 disabled:opacity-40"
+              className="min-h-10 rounded-lg bg-foreground/[0.08] px-3 text-label font-semibold text-foreground/70 disabled:opacity-40"
             >
               Enable voice identity
             </button>
@@ -295,7 +296,7 @@ export default function VoiceIdentitySettings() {
               type="button"
               onClick={() => void toggleEnabled(false)}
               disabled={busy}
-              className="min-h-10 rounded-lg bg-foreground/[0.08] px-3 text-[12px] font-semibold text-foreground/70 disabled:opacity-40"
+              className="min-h-10 rounded-lg bg-foreground/[0.08] px-3 text-label font-semibold text-foreground/70 disabled:opacity-40"
             >
               Disable
             </button>
@@ -305,7 +306,7 @@ export default function VoiceIdentitySettings() {
               type="button"
               onClick={() => void deleteReference()}
               disabled={busy}
-              className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-red-500/10 px-3 text-[12px] font-semibold text-red-600 disabled:opacity-40"
+              className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-red-500/10 px-3 text-label font-semibold text-red-600 disabled:opacity-40"
             >
               <Trash2 size={14} />
               Delete
@@ -314,7 +315,7 @@ export default function VoiceIdentitySettings() {
         </div>
       )}
 
-      {error && <p className="text-[11px] font-medium leading-snug text-red-500">{error}</p>}
+      {error && <Text variant="caption" weight="medium" className="block leading-snug text-red-500">{error}</Text>}
     </section>
   );
 }

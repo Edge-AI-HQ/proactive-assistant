@@ -17,6 +17,7 @@
     "@pin-ai/core": "*",
     "@pin-ai/design": "*",
     "@pin-ai/state": "*",
+    "@pin-ai/ui-kit": "*",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-masked-view/masked-view": "0.3.2",
     "@shopify/react-native-skia": "2.6.2",

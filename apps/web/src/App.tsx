@@ -1,9 +1,14 @@
+import { lazy, Suspense } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Toaster } from "sonner";
 import { useAuth, VoiceProvider } from "@pin-ai/ui-web";
 import ZebraShell from "@/components/zebra/ZebraShell";
 import ZebraLogin from "@/components/zebra/ZebraLogin";
 import DesktopTitleBar from "@/components/DesktopTitleBar";
+
+// dev-only 设计系统 Gallery（S3 验证基座）。仅 DEV 下 lazy 挂载，prod bundle
+// 经 import.meta.env.DEV 静态求值 tree-shake 掉。路由见下方 /dev/gallery。
+const Gallery = import.meta.env.DEV ? lazy(() => import("@/dev/Gallery")) : null;
 
 /**
  * apps/web 顶层路由（URL 路由，桌面 deep-link 约定）：
@@ -38,6 +43,16 @@ export default function App() {
           <Spinner />
         ) : (
           <Routes>
+            {Gallery && (
+              <Route
+                path="/dev/gallery"
+                element={
+                  <Suspense fallback={null}>
+                    <Gallery />
+                  </Suspense>
+                }
+              />
+            )}
             {user ? (
               <>
                 <Route element={<ZebraShell />}>

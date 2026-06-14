@@ -20,6 +20,7 @@ import {
   type ToolCallPart,
   type WorkGroupItem,
 } from "@pin-ai/core";
+import { Text } from "../../primitives/Text";
 
 const CHILDREN_WINDOW = 30;
 
@@ -79,10 +80,10 @@ export default function TaskCard({ item }: { item: TaskItem }) {
           </span>
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[12.5px] font-medium text-foreground/85 leading-tight">
+          <Text variant="bodySm" weight="medium" className="block truncate text-foreground/85 leading-tight">
             {description}
-          </span>
-          <span className="block truncate text-[11px] text-foreground/45 leading-tight">
+          </Text>
+          <Text variant="caption" className="block truncate text-foreground/45 leading-tight">
             {(() => {
               const n = item.children.length;
               const tools = `${n} tool${n === 1 ? "" : "s"}`;
@@ -90,7 +91,7 @@ export default function TaskCard({ item }: { item: TaskItem }) {
                 ? `${tools}${action ? ` · ${action}` : ""}`
                 : `Done · ${tools}`;
             })()}
-          </span>
+          </Text>
         </span>
         <ChevronDown
           size={13}
@@ -112,17 +113,17 @@ export default function TaskCard({ item }: { item: TaskItem }) {
               <button
                 type="button"
                 onClick={() => setChildLimit((n) => n + CHILDREN_WINDOW)}
-                className="w-full py-1 text-[11px] text-foreground/50 hover:text-foreground/75"
+                className="w-full py-1 text-caption text-foreground/50 hover:text-foreground/75"
               >
                 Show more ({item.children.length - childLimit})
               </button>
             )}
             {item.children.length === 0 && (
-              <p className="py-1 text-[11px] text-foreground/40">No tool activity yet.</p>
+              <Text variant="caption" className="block py-1 text-foreground/40">No tool activity yet.</Text>
             )}
           </div>
           {typeof resultMeta === "string" && resultMeta && !running && (
-            <div className="mt-2 rounded-lg bg-foreground/[0.03] px-2.5 py-2 text-[12px]">
+            <div className="mt-2 rounded-lg bg-foreground/[0.03] px-2.5 py-2 text-label">
               <MarkdownContent text={resultMeta} />
             </div>
           )}

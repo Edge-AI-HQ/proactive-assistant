@@ -24,6 +24,7 @@ import {
   type UsageInfo,
 } from "@pin-ai/core";
 import { PLANS } from "./PlanPaymentForm";
+import { Text } from "../primitives/Text";
 
 /* ── Shared sub-page header ─────────────────────────────────────────── */
 
@@ -307,15 +308,15 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
       />
 
       {loading && (
-        <div className="text-[12px] text-foreground/55 py-4">
+        <Text variant="label" className="block text-foreground/55 py-4">
           Loading subscription…
-        </div>
+        </Text>
       )}
 
       {error && (
-        <div className="rounded-xl border border-[hsl(0_72%_60%/0.25)] bg-[hsl(0_72%_60%/0.04)] px-3 py-2 mb-3 text-[12px] text-[hsl(0_72%_45%)]">
+        <Text variant="label" className="block rounded-xl border border-[hsl(0_72%_60%/0.25)] bg-[hsl(0_72%_60%/0.04)] px-3 py-2 mb-3 text-[hsl(0_72%_45%)]">
           {error}
-        </div>
+        </Text>
       )}
 
       {!loading && sub && (
@@ -329,18 +330,18 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
               <div className="flex-1 min-w-0">
                 <div className="flex items-baseline gap-2">
                   <span className="text-base font-semibold text-foreground">{planLabel}</span>
-                  <span className="text-[10px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded-md bg-[hsl(304_75%_63%/0.1)] text-[hsl(304_75%_63%)]">
+                  <Text variant="micro" weight="bold" className="tracking-wider uppercase px-1.5 py-0.5 rounded-md bg-[hsl(304_75%_63%/0.1)] text-[hsl(304_75%_63%)]">
                     {statusLabel}
-                  </span>
+                  </Text>
                 </div>
-                <p className="text-[11px] text-foreground/55 mt-0.5">{priceLine}</p>
+                <Text variant="caption" className="block text-foreground/55 mt-0.5">{priceLine}</Text>
                 {sub.pendingPlanCode && (
-                  <p className="text-[11px] text-[hsl(292_78%_63%)] mt-0.5 font-medium">
+                  <Text variant="caption" weight="medium" className="block text-[hsl(292_78%_63%)] mt-0.5">
                     → Switching to{" "}
                     {PLANS.find((p) => p.id === sub.pendingPlanCode)?.name
                       ?? (sub.pendingPlanCode.charAt(0).toUpperCase() + sub.pendingPlanCode.slice(1))}
                     {periodEnd ? ` on ${periodEnd}` : ""}
-                  </p>
+                  </Text>
                 )}
               </div>
             </div>
@@ -349,7 +350,7 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
                 {currentFeatures.map((f) => (
                   <div key={f} className="flex items-center gap-1.5">
                     <Check size={11} strokeWidth={2.5} className="text-[hsl(304_75%_63%)] flex-shrink-0" />
-                    <span className="text-[11px] text-foreground/70 truncate">{f}</span>
+                    <Text variant="caption" className="text-foreground/70 truncate">{f}</Text>
                   </div>
                 ))}
               </div>
@@ -367,7 +368,7 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
                   : "hsl(150 70% 50%)";
               return (
                 <div className={`${currentFeatures.length > 0 ? "mt-3 pt-3 border-t border-foreground/[0.06]" : "mt-2"}`}>
-                  <div className="flex items-center justify-between text-[11px] mb-1.5">
+                  <div className="flex items-center justify-between text-caption mb-1.5">
                     <span className="text-foreground/55 uppercase tracking-[0.12em] font-semibold">
                       Plan usage
                     </span>
@@ -383,9 +384,9 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
                     />
                   </div>
                   {overBudget && (
-                    <p className="text-[11px] text-[hsl(0_72%_45%)] mt-1.5">
+                    <Text variant="caption" className="block text-[hsl(0_72%_45%)] mt-1.5">
                       Plan usage limit reached — calls blocked until {isFree ? "you upgrade your plan" : "next renewal"}.
-                    </p>
+                    </Text>
                   )}
                 </div>
               );
@@ -393,9 +394,9 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
           </div>
 
           {actionToast && (
-            <div className="rounded-xl border border-[hsl(304_75%_63%/0.25)] bg-[hsl(304_75%_63%/0.05)] px-3 py-2 mb-3 text-[12px] text-foreground/75">
+            <Text variant="label" className="block rounded-xl border border-[hsl(304_75%_63%/0.25)] bg-[hsl(304_75%_63%/0.05)] px-3 py-2 mb-3 text-foreground/75">
               {actionToast}
-            </div>
+            </Text>
           )}
 
           {/* 2. Quick actions — Switch plan expands the picker below; Add credits is a placeholder until we wire one-time top-ups. */}
@@ -404,19 +405,19 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
               onClick={() => setShowPlanPicker((v) => !v)}
               className="glass-card-strong p-3 text-left hover:bg-white/20 transition-colors"
             >
-              <p className="text-[10px] font-semibold text-foreground/45 uppercase tracking-[0.12em] mb-0.5">
+              <Text variant="micro" weight="semibold" className="block text-foreground/45 uppercase tracking-[0.12em] mb-0.5">
                 {showPlanPicker ? "Hide options" : isFree ? "Upgrade plan" : "Switch plan"}
-              </p>
-              <p className="text-[13px] font-semibold text-foreground">{otherPlansLabel}</p>
+              </Text>
+              <Text variant="bodySm" weight="semibold" className="block text-foreground">{otherPlansLabel}</Text>
             </button>
             <button
               disabled
               className="glass-card-strong p-3 text-left opacity-60 cursor-not-allowed"
             >
-              <p className="text-[10px] font-semibold text-foreground/45 uppercase tracking-[0.12em] mb-0.5">
+              <Text variant="micro" weight="semibold" className="block text-foreground/45 uppercase tracking-[0.12em] mb-0.5">
                 Add credits
-              </p>
-              <p className="text-[13px] font-semibold text-foreground/70">Coming soon</p>
+              </Text>
+              <Text variant="bodySm" weight="semibold" className="block text-foreground/70">Coming soon</Text>
             </button>
           </div>
 
@@ -435,26 +436,26 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
                     style={isCurrent ? { borderColor: "hsla(292 78% 63% / 0.45)" } : undefined}
                   >
                     <div className="flex items-baseline gap-2 mb-1">
-                      <span className="text-[14px] font-semibold text-foreground">{p.name}</span>
-                      <span className="text-[12px] text-foreground/80">${p.price}/mo</span>
+                      <Text variant="bodySm" weight="semibold" className="text-foreground">{p.name}</Text>
+                      <Text variant="label" className="text-foreground/80">${p.price}/mo</Text>
                       {isCurrent && (
-                        <span className="text-[9px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded-md bg-[hsl(292_78%_63%/0.12)] text-[hsl(292_78%_63%)] ml-auto">
+                        <Text variant="micro" weight="bold" className="tracking-wider uppercase px-1.5 py-0.5 rounded-md bg-[hsl(292_78%_63%/0.12)] text-[hsl(292_78%_63%)] ml-auto">
                           Current
-                        </span>
+                        </Text>
                       )}
                       {isPending && (
-                        <span className="text-[10px] text-foreground/55 ml-auto">Loading…</span>
+                        <Text variant="micro" className="text-foreground/55 ml-auto">Loading…</Text>
                       )}
                     </div>
-                    <p className="text-[11px] text-foreground/55">{p.credits}</p>
+                    <Text variant="caption" className="block text-foreground/55">{p.credits}</Text>
                   </button>
                 );
               })}
-              <p className="text-[11px] text-foreground/45 mt-2 px-1">
+              <Text variant="caption" className="block text-foreground/45 mt-2 px-1">
                 {isFree
                   ? "Card required. Cancel anytime."
                   : "All plan changes take effect at next renewal. Cancel anytime."}
-              </p>
+              </Text>
             </div>
           )}
 
@@ -462,21 +463,21 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
           <div className="glass-card-strong p-4 mb-3">
             <div className="flex items-center gap-2 mb-2">
               <CreditCard size={13} strokeWidth={1.8} className="text-foreground/55" />
-              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/55">
+              <Text variant="micro" weight="semibold" className="uppercase tracking-[0.14em] text-foreground/55">
                 Payment method
-              </span>
+              </Text>
               <button
                 onClick={onManage}
                 disabled={actionPending}
-                className="text-[10px] font-semibold text-foreground/55 hover:text-foreground ml-auto disabled:opacity-50"
+                className="text-micro font-semibold text-foreground/55 hover:text-foreground ml-auto disabled:opacity-50"
               >
                 Update on Stripe →
               </button>
             </div>
             {paymentMethods.length === 0 ? (
-              <p className="text-[12px] text-foreground/55 py-1">
+              <Text variant="label" className="block text-foreground/55 py-1">
                 {isFree ? "No card on file — added at checkout." : "No payment method on file."}
-              </p>
+              </Text>
             ) : (
               <ul className="space-y-2">
                 {paymentMethods.map((pm) => {
@@ -509,20 +510,20 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
                   }
                   return (
                     <li key={pm.id} className="flex items-center gap-3">
-                      <div className="w-10 h-7 rounded-md bg-foreground/85 text-background flex items-center justify-center text-[10px] font-bold tracking-wider">
+                      <div className="w-10 h-7 rounded-md bg-foreground/85 text-background flex items-center justify-center text-micro font-bold tracking-wider">
                         {chipLabel}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <p className="text-[13px] font-semibold text-foreground truncate">
+                        <Text variant="bodySm" weight="semibold" className="block text-foreground truncate">
                           {primary}
                           {pm.isDefault && (
-                            <span className="ml-2 text-[10px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded-md bg-[hsl(292_78%_63%/0.12)] text-[hsl(292_78%_63%)]">
+                            <Text variant="micro" weight="bold" className="ml-2 tracking-wider uppercase px-1.5 py-0.5 rounded-md bg-[hsl(292_78%_63%/0.12)] text-[hsl(292_78%_63%)]">
                               Default
-                            </span>
+                            </Text>
                           )}
-                        </p>
+                        </Text>
                         {secondary && (
-                          <p className="text-[11px] text-foreground/50 truncate">{secondary}</p>
+                          <Text variant="caption" className="block text-foreground/50 truncate">{secondary}</Text>
                         )}
                       </div>
                     </li>
@@ -536,19 +537,19 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
           <div className="glass-card-strong p-4 mb-3">
             <div className="flex items-center gap-2 mb-3">
               <Receipt size={13} strokeWidth={1.8} className="text-foreground/55" />
-              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/55">
+              <Text variant="micro" weight="semibold" className="uppercase tracking-[0.14em] text-foreground/55">
                 Billing history
-              </span>
+              </Text>
               <button
                 onClick={onManage}
                 disabled={actionPending}
-                className="text-[10px] font-semibold text-foreground/55 hover:text-foreground ml-auto disabled:opacity-50"
+                className="text-micro font-semibold text-foreground/55 hover:text-foreground ml-auto disabled:opacity-50"
               >
                 View all on Stripe →
               </button>
             </div>
             {invoices.length === 0 ? (
-              <p className="text-[12px] text-foreground/55 py-1">No payments yet.</p>
+              <Text variant="label" className="block text-foreground/55 py-1">No payments yet.</Text>
             ) : (
               <ul className="divide-y divide-foreground/[0.06]">
                 {invoices.map((inv) => {
@@ -572,16 +573,16 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
                       >
                         <Calendar size={13} strokeWidth={1.7} className="text-foreground/40 shrink-0" />
                         <div className="flex-1 min-w-0">
-                          <p className="text-[12.5px] font-medium text-foreground/85 truncate">
+                          <Text variant="bodySm" weight="medium" className="block text-foreground/85 truncate">
                             {inv.description}
-                          </p>
-                          <p className="text-[11px] text-foreground/45">{dateStr}</p>
+                          </Text>
+                          <Text variant="caption" className="block text-foreground/45">{dateStr}</Text>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
-                          <span className="text-[13px] font-semibold text-foreground tabular-nums">{amount}</span>
-                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-md bg-foreground/[0.06] text-foreground/55">
+                          <Text variant="bodySm" weight="semibold" className="text-foreground tabular-nums">{amount}</Text>
+                          <Text variant="micro" weight="medium" className="px-1.5 py-0.5 rounded-md bg-foreground/[0.06] text-foreground/55">
                             {statusLabel}
-                          </span>
+                          </Text>
                         </div>
                       </a>
                     </li>
@@ -611,7 +612,7 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
                       ? "Tap again to confirm"
                       : "Cancel subscription"}
                 </p>
-                <p className="text-[11px] text-foreground/50 mt-0.5">
+                <Text variant="caption" className="block text-foreground/50 mt-0.5">
                   {isFree
                     ? "No active subscription to cancel"
                     : sub.cancelAtPeriodEnd && periodEnd
@@ -619,14 +620,14 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
                       : confirmingCancel
                         ? `You'll keep ${planLabel} features until ${periodEnd ?? "period end"}`
                         : `Keep ${planLabel} features until ${periodEnd ?? "period end"}, then your plan ends.`}
-                </p>
+                </Text>
               </div>
             </button>
             {confirmingCancel && !sub.cancelAtPeriodEnd && (
               <button
                 onClick={() => setConfirmingCancel(false)}
                 disabled={actionPending}
-                className="px-3 rounded-2xl border border-foreground/15 bg-foreground/[0.02] text-[12px] text-foreground/65 hover:bg-foreground/[0.06] transition-colors disabled:opacity-50"
+                className="px-3 rounded-2xl border border-foreground/15 bg-foreground/[0.02] text-label text-foreground/65 hover:bg-foreground/[0.06] transition-colors disabled:opacity-50"
               >
                 Keep it
               </button>

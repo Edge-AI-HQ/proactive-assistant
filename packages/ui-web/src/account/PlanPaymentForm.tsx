@@ -3,6 +3,7 @@ import {
   Check, Apple, CreditCard, Zap, Crown, Star,
   type LucideIcon,
 } from "lucide-react";
+import { Text } from "../primitives/Text";
 
 export type PlanId = "basic" | "pro" | "max";
 export type PayMethod = "apple" | "card";
@@ -58,9 +59,9 @@ export function PlanPaymentForm({
 }) {
   return (
     <div>
-      <div className="text-[11px] uppercase tracking-wider text-foreground/45 font-semibold mb-2 px-1">
+      <Text variant="caption" weight="semibold" className="block uppercase tracking-wider text-foreground/45 mb-2 px-1">
         Choose your plan
-      </div>
+      </Text>
 
       <div className="space-y-2.5">
         {PLANS.map((p) => {
@@ -75,7 +76,7 @@ export function PlanPaymentForm({
                 background: isSel
                   ? "linear-gradient(135deg, hsla(292 78% 63% / 0.12), hsla(320 75% 60% / 0.05))"
                   : "hsla(0,0%,100%,0.6)",
-                border: `1px solid ${isSel ? "hsl(292 78% 63%)" : "hsla(0,0%,100%,0.6)"}`,
+                border: `1px solid ${isSel ? "hsl(var(--primary))" : "hsla(0,0%,100%,0.6)"}`,
                 backdropFilter: "blur(20px)",
                 WebkitBackdropFilter: "blur(20px)",
                 boxShadow: isSel ? "0 8px 24px hsla(292 78% 63% / 0.2)" : "0 2px 10px hsla(280 20% 60% / 0.06)",
@@ -83,8 +84,8 @@ export function PlanPaymentForm({
             >
               {p.highlight && (
                 <span
-                  className="absolute top-3 right-3 text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider"
-                  style={{ background: "hsl(292 78% 63%)", color: "white" }}
+                  className="absolute top-3 right-3 text-micro px-2 py-0.5 rounded-full font-bold uppercase tracking-wider"
+                  style={{ background: "hsl(var(--primary))", color: "white" }}
                 >
                   Most popular
                 </span>
@@ -94,18 +95,18 @@ export function PlanPaymentForm({
                   className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
                   style={{
                     background: isSel ? "hsla(292 78% 63% / 0.18)" : "hsla(220 15% 90% / 0.6)",
-                    color: isSel ? "hsl(292 78% 63%)" : "hsl(220 10% 50%)",
+                    color: isSel ? "hsl(var(--primary))" : "hsl(220 10% 50%)",
                   }}
                 >
                   <Icon size={18} />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-baseline gap-1.5">
-                    <span className="text-[15px] font-bold text-foreground">{p.name}</span>
-                    <span className="text-[13px] font-semibold text-foreground">${p.price}</span>
-                    <span className="text-[11px] text-foreground/50">/mo</span>
+                    <Text variant="body" weight="bold" className="text-foreground">{p.name}</Text>
+                    <Text variant="bodySm" weight="semibold" className="text-foreground">${p.price}</Text>
+                    <Text variant="caption" className="text-foreground/50">/mo</Text>
                   </div>
-                  <div className="text-[11.5px] text-foreground/60 mt-0.5">{p.credits}</div>
+                  <Text variant="label" className="block text-foreground/60 mt-0.5">{p.credits}</Text>
 
                   <div className="mt-2 flex flex-wrap gap-1">
                     <ModelChip label={`Local · ${p.localModel}`} />
@@ -118,7 +119,7 @@ export function PlanPaymentForm({
                       className="mt-3 space-y-1 overflow-hidden"
                     >
                       {p.perks.map((perk) => (
-                        <li key={perk} className="flex items-center gap-1.5 text-[12px] text-foreground/75">
+                        <li key={perk} className="flex items-center gap-1.5 text-label text-foreground/75">
                           <Check size={12} className="text-primary shrink-0" strokeWidth={3} />
                           {perk}
                         </li>
@@ -133,9 +134,9 @@ export function PlanPaymentForm({
       </div>
 
       <div className="mt-5">
-        <div className="text-[10.5px] text-foreground/45 mb-2 px-1">
+        <Text variant="caption" className="block text-foreground/45 mb-2 px-1">
           Choose how to pay. You'll be charged today.
-        </div>
+        </Text>
         <div className="space-y-2">
           <PayButton active={payMethod === "apple"} onClick={() => setPayMethod("apple")}
             icon={<Apple size={18} />} label="Apple Pay" sub="Recommended · one tap" />
@@ -170,7 +171,7 @@ export function PlanPaymentForm({
                     const formatted = digits.replace(/(.{4})/g, "$1 ").trim();
                     setCardInfo({ ...cardInfo, number: formatted });
                   }}
-                  className="w-full bg-transparent text-[13px] text-foreground placeholder:text-foreground/40 px-3 py-2.5 rounded-lg outline-none focus:ring-1 focus:ring-foreground/20"
+                  className="w-full bg-transparent text-bodySm text-foreground placeholder:text-foreground/40 px-3 py-2.5 rounded-lg outline-none focus:ring-1 focus:ring-foreground/20"
                   style={{ border: "1px solid hsla(220 15% 70% / 0.25)" }}
                 />
                 <div className="grid grid-cols-2 gap-2">
@@ -182,7 +183,7 @@ export function PlanPaymentForm({
                       const f = d.length > 2 ? `${d.slice(0, 2)} / ${d.slice(2)}` : d;
                       setCardInfo({ ...cardInfo, expiry: f });
                     }}
-                    className="w-full bg-transparent text-[13px] text-foreground placeholder:text-foreground/40 px-3 py-2.5 rounded-lg outline-none focus:ring-1 focus:ring-foreground/20"
+                    className="w-full bg-transparent text-bodySm text-foreground placeholder:text-foreground/40 px-3 py-2.5 rounded-lg outline-none focus:ring-1 focus:ring-foreground/20"
                     style={{ border: "1px solid hsla(220 15% 70% / 0.25)" }}
                   />
                   <input
@@ -191,7 +192,7 @@ export function PlanPaymentForm({
                     onChange={(e) =>
                       setCardInfo({ ...cardInfo, cvc: e.target.value.replace(/\D/g, "").slice(0, 4) })
                     }
-                    className="w-full bg-transparent text-[13px] text-foreground placeholder:text-foreground/40 px-3 py-2.5 rounded-lg outline-none focus:ring-1 focus:ring-foreground/20"
+                    className="w-full bg-transparent text-bodySm text-foreground placeholder:text-foreground/40 px-3 py-2.5 rounded-lg outline-none focus:ring-1 focus:ring-foreground/20"
                     style={{ border: "1px solid hsla(220 15% 70% / 0.25)" }}
                   />
                 </div>
@@ -207,7 +208,7 @@ export function PlanPaymentForm({
 function ModelChip({ label }: { label: string }) {
   return (
     <span
-      className="text-[10px] px-2 py-0.5 rounded-full font-medium"
+      className="text-micro px-2 py-0.5 rounded-full font-medium"
       style={{
         background: "hsla(220 20% 50% / 0.08)",
         color: "hsl(220 15% 35%)",
@@ -236,8 +237,8 @@ function PayButton({
     >
       <span className="shrink-0">{icon}</span>
       <span className="flex-1 min-w-0 text-left">
-        <span className="block text-[13.5px] font-semibold leading-tight">{label}</span>
-        <span className={`block text-[11px] mt-0.5 ${active ? "text-white/60" : "text-foreground/50"}`}>{sub}</span>
+        <Text variant="bodySm" weight="semibold" className="block leading-tight">{label}</Text>
+        <span className={`block text-caption mt-0.5 ${active ? "text-white/60" : "text-foreground/50"}`}>{sub}</span>
       </span>
       <span
         className="w-4 h-4 rounded-full shrink-0 flex items-center justify-center"

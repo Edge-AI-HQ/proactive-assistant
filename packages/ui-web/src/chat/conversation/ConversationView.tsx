@@ -53,6 +53,7 @@ import { useBrowserSession } from "../../browser/useBrowserSession";
 import { useVoiceInput, Waveform, appendVoiceTranscript } from "../../voice";
 import { useConversationRuntime } from "@pin-ai/state";
 import { type ConversationAssistantEntry, type ConversationEntry, type ConversationUserEntry, type ConversationContentPart, conversationInit, proxyPost } from "@pin-ai/core";
+import { Text } from "../../primitives/Text";
 
 interface ConversationViewProps {
   onBack: () => void;
@@ -135,12 +136,12 @@ function ProactiveLanding({ onPick }: { onPick: (prompt: string) => void }) {
       <div className="mb-7">
         <AiSphere size={216} mode="idle" />
       </div>
-      <h2 className="text-display px-6 text-center text-[28px] font-semibold leading-[1.05] tracking-tight text-foreground">
+      <Text as="h2" variant="display" weight="semibold" className="text-display px-6 text-center tracking-tight">
         What&apos;s on your mind?
-      </h2>
-      <p className="mt-2 px-8 text-center text-[13px] leading-snug text-foreground/50">
+      </Text>
+      <Text variant="bodySm" className="block mt-2 px-8 text-center leading-snug text-foreground/50">
         Ask anything — I have your context.
-      </p>
+      </Text>
       <div className="mt-8 flex w-full flex-col gap-2">
         {LANDING_SUGGESTIONS.map((s, i) => (
           <motion.button
@@ -157,7 +158,7 @@ function ProactiveLanding({ onPick }: { onPick: (prompt: string) => void }) {
               WebkitBackdropFilter: "blur(20px) saturate(1.4)",
             }}
           >
-            <span className="text-[13px] leading-snug text-foreground/75">{s}</span>
+            <Text variant="bodySm" className="leading-snug text-foreground/75">{s}</Text>
             <span className="shrink-0 text-foreground/30 transition-colors group-hover:text-foreground/55">
               →
             </span>
@@ -348,9 +349,9 @@ function CardResultFeedbackBar({
         className="flex items-center justify-between gap-2 rounded-2xl border border-foreground/8 px-3 py-2"
         style={{ background: "rgba(255,255,255,0.5)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)" }}
       >
-        <span className="whitespace-nowrap text-[12px] font-medium text-foreground/55">
+        <Text variant="label" weight="medium" className="whitespace-nowrap text-foreground/55">
           Helpful?
-        </span>
+        </Text>
         <div className="flex items-center gap-1">
           <button
             type="button"
@@ -374,7 +375,7 @@ function CardResultFeedbackBar({
             type="button"
             onClick={() => setCommentOpen((v) => !v)}
             disabled={commentSent}
-            className="ml-0.5 flex h-8 items-center gap-1 whitespace-nowrap rounded-full bg-foreground/5 px-2.5 text-[12px] font-medium text-foreground/65 transition-colors hover:bg-foreground/10 disabled:opacity-60"
+            className="ml-0.5 flex h-8 items-center gap-1 whitespace-nowrap rounded-full bg-foreground/5 px-2.5 text-label font-medium text-foreground/65 transition-colors hover:bg-foreground/10 disabled:opacity-60"
           >
             {commentSent ? (
               <>
@@ -390,7 +391,7 @@ function CardResultFeedbackBar({
             type="button"
             onClick={onDone}
             disabled={doneBusy}
-            className="flex h-8 items-center gap-1 whitespace-nowrap rounded-full bg-foreground px-3 text-[12px] font-semibold text-background transition-colors hover:bg-foreground/85 disabled:opacity-40"
+            className="flex h-8 items-center gap-1 whitespace-nowrap rounded-full bg-foreground px-3 text-label font-semibold text-background transition-colors hover:bg-foreground/85 disabled:opacity-40"
           >
             {doneBusy ? (
               <Loader2 size={12} className="animate-spin" />
@@ -414,7 +415,7 @@ function CardResultFeedbackBar({
               if (e.key === "Enter") submitComment();
             }}
             placeholder="Feedback on this card (won't message the agent)…"
-            className="h-9 flex-1 rounded-full border border-foreground/10 bg-white/60 px-4 text-[13px] text-foreground placeholder:text-foreground/35 focus:outline-none"
+            className="h-9 flex-1 rounded-full border border-foreground/10 bg-white/60 px-4 text-bodySm text-foreground placeholder:text-foreground/35 focus:outline-none"
           />
           <button
             type="button"
@@ -501,7 +502,7 @@ function UserEntry({
     >
       <div
         className={cn(
-          "max-w-[82%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-foreground/90 px-4 py-2.5 text-[13px] leading-relaxed text-background",
+          "max-w-[82%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-foreground/90 px-4 py-2.5 text-bodySm leading-relaxed text-background",
           entry.failed && "opacity-50",
           editingQueued && "w-[82%]",
         )}
@@ -533,7 +534,7 @@ function UserEntry({
         <button
           type="button"
           onClick={() => onRetry(entry.id, entry.text)}
-          className="mt-1 flex items-center gap-1 text-[11px] font-medium text-red-500 transition-colors hover:text-red-600"
+          className="mt-1 flex items-center gap-1 text-caption font-medium text-red-500 transition-colors hover:text-red-600"
         >
           <AlertCircle size={11} strokeWidth={2} />
           Not sent
@@ -544,13 +545,13 @@ function UserEntry({
       ) : (
         <div className="mt-1 flex items-center gap-1 pr-0.5">
           {isQueued ? (
-            <span className="mr-1 rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[11px] font-medium text-foreground/45">
+            <Text variant="caption" weight="medium" className="mr-1 rounded-full bg-foreground/[0.06] px-2 py-0.5 text-foreground/45">
               Queued
-            </span>
+            </Text>
           ) : clockLabel ? (
-            <span className="text-[11px] font-medium tabular-nums text-foreground/40">
+            <Text variant="caption" weight="medium" className="tabular-nums text-foreground/40">
               {clockLabel}
-            </span>
+            </Text>
           ) : null}
           {!isQueued ? (
             <button type="button" onClick={copy} className={ACTION_BTN} aria-label="Copy message" title="Copy">
@@ -743,13 +744,13 @@ function QueuedMessageRow({
               }
             }}
             rows={1}
-            className="max-h-20 min-h-7 flex-1 resize-none bg-transparent py-1 text-[14px] leading-5 text-foreground/70 outline-none placeholder:text-foreground/35"
+            className="max-h-20 min-h-7 flex-1 resize-none bg-transparent py-1 text-body leading-5 text-foreground/70 outline-none placeholder:text-foreground/35"
             autoFocus
           />
         ) : (
-          <span className="min-w-0 truncate text-[14px] font-medium leading-5 text-foreground/62">
+          <Text variant="bodySm" weight="medium" className="min-w-0 truncate leading-5 text-foreground/62">
             {entry.text}
-          </span>
+          </Text>
         )}
       </div>
       <div className="flex shrink-0 items-center gap-1">
@@ -853,9 +854,9 @@ function NotifyCard({ text }: { text: string }) {
     >
       <div className="mb-1.5 flex items-center gap-1.5">
         <Sparkles size={11} strokeWidth={2} className="text-[hsl(304_75%_45%)]" />
-        <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-[hsl(304_75%_45%)]">
+        <Text variant="micro" weight="bold" className="uppercase tracking-[0.18em] text-[hsl(304_75%_45%)]">
           Notify you
-        </span>
+        </Text>
       </div>
       <MarkdownContent text={text} />
     </motion.div>
@@ -957,7 +958,7 @@ function AssistantEntry({
       <div className="px-1 text-foreground/85">
         {showThinkingPill ? (
           <div className="mb-2">
-            <div className="inline-flex items-center -ml-2 rounded-lg px-2 py-1 text-[12.5px] font-medium text-foreground/65">
+            <div className="inline-flex items-center -ml-2 rounded-lg px-2 py-1 text-label font-medium text-foreground/65">
               <ShimmerText>Thinking…</ShimmerText>
             </div>
           </div>
@@ -1105,7 +1106,7 @@ function TranscriptFooter({ context }: { context?: TranscriptFooterContext }) {
       ) : null}
       {!awaitingDecision && busy && !hasRunningTurn ? (
         <div className="mb-5 px-4 pt-1">
-          <div className="inline-flex items-center -ml-2 rounded-lg px-2 py-1 text-[12.5px] font-medium text-foreground/65">
+          <div className="inline-flex items-center -ml-2 rounded-lg px-2 py-1 text-label font-medium text-foreground/65">
             <ShimmerText>Thinking…</ShimmerText>
           </div>
         </div>
@@ -1218,7 +1219,7 @@ function TranscriptView({
       <div className="flex flex-1 items-center justify-center">
         <div className="flex items-center gap-2">
           <Loader2 size={14} className="animate-spin text-foreground/40" />
-          <span className="text-[13px] text-foreground/40">Loading…</span>
+          <Text variant="bodySm" className="text-foreground/40">Loading…</Text>
         </div>
       </div>
     );
@@ -1231,9 +1232,9 @@ function TranscriptView({
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center">
             <Radio size={22} strokeWidth={1.5} className="text-foreground/30" />
-            <p className="text-[13px] text-foreground/45">
+            <Text variant="bodySm" className="block text-foreground/45">
               Ask the agent to act on this card, or send it a message.
-            </p>
+            </Text>
           </div>
         )}
       </div>
@@ -1610,7 +1611,7 @@ export default function ConversationView({
                 menu (AppLayout's ☰, absolute top-right) so a long title
                 truncates with "…" BEFORE it instead of overlapping. */}
             {title && (
-              <h2 className="text-display truncate text-[15px] text-foreground">
+              <h2 className="text-display truncate text-body text-foreground">
                 {title}
               </h2>
             )}
@@ -1623,17 +1624,17 @@ export default function ConversationView({
           {isProactive && (
             <div className="flex items-center gap-2">
               {/* Debug: show hidden heartbeat / heartbeat-triggered messages. */}
-              <span className="text-[12px] font-medium text-foreground/55">
+              <Text variant="label" weight="medium" className="text-foreground/55">
                 Debug
-              </span>
+              </Text>
               <HeartbeatToggle
                 checked={debugEnabled}
                 disabled={false}
                 onChange={setDebug}
               />
-              <span className="ml-1 text-[12px] font-medium text-foreground/55">
+              <Text variant="label" weight="medium" className="ml-1 text-foreground/55">
                 Proactive
-              </span>
+              </Text>
               <HeartbeatToggle
                 checked={enabled === true}
                 disabled={enabled === null}
@@ -1650,7 +1651,7 @@ export default function ConversationView({
                   type="button"
                   onClick={() => void runLifecycle("dismiss", onDismiss)}
                   disabled={lifecycleBusy !== null}
-                  className="flex items-center gap-1 rounded-full px-2.5 py-1 text-[11.5px] font-medium text-foreground/55 transition-colors hover:bg-foreground/[0.06] disabled:opacity-40"
+                  className="flex items-center gap-1 rounded-full px-2.5 py-1 text-caption font-medium text-foreground/55 transition-colors hover:bg-foreground/[0.06] disabled:opacity-40"
                 >
                   {lifecycleBusy === "dismiss" ? (
                     <Loader2 size={12} className="animate-spin" />
@@ -1665,7 +1666,7 @@ export default function ConversationView({
                   type="button"
                   onClick={() => void runLifecycle("done", onDone)}
                   disabled={lifecycleBusy !== null}
-                  className="flex items-center gap-1 rounded-full bg-foreground/90 px-2.5 py-1 text-[11.5px] font-medium text-background transition-colors hover:bg-foreground disabled:opacity-40"
+                  className="flex items-center gap-1 rounded-full bg-foreground/90 px-2.5 py-1 text-caption font-medium text-background transition-colors hover:bg-foreground disabled:opacity-40"
                 >
                   {lifecycleBusy === "done" ? (
                     <Loader2 size={12} className="animate-spin" />
@@ -1968,7 +1969,7 @@ const Composer = forwardRef<
             boxShadow: "0 4px 24px hsl(0 0% 0% / 0.04)",
           }}
         >
-          <p className="flex min-h-[20px] items-center gap-1.5 text-[14px] italic leading-snug text-foreground/55">
+          <p className="flex min-h-[20px] items-center gap-1.5 text-body italic leading-snug text-foreground/55">
             {voiceConnecting && !voiceFinalizing && !voiceTranscript && (
               <Loader2 size={14} strokeWidth={2} className="shrink-0 animate-spin" />
             )}
@@ -1979,9 +1980,9 @@ const Composer = forwardRef<
             </span>
           </p>
           <div className="flex items-center gap-2.5">
-            <span className="w-[40px] shrink-0 text-[12px] font-medium tabular-nums text-foreground/55">
+            <Text variant="label" weight="medium" className="w-[40px] shrink-0 tabular-nums text-foreground/55">
               {formatRecordDuration(recordSec)}
-            </span>
+            </Text>
             {voiceConnecting ? (
               <div className="flex min-w-0 flex-1 items-center justify-center">
                 <Loader2 size={19} strokeWidth={2} className="animate-spin text-foreground/50" />
@@ -2005,8 +2006,8 @@ const Composer = forwardRef<
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-background transition-transform active:scale-95 disabled:opacity-60"
               style={{
                 background:
-                  "linear-gradient(135deg, hsl(292 78% 63%) 0%, hsl(330 80% 65%) 100%)",
-                boxShadow: "0 4px 12px hsl(292 78% 63% / 0.35)",
+                  "linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(330 80% 65%) 100%)",
+                boxShadow: "0 4px 12px hsl(var(--primary) / 0.35)",
               }}
               aria-label="Use transcript"
             >
@@ -2033,7 +2034,7 @@ const Composer = forwardRef<
           onKeyDown={onKeyDown}
           placeholder={placeholder ?? "Message PIN AI…"}
           rows={1}
-          className="min-h-9 max-h-[120px] flex-1 resize-none bg-transparent py-2 text-[15px] leading-[20px] text-foreground outline-none placeholder:text-foreground/35"
+          className="min-h-9 max-h-[120px] flex-1 resize-none bg-transparent py-2 text-body leading-[20px] text-foreground outline-none placeholder:text-foreground/35"
         />
         {kbVisible && (
           <button
@@ -2076,8 +2077,8 @@ const Composer = forwardRef<
               canSend
                 ? {
                     background:
-                      "linear-gradient(135deg, hsl(292 78% 63%) 0%, hsl(330 80% 65%) 100%)",
-                    boxShadow: "0 4px 12px hsl(292 78% 63% / 0.35)",
+                      "linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(330 80% 65%) 100%)",
+                    boxShadow: "0 4px 12px hsl(var(--primary) / 0.35)",
                     color: "hsl(var(--background))",
                   }
                 : {

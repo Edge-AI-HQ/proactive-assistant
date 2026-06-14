@@ -37,6 +37,8 @@ import {
 } from "lucide-react";
 import { useVoiceInput, Waveform, appendVoiceTranscript } from "../../voice";
 import { cn } from "../../lib/utils";
+import { Text } from "../../primitives/Text";
+import { Button } from "../../primitives/Button";
 
 interface ProposeActionArtifact {
   kind: "email_draft" | "message" | "doc" | "other";
@@ -129,12 +131,12 @@ function DraftItem({ artifact, index }: { artifact: ProposeActionArtifact; index
           <Icon size={14} strokeWidth={1.8} className="text-foreground/65" />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-foreground/40 leading-none mb-1">
+          <Text variant="micro" weight="semibold" className="block uppercase tracking-wider text-foreground/40 leading-none mb-1">
             {label}
-          </p>
-          <p className="text-[13px] font-semibold text-foreground/85 truncate leading-tight">
+          </Text>
+          <Text variant="bodySm" weight="semibold" className="block text-foreground/85 truncate leading-tight">
             {artifact.title}
-          </p>
+          </Text>
         </div>
         <ChevronUp
           size={14}
@@ -156,9 +158,9 @@ function DraftItem({ artifact, index }: { artifact: ProposeActionArtifact; index
             className="overflow-hidden"
           >
             <div className="px-3.5 pb-3 pt-2 border-t border-foreground/[0.06]">
-              <p className="text-[12.5px] text-foreground/75 leading-relaxed whitespace-pre-line">
+              <Text variant="bodySm" className="block text-foreground/75 leading-relaxed whitespace-pre-line">
                 {artifact.body}
-              </p>
+              </Text>
             </div>
           </motion.div>
         )}
@@ -311,25 +313,25 @@ export default function ProposeActionCard({
         initial={{ opacity: 0, y: 6 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
-        className="rounded-2xl px-4 py-3.5 border border-[hsl(292,78%,63%)]/35 overflow-hidden bg-background/60"
+        className="rounded-2xl px-4 py-3.5 border border-primary/35 overflow-hidden bg-background/60"
       >
         <div className="flex items-center justify-between gap-2 mb-3">
           <div className="flex items-center gap-1.5">
             <motion.span
-              className="inline-block rounded-full bg-[hsl(292,78%,63%)]"
+              className="inline-block rounded-full bg-primary"
               style={{ width: 8, height: 8 }}
               animate={{ opacity: [0.55, 1, 0.55], scale: [1, 1.15, 1] }}
               transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut" }}
             />
-            <p className="text-[11px] font-bold uppercase tracking-wider text-[hsl(292,78%,55%)]">
+            <Text variant="caption" weight="bold" className="block uppercase tracking-wider text-[hsl(292,78%,55%)]">
               Needs your input
-            </p>
+            </Text>
           </div>
         </div>
 
-        <p className="text-[13.5px] text-foreground/85 font-medium leading-snug mb-2.5 whitespace-pre-line">
+        <Text variant="bodySm" weight="medium" className="block text-foreground/85 leading-snug mb-2.5 whitespace-pre-line">
           {parsed.message}
-        </p>
+        </Text>
 
         {options.length > 0 && (
           <div className="space-y-1.5">
@@ -344,7 +346,7 @@ export default function ProposeActionCard({
                     setSelectedOption(i);
                     if (inputValue) setInputValue("");
                   }}
-                  className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-left text-[13px] border disabled:cursor-not-allowed"
+                  className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-left text-bodySm border disabled:cursor-not-allowed"
                   style={{
                     background: isSelected
                       ? "hsl(0 0% 0% / 0.04)"
@@ -387,7 +389,7 @@ export default function ProposeActionCard({
             className="mt-2.5 flex flex-col gap-2 rounded-xl border border-foreground/10 px-3 py-2.5"
             style={{ background: "rgba(255,255,255,0.55)" }}
           >
-            <p className="flex min-h-[18px] items-center gap-1.5 text-[13px] italic leading-snug text-foreground/55">
+            <Text variant="bodySm" className="flex min-h-[18px] items-center gap-1.5 italic leading-snug text-foreground/55">
               {voiceConnecting && !voiceFinalizing && !voiceTranscript && (
                 <Loader2 size={13} strokeWidth={2} className="shrink-0 animate-spin" />
               )}
@@ -396,11 +398,11 @@ export default function ProposeActionCard({
                   ? "Polishing…"
                   : voiceTranscript || (voiceConnecting ? "Connecting…" : "Listening…")}
               </span>
-            </p>
+            </Text>
             <div className="flex items-center gap-2.5">
-              <span className="w-[36px] shrink-0 text-[11px] font-medium tabular-nums text-foreground/55">
+              <Text variant="caption" weight="medium" className="w-[36px] shrink-0 tabular-nums text-foreground/55">
                 {formatRecordDuration(recordSec)}
-              </span>
+              </Text>
               {voiceConnecting ? (
                 <div className="flex min-w-0 flex-1 items-center justify-center">
                   <Loader2 size={18} strokeWidth={2} className="animate-spin text-foreground/50" />
@@ -424,8 +426,8 @@ export default function ProposeActionCard({
                 className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-background transition-transform active:scale-95 disabled:opacity-60"
                 style={{
                   background:
-                    "linear-gradient(135deg, hsl(292 78% 63%) 0%, hsl(330 80% 65%) 100%)",
-                  boxShadow: "0 4px 12px hsl(292 78% 63% / 0.35)",
+                    "linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(330 80% 65%) 100%)",
+                  boxShadow: "0 4px 12px hsl(var(--primary) / 0.35)",
                 }}
                 aria-label="Use transcript"
               >
@@ -456,7 +458,7 @@ export default function ProposeActionCard({
                     : "Type your reply..."
               }
               disabled={locked}
-              className="min-w-0 flex-1 bg-transparent text-[13px] text-foreground placeholder:text-foreground/35 outline-none disabled:opacity-50"
+              className="min-w-0 flex-1 bg-transparent text-bodySm text-foreground placeholder:text-foreground/35 outline-none disabled:opacity-50"
             />
             <button
               type="button"
@@ -470,29 +472,23 @@ export default function ProposeActionCard({
           </div>
         )}
 
-        <button
-          type="button"
-          onClick={() => void submitReply()}
-          disabled={
-            locked
-            || (options.length === 0 && !inputValue.trim())
+        <Button
+          variant="primary"
+          size="md"
+          className="mt-3 w-full"
+          onPress={() => void submitReply()}
+          disabled={locked || (options.length === 0 && !inputValue.trim())}
+          leftIcon={
+            sent ? (
+              <Check size={13} strokeWidth={2.5} />
+            ) : isRunning ? (
+              <Loader2 size={13} className="animate-spin" />
+            ) : undefined
           }
-          className="mt-3 w-full px-4 py-2.5 rounded-xl bg-foreground text-background text-[13px] font-semibold hover:bg-foreground/85 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+          rightIcon={!sent && !isRunning ? <ArrowRight size={13} strokeWidth={2.5} /> : undefined}
         >
-          {sent ? (
-            <>
-              <Check size={13} strokeWidth={2.5} /> Sent
-            </>
-          ) : isRunning ? (
-            <>
-              <Loader2 size={13} className="animate-spin" /> Sending…
-            </>
-          ) : (
-            <>
-              Continue <ArrowRight size={13} strokeWidth={2.5} />
-            </>
-          )}
-        </button>
+          {sent ? "Sent" : isRunning ? "Sending…" : "Continue"}
+        </Button>
       </motion.div>
     </div>
   );

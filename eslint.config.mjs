@@ -128,4 +128,50 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // @pin-ai/ui-kit：设计系统层（契约 + cva 配方 + cn + motion 预设），平台无关。
+    // 依赖方向 ui-kit → design / core(仅类型);禁止 import app / ui-web / state / 渲染器。
+    // 设计 SSOT：docs/plans/2026-06-13-dual-platform-design-system.mdx。
+    files: ["packages/ui-kit/src/**/*.ts", "packages/ui-kit/src/**/*.tsx"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            ...PLATFORM_IMPORT_PATTERNS,
+            {
+              group: [
+                "**/proactive-ai-frontend/**",
+                "**/apps/**",
+                "@pin-ai/ui-web",
+                "@pin-ai/state",
+                "react-native",
+                "react-native/*",
+                "react-dom",
+                "react-dom/*",
+              ],
+              message:
+                "ui-kit 是双端设计系统层（契约 + cva 配方），只依赖 @pin-ai/design + @pin-ai/core(类型);渲染实现与 app 代码不进 ui-kit。",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // 字号守门：禁止新增 text-[Npx] 魔法数。存量已清零（S2：codemod 迁 331 处到
+    // typeScale 派生的 fontSize 工具类 + 4 处 display hero 迁 Text primitive），
+    // 故为 error 防回潮。
+    files: ["packages/*/src/**/*.tsx"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "Literal[value=/text-\\[[0-9.]+px\\]/]",
+          message:
+            "字号魔法数 text-[Npx] 禁止新增：用 typeScale 派生的 fontSize 工具类(text-body / text-caption 等)，或 Text primitive 的 variant。见 plan 2026-06-13-dual-platform-design-system。",
+        },
+      ],
+    },
+  },
 );

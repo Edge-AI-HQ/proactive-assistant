@@ -21,6 +21,7 @@ import {
   CornerDownLeft,
   GripHorizontal,
 } from "lucide-react";
+import { Text } from "../primitives/Text";
 
 export type SheetStage = "mini" | "medium" | "full";
 
@@ -394,7 +395,7 @@ export default function BrowserView({
           <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-[1]">
             <div className="flex items-center gap-2">
               <Loader2 size={14} className="animate-spin text-white/50" />
-              <span className="text-[12.5px] text-white/50">Loading browser...</span>
+              <Text variant="bodySm" className="text-white/50">Loading browser...</Text>
             </div>
           </div>
         )}
@@ -511,13 +512,13 @@ export default function BrowserView({
           className="mx-3 mt-2 flex items-start gap-2 px-2.5 py-2 rounded-xl bg-amber-500/95 text-black"
         >
           <AlertCircle size={14} className="shrink-0 mt-0.5" />
-          <div className="flex-1 min-w-0 text-[12px] leading-snug">
+          <div className="flex-1 min-w-0 text-label leading-snug">
             <div className="font-medium">AI needs your help</div>
             <div className="opacity-80">{takeoverReason}</div>
           </div>
           <button
             onClick={() => onControlChange("ai")}
-            className="shrink-0 px-2.5 py-1 rounded-md bg-black text-white text-[11px] font-medium hover:bg-black/80"
+            className="shrink-0 px-2.5 py-1 rounded-md bg-black text-white text-caption font-medium hover:bg-black/80"
           >
             Done
           </button>
@@ -539,7 +540,7 @@ export default function BrowserView({
               onPointerDown={stopDrag}
               className="flex items-center gap-1.5 min-w-0"
             >
-              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/[0.08] text-[11.5px] text-white/85">
+              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/[0.08] text-caption text-white/85">
                 {statusDot}
                 <span className="truncate">{statusLabel}</span>
               </div>
@@ -547,7 +548,7 @@ export default function BrowserView({
               {controlMode === "ai" ? (
                 <button
                   onClick={() => onControlChange("user")}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/[0.08] hover:bg-white/15 active:bg-white/20 text-white/85 text-[11.5px] transition-colors"
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/[0.08] hover:bg-white/15 active:bg-white/20 text-white/85 text-caption transition-colors"
                 >
                   <Hand size={12} strokeWidth={2} />
                   <span>Take over</span>
@@ -555,7 +556,7 @@ export default function BrowserView({
               ) : (
                 <button
                   onClick={() => onControlChange("ai")}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-blue-500/25 hover:bg-blue-500/40 active:bg-blue-500/50 text-blue-100 text-[11.5px] transition-colors"
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-blue-500/25 hover:bg-blue-500/40 active:bg-blue-500/50 text-blue-100 text-caption transition-colors"
                 >
                   <Bot size={12} strokeWidth={2} />
                   <span>Return to AI</span>
@@ -571,7 +572,7 @@ export default function BrowserView({
                 <>
                   <button
                     onClick={() => setConfirmingClose(false)}
-                    className="px-2.5 py-1 rounded-md text-[11.5px] text-white/75 hover:bg-white/10 active:bg-white/15"
+                    className="px-2.5 py-1 rounded-md text-caption text-white/75 hover:bg-white/10 active:bg-white/15"
                   >
                     Cancel
                   </button>
@@ -580,7 +581,7 @@ export default function BrowserView({
                       setConfirmingClose(false);
                       onRequestClose();
                     }}
-                    className="px-2.5 py-1 rounded-md text-[11.5px] font-medium bg-red-500/85 hover:bg-red-500 active:bg-red-600 text-white"
+                    className="px-2.5 py-1 rounded-md text-caption font-medium bg-red-500/85 hover:bg-red-500 active:bg-red-600 text-white"
                   >
                     Close
                   </button>

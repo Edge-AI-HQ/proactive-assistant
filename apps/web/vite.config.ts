@@ -36,7 +36,13 @@ export default defineConfig(({ mode }) => {
         // 经 path.resolve 落到 /packages，同 proactive-ai-frontend 的机制。
         "@pin-ai/core": path.resolve(__dirname, "../../packages/core/src/index.ts"),
         "@pin-ai/state": path.resolve(__dirname, "../../packages/state/src/index.ts"),
+        "@pin-ai/ui-kit": path.resolve(__dirname, "../../packages/ui-kit/src/index.ts"),
         "@pin-ai/ui-web": path.resolve(__dirname, "../../packages/ui-web/src/index.ts"),
+        // design token：ui-web primitive 值导入 typeScale/elevation（运行时真值），
+        // 容器 node_modules 不含 workspace 包 → 必须 alias 到源码文件。
+        // 指 tokens.mjs（ESM 视图）：Vite dev 不对源码 .cjs 合成命名导出会白屏，
+        // ESM+JSON dev/prod 双通。（tailwind config 另走相对路径引 tokens.cjs。）
+        "@pin-ai/design": path.resolve(__dirname, "../../packages/design/tokens.mjs"),
       },
     },
     server: {

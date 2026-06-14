@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { Expand, MapPin, Mic, Radio, X } from "lucide-react";
 import type { LiveSession } from "@/services/ambient/live-session";
+import { Text } from "@pin-ai/ui-web";
 
 interface LiveSessionCardProps {
   session: LiveSession | null;
@@ -59,7 +60,7 @@ export default function LiveSessionCard({
             )}
             <span className={`relative inline-flex rounded-full h-2 w-2 ${isIdle ? "bg-foreground/35" : "bg-[hsl(304_75%_63%)]"}`} />
           </span>
-          <span className={`text-[10px] font-bold uppercase tracking-[0.16em] truncate ${isIdle ? "text-foreground/50" : "text-[hsl(304_75%_42%)]"}`}>
+          <span className={`text-micro font-bold uppercase tracking-[0.16em] truncate ${isIdle ? "text-foreground/50" : "text-[hsl(304_75%_42%)]"}`}>
             Live · {kind}
           </span>
         </div>
@@ -67,7 +68,7 @@ export default function LiveSessionCard({
           {session && onFocus && (
             <button
               onClick={() => onFocus(session)}
-              className="h-9 px-3.5 rounded-full flex items-center gap-1.5 text-[12px] font-semibold text-[hsl(304_75%_32%)] hover:text-[hsl(304_75%_22%)] bg-[hsl(304_75%_63%/0.16)] hover:bg-[hsl(304_75%_63%/0.26)] border border-[hsl(304_75%_63%/0.35)] active:scale-[0.97] transition-all shadow-sm"
+              className="h-9 px-3.5 rounded-full flex items-center gap-1.5 text-label font-semibold text-[hsl(304_75%_32%)] hover:text-[hsl(304_75%_22%)] bg-[hsl(304_75%_63%/0.16)] hover:bg-[hsl(304_75%_63%/0.26)] border border-[hsl(304_75%_63%/0.35)] active:scale-[0.97] transition-all shadow-sm"
               aria-label="Open fullscreen session"
               title="Focus mode"
             >
@@ -92,10 +93,10 @@ export default function LiveSessionCard({
           <SessionIcon size={17} strokeWidth={1.8} />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-[13.5px] font-semibold text-foreground leading-snug truncate">
+          <Text variant="bodySm" weight="semibold" className="block text-foreground leading-snug truncate">
             {title}
-          </p>
-          <p className="text-[11px] text-foreground/55 mt-0.5 flex items-center gap-1 truncate">
+          </Text>
+          <p className="text-caption text-foreground/55 mt-0.5 flex items-center gap-1 truncate">
             <MapPin size={10} className="shrink-0" />
             <span className="truncate">{location}</span>
             <span className="text-foreground/30">·</span>
@@ -109,7 +110,7 @@ export default function LiveSessionCard({
           {session.signals.slice(0, 5).map((signal) => (
             <span
               key={signal}
-              className="inline-flex max-w-full items-center rounded-full bg-foreground/[0.05] border border-foreground/[0.08] px-2 py-0.5 text-[10px] font-medium text-foreground/60 whitespace-nowrap"
+              className="inline-flex max-w-full items-center rounded-full bg-foreground/[0.05] border border-foreground/[0.08] px-2 py-0.5 text-micro font-medium text-foreground/60 whitespace-nowrap"
             >
               {signal}
             </span>
@@ -145,7 +146,7 @@ export default function LiveSessionCard({
                       className="flex gap-2.5 py-1"
                     >
                       <span
-                        className={`text-[9px] font-mono pt-0.5 w-10 shrink-0 tabular-nums transition-colors duration-500 ${
+                        className={`text-micro font-mono pt-0.5 w-10 shrink-0 tabular-nums transition-colors duration-500 ${
                           isNewest ? "text-[hsl(304_75%_45%)]" : "text-foreground/35"
                         }`}
                       >
@@ -153,7 +154,7 @@ export default function LiveSessionCard({
                       </span>
                       <div className="min-w-0 flex-1">
                         <p
-                          className={`text-[12.5px] leading-snug ${
+                          className={`text-label leading-snug ${
                             a.kind === "action"
                               ? "text-foreground font-medium"
                               : a.kind === "assist"
@@ -162,9 +163,9 @@ export default function LiveSessionCard({
                           }`}
                         >
                           {a.kind === "action" && (
-                            <span className="inline-block mr-1.5 px-1.5 py-0 rounded text-[9px] font-bold uppercase tracking-wider bg-[hsl(304_75%_63%)] text-white align-middle">
+                            <Text variant="micro" weight="bold" className="inline-block mr-1.5 px-1.5 py-0 rounded uppercase tracking-wider bg-[hsl(304_75%_63%)] text-white align-middle">
                               Action
-                            </span>
+                            </Text>
                           )}
                           {a.text}
                         </p>
@@ -179,9 +180,9 @@ export default function LiveSessionCard({
         <div className="px-4 pb-4">
           <div className="rounded-xl border border-dashed border-foreground/15 bg-foreground/[0.03] px-3 py-3 flex items-center gap-2.5">
             <Mic size={14} className="text-foreground/45 shrink-0" />
-            <p className="text-[12.5px] leading-snug text-foreground/55">
+            <Text variant="bodySm" className="block leading-snug text-foreground/55">
               No active live session yet. When Ambient captures a real-world session, it will appear here automatically.
-            </p>
+            </Text>
           </div>
         </div>
       )}

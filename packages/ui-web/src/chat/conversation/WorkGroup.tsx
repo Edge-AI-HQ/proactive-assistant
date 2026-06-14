@@ -26,6 +26,7 @@ import {
   toolStatus,
   type WorkGroupData,
 } from "@pin-ai/core";
+import { Text } from "../../primitives/Text";
 
 const EASE: [number, number, number, number] = [0.32, 0.72, 0, 1];
 
@@ -111,7 +112,7 @@ export default function WorkGroup({
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
             className={cn(
-              "min-w-0 flex-1 truncate text-[12px] text-foreground/60",
+              "min-w-0 flex-1 truncate text-label text-foreground/60",
               streaming ? "font-normal" : "font-medium",
             )}
           >
@@ -119,9 +120,9 @@ export default function WorkGroup({
           </motion.span>
         </AnimatePresence>
         {!streaming && stepCount > 0 && (
-          <span className="shrink-0 text-[10.5px] uppercase tracking-[0.12em] text-foreground/35">
+          <Text variant="caption" className="shrink-0 uppercase tracking-[0.12em] text-foreground/35">
             {stepCount} steps
-          </span>
+          </Text>
         )}
         <ChevronDown
           size={13}

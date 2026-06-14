@@ -31,6 +31,7 @@ import {
   setSelectedAmbientAsrModelId,
   setSelectedAmbientSummaryModelId,
 } from "@/services/ambient/models-selection";
+import { Text } from "@pin-ai/ui-web";
 
 type StatusById = Record<string, ModelDownloadStatus>;
 
@@ -248,7 +249,7 @@ function ModelSection({
 
   return (
     <div className="space-y-1.5">
-      <label className="block text-[10px] font-medium text-foreground/45">
+      <label className="block text-micro font-medium text-foreground/45">
         {KIND_LABEL[kind]} · active
       </label>
       <select
@@ -256,7 +257,7 @@ function ModelSection({
         value={selected?.id ?? ""}
         disabled={busy || downloading}
         onChange={(e) => handleSelect(e.currentTarget.value)}
-        className="w-full rounded-md border border-foreground/15 bg-white/70 px-2 py-1.5 text-[12px] text-foreground/80 focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60 disabled:cursor-not-allowed"
+        className="w-full rounded-md border border-foreground/15 bg-white/70 px-2 py-1.5 text-label text-foreground/80 focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60 disabled:cursor-not-allowed"
       >
         {profiles.map((p) => {
           const s = statusById[p.id];
@@ -276,10 +277,10 @@ function ModelSection({
 
       {selected ? (
         <>
-          <p className="text-[10px] text-foreground/45 leading-snug break-words">
+          <Text variant="micro" className="block text-foreground/45 leading-snug break-words">
             {selected.repo} / {selected.file}
             {selected.notes ? ` · ${selected.notes}` : ""}
-          </p>
+          </Text>
 
           {downloading && selectedStatus ? (
             <div className="space-y-1">
@@ -294,7 +295,7 @@ function ModelSection({
                   }}
                 />
               </div>
-              <p className="text-[10px] tabular-nums text-foreground/45">
+              <Text variant="micro" className="block tabular-nums text-foreground/45">
                 {formatBytes(selectedStatus.bytesWritten)} /
                 {" "}
                 {formatBytes(selectedStatus.bytesTotal || selected.approxBytes)}
@@ -304,20 +305,20 @@ function ModelSection({
                   selectedStatus.bytesTotal || selected.approxBytes,
                 )}
                 {selectedStatus.mirrorInUse ? ` · via ${selectedStatus.mirrorInUse}` : ""}
-              </p>
+              </Text>
             </div>
           ) : null}
 
           {present && selectedStatus?.sizeOnDisk ? (
-            <p className="text-[10px] tabular-nums text-foreground/45">
+            <Text variant="micro" className="block tabular-nums text-foreground/45">
               on disk: {formatBytes(selectedStatus.sizeOnDisk)}
-            </p>
+            </Text>
           ) : null}
 
           {failed && selectedStatus?.errorMessage ? (
-            <p className="text-[10px] text-red-500 leading-snug">
+            <Text variant="micro" className="block text-red-500 leading-snug">
               {selectedStatus.errorMessage}
-            </p>
+            </Text>
           ) : null}
 
           <div className="flex items-center gap-2 pt-1">
@@ -325,7 +326,7 @@ function ModelSection({
               type="button"
               onClick={handleDownloadOrCancel}
               disabled={busy && !downloading}
-              className="flex-1 rounded-md bg-foreground text-background text-[11px] font-semibold py-1.5 transition-colors hover:bg-foreground/85 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="flex-1 rounded-md bg-foreground text-background text-caption font-semibold py-1.5 transition-colors hover:bg-foreground/85 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {downloadLabel}
             </button>
@@ -343,14 +344,14 @@ function ModelSection({
           {showAdvanced ? (
             <div className="pt-1.5 border-t border-foreground/10 mt-1.5 space-y-1">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-[10px] text-foreground/45">
+                <Text variant="micro" className="text-foreground/45">
                   Manual verify (runtime auto-verifies on first use)
-                </span>
+                </Text>
                 <button
                   type="button"
                   onClick={handleVerify}
                   disabled={!present || busy || verifying}
-                  className="text-[10px] text-foreground/70 underline underline-offset-2 hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed disabled:no-underline inline-flex items-center gap-1"
+                  className="text-micro text-foreground/70 underline underline-offset-2 hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed disabled:no-underline inline-flex items-center gap-1"
                 >
                   {verifying ? <Loader2 size={10} className="animate-spin" /> : null}
                   {verifying ? "Verifying…" : "Run verify"}
@@ -358,7 +359,7 @@ function ModelSection({
               </div>
               {(verifyOk || verifyFail) && selectedStatus ? (
                 <div
-                  className={`flex items-start gap-1.5 text-[10px] leading-snug ${verifyOk ? "text-emerald-700" : "text-red-500"
+                  className={`flex items-start gap-1.5 text-micro leading-snug ${verifyOk ? "text-emerald-700" : "text-red-500"
                     }`}
                 >
                   {verifyOk ? (
@@ -438,13 +439,13 @@ export default function AmbientModelsPanel() {
           <Cpu size={14} strokeWidth={1.5} className="text-foreground/40" />
           <span className="text-xs font-medium text-foreground/50">Ambient Models</span>
         </div>
-        <label className="text-[10px] font-medium text-foreground/45 inline-flex items-center gap-1.5">
+        <label className="text-micro font-medium text-foreground/45 inline-flex items-center gap-1.5">
           <span>Mirror</span>
           <select
             value={mirror}
             onChange={(e) => handleMirrorChange(e.currentTarget.value as ModelMirror)}
             aria-label="Preferred mirror"
-            className="rounded-md border border-foreground/10 bg-white/60 px-2 py-0.5 text-[11px] text-foreground/70 focus:outline-none focus:ring-2 focus:ring-primary/30"
+            className="rounded-md border border-foreground/10 bg-white/60 px-2 py-0.5 text-caption text-foreground/70 focus:outline-none focus:ring-2 focus:ring-primary/30"
           >
             {MIRROR_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -454,9 +455,9 @@ export default function AmbientModelsPanel() {
       </div>
 
       {profiles.length === 0 ? (
-        <p className="text-[11px] text-foreground/30 py-3 text-center">
+        <Text variant="caption" className="block text-foreground/30 py-3 text-center">
           {error ? `models.list failed: ${error}` : "Loading manifest…"}
-        </p>
+        </Text>
       ) : (
         <>
           <ModelSection
@@ -490,7 +491,7 @@ export default function AmbientModelsPanel() {
         type="button"
         onClick={() => setAdvancedOpen((open) => !open)}
         aria-expanded={advancedOpen}
-        className="inline-flex items-center gap-1 text-[10px] text-foreground/45 hover:text-foreground/70"
+        className="inline-flex items-center gap-1 text-micro text-foreground/45 hover:text-foreground/70"
       >
         <ChevronDown
           size={11}
@@ -501,7 +502,7 @@ export default function AmbientModelsPanel() {
       </button>
 
       {error && profiles.length > 0 && (
-        <p className="text-[10px] text-red-500 leading-snug">{error}</p>
+        <Text variant="micro" className="block text-red-500 leading-snug">{error}</Text>
       )}
     </div>
   );

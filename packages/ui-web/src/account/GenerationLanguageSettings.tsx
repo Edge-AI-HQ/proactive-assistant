@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Loader2 } from "lucide-react";
 import { useUserSettings } from "@pin-ai/state";
 import { GENERATION_LANGUAGE_OPTIONS, type SupportedGenerationLanguage } from "@pin-ai/core";
+import { Text } from "../primitives/Text";
 
 export default function GenerationLanguageSettings() {
   const { settings, loading, saving, error, patch } = useUserSettings();
@@ -46,7 +47,7 @@ export default function GenerationLanguageSettings() {
           <ChevronDown size={14} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-foreground/40" />
         </div>
       </div>
-      {error && <p className="text-[11px] text-red-500 mt-1">{error}</p>}
+      {error && <Text variant="caption" className="block text-red-500 mt-1">{error}</Text>}
     </div>
   );
 }

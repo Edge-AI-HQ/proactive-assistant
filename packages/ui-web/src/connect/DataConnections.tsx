@@ -38,6 +38,7 @@ import {
 import { useInitTask, isInitTaskFresh } from "@pin-ai/state";
 import { resolveComposioConnectionIdentity } from "./composio-display-identity";
 import { closeOAuthSurface, openOAuthAndAwaitClose } from "./oauth-popup";
+import { Text } from "../primitives/Text";
 
 /**
  * Small inline chip that polls connector.init tasks and renders a
@@ -102,7 +103,7 @@ function InitTaskChip({
     // yet — e.g. user never triggered connect on this device).
     if (error) return null;
     return (
-      <p className="text-[10px] text-foreground/40 truncate flex items-center gap-1">
+      <p className="text-micro text-foreground/40 truncate flex items-center gap-1">
         <Loader2 size={9} className="animate-spin" />
         Initializing…
       </p>
@@ -120,23 +121,23 @@ function InitTaskChip({
       if (skipped) {
         const reason = String(task.result?.reason ?? "skipped");
         return (
-          <p className="text-[10px] text-foreground/40 truncate">
+          <Text variant="micro" className="block text-foreground/40 truncate">
             Initialization skipped · {reason}
-          </p>
+          </Text>
         );
       }
       return (
-        <p className="text-[10px] text-emerald-600/80 truncate">
+        <Text variant="micro" className="block text-emerald-600/80 truncate">
           Initialized · {fetched} fetched{memoriesWritten > 0 ? ` · ${memoriesWritten} memories` : ""}{skillsAdded > 0 ? ` · ${skillsAdded} skills` : ""}
-        </p>
+        </Text>
       );
     }
     // failed / timed_out / cancelled / lost — show shortest possible error
     const shortErr = (task.last_error_message ?? task.last_error_code ?? "Unknown error").slice(0, 80);
     return (
-      <p className="text-[10px] text-red-500/80 truncate">
+      <Text variant="micro" className="block text-red-500/80 truncate">
         Initialization failed — {shortErr}
-      </p>
+      </Text>
     );
   }
   // running / queued — surface stage + progress when present
@@ -151,7 +152,7 @@ function InitTaskChip({
     return stage;
   })();
   return (
-    <p className="text-[10px] text-foreground/45 truncate flex items-center gap-1">
+    <p className="text-micro text-foreground/45 truncate flex items-center gap-1">
       <Loader2 size={9} className="animate-spin" />
       Initializing · {progressDetail}
     </p>
@@ -394,16 +395,16 @@ function CustomMcpStatus({ connector }: { connector: CustomConnector }) {
   const fetched = connector.fetched ?? connector.rawInserted;
   const isDistilling = task?.status === "queued" || task?.status === "running";
   if (connector.lastError) {
-    return <span className="text-[10px] font-medium text-red-500">Sync failed</span>;
+    return <Text variant="micro" weight="medium" className="text-red-500">Sync failed</Text>;
   }
   if (typeof fetched === "number") {
     return (
-      <span className="text-[10px] font-medium text-emerald-600">
+      <Text variant="micro" weight="medium" className="text-emerald-600">
         {formatCount(fetched)} fetched{isDistilling ? " · Distilling" : ""}
-      </span>
+      </Text>
     );
   }
-  return <span className="text-[10px] font-medium text-emerald-600">Connected</span>;
+  return <Text variant="micro" weight="medium" className="text-emerald-600">Connected</Text>;
 }
 
 export function isDataSourceConnected(source: DataSource, connections: Connection[]): boolean {
@@ -720,7 +721,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
   return (
     <div>
       {!configured && !statusLoading && (
-        <div className="glass-card p-4 mb-4 flex items-start gap-1.5 text-[11px] text-foreground/60">
+        <div className="glass-card p-4 mb-4 flex items-start gap-1.5 text-caption text-foreground/60">
           <XCircle size={12} className="mt-0.5 flex-shrink-0 text-red-500" />
           <span>
             Composio is not configured on this deployment. Connections will be
@@ -759,13 +760,13 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                     <span className="text-sm font-semibold text-foreground">
                       {category.name}
                     </span>
-                    <span className="text-[10px] font-medium text-foreground/40 bg-foreground/[0.06] px-1.5 py-0.5 rounded-md">
+                    <Text variant="micro" weight="medium" className="text-foreground/40 bg-foreground/[0.06] px-1.5 py-0.5 rounded-md">
                       {connected} / {category.sources.length}
-                    </span>
+                    </Text>
                   </div>
-                  <p className="text-[11px] text-foreground/40 mt-0.5 leading-snug">
+                  <Text variant="caption" className="block text-foreground/40 mt-0.5 leading-snug">
                     {category.description}
-                  </p>
+                  </Text>
                 </div>
                 <div className="flex-shrink-0 text-foreground/30">
                   {isExpanded ? (
@@ -789,9 +790,9 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                       <div className="h-px bg-foreground/[0.06] mb-2" />
 
                       {category.sources.length === 0 && (
-                        <p className="text-[11px] text-foreground/40 italic px-1 py-3 text-center">
+                        <Text variant="caption" className="block text-foreground/40 italic px-1 py-3 text-center">
                           No connectors available yet
-                        </p>
+                        </Text>
                       )}
 
                       {[0, 1, 2].map((tier) => {
@@ -812,9 +813,9 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                       : "bg-foreground/20"
                                 }`}
                               />
-                              <span className="text-[10px] font-semibold text-foreground/50 uppercase tracking-wider">
+                              <Text variant="micro" weight="semibold" className="text-foreground/50 uppercase tracking-wider">
                                 {tierLabels[tier]}
-                              </span>
+                              </Text>
                             </div>
                             <div className="space-y-1">
                               {tierSources.map((source) => {
@@ -878,9 +879,9 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                 connections,
                                               );
                                               return identity ? (
-                                                <p className="text-[10px] text-foreground/35 truncate">
+                                                <Text variant="micro" className="block text-foreground/35 truncate">
                                                   {identity}
-                                                </p>
+                                                </Text>
                                               ) : null;
                                             })()}
                                           {singleAccount?.connectedAccountId && source.composioId && (
@@ -900,7 +901,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                   e.stopPropagation();
                                                   handleCancel();
                                                 }}
-                                                className="text-[10px] font-medium text-foreground/50 hover:text-foreground/80 bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.1] transition-colors flex items-center gap-1"
+                                                className="text-micro font-medium text-foreground/50 hover:text-foreground/80 bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.1] transition-colors flex items-center gap-1"
                                               >
                                                 <Loader2
                                                   size={10}
@@ -916,7 +917,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                     source.composioId!,
                                                   );
                                                 }}
-                                                className="text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.1] transition-all opacity-0 group-hover:opacity-100"
+                                                className="text-micro font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.1] transition-all opacity-0 group-hover:opacity-100"
                                               >
                                                 <span className="flex items-center gap-1">
                                                   <Plus size={10} /> Add
@@ -936,7 +937,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                 disconnectingId ===
                                                 singleAccount.connectedAccountId
                                               }
-                                              className="text-[10px] font-medium rounded-lg px-2.5 py-0.5 transition-colors disabled:opacity-40 text-emerald-600 hover:text-red-500 hover:bg-red-500/[0.08]"
+                                              className="text-micro font-medium rounded-lg px-2.5 py-0.5 transition-colors disabled:opacity-40 text-emerald-600 hover:text-red-500 hover:bg-red-500/[0.08]"
                                             >
                                               {disconnectingId ===
                                               singleAccount.connectedAccountId ? (
@@ -965,7 +966,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                   e.stopPropagation();
                                                   handleCancel();
                                                 }}
-                                                className="text-[10px] font-medium text-foreground/50 hover:text-foreground/80 bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1] transition-colors flex items-center gap-1"
+                                                className="text-micro font-medium text-foreground/50 hover:text-foreground/80 bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1] transition-colors flex items-center gap-1"
                                               >
                                                 <Loader2
                                                   size={10}
@@ -981,7 +982,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                     source.composioId!,
                                                   );
                                                 }}
-                                                className="text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1] transition-colors"
+                                                className="text-micro font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1] transition-colors"
                                               >
                                                 Connect
                                               </button>
@@ -990,9 +991,9 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                         ) : (
                                           <>
                                             <span className="w-1.5 h-1.5 rounded-full bg-foreground/10 flex-shrink-0" />
-                                            <span className="text-[10px] font-medium text-foreground/20 bg-foreground/[0.03] border border-foreground/[0.06] rounded-lg px-2.5 py-0.5 cursor-not-allowed">
+                                            <Text variant="micro" weight="medium" className="text-foreground/20 bg-foreground/[0.03] border border-foreground/[0.06] rounded-lg px-2.5 py-0.5 cursor-not-allowed">
                                               Connect
-                                            </span>
+                                            </Text>
                                           </>
                                         )}
                                       </div>
@@ -1010,16 +1011,16 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                           <span className="text-xs text-foreground font-medium flex-1">
                                             {source.name}
                                           </span>
-                                          <span className="text-[10px] text-foreground/30">
+                                          <Text variant="micro" className="text-foreground/30">
                                             {accounts.length}
-                                          </span>
+                                          </Text>
                                           {isConnecting ? (
                                             <button
                                               onClick={(e) => {
                                                 e.stopPropagation();
                                                 handleCancel();
                                               }}
-                                              className="text-[10px] font-medium text-foreground/50 hover:text-foreground/80 bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1] transition-colors flex items-center gap-1"
+                                              className="text-micro font-medium text-foreground/50 hover:text-foreground/80 bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1] transition-colors flex items-center gap-1"
                                             >
                                               <Loader2
                                                 size={10}
@@ -1035,7 +1036,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                   source.composioId!,
                                                 );
                                               }}
-                                              className="text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1] transition-colors"
+                                              className="text-micro font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1] transition-colors"
                                             >
                                               <span className="flex items-center gap-1">
                                                 <Plus size={10} /> Add
@@ -1058,7 +1059,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                             >
                                               <div className="flex items-center gap-2.5">
                                                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
-                                                <span className="text-[11px] text-foreground/70 flex-1 truncate">
+                                                <span className="text-caption text-foreground/70 flex-1 truncate">
                                                   {identity ??
                                                     `${source.name} #${idx + 1}`}
                                                 </span>
@@ -1071,7 +1072,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                       );
                                                   }}
                                                   disabled={isDisconnecting}
-                                                  className="text-[10px] font-medium rounded-lg px-2 py-0.5 transition-colors disabled:opacity-40 text-foreground/30 hover:text-red-500 hover:bg-red-500/[0.08] opacity-0 group-hover:opacity-100"
+                                                  className="text-micro font-medium rounded-lg px-2 py-0.5 transition-colors disabled:opacity-40 text-foreground/30 hover:text-red-500 hover:bg-red-500/[0.08] opacity-0 group-hover:opacity-100"
                                                 >
                                                   {isDisconnecting ? (
                                                     <Loader2
@@ -1146,7 +1147,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                 <div className="min-w-0 flex-1">
                                                   <div className="flex items-center gap-1.5">
                                                     <span
-                                                      className={`truncate text-[11px] ${
+                                                      className={`truncate text-caption ${
                                                         childIsConnected
                                                           ? "text-foreground/75 font-medium"
                                                           : childHasComposio
@@ -1157,9 +1158,9 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                       {child.name}
                                                     </span>
                                                     {child.coverageNote && (
-                                                      <span className="text-[9px] text-foreground/30">
+                                                      <Text variant="micro" className="text-foreground/30">
                                                         {child.coverageNote}
-                                                      </span>
+                                                      </Text>
                                                     )}
                                                   </div>
                                                   {child.showInitTask !== false &&
@@ -1180,7 +1181,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                           e.stopPropagation();
                                                           handleCancel();
                                                         }}
-                                                        className="text-[10px] font-medium text-foreground/50 bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 flex items-center gap-1"
+                                                        className="text-micro font-medium text-foreground/50 bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 flex items-center gap-1"
                                                       >
                                                         <Loader2 size={10} className="animate-spin" />
                                                         Cancel
@@ -1194,7 +1195,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                               e.stopPropagation();
                                                               handleConnect(child.composioId!);
                                                             }}
-                                                            className="inline-flex items-center gap-1 text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.1] transition-all opacity-0 group-hover/child:opacity-100"
+                                                            className="inline-flex items-center gap-1 text-micro font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.1] transition-all opacity-0 group-hover/child:opacity-100"
                                                           >
                                                             <Plus size={10} />
                                                             Add
@@ -1210,7 +1211,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                             disabled={
                                                               disconnectingId === childAccount.connectedAccountId
                                                             }
-                                                            className="text-[10px] font-medium rounded-lg px-2 py-0.5 transition-colors disabled:opacity-40 text-emerald-600 hover:text-red-500 hover:bg-red-500/[0.08]"
+                                                            className="text-micro font-medium rounded-lg px-2 py-0.5 transition-colors disabled:opacity-40 text-emerald-600 hover:text-red-500 hover:bg-red-500/[0.08]"
                                                           >
                                                             {disconnectingId === childAccount.connectedAccountId ? (
                                                               <Loader2
@@ -1229,25 +1230,25 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                             )}
                                                           </button>
                                                         ) : (
-                                                          <span className="text-[10px] font-medium text-emerald-600">
+                                                          <Text variant="micro" weight="medium" className="text-emerald-600">
                                                             Connected
-                                                          </span>
+                                                          </Text>
                                                         )}
                                                       </>
                                                     )}
                                                   </div>
                                                 ) : childHasComposio ? (
                                                   child.coverageNote ? (
-                                                    <span className="text-[10px] font-medium text-foreground/30">
+                                                    <Text variant="micro" weight="medium" className="text-foreground/30">
                                                       {child.coverageNote}
-                                                    </span>
+                                                    </Text>
                                                   ) : childIsConnecting ? (
                                                     <button
                                                       onClick={(e) => {
                                                         e.stopPropagation();
                                                         handleCancel();
                                                       }}
-                                                      className="text-[10px] font-medium text-foreground/50 bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 flex items-center gap-1"
+                                                      className="text-micro font-medium text-foreground/50 bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 flex items-center gap-1"
                                                     >
                                                       <Loader2 size={10} className="animate-spin" />
                                                       Cancel
@@ -1258,15 +1259,15 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                         e.stopPropagation();
                                                         handleConnect(child.composioId!);
                                                       }}
-                                                      className="text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.1] transition-colors"
+                                                      className="text-micro font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.1] transition-colors"
                                                     >
                                                       Connect
                                                     </button>
                                                   )
                                                 ) : (
-                                                  <span className="text-[10px] font-medium text-foreground/20">
+                                                  <Text variant="micro" weight="medium" className="text-foreground/20">
                                                     Connect
-                                                  </span>
+                                                  </Text>
                                                 )}
                                               </div>
                                               {childMultiAccounts &&
@@ -1283,7 +1284,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                           className="rounded-lg bg-emerald-500/[0.02] px-2 py-1"
                                                         >
                                                           <div className="flex items-center gap-2">
-                                                            <p className="min-w-0 flex-1 truncate text-[10px] text-foreground/45">
+                                                            <p className="min-w-0 flex-1 truncate text-micro text-foreground/45">
                                                               {identity ?? `${child.name} #${idx + 1}`}
                                                             </p>
                                                             {conn.connectedAccountId && (
@@ -1294,7 +1295,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                                   handleDisconnect(conn.connectedAccountId!);
                                                                 }}
                                                                 disabled={isDisconnecting}
-                                                                className="text-[10px] font-medium rounded-lg px-2 py-0.5 transition-colors disabled:opacity-40 text-foreground/35 hover:text-red-500 hover:bg-red-500/[0.08]"
+                                                                className="text-micro font-medium rounded-lg px-2 py-0.5 transition-colors disabled:opacity-40 text-foreground/35 hover:text-red-500 hover:bg-red-500/[0.08]"
                                                               >
                                                                 {isDisconnecting ? (
                                                                   <Loader2
@@ -1354,9 +1355,9 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
               <div className="flex items-center gap-2">
                 <h3 className="text-sm font-semibold text-foreground">More data connectors</h3>
               </div>
-              <p className="text-[11px] text-foreground/45 mt-0.5">
+              <Text variant="caption" className="block text-foreground/45 mt-0.5">
                 {catalogTotalLabel} sources
-              </p>
+              </Text>
             </div>
             <ChevronDown
               size={16}
@@ -1443,9 +1444,9 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                 <div className="flex items-center gap-1.5">
                                   <span className="truncate text-xs font-medium text-foreground/75">{item.name || item.slug}</span>
                                 </div>
-                                <p className="text-[10px] text-foreground/35 truncate">
+                                <Text variant="micro" className="block text-foreground/35 truncate">
                                   {item.auth_schemes.length > 0 ? item.auth_schemes.join(", ") : "auth"}{item.categories.length > 0 ? ` · ${item.categories.join(", ")}` : ""}
-                                </p>
+                                </Text>
                                 {primaryAccount?.connectedAccountId && (
                                   <InitTaskChip
                                     toolkit={primaryAccount.toolkit}
@@ -1457,7 +1458,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                               {isConnecting ? (
                                 <button
                                   onClick={handleCancel}
-                                  className="text-[10px] font-medium text-foreground/50 bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5"
+                                  className="text-micro font-medium text-foreground/50 bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5"
                                 >
                                   Cancel
                                 </button>
@@ -1465,17 +1466,17 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                 <div className="flex flex-shrink-0 items-center gap-1.5">
                                   <button
                                     onClick={() => void handleConnect(item.slug)}
-                                    className="inline-flex items-center gap-1 text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.1] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-all"
+                                    className="inline-flex items-center gap-1 text-micro font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.1] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-all"
                                   >
                                     <Plus size={10} />
                                     Add
                                   </button>
-                                  <span className="text-[10px] font-medium text-emerald-600">Connected</span>
+                                  <Text variant="micro" weight="medium" className="text-emerald-600">Connected</Text>
                                 </div>
                               ) : (
                                 <button
                                   onClick={() => void handleConnect(item.slug)}
-                                  className="text-[10px] font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1]"
+                                  className="text-micro font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1]"
                                 >
                                   Connect
                                 </button>
@@ -1486,16 +1487,16 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                       </div>
                       <div className="flex items-center justify-end gap-2">
                         {catalogCursor && (
-                          <span className="text-[10px] text-foreground/30">
+                          <Text variant="micro" className="text-foreground/30">
                             {catalogLoading ? "Loading..." : "Scroll for more"}
-                          </span>
+                          </Text>
                         )}
                       </div>
                     </div>
                   )}
 
                   {catalogError && (
-                    <p className="text-[11px] text-red-500">{catalogError}</p>
+                    <Text variant="caption" className="block text-red-500">{catalogError}</Text>
                   )}
 
                   {customConnectors.length > 0 && (
@@ -1511,13 +1512,13 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                               <span className="truncate text-xs font-medium text-foreground/75">
                                 {connector.name}
                               </span>
-                              <span className="text-[10px] font-medium text-foreground/30">
+                              <Text variant="micro" weight="medium" className="text-foreground/30">
                                 MCP
-                              </span>
+                              </Text>
                             </div>
-                            <p className="truncate text-[10px] text-foreground/35">
+                            <Text variant="micro" className="block truncate text-foreground/35">
                               {connector.url}
-                            </p>
+                            </Text>
                           </div>
                           <div className="flex flex-shrink-0 items-center gap-1.5">
                             <CustomMcpStatus connector={connector} />
@@ -1569,7 +1570,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="glass-card px-4 py-3 mt-3 flex items-start gap-1.5 text-[11px] text-red-500"
+            className="glass-card px-4 py-3 mt-3 flex items-start gap-1.5 text-caption text-red-500"
           >
             <XCircle size={12} className="mt-0.5 flex-shrink-0" />
             <span>{connectError}</span>
@@ -1675,13 +1676,13 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
 
       {connectingToolkit && (
         <div className="glass-card px-4 py-3 mt-3 flex items-center justify-between">
-          <p className="text-[11px] text-foreground/40 italic flex items-center gap-1.5">
+          <p className="text-caption text-foreground/40 italic flex items-center gap-1.5">
             <Loader2 size={10} className="animate-spin" />
             Authorize in your browser — this will update automatically
           </p>
           <button
             onClick={handleCancel}
-            className="text-[10px] font-medium text-foreground/40 hover:text-foreground/70 px-2 py-0.5 rounded-lg hover:bg-foreground/[0.06] transition-colors"
+            className="text-micro font-medium text-foreground/40 hover:text-foreground/70 px-2 py-0.5 rounded-lg hover:bg-foreground/[0.06] transition-colors"
           >
             Cancel
           </button>

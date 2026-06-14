@@ -4,7 +4,7 @@ import {
   CATEGORIES,
   Sphere3DCards,
   type Intent,
-  type WeatherData,
+  type WeatherData, Text,
 } from "@pin-ai/ui-web";
 
 /**
@@ -49,15 +49,15 @@ export default function ZebraNow({
     <div className="relative flex flex-col h-full w-full max-w-[1160px] mx-auto">
       {/* Greeting + Ambient pill */}
       <div className="relative z-20 px-10 pt-10 pb-2">
-        <h2 className="text-[34px] font-semibold tracking-tight text-foreground leading-[1.05]">
+        <Text as="h2" variant="display" weight="semibold" className="tracking-tight">
           Hi,{" "}
-          <span className="bg-gradient-to-r from-[hsl(292,78%,63%)] to-[hsl(330,80%,65%)] bg-clip-text text-transparent">
+          <span className="bg-gradient-to-r from-primary to-[hsl(330,80%,65%)] bg-clip-text text-transparent">
             {displayName}
           </span>
-        </h2>
-        <p className="mt-1.5 text-[13px] text-foreground/50 leading-snug">
+        </Text>
+        <Text variant="bodySm" className="block mt-1.5 text-foreground/50 leading-snug">
           Your proactive feed · {sphereCards.length} cards today
-        </p>
+        </Text>
 
         <div className="mt-4 max-w-sm rounded-2xl bg-foreground/[0.04] border border-foreground/[0.06] shadow-sm px-3 py-2.5 flex items-center gap-3">
           <div className="flex items-center gap-3 flex-1 min-w-0 text-left">
@@ -74,12 +74,12 @@ export default function ZebraNow({
               )}
             </span>
             <div className="flex-1 min-w-0">
-              <div className={`text-[14px] font-semibold leading-tight ${ambientOn ? "text-foreground" : "text-foreground/70"}`}>
+              <div className={`text-body font-semibold leading-tight ${ambientOn ? "text-foreground" : "text-foreground/70"}`}>
                 {ambientOn ? "Ambient is on" : "Ambient is off"}
               </div>
-              <div className="text-[12px] text-foreground/50 leading-snug truncate mt-0.5">
+              <Text variant="label" className="block text-foreground/50 leading-snug truncate mt-0.5">
                 {subtitle}
-              </div>
+              </Text>
             </div>
           </div>
           <button
@@ -107,12 +107,12 @@ export default function ZebraNow({
               {cardsLoading ? (
                 <>
                   <Loader2 size={14} className="animate-spin text-foreground/45" />
-                  <span className="text-[13px] text-foreground/55">Loading your cards…</span>
+                  <Text variant="bodySm" className="text-foreground/55">Loading your cards…</Text>
                 </>
               ) : (
-                <span className="text-[13px] text-foreground/55">
+                <Text variant="bodySm" className="text-foreground/55">
                   No cards yet — they surface here as PIN AI learns your context.
-                </span>
+                </Text>
               )}
             </div>
           </div>
@@ -153,12 +153,12 @@ export default function ZebraNow({
         >
           <span
             className="w-2 h-2 rounded-full shrink-0"
-            style={{ background: "linear-gradient(135deg, hsl(292 78% 63%) 0%, hsl(330 80% 65%) 100%)" }}
+            style={{ background: "linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(330 80% 65%) 100%)" }}
           />
-          <span className="flex-1 text-[14px] text-foreground/40 group-hover:text-foreground/60 transition-colors">
+          <span className="flex-1 text-body text-foreground/40 group-hover:text-foreground/60 transition-colors">
             Ask PIN AI…
           </span>
-          <kbd className="shrink-0 px-2 py-1 rounded-lg bg-foreground/[0.05] border border-foreground/[0.08] text-[11px] font-medium text-foreground/45 tracking-wide">
+          <kbd className="shrink-0 px-2 py-1 rounded-lg bg-foreground/[0.05] border border-foreground/[0.08] text-caption font-medium text-foreground/45 tracking-wide">
             ⌘K
           </kbd>
         </button>
