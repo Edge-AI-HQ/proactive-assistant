@@ -58,7 +58,7 @@ export default function ZebraLogin() {
                 <span className="w-[18px] h-[18px] shrink-0">
                   <GoogleG />
                 </span>
-                <Text variant="body" weight="medium" className="">Continue with Google</Text>
+                <Text variant="body" weight="medium" className="text-background">Continue with Google</Text>
               </>
             )}
           </button>

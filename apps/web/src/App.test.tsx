@@ -4,13 +4,22 @@ import { describe, expect, test, vi } from "vitest";
 
 import App from "./App";
 
-const { useAuthMock } = vi.hoisted(() => ({ useAuthMock: vi.fn() }));
+const { useAuthMock, useUserSettingsMock } = vi.hoisted(() => ({
+  useAuthMock: vi.fn(),
+  useUserSettingsMock: vi.fn(),
+}));
 
 // 只替换 useAuth；其余（CATEGORIES / hooks / Sphere3DCards …）用真实实现，
 // 数据 hooks 在 jsdom 里 fetch 失败会落到 TQ error 态，渲染层不受影响。
 vi.mock("@pin-ai/ui-web", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   useAuth: useAuthMock,
+}));
+// useUserSettings gate 着已登录 UI（onboarding 判定）——mock 它以脱离网络；
+// 其余 @pin-ai/state hooks（useComposio / useCardsQuery …）保留真实。
+vi.mock("@pin-ai/state", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  useUserSettings: () => useUserSettingsMock(),
 }));
 
 function renderApp() {
@@ -33,19 +42,52 @@ describe("App auth gate", () => {
       signInWithGoogle: vi.fn(),
       signOut: vi.fn(),
     });
+    useUserSettingsMock.mockReturnValue({
+      settings: null,
+      loading: false,
+      patch: vi.fn(),
+      refetch: vi.fn(),
+    });
 
     renderApp();
 
     expect(screen.getByText("Continue with Google")).toBeTruthy();
   });
 
-  test("shows the zebra shell nav when signed in", () => {
+  test("shows onboarding when signed in before onboarding is done", () => {
     useAuthMock.mockReturnValue({
       loading: false,
       session: {},
       user: { email: "dev@pinai.io", user_metadata: { full_name: "Dev User" } },
       signInWithGoogle: vi.fn(),
       signOut: vi.fn(),
+    });
+    useUserSettingsMock.mockReturnValue({
+      settings: { onboardingCompletedAt: null, ambientSources: {} },
+      loading: false,
+      patch: vi.fn(),
+      refetch: vi.fn(),
+    });
+
+    renderApp();
+
+    expect(screen.getByText("Connect your data")).toBeTruthy();
+    expect(screen.getByText("Enter PIN AI")).toBeTruthy();
+  });
+
+  test("shows the zebra shell nav when signed in and onboarded", () => {
+    useAuthMock.mockReturnValue({
+      loading: false,
+      session: {},
+      user: { email: "dev@pinai.io", user_metadata: { full_name: "Dev User" } },
+      signInWithGoogle: vi.fn(),
+      signOut: vi.fn(),
+    });
+    useUserSettingsMock.mockReturnValue({
+      settings: { onboardingCompletedAt: "2026-06-14T00:00:00Z", ambientSources: {} },
+      loading: false,
+      patch: vi.fn(),
+      refetch: vi.fn(),
     });
 
     renderApp();

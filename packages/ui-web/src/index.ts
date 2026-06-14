@@ -140,7 +140,7 @@ export { getToolkit, type ToolkitMeta } from "./connect/toolkit-icons";
 
 // ── connect：CONNECT 视图功能件（Composio 连接矩阵 / device registry / 上传数据 timeline） ──
 export { default as ControlPanel } from "./connect/ControlPanel";
-// onboarding connector 洞察卡（OnboardingFlow 用；apps/web 暂不做 onboarding）。
+// onboarding connector 洞察卡（iOS OnboardingFlow + apps/web ZebraOnboarding 共用）。
 export { default as ConnectorOnboardingInsight, type ConnectorInsightStatus } from "./connect/ConnectorOnboardingInsight";
 export {
   default as DataConnections,
