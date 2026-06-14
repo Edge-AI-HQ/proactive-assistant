@@ -3,12 +3,19 @@
  *
  * Reading-first model (Claude/ChatGPT-style), as one explicit state machine:
  *
- *   mode: "following"  the viewport sticks to the bottom; every content
- *                      growth re-pins (rAF-throttled, instant behavior).
+ *   mode: "following"  the viewport re-pins to the bottom as content grows —
+ *                      ONE write per change, never a per-frame animation (a
+ *                      main-thread animation races iOS momentum and bounces).
+ *                      Suppressed while the finger is down, so a streaming reply
+ *                      sticks without fighting the user (assistant-ui's pattern).
  *   mode: "free"       the viewport never moves on its own. The default
  *                      after sending: the user's message is anchored to the
- *                      viewport top and the reply streams into the runway
- *                      below it, so the reading position is perfectly still.
+ *                      viewport top and the reply streams into a runway
+ *                      (a footer spacer) below it, so the reading position is
+ *                      perfectly still. The runway shrinks by exactly the
+ *                      reply's growth — scrollHeight stays constant, so there
+ *                      is zero jump — and reaches 0 once the reply fills a
+ *                      viewport (from then on the reply grows the true tail).
  *
  * Transitions (asymmetric on purpose — this kills the two classic streaming
  * scroll bugs):
@@ -18,10 +25,12 @@
  *     is exactly how virtuoso's built-in follow both fought the user
  *     (SIZE_INCREASED outranking SCROLLING_UPWARDS) and silently slipped.
  *   - RESUME free → following only on a not-at-bottom → at-bottom TRANSITION
- *     (the user deliberately came back), with the finger lifted and no
- *     programmatic scroll in flight. The anchored reading position sits AT
- *     the bottom (the runway absorbs growth), so it never produces such a
- *     transition and reading is never hijacked.
+ *     (the user deliberately came back), with the finger lifted, no
+ *     programmatic scroll in flight, AND the runway already consumed (== 0).
+ *     That last clause is what kills the "collapse jump": while the runway is
+ *     open the bottom is just blank space, so reaching it must NOT resume;
+ *     only once the reply has eaten the runway does the true tail sit at the
+ *     bottom — and collapsing an already-0 runway is a no-op.
  *   - jumpToLatest()  explicit: collapse the runway, pin, follow.
  *   - anchorToSend()  send choreography: size the runway, scroll the new
  *     user message to the viewport top, land in free mode.
@@ -81,6 +90,7 @@ export function useChatScroll({ session, transcript }: UseChatScrollOptions): Ch
   const [mode, setMode] = useState<ScrollMode>("following");
   const modeRef = useRef<ScrollMode>("following");
   const [runwayPx, setRunwayPx] = useState(0);
+  const runwayPxRef = useRef(0);
   const [atBottom, setAtBottom] = useState(true);
   const atBottomRef = useRef(true);
   const [hasNewBelow, setHasNewBelow] = useState(false);
@@ -94,7 +104,7 @@ export function useChatScroll({ session, transcript }: UseChatScrollOptions): Ch
   // flag is up) and expires only after PROGRAMMATIC_SETTLE_MS of silence.
   const programmaticRef = useRef(false);
   const settleTimerRef = useRef<number | null>(null);
-  const pinRafRef = useRef<number | null>(null);
+  const adjustRafRef = useRef<number | null>(null);
   // Send anchor choreography state: "runway" sizes the spacer, the follow-up
   // pass scrolls. Each phase bumps anchorTick so the effect below is
   // GUARANTEED a re-run even when no other state happens to change (e.g. two
@@ -102,10 +112,20 @@ export function useChatScroll({ session, transcript }: UseChatScrollOptions): Ch
   const pendingAnchorRef = useRef<null | { phase: "runway" | "scroll" }>(null);
   const [anchorTick, setAnchorTick] = useState(0);
   const prevTailIdRef = useRef<string | null>(null);
+  // The user message the runway is sized against. Set when a send anchors;
+  // cleared when follow re-engages (the runway's life ends with free mode).
+  // While set and in free mode, the runway is re-measured against this bubble
+  // on every content/viewport change so it shrinks as the reply grows.
+  const anchorIdRef = useRef<string | null>(null);
 
   const setModeBoth = useCallback((next: ScrollMode) => {
     modeRef.current = next;
     setMode(next);
+  }, []);
+
+  const setRunwayBoth = useCallback((next: number) => {
+    runwayPxRef.current = next;
+    setRunwayPx(next);
   }, []);
 
   const markProgrammatic = useCallback(() => {
@@ -117,32 +137,73 @@ export function useChatScroll({ session, transcript }: UseChatScrollOptions): Ch
     }, PROGRAMMATIC_SETTLE_MS);
   }, []);
 
-  /** Pin the viewport to the bottom on the next frame (idempotent). */
-  const schedulePin = useCallback(() => {
-    if (modeRef.current !== "following") return;
-    if (pinRafRef.current !== null) return;
-    pinRafRef.current = requestAnimationFrame(() => {
-      pinRafRef.current = null;
-      if (modeRef.current !== "following") return;
-      const el = scrollerRef.current;
-      if (!el) return;
-      markProgrammatic();
-      el.scrollTop = el.scrollHeight;
-    });
+  /** Pin the viewport to the bottom (following only) — ONE write, never a
+   *  per-frame animation: hand the scroll to the browser's one-shot path
+   *  instead of racing iOS momentum on the main thread (the spring's mistake).
+   *  Suppressed while the finger is down — a user touch owns the scroll, so we
+   *  never write under it (mirrors assistant-ui cancelling on pointerdown). */
+  const pinBottom = useCallback(() => {
+    const el = scrollerRef.current;
+    if (!el || modeRef.current !== "following" || touchActiveRef.current) return;
+    markProgrammatic();
+    el.scrollTop = el.scrollHeight - el.clientHeight;
   }, [markProgrammatic]);
 
+  /**
+   * Keep the viewport coherent with content/runway growth (one coalesced rAF):
+   *   - following: pin to the bottom (pinBottom) — a single write, suppressed
+   *     under touch, so a streaming reply sticks without fighting the user.
+   *   - free + an active send anchor: shrink the runway to exactly absorb the
+   *     reply. runway = max(0, viewport − belowAnchor − pad), where belowAnchor
+   *     is the height from the anchored user bubble's top to the real content
+   *     bottom (runway excluded). As the reply grows, belowAnchor grows and the
+   *     runway shrinks by the same amount, so scrollHeight (= viewport +
+   *     anchorTop − pad) is constant and scrollTop never moves — zero jump. The
+   *     formula is absolute (re-derived from layout), so it self-corrects.
+   * The free branch is skipped while a send choreography or programmatic scroll
+   * is in flight — the anchor bubble isn't settled at the top yet.
+   */
+  const scheduleAdjust = useCallback(() => {
+    if (adjustRafRef.current !== null) return;
+    adjustRafRef.current = requestAnimationFrame(() => {
+      adjustRafRef.current = null;
+      const el = scrollerRef.current;
+      if (!el) return;
+      if (modeRef.current === "following") {
+        pinBottom();
+        return;
+      }
+      const anchorId = anchorIdRef.current;
+      if (!anchorId || pendingAnchorRef.current || programmaticRef.current) return;
+      const anchor = el.querySelector(`[data-entry-id="${anchorId}"]`);
+      if (!(anchor instanceof HTMLElement)) return; // not mounted — hold the runway
+      const viewport = el.clientHeight;
+      const anchorTop =
+        anchor.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
+      const contentBottom = el.scrollHeight - runwayPxRef.current; // real content, runway excluded
+      const belowAnchor = contentBottom - anchorTop;
+      const next = Math.max(0, viewport - belowAnchor - ANCHOR_TOP_PAD_PX);
+      if (next !== runwayPxRef.current) setRunwayBoth(next);
+    });
+  }, [pinBottom, setRunwayBoth]);
+
   const engageFollowing = useCallback(() => {
+    anchorIdRef.current = null; // the runway's life ends when follow re-engages
     setModeBoth("following");
-    setRunwayPx(0); // follow wants the true tail — the runway blank is over
+    setRunwayBoth(0); // follow wants the true tail — the runway blank is over
     setHasNewBelow(false);
-    schedulePin();
-  }, [setModeBoth, schedulePin]);
+    // No immediate scrollTop write: re-engaging usually happens AS momentum
+    // carries the view to the bottom, and writing into a live iOS fling is the
+    // bounce. Just arm following — the next content growth (or keyboard resize)
+    // pins via scheduleAdjust, by which point the fling has settled. (The user
+    // is already at the bottom here, so there's nothing to catch up to anyway.)
+  }, [setModeBoth, setRunwayBoth]);
 
   const breakFollowing = useCallback(() => {
     if (modeRef.current !== "following") return;
-    if (pinRafRef.current !== null) {
-      cancelAnimationFrame(pinRafRef.current);
-      pinRafRef.current = null;
+    if (adjustRafRef.current !== null) {
+      cancelAnimationFrame(adjustRafRef.current);
+      adjustRafRef.current = null;
     }
     setModeBoth("free");
   }, [setModeBoth]);
@@ -153,6 +214,9 @@ export function useChatScroll({ session, transcript }: UseChatScrollOptions): Ch
       && atBottomRef.current
       && !touchActiveRef.current
       && !programmaticRef.current
+      // Only when the runway is consumed: while it's open the "bottom" is just
+      // blank space, and resuming there would collapse the runway in one jump.
+      && runwayPxRef.current <= 1
     ) {
       engageFollowing();
     }
@@ -201,18 +265,19 @@ export function useChatScroll({ session, transcript }: UseChatScrollOptions): Ch
         el.removeEventListener("scroll", onScrollSettle);
       };
       // Viewport (clientHeight) changes — keyboard show/hide, TodoPanel
-      // expand, browser mini-sheet — re-pin when following. In free mode the
-      // browser keeps scrollTop, so the top-anchored reading position holds.
-      viewportObserverRef.current = new ResizeObserver(() => schedulePin());
+      // expand, browser mini-sheet. Following: re-pin to the tail. Free with an
+      // anchor: re-measure the runway (a shorter viewport needs less runway).
+      // The browser keeps scrollTop, so the top-anchored reading position holds.
+      viewportObserverRef.current = new ResizeObserver(() => scheduleAdjust());
       viewportObserverRef.current.observe(el);
     },
-    [breakFollowing, maybeResume, schedulePin, markProgrammatic],
+    [breakFollowing, maybeResume, scheduleAdjust, markProgrammatic],
   );
   useEffect(
     () => () => {
       detachIntentRef.current?.();
       viewportObserverRef.current?.disconnect();
-      if (pinRafRef.current !== null) cancelAnimationFrame(pinRafRef.current);
+      if (adjustRafRef.current !== null) cancelAnimationFrame(adjustRafRef.current);
       if (settleTimerRef.current !== null) window.clearTimeout(settleTimerRef.current);
     },
     [],
@@ -231,7 +296,7 @@ export function useChatScroll({ session, transcript }: UseChatScrollOptions): Ch
     [maybeResume],
   );
 
-  const handleTotalHeightChange = useCallback(() => schedulePin(), [schedulePin]);
+  const handleTotalHeightChange = useCallback(() => scheduleAdjust(), [scheduleAdjust]);
 
   // ── commands ──
   const jumpToLatest = useCallback(() => {
@@ -276,7 +341,8 @@ export function useChatScroll({ session, transcript }: UseChatScrollOptions): Ch
       // anchor, while under-provisioning would clamp the scroll short.
       const bubble = el?.querySelector(`[data-entry-id="${transcript[userIdx].id}"]`);
       const bubbleH = bubble instanceof HTMLElement ? bubble.offsetHeight : 0;
-      setRunwayPx(Math.max(0, viewport - bubbleH - ANCHOR_TOP_PAD_PX));
+      anchorIdRef.current = transcript[userIdx].id;
+      setRunwayBoth(Math.max(0, viewport - bubbleH - ANCHOR_TOP_PAD_PX));
       setModeBoth("free");
       setHasNewBelow(false);
       pending.phase = "scroll";
@@ -298,7 +364,7 @@ export function useChatScroll({ session, transcript }: UseChatScrollOptions): Ch
       offset: -ANCHOR_TOP_PAD_PX,
       behavior: farJump ? "auto" : "smooth",
     });
-  }, [transcript, anchorTick, setModeBoth, markProgrammatic]);
+  }, [transcript, anchorTick, setModeBoth, setRunwayBoth, markProgrammatic]);
 
   // Conversation switch — back to the entry state (Virtuoso remounts via the
   // ready/empty gates and lands at the bottom on its own). Declared BEFORE the
@@ -306,19 +372,21 @@ export function useChatScroll({ session, transcript }: UseChatScrollOptions): Ch
   // new conversation's first fill is recorded as the baseline, not pulsed.
   useEffect(() => {
     pendingAnchorRef.current = null;
+    anchorIdRef.current = null;
     setModeBoth("following");
-    setRunwayPx(0);
+    setRunwayBoth(0);
     setHasNewBelow(false);
     atBottomRef.current = true;
     setAtBottom(true);
     prevTailIdRef.current = null;
     touchActiveRef.current = false;
     programmaticRef.current = false;
-  }, [session, setModeBoth]);
+  }, [session, setModeBoth, setRunwayBoth]);
 
-  // Content changes: re-pin when following; surface "new below" when reading.
+  // Content changes: re-pin (following) / re-measure the runway (free) and
+  // surface "new below" when reading.
   useEffect(() => {
-    schedulePin();
+    scheduleAdjust();
     const tail = transcript.length > 0 ? transcript[transcript.length - 1] : null;
     const tailId = tail?.id ?? null;
     if (
@@ -331,7 +399,7 @@ export function useChatScroll({ session, transcript }: UseChatScrollOptions): Ch
       setHasNewBelow(true);
     }
     prevTailIdRef.current = tailId;
-  }, [transcript, schedulePin]);
+  }, [transcript, scheduleAdjust]);
 
   const showJump = !atBottom && transcript.length > 0;
 

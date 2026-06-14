@@ -85,12 +85,40 @@ describe("useChatScroll", () => {
     return view;
   }
 
-  test("starts following and pins on content growth", () => {
+  test("pins to the bottom on content growth", () => {
     const { rerender } = setup();
     scroller.setScrollHeight(2400);
     rerender({ transcript: [userEntry("u1"), turnEntry("t1")] });
     flushFrames();
-    expect(scroller.el.scrollTop).toBe(2400);
+    expect(scroller.el.scrollTop).toBe(2400 - 600);
+  });
+
+  test("does not pin while the finger is down — a touch owns the scroll", () => {
+    const { rerender } = setup();
+    scroller.setScrollHeight(2000);
+    rerender({ transcript: [userEntry("u1"), turnEntry("t1")] });
+    flushFrames();
+    expect(scroller.el.scrollTop).toBe(2000 - 600); // following → pinned
+
+    // Finger down, then content grows: we must NOT write scrollTop under the
+    // touch — writing under the finger/momentum is exactly the iOS bounce.
+    act(() => {
+      fire(scroller.el, "touchstart", { touches: [{ clientY: 300 }] });
+    });
+    const held = scroller.el.scrollTop;
+    scroller.setScrollHeight(2600);
+    rerender({ transcript: [userEntry("u1"), turnEntry("t1")] });
+    flushFrames();
+    expect(scroller.el.scrollTop).toBe(held); // untouched while held
+
+    // Finger up at the bottom: pinning resumes on the next growth.
+    act(() => {
+      fire(scroller.el, "touchend", { touches: [] });
+    });
+    scroller.setScrollHeight(2800);
+    rerender({ transcript: [userEntry("u1"), turnEntry("t1")] });
+    flushFrames();
+    expect(scroller.el.scrollTop).toBe(2800 - 600);
   });
 
   test("wheel up breaks following; growth no longer moves the viewport", () => {
@@ -141,19 +169,69 @@ describe("useChatScroll", () => {
     expect(result.current.mode).toBe("free");
   });
 
-  test("a user's return to the bottom resumes following and collapses the runway", () => {
+  test("reaching the still-open runway's blank bottom does not resume or collapse it", () => {
     const { result, rerender } = setup();
     act(() => {
       result.current.anchorToSend();
     });
     rerender({ transcript: [userEntry("u1"), turnEntry("t1")] });
     flushFrames(); // programmatic window settles
+    const runway = result.current.runwayPx;
+    expect(runway).toBeGreaterThan(1);
+    // The reply hasn't filled the viewport, so the runway is still open and the
+    // "bottom" is just blank space. Returning to it must NOT collapse the runway
+    // in one jump (the old bug) — stay free, runway untouched.
+    act(() => {
+      result.current.handleAtBottomChange(false);
+      result.current.handleAtBottomChange(true);
+    });
+    expect(result.current.mode).toBe("free");
+    expect(result.current.runwayPx).toBe(runway);
+  });
+
+  test("the free runway shrinks as the reply grows (no jump), then resumes once consumed", () => {
+    const { result, rerender } = setup([userEntry("u1")]);
+    // Mount the anchor bubble pinned at the content top (scrollTop 0) so the
+    // runway can be re-measured against it. jsdom does no layout, so rects and
+    // scrollHeight are mocked to drive the formula directly.
+    const anchor = document.createElement("div");
+    anchor.setAttribute("data-entry-id", "u1");
+    scroller.el.appendChild(anchor);
+    const rect = (top: number) =>
+      ({ top, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON() {} }) as DOMRect;
+    scroller.el.getBoundingClientRect = () => rect(0);
+    anchor.getBoundingClientRect = () => rect(0);
+    scroller.el.scrollTop = 0;
+
+    act(() => {
+      result.current.anchorToSend();
+    });
+    rerender({ transcript: [userEntry("u1"), turnEntry("t1")] });
+    flushFrames(); // settle the anchor scroll's programmatic window
+    expect(result.current.runwayPx).toBeGreaterThan(1); // runway opened
+
+    // Reply grows: content below the anchor goes to 300. The runway shrinks by
+    // the same 300 so scrollHeight (= content + runway) and scrollTop hold.
+    scroller.setScrollHeight(300 + result.current.runwayPx);
+    act(() => result.current.handleTotalHeightChange());
+    flushFrames();
+    expect(result.current.runwayPx).toBe(600 - 300 - 8);
+    expect(scroller.el.scrollTop).toBe(0); // zero jump
+
+    // Reply overflows the viewport — the runway bottoms out at 0.
+    scroller.setScrollHeight(700 + result.current.runwayPx);
+    act(() => result.current.handleTotalHeightChange());
+    flushFrames();
+    expect(result.current.runwayPx).toBe(0);
+    expect(scroller.el.scrollTop).toBe(0);
+
+    // The true tail now sits at the bottom: returning there resumes follow, and
+    // collapsing an already-0 runway is a no-op.
     act(() => {
       result.current.handleAtBottomChange(false);
       result.current.handleAtBottomChange(true);
     });
     expect(result.current.mode).toBe("following");
-    expect(result.current.runwayPx).toBe(0);
   });
 
   test("a smooth anchor animation outliving the settle window stays programmatic (scroll events re-arm it)", () => {
@@ -175,13 +253,16 @@ describe("useChatScroll", () => {
       result.current.handleAtBottomChange(true); // the animation landing at the bottom
     });
     expect(result.current.mode).toBe("free"); // NOT mistaken for the user
-    // After real scroll silence the window expires; a user transition resumes.
+    // After real scroll silence the programmatic gate releases — but the runway
+    // gate is independent: the runway is still open, so a return to its blank
+    // bottom still must not resume (resume waits for the runway to be consumed,
+    // covered by the shrink test above).
     flushFrames(300);
     act(() => {
       result.current.handleAtBottomChange(false);
       result.current.handleAtBottomChange(true);
     });
-    expect(result.current.mode).toBe("following");
+    expect(result.current.mode).toBe("free");
   });
 
   test("resume waits for the finger to lift", () => {
