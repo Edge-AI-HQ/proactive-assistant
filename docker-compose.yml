@@ -213,6 +213,15 @@ services:
       # Local-only generator debug path: run DeepAgents code execution in
       # the chat container instead of Daytona so pinai_sdk can use docker DNS.
       PINAI_LOCAL_SANDBOX: ${PINAI_LOCAL_SANDBOX:-0}
+      # Daytona sandbox source. Default to the prebuilt dev snapshot (same as
+      # fly.dev.toml) so local sandbox creates take ~1s. Without it, every
+      # cold create falls back to the declarative image-build path, which can
+      # stall in Daytona `pending_build` indefinitely and time out at 150s —
+      # this breaks the oneshot path used by /agent/run/evolve and /generate
+      # (LazyThreadSandbox in chat/history honors PINAI_LOCAL_SANDBOX instead,
+      # but the oneshot path does not). Set PINAI_DAYTONA_SNAPSHOT= (empty) to
+      # opt back into image-build when iterating on packages/pinai_sdk locally.
+      PINAI_DAYTONA_SNAPSHOT: ${PINAI_DAYTONA_SNAPSHOT-pinai-sandbox:dev}
     ports:
       - "8001"
     healthcheck:
