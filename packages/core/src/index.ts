@@ -8,7 +8,9 @@
 export {
   configureTransport,
   getTransportConfig,
+  resolveClientHints,
   type TransportConfig,
+  type DeviceClientHints,
 } from "./transport/config";
 export { readErrorMessage } from "./transport/errors";
 export { pinaiFetch, proxyFetch, proxyPost } from "./transport/http";

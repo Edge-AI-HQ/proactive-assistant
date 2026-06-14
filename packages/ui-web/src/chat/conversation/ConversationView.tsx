@@ -33,6 +33,7 @@ import { Virtuoso, type Components } from "react-virtuoso";
 import { AlertCircle, ArrowLeft, Check, ChevronDown, Copy, Loader2, MessageSquarePlus, Mic, Pencil, Radio, RotateCcw, Send, Sparkles, Square, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
 import bgGradient from "../../assets/bg-gradient.jpg";
 import { cn } from "../../lib/utils";
+import { useMediaQuery } from "../../lib/use-media-query";
 import { notifyThreadActivity, readLocalHistory } from "../../local-sync";
 import MarkdownContent from "./MarkdownContent";
 import { buildAssistantMessageFeedbackBody } from "@pin-ai/core";
@@ -47,9 +48,11 @@ import { HitlApprovalCard, type HitlRequiresAction } from "./HitlApprovalCard";
 import { useChatScroll, type ChatScrollApi } from "./scroll/useChatScroll";
 import JumpToLatest from "./scroll/JumpToLatest";
 import TodoPanel from "./TodoPanel";
-import BrowserPanel from "../../browser/BrowserPanel";
-import type { SheetStage } from "../../browser/BrowserView";
+import BrowserView from "../../browser/BrowserView";
+import BrowserHeader from "../../browser/BrowserHeader";
+import BrowserDrawer from "../../browser/BrowserDrawer";
 import { useBrowserSession } from "../../browser/useBrowserSession";
+import { isNative } from "../../auth/platform";
 import { useVoiceInput, Waveform, appendVoiceTranscript } from "../../voice";
 import { useConversationRuntime } from "@pin-ai/state";
 import { type ConversationAssistantEntry, type ConversationEntry, type ConversationUserEntry, type ConversationContentPart, conversationInit, proxyPost } from "@pin-ai/core";
@@ -96,6 +99,15 @@ interface ConversationViewProps {
     onDone: () => boolean | void | Promise<boolean | void>;
     onComment: (text: string) => void | Promise<void>;
   };
+  /** Desktop (wide) only: when the browser panel opens, render it as a left
+   *  split column beside the chat instead of a bottom-sheet drawer. The host
+   *  must widen this view's container in response to onBrowserSplitChange
+   *  (the chat keeps its width; the browser takes the freed space). Narrow
+   *  hosts (phone-width web / Capacitor) omit this → always the drawer. */
+  enableBrowserSplit?: boolean;
+  /** Fired when the browser split activates / deactivates so the host shell
+   *  can widen / restore this view. Only meaningful with enableBrowserSplit. */
+  onBrowserSplitChange?: (active: boolean) => void;
 }
 
 /** Extract the agent's outreach text from a `notify_user` tool-call part's
@@ -124,6 +136,10 @@ const LANDING_SUGGESTIONS = [
   "Summarize my week so far",
   "What's on my mind lately?",
 ];
+
+/** Split layout: the chat column keeps this width on the right; the browser
+ *  takes the rest on the left. ~standard comfortable chat reading width. */
+const SPLIT_CHAT_WIDTH = 480;
 
 /** Proactive-thread empty state — the greeting shown when the proactive
  *  transcript is empty: idle orb + prompt + suggestion chips. Tapping a chip
@@ -1329,6 +1345,8 @@ export default function ConversationView({
   backIcon = "down",
   onTurnDone,
   cardFeedback,
+  enableBrowserSplit = false,
+  onBrowserSplitChange,
 }: ConversationViewProps) {
   // Debug message visibility: heartbeats + heartbeat-triggered turns (except
   // notify_user). A dev aid; persisted in localStorage so it survives reload.
@@ -1466,13 +1484,33 @@ export default function ConversationView({
   const browserSessionKey = threadId ?? "";
   const {
     session: browserSession,
+    panelOpen: browserPanelOpen,
+    openPanel: openBrowserPanel,
+    closePanel: closeBrowserPanel,
     setControl,
     sendInput,
     refreshLiveView,
     close: closeBrowser,
   } = useBrowserSession(browserSessionKey);
-  const [browserStage, setBrowserStage] = useState<SheetStage | "closed">("closed");
   const [composerFocused, setComposerFocused] = useState(false);
+
+  // Browser panel layout. Wide hosts that opted into split render it as a left
+  // column beside the chat; everything else (phone-width) gets a bottom-sheet
+  // drawer. Hidden until the user opens it from the header (default closed).
+  const wideViewport = useMediaQuery("(min-width: 1024px)");
+  const canSplitBrowser = enableBrowserSplit && wideViewport;
+  const browserLayout: "hidden" | "split" | "drawer" =
+    !browserSession || !browserPanelOpen
+      ? "hidden"
+      : canSplitBrowser
+        ? "split"
+        : "drawer";
+  // Ask the host shell to widen this view for the split (chat keeps its width;
+  // the browser takes the freed space). The drawer needs no host change.
+  const browserSplitActive = browserLayout === "split";
+  useEffect(() => {
+    onBrowserSplitChange?.(browserSplitActive);
+  }, [browserSplitActive, onBrowserSplitChange]);
 
   // Scroll policy (reading-first): useChatScroll owns the follow/free state
   // machine, the send anchor and the jump affordance; TranscriptView wires it
@@ -1536,21 +1574,23 @@ export default function ConversationView({
     };
   }, [refreshLiveView]);
 
-  // BrowserPanel speaks (mode, x, y, dx, dy); wrap the hook's typed sendInput.
+  // BrowserView speaks (mode, key, dx, dy); wrap the hook's typed sendInput.
   const handleUserInputText = useCallback(
-    (text: string) => sendInput({ type: "text", text }),
+    (text: string) => sendInput({ type: "text", text }).then(() => undefined),
     [sendInput],
   );
   const handleUserInputKey = useCallback(
-    (key: string) => sendInput({ type: "key", key }),
-    [sendInput],
-  );
-  const handleUserInputClick = useCallback(
-    (x: number, y: number) => sendInput({ type: "click", x, y }),
+    (key: string) => sendInput({ type: "key", key }).then(() => undefined),
     [sendInput],
   );
   const handleUserInputScroll = useCallback(
-    (dx: number, dy: number) => sendInput({ type: "scroll", dx, dy }),
+    (dx: number, dy: number) =>
+      sendInput({ type: "scroll", dx, dy }).then(() => undefined),
+    [sendInput],
+  );
+  const handleUserInputTap = useCallback(
+    (x: number, y: number) =>
+      sendInput({ type: "tap", x, y }).then((r) => !!(r && r.editableFocused)),
     [sendInput],
   );
   const handleBrowserControlChange = useCallback(
@@ -1558,6 +1598,53 @@ export default function ConversationView({
     [setControl],
   );
   const handleBrowserClose = useCallback(() => void closeBrowser(), [closeBrowser]);
+  const handleBrowserBack = useCallback(() => void sendInput({ type: "back" }), [sendInput]);
+  const handleBrowserForward = useCallback(
+    () => void sendInput({ type: "forward" }),
+    [sendInput],
+  );
+  const handleBrowserReload = useCallback(
+    () => void sendInput({ type: "reload" }),
+    [sendInput],
+  );
+  const handleBrowserNavigate = useCallback(
+    (url: string) => void sendInput({ type: "navigate", url }),
+    [sendInput],
+  );
+  // Header click opens the panel. If the AI asked for help (attention state),
+  // the user opening it means they're stepping in → take control for them.
+  const browserAttention = !!browserSession?.takeoverReason;
+  const handleBrowserHeaderOpen = useCallback(() => {
+    openBrowserPanel();
+    if (browserAttention && browserSession?.controlMode !== "user") {
+      void setControl("user");
+    }
+  }, [openBrowserPanel, browserAttention, browserSession?.controlMode, setControl]);
+
+  // One BrowserView element reused by whichever layout is active (split column
+  // or drawer — they're mutually exclusive, so only one renders).
+  const browserViewEl = browserSession ? (
+    <BrowserView
+      liveViewUrl={browserSession.liveViewUrl}
+      sessionId={browserSession.sessionKey}
+      controlMode={browserSession.controlMode}
+      iframeReloadKey={iframeReloadKey}
+      isNative={isNative}
+      viewport={browserSession.viewport}
+      currentUrl={browserSession.currentUrl}
+      onControlChange={handleBrowserControlChange}
+      onUserInputTap={handleUserInputTap}
+      onUserInputText={handleUserInputText}
+      onUserInputKey={handleUserInputKey}
+      onUserInputScroll={handleUserInputScroll}
+      onBack={handleBrowserBack}
+      onForward={handleBrowserForward}
+      onReload={handleBrowserReload}
+      onNavigate={handleBrowserNavigate}
+      onCollapse={closeBrowserPanel}
+      onRequestClose={handleBrowserClose}
+    />
+  ) : null;
 
   return (
     <div className="absolute inset-0 z-0 overflow-hidden font-native bg-background">
@@ -1685,17 +1772,28 @@ export default function ConversationView({
             block). Main chat / proactive pass no headerSlot → nothing here. */}
         {headerSlot}
 
-        {/* Chat region + browser top-sheet share a relative container so the
-            BrowserPanel slides down from just below the header (never covering
-            the back button). When the sheet is in "mini" it occupies the top
-            32px; pad the chat so messages aren't clipped behind it. */}
-        <div className="relative flex min-h-0 flex-1 flex-col">
+        {/* Chat region. With the browser open as a split (wide opted-in hosts)
+            this row is horizontal — browser left (flex-1), chat keeps its
+            width on the right. Otherwise it's a column and the browser, if
+            open, is a bottom-sheet drawer over the chat. */}
+        <div
+          className={cn(
+            "relative flex min-h-0 flex-1",
+            browserLayout === "split" ? "flex-row" : "flex-col",
+          )}
+        >
+          {browserLayout === "split" && (
+            <div className="relative min-w-0 flex-1 border-r border-foreground/10">
+              {browserViewEl}
+            </div>
+          )}
+
           <div
-            className="flex min-h-0 flex-1 flex-col"
-            style={{
-              paddingTop: browserStage === "mini" ? 32 : 0,
-              transition: "padding-top 200ms ease-out",
-            }}
+            className={cn(
+              "flex min-h-0 flex-col",
+              browserLayout === "split" ? "shrink-0" : "flex-1",
+            )}
+            style={browserLayout === "split" ? { width: SPLIT_CHAT_WIDTH } : undefined}
           >
             {/* Transcript + the floating jump-to-latest affordance. */}
             <div className="relative flex min-h-0 flex-1 flex-col">
@@ -1728,9 +1826,20 @@ export default function ConversationView({
               />
             </div>
 
-            {/* Footer: agent plan + composer. The HITL approval gate renders
-                inline on the paused turn (TranscriptView), not here. */}
+            {/* Footer: browser header (session exists, panel closed) + agent
+                plan + composer. The HITL approval gate renders inline on the
+                paused turn (TranscriptView), not here. */}
             <div className="relative shrink-0">
+              {browserSession && !browserPanelOpen && (
+                <div className="px-3 pb-1">
+                  <BrowserHeader
+                    currentUrl={browserSession.currentUrl}
+                    attention={browserAttention}
+                    attentionReason={browserSession.takeoverReason}
+                    onOpen={handleBrowserHeaderOpen}
+                  />
+                </div>
+              )}
               <TodoPanel sessionKey={browserSessionKey} composerFocused={composerFocused} />
               {cardFeedback && cardResultMessageId !== undefined && (
                 <CardResultFeedbackBar
@@ -1761,32 +1870,18 @@ export default function ConversationView({
               />
             </div>
           </div>
-
-          <BrowserPanel
-            session={
-              browserSession
-                ? {
-                    browserSessionId: browserSession.sessionKey,
-                    liveViewUrl: browserSession.liveViewUrl,
-                    viewport: browserSession.viewport,
-                    deviceKind: browserSession.deviceKind,
-                    currentUrl: browserSession.currentUrl,
-                    controlMode: browserSession.controlMode,
-                    takeoverReason: browserSession.takeoverReason,
-                  }
-                : null
-            }
-            iframeReloadKey={iframeReloadKey}
-            onControlChange={handleBrowserControlChange}
-            onUserInputText={handleUserInputText}
-            onUserInputKey={handleUserInputKey}
-            onUserInputClick={handleUserInputClick}
-            onUserInputScroll={handleUserInputScroll}
-            onClose={handleBrowserClose}
-            onStageChange={setBrowserStage}
-            composerFocused={composerFocused}
-          />
         </div>
+
+        {/* Drawer-capable hosts (narrow / no split): a full-screen bottom sheet
+            covering the WHOLE conversation incl. the chat header, so the browser
+            owns the screen (its own control + URL bars are the top chrome). Kept
+            mounted so the slide-down exit plays on collapse; `open` drives
+            visibility + mounts the live view inside. */}
+        {browserSession && !canSplitBrowser && (
+          <BrowserDrawer open={browserPanelOpen} onClose={closeBrowserPanel}>
+            {browserViewEl}
+          </BrowserDrawer>
+        )}
       </div>
     </div>
   );

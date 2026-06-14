@@ -101,7 +101,7 @@ async def browser_control(
 
 
 class InputBody(BaseModel):
-    type: str = Field(pattern="^(text|key|click|scroll|navigate|back|forward|reload)$")
+    type: str = Field(pattern="^(tap|text|key|click|scroll|navigate|back|forward|reload)$")
     text: str | None = None
     key: str | None = None
     x: float | None = None
@@ -123,11 +123,11 @@ async def browser_input(
     payload = body.model_dump(exclude_none=True)
     payload.pop("type", None)
     try:
-        await get_browser_manager().apply_user_input(session_key, body.type, payload)
+        result = await get_browser_manager().apply_user_input(session_key, body.type, payload)
     except RuntimeError as e:
         # session not found
         raise HTTPException(404, str(e)) from e
-    return {"ok": True}
+    return {"ok": True, **(result or {})}
 
 
 @router.post("/agent/browser/sessions/{session_key}/heartbeat")

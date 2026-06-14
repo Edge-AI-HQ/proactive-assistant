@@ -8,6 +8,14 @@
  * 设计 SSOT：research/2026-06-10-frontend-layering.mdx §4.2-§4.3。
  */
 
+/** 显示设备 hints —— 随每个 chat send 进 body 给后端 browser_tool 用。
+ *  snake_case 与后端 ClientHintsBody 字段一致，整条 opaque 透传。 */
+export interface DeviceClientHints {
+  viewport_width: number;
+  viewport_height: number;
+  device_kind: "mobile" | "tablet" | "desktop";
+}
+
 export interface TransportConfig {
   /** 后端基址。web 同源传 ""；native/RN 传绝对 URL（如 ngrok / fly）。 */
   baseUrl: string;
@@ -23,6 +31,10 @@ export interface TransportConfig {
   defaultHeaders?: Record<string, string>;
   /** 客户端环境 hints（locale/timezone），/profile、/settings 用。平台各异。 */
   clientHintHeaders?: () => Record<string, string>;
+  /** 显示设备 hints（panel CSS 尺寸 + 设备类型），随 chat send 进 body —— 后端
+   *  browser_tool 据此给 BB 远程浏览器选 viewport + mobile/tablet/desktop UA。
+   *  平台各异（web 从 window 探测）；返回 null 则不带。 */
+  getClientHints?: () => DeviceClientHints | null;
   /** fetch 实现。默认 globalThis.fetch；RN 注入 expo/fetch（流式 SSE 必需）。 */
   fetchImpl?: typeof fetch;
 }
@@ -41,6 +53,14 @@ export function getTransportConfig(): TransportConfig {
     );
   }
   return config;
+}
+
+/** Best-effort device hints — null when transport isn't configured (unit
+ *  tests / pre-bootstrap) or the platform doesn't probe. Unlike
+ *  getTransportConfig() this never throws: hints are an optional enhancement
+ *  (remote-browser sizing), not a hard requirement of a request. */
+export function resolveClientHints(): DeviceClientHints | null {
+  return config?.getClientHints?.() ?? null;
 }
 
 /** 解析 fetch 实现；默认分支以 method-call 形式调 globalThis.fetch，避免裸引用丢 this。 */

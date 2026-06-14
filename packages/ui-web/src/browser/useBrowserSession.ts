@@ -8,7 +8,7 @@
  *   - heartbeat ping while user is driving
  *
  * Exposes a small set of imperative actions (control / input / refresh /
- * close) so the BrowserPanel doesn't talk to the API directly.
+ * close) so the panel components don't talk to the API directly.
  *
  * Lifetime is tied to the chat thread (sessionKey). Session lifecycle is
  * decoupled from chat-stream/send: the SSE connection stays open across
@@ -119,15 +119,26 @@ function parseSSEBuffer(
 
 export interface UseBrowserSessionResult {
   session: BrowserSession | null;
+  /** UI visibility of the browser panel, decoupled from session existence.
+   *  A session can exist (browser_tool opened one) while the panel stays
+   *  closed — the user opens it from the input-bar header. */
+  panelOpen: boolean;
+  openPanel: () => void;
+  /** Collapse the panel back to the header without destroying the session. */
+  closePanel: () => void;
   setControl: (mode: BrowserControlMode, reason?: string) => Promise<void>;
-  sendInput: (input: BrowserInput) => Promise<void>;
+  /** Forward a user input event. Returns the backend's JSON (e.g. `tap`
+   *  returns `{editableFocused}`) or null when there's no session / 404. */
+  sendInput: (input: BrowserInput) => Promise<Record<string, unknown> | null>;
   refreshLiveView: () => Promise<void>;
+  /** Destroy the remote session (which also closes the panel). */
   close: () => Promise<void>;
 }
 
 export type BrowserInput =
   | { type: "text"; text: string }
   | { type: "key"; key: string }
+  | { type: "tap"; x: number; y: number }
   | { type: "click"; x: number; y: number }
   | { type: "scroll"; dx: number; dy: number }
   | { type: "navigate"; url: string }
@@ -142,6 +153,17 @@ export function useBrowserSession(sessionKey: string): UseBrowserSessionResult {
   const [session, setSession] = useState<BrowserSession | null>(null);
   const sessionRef = useRef<BrowserSession | null>(null);
   sessionRef.current = session;
+
+  // Panel visibility is the user's choice, NOT a function of session
+  // existence: browser_tool opening a session must not pop the panel open
+  // (the user opens it from the input-bar header). A session going away,
+  // though, always closes the panel.
+  const [panelOpen, setPanelOpen] = useState(false);
+  useEffect(() => {
+    if (!session) setPanelOpen(false);
+  }, [session]);
+  const openPanel = useCallback(() => setPanelOpen(true), []);
+  const closePanel = useCallback(() => setPanelOpen(false), []);
 
   // ── SSE auto-reconnect loop ──
   useEffect(() => {
@@ -219,18 +241,27 @@ export function useBrowserSession(sessionKey: string): UseBrowserSessionResult {
     [],
   );
 
-  const sendInput = useCallback(async (input: BrowserInput) => {
-    const cur = sessionRef.current;
-    if (!cur) return;
-    const res = await proxyPost(
-      `/browser/sessions/${encodeURIComponent(cur.sessionKey)}/input`,
-      input,
-    );
-    if (res.status === 404) {
-      // Session is gone — drop local state so the panel unmounts.
-      setSession(null);
-    }
-  }, []);
+  const sendInput = useCallback(
+    async (input: BrowserInput): Promise<Record<string, unknown> | null> => {
+      const cur = sessionRef.current;
+      if (!cur) return null;
+      const res = await proxyPost(
+        `/browser/sessions/${encodeURIComponent(cur.sessionKey)}/input`,
+        input,
+      );
+      if (res.status === 404) {
+        // Session is gone — drop local state so the panel unmounts.
+        setSession(null);
+        return null;
+      }
+      try {
+        return (await res.json()) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    },
+    [],
+  );
 
   const refreshLiveView = useCallback(async () => {
     const cur = sessionRef.current;
@@ -253,5 +284,14 @@ export function useBrowserSession(sessionKey: string): UseBrowserSessionResult {
     );
   }, []);
 
-  return { session, setControl, sendInput, refreshLiveView, close };
+  return {
+    session,
+    panelOpen,
+    openPanel,
+    closePanel,
+    setControl,
+    sendInput,
+    refreshLiveView,
+    close,
+  };
 }

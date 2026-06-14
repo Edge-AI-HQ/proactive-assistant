@@ -159,6 +159,15 @@ export default function ZebraTasksSplit({
   const showChat =
     selected !== null && (selectedEngaged || chatMode?.cardId === selected.card.id);
 
+  // Browser split (live view beside the chat) in the right pane hides the task
+  // list so the execution view goes full width. Reset whenever we leave chat
+  // (detail / empty / a different card) — ConversationView unmounts then and
+  // can't report back to false on its own.
+  const [browserSplit, setBrowserSplit] = useState(false);
+  useEffect(() => {
+    if (!showChat) setBrowserSplit(false);
+  }, [showChat]);
+
   const selectedIntent: Intent | null = selected
     ? realCardToLovableIntent(selected.card, selected.resolved ? "done" : selected.runUi)
     : null;
@@ -166,9 +175,15 @@ export default function ZebraTasksSplit({
   return (
     // Capped + centered content column; the right pane stops stretching on
     // ultra-wide windows instead of scattering the execution view.
-    <div className="h-full flex gap-5 px-8 pt-10 pb-6 w-full max-w-[1320px] mx-auto">
-      {/* Left — task list */}
-      <div className="w-[340px] shrink-0 flex flex-col min-h-0">
+    <div
+      className={`h-full flex gap-5 px-8 pt-10 pb-6 w-full mx-auto ${
+        browserSplit ? "max-w-none" : "max-w-[1320px]"
+      }`}
+    >
+      {/* Left — task list (hidden while the browser split takes over) */}
+      <div
+        className={`w-[340px] shrink-0 flex-col min-h-0 ${browserSplit ? "hidden" : "flex"}`}
+      >
         <h1 className="text-display text-2xl text-foreground mb-1">Tasks</h1>
         <p className="text-sm text-muted-foreground mb-4">AI is running these for you</p>
 
@@ -315,6 +330,8 @@ export default function ZebraTasksSplit({
                   }}
                   onComment={(text) => cardActions.textFeedback(selected.card, text)}
                   onTurnDone={() => cardActions.clearProcessing(selected.card.id)}
+                  enableBrowserSplit
+                  onBrowserSplitChange={setBrowserSplit}
                 />
               ) : (
                 <ZebraCardDetailPanel

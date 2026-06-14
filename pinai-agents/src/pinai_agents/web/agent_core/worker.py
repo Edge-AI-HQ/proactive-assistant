@@ -338,6 +338,18 @@ class AgentRunWorker:
             (m.meta["card_context"] for m in msgs if m.meta and m.meta.get("card_context")),
             None,
         )
+        # Display device hints (panel CSS size + device kind) ride in message
+        # meta from the send route; the LATEST message's hints win so the BB
+        # session sizes for the device showing it now. browser_tool consumes
+        # them when it opens a session.
+        client_hints = next(
+            (
+                m.meta["client_hints"]
+                for m in reversed(msgs)
+                if m.meta and m.meta.get("client_hints")
+            ),
+            None,
+        )
         # regenerate (Retry / Edit): a lone message flagged in meta re-runs the
         # last turn — chat pops the trailing AI/Tool from the checkpoint + reruns,
         # and _finalize_turn mirrors that on pai_chat_messages (pop + rewrite).
@@ -371,6 +383,7 @@ class AgentRunWorker:
             regenerate=regenerate,
             run_id=run_id,
             timezone=timezone,
+            client_hints=client_hints,
         )
         try:
             recorder, outcome, stream_error = await self._relay_frames(

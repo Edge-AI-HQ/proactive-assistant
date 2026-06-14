@@ -23,6 +23,8 @@ export default function ZebraCardChat({
   onDone,
   onComment,
   onTurnDone,
+  enableBrowserSplit,
+  onBrowserSplitChange,
 }: {
   card: IntentCard;
   bootstrap?: string;
@@ -31,6 +33,9 @@ export default function ZebraCardChat({
   onDone: () => boolean | void | Promise<boolean | void>;
   onComment: (text: string) => void | Promise<void>;
   onTurnDone?: () => void;
+  /** Wide hosts (TASKS right pane) opt into the browser split layout. */
+  enableBrowserSplit?: boolean;
+  onBrowserSplitChange?: (active: boolean) => void;
 }) {
   const chatCard = useMemo(() => realIntentToChatCard(card), [card]);
   const sessionKey = useMemo(
@@ -49,6 +54,8 @@ export default function ZebraCardChat({
       backIcon="down"
       onTurnDone={onTurnDone}
       cardFeedback={{ onDone, onComment }}
+      enableBrowserSplit={enableBrowserSplit}
+      onBrowserSplitChange={onBrowserSplitChange}
       placeholder="Message about this card..."
       headerSlot={
         <CardContextHeaderSlot

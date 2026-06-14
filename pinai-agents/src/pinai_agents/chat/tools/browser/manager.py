@@ -41,6 +41,7 @@ from browserbase import Browserbase
 from playwright.async_api import (
     Browser,
     BrowserContext,
+    CDPSession,
     ConsoleMessage,
     Page,
     async_playwright,
@@ -93,6 +94,21 @@ _POST_ACTION_SETTLE_MS = 400
 # Browserbase rejects unreasonable values. Clamp before forwarding.
 _VIEWPORT_W_MIN, _VIEWPORT_W_MAX = 320, 2560
 _VIEWPORT_H_MIN, _VIEWPORT_H_MAX = 480, 1600
+
+# After a tap, does the focused element accept text? Drives whether the
+# frontend raises the soft keyboard. Excludes button-like <input> types.
+_IS_EDITABLE_JS = """() => {
+  const el = document.activeElement;
+  if (!el) return false;
+  const tag = el.tagName;
+  if (tag === 'INPUT') {
+    const t = (el.getAttribute('type') || 'text').toLowerCase();
+    const nonText = ['checkbox','radio','button','submit','reset','range','color','file','image'];
+    return !el.disabled && !el.readOnly && !nonText.includes(t);
+  }
+  if (tag === 'TEXTAREA') return !el.disabled && !el.readOnly;
+  return el.isContentEditable === true;
+}"""
 
 DeviceKind = Literal["mobile", "tablet", "desktop"]
 
@@ -154,6 +170,12 @@ class _Internal:
     context: BrowserContext
     page: Page
     pw_stop: Any  # async () -> None
+    # Persistent CDP session for user input dispatch (Input.dispatchTouchEvent
+    # etc.). Created once at session create, reused for device emulation, and
+    # detached on teardown. Playwright's page.tap/touchscreen can't be used over
+    # connectOverCDP (hasTouch can't be set on an attached context), so user
+    # touch input goes through raw CDP on this handle.
+    cdp: CDPSession
     console: deque = field(default_factory=lambda: deque(maxlen=_CONSOLE_BUFFER_MAX))
 
 
@@ -350,6 +372,39 @@ class BrowserManager:
         await self._emit_opened(internal)
         return url
 
+    # ── device emulation (mobile/tablet; applied once at session create) ──
+
+    @staticmethod
+    async def _send_device_metrics(
+        cdp: CDPSession,
+        viewport: tuple[int, int],
+        device_kind: DeviceKind,
+        device_scale_factor: float,
+    ) -> None:
+        """Push viewport + DPR + mobile/touch flags over CDP at create so the
+        page lays out for the device. NOTE: this does NOT resize a live
+        Browserbase screencast — the capture surface is the window fixed at
+        `browserSettings.viewport`; emulation only reflows layout. (Resizing
+        the emulated viewport wider than the capture surface at runtime is
+        exactly what crops the live view — so we never do it post-create; the
+        live-view player downscales the fixed frame to fit the panel.)"""
+        await cdp.send(
+            "Emulation.setDeviceMetricsOverride",
+            {
+                "width": viewport[0],
+                "height": viewport[1],
+                "deviceScaleFactor": device_scale_factor,
+                "mobile": device_kind != "desktop",
+                "screenWidth": viewport[0],
+                "screenHeight": viewport[1],
+            },
+        )
+        if device_kind != "desktop":
+            await cdp.send(
+                "Emulation.setTouchEmulationEnabled",
+                {"enabled": True, "maxTouchPoints": 5},
+            )
+
     # ── snapshot + tool actions ──
 
     async def aria_snapshot(self, session_key: str) -> dict[str, Any]:
@@ -458,21 +513,41 @@ class BrowserManager:
         session_key: str,
         type_: str,
         payload: dict[str, Any],
-    ) -> None:
-        """Frontend POST /input dispatch. NAV-class actions implicitly
-        take control from AI so the user can always touch URL bar /
-        back / forward / reload without clicking 'Take over' first."""
+    ) -> dict[str, Any] | None:
+        """Frontend POST /input dispatch. ANY user input implicitly takes
+        control from AI (the user touching the page = the user driving), so
+        they never have to click 'Take over' first. Touch input (`tap`) goes
+        through raw CDP Input on the persistent cdp session — Playwright's
+        page.tap can't be used over connectOverCDP. `tap` returns
+        {editableFocused} so the frontend knows whether to raise the soft
+        keyboard."""
         internal = await self.get(session_key)
         if internal is None:
             raise RuntimeError("session not found")
-        nav_types = {"navigate", "back", "forward", "reload"}
-        if type_ in nav_types and internal.session.control_mode != BrowserControlMode.USER:
+        if internal.session.control_mode != BrowserControlMode.USER:
             await self.set_control_mode(
                 session_key,
                 BrowserControlMode.USER,
                 reason="You took control of the browser",
             )
         page = internal.page
+        if type_ == "tap":
+            x = float(payload["x"])
+            y = float(payload["y"])
+            await internal.cdp.send(
+                "Input.dispatchTouchEvent",
+                {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]},
+            )
+            await internal.cdp.send(
+                "Input.dispatchTouchEvent",
+                {"type": "touchEnd", "touchPoints": []},
+            )
+            # Frameworks often focus on the synthesized click after touchend —
+            # let it settle, then report whether an editable element took focus
+            # so the frontend can raise the soft keyboard.
+            await page.wait_for_timeout(60)
+            editable = await page.evaluate(_IS_EDITABLE_JS)
+            return {"editableFocused": bool(editable)}
         if type_ == "text":
             text = str(payload.get("text") or "")
             if text:
@@ -497,6 +572,7 @@ class BrowserManager:
             await self._on_nav(session_key, internal)
         else:
             raise ValueError(f"unknown input type: {type_}")
+        return None
 
     # ── internal: session bootstrap + teardown ──
 
@@ -559,50 +635,26 @@ class BrowserManager:
         context = contexts[0]
         page = context.pages[0] if context.pages else await context.new_page()
 
-        # Mobile / tablet emulation via raw CDP. This is the same set of
-        # commands Playwright's `browser.new_context(**devices[...])`
-        # emits internally — works on any Browserbase tier (no Advanced
-        # Stealth required) and gives the full picture: realistic UA,
-        # mobile=true (sets isMobile / maxTouchPoints in the page),
-        # touch enabled, and CSS-px viewport matching the user's panel.
-        # The BB session's window was already created at `viewport` size,
-        # so the streamed live view matches what we override here.
+        # One persistent CDP session, kept for the session's life: used here
+        # for mobile/tablet device emulation and later for user touch input
+        # dispatch (Input.*). It's the same command set Playwright's
+        # `browser.new_context(**devices[...])` emits internally — works on any
+        # Browserbase tier (no Advanced Stealth): realistic UA, mobile=true
+        # (sets isMobile / maxTouchPoints), touch enabled, and a CSS-px viewport
+        # matching the user's panel. The BB window was created at `viewport`
+        # size, so the streamed live view matches what we override here.
+        cdp = await context.new_cdp_session(page)
+        device_scale_factor = 1.0
         if device_kind != "desktop":
             preset = pw.devices.get(_DEVICE_PRESET[device_kind], {})
-            cdp = await context.new_cdp_session(page)
-            try:
+            device_scale_factor = float(preset.get("device_scale_factor", 2))
+            await self._send_device_metrics(cdp, viewport, device_kind, device_scale_factor)
+            ua = preset.get("user_agent")
+            if ua:
                 await cdp.send(
-                    "Emulation.setDeviceMetricsOverride",
-                    {
-                        "width": viewport[0],
-                        "height": viewport[1],
-                        "deviceScaleFactor": preset.get("device_scale_factor", 2),
-                        "mobile": True,
-                        "screenWidth": viewport[0],
-                        "screenHeight": viewport[1],
-                    },
+                    "Network.setUserAgentOverride",
+                    {"userAgent": ua, "acceptLanguage": "en-US,en;q=0.9"},
                 )
-                await cdp.send(
-                    "Emulation.setTouchEmulationEnabled",
-                    {
-                        "enabled": True,
-                        "maxTouchPoints": 5,
-                    },
-                )
-                ua = preset.get("user_agent")
-                if ua:
-                    await cdp.send(
-                        "Network.setUserAgentOverride",
-                        {
-                            "userAgent": ua,
-                            "acceptLanguage": "en-US,en;q=0.9",
-                        },
-                    )
-            finally:
-                # Detach the auxiliary CDP session — Playwright's own
-                # Target tracking keeps the page alive without it.
-                with suppress(Exception):
-                    await cdp.detach()
 
         # The viewport we requested is authoritative — page.viewport_size
         # over CDP can return None or stale defaults before the first
@@ -632,6 +684,7 @@ class BrowserManager:
             context=context,
             page=page,
             pw_stop=_stop_pw,
+            cdp=cdp,
         )
 
         # Capture page console messages for the `console` tool action.
@@ -665,6 +718,8 @@ class BrowserManager:
         session_key: str,
         internal: _Internal,
     ) -> None:
+        with suppress(Exception):
+            await internal.cdp.detach()
         with suppress(Exception):
             await internal.browser.close()
         await internal.pw_stop()

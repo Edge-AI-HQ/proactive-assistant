@@ -98,8 +98,9 @@ export { transcribeVoiceAudio, type TranscribeVoiceAudioOptions } from "./voice/
 export { normalizeVoiceLanguage, type VoiceLanguageHint } from "./voice/language";
 
 // ── browser：browser tool 的远程画面面板 ──
-export { default as BrowserPanel } from "./browser/BrowserPanel";
-export { default as BrowserView, type SheetStage } from "./browser/BrowserView";
+export { default as BrowserView } from "./browser/BrowserView";
+export { default as BrowserHeader } from "./browser/BrowserHeader";
+export { default as BrowserDrawer } from "./browser/BrowserDrawer";
 export {
   useBrowserSession,
   type BrowserControlMode,

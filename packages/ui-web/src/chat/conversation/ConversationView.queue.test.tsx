@@ -50,11 +50,13 @@ vi.mock("react-virtuoso", async () => {
 vi.mock("../../assets/bg-gradient.jpg", () => ({
   default: "data:image/gif;base64,R0lGODlhAQABAAAAACw=",
 }));
-vi.mock("../../browser/BrowserPanel", () => ({ default: () => null }));
 vi.mock("../../now/AiSphere", () => ({ default: () => null }));
 vi.mock("../../browser/useBrowserSession", () => ({
   useBrowserSession: () => ({
     session: null,
+    panelOpen: false,
+    openPanel: vi.fn(),
+    closePanel: vi.fn(),
     setControl: vi.fn(),
     sendInput: vi.fn(),
     refreshLiveView: vi.fn(),

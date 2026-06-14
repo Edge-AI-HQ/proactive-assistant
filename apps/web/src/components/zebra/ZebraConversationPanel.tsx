@@ -14,10 +14,14 @@ export default function ZebraConversationPanel({
   onClose,
   expanded,
   onToggleExpand,
+  onBrowserSplitChange,
 }: {
   onClose: () => void;
   expanded: boolean;
   onToggleExpand: () => void;
+  /** Bubbles ConversationView's browser-split state up so the shell can
+   *  widen this panel to full width (browser live view beside the chat). */
+  onBrowserSplitChange?: (active: boolean) => void;
 }) {
   const [sessionKey, setSessionKey] = useState<string | null>(null);
   const [view, setView] = useState<"landing" | "conversation">("landing");
@@ -83,6 +87,8 @@ export default function ZebraConversationPanel({
               bootstrap={bootstrap}
               onBack={onClose}
               backIcon="down"
+              enableBrowserSplit
+              onBrowserSplitChange={onBrowserSplitChange}
             />
           </div>
         </>

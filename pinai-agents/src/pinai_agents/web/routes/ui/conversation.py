@@ -233,6 +233,12 @@ async def send(
     card_context = body.get("cardContext")
     if card_context is not None and not isinstance(card_context, dict):
         raise HTTPException(status_code=400, detail="cardContext must be an object")
+    # Display device hints (panel CSS size + device kind) for browser_tool's BB
+    # session sizing + stealth UA. Rides in the mailbox row's meta → worker →
+    # chat's run_context; opaque pass-through here.
+    client_hints = body.get("clientHints")
+    if client_hints is not None and not isinstance(client_hints, dict):
+        raise HTTPException(status_code=400, detail="clientHints must be an object")
     # Client message id (FE crypto.randomUUID). Doubles as the mailbox
     # idempotency_key — a retried POST (timeout, the first one actually
     # landed) can't enqueue twice — and flows through to the history row +
@@ -252,6 +258,8 @@ async def send(
     meta: dict[str, Any] = {}
     if card_context:
         meta["card_context"] = card_context
+    if client_hints:
+        meta["client_hints"] = client_hints
     if regenerate:
         meta["regenerate"] = True
     if body.get("interrupt") is True:

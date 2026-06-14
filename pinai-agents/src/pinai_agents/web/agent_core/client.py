@@ -59,6 +59,7 @@ class ChatRunClient:
         regenerate: bool = False,
         run_id: str | None = None,
         timezone: str | None = None,
+        client_hints: dict[str, Any] | None = None,
     ) -> AsyncIterator[Frame]:
         """Execute on chat and yield parsed SSE Frames.
 
@@ -84,6 +85,10 @@ class ChatRunClient:
             # User's IANA timezone (profile truth, web-resolved — chat has no
             # DB): chat injects a <current_datetime> anchor per send turn.
             "timezone": timezone,
+            # Display device hints (panel CSS size + mobile/tablet/desktop)
+            # from the FE send; chat's browser_tool sizes the BB session +
+            # picks the stealth UA for the device actually showing it.
+            "client_hints": client_hints,
         }
         if regenerate:
             # chat's regenerate path diffs `message` (not `messages`) against the

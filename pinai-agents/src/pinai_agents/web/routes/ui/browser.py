@@ -58,7 +58,7 @@ async def browser_control(
 
 
 class InputBody(BaseModel):
-    type: str = Field(pattern="^(text|key|click|scroll|navigate|back|forward|reload)$")
+    type: str = Field(pattern="^(tap|text|key|click|scroll|navigate|back|forward|reload)$")
     text: str | None = None
     key: str | None = None
     x: float | None = None

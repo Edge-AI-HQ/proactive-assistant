@@ -10,7 +10,7 @@
  * 设计 SSOT：research/2026-06-10-frontend-layering.mdx §4.2-§4.3。
  */
 import { Capacitor } from "@capacitor/core";
-import { configureTransport } from "@pin-ai/core";
+import { configureTransport, type DeviceClientHints } from "@pin-ai/core";
 
 import { isPinLocalDevAuthEnabled, pinLocalDevAuthHeaders } from "./dev-auth";
 import { PIN_API_BASE, pinApiRequestHeaders } from "./platform";
@@ -41,6 +41,28 @@ export function profileClientHintHeaders(): Record<string, string> {
   headers["X-Pin-Client-Platform"] = Capacitor.getPlatform();
 
   return headers;
+}
+
+/**
+ * Display device hints for the remote browser — browser_tool sizes the
+ * Browserbase session + picks a mobile/tablet/desktop stealth UA off these.
+ * snake_case matches the backend ClientHintsBody; values clamped to its
+ * 200–4096 px bounds so a tiny window can't 422 the send. Coarse pointer +
+ * width disambiguates a phone from a narrow desktop window (Tailwind md/lg).
+ */
+function probeClientHints(): DeviceClientHints {
+  if (typeof window === "undefined") {
+    return { viewport_width: 1280, viewport_height: 800, device_kind: "desktop" };
+  }
+  const clamp = (v: number) => Math.min(4096, Math.max(200, Math.round(v)));
+  const w = clamp(window.innerWidth || 1280);
+  const h = clamp(window.innerHeight || 800);
+  const coarse = window.matchMedia?.("(pointer: coarse)").matches ?? false;
+  let device_kind: DeviceClientHints["device_kind"];
+  if (w < 768) device_kind = "mobile";
+  else if (w < 1024 && coarse) device_kind = "tablet";
+  else device_kind = "desktop";
+  return { viewport_width: w, viewport_height: h, device_kind };
 }
 
 async function getAccessToken(): Promise<string | null> {
@@ -92,4 +114,5 @@ configureTransport({
   // ngrok-skip-browser-warning 等平台 headers（web 同源时为空对象）。
   defaultHeaders: pinApiRequestHeaders(),
   clientHintHeaders: profileClientHintHeaders,
+  getClientHints: probeClientHints,
 });

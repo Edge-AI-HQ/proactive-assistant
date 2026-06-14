@@ -1,4 +1,5 @@
 import { proxyFetch, proxyPost } from "../transport/http";
+import { resolveClientHints } from "../transport/config";
 import { proxyGetSSE } from "../transport/sse";
 
 // ── Conversation history shapes ──
@@ -133,6 +134,10 @@ export async function conversationSend(
   if (opts?.regenerate) body.regenerate = true;
   if (opts?.clientMsgId) body.clientMsgId = opts.clientMsgId;
   if (opts?.interrupt) body.interrupt = true;
+  // Display device hints for the remote browser (viewport + mobile/desktop
+  // UA). Platform-injected; null when unconfigured / no probe — never throws.
+  const clientHints = resolveClientHints();
+  if (clientHints) body.clientHints = clientHints;
   const res = await proxyPost("/conversation/send", body, opts?.signal);
   if (!res.ok) throw new Error(`/conversation/send failed: ${res.status}`);
 }
