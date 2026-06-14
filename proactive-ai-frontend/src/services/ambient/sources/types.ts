@@ -1,23 +1,6 @@
-import type { PersonalSignalInput } from "@/lib/devices";
-
-/**
- * Context handed to every source. Sources push PersonalSignal drafts
- * via `push` and report their human-readable last-event summary via
- * `onEvent` (used by DebugPanel for visual feedback).
- */
-export interface SourceContext {
-  push: (item: PersonalSignalInput) => void;
-  pushDurable?: (item: PersonalSignalInput) => Promise<void>;
-  onEvent: (sourceKey: string, summary: string) => void;
-  getTranscriptionLanguage?: () => string | null | undefined;
-}
-
-/** Common shape every ambient source implements. */
-export interface AmbientSource {
-  readonly key: string;
-  readonly label: string;
-  isStarted(): boolean;
-  start(): Promise<void>;
-  stop(): Promise<void>;
-  refresh?(): Promise<void>;
-}
+// Lifted to @pin-ai/core (domain/ambient); re-exported here so existing
+// "@/services/ambient/sources/types" importers keep working unchanged. The
+// SourceContext / AmbientSource port contracts are shared by every native
+// source; the concrete source implementations stay in this app. Delete this
+// shim when the Capacitor shell retires.
+export * from "@pin-ai/core";

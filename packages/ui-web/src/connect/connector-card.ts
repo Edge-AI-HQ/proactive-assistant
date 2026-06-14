@@ -1,57 +1,31 @@
 /**
- * Shared "kick off OAuth from a connector-guidance surface" helper.
+ * Connector OAuth 编排:把 connector-guidance card / chip 转成实际 OAuth 流程。
+ * 用 composio(state)+ oauth-popup(web/Capacitor IO)+ toolkit 注册表。属平台 IO
+ * glue,留 ui-web —— 等 RN 做连接器时再抽 oauth port(用真适配器验证 port 形状)。
  *
- * Both surfaces that nudge the user to connect a Composio data source
- * call into here so they behave identically:
- *   - A `connect:<slug>` intent card's primary action (handled by the
- *     three card-confirm sites: ChatTimeline, AppShell, useCardActions).
- *   - The inline `<ConnectChip>` rendered when assistant chat text
- *     contains a literal `[connect:<slug>]` tag.
- *
- * Returns the canonical Composio slug if the card / chip was a
- * connector-guidance one and the OAuth flow ran; returns null when
- * the input wasn't recognized (caller falls back to its normal
- * confirm flow).
+ * 纯 slug 逻辑(isConnectorCard / connectorSlugFromIntentKey /
+ * canonicalConnectorSlugFromIntentKey + PreparedConnectorOAuth)已下沉 @pin-ai/core
+ * (domain/connector-card),web / RN 共用;下方 re-export 保旧路径。
  */
-import type { ComposioState } from "@pin-ai/state";
 import type { IntentCard } from "@pin-ai/core";
+import { canonicalConnectorSlugFromIntentKey, type PreparedConnectorOAuth } from "@pin-ai/core";
+import type { ComposioState } from "@pin-ai/state";
 
 import { openOAuthAndAwaitClose } from "./oauth-popup";
 import { getToolkit } from "./toolkit-icons";
 
-const CONNECT_PREFIX = "connect:";
-
-export interface PreparedConnectorOAuth {
-  canonicalSlug: string;
-  redirectUrl?: string;
-}
-
-/** True if this card is a connector-guidance card (intent_key="connect:<slug>"). */
-export function isConnectorCard(card: Pick<IntentCard, "intentKey">): boolean {
-  const key = card.intentKey;
-  return typeof key === "string" && key.startsWith(CONNECT_PREFIX);
-}
-
-/** Extract the slug from an intent_key like "connect:google_calendar"; null when not a connector card. */
-export function connectorSlugFromIntentKey(intentKey: string | undefined): string | null {
-  if (!intentKey || !intentKey.startsWith(CONNECT_PREFIX)) return null;
-  return intentKey.slice(CONNECT_PREFIX.length);
-}
-
-/** Return the canonical toolkit slug for a recognized connector card. */
-export function canonicalConnectorSlugFromIntentKey(intentKey: string | undefined): string | null {
-  const slug = connectorSlugFromIntentKey(intentKey);
-  if (!slug) return null;
-  return getToolkit(slug)?.canonicalSlug ?? null;
-}
+export {
+  isConnectorCard,
+  connectorSlugFromIntentKey,
+  canonicalConnectorSlugFromIntentKey,
+  type PreparedConnectorOAuth,
+} from "@pin-ai/core";
 
 /**
  * Kick off OAuth for a given prompt-friendly slug (e.g. "google_calendar",
  * "gmail", "slack"). Mirrors what `DataConnections.tsx`'s `handleConnect`
- * does, minus the per-toolkit error-state UI — connector nudges live
- * inline in cards/chat and intentionally don't render their own progress
- * surface; settings page is the single place that polls and reports
- * init-task progress.
+ * does, minus the per-toolkit error-state UI — connector nudges live inline
+ * in cards/chat and intentionally don't render their own progress surface.
  *
  * Returns the canonical slug we attempted, or null if the slug wasn't
  * recognized (caller should degrade to "no-op" or fall through).
@@ -100,9 +74,9 @@ export async function openPreparedConnectorOAuth(
 }
 
 /**
- * Card-side entry point: if `card` is a connector-guidance card, run
- * OAuth and return the canonical slug; otherwise return null so the
- * caller can run its normal confirm flow (open chat thread, etc.).
+ * Card-side entry point: if `card` is a connector-guidance card, run OAuth and
+ * return the canonical slug; otherwise return null so the caller can run its
+ * normal confirm flow (open chat thread, etc.).
  */
 export async function tryHandleConnectorCard(
   card: Pick<IntentCard, "intentKey">,

@@ -49,6 +49,15 @@ export * from "./domain/intent-card";
 export * from "./domain/markdown-blocks";
 export * from "./domain/reminder-card";
 export * from "./domain/signals";
+export * from "./domain/voice-language";
+export * from "./domain/basket-category";
+export * from "./domain/source-app";
+export * from "./domain/tool-presentation";
+export * from "./domain/lovable-card";
+export * from "./domain/weather";
+export * from "./domain/browser-session";
+export * from "./domain/connector-toolkit";
+export * from "./domain/connector-card";
 
 export * from "./machines/card-execution";
 export * from "./machines/conversation";

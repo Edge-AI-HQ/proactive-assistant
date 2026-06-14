@@ -25,6 +25,14 @@ export {
   type UseCardsQueryResult,
 } from "./queries/cards";
 export {
+  weatherKeys,
+  useWeatherData,
+} from "./queries/weather";
+export {
+  useBrowserSession,
+  type UseBrowserSessionResult,
+} from "./queries/browser-session";
+export {
   useConversationRuntime,
   type ConversationRuntimeOpts,
   type UseConversationRuntimeResult,

@@ -2,30 +2,25 @@ import {
   Briefcase, Heart, Users, TrendingUp, Sprout, Sparkles,
   type LucideIcon,
 } from "lucide-react";
+import { basketCategory, type BasketIconKey } from "@pin-ai/core";
 
 export interface BasketMeta {
   icon: LucideIcon;
   label: string;
 }
 
-const BASKET_ICONS: Record<string, BasketMeta> = {
-  work:    { icon: Briefcase,   label: "Work" },
-  career:  { icon: Briefcase,   label: "Work" },
-  health:  { icon: Heart,       label: "Health" },
-  stay:    { icon: Heart,       label: "Health" },
-  family:  { icon: Users,       label: "Family" },
-  relationships: { icon: Users, label: "Family" },
-  wealth:  { icon: TrendingUp,  label: "Finance" },
-  finance: { icon: TrendingUp,  label: "Finance" },
-  financial: { icon: TrendingUp, label: "Finance" },
-  growth:  { icon: Sprout,      label: "Growth" },
-  learn:   { icon: Sprout,      label: "Growth" },
-  life:    { icon: Sparkles,    label: "Life" },
+/** core 语义 iconKey → lucide web 图标。RN 同名绑定用 lucide-react-native。 */
+const BASKET_ICONS: Record<BasketIconKey, LucideIcon> = {
+  work: Briefcase,
+  health: Heart,
+  family: Users,
+  finance: TrendingUp,
+  growth: Sprout,
+  life: Sparkles,
+  general: Sparkles,
 };
 
-const FALLBACK: BasketMeta = { icon: Sparkles, label: "General" };
-
 export function basketMeta(key: string): BasketMeta {
-  const k = key?.toLowerCase();
-  return BASKET_ICONS[k] ?? BASKET_ICONS[k?.split("-")[0]] ?? FALLBACK;
+  const { iconKey, label } = basketCategory(key);
+  return { icon: BASKET_ICONS[iconKey], label };
 }

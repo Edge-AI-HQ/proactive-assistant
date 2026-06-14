@@ -4,10 +4,16 @@
 // bridge stay in each app and import these. Web re-exports from these paths so
 // existing `@/services/ambient/...` importers are unaffected.
 export * from "./types";
+export * from "./source";
 export * from "./utils";
 export * from "./normalize";
 export * from "./envelope";
+export * from "./sound-runs";
+export * from "./motion-segments";
 export * from "./narrative";
 export * from "./summary-scheduler";
 export * from "./summary-context";
 export * from "./speaker-transcript";
+export * from "./timeline-store";
+export * from "./pipeline-models";
+export * from "./pipeline";

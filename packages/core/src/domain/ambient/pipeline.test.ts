@@ -1,9 +1,9 @@
 import { describe, expect, test } from "vitest";
 
-import type { PersonalSignalInput } from "@/lib/devices";
+import type { PersonalSignalInput } from "../signals";
 import { LocalAmbientTimelinePipeline } from "./pipeline";
-import type { AmbientTimelineModelBridge } from "./models";
-import { MemoryTimelineStore } from "./store";
+import type { AmbientTimelineModelBridge } from "./pipeline-models";
+import { MemoryTimelineStore } from "./timeline-store";
 import { AMBIENT_CANDIDATE_WINDOW_KIND, AMBIENT_TIMELINE_KIND } from "./types";
 
 function makePipeline(): {

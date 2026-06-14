@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { normalizeVoiceLanguage } from "./language";
+import { normalizeVoiceLanguage } from "./voice-language";
 
 describe("normalizeVoiceLanguage", () => {
   test("does not force English when no user preference is available", () => {
