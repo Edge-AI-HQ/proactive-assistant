@@ -1,13 +1,5 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Bell } from "lucide-react";
-import {
-  Drawer,
-  DrawerContent,
-  DrawerHeader,
-  DrawerTitle,
-  DrawerDescription,
-  DrawerFooter,
-} from "@/components/ui/drawer";
 
 /**
  * In-app pre-prompt for notification permission. Mounts once per user
@@ -24,6 +16,14 @@ import {
  * Both CTAs stamp notifyPermissionPromptedAt server-side so we never
  * re-show this automatically. The Account → Notifications toggle is
  * the only way to revisit the choice.
+ *
+ * Rendered as a plain bottom-sheet modal (NOT a vaul Drawer): this sheet
+ * auto-opens during the post-login boot render cascade, and vaul's
+ * iOS-only `position: fixed` body machinery + Radix Dialog presence then
+ * infinite-loop inside the WKWebView (React #185 — only reproduces on a
+ * fresh iOS account, where this is the one drawer that auto-opens). An
+ * informational prompt needs none of vaul's drag / snap / scale features,
+ * so a static modal is both the correct altitude and loop-proof.
  */
 export interface PreNotificationPromptProps {
   open: boolean;
@@ -44,7 +44,7 @@ export function PreNotificationPrompt({
 }: PreNotificationPromptProps) {
   const [busy, setBusy] = useState(false);
 
-  const handleAccept = async () => {
+  const handleAccept = useCallback(async () => {
     if (busy) return;
     setBusy(true);
     try {
@@ -52,9 +52,9 @@ export function PreNotificationPrompt({
     } finally {
       setBusy(false);
     }
-  };
+  }, [busy, onAccept]);
 
-  const handleDecline = async () => {
+  const handleDecline = useCallback(async () => {
     if (busy) return;
     setBusy(true);
     try {
@@ -62,32 +62,56 @@ export function PreNotificationPrompt({
     } finally {
       setBusy(false);
     }
-  };
+  }, [busy, onDecline]);
+
+  // Escape = "Later" (mirrors the old drawer's swipe-down / tap-outside
+  // dismiss, which also routed to onDecline so the prompted_at stamp lands).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") void handleDecline();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, handleDecline]);
+
+  if (!open) return null;
 
   return (
-    <Drawer
-      open={open}
-      // Tapping outside the sheet counts as "later" — same outcome as
-      // the explicit button, so we don't drop the prompted_at stamp.
-      onOpenChange={(next) => {
-        if (!next && open && !busy) {
-          void handleDecline();
-        }
-      }}
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="prenotif-title"
+      aria-describedby="prenotif-desc"
     >
-      <DrawerContent className="max-w-md mx-auto pb-6">
-        <DrawerHeader className="flex flex-col items-center gap-3 pt-2">
+      {/* Backdrop — tapping outside counts as "Later", same outcome as the
+          explicit button, so we don't drop the prompted_at stamp. */}
+      <div
+        className="absolute inset-0 bg-black/40"
+        onClick={() => void handleDecline()}
+      />
+      <div className="relative z-10 mx-auto w-full max-w-md rounded-t-[10px] border bg-background pb-6">
+        <div className="flex flex-col items-center gap-3 p-4 pt-5 text-center">
           <div className="rounded-full bg-primary/10 p-3">
             <Bell className="h-6 w-6 text-primary" aria-hidden />
           </div>
-          <DrawerTitle className="text-center">Turn on notifications</DrawerTitle>
-          <DrawerDescription className="text-center text-base leading-relaxed">
+          <h2
+            id="prenotif-title"
+            className="text-lg font-semibold leading-none tracking-tight"
+          >
+            Turn on notifications
+          </h2>
+          <p
+            id="prenotif-desc"
+            className="text-base leading-relaxed text-muted-foreground"
+          >
             Generating cards can take a few minutes to a few hours. With
             notifications on, we'll alert you the moment they're ready — no need
             to keep watching the app.
-          </DrawerDescription>
-        </DrawerHeader>
-        <DrawerFooter className="gap-2">
+          </p>
+        </div>
+        <div className="flex flex-col gap-2 p-4">
           <button
             type="button"
             onClick={handleAccept}
@@ -104,8 +128,8 @@ export function PreNotificationPrompt({
           >
             Later
           </button>
-        </DrawerFooter>
-      </DrawerContent>
-    </Drawer>
+        </div>
+      </div>
+    </div>
   );
 }
