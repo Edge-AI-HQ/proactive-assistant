@@ -36,6 +36,7 @@ from collections import OrderedDict, deque
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 from browserbase import Browserbase
 from playwright.async_api import (
@@ -109,6 +110,23 @@ _IS_EDITABLE_JS = """() => {
   if (tag === 'TEXTAREA') return !el.disabled && !el.readOnly;
   return el.isContentEditable === true;
 }"""
+
+# Cookie name fragments that signal a real auth/session cookie. Some sites set
+# HttpOnly consent / analytics cookies even when logged out (e.g. google's
+# NID / AEC), so "has any HttpOnly cookie" over-reports. We additionally
+# require the cookie name to look auth-ish. Covers session / JSESSIONID /
+# PHPSESSID (sess), google SID (sid), oauth (auth/token), etc. Trade-off: may
+# miss sites that use an unusual login cookie name.
+_AUTH_COOKIE_HINTS = (
+    "sess",
+    "sid",
+    "auth",
+    "token",
+    "login",
+    "jwt",
+    "credential",
+    "remember",
+)
 
 DeviceKind = Literal["mobile", "tablet", "desktop"]
 
@@ -313,6 +331,104 @@ class BrowserManager:
     async def heartbeat(self, session_key: str) -> bool:
         internal = await self.get(session_key)
         return internal is not None
+
+    async def check_current_login(self, session_key: str) -> dict[str, Any]:
+        """Does the current page carry a login cookie, and which site does it
+        belong to? Heuristic: a login exists iff there's an HttpOnly cookie
+        applying to the current host (server-set session / auth cookies are
+        almost always HttpOnly; analytics / ad cookies usually aren't).
+
+        The site key is the cookie's own declared domain (leading dot
+        stripped), broadest match wins — so one login spanning subdomains
+        (`.google.com` across www/drive/mail) collapses to a single
+        `google.com` entry instead of one row per visited host. Returns
+        {hasLogin, host, loginDomain}; loginDomain is "" when not logged in."""
+        empty = {"hasLogin": False, "host": "", "loginDomain": ""}
+        internal = await self.get(session_key)
+        if internal is None:
+            return empty
+        url = internal.page.url
+        host = (urlparse(url).hostname or "").lower()
+        if not host:
+            return empty
+        try:
+            cookies = await internal.context.cookies([url])
+        except Exception:
+            return {"hasLogin": False, "host": host, "loginDomain": ""}
+        login_domains: list[str] = []
+        for c in cookies:
+            if not c.get("httpOnly"):
+                continue
+            name = str(c.get("name") or "").lower()
+            if not any(h in name for h in _AUTH_COOKIE_HINTS):
+                continue
+            dom = str(c.get("domain") or "").lstrip(".").lower()
+            if dom and (host == dom or host.endswith("." + dom)):
+                login_domains.append(dom)
+        if not login_domains:
+            return {"hasLogin": False, "host": host, "loginDomain": ""}
+        # Broadest (shortest) domain the login cookie is scoped to = the site.
+        login_domain = min(login_domains, key=len)
+        return {"hasLogin": True, "host": host, "loginDomain": login_domain}
+
+    async def clear_site_cookies(self, context_id: str, site_domain: str) -> None:
+        """Clear one site's cookies + storage from a persistent Browserbase
+        context. Opens a throwaway session bound to the context
+        (persist:True), runs CDP `Storage.clearDataForOrigin` for the site
+        origin, then releases so the deletion is written back to the context.
+
+        One-shot maintenance op — independent of the session cache (not a
+        user-facing session). Caveat: if the user has a live session on the
+        same context concurrently, behavior is whatever Browserbase does for
+        concurrent context use; in practice deletion happens while the user
+        isn't actively browsing that site.
+        """
+        bb = self._bb_client()
+        project_id = self._project_id()
+        bb_session = await asyncio.to_thread(
+            bb.sessions.create,
+            project_id=project_id,
+            keep_alive=False,
+            timeout=_BB_SESSION_TIMEOUT_SEC,
+            browser_settings={"context": {"id": context_id, "persist": True}},
+        )
+        pw_ctx = async_playwright()
+        pw = await pw_ctx.__aenter__()
+        try:
+            browser = await pw.chromium.connect_over_cdp(
+                bb_session.connect_url,
+                timeout=_CDP_CONNECT_TIMEOUT_SEC * 1000,
+            )
+            contexts = browser.contexts
+            if not contexts:
+                raise RuntimeError(f"browserbase session {bb_session.id} has no context")
+            context = contexts[0]
+            page = context.pages[0] if context.pages else await context.new_page()
+            cdp = await context.new_cdp_session(page)
+            # cookies are domain-scoped, not origin-scoped — clear both schemes
+            # so an http-set cookie doesn't survive an https delete.
+            for scheme in ("https", "http"):
+                with suppress(Exception):
+                    await cdp.send(
+                        "Storage.clearDataForOrigin",
+                        {"origin": f"{scheme}://{site_domain}", "storageTypes": "all"},
+                    )
+            with suppress(Exception):
+                await cdp.detach()
+            with suppress(Exception):
+                await browser.close()
+            logger.info("browser: cleared site data ctx=%s domain=%s", context_id, site_domain)
+        finally:
+            with suppress(Exception):
+                await pw_ctx.__aexit__(None, None, None)
+            # Release the throwaway session so persist writes the deletion back.
+            with suppress(Exception):
+                await asyncio.to_thread(
+                    bb.sessions.update,
+                    bb_session.id,
+                    project_id=project_id,
+                    status="REQUEST_RELEASE",
+                )
 
     async def shutdown_all(self) -> None:
         for task in (self._gc_task, self._health_task):

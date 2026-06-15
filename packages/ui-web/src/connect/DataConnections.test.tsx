@@ -53,6 +53,18 @@ vi.mock("@pin-ai/state", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@pin-ai/state")>();
   return {
     ...actual,
+    // DataConnections renders <BrowserLoginsSection/>, which calls
+    // useBrowserLogins (a React Query hook hitting /browser/logins). Stub it
+    // with an empty list so the section renders nothing and these tests stay
+    // isolated from the network + QueryClient.
+    useBrowserLogins: () => ({
+      logins: [],
+      isLoading: false,
+      error: null,
+      deleteLogin: vi.fn(),
+      deletingDomain: null,
+      refetch: vi.fn(),
+    }),
     useInitTask: (taskId: string | null) => {
       const hasTask = taskId ? Object.prototype.hasOwnProperty.call(initTaskState.tasks, taskId) : false;
       const task = taskId

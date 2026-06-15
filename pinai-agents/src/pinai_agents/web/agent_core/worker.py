@@ -34,6 +34,7 @@ from psycopg_pool import AsyncConnectionPool
 from ..db.repositories.chat_messages import ChatMessagesRepository, Role, Trigger
 from ..db.repositories.profile import ProfileRepository
 from ..db.rls import service_tx, user_scoped_tx
+from ..services.browserbase_provisioning import ensure_browserbase_context_id
 from ..services.chat_turn_recorder import ChatTurnRecorder
 from ..services.push_notifier import notify_turn_completed
 from .bus import AgentBus, notify_run_status
@@ -816,4 +817,10 @@ class AgentRunWorker:
             row = await cur.fetchone()
         if row is None:
             return None, None
-        return row["litellm_virtual_key"], row["browserbase_context_id"]
+        context_id = row["browserbase_context_id"]
+        if context_id is None:
+            # Provisioning only fires at onboarding-finish (profile.py); backfill
+            # here so users whose context was never minted (or failed then) still
+            # get a persistent context — login state has somewhere to persist.
+            context_id = await ensure_browserbase_context_id(self._pool, user_id, None)
+        return row["litellm_virtual_key"], context_id

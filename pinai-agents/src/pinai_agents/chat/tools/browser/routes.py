@@ -21,9 +21,9 @@ from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Header, HTTPException, Path, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from ...auth.run_jwt import RunJWTError, verify_run_jwt
+from ...auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
 from .control_state import normalize_mode
 from .events import browser_events
 from .manager import get_browser_manager
@@ -41,6 +41,19 @@ def _verify_or_401(authorization: str | None) -> None:
     token = authorization[len("bearer ") :].strip()
     try:
         verify_run_jwt(token)
+    except RunJWTError as e:
+        logger.warning("browser routes: invalid run JWT — %s", e)
+        raise HTTPException(401, "invalid run JWT") from e
+
+
+def _principal_or_401(authorization: str | None) -> RunPrincipal:
+    """Like _verify_or_401 but REQUIRES a valid JWT and returns its claims —
+    used by endpoints that need the `bbctx` (persistent context id) claim."""
+    if not (authorization and authorization.lower().startswith("bearer ")):
+        raise HTTPException(401, "missing run JWT")
+    token = authorization[len("bearer ") :].strip()
+    try:
+        return verify_run_jwt(token)
     except RunJWTError as e:
         logger.warning("browser routes: invalid run JWT — %s", e)
         raise HTTPException(401, "invalid run JWT") from e
@@ -142,6 +155,17 @@ async def browser_heartbeat(
     return {"ok": True}
 
 
+@router.get("/agent/browser/sessions/{session_key}/login-check")
+async def browser_login_check(
+    session_key: str = _SESSION_KEY,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """Does the current page carry a login cookie (HttpOnly heuristic)? Web
+    calls this before recording a site to the login list."""
+    _verify_or_401(authorization)
+    return await get_browser_manager().check_current_login(session_key)
+
+
 @router.post("/agent/browser/sessions/{session_key}/refresh-live-view")
 async def browser_refresh_live_view(
     session_key: str = _SESSION_KEY,
@@ -162,3 +186,28 @@ async def browser_destroy(
     _verify_or_401(authorization)
     await get_browser_manager().destroy(session_key)
     return {"ok": True}
+
+
+# ── persistent-context maintenance (per-user login state) ──
+
+
+class ClearSiteBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    site_domain: str = Field(alias="siteDomain", min_length=1, max_length=255)
+
+
+@router.post("/agent/browser/context/clear-site")
+async def browser_context_clear_site(
+    body: ClearSiteBody,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """Clear one site's cookies/storage from the caller's persistent
+    Browserbase context. Context id comes from the JWT `bbctx` claim (chat
+    never reads the DB). Web calls this when the user deletes a saved login."""
+    principal = _principal_or_401(authorization)
+    context_id = principal.browserbase_context_id
+    if not context_id:
+        raise HTTPException(400, "no browserbase context for this user")
+    domain = body.site_domain.strip().lower()
+    await get_browser_manager().clear_site_cookies(context_id, domain)
+    return {"ok": True, "siteDomain": domain}

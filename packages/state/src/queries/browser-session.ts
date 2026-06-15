@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
+  hostFromUrl,
   proxyFetch,
   proxyPost,
   reduceBrowserSession,
@@ -137,6 +138,21 @@ export function useBrowserSession(sessionKey: string): UseBrowserSessionResult {
     const t = setInterval(ping, HEARTBEAT_INTERVAL_MS);
     return () => clearInterval(t);
   }, [session?.sessionKey, session?.controlMode]);
+
+  // ── Record sites the user manually operates while driving (user-control
+  //    mode = they're almost always logging in). Powers the data-connector
+  //    "网站登录" list. Dedup by host within the hook lifetime; the backend
+  //    upsert is idempotent so a re-touch just bumps last_used_at. ──
+  const recordedHostRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!session || session.controlMode !== "user") return;
+    const host = hostFromUrl(session.currentUrl);
+    if (!host || host === recordedHostRef.current) return;
+    recordedHostRef.current = host;
+    // Backend asks chat whether the page actually has a login cookie before
+    // recording, so merely browsing a site (no login) won't add it.
+    void proxyPost("/browser/logins/record", { sessionKey: session.sessionKey });
+  }, [session?.controlMode, session?.currentUrl]);
 
   // ── Imperative actions ──
   const setControl = useCallback(

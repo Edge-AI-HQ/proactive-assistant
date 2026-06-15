@@ -21,24 +21,24 @@ from ..db.rls import service_tx
 logger = logging.getLogger(__name__)
 
 
-async def ensure_browserbase_context(
+async def ensure_browserbase_context_id(
     pool: AsyncConnectionPool,
-    user: User,
-) -> User:
-    """Idempotent: returns `user` unchanged if already provisioned (or if
-    Browserbase isn't configured). Otherwise mints a context, persists
-    `users.browserbase_context_id`, returns the updated `User`.
+    user_id: int,
+    current_context_id: str | None,
+) -> str | None:
+    """Idempotent core: returns `current_context_id` if already set;
+    otherwise mints a Browserbase context, persists it on
+    `users.browserbase_context_id`, and returns the new id.
 
-    Failure mode: if the Browserbase call errors we leave `browserbase_context_id`
-    NULL and return the user as-is. Browser tool falls back to ephemeral
-    sessions, retry on the next chat-send. Same lazy-recovery posture as
-    LiteLLM provisioning.
+    Returns None if Browserbase isn't configured or the create call fails —
+    caller falls back to ephemeral sessions and retries on the next
+    chat-send. Same lazy-recovery posture as LiteLLM provisioning.
     """
-    if user.browserbase_context_id:
-        return user
+    if current_context_id:
+        return current_context_id
     s = get_web_settings()
     if not (s.browserbase_api_key and s.browserbase_project_id):
-        return user
+        return None
 
     try:
         bb = Browserbase(api_key=s.browserbase_api_key)
@@ -49,22 +49,36 @@ async def ensure_browserbase_context(
     except Exception as e:
         logger.warning(
             "browserbase context provisioning failed user=%d: %s: %s",
-            user.id,
+            user_id,
             type(e).__name__,
             e,
         )
-        return user
+        return None
 
     context_id = getattr(ctx, "id", None)
     if not isinstance(context_id, str) or not context_id:
-        logger.warning("browserbase context create returned no id user=%d", user.id)
-        return user
+        logger.warning("browserbase context create returned no id user=%d", user_id)
+        return None
 
     async with service_tx(pool) as conn:
         await conn.execute(
             "UPDATE users SET browserbase_context_id = %s WHERE id = %s",
-            (context_id, user.id),
+            (context_id, user_id),
         )
-    logger.info("browserbase context provisioned user=%d ctx=%s", user.id, context_id)
-    user.browserbase_context_id = context_id
+    logger.info("browserbase context provisioned user=%d ctx=%s", user_id, context_id)
+    return context_id
+
+
+async def ensure_browserbase_context(
+    pool: AsyncConnectionPool,
+    user: User,
+) -> User:
+    """Idempotent: returns `user` unchanged if already provisioned (or if
+    Browserbase isn't configured). Otherwise mints a context, persists
+    `users.browserbase_context_id`, returns the updated `User`. Thin wrapper
+    over `ensure_browserbase_context_id` for callers holding a `User`
+    (onboarding-finish)."""
+    user.browserbase_context_id = await ensure_browserbase_context_id(
+        pool, user.id, user.browserbase_context_id
+    )
     return user

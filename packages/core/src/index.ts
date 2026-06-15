@@ -56,6 +56,7 @@ export * from "./domain/tool-presentation";
 export * from "./domain/lovable-card";
 export * from "./domain/weather";
 export * from "./domain/browser-session";
+export * from "./domain/browser-login";
 export * from "./domain/connector-toolkit";
 export * from "./domain/connector-card";
 

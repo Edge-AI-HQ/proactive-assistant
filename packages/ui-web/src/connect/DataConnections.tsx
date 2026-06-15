@@ -39,6 +39,7 @@ import { useInitTask, isInitTaskFresh } from "@pin-ai/state";
 import { resolveComposioConnectionIdentity } from "./composio-display-identity";
 import { closeOAuthSurface, openOAuthAndAwaitClose } from "./oauth-popup";
 import { Text } from "../primitives/Text";
+import { BrowserLoginsSection } from "./BrowserLoginsSection";
 
 /**
  * Small inline chip that polls connector.init tasks and renders a
@@ -1562,6 +1563,9 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
           </AnimatePresence>
         </div>
       )}
+
+      {/* Sites the user has logged into through the agent's browser */}
+      <BrowserLoginsSection />
 
       {/* Connect error */}
       <AnimatePresence>

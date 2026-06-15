@@ -1,0 +1,161 @@
+---
+title: "浏览器登录态持久化(被动一次登录 → 长期免登录)"
+description: "让 agent 帮用户操作需要登录的网站时,用户只在 live view 里手动登一次,登录态自动 persist 进 per-user Browserbase Context,之后 agent 复用免重复登录。核心发现:持久化底座 + 用户手动登录能力 + agent 撞墙喊用户三块已全部在线上,真正的硬缺口只有 provisioning 不兜底。cookie 不进我们 DB。"
+---
+
+# 浏览器登录态持久化(被动一次登录 → 长期免登录)
+
+状态:**P0 + P1(登录站可见性 + 手动删除)已实现**(分支 `feat/browser-login-persistence`;本地 ruff/mypy/chat-browser pytest + 前端 check:packages/frontend/apps-web type-check 全绿;待 DB migration yoyo + e2e 真机 Browserbase 验证);P2(反 bot 住宅代理 / per-site context 隔离)仍 brainstorm。本文是该 feature 的设计 SSOT。承接 PR#139(browser view 重构)与 [手机端远端浏览器原生触摸操控](./2026-06-14-mobile-browser-touch-control)(同一套 BrowserView / live view / CDP input)。
+
+## 问题(为什么)
+
+产品目标是 agent 顺滑帮用户在网页上办事。痛点:很多站点需要登录,反复登录很烦。要的效果是 **agent 打开网页 → 第一次需要登录时请用户登一次 → 之后用户不用再登,agent 长期免登录操作**。
+
+设计边界(已拍板):**只做被动流,不做"连接中心主动登录入口"**。即不在设置/连接页让用户预先登录一批站,而是让 agent 在真正需要时撞到登录墙、当场请用户登。
+
+## 关键认知:底座大部分已在线上
+
+调研(4 个子系统并行精读 + grep 核实)后的核心结论 —— 这个 feature **不是从零接入**,持久化底座、用户手动登录能力、agent 撞墙喊用户三块都已经实现并上线。对照表:
+
+| 能力 | 现状 | 证据 | 要做什么 |
+|---|---|---|---|
+| per-user 持久 Context | ✅ 在线上 | `users.browserbase_context_id`(migration `033`)+ `browserbase_provisioning.py:24-70` lazy 创建 | 不动 |
+| 登录态自动回写(存 cookie) | ✅ 在线上 | `manager.py:609-610` 每次 open session 带 `{id, persist:True}` | 不动 |
+| context_id 透传到 chat | ✅ 在线上 | `worker.py:807` 读库 → JWT `bbctx` claim(`agent_jwt.py:122`)→ `run_jwt.py:89` → `ctx.py:47` → `tools.py:123` | 不动 |
+| 用户在 live view 真手动登录 | ✅ 在线上 | 桌面 iframe 直接操作 / 手机手势→CDP(`BrowserView.tsx`);user 接管时 AI 写操作被门禁挡(`control_state.py:38-49`) | 不动 |
+| agent 撞登录墙 → 请用户登 | ✅ 在线上 | `request_takeover` action(`tools.py`)+ prompt 已教(`card_execution.py` 有完整 `<browser_takeover>` 话术 "请完成登录后告诉我";`proactive.py`/`main_chat.py` "填表单/登录/走流程 → request_takeover 停下等用户") | 不动 |
+| 账号删除清 Context | ✅ 在线上 | `account_deletion.py:190-219` `_cleanup_browserbase` 调 `bb.contexts.delete` | P1 新表加 CASCADE |
+| **provisioning 兜底** | ❌ **只 onboarding 触发** | `ensure_browserbase_context` 唯一调用点是 `profile.py:571`(onboarding-completed) | **P0 补** |
+| 登录态可见性 / proactive 召回 | ❌ 无 | — | P1 |
+| 反 bot(住宅代理/指纹) | ⚠️ 未传 | `manager.py:_create` 没传 `proxies`/`fingerprint` | P2 |
+| at-rest 加密引擎 | ❌ 无(grep 确认无 KMS/DEK/encrypt) | context_id 同 `litellm_virtual_key` 明文存 | 不存 cookie 规避 |
+
+## 用户要的流程(纯被动,端到端)
+
+```
+agent 要在网页办事
+   │
+   ▼  browser_tool.open(url)  —— 已有
+session 用 persistent context (persist:True)  —— 已有, 前提: context_id 非 NULL ← P0 兜底
+   │
+   ▼  命中登录墙
+agent: request_takeover("需要登录 X")  —— 已有 (prompt 已教)
+   │
+   ▼  BrowserHeader 变琥珀 "Browser needs you"  —— 已有
+用户点开 → live view → 手动输账号密码  —— 已有 (桌面/手机)
+   │
+   ▼  登录成功
+cookie 自动 persist 进用户的 Context  —— 已有 (persist:True)
+   │
+   ▼  下次 agent open 同站
+自动已登录, 不再撞墙  —— 已有 (同 context 自动带 cookie)
+```
+
+**结论:这条流的每一环都已存在。唯一让它对"所有用户"成立的硬前提是 context_id 不能为 NULL,而这正是 P0 要补的兜底。**
+
+## cookie 怎么存:Context persist,不进我们 DB
+
+用户的原始诉求是"记录下用户这次登录的 cookie"。**正解是不自己存 cookie**:
+
+- `persist:True`(`manager.py:610`)已让 Browserbase 把 cookie/localStorage/session 自动写进**用户专属的持久 Context**(存在 Browserbase 侧,加密 at-rest)。
+- 我们 DB 一行 cookie 都不存。原因:(1) 仓库**无 at-rest 加密引擎**(grep `KMS|envelope_encrypt|EncryptedSerializer|DEK|encrypt` 全 0),自己存 cookie 等于明文托管高价值凭证;(2) cookie 是泄漏爆炸半径最大的东西,留在 Browserbase 让 **agent/LLM 永远不接触原始凭证**(符合 deep research 的凭证 vault 原则);(3) 我们只持有 `context_id`(一个 handle),光有它没有 master API key 也复活不了 Context —— 所以 `context_id` 明文存(同现有 `litellm_virtual_key`)可接受。
+- 我们**最多**存"登过哪些站"的元数据(P1,`site_domain`/状态/时间,**不含凭证**)。
+
+> 用户要的结果("下次不用登录")完全达成,且比"自己抄 cookie 进库"更安全、更简单。
+
+## 唯一硬缺口:provisioning 不兜底
+
+`ensure_browserbase_context`(`browserbase_provisioning.py:24-70`)是幂等的(已有 context 直接返回;失败留 NULL 下次重试),但**唯一调用点是 onboarding-completed**(`profile.py:571`)。后果:
+
+- onboarding 早于 migration `033` 上线的老用户,或 onboarding 时 Browserbase 调用恰好失败的用户,`browserbase_context_id` 是 **NULL**。
+- context_id 为 NULL → `manager._create` 不带 context → session 是 ephemeral → **登录态 persist 无处可去** → "下次免登录"对这部分用户**不成立**。
+
+**P0 修复:在每次进入 chat 链路时兜底 ensure。** 最干净的挂载点是 `worker.py:807` `_user_keys()` —— 它每次 chat run 都会读 `browserbase_context_id` 去签 JWT,在这里发现 NULL 就调一次 `ensure_browserbase_context`(web 进程内,持 master key,信任边界正确),保证签进 JWT 的 context_id 永远非空。这是 LiteLLM provisioning 同款 lazy-recovery 姿态。
+
+## 信任边界(不变)
+
+现状已正确,P0 不改拓扑:
+
+- **web 进程**(持 `BROWSERBASE_API_KEY`):`bb.contexts.create/delete` 管 Context 生命周期(创建/兜底/账号删除清理)。
+- **chat 进程**(不读 DB):只从 run JWT 的 `bbctx` claim 拿 `context_id`,`bb.sessions.create(context={id, persist})` 干活。
+- `BROWSERBASE_API_KEY` 不在 `FORBIDDEN_ENVS`(`trust_boundary.py`)是设计意图 —— browser tool 本就在 chat 跑。Context 里的真凭证(cookie)在 Browserbase 侧,不落我们任何进程。
+
+## 自愈回路(回答"确认自愈回路")
+
+持久登录的真相:**存得住 ≠ 一直有效**。cookie 过期(常见约 30 天)、改密码、server 端登出("登出所有设备")、token 撤销、反 bot 事件,都会让存的登录态作废(Browserbase 官方文档逐条列出,建议内建"检测已登出 → 重新认证")。所以自愈是必需件。分两种场景:
+
+1. **同步场景(用户在 chat 里)—— 天然自愈,已有**:登录态失效 → 下次 agent 用到该站 → 又命中登录墙 → 又 `request_takeover` → 用户当场重登。被动流自己就是自愈回路,无需额外检测。
+2. **proactive 场景(用户不在场)—— 缺口,P1 补**:agent 后台跑定时任务时撞到登录墙,没人当场登 → 任务**静默失败**。这才需要主动召回:检测到登录墙 → 出一张"X 需要重新登录"的卡(复用现有 card/proactive 通知链路)→ 用户有空时点开补登。
+
+**不能假设免 MFA**:deep research 明确否决了"Context 能记住 MFA 设备/免再 MFA"(`manual-mfa-with-contexts` 相关 claim 被 0-3 推翻)。失效后按完整重登处理,可能再过一次 MFA。
+
+## 用户体验
+
+被动流的 UX 主体**已经存在**,P0 不新增界面:
+
+- **召唤**:agent `request_takeover` → `BrowserHeader` 琥珀态 "Browser needs you" + reason(已有)。
+- **登录**:用户点开 → live view(`BrowserView`,iframe 嵌 Browserbase live view URL)→ 桌面鼠标直接操作 / 手机手势(已有)→ 输账号密码。
+- **信任文案(P0 可加一行)**:live view 上固定 "🔒 你的账号密码直接进网站,助手看不到,只保留登录状态" —— 这是真的(cookie 在 Browserbase,我们连密文都不碰)。
+- **保存**:无保存按钮,登完即 persist。用户登完点 "登录完成"(`card_execution.py` 已有此 option)即可。
+- **P1 召回卡**:proactive 场景失效时出 "重新登录 X" 卡,点击进同一 live view。
+
+设计原则:不向用户暴露 "Context/session" 概念;用户只做"在真实页面登录"这一件他本就会的事;"偶尔需要重登"做成产品常态预期,不是错误态。
+
+## 分阶段
+
+- **P0(让被动流对所有用户成立 —— 极小)**
+  1. **provisioning 兜底**:`worker.py:_user_keys` 发现 `browserbase_context_id` NULL → 调 `ensure_browserbase_context`(唯一硬改动)。
+  2. **端到端真跑验证**(见验证方式)。
+  3. (可选)live view 信任文案一行。
+  > 交付后即满足用户核心诉求:agent 打开网页 → 第一次请用户登 → 之后免登录,对所有用户成立。
+
+- **P1(可见性 + proactive 召回)**
+  4. `pai_browser_logins` 元数据表(`user_id`/`site_domain`/`status`/`last_verified_at`,**不含 cookie**)+ RLS(照 `023_pai_rls.sql`)。
+  5. 登录墙检测:agent open 后落到登录页(已知站配特征 / 通用启发式:出现 password 输入框、URL 含 `/login|/signin`)→ 发 `browser:login_required` 事件 → web 标对应站 `expired`。
+  6. proactive 场景失效 → 出召回卡。
+
+- **P2(加固)**
+  7. 反 bot:已知强防护站(Cloudflare/DataDome…)按需开 Browserbase residential proxy(`_create` 加 `proxies`)—— deep research 实证:机房 IP 访问强防护站会秒封,stealth 救不了,只有住宅代理管用。要算成本。
+  8. per-site Context 隔离(仅当单 Context 并发成瓶颈、或需要 per-site 撤销时):现状是 per-user 一个 Context 装所有站,撤销只能整删。
+
+## 不变量(本期不动)
+
+- 信任边界:web 建 Context、chat 用 context_id,master key 只在 web 视角的生命周期管理 + chat 的 session 驱动(`BROWSERBASE_API_KEY` 设计内可在 chat)。
+- 持久化机制:`persist:True`,cookie 在 Browserbase Context,不进我们 DB。
+- 用户手动登录能力:`BrowserView` + control gating(PR#139 / 触摸操控 plan)。
+- agent 撞墙话术:现有 `request_takeover` + prompt,不重写。
+- 不用 Stagehand:deep research 发现 Stagehand v3 的 `userDataDir`/`storageState` 持久化已失效;我们用 Browserbase SDK + Playwright over CDP,不受影响,继续别引入 Stagehand。
+
+## 风险 / 待验证 / 不过度承诺
+
+- **"下次永远不用登录"不能 100% 保证**:登录态会失效(见自愈节),失效后回到"撞墙→请登"。产品上把"偶尔重登"当常态。
+- **MFA 不能免**:失效后可能再过 MFA。
+- **反 bot**:机房 IP 访问强防护站会被封(P2 才解决);P0/P1 适用于无强防护的长尾站。
+- **ToS/合规**:浏览器代登录可能违反目标站 ToS(deep research:hiQ 的 CFAA 保护只覆盖公开数据,登录态代操作不在内)。**有 API/OAuth 的站(Composio 已覆盖 Gmail/Calendar 等)优先走 API,不走浏览器登录** —— 更稳更合规。
+- **agent 自主成功率**:deep research 第三方 benchmark 实测 web agent 端到端成功率约 30–60%(远低于厂商 demo 的 ~90%)。"丝滑帮用户办事"的真天花板在执行可靠性,不在登录 —— 产品上把 agent 浏览器操作定位成"提议 + 关键步骤人确认",不是全自动。
+- **加密**:context_id 明文存(同 `litellm_virtual_key`);若未来隐私加密引擎进 main,P1 元数据表可纳入。
+- **无本地 Browserbase E2E**:必须真跑验证。
+- **单 Context 并发**:per-user 一个 Context 是否允许多个 active session 并发(proactive 多任务并行)未验证 —— 列为 P2 per-site 隔离的触发条件。
+
+## 验证方式
+
+P0 端到端(本地 `make up` + dev 真 `BROWSERBASE_API_KEY`):
+1. 造一个 `browserbase_context_id` 为 NULL 的用户 → 发一条 chat → 确认 `worker._user_keys` 兜底建了 Context(`users` 表非空 + 日志 `browserbase context provisioned`)。
+2. 让 agent open 一个需登录站(如 gmail)→ 撞墙 → takeover → 在 live view 手动登录 → 关 session。
+3. 再让 agent open 同站 → 确认自动已登录(不再 takeover)。
+4. 信任边界:确认 chat 进程日志无 master key;context_id 经 JWT `bbctx` 透传。
+
+后端 `uv run ruff check && uv run ruff format && uv run mypy src && uv run pytest`;动前端则 `npm run type-check && npm test`。
+
+## 待拍板(P1)
+
+- proactive 失效召回的形态:出卡 / 推送 / 二者。
+- 是否要 `pai_browser_logins` 可见性(用户能看到"登过哪些站")—— 影响要不要给用户一个轻量列表。
+- per-site Context 隔离是否做(取决于单 Context 并发实测)。
+
+## 相关
+
+- 模块:`docs/modules/execution.mdx`(browser tool / control mode / BrowserView)。
+- 前序 plan:[手机端远端浏览器原生触摸操控](./2026-06-14-mobile-browser-touch-control)(同一套 live view + CDP input)。
+- 关键文件:`pinai-agents/src/pinai_agents/web/services/browserbase_provisioning.py`、`web/agent_core/worker.py:807`、`web/services/browser_proxy.py`、`chat/tools/browser/{manager,tools,routes,control_state}.py`、`web/auth/agent_jwt.py`、`chat/auth/run_jwt.py`、`db/migrations/033_users_browserbase_context.sql`。
+- 调研依据:两轮 deep research(① Browserbase Contexts 能力 + Chrome 登录态导入不可行(ABE/DBSC);② 生产可靠性 benchmark + ToS/CFAA + 凭证 vault 原则)。
