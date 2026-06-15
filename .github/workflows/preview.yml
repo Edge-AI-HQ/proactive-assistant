@@ -1,0 +1,81 @@
+name: PR Preview
+
+# 按需起一个临时 Fly app 预览某个 PR 的前端(指向共享 dev 后端)。
+# 触发:手动 / dev-pipeline agent 调 `gh workflow run preview.yml -f pr=<PR号>`。
+# app 名 = pinai-pr-<PR号>;1 台机 + 空闲缩零(fly.toml min_machines_running=0)。
+# 销毁在 preview-cleanup.yml(PR 关闭时)。
+#
+# Discovery note: workflow_dispatch 要能触发,本文件必须在默认分支(main)上。
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "PR number (→ app pinai-pr-<N> + 回贴该 PR)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 切到目标 PR 的代码(解耦 dispatch ref 与 PR)
+      - name: Checkout PR code
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr checkout ${{ inputs.pr }}
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # 用 dotenvx 解密 .env.dev 里的 VITE_*(build-time inline 进 SPA)
+      - name: Decrypt VITE_* build args
+        env:
+          DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
+        run: |
+          json=$(npx --yes @dotenvx/dotenvx get -f pinai-agents/.env.dev --format json)
+          python3 - "$json" <<'PY' >> "$GITHUB_ENV"
+          import json, sys
+          d = json.loads(sys.argv[1])
+          for k in ("VITE_PIN_API_URL", "VITE_SUPABASE_URL", "VITE_SUPABASE_PUBLISHABLE_KEY"):
+              print(f"{k}={d[k]}")
+          PY
+
+      - name: Create preview app if needed
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl apps create "pinai-pr-${{ inputs.pr }}" --org pin-ai 2>/dev/null || true
+
+      # build context = 仓库根(Dockerfile 要 packages/ + capacitor-plugins/);--ha=false 只起 1 台
+      - name: Deploy frontend preview
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl deploy . \
+            --config proactive-ai-frontend/fly.toml \
+            --dockerfile proactive-ai-frontend/Dockerfile \
+            --remote-only --ha=false \
+            --app "pinai-pr-${{ inputs.pr }}" \
+            --build-arg WORKDIR=proactive-ai-frontend \
+            --build-arg VITE_PIN_API_URL="$VITE_PIN_API_URL" \
+            --build-arg VITE_SUPABASE_URL="$VITE_SUPABASE_URL" \
+            --build-arg VITE_SUPABASE_PUBLISHABLE_KEY="$VITE_SUPABASE_PUBLISHABLE_KEY"
+
+      - name: Comment preview URL on PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          url="https://pinai-pr-${{ inputs.pr }}.fly.dev/"
+          gh pr comment "${{ inputs.pr }}" --repo "${{ github.repository }}" \
+            --body "🔗 **Frontend preview**: ${url} （指向 dev 后端;空闲自动停;PR 关闭后自动销毁）"
+          echo "preview: $url"
