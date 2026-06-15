@@ -86,9 +86,11 @@ export default function ZebraShell() {
 
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [convExpanded, setConvExpanded] = useState(false);
-  // Browser split (live view beside the chat) widens the conversation panel
-  // to full width, like focus mode. Driven up from ConversationView.
+  // Browser split (live view beside the chat) widens the chat-bearing panel to
+  // full width, like focus mode. Driven up from ConversationView — one flag per
+  // panel kind (main conversation + card chat slide-over).
   const [convBrowserSplit, setConvBrowserSplit] = useState(false);
+  const [chatBrowserSplit, setChatBrowserSplit] = useState(false);
   const [selectedCard, setSelectedCard] = useState<Intent | null>(null);
   const [approvePending, setApprovePending] = useState(false);
   const [activeChat, setActiveChat] = useState<{ card: IntentCard; bootstrap?: string } | null>(null);
@@ -551,7 +553,8 @@ export default function ZebraShell() {
             className="fixed top-4 right-4 bottom-4 z-50 rounded-3xl overflow-hidden"
             style={{
               width:
-                panel.kind === "conversation" && (convExpanded || convBrowserSplit)
+                (panel.kind === "conversation" && (convExpanded || convBrowserSplit)) ||
+                (panel.kind === "chat" && chatBrowserSplit)
                   ? "calc(100vw - 2rem)"
                   : `min(${panel.width}px, calc(100vw - 2rem))`,
               transition: "width 0.42s cubic-bezier(0.32, 0.72, 0, 1)",
@@ -583,6 +586,8 @@ export default function ZebraShell() {
                   cardActions.clearProcessing(activeChat.card.id);
                   void cardsState.refresh();
                 }}
+                enableBrowserSplit
+                onBrowserSplitChange={setChatBrowserSplit}
               />
             ) : panel.kind === "detail" && selectedCard ? (
               <ZebraCardDetailPanel
