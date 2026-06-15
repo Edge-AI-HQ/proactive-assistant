@@ -1334,7 +1334,7 @@ function HeartbeatToggle({
 export default function ConversationView({
   onBack,
   session,
-  kind = "proactive",
+  kind = "main",
   cardContext,
   bootstrap,
   title,

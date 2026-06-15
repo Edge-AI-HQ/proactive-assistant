@@ -184,9 +184,7 @@ _LONG_LEASE_SECONDS = 600
 
 # Scheduler task.kind → unified pai_agent_runs agent_kind (RC-3). Batch agents
 # get a ledger row alongside conversational agents so every agent run lives in
-# one table. Excluded: connector.init/sync (not agents — plan §299) and
-# proactive.tick (RC-1 routes it through the actor mailbox, where the worker
-# creates the run).
+# one table. Excluded: connector.init/sync (not agents — plan §299).
 _AGENT_RUN_KIND: dict[str, AgentKind] = {
     "auto.dreaming": "dream",
     "connector.evolve": "evolve",
@@ -197,15 +195,6 @@ _AGENT_RUN_KIND: dict[str, AgentKind] = {
     "generator.scheduled": "generator",
     "user.prompt": "dream",
 }
-
-# Producer kinds: scheduled tasks that only PRODUCE work (enqueue onto the actor
-# mailbox) instead of executing it inline. They take the lightweight dispatch
-# path (see dispatch / _dispatch_producer) — no per-run ledger row, no
-# pai_agent_runs mirror — because the real execution (the proactive agent) runs
-# in AgentRunWorker with its own pai_agent_runs row. Multi-instance dedup still
-# comes from tick_loop's SKIP LOCKED claim + next_run_at advance, so dropping the
-# insert_run UNIQUE guard here is safe.
-_PRODUCER_KINDS: frozenset[str] = frozenset({"proactive.tick"})
 
 
 class DefaultDispatcher:
@@ -270,12 +259,6 @@ class DefaultDispatcher:
                 "dispatch skipped: task=%s has no last_run_at",
                 task.id,
             )
-            return
-
-        # Producer kinds (proactive.tick) only enqueue onto the actor mailbox,
-        # so they skip the whole per-run ledger below — see _PRODUCER_KINDS.
-        if task.kind in _PRODUCER_KINDS:
-            await self._dispatch_producer(task, run_id)
             return
 
         # Idempotent run-row insert; race losers exit cleanly. Lease
@@ -417,39 +400,6 @@ class DefaultDispatcher:
                 task.id,
             )
 
-    async def _dispatch_producer(self, task: ScheduledTaskRow, run_id: str) -> None:
-        """Lightweight dispatch for producer kinds (see _PRODUCER_KINDS): run the
-        handler (which enqueues onto the actor mailbox) + flip the task's
-        recurring success/failure state for backoff + /api/tasks status. No
-        per-run ledger row, no pai_agent_runs mirror — the worker owns the real
-        run record. next_run_at was already advanced by tick_loop at claim time;
-        multi-instance dedup is tick_loop's SKIP LOCKED claim."""
-        try:
-            await self._handle_kind(task, run_id)
-        except Exception as e:
-            logger.exception(
-                "producer dispatch failed user=%d task=%s kind=%s",
-                task.user_id,
-                task.id,
-                task.kind,
-            )
-            backoff = backoff_seconds_for_attempt(task.attempts + 1)
-            async with service_tx(self._pool) as conn:
-                await record_failure_and_decide(
-                    conn,
-                    user_id=task.user_id,
-                    task_id=task.id,
-                    last_error=f"{type(e).__name__}: {e}"[:1000],
-                    retry_backoff_seconds=backoff,
-                )
-            return
-        async with service_tx(self._pool) as conn:
-            await record_recurring_success(
-                conn,
-                user_id=task.user_id,
-                task_id=task.id,
-            )
-
     async def _handle_kind(self, task: ScheduledTaskRow, run_id: str) -> None:
         kind = task.kind
         if kind == "auto.dreaming":
@@ -505,73 +455,6 @@ class DefaultDispatcher:
             from ..services import connector_ingest  # noqa: PLC0415
 
             await connector_ingest.run(self._pool, task, run_id)
-        elif kind == "proactive.tick":
-            # RC-1 (plan §十七): build the heartbeat content NOW (timeline window
-            # since the cursor) and post it as one source=heartbeat message onto
-            # the user's proactive session; the unified AgentRunWorker drains it.
-            # The cursor advances here (enqueue time) so a delayed drain never
-            # loses or repeats events. idempotency_key on run_id makes a
-            # scheduler retry a no-op (no duplicate heartbeat / double advance).
-            from ..agent_core.bus import notify_message  # noqa: PLC0415
-            from ..agent_core.mailbox import MailboxRepository  # noqa: PLC0415
-            from ..agent_core.sessions import SessionRepository  # noqa: PLC0415
-            from ..db.repositories.proactive import ProactiveRepository  # noqa: PLC0415
-            from ..db.repositories.profile import ProfileRepository  # noqa: PLC0415
-            from ..db.rls import user_scoped_tx  # noqa: PLC0415
-            from ..services.proactive_window import build_heartbeat_message  # noqa: PLC0415
-
-            # Runtime gate: proactive_enabled (pai_user_settings) is the source
-            # of truth for whether the heartbeat runs. claim_due_tasks filters
-            # only on task status, so a proactive.tick left 'active' while the
-            # user disabled proactive — flag flipped directly in the DB, or a
-            # legacy row predating _sync_proactive_schedule — would emit
-            # heartbeats forever (the runaway that grew a multi-GB checkpoint).
-            # Re-check here and self-heal: archive the task so the next tick
-            # stops claiming it, then skip this tick without enqueuing.
-            async with user_scoped_tx(self._pool, task.user_id) as conn:
-                proactive_enabled = (
-                    await ProfileRepository(task.user_id, conn).get_settings()
-                ).proactive_enabled
-                if not proactive_enabled:
-                    await conn.execute(
-                        "UPDATE pai_scheduled_tasks "
-                        "SET status='archived', next_run_at=NULL, updated_at=NOW() "
-                        "WHERE user_id=%s AND id=%s",
-                        (task.user_id, task.id),
-                    )
-                    logger.info(
-                        "proactive.tick gated: user=%d has proactive_enabled=false; "
-                        "archived stale task",
-                        task.user_id,
-                    )
-                    return
-
-            session_id = f"proactive-{task.user_id}"
-            window = await build_heartbeat_message(self._pool, task.user_id, session_id=session_id)
-            async with user_scoped_tx(self._pool, task.user_id) as conn:
-                await SessionRepository(task.user_id, conn).ensure_session(
-                    session_id=session_id, agent_kind="proactive"
-                )
-                enqueued = await MailboxRepository(task.user_id, conn).enqueue(
-                    session_id=session_id,
-                    source="heartbeat",
-                    content=window.text,
-                    meta={
-                        "windowStart": window.window_start.isoformat(),
-                        "windowEnd": window.window_end.isoformat(),
-                    },
-                    idempotency_key=f"tick-{run_id}",
-                )
-                # Advance the cursor in the SAME tx as the enqueue so a crash
-                # between the two can't replay or duplicate the window — they
-                # commit together or not at all. Only when we actually enqueued
-                # (idempotency_key dedupe returns None on a scheduler retry).
-                if enqueued is not None:
-                    await ProactiveRepository(task.user_id, conn).advance_last_tick_at(
-                        window.advance_to, thread_id=session_id
-                    )
-            if enqueued is not None:
-                await notify_message(self._pool, session_id)
         else:
             logger.warning("unknown task.kind=%s — no-op", kind)
 

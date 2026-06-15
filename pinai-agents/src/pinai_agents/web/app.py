@@ -49,13 +49,11 @@ from .routes.agent.generate import router as agent_generate_router
 from .routes.agent.memory import router as agent_memory_router
 from .routes.agent.pipeline import router as agent_pipeline_router
 from .routes.agent.preferences import router as agent_preferences_router
-from .routes.agent.proactive import router as agent_proactive_router
 from .routes.agent.profile import router as agent_profile_router
 from .routes.agent.raw import router as agent_raw_router
 from .routes.agent.sandbox_phantom import router as agent_sandbox_phantom_router
 from .routes.agent.signals import router as agent_signals_router
 from .routes.agent.skills import router as agent_skills_router
-from .routes.agent.timeline import router as agent_timeline_router
 from .routes.agent.world import router as agent_world_router
 from .routes.ui.account import router as ui_account_router
 from .routes.ui.agent_runs import router as ui_agent_runs_router
@@ -248,10 +246,8 @@ def create_app() -> FastAPI:
     app.include_router(agent_feedback_router)
     app.include_router(agent_evolution_router)
     app.include_router(agent_pipeline_router)
-    app.include_router(agent_proactive_router)
     app.include_router(agent_sandbox_phantom_router)
     app.include_router(agent_development_feedback_router)
-    app.include_router(agent_timeline_router)
 
     @app.get("/health")
     async def health() -> dict[str, object]:

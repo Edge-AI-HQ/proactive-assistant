@@ -3,10 +3,10 @@ import type { IntentCard } from "@pin-ai/core";
 import type { LiveSession } from "@/services/ambient/live-session";
 import type { ChatCard } from "@/components/chat/ChatDetailView";
 
-/** Single source of truth for the 7 top-level views. SideMenu's
+/** Single source of truth for the 6 top-level views. SideMenu's
  *  MENU_ITEMS must stay in this same order (locked by the menu test). */
 export type MenuId =
-  | "now" | "ambient" | "chat" | "connect" | "profile" | "account" | "proactive";
+  | "now" | "ambient" | "chat" | "connect" | "profile" | "account";
 
 export type SettingsSubPage =
   | "main" | "subscription" | "preferences" | "notifications" | "ambient";

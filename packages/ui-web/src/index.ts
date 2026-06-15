@@ -177,7 +177,6 @@ export { default as GoalsView } from "./profile/GoalsView";
 export { default as AutoDreamingSettings } from "./account/AutoDreamingSettings";
 export { default as AutoGenerateSettings } from "./account/AutoGenerateSettings";
 export { default as GenerationLanguageSettings } from "./account/GenerationLanguageSettings";
-export { default as ProactiveSettings } from "./account/ProactiveSettings";
 export { default as ScheduledTasksSettings } from "./account/ScheduledTasksSettings";
 export { PlanPaymentForm, PLANS, isPayValid, type PlanId, type PayMethod, type CardInfo } from "./account/PlanPaymentForm";
 export { default as PaywallDrawer } from "./account/PaywallDrawer";

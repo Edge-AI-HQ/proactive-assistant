@@ -11,7 +11,6 @@ import GenerationLanguageSettings from "@/components/account/GenerationLanguageS
 import AmbientSourceControlsPanel from "@/components/ambient/AmbientSourceControlsPanel";
 import AmbientTimelineSummaryStatusPanel from "@/components/ambient/AmbientTimelineSummaryStatusPanel";
 import VoiceIdentitySettings from "@/components/account/VoiceIdentitySettings";
-import ProactiveSettings from "@/components/account/ProactiveSettings";
 import { isNative } from "@/lib/platform";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
 import { useUserSettings } from "@pin-ai/state";
@@ -213,16 +212,6 @@ function PreferencesSubPage({ onBack }: { onBack: () => void }) {
         animate={{ opacity: 1 }}
         className="space-y-3"
       >
-        <section className="glass-card-strong p-4">
-          <div className="mb-3">
-            <h2 className="text-sm font-semibold text-foreground">Proactive</h2>
-            <Text variant="caption" className="block text-foreground/42 mt-1">
-              How often your Proactive AI checks in on you.
-            </Text>
-          </div>
-          <ProactiveSettings />
-        </section>
-
         <section className="glass-card-strong p-4">
           <div className="mb-3">
             <h2 className="text-sm font-semibold text-foreground">Dreaming</h2>

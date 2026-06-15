@@ -22,10 +22,6 @@ from ...db.repositories.profile import ProfileRepository
 from ...db.rls import user_scoped_tx
 from ...services.scheduled_generators import retime_user_cron_tasks
 
-# Reuse the UI settings route's schedule re-stamp (don't copy the impl). No
-# import cycle: ui.profile imports nothing from routes/agent/*.
-from ..ui.profile import _sync_auto_generate_schedule
-
 router = APIRouter(prefix="/api/agent/profile", tags=["agent-profile"])
 
 
@@ -130,16 +126,12 @@ async def agent_set_generation_language(
     pool=Depends(get_pool),
 ):
     """Flip the user's `generation_language` from chat (the user said
-    "use English from now on"). Language must take effect deterministically
-    — so this re-stamps the auto-generate schedule payload's
-    `output_language` via the exact same helper the UI settings route uses
-    (`_sync_auto_generate_schedule`), not by hoping the next planner reads
-    a preference row. Returns the updated settings row.
+    "use English from now on"). Persisted to pai_user_settings so the next
+    generate run reads it deterministically. Returns the updated settings row.
     """
     async with user_scoped_tx(pool, run.user_id) as conn:
         repo = ProfileRepository(run.user_id, conn)
         row = await repo.upsert_settings(
             generation_language=body.generation_language,
         )
-        await _sync_auto_generate_schedule(conn, user_id=run.user_id, settings=row)
     return asdict(row)

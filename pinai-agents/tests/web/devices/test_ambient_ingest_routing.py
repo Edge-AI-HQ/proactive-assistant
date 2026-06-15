@@ -1,7 +1,10 @@
-"""Ambient → timeline ingest path.
+"""Ambient → signals ingest routing + filter allowlist.
 
-Cover the new `timeline_only` policy mode: per-utterance ambient events
-go straight to pai_timeline_events with curation_status='pending'.
+Proactive sunset (plan 2026-06-14): ambient cloud data no longer feeds a
+proactive timeline. Only the voice transcript (utterance / session_summary)
+is surfaced to pai_personal_signals so main chat / memory can read the user's
+offline life; every other ambient/device kind is accepted but filtered (not
+persisted). The client keeps reporting all kinds; the server drops the rest.
 """
 
 from __future__ import annotations
@@ -17,7 +20,6 @@ import pytest_asyncio
 
 from pinai_agents.web.app import create_app
 from pinai_agents.web.auth import supabase_jwt as supabase_jwt_module
-from pinai_agents.web.db.repositories.timeline import TimelineRepository
 from pinai_agents.web.db.rls import user_scoped_tx
 
 HMAC_SECRET = "test-hmac-secret-must-be-long-enough!"
@@ -93,7 +95,6 @@ async def device(client, pool):
     assert r.status_code == 200, r.text
     device_token = r.json()["deviceToken"]
 
-    # Resolve user_id for downstream DB inspection.
     async with pool.connection() as conn:
         cur = await conn.execute(
             "SELECT id FROM users WHERE supabase_user_id = %s",
@@ -120,114 +121,85 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-# ── ambient.utterance ─────────────────────────────────────────────────
+async def _signal_rows(pool, user_id: int) -> list[dict]:
+    async with user_scoped_tx(pool, user_id) as conn, conn.cursor() as cur:
+        await cur.execute(
+            "SELECT kind, title, summary FROM pai_personal_signals WHERE user_id=%s",
+            (user_id,),
+        )
+        return list(await cur.fetchall())
+
+
+# ── utterance / session_summary → signals (allowlisted) ───────────────
 
 
 @pytest.mark.asyncio
-async def test_ambient_utterance_lands_in_timeline_as_pending(device, pool):
+async def test_ambient_utterance_lands_in_signals(device, pool):
     c, device_id, device_token, user_id = device
     occurred = _now() - timedelta(seconds=10)
-    end_at = occurred + timedelta(seconds=6)
-
     item = {
         "id": f"utt_{uuid.uuid4().hex[:12]}",
         "kind": "ambient.utterance",
         "title": "i need to call mom tomorrow",
-        "summary": "user utterance captured by ambient mic",
+        "summary": "i need to call mom tomorrow",
         "occurredAt": occurred.isoformat(),
         "salience": 0.0,
         "confidence": 0.95,
         "syncMode": "incremental",
         "source": f"device:{device_id}",
-        "payload": {
-            "text": "i need to call mom tomorrow",
-            "language": "en",
-            "asr_confidence": 0.95,
-            "endAt": end_at.isoformat(),
-            "session_id": "sess_abc",
-        },
+        "payload": {"text": "i need to call mom tomorrow", "language": "en"},
     }
-
     r = await c.post(
         "/api/devices/ingest",
         headers=_headers(device_id, device_token),
         json={"deviceId": device_id, "items": [item]},
     )
     assert r.status_code == 200, r.text
-    payload = r.json()
-    assert payload["inserted"] == 1
-    assert payload["results"][0]["status"] == "inserted"
+    assert r.json()["results"][0]["status"] == "inserted"
 
-    async with user_scoped_tx(pool, user_id) as conn:
-        # Include pending — the row is fresh and not yet curated.
-        rows = await TimelineRepository(user_id, conn).query(
-            window_start=occurred - timedelta(minutes=1),
-            window_end=occurred + timedelta(minutes=1),
-            include_pending=True,
-        )
-
+    rows = await _signal_rows(pool, user_id)
     assert len(rows) == 1
-    row = rows[0]
-    assert row.source == "ambient.utterance"
-    assert row.event_type == "utterance"
-    assert row.title == "i need to call mom tomorrow"
-    assert row.body == "i need to call mom tomorrow"
-    assert row.curation_status == "pending"
-    assert row.importance == pytest.approx(0.5)
-    assert row.end_at is not None
-    # Source ref reflects the device origin
-    assert row.source_ref["device_id"] == device_id
-    assert row.source_ref["sensor"] == "utterance"
+    assert rows[0]["kind"] == "ambient.utterance"
+    assert "call mom" in (rows[0]["summary"] or "")
 
 
 @pytest.mark.asyncio
-async def test_ambient_utterance_dedupe_idempotent(device, pool):
-    """Re-uploading the same utterance from a retry doesn't duplicate."""
+async def test_session_summary_lands_in_signals(device, pool):
+    """`session_summary` is the V3 voice-transcript primary path → signals."""
     c, device_id, device_token, user_id = device
     occurred = _now() - timedelta(seconds=10)
-    item_id = f"utt_{uuid.uuid4().hex[:12]}"
-
     item = {
-        "id": item_id,
-        "kind": "ambient.utterance",
-        "title": "duplicate test",
-        "summary": "x",
+        "id": f"sess_{uuid.uuid4().hex[:12]}",
+        "kind": "session_summary",
+        "title": "Morning standup",
+        "summary": "self: shipped the sunset PR. teammate: reviewing now.",
         "occurredAt": occurred.isoformat(),
         "salience": 0.0,
         "confidence": 0.9,
         "syncMode": "incremental",
         "source": f"device:{device_id}",
-        "dedupeKey": f"ambient:utterance:{device_id}:{item_id}",
-        "payload": {"text": "duplicate test", "language": "en"},
+        "payload": {"language": "en", "speaker_segments": [{"speaker": "self"}]},
     }
-
-    r1 = await c.post(
+    r = await c.post(
         "/api/devices/ingest",
         headers=_headers(device_id, device_token),
         json={"deviceId": device_id, "items": [item]},
     )
-    r2 = await c.post(
-        "/api/devices/ingest",
-        headers=_headers(device_id, device_token),
-        json={"deviceId": device_id, "items": [item]},
-    )
-    assert r1.status_code == 200
-    assert r2.status_code == 200
+    assert r.status_code == 200, r.text
+    assert r.json()["results"][0]["status"] == "inserted"
 
-    async with user_scoped_tx(pool, user_id) as conn:
-        rows = await TimelineRepository(user_id, conn).query(
-            window_start=occurred - timedelta(minutes=1),
-            window_end=occurred + timedelta(minutes=1),
-            include_pending=True,
-        )
+    rows = await _signal_rows(pool, user_id)
     assert len(rows) == 1
+    assert rows[0]["kind"] == "session_summary"
+
+
+# ── other ambient/device kinds → filtered (no cloud sink) ─────────────
 
 
 @pytest.mark.asyncio
-async def test_ambient_location_lands_as_state_change(device, pool):
+async def test_ambient_location_is_filtered(device, pool):
     c, device_id, device_token, user_id = device
     occurred = _now() - timedelta(seconds=30)
-
     item = {
         "id": f"loc_{uuid.uuid4().hex[:12]}",
         "kind": "ambient.location",
@@ -238,49 +210,56 @@ async def test_ambient_location_lands_as_state_change(device, pool):
         "confidence": 0.9,
         "syncMode": "incremental",
         "source": f"device:{device_id}",
-        "payload": {
-            "location": {
-                "lat": 37.7749,
-                "lng": -122.4194,
-                "place_name": "Office",
-                "accuracy_m": 10,
-            },
-        },
+        "payload": {"location": {"lat": 37.7749, "lng": -122.4194}},
     }
-
     r = await c.post(
         "/api/devices/ingest",
         headers=_headers(device_id, device_token),
         json={"deviceId": device_id, "items": [item]},
     )
     assert r.status_code == 200, r.text
-    assert r.json()["results"][0]["status"] == "inserted"
+    # Accepted but not persisted.
+    assert r.json()["results"][0]["status"] == "filtered"
+    assert await _signal_rows(pool, user_id) == []
 
-    async with user_scoped_tx(pool, user_id) as conn:
-        rows = await TimelineRepository(user_id, conn).query(
-            window_start=occurred - timedelta(minutes=1),
-            window_end=occurred + timedelta(minutes=1),
-            include_pending=True,
-        )
-    assert len(rows) == 1
-    row = rows[0]
-    assert row.source == "ambient.location"
-    assert row.event_type == "state_change"
-    assert row.location is not None
-    assert row.location["place_name"] == "Office"
+
+@pytest.mark.asyncio
+async def test_device_visit_is_filtered(device, pool):
+    """`device.*` is what the V3 client actually emits — also filtered."""
+    c, device_id, device_token, user_id = device
+    occurred = _now() - timedelta(seconds=30)
+    item = {
+        "id": f"vis_{uuid.uuid4().hex[:12]}",
+        "kind": "device.visit",
+        "title": "Visit: Cafe",
+        "summary": "30 min at Cafe",
+        "occurredAt": occurred.isoformat(),
+        "salience": 0.0,
+        "confidence": 0.9,
+        "syncMode": "incremental",
+        "source": f"device:{device_id}",
+        "payload": {"place_name": "Cafe"},
+    }
+    r = await c.post(
+        "/api/devices/ingest",
+        headers=_headers(device_id, device_token),
+        json={"deviceId": device_id, "items": [item]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["results"][0]["status"] == "filtered"
+    assert await _signal_rows(pool, user_id) == []
+
+
+# ── legacy V2 signal path unchanged ───────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_legacy_candidate_window_still_signal(device, pool):
     """`ambient.candidate_window` is the V2 aggregated-transcript path that
-    lands in pai_personal_signals. This migration is ADDITIVE: the timeline
-    sink is added alongside the signal/raw path rather than replacing it, so
-    the legacy kind is still accepted via signal_only (old builds keep
-    working) — NOT rejected. The V3 ambient frontend simply stops emitting
-    it; nothing on the backend removes the route."""
+    lands in pai_personal_signals. Unchanged by the sunset — old builds keep
+    working."""
     c, device_id, device_token, _user_id = device
     occurred = _now() - timedelta(seconds=30)
-
     item = {
         "id": f"cand_{uuid.uuid4().hex[:12]}",
         "kind": "ambient.candidate_window",
@@ -306,5 +285,4 @@ async def test_legacy_candidate_window_still_signal(device, pool):
         json={"deviceId": device_id, "items": [item]},
     )
     assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["results"][0]["status"] == "inserted"
+    assert r.json()["results"][0]["status"] == "inserted"

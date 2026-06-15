@@ -749,15 +749,14 @@ export default function AppLayout() {
     }
   };
 
-  // Legacy mock card chat (activeChat) and the proactive agent view both
-  // mount the full-screen ConversationView *inside* this layout's content
-  // area. Unlike the two real chats — portal sheets (MainChatOverlay /
-  // CardChatOverlay) that cover the whole layout — these surfaces don't hide
-  // the layout's own floating chrome. ConversationView already carries its
-  // own aurora background, header and back button, so the top-right menu bar
-  // and the bottom ASK PIN AI entry must step aside or they overlap that
-  // surface.
-  const inFullscreenChat = activeChat != null || activeView === "proactive";
+  // Legacy mock card chat (activeChat) mounts the full-screen ConversationView
+  // *inside* this layout's content area. Unlike the real chats — portal sheets
+  // (MainChatOverlay / CardChatOverlay) that cover the whole layout — it
+  // doesn't hide the layout's own floating chrome. ConversationView already
+  // carries its own aurora background, header and back button, so the top-right
+  // menu bar and the bottom ASK PIN AI entry must step aside or they overlap
+  // that surface.
+  const inFullscreenChat = activeChat != null;
 
   return (
     <CardStateProvider value={{ cardsState, cardActions }}>
@@ -781,7 +780,7 @@ export default function AppLayout() {
       <div className="relative z-10 flex flex-col h-full">
         {/* Top bar — AgentRunIndicator + Chat (MainChat) + DebugPanel (gear)
             + hamburger. Same composition as the old AppShell. Hidden while a
-            full-screen ConversationView (card execution / proactive) owns the
+            full-screen ConversationView (card execution) owns the
             content area — that surface carries its own header + back button, so
             this floating bar would otherwise overlap it (main chat avoids this
             by rendering as a portal overlay that covers the whole layout). */}
@@ -838,7 +837,6 @@ export default function AppLayout() {
           activeView={activeView}
           composio={composio}
           onCardChatBack={() => closeCardChat()}
-          onProactiveBack={() => navigateTo("now")}
           displayName={displayName}
           sphereCards={sphereCards}
           ambientOn={ambientOn}

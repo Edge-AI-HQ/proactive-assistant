@@ -126,12 +126,12 @@ export class AmbientSyncScheduler {
 
       console.info("[ambient] draining outbox", { count: records.length });
       const stats = await ingestBatch(records.map((row) => row.item));
-      // Three-bucket classification per the V3 5-state status contract
-      // (docs/plans/2026-05-12-v2-to-v3-migration.mdx D-3):
-      //   * settledIds:  inserted | duplicate | rejected | parse_failed
-      //                  → drop from queue. ``rejected`` and ``parse_failed``
-      //                  are permanent client-side bugs; retrying won't
-      //                  help, so we log and discard.
+      // Three-bucket classification per the V3 status contract:
+      //   * settledIds:  inserted | duplicate | filtered | rejected |
+      //                  parse_failed → drop from queue. ``rejected`` /
+      //                  ``parse_failed`` are permanent client-side bugs;
+      //                  ``filtered`` is a deferred-sink kind the server
+      //                  dropped on purpose; none are worth retrying.
       //   * retryableIds: retryable_failed (server-side transient blip),
       //                  or records the response never acknowledged.
       const { settledIds, retryableIds, rejectedDetails } =
@@ -242,6 +242,10 @@ function bucketRecords(records: OutboxRecord[], stats: IngestStats): BucketResul
     switch (result.status) {
       case "inserted":
       case "duplicate":
+      case "filtered":
+        // ``filtered``: server accepted but intentionally did not persist
+        // (a kind whose cloud sink is deferred). Drop from queue — retrying
+        // won't change the outcome.
         settledIds.push(row.id);
         break;
       case "rejected":

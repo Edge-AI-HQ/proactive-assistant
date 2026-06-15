@@ -1,0 +1,142 @@
+---
+title: "Proactive Agent Sunset(退役主动性,保留对话/记忆/卡片/连接/ambient 端上)"
+description: "把 PIN AI 从「主动 AI」收回到「被动 AI」:删掉心跳(proactive.tick)、proactive agent、notify_user、timeline 表与读写、自动出卡(generator.auto);保留 main chat、card chat、卡片生成(手动/对话/定时)、connector 连接+后台拉取、memory(crystallize+dreaming)、reminder、voice、ambient 端上采集与展示。ambient 上云数据从 timeline 改落 personal_signals,先用白名单只放行录音转写 utterance,其余 kind 接住但 filter。"
+---
+
+# Proactive Agent Sunset
+
+状态:已定稿(待实施)。本文是该 sunset 的设计 SSOT。退役 [Proactive Agent 实施计划](./2026-05-23-proactive-agent-impl) 描述的整套主动性链路,但**不**碰它依赖的统一 actor 内核([Agent Core](./2026-06-04-agentrun-control-plane))、connector、memory、generation。
+
+## 动机(为什么)
+
+产品方向调整:PIN AI 不再做「系统主动替你做事」(定时心跳看 timeline → 主动推通知、后台自动循环出卡、自动 dreaming、ambient 喂 proactive)。收回到一个**有记忆、能连第三方数据、能出卡、能录环境的对话助手**——所有动作都由用户主动触发。
+
+核心约束:**删除后其它功能不受影响**。所以这不是「砍一刀」,而是沿系统真实的读写边界精确切除 proactive 独占的部分,保留所有被 main chat / 卡片 / memory / ambient 端上共享的东西。
+
+## 范围决策(已拍板)
+
+| # | 维度 | 决策 |
+|---|---|---|
+| 1 | 卡片体系 | **保留**手动 / 对话(`generate_card` 工具) / 定时(`generator.scheduled`)出卡 + card chat + reward dashboard;**删**自动出卡 `generator.auto` |
+| 2 | 第三方数据 | **保留** connector OAuth 连接 + 后台拉取(`connector.init/sync/preview/evolve`)+ `pai_raw_*` / `pai_personal_signals`;main chat 数据查询能力不变 |
+| 3 | 定时与提醒 | **保留** scheduler 框架 + `scheduled-generator` + `reminder.card`;只删 `proactive.tick` 这一种 kind |
+| 4 | 记忆沉淀 | **保留** crystallize(对话结晶)+ dreaming(`auto.dreaming` 每日自动)+ memory/profile/skill 全套 |
+| 5 | ambient | 采集 / 转写 / 本地处理 / AmbientView 展示**全保留**;上云数据从 `pai_timeline_events` 改落 `pai_personal_signals` |
+| 5a | ambient 落点白名单 | 上云只放行**录音转写 utterance**(`ambient.utterance` + `session_summary`)真写 signals;其余 ambient/device kind(含 health)**接住但 filter 掉**,不落库;将来放开某类只改白名单 |
+
+## 关键技术事实(已核实)
+
+切除边界基于以下核实结论(都有代码证据,实施时仍以代码为准):
+
+1. **读取边界**:main chat agent 读 `pai_raw_*` / `pai_personal_signals` / `pai_world_signals`(`signals_recent` / `raw_list` / `world_recent` 工具),**不读 timeline**;proactive agent 读 `pai_timeline_events`(`timeline_*` 工具),**不读 raw/signals**。两者数据面不重叠。
+2. **timeline 唯一读取方 = proactive agent**。`grep -rl timeline pinai-agents/src/pinai_agents/chat/` 只命中 `tools/direct/timeline.py`、`tools/direct/__init__.py`(注册)、`agents/proactive.py`。generator 不读 timeline(`generation_context.py` 收集 `profile/memory/signals/world/raw`,无 timeline;generator agent 无 tools)。main chat / card execution 不读。**删 timeline 对卡片生成、main chat、card chat 零影响**。
+3. **ambient 与 timeline 物理隔离**。AmbientView / `useAmbientTimeline` / LiveSessionCard 读**端上本地 store**(`packages/core/src/domain/ambient/timeline-store.ts` = web `MemoryTimelineStore` / RN `SqliteTimelineStore`),零 cloud fetch。`pai_timeline_events` 是 migration 064 明确的「ADDITIVE layer dedicated to the proactive agent」,只供 proactive 读。删 timeline 表后 ambient 端上一行不受影响。
+4. **无外键指向待删表**。`grep -niE "references pai_(timeline_events|proactive_state|proactive_inbox)"` 在 migrations 下无命中 → 可直接 drop,无级联。
+5. **notify_user 独立**。`notify_user` 只注册到 `PROACTIVE_TOOLS`,后端只走 `/api/agent/proactive/emit` → `notify_proactive_message`;与 `notify_new_cards`(卡片完成)/ `notify_reminder`(提醒)/ `notify_turn_completed` 是独立通道,共用 APNs 基础设施。删 `notify_user` 不影响其余推送。
+6. **ambient 上云现状**:V3 `device.*` / `session_summary` 经 `POST /api/devices/ingest` → `device_ingest/policies.py` 的 `timeline_only` policy,**只**落 timeline、**只**喂 proactive。删 proactive 后这些数据上云无消费者 → 决策 5/5a 把落点改 signals + 白名单。
+
+## 删 / 改 / 留 总表
+
+**删**(proactive 独占)
+- 心跳调度:`pai_proactive_state` / `pai_proactive_inbox` 表、`web/db/repositories/proactive.py`、`web/services/proactive_window.py`、dispatcher `_dispatch_producer` + `proactive.tick` 分支 + `_PRODUCER_KINDS`、`profile.py:_sync_proactive_schedule`/`_ensure_proactive_schedule`、`scripts/seed_proactive_tick.py`、`pai_user_settings.proactive_enabled`/`proactive_interval_seconds`
+- proactive agent:`chat/agents/proactive.py`、`chat.py` 的 proactive 选择分支、`worker.py:_publish_proactive_ticks`/`_proactive_finalize`
+- notify_user:`chat/tools/direct/proactive.py`、`web/routes/agent/proactive.py`、`push_notifier.notify_proactive_message`/`_build_proactive_payload`
+- timeline 整套:`pai_timeline_events` 表、`web/db/repositories/timeline.py`、`web/routes/agent/timeline.py`、`chat/tools/direct/timeline.py`(+`__init__` 注册)、`pinai_sdk` timeline client
+- 自动出卡:`generator.auto` schedule sync(`profile.py:_sync_auto_generate_schedule`/`_ensure_auto_generate_schedule`)
+- 前端 proactive 界面:见 PR4
+
+**改**
+- `device_ingest/policies.py`:ambient/device kind 落点 timeline → signals + 白名单 filter(见下节)
+- `connector_ingest.py`:删 timeline dual-write 旁路(`_dual_write_timeline`/`_ingest_timeline`/`_tl_*` + 调用点)
+
+**留**(被其它功能共享,一行不动)
+- ambient 端上全套:`apps/mobile/modules/ambient-{audio,visit}`、`services/ambient/*`、`core/domain/ambient/*`(含 `timeline-store.ts`)、`core/sync/ambient-outbox.ts`、AmbientView / useAmbientTimeline / LiveSessionCard 等
+- `POST /api/devices/ingest`、device registry、`pai_personal_signals`、`pai_raw_*`、`GET /api/devices/{id}/timeline`(Connect 检查器,读 signals+health,不碰 timeline 表)
+- connector OAuth + ingest + raw/signals;scheduler 框架 + scheduled-generator + reminder;crystallize + dreaming + memory;卡片 + reward dashboard;voice diarize/identity;main chat;APNs + 其余推送通道;world_ingest
+
+## ambient → signals 落点迁移(PR2 详细设计)
+
+唯一「改写」而非「删除」的部分。当前 `device_ingest/policies.py` 里 21 个 V3 ambient/device kind 全是 `timeline_only`。
+
+**白名单(真写 `pai_personal_signals`,走 `signal_only` + `build_default_signal`)**
+- `ambient.utterance`、`session_summary`(V3 语音转写主路;转写全文在 `summary`,带 speaker 分段)
+
+**接住但 filter 掉(不落库)** —— 其余全部 V3 ambient/device kind:
+- `ambient.location/visit/activity/sound/audio_route/calendar_event/focus_state/device_state/health`
+- `device.location/visit/activity/motion_segment/sound_classification/sound_scene_run/calendar_event/focus_state/audio_route/device_state`
+
+**filter 实现**:给被 filter 的 kind 配一个新档(建议 `mode="filtered"` 或显式白名单 set),`POST /api/devices/ingest` 收到 → 计入 `filtered` 计数、返回 accepted、**不写库、前端不重试**。前端 ambient 上报逻辑一行不改(继续上报所有 kind)。**将来要放开某类(如 visit),只把 `device.visit` 从 filtered 改成 `signal_only` 一行**,管线已通。
+
+**health 的特殊处理**(决策:health 不进 signals)
+- `ambient.health`(legacy alias,timeline_only,无 raw):→ filter 掉。
+- `health.observation`(当前 `raw_only` + `build_timeline`):**保持 `raw_only`**,继续写 `pai_raw_device_health_observations`(健康结构化 system of record,`raw_list` / personal data snapshot 读它);只在 PR3 随 timeline 一起摘掉它的 `build_timeline` 投影。**不进 signals**。
+
+**注意**:filter 掉的 kind(visit/location/活动…)**只是不上云喂 AI**——端上本地 store 仍在,AmbientView 照常展示。即 ambient 端上体验完整,只是先不把这些喂给云端被动 AI。
+
+## 实施计划(5 PR)
+
+每个 PR 独立可验证、单独 merge;PR 内用 commit 分粒度。顺序:PR1/PR4 无依赖可先做;**PR2 必须在 PR3 之前**(先把 ambient 迁走 signals,再删 timeline,中间态不丢数据);PR5 最后(此时 timeline 已无人读无人写)。
+
+### PR1 — 后端·停主动性
+落地即停掉生产的心跳和自动出卡,是最安全的第一步。
+- dispatcher:删 `_dispatch_producer`、`proactive.tick` 分支、`_PRODUCER_KINDS`
+- 删整文件:`chat/agents/proactive.py`(连 `PROACTIVE_TOOLS`)、`chat/tools/direct/proactive.py`、`web/routes/agent/proactive.py`、`web/db/repositories/proactive.py`、`web/services/proactive_window.py`、`scripts/seed_proactive_tick.py`
+- `push_notifier`:删 `notify_proactive_message` + `_build_proactive_payload`
+- `chat.py`:删 `session_key.startswith("proactive-")` 的 agent 选择分支
+- `worker.py`:删 `_publish_proactive_ticks` / `_proactive_finalize`
+- `profile.py`:删 `_sync_proactive_schedule`/`_ensure_proactive_schedule` + `_sync_auto_generate_schedule`/`_ensure_auto_generate_schedule`(关 auto-generate)
+- 运行时:启动时归档存量 `proactive.tick` / `generator.auto` task(status='archived')
+- **验证**:`ruff check` + `ruff format` + `mypy src` + `pytest tests/web/scheduler tests/chat`;本地发消息走 main chat 正常、手动 Generate 正常、reminder 正常
+
+### PR2 — 后端·ambient 落点迁移(timeline → signals + 白名单)
+- `device_ingest/policies.py`:utterance 两个 kind → `signal_only`;其余 ambient/device kind → `filtered`;`ambient.health` → `filtered`;`health.observation` 保持 `raw_only`
+- `devices.py`:route 支持 `filtered` 档(返回 accepted-but-filtered 计数)
+- **不删 timeline 表**(留给 PR3);此 PR 后 ambient 不再写 timeline
+- **验证**:ambient 上报 utterance → 落 `pai_personal_signals` → main chat `signals_recent` 读得到;filter 掉的 kind 返回成功不落库;端上 AmbientView 照常;`pytest tests/web/.../test_device_ingest*`
+
+### PR3 — 后端·删 timeline 整套 + connector 旁路
+- 删整文件:`web/db/repositories/timeline.py`、`web/routes/agent/timeline.py`、`chat/tools/direct/timeline.py`(+`__init__` 的 `TIMELINE_TOOLS`)、`pinai_sdk` timeline client
+- `connector_ingest.py`:删 `_dual_write_timeline` / `_ingest_timeline` / `_tl_*` 投影器 + 两处调用点
+- `device_ingest/policies.py`:删 `build_default_timeline_event` / `_TL_*` / `timeline_event_type` / 各 policy 的 `build_timeline`;`health.observation` 摘 `build_timeline`(保留 `raw_only`)
+- 此时 timeline 无人读(PR1 删 proactive)无人写(PR2 迁走 ambient + 本 PR 摘 connector/device 旁路)
+- **验证**:connector init/sync 仍写 raw/signals;main chat / 卡片生成正常;`ruff`/`mypy`/`pytest`
+
+### PR4 — 前端·删 proactive 界面(ambient 不动)
+- proactive-ai-frontend:`useAppNavigation` 的 `"proactive"` MenuId、`ViewRouter` proactive 分支、`AppLayout` proactive 检查、`ProactiveSettings`
+- packages/core:`api/conversation.ts` 的 `fetchProactiveEnabled`/`setProactiveEnabled`、`conversationInit` 的 `kind:"proactive"`、`trigger:"tick"`
+- packages/state:user-settings 的 proactive 字段、conversation 的 proactive polling
+- packages/ui-web:`ProactiveSettings`、`ConversationView` 的 `kind="proactive"` 分支(**只删分支,留组件**——main chat 共用)
+- **ambient 组件全部保留**
+- **验证**:`npm run check:packages` + 三端 type-check/test;AmbientView 正常、main chat 正常
+
+### PR5 — DB 收尾(drop 表 + 字段)
+- 新 migration(编号取实施时最新 + 1,当前最新约 095):
+  - `DROP TABLE pai_timeline_events` / `pai_proactive_state` / `pai_proactive_inbox`
+  - `ALTER TABLE pai_user_settings DROP COLUMN proactive_enabled, DROP COLUMN proactive_interval_seconds`
+  - auto-generate 字段(`auto_generate` / `auto_generate_interval_minutes`):若一并退役则 drop,同步改 `web/services/personal_data_snapshot.py` 的读取(否则保留字段、仅不再触发)
+- 符合 expand-contract:PR1-4 已停止所有读写,本 PR 才物理 drop
+- **验证**:`make migrate` 成功 + 全栈 `make up` 起得来
+
+## 风险与注意
+
+- **顺序**:PR2 先于 PR3,否则先删 timeline 会让 ambient utterance 在迁到 signals 前丢落点。PR5 必须最后。
+- **ambient 数据量**:utterance 进 signals 后,`signals_recent` / generator context / memory evolve 都会读到。utterance 是 curated 转写(非高频原始采样),量可控;但要在 PR2 验证 signals 不被淹、卡片上下文质量不退。其余高频 kind 正因此先 filter。
+- **`ConversationView` 共用**:main chat 与 proactive 共用统一 actor 路径(RC-1),PR4 只删 `kind="proactive"` 分支,**不删组件**。
+- **dreaming 保留**:`auto.dreaming` 是独立 scheduled task(profile `auto_dreaming` 开关 + dispatcher `auto.dreaming` kind),不随 `proactive.tick` 删。
+- **存量数据**:`pai_timeline_events` 历史行随表 drop 丢弃(无保留价值,ambient 真源在端上 + 迁移后的 signals)。
+
+## 实施后状态(2026-06-14,PR #151)
+
+5 个 PR 已实施(分支 `feat/proactive-agent-sunset`)。实际范围比上面 PR4/PR5 文案**更保守**,以下偏差是有意的范围控制,记此为当前事实:
+
+- **前端 proactive 运行时保留为不可达死代码**:`fetchProactiveEnabled`/`setProactiveEnabled`(core)、state conversation proactive toggle、`ConversationView` 的 `kind="proactive"` 分支(ProactiveLanding / heartbeat toggle)**没删**——它们深耦合共用 ConversationView(1000+ 行 main/card/proactive 三态交织),彻底拆除风险高。已验证安全:删导航入口后前端无任何 UI 路径能构造 `kind="proactive"` session(所有挂载点显式传 `session`/`kind="main"`,唯一靠 proactive 默认值的 ViewRouter 已删),故是死代码而非"半删可触发"。`ConversationView` 默认 `kind` 已从 `"proactive"` 改 `"main"`。
+- **death-columns 保留**:`pai_user_settings.proactive_enabled`/`proactive_interval_seconds`/`auto_generate`/`auto_generate_interval_minutes` 列**没 drop**(PR5 只 drop `pai_timeline_events`/`pai_proactive_state`/`pai_proactive_inbox` 三表)——后端 settings repo/api model + `personal_data_snapshot` 仍读这些列,drop 需连带删上述前端运行时 + repo/api model(另一轮 expand-contract)。auto-generate 出卡已由 PR1(删 schedule sync)+ migration 归档存量彻底停止,列仅作死显示字段。
+- **utterance 白名单前瞻性**:`session_summary`/`ambient.utterance` 当前无 live producer 直达服务器(web 经 `ambient.candidate_window`=signal_only 上云、RN 经 `device.audio_transcript`→unknown_kind→signal fallback,两条本就落 signals、PR2 未碰);白名单是前瞻入口。PR2 真正改变的是 19 个 filtered kind 从 timeline 改为不落库。语音转写落 signals 功能不丢。
+
+**follow-up 清理(独立 PR,非本次范围)**:① 前端 proactive 运行时 + death-columns 的彻底 contract;② 可选把 `device.audio_transcript` 显式加白名单(RN 转写走 named allowlist + speaker preview,而非 unknown fallback);③ 前端 `AutoGenerateSettings` UI(PR1 已停出卡,UI 无效但保留)。
+
+## 相关 plan / 模块
+
+- 退役对象:[Proactive Agent 实施计划](./2026-05-23-proactive-agent-impl)(本 sunset 完成、模块文档吸收后可删该 plan + 其代码 5 处 `决策 N` 引用)
+- 不碰但相邻:[Agent Core 控制平面](./2026-06-04-agentrun-control-plane)(统一 actor 内核保留)、[Device Ingest Policy + Health Raw](./2026-04-30-device-ingest-policy-and-health-raw)(PR2 改 policy 落点)、[Ambient AI-visible Records SSOT](./2026-05-17-ambient-ai-visible-records-ssot)(ambient 端上链路保留)
+- 实施后需同步更新模块文档:`docs/modules/background-tasks.mdx`(删 `proactive.tick`)、`docs/modules/execution.mdx`(删 proactive agent 段)、`docs/modules/data-connectors.mdx`(device ingest 落点改 signals + 删 timeline 投影)、`docs/modules/memory.mdx`(若 timeline 有提及)

@@ -27,13 +27,12 @@ Design notes:
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import re
 import time
 from collections.abc import Awaitable, Callable
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from psycopg import AsyncConnection
@@ -48,7 +47,6 @@ from ..db.repositories.scheduled_tasks import (
     requeue_once,
     update_progress,
 )
-from ..db.repositories.timeline import IngestTimelineEvent, TimelineRepository
 from ..db.rls import user_scoped_tx
 from . import generic_ingest, ingest_runner, recipe_infer
 
@@ -147,16 +145,6 @@ def _cron_for_interval(hours: int) -> str:
     if h >= 24:
         return "0 6 * * *"
     return f"0 */{h} * * *"
-
-
-# Timeline dual-write: the SAME fetched items are also projected into
-# pai_timeline_events (alongside the raw tables) so the proactive agent sees
-# connector events on its timeline. _RawMapper is the shared raw-item parser
-# (dict → cleaned dict); _TimelineProjector turns a cleaned dict into an
-# IngestTimelineEvent. Registry populated after the projector defs below.
-_RawMapper = Callable[[dict[str, Any]], "dict[str, Any] | None"]
-_TimelineProjector = Callable[..., IngestTimelineEvent]
-_TIMELINE_MAPPERS: dict[str, tuple[_RawMapper, _TimelineProjector]] = {}
 
 
 def _clamp_limit(value: Any) -> int:
@@ -677,25 +665,13 @@ async def _run_init(
             },
         )
 
-    # Additive proactive feed (separate tx, best-effort — see helper).
-    tl_written = 0
-    for sub_tk, sub_items in items_by_sub.items():
-        tl_written += await _dual_write_timeline(
-            pool,
-            user_id,
-            sub_items,
-            toolkit=sub_tk,
-            cid=cid,
-        )
-
     logger.info(
         "[connector.init] done user=%d toolkit=%s fetched=%d inserted=%d "
-        "timeline=%d evolve_task=%s sync_schedule=sync.%s.%s",
+        "evolve_task=%s sync_schedule=sync.%s.%s",
         user_id,
         toolkit_raw,
         total_fetched,
         total_inserted,
-        tl_written,
         evolve_task_id,
         toolkit_raw,
         cid,
@@ -852,27 +828,13 @@ async def _run_sync(
             },
         )
 
-    # Additive proactive feed (separate tx, best-effort — see helper). Runs
-    # on every non-empty sync (idempotent upsert self-heals prior failures),
-    # independent of the inserted>0 gate the raw-evolve enqueue uses.
-    tl_written = 0
-    for sub_tk, sub_items in items_by_sub.items():
-        tl_written += await _dual_write_timeline(
-            pool,
-            user_id,
-            sub_items,
-            toolkit=sub_tk,
-            cid=cid,
-        )
-
     logger.info(
         "[connector.sync] done user=%d toolkit=%s fetched=%d inserted=%d "
-        "timeline=%d since=%s synced_through=%s",
+        "since=%s synced_through=%s",
         user_id,
         toolkit_raw,
         total_fetched,
         total_inserted,
-        tl_written,
         since_min.isoformat() if since_min is not None else None,
         started_at.isoformat(),
     )
@@ -2088,379 +2050,3 @@ def supported_toolkits() -> frozenset[str]:
     ingestable recipe (see ingest_runner.ingestable_toolkits()) for
     end-to-end ingest to actually run."""
     return frozenset(_UPSERTERS.keys())
-
-
-# ── Timeline projector helpers (shared by the _tl_* projectors) ──
-
-
-def _clip(value: Any, limit: int = 200) -> str:
-    """Title-safe one-liner: coerce to str, strip, ellipsize."""
-    s = str(value).strip() if value is not None else ""
-    return s if len(s) <= limit else s[: limit - 1] + "…"
-
-
-def _clean(meta: dict[str, Any]) -> dict[str, Any]:
-    """Drop None / empty values so metadata stays lean. Datetimes/dates
-    must already be ISO strings — the caller stringifies them."""
-    return {k: v for k, v in meta.items() if v not in (None, "", [], {})}
-
-
-def _source_ref(toolkit: str, cid: str, provider_id: str) -> dict[str, Any]:
-    """Provenance back to the Composio origin. `toolkit` is the canonical
-    Composio slug (e.g. 'googlecalendar'); `provider_id` is the source's
-    natural id (message_id / event_id / ...)."""
-    return {"toolkit": toolkit, "connected_account_id": cid, "provider_id": provider_id}
-
-
-def _iso(value: Any) -> str | None:
-    """ISO-stringify a datetime/date for JSON metadata; pass through other
-    falsy/str values unchanged-ish."""
-    if isinstance(value, (datetime, date)):
-        return value.isoformat()
-    return None
-
-
-# ─────────────────────────────────────────────────────────────────────
-# Timeline projection (dual-write): map the SAME fetched items into
-# pai_timeline_events alongside the raw tables, so the proactive agent
-# sees connector events on the timeline. Rule-based, no LLM; the raw
-# path + connector.evolve are untouched (see _run_init / _run_sync).
-# ─────────────────────────────────────────────────────────────────────
-
-
-def _tl_id(dedupe_key: str) -> str:
-    """Deterministic per-user event id derived from the dedupe_key so a
-    retry before the first commit lands on the same row. On a real
-    re-ingest the (user_id, dedupe_key) UNIQUE index is what UPSERTs;
-    this id is just the PK shape requirement."""
-    return "tle_" + hashlib.sha1(dedupe_key.encode()).hexdigest()[:16]
-
-
-async def _ingest_timeline(
-    conn: AsyncConnection[DictRow],
-    user_id: int,
-    items: list[dict[str, Any]],
-    *,
-    toolkit: str,
-    cid: str,
-) -> int:
-    """Map → project → upsert each fetched item into pai_timeline_events.
-    Returns the number of events written (insert or update; the timeline
-    dedupe_key UNIQUE absorbs re-fetches). Skips items the parser drops."""
-    entry = _TIMELINE_MAPPERS.get(toolkit)
-    if entry is None:
-        return 0
-    mapper, projector = entry
-    repo = TimelineRepository(user_id, conn)
-    written = 0
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        mapped = mapper(item)
-        if mapped is None:
-            continue
-        await repo.upsert_event(projector(mapped, toolkit=toolkit, cid=cid))
-        written += 1
-    return written
-
-
-async def _dual_write_timeline(
-    pool: AsyncConnectionPool,
-    user_id: int,
-    items: list[dict[str, Any]],
-    *,
-    toolkit: str,
-    cid: str,
-) -> int:
-    """Best-effort timeline dual-write in its OWN transaction, run AFTER the
-    raw ingest has committed. The raw tables + connector.evolve are the system
-    of record (main chat / evolve / memory read them); the timeline projection
-    is the additive proactive feed. A projection failure must never roll back
-    or block the raw path — so we isolate it here and swallow errors with a
-    log. Returns the number of events written (0 on skip/failure)."""
-    if not items or toolkit not in _TIMELINE_MAPPERS:
-        return 0
-    try:
-        async with user_scoped_tx(pool, user_id) as conn:
-            return await _ingest_timeline(
-                conn,
-                user_id,
-                items,
-                toolkit=toolkit,
-                cid=cid,
-            )
-    except Exception:
-        logger.exception(
-            "[timeline] dual-write failed user=%d toolkit=%s (raw ingest unaffected)",
-            user_id,
-            toolkit,
-        )
-        return 0
-
-
-def _tl_gmail(mapped: dict[str, Any], *, toolkit: str, cid: str) -> IngestTimelineEvent:
-    dedupe = f"gmail:msg:{mapped['message_id']}"
-    participants: list[dict[str, Any]] = []
-    if mapped["from_addr"]:
-        participants.append({"identifier": mapped["from_addr"], "role": "from"})
-    participants += [{"identifier": a, "role": "to"} for a in mapped["to_addrs"]]
-    participants += [{"identifier": a, "role": "cc"} for a in mapped["cc_addrs"]]
-    title = mapped["subject"] or mapped["snippet"]
-    if not title:
-        title = f"Email from {mapped['from_addr']}" if mapped["from_addr"] else "Email"
-    return IngestTimelineEvent(
-        id=_tl_id(dedupe),
-        occurred_at=mapped["occurred_at"],
-        source="gmail",
-        event_type="communication",
-        title=_clip(title),
-        body=mapped["body"] or mapped["snippet"],
-        participants=participants,
-        metadata=_clean(
-            {
-                "thread_id": mapped["thread_id"],
-                "label_ids": mapped["label_ids"],
-            }
-        ),
-        source_ref=_source_ref(toolkit, cid, mapped["message_id"]),
-        curation_status="pending",
-        dedupe_key=dedupe,
-    )
-
-
-def _tl_gcal(mapped: dict[str, Any], *, toolkit: str, cid: str) -> IngestTimelineEvent:
-    dedupe = f"gcal:evt:{mapped['calendar_id']}:{mapped['event_id']}"
-    loc = mapped["location"]
-    return IngestTimelineEvent(
-        id=_tl_id(dedupe),
-        occurred_at=mapped["occurred_at"],
-        end_at=mapped["end_at"],
-        source="gcal",
-        event_type="meeting",
-        title=_clip(mapped["title"] or "Calendar event"),
-        body=mapped["description"],
-        participants=[{"identifier": a} for a in mapped["attendees"]],
-        location={"place_name": loc} if isinstance(loc, str) and loc else None,
-        metadata=_clean(
-            {
-                "calendar_id": mapped["calendar_id"],
-                "status": mapped["status"],
-            }
-        ),
-        source_ref=_source_ref(toolkit, cid, mapped["event_id"]),
-        curation_status="pending",
-        dedupe_key=dedupe,
-    )
-
-
-def _tl_github(mapped: dict[str, Any], *, toolkit: str, cid: str) -> IngestTimelineEvent:
-    dedupe = f"github:issue:{mapped['issue_id']}"
-    kind = "PR" if mapped["is_pull_request"] else "Issue"
-    repo = mapped["repo_full_name"]
-    title = mapped["title"] or f"{kind} #{mapped['number']}"
-    return IngestTimelineEvent(
-        id=_tl_id(dedupe),
-        occurred_at=mapped["occurred_at"],
-        source="github",
-        event_type="commit",
-        title=_clip(f"{repo}: {title}" if repo else title),
-        body=mapped["body"] or mapped["body_preview"],
-        participants=[{"identifier": a} for a in mapped["assignees"]],
-        metadata=_clean(
-            {
-                "repo_full_name": repo,
-                "number": mapped["number"],
-                "state": mapped["state"],
-                "html_url": mapped["html_url"],
-                "is_pull_request": mapped["is_pull_request"],
-                "labels": mapped["labels"],
-            }
-        ),
-        source_ref=_source_ref(toolkit, cid, mapped["issue_id"]),
-        curation_status="pending",
-        dedupe_key=dedupe,
-    )
-
-
-def _tl_slack(mapped: dict[str, Any], *, toolkit: str, cid: str) -> IngestTimelineEvent:
-    dedupe = f"slack:msg:{mapped['channel_id']}:{mapped['ts']}"
-    channel = mapped["channel_name"] or mapped["channel_id"]
-    title = mapped["text"] or f"Message in #{channel}"
-    participants: list[dict[str, Any]] = []
-    if mapped["slack_user_id"] or mapped["slack_user_name"]:
-        participants.append(
-            _clean(
-                {
-                    "identifier": mapped["slack_user_id"],
-                    "name": mapped["slack_user_name"],
-                }
-            )
-        )
-    return IngestTimelineEvent(
-        id=_tl_id(dedupe),
-        occurred_at=mapped["occurred_at"],
-        source="slack",
-        event_type="communication",
-        title=_clip(title),
-        body=mapped["text"],
-        participants=participants,
-        metadata=_clean(
-            {
-                "channel_id": mapped["channel_id"],
-                "channel_name": mapped["channel_name"],
-                "thread_ts": mapped["thread_ts"],
-                "permalink": mapped["permalink"],
-            }
-        ),
-        source_ref=_source_ref(toolkit, cid, f"{mapped['channel_id']}:{mapped['ts']}"),
-        curation_status="pending",
-        dedupe_key=dedupe,
-    )
-
-
-def _tl_gdrive(mapped: dict[str, Any], *, toolkit: str, cid: str) -> IngestTimelineEvent:
-    dedupe = f"gdrive:file:{mapped['file_id']}"
-    return IngestTimelineEvent(
-        id=_tl_id(dedupe),
-        occurred_at=mapped["occurred_at"],
-        source="gdrive",
-        event_type="commit",
-        title=_clip(mapped["name"] or "(untitled file)"),
-        participants=[{"identifier": o} for o in mapped["owners"]],
-        metadata=_clean(
-            {
-                "mime_type": mapped["mime_type"],
-                "web_view_link": mapped["web_view_link"],
-                "size_bytes": mapped["size_bytes"],
-                "trashed": mapped["trashed"],
-            }
-        ),
-        source_ref=_source_ref(toolkit, cid, mapped["file_id"]),
-        curation_status="pending",
-        dedupe_key=dedupe,
-    )
-
-
-def _tl_calendly(mapped: dict[str, Any], *, toolkit: str, cid: str) -> IngestTimelineEvent:
-    dedupe = f"calendly:event:{mapped['event_uri']}"
-    loc = mapped["location_value"]
-    participants = [
-        _clean({"name": inv.get("name"), "identifier": inv.get("email")})
-        for inv in mapped["invitees"]
-    ]
-    return IngestTimelineEvent(
-        id=_tl_id(dedupe),
-        occurred_at=mapped["occurred_at"],
-        end_at=mapped["end_at"],
-        source="calendly",
-        event_type="meeting",
-        title=_clip(mapped["name"] or "Calendly event"),
-        participants=[p for p in participants if p],
-        location={"place_name": loc} if isinstance(loc, str) and loc else None,
-        metadata=_clean(
-            {
-                "status": mapped["status"],
-                "location_type": mapped["location_type"],
-                "meeting_url": mapped["meeting_url"],
-            }
-        ),
-        source_ref=_source_ref(toolkit, cid, mapped["event_uri"]),
-        curation_status="pending",
-        dedupe_key=dedupe,
-    )
-
-
-def _tl_linkedin(mapped: dict[str, Any], *, toolkit: str, cid: str) -> IngestTimelineEvent:
-    dedupe = f"linkedin:profile:{mapped['linkedin_id']}"
-    name = mapped["localized_name"] or " ".join(
-        s for s in (mapped["first_name"], mapped["last_name"]) if s
-    )
-    return IngestTimelineEvent(
-        id=_tl_id(dedupe),
-        occurred_at=mapped["occurred_at"],
-        source="linkedin",
-        event_type="state_change",
-        title=_clip(name or "LinkedIn profile"),
-        body=mapped["headline"],
-        metadata=_clean(
-            {
-                "first_name": mapped["first_name"],
-                "last_name": mapped["last_name"],
-                "vanity_name": mapped["vanity_name"],
-                "profile_url": mapped["profile_url"],
-                "picture_url": mapped["picture_url"],
-            }
-        ),
-        source_ref=_source_ref(toolkit, cid, mapped["linkedin_id"]),
-        curation_status="pending",
-        dedupe_key=dedupe,
-    )
-
-
-def _tl_stripe(mapped: dict[str, Any], *, toolkit: str, cid: str) -> IngestTimelineEvent:
-    dedupe = f"stripe:invoice:{mapped['invoice_id']}"
-    label = mapped["number"] or mapped["invoice_id"]
-    status = mapped["status"]
-    title = f"Invoice {label}" + (f" — {status}" if status else "")
-    return IngestTimelineEvent(
-        id=_tl_id(dedupe),
-        occurred_at=mapped["occurred_at"],
-        source="stripe",
-        event_type="transaction",
-        title=_clip(title),
-        metadata=_clean(
-            {
-                "status": status,
-                "amount_due": mapped["amount_due"],
-                "amount_paid": mapped["amount_paid"],
-                "amount_remaining": mapped["amount_remaining"],
-                "currency": mapped["currency"],
-                "customer_email": mapped["customer_email"],
-                "customer_name": mapped["customer_name"],
-                "hosted_invoice_url": mapped["hosted_invoice_url"],
-                "invoice_pdf": mapped["invoice_pdf"],
-                "due_date": _iso(mapped["due_date"]),
-            }
-        ),
-        source_ref=_source_ref(toolkit, cid, mapped["invoice_id"]),
-        curation_status="pending",
-        dedupe_key=dedupe,
-    )
-
-
-def _tl_youtube(mapped: dict[str, Any], *, toolkit: str, cid: str) -> IngestTimelineEvent:
-    dedupe = f"youtube:sub:{mapped['subscription_id']}"
-    channel = mapped["channel_title"] or mapped["channel_id"]
-    return IngestTimelineEvent(
-        id=_tl_id(dedupe),
-        occurred_at=mapped["occurred_at"],
-        source="youtube",
-        event_type="consumption",
-        title=_clip(f"Subscribed to {channel}"),
-        body=mapped["channel_description"],
-        metadata=_clean(
-            {
-                "channel_id": mapped["channel_id"],
-                "thumbnail_url": mapped["thumbnail_url"],
-                "subscribed_at": _iso(mapped["subscribed_at"]),
-            }
-        ),
-        source_ref=_source_ref(toolkit, cid, mapped["subscription_id"]),
-        curation_status="pending",
-        dedupe_key=dedupe,
-    )
-
-
-_TIMELINE_MAPPERS.update(
-    {
-        "gmail": (_map_gmail_message, _tl_gmail),
-        "googlecalendar": (_map_gcal_event, _tl_gcal),
-        "github": (_map_github_issue, _tl_github),
-        "slack": (_map_slack_message, _tl_slack),
-        "googledrive": (_map_gdrive_file, _tl_gdrive),
-        "calendly": (_map_calendly_event, _tl_calendly),
-        "linkedin": (_map_linkedin_profile, _tl_linkedin),
-        "stripe": (_map_stripe_invoice, _tl_stripe),
-        "youtube": (_map_youtube_subscription, _tl_youtube),
-    }
-)

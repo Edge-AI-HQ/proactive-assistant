@@ -37,7 +37,6 @@ from pydantic import BaseModel, Field
 
 from ...agents.card_execution import make_card_execution_agent
 from ...agents.main_chat import make_main_chat_agent
-from ...agents.proactive import make_proactive_agent
 from ...auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
 from ...harness.compaction import (
     compact_thread,
@@ -66,9 +65,6 @@ logger = logging.getLogger(__name__)
 
 # Card threads use this session_key prefix — see web/routes/ui/chat.py.
 _CARD_THREAD_PREFIX = "card-thread-"
-# Proactive sessions: proactive-<user_id> (RC-1 routes these to the proactive
-# agent on the same unified /agent/chat path).
-_PROACTIVE_PREFIX = "proactive-"
 
 
 def _is_sandbox_dead(exc: BaseException) -> bool:
@@ -352,8 +348,6 @@ async def _stream(
         agent = (
             make_card_execution_agent(virtual_key=virtual_key, backend=backend)
             if is_card_thread
-            else make_proactive_agent(virtual_key=virtual_key, backend=backend)
-            if req.session_key.startswith(_PROACTIVE_PREFIX)
             else make_main_chat_agent(virtual_key=virtual_key, backend=backend)
         )
     except Exception as e:

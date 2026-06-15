@@ -191,12 +191,12 @@ async def test_list_isolated_across_users(client, user_ids):
 
 
 @pytest.mark.asyncio
-async def test_set_generation_language_restamps_schedule(client, user_ids, pool):
-    """Flipping generation_language via the agent route must (a) persist
-    on pai_user_settings and (b) re-stamp the generator.auto schedule
-    payload's output_language — the deterministic language path."""
+async def test_set_generation_language_persists_to_settings(client, user_ids, pool):
+    """Flipping generation_language via the agent route persists on
+    pai_user_settings. The proactive sunset removed the auto-generate schedule
+    sync, so the language is read straight from settings by the next generate
+    run — nothing touches a scheduler row."""
     from pinai_agents.web.db.rls import user_scoped_tx
-    from pinai_agents.web.routes.ui.profile import _auto_generate_task_id
 
     user_a, _ = user_ids
     r = await client.post(
@@ -207,7 +207,6 @@ async def test_set_generation_language_restamps_schedule(client, user_ids, pool)
     assert r.status_code == 200, r.text
     assert r.json()["generation_language"] == "en"
 
-    # Flip to zh-Hans and assert both the setting and the schedule payload.
     r = await client.post(
         "/api/agent/profile/settings/generation-language",
         headers=_auth(user_a),
@@ -216,21 +215,11 @@ async def test_set_generation_language_restamps_schedule(client, user_ids, pool)
     assert r.status_code == 200, r.text
     assert r.json()["generation_language"] == "zh-Hans"
 
-    task_id = _auto_generate_task_id(user_a)
     async with user_scoped_tx(pool, user_a) as conn:
         cur = await conn.execute(
             "SELECT generation_language FROM pai_user_settings WHERE user_id = %s",
             (user_a,),
         )
         settings_row = await cur.fetchone()
-        cur = await conn.execute(
-            "SELECT kind, status, payload FROM pai_scheduled_tasks WHERE user_id = %s AND id = %s",
-            (user_a, task_id),
-        )
-        sched = await cur.fetchone()
 
     assert settings_row["generation_language"] == "zh-Hans"
-    assert sched is not None, "generator.auto schedule row should exist (auto_generate default ON)"
-    assert sched["kind"] == "generator.auto"
-    assert sched["status"] == "active"
-    assert sched["payload"]["output_language"] == "zh-Hans"

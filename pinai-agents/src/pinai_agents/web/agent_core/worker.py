@@ -368,10 +368,6 @@ class AgentRunWorker:
             # not guess dates — the at_local date-guess bug).
             prof = await ProfileRepository(user_id, conn).get_profile()
         timezone = (prof.timezone if prof and prof.timezone else None) or "UTC"
-        # proactive: surface each heartbeat input to the FE (it has no copy —
-        # the user's own messages it already shows). plan §十七.
-        if agent_kind == "proactive":
-            await self._publish_proactive_ticks(session_id, run_id, msgs)
         vk, bbctx = await self._user_keys(user_id)
         frames = self._chat.run(
             kind=agent_kind,
@@ -406,27 +402,21 @@ class AgentRunWorker:
             # input as role='heartbeat', same as the clean-finish path.
             await self._persist_user_turns(session_id, user_id, run_id, msg_ids, msgs)
             return
-        if agent_kind == "proactive":
-            await self._proactive_finalize(
-                session_id, user_id, run_id, msg_ids, msgs, recorder, error=stream_error
-            )
-        else:
-            await self._finalize_turn(
-                session_id,
-                user_id,
-                run_id,
-                msg_ids,
-                recorder,
-                regenerate=regenerate,
-                input_rows=_input_rows(msgs),
-                error=stream_error,
-            )
-            # A turn that ran this long has almost certainly outlived the
-            # user's attention — pull them back. Proactive has its own
-            # notify_user push; HITL resumes skip this (the user was just
-            # here approving). notify_turn_completed never raises.
-            if time.monotonic() - run_started >= _LONG_TURN_NOTIFY_S:
-                await notify_turn_completed(self._pool, user_id=user_id, session_key=session_id)
+        await self._finalize_turn(
+            session_id,
+            user_id,
+            run_id,
+            msg_ids,
+            recorder,
+            regenerate=regenerate,
+            input_rows=_input_rows(msgs),
+            error=stream_error,
+        )
+        # A turn that ran this long has almost certainly outlived the user's
+        # attention — pull them back. HITL resumes skip this (the user was just
+        # here approving). notify_turn_completed never raises.
+        if time.monotonic() - run_started >= _LONG_TURN_NOTIFY_S:
+            await notify_turn_completed(self._pool, user_id=user_id, session_key=session_id)
 
     async def _resume_run(
         self,
@@ -564,62 +554,6 @@ class AgentRunWorker:
                     trigger="tick" if role == "heartbeat" else "user",
                     client_msg_id=client_msg_id,
                 )
-
-    # ── proactive hooks (RC-1) ───────────────────────────────────────
-    async def _publish_proactive_ticks(
-        self, session_id: str, run_id: str, msgs: list[Message]
-    ) -> None:
-        """Publish a proactive:tick frame per heartbeat message so the FE
-        renders the heartbeat input (content was built at enqueue time; the
-        agent's reasoning/say follow as chat:* frames)."""
-        for m in msgs:
-            if m.source != "heartbeat":
-                continue
-            meta = m.meta or {}
-            await self._framebus.publish(
-                session_id,
-                {
-                    "type": "proactive:tick",
-                    "ts": int(time.time() * 1000),
-                    "traceId": run_id,
-                    "data": {
-                        "text": m.content or "",
-                        "windowStart": meta.get("windowStart"),
-                        "windowEnd": meta.get("windowEnd"),
-                    },
-                },
-            )
-
-    async def _proactive_finalize(
-        self,
-        session_id: str,
-        user_id: int,
-        run_id: str,
-        msg_ids: list[int],
-        msgs: list[Message],
-        recorder: ChatTurnRecorder,
-        *,
-        error: str | None = None,
-    ) -> None:
-        """proactive clean finish — persisted to pai_chat_messages like any turn
-        so a reconnect / Debug-toggle rebuilds the transcript from the table:
-        heartbeat inputs become role='heartbeat' rows and a pure-heartbeat
-        assistant turn is tagged trigger='tick'. The frontend marks
-        tick-triggered turns debug-only (hidden unless Debug is on); a tick turn
-        that reached out surfaces via its notify_user tool-call part (see
-        ChatMessagesRepository.get_page include_debug). A batch that also merged
-        a real user message is a normal visible turn (trigger='user')."""
-        all_heartbeat = all(m.source == "heartbeat" for m in msgs)
-        await self._finalize_turn(
-            session_id,
-            user_id,
-            run_id,
-            msg_ids,
-            recorder,
-            input_rows=_input_rows(msgs),
-            assistant_trigger="tick" if all_heartbeat else "user",
-            error=error,
-        )
 
     # ── terminal transitions ─────────────────────────────────────────
     async def _finalize_turn(

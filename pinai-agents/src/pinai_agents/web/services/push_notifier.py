@@ -335,49 +335,6 @@ async def _send_to_targets(
     return sent
 
 
-def _build_proactive_payload(*, message: str) -> PushPayload:
-    # Single banner per outreach; collapse so a burst shows the latest only.
-    # We always emit the push; the OS banner only shows when the app is NOT
-    # foregrounded. Foreground suppression is client-side: iOS willPresent is
-    # gated by capacitor.config `PushNotifications.presentationOptions: []`, so
-    # an in-app user sees nothing here (the message arrives on the live stream).
-    return PushPayload(
-        title="Pin AI",
-        body=message[:240],
-        deep_link="app://proactive",
-        collapse_key="proactive",
-    )
-
-
-async def notify_proactive_message(
-    pool,
-    *,
-    user_id: int,
-    message: str,
-) -> int:
-    """Dispatch a proactive notify_user message to the user's push-eligible
-    devices. Unlike notify_new_cards there is no opt-in gate — proactive
-    outreach is the product; the client decides whether to surface the
-    banner. Never raises into the caller (the emit route)."""
-    if not message.strip():
-        return 0
-    try:
-        async with user_scoped_tx(pool, user_id) as conn:
-            targets = await DevicesRepository(user_id, conn).find_push_targets()
-        if not targets:
-            logger.info("push.skip user=%s reason=no_targets kind=proactive", user_id)
-            return 0
-        return await _send_to_targets(
-            pool,
-            user_id=user_id,
-            targets=targets,
-            payload=_build_proactive_payload(message=message),
-        )
-    except Exception:
-        logger.exception("push.proactive_dispatch_failed user=%s", user_id)
-        return 0
-
-
 def _build_turn_completed_payload(*, session_key: str) -> PushPayload:
     # One banner per session — back-to-back long turns collapse to the
     # latest. NOTE: the client does NOT currently suppress foreground
@@ -401,9 +358,8 @@ async def notify_turn_completed(
 ) -> int:
     """Dispatch the "long task finished" notification. The agent worker calls
     this after finalizing a turn that ran past its long-turn threshold — by
-    then the user has almost certainly backgrounded the app. Same opt-in
-    exemption as notify_proactive_message (the user asked for this work);
-    never raises into finalize."""
+    then the user has almost certainly backgrounded the app. No opt-in gate
+    (the user asked for this work); never raises into finalize."""
     try:
         async with user_scoped_tx(pool, user_id) as conn:
             targets = await DevicesRepository(user_id, conn).find_push_targets()
@@ -440,8 +396,8 @@ async def notify_reminder(
     task_id: str,
 ) -> int:
     """用户显式创建的提醒 — 不受 notify_new_cards 开关约束(那是系统
-    广播的 opt-in;这是用户自己要求的打扰),与 notify_proactive_message
-    同一豁免逻辑。卡片已落库,push 失败不重试任务,所以永不上抛。"""
+    广播的 opt-in;这是用户自己要求的打扰)。卡片已落库,push 失败不重试
+    任务,所以永不上抛。"""
     if not message.strip():
         return 0
     try:

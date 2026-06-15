@@ -31,8 +31,10 @@ export interface PersonalSignalInput {
 }
 
 /**
- * Server-side per-item status. Five states; the outbox must handle each:
+ * Server-side per-item status. Six states; the outbox must handle each:
  *   inserted | duplicate     → success, drop from queue
+ *   filtered                 → accepted but intentionally not persisted
+ *                              (deferred-sink kind) → drop, don't retry
  *   rejected | parse_failed  → permanent failure, drop + log
  *   retryable_failed         → transient server-side failure, keep + retry
  * Contract owner: pinai-agents `/api/devices/ingest`.
@@ -40,6 +42,7 @@ export interface PersonalSignalInput {
 export type IngestItemStatus =
   | "inserted"
   | "duplicate"
+  | "filtered"
   | "rejected"
   | "parse_failed"
   | "retryable_failed";

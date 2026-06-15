@@ -52,13 +52,6 @@ from .scheduled_generators import (
 )
 from .signals import signals_get, signals_kinds, signals_recent
 from .tavily import tavily_extract, tavily_search
-from .timeline import (
-    timeline_future,
-    timeline_get,
-    timeline_history,
-    timeline_in_progress,
-    timeline_past,
-)
 from .world import world_recent, world_search
 
 ALL_TOOLS = [
@@ -148,25 +141,10 @@ SIDE_EFFECT_TOOL_NAMES = frozenset(
 # + card agents stay in sync.
 HITL_INTERRUPT_ON: dict[str, bool] = {name: True for name in SIDE_EFFECT_TOOL_NAMES}
 
-# Timeline read tools — the proactive agent's event source over
-# pai_timeline_events (migration 064). Deliberately NOT in ALL_TOOLS: the
-# main-chat agent keeps reading pai_personal_signals / pai_raw_* through
-# signals_* / raw_*. The proactive agent factory composes its own list
-# from the shared ALL_TOOLS members plus these (see chat/agents/proactive.py).
-TIMELINE_TOOLS = [
-    timeline_past,
-    timeline_future,
-    timeline_in_progress,
-    timeline_get,
-    timeline_history,
-]
-
-
 __all__ = [
     "ALL_TOOLS",
     "HITL_INTERRUPT_ON",
     "SIDE_EFFECT_TOOL_NAMES",
-    "TIMELINE_TOOLS",
     "browser_tool",
     "cards_recent",
     "composio_get_tool_schemas",
@@ -201,11 +179,6 @@ __all__ = [
     "signals_recent",
     "tavily_extract",
     "tavily_search",
-    "timeline_future",
-    "timeline_get",
-    "timeline_history",
-    "timeline_in_progress",
-    "timeline_past",
     "world_recent",
     "world_search",
 ]

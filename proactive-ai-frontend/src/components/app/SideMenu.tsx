@@ -1,7 +1,7 @@
 import { useCallback, useRef, type PointerEvent, type TouchEvent } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  X, Zap, ListChecks, Settings, Radio, Plug, Target, Sparkles,
+  X, Zap, ListChecks, Settings, Radio, Plug, Target,
 } from "lucide-react";
 import { isMainMenuSwipeRight, type TouchPoint } from "@/components/chat/main-chat-entry-gesture";
 import type { MenuId } from "@/components/app/useAppNavigation";
@@ -15,10 +15,6 @@ const MENU_ITEMS = [
   { id: "connect", label: "CONNECT", icon: Plug },
   { id: "profile", label: "PROFILE", icon: Target },
   { id: "account", label: "SETTING", icon: Settings },
-  // PROACTIVE view temporarily hidden from the nav. The view itself stays
-  // routable (useAppNavigation MenuId + ViewRouter branch are untouched);
-  // only its menu entry is removed. Restore by uncommenting this line.
-  // { id: "proactive", label: "PROACTIVE", icon: Sparkles },
 ] as const;
 
 interface SideMenuProps {

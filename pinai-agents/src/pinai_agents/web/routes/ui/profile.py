@@ -27,10 +27,6 @@ from ...services.litellm_provisioning import ensure_user_litellm_key
 from ...services.scheduled_generators import retime_user_cron_tasks
 
 
-def _auto_generate_task_id(user_id: int) -> str:
-    return f"gen.auto.{user_id}"
-
-
 def _auto_dreaming_task_id(user_id: int) -> str:
     return f"dream.auto.{user_id}"
 
@@ -45,13 +41,6 @@ _LOCALE_LANGUAGE_PREFIXES = {
     "de": "de",
     "pt": "pt",
 }
-
-# The proactive heartbeat is a per-user `proactive.tick` scheduler task. The
-# id == kind are fixed strings the dispatcher (scheduler/dispatcher.py) and the
-# seed script key off — don't rename. The interval is per-user
-# (pai_user_settings.proactive_interval_seconds, default 300); the sync/ensure
-# helpers below mirror it into the task's interval_seconds. Proactive thread only.
-_PROACTIVE_TASK_ID = "proactive.tick"
 
 
 def _initial_generation_language_from_locale(locale: str | None) -> str | None:
@@ -93,45 +82,6 @@ async def _profile_timezone(conn: AsyncConnection[DictRow], *, user_id: int) -> 
     return timezone
 
 
-async def _sync_auto_generate_schedule(
-    conn: AsyncConnection[DictRow],
-    *,
-    user_id: int,
-    settings: UserSettingsRow,
-) -> None:
-    """Reflect (auto_generate, interval, generation_language) into the
-    recurring `generator` schedule task. One row per user, idempotent.
-    Disabled = status='archived' so the tick loop skips it but we don't
-    lose the row's history. Called unconditionally on settings updates —
-    cheap, and it's the only place that owns the schedule's payload
-    (output_language) so any settings change must re-stamp it.
-    """
-    task_id = _auto_generate_task_id(user_id)
-    if settings.auto_generate:
-        interval_seconds = settings.auto_generate_interval_minutes * 60
-        await ScheduledTasksRepository(user_id, conn).upsert(
-            id=task_id,
-            kind="generator.auto",
-            trigger_kind="schedule",
-            interval_seconds=interval_seconds,
-            next_run_at=datetime.now(UTC) + timedelta(seconds=interval_seconds),
-            payload={
-                "cards_to_generate": 8,
-                "output_language": settings.generation_language,
-                "trigger": "auto",
-            },
-            status="active",
-        )
-    else:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                "UPDATE pai_scheduled_tasks "
-                "SET status='archived', next_run_at=NULL, updated_at=NOW() "
-                "WHERE user_id=%s AND id=%s",
-                (user_id, task_id),
-            )
-
-
 async def _sync_auto_dreaming_schedule(
     conn: AsyncConnection[DictRow],
     *,
@@ -167,46 +117,6 @@ async def _sync_auto_dreaming_schedule(
                 "WHERE user_id=%s AND id=%s",
                 (user_id, task_id),
             )
-
-
-async def _ensure_auto_generate_schedule(
-    conn: AsyncConnection[DictRow],
-    *,
-    user_id: int,
-    settings: UserSettingsRow,
-) -> None:
-    """Read-path counterpart to `_sync_auto_generate_schedule`.
-
-    It acts when the task row is missing or stale/archived for an
-    enabled user. Used on GET so brand-new users and previously failed
-    schedules actually have an active task, without bumping
-    `next_run_at` on every page refresh for already-correct rows.
-    """
-    if not settings.auto_generate:
-        return
-    task_id = _auto_generate_task_id(user_id)
-    interval_seconds = settings.auto_generate_interval_minutes * 60
-    async with conn.cursor() as cur:
-        await cur.execute(
-            """
-            SELECT kind, trigger_kind, status, interval_seconds, payload
-            FROM pai_scheduled_tasks
-            WHERE user_id=%s AND id=%s
-            """,
-            (user_id, task_id),
-        )
-        row = await cur.fetchone()
-    if (
-        row is not None
-        and row["kind"] == "generator.auto"
-        and row["trigger_kind"] == "schedule"
-        and row["status"] == "active"
-        and row["interval_seconds"] == interval_seconds
-        and (row["payload"] or {}).get("output_language") == settings.generation_language
-        and (row["payload"] or {}).get("cards_to_generate") == 8
-    ):
-        return
-    await _sync_auto_generate_schedule(conn, user_id=user_id, settings=settings)
 
 
 async def _ensure_auto_dreaming_schedule(
@@ -247,93 +157,13 @@ async def _ensure_auto_dreaming_schedule(
     await _sync_auto_dreaming_schedule(conn, user_id=user_id, settings=settings)
 
 
-async def _sync_proactive_schedule(
-    conn: AsyncConnection[DictRow],
-    *,
-    pool,
-    user: User,
-    settings: UserSettingsRow,
-) -> None:
-    """Reflect proactive_enabled into the per-user `proactive.tick` heartbeat
-    task. Mirrors _sync_auto_generate_schedule. Enabling first ensures the user
-    has a LiteLLM key — the heartbeat runs the proactive agent, which needs it.
-    Disabled = archived so the tick loop skips it without losing the row."""
-    if settings.proactive_enabled:
-        if not user.litellm_virtual_key:
-            await ensure_user_litellm_key(pool, user)
-        await ScheduledTasksRepository(user.id, conn).upsert(
-            id=_PROACTIVE_TASK_ID,
-            kind=_PROACTIVE_TASK_ID,
-            trigger_kind="schedule",
-            interval_seconds=settings.proactive_interval_seconds,
-            next_run_at=datetime.now(UTC),
-            name="Proactive agent heartbeat",
-            status="active",
-        )
-    else:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                "UPDATE pai_scheduled_tasks "
-                "SET status='archived', next_run_at=NULL, updated_at=NOW() "
-                "WHERE user_id=%s AND id=%s",
-                (user.id, _PROACTIVE_TASK_ID),
-            )
-
-
-async def _ensure_proactive_schedule(
-    conn: AsyncConnection[DictRow],
-    *,
-    pool,
-    user: User,
-    settings: UserSettingsRow,
-) -> None:
-    """Read-path repair for the proactive heartbeat, both directions:
-    * enabled but the tick row is missing/stale/archived (e.g. after a DB
-      reset) → re-sync so the heartbeat runs.
-    * disabled but the tick row is still active (flag flipped directly in the
-      DB, or a legacy row predating the settings sync) → archive it so the
-      heartbeat actually stops. This mirrors the dispatcher's runtime gate
-      one layer earlier, on a settings read instead of the next tick.
-    Mirrors _ensure_auto_generate_schedule — already-correct rows return early
-    so a settings read doesn't bump next_run_at or re-touch the LiteLLM key."""
-    async with conn.cursor() as cur:
-        await cur.execute(
-            """
-            SELECT kind, trigger_kind, status, interval_seconds
-            FROM pai_scheduled_tasks
-            WHERE user_id=%s AND id=%s
-            """,
-            (user.id, _PROACTIVE_TASK_ID),
-        )
-        row = await cur.fetchone()
-    if not settings.proactive_enabled:
-        # Disabled: the only drift worth fixing is a tick row still active.
-        # Missing / already-archived rows need nothing (return early — no
-        # redundant write). _sync archives when proactive_enabled is false.
-        if row is not None and row["status"] != "archived":
-            await _sync_proactive_schedule(conn, pool=pool, user=user, settings=settings)
-        return
-    if (
-        row is not None
-        and row["kind"] == _PROACTIVE_TASK_ID
-        and row["trigger_kind"] == "schedule"
-        and row["status"] == "active"
-        and row["interval_seconds"] == settings.proactive_interval_seconds
-    ):
-        return
-    await _sync_proactive_schedule(conn, pool=pool, user=user, settings=settings)
-
-
 async def _ensure_settings_schedules(
     conn: AsyncConnection[DictRow],
     *,
-    pool,
-    user: User,
+    user_id: int,
     settings: UserSettingsRow,
 ) -> None:
-    await _ensure_auto_generate_schedule(conn, user_id=user.id, settings=settings)
-    await _ensure_auto_dreaming_schedule(conn, user_id=user.id, settings=settings)
-    await _ensure_proactive_schedule(conn, pool=pool, user=user, settings=settings)
+    await _ensure_auto_dreaming_schedule(conn, user_id=user_id, settings=settings)
 
 
 def _settings_response(row: UserSettingsRow) -> SettingsResponse:
@@ -440,7 +270,7 @@ async def get_profile_snapshot(
         settings = await repo.get_settings(
             initial_generation_language=_initial_generation_language_from_locale(locale_hint),
         )
-        await _ensure_settings_schedules(conn, pool=pool, user=user, settings=settings)
+        await _ensure_settings_schedules(conn, user_id=user.id, settings=settings)
     return ProfileResponse(
         profile=asdict(profile) if profile else None,
         goals=[asdict(g) for g in goals],
@@ -525,7 +355,7 @@ async def get_settings(
                 x_pin_client_locale,
             ),
         )
-        await _ensure_settings_schedules(conn, pool=pool, user=user, settings=s)
+        await _ensure_settings_schedules(conn, user_id=user.id, settings=s)
     return _settings_response(s)
 
 
@@ -536,10 +366,6 @@ async def update_settings(
     pool=Depends(get_pool),
 ):
     """Partial update — only fields present in the body change.
-
-    `_sync_auto_generate_schedule` runs unconditionally because changing
-    `generation_language` alone must re-stamp the schedule payload's
-    `output_language` field. The sync is one upsert/update either way.
 
     ``ambient_sources`` is a per-key patch (merged with existing JSONB),
     not a full replacement — set a key to ``null`` to remove it. Server
@@ -588,7 +414,5 @@ async def update_settings(
             ),
             onboarding_completed_at=(datetime.now(UTC) if body.onboarding_completed else None),
         )
-        await _sync_auto_generate_schedule(conn, user_id=user.id, settings=row)
         await _sync_auto_dreaming_schedule(conn, user_id=user.id, settings=row)
-        await _sync_proactive_schedule(conn, pool=pool, user=user, settings=row)
     return _settings_response(row)

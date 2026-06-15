@@ -1,14 +1,11 @@
-"""Diarized speaker attribution helpers for ambient timeline events.
+"""Diarized speaker attribution helpers for ambient transcript signals.
 
-The end-side capture pipeline stores per-utterance diarization in each
-`ambient.utterance` event's metadata (`self_text` / `speaker_segments`).
-These helpers turn that metadata into a self/other preview using the same
-`self: "..."` labels the live UI renders. Shared by:
-
-  * the agent timeline read path (`agent/timeline.py`) — per-event
-    `selfText` / `speakerText` preview, since the list view drops `metadata`;
-  * the proactive heartbeat (`proactive_loop.py`) — inline speaker
-    attribution in the "new since last check" list.
+The end-side capture pipeline stores per-utterance diarization in each ambient
+transcript event's metadata (`self_text` / `speaker_segments`). These helpers
+turn that metadata into a self/other preview using the same `self: "..."`
+labels the live UI renders. Consumed by the agent signals read path
+(`routes/agent/signals.py`) to attach a per-signal `selfText` / `speakerText`
+preview, since the list view drops the raw `metadata`.
 
 Pure functions, no IO — safe to import from both routes and services.
 """

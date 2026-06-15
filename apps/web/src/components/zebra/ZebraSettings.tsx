@@ -9,7 +9,6 @@ import {
   AutoDreamingSettings,
   AutoGenerateSettings,
   GenerationLanguageSettings,
-  ProactiveSettings,
   ScheduledTasksSettings,
   SubPageHeader,
   SubscriptionPanel,
@@ -77,7 +76,7 @@ export function ZebraSetting() {
     {
       icon: SlidersHorizontal,
       title: "Preferences",
-      subtitle: "Generation, language, proactive, scheduled tasks",
+      subtitle: "Generation, language, scheduled tasks",
       to: "/preferences",
     },
   ];
@@ -212,13 +211,12 @@ export function ZebraPreferences() {
     <SettingsColumn>
       <SubPageHeader
         title="Preferences"
-        subtitle="Generation · Language · Proactive · Scheduled"
+        subtitle="Generation · Language · Scheduled"
         onBack={() => navigate("/setting")}
       />
       <div className="flex flex-col gap-4">
         <AutoGenerateSettings />
         <GenerationLanguageSettings />
-        <ProactiveSettings />
         <ScheduledTasksSettings />
         <AutoDreamingSettings />
       </div>
