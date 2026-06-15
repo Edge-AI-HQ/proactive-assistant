@@ -30,7 +30,6 @@ from ..tools.code_mode.sandbox import create_oneshot_sandbox, delete_sandbox_now
 from .prompts import CODE_MODE_GUIDANCE, GROUNDING_POLICY, SANDBOX_PREAMBLE
 
 logger = logging.getLogger(__name__)
-_DEFAULT_EVOLVE_MODEL = "claude-sonnet-4-6"
 
 
 # Order: identity → trigger → goal → SANDBOX → CODE_MODE → GROUNDING →
@@ -128,7 +127,12 @@ async def run_evolve(
         scope_label=f"evolve:{connector}",
     )
     try:
-        model_name = model or os.environ.get("CONNECTOR_EVOLVE_MODEL") or _DEFAULT_EVOLVE_MODEL
+        # No hardcoded default — fall through to make_chat_model, which uses
+        # settings.default_model (the DEFAULT_MODEL env: glm-5.1 on dev,
+        # claude-sonnet-4-6 on prod), same as every other agent. Keep
+        # CONNECTOR_EVOLVE_MODEL as an optional per-env override to pin a
+        # specific model for the distillation task.
+        model_name = model or os.environ.get("CONNECTOR_EVOLVE_MODEL")
         raw_sources_hint = _raw_sources_hint(connector, raw_sources)
         agent = build_agent(
             model=make_chat_model(
