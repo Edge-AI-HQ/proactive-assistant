@@ -469,7 +469,7 @@ rn: install ensure-env-pinai-agents ## Run Expo RN on your iPhone vs this worktr
 			TARGET="http://127.0.0.1:$$PORT"; \
 			echo "→ RN (simulator) vs this worktree's backend ($$TARGET)"; \
 		else \
-			LAN_IP=$$(for i in $$(ifconfig -lu 2>/dev/null); do ipconfig getifaddr $$i 2>/dev/null; done | grep -v '^169\.254\.' | head -1); \
+			LAN_IP=$$(for i in $$(ifconfig -lu 2>/dev/null); do ipconfig getifaddr $$i 2>/dev/null || true; done | grep -v '^169\.254\.' | head -1); \
 			[ -z "$$LAN_IP" ] && { echo "no usable LAN IP(en0/Wi-Fi 无 IPv4;169.254.* link-local 不算)— 连 Wi-Fi(手机与 Mac 同网)后重试,或用 DEV=1(fly dev)/ PROD=1 / SIM=1(模拟器)"; exit 1; }; \
 			TARGET="http://$$LAN_IP:$$PORT"; \
 			echo "→ RN (iPhone) vs this worktree's backend ($$TARGET, 手机需与 Mac 同 WiFi)"; \

@@ -17,6 +17,7 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import {
+  basketToLovableCategory,
   cardActionFeedbackBody,
   confirmBootstrap,
   deriveCardUiStatus,
@@ -192,13 +193,10 @@ export default function NowScreen({
   const visible = cards.filter(
     (e) => !isHiddenCardOutcome(e.latestOutcome) && !hidden.has(e.card.id),
   );
-  // web basketToLovableCategory 同构：wealth→finance、family→life。
-  const toCategory = (basket: string) =>
-    basket === "wealth" ? "finance" : basket === "family" ? "life" : basket;
   const sphereItems: SphereItem[] = visible.map((e) => ({
     id: e.card.id,
     title: e.card.title,
-    category: toCategory(e.card.goalBasket),
+    category: basketToLovableCategory(e.card.goalBasket),
     // web AppLayout 同一推导函数（core 共享）：engagement gate + run 状态。
     status: deriveCardUiStatus({
       runStatus: e.runStatus,

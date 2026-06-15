@@ -1,29 +1,38 @@
 /**
  * Assistant 回复下的操作行——web 的 复制/👍/👎/🔄 对应物。copy 走
  * expo-clipboard；regenerate 只在最后一条 assistant 上出现（runtime
- * regenerateLast 语义）；thumbs 触觉反馈 + 高亮（消息级 feedback 上报
- * 端点接入列 README 清单）。
+ * regenerateLast 语义）；thumbs 走 core buildAssistantMessageFeedbackBody →
+ * best-effort POST /feedback（与 web ConversationView 同源，清空 toggle 不发事件）。
  */
 import { useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { Copy, RotateCcw, ThumbsDown, ThumbsUp } from "lucide-react-native";
+import { buildAssistantMessageFeedbackBody, proxyPost } from "@pin-ai/core";
 
 export default function MessageActions({
   text,
+  messageId,
+  channel,
   canRegenerate,
   onRegenerate,
 }: {
   text: string;
+  messageId: string;
+  channel: string;
   canRegenerate: boolean;
   onRegenerate: () => void;
 }) {
   const [voted, setVoted] = useState<"up" | "down" | null>(null);
 
   const vote = (v: "up" | "down") => {
-    setVoted((prev) => (prev === v ? null : v));
+    const effective = voted === v ? null : v;
+    setVoted(effective);
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    // clearing the toggle (effective=null) yields no event — body is null.
+    const body = buildAssistantMessageFeedbackBody(messageId, effective, channel);
+    if (body) void proxyPost("/feedback", body).catch(() => {});
   };
 
   return (

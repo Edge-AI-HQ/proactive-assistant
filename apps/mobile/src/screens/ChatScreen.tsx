@@ -22,6 +22,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import {
   conversationInit,
+  feedbackChannelForSession,
   partsHaveNotifyUser,
   type ConversationContentPart,
   type ConversationEntry,
@@ -62,11 +63,13 @@ function Part({
 const Entry = memo(function Entry({
   entry,
   isLastAssistant,
+  channel,
   onRetry,
   onRegenerate,
 }: {
   entry: ConversationEntry;
   isLastAssistant: boolean;
+  channel: string;
   onRetry: (id: string, text: string) => void;
   onRegenerate: () => void;
 }) {
@@ -108,6 +111,8 @@ const Entry = memo(function Entry({
         {!entry.running && fullText ? (
           <MessageActions
             text={fullText}
+            messageId={entry.id}
+            channel={channel}
             canRegenerate={isLastAssistant}
             onRegenerate={onRegenerate}
           />
@@ -249,6 +254,8 @@ function Conversation({
     [transcript],
   );
 
+  const channel = feedbackChannelForSession(sessionKey);
+
   const send = useCallback(() => {
     const text = draft.trim();
     if (!text || busy) return;
@@ -290,6 +297,7 @@ function Conversation({
               item.kind === "assistant"
               && index === visible.length - 1
             }
+            channel={channel}
             onRetry={handleRetry}
             onRegenerate={handleRegenerate}
           />

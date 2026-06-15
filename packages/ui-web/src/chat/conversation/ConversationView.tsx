@@ -36,7 +36,7 @@ import { cn } from "../../lib/utils";
 import { useMediaQuery } from "../../lib/use-media-query";
 import { notifyThreadActivity, readLocalHistory } from "../../local-sync";
 import MarkdownContent from "./MarkdownContent";
-import { buildAssistantMessageFeedbackBody } from "@pin-ai/core";
+import { buildAssistantMessageFeedbackBody, feedbackChannelForSession } from "@pin-ai/core";
 // The shared animated orb — looping video with a buffering reveal so the
 // landing hero doesn't flash dark when the Ask PIN AI sheet opens.
 import AiSphere from "../../now/AiSphere";
@@ -1447,11 +1447,7 @@ export default function ConversationView({
   const isProactive = sessionKey.startsWith("proactive-");
   // Feedback channel for this surface — recorded on 👍/👎 events so reward
   // analytics can tell which conversation type they came from.
-  const feedbackChannel = isProactive
-    ? "proactive"
-    : sessionKey.startsWith("card-thread-")
-      ? "card_execution"
-      : "main_chat";
+  const feedbackChannel = feedbackChannelForSession(sessionKey);
 
   // Card result bar visibility: the turn is settled (not busy, no HITL gate)
   // and the LAST entry is a finalized assistant turn with visible text and no
