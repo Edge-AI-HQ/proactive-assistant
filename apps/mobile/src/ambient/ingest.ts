@@ -1,26 +1,27 @@
 /**
- * Ingest 上传（RN）：buffer + 周期 flush POST /api/devices/ingest——
- * 与 web lib/devices.ts ingestSignals 同 wire 协议（X-Device 头、401 清
- * 凭证重注册重试、id 客户端生成）。
- *
- * MVP 为内存 buffer（flush 失败保留下轮重试；app 被杀丢未传批次——
- * durable outbox 接 DatabasePort 是后续刀，web 的 sqlite outbox 同语义）。
+ * Ingest 上传(RN):**durable outbox**(expo-sqlite via core SqliteOutboxStore)+ 周期
+ * flush POST /api/devices/ingest。app kill 不丢信号(此前是内存 buffer)。wire 协议同
+ * web lib/devices.ts ingestSignals(X-Device 头、id 客户端生成);401 清凭证下轮重注册。
  */
+import { SqliteOutboxStore } from "@pin-ai/core";
+
 import { ENV } from "../lib/env";
-import { ensureDevice, type DeviceCredentials } from "../lib/devices";
+import { ensureDevice, clearDeviceCredentials, type DeviceCredentials } from "../lib/devices";
+import { createExpoDatabase } from "../lib/sync/expo-database";
 import type { PersonalSignalInput } from "./types";
 
 const FLUSH_INTERVAL_MS = 30_000;
-const MAX_BUFFER = 500;
+const PENDING_BATCH = 200;
+const RETRY_BACKOFF_MS = 60_000;
 
-let buffer: PersonalSignalInput[] = [];
+// durable:落 expo-sqlite,app kill / 断连后重启仍能续传(replaced 内存 buffer)。
+const outbox = new SqliteOutboxStore(createExpoDatabase("ambient"));
 let timer: ReturnType<typeof setInterval> | null = null;
 let flushing = false;
 let ownerUserId: string | null = null;
 
 export function pushSignal(item: PersonalSignalInput): void {
-  buffer.push({ ...item, id: item.id ?? crypto.randomUUID() });
-  if (buffer.length > MAX_BUFFER) buffer = buffer.slice(-MAX_BUFFER);
+  void outbox.enqueue([item]).catch((err) => console.warn("[ambient] enqueue failed:", err));
 }
 
 async function postBatch(creds: DeviceCredentials, items: PersonalSignalInput[]) {
@@ -52,19 +53,28 @@ async function postBatch(creds: DeviceCredentials, items: PersonalSignalInput[])
 }
 
 export async function flushSignals(): Promise<void> {
-  if (flushing || buffer.length === 0 || !ownerUserId) return;
+  if (flushing || !ownerUserId) return;
   flushing = true;
-  const batch = buffer;
-  buffer = [];
+  const owner = ownerUserId;
+  const backendUrl = ENV.pinApiUrl;
   try {
-    const creds = await ensureDevice(ownerUserId);
-    const res = await postBatch(creds, batch);
-    if (!res.ok) throw new Error(`ingest failed: ${res.status}`);
-    console.log(`[ambient] ingested ${batch.length} signals`);
+    const records = await outbox.pending(PENDING_BATCH, Date.now(), owner, backendUrl);
+    if (records.length === 0) return;
+    const creds = await ensureDevice(owner);
+    const res = await postBatch(creds, records.map((r) => r.item));
+    const ids = records.map((r) => r.id);
+    if (res.ok) {
+      await outbox.markSynced(ids, Date.now(), owner, backendUrl);
+      console.log(`[ambient] ingested ${ids.length} signals`);
+    } else {
+      // 401 = device token 失效:清凭证,下轮 ensureDevice 重注册换新 token。
+      if (res.status === 401) await clearDeviceCredentials();
+      await outbox.markFailed(ids, `ingest ${res.status}`, Date.now() + RETRY_BACKOFF_MS);
+      console.warn(`[ambient] ingest failed ${res.status}, will retry`);
+    }
   } catch (err) {
-    // 失败整批放回（保序），下轮重试。
-    buffer = [...batch, ...buffer].slice(-MAX_BUFFER);
-    console.warn("[ambient] flush failed (kept in buffer):", err);
+    // 网络等异常:不 markFailed(保 pending 下轮即重试,不累加 backoff)。
+    console.warn("[ambient] flush failed:", err);
   } finally {
     flushing = false;
   }
@@ -74,6 +84,7 @@ export function startIngestLoop(userId: string): void {
   ownerUserId = userId;
   if (timer) return;
   timer = setInterval(() => void flushSignals(), FLUSH_INTERVAL_MS);
+  void outbox.prune().catch(() => {}); // 启动清过期(synced 超 24h / pending 超 TTL)
 }
 
 export function stopIngestLoop(): void {

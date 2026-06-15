@@ -1,0 +1,76 @@
+---
+title: "RN 重构 — apps/mobile 接替 proactive-ai-frontend"
+description: "路线 A「Share logic, not UI」下,apps/mobile(Expo RN)接替 Capacitor frontend 的 port-first 分批执行计划。现状:逻辑层(core/state)+ DatabasePort/sync 已就绪,缺 register* port wire / DeviceCredentials / ambient durable ingest / ambient native Swift(Capacitor→Expo 移植) / 屏 UI 重写。含 4 批顺序、每批验证边界(纯 TS type-check vs Xcode 真机)、Swift 移植策略、exit criteria。"
+---
+
+# RN 重构 — apps/mobile 接替 proactive-ai-frontend
+
+> SSOT for RN 重构。路线 **A「Share logic, not UI」**(见 `2026-06-13-dual-platform-design-system.mdx`):逻辑/契约共享(`@pin-ai/core` / `@pin-ai/state` / `@pin-ai/ui-kit`),UI 各端写,原生能力走 port。前提:**apps/mobile 现有实现可全部重写**。
+
+## 终局
+
+- **apps/mobile**(Expo RN)= **手机端**,接替并 sunset `proactive-ai-frontend`(Capacitor)
+- **apps/web**(React DOM)= 桌面端(不动)
+- 两端共享 core/state/ui-kit/design;UI 各写;ambient/device 原生能力经 port + Expo native module
+
+## 现状图(2026-06-14 核实)
+
+**✅ 已就绪(直接复用,无需改)**
+- **逻辑层**:9 屏全部消费 core/state —— `useConversationRuntime` / `useCardsQuery` / `useUserDevices` / `useMemories` / `useUserSettings`;`fetchSignals` / `fetchCards` / Composio 流程。屏逻辑零漂移。
+- **ambient 共享逻辑**:#144 已下沉 `core/domain/ambient/`(timeline-store / pipeline / pipeline-models / `SourceContext`·`AmbientSource` 契约 / sound-runs / motion-segments);apps/mobile `ambient/types.ts` 已 import core 契约。
+- **DatabasePort + sync engine**:`core/ports/database.ts` 契约 + `apps/mobile/src/lib/sync/expo-database.ts`(expo-sqlite driver)已实现;`sync-bootstrap.ts` + App.tsx `startSync(user.id)` 已启动(thread/message 同步链路)。
+- **原生包齐全**:expo-sqlite / expo-secure-store / expo-location / expo-calendar / @kingstinct/react-native-healthkit 已装。
+- **primitive**:ui-kit 8 契约 + apps/mobile RN 实现(Text/Button/Input/Surface/Box/Stack/Icon/Divider)。
+
+**❌ 缺口**
+1. **register* port 未 wire**:`App.tsx` 没调 `registerSignOutCleanup` / `registerFeedbackOutbox` / `registerLocalThreadStore` / `registerExternalMicAcquirer`(契约在 ui-web 模式,RN 侧要有等价注册点;实现部分散在 sync-bootstrap / 待建 devices)。
+2. **DeviceCredentials 层缺**:`apps/mobile/src/lib/devices.ts` 不存在。需 `ensureDevice` + expo-secure-store(对照 `proactive-ai-frontend/src/lib/devices.ts`,但那是平台 IO 适配层,RN 各写)。
+3. **ambient ingest 非持久**:`apps/mobile/src/ambient/ingest.ts` 是内存 buffer(app kill 丢数据),没接 DatabasePort durable outbox。
+4. **ambient native Swift(Expo 形态)缺**:`modules/ambient-{audio,visit}` 只有 TS 桥 + config,**无 ios/Swift** → prebuild 缺 native module(PR#127 已降级不崩)。完整 Swift 在 `capacitor-plugins/ambient-ai`(Capacitor 形态)。
+5. **屏 UI**:9 屏是早期 RN 实现,用户授权全部重写(消费 primitive、对齐 web 功能、手机 UX)。
+
+## Swift 真相 + 移植策略
+
+完整 ambient Swift 在 **`capacitor-plugins/ambient-ai/ios/Sources/AmbientAi/`**(git tracked,Capacitor 插件形态):`Audio/`(AudioStreamManager / SileroVadGate / SoundClassificationService / CloudTranscriptionWorker / TranscriptStitcher)、`Geocoding/GeocodeService`、`Models/`(Llama / ModelStore / ModelDownloader)、`Plugins/`(AudioCapture / VisitMonitor / Geocoder / Calendar / DeviceState / NotificationUsage / NearbyConnectivity / AmbientModels / MediaNotebook)。
+
+**移植策略**:核心业务 Swift(Audio / Geocode / Model 逻辑)**可复用**;**桥接层 Capacitor `CAPPlugin` → Expo `Module` 要重写**(不同原生桥协议)。即在 `apps/mobile/modules/ambient-{audio,visit}/ios/` 建 Expo Module 壳(Package.swift + Module entry),把核心 Swift 搬入,桥接到已就绪的 TS 接口(`AmbientAudio.startCapture` 等)。
+
+## Port-first 分批
+
+> 原则:port 框架先行 → 纯 TS 地基(type-check 可验)→ 屏 UI(模拟器)→ Swift native(Xcode/真机)。每批独立可验、可单独 PR。
+
+### Batch 1 — 平台集成 TS 地基(纯 TS,type-check 验,无真机)
+- 新建 `apps/mobile/src/lib/devices.ts`:`ensureDevice` + `clearDeviceCredentials`,expo-secure-store 存 device token(对照 frontend 实现,RN 介质各写)。
+- `ambient/ingest.ts` 改造:内存 buffer → DatabasePort durable outbox(失败信号持久化 + 重传),复用 `expo-database.ts`。
+- `App.tsx` wire 4 个 register*:signOutCleanup(clearDeviceCredentials)/ feedbackOutbox / localThreadStore(sync-bootstrap 已有实现,接线)/ externalMicAcquirer(占位,voice 用)。
+- **验证**:`apps/mobile tsc --noEmit` 绿 + `check:packages`(若动 core/ui-kit)。**运行时(token 往返 / outbox 持久化)待真机**。
+
+### Batch 2 — 屏 UI 重写(模拟器验)
+- 9 屏按手机 UX 重写,消费 primitive(Icon/Stack/Box/Text/Button/Surface)收敛裸拼 + 魔法数;逻辑零改(已就绪的 hooks)。对齐 web 功能(UX 可不同)。
+- 7/9 ambient source(location/calendar/health/device-state/focus/activity/audio-route)已走 expo-*,确认接 `SourceContext`。
+- **验证**:`expo prebuild --platform ios` + simulator 跑(ambient native 用 PR#127 降级 stub,非 ambient 链路可验)。**视觉/交互待真机确认**。
+
+### Batch 3 — ambient native Swift(Xcode/真机)
+- `modules/ambient-audio/ios/`:建 Expo Module 壳,移植 `capacitor-plugins` 的 `Audio/*` + `SoundClassificationService` + 相关 `Models/`,桥接到 TS 接口。
+- `modules/ambient-visit/ios/`:同样移植 VisitMonitor + Activity。
+- **验证**:Xcode 编译 + 真机端到端(sound capture / visit / ingest POST)。**全程真机,我只产代码**。
+
+### Batch 4 — MVP 完整性(正交,并行)
+- push 通知、离线同步打磨、模型下载等。按需。
+
+## Exit criteria(sunset frontend 的前置)
+- RN 不再缺 frontend 的功能(9 屏 + ambient 全链路对齐)
+- ambient 真数据流进 RN 屏(传感器 → ingest → sync → 服务端,真机验证)
+- register* port 齐 wire;DeviceCredentials / durable outbox 真机验过
+- ambient native Swift Expo module 真机跑通
+- 达 iOS 生产 parity 后才删 `proactive-ai-frontend` + ui-web 的 RN 绑定(非 shared 稳定就删)
+
+## 能力边界(谁验)
+- **AI 能写 + type-check 验**:Batch 1 全部、Batch 2 屏代码、Batch 3 Swift 代码(产出)
+- **必须真机/Xcode 验**:Batch 1 运行时(token/outbox)、Batch 2 视觉/交互、Batch 3 全部(prebuild / Swift 编译 / 传感器)
+- Swift 移植 AI 产代码,但**编译 + 真机功能验证依赖用户环境**
+
+## 相关
+- 设计系统 SSOT:`2026-06-13-dual-platform-design-system.mdx`
+- RN-readiness 调研:`docs/research/2026-06-14-rn-readiness-and-frontend-sunset.mdx`(本地)
+- ambient Swift 形态:见 memory `project_ambient_module_swift_not_checked_in`

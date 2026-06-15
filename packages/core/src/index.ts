@@ -66,8 +66,13 @@ export * from "./machines/pipeline";
 export * from "./machines/tool-steps";
 
 export * from "./ports/database";
+export * from "./ports/sign-out-cleanup";
+export * from "./ports/feedback-outbox";
+export * from "./ports/local-thread-store";
+export * from "./ports/external-mic";
 
 export * from "./sync/ambient-outbox";
+export * from "./sync/sqlite-outbox";
 export * from "./sync/engine";
 export * from "./sync/local-read";
 export * from "./sync/outbox";

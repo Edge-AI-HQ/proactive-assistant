@@ -450,7 +450,7 @@ macos: install ensure-env-pinai-agents ## Run the Electron desktop shell (this w
 	fi; \
 	VITE_PIN_API_PROXY_TARGET="$$TARGET" npm run dev --workspace=@pin-ai/desktop
 
-rn: install ensure-env-pinai-agents ## Run Expo RN on your iPhone vs this worktree's backend (SIM=1 simulator, DEV=1 fly dev, PROD=1 fly prod)
+rn: install ensure-env-pinai-agents ## Run Expo RN on your iPhone vs this worktree's backend (SIM=1 simulator, DEV=1 fly dev, PROD=1 fly prod; TUNNEL=1 Metro 走 ngrok 公网,手机不必与 Mac 同 LAN,corp/远程网用)
 	@set -e; \
 	set -a && . ./pinai-agents/.env && set +a; \
 	if [ "$(PROD)" = "1" ]; then \
@@ -469,8 +469,8 @@ rn: install ensure-env-pinai-agents ## Run Expo RN on your iPhone vs this worktr
 			TARGET="http://127.0.0.1:$$PORT"; \
 			echo "→ RN (simulator) vs this worktree's backend ($$TARGET)"; \
 		else \
-			LAN_IP=$$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1); \
-			[ -z "$$LAN_IP" ] && { echo "no LAN IP — use SIM=1 or DEV=1"; exit 1; }; \
+			LAN_IP=$$(for i in $$(ifconfig -lu 2>/dev/null); do ipconfig getifaddr $$i 2>/dev/null; done | grep -v '^169\.254\.' | head -1); \
+			[ -z "$$LAN_IP" ] && { echo "no usable LAN IP(en0/Wi-Fi 无 IPv4;169.254.* link-local 不算)— 连 Wi-Fi(手机与 Mac 同网)后重试,或用 DEV=1(fly dev)/ PROD=1 / SIM=1(模拟器)"; exit 1; }; \
 			TARGET="http://$$LAN_IP:$$PORT"; \
 			echo "→ RN (iPhone) vs this worktree's backend ($$TARGET, 手机需与 Mac 同 WiFi)"; \
 		fi; \
@@ -490,5 +490,11 @@ rn: install ensure-env-pinai-agents ## Run Expo RN on your iPhone vs this worktr
 			| grep -E "iPhone" | head -1 | grep -oE "[0-9A-F]{8}-[0-9A-F]{16}" || true); \
 		[ -z "$$UDID" ] && { echo "未检测到在线的 iPhone（xctrace 的 == Devices == 区；锁屏/离线不算）。插线解锁后重试，或 SIM=1 用模拟器。"; exit 1; }; \
 		echo "→ device $$UDID"; \
-		EXPO_PUBLIC_PIN_API_URL="$$TARGET" npm run ios --workspace=@pin-ai/mobile -- --device "$$UDID"; \
+		if [ "$(TUNNEL)" = "1" ]; then \
+			echo "→ TUNNEL: build+装真机,Metro 走 ngrok 公网(手机不必与 Mac 同 LAN;corp/远程网用;首次装 @expo/ngrok)"; \
+			EXPO_PUBLIC_PIN_API_URL="$$TARGET" npm run ios --workspace=@pin-ai/mobile -- --device "$$UDID" --no-bundler || echo "→ app 已 build+装;未能自动启动(常见:手机锁屏)。解锁手机手动开「PIN AI Dev」即可——Metro tunnel 继续启动,不受影响"; \
+			EXPO_PUBLIC_PIN_API_URL="$$TARGET" npm run start --workspace=@pin-ai/mobile -- --tunnel --dev-client; \
+		else \
+			EXPO_PUBLIC_PIN_API_URL="$$TARGET" npm run ios --workspace=@pin-ai/mobile -- --device "$$UDID"; \
+		fi; \
 	fi

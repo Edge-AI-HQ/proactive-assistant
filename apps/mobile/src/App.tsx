@@ -16,7 +16,10 @@ import { StatusBar } from "expo-status-bar";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { User } from "@supabase/supabase-js";
 
+import { registerSignOutCleanup } from "@pin-ai/core";
+
 import { useAuth } from "./hooks/useAuth";
+import { clearDeviceCredentials } from "./lib/devices";
 import { startSync } from "./lib/sync/sync-bootstrap";
 import { resumeAmbientIfEnabled } from "./ambient/runtime";
 import AppShell from "./components/app/AppShell";
@@ -25,6 +28,11 @@ import { registerPush } from "./lib/push";
 import LoginScreen from "./screens/LoginScreen";
 
 const queryClient = new QueryClient();
+
+// signOut 时清 device 凭据(secure-store)——注册进 core 的 signOut 清理链
+// (useAuth.signOut → runSignOutCleanups)。registerExternalMicAcquirer /
+// registerFeedbackOutbox / registerLocalThreadStore 待对应实现就绪后续 wire。
+registerSignOutCleanup(clearDeviceCredentials);
 
 function Root() {
   const { loading, user, signInWithGoogle, signOut } = useAuth();

@@ -1,3 +1,6 @@
-ios/
-android/
+# 只挡 prebuild 生成的根级原生工程(/ios /android),不挡 local module 源码
+# (modules/*/ios 的 Swift)——旧规则 `ios/`/`android/` 匹配所有层级,误伤 Expo
+# native module 源码,是 ambient-audio/visit 的 Swift "从未 checkin → prebuild 红屏"的根因。
+/ios/
+/android/
 .expo/

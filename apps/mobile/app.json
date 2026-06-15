@@ -37,14 +37,20 @@
         "expo-build-properties",
         {
           "ios": {
-            "deploymentTarget": "17.0"
+            "deploymentTarget": "17.0",
+            "extraPods": [
+              {
+                "name": "FluidAudio",
+                "git": "https://github.com/FluidInference/FluidAudio.git",
+                "tag": "v0.14.8"
+              }
+            ]
           }
         }
       ],
       "expo-secure-store",
       "expo-notifications",
       "@kingstinct/react-native-healthkit",
-      "expo-build-properties",
       "expo-font",
       "expo-video"
     ]

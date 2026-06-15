@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
+import { runSignOutCleanups } from "@pin-ai/core";
 
 import { isPinLocalDevAuthEnabled, pinLocalDevAuthUser } from "../lib/dev-auth";
 import { supabase } from "../lib/supabase";
@@ -69,6 +70,9 @@ export function useAuth() {
 
   const signOut = useCallback(async () => {
     await supabase.auth.signOut();
+    // 平台清理(清 device 凭据等)——各 app 经 registerSignOutCleanup 注册;
+    // 无注册则 no-op(core/ports/sign-out-cleanup)。
+    await runSignOutCleanups();
   }, []);
 
   return { ...state, signInWithGoogle, signOut };

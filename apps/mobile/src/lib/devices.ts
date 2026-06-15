@@ -82,3 +82,15 @@ export async function setDevicePushToken(deviceId: string, token: string): Promi
   });
   if (!res.ok) throw new Error(`push-token PUT failed: ${res.status}`);
 }
+
+/** signOut 清理:清空 secure-store 里的 device 凭据。经 App.tsx
+ *  registerSignOutCleanup(@pin-ai/core)注册,signOut 时由 runSignOutCleanups 调用。 */
+export async function clearDeviceCredentials(): Promise<void> {
+  for (const key of [DEVICE_ID_KEY, DEVICE_TOKEN_KEY, DEVICE_OWNER_KEY]) {
+    try {
+      await SecureStore.deleteItemAsync(key);
+    } catch {
+      /* ignore */
+    }
+  }
+}
