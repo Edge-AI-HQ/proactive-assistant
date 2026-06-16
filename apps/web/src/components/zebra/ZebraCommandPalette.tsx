@@ -10,6 +10,7 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 import { Text } from "@pin-ai/ui-web";
+import { shortcutHint } from "@/lib/platform";
 
 export interface PaletteNavItem {
   id: string;
@@ -118,7 +119,7 @@ export default function ZebraCommandPalette({
                       <PanelLeft size={12} strokeWidth={2} className="text-foreground/65" />
                     </span>
                     <span className="font-medium">Toggle sidebar</span>
-                    <kbd className="ml-auto text-micro font-semibold text-foreground/40 bg-foreground/[0.06] rounded px-1.5 py-0.5">⌘B</kbd>
+                    <kbd className="ml-auto text-micro font-semibold text-foreground/40 bg-foreground/[0.06] rounded px-1.5 py-0.5">{shortcutHint("B")}</kbd>
                   </CommandItem>
                 </CommandGroup>
 

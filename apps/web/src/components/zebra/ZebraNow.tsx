@@ -7,6 +7,7 @@ import {
   type Intent,
   type WeatherData, Text,
 } from "@pin-ai/ui-web";
+import { shortcutHint } from "@/lib/platform";
 
 /**
  * Desktop (zebra) NOW view — the iOS Now screen rescaled for a wide canvas.
@@ -160,7 +161,7 @@ export default function ZebraNow({
             Ask PIN AI…
           </span>
           <kbd className="shrink-0 px-2 py-1 rounded-lg bg-foreground/[0.05] border border-foreground/[0.08] text-caption font-medium text-foreground/45 tracking-wide">
-            ⌘K
+            {shortcutHint("K")}
           </kbd>
         </button>
       </div>

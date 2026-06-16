@@ -24,6 +24,7 @@ import {
   type CardStatus,
   type Intent, Text,
 } from "@pin-ai/ui-web";
+import { hasCmdModifier, shortcutHint } from "@/lib/platform";
 import ZebraBackdrop from "./ZebraBackdrop";
 import ZebraNow from "./ZebraNow";
 import ZebraCardDetailPanel from "./ZebraCardDetailPanel";
@@ -261,12 +262,12 @@ export default function ZebraShell() {
   // ⌘K command palette, ⌘B sidebar, Escape closes topmost layer.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      if (hasCmdModifier(e) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPaletteOpen((v) => !v);
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "b") {
+      if (hasCmdModifier(e) && e.key.toLowerCase() === "b") {
         e.preventDefault();
         setSidebarCollapsed((v) => !v);
         return;
@@ -382,7 +383,7 @@ export default function ZebraShell() {
             onClick={() => setSidebarCollapsed((v) => !v)}
             className="p-1.5 rounded-lg hover:bg-foreground/[0.06] text-foreground/40 hover:text-foreground/70 transition-colors"
             aria-label="Toggle sidebar"
-            title="Toggle sidebar (⌘B)"
+            title={`Toggle sidebar (${shortcutHint("B")})`}
           >
             {sidebarCollapsed ? (
               <PanelLeft size={15} strokeWidth={1.8} />
