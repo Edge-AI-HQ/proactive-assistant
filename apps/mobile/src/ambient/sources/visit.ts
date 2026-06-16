@@ -7,7 +7,12 @@
 import * as Location from "expo-location";
 
 import { AmbientVisit, type VisitEvent } from "../../../modules/ambient-visit";
-import { SIGNAL_KINDS, type AmbientSource, type SourceContext } from "../types";
+import {
+  SIGNAL_KINDS,
+  type AmbientSource,
+  type AmbientSourceStartOptions,
+  type SourceContext,
+} from "../types";
 
 const DRAIN_INTERVAL_MS = 5 * 60 * 1000;
 
@@ -61,10 +66,13 @@ export function createVisitSource(ctx: SourceContext): AmbientSource {
     key: "visit",
     label: "Visits",
     isStarted: () => started,
-    async start() {
+    async start(options?: AmbientSourceStartOptions) {
       if (started) return;
       // CLVisit 要求 Always 权限（后台到访检测）。
-      const { status } = await Location.requestBackgroundPermissionsAsync();
+      const { status } =
+        options?.interactivePermissions === false
+          ? await Location.getBackgroundPermissionsAsync()
+          : await Location.requestBackgroundPermissionsAsync();
       if (status !== "granted") throw new Error("always location permission denied");
       await AmbientVisit.startMonitoring();
       await drain(); // 启动先清积压（上次后台攒下的）

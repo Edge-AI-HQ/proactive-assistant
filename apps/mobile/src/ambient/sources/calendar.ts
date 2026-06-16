@@ -5,7 +5,12 @@
  */
 import * as Calendar from "expo-calendar";
 
-import { SIGNAL_KINDS, type AmbientSource, type SourceContext } from "../types";
+import {
+  SIGNAL_KINDS,
+  type AmbientSource,
+  type AmbientSourceStartOptions,
+  type SourceContext,
+} from "../types";
 
 const SCAN_INTERVAL_MS = 15 * 60 * 1000;
 const LOOKAHEAD_MS = 24 * 60 * 60 * 1000;
@@ -49,9 +54,12 @@ export function createCalendarSource(ctx: SourceContext): AmbientSource {
     key: "calendar",
     label: "Calendar",
     isStarted: () => timer !== null,
-    async start() {
+    async start(options?: AmbientSourceStartOptions) {
       if (timer) return;
-      const { status } = await Calendar.requestCalendarPermissions();
+      const { status } =
+        options?.interactivePermissions === false
+          ? await Calendar.getCalendarPermissions()
+          : await Calendar.requestCalendarPermissions();
       if (status !== "granted") throw new Error("calendar permission denied");
       await scan();
       timer = setInterval(() => void scan(), SCAN_INTERVAL_MS);

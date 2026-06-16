@@ -1,11 +1,4 @@
-"""Ambient → signals ingest routing + filter allowlist.
-
-Proactive sunset (plan 2026-06-14): ambient cloud data no longer feeds a
-proactive timeline. Only the voice transcript (utterance / session_summary)
-is surfaced to pai_personal_signals so main chat / memory can read the user's
-offline life; every other ambient/device kind is accepted but filtered (not
-persisted). The client keeps reporting all kinds; the server drops the rest.
-"""
+"""Ambient → signals ingest routing."""
 
 from __future__ import annotations
 
@@ -193,11 +186,11 @@ async def test_session_summary_lands_in_signals(device, pool):
     assert rows[0]["kind"] == "session_summary"
 
 
-# ── other ambient/device kinds → filtered (no cloud sink) ─────────────
+# ── high-value aggregate ambient/device kinds → signals ──────────────
 
 
 @pytest.mark.asyncio
-async def test_ambient_location_is_filtered(device, pool):
+async def test_ambient_location_is_filtered_not_signaled(device, pool):
     c, device_id, device_token, user_id = device
     occurred = _now() - timedelta(seconds=30)
     item = {
@@ -218,14 +211,14 @@ async def test_ambient_location_is_filtered(device, pool):
         json={"deviceId": device_id, "items": [item]},
     )
     assert r.status_code == 200, r.text
-    # Accepted but not persisted.
     assert r.json()["results"][0]["status"] == "filtered"
-    assert await _signal_rows(pool, user_id) == []
+    rows = await _signal_rows(pool, user_id)
+    assert rows == []
 
 
 @pytest.mark.asyncio
-async def test_device_visit_is_filtered(device, pool):
-    """`device.*` is what the V3 client actually emits — also filtered."""
+async def test_device_visit_lands_in_signals(device, pool):
+    """`device.*` is what the Expo/RN client actually emits."""
     c, device_id, device_token, user_id = device
     occurred = _now() - timedelta(seconds=30)
     item = {
@@ -246,8 +239,11 @@ async def test_device_visit_is_filtered(device, pool):
         json={"deviceId": device_id, "items": [item]},
     )
     assert r.status_code == 200, r.text
-    assert r.json()["results"][0]["status"] == "filtered"
-    assert await _signal_rows(pool, user_id) == []
+    assert r.json()["results"][0]["status"] == "inserted"
+    rows = await _signal_rows(pool, user_id)
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "device.visit"
+    assert rows[0]["summary"] == "30 min at Cafe"
 
 
 # ── legacy V2 signal path unchanged ───────────────────────────────────

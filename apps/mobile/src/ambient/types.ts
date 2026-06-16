@@ -14,11 +14,15 @@ export interface SourceContext {
   onEvent: (sourceKey: string, summary: string) => void;
 }
 
+export interface AmbientSourceStartOptions {
+  readonly interactivePermissions: boolean;
+}
+
 export interface AmbientSource {
   readonly key: string;
   readonly label: string;
   isStarted(): boolean;
-  start(): Promise<void>;
+  start(options?: AmbientSourceStartOptions): Promise<void>;
   stop(): Promise<void>;
   /** 周期源（calendar 扫描类）的手动刷新钩子。 */
   refresh?(): Promise<void>;

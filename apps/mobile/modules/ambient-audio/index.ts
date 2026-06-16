@@ -12,21 +12,33 @@ export interface SoundClassificationEvent {
 }
 
 export interface CaptureReadyEvent {
+  platform?: string;
   wavId: string;
-  startedAt: number;
-  endedAt: number;
+  burstId?: string;
+  captureSessionId?: string;
+  capturedAt?: string;
+  startedAt?: number;
+  endedAt?: number;
   durationMs: number;
   byteSize: number;
   sessionId?: string;
+  triggerSource?: string;
 }
 
 export interface TranscriptEvent {
+  platform?: string;
   text: string;
-  startedAt: number;
-  endedAt: number;
+  startedAt?: number;
+  endedAt?: number;
+  capturedAt?: string;
+  burstId?: string;
+  captureSessionId?: string;
+  durationMs?: number;
   wavId?: string;
   provider?: string;
   sessionId?: string;
+  fallback?: boolean;
+  triggerSource?: string;
 }
 
 export interface SpeechBurstEvent {
@@ -45,8 +57,19 @@ export interface AudioStateEvent {
   engineState: string;
   classifierRestartCount: number;
   suppressed: boolean;
+  routeInputs?: AudioRoutePort[];
+  routeOutputs?: AudioRoutePort[];
+  hasCarAudio?: boolean;
+  hasBluetoothA2DP?: boolean;
+  hasBluetoothHFP?: boolean;
   route?: string;
   reason?: string;
+}
+
+export interface AudioRoutePort {
+  portType?: string;
+  portName?: string;
+  uid?: string;
 }
 
 export interface AudioErrorEvent {

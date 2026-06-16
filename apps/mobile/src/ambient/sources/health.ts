@@ -5,6 +5,8 @@
  * （ios:health:<metric>:…），迁移期与 Capacitor 版并存也不会双写。
  */
 import {
+  AuthorizationRequestStatus,
+  getRequestStatusForAuthorization,
   isHealthDataAvailableAsync,
   queryCategorySamples,
   queryQuantitySamples,
@@ -12,12 +14,21 @@ import {
   requestAuthorization,
 } from "@kingstinct/react-native-healthkit";
 
-import { type AmbientSource, type SourceContext } from "../types";
+import {
+  type AmbientSource,
+  type AmbientSourceStartOptions,
+  type SourceContext,
+} from "../types";
 
 const HEALTH_KIND = "health.observation";
 const SCHEMA_VERSION = "health_observation.v1";
 const SCAN_INTERVAL_MS = 15 * 60 * 1000;
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+const HEALTH_READ_TYPES = [
+  "HKQuantityTypeIdentifierStepCount",
+  "HKQuantityTypeIdentifierHeartRate",
+  "HKCategoryTypeIdentifierSleepAnalysis",
+] as const;
 
 function localDate(ts: number): string {
   const d = new Date(ts);
@@ -158,20 +169,24 @@ export function createHealthSource(ctx: SourceContext): AmbientSource {
     await scanSleep(now).catch(() => {});
   }
 
+  async function ensureAuthorization(options?: AmbientSourceStartOptions): Promise<void> {
+    const request = { toRead: HEALTH_READ_TYPES };
+    const status = await getRequestStatusForAuthorization(request);
+    if (status === AuthorizationRequestStatus.unnecessary) return;
+    if (options?.interactivePermissions === false) {
+      throw new Error("health authorization requires user prompt");
+    }
+    await requestAuthorization(request);
+  }
+
   return {
     key: "health",
     label: "HealthKit",
     isStarted: () => timer !== null,
-    async start() {
+    async start(options?: AmbientSourceStartOptions) {
       if (timer) return;
       if (!(await isHealthDataAvailableAsync())) throw new Error("HealthKit unavailable");
-      await requestAuthorization({
-        toRead: [
-          "HKQuantityTypeIdentifierStepCount",
-          "HKQuantityTypeIdentifierHeartRate",
-          "HKCategoryTypeIdentifierSleepAnalysis",
-        ],
-      });
+      await ensureAuthorization(options);
       await scan();
       timer = setInterval(() => void scan(), SCAN_INTERVAL_MS);
     },

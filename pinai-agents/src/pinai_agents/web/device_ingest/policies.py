@@ -2,14 +2,12 @@
 
 Each kind picks one of four modes:
   * signal_only   — only write personal_signals (legacy device events +
-    the allowlisted ambient utterance / session_summary voice transcript).
+    ambient context events that chat / memory should be able to read).
   * raw_only      — only write a typed raw table (health observations).
   * dual          — write raw table + personal_signal in same call (apps,
     contacts directories — agents read raw, generator surfaces signals).
-  * filtered      — accept but drop (no write). V3 ambient/device kinds whose
-    cloud sink is deferred (location / visit / activity / sound / …): the
-    client keeps reporting them, the server just doesn't persist them yet.
-    See plan 2026-06-14-proactive-agent-sunset.
+  * filtered      — accept but drop (no write). Reserved for deprecated or
+    intentionally suppressed kinds.
 
 The signal/raw split mirrors memory architecture §一:
   signals = increment / consumption layer, raw = source of truth.
@@ -285,45 +283,37 @@ _HEALTH_POLICY = DeviceIngestPolicy(
 _SIGNAL_POLICY = DeviceIngestPolicy(mode="signal_only", build_signal=build_default_signal)
 
 # Accepted-but-dropped: the ingest route short-circuits these to status
-# 'filtered' (no raw / signal / timeline write). Used for V3 ambient/device
-# kinds whose cloud sink is deferred — the client keeps reporting them, the
-# server just doesn't persist them yet. Flip a kind to _SIGNAL_POLICY to enable
-# it. See plan 2026-06-14-proactive-agent-sunset.
+# 'filtered' (no raw / signal / timeline write). Raw/high-frequency Ambient
+# frames stay here until they have aggregation, retention, and privacy rules.
 _FILTERED_POLICY = DeviceIngestPolicy(mode="filtered")
 
 
 DEVICE_INGEST_POLICIES: dict[str, DeviceIngestPolicy] = {
-    # V3 ambient → pai_personal_signals, allowlisted. Only the voice transcript
-    # (utterance) is surfaced to signals for now so main chat / memory can read
-    # the user's offline life; every other ambient/device kind is accepted but
-    # filtered (no cloud sink). To enable a kind later, point it at
-    # _SIGNAL_POLICY. See plan 2026-06-14-proactive-agent-sunset.
+    # V3 ambient → pai_personal_signals. The Expo/RN client emits `device.*`
+    # for context sources; older builds may still emit `ambient.*` aliases.
+    # Health observations stay raw-only because they already have a typed table.
     "ambient.utterance": _SIGNAL_POLICY,
     # `session_summary` carries the V3 voice transcript (speaker_segments +
     # full text in `summary`) — the primary utterance path.
     "session_summary": _SIGNAL_POLICY,
-    # Other V3 ambient/device kinds: accepted but filtered. `device.*` is what
-    # the V3 client actually emits (services/ambient/kinds.ts); the `ambient.*`
-    # aliases cover older builds. health.observation stays raw+timeline (see
-    # _HEALTH_POLICY in the block below); ambient.health (legacy alias) filters.
     "ambient.location": _FILTERED_POLICY,
-    "ambient.visit": _FILTERED_POLICY,
+    "ambient.visit": _SIGNAL_POLICY,
     "ambient.activity": _FILTERED_POLICY,
     "ambient.sound": _FILTERED_POLICY,
-    "ambient.audio_route": _FILTERED_POLICY,
-    "ambient.calendar_event": _FILTERED_POLICY,
-    "ambient.focus_state": _FILTERED_POLICY,
+    "ambient.audio_route": _SIGNAL_POLICY,
+    "ambient.calendar_event": _SIGNAL_POLICY,
+    "ambient.focus_state": _SIGNAL_POLICY,
     "ambient.device_state": _FILTERED_POLICY,
     "ambient.health": _FILTERED_POLICY,
     "device.location": _FILTERED_POLICY,
-    "device.visit": _FILTERED_POLICY,
+    "device.visit": _SIGNAL_POLICY,
     "device.activity": _FILTERED_POLICY,
-    "device.motion_segment": _FILTERED_POLICY,
+    "device.motion_segment": _SIGNAL_POLICY,
     "device.sound_classification": _FILTERED_POLICY,
-    "device.sound_scene_run": _FILTERED_POLICY,
-    "device.calendar_event": _FILTERED_POLICY,
-    "device.focus_state": _FILTERED_POLICY,
-    "device.audio_route": _FILTERED_POLICY,
+    "device.sound_scene_run": _SIGNAL_POLICY,
+    "device.calendar_event": _SIGNAL_POLICY,
+    "device.focus_state": _SIGNAL_POLICY,
+    "device.audio_route": _SIGNAL_POLICY,
     "device.device_state": _FILTERED_POLICY,
     # Legacy device events (signal layer) — kept for any client still on
     # the V2 ambient pipeline / older builds.

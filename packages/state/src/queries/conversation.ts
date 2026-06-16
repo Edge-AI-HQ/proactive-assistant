@@ -50,6 +50,11 @@ const RECONNECT_MAX_MS = 15000;
  *  of debug-on heartbeats. */
 const HISTORY_PAGE_SIZE = 200;
 
+function isRecoverableStreamDisconnect(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.toLowerCase().includes("network connection was lost");
+}
+
 export interface ConversationRuntimeOpts {
   /** Thread to address. Omit → the user's main thread.
    *  `card-thread-<id>` → a per-card execution thread. */
@@ -373,7 +378,13 @@ export function useConversationRuntime(
         }
       } catch (err) {
         if (cancelled || signal.aborted) return;
-        console.warn("[proactive] stream error:", err);
+        // RN/Expo sometimes reports a closed SSE as "network connection was lost";
+        // the loop below reconnects, so keep dev UI free of a false warning.
+        if (isRecoverableStreamDisconnect(err)) {
+          console.debug("[proactive] stream disconnected; reconnecting:", err);
+        } else {
+          console.warn("[proactive] stream error:", err);
+        }
       }
 
       // Stream ended (clean EOF or error). Reconnect with capped backoff.

@@ -72,7 +72,13 @@ export default function ChatSheet({ open, onClose }: { open: boolean; onClose: (
       {/* web ChatSheetOverlay 同构：不透明底 + 同款 aurora 层，面板下滑时
           作为整体一起走，不透出下层。 */}
       <AuroraBackground />
-      <Pressable onPress={onClose} hitSlop={10} className="items-start px-5 pt-3 pb-1">
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Close chat"
+        onPress={onClose}
+        hitSlop={10}
+        className="items-start px-5 pt-3 pb-1"
+      >
         <ChevronDown size={22} color="#71717a" strokeWidth={1.8} />
       </Pressable>
       <ChatScreen kind="main" />

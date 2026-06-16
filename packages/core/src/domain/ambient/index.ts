@@ -10,6 +10,7 @@ export * from "./normalize";
 export * from "./envelope";
 export * from "./sound-runs";
 export * from "./motion-segments";
+export * from "./runtime-lifecycle";
 export * from "./narrative";
 export * from "./summary-scheduler";
 export * from "./summary-context";

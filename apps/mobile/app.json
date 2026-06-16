@@ -4,11 +4,11 @@
     "slug": "pin-ai",
     "version": "0.1.0",
     "orientation": "portrait",
-    "scheme": "ai.pin.proactive.development",
+    "scheme": "ai.pin.proactive.dev",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "ios": {
-      "bundleIdentifier": "ai.pin.proactive.development",
+      "bundleIdentifier": "ai.pin.proactive.dev",
       "supportsTablet": false,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
@@ -21,10 +21,12 @@
         "NSMicrophoneUsageDescription": "PIN AI listens for ambient sounds and conversations (on-device gated) to understand context.",
         "NSSpeechRecognitionUsageDescription": "PIN AI transcribes ambient speech on-device to capture useful moments.",
         "UIBackgroundModes": [
-          "audio"
+          "audio",
+          "fetch",
+          "remote-notification"
         ]
       },
-      "appleTeamId": "7T7C9L7H8F"
+      "appleTeamId": "58AXBDC7K4"
     },
     "platforms": [
       "ios"
