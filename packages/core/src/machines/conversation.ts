@@ -90,6 +90,10 @@ export interface HitlRequiresAction {
   toolUseId: string;
   toolName: string;
   argsPreview?: string;
+  /** Structured tool input (same dict the backend sends on the frame / stores
+   *  on pending_action). The card humanizes known tools from these fields;
+   *  `argsPreview` stays as the fallback for tools without a template. */
+  args?: Record<string, unknown>;
   /** Backend-advertised allowed decisions; empty → default [approve, reject]. */
   allowedDecisions: string[];
 }

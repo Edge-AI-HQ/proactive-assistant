@@ -49,6 +49,72 @@ describe("HitlApprovalCard", () => {
     expect(screen.getByText(/resolved earlier/i)).toBeTruthy();
   });
 
+  test("preference_add renders friendly copy from structured args, not raw JSON", () => {
+    render(
+      <HitlApprovalCard
+        action={{
+          toolUseId: "iid-2",
+          toolName: "preference_add",
+          argsPreview:
+            '{"statement":"Show me more A-share market news","scope":"topic","polarity":"positive"}',
+          args: {
+            statement: "Show me more A-share market news",
+            scope: "topic",
+            polarity: "positive",
+          },
+          allowedDecisions: ["approve", "reject"],
+        }}
+        onDecide={vi.fn()}
+      />,
+    );
+    // Friendly title instead of the internal tool name.
+    expect(screen.getByText("Save a preference")).toBeTruthy();
+    // The user's own statement, shown plainly.
+    expect(screen.getByText("Show me more A-share market news")).toBeTruthy();
+    // Internal mechanics + raw JSON are hidden.
+    expect(screen.queryByText("preference_add")).toBeNull();
+    expect(screen.queryByText(/polarity/)).toBeNull();
+  });
+
+  test("composio multi-execute: a single call shows its humanized slug", () => {
+    render(
+      <HitlApprovalCard
+        action={{
+          toolUseId: "iid-3",
+          toolName: "COMPOSIO_MULTI_EXECUTE_TOOL",
+          argsPreview: '{"calls":[{"tool_slug":"GMAIL_SEND_DRAFT"}]}',
+          args: { calls: [{ tool_slug: "GMAIL_SEND_DRAFT", arguments: {} }] },
+          allowedDecisions: ["approve", "reject"],
+        }}
+        onDecide={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Gmail send draft")).toBeTruthy();
+    expect(screen.queryByText(/tool_slug/)).toBeNull();
+  });
+
+  test("composio multi-execute: multiple calls summarize as a labelled list", () => {
+    render(
+      <HitlApprovalCard
+        action={{
+          toolUseId: "iid-4",
+          toolName: "COMPOSIO_MULTI_EXECUTE_TOOL",
+          args: {
+            calls: [
+              { tool_slug: "GMAIL_SEND_DRAFT", arguments: {} },
+              { tool_slug: "SLACK_SEND_MESSAGE", arguments: {} },
+            ],
+          },
+          allowedDecisions: ["approve", "reject"],
+        }}
+        onDecide={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Run 2 actions")).toBeTruthy();
+    expect(screen.getByText(/Gmail send draft/)).toBeTruthy();
+    expect(screen.getByText(/Slack send message/)).toBeTruthy();
+  });
+
   test("respects allowedDecisions (approve-only hides Reject)", () => {
     render(
       <HitlApprovalCard

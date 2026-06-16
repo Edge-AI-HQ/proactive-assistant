@@ -519,6 +519,12 @@ export function useConversationRuntime(
             toolUseId: interruptId,
             toolName: str(payload.toolName) || "tool",
             argsPreview: str(payload.argsPreview) || undefined,
+            args:
+              payload.args &&
+              typeof payload.args === "object" &&
+              !Array.isArray(payload.args)
+                ? (payload.args as Record<string, unknown>)
+                : undefined,
             allowedDecisions: Array.isArray(rawAllowed)
               ? rawAllowed.map((x) => str(x))
               : [],
@@ -681,6 +687,7 @@ export function useConversationRuntime(
                   toolUseId: page.awaiting.toolUseId,
                   toolName: page.awaiting.toolName,
                   argsPreview: page.awaiting.argsPreview,
+                  args: page.awaiting.args,
                   allowedDecisions: page.awaiting.allowedDecisions,
                 }
               : null,

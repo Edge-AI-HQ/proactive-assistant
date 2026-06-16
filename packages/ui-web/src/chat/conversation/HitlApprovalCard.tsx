@@ -31,6 +31,57 @@ export interface HitlApprovalCardProps {
   onDecide: (decision: "approve" | "reject", message?: string) => void;
 }
 
+/** Turn an upper/snake-case tool or SaaS slug into readable sentence case:
+ *  `GMAIL_SEND_DRAFT` → `Gmail send draft`. The open-ended set of Composio
+ *  slugs (1000+) can't be enumerated, so we derive a label instead. */
+function humanizeSlug(slug: string): string {
+  const s = slug.replace(/[_-]+/g, " ").trim().toLowerCase();
+  return s ? s[0].toUpperCase() + s.slice(1) : slug;
+}
+
+/** Turn a paused side-effect tool call into human-friendly card copy so a
+ *  non-technical user reads an action, not raw JSON. The two tools gated behind
+ *  HITL today (SIDE_EFFECT_TOOL_NAMES) each get a template; any future tool
+ *  falls back to a humanized name + the raw argsPreview, so it still renders. */
+function describeApproval(
+  toolName: string,
+  args: Record<string, unknown> | undefined,
+  argsPreview: string | undefined,
+): { title: string; detail?: string } {
+  const a = args ?? {};
+
+  switch (toolName) {
+    case "preference_add": {
+      // `statement` is the user's own one-sentence framing — show it verbatim;
+      // scope / polarity / card_id are internal mechanics, intentionally hidden.
+      const statement = typeof a.statement === "string" ? a.statement : undefined;
+      return { title: "Save a preference", detail: statement ?? argsPreview };
+    }
+    case "COMPOSIO_MULTI_EXECUTE_TOOL": {
+      // Meta-tool: `calls` is a batch of {tool_slug, arguments}. We can't write
+      // copy per SaaS tool, so label each by its humanized slug.
+      const calls = Array.isArray(a.calls) ? a.calls : [];
+      const actions = calls
+        .map((c) =>
+          c && typeof c === "object"
+            ? (c as Record<string, unknown>).tool_slug
+            : undefined,
+        )
+        .filter((s): s is string => typeof s === "string")
+        .map(humanizeSlug);
+      if (actions.length === 0) return { title: "Run an action", detail: argsPreview };
+      if (actions.length === 1) return { title: actions[0] };
+      return {
+        title: `Run ${actions.length} actions`,
+        detail: actions.map((s) => `• ${s}`).join("\n"),
+      };
+    }
+    default:
+      // Future side-effect tool with no template yet: humanize the name.
+      return { title: humanizeSlug(toolName), detail: argsPreview };
+  }
+}
+
 export function HitlApprovalCard({
   action,
   disabled = false,
@@ -43,6 +94,11 @@ export function HitlApprovalCard({
   const allowed = action.allowedDecisions;
   const canReject = allowed.length === 0 || allowed.includes("reject");
   const canApprove = allowed.length === 0 || allowed.includes("approve");
+  const { title, detail } = describeApproval(
+    action.toolName,
+    action.args,
+    action.argsPreview,
+  );
 
   return (
     <div className="rounded-xl border border-amber-400/30 bg-amber-50/40 overflow-hidden">
@@ -59,16 +115,19 @@ export function HitlApprovalCard({
             {t("hitl.needsApproval")}
           </Text>
           <Text variant="bodySm" weight="semibold" className="block text-foreground/85 truncate leading-tight">
-            {action.toolName}
+            {title}
           </Text>
         </div>
       </div>
 
-      {action.argsPreview ? (
+      {detail ? (
         <div className="px-3 pb-2">
-          <pre className="text-caption text-foreground/60 bg-foreground/[0.03] rounded-lg px-2.5 py-2 overflow-x-auto whitespace-pre-wrap break-words">
-            {action.argsPreview}
-          </pre>
+          <Text
+            variant="bodySm"
+            className="block text-foreground/70 bg-foreground/[0.03] rounded-lg px-2.5 py-2 whitespace-pre-wrap break-words leading-snug"
+          >
+            {detail}
+          </Text>
         </div>
       ) : null}
 

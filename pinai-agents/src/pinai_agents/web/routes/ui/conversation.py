@@ -526,6 +526,9 @@ async def history(
                     "toolUseId": pa["interrupt_id"],
                     "toolName": pa.get("tool_name") or "tool",
                     "argsPreview": pa.get("args_preview"),
+                    # Structured input so a card rebuilt on refresh humanizes the
+                    # same as the live frame (worker stores it on pending_action).
+                    "args": pa.get("args"),
                     "allowedDecisions": pa.get("allowed_decisions") or [],
                     # The reasoning / tool-call parts the agent streamed BEFORE
                     # the interrupt. They're NOT in pai_chat_messages yet (they

@@ -245,6 +245,9 @@ export interface ConversationAwaiting {
   toolUseId: string;
   toolName: string;
   argsPreview?: string;
+  /** Structured tool input (mirrors the live frame's `args`) so a card rebuilt
+   *  from history after a refresh humanizes the same as the live one. */
+  args?: Record<string, unknown>;
   allowedDecisions: string[];
   /** Reasoning / tool-call parts the agent streamed before the interrupt (not
    *  yet persisted — they land on resume). Same shape as a history message's
