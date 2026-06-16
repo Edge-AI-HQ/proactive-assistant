@@ -8,16 +8,15 @@
  * the user, and the user's reply is just a normal user turn on the
  * same thread.
  *
- * 本文件是 history page → RunSnapshot 的全部转换与状态合成逻辑：
- * 纯函数、可回放测试（见 card-execution.test.ts）。轮询/bootstrap 的
- * React 生命周期编排在 @pin-ai/state 的 queries/card-execution.ts。
+ * 本文件是 transcript（ConversationEntry[]）→ RunSnapshot 的全部转换与状态
+ * 合成逻辑：纯函数、可回放测试（见 card-execution.test.ts）。card detail 与
+ * main chat 现共用同一 SSE conversation runtime，snapshot 是其 transcript 上的
+ * 纯派生（deriveRunSnapshot）。SSE 生命周期编排在 @pin-ai/state 的
+ * queries/card-execution.ts。
  */
-import {
-  type ConversationHistoryMessage,
-  type ConversationHistoryPage,
-  type ConversationHistoryToolCallPart,
-} from "../api/conversation";
 import { stripRequestOnlyCardContext } from "../domain/card-chat-session";
+import type { ConversationEntry, HitlRequiresAction } from "./conversation";
+import type { ConversationContentPart } from "./tool-steps";
 
 // ── Shared event envelope ─────────────────────────────────────────────────
 
@@ -97,15 +96,6 @@ export interface LastMessagePayload {
   risks: string[];
 }
 
-export function messagePayloadEqual(
-  a: LastMessagePayload | null,
-  b: LastMessagePayload | null,
-): boolean {
-  if (a === b) return true;
-  if (!a || !b) return false;
-  return JSON.stringify(a) === JSON.stringify(b);
-}
-
 export function toMessagePayload(p: PendingInput): LastMessagePayload {
   return {
     message: p.message,
@@ -114,24 +104,6 @@ export function toMessagePayload(p: PendingInput): LastMessagePayload {
     plan: p.plan ?? [],
     dangerous_actions: p.dangerous_actions ?? [],
     risks: p.risks ?? [],
-  };
-}
-
-export function mergeAuditFields(
-  incoming: LastMessagePayload,
-  prev: LastMessagePayload | null,
-): LastMessagePayload {
-  if (!prev) return incoming;
-  const incomingHasAudit =
-    incoming.plan.length > 0
-    || incoming.dangerous_actions.length > 0
-    || incoming.risks.length > 0;
-  if (incomingHasAudit) return incoming;
-  return {
-    ...incoming,
-    plan: prev.plan,
-    dangerous_actions: prev.dangerous_actions,
-    risks: prev.risks,
   };
 }
 
@@ -152,12 +124,6 @@ export interface RunSnapshot {
   completedAt: string | null;
 }
 
-export const CARD_EXECUTION_TERMINAL: ReadonlySet<RunStatus> = new Set([
-  "done",
-  "error",
-  "cancelled",
-]);
-
 export const CARD_THREAD_PREFIX = "card-thread-";
 
 export function cardSessionKeyFor(runId: string): string {
@@ -165,22 +131,28 @@ export function cardSessionKeyFor(runId: string): string {
   return `${CARD_THREAD_PREFIX}${runId}`;
 }
 
-// ── conversation history → RunSnapshot adapter ───────────────────────────
+// ── transcript → RunSnapshot adapter ─────────────────────────────────────
 
-/** Narrowed text part of a history message (api ConversationHistoryPart). */
-interface HistoryTextPart {
-  type: "text";
-  text: string;
+type ToolCallPart = Extract<ConversationContentPart, { type: "tool-call" }>;
+
+/** Tool-call status from a transcript content part. historyAssistantParts /
+ *  LiveContentBuilder both stash it under `args.status` ("running"|"ok"|
+ *  "error"); a settled call also carries `result`/`isError`, but `args.status`
+ *  is the single source both paths agree on. */
+function toolStatus(part: ToolCallPart): "running" | "ok" | "error" {
+  const s = part.args.status;
+  return s === "ok" || s === "error" ? s : "running";
 }
 
-/** Pull the propose_action structured args out of a tool-call part.
- *  Tolerant: when `args` is missing (e.g. the call exceeded the 8 KB
- *  cap), the call is treated as if propose_action's payload were
- *  unavailable and the FE falls back to argsPreview-only rendering. */
-function parseProposeAction(part: ConversationHistoryToolCallPart): PendingInput | null {
+/** Pull the propose_action structured args from a transcript tool-call part.
+ *  The structured payload lives in `part.args.input` (historyAssistantParts /
+ *  LiveContentBuilder wrap the raw tool args under `input`). Tolerant: when
+ *  `input` is missing (e.g. the call exceeded the 8 KB cap), propose_action's
+ *  payload is unavailable and the FE falls back to argsPreview-only rendering. */
+function parseProposeAction(part: ToolCallPart): PendingInput | null {
   if (part.toolName !== "propose_action") return null;
-  const raw = part.args;
-  if (!raw || typeof raw !== "object") return null;
+  const raw = part.args.input;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
   const message = typeof r.message === "string" ? r.message : "";
   if (!message) return null;
@@ -202,74 +174,66 @@ function parseProposeAction(part: ConversationHistoryToolCallPart): PendingInput
   };
 }
 
-/** Walk the conversation history page and synthesize the RunSnapshot
- *  shape ChatDetailView expects. Each tool-call becomes a
- *  (chat:tool:start, chat:tool:result?) pair in the events log so the
- *  existing eventsToMessages projection keeps working; each
- *  propose_action additionally emits an input_required event so the
- *  pause-history walker (StaticPauseCard) finds it. The page's
- *  `active` / `awaiting` mark an in-flight turn not yet in the rows —
- *  they drive the status synthesis and the bootstrap guard
- *  (metadata.inFlight). */
-export function chatHistoryToSnapshot(
+/** Walk the unified transcript (ConversationEntry[]) and synthesize the
+ *  RunSnapshot the card drawer expects — the same projection
+ *  chatHistoryToSnapshot did from a history page, but now sourced from the
+ *  single conversation runtime (SSE) so card detail and main chat share ONE
+ *  data path. Each tool-call → (chat:tool:start, chat:tool:result?) events;
+ *  each propose_action → an input_required event (StaticPauseCard reads
+ *  metadata.plan_revisions / events). Status is synthesized from the transcript
+ *  tail + the runtime's busy / awaiting state: an in-flight turn shows as a
+ *  `running` trailing assistant entry once frames stream, and `ctx.busy`
+ *  (= the old history page's `active != null`) covers the gap before the first
+ *  frame — together replacing the old page.active/awaiting override. */
+export function deriveRunSnapshot(
   sessionKey: string,
-  page: ConversationHistoryPage,
+  transcript: ConversationEntry[],
+  ctx: { awaitingDecision: HitlRequiresAction | null; busy: boolean },
 ): RunSnapshot {
   const events: SSEEvent[] = [];
-  const messages: ConversationHistoryMessage[] = Array.isArray(page.messages)
-    ? page.messages
-    : [];
-
   let latestProposeAction: PendingInput | null = null;
   let finalText = "";
   let saw_error_part = false;
-
-  // Walk messages in order; each time we see a propose_action we open a
-  // new "pause slot" and the NEXT user HumanMessage fills it. ChatDetailView's
-  // StaticPauseCard reads these via `snapshot.metadata.plan_revisions[i].reply`
-  // — they're the durable source for past user replies (survives refresh /
-  // SSE reconnect). Without this, the FE shows the agent pause card but no
-  // user reply bubble for any pause prior to the current session.
+  // Each propose_action opens a "pause slot" the NEXT user turn fills —
+  // StaticPauseCard reads these via snapshot.metadata.plan_revisions[i].reply
+  // (durable past user replies, survives refresh / reconnect).
   const planRevisions: Array<{ reply: string }> = [];
   let awaitingUserReplyForPause = false;
 
-  for (const m of messages) {
-    const parts = Array.isArray(m.parts) ? m.parts : [];
-    // User HumanMessage: if it's the first user turn AFTER a propose_action,
-    // pair it with that pause slot. Concatenate text parts (rare to have
-    // multiple, but safe).
-    if (m.role === "user" && awaitingUserReplyForPause) {
-      const replyText = parts
-        .filter((p): p is HistoryTextPart => p.type === "text")
-        .map((p) => p.text)
-        .join("")
-        .trim();
-      if (replyText) {
-        planRevisions.push({ reply: stripRequestOnlyCardContext(replyText) });
-        awaitingUserReplyForPause = false;
+  for (const entry of transcript) {
+    if (entry.kind === "user") {
+      if (awaitingUserReplyForPause) {
+        const replyText = entry.text.trim();
+        if (replyText) {
+          planRevisions.push({ reply: stripRequestOnlyCardContext(replyText) });
+          awaitingUserReplyForPause = false;
+        }
       }
+      continue;
     }
-    for (const part of parts) {
+    for (const part of entry.parts) {
       if (part.type === "tool-call") {
+        const status = toolStatus(part);
         events.push({
           type: "chat:tool:start",
-          ts: m.createdAt,
+          ts: entry.ts,
           data: {
             toolCallId: part.toolCallId,
             name: part.toolName,
-            argsPreview: part.argsPreview ?? "",
-            args: part.args,
+            argsPreview:
+              typeof part.args.argsPreview === "string" ? part.args.argsPreview : "",
+            args: part.args.input,
           },
         });
-        if (part.status === "ok" || part.status === "error") {
-          if (part.status === "error") saw_error_part = true;
+        if (status === "ok" || status === "error") {
+          if (status === "error") saw_error_part = true;
           events.push({
             type: "chat:tool:result",
-            ts: m.createdAt,
+            ts: entry.ts,
             data: {
               toolCallId: part.toolCallId,
-              isError: part.status === "error",
-              meta: part.meta ?? "",
+              isError: status === "error",
+              meta: typeof part.args.meta === "string" ? part.args.meta : "",
             },
           });
         }
@@ -278,81 +242,68 @@ export function chatHistoryToSnapshot(
           latestProposeAction = proposed;
           events.push({
             type: "input_required",
-            ts: m.createdAt,
+            ts: entry.ts,
             data: proposed as unknown as Record<string, unknown>,
           });
-          // Mark the pause slot as awaiting the next user reply.
           awaitingUserReplyForPause = true;
         }
-      } else if (part.type === "text" && m.role === "assistant") {
-        // The agent's prose. Accumulate as the eventual `result`
-        // summary; if it sits AFTER all propose_action calls in the
-        // last assistant turn, that's the final report.
+      } else if (part.type === "text") {
+        // The agent's prose; the trailing run becomes the `result` summary.
         finalText += part.text;
       }
     }
   }
 
-  // Status synthesis. An in-flight turn (page.active / page.awaiting) is NOT
-  // in the rows yet — finalize writes on completion — so it overrides the
-  // last-row reading; without it, a reply would flash back to the previous
-  // propose_action's "needs_input" while the agent is actually running.
-  // Otherwise look at the LAST assistant turn:
-  //   - tool call in flight (status="running") and not yet a
-  //     propose_action → status="running"
-  //   - propose_action present AND no user reply after it
-  //     (i.e. it's the latest assistant turn) → status="needs_input"
-  //   - text-only completion (no propose_action) → status="pending_done"
-  //   - any chat:tool:result with isError + nothing past it → "error"
+  // Status synthesis. In-flight shows as a `running` trailing assistant entry
+  // once frames stream; ctx.busy (= old history page's `active != null`) covers
+  // the pre-first-frame gap (regenerate / resync); HITL pause is the runtime's
+  // awaitingDecision — together they replace the old page.active / page.awaiting
+  // override. Otherwise inspect the last assistant turn (running tool → running
+  // / propose_action → needs_input / final text → pending_done / tool error →
+  // error).
   let status: RunStatus = "running";
   let result: RunResult | null = null;
   let errorMessage: string | null = null;
-  const inFlight = Boolean(page.active || page.awaiting);
+  const lastEntry = transcript.length > 0 ? transcript[transcript.length - 1] : null;
+  const lastRunning = lastEntry?.kind === "assistant" && lastEntry.running;
+  const inFlight = Boolean(lastRunning || ctx.awaitingDecision || ctx.busy);
 
-  if (page.awaiting) {
-    // HITL pause: a side-effect tool awaits approval. The drawer can't
-    // render the approval gate (CardChat's ConversationView does) — surface
-    // as needs_input so the shimmer stops and the user opens the chat.
+  if (ctx.awaitingDecision) {
+    // HITL pause: drawer can't render the approval gate (CardChat's
+    // ConversationView does) — surface needs_input so the user opens the chat.
     status = "needs_input";
-  } else if (page.active) {
+  } else if (lastRunning || ctx.busy) {
+    // In-flight: a `running` trailing entry once frames stream, OR ctx.busy
+    // (= the old history page's `active != null`) before the first frame —
+    // covers regenerate-in-flight / resync-to-active so the drawer doesn't
+    // flash the previous turn's pending_done/needs_input until a frame lands.
     status = "running";
-  } else if (messages.length === 0) {
-    // Fresh thread (fanout hasn't fired or never reached the worker).
-    // Surface as "running" so the FE shows the preparing spinner.
+  } else if (!lastEntry) {
+    // Fresh thread (fanout hasn't fired / not reached the worker).
+    status = "running";
+  } else if (lastEntry.kind === "user") {
     status = "running";
   } else {
-    const lastMsg = messages[messages.length - 1];
-    if (lastMsg.role === "user") {
-      // User just replied; agent is presumably mid-turn (we'll see
-      // its assistant reply on the next poll).
+    const parts = lastEntry.parts;
+    const hasProposeAction = parts.some(
+      (p) => p.type === "tool-call" && p.toolName === "propose_action",
+    );
+    const hasRunningTool = parts.some(
+      (p) => p.type === "tool-call" && toolStatus(p) === "running",
+    );
+    const hasFinalText = parts.some((p) => p.type === "text" && Boolean(p.text));
+    if (hasRunningTool) {
       status = "running";
+    } else if (hasProposeAction && latestProposeAction) {
+      status = "needs_input";
+    } else if (hasFinalText) {
+      status = "pending_done";
+      result = { summary: finalText.trim(), side_effects: [] };
+    } else if (saw_error_part) {
+      status = "error";
+      errorMessage = "Agent run failed; see tool errors above.";
     } else {
-      // Assistant message — inspect its parts.
-      const parts = Array.isArray(lastMsg.parts) ? lastMsg.parts : [];
-      const hasProposeAction = parts.some(
-        (p): p is ConversationHistoryToolCallPart =>
-          p.type === "tool-call" && p.toolName === "propose_action",
-      );
-      const hasRunningTool = parts.some(
-        (p): p is ConversationHistoryToolCallPart =>
-          p.type === "tool-call" && p.status === "running",
-      );
-      const hasFinalText = parts.some(
-        (p): p is HistoryTextPart => p.type === "text" && Boolean(p.text),
-      );
-      if (hasRunningTool) {
-        status = "running";
-      } else if (hasProposeAction && latestProposeAction) {
-        status = "needs_input";
-      } else if (hasFinalText) {
-        status = "pending_done";
-        result = { summary: finalText.trim(), side_effects: [] };
-      } else if (saw_error_part) {
-        status = "error";
-        errorMessage = "Agent run failed; see tool errors above.";
-      } else {
-        status = "running";
-      }
+      status = "running";
     }
   }
 

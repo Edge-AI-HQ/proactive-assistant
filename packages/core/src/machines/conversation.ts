@@ -335,3 +335,222 @@ export function deriveCardResultMessageId(
   if (!hasText || hasProposal) return undefined;
   return last.serverId ?? null;
 }
+
+// ── Conversation runtime reducer（流式状态机）─────────────────────────────
+// 把 useConversationRuntime 散在各处的 setState 状态转换提纯成纯
+// (state, action) → state：① 消除 busy/awaitingDecision/threadId 的镜像 ref
+// （reducer dispatch 天然拿最新 state，乐观 send 的 queued 判断也在 reducer
+// 内做）；② envelope→state 转换可回放单测。LiveContentBuilder（mutable 增量
+// 组装）仍留在 hook 的 ref，flush 时把 builder.snapshot() 经 `turn_flush` 写进
+// 这里的 transcript（builder 不进纯 reducer）。switch body 自身不调 Date.now()
+// ——流式 turn 的 ts 由 dispatch 方在 action 里 stamp；唯一例外是 `resync` 委派的
+// mergeTranscriptOnResync，它为「reload 时恢复一个本地无对应气泡的在途输入」这一
+// 罕见 fallback 仍 mint id + Date.now()（pre-existing，运行时无害，回放非确定）。
+
+export interface ConversationState {
+  transcript: ConversationEntry[];
+  connection: ConversationConnectionState;
+  ready: boolean;
+  busy: boolean;
+  awaitingDecision: HitlRequiresAction | null;
+  threadId: string | null;
+  hasMoreHistory: boolean;
+  /** 流式 turn 在 transcript 的缓存 index（O(1) per-delta flush；-1 = 无）。 */
+  turnPos: number;
+}
+
+export function initConversationState(session: string): ConversationState {
+  return {
+    transcript: [],
+    connection: "connecting",
+    ready: false,
+    busy: false,
+    awaitingDecision: null,
+    threadId: session || null,
+    hasMoreHistory: false,
+    turnPos: -1,
+  };
+}
+
+export type ConversationAction =
+  // 标量
+  | { type: "set_connection"; connection: ConversationConnectionState }
+  | { type: "set_ready"; ready: boolean }
+  | { type: "set_busy"; busy: boolean }
+  | { type: "set_awaiting"; awaiting: HitlRequiresAction | null }
+  | { type: "set_thread"; threadId: string }
+  | { type: "set_has_more"; hasMoreHistory: boolean }
+  // 流式 turn（builder.snapshot() 经此写 transcript；ts 由 dispatch 方 stamp）
+  | { type: "turn_flush"; turnId: string; parts: ConversationContentPart[]; running: boolean; ts: number }
+  | { type: "turn_drop"; turnId: string }
+  // history / resync
+  | { type: "resync"; history: ConversationEntry[]; serverEntries: ConversationActiveEntry[] }
+  | { type: "prepend_history"; entries: ConversationEntry[] }
+  // 乐观 user 气泡（queued 由 reducer 据 busy/awaiting 判定 → 消除镜像 ref）
+  | { type: "optimistic_user"; id: string; text: string; ts: number }
+  | { type: "mark_failed"; id: string; failed: boolean }
+  | { type: "set_user_text"; id: string; text: string }
+  | { type: "set_user_queued"; id: string; queued: boolean }
+  | { type: "remove_user"; id: string }
+  | { type: "insert_user_at"; index: number; entry: ConversationUserEntry }
+  // turn 维护
+  | { type: "persisted"; messageId: string }
+  | { type: "clear_queued_flags" }
+  | { type: "drop_trailing_assistant" };
+
+export function conversationReducer(
+  state: ConversationState,
+  action: ConversationAction,
+): ConversationState {
+  switch (action.type) {
+    case "set_connection":
+      return { ...state, connection: action.connection };
+    case "set_ready":
+      return { ...state, ready: action.ready };
+    case "set_busy":
+      return { ...state, busy: action.busy };
+    case "set_awaiting":
+      return { ...state, awaitingDecision: action.awaiting };
+    case "set_thread":
+      return { ...state, threadId: action.threadId };
+    case "set_has_more":
+      return { ...state, hasMoreHistory: action.hasMoreHistory };
+    case "turn_flush": {
+      // 搬 turn-assembly flushTurn：turnPos 缓存命中则原地更新，否则 findIndex；
+      // 缺失则 append（新 turn entry）。ts 仅 append 时用（更新保留 existing.ts）。
+      const { turnId, parts, running, ts } = action;
+      let idx = state.turnPos;
+      const cached =
+        idx >= 0 && idx < state.transcript.length ? state.transcript[idx] : undefined;
+      if (!cached || cached.kind !== "assistant" || cached.id !== turnId) {
+        idx = state.transcript.findIndex((e) => e.kind === "assistant" && e.id === turnId);
+      }
+      if (idx === -1) {
+        return {
+          ...state,
+          transcript: [
+            ...state.transcript,
+            { kind: "assistant", id: turnId, ts, parts, running },
+          ],
+          turnPos: state.transcript.length,
+        };
+      }
+      const next = state.transcript.slice();
+      const existing = next[idx] as ConversationAssistantEntry;
+      next[idx] = { ...existing, parts, running };
+      return { ...state, transcript: next, turnPos: idx };
+    }
+    case "turn_drop":
+      // finalizeTurn：builder 无可见 parts 时删掉空 turn entry。
+      return {
+        ...state,
+        transcript: state.transcript.filter(
+          (e) => !(e.kind === "assistant" && e.id === action.turnId),
+        ),
+        turnPos: -1,
+      };
+    case "resync":
+      return {
+        ...state,
+        transcript: mergeTranscriptOnResync(state.transcript, action.history, action.serverEntries),
+        turnPos: -1,
+      };
+    case "prepend_history":
+      return {
+        ...state,
+        transcript: [...action.entries, ...state.transcript],
+        // prepend 把现有 entry 右移；保持 turnPos 指向同一 turn。
+        turnPos: state.turnPos >= 0 ? state.turnPos + action.entries.length : -1,
+      };
+    case "optimistic_user": {
+      // queued = 已有 in-flight turn / 待审批（取代旧 busyRef||awaitingRef 镜像）。
+      const queued = state.busy || state.awaitingDecision !== null;
+      const entry: ConversationUserEntry = {
+        kind: "user",
+        id: action.id,
+        ts: action.ts,
+        text: action.text,
+        clientId: action.id,
+        ...(queued ? { queued: true } : {}),
+      };
+      return { ...state, transcript: [...state.transcript, entry] };
+    }
+    case "mark_failed":
+      return {
+        ...state,
+        transcript: state.transcript.map((e) =>
+          e.kind === "user" && e.id === action.id ? { ...e, failed: action.failed } : e,
+        ),
+      };
+    case "set_user_text":
+      return {
+        ...state,
+        transcript: state.transcript.map((e) =>
+          e.kind === "user" && e.id === action.id ? { ...e, text: action.text } : e,
+        ),
+      };
+    case "set_user_queued":
+      return {
+        ...state,
+        transcript: state.transcript.map((e) =>
+          e.kind === "user" && e.id === action.id ? { ...e, queued: action.queued } : e,
+        ),
+      };
+    case "remove_user":
+      return {
+        ...state,
+        transcript: state.transcript.filter((e) => !(e.kind === "user" && e.id === action.id)),
+      };
+    case "insert_user_at": {
+      // 删除回滚：原位插回（已存在则 no-op，幂等）。
+      if (state.transcript.some((e) => e.kind === "user" && e.id === action.entry.id)) return state;
+      const insertAt =
+        action.index >= 0 ? Math.min(action.index, state.transcript.length) : state.transcript.length;
+      return {
+        ...state,
+        transcript: [
+          ...state.transcript.slice(0, insertAt),
+          action.entry,
+          ...state.transcript.slice(insertAt),
+        ],
+      };
+    }
+    case "persisted": {
+      // chat:persisted：真实 pai_chat_messages id 落到最后一个 assistant 的
+      // serverId（NOT id——改 id 会让 Virtuoso key 变致 remount flicker）。
+      const mid = action.messageId;
+      const t = state.transcript;
+      for (let i = t.length - 1; i >= 0; i--) {
+        if (t[i].kind === "assistant") {
+          const a = t[i] as ConversationAssistantEntry;
+          if (a.serverId === mid) return state;
+          const next = t.slice();
+          next[i] = { ...a, serverId: mid };
+          return { ...state, transcript: next };
+        }
+      }
+      return state;
+    }
+    case "clear_queued_flags":
+      // chat:done：把排队 user 气泡的 queued 标记清掉。
+      return {
+        ...state,
+        transcript: state.transcript.map((e) =>
+          e.kind === "user" && e.queued ? { ...e, queued: false } : e,
+        ),
+      };
+    case "drop_trailing_assistant": {
+      // regenerate：丢弃末尾 assistant turn（含其后所有，沿用 slice 到该 idx）。
+      let lastAssistantIdx = -1;
+      for (let i = state.transcript.length - 1; i >= 0; i--) {
+        if (state.transcript[i].kind === "assistant") {
+          lastAssistantIdx = i;
+          break;
+        }
+      }
+      return lastAssistantIdx >= 0
+        ? { ...state, transcript: state.transcript.slice(0, lastAssistantIdx), turnPos: -1 }
+        : state;
+    }
+  }
+}

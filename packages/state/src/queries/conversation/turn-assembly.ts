@@ -1,30 +1,25 @@
 /**
  * Turn assembly — the live SSE-streamed assistant turn's builder + its
- * transcript entry, folded from deltas in refs and flushed to React state.
+ * transcript entry, folded from deltas in refs and flushed to the reducer.
  *
  * Extracted from useConversationRuntime (Phase 2) so the streaming-turn
- * lifecycle is one cohesive, independently-reasoned unit. Behaviour is
- * identical to the previous inline version — the SSE handler (sse-handler.ts)
- * and the connection lifecycle (conversation.ts) drive these via the returned
- * refs + helpers.
+ * lifecycle is one cohesive unit. Step 1b: the mutable builder + turn refs stay
+ * here; transcript state lives in the core conversationReducer, so flush no
+ * longer calls setTranscript — it dispatches `turn_flush` (the reducer owns the
+ * turnPos O(1) cache + in-place/append). Behaviour is identical to the inline
+ * version; the SSE handler (sse-handler.ts) and connection lifecycle
+ * (conversation.ts) drive these via the returned refs + helpers.
  */
 import { useCallback, useRef } from "react";
-import type { Dispatch, MutableRefObject, SetStateAction } from "react";
+import type { Dispatch, MutableRefObject } from "react";
 
-import {
-  LiveContentBuilder,
-  nextEntryId,
-  type ConversationAssistantEntry,
-  type ConversationEntry,
-} from "@pin-ai/core";
+import { LiveContentBuilder, nextEntryId, type ConversationAction } from "@pin-ai/core";
 
 export interface TurnAssembly {
   /** The streaming turn's builder (null between turns). */
   builderRef: MutableRefObject<LiveContentBuilder | null>;
   /** The streaming turn's transcript entry id (the stable "turn-N" list key). */
   turnIdRef: MutableRefObject<string | null>;
-  /** Cached index of the turn entry in the transcript (O(1) per-delta flush). */
-  turnPosRef: MutableRefObject<number>;
   /** Open turn's traceId — turn-boundary detection (see the SSE handler). */
   turnTraceRef: MutableRefObject<string | null>;
   /** Send-time optimistic placeholder turn id while still UNCLAIMED. */
@@ -36,12 +31,11 @@ export interface TurnAssembly {
   dropIdlePlaceholder: (placeholderId: string | null) => void;
 }
 
-export function useTurnAssembly(
-  setTranscript: Dispatch<SetStateAction<ConversationEntry[]>>,
-): TurnAssembly {
-  // The streaming turn currently being assembled from SSE deltas. We keep the
-  // builder + its transcript entry id in refs so the SSE loop can fold deltas
-  // without re-subscribing, then flush to React state on each change.
+export function useTurnAssembly(dispatch: Dispatch<ConversationAction>): TurnAssembly {
+  // The streaming turn currently being assembled from SSE deltas. The builder +
+  // its transcript entry id stay in refs so the SSE loop can fold deltas without
+  // re-subscribing, then flush to the reducer on each change. (turnPos moved into
+  // reducer state — the reducer's turn_flush owns the O(1) cache + revalidation.)
   const builderRef = useRef<LiveContentBuilder | null>(null);
   const turnIdRef = useRef<string | null>(null);
   // The send-time optimistic placeholder's turn id while it's still UNCLAIMED
@@ -49,78 +43,50 @@ export function useTurnAssembly(
   const placeholderTurnIdRef = useRef<string | null>(null);
   /** 当前开放 turn 的 traceId——turn 边界检测用（见 handleEnvelope 头部）。 */
   const turnTraceRef = useRef<string | null>(null);
-  // Cached index of the current turn's entry in the transcript array, so a
-  // per-delta flush is O(1) instead of scanning the whole transcript every
-  // token. Other appends (ticks / user messages) always go to the end and
-  // never shift this entry; a transcript trim does, so flushTurn revalidates
-  // the cached index and re-finds it on a miss.
-  const turnPosRef = useRef(-1);
 
-  // Push the in-progress assistant turn's snapshot into the transcript. If the
-  // turn entry doesn't exist yet it's appended; otherwise its parts are
-  // replaced in place. `running` controls the shimmer affordance.
+  // Push the in-progress assistant turn's snapshot into the transcript. The
+  // reducer appends a new turn entry if none exists, else replaces its parts in
+  // place (turnPos cache). `running` controls the shimmer affordance. ts is
+  // stamped here (reducer is pure) and only used on append.
   const flushTurn = useCallback(
     (running: boolean) => {
       const builder = builderRef.current;
       const turnId = turnIdRef.current;
       if (!builder || !turnId) return;
-      const parts = builder.snapshot();
-      setTranscript((prev) => {
-        let idx = turnPosRef.current;
-        const cached = idx >= 0 && idx < prev.length ? prev[idx] : undefined;
-        if (!cached || cached.kind !== "assistant" || cached.id !== turnId) {
-          idx = prev.findIndex((e) => e.kind === "assistant" && e.id === turnId);
-        }
-        if (idx === -1) {
-          turnPosRef.current = prev.length;
-          return [
-            ...prev,
-            { kind: "assistant", id: turnId, ts: Date.now(), parts, running },
-          ];
-        }
-        turnPosRef.current = idx;
-        const next = prev.slice();
-        const existing = next[idx] as ConversationAssistantEntry;
-        next[idx] = { ...existing, parts, running };
-        return next;
-      });
+      dispatch({ type: "turn_flush", turnId, parts: builder.snapshot(), running, ts: Date.now() });
     },
-    [setTranscript],
+    [dispatch],
   );
 
   const ensureTurn = useCallback(() => {
     if (!builderRef.current) builderRef.current = new LiveContentBuilder();
-    if (!turnIdRef.current) {
-      turnIdRef.current = nextEntryId("turn");
-      turnPosRef.current = -1;
-    }
+    // A fresh turnId makes the next flush's cache check miss (id mismatch) → the
+    // reducer findIndex's it (absent) → appends, resetting turnPos itself.
+    if (!turnIdRef.current) turnIdRef.current = nextEntryId("turn");
   }, []);
 
   const finalizeTurn = useCallback(() => {
-    if (turnIdRef.current && builderRef.current) {
-      // If the builder produced no visible parts, drop the empty entry rather
-      // than leaving a blank bubble.
-      if (builderRef.current.isEmpty()) {
-        const turnId = turnIdRef.current;
-        setTranscript((prev) =>
-          prev.filter((e) => !(e.kind === "assistant" && e.id === turnId)),
-        );
+    const builder = builderRef.current;
+    const turnId = turnIdRef.current;
+    if (turnId && builder) {
+      // No visible parts (silent turn) → drop the empty entry; else flush a
+      // final non-running snapshot.
+      if (builder.isEmpty()) {
+        dispatch({ type: "turn_drop", turnId });
       } else {
-        flushTurn(false);
+        dispatch({ type: "turn_flush", turnId, parts: builder.snapshot(), running: false, ts: Date.now() });
       }
     }
     builderRef.current = null;
     turnIdRef.current = null;
-    turnPosRef.current = -1;
     placeholderTurnIdRef.current = null;
-  }, [flushTurn, setTranscript]);
+  }, [dispatch]);
 
   // Optimistic turn placeholder: open the assistant entry (whose in-entry
-  // "Thinking…" pill shows while parts are empty) the moment the user sends,
-  // so the reply slot exists immediately — the send anchor scrolls against it
-  // and the pill never pops in later. The real turn's frames continue into
-  // the same builder (ensureTurn is idempotent). Skipped when a turn is
-  // already mid-stream — that builder isn't ours to reuse.
+  // "Thinking…" pill shows while parts are empty) the moment the user sends, so
+  // the reply slot exists immediately. The real turn's frames continue into the
+  // same builder (ensureTurn is idempotent). Skipped when a turn is already
+  // mid-stream — that builder isn't ours to reuse.
   const createTurnPlaceholder = useCallback((): string | null => {
     if (builderRef.current) return null;
     ensureTurn();
@@ -144,7 +110,6 @@ export function useTurnAssembly(
   return {
     builderRef,
     turnIdRef,
-    turnPosRef,
     turnTraceRef,
     placeholderTurnIdRef,
     ensureTurn,

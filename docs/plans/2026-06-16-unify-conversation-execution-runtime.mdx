@@ -1,0 +1,143 @@
+---
+title: "统一 conversation 执行流程：card execution 收敛进 main chat 的单一 runtime"
+description: "把 card execution（useCardExecutionRun：poll history 1.5s + 独立 useReducer + chatHistoryToSnapshot）和 main chat（useConversationRuntime：SSE + useState+镜像ref + transcript）这两套消费同一个 /api/conversation/* card-thread 的前端执行流程，收敛成业界标准的单一架构：单一 SSE 事件流 → core 纯 conversationReducer(state,envelope)→state → 单一 transcript → 多个纯 selector 投影（transcript 视图 + deriveRunSnapshot 执行视图）。后端早已是一套 actor kernel（/api/conversation/*），本计划只收敛前端消费层。落地团队 SSOT research/2026-06-10-frontend-layering.mdx L164 已批准但 #95 没走完的 reducer 终态 + 对齐姊妹 card-execution 的 reducer 范式。一个 PR、4 step（reducer 化 → snapshot selector → card detail 复用 runtime → 收尾），每 step 一 commit + 独立验证（含 apps/mobile RN）。"
+---
+
+# 统一 conversation 执行流程
+
+> 状态:已实施(2026-06-16)。本文是「card execution 收敛进 main chat 单一 runtime」的设计 SSOT。**不碰后端**（`/api/conversation/*` actor kernel 早已统一，见 [Agent Core](./2026-06-04-agentrun-control-plane)）。落地 [前端分层 SSOT](../research/2026-06-10-frontend-layering.mdx) L164 已批准的 reducer 终态。
+
+## 结论（先读）
+
+1. **可行，且后端已是一套**。card execution 与 main chat 打同一组 `/api/conversation/*`（history / send / stream），消费同一个 `card-thread-*` session。差异只在**前端消费层**：card detail 用 poll + 独立 reducer + snapshot，main chat 用 SSE + useState + transcript。
+2. **终态 = 单一 SSE 流 → core 纯 reducer → 单一 transcript → 多 selector 投影**。这是 Claude/ChatGPT 级 agent app 的标准架构（一份 conversation 真相，多视图纯派生），也正是团队 SSOT L164 早已写死的方向。
+3. **不引 zustand**（YAGNI——当前无跨子树共享 transcript 的真实需求；先 reducer，将来真有共享再机械升级为 store）。
+4. **对外契约零改**：`UseConversationRuntimeResult` / `UseCardExecutionRun` 接口形状不变 → `ConversationView` / `ZebraCardDetailPanel` / `DrawerDetailBody` / apps/mobile `ChatScreen` 全部零改。统一是内部收敛。
+
+## 背景:当前两套执行流程
+
+```
+                  后端 /api/conversation/*  (一套 actor kernel,已统一)
+                            │ 同一个 card-thread-<id>
+        ┌────────────────────┴────────────────────┐
+  card detail drawer                          card chat / main chat
+  useCardExecutionRun (state/queries)         useConversationRuntime (state/queries)
+  · poll GET /history 每 1.5s (running 时)     · SSE 长连接 /stream (实时)
+  · useReducer + Action union (已 reducer 化)  · useState + 3 对镜像 ref ⚠️
+  · chatHistoryToSnapshot: history→RunSnapshot  · historyToEntries+envelope→transcript
+  · → DrawerDetailBody (plan/drafts/result)     · → ConversationView (对话气泡)
+```
+
+**问题**：
+- **同一 thread 被消费两次、两种方式**：poll（慢/费/不实时）vs SSE（实时）。
+- **两套状态管理范式**：card-execution 已 `useReducer`，main chat 还 `useState`+镜像 ref（review 指出的 inconsistency；镜像 ref `busyRef`/`awaitingDecisionRef`/`threadIdRef` 是公认 anti-pattern）。
+- **snapshot 本可派生却独立 fetch**：`chatHistoryToSnapshot` 需要的 plan/drafts/pendingInput/result 全在 transcript 的 tool-call parts 里（与已下沉的 `deriveCardResultMessageId`/`findHitlHostId` 同族）。
+
+**关键利好（已核实）**：
+- 后端同一套 `/api/conversation/*`（`useCardExecutionRun` 注释 + import `conversationHistory`/`conversationSend` 为证）。
+- card chat 已用 `useConversationRuntime` 跑 `card-thread-*` 的 SSE——**`useConversationRuntime` 支持 card thread 已被证明**，card detail 改用它无新风险。
+- `card-execution.ts` 已是 reducer 范式（`useReducer`+`Action`），是 main chat reducer 化的现成参照。
+
+## 目标 / 非目标
+
+**目标**：单一 conversation runtime（SSE + core 纯 reducer）作为唯一数据通路；transcript 与执行 snapshot 都是其上的纯 selector 投影；消除 card detail 的 1.5s poll、消除第二套 reducer、消除 main chat 的镜像 ref。
+
+**非目标**：① 不碰后端（已统一）；② 不引 zustand；③ 不改任何对外契约/DOM/视觉（纯内部收敛，测试为证）；④ 不做 review 里 P1/P2 的目录重组（语音去重可选顺带，余者另列）。
+
+## 最优架构（终态）
+
+```
+SSE /api/conversation/stream  (一套)
+   ↓ envelope
+core: conversationReducer(state, event) → state          ← 一套纯状态机(可回放单测)
+   ↓                          event = SSE envelope | 本地 action(history_loaded/resync/optimistic_send/...)
+ConversationState { transcript, connection, ready, busy, awaitingDecision, threadId, hasMoreHistory }
+   ↓ 纯 selector (core, 与 historyToEntries/deriveCardResultMessageId 同居)
+   ├─ state.transcript                      → ConversationView      (对话视图)
+   └─ deriveRunSnapshot(transcript, active) → DrawerDetailBody       (执行视图)
+   ↓
+state: useConversationRuntime  (薄 hook: SSE 生命周期 + dispatch + builder ref)
+   ├─ main chat / card chat   →  返回 transcript + actions（契约不变）
+   └─ useCardExecutionRun     →  内部复用上面这个 runtime + deriveRunSnapshot（契约不变）
+```
+
+**LiveContentBuilder 留在 ref**（mutable 增量组装，不进纯 reducer）：flush 时把 builder.snapshot() 经 `dispatch({type:'turn_flush', parts})` 写进 reducer 的 transcript。这是 reducer 纯度与流式增量的合理边界（review 已认同）。
+
+## 实施步骤（一个 PR，4 step，每 step 一 commit + 独立验证）
+
+> 用户拍板：一个 PR 全做完。step 内/间用 commit 分粒度。**step 1 是「风险集中区」（SSOT L210 原话），先补 core reducer 回放测试再动手**。
+
+### Step 1 — core 纯 `conversationReducer` + 薄 hook（reducer 化 main chat）
+- core `machines/conversation.ts` 新增 `ConversationState` + `conversationReducer(state, event)`：把现 `sse-handler.ts` 的 12-case envelope→state 转换 + 乐观 send/resync/history-loaded 翻译成纯 `(state,event)→next`。
+- `state/queries/conversation.ts` 改 `useReducer(conversationReducer, init)` + `dispatch`；**删 `busyRef`/`awaitingDecisionRef`/`threadIdRef` 三对镜像 ref**（dispatch 天然拿最新 state）。**保留**门铃 ref（`onTurnPersistedRef`/`onTurnDoneRef`/`localHistoryRef`）、cursor ref（`lastEventIdRef`/`oldestCursorRef`/`loadingMoreRef`）、`LiveContentBuilder` ref。
+- 对外 `UseConversationRuntimeResult` 形状不变 → ConversationView / ChatScreen / 测试 mock 零改。
+- **验证**：core 新增 `conversation-reducer.test.ts` 回放测试（envelope 序列 → state 断言，复用 conversation.test fixture 风格）；现有 25 个 useConversationRuntime 测试 + serverId 回归测试全过（契约不变）。
+
+### Step 2 — `deriveRunSnapshot(transcript)` 纯 selector
+- core `machines/card-execution.ts`：`chatHistoryToSnapshot(sessionKey, page)`（history→snapshot）重构为 `deriveRunSnapshot(sessionKey, transcript, active?)`（`ConversationEntry[]`→`RunSnapshot`）。从 transcript 的 `ConversationAssistantEntry.parts` 的 tool-call / propose_action 派生 plan/drafts/pendingInput/result/status（`parseProposeAction` 等逻辑复用，输入从 `ConversationHistoryToolCallPart` 切到 `ConversationContentPart`）。
+- 评估 `RunSnapshot.events: SSEEvent[]` 中间表示能否瘦身（若 DrawerDetailBody 只读 plan/drafts/result/pendingInput，events 可不再合成）。
+- **验证**：core `card-execution.test.ts` 增 `deriveRunSnapshot` 单测（transcript fixture → snapshot 各分支：running/propose_action pause/done/error）；保留并迁移现有 chatHistoryToSnapshot 测试到新签名。
+
+### Step 3 — card detail 复用 conversation runtime（消除 poll + 第二套 reducer）
+- `state/queries/card-execution.ts` `useCardExecutionRun(runId)` 重构：内部 `useConversationRuntime({ session: cardSessionKeyFor(runId), localHistory })` 拿 transcript + status，`deriveRunSnapshot(transcript)` 出 snapshot；**删 1.5s poll loop + 独立 useReducer + chatHistoryToSnapshot 调用**。
+- actions 映射到统一 runtime：`reply`/`continueWith` → runtime `sendMessage`；`cancel` → `stop`；`retry` → `regenerateLast` 或 bootstrap send；`confirmDone` → 本地 status（thread 持久不变，沿用现语义）。
+- 对外 `UseCardExecutionRun` 接口（snapshot/events/loading/error/5 actions）不变 → `ZebraCardDetailPanel`/`DrawerDetailBody` 零改。
+- **验证**：apps/web `npm run type-check && npm test`（ZebraCardDetailPanel 链路）；card detail drawer 实测（plan/drafts/result 显示一致、propose_action 暂停卡、reply 链路）；确认同一 card thread 同时开 detail + chat 时两 SSE 订阅互不干扰（各自 cursor，Redis Streams replay-gap）。
+
+### Step 4 — 收尾
+- 删 `card-execution.ts` 因 step 2/3 而冗余的部分（如 `chatHistoryToSnapshot` 旧签名、`SSEEvent` 合成若不再需要）。
+- `machines/conversation.ts` 现在真有 `(state,event)→state`，`machines/` 命名名副其实；评估 `LiveContentBuilder` 是否移出 machines（→ domain）。
+- 顺带 review P0：三处语音录制改用现成 `voice/VoiceButton`（可纳入本 PR 或注明单列）。
+- **全量验证**（见下）+ CI。
+
+## 与团队 SSOT / review 的关系
+
+- **落地** [前端分层 SSOT](../research/2026-06-10-frontend-layering.mdx) L164：「useConversationRuntime 是流式状态机，正解 = core 纯 reducer `(state,envelope)→state` + 薄 hook，最大红利可测试性」——#95 conversation 收官只做到拆文件 + 下沉 projection，停在 reducer 之前；本计划补完（step 1）。
+- **统一** card-execution 与 useConversationRuntime 的两套范式（review「状态管理」P1 的延伸——不仅 main chat reducer 化，更让 card execution 复用同一 runtime）。
+- **承接** [chat 前端重构](./2026-06-15-agent-chat-frontend-refactor.mdx) 已下沉的 transcript 派生纯函数（deriveRunSnapshot 与之同族同居 core）。
+
+## 风险与注意
+
+- **step 1 是风险集中区**：reducer 迁移触碰 SSE 流式核心。缓解：先写 core reducer 回放测试；对外契约严格不变（下游零改是行为不变的硬约束）；现有 25 测试全过才算行为保持。
+- **card detail poll→SSE 是行为升级**：必须确认 snapshot 内容与 poll 版逐项一致（drawer 实测），且 SSE 比 poll 更省更实时（收益）。
+- **同 thread 多 SSE 消费者**：card detail + card chat 可能同开同一 `card-thread-*`，两个 useConversationRuntime 各开一条 SSE。Redis Streams 支持（各自 lastEventId cursor、replay-gap-only），但需实测不串、不丢、不重。
+- **LiveContentBuilder 边界**：留 ref 不进 reducer，flush→dispatch 写 transcript；确保 turn 生命周期（ensure/flush/finalize）与 reducer 的 transcript 更新一致。
+- **`active` / `awaiting` 语义**：snapshot 的 status 合成依赖 history page 的 `active`/`awaiting`（in-flight turn 标记）；transcript selector 需从 runtime 的等价状态（busy / awaitingDecision / running turn）派生。
+
+## 验证（每 step 通用，全量在 step 4）
+
+> **前提**：worktree 无独立 node_modules → vitest 跨包 import 跑主 checkout 旧代码。验证前必建 symlink：`mkdir -p node_modules/@pin-ai && for p in core state ui-web design ui-kit; do ln -sfn ../../packages/$p node_modules/@pin-ai/$p; done` + 清 `.vite`。（见 [[worktree 陷阱]]）
+
+- `npm run check:packages`（core/state/ui-web lint+type-check+test）
+- `cd apps/web && npm run type-check && npm test`（card detail 消费端）
+- `cd proactive-ai-frontend && npm run type-check && npm test`
+- **`cd apps/mobile && npm run type-check`**（RN 端 ChatScreen 也消费 useConversationRuntime——#170 漏验过一次 RN type-check 致 CI fail，本计划起 RN 是一等验证对象）
+- 实测：main chat + card chat 流式对话、card detail drawer（plan/drafts/result/propose_action/reply）、HITL 暂停、排队、reconnect
+- CI `frontend-check` 绿（含 Mobile/Expo type-check 段）
+
+## 实施记录（2026-06-16）
+
+4 step 全部落地（一个 PR，分 step commit）。全量验证全绿：`check:packages`（core 275 / state 22 / ui-kit 2 / ui-web 214 + 4 包 type-check + eslint）、apps/web type-check + test、proactive-ai-frontend type-check + test、**apps/mobile RN type-check**。独立 adversarial review 未发现 P0/P1（删 3 对镜像 ref 无 stale closure、`turnPos` 缓存自愈严密、对外契约逐字段未变、死代码清理干净均经查证）。
+
+- **Step 1**：core `conversationReducer(state, action) → state`（19 action，纯回放可测）+ 薄 hook（`useReducer` + dispatch，删 `busyRef`/`awaitingDecisionRef`/`threadIdRef` 三对镜像 ref；`turnPos` 进 reducer state）。
+- **Step 2**：core `deriveRunSnapshot(transcript, ctx)` 纯 selector 取代 `chatHistoryToSnapshot`（history→snapshot）。
+- **Step 3**：`useCardExecutionRun` 内部复用 `useConversationRuntime` + `deriveRunSnapshot`，删 1.5s poll loop / 独立 useReducer / `chatHistoryToSnapshot` 调用；对外接口零改。
+- **Step 4**：删死代码（`chatHistoryToSnapshot`/`messagePayloadEqual`/`mergeAuditFields`/`CARD_EXECUTION_TERMINAL`）+ 注释同步。
+
+**Step 4 评估结论**：
+- `LiveContentBuilder` **留 `machines/`**（与 `tool-steps` 类型耦合、是 reducer 的流式输入伴生；移到 domain/ 纯为命名整洁却牵扯 6+ 文件 import，违反改动最小化）。`machines/conversation.ts` 现有真 reducer，命名已名副其实。
+- 语音录制去重（review P0）**单列**（与 conversation 统一无关，塞进来违反「一个 PR 聚焦一个变更点」）。
+
+**review 收编（本 PR 内）**：P2-2 给 `deriveRunSnapshot` 的 ctx 加 `busy`（= 旧 history page 的 `active != null`）override，逐项对齐旧 `chatHistoryToSnapshot` 的 `page.active` 行为，补上「在途但 trailing 非 running entry」（regenerate / resync）的状态合成 gap；P2-1 把 reducer 注释收敛为「switch body 纯，`resync` 委派的 `mergeTranscriptOnResync` 仍带 `Date.now()`/id 副作用（pre-existing）」。
+
+**遗留（后续清理 PR）**：
+- P2-3：同 card-thread 双 SSE 消费者下，frontend `confirm(real)` 早返回路径未显式关 drawer（无正确性问题，纯 2x 连接成本）。
+- P2-4：`CardDrawerBody` 的 `resuming` status 分支 + i18n key 现为准死代码（`deriveRunSnapshot` 永不产出 `resuming`，action 方法全仓无 production 调用方）。
+- execution.mdx L294-297 前端路径表仍指 `proactive-ai-frontend` 旧路径（分层重构遗留的文档债，本 PR 已同步 L16 的 poll→SSE 事实）。
+
+## 相关 plan / 模块
+
+- 落地依据:[前端分层 SSOT](../research/2026-06-10-frontend-layering.mdx)（L164 reducer 终态 / L210 风险集中区）
+- 承接:[chat 前端重构](./2026-06-15-agent-chat-frontend-refactor.mdx)（transcript 派生下沉 core）
+- 后端(不碰):[Agent Core 控制平面](./2026-06-04-agentrun-control-plane)（`/api/conversation/*` actor kernel）
+- 模块文档:实施后同步 `docs/modules/execution.mdx`（card execution 与 main chat 统一 runtime）

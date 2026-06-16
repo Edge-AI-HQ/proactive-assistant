@@ -1,17 +1,18 @@
 /**
  * Runtime hook for the unified conversation agent (main / card threads).
  *
- * 纯逻辑（history→entries 转换、resync 三段合并、HITL partial 重建）在
- * @pin-ai/core 的 machines/conversation.ts（回放测试）；LiveContentBuilder
- * （流式 turn 组装）在 core 的 machines/tool-steps.ts。本文件只剩 React
- * 编排：SSE 长连接生命周期（首连 resync / 游标重连 / capped backoff）、
- * builder 的 ref 桥接与 flush、busy/HITL 等 actions。
+ * 纯逻辑（history→entries 转换、resync 三段合并、HITL partial 重建）+ 流式状态
+ * 机 reducer 在 @pin-ai/core 的 machines/conversation.ts（回放测试）；
+ * LiveContentBuilder（流式 turn 组装）在 core 的 machines/tool-steps.ts。本文件
+ * 只剩 React 编排：SSE 长连接生命周期（首连 resync / 游标重连 / capped
+ * backoff）、builder 的 ref 桥接、把转换 dispatch 进 reducer、busy/HITL 等
+ * actions。状态全在 conversationReducer（消除 busy/awaiting 镜像 ref）。
  *
  * 回复是异步的：turn 经 conversationStream() 的长连接推流到达，不是 send
  * 的响应；HITL 暂停以 chat:requires_action 帧出现，由 conversationDecision()
  * 解决。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 
 import {
   awaitingPartialEntry,
@@ -19,11 +20,12 @@ import {
   conversationDeleteMessage,
   conversationDecision,
   conversationHistory,
+  conversationReducer,
   conversationSend,
   conversationStream,
   conversationUpdateMessage,
   historyToEntries,
-  mergeTranscriptOnResync,
+  initConversationState,
   type ConversationConnectionState,
   type ConversationEntry,
   type ConversationHistoryPage,
@@ -158,42 +160,29 @@ export function useConversationRuntime(
   // Card context is sent on the first message only, then cleared.
   const cardCtxRef = useRef<Record<string, unknown> | null>(opts?.cardContext ?? null);
   const bootstrappedRef = useRef(false);
-  const [transcript, setTranscript] = useState<ConversationEntry[]>([]);
-  const [connection, setConnection] =
-    useState<ConversationConnectionState>("connecting");
-  const [ready, setReady] = useState(false);
-  // Pagination state for the initial /history fetch + scroll-up loads. The
-  // cursor lives in a ref because `loadMoreHistory` reads it without needing
-  // to re-render; `hasMoreHistory` is state so the UI can re-render when
-  // the head of the list is reached.
-  const [hasMoreHistory, setHasMoreHistory] = useState(false);
+
+  // All runtime state lives in the core conversationReducer — transcript,
+  // connection, ready, busy, awaitingDecision, threadId, hasMoreHistory + the
+  // turnPos cache. Transitions go through `dispatch`, so the SSE handler reads
+  // the latest state at reduce time and no busy/awaiting state-mirror ref is
+  // needed (the queued判定 lives in the reducer's optimistic_user case).
+  const [state, dispatch] = useReducer(conversationReducer, session, initConversationState);
+  const { transcript, connection, ready, busy, awaitingDecision, threadId, hasMoreHistory } = state;
+
+  // Pagination cursor / re-entrancy guard — read without a re-render, so refs.
   const oldestCursorRef = useRef<number | null>(null);
   const loadingMoreRef = useRef(false);
-  // True while we're awaiting / streaming a user-initiated turn. Set on send,
-  // cleared on the turn's chat:done/error (also on stop + reconnect resync).
-  const [busy, setBusy] = useState(false);
-  const busyRef = useRef(false);
-  useEffect(() => {
-    busyRef.current = busy;
-  }, [busy]);
-  const [awaitingDecision, setAwaitingDecision] =
-    useState<HitlRequiresAction | null>(null);
-  const awaitingDecisionRef = useRef<HitlRequiresAction | null>(null);
-  useEffect(() => {
-    awaitingDecisionRef.current = awaitingDecision;
-  }, [awaitingDecision]);
-  // The card session id is known up front; the main thread id arrives in the
-  // stream's hello event. Mirrored into a ref so the SSE handler can key the
-  // todo store without re-subscribing.
-  const [threadId, setThreadId] = useState<string | null>(session || null);
+  // Stable thread id: set once on the stream's `conversation:hello`, read by the
+  // SSE handler's side effects (todo store / doorbells). NOT a state mirror —
+  // it's a thread identifier, mirrored into state.threadId only for the UI.
   const threadIdRef = useRef<string | null>(session || null);
   // Streaming-turn assembly (builder + its transcript entry, flushed from SSE
-  // deltas). Turn refs + helpers live in useTurnAssembly so the streaming-turn
-  // lifecycle is one unit; the SSE handler + connect loop drive them.
+  // deltas into the reducer). Turn refs + helpers live in useTurnAssembly so the
+  // streaming-turn lifecycle is one unit; the SSE handler + connect loop drive
+  // them. flushTurn dispatches `turn_flush` (the reducer owns turnPos).
   const {
     builderRef,
     turnIdRef,
-    turnPosRef,
     turnTraceRef,
     placeholderTurnIdRef,
     ensureTurn,
@@ -201,17 +190,17 @@ export function useConversationRuntime(
     finalizeTurn,
     createTurnPlaceholder,
     dropIdlePlaceholder,
-  } = useTurnAssembly(setTranscript);
+  } = useTurnAssembly(dispatch);
   // SSE resume cursor: the Redis Stream entry id of the last frame received.
   // Echoed back as Last-Event-ID on reconnect so the server replays the frames
   // missed during the gap (vs the old no-replay model that lost them). Null =
   // a fresh connection cycle → rebuild from history + tail from now.
   const lastEventIdRef = useRef<string | null>(null);
 
-  // SSE envelope → transcript/turn state. The 12-case dispatch lives in
+  // SSE envelope → reducer dispatch. The 12-case dispatch lives in
   // createEnvelopeHandler (sse-handler.ts); deps carry the turn-assembly
-  // helpers/refs + state setters + doorbell refs. Stable while those are, so
-  // the connect effect (which deps on it) doesn't re-subscribe per render.
+  // helpers/refs + dispatch + doorbell refs. Stable while those are, so the
+  // connect effect (which deps on it) doesn't re-subscribe per render.
   const handleEnvelope = useMemo(
     () =>
       createEnvelopeHandler({
@@ -225,10 +214,7 @@ export function useConversationRuntime(
         threadIdRef,
         onTurnPersistedRef,
         onTurnDoneRef,
-        setTranscript,
-        setBusy,
-        setAwaitingDecision,
-        setThreadId,
+        dispatch,
       }),
     [
       ensureTurn,
@@ -248,9 +234,9 @@ export function useConversationRuntime(
     let abort: AbortController | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
-    // New connection cycle (mount / session change / debug toggle): no cursor,
-    // so the first connect rebuilds from history. Mid-cycle reconnects keep the
-    // cursor the stream loop sets below and resume via replay instead.
+    // New connection cycle (mount / session change): no cursor, so the first
+    // connect rebuilds from history. Mid-cycle reconnects keep the cursor the
+    // stream loop sets below and resume via replay instead.
     lastEventIdRef.current = null;
 
     const connect = async () => {
@@ -263,9 +249,7 @@ export function useConversationRuntime(
       // while we were gone. A mid-cycle RECONNECT (cursor set) SKIPS this — the
       // server replays the gap from the cursor and the in-memory transcript
       // (including a half-streamed turn) is intact, so re-fetching would waste
-      // a round-trip and reset the in-flight turn. `includeDebug` follows the
-      // prop so a debug-toggle (which resets the cursor) refetches the matching
-      // filtered view.
+      // a round-trip and reset the in-flight turn.
       const isResume = lastEventIdRef.current !== null;
       if (!isResume) {
         // ── B3b 本地优先：本地同步库有此 thread 即先渲染（0 网络首屏、
@@ -276,10 +260,10 @@ export function useConversationRuntime(
           const localPage = await localHistoryRef.current?.(session, HISTORY_PAGE_SIZE);
           if (localPage && !cancelled) {
             const localEntries = historyToEntries(localPage.messages);
-            setTranscript((prev) => mergeTranscriptOnResync(prev, localEntries, []));
-            setHasMoreHistory(localPage.nextCursor !== null);
+            dispatch({ type: "resync", history: localEntries, serverEntries: [] });
+            dispatch({ type: "set_has_more", hasMoreHistory: localPage.nextCursor !== null });
             oldestCursorRef.current = localPage.nextCursor;
-            setReady(true);
+            dispatch({ type: "set_ready", ready: true });
           }
         } catch {
           /* local read is best-effort; network path below is authoritative */
@@ -297,14 +281,9 @@ export function useConversationRuntime(
           // streamed before the interrupt (partialParts aren't persisted yet).
           const partial = awaitingPartialEntry(page.awaiting);
           if (partial) history.push(partial);
-          // No plan re-hydration from history: todos are turn-scoped. A
-          // finished turn's plan is retired by definition; an in-flight
-          // turn's plan re-arrives via the replayFrom frame replay (the
-          // same write_todos path as live).
           // Discard any half-streamed turn; history is the source of truth.
           builderRef.current = null;
           turnIdRef.current = null;
-          turnPosRef.current = -1;
           // …but DON'T drop user messages history doesn't yet reflect —
           // merge 算法（carry / identity / text-claim 三段）在 core，详见
           // mergeTranscriptOnResync 的注释与回放测试。
@@ -313,13 +292,14 @@ export function useConversationRuntime(
             ?? (page.active && Array.isArray(page.active.userTexts)
               ? page.active.userTexts.map((t) => ({ text: t, clientId: null }))
               : []);
-          setTranscript((prev) => mergeTranscriptOnResync(prev, history, serverEntries));
-          setHasMoreHistory(page.nextCursor !== null);
+          dispatch({ type: "resync", history, serverEntries });
+          dispatch({ type: "set_has_more", hasMoreHistory: page.nextCursor !== null });
           oldestCursorRef.current = page.nextCursor;
           // Rebuild (or clear) the HITL approval gate from current run state:
           // /stream won't replay requires_action, so a refresh relies on this.
-          setAwaitingDecision(
-            page.awaiting
+          dispatch({
+            type: "set_awaiting",
+            awaiting: page.awaiting
               ? {
                   toolUseId: page.awaiting.toolUseId,
                   toolName: page.awaiting.toolName,
@@ -328,7 +308,7 @@ export function useConversationRuntime(
                   allowedDecisions: page.awaiting.allowedDecisions,
                 }
               : null,
-          );
+          });
           // In-flight turn on a fresh connect (refresh): its user bubble(s)
           // were merged into the rebuild above; here set the resume cursor so
           // the stream below replays the WHOLE turn (its agent frames rebuild
@@ -338,18 +318,18 @@ export function useConversationRuntime(
           if (page.active?.replayFrom) {
             lastEventIdRef.current = page.active.replayFrom;
           }
-          setBusy(page.active != null);
-          setReady(true);
+          dispatch({ type: "set_busy", busy: page.active != null });
+          dispatch({ type: "set_ready", ready: true });
         } catch (err) {
           if (cancelled || signal.aborted) return;
           // History failed — keep whatever we have and still try the stream.
-          setReady(true);
+          dispatch({ type: "set_ready", ready: true });
           console.warn("[proactive] history fetch failed:", err);
         }
       }
 
       if (cancelled) return;
-      setConnection(attempt === 0 ? "connecting" : "reconnecting");
+      dispatch({ type: "set_connection", connection: attempt === 0 ? "connecting" : "reconnecting" });
 
       // The backend's `conversation:hello` flips us to "open" (and resets
       // backoff) even on an idle stream. Each event carries the resume cursor
@@ -366,7 +346,7 @@ export function useConversationRuntime(
           if (cancelled) return;
           if (!opened) {
             opened = true;
-            setConnection("open");
+            dispatch({ type: "set_connection", connection: "open" });
             attempt = 0;
           }
           if (event.type === "conversation:resync") {
@@ -389,7 +369,7 @@ export function useConversationRuntime(
 
       // Stream ended (clean EOF or error). Reconnect with capped backoff.
       if (cancelled) return;
-      setConnection("reconnecting");
+      dispatch({ type: "set_connection", connection: "reconnecting" });
       attempt += 1;
       const delay = Math.min(
         RECONNECT_BASE_MS * 2 ** (attempt - 1),
@@ -402,7 +382,7 @@ export function useConversationRuntime(
 
     return () => {
       cancelled = true;
-      setConnection("closed");
+      dispatch({ type: "set_connection", connection: "closed" });
       abort?.abort();
       if (reconnectTimer) clearTimeout(reconnectTimer);
     };
@@ -422,8 +402,8 @@ export function useConversationRuntime(
         limit: HISTORY_PAGE_SIZE,
       });
       const olderEntries = historyToEntries(page.messages);
-      setTranscript((prev) => [...olderEntries, ...prev]);
-      setHasMoreHistory(page.nextCursor !== null);
+      dispatch({ type: "prepend_history", entries: olderEntries });
+      dispatch({ type: "set_has_more", hasMoreHistory: page.nextCursor !== null });
       oldestCursorRef.current = page.nextCursor;
     } catch (err) {
       // Only the 400 case (stale cursor — the filter list shifted under us)
@@ -432,7 +412,7 @@ export function useConversationRuntime(
       // failures (network blip / 5xx) leave the state alone — the next
       // start-reached fire (after a scroll-down-and-back-up) will retry.
       const msg = err instanceof Error ? err.message : "";
-      if (msg.includes("failed: 400")) setHasMoreHistory(false);
+      if (msg.includes("failed: 400")) dispatch({ type: "set_has_more", hasMoreHistory: false });
       console.warn("[proactive] loadMoreHistory failed:", err);
     } finally {
       loadingMoreRef.current = false;
@@ -447,8 +427,8 @@ export function useConversationRuntime(
     async (id: string, text: string, placeholderId: string | null) => {
       // Awaiting a turn from here on → composer flips to Stop + gates sends
       // immediately, before the (possibly slow first-turn) stream even starts.
-      setBusy(true);
-      setAwaitingDecision(null); // a new message supersedes any pending approval
+      dispatch({ type: "set_busy", busy: true });
+      dispatch({ type: "set_awaiting", awaiting: null }); // a new message supersedes any pending approval
       // card_context (if any) rides only the first send, then is cleared —
       // but only after the send succeeds, so a failed first send retries with it.
       const cardContext = cardCtxRef.current ?? undefined;
@@ -459,22 +439,12 @@ export function useConversationRuntime(
         // bubble reconciles by identity.
         await conversationSend(session, text, { cardContext, clientMsgId: id });
         cardCtxRef.current = null;
-        setTranscript((prev) =>
-          prev.map((e) =>
-            e.kind === "user" && e.id === id && e.failed
-              ? { ...e, failed: false }
-              : e,
-          ),
-        );
+        dispatch({ type: "mark_failed", id, failed: false });
       } catch (err) {
         console.warn("[proactive] send failed:", err);
-        setBusy(false); // no turn is coming; unblock the composer
+        dispatch({ type: "set_busy", busy: false }); // no turn is coming; unblock the composer
         dropIdlePlaceholder(placeholderId); // no reply is coming either
-        setTranscript((prev) =>
-          prev.map((e) =>
-            e.kind === "user" && e.id === id ? { ...e, failed: true } : e,
-          ),
-        );
+        dispatch({ type: "mark_failed", id, failed: true });
       }
     },
     [session, dropIdlePlaceholder],
@@ -484,23 +454,13 @@ export function useConversationRuntime(
     async (text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
-      const queued = busyRef.current || awaitingDecisionRef.current !== null;
       // Optimistic: the reply does NOT come back on this POST — it arrives over
       // /stream — so we render the user's message locally immediately. One
       // uuid serves as entry id AND client message id (clientId), so a retry
-      // (which gets the entry id back) naturally reuses the same identity.
+      // (which gets the entry id back) naturally reuses the same identity. The
+      // reducer marks it queued iff a turn is already in flight / awaiting.
       const id = crypto.randomUUID();
-      setTranscript((prev) => [
-        ...prev,
-        {
-          kind: "user",
-          id,
-          ts: Date.now(),
-          text: trimmed,
-          clientId: id,
-          ...(queued ? { queued: true } : {}),
-        },
-      ]);
+      dispatch({ type: "optimistic_user", id, text: trimmed, ts: Date.now() });
       const placeholderId = createTurnPlaceholder();
       await postUserMessage(id, trimmed, placeholderId);
     },
@@ -509,11 +469,7 @@ export function useConversationRuntime(
 
   const retryMessage = useCallback(
     async (id: string, text: string) => {
-      setTranscript((prev) =>
-        prev.map((e) =>
-          e.kind === "user" && e.id === id ? { ...e, failed: false } : e,
-        ),
-      );
+      dispatch({ type: "mark_failed", id, failed: false });
       const placeholderId = createTurnPlaceholder();
       await postUserMessage(id, text, placeholderId);
     },
@@ -531,17 +487,12 @@ export function useConversationRuntime(
       if (!previous) return;
       const clientMsgId = previous.clientId;
       if (!clientMsgId) return;
-      setTranscript((prev) =>
-        prev.map((e) => (e.kind === "user" && e.id === id ? { ...e, text: trimmed } : e)),
-      );
+      dispatch({ type: "set_user_text", id, text: trimmed });
       try {
         await conversationUpdateMessage(session, clientMsgId, trimmed);
       } catch (err) {
         console.warn("[proactive] queued message update failed:", err);
-        const rollback = previous;
-        setTranscript((prev) =>
-          prev.map((e) => (e.kind === "user" && e.id === rollback.id ? rollback : e)),
-        );
+        dispatch({ type: "set_user_text", id, text: previous.text });
       }
     },
     [session, transcript],
@@ -556,18 +507,12 @@ export function useConversationRuntime(
       const removed = transcript[removedIndex] as ConversationUserEntry;
       const clientMsgId = removed.clientId;
       if (!clientMsgId) return;
-      setTranscript((prev) => prev.filter((e) => !(e.kind === "user" && e.id === id)));
+      dispatch({ type: "remove_user", id });
       try {
         await conversationDeleteMessage(session, clientMsgId);
       } catch (err) {
         console.warn("[proactive] queued message delete failed:", err);
-        const rollback = removed;
-        const idx = removedIndex;
-        setTranscript((prev) => {
-          if (prev.some((e) => e.kind === "user" && e.id === rollback.id)) return prev;
-          const insertAt = idx >= 0 ? Math.min(idx, prev.length) : prev.length;
-          return [...prev.slice(0, insertAt), rollback, ...prev.slice(insertAt)];
-        });
+        dispatch({ type: "insert_user_at", index: removedIndex, entry: removed });
       }
     },
     [session, transcript],
@@ -580,12 +525,10 @@ export function useConversationRuntime(
           e.kind === "user" && e.id === id && !!e.queued && !!e.clientId,
       );
       if (!target) return;
-      setTranscript((prev) =>
-        prev.map((e) => (e.kind === "user" && e.id === id ? { ...e, queued: false } : e)),
-      );
+      dispatch({ type: "set_user_queued", id, queued: false });
       finalizeTurn();
-      setBusy(true);
-      setAwaitingDecision(null);
+      dispatch({ type: "set_busy", busy: true });
+      dispatch({ type: "set_awaiting", awaiting: null });
       try {
         await conversationSend(session, target.text, {
           clientMsgId: target.clientId,
@@ -593,13 +536,8 @@ export function useConversationRuntime(
         });
       } catch (err) {
         console.warn("[proactive] queued message interrupt failed:", err);
-        setBusy(false);
-        const rollback = target;
-        setTranscript((prev) =>
-          prev.map((e) =>
-            e.kind === "user" && e.id === rollback.id ? { ...e, queued: true } : e,
-          ),
-        );
+        dispatch({ type: "set_busy", busy: false });
+        dispatch({ type: "set_user_queued", id, queued: true });
       }
     },
     [session, finalizeTurn, transcript],
@@ -621,21 +559,12 @@ export function useConversationRuntime(
       }
     }
     if (!lastUserText) return;
-    setTranscript((prev) => {
-      let lastAssistantIdx = -1;
-      for (let i = prev.length - 1; i >= 0; i--) {
-        if (prev[i].kind === "assistant") {
-          lastAssistantIdx = i;
-          break;
-        }
-      }
-      return lastAssistantIdx >= 0 ? prev.slice(0, lastAssistantIdx) : prev;
-    });
+    dispatch({ type: "drop_trailing_assistant" });
     // Same optimistic placeholder as a send — the pill replaces the dropped
     // turn immediately instead of popping in on the first frame.
     const placeholderId = createTurnPlaceholder();
-    setBusy(true);
-    setAwaitingDecision(null);
+    dispatch({ type: "set_busy", busy: true });
+    dispatch({ type: "set_awaiting", awaiting: null });
     try {
       // clientMsgId guards the regenerate against a timed-out-but-landed
       // POST being retried: a duplicate enqueue would merge into one batch,
@@ -649,7 +578,7 @@ export function useConversationRuntime(
       });
     } catch (err) {
       console.warn("[proactive] regenerate failed:", err);
-      setBusy(false);
+      dispatch({ type: "set_busy", busy: false });
       dropIdlePlaceholder(placeholderId);
     }
   }, [busy, transcript, session, createTurnPlaceholder, dropIdlePlaceholder]);
@@ -658,9 +587,9 @@ export function useConversationRuntime(
     // Optimistic: close the in-flight turn locally so the shimmer + Stop button
     // clear at once (the backend's terminal chat:done then finalizes a no-op).
     finalizeTurn();
-    setBusy(false);
+    dispatch({ type: "set_busy", busy: false });
     // 取消即放弃待审批动作——本地立即清(断流收不到补发 done 帧的兜底)。
-    setAwaitingDecision(null);
+    dispatch({ type: "set_awaiting", awaiting: null });
     try {
       await conversationCancel(session);
     } catch (err) {
@@ -679,16 +608,16 @@ export function useConversationRuntime(
     ) => {
       const pending = awaitingDecision;
       if (!pending) return;
-      setBusy(true);
-      setAwaitingDecision(null);
+      dispatch({ type: "set_busy", busy: true });
+      dispatch({ type: "set_awaiting", awaiting: null });
       try {
         await conversationDecision(session, pending.toolUseId, decision, {
           message,
         });
       } catch (err) {
         console.warn("[proactive] decision failed:", err);
-        setBusy(false);
-        setAwaitingDecision(pending);
+        dispatch({ type: "set_busy", busy: false });
+        dispatch({ type: "set_awaiting", awaiting: pending });
       }
     },
     [session, awaitingDecision],

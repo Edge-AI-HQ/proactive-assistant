@@ -13,7 +13,7 @@ description: "Chat-driven 执行的当前事实(用户/agent 在 card 或 main �
 
 回复是异步的:`/send` 只入队返回 202,turn 的帧从长连 `/stream` 推回(断线带 `lastEventId` 重连 replay gap;刷新靠 `/history` 的 `active` 重建进行中 turn)。turn 结束时 worker 把 user+assistant 行写进 `pai_chat_messages`(history 真相)。
 
-session_key 决定走哪个 agent:`main-<user_id>-<rand>` → `main_chat`;`card-thread-<card_id>` → `card_execution`;`proactive-<user_id>` → `proactive`。card 的 `card_context` 在首轮作为 SystemMessage 写进 LangGraph checkpointer 持久化(后续 turn 不需要前端再传)。卡片生成后,scheduler dispatcher 经 `services/card_fanout.py` 为前 N 张卡(`PINAI_CARD_FANOUT_LIMIT`,默认 2)直接 post_message 预跑 bootstrap turn(pre-run),agent 跑到 `propose_action` 自然停轮;抽屉(useCardExecutionRun 轮询 `/conversation/history`)和 CardChat 读同一线程。
+session_key 决定走哪个 agent:`main-<user_id>-<rand>` → `main_chat`;`card-thread-<card_id>` → `card_execution`;`proactive-<user_id>` → `proactive`。card 的 `card_context` 在首轮作为 SystemMessage 写进 LangGraph checkpointer 持久化(后续 turn 不需要前端再传)。卡片生成后,scheduler dispatcher 经 `services/card_fanout.py` 为前 N 张卡(`PINAI_CARD_FANOUT_LIMIT`,默认 2)直接 post_message 预跑 bootstrap turn(pre-run),agent 跑到 `propose_action` 自然停轮;抽屉(useCardExecutionRun)和 CardChat 现复用**同一个 SSE conversation runtime**(useConversationRuntime),抽屉用 `deriveRunSnapshot` 纯 selector 把 transcript 投影成 RunSnapshot(plan/drafts/result/plan_revisions),取代旧的 1.5s 轮询 `/conversation/history`,与 CardChat 读同一线程。
 
 工具决策 Tier 1-4 政策**完全靠 agent system prompt 和 native tool 命名区分**(没有运行时硬拦截 hook,Composio side-effect 强制门**当前只是 prompt 规则 + tools allowlist,没有 verb 分类硬闸**,详见下方"Composio side-effect"段):
 
