@@ -19,11 +19,10 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          # 前端 + 后端副本 + 独立库（full-stack preview 时才有），全部尝试销毁
+          # 前端 + 后端副本（独立库是 -api 内的一台机器，随 -api 一起销毁，不单列）
           for app in \
             "pinai-pr-${{ github.event.pull_request.number }}" \
-            "pinai-pr-${{ github.event.pull_request.number }}-api" \
-            "pinai-pr-${{ github.event.pull_request.number }}-db"; do
+            "pinai-pr-${{ github.event.pull_request.number }}-api"; do
             flyctl apps destroy "$app" --yes 2>/dev/null \
               && echo "destroyed $app" \
               || echo "no preview app for $app (nothing to clean)"

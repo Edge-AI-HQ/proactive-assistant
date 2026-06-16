@@ -78,25 +78,55 @@ jobs:
         id: urls
         run: |
           api="pinai-pr-${{ inputs.pr }}-api"
-          db="pinai-pr-${{ inputs.pr }}-db"
           echo "api=$api" >> "$GITHUB_OUTPUT"
-          echo "db=$db" >> "$GITHUB_OUTPUT"
           echo "api_url=https://$api.fly.dev" >> "$GITHUB_OUTPUT"
 
-      # 动了 migration → 起一个独立 Postgres，后端连它（dev 库零影响）。
-      # 没动 → 不起，DATABASE_URL 用 dev 的（release_command 的 yoyo apply 幂等空跑）。
-      - name: Provision isolated DB (only if migration changed)
+      - name: Create backend app
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl apps create "${{ steps.urls.outputs.api }}" --org "$FLY_ORG" 2>/dev/null || true
+
+      # A 档：独立库不再是单独的 Fly app，而是后端 app **内的一台 postgres 机器**（6PN 内网）。
+      # 这样后端 app = web + chat + db 一锅：一次 destroy、一套 secret，不再散成 -db。
+      # 没动 migration → 不起这台，DATABASE_URL 用 dev 的（release_command 的 yoyo apply 幂等空跑）。
+      - name: Run isolated DB machine inside backend app (only if migration changed)
+        id: db
         if: needs.detect.outputs.migration == 'true'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          db="${{ steps.urls.outputs.db }}"
-          # 复用项目同款 pg（pgvector，迁移需要）。单机、小卷，throwaway。
-          flyctl postgres create --name "$db" --org "$FLY_ORG" --region "$REGION" \
-            --vm-size shared-cpu-1x --volume-size 1 --initial-cluster-size 1 \
-            --image-ref flyio/postgres-flex:15 2>&1 | tee /tmp/pg.txt || true
-          # attach 会在后端 app 上建库+用户并自动设 DATABASE_URL secret
-          flyctl postgres attach "$db" --app "${{ steps.urls.outputs.api }}" 2>&1 || true
+          api="${{ steps.urls.outputs.api }}"
+          # 同款 pgvector（迁移需要 vector 扩展）。throwaway、无卷（preview 不需持久化）。
+          flyctl machine run pgvector/pgvector:pg15 \
+            --app "$api" --region "$REGION" --name db --vm-memory 1024 \
+            --env POSTGRES_USER=postgres --env POSTGRES_PASSWORD=preview --env POSTGRES_DB=postgres
+          # 取这台 db 机器的 6PN 私有 IPv6（machine 之间走内网）
+          ip=""
+          for i in $(seq 1 12); do
+            ip=$(flyctl machine list --app "$api" --json 2>/dev/null \
+              | python3 -c "import sys,json; print(next((m['private_ip'] for m in json.load(sys.stdin) if m.get('name')=='db'),''))")
+            [ -n "$ip" ] && break || sleep 3
+          done
+          echo "ip=$ip" >> "$GITHUB_OUTPUT"
+          echo "db machine 6PN ip: $ip"
+          sleep 15  # 等 postgres initdb 起来
+
+      - name: Inject all dev secrets (+ 独立库时覆盖 DATABASE_URL)
+        working-directory: pinai-agents
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
+        run: |
+          api="${{ steps.urls.outputs.api }}"
+          # 整套 dev secret（含 Composio/Stripe/LiteLLM 等副作用服务——前期全保留，验证完整环境）
+          python3 scripts/sync_fly_secrets.py --app "$api" --env-file .env.dev --no-stage
+          if [ "${{ needs.detect.outputs.migration }}" = "true" ]; then
+            ip="${{ steps.db.outputs.ip }}"
+            # 覆盖 DATABASE_URL 指向 app 内的 db 机器（dev 库零影响）；deploy 时随 release_command 生效
+            flyctl secrets set "DATABASE_URL=postgresql://postgres:preview@[$ip]:5432/postgres" --app "$api" --stage
+          else
+            echo "（共用 dev 库：DATABASE_URL 用 .env.dev 的值，release_command 的 yoyo apply 幂等空跑）"
+          fi
 
       - name: Generate per-PR fly config
         run: |
@@ -108,21 +138,6 @@ jobs:
             pinai-agents/fly.dev.toml > pinai-agents/fly.pr.toml
           echo "----- fly.pr.toml [app/env] -----"; grep -E "^app|PAI_API_URL|WEB_INTERNAL_URL|CHAT_INTERNAL_URL" pinai-agents/fly.pr.toml || true
 
-      - name: Create app + inject all dev secrets
-        working-directory: pinai-agents
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-          DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
-        run: |
-          flyctl apps create "${{ steps.urls.outputs.api }}" --org "$FLY_ORG" 2>/dev/null || true
-          # 整套 dev secret（含 Composio/Stripe/LiteLLM 等副作用服务——前期全保留，验证完整环境）
-          python3 scripts/sync_fly_secrets.py --app "${{ steps.urls.outputs.api }}" --env-file .env.dev --no-stage
-          # 若没起独立库，把 DATABASE_URL 显式锁成 dev（sync 已经推了 dev 的，这里幂等确认）。
-          # 若起了独立库，上一步 postgres attach 已覆盖 DATABASE_URL，不要再推 dev。
-          if [ "${{ needs.detect.outputs.migration }}" != "true" ]; then
-            echo "（共用 dev 库：DATABASE_URL 用 .env.dev 的值，release_command 的 yoyo apply 幂等空跑）"
-          fi
-
       - name: Deploy backend preview (web + chat)
         working-directory: pinai-agents
         env:
@@ -131,12 +146,12 @@ jobs:
           flyctl deploy --config fly.pr.toml --remote-only --app "${{ steps.urls.outputs.api }}"
 
   # ── 3. 前端副本（前端改了，或后端改了也要个前端去打它）─────────────────
+  # 与 backend 并行：后端副本 URL 是确定的（pinai-pr-<N>-api.fly.dev），前端只需这个字符串，
+  # 不必等后端部署完 → 省掉串行等待（实测 ~90s）。后端真失败的话前端这条 API 会指向空地址，
+  # comment/run 状态会显示后端失败，可接受。
   frontend:
-    needs: [detect, backend]
-    if: |
-      always() &&
-      (needs.detect.outputs.frontend == 'true' || needs.detect.outputs.backend == 'true') &&
-      needs.backend.result != 'failure'
+    needs: [detect]
+    if: needs.detect.outputs.frontend == 'true' || needs.detect.outputs.backend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -153,8 +168,8 @@ jobs:
       - name: Decide which backend the frontend points at
         id: api
         run: |
-          # 起了后端副本就指向它，否则指向共享 dev 后端
-          if [ "${{ needs.detect.outputs.backend }}" = "true" ] && [ "${{ needs.backend.result }}" = "success" ]; then
+          # 后端改了 → 指向确定的后端副本 URL；否则指向共享 dev 后端
+          if [ "${{ needs.detect.outputs.backend }}" = "true" ]; then
             echo "url=https://pinai-pr-${{ inputs.pr }}-api.fly.dev" >> "$GITHUB_OUTPUT"
           else
             echo "url=$DEV_API_URL" >> "$GITHUB_OUTPUT"

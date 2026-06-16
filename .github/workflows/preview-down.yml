@@ -28,7 +28,7 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          for app in "pinai-pr-${{ inputs.pr }}" "pinai-pr-${{ inputs.pr }}-api" "pinai-pr-${{ inputs.pr }}-db"; do
+          for app in "pinai-pr-${{ inputs.pr }}" "pinai-pr-${{ inputs.pr }}-api"; do
             flyctl apps destroy "$app" --yes 2>/dev/null \
               && echo "destroyed $app" \
               || echo "no preview app for $app (nothing to clean)"
