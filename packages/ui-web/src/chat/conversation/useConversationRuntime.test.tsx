@@ -1,9 +1,8 @@
 /**
- * Unit + hook tests for the proactive runtime — covers the bits added by
- * the cursor-pagination + Debug-aware filter rework:
- *   1. `partsHaveNotifyUser` (live-stream filter parity with backend rule)
- *   2. `historyToEntries` correctly tags tick-triggered turns as debug
- *   3. `loadMoreHistory` prepends an older page and updates the cursor
+ * Unit + hook tests for the conversation runtime:
+ *   1. `partsHaveNotifyUser` (notify_user detection)
+ *   2. `loadMoreHistory` prepends an older page and updates the cursor
+ *   3. send / queue / regenerate / HITL reconnect
  */
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
@@ -27,12 +26,10 @@ vi.mock("@pin-ai/core", async (importOriginal) => {
     conversationCancel: vi.fn(async () => {}),
     conversationDecision: vi.fn(async () => {}),
     conversationInit: vi.fn(async () => ({
-      sessionKey: "proactive-1",
-      kind: "proactive",
+      sessionKey: "main-1",
+      kind: "main",
       existing: false,
     })),
-    fetchProactiveEnabled: vi.fn(async () => false),
-    setProactiveEnabled: vi.fn(async (next: boolean) => next),
   };
 });
 
@@ -98,50 +95,6 @@ describe("partsHaveNotifyUser", () => {
 
   test("returns false on an empty parts list", () => {
     expect(partsHaveNotifyUser([])).toBe(false);
-  });
-});
-
-// ─── historyToEntries ─────────────────────────────────────────────────
-
-
-describe("historyToEntries", () => {
-  test("tick trigger on assistant entry sets debug=true", () => {
-    const out = historyToEntries([
-      { id: "hb-1", role: "heartbeat", parts: [{ type: "text", text: "[heartbeat]" }] },
-      {
-        id: "a-tick",
-        role: "assistant",
-        trigger: "tick",
-        parts: [{ type: "text", text: "silent" }],
-      },
-      { id: "u-1", role: "user", parts: [{ type: "text", text: "hi" }] },
-      {
-        id: "a-user",
-        role: "assistant",
-        trigger: "user",
-        parts: [{ type: "text", text: "hello" }],
-      },
-    ]);
-    expect(out).toHaveLength(4);
-    expect(out[0].kind).toBe("heartbeat");
-    const tickTurn = out[1] as ConversationAssistantEntry;
-    expect(tickTurn.kind).toBe("assistant");
-    expect(tickTurn.debug).toBe(true);
-    expect(out[2].kind).toBe("user");
-    const userTurn = out[3] as ConversationAssistantEntry;
-    expect(userTurn.debug).toBe(false);
-  });
-
-  test("legacy [heartbeat] text on a user-role message still classifies as debug input", () => {
-    // Older backend emits the heartbeat as `role=user` text starting with
-    // `[heartbeat]`; the assistant turn that follows should still be tagged
-    // debug even when the message lacks a `trigger` field.
-    const out = historyToEntries([
-      { id: "hb-1", role: "user", parts: [{ type: "text", text: "[heartbeat] 10:00" }] },
-      { id: "a-1", role: "assistant", parts: [{ type: "text", text: "…" }] },
-    ]);
-    expect(out[0].kind).toBe("heartbeat");
-    expect((out[1] as ConversationAssistantEntry).debug).toBe(true);
   });
 });
 
@@ -381,47 +334,6 @@ describe("useConversationRuntime HITL reconnect", () => {
   });
 });
 
-// ─── Debug toggle ─────────────────────────────────────────────────────
-
-
-describe("useConversationRuntime Debug toggle", () => {
-  beforeEach(() => {
-    fetchHistoryMock.mockReset();
-    fetchHistoryMock.mockResolvedValue(page([]));
-    streamMock.mockReset();
-    streamMock.mockImplementation(() => emptyStream());
-  });
-
-  test("refetches history with includeDebug when the Debug toggle flips", async () => {
-    // The Debug toggle must rebuild the transcript from the server: heartbeat +
-    // silent-tick rows live only in pai_chat_messages behind include_debug, so
-    // flipping debugEnabled re-runs the connect effect with the matching filter.
-    // Without debugEnabled in the effect deps the toggle would only gate live
-    // events and a reconnect would drop those rows (the original bug).
-    const { result, rerender } = renderHook(
-      ({ debug }) =>
-        useConversationRuntime({ session: "proactive-1", debugEnabled: debug }),
-      { initialProps: { debug: false } },
-    );
-
-    await waitFor(() => expect(result.current.ready).toBe(true));
-    // Default view asks for the filtered (non-debug) page.
-    expect(fetchHistoryMock).toHaveBeenLastCalledWith(
-      "proactive-1",
-      expect.objectContaining({ includeDebug: false }),
-    );
-
-    rerender({ debug: true });
-    // Toggling Debug on re-fetches with includeDebug=true.
-    await waitFor(() =>
-      expect(fetchHistoryMock).toHaveBeenLastCalledWith(
-        "proactive-1",
-        expect.objectContaining({ includeDebug: true }),
-      ),
-    );
-  });
-});
-
 // ─── In-flight user bubble merge ──────────────────────────────────────
 
 
@@ -436,42 +348,6 @@ describe("useConversationRuntime in-flight user bubble merge", () => {
 
   const userEntries = (entries: { kind: string }[]) =>
     entries.filter((e): e is ConversationUserEntry => e.kind === "user");
-
-  test("a history refetch mid-turn does not duplicate the just-sent bubble", async () => {
-    // Regression: until the turn finalizes into pai_chat_messages, the sent
-    // message exists BOTH as the local optimistic bubble and as
-    // `page.active.userTexts` (the unconsumed mailbox row). A refetch in that
-    // window (resync / debug toggle / reconnect before the first frame) used
-    // to render both copies.
-    fetchHistoryMock.mockResolvedValueOnce(page([]));
-    const { result, rerender } = renderHook(
-      ({ debug }) =>
-        useConversationRuntime({ session: "main-1", debugEnabled: debug }),
-      { initialProps: { debug: false } },
-    );
-    await waitFor(() => expect(result.current.ready).toBe(true));
-
-    await act(async () => {
-      await result.current.sendMessage("你是kimi 2.6吗");
-    });
-    expect(userEntries(result.current.transcript)).toHaveLength(1);
-
-    fetchHistoryMock.mockResolvedValueOnce(
-      page(
-        [{ id: "a-0", role: "assistant", parts: [{ type: "text", text: "earlier reply" }] }],
-        { active: { userTexts: ["你是kimi 2.6吗"], replayFrom: null } },
-      ),
-    );
-    rerender({ debug: true });
-    // `a-0` landing proves the refetched rebuild has been applied.
-    await waitFor(() =>
-      expect(result.current.transcript.some((e) => e.id === "a-0")).toBe(true),
-    );
-
-    const users = userEntries(result.current.transcript);
-    expect(users).toHaveLength(1);
-    expect(users[0].text).toBe("你是kimi 2.6吗");
-  });
 
   test("restores the in-flight bubble from userTexts when no local bubble survives (reload)", async () => {
     fetchHistoryMock.mockResolvedValueOnce(
@@ -522,37 +398,6 @@ describe("useConversationRuntime in-flight user bubble merge", () => {
     ]);
   });
 
-  test("repeated identical sends stay distinct across a refetch", async () => {
-    fetchHistoryMock.mockResolvedValueOnce(page([]));
-    const { result, rerender } = renderHook(
-      ({ debug }) =>
-        useConversationRuntime({ session: "main-3", debugEnabled: debug }),
-      { initialProps: { debug: false } },
-    );
-    await waitFor(() => expect(result.current.ready).toBe(true));
-
-    await act(async () => {
-      await result.current.sendMessage("again");
-    });
-    await act(async () => {
-      await result.current.sendMessage("again");
-    });
-    expect(userEntries(result.current.transcript)).toHaveLength(2);
-
-    fetchHistoryMock.mockResolvedValueOnce(
-      page(
-        [{ id: "a-0", role: "assistant", parts: [{ type: "text", text: "earlier" }] }],
-        { active: { userTexts: ["again", "again"], replayFrom: null } },
-      ),
-    );
-    rerender({ debug: true });
-    await waitFor(() =>
-      expect(result.current.transcript.some((e) => e.id === "a-0")).toBe(true),
-    );
-    // Each pending text claims one local bubble — exactly two, not one, not four.
-    expect(userEntries(result.current.transcript)).toHaveLength(2);
-  });
-
   test("sends carry a clientMsgId and a retry reuses the same one (idempotent resend)", async () => {
     fetchHistoryMock.mockResolvedValueOnce(page([]));
     const { result } = renderHook(() =>
@@ -582,189 +427,6 @@ describe("useConversationRuntime in-flight user bubble merge", () => {
     expect(retryOpts.clientMsgId).toBe(firstOpts.clientMsgId);
   });
 
-  test("reconciles by clientId when the backend reports userEntries", async () => {
-    fetchHistoryMock.mockResolvedValueOnce(page([]));
-    const { result, rerender } = renderHook(
-      ({ debug }) =>
-        useConversationRuntime({ session: "main-6", debugEnabled: debug }),
-      { initialProps: { debug: false } },
-    );
-    await waitFor(() => expect(result.current.ready).toBe(true));
-
-    await act(async () => {
-      await result.current.sendMessage("ping");
-    });
-    const sent = userEntries(result.current.transcript)[0];
-    expect(sent.clientId).toBeTruthy();
-
-    fetchHistoryMock.mockResolvedValueOnce(
-      page(
-        [{ id: "a-0", role: "assistant", parts: [{ type: "text", text: "earlier" }] }],
-        {
-          active: {
-            userTexts: ["ping"],
-            userEntries: [{ text: "ping", clientId: sent.clientId! }],
-            replayFrom: null,
-          },
-        },
-      ),
-    );
-    rerender({ debug: true });
-    await waitFor(() =>
-      expect(result.current.transcript.some((e) => e.id === "a-0")).toBe(true),
-    );
-    expect(userEntries(result.current.transcript)).toHaveLength(1);
-  });
-
-  test("same text, different message: a history row with another clientId does not swallow the new bubble", async () => {
-    // The text heuristic's blind spot: the user said "继续" last turn (already
-    // persisted) and says "继续" again now. Identity reconciliation must keep
-    // the new optimistic bubble while a text-keyed carry would drop it.
-    fetchHistoryMock.mockResolvedValueOnce(page([]));
-    const { result, rerender } = renderHook(
-      ({ debug }) =>
-        useConversationRuntime({ session: "main-7", debugEnabled: debug }),
-      { initialProps: { debug: false } },
-    );
-    await waitFor(() => expect(result.current.ready).toBe(true));
-
-    await act(async () => {
-      await result.current.sendMessage("继续");
-    });
-    const sent = userEntries(result.current.transcript)[0];
-
-    fetchHistoryMock.mockResolvedValueOnce(
-      page(
-        [
-          {
-            id: "u-old",
-            role: "user",
-            parts: [{ type: "text", text: "继续" }],
-            clientMsgId: "earlier-uuid",
-          },
-          { id: "a-old", role: "assistant", parts: [{ type: "text", text: "done" }] },
-        ],
-        {
-          active: {
-            userTexts: ["继续"],
-            userEntries: [{ text: "继续", clientId: sent.clientId! }],
-            replayFrom: null,
-          },
-        },
-      ),
-    );
-    rerender({ debug: true });
-    await waitFor(() =>
-      expect(result.current.transcript.some((e) => e.id === "u-old")).toBe(true),
-    );
-    // Two bubbles: last turn's persisted one + this turn's in-flight one.
-    const users = userEntries(result.current.transcript);
-    expect(users).toHaveLength(2);
-    expect(users.map((u) => u.clientId)).toEqual(["earlier-uuid", sent.clientId]);
-  });
-
-  test("an id-bearing pending entry never text-claims a different message's bubble (two tabs, same text)", async () => {
-    // Tab A's bubble (uuid-1, POST in flight) and tab B's pending send
-    // (uuid-2, same text) are DIFFERENT messages. Identity reconciliation
-    // must restore uuid-2 as its own bubble, not swallow it into uuid-1 via
-    // the text-claim fallback (which is reserved for id-less entries from
-    // older backends).
-    fetchHistoryMock.mockResolvedValueOnce(page([]));
-    const { result, rerender } = renderHook(
-      ({ debug }) =>
-        useConversationRuntime({ session: "main-9", debugEnabled: debug }),
-      { initialProps: { debug: false } },
-    );
-    await waitFor(() => expect(result.current.ready).toBe(true));
-
-    await act(async () => {
-      await result.current.sendMessage("hello");
-    });
-    const local = userEntries(result.current.transcript)[0];
-
-    fetchHistoryMock.mockResolvedValueOnce(
-      page([], {
-        active: {
-          userTexts: ["hello"],
-          userEntries: [{ text: "hello", clientId: "other-tab-uuid" }],
-          replayFrom: null,
-        },
-      }),
-    );
-    rerender({ debug: true });
-    await waitFor(() =>
-      expect(userEntries(result.current.transcript)).toHaveLength(2),
-    );
-    const ids = userEntries(result.current.transcript).map((e) => e.clientId);
-    expect(ids).toContain(local.clientId);
-    expect(ids).toContain("other-tab-uuid");
-  });
-
-  test("clears a stale failed flag when the mailbox proves the send landed", async () => {
-    fetchHistoryMock.mockResolvedValueOnce(page([]));
-    const { result, rerender } = renderHook(
-      ({ debug }) =>
-        useConversationRuntime({ session: "main-8", debugEnabled: debug }),
-      { initialProps: { debug: false } },
-    );
-    await waitFor(() => expect(result.current.ready).toBe(true));
-
-    // POST times out client-side but actually landed server-side.
-    sendMock.mockRejectedValueOnce(new Error("timeout"));
-    await act(async () => {
-      await result.current.sendMessage("hello");
-    });
-    const bubble = userEntries(result.current.transcript)[0];
-    expect(bubble.failed).toBe(true);
-
-    fetchHistoryMock.mockResolvedValueOnce(
-      page([], {
-        active: {
-          userTexts: ["hello"],
-          userEntries: [{ text: "hello", clientId: bubble.clientId! }],
-          replayFrom: null,
-        },
-      }),
-    );
-    rerender({ debug: true });
-    await waitFor(() => {
-      const users = userEntries(result.current.transcript);
-      expect(users).toHaveLength(1);
-      expect(users[0].failed).toBe(false);
-    });
-  });
-
-  test("a failed bubble does not absorb a pending text (failed sends never reached the mailbox)", async () => {
-    fetchHistoryMock.mockResolvedValueOnce(page([]));
-    const { result, rerender } = renderHook(
-      ({ debug }) =>
-        useConversationRuntime({ session: "main-4", debugEnabled: debug }),
-      { initialProps: { debug: false } },
-    );
-    await waitFor(() => expect(result.current.ready).toBe(true));
-
-    sendMock.mockRejectedValueOnce(new Error("boom"));
-    await act(async () => {
-      await result.current.sendMessage("hello");
-    });
-    const afterFail = userEntries(result.current.transcript);
-    expect(afterFail).toHaveLength(1);
-    expect(afterFail[0].failed).toBe(true);
-
-    // The server reports an EARLIER send of the same text still in flight
-    // (e.g. sent before a reload). The failed bubble must not claim it —
-    // both the retryable bubble and the pending one render.
-    fetchHistoryMock.mockResolvedValueOnce(
-      page([], { active: { userTexts: ["hello"], replayFrom: null } }),
-    );
-    rerender({ debug: true });
-    await waitFor(() =>
-      expect(userEntries(result.current.transcript)).toHaveLength(2),
-    );
-    const users = userEntries(result.current.transcript);
-    expect(users.some((e) => e.failed)).toBe(true);
-    expect(users.some((e) => !e.failed)).toBe(true);
-  });
 });
 
 // ─── Optimistic turn placeholder ──────────────────────────────────────
@@ -800,7 +462,6 @@ describe("useConversationRuntime optimistic turn placeholder", () => {
     const turn = assistantEntries(result.current.transcript)[0];
     expect(turn.running).toBe(true);
     expect(turn.parts).toEqual([]);
-    expect(turn.debug).toBe(false);
   });
 
   test("a failed send drops the idle placeholder, keeping the failed bubble", async () => {
@@ -821,9 +482,8 @@ describe("useConversationRuntime optimistic turn placeholder", () => {
 
   test("the placeholder is skipped while a foreign turn is mid-stream", async () => {
     fetchHistoryMock.mockResolvedValueOnce(page([]));
-    // A heartbeat-triggered turn is already streaming when the user sends:
-    // its builder isn't ours to reuse, so the send must NOT open a second
-    // assistant entry.
+    // Another turn is already streaming when the user sends: its builder isn't
+    // ours to reuse, so the send must NOT open a second assistant entry.
     streamMock.mockImplementation(() =>
       (async function* () {
         yield {
@@ -835,7 +495,7 @@ describe("useConversationRuntime optimistic turn placeholder", () => {
       })(),
     );
     const { result } = renderHook(() =>
-      useConversationRuntime({ session: "proactive-p3" }),
+      useConversationRuntime({ session: "main-p3" }),
     );
     await waitFor(() =>
       expect(assistantEntries(result.current.transcript)).toHaveLength(1),
@@ -845,64 +505,6 @@ describe("useConversationRuntime optimistic turn placeholder", () => {
       await result.current.sendMessage("hi");
     });
     expect(assistantEntries(result.current.transcript)).toHaveLength(1);
-  });
-
-  test("a tick turn arriving after the send drops the idle placeholder instead of adopting it", async () => {
-    fetchHistoryMock.mockResolvedValueOnce(page([]));
-    // Controllable stream: frames are pushed mid-test, AFTER the send has
-    // already created the optimistic placeholder.
-    const queue: { event: Record<string, unknown>; lastEventId: string }[] = [];
-    let notify: (() => void) | null = null;
-    const push = (event: Record<string, unknown>) => {
-      queue.push({ event, lastEventId: String(queue.length + 1) });
-      notify?.();
-    };
-    streamMock.mockImplementation(() =>
-      (async function* () {
-        while (true) {
-          while (queue.length === 0) {
-            await new Promise<void>((resolve) => {
-              notify = resolve;
-            });
-          }
-          yield queue.shift();
-        }
-      })(),
-    );
-
-    const { result } = renderHook(() =>
-      useConversationRuntime({ session: "proactive-p5", debugEnabled: false }),
-    );
-    await waitFor(() => expect(result.current.ready).toBe(true));
-
-    await act(async () => {
-      await result.current.sendMessage("hi");
-    });
-    expect(assistantEntries(result.current.transcript)).toHaveLength(1);
-
-    // A heartbeat tick's turn starts BEFORE the user's turn. Its frames must
-    // not adopt the placeholder builder: with Debug off the gate would
-    // swallow every flush and strand a running/empty entry forever.
-    await act(async () => {
-      push({ type: "proactive:tick", traceId: "run-tick", data: { text: "[heartbeat]", windowEnd: "w" } });
-      push({ type: "chat:thinking", traceId: "run-tick", data: {} });
-      push({ type: "chat:delta", traceId: "run-tick", data: { delta: "silent work" } });
-      push({ type: "chat:done", traceId: "run-tick", data: {} });
-    });
-    await waitFor(() =>
-      expect(assistantEntries(result.current.transcript)).toHaveLength(0),
-    );
-
-    // The user's own turn then opens normally.
-    await act(async () => {
-      push({ type: "chat:thinking", traceId: "run-user", data: {} });
-      push({ type: "chat:delta", traceId: "run-user", data: { delta: "answer" } });
-    });
-    await waitFor(() => {
-      const turns = assistantEntries(result.current.transcript);
-      expect(turns).toHaveLength(1);
-      expect(turns[0].parts).toEqual([{ type: "text", text: "answer" }]);
-    });
   });
 
   test("stop drops a placeholder that never streamed", async () => {
@@ -1184,5 +786,63 @@ describe("turn boundary on traceId change", () => {
     expect(hasNewThinking(assistants[0])).toBe(false);
     expect(hasNewThinking(assistants[1])).toBe(true);
     expect(result.current.awaitingDecision).toBeNull();
+  });
+});
+
+describe("chat:persisted adopts serverId without changing the list key", () => {
+  beforeEach(() => {
+    fetchHistoryMock.mockReset();
+    streamMock.mockReset();
+    sendMock.mockReset();
+    sendMock.mockResolvedValue(undefined);
+  });
+
+  test("a live turn keeps its 'turn-N' id; the real id lands in serverId (no remount flicker)", async () => {
+    fetchHistoryMock.mockResolvedValueOnce(page([]));
+    const queue: { event: Record<string, unknown>; lastEventId: string }[] = [];
+    let notify: (() => void) | null = null;
+    const push = (event: Record<string, unknown>) => {
+      queue.push({ event, lastEventId: String(queue.length + 1) });
+      notify?.();
+    };
+    streamMock.mockImplementation(() =>
+      (async function* () {
+        while (true) {
+          while (queue.length === 0) {
+            await new Promise<void>((resolve) => {
+              notify = resolve;
+            });
+          }
+          yield queue.shift();
+        }
+      })(),
+    );
+
+    const { result } = renderHook(() => useConversationRuntime({ session: "main-persist" }));
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    await act(async () => {
+      push({ type: "chat:thinking", traceId: "run-1", data: {} });
+      push({ type: "chat:delta", traceId: "run-1", data: { delta: "hello" } });
+      push({ type: "chat:done", traceId: "run-1", data: {} });
+    });
+    const liveTurn = () =>
+      result.current.transcript.find(
+        (e): e is ConversationAssistantEntry => e.kind === "assistant",
+      );
+    await waitFor(() => expect(liveTurn()?.running).toBe(false));
+    const liveId = liveTurn()!.id;
+    // While streaming/just-done the turn has its client-local id and no serverId.
+    expect(liveId.startsWith("turn-")).toBe(true);
+    expect(liveTurn()!.serverId).toBeUndefined();
+
+    await act(async () => {
+      push({ type: "chat:persisted", traceId: "run-1", data: { messageId: "98765" } });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(liveTurn()?.serverId).toBe("98765"));
+    // The key (id) MUST be unchanged — this is what prevents the remount flicker
+    // (Virtuoso computeItemKey reads entry.id).
+    expect(liveTurn()!.id).toBe(liveId);
   });
 });

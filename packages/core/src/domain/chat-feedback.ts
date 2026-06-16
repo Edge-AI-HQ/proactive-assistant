@@ -34,7 +34,6 @@ export function buildAssistantMessageFeedbackBody(
  *  — recorded on 👍/👎 events so reward analytics can tell which conversation
  *  type they came from. Shared by web (ConversationView) and RN. */
 export function feedbackChannelForSession(sessionKey: string): string {
-  if (sessionKey.startsWith("proactive-")) return "proactive";
   if (sessionKey.startsWith("card-thread-")) return "card_execution";
   return "main_chat";
 }

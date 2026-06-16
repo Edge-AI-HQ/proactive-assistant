@@ -149,7 +149,7 @@ export class SyncEngine {
                 threadId,
                 m.role,
                 JSON.stringify(m.parts ?? []),
-                (m.trigger as SqlParam) ?? null,
+                null, // trigger_kind: 无（proactive 退役后不再有 tick turn）
                 m.clientMsgId ?? null,
                 m.createdAt ?? null,
               ],

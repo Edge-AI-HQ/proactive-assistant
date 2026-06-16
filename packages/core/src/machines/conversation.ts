@@ -24,15 +24,6 @@ export type ConversationConnectionState =
   | "reconnecting"
   | "closed";
 
-export interface ConversationHeartbeatEntry {
-  kind: "heartbeat";
-  id: string;
-  ts: number;
-  text: string;
-  windowStart: string | null;
-  windowEnd: string;
-}
-
 export interface ConversationUserEntry {
   kind: "user";
   id: string;
@@ -55,6 +46,10 @@ export interface ConversationUserEntry {
 
 export interface ConversationAssistantEntry {
   kind: "assistant";
+  /** Stable React list key for the turn's whole lifetime. A live turn keeps
+   *  its client-local "turn-N" id even after it persists — the real
+   *  pai_chat_messages id lands in `serverId`, NOT here — so the list key
+   *  never changes mid-turn (changing it would remount the entry = flicker). */
   id: string;
   ts: number;
   /** Ordered content parts (text / reasoning / tool-call), exactly the shape
@@ -63,14 +58,13 @@ export interface ConversationAssistantEntry {
   /** True while this turn is still streaming (before chat:done). Drives the
    *  shimmer / "Thinking…" affordance the same way main chat does. */
   running: boolean;
-  /** True when this turn was triggered by a heartbeat tick (vs a user
-   *  message). The UI treats it as debug — hidden unless Debug is on, except
-   *  any `notify_user` part, which always shows. */
-  debug?: boolean;
+  /** Backend pai_chat_messages id, for feedback/thumbs joins. Present on
+   *  history turns (equals `id`) and adopted by a live turn on chat:persisted;
+   *  absent while a turn streams (thumbs stay disabled until it lands). */
+  serverId?: string;
 }
 
 export type ConversationEntry =
-  | ConversationHeartbeatEntry
   | ConversationUserEntry
   | ConversationAssistantEntry;
 
@@ -150,33 +144,14 @@ function historyAssistantParts(m: ConversationHistoryMessage): ConversationConte
   });
 }
 
-/** Convert persisted history into transcript entries, classifying which
- *  assistant turns are heartbeat-triggered (debug) so reload/reconnect matches
- *  the live view.
- *
- *  A heartbeat INPUT is recognized two ways, so this works regardless of
- *  backend version: role `heartbeat` (updated backend) OR a `[heartbeat]`
- *  text prefix on a `user` message (older backend that emits the heartbeat as
- *  a plain user turn). The assistant turn that FOLLOWS a heartbeat input is
- *  debug — taken from the backend's `trigger` when present, else inferred from
- *  the preceding heartbeat. */
+/** Convert persisted history into transcript entries. */
 export function historyToEntries(
   messages: ConversationHistoryMessage[],
 ): ConversationEntry[] {
   const out: ConversationEntry[] = [];
-  let lastInputWasTick = false;
   for (const m of messages) {
     const ts = typeof m.createdAt === "number" ? m.createdAt : Date.now();
-    const isHeartbeatInput =
-      m.role === "heartbeat" ||
-      (m.role === "user" && historyText(m).trimStart().startsWith("[heartbeat]"));
-    if (isHeartbeatInput) {
-      lastInputWasTick = true;
-      out.push({ kind: "heartbeat", id: m.id, ts, text: historyText(m), windowStart: null, windowEnd: "" });
-      continue;
-    }
     if (m.role === "user") {
-      lastInputWasTick = false;
       out.push({
         kind: "user",
         id: m.id,
@@ -192,7 +167,7 @@ export function historyToEntries(
       ts,
       parts: historyAssistantParts(m),
       running: false,
-      debug: m.trigger === "tick" || lastInputWasTick,
+      serverId: m.id,
     });
   }
   return out;
@@ -311,4 +286,52 @@ export function mergeTranscriptOnResync(
     return next;
   });
   return [...history, ...carried, ...inflight];
+}
+
+/** 分流 transcript：queued user 气泡（等在 in-flight turn 后面、渲染在 composer
+ *  上方的 QueuedMessagesPanel）与其余可见 transcript。 */
+export function splitQueuedEntries(transcript: ConversationEntry[]): {
+  visible: ConversationEntry[];
+  queued: ConversationUserEntry[];
+} {
+  const visible: ConversationEntry[] = [];
+  const queued: ConversationUserEntry[] = [];
+  for (const entry of transcript) {
+    if (entry.kind === "user" && entry.queued) queued.push(entry);
+    else visible.push(entry);
+  }
+  return { visible, queued };
+}
+
+/** 暂停的 HITL turn 把审批卡 host 在它的 entry 上（流式停的地方）= 最后一个仍
+ *  running 的 assistant entry。无 awaiting、或末尾 assistant 已结束 → null（审批
+ *  卡走 Footer fallback 渲染）。 */
+export function findHitlHostId(
+  transcript: ConversationEntry[],
+  hasAwaiting: boolean,
+): string | null {
+  if (!hasAwaiting) return null;
+  for (let i = transcript.length - 1; i >= 0; i--) {
+    const e = transcript[i];
+    if (e.kind === "assistant") return e.running ? e.id : null;
+  }
+  return null;
+}
+
+/** Card result bar 的目标 message（纯 transcript 规则，UI 再叠加
+ *  cardFeedback/busy/awaiting 的 gating）：末尾 entry 是已结束、有可见文本、无
+ *  propose_action 的 assistant turn 时返回其 serverId（未落库为 null，thumbs 禁用
+ *  到 chat:persisted 落 id）；否则 undefined（不显示 bar）。propose_action = 「需
+ *  你决定」而非「结果」，故排除。 */
+export function deriveCardResultMessageId(
+  visibleTranscript: ConversationEntry[],
+): string | null | undefined {
+  const last = visibleTranscript[visibleTranscript.length - 1];
+  if (!last || last.kind !== "assistant" || last.running) return undefined;
+  const hasText = last.parts.some((p) => p.type === "text" && p.text.trim().length > 0);
+  const hasProposal = last.parts.some(
+    (p) => p.type === "tool-call" && p.toolName === "propose_action",
+  );
+  if (!hasText || hasProposal) return undefined;
+  return last.serverId ?? null;
 }

@@ -163,17 +163,6 @@ describe("chatHistoryToSnapshot — status synthesis", () => {
     expect(snap.status).toBe("error");
     expect(snap.errorMessage).toMatch(/failed/);
   });
-
-  test("heartbeat rows are filtered out defensively", () => {
-    const snap = chatHistoryToSnapshot(
-      SESSION,
-      page([
-        { id: "1", role: "heartbeat", parts: [{ type: "text", text: "tick" }] },
-      ]),
-    );
-    expect(snap.status).toBe("running");
-    expect(snap.events).toHaveLength(0);
-  });
 });
 
 describe("chatHistoryToSnapshot — plan_revisions pairing", () => {

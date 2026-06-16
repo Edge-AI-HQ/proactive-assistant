@@ -216,11 +216,9 @@ export function chatHistoryToSnapshot(
   page: ConversationHistoryPage,
 ): RunSnapshot {
   const events: SSEEvent[] = [];
-  // Cards never heartbeat; filter defensively so the walker only sees
-  // user/assistant turns (the shared history shape includes 'heartbeat').
-  const messages: ConversationHistoryMessage[] = (
-    Array.isArray(page.messages) ? page.messages : []
-  ).filter((m) => m.role !== "heartbeat");
+  const messages: ConversationHistoryMessage[] = Array.isArray(page.messages)
+    ? page.messages
+    : [];
 
   let latestProposeAction: PendingInput | null = null;
   let finalText = "";

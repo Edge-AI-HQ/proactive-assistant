@@ -1,0 +1,175 @@
+---
+title: "Agent Chat 前端重构（拆两个巨石 + 修 flicker + 清 proactive 死代码）"
+description: "chat 前端结构重构的设计 SSOT。现状两个巨石——ConversationView.tsx(2207 行,13 组件挤一文件 + browser/voice 内联 167 行 + main/card 双态 props 爆炸 + 零 memo)与 useConversationRuntime(1113 行,243 行 handleEnvelope + 171 行连接 effect + 18 ref + 零 hook 单测)。核心 bug:chat:persisted 把流式 assistant 的 id 从 turn-N 换成数字 messageId(conversation.ts:576),而 Virtuoso computeItemKey 用 entry.id(ConversationView.tsx:1278)→ key 变 → 整条消息 unmount/remount = 用户感知的 flicker。结论:不引入 assistant-ui(自研 useChatScroll 已超它);沿分层把逻辑下沉 state/core(RN 直接复用)、ui-web 拆薄。5 Phase 各一 PR:①清 proactive/heartbeat/debug 死代码(接 sunset follow-up①)②修 flicker + memo③拆 useConversationRuntime④抽 browser/voice + 拆 ConversationView⑤下沉 UI 派生逻辑。改 packages/ui-web/src/chat、packages/state/src/queries/conversation.ts、packages/core/src/machines/conversation.ts 前必读。"
+---
+
+# Agent Chat 前端重构
+
+> 状态:已定稿(待实施)。本文是 chat **前端**(packages/ui-web/src/chat + state/core conversation 链路)结构重构的设计 SSOT。**不碰**后端 agent(见 [Agent Core](./2026-06-04-agentrun-control-plane))、不碰跨包分层骨架、不碰滚动状态机(见 [Chat 滚动:阅读优先](./2026-06-10-chat-scroll-reading-first))。
+
+## 结论(先读)
+
+1. **不引入 assistant-ui**。问题是"自己的两个巨石内部组织乱",不是"缺一个 chat 库"。自研 `useChatScroll`(reading-first 状态机 + runway)已**超过** assistant-ui 默认实现(后者 `turnAnchor="top"` 仍有 open bug #3648/#1916);换库要重写 5000+ 行产品特异 UI 且丢掉更好的滚动,净收益为负。
+2. **重构沿分层做,不做大爆炸重写**。逻辑下沉 `@pin-ai/state` / `@pin-ai/core`(RN 端 100% 复用这两层),`@pin-ai/ui-web` 拆成薄 DOM 壳。这样无论 `proactive-ai-frontend` 何时被 RN 接替(见 [RN 重构](./2026-06-14-rn-mobile-rebuild)),投资都不浪费。
+3. **flicker 是数据层 key bug,不是渲染库问题**。`chat:persisted` 中途换 `entry.id` → Virtuoso key 变 → remount。修 key 稳定性即可,几十行。
+4. **proactive 已是死代码,先清掉再拆分**。后端 proactive 主链路已随 [Proactive Sunset](./2026-06-14-proactive-agent-sunset) #151 删除;前端 `kind="proactive"` 分支是该 plan 有意保留的不可达死代码(其 follow-up①)。本重构的 Phase 0 接手它。
+
+## 现状解剖(带证据)
+
+### 分层骨架是健康的(不动)
+
+```
+apps/web(ZebraConversationPanel) · proactive-ai-frontend(MainChat→一行 re-export)
+        └──────────┬──────────────────────┘  两端消费同一 ConversationView,零分叉
+@pin-ai/ui-web (26.7k)  ── web DOM 渲染层
+@pin-ai/state  (4.2k)   ── React hooks 编排(RN 也复用) → useConversationRuntime
+@pin-ai/core   (16.5k)  ── 纯 TS,零 React(可单测) → machines/conversation·tool-steps, api/conversation, ports/
+@pin-ai/ui-kit (0.35k)  ── cva 契约,为 RN 双端预留
+```
+
+`core` 纯、`state` 只管 hooks、`ui-web` 只管 DOM、两端共用、native 靠 4 个注册点注入(`registerSignOutCleanup`/`registerFeedbackOutbox`/`registerLocalThreadStore`/`registerExternalMicAcquirer`)。**问题不在分层之间,在两层各自的"巨石"内部。**
+
+### 巨石 A:`ConversationView.tsx` — 2207 行
+
+一个文件塞了 **4 工具函数 + 1 context + 13 组件**:
+
+| 行 | 单元 | 行数 | 性质 |
+|---|---|---|---|
+| 230–454 | `AssistantActionBar` / `CardResultFeedbackBar` | ~225 | 操作栏/反馈栏 |
+| 455–863 | `UserEntry` / `QueuedMessagesPanel` / `QueuedMessageRow` | ~408 | 用户气泡 + 排队 |
+| 864–1121 | `NotifyCard` / `AssistantEntry` / `TranscriptEntry` | ~258 | 助手气泡 + 分发 |
+| 1122–1312 | `TranscriptFooter` / `TranscriptView` / `HeartbeatToggle` | ~190 | 列表容器 |
+| **1346–1897** | **`ConversationView` 主组件** | **551** | **上帝组件** |
+| 1904–2207 | `Composer` | 303 | 输入框(内嵌 voice) |
+
+主组件 551 行编排 11 个互不相关职责,其中最严重的是 **feature 内联**:
+- **browser live view 整套 167 行内联**(`useBrowserSession` + 12 个 input handler + iframe reload + `@capacitor/app` 监听,L1489–1656)
+- voice 内联进 `Composer`;直接 `import` `browser/`·`voice/`·`now/AiSphere`·`local-sync`·`@capacitor/app`
+- **props 爆炸**:15 个 props,靠 `if(isProactive)`/`if(cardFeedback)` 在同一函数里分叉 main/card/proactive 三态
+- **零 `React.memo`**:全 22 个 chat 文件无一处 memo
+
+### 巨石 B:`useConversationRuntime` — 1113 行(`state/queries/conversation.ts`)
+
+| 病灶 | 证据 |
+|---|---|
+| 243 行 `handleEnvelope` | 单 switch 12 种 SSE type,turn 边界检测混在 switch 前(L357–599) |
+| 171 行连接 lifecycle effect | 本地 DB 读 + history fetch + merge + SSE loop + 退避重连全塞一个 effect(L602–772) |
+| 18 个 `useRef` | 多是 state 镜像(`busyRef↔busy`),易漏同步(L169–251) |
+| 零 hook 单测 | core 纯函数测得好;`handleEnvelope`/lifecycle/队列语义/placeholder 竞争全无测试 |
+
+### 核心 bug:flicker 根因
+
+```ts
+// state/queries/conversation.ts:559-582  —— chat:done 之后到达
+case "chat:persisted": {
+  const mid = str(payload.messageId);
+  setTranscript((prev) => {
+    for (let i = prev.length - 1; i >= 0; i--) {
+      if (prev[i].kind === "assistant") {
+        if (prev[i].id === mid) return prev;
+        const next = [...prev];
+        next[i] = { ...(next[i] as ConversationAssistantEntry), id: mid }; // ⚠️ key 变了
+        return next;
+      }
+    }
+    return prev;
+  });
+}
+```
+
+`computeItemKey={(_index, entry) => entry.id}`(`ConversationView.tsx:1278`)。流式中 id 是 `"turn-<ts>-N"`,`chat:persisted` 后变成数字 → Virtuoso 认为旧项卸载、新项挂载 → **这条刚写完的 assistant 消息整个子树(含 WorkGroup/TaskCard/Markdown)unmount+remount**,视觉上闪一下 + 重新测高 → 又扰动 scroll。换 id 的目的(注释 L560)是"thumbs/feedback join 真实 id",合理但实现错了:**React 列表 key 在 entry 生命周期内必须恒定**。
+
+> 校准:"高频 `setTranscript` + 无 memo"是**性能**(浪费 re-render,不"闪");**视觉 flicker 几乎只来自上面的 id-swap remount**。两件事分开治。
+
+### proactive 死代码(已停用,待物理清除)
+
+后端主链路已随 #151 删除;前端是 sunset plan 有意保留的不可达死代码(`ConversationView` 默认 `kind` 已改 `"main"`,无 UI 路径能构造 `proactive-` session)。精确清单:
+
+| 文件 | 死代码 |
+|---|---|
+| `core/machines/conversation.ts` | `ConversationHeartbeatEntry`(L27/73) + `historyToEntries` 的 heartbeat 分类 + `partsHaveNotifyUser` |
+| `core/api/conversation.ts` | `fetchProactiveEnabled`(L55) / `setProactiveEnabled`(L66) |
+| `core/domain/chat-feedback.ts` | `startsWith("proactive-")` 分支(L37) |
+| `state/queries/conversation.ts` | `isProactive`(L165) / `case "proactive:tick"`(L407) / `enabled`·`setEnabled` effect(L1083–1096) / `tickRunIdsRef` / heartbeat-debug gate |
+| `ui-web/.../ConversationView.tsx` | `ProactiveLanding`(L148) / `HeartbeatToggle`(L1313) / `isProactive` 分叉(L1460/1720/1743/1812) / debug toggle header / `debugEnabled` 整条线 |
+| `useConversationRuntime.test.tsx` | proactive/heartbeat mock + 测试(L34/35/887) |
+
+无关命中只有 2 处(`/api/proactive/devices/ingest` endpoint 名),**不碰**。
+
+## 重构必要性论证(含反方)
+
+**反方**:"`proactive-ai-frontend` 要 sunset、RN 要重写 chat UI。重构现在的 ui-web chat 是不是给要被替换的东西做无用功?"
+
+把"重构"拆成两件事回答:
+
+1. **数据层(state+core)整理 + 修 flicker — 无条件该做**。RN 端 100% 复用 `useConversationRuntime`(在 `@pin-ai/state`)。拆 1113 行 hook、修 flicker、补单测 = web 现在 + RN 未来同时受益。flicker 是用户已感知的 bug。**最高优先级。**
+2. **UI 层(ui-web DOM)拆分 — 该做,但形态要对**。RN 不复用 ui-web DOM,所以"为 RN 美化组件"是伪命题。但拆它仍**独立成立**:(a) `ui-web` 不 sunset——`apps/web`(zebra 桌面端)是它的长期消费者,被 RN 替的是 iOS frontend 不是桌面 web;(b) 把藏在 UI 里的业务逻辑(可见性/segment/feedback 判断)挤回 state/core,挤出来的 RN 又能复用。所以 UI 层重构的正确形态是**"把逻辑挤出 UI + 巨组件拆成薄展示层 + 加 memo"**,不是重画 DOM。
+
+**结论:值得,但不是大爆炸重写。** 不动:跨包分层、两端统一、注册点、`useChatScroll`。
+
+## 实施计划(5 Phase,每 Phase 一个 PR)
+
+> 顺序:先删死代码降复杂度(P0)→ 止血(P1)→ 数据层(P2)→ UI 层(P3/P4)。风险递增、价值前置。每 Phase 独立可验、单独 PR,Phase 内用 commit 分粒度。
+
+### Phase 0 — 清 proactive/heartbeat/debug 死代码(接 sunset follow-up①)
+
+纯删 + 简化分支,先做让两个巨石天然瘦一圈。
+
+- `core`:删 `ConversationHeartbeatEntry`(union 收成 `user|assistant`)、`historyToEntries` 的 heartbeat 分类、`partsHaveNotifyUser`、`fetchProactiveEnabled`/`setProactiveEnabled`、`chat-feedback.ts` 的 proactive 分支
+- `state`:删 `case "proactive:tick"`、`isProactive`、`enabled`/`setEnabled` + 其 effect、`tickRunIdsRef`、`turnDebugRef`、history fetch 的 `includeDebug`、flushTurn 的 debug gate;`useConversationRuntime` 返回值去掉 `enabled`/`setEnabled`
+- `ui-web`:删 `ProactiveLanding`、`HeartbeatToggle`、`isProactive` 分叉、debug toggle header、`debugEnabled` state + localStorage;主组件 props 去掉 `isProactive`/`debugEnabled`/`enabled`/`setEnabled`;`!isProactive && (onDismiss||onDone)` 简化为 `(onDismiss||onDone)`
+- 测试:删/改 `useConversationRuntime.test.tsx`、`conversation.test.ts` 的 heartbeat 回放用例
+- **与 sunset 的边界**:本 Phase = sunset plan 第 136 行 follow-up① 的前端落地。death-columns(`pai_user_settings.proactive_enabled` 等)是后端,不在本 plan(留 sunset follow-up 的 DB contract)。
+- **验证**:`npm run check:packages` + 三端 type-check/test;main chat / card chat 正常
+
+### Phase 1 — 修 flicker + 加 memo(P0 止血)
+
+- **flicker**:`entry.id` 在 entry 生命周期内恒定(始终用乐观 id);新增 `ConversationAssistantEntry.serverId` 存 `chat:persisted` 的真实 `messageId`;`chat:persisted` 改成只补 `serverId`、不动 `id`。所有"判断是否已落库 + join 真实 id"的点改读 `serverId`:`cardResultMessageId`(`ConversationView.tsx:1479` 的 `/^\d+$/.test(last.id)`)、`buildAssistantMessageFeedbackBody`、`AssistantActionBar` thumbs
+- **memo**:`TranscriptEntry`/`UserEntry`/`AssistantEntry` 包 `React.memo`,比较依据 `entry`(引用) + `isLast*` + `busy`;`itemContent` 内联回调(`onReply`/`onDecide` 等)用 `useCallback` 稳定化
+- **验证**:新增"persisted 不改 key"单测;React DevTools Highlight updates 实测 `chat:persisted` 那条不 remount;`npm run check:packages`
+
+### Phase 2 — 拆 `useConversationRuntime`(数据层,RN 复用)
+
+- `handleEnvelope` 243 行 → per-event handler(`handlers/chat-delta.ts` 等)或 reducer;turn 边界检测提取为独立纯函数(可下沉 core 单测)
+- 171 行 lifecycle effect → 抽 `useConversationStream`(连接/重连/replay)独立 hook
+- 18 ref 分类收敛:消除明显的 state 镜像对;builder/turnId 等真 ref 留下
+- 补 hook 层单测:event 处理、队列语义(`interruptQueuedMessage`)、placeholder 竞争、resync 集成(mock history + stream)
+- **验证**:新增 state 层集成测试;`useConversationRuntime` 对外签名不变(消费端零改);`npm run check:packages`
+
+### Phase 3 — 抽 browser/voice feature + 拆 ConversationView(UI 层)
+
+- **抽 browser**:167 行 browser live view → `chat/browser-panel/`(`ConversationBrowserPanel` + 把 12 个 handler 收进 `useBrowserPanel`);`ConversationView` 只留一个挂载点
+- **抽 voice**:`Composer` 移出到独立文件 `chat/composer/Composer.tsx`,voice 集成收进 composer 内部
+- **拆主组件**:`ConversationView`(orchestrator,~150 行) → `ConversationHeader` + `ConversationTranscript`(包 TranscriptView) + `ConversationFooter`(composer/todo/feedback/queued)
+- 13 个内联组件移到各自文件(`UserEntry.tsx`/`AssistantEntry.tsx`/...)
+- **验证**:`apps/web` + frontend 双端跑(`npm run dev` 点真实流程);源码断言测试(参考既有 source 测试)更新;`npm run check:packages`
+
+### Phase 4 — 下沉 UI 派生逻辑到 state/core(RN 复用)
+
+- `visibleTranscript`/`queuedEntries` 分流、`cardResultMessageId` 可见性规则、HITL host 选择 → 下沉为 `@pin-ai/state` selector 或 `@pin-ai/core` 纯函数
+- (可选)chat 相关 cva 契约进 `@pin-ai/ui-kit`(Bubble/ToolRow),RN 重写时按同契约对照
+- **验证**:下沉逻辑加 core 单测;ui-web 仅消费;`npm run check:packages`
+
+## 风险与注意
+
+- **Phase 1 的 serverId 改动面**:凡用 `/^\d+$/.test(entry.id)` 判断"是否已落库"的点都要迁到 `serverId`,漏一个会导致 feedback join 失败。先 grep `\^\\d` + `messageId` 全量定位。
+- **Phase 2 签名不变**:`useConversationRuntime` 返回值结构不能变(两端 + 测试依赖),内部重构外部无感。
+- **Phase 3 源码断言测试**:`apps/web`/frontend 有 readFileSync + 正则锁组件结构的测试(见 [前端源码断言测试] 经验),拆组件会失配,tsc 抓不到,改完必须跑 vitest。
+- **proactive 共用历史**:Phase 0 删 `kind="proactive"` 时确认 main/card 两态不依赖被删分支(sunset #151 已验证默认 `kind="main"` 安全)。
+- **不碰** `useChatScroll`:它是已验证的 SSOT,本重构只改它的接线位置(Phase 3 随 ConversationView 拆分移动),不改其状态机逻辑。
+
+## 验证方式(每 Phase 通用)
+
+- `npm run check:packages`(core/state/ui-web 边界 lint + 类型 + 单测)
+- 动 ui-web → `cd apps/web && npm run type-check && npm test` + frontend type-check/test(shim 双端共享)
+- 实测:`cd apps/web && npm run dev` 发消息走完整流式 + persisted,React DevTools 确认无 remount flicker
+
+## 相关 plan / 模块
+
+- **不引入的对照**:assistant-ui 调研结论见本 plan「结论」节(自研 `useChatScroll` 已超它)
+- **滚动 SSOT(不动)**:[Chat 滚动:阅读优先](./2026-06-10-chat-scroll-reading-first)
+- **work group 渲染体系(已实施,本重构保留)**:[长任务/多 Agent 对话体验优化](./2026-06-09-long-task-agent-ux)
+- **proactive 死代码来源**:[Proactive Agent Sunset](./2026-06-14-proactive-agent-sunset)(Phase 0 = 其 follow-up①)
+- **双端方向**:[双端设计系统](./2026-06-13-dual-platform-design-system) + [RN 重构](./2026-06-14-rn-mobile-rebuild)(逻辑下沉 state/core 的依据)
+- **后端 chat(不碰)**:[Agent Core 控制平面](./2026-06-04-agentrun-control-plane)
+- **模块文档**:实施后同步 `docs/modules/execution.mdx`(chat 前端结构 + 删 proactive agent 段)

@@ -1,15 +1,18 @@
 /**
- * Conversation 状态机回放测试 —— 锁 history 转换的 heartbeat 分类与
- * resync 三段合并算法（carry / identity / text-claim）的全部边界。
+ * Conversation 状态机回放测试 —— 锁 history→entries 转换与 resync 三段
+ * 合并算法（carry / identity / text-claim）的全部边界。
  */
 import { describe, expect, test } from "vitest";
 
 import type { ConversationHistoryMessage } from "../api/conversation";
 import {
   awaitingPartialEntry,
+  deriveCardResultMessageId,
+  findHitlHostId,
   historyToEntries,
   mergeTranscriptOnResync,
   partsHaveNotifyUser,
+  splitQueuedEntries,
   type ConversationEntry,
   type ConversationUserEntry,
 } from "./conversation";
@@ -23,44 +26,15 @@ function userMsg(id: string, text: string, clientMsgId?: string): ConversationHi
   };
 }
 
-function assistantMsg(
-  id: string,
-  text: string,
-  trigger?: "tick" | "user",
-): ConversationHistoryMessage {
-  return { id, role: "assistant", parts: [{ type: "text", text }], trigger };
+function assistantMsg(id: string, text: string): ConversationHistoryMessage {
+  return { id, role: "assistant", parts: [{ type: "text", text }] };
 }
 
 function bubble(over: Partial<ConversationUserEntry> & { text: string }): ConversationUserEntry {
   return { kind: "user", id: over.id ?? over.clientId ?? "b", ts: 0, ...over };
 }
 
-describe("historyToEntries — heartbeat classification", () => {
-  test("role=heartbeat and [heartbeat]-prefixed user rows become heartbeat entries; following assistant turn is debug", () => {
-    const entries = historyToEntries([
-      { id: "1", role: "heartbeat", parts: [{ type: "text", text: "tick" }] },
-      assistantMsg("2", "silent thinking"),
-      userMsg("3", "[heartbeat] legacy tick"),
-      assistantMsg("4", "another"),
-      userMsg("5", "real user message"),
-      assistantMsg("6", "reply"),
-    ]);
-    expect(entries.map((e) => e.kind)).toEqual([
-      "heartbeat", "assistant", "heartbeat", "assistant", "user", "assistant",
-    ]);
-    expect((entries[1] as { debug?: boolean }).debug).toBe(true);
-    expect((entries[3] as { debug?: boolean }).debug).toBe(true);
-    expect((entries[5] as { debug?: boolean }).debug).toBe(false);
-  });
-
-  test("backend trigger=tick wins even without a preceding heartbeat row", () => {
-    const entries = historyToEntries([
-      userMsg("1", "hi"),
-      assistantMsg("2", "tick turn", "tick"),
-    ]);
-    expect((entries[1] as { debug?: boolean }).debug).toBe(true);
-  });
-
+describe("historyToEntries", () => {
   test("user rows carry the echoed clientMsgId as clientId", () => {
     const [e] = historyToEntries([userMsg("1", "hello", "cid-1")]);
     expect(e.kind).toBe("user");
@@ -217,5 +191,65 @@ describe("mergeTranscriptOnResync", () => {
     const users = merged.filter((e): e is ConversationUserEntry => e.kind === "user");
     const queued = users.filter((u) => u.queued);
     expect(queued.map((u) => u.clientId)).toEqual(["cid-queued", "cid-reload"]);
+  });
+});
+
+describe("transcript derivations (split / hitl host / card result)", () => {
+  test("splitQueuedEntries separates queued user bubbles from the visible rest", () => {
+    const entries: ConversationEntry[] = [
+      { kind: "user", id: "u1", ts: 0, text: "sent" },
+      { kind: "assistant", id: "a1", ts: 0, parts: [{ type: "text", text: "hi" }], running: false },
+      { kind: "user", id: "u2", ts: 0, text: "queued", queued: true },
+    ];
+    const { visible, queued } = splitQueuedEntries(entries);
+    expect(visible.map((e) => e.id)).toEqual(["u1", "a1"]);
+    expect(queued.map((e) => e.id)).toEqual(["u2"]);
+  });
+
+  test("findHitlHostId = last running assistant; null on no-awaiting / settled / none", () => {
+    const running: ConversationEntry[] = [
+      { kind: "user", id: "u1", ts: 0, text: "x" },
+      { kind: "assistant", id: "a1", ts: 0, parts: [], running: true },
+    ];
+    expect(findHitlHostId(running, true)).toBe("a1");
+    expect(findHitlHostId(running, false)).toBeNull(); // no awaiting → no host
+    const settled: ConversationEntry[] = [
+      { kind: "assistant", id: "a1", ts: 0, parts: [], running: false },
+    ];
+    expect(findHitlHostId(settled, true)).toBeNull(); // last assistant done → Footer fallback
+    expect(findHitlHostId([], true)).toBeNull();
+  });
+
+  test("deriveCardResultMessageId: settled assistant w/ text & no proposal → serverId (null pre-persist)", () => {
+    expect(
+      deriveCardResultMessageId([
+        { kind: "assistant", id: "turn-1", ts: 0, parts: [{ type: "text", text: "done" }], running: false, serverId: "123" },
+      ]),
+    ).toBe("123");
+    expect(
+      deriveCardResultMessageId([
+        { kind: "assistant", id: "turn-1", ts: 0, parts: [{ type: "text", text: "done" }], running: false },
+      ]),
+    ).toBeNull();
+  });
+
+  test("deriveCardResultMessageId → undefined for running / empty / proposal / no-text", () => {
+    expect(
+      deriveCardResultMessageId([
+        { kind: "assistant", id: "a", ts: 0, parts: [{ type: "text", text: "x" }], running: true },
+      ]),
+    ).toBeUndefined();
+    expect(deriveCardResultMessageId([])).toBeUndefined();
+    expect(
+      deriveCardResultMessageId([
+        {
+          kind: "assistant", id: "a", ts: 0, running: false, serverId: "1",
+          parts: [
+            { type: "text", text: "x" },
+            { type: "tool-call", toolCallId: "t", toolName: "propose_action", args: {}, argsText: "" },
+          ],
+        },
+      ]),
+    ).toBeUndefined();
   });
 });

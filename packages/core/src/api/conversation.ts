@@ -34,40 +34,14 @@ export type ConversationHistoryPart =
 
 export interface ConversationHistoryMessage {
   id: string;
-  /** `heartbeat` = a heartbeat input (renders as a debug-only heartbeat entry,
-   *  not a user bubble). */
-  role: "user" | "assistant" | "heartbeat";
+  role: "user" | "assistant";
   parts: ConversationHistoryPart[];
   createdAt?: number;
-  /** Assistant turns only: how the turn was triggered. "tick" → heartbeat-driven
-   *  (debug-only); "user" / undefined → user-driven (always shown). */
-  trigger?: "tick" | "user";
   /** User turns only: the client message id the send carried (clientMsgId on
    *  POST /send), echoed back so the optimistic bubble reconciles by identity
    *  instead of text. Absent on assistant rows, pre-089 rows, and sends that
    *  didn't supply one. */
   clientMsgId?: string;
-}
-
-/** Whether the proactive heartbeat is on. Stored in
- * `pai_user_settings.proactive_enabled` and read via the unified settings
- * resource; the server mirrors it into the per-user `proactive.tick` task. */
-export async function fetchProactiveEnabled(
-  signal?: AbortSignal,
-): Promise<boolean> {
-  const res = await proxyFetch("/settings", { signal });
-  if (!res.ok) throw new Error(`/settings failed: ${res.status}`);
-  const data = (await res.json()) as { proactiveEnabled?: boolean };
-  return !!data.proactiveEnabled;
-}
-
-/** Turn the proactive heartbeat on/off via the unified settings resource.
- * Returns the resulting state. */
-export async function setProactiveEnabled(enabled: boolean): Promise<boolean> {
-  const res = await proxyPost("/settings", { proactiveEnabled: enabled });
-  if (!res.ok) throw new Error(`/settings failed: ${res.status}`);
-  const data = (await res.json()) as { proactiveEnabled?: boolean };
-  return !!data.proactiveEnabled;
 }
 
 // ── Conversation agent (unified actor kernel: /api/conversation/*) ──
@@ -79,7 +53,7 @@ export async function setProactiveEnabled(enabled: boolean): Promise<boolean> {
 
 export interface ConversationInitResult {
   sessionKey: string;
-  kind: "main" | "card" | "proactive";
+  kind: "main" | "card";
   existing: boolean;
 }
 
@@ -89,7 +63,7 @@ export interface ConversationInitResult {
 export async function conversationInit(opts?: {
   sessionKey?: string;
   cardId?: string;
-  kind?: "main" | "card" | "proactive";
+  kind?: "main" | "card";
   signal?: AbortSignal;
 }): Promise<ConversationInitResult> {
   const body: Record<string, unknown> = {};
@@ -211,7 +185,7 @@ export async function conversationCancel(
 }
 
 /** Long-lived, resumable push stream of a session's frames (SSE envelopes):
- *  thinking / reasoning / tool / text / requires_action / proactive:tick.
+ *  thinking / reasoning / tool / text / requires_action.
  *  Iterate until it ends, then reconnect — passing the last `lastEventId` seen
  *  so the server replays the frames missed during the gap (no loss, no dup).
  *  Yields `{ event, lastEventId }`. */
@@ -232,10 +206,6 @@ export interface ConversationHistoryOpts {
   before?: number;
   /** Page size. Backend caps at 200; default 50. */
   limit?: number;
-  /** Include proactive debug-only rows (heartbeat inputs + silent tick turns).
-   *  Mirrors the Debug toggle; default false → only user-visible turns (user
-   *  messages + tick turns that reached out via notify_user). */
-  includeDebug?: boolean;
 }
 
 /** A paused HITL run surfaced on the newest history page so the FE can rebuild
@@ -299,7 +269,6 @@ export async function conversationHistory(
   const params = new URLSearchParams({ session: sessionKey });
   if (opts.before !== undefined) params.set("before", String(opts.before));
   if (opts.limit !== undefined) params.set("limit", String(opts.limit));
-  if (opts.includeDebug) params.set("include_debug", "true");
   const res = await proxyFetch(`/conversation/history?${params.toString()}`, {
     signal: opts.signal,
   });

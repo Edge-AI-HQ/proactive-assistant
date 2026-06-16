@@ -16,10 +16,6 @@ function rowToMessage(row: Record<string, unknown>): ConversationHistoryMessage 
     role: row.role as ConversationHistoryMessage["role"],
     parts: JSON.parse(String(row.parts_json ?? "[]")),
   };
-  const trigger = row.trigger_kind;
-  if (trigger && trigger !== "user") {
-    out.trigger = trigger as "tick";
-  }
   if (typeof row.created_at === "number") out.createdAt = row.created_at;
   if (typeof row.client_msg_id === "string" && row.client_msg_id) {
     out.clientMsgId = row.client_msg_id;

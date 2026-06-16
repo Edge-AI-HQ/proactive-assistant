@@ -103,8 +103,6 @@ vi.mock("@pin-ai/state", async () => {
       deleteQueuedMessage,
       interruptQueuedMessage,
       regenerateLast: vi.fn(async () => {}),
-      enabled: null,
-      setEnabled: vi.fn(async () => {}),
       threadId: "main-1",
       hasMoreHistory: false,
       loadMoreHistory: vi.fn(async () => {}),

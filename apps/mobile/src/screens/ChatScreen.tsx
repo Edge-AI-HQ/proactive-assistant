@@ -4,7 +4,7 @@
  * 重连游标、HITL 状态全部共用），本文件只有 RN 渲染层（FlatList +
  * composer），不重新实现任何协议逻辑。
  */
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -23,7 +23,6 @@ import Animated, { FadeInDown } from "react-native-reanimated";
 import {
   conversationInit,
   feedbackChannelForSession,
-  partsHaveNotifyUser,
   type ConversationContentPart,
   type ConversationEntry,
   type HitlRequiresAction,
@@ -243,16 +242,7 @@ function Conversation({
     localHistory: readLocalHistory,
   });
 
-  // tick 触发的 assistant turn 默认隐藏（与 web 一致），notify_user 例外。
-  const visible = useMemo(
-    () =>
-      transcript.filter((e) => {
-        if (e.kind === "heartbeat") return false;
-        if (e.kind === "assistant" && e.debug) return partsHaveNotifyUser(e.parts);
-        return true;
-      }),
-    [transcript],
-  );
+  const visible = transcript;
 
   const channel = feedbackChannelForSession(sessionKey);
 

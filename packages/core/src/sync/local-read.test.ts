@@ -69,7 +69,6 @@ describe("readLocalHistoryPage", () => {
       createdAt: 1000,
       parts: [{ type: "text", text: "m1" }],
     });
-    expect(full?.messages[0].trigger).toBeUndefined();
   });
 
   it("returns null for an empty/unknown thread (caller falls through to network)", async () => {
