@@ -15,11 +15,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Destroy preview app
+      - name: Destroy preview apps
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          app="pinai-pr-${{ github.event.pull_request.number }}"
-          flyctl apps destroy "$app" --yes 2>/dev/null \
-            && echo "destroyed $app" \
-            || echo "no preview app for $app (nothing to clean)"
+          # 前端 + 后端副本 + 独立库（full-stack preview 时才有），全部尝试销毁
+          for app in \
+            "pinai-pr-${{ github.event.pull_request.number }}" \
+            "pinai-pr-${{ github.event.pull_request.number }}-api" \
+            "pinai-pr-${{ github.event.pull_request.number }}-db"; do
+            flyctl apps destroy "$app" --yes 2>/dev/null \
+              && echo "destroyed $app" \
+              || echo "no preview app for $app (nothing to clean)"
+          done

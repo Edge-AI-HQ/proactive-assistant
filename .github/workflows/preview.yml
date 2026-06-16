@@ -1,17 +1,21 @@
 name: PR Preview
 
-# 按需起一个临时 Fly app 预览某个 PR 的前端(指向共享 dev 后端)。
-# 触发:手动 / dev-pipeline agent 调 `gh workflow run preview.yml -f pr=<PR号>`。
-# app 名 = pinai-pr-<PR号>;1 台机 + 空闲缩零(fly.toml min_machines_running=0)。
-# 销毁在 preview-cleanup.yml(PR 关闭时)。
+# 按需起一个临时环境预览某个 PR，**按实际改动范围智能决定起哪些副本**（最省）：
+#   - 只改前端           → 只起 pinai-pr-<N>（前端），指向共享 dev 后端
+#   - 改了后端逻辑        → 额外起 pinai-pr-<N>-api（后端副本），前端指向它；后端共用 dev 库
+#   - 还动了 DB migration → 再起 pinai-pr-<N>-db（独立 Postgres），后端连它跑迁移，dev 库零影响
+# 没改到的服务一律不起。auth 一律复用共享 dev Supabase（登录不随 PR 变）。
 #
-# Discovery note: workflow_dispatch 要能触发,本文件必须在默认分支(main)上。
+# 销毁：PR 关闭→preview-cleanup.yml；不关 PR 随时拆→preview-down.yml；两者都按 pinai-pr-<N>* 全清。
+#
+# ⚠️ 成本：后端副本是 web+chat 两进程（~4 vCPU+4GB，不缩零）+ 可选 Postgres，跑着就花钱，及时拆。
+# Discovery note: workflow_dispatch 要能触发，本文件必须在默认分支（main）上。
 
 on:
   workflow_dispatch:
     inputs:
       pr:
-        description: "PR number (→ app pinai-pr-<N> + 回贴该 PR)"
+        description: "PR number (→ 按改动范围起 pinai-pr-<N>[-api][-db] + 回贴该 PR)"
         required: true
         type: string
 
@@ -19,26 +23,143 @@ permissions:
   contents: read
   pull-requests: write
 
+env:
+  FLY_ORG: pin-ai
+  REGION: ord
+  DEV_API_URL: https://proactive-ai-agents-dev.fly.dev
+
 jobs:
-  preview:
+  # ── 1. 判断这个 PR 改了哪些范围 ─────────────────────────────────────────
+  detect:
     runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.scope.outputs.frontend }}
+      backend: ${{ steps.scope.outputs.backend }}
+      migration: ${{ steps.scope.outputs.migration }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      # 切到目标 PR 的代码(解耦 dispatch ref 与 PR)
-      - name: Checkout PR code
+      - name: Classify changed paths
+        id: scope
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh pr checkout ${{ inputs.pr }}
+        run: |
+          files=$(gh pr diff "${{ inputs.pr }}" --repo "${{ github.repository }}" --name-only)
+          echo "$files"
+          # 路径 → 服务映射（packages/ 是前端共享层，算前端）
+          grep -qE '^(proactive-ai-frontend|packages|apps/web)/' <<<"$files" && fe=true || fe=false
+          grep -qE '^pinai-agents/' <<<"$files" && be=true || be=false
+          grep -qE '^pinai-agents/db/migrations/' <<<"$files" && mig=true || mig=false
+          echo "frontend=$fe" >> "$GITHUB_OUTPUT"
+          echo "backend=$be" >> "$GITHUB_OUTPUT"
+          echo "migration=$mig" >> "$GITHUB_OUTPUT"
+          echo "→ frontend=$fe backend=$be migration=$mig"
 
+  # ── 2. 后端副本（仅当后端改了）。动了 migration 则先起独立库 ────────────
+  backend:
+    needs: detect
+    if: needs.detect.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      api_url: ${{ steps.urls.outputs.api_url }}
+    steps:
+      - name: Checkout PR code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr checkout ${{ inputs.pr }}
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      # 用 dotenvx 解密 .env.dev 里的 VITE_*(build-time inline 进 SPA)
+      - name: Compute names/URLs
+        id: urls
+        run: |
+          api="pinai-pr-${{ inputs.pr }}-api"
+          db="pinai-pr-${{ inputs.pr }}-db"
+          echo "api=$api" >> "$GITHUB_OUTPUT"
+          echo "db=$db" >> "$GITHUB_OUTPUT"
+          echo "api_url=https://$api.fly.dev" >> "$GITHUB_OUTPUT"
+
+      # 动了 migration → 起一个独立 Postgres，后端连它（dev 库零影响）。
+      # 没动 → 不起，DATABASE_URL 用 dev 的（release_command 的 yoyo apply 幂等空跑）。
+      - name: Provision isolated DB (only if migration changed)
+        if: needs.detect.outputs.migration == 'true'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          db="${{ steps.urls.outputs.db }}"
+          # 复用项目同款 pg（pgvector，迁移需要）。单机、小卷，throwaway。
+          flyctl postgres create --name "$db" --org "$FLY_ORG" --region "$REGION" \
+            --vm-size shared-cpu-1x --volume-size 1 --initial-cluster-size 1 \
+            --image-ref flyio/postgres-flex:15 2>&1 | tee /tmp/pg.txt || true
+          # attach 会在后端 app 上建库+用户并自动设 DATABASE_URL secret
+          flyctl postgres attach "$db" --app "${{ steps.urls.outputs.api }}" 2>&1 || true
+
+      - name: Generate per-PR fly config
+        run: |
+          api="${{ steps.urls.outputs.api }}"
+          # 从 dev toml 派生：换 app 名 + 把自指的内部/回连 URL 改成本副本
+          sed \
+            -e "s/^app = .*/app = '$api'/" \
+            -e "s#proactive-ai-agents-dev#$api#g" \
+            pinai-agents/fly.dev.toml > pinai-agents/fly.pr.toml
+          echo "----- fly.pr.toml [app/env] -----"; grep -E "^app|PAI_API_URL|WEB_INTERNAL_URL|CHAT_INTERNAL_URL" pinai-agents/fly.pr.toml || true
+
+      - name: Create app + inject all dev secrets
+        working-directory: pinai-agents
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
+        run: |
+          flyctl apps create "${{ steps.urls.outputs.api }}" --org "$FLY_ORG" 2>/dev/null || true
+          # 整套 dev secret（含 Composio/Stripe/LiteLLM 等副作用服务——前期全保留，验证完整环境）
+          python3 scripts/sync_fly_secrets.py --app "${{ steps.urls.outputs.api }}" --env-file .env.dev --no-stage
+          # 若没起独立库，把 DATABASE_URL 显式锁成 dev（sync 已经推了 dev 的，这里幂等确认）。
+          # 若起了独立库，上一步 postgres attach 已覆盖 DATABASE_URL，不要再推 dev。
+          if [ "${{ needs.detect.outputs.migration }}" != "true" ]; then
+            echo "（共用 dev 库：DATABASE_URL 用 .env.dev 的值，release_command 的 yoyo apply 幂等空跑）"
+          fi
+
+      - name: Deploy backend preview (web + chat)
+        working-directory: pinai-agents
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl deploy --config fly.pr.toml --remote-only --app "${{ steps.urls.outputs.api }}"
+
+  # ── 3. 前端副本（前端改了，或后端改了也要个前端去打它）─────────────────
+  frontend:
+    needs: [detect, backend]
+    if: |
+      always() &&
+      (needs.detect.outputs.frontend == 'true' || needs.detect.outputs.backend == 'true') &&
+      needs.backend.result != 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr checkout ${{ inputs.pr }}
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Decide which backend the frontend points at
+        id: api
+        run: |
+          # 起了后端副本就指向它，否则指向共享 dev 后端
+          if [ "${{ needs.detect.outputs.backend }}" = "true" ] && [ "${{ needs.backend.result }}" = "success" ]; then
+            echo "url=https://pinai-pr-${{ inputs.pr }}-api.fly.dev" >> "$GITHUB_OUTPUT"
+          else
+            echo "url=$DEV_API_URL" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Decrypt VITE_* build args
         env:
           DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
@@ -47,35 +168,49 @@ jobs:
           python3 - "$json" <<'PY' >> "$GITHUB_ENV"
           import json, sys
           d = json.loads(sys.argv[1])
-          for k in ("VITE_PIN_API_URL", "VITE_SUPABASE_URL", "VITE_SUPABASE_PUBLISHABLE_KEY"):
+          for k in ("VITE_SUPABASE_URL", "VITE_SUPABASE_PUBLISHABLE_KEY"):
               print(f"{k}={d[k]}")
           PY
 
-      - name: Create preview app if needed
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: flyctl apps create "pinai-pr-${{ inputs.pr }}" --org pin-ai 2>/dev/null || true
-
-      # build context = 仓库根(Dockerfile 要 packages/ + capacitor-plugins/);--ha=false 只起 1 台
-      - name: Deploy frontend preview
+      - name: Create + deploy frontend preview
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
+          app="pinai-pr-${{ inputs.pr }}"
+          flyctl apps create "$app" --org "$FLY_ORG" 2>/dev/null || true
           flyctl deploy . \
             --config proactive-ai-frontend/fly.toml \
             --dockerfile proactive-ai-frontend/Dockerfile \
-            --remote-only --ha=false \
-            --app "pinai-pr-${{ inputs.pr }}" \
+            --remote-only --ha=false --app "$app" \
             --build-arg WORKDIR=proactive-ai-frontend \
-            --build-arg VITE_PIN_API_URL="$VITE_PIN_API_URL" \
+            --build-arg VITE_PIN_API_URL="${{ steps.api.outputs.url }}" \
             --build-arg VITE_SUPABASE_URL="$VITE_SUPABASE_URL" \
             --build-arg VITE_SUPABASE_PUBLISHABLE_KEY="$VITE_SUPABASE_PUBLISHABLE_KEY"
 
-      - name: Comment preview URL on PR
+  # ── 4. 回贴 PR：列出这次起了哪些副本 + 各自 URL ──────────────────────────
+  comment:
+    needs: [detect, backend, frontend]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment preview URLs on PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          url="https://pinai-pr-${{ inputs.pr }}.fly.dev/"
-          gh pr comment "${{ inputs.pr }}" --repo "${{ github.repository }}" \
-            --body "🔗 **Frontend preview**: ${url} （指向 dev 后端;空闲自动停;PR 关闭后自动销毁）"
-          echo "preview: $url"
+          fe="https://pinai-pr-${{ inputs.pr }}.fly.dev/"
+          api="https://pinai-pr-${{ inputs.pr }}-api.fly.dev/"
+          body="🔗 **PR Preview**（按需起，关 PR 或说「拆 preview」自动销毁）"
+          if [ "${{ needs.detect.outputs.frontend }}" = "true" ] || [ "${{ needs.detect.outputs.backend }}" = "true" ]; then
+            body="$body
+          - 前端: $fe"
+          fi
+          if [ "${{ needs.detect.outputs.backend }}" = "true" ]; then
+            db_note=""
+            [ "${{ needs.detect.outputs.migration }}" = "true" ] && db_note="（独立库，dev 不受影响）" || db_note="（共用 dev 库）"
+            body="$body
+          - 后端: $api $db_note"
+          fi
+          body="$body
+
+          范围判定: frontend=${{ needs.detect.outputs.frontend }} backend=${{ needs.detect.outputs.backend }} migration=${{ needs.detect.outputs.migration }}"
+          gh pr comment "${{ inputs.pr }}" --repo "${{ github.repository }}" --body "$body"
