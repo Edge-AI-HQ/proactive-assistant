@@ -26,12 +26,13 @@ jobs:
   build:
     runs-on: macos-15
     timeout-minutes: 60
+
     steps:
       - uses: actions/checkout@v6
 
       - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: "22"
           cache: npm
 
       - run: npm ci
@@ -43,9 +44,9 @@ jobs:
           DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
         run: |
           {
-            echo "EXPO_PUBLIC_SUPABASE_URL=$(npx -y @dotenvx/dotenvx get VITE_SUPABASE_URL -f pinai-agents/.env.dev)"
-            echo "EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=$(npx -y @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f pinai-agents/.env.dev)"
-            echo "EXPO_PUBLIC_PIN_API_URL=$(npx -y @dotenvx/dotenvx get VITE_PIN_API_URL -f pinai-agents/.env.dev)"
+          echo "EXPO_PUBLIC_SUPABASE_URL=$(npx -y @dotenvx/dotenvx get VITE_SUPABASE_URL -f pinai-agents/.env.dev)"
+          echo "EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=$(npx -y @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f pinai-agents/.env.dev)"
+          echo "EXPO_PUBLIC_PIN_API_URL=$(npx -y @dotenvx/dotenvx get VITE_PIN_API_URL -f pinai-agents/.env.dev)"
           } >> "$GITHUB_ENV"
 
       # CNG：从 app.json 生成 ios/（本仓不入库原生工程）。
@@ -57,29 +58,51 @@ jobs:
         working-directory: apps/mobile/ios
         run: pod install
 
-      - name: Import signing certificate
+      # Import Apple Distribution certificate into a temporary keychain
+      # (aligned with the working build-ios.yml pattern).
+      - name: Install Apple certificate
         env:
-          CERT_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
-          CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
-          KEYCHAIN=build.keychain
-          security create-keychain -p ci $KEYCHAIN
-          security default-keychain -s $KEYCHAIN
-          security unlock-keychain -p ci $KEYCHAIN
-          echo "$CERT_BASE64" | base64 --decode > /tmp/cert.p12
-          security import /tmp/cert.p12 -k $KEYCHAIN -P "$CERT_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k ci $KEYCHAIN
+          if [ -z "$P12_BASE64" ]; then
+            echo "Missing secret APPLE_CERTIFICATE_P12_BASE64" >&2
+            exit 1
+          fi
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
 
+          echo "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+
+      # Each bundle id has its own distribution profile:
+      # dev = ai.pin.proactive.development.
       - name: Install provisioning profile
+        id: provisioning
         env:
           PROFILE_BASE64: ${{ secrets.PROVISIONING_PROFILE_DEV_BASE64 }}
         run: |
+          if [ -z "$PROFILE_BASE64" ]; then
+            echo "Missing secret PROVISIONING_PROFILE_DEV_BASE64" >&2
+            exit 1
+          fi
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
           echo "$PROFILE_BASE64" | base64 --decode \
             > ~/Library/MobileDevice/Provisioning\ Profiles/pinai-dev.mobileprovision
+          # Extract profile name for PROVISIONING_PROFILE_SPECIFIER
+          PROFILE_NAME="$(/usr/libexec/PlistBuddy -c 'Print :Name' /dev/stdin <<< "$(security cms -D -i ~/Library/MobileDevice/Provisioning\ Profiles/pinai-dev.mobileprovision)")"
+          echo "profile_name=$PROFILE_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Archive
         working-directory: apps/mobile/ios
+        env:
+          PROFILE_NAME: ${{ steps.provisioning.outputs.profile_name }}
         run: |
           xcodebuild archive \
             -workspace PINAIDev.xcworkspace \
@@ -90,17 +113,22 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM=7T7C9L7H8F \
             "CODE_SIGN_IDENTITY=Apple Distribution" \
-            PROVISIONING_PROFILE_SPECIFIER="$(/usr/libexec/PlistBuddy -c 'Print :Name' /dev/stdin <<< "$(security cms -D -i ~/Library/MobileDevice/Provisioning\ Profiles/pinai-dev.mobileprovision)")"
+            "PROVISIONING_PROFILE_SPECIFIER=$PROFILE_NAME"
 
       - name: Export IPA
         working-directory: apps/mobile/ios
+        env:
+          PROFILE_NAME: ${{ steps.provisioning.outputs.profile_name }}
         run: |
-          cat > ExportOptions.plist <<'PLIST'
+          cat > ExportOptions.plist <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0"><dict>
             <key>method</key><string>app-store-connect</string>
             <key>teamID</key><string>7T7C9L7H8F</string>
+            <key>provisioningProfiles</key><dict>
+              <key>ai.pin.proactive.development</key><string>$PROFILE_NAME</string>
+            </dict>
           </dict></plist>
           PLIST
           xcodebuild -exportArchive \
@@ -120,3 +148,10 @@ jobs:
             > ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
           xcrun altool --upload-app -f build/export/*.ipa -t ios \
             --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          rm -rf "$RUNNER_TEMP/private_keys"
