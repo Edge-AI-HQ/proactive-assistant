@@ -51,6 +51,7 @@ from ...harness.session import (
     read_state_messages,
     stream_events,
 )
+from ...tools.browser.manager import get_browser_manager
 from ...tools.code_mode.lazy_sandbox import LazyThreadSandbox
 from ...tools.code_mode.local_sandbox import (
     create_local_sandbox_backend,
@@ -461,6 +462,23 @@ async def _stream(
             yield chat_done()
             return
         title_user_text = user_texts[-1]
+        # Sending a new message = the user is done driving the browser, so
+        # hand control back to the AI for this turn — sparing them a manual
+        # "give control back" click. Mirror of touching the page = implicit
+        # takeover (manager.apply_user_input). Normal-send only: a fresh user
+        # signal; regenerate / HITL-resume don't imply they finished. Best
+        # effort — a browser-control hiccup must never block the chat.
+        try:
+            released = await get_browser_manager().release_to_ai_if_user_driving(
+                req.session_key,
+            )
+            if released:
+                logger.info(
+                    "browser: user message handed control back to AI session=%s",
+                    req.session_key,
+                )
+        except Exception:
+            logger.exception("browser auto-release failed session=%s", req.session_key)
         # Only card threads need the (async) first-turn probe; main threads
         # inject per-turn so we skip the checkpoint read for them.
         is_first_turn = await _is_first_turn(agent, req.session_key) if is_card_thread else False

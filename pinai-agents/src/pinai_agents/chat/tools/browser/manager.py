@@ -469,6 +469,24 @@ class BrowserManager:
             },
         )
 
+    async def release_to_ai_if_user_driving(self, session_key: str) -> bool:
+        """Hand control back to the AI iff the user is currently driving.
+
+        Called when the user sends a chat message: coming back to the
+        conversation to tell the agent what to do next means they're done
+        touching the browser, so we lift the takeover lock without making
+        them click "give control back" first. Mirror image of
+        `apply_user_input`'s "any user input implicitly takes control".
+        No-op when there's no session or the AI already holds control;
+        returns whether a release actually happened (for logging)."""
+        internal = await self.get(session_key)
+        if internal is None:
+            return False
+        if internal.session.control_mode != BrowserControlMode.USER:
+            return False
+        await self.set_control_mode(session_key, BrowserControlMode.AI)
+        return True
+
     # ── live-view URL refresh (Browserbase signed URL TTL is short) ──
 
     async def refresh_live_view(self, session_key: str) -> str | None:
