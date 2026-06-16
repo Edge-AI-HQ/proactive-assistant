@@ -55,7 +55,11 @@ function SettingRow({
   onPress: () => void;
 }) {
   return (
-    <Pressable onPress={onPress}>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      onPress={onPress}
+    >
       <GlassCard className="mb-2.5 flex-row items-center gap-3 px-4 py-3.5">
         <View className="h-9 w-9 items-center justify-center rounded-full bg-white/85 border border-white/70">
           <Icon size={15} color="#71717a" strokeWidth={1.8} />
@@ -112,7 +116,13 @@ function ToggleRow({
 function SubHeader({ title, onBack }: { title: string; onBack: () => void }) {
   return (
     <View className="flex-row items-center gap-3 px-6 pt-4 pb-2">
-      <Pressable onPress={onBack} hitSlop={8} className="h-10 w-10 items-center justify-center rounded-full bg-white/70 border border-white/60">
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Back from ${title}`}
+        onPress={onBack}
+        hitSlop={8}
+        className="h-10 w-10 items-center justify-center rounded-full bg-white/70 border border-white/60"
+      >
         <ArrowLeft size={17} color="#3f3f46" strokeWidth={1.8} />
       </Pressable>
       <Text className="text-[22px] text-foreground" style={{ fontFamily: "Inter_700Bold" }}>

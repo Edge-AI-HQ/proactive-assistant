@@ -72,7 +72,7 @@ export default function AppShell({
           （exiting 视图脱离布局以 overlay 形式淡出 → cross-fade）。 */}
       {view === "ambient" ? (
         <PageFade>
-          <AmbientScreen headerProps={headerProps} />
+          <AmbientScreen headerProps={headerProps} userId={user.id} />
         </PageFade>
       ) : null}
       {view === "tasks" ? (

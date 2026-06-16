@@ -4,13 +4,20 @@
  * 去重语义一致——连续同类型不重复推）。
  */
 import { AmbientVisit, type ActivityEvent } from "../../../modules/ambient-visit";
+import { MotionSegmentAggregator } from "@pin-ai/core";
 import { SIGNAL_KINDS, type AmbientSource, type SourceContext } from "../types";
 
 export function createActivitySource(ctx: SourceContext): AmbientSource {
   let sub: { remove(): void } | null = null;
   let lastType: string | null = null;
+  const segments = new MotionSegmentAggregator();
 
   function handle(event: ActivityEvent): void {
+    const emitted = segments.addSample(event);
+    for (const item of emitted) {
+      ctx.push(item);
+      ctx.onEvent("activity", item.summary);
+    }
     if (event.type === lastType) return; // 连续同类型去重
     lastType = event.type;
     if (event.confidence === "low") return;
@@ -42,6 +49,8 @@ export function createActivitySource(ctx: SourceContext): AmbientSource {
       sub?.remove();
       sub = null;
       await AmbientVisit.stopActivityRecognition();
+      const finalized = segments.stop();
+      if (finalized) ctx.push(finalized);
       lastType = null;
     },
   };

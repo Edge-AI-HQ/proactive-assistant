@@ -5,7 +5,12 @@
  */
 import * as Location from "expo-location";
 
-import { SIGNAL_KINDS, type AmbientSource, type SourceContext } from "../types";
+import {
+  SIGNAL_KINDS,
+  type AmbientSource,
+  type AmbientSourceStartOptions,
+  type SourceContext,
+} from "../types";
 
 const MIN_INTERVAL_MS = 5 * 60 * 1000; // 同 web：5 分钟节流
 const MIN_DISTANCE_M = 250;
@@ -49,9 +54,12 @@ export function createLocationSource(ctx: SourceContext): AmbientSource {
     key: "location",
     label: "Location",
     isStarted: () => sub !== null,
-    async start() {
+    async start(options?: AmbientSourceStartOptions) {
       if (sub) return;
-      const { status } = await Location.requestForegroundPermissionsAsync();
+      const { status } =
+        options?.interactivePermissions === false
+          ? await Location.getForegroundPermissionsAsync()
+          : await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") throw new Error("location permission denied");
       sub = await Location.watchPositionAsync(
         {

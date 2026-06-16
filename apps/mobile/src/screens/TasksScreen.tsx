@@ -81,7 +81,11 @@ function Row({ entry, onPress }: { entry: VisibleCardEntry; onPress: () => void 
       : card.sources.join(" · ");
 
   return (
-    <Pressable onPress={onPress}>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={card.title}
+      onPress={onPress}
+    >
       <GlassCard className="mb-2 px-3.5 py-3.5">
         <View style={styles.rowTop}>
           <Text

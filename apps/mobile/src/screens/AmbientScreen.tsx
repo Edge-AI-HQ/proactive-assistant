@@ -23,7 +23,6 @@ import { useUserDevices } from "@pin-ai/state";
 import { GlassCard } from "../ui/GlassCard";
 import PageHeader from "../components/app/PageHeader";
 import { isAmbientEnabled, startAmbient, stopAmbient } from "../ambient/runtime";
-import { supabase } from "../lib/supabase";
 
 export interface HeaderProps {
   onOpenDebug: () => void;
@@ -39,7 +38,13 @@ function kindTag(kind: string): string {
   return kind.split(".").pop() ?? kind;
 }
 
-export default function AmbientScreen({ headerProps }: { headerProps: HeaderProps }) {
+export default function AmbientScreen({
+  headerProps,
+  userId,
+}: {
+  headerProps: HeaderProps;
+  userId: string;
+}) {
   const [on, setOn] = useState(false);
   const { devices } = useUserDevices();
   const activeDevices = devices.filter((d) => d.status === "active");
@@ -64,9 +69,7 @@ export default function AmbientScreen({ headerProps }: { headerProps: HeaderProp
   const toggle = async (next: boolean) => {
     setOn(next);
     if (next) {
-      const { data } = await supabase.auth.getUser();
-      if (!data.user?.id) return;
-      const started = await startAmbient(data.user.id);
+      const started = await startAmbient(userId);
       if (started.length === 0) setOn(false);
     } else {
       await stopAmbient();

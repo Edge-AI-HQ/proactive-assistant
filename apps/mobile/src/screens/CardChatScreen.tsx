@@ -26,7 +26,12 @@ export default function CardChatScreen({
         <Text style={styles.title} numberOfLines={1}>
           {card.title}
         </Text>
-        <Pressable onPress={onClose} hitSlop={12}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Close card chat"
+          onPress={onClose}
+          hitSlop={12}
+        >
           <Text style={styles.close}>Done</Text>
         </Pressable>
       </View>

@@ -51,24 +51,35 @@ def test_resolve_policy_known_kinds():
     assert resolve_policy("health.observation").mode == "raw_only"
 
 
-def test_resolve_policy_ambient_routing_after_sunset():
-    """Proactive sunset (plan 2026-06-14): ambient cloud data drops the
-    timeline sink. Only the voice transcript (utterance / session_summary) is
-    allowlisted to signals; every other ambient/device kind is filtered."""
-    # Allowlisted → personal_signals.
-    assert resolve_policy("ambient.utterance").mode == "signal_only"
-    assert resolve_policy("session_summary").mode == "signal_only"
-    # Accepted but dropped (no cloud sink yet).
+def test_resolve_policy_ambient_signal_routing_after_sunset():
     for kind in (
-        "ambient.location",
+        "ambient.utterance",
+        "session_summary",
         "ambient.visit",
-        "ambient.activity",
-        "ambient.health",
-        "device.location",
         "device.visit",
         "device.motion_segment",
+        "device.sound_scene_run",
+        "ambient.calendar_event",
+        "device.calendar_event",
+        "ambient.focus_state",
+        "device.focus_state",
+        "ambient.audio_route",
+        "device.audio_route",
+    ):
+        assert resolve_policy(kind).mode == "signal_only", kind
+
+
+def test_resolve_policy_filters_raw_or_noisy_ambient_frames():
+    for kind in (
+        "ambient.location",
+        "device.location",
+        "ambient.activity",
+        "device.activity",
+        "ambient.sound",
         "device.sound_classification",
+        "ambient.device_state",
         "device.device_state",
+        "ambient.health",
     ):
         assert resolve_policy(kind).mode == "filtered", kind
 

@@ -3,14 +3,14 @@
  * 字段——车载/蓝牙耳机等高价值上下文）。与 web sources/audio-route.ts
  * 同语义：路由集合变化才推。
  */
-import { AmbientAudio, type AudioStateEvent } from "../../../modules/ambient-audio";
+import { AmbientAudio, type AudioRoutePort, type AudioStateEvent } from "../../../modules/ambient-audio";
 import { type AmbientSource, type SourceContext } from "../types";
 
 const ROUTE_KIND = "device.audio_route";
 
 interface RouteState extends AudioStateEvent {
-  routeInputs?: string[];
-  routeOutputs?: string[];
+  routeInputs?: AudioRoutePort[];
+  routeOutputs?: AudioRoutePort[];
   hasCarAudio?: boolean;
   hasBluetoothA2DP?: boolean;
   hasBluetoothHFP?: boolean;
@@ -23,11 +23,13 @@ export function createAudioRouteSource(ctx: SourceContext): AmbientSource {
   function handle(event: RouteState): void {
     const inputs = event.routeInputs ?? [];
     const outputs = event.routeOutputs ?? [];
-    const key = [...inputs, "|", ...outputs].join(",");
+    const inputLabels = inputs.map(routePortLabel).filter(Boolean);
+    const outputLabels = outputs.map(routePortLabel).filter(Boolean);
+    const key = [...inputLabels, "|", ...outputLabels].join(",");
     if (!key || key === lastKey) return;
     lastKey = key;
     const valuable = event.hasCarAudio === true || event.hasBluetoothA2DP === true || event.hasBluetoothHFP === true;
-    const summary = outputs.length > 0 ? `audio → ${outputs.join(", ")}` : "audio route changed";
+    const summary = outputLabels.length > 0 ? `audio → ${outputLabels.join(", ")}` : "audio route changed";
     ctx.push({
       kind: ROUTE_KIND,
       title: "Audio route context",
@@ -59,4 +61,8 @@ export function createAudioRouteSource(ctx: SourceContext): AmbientSource {
       lastKey = null;
     },
   };
+}
+
+function routePortLabel(port: AudioRoutePort): string {
+  return port.portName || port.portType || port.uid || "";
 }

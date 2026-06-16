@@ -371,8 +371,8 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     maxWidth: "84%",
   },
-  // web .font-native：chat 面整体 Geist（Söhne 开源近似）。
-  userText: { color: "#fff", fontSize: 16, lineHeight: 22, fontFamily: "Geist_400Regular" },
+  // Message content uses the system font so iOS can fall back to Apple Color Emoji.
+  userText: { color: "#fff", fontSize: 16, lineHeight: 22 },
   failed: { color: "#fca5a5", fontSize: 12, marginTop: 4 },
   assistantRow: { marginVertical: 6, maxWidth: "92%" },
   assistantText: {
@@ -406,7 +406,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
     fontSize: 16,
     color: "#1a1a1a",
-    fontFamily: "Geist_400Regular",
   },
   sendButton: {
     borderRadius: 19,

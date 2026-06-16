@@ -5,7 +5,7 @@
  * 只有最后一个未闭合块每 token 重渲——替代「每 token 重 parse 整条
  * 消息」的 O(N) 退化。代价：跨块的 link reference 定义不解析（LLM
  * 输出几乎全用 inline link，可接受，web streamdown 同样取舍）。
- * 样式贴品牌（#1a1a1a 正文 / 代码块浅底圆角 / 链接蓝 / Geist chat 面）。
+ * 样式贴品牌（#1a1a1a 正文 / 代码块浅底圆角 / 链接蓝）。
  */
 import { memo } from "react";
 import { StyleSheet } from "react-native";
@@ -29,13 +29,13 @@ export default function MarkdownText({ text }: { text: string }) {
 }
 
 const markdownStyles = StyleSheet.create({
-  // web .font-native：chat 面 Geist。expo-google-fonts 按字重独立成字体名，
-  // 标题/加粗直接指 SemiBold 实例（Geist_700 未打包，600 与 web 视觉等级一致）。
-  body: { color: "#1a1a1a", fontSize: 16, lineHeight: 23, fontFamily: "Geist_400Regular" },
-  heading1: { fontSize: 22, fontFamily: "Geist_600SemiBold", marginTop: 12, marginBottom: 4 },
-  heading2: { fontSize: 19, fontFamily: "Geist_600SemiBold", marginTop: 10, marginBottom: 4 },
-  heading3: { fontSize: 17, fontFamily: "Geist_600SemiBold", marginTop: 8, marginBottom: 2 },
-  strong: { fontFamily: "Geist_600SemiBold" },
+  // Message content must keep the iOS system emoji fallback. Custom RN fonts
+  // render emoji as missing-glyph boxes in streamed assistant replies.
+  body: { color: "#1a1a1a", fontSize: 16, lineHeight: 23 },
+  heading1: { fontSize: 22, fontWeight: "600", marginTop: 12, marginBottom: 4 },
+  heading2: { fontSize: 19, fontWeight: "600", marginTop: 10, marginBottom: 4 },
+  heading3: { fontSize: 17, fontWeight: "600", marginTop: 8, marginBottom: 2 },
+  strong: { fontWeight: "600" },
   link: { color: "#2563eb" },
   bullet_list: { marginVertical: 4 },
   ordered_list: { marginVertical: 4 },

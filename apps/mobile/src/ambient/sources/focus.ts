@@ -5,7 +5,11 @@
  * 授权时 Swift 侧静默不发——行为与 Capacitor 版一致。
  */
 import { AmbientVisit, type FocusEvent } from "../../../modules/ambient-visit";
-import { type AmbientSource, type SourceContext } from "../types";
+import {
+  type AmbientSource,
+  type AmbientSourceStartOptions,
+  type SourceContext,
+} from "../types";
 
 const FOCUS_KIND = "device.focus_state";
 
@@ -36,8 +40,11 @@ export function createFocusSource(ctx: SourceContext): AmbientSource {
     key: "focus",
     label: "Focus",
     isStarted: () => sub !== null,
-    async start() {
+    async start(options?: AmbientSourceStartOptions) {
       if (sub) return;
+      if (options?.interactivePermissions === false) {
+        throw new Error("focus authorization requires user prompt");
+      }
       await AmbientVisit.requestFocusPermissions();
       sub = AmbientVisit.addListener("focus", handle);
       await AmbientVisit.startFocusMonitoring();
