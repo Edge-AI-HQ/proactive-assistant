@@ -1,0 +1,78 @@
+{
+  "status": {
+    "loading": "Carregando…",
+    "saving": "Salvando…",
+    "retry": "Tentar novamente",
+    "cancel": "Cancelar",
+    "done": "Pronto",
+    "close": "Fechar",
+    "thinking": "Pensando…",
+    "connecting": "Conectando…",
+    "listening": "Ouvindo…",
+    "polishing": "Refinando…"
+  },
+  "appShell": {
+    "openMenu": "Abrir menu",
+    "openMainChat": "Abrir chat principal",
+    "askPinAi": "Perguntar ao PIN AI"
+  },
+  "menu": {
+    "now": "AGORA",
+    "ambient": "AMBIENTE",
+    "tasks": "TAREFAS",
+    "connect": "CONECTAR",
+    "profile": "PERFIL",
+    "setting": "AJUSTES"
+  },
+  "bootstrapError": {
+    "message": "Não foi possível conectar ao servidor. Verifique sua conexão e tente novamente."
+  },
+  "errorBoundary": {
+    "title": "Algo deu errado",
+    "fallbackMessage": "Ocorreu um erro inesperado.",
+    "tryAgain": "Tentar novamente"
+  },
+  "errors": {
+    "onboardingSave": "Não foi possível salvar seu progresso da configuração inicial. Verifique sua conexão e tente novamente.",
+    "noRedirectUrl": "Nenhuma URL de redirecionamento retornada",
+    "disconnectFailed": "Falha ao desconectar",
+    "connectFailedWithStatus": "Falha ao conectar ({{status}})"
+  },
+  "agentRuns": {
+    "ariaLabel": "Execuções de agente ativas",
+    "title": "Execuções do agente",
+    "runCount_one": "{{count}} execução",
+    "runCount_many": "{{count}} execuções",
+    "runCount_other": "{{count}} execuções",
+    "kind": {
+      "autoDreaming": "Sonhando",
+      "connectorInit": "Conectando fonte",
+      "connectorEvolve": "Destilando sinais",
+      "crystallize": "Cristalizando conversa",
+      "generatorManual": "Gerando cards",
+      "generatorAuto": "Gerando cards",
+      "userPrompt": "Prompt sintético"
+    }
+  },
+  "notificationPrompt": {
+    "title": "Ative as notificações",
+    "description": "Gerar cards pode levar de alguns minutos a algumas horas. Com as notificações ativadas, avisamos assim que eles ficarem prontos — sem precisar ficar de olho no app.",
+    "turnOn": "Ativar",
+    "later": "Depois"
+  },
+  "weather": {
+    "clear": "Limpo",
+    "cloudy": "Nublado",
+    "foggy": "Neblina",
+    "drizzle": "Garoa",
+    "rainy": "Chuvoso",
+    "snowy": "Neve",
+    "showers": "Pancadas de chuva",
+    "stormy": "Tempestade"
+  },
+  "desktopNotify": {
+    "newCards_one": "{{count}} novo card para você",
+    "newCards_many": "{{count}} novos cards para você",
+    "newCards_other": "{{count}} novos cards para você"
+  }
+}

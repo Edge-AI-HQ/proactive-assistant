@@ -1,0 +1,31 @@
+{
+  "view": {
+    "loading": "ブラウザを読み込み中…",
+    "needsYourHelp": "操作が必要です",
+    "aiBrowsing": "AIが閲覧中",
+    "youHaveControl": "あなたが操作中",
+    "expand": "展開",
+    "minimize": "最小化",
+    "zoomIn": "拡大",
+    "zoomOut": "縮小",
+    "dragToScroll": "ドラッグでスクロール",
+    "iframeTitle": "ブラウザセッション {{id}}",
+    "aiNeedsHelp": "AIがあなたの操作を必要としています",
+    "takeOver": "自分で操作",
+    "returnToAi": "AIに戻す",
+    "dismissKeyboard": "キーボードを閉じる",
+    "summonKeyboard": "入力",
+    "pressEnter": "Enterを押す",
+    "closeBrowser": "ブラウザを閉じる",
+    "endSession": "セッションを終了",
+    "collapse": "折りたたむ",
+    "endBrowserSession": "ブラウザセッションを終了",
+    "back": "戻る",
+    "forward": "進む",
+    "reload": "再読み込み",
+    "enterUrl": "URLを入力",
+    "addressBar": "アドレスバー",
+    "takeControl": "ブラウザを自分で操作",
+    "tapToTakeControl": "タップして自分で操作"
+  }
+}

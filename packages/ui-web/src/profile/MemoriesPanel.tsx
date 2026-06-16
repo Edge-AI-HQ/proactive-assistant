@@ -10,6 +10,7 @@
  */
 import { useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { useTranslation } from "react-i18next";
 import {
   Brain,
   ChevronDown,
@@ -32,11 +33,7 @@ interface MemoriesPanelProps {
   enabled: boolean;
 }
 
-const STATUS_TABS: Array<{ key: MemoryStatus; label: string }> = [
-  { key: "active", label: "Active" },
-  { key: "archived", label: "Archived" },
-  { key: "superseded", label: "Superseded" },
-];
+const STATUS_TABS: MemoryStatus[] = ["active", "archived", "superseded"];
 
 const STATUS_STYLES: Record<MemoryStatus, string> = {
   active: "bg-emerald-50 text-emerald-700 border-emerald-200",
@@ -69,6 +66,7 @@ function qualityColor(q: number): string {
 }
 
 export default function MemoriesPanel({ enabled }: MemoriesPanelProps) {
+  const { t } = useTranslation("profile");
   const { memories, total, loading, mutating, error, filter, setFilter, refetch, create, update, archive, supersede } =
     useMemories(enabled);
 
@@ -95,7 +93,7 @@ export default function MemoriesPanel({ enabled }: MemoriesPanelProps) {
       <div className="flex items-center justify-between mb-2.5">
         <div className="flex items-center gap-2">
           <Brain size={14} strokeWidth={1.5} className="text-foreground/40" />
-          <span className="text-xs font-medium text-foreground/50">Memories</span>
+          <span className="text-xs font-medium text-foreground/50">{t("memoriesPanel.title")}</span>
           {loading && (
             <Loader2 size={11} className="animate-spin text-foreground/30" strokeWidth={1.5} />
           )}
@@ -104,7 +102,7 @@ export default function MemoriesPanel({ enabled }: MemoriesPanelProps) {
           <button
             onClick={() => void refetch()}
             disabled={loading}
-            title="Refresh"
+            title={t("memoriesPanel.refresh")}
             className="p-1 rounded-md text-foreground/30 hover:text-foreground/60 hover:bg-foreground/5 disabled:opacity-40"
           >
             <RefreshCw size={11} strokeWidth={1.5} className={loading ? "animate-spin" : ""} />
@@ -114,7 +112,7 @@ export default function MemoriesPanel({ enabled }: MemoriesPanelProps) {
             className="inline-flex items-center gap-1 rounded-md bg-foreground text-background text-micro font-semibold px-2 py-1 hover:bg-foreground/85"
           >
             <Plus size={10} strokeWidth={2} />
-            New
+            {t("memoriesPanel.new")}
           </button>
         </div>
       </div>
@@ -123,16 +121,16 @@ export default function MemoriesPanel({ enabled }: MemoriesPanelProps) {
       <div className="flex items-center gap-1 mb-2">
         {STATUS_TABS.map((tab) => (
           <button
-            key={tab.key}
-            onClick={() => setStatus(tab.key)}
+            key={tab}
+            onClick={() => setStatus(tab)}
             className={cn(
               "rounded-md px-2 py-0.5 text-micro font-medium transition-colors",
-              status === tab.key
+              status === tab
                 ? "bg-foreground text-background"
                 : "bg-foreground/5 text-foreground/50 hover:bg-foreground/10",
             )}
           >
-            {tab.label}
+            {t(`memoriesPanel.tabs.${tab}`)}
           </button>
         ))}
       </div>
@@ -151,12 +149,12 @@ export default function MemoriesPanel({ enabled }: MemoriesPanelProps) {
         >
           {SUBJECT_PRESETS.map((s) => (
             <option key={s} value={s}>
-              {s === "" ? "subject: any" : s}
+              {s === "" ? t("memoriesPanel.subjectAny") : s}
             </option>
           ))}
         </select>
         <label className="flex items-center gap-1 text-micro text-foreground/50">
-          <span>min q</span>
+          <span>{t("memoriesPanel.minQuality")}</span>
           <input
             type="number"
             min={0}
@@ -176,7 +174,9 @@ export default function MemoriesPanel({ enabled }: MemoriesPanelProps) {
           />
         </label>
         <Text variant="micro" className="text-foreground/40 ml-auto tabular-nums">
-          {total === 0 ? "0 rows" : `${firstVisible}-${lastVisible} of ${total}`}
+          {total === 0
+            ? t("memoriesPanel.zeroRows")
+            : t("memoriesPanel.rowRange", { first: firstVisible, last: lastVisible, total })}
         </Text>
       </div>
 
@@ -205,7 +205,9 @@ export default function MemoriesPanel({ enabled }: MemoriesPanelProps) {
       {/* List */}
       <div className="space-y-1">
         {memories.length === 0 && !loading && (
-          <div className="text-micro text-foreground/40 py-3 text-center">No {status} memories.</div>
+          <div className="text-micro text-foreground/40 py-3 text-center">
+            {t(`memoriesPanel.emptyList.${status}`)}
+          </div>
         )}
         {memories.map((m) => (
           <MemoryRow
@@ -231,14 +233,17 @@ export default function MemoriesPanel({ enabled }: MemoriesPanelProps) {
 
       <div className="mt-2 flex items-center justify-between border-t border-foreground/5 pt-2">
         <Text variant="micro" className="text-foreground/35 tabular-nums">
-          Page {total === 0 ? 0 : page + 1} / {total === 0 ? 0 : maxPage + 1}
+          {t("memoriesPanel.pageOf", {
+            page: total === 0 ? 0 : page + 1,
+            total: total === 0 ? 0 : maxPage + 1,
+          })}
         </Text>
         <div className="flex items-center gap-1">
           <button
             type="button"
             onClick={() => setPage(page - 1)}
             disabled={page <= 0 || loading}
-            title="Previous page"
+            title={t("memoriesPanel.previousPage")}
             className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-foreground/10 bg-white/60 text-foreground/45 hover:bg-white/90 disabled:opacity-35 disabled:cursor-not-allowed"
           >
             <ChevronLeft size={13} strokeWidth={1.7} />
@@ -247,7 +252,7 @@ export default function MemoriesPanel({ enabled }: MemoriesPanelProps) {
             type="button"
             onClick={() => setPage(page + 1)}
             disabled={page >= maxPage || loading || total === 0}
-            title="Next page"
+            title={t("memoriesPanel.nextPage")}
             className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-foreground/10 bg-white/60 text-foreground/45 hover:bg-white/90 disabled:opacity-35 disabled:cursor-not-allowed"
           >
             <ChevronRight size={13} strokeWidth={1.7} />
@@ -271,6 +276,7 @@ interface MemoryRowProps {
 }
 
 function MemoryRow({ memory, expanded, mutating, onToggle, onUpdate, onArchive, onSupersede }: MemoryRowProps) {
+  const { t } = useTranslation(["profile", "common"]);
   const [text, setText] = useState(memory.text);
   const [subject, setSubject] = useState(memory.subject ?? "");
   const [quality, setQuality] = useState(memory.quality);
@@ -310,7 +316,7 @@ function MemoryRow({ memory, expanded, mutating, onToggle, onUpdate, onArchive, 
             STATUS_STYLES[memory.status],
           )}
         >
-          {memory.status}
+          {t(`memoriesPanel.status.${memory.status}`)}
         </span>
           <div className="min-w-0 flex-1 overflow-hidden">
             <Text variant="caption" className="block text-foreground leading-snug line-clamp-2">{memory.text}</Text>
@@ -361,7 +367,7 @@ function MemoryRow({ memory, expanded, mutating, onToggle, onUpdate, onArchive, 
           >
             <div className="p-2.5 space-y-2">
               <label className="block">
-                <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">Text</Text>
+                <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">{t("memoriesPanel.fields.text")}</Text>
                 <textarea
                   value={text}
                   onChange={(e) => setText(e.target.value)}
@@ -372,18 +378,18 @@ function MemoryRow({ memory, expanded, mutating, onToggle, onUpdate, onArchive, 
 
               <div className="grid grid-cols-2 gap-2">
                 <label className="block">
-                  <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">Subject</Text>
+                  <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">{t("memoriesPanel.fields.subject")}</Text>
                   <input
                     type="text"
                     value={subject}
                     onChange={(e) => setSubject(e.target.value)}
-                    placeholder="self / person:alice / topic:coffee"
+                    placeholder={t("memoriesPanel.subjectPlaceholder")}
                     className="w-full mt-0.5 rounded-md bg-white/60 border border-foreground/10 px-2 py-1 text-caption focus:outline-none focus:ring-1 focus:ring-primary/30"
                   />
                 </label>
                 <label className="block">
                   <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">
-                    Quality
+                    {t("memoriesPanel.fields.quality")}
                   </Text>
                   <input
                     type="number"
@@ -399,7 +405,7 @@ function MemoryRow({ memory, expanded, mutating, onToggle, onUpdate, onArchive, 
 
               <label className="block">
                 <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">
-                  Tags (comma-separated)
+                  {t("memoriesPanel.fields.tags")}
                 </Text>
                 <input
                   type="text"
@@ -416,7 +422,7 @@ function MemoryRow({ memory, expanded, mutating, onToggle, onUpdate, onArchive, 
                   className="inline-flex items-center gap-1 rounded-md bg-foreground text-background text-micro font-semibold px-2 py-1 disabled:opacity-40"
                 >
                   {mutating ? <Loader2 size={10} className="animate-spin" /> : <Save size={10} />}
-                  Save
+                  {t("memoriesPanel.save")}
                 </button>
                 {memory.status === "active" && (
                   <>
@@ -426,7 +432,7 @@ function MemoryRow({ memory, expanded, mutating, onToggle, onUpdate, onArchive, 
                       className="inline-flex items-center gap-1 rounded-md border border-foreground/10 bg-white/60 text-foreground/70 text-micro font-medium px-2 py-1 hover:bg-foreground/5 disabled:opacity-40"
                     >
                       <GitBranch size={10} />
-                      Supersede
+                      {t("memoriesPanel.supersede")}
                     </button>
                     <button
                       onClick={() => void onArchive()}
@@ -434,7 +440,7 @@ function MemoryRow({ memory, expanded, mutating, onToggle, onUpdate, onArchive, 
                       className="inline-flex items-center gap-1 rounded-md border border-foreground/10 bg-white/60 text-foreground/70 text-micro font-medium px-2 py-1 hover:bg-red-50 hover:text-red-600 hover:border-red-200 disabled:opacity-40"
                     >
                       <Archive size={10} />
-                      Archive
+                      {t("memoriesPanel.archive")}
                     </button>
                   </>
                 )}
@@ -443,13 +449,13 @@ function MemoryRow({ memory, expanded, mutating, onToggle, onUpdate, onArchive, 
               {supersedeOpen && (
                 <div className="rounded-md border border-blue-200 bg-blue-50/50 p-2 space-y-1.5">
                   <Text variant="micro" weight="medium" className="text-blue-700 uppercase tracking-wider">
-                    Replacement text
+                    {t("memoriesPanel.replacementText")}
                   </Text>
                   <textarea
                     value={supersedeDraft}
                     onChange={(e) => setSupersedeDraft(e.target.value)}
                     rows={3}
-                    placeholder="New, corrected version of this memory"
+                    placeholder={t("memoriesPanel.replacementPlaceholder")}
                     className="w-full rounded-md bg-white/80 border border-blue-200 px-2 py-1 text-caption focus:outline-none focus:ring-1 focus:ring-blue-300"
                   />
                   <div className="flex items-center gap-1.5">
@@ -465,13 +471,13 @@ function MemoryRow({ memory, expanded, mutating, onToggle, onUpdate, onArchive, 
                       disabled={!supersedeDraft.trim() || mutating}
                       className="rounded-md bg-blue-600 text-white text-micro font-semibold px-2 py-1 disabled:opacity-40"
                     >
-                      Confirm supersede
+                      {t("memoriesPanel.confirmSupersede")}
                     </button>
                     <button
                       onClick={() => setSupersedeOpen(false)}
                       className="rounded-md border border-blue-200 bg-white/60 text-blue-700 text-micro font-medium px-2 py-1 hover:bg-white"
                     >
-                      Cancel
+                      {t("common:status.cancel")}
                     </button>
                   </div>
                 </div>
@@ -497,6 +503,7 @@ interface CreateMemoryFormProps {
 }
 
 function CreateMemoryForm({ mutating, onCancel, onSubmit }: CreateMemoryFormProps) {
+  const { t } = useTranslation(["profile", "common"]);
   const [text, setText] = useState("");
   const [subject, setSubject] = useState("self");
   const [quality, setQuality] = useState(0.6);
@@ -507,18 +514,18 @@ function CreateMemoryForm({ mutating, onCancel, onSubmit }: CreateMemoryFormProp
   return (
     <div className="rounded-lg border border-foreground/10 bg-white/70 p-2.5 space-y-2">
       <label className="block">
-        <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">Text</Text>
+        <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">{t("memoriesPanel.fields.text")}</Text>
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
           rows={3}
-          placeholder="A fact or sedimented insight about the user"
+          placeholder={t("memoriesPanel.createTextPlaceholder")}
           className="w-full mt-0.5 rounded-md bg-white/80 border border-foreground/10 px-2 py-1 text-caption focus:outline-none focus:ring-1 focus:ring-primary/30"
         />
       </label>
       <div className="grid grid-cols-2 gap-2">
         <label className="block">
-          <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">Subject</Text>
+          <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">{t("memoriesPanel.fields.subject")}</Text>
           <input
             type="text"
             value={subject}
@@ -527,7 +534,7 @@ function CreateMemoryForm({ mutating, onCancel, onSubmit }: CreateMemoryFormProp
           />
         </label>
         <label className="block">
-          <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">Quality</Text>
+          <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">{t("memoriesPanel.fields.quality")}</Text>
           <input
             type="number"
             min={0}
@@ -541,7 +548,7 @@ function CreateMemoryForm({ mutating, onCancel, onSubmit }: CreateMemoryFormProp
       </div>
       <label className="block">
         <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">
-          Tags (comma-separated)
+          {t("memoriesPanel.fields.tags")}
         </Text>
         <input
           type="text"
@@ -565,7 +572,7 @@ function CreateMemoryForm({ mutating, onCancel, onSubmit }: CreateMemoryFormProp
           className="inline-flex items-center gap-1 rounded-md bg-foreground text-background text-micro font-semibold px-2 py-1 disabled:opacity-40"
         >
           {mutating ? <Loader2 size={10} className="animate-spin" /> : <Save size={10} />}
-          Create
+          {t("memoriesPanel.create")}
         </button>
         <button
           onClick={onCancel}
@@ -573,7 +580,7 @@ function CreateMemoryForm({ mutating, onCancel, onSubmit }: CreateMemoryFormProp
           className="inline-flex items-center gap-1 rounded-md border border-foreground/10 bg-white/60 text-foreground/60 text-micro font-medium px-2 py-1 hover:bg-foreground/5 disabled:opacity-40"
         >
           <X size={10} />
-          Cancel
+          {t("common:status.cancel")}
         </button>
       </div>
     </div>

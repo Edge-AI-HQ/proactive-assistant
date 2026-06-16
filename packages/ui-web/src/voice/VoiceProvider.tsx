@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
+import i18n from "../i18n";
 import { isNative } from "../auth/platform";
 import type { ExternalMicLease } from "./external-mic-bridge";
 import { ByteDanceStreamingEngine } from "./ByteDanceStreamingEngine";
@@ -164,9 +165,11 @@ export function VoiceProvider({ children, engine, transcriptionLanguage }: Voice
 }
 
 function voiceErrorMessage(err: unknown): string {
+  // Engine-thrown Error messages pass through untranslated (error-code i18n
+  // is a bigger refactor); only this UI-owned fallback is translated.
   if (err instanceof Error && err.message) return err.message;
   if (typeof err === "string" && err.trim()) return err;
-  return "Voice transcription failed";
+  return i18n.t("voice:errors.transcriptionFailed");
 }
 
 function isPromiseLike(value: void | Promise<void> | undefined): value is Promise<void> {

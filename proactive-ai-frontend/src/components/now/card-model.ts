@@ -8,6 +8,7 @@ export {
   realIntentToChatCard,
   realCardToLovableIntent,
   CATEGORIES,
+  categoryLabel,
   type Intent,
   type CardStatus,
   type DetailData,

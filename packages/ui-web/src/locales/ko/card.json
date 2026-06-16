@@ -1,0 +1,100 @@
+{
+  "category": {
+    "growth": "성장",
+    "work": "업무",
+    "finance": "금융",
+    "health": "건강",
+    "learn": "학습",
+    "life": "생활"
+  },
+  "tag": {
+    "urgent": "긴급"
+  },
+  "scheduledSource": "예약됨 · {{label}}",
+  "score": {
+    "confidence": "신뢰도",
+    "importance": "중요도",
+    "urgency": "긴급도"
+  },
+  "sourceApp": {
+    "calendar": "캘린더",
+    "drive": "드라이브",
+    "docs": "문서",
+    "sheets": "스프레드시트",
+    "web": "웹",
+    "memory": "메모리",
+    "phone": "휴대폰",
+    "profile": "프로필",
+    "goal": "목표",
+    "preference": "선호"
+  },
+  "reasoningStep": {
+    "observed": "관찰",
+    "crossReferenced": "교차 확인",
+    "patternMatched": "패턴 일치",
+    "flagged": "포착",
+    "decided": "결정"
+  },
+  "drawer": {
+    "srTitleFallback": "카드 상세",
+    "srDescription": "카드 상세 보기",
+    "quickApprove": "빠른 승인",
+    "quickApproveHint": "위험도가 낮은 작업이에요 — 보통 그대로 승인해도 안전해요",
+    "dismiss": "무시",
+    "chat": "채팅",
+    "approve": "승인",
+    "opening": "여는 중…"
+  },
+  "detail": {
+    "howReasoned": "이렇게 판단했어요",
+    "stepCount_other": "{{count}}단계",
+    "whyNow": "지금 알려드리는 이유",
+    "executionPlan": "실행 계획",
+    "generatedDrafts_other": "생성된 초안",
+    "approvingTitle": "승인하면 에이전트가 할 수 있는 일:",
+    "risksTitle": "고려할 위험 요소",
+    "sourcesTitle": "출처"
+  },
+  "fallback": {
+    "agentNote": "에이전트 메모",
+    "calledTool": "{{name}} 호출"
+  },
+  "statusBanner": {
+    "preparing": "에이전트가 계획을 준비하고 있어요 — 잠시만 기다려 주세요.",
+    "resuming": "다시 시작하는 중…",
+    "resultTitle": "결과",
+    "resultFallback": "완료.",
+    "failedTitle": "실패",
+    "failedFallback": "실행에 실패했어요.",
+    "cancelled": "취소됐어요. 재시도를 눌러 새로 실행해 주세요."
+  },
+  "now": {
+    "greeting": "안녕하세요, <nameSpan>{{name}}</nameSpan>님",
+    "greetingFallbackName": "사용자",
+    "feedSummary_other": "내 프로액티브 피드 · 오늘 카드 {{count}}개",
+    "openAmbient": "앰비언트 열기",
+    "toggleAmbient": "앰비언트 켜기/끄기",
+    "ambientOn": "앰비언트 켜짐",
+    "ambientOff": "앰비언트 꺼짐",
+    "ambientTapToStart": "탭하면 컨텍스트 감지를 시작해요",
+    "ambientQuiet": "앰비언트가 조용해요 — 소스를 연결해 시그널을 받아 보세요"
+  },
+  "emptyState": {
+    "warmingUpTitle": "피드를 준비하고 있어요",
+    "warmingUpBody": "카드 생성에는 몇 분에서 몇 시간이 걸릴 수 있어요. 준비되는 대로 바로 알려드릴게요.",
+    "checklistTitle": "피드를 시작해 볼까요",
+    "voiceTitle": "음성 켜기",
+    "voiceSubtitle": "PIN AI가 내 하루를 감지해 카드를 제안해요",
+    "connectTitle": "앱 연결하기",
+    "connectSubtitle": "Gmail, 캘린더 등 — PIN AI가 상황을 이해할 수 있어요",
+    "reviewPermissions": "권한 확인"
+  },
+  "sphere": {
+    "quick": "퀵",
+    "badgeNew": "신규",
+    "badgeInput": "입력",
+    "badgeReady": "준비됨",
+    "badgeFailed": "실패",
+    "badgeDone": "완료"
+  }
+}

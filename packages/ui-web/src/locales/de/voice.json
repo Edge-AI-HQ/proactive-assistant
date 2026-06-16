@@ -1,0 +1,10 @@
+{
+  "button": {
+    "cancelRecordingAria": "Aufnahme abbrechen",
+    "useTranscriptAria": "Transkript verwenden",
+    "voiceInputAria": "Spracheingabe"
+  },
+  "errors": {
+    "transcriptionFailed": "Sprachtranskription fehlgeschlagen"
+  }
+}

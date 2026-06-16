@@ -10,6 +10,7 @@
  */
 import { useState } from "react";
 import { Bot, Check, ChevronDown, Loader2, AlertCircle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import MarkdownContent from "./MarkdownContent";
 import { ToolNodeRow } from "./WorkGroupNodes";
@@ -38,11 +39,12 @@ function currentAction(children: ToolCallPart[]): string | null {
 }
 
 export default function TaskCard({ item }: { item: TaskItem }) {
+  const { t } = useTranslation(["chat", "common"]);
   const [expanded, setExpanded] = useState(false);
   const [childLimit, setChildLimit] = useState(CHILDREN_WINDOW);
   const status = toolStatus(item.part);
   const running = status === "running";
-  const description = taskDescription(item.part) || "Subtask";
+  const description = taskDescription(item.part) || t("taskCard.subtask");
   const action = running ? currentAction(item.children) : null;
   const resultMeta = item.part.args["meta"];
   const visibleChildren = expanded ? item.children.slice(0, childLimit) : [];
@@ -85,11 +87,10 @@ export default function TaskCard({ item }: { item: TaskItem }) {
           </Text>
           <Text variant="caption" className="block truncate text-foreground/45 leading-tight">
             {(() => {
-              const n = item.children.length;
-              const tools = `${n} tool${n === 1 ? "" : "s"}`;
+              const tools = t("taskCard.toolCount", { count: item.children.length });
               return running
                 ? `${tools}${action ? ` · ${action}` : ""}`
-                : `Done · ${tools}`;
+                : `${t("common:status.done")} · ${tools}`;
             })()}
           </Text>
         </span>
@@ -115,11 +116,11 @@ export default function TaskCard({ item }: { item: TaskItem }) {
                 onClick={() => setChildLimit((n) => n + CHILDREN_WINDOW)}
                 className="w-full py-1 text-caption text-foreground/50 hover:text-foreground/75"
               >
-                Show more ({item.children.length - childLimit})
+                {t("taskCard.showMore", { count: item.children.length - childLimit })}
               </button>
             )}
             {item.children.length === 0 && (
-              <Text variant="caption" className="block py-1 text-foreground/40">No tool activity yet.</Text>
+              <Text variant="caption" className="block py-1 text-foreground/40">{t("taskCard.noActivity")}</Text>
             )}
           </div>
           {typeof resultMeta === "string" && resultMeta && !running && (

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { AlertCircle, CheckCircle2, Clock, Play, RefreshCcw, Sparkles } from "lucide-react";
 import { isNative } from "@/lib/platform";
 import {
@@ -8,7 +9,7 @@ import {
   type AmbientTimelineEvent,
   type TimelineStoreStatus,
 } from "@/services/ambient/timeline";
-import { Text } from "@pin-ai/ui-web";
+import { Text, i18n } from "@pin-ai/ui-web";
 
 interface SummaryStatusSnapshot {
   storeStatus: TimelineStoreStatus | null;
@@ -37,6 +38,7 @@ const EMPTY_SNAPSHOT: SummaryStatusSnapshot = {
 };
 
 export default function AmbientTimelineSummaryStatusPanel() {
+  const { t } = useTranslation("ambient");
   const store = useMemo(() => getAmbientTimelineStore(), []);
   const runtimeRef = useRef<AmbientTimelineRuntime | null>(null);
   const [snapshot, setSnapshot] = useState<SummaryStatusSnapshot>(EMPTY_SNAPSHOT);
@@ -94,7 +96,7 @@ export default function AmbientTimelineSummaryStatusPanel() {
           setSnapshot((prev) => ({
             ...prev,
             storeStatus: store.status(),
-            error: "Timeline summary generation is only available in the native app.",
+            error: i18n.t("ambient:summaryStatus.nativeOnly"),
           }));
           return;
         }
@@ -120,15 +122,17 @@ export default function AmbientTimelineSummaryStatusPanel() {
   const latestEvent = snapshot.llmEvents[snapshot.llmEvents.length - 1] ?? null;
   const latestFailure = [...snapshot.failed]
     .sort((a, b) => Date.parse(b.lastAttemptAt ?? b.updatedAt) - Date.parse(a.lastAttemptAt ?? a.updatedAt))[0] ?? null;
-  const status = snapshot.error
-    ? "Error"
+  // Logical status enum — drives both the tone branch and the label key.
+  // Only the label (t(`summaryStatus.status.${status}`)) is translated.
+  const status: SummaryPanelStatus = snapshot.error
+    ? "error"
     : snapshot.processing.length > 0
-      ? "Summarizing"
+      ? "summarizing"
       : snapshot.llmEvents.length > 0
-        ? "Ready"
+        ? "ready"
         : snapshot.pending.length > 0
-          ? "Waiting"
-          : "Idle";
+          ? "waiting"
+          : "idle";
 
   return (
     <div className="glass-card-strong p-4 space-y-3" data-testid="ambient-summary-status">
@@ -136,10 +140,10 @@ export default function AmbientTimelineSummaryStatusPanel() {
         <div>
           <div className="flex items-center gap-2 mb-1">
             <Sparkles size={15} strokeWidth={1.8} className="text-foreground/55" />
-            <h2 className="text-base font-semibold text-foreground">Timeline summaries</h2>
+            <h2 className="text-base font-semibold text-foreground">{t("summaryStatus.title")}</h2>
           </div>
           <Text variant="label" className="block text-foreground/55 leading-relaxed">
-            Shows whether local LLM summary windows are pending, processing, or already written as Timeline cards.
+            {t("summaryStatus.description")}
           </Text>
         </div>
         <div className="flex items-center gap-1.5">
@@ -148,16 +152,16 @@ export default function AmbientTimelineSummaryStatusPanel() {
             onClick={() => void runSummaryNow()}
             disabled={summaryRunning}
             className="inline-flex items-center gap-1.5 rounded-lg border border-foreground/10 bg-foreground text-background px-2.5 py-2 text-caption font-semibold hover:opacity-90 disabled:opacity-45 disabled:cursor-not-allowed"
-            aria-label="Run timeline summary now"
+            aria-label={t("summaryStatus.runNowAria")}
           >
             <Play size={12} strokeWidth={2} />
-            {summaryRunning ? "Running" : "Trigger"}
+            {summaryRunning ? t("summaryStatus.running") : t("summaryStatus.trigger")}
           </button>
           <button
             type="button"
             onClick={() => void refresh()}
             className="rounded-lg border border-foreground/10 bg-foreground/[0.03] p-2 text-foreground/55 hover:bg-foreground/[0.06]"
-            aria-label="Refresh timeline summary status"
+            aria-label={t("summaryStatus.refreshAria")}
           >
             <RefreshCcw size={13} strokeWidth={1.8} />
           </button>
@@ -165,29 +169,29 @@ export default function AmbientTimelineSummaryStatusPanel() {
       </div>
 
       <div className="grid grid-cols-2 gap-2">
-        <Metric label="Status" value={loading ? "Loading" : status} tone={statusTone(status)} />
-        <Metric label="LLM cards" value={String(snapshot.llmEvents.length)} tone="ok" />
-        <Metric label="Pending windows" value={String(snapshot.pending.length)} tone={snapshot.pending.length > 0 ? "warn" : "muted"} />
-        <Metric label="Failed attempts" value={String(snapshot.failed.length)} tone={snapshot.failed.length > 0 ? "error" : "muted"} />
+        <Metric label={t("summaryStatus.metricStatus")} value={loading ? t("summaryStatus.loading") : t(`summaryStatus.status.${status}`)} tone={statusTone(status)} />
+        <Metric label={t("summaryStatus.metricLlmCards")} value={String(snapshot.llmEvents.length)} tone="ok" />
+        <Metric label={t("summaryStatus.metricPending")} value={String(snapshot.pending.length)} tone={snapshot.pending.length > 0 ? "warn" : "muted"} />
+        <Metric label={t("summaryStatus.metricFailed")} value={String(snapshot.failed.length)} tone={snapshot.failed.length > 0 ? "error" : "muted"} />
       </div>
 
       <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-3 space-y-2 text-caption text-foreground/55">
-        <StatusRow icon={<CheckCircle2 size={13} />} label="Summarized windows" value={snapshot.summarized.length} />
-        <StatusRow icon={<Clock size={13} />} label="Skipped low-value windows" value={snapshot.skipped.length} />
-        <StatusRow icon={<Clock size={13} />} label="Processing windows" value={snapshot.processing.length} />
+        <StatusRow icon={<CheckCircle2 size={13} />} label={t("summaryStatus.summarizedWindows")} value={snapshot.summarized.length} />
+        <StatusRow icon={<Clock size={13} />} label={t("summaryStatus.skippedWindows")} value={snapshot.skipped.length} />
+        <StatusRow icon={<Clock size={13} />} label={t("summaryStatus.processingWindows")} value={snapshot.processing.length} />
         {latestEvent && (
           <p className="leading-snug">
-            Latest card: <span className="font-medium text-foreground/75">{latestEvent.title}</span>
+            {t("summaryStatus.latestCard")} <span className="font-medium text-foreground/75">{latestEvent.title}</span>
           </p>
         )}
         {latestFailure?.lastErrorCode && (
           <div className="space-y-1 text-amber-700">
             <p className="flex items-center gap-1.5 leading-snug">
-              <AlertCircle size={12} /> Last error: {latestFailure.lastErrorCode}
+              <AlertCircle size={12} /> {t("summaryStatus.lastError", { code: latestFailure.lastErrorCode })}
             </p>
             {latestFailure.summaryErrorMessage && (
               <p className="pl-[18px] leading-snug break-words">
-                Detail: {latestFailure.summaryErrorMessage}
+                {t("summaryStatus.detail", { message: latestFailure.summaryErrorMessage })}
               </p>
             )}
           </div>
@@ -198,8 +202,13 @@ export default function AmbientTimelineSummaryStatusPanel() {
           </p>
         )}
         <p className="text-foreground/40">
-          Store: {snapshot.storeStatus?.mode ?? "unknown"} · {snapshot.storeStatus?.ready ? "ready" : "not ready"}
-          {lastRefreshAt ? ` · refreshed ${lastRefreshAt}` : ""}
+          {t("summaryStatus.storeLine", {
+            mode: snapshot.storeStatus?.mode ?? t("summaryStatus.storeUnknown"),
+            readiness: snapshot.storeStatus?.ready
+              ? t("summaryStatus.storeReady")
+              : t("summaryStatus.storeNotReady"),
+          })}
+          {lastRefreshAt ? t("summaryStatus.refreshedAt", { time: lastRefreshAt }) : ""}
         </p>
       </div>
     </div>
@@ -230,10 +239,12 @@ function StatusRow({ icon, label, value }: { icon: React.ReactNode; label: strin
   );
 }
 
-function statusTone(status: string): "ok" | "warn" | "error" | "muted" {
-  if (status === "Ready") return "ok";
-  if (status === "Summarizing" || status === "Waiting") return "warn";
-  if (status === "Error") return "error";
+type SummaryPanelStatus = "error" | "summarizing" | "ready" | "waiting" | "idle";
+
+function statusTone(status: SummaryPanelStatus): "ok" | "warn" | "error" | "muted" {
+  if (status === "ready") return "ok";
+  if (status === "summarizing" || status === "waiting") return "warn";
+  if (status === "error") return "error";
   return "muted";
 }
 

@@ -35,6 +35,7 @@ import {
   MessageSquare,
   X,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useVoiceInput, Waveform, appendVoiceTranscript } from "../../voice";
 import { cn } from "../../lib/utils";
 import { Text } from "../../primitives/Text";
@@ -95,12 +96,13 @@ const ARTIFACT_ICON: Record<ProposeActionArtifact["kind"], typeof FileText> = {
   other: FileText,
 };
 
-const ARTIFACT_LABEL: Record<ProposeActionArtifact["kind"], string> = {
-  email_draft: "Email draft",
-  message: "Message draft",
-  doc: "Document",
-  other: "Draft",
-};
+/** Values are chat-namespace translation keys (rendered via `t`). */
+const ARTIFACT_LABEL_KEY = {
+  email_draft: "artifact.emailDraft",
+  message: "artifact.messageDraft",
+  doc: "artifact.document",
+  other: "artifact.draft",
+} as const satisfies Record<ProposeActionArtifact["kind"], string>;
 
 function formatRecordDuration(totalSec: number): string {
   const m = Math.floor(totalSec / 60);
@@ -109,12 +111,13 @@ function formatRecordDuration(totalSec: number): string {
 }
 
 function DraftItem({ artifact, index }: { artifact: ProposeActionArtifact; index: number }) {
+  const { t } = useTranslation("chat");
   // First artifact expanded by default so the user sees content
   // without an extra tap; subsequent ones collapsed to keep the
   // surface scannable.
   const [expanded, setExpanded] = useState(index === 0);
   const Icon = ARTIFACT_ICON[artifact.kind] ?? FileText;
-  const label = ARTIFACT_LABEL[artifact.kind] ?? "Draft";
+  const label = t(ARTIFACT_LABEL_KEY[artifact.kind] ?? "artifact.draft");
   return (
     <motion.div
       layout
@@ -180,6 +183,7 @@ export default function ProposeActionCard({
   /** True while a turn is streaming on this thread — disables Continue. */
   busy: boolean;
 }) {
+  const { t } = useTranslation(["chat", "common"]);
   const parsed = parseArgs(args);
 
   const [inputValue, setInputValue] = useState("");
@@ -324,7 +328,7 @@ export default function ProposeActionCard({
               transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut" }}
             />
             <Text variant="caption" weight="bold" className="block uppercase tracking-wider text-[hsl(292,78%,55%)]">
-              Needs your input
+              {t("proposeAction.needsInput")}
             </Text>
           </div>
         </div>
@@ -395,8 +399,11 @@ export default function ProposeActionCard({
               )}
               <span className="min-w-0 truncate">
                 {voiceFinalizing
-                  ? "Polishing…"
-                  : voiceTranscript || (voiceConnecting ? "Connecting…" : "Listening…")}
+                  ? t("common:status.polishing")
+                  : voiceTranscript ||
+                    (voiceConnecting
+                      ? t("common:status.connecting")
+                      : t("common:status.listening"))}
               </span>
             </Text>
             <div className="flex items-center gap-2.5">
@@ -415,7 +422,7 @@ export default function ProposeActionCard({
                 onClick={cancelRecording}
                 disabled={voiceFinalizing}
                 className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-foreground/[0.06] text-foreground/55 transition-colors hover:bg-foreground/10 disabled:opacity-40"
-                aria-label="Cancel recording"
+                aria-label={t("composer.cancelRecording")}
               >
                 <X size={15} strokeWidth={2} />
               </button>
@@ -429,7 +436,7 @@ export default function ProposeActionCard({
                     "linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(330 80% 65%) 100%)",
                   boxShadow: "0 4px 12px hsl(var(--primary) / 0.35)",
                 }}
-                aria-label="Use transcript"
+                aria-label={t("composer.useTranscript")}
               >
                 <Check size={15} strokeWidth={2.5} />
               </button>
@@ -452,10 +459,10 @@ export default function ProposeActionCard({
               }}
               placeholder={
                 sent
-                  ? "Reply sent"
+                  ? t("proposeAction.replySent")
                   : options.length > 0
-                    ? "Or type your own reply..."
-                    : "Type your reply..."
+                    ? t("proposeAction.typeOwnReplyPlaceholder")
+                    : t("proposeAction.typeReplyPlaceholder")
               }
               disabled={locked}
               className="min-w-0 flex-1 bg-transparent text-bodySm text-foreground placeholder:text-foreground/35 outline-none disabled:opacity-50"
@@ -465,7 +472,7 @@ export default function ProposeActionCard({
               onClick={startRecording}
               disabled={locked}
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-foreground/10 text-foreground/60 transition-colors hover:bg-foreground/15 hover:text-foreground disabled:opacity-40"
-              aria-label="Voice input"
+              aria-label={t("composer.voiceInput")}
             >
               <Mic size={17} strokeWidth={2} />
             </button>
@@ -487,7 +494,11 @@ export default function ProposeActionCard({
           }
           rightIcon={!sent && !isRunning ? <ArrowRight size={13} strokeWidth={2.5} /> : undefined}
         >
-          {sent ? "Sent" : isRunning ? "Sending…" : "Continue"}
+          {sent
+            ? t("proposeAction.sent")
+            : isRunning
+              ? t("proposeAction.sending")
+              : t("proposeAction.continue")}
         </Button>
       </motion.div>
     </div>

@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Loader2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useUserSettings } from "@pin-ai/state";
 import { GENERATION_LANGUAGE_OPTIONS, type SupportedGenerationLanguage } from "@pin-ai/core";
 import { Text } from "../primitives/Text";
 
 export default function GenerationLanguageSettings() {
+  const { t } = useTranslation("account");
   const { settings, loading, saving, error, patch } = useUserSettings();
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const savedTimerRef = useRef<number | null>(null);
@@ -29,7 +31,7 @@ export default function GenerationLanguageSettings() {
     <div>
       <div className="flex items-center gap-3">
         <div className="flex-1 min-w-0 flex items-center gap-2.5">
-          <h3 className="text-sm font-medium text-foreground/80">Language</h3>
+          <h3 className="text-sm font-medium text-foreground/80">{t("language.title")}</h3>
           {saving && <Loader2 size={12} className="animate-spin text-foreground/40" />}
           {!saving && savedAt && <Check size={12} className="text-emerald-500" />}
         </div>

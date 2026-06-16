@@ -1,0 +1,10 @@
+{
+  "button": {
+    "cancelRecordingAria": "録音をキャンセル",
+    "useTranscriptAria": "文字起こしを使用",
+    "voiceInputAria": "音声入力"
+  },
+  "errors": {
+    "transcriptionFailed": "音声の文字起こしに失敗しました"
+  }
+}

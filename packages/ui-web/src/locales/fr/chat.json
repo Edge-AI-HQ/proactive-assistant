@@ -1,0 +1,208 @@
+{
+  "toolVerbs": {
+    "ran": "Lancé",
+    "ranCommand": "Commande exécutée",
+    "executed": "Exécuté",
+    "ranPython": "Python exécuté",
+    "browsed": "Navigation",
+    "searchedWeb": "Recherche web",
+    "readPages": "Pages lues",
+    "searchedNews": "Recherche d'actualités",
+    "searchedMemory": "Recherche en mémoire",
+    "searchedX": "Recherche sur X",
+    "fetched": "Récupéré",
+    "read": "Lu",
+    "wrote": "Écrit",
+    "edited": "Modifié",
+    "patched": "Corrigé",
+    "messaged": "Message envoyé",
+    "readImage": "Image lue",
+    "generatedImage": "Image générée",
+    "generatedVideo": "Vidéo générée",
+    "generatedMusic": "Musique générée",
+    "spoke": "Synthèse vocale",
+    "drew": "Dessin créé",
+    "scheduled": "Planifié",
+    "checkedSession": "Session vérifiée",
+    "listedSessions": "Sessions listées",
+    "loadedHistory": "Historique chargé",
+    "sent": "Envoyé",
+    "spawnedAgent": "Agent lancé",
+    "delegatedToAgent": "Délégué à un agent",
+    "delegated": "Délégué",
+    "updatedPlan": "Plan mis à jour",
+    "messagedYou": "Vous a écrit",
+    "searchedGmail": "Recherche dans Gmail",
+    "draftedEmail": "Brouillon d'e-mail rédigé",
+    "usedGmail": "Gmail utilisé",
+    "readCalendar": "Agenda consulté",
+    "updatedCalendar": "Agenda mis à jour",
+    "usedCalendar": "Agenda utilisé",
+    "searchedNotion": "Recherche dans Notion",
+    "sentOnSlack": "Envoyé sur Slack",
+    "searchedSlack": "Recherche dans Slack",
+    "searchedDrive": "Recherche dans Drive"
+  },
+  "landing": {
+    "heading": "Qu'avez-vous en tête ?",
+    "subheading": "Demandez-moi ce que vous voulez — j'ai votre contexte.",
+    "suggestions": {
+      "focusToday": "Sur quoi devrais-je me concentrer aujourd'hui ?",
+      "summarizeWeek": "Résume ma semaine jusqu'ici",
+      "onMyMind": "Qu'est-ce qui me préoccupe ces derniers temps ?"
+    }
+  },
+  "composer": {
+    "placeholder": "Message à PIN AI…",
+    "voiceInput": "Saisie vocale",
+    "send": "Envoyer",
+    "stop": "Arrêter",
+    "dismissKeyboard": "Masquer le clavier",
+    "cancelRecording": "Annuler l'enregistrement",
+    "useTranscript": "Utiliser la transcription"
+  },
+  "actionBar": {
+    "copyMessage": "Copier le message",
+    "copy": "Copier",
+    "goodResponse": "Bonne réponse",
+    "badResponse": "Mauvaise réponse",
+    "regenerateResponse": "Régénérer la réponse",
+    "regenerate": "Régénérer"
+  },
+  "cardFeedback": {
+    "helpfulPrompt": "Utile ?",
+    "helpful": "Utile",
+    "notHelpful": "Pas utile",
+    "sent": "Envoyé",
+    "comment": "Commenter",
+    "commentPlaceholder": "Votre avis sur cette carte (aucun message ne sera envoyé à l'agent)…",
+    "sendFeedback": "Envoyer mon avis"
+  },
+  "userEntry": {
+    "notSent": "Non envoyé",
+    "editMessage": "Modifier le message"
+  },
+  "notify": {
+    "label": "Vous notifier"
+  },
+  "transcript": {
+    "cardEmptyState": "Demandez à l'agent d'agir sur cette carte, ou envoyez-lui un message.",
+    "scrollToLatest": "Aller au plus récent"
+  },
+  "header": {
+    "back": "Retour",
+    "debug": "Debug",
+    "proactive": "Proactif",
+    "proactiveToggle": "Activer/désactiver l'agent proactif",
+    "dismiss": "Ignorer"
+  },
+  "workGroup": {
+    "subtasksRunning_one": "{{count}} sous-tâche en cours",
+    "subtasksRunning_many": "{{count}} sous-tâches en cours",
+    "subtasksRunning_other": "{{count}} sous-tâches en cours",
+    "runningSubtask": "Sous-tâche en cours",
+    "working": "En cours…",
+    "ranSubtasks_one": "{{count}} sous-tâche exécutée",
+    "ranSubtasks_many": "{{count}} sous-tâches exécutées",
+    "ranSubtasks_other": "{{count}} sous-tâches exécutées",
+    "usedTools_one": "{{count}} outil utilisé",
+    "usedTools_many": "{{count}} outils utilisés",
+    "usedTools_other": "{{count}} outils utilisés",
+    "thought": "Réflexion",
+    "steps_one": "{{count}} étape",
+    "steps_many": "{{count}} étapes",
+    "steps_other": "{{count}} étapes"
+  },
+  "toolNode": {
+    "results_one": "{{count}} résultat",
+    "results_many": "{{count}} résultats",
+    "results_other": "{{count}} résultats"
+  },
+  "taskCard": {
+    "subtask": "Sous-tâche",
+    "toolCount_one": "{{count}} outil",
+    "toolCount_many": "{{count}} outils",
+    "toolCount_other": "{{count}} outils",
+    "showMore": "Afficher plus ({{count}})",
+    "noActivity": "Aucune activité d'outil pour l'instant."
+  },
+  "todoPanel": {
+    "plan": "Plan",
+    "planDone": "Plan terminé",
+    "progress": "{{completed}}/{{total}} terminées",
+    "collapsePlan": "Réduire le plan",
+    "expandPlan": "Développer le plan",
+    "closePlan": "Fermer le plan"
+  },
+  "reasoning": {
+    "thoughtForSeconds": "A réfléchi pendant {{seconds}} s",
+    "thoughtProcess": "Processus de réflexion"
+  },
+  "hitl": {
+    "needsApproval": "Votre approbation est requise",
+    "rejectReasonPlaceholder": "Facultatif : dites à l'agent pourquoi (il continue sans exécuter l'outil)",
+    "back": "Retour",
+    "reject": "Refuser",
+    "approve": "Approuver",
+    "resolvedEarlier": "Déjà résolu"
+  },
+  "proposeAction": {
+    "needsInput": "En attente de votre réponse",
+    "replySent": "Réponse envoyée",
+    "typeOwnReplyPlaceholder": "Ou rédigez votre propre réponse…",
+    "typeReplyPlaceholder": "Saisissez votre réponse…",
+    "sent": "Envoyé",
+    "sending": "Envoi…",
+    "continue": "Continuer"
+  },
+  "artifact": {
+    "emailDraft": "Brouillon d'e-mail",
+    "notes": "Notes",
+    "messageDraft": "Brouillon de message",
+    "document": "Document",
+    "draft": "Brouillon",
+    "failed": "Échec",
+    "open": "Ouvrir ↗",
+    "verbSent": "Envoyé",
+    "verbPosted": "Publié",
+    "verbCreated": "Créé"
+  },
+  "cardContext": {
+    "context": "Contexte",
+    "viewDetails": "Voir les détails de la carte",
+    "more": "+{{count}} autres",
+    "messagePlaceholder": "Message à propos de cette carte…",
+    "drawerDescription": "Vue détaillée de la carte",
+    "quickApprove": "Approbation rapide",
+    "quickApproveHint": "Tâche à faible risque — généralement sûre à approuver telle quelle"
+  },
+  "categories": {
+    "growth": "Croissance",
+    "work": "Travail",
+    "finance": "Finances",
+    "health": "Santé",
+    "learn": "Apprendre",
+    "life": "Vie"
+  },
+  "mainChat": {
+    "cardFeedbackPlaceholder": "Dites à PIN AI quoi changer sur cette carte…",
+    "feedbackOnCard": "Avis sur cette carte"
+  },
+  "codeBlock": {
+    "copy": "Copier",
+    "copied": "Copié"
+  },
+  "queued": {
+    "badge": "En file",
+    "regionLabel": "Messages en file",
+    "save": "Enregistrer",
+    "saveAria": "Enregistrer le message en file",
+    "cancelEditAria": "Annuler la modification en file",
+    "edit": "Modifier",
+    "editAria": "Modifier le message en file",
+    "sendNow": "Envoyer maintenant",
+    "delete": "Supprimer",
+    "deleteAria": "Supprimer le message en file",
+    "queueMessage": "Mettre le message en file"
+  }
+}

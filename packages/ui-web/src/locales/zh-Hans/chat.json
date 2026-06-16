@@ -1,0 +1,196 @@
+{
+  "toolVerbs": {
+    "ran": "已运行",
+    "ranCommand": "已运行命令",
+    "executed": "已执行",
+    "ranPython": "已运行 Python",
+    "browsed": "已浏览",
+    "searchedWeb": "已搜索网页",
+    "readPages": "已阅读页面",
+    "searchedNews": "已搜索新闻",
+    "searchedMemory": "已搜索记忆",
+    "searchedX": "已搜索 X",
+    "fetched": "已获取",
+    "read": "已读取",
+    "wrote": "已写入",
+    "edited": "已编辑",
+    "patched": "已修补",
+    "messaged": "已发消息",
+    "readImage": "已读取图片",
+    "generatedImage": "已生成图片",
+    "generatedVideo": "已生成视频",
+    "generatedMusic": "已生成音乐",
+    "spoke": "已朗读",
+    "drew": "已绘图",
+    "scheduled": "已安排",
+    "checkedSession": "已查看会话",
+    "listedSessions": "已列出会话",
+    "loadedHistory": "已加载历史",
+    "sent": "已发送",
+    "spawnedAgent": "已启动智能体",
+    "delegatedToAgent": "已委派给智能体",
+    "delegated": "已委派",
+    "updatedPlan": "已更新计划",
+    "messagedYou": "已给你发消息",
+    "searchedGmail": "已搜索 Gmail",
+    "draftedEmail": "已起草邮件",
+    "usedGmail": "已使用 Gmail",
+    "readCalendar": "已读取日历",
+    "updatedCalendar": "已更新日历",
+    "usedCalendar": "已使用日历",
+    "searchedNotion": "已搜索 Notion",
+    "sentOnSlack": "已在 Slack 发送",
+    "searchedSlack": "已搜索 Slack",
+    "searchedDrive": "已搜索 Drive"
+  },
+  "landing": {
+    "heading": "在想什么？",
+    "subheading": "想问什么都可以——我了解你的情况。",
+    "suggestions": {
+      "focusToday": "我今天该专注做什么？",
+      "summarizeWeek": "总结一下我这周的情况",
+      "onMyMind": "我最近在关注什么？"
+    }
+  },
+  "composer": {
+    "placeholder": "给 PIN AI 发消息…",
+    "voiceInput": "语音输入",
+    "send": "发送",
+    "stop": "停止",
+    "dismissKeyboard": "收起键盘",
+    "cancelRecording": "取消录音",
+    "useTranscript": "使用转写文本"
+  },
+  "actionBar": {
+    "copyMessage": "复制消息",
+    "copy": "复制",
+    "goodResponse": "回答不错",
+    "badResponse": "回答不佳",
+    "regenerateResponse": "重新生成回答",
+    "regenerate": "重新生成"
+  },
+  "cardFeedback": {
+    "helpfulPrompt": "有帮助吗？",
+    "helpful": "有帮助",
+    "notHelpful": "没帮助",
+    "sent": "已发送",
+    "comment": "评论",
+    "commentPlaceholder": "对这张卡片的反馈（不会发给智能体）…",
+    "sendFeedback": "发送反馈"
+  },
+  "userEntry": {
+    "notSent": "未发送",
+    "editMessage": "编辑消息"
+  },
+  "notify": {
+    "label": "通知你"
+  },
+  "transcript": {
+    "cardEmptyState": "让智能体处理这张卡片，或给它发条消息。",
+    "scrollToLatest": "回到最新"
+  },
+  "header": {
+    "back": "返回",
+    "debug": "调试",
+    "proactive": "主动模式",
+    "proactiveToggle": "主动智能体开/关",
+    "dismiss": "忽略"
+  },
+  "workGroup": {
+    "subtasksRunning_other": "{{count}} 个子任务运行中",
+    "runningSubtask": "正在运行子任务",
+    "working": "处理中…",
+    "ranSubtasks_other": "已运行 {{count}} 个子任务",
+    "usedTools_other": "使用了 {{count}} 个工具",
+    "thought": "思考",
+    "steps_other": "{{count}} 步"
+  },
+  "toolNode": {
+    "results_other": "{{count}} 条结果"
+  },
+  "taskCard": {
+    "subtask": "子任务",
+    "toolCount_other": "{{count}} 个工具",
+    "showMore": "显示更多（{{count}}）",
+    "noActivity": "暂无工具活动。"
+  },
+  "todoPanel": {
+    "plan": "计划",
+    "planDone": "计划完成",
+    "progress": "已完成 {{completed}}/{{total}}",
+    "collapsePlan": "收起计划",
+    "expandPlan": "展开计划",
+    "closePlan": "关闭计划"
+  },
+  "reasoning": {
+    "thoughtForSeconds": "思考了 {{seconds}} 秒",
+    "thoughtProcess": "思考过程"
+  },
+  "hitl": {
+    "needsApproval": "需要你的批准",
+    "rejectReasonPlaceholder": "可选：告诉智能体原因（它会跳过该工具继续执行）",
+    "back": "返回",
+    "reject": "拒绝",
+    "approve": "批准",
+    "resolvedEarlier": "已在之前处理"
+  },
+  "proposeAction": {
+    "needsInput": "需要你的输入",
+    "replySent": "回复已发送",
+    "typeOwnReplyPlaceholder": "或输入你自己的回复…",
+    "typeReplyPlaceholder": "输入你的回复…",
+    "sent": "已发送",
+    "sending": "发送中…",
+    "continue": "继续"
+  },
+  "artifact": {
+    "emailDraft": "邮件草稿",
+    "notes": "笔记",
+    "messageDraft": "消息草稿",
+    "document": "文档",
+    "draft": "草稿",
+    "failed": "失败",
+    "open": "打开 ↗",
+    "verbSent": "已发送",
+    "verbPosted": "已发布",
+    "verbCreated": "已创建"
+  },
+  "cardContext": {
+    "context": "上下文",
+    "viewDetails": "查看卡片详情",
+    "more": "+{{count}} 项",
+    "messagePlaceholder": "针对这张卡片发消息…",
+    "drawerDescription": "卡片详情视图",
+    "quickApprove": "快速批准",
+    "quickApproveHint": "低风险任务——通常可以直接批准"
+  },
+  "categories": {
+    "growth": "成长",
+    "work": "工作",
+    "finance": "财务",
+    "health": "健康",
+    "learn": "学习",
+    "life": "生活"
+  },
+  "mainChat": {
+    "cardFeedbackPlaceholder": "告诉 PIN AI 这张卡片要怎么改…",
+    "feedbackOnCard": "对这张卡片的反馈"
+  },
+  "codeBlock": {
+    "copy": "复制",
+    "copied": "已复制"
+  },
+  "queued": {
+    "badge": "排队中",
+    "regionLabel": "排队的消息",
+    "save": "保存",
+    "saveAria": "保存排队的消息",
+    "cancelEditAria": "取消编辑排队消息",
+    "edit": "编辑",
+    "editAria": "编辑排队的消息",
+    "sendNow": "立即发送",
+    "delete": "删除",
+    "deleteAria": "删除排队的消息",
+    "queueMessage": "加入队列"
+  }
+}

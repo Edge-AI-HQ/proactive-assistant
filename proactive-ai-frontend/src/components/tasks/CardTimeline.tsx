@@ -1,4 +1,5 @@
 import { Loader2, CheckCircle2, Circle, CircleAlert, XCircle, Sparkles, Bell } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { IntentCard, CardScore, CardOutcome, CardRunStatus } from "@pin-ai/core";
 import { sourceAppDisplay } from "@/components/card/source-app-display";
 import { basketMeta } from "@/lib/basket-meta";
@@ -6,7 +7,7 @@ import { deriveCardUiStatus, isReminderCard } from "@pin-ai/core";
 import { connectorSlugFromIntentKey } from "@/lib/connector-card";
 import { getToolkit } from "@/lib/toolkit-icons";
 import { useCardState } from "@/components/card/CardStateContext";
-import { Text } from "@pin-ai/ui-web";
+import { Text, i18n } from "@pin-ai/ui-web";
 
 type TimelineCard = IntentCard & {
   runId: string;
@@ -35,8 +36,11 @@ function formatDate(iso: string): string {
   const d = new Date(iso);
   const today = new Date();
   const yesterday = new Date(Date.now() - 86400000);
-  if (d.toDateString() === today.toDateString()) return "Today";
-  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
+  // numeric:"auto" yields the localized "today"/"yesterday" word (zero new
+  // translation keys); other days fall back to a localized short date.
+  const rtf = new Intl.RelativeTimeFormat(i18n.language, { numeric: "auto" });
+  if (d.toDateString() === today.toDateString()) return rtf.format(0, "day");
+  if (d.toDateString() === yesterday.toDateString()) return rtf.format(-1, "day");
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
@@ -44,6 +48,7 @@ export default function CardTimeline({
   onOpenChat,
   onOpenCardDetail,
 }: CardTimelineProps) {
+  const { t } = useTranslation("tasks");
   // cardsState + cardActions come from context (phase-2 de-prop-drilling).
   // Alias the action fields back to the old local names so the render/handlers
   // below are untouched.
@@ -83,13 +88,13 @@ export default function CardTimeline({
       className="flex flex-col h-full px-4 pb-2 overflow-y-auto"
       style={{ paddingTop: "var(--constellation-header-top, 3.5rem)" }}
     >
-      <h1 className="text-display text-2xl text-foreground mb-1">Tasks</h1>
-      <p className="text-sm text-muted-foreground mb-6">AI is running these for you</p>
+      <h1 className="text-display text-2xl text-foreground mb-1">{t("header.title")}</h1>
+      <p className="text-sm text-muted-foreground mb-6">{t("header.subtitle")}</p>
 
       {cards.loading && cards.cards.length === 0 && (
         <div className="flex items-center justify-center py-8 gap-2">
           <Loader2 size={16} className="animate-spin text-foreground/40" />
-          <Text variant="bodySm" className="text-foreground/40">Loading history...</Text>
+          <Text variant="bodySm" className="text-foreground/40">{t("loadingHistory")}</Text>
         </div>
       )}
 
@@ -128,27 +133,30 @@ export default function CardTimeline({
                     chatted: isChatted,
                   });
               const previewText = isDone
-                ? "Completed"
+                ? t("preview.completed")
                 : isDismissed
-                ? "Dismissed"
+                ? t("preview.dismissed")
                 : runUi === "processing"
-                ? "Processing..."
+                ? t("preview.processing")
                 : runUi === "needs_input"
-                ? "Waiting for your input"
+                ? t("preview.needsInput")
                 : runUi === "ready"
-                ? "Ready for review"
+                ? t("preview.ready")
                 : runUi === "failed"
-                ? "Failed"
+                ? t("preview.failed")
                 : isChatted
-                ? "In conversation"
+                ? t("preview.inConversation")
                 : isConfirmed
-                ? "Confirmed"
+                ? t("preview.confirmed")
                 : reminder
                 // A reminder has no operations — show the nudge itself, not
                 // "2 operations · Done".
                 ? card.summary
                 : card.primaryAction
-                ? `${actionCount + 1} operations · ${card.primaryAction.label}`
+                ? t("preview.operationsSummary", {
+                    count: actionCount + 1,
+                    action: card.primaryAction.label,
+                  })
                 : card.sourceApps.map((slug) => sourceAppDisplay(slug).label).join(" · ");
 
               return (
@@ -208,9 +216,9 @@ export default function CardTimeline({
           <div className="glass-card p-4 rounded-full">
             <Sparkles size={28} strokeWidth={1.5} className="text-foreground/40" />
           </div>
-          <Text variant="body" className="block text-display text-foreground/60">No cards yet</Text>
+          <Text variant="body" className="block text-display text-foreground/60">{t("empty.title")}</Text>
           <Text variant="bodySm" className="block text-foreground/40 leading-relaxed max-w-[260px]">
-            Generate intent cards from the NOW tab. All cards will appear here.
+            {t("empty.body")}
           </Text>
         </div>
       )}

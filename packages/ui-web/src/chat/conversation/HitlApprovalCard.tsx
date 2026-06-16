@@ -13,6 +13,7 @@
  */
 import { useState } from "react";
 import { Check, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { HitlRequiresAction } from "@pin-ai/core";
 import { Button } from "../../primitives/Button";
 import { Text } from "../../primitives/Text";
@@ -36,6 +37,7 @@ export function HitlApprovalCard({
   readOnly = false,
   onDecide,
 }: HitlApprovalCardProps) {
+  const { t } = useTranslation("chat");
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
   const allowed = action.allowedDecisions;
@@ -54,7 +56,7 @@ export function HitlApprovalCard({
         </div>
         <div className="flex-1 min-w-0">
           <Text variant="micro" weight="semibold" className="block uppercase tracking-wider text-amber-700/70 leading-none mb-1">
-            Needs your approval
+            {t("hitl.needsApproval")}
           </Text>
           <Text variant="bodySm" weight="semibold" className="block text-foreground/85 truncate leading-tight">
             {action.toolName}
@@ -72,14 +74,14 @@ export function HitlApprovalCard({
 
       {readOnly ? (
         <div className="px-3 py-2 border-t border-foreground/8">
-          <Text variant="caption" className="block text-foreground/40 italic">Resolved earlier</Text>
+          <Text variant="caption" className="block text-foreground/40 italic">{t("hitl.resolvedEarlier")}</Text>
         </div>
       ) : rejecting ? (
         <div className="px-3 py-2.5 border-t border-foreground/8 space-y-2">
           <textarea
             value={reason}
             onChange={(e) => setReason(e.target.value)}
-            placeholder="Optional: tell the agent why (it continues without running the tool)"
+            placeholder={t("hitl.rejectReasonPlaceholder")}
             rows={2}
             disabled={disabled}
             className="w-full text-label rounded-lg border border-foreground/12 px-2.5 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-foreground/20 disabled:opacity-50"
@@ -94,7 +96,7 @@ export function HitlApprovalCard({
                 setReason("");
               }}
             >
-              Back
+              {t("hitl.back")}
             </Button>
             <Button
               variant="danger"
@@ -102,7 +104,7 @@ export function HitlApprovalCard({
               disabled={disabled}
               onPress={() => onDecide("reject", reason.trim() || undefined)}
             >
-              Reject
+              {t("hitl.reject")}
             </Button>
           </div>
         </div>
@@ -116,7 +118,7 @@ export function HitlApprovalCard({
               onPress={() => setRejecting(true)}
               leftIcon={<X size={14} strokeWidth={2} />}
             >
-              Reject
+              {t("hitl.reject")}
             </Button>
           ) : null}
           {canApprove ? (
@@ -127,7 +129,7 @@ export function HitlApprovalCard({
               onPress={() => onDecide("approve")}
               leftIcon={<Check size={14} strokeWidth={2} />}
             >
-              Approve
+              {t("hitl.approve")}
             </Button>
           ) : null}
         </div>

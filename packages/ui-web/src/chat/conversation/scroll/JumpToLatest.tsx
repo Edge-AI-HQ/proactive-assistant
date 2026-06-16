@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { ChevronDown } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 /**
  * Floating jump-to-latest affordance. Visible whenever the viewport isn't at
@@ -16,6 +17,7 @@ export default function JumpToLatest({
   attention: boolean;
   onClick: () => void;
 }) {
+  const { t } = useTranslation("chat");
   return (
     <AnimatePresence>
       {visible && (
@@ -29,7 +31,7 @@ export default function JumpToLatest({
           <button
             type="button"
             onClick={onClick}
-            aria-label="Scroll to latest"
+            aria-label={t("transcript.scrollToLatest")}
             className="pointer-events-auto relative flex h-9 w-9 items-center justify-center rounded-full border border-foreground/[0.08] text-foreground/65 shadow-[0_2px_10px_rgba(0,0,0,0.08)] transition-colors hover:text-foreground"
             style={{
               background: "rgba(255,255,255,0.7)",

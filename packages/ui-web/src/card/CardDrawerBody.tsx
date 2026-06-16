@@ -1,8 +1,12 @@
 import { useState, type JSX } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Brain, ChevronDown, Zap, FileText, AlertTriangle, Loader2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { brandSvg, detectToolIcon, ArtifactItem, matchSideEffect, type Artifact } from "./chat-card-presentation";
+import i18n from "../i18n";
 import { reasoningStepLabel, sourceAppDisplay } from "./source-app-display";
+import { reasoningStepKey } from "@pin-ai/core";
 import { Text } from "../primitives/Text";
 import type { ReasoningStep } from "@pin-ai/core";
 import type {
@@ -53,6 +57,7 @@ function SourcePill({ slug }: { slug: string }) {
 
 /* Collapsible "How I reasoned" — LLM-written reasoning steps, default collapsed */
 export function HowGeneratedSection({ steps }: { steps: ReasoningStep[] }) {
+  const { t } = useTranslation("card");
   const [open, setOpen] = useState(false);
   if (steps.length === 0) return null;
   return (
@@ -64,9 +69,9 @@ export function HowGeneratedSection({ steps }: { steps: ReasoningStep[] }) {
         <div className="flex items-center gap-1.5">
           <Brain size={13} strokeWidth={2.2} className="text-foreground/55" />
           <Text variant="caption" weight="bold" className="uppercase tracking-wider text-foreground/55">
-            How I reasoned
+            {t("detail.howReasoned")}
           </Text>
-          <Text variant="caption" weight="medium" className="text-foreground/40">· {steps.length} steps</Text>
+          <Text variant="caption" weight="medium" className="text-foreground/40">· {t("detail.stepCount", { count: steps.length })}</Text>
         </div>
         <ChevronDown
           size={16}
@@ -90,7 +95,11 @@ export function HowGeneratedSection({ steps }: { steps: ReasoningStep[] }) {
                   </Text>
                   <div className="flex-1 min-w-0">
                     <Text variant="micro" weight="semibold" className="block uppercase tracking-wide text-foreground/45 mb-0.5">
-                      {reasoningStepLabel(s.label)}
+                      {(() => {
+                        // 已知枚举走 i18n;未知回落英文 prettify。
+                        const key = reasoningStepKey(s.label);
+                        return key ? i18n.t(`card:reasoningStep.${key}`) : reasoningStepLabel(s.label);
+                      })()}
                     </Text>
                     <Text variant="bodySm" className="block text-foreground/75 leading-snug">{s.detail}</Text>
                   </div>
@@ -164,7 +173,9 @@ function eventsToFallbackPlan(events: SSEEvent[] | undefined): { text: string; t
     seen.add(name);
     const preview = typeof d?.argsPreview === "string" ? d.argsPreview.trim() : "";
     rows.push({
-      text: preview && preview.length <= 140 ? preview : `Called ${name}`,
+      text: preview && preview.length <= 140
+        ? preview
+        : i18n.t("card:fallback.calledTool", { name }),
       tool: name,
     });
   }
@@ -177,7 +188,7 @@ function summaryToFallbackArtifact(summary: string | undefined): Artifact[] {
   return [{
     kind: "notes",
     app: "gdocs",
-    title: "Agent's note",
+    title: i18n.t("card:fallback.agentNote"),
     body: text,
   }];
 }
@@ -274,6 +285,7 @@ export function DrawerDetailBody({
   lastMessagePayload?: LastMessagePayload | null;
   sideEffects?: SideEffect[];
 }) {
+  const { t } = useTranslation("card");
   // Source-of-truth selection. Priority for plan / artifacts:
   //   (a) cached lastMessagePayload — the hook merges audit fields
   //       forward across propose_action turns. Best signal.
@@ -326,7 +338,7 @@ export function DrawerDetailBody({
 
   // Status banner — surface preparing / resuming / error / cancelled so the
   // user understands why the buttons may not match the prior shape.
-  const statusBanner = renderStatusBanner(runSnapshot ?? null, !!cached);
+  const statusBanner = renderStatusBanner(runSnapshot ?? null, !!cached, t);
 
   const whyNowText = card.whyNow?.trim();
 
@@ -348,7 +360,7 @@ export function DrawerDetailBody({
           }}
         >
           <Text variant="caption" weight="bold" className="block uppercase tracking-wider text-green-700/80 mb-1">
-            Why now
+            {t("detail.whyNow")}
           </Text>
           <Text variant="bodySm" className="block text-foreground/75 leading-snug">{whyNowText}</Text>
         </div>
@@ -370,9 +382,9 @@ export function DrawerDetailBody({
             <div className="flex items-center gap-1.5">
               <Zap size={13} strokeWidth={2.5} color="hsl(var(--primary))" />
               <Text variant="caption" weight="bold" className="uppercase tracking-wider bg-gradient-to-r from-primary to-[hsl(330,80%,65%)] bg-clip-text text-transparent">
-                Execution Plan
+                {t("detail.executionPlan")}
               </Text>
-              <Text variant="caption" weight="medium" className="text-foreground/45">· {plan.length} steps</Text>
+              <Text variant="caption" weight="medium" className="text-foreground/45">· {t("detail.stepCount", { count: plan.length })}</Text>
             </div>
             <ChevronDown
               size={16}
@@ -416,7 +428,7 @@ export function DrawerDetailBody({
             <div className="flex items-center gap-1.5">
               <FileText size={13} strokeWidth={2.5} className="text-foreground/60" />
               <Text variant="caption" weight="bold" className="uppercase tracking-wider text-foreground/60">
-                {artifacts.length === 1 ? "Generated draft" : "Generated drafts"}
+                {t("detail.generatedDrafts", { count: artifacts.length })}
               </Text>
               <Text variant="caption" weight="medium" className="text-foreground/45">· {artifacts.length}</Text>
             </div>
@@ -467,7 +479,7 @@ export function DrawerDetailBody({
             <div className="flex items-center gap-1.5">
               <AlertTriangle size={13} strokeWidth={2.5} className="text-amber-600" />
               <Text variant="caption" weight="bold" className="uppercase tracking-wider text-amber-700">
-                Approving will let agent:
+                {t("detail.approvingTitle")}
               </Text>
               <Text variant="caption" weight="medium" className="text-foreground/45">· {dangerousActions.length}</Text>
             </div>
@@ -499,7 +511,7 @@ export function DrawerDetailBody({
       {/* Risks — one-liner bullets from the agent's plan */}
       {risks.length > 0 && (
         <div className="mb-3">
-          <Text variant="caption" weight="bold" className="block text-foreground/55 uppercase tracking-wider mb-1.5">Risks to consider</Text>
+          <Text variant="caption" weight="bold" className="block text-foreground/55 uppercase tracking-wider mb-1.5">{t("detail.risksTitle")}</Text>
           <ul className="space-y-1">
             {risks.map((r, i) => (
               <li key={i} className="flex items-start gap-2">
@@ -514,7 +526,7 @@ export function DrawerDetailBody({
       {/* Sources — second to last */}
       {sources.length > 0 && (
         <div className="mb-3">
-          <Text variant="caption" weight="bold" className="block text-foreground/55 uppercase tracking-wider mb-1.5">Sources</Text>
+          <Text variant="caption" weight="bold" className="block text-foreground/55 uppercase tracking-wider mb-1.5">{t("detail.sourcesTitle")}</Text>
           <div className="flex flex-wrap gap-1.5">
             {sources.map((s) => <SourcePill key={s} slug={s} />)}
           </div>
@@ -528,10 +540,12 @@ export function DrawerDetailBody({
 }
 
 /* Status banner — only renders for non-needs_input states so the
- * Approve UI doesn't get a competing banner. */
+ * Approve UI doesn't get a competing banner. Receives the caller's `t`
+ * (card namespace) because it's a render helper, not a component. */
 function renderStatusBanner(
   snapshot: RunSnapshot | null,
   hasLiveApproval: boolean,
+  t: TFunction<"card">,
 ): JSX.Element | null {
   if (!snapshot) return null;
   if (hasLiveApproval) return null;
@@ -546,8 +560,8 @@ function renderStatusBanner(
           <Loader2 size={13} className="text-foreground/55 animate-spin" />
           <Text variant="label" weight="medium" className="text-foreground/70">
             {snapshot.status === "running"
-              ? "Agent is preparing the plan — give it a moment."
-              : "Resuming…"}
+              ? t("statusBanner.preparing")
+              : t("statusBanner.resuming")}
           </Text>
         </div>
       );
@@ -561,10 +575,10 @@ function renderStatusBanner(
           }}
         >
           <Text variant="caption" weight="bold" className="block uppercase tracking-wider mb-1 bg-gradient-to-r from-primary to-[hsl(330,80%,65%)] bg-clip-text text-transparent">
-            Result
+            {t("statusBanner.resultTitle")}
           </Text>
           <Text variant="bodySm" className="block text-foreground/80 leading-relaxed">
-            {snapshot.result?.summary || "Done."}
+            {snapshot.result?.summary || t("statusBanner.resultFallback")}
           </Text>
         </div>
       );
@@ -572,10 +586,10 @@ function renderStatusBanner(
       return (
         <div className="mb-3 px-3.5 py-2.5 rounded-2xl border border-red-500/30 bg-red-500/[0.04]">
           <Text variant="caption" weight="bold" className="block uppercase tracking-wider text-red-600 mb-1">
-            Failed
+            {t("statusBanner.failedTitle")}
           </Text>
           <Text variant="bodySm" className="block text-foreground/75 leading-snug">
-            {snapshot.errorMessage || "Run failed."}
+            {snapshot.errorMessage || t("statusBanner.failedFallback")}
           </Text>
         </div>
       );
@@ -583,7 +597,7 @@ function renderStatusBanner(
       return (
         <div className="mb-3 px-3.5 py-2.5 rounded-2xl border border-foreground/10 bg-foreground/[0.03]">
           <Text variant="bodySm" className="block text-foreground/60 leading-snug">
-            Cancelled. Tap Retry to start a fresh run.
+            {t("statusBanner.cancelled")}
           </Text>
         </div>
       );

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { deleteScheduledGenerator, listScheduledGenerators, pauseScheduledGenerator, resumeScheduledGenerator, type ScheduledGeneratorTask } from "@pin-ai/core";
+import i18n from "../i18n";
 import { Text } from "../primitives/Text";
 
 // Server-rendered label ("每 5 分钟" / "一次 · 06-10 15:00") wins; legacy tasks
@@ -12,6 +14,7 @@ function formatSchedule(task: ScheduledGeneratorTask): string {
 }
 
 export default function ScheduledTasksSettings() {
+  const { t } = useTranslation("account");
   const [tasks, setTasks] = useState<ScheduledGeneratorTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -24,7 +27,7 @@ export default function ScheduledTasksSettings() {
         const items = await listScheduledGenerators();
         if (mounted) setTasks(items);
       } catch {
-        if (mounted) setError("Failed to load scheduled tasks");
+        if (mounted) setError(i18n.t("account:scheduledTasks.loadFailed"));
       } finally {
         if (mounted) setLoading(false);
       }
@@ -45,7 +48,7 @@ export default function ScheduledTasksSettings() {
           : await resumeScheduledGenerator(task.id);
       setTasks((current) => current.map((t) => (t.id === task.id ? updated : t)));
     } catch {
-      setError(`Failed to ${next === "paused" ? "pause" : "resume"} task`);
+      setError(next === "paused" ? t("scheduledTasks.pauseFailed") : t("scheduledTasks.resumeFailed"));
     } finally {
       setPendingId(null);
     }
@@ -58,20 +61,20 @@ export default function ScheduledTasksSettings() {
       await deleteScheduledGenerator(task.id);
       setTasks((current) => current.filter((t) => t.id !== task.id));
     } catch {
-      setError("Failed to delete task");
+      setError(t("scheduledTasks.deleteFailed"));
     } finally {
       setPendingId(null);
     }
   };
 
   if (loading) {
-    return <Text variant="caption" className="block text-foreground/45">Loading scheduled tasks…</Text>;
+    return <Text variant="caption" className="block text-foreground/45">{t("scheduledTasks.loading")}</Text>;
   }
 
   if (tasks.length === 0) {
     return (
       <Text variant="caption" className="block text-foreground/45">
-        No scheduled tasks yet. Create one from chat — for example, ask for a daily news digest.
+        {t("scheduledTasks.empty")}
       </Text>
     );
   }
@@ -86,7 +89,7 @@ export default function ScheduledTasksSettings() {
             <div className="flex items-center gap-3">
               <div className="flex-1 min-w-0">
                 <div className="text-xs font-medium text-foreground truncate">
-                  {task.title || "Scheduled task"}
+                  {task.title || t("scheduledTasks.fallbackTitle")}
                 </div>
                 <Text variant="caption" className="block text-foreground/45 mt-0.5">{formatSchedule(task)}</Text>
               </div>
@@ -94,7 +97,7 @@ export default function ScheduledTasksSettings() {
                 type="button"
                 role="switch"
                 aria-checked={active}
-                aria-label={`${task.title || "Scheduled task"} active`}
+                aria-label={t("scheduledTasks.activeAria", { title: task.title || t("scheduledTasks.fallbackTitle") })}
                 disabled={busy}
                 onClick={() => void handleToggle(task)}
                 className={`
@@ -118,7 +121,7 @@ export default function ScheduledTasksSettings() {
                   active ? "text-emerald-600 bg-emerald-500/10" : "text-amber-700 bg-amber-500/10"
                 }`}
               >
-                {active ? "active" : "paused"}
+                {active ? t("scheduledTasks.statusActive") : t("scheduledTasks.statusPaused")}
               </span>
               <button
                 type="button"
@@ -126,7 +129,7 @@ export default function ScheduledTasksSettings() {
                 disabled={busy}
                 className="text-caption text-red-500/80 hover:text-red-500 transition-colors disabled:opacity-40"
               >
-                Delete
+                {t("scheduledTasks.delete")}
               </button>
             </div>
           </div>

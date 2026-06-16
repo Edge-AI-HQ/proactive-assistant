@@ -9,6 +9,7 @@
  * the message render.
  */
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
 
 import { useComposio } from "@pin-ai/state";
@@ -28,6 +29,7 @@ export function ConnectChip({ toolkit }: ConnectChipProps) {
   // session. If it becomes a hot path, lift composio into a context
   // provider and consume here. Drilling it through MarkdownContent's
   // four call sites + assistant-ui parts would be uglier than that.
+  const { t } = useTranslation("connect");
   const composio = useComposio();
   const [busy, setBusy] = useState(false);
   const meta = getToolkit(toolkit);
@@ -56,7 +58,9 @@ export function ConnectChip({ toolkit }: ConnectChipProps) {
       type="button"
       onClick={handleClick}
       disabled={busy || alreadyConnected}
-      title={alreadyConnected ? `${meta.label} already connected` : `Connect ${meta.label}`}
+      title={alreadyConnected
+        ? t("connectChip.alreadyConnected", { name: meta.label })
+        : t("connectChip.connect", { name: meta.label })}
       className={cn(
         "inline-flex items-center gap-1 px-2 py-0.5 mx-0.5 rounded-full",
         "text-label leading-none align-baseline",
@@ -71,7 +75,9 @@ export function ConnectChip({ toolkit }: ConnectChipProps) {
       ) : (
         <Icon size={11} />
       )}
-      <span>{alreadyConnected ? `${meta.label} connected` : `Connect ${meta.label}`}</span>
+      <span>{alreadyConnected
+        ? t("connectChip.connected", { name: meta.label })
+        : t("connectChip.connect", { name: meta.label })}</span>
     </button>
   );
 }

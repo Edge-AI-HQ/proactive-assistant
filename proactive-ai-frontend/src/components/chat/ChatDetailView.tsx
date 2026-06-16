@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { Check, ChevronUp, Sprout, Briefcase, TrendingUp, Heart, BookOpen, Sparkles, X, type LucideIcon } from "lucide-react";
 import { DrawerDetailBody } from "@/components/card/CardDrawerBody";
 import ConversationView from "@/components/chat/conversation/ConversationView";
@@ -98,6 +99,7 @@ export default function ChatDetailView({
   onDoneBackend,
   onCommentBackend,
 }: ChatDetailViewProps) {
+  const { t } = useTranslation(["chat", "common"]);
   const [cardDrawerOpen, setCardDrawerOpen] = useState(false);
   const sessionKey = useMemo(
     () => cardThreadSessionKey(card, runId),
@@ -120,7 +122,7 @@ export default function ChatDetailView({
             ? { onDone: onDoneBackend, onComment: onCommentBackend }
             : undefined
         }
-        placeholder="Message about this card..."
+        placeholder={t("cardContext.messagePlaceholder")}
         headerSlot={
           <CardContextHeaderSlot
             card={card}
@@ -144,7 +146,7 @@ export default function ChatDetailView({
         >
           <DrawerHeader className="sr-only">
             <DrawerTitle>{card.title}</DrawerTitle>
-            <DrawerDescription>Card detail view</DrawerDescription>
+            <DrawerDescription>{t("cardContext.drawerDescription")}</DrawerDescription>
           </DrawerHeader>
           <ChatCardDrawerBody card={card} />
           {/* Dismiss / Done are reachable from EVERY drawer (unified action
@@ -161,7 +163,7 @@ export default function ChatDetailView({
                   }}
                   className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-bodySm font-medium text-foreground/55"
                 >
-                  <X size={13} strokeWidth={2} /> Dismiss
+                  <X size={13} strokeWidth={2} /> {t("header.dismiss")}
                 </button>
               )}
               {onDoneBackend && (
@@ -173,7 +175,7 @@ export default function ChatDetailView({
                   }}
                   className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground text-background text-bodySm font-semibold hover:bg-foreground/85 transition-colors"
                 >
-                  <Check size={13} strokeWidth={2.5} /> Done
+                  <Check size={13} strokeWidth={2.5} /> {t("common:status.done")}
                 </button>
               )}
             </div>
@@ -184,13 +186,15 @@ export default function ChatDetailView({
   );
 }
 
+/* Labels are chat-namespace translation keys (rendered via `t`); an unknown
+ * backend category falls back to its raw slug (untranslated by design). */
 const CATEGORIES: Record<string, { icon: LucideIcon; label: string }> = {
-  growth: { icon: Sprout, label: "Growth" },
-  work: { icon: Briefcase, label: "Work" },
-  finance: { icon: TrendingUp, label: "Finance" },
-  health: { icon: Heart, label: "Health" },
-  learn: { icon: BookOpen, label: "Learn" },
-  life: { icon: Sparkles, label: "Life" },
+  growth: { icon: Sprout, label: "categories.growth" },
+  work: { icon: Briefcase, label: "categories.work" },
+  finance: { icon: TrendingUp, label: "categories.finance" },
+  health: { icon: Heart, label: "categories.health" },
+  learn: { icon: BookOpen, label: "categories.learn" },
+  life: { icon: Sparkles, label: "categories.life" },
 };
 
 /* Drawer body — mirrors home CardDrawerContent (no action buttons). The
@@ -212,6 +216,7 @@ function ChatCardDrawerBody({
   lastMessagePayload?: LastMessagePayload | null;
   sideEffects?: SideEffect[];
 }) {
+  const { t } = useTranslation("chat");
   const cat = CATEGORIES[card.category];
   const Icon = cat?.icon || Briefcase;
 
@@ -220,7 +225,7 @@ function ChatCardDrawerBody({
       {/* Category + tag + Quick badge */}
       <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
         <Icon size={14} strokeWidth={1.5} className="text-foreground/50" />
-        <span className="text-xs font-semibold tracking-wide text-foreground/50 uppercase">{cat?.label || card.category}</span>
+        <span className="text-xs font-semibold tracking-wide text-foreground/50 uppercase">{cat ? t(cat.label) : card.category}</span>
         {card.tag && (
           <Text variant="caption" weight="bold" className="px-1.5 py-0.5 rounded-full bg-foreground/10 text-foreground/50">
             {card.tag}
@@ -230,10 +235,10 @@ function ChatCardDrawerBody({
           <span
             className="inline-flex items-center gap-1 text-caption font-bold px-1.5 py-0.5 rounded-full"
             style={{ background: "hsl(var(--primary) / 0.12)", color: "hsl(var(--primary))" }}
-            title="Low-risk task — usually safe to approve as-is"
+            title={t("cardContext.quickApproveHint")}
           >
             <span className="w-1.5 h-1.5 rounded-full" style={{ background: "hsl(var(--primary))" }} />
-            Quick approve
+            {t("cardContext.quickApprove")}
           </span>
         )}
       </div>

@@ -15,6 +15,7 @@ import {
 import { useCardsQuery, useComposio, usePipeline, useUserSettings } from "@pin-ai/state";
 import {
   CATEGORIES,
+  categoryLabel,
   DebugPanel,
   realCardToLovableIntent,
   useAuth,
@@ -299,7 +300,7 @@ export default function ZebraShell() {
           id: String(c.id),
           title: c.title,
           icon: cat.icon,
-          categoryLabel: cat.label,
+          categoryLabel: categoryLabel(c.category),
           searchText: `${c.tag ?? ""} ${c.line1}`,
         };
       }),

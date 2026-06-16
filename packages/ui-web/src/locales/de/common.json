@@ -1,0 +1,76 @@
+{
+  "status": {
+    "loading": "Lädt…",
+    "saving": "Speichert…",
+    "retry": "Wiederholen",
+    "cancel": "Abbrechen",
+    "done": "Fertig",
+    "close": "Schließen",
+    "thinking": "Denkt nach…",
+    "connecting": "Verbinden…",
+    "listening": "Höre zu…",
+    "polishing": "Feinschliff…"
+  },
+  "appShell": {
+    "openMenu": "Menü öffnen",
+    "openMainChat": "Haupt-Chat öffnen",
+    "askPinAi": "PIN AI fragen"
+  },
+  "menu": {
+    "now": "JETZT",
+    "ambient": "AMBIENT",
+    "tasks": "AUFGABEN",
+    "connect": "VERBINDEN",
+    "profile": "PROFIL",
+    "setting": "EINSTELLUNGEN"
+  },
+  "bootstrapError": {
+    "message": "Server nicht erreichbar. Prüfen Sie Ihre Verbindung und versuchen Sie es erneut."
+  },
+  "errorBoundary": {
+    "title": "Etwas ist schiefgelaufen",
+    "fallbackMessage": "Ein unerwarteter Fehler ist aufgetreten.",
+    "tryAgain": "Erneut versuchen"
+  },
+  "errors": {
+    "onboardingSave": "Ihr Onboarding-Fortschritt konnte nicht gespeichert werden. Prüfen Sie Ihre Verbindung und versuchen Sie es erneut.",
+    "noRedirectUrl": "Keine Weiterleitungs-URL erhalten",
+    "disconnectFailed": "Trennen fehlgeschlagen",
+    "connectFailedWithStatus": "Verbindung fehlgeschlagen ({{status}})"
+  },
+  "agentRuns": {
+    "ariaLabel": "Aktive Agentenläufe",
+    "title": "Agentenläufe",
+    "runCount_one": "{{count}} Lauf",
+    "runCount_other": "{{count}} Läufe",
+    "kind": {
+      "autoDreaming": "Träumen",
+      "connectorInit": "Quelle wird verbunden",
+      "connectorEvolve": "Signale werden destilliert",
+      "crystallize": "Chat wird kristallisiert",
+      "generatorManual": "Karten werden generiert",
+      "generatorAuto": "Karten werden generiert",
+      "userPrompt": "Synthetischer Prompt"
+    }
+  },
+  "notificationPrompt": {
+    "title": "Benachrichtigungen aktivieren",
+    "description": "Das Generieren von Karten kann einige Minuten bis Stunden dauern. Mit aktivierten Benachrichtigungen informieren wir Sie, sobald sie fertig sind — Sie müssen die App nicht im Blick behalten.",
+    "turnOn": "Aktivieren",
+    "later": "Später"
+  },
+  "weather": {
+    "clear": "Klar",
+    "cloudy": "Bewölkt",
+    "foggy": "Neblig",
+    "drizzle": "Nieselregen",
+    "rainy": "Regen",
+    "snowy": "Schnee",
+    "showers": "Schauer",
+    "stormy": "Gewitter"
+  },
+  "desktopNotify": {
+    "newCards_one": "{{count}} neue Karte für Sie",
+    "newCards_other": "{{count}} neue Karten für Sie"
+  }
+}

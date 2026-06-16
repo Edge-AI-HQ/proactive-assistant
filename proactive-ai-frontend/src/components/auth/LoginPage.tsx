@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
+import { Trans, useTranslation } from "react-i18next";
 import { Text } from "@pin-ai/ui-web";
 import LoginBackdrop from "./LoginBackdrop";
 
@@ -18,6 +19,7 @@ interface LoginPageProps {
  * （web redirect 时整页跳走；失败时复位）。
  */
 export default function LoginPage({ onSignIn }: LoginPageProps) {
+  const { t } = useTranslation("auth");
   const [signingIn, setSigningIn] = useState(false);
 
   const handleGoogle = async () => {
@@ -52,7 +54,7 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
               <>
                 <Loader2 size={18} className="animate-spin text-background/70" />
                 <Text variant="body" weight="medium" className="text-background/80">
-                  Signing in…
+                  {t("login.signingIn")}
                 </Text>
               </>
             ) : (
@@ -74,25 +76,28 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
           transition={{ duration: 0.6, delay: 0.35, ease: EASE }}
           className="mt-7 text-center text-caption leading-relaxed text-foreground/40"
         >
-          By continuing, you agree to PIN AI's{" "}
-          <a
-            href="https://www.pinai.io/terms"
-            target="_blank"
-            rel="noreferrer"
-            className="underline underline-offset-2 transition-colors hover:text-foreground/60"
-          >
-            Terms
-          </a>
-          {" "}and{" "}
-          <a
-            href="https://www.pinai.io/privacy"
-            target="_blank"
-            rel="noreferrer"
-            className="underline underline-offset-2 transition-colors hover:text-foreground/60"
-          >
-            Privacy Policy
-          </a>
-          .
+          <Trans
+            t={t}
+            i18nKey="legal.agreement"
+            components={{
+              terms: (
+                <a
+                  href="https://www.pinai.io/terms"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline underline-offset-2 transition-colors hover:text-foreground/60"
+                />
+              ),
+              privacy: (
+                <a
+                  href="https://www.pinai.io/privacy"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline underline-offset-2 transition-colors hover:text-foreground/60"
+                />
+              ),
+            }}
+          />
         </motion.p>
       </div>
     </div>

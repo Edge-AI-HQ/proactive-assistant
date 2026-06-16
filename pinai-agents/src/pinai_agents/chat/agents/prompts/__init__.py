@@ -15,6 +15,7 @@ from .shared import (
     GROUNDING_POLICY,
     SANDBOX_PREAMBLE,
     TOOL_DISCIPLINE,
+    lang_clause,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "GROUNDING_POLICY",
     "SANDBOX_PREAMBLE",
     "TOOL_DISCIPLINE",
+    "lang_clause",
 ]

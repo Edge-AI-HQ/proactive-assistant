@@ -23,7 +23,7 @@ import {
   type SubscriptionState,
   type UsageInfo,
 } from "@pin-ai/core";
-import { PLANS } from "./PlanPaymentForm";
+import { PLANS, planName, planCredits, planPerks } from "./PlanPaymentForm";
 import { Text } from "../primitives/Text";
 
 /* ── Shared sub-page header ─────────────────────────────────────────── */
@@ -199,8 +199,9 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
         // Switch (upgrade / downgrade / lateral): scheduled for next renewal,
         // no immediate charge. Plan card now shows a "→ Switching to X on
         // <date>" hint sourced from sub.pendingPlanCode.
+        const matchedPlan = PLANS.find((p) => p.id === planCode);
         const newPlanName =
-          PLANS.find((p) => p.id === planCode)?.name
+          (matchedPlan ? planName(matchedPlan.id) : null)
           ?? (planCode.charAt(0).toUpperCase() + planCode.slice(1));
         setActionToast(
           `Switch scheduled — ${newPlanName} takes effect at next renewal`,
@@ -281,7 +282,7 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
 
   const isFree = !sub || sub.planCode == null || sub.planCode === "free";
   const currentPlanInfo = PLANS.find((p) => p.id === sub?.planCode);
-  const currentFeatures = currentPlanInfo?.perks ?? [];
+  const currentFeatures = currentPlanInfo ? planPerks(currentPlanInfo.id) : [];
   const priceLine = (() => {
     if (isFree) return "$5 / month budget · upgrade for more";
     const head = currentPlanInfo?.price ? `$${currentPlanInfo.price} / mo` : "—";
@@ -292,7 +293,7 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
   })();
   const otherPlansLabel = (() => {
     if (isFree) return "Basic / Pro / Max";
-    const others = PLANS.filter((p) => p.id !== sub?.planCode).map((p) => p.name);
+    const others = PLANS.filter((p) => p.id !== sub?.planCode).map((p) => planName(p.id));
     return others.length > 0 ? others.join(" / ") : "—";
   })();
 
@@ -338,8 +339,12 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
                 {sub.pendingPlanCode && (
                   <Text variant="caption" weight="medium" className="block text-[hsl(292_78%_63%)] mt-0.5">
                     → Switching to{" "}
-                    {PLANS.find((p) => p.id === sub.pendingPlanCode)?.name
-                      ?? (sub.pendingPlanCode.charAt(0).toUpperCase() + sub.pendingPlanCode.slice(1))}
+                    {(() => {
+                      const pending = PLANS.find((p) => p.id === sub.pendingPlanCode);
+                      return pending
+                        ? planName(pending.id)
+                        : sub.pendingPlanCode.charAt(0).toUpperCase() + sub.pendingPlanCode.slice(1);
+                    })()}
                     {periodEnd ? ` on ${periodEnd}` : ""}
                   </Text>
                 )}
@@ -347,7 +352,7 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
             </div>
             {currentFeatures.length > 0 && (
               <div className="grid grid-cols-2 gap-x-3 gap-y-1 pt-1">
-                {currentFeatures.map((f) => (
+                {currentFeatures.map((f: string) => (
                   <div key={f} className="flex items-center gap-1.5">
                     <Check size={11} strokeWidth={2.5} className="text-[hsl(304_75%_63%)] flex-shrink-0" />
                     <Text variant="caption" className="text-foreground/70 truncate">{f}</Text>
@@ -436,7 +441,7 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
                     style={isCurrent ? { borderColor: "hsla(292 78% 63% / 0.45)" } : undefined}
                   >
                     <div className="flex items-baseline gap-2 mb-1">
-                      <Text variant="bodySm" weight="semibold" className="text-foreground">{p.name}</Text>
+                      <Text variant="bodySm" weight="semibold" className="text-foreground">{planName(p.id)}</Text>
                       <Text variant="label" className="text-foreground/80">${p.price}/mo</Text>
                       {isCurrent && (
                         <Text variant="micro" weight="bold" className="tracking-wider uppercase px-1.5 py-0.5 rounded-md bg-[hsl(292_78%_63%/0.12)] text-[hsl(292_78%_63%)] ml-auto">
@@ -447,7 +452,7 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
                         <Text variant="micro" className="text-foreground/55 ml-auto">Loading…</Text>
                       )}
                     </div>
-                    <Text variant="caption" className="block text-foreground/55">{p.credits}</Text>
+                    <Text variant="caption" className="block text-foreground/55">{planCredits(p.id)}</Text>
                   </button>
                 );
               })}

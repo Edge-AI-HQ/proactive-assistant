@@ -56,6 +56,7 @@ async def post_run_dream(
         run_id=run_id,
         run_jwt=run_jwt,
         model=body.get("model"),
+        output_language=str(body.get("generation_language") or "en"),
     )
     return summary
 
@@ -79,6 +80,7 @@ async def post_run_evolve(
         connector=body.get("connector", "unknown"),
         raw_sources=body.get("raw_sources"),
         model=body.get("model"),
+        output_language=str(body.get("generation_language") or "en"),
     )
     return summary
 
@@ -110,5 +112,6 @@ async def post_run_crystallize(
         run_id=run_id,
         session_key=session_key,
         model=body.get("model"),
+        output_language=str(body.get("generation_language") or "en"),
     )
     return summary

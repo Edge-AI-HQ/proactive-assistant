@@ -2,6 +2,7 @@ import { motion } from "framer-motion";
 import { Loader2, Radio } from "lucide-react";
 import {
   CATEGORIES,
+  categoryLabel,
   Sphere3DCards,
   type Intent,
   type WeatherData, Text,
@@ -126,7 +127,7 @@ export default function ZebraNow({
               category: c.category,
               title: c.title,
               icon: (CATEGORIES[c.category] ?? CATEGORIES.life).icon,
-              categoryLabel: (CATEGORIES[c.category] ?? CATEGORIES.life).label,
+              categoryLabel: categoryLabel(c.category),
               complexity: c.complexity,
               status: c.status,
             }))}

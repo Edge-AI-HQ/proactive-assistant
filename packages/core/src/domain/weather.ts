@@ -13,24 +13,41 @@ export type WeatherIconKey =
   | "snow"
   | "lightning";
 
+/** 语义文案键(common.json `weather.*`)。各端绑 i18n。 */
+export type WeatherConditionKey =
+  | "clear"
+  | "cloudy"
+  | "foggy"
+  | "drizzle"
+  | "rainy"
+  | "snowy"
+  | "showers"
+  | "stormy";
+
 export interface WeatherSnapshot {
   temp: number;
   label: string;
   iconKey: WeatherIconKey;
+  /** i18n 键(common.json weather.*)。各端绑 i18n;`label` 是英文回落。 */
+  conditionKey: WeatherConditionKey;
   city?: string;
 }
 
-/** WMO weather code → 展示文案 + 语义图标键。各端把 iconKey 绑成自己的图标。 */
-export function weatherMeta(code: number): { label: string; iconKey: WeatherIconKey } {
-  if (code === 0) return { label: "Clear", iconKey: "sun" };
-  if (code <= 3) return { label: "Cloudy", iconKey: "cloud" };
-  if (code <= 48) return { label: "Foggy", iconKey: "fog" };
-  if (code <= 57) return { label: "Drizzle", iconKey: "drizzle" };
-  if (code <= 67) return { label: "Rainy", iconKey: "rain" };
-  if (code <= 77) return { label: "Snowy", iconKey: "snow" };
-  if (code <= 82) return { label: "Showers", iconKey: "rain" };
-  if (code >= 95) return { label: "Stormy", iconKey: "lightning" };
-  return { label: "Cloudy", iconKey: "cloud" };
+/** WMO weather code → 展示文案 + 语义图标键 + 语义文案键。各端绑各自图标 / i18n。 */
+export function weatherMeta(code: number): {
+  label: string;
+  iconKey: WeatherIconKey;
+  conditionKey: WeatherConditionKey;
+} {
+  if (code === 0) return { label: "Clear", iconKey: "sun", conditionKey: "clear" };
+  if (code <= 3) return { label: "Cloudy", iconKey: "cloud", conditionKey: "cloudy" };
+  if (code <= 48) return { label: "Foggy", iconKey: "fog", conditionKey: "foggy" };
+  if (code <= 57) return { label: "Drizzle", iconKey: "drizzle", conditionKey: "drizzle" };
+  if (code <= 67) return { label: "Rainy", iconKey: "rain", conditionKey: "rainy" };
+  if (code <= 77) return { label: "Snowy", iconKey: "snow", conditionKey: "snowy" };
+  if (code <= 82) return { label: "Showers", iconKey: "rain", conditionKey: "showers" };
+  if (code >= 95) return { label: "Stormy", iconKey: "lightning", conditionKey: "stormy" };
+  return { label: "Cloudy", iconKey: "cloud", conditionKey: "cloudy" };
 }
 
 interface GeoLookup {
@@ -121,7 +138,13 @@ export async function fetchWeather(): Promise<WeatherSnapshot | null> {
     const temp = Math.round(data.current.temperature_2m);
     const code: number = data.current.weather_code;
     const meta = weatherMeta(code);
-    return { temp, label: meta.label, iconKey: meta.iconKey, city: geo.city };
+    return {
+      temp,
+      label: meta.label,
+      iconKey: meta.iconKey,
+      conditionKey: meta.conditionKey,
+      city: geo.city,
+    };
   } catch (err) {
     console.warn("[weather] open-meteo fetch failed:", err);
     return null;

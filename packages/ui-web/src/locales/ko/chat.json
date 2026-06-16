@@ -1,0 +1,196 @@
+{
+  "toolVerbs": {
+    "ran": "실행",
+    "ranCommand": "명령어 실행",
+    "executed": "실행",
+    "ranPython": "Python 실행",
+    "browsed": "웹 탐색",
+    "searchedWeb": "웹 검색",
+    "readPages": "페이지 읽음",
+    "searchedNews": "뉴스 검색",
+    "searchedMemory": "메모리 검색",
+    "searchedX": "X 검색",
+    "fetched": "가져옴",
+    "read": "읽음",
+    "wrote": "작성",
+    "edited": "편집",
+    "patched": "수정",
+    "messaged": "메시지 전송",
+    "readImage": "이미지 읽음",
+    "generatedImage": "이미지 생성",
+    "generatedVideo": "동영상 생성",
+    "generatedMusic": "음악 생성",
+    "spoke": "음성 출력",
+    "drew": "그리기",
+    "scheduled": "예약",
+    "checkedSession": "세션 확인",
+    "listedSessions": "세션 목록 확인",
+    "loadedHistory": "기록 불러옴",
+    "sent": "전송",
+    "spawnedAgent": "에이전트 생성",
+    "delegatedToAgent": "에이전트에 위임",
+    "delegated": "위임",
+    "updatedPlan": "계획 업데이트",
+    "messagedYou": "내게 메시지 전송",
+    "searchedGmail": "Gmail 검색",
+    "draftedEmail": "이메일 초안 작성",
+    "usedGmail": "Gmail 사용",
+    "readCalendar": "캘린더 확인",
+    "updatedCalendar": "캘린더 업데이트",
+    "usedCalendar": "캘린더 사용",
+    "searchedNotion": "Notion 검색",
+    "sentOnSlack": "Slack 메시지 전송",
+    "searchedSlack": "Slack 검색",
+    "searchedDrive": "Drive 검색"
+  },
+  "landing": {
+    "heading": "무슨 생각을 하고 계세요?",
+    "subheading": "무엇이든 물어보세요 — 당신의 맥락은 이미 알고 있어요.",
+    "suggestions": {
+      "focusToday": "오늘은 무엇에 집중해야 할까요?",
+      "summarizeWeek": "이번 주 지금까지를 요약해 주세요",
+      "onMyMind": "요즘 나는 무슨 생각을 하고 있나요?"
+    }
+  },
+  "composer": {
+    "placeholder": "PIN AI에게 메시지 보내기…",
+    "voiceInput": "음성 입력",
+    "send": "보내기",
+    "stop": "중지",
+    "dismissKeyboard": "키보드 닫기",
+    "cancelRecording": "녹음 취소",
+    "useTranscript": "텍스트 사용"
+  },
+  "actionBar": {
+    "copyMessage": "메시지 복사",
+    "copy": "복사",
+    "goodResponse": "좋은 응답",
+    "badResponse": "아쉬운 응답",
+    "regenerateResponse": "응답 다시 생성",
+    "regenerate": "다시 생성"
+  },
+  "cardFeedback": {
+    "helpfulPrompt": "도움이 됐나요?",
+    "helpful": "도움됨",
+    "notHelpful": "도움 안 됨",
+    "sent": "전송됨",
+    "comment": "의견",
+    "commentPlaceholder": "이 카드에 대한 피드백 (에이전트에게는 전송되지 않아요)…",
+    "sendFeedback": "피드백 보내기"
+  },
+  "userEntry": {
+    "notSent": "전송 안 됨",
+    "editMessage": "메시지 수정"
+  },
+  "notify": {
+    "label": "알림 전송"
+  },
+  "transcript": {
+    "cardEmptyState": "이 카드와 관련해 에이전트에게 작업을 요청하거나 메시지를 보내 보세요.",
+    "scrollToLatest": "최신 메시지로 이동"
+  },
+  "header": {
+    "back": "뒤로",
+    "debug": "디버그",
+    "proactive": "프로액티브",
+    "proactiveToggle": "프로액티브 에이전트 켜기/끄기",
+    "dismiss": "닫기"
+  },
+  "workGroup": {
+    "subtasksRunning_other": "하위 작업 {{count}}개 실행 중",
+    "runningSubtask": "하위 작업 실행 중",
+    "working": "작업 중…",
+    "ranSubtasks_other": "하위 작업 {{count}}개 실행",
+    "usedTools_other": "도구 {{count}}개 사용",
+    "thought": "생각",
+    "steps_other": "{{count}}단계"
+  },
+  "toolNode": {
+    "results_other": "결과 {{count}}개"
+  },
+  "taskCard": {
+    "subtask": "하위 작업",
+    "toolCount_other": "도구 {{count}}개",
+    "showMore": "더 보기 ({{count}})",
+    "noActivity": "아직 도구 활동이 없어요."
+  },
+  "todoPanel": {
+    "plan": "계획",
+    "planDone": "계획 완료",
+    "progress": "{{completed}}/{{total}} 완료",
+    "collapsePlan": "계획 접기",
+    "expandPlan": "계획 펼치기",
+    "closePlan": "계획 닫기"
+  },
+  "reasoning": {
+    "thoughtForSeconds": "{{seconds}}초 동안 생각함",
+    "thoughtProcess": "생각 과정"
+  },
+  "hitl": {
+    "needsApproval": "승인이 필요해요",
+    "rejectReasonPlaceholder": "선택 사항: 이유를 알려 주세요 (도구를 실행하지 않고 계속 진행해요)",
+    "back": "뒤로",
+    "reject": "거절",
+    "approve": "승인",
+    "resolvedEarlier": "이미 처리됨"
+  },
+  "proposeAction": {
+    "needsInput": "입력이 필요해요",
+    "replySent": "답장 전송됨",
+    "typeOwnReplyPlaceholder": "또는 직접 답장을 입력하세요…",
+    "typeReplyPlaceholder": "답장을 입력하세요…",
+    "sent": "전송됨",
+    "sending": "전송 중…",
+    "continue": "계속"
+  },
+  "artifact": {
+    "emailDraft": "이메일 초안",
+    "notes": "메모",
+    "messageDraft": "메시지 초안",
+    "document": "문서",
+    "draft": "초안",
+    "failed": "실패",
+    "open": "열기 ↗",
+    "verbSent": "전송됨",
+    "verbPosted": "게시됨",
+    "verbCreated": "생성됨"
+  },
+  "cardContext": {
+    "context": "컨텍스트",
+    "viewDetails": "카드 상세 보기",
+    "more": "+{{count}}개 더",
+    "messagePlaceholder": "이 카드에 대해 메시지 보내기…",
+    "drawerDescription": "카드 상세 화면",
+    "quickApprove": "빠른 승인",
+    "quickApproveHint": "위험도가 낮은 작업 — 보통 그대로 승인해도 안전해요"
+  },
+  "categories": {
+    "growth": "성장",
+    "work": "업무",
+    "finance": "금융",
+    "health": "건강",
+    "learn": "학습",
+    "life": "생활"
+  },
+  "mainChat": {
+    "cardFeedbackPlaceholder": "이 카드에서 바꾸고 싶은 점을 PIN AI에게 알려 주세요…",
+    "feedbackOnCard": "이 카드에 대한 피드백"
+  },
+  "codeBlock": {
+    "copy": "복사",
+    "copied": "복사됨"
+  },
+  "queued": {
+    "badge": "대기 중",
+    "regionLabel": "대기 중인 메시지",
+    "save": "저장",
+    "saveAria": "대기 중인 메시지 저장",
+    "cancelEditAria": "대기 편집 취소",
+    "edit": "편집",
+    "editAria": "대기 중인 메시지 편집",
+    "sendNow": "지금 보내기",
+    "delete": "삭제",
+    "deleteAria": "대기 중인 메시지 삭제",
+    "queueMessage": "메시지 대기열에 추가"
+  }
+}

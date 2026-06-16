@@ -8,6 +8,19 @@
 
 export const PIN_AI_UI_WEB = "@pin-ai/ui-web";
 
+// ── i18n：共享 UI 国际化（react-i18next）。import 本包即初始化 i18next（en
+//    静态打包为回落层，其余 7 语言懒加载），与 transport-bootstrap 同样的
+//    「模块加载即配置」side effect。语言真源 = settings.generationLanguage，
+//    经 useUiLanguageSync 驱动；同一设置在后端 lang_clause 控制 LLM 输出语言。
+import "./i18n";
+export { default as i18n, loadAndSwitchLanguage } from "./i18n";
+export {
+  detectDeviceLanguage,
+  matchSupportedLanguage,
+  SUPPORTED_UI_LANGUAGES,
+} from "./i18n/languages";
+export { useUiLanguageSync } from "./i18n/use-ui-language-sync";
+
 // ── primitives：设计系统基础组件（契约在 @pin-ai/ui-kit，此为 web 实现） ──
 export { Text } from "./primitives/Text";
 export { Button } from "./primitives/Button";
@@ -68,6 +81,7 @@ export {
   realIntentToChatCard,
   realCardToLovableIntent,
   CATEGORIES,
+  categoryLabel,
   type Intent,
   type CardStatus,
   type DetailData,

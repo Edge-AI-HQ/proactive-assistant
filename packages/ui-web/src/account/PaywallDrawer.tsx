@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Lock as LockIcon } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import {
   Drawer,
   DrawerContent,
@@ -26,6 +27,7 @@ interface PaywallDrawerProps {
  * leaves the drawer); only the open trigger (`card`) is owned by the parent.
  */
 export default function PaywallDrawer({ card, onClose }: PaywallDrawerProps) {
+  const { t } = useTranslation(["account", "common"]);
   const [paywallPlan, setPaywallPlan] = useState<PlanId>("pro");
   const [paywallPay, setPaywallPay] = useState<PayMethod | null>("apple");
   const [paywallCard_, setPaywallCardInfo] = useState<CardInfo>({ number: "", expiry: "", cvc: "" });
@@ -47,8 +49,8 @@ export default function PaywallDrawer({ card, onClose }: PaywallDrawerProps) {
         overlayClassName="!bg-foreground/10 backdrop-blur-[2px]"
       >
         <DrawerHeader className="sr-only">
-          <DrawerTitle>Choose your plan</DrawerTitle>
-          <DrawerDescription>Choose a plan and payment method to approve this task</DrawerDescription>
+          <DrawerTitle>{t("plans.choosePlan")}</DrawerTitle>
+          <DrawerDescription>{t("paywall.drawerDescription")}</DrawerDescription>
         </DrawerHeader>
         <div className="flex flex-col" style={{ maxHeight: "84vh" }}>
           <div className="px-5 pt-3 pb-24 overflow-y-auto flex-1">
@@ -58,10 +60,10 @@ export default function PaywallDrawer({ card, onClose }: PaywallDrawerProps) {
                 <LockIcon size={18} strokeWidth={2.5} className="text-white" />
               </div>
               <Text variant="micro" weight="bold" className="block uppercase tracking-[0.2em] text-foreground/50 mb-1.5">
-                Subscription required
+                {t("paywall.subscriptionRequired")}
               </Text>
               <h3 className="text-display text-heading leading-tight text-foreground font-semibold max-w-[20rem] mx-auto">
-                Pick a plan to approve “{card?.title}”
+                {t("paywall.pickPlanFor", { title: card?.title })}
               </h3>
             </div>
 
@@ -80,7 +82,7 @@ export default function PaywallDrawer({ card, onClose }: PaywallDrawerProps) {
               onClick={onClose}
               className="px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-bodySm font-medium text-foreground/55"
             >
-              Not now
+              {t("paywall.notNow")}
             </button>
             <button
               disabled={paywallPending}
@@ -100,7 +102,7 @@ export default function PaywallDrawer({ card, onClose }: PaywallDrawerProps) {
                   }
                 } catch (e) {
                   setPaywallError(
-                    e instanceof Error ? e.message : "checkout failed",
+                    e instanceof Error ? e.message : t("paywall.checkoutFailed"),
                   );
                 } finally {
                   setPaywallPending(false);
@@ -110,8 +112,8 @@ export default function PaywallDrawer({ card, onClose }: PaywallDrawerProps) {
               style={{ background: "linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(330,80%,65%) 100%)" }}
             >
               {paywallPending
-                ? "Loading…"
-                : `Subscribe · $${PLANS.find((p) => p.id === paywallPlan)?.price}/mo`}
+                ? t("common:status.loading")
+                : t("paywall.subscribe", { price: PLANS.find((p) => p.id === paywallPlan)?.price })}
             </button>
           </div>
         </div>

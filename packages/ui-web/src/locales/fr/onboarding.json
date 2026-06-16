@@ -1,0 +1,55 @@
+{
+  "stepOf": "Étape {{step}} sur {{total}}",
+  "skip": "Passer",
+  "next": "Suivant",
+  "back": "Retour",
+  "genericError": "Une erreur est survenue. Veuillez réessayer.",
+  "step1": {
+    "title": "Configuration d'Ambient",
+    "subtitleNative": "Activez les sources ambiantes et enregistrez un court échantillon de votre voix. Vous pourrez modifier les deux à tout moment dans le Centre de contrôle.",
+    "subtitleWeb": "Les capteurs ambiants fonctionnent dans l'app iOS. Vous pouvez passer cette étape ici et terminer la configuration d'Ambient plus tard depuis votre téléphone."
+  },
+  "step2": {
+    "title": "Modèle d'IA sur l'appareil",
+    "subtitleNative": "Téléchargez Gemma 2B pour qu'Ambient puisse résumer votre contexte local en toute confidentialité, directement sur cet appareil.",
+    "subtitleWeb": "Les résumés locaux d'Ambient sont générés dans l'app iOS. Vous pouvez passer cette étape ici et télécharger le modèle depuis votre téléphone.",
+    "webPlaceholder": "La configuration de Gemma 2B se fait dans l'app native. Continuez ici et terminez la configuration plus tard depuis Ambient sur votre téléphone."
+  },
+  "step3": {
+    "title": "Connectez vos données",
+    "subtitle": "Choisissez les apps que PIN AI peut consulter. Vous pourrez en connecter d'autres (ou les déconnecter) à tout moment depuis le Centre de contrôle.",
+    "subtitleConnect": "Choisissez les apps que PIN AI peut consulter. Nous résumerons la première extraction pendant que vous poursuivez la configuration."
+  },
+  "insightWait": {
+    "eyebrow": "Aperçu du connecteur",
+    "heading": "PIN AI apprend à connaître votre contexte de travail",
+    "description": "Nous transformons votre première extraction de connecteur en un aperçu de profil concis.",
+    "firstDataPull": "Première extraction de données",
+    "live": "En direct",
+    "footer": "Vous examinerez cet aperçu avant d'entrer dans PIN AI. La page de résultats remplacera cet état dès qu'elle sera prête.",
+    "continue": "Entrer dans PIN AI",
+    "steps": {
+      "reading": {
+        "label": "Lecture des éléments récents",
+        "detail": "Extraction des enregistrements de connecteur les plus récents dans un petit ensemble de travail."
+      },
+      "signals": {
+        "label": "Recherche de signaux utiles",
+        "detail": "Recherche de schémas de travail, collaborateurs, outils et style d'écriture."
+      },
+      "composing": {
+        "label": "Composition de votre aperçu",
+        "detail": "Transformation de la première extraction en un court profil que vous pouvez examiner."
+      }
+    }
+  },
+  "model": {
+    "recommendedBadge": "Recommandé",
+    "description": "Téléchargez Gemma 2B pour transformer vos signaux de mouvement, position, voix, santé et son en résumés locaux privés.",
+    "downloading": "Téléchargement {{percent}}",
+    "use": "Utiliser Gemma 2B",
+    "download": "Télécharger Gemma 2B",
+    "skipNote": "Vous pouvez passer cette étape et télécharger le modèle plus tard depuis Ambient. Sans LLM sur l'appareil, Ambient peut collecter des événements mais pas créer de cartes de résumé locales.",
+    "verificationFailed": "Échec de la vérification du modèle."
+  }
+}

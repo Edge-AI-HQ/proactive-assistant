@@ -27,7 +27,7 @@ from typing import Any
 from ..harness.factory import build_agent
 from ..harness.llm import make_chat_model
 from ..tools.code_mode.sandbox import create_oneshot_sandbox, delete_sandbox_now
-from .prompts import CODE_MODE_GUIDANCE, GROUNDING_POLICY, SANDBOX_PREAMBLE
+from .prompts import CODE_MODE_GUIDANCE, GROUNDING_POLICY, SANDBOX_PREAMBLE, lang_clause
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +109,17 @@ layers; each has a different durability and editing rule.
 """
 
 
+def _evolve_system_prompt(output_language: str) -> str:
+    return (
+        f"{_EVOLVE_SYSTEM_PROMPT}\n"
+        "<output_language>\n"
+        f"{lang_clause(output_language)} — signal titles and summaries, memory "
+        "bodies, profile facts, and goal titles are user-visible. Keys, slugs, "
+        "and JSON field names stay in English.\n"
+        "</output_language>"
+    )
+
+
 async def run_evolve(
     *,
     virtual_key: str,
@@ -118,6 +129,7 @@ async def run_evolve(
     run_jwt: str | None = None,
     raw_sources: Any | None = None,
     model: str | None = None,
+    output_language: str = "en",
 ) -> dict[str, Any]:
     # run_jwt is forwarded into create_oneshot_sandbox so it can mint a
     # phantom token for the sandbox; without it sandbox-side SDK calls
@@ -140,7 +152,7 @@ async def run_evolve(
                 model=model_name,
                 enable_thinking=False,
             ),
-            system_prompt=_EVOLVE_SYSTEM_PROMPT,
+            system_prompt=_evolve_system_prompt(output_language),
             backend=backend,
         )
         result: dict[str, Any] = await agent.ainvoke(

@@ -5,6 +5,7 @@
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { Check, Copy } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { Text } from "../../primitives/Text";
 
@@ -15,6 +16,7 @@ interface CodeBlockProps {
 }
 
 export default function CodeBlock({ language, rawText, children }: CodeBlockProps) {
+  const { t } = useTranslation("chat");
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -50,12 +52,12 @@ export default function CodeBlock({ language, rawText, children }: CodeBlockProp
           {copied ? (
             <>
               <Check size={11} strokeWidth={2} className="text-emerald-500" />
-              <span>Copied</span>
+              <span>{t("codeBlock.copied")}</span>
             </>
           ) : (
             <>
               <Copy size={11} strokeWidth={1.8} />
-              <span>Copy</span>
+              <span>{t("codeBlock.copy")}</span>
             </>
           )}
         </button>

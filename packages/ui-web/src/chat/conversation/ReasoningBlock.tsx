@@ -25,6 +25,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronDown } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import MarkdownContent from "./MarkdownContent";
 
 interface Props {
@@ -42,6 +43,7 @@ export default function ReasoningBlock({
   shimmer = false,
   appending = false,
 }: Props) {
+  const { t } = useTranslation(["chat", "common"]);
   const [open, setOpen] = useState(false);
   const startedAtRef = useRef<number | null>(null);
   const [durationSec, setDurationSec] = useState<number | null>(null);
@@ -62,10 +64,10 @@ export default function ReasoningBlock({
 
   const canExpand = !!text;
   const label = appending
-    ? "Thinking…"
+    ? t("common:status.thinking")
     : durationSec !== null
-      ? `Thought for ${durationSec}s`
-      : "Thought process";
+      ? t("reasoning.thoughtForSeconds", { seconds: durationSec })
+      : t("reasoning.thoughtProcess");
 
   return (
     <div className="mb-2 select-text">

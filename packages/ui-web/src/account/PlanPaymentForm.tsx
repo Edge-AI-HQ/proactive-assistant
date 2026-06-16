@@ -3,6 +3,8 @@ import {
   Check, Apple, CreditCard, Zap, Crown, Star,
   type LucideIcon,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import i18n from "../i18n";
 import { Text } from "../primitives/Text";
 
 export type PlanId = "basic" | "pro" | "max";
@@ -11,34 +13,36 @@ export interface CardInfo { number: string; expiry: string; cvc: string }
 
 interface Plan {
   id: PlanId;
-  name: string;
   price: number;
-  credits: string;
   localModel: string;
   cloudModel: string;
-  perks: string[];
   icon: LucideIcon;
   highlight?: boolean;
 }
 
-// Display credits per plan. Numbers match pai_billing_plans.monthly_refresh_credits
+// Logic data only — display copy (name / credits / perks) lives in
+// locales/en/account.json under `plans.<id>.*` (see planName / planCredits /
+// planPerks). Credits numbers there match pai_billing_plans.monthly_refresh_credits
 // (100 credits = $1 USD LiteLLM budget). Updated 2026-05-25 to align with
 // migration 058 (paid tiers shifted to 1:1 with price: $39 → 3900, $99 → 9900,
 // $199 → 19900).
 export const PLANS: Plan[] = [
-  { id: "basic", name: "Basic", price: 39, credits: "3,900 credits / mo",
-    localModel: "Gemma 2B", cloudModel: "Gemini Flash",
-    perks: ["Daily card feed", "Connect 3 apps", "Email + Calendar"],
-    icon: Star },
-  { id: "pro",   name: "Pro",   price: 99, credits: "9,900 credits / mo",
-    localModel: "Llama 3 8B", cloudModel: "Claude Sonnet",
-    perks: ["Everything in Basic", "Connect unlimited apps", "Voice + Ambient mode", "Priority execution"],
-    icon: Zap, highlight: true },
-  { id: "max",   name: "Max",   price: 199, credits: "19,900 credits / mo",
-    localModel: "Llama 3 70B", cloudModel: "Claude Opus / GPT-5",
-    perks: ["Everything in Pro", "Custom personas", "Team sharing", "Early access models"],
-    icon: Crown },
+  { id: "basic", price: 39, localModel: "Gemma 2B", cloudModel: "Gemini Flash", icon: Star },
+  { id: "pro",   price: 99, localModel: "Llama 3 8B", cloudModel: "Claude Sonnet", icon: Zap, highlight: true },
+  { id: "max",   price: 199, localModel: "Llama 3 70B", cloudModel: "Claude Opus / GPT-5", icon: Crown },
 ];
+
+export function planName(id: PlanId): string {
+  return i18n.t(`account:plans.${id}.name`);
+}
+
+export function planCredits(id: PlanId): string {
+  return i18n.t(`account:plans.${id}.credits`);
+}
+
+export function planPerks(id: PlanId): string[] {
+  return i18n.t(`account:plans.${id}.perks`, { returnObjects: true }) as string[]; // returnObjects 返回 i18next $SpecialObject,数组形态需断言
+}
 
 export function isPayValid(payMethod: PayMethod | null, cardInfo: CardInfo) {
   if (!payMethod) return false;
@@ -57,10 +61,11 @@ export function PlanPaymentForm({
   payMethod: PayMethod | null; setPayMethod: (m: PayMethod) => void;
   cardInfo: CardInfo; setCardInfo: (c: CardInfo) => void;
 }) {
+  const { t } = useTranslation("account");
   return (
     <div>
       <Text variant="caption" weight="semibold" className="block uppercase tracking-wider text-foreground/45 mb-2 px-1">
-        Choose your plan
+        {t("plans.choosePlan")}
       </Text>
 
       <div className="space-y-2.5">
@@ -87,7 +92,7 @@ export function PlanPaymentForm({
                   className="absolute top-3 right-3 text-micro px-2 py-0.5 rounded-full font-bold uppercase tracking-wider"
                   style={{ background: "hsl(var(--primary))", color: "white" }}
                 >
-                  Most popular
+                  {t("plans.mostPopular")}
                 </span>
               )}
               <div className="flex items-start gap-3">
@@ -102,15 +107,15 @@ export function PlanPaymentForm({
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-baseline gap-1.5">
-                    <Text variant="body" weight="bold" className="text-foreground">{p.name}</Text>
+                    <Text variant="body" weight="bold" className="text-foreground">{planName(p.id)}</Text>
                     <Text variant="bodySm" weight="semibold" className="text-foreground">${p.price}</Text>
-                    <Text variant="caption" className="text-foreground/50">/mo</Text>
+                    <Text variant="caption" className="text-foreground/50">{t("plans.perMonth")}</Text>
                   </div>
-                  <Text variant="label" className="block text-foreground/60 mt-0.5">{p.credits}</Text>
+                  <Text variant="label" className="block text-foreground/60 mt-0.5">{planCredits(p.id)}</Text>
 
                   <div className="mt-2 flex flex-wrap gap-1">
-                    <ModelChip label={`Local · ${p.localModel}`} />
-                    <ModelChip label={`Cloud · ${p.cloudModel}`} />
+                    <ModelChip label={t("plans.localChip", { model: p.localModel })} />
+                    <ModelChip label={t("plans.cloudChip", { model: p.cloudModel })} />
                   </div>
 
                   {isSel && (
@@ -118,7 +123,7 @@ export function PlanPaymentForm({
                       initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }}
                       className="mt-3 space-y-1 overflow-hidden"
                     >
-                      {p.perks.map((perk) => (
+                      {planPerks(p.id).map((perk) => (
                         <li key={perk} className="flex items-center gap-1.5 text-label text-foreground/75">
                           <Check size={12} className="text-primary shrink-0" strokeWidth={3} />
                           {perk}
@@ -135,13 +140,13 @@ export function PlanPaymentForm({
 
       <div className="mt-5">
         <Text variant="caption" className="block text-foreground/45 mb-2 px-1">
-          Choose how to pay. You'll be charged today.
+          {t("plans.choosePay")}
         </Text>
         <div className="space-y-2">
           <PayButton active={payMethod === "apple"} onClick={() => setPayMethod("apple")}
-            icon={<Apple size={18} />} label="Apple Pay" sub="Recommended · one tap" />
+            icon={<Apple size={18} />} label="Apple Pay" sub={t("plans.applePaySub")} />
           <PayButton active={payMethod === "card"} onClick={() => setPayMethod("card")}
-            icon={<CreditCard size={18} />} label="Credit or debit card" sub="Visa · Mastercard · Amex" />
+            icon={<CreditCard size={18} />} label={t("plans.cardLabel")} sub="Visa · Mastercard · Amex" />
         </div>
 
         <AnimatePresence initial={false}>
@@ -165,7 +170,7 @@ export function PlanPaymentForm({
               >
                 <input
                   inputMode="numeric" autoComplete="cc-number" maxLength={19}
-                  placeholder="Card number" value={cardInfo.number}
+                  placeholder={t("plans.cardNumber")} value={cardInfo.number}
                   onChange={(e) => {
                     const digits = e.target.value.replace(/\D/g, "").slice(0, 16);
                     const formatted = digits.replace(/(.{4})/g, "$1 ").trim();
@@ -177,7 +182,7 @@ export function PlanPaymentForm({
                 <div className="grid grid-cols-2 gap-2">
                   <input
                     inputMode="numeric" autoComplete="cc-exp" maxLength={5}
-                    placeholder="MM / YY" value={cardInfo.expiry}
+                    placeholder={t("plans.cardExpiry")} value={cardInfo.expiry}
                     onChange={(e) => {
                       const d = e.target.value.replace(/\D/g, "").slice(0, 4);
                       const f = d.length > 2 ? `${d.slice(0, 2)} / ${d.slice(2)}` : d;

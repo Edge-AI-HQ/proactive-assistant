@@ -1,4 +1,5 @@
 import { useCallback, useRef, type PointerEvent, type TouchEvent } from "react";
+import { useTranslation } from "react-i18next";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   X, Zap, ListChecks, Settings, Radio, Plug, Target,
@@ -7,14 +8,14 @@ import { isMainMenuSwipeRight, type TouchPoint } from "@/components/chat/main-ch
 import type { MenuId } from "@/components/app/useAppNavigation";
 import type { ChatCard } from "@/components/chat/ChatDetailView";
 
-/* ── Hamburger side menu items ── */
+/* ── Hamburger side menu items (labelKey → common:menu.*, rendered via t) ── */
 const MENU_ITEMS = [
-  { id: "now", label: "NOW", icon: Zap },
-  { id: "ambient", label: "AMBIENT", icon: Radio },
-  { id: "chat", label: "TASKS", icon: ListChecks },
-  { id: "connect", label: "CONNECT", icon: Plug },
-  { id: "profile", label: "PROFILE", icon: Target },
-  { id: "account", label: "SETTING", icon: Settings },
+  { id: "now", labelKey: "menu.now", icon: Zap },
+  { id: "ambient", labelKey: "menu.ambient", icon: Radio },
+  { id: "chat", labelKey: "menu.tasks", icon: ListChecks },
+  { id: "connect", labelKey: "menu.connect", icon: Plug },
+  { id: "profile", labelKey: "menu.profile", icon: Target },
+  { id: "account", labelKey: "menu.setting", icon: Settings },
 ] as const;
 
 interface SideMenuProps {
@@ -43,6 +44,7 @@ export default function SideMenu({
   onClose,
   onNavigate,
 }: SideMenuProps) {
+  const { t } = useTranslation();
   const menuCloseSwipeStartRef = useRef<TouchPoint | null>(null);
   const closeMenuFromSwipe = useCallback((
     end: TouchPoint,
@@ -163,7 +165,7 @@ export default function SideMenu({
                     >
                       <Icon size={18} strokeWidth={isActive ? 2 : 1.5} />
                       <span className={`text-sm tracking-wider ${isActive ? "font-semibold" : "font-medium"}`}>
-                        {item.label}
+                        {t(item.labelKey)}
                       </span>
                     </button>
                   );

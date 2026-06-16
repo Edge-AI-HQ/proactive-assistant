@@ -1,0 +1,103 @@
+{
+  "category": {
+    "growth": "Growth",
+    "work": "Work",
+    "finance": "Finance",
+    "health": "Health",
+    "learn": "Learn",
+    "life": "Life"
+  },
+  "tag": {
+    "urgent": "Urgent"
+  },
+  "scheduledSource": "Scheduled · {{label}}",
+  "score": {
+    "confidence": "Confidence",
+    "importance": "Importance",
+    "urgency": "Urgency"
+  },
+  "sourceApp": {
+    "calendar": "Calendar",
+    "drive": "Drive",
+    "docs": "Docs",
+    "sheets": "Sheets",
+    "web": "Web",
+    "memory": "Memory",
+    "phone": "Phone",
+    "profile": "Profile",
+    "goal": "Goal",
+    "preference": "Preference"
+  },
+  "reasoningStep": {
+    "observed": "Observed",
+    "crossReferenced": "Cross-referenced",
+    "patternMatched": "Pattern matched",
+    "flagged": "Flagged",
+    "decided": "Decided"
+  },
+  "drawer": {
+    "srTitleFallback": "Card Detail",
+    "srDescription": "Card detail view",
+    "quickApprove": "Quick approve",
+    "quickApproveHint": "Low-risk task — usually safe to approve as-is",
+    "dismiss": "Dismiss",
+    "chat": "Chat",
+    "approve": "Approve",
+    "opening": "Opening..."
+  },
+  "detail": {
+    "howReasoned": "How I reasoned",
+    "stepCount_one": "{{count}} step",
+    "stepCount_other": "{{count}} steps",
+    "whyNow": "Why now",
+    "executionPlan": "Execution Plan",
+    "generatedDrafts_one": "Generated draft",
+    "generatedDrafts_other": "Generated drafts",
+    "approvingTitle": "Approving will let agent:",
+    "risksTitle": "Risks to consider",
+    "sourcesTitle": "Sources"
+  },
+  "fallback": {
+    "agentNote": "Agent's note",
+    "calledTool": "Called {{name}}"
+  },
+  "statusBanner": {
+    "preparing": "Agent is preparing the plan — give it a moment.",
+    "resuming": "Resuming…",
+    "resultTitle": "Result",
+    "resultFallback": "Done.",
+    "failedTitle": "Failed",
+    "failedFallback": "Run failed.",
+    "cancelled": "Cancelled. Tap Retry to start a fresh run."
+  },
+  "now": {
+    "greeting": "Hi, <nameSpan>{{name}}</nameSpan>",
+    "greetingFallbackName": "there",
+    "feedSummary_one": "Your proactive feed · {{count}} card today",
+    "feedSummary_other": "Your proactive feed · {{count}} cards today",
+    "openAmbient": "Open Ambient",
+    "toggleAmbient": "Toggle ambient",
+    "ambientOn": "Ambient is on",
+    "ambientOff": "Ambient is off",
+    "ambientTapToStart": "Tap to start sensing context",
+    "ambientQuiet": "Quiet ambient — connect sources to start streaming signals"
+  },
+  "emptyState": {
+    "warmingUpTitle": "Your feed is warming up",
+    "warmingUpBody": "Generating cards can take a few minutes to a few hours. We'll notify you the moment they're ready.",
+    "checklistTitle": "Let's get your feed going",
+    "voiceTitle": "Turn on voice",
+    "voiceSubtitle": "Let PIN AI sense your day to suggest cards",
+    "connectTitle": "Connect your apps",
+    "connectSubtitle": "Gmail, Calendar & more — so PIN AI has context",
+    "reviewPermissions": "Review permissions"
+  },
+  "sphere": {
+    "quick": "Quick",
+    "badgeNew": "new",
+    "badgeInput": "input",
+    "badgeReady": "ready",
+    "badgeFailed": "failed",
+    "badgeDone": "done"
+  }
+}

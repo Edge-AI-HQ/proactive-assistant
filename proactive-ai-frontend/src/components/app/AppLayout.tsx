@@ -9,6 +9,7 @@ import {
   type TouchEvent,
 } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { motion } from "framer-motion";
 import {
   Menu, Zap, ListChecks, Settings, Pencil, Plug,
@@ -82,6 +83,7 @@ export default function AppLayout() {
     openMainChat, closeMainChat, setMainChatOpen, setLiveOverlay,
     setSettingsSubPage, recordChatEntryView, goBack,
   } = useAppNavigation();
+  const { t } = useTranslation(["common", "card"]);
   const [selectedCard, setSelectedCard] = useState<Intent | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [paywallCard, setPaywallCard] = useState<Intent | null>(null);
@@ -194,7 +196,7 @@ export default function AppLayout() {
   const fullName = userMeta?.full_name || userMeta?.name || "";
   const firstName = fullName ? fullName.split(" ")[0] : "";
   const emailPrefix = user?.email ? user.email.split("@")[0] : "";
-  const displayName = firstName || emailPrefix || "there";
+  const displayName = firstName || emailPrefix || t("card:now.greetingFallbackName");
   const avatarLetter = (firstName || emailPrefix || "?").slice(0, 1).toUpperCase();
 
   // ── Real-backend integration (preserved card execution path) ──
@@ -804,7 +806,7 @@ export default function AppLayout() {
                   ? "border border-foreground/12 bg-background/55 backdrop-blur-md shadow-sm hover:bg-background/75"
                   : "border border-transparent hover:bg-foreground/[0.04]"
               }`}
-              aria-label="Open menu"
+              aria-label={t("appShell.openMenu")}
             >
               <Menu size={20} strokeWidth={1.5} className={isScrolled ? "text-foreground/65" : "text-foreground/55"} />
             </button>
@@ -824,7 +826,7 @@ export default function AppLayout() {
             <button
               onClick={() => setMenuOpen(true)}
               className="p-2 rounded-full border border-transparent transition-all duration-200 hover:bg-foreground/[0.04]"
-              aria-label="Open menu"
+              aria-label={t("appShell.openMenu")}
             >
               <Menu size={20} strokeWidth={1.5} className="text-foreground/55" />
             </button>
@@ -898,7 +900,7 @@ export default function AppLayout() {
             }}
             className="absolute left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-1 px-3 py-1.5 touch-none select-none group"
             style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 16px)" }}
-            aria-label="Open main chat"
+            aria-label={t("appShell.openMainChat")}
           >
             <motion.div
               animate={{ y: [0, -4, 0], opacity: [0.45, 0.75, 0.45] }}
@@ -908,7 +910,7 @@ export default function AppLayout() {
               <ChevronUp size={18} strokeWidth={2} className="text-foreground/60 group-hover:text-foreground transition-colors" />
             </motion.div>
             <Text variant="micro" weight="semibold" className="tracking-[0.18em] uppercase text-foreground/60 group-hover:text-foreground transition-colors">
-              Ask PIN AI
+              {t("appShell.askPinAi")}
             </Text>
           </button>
         )}

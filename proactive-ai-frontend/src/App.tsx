@@ -7,6 +7,7 @@ import { VoiceProvider } from "@/components/voice";
 import OnboardingFlow from "@/components/onboarding/OnboardingFlow";
 import { isElectron, isNative } from "@/lib/platform";
 import { useUserSettings } from "@pin-ai/state";
+import { useUiLanguageSync, detectDeviceLanguage } from "@pin-ai/ui-web";
 import { getPersistedAmbientEnabled } from "@/services/ambient/enabled-state";
 import { type SourceKey } from "@/services/ambient/keys";
 
@@ -66,6 +67,8 @@ export default function App() {
     patch: patchSettings,
     refetch: refetchSettings,
   } = useUserSettings(user?.id ?? null);
+  // UI 语言跟随 settings.generationLanguage（共享 hook，web 端同款）。
+  useUiLanguageSync();
   // Stable key signature so unrelated settings changes (autoGenerate,
   // language, etc.) don't re-trigger the reconcile. We deliberately
   // distinguish "settings not yet loaded" (null) from "loaded, empty
@@ -161,7 +164,11 @@ export default function App() {
     return (
       <OnboardingFlow
         onComplete={async () => {
-          const next = await patchSettings({ onboardingCompleted: true });
+          const next = await patchSettings({
+            onboardingCompleted: true,
+            // 新用户首启:把检测到的设备语言写成正式设置,生成语言同步对齐
+            generationLanguage: detectDeviceLanguage(),
+          });
           if (next === null) {
             throw new Error("Couldn't save your onboarding progress. Check your connection and try again.");
           }

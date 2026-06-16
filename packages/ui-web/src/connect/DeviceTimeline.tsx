@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ArrowLeft, Activity, Loader2 } from "lucide-react";
 import { deviceMediaUrl, fetchDeviceTimeline, type DeviceHealthObservation, type DeviceTimelineItem, type PersonalSignal, type UserDevice } from "@pin-ai/core";
 import {
@@ -29,6 +30,7 @@ interface DeviceTimelineProps {
  * per-day windows are small (≤ a week of data) so this is cheap.
  */
 export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) {
+  const { t } = useTranslation(["connect", "common"]);
   const [items, setItems] = useState<DeviceTimelineItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -111,7 +113,7 @@ export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) 
           onClick={onBack}
           className="text-foreground/60 hover:text-foreground transition flex items-center gap-1 text-xs"
         >
-          <ArrowLeft size={14} /> Back
+          <ArrowLeft size={14} /> {t("deviceTimeline.back")}
         </button>
         <div className="flex-1 min-w-0">
           <div className="text-sm font-semibold truncate">
@@ -120,7 +122,9 @@ export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) 
           <div className="text-micro text-foreground/40 truncate">
             {device.platform}
             {device.model ? ` · ${device.model}` : ""}
-            {items.length > 0 ? ` · ${items.length}${hasMore ? "+" : ""} loaded` : ""}
+            {items.length > 0
+              ? ` · ${t("deviceTimeline.loaded", { count: `${items.length}${hasMore ? "+" : ""}` })}`
+              : ""}
           </div>
         </div>
       </div>
@@ -137,13 +141,13 @@ export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) 
                   : "border-foreground/10 text-foreground/55 hover:border-foreground/25 hover:text-foreground"
               }`}
             >
-              {option.label}
+              {t(`deviceTimeline.filters.${option.value}`)}
             </button>
           ))}
         </div>
         <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-xl border border-foreground/10 bg-foreground/[0.025] p-1.5">
           <input
-            aria-label="Filter by day"
+            aria-label={t("deviceTimeline.filterByDay")}
             type="date"
             value={customDay}
             onChange={(event) => {
@@ -154,7 +158,7 @@ export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) 
           />
           <div className="min-w-[72px] shrink-0 text-right text-micro leading-tight text-foreground/40">
             <div>{dateRange.label}</div>
-            <div>{items.length} shown</div>
+            <div>{t("deviceTimeline.shownCount", { count: items.length })}</div>
           </div>
         </div>
       </div>
@@ -167,7 +171,7 @@ export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) 
 
       {items.length === 0 && !loading && !error && (
         <div className="text-xs text-foreground/40 px-2 py-8 text-center">
-          No data yet from this device.
+          {t("deviceTimeline.emptyTimeline")}
         </div>
       )}
 
@@ -184,17 +188,17 @@ export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) 
       <div className="flex justify-center pt-2">
         {loading ? (
           <div className="flex items-center gap-2 text-xs text-foreground/50">
-            <Loader2 size={12} className="animate-spin" /> Loading…
+            <Loader2 size={12} className="animate-spin" /> {t("common:status.loading")}
           </div>
         ) : hasMore ? (
           <button
             onClick={() => void loadPage(false)}
             className="text-xs text-foreground/60 hover:text-foreground px-3 py-1.5 rounded-md border border-foreground/10 hover:border-foreground/30 transition"
           >
-            Load 10 more
+            {t("deviceTimeline.loadMore", { count: PAGE_SIZE })}
           </button>
         ) : items.length > 0 ? (
-          <Text variant="micro" className="block text-foreground/30">— end —</Text>
+          <Text variant="micro" className="block text-foreground/30">{t("deviceTimeline.end")}</Text>
         ) : null}
       </div>
     </div>
@@ -220,6 +224,7 @@ function useDeviceMediaUrl(filePath: string | null): string | null {
 }
 
 function SignalRow({ signal }: { signal: PersonalSignal }) {
+  const { t } = useTranslation("connect");
   const filePath = useMemo(() => {
     // pinai-agents writes payload.storage_path; legacy plugin wrote file_path.
     // Read both during the cutover; storage_path takes precedence.
@@ -283,7 +288,7 @@ function SignalRow({ signal }: { signal: PersonalSignal }) {
           rel="noopener noreferrer"
           className="text-caption text-primary underline break-all"
         >
-          Download {filePath?.split("/").pop()}
+          {t("deviceTimeline.download", { name: filePath?.split("/").pop() ?? "" })}
         </a>
       )}
     </li>

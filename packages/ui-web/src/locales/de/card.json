@@ -1,0 +1,103 @@
+{
+  "category": {
+    "growth": "Wachstum",
+    "work": "Arbeit",
+    "finance": "Finanzen",
+    "health": "Gesundheit",
+    "learn": "Lernen",
+    "life": "Leben"
+  },
+  "tag": {
+    "urgent": "Dringend"
+  },
+  "scheduledSource": "Geplant · {{label}}",
+  "score": {
+    "confidence": "Konfidenz",
+    "importance": "Wichtigkeit",
+    "urgency": "Dringlichkeit"
+  },
+  "sourceApp": {
+    "calendar": "Kalender",
+    "drive": "Drive",
+    "docs": "Docs",
+    "sheets": "Tabellen",
+    "web": "Web",
+    "memory": "Erinnerung",
+    "phone": "Telefon",
+    "profile": "Profil",
+    "goal": "Ziel",
+    "preference": "Präferenz"
+  },
+  "reasoningStep": {
+    "observed": "Beobachtet",
+    "crossReferenced": "Abgeglichen",
+    "patternMatched": "Muster erkannt",
+    "flagged": "Markiert",
+    "decided": "Entschieden"
+  },
+  "drawer": {
+    "srTitleFallback": "Kartendetails",
+    "srDescription": "Kartendetailansicht",
+    "quickApprove": "Schnell genehmigen",
+    "quickApproveHint": "Risikoarme Aufgabe — kann meist direkt genehmigt werden",
+    "dismiss": "Verwerfen",
+    "chat": "Chat",
+    "approve": "Genehmigen",
+    "opening": "Wird geöffnet…"
+  },
+  "detail": {
+    "howReasoned": "Mein Gedankengang",
+    "stepCount_one": "{{count}} Schritt",
+    "stepCount_other": "{{count}} Schritte",
+    "whyNow": "Warum jetzt",
+    "executionPlan": "Ausführungsplan",
+    "generatedDrafts_one": "Generierter Entwurf",
+    "generatedDrafts_other": "Generierte Entwürfe",
+    "approvingTitle": "Mit der Genehmigung darf der Agent:",
+    "risksTitle": "Zu beachtende Risiken",
+    "sourcesTitle": "Quellen"
+  },
+  "fallback": {
+    "agentNote": "Notiz des Agenten",
+    "calledTool": "{{name}} aufgerufen"
+  },
+  "statusBanner": {
+    "preparing": "Der Agent bereitet den Plan vor — einen Moment bitte.",
+    "resuming": "Wird fortgesetzt…",
+    "resultTitle": "Ergebnis",
+    "resultFallback": "Fertig.",
+    "failedTitle": "Fehlgeschlagen",
+    "failedFallback": "Lauf fehlgeschlagen.",
+    "cancelled": "Abgebrochen. Tippen Sie auf „Wiederholen“, um einen neuen Lauf zu starten."
+  },
+  "now": {
+    "greeting": "Hallo, <nameSpan>{{name}}</nameSpan>",
+    "greetingFallbackName": "willkommen",
+    "feedSummary_one": "Ihr proaktiver Feed · {{count}} Karte heute",
+    "feedSummary_other": "Ihr proaktiver Feed · {{count}} Karten heute",
+    "openAmbient": "Ambient öffnen",
+    "toggleAmbient": "Ambient umschalten",
+    "ambientOn": "Ambient ist an",
+    "ambientOff": "Ambient ist aus",
+    "ambientTapToStart": "Tippen, um Kontext zu erfassen",
+    "ambientQuiet": "Ambient ist ruhig — verbinden Sie Quellen, um Signale zu empfangen"
+  },
+  "emptyState": {
+    "warmingUpTitle": "Ihr Feed läuft sich warm",
+    "warmingUpBody": "Das Generieren von Karten kann einige Minuten bis Stunden dauern. Wir benachrichtigen Sie, sobald sie fertig sind.",
+    "checklistTitle": "Bringen wir Ihren Feed in Gang",
+    "voiceTitle": "Sprachfunktion aktivieren",
+    "voiceSubtitle": "Lassen Sie PIN AI Ihren Tag wahrnehmen, um Karten vorzuschlagen",
+    "connectTitle": "Apps verbinden",
+    "connectSubtitle": "Gmail, Kalender & mehr — damit PIN AI Kontext hat",
+    "reviewPermissions": "Berechtigungen prüfen"
+  },
+  "sphere": {
+    "quick": "Schnell",
+    "badgeNew": "neu",
+    "badgeInput": "Eingabe",
+    "badgeReady": "bereit",
+    "badgeFailed": "Fehler",
+    "badgeDone": "fertig"
+  }
+}

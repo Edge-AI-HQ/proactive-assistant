@@ -1,0 +1,334 @@
+{
+  "goalDetail": {
+    "ariaLabel": "{{label}} goal detail",
+    "close": "Close goal"
+  },
+  "goalsView": {
+    "title": "Profile",
+    "subtitle": "Who your AI thinks you are — derived from your data.",
+    "loadingSnapshot": "Loading profile snapshot...",
+    "refreshError": "Could not refresh profile snapshot.",
+    "loadFailed": "Failed to load profile",
+    "loadMoreMemoriesFailed": "Failed to load more memories",
+    "loadMoreSignalsFailed": "Failed to load more signals",
+    "tabs": {
+      "identity": "Identity",
+      "goals": "Goals"
+    },
+    "identityLabel": "IDENTITY",
+    "unnamedUser": "Unnamed user",
+    "noSummary": "No summary stored yet. The assistant will still use memories, signals, and goals below.",
+    "subTabs": {
+      "profile": "Profile",
+      "memory": "Memory",
+      "empty": "Empty"
+    },
+    "status": {
+      "normal": "Normal",
+      "alert": "Alert",
+      "watch": "Watch"
+    },
+    "profileGroups": {
+      "facts": {
+        "title": "Facts",
+        "description": "Stable details the assistant knows about you.",
+        "emptyTitle": "No facts yet"
+      },
+      "preferences": {
+        "title": "Preferences",
+        "description": "How you prefer the assistant to behave.",
+        "emptyTitle": "No preferences yet"
+      },
+      "constraints": {
+        "title": "Constraints",
+        "description": "Rules and boundaries the assistant should honor.",
+        "emptyTitle": "No constraints yet"
+      }
+    },
+    "groupEmptyDescription": "This group is empty right now.",
+    "mirror": {
+      "title": "Profile",
+      "description": "Facts, preferences, constraints, and metadata — derived from your data."
+    },
+    "memory": {
+      "title": "Memory",
+      "description": "What your AI has noticed and saved. Newest first.",
+      "emptyTitle": "No memories yet",
+      "emptyDescription": "Nothing has been saved as long-term memory yet.",
+      "countZero": "0 memories",
+      "countOfTotal": "{{shown}} of {{total}}",
+      "loadMore": "Load more",
+      "endOfList": "End of list",
+      "inferredFrom": "Inferred from {{source}}",
+      "today": "TODAY",
+      "yesterday": "YESTERDAY",
+      "unknownDate": "UNKNOWN"
+    },
+    "signals": {
+      "title": "Signals",
+      "description": "Recent observations that may become memory after the assistant sees enough context.",
+      "total": "Total",
+      "emptyTitle": "No signals yet",
+      "emptyDescription": "Recent observations will appear here after connected sources provide data.",
+      "loadMore": "Load more signals",
+      "payload": "Payload"
+    },
+    "pills": {
+      "salience": "salience {{value}}",
+      "confidence": "confidence {{value}}"
+    },
+    "raw": {
+      "title": "Raw",
+      "description": "Source data from connected apps and devices before it becomes memories or profile details.",
+      "dataSourceLabel": "Data source",
+      "noSourceOption": "No connected data source",
+      "deviceKind": "Device",
+      "connectorKind": "Connector",
+      "rowCount_one": "{{count}} row",
+      "rowCount_other": "{{count}} rows",
+      "noSourceTitle": "No connected data source",
+      "noSourceDescription": "Connect an app or sync a device to show source data here.",
+      "noGmailTitle": "No Gmail data",
+      "noGmailDescription": "No Gmail messages are available right now.",
+      "noCalendarTitle": "No Calendar data",
+      "noCalendarDescription": "No calendar events are available right now.",
+      "noDeviceTitle": "No device data",
+      "noDeviceRegisteredDescription": "This device is registered, but no raw rows have been ingested yet.",
+      "noDeviceRowsDescription": "No current or past device rows are available for this source.",
+      "noDeviceSourceDescription": "This device source is not available right now.",
+      "loadingSource": "Loading {{label}}…",
+      "notLoadedTitle": "Not loaded yet",
+      "notLoadedDescription": "Switching to this source will fetch its rows.",
+      "noSourceDataTitle": "No {{label}} data",
+      "noSourceDataDescription": "This connector is connected but no rows have been ingested yet. Reconciler usually catches up within ~10 minutes.",
+      "rawFields": "Raw fields",
+      "deviceFallbackLabel": "Device {{id}}",
+      "devicePlatformFallback": "DEVICE"
+    },
+    "deviceSources": {
+      "apps": "Apps",
+      "contacts": "Contacts",
+      "health": "Health"
+    },
+    "rawSources": {
+      "gmail": "Gmail",
+      "gcal": "Calendar",
+      "slackMessages": "Slack messages",
+      "notionPages": "Notion pages",
+      "gdriveFiles": "Drive files",
+      "githubIssues": "GitHub issues",
+      "outlook": "Outlook",
+      "gdocs": "Google Docs",
+      "gsheets": "Google Sheets",
+      "stripeInvoices": "Stripe invoices",
+      "spotifyHistory": "Spotify history",
+      "stravaActivities": "Strava activities",
+      "todoistTasks": "Todoist tasks",
+      "youtubeSubs": "YouTube subs",
+      "trelloBoards": "Trello boards",
+      "jiraProjects": "Jira projects",
+      "calendlyEvents": "Calendly events",
+      "linkedinProfile": "LinkedIn profile",
+      "linkedinOrgs": "LinkedIn orgs",
+      "figmaUser": "Figma user",
+      "zoomUser": "Zoom user",
+      "zoomApps": "Zoom apps",
+      "dropboxAccount": "Dropbox account",
+      "dropboxFiles": "Dropbox files",
+      "asanaWorkspaces": "Asana workspaces",
+      "asanaTasks": "Asana tasks",
+      "hubspotContacts": "HubSpot contacts",
+      "clickupUser": "ClickUp user",
+      "clickupWorkspaces": "ClickUp workspaces"
+    },
+    "goals": {
+      "title": "Goals",
+      "description": "Share your goals — help AI know you. Tap any basket to expand.",
+      "emptyTitle": "No active goals",
+      "emptyDescription": "Goals stay as a first-class collection in the mirror layer.",
+      "drawerFallbackTitle": "Goal",
+      "drawerDescription": "Goal detail view",
+      "weeklyActions": "AI Weekly Actions",
+      "monitoring": "Monitoring",
+      "aiWantsToKnow": "AI wants to know",
+      "lockGoals": "Lock Goals — AI watches only, no modify"
+    }
+  },
+  "goalMeta": {
+    "work": {
+      "weeklyActions": [
+        "Review project milestones for this sprint",
+        "Follow up on pending decisions",
+        "Check team blockers and unblock"
+      ],
+      "monitoring": [
+        "Career development trajectory",
+        "Skill gap analysis",
+        "Industry trends"
+      ],
+      "aiQuestions": [
+        "What skill are you focusing on developing?",
+        "Any career goals shifting this quarter?"
+      ]
+    },
+    "health": {
+      "weeklyActions": [
+        "No new health signals this cycle"
+      ],
+      "monitoring": [
+        "Exercise consistency",
+        "Sleep quality trends",
+        "Annual checkup schedule"
+      ],
+      "aiQuestions": [
+        "What health tracking are you currently doing?",
+        "Any specific health topics you're watching?"
+      ]
+    },
+    "finance": {
+      "weeklyActions": [
+        "Review monthly spending summary",
+        "Check upcoming bills and subscriptions"
+      ],
+      "monitoring": [
+        "Budget vs. actual spending",
+        "Savings rate",
+        "Investment performance"
+      ],
+      "aiQuestions": [
+        "Any budget concerns for this quarter?",
+        "Should I prepare a savings analysis?"
+      ]
+    },
+    "growth": {
+      "weeklyActions": [
+        "Continue current learning path",
+        "Review bookmarked articles"
+      ],
+      "monitoring": [
+        "Learning time allocation",
+        "New topics of interest",
+        "Skill acquisition progress"
+      ],
+      "aiQuestions": [
+        "What topic are you most curious about right now?",
+        "Should I find new learning resources?"
+      ]
+    },
+    "family": {
+      "weeklyActions": [
+        "Plan weekend family activity",
+        "Check in with close friends"
+      ],
+      "monitoring": [
+        "Family event calendar",
+        "Relationship check-in frequency"
+      ],
+      "aiQuestions": [
+        "Any family events coming up?",
+        "How's the work-life balance feeling?"
+      ]
+    },
+    "life": {
+      "weeklyActions": [
+        "Block personal time on calendar",
+        "Review stress levels"
+      ],
+      "monitoring": [
+        "Personal time allocation",
+        "Burnout risk indicators",
+        "Hobby engagement"
+      ],
+      "aiQuestions": [
+        "Any personal projects you want to prioritize?",
+        "What recharges you most right now?"
+      ]
+    }
+  },
+  "baskets": {
+    "work": "Work",
+    "health": "Health",
+    "family": "Family",
+    "finance": "Finance",
+    "growth": "Growth",
+    "life": "Life",
+    "general": "General"
+  },
+  "memoriesPanel": {
+    "title": "Memories",
+    "refresh": "Refresh",
+    "new": "New",
+    "tabs": {
+      "active": "Active",
+      "archived": "Archived",
+      "superseded": "Superseded"
+    },
+    "subjectAny": "subject: any",
+    "minQuality": "min q",
+    "zeroRows": "0 rows",
+    "rowRange": "{{first}}-{{last}} of {{total}}",
+    "emptyList": {
+      "active": "No active memories.",
+      "archived": "No archived memories.",
+      "superseded": "No superseded memories."
+    },
+    "pageOf": "Page {{page}} / {{total}}",
+    "previousPage": "Previous page",
+    "nextPage": "Next page",
+    "status": {
+      "active": "active",
+      "archived": "archived",
+      "superseded": "superseded"
+    },
+    "fields": {
+      "text": "Text",
+      "subject": "Subject",
+      "quality": "Quality",
+      "tags": "Tags (comma-separated)"
+    },
+    "subjectPlaceholder": "self / person:alice / topic:coffee",
+    "save": "Save",
+    "supersede": "Supersede",
+    "archive": "Archive",
+    "replacementText": "Replacement text",
+    "replacementPlaceholder": "New, corrected version of this memory",
+    "confirmSupersede": "Confirm supersede",
+    "createTextPlaceholder": "A fact or sedimented insight about the user",
+    "create": "Create"
+  },
+  "skillsPanel": {
+    "title": "Skills",
+    "refresh": "Refresh",
+    "new": "New",
+    "tabs": {
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "archived": "Archived"
+    },
+    "searchPlaceholder": "Search title / description / trigger",
+    "emptyList": {
+      "enabled": "No enabled skills.",
+      "disabled": "No disabled skills.",
+      "archived": "No archived skills."
+    },
+    "status": {
+      "enabled": "enabled",
+      "disabled": "disabled",
+      "archived": "archived"
+    },
+    "fields": {
+      "title": "Title",
+      "description": "Description",
+      "triggers": "Triggers (one per line)",
+      "body": "Body (SKILL.md)"
+    },
+    "optionalPlaceholder": "optional",
+    "loadingBody": "Loading body…",
+    "bodyPlaceholder": "## When to use...",
+    "save": "Save",
+    "disable": "Disable",
+    "enable": "Enable",
+    "archive": "Archive",
+    "create": "Create"
+  }
+}

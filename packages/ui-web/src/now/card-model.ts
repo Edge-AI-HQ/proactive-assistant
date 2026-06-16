@@ -15,6 +15,7 @@ import {
   type IntentCard,
 } from "@pin-ai/core";
 import type { ChatCard } from "../card/chat-card-presentation";
+import i18n from "../i18n";
 
 // 卡片数据模型 + 纯投影(djb2 / basketToLovableCategory / Intent / DetailData /
 // CardStatus / realCardToLovableIntent)已下沉 @pin-ai/core(domain/lovable-card),
@@ -38,7 +39,7 @@ export function realIntentToChatCard(card: IntentCard): ChatCard {
   return {
     id: djb2(card.id),
     category: basketToLovableCategory(card.goalBasket),
-    tag: card.urgency >= 0.85 ? "Urgent" : undefined,
+    tag: card.urgency >= 0.85 ? i18n.t("card:tag.urgent") : undefined,
     // Derive (not just copy) the kind: legacy reminder cards predate the
     // cardKind field and are only recognizable by their card-rem- id — the
     // string id is lost past this projection (ChatCard.id is numeric), so
@@ -54,7 +55,7 @@ export function realIntentToChatCard(card: IntentCard): ChatCard {
     line1: card.whyNow || card.summary,
     line2:
       card.sourceKind === "scheduled" && card.sourceLabel
-        ? `Scheduled · ${card.sourceLabel}`
+        ? i18n.t("card:scheduledSource", { label: card.sourceLabel })
         : "",
     whyNow:
       card.whyNow && card.whyNow.trim() && card.whyNow !== card.summary
@@ -64,9 +65,9 @@ export function realIntentToChatCard(card: IntentCard): ChatCard {
     reasoningSteps: card.reasoningSteps,
     detail: {
       scores: [
-        { label: "Confidence", value: Math.round(card.confidence * 100) },
-        { label: "Importance", value: Math.round(card.importance * 100) },
-        { label: "Urgency", value: Math.round(card.urgency * 100) },
+        { label: i18n.t("card:score.confidence"), value: Math.round(card.confidence * 100) },
+        { label: i18n.t("card:score.importance"), value: Math.round(card.importance * 100) },
+        { label: i18n.t("card:score.urgency"), value: Math.round(card.urgency * 100) },
       ],
       willExecute: card.primaryAction?.label ?? "",
       executionPlan: [],
@@ -77,11 +78,31 @@ export function realIntentToChatCard(card: IntentCard): ChatCard {
   };
 }
 
-export const CATEGORIES: Record<string, { icon: LucideIcon; label: string }> = {
-  growth:  { icon: Sprout,      label: "Growth" },
-  work:    { icon: Briefcase,   label: "Work" },
-  finance: { icon: TrendingUp,  label: "Finance" },
-  health:  { icon: Heart,       label: "Health" },
-  learn:   { icon: BookOpen,    label: "Learn" },
-  life:    { icon: Sparkles,    label: "Life" },
+export const CATEGORIES: Record<string, { icon: LucideIcon }> = {
+  growth:  { icon: Sprout },
+  work:    { icon: Briefcase },
+  finance: { icon: TrendingUp },
+  health:  { icon: Heart },
+  learn:   { icon: BookOpen },
+  life:    { icon: Sparkles },
 };
+
+const CATEGORY_LABEL_KEYS = {
+  growth: "card:category.growth",
+  work: "card:category.work",
+  finance: "card:category.finance",
+  health: "card:category.health",
+  learn: "card:category.learn",
+  life: "card:category.life",
+} as const;
+
+function isKnownCategory(c: string): c is keyof typeof CATEGORY_LABEL_KEYS {
+  return c in CATEGORY_LABEL_KEYS;
+}
+
+/** Category display label, resolved through i18n at call time. Unknown
+ *  categories fall back to the Title-Cased slug (backend identifier). */
+export function categoryLabel(category: string): string {
+  if (isKnownCategory(category)) return i18n.t(CATEGORY_LABEL_KEYS[category]);
+  return category.charAt(0).toUpperCase() + category.slice(1);
+}

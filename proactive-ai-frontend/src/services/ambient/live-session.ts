@@ -1,4 +1,5 @@
 import type { TranscriptReadyEvent } from "@pin/capacitor-ambient-ai";
+import { i18n } from "@pin-ai/ui-web";
 import { speakerAwareTranscriptTextFromPayload } from "./speaker-transcript";
 import type { AmbientCandidateWindow, AmbientPrivacy, AmbientRawEvent } from "./timeline";
 import {
@@ -97,7 +98,11 @@ export type LiveSessionContextKind =
 export interface LiveSessionContextItem {
   id: string;
   kind: LiveSessionContextKind;
+  /** Localized display label — never branch logic on it (use `kind`/`placeName`). */
   label: string;
+  /** Raw place name parsed from native English compactText (data, not copy).
+   *  Set for place/visit items so titles can be rebuilt without parsing `label`. */
+  placeName?: string;
   summary?: string;
   transcriptText?: () => string | null;
   startedAt: string;
@@ -268,22 +273,27 @@ export function liveSessionDataToSession(
     : visibleContext;
   const last = hasDisplayTranscript ? transcriptMessages[transcriptMessages.length - 1] : null;
   const title = last
-    ? truncateTitle(last.text) || "Live transcript"
+    ? truncateTitle(last.text) || i18n.t("ambient:live.transcriptTitle")
     : contextOnlyTitle(displayContext);
   const provider = last?.source ?? "device";
   const primaryPlace = displayContext.find((item) => item.kind === "place" || item.kind === "visit");
-  const location = primaryPlace?.label ?? (hasDisplayTranscript ? "On device · captured locally" : "Ambient context active");
+  const location = primaryPlace?.label
+    ?? (hasDisplayTranscript
+      ? i18n.t("ambient:live.onDeviceCaptured")
+      : i18n.t("ambient:live.ambientContextActive"));
   const device = uniqueStrings([
-    ...(hasDisplayTranscript ? ["Microphone"] : []),
+    ...(hasDisplayTranscript ? [i18n.t("ambient:rawEvent.microphone")] : []),
     ...deviceLabelsForContext(displayContext),
-  ]).join(" · ") || "Ambient sensors";
+  ]).join(" · ") || i18n.t("ambient:liveCard.standbyDevice");
   const startedAt = data
     ? formatStartTimestamp(data.startedAt)
     : formatStartTimestamp(Date.parse(displayContext[displayContext.length - 1]?.startedAt ?? new Date().toISOString()));
 
   return {
     icon: hasDisplayTranscript ? Mic : iconForContext(displayContext),
-    kind: hasDisplayTranscript ? "Voice session" : "Ambient context",
+    kind: hasDisplayTranscript
+      ? i18n.t("ambient:live.kindVoiceSession")
+      : i18n.t("ambient:live.kindAmbientContext"),
     title,
     location,
     device,
@@ -409,13 +419,20 @@ function candidateWindowToLiveSessionItem(
       ...base,
       kind: "place",
       label,
+      ...(place ? { placeName: placeNameFromData(place) } : {}),
       summary: privacySuffix(label, window.privacyHint),
     };
   }
   if (window.windowType === "visit_stay") {
     const place = placeLabelFromWindow(window);
-    const label = place ? `Near ${place}` : "Visit context active";
-    return { ...base, kind: "visit", label, summary: privacySuffix(label, window.privacyHint) };
+    const label = place ? nearPlaceLabel(place) : i18n.t("ambient:live.visitContextActive");
+    return {
+      ...base,
+      kind: "visit",
+      label,
+      ...(place ? { placeName: placeNameFromData(place) } : {}),
+      summary: privacySuffix(label, window.privacyHint),
+    };
   }
   if (window.windowType === "motion_state_run") {
     const label = motionLabel(window.compactContext);
@@ -426,20 +443,22 @@ function candidateWindowToLiveSessionItem(
     return { ...base, kind: "sound", label, summary: privacySuffix(label, window.privacyHint) };
   }
   if (window.windowType === "transcript_session") {
+    const label = i18n.t("ambient:live.conversationWindowActive");
     return {
       ...base,
       kind: "transcript",
-      label: "Conversation window active",
-      summary: privacySuffix("Conversation window active", window.privacyHint),
+      label,
+      summary: privacySuffix(label, window.privacyHint),
       transcriptText: () => transcriptTextFromCandidateWindow(window),
     };
   }
   if (window.windowType === "transition") {
+    const label = i18n.t("ambient:live.contextShiftActive");
     return {
       ...base,
       kind: "transition",
-      label: "Context shift active",
-      summary: privacySuffix("Context shift active", window.privacyHint),
+      label,
+      summary: privacySuffix(label, window.privacyHint),
     };
   }
   return null;
@@ -458,12 +477,23 @@ function rawEventToLiveSessionItem(event: AmbientRawEvent): LiveSessionContextIt
     sourceWindowIds: [],
   };
   if (event.sourceType === "health") {
-    return { ...base, kind: "health", label: "Health update", summary: compactSummary(event) };
+    return {
+      ...base,
+      kind: "health",
+      label: i18n.t("ambient:rawEvent.healthUpdate"),
+      summary: compactSummary(event),
+    };
   }
   if (event.sourceType === "location") {
     const place = placeLabelFromText(event.compactText);
     const label = locationDisplayLabel(place);
-    return { ...base, kind: "place", label, summary: compactSummary(event) };
+    return {
+      ...base,
+      kind: "place",
+      label,
+      ...(place ? { placeName: placeNameFromData(place) } : {}),
+      summary: compactSummary(event),
+    };
   }
   if (event.sourceType === "motion") {
     const label = motionLabel(event.compactText);
@@ -475,11 +505,22 @@ function rawEventToLiveSessionItem(event: AmbientRawEvent): LiveSessionContextIt
   }
   if (event.sourceType === "visit") {
     const place = placeLabelFromText(event.compactText);
-    const label = place ? `Near ${place}` : "Place update";
-    return { ...base, kind: "visit", label, summary: compactSummary(event) };
+    const label = place ? nearPlaceLabel(place) : i18n.t("ambient:rawEvent.placeUpdate");
+    return {
+      ...base,
+      kind: "visit",
+      label,
+      ...(place ? { placeName: placeNameFromData(place) } : {}),
+      summary: compactSummary(event),
+    };
   }
   if (event.sourceType === "calendar") {
-    return { ...base, kind: "calendar", label: "Calendar context", summary: compactSummary(event) };
+    return {
+      ...base,
+      kind: "calendar",
+      label: i18n.t("ambient:rawEvent.calendarContext"),
+      summary: compactSummary(event),
+    };
   }
   return null;
 }
@@ -514,10 +555,11 @@ function truncateTitle(text: string): string {
 }
 
 function contextOnlyTitle(items: LiveSessionContextItem[]): string {
+  // Branch on the `placeName` data field, not the (localized) display label.
   const place = items.find((item) => item.kind === "place" || item.kind === "visit");
-  if (place?.label.startsWith("Near ")) return `Sensing near ${place.label.slice(5)}`;
-  if (items.some((item) => item.kind === "health")) return "Health context active";
-  return "Ambient context active";
+  if (place?.placeName) return i18n.t("ambient:live.sensingNear", { place: place.placeName });
+  if (items.some((item) => item.kind === "health")) return i18n.t("ambient:live.healthContextActive");
+  return i18n.t("ambient:live.ambientContextActive");
 }
 
 function contextItemToAssist(item: LiveSessionContextItem): LiveAssistItem {
@@ -538,8 +580,8 @@ function sessionSignals(
     ...contextItems.map((item) => item.label),
     ...(transcriptCount > 0
       ? [
-          `${transcriptCount} transcript${transcriptCount === 1 ? "" : "s"}`,
-          `Provider: ${provider}`,
+          i18n.t("ambient:live.transcriptCount", { count: transcriptCount }),
+          i18n.t("ambient:live.provider", { provider }),
         ]
       : []),
   ]).slice(0, MAX_SESSION_SIGNALS);
@@ -563,8 +605,17 @@ function placeLabelFromWindow(window: AmbientCandidateWindow): string | null {
 }
 
 function locationDisplayLabel(place: string | null): string {
-  if (!place) return "Location updated";
-  return /^Near\s+/i.test(place) ? place : `Near ${place}`;
+  if (!place) return i18n.t("ambient:rawEvent.locationUpdated");
+  return nearPlaceLabel(place);
+}
+
+/** Strips a "Near " prefix the native English compactText may already carry. */
+function placeNameFromData(place: string): string {
+  return place.replace(/^Near\s+/i, "").trim();
+}
+
+function nearPlaceLabel(place: string): string {
+  return i18n.t("ambient:live.nearPlace", { place: placeNameFromData(place) });
 }
 
 function placeLabelFromText(text: string): string | null {
@@ -577,34 +628,45 @@ function placeLabelFromText(text: string): string | null {
 }
 
 function motionLabel(context: string): string {
+  // Parses the native layer's English "Motion <activity> …" sentence — input
+  // format is fixed; only the rebuilt display label is translated. Unknown
+  // activities fall back to the capitalized raw slug (English, on purpose).
   const match = /^Motion\s+([a-zA-Z_ -]+)/.exec(context.trim());
   const activity = match?.[1]?.split(" for ")[0]?.trim().toLowerCase();
-  if (!activity) return "Motion active";
-  if (activity === "stationary") return "Stationary";
-  if (activity === "walking") return "Walking";
-  if (activity === "automotive") return "Automotive";
+  if (!activity) return i18n.t("ambient:live.motionActive");
+  if (activity === "stationary") return i18n.t("ambient:live.motionStationary");
+  if (activity === "walking") return i18n.t("ambient:live.motionWalking");
+  if (activity === "automotive") return i18n.t("ambient:live.motionAutomotive");
   return activity.charAt(0).toUpperCase() + activity.slice(1);
 }
 
 function soundLabel(context: string): string {
+  // Same native "Heard X for …" parsing as AmbientView.soundBody — regex
+  // untouched, display templates share the ambient:sound.* keys.
   const match = /^Heard\s+(.+?)\s+for\s+/.exec(context.trim());
   const label = match?.[1]?.trim();
   const normalized = label?.toLowerCase();
-  if (!label) return "Sound detected";
-  if (normalized === "speech" || normalized === "conversation") return "Speech detected";
-  if (normalized === "traffic") return "Traffic sound detected";
-  if (normalized === "quiet" || normalized === "quiet room") return "Quiet room";
-  if (normalized === "music" || normalized === "singing") return "Music detected";
-  return `${label.replace(/^./, (char) => char.toUpperCase())} detected`;
+  if (!label) return i18n.t("ambient:sound.detected");
+  if (normalized === "speech" || normalized === "conversation") return i18n.t("ambient:sound.speech");
+  if (normalized === "traffic") return i18n.t("ambient:sound.traffic");
+  if (normalized === "quiet" || normalized === "quiet room") return i18n.t("ambient:sound.quietRoom");
+  if (normalized === "music" || normalized === "singing") return i18n.t("ambient:sound.music");
+  return i18n.t("ambient:sound.labelDetected", {
+    label: label.replace(/^./, (char) => char.toUpperCase()),
+  });
 }
 
 function privacySuffix(label: string, privacy: AmbientPrivacy): string {
-  return privacy === "normal" ? label : `${label} · ${privacy}`;
+  if (privacy === "normal") return label;
+  const badge = privacy === "private"
+    ? i18n.t("ambient:view.privateBadge")
+    : i18n.t("ambient:view.sensitiveBadge");
+  return `${label} · ${badge}`;
 }
 
 function formatContextOffset(iso: string): string {
   const ts = Date.parse(iso);
-  if (!Number.isFinite(ts)) return "live";
+  if (!Number.isFinite(ts)) return i18n.t("ambient:live.timeFallback");
   return formatStartTimestamp(ts);
 }
 
@@ -655,67 +717,92 @@ function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values.filter((value) => value.trim().length > 0)));
 }
 
-export const LIVE_SCENARIOS: LiveSession[] = [
-  {
-    icon: Users,
-    kind: "Meeting",
-    title: "Product review with design team",
-    location: "Conference Room B · WeWork",
-    device: "AirPods Pro · Watch",
-    startedAt: "14:32",
-    signals: ["5 voices detected", "Cadence: discussion", "HR 78"],
-    assists: [
-      { time: "+00:18", kind: "context", text: "Meeting started. 5 voices detected — Sarah, Marcus, Priya, Devon, you.", source: "Voice ID" },
-      { time: "+00:42", kind: "context", text: "Sarah referenced the \"north-star metric\" from the Jan deck.", source: "Notion" },
-      { time: "+01:24", kind: "assist", text: "Jan deck open on your watch — jumped to slide 7 (north-star definition).", source: "Drive" },
-      { time: "+02:15", kind: "assist", text: "Pulled slide 12 (\"Activation funnel — Q1\") to your watch.", source: "Drive" },
-      { time: "+03:01", kind: "context", text: "Devon brought up the iOS 18 widget refresh bug — filed as LIN-842 last Tuesday.", source: "Linear" },
-      { time: "+03:48", kind: "assist", text: "LIN-842 thread summary surfaced. 3 unread comments from engineering.", source: "Linear" },
-      { time: "+04:08", kind: "context", text: "Marcus mentioned the onboarding drop-off at step 3 — same issue raised in last week's retro.", source: "Linear" },
-      { time: "+04:55", kind: "assist", text: "Retro notes from Apr 18 pulled. Step-3 drop-off was 34% — Priya owned the audit.", source: "Notion" },
-      { time: "+05:30", kind: "action", text: "Drafted action item: \"Audit step-3 onboarding by Fri.\" Tap to assign.", source: "Linear draft" },
-      { time: "+06:12", kind: "context", text: "Sarah asked about Q2 OKR alignment — your draft is in Notion.", source: "Notion" },
-      { time: "+06:48", kind: "action", text: "Q2 OKR draft ready to share. Tap to send to the room.", source: "Notion" },
-      { time: "+07:30", kind: "assist", text: "Decision detected: ship v2 onboarding behind a flag by May 9. Logged.", source: "Decision log" },
-    ],
-  },
-  {
-    icon: Stethoscope,
-    kind: "Medical visit",
-    title: "Annual check-up with Dr. Patel",
-    location: "UCSF Medical Center",
-    device: "iPhone · Watch",
-    startedAt: "11:20",
-    signals: ["Clinical vocabulary", "Quiet room", "HRV ↓"],
-    assists: [
-      { time: "+00:30", kind: "context", text: "Visit started. Vitals from Apple Health pre-shared with Dr. Patel's chart.", source: "Apple Health" },
-      { time: "+01:05", kind: "context", text: "Dr. Patel mentioned \"LDL apolipoprotein B\" — a marker for cardiovascular risk.", source: "Glossary" },
-      { time: "+01:48", kind: "assist", text: "ApoB explained on your watch — what it measures, why it matters, your last value.", source: "Glossary" },
-      { time: "+02:40", kind: "assist", text: "Plain-English summary of all lab terms used so far is ready on your watch.", source: "Health" },
-      { time: "+03:22", kind: "context", text: "She referenced your March lipid panel — values pulled from Apple Health.", source: "Apple Health" },
-      { time: "+04:00", kind: "action", text: "Suggested follow-up questions queued: \"What lifestyle changes move ApoB the most?\"", source: "Notes draft" },
-      { time: "+04:42", kind: "context", text: "Dr. Patel recommended a 3-month lipid recheck. Calendar slot suggested.", source: "Calendar" },
-      { time: "+05:18", kind: "action", text: "Tentative follow-up: Jul 24, 11:00 AM. Tap to confirm.", source: "Calendar draft" },
-      { time: "+06:05", kind: "assist", text: "Dietary changes that move ApoB the most: saturated fat ↓, soluble fiber ↑.", source: "Mayo Clinic" },
-    ],
-  },
-  {
-    icon: Coffee,
-    kind: "Casual chat",
-    title: "Lunch with Marcus — boba craving detected",
-    location: "Blue Bottle · Mission St",
-    device: "AirPods Pro",
-    startedAt: "13:45",
-    signals: ["2 voices", "Casual tone", "Stationary 18m"],
-    assists: [
-      { time: "+00:12", kind: "context", text: "Lunch with Marcus started. Casual tone, low-stakes conversation." },
-      { time: "+00:30", kind: "context", text: "Heard you say \"I could really go for boba right now.\"" },
-      { time: "+00:35", kind: "assist", text: "Boba Guys (3 min walk) — your usual: Strawberry Matcha, 50% sugar, no ice.", source: "Order history" },
-      { time: "+00:38", kind: "action", text: "Order ready to place. Say \"go\" or tap to confirm.", source: "DoorDash draft" },
-      { time: "+01:20", kind: "context", text: "Marcus mentioned his sister's wedding next month — added to your relationship notes.", source: "Notes" },
-      { time: "+02:05", kind: "assist", text: "Reminder set: ask Marcus about the wedding when you see him next week.", source: "Reminders" },
-      { time: "+02:48", kind: "context", text: "He brought up the Sequoia call — that's tomorrow at 10am for you.", source: "Calendar" },
-      { time: "+03:30", kind: "assist", text: "Sequoia prep doc pinned to your morning briefing.", source: "Notion" },
-    ],
-  },
-];
+/**
+ * Web-demo rotation scenarios (mock, web preview only). Factory instead of a
+ * const so copy follows the UI language — same pattern as AmbientView's
+ * demoTimeline; re-evaluated per render so a language switch takes effect
+ * immediately. Per-field rules: kind/title/location/signals/assist text and
+ * generic source labels are translated; brand-only sources (Notion, Drive,
+ * Linear, Apple Health, Mayo Clinic), device strings and mock clock times
+ * ("14:32" start times, "+MM:SS" offsets) stay literal (brands / data).
+ * Assist `kind` is a logic enum — untouched.
+ */
+export function demoLiveScenarios(): LiveSession[] {
+  const t = i18n.t;
+  return [
+    {
+      icon: Users,
+      kind: t("ambient:demo.live.meeting.kind"),
+      title: t("ambient:demo.live.meeting.title"),
+      location: t("ambient:demo.live.meeting.location"),
+      device: "AirPods Pro · Watch",
+      startedAt: "14:32",
+      signals: [
+        t("ambient:demo.live.meeting.signal1"),
+        t("ambient:demo.live.meeting.signal2"),
+        t("ambient:demo.live.meeting.signal3"),
+      ],
+      assists: [
+        { time: "+00:18", kind: "context", text: t("ambient:demo.live.meeting.assist1"), source: t("ambient:demo.live.sources.voiceId") },
+        { time: "+00:42", kind: "context", text: t("ambient:demo.live.meeting.assist2"), source: "Notion" },
+        { time: "+01:24", kind: "assist", text: t("ambient:demo.live.meeting.assist3"), source: "Drive" },
+        { time: "+02:15", kind: "assist", text: t("ambient:demo.live.meeting.assist4"), source: "Drive" },
+        { time: "+03:01", kind: "context", text: t("ambient:demo.live.meeting.assist5"), source: "Linear" },
+        { time: "+03:48", kind: "assist", text: t("ambient:demo.live.meeting.assist6"), source: "Linear" },
+        { time: "+04:08", kind: "context", text: t("ambient:demo.live.meeting.assist7"), source: "Linear" },
+        { time: "+04:55", kind: "assist", text: t("ambient:demo.live.meeting.assist8"), source: "Notion" },
+        { time: "+05:30", kind: "action", text: t("ambient:demo.live.meeting.assist9"), source: t("ambient:demo.live.sources.linearDraft") },
+        { time: "+06:12", kind: "context", text: t("ambient:demo.live.meeting.assist10"), source: "Notion" },
+        { time: "+06:48", kind: "action", text: t("ambient:demo.live.meeting.assist11"), source: "Notion" },
+        { time: "+07:30", kind: "assist", text: t("ambient:demo.live.meeting.assist12"), source: t("ambient:demo.live.sources.decisionLog") },
+      ],
+    },
+    {
+      icon: Stethoscope,
+      kind: t("ambient:demo.live.medical.kind"),
+      title: t("ambient:demo.live.medical.title"),
+      location: t("ambient:demo.live.medical.location"),
+      device: "iPhone · Watch",
+      startedAt: "11:20",
+      signals: [
+        t("ambient:demo.live.medical.signal1"),
+        t("ambient:demo.live.medical.signal2"),
+        t("ambient:demo.live.medical.signal3"),
+      ],
+      assists: [
+        { time: "+00:30", kind: "context", text: t("ambient:demo.live.medical.assist1"), source: "Apple Health" },
+        { time: "+01:05", kind: "context", text: t("ambient:demo.live.medical.assist2"), source: t("ambient:demo.live.sources.glossary") },
+        { time: "+01:48", kind: "assist", text: t("ambient:demo.live.medical.assist3"), source: t("ambient:demo.live.sources.glossary") },
+        { time: "+02:40", kind: "assist", text: t("ambient:demo.live.medical.assist4"), source: t("ambient:demo.live.sources.health") },
+        { time: "+03:22", kind: "context", text: t("ambient:demo.live.medical.assist5"), source: "Apple Health" },
+        { time: "+04:00", kind: "action", text: t("ambient:demo.live.medical.assist6"), source: t("ambient:demo.live.sources.notesDraft") },
+        { time: "+04:42", kind: "context", text: t("ambient:demo.live.medical.assist7"), source: t("ambient:demo.live.sources.calendar") },
+        { time: "+05:18", kind: "action", text: t("ambient:demo.live.medical.assist8"), source: t("ambient:demo.live.sources.calendarDraft") },
+        { time: "+06:05", kind: "assist", text: t("ambient:demo.live.medical.assist9"), source: "Mayo Clinic" },
+      ],
+    },
+    {
+      icon: Coffee,
+      kind: t("ambient:demo.live.casual.kind"),
+      title: t("ambient:demo.live.casual.title"),
+      location: t("ambient:demo.live.casual.location"),
+      device: "AirPods Pro",
+      startedAt: "13:45",
+      signals: [
+        t("ambient:demo.live.casual.signal1"),
+        t("ambient:demo.live.casual.signal2"),
+        t("ambient:demo.live.casual.signal3"),
+      ],
+      assists: [
+        { time: "+00:12", kind: "context", text: t("ambient:demo.live.casual.assist1") },
+        { time: "+00:30", kind: "context", text: t("ambient:demo.live.casual.assist2") },
+        { time: "+00:35", kind: "assist", text: t("ambient:demo.live.casual.assist3"), source: t("ambient:demo.live.sources.orderHistory") },
+        { time: "+00:38", kind: "action", text: t("ambient:demo.live.casual.assist4"), source: t("ambient:demo.live.sources.doordashDraft") },
+        { time: "+01:20", kind: "context", text: t("ambient:demo.live.casual.assist5"), source: t("ambient:demo.live.sources.notes") },
+        { time: "+02:05", kind: "assist", text: t("ambient:demo.live.casual.assist6"), source: t("ambient:demo.live.sources.reminders") },
+        { time: "+02:48", kind: "context", text: t("ambient:demo.live.casual.assist7"), source: t("ambient:demo.live.sources.calendar") },
+        { time: "+03:30", kind: "assist", text: t("ambient:demo.live.casual.assist8"), source: "Notion" },
+      ],
+    },
+  ];
+}

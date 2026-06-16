@@ -1,5 +1,9 @@
 import { vi } from "vitest";
 
+// i18n 初始化:让组件测试里的 useTranslation/t() 同步返回英文(en 静态打包),
+// 否则 t() 回显 key,断言英文文案的现有测试会查不到元素。
+import "./i18n";
+
 // Pin the test timezone to UTC so time-of-day logic that relies on local hours
 // (e.g. the ambient timeline morning_health cutoff via Date.getHours()) is
 // deterministic across machines. CI runners are UTC; without this a fixture like

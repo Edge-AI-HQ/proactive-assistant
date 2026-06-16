@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { LucideIcon } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Text } from "../primitives/Text";
 
 export type SphereCardStatus =
@@ -155,6 +156,7 @@ const Sphere3DCards = ({
   onCardTap,
   cacheKey,
 }: Props) => {
+  const { t } = useTranslation("card");
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
 
@@ -463,7 +465,7 @@ const Sphere3DCards = ({
                     style={{ background: "hsl(var(--primary) / 0.15)", color: "hsl(var(--primary))" }}
                   >
                     <span className="w-1 h-1 rounded-full" style={{ background: "hsl(var(--primary))" }} />
-                    Quick
+                    {t("sphere.quick")}
                   </span>
                 ) : (
                   <>
@@ -475,7 +477,7 @@ const Sphere3DCards = ({
                 )}
                 {isNew && (
                   <Text variant="micro" weight="bold" className="text-pink-500 uppercase tracking-wider ml-auto">
-                    new
+                    {t("sphere.badgeNew")}
                   </Text>
                 )}
                 {isProcessing && (
@@ -483,22 +485,22 @@ const Sphere3DCards = ({
                 )}
                 {isNeedsInput && (
                   <Text variant="micro" weight="bold" className="text-amber-500 uppercase tracking-wider ml-auto animate-pulse">
-                    input
+                    {t("sphere.badgeInput")}
                   </Text>
                 )}
                 {isReady && (
                   <Text variant="micro" weight="bold" className="text-green-500 uppercase tracking-wider ml-auto">
-                    ready
+                    {t("sphere.badgeReady")}
                   </Text>
                 )}
                 {isFailed && (
                   <Text variant="micro" weight="bold" className="text-rose-500 uppercase tracking-wider ml-auto">
-                    failed
+                    {t("sphere.badgeFailed")}
                   </Text>
                 )}
                 {isDone && (
                   <Text variant="micro" weight="bold" className="text-green-500 uppercase tracking-wider ml-auto">
-                    done
+                    {t("sphere.badgeDone")}
                   </Text>
                 )}
               </div>

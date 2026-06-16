@@ -1,0 +1,74 @@
+{
+  "status": {
+    "loading": "読み込み中…",
+    "saving": "保存中…",
+    "retry": "再試行",
+    "cancel": "キャンセル",
+    "done": "完了",
+    "close": "閉じる",
+    "thinking": "思考中…",
+    "connecting": "接続中…",
+    "listening": "聞き取り中…",
+    "polishing": "仕上げ中…"
+  },
+  "appShell": {
+    "openMenu": "メニューを開く",
+    "openMainChat": "メインチャットを開く",
+    "askPinAi": "PIN AI に質問"
+  },
+  "menu": {
+    "now": "いま",
+    "ambient": "アンビエント",
+    "tasks": "タスク",
+    "connect": "接続",
+    "profile": "プロフィール",
+    "setting": "設定"
+  },
+  "bootstrapError": {
+    "message": "サーバーに接続できませんでした。接続を確認して、もう一度お試しください。"
+  },
+  "errorBoundary": {
+    "title": "問題が発生しました",
+    "fallbackMessage": "予期しないエラーが発生しました。",
+    "tryAgain": "再試行"
+  },
+  "errors": {
+    "onboardingSave": "オンボーディングの進行状況を保存できませんでした。接続を確認して、もう一度お試しください。",
+    "noRedirectUrl": "リダイレクト URL が返されませんでした",
+    "disconnectFailed": "接続解除に失敗しました",
+    "connectFailedWithStatus": "接続に失敗しました（{{status}}）"
+  },
+  "agentRuns": {
+    "ariaLabel": "実行中のエージェント処理",
+    "title": "エージェントの実行",
+    "runCount_other": "{{count}}件の実行",
+    "kind": {
+      "autoDreaming": "ドリーミング中",
+      "connectorInit": "ソースを接続中",
+      "connectorEvolve": "シグナルを抽出中",
+      "crystallize": "チャットを整理中",
+      "generatorManual": "カードを生成中",
+      "generatorAuto": "カードを生成中",
+      "userPrompt": "合成プロンプト"
+    }
+  },
+  "notificationPrompt": {
+    "title": "通知をオンにする",
+    "description": "カードの生成には数分から数時間かかることがあります。通知をオンにしておけば、準備ができ次第すぐにお知らせします。アプリを見続ける必要はありません。",
+    "turnOn": "オンにする",
+    "later": "あとで"
+  },
+  "weather": {
+    "clear": "晴れ",
+    "cloudy": "くもり",
+    "foggy": "霧",
+    "drizzle": "霧雨",
+    "rainy": "雨",
+    "snowy": "雪",
+    "showers": "にわか雨",
+    "stormy": "嵐"
+  },
+  "desktopNotify": {
+    "newCards_other": "新しいカードが{{count}}件あります"
+  }
+}

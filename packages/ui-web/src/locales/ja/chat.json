@@ -1,0 +1,196 @@
+{
+  "toolVerbs": {
+    "ran": "実行",
+    "ranCommand": "コマンドを実行",
+    "executed": "実行",
+    "ranPython": "Python を実行",
+    "browsed": "閲覧",
+    "searchedWeb": "Web を検索",
+    "readPages": "ページを読み取り",
+    "searchedNews": "ニュースを検索",
+    "searchedMemory": "メモリを検索",
+    "searchedX": "X を検索",
+    "fetched": "取得",
+    "read": "読み取り",
+    "wrote": "書き込み",
+    "edited": "編集",
+    "patched": "パッチを適用",
+    "messaged": "メッセージを送信",
+    "readImage": "画像を読み取り",
+    "generatedImage": "画像を生成",
+    "generatedVideo": "動画を生成",
+    "generatedMusic": "音楽を生成",
+    "spoke": "読み上げ",
+    "drew": "描画",
+    "scheduled": "スケジュールを設定",
+    "checkedSession": "セッションを確認",
+    "listedSessions": "セッション一覧を取得",
+    "loadedHistory": "履歴を読み込み",
+    "sent": "送信",
+    "spawnedAgent": "エージェントを起動",
+    "delegatedToAgent": "エージェントに委任",
+    "delegated": "委任",
+    "updatedPlan": "プランを更新",
+    "messagedYou": "あなたにメッセージを送信",
+    "searchedGmail": "Gmail を検索",
+    "draftedEmail": "メールの下書きを作成",
+    "usedGmail": "Gmail を使用",
+    "readCalendar": "カレンダーを確認",
+    "updatedCalendar": "カレンダーを更新",
+    "usedCalendar": "カレンダーを使用",
+    "searchedNotion": "Notion を検索",
+    "sentOnSlack": "Slack に送信",
+    "searchedSlack": "Slack を検索",
+    "searchedDrive": "Drive を検索"
+  },
+  "landing": {
+    "heading": "いま、何をお考えですか？",
+    "subheading": "何でも聞いてください。あなたのコンテキストを把握しています。",
+    "suggestions": {
+      "focusToday": "今日は何に集中すべき？",
+      "summarizeWeek": "今週のここまでをまとめて",
+      "onMyMind": "最近の関心ごとは？"
+    }
+  },
+  "composer": {
+    "placeholder": "PIN AI にメッセージ…",
+    "voiceInput": "音声入力",
+    "send": "送信",
+    "stop": "停止",
+    "dismissKeyboard": "キーボードを閉じる",
+    "cancelRecording": "録音をキャンセル",
+    "useTranscript": "文字起こしを使用"
+  },
+  "actionBar": {
+    "copyMessage": "メッセージをコピー",
+    "copy": "コピー",
+    "goodResponse": "良い回答",
+    "badResponse": "悪い回答",
+    "regenerateResponse": "回答を再生成",
+    "regenerate": "再生成"
+  },
+  "cardFeedback": {
+    "helpfulPrompt": "役に立ちましたか？",
+    "helpful": "役に立った",
+    "notHelpful": "役に立たなかった",
+    "sent": "送信済み",
+    "comment": "コメント",
+    "commentPlaceholder": "このカードへのフィードバック（エージェントには送信されません）…",
+    "sendFeedback": "フィードバックを送信"
+  },
+  "userEntry": {
+    "notSent": "未送信",
+    "editMessage": "メッセージを編集"
+  },
+  "notify": {
+    "label": "あなたへ通知"
+  },
+  "transcript": {
+    "cardEmptyState": "このカードについてエージェントに依頼するか、メッセージを送ってください。",
+    "scrollToLatest": "最新へスクロール"
+  },
+  "header": {
+    "back": "戻る",
+    "debug": "デバッグ",
+    "proactive": "プロアクティブ",
+    "proactiveToggle": "プロアクティブエージェントのオン/オフ",
+    "dismiss": "閉じる"
+  },
+  "workGroup": {
+    "subtasksRunning_other": "{{count}}件のサブタスクを実行中",
+    "runningSubtask": "サブタスクを実行中",
+    "working": "作業中…",
+    "ranSubtasks_other": "{{count}}件のサブタスクを実行",
+    "usedTools_other": "{{count}}個のツールを使用",
+    "thought": "思考",
+    "steps_other": "{{count}}ステップ"
+  },
+  "toolNode": {
+    "results_other": "{{count}}件の結果"
+  },
+  "taskCard": {
+    "subtask": "サブタスク",
+    "toolCount_other": "{{count}}個のツール",
+    "showMore": "さらに表示（{{count}}）",
+    "noActivity": "まだツールの実行はありません。"
+  },
+  "todoPanel": {
+    "plan": "プラン",
+    "planDone": "プラン完了",
+    "progress": "{{completed}}/{{total}} 完了",
+    "collapsePlan": "プランを折りたたむ",
+    "expandPlan": "プランを展開",
+    "closePlan": "プランを閉じる"
+  },
+  "reasoning": {
+    "thoughtForSeconds": "{{seconds}}秒間思考",
+    "thoughtProcess": "思考プロセス"
+  },
+  "hitl": {
+    "needsApproval": "承認が必要です",
+    "rejectReasonPlaceholder": "任意：理由をエージェントに伝える（ツールを実行せずに続行します）",
+    "back": "戻る",
+    "reject": "却下",
+    "approve": "承認",
+    "resolvedEarlier": "解決済み"
+  },
+  "proposeAction": {
+    "needsInput": "入力が必要です",
+    "replySent": "返信済み",
+    "typeOwnReplyPlaceholder": "または自分で返信を入力…",
+    "typeReplyPlaceholder": "返信を入力…",
+    "sent": "送信済み",
+    "sending": "送信中…",
+    "continue": "続行"
+  },
+  "artifact": {
+    "emailDraft": "メールの下書き",
+    "notes": "メモ",
+    "messageDraft": "メッセージの下書き",
+    "document": "ドキュメント",
+    "draft": "下書き",
+    "failed": "失敗",
+    "open": "開く ↗",
+    "verbSent": "送信済み",
+    "verbPosted": "投稿済み",
+    "verbCreated": "作成済み"
+  },
+  "cardContext": {
+    "context": "コンテキスト",
+    "viewDetails": "カードの詳細を表示",
+    "more": "+{{count}}件",
+    "messagePlaceholder": "このカードについてメッセージ…",
+    "drawerDescription": "カード詳細ビュー",
+    "quickApprove": "クイック承認",
+    "quickApproveHint": "低リスクのタスクです。通常はそのまま承認して問題ありません"
+  },
+  "categories": {
+    "growth": "成長",
+    "work": "仕事",
+    "finance": "お金",
+    "health": "健康",
+    "learn": "学習",
+    "life": "生活"
+  },
+  "mainChat": {
+    "cardFeedbackPlaceholder": "このカードの変更してほしい点を PIN AI に伝えてください…",
+    "feedbackOnCard": "このカードへのフィードバック"
+  },
+  "codeBlock": {
+    "copy": "コピー",
+    "copied": "コピー済み"
+  },
+  "queued": {
+    "badge": "送信待ち",
+    "regionLabel": "送信待ちのメッセージ",
+    "save": "保存",
+    "saveAria": "送信待ちのメッセージを保存",
+    "cancelEditAria": "送信待ちの編集をキャンセル",
+    "edit": "編集",
+    "editAria": "送信待ちのメッセージを編集",
+    "sendNow": "今すぐ送信",
+    "delete": "削除",
+    "deleteAria": "送信待ちのメッセージを削除",
+    "queueMessage": "メッセージを送信待ちに追加"
+  }
+}

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { useTranslation } from "react-i18next";
 import {
   Briefcase,
   ChevronDown,
@@ -36,6 +37,8 @@ import {
   normalizeComposioToolkit,
 } from "@pin-ai/state";
 import { useInitTask, isInitTaskFresh } from "@pin-ai/state";
+import i18n from "../i18n";
+import type connectEn from "../locales/en/connect.json";
 import { resolveComposioConnectionIdentity } from "./composio-display-identity";
 import { closeOAuthSurface, openOAuthAndAwaitClose } from "./oauth-popup";
 import { Text } from "../primitives/Text";
@@ -97,6 +100,7 @@ function InitTaskChip({
   connectedAccountId: string;
   sourceToolkit?: string;
 }) {
+  const { t } = useTranslation("connect");
   const taskId = buildConnectorInitTaskId(toolkit, connectedAccountId);
   const { task, error, terminal } = useInitTask(taskId);
   if (!task) {
@@ -106,7 +110,7 @@ function InitTaskChip({
     return (
       <p className="text-micro text-foreground/40 truncate flex items-center gap-1">
         <Loader2 size={9} className="animate-spin" />
-        Initializing…
+        {t("dataConnections.initTask.initializing")}
       </p>
     );
   }
@@ -120,24 +124,29 @@ function InitTaskChip({
       const fetched = finiteNumber(displayResult?.fetched) ?? resultNumber(displayResult?.rawInserted);
       const skipped = Boolean(task.result?.skipped);
       if (skipped) {
+        // `reason` is a backend enum/slug — rendered raw on purpose.
         const reason = String(task.result?.reason ?? "skipped");
         return (
           <Text variant="micro" className="block text-foreground/40 truncate">
-            Initialization skipped · {reason}
+            {t("dataConnections.initTask.skipped", { reason })}
           </Text>
         );
       }
       return (
         <Text variant="micro" className="block text-emerald-600/80 truncate">
-          Initialized · {fetched} fetched{memoriesWritten > 0 ? ` · ${memoriesWritten} memories` : ""}{skillsAdded > 0 ? ` · ${skillsAdded} skills` : ""}
+          {t("dataConnections.initTask.initialized", { fetched })}
+          {memoriesWritten > 0 ? ` · ${t("dataConnections.initTask.memories", { count: memoriesWritten })}` : ""}
+          {skillsAdded > 0 ? ` · ${t("dataConnections.initTask.skills", { count: skillsAdded })}` : ""}
         </Text>
       );
     }
     // failed / timed_out / cancelled / lost — show shortest possible error
-    const shortErr = (task.last_error_message ?? task.last_error_code ?? "Unknown error").slice(0, 80);
+    const shortErr = (
+      task.last_error_message ?? task.last_error_code ?? t("dataConnections.initTask.unknownError")
+    ).slice(0, 80);
     return (
       <Text variant="micro" className="block text-red-500/80 truncate">
-        Initialization failed — {shortErr}
+        {t("dataConnections.initTask.failed", { error: shortErr })}
       </Text>
     );
   }
@@ -145,17 +154,21 @@ function InitTaskChip({
   const stage = typeof task.progress?.stage === "string" ? task.progress.stage : null;
   const limit = Number(task.payload?.limit ?? 0);
   const progressDetail = (() => {
-    if (!stage) return "Queued";
-    if (stage === "fetch") return `Fetching data${limit ? ` (limit ${limit})` : ""}`;
-    if (stage === "raw") return "Saving locally";
-    if (stage === "signals") return "Extracting signals";
-    if (stage === "evolve") return "Distilling memories";
-    return stage;
+    if (!stage) return t("dataConnections.initTask.stageQueued");
+    if (stage === "fetch") {
+      return limit
+        ? t("dataConnections.initTask.stageFetchWithLimit", { limit })
+        : t("dataConnections.initTask.stageFetch");
+    }
+    if (stage === "raw") return t("dataConnections.initTask.stageRaw");
+    if (stage === "signals") return t("dataConnections.initTask.stageSignals");
+    if (stage === "evolve") return t("dataConnections.initTask.stageEvolve");
+    return stage; // unknown stage = backend identifier, render raw
   })();
   return (
     <p className="text-micro text-foreground/45 truncate flex items-center gap-1">
       <Loader2 size={9} className="animate-spin" />
-      Initializing · {progressDetail}
+      {t("dataConnections.initTask.initializingDetail", { detail: progressDetail })}
     </p>
   );
 }
@@ -167,6 +180,9 @@ function resolveIdentity(
   return resolveComposioConnectionIdentity(conn, allConnections);
 }
 
+type CoverageNoteKey = keyof typeof connectEn.dataConnections.coverage;
+type CategoryLabelKey = keyof typeof connectEn.dataConnections.categories;
+
 export interface DataSource {
   name: string;
   composioId?: string;
@@ -174,14 +190,16 @@ export interface DataSource {
   icon: LucideIcon;
   tier: 0 | 1 | 2;
   children?: DataSource[];
-  coverageNote?: string;
+  coverageNoteKey?: CoverageNoteKey;
   showInitTask?: boolean;
 }
 
 export interface InputCategory {
+  /** i18n key under `dataConnections.categories` for name + description. */
+  labelKey: CategoryLabelKey;
+  /** Stable id used as React key / expanded-state value — not displayed. */
   name: string;
   icon: LucideIcon;
-  description: string;
   sources: DataSource[];
 }
 
@@ -234,7 +252,7 @@ export const RECOMMENDED_SOURCES: DataSource[] = [
         description: "Presentations",
         icon: Presentation,
         tier: 0,
-        coverageNote: "via Drive metadata",
+        coverageNoteKey: "viaDriveMetadata",
         showInitTask: false,
       },
     ],
@@ -285,9 +303,9 @@ export const RECOMMENDED_SOURCES: DataSource[] = [
 
 export const INPUT_CATEGORIES: InputCategory[] = [
   {
+    labelKey: "recommended",
     name: "Recommended",
     icon: Briefcase,
-    description: "Best first-party data sources",
     sources: RECOMMENDED_SOURCES,
   },
 ];
@@ -302,26 +320,29 @@ const RECOMMENDED_CATALOG_TOOLKITS = new Set(
     .map((toolkit) => normalizeComposioToolkit(toolkit)),
 );
 const CATALOG_CATEGORIES = [
-  { value: "", label: "All" },
-  { value: "email", label: "Email" },
-  { value: "calendar", label: "Calendar" },
-  { value: "team-chat", label: "Team chat" },
-  { value: "productivity", label: "Productivity" },
-  { value: "developer-tools", label: "Dev tools" },
-  { value: "crm", label: "CRM" },
-  { value: "project-management", label: "Projects" },
-  { value: "documents", label: "Documents" },
-  { value: "databases", label: "Databases" },
-  { value: "analytics", label: "Analytics" },
-  { value: "marketing-automation", label: "Marketing" },
-  { value: "ecommerce", label: "Ecommerce" },
-  { value: "scheduling & booking", label: "Scheduling" },
-  { value: "file management & storage", label: "Files" },
-  { value: "video & audio", label: "Video & audio" },
-] as const;
+  { value: "", labelKey: "all" },
+  { value: "email", labelKey: "email" },
+  { value: "calendar", labelKey: "calendar" },
+  { value: "team-chat", labelKey: "teamChat" },
+  { value: "productivity", labelKey: "productivity" },
+  { value: "developer-tools", labelKey: "devTools" },
+  { value: "crm", labelKey: "crm" },
+  { value: "project-management", labelKey: "projects" },
+  { value: "documents", labelKey: "documents" },
+  { value: "databases", labelKey: "databases" },
+  { value: "analytics", labelKey: "analytics" },
+  { value: "marketing-automation", labelKey: "marketing" },
+  { value: "ecommerce", labelKey: "ecommerce" },
+  { value: "scheduling & booking", labelKey: "scheduling" },
+  { value: "file management & storage", labelKey: "files" },
+  { value: "video & audio", labelKey: "videoAudio" },
+] as const satisfies ReadonlyArray<{
+  value: string;
+  labelKey: keyof typeof connectEn.dataConnections.catalog.categories;
+}>;
 
 function formatCount(value: number): string {
-  return new Intl.NumberFormat("en-US").format(value);
+  return new Intl.NumberFormat(i18n.language || "en").format(value);
 }
 
 function getComposioLogoUrl(toolkit: string | undefined): string | null {
@@ -392,20 +413,21 @@ function customConnectorFromConnection(conn: Connection): CustomConnector | null
 }
 
 function CustomMcpStatus({ connector }: { connector: CustomConnector }) {
+  const { t } = useTranslation("connect");
   const { task } = useInitTask(connector.evolveTaskId ?? null);
   const fetched = connector.fetched ?? connector.rawInserted;
   const isDistilling = task?.status === "queued" || task?.status === "running";
   if (connector.lastError) {
-    return <Text variant="micro" weight="medium" className="text-red-500">Sync failed</Text>;
+    return <Text variant="micro" weight="medium" className="text-red-500">{t("dataConnections.customMcp.syncFailed")}</Text>;
   }
   if (typeof fetched === "number") {
     return (
       <Text variant="micro" weight="medium" className="text-emerald-600">
-        {formatCount(fetched)} fetched{isDistilling ? " · Distilling" : ""}
+        {t("dataConnections.customMcp.fetched", { value: formatCount(fetched) })}{isDistilling ? ` · ${t("dataConnections.customMcp.distilling")}` : ""}
       </Text>
     );
   }
-  return <Text variant="micro" weight="medium" className="text-emerald-600">Connected</Text>;
+  return <Text variant="micro" weight="medium" className="text-emerald-600">{t("dataConnections.customMcp.connected")}</Text>;
 }
 
 export function isDataSourceConnected(source: DataSource, connections: Connection[]): boolean {
@@ -422,6 +444,7 @@ interface DataConnectionsProps {
 }
 
 export default function DataConnections({ composio }: DataConnectionsProps) {
+  const { t } = useTranslation(["connect", "common"]);
   const {
     keyStatus,
     connections,
@@ -488,7 +511,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
     try {
       const result = await connectToolkit(composioId);
       if (!result.ok) {
-        setConnectError(result.error ?? "Connect failed");
+        setConnectError(result.error ?? t("dataConnections.errors.connectFailed"));
         return;
       }
       if (!result.redirectUrl && result.connectedAccountId) {
@@ -498,7 +521,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
       if (!result.redirectUrl || !result.connectedAccountId) {
         if (result.ok)
           setConnectError(
-            "Connect succeeded but missing redirect info — please try again",
+            t("dataConnections.errors.missingRedirect"),
           );
         return;
       }
@@ -522,7 +545,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
     } catch (err) {
       if (!cancelledRef.current)
         setConnectError(
-          err instanceof Error ? err.message : "Unexpected error",
+          err instanceof Error ? err.message : t("dataConnections.errors.unexpected"),
         );
     } finally {
       setConnectingToolkit(null);
@@ -547,7 +570,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
     if (requestId !== catalogRequestRef.current) return;
     setCatalogLoading(false);
     if (!result.ok || !result.page) {
-      setCatalogError(result.error ?? "Catalog unavailable");
+      setCatalogError(result.error ?? t("dataConnections.errors.catalogUnavailable"));
       return;
     }
     const page = result.page;
@@ -576,8 +599,9 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
     }
   };
 
-  const catalogTotalLabel =
-    catalogTotalCount !== null ? `${formatCount(catalogTotalCount)} supported` : "1000+ supported";
+  const catalogTotalLabel = catalogTotalCount !== null
+    ? t("dataConnections.catalog.supportedCount", { total: formatCount(catalogTotalCount) })
+    : t("dataConnections.catalog.supportedFallback");
   const catalogDisplayItems = useMemo(
     () => catalogItems
       .map((item, index) => ({
@@ -633,17 +657,17 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
     const url = customUrl.trim();
     setCustomError(null);
     if (!name) {
-      setCustomError("Enter a connector name");
+      setCustomError(t("dataConnections.customMcp.nameRequired"));
       return;
     }
     try {
       const parsed = new URL(url);
       if (parsed.protocol !== "https:") {
-        setCustomError("Remote MCP server URL must use https");
+        setCustomError(t("dataConnections.customMcp.httpsRequired"));
         return;
       }
     } catch (err) {
-      setCustomError("Enter a valid Remote MCP server URL");
+      setCustomError(t("dataConnections.customMcp.urlInvalid"));
       return;
     }
     setCustomSubmitting(true);
@@ -656,7 +680,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
         ? await updateCustomMcpConnector(editingCustomConnector.id, input)
         : await createCustomMcpConnector(input);
       if (!result.ok || !result.connector) {
-        setCustomError(result.error ?? "Custom connector failed");
+        setCustomError(result.error ?? t("dataConnections.customMcp.failed"));
         return;
       }
       const connector: CustomConnector = {
@@ -687,7 +711,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
     try {
       const result = await deleteCustomMcpConnector(connector.id);
       if (!result.ok) {
-        setConnectError(result.error ?? "Delete custom connector failed");
+        setConnectError(result.error ?? t("dataConnections.customMcp.deleteFailed"));
         return;
       }
       setOptimisticCustomConnectors((prev) => prev.filter((item) => item.id !== connector.id));
@@ -708,7 +732,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
     setConnectError(null);
     try {
       const result = await disconnectAccount(connectedAccountId);
-      if (!result.ok) setConnectError(result.error ?? "Disconnect failed");
+      if (!result.ok) setConnectError(result.error ?? t("dataConnections.errors.disconnectFailed"));
     } finally {
       setDisconnectingId(null);
     }
@@ -724,10 +748,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
       {!configured && !statusLoading && (
         <div className="glass-card p-4 mb-4 flex items-start gap-1.5 text-caption text-foreground/60">
           <XCircle size={12} className="mt-0.5 flex-shrink-0 text-red-500" />
-          <span>
-            Composio is not configured on this deployment. Connections will be
-            unavailable until the backend operator sets it up.
-          </span>
+          <span>{t("dataConnections.notConfigured")}</span>
         </div>
       )}
 
@@ -759,14 +780,14 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                 <div className="flex-1 text-left">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-foreground">
-                      {category.name}
+                      {t(`dataConnections.categories.${category.labelKey}.name`)}
                     </span>
                     <Text variant="micro" weight="medium" className="text-foreground/40 bg-foreground/[0.06] px-1.5 py-0.5 rounded-md">
                       {connected} / {category.sources.length}
                     </Text>
                   </div>
                   <Text variant="caption" className="block text-foreground/40 mt-0.5 leading-snug">
-                    {category.description}
+                    {t(`dataConnections.categories.${category.labelKey}.description`)}
                   </Text>
                 </div>
                 <div className="flex-shrink-0 text-foreground/30">
@@ -792,16 +813,16 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
 
                       {category.sources.length === 0 && (
                         <Text variant="caption" className="block text-foreground/40 italic px-1 py-3 text-center">
-                          No connectors available yet
+                          {t("dataConnections.noConnectors")}
                         </Text>
                       )}
 
-                      {[0, 1, 2].map((tier) => {
+                      {([0, 1, 2] as const).map((tier) => {
                         const tierSources = category.sources.filter(
                           (s) => s.tier === tier,
                         );
                         if (tierSources.length === 0) return null;
-                        const tierLabels = ["Core sources", "More sources", "Optional"];
+                        const tierLabelKeys = ["core", "more", "optional"] as const;
                         return (
                           <div key={tier}>
                             <div className="flex items-center gap-2 mb-1.5 mt-2.5">
@@ -815,7 +836,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                 }`}
                               />
                               <Text variant="micro" weight="semibold" className="text-foreground/50 uppercase tracking-wider">
-                                {tierLabels[tier]}
+                                {t(`dataConnections.tiers.${tierLabelKeys[tier]}`)}
                               </Text>
                             </div>
                             <div className="space-y-1">
@@ -908,7 +929,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                   size={10}
                                                   className="animate-spin"
                                                 />{" "}
-                                                Cancel
+                                                {t("common:status.cancel")}
                                               </button>
                                             ) : (
                                               <button
@@ -921,7 +942,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                 className="text-micro font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.1] transition-all opacity-0 group-hover:opacity-100"
                                               >
                                                 <span className="flex items-center gap-1">
-                                                  <Plus size={10} /> Add
+                                                  <Plus size={10} /> {t("dataConnections.add")}
                                                 </span>
                                               </button>
                                             )}
@@ -949,10 +970,10 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                               ) : (
                                                 <span>
                                                   <span className="group-hover:hidden">
-                                                    Connected
+                                                    {t("dataConnections.connected")}
                                                   </span>
                                                   <span className="hidden group-hover:inline">
-                                                    Disconnect
+                                                    {t("dataConnections.disconnect")}
                                                   </span>
                                                 </span>
                                               )}
@@ -973,7 +994,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                   size={10}
                                                   className="animate-spin"
                                                 />{" "}
-                                                Cancel
+                                                {t("common:status.cancel")}
                                               </button>
                                             ) : (
                                               <button
@@ -985,7 +1006,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                 }}
                                                 className="text-micro font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1] transition-colors"
                                               >
-                                                Connect
+                                                {t("dataConnections.connect")}
                                               </button>
                                             )}
                                           </>
@@ -993,7 +1014,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                           <>
                                             <span className="w-1.5 h-1.5 rounded-full bg-foreground/10 flex-shrink-0" />
                                             <Text variant="micro" weight="medium" className="text-foreground/20 bg-foreground/[0.03] border border-foreground/[0.06] rounded-lg px-2.5 py-0.5 cursor-not-allowed">
-                                              Connect
+                                              {t("dataConnections.connect")}
                                             </Text>
                                           </>
                                         )}
@@ -1027,7 +1048,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                 size={10}
                                                 className="animate-spin"
                                               />{" "}
-                                              Cancel
+                                              {t("common:status.cancel")}
                                             </button>
                                           ) : (
                                             <button
@@ -1040,7 +1061,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                               className="text-micro font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1] transition-colors"
                                             >
                                               <span className="flex items-center gap-1">
-                                                <Plus size={10} /> Add
+                                                <Plus size={10} /> {t("dataConnections.add")}
                                               </span>
                                             </button>
                                           )}
@@ -1081,7 +1102,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                       className="animate-spin text-red-500"
                                                     />
                                                   ) : (
-                                                    "Disconnect"
+                                                    t("dataConnections.disconnect")
                                                   )}
                                                 </button>
                                               </div>
@@ -1123,7 +1144,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                             childAccount.toolkit.toLowerCase() ===
                                               child.composioId?.toLowerCase();
                                           const childCanAddAccount =
-                                            childHasComposio && !child.coverageNote;
+                                            childHasComposio && !child.coverageNoteKey;
                                           return (
                                             <div key={child.name} className="space-y-0.5">
                                               <div
@@ -1158,9 +1179,9 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                     >
                                                       {child.name}
                                                     </span>
-                                                    {child.coverageNote && (
+                                                    {child.coverageNoteKey && (
                                                       <Text variant="micro" className="text-foreground/30">
-                                                        {child.coverageNote}
+                                                        {t(`dataConnections.coverage.${child.coverageNoteKey}`)}
                                                       </Text>
                                                     )}
                                                   </div>
@@ -1185,13 +1206,13 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                         className="text-micro font-medium text-foreground/50 bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 flex items-center gap-1"
                                                       >
                                                         <Loader2 size={10} className="animate-spin" />
-                                                        Cancel
+                                                        {t("common:status.cancel")}
                                                       </button>
                                                     ) : (
                                                       <>
                                                         {childCanAddAccount && (
                                                           <button
-                                                            aria-label={`Add ${child.name} account`}
+                                                            aria-label={t("dataConnections.addAccountAria", { name: child.name })}
                                                             onClick={(e) => {
                                                               e.stopPropagation();
                                                               handleConnect(child.composioId!);
@@ -1199,7 +1220,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                             className="inline-flex items-center gap-1 text-micro font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.1] transition-all opacity-0 group-hover/child:opacity-100"
                                                           >
                                                             <Plus size={10} />
-                                                            Add
+                                                            {t("dataConnections.add")}
                                                           </button>
                                                         )}
                                                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
@@ -1222,26 +1243,26 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                             ) : (
                                                               <span>
                                                                 <span className="group-hover/child:hidden">
-                                                                  Connected
+                                                                  {t("dataConnections.connected")}
                                                                 </span>
                                                                 <span className="hidden group-hover/child:inline">
-                                                                  Disconnect
+                                                                  {t("dataConnections.disconnect")}
                                                                 </span>
                                                               </span>
                                                             )}
                                                           </button>
                                                         ) : (
                                                           <Text variant="micro" weight="medium" className="text-emerald-600">
-                                                            Connected
+                                                            {t("dataConnections.connected")}
                                                           </Text>
                                                         )}
                                                       </>
                                                     )}
                                                   </div>
                                                 ) : childHasComposio ? (
-                                                  child.coverageNote ? (
+                                                  child.coverageNoteKey ? (
                                                     <Text variant="micro" weight="medium" className="text-foreground/30">
-                                                      {child.coverageNote}
+                                                      {t(`dataConnections.coverage.${child.coverageNoteKey}`)}
                                                     </Text>
                                                   ) : childIsConnecting ? (
                                                     <button
@@ -1252,7 +1273,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                       className="text-micro font-medium text-foreground/50 bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 flex items-center gap-1"
                                                     >
                                                       <Loader2 size={10} className="animate-spin" />
-                                                      Cancel
+                                                      {t("common:status.cancel")}
                                                     </button>
                                                   ) : (
                                                     <button
@@ -1262,12 +1283,12 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                       }}
                                                       className="text-micro font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.1] transition-colors"
                                                     >
-                                                      Connect
+                                                      {t("dataConnections.connect")}
                                                     </button>
                                                   )
                                                 ) : (
                                                   <Text variant="micro" weight="medium" className="text-foreground/20">
-                                                    Connect
+                                                    {t("dataConnections.connect")}
                                                   </Text>
                                                 )}
                                               </div>
@@ -1304,7 +1325,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                                                     className="animate-spin text-red-500"
                                                                   />
                                                                 ) : (
-                                                                  "Disconnect"
+                                                                  t("dataConnections.disconnect")
                                                                 )}
                                                               </button>
                                                             )}
@@ -1354,10 +1375,10 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <h3 className="text-sm font-semibold text-foreground">More data connectors</h3>
+                <h3 className="text-sm font-semibold text-foreground">{t("dataConnections.catalog.title")}</h3>
               </div>
               <Text variant="caption" className="block text-foreground/45 mt-0.5">
-                {catalogTotalLabel} sources
+                {catalogTotalLabel}
               </Text>
             </div>
             <ChevronDown
@@ -1382,7 +1403,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                       <input
                         value={catalogQuery}
                         onChange={(e) => setCatalogQuery(e.target.value)}
-                        placeholder="Search connectors"
+                        placeholder={t("dataConnections.catalog.searchPlaceholder")}
                         className="w-full rounded-xl border border-foreground/10 bg-foreground/[0.03] pl-8 pr-3 py-2 text-xs text-foreground outline-none placeholder:text-foreground/30 focus:border-foreground/25"
                       />
                     </label>
@@ -1392,7 +1413,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                       className="rounded-xl border border-foreground/10 bg-foreground/[0.03] px-2 py-2 text-xs text-foreground outline-none focus:border-foreground/25"
                     >
                       {CATALOG_CATEGORIES.map((cat) => (
-                        <option key={cat.value} value={cat.value}>{cat.label}</option>
+                        <option key={cat.value} value={cat.value}>{t(`dataConnections.catalog.categories.${cat.labelKey}`)}</option>
                       ))}
                     </select>
                   </div>
@@ -1400,11 +1421,11 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                   {catalogItems.length === 0 && catalogLoading ? (
                     <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] px-3 py-3 text-xs text-foreground/45 flex items-center gap-2">
                       <Loader2 size={13} className="animate-spin" />
-                      Loading connectors
+                      {t("dataConnections.catalog.loading")}
                     </div>
                   ) : catalogItems.length === 0 && catalogLoaded ? (
                     <div className="rounded-xl bg-foreground/[0.02] px-3 py-3 text-xs text-foreground/40">
-                      No connectors found
+                      {t("dataConnections.catalog.empty")}
                     </div>
                   ) : catalogItems.length === 0 ? (
                     <button
@@ -1412,12 +1433,12 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                       disabled={catalogLoading}
                       className="w-full rounded-xl border border-foreground/10 bg-foreground/[0.04] px-3 py-2 text-xs font-medium text-foreground hover:bg-foreground/[0.08] disabled:opacity-50"
                     >
-                      Load connectors
+                      {t("dataConnections.catalog.load")}
                     </button>
                   ) : (
                     <div className="space-y-2">
                       <div
-                        aria-label="Connector results"
+                        aria-label={t("dataConnections.catalog.resultsAria")}
                         onScroll={handleCatalogScroll}
                         className="max-h-72 overflow-y-auto pr-1 space-y-1"
                       >
@@ -1461,7 +1482,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                   onClick={handleCancel}
                                   className="text-micro font-medium text-foreground/50 bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5"
                                 >
-                                  Cancel
+                                  {t("common:status.cancel")}
                                 </button>
                               ) : isConnected ? (
                                 <div className="flex flex-shrink-0 items-center gap-1.5">
@@ -1470,16 +1491,16 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                                     className="inline-flex items-center gap-1 text-micro font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2 py-0.5 hover:bg-foreground/[0.1] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-all"
                                   >
                                     <Plus size={10} />
-                                    Add
+                                    {t("dataConnections.add")}
                                   </button>
-                                  <Text variant="micro" weight="medium" className="text-emerald-600">Connected</Text>
+                                  <Text variant="micro" weight="medium" className="text-emerald-600">{t("dataConnections.connected")}</Text>
                                 </div>
                               ) : (
                                 <button
                                   onClick={() => void handleConnect(item.slug)}
                                   className="text-micro font-medium text-foreground bg-foreground/[0.06] border border-foreground/12 rounded-lg px-2.5 py-0.5 hover:bg-foreground/[0.1]"
                                 >
-                                  Connect
+                                  {t("dataConnections.connect")}
                                 </button>
                               )}
                             </div>
@@ -1489,7 +1510,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                       <div className="flex items-center justify-end gap-2">
                         {catalogCursor && (
                           <Text variant="micro" className="text-foreground/30">
-                            {catalogLoading ? "Loading..." : "Scroll for more"}
+                            {catalogLoading ? t("common:status.loading") : t("dataConnections.catalog.scrollForMore")}
                           </Text>
                         )}
                       </div>
@@ -1525,14 +1546,14 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                             <CustomMcpStatus connector={connector} />
                             <button
                               onClick={() => openEditCustomConnector(connector)}
-                              aria-label={`Edit ${connector.name}`}
+                              aria-label={t("dataConnections.customMcp.editAria", { name: connector.name })}
                               className="rounded-lg p-1 text-foreground/35 hover:bg-foreground/[0.06] hover:text-foreground"
                             >
                               <Pencil size={12} />
                             </button>
                             <button
                               onClick={() => void handleCustomDelete(connector)}
-                              aria-label={`Delete ${connector.name}`}
+                              aria-label={t("dataConnections.customMcp.deleteAria", { name: connector.name })}
                               disabled={disconnectingId === connector.id}
                               className="rounded-lg p-1 text-foreground/35 hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50"
                             >
@@ -1554,7 +1575,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                       className="w-full rounded-xl border border-dashed border-foreground/15 bg-foreground/[0.02] px-3 py-2 text-xs font-medium text-foreground/65 hover:text-foreground hover:bg-foreground/[0.05] flex items-center justify-center gap-1.5"
                     >
                       <Plus size={13} />
-                      Add custom connector
+                      {t("dataConnections.customMcp.addButton")}
                     </button>
                   </div>
                 </div>
@@ -1604,16 +1625,18 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-3">
                     <h2 id="custom-connector-title" className="text-lg font-semibold leading-snug text-foreground">
-                      {editingCustomConnector ? "Edit custom connector" : "Add custom connector"}
+                      {editingCustomConnector
+                        ? t("dataConnections.customMcp.editTitle")
+                        : t("dataConnections.customMcp.addTitle")}
                     </h2>
                   </div>
                   <p className="mt-3 max-w-xl text-xs leading-5 text-foreground/50">
-                    Connect PIN AI to your data and tools with a remote MCP server.
+                    {t("dataConnections.customMcp.dialogDescription")}
                   </p>
                 </div>
                 <button
                   onClick={closeCustomConnectorDialog}
-                  aria-label="Close custom connector dialog"
+                  aria-label={t("dataConnections.customMcp.closeAria")}
                   className="rounded-full p-1.5 text-foreground/45 hover:bg-foreground/[0.08] hover:text-foreground"
                 >
                   <X size={24} />
@@ -1624,7 +1647,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                 <input
                   value={customName}
                   onChange={(e) => setCustomName(e.target.value)}
-                  placeholder="Name"
+                  placeholder={t("dataConnections.customMcp.namePlaceholder")}
                   autoComplete="off"
                   name="pinai-custom-mcp-name"
                   spellCheck={false}
@@ -1633,7 +1656,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                 <input
                   value={customUrl}
                   onChange={(e) => setCustomUrl(e.target.value)}
-                  placeholder="Remote MCP server URL"
+                  placeholder={t("dataConnections.customMcp.urlPlaceholder")}
                   autoComplete="off"
                   name="pinai-custom-mcp-url"
                   spellCheck={false}
@@ -1641,7 +1664,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                 />
 
                 <p className="text-xs leading-5 text-foreground/45">
-                  Only use connectors from developers you trust. PIN AI cannot verify that third-party tools will work as intended or remain unchanged.
+                  {t("dataConnections.customMcp.trustNote")}
                 </p>
 
                 {customError && (
@@ -1656,7 +1679,7 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                   onClick={closeCustomConnectorDialog}
                   className="rounded-xl bg-foreground/[0.08] px-5 py-2.5 text-sm font-semibold text-foreground hover:bg-foreground/[0.12]"
                 >
-                  Cancel
+                  {t("common:status.cancel")}
                 </button>
                 <button
                   onClick={() => void handleCustomConnect()}
@@ -1666,10 +1689,10 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                   {customSubmitting ? (
                     <span className="inline-flex items-center gap-1.5">
                       <Loader2 size={14} className="animate-spin" />
-                      {editingCustomConnector ? "Save" : "Add"}
+                      {editingCustomConnector ? t("dataConnections.save") : t("dataConnections.add")}
                     </span>
                   ) : (
-                    editingCustomConnector ? "Save" : "Add"
+                    editingCustomConnector ? t("dataConnections.save") : t("dataConnections.add")
                   )}
                 </button>
               </div>
@@ -1682,13 +1705,13 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
         <div className="glass-card px-4 py-3 mt-3 flex items-center justify-between">
           <p className="text-caption text-foreground/40 italic flex items-center gap-1.5">
             <Loader2 size={10} className="animate-spin" />
-            Authorize in your browser — this will update automatically
+            {t("dataConnections.authorizeHint")}
           </p>
           <button
             onClick={handleCancel}
             className="text-micro font-medium text-foreground/40 hover:text-foreground/70 px-2 py-0.5 rounded-lg hover:bg-foreground/[0.06] transition-colors"
           >
-            Cancel
+            {t("common:status.cancel")}
           </button>
         </div>
       )}

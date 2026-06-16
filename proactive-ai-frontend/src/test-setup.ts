@@ -1,5 +1,11 @@
 import { vi } from "vitest";
 
+// i18n 初始化(下沉 @pin-ai/ui-web):让组件测试里 t() 同步返回英文,
+// 否则回显 key,断言英文文案的测试会查不到元素。只 import i18n init 模块,
+// 不走整包 barrel(避免 transport-bootstrap 的 configureTransport 等副作用
+// 污染不期望配置 transport 的测试)。
+import "../../packages/ui-web/src/i18n";
+
 // Pin the test timezone to UTC so time-of-day logic that relies on local hours
 // (e.g. the ambient timeline morning_health cutoff via Date.getHours()) is
 // deterministic across machines. CI runners are UTC; without this a fixture like

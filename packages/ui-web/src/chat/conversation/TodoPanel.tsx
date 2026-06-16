@@ -16,6 +16,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Circle, Loader2, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { useTodoPlan, type Todo } from "@pin-ai/state";
 import { Text } from "../../primitives/Text";
@@ -39,6 +40,7 @@ function statusIcon(status: Todo["status"]) {
 }
 
 export default function TodoPanel({ sessionKey, composerFocused }: TodoPanelProps) {
+  const { t } = useTranslation("chat");
   const plan = useTodoPlan(sessionKey);
   const [expanded, setExpanded] = useState(true);
   const [dismissedTurnId, setDismissedTurnId] = useState<string | null>(null);
@@ -102,7 +104,7 @@ export default function TodoPanel({ sessionKey, composerFocused }: TodoPanelProp
     <div className="mx-2 mb-1 rounded-xl border border-foreground/10 bg-white/70 backdrop-blur-sm shadow-sm overflow-hidden">
       <div className="flex items-center gap-2 px-3 py-2">
         <Text variant="bodySm" weight="medium" className="text-foreground/80">
-          {plan.done && allDone ? "Plan done" : "Plan"}
+          {plan.done && allDone ? t("todoPanel.planDone") : t("todoPanel.plan")}
         </Text>
         <span
           className={cn(
@@ -110,13 +112,13 @@ export default function TodoPanel({ sessionKey, composerFocused }: TodoPanelProp
             allDone ? "text-emerald-600" : "text-foreground/45",
           )}
         >
-          · {completed}/{plan.todos.length} done
+          · {t("todoPanel.progress", { completed, total: plan.todos.length })}
         </span>
         <div className="ml-auto flex items-center gap-0.5">
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
-            aria-label={expanded ? "Collapse plan" : "Expand plan"}
+            aria-label={expanded ? t("todoPanel.collapsePlan") : t("todoPanel.expandPlan")}
             className="p-1 rounded-md text-foreground/50 hover:text-foreground/80 hover:bg-foreground/10 transition-colors"
           >
             <ChevronDown
@@ -131,7 +133,7 @@ export default function TodoPanel({ sessionKey, composerFocused }: TodoPanelProp
           <button
             type="button"
             onClick={() => setDismissedTurnId(plan.turnId)}
-            aria-label="Close plan"
+            aria-label={t("todoPanel.closePlan")}
             className="p-1 rounded-md text-foreground/50 hover:text-foreground/80 hover:bg-foreground/10 transition-colors"
           >
             <X size={14} strokeWidth={2.2} />

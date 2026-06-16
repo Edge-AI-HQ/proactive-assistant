@@ -8,6 +8,7 @@
  * 点击经 preload 唤起主窗。
  */
 import type { DatabasePort } from "@pin-ai/core";
+import { i18n } from "@pin-ai/ui-web";
 import { isElectron } from "../platform";
 
 export async function notifyNewCards(
@@ -43,7 +44,7 @@ export async function notifyNewCards(
     const notification =
       titles.length === 1
         ? new Notification(titles[0].title, { body: titles[0].summary })
-        : new Notification(`${titles.length} new cards for you`, {
+        : new Notification(i18n.t("common:desktopNotify.newCards", { count: titles.length }), {
             body: titles
               .slice(0, 2)
               .map((t) => t.title)

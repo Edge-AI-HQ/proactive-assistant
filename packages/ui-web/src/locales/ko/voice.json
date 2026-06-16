@@ -1,0 +1,10 @@
+{
+  "button": {
+    "cancelRecordingAria": "녹음 취소",
+    "useTranscriptAria": "변환된 텍스트 사용",
+    "voiceInputAria": "음성 입력"
+  },
+  "errors": {
+    "transcriptionFailed": "음성 변환에 실패했어요"
+  }
+}

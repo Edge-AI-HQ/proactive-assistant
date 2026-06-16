@@ -1,0 +1,78 @@
+{
+  "status": {
+    "loading": "Cargando…",
+    "saving": "Guardando…",
+    "retry": "Reintentar",
+    "cancel": "Cancelar",
+    "done": "Listo",
+    "close": "Cerrar",
+    "thinking": "Pensando…",
+    "connecting": "Conectando…",
+    "listening": "Escuchando…",
+    "polishing": "Puliendo…"
+  },
+  "appShell": {
+    "openMenu": "Abrir menú",
+    "openMainChat": "Abrir chat principal",
+    "askPinAi": "Pregunta a PIN AI"
+  },
+  "menu": {
+    "now": "AHORA",
+    "ambient": "AMBIENTE",
+    "tasks": "TAREAS",
+    "connect": "CONECTAR",
+    "profile": "PERFIL",
+    "setting": "AJUSTES"
+  },
+  "bootstrapError": {
+    "message": "No se pudo conectar con el servidor. Revisa tu conexión e inténtalo de nuevo."
+  },
+  "errorBoundary": {
+    "title": "Algo salió mal",
+    "fallbackMessage": "Ocurrió un error inesperado.",
+    "tryAgain": "Reintentar"
+  },
+  "errors": {
+    "onboardingSave": "No se pudo guardar tu progreso de configuración inicial. Revisa tu conexión e inténtalo de nuevo.",
+    "noRedirectUrl": "No se recibió ninguna URL de redirección",
+    "disconnectFailed": "Error al desconectar",
+    "connectFailedWithStatus": "Error al conectar ({{status}})"
+  },
+  "agentRuns": {
+    "ariaLabel": "Ejecuciones de agente activas",
+    "title": "Ejecuciones del agente",
+    "runCount_one": "{{count}} ejecución",
+    "runCount_many": "{{count}} ejecuciones",
+    "runCount_other": "{{count}} ejecuciones",
+    "kind": {
+      "autoDreaming": "Soñando",
+      "connectorInit": "Conectando fuente",
+      "connectorEvolve": "Destilando señales",
+      "crystallize": "Cristalizando chat",
+      "generatorManual": "Generando tarjetas",
+      "generatorAuto": "Generando tarjetas",
+      "userPrompt": "Prompt sintético"
+    }
+  },
+  "notificationPrompt": {
+    "title": "Activa las notificaciones",
+    "description": "Generar tarjetas puede tardar de unos minutos a varias horas. Con las notificaciones activadas, te avisaremos en cuanto estén listas, sin que tengas que estar pendiente de la app.",
+    "turnOn": "Activar",
+    "later": "Más tarde"
+  },
+  "weather": {
+    "clear": "Despejado",
+    "cloudy": "Nublado",
+    "foggy": "Niebla",
+    "drizzle": "Llovizna",
+    "rainy": "Lluvia",
+    "snowy": "Nieve",
+    "showers": "Chubascos",
+    "stormy": "Tormenta"
+  },
+  "desktopNotify": {
+    "newCards_one": "{{count}} tarjeta nueva para ti",
+    "newCards_many": "{{count}} tarjetas nuevas para ti",
+    "newCards_other": "{{count}} tarjetas nuevas para ti"
+  }
+}

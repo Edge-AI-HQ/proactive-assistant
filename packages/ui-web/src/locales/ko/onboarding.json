@@ -1,0 +1,55 @@
+{
+  "stepOf": "{{total}}단계 중 {{step}}단계",
+  "skip": "건너뛰기",
+  "next": "다음",
+  "back": "뒤로",
+  "genericError": "문제가 발생했어요. 다시 시도해 주세요.",
+  "step1": {
+    "title": "Ambient 설정",
+    "subtitleNative": "Ambient 소스를 켜고 짧은 본인 음성 샘플을 녹음해 주세요. 둘 다 언제든지 Control Center에서 바꿀 수 있어요.",
+    "subtitleWeb": "Ambient 센서는 iOS 앱에서 동작해요. 이 단계는 여기서 건너뛰고 나중에 휴대폰에서 Ambient 설정을 마칠 수 있어요."
+  },
+  "step2": {
+    "title": "온디바이스 AI 모델",
+    "subtitleNative": "Gemma 2B를 다운로드하면 Ambient가 이 기기 안에서 로컬 컨텍스트를 비공개로 요약할 수 있어요.",
+    "subtitleWeb": "로컬 Ambient 요약은 iOS 앱에서 동작해요. 이 단계는 여기서 건너뛰고 나중에 휴대폰에서 모델을 다운로드할 수 있어요.",
+    "webPlaceholder": "Gemma 2B 설정은 네이티브 앱에서 할 수 있어요. 여기서는 계속 진행하고, 나중에 휴대폰의 Ambient에서 설정을 마쳐 주세요."
+  },
+  "step3": {
+    "title": "데이터 연결",
+    "subtitle": "PIN AI가 읽을 수 있는 앱을 선택해 주세요. 언제든지 Control Center에서 더 연결하거나 해제할 수 있어요.",
+    "subtitleConnect": "PIN AI가 읽을 수 있는 앱을 선택해 주세요. 설정을 이어가는 동안 첫 데이터를 요약해 드려요."
+  },
+  "insightWait": {
+    "eyebrow": "커넥터 미리보기",
+    "heading": "PIN AI가 당신의 업무 맥락을 파악하고 있어요",
+    "description": "첫 커넥터 데이터를 간결한 프로필 미리보기로 정리하고 있어요.",
+    "firstDataPull": "첫 데이터 수집",
+    "live": "실시간",
+    "footer": "PIN AI에 들어가기 전에 이 미리보기를 확인할 수 있어요. 결과가 준비되는 즉시 이 화면이 결과 페이지로 바뀌어요.",
+    "continue": "PIN AI 시작하기",
+    "steps": {
+      "reading": {
+        "label": "최근 항목 읽는 중",
+        "detail": "가장 최신 커넥터 기록을 작은 작업 세트로 가져오고 있어요."
+      },
+      "signals": {
+        "label": "유용한 시그널 찾는 중",
+        "detail": "업무 패턴, 협업자, 도구, 글쓰기 스타일을 살펴보고 있어요."
+      },
+      "composing": {
+        "label": "미리보기 구성 중",
+        "detail": "첫 데이터를 확인할 수 있는 짧은 프로필로 정리하고 있어요."
+      }
+    }
+  },
+  "model": {
+    "recommendedBadge": "추천",
+    "description": "Gemma 2B를 다운로드하면 움직임·위치·음성·건강·소리 신호를 비공개 로컬 요약으로 정리해 드려요.",
+    "downloading": "다운로드 중 {{percent}}",
+    "use": "Gemma 2B 사용",
+    "download": "Gemma 2B 다운로드",
+    "skipNote": "지금은 건너뛰고 나중에 Ambient에서 다운로드할 수 있어요. 온디바이스 LLM이 없으면 Ambient가 이벤트는 수집할 수 있지만 로컬 요약 카드는 만들 수 없어요.",
+    "verificationFailed": "모델 검증에 실패했어요."
+  }
+}

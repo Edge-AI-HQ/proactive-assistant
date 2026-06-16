@@ -34,6 +34,13 @@ vi.mock("@pin-ai/state", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   useUserSettings: () => useUserSettingsMock(),
 }));
+// useUiLanguageSync 内部调真的 useUserSettings(→useQueryClient),本测试不裹
+// QueryClientProvider 也不测语言,no-op 掉它;detectDeviceLanguage 给个常量。
+vi.mock("@pin-ai/ui-web", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  useUiLanguageSync: () => {},
+  detectDeviceLanguage: () => "en",
+}));
 vi.mock("@/components/auth/LoginPage", () => ({
   default: () => <div>Login</div>,
 }));

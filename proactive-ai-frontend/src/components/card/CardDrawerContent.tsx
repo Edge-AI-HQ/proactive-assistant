@@ -1,7 +1,8 @@
 import { X, Check, Lock as LockIcon, Loader2, MessageCircle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useCardExecutionRun } from "@/hooks/useCardExecutionRun";
 import { DrawerDetailBody } from "@/components/card/CardDrawerBody";
-import { CATEGORIES, type Intent } from "@/components/now/card-model";
+import { CATEGORIES, categoryLabel, type Intent } from "@/components/now/card-model";
 import { Text } from "@pin-ai/ui-web";
 
 /* ── Drawer card detail ──
@@ -37,6 +38,7 @@ export default function CardDrawerContent({
   onComplete: (card: Intent) => void;
   onChat: (card: Intent) => void;
 }) {
+  const { t } = useTranslation(["card", "common"]);
   const cat = CATEGORIES[card.category];
   const Icon = cat.icon;
   // The hook accepts the card's original string id (gen.*_card_NN) and
@@ -52,7 +54,7 @@ export default function CardDrawerContent({
       {/* Category */}
       <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
         <Icon size={14} strokeWidth={1.5} className="text-foreground/50" />
-        <span className="text-xs font-semibold tracking-wide text-foreground/50 uppercase">{cat.label}</span>
+        <span className="text-xs font-semibold tracking-wide text-foreground/50 uppercase">{t(`category.${card.category}`, { defaultValue: categoryLabel(card.category) })}</span>
         {card.tag && (
           <Text variant="caption" weight="bold" className="px-1.5 py-0.5 rounded-full bg-foreground/10 text-foreground/50">
             {card.tag}
@@ -62,10 +64,10 @@ export default function CardDrawerContent({
           <span
             className="inline-flex items-center gap-1 text-caption font-bold px-1.5 py-0.5 rounded-full"
             style={{ background: "hsl(var(--primary) / 0.12)", color: "hsl(var(--primary))" }}
-            title="Low-risk task — usually safe to approve as-is"
+            title={t("drawer.quickApproveHint")}
           >
             <span className="w-1.5 h-1.5 rounded-full" style={{ background: "hsl(var(--primary))" }} />
-            Quick approve
+            {t("drawer.quickApprove")}
           </span>
         )}
       </div>
@@ -101,7 +103,7 @@ export default function CardDrawerContent({
             onClick={onClose}
             className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-bodySm font-medium text-foreground/55"
           >
-            Close
+            {t("common:status.close")}
           </button>
         ) : (
           // Unified action row for every card type:
@@ -118,14 +120,14 @@ export default function CardDrawerContent({
               disabled={pending}
               className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-bodySm font-medium text-foreground/55 disabled:opacity-45 disabled:cursor-default"
             >
-              <X size={13} strokeWidth={2} /> Dismiss
+              <X size={13} strokeWidth={2} /> {t("drawer.dismiss")}
             </button>
             <button
               onClick={() => onComplete(card)}
               disabled={pending}
               className="flex items-center justify-center gap-1 px-3 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-colors text-label font-medium text-foreground/55 disabled:opacity-45 disabled:cursor-default"
             >
-              <Check size={12} strokeWidth={2.5} /> Done
+              <Check size={12} strokeWidth={2.5} /> {t("common:status.done")}
             </button>
             {card.reminder ? (
               <button
@@ -133,7 +135,7 @@ export default function CardDrawerContent({
                 disabled={pending}
                 className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground text-background text-bodySm font-semibold hover:bg-foreground/85 transition-colors disabled:opacity-70 disabled:cursor-default"
               >
-                <MessageCircle size={13} strokeWidth={2} /> Chat
+                <MessageCircle size={13} strokeWidth={2} /> {t("drawer.chat")}
               </button>
             ) : (
               <button
@@ -142,11 +144,11 @@ export default function CardDrawerContent({
                 className="flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-foreground text-background text-bodySm font-semibold hover:bg-foreground/85 transition-colors disabled:opacity-70 disabled:cursor-default"
               >
                 {pending ? (
-                  <><Loader2 size={13} className="animate-spin" /> Opening...</>
+                  <><Loader2 size={13} className="animate-spin" /> {t("drawer.opening")}</>
                 ) : card.locked ? (
-                  <><LockIcon size={13} strokeWidth={2.5} /> Approve</>
+                  <><LockIcon size={13} strokeWidth={2.5} /> {t("drawer.approve")}</>
                 ) : (
-                  <><Check size={13} strokeWidth={2.5} /> Approve</>
+                  <><Check size={13} strokeWidth={2.5} /> {t("drawer.approve")}</>
                 )}
               </button>
             )}

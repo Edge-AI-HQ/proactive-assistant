@@ -12,6 +12,7 @@ import {
   type SourceBrand,
   type SourceIconKey,
 } from "@pin-ai/core";
+import i18n from "../i18n";
 
 export { reasoningStepLabel } from "@pin-ai/core";
 
@@ -32,6 +33,10 @@ export interface SourceAppDisplay {
 }
 
 export function sourceAppDisplay(slug: string): SourceAppDisplay {
-  const { brand, label, iconKey } = sourceAppMeta(slug);
-  return iconKey ? { brand, label, Icon: SOURCE_ICONS[iconKey] } : { brand, label };
+  const { brand, label, iconKey, labelKey } = sourceAppMeta(slug);
+  // 普通词走 i18n;品牌词(无 labelKey)保留英文 brand 名。
+  const resolvedLabel = labelKey ? i18n.t(`card:sourceApp.${labelKey}`) : label;
+  return iconKey
+    ? { brand, label: resolvedLabel, Icon: SOURCE_ICONS[iconKey] }
+    : { brand, label: resolvedLabel };
 }

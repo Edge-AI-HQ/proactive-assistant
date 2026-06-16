@@ -1,0 +1,168 @@
+{
+  "controlPanel": {
+    "title": "연결",
+    "subtitle": "AI를 움직이는 데이터 소스와 기기",
+    "dataSources": "데이터 소스",
+    "ofTotal": "/ {{total}}",
+    "allSynced": "모두 동기화됨",
+    "devices": "기기",
+    "paired": "페어링됨",
+    "ambientSources": "앰비언트 소스",
+    "activeCount": "{{count}}개 활성",
+    "meshDescription": "휴대폰, 노트북, 웨어러블, 글래스, 카메라 — 암호화된 P2P 연결"
+  },
+  "dataConnections": {
+    "notConfigured": "이 배포에는 Composio가 설정되어 있지 않아요. 백엔드 운영자가 설정하기 전까지는 연결을 사용할 수 없어요.",
+    "categories": {
+      "recommended": {
+        "name": "추천",
+        "description": "가장 추천하는 기본 데이터 소스"
+      }
+    },
+    "noConnectors": "아직 사용할 수 있는 커넥터가 없어요",
+    "tiers": {
+      "core": "핵심 소스",
+      "more": "추가 소스",
+      "optional": "선택 사항"
+    },
+    "connect": "연결",
+    "connected": "연결됨",
+    "disconnect": "연결 해제",
+    "add": "추가",
+    "save": "저장",
+    "addAccountAria": "{{name}} 계정 추가",
+    "authorizeHint": "브라우저에서 인증해 주세요 — 완료되면 자동으로 업데이트돼요",
+    "initTask": {
+      "initializing": "초기화 중…",
+      "initializingDetail": "초기화 중 · {{detail}}",
+      "skipped": "초기화 건너뜀 · {{reason}}",
+      "initialized": "초기화 완료 · {{fetched}} 가져옴",
+      "memories_other": "메모리 {{count}}개",
+      "skills_other": "스킬 {{count}}개",
+      "failed": "초기화 실패 — {{error}}",
+      "unknownError": "알 수 없는 오류",
+      "stageQueued": "대기 중",
+      "stageFetch": "데이터 가져오는 중",
+      "stageFetchWithLimit": "데이터 가져오는 중 (최대 {{limit}}개)",
+      "stageRaw": "로컬에 저장 중",
+      "stageSignals": "시그널 추출 중",
+      "stageEvolve": "메모리 정제 중"
+    },
+    "customMcp": {
+      "syncFailed": "동기화 실패",
+      "fetched": "{{value}} 가져옴",
+      "distilling": "정제 중",
+      "connected": "연결됨",
+      "addTitle": "커스텀 커넥터 추가",
+      "editTitle": "커스텀 커넥터 편집",
+      "dialogDescription": "원격 MCP 서버로 PIN AI를 내 데이터와 도구에 연결해요.",
+      "closeAria": "커스텀 커넥터 대화 상자 닫기",
+      "namePlaceholder": "이름",
+      "urlPlaceholder": "원격 MCP 서버 URL",
+      "trustNote": "신뢰하는 개발자의 커넥터만 사용해 주세요. 서드파티 도구가 의도대로 작동하는지, 변경되지 않는지는 PIN AI가 확인할 수 없어요.",
+      "editAria": "{{name}} 편집",
+      "deleteAria": "{{name}} 삭제",
+      "nameRequired": "커넥터 이름을 입력해 주세요",
+      "httpsRequired": "원격 MCP 서버 URL은 https를 사용해야 해요",
+      "urlInvalid": "올바른 원격 MCP 서버 URL을 입력해 주세요",
+      "failed": "커스텀 커넥터 저장 실패",
+      "deleteFailed": "커스텀 커넥터 삭제 실패",
+      "addButton": "커스텀 커넥터 추가"
+    },
+    "catalog": {
+      "title": "더 많은 데이터 커넥터",
+      "supportedCount": "{{total}}개 소스 지원",
+      "supportedFallback": "1000개 이상 소스 지원",
+      "searchPlaceholder": "커넥터 검색",
+      "loading": "커넥터 불러오는 중",
+      "empty": "커넥터를 찾을 수 없어요",
+      "load": "커넥터 불러오기",
+      "resultsAria": "커넥터 검색 결과",
+      "scrollForMore": "스크롤해서 더 보기",
+      "categories": {
+        "all": "전체",
+        "email": "이메일",
+        "calendar": "캘린더",
+        "teamChat": "팀 채팅",
+        "productivity": "생산성",
+        "devTools": "개발 도구",
+        "crm": "CRM",
+        "projects": "프로젝트",
+        "documents": "문서",
+        "databases": "데이터베이스",
+        "analytics": "분석",
+        "marketing": "마케팅",
+        "ecommerce": "이커머스",
+        "scheduling": "일정 관리",
+        "files": "파일",
+        "videoAudio": "영상·오디오"
+      }
+    },
+    "coverage": {
+      "viaDriveMetadata": "Drive 메타데이터 기반"
+    },
+    "errors": {
+      "connectFailed": "연결 실패",
+      "missingRedirect": "연결은 성공했지만 리디렉션 정보가 없어요 — 다시 시도해 주세요",
+      "notConfirmed": "연결이 확인되지 않았어요 — 다시 시도해 주세요",
+      "unexpected": "예기치 않은 오류",
+      "catalogUnavailable": "카탈로그를 사용할 수 없어요",
+      "disconnectFailed": "연결 해제 실패"
+    }
+  },
+  "deviceConnections": {
+    "loading": "기기 불러오는 중…",
+    "empty": "아직 페어링된 다른 기기가 없어요. 모바일 앱에서 로그인하면 여기에 표시돼요.",
+    "removeConfirm": "\"{{name}}\"을(를) 제거할까요?",
+    "refresh": "새로고침",
+    "never": "없음",
+    "lastSeen": "마지막 접속 {{time}}",
+    "deviceAria": "{{platform}} 기기",
+    "platform": {
+      "ios": "iOS",
+      "android": "Android",
+      "wearable": "웨어러블",
+      "sensor": "센서",
+      "embedded": "임베디드",
+      "web": "웹"
+    },
+    "revokeDevice": "기기 등록 해제",
+    "openTimeline": "타임라인 열기"
+  },
+  "deviceTimeline": {
+    "back": "뒤로",
+    "loaded": "{{count}}개 불러옴",
+    "filters": {
+      "all": "전체",
+      "today": "오늘"
+    },
+    "range": {
+      "allDays": "전체 기간",
+      "today": "오늘",
+      "yesterday": "어제",
+      "last7d": "최근 7일",
+      "customDay": "날짜 지정"
+    },
+    "filterByDay": "날짜별 필터",
+    "shownCount": "{{count}}개 표시",
+    "emptyTimeline": "이 기기에서 받은 데이터가 아직 없어요.",
+    "loadMore": "{{count}}개 더 불러오기",
+    "end": "— 끝 —",
+    "download": "{{name}} 다운로드"
+  },
+  "connectChip": {
+    "connect": "{{name}} 연결",
+    "connected": "{{name}} 연결됨",
+    "alreadyConnected": "{{name}}은(는) 이미 연결되어 있어요"
+  },
+  "toolkits": {
+    "calendar": "캘린더",
+    "drive": "드라이브",
+    "docs": "문서",
+    "sheets": "스프레드시트"
+  },
+  "identity": {
+    "connectorFallback": "커넥터",
+    "accountUnavailable": "계정 정보를 불러올 수 없어요"
+  }
+}

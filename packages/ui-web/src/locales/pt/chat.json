@@ -1,0 +1,208 @@
+{
+  "toolVerbs": {
+    "ran": "Executou",
+    "ranCommand": "Executou comando",
+    "executed": "Executou",
+    "ranPython": "Executou Python",
+    "browsed": "Navegou",
+    "searchedWeb": "Pesquisou na web",
+    "readPages": "Leu páginas",
+    "searchedNews": "Pesquisou notícias",
+    "searchedMemory": "Pesquisou na memória",
+    "searchedX": "Pesquisou no X",
+    "fetched": "Buscou",
+    "read": "Leu",
+    "wrote": "Escreveu",
+    "edited": "Editou",
+    "patched": "Aplicou patch",
+    "messaged": "Enviou mensagem",
+    "readImage": "Leu imagem",
+    "generatedImage": "Gerou imagem",
+    "generatedVideo": "Gerou vídeo",
+    "generatedMusic": "Gerou música",
+    "spoke": "Falou",
+    "drew": "Desenhou",
+    "scheduled": "Agendou",
+    "checkedSession": "Verificou sessão",
+    "listedSessions": "Listou sessões",
+    "loadedHistory": "Carregou histórico",
+    "sent": "Enviou",
+    "spawnedAgent": "Iniciou agente",
+    "delegatedToAgent": "Delegou ao agente",
+    "delegated": "Delegou",
+    "updatedPlan": "Atualizou plano",
+    "messagedYou": "Enviou mensagem a você",
+    "searchedGmail": "Pesquisou no Gmail",
+    "draftedEmail": "Rascunhou e-mail",
+    "usedGmail": "Usou o Gmail",
+    "readCalendar": "Leu agenda",
+    "updatedCalendar": "Atualizou agenda",
+    "usedCalendar": "Usou agenda",
+    "searchedNotion": "Pesquisou no Notion",
+    "sentOnSlack": "Enviou no Slack",
+    "searchedSlack": "Pesquisou no Slack",
+    "searchedDrive": "Pesquisou no Drive"
+  },
+  "landing": {
+    "heading": "No que você está pensando?",
+    "subheading": "Pergunte o que quiser — eu tenho o seu contexto.",
+    "suggestions": {
+      "focusToday": "No que devo focar hoje?",
+      "summarizeWeek": "Resuma minha semana até agora",
+      "onMyMind": "No que tenho pensado ultimamente?"
+    }
+  },
+  "composer": {
+    "placeholder": "Mensagem para o PIN AI…",
+    "voiceInput": "Entrada de voz",
+    "send": "Enviar",
+    "stop": "Parar",
+    "dismissKeyboard": "Ocultar teclado",
+    "cancelRecording": "Cancelar gravação",
+    "useTranscript": "Usar transcrição"
+  },
+  "actionBar": {
+    "copyMessage": "Copiar mensagem",
+    "copy": "Copiar",
+    "goodResponse": "Boa resposta",
+    "badResponse": "Resposta ruim",
+    "regenerateResponse": "Regenerar resposta",
+    "regenerate": "Regenerar"
+  },
+  "cardFeedback": {
+    "helpfulPrompt": "Útil?",
+    "helpful": "Útil",
+    "notHelpful": "Não útil",
+    "sent": "Enviado",
+    "comment": "Comentar",
+    "commentPlaceholder": "Feedback sobre este card (não envia mensagem ao agente)…",
+    "sendFeedback": "Enviar feedback"
+  },
+  "userEntry": {
+    "notSent": "Não enviada",
+    "editMessage": "Editar mensagem"
+  },
+  "notify": {
+    "label": "Notificar você"
+  },
+  "transcript": {
+    "cardEmptyState": "Peça ao agente para agir neste card ou envie uma mensagem a ele.",
+    "scrollToLatest": "Ir para a mais recente"
+  },
+  "header": {
+    "back": "Voltar",
+    "debug": "Debug",
+    "proactive": "Proativo",
+    "proactiveToggle": "Ativar/desativar agente proativo",
+    "dismiss": "Dispensar"
+  },
+  "workGroup": {
+    "subtasksRunning_one": "{{count}} subtarefa em execução",
+    "subtasksRunning_many": "{{count}} subtarefas em execução",
+    "subtasksRunning_other": "{{count}} subtarefas em execução",
+    "runningSubtask": "Executando subtarefa",
+    "working": "Trabalhando…",
+    "ranSubtasks_one": "Executou {{count}} subtarefa",
+    "ranSubtasks_many": "Executou {{count}} subtarefas",
+    "ranSubtasks_other": "Executou {{count}} subtarefas",
+    "usedTools_one": "Usou {{count}} ferramenta",
+    "usedTools_many": "Usou {{count}} ferramentas",
+    "usedTools_other": "Usou {{count}} ferramentas",
+    "thought": "Pensou",
+    "steps_one": "{{count}} etapa",
+    "steps_many": "{{count}} etapas",
+    "steps_other": "{{count}} etapas"
+  },
+  "toolNode": {
+    "results_one": "{{count}} resultado",
+    "results_many": "{{count}} resultados",
+    "results_other": "{{count}} resultados"
+  },
+  "taskCard": {
+    "subtask": "Subtarefa",
+    "toolCount_one": "{{count}} ferramenta",
+    "toolCount_many": "{{count}} ferramentas",
+    "toolCount_other": "{{count}} ferramentas",
+    "showMore": "Mostrar mais ({{count}})",
+    "noActivity": "Nenhuma atividade de ferramenta ainda."
+  },
+  "todoPanel": {
+    "plan": "Plano",
+    "planDone": "Plano concluído",
+    "progress": "{{completed}}/{{total}} concluídas",
+    "collapsePlan": "Recolher plano",
+    "expandPlan": "Expandir plano",
+    "closePlan": "Fechar plano"
+  },
+  "reasoning": {
+    "thoughtForSeconds": "Pensou por {{seconds}}s",
+    "thoughtProcess": "Linha de raciocínio"
+  },
+  "hitl": {
+    "needsApproval": "Precisa da sua aprovação",
+    "rejectReasonPlaceholder": "Opcional: diga ao agente o motivo (ele continua sem executar a ferramenta)",
+    "back": "Voltar",
+    "reject": "Rejeitar",
+    "approve": "Aprovar",
+    "resolvedEarlier": "Resolvido anteriormente"
+  },
+  "proposeAction": {
+    "needsInput": "Precisa da sua resposta",
+    "replySent": "Resposta enviada",
+    "typeOwnReplyPlaceholder": "Ou digite sua própria resposta…",
+    "typeReplyPlaceholder": "Digite sua resposta…",
+    "sent": "Enviada",
+    "sending": "Enviando…",
+    "continue": "Continuar"
+  },
+  "artifact": {
+    "emailDraft": "Rascunho de e-mail",
+    "notes": "Notas",
+    "messageDraft": "Rascunho de mensagem",
+    "document": "Documento",
+    "draft": "Rascunho",
+    "failed": "Falhou",
+    "open": "Abrir ↗",
+    "verbSent": "Enviado",
+    "verbPosted": "Publicado",
+    "verbCreated": "Criado"
+  },
+  "cardContext": {
+    "context": "Contexto",
+    "viewDetails": "Ver detalhes do card",
+    "more": "+{{count}} mais",
+    "messagePlaceholder": "Mensagem sobre este card…",
+    "drawerDescription": "Visualização de detalhes do card",
+    "quickApprove": "Aprovação rápida",
+    "quickApproveHint": "Tarefa de baixo risco — geralmente é seguro aprovar como está"
+  },
+  "categories": {
+    "growth": "Crescimento",
+    "work": "Trabalho",
+    "finance": "Finanças",
+    "health": "Saúde",
+    "learn": "Aprendizado",
+    "life": "Vida"
+  },
+  "mainChat": {
+    "cardFeedbackPlaceholder": "Diga ao PIN AI o que mudar neste card…",
+    "feedbackOnCard": "Feedback sobre este card"
+  },
+  "codeBlock": {
+    "copy": "Copiar",
+    "copied": "Copiado"
+  },
+  "queued": {
+    "badge": "Na fila",
+    "regionLabel": "Mensagens na fila",
+    "save": "Salvar",
+    "saveAria": "Salvar mensagem na fila",
+    "cancelEditAria": "Cancelar edição da mensagem na fila",
+    "edit": "Editar",
+    "editAria": "Editar mensagem na fila",
+    "sendNow": "Enviar agora",
+    "delete": "Excluir",
+    "deleteAria": "Excluir mensagem na fila",
+    "queueMessage": "Colocar mensagem na fila"
+  }
+}

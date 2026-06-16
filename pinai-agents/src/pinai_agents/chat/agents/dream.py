@@ -16,7 +16,7 @@ from typing import Any
 from ..harness.factory import build_agent
 from ..harness.llm import make_chat_model
 from ..tools.code_mode.sandbox import create_oneshot_sandbox, delete_sandbox_now
-from .prompts import CODE_MODE_GUIDANCE, GROUNDING_POLICY, SANDBOX_PREAMBLE
+from .prompts import CODE_MODE_GUIDANCE, GROUNDING_POLICY, SANDBOX_PREAMBLE, lang_clause
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +99,17 @@ Final assistant message must be JSON only:
 """
 
 
+def _dream_system_prompt(output_language: str) -> str:
+    return (
+        f"{_DREAM_SYSTEM_PROMPT}\n"
+        "<output_language>\n"
+        f"{lang_clause(output_language)} — memory bodies, profile facts, and "
+        "summary strings are user-visible. Keys, slugs, and JSON field names "
+        "stay in English.\n"
+        "</output_language>"
+    )
+
+
 def _message_content_text(content: Any) -> str:
     """Normalize LangChain text-block content into plain text."""
     if isinstance(content, str):
@@ -134,6 +145,7 @@ async def run_dream(
     run_id: str,
     run_jwt: str | None = None,
     model: str | None = None,
+    output_language: str = "en",
 ) -> dict[str, Any]:
     backend, raw = await create_oneshot_sandbox(
         run_jwt=run_jwt,
@@ -142,7 +154,7 @@ async def run_dream(
     try:
         agent = build_agent(
             model=make_chat_model(virtual_key=virtual_key, model=model, thinking_budget=8000),
-            system_prompt=_DREAM_SYSTEM_PROMPT,
+            system_prompt=_dream_system_prompt(output_language),
             backend=backend,
         )
         result: dict[str, Any] = await agent.ainvoke(

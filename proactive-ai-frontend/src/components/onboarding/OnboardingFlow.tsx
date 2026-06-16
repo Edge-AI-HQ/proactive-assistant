@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, ChevronRight, Database, Loader2, Sparkles, UserRound } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import AmbientSourceControlsPanel from "@/components/ambient/AmbientSourceControlsPanel";
 import VoiceIdentitySettings from "@/components/account/VoiceIdentitySettings";
 import AmbientModelSetupStep from "./AmbientModelSetupStep";
@@ -43,11 +44,12 @@ interface StepHeaderProps {
 }
 
 function StepHeader({ step, title, subtitle }: StepHeaderProps) {
+  const { t } = useTranslation("onboarding");
   return (
     <div className="mb-5">
       <div className="mb-3 flex items-center gap-2">
         <Text variant="caption" weight="semibold" className="uppercase tracking-wider text-foreground/40">
-          Step {step} of 3
+          {t("stepOf", { step, total: 3 })}
         </Text>
         <div className="flex flex-1 items-center gap-1.5">
           <span className="h-1 flex-1 rounded-full bg-foreground/15">
@@ -69,20 +71,21 @@ function StepHeader({ step, title, subtitle }: StepHeaderProps) {
 }
 
 function InsightWaitPage() {
+  const { t } = useTranslation("onboarding");
   const steps = [
     {
-      label: "Reading recent items",
-      detail: "Pulling the newest connector records into a small working set.",
+      label: t("insightWait.steps.reading.label"),
+      detail: t("insightWait.steps.reading.detail"),
       icon: Database,
     },
     {
-      label: "Finding useful signals",
-      detail: "Looking for work patterns, collaborators, tools, and writing style.",
+      label: t("insightWait.steps.signals.label"),
+      detail: t("insightWait.steps.signals.detail"),
       icon: Sparkles,
     },
     {
-      label: "Composing your preview",
-      detail: "Turning the first pull into a short profile you can review.",
+      label: t("insightWait.steps.composing.label"),
+      detail: t("insightWait.steps.composing.detail"),
       icon: UserRound,
     },
   ];
@@ -95,13 +98,13 @@ function InsightWaitPage() {
         </div>
         <div className="min-w-0 flex-1">
           <Text variant="micro" weight="semibold" className="block mb-1 uppercase tracking-[0.16em] text-foreground/34">
-            Connector preview
+            {t("insightWait.eyebrow")}
           </Text>
           <h1 className="max-w-[18rem] text-title font-semibold leading-[1.08] tracking-tight text-foreground">
-            PIN AI is getting to know your work context
+            {t("insightWait.heading")}
           </h1>
           <Text variant="bodySm" className="block mt-3 max-w-sm leading-5 text-foreground/55">
-            We are turning your first connector pull into a concise profile preview.
+            {t("insightWait.description")}
           </Text>
         </div>
       </div>
@@ -110,10 +113,10 @@ function InsightWaitPage() {
         <div className="rounded-[24px] border border-foreground/[0.07] bg-white/45 p-4">
           <div className="flex items-center justify-between gap-3">
             <Text variant="caption" weight="semibold" className="uppercase tracking-[0.12em] text-foreground/42">
-              First data pull
+              {t("insightWait.firstDataPull")}
             </Text>
             <Text variant="micro" weight="medium" className="rounded-full bg-foreground/[0.055] px-2.5 py-1 leading-none text-foreground/45">
-              Live
+              {t("insightWait.live")}
             </Text>
           </div>
 
@@ -153,7 +156,7 @@ function InsightWaitPage() {
       <div className="flex flex-shrink-0 gap-2.5 border-t border-foreground/[0.06] px-5 py-4 text-caption leading-4 text-foreground/48 sm:px-6">
         <CheckCircle2 size={14} className="mt-0.5 flex-shrink-0 text-foreground/45" />
         <div>
-          You will review this preview before entering PIN AI. The result page replaces this state as soon as it is ready.
+          {t("insightWait.footer")}
         </div>
       </div>
     </section>
@@ -161,6 +164,7 @@ function InsightWaitPage() {
 }
 
 export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
+  const { t } = useTranslation(["onboarding", "common"]);
   const [step, setStep] = useState<Step>(1);
   const [finishing, setFinishing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -188,11 +192,11 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
       // On success App.tsx flips to AppLayout — this component
       // unmounts before the next render so we don't clear local state.
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
+      setError(err instanceof Error ? err.message : t("genericError"));
     } finally {
       setFinishing(false);
     }
-  }, [onComplete]);
+  }, [onComplete, t]);
 
   const handleInsightStatus = useCallback((status: ConnectorInsightStatus, insightKey: string | null) => {
     setInsightStatus(status);
@@ -260,7 +264,7 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
             mode={showInsightPage ? "page" : "watcher"}
             onStatusChange={handleInsightStatus}
             onContinue={continueFromInsight}
-            continueLabel="Enter PIN AI"
+            continueLabel={t("insightWait.continue")}
           />
 
           {showWaitingPage ? (
@@ -269,8 +273,8 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
             <>
               <StepHeader
                 step={1}
-                title="Connect your data"
-                subtitle="Pick the apps PIN AI can read from. We'll summarize the first pull while you keep setting up."
+                title={t("step3.title")}
+                subtitle={t("step3.subtitleConnect")}
               />
               <div className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto">
                 <DataConnections composio={composio} />
@@ -280,12 +284,8 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
             <>
               <StepHeader
                 step={2}
-                title="Ambient setup"
-                subtitle={
-                  isNative
-                    ? "Turn on ambient sources and record a short self voice sample. You can change both any time in Control Center."
-                    : "Ambient sensors run on the iOS app. You can skip this step here and finish ambient setup later from your phone."
-                }
+                title={t("step1.title")}
+                subtitle={isNative ? t("step1.subtitleNative") : t("step1.subtitleWeb")}
               />
               <div className="scrollbar-hidden min-h-0 flex-1 space-y-3 overflow-y-auto">
                 <AmbientSourceControlsPanel />
@@ -296,19 +296,15 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
             <>
               <StepHeader
                 step={3}
-                title="On-device AI model"
-                subtitle={
-                  isNative
-                    ? "Download Gemma 2B so Ambient can summarize your local context privately on this device."
-                    : "Local Ambient summaries run on the iOS app. You can skip this step here and download the model from your phone."
-                }
+                title={t("step2.title")}
+                subtitle={isNative ? t("step2.subtitleNative") : t("step2.subtitleWeb")}
               />
               <div className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto">
                 {isNative ? (
                   <AmbientModelSetupStep />
                 ) : (
                   <section className="glass-card-strong p-4 text-bodySm leading-relaxed text-foreground/55">
-                    Gemma 2B setup is available in the native app. Continue here and finish setup later from Ambient on your phone.
+                    {t("step2.webPlaceholder")}
                   </section>
                 )}
               </div>
@@ -331,14 +327,14 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
                     onClick={() => setStep((step + 1) as Step)}
                     className="min-h-11 rounded-full px-4 text-bodySm font-medium text-foreground/55 transition-colors hover:bg-foreground/[0.06]"
                   >
-                    Skip
+                    {t("skip")}
                   </button>
                   <button
                     type="button"
                     onClick={() => setStep((step + 1) as Step)}
                     className="inline-flex min-h-11 items-center gap-1.5 rounded-full bg-foreground px-5 text-bodySm font-semibold text-background transition-opacity hover:opacity-90"
                   >
-                    Next
+                    {t("next")}
                     <ChevronRight size={15} strokeWidth={2} />
                   </button>
                 </>
@@ -350,7 +346,7 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
                     disabled={finishing}
                     className="min-h-11 rounded-full px-4 text-bodySm font-medium text-foreground/55 transition-colors hover:bg-foreground/[0.06] disabled:opacity-40"
                   >
-                    Back
+                    {t("back")}
                   </button>
                   <button
                     type="button"
@@ -361,7 +357,7 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
                     {finishing ? (
                       <Loader2 size={14} className="animate-spin" />
                     ) : null}
-                    Done
+                    {t("common:status.done")}
                   </button>
                 </>
               )}

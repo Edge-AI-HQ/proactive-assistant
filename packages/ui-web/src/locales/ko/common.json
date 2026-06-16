@@ -1,0 +1,74 @@
+{
+  "status": {
+    "loading": "불러오는 중…",
+    "saving": "저장 중…",
+    "retry": "다시 시도",
+    "cancel": "취소",
+    "done": "완료",
+    "close": "닫기",
+    "thinking": "생각 중…",
+    "connecting": "연결 중…",
+    "listening": "듣는 중…",
+    "polishing": "다듬는 중…"
+  },
+  "appShell": {
+    "openMenu": "메뉴 열기",
+    "openMainChat": "메인 채팅 열기",
+    "askPinAi": "PIN AI에게 물어보기"
+  },
+  "menu": {
+    "now": "지금",
+    "ambient": "앰비언트",
+    "tasks": "작업",
+    "connect": "연결",
+    "profile": "프로필",
+    "setting": "설정"
+  },
+  "bootstrapError": {
+    "message": "서버에 연결할 수 없어요. 연결 상태를 확인하고 다시 시도해 주세요."
+  },
+  "errorBoundary": {
+    "title": "문제가 발생했어요",
+    "fallbackMessage": "예상치 못한 오류가 발생했어요.",
+    "tryAgain": "다시 시도"
+  },
+  "errors": {
+    "onboardingSave": "온보딩 진행 상황을 저장하지 못했어요. 연결 상태를 확인하고 다시 시도해 주세요.",
+    "noRedirectUrl": "리디렉션 URL을 받지 못했어요",
+    "disconnectFailed": "연결 해제 실패",
+    "connectFailedWithStatus": "연결 실패 ({{status}})"
+  },
+  "agentRuns": {
+    "ariaLabel": "실행 중인 에이전트 작업",
+    "title": "에이전트 실행",
+    "runCount_other": "실행 {{count}}개",
+    "kind": {
+      "autoDreaming": "드리밍 중",
+      "connectorInit": "소스 연결 중",
+      "connectorEvolve": "시그널 정제 중",
+      "crystallize": "대화 정리 중",
+      "generatorManual": "카드 생성 중",
+      "generatorAuto": "카드 생성 중",
+      "userPrompt": "합성 프롬프트"
+    }
+  },
+  "notificationPrompt": {
+    "title": "알림 켜기",
+    "description": "카드 생성에는 몇 분에서 몇 시간까지 걸릴 수 있어요. 알림을 켜 두면 준비되는 즉시 알려 드릴게요 — 앱을 계속 지켜보지 않아도 돼요.",
+    "turnOn": "켜기",
+    "later": "나중에"
+  },
+  "weather": {
+    "clear": "맑음",
+    "cloudy": "흐림",
+    "foggy": "안개",
+    "drizzle": "이슬비",
+    "rainy": "비",
+    "snowy": "눈",
+    "showers": "소나기",
+    "stormy": "뇌우"
+  },
+  "desktopNotify": {
+    "newCards_other": "새 카드 {{count}}개가 도착했어요"
+  }
+}

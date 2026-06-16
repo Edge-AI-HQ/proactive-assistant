@@ -1,20 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { Check, ChevronDown, Loader2, Mic, Send, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import bgGradient from "../../assets/bg-gradient.jpg";
 import AiSphere from "../../now/AiSphere";
 import { useVoiceInput, Waveform, appendVoiceTranscript } from "../../voice";
 import { Text } from "../../primitives/Text";
 
 interface Suggestion {
-  label: string;
+  /** chat-namespace key for the chip text (display only — translated). */
+  labelKey:
+    | "landing.suggestions.focusToday"
+    | "landing.suggestions.summarizeWeek"
+    | "landing.suggestions.onMyMind";
+  /** The message actually sent to the LLM — stays English regardless of UI
+   *  language (model-facing text is out of i18n scope). */
   prompt: string;
 }
 
 const SUGGESTIONS: Suggestion[] = [
-  { label: "What should I focus on today?", prompt: "What should I focus on today?" },
-  { label: "Summarize my week so far", prompt: "Summarize my week so far" },
-  { label: "What's on my mind lately?", prompt: "What's on my mind lately?" },
+  { labelKey: "landing.suggestions.focusToday", prompt: "What should I focus on today?" },
+  { labelKey: "landing.suggestions.summarizeWeek", prompt: "Summarize my week so far" },
+  { labelKey: "landing.suggestions.onMyMind", prompt: "What's on my mind lately?" },
 ];
 
 function formatRecordDuration(totalSec: number): string {
@@ -52,6 +59,7 @@ export default function MinimalistLanding({
   onSubmit,
   disabled = false,
 }: MinimalistLandingProps) {
+  const { t } = useTranslation(["chat", "common"]);
   const [text, setText] = useState("");
   const { startCapture, stopCapture, captureStatus } = useVoiceInput();
   const [recording, setRecording] = useState(false);
@@ -211,7 +219,7 @@ export default function MinimalistLanding({
           <button
             onClick={onBack}
             className="p-2 -ml-1 rounded-full hover:bg-foreground/[0.06] transition-colors"
-            aria-label="Close"
+            aria-label={t("common:status.close")}
           >
             <ChevronDown
               size={20}
@@ -244,17 +252,17 @@ export default function MinimalistLanding({
               <AiSphere size={216} mode="idle" />
             </div>
             <Text as="h2" variant="display" weight="semibold" className="tracking-tight text-center px-6">
-              What&apos;s on your mind?
+              {t("landing.heading")}
             </Text>
             <Text variant="bodySm" className="block mt-2 text-foreground/50 leading-snug text-center px-8">
-              Ask anything — I have your context.
+              {t("landing.subheading")}
             </Text>
           </div>
 
           <div className="w-full flex flex-col gap-2 px-3">
             {SUGGESTIONS.map((s, i) => (
               <motion.button
-                key={s.label}
+                key={s.labelKey}
                 type="button"
                 disabled={disabled}
                 initial={{ opacity: 0, y: 8 }}
@@ -273,7 +281,7 @@ export default function MinimalistLanding({
                 }}
               >
                 <Text variant="bodySm" className="text-foreground/75 leading-snug">
-                  {s.label}
+                  {t(s.labelKey)}
                 </Text>
                 <span className="text-foreground/30 group-hover:text-foreground/55 transition-colors shrink-0">
                   →
@@ -315,8 +323,11 @@ export default function MinimalistLanding({
                 )}
                 <span className="min-w-0 truncate">
                   {voiceFinalizing
-                    ? "Polishing…"
-                    : voiceTranscript || (voiceConnecting ? "Connecting…" : "Listening…")}
+                    ? t("common:status.polishing")
+                    : voiceTranscript ||
+                      (voiceConnecting
+                        ? t("common:status.connecting")
+                        : t("common:status.listening"))}
                 </span>
               </p>
               <div className="flex items-center gap-2.5">
@@ -335,7 +346,7 @@ export default function MinimalistLanding({
                   onClick={cancelRecording}
                   disabled={voiceFinalizing}
                   className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-foreground/[0.06] text-foreground/55 transition-colors hover:bg-foreground/10 disabled:opacity-40"
-                  aria-label="Cancel recording"
+                  aria-label={t("composer.cancelRecording")}
                 >
                   <X size={16} strokeWidth={2} />
                 </button>
@@ -349,7 +360,7 @@ export default function MinimalistLanding({
                       "linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(330 80% 65%) 100%)",
                     boxShadow: "0 4px 12px hsl(var(--primary) / 0.35)",
                   }}
-                  aria-label="Use transcript"
+                  aria-label={t("composer.useTranscript")}
                 >
                   <Check size={16} strokeWidth={2.5} />
                 </button>
@@ -370,7 +381,7 @@ export default function MinimalistLanding({
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 onKeyDown={onKeyDown}
-                placeholder="Message PIN AI…"
+                placeholder={t("composer.placeholder")}
                 rows={1}
                 className="flex-1 resize-none bg-transparent text-body text-foreground placeholder:text-foreground/35 outline-none leading-[20px] py-2 min-h-9 max-h-[120px]"
               />
@@ -379,7 +390,7 @@ export default function MinimalistLanding({
                 onClick={startRecording}
                 disabled={disabled}
                 className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 bg-transparent text-foreground/55 hover:bg-foreground/[0.06] hover:text-foreground/80 disabled:opacity-40"
-                aria-label="Voice input"
+                aria-label={t("composer.voiceInput")}
               >
                 <Mic size={18} strokeWidth={1.6} />
               </button>
@@ -401,7 +412,7 @@ export default function MinimalistLanding({
                         color: "hsl(var(--foreground) / 0.35)",
                       }
                 }
-                aria-label="Send"
+                aria-label={t("composer.send")}
               >
                 <Send size={15} strokeWidth={2} />
               </button>

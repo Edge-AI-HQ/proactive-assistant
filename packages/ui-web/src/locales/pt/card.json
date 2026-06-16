@@ -1,0 +1,106 @@
+{
+  "category": {
+    "growth": "Crescimento",
+    "work": "Trabalho",
+    "finance": "Finanças",
+    "health": "Saúde",
+    "learn": "Aprendizado",
+    "life": "Vida"
+  },
+  "tag": {
+    "urgent": "Urgente"
+  },
+  "scheduledSource": "Agendado · {{label}}",
+  "score": {
+    "confidence": "Confiança",
+    "importance": "Importância",
+    "urgency": "Urgência"
+  },
+  "sourceApp": {
+    "calendar": "Agenda",
+    "drive": "Drive",
+    "docs": "Documentos",
+    "sheets": "Planilhas",
+    "web": "Web",
+    "memory": "Memória",
+    "phone": "Celular",
+    "profile": "Perfil",
+    "goal": "Meta",
+    "preference": "Preferência"
+  },
+  "reasoningStep": {
+    "observed": "Observado",
+    "crossReferenced": "Referência cruzada",
+    "patternMatched": "Padrão identificado",
+    "flagged": "Sinalizado",
+    "decided": "Decidido"
+  },
+  "drawer": {
+    "srTitleFallback": "Detalhes do card",
+    "srDescription": "Visualização de detalhes do card",
+    "quickApprove": "Aprovação rápida",
+    "quickApproveHint": "Tarefa de baixo risco — geralmente é seguro aprovar como está",
+    "dismiss": "Dispensar",
+    "chat": "Chat",
+    "approve": "Aprovar",
+    "opening": "Abrindo…"
+  },
+  "detail": {
+    "howReasoned": "Como raciocinei",
+    "stepCount_one": "{{count}} etapa",
+    "stepCount_many": "{{count}} etapas",
+    "stepCount_other": "{{count}} etapas",
+    "whyNow": "Por que agora",
+    "executionPlan": "Plano de execução",
+    "generatedDrafts_one": "Rascunho gerado",
+    "generatedDrafts_many": "Rascunhos gerados",
+    "generatedDrafts_other": "Rascunhos gerados",
+    "approvingTitle": "Ao aprovar, o agente poderá:",
+    "risksTitle": "Riscos a considerar",
+    "sourcesTitle": "Fontes"
+  },
+  "fallback": {
+    "agentNote": "Nota do agente",
+    "calledTool": "Chamou {{name}}"
+  },
+  "statusBanner": {
+    "preparing": "O agente está preparando o plano — aguarde um instante.",
+    "resuming": "Retomando…",
+    "resultTitle": "Resultado",
+    "resultFallback": "Concluído.",
+    "failedTitle": "Falhou",
+    "failedFallback": "A execução falhou.",
+    "cancelled": "Cancelado. Toque em Tentar novamente para iniciar uma nova execução."
+  },
+  "now": {
+    "greeting": "Oi, <nameSpan>{{name}}</nameSpan>",
+    "greetingFallbackName": "você",
+    "feedSummary_one": "Seu feed proativo · {{count}} card hoje",
+    "feedSummary_many": "Seu feed proativo · {{count}} cards hoje",
+    "feedSummary_other": "Seu feed proativo · {{count}} cards hoje",
+    "openAmbient": "Abrir modo ambiente",
+    "toggleAmbient": "Alternar modo ambiente",
+    "ambientOn": "Modo ambiente ativado",
+    "ambientOff": "Modo ambiente desativado",
+    "ambientTapToStart": "Toque para começar a captar o contexto",
+    "ambientQuiet": "Modo ambiente em silêncio — conecte fontes para começar a receber sinais"
+  },
+  "emptyState": {
+    "warmingUpTitle": "Seu feed está aquecendo",
+    "warmingUpBody": "Gerar cards pode levar de alguns minutos a algumas horas. Avisaremos assim que estiverem prontos.",
+    "checklistTitle": "Vamos colocar seu feed para funcionar",
+    "voiceTitle": "Ativar voz",
+    "voiceSubtitle": "Deixe o PIN AI acompanhar seu dia para sugerir cards",
+    "connectTitle": "Conecte seus apps",
+    "connectSubtitle": "Gmail, Agenda e mais — para o PIN AI ter contexto",
+    "reviewPermissions": "Revisar permissões"
+  },
+  "sphere": {
+    "quick": "Rápido",
+    "badgeNew": "novo",
+    "badgeInput": "entrada",
+    "badgeReady": "pronto",
+    "badgeFailed": "falhou",
+    "badgeDone": "feito"
+  }
+}

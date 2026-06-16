@@ -1,8 +1,9 @@
 import { motion } from "framer-motion";
 import { Radio } from "lucide-react";
+import { Trans, useTranslation } from "react-i18next";
 import Sphere3DCards from "@/components/now/Sphere3DCards";
 import HomeEmptyState from "@/components/now/HomeEmptyState";
-import { CATEGORIES, type Intent } from "@/components/now/card-model";
+import { CATEGORIES, categoryLabel, type Intent } from "@/components/now/card-model";
 import type { WeatherData } from "@/hooks/useWeather";
 import type { VoicePermissionState } from "@/hooks/useVoicePermission";
 import { Text } from "@pin-ai/ui-web";
@@ -64,6 +65,7 @@ export default function NowView({
   onReviewPermissions,
   onCardTap,
 }: NowViewProps) {
+  const { t } = useTranslation(["card", "common"]);
   return (
     <div className="relative flex flex-col h-full">
       {/* Greeting + Ambient (always) + Live (when active) */}
@@ -73,13 +75,19 @@ export default function NowView({
       >
         {/* Greeting — generous space, editorial feel */}
         <Text as="h2" variant="display" weight="semibold" className="tracking-tight">
-          Hi,{" "}
-          <span className="bg-gradient-to-r from-primary to-[hsl(330,80%,65%)] bg-clip-text text-transparent">
-            {displayName}
-          </span>
+          <Trans
+            t={t}
+            i18nKey="now.greeting"
+            values={{ name: displayName }}
+            components={{
+              nameSpan: (
+                <span className="bg-gradient-to-r from-primary to-[hsl(330,80%,65%)] bg-clip-text text-transparent" />
+              ),
+            }}
+          />
         </Text>
         <Text variant="bodySm" className="block mt-1.5 text-foreground/50 leading-snug">
-          Your proactive feed · {sphereCards.length} cards today
+          {t("now.feedSummary", { count: sphereCards.length })}
         </Text>
 
         {/* Ambient — a prominent card (replaces the old divider + plain text
@@ -91,7 +99,7 @@ export default function NowView({
           <button
             onClick={onOpenAmbient}
             className="flex items-center gap-3 flex-1 min-w-0 text-left"
-            aria-label="Open Ambient"
+            aria-label={t("now.openAmbient")}
           >
             <span
               className={`relative shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
@@ -113,14 +121,14 @@ export default function NowView({
                   ambientOn ? "text-foreground" : "text-foreground/70"
                 }`}
               >
-                {ambientOn ? "Ambient is on" : "Ambient is off"}
+                {ambientOn ? t("now.ambientOn") : t("now.ambientOff")}
               </div>
               <Text variant="label" className="block text-foreground/50 leading-snug truncate mt-0.5">
                 {!ambientOn
-                  ? "Tap to start sensing context"
+                  ? t("now.ambientTapToStart")
                   : weather
-                    ? `${weather.city} · ${weather.label} · ${weather.temp}°`
-                    : "Quiet ambient — connect sources to start streaming signals"}
+                    ? `${weather.city} · ${t(`common:weather.${weather.conditionKey}`)} · ${weather.temp}°`
+                    : t("now.ambientQuiet")}
               </Text>
             </div>
           </button>
@@ -133,7 +141,7 @@ export default function NowView({
             className={`relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-60 disabled:cursor-progress ${
               ambientOn ? "bg-foreground animate-ambient-toggle-breathe" : "bg-foreground/20"
             }`}
-            aria-label="Toggle ambient"
+            aria-label={t("now.toggleAmbient")}
             aria-pressed={ambientOn}
             aria-busy={ambientTogglePending}
           >
@@ -170,7 +178,7 @@ export default function NowView({
               category: c.category,
               title: c.title,
               icon: CATEGORIES[c.category].icon,
-              categoryLabel: CATEGORIES[c.category].label,
+              categoryLabel: categoryLabel(c.category),
               complexity: c.complexity,
               status: c.status,
             }))}

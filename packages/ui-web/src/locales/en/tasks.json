@@ -1,0 +1,23 @@
+{
+  "header": {
+    "title": "Tasks",
+    "subtitle": "AI is running these for you"
+  },
+  "loadingHistory": "Loading history...",
+  "preview": {
+    "completed": "Completed",
+    "dismissed": "Dismissed",
+    "processing": "Processing...",
+    "needsInput": "Waiting for your input",
+    "ready": "Ready for review",
+    "failed": "Failed",
+    "inConversation": "In conversation",
+    "confirmed": "Confirmed",
+    "operationsSummary_one": "{{count}} operation · {{action}}",
+    "operationsSummary_other": "{{count}} operations · {{action}}"
+  },
+  "empty": {
+    "title": "No cards yet",
+    "body": "Generate intent cards from the NOW tab. All cards will appear here."
+  }
+}

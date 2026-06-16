@@ -1,0 +1,76 @@
+{
+  "status": {
+    "loading": "Loading…",
+    "saving": "Saving…",
+    "retry": "Retry",
+    "cancel": "Cancel",
+    "done": "Done",
+    "close": "Close",
+    "thinking": "Thinking…",
+    "connecting": "Connecting…",
+    "listening": "Listening…",
+    "polishing": "Polishing…"
+  },
+  "appShell": {
+    "openMenu": "Open menu",
+    "openMainChat": "Open main chat",
+    "askPinAi": "Ask PIN AI"
+  },
+  "menu": {
+    "now": "NOW",
+    "ambient": "AMBIENT",
+    "tasks": "TASKS",
+    "connect": "CONNECT",
+    "profile": "PROFILE",
+    "setting": "SETTING"
+  },
+  "bootstrapError": {
+    "message": "Couldn't reach the server. Check your connection and try again."
+  },
+  "errorBoundary": {
+    "title": "Something went wrong",
+    "fallbackMessage": "An unexpected error occurred.",
+    "tryAgain": "Try again"
+  },
+  "errors": {
+    "onboardingSave": "Couldn't save your onboarding progress. Check your connection and try again.",
+    "noRedirectUrl": "No redirect URL returned",
+    "disconnectFailed": "Disconnect failed",
+    "connectFailedWithStatus": "Connect failed ({{status}})"
+  },
+  "agentRuns": {
+    "ariaLabel": "Active agent runs",
+    "title": "Agent runs",
+    "runCount_one": "{{count}} run",
+    "runCount_other": "{{count}} runs",
+    "kind": {
+      "autoDreaming": "Dreaming",
+      "connectorInit": "Connecting source",
+      "connectorEvolve": "Distilling signals",
+      "crystallize": "Crystallizing chat",
+      "generatorManual": "Generating cards",
+      "generatorAuto": "Generating cards",
+      "userPrompt": "Synthetic prompt"
+    }
+  },
+  "notificationPrompt": {
+    "title": "Turn on notifications",
+    "description": "Generating cards can take a few minutes to a few hours. With notifications on, we'll alert you the moment they're ready — no need to keep watching the app.",
+    "turnOn": "Turn on",
+    "later": "Later"
+  },
+  "weather": {
+    "clear": "Clear",
+    "cloudy": "Cloudy",
+    "foggy": "Foggy",
+    "drizzle": "Drizzle",
+    "rainy": "Rainy",
+    "snowy": "Snowy",
+    "showers": "Showers",
+    "stormy": "Stormy"
+  },
+  "desktopNotify": {
+    "newCards_one": "{{count}} new card for you",
+    "newCards_other": "{{count}} new cards for you"
+  }
+}

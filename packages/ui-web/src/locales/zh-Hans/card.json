@@ -1,0 +1,100 @@
+{
+  "category": {
+    "growth": "成长",
+    "work": "工作",
+    "finance": "财务",
+    "health": "健康",
+    "learn": "学习",
+    "life": "生活"
+  },
+  "tag": {
+    "urgent": "紧急"
+  },
+  "scheduledSource": "定时 · {{label}}",
+  "score": {
+    "confidence": "置信度",
+    "importance": "重要性",
+    "urgency": "紧急度"
+  },
+  "sourceApp": {
+    "calendar": "日历",
+    "drive": "云端硬盘",
+    "docs": "文档",
+    "sheets": "表格",
+    "web": "网页",
+    "memory": "记忆",
+    "phone": "手机",
+    "profile": "个人资料",
+    "goal": "目标",
+    "preference": "偏好"
+  },
+  "reasoningStep": {
+    "observed": "观察",
+    "crossReferenced": "交叉比对",
+    "patternMatched": "模式匹配",
+    "flagged": "标记",
+    "decided": "决策"
+  },
+  "drawer": {
+    "srTitleFallback": "卡片详情",
+    "srDescription": "卡片详情视图",
+    "quickApprove": "快速批准",
+    "quickApproveHint": "低风险任务——通常可以直接批准",
+    "dismiss": "忽略",
+    "chat": "聊天",
+    "approve": "批准",
+    "opening": "打开中…"
+  },
+  "detail": {
+    "howReasoned": "我的推理过程",
+    "stepCount_other": "{{count}} 步",
+    "whyNow": "为什么是现在",
+    "executionPlan": "执行计划",
+    "generatedDrafts_other": "生成的草稿",
+    "approvingTitle": "批准后，AI 助手将可以：",
+    "risksTitle": "需要注意的风险",
+    "sourcesTitle": "来源"
+  },
+  "fallback": {
+    "agentNote": "助手备注",
+    "calledTool": "调用了 {{name}}"
+  },
+  "statusBanner": {
+    "preparing": "助手正在制定计划——请稍候。",
+    "resuming": "正在恢复…",
+    "resultTitle": "结果",
+    "resultFallback": "完成。",
+    "failedTitle": "失败",
+    "failedFallback": "运行失败。",
+    "cancelled": "已取消。点「重试」可重新运行。"
+  },
+  "now": {
+    "greeting": "嗨，<nameSpan>{{name}}</nameSpan>",
+    "greetingFallbackName": "朋友",
+    "feedSummary_other": "你的主动信息流 · 今天 {{count}} 张卡片",
+    "openAmbient": "打开环境感知",
+    "toggleAmbient": "切换环境感知",
+    "ambientOn": "环境感知已开启",
+    "ambientOff": "环境感知已关闭",
+    "ambientTapToStart": "点按开始感知周围情境",
+    "ambientQuiet": "环境感知很安静——连接数据源后开始接收信号"
+  },
+  "emptyState": {
+    "warmingUpTitle": "你的信息流正在预热",
+    "warmingUpBody": "生成卡片可能需要几分钟到几小时。准备好后我们会立即通知你。",
+    "checklistTitle": "让你的信息流跑起来",
+    "voiceTitle": "开启语音",
+    "voiceSubtitle": "让 PIN AI 感知你的一天，为你推荐卡片",
+    "connectTitle": "连接你的应用",
+    "connectSubtitle": "Gmail、日历等——让 PIN AI 掌握你的情况",
+    "reviewPermissions": "查看权限"
+  },
+  "sphere": {
+    "quick": "快捷",
+    "badgeNew": "新",
+    "badgeInput": "待输入",
+    "badgeReady": "就绪",
+    "badgeFailed": "失败",
+    "badgeDone": "完成"
+  }
+}

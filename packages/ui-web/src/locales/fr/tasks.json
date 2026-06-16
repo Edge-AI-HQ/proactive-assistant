@@ -1,0 +1,24 @@
+{
+  "header": {
+    "title": "Tâches",
+    "subtitle": "L'IA les exécute pour vous"
+  },
+  "loadingHistory": "Chargement de l'historique…",
+  "preview": {
+    "completed": "Terminée",
+    "dismissed": "Ignorée",
+    "processing": "En cours…",
+    "needsInput": "En attente de votre réponse",
+    "ready": "Prête à examiner",
+    "failed": "Échec",
+    "inConversation": "En conversation",
+    "confirmed": "Confirmée",
+    "operationsSummary_one": "{{count}} opération · {{action}}",
+    "operationsSummary_many": "{{count}} opérations · {{action}}",
+    "operationsSummary_other": "{{count}} opérations · {{action}}"
+  },
+  "empty": {
+    "title": "Pas encore de cartes",
+    "body": "Générez des cartes d'intention depuis l'onglet NOW. Toutes les cartes apparaîtront ici."
+  }
+}

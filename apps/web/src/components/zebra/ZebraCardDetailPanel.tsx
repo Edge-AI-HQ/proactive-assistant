@@ -1,6 +1,6 @@
 import { X, Check, Lock as LockIcon, Loader2, MessageCircle } from "lucide-react";
 import { useCardExecutionRun } from "@pin-ai/state";
-import { CATEGORIES, DrawerDetailBody, type Intent, Text } from "@pin-ai/ui-web";
+import { CATEGORIES, categoryLabel, DrawerDetailBody, type Intent, Text } from "@pin-ai/ui-web";
 
 /**
  * Desktop (zebra) card detail — the iOS bottom-drawer content re-housed in a
@@ -57,7 +57,7 @@ export default function ZebraCardDetailPanel({
         {/* Category */}
         <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
           <Icon size={14} strokeWidth={1.5} className="text-foreground/50" />
-          <span className="text-xs font-semibold tracking-wide text-foreground/50 uppercase">{cat.label}</span>
+          <span className="text-xs font-semibold tracking-wide text-foreground/50 uppercase">{categoryLabel(card.category)}</span>
           {card.tag && (
             <Text variant="caption" weight="bold" className="px-1.5 py-0.5 rounded-full bg-foreground/10 text-foreground/50">
               {card.tag}

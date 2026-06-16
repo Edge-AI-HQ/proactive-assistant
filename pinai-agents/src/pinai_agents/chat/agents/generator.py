@@ -50,6 +50,7 @@ from ...shared.api_models import (
 from ..harness.ctx import run_context
 from ..harness.llm import make_chat_model
 from .generation_context import _connection_toolkit, build_generation_context
+from .prompts import lang_clause
 
 logger = logging.getLogger(__name__)
 
@@ -628,12 +629,6 @@ rejectedIntentKeys for candidates you intentionally drop, and one short
 notes paragraph.
 </output>
 """
-
-
-def _lang_clause(output_language: str) -> str:
-    if output_language in ("zh-Hans", "zh"):
-        return "Use Simplified Chinese for all user-visible text fields"
-    return "Use English for all user-visible text fields"
 
 
 def _stage_config(*, run_id: str, user_id: int, stage: str) -> dict[str, Any]:
@@ -1288,7 +1283,7 @@ def _card_writer_content(
     output_language: str,
 ) -> str:
     return (
-        f"Today is {current_date}. {_lang_clause(output_language)}.\n"
+        f"Today is {current_date}. {lang_clause(output_language)}.\n"
         "Write exactly one GeneratedCard for this plan item. Use only the "
         "provided source bundle. Copy citation strings verbatim into sources[].\n"
         f"<plan_item_json>{_dump_model(plan_item)}</plan_item_json>\n"
@@ -1752,7 +1747,7 @@ async def run_generator(
                         f"{target_cards} high-quality cards."
                     ),
                     content=(
-                        f"Today is {current_date}. {_lang_clause(output_language)}.\n"
+                        f"Today is {current_date}. {lang_clause(output_language)}.\n"
                         f"Target {target_cards} final cards; plan up to {candidate_count} candidates.\n"
                         f"{focus_clause}"
                         f"<generation_request_json>{generation_request_json}</generation_request_json>\n"
@@ -1812,7 +1807,7 @@ async def run_generator(
                                 system=(
                                     _render_prompt(
                                         _CARD_GENERATOR_PROMPT,
-                                        lang_clause=_lang_clause(output_language),
+                                        lang_clause=lang_clause(output_language),
                                     )
                                     + "\n\nDIRECT MODE: a single PlanItem and source_bundle_json "
                                     "are provided in the user message. Do not call tools or "
@@ -2019,7 +2014,7 @@ async def run_generator(
                                         "fresh evidence over basket diversity."
                                     ),
                                     content=(
-                                        f"Today is {current_date}. {_lang_clause(output_language)}.\n"
+                                        f"Today is {current_date}. {lang_clause(output_language)}.\n"
                                         f"Need {missing_count} more passing cards; plan up to "
                                         f"{topup_count} top-up candidates.\n"
                                         f"<existing_intent_keys_json>{json.dumps(existing_intents, ensure_ascii=False)}</existing_intent_keys_json>\n"

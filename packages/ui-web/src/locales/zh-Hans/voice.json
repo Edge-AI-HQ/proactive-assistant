@@ -1,0 +1,10 @@
+{
+  "button": {
+    "cancelRecordingAria": "取消录音",
+    "useTranscriptAria": "使用转写文字",
+    "voiceInputAria": "语音输入"
+  },
+  "errors": {
+    "transcriptionFailed": "语音转写失败"
+  }
+}

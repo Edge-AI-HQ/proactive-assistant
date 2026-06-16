@@ -1,5 +1,6 @@
 import { useCallback, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { animate } from "framer-motion";
+import { useTranslation } from "react-i18next";
 import {
   Drawer,
   DrawerContent,
@@ -67,6 +68,7 @@ export default function CardDrawer({
   onComplete,
   onChat,
 }: CardDrawerProps) {
+  const { t } = useTranslation("card");
   const gestureRef = useRef<{
     startX: number;
     startY: number;
@@ -246,8 +248,8 @@ export default function CardDrawer({
         overlayClassName="!bg-foreground/5 backdrop-blur-[2px]"
       >
         <DrawerHeader className="sr-only">
-          <DrawerTitle>{card?.title ?? "Card Detail"}</DrawerTitle>
-          <DrawerDescription>Card detail view</DrawerDescription>
+          <DrawerTitle>{card?.title ?? t("drawer.srTitleFallback")}</DrawerTitle>
+          <DrawerDescription>{t("drawer.srDescription")}</DrawerDescription>
         </DrawerHeader>
         {card && (
           <div

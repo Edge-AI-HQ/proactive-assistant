@@ -11,6 +11,7 @@
  */
 import { useState } from "react";
 import { AlertCircle, Check, ChevronDown, Clock, Loader2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import MarkdownContent from "./MarkdownContent";
 import { resolveToolPresentation } from "./tool-presentation";
@@ -90,6 +91,7 @@ export function ToolNodeRow({
   /** Slightly tighter row inside a TaskCard's nested rail. */
   compact?: boolean;
 }) {
+  const { t } = useTranslation("chat");
   const [expanded, setExpanded] = useState(false);
   const status = toolStatus(part);
   const { verb } = resolveToolPresentation(part.toolName);
@@ -133,7 +135,7 @@ export function ToolNodeRow({
         </span>
         {part.links && (
           <Text variant="caption" className="shrink-0 text-foreground/45">
-            {part.links.length} results
+            {t("toolNode.results", { count: part.links.length })}
           </Text>
         )}
         {canExpand && (
@@ -179,6 +181,7 @@ export function ThinkingNode({
   /** This reasoning span is still receiving deltas — show the sliding tail. */
   streaming: boolean;
 }) {
+  const { t } = useTranslation("chat");
   const [expanded, setExpanded] = useState(false);
 
   if (streaming) {
@@ -202,7 +205,7 @@ export function ThinkingNode({
       >
         <Clock size={11} strokeWidth={2} className="shrink-0 text-foreground/35" />
         <span className="min-w-0 flex-1 truncate text-caption italic text-foreground/45">
-          {firstLine(text) || "Thought"}
+          {firstLine(text) || t("workGroup.thought")}
         </span>
         <ChevronDown
           size={12}

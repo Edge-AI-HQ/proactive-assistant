@@ -1,0 +1,22 @@
+{
+  "header": {
+    "title": "任务",
+    "subtitle": "AI 正在为你处理这些任务"
+  },
+  "loadingHistory": "正在加载历史…",
+  "preview": {
+    "completed": "已完成",
+    "dismissed": "已忽略",
+    "processing": "处理中…",
+    "needsInput": "等待你的输入",
+    "ready": "待你查看",
+    "failed": "失败",
+    "inConversation": "对话中",
+    "confirmed": "已确认",
+    "operationsSummary_other": "{{count}} 个操作 · {{action}}"
+  },
+  "empty": {
+    "title": "还没有卡片",
+    "body": "在 NOW 标签页生成意图卡片，所有卡片都会显示在这里。"
+  }
+}

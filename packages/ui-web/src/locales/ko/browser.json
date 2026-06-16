@@ -1,0 +1,31 @@
+{
+  "view": {
+    "loading": "브라우저를 불러오는 중…",
+    "needsYourHelp": "도움이 필요해요",
+    "aiBrowsing": "AI가 탐색 중이에요",
+    "youHaveControl": "직접 제어 중이에요",
+    "expand": "펼치기",
+    "minimize": "최소화",
+    "zoomIn": "확대",
+    "zoomOut": "축소",
+    "dragToScroll": "드래그로 스크롤",
+    "iframeTitle": "브라우저 세션 {{id}}",
+    "aiNeedsHelp": "AI에게 도움이 필요해요",
+    "takeOver": "직접 제어",
+    "returnToAi": "AI에게 넘기기",
+    "dismissKeyboard": "키보드 닫기",
+    "summonKeyboard": "입력",
+    "pressEnter": "Enter 입력",
+    "closeBrowser": "브라우저 닫기",
+    "endSession": "세션 종료",
+    "collapse": "접기",
+    "endBrowserSession": "브라우저 세션 종료",
+    "back": "뒤로",
+    "forward": "앞으로",
+    "reload": "새로고침",
+    "enterUrl": "URL 입력",
+    "addressBar": "주소창",
+    "takeControl": "브라우저 직접 제어",
+    "tapToTakeControl": "탭하여 직접 제어"
+  }
+}

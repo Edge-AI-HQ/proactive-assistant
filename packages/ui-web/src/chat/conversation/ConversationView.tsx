@@ -31,6 +31,7 @@ import {
 import { motion } from "framer-motion";
 import { Virtuoso, type Components } from "react-virtuoso";
 import { AlertCircle, ArrowLeft, Check, ChevronDown, Copy, Loader2, MessageSquarePlus, Mic, Pencil, Radio, RotateCcw, Send, Sparkles, Square, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import bgGradient from "../../assets/bg-gradient.jpg";
 import { cn } from "../../lib/utils";
 import { useMediaQuery } from "../../lib/use-media-query";
@@ -132,10 +133,10 @@ function formatRecordDuration(totalSec: number): string {
 }
 
 const LANDING_SUGGESTIONS = [
-  "What should I focus on today?",
-  "Summarize my week so far",
-  "What's on my mind lately?",
-];
+  { labelKey: "landing.suggestions.focusToday", prompt: "What should I focus on today?" },
+  { labelKey: "landing.suggestions.summarizeWeek", prompt: "Summarize my week so far" },
+  { labelKey: "landing.suggestions.onMyMind", prompt: "What's on my mind lately?" },
+] as const;
 
 /** Split layout: the chat column keeps this width on the right; the browser
  *  takes the rest on the left. ~standard comfortable chat reading width. */
@@ -145,6 +146,7 @@ const SPLIT_CHAT_WIDTH = 480;
  *  transcript is empty: idle orb + prompt + suggestion chips. Tapping a chip
  *  (or typing in the composer below) starts the thread. */
 function ProactiveLanding({ onPick }: { onPick: (prompt: string) => void }) {
+  const { t } = useTranslation("chat");
   return (
     // min-h-full + justify-center centers the greeting when it fits, and lets
     // the column scroll instead of clipping when it doesn't (small screens).
@@ -153,20 +155,20 @@ function ProactiveLanding({ onPick }: { onPick: (prompt: string) => void }) {
         <AiSphere size={216} mode="idle" />
       </div>
       <Text as="h2" variant="display" weight="semibold" className="text-display px-6 text-center tracking-tight">
-        What&apos;s on your mind?
+        {t("landing.heading")}
       </Text>
       <Text variant="bodySm" className="block mt-2 px-8 text-center leading-snug text-foreground/50">
-        Ask anything — I have your context.
+        {t("landing.subheading")}
       </Text>
       <div className="mt-8 flex w-full flex-col gap-2">
         {LANDING_SUGGESTIONS.map((s, i) => (
           <motion.button
-            key={s}
+            key={s.labelKey}
             type="button"
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.32, delay: 0.12 + i * 0.05, ease: [0.32, 0.72, 0, 1] }}
-            onClick={() => onPick(s)}
+            onClick={() => onPick(s.prompt)}
             className="group flex w-full items-center justify-between gap-3 rounded-2xl border border-foreground/[0.08] px-4 py-3 text-left transition-colors hover:bg-foreground/[0.03]"
             style={{
               background: "rgba(255,255,255,0.45)",
@@ -174,7 +176,7 @@ function ProactiveLanding({ onPick }: { onPick: (prompt: string) => void }) {
               WebkitBackdropFilter: "blur(20px) saturate(1.4)",
             }}
           >
-            <Text variant="bodySm" className="leading-snug text-foreground/75">{s}</Text>
+            <Text variant="bodySm" className="leading-snug text-foreground/75">{t(s.labelKey)}</Text>
             <span className="shrink-0 text-foreground/30 transition-colors group-hover:text-foreground/55">
               →
             </span>
@@ -236,6 +238,7 @@ function AssistantActionBar({
   isLast: boolean;
   onRegenerate?: () => void;
 }) {
+  const { t } = useTranslation("chat");
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState<"up" | "down" | null>(null);
   const channel = useContext(FeedbackChannelContext);
@@ -264,7 +267,7 @@ function AssistantActionBar({
   return (
     <div className="mt-2 flex items-center gap-0.5 pl-0.5">
       {plainText ? (
-        <button type="button" onClick={copy} className={ACTION_BTN} aria-label="Copy message" title="Copy">
+        <button type="button" onClick={copy} className={ACTION_BTN} aria-label={t("actionBar.copyMessage")} title={t("actionBar.copy")}>
           {copied ? (
             <Check size={13} strokeWidth={2} className="text-emerald-500" />
           ) : (
@@ -278,8 +281,8 @@ function AssistantActionBar({
             type="button"
             onClick={() => sendFeedback("up")}
             className={feedback === "up" ? ACTION_BTN_ACTIVE : ACTION_BTN}
-            aria-label="Good response"
-            title="Good response"
+            aria-label={t("actionBar.goodResponse")}
+            title={t("actionBar.goodResponse")}
           >
             <ThumbsUp size={13} strokeWidth={1.6} fill={feedback === "up" ? "currentColor" : "none"} />
           </button>
@@ -287,15 +290,15 @@ function AssistantActionBar({
             type="button"
             onClick={() => sendFeedback("down")}
             className={feedback === "down" ? ACTION_BTN_ACTIVE : ACTION_BTN}
-            aria-label="Bad response"
-            title="Bad response"
+            aria-label={t("actionBar.badResponse")}
+            title={t("actionBar.badResponse")}
           >
             <ThumbsDown size={13} strokeWidth={1.6} fill={feedback === "down" ? "currentColor" : "none"} />
           </button>
         </>
       ) : null}
       {isLast && onRegenerate ? (
-        <button type="button" onClick={onRegenerate} className={ACTION_BTN} aria-label="Regenerate response" title="Regenerate">
+        <button type="button" onClick={onRegenerate} className={ACTION_BTN} aria-label={t("actionBar.regenerateResponse")} title={t("actionBar.regenerate")}>
           <RotateCcw size={13} strokeWidth={1.6} />
         </button>
       ) : null}
@@ -328,6 +331,7 @@ function CardResultFeedbackBar({
   onDone: () => void;
   doneBusy: boolean;
 }) {
+  const { t } = useTranslation(["chat", "common"]);
   const [feedback, setFeedback] = useState<"up" | "down" | null>(null);
   const [commentOpen, setCommentOpen] = useState(false);
   const [commentText, setCommentText] = useState("");
@@ -366,14 +370,14 @@ function CardResultFeedbackBar({
         style={{ background: "rgba(255,255,255,0.5)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)" }}
       >
         <Text variant="label" weight="medium" className="whitespace-nowrap text-foreground/55">
-          Helpful?
+          {t("cardFeedback.helpfulPrompt")}
         </Text>
         <div className="flex items-center gap-1">
           <button
             type="button"
             onClick={() => sendThumbs("up")}
             disabled={!messageId}
-            aria-label="Helpful"
+            aria-label={t("cardFeedback.helpful")}
             className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${feedback === "up" ? "bg-green-500/20 text-green-600" : "bg-foreground/5 text-foreground/55 hover:bg-foreground/10"}`}
           >
             <ThumbsUp size={13} strokeWidth={2} />
@@ -382,7 +386,7 @@ function CardResultFeedbackBar({
             type="button"
             onClick={() => sendThumbs("down")}
             disabled={!messageId}
-            aria-label="Not helpful"
+            aria-label={t("cardFeedback.notHelpful")}
             className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${feedback === "down" ? "bg-red-500/20 text-red-600" : "bg-foreground/5 text-foreground/55 hover:bg-foreground/10"}`}
           >
             <ThumbsDown size={13} strokeWidth={2} />
@@ -395,11 +399,11 @@ function CardResultFeedbackBar({
           >
             {commentSent ? (
               <>
-                <Check size={12} strokeWidth={2.5} /> Sent
+                <Check size={12} strokeWidth={2.5} /> {t("cardFeedback.sent")}
               </>
             ) : (
               <>
-                <MessageSquarePlus size={12} strokeWidth={2} /> Comment
+                <MessageSquarePlus size={12} strokeWidth={2} /> {t("cardFeedback.comment")}
               </>
             )}
           </button>
@@ -414,7 +418,7 @@ function CardResultFeedbackBar({
             ) : (
               <Check size={13} strokeWidth={2.5} />
             )}{" "}
-            Done
+            {t("common:status.done")}
           </button>
         </div>
       </div>
@@ -430,14 +434,14 @@ function CardResultFeedbackBar({
               if (e.nativeEvent.isComposing) return;
               if (e.key === "Enter") submitComment();
             }}
-            placeholder="Feedback on this card (won't message the agent)…"
+            placeholder={t("cardFeedback.commentPlaceholder")}
             className="h-9 flex-1 rounded-full border border-foreground/10 bg-white/60 px-4 text-bodySm text-foreground placeholder:text-foreground/35 focus:outline-none"
           />
           <button
             type="button"
             onClick={submitComment}
             disabled={!commentText.trim()}
-            aria-label="Send feedback"
+            aria-label={t("cardFeedback.sendFeedback")}
             className="flex h-9 w-9 items-center justify-center rounded-full bg-foreground text-background disabled:opacity-40"
           >
             <Send size={14} strokeWidth={2} />
@@ -468,6 +472,7 @@ function UserEntry({
   onDeleteQueued?: (id: string) => Promise<void>;
   onInterruptQueued?: (id: string) => Promise<void>;
 }) {
+  const { t } = useTranslation(["chat", "common"]);
   const [copied, setCopied] = useState(false);
   const [editingQueued, setEditingQueued] = useState(false);
   const [draft, setDraft] = useState(entry.text);
@@ -553,16 +558,16 @@ function UserEntry({
           className="mt-1 flex items-center gap-1 text-caption font-medium text-red-500 transition-colors hover:text-red-600"
         >
           <AlertCircle size={11} strokeWidth={2} />
-          Not sent
+          {t("userEntry.notSent")}
           <span className="text-foreground/40">·</span>
           <RotateCcw size={10} strokeWidth={2} />
-          Retry
+          {t("common:status.retry")}
         </button>
       ) : (
         <div className="mt-1 flex items-center gap-1 pr-0.5">
           {isQueued ? (
             <Text variant="caption" weight="medium" className="mr-1 rounded-full bg-foreground/[0.06] px-2 py-0.5 text-foreground/45">
-              Queued
+              {t("queued.badge")}
             </Text>
           ) : clockLabel ? (
             <Text variant="caption" weight="medium" className="tabular-nums text-foreground/40">
@@ -570,7 +575,7 @@ function UserEntry({
             </Text>
           ) : null}
           {!isQueued ? (
-            <button type="button" onClick={copy} className={ACTION_BTN} aria-label="Copy message" title="Copy">
+            <button type="button" onClick={copy} className={ACTION_BTN} aria-label={t("actionBar.copyMessage")} title={t("actionBar.copy")}>
               {copied ? (
                 <Check size={13} strokeWidth={2} className="text-emerald-500" />
               ) : (
@@ -585,8 +590,8 @@ function UserEntry({
                 onClick={saveQueuedEdit}
                 disabled={queueBusy !== null || !draft.trim()}
                 className={ACTION_BTN}
-                aria-label="Save queued message"
-                title="Save"
+                aria-label={t("queued.saveAria")}
+                title={t("queued.save")}
               >
                 {queueBusy === "edit" ? (
                   <Loader2 size={13} className="animate-spin" />
@@ -602,8 +607,8 @@ function UserEntry({
                 }}
                 disabled={queueBusy !== null}
                 className={ACTION_BTN}
-                aria-label="Cancel queued edit"
-                title="Cancel"
+                aria-label={t("queued.cancelEditAria")}
+                title={t("common:status.cancel")}
               >
                 <X size={13} strokeWidth={1.8} />
               </button>
@@ -615,8 +620,8 @@ function UserEntry({
                 onClick={() => setEditingQueued(true)}
                 disabled={queueBusy !== null}
                 className={ACTION_BTN}
-                aria-label="Edit queued message"
-                title="Edit"
+                aria-label={t("queued.editAria")}
+                title={t("queued.edit")}
               >
                 <Pencil size={13} strokeWidth={1.8} />
               </button>
@@ -625,8 +630,8 @@ function UserEntry({
                 onClick={sendQueuedNow}
                 disabled={queueBusy !== null}
                 className={ACTION_BTN}
-                aria-label="Send now"
-                title="Send now"
+                aria-label={t("queued.sendNow")}
+                title={t("queued.sendNow")}
               >
                 {queueBusy === "send" ? (
                   <Loader2 size={13} className="animate-spin" />
@@ -639,8 +644,8 @@ function UserEntry({
                 onClick={deleteQueued}
                 disabled={queueBusy !== null}
                 className={ACTION_BTN}
-                aria-label="Delete queued message"
-                title="Delete"
+                aria-label={t("queued.deleteAria")}
+                title={t("queued.delete")}
               >
                 {queueBusy === "delete" ? (
                   <Loader2 size={13} className="animate-spin" />
@@ -654,8 +659,8 @@ function UserEntry({
               type="button"
               onClick={() => onEdit(entry.text)}
               className={ACTION_BTN}
-              aria-label="Edit message"
-              title="Edit"
+              aria-label={t("userEntry.editMessage")}
+              title={t("queued.edit")}
             >
               <Pencil size={13} strokeWidth={1.8} />
             </button>
@@ -677,12 +682,13 @@ function QueuedMessagesPanel({
   onDeleteQueued: (id: string) => Promise<void>;
   onInterruptQueued: (id: string) => Promise<void>;
 }) {
+  const { t } = useTranslation("chat");
   if (entries.length === 0) return null;
   return (
     <div className="px-8">
       <div
         role="region"
-        aria-label="Queued messages"
+        aria-label={t("queued.regionLabel")}
         className="mb-[-1px] overflow-hidden rounded-t-[22px] rounded-b-none border border-foreground/[0.10] bg-white/56 shadow-[0_1px_14px_hsl(0_0%_0%/0.03)] backdrop-blur-[20px]"
       >
         <div className="divide-y divide-foreground/[0.06]">
@@ -712,6 +718,7 @@ function QueuedMessageRow({
   onDeleteQueued: (id: string) => Promise<void>;
   onInterruptQueued: (id: string) => Promise<void>;
 }) {
+  const { t } = useTranslation(["chat", "common"]);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(entry.text);
   const [busy, setBusy] = useState<null | "edit" | "delete" | "send">(null);
@@ -777,8 +784,8 @@ function QueuedMessageRow({
               onClick={save}
               disabled={busy !== null || !draft.trim()}
               className={ACTION_BTN}
-              aria-label="Save queued message"
-              title="Save"
+              aria-label={t("queued.saveAria")}
+              title={t("queued.save")}
             >
               {busy === "edit" ? (
                 <Loader2 size={13} className="animate-spin" />
@@ -794,8 +801,8 @@ function QueuedMessageRow({
               }}
               disabled={busy !== null}
               className={ACTION_BTN}
-              aria-label="Cancel queued edit"
-              title="Cancel"
+              aria-label={t("queued.cancelEditAria")}
+              title={t("common:status.cancel")}
             >
               <X size={13} strokeWidth={1.8} />
             </button>
@@ -807,8 +814,8 @@ function QueuedMessageRow({
               onClick={() => setEditing(true)}
               disabled={busy !== null}
               className={ACTION_BTN}
-              aria-label="Edit queued message"
-              title="Edit"
+              aria-label={t("queued.editAria")}
+              title={t("queued.edit")}
             >
               <Pencil size={13} strokeWidth={1.8} />
             </button>
@@ -817,8 +824,8 @@ function QueuedMessageRow({
               onClick={sendNow}
               disabled={busy !== null}
               className={ACTION_BTN}
-              aria-label="Send now"
-              title="Send now"
+              aria-label={t("queued.sendNow")}
+              title={t("queued.sendNow")}
             >
               {busy === "send" ? (
                 <Loader2 size={13} className="animate-spin" />
@@ -831,8 +838,8 @@ function QueuedMessageRow({
               onClick={remove}
               disabled={busy !== null}
               className={ACTION_BTN}
-              aria-label="Delete queued message"
-              title="Delete"
+              aria-label={t("queued.deleteAria")}
+              title={t("queued.delete")}
             >
               {busy === "delete" ? (
                 <Loader2 size={13} className="animate-spin" />
@@ -855,6 +862,7 @@ function QueuedMessageRow({
  * history replay.
  */
 function NotifyCard({ text }: { text: string }) {
+  const { t } = useTranslation("chat");
   return (
     <motion.div
       initial={{ opacity: 0, y: 6 }}
@@ -871,7 +879,7 @@ function NotifyCard({ text }: { text: string }) {
       <div className="mb-1.5 flex items-center gap-1.5">
         <Sparkles size={11} strokeWidth={2} className="text-[hsl(304_75%_45%)]" />
         <Text variant="micro" weight="bold" className="uppercase tracking-[0.18em] text-[hsl(304_75%_45%)]">
-          Notify you
+          {t("notify.label")}
         </Text>
       </div>
       <MarkdownContent text={text} />
@@ -912,6 +920,7 @@ function AssistantEntry({
   hitlAction?: HitlRequiresAction | null;
   onDecide?: (decision: "approve" | "reject", message?: string) => void;
 }) {
+  const { t } = useTranslation("common");
   const { parts, running } = entry;
   // Heartbeat-triggered turn with Debug off → surface only notify_user.
   const debugHidden = !!entry.debug && !debugEnabled;
@@ -975,7 +984,7 @@ function AssistantEntry({
         {showThinkingPill ? (
           <div className="mb-2">
             <div className="inline-flex items-center -ml-2 rounded-lg px-2 py-1 text-label font-medium text-foreground/65">
-              <ShimmerText>Thinking…</ShimmerText>
+              <ShimmerText>{t("status.thinking")}</ShimmerText>
             </div>
           </div>
         ) : (
@@ -1111,6 +1120,7 @@ interface TranscriptFooterContext {
  *  held the builder), and the runway spacer the send anchor scrolls against
  *  (see useChatScroll). */
 function TranscriptFooter({ context }: { context?: TranscriptFooterContext }) {
+  const { t } = useTranslation("common");
   if (!context) return null;
   const { busy, hasRunningTurn, awaitingDecision, hitlHostId, onDecide, runwayPx } = context;
   return (
@@ -1123,7 +1133,7 @@ function TranscriptFooter({ context }: { context?: TranscriptFooterContext }) {
       {!awaitingDecision && busy && !hasRunningTurn ? (
         <div className="mb-5 px-4 pt-1">
           <div className="inline-flex items-center -ml-2 rounded-lg px-2 py-1 text-label font-medium text-foreground/65">
-            <ShimmerText>Thinking…</ShimmerText>
+            <ShimmerText>{t("status.thinking")}</ShimmerText>
           </div>
         </div>
       ) : null}
@@ -1167,6 +1177,7 @@ function TranscriptView({
   awaitingDecision,
   onDecide,
 }: TranscriptViewProps) {
+  const { t } = useTranslation(["chat", "common"]);
   // `firstItemIndex` is a virtual offset that lets prepended history pages
   // keep their visual position. Start high and decrement by the number of
   // items prepended (detected by head id change + growth; appends and
@@ -1235,7 +1246,7 @@ function TranscriptView({
       <div className="flex flex-1 items-center justify-center">
         <div className="flex items-center gap-2">
           <Loader2 size={14} className="animate-spin text-foreground/40" />
-          <Text variant="bodySm" className="text-foreground/40">Loading…</Text>
+          <Text variant="bodySm" className="text-foreground/40">{t("common:status.loading")}</Text>
         </div>
       </div>
     );
@@ -1249,7 +1260,7 @@ function TranscriptView({
           <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center">
             <Radio size={22} strokeWidth={1.5} className="text-foreground/30" />
             <Text variant="bodySm" className="block text-foreground/45">
-              Ask the agent to act on this card, or send it a message.
+              {t("transcript.cardEmptyState")}
             </Text>
           </div>
         )}
@@ -1308,12 +1319,13 @@ function HeartbeatToggle({
   disabled: boolean;
   onChange: (next: boolean) => void;
 }) {
+  const { t } = useTranslation("chat");
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
-      aria-label="Proactive agent on/off"
+      aria-label={t("header.proactiveToggle")}
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
@@ -1348,6 +1360,7 @@ export default function ConversationView({
   enableBrowserSplit = false,
   onBrowserSplitChange,
 }: ConversationViewProps) {
+  const { t } = useTranslation(["chat", "common"]);
   // Debug message visibility: heartbeats + heartbeat-triggered turns (except
   // notify_user). A dev aid; persisted in localStorage so it survives reload.
   // Read BEFORE the runtime hook so the initial history fetch matches the
@@ -1669,7 +1682,7 @@ export default function ConversationView({
           <button
             onClick={onBack}
             className="-ml-1 rounded-full p-2 transition-colors hover:bg-foreground/[0.06]"
-            aria-label="Back"
+            aria-label={t("header.back")}
           >
             {backIcon === "left" ? (
               <ArrowLeft
@@ -1708,7 +1721,7 @@ export default function ConversationView({
             <div className="flex items-center gap-2">
               {/* Debug: show hidden heartbeat / heartbeat-triggered messages. */}
               <Text variant="label" weight="medium" className="text-foreground/55">
-                Debug
+                {t("header.debug")}
               </Text>
               <HeartbeatToggle
                 checked={debugEnabled}
@@ -1716,7 +1729,7 @@ export default function ConversationView({
                 onChange={setDebug}
               />
               <Text variant="label" weight="medium" className="ml-1 text-foreground/55">
-                Proactive
+                {t("header.proactive")}
               </Text>
               <HeartbeatToggle
                 checked={enabled === true}
@@ -1741,7 +1754,7 @@ export default function ConversationView({
                   ) : (
                     <X size={12} strokeWidth={2} />
                   )}
-                  Dismiss
+                  {t("header.dismiss")}
                 </button>
               )}
               {onDone && (
@@ -1756,7 +1769,7 @@ export default function ConversationView({
                   ) : (
                     <Check size={12} strokeWidth={2.5} />
                   )}
-                  Done
+                  {t("common:status.done")}
                 </button>
               )}
             </div>
@@ -1903,6 +1916,7 @@ const Composer = forwardRef<
   { onSend, onFocusChange, placeholder, streaming = false, onStop },
   ref,
 ) {
+  const { t } = useTranslation(["chat", "common"]);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -2066,8 +2080,11 @@ const Composer = forwardRef<
             )}
             <span className="min-w-0 truncate">
               {voiceFinalizing
-                ? "Polishing…"
-                : voiceTranscript || (voiceConnecting ? "Connecting…" : "Listening…")}
+                ? t("common:status.polishing")
+                : voiceTranscript ||
+                  (voiceConnecting
+                    ? t("common:status.connecting")
+                    : t("common:status.listening"))}
             </span>
           </p>
           <div className="flex items-center gap-2.5">
@@ -2086,7 +2103,7 @@ const Composer = forwardRef<
               onClick={cancelRecording}
               disabled={voiceFinalizing}
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-foreground/[0.06] text-foreground/55 transition-colors hover:bg-foreground/10 disabled:opacity-40"
-              aria-label="Cancel recording"
+              aria-label={t("composer.cancelRecording")}
             >
               <X size={16} strokeWidth={2} />
             </button>
@@ -2100,7 +2117,7 @@ const Composer = forwardRef<
                   "linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(330 80% 65%) 100%)",
                 boxShadow: "0 4px 12px hsl(var(--primary) / 0.35)",
               }}
-              aria-label="Use transcript"
+              aria-label={t("composer.useTranscript")}
             >
               <Check size={16} strokeWidth={2.5} />
             </button>
@@ -2123,7 +2140,7 @@ const Composer = forwardRef<
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={placeholder ?? "Message PIN AI…"}
+          placeholder={placeholder ?? t("composer.placeholder")}
           rows={1}
           className="min-h-9 max-h-[120px] flex-1 resize-none bg-transparent py-2 text-body leading-[20px] text-foreground outline-none placeholder:text-foreground/35"
         />
@@ -2134,7 +2151,7 @@ const Composer = forwardRef<
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => (document.activeElement as HTMLElement | null)?.blur?.()}
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-foreground/55 transition-colors hover:bg-foreground/[0.06] hover:text-foreground/80"
-            title="Dismiss keyboard"
+            title={t("composer.dismissKeyboard")}
           >
             <ChevronDown size={18} strokeWidth={1.6} />
           </button>
@@ -2143,7 +2160,7 @@ const Composer = forwardRef<
           type="button"
           onClick={startRecording}
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-foreground/55 transition-colors hover:bg-foreground/[0.06] hover:text-foreground/80"
-          aria-label="Voice input"
+          aria-label={t("composer.voiceInput")}
         >
           <Mic size={18} strokeWidth={1.6} />
         </button>
@@ -2152,8 +2169,8 @@ const Composer = forwardRef<
             type="button"
             onClick={() => void onStop?.()}
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-foreground/90 text-background transition-all active:scale-95 hover:bg-foreground"
-            aria-label="Stop"
-            title="Stop"
+            aria-label={t("composer.stop")}
+            title={t("composer.stop")}
           >
             <Square size={12} strokeWidth={2} fill="currentColor" />
           </button>
@@ -2177,8 +2194,8 @@ const Composer = forwardRef<
                     color: "hsl(var(--foreground) / 0.35)",
                   }
             }
-            aria-label={streaming ? "Queue message" : "Send"}
-            title={streaming ? "Queue message" : "Send"}
+            aria-label={streaming ? t("queued.queueMessage") : t("composer.send")}
+            title={streaming ? t("queued.queueMessage") : t("composer.send")}
           >
             <Send size={15} strokeWidth={2} />
           </button>

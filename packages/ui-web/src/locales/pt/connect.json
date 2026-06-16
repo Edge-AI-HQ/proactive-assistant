@@ -1,0 +1,172 @@
+{
+  "controlPanel": {
+    "title": "Conectar",
+    "subtitle": "Fontes de dados e dispositivos que alimentam sua IA",
+    "dataSources": "Fontes de dados",
+    "ofTotal": "de {{total}}",
+    "allSynced": "Tudo sincronizado",
+    "devices": "Dispositivos",
+    "paired": "pareados",
+    "ambientSources": "Fontes ambiente",
+    "activeCount": "{{count}} ativas",
+    "meshDescription": "Celulares, notebooks, wearables, óculos, câmeras — conexão peer-to-peer criptografada"
+  },
+  "dataConnections": {
+    "notConfigured": "O Composio não está configurado nesta instalação. As conexões ficarão indisponíveis até que o operador do backend faça a configuração.",
+    "categories": {
+      "recommended": {
+        "name": "Recomendados",
+        "description": "As melhores fontes de dados oficiais"
+      }
+    },
+    "noConnectors": "Nenhum conector disponível ainda",
+    "tiers": {
+      "core": "Fontes principais",
+      "more": "Mais fontes",
+      "optional": "Opcionais"
+    },
+    "connect": "Conectar",
+    "connected": "Conectado",
+    "disconnect": "Desconectar",
+    "add": "Adicionar",
+    "save": "Salvar",
+    "addAccountAria": "Adicionar conta de {{name}}",
+    "authorizeHint": "Autorize no navegador — isto será atualizado automaticamente",
+    "initTask": {
+      "initializing": "Inicializando…",
+      "initializingDetail": "Inicializando · {{detail}}",
+      "skipped": "Inicialização ignorada · {{reason}}",
+      "initialized": "Inicializado · {{fetched}} obtidas",
+      "memories_one": "{{count}} memória",
+      "memories_many": "{{count}} memórias",
+      "memories_other": "{{count}} memórias",
+      "skills_one": "{{count}} habilidade",
+      "skills_many": "{{count}} habilidades",
+      "skills_other": "{{count}} habilidades",
+      "failed": "Falha na inicialização — {{error}}",
+      "unknownError": "Erro desconhecido",
+      "stageQueued": "Na fila",
+      "stageFetch": "Buscando dados",
+      "stageFetchWithLimit": "Buscando dados (limite {{limit}})",
+      "stageRaw": "Salvando localmente",
+      "stageSignals": "Extraindo sinais",
+      "stageEvolve": "Destilando memórias"
+    },
+    "customMcp": {
+      "syncFailed": "Falha na sincronização",
+      "fetched": "{{value}} obtidos",
+      "distilling": "Destilando",
+      "connected": "Conectado",
+      "addTitle": "Adicionar conector personalizado",
+      "editTitle": "Editar conector personalizado",
+      "dialogDescription": "Conecte o PIN AI aos seus dados e ferramentas com um servidor MCP remoto.",
+      "closeAria": "Fechar diálogo de conector personalizado",
+      "namePlaceholder": "Nome",
+      "urlPlaceholder": "URL do servidor MCP remoto",
+      "trustNote": "Use apenas conectores de desenvolvedores em quem você confia. O PIN AI não pode garantir que ferramentas de terceiros funcionem como esperado nem que permaneçam inalteradas.",
+      "editAria": "Editar {{name}}",
+      "deleteAria": "Excluir {{name}}",
+      "nameRequired": "Informe um nome para o conector",
+      "httpsRequired": "A URL do servidor MCP remoto deve usar https",
+      "urlInvalid": "Informe uma URL válida de servidor MCP remoto",
+      "failed": "Falha no conector personalizado",
+      "deleteFailed": "Falha ao excluir o conector personalizado",
+      "addButton": "Adicionar conector personalizado"
+    },
+    "catalog": {
+      "title": "Mais conectores de dados",
+      "supportedCount": "{{total}} fontes compatíveis",
+      "supportedFallback": "1000+ fontes compatíveis",
+      "searchPlaceholder": "Buscar conectores",
+      "loading": "Carregando conectores",
+      "empty": "Nenhum conector encontrado",
+      "load": "Carregar conectores",
+      "resultsAria": "Resultados de conectores",
+      "scrollForMore": "Role para ver mais",
+      "categories": {
+        "all": "Todos",
+        "email": "E-mail",
+        "calendar": "Agenda",
+        "teamChat": "Chat de equipe",
+        "productivity": "Produtividade",
+        "devTools": "Ferramentas dev",
+        "crm": "CRM",
+        "projects": "Projetos",
+        "documents": "Documentos",
+        "databases": "Bancos de dados",
+        "analytics": "Análises",
+        "marketing": "Marketing",
+        "ecommerce": "E-commerce",
+        "scheduling": "Agendamento",
+        "files": "Arquivos",
+        "videoAudio": "Vídeo e áudio"
+      }
+    },
+    "coverage": {
+      "viaDriveMetadata": "via metadados do Drive"
+    },
+    "errors": {
+      "connectFailed": "Falha ao conectar",
+      "missingRedirect": "Conexão concluída, mas faltam dados de redirecionamento — tente novamente",
+      "notConfirmed": "Conexão não confirmada — tente novamente",
+      "unexpected": "Erro inesperado",
+      "catalogUnavailable": "Catálogo indisponível",
+      "disconnectFailed": "Falha ao desconectar"
+    }
+  },
+  "deviceConnections": {
+    "loading": "Carregando dispositivos…",
+    "empty": "Nenhum outro dispositivo pareado ainda. Entre no app do celular para que ele apareça aqui.",
+    "removeConfirm": "Remover \"{{name}}\"?",
+    "refresh": "Atualizar",
+    "never": "nunca",
+    "lastSeen": "visto por último {{time}}",
+    "deviceAria": "Dispositivo {{platform}}",
+    "platform": {
+      "ios": "iOS",
+      "android": "Android",
+      "wearable": "Wearable",
+      "sensor": "Sensor",
+      "embedded": "Embarcado",
+      "web": "Web"
+    },
+    "revokeDevice": "Revogar dispositivo",
+    "openTimeline": "Abrir linha do tempo"
+  },
+  "deviceTimeline": {
+    "back": "Voltar",
+    "loaded": "{{count}} carregados",
+    "filters": {
+      "all": "Todos",
+      "today": "Hoje"
+    },
+    "range": {
+      "allDays": "Todos os dias",
+      "today": "Hoje",
+      "yesterday": "Ontem",
+      "last7d": "Últimos 7 dias",
+      "customDay": "Dia específico"
+    },
+    "filterByDay": "Filtrar por dia",
+    "shownCount": "{{count}} exibidos",
+    "emptyTimeline": "Ainda não há dados deste dispositivo.",
+    "loadMore": "Carregar mais {{count}}",
+    "end": "— fim —",
+    "download": "Baixar {{name}}"
+  },
+  "connectChip": {
+    "connect": "Conectar {{name}}",
+    "connected": "{{name}} conectado",
+    "alreadyConnected": "{{name}} já conectado"
+  },
+  "toolkits": {
+    "calendar": "Agenda",
+    "drive": "Drive",
+    "docs": "Documentos",
+    "sheets": "Planilhas"
+  },
+  "identity": {
+    "connectorFallback": "Conector",
+    "accountUnavailable": "Detalhes da conta indisponíveis"
+  }
+}

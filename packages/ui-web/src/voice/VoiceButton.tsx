@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Loader2, Mic, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { cn } from "../lib/utils";
 
@@ -26,6 +27,7 @@ export function VoiceButton({
   onResult,
   "aria-label": ariaLabel,
 }: VoiceButtonProps) {
+  const { t } = useTranslation(["voice", "common"]);
   const { startCapture, stopCapture, isCapturing, captureStatus } = useVoiceInput();
   const [recording, setRecording] = useState(false);
   const [transcript, setTranscript] = useState("");
@@ -94,7 +96,9 @@ export function VoiceButton({
             <Loader2 size={13} strokeWidth={2} className="shrink-0 animate-spin" />
           )}
           <span className="truncate">
-            {finalizing ? "Polishing…" : transcript || (isConnecting ? "Connecting…" : "Listening…")}
+            {finalizing
+              ? t("common:status.polishing")
+              : transcript || (isConnecting ? t("common:status.connecting") : t("common:status.listening"))}
           </span>
         </p>
         <div className="flex items-center gap-2.5">
@@ -110,7 +114,7 @@ export function VoiceButton({
             onClick={cancelRecording}
             disabled={finalizing}
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-foreground/[0.06] text-foreground/55 transition-colors hover:bg-foreground/10 disabled:opacity-40"
-            aria-label="Cancel recording"
+            aria-label={t("voice:button.cancelRecordingAria")}
           >
             <X size={15} strokeWidth={2} />
           </button>
@@ -124,7 +128,7 @@ export function VoiceButton({
                 "linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(330 80% 65%) 100%)",
               boxShadow: "0 4px 12px hsl(var(--primary) / 0.35)",
             }}
-            aria-label="Use transcript"
+            aria-label={t("voice:button.useTranscriptAria")}
           >
             <Check size={15} strokeWidth={2.5} />
           </button>
@@ -142,7 +146,7 @@ export function VoiceButton({
         "w-8 h-8 rounded-full bg-foreground/10 flex items-center justify-center text-foreground/60 hover:bg-foreground/15 hover:text-foreground transition-colors disabled:opacity-40",
         className,
       )}
-      aria-label={ariaLabel ?? "Voice input"}
+      aria-label={ariaLabel ?? t("voice:button.voiceInputAria")}
     >
       <Mic size={size} strokeWidth={2} />
     </button>

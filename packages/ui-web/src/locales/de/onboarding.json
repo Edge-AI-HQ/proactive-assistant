@@ -1,0 +1,55 @@
+{
+  "stepOf": "Schritt {{step}} von {{total}}",
+  "skip": "Überspringen",
+  "next": "Weiter",
+  "back": "Zurück",
+  "genericError": "Etwas ist schiefgelaufen. Bitte versuchen Sie es erneut.",
+  "step1": {
+    "title": "Ambient einrichten",
+    "subtitleNative": "Aktivieren Sie Ambient-Quellen und nehmen Sie eine kurze Sprachprobe von sich auf. Beides können Sie jederzeit im Control Center ändern.",
+    "subtitleWeb": "Ambient-Sensoren laufen in der iOS-App. Sie können diesen Schritt hier überspringen und die Ambient-Einrichtung später auf Ihrem Telefon abschließen."
+  },
+  "step2": {
+    "title": "KI-Modell auf dem Gerät",
+    "subtitleNative": "Laden Sie Gemma 2B herunter, damit Ambient Ihren lokalen Kontext privat auf diesem Gerät zusammenfassen kann.",
+    "subtitleWeb": "Lokale Ambient-Zusammenfassungen laufen in der iOS-App. Sie können diesen Schritt hier überspringen und das Modell auf Ihrem Telefon herunterladen.",
+    "webPlaceholder": "Die Einrichtung von Gemma 2B ist in der nativen App verfügbar. Fahren Sie hier fort und schließen Sie die Einrichtung später über Ambient auf Ihrem Telefon ab."
+  },
+  "step3": {
+    "title": "Daten verbinden",
+    "subtitle": "Wählen Sie die Apps aus, aus denen PIN AI lesen darf. Im Control Center können Sie jederzeit weitere verbinden (oder trennen).",
+    "subtitleConnect": "Wählen Sie die Apps aus, aus denen PIN AI lesen darf. Wir fassen den ersten Abruf zusammen, während Sie die Einrichtung fortsetzen."
+  },
+  "insightWait": {
+    "eyebrow": "Connector-Vorschau",
+    "heading": "PIN AI lernt Ihren Arbeitskontext kennen",
+    "description": "Wir verwandeln Ihren ersten Connector-Abruf in eine kompakte Profilvorschau.",
+    "firstDataPull": "Erster Datenabruf",
+    "live": "Live",
+    "footer": "Sie prüfen diese Vorschau, bevor Sie PIN AI betreten. Die Ergebnisseite ersetzt diesen Zustand, sobald sie bereit ist.",
+    "continue": "PIN AI betreten",
+    "steps": {
+      "reading": {
+        "label": "Aktuelle Einträge werden gelesen",
+        "detail": "Die neuesten Connector-Datensätze werden in einen kleinen Arbeitssatz übernommen."
+      },
+      "signals": {
+        "label": "Nützliche Signale werden gefunden",
+        "detail": "Suche nach Arbeitsmustern, Mitwirkenden, Tools und Schreibstil."
+      },
+      "composing": {
+        "label": "Ihre Vorschau wird erstellt",
+        "detail": "Der erste Abruf wird in ein kurzes Profil verwandelt, das Sie prüfen können."
+      }
+    }
+  },
+  "model": {
+    "recommendedBadge": "Empfohlen",
+    "description": "Laden Sie Gemma 2B herunter, um Ihre Bewegungs-, Standort-, Sprach-, Gesundheits- und Tonsignale in private lokale Zusammenfassungen zu verwandeln.",
+    "downloading": "Wird heruntergeladen {{percent}}",
+    "use": "Gemma 2B verwenden",
+    "download": "Gemma 2B herunterladen",
+    "skipNote": "Sie können dies überspringen und das Modell später über Ambient herunterladen. Ohne lokales LLM kann Ambient Ereignisse erfassen, aber keine lokalen Zusammenfassungskarten erstellen.",
+    "verificationFailed": "Modellüberprüfung fehlgeschlagen."
+  }
+}

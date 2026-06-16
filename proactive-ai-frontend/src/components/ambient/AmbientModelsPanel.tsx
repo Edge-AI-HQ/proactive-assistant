@@ -13,6 +13,7 @@
  * `Run verify` link in the Advanced disclosure is a debug override only.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Cpu, CheckCircle2, XCircle, Trash2, Loader2, ChevronDown } from "lucide-react";
 import {
   AmbientAi,
@@ -119,6 +120,7 @@ function ModelSection({
   setStatusById,
   showAdvanced,
 }: SectionProps) {
+  const { t } = useTranslation(["ambient", "common"]);
   const persister = KIND_PERSISTERS[kind];
 
   const [selectedId, setSelectedId] = useState<string | null>(() => {
@@ -155,12 +157,12 @@ function ModelSection({
   const verifyFail = selectedStatus?.lastVerifyResult === "fail";
 
   const downloadLabel = downloading
-    ? "Cancel"
+    ? t("common:status.cancel")
     : present
-      ? "Re-download"
+      ? t("ambient:models.redownload")
       : failed
-        ? "Retry"
-        : "Download";
+        ? t("common:status.retry")
+        : t("ambient:models.download");
 
   const handleDownloadOrCancel = useCallback(async () => {
     if (!selected) return;
@@ -250,10 +252,10 @@ function ModelSection({
   return (
     <div className="space-y-1.5">
       <label className="block text-micro font-medium text-foreground/45">
-        {KIND_LABEL[kind]} · active
+        {t("ambient:models.activeLabel", { kind: KIND_LABEL[kind] })}
       </label>
       <select
-        aria-label={`Active ${kind} model`}
+        aria-label={t("ambient:models.activeModelAria", { kind })}
         value={selected?.id ?? ""}
         disabled={busy || downloading}
         onChange={(e) => handleSelect(e.currentTarget.value)}
@@ -304,14 +306,14 @@ function ModelSection({
                   selectedStatus.bytesWritten,
                   selectedStatus.bytesTotal || selected.approxBytes,
                 )}
-                {selectedStatus.mirrorInUse ? ` · via ${selectedStatus.mirrorInUse}` : ""}
+                {selectedStatus.mirrorInUse ? ` · ${t("ambient:models.viaMirror", { mirror: selectedStatus.mirrorInUse })}` : ""}
               </Text>
             </div>
           ) : null}
 
           {present && selectedStatus?.sizeOnDisk ? (
             <Text variant="micro" className="block tabular-nums text-foreground/45">
-              on disk: {formatBytes(selectedStatus.sizeOnDisk)}
+              {t("ambient:models.onDisk", { size: formatBytes(selectedStatus.sizeOnDisk) })}
             </Text>
           ) : null}
 
@@ -334,7 +336,7 @@ function ModelSection({
               type="button"
               onClick={handleDelete}
               disabled={!present || busy}
-              aria-label={`Delete ${selected.displayName}`}
+              aria-label={t("ambient:models.deleteAria", { name: selected.displayName })}
               className="rounded-md border border-foreground/15 text-red-500 hover:bg-red-50 disabled:opacity-40 px-2 py-1.5"
             >
               <Trash2 size={12} strokeWidth={1.75} />
@@ -345,7 +347,7 @@ function ModelSection({
             <div className="pt-1.5 border-t border-foreground/10 mt-1.5 space-y-1">
               <div className="flex items-center justify-between gap-2">
                 <Text variant="micro" className="text-foreground/45">
-                  Manual verify (runtime auto-verifies on first use)
+                  {t("ambient:models.manualVerify")}
                 </Text>
                 <button
                   type="button"
@@ -354,7 +356,7 @@ function ModelSection({
                   className="text-micro text-foreground/70 underline underline-offset-2 hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed disabled:no-underline inline-flex items-center gap-1"
                 >
                   {verifying ? <Loader2 size={10} className="animate-spin" /> : null}
-                  {verifying ? "Verifying…" : "Run verify"}
+                  {verifying ? t("ambient:models.verifying") : t("ambient:models.runVerify")}
                 </button>
               </div>
               {(verifyOk || verifyFail) && selectedStatus ? (
@@ -369,8 +371,12 @@ function ModelSection({
                   )}
                   <span className="break-words">
                     {verifyOk
-                      ? `verified${selectedStatus.lastVerifyOutput ? `: ${selectedStatus.lastVerifyOutput}` : ""}`
-                      : `verify failed${selectedStatus.lastVerifyError ? `: ${selectedStatus.lastVerifyError}` : ""}`}
+                      ? selectedStatus.lastVerifyOutput
+                        ? t("ambient:models.verifiedWithOutput", { output: selectedStatus.lastVerifyOutput })
+                        : t("ambient:models.verified")
+                      : selectedStatus.lastVerifyError
+                        ? t("ambient:models.verifyFailedWithError", { error: selectedStatus.lastVerifyError })
+                        : t("ambient:models.verifyFailed")}
                   </span>
                 </div>
               ) : null}
@@ -383,6 +389,7 @@ function ModelSection({
 }
 
 export default function AmbientModelsPanel() {
+  const { t } = useTranslation("ambient");
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
   const [statusById, setStatusById] = useState<StatusById>({});
   const [mirror, setMirror] = useState<ModelMirror>(() => readStoredMirror());
@@ -437,14 +444,14 @@ export default function AmbientModelsPanel() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Cpu size={14} strokeWidth={1.5} className="text-foreground/40" />
-          <span className="text-xs font-medium text-foreground/50">Ambient Models</span>
+          <span className="text-xs font-medium text-foreground/50">{t("models.title")}</span>
         </div>
         <label className="text-micro font-medium text-foreground/45 inline-flex items-center gap-1.5">
-          <span>Mirror</span>
+          <span>{t("models.mirror")}</span>
           <select
             value={mirror}
             onChange={(e) => handleMirrorChange(e.currentTarget.value as ModelMirror)}
-            aria-label="Preferred mirror"
+            aria-label={t("models.preferredMirrorAria")}
             className="rounded-md border border-foreground/10 bg-white/60 px-2 py-0.5 text-caption text-foreground/70 focus:outline-none focus:ring-2 focus:ring-primary/30"
           >
             {MIRROR_OPTIONS.map((opt) => (
@@ -456,7 +463,7 @@ export default function AmbientModelsPanel() {
 
       {profiles.length === 0 ? (
         <Text variant="caption" className="block text-foreground/30 py-3 text-center">
-          {error ? `models.list failed: ${error}` : "Loading manifest…"}
+          {error ? t("models.listFailed", { error }) : t("models.loadingManifest")}
         </Text>
       ) : (
         <>
@@ -498,7 +505,7 @@ export default function AmbientModelsPanel() {
           strokeWidth={1.75}
           className={`transition-transform ${advancedOpen ? "rotate-0" : "-rotate-90"}`}
         />
-        Advanced
+        {t("models.advanced")}
       </button>
 
       {error && profiles.length > 0 && (

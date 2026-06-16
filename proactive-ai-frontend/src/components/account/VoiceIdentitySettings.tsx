@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Mic, RotateCcw, Square, Trash2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { createPcmRecorder, type PcmRecorder } from "@/components/voice/pcm-recorder";
 import { acquireExternalMic, type ExternalMicLease } from "@/services/ambient/external-mic";
 import {
@@ -10,7 +11,7 @@ import {
   type VoiceIdentityProfile,
 } from "@/services/voice-identity-api";
 import { useUserSettings } from "@pin-ai/state";
-import { Text } from "@pin-ai/ui-web";
+import { i18n, Text } from "@pin-ai/ui-web";
 
 const TARGET_DURATION_MS = 5_000;
 const MIN_DURATION_MS = 2_000;
@@ -22,6 +23,7 @@ const ENGLISH_REFERENCE_PROMPT = "This morning I checked my schedule, and this a
 const CHINESE_REFERENCE_PROMPT = "今天早上我整理了日程，下午会给同事回一条消息。";
 
 export default function VoiceIdentitySettings() {
+  const { t } = useTranslation("account");
   const { settings } = useUserSettings();
   const [profile, setProfile] = useState<VoiceIdentityProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -137,7 +139,7 @@ export default function VoiceIdentitySettings() {
 
   const saveReview = useCallback(async () => {
     if (!reviewBlob || reviewDurationMs < MIN_DURATION_MS) {
-      setError("Record at least 2 seconds before saving.");
+      setError(i18n.t("account:voiceIdentity.tooShort"));
       return;
     }
     setBusy(true);
@@ -183,21 +185,21 @@ export default function VoiceIdentitySettings() {
   const reviewTooShort = Boolean(reviewBlob) && reviewDurationMs < MIN_DURATION_MS;
   const enrolled = profile !== null;
   const status = loading
-    ? "Loading"
+    ? t("voiceIdentity.statusLoading")
     : !enrolled
-      ? "Not enrolled"
+      ? t("voiceIdentity.statusNotEnrolled")
       : profile.enabled
-        ? "Enrolled"
-        : "Disabled";
+        ? t("voiceIdentity.statusEnrolled")
+        : t("voiceIdentity.statusDisabled");
   const referencePrompt = voiceReferencePrompt(settings?.generationLanguage);
 
   return (
     <section className="glass-card-strong p-4 space-y-3">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <h2 className="text-sm font-semibold text-foreground">Voice identity</h2>
+          <h2 className="text-sm font-semibold text-foreground">{t("voiceIdentity.title")}</h2>
           <Text variant="caption" className="block mt-1 leading-relaxed text-foreground/45">
-            Save a short sample so Ambient can label your own speech as self.
+            {t("voiceIdentity.description")}
           </Text>
         </div>
         <Text variant="micro" weight="semibold" className="shrink-0 whitespace-nowrap rounded-full bg-foreground/[0.06] px-2.5 py-1 leading-none text-foreground/55">
@@ -206,7 +208,7 @@ export default function VoiceIdentitySettings() {
       </div>
 
       <div className="border-l-2 border-foreground/15 pl-3">
-        <Text variant="micro" weight="semibold" className="block text-foreground/35">Read aloud</Text>
+        <Text variant="micro" weight="semibold" className="block text-foreground/35">{t("voiceIdentity.readAloud")}</Text>
         <Text variant="label" weight="medium" className="block mt-1 leading-relaxed text-foreground/75">
           {referencePrompt}
         </Text>
@@ -215,11 +217,11 @@ export default function VoiceIdentitySettings() {
       {profile && (
         <div className="grid grid-cols-2 gap-2 text-caption text-foreground/55">
           <div>
-            <span className="block text-foreground/35">Duration</span>
+            <span className="block text-foreground/35">{t("voiceIdentity.duration")}</span>
             <span className="font-medium text-foreground/75">{formatDuration(profile.referenceDurationMs ?? 0)}</span>
           </div>
           <div>
-            <span className="block text-foreground/35">Updated</span>
+            <span className="block text-foreground/35">{t("voiceIdentity.updated")}</span>
             <span className="font-medium text-foreground/75">{formatDate(profile.updatedAt)}</span>
           </div>
         </div>
@@ -228,8 +230,8 @@ export default function VoiceIdentitySettings() {
       {recording && (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-foreground/10 bg-foreground/[0.03] px-3 py-3">
           <div className="min-w-0">
-            <Text variant="bodySm" weight="semibold" className="block text-foreground">Recording {formatDuration(elapsedMs)}</Text>
-            <Text variant="caption" className="block text-foreground/45">Target {formatDuration(TARGET_DURATION_MS)}, max {formatDuration(MAX_DURATION_MS)}</Text>
+            <Text variant="bodySm" weight="semibold" className="block text-foreground">{t("voiceIdentity.recording", { duration: formatDuration(elapsedMs) })}</Text>
+            <Text variant="caption" className="block text-foreground/45">{t("voiceIdentity.recordingTarget", { target: formatDuration(TARGET_DURATION_MS), max: formatDuration(MAX_DURATION_MS) })}</Text>
           </div>
           <button
             type="button"
@@ -237,7 +239,7 @@ export default function VoiceIdentitySettings() {
             className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-foreground px-3 text-caption font-semibold text-background"
           >
             <Square size={13} />
-            Stop
+            {t("voiceIdentity.stop")}
           </button>
         </div>
       )}
@@ -245,19 +247,19 @@ export default function VoiceIdentitySettings() {
       {reviewBlob && !recording && (
         <div className="space-y-2 rounded-lg border border-foreground/10 bg-foreground/[0.03] px-3 py-3">
           <div className="flex items-center justify-between gap-3">
-            <Text variant="bodySm" weight="semibold" className="block text-foreground">Review {formatDuration(reviewDurationMs)}</Text>
+            <Text variant="bodySm" weight="semibold" className="block text-foreground">{t("voiceIdentity.review", { duration: formatDuration(reviewDurationMs) })}</Text>
             <button
               type="button"
               onClick={() => void startRecording()}
               className="inline-flex min-h-9 items-center gap-1.5 rounded-lg bg-foreground/[0.08] px-3 text-caption font-semibold text-foreground/70"
             >
               <RotateCcw size={13} />
-              Re-record
+              {t("voiceIdentity.reRecord")}
             </button>
           </div>
           {reviewUrl && <audio controls src={reviewUrl} className="w-full" />}
           {reviewTooShort && (
-            <Text variant="caption" weight="medium" className="block text-red-500">Record at least 2 seconds before saving.</Text>
+            <Text variant="caption" weight="medium" className="block text-red-500">{t("voiceIdentity.tooShort")}</Text>
           )}
           <button
             type="button"
@@ -265,7 +267,7 @@ export default function VoiceIdentitySettings() {
             disabled={busy || reviewTooShort}
             className="min-h-10 w-full rounded-lg bg-foreground px-3 text-label font-semibold text-background disabled:cursor-not-allowed disabled:opacity-40"
           >
-            Save reference
+            {t("voiceIdentity.saveReference")}
           </button>
         </div>
       )}
@@ -279,7 +281,7 @@ export default function VoiceIdentitySettings() {
             className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-foreground px-3 text-label font-semibold text-background disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Mic size={14} />
-            {profile ? "Re-record" : "Record self reference"}
+            {profile ? t("voiceIdentity.reRecord") : t("voiceIdentity.recordSelfReference")}
           </button>
           {profile && !profile.enabled && (
             <button
@@ -288,7 +290,7 @@ export default function VoiceIdentitySettings() {
               disabled={busy}
               className="min-h-10 rounded-lg bg-foreground/[0.08] px-3 text-label font-semibold text-foreground/70 disabled:opacity-40"
             >
-              Enable voice identity
+              {t("voiceIdentity.enable")}
             </button>
           )}
           {profile && profile.enabled && (
@@ -298,7 +300,7 @@ export default function VoiceIdentitySettings() {
               disabled={busy}
               className="min-h-10 rounded-lg bg-foreground/[0.08] px-3 text-label font-semibold text-foreground/70 disabled:opacity-40"
             >
-              Disable
+              {t("voiceIdentity.disable")}
             </button>
           )}
           {profile && (
@@ -309,7 +311,7 @@ export default function VoiceIdentitySettings() {
               className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-red-500/10 px-3 text-label font-semibold text-red-600 disabled:opacity-40"
             >
               <Trash2 size={14} />
-              Delete
+              {t("voiceIdentity.delete")}
             </button>
           )}
         </div>
@@ -325,9 +327,9 @@ function formatDuration(ms: number): string {
 }
 
 function formatDate(value: string | null): string {
-  if (!value) return "Never";
+  if (!value) return i18n.t("account:voiceIdentity.never");
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Unknown";
+  if (Number.isNaN(date.getTime())) return i18n.t("account:voiceIdentity.unknown");
   return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckCircle2, Loader2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import {
   AmbientAi,
   type ModelDownloadProgressEvent,
@@ -12,7 +13,7 @@ import {
   RECOMMENDED_AMBIENT_LLM_MODEL_ID,
 } from "@/services/ambient/models-recommendation";
 import { setSelectedAmbientSummaryModelId } from "@/services/ambient/models-selection";
-import { Text } from "@pin-ai/ui-web";
+import { i18n, Text } from "@pin-ai/ui-web";
 
 interface AmbientModelSetupStepProps {
   compact?: boolean;
@@ -44,6 +45,7 @@ function formatPercent(written: number, total: number): string {
 }
 
 export default function AmbientModelSetupStep({ compact = false }: AmbientModelSetupStepProps) {
+  const { t } = useTranslation("onboarding");
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
   const [statusById, setStatusById] = useState<StatusById>({});
   const [busy, setBusy] = useState(false);
@@ -84,7 +86,7 @@ export default function AmbientModelSetupStep({ compact = false }: AmbientModelS
     try {
       const verify = await AmbientAi.models.verifyModel({ id: recommended.id });
       if (!verify.ok) {
-        setError(verify.errorMessage ?? "Model verification failed.");
+        setError(verify.errorMessage ?? i18n.t("onboarding:model.verificationFailed"));
         return;
       }
       setSelectedAmbientSummaryModelId(recommended.id);
@@ -149,10 +151,10 @@ export default function AmbientModelSetupStep({ compact = false }: AmbientModelS
     <section className={`glass-card-strong ${compact ? "p-3" : "p-4"}`}>
       <div className="flex items-start justify-between gap-3">
         <div>
-          <Text variant="caption" weight="semibold" className="block uppercase tracking-wider text-foreground/40">Recommended</Text>
+          <Text variant="caption" weight="semibold" className="block uppercase tracking-wider text-foreground/40">{t("model.recommendedBadge")}</Text>
           <h2 className="mt-1 text-lg font-semibold text-foreground">{RECOMMENDED_AMBIENT_LLM_LABEL}</h2>
           <Text variant="label" className="block mt-1 leading-relaxed text-foreground/55">
-            Download Gemma 2B to turn your motion, location, voice, health, and sound signals into private local summaries.
+            {t("model.description")}
           </Text>
         </div>
         {verified ? <CheckCircle2 size={20} className="mt-1 text-emerald-600" /> : null}
@@ -168,7 +170,7 @@ export default function AmbientModelSetupStep({ compact = false }: AmbientModelS
         ) : null}
         {downloading && status ? (
           <Text variant="micro" className="block mt-2 tabular-nums text-foreground/50">
-            Downloading {formatPercent(status.bytesWritten, status.bytesTotal || recommended.approxBytes)}
+            {t("model.downloading", { percent: formatPercent(status.bytesWritten, status.bytesTotal || recommended.approxBytes) })}
           </Text>
         ) : null}
       </div>
@@ -181,11 +183,11 @@ export default function AmbientModelSetupStep({ compact = false }: AmbientModelS
           className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-full bg-foreground px-4 text-bodySm font-semibold text-background transition-opacity hover:opacity-90 disabled:opacity-50"
         >
           {busy ? <Loader2 size={14} className="animate-spin" /> : null}
-          {present ? "Use Gemma 2B" : "Download Gemma 2B"}
+          {present ? t("model.use") : t("model.download")}
         </button>
       </div>
       <Text variant="micro" className="block mt-2 leading-snug text-foreground/45">
-        You can skip this and download later from Ambient. Without an on-device LLM, Ambient can collect events but cannot create local summary cards.
+        {t("model.skipNote")}
       </Text>
       {error ? <Text variant="caption" className="block mt-2 text-red-500">{error}</Text> : null}
     </section>

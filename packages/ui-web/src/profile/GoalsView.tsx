@@ -25,7 +25,10 @@ import {
   DrawerTitle,
   DrawerDescription,
 } from "../ui/drawer";
+import { useTranslation } from "react-i18next";
 import { fetchRawDeviceApps, fetchRawDeviceContacts, fetchRawDeviceHealth, fetchRawGcal, fetchRawGmail, fetchRawTable, fetchMemories, fetchProfileSnapshot, fetchSignals, listUserDevices, type DeviceAppRaw, type DeviceContactRaw, type DeviceHealthRaw, type GcalEvent, type GmailMessage, type Goal, type Memory, type PersonalSignal, type ProfileSnapshot, type RawTableRow, type UserDevice } from "@pin-ai/core";
+import i18n from "../i18n";
+import type profileEn from "../locales/en/profile.json";
 import { basketMeta } from "../card/basket-meta";
 import { useMediaQuery } from "../lib/use-media-query";
 import { isComposioToolkitConnected, type ComposioState } from "@pin-ai/state";
@@ -48,12 +51,14 @@ type RawSourceKind = "connector" | "device";
 const DEVICE_PANEL_PREFIX = "device:";
 const SPECIALIZED_RAW_PANELS = new Set(["gmail", "gcal"]);
 
+/** Canonical goal-meta key — the demo action/monitoring/question lists live
+ *  in `profile.json` under `goalMeta.<key>`. `null` = no lists (fallback). */
+type GoalMetaKey = keyof typeof profileEn.goalMeta;
+
 interface GoalVisualMeta {
   image: string;
   pct: number;
-  weeklyActions: string[];
-  monitoring: string[];
-  aiQuestions: string[];
+  metaKey: GoalMetaKey | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -63,114 +68,40 @@ interface GoalVisualMeta {
 const BASE = import.meta.env.BASE_URL;
 
 const GOAL_VISUAL_META: Record<string, GoalVisualMeta> = {
-  "career-growth": {
-    image: `${BASE}goal-work.png`,
-    pct: 62,
-    weeklyActions: [
-      "Review project milestones for this sprint",
-      "Follow up on pending decisions",
-      "Check team blockers and unblock",
-    ],
-    monitoring: ["Career development trajectory", "Skill gap analysis", "Industry trends"],
-    aiQuestions: ["What skill are you focusing on developing?", "Any career goals shifting this quarter?"],
-  },
-  work: {
-    image: `${BASE}goal-work.png`,
-    pct: 62,
-    weeklyActions: [
-      "Review project milestones for this sprint",
-      "Follow up on pending decisions",
-      "Check team blockers and unblock",
-    ],
-    monitoring: ["Career development trajectory", "Skill gap analysis", "Industry trends"],
-    aiQuestions: ["What skill are you focusing on developing?", "Any career goals shifting this quarter?"],
-  },
-  "stay-healthy": {
-    image: `${BASE}goal-health.png`,
-    pct: 35,
-    weeklyActions: ["No new health signals this cycle"],
-    monitoring: ["Exercise consistency", "Sleep quality trends", "Annual checkup schedule"],
-    aiQuestions: ["What health tracking are you currently doing?", "Any specific health topics you're watching?"],
-  },
-  health: {
-    image: `${BASE}goal-health.png`,
-    pct: 35,
-    weeklyActions: ["No new health signals this cycle"],
-    monitoring: ["Exercise consistency", "Sleep quality trends", "Annual checkup schedule"],
-    aiQuestions: ["What health tracking are you currently doing?", "Any specific health topics you're watching?"],
-  },
-  "financial-plan": {
-    image: `${BASE}goal-finance.png`,
-    pct: 52,
-    weeklyActions: ["Review monthly spending summary", "Check upcoming bills and subscriptions"],
-    monitoring: ["Budget vs. actual spending", "Savings rate", "Investment performance"],
-    aiQuestions: ["Any budget concerns for this quarter?", "Should I prepare a savings analysis?"],
-  },
-  finance: {
-    image: `${BASE}goal-finance.png`,
-    pct: 52,
-    weeklyActions: ["Review monthly spending summary", "Check upcoming bills and subscriptions"],
-    monitoring: ["Budget vs. actual spending", "Savings rate", "Investment performance"],
-    aiQuestions: ["Any budget concerns for this quarter?", "Should I prepare a savings analysis?"],
-  },
-  wealth: {
-    image: `${BASE}goal-finance.png`,
-    pct: 52,
-    weeklyActions: ["Review monthly spending summary", "Check upcoming bills and subscriptions"],
-    monitoring: ["Budget vs. actual spending", "Savings rate", "Investment performance"],
-    aiQuestions: ["Any budget concerns for this quarter?", "Should I prepare a savings analysis?"],
-  },
-  "learn-and-grow": {
-    image: `${BASE}goal-growth.png`,
-    pct: 72,
-    weeklyActions: ["Continue current learning path", "Review bookmarked articles"],
-    monitoring: ["Learning time allocation", "New topics of interest", "Skill acquisition progress"],
-    aiQuestions: ["What topic are you most curious about right now?", "Should I find new learning resources?"],
-  },
-  growth: {
-    image: `${BASE}goal-growth.png`,
-    pct: 72,
-    weeklyActions: ["Continue current learning path", "Review bookmarked articles"],
-    monitoring: ["Learning time allocation", "New topics of interest", "Skill acquisition progress"],
-    aiQuestions: ["What topic are you most curious about right now?", "Should I find new learning resources?"],
-  },
-  relationships: {
-    image: `${BASE}goal-family.png`,
-    pct: 50,
-    weeklyActions: ["Plan weekend family activity", "Check in with close friends"],
-    monitoring: ["Family event calendar", "Relationship check-in frequency"],
-    aiQuestions: ["Any family events coming up?", "How's the work-life balance feeling?"],
-  },
-  family: {
-    image: `${BASE}goal-family.png`,
-    pct: 50,
-    weeklyActions: ["Plan weekend family activity", "Check in with close friends"],
-    monitoring: ["Family event calendar", "Relationship check-in frequency"],
-    aiQuestions: ["Any family events coming up?", "How's the work-life balance feeling?"],
-  },
-  "life-balance": {
-    image: `${BASE}goal-life.png`,
-    pct: 40,
-    weeklyActions: ["Block personal time on calendar", "Review stress levels"],
-    monitoring: ["Personal time allocation", "Burnout risk indicators", "Hobby engagement"],
-    aiQuestions: ["Any personal projects you want to prioritize?", "What recharges you most right now?"],
-  },
-  life: {
-    image: `${BASE}goal-life.png`,
-    pct: 40,
-    weeklyActions: ["Block personal time on calendar", "Review stress levels"],
-    monitoring: ["Personal time allocation", "Burnout risk indicators", "Hobby engagement"],
-    aiQuestions: ["Any personal projects you want to prioritize?", "What recharges you most right now?"],
-  },
+  "career-growth": { image: `${BASE}goal-work.png`, pct: 62, metaKey: "work" },
+  work: { image: `${BASE}goal-work.png`, pct: 62, metaKey: "work" },
+  "stay-healthy": { image: `${BASE}goal-health.png`, pct: 35, metaKey: "health" },
+  health: { image: `${BASE}goal-health.png`, pct: 35, metaKey: "health" },
+  "financial-plan": { image: `${BASE}goal-finance.png`, pct: 52, metaKey: "finance" },
+  finance: { image: `${BASE}goal-finance.png`, pct: 52, metaKey: "finance" },
+  wealth: { image: `${BASE}goal-finance.png`, pct: 52, metaKey: "finance" },
+  "learn-and-grow": { image: `${BASE}goal-growth.png`, pct: 72, metaKey: "growth" },
+  growth: { image: `${BASE}goal-growth.png`, pct: 72, metaKey: "growth" },
+  relationships: { image: `${BASE}goal-family.png`, pct: 50, metaKey: "family" },
+  family: { image: `${BASE}goal-family.png`, pct: 50, metaKey: "family" },
+  "life-balance": { image: `${BASE}goal-life.png`, pct: 40, metaKey: "life" },
+  life: { image: `${BASE}goal-life.png`, pct: 40, metaKey: "life" },
 };
 
 const FALLBACK_VISUAL: GoalVisualMeta = {
   image: `${BASE}goal-life.png`,
   pct: 50,
-  weeklyActions: [],
-  monitoring: [],
-  aiQuestions: [],
+  metaKey: null,
 };
+
+/** Localized demo lists for a goal's drawer. Empty arrays for the fallback. */
+function goalMetaLists(metaKey: GoalMetaKey | null): {
+  weeklyActions: string[];
+  monitoring: string[];
+  aiQuestions: string[];
+} {
+  if (!metaKey) return { weeklyActions: [], monitoring: [], aiQuestions: [] };
+  return {
+    weeklyActions: i18n.t(`profile:goalMeta.${metaKey}.weeklyActions`, { returnObjects: true }) as string[], // returnObjects 返回 i18next $SpecialObject,数组形态需断言
+    monitoring: i18n.t(`profile:goalMeta.${metaKey}.monitoring`, { returnObjects: true }) as string[], // returnObjects 返回 i18next $SpecialObject,数组形态需断言
+    aiQuestions: i18n.t(`profile:goalMeta.${metaKey}.aiQuestions`, { returnObjects: true }) as string[], // returnObjects 返回 i18next $SpecialObject,数组形态需断言
+  };
+}
 
 function getVisualMeta(key: string): GoalVisualMeta {
   return GOAL_VISUAL_META[key] ?? GOAL_VISUAL_META[key.split("-")[0]] ?? FALLBACK_VISUAL;
@@ -199,6 +130,18 @@ const statusBarColor: Record<VisualStatus, string> = {
   Alert: "bg-rose-400/50",
   Watch: "bg-amber-400/50",
 };
+
+// VisualStatus doubles as a logic value (color maps above); the display
+// label is resolved through i18n via this enum → key mapping.
+const STATUS_LABEL_KEY: Record<VisualStatus, "normal" | "alert" | "watch"> = {
+  Normal: "normal",
+  Alert: "alert",
+  Watch: "watch",
+};
+
+function statusLabel(status: VisualStatus): string {
+  return i18n.t(`profile:goalsView.status.${STATUS_LABEL_KEY[status]}`);
+}
 
 // ---------------------------------------------------------------------------
 // Constants — upstream profile sections
@@ -339,15 +282,13 @@ const GOAL_ICONS: Record<string, { icon: LucideIcon; label: string }> = {
 
 const FALLBACK_ICON = { icon: Sparkles, label: "Goal" };
 
-const PROFILE_GROUP_META: Array<{
-  key: ProfileGroupKey;
-  title: string;
-  description: string;
-}> = [
-  { key: "facts", title: "Facts", description: "Stable details the assistant knows about you." },
-  { key: "preferences", title: "Preferences", description: "How you prefer the assistant to behave." },
-  { key: "constraints", title: "Constraints", description: "Rules and boundaries the assistant should honor." },
-];
+// Copy (title / description / empty state) lives in profile.json under
+// `goalsView.profileGroups.<key>`; this array only fixes the display order.
+const PROFILE_GROUP_META = [
+  { key: "facts" },
+  { key: "preferences" },
+  { key: "constraints" },
+] as const;
 
 // Top-level Profile tabs, in display order. A horizontal swipe across the page
 // body steps between them (left swipe → next, right swipe → previous).
@@ -762,7 +703,7 @@ function firstTextValue(value: unknown): string | null {
 }
 
 function profileSummaryText(profile: ProfileSnapshot["profile"]): string {
-  const fallback = "No summary stored yet. The assistant will still use memories, signals, and goals below.";
+  const fallback = i18n.t("profile:goalsView.noSummary");
   if (!profile) return fallback;
 
   return firstTextValue(profile.summary)
@@ -853,18 +794,17 @@ function WorkbenchTabButton({
 }
 
 function ProfileGroupCard({
-  title,
-  description,
+  groupKey,
   values,
   expanded,
   onToggle,
 }: {
-  title: string;
-  description: string;
+  groupKey: (typeof PROFILE_GROUP_META)[number]["key"];
   values: Record<string, unknown>;
   expanded: boolean;
   onToggle: () => void;
 }) {
+  const { t } = useTranslation("profile");
   const entries = Object.entries(values);
 
   return (
@@ -875,12 +815,16 @@ function ProfileGroupCard({
       >
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-foreground">{title}</span>
+            <span className="text-sm font-semibold text-foreground">
+              {t(`goalsView.profileGroups.${groupKey}.title`)}
+            </span>
             <Text variant="micro" weight="medium" className="rounded-full bg-foreground/5 px-2 py-0.5 text-foreground/45">
               {entries.length}
             </Text>
           </div>
-          <p className="mt-1 text-xs leading-relaxed text-foreground/42">{description}</p>
+          <p className="mt-1 text-xs leading-relaxed text-foreground/42">
+            {t(`goalsView.profileGroups.${groupKey}.description`)}
+          </p>
         </div>
         <ChevronDown
           size={14}
@@ -901,8 +845,8 @@ function ProfileGroupCard({
             <div className="border-t border-foreground/8 px-4 pb-4 pt-3">
               {entries.length === 0 ? (
                 <EmptyState
-                  title={`No ${title.toLowerCase()} yet`}
-                  description="This group is empty right now."
+                  title={t(`goalsView.profileGroups.${groupKey}.emptyTitle`)}
+                  description={t("goalsView.groupEmptyDescription")}
                 />
               ) : (
                 <div className="space-y-1">
@@ -1220,12 +1164,13 @@ function MirrorPanel({
   openGroups: Record<ProfileGroupKey, boolean>;
   onToggleGroup: (group: ProfileGroupKey) => void;
 }) {
+  const { t } = useTranslation("profile");
   return (
     <div>
       <div className="mb-3">
-        <h2 className="text-sm font-semibold text-foreground">Profile</h2>
+        <h2 className="text-sm font-semibold text-foreground">{t("goalsView.mirror.title")}</h2>
         <Text variant="caption" className="block mt-1 leading-5 text-foreground/42">
-          Facts, preferences, constraints, and metadata — derived from your data.
+          {t("goalsView.mirror.description")}
         </Text>
       </div>
 
@@ -1233,8 +1178,7 @@ function MirrorPanel({
         {PROFILE_GROUP_META.map((group) => (
           <ProfileGroupCard
             key={group.key}
-            title={group.title}
-            description={group.description}
+            groupKey={group.key}
             values={profile?.[group.key] ?? {}}
             expanded={openGroups[group.key]}
             onToggle={() => onToggleGroup(group.key)}
@@ -1258,22 +1202,30 @@ function MemoryPanel({
   loadingMore: boolean;
   onLoadMore: () => void;
 }) {
+  const { t, i18n: i18nInstance } = useTranslation(["profile", "common"]);
   // Group memories by relative day label (TODAY / YESTERDAY / "MMM D" /
   // "MMM D, YYYY"). Memories arrive already sorted desc by created_at, so
   // we preserve insertion order — Object.entries keeps that on modern JS.
-  const groups = useMemo(() => groupMemoriesByDay(memories), [memories]);
+  // i18n.language is a dep so day labels re-localize on language switch.
+  const groups = useMemo(
+    () => groupMemoriesByDay(memories),
+    [memories, i18nInstance.language],
+  );
 
   return (
     <div>
       <div className="mb-3">
-        <h2 className="text-sm font-semibold text-foreground">Memory</h2>
+        <h2 className="text-sm font-semibold text-foreground">{t("goalsView.memory.title")}</h2>
         <Text variant="caption" className="block mt-1 leading-5 text-foreground/42">
-          What your AI has noticed and saved. Newest first.
+          {t("goalsView.memory.description")}
         </Text>
       </div>
       <div className="space-y-5">
         {memories.length === 0 ? (
-          <EmptyState title="No memories yet" description="Nothing has been saved as long-term memory yet." />
+          <EmptyState
+            title={t("goalsView.memory.emptyTitle")}
+            description={t("goalsView.memory.emptyDescription")}
+          />
         ) : (
           groups.map((group) => (
             <div key={group.key}>
@@ -1294,7 +1246,9 @@ function MemoryPanel({
       </div>
       <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl bg-white/45 px-3 py-2 ring-1 ring-white/60">
         <Text variant="caption" className="block text-foreground/45 tabular-nums">
-          {total === 0 ? "0 memories" : `${memories.length} of ${total}`}
+          {total === 0
+            ? t("goalsView.memory.countZero")
+            : t("goalsView.memory.countOfTotal", { shown: memories.length, total })}
         </Text>
         <button
           type="button"
@@ -1304,12 +1258,12 @@ function MemoryPanel({
         >
           {loadingMore ? (
             <>
-              <Loader2 size={12} className="animate-spin" /> Loading…
+              <Loader2 size={12} className="animate-spin" /> {t("common:status.loading")}
             </>
           ) : hasMore ? (
-            "Load more"
+            t("goalsView.memory.loadMore")
           ) : (
-            "End of list"
+            t("goalsView.memory.endOfList")
           )}
         </button>
       </div>
@@ -1320,13 +1274,14 @@ function MemoryPanel({
 /** One memory row matching the reference design — text first, attribution
  *  line ("Inferred from {source} · {time}") underneath. */
 function MemoryListItem({ memory }: { memory: Memory }) {
+  const { t } = useTranslation("profile");
   const when = memory.occurred_at ?? memory.created_at;
   const time = formatClockTime(when);
   return (
     <div>
       <Text variant="bodySm" className="block leading-6 text-foreground/85">{memory.text}</Text>
       <Text variant="caption" className="block mt-1 text-foreground/45">
-        Inferred from {memory.source}
+        {t("goalsView.memory.inferredFrom", { source: memory.source })}
         {time && ` · ${time}`}
       </Text>
     </div>
@@ -1353,7 +1308,7 @@ function groupMemoriesByDay(memories: Memory[]): MemoryGroup[] {
     if (!date || Number.isNaN(date.getTime())) {
       const fallback = byKey.get("unknown") ?? {
         key: "unknown",
-        label: "UNKNOWN",
+        label: i18n.t("profile:goalsView.memory.unknownDate"),
         items: [],
       };
       fallback.items.push(memory);
@@ -1362,9 +1317,9 @@ function groupMemoriesByDay(memories: Memory[]): MemoryGroup[] {
     }
     const key = dayBucketKey(date);
     const label = key === todayKey
-      ? "TODAY"
+      ? i18n.t("profile:goalsView.memory.today")
       : key === yesterdayKey
-        ? "YESTERDAY"
+        ? i18n.t("profile:goalsView.memory.yesterday")
         : formatDayLabel(date, now);
     const group = byKey.get(key) ?? { key, label, items: [] };
     group.items.push(memory);
@@ -1633,6 +1588,7 @@ interface GoalsViewProps {
 }
 
 export default function GoalsView({ composio, detailLayout = "auto" }: GoalsViewProps) {
+  const { t, i18n: i18nInstance } = useTranslation("profile");
   const [snapshot, setSnapshot] = useState<ProfileSnapshot>(EMPTY_SNAPSHOT);
   const [memories, setMemories] = useState<Memory[]>([]);
   const [memoryTotal, setMemoryTotal] = useState(0);
@@ -1740,7 +1696,9 @@ export default function GoalsView({ composio, detailLayout = "auto" }: GoalsView
       }
     } catch (err) {
       if (!controller.signal.aborted) {
-        const message = err instanceof Error ? err.message : "Failed to load profile";
+        const message = err instanceof Error
+          ? err.message
+          : i18n.t("profile:goalsView.loadFailed");
         console.warn("[GoalsView] loadSnapshot failed:", err);
         setError(message);
       }
@@ -1765,7 +1723,8 @@ export default function GoalsView({ composio, detailLayout = "auto" }: GoalsView
   );
   const rawSources = useMemo(
     () => buildRawSourceOptions(rawPreview, genericRaw, genericRawCounts, composio.connections),
-    [rawPreview, genericRaw, genericRawCounts, composio.connections],
+    // i18nInstance.language: labels resolve through i18n, re-localize on switch.
+    [rawPreview, genericRaw, genericRawCounts, composio.connections, i18nInstance.language],
   );
   const genericCountTargets = useMemo(() => countableGenericRawSources(), []);
 
@@ -1894,7 +1853,7 @@ export default function GoalsView({ composio, detailLayout = "auto" }: GoalsView
       setMemoryTotal(total);
     } catch (err) {
       console.warn("[GoalsView] loadMoreMemories failed:", err);
-      setError(err instanceof Error ? err.message : "Failed to load more memories");
+      setError(err instanceof Error ? err.message : i18n.t("profile:goalsView.loadMoreMemoriesFailed"));
     } finally {
       setMemoryLoadingMore(false);
     }
@@ -1921,7 +1880,7 @@ export default function GoalsView({ composio, detailLayout = "auto" }: GoalsView
       setSignalHasMore(data.has_more && nextFetchedCount < signalTotal);
     } catch (err) {
       console.warn("[GoalsView] loadMoreSignals failed:", err);
-      setError(err instanceof Error ? err.message : "Failed to load more signals");
+      setError(err instanceof Error ? err.message : i18n.t("profile:goalsView.loadMoreSignalsFailed"));
     } finally {
       setSignalLoadingMore(false);
     }
@@ -2008,22 +1967,22 @@ export default function GoalsView({ composio, detailLayout = "auto" }: GoalsView
     >
       {/* Page header */}
       <div className="mb-6 pr-20">
-        <h1 className="text-2xl font-semibold tracking-tight text-foreground">Profile</h1>
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground">{t("goalsView.title")}</h1>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          Who your AI thinks you are — derived from your data.
+          {t("goalsView.subtitle")}
         </p>
       </div>
 
       {loading ? (
         <div className="flex items-center justify-center gap-2 py-14">
           <Loader2 size={16} className="animate-spin text-foreground/40" />
-          <Text variant="bodySm" className="text-foreground/40">Loading profile snapshot...</Text>
+          <Text variant="bodySm" className="text-foreground/40">{t("goalsView.loadingSnapshot")}</Text>
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">
           {error && (
             <motion.section {...sectionMotion} className="glass-card-strong mb-4 p-4">
-              <p className="text-sm font-medium text-rose-500">Could not refresh profile snapshot.</p>
+              <p className="text-sm font-medium text-rose-500">{t("goalsView.refreshError")}</p>
               <p className="mt-1 text-xs leading-5 text-foreground/55">{error}</p>
             </motion.section>
           )}
@@ -2051,7 +2010,7 @@ export default function GoalsView({ composio, detailLayout = "auto" }: GoalsView
                     isActive ? "bg-foreground text-background" : "text-foreground/55 hover:text-foreground/80"
                   }`}
                 >
-                  {tab === "identity" ? "Identity" : "Goals"}
+                  {t(`goalsView.tabs.${tab}`)}
                 </button>
               );
             })}
@@ -2082,10 +2041,10 @@ export default function GoalsView({ composio, detailLayout = "auto" }: GoalsView
             <>
               <motion.section {...sectionMotion} className="glass-card-strong p-5">
                 <Text variant="caption" weight="semibold" className="block uppercase tracking-[0.18em] text-foreground/45">
-                  IDENTITY
+                  {t("goalsView.identityLabel")}
                 </Text>
                 <h2 className="mt-2 text-xl font-semibold tracking-tight text-foreground">
-                  {profile?.display_name?.trim() || "Unnamed user"}
+                  {profile?.display_name?.trim() || t("goalsView.unnamedUser")}
                 </h2>
                 <Text variant="bodySm" className="block mt-2 leading-6 text-foreground/65 line-clamp-6">
                   {profileSummaryText(profile)}
@@ -2098,13 +2057,13 @@ export default function GoalsView({ composio, detailLayout = "auto" }: GoalsView
               <div className="grid grid-cols-2 gap-2.5">
                 <WorkbenchTabButton
                   active={identitySubTab === "profile"}
-                  label="Profile"
-                  value={profile ? "Profile" : "Empty"}
+                  label={t("goalsView.subTabs.profile")}
+                  value={profile ? t("goalsView.subTabs.profile") : t("goalsView.subTabs.empty")}
                   onClick={() => setIdentitySubTab("profile")}
                 />
                 <WorkbenchTabButton
                   active={identitySubTab === "memory"}
-                  label="Memory"
+                  label={t("goalsView.subTabs.memory")}
                   value={String(memoryTotal)}
                   onClick={() => setIdentitySubTab("memory")}
                 />
@@ -2139,13 +2098,16 @@ export default function GoalsView({ composio, detailLayout = "auto" }: GoalsView
               >
             <motion.section id="profile-section-goals" {...sectionMotion} className="glass-card-strong p-4">
               <div className="mb-3">
-                <h2 className="text-sm font-semibold text-foreground">Goals</h2>
+                <h2 className="text-sm font-semibold text-foreground">{t("goalsView.goals.title")}</h2>
                 <Text variant="caption" className="block mt-1 leading-5 text-foreground/42">
-                  Share your goals — help AI know you. Tap any basket to expand.
+                  {t("goalsView.goals.description")}
                 </Text>
               </div>
               {activeGoals.length === 0 ? (
-                <EmptyState title="No active goals" description="Goals stay as a first-class collection in the mirror layer." />
+                <EmptyState
+                  title={t("goalsView.goals.emptyTitle")}
+                  description={t("goalsView.goals.emptyDescription")}
+                />
               ) : (
                 <div className="grid grid-cols-2 gap-3">
                   {activeGoals.map((goal) => {
@@ -2179,7 +2141,7 @@ export default function GoalsView({ composio, detailLayout = "auto" }: GoalsView
                           <div className="mb-2 flex items-center justify-between gap-2">
                             <span className="text-lg font-semibold tabular-nums text-foreground">{visual.pct}%</span>
                             <span className={`rounded-full px-2 py-0.5 text-micro font-medium ${statusPillColor[status]}`}>
-                              {status}
+                              {statusLabel(status)}
                             </span>
                           </div>
                           <div className="flex items-end justify-between gap-2">
@@ -2227,8 +2189,8 @@ export default function GoalsView({ composio, detailLayout = "auto" }: GoalsView
             overlayClassName="!bg-foreground/5 backdrop-blur-[2px]"
           >
             <DrawerHeader className="sr-only">
-              <DrawerTitle>{selectedBasket?.label || "Goal"}</DrawerTitle>
-              <DrawerDescription>Goal detail view</DrawerDescription>
+              <DrawerTitle>{selectedBasket?.label || t("goalsView.goals.drawerFallbackTitle")}</DrawerTitle>
+              <DrawerDescription>{t("goalsView.goals.drawerDescription")}</DrawerDescription>
             </DrawerHeader>
             {selectedApiGoal && selectedVisual && selectedBasket && (
               <div className="px-5 pb-6 pt-2 overflow-y-auto max-h-[75vh]">
@@ -2266,6 +2228,8 @@ function GoalDetailBody({
   status: VisualStatus;
   hideHeaderImage?: boolean;
 }) {
+  const { t } = useTranslation("profile");
+  const lists = goalMetaLists(visual.metaKey);
   return (
     <>
       <div className="flex items-center justify-between mb-3">
@@ -2278,7 +2242,7 @@ function GoalDetailBody({
             status === "Alert" ? "bg-rose-50 text-rose-400"
             : status === "Watch" ? "bg-amber-50 text-amber-500"
             : "bg-emerald-50 text-emerald-500"
-          }`}>{status}</span>
+          }`}>{statusLabel(status)}</span>
         </div>
         <span className={`text-display text-lg font-semibold ${
           status === "Alert" ? "text-rose-400"
@@ -2303,10 +2267,10 @@ function GoalDetailBody({
       <div className="w-full h-px bg-foreground/10 mb-4" />
 
       <h3 className="text-xs font-semibold text-emerald-500 uppercase tracking-wider mb-3">
-        AI Weekly Actions
+        {t("goalsView.goals.weeklyActions")}
       </h3>
       <div className="space-y-2.5 mb-5">
-        {visual.weeklyActions.map((action, i) => (
+        {lists.weeklyActions.map((action, i) => (
           <div key={i} className="flex items-start gap-2.5">
             <Check size={14} className="text-emerald-500 mt-0.5 shrink-0" />
             <span className="text-sm text-foreground/80 leading-snug">{action}</span>
@@ -2315,10 +2279,10 @@ function GoalDetailBody({
       </div>
 
       <h3 className="text-xs font-semibold text-amber-500 uppercase tracking-wider mb-3">
-        Monitoring
+        {t("goalsView.goals.monitoring")}
       </h3>
       <div className="space-y-2.5 mb-5">
-        {visual.monitoring.map((item, i) => (
+        {lists.monitoring.map((item, i) => (
           <div key={i} className="flex items-start gap-2.5">
             <div className="w-2.5 h-2.5 rounded-full bg-amber-400 mt-1 shrink-0 animate-pulse" />
             <span className="text-sm text-foreground/75 leading-snug">{item}</span>
@@ -2327,10 +2291,10 @@ function GoalDetailBody({
       </div>
 
       <h3 className="text-xs font-semibold text-foreground/50 uppercase tracking-wider mb-3">
-        AI wants to know
+        {t("goalsView.goals.aiWantsToKnow")}
       </h3>
       <div className="space-y-2.5 mb-5">
-        {visual.aiQuestions.map((q, i) => (
+        {lists.aiQuestions.map((q, i) => (
           <button
             key={i}
             className="w-full flex items-center gap-3 p-3.5 rounded-2xl border border-foreground/10 bg-foreground/[0.03] hover:bg-foreground/[0.07] active:bg-foreground/[0.1] transition-all text-left group"
@@ -2345,7 +2309,7 @@ function GoalDetailBody({
       </div>
 
       <button className="w-full py-3.5 rounded-2xl bg-foreground/[0.04] text-sm text-foreground/50 font-medium hover:bg-foreground/[0.07] transition-colors">
-        Lock Goals — AI watches only, no modify
+        {t("goalsView.goals.lockGoals")}
       </button>
     </>
   );
@@ -2371,6 +2335,7 @@ function GoalDetailPopup({
   status: VisualStatus;
   onClose: () => void;
 }) {
+  const { t } = useTranslation("profile");
   const open = !!(apiGoal && visual && basket);
   useEffect(() => {
     if (!open) return;
@@ -2407,7 +2372,7 @@ function GoalDetailPopup({
               exit={{ opacity: 0 }}
               transition={{ duration: 0.16, ease: "easeOut" }}
               role="dialog"
-              aria-label={`${basket.label} goal detail`}
+              aria-label={t("goalDetail.ariaLabel", { label: basket.label })}
               className="pointer-events-auto w-[600px] max-w-full max-h-[82vh] rounded-3xl overflow-hidden flex flex-col"
               style={{
                 background: "linear-gradient(180deg, hsla(0, 0%, 100%, 0.75) 0%, hsla(0, 0%, 100%, 0.92) 100%)",
@@ -2423,7 +2388,7 @@ function GoalDetailPopup({
                 <button
                   onClick={onClose}
                   className="absolute top-3 right-3 p-2 rounded-full bg-white/60 hover:bg-white/85 backdrop-blur-md transition-colors"
-                  aria-label="Close goal"
+                  aria-label={t("goalDetail.close")}
                 >
                   <X size={16} strokeWidth={1.8} className="text-foreground/65" />
                 </button>

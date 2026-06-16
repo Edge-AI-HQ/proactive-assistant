@@ -25,17 +25,19 @@ describe("AppLayout menu order", () => {
       .split("\n")
       .filter((line) => !line.trim().startsWith("//"))
       .join("\n");
-    const labels = Array.from(activeMenuSource.matchAll(/label: "([^"]+)"/g)).map(
+    // i18n 后 MENU_ITEMS 用 labelKey(menu.* 翻译键)代替字面 label;
+    // 校验的仍是导航顺序,只是从字面文案换成对应的 key 序列。
+    const labels = Array.from(activeMenuSource.matchAll(/labelKey: "([^"]+)"/g)).map(
       ([, label]) => label,
     );
 
     expect(labels).toEqual([
-      "NOW",
-      "AMBIENT",
-      "TASKS",
-      "CONNECT",
-      "PROFILE",
-      "SETTING",
+      "menu.now",
+      "menu.ambient",
+      "menu.tasks",
+      "menu.connect",
+      "menu.profile",
+      "menu.setting",
     ]);
   });
 
@@ -45,8 +47,9 @@ describe("AppLayout menu order", () => {
     // Gated on the NOW view AND !inFullscreenChat: card execution keeps
     // activeView "now" while chatTarget is set, so the extra guard stops the
     // entry arrow from floating over the full-screen card conversation.
+    // aria-label i18n 化后是 {t("appShell.openMainChat")}(en 值 "Open main chat")。
     expect(source).toMatch(
-      /\{activeView === "now" && !inFullscreenChat && \(\s*<button[\s\S]*aria-label="Open main chat"/,
+      /\{activeView === "now" && !inFullscreenChat && \(\s*<button[\s\S]*aria-label=\{t\("appShell\.openMainChat"\)\}/,
     );
   });
 

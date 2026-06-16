@@ -1,0 +1,31 @@
+{
+  "view": {
+    "loading": "Browser wird geladen…",
+    "needsYourHelp": "Braucht Ihre Hilfe",
+    "aiBrowsing": "KI surft",
+    "youHaveControl": "Sie haben die Kontrolle",
+    "expand": "Erweitern",
+    "minimize": "Minimieren",
+    "zoomIn": "Vergrößern",
+    "zoomOut": "Verkleinern",
+    "dragToScroll": "Zum Scrollen ziehen",
+    "iframeTitle": "Browser-Sitzung {{id}}",
+    "aiNeedsHelp": "Die KI braucht Ihre Hilfe",
+    "takeOver": "Übernehmen",
+    "returnToAi": "An KI zurückgeben",
+    "dismissKeyboard": "Tastatur ausblenden",
+    "summonKeyboard": "Tippen",
+    "pressEnter": "Enter drücken",
+    "closeBrowser": "Browser schließen",
+    "endSession": "Sitzung beenden",
+    "collapse": "Einklappen",
+    "endBrowserSession": "Browser-Sitzung beenden",
+    "back": "Zurück",
+    "forward": "Vorwärts",
+    "reload": "Neu laden",
+    "enterUrl": "URL eingeben",
+    "addressBar": "Adressleiste",
+    "takeControl": "Kontrolle über den Browser übernehmen",
+    "tapToTakeControl": "Tippen, um die Kontrolle zu übernehmen"
+  }
+}

@@ -15,7 +15,7 @@ from typing import Any
 from ..harness.factory import build_agent
 from ..harness.llm import make_chat_model
 from ..tools.code_mode.sandbox import create_oneshot_sandbox, delete_sandbox_now
-from .prompts import CODE_MODE_GUIDANCE, GROUNDING_POLICY, SANDBOX_PREAMBLE
+from .prompts import CODE_MODE_GUIDANCE, GROUNDING_POLICY, SANDBOX_PREAMBLE, lang_clause
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,17 @@ Distill the thread into:
 """
 
 
+def _crystallize_system_prompt(output_language: str) -> str:
+    return (
+        f"{_CRYSTALLIZE_SYSTEM_PROMPT}\n"
+        "<output_language>\n"
+        f"{lang_clause(output_language)} — memory bodies, skill descriptions, "
+        "and summary strings are user-visible. Keys, slugs, and JSON field "
+        "names stay in English.\n"
+        "</output_language>"
+    )
+
+
 async def run_crystallize(
     *,
     virtual_key: str,
@@ -59,12 +70,13 @@ async def run_crystallize(
     run_id: str,
     session_key: str,
     model: str | None = None,
+    output_language: str = "en",
 ) -> dict[str, Any]:
     backend, raw = await create_oneshot_sandbox()
     try:
         agent = build_agent(
             model=make_chat_model(virtual_key=virtual_key, model=model, thinking_budget=4000),
-            system_prompt=_CRYSTALLIZE_SYSTEM_PROMPT,
+            system_prompt=_crystallize_system_prompt(output_language),
             backend=backend,
         )
         result: dict[str, Any] = await agent.ainvoke(

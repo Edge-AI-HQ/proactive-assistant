@@ -7,6 +7,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Loader2,
   Hand,
@@ -95,6 +96,7 @@ export default function BrowserView({
   onCollapse,
   onRequestClose,
 }: BrowserViewProps) {
+  const { t } = useTranslation(["browser", "common"]);
   const [iframeLoaded, setIframeLoaded] = useState(false);
   const [confirmingClose, setConfirmingClose] = useState(false);
   const isAi = controlMode === "ai";
@@ -278,7 +280,7 @@ export default function BrowserView({
               className={`${ctrlBtn} bg-white/[0.08] text-white/85 hover:bg-white/15 active:bg-white/20`}
             >
               <Hand size={12} strokeWidth={2} />
-              <span>Take over</span>
+              <span>{t("view.takeOver")}</span>
             </button>
           ) : (
             <button
@@ -286,7 +288,7 @@ export default function BrowserView({
               className={`${ctrlBtn} bg-blue-500/25 text-blue-100 hover:bg-blue-500/40 active:bg-blue-500/50`}
             >
               <Bot size={12} strokeWidth={2} />
-              <span>Return to AI</span>
+              <span>{t("view.returnToAi")}</span>
             </button>
           )}
         </div>
@@ -298,7 +300,7 @@ export default function BrowserView({
                 onClick={() => setConfirmingClose(false)}
                 className="rounded-md px-2.5 py-1 text-caption text-white/75 hover:bg-white/10"
               >
-                Cancel
+                {t("common:status.cancel")}
               </button>
               <button
                 onClick={() => {
@@ -307,7 +309,7 @@ export default function BrowserView({
                 }}
                 className="rounded-md bg-red-500/85 px-2.5 py-1 text-caption font-medium text-white hover:bg-red-500"
               >
-                End session
+                {t("view.endSession")}
               </button>
             </>
           ) : (
@@ -315,14 +317,14 @@ export default function BrowserView({
               <button
                 onClick={onCollapse}
                 className="rounded-md p-1.5 text-white/65 hover:bg-white/10 active:bg-white/15"
-                title="Collapse"
+                title={t("view.collapse")}
               >
                 <Minimize2 size={15} strokeWidth={2} />
               </button>
               <button
                 onClick={() => setConfirmingClose(true)}
                 className="rounded-md p-1.5 text-white/65 hover:bg-white/10 active:bg-white/15"
-                title="End browser session"
+                title={t("view.endBrowserSession")}
               >
                 <X size={15} strokeWidth={2} />
               </button>
@@ -339,7 +341,7 @@ export default function BrowserView({
         <button
           type="button"
           onClick={onBack}
-          title="Back"
+          title={t("view.back")}
           className="rounded-md p-1.5 text-white/65 hover:bg-white/10 active:bg-white/15"
         >
           <ChevronLeft size={16} strokeWidth={2} />
@@ -347,7 +349,7 @@ export default function BrowserView({
         <button
           type="button"
           onClick={onForward}
-          title="Forward"
+          title={t("view.forward")}
           className="rounded-md p-1.5 text-white/65 hover:bg-white/10 active:bg-white/15"
         >
           <ChevronRight size={16} strokeWidth={2} />
@@ -355,7 +357,7 @@ export default function BrowserView({
         <button
           type="button"
           onClick={onReload}
-          title="Reload"
+          title={t("view.reload")}
           className="rounded-md p-1.5 text-white/65 hover:bg-white/10 active:bg-white/15"
         >
           <RotateCw size={14} strokeWidth={2} />
@@ -368,8 +370,8 @@ export default function BrowserView({
           autoCorrect="off"
           spellCheck={false}
           enterKeyHint="go"
-          placeholder="Enter URL"
-          aria-label="Address bar"
+          placeholder={t("view.enterUrl")}
+          aria-label={t("view.addressBar")}
           className="min-w-0 flex-1 truncate rounded-full bg-white/[0.08] px-3 py-1 text-caption text-white/85 outline-none placeholder:text-white/35 focus:bg-white/[0.12]"
         />
       </form>
@@ -381,7 +383,7 @@ export default function BrowserView({
           <div className="absolute inset-0 z-[1] flex items-center justify-center bg-black/80">
             <div className="flex items-center gap-2">
               <Loader2 size={14} className="animate-spin text-white/50" />
-              <span className="text-bodySm text-white/50">Loading browser…</span>
+              <span className="text-bodySm text-white/50">{t("view.loading")}</span>
             </div>
           </div>
         )}
@@ -391,7 +393,7 @@ export default function BrowserView({
           onLoad={() => setIframeLoaded(true)}
           sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"
           allow="clipboard-read; clipboard-write; fullscreen"
-          title={`Browser session ${sessionId}`}
+          title={t("view.iframeTitle", { id: sessionId })}
           className="absolute inset-0 h-full w-full"
           style={{
             border: 0,
@@ -411,8 +413,8 @@ export default function BrowserView({
             type="button"
             onClick={() => onControlChange("user")}
             className="absolute inset-0 z-10 cursor-pointer bg-transparent"
-            aria-label="Take control of the browser"
-            title="Tap to take control"
+            aria-label={t("view.takeControl")}
+            title={t("view.tapToTakeControl")}
           />
         )}
 
@@ -445,12 +447,12 @@ export default function BrowserView({
             {kbVisible ? (
               <>
                 <ChevronDown size={14} strokeWidth={2} />
-                <span>Done</span>
+                <span>{t("common:status.done")}</span>
               </>
             ) : (
               <>
                 <Keyboard size={14} strokeWidth={2} />
-                <span>Type</span>
+                <span>{t("view.summonKeyboard")}</span>
               </>
             )}
           </button>

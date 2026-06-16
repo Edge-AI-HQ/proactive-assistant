@@ -1,0 +1,31 @@
+{
+  "view": {
+    "loading": "Loading browser...",
+    "needsYourHelp": "Needs your help",
+    "aiBrowsing": "AI is browsing",
+    "youHaveControl": "You have control",
+    "expand": "Expand",
+    "minimize": "Minimize",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "dragToScroll": "Drag to scroll",
+    "iframeTitle": "Browser session {{id}}",
+    "aiNeedsHelp": "AI needs your help",
+    "takeOver": "Take over",
+    "returnToAi": "Return to AI",
+    "dismissKeyboard": "Dismiss keyboard",
+    "summonKeyboard": "Type",
+    "pressEnter": "Press Enter",
+    "closeBrowser": "Close browser",
+    "endSession": "End session",
+    "collapse": "Collapse",
+    "endBrowserSession": "End browser session",
+    "back": "Back",
+    "forward": "Forward",
+    "reload": "Reload",
+    "enterUrl": "Enter URL",
+    "addressBar": "Address bar",
+    "takeControl": "Take control of the browser",
+    "tapToTakeControl": "Tap to take control"
+  }
+}

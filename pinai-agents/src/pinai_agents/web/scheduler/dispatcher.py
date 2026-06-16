@@ -43,6 +43,7 @@ from ...shared.agent_run import AgentKind
 from ..agent_core.service import AgentRunService
 from ..auth.agent_jwt import sign_agent_run_jwt
 from ..db.repositories.evolution import EvolutionRepository
+from ..db.repositories.profile import ProfileRepository
 from ..db.repositories.scheduled_tasks import (
     ScheduledTaskRow,
     archive_after_success,
@@ -221,6 +222,16 @@ class DefaultDispatcher:
         # pai_agent_runs ledger via start_run/finish_run. Optional so tests can
         # build a dispatcher without the full actor service.
         self._service = service
+
+    async def _generation_language(self, user_id: int) -> str:
+        """读用户语言设置给 agent prompt;读失败回落 en(语言错不该挡 run)。"""
+        try:
+            async with user_scoped_tx(self._pool, user_id) as conn:
+                settings = await ProfileRepository(user_id, conn).get_settings()
+                return settings.generation_language
+        except Exception:
+            logger.exception("generation_language read failed user=%d — fallback en", user_id)
+            return "en"
 
     def _lease_for(self, kind: str) -> int:
         if kind in _GENERATOR_KINDS:
@@ -412,6 +423,7 @@ class DefaultDispatcher:
                 run_id,
                 extra={
                     "connector": (task.payload or {}).get("connector", "unknown"),
+                    "generation_language": await self._generation_language(task.user_id),
                     **({"raw_sources": raw_sources} if isinstance(raw_sources, list) else {}),
                 },
             )
@@ -420,13 +432,17 @@ class DefaultDispatcher:
                 "/agent/run/dream",
                 task,
                 run_id,  # reuse dream as a generic synthetic-prompt path
+                extra={"generation_language": await self._generation_language(task.user_id)},
             )
         elif kind == "crystallize":
             await self._call_chat(
                 "/agent/run/crystallize",
                 task,
                 run_id,
-                extra={"session_key": (task.payload or {}).get("session_key", "")},
+                extra={
+                    "session_key": (task.payload or {}).get("session_key", ""),
+                    "generation_language": await self._generation_language(task.user_id),
+                },
             )
         elif kind == "reminder.card":
             # 用户自建提醒:web 进程直接写卡 + 推送,零 LLM。默认 60s
@@ -507,7 +523,12 @@ class DefaultDispatcher:
             )
 
         try:
-            chat_result = await self._call_chat("/agent/run/dream", task, run_id)
+            chat_result = await self._call_chat(
+                "/agent/run/dream",
+                task,
+                run_id,
+                extra={"generation_language": await self._generation_language(task.user_id)},
+            )
         except Exception as e:
             if evol_id is not None:
                 try:

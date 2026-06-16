@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useUserSettings } from "@pin-ai/state";
 import { proxyFetch, proxyPost } from "@pin-ai/core";
+import i18n from "../i18n";
+import { formatDateTime, formatTime } from "../lib/format";
 import { Text } from "../primitives/Text";
 
 // Auto-dreaming runs daily at 06:00 in the user's profile timezone. The
@@ -72,11 +75,9 @@ const DEFAULT_VISIBLE_HISTORY_DAYS = 7;
 const DEFAULT_VISIBLE_RUNS_PER_DAY = 3;
 
 function scheduleLabel(schedule: AutoDreamingSchedule | null): string {
-  if (!schedule) return "Runs every day at 6:00 AM";
-  const suffix = schedule.hour >= 12 ? "PM" : "AM";
-  const hour = schedule.hour % 12 || 12;
-  const minute = String(schedule.minute).padStart(2, "0");
-  return `Runs every day at ${hour}:${minute} ${suffix}`;
+  const at = new Date();
+  at.setHours(schedule?.hour ?? 6, schedule?.minute ?? 0, 0, 0);
+  return i18n.t("account:dreaming.runsDaily", { time: formatTime(at) });
 }
 
 function formatStatusLabel(status: string): string {
@@ -94,7 +95,7 @@ function formatTimestamp(value?: string | null): string {
   if (!value) return "n/a";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
+  return formatDateTime(date);
 }
 
 function formatDreamRunTitle(run: AutoDreamingRun): string {
@@ -163,7 +164,7 @@ function itemSummaryText(item: Record<string, unknown>): string {
   for (const candidate of [item.preview, item.reason, item.context, item.body, item.description]) {
     if (typeof candidate === "string" && candidate.trim().length > 0) return candidate;
   }
-  return "No summary available.";
+  return i18n.t("account:dreaming.noSummaryAvailable");
 }
 
 function goalChangeTitle(change: Record<string, unknown>, index: number): string {
@@ -173,7 +174,7 @@ function goalChangeTitle(change: Record<string, unknown>, index: number): string
   const before = change.before && typeof change.before === "object" && !Array.isArray(change.before)
     ? change.before as Record<string, unknown>
     : null;
-  return String(after?.title ?? before?.title ?? change.key ?? `Goal ${index + 1}`);
+  return String(after?.title ?? before?.title ?? change.key ?? i18n.t("account:dreaming.goalFallback", { index: index + 1 }));
 }
 
 function normalizedSourceGroups(normalizedInputs: Record<string, unknown>): Array<{
@@ -188,7 +189,7 @@ function normalizedSourceGroups(normalizedInputs: Record<string, unknown>): Arra
         const title =
           (typeof item.title === "string" && item.title.trim().length > 0 ? item.title : null)
           ?? (typeof item.subject === "string" && item.subject.trim().length > 0 ? item.subject : null)
-          ?? `${sourceId} item ${index + 1}`;
+          ?? i18n.t("account:dreaming.itemFallback", { source: sourceId, index: index + 1 });
         return {
           key: `${sourceId}-${typeof item.connector === "string" ? item.connector : "item"}-${index}`,
           title,
@@ -251,6 +252,7 @@ function inferRawConnectorItemCount(connectorRaw: unknown): number {
 }
 
 export default function AutoDreamingSettings() {
+  const { t } = useTranslation("account");
   const { settings, loading: settingsLoading, saving, error: settingsError, patch } = useUserSettings();
   const [runsLoading, setRunsLoading] = useState(true);
   const [startingRun, setStartingRun] = useState(false);
@@ -280,7 +282,7 @@ export default function AutoDreamingSettings() {
         setRuns(runsData.runs ?? []);
       } catch {
         if (!mounted) return;
-        setError("Failed to load dreaming runs");
+        setError(i18n.t("account:dreaming.loadRunsFailed"));
       } finally {
         if (mounted) setRunsLoading(false);
       }
@@ -332,9 +334,9 @@ export default function AutoDreamingSettings() {
     setNotice(null);
     const result = await patch({ autoDreaming: next });
     if (result) {
-      setNotice(next ? "Auto Dreaming enabled." : "Auto Dreaming disabled.");
+      setNotice(next ? t("dreaming.enabledNotice") : t("dreaming.disabledNotice"));
     } else {
-      setError(settingsError ?? "Failed to save auto dreaming");
+      setError(settingsError ?? t("dreaming.saveFailed"));
     }
   };
 
@@ -350,7 +352,7 @@ export default function AutoDreamingSettings() {
       if (!background) setVisibleHistoryDays(DEFAULT_VISIBLE_HISTORY_DAYS);
       if (!background) setView("history");
     } catch {
-      if (!background) setError("Failed to load dreaming history");
+      if (!background) setError(t("dreaming.loadHistoryFailed"));
     }
   };
 
@@ -368,7 +370,7 @@ export default function AutoDreamingSettings() {
       // next tick will succeed.
       if (!res.ok) {
         if (!options?.background) {
-          setError(res.status === 404 ? "Run not started yet — try again in a moment" : "Failed to load dream run detail");
+          setError(res.status === 404 ? t("dreaming.runNotStarted") : t("dreaming.loadDetailFailed"));
         }
         return;
       }
@@ -377,7 +379,7 @@ export default function AutoDreamingSettings() {
       if (!options?.background) setExpandedGroups({});
       if (!options?.background) setView("detail");
     } catch {
-      if (!options?.background) setError("Failed to load dream run detail");
+      if (!options?.background) setError(t("dreaming.loadDetailFailed"));
     } finally {
       if (!options?.background) setDetailLoading(false);
     }
@@ -391,17 +393,17 @@ export default function AutoDreamingSettings() {
       const res = await proxyPost("/dreaming/run", {});
       const data = await res.json() as { ok?: boolean; runId?: string; taskId?: string; status?: string; error?: string };
       if (!res.ok) {
-        setError(data.error ?? "Failed to start dreaming");
+        setError(data.error ?? t("dreaming.startFailed"));
         return;
       }
       const runRef = data.runId ?? data.taskId;
-      setNotice(`Dreaming started${runRef ? `: ${runRef}` : ""}`);
+      setNotice(runRef ? t("dreaming.startedWithRef", { ref: runRef }) : t("dreaming.started"));
       // Don't loadDetail — the dispatcher hasn't created the run row
       // yet; loadHistory's background poll will surface it once the
       // scheduler tick claims the task.
       await loadHistory(true);
     } catch {
-      setError("Failed to start dreaming");
+      setError(t("dreaming.startFailed"));
     } finally {
       setStartingRun(false);
     }
@@ -416,9 +418,9 @@ export default function AutoDreamingSettings() {
     return (
       <div className="glass-card-strong p-4 space-y-3">
         <div className="flex items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold text-foreground">Dreaming History</h2>
+          <h2 className="text-sm font-semibold text-foreground">{t("dreaming.historyTitle")}</h2>
           <button type="button" onClick={() => setView("home")} className="text-xs text-foreground/60 hover:text-foreground/80 transition-colors">
-            Back
+            {t("back")}
           </button>
         </div>
         <div className="space-y-2">
@@ -428,15 +430,15 @@ export default function AutoDreamingSettings() {
               <div key={group.day} className="rounded-2xl bg-foreground/[0.04] px-3 py-3 space-y-2">
                 <div className="flex items-center justify-between gap-2">
                   <div>
-                    <div className="text-xs font-medium text-foreground">{group.day}</div>
-                    <div className="text-micro text-foreground/45">{group.runs.length} run(s)</div>
+                    <div className="text-xs font-medium text-foreground">{group.day === "Unknown" ? t("dreaming.unknownDay") : group.day}</div>
+                    <div className="text-micro text-foreground/45">{t("dreaming.runCount", { count: group.runs.length })}</div>
                   </div>
                   <button
                     type="button"
                     onClick={() => toggleGroup(`history:${group.day}`)}
                     className="text-micro text-foreground/55 hover:text-foreground/80 transition-colors"
                   >
-                    {expanded ? "Collapse" : "Expand"}
+                    {expanded ? t("dreaming.collapse") : t("dreaming.expand")}
                   </button>
                 </div>
                 {expanded && (
@@ -444,8 +446,8 @@ export default function AutoDreamingSettings() {
                     <div className="flex items-center justify-between gap-2 text-micro text-foreground/45">
                       <span>
                         {group.runs.length > DEFAULT_VISIBLE_RUNS_PER_DAY && !isHistoryDayShowingAll(group.day)
-                          ? `Showing latest ${DEFAULT_VISIBLE_RUNS_PER_DAY} of ${group.runs.length}`
-                          : `${group.runs.length} run(s)`}
+                          ? t("dreaming.showingLatest", { visible: DEFAULT_VISIBLE_RUNS_PER_DAY, total: group.runs.length })
+                          : t("dreaming.runCount", { count: group.runs.length })}
                       </span>
                       {group.runs.length > DEFAULT_VISIBLE_RUNS_PER_DAY && (
                         <button
@@ -453,7 +455,7 @@ export default function AutoDreamingSettings() {
                           onClick={() => toggleGroup(`history-all:${group.day}`)}
                           className="text-micro text-foreground/55"
                         >
-                          {isHistoryDayShowingAll(group.day) ? "Show latest only" : "Show all runs"}
+                          {isHistoryDayShowingAll(group.day) ? t("dreaming.showLatestOnly") : t("dreaming.showAllRuns")}
                         </button>
                       )}
                     </div>
@@ -475,13 +477,13 @@ export default function AutoDreamingSettings() {
                           </div>
                           <Text variant="micro" className="block text-foreground/35">{run.id}</Text>
                           <Text variant="caption" className="block text-foreground/55">
-                            {run.summary?.text ?? "No summary yet"}
+                            {run.summary?.text ?? t("dreaming.noSummaryYet")}
                           </Text>
                           <div className="flex flex-wrap gap-2 text-micro text-foreground/45">
                             <span>{run.trigger ?? "manual"}</span>
                             <span>{formatTimestamp(run.started_at)}</span>
-                            <span>{activeSourceCount} active source(s)</span>
-                            <span>{run.applied_at ? "Applied" : run.superseded ? "Superseded" : "Not applied"}</span>
+                            <span>{t("dreaming.activeSourceCount", { count: activeSourceCount })}</span>
+                            <span>{run.applied_at ? t("dreaming.applied") : run.superseded ? t("dreaming.superseded") : t("dreaming.notApplied")}</span>
                           </div>
                         </button>
                       );
@@ -498,11 +500,11 @@ export default function AutoDreamingSettings() {
               onClick={() => setVisibleHistoryDays((current) => current + DEFAULT_VISIBLE_HISTORY_DAYS)}
               className="w-full rounded-2xl bg-foreground/[0.06] px-3 py-2 text-xs font-medium text-foreground hover:bg-foreground/[0.10] transition-colors"
             >
-              Load older days
+              {t("dreaming.loadOlderDays")}
             </button>
           )}
           {runs.length === 0 && (
-            <Text variant="caption" className="block text-foreground/45">No dreaming runs yet.</Text>
+            <Text variant="caption" className="block text-foreground/45">{t("dreaming.noRunsYet")}</Text>
           )}
         </div>
       </div>
@@ -515,44 +517,44 @@ export default function AutoDreamingSettings() {
       <div className="glass-card-strong p-4 space-y-3">
         <div className="flex items-center justify-between gap-2">
           <div>
-            <h2 className="text-sm font-semibold text-foreground">Dream Run Detail</h2>
+            <h2 className="text-sm font-semibold text-foreground">{t("dreaming.detailTitle")}</h2>
             <Text variant="caption" className="block text-foreground/45 mt-1">{formatDreamRunTitle(detail.run)}</Text>
             <Text variant="micro" className="block text-foreground/30 mt-1">{detail.run.id}</Text>
           </div>
           <button type="button" onClick={() => setView("history")} className="text-xs text-foreground/60 hover:text-foreground/80 transition-colors">
-            Back
+            {t("back")}
           </button>
         </div>
 
         <div className="rounded-2xl bg-foreground/[0.04] px-3 py-3 space-y-2">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-xs font-medium text-foreground">Run Status</span>
+            <span className="text-xs font-medium text-foreground">{t("dreaming.runStatus")}</span>
             <span className={`rounded-full px-2 py-0.5 text-micro font-medium ${statusTone(detail.run.status)}`}>
               {formatStatusLabel(detail.run.status)}
             </span>
           </div>
           <p className="text-xs text-foreground/70">{detail.detail.summary.text}</p>
           <div className="flex flex-wrap gap-2 text-micro text-foreground/45">
-            <span>Started {formatTimestamp(detail.run.started_at)}</span>
-            <span>Completed {formatTimestamp(detail.run.completed_at)}</span>
-            <span>{detail.run.applied_at ? "Profile applied" : "Profile pending apply"}</span>
+            <span>{t("dreaming.startedAt", { time: formatTimestamp(detail.run.started_at) })}</span>
+            <span>{t("dreaming.completedAt", { time: formatTimestamp(detail.run.completed_at) })}</span>
+            <span>{detail.run.applied_at ? t("dreaming.profileApplied") : t("dreaming.profilePending")}</span>
           </div>
         </div>
 
         <div className="space-y-2">
-          <h3 className="text-xs font-semibold text-foreground">Dream Journal</h3>
+          <h3 className="text-xs font-semibold text-foreground">{t("dreaming.journalTitle")}</h3>
           <div className="rounded-2xl bg-foreground/[0.04] px-3 py-3 space-y-2">
             {detail.detail.dreamMarkdownPath && (
               <Text variant="micro" className="block text-foreground/45 break-all">{detail.detail.dreamMarkdownPath}</Text>
             )}
             <pre className="whitespace-pre-wrap text-caption leading-5 text-foreground/75">
-              {detail.detail.dreamMarkdown || "No dream journal yet."}
+              {detail.detail.dreamMarkdown || t("dreaming.noJournalYet")}
             </pre>
           </div>
         </div>
 
         <div className="space-y-2">
-          <h3 className="text-xs font-semibold text-foreground">Collected Context</h3>
+          <h3 className="text-xs font-semibold text-foreground">{t("dreaming.collectedContext")}</h3>
           {normalizedGroups.length > 0 ? (
             normalizedGroups.map((group) => {
               const expanded = Boolean(expandedGroups[`normalized:${group.sourceId}`]);
@@ -561,7 +563,7 @@ export default function AutoDreamingSettings() {
                 <div key={`normalized-${group.sourceId}`} className="rounded-2xl bg-foreground/[0.04] px-3 py-3 space-y-2">
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-xs font-medium text-foreground">
-                      {group.sourceId} · {group.items.length} item(s)
+                      {t("dreaming.sourceItems", { source: group.sourceId, count: group.items.length })}
                     </div>
                     {group.items.length > DEFAULT_VISIBLE_ITEMS && (
                       <button
@@ -569,7 +571,7 @@ export default function AutoDreamingSettings() {
                         onClick={() => toggleGroup(`normalized:${group.sourceId}`)}
                         className="text-micro text-foreground/55"
                       >
-                        {expanded ? "Show less" : `Show all ${group.items.length}`}
+                        {expanded ? t("dreaming.showLess") : t("dreaming.showAll", { count: group.items.length })}
                       </button>
                     )}
                   </div>
@@ -599,12 +601,12 @@ export default function AutoDreamingSettings() {
               );
             })
           ) : (
-            <Text variant="caption" className="block text-foreground/45">No normalized input items for this run.</Text>
+            <Text variant="caption" className="block text-foreground/45">{t("dreaming.noNormalizedItems")}</Text>
           )}
         </div>
 
         <div className="space-y-2">
-          <h3 className="text-xs font-semibold text-foreground">Source Status</h3>
+          <h3 className="text-xs font-semibold text-foreground">{t("dreaming.sourceStatus")}</h3>
           <div className="space-y-2">
             {detail.detail.sourceBreakdown.map((source) => (
               <div key={source.sourceId} className="rounded-2xl bg-foreground/[0.04] px-3 py-3 space-y-2">
@@ -637,13 +639,13 @@ export default function AutoDreamingSettings() {
               </div>
             ))}
             {detail.detail.sourceBreakdown.length === 0 && (
-              <Text variant="caption" className="block text-foreground/45">No source results recorded yet.</Text>
+              <Text variant="caption" className="block text-foreground/45">{t("dreaming.noSourceResults")}</Text>
             )}
           </div>
         </div>
 
         <div className="space-y-2">
-          <h3 className="text-xs font-semibold text-foreground">Candidate Cards</h3>
+          <h3 className="text-xs font-semibold text-foreground">{t("dreaming.candidateCards")}</h3>
           {detail.detail.candidates.length > 0 ? (
             detail.detail.candidates.map((candidate) => (
               <div key={String(candidate.id)} className="rounded-2xl bg-foreground/[0.04] px-3 py-2">
@@ -652,38 +654,38 @@ export default function AutoDreamingSettings() {
               </div>
             ))
           ) : (
-            <Text variant="caption" className="block text-foreground/45">No candidate cards for this run.</Text>
+            <Text variant="caption" className="block text-foreground/45">{t("dreaming.noCandidateCards")}</Text>
           )}
         </div>
 
         <details className="rounded-2xl bg-foreground/[0.04] px-3 py-3">
-          <summary className="cursor-pointer text-xs font-semibold text-foreground">Dreaming Logs</summary>
+          <summary className="cursor-pointer text-xs font-semibold text-foreground">{t("dreaming.logsTitle")}</summary>
           <div className="mt-2 space-y-2">
             {detail.detail.logPath && (
               <Text variant="micro" className="block text-foreground/45 break-all">{detail.detail.logPath}</Text>
             )}
             <pre className="max-h-48 overflow-auto rounded-2xl bg-foreground/[0.04] p-3 text-micro text-foreground/70 whitespace-pre-wrap">
-              {detail.detail.logText || "No run logs yet."}
+              {detail.detail.logText || t("dreaming.noLogsYet")}
             </pre>
           </div>
         </details>
 
         <details className="rounded-2xl bg-foreground/[0.04] px-3 py-3">
-          <summary className="cursor-pointer text-xs font-semibold text-foreground">Profile Diff</summary>
+          <summary className="cursor-pointer text-xs font-semibold text-foreground">{t("dreaming.profileDiff")}</summary>
           <pre className="mt-2 max-h-48 overflow-auto rounded-2xl bg-foreground/[0.04] p-3 text-micro text-foreground/70">
             {JSON.stringify(detail.detail.profileDelta, null, 2)}
           </pre>
         </details>
 
         <details className="rounded-2xl bg-foreground/[0.04] px-3 py-3">
-          <summary className="cursor-pointer text-xs font-semibold text-foreground">Goal Diff</summary>
+          <summary className="cursor-pointer text-xs font-semibold text-foreground">{t("dreaming.goalDiff")}</summary>
           <pre className="mt-2 max-h-48 overflow-auto rounded-2xl bg-foreground/[0.04] p-3 text-micro text-foreground/70">
             {JSON.stringify(detail.detail.goalDelta, null, 2)}
           </pre>
         </details>
 
         <div className="space-y-2">
-          <h3 className="text-xs font-semibold text-foreground">Goal Changes</h3>
+          <h3 className="text-xs font-semibold text-foreground">{t("dreaming.goalChanges")}</h3>
           {(detail.detail.goalDelta?.changes ?? []).length > 0 ? (
             (detail.detail.goalDelta?.changes ?? []).map((change, index) => (
               <div key={`goal-change-${index}`} className="rounded-2xl bg-foreground/[0.04] px-3 py-3 space-y-1">
@@ -702,18 +704,18 @@ export default function AutoDreamingSettings() {
               </div>
             ))
           ) : (
-            <Text variant="caption" className="block text-foreground/45">No goal changes for this run.</Text>
+            <Text variant="caption" className="block text-foreground/45">{t("dreaming.noGoalChanges")}</Text>
           )}
         </div>
 
         <div className="space-y-2">
-          <h3 className="text-xs font-semibold text-foreground">Raw Connector Payloads</h3>
+          <h3 className="text-xs font-semibold text-foreground">{t("dreaming.rawConnectorPayloads")}</h3>
           {connectorGroups.length > 0 ? connectorGroups.map((group) => (
             <div key={`raw-${group.sourceId}`} className="space-y-2">
               {group.connectors.map((connector) => (
                 <details key={`raw-${group.sourceId}-${connector.connectorId}`} className="rounded-2xl bg-foreground/[0.04] px-3 py-3">
                   <summary className="cursor-pointer text-xs font-semibold text-foreground">
-                    {connector.connectorId} · {connector.itemCount} item(s)
+                    {t("dreaming.sourceItems", { source: connector.connectorId, count: connector.itemCount })}
                   </summary>
                   <pre className="mt-2 max-h-64 overflow-auto rounded-2xl bg-foreground/[0.04] p-3 text-micro text-foreground/70">
                     {JSON.stringify(connector.raw, null, 2)}
@@ -723,7 +725,7 @@ export default function AutoDreamingSettings() {
             </div>
           )) : (
             <details className="rounded-2xl bg-foreground/[0.04] px-3 py-3">
-              <summary className="cursor-pointer text-xs font-semibold text-foreground">Raw Inputs</summary>
+              <summary className="cursor-pointer text-xs font-semibold text-foreground">{t("dreaming.rawInputs")}</summary>
               <pre className="mt-2 max-h-64 overflow-auto rounded-2xl bg-foreground/[0.04] p-3 text-micro text-foreground/70">
                 {JSON.stringify(detail.detail.rawInputs, null, 2)}
               </pre>
@@ -733,32 +735,32 @@ export default function AutoDreamingSettings() {
 
         {/* Phase 2a status badges — dreams write through automatically */}
         <div className="flex items-center justify-between rounded-2xl bg-foreground/[0.04] px-3 py-2 text-xs">
-          <span className="text-foreground/70">Profile changes</span>
+          <span className="text-foreground/70">{t("dreaming.profileChanges")}</span>
           <span className="font-medium text-foreground">
             {detail.run.status === "running"
-              ? "Pending — dream still in progress"
+              ? t("dreaming.applyPending")
               : detail.run.status === "failed"
-                ? "Skipped — dream failed"
+                ? t("dreaming.applySkipped")
                 : detail.run.applied_at
-                  ? "Applied during the run"
+                  ? t("dreaming.appliedDuringRun")
                   : detail.run.superseded
-                    ? "Superseded by a newer dream"
-                    : "Applied"}
+                    ? t("dreaming.supersededByNewer")
+                    : t("dreaming.applied")}
           </span>
         </div>
 
         <div className="flex items-center justify-between rounded-2xl bg-foreground/[0.04] px-3 py-2 text-xs">
-          <span className="text-foreground/70">Goal changes</span>
+          <span className="text-foreground/70">{t("dreaming.goalChangesBadge")}</span>
           <span className="font-medium text-foreground">
             {detail.run.status === "running"
-              ? "Pending — dream still in progress"
+              ? t("dreaming.applyPending")
               : detail.run.status === "failed"
-                ? "Skipped — dream failed"
+                ? t("dreaming.applySkipped")
                 : detail.run.goals_applied_at
-                  ? "Applied during the run"
+                  ? t("dreaming.appliedDuringRun")
                   : detail.run.superseded
-                    ? "Superseded by a newer dream"
-                    : "Applied"}
+                    ? t("dreaming.supersededByNewer")
+                    : t("dreaming.applied")}
           </span>
         </div>
       </div>
@@ -770,7 +772,7 @@ export default function AutoDreamingSettings() {
     <div className="space-y-3">
       <div className="flex items-center gap-3">
         <div className="flex-1 min-w-0">
-          <h3 className="text-xs font-semibold text-foreground">Auto Dreaming</h3>
+          <h3 className="text-xs font-semibold text-foreground">{t("dreaming.title")}</h3>
           <Text variant="caption" className="block text-foreground/42 mt-1">
             {scheduleLabel(schedule)}
           </Text>
@@ -779,7 +781,7 @@ export default function AutoDreamingSettings() {
           type="button"
           role="switch"
           aria-checked={enabled}
-          aria-label="Auto dreaming"
+          aria-label={t("dreaming.title")}
           disabled={loading || saving}
           onClick={() => void handleToggle()}
           className={`
@@ -801,12 +803,12 @@ export default function AutoDreamingSettings() {
       {latestRun && (
         <div className="rounded-2xl bg-foreground/[0.04] px-3 py-3 space-y-1">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-xs font-medium text-foreground">Latest Dream Run</span>
+            <span className="text-xs font-medium text-foreground">{t("dreaming.latestRun")}</span>
             <span className={`rounded-full px-2 py-0.5 text-micro font-medium ${statusTone(latestRun.status)}`}>
               {formatStatusLabel(latestRun.status)}
             </span>
           </div>
-          <Text variant="caption" className="block text-foreground/60">{latestRun.summary?.text ?? "No summary yet."}</Text>
+          <Text variant="caption" className="block text-foreground/60">{latestRun.summary?.text ?? t("dreaming.noSummaryYet")}</Text>
           <Text variant="micro" className="block text-foreground/40">{formatTimestamp(latestRun.started_at)}</Text>
         </div>
       )}
@@ -818,14 +820,14 @@ export default function AutoDreamingSettings() {
           disabled={startingRun || detailLoading}
           className="flex-1 rounded-2xl bg-primary px-3 py-2 text-xs font-medium text-background disabled:opacity-50 hover:bg-primary/85 transition-colors"
         >
-          {startingRun ? "Starting..." : "Run Dreaming"}
+          {startingRun ? t("dreaming.starting") : t("dreaming.runNow")}
         </button>
         <button
           type="button"
           onClick={() => void loadHistory()}
           className="flex-1 rounded-2xl bg-foreground/[0.06] px-3 py-2 text-xs font-medium text-foreground hover:bg-foreground/[0.10] transition-colors"
         >
-          View History
+          {t("dreaming.viewHistory")}
         </button>
       </div>
 

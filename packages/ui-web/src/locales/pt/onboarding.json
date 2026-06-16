@@ -1,0 +1,55 @@
+{
+  "stepOf": "Etapa {{step}} de {{total}}",
+  "skip": "Pular",
+  "next": "Avançar",
+  "back": "Voltar",
+  "genericError": "Algo deu errado. Tente novamente.",
+  "step1": {
+    "title": "Configuração do Ambient",
+    "subtitleNative": "Ative as fontes de ambiente e grave uma breve amostra da sua voz. Você pode alterar as duas opções a qualquer momento na Central de Controle.",
+    "subtitleWeb": "Os sensores de ambiente funcionam no app para iOS. Você pode pular esta etapa aqui e concluir a configuração depois pelo celular."
+  },
+  "step2": {
+    "title": "Modelo de IA no dispositivo",
+    "subtitleNative": "Baixe o Gemma 2B para que o Ambient resuma seu contexto local de forma privada neste dispositivo.",
+    "subtitleWeb": "Os resumos locais do Ambient funcionam no app para iOS. Você pode pular esta etapa aqui e baixar o modelo pelo celular.",
+    "webPlaceholder": "A configuração do Gemma 2B está disponível no app nativo. Continue aqui e conclua a configuração depois no Ambient pelo celular."
+  },
+  "step3": {
+    "title": "Conecte seus dados",
+    "subtitle": "Escolha os apps que o PIN AI pode ler. Você pode conectar mais (ou desconectar) a qualquer momento na Central de Controle.",
+    "subtitleConnect": "Escolha os apps que o PIN AI pode ler. Vamos resumir a primeira coleta enquanto você continua a configuração."
+  },
+  "insightWait": {
+    "eyebrow": "Prévia do conector",
+    "heading": "O PIN AI está conhecendo o contexto do seu trabalho",
+    "description": "Estamos transformando a primeira coleta do seu conector em uma prévia concisa do perfil.",
+    "firstDataPull": "Primeira coleta de dados",
+    "live": "Ao vivo",
+    "footer": "Você vai revisar esta prévia antes de entrar no PIN AI. A página de resultado substitui este estado assim que estiver pronta.",
+    "continue": "Entrar no PIN AI",
+    "steps": {
+      "reading": {
+        "label": "Lendo itens recentes",
+        "detail": "Coletando os registros mais novos do conector em um pequeno conjunto de trabalho."
+      },
+      "signals": {
+        "label": "Encontrando sinais úteis",
+        "detail": "Buscando padrões de trabalho, colaboradores, ferramentas e estilo de escrita."
+      },
+      "composing": {
+        "label": "Montando sua prévia",
+        "detail": "Transformando a primeira coleta em um perfil curto para você revisar."
+      }
+    }
+  },
+  "model": {
+    "recommendedBadge": "Recomendado",
+    "description": "Baixe o Gemma 2B para transformar seus sinais de movimento, localização, voz, saúde e som em resumos locais privados.",
+    "downloading": "Baixando {{percent}}",
+    "use": "Usar Gemma 2B",
+    "download": "Baixar Gemma 2B",
+    "skipNote": "Você pode pular esta etapa e baixar depois no Ambient. Sem um LLM no dispositivo, o Ambient coleta eventos, mas não cria cards de resumo locais.",
+    "verificationFailed": "Falha na verificação do modelo."
+  }
+}

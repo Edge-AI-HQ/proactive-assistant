@@ -2,13 +2,15 @@ import {
   Sun, Cloud, CloudRain, CloudSnow, CloudLightning, CloudDrizzle, CloudFog,
   type LucideIcon,
 } from "lucide-react";
-import { type WeatherIconKey } from "@pin-ai/core";
+import { type WeatherConditionKey, type WeatherIconKey } from "@pin-ai/core";
 import { useWeatherData } from "@pin-ai/state";
 
 export interface WeatherData {
   temp: number;
   label: string;
   icon: LucideIcon;
+  /** i18n 键(common.json weather.*)。消费方绑 i18n;`label` 是英文回落。 */
+  conditionKey: WeatherConditionKey;
   city?: string;
 }
 
@@ -35,6 +37,7 @@ export function useWeather(): WeatherData | null {
     temp: snapshot.temp,
     label: snapshot.label,
     icon: WEATHER_ICONS[snapshot.iconKey],
+    conditionKey: snapshot.conditionKey,
     city: snapshot.city,
   };
 }

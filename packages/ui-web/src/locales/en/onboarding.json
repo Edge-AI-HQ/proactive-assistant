@@ -1,0 +1,55 @@
+{
+  "stepOf": "Step {{step}} of {{total}}",
+  "skip": "Skip",
+  "next": "Next",
+  "back": "Back",
+  "genericError": "Something went wrong. Please try again.",
+  "step1": {
+    "title": "Ambient setup",
+    "subtitleNative": "Turn on ambient sources and record a short self voice sample. You can change both any time in Control Center.",
+    "subtitleWeb": "Ambient sensors run on the iOS app. You can skip this step here and finish ambient setup later from your phone."
+  },
+  "step2": {
+    "title": "On-device AI model",
+    "subtitleNative": "Download Gemma 2B so Ambient can summarize your local context privately on this device.",
+    "subtitleWeb": "Local Ambient summaries run on the iOS app. You can skip this step here and download the model from your phone.",
+    "webPlaceholder": "Gemma 2B setup is available in the native app. Continue here and finish setup later from Ambient on your phone."
+  },
+  "step3": {
+    "title": "Connect your data",
+    "subtitle": "Pick the apps PIN AI can read from. You can connect more (or disconnect) any time from Control Center.",
+    "subtitleConnect": "Pick the apps PIN AI can read from. We'll summarize the first pull while you keep setting up."
+  },
+  "insightWait": {
+    "eyebrow": "Connector preview",
+    "heading": "PIN AI is getting to know your work context",
+    "description": "We are turning your first connector pull into a concise profile preview.",
+    "firstDataPull": "First data pull",
+    "live": "Live",
+    "footer": "You will review this preview before entering PIN AI. The result page replaces this state as soon as it is ready.",
+    "continue": "Enter PIN AI",
+    "steps": {
+      "reading": {
+        "label": "Reading recent items",
+        "detail": "Pulling the newest connector records into a small working set."
+      },
+      "signals": {
+        "label": "Finding useful signals",
+        "detail": "Looking for work patterns, collaborators, tools, and writing style."
+      },
+      "composing": {
+        "label": "Composing your preview",
+        "detail": "Turning the first pull into a short profile you can review."
+      }
+    }
+  },
+  "model": {
+    "recommendedBadge": "Recommended",
+    "description": "Download Gemma 2B to turn your motion, location, voice, health, and sound signals into private local summaries.",
+    "downloading": "Downloading {{percent}}",
+    "use": "Use Gemma 2B",
+    "download": "Download Gemma 2B",
+    "skipNote": "You can skip this and download later from Ambient. Without an on-device LLM, Ambient can collect events but cannot create local summary cards.",
+    "verificationFailed": "Model verification failed."
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "header": {
+    "title": "Tarefas",
+    "subtitle": "A IA está executando estas tarefas para você"
+  },
+  "loadingHistory": "Carregando histórico…",
+  "preview": {
+    "completed": "Concluído",
+    "dismissed": "Dispensado",
+    "processing": "Processando…",
+    "needsInput": "Aguardando sua resposta",
+    "ready": "Pronto para revisão",
+    "failed": "Falhou",
+    "inConversation": "Em conversa",
+    "confirmed": "Confirmado",
+    "operationsSummary_one": "{{count}} operação · {{action}}",
+    "operationsSummary_many": "{{count}} operações · {{action}}",
+    "operationsSummary_other": "{{count}} operações · {{action}}"
+  },
+  "empty": {
+    "title": "Nenhum card ainda",
+    "body": "Gere cards de intenção na aba NOW. Todos os cards aparecerão aqui."
+  }
+}

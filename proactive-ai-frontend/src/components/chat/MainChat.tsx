@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { conversationInit } from "@pin-ai/core";
 import ConversationView from "./conversation/ConversationView";
 import MinimalistLanding from "./conversation/MinimalistLanding";
@@ -26,6 +27,7 @@ type ViewMode = "landing" | "conversation";
  * stream survives the landing → conversation transition.
  */
 export default function MainChat({ onBack, cardContext }: MainChatProps) {
+  const { t } = useTranslation("chat");
   const [sessionKey, setSessionKey] = useState<string | null>(null);
   const [view, setView] = useState<ViewMode>(cardContext ? "conversation" : "landing");
   const [bootstrap, setBootstrap] = useState<string | undefined>(undefined);
@@ -83,14 +85,14 @@ export default function MainChat({ onBack, cardContext }: MainChatProps) {
           bootstrap={bootstrap}
           onBack={onBack}
           placeholder={
-            cardContext ? "Tell PIN AI what to change about this card…" : undefined
+            cardContext ? t("mainChat.cardFeedbackPlaceholder") : undefined
           }
           headerSlot={
             cardContext ? (
               <div className="px-4 pt-1 pb-2">
                 <div className="rounded-2xl border border-foreground/[0.06] bg-white/45 px-3 py-2 text-label leading-snug text-foreground/60 backdrop-blur-xl">
                   <span className="font-semibold text-foreground/75">
-                    Feedback on this card
+                    {t("mainChat.feedbackOnCard")}
                   </span>
                   {cardTitle ? <span> · {cardTitle}</span> : null}
                 </div>

@@ -1,0 +1,22 @@
+{
+  "header": {
+    "title": "작업",
+    "subtitle": "AI가 대신 처리하고 있어요"
+  },
+  "loadingHistory": "기록을 불러오는 중…",
+  "preview": {
+    "completed": "완료",
+    "dismissed": "무시함",
+    "processing": "처리 중…",
+    "needsInput": "입력 대기 중",
+    "ready": "검토 준비 완료",
+    "failed": "실패",
+    "inConversation": "대화 중",
+    "confirmed": "확인됨",
+    "operationsSummary_other": "작업 {{count}}개 · {{action}}"
+  },
+  "empty": {
+    "title": "아직 카드가 없어요",
+    "body": "NOW 탭에서 인텐트 카드를 만들어 보세요. 모든 카드가 여기에 표시돼요."
+  }
+}

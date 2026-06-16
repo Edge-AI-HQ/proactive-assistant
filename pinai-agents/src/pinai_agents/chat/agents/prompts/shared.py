@@ -234,3 +234,24 @@ first to lay out the steps and keep it updated as you go — the user
 sees the plan and your progress. Skip it for single-step asks; don't
 narrate trivial work as todos.
 </tool_discipline>"""
+
+
+# UI 的 8 种 SupportedGenerationLanguage(packages/core intent-card.ts 同步)
+# → prompt 语言指令。generator / dream / crystallize / evolve 共用。
+_LANGUAGE_NAMES = {
+    "en": "English",
+    "zh-Hans": "Simplified Chinese",
+    "zh": "Simplified Chinese",  # 历史值兼容
+    "ja": "Japanese",
+    "ko": "Korean",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "pt": "Portuguese",
+}
+
+
+def lang_clause(output_language: str) -> str:
+    """LLM 输出语言指令;未知值回落英文(防御:setting 来自外部输入)。"""
+    name = _LANGUAGE_NAMES.get(output_language, "English")
+    return f"Use {name} for all user-visible text fields"

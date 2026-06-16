@@ -12,23 +12,29 @@
  *     then the server-side window closes and they roll out.
  */
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Loader2, CheckCircle2, XCircle, ChevronDown } from "lucide-react";
 import { useActiveAgentRuns } from "@pin-ai/state";
 import type { ActiveAgentRun, AgentRunKind, AgentRunStatus } from "@pin-ai/core";
-import { Text } from "@pin-ai/ui-web";
+import { i18n, Text } from "@pin-ai/ui-web";
 
-const KIND_LABEL: Record<AgentRunKind, string> = {
-  "auto.dreaming": "Dreaming",
-  "connector.init": "Connecting source",
-  "connector.evolve": "Distilling signals",
-  crystallize: "Crystallizing chat",
-  "generator.manual": "Generating cards",
-  "generator.auto": "Generating cards",
-  "user.prompt": "Synthetic prompt",
-};
+const KIND_LABEL_KEYS = {
+  "auto.dreaming": "common:agentRuns.kind.autoDreaming",
+  "connector.init": "common:agentRuns.kind.connectorInit",
+  "connector.evolve": "common:agentRuns.kind.connectorEvolve",
+  crystallize: "common:agentRuns.kind.crystallize",
+  "generator.manual": "common:agentRuns.kind.generatorManual",
+  "generator.auto": "common:agentRuns.kind.generatorAuto",
+  "user.prompt": "common:agentRuns.kind.userPrompt",
+} as const;
+
+function isKnownRunKind(kind: AgentRunKind): kind is keyof typeof KIND_LABEL_KEYS {
+  return kind in KIND_LABEL_KEYS;
+}
 
 function labelFor(kind: AgentRunKind): string {
-  return KIND_LABEL[kind] ?? kind;
+  // Unknown kind (newer server): backend identifier renders raw.
+  return isKnownRunKind(kind) ? i18n.t(KIND_LABEL_KEYS[kind]) : kind;
 }
 
 function statusIcon(status: AgentRunStatus) {
@@ -50,6 +56,7 @@ function elapsed(run: ActiveAgentRun, now: number): string {
 }
 
 export default function AgentRunIndicator() {
+  const { t } = useTranslation();
   const { runs } = useActiveAgentRuns();
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState<number>(() => Date.now());
@@ -77,7 +84,7 @@ export default function AgentRunIndicator() {
   const summary =
     runs.length === 1
       ? labelFor(primary.kind)
-      : `${inflight.length || runs.length} runs`;
+      : t("agentRuns.runCount", { count: inflight.length || runs.length });
 
   const inflightCount = inflight.length;
   const summaryDetail =
@@ -91,7 +98,7 @@ export default function AgentRunIndicator() {
         type="button"
         onClick={() => setOpen((v) => !v)}
         className="flex items-center gap-1.5 rounded-full glass-card-strong px-3 py-1.5 text-caption font-medium text-foreground/70 transition-colors hover:bg-white/85"
-        aria-label="Active agent runs"
+        aria-label={t("agentRuns.ariaLabel")}
       >
         {statusIcon(primary.status)}
         <span className="whitespace-nowrap">{summary}</span>
@@ -114,7 +121,7 @@ export default function AgentRunIndicator() {
       {open && runs.length > 0 && (
         <div className="absolute right-0 top-[calc(100%+6px)] z-40 w-72 rounded-2xl glass-card-strong p-2 shadow-lg">
           <Text variant="micro" weight="medium" className="block px-2 py-1.5 uppercase tracking-wide text-foreground/45">
-            Agent runs
+            {t("agentRuns.title")}
           </Text>
           <div className="space-y-1">
             {runs.map((r) => (

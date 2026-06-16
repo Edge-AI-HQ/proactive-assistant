@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
+import { useTranslation } from "react-i18next";
 import {
   Sparkles, Check, Bell, SlidersHorizontal, Radio, ChevronRight, ArrowLeft,
   CreditCard, Calendar, AlertTriangle, Receipt,
@@ -56,15 +57,17 @@ export interface AccountPanelProps {
 }
 
 export default function AccountPanel({
-  userName = "Account",
+  userName,
   avatarLetter,
   userEmail,
   onSignOut,
   subPage,
   onSubPageChange,
 }: AccountPanelProps) {
-  const initial = (avatarLetter ?? userName.trim().slice(0, 1) ?? "?").toUpperCase();
-  const subtitle = userEmail ?? "Signed in";
+  const { t } = useTranslation("account");
+  const displayName = userName ?? t("panel.accountFallback");
+  const initial = (avatarLetter ?? displayName.trim().slice(0, 1) ?? "?").toUpperCase();
+  const subtitle = userEmail ?? t("panel.signedIn");
   // subPage is controlled by AppLayout via useAppNavigation so the
   // global goBack() (left-edge swipe) can pop a sub-page back to "main".
   // sessionStorage persistence now lives in the hook.
@@ -91,8 +94,8 @@ export default function AccountPanel({
       style={{ paddingTop: "var(--constellation-header-top, 3.5rem)" }}
     >
       {/* Header — mirrors MinimalistSetting from the design source. */}
-      <h1 className="text-2xl font-semibold text-foreground tracking-tight mb-0.5">Setting</h1>
-      <p className="text-xs text-muted-foreground mb-5">Subscription · Preferences · Notifications · Ambient</p>
+      <h1 className="text-2xl font-semibold text-foreground tracking-tight mb-0.5">{t("panel.title")}</h1>
+      <p className="text-xs text-muted-foreground mb-5">{t("panel.subtitle")}</p>
 
       <motion.div
         initial={{ opacity: 0 }}
@@ -106,7 +109,7 @@ export default function AccountPanel({
             <span className="text-base font-semibold text-foreground/70">{initial}</span>
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-foreground">{userName}</p>
+            <p className="text-sm font-semibold text-foreground">{displayName}</p>
             <Text variant="caption" className="block text-foreground/50 truncate">{subtitle}</Text>
           </div>
           {onSignOut ? (
@@ -114,11 +117,11 @@ export default function AccountPanel({
               onClick={onSignOut}
               className="text-caption font-medium text-foreground border border-foreground/12 rounded-lg px-3 py-1 hover:bg-foreground/[0.04] transition-colors"
             >
-              Sign out
+              {t("panel.signOut")}
             </button>
           ) : (
             <button className="text-caption font-medium text-foreground border border-foreground/12 rounded-lg px-3 py-1 hover:bg-foreground/[0.04] transition-colors">
-              Edit
+              {t("panel.edit")}
             </button>
           )}
         </div>
@@ -133,8 +136,8 @@ export default function AccountPanel({
             <Sparkles size={16} strokeWidth={1.5} className="text-foreground/70" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-foreground">Subscription & Billing</p>
-            <Text variant="caption" className="block text-foreground/50 mt-0.5">Manage plan, billing, payment</Text>
+            <p className="text-sm font-semibold text-foreground">{t("panel.subscriptionTitle")}</p>
+            <Text variant="caption" className="block text-foreground/50 mt-0.5">{t("panel.subscriptionDescription")}</Text>
           </div>
           <Text variant="micro" weight="bold" className="tracking-wider uppercase px-2 py-0.5 rounded-md bg-[hsl(304_75%_63%/0.12)] text-[hsl(304_75%_63%)] shrink-0">
             Pro
@@ -151,8 +154,8 @@ export default function AccountPanel({
             <SlidersHorizontal size={16} strokeWidth={1.5} className="text-foreground/70" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-foreground">Preferences</p>
-            <Text variant="caption" className="block text-foreground/50 mt-0.5">Tone, formatting, defaults</Text>
+            <p className="text-sm font-semibold text-foreground">{t("panel.preferencesTitle")}</p>
+            <Text variant="caption" className="block text-foreground/50 mt-0.5">{t("panel.preferencesDescription")}</Text>
           </div>
           <ChevronRight size={16} strokeWidth={1.5} className="text-foreground/35 shrink-0" />
         </button>
@@ -166,8 +169,8 @@ export default function AccountPanel({
             <Bell size={16} strokeWidth={1.5} className="text-foreground/70" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-foreground">Push Notifications</p>
-            <Text variant="caption" className="block text-foreground/50 mt-0.5">What gets through — even during quiet hours</Text>
+            <p className="text-sm font-semibold text-foreground">{t("panel.notificationsTitle")}</p>
+            <Text variant="caption" className="block text-foreground/50 mt-0.5">{t("panel.notificationsDescription")}</Text>
           </div>
           <ChevronRight size={16} strokeWidth={1.5} className="text-foreground/35 shrink-0" />
         </button>
@@ -183,8 +186,8 @@ export default function AccountPanel({
             <Radio size={16} strokeWidth={1.5} className="text-foreground/70" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-foreground">Ambient</p>
-            <Text variant="caption" className="block text-foreground/50 mt-0.5">Source consents, on-device models, summaries</Text>
+            <p className="text-sm font-semibold text-foreground">{t("panel.ambientTitle")}</p>
+            <Text variant="caption" className="block text-foreground/50 mt-0.5">{t("panel.ambientDescription")}</Text>
           </div>
           <ChevronRight size={16} strokeWidth={1.5} className="text-foreground/35 shrink-0" />
         </button>
@@ -196,14 +199,15 @@ export default function AccountPanel({
 /* ── Preferences sub-page ──────────────────────────────────────────── */
 
 function PreferencesSubPage({ onBack }: { onBack: () => void }) {
+  const { t } = useTranslation("account");
   return (
     <div
       className="flex flex-col h-full px-4 pb-2 overflow-y-auto"
       style={{ paddingTop: "var(--constellation-header-top, 3.5rem)" }}
     >
       <SubPageHeader
-        title="Preferences"
-        subtitle="How your AI behaves — tone, formatting, and defaults."
+        title={t("preferences.pageTitle")}
+        subtitle={t("preferences.pageSubtitle")}
         onBack={onBack}
       />
 
@@ -214,9 +218,9 @@ function PreferencesSubPage({ onBack }: { onBack: () => void }) {
       >
         <section className="glass-card-strong p-4">
           <div className="mb-3">
-            <h2 className="text-sm font-semibold text-foreground">Dreaming</h2>
+            <h2 className="text-sm font-semibold text-foreground">{t("preferences.dreamingTitle")}</h2>
             <Text variant="caption" className="block text-foreground/42 mt-1">
-              Review background dreaming runs, profile diffs, and candidate cards.
+              {t("preferences.dreamingDescription")}
             </Text>
           </div>
           <AutoDreamingSettings />
@@ -224,9 +228,9 @@ function PreferencesSubPage({ onBack }: { onBack: () => void }) {
 
         <section className="glass-card-strong p-4">
           <div className="mb-3">
-            <h2 className="text-sm font-semibold text-foreground">Generation</h2>
+            <h2 className="text-sm font-semibold text-foreground">{t("preferences.generationTitle")}</h2>
             <Text variant="caption" className="block text-foreground/42 mt-1">
-              Tune how cards are generated and shown to you.
+              {t("preferences.generationDescription")}
             </Text>
           </div>
           <AutoGenerateSettings />
@@ -235,9 +239,9 @@ function PreferencesSubPage({ onBack }: { onBack: () => void }) {
 
         <section className="glass-card-strong p-4">
           <div className="mb-3">
-            <h2 className="text-sm font-semibold text-foreground">Scheduled Tasks</h2>
+            <h2 className="text-sm font-semibold text-foreground">{t("preferences.scheduledTasksTitle")}</h2>
             <Text variant="caption" className="block text-foreground/42 mt-1">
-              Recurring card generation you set up from chat — pause, resume, or remove.
+              {t("preferences.scheduledTasksDescription")}
             </Text>
           </div>
           <ScheduledTasksSettings />
@@ -258,6 +262,7 @@ function PreferencesSubPage({ onBack }: { onBack: () => void }) {
  * for dev previews without faking a granted state.
  */
 function NotificationsSubPage({ onBack }: { onBack: () => void }) {
+  const { t } = useTranslation("account");
   const push = usePushNotifications();
   const userSettings = useUserSettings();
   const unsupported = push.permissionState === "unsupported";
@@ -296,8 +301,8 @@ function NotificationsSubPage({ onBack }: { onBack: () => void }) {
       style={{ paddingTop: "var(--constellation-header-top, 3.5rem)" }}
     >
       <SubPageHeader
-        title="Push Notifications"
-        subtitle="Control what your AI is allowed to interrupt you with."
+        title={t("notifications.pageTitle")}
+        subtitle={t("notifications.pageSubtitle")}
         onBack={onBack}
       />
 
@@ -310,17 +315,17 @@ function NotificationsSubPage({ onBack }: { onBack: () => void }) {
           className="glass-card-strong w-full p-4 flex items-center gap-3 text-left hover:bg-white/20 transition-colors disabled:hover:bg-transparent disabled:cursor-default"
         >
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-foreground">Card generation</p>
+            <p className="text-sm font-semibold text-foreground">{t("notifications.cardGeneration")}</p>
             <Text variant="caption" className="block text-foreground/50 mt-0.5">
               {unsupported
-                ? "Available only in the iOS app."
+                ? t("notifications.iosOnly")
                 : denied
-                  ? "Disabled in system settings — tap to open."
+                  ? t("notifications.deniedHint")
                   : isOn
-                    ? "Notify me when your AI surfaces a new proactive card."
+                    ? t("notifications.onHint")
                     : granted
-                      ? "Paused in PIN AI — tap to resume card alerts."
-                      : "Tap to enable system notifications."}
+                      ? t("notifications.pausedHint")
+                      : t("notifications.enableHint")}
             </Text>
           </div>
           <span
@@ -358,14 +363,15 @@ function NotificationsSubPage({ onBack }: { onBack: () => void }) {
  *      "available only in iOS app" placeholder.
  */
 function AmbientSubPage({ onBack }: { onBack: () => void }) {
+  const { t } = useTranslation("account");
   return (
     <div
       className="flex flex-col h-full px-4 pb-2 overflow-y-auto"
       style={{ paddingTop: "var(--constellation-header-top, 3.5rem)" }}
     >
       <SubPageHeader
-        title="Ambient"
-        subtitle="Control what PIN AI can observe locally, and which on-device models it uses."
+        title={t("ambientPage.pageTitle")}
+        subtitle={t("ambientPage.pageSubtitle")}
         onBack={onBack}
       />
 
@@ -382,9 +388,9 @@ function AmbientSubPage({ onBack }: { onBack: () => void }) {
 
         <section className="glass-card-strong p-4 space-y-3">
           <div>
-            <h2 className="text-sm font-semibold text-foreground">On-device models</h2>
+            <h2 className="text-sm font-semibold text-foreground">{t("ambientPage.modelsTitle")}</h2>
             <Text variant="caption" className="block text-foreground/42 mt-1 leading-relaxed">
-              Manage the on-device models used for offline speech and reasoning.
+              {t("ambientPage.modelsDescription")}
             </Text>
           </div>
 
@@ -392,7 +398,7 @@ function AmbientSubPage({ onBack }: { onBack: () => void }) {
             <Suspense
               fallback={
                 <Text variant="caption" className="block rounded-xl border border-foreground/10 bg-foreground/[0.03] p-4 text-foreground/45">
-                  Loading model manifest…
+                  {t("ambientPage.loadingManifest")}
                 </Text>
               }
             >
@@ -400,16 +406,12 @@ function AmbientSubPage({ onBack }: { onBack: () => void }) {
             </Suspense>
           ) : (
             <Text variant="label" className="block rounded-xl border border-foreground/10 bg-foreground/[0.03] p-4 text-foreground/60 leading-relaxed">
-              On-device models are only available inside the iOS app. Open this
-              page in the native build to download, verify, or delete the
-              Whisper / local LLM profiles.
+              {t("ambientPage.iosOnlyModels")}
             </Text>
           )}
 
           <Text variant="caption" className="block text-foreground/45 leading-snug">
-            Models are stored locally and never re-uploaded. If a download
-            fails, the plugin automatically falls back to the secondary
-            mirror.
+            {t("ambientPage.localStorageNote")}
           </Text>
         </section>
       </motion.div>

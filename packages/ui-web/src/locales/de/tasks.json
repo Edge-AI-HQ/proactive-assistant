@@ -1,0 +1,23 @@
+{
+  "header": {
+    "title": "Aufgaben",
+    "subtitle": "Die KI erledigt diese für Sie"
+  },
+  "loadingHistory": "Verlauf wird geladen…",
+  "preview": {
+    "completed": "Abgeschlossen",
+    "dismissed": "Verworfen",
+    "processing": "Wird verarbeitet…",
+    "needsInput": "Wartet auf Ihre Eingabe",
+    "ready": "Bereit zur Prüfung",
+    "failed": "Fehlgeschlagen",
+    "inConversation": "Im Gespräch",
+    "confirmed": "Bestätigt",
+    "operationsSummary_one": "{{count}} Vorgang · {{action}}",
+    "operationsSummary_other": "{{count}} Vorgänge · {{action}}"
+  },
+  "empty": {
+    "title": "Noch keine Karten",
+    "body": "Erstellen Sie Intent-Karten über den NOW-Tab. Alle Karten erscheinen hier."
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "header": {
+    "title": "Tareas",
+    "subtitle": "La IA las está ejecutando por ti"
+  },
+  "loadingHistory": "Cargando historial…",
+  "preview": {
+    "completed": "Completada",
+    "dismissed": "Descartada",
+    "processing": "Procesando…",
+    "needsInput": "Esperando tu respuesta",
+    "ready": "Lista para revisar",
+    "failed": "Fallida",
+    "inConversation": "En conversación",
+    "confirmed": "Confirmada",
+    "operationsSummary_one": "{{count}} operación · {{action}}",
+    "operationsSummary_many": "{{count}} operaciones · {{action}}",
+    "operationsSummary_other": "{{count}} operaciones · {{action}}"
+  },
+  "empty": {
+    "title": "Aún no hay tarjetas",
+    "body": "Genera tarjetas de intención desde la pestaña NOW. Todas las tarjetas aparecerán aquí."
+  }
+}

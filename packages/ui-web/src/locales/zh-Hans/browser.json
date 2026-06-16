@@ -1,0 +1,31 @@
+{
+  "view": {
+    "loading": "正在加载浏览器…",
+    "needsYourHelp": "需要你帮忙",
+    "aiBrowsing": "AI 正在浏览",
+    "youHaveControl": "由你控制",
+    "expand": "展开",
+    "minimize": "收起",
+    "zoomIn": "放大",
+    "zoomOut": "缩小",
+    "dragToScroll": "拖动滚动",
+    "iframeTitle": "浏览器会话 {{id}}",
+    "aiNeedsHelp": "AI 需要你的帮助",
+    "takeOver": "接管",
+    "returnToAi": "交还给 AI",
+    "dismissKeyboard": "收起键盘",
+    "summonKeyboard": "输入",
+    "pressEnter": "按回车",
+    "closeBrowser": "关闭浏览器",
+    "endSession": "结束会话",
+    "collapse": "收起",
+    "endBrowserSession": "结束浏览器会话",
+    "back": "后退",
+    "forward": "前进",
+    "reload": "重新加载",
+    "enterUrl": "输入网址",
+    "addressBar": "地址栏",
+    "takeControl": "接管浏览器",
+    "tapToTakeControl": "点按以接管"
+  }
+}

@@ -14,8 +14,9 @@ describe("ChatTimeline minimalist copy", () => {
     // the minimalist container spacing stays on the className.
     expect(source).toContain('className="flex flex-col h-full px-4 pb-2 overflow-y-auto"');
     expect(source).toContain("var(--constellation-header-top");
-    expect(source).toContain(">Tasks</h1>");
-    expect(source).toContain(">AI is running these for you</p>");
+    // i18n 后头部文案经 tasks:header.* key 渲染(en 值在 ui-web locales)。
+    expect(source).toContain('{t("header.title")}</h1>');
+    expect(source).toContain('{t("header.subtitle")}</p>');
     expect(source).not.toContain(">Timeline</h1>");
     expect(source).not.toContain("AI memory &amp; action log");
   });

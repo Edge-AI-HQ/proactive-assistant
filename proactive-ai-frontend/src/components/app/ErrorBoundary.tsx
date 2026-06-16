@@ -1,5 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
+import { i18n } from "@pin-ai/ui-web";
+
 interface Props {
   children: ReactNode;
   fallback?: ReactNode;
@@ -38,20 +40,23 @@ export default class ErrorBoundary extends Component<Props, State> {
     if (this.state.hasError) {
       if (this.props.fallback) return this.props.fallback;
 
+      // Class component (error boundaries can't be hooks) — i18n.t directly;
+      // the error state is transient so reactivity to language switches
+      // isn't needed. error.message renders verbatim (exempt from i18n).
       return (
         <div className="flex h-full items-center justify-center p-6">
           <div className="w-full max-w-sm text-center space-y-4">
             <h2 className="text-lg font-semibold text-foreground">
-              Something went wrong
+              {i18n.t("common:errorBoundary.title")}
             </h2>
             <p className="text-sm text-muted-foreground">
-              {this.state.error?.message ?? "An unexpected error occurred."}
+              {this.state.error?.message ?? i18n.t("common:errorBoundary.fallbackMessage")}
             </p>
             <button
               onClick={this.handleReset}
               className="rounded-xl bg-foreground px-6 py-2.5 text-sm font-medium text-background hover:bg-foreground/85 transition-colors"
             >
-              Try again
+              {i18n.t("common:errorBoundary.tryAgain")}
             </button>
           </div>
         </div>

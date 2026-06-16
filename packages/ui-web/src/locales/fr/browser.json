@@ -1,0 +1,31 @@
+{
+  "view": {
+    "loading": "Chargement du navigateur…",
+    "needsYourHelp": "Besoin de votre aide",
+    "aiBrowsing": "L'IA navigue",
+    "youHaveControl": "Vous avez la main",
+    "expand": "Agrandir",
+    "minimize": "Réduire",
+    "zoomIn": "Zoom avant",
+    "zoomOut": "Zoom arrière",
+    "dragToScroll": "Glisser pour défiler",
+    "iframeTitle": "Session de navigation {{id}}",
+    "aiNeedsHelp": "L'IA a besoin de votre aide",
+    "takeOver": "Prendre la main",
+    "returnToAi": "Rendre la main à l'IA",
+    "dismissKeyboard": "Masquer le clavier",
+    "summonKeyboard": "Saisir",
+    "pressEnter": "Appuyer sur Entrée",
+    "closeBrowser": "Fermer le navigateur",
+    "endSession": "Terminer la session",
+    "collapse": "Réduire",
+    "endBrowserSession": "Terminer la session de navigation",
+    "back": "Retour",
+    "forward": "Suivant",
+    "reload": "Actualiser",
+    "enterUrl": "Saisir l'URL",
+    "addressBar": "Barre d'adresse",
+    "takeControl": "Prendre le contrôle du navigateur",
+    "tapToTakeControl": "Touchez pour prendre le contrôle"
+  }
+}

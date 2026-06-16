@@ -17,6 +17,8 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertCircle, Check, ChevronDown, Loader2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { cn } from "../../lib/utils";
 import TaskCard from "./TaskCard";
 import { ThinkingNode, ToolNodeRow } from "./WorkGroupNodes";
@@ -32,21 +34,23 @@ const EASE: [number, number, number, number] = [0.32, 0.72, 0, 1];
 
 /** Deterministic status line while the group is open: the most recent
  *  still-running node's human description. */
-function currentActivity(group: WorkGroupData): string {
+function currentActivity(group: WorkGroupData, t: TFunction<"chat">): string {
   const runningTasks = group.items.filter(
     (i) => i.kind === "task" && toolStatus(i.part) === "running",
   );
-  if (runningTasks.length > 1) return `${runningTasks.length} subtasks running`;
+  if (runningTasks.length > 1) {
+    return t("workGroup.subtasksRunning", { count: runningTasks.length });
+  }
   for (let i = group.items.length - 1; i >= 0; i--) {
     const item = group.items[i];
     if (item.kind === "task" && toolStatus(item.part) === "running") {
-      return taskDescription(item.part) || "Running subtask";
+      return taskDescription(item.part) || t("workGroup.runningSubtask");
     }
     if (item.kind === "tool" && toolStatus(item.part) === "running") {
       return resolveToolPresentation(item.part.toolName).verb;
     }
   }
-  return "Working…";
+  return t("workGroup.working");
 }
 
 export default function WorkGroup({
@@ -57,6 +61,7 @@ export default function WorkGroup({
   /** True while this group is the turn's live tail (no text after it yet). */
   streaming: boolean;
 }) {
+  const { t } = useTranslation("chat");
   const [expanded, setExpanded] = useState(streaming);
 
   // The group settles exactly once (text arrived / turn ended) — collapse
@@ -73,12 +78,12 @@ export default function WorkGroup({
   const stepCount = group.items.filter((i) => i.kind !== "reasoning").length;
   const fallbackLabel =
     taskCount > 0
-      ? `Ran ${taskCount} subtask${taskCount === 1 ? "" : "s"}`
+      ? t("workGroup.ranSubtasks", { count: taskCount })
       : stepCount > 0
-        ? `Used ${stepCount} tool${stepCount === 1 ? "" : "s"}`
-        : "Thought";
+        ? t("workGroup.usedTools", { count: stepCount })
+        : t("workGroup.thought");
   const headerLabel = streaming
-    ? currentActivity(group)
+    ? currentActivity(group, t)
     : (group.title ?? fallbackLabel);
 
   return (
@@ -121,7 +126,7 @@ export default function WorkGroup({
         </AnimatePresence>
         {!streaming && stepCount > 0 && (
           <Text variant="caption" className="shrink-0 uppercase tracking-[0.12em] text-foreground/35">
-            {stepCount} steps
+            {t("workGroup.steps", { count: stepCount })}
           </Text>
         )}
         <ChevronDown

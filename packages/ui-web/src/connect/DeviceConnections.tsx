@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Activity,
   Apple,
@@ -13,6 +14,7 @@ import {
 import { useUserDevices } from "@pin-ai/state";
 import type { UserDevice, UserDevicePlatform } from "@pin-ai/core";
 import DeviceTimeline from "./DeviceTimeline";
+import { formatRelativeTime } from "../lib/format";
 
 /**
  * Hardware Devices section in Control Center.
@@ -22,6 +24,7 @@ import DeviceTimeline from "./DeviceTimeline";
  * - Tapping a device drills into its time-axis waterfall view.
  */
 export default function DeviceConnections() {
+  const { t } = useTranslation("connect");
   const { devices, loading, error, revoke, refresh } = useUserDevices(true);
   const [selectedDevice, setSelectedDevice] = useState<UserDevice | null>(null);
 
@@ -44,11 +47,11 @@ export default function DeviceConnections() {
 
       {loading && peerDevices.length === 0 ? (
         <div className="flex items-center gap-2 text-xs text-foreground/50 py-4 justify-center">
-          <Loader2 size={12} className="animate-spin" /> Loading devices…
+          <Loader2 size={12} className="animate-spin" /> {t("deviceConnections.loading")}
         </div>
       ) : peerDevices.length === 0 ? (
         <div className="text-xs text-foreground/40 py-4 text-center">
-          No other devices paired yet. Sign in on the mobile app to have it appear here.
+          {t("deviceConnections.empty")}
         </div>
       ) : (
         <ul className="space-y-2">
@@ -58,7 +61,8 @@ export default function DeviceConnections() {
               device={d}
               onOpen={() => setSelectedDevice(d)}
               onRevoke={async () => {
-                if (!confirm(`Remove "${d.display_name ?? d.device_id}"?`)) return;
+                const name = d.display_name ?? d.device_id;
+                if (!confirm(t("deviceConnections.removeConfirm", { name }))) return;
                 await revoke(d.device_id);
               }}
             />
@@ -71,7 +75,7 @@ export default function DeviceConnections() {
           onClick={() => void refresh()}
           className="text-micro text-foreground/40 hover:text-foreground/70 transition"
         >
-          Refresh
+          {t("deviceConnections.refresh")}
         </button>
       </div>
     </div>
@@ -89,18 +93,24 @@ function DeviceRow({
   onOpen: () => void;
   onRevoke: () => void;
 }) {
+  const { t } = useTranslation("connect");
   const platform = platformDisplay(device.platform);
   const Icon = platform.Icon;
-  const lastSeen = device.last_seen_at ? formatRelativeTime(device.last_seen_at) : "never";
-  const detail = [device.model, `last seen ${lastSeen}`].filter(Boolean).join(" · ");
+  const platformLabel = t(`deviceConnections.platform.${platform.labelKey}`);
+  const lastSeen = device.last_seen_at
+    ? safeRelativeTime(device.last_seen_at)
+    : t("deviceConnections.never");
+  const detail = [device.model, t("deviceConnections.lastSeen", { time: lastSeen })]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <li className="glass-card p-3 flex items-center gap-3 group">
       <div
         className={`w-9 h-9 rounded-md flex items-center justify-center shrink-0 ${platform.iconClass}`}
-        aria-label={`${platform.label} device`}
+        aria-label={t("deviceConnections.deviceAria", { platform: platformLabel })}
         role="img"
-        title={`${platform.label} device`}
+        title={t("deviceConnections.deviceAria", { platform: platformLabel })}
       >
         <Icon size={16} />
       </div>
@@ -110,7 +120,7 @@ function DeviceRow({
         </div>
         <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-micro text-foreground/40">
           <span className={`rounded-sm px-1.5 py-0.5 font-medium ${platform.badgeClass}`}>
-            {platform.label}
+            {platformLabel}
           </span>
           <span className="min-w-0 truncate">{detail}</span>
         </div>
@@ -118,14 +128,14 @@ function DeviceRow({
       <button
         onClick={onRevoke}
         className="opacity-0 group-hover:opacity-100 transition text-foreground/40 hover:text-red-500"
-        title="Revoke device"
+        title={t("deviceConnections.revokeDevice")}
       >
         <Trash2 size={14} />
       </button>
       <button
         onClick={onOpen}
         className="text-foreground/40 group-hover:text-foreground/80 transition"
-        title="Open timeline"
+        title={t("deviceConnections.openTimeline")}
       >
         <ChevronRight size={16} />
       </button>
@@ -135,11 +145,18 @@ function DeviceRow({
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-function platformDisplay(p: UserDevicePlatform) {
+type PlatformLabelKey = "ios" | "android" | "wearable" | "sensor" | "embedded" | "web";
+
+function platformDisplay(p: UserDevicePlatform): {
+  Icon: typeof Apple;
+  labelKey: PlatformLabelKey;
+  iconClass: string;
+  badgeClass: string;
+} {
   if (p === "ios") {
     return {
       Icon: Apple,
-      label: "iOS",
+      labelKey: "ios",
       iconClass: "bg-neutral-900 text-white dark:bg-white dark:text-neutral-950",
       badgeClass: "bg-neutral-500/10 text-foreground/60",
     };
@@ -147,7 +164,7 @@ function platformDisplay(p: UserDevicePlatform) {
   if (p === "android") {
     return {
       Icon: Bot,
-      label: "Android",
+      labelKey: "android",
       iconClass: "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300",
       badgeClass: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
     };
@@ -155,7 +172,7 @@ function platformDisplay(p: UserDevicePlatform) {
   if (p === "wearable") {
     return {
       Icon: Watch,
-      label: "Wearable",
+      labelKey: "wearable",
       iconClass: "bg-sky-500/12 text-sky-700 dark:text-sky-300",
       badgeClass: "bg-sky-500/10 text-sky-700 dark:text-sky-300",
     };
@@ -163,7 +180,7 @@ function platformDisplay(p: UserDevicePlatform) {
   if (p === "sensor") {
     return {
       Icon: Activity,
-      label: "Sensor",
+      labelKey: "sensor",
       iconClass: "bg-amber-500/12 text-amber-700 dark:text-amber-300",
       badgeClass: "bg-amber-500/10 text-amber-700 dark:text-amber-300",
     };
@@ -171,28 +188,23 @@ function platformDisplay(p: UserDevicePlatform) {
   if (p === "embedded") {
     return {
       Icon: Cpu,
-      label: "Embedded",
+      labelKey: "embedded",
       iconClass: "bg-violet-500/12 text-violet-700 dark:text-violet-300",
       badgeClass: "bg-violet-500/10 text-violet-700 dark:text-violet-300",
     };
   }
   return {
     Icon: Smartphone,
-    label: "Web",
+    labelKey: "web",
     iconClass: "bg-foreground/5 text-foreground/60",
     badgeClass: "bg-foreground/5 text-foreground/50",
   };
 }
 
-function formatRelativeTime(iso: string): string {
-  try {
-    const d = new Date(iso);
-    const diffSec = Math.max(0, Math.round((Date.now() - d.getTime()) / 1000));
-    if (diffSec < 60) return `${diffSec}s ago`;
-    if (diffSec < 3600) return `${Math.round(diffSec / 60)}m ago`;
-    if (diffSec < 86400) return `${Math.round(diffSec / 3600)}h ago`;
-    return `${Math.round(diffSec / 86400)}d ago`;
-  } catch {
-    return iso;
-  }
+/** Locale-aware relative time with the old defensive fallback (raw ISO on
+ *  unparseable input — backend data is trusted but not blindly). */
+function safeRelativeTime(iso: string): string {
+  const parsed = Date.parse(iso);
+  if (!Number.isFinite(parsed)) return iso;
+  return formatRelativeTime(parsed);
 }

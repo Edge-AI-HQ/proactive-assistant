@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect, forwardRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { isNative } from "@/lib/platform";
 import {
   Radio, Smartphone, Watch, Laptop,
@@ -30,7 +32,7 @@ import type {
 import type { RuntimeStatus } from "@/services/ambient";
 import type { LiveAssistItem, LiveSession } from "@/services/ambient/live-session";
 import { transcriptTextOnly } from "@/services/ambient/timeline/utils";
-import { Text } from "@pin-ai/ui-web";
+import { Text, i18n } from "@pin-ai/ui-web";
 
 /* ──────────────── TIMELINE (today's narrative) ──────────────── */
 
@@ -56,77 +58,79 @@ export interface TimelineEntry {
   onDismiss?: () => void;
 }
 
-const TIMELINE: TimelineEntry[] = [
-  {
-    time: "9:12 AM",
-    icon: Sun,
-    device: { name: "Apple Watch", icon: Watch },
-    title: "Morning — well-rested and on-time",
-    body: "Slept 7h 24m (HRV 62, +4 above baseline). Commuted via Muni, arrived WeWork 9:12. No blocked meetings.",
-    tags: ["sleep", "commute"],
-  },
-  {
-    id: "t-investor",
-    time: "10:03 AM",
-    icon: Phone,
-    device: { name: "MacBook", icon: Laptop },
-    privacyTag: "private",
-    title: "Investor call — Sequoia (Mike K.)",
-    body: "45-min call. Discussed Series A bridge. HR elevated during term-sheet discussion (158 peak). Action items: send updated cap table.",
-    tags: ["work", "call"],
-    triggeredCard: "C1 Fund SAFE Conversion …",
-    action: {
-      label: "Send recap to Mike",
-      goal: "Draft a follow-up email to Mike K. recapping the Sequoia bridge call and attach the updated cap table.",
-      goalBasket: "work",
+/** Web-preview mock timeline. Copy comes from the ambient namespace so the
+ *  demo follows the UI language; the `goal` strings are LLM prompts and stay
+ *  English by design. Demo clock times / device brand names are data. */
+function demoTimeline(t: TFunction<"ambient">): TimelineEntry[] {
+  return [
+    {
+      time: "9:12 AM",
+      icon: Sun,
+      device: { name: "Apple Watch", icon: Watch },
+      title: t("demo.morningTitle"),
+      body: t("demo.morningBody"),
+      tags: [t("demo.tags.sleep"), t("demo.tags.commute")],
     },
-  },
-  {
-    id: "t-lunch",
-    time: "12:40 PM",
-    icon: Soup,
-    device: { name: "iPhone", icon: Smartphone },
-    privacyTag: "private",
-    title: "Lunch at Souvla with Priya",
-    body: "Discussed weekend Tahoe trip. Priya mentioned her sister's wedding in June — calendar hold queued.",
-    tags: ["life", "social"],
-    triggeredCard: "Calendar — Priya's sister wedding (June)",
-    action: {
-      label: "Hold June wedding date",
-      goal: "Add a tentative calendar hold for Priya's sister's wedding in June and remind me to confirm the exact date with Priya.",
-      goalBasket: "life",
+    {
+      id: "t-investor",
+      time: "10:03 AM",
+      icon: Phone,
+      device: { name: "MacBook", icon: Laptop },
+      privacyTag: "private",
+      title: t("demo.investorTitle"),
+      body: t("demo.investorBody"),
+      tags: [t("demo.tags.work"), t("demo.tags.call")],
+      triggeredCard: t("demo.investorCard"),
+      action: {
+        label: t("demo.investorAction"),
+        goal: "Draft a follow-up email to Mike K. recapping the Sequoia bridge call and attach the updated cap table.",
+        goalBasket: "work",
+      },
     },
-  },
-  {
-    time: "1:15 PM",
-    icon: Target,
-    device: { name: "MacBook", icon: Laptop },
-    title: "45-min deep focus block",
-    body: "No Slack, zero tab switches. Drafted Q3 hiring plan. Flow state window identified.",
-    tags: ["focus", "work"],
-    triggeredCard: "Daily Reflection — Monday",
-  },
-  {
-    time: "2:30 PM",
-    icon: MapPin,
-    device: { name: "iPhone", icon: Smartphone },
-    title: "Context shift — WeWork → Home",
-    body: "Commute detected via motion + location. Re-ranked feed: Work cards deferred, Life cards surfaced.",
-    tags: ["transition"],
-    triggeredCard: "Context Shift — Arrived at …",
-  },
-  {
-    time: "4:45 PM",
-    icon: Waves,
-    device: { name: "Apple Watch", icon: Watch },
-    title: "Swim session at Mission Pool",
-    body: "40 laps freestyle. HR zone 3 for 32 minutes. 8% above weekly average.",
-    tags: ["health", "fitness"],
-  },
-];
-
-const NARRATIVE_SUMMARY =
-  "Today felt productive. 7h 24m of sleep set a clean baseline; you ran hot during the Sequoia call (HR peaked at 158) but recovered in the 45-min focus block after lunch. Evening swim hit zone 3 for 32 minutes — 8% above your weekly average. Dad is visiting and mentioned a cardiologist appointment Thursday.";
+    {
+      id: "t-lunch",
+      time: "12:40 PM",
+      icon: Soup,
+      device: { name: "iPhone", icon: Smartphone },
+      privacyTag: "private",
+      title: t("demo.lunchTitle"),
+      body: t("demo.lunchBody"),
+      tags: [t("demo.tags.life"), t("demo.tags.social")],
+      triggeredCard: t("demo.lunchCard"),
+      action: {
+        label: t("demo.lunchAction"),
+        goal: "Add a tentative calendar hold for Priya's sister's wedding in June and remind me to confirm the exact date with Priya.",
+        goalBasket: "life",
+      },
+    },
+    {
+      time: "1:15 PM",
+      icon: Target,
+      device: { name: "MacBook", icon: Laptop },
+      title: t("demo.focusTitle"),
+      body: t("demo.focusBody"),
+      tags: [t("demo.tags.focus"), t("demo.tags.work")],
+      triggeredCard: t("demo.focusCard"),
+    },
+    {
+      time: "2:30 PM",
+      icon: MapPin,
+      device: { name: "iPhone", icon: Smartphone },
+      title: t("demo.transitionTitle"),
+      body: t("demo.transitionBody"),
+      tags: [t("demo.tags.transition")],
+      triggeredCard: t("demo.transitionCard"),
+    },
+    {
+      time: "4:45 PM",
+      icon: Waves,
+      device: { name: "Apple Watch", icon: Watch },
+      title: t("demo.swimTitle"),
+      body: t("demo.swimBody"),
+      tags: [t("demo.tags.health"), t("demo.tags.fitness")],
+    },
+  ];
+}
 
 const INITIAL_TIMELINE_VISIBLE_COUNT = 10;
 const TIMELINE_LOAD_MORE_COUNT = 10;
@@ -160,9 +164,9 @@ function deviceIconForTimelineEvent(event: AmbientTimelineEvent): LucideIcon {
 }
 
 function deviceLabelForTimelineEvent(event: AmbientTimelineEvent): string {
-  if (event.generationMethod === "cloud_llm") return "Ambient summary";
-  if (event.generationMethod === "local_llm") return "On-device summary";
-  if (isLlmSummaryEvent(event)) return "On-device summary";
+  if (event.generationMethod === "cloud_llm") return i18n.t("ambient:summaryLabel.cloud");
+  if (event.generationMethod === "local_llm") return i18n.t("ambient:summaryLabel.onDevice");
+  if (isLlmSummaryEvent(event)) return i18n.t("ambient:summaryLabel.onDevice");
   return event.primarySourceLabel;
 }
 
@@ -199,10 +203,10 @@ function pendingTranscriptWindowToEntry(window: AmbientCandidateWindow): Timelin
     sortTs: Date.parse(window.startedAt),
     time: formatTimelineTime(window.startedAt),
     icon: Mic,
-    device: { name: "Microphone", icon: Mic },
+    device: { name: i18n.t("ambient:rawEvent.microphone"), icon: Mic },
     privacyTag: "private",
     confidenceLabel: undefined,
-    title: "Voice transcript",
+    title: i18n.t("ambient:rawEvent.voiceTranscript"),
     body: transcriptWindowPreview(window.compactContext),
     tags: ["voice"],
   };
@@ -249,24 +253,24 @@ function deviceIconForRawEvent(sourceType: AmbientSourceType): LucideIcon {
 
 function deviceLabelForRawEvent(raw: AmbientRawEvent): string {
   if (raw.sourceType === "health") return "HealthKit";
-  if (raw.sourceType === "transcript") return "Microphone";
-  if (raw.sourceType === "location") return "Location";
-  if (raw.sourceType === "motion") return "Motion";
-  if (raw.sourceType === "sound") return "Microphone";
-  if (raw.sourceType === "visit") return "Places";
-  if (raw.sourceType === "calendar") return "Calendar";
+  if (raw.sourceType === "transcript") return i18n.t("ambient:rawEvent.microphone");
+  if (raw.sourceType === "location") return i18n.t("ambient:rawEvent.location");
+  if (raw.sourceType === "motion") return i18n.t("ambient:rawEvent.motion");
+  if (raw.sourceType === "sound") return i18n.t("ambient:rawEvent.microphone");
+  if (raw.sourceType === "visit") return i18n.t("ambient:rawEvent.places");
+  if (raw.sourceType === "calendar") return i18n.t("ambient:rawEvent.calendar");
   return raw.sourceType;
 }
 
 function titleForRawEvent(sourceType: AmbientSourceType): string {
-  if (sourceType === "health") return "Health update";
-  if (sourceType === "transcript") return "Voice transcript";
-  if (sourceType === "location") return "Location updated";
-  if (sourceType === "motion") return "Motion update";
-  if (sourceType === "sound") return "Sound context";
-  if (sourceType === "visit") return "Place update";
-  if (sourceType === "calendar") return "Calendar context";
-  return "Context update";
+  if (sourceType === "health") return i18n.t("ambient:rawEvent.healthUpdate");
+  if (sourceType === "transcript") return i18n.t("ambient:rawEvent.voiceTranscript");
+  if (sourceType === "location") return i18n.t("ambient:rawEvent.locationUpdated");
+  if (sourceType === "motion") return i18n.t("ambient:rawEvent.motionUpdate");
+  if (sourceType === "sound") return i18n.t("ambient:rawEvent.soundContext");
+  if (sourceType === "visit") return i18n.t("ambient:rawEvent.placeUpdate");
+  if (sourceType === "calendar") return i18n.t("ambient:rawEvent.calendarContext");
+  return i18n.t("ambient:rawEvent.contextUpdate");
 }
 
 function tagsForRawEvent(raw: AmbientRawEvent): string[] {
@@ -294,24 +298,26 @@ function rawEventBody(raw: AmbientRawEvent): string {
   if (raw.sourceType === "sound") {
     return soundBody(raw.compactText);
   }
-  return raw.compactText || `${titleForRawEvent(raw.sourceType)} captured.`;
+  return raw.compactText || i18n.t("ambient:rawEvent.captured", { title: titleForRawEvent(raw.sourceType) });
 }
 
 function soundBody(text: string): string {
   const match = /^Heard\s+(.+?)\s+for\s+/.exec(text.trim());
   const label = match?.[1]?.trim();
   const normalized = label?.toLowerCase();
-  if (!label) return "Sound detected";
-  if (normalized === "speech" || normalized === "conversation") return "Speech detected";
-  if (normalized === "traffic") return "Traffic sound detected";
-  if (normalized === "quiet" || normalized === "quiet room") return "Quiet room";
-  if (normalized === "music" || normalized === "singing") return "Music detected";
-  return `${label.replace(/^./, (char) => char.toUpperCase())} detected`;
+  if (!label) return i18n.t("ambient:sound.detected");
+  if (normalized === "speech" || normalized === "conversation") return i18n.t("ambient:sound.speech");
+  if (normalized === "traffic") return i18n.t("ambient:sound.traffic");
+  if (normalized === "quiet" || normalized === "quiet room") return i18n.t("ambient:sound.quietRoom");
+  if (normalized === "music" || normalized === "singing") return i18n.t("ambient:sound.music");
+  return i18n.t("ambient:sound.labelDetected", {
+    label: label.replace(/^./, (char) => char.toUpperCase()),
+  });
 }
 
 function transcriptWindowPreview(compactContext: string): string {
   const transcriptText = transcriptTextOnly(compactContext);
-  const segments = (transcriptText || "Voice transcript captured.")
+  const segments = (transcriptText || i18n.t("ambient:transcript.captured"))
     .split(/Transcript segment:\s*/g)
     .map((part) => part.replace(/^Sound context:\s*/i, "").trim())
     .filter(Boolean);
@@ -334,8 +340,14 @@ function titleForUserDevice(device: UserDevice): string {
   const name = device.display_name ?? device.model ?? device.device_id;
   const detail = [
     device.model,
-    device.app_version ? `app ${device.app_version}` : null,
-    device.last_seen_at ? `last seen ${formatDeviceRelativeTime(device.last_seen_at)}` : null,
+    device.app_version
+      ? i18n.t("ambient:deviceStrip.appVersion", { version: device.app_version })
+      : null,
+    device.last_seen_at
+      ? i18n.t("ambient:deviceStrip.lastSeen", {
+        time: formatDeviceRelativeTime(device.last_seen_at),
+      })
+      : null,
   ].filter(Boolean);
   return detail.length > 0 ? `${name} · ${detail.join(" · ")}` : name;
 }
@@ -348,10 +360,13 @@ function signalClassForUserDevice(device: UserDevice): string {
 
 function formatDeviceRelativeTime(iso: string): string {
   const ageSec = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
-  if (ageSec < 60) return `${ageSec}s ago`;
-  if (ageSec < 3600) return `${Math.round(ageSec / 60)}m ago`;
-  if (ageSec < 86400) return `${Math.round(ageSec / 3600)}h ago`;
-  return `${Math.round(ageSec / 86400)}d ago`;
+  // narrow style keeps the compact "5m ago" look while localizing the unit
+  // and word order (zero new translation keys).
+  const rtf = new Intl.RelativeTimeFormat(i18n.language, { numeric: "always", style: "narrow" });
+  if (ageSec < 60) return rtf.format(-ageSec, "second");
+  if (ageSec < 3600) return rtf.format(-Math.round(ageSec / 60), "minute");
+  if (ageSec < 86400) return rtf.format(-Math.round(ageSec / 3600), "hour");
+  return rtf.format(-Math.round(ageSec / 86400), "day");
 }
 
 function deviceStripSummary(
@@ -360,11 +375,13 @@ function deviceStripSummary(
   error: string | null,
   hiddenDeviceCount: number,
 ): string {
-  if (loading && connectedCount === 0) return "Loading devices";
-  if (error && connectedCount === 0) return "Devices unavailable";
-  if (hiddenDeviceCount > 0) return `${hiddenDeviceCount} more connected`;
-  if (connectedCount > 0) return "Manage devices";
-  return "No devices paired";
+  if (loading && connectedCount === 0) return i18n.t("ambient:view.deviceCountLoading");
+  if (error && connectedCount === 0) return i18n.t("ambient:deviceStrip.unavailable");
+  if (hiddenDeviceCount > 0) {
+    return i18n.t("ambient:deviceStrip.moreConnected", { count: hiddenDeviceCount });
+  }
+  if (connectedCount > 0) return i18n.t("ambient:deviceStrip.manage");
+  return i18n.t("ambient:deviceStrip.nonePaired");
 }
 
 /* ──────────────── COMPONENT ──────────────── */
@@ -382,6 +399,7 @@ interface AmbientViewProps {
 }
 
 export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHandled, onOpenFullscreen, onAmbientAction }: AmbientViewProps = {}) {
+  const { t } = useTranslation("ambient");
   const { settings } = useUserSettings();
   const { devices, loading: devicesLoading, error: devicesError } = useUserDevices(true);
   const ambientTimeline = useAmbientTimeline();
@@ -404,10 +422,10 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
   const connectedCount = connectedDevices.length;
   const hiddenDeviceCount = Math.max(0, connectedCount - visibleConnectedDevices.length);
   const deviceCountLabel = devicesLoading && connectedCount === 0
-    ? "Loading devices"
+    ? t("view.deviceCountLoading")
     : devicesError && connectedCount === 0
-      ? "devices unavailable"
-      : `${connectedCount} ${connectedCount === 1 ? "device" : "devices"}`;
+      ? t("view.deviceCountUnavailable")
+      : t("view.deviceCount", { count: connectedCount });
 
   // Shared with the NOW-view toggle via useAmbientToggle. Don't OR with
   // runtimeStatus.sources.enabled — that was an old flicker-prevention net
@@ -487,7 +505,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
 
   const useWebPreviewTimeline = !isNative && ambientTimeline.events.length === 0;
   const timelineEntries = useMemo<TimelineEntry[]>(() => {
-    if (useWebPreviewTimeline) return TIMELINE;
+    if (useWebPreviewTimeline) return demoTimeline(t);
     const pendingTranscriptWindows = ambientTimeline.pendingTranscriptWindows ?? [];
     const latestRawEvents = ambientTimeline.latestRawEvents ?? [];
     return [
@@ -507,6 +525,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
     ambientTimeline.pendingTranscriptWindows,
     handleDismissTimelineEvent,
     useWebPreviewTimeline,
+    t,
   ]);
   const visibleTimelineEntries = useMemo<TimelineEntry[]>(() => {
     if (useWebPreviewTimeline) return timelineEntries.slice(0, timelineVisibleCount);
@@ -534,12 +553,12 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
       {/* ── Header ── */}
       <div className="mb-5">
         <h1 className="text-2xl font-semibold text-foreground tracking-tight leading-tight">
-          Ambient
+          {t("view.title")}
         </h1>
         <div className="mt-1 flex items-center gap-1.5 text-bodySm text-foreground/60">
           <span>{deviceCountLabel}</span>
           <span className="text-foreground/30">·</span>
-          <span>on-device TEE</span>
+          <span>{t("view.onDeviceTee")}</span>
         </div>
       </div>
 
@@ -575,16 +594,16 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
 
           <div className="min-w-0">
             <Text variant="bodySm" weight="semibold" className="block text-foreground leading-tight">
-              Ambient is {ambientOn ? "on" : "off"}
+              {ambientOn ? t("view.ambientOn") : t("view.ambientOff")}
             </Text>
             <Text variant="caption" className="block text-foreground/55 leading-tight mt-0.5 truncate">
               {!ambientOn
-                ? "AI is paused from sensing your surroundings"
+                ? t("view.statusPaused")
                 : uploadsLocked
-                  ? "Sensing locally — uploads paused"
+                  ? t("view.statusUploadsPaused")
                   : firstSourceError
                     ? firstSourceError
-                    : "Listening, sensing, understanding context"}
+                    : t("view.statusListening")}
             </Text>
           </div>
         </div>
@@ -598,8 +617,8 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                 ? "bg-foreground text-background border-foreground"
                 : "bg-foreground/[0.04] text-foreground/60 hover:bg-foreground/[0.08] hover:text-foreground border-foreground/15"
                 }`}
-              aria-label={uploadsLocked ? "Unlock uploads" : "Lock uploads"}
-              title={uploadsLocked ? "Uploads locked" : "Lock uploads"}
+              aria-label={uploadsLocked ? t("view.unlockUploads") : t("view.lockUploads")}
+              title={uploadsLocked ? t("view.uploadsLocked") : t("view.lockUploads")}
             >
               {uploadsLocked ? (
                 <Lock size={14} strokeWidth={2.2} />
@@ -615,7 +634,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
             disabled={togglePending}
             className={`relative w-12 h-7 rounded-full transition-colors shrink-0 disabled:opacity-60 disabled:cursor-progress ${ambientOn ? "bg-foreground" : "bg-foreground/20"
               }`}
-            aria-label="Toggle ambient"
+            aria-label={t("view.toggleAmbient")}
             aria-busy={togglePending}
           >
             <motion.span
@@ -645,7 +664,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
       <button
         onClick={handleConnectMore}
         className="w-full mb-5 text-left group"
-        aria-label="Manage connected devices"
+        aria-label={t("view.manageConnectedDevices")}
       >
         <div className="glass-card p-2.5 flex items-center gap-2 transition-all group-hover:bg-foreground/[0.02]">
           <div className="flex items-center -space-x-1.5 flex-1">
@@ -679,7 +698,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
               {deviceStripSummary(connectedCount, devicesLoading, devicesError, hiddenDeviceCount)}
             </Text>
             <p className="text-micro text-foreground/45 leading-tight mt-0.5 flex items-center gap-0.5 justify-end">
-              Connect in Control <ChevronRight size={9} />
+              {t("view.connectInControl")} <ChevronRight size={9} />
             </p>
           </div>
         </div>
@@ -697,9 +716,9 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
           <div className="flex items-center justify-between mb-2">
             <p className="text-micro font-bold tracking-[0.16em] flex items-center gap-1.5">
               <Sparkles size={11} className="text-[hsl(304_75%_55%)]" />
-              <span className="text-[hsl(304_75%_45%)]">TODAY · LOCAL SUMMARY</span>
+              <span className="text-[hsl(304_75%_45%)]">{t("view.todayLocalSummary")}</span>
             </p>
-            <Text variant="micro" className="text-foreground/45 font-mono">{timelineEntries.length} entries</Text>
+            <Text variant="micro" className="text-foreground/45 font-mono">{t("view.entries", { count: timelineEntries.length })}</Text>
           </div>
           <Text variant="bodySm" className="block leading-relaxed text-foreground/85">{ambientTimeline.narrativeSummary}</Text>
         </div>
@@ -720,11 +739,11 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
           <div className="flex items-center justify-between mb-2">
             <p className="text-micro font-bold tracking-[0.16em] flex items-center gap-1.5">
               <Sparkles size={11} className="text-[hsl(304_75%_55%)]" />
-              <span className="text-[hsl(304_75%_45%)]">TODAY · NARRATIVE SUMMARY</span>
+              <span className="text-[hsl(304_75%_45%)]">{t("view.todayNarrativeSummary")}</span>
             </p>
-            <Text variant="micro" className="text-foreground/45 font-mono">{timelineEntries.length} entries</Text>
+            <Text variant="micro" className="text-foreground/45 font-mono">{t("view.entries", { count: timelineEntries.length })}</Text>
           </div>
-          <Text variant="bodySm" className="block leading-relaxed text-foreground/85">{NARRATIVE_SUMMARY}</Text>
+          <Text variant="bodySm" className="block leading-relaxed text-foreground/85">{t("demo.narrative")}</Text>
         </div>
       )}
 
@@ -750,14 +769,14 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
               </div>
             )}
             <Text variant="bodySm" weight="semibold" className="block text-foreground/80">
-              {ambientTimeline.loading ? "Building local timeline…" : "No local timeline events yet"}
+              {ambientTimeline.loading ? t("view.buildingTimeline") : t("view.noTimelineEvents")}
             </Text>
             <Text variant="label" className="block mt-1 text-foreground/50 leading-snug">
               {ambientTimeline.error
                 ? ambientTimeline.error
                 : ambientOn
-                  ? "Keep Ambient on while Visit, Location, Motion, and Health collect real signals."
-                  : "Turn Ambient on to create timeline events from local signals."}
+                  ? t("view.emptyKeepOn")
+                  : t("view.emptyTurnOn")}
             </Text>
             {ambientTimeline.storeStatus?.lastError && (
               <Text variant="caption" className="block mt-2 text-red-500">
@@ -795,7 +814,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                         <span className="text-foreground/30">·</span>
                         <span className="inline-flex items-center gap-0.5 text-[hsl(304_75%_55%)] font-medium">
                           <span className="w-1.5 h-1.5 rounded-full bg-[hsl(304_75%_63%)]" />
-                          private
+                          {t("view.privateBadge")}
                         </span>
                       </>
                     )}
@@ -804,7 +823,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                         <span className="text-foreground/30">·</span>
                         <span className="inline-flex items-center gap-0.5 text-[hsl(304_75%_55%)] font-medium">
                           <span className="w-1.5 h-1.5 rounded-full bg-[hsl(304_75%_63%)]" />
-                          sensitive
+                          {t("view.sensitiveBadge")}
                         </span>
                       </>
                     )}
@@ -812,7 +831,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                       <>
                         <span className="text-foreground/30">·</span>
                         <span className="inline-flex items-center gap-0.5 text-foreground/45 font-medium">
-                          uncertain
+                          {t("view.uncertainBadge")}
                         </span>
                       </>
                     )}
@@ -821,7 +840,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                     <button
                       onClick={entry.onDismiss}
                       className="text-foreground/30 hover:text-foreground/60 shrink-0"
-                      aria-label="Dismiss"
+                      aria-label={t("view.dismissAria")}
                     >
                       <X size={13} />
                     </button>
@@ -860,7 +879,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                     }}
                   >
                     <p className="text-micro font-bold uppercase tracking-[0.14em] text-[hsl(304_75%_45%)] mb-1 flex items-center gap-1">
-                      → Triggered this card
+                      {t("view.triggeredThisCard")}
                     </p>
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1.5 min-w-0">
@@ -880,7 +899,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                         }
                         className="text-caption font-semibold text-[hsl(304_75%_45%)] shrink-0 flex items-center gap-0.5 hover:text-[hsl(304_75%_35%)]"
                       >
-                        Open →
+                        {t("view.open")}
                       </button>
                     </div>
                   </div>
@@ -899,7 +918,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
             }}
             className="w-full rounded-2xl border border-foreground/[0.08] bg-foreground/[0.035] px-4 py-3 text-label font-semibold text-foreground/65 hover:bg-foreground/[0.06] hover:text-foreground/80 transition-colors"
           >
-            Load more · {timelineEntries.length - visibleTimelineEntries.length} older
+            {t("view.loadMore", { count: timelineEntries.length - visibleTimelineEntries.length })}
           </button>
         )}
       </div>
@@ -909,8 +928,8 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
         <Lightbulb size={10} />
         <span>
           {ambientOn
-            ? "Live assist appears whenever a real-world session is detected"
-            : "Turn ambient on to enable real-time assist during meetings, visits, conversations"}
+            ? t("view.hintLiveAssist")
+            : t("view.hintEnableAssist")}
         </span>
       </div>
 
@@ -923,7 +942,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
             exit={{ opacity: 0 }}
             role="dialog"
             aria-modal="true"
-            aria-label="Ambient model setup"
+            aria-label={t("view.modelSetupAria")}
           >
             <motion.div
               className="w-full rounded-3xl bg-background p-3 shadow-2xl"
@@ -936,7 +955,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
                   type="button"
                   onClick={() => setModelSetupOpen(false)}
                   className="flex h-8 w-8 items-center justify-center rounded-full bg-foreground/[0.06] text-foreground/60"
-                  aria-label="Close model setup"
+                  aria-label={t("view.closeModelSetupAria")}
                 >
                   <X size={14} />
                 </button>
@@ -958,6 +977,7 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
   session: LiveSession;
   onClose: () => void;
 }>(function LiveFullscreen({ session, onClose }, ref) {
+  const { t } = useTranslation("ambient");
   const [elapsed, setElapsed] = useState(0);
   const [isFollowingLive, setIsFollowingLive] = useState(true);
   const [unseenCount, setUnseenCount] = useState(0);
@@ -1057,7 +1077,7 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
       }}
       role="dialog"
       aria-modal="true"
-      aria-label="Live session focus mode"
+      aria-label={t("live.focusModeAria")}
     >
       {/* Pink halo backdrop */}
       <div
@@ -1086,7 +1106,7 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
             <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[hsl(304_75%_70%)]" />
           </span>
           <Text variant="caption" weight="bold" className="uppercase tracking-[0.22em] text-[hsl(304_75%_78%)] truncate">
-            Live · {session.kind}
+            {t("live.label", { kind: session.kind })}
           </Text>
           <Text variant="caption" className="tabular-nums text-white/55 font-mono ml-1.5 shrink-0">
             {fmt(elapsed)}
@@ -1095,10 +1115,10 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
         <button
           onClick={onClose}
           className="shrink-0 px-3.5 h-9 rounded-full text-bodySm font-medium text-white/85 hover:text-white bg-white/[0.06] hover:bg-white/[0.12] border border-white/[0.08] transition-colors flex items-center gap-1.5"
-          aria-label="Exit fullscreen"
+          aria-label={t("live.exitFullscreenAria")}
         >
           <Minimize2 size={14} strokeWidth={2.2} />
-          Exit
+          {t("live.exit")}
         </button>
       </div>
 
@@ -1140,7 +1160,7 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
         <div className="flex items-center gap-2.5 py-2.5 border-y border-white/[0.06]">
           <Sparkles size={11} className="text-[hsl(304_75%_75%)]" />
           <Text variant="micro" weight="bold" className="uppercase tracking-[0.22em] text-[hsl(304_75%_75%)]">
-            Real-time assist
+            {t("live.realTimeAssist")}
           </Text>
           <Text variant="micro" className="ml-auto text-white/40 font-mono tabular-nums">
             {visibleCount}/{session.assists.length}
@@ -1186,10 +1206,10 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
                 exit={{ opacity: 0, y: 8, scale: 0.96 }}
                 transition={{ duration: 0.22, ease: "easeOut" }}
                 className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-[hsl(304_75%_70%/0.35)] bg-[hsl(0_0%_4%/0.88)] px-3 py-2 text-label font-semibold text-[hsl(304_75%_82%)] shadow-lg backdrop-blur-md"
-                aria-label={`Show ${unseenCount} new live message${unseenCount === 1 ? "" : "s"}`}
+                aria-label={t("live.newMessagesAria", { count: unseenCount })}
               >
                 <ChevronDown size={14} strokeWidth={2.2} />
-                <span>{unseenCount} new</span>
+                <span>{t("live.newCount", { count: unseenCount })}</span>
               </motion.button>
             </div>
           )}
@@ -1200,9 +1220,9 @@ export const LiveFullscreen = forwardRef<HTMLDivElement, {
       <div className="absolute bottom-0 left-0 right-0 px-6 py-4 border-t border-white/[0.06] bg-black/40 backdrop-blur-md">
         <div className="max-w-3xl mx-auto flex items-center justify-between text-caption text-white/45">
           <span className="flex items-center gap-1.5">
-            <Lightbulb size={11} /> Focus mode · messages stream as they happen
+            <Lightbulb size={11} /> {t("live.footerHint")}
           </span>
-          <span className="hidden md:inline">Press Esc to exit</span>
+          <span className="hidden md:inline">{t("live.pressEsc")}</span>
         </div>
       </div>
     </motion.div>
@@ -1222,6 +1242,7 @@ function LiveFullscreenAssistRow({
   animated,
   onAnimationComplete,
 }: LiveFullscreenAssistRowProps) {
+  const { t } = useTranslation("ambient");
   const key = liveAssistKey(assist);
   const content = (
     <>
@@ -1234,7 +1255,7 @@ function LiveFullscreenAssistRow({
       <div className="min-w-0 flex-1">
         {assist.kind === "action" && (
           <Text variant="micro" weight="bold" className="inline-block mb-1.5 px-1.5 py-0.5 rounded uppercase tracking-wider bg-[hsl(304_75%_63%)] text-white">
-            Action
+            {t("live.actionBadge")}
           </Text>
         )}
         <p
@@ -1248,7 +1269,7 @@ function LiveFullscreenAssistRow({
           {assist.text}
         </p>
         {assist.source && (
-          <Text variant="caption" className="block text-white/40 mt-1">via {assist.source}</Text>
+          <Text variant="caption" className="block text-white/40 mt-1">{t("live.viaSource", { source: assist.source })}</Text>
         )}
       </div>
     </>

@@ -30,6 +30,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { resolveToolPresentationMeta, type ToolIconKey } from "@pin-ai/core";
+import i18n from "../../i18n";
 
 export interface ToolPresentation {
   Icon: LucideIcon;
@@ -63,6 +64,10 @@ const TOOL_ICONS: Record<ToolIconKey, LucideIcon> = {
 };
 
 export function resolveToolPresentation(toolName: string): ToolPresentation {
-  const { iconKey, verb } = resolveToolPresentationMeta(toolName);
-  return { Icon: TOOL_ICONS[iconKey], verb };
+  const { iconKey, verb, verbKey } = resolveToolPresentationMeta(toolName);
+  return {
+    Icon: TOOL_ICONS[iconKey],
+    // 已知工具走 i18n;unknown-tool 兜底没有 verbKey,回落英文 Title-Case verb。
+    verb: verbKey ? i18n.t(`chat:toolVerbs.${verbKey}`) : verb,
+  };
 }

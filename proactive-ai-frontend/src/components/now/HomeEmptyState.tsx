@@ -1,4 +1,5 @@
 import { ChevronRight, Mic, Plug } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { VoicePermissionState } from "@/hooks/useVoicePermission";
 import { Text } from "@pin-ai/ui-web";
 
@@ -71,6 +72,7 @@ export default function HomeEmptyState({
   onConnect,
   onReviewPermissions,
 }: HomeEmptyStateProps) {
+  const { t } = useTranslation("card");
   const needVoice = voiceState === "missing";
   const needConnect = connectorsKnown && connectorCount === 0;
   // The permissions panel is only meaningful where native ambient sensors
@@ -81,11 +83,10 @@ export default function HomeEmptyState({
     return (
       <div className="flex h-full flex-col items-center justify-center px-8 pb-40 text-center">
         <Text variant="body" weight="semibold" className="block text-foreground/80">
-          Your feed is warming up
+          {t("emptyState.warmingUpTitle")}
         </Text>
         <Text variant="bodySm" className="block mt-1.5 max-w-[18rem] leading-relaxed text-foreground/50">
-          Generating cards can take a few minutes to a few hours. We'll notify
-          you the moment they're ready.
+          {t("emptyState.warmingUpBody")}
         </Text>
       </div>
     );
@@ -94,22 +95,22 @@ export default function HomeEmptyState({
   return (
     <div className="px-5 pt-3">
       <Text variant="bodySm" weight="medium" className="block mb-2.5 text-foreground/55">
-        Let's get your feed going
+        {t("emptyState.checklistTitle")}
       </Text>
       <div className="divide-y divide-foreground/[0.06] overflow-hidden rounded-2xl border border-foreground/[0.06] bg-foreground/[0.04] shadow-sm">
         {needVoice && (
           <ChecklistRow
             icon={Mic}
-            title="Turn on voice"
-            subtitle="Let PIN AI sense your day to suggest cards"
+            title={t("emptyState.voiceTitle")}
+            subtitle={t("emptyState.voiceSubtitle")}
             onClick={onEnableVoice}
           />
         )}
         {needConnect && (
           <ChecklistRow
             icon={Plug}
-            title="Connect your apps"
-            subtitle="Gmail, Calendar & more — so PIN AI has context"
+            title={t("emptyState.connectTitle")}
+            subtitle={t("emptyState.connectSubtitle")}
             onClick={onConnect}
           />
         )}
@@ -120,7 +121,7 @@ export default function HomeEmptyState({
           onClick={onReviewPermissions}
           className="mt-3 px-1 text-label text-foreground/45 underline-offset-2 hover:underline"
         >
-          Review permissions
+          {t("emptyState.reviewPermissions")}
         </button>
       )}
     </div>

@@ -76,7 +76,7 @@ export type SupportedGenerationLanguage = 'en' | 'zh-Hans' | 'ja' | 'ko' | 'es' 
 
 export const GENERATION_LANGUAGE_OPTIONS: { value: SupportedGenerationLanguage; label: string }[] = [
   { value: 'en', label: 'English' },
-  { value: 'zh-Hans', label: 'Simplified Chinese' },
+  { value: 'zh-Hans', label: '简体中文' },
   { value: 'ja', label: '日本語' },
   { value: 'ko', label: '한국어' },
   { value: 'es', label: 'Español' },

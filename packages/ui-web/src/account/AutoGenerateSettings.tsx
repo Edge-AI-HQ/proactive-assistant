@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useUserSettings } from "@pin-ai/state";
+import i18n from "../i18n";
 import { Text } from "../primitives/Text";
 
 // Preset interval buckets surfaced in the UI. Server enforces 15–1440min
@@ -8,14 +10,15 @@ import { Text } from "../primitives/Text";
 const PRESETS_MINUTES = [30, 60, 120, 240, 720, 1440] as const;
 
 function formatPreset(min: number): string {
-  if (min < 60) return `${min} min`;
-  if (min % 60 !== 0) return `${(min / 60).toFixed(1)} h`;
+  if (min < 60) return i18n.t("account:duration.minutes", { value: min });
+  if (min % 60 !== 0) return i18n.t("account:duration.hours", { value: (min / 60).toFixed(1) });
   const h = min / 60;
-  if (h < 24) return `${h} h`;
-  return `${h / 24} day${h === 24 ? "" : "s"}`;
+  if (h < 24) return i18n.t("account:duration.hours", { value: h });
+  return i18n.t("account:duration.days", { count: h / 24 });
 }
 
 export default function AutoGenerateSettings() {
+  const { t } = useTranslation("account");
   const { settings, loading, saving, error, patch } = useUserSettings();
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const savedTimerRef = useRef<number | null>(null);
@@ -52,7 +55,7 @@ export default function AutoGenerateSettings() {
     <div className="mb-3">
       <div className="flex items-center gap-3">
         <div className="flex-1 min-w-0 flex items-center gap-2.5">
-          <h3 className="text-sm font-medium text-foreground/80">Auto Generate</h3>
+          <h3 className="text-sm font-medium text-foreground/80">{t("autoGenerate.title")}</h3>
           {saving && <Loader2 size={12} className="animate-spin text-foreground/40" />}
           {!saving && savedAt && <Check size={12} className="text-emerald-500" />}
         </div>
@@ -72,10 +75,10 @@ export default function AutoGenerateSettings() {
         </button>
       </div>
       <Text variant="caption" className="block text-foreground/40 mt-1">
-        Automatically generate cards based on new data from your connected sources.
+        {t("autoGenerate.description")}
       </Text>
       <div className="mt-2 flex items-center gap-2">
-        <label className="text-caption text-foreground/60">Every</label>
+        <label className="text-caption text-foreground/60">{t("every")}</label>
         <select
           value={intervalMinutes}
           disabled={loading || saving || !enabled}

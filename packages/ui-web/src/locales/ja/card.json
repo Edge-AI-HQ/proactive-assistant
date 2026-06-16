@@ -1,0 +1,100 @@
+{
+  "category": {
+    "growth": "成長",
+    "work": "仕事",
+    "finance": "お金",
+    "health": "健康",
+    "learn": "学習",
+    "life": "生活"
+  },
+  "tag": {
+    "urgent": "緊急"
+  },
+  "scheduledSource": "スケジュール · {{label}}",
+  "score": {
+    "confidence": "確信度",
+    "importance": "重要度",
+    "urgency": "緊急度"
+  },
+  "sourceApp": {
+    "calendar": "カレンダー",
+    "drive": "ドライブ",
+    "docs": "ドキュメント",
+    "sheets": "スプレッドシート",
+    "web": "Web",
+    "memory": "メモリー",
+    "phone": "スマートフォン",
+    "profile": "プロフィール",
+    "goal": "目標",
+    "preference": "好み"
+  },
+  "reasoningStep": {
+    "observed": "観察",
+    "crossReferenced": "相互参照",
+    "patternMatched": "パターン検出",
+    "flagged": "フラグ付け",
+    "decided": "決定"
+  },
+  "drawer": {
+    "srTitleFallback": "カードの詳細",
+    "srDescription": "カードの詳細ビュー",
+    "quickApprove": "クイック承認",
+    "quickApproveHint": "低リスクのタスクです。通常はそのまま承認して問題ありません",
+    "dismiss": "却下",
+    "chat": "チャット",
+    "approve": "承認",
+    "opening": "開いています…"
+  },
+  "detail": {
+    "howReasoned": "推論の流れ",
+    "stepCount_other": "{{count}}ステップ",
+    "whyNow": "なぜ今なのか",
+    "executionPlan": "実行プラン",
+    "generatedDrafts_other": "生成されたドラフト",
+    "approvingTitle": "承認するとエージェントは次を実行できます：",
+    "risksTitle": "考慮すべきリスク",
+    "sourcesTitle": "情報源"
+  },
+  "fallback": {
+    "agentNote": "エージェントのメモ",
+    "calledTool": "{{name}} を呼び出し"
+  },
+  "statusBanner": {
+    "preparing": "エージェントがプランを準備しています。少々お待ちください。",
+    "resuming": "再開中…",
+    "resultTitle": "結果",
+    "resultFallback": "完了しました。",
+    "failedTitle": "失敗",
+    "failedFallback": "実行に失敗しました。",
+    "cancelled": "キャンセルしました。「再試行」をタップすると新しく実行できます。"
+  },
+  "now": {
+    "greeting": "こんにちは、<nameSpan>{{name}}</nameSpan>さん",
+    "greetingFallbackName": "ゲスト",
+    "feedSummary_other": "あなたのプロアクティブフィード · 今日のカードは{{count}}件",
+    "openAmbient": "アンビエントを開く",
+    "toggleAmbient": "アンビエントを切り替え",
+    "ambientOn": "アンビエントはオンです",
+    "ambientOff": "アンビエントはオフです",
+    "ambientTapToStart": "タップしてコンテキストの感知を開始",
+    "ambientQuiet": "アンビエントは静かです。ソースを接続するとシグナルが流れ始めます"
+  },
+  "emptyState": {
+    "warmingUpTitle": "フィードを準備中です",
+    "warmingUpBody": "カードの生成には数分から数時間かかることがあります。準備ができ次第すぐにお知らせします。",
+    "checklistTitle": "フィードを始めましょう",
+    "voiceTitle": "音声をオンにする",
+    "voiceSubtitle": "PIN AI があなたの1日を感知してカードを提案します",
+    "connectTitle": "アプリを接続",
+    "connectSubtitle": "Gmail やカレンダーなど — PIN AI がコンテキストを把握できるように",
+    "reviewPermissions": "権限を確認"
+  },
+  "sphere": {
+    "quick": "クイック",
+    "badgeNew": "新着",
+    "badgeInput": "入力",
+    "badgeReady": "準備完了",
+    "badgeFailed": "失敗",
+    "badgeDone": "完了"
+  }
+}

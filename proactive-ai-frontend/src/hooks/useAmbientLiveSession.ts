@@ -8,7 +8,7 @@ import {
   rawTranscriptEventsToLiveSessionData,
   rawTranscriptEventsToHistory,
   rawEventsToLiveSessionContextItems,
-  LIVE_SCENARIOS,
+  demoLiveScenarios,
   type LiveSession,
   type LiveSessionData,
   type LiveSessionContextItem,
@@ -174,13 +174,13 @@ export function useAmbientLiveSession({
   );
 
   const session = ambientOn && !liveDismissed
-    ? (realSession ?? (enableWebDemo && !isNative ? LIVE_SCENARIOS[liveIndex] : null))
+    ? (realSession ?? (enableWebDemo && !isNative ? demoLiveScenarios()[liveIndex] : null))
     : null;
 
   useEffect(() => {
     if (!ambientOn || isNative || realSession || !enableWebDemo) return;
     const t = setInterval(() => {
-      setLiveIndex((i) => (i + 1) % LIVE_SCENARIOS.length);
+      setLiveIndex((i) => (i + 1) % demoLiveScenarios().length);
       setLiveDismissed(false);
     }, 12000);
     return () => clearInterval(t);

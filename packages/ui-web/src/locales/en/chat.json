@@ -1,0 +1,202 @@
+{
+  "toolVerbs": {
+    "ran": "Ran",
+    "ranCommand": "Ran command",
+    "executed": "Executed",
+    "ranPython": "Ran Python",
+    "browsed": "Browsed",
+    "searchedWeb": "Searched web",
+    "readPages": "Read pages",
+    "searchedNews": "Searched news",
+    "searchedMemory": "Searched memory",
+    "searchedX": "Searched X",
+    "fetched": "Fetched",
+    "read": "Read",
+    "wrote": "Wrote",
+    "edited": "Edited",
+    "patched": "Patched",
+    "messaged": "Messaged",
+    "readImage": "Read image",
+    "generatedImage": "Generated image",
+    "generatedVideo": "Generated video",
+    "generatedMusic": "Generated music",
+    "spoke": "Spoke",
+    "drew": "Drew",
+    "scheduled": "Scheduled",
+    "checkedSession": "Checked session",
+    "listedSessions": "Listed sessions",
+    "loadedHistory": "Loaded history",
+    "sent": "Sent",
+    "spawnedAgent": "Spawned agent",
+    "delegatedToAgent": "Delegated to agent",
+    "delegated": "Delegated",
+    "updatedPlan": "Updated plan",
+    "messagedYou": "Messaged you",
+    "searchedGmail": "Searched Gmail",
+    "draftedEmail": "Drafted email",
+    "usedGmail": "Used Gmail",
+    "readCalendar": "Read calendar",
+    "updatedCalendar": "Updated calendar",
+    "usedCalendar": "Used calendar",
+    "searchedNotion": "Searched Notion",
+    "sentOnSlack": "Sent on Slack",
+    "searchedSlack": "Searched Slack",
+    "searchedDrive": "Searched Drive"
+  },
+  "landing": {
+    "heading": "What's on your mind?",
+    "subheading": "Ask anything — I have your context.",
+    "suggestions": {
+      "focusToday": "What should I focus on today?",
+      "summarizeWeek": "Summarize my week so far",
+      "onMyMind": "What's on my mind lately?"
+    }
+  },
+  "composer": {
+    "placeholder": "Message PIN AI…",
+    "voiceInput": "Voice input",
+    "send": "Send",
+    "stop": "Stop",
+    "dismissKeyboard": "Dismiss keyboard",
+    "cancelRecording": "Cancel recording",
+    "useTranscript": "Use transcript"
+  },
+  "actionBar": {
+    "copyMessage": "Copy message",
+    "copy": "Copy",
+    "goodResponse": "Good response",
+    "badResponse": "Bad response",
+    "regenerateResponse": "Regenerate response",
+    "regenerate": "Regenerate"
+  },
+  "cardFeedback": {
+    "helpfulPrompt": "Helpful?",
+    "helpful": "Helpful",
+    "notHelpful": "Not helpful",
+    "sent": "Sent",
+    "comment": "Comment",
+    "commentPlaceholder": "Feedback on this card (won't message the agent)…",
+    "sendFeedback": "Send feedback"
+  },
+  "userEntry": {
+    "notSent": "Not sent",
+    "editMessage": "Edit message"
+  },
+  "queued": {
+    "badge": "Queued",
+    "regionLabel": "Queued messages",
+    "save": "Save",
+    "saveAria": "Save queued message",
+    "cancelEditAria": "Cancel queued edit",
+    "edit": "Edit",
+    "editAria": "Edit queued message",
+    "sendNow": "Send now",
+    "delete": "Delete",
+    "deleteAria": "Delete queued message",
+    "queueMessage": "Queue message"
+  },
+  "notify": {
+    "label": "Notify you"
+  },
+  "transcript": {
+    "cardEmptyState": "Ask the agent to act on this card, or send it a message.",
+    "scrollToLatest": "Scroll to latest"
+  },
+  "header": {
+    "back": "Back",
+    "debug": "Debug",
+    "proactive": "Proactive",
+    "proactiveToggle": "Proactive agent on/off",
+    "dismiss": "Dismiss"
+  },
+  "workGroup": {
+    "subtasksRunning_one": "{{count}} subtask running",
+    "subtasksRunning_other": "{{count}} subtasks running",
+    "runningSubtask": "Running subtask",
+    "working": "Working…",
+    "ranSubtasks_one": "Ran {{count}} subtask",
+    "ranSubtasks_other": "Ran {{count}} subtasks",
+    "usedTools_one": "Used {{count}} tool",
+    "usedTools_other": "Used {{count}} tools",
+    "thought": "Thought",
+    "steps_one": "{{count}} step",
+    "steps_other": "{{count}} steps"
+  },
+  "toolNode": {
+    "results_one": "{{count}} result",
+    "results_other": "{{count}} results"
+  },
+  "taskCard": {
+    "subtask": "Subtask",
+    "toolCount_one": "{{count}} tool",
+    "toolCount_other": "{{count}} tools",
+    "showMore": "Show more ({{count}})",
+    "noActivity": "No tool activity yet."
+  },
+  "todoPanel": {
+    "plan": "Plan",
+    "planDone": "Plan done",
+    "progress": "{{completed}}/{{total}} done",
+    "collapsePlan": "Collapse plan",
+    "expandPlan": "Expand plan",
+    "closePlan": "Close plan"
+  },
+  "reasoning": {
+    "thoughtForSeconds": "Thought for {{seconds}}s",
+    "thoughtProcess": "Thought process"
+  },
+  "hitl": {
+    "needsApproval": "Needs your approval",
+    "rejectReasonPlaceholder": "Optional: tell the agent why (it continues without running the tool)",
+    "back": "Back",
+    "reject": "Reject",
+    "approve": "Approve",
+    "resolvedEarlier": "Resolved earlier"
+  },
+  "proposeAction": {
+    "needsInput": "Needs your input",
+    "replySent": "Reply sent",
+    "typeOwnReplyPlaceholder": "Or type your own reply...",
+    "typeReplyPlaceholder": "Type your reply...",
+    "sent": "Sent",
+    "sending": "Sending…",
+    "continue": "Continue"
+  },
+  "artifact": {
+    "emailDraft": "Email draft",
+    "notes": "Notes",
+    "messageDraft": "Message draft",
+    "document": "Document",
+    "draft": "Draft",
+    "failed": "Failed",
+    "open": "Open ↗",
+    "verbSent": "Sent",
+    "verbPosted": "Posted",
+    "verbCreated": "Created"
+  },
+  "cardContext": {
+    "context": "Context",
+    "viewDetails": "View card details",
+    "more": "+{{count}} more",
+    "messagePlaceholder": "Message about this card...",
+    "drawerDescription": "Card detail view",
+    "quickApprove": "Quick approve",
+    "quickApproveHint": "Low-risk task — usually safe to approve as-is"
+  },
+  "categories": {
+    "growth": "Growth",
+    "work": "Work",
+    "finance": "Finance",
+    "health": "Health",
+    "learn": "Learn",
+    "life": "Life"
+  },
+  "mainChat": {
+    "cardFeedbackPlaceholder": "Tell PIN AI what to change about this card…",
+    "feedbackOnCard": "Feedback on this card"
+  },
+  "codeBlock": {
+    "copy": "Copy",
+    "copied": "Copied"
+  }
+}

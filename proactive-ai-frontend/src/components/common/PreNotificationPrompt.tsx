@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Bell } from "lucide-react";
 
 /**
@@ -42,6 +43,7 @@ export function PreNotificationPrompt({
   onAccept,
   onDecline,
 }: PreNotificationPromptProps) {
+  const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
 
   const handleAccept = useCallback(async () => {
@@ -100,15 +102,13 @@ export function PreNotificationPrompt({
             id="prenotif-title"
             className="text-lg font-semibold leading-none tracking-tight"
           >
-            Turn on notifications
+            {t("notificationPrompt.title")}
           </h2>
           <p
             id="prenotif-desc"
             className="text-base leading-relaxed text-muted-foreground"
           >
-            Generating cards can take a few minutes to a few hours. With
-            notifications on, we'll alert you the moment they're ready — no need
-            to keep watching the app.
+            {t("notificationPrompt.description")}
           </p>
         </div>
         <div className="flex flex-col gap-2 p-4">
@@ -118,7 +118,7 @@ export function PreNotificationPrompt({
             disabled={busy}
             className="w-full rounded-md bg-primary text-primary-foreground py-3 text-sm font-medium disabled:opacity-60"
           >
-            Turn on
+            {t("notificationPrompt.turnOn")}
           </button>
           <button
             type="button"
@@ -126,7 +126,7 @@ export function PreNotificationPrompt({
             disabled={busy}
             className="w-full rounded-md bg-transparent text-muted-foreground py-3 text-sm disabled:opacity-60"
           >
-            Later
+            {t("notificationPrompt.later")}
           </button>
         </div>
       </div>

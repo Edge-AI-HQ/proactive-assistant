@@ -1,4 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
+import { useTranslation } from "react-i18next";
 import { Expand, MapPin, Mic, Radio, X } from "lucide-react";
 import type { LiveSession } from "@/services/ambient/live-session";
 import { Text } from "@pin-ai/ui-web";
@@ -20,13 +21,14 @@ export default function LiveSessionCard({
   onFocus,
   onDismiss,
 }: LiveSessionCardProps) {
+  const { t } = useTranslation("ambient");
   if (!session && !alwaysVisible) return null;
   const isNow = variant === "now";
   const isIdle = !session;
-  const title = session?.title ?? "Live standby";
-  const kind = session?.kind ?? "Standby";
-  const location = session?.location ?? "Waiting for ambient session";
-  const device = session?.device ?? "Ambient sensors";
+  const title = session?.title ?? t("liveCard.standbyTitle");
+  const kind = session?.kind ?? t("liveCard.standbyKind");
+  const location = session?.location ?? t("liveCard.standbyLocation");
+  const device = session?.device ?? t("liveCard.standbyDevice");
   const SessionIcon = session?.icon ?? Radio;
 
   return (
@@ -61,7 +63,7 @@ export default function LiveSessionCard({
             <span className={`relative inline-flex rounded-full h-2 w-2 ${isIdle ? "bg-foreground/35" : "bg-[hsl(304_75%_63%)]"}`} />
           </span>
           <span className={`text-micro font-bold uppercase tracking-[0.16em] truncate ${isIdle ? "text-foreground/50" : "text-[hsl(304_75%_42%)]"}`}>
-            Live · {kind}
+            {t("live.label", { kind })}
           </span>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
@@ -69,18 +71,18 @@ export default function LiveSessionCard({
             <button
               onClick={() => onFocus(session)}
               className="h-9 px-3.5 rounded-full flex items-center gap-1.5 text-label font-semibold text-[hsl(304_75%_32%)] hover:text-[hsl(304_75%_22%)] bg-[hsl(304_75%_63%/0.16)] hover:bg-[hsl(304_75%_63%/0.26)] border border-[hsl(304_75%_63%/0.35)] active:scale-[0.97] transition-all shadow-sm"
-              aria-label="Open fullscreen session"
-              title="Focus mode"
+              aria-label={t("liveCard.openFullscreenAria")}
+              title={t("liveCard.focusModeTitle")}
             >
               <Expand size={14} strokeWidth={2.4} />
-              <span>Focus</span>
+              <span>{t("liveCard.focus")}</span>
             </button>
           )}
           {!isNow && onDismiss && (
             <button
               onClick={onDismiss}
               className="w-9 h-9 rounded-full flex items-center justify-center text-foreground/70 hover:text-foreground bg-foreground/[0.05] hover:bg-foreground/[0.12] border border-foreground/[0.10] active:scale-[0.97] transition-all"
-              aria-label="End session"
+              aria-label={t("liveCard.endSessionAria")}
             >
               <X size={17} strokeWidth={2.2} />
             </button>
@@ -164,7 +166,7 @@ export default function LiveSessionCard({
                         >
                           {a.kind === "action" && (
                             <Text variant="micro" weight="bold" className="inline-block mr-1.5 px-1.5 py-0 rounded uppercase tracking-wider bg-[hsl(304_75%_63%)] text-white align-middle">
-                              Action
+                              {t("live.actionBadge")}
                             </Text>
                           )}
                           {a.text}
@@ -181,7 +183,7 @@ export default function LiveSessionCard({
           <div className="rounded-xl border border-dashed border-foreground/15 bg-foreground/[0.03] px-3 py-3 flex items-center gap-2.5">
             <Mic size={14} className="text-foreground/45 shrink-0" />
             <Text variant="bodySm" className="block leading-snug text-foreground/55">
-              No active live session yet. When Ambient captures a real-world session, it will appear here automatically.
+              {t("liveCard.empty")}
             </Text>
           </div>
         </div>

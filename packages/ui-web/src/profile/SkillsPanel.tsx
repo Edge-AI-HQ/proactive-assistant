@@ -11,6 +11,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { useTranslation } from "react-i18next";
 import {
   BookOpen,
   ChevronDown,
@@ -30,11 +31,7 @@ interface SkillsPanelProps {
   enabled: boolean;
 }
 
-const STATUS_TABS: Array<{ key: SkillStatus; label: string }> = [
-  { key: "enabled", label: "Enabled" },
-  { key: "disabled", label: "Disabled" },
-  { key: "archived", label: "Archived" },
-];
+const STATUS_TABS: SkillStatus[] = ["enabled", "disabled", "archived"];
 
 const STATUS_STYLES: Record<SkillStatus, string> = {
   enabled: "bg-emerald-50 text-emerald-700 border-emerald-200",
@@ -58,6 +55,7 @@ function relativeTime(iso: string | null | undefined): string {
 }
 
 export default function SkillsPanel({ enabled }: SkillsPanelProps) {
+  const { t } = useTranslation("profile");
   const { skills, loading, mutating, error, filter, setFilter, refetch, create, update, archive } =
     useSkills(enabled);
 
@@ -83,7 +81,7 @@ export default function SkillsPanel({ enabled }: SkillsPanelProps) {
       <div className="flex items-center justify-between mb-2.5">
         <div className="flex items-center gap-2">
           <BookOpen size={14} strokeWidth={1.5} className="text-foreground/40" />
-          <span className="text-xs font-medium text-foreground/50">Skills</span>
+          <span className="text-xs font-medium text-foreground/50">{t("skillsPanel.title")}</span>
           {loading && (
             <Loader2 size={11} className="animate-spin text-foreground/30" strokeWidth={1.5} />
           )}
@@ -92,7 +90,7 @@ export default function SkillsPanel({ enabled }: SkillsPanelProps) {
           <button
             onClick={() => void refetch()}
             disabled={loading}
-            title="Refresh"
+            title={t("skillsPanel.refresh")}
             className="p-1 rounded-md text-foreground/30 hover:text-foreground/60 hover:bg-foreground/5 disabled:opacity-40"
           >
             <RefreshCw size={11} strokeWidth={1.5} className={loading ? "animate-spin" : ""} />
@@ -102,7 +100,7 @@ export default function SkillsPanel({ enabled }: SkillsPanelProps) {
             className="inline-flex items-center gap-1 rounded-md bg-foreground text-background text-micro font-semibold px-2 py-1 hover:bg-foreground/85"
           >
             <Plus size={10} strokeWidth={2} />
-            New
+            {t("skillsPanel.new")}
           </button>
         </div>
       </div>
@@ -111,16 +109,16 @@ export default function SkillsPanel({ enabled }: SkillsPanelProps) {
       <div className="flex items-center gap-1 mb-2">
         {STATUS_TABS.map((tab) => (
           <button
-            key={tab.key}
-            onClick={() => setStatus(tab.key)}
+            key={tab}
+            onClick={() => setStatus(tab)}
             className={cn(
               "rounded-md px-2 py-0.5 text-micro font-medium transition-colors",
-              status === tab.key
+              status === tab
                 ? "bg-foreground text-background"
                 : "bg-foreground/5 text-foreground/50 hover:bg-foreground/10",
             )}
           >
-            {tab.label}
+            {t(`skillsPanel.tabs.${tab}`)}
           </button>
         ))}
       </div>
@@ -130,7 +128,7 @@ export default function SkillsPanel({ enabled }: SkillsPanelProps) {
         type="text"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search title / description / trigger"
+        placeholder={t("skillsPanel.searchPlaceholder")}
         className="w-full rounded-md bg-white/60 border border-foreground/10 px-2 py-1 text-caption text-foreground focus:outline-none focus:ring-1 focus:ring-primary/30 mb-2"
       />
 
@@ -160,7 +158,7 @@ export default function SkillsPanel({ enabled }: SkillsPanelProps) {
       <div className="space-y-1">
         {skills.length === 0 && !loading && (
           <div className="text-micro text-foreground/40 py-3 text-center">
-            No {status} skills.
+            {t(`skillsPanel.emptyList.${status}`)}
           </div>
         )}
         {skills.map((skill) => (
@@ -191,6 +189,7 @@ interface SkillRowProps {
 }
 
 function SkillRow({ skill, expanded, mutating, onToggle, onUpdate, onArchive }: SkillRowProps) {
+  const { t } = useTranslation("profile");
   const [title, setTitle] = useState(skill.title);
   const [description, setDescription] = useState(skill.description ?? "");
   const [triggersText, setTriggersText] = useState(skill.triggers.join("\n"));
@@ -253,7 +252,7 @@ function SkillRow({ skill, expanded, mutating, onToggle, onUpdate, onArchive }: 
             STATUS_STYLES[skill.status],
           )}
         >
-          {skill.status}
+          {t(`skillsPanel.status.${skill.status}`)}
         </span>
         <div className="flex-1 min-w-0">
           <Text variant="caption" weight="medium" className="block text-foreground truncate">{skill.title}</Text>
@@ -282,7 +281,7 @@ function SkillRow({ skill, expanded, mutating, onToggle, onUpdate, onArchive }: 
           >
             <div className="p-2.5 space-y-2">
               <label className="block">
-                <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">Title</Text>
+                <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">{t("skillsPanel.fields.title")}</Text>
                 <input
                   type="text"
                   value={title}
@@ -292,19 +291,19 @@ function SkillRow({ skill, expanded, mutating, onToggle, onUpdate, onArchive }: 
               </label>
 
               <label className="block">
-                <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">Description</Text>
+                <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">{t("skillsPanel.fields.description")}</Text>
                 <input
                   type="text"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="optional"
+                  placeholder={t("skillsPanel.optionalPlaceholder")}
                   className="w-full mt-0.5 rounded-md bg-white/60 border border-foreground/10 px-2 py-1 text-caption focus:outline-none focus:ring-1 focus:ring-primary/30"
                 />
               </label>
 
               <label className="block">
                 <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">
-                  Triggers (one per line)
+                  {t("skillsPanel.fields.triggers")}
                 </Text>
                 <textarea
                   value={triggersText}
@@ -316,10 +315,10 @@ function SkillRow({ skill, expanded, mutating, onToggle, onUpdate, onArchive }: 
 
               <label className="block">
                 <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">
-                  Body (SKILL.md)
+                  {t("skillsPanel.fields.body")}
                 </Text>
                 {loadingBody && body === null ? (
-                  <Text variant="micro" className="block text-foreground/40 py-2">Loading body…</Text>
+                  <Text variant="micro" className="block text-foreground/40 py-2">{t("skillsPanel.loadingBody")}</Text>
                 ) : (
                   <textarea
                     value={body ?? ""}
@@ -337,7 +336,7 @@ function SkillRow({ skill, expanded, mutating, onToggle, onUpdate, onArchive }: 
                   className="inline-flex items-center gap-1 rounded-md bg-foreground text-background text-micro font-semibold px-2 py-1 disabled:opacity-40"
                 >
                   {mutating ? <Loader2 size={10} className="animate-spin" /> : <Save size={10} />}
-                  Save
+                  {t("skillsPanel.save")}
                 </button>
                 {skill.status !== "archived" && (
                   <button
@@ -345,7 +344,7 @@ function SkillRow({ skill, expanded, mutating, onToggle, onUpdate, onArchive }: 
                     disabled={mutating}
                     className="rounded-md border border-foreground/10 bg-white/60 text-foreground/70 text-micro font-medium px-2 py-1 hover:bg-foreground/5 disabled:opacity-40"
                   >
-                    {skill.status === "enabled" ? "Disable" : "Enable"}
+                    {skill.status === "enabled" ? t("skillsPanel.disable") : t("skillsPanel.enable")}
                   </button>
                 )}
                 {skill.status !== "archived" && (
@@ -355,7 +354,7 @@ function SkillRow({ skill, expanded, mutating, onToggle, onUpdate, onArchive }: 
                     className="inline-flex items-center gap-1 rounded-md border border-foreground/10 bg-white/60 text-foreground/70 text-micro font-medium px-2 py-1 hover:bg-red-50 hover:text-red-600 hover:border-red-200 disabled:opacity-40"
                   >
                     <Archive size={10} />
-                    Archive
+                    {t("skillsPanel.archive")}
                   </button>
                 )}
               </div>
@@ -374,6 +373,7 @@ interface CreateSkillFormProps {
 }
 
 function CreateSkillForm({ mutating, onCancel, onSubmit }: CreateSkillFormProps) {
+  const { t } = useTranslation(["profile", "common"]);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [triggersText, setTriggersText] = useState("");
@@ -384,7 +384,7 @@ function CreateSkillForm({ mutating, onCancel, onSubmit }: CreateSkillFormProps)
   return (
     <div className="rounded-lg border border-foreground/10 bg-white/70 p-2.5 space-y-2">
       <label className="block">
-        <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">Title</Text>
+        <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">{t("skillsPanel.fields.title")}</Text>
         <input
           type="text"
           value={title}
@@ -393,7 +393,7 @@ function CreateSkillForm({ mutating, onCancel, onSubmit }: CreateSkillFormProps)
         />
       </label>
       <label className="block">
-        <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">Description</Text>
+        <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">{t("skillsPanel.fields.description")}</Text>
         <input
           type="text"
           value={description}
@@ -403,7 +403,7 @@ function CreateSkillForm({ mutating, onCancel, onSubmit }: CreateSkillFormProps)
       </label>
       <label className="block">
         <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">
-          Triggers (one per line)
+          {t("skillsPanel.fields.triggers")}
         </Text>
         <textarea
           value={triggersText}
@@ -413,12 +413,12 @@ function CreateSkillForm({ mutating, onCancel, onSubmit }: CreateSkillFormProps)
         />
       </label>
       <label className="block">
-        <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">Body (SKILL.md)</Text>
+        <Text variant="micro" weight="medium" className="text-foreground/40 uppercase tracking-wider">{t("skillsPanel.fields.body")}</Text>
         <textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
           rows={6}
-          placeholder="## When to use..."
+          placeholder={t("skillsPanel.bodyPlaceholder")}
           className="w-full mt-0.5 rounded-md bg-white/80 border border-foreground/10 px-2 py-1 text-caption font-mono focus:outline-none focus:ring-1 focus:ring-primary/30"
         />
       </label>
@@ -436,7 +436,7 @@ function CreateSkillForm({ mutating, onCancel, onSubmit }: CreateSkillFormProps)
           className="inline-flex items-center gap-1 rounded-md bg-foreground text-background text-micro font-semibold px-2 py-1 disabled:opacity-40"
         >
           {mutating ? <Loader2 size={10} className="animate-spin" /> : <Save size={10} />}
-          Create
+          {t("skillsPanel.create")}
         </button>
         <button
           onClick={onCancel}
@@ -444,7 +444,7 @@ function CreateSkillForm({ mutating, onCancel, onSubmit }: CreateSkillFormProps)
           className="inline-flex items-center gap-1 rounded-md border border-foreground/10 bg-white/60 text-foreground/60 text-micro font-medium px-2 py-1 hover:bg-foreground/5 disabled:opacity-40"
         >
           <X size={10} />
-          Cancel
+          {t("common:status.cancel")}
         </button>
       </div>
     </div>

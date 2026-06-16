@@ -2,7 +2,7 @@ import { lazy, Suspense, type ReactNode } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Toaster } from "sonner";
 import { useUserSettings } from "@pin-ai/state";
-import { useAuth, VoiceProvider, Text } from "@pin-ai/ui-web";
+import { useAuth, VoiceProvider, Text, useUiLanguageSync } from "@pin-ai/ui-web";
 import ZebraShell from "@/components/zebra/ZebraShell";
 import ZebraLogin from "@/components/zebra/ZebraLogin";
 import ZebraOnboarding from "@/components/zebra/ZebraOnboarding";
@@ -65,6 +65,8 @@ export default function App() {
     patch: patchSettings,
     refetch: refetchSettings,
   } = useUserSettings(user?.id ?? null);
+  // UI 语言跟随 settings.generationLanguage（与 mobile 同款共享 hook）。
+  useUiLanguageSync();
 
   // 已登录后的 onboarding 三态 gate（与 proactive-ai-frontend App.tsx 对齐）：
   // 加载中 spinner / 失败可重试 / 未完成 onboarding 进引导页；都不命中就落到

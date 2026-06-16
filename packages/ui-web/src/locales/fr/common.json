@@ -1,0 +1,78 @@
+{
+  "status": {
+    "loading": "Chargement…",
+    "saving": "Enregistrement…",
+    "retry": "Réessayer",
+    "cancel": "Annuler",
+    "done": "Terminé",
+    "close": "Fermer",
+    "thinking": "Réflexion…",
+    "connecting": "Connexion…",
+    "listening": "Écoute…",
+    "polishing": "Peaufinage…"
+  },
+  "appShell": {
+    "openMenu": "Ouvrir le menu",
+    "openMainChat": "Ouvrir le chat principal",
+    "askPinAi": "Demander à PIN AI"
+  },
+  "menu": {
+    "now": "MAINTENANT",
+    "ambient": "AMBIANT",
+    "tasks": "TÂCHES",
+    "connect": "CONNECTER",
+    "profile": "PROFIL",
+    "setting": "RÉGLAGES"
+  },
+  "bootstrapError": {
+    "message": "Impossible de joindre le serveur. Vérifiez votre connexion et réessayez."
+  },
+  "errorBoundary": {
+    "title": "Un problème est survenu",
+    "fallbackMessage": "Une erreur inattendue s'est produite.",
+    "tryAgain": "Réessayer"
+  },
+  "errors": {
+    "onboardingSave": "Impossible d'enregistrer votre progression d'intégration. Vérifiez votre connexion et réessayez.",
+    "noRedirectUrl": "Aucune URL de redirection renvoyée",
+    "disconnectFailed": "Échec de la déconnexion",
+    "connectFailedWithStatus": "Échec de la connexion ({{status}})"
+  },
+  "agentRuns": {
+    "ariaLabel": "Exécutions d'agent actives",
+    "title": "Exécutions d'agent",
+    "runCount_one": "{{count}} exécution",
+    "runCount_many": "{{count}} exécutions",
+    "runCount_other": "{{count}} exécutions",
+    "kind": {
+      "autoDreaming": "Rêverie",
+      "connectorInit": "Connexion de la source",
+      "connectorEvolve": "Distillation des signaux",
+      "crystallize": "Cristallisation de la conversation",
+      "generatorManual": "Génération de cartes",
+      "generatorAuto": "Génération de cartes",
+      "userPrompt": "Prompt synthétique"
+    }
+  },
+  "notificationPrompt": {
+    "title": "Activer les notifications",
+    "description": "La génération de cartes peut prendre de quelques minutes à quelques heures. Avec les notifications activées, nous vous préviendrons dès qu'elles seront prêtes — inutile de surveiller l'app.",
+    "turnOn": "Activer",
+    "later": "Plus tard"
+  },
+  "weather": {
+    "clear": "Dégagé",
+    "cloudy": "Nuageux",
+    "foggy": "Brumeux",
+    "drizzle": "Bruine",
+    "rainy": "Pluvieux",
+    "snowy": "Neigeux",
+    "showers": "Averses",
+    "stormy": "Orageux"
+  },
+  "desktopNotify": {
+    "newCards_one": "{{count}} nouvelle carte pour vous",
+    "newCards_many": "{{count}} nouvelles cartes pour vous",
+    "newCards_other": "{{count}} nouvelles cartes pour vous"
+  }
+}
