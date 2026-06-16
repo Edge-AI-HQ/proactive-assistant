@@ -14,7 +14,7 @@
 # encrypted .env.dev → .env on each `make up`.
 
 COMPOSE := docker compose
-DOTENVX := npx @dotenvx/dotenvx
+DOTENVX := npx --no-install @dotenvx/dotenvx
 
 # Per-worktree Compose project name: multiple worktrees run as isolated
 # groups (own containers / network / volumes), never colliding. Hash of the
@@ -391,7 +391,7 @@ ios: install ensure-env ## Build frontend, sync iOS, open Xcode
 	if [ -n "$(NGROK)" ]; then \
 		echo "Using ngrok at $(NGROK)"; VITE_PIN_API_URL="$(NGROK)"; \
 	elif [ "$(PROD)" = "1" ]; then \
-		PROD_URL=$$(npx -y @dotenvx/dotenvx get VITE_PIN_API_URL -f pinai-agents/.env.production 2>/dev/null); \
+		PROD_URL=$$(npx --no-install @dotenvx/dotenvx get VITE_PIN_API_URL -f pinai-agents/.env.production 2>/dev/null); \
 		if [ -z "$$PROD_URL" ]; then echo "VITE_PIN_API_URL missing in prod env"; exit 1; fi; \
 		VITE_PIN_API_URL="$$PROD_URL"; \
 	elif [ "$(DEV)" = "1" ]; then \
@@ -412,7 +412,7 @@ android: install ensure-env ## Build frontend, sync Android, install on USB devi
 	if [ -n "$(NGROK)" ]; then \
 		VITE_PIN_API_URL="$(NGROK)"; \
 	elif [ "$(PROD)" = "1" ]; then \
-		PROD_URL=$$(npx -y @dotenvx/dotenvx get VITE_PIN_API_URL -f pinai-agents/.env.production 2>/dev/null); \
+		PROD_URL=$$(npx --no-install @dotenvx/dotenvx get VITE_PIN_API_URL -f pinai-agents/.env.production 2>/dev/null); \
 		[ -z "$$PROD_URL" ] && { echo "VITE_PIN_API_URL missing in prod env"; exit 1; }; \
 		VITE_PIN_API_URL="$$PROD_URL"; \
 	elif [ "$(DEV)" = "1" ]; then \
@@ -434,10 +434,10 @@ macos: install ensure-env-pinai-agents ## Run the Electron desktop shell (this w
 	@set -e; \
 	set -a && . ./pinai-agents/.env && set +a; \
 	if [ "$(PROD)" = "1" ]; then \
-		TARGET=$$(npx -y @dotenvx/dotenvx get VITE_PIN_API_URL -f pinai-agents/.env.production 2>/dev/null); \
+		TARGET=$$(npx --no-install @dotenvx/dotenvx get VITE_PIN_API_URL -f pinai-agents/.env.production 2>/dev/null); \
 		[ -z "$$TARGET" ] && { echo "VITE_PIN_API_URL missing in prod env"; exit 1; }; \
-		export VITE_SUPABASE_URL=$$(npx -y @dotenvx/dotenvx get VITE_SUPABASE_URL -f pinai-agents/.env.production 2>/dev/null); \
-		export VITE_SUPABASE_PUBLISHABLE_KEY=$$(npx -y @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f pinai-agents/.env.production 2>/dev/null); \
+		export VITE_SUPABASE_URL=$$(npx --no-install @dotenvx/dotenvx get VITE_SUPABASE_URL -f pinai-agents/.env.production 2>/dev/null); \
+		export VITE_SUPABASE_PUBLISHABLE_KEY=$$(npx --no-install @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f pinai-agents/.env.production 2>/dev/null); \
 		echo "→ Electron vs fly prod ($$TARGET) + prod Supabase"; \
 	elif [ "$(DEV)" = "1" ]; then \
 		TARGET="$$VITE_PIN_API_URL"; \
@@ -454,10 +454,10 @@ rn: install ensure-env-pinai-agents ## Run Expo RN on your iPhone vs this worktr
 	@set -e; \
 	set -a && . ./pinai-agents/.env && set +a; \
 	if [ "$(PROD)" = "1" ]; then \
-		TARGET=$$(npx -y @dotenvx/dotenvx get VITE_PIN_API_URL -f pinai-agents/.env.production 2>/dev/null); \
+		TARGET=$$(npx --no-install @dotenvx/dotenvx get VITE_PIN_API_URL -f pinai-agents/.env.production 2>/dev/null); \
 		[ -z "$$TARGET" ] && { echo "VITE_PIN_API_URL missing in prod env"; exit 1; }; \
-		export EXPO_PUBLIC_SUPABASE_URL=$$(npx -y @dotenvx/dotenvx get VITE_SUPABASE_URL -f pinai-agents/.env.production 2>/dev/null); \
-		export EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=$$(npx -y @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f pinai-agents/.env.production 2>/dev/null); \
+		export EXPO_PUBLIC_SUPABASE_URL=$$(npx --no-install @dotenvx/dotenvx get VITE_SUPABASE_URL -f pinai-agents/.env.production 2>/dev/null); \
+		export EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=$$(npx --no-install @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f pinai-agents/.env.production 2>/dev/null); \
 		echo "→ RN vs fly prod ($$TARGET) + prod Supabase"; \
 	elif [ "$(DEV)" = "1" ]; then \
 		TARGET="$$VITE_PIN_API_URL"; \
