@@ -96,9 +96,13 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           api="${{ steps.urls.outputs.api }}"
+          # db 机器跟后端 web/chat 同区（fly.dev.toml 的 primary_region），避免跨区查询延迟
+          reg=$(sed -n "s/^primary_region *= *'\([^']*\)'.*/\1/p" pinai-agents/fly.dev.toml | head -1)
+          reg="${reg:-$REGION}"
+          echo "db region: $reg"
           # 同款 pgvector（迁移需要 vector 扩展）。throwaway、无卷（preview 不需持久化）。
           flyctl machine run pgvector/pgvector:pg15 \
-            --app "$api" --region "$REGION" --name db --vm-memory 1024 \
+            --app "$api" --region "$reg" --name db --vm-memory 1024 \
             --env POSTGRES_USER=postgres --env POSTGRES_PASSWORD=preview --env POSTGRES_DB=postgres
           # 取这台 db 机器的 6PN 私有 IPv6（machine 之间走内网）
           ip=""
@@ -145,7 +149,8 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          flyctl deploy --config fly.pr.toml --remote-only --app "${{ steps.urls.outputs.api }}"
+          # --ha=false：preview 每个进程组只起 1 台（web×1 + chat×1），省一半算力
+          flyctl deploy --config fly.pr.toml --remote-only --ha=false --app "${{ steps.urls.outputs.api }}"
 
   # ── 3. 前端副本（前端改了，或后端改了也要个前端去打它）─────────────────
   # 与 backend 并行：后端副本 URL 是确定的（pinai-pr-<N>-api.fly.dev），前端只需这个字符串，
