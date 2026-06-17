@@ -228,7 +228,7 @@ def test_zai_model_sends_thinking_disable_when_thinking_off() -> None:
     # request — LiteLLM's provider-specific passthrough (a top-level
     # `thinking` is dropped or rejected for zai; see build_reasoning_options).
     options = build_reasoning_options(
-        model="glm-5.1",
+        model="glm-5.2",
         enable_prompt_cache=True,
         enable_thinking=False,
         thinking_budget=5000,
@@ -241,7 +241,7 @@ def test_zai_model_sends_thinking_disable_when_thinking_off() -> None:
     # With thinking requested we leave the provider default (ON) untouched:
     # no thinking key at all, so reasoning_content keeps flowing as today.
     options = build_reasoning_options(
-        model="glm-5.1",
+        model="glm-5.2",
         enable_prompt_cache=True,
         enable_thinking=True,
         thinking_budget=5000,

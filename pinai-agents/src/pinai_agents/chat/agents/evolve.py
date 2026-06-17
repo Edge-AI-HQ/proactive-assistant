@@ -140,7 +140,7 @@ async def run_evolve(
     )
     try:
         # No hardcoded default — fall through to make_chat_model, which uses
-        # settings.default_model (the DEFAULT_MODEL env: glm-5.1 on dev,
+        # settings.default_model (the DEFAULT_MODEL env: glm-5.2 on dev,
         # claude-sonnet-4-6 on prod), same as every other agent. Keep
         # CONNECTOR_EVOLVE_MODEL as an optional per-env override to pin a
         # specific model for the distillation task.

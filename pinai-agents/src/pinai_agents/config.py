@@ -39,7 +39,7 @@ class _BaseAppSettings(BaseSettings):
     # ops/litellm/litellm_config.yaml. Chat falls back to it when a run
     # doesn't specify a model; web probes it when checking a virtual key
     # still covers what agents need (litellm_provisioning).
-    # Per-env override via DEFAULT_MODEL (dev runs glm-5.1; prod stays
+    # Per-env override via DEFAULT_MODEL (dev runs glm-5.2; prod stays
     # on the code default).
     default_model: str = "claude-sonnet-4-6"
 

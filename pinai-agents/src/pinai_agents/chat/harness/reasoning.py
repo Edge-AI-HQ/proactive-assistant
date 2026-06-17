@@ -59,7 +59,7 @@ def is_kimi_model(model: str | None) -> bool:
 
 
 def is_zai_model(model: str | None) -> bool:
-    """Return true for Z.AI GLM aliases (e.g. ``glm-5.1``)."""
+    """Return true for Z.AI GLM aliases (e.g. ``glm-5.2``)."""
 
     if not model:
         return False
