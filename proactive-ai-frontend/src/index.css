@@ -26,10 +26,9 @@
 
     --radius: 1.25rem;
 
-    /* Glass tokens */
+    /* Glass surface token — consumed by the Surface primitive's `glass` variant.
+       (glass-card / glass-card-strong carry their own liquid-glass recipe inline.) */
     --glass-bg: 0 0% 100% / 0.55;
-    --glass-border: 0 0% 100% / 0.6;
-    --glass-shadow: 280 20% 60% / 0.06;
     --glow-primary: 292 78% 63%;
     --glow-success: 145 60% 50%;
     --glow-warning: 35 90% 55%;
