@@ -24,6 +24,7 @@ from pinai_agents.web.agent_core.worker import (
     _decisions_from,
     _find_decision_message,
     _input_rows,
+    _merged_bypass_permissions,
     _pick_trigger,
 )
 
@@ -61,6 +62,32 @@ def _awaiting(interrupt_id: str | None) -> Run:
         result=None,
         error=None,
     )
+
+
+def test_merged_bypass_permissions_unanimous_opt_in():
+    on = {"bypass_permissions": True}
+    assert _merged_bypass_permissions([_msg(1, "user", "a", meta=on)]) is True
+    assert (
+        _merged_bypass_permissions([_msg(1, "user", "a", meta=on), _msg(2, "user", "b", meta=on)])
+        is True
+    )
+
+
+def test_merged_bypass_permissions_any_non_opt_in_keeps_gate():
+    # Regression: a later toggle-OFF message (no meta key) merged into the SAME
+    # turn as an earlier opt-in must NOT bypass — the gate stays on. OFF writes
+    # no key, so "latest wins on truthiness" would wrongly inherit the opt-in.
+    on = {"bypass_permissions": True}
+    assert (
+        _merged_bypass_permissions([_msg(1, "user", "a", meta=on), _msg(2, "user", "b", meta=None)])
+        is False
+    )
+    # no meta at all (system / proactive turn) → gate stays
+    assert _merged_bypass_permissions([_msg(1, "user", "a", meta=None)]) is False
+    # meta present but no bypass key → gate stays
+    assert _merged_bypass_permissions([_msg(1, "user", "a", meta={"x": 1})]) is False
+    # empty batch → gate stays
+    assert _merged_bypass_permissions([]) is False
 
 
 def test_find_decision_matches_on_interrupt_id():

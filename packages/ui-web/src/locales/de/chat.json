@@ -53,6 +53,15 @@
     }
   },
   "composer": {
+    "permission": {
+      "menuTitle": "Modus",
+      "ask": "Berechtigungen erfragen",
+      "bypass": "Berechtigungen überspringen",
+      "confirmBody": "Die KI handelt für dich – E-Mails senden, bezahlen und andere externe Aktionen – ohne dich jedes Mal um Bestätigung zu bitten. Die Browser-Übernahme ist nicht betroffen.",
+      "cancel": "Abbrechen",
+      "confirm": "Zu Überspringen wechseln",
+      "saveFailed": "Speichern fehlgeschlagen – bitte erneut versuchen."
+    },
     "placeholder": "Nachricht an PIN AI…",
     "voiceInput": "Spracheingabe",
     "send": "Senden",

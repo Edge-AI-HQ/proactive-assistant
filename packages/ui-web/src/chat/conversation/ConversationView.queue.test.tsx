@@ -109,6 +109,14 @@ vi.mock("@pin-ai/state", async () => {
       awaitingDecision: null,
       submitDecision: vi.fn(async () => {}),
     })),
+    useUserSettings: () => ({
+      settings: null,
+      loading: false,
+      saving: false,
+      error: null,
+      patch: vi.fn(async () => null),
+      refetch: vi.fn(async () => {}),
+    }),
   };
 });
 

@@ -10,6 +10,7 @@ import { Check, ChevronDown, Loader2, Mic, Send, Square, X } from "lucide-react"
 import { useTranslation } from "react-i18next";
 import { useVoiceInput, Waveform, appendVoiceTranscript } from "../../voice";
 import { Text } from "../../primitives/Text";
+import { PermissionModeMenu } from "./PermissionModeMenu";
 
 export interface ComposerHandle {
   /** Replace the draft and focus the input (used by message Edit). */
@@ -323,6 +324,7 @@ export const Composer = forwardRef<
         )}
       </div>
       )}
+      {!recording && <PermissionModeMenu />}
     </div>
   );
 });

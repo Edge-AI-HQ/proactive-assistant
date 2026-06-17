@@ -53,6 +53,15 @@
     }
   },
   "composer": {
+    "permission": {
+      "menuTitle": "Mode",
+      "ask": "Ask Permissions",
+      "bypass": "Bypass Permissions",
+      "confirmBody": "AI will act for you — send email, pay, and other outbound actions — without asking you to approve each one. Browser takeover is unaffected.",
+      "cancel": "Cancel",
+      "confirm": "Switch to Bypass",
+      "saveFailed": "Couldn't save — try again."
+    },
     "placeholder": "Message PIN AI…",
     "voiceInput": "Voice input",
     "send": "Send",

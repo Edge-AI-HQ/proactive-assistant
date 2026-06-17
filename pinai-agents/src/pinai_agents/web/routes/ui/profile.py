@@ -404,6 +404,7 @@ async def update_settings(
             auto_generate_interval_minutes=body.auto_generate_interval_minutes,
             auto_dreaming=body.auto_dreaming,
             auto_crystallize=body.auto_crystallize,
+            permission_mode=body.permission_mode,
             proactive_enabled=body.proactive_enabled,
             proactive_interval_seconds=body.proactive_interval_seconds,
             metadata=body.metadata,

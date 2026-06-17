@@ -53,6 +53,15 @@
     }
   },
   "composer": {
+    "permission": {
+      "menuTitle": "Modo",
+      "ask": "Pedir permissões",
+      "bypass": "Ignorar permissões",
+      "confirmBody": "A IA agirá por você — enviar e-mails, pagar e outras ações externas — sem pedir que você aprove cada uma. O controle do navegador não é afetado.",
+      "cancel": "Cancelar",
+      "confirm": "Mudar para Ignorar",
+      "saveFailed": "Falha ao salvar; tente novamente."
+    },
     "placeholder": "Mensagem para o PIN AI…",
     "voiceInput": "Entrada de voz",
     "send": "Enviar",

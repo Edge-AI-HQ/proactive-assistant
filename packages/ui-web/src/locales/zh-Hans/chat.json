@@ -53,6 +53,15 @@
     }
   },
   "composer": {
+    "permission": {
+      "menuTitle": "模式",
+      "ask": "询问授权",
+      "bypass": "跳过授权",
+      "confirmBody": "开启后，AI 代表你执行对外操作（发邮件、付款等）将不再逐条征求你确认。浏览器接管不受影响。",
+      "cancel": "取消",
+      "confirm": "切换到跳过",
+      "saveFailed": "保存失败，请重试。"
+    },
     "placeholder": "给 PIN AI 发消息…",
     "voiceInput": "语音输入",
     "send": "发送",

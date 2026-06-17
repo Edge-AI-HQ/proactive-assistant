@@ -127,6 +127,11 @@ class ChatRequest(BaseModel):
     # Friday") against an authoritative anchor instead of guessing.
     timezone: str | None = Field(default=None, max_length=64)
     client_hints: ClientHintsBody | None = None
+    # "Bypass permissions" opt-in (composer toggle), per-run: when True the
+    # agent is built WITHOUT HumanInTheLoopMiddleware so side-effect tools run
+    # without the per-call approval pause. Per-run only — never persisted here;
+    # the web process reads the user's setting and tags each run.
+    bypass_permissions: bool = False
     regenerate: bool = False
     # HITL resume: re-enter a thread paused on interrupt() with the human's
     # decision(s): {"decisions": [{"type": "approve"|"reject"|..., ...}]}
@@ -347,9 +352,17 @@ async def _stream(
     # ── agent factory ──
     try:
         agent = (
-            make_card_execution_agent(virtual_key=virtual_key, backend=backend)
+            make_card_execution_agent(
+                virtual_key=virtual_key,
+                backend=backend,
+                bypass_permissions=req.bypass_permissions,
+            )
             if is_card_thread
-            else make_main_chat_agent(virtual_key=virtual_key, backend=backend)
+            else make_main_chat_agent(
+                virtual_key=virtual_key,
+                backend=backend,
+                bypass_permissions=req.bypass_permissions,
+            )
         )
     except Exception as e:
         logger.exception("chat agent build failed session_key=%s", req.session_key)

@@ -193,6 +193,36 @@ async def test_settings_default_notify_new_cards_off(pool, user_ids):
 
 
 @pytest.mark.asyncio
+async def test_settings_default_permission_mode_ask(pool, user_ids):
+    """permission_mode defaults to 'ask': a fresh user keeps the HITL approval
+    gate on side-effect tools until they explicitly switch to 'bypass'."""
+    user_a, _ = user_ids
+    async with user_scoped_tx(pool, user_a) as conn:
+        s = await ProfileRepository(user_a, conn).get_settings()
+    assert s.permission_mode == "ask"
+
+
+@pytest.mark.asyncio
+async def test_settings_permission_mode_round_trip(pool, user_ids):
+    """Switching permission_mode persists; an unrelated upsert (None param)
+    preserves it via COALESCE so editing another setting can't silently
+    change the mode."""
+    user_a, _ = user_ids
+    async with user_scoped_tx(pool, user_a) as conn:
+        on = await ProfileRepository(user_a, conn).upsert_settings(permission_mode="bypass")
+    assert on.permission_mode == "bypass"
+
+    async with user_scoped_tx(pool, user_a) as conn:
+        # An unrelated edit must NOT change permission_mode (COALESCE).
+        preserved = await ProfileRepository(user_a, conn).upsert_settings(generation_language="en")
+    assert preserved.permission_mode == "bypass"
+
+    async with user_scoped_tx(pool, user_a) as conn:
+        off = await ProfileRepository(user_a, conn).upsert_settings(permission_mode="ask")
+    assert off.permission_mode == "ask"
+
+
+@pytest.mark.asyncio
 async def test_settings_notify_prompt_stamp_is_monotonic(pool, user_ids):
     """First write stamps notify_permission_prompted_at. A subsequent
     upsert that doesn't touch the field (None param) must preserve the

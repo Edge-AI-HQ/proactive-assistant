@@ -239,6 +239,12 @@ async def send(
     client_hints = body.get("clientHints")
     if client_hints is not None and not isinstance(client_hints, dict):
         raise HTTPException(status_code=400, detail="clientHints must be an object")
+    # Per-run "bypass permissions" opt-in (composer toggle). Rides in the
+    # mailbox row's meta → worker → chat's agent factory (which skips the HITL
+    # approval middleware). Boolean pass-through; absent/false keeps the gate.
+    bypass_permissions = body.get("bypassPermissions")
+    if bypass_permissions is not None and not isinstance(bypass_permissions, bool):
+        raise HTTPException(status_code=400, detail="bypassPermissions must be a boolean")
     # Client message id (FE crypto.randomUUID). Doubles as the mailbox
     # idempotency_key — a retried POST (timeout, the first one actually
     # landed) can't enqueue twice — and flows through to the history row +
@@ -260,6 +266,8 @@ async def send(
         meta["card_context"] = card_context
     if client_hints:
         meta["client_hints"] = client_hints
+    if bypass_permissions:
+        meta["bypass_permissions"] = True
     if regenerate:
         meta["regenerate"] = True
     if body.get("interrupt") is True:

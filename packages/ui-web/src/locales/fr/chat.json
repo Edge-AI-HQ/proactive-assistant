@@ -53,6 +53,15 @@
     }
   },
   "composer": {
+    "permission": {
+      "menuTitle": "Mode",
+      "ask": "Demander l'autorisation",
+      "bypass": "Ignorer les autorisations",
+      "confirmBody": "L'IA agira pour vous — envoyer des e-mails, payer et d'autres actions externes — sans vous demander d'approuver chacune. La prise de contrôle du navigateur n'est pas affectée.",
+      "cancel": "Annuler",
+      "confirm": "Passer en mode Ignorer",
+      "saveFailed": "Échec de l'enregistrement, réessayez."
+    },
     "placeholder": "Message à PIN AI…",
     "voiceInput": "Saisie vocale",
     "send": "Envoyer",

@@ -60,6 +60,7 @@ class ChatRunClient:
         run_id: str | None = None,
         timezone: str | None = None,
         client_hints: dict[str, Any] | None = None,
+        bypass_permissions: bool = False,
     ) -> AsyncIterator[Frame]:
         """Execute on chat and yield parsed SSE Frames.
 
@@ -89,6 +90,9 @@ class ChatRunClient:
             # from the FE send; chat's browser_tool sizes the BB session +
             # picks the stealth UA for the device actually showing it.
             "client_hints": client_hints,
+            # Per-run "bypass permissions": forwarded so chat builds the agent
+            # without the HITL approval middleware. Default False keeps the gate.
+            "bypass_permissions": bypass_permissions,
         }
         if regenerate:
             # chat's regenerate path diffs `message` (not `messages`) against the

@@ -85,6 +85,11 @@ export interface ConversationRuntimeOpts {
    *  doorbell). Best-effort — a dropped stream means no call, so consumers
    *  keep their own polling as the backstop. */
   onTurnDone?: () => void;
+  /** "Bypass permissions": when true, each outgoing run is tagged so chat
+   *  builds the agent without the HITL approval middleware (side-effect tools
+   *  run without the per-call approval pause). ConversationView sources this
+   *  from the user's setting; the value at SEND time wins. */
+  bypassPermissions?: boolean;
 }
 
 export interface UseConversationRuntimeResult {
@@ -160,6 +165,16 @@ export function useConversationRuntime(
   // Card context is sent on the first message only, then cleared.
   const cardCtxRef = useRef<Record<string, unknown> | null>(opts?.cardContext ?? null);
   const bootstrappedRef = useRef(false);
+
+  // "Bypass permissions" rides every outgoing run as a per-run flag (chat then
+  // builds the agent WITHOUT the HITL approval middleware). The caller passes
+  // the user's setting in (ConversationView reads it from user-settings); held
+  // in a ref so flipping the toggle never rebuilds the send callbacks — the
+  // toggle state at SEND time is what wins.
+  const bypassPermissionsRef = useRef(opts?.bypassPermissions ?? false);
+  useEffect(() => {
+    bypassPermissionsRef.current = opts?.bypassPermissions ?? false;
+  }, [opts?.bypassPermissions]);
 
   // All runtime state lives in the core conversationReducer — transcript,
   // connection, ready, busy, awaitingDecision, threadId, hasMoreHistory + the
@@ -437,7 +452,11 @@ export function useConversationRuntime(
         // backend dedupes on it (a retry of a timed-out-but-landed POST
         // can't enqueue twice) and echoes it back on /history so the
         // bubble reconciles by identity.
-        await conversationSend(session, text, { cardContext, clientMsgId: id });
+        await conversationSend(session, text, {
+          cardContext,
+          clientMsgId: id,
+          bypassPermissions: bypassPermissionsRef.current,
+        });
         cardCtxRef.current = null;
         dispatch({ type: "mark_failed", id, failed: false });
       } catch (err) {
@@ -533,6 +552,7 @@ export function useConversationRuntime(
         await conversationSend(session, target.text, {
           clientMsgId: target.clientId,
           interrupt: true,
+          bypassPermissions: bypassPermissionsRef.current,
         });
       } catch (err) {
         console.warn("[proactive] queued message interrupt failed:", err);
@@ -575,6 +595,7 @@ export function useConversationRuntime(
       await conversationSend(session, lastUserText, {
         regenerate: true,
         clientMsgId: crypto.randomUUID(),
+        bypassPermissions: bypassPermissionsRef.current,
       });
     } catch (err) {
       console.warn("[proactive] regenerate failed:", err);

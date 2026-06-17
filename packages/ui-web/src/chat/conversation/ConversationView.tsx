@@ -33,7 +33,7 @@ import JumpToLatest from "./scroll/JumpToLatest";
 import TodoPanel from "./TodoPanel";
 import BrowserHeader from "../../browser/BrowserHeader";
 import BrowserDrawer from "../../browser/BrowserDrawer";
-import { useConversationRuntime } from "@pin-ai/state";
+import { useConversationRuntime, useUserSettings } from "@pin-ai/state";
 import {
   conversationInit,
   deriveCardResultMessageId,
@@ -140,6 +140,9 @@ export default function ConversationView({
       cancelled = true;
     };
   }, [session, kind]);
+  // "Bypass permissions" — read the user's setting here and pass it into the
+  // runtime, which tags each outgoing run so chat skips the HITL approval gate.
+  const { settings: userSettings } = useUserSettings();
   const {
     transcript, ready, sendMessage, busy, retryMessage, stop, regenerateLast,
     updateQueuedMessage, deleteQueuedMessage, interruptQueuedMessage,
@@ -157,6 +160,7 @@ export default function ConversationView({
     localHistory: readLocalHistory,
     // 卡片层门铃：chat:done / HITL 暂停时立即回传，球面/Tasks 状态不等轮询。
     onTurnDone,
+    bypassPermissions: userSettings?.permissionMode === "bypass",
   });
   // 访问驱动同步（lazy incomplete model）：打开任何 thread 拉一次增量，
   // card threads 由此按需进入本地库（不全量扫）。

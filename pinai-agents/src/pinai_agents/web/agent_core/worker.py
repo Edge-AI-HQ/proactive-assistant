@@ -96,6 +96,22 @@ def _pick_trigger(msgs: list[Message]) -> str:
     return msgs[0].source if msgs else "user"
 
 
+def _merged_bypass_permissions(msgs: list[Message]) -> bool:
+    """Whether this merged turn runs with the HITL approval gate bypassed.
+
+    A turn can merge several queued user messages that span a "bypass
+    permissions" toggle flip (they drain together as one run). The agent is a
+    single graph, so the whole turn shares one interrupt_on — there is no
+    per-message gating. Require UNANIMOUS explicit opt-in: bypass only if every
+    message carries meta["bypass_permissions"] == True. Fail-safe — any message
+    without an explicit opt-in (toggle OFF writes no key, an older client, or a
+    system turn with no meta) keeps the gate.
+    """
+    return bool(msgs) and all(
+        m.meta is not None and bool(m.meta.get("bypass_permissions")) for m in msgs
+    )
+
+
 def _find_decision_message(msgs: list[Message], awaiting: Run) -> Message | None:
     """The tool_decision message matching this awaiting run's interrupt, if
     any (matched on interrupt_id; idempotency_key already dedupes re-taps).
@@ -351,6 +367,20 @@ class AgentRunWorker:
             ),
             None,
         )
+        # Per-run "bypass permissions" (see _merged_bypass_permissions): skip
+        # the HITL approval gate only on unanimous explicit opt-in across the
+        # merged turn — fail-safe, any non-opted message keeps the gate.
+        bypass_permissions = _merged_bypass_permissions(msgs)
+        if bypass_permissions:
+            # Security-sensitive: this turn skips human approval on side-effect
+            # tools (outbound Composio actions + preference_add). Audit log.
+            logger.info(
+                "bypass_permissions active — HITL approval skipped "
+                "(user_id=%s session_id=%s msgs=%d)",
+                user_id,
+                session_id,
+                len(msgs),
+            )
         # regenerate (Retry / Edit): a lone message flagged in meta re-runs the
         # last turn — chat pops the trailing AI/Tool from the checkpoint + reruns,
         # and _finalize_turn mirrors that on pai_chat_messages (pop + rewrite).
@@ -381,6 +411,7 @@ class AgentRunWorker:
             run_id=run_id,
             timezone=timezone,
             client_hints=client_hints,
+            bypass_permissions=bypass_permissions,
         )
         try:
             recorder, outcome, stream_error = await self._relay_frames(

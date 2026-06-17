@@ -53,6 +53,15 @@
     }
   },
   "composer": {
+    "permission": {
+      "menuTitle": "モード",
+      "ask": "承認を求める",
+      "bypass": "承認をスキップ",
+      "confirmBody": "オンにすると、AI がメール送信や支払いなどの外部操作を、その都度確認せずに代行します。ブラウザの操作引き継ぎには影響しません。",
+      "cancel": "キャンセル",
+      "confirm": "スキップに切り替える",
+      "saveFailed": "保存できませんでした。もう一度お試しください。"
+    },
     "placeholder": "PIN AI にメッセージ…",
     "voiceInput": "音声入力",
     "send": "送信",

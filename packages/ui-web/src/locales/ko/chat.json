@@ -53,6 +53,15 @@
     }
   },
   "composer": {
+    "permission": {
+      "menuTitle": "모드",
+      "ask": "권한 확인",
+      "bypass": "권한 건너뛰기",
+      "confirmBody": "켜면 AI가 이메일 보내기, 결제 등 외부 작업을 매번 확인받지 않고 수행합니다. 브라우저 제어 인계에는 영향을 주지 않습니다.",
+      "cancel": "취소",
+      "confirm": "건너뛰기로 전환",
+      "saveFailed": "저장하지 못했습니다. 다시 시도하세요."
+    },
     "placeholder": "PIN AI에게 메시지 보내기…",
     "voiceInput": "음성 입력",
     "send": "보내기",

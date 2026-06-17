@@ -74,6 +74,7 @@ export {
   userSettingsKeys,
   useUserSettings,
   type AmbientSourceConsent,
+  type PermissionMode,
   type UserSettings,
   type UserSettingsPatch,
   type UseUserSettingsResult,

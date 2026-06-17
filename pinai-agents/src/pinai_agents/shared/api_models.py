@@ -160,6 +160,11 @@ class SettingsResponse(_CamelModel):
     auto_generate_interval_minutes: int
     auto_dreaming: bool
     auto_crystallize: bool
+    # Per-user "permission mode" for side-effect tools: 'ask' (pause for HITL
+    # approval) or 'bypass' (no per-call pause). The composer shows this as a
+    # mode menu; persisted, cross-device SSOT. Delivered to chat per-run via
+    # request meta (mapped to a bool). TEXT-backed so modes can grow.
+    permission_mode: Literal["ask", "bypass"] = "ask"
     # Proactive heartbeat opt-in (the "Proactive" page toggle). Mirrored
     # server-side into a per-user proactive.tick scheduler task.
     proactive_enabled: bool
@@ -221,6 +226,7 @@ class SettingsUpdateRequest(_CamelModel):
     auto_generate_interval_minutes: int | None = Field(default=None, ge=15, le=1440)
     auto_dreaming: bool | None = None
     auto_crystallize: bool | None = None
+    permission_mode: Literal["ask", "bypass"] | None = None
     proactive_enabled: bool | None = None
     # One of the three UI buckets (seconds). Literal pins them so a bad client
     # can't create a runaway heartbeat; the DB CHECK is the backstop.

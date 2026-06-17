@@ -88,6 +88,13 @@ class UserSettingsRow:
     auto_generate_interval_minutes: int
     auto_dreaming: bool
     auto_crystallize: bool
+    # Per-user "permission mode" for the chat agent's side-effect tools:
+    # 'ask' (default — pause for HITL approval) or 'bypass' (run without the
+    # per-call approval pause). TEXT so future modes can be added. Persisted,
+    # cross-device SSOT; the runtime effect is delivered per-run via request
+    # meta (mapped to a bool), never read from this column by chat (trust
+    # boundary).
+    permission_mode: str
     # Proactive heartbeat opt-in (the "Proactive" page toggle). False by
     # default. The settings route mirrors this into a per-user `proactive.tick`
     # scheduler task — the scheduler tick only reads pai_scheduled_tasks, never
@@ -123,6 +130,7 @@ class UserSettingsRow:
             auto_generate_interval_minutes=row["auto_generate_interval_minutes"],
             auto_dreaming=row["auto_dreaming"],
             auto_crystallize=row["auto_crystallize"],
+            permission_mode=str(row.get("permission_mode", "ask")),
             proactive_enabled=row["proactive_enabled"],
             proactive_interval_seconds=row["proactive_interval_seconds"],
             metadata=_as_dict(row["metadata"]),
@@ -402,6 +410,7 @@ class ProfileRepository(UserScopedRepository):
         auto_generate_interval_minutes: int | None = None,
         auto_dreaming: bool | None = None,
         auto_crystallize: bool | None = None,
+        permission_mode: str | None = None,
         proactive_enabled: bool | None = None,
         proactive_interval_seconds: int | None = None,
         metadata: dict[str, Any] | None = None,
@@ -463,6 +472,7 @@ class ProfileRepository(UserScopedRepository):
                   auto_generate_interval_minutes = COALESCE(%s, auto_generate_interval_minutes),
                   auto_dreaming                  = COALESCE(%s, auto_dreaming),
                   auto_crystallize               = COALESCE(%s, auto_crystallize),
+                  permission_mode                = COALESCE(%s, permission_mode),
                   proactive_enabled              = COALESCE(%s, proactive_enabled),
                   proactive_interval_seconds     = COALESCE(%s, proactive_interval_seconds),
                   metadata                       = COALESCE(%s::jsonb, metadata),
@@ -480,6 +490,7 @@ class ProfileRepository(UserScopedRepository):
                     auto_generate_interval_minutes,
                     auto_dreaming,
                     auto_crystallize,
+                    permission_mode,
                     proactive_enabled,
                     proactive_interval_seconds,
                     json.dumps(metadata) if metadata is not None else None,

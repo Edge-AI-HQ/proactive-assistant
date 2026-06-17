@@ -255,12 +255,15 @@ def make_card_execution_agent(
     *,
     virtual_key: str,
     backend: BackendProtocol,
+    bypass_permissions: bool = False,
 ) -> Any:
     return build_agent(
         model=make_chat_model(virtual_key=virtual_key, streaming=True),
         system_prompt=_INSTRUCTIONS,
         backend=backend,
         tools=[*ALL_TOOLS, propose_action],
-        interrupt_on=HITL_INTERRUPT_ON,
+        # bypass → empty map → build_agent skips HumanInTheLoopMiddleware
+        # entirely, so side-effect tools execute without the approval pause.
+        interrupt_on={} if bypass_permissions else HITL_INTERRUPT_ON,
         with_checkpointer=True,
     )

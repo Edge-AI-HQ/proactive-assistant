@@ -310,6 +310,7 @@ def make_main_chat_agent(
     *,
     virtual_key: str,
     backend: BackendProtocol,
+    bypass_permissions: bool = False,
 ) -> Any:
     # create_deep_agent's default middleware stack includes filesystem, todo
     # planning, Anthropic prompt caching, and a non-mutating summarization that
@@ -325,6 +326,8 @@ def make_main_chat_agent(
         backend=backend,
         tools=ALL_TOOLS,
         subagents=[_ECHO_PROBE_SUBAGENT],
-        interrupt_on=HITL_INTERRUPT_ON,
+        # bypass → empty map → build_agent skips HumanInTheLoopMiddleware
+        # entirely, so side-effect tools execute without the approval pause.
+        interrupt_on={} if bypass_permissions else HITL_INTERRUPT_ON,
         with_checkpointer=True,
     )
