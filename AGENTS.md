@@ -17,9 +17,24 @@
 
 ## 当前架构
 
-Proactive AI 后端整体收敛到 **pinai-agents**（Python / FastAPI / LangChain + DeepAgents），用户产品前端是 **proactive-ai-frontend**（React SPA，Vite + Tailwind + Capacitor，登录走 Supabase Auth），内部卡片 review 工具是 **internal-reward-dashboard**（独立 Vite React app，登录也走 Supabase Auth）。LLM 统一经 **LiteLLM** 路由。
+Proactive AI 后端整体收敛到 **pinai-agents**（Python / FastAPI / LangChain + DeepAgents）；内部卡片 review 工具是 **internal-reward-dashboard**（独立 Vite React app，登录走 Supabase Auth）。LLM 统一经 **LiteLLM** 路由。
 
-桌面 web 端是 **apps/web**（zebra 设计的独立 Vite React app，React 19 + react-router URL 路由），与 proactive-ai-frontend（Capacitor iOS 路线）并行；双端共享的 React DOM 层沉在 **packages/ui-web**（`@pin-ai/ui-web`：auth/聊天栈/球面/卡片/connect/voice/browser/设置 sections），逻辑层共享 `@pin-ai/core` + `@pin-ai/state`。设计 SSOT：[`docs/plans/2026-06-12-zebra-web-app-port.mdx`](docs/plans/2026-06-12-zebra-web-app-port.mdx)。
+用户产品前端是「**一套共享层 + 多个端壳**」：跨端逻辑与 UI 沉在 `packages/*`，各端只写壳。
+
+共享层 `packages/`（自底向上，包间边界由根 `eslint.config.mjs` 规则强制）：
+- `@pin-ai/core` — 纯 TS：transport/SSE、API 域函数、域类型、纯状态机、平台 ports 接口（禁 react / capacitor / electron / 浏览器 globals）。
+- `@pin-ai/design` — 跨端设计 token SSOT（`tokens.cjs/mjs/json`，web Tailwind 与 RN NativeWind 共用，改色值只改这里）。
+- `@pin-ai/state` — 跨端 React hooks：TanStack Query / zustand / 业务编排 / auth glue，依赖 core（禁 react-dom / 平台 API）。
+- `@pin-ai/ui-kit` — 双端设计系统层：`cn` 工具 / 组件契约 / cva variant / motion 预设，平台无关，web 与 RN 共享，依赖 design。
+- `@pin-ai/ui-web` — web 介质层：React DOM 组件 + 平台 hooks，硬标准「纯 web 可运行」，依赖 core/design/ui-kit。
+
+端壳：
+- **apps/web** — zebra 设计的桌面 web 端（Vite + React 19 + react-router），消费 core/state/ui-web，**已上线 dev/prod**。设计 SSOT：[`docs/plans/2026-06-12-zebra-web-app-port.mdx`](docs/plans/2026-06-12-zebra-web-app-port.mdx)。
+- **apps/desktop** — Electron macOS 壳，renderer 复用 apps/web 的 Vite root（「一套 zebra UI、web + 桌面两个壳」），桌面侧只有 main + preload。仅本地 `make macos`，暂无自动部署。
+- **apps/mobile** — Expo / React Native iOS app，UI 独立实现，业务层消费 core/design/state/ui-kit（不碰 ui-web）。**仍在开发、未上线**，CI 自动构建已禁用。
+- **proactive-ai-frontend** — Capacitor（Vite + Tailwind）React SPA，**当前生产 iOS 前端**，消费 core/state/ui-kit/ui-web/design；apps/mobile（RN）是它的未来接替者，接替前 iOS 仍以它为准。
+
+三个 web 端（proactive-ai-frontend / apps/web / apps/desktop）经 vite alias + tsconfig paths 直引 `packages/*/src`（无 build 步骤，改包即时生效）；apps/mobile 走 npm workspace 依赖（metro 解析）。前端分层 SSOT：[`research/2026-06-10-frontend-layering.mdx`](research/2026-06-10-frontend-layering.mdx)；双端设计系统 SSOT：[`docs/plans/2026-06-13-dual-platform-design-system.mdx`](docs/plans/2026-06-13-dual-platform-design-system.mdx)。
 
 `apis/`（Node 后端 + 容器编排 + gateway）、`pinai-openclaw/`（用户容器镜像 + plugin）、`miniapp/`（Telegram mini app）三个老仓目录已经移除，所有职责都搬到 pinai-agents：
 
@@ -48,6 +63,8 @@ pinai-agents 在同一 codebase 里跑两个进程，**单一信任边界**：
 | prod | `proactive-ai-agents-prod` | `proactive-ai-frontend-prod` | `proactive-ai-web-prod` | 暂无独立 app | `proactive-ai-litellm-prod` |
 
 所有 fly app 都在 `iad` / `ord` region。Daytona sandbox 是 chat 进程的远端执行环境（python_exec、browser tool 跑在那里），不算 fly app。
+
+上表是 fly app 维度（表中 Frontend 列 = proactive-ai-frontend 的 web/nginx 形态）。**apps/desktop**（Electron 桌面）、**apps/mobile**（Expo RN）、**proactive-ai-frontend 的 iOS** 都不是 fly app，部署形态见「变更与部署」。
 
 ## Secrets 管理（dotenvx）
 所有环境变量（后端 secrets + 前端 VITE_*）用 [dotenvx](https://dotenvx.com/) 加密 checkin，每环境一把私钥。
@@ -82,9 +99,15 @@ pinai-agents/.env / pinai-agents/.env.chat / ops/litellm/.env / ./.env  # 本地
 - `pinai-agents/db/ingest_recipes/`：connector ingest 的 declarative recipes。
 - `pinai-agents/infra/daytona/`：Daytona snapshot 构建脚本。
 - `pinai-agents/scripts/`：`sync_fly_secrets.py`（trust boundary 守护）、`regen_sdk.py`、`check_trust_boundary.sh`、`validate_ingest_recipe.py`。
-- `proactive-ai-frontend/src/`：React SPA（Vite + Tailwind + Capacitor，支持 Web/iOS/Android）。
-- `apps/web/src/`：zebra 桌面 web 端（独立 Vite app；壳=ZebraShell/panels/⌘K，功能=共享层）。部署随前端走统一管道（`deploy-{dev,prod}.yml` → `_deploy.yml` 的 `deploy-web` job），dev 跟 main push、prod 跟 `v*` tag。
-- `packages/ui-web/src/`：web 介质共享层（proactive-ai-frontend 与 apps/web 双端消费的 React DOM 组件 + 平台 hooks）。依赖硬标准「纯 web 可运行」，重 native 模块经注册点注入（registerSignOutCleanup / registerFeedbackOutbox / registerLocalThreadStore / registerExternalMicAcquirer）。
+- `packages/core/src/`、`packages/state/src/`：跨端纯逻辑层（`@pin-ai/core`=transport/SSE/API/域类型/状态机/ports；`@pin-ai/state`=TanStack Query/zustand/编排 hooks），平台无关，边界由根 eslint 强制。
+- `packages/design/`：跨端设计 token SSOT（`@pin-ai/design`，`tokens.cjs/mjs/json`，web Tailwind + RN NativeWind 共用）。
+- `packages/ui-kit/src/`：双端设计系统层（`@pin-ai/ui-kit`，`cn` / 组件契约 / cva / motion 预设），平台无关，web 与 RN 共享。
+- `packages/ui-web/src/`：web 介质共享层（`@pin-ai/ui-web`：auth/聊天栈/球面/卡片/connect/voice/browser/设置 sections），proactive-ai-frontend 与 apps/web 双端消费，硬标准「纯 web 可运行」，重 native 模块经注册点注入（registerSignOutCleanup / registerFeedbackOutbox / registerLocalThreadStore / registerExternalMicAcquirer）。
+- `proactive-ai-frontend/src/`：Capacitor React SPA（Vite + Tailwind，Web/iOS/Android），**当前生产 iOS 前端**，经 vite alias 直引 packages 共享层。
+- `apps/web/src/`：zebra 桌面 web 端（独立 Vite app；壳=ZebraShell/panels/⌘K，功能=共享层）。已上线 dev/prod（部署见「变更与部署」）。
+- `apps/desktop/src/`：Electron macOS 壳（`main` + `preload`；renderer 复用 apps/web，见 `electron.vite.config.ts`）。本地 `make macos`，暂无自动部署。
+- `apps/mobile/src/`：Expo / React Native iOS app（UI 独立实现，消费 core/design/state/ui-kit；native 采集在 `apps/mobile/modules/`）。开发中、未上线；本地 `make rn`。
+- `research/2026-06-10-frontend-layering.mdx`：前端分层 SSOT（core/state/apps 三层，web/Electron/RN 三端）。
 - `internal-reward-dashboard/src/`：内部 reward review app（`/runs`、`/cards/:cardId`、`/casebook`、`/traces/:runId`、`/personal-data`），本地端口 `3004`，不要混进主产品前端。
 - `ops/litellm/`：LiteLLM 配置 + fly toml + 部署脚本。
 
@@ -97,7 +120,7 @@ pinai-agents/.env / pinai-agents/.env.chat / ops/litellm/.env / ./.env  # 本地
 4. 不要把 `docs/plans/` 当历史归档。plan 只是可引用的 AI 设计计划，不替代模块文档。
 5. 如果代码行为和文档冲突，以代码核实当前事实，并同步更新对应模块文档。
 
-> ⚠️ 部分 `docs/modules/*.mdx`（尤其 `runtime-deployment.mdx`）还残留 `apis/` / `pinai-openclaw/` 时代的描述，碰到时以 `pinai-agents/` 实际代码为准，并顺手更新该模块文档。后端搬迁的设计 SSOT 在 [`docs/plans/2026-05-04-pinai-agents-backend-consolidation.mdx`](docs/plans/2026-05-04-pinai-agents-backend-consolidation.mdx)。
+> ⚠️ 部分 `docs/modules/*.mdx` 还残留 `apis/` / `pinai-openclaw/` 时代的描述，和 `pinai-agents/` 实际代码冲突时以代码为准，并顺手更新该模块文档。后端搬迁的设计 SSOT 在 [`docs/plans/2026-05-04-pinai-agents-backend-consolidation.mdx`](docs/plans/2026-05-04-pinai-agents-backend-consolidation.mdx)。
 
 ## 文档维护规则
 - `docs/modules/*.mdx`：每个模块一篇当前事实文档，必须包含边界、核心链路、开发入口、验证方式、踩坑。
@@ -133,7 +156,7 @@ make up                    # 自动解密 .env.dev → .env，构建并启动所
 
 全栈启动（Docker Compose）：
 ```bash
-make up                    # 启动 postgres + litellm + pinai-web + pinai-chat + frontend
+make up                    # 启动 postgres + litellm + pinai-web + pinai-chat + frontend + web(zebra)
 make logs                  # 跟所有 log
 make logs-pinai-web        # 单看 web
 make logs-pinai-chat       # 单看 chat
@@ -155,6 +178,7 @@ cd pinai-agents && uv sync                          # 装 Python 依赖
 cd pinai-agents && uv run uvicorn pinai_agents.web.asgi:app --reload --port 8000
 cd pinai-agents && uv run uvicorn pinai_agents.chat.asgi:app --reload --port 8001
 cd proactive-ai-frontend && npm run dev             # 前端 dev server（端口 3003）
+cd apps/web && npm run dev                          # zebra 桌面 web dev server（端口 3005）
 cd internal-reward-dashboard && npm run dev -- --host 127.0.0.1 --port 3004  # 内部 review app
 ```
 
@@ -168,7 +192,7 @@ make tunnel-down
 ```
 每个 worktree 用自己的 `.ngrok.app` 子域（= project hash），所以 **多 worktree、多人共享同一个 token 可以并发各起 tunnel，互不冲突**（各拿各的 URL）。前提是**付费 ngrok**——免费版只能用账户那一个 dev domain，多开会 ERR_NGROK_334；付费版才能用任意 `<name>.ngrok.app` 子域。
 
-Mobile（Capacitor，iOS / Android）：
+Mobile（Capacitor，iOS / Android — proactive-ai-frontend 路线）：
 ```bash
 make ios                   # 默认：自动起本 worktree tunnel + 抓 URL → 构建前端 → cap sync → 打开 Xcode
 make android               # 同上，装到 USB device
@@ -180,6 +204,13 @@ iOS 多环境与签名硬规则：
 - **禁止为绕过问题临时换 id**：不要为了绕过签名失败、权限/能力不满足、验证报错而新增或改 bundle id / 包名 / scheme / target。signing/profile 不满足时停下来报告真实 blocker，不要换 id 绕过。
 - 同一环境内的安装是用该环境原 bundle id 覆盖更新，不要为并存再造这两个之外的第三个 id。
 
+桌面（Electron，apps/desktop）与 RN（Expo，apps/mobile）各自独立 build，不走 Capacitor：
+```bash
+make macos                 # Electron 桌面壳（renderer 复用 apps/web）连本 worktree 后端；DEV=1 fly dev、PROD=1 fly prod
+make rn                    # Expo RN 装真机 iPhone；SIM=1 模拟器、DEV=1 fly dev、PROD=1 fly prod、TUNNEL=1 Metro 走 ngrok
+```
+`make macos` = `npm run dev --workspace=@pin-ai/desktop`（electron-vite，`/api` 同源 proxy 到 pinai-web，与 web dev 同构零 CORS）。`make rn` 先 `expo prebuild` 生成 `ios/`（gitignore 产物）再 `expo run:ios`，把 `VITE_*` 映射成 `EXPO_PUBLIC_*`。**apps/mobile 仍在开发、未上线**；apps/desktop 仅本地运行，打包（`npm run package --workspace=@pin-ai/desktop` 出 dmg）的签名/公证未配。
+
 验证：
 ```bash
 cd pinai-agents && uv run ruff check               # 静态检查（含 trust-boundary 防墙）
@@ -190,15 +221,20 @@ cd proactive-ai-frontend && npm test               # 前端单测（vitest）
 cd internal-reward-dashboard && npm run type-check  # 内部 review app 类型检查
 cd internal-reward-dashboard && npm test            # 内部 review app 单测
 cd apps/web && npm run type-check && npm test       # zebra web 端
-npm run check:packages                              # core/state/ui-web 边界 lint + 类型 + 单测
+cd apps/desktop && npm run type-check               # Electron 桌面壳（仅类型）
+cd apps/mobile && npm run type-check                # Expo RN（仅类型）
+npm run check:packages                              # core/state/ui-kit/ui-web 边界 lint + 类型 + 单测
 ```
 
 改完怎么验证（按改动范围选最轻的）：
 - 纯 Python 逻辑/类型 → `uv run ruff check` + `uv run mypy src` + 相关 `uv run pytest tests/<path>`
 - 改 `pinai-agents/src/pinai_agents/web/` → `make restart`，看 `make logs-pinai-web` 起得来 + 打目标接口（端口随机，`make urls` 查）
 - 改 `pinai-agents/src/pinai_agents/chat/` → `make restart`，看 `make logs-pinai-chat` + 用前端发一条消息验证
-- 改前端 → `npm run dev`（端口 3003）在浏览器点；或 `make restart-frontend` 看容器版本
-- 改 `apps/web/` 或 `packages/ui-web/` → `cd apps/web && npm run dev`（端口 3005）+ `npm run check:packages`；动了 ui-web 还要跑 frontend type-check/test（shim 双端共享）
+- 改 proactive-ai-frontend → `npm run dev`（端口 3003）在浏览器点；或 `make restart-frontend` 看容器版本
+- 改 `apps/web/` → `cd apps/web && npm run dev`（端口 3005）+ `cd apps/web && npm run type-check && npm test`
+- 改 `apps/desktop/` → `cd apps/desktop && npm run type-check` + `make macos` 看 Electron 起得来
+- 改 `apps/mobile/` → `cd apps/mobile && npm run type-check` + `make rn SIM=1` 在模拟器点
+- 改 `packages/`（共享层）→ `npm run check:packages`（core/state/ui-kit/ui-web 边界+类型+单测）；这些包被多端共享，按改动面补跑消费端 type-check（proactive-ai-frontend / apps/web 另跑单测，desktop / mobile 只有 type-check）
 - 改 `internal-reward-dashboard/` → `npm run type-check` + `npm test` + `npm run dev -- --host 127.0.0.1 --port 3004`，在 `/runs` / `/traces/:runId` 点真实流程
 - 改 `/api/reward-dashboard/*` 或 reward schema → `uv run ruff check .` + `uv run pytest tests/web/db/repositories/test_reward_repo.py tests/web/routes/test_reward_dashboard.py tests/web/services/test_trace_artifacts.py`
 - 改 db migration → `make migrate`，确认 schema 应用成功
@@ -275,7 +311,9 @@ push 到 `main` 后按改动范围自动部署（CI workflow：`.github/workflow
 - 改 `ops/litellm/` → 部署 LiteLLM
 - Daytona snapshot 跟随 pinai-agents 部署刷新
 
-`apps/web`（zebra 桌面 web 端）与前端走**同一套统一部署管道**（`_deploy.yml` 的 `deploy-web` job + `web_toml` input），dev 跟 main push、prod 跟 `v*` tag——和前端机制完全一致。test 环境暂不部署 web（caller 不传 `web_toml`，job 自动跳过）；PR 上 apps/web + ui-web 的 type-check/test 由 `ci.yml` 的 frontend-check 覆盖。
+`apps/web`（zebra 桌面 web 端）与前端走**同一套统一部署管道**（`_deploy.yml` 的 `deploy-web` job + `web_toml` input），dev 跟 main push、prod 跟 `v*` tag——和前端机制完全一致。test 环境暂不部署 web（caller 不传 `web_toml`，job 自动跳过）；PR 上四端（proactive-ai-frontend / apps/web / apps/desktop / apps/mobile）的 type-check + packages 边界 lint/类型/单测，统一由 `ci.yml` 的 frontend-check 覆盖。
+
+**apps/desktop（Electron）和 apps/mobile（Expo RN）只进 CI type-check，没有自动部署。** desktop 目前仅本地 `make macos`，electron-builder 打包/签名/公证待做；mobile 的 `build-rn-ios.yml` 自动触发已注释禁用（RN iOS 链路未就绪），只能手动 `workflow_dispatch` archive → TestFlight。**proactive-ai-frontend 的 iOS** 另走 `build-ios.yml`：push main（命中 `proactive-ai-frontend/` / `capacitor-plugins/` / `packages/`）自动 build dev → TestFlight，prod 手动 dispatch（bundle id dev=`ai.pin.proactive.development`、prod=`ai.pin.proactive`）。
 
 `internal-reward-dashboard/` 使用独立 workflow `.github/workflows/internal-reward-dashboard-dev.yml`：PR 只跑 type-check / test / build；push 到 `main` 且该目录变化时，部署到 Fly dev app `proactive-ai-reward-dashboard-dev`（默认地址 `https://proactive-ai-reward-dashboard-dev.fly.dev`）。
 
@@ -336,7 +374,7 @@ make deploy-litellm-prod    # LiteLLM → prod
 ## 提交规范
 - Conventional Commits：`feat(...)` / `fix(...)` / `chore(...)` / `docs(...)`。
 - 每次提交聚焦一个变更点。
-- 提交前最少跑：`cd pinai-agents && uv run ruff check && uv run mypy src` + 前端动到的话 `cd proactive-ai-frontend && npm run type-check`。
+- 提交前最少跑：`cd pinai-agents && uv run ruff check && uv run mypy src`（改 Python）+ 前端按改动面：动 `packages/` 跑 `npm run check:packages`，动某个端跑该端 `npm run type-check`（proactive-ai-frontend / apps/web 另跑 `npm test`）。
 
 ## 规则单一真源
 - `AGENTS.md` 是 SSOT。

@@ -1,7 +1,7 @@
 # PIN AI Desktop（Electron macOS 壳）
 
-「一套 React DOM UI、两个壳」：renderer 直接复用 `proactive-ai-frontend` 的
-Vite root（index.html + src/），桌面侧只有 main process + preload 两个文件。
+「一套 zebra UI、web + 桌面两个壳」：renderer 直接复用 `apps/web` 的
+Vite root（index.html + src/，apps/web 是 UI 真源），桌面侧只有 main process + preload 两个文件。
 设计 SSOT：`research/2026-06-10-frontend-layering.mdx` §3.2 / §5。
 
 ## 本地开发
@@ -14,7 +14,7 @@ make macos PROD=1   # 连 fly prod（连 Supabase 也切 prod 的）
 
 - `/api` 走 dev server 同源 proxy（`changeOrigin`，本地/fly 都通）——与
   web dev 完全一致，零 CORS。
-- web UI 改动即热更（renderer 就是 proactive-ai-frontend 的源码）。
+- web UI 改动即热更（renderer 就是 apps/web 的源码）。
 - 不走 make 的裸启动：`set -a && . pinai-agents/.env && set +a &&
   VITE_PIN_API_PROXY_TARGET=<url> npm run dev --workspace=@pin-ai/desktop`。
 

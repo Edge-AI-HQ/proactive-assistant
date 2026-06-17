@@ -145,16 +145,11 @@ jobs:
 
       - run: npm ci
 
-      # 共用层（packages/*）：边界 lint（前端版 trust boundary，规则见
-      # 根 eslint.config.mjs）+ type-check + 单测。
-      - name: Boundary lint (packages)
-        run: npm run lint:packages
-
-      - name: Type check (packages)
-        run: npm run type-check --workspace=@pin-ai/core --workspace=@pin-ai/state --workspace=@pin-ai/ui-web
-
-      - name: Unit tests (packages)
-        run: npm test --workspace=@pin-ai/core --workspace=@pin-ai/state --workspace=@pin-ai/ui-web
+      # 共用层（packages/*）：边界 lint（前端版 trust boundary，规则见根
+      # eslint.config.mjs）+ 各包 type-check + 单测，统一走根 check:packages
+      # 单一真源（含 ui-kit），避免与根脚本漂移漏跑某个包。
+      - name: Check packages (boundary lint + type-check + unit tests)
+        run: npm run check:packages
 
       - name: Type check (Frontend)
         run: npm run type-check --workspace=@pin-ai/proactive-ai-frontend
