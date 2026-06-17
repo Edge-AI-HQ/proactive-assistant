@@ -105,6 +105,44 @@ describe("proxyFetch", () => {
     expect(res.status).toBe(401);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("fires onAuthInvalid when refresh yields no token (session unrecoverable)", async () => {
+    const onAuthInvalid = vi.fn();
+    configure({ refreshAuth: async () => null, onAuthInvalid });
+    fetchMock.mockResolvedValueOnce(jsonResponse(401));
+
+    const res = await proxyFetch("/settings");
+
+    expect(res.status).toBe(401);
+    expect(onAuthInvalid).toHaveBeenCalledTimes(1);
+  });
+
+  it("fires onAuthInvalid when the freshly refreshed token is still rejected", async () => {
+    const onAuthInvalid = vi.fn();
+    configure({ refreshAuth: async () => "tok-2", onAuthInvalid });
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(401))
+      .mockResolvedValueOnce(jsonResponse(401));
+
+    const res = await proxyFetch("/settings");
+
+    expect(res.status).toBe(401);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(onAuthInvalid).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fire onAuthInvalid when the retry succeeds", async () => {
+    const onAuthInvalid = vi.fn();
+    configure({ refreshAuth: async () => "tok-2", onAuthInvalid });
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(401))
+      .mockResolvedValueOnce(jsonResponse(200));
+
+    const res = await proxyFetch("/settings");
+
+    expect(res.status).toBe(200);
+    expect(onAuthInvalid).not.toHaveBeenCalled();
+  });
 });
 
 describe("pinaiFetch", () => {

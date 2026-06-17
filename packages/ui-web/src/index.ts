@@ -46,6 +46,7 @@ export {
 } from "./auth/dev-auth";
 export { registerSignOutCleanup } from "./auth/auth-cleanup";
 export { useAuth } from "./auth/useAuth";
+export { initialOAuthError } from "./auth/supabase";
 export { authHeaders, profileClientHintHeaders } from "./auth/transport-bootstrap";
 
 // ── card：展示原语 / detail 面板内容 / 卡动作 hook ──

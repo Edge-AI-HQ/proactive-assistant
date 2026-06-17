@@ -14,6 +14,7 @@ import { configureTransport, type DeviceClientHints } from "@pin-ai/core";
 
 import { isPinLocalDevAuthEnabled, pinLocalDevAuthHeaders } from "./dev-auth";
 import { PIN_API_BASE, pinApiRequestHeaders } from "./platform";
+import { performSignOut } from "./sign-out";
 import { supabase } from "./supabase";
 
 export function profileClientHintHeaders(): Record<string, string> {
@@ -107,10 +108,23 @@ async function refreshAndGetToken(): Promise<string | null> {
   return refreshPromise;
 }
 
+/**
+ * 传输层判定 session 不可恢复时的全局收口（HTTP 层 401 + refresh 失败触发）：
+ * 清本地态回登录页。performSignOut 自身幂等，并发 401 多次触发也只清一次。
+ * localDevAuth 下 X-Dev-Auth 永不该 401，万一触发也不能 reload 掉 dev session
+ * （且会 reload 循环），直接 no-op。
+ */
+function handleAuthInvalid(): void {
+  if (isPinLocalDevAuthEnabled()) return;
+  console.warn("[auth] session unrecoverable (401 after refresh) — signing out");
+  void performSignOut();
+}
+
 configureTransport({
   baseUrl: PIN_API_BASE,
   getAuthHeaders: authHeaders,
   refreshAuth: refreshAndGetToken,
+  onAuthInvalid: handleAuthInvalid,
   // ngrok-skip-browser-warning 等平台 headers（web 同源时为空对象）。
   defaultHeaders: pinApiRequestHeaders(),
   clientHintHeaders: profileClientHintHeaders,

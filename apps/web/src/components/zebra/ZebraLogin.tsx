@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
-import { useAuth, Text } from "@pin-ai/ui-web";
+import { useAuth, Text, initialOAuthError } from "@pin-ai/ui-web";
 import ZebraBackdrop from "./ZebraBackdrop";
 
 const EASE = [0.32, 0.72, 0, 1] as const;
@@ -16,9 +16,12 @@ const EASE = [0.32, 0.72, 0, 1] as const;
 export default function ZebraLogin() {
   const { signInWithGoogle } = useAuth();
   const [signingIn, setSigningIn] = useState(false);
+  // OAuth web 回调失败时由 supabase.ts 在整页加载时抓到（见 initialOAuthError）。
+  const [authError, setAuthError] = useState(initialOAuthError);
 
   const handleGoogle = async () => {
     if (signingIn) return;
+    setAuthError(null);
     setSigningIn(true);
     try {
       // Web flow redirects the whole page to the provider; the spinner only
@@ -42,6 +45,13 @@ export default function ZebraLogin() {
           transition={{ duration: 0.6, delay: 0.15, ease: EASE }}
           className="w-full max-w-[360px]"
         >
+          {authError && (
+            <div className="mb-4 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-center">
+              <Text variant="bodySm" className="text-red-600">
+                Couldn't sign you in. {authError}
+              </Text>
+            </div>
+          )}
           <button
             onClick={handleGoogle}
             disabled={signingIn}

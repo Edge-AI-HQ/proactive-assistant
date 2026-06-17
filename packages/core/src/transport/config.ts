@@ -27,6 +27,14 @@ export interface TransportConfig {
    * 实现方负责并发去重（gotrue refresh token 是单次使用的）。
    */
   refreshAuth?: () => Promise<string | null>;
+  /**
+   * 认证态不可恢复时调用一次：带 auth 的请求收到 401，且 refreshAuth 也
+   * 无法续期（返回 null / 刷新后仍 401）——意味着这个 session 已经死了，
+   * 不是网络抖动。平台据此做全局收口（web/native: 清本地态 + 回登录页），
+   * 避免 stale user 卡在「连不上服务器」错误屏。实现方负责幂等（并发请求
+   * 会触发多次）。未注入则退化为旧行为（原 401 原样返回）。
+   */
+  onAuthInvalid?: () => void;
   /** 平台附加 headers（如 ngrok-skip-browser-warning），垫在最底层。 */
   defaultHeaders?: Record<string, string>;
   /** 客户端环境 hints（locale/timezone），/profile、/settings 用。平台各异。 */

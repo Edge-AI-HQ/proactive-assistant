@@ -5,7 +5,7 @@ import { App as CapApp } from "@capacitor/app";
 import { supabase } from "./supabase";
 import { isElectron, isNative } from "./platform";
 import { getDesktopBridge } from "./desktop-bridge";
-import { runSignOutCleanups } from "./auth-cleanup";
+import { performSignOut } from "./sign-out";
 import {
   isPinLocalDevAuthEnabled,
   pinLocalDevAuthSession,
@@ -148,26 +148,9 @@ export function useAuth() {
     }
   }, [localDevAuth]);
 
-  // Full reload after signOut wipes app state cleanly — simpler than
-  // coordinating per-component cleanup for multi-account flows. Also
-  // sweep our session/local-storage keys so a different user signing in
-  // on the same browser doesn't inherit them.
-  const signOut = useCallback(async () => {
-    for (const key of Object.keys(sessionStorage)) {
-      if (key.startsWith("proactive-ai")) sessionStorage.removeItem(key);
-    }
-    for (const key of Object.keys(localStorage)) {
-      if (key.startsWith("pinai:")) localStorage.removeItem(key);
-    }
-    // 平台注册的清理（frontend: clearDeviceCredentials；apps/web: 无）。
-    await runSignOutCleanups();
-    if (!localDevAuth) {
-      await supabase.auth.signOut();
-    }
-    // MemoryRouter 下 URL 恒为入口路径,reload 即"回到根并清状态";
-    // replace("/") 在 Electron 的 pinai:// scheme 下会跳出 app 根,不可用。
-    window.location.reload();
-  }, [localDevAuth]);
+  // 清态 + reload 抽到 performSignOut（模块级），与传输层 onAuthInvalid 收口
+  // 共用同一实现且自身幂等——失效 session 自动登出与用户主动登出走同一条路。
+  const signOut = useCallback(() => performSignOut(), []);
 
   return { ...state, signInWithGoogle, signOut };
 }
