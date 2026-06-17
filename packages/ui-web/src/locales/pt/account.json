@@ -105,6 +105,13 @@
     "drawerDescription": "Escolha um plano e uma forma de pagamento para aprovar esta tarefa",
     "subscriptionRequired": "Assinatura necessária",
     "pickPlanFor": "Escolha um plano para aprovar “{{title}}”",
+    "outOfCredits": "Sem créditos",
+    "outOfCreditsBody": "Você ficou sem créditos gratuitos. Escolha um plano para o Pin AI continuar trabalhando em segundo plano — triando, redigindo e executando nos seus apps.",
+    "feature1": "Apps e contas conectados ilimitados",
+    "feature2": "Modo Voz + Ambient sempre ativo",
+    "feature3": "Execução prioritária, modelos maiores",
+    "feature4": "Cancele quando quiser · 7 dias de teste grátis",
+    "startTrial": "Iniciar teste grátis de 7 dias · ${{price}}/mês",
     "notNow": "Agora não",
     "subscribe": "Assinar · ${{price}}/mês",
     "checkoutFailed": "falha no checkout"

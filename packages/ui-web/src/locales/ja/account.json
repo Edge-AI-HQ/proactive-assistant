@@ -103,6 +103,13 @@
     "drawerDescription": "このタスクを承認するには、プランと支払い方法を選択してください",
     "subscriptionRequired": "サブスクリプションが必要です",
     "pickPlanFor": "「{{title}}」を承認するプランを選択してください",
+    "outOfCredits": "クレジットを使い切りました",
+    "outOfCreditsBody": "無料クレジットを使い切りました。プランを選ぶと、Pin AI がバックグラウンドで動き続け、各アプリで仕分け・下書き・実行を行います。",
+    "feature1": "アプリとアカウントを無制限に接続",
+    "feature2": "音声 + Ambient モード常時オン",
+    "feature3": "優先実行・より大きなモデル",
+    "feature4": "いつでもキャンセル可 · 7日間無料トライアル",
+    "startTrial": "7日間の無料トライアルを開始 · ${{price}}/月",
     "notNow": "あとで",
     "subscribe": "登録する · ${{price}}/月",
     "checkoutFailed": "決済に失敗しました"

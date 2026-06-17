@@ -184,8 +184,18 @@ export {
 // device-timeline-filters 已移 @pin-ai/core（纯日期逻辑，跨端）——消费者直接
 // import @pin-ai/core，ui-web 不再转出。
 
-// ── profile：MIRROR 视图（profile / goals / memory） ──
-export { default as GoalsView } from "./profile/GoalsView";
+// ── profile：MIRROR 共享展示层（apps/web MirrorDesktop + proactive
+//    MirrorMobile 复用；数据走 @pin-ai/state 的 useProfileSnapshot /
+//    useProfileMemories；各 app 的 layout shell 自己持 tab/openGroups/expandedGoal）。──
+export {
+  ProfilePanel,
+  MemoryPanel,
+  GoalsGrid,
+  GoalDetail,
+  IdentitySummaryCard,
+  WorkbenchTabButton,
+  type ProfileGroupKey,
+} from "./profile/mirror";
 
 // ── account：SETTING sections + 订阅（真实 Stripe 链路） ──
 export { default as AutoDreamingSettings } from "./account/AutoDreamingSettings";

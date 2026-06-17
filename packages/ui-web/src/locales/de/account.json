@@ -104,6 +104,13 @@
     "drawerDescription": "Wählen Sie Tarif und Zahlungsart, um diese Aufgabe freizugeben",
     "subscriptionRequired": "Abo erforderlich",
     "pickPlanFor": "Wählen Sie einen Tarif, um „{{title}}“ freizugeben",
+    "outOfCredits": "Keine Credits mehr",
+    "outOfCreditsBody": "Deine kostenlosen Credits sind aufgebraucht. Wähle einen Plan, damit Pin AI im Hintergrund weiterarbeitet – sichten, entwerfen und ausführen über deine Apps hinweg.",
+    "feature1": "Unbegrenzt verbundene Apps & Konten",
+    "feature2": "Sprach- + Ambient-Modus immer aktiv",
+    "feature3": "Priorisierte Ausführung, größere Modelle",
+    "feature4": "Jederzeit kündbar · 7 Tage kostenlos testen",
+    "startTrial": "7 Tage kostenlos testen · ${{price}}/Mon.",
     "notNow": "Nicht jetzt",
     "subscribe": "Abonnieren · {{price}} $/Monat",
     "checkoutFailed": "Checkout fehlgeschlagen"

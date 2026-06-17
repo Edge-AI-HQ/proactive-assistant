@@ -6,6 +6,7 @@ import {
   PanelLeft, PanelLeftClose, Bug,
 } from "lucide-react";
 import { toast } from "sonner";
+import logoAsset from "@/assets/pin-ai-logo.svg";
 import {
   deleteAccount,
   deriveCardUiStatus,
@@ -369,15 +370,24 @@ export default function ZebraShell() {
         }}
       >
         {/* Brand + collapse toggle */}
-        <div className={`flex items-center pt-6 pb-5 ${sidebarCollapsed ? "flex-col gap-3" : "gap-2.5 px-5"}`}>
-          <span
-            className="w-2.5 h-2.5 rounded-full shrink-0"
-            style={{ background: "linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(330 80% 65%) 100%)" }}
-          />
-          {!sidebarCollapsed && (
-            <span className="text-bodySm font-bold tracking-[0.22em] text-foreground/80 flex-1 whitespace-nowrap">
-              PIN AI
-            </span>
+        <div className={`flex items-center pt-6 pb-5 ${sidebarCollapsed ? "flex-col gap-3" : "gap-3 pl-7 pr-5"}`}>
+          {sidebarCollapsed ? (
+            <img
+              src={logoAsset}
+              alt="PIN AI"
+              className="shrink-0 select-none w-9 h-9 object-cover object-left"
+            />
+          ) : (
+            <>
+              <img
+                src={logoAsset}
+                alt=""
+                className="shrink-0 select-none h-6 w-6 object-cover object-left"
+              />
+              <span className="text-base font-semibold tracking-wider text-foreground whitespace-nowrap flex-1">
+                PIN AI
+              </span>
+            </>
           )}
           <button
             onClick={() => setSidebarCollapsed((v) => !v)}
@@ -506,7 +516,7 @@ export default function ZebraShell() {
             ) : mainPath === "/connect" ? (
               <ZebraConnect composio={composio} />
             ) : mainPath === "/mirror" ? (
-              <ZebraMirror composio={composio} />
+              <ZebraMirror />
             ) : mainPath === "/setting" ? (
               <ZebraSetting />
             ) : mainPath === "/subscription" ? (

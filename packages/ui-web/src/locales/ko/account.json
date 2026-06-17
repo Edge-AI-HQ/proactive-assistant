@@ -103,6 +103,13 @@
     "drawerDescription": "이 작업을 승인하려면 플랜과 결제 수단을 선택하세요",
     "subscriptionRequired": "구독이 필요해요",
     "pickPlanFor": "“{{title}}” 승인을 위해 플랜을 선택하세요",
+    "outOfCredits": "크레딧 소진",
+    "outOfCreditsBody": "무료 크레딧을 모두 사용했습니다. 플랜을 선택하면 Pin AI가 백그라운드에서 계속 작동하며 여러 앱에서 분류·초안 작성·실행을 수행합니다.",
+    "feature1": "앱 및 계정 무제한 연결",
+    "feature2": "음성 + Ambient 모드 상시 작동",
+    "feature3": "우선 실행, 더 큰 모델",
+    "feature4": "언제든 취소 가능 · 7일 무료 체험",
+    "startTrial": "7일 무료 체험 시작 · ${{price}}/월",
     "notNow": "나중에",
     "subscribe": "구독 · ${{price}}/월",
     "checkoutFailed": "결제 실패"

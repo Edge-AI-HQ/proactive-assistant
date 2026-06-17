@@ -22,12 +22,25 @@ export default function ZebraAmbient({
 
       {/* Status card — mirror of the server-side consent (capture runs on the phone) */}
       <div className="glass-card-strong px-4 py-3.5 mb-4 flex items-center gap-3">
-        <span className={`relative shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${
-          ambientOn ? "bg-foreground animate-ambient-icon-breathe" : "bg-foreground/30"
-        }`}>
-          <Radio size={15} strokeWidth={2} className={ambientOn ? "text-background" : "text-background/60"} />
+        <span
+          className={`relative shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${
+            ambientOn ? "animate-ambient-icon-breathe" : ""
+          }`}
+          style={{
+            background: ambientOn
+              ? "linear-gradient(135deg, rgba(0,0,0,0.75) 0%, rgba(0,0,0,0.55) 100%)"
+              : "linear-gradient(135deg, rgba(0,0,0,0.25) 0%, rgba(0,0,0,0.15) 100%)",
+          }}
+        >
+          <Radio size={15} strokeWidth={2} className={ambientOn ? "text-white" : "text-white/70"} />
           {ambientOn && (
-            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-background" />
+            <span
+              className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full"
+              style={{
+                background: "linear-gradient(135deg, #34d399 0%, #10b981 100%)",
+                boxShadow: "0 0 0 2px rgba(255,255,255,0.6)",
+              }}
+            />
           )}
         </span>
         <div className="flex-1 min-w-0">

@@ -61,18 +61,31 @@ export default function ZebraNow({
           Your proactive feed · {sphereCards.length} cards today
         </Text>
 
-        <div className="mt-4 max-w-sm rounded-2xl bg-foreground/[0.04] border border-foreground/[0.06] shadow-sm px-3 py-2.5 flex items-center gap-3">
+        <div className="glass-card mt-4 max-w-sm px-3.5 py-3 flex items-center gap-3">
           <div className="flex items-center gap-3 flex-1 min-w-0 text-left">
-            <span className={`relative shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
-              ambientOn ? "bg-foreground animate-ambient-icon-breathe" : "bg-foreground/30"
-            }`}>
+            <span
+              className={`relative shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${
+                ambientOn ? "animate-ambient-icon-breathe" : ""
+              }`}
+              style={{
+                background: ambientOn
+                  ? "linear-gradient(135deg, rgba(0,0,0,0.75) 0%, rgba(0,0,0,0.55) 100%)"
+                  : "linear-gradient(135deg, rgba(0,0,0,0.25) 0%, rgba(0,0,0,0.15) 100%)",
+              }}
+            >
               <Radio
-                size={14}
+                size={15}
                 strokeWidth={2}
-                className={ambientOn ? "text-background" : "text-background/60"}
+                className={ambientOn ? "text-white" : "text-white/70"}
               />
               {ambientOn && (
-                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-background" />
+                <span
+                  className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full"
+                  style={{
+                    background: "linear-gradient(135deg, #34d399 0%, #10b981 100%)",
+                    boxShadow: "0 0 0 2px rgba(255,255,255,0.6)",
+                  }}
+                />
               )}
             </span>
             <div className="flex-1 min-w-0">
@@ -87,15 +100,25 @@ export default function ZebraNow({
           <button
             onClick={onToggleAmbient}
             disabled={ambientBusy}
-            className={`relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-60 ${
-              ambientOn ? "bg-foreground animate-ambient-toggle-breathe" : "bg-foreground/20"
+            className={`relative w-11 h-7 rounded-full shrink-0 transition-colors disabled:opacity-60 ${
+              ambientOn ? "animate-ambient-toggle-breathe" : ""
             }`}
+            style={{
+              background: ambientOn
+                ? "linear-gradient(135deg, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0.6) 100%)"
+                : "linear-gradient(135deg, rgba(0,0,0,0.2) 0%, rgba(0,0,0,0.1) 100%)",
+            }}
             aria-label="Toggle ambient"
           >
             <motion.span
               layout
               transition={{ type: "tween", duration: 0.2, ease: "easeInOut" }}
-              className={`absolute top-0.5 w-5 h-5 rounded-full bg-background shadow-sm ${ambientOn ? "left-[22px]" : "left-0.5"}`}
+              className="absolute top-0.5 w-6 h-6 rounded-full"
+              style={{
+                left: ambientOn ? "20px" : "2px",
+                background: "linear-gradient(180deg, #ffffff 0%, #f2f2f7 100%)",
+                boxShadow: "0 1px 3px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.8)",
+              }}
             />
           </button>
         </div>

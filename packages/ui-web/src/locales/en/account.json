@@ -104,6 +104,13 @@
     "drawerDescription": "Choose a plan and payment method to approve this task",
     "subscriptionRequired": "Subscription required",
     "pickPlanFor": "Pick a plan to approve “{{title}}”",
+    "outOfCredits": "Out of Credits",
+    "outOfCreditsBody": "You're out of free credits. Choose a plan to keep Pin AI working in the background — triaging, drafting and executing across your apps.",
+    "feature1": "Unlimited connected apps & accounts",
+    "feature2": "Voice + Ambient mode always-on",
+    "feature3": "Priority execution, larger models",
+    "feature4": "Cancel anytime · 7-day free trial",
+    "startTrial": "Start 7-day free trial · ${{price}}/mo",
     "notNow": "Not now",
     "subscribe": "Subscribe · ${{price}}/mo",
     "checkoutFailed": "checkout failed"

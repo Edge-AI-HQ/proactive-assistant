@@ -103,6 +103,13 @@
     "drawerDescription": "选择套餐和支付方式以批准此任务",
     "subscriptionRequired": "需要订阅",
     "pickPlanFor": "选择套餐以批准「{{title}}」",
+    "outOfCredits": "额度已用完",
+    "outOfCreditsBody": "你的免费额度已用完。选择一个套餐，让 Pin AI 持续在后台为你工作——跨各个应用做分诊、起草和执行。",
+    "feature1": "无限连接应用与账户",
+    "feature2": "语音 + Ambient 模式常驻",
+    "feature3": "优先执行、更大模型",
+    "feature4": "随时取消 · 7 天免费试用",
+    "startTrial": "开启 7 天免费试用 · ${{price}}/月",
     "notNow": "暂不",
     "subscribe": "订阅 · ${{price}}/月",
     "checkoutFailed": "支付发起失败"

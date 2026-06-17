@@ -4,7 +4,7 @@ import AmbientView, { type TimelineEntry as AmbientTimelineEntry } from "@/compo
 import AccountPanel from "@/components/account/AccountPanel";
 import NowView from "@/components/now/NowView";
 import SwipeBackLayer from "@/components/app/SwipeBackLayer";
-import RealGoalsView from "@/components/profile/GoalsView";
+import MirrorMobile from "@/components/profile/MirrorMobile";
 import RealControlPanel from "@/components/connect/ControlPanel";
 import CardTimeline from "@/components/tasks/CardTimeline";
 import type { Intent } from "@/components/now/card-model";
@@ -150,9 +150,10 @@ export default function ViewRouter({
             onAmbientAction={onAmbientAction}
           />
         ) : activeView === "profile" ? (
-          /* Real goals/memory/skill page (old AppShell GOALS view). */
+          /* MIRROR —— profile / memory / goals。移动布局 shell（数据走
+             @pin-ai/state hook、展示复用 @pin-ai/ui-web panel）。 */
           <div className="h-full min-h-0 overflow-hidden">
-            <RealGoalsView composio={composio} />
+            <MirrorMobile />
           </div>
         ) : activeView === "connect" ? (
           /* Real data + device connections + auto settings (old AppShell

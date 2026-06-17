@@ -55,6 +55,14 @@ export {
   type UseMemoriesResult,
 } from "./queries/memories";
 export {
+  profileKeys,
+  profileMemoriesKeys,
+  useProfileSnapshot,
+  useProfileMemories,
+  type UseProfileSnapshotResult,
+  type UseProfileMemoriesResult,
+} from "./queries/profile";
+export {
   usePipeline,
   type PipelinePersist,
   type UsePipelineOptions,

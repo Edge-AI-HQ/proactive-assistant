@@ -110,8 +110,18 @@ export function computeCardStyle(
     transform: `translate3d(${(x - 80).toFixed(2)}px, ${(y - 34).toFixed(2)}px, 0) scale(${scale.toFixed(3)})`,
     opacity: Math.round(getSphereCardPresentation(depth).opacity * 100) / 100,
     zIndex: Math.round(1000 + z),
-    background: `hsl(var(--card) / ${surfaceAlpha.toFixed(2)})`,
-    boxShadow: z > 0 ? "0 4px 18px rgba(0,0,0,0.12)" : "none",
+    // Liquid-glass surface (zebra design prototype) anchored to depth: the
+    // gradient alpha tracks surfaceAlpha so front cards stay readable over the
+    // video backdrop even on native, where native-power-save drops the
+    // glass-card-strong backdrop blur and the gradient must carry the surface.
+    background: `linear-gradient(135deg, rgba(255,255,255,${surfaceAlpha.toFixed(2)}) 0%, rgba(255,255,255,${(surfaceAlpha * 0.55).toFixed(2)}) 100%)`,
+    // Front hemisphere gets the liquid-glass inset highlight + soft layered
+    // shadow; back-facing cards keep "none" (deliberate — far cards skip shadow
+    // rendering, asserted by Sphere3DCards.test).
+    boxShadow:
+      z > 0
+        ? "inset 0 1px 1px rgba(255,255,255,0.6), 0 4px 16px rgba(0,0,0,0.04), 0 1px 4px rgba(0,0,0,0.02)"
+        : "none",
     pointerEvents: depth < 0.25 ? "none" : "auto",
   };
 }

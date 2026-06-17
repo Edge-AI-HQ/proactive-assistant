@@ -105,6 +105,13 @@
     "drawerDescription": "Choisissez un forfait et un moyen de paiement pour approuver cette tâche",
     "subscriptionRequired": "Abonnement requis",
     "pickPlanFor": "Choisissez un forfait pour approuver « {{title}} »",
+    "outOfCredits": "Crédits épuisés",
+    "outOfCreditsBody": "Vous n'avez plus de crédits gratuits. Choisissez une formule pour que Pin AI continue de travailler en arrière-plan : tri, rédaction et exécution dans vos applis.",
+    "feature1": "Applis et comptes connectés illimités",
+    "feature2": "Mode Voix + Ambient toujours actif",
+    "feature3": "Exécution prioritaire, modèles plus puissants",
+    "feature4": "Annulez à tout moment · 7 jours d'essai gratuit",
+    "startTrial": "Démarrer l'essai gratuit de 7 jours · ${{price}}/mois",
     "notNow": "Pas maintenant",
     "subscribe": "S'abonner · {{price}} $/mois",
     "checkoutFailed": "échec du paiement"

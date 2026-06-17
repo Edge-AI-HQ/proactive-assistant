@@ -190,10 +190,11 @@ export const Composer = forwardRef<
         <div
           className="flex flex-col gap-2 rounded-3xl border border-foreground/[0.08] px-4 py-3"
           style={{
-            background: "rgba(255,255,255,0.6)",
-            backdropFilter: "blur(20px) saturate(1.5)",
-            WebkitBackdropFilter: "blur(20px) saturate(1.5)",
-            boxShadow: "0 4px 24px hsl(0 0% 0% / 0.04)",
+            background: "linear-gradient(135deg, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.25) 100%)",
+            backdropFilter: "blur(24px) saturate(1.8)",
+            WebkitBackdropFilter: "blur(24px) saturate(1.8)",
+            boxShadow:
+              "inset 0 1px 1px rgba(255,255,255,0.6), 0 4px 16px rgba(0,0,0,0.04), 0 1px 4px rgba(0,0,0,0.02)",
           }}
         >
           <p className="flex min-h-[20px] items-center gap-1.5 text-body italic leading-snug text-foreground/55">
@@ -249,10 +250,11 @@ export const Composer = forwardRef<
       <div
         className="flex items-end gap-2 rounded-3xl border border-foreground/[0.08] py-2 pl-4 pr-2 transition-colors focus-within:border-foreground/[0.18]"
         style={{
-          background: "rgba(255,255,255,0.6)",
-          backdropFilter: "blur(20px) saturate(1.5)",
-          WebkitBackdropFilter: "blur(20px) saturate(1.5)",
-          boxShadow: "0 4px 24px hsl(0 0% 0% / 0.04)",
+          background: "linear-gradient(135deg, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.25) 100%)",
+          backdropFilter: "blur(24px) saturate(1.8)",
+          WebkitBackdropFilter: "blur(24px) saturate(1.8)",
+          boxShadow:
+            "inset 0 1px 1px rgba(255,255,255,0.6), 0 4px 16px rgba(0,0,0,0.04), 0 1px 4px rgba(0,0,0,0.02)",
         }}
         onFocusCapture={() => onFocusChange?.(true)}
         onBlurCapture={() => onFocusChange?.(false)}
