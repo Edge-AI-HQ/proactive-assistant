@@ -75,14 +75,16 @@ node_modules/.install-stamp: package-lock.json
 # in your shell — recommended, nothing to distribute) OR a local .env.keys
 # file. Re-runs when .env is missing/empty or .env.dev is newer; recover a
 # stuck or empty env with `make env-local`. Atomic decrypt: see
-# scripts/decrypt_env.sh.
+# scripts/decrypt_env.sh. Each ensure-env-* depends on `install`, so the
+# dotenvx binary (a root devDependency) is auto-installed before first use — no
+# manual `npm install` needed before `make up`/`reset`/`restart`.
 
 ensure-env: ensure-env-litellm ensure-env-pinai-agents ensure-env-root ## Auto-decrypt all .env files if needed
 
-ensure-env-litellm:
+ensure-env-litellm: install
 	@bash scripts/decrypt_env.sh ops/litellm
 
-ensure-env-pinai-agents:
+ensure-env-pinai-agents: install
 	@bash scripts/decrypt_env.sh pinai-agents
 	@# Re-derive .env.chat (master creds stripped) whenever .env changes —
 	@# atomically, and only with a valid FORBIDDEN_ENVS filter (an empty regex
@@ -120,7 +122,7 @@ ensure-env-pinai-agents:
 # Root ./.env holds local-infra config (NGROK_AUTHTOKEN), shared across the
 # team via the encrypted ./.env.dev. docker compose reads ./.env automatically
 # for the ngrok service.
-ensure-env-root:
+ensure-env-root: install
 	@bash scripts/decrypt_env.sh .
 
 env-local: ## Force re-decrypt all .env files
