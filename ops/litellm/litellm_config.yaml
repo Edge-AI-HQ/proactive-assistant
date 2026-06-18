@@ -36,10 +36,13 @@ model_list:
       # aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
       # aws_region_name: us-east-1
       cache_control_injection_points:
+        # index:0 = tools+system (static prefix), index:-1 = conversation
+        # tail. NOT role:system — that marked EVERY system message, so the
+        # per-turn <current_datetime> blocks overflowed Anthropic's max of 4
+        # ("Found 5" card-chat 400). Two fixed breakpoints, count-bounded.
         - location: message
-          role: system
+          index: 0
         - location: message
-          role: user
           index: -1
     model_info:
       input_cost_per_token: 0.000003
@@ -60,10 +63,13 @@ model_list:
       # aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
       # aws_region_name: us-east-1
       cache_control_injection_points:
+        # index:0 = tools+system (static prefix), index:-1 = conversation
+        # tail. NOT role:system — that marked EVERY system message, so the
+        # per-turn <current_datetime> blocks overflowed Anthropic's max of 4
+        # ("Found 5" card-chat 400). Two fixed breakpoints, count-bounded.
         - location: message
-          role: system
+          index: 0
         - location: message
-          role: user
           index: -1
     model_info:
       input_cost_per_token: 0.000005
@@ -90,10 +96,13 @@ model_list:
       model: anthropic/claude-sonnet-4-6
       api_key: os.environ/ANTHROPIC_API_KEY
       cache_control_injection_points:
+        # index:0 = tools+system (static prefix), index:-1 = conversation
+        # tail. NOT role:system — that marked EVERY system message, so the
+        # per-turn <current_datetime> blocks overflowed Anthropic's max of 4
+        # ("Found 5" card-chat 400). Two fixed breakpoints, count-bounded.
         - location: message
-          role: system
+          index: 0
         - location: message
-          role: user
           index: -1
     model_info:
       input_cost_per_token: 0.000003
@@ -108,10 +117,13 @@ model_list:
       model: anthropic/claude-opus-4-6
       api_key: os.environ/ANTHROPIC_API_KEY
       cache_control_injection_points:
+        # index:0 = tools+system (static prefix), index:-1 = conversation
+        # tail. NOT role:system — that marked EVERY system message, so the
+        # per-turn <current_datetime> blocks overflowed Anthropic's max of 4
+        # ("Found 5" card-chat 400). Two fixed breakpoints, count-bounded.
         - location: message
-          role: system
+          index: 0
         - location: message
-          role: user
           index: -1
     model_info:
       input_cost_per_token: 0.000005

@@ -19,9 +19,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator
-from datetime import datetime
 from typing import Any, Literal
-from zoneinfo import ZoneInfo
 
 import daytona
 from fastapi import APIRouter, Header, HTTPException, status
@@ -122,9 +120,9 @@ class ChatRequest(BaseModel):
     messages: list[str] = Field(default_factory=list, max_length=50)
     card_context: dict[str, Any] | None = None
     # IANA timezone of the user's device/profile (web resolves it — chat has
-    # no DB). When present, every send turn gets a <current_datetime>
-    # SystemMessage so the agent can resolve relative dates ("明天", "next
-    # Friday") against an authoritative anchor instead of guessing.
+    # no DB). Carried into run_context; CurrentDatetimeMiddleware injects a
+    # day-granular <current_datetime> anchor at model-call time so the agent
+    # can resolve relative dates ("明天", "next Friday") instead of guessing.
     timezone: str | None = Field(default=None, max_length=64)
     client_hints: ClientHintsBody | None = None
     # "Bypass permissions" opt-in (composer toggle), per-run: when True the
@@ -214,38 +212,12 @@ def _card_context_message(card_context: dict[str, Any]) -> SystemMessage:
     )
 
 
-def _current_datetime_message(tz_name: str) -> SystemMessage:
-    """`<current_datetime>` anchor for the turn — the agent has no clock and
-    must not guess dates (the at_local date-guess bug). Injected per send
-    turn alongside the user messages, so the conversation's cached prefix is
-    untouched (unlike a date in the system prompt, which would bust the
-    LiteLLM cache breakpoints every turn). SystemMessages are filtered out
-    of /history, so this never renders to the user."""
-    try:
-        tz = ZoneInfo(tz_name)
-    except Exception:
-        tz, tz_name = ZoneInfo("UTC"), "UTC"
-    local = datetime.now(tz)
-    return SystemMessage(
-        content=(
-            "<current_datetime>\n"
-            f"{local.strftime('%Y-%m-%dT%H:%M')} {local.strftime('%A')} ({tz_name})\n"
-            "Authoritative current date/time at the moment the latest user "
-            "message was sent. Resolve relative dates (tomorrow, 明天, next "
-            "Friday) against THIS. If several current_datetime notes appear "
-            "in the conversation, the latest one wins.\n"
-            "</current_datetime>"
-        ),
-    )
-
-
 def _build_send_messages(
     *,
     messages: list[str],
     card_context: dict[str, Any] | None,
     is_card_thread: bool,
     is_first_turn: bool,
-    timezone: str | None = None,
 ) -> list[Any]:
     """Assemble the input messages for a normal (non-regenerate) send.
 
@@ -265,6 +237,11 @@ def _build_send_messages(
         trigger is "this turn opened main chat from a card", not "first
         turn". `is_first_turn` is irrelevant here.
 
+    The `<current_datetime>` anchor is NOT injected here — it rides as a
+    transient, day-granular system block added at model-call time by
+    `CurrentDatetimeMiddleware` (it must not be persisted into thread state,
+    or it accumulates and overflows Anthropic's cache_control breakpoints).
+
     Pure + side-effect-free so the branch logic is unit-testable without
     spinning up the agent / sandbox.
     """
@@ -274,10 +251,6 @@ def _build_send_messages(
             msgs.append(_card_context_message(card_context))
     elif card_context is not None:
         msgs.append(_card_context_message(card_context))
-    if timezone is not None:
-        # Every send turn, both thread kinds — the date moves with the turn,
-        # unlike card_context whose card-thread injection is first-turn-only.
-        msgs.append(_current_datetime_message(timezone))
     msgs.extend({"role": "user", "content": text} for text in messages)
     return msgs
 
@@ -501,7 +474,6 @@ async def _stream(
                 card_context=req.card_context,
                 is_card_thread=is_card_thread,
                 is_first_turn=is_first_turn,
-                timezone=req.timezone,
             ),
         )
 
@@ -548,6 +520,7 @@ async def _stream(
         session_key=req.session_key,
         browserbase_context_id=principal.browserbase_context_id or "",
         client_hints=hints,
+        timezone=req.timezone or "",
     ):
         # HITL resume re-enters the paused graph via Command(resume=); a
         # normal/regenerate turn feeds the assembled messages.

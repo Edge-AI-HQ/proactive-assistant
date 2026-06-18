@@ -8,6 +8,11 @@ Asserts the message-assembly branch in `chat/routes/chat.py`:
   * card thread keeps its first-turn guard: injects on first turn, skips
     on later turns (regression — main-thread change must not touch it).
 
+The `<current_datetime>` anchor is NOT assembled here anymore — it rides
+as a transient day-granular system block injected at model-call time by
+`CurrentDatetimeMiddleware` (see tests/chat/runtime/test_datetime_middleware.py).
+So `_build_send_messages` injects card_context only.
+
 These exercise the pure `_build_send_messages` helper so we test the
 decision without spinning up the agent / sandbox.
 """
@@ -95,66 +100,3 @@ def test_merge_sends_each_message_as_its_own_user_turn():
         {"role": "user", "content": "second"},
         {"role": "user", "content": "third"},
     ]
-
-
-def test_timezone_injects_current_datetime_anchor():
-    """With a timezone, every send turn carries a <current_datetime>
-    SystemMessage (date anchor — the agent has no clock and must not guess
-    dates when resolving '明天 15:00' into at_local)."""
-    msgs = _build_send_messages(
-        messages=["明天 15:00 的会议提前半小时提醒我"],
-        card_context=None,
-        is_card_thread=False,
-        is_first_turn=False,
-        timezone="Asia/Shanghai",
-    )
-    sys_msgs = _system_messages(msgs)
-    assert len(sys_msgs) == 1
-    content = sys_msgs[0].content
-    assert "<current_datetime>" in content
-    assert "(Asia/Shanghai)" in content
-    # YYYY-MM-DDTHH:MM shape — the exact value is now-dependent.
-    import re
-
-    assert re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}", content)
-    # Anchor precedes the user turn, mirroring card_context placement.
-    assert isinstance(msgs[0], SystemMessage)
-
-
-def test_timezone_injected_on_card_thread_every_turn():
-    """Unlike card_context (card threads: first turn only), the date anchor
-    rides EVERY send turn — the date moves over a thread's lifetime."""
-    msgs = _build_send_messages(
-        messages=["follow-up"],
-        card_context=_CTX,
-        is_card_thread=True,
-        is_first_turn=False,
-        timezone="America/Los_Angeles",
-    )
-    sys_msgs = _system_messages(msgs)
-    assert len(sys_msgs) == 1
-    assert "<current_datetime>" in sys_msgs[0].content
-    assert "(America/Los_Angeles)" in sys_msgs[0].content
-
-
-def test_invalid_timezone_falls_back_to_utc_anchor():
-    msgs = _build_send_messages(
-        messages=["hi"],
-        card_context=None,
-        is_card_thread=False,
-        is_first_turn=False,
-        timezone="Not/AZone",
-    )
-    sys_msgs = _system_messages(msgs)
-    assert len(sys_msgs) == 1
-    assert "(UTC)" in sys_msgs[0].content
-
-
-def test_no_timezone_means_no_anchor():
-    msgs = _build_send_messages(
-        messages=["hi"],
-        card_context=None,
-        is_card_thread=False,
-        is_first_turn=False,
-    )
-    assert _system_messages(msgs) == []

@@ -25,6 +25,7 @@ from deepagents import SubAgent, create_deep_agent
 from deepagents.backends.protocol import BackendProtocol
 
 from .checkpoint import get_checkpointer
+from .middleware import CurrentDatetimeMiddleware
 
 __all__ = ["BackendProtocol", "SubAgent", "build_agent", "create_deep_agent"]
 
@@ -51,7 +52,10 @@ def build_agent(
     BEFORE the tool runs; web translates that into a requires_action frame and
     resumes with `Command(resume=)` once a decision arrives. deepagents'
     default middleware stack (todo / fs / subagent / summarization /
-    prompt-caching) is applied by create_deep_agent itself.
+    prompt-caching) is applied by create_deep_agent itself; we add
+    `CurrentDatetimeMiddleware` on top to inject the per-run
+    `<current_datetime>` anchor at model-call time (no-op when the run
+    didn't set a timezone, e.g. batch agents).
     """
     kwargs: dict[str, Any] = {}
     if tools is not None:
@@ -69,5 +73,6 @@ def build_agent(
         model=model,
         system_prompt=system_prompt,
         backend=backend,
+        middleware=[CurrentDatetimeMiddleware()],
         **kwargs,
     )

@@ -55,6 +55,10 @@ current_client_hints: ContextVar[ClientHints | None] = ContextVar(
     "current_client_hints",
     default=None,
 )
+# IANA timezone of the user's device for this run. CurrentDatetimeMiddleware
+# reads it to inject the day-granular <current_datetime> anchor at model-call
+# time. Empty means the request didn't supply one — the middleware no-ops.
+current_timezone: ContextVar[str] = ContextVar("current_timezone", default="")
 
 
 @contextmanager
@@ -67,6 +71,7 @@ def run_context(
     session_key: str = "",
     browserbase_context_id: str = "",
     client_hints: ClientHints | None = None,
+    timezone: str = "",
 ):
     """Set ContextVars for the duration of a chat agent run."""
     t1 = current_agent_user_id.set(user_id)
@@ -76,6 +81,7 @@ def run_context(
     t5 = current_session_key.set(session_key)
     t6 = current_browserbase_context_id.set(browserbase_context_id)
     t7 = current_client_hints.set(client_hints)
+    t8 = current_timezone.set(timezone)
     try:
         yield
     finally:
@@ -86,3 +92,4 @@ def run_context(
         current_session_key.reset(t5)
         current_browserbase_context_id.reset(t6)
         current_client_hints.reset(t7)
+        current_timezone.reset(t8)
