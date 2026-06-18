@@ -90,7 +90,7 @@ export default function AccountPanel({
 
   return (
     <div
-      className="flex flex-col h-full px-4 pb-2 overflow-y-auto"
+      className="flex flex-col h-full px-4 pb-2 overflow-y-auto overflow-x-hidden"
       style={{ paddingTop: "var(--constellation-header-top, 3.5rem)" }}
     >
       {/* Header — mirrors MinimalistSetting from the design source. */}
@@ -202,7 +202,7 @@ function PreferencesSubPage({ onBack }: { onBack: () => void }) {
   const { t } = useTranslation("account");
   return (
     <div
-      className="flex flex-col h-full px-4 pb-2 overflow-y-auto"
+      className="flex flex-col h-full px-4 pb-2 overflow-y-auto overflow-x-hidden"
       style={{ paddingTop: "var(--constellation-header-top, 3.5rem)" }}
     >
       <SubPageHeader
@@ -297,7 +297,7 @@ function NotificationsSubPage({ onBack }: { onBack: () => void }) {
 
   return (
     <div
-      className="flex flex-col h-full px-4 pb-2 overflow-y-auto"
+      className="flex flex-col h-full px-4 pb-2 overflow-y-auto overflow-x-hidden"
       style={{ paddingTop: "var(--constellation-header-top, 3.5rem)" }}
     >
       <SubPageHeader
@@ -366,7 +366,7 @@ function AmbientSubPage({ onBack }: { onBack: () => void }) {
   const { t } = useTranslation("account");
   return (
     <div
-      className="flex flex-col h-full px-4 pb-2 overflow-y-auto"
+      className="flex flex-col h-full px-4 pb-2 overflow-y-auto overflow-x-hidden"
       style={{ paddingTop: "var(--constellation-header-top, 3.5rem)" }}
     >
       <SubPageHeader

@@ -85,7 +85,7 @@ export default function CardTimeline({
 
   return (
     <div
-      className="flex flex-col h-full px-4 pb-2 overflow-y-auto"
+      className="flex flex-col h-full px-4 pb-2 overflow-y-auto overflow-x-hidden"
       style={{ paddingTop: "var(--constellation-header-top, 3.5rem)" }}
     >
       <h1 className="text-display text-2xl text-foreground mb-1">{t("header.title")}</h1>

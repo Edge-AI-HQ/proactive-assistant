@@ -12,7 +12,7 @@ describe("ChatTimeline minimalist copy", () => {
     // Top spacing moved from a hardcoded `pt-14` to the shared
     // `--constellation-header-top` CSS var (same 3.5rem default); the rest of
     // the minimalist container spacing stays on the className.
-    expect(source).toContain('className="flex flex-col h-full px-4 pb-2 overflow-y-auto"');
+    expect(source).toContain('className="flex flex-col h-full px-4 pb-2 overflow-y-auto overflow-x-hidden"');
     expect(source).toContain("var(--constellation-header-top");
     // i18n 后头部文案经 tasks:header.* key 渲染(en 值在 ui-web locales)。
     expect(source).toContain('{t("header.title")}</h1>');

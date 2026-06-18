@@ -547,7 +547,7 @@ export default function AmbientView({ onConnectMore, autoOpenLive, onAutoOpenHan
 
   return (
     <div
-      className="h-full overflow-y-auto pb-32 px-4"
+      className="h-full overflow-y-auto overflow-x-hidden pb-32 px-4"
       style={{ paddingTop: "var(--constellation-header-top, calc(0.875rem + env(safe-area-inset-top, 0px)))" }}
     >
       {/* ── Header ── */}
