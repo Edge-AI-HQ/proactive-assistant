@@ -12,7 +12,7 @@
     "apps/*"
   ],
   "scripts": {
-    "postinstall": "patch-package",
+    "postinstall": "node scripts/apply-patches.mjs",
     "type-check": "npm run type-check --workspace=@pin-ai/proactive-ai-frontend",
     "lint:packages": "eslint packages",
     "check:packages": "npm run lint:packages && npm run type-check --workspace=@pin-ai/core --workspace=@pin-ai/state --workspace=@pin-ai/ui-kit --workspace=@pin-ai/ui-web && npm test --workspace=@pin-ai/core --workspace=@pin-ai/state --workspace=@pin-ai/ui-kit --workspace=@pin-ai/ui-web",
