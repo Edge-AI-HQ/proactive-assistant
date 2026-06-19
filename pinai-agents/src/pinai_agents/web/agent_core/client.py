@@ -56,7 +56,6 @@ class ChatRunClient:
         virtual_key: str | None,
         browserbase_context_id: str | None = None,
         card_context: dict[str, Any] | None = None,
-        regenerate: bool = False,
         run_id: str | None = None,
         timezone: str | None = None,
         client_hints: dict[str, Any] | None = None,
@@ -82,7 +81,6 @@ class ChatRunClient:
             "session_key": session_id,
             "messages": messages,
             "card_context": card_context,
-            "regenerate": regenerate,
             # User's IANA timezone (profile truth, web-resolved — chat has no
             # DB): chat injects a <current_datetime> anchor per send turn.
             "timezone": timezone,
@@ -94,11 +92,6 @@ class ChatRunClient:
             # without the HITL approval middleware. Default False keeps the gate.
             "bypass_permissions": bypass_permissions,
         }
-        if regenerate:
-            # chat's regenerate path diffs `message` (not `messages`) against the
-            # trailing HumanMessage to decide edit-vs-pure-rerun; forward the
-            # single text there. messages may be empty (pure rerun, no echo).
-            body["message"] = messages[0] if messages else ""
         async for frame in self._stream_frames(
             body=body, token=token, run_id=run_id, session_id=session_id
         ):

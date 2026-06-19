@@ -381,11 +381,6 @@ class AgentRunWorker:
                 session_id,
                 len(msgs),
             )
-        # regenerate (Retry / Edit): a lone message flagged in meta re-runs the
-        # last turn — chat pops the trailing AI/Tool from the checkpoint + reruns,
-        # and _finalize_turn mirrors that on pai_chat_messages (pop + rewrite).
-        # Only honored for a single message; a merged batch is a normal turn.
-        regenerate = len(msgs) == 1 and bool((msgs[0].meta or {}).get("regenerate"))
         run_started = time.monotonic()
 
         async with user_scoped_tx(self._pool, user_id) as conn:
@@ -407,7 +402,6 @@ class AgentRunWorker:
             virtual_key=vk,
             browserbase_context_id=bbctx,
             card_context=card_context,
-            regenerate=regenerate,
             run_id=run_id,
             timezone=timezone,
             client_hints=client_hints,
@@ -439,7 +433,6 @@ class AgentRunWorker:
             run_id,
             msg_ids,
             recorder,
-            regenerate=regenerate,
             input_rows=_input_rows(msgs),
             error=stream_error,
         )
@@ -596,7 +589,6 @@ class AgentRunWorker:
         recorder: ChatTurnRecorder,
         *,
         partial_parts: list[dict[str, Any]] | None = None,
-        regenerate: bool = False,
         input_rows: list[InputRow] | None = None,
         assistant_trigger: Trigger = "user",
         error: str | None = None,
@@ -625,38 +617,16 @@ class AgentRunWorker:
                 await runs.complete(run_id=run_id, result={"recorded_parts": len(assistant_parts)})
             await MailboxRepository(user_id, conn).mark_consumed(message_ids=msg_ids, run_id=run_id)
             chat_msgs = ChatMessagesRepository(user_id=user_id, conn=conn)
-            if regenerate:
-                # Retry / Edit: mirror chat's pop-tail-and-rerun on
-                # pai_chat_messages.
-                # An edit (user text changed) replaces user+assistant; a pure
-                # regenerate replaces only the assistant. Empty table (thread
-                # predates the table) → skip surgery, just append the new
-                # assistant below.
-                new_row = input_rows[0] if input_rows else None
-                new_text = new_row.text if new_row else ""
-                if await chat_msgs.latest_id(thread_id=session_id) is not None:
-                    last_user = (await chat_msgs.last_user_text(thread_id=session_id)) or ""
-                    if new_row and new_text and new_text != last_user.strip():
-                        await chat_msgs.delete_tail(thread_id=session_id, count=2)
-                        await chat_msgs.append_turn(
-                            thread_id=session_id,
-                            role="user",
-                            parts=[{"type": "text", "text": new_text}],
-                            client_msg_id=new_row.client_msg_id,
-                        )
-                    else:
-                        await chat_msgs.delete_tail(thread_id=session_id, count=1)
-            else:
-                # history truth (plan §四.4): one row PER merged input message
-                # (mirrors how the model saw them — distinct turns).
-                for role, text, client_msg_id in input_rows or []:
-                    await chat_msgs.append_turn(
-                        thread_id=session_id,
-                        role=role,
-                        parts=[{"type": "text", "text": text}],
-                        trigger="tick" if role == "heartbeat" else "user",
-                        client_msg_id=client_msg_id,
-                    )
+            # history truth (plan §四.4): one row PER merged input message
+            # (mirrors how the model saw them — distinct turns).
+            for role, text, client_msg_id in input_rows or []:
+                await chat_msgs.append_turn(
+                    thread_id=session_id,
+                    role=role,
+                    parts=[{"type": "text", "text": text}],
+                    trigger="tick" if role == "heartbeat" else "user",
+                    client_msg_id=client_msg_id,
+                )
             if assistant_parts:
                 assistant_msg_id = await chat_msgs.append_turn(
                     thread_id=session_id,

@@ -1,28 +1,23 @@
 /**
- * Assistant 回复下的操作行——web 的 复制/👍/👎/🔄 对应物。copy 走
- * expo-clipboard；regenerate 只在最后一条 assistant 上出现（runtime
- * regenerateLast 语义）；thumbs 走 core buildAssistantMessageFeedbackBody →
+ * Assistant 回复下的操作行——web 的 复制/👍/👎 对应物。copy 走
+ * expo-clipboard；thumbs 走 core buildAssistantMessageFeedbackBody →
  * best-effort POST /feedback（与 web ConversationView 同源，清空 toggle 不发事件）。
  */
 import { useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
-import { Copy, RotateCcw, ThumbsDown, ThumbsUp } from "lucide-react-native";
+import { Copy, ThumbsDown, ThumbsUp } from "lucide-react-native";
 import { buildAssistantMessageFeedbackBody, proxyPost } from "@pin-ai/core";
 
 export default function MessageActions({
   text,
   messageId,
   channel,
-  canRegenerate,
-  onRegenerate,
 }: {
   text: string;
   messageId: string;
   channel: string;
-  canRegenerate: boolean;
-  onRegenerate: () => void;
 }) {
   const [voted, setVoted] = useState<"up" | "down" | null>(null);
 
@@ -52,11 +47,6 @@ export default function MessageActions({
       <Pressable hitSlop={8} onPress={() => vote("down")}>
         <ThumbsDown size={14} color={voted === "down" ? "#dc2626" : "#a1a1aa"} strokeWidth={1.8} />
       </Pressable>
-      {canRegenerate ? (
-        <Pressable hitSlop={8} onPress={onRegenerate}>
-          <RotateCcw size={14} color="#a1a1aa" strokeWidth={1.8} />
-        </Pressable>
-      ) : null}
     </View>
   );
 }

@@ -1,21 +1,9 @@
-import {
-  forwardRef,
-  useCallback,
-  useEffect,
-  useImperativeHandle,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Loader2, Mic, Send, Square, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useVoiceInput, Waveform, appendVoiceTranscript } from "../../voice";
 import { Text } from "../../primitives/Text";
 import { PermissionModeMenu } from "./PermissionModeMenu";
-
-export interface ComposerHandle {
-  /** Replace the draft and focus the input (used by message Edit). */
-  setDraft: (text: string) => void;
-}
 
 function formatRecordDuration(totalSec: number): string {
   const m = Math.floor(totalSec / 60);
@@ -23,42 +11,25 @@ function formatRecordDuration(totalSec: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-export const Composer = forwardRef<
-  ComposerHandle,
-  {
-    onSend: (text: string) => Promise<void>;
-    onFocusChange?: (focused: boolean) => void;
-    placeholder?: string;
-    /** A turn is streaming on this thread → the send button becomes a Stop
-     *  button and sending is gated (Claude/ChatGPT model: stop first, then send). */
-    streaming?: boolean;
-    onStop?: () => void | Promise<void>;
-  }
->(function Composer(
-  { onSend, onFocusChange, placeholder, streaming = false, onStop },
-  ref,
-) {
+export function Composer({
+  onSend,
+  onFocusChange,
+  placeholder,
+  streaming = false,
+  onStop,
+}: {
+  onSend: (text: string) => Promise<void>;
+  onFocusChange?: (focused: boolean) => void;
+  placeholder?: string;
+  /** A turn is streaming on this thread → the send button becomes a Stop
+   *  button and sending is gated (Claude/ChatGPT model: stop first, then send). */
+  streaming?: boolean;
+  onStop?: () => void | Promise<void>;
+}) {
   const { t } = useTranslation(["chat", "common"]);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
-
-  useImperativeHandle(
-    ref,
-    () => ({
-      setDraft: (next: string) => {
-        setText(next);
-        // Defer focus so the value commits first; place the caret at the end.
-        window.setTimeout(() => {
-          const ta = taRef.current;
-          if (!ta) return;
-          ta.focus();
-          ta.setSelectionRange(next.length, next.length);
-        }, 0);
-      },
-    }),
-    [],
-  );
 
   // Track keyboard visibility (events dispatched from main.tsx on Capacitor
   // Keyboard willShow/willHide) so we can offer a dismiss-keyboard button on
@@ -329,4 +300,4 @@ export const Composer = forwardRef<
       {!recording && <PermissionModeMenu />}
     </div>
   );
-});
+}

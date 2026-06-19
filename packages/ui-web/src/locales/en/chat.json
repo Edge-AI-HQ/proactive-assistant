@@ -74,10 +74,7 @@
     "copyMessage": "Copy message",
     "copy": "Copy",
     "goodResponse": "Good response",
-    "badResponse": "Bad response",
-    "regenerateResponse": "Regenerate response",
-    "regenerate": "Regenerate"
-  },
+    "badResponse": "Bad response"  },
   "cardFeedback": {
     "helpfulPrompt": "Helpful?",
     "helpful": "Helpful",
@@ -88,9 +85,7 @@
     "sendFeedback": "Send feedback"
   },
   "userEntry": {
-    "notSent": "Not sent",
-    "editMessage": "Edit message"
-  },
+    "notSent": "Not sent"  },
   "queued": {
     "badge": "Queued",
     "regionLabel": "Queued messages",

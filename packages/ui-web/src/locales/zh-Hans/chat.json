@@ -74,10 +74,7 @@
     "copyMessage": "复制消息",
     "copy": "复制",
     "goodResponse": "回答不错",
-    "badResponse": "回答不佳",
-    "regenerateResponse": "重新生成回答",
-    "regenerate": "重新生成"
-  },
+    "badResponse": "回答不佳"  },
   "cardFeedback": {
     "helpfulPrompt": "有帮助吗？",
     "helpful": "有帮助",
@@ -88,9 +85,7 @@
     "sendFeedback": "发送反馈"
   },
   "userEntry": {
-    "notSent": "未发送",
-    "editMessage": "编辑消息"
-  },
+    "notSent": "未发送"  },
   "notify": {
     "label": "通知你"
   },

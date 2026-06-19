@@ -20,11 +20,9 @@ export interface TranscriptViewProps {
   loadMoreHistory: () => Promise<void>;
   sendMessage: (text: string) => Promise<void>;
   retryMessage: (id: string, text: string) => void;
-  onEdit: (text: string) => void;
   onUpdateQueued: (id: string, text: string) => Promise<void>;
   onDeleteQueued: (id: string) => Promise<void>;
   onInterruptQueued: (id: string) => Promise<void>;
-  onRegenerate: () => void;
   /** Paused HITL run → render the approval gate inline on the paused turn. */
   awaitingDecision: HitlRequiresAction | null;
   onDecide: (decision: "approve" | "reject", message?: string) => void;
@@ -96,11 +94,9 @@ export function TranscriptView({
   loadMoreHistory,
   sendMessage,
   retryMessage,
-  onEdit,
   onUpdateQueued,
   onDeleteQueued,
   onInterruptQueued,
-  onRegenerate,
   awaitingDecision,
   onDecide,
 }: TranscriptViewProps) {
@@ -150,20 +146,6 @@ export function TranscriptView({
     if (hasMoreHistory) void loadMoreHistory();
   }, [hasMoreHistory, loadMoreHistory]);
 
-  // Identify the latest user / assistant turn so only they show the
-  // Edit / Regenerate affordances (matching ConversationView's action-bar gating).
-  const { lastUserId, lastAssistantId } = useMemo(() => {
-    let u: string | null = null;
-    let a: string | null = null;
-    for (let i = transcript.length - 1; i >= 0; i--) {
-      const e = transcript[i];
-      if (!u && e.kind === "user") u = e.id;
-      if (!a && e.kind === "assistant") a = e.id;
-      if (u && a) break;
-    }
-    return { lastUserId: u, lastAssistantId: a };
-  }, [transcript]);
-
   if (!ready) {
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -201,13 +183,9 @@ export function TranscriptView({
             entry={entry}
             onReply={sendMessage}
             onRetry={retryMessage}
-            onEdit={onEdit}
             onUpdateQueued={onUpdateQueued}
             onDeleteQueued={onDeleteQueued}
             onInterruptQueued={onInterruptQueued}
-            onRegenerate={onRegenerate}
-            isLastUser={entry.id === lastUserId}
-            isLastAssistant={entry.id === lastAssistantId}
             busy={busy}
             hitlAction={entry.id === hitlHostId ? awaitingDecision : null}
             onDecide={onDecide}

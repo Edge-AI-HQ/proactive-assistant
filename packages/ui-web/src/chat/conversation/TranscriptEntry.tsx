@@ -8,13 +8,9 @@ export const TranscriptEntry = memo(function TranscriptEntry({
   entry,
   onReply,
   onRetry,
-  onEdit,
   onUpdateQueued,
   onDeleteQueued,
   onInterruptQueued,
-  onRegenerate,
-  isLastUser,
-  isLastAssistant,
   busy,
   hitlAction,
   onDecide,
@@ -22,13 +18,9 @@ export const TranscriptEntry = memo(function TranscriptEntry({
   entry: ConversationEntry;
   onReply: (text: string) => Promise<void>;
   onRetry: (id: string, text: string) => void;
-  onEdit: (text: string) => void;
   onUpdateQueued: (id: string, text: string) => Promise<void>;
   onDeleteQueued: (id: string) => Promise<void>;
   onInterruptQueued: (id: string) => Promise<void>;
-  onRegenerate: () => void;
-  isLastUser: boolean;
-  isLastAssistant: boolean;
   busy: boolean;
   /** Set on the paused HITL turn's entry only (see TranscriptView). */
   hitlAction?: HitlRequiresAction | null;
@@ -39,8 +31,6 @@ export const TranscriptEntry = memo(function TranscriptEntry({
       <UserEntry
         entry={entry}
         onRetry={onRetry}
-        isLast={isLastUser}
-        onEdit={onEdit}
         onUpdateQueued={onUpdateQueued}
         onDeleteQueued={onDeleteQueued}
         onInterruptQueued={onInterruptQueued}
@@ -51,8 +41,6 @@ export const TranscriptEntry = memo(function TranscriptEntry({
       entry={entry}
       onReply={onReply}
       busy={busy}
-      isLast={isLastAssistant}
-      onRegenerate={onRegenerate}
       hitlAction={hitlAction}
       onDecide={onDecide}
     />

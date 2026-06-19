@@ -24,13 +24,7 @@ from typing import Any, Literal
 import daytona
 from fastapi import APIRouter, Header, HTTPException, status
 from fastapi.responses import StreamingResponse
-from langchain_core.messages import (
-    AIMessage,
-    HumanMessage,
-    RemoveMessage,
-    SystemMessage,
-    ToolMessage,
-)
+from langchain_core.messages import SystemMessage
 from pydantic import BaseModel, Field
 
 from ...agents.card_execution import make_card_execution_agent
@@ -44,7 +38,6 @@ from ...harness.compaction import (
 from ...harness.ctx import ClientHints, run_context
 from ...harness.group_title import make_group_title_fn
 from ...harness.session import (
-    apply_message_updates,
     make_resume_input,
     read_state_messages,
     stream_events,
@@ -104,10 +97,6 @@ class ChatRequest(BaseModel):
     first turn of a card thread. client_hints carries the frontend's
     panel CSS size + device kind so browser_tool sizes BB sessions for
     the device that's actually displaying them.
-
-    `regenerate=True` makes `message` optional — the worker pops the
-    trailing AI / Tool messages from LangGraph state and resumes the
-    run from the existing HumanMessage at the tail.
     """
 
     session_key: str = Field(min_length=1, max_length=200)
@@ -130,11 +119,10 @@ class ChatRequest(BaseModel):
     # without the per-call approval pause. Per-run only — never persisted here;
     # the web process reads the user's setting and tags each run.
     bypass_permissions: bool = False
-    regenerate: bool = False
     # HITL resume: re-enter a thread paused on interrupt() with the human's
     # decision(s): {"decisions": [{"type": "approve"|"reject"|..., ...}]}
-    # (HumanInTheLoopMiddleware schema). Mutually exclusive with messages /
-    # regenerate — when set, no new input is added; Command(resume=) re-enters.
+    # (HumanInTheLoopMiddleware schema). Mutually exclusive with messages —
+    # when set, no new input is added; Command(resume=) re-enters.
     resume: dict[str, Any] | None = None
 
 
@@ -170,29 +158,6 @@ def _verify_principal(token: str) -> RunPrincipal:
     return principal
 
 
-def _extract_human_text(msg: HumanMessage | None) -> str:
-    """Return the plain-text portion of a HumanMessage, regardless of
-    whether its `content` is a bare string (legacy / Anthropic non-v1)
-    or a v1-protocol block list (langchain-core 1.x). Used by the
-    regenerate-edit diff to decide whether the frontend is asking us to
-    replace the trailing HumanMessage with new text or just rerun the
-    existing one."""
-    if msg is None:
-        return ""
-    c = msg.content
-    if isinstance(c, str):
-        return c
-    if isinstance(c, list):
-        out: list[str] = []
-        for block in c:
-            if isinstance(block, dict) and block.get("type") == "text":
-                t = block.get("text")
-                if isinstance(t, str):
-                    out.append(t)
-        return "".join(out)
-    return ""
-
-
 def _card_context_message(card_context: dict[str, Any]) -> SystemMessage:
     """Wrap card context JSON as the `<card_context>` SystemMessage both
     the card-thread first-turn path and the main-thread per-turn path
@@ -219,7 +184,7 @@ def _build_send_messages(
     is_card_thread: bool,
     is_first_turn: bool,
 ) -> list[Any]:
-    """Assemble the input messages for a normal (non-regenerate) send.
+    """Assemble the input messages for a normal send.
 
     `messages` is one-or-more user-message texts. The actor kernel's mailbox
     merge sends every pending user message as its OWN role=user message (NOT
@@ -344,101 +309,14 @@ async def _stream(
         return
 
     # Language anchor for async work-group titles — the user's own words
-    # (thinking drifts to English; the title must not). Stays empty on pure
-    # regenerate / HITL resume turns: those degrade to the frontend's
-    # deterministic fallback label by design.
+    # (thinking drifts to English; the title must not). Stays empty on a HITL
+    # resume turn: it degrades to the frontend's deterministic fallback label
+    # by design.
     title_user_text = ""
 
-    # ── regenerate / edit state surgery (optional) ──
-    # `regenerate=True` covers two frontend flows:
-    #
-    #   - Pure regenerate (Retry on last user msg, Regenerate on last
-    #     assistant msg): pop trailing AI / Tool messages, leave the
-    #     trailing HumanMessage untouched, rerun. `req.message` here
-    #     equals the trailing HumanMessage's current text (the adapter
-    #     just echoes back the current last-user text); no replacement
-    #     is needed.
-    #
-    #   - Edit-and-rerun (user edited the last user msg, hit Send): pop
-    #     trailing AI / Tool messages AND replace the trailing
-    #     HumanMessage with `req.message` (the edited text), then rerun.
-    #
-    # We auto-detect which case we're in by diffing `req.message`
-    # against the trailing HumanMessage's text content. Identical → pure
-    # regenerate, no human-side change. Different → edit, drop + add.
     input_messages: list[Any] = []
-    if req.regenerate:
-        try:
-            msgs = await read_state_messages(agent, req.session_key)
-        except Exception as e:
-            logger.exception(
-                "regenerate state read failed session=%s",
-                req.session_key,
-            )
-            yield chat_error(
-                f"regenerate state read failed: {type(e).__name__}: {e}",
-            )
-            yield chat_done()
-            return
-        to_remove_ids: list[str] = []
-        trailing_human: HumanMessage | None = None
-        # Walk back: collect AI/Tool ids to drop until we hit the first
-        # non-AI/Tool message. If it's a HumanMessage we remember it for
-        # the edit-diff check below.
-        for msg in reversed(msgs):
-            if isinstance(msg, (AIMessage, ToolMessage)):
-                mid = getattr(msg, "id", None)
-                if mid:
-                    to_remove_ids.append(mid)
-                continue
-            if isinstance(msg, HumanMessage):
-                trailing_human = msg
-            break
-
-        new_text = (req.message or "").strip()
-        trailing_text = _extract_human_text(trailing_human) if trailing_human else ""
-        is_edit = bool(new_text) and new_text != trailing_text.strip()
-
-        if is_edit and trailing_human is not None:
-            th_id = getattr(trailing_human, "id", None)
-            if th_id:
-                to_remove_ids.append(th_id)
-
-        if to_remove_ids:
-            try:
-                await apply_message_updates(
-                    agent,
-                    req.session_key,
-                    [RemoveMessage(id=mid) for mid in to_remove_ids],
-                )
-            except Exception as e:
-                logger.exception(
-                    "regenerate pop failed session=%s",
-                    req.session_key,
-                )
-                yield chat_error(
-                    f"regenerate pop failed: {type(e).__name__}: {e}",
-                )
-                yield chat_done()
-                return
-            logger.info(
-                "regenerate popped %d trailing messages session=%s is_edit=%s",
-                len(to_remove_ids),
-                req.session_key,
-                is_edit,
-            )
-
-        # Either way the adapter sent the (current or edited) last-user text in
-        # req.message — a valid language anchor for this rerun's group titles.
-        title_user_text = new_text
-
-        # If edit, add the replacement HumanMessage; if pure regen, leave
-        # input_messages empty so LangGraph reruns from the popped state.
-        if is_edit:
-            input_messages.append({"role": "user", "content": new_text})
-
     # ── input messages (normal-send path) ──
-    if not req.regenerate and not req.resume:
+    if not req.resume:
         # Actor kernel sends `messages` (merge: ≥1 user message, each its own
         # role=user turn); the single-message frontend path sends `message`.
         # Prefer the list when present.
@@ -452,7 +330,7 @@ async def _stream(
         # hand control back to the AI for this turn — sparing them a manual
         # "give control back" click. Mirror of touching the page = implicit
         # takeover (manager.apply_user_input). Normal-send only: a fresh user
-        # signal; regenerate / HITL-resume don't imply they finished. Best
+        # signal; a HITL resume doesn't imply they finished. Best
         # effort — a browser-control hiccup must never block the chat.
         try:
             released = await get_browser_manager().release_to_ai_if_user_driving(
@@ -523,7 +401,7 @@ async def _stream(
         timezone=req.timezone or "",
     ):
         # HITL resume re-enters the paused graph via Command(resume=); a
-        # normal/regenerate turn feeds the assembled messages.
+        # normal turn feeds the assembled messages.
         stream_input: Any = (
             make_resume_input(req.resume.get("decisions") or [])
             if req.resume

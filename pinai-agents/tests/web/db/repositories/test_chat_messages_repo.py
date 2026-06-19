@@ -115,34 +115,6 @@ async def test_get_page_cursor_walks_older(pool, user_ids):
 
 
 @pytest.mark.asyncio
-async def test_delete_tail_removes_most_recent(pool, user_ids):
-    user_a, _ = user_ids
-    tid = f"main-{user_a}-m5"
-    async with user_scoped_tx(pool, user_a) as conn:
-        repo = ChatMessagesRepository(user_a, conn)
-        for i in range(4):
-            await repo.append_turn(thread_id=tid, role="user", parts=_text(str(i)))
-        deleted = await repo.delete_tail(thread_id=tid, count=2)
-    assert deleted == 2
-    async with user_scoped_tx(pool, user_a) as conn:
-        rows = await ChatMessagesRepository(user_a, conn).get_page(thread_id=tid)
-    assert [r["parts"][0]["text"] for r in reversed(rows)] == ["0", "1"]
-
-
-@pytest.mark.asyncio
-async def test_last_user_text_is_most_recent_user_turn(pool, user_ids):
-    user_a, _ = user_ids
-    tid = f"main-{user_a}-m6"
-    async with user_scoped_tx(pool, user_a) as conn:
-        repo = ChatMessagesRepository(user_a, conn)
-        await repo.append_turn(thread_id=tid, role="user", parts=_text("first q"))
-        await repo.append_turn(thread_id=tid, role="assistant", parts=_text("a1"))
-        await repo.append_turn(thread_id=tid, role="user", parts=_text("second q"))
-        await repo.append_turn(thread_id=tid, role="assistant", parts=_text("a2"))
-        assert await repo.last_user_text(thread_id=tid) == "second q"
-
-
-@pytest.mark.asyncio
 async def test_get_page_include_debug_filters_heartbeat_and_silent(pool, user_ids):
     # proactive debug-only rows: heartbeat inputs (role='heartbeat') and 'silent'
     # tick turns (trigger='tick' with no notify_user) are hidden when

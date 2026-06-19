@@ -74,10 +74,7 @@
     "copyMessage": "Copiar mensaje",
     "copy": "Copiar",
     "goodResponse": "Buena respuesta",
-    "badResponse": "Mala respuesta",
-    "regenerateResponse": "Regenerar respuesta",
-    "regenerate": "Regenerar"
-  },
+    "badResponse": "Mala respuesta"  },
   "cardFeedback": {
     "helpfulPrompt": "¿Útil?",
     "helpful": "Útil",
@@ -88,9 +85,7 @@
     "sendFeedback": "Enviar comentarios"
   },
   "userEntry": {
-    "notSent": "No enviado",
-    "editMessage": "Editar mensaje"
-  },
+    "notSent": "No enviado"  },
   "notify": {
     "label": "Notificarte"
   },

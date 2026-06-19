@@ -43,7 +43,7 @@ import {
 import { Text } from "../../primitives/Text";
 import { FeedbackChannelContext } from "./_shared";
 import { TranscriptView } from "./TranscriptView";
-import { Composer, type ComposerHandle } from "./Composer";
+import { Composer } from "./Composer";
 import { QueuedMessagesPanel } from "./QueuedMessagesPanel";
 import { CardResultFeedbackBar } from "./CardResultFeedbackBar";
 import { useBrowserPanel } from "./useBrowserPanel";
@@ -144,7 +144,7 @@ export default function ConversationView({
   // runtime, which tags each outgoing run so chat skips the HITL approval gate.
   const { settings: userSettings } = useUserSettings();
   const {
-    transcript, ready, sendMessage, busy, retryMessage, stop, regenerateLast,
+    transcript, ready, sendMessage, busy, retryMessage, stop,
     updateQueuedMessage, deleteQueuedMessage, interruptQueuedMessage,
     threadId,
     hasMoreHistory, loadMoreHistory,
@@ -210,13 +210,6 @@ export default function ConversationView({
         : deriveCardResultMessageId(visibleTranscript),
     [cardFeedback, busy, awaitingDecision, visibleTranscript],
   );
-
-  // Message Edit prefills the composer (imperative — the composer owns its
-  // draft state, which also absorbs voice-transcript appends).
-  const composerRef = useRef<ComposerHandle>(null);
-  const handleEditEntry = useCallback((text: string) => {
-    composerRef.current?.setDraft(text);
-  }, []);
 
   // Browser live view (state + input wiring extracted to useBrowserPanel).
   const {
@@ -393,11 +386,9 @@ export default function ConversationView({
                   loadMoreHistory={loadMoreHistory}
                   sendMessage={sendAndAnchor}
                   retryMessage={retryAndAnchor}
-                  onEdit={handleEditEntry}
                   onUpdateQueued={updateQueuedMessage}
                   onDeleteQueued={deleteQueuedMessage}
                   onInterruptQueued={interruptQueuedMessage}
-                  onRegenerate={regenerateLast}
                   awaitingDecision={awaitingDecision}
                   onDecide={handleDecide}
                 />
@@ -444,7 +435,6 @@ export default function ConversationView({
                 onInterruptQueued={interruptQueuedMessage}
               />
               <Composer
-                ref={composerRef}
                 onSend={sendAndAnchor}
                 onFocusChange={setComposerFocused}
                 placeholder={placeholder}

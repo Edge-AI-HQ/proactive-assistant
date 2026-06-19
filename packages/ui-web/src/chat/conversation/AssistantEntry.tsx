@@ -1,6 +1,6 @@
 import { memo, useCallback, useContext, useState, type ReactNode } from "react";
 import { motion } from "framer-motion";
-import { Check, Copy, RotateCcw, Sparkles, ThumbsDown, ThumbsUp } from "lucide-react";
+import { Check, Copy, Sparkles, ThumbsDown, ThumbsUp } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
   buildAssistantMessageFeedbackBody,
@@ -30,13 +30,9 @@ import {
 function AssistantActionBar({
   messageId,
   plainText,
-  isLast,
-  onRegenerate,
 }: {
   messageId: string;
   plainText: string;
-  isLast: boolean;
-  onRegenerate?: () => void;
 }) {
   const { t } = useTranslation("chat");
   const [copied, setCopied] = useState(false);
@@ -97,11 +93,6 @@ function AssistantActionBar({
           </button>
         </>
       ) : null}
-      {isLast && onRegenerate ? (
-        <button type="button" onClick={onRegenerate} className={ACTION_BTN} aria-label={t("actionBar.regenerateResponse")} title={t("actionBar.regenerate")}>
-          <RotateCcw size={13} strokeWidth={1.6} />
-        </button>
-      ) : null}
     </div>
   );
 }
@@ -149,8 +140,6 @@ export const AssistantEntry = memo(function AssistantEntry({
   entry,
   onReply,
   busy,
-  isLast,
-  onRegenerate,
   hitlAction,
   onDecide,
 }: {
@@ -159,10 +148,6 @@ export const AssistantEntry = memo(function AssistantEntry({
   onReply: (text: string) => Promise<void>;
   /** A turn is currently streaming on this thread. */
   busy: boolean;
-  /** This is the latest assistant turn → show the Regenerate affordance. */
-  isLast?: boolean;
-  /** Drop this turn and re-run the latest user message (regenerate=true). */
-  onRegenerate?: () => void;
   /** This turn paused on a HITL approval → render the gate where the
    *  stream stopped (after the turn's streamed parts). */
   hitlAction?: HitlRequiresAction | null;
@@ -235,8 +220,6 @@ export const AssistantEntry = memo(function AssistantEntry({
               <AssistantActionBar
                 messageId={entry.serverId ?? ""}
                 plainText={assistantPlainText(parts)}
-                isLast={!!isLast}
-                onRegenerate={onRegenerate}
               />
             ) : null}
           </>

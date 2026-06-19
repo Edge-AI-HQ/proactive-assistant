@@ -395,8 +395,7 @@ export type ConversationAction =
   | { type: "insert_user_at"; index: number; entry: ConversationUserEntry }
   // turn 维护
   | { type: "persisted"; messageId: string }
-  | { type: "clear_queued_flags" }
-  | { type: "drop_trailing_assistant" };
+  | { type: "clear_queued_flags" };
 
 export function conversationReducer(
   state: ConversationState,
@@ -539,18 +538,5 @@ export function conversationReducer(
           e.kind === "user" && e.queued ? { ...e, queued: false } : e,
         ),
       };
-    case "drop_trailing_assistant": {
-      // regenerate：丢弃末尾 assistant turn（含其后所有，沿用 slice 到该 idx）。
-      let lastAssistantIdx = -1;
-      for (let i = state.transcript.length - 1; i >= 0; i--) {
-        if (state.transcript[i].kind === "assistant") {
-          lastAssistantIdx = i;
-          break;
-        }
-      }
-      return lastAssistantIdx >= 0
-        ? { ...state, transcript: state.transcript.slice(0, lastAssistantIdx), turnPos: -1 }
-        : state;
-    }
   }
 }

@@ -10,19 +10,12 @@ import { ACTION_BTN, formatClockTime } from "./_shared";
 export const UserEntry = memo(function UserEntry({
   entry,
   onRetry,
-  isLast,
-  onEdit,
   onUpdateQueued,
   onDeleteQueued,
   onInterruptQueued,
 }: {
   entry: ConversationUserEntry;
   onRetry: (id: string, text: string) => void;
-  /** This is the latest user turn → show the Edit affordance. */
-  isLast?: boolean;
-  /** Prefill the composer with this turn's text for the user to revise and
-   *  re-send as a NEW turn (the original bubble stays as-is). */
-  onEdit?: (text: string) => void;
   onUpdateQueued?: (id: string, text: string) => Promise<void>;
   onDeleteQueued?: (id: string) => Promise<void>;
   onInterruptQueued?: (id: string) => Promise<void>;
@@ -209,16 +202,6 @@ export const UserEntry = memo(function UserEntry({
                 )}
               </button>
             </>
-          ) : isLast && onEdit ? (
-            <button
-              type="button"
-              onClick={() => onEdit(entry.text)}
-              className={ACTION_BTN}
-              aria-label={t("userEntry.editMessage")}
-              title={t("queued.edit")}
-            >
-              <Pencil size={13} strokeWidth={1.8} />
-            </button>
           ) : null}
         </div>
       )}

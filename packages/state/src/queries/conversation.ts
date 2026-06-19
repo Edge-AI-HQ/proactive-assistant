@@ -115,9 +115,6 @@ export interface UseConversationRuntimeResult {
   deleteQueuedMessage: (id: string) => Promise<void>;
   /** Cancel the current run and promote a queued message to run next. */
   interruptQueuedMessage: (id: string) => Promise<void>;
-  /** Regenerate the latest assistant turn: drops it locally and re-runs the
-   *  latest user message with regenerate=true (backend pops the stale reply). */
-  regenerateLast: () => Promise<void>;
   /** Resolved server-side thread id (from the stream's hello event). `null`
    *  until the stream opens. Card sessions know it up front; the main thread's
    *  id is server-resolved. Used to key the browser live view + todo store. */
@@ -563,47 +560,6 @@ export function useConversationRuntime(
     [session, finalizeTurn, transcript],
   );
 
-  // Regenerate the latest assistant turn: drop it locally, then re-send the
-  // latest user text with regenerate=true. The backend pops the stale
-  // AIMessage from state and streams a fresh reply in its place (it diffs
-  // `message`, not `messages`). No new user bubble — the existing user turn is
-  // reused, matching the old ConversationView Regenerate/Retry semantics.
-  const regenerateLast = useCallback(async () => {
-    if (busy) return;
-    let lastUserText: string | null = null;
-    for (let i = transcript.length - 1; i >= 0; i--) {
-      const e = transcript[i];
-      if (e.kind === "user") {
-        lastUserText = e.text;
-        break;
-      }
-    }
-    if (!lastUserText) return;
-    dispatch({ type: "drop_trailing_assistant" });
-    // Same optimistic placeholder as a send — the pill replaces the dropped
-    // turn immediately instead of popping in on the first frame.
-    const placeholderId = createTurnPlaceholder();
-    dispatch({ type: "set_busy", busy: true });
-    dispatch({ type: "set_awaiting", awaiting: null });
-    try {
-      // clientMsgId guards the regenerate against a timed-out-but-landed
-      // POST being retried: a duplicate enqueue would merge into one batch,
-      // fail the worker's single-message regenerate check, and replay the
-      // text as two ordinary user turns. No bubble rides this id — a
-      // regenerate reuses the existing one (meta.regenerate rows are
-      // excluded from active.userEntries).
-      await conversationSend(session, lastUserText, {
-        regenerate: true,
-        clientMsgId: crypto.randomUUID(),
-        bypassPermissions: bypassPermissionsRef.current,
-      });
-    } catch (err) {
-      console.warn("[proactive] regenerate failed:", err);
-      dispatch({ type: "set_busy", busy: false });
-      dropIdlePlaceholder(placeholderId);
-    }
-  }, [busy, transcript, session, createTurnPlaceholder, dropIdlePlaceholder]);
-
   const stop = useCallback(async () => {
     // Optimistic: close the in-flight turn locally so the shimmer + Stop button
     // clear at once (the backend's terminal chat:done then finalizes a no-op).
@@ -660,7 +616,6 @@ export function useConversationRuntime(
   return {
     transcript, connection, ready, sendMessage, busy, retryMessage, stop,
     updateQueuedMessage, deleteQueuedMessage, interruptQueuedMessage,
-    regenerateLast,
     threadId,
     hasMoreHistory, loadMoreHistory,
     awaitingDecision, submitDecision,

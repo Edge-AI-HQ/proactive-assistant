@@ -58,7 +58,7 @@ async def read_state_messages(agent: Any, session_key: str) -> list[Any]:
 def stream_events(agent: Any, inputs: Any, config: dict[str, Any]) -> Any:
     """The single call to `agent.astream_events` (langgraph v2 event stream).
 
-    `inputs` is either `{"messages": [...]}` for a normal/regenerate turn or a
+    `inputs` is either `{"messages": [...]}` for a normal turn or a
     langgraph `Command` (HITL resume, built by `make_resume_input`) — both are
     valid astream_events inputs. Returns the raw async event iterator;
     transport's `langgraph_to_sse` translates it into chat:* SSE frames.
@@ -74,12 +74,3 @@ def make_resume_input(decisions: list[dict[str, Any]]) -> Command:
     `{type: approve|edit|reject|respond, ...}` aligned with the interrupt's
     action_requests (verified 2026-06-05: resume={"decisions": [...]})."""
     return Command(resume={"decisions": decisions})
-
-
-async def apply_message_updates(agent: Any, session_key: str, updates: list[Any]) -> None:
-    """Apply a `messages`-channel state update via `agent.aupdate_state`.
-
-    Used by regenerate / edit to pop trailing AI/Tool/Human messages
-    (`RemoveMessage` instances built by the caller) before re-running.
-    """
-    await agent.aupdate_state(_thread_config(session_key), {"messages": updates})

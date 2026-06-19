@@ -74,10 +74,7 @@
     "copyMessage": "메시지 복사",
     "copy": "복사",
     "goodResponse": "좋은 응답",
-    "badResponse": "아쉬운 응답",
-    "regenerateResponse": "응답 다시 생성",
-    "regenerate": "다시 생성"
-  },
+    "badResponse": "아쉬운 응답"  },
   "cardFeedback": {
     "helpfulPrompt": "도움이 됐나요?",
     "helpful": "도움됨",
@@ -88,9 +85,7 @@
     "sendFeedback": "피드백 보내기"
   },
   "userEntry": {
-    "notSent": "전송 안 됨",
-    "editMessage": "메시지 수정"
-  },
+    "notSent": "전송 안 됨"  },
   "notify": {
     "label": "알림 전송"
   },

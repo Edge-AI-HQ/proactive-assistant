@@ -61,16 +61,12 @@ function Part({
  *  更新，未变 entry 保持引用同一；回调用 ref-latest 保持身份稳定）。 */
 const Entry = memo(function Entry({
   entry,
-  isLastAssistant,
   channel,
   onRetry,
-  onRegenerate,
 }: {
   entry: ConversationEntry;
-  isLastAssistant: boolean;
   channel: string;
   onRetry: (id: string, text: string) => void;
-  onRegenerate: () => void;
 }) {
   // 行入场 = web 消息卡 initial{opacity:0,y:6} 0.26s 的对应物。
   if (entry.kind === "user") {
@@ -112,8 +108,6 @@ const Entry = memo(function Entry({
             text={fullText}
             messageId={entry.id}
             channel={channel}
-            canRegenerate={isLastAssistant}
-            onRegenerate={onRegenerate}
           />
         ) : null}
       </Animated.View>
@@ -230,7 +224,6 @@ function Conversation({
     stop,
     connection,
     retryMessage,
-    regenerateLast,
     awaitingDecision,
     submitDecision,
     threadId,
@@ -257,13 +250,8 @@ function Conversation({
   // 不保证稳定，inline lambda 则每 render 必击穿 memo）。
   const retryRef = useRef(retryMessage);
   retryRef.current = retryMessage;
-  const regenRef = useRef(regenerateLast);
-  regenRef.current = regenerateLast;
   const handleRetry = useCallback((id: string, text: string) => {
     void retryRef.current(id, text);
-  }, []);
-  const handleRegenerate = useCallback(() => {
-    void regenRef.current();
   }, []);
 
   return (
@@ -280,16 +268,11 @@ function Conversation({
         contentContainerStyle={styles.listContent}
         data={visible}
         keyExtractor={(e) => `${e.kind}-${e.id}`}
-        renderItem={({ item, index }) => (
+        renderItem={({ item }) => (
           <Entry
             entry={item}
-            isLastAssistant={
-              item.kind === "assistant"
-              && index === visible.length - 1
-            }
             channel={channel}
             onRetry={handleRetry}
-            onRegenerate={handleRegenerate}
           />
         )}
         onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}

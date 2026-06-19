@@ -2,7 +2,7 @@
  * Unit + hook tests for the conversation runtime:
  *   1. `partsHaveNotifyUser` (notify_user detection)
  *   2. `loadMoreHistory` prepends an older page and updates the cursor
- *   3. send / queue / regenerate / HITL reconnect
+ *   3. send / queue / HITL reconnect
  */
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
@@ -189,76 +189,6 @@ describe("useConversationRuntime.loadMoreHistory", () => {
 
     // Only the initial fetch — no older-page request fired.
     expect(fetchHistoryMock).toHaveBeenCalledTimes(1);
-  });
-});
-
-// ─── regenerateLast ───────────────────────────────────────────────────
-
-
-describe("useConversationRuntime.regenerateLast", () => {
-  beforeEach(() => {
-    fetchHistoryMock.mockReset();
-    streamMock.mockReset();
-    streamMock.mockImplementation(() => emptyStream());
-    sendMock.mockReset();
-    sendMock.mockResolvedValue(undefined);
-  });
-
-  test("drops the trailing assistant turn and re-sends the latest user text with regenerate=true", async () => {
-    fetchHistoryMock.mockResolvedValueOnce(
-      page([
-        { id: "u-1", role: "user", parts: [{ type: "text", text: "summarize this" }] },
-        { id: "a-1", role: "assistant", parts: [{ type: "text", text: "here you go" }] },
-      ]),
-    );
-
-    const { result } = renderHook(() =>
-      useConversationRuntime({ session: "card-thread-z" }),
-    );
-
-    await waitFor(() => expect(result.current.ready).toBe(true));
-    expect(result.current.transcript.map((e) => e.id)).toEqual(["u-1", "a-1"]);
-
-    await act(async () => {
-      await result.current.regenerateLast();
-    });
-
-    // Stale assistant turn dropped locally; the user turn stays put and an
-    // optimistic placeholder (running, empty) takes the dropped turn's place
-    // so the pill shows without waiting for the first frame.
-    expect(result.current.transcript.map((e) => e.kind)).toEqual([
-      "user", "assistant",
-    ]);
-    expect(result.current.transcript[0].id).toBe("u-1");
-    const placeholder = result.current.transcript[1] as ConversationAssistantEntry;
-    expect(placeholder.id).not.toBe("a-1");
-    expect(placeholder.running).toBe(true);
-    expect(placeholder.parts).toEqual([]);
-    // Backend re-run with the regenerate flag + the latest user text (it diffs
-    // `message`, not `messages`, then pops the stale AIMessage). clientMsgId
-    // rides along so a retried-after-timeout regenerate can't double-enqueue.
-    expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(sendMock).toHaveBeenCalledWith(
-      "card-thread-z",
-      "summarize this",
-      expect.objectContaining({ regenerate: true, clientMsgId: expect.any(String) }),
-    );
-  });
-
-  test("no-ops when there is no user turn to regenerate", async () => {
-    fetchHistoryMock.mockResolvedValueOnce(page([]));
-
-    const { result } = renderHook(() =>
-      useConversationRuntime({ session: "card-thread-empty" }),
-    );
-
-    await waitFor(() => expect(result.current.ready).toBe(true));
-
-    await act(async () => {
-      await result.current.regenerateLast();
-    });
-
-    expect(sendMock).not.toHaveBeenCalled();
   });
 });
 

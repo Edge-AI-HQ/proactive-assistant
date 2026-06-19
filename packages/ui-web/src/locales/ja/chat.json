@@ -74,10 +74,7 @@
     "copyMessage": "メッセージをコピー",
     "copy": "コピー",
     "goodResponse": "良い回答",
-    "badResponse": "悪い回答",
-    "regenerateResponse": "回答を再生成",
-    "regenerate": "再生成"
-  },
+    "badResponse": "悪い回答"  },
   "cardFeedback": {
     "helpfulPrompt": "役に立ちましたか？",
     "helpful": "役に立った",
@@ -88,9 +85,7 @@
     "sendFeedback": "フィードバックを送信"
   },
   "userEntry": {
-    "notSent": "未送信",
-    "editMessage": "メッセージを編集"
-  },
+    "notSent": "未送信"  },
   "notify": {
     "label": "あなたへ通知"
   },

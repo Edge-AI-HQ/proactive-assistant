@@ -23,8 +23,6 @@ surface.
 AgentRunWorker drives every agent_kind through chat /agent/chat (which picks the
 agent by session_key prefix) and persists turns to pai_chat_messages. chat never
 reads the DB; the LiteLLM key rides the per-run EdDSA JWT (trust boundary).
-regenerate / edit run under the actor model via history pop+rewrite (the worker
-mirrors the chat-side checkpoint surgery).
 """
 
 from __future__ import annotations
@@ -90,7 +88,7 @@ def _active_user_entries(
     """
     entries: list[dict[str, Any]] = []
     for msg in pending:
-        if msg.source != "user" or not msg.content or (msg.meta or {}).get("regenerate"):
+        if msg.source != "user" or not msg.content:
             continue
         entry: dict[str, Any] = {
             "text": msg.content,
@@ -223,12 +221,8 @@ async def send(
     session_key = (body.get("session_key") or "").strip()
     if not session_key:
         raise HTTPException(status_code=400, detail="session_key required")
-    regenerate = bool(body.get("regenerate"))
-    # regenerate (Retry / Edit) re-runs the last turn; `message` is the (possibly
-    # edited) trailing user text — pure-rerun may echo the last user text or omit
-    # it, so message is optional when regenerating.
     message = (body.get("message") or "").strip()
-    if not message and not regenerate:
+    if not message:
         raise HTTPException(status_code=400, detail="message required")
     card_context = body.get("cardContext")
     if card_context is not None and not isinstance(card_context, dict):
@@ -268,8 +262,6 @@ async def send(
         meta["client_hints"] = client_hints
     if bypass_permissions:
         meta["bypass_permissions"] = True
-    if regenerate:
-        meta["regenerate"] = True
     if body.get("interrupt") is True:
         await request.app.state.agent_service.interrupt(
             session_key,
@@ -553,8 +545,7 @@ async def history(
                 # text(s) (consume-on-completion — they stay pending until the
                 # turn finalizes, covering the sent-but-not-yet-claimed window
                 # too), and the Redis stream gives the cursor to replay the
-                # agent's frames from. A regenerate message renders no bubble —
-                # its user turn is already in history.
+                # agent's frames from.
                 pending = await MailboxRepository(user.id, conn).peek_pending(session_id=session)
                 running = await RunRepository(user.id, conn).get_active(session_id=session)
                 # `userEntries` carries each pending input's client message id

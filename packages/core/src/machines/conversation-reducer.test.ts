@@ -2,7 +2,7 @@
  * conversationReducer 回放测试 —— 锁流式状态机的纯转换：turn flush 的 turnPos
  * 缓存/原地更新、乐观 user 的 queued 判定（取代旧 busyRef/awaitingRef 镜像）、
  * persisted 落 serverId 而不改 id（无 remount flicker）、resync 三段合并委派、
- * regenerate 丢尾、排队气泡维护。
+ * 排队气泡维护。
  */
 import { describe, expect, test } from "vitest";
 
@@ -76,15 +76,6 @@ describe("conversationReducer", () => {
     expect((s.transcript[0] as ConversationUserEntry).queued).toBe(true);
     s = conversationReducer(s, { type: "clear_queued_flags" });
     expect((s.transcript[0] as ConversationUserEntry).queued).toBe(false);
-  });
-
-  test("drop_trailing_assistant slices from the last assistant", () => {
-    let s = initConversationState("main-1");
-    s = conversationReducer(s, { type: "optimistic_user", id: "u1", text: "ask", ts: 1 });
-    s = conversationReducer(s, { type: "turn_flush", turnId: "turn-1", parts: [textPart("reply")], running: false, ts: 2 });
-    s = conversationReducer(s, { type: "drop_trailing_assistant" });
-    expect(s.transcript.map((e) => e.kind)).toEqual(["user"]);
-    expect(s.turnPos).toBe(-1);
   });
 
   test("prepend_history shifts a cached turnPos by the prepended count", () => {

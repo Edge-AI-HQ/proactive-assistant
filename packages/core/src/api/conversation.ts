@@ -88,9 +88,6 @@ export async function conversationSend(
   message: string,
   opts?: {
     cardContext?: Record<string, unknown>;
-    /** Re-run the latest user turn: the backend pops the stale assistant
-     *  reply from state and regenerates (diffs `message`, not `messages`). */
-    regenerate?: boolean;
     /** Client-generated message id (crypto.randomUUID). The backend uses it
      *  as the mailbox idempotency key (a retried POST can't enqueue twice)
      *  and echoes it on /history rows + `active.userEntries` so the
@@ -110,7 +107,6 @@ export async function conversationSend(
 ): Promise<void> {
   const body: Record<string, unknown> = { session_key: sessionKey, message };
   if (opts?.cardContext) body.cardContext = opts.cardContext;
-  if (opts?.regenerate) body.regenerate = true;
   if (opts?.clientMsgId) body.clientMsgId = opts.clientMsgId;
   if (opts?.interrupt) body.interrupt = true;
   if (opts?.bypassPermissions) body.bypassPermissions = true;
