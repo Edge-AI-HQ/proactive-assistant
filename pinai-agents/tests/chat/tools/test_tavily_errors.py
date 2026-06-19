@@ -9,6 +9,7 @@ these tools) emits a real error ToolMessage.
 
 from __future__ import annotations
 
+import asyncio
 import os
 
 # langchain_tavily validates TAVILY_API_KEY at import time (module-level
@@ -24,7 +25,14 @@ from langchain_core.messages import ToolMessage  # noqa: E402
 from langchain_core.tools import ToolException  # noqa: E402
 from langchain_tavily import TavilyExtract, TavilySearch  # noqa: E402
 
+from pinai_agents.chat.harness.ctx import current_run_jwt  # noqa: E402
+from pinai_agents.chat.tools import http_client, usage_report  # noqa: E402
 from pinai_agents.chat.tools.direct.tavily import tavily_extract, tavily_search  # noqa: E402
+
+
+async def _drain_usage_reports() -> None:
+    if usage_report._pending:
+        await asyncio.gather(*list(usage_report._pending))
 
 
 def _tool_call(name: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -76,6 +84,42 @@ async def test_search_success_payload_passes_through(monkeypatch) -> None:
     assert isinstance(msg, ToolMessage)
     assert msg.status != "error"
     assert "lindy.ai" in str(msg.content)
+
+
+@pytest.mark.asyncio
+async def test_search_success_reports_tavily_api_credit(monkeypatch) -> None:
+    payload = {"results": [{"title": "Lindy AI", "url": "https://lindy.ai"}]}
+    calls: list[tuple[str, dict[str, Any], str]] = []
+
+    async def fake_arun(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return payload
+
+    async def fake_post(path: str, body: dict[str, Any], *, jwt: str) -> dict[str, Any]:
+        calls.append((path, body, jwt))
+        return {"ok": True}
+
+    monkeypatch.setattr(TavilySearch, "_arun", fake_arun)
+    monkeypatch.setattr(http_client, "post_with_jwt", fake_post)
+    token = current_run_jwt.set("jwt-tavily")
+    try:
+        await tavily_search.ainvoke(_tool_call("tavily_search", {"query": "lindy.ai"}))
+        await _drain_usage_reports()
+    finally:
+        current_run_jwt.reset(token)
+
+    assert calls == [
+        (
+            "/api/agent/usage/record",
+            {
+                "provider": "tavily",
+                "product": "tavily_search",
+                "apiCredits": 1,
+                "source": "tavily:search",
+                "metadata": {"search_depth": "basic"},
+            },
+            "jwt-tavily",
+        )
+    ]
 
 
 @pytest.mark.asyncio

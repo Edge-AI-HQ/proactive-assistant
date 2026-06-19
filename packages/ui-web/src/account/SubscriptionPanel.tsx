@@ -11,13 +11,14 @@ import {
 import {
   cancelCurrentSubscription,
   createCheckout,
+  createTopup,
   getCurrentSubscription,
   getCustomerPortalUrl,
   getUsage,
-  listInvoices,
+  listPaymentHistory,
   listPaymentMethods,
   reconcileSubscription,
-  type InvoiceEntry,
+  type PaymentHistoryEntry,
   type PaymentMethodEntry,
   type PlanCode,
   type SubscriptionState,
@@ -80,13 +81,13 @@ const subscriptionPanelCache: {
   sub: SubscriptionState | null;
   usage: UsageInfo | null;
   paymentMethods: PaymentMethodEntry[];
-  invoices: InvoiceEntry[];
+  paymentHistory: PaymentHistoryEntry[];
   primed: boolean;
 } = {
   sub: null,
   usage: null,
   paymentMethods: [],
-  invoices: [],
+  paymentHistory: [],
   primed: false,
 };
 
@@ -97,6 +98,52 @@ const SUBSCRIPTION_PRO_FEATURES = [
   "Voice + Ambient mode",
   "Priority execution",
 ];
+
+const RECONCILE_TIMEOUT_MS = 1500;
+function formatCredits(credits: number): string {
+  return Math.max(0, Math.round(credits)).toLocaleString();
+}
+
+function formatBudgetUsdFromCredits(credits: number): string {
+  const dollars = Math.max(0, Math.round(credits)) / 100;
+  return Number.isInteger(dollars) ? `$${dollars}` : `$${dollars.toFixed(2)}`;
+}
+
+function resolvePlanAllowanceCredits(usage: UsageInfo | null): number {
+  if (typeof usage?.planAllowanceCredits === "number") {
+    return Math.max(0, Math.round(usage.planAllowanceCredits));
+  }
+  if (!usage) return 0;
+  return Math.max(
+    0,
+    Math.round(usage.maxBudgetUsd * 100) - Math.round(usage.topupCreditsAvailable ?? 0),
+  );
+}
+
+function optionalWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = globalThis.setTimeout(() => {
+      settled = true;
+      resolve(null);
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        globalThis.clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        globalThis.clearTimeout(timer);
+        resolve(null);
+      },
+    );
+  });
+}
 
 /**
  * Subscription sub-page — fetches real Stripe-backed state from
@@ -112,7 +159,7 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
   // so loading=true triggers the cold-start spinner once.
   const [sub, setSub] = useState<SubscriptionState | null>(subscriptionPanelCache.sub);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodEntry[]>(subscriptionPanelCache.paymentMethods);
-  const [invoices, setInvoices] = useState<InvoiceEntry[]>(subscriptionPanelCache.invoices);
+  const [paymentHistory, setPaymentHistory] = useState<PaymentHistoryEntry[]>(subscriptionPanelCache.paymentHistory);
   const [usage, setUsage] = useState<UsageInfo | null>(subscriptionPanelCache.usage);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [loading, setLoading] = useState(!subscriptionPanelCache.primed);
@@ -121,6 +168,8 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
   const [actionToast, setActionToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showPlanPicker, setShowPlanPicker] = useState(false);
+  const [showTopup, setShowTopup] = useState(false);
+  const [customTopup, setCustomTopup] = useState("");
 
   const refresh = useCallback(async (silent: boolean = false) => {
     try {
@@ -134,25 +183,24 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
       // failure (reconcile is a "nice to have"; getCurrentSubscription
       // is the authoritative read below).
       let multipleActive = false;
-      try {
-        const r = await reconcileSubscription();
-        // Only warn when 2+ subs are actually going to bill — a sub in
-        // cancel_at_period_end will wind down on its own, not a duplicate.
-        if ((r.activelyRenewing ?? r.totalActive ?? 0) > 1) multipleActive = true;
-      } catch {
-        /* ignored — reconcile may error on edge cases like no customer */
-      }
+      const r = await optionalWithTimeout(
+        reconcileSubscription(),
+        RECONCILE_TIMEOUT_MS,
+      );
+      // Only warn when 2+ subs are actually going to bill — a sub in
+      // cancel_at_period_end will wind down on its own, not a duplicate.
+      if (r && (r.activelyRenewing ?? r.totalActive ?? 0) > 1) multipleActive = true;
       const [s, pms, invs, u] = await Promise.all([
         getCurrentSubscription(),
         listPaymentMethods().catch(() => [] as PaymentMethodEntry[]),
-        listInvoices(12).catch(() => [] as InvoiceEntry[]),
+        listPaymentHistory(12).catch(() => [] as PaymentHistoryEntry[]),
         getUsage().catch(() => null as UsageInfo | null),
       ]);
       // Write through to module cache so the next mount can render
       // instantly without re-fetching.
       setSub(s); subscriptionPanelCache.sub = s;
       setPaymentMethods(pms); subscriptionPanelCache.paymentMethods = pms;
-      setInvoices(invs); subscriptionPanelCache.invoices = invs;
+      setPaymentHistory(invs); subscriptionPanelCache.paymentHistory = invs;
       setUsage(u); subscriptionPanelCache.usage = u;
       subscriptionPanelCache.primed = true;
       setError(null);
@@ -215,6 +263,46 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
       setActionPending(false);
       setPendingPlanCode(null);
     }
+  };
+
+  const onTopup = async (amountCents: number) => {
+    if (actionPending) return;
+    setActionPending(true);
+    setActionToast(null);
+    setError(null);
+    try {
+      const r = await createTopup(amountCents, {
+        successUrl: `${window.location.origin}/?topup=success`,
+        cancelUrl: `${window.location.origin}/?topup=cancel`,
+      });
+      // Stripe Checkout (mode=payment) — credits land on the
+      // checkout.session.completed webhook after the user pays.
+      window.location.href = r.checkoutUrl;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "topup failed");
+      setActionPending(false);  // success path navigates away, no reset needed
+    }
+  };
+
+  const onCustomTopup = () => {
+    const dollars = Number(customTopup);
+    if (!Number.isFinite(dollars) || dollars < 5 || dollars > 1000) {
+      setError("Enter an amount between $5 and $1000");
+      return;
+    }
+    void onTopup(Math.round(dollars * 100));
+  };
+
+  const togglePlanPicker = () => {
+    const next = !showPlanPicker;
+    setShowPlanPicker(next);
+    if (next) setShowTopup(false);
+  };
+
+  const toggleTopupPicker = () => {
+    const next = !showTopup;
+    setShowTopup(next);
+    if (next) setShowPlanPicker(false);
   };
 
   const onManage = async () => {
@@ -283,13 +371,36 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
   const isFree = !sub || sub.planCode == null || sub.planCode === "free";
   const currentPlanInfo = PLANS.find((p) => p.id === sub?.planCode);
   const currentFeatures = currentPlanInfo ? planPerks(currentPlanInfo.id) : [];
+  const monthlyPlanCredits = resolvePlanAllowanceCredits(usage);
+  const totalSpendCredits = Math.max(0, Math.round((usage?.spendUsd ?? 0) * 100));
+  const planCreditsUsed = Math.min(totalSpendCredits, monthlyPlanCredits);
+  const topupCreditsGranted = Math.max(
+    0,
+    Math.round(usage?.topupCreditsAvailable ?? 0),
+  );
+  const extraCreditsSpent = Math.max(0, totalSpendCredits - monthlyPlanCredits);
+  const extraCreditsAvailable = Math.max(0, topupCreditsGranted - extraCreditsSpent);
+  const planCreditsRemaining = Math.max(0, monthlyPlanCredits - planCreditsUsed);
+  const totalCreditsAvailable = planCreditsRemaining + extraCreditsAvailable;
+  const creditsAvailableLine = extraCreditsAvailable > 0
+    ? `${formatCredits(extraCreditsAvailable)} extra credits`
+    : null;
+  const withCreditsAvailable = (line: string) =>
+    creditsAvailableLine ? `${line} · ${creditsAvailableLine}` : line;
   const priceLine = (() => {
-    if (isFree) return "$5 / month budget · upgrade for more";
+    if (isFree) {
+      const freeBudgetLine = monthlyPlanCredits > 0
+        ? `${formatBudgetUsdFromCredits(monthlyPlanCredits)} / month budget`
+        : "$5 / month budget";
+      return creditsAvailableLine
+        ? `${freeBudgetLine} · ${creditsAvailableLine}`
+        : `${freeBudgetLine} · upgrade for more`;
+    }
     const head = currentPlanInfo?.price ? `$${currentPlanInfo.price} / mo` : "—";
-    if (sub.cancelAtPeriodEnd && periodEnd) return `${head} · ends ${periodEnd}`;
-    if (sub.status === "trialing" && periodEnd) return `${head} · trial ends ${periodEnd}`;
-    if (periodEnd) return `${head} · renews on ${periodEnd}`;
-    return head;
+    if (sub.cancelAtPeriodEnd && periodEnd) return withCreditsAvailable(`${head} · ends ${periodEnd}`);
+    if (sub.status === "trialing" && periodEnd) return withCreditsAvailable(`${head} · trial ends ${periodEnd}`);
+    if (periodEnd) return withCreditsAvailable(`${head} · renews on ${periodEnd}`);
+    return withCreditsAvailable(head);
   })();
   const otherPlansLabel = (() => {
     if (isFree) return "Basic / Pro / Max";
@@ -361,12 +472,14 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
               </div>
             )}
 
-            {/* Budget usage progress — real LiteLLM spend / max_budget */}
-            {usage && usage.maxBudgetUsd > 0 && (() => {
-              const pct = (usage.spendUsd / usage.maxBudgetUsd) * 100;
+            {/* Budget usage progress — product plan bucket + purchased top-up bucket. */}
+            {usage && monthlyPlanCredits > 0 && (() => {
+              const pct = (planCreditsUsed / monthlyPlanCredits) * 100;
               const clamped = Math.min(100, Math.max(0, pct));
-              const overBudget = usage.spendUsd >= usage.maxBudgetUsd;
-              const barColor = overBudget
+              const creditsExhausted = totalCreditsAvailable <= 0;
+              const planUsageText = `${formatCredits(planCreditsUsed)} / ${formatCredits(monthlyPlanCredits)} credits`;
+              const extraCreditsText = `${formatCredits(extraCreditsAvailable)} available`;
+              const barColor = creditsExhausted
                 ? "hsl(0 75% 55%)"
                 : pct >= 80
                   ? "hsl(40 95% 55%)"
@@ -375,10 +488,10 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
                 <div className={`${currentFeatures.length > 0 ? "mt-3 pt-3 border-t border-foreground/[0.06]" : "mt-2"}`}>
                   <div className="flex items-center justify-between text-caption mb-1.5">
                     <span className="text-foreground/55 uppercase tracking-[0.12em] font-semibold">
-                      Plan usage
+                      Plan credits
                     </span>
                     <span className="text-foreground/85 font-medium tabular-nums">
-                      {Math.round(usage.spendUsd * 100).toLocaleString()} / {Math.round(usage.maxBudgetUsd * 100).toLocaleString()} credits
+                      {planUsageText}
                       <span className="text-foreground/45 ml-1">({Math.round(pct)}%)</span>
                     </span>
                   </div>
@@ -388,9 +501,24 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
                       style={{ width: `${clamped}%`, background: barColor }}
                     />
                   </div>
-                  {overBudget && (
+                  {topupCreditsGranted > 0 && (
+                    <div className="mt-2 flex items-start justify-between gap-3 text-caption">
+                      <div>
+                        <span className="block text-foreground/55 uppercase tracking-[0.12em] font-semibold">
+                          Extra credits
+                        </span>
+                        <Text variant="micro" className="block text-foreground/45 mt-0.5">
+                          Used after plan credits
+                        </Text>
+                      </div>
+                      <span className="text-foreground/85 font-medium tabular-nums text-right">
+                        {extraCreditsText}
+                      </span>
+                    </div>
+                  )}
+                  {creditsExhausted && (
                     <Text variant="caption" className="block text-[hsl(0_72%_45%)] mt-1.5">
-                      Plan usage limit reached — calls blocked until {isFree ? "you upgrade your plan" : "next renewal"}.
+                      Credits exhausted — add credits or wait until {isFree ? "you upgrade your plan" : "next renewal"}.
                     </Text>
                   )}
                 </div>
@@ -404,27 +532,78 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
             </Text>
           )}
 
-          {/* 2. Quick actions — Switch plan expands the picker below; Add credits is a placeholder until we wire one-time top-ups. */}
+          {/* 2. Quick actions — Switch plan expands the plan picker; Add credits
+              expands the one-time top-up picker below. */}
           <div className="grid grid-cols-2 gap-2.5 mb-3">
             <button
-              onClick={() => setShowPlanPicker((v) => !v)}
+              onClick={togglePlanPicker}
               className="glass-card-strong p-3 text-left hover:bg-white/20 transition-colors"
             >
               <Text variant="micro" weight="semibold" className="block text-foreground/45 uppercase tracking-[0.12em] mb-0.5">
-                {showPlanPicker ? "Hide options" : isFree ? "Upgrade plan" : "Switch plan"}
+                Change plan
               </Text>
-              <Text variant="bodySm" weight="semibold" className="block text-foreground">{otherPlansLabel}</Text>
+              <Text variant="bodySm" weight="semibold" className="block text-foreground">{showPlanPicker ? "Hide" : otherPlansLabel}</Text>
             </button>
             <button
-              disabled
-              className="glass-card-strong p-3 text-left opacity-60 cursor-not-allowed"
+              onClick={toggleTopupPicker}
+              className="glass-card-strong p-3 text-left hover:bg-white/20 transition-colors"
             >
               <Text variant="micro" weight="semibold" className="block text-foreground/45 uppercase tracking-[0.12em] mb-0.5">
                 Add credits
               </Text>
-              <Text variant="bodySm" weight="semibold" className="block text-foreground/70">Coming soon</Text>
+              <Text variant="bodySm" weight="semibold" className="block text-foreground">{showTopup ? "Hide" : "Buy credits"}</Text>
             </button>
           </div>
+
+          {/* 2b. Top-up picker — one-time credit purchase via /api/payment/topup
+              (Stripe Checkout mode=payment). Credits land on the
+              checkout.session.completed webhook; balance updates after payment. */}
+          {showTopup && (
+            <div className="glass-card-strong p-3 mb-3 space-y-2.5">
+              <Text variant="micro" weight="semibold" className="block text-foreground/45 uppercase tracking-[0.12em]">
+                Add credits (one-time)
+              </Text>
+              <div className="grid grid-cols-3 gap-2">
+                {[2000, 5000, 10000].map((cents) => (
+                  <button
+                    key={cents}
+                    disabled={actionPending}
+                    onClick={() => void onTopup(cents)}
+                    className="glass-card-strong p-2.5 text-center hover:bg-white/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Text variant="bodySm" weight="semibold" className="block text-foreground">${cents / 100}</Text>
+                    <Text variant="micro" className="block text-foreground/55">{cents.toLocaleString()} cr</Text>
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-foreground/50">$</span>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min={5}
+                    max={1000}
+                    placeholder="Other amount"
+                    value={customTopup}
+                    onChange={(e) => setCustomTopup(e.target.value)}
+                    className="w-full rounded-xl border border-white/15 bg-white/10 py-2 pl-6 pr-3 text-sm text-foreground placeholder:text-foreground/40 focus:border-white/30 focus:outline-none"
+                  />
+                </div>
+                <button
+                  disabled={actionPending || !customTopup}
+                  onClick={onCustomTopup}
+                  className="glass-card-strong px-4 py-2 text-sm font-semibold text-foreground transition-colors hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Buy
+                </button>
+              </div>
+              <Text variant="micro" className="block text-foreground/45">
+                Added on top of your monthly plan allowance. Spent after the plan
+                allowance runs out; expire 12 months after purchase.
+              </Text>
+            </div>
+          )}
 
           {/* 2a. Plan picker — revealed when Switch plan is tapped. Wires to /api/payment/create-checkout (handles new / upgrade / downgrade). */}
           {showPlanPicker && (
@@ -490,12 +669,17 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
                   let chipLabel = "CARD";
                   let primary = "Payment method";
                   let secondary: string | null = null;
+                  const checkoutOnly = pm.source === "checkout" || pm.isSaved === false;
                   if (pm.type === "card") {
                     chipLabel = (pm.brand ?? "card").toUpperCase().slice(0, 5);
                     primary = `•••• ${pm.last4 ?? "····"}`;
-                    secondary = pm.expMonth != null && pm.expYear != null
-                      ? `Expires ${String(pm.expMonth).padStart(2, "0")} / ${String(pm.expYear).slice(-2)}`
-                      : null;
+                    secondary = checkoutOnly
+                      ? "Used at checkout"
+                      : (
+                        pm.expMonth != null && pm.expYear != null
+                          ? `Expires ${String(pm.expMonth).padStart(2, "0")} / ${String(pm.expYear).slice(-2)}`
+                          : null
+                      );
                   } else if (pm.type === "link") {
                     chipLabel = "LINK";
                     primary = "Stripe Link";
@@ -512,6 +696,9 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
                   } else {
                     chipLabel = pm.type.toUpperCase().slice(0, 5);
                     primary = pm.type;
+                  }
+                  if (checkoutOnly && !secondary) {
+                    secondary = "Used at checkout";
                   }
                   return (
                     <li key={pm.id} className="flex items-center gap-3">
@@ -553,11 +740,11 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
                 View all on Stripe →
               </button>
             </div>
-            {invoices.length === 0 ? (
+            {paymentHistory.length === 0 ? (
               <Text variant="label" className="block text-foreground/55 py-1">No payments yet.</Text>
             ) : (
               <ul className="divide-y divide-foreground/[0.06]">
-                {invoices.map((inv) => {
+                {paymentHistory.map((inv) => {
                   const dateStr = new Date(inv.createdAt * 1000).toLocaleDateString("en-US", {
                     year: "numeric", month: "short", day: "numeric",
                   });
@@ -568,28 +755,39 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
                     : inv.status === "void" ? "Void"
                     : inv.status === "uncollectible" ? "Failed"
                     : inv.status;
+                  const rowContent = (
+                    <>
+                      <Calendar size={13} strokeWidth={1.7} className="text-foreground/40 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <Text variant="bodySm" weight="medium" className="block text-foreground/85 truncate">
+                          {inv.description}
+                        </Text>
+                        <Text variant="caption" className="block text-foreground/45">{dateStr}</Text>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <Text variant="bodySm" weight="semibold" className="text-foreground tabular-nums">{amount}</Text>
+                        <Text variant="micro" weight="medium" className="px-1.5 py-0.5 rounded-md bg-foreground/[0.06] text-foreground/55">
+                          {statusLabel}
+                        </Text>
+                      </div>
+                    </>
+                  );
                   return (
-                    <li key={inv.id} className="py-2.5">
-                      <a
-                        href={inv.hostedInvoiceUrl ?? "#"}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-3 hover:bg-white/10 -mx-2 px-2 rounded-md transition-colors"
-                      >
-                        <Calendar size={13} strokeWidth={1.7} className="text-foreground/40 shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <Text variant="bodySm" weight="medium" className="block text-foreground/85 truncate">
-                            {inv.description}
-                          </Text>
-                          <Text variant="caption" className="block text-foreground/45">{dateStr}</Text>
+                    <li key={`${inv.kind}:${inv.id}`} className="py-2.5">
+                      {inv.hostedInvoiceUrl ? (
+                        <a
+                          href={inv.hostedInvoiceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-3 hover:bg-white/10 -mx-2 px-2 rounded-md transition-colors"
+                        >
+                          {rowContent}
+                        </a>
+                      ) : (
+                        <div className="flex items-center gap-3 -mx-2 px-2 rounded-md">
+                          {rowContent}
                         </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <Text variant="bodySm" weight="semibold" className="text-foreground tabular-nums">{amount}</Text>
-                          <Text variant="micro" weight="medium" className="px-1.5 py-0.5 rounded-md bg-foreground/[0.06] text-foreground/55">
-                            {statusLabel}
-                          </Text>
-                        </div>
-                      </a>
+                      )}
                     </li>
                   );
                 })}
@@ -643,4 +841,3 @@ export function SubscriptionPanel({ onBack }: { onBack: () => void }) {
     </div>
   );
 }
-

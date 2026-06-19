@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from pinai_agents.web.payment import plans, subscriptions
+from pinai_agents.web.payment import budget_periods, checkout, plans, subscriptions
 from pinai_agents.web.payment import webhook as webhook_mod
 from pinai_agents.web.payment.webhook import (
     _attr,
@@ -218,7 +218,13 @@ def invoice_paid_harness(monkeypatch):
         clear_mock,
     )
 
-    # Short-circuit LiteLLM budget refresh (out of scope for these tests).
+    # invoice.paid rolls the budget window: recompute (mocked) raises the cap,
+    # set_period_end (mocked) marks the window for the reconcile tick. Both are
+    # out of scope for the pending-resolution tests but must not hit the DB.
+    recompute_mock = AsyncMock()
+    monkeypatch.setattr(checkout, "recompute_litellm_budget", recompute_mock)
+    period_mock = AsyncMock()
+    monkeypatch.setattr(budget_periods, "set_period_end", period_mock)
     monkeypatch.setattr(plans, "find_by_code", AsyncMock(return_value=None))
 
     return SimpleNamespace(
@@ -227,6 +233,8 @@ def invoice_paid_harness(monkeypatch):
         sync_mock=sync_mock,
         clear_mock=clear_mock,
         stripe_modify=stripe_modify,
+        recompute_mock=recompute_mock,
+        period_mock=period_mock,
     )
 
 
@@ -312,3 +320,71 @@ async def test_invoice_paid_metadata_cleanup_failure_does_not_break_webhook(
     _, kwargs = invoice_paid_harness.sync_mock.await_args
     assert kwargs["plan_code"] == "max"
     invoice_paid_harness.clear_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_invoice_paid_skips_upgrade_delta_invoice(invoice_paid_harness):
+    """The one-off difference charge from an immediate upgrade is tagged
+    metadata.kind='upgrade_delta'. It is NOT a renewal — _handle_invoice_paid
+    must short-circuit so it doesn't reset spend or re-promote a plan."""
+    delta_invoice = SimpleNamespace(
+        id="in_upgrade_delta",
+        subscription="sub_y",
+        customer="cus_x",
+        metadata={"kind": "upgrade_delta"},
+    )
+
+    await _handle_invoice_paid(conn=None, invoice=delta_invoice)
+
+    invoice_paid_harness.sync_mock.assert_not_awaited()
+    invoice_paid_harness.clear_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_invoice_paid_rolls_window_and_keeps_spend(invoice_paid_harness):
+    """On renewal, invoice.paid raises the cap immediately (recompute with
+    reset_spend=False — KEEP spend so the reconcile can attribute the closing
+    window) and marks period_end=NOW() so the reconcile tick rolls the window
+    (the reconcile, not invoice.paid, owns the spend reset)."""
+    invoice_paid_harness.fresh_sub.metadata = {}
+    invoice_paid_harness.sub_row_container["row"] = _sub_row(pending=None)
+
+    await _handle_invoice_paid(conn=None, invoice=_invoice())
+
+    invoice_paid_harness.recompute_mock.assert_awaited_once()
+    _, kwargs = invoice_paid_harness.recompute_mock.await_args
+    assert kwargs["reset_spend"] is False
+    invoice_paid_harness.period_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cancel_to_free_keeps_credits(monkeypatch):
+    """A terminal cancel demotes to Free via recompute (reset_spend=False) —
+    which re-adds the user's active credit grants on top of the Free allowance,
+    so purchased credits survive cancel — and rolls the window for reconcile."""
+    monkeypatch.setattr(webhook_mod, "_user_id_from_metadata", AsyncMock(return_value=42))
+    monkeypatch.setattr(webhook_mod, "_plan_code_for_subscription", AsyncMock(return_value="free"))
+    fresh = SimpleNamespace(status="canceled")
+    monkeypatch.setattr(
+        webhook_mod,
+        "requires_stripe",
+        lambda: SimpleNamespace(
+            Subscription=SimpleNamespace(retrieve=MagicMock(return_value=fresh))
+        ),
+    )
+    monkeypatch.setattr(subscriptions, "sync_from_stripe_subscription", AsyncMock())
+    ensure_free = AsyncMock()
+    monkeypatch.setattr(checkout, "ensure_user_free_subscription", ensure_free)
+    set_end = AsyncMock()
+    monkeypatch.setattr(budget_periods, "set_period_end", set_end)
+    recompute = AsyncMock()
+    monkeypatch.setattr(checkout, "recompute_litellm_budget", recompute)
+
+    sub = SimpleNamespace(id="sub_x", customer="cus_x", metadata={"supabase_user_id": "u"})
+    await webhook_mod._handle_subscription_event(None, sub)
+
+    ensure_free.assert_awaited_once()
+    set_end.assert_awaited_once()
+    recompute.assert_awaited_once()
+    _, kwargs = recompute.await_args
+    assert kwargs["reset_spend"] is False

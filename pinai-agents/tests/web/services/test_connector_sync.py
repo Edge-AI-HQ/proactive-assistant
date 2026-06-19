@@ -104,7 +104,7 @@ def fake_adapter(monkeypatch):
             return fake_recipe
         return None
 
-    async def fake_fetch(user_id, toolkit, cid, *, limit=100, since=None):
+    async def fake_fetch(user_id, toolkit, cid, *, limit=100, since=None, pool=None):
         if toolkit != "fake":
             return []
         captured["user_id"] = user_id

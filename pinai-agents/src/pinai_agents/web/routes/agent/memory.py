@@ -88,10 +88,16 @@ async def search_memory(
     been computed yet (queue lag) are excluded — caller can fall back
     to /list for keyword filtering.
     """
+    from ...auth.user_service import load_user_by_id  # noqa: PLC0415
     from ...embeddings import EmbeddingError, text_to_query_vector  # noqa: PLC0415
 
+    # Bill the query embedding to the searching user's virtual key.
+    searcher = await load_user_by_id(pool, run.user_id)
     try:
-        qvec = await text_to_query_vector(query)
+        qvec = await text_to_query_vector(
+            query,
+            virtual_key=searcher.litellm_virtual_key if searcher else None,
+        )
     except EmbeddingError as e:
         raise HTTPException(503, f"embedding service unavailable: {e}") from e
 

@@ -394,6 +394,23 @@ async def resolve_and_persist_label(
             )
         return None
 
+    from .services.provider_usage import (  # noqa: PLC0415
+        estimate_composio_tool_call_charge,
+        record_provider_usage_charge,
+    )
+
+    charge = estimate_composio_tool_call_charge(
+        tool_calls=1,
+        source="composio:identity",
+        metadata={"toolkit": toolkit, "action": spec.action},
+    )
+    await record_provider_usage_charge(
+        pool,
+        user_id=user.id,
+        supabase_user_id=user.supabase_user_id,
+        charge=charge,
+    )
+
     label = spec.extract(raw) if raw else None
     async with user_scoped_tx(pool, user.id) as conn:
         await ConnectorLabelsRepository(user.id, conn).upsert_resolved(

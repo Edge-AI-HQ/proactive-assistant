@@ -457,6 +457,7 @@ async def _run_preview(
             cid,
             limit=preview_limit,
             since=None,
+            pool=pool,
         )
     total_fetched = sum(len(items) for items in preview_items_by_sub.values())
 
@@ -594,6 +595,7 @@ async def _run_init(
                 cid,
                 limit=limit,
                 since=None,
+                pool=pool,
             )
         except Exception as e:
             if not is_fanout:
@@ -757,6 +759,7 @@ async def _run_sync(
                 cid,
                 limit=limit,
                 since=since_by_sub[sub_tk],
+                pool=pool,
             )
         except Exception as e:
             if not is_fanout:

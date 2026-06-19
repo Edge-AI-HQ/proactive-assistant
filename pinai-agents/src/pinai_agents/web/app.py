@@ -54,6 +54,7 @@ from .routes.agent.raw import router as agent_raw_router
 from .routes.agent.sandbox_phantom import router as agent_sandbox_phantom_router
 from .routes.agent.signals import router as agent_signals_router
 from .routes.agent.skills import router as agent_skills_router
+from .routes.agent.usage import router as agent_usage_router
 from .routes.agent.world import router as agent_world_router
 from .routes.ui.account import router as ui_account_router
 from .routes.ui.agent_runs import router as ui_agent_runs_router
@@ -106,6 +107,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     scheduler_task: asyncio.Task[None] | None = None
     world_ingest_task: asyncio.Task[None] | None = None
+    reconcile_task: asyncio.Task[None] | None = None
     agent_worker: AgentRunWorker | None = None
     redis_client: Redis | None = None
     if pool is not None:
@@ -117,6 +119,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         from .services.world_ingest import loop as world_ingest_loop  # noqa: PLC0415
 
         world_ingest_task = asyncio.create_task(world_ingest_loop(pool), name="pinai-world-ingest")
+
+        # Budget reconciliation (Phase 2 credits) is also a Redis-independent
+        # loop: it closes due budget windows + resets the LiteLLM spend window
+        # so FREE users (who never produce an invoice.paid) still get
+        # reconciled. Multi-replica safe via FOR UPDATE SKIP LOCKED.
+        from .services.budget_reconcile import loop as budget_reconcile_loop  # noqa: PLC0415
+
+        reconcile_task = asyncio.create_task(
+            budget_reconcile_loop(pool), name="pinai-budget-reconcile"
+        )
         # Agent Core actor kernel (plan 2026-06-04): AgentRunService is the
         # produce-side API the routes call; the worker (below) drains every
         # conversational session via a per-session lease and fans frames out
@@ -155,7 +167,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         # old proactive_loop / proactive_bus are retired (no longer started).
         if agent_worker is not None:
             await agent_worker.stop()
-        for t in (scheduler_task, world_ingest_task):
+        for t in (scheduler_task, world_ingest_task, reconcile_task):
             if t is not None:
                 t.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -247,6 +259,7 @@ def create_app() -> FastAPI:
     app.include_router(agent_evolution_router)
     app.include_router(agent_pipeline_router)
     app.include_router(agent_sandbox_phantom_router)
+    app.include_router(agent_usage_router)
     app.include_router(agent_development_feedback_router)
 
     @app.get("/health")

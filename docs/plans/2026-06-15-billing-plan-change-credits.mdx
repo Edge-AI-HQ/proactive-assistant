@@ -1,0 +1,222 @@
+---
+title: "计费:当期升级即时生效 + Credits 充值模块"
+description: "升级当期即时生效(收全差价)、降级期末生效、新增可充值 credits;所有消费统一记在 LiteLLM key 一个账本上。分两期:Phase 1 升级,Phase 2 credits。"
+---
+
+# 计费:当期升级即时生效 + Credits 充值模块
+
+## 状态
+
+Brainstorm **已定稿(2026-06-15)**。**Phase 1(升级即时生效)先实施**;Phase 2(credits 充值)设计已经多轮对抗式验证,待 Phase 1 上线后实施。本文是两期共同的设计 SSOT。
+
+参考做法对标 OpenAI / Anthropic / Stripe 行业惯例(见下「调研结论」)。
+
+## 背景与问题
+
+现状(`web/payment/checkout.py` 的 `create_or_change_subscription` "Switch" 分支):**升级和降级被同等对待**——都用 `proration_behavior="none"` + `billing_cycle_anchor="unchanged"` + 写 `pending_plan_code`,真正生效推到下次 `invoice.paid`。`is_upgrade` 只决定返回文案,不改行为。结果:**升级也要等下个月**,用户「付了 Pro 却还被 Basic 限额」。
+
+「credits」当前**不是钱包**,只是每月重置的 LiteLLM 预算上限(`reset_spend=True`),没有可购买/持久/过期的余额。
+
+## 调研结论(行业惯例)
+
+- **升级**:立即生效。OpenAI/Anthropic/Stripe 一致。
+- **降级/取消**:期末生效,已付不退。三家一致。
+- **预付 credits**:叠在套餐额度之上;套餐额度先用、credits 兜底;常 12 月过期、不退。
+
+## 锁定的产品决策
+
+| # | 决定 |
+|---|---|
+| 1 | credits = **两个桶**:套餐月额度(每月重置)+ 充值 credits(持久、12 月过期);**先扣套餐、再扣 credits** |
+| 2 | **升级即时生效**:当场收**全差价**(新档价 − 旧档价,**非按天 proration**,因计费单位是 credits 配额不是时间),额度拔到新档满额、保留已用量;下月按新档全价续费 |
+| 3 | **降级延后**:期末生效(沿用现有 `pending_plan_code` 机制) |
+| 4 | 充值 = **手动一次性**(自动续充以后再说) |
+| 5 | **一律不退**(credits、降级/取消都不退;EU/UK 法定退款以后再单独处理) |
+| 6 | 充值 UI = 预设档(20/50/100)+ Other 自填,**1:1 不打折**(阶梯折扣"save up"以后再加) |
+| 7 | 充值 credits **跨重置、跨降级/取消都保留**(已付即用户所有) |
+| 8 | **单一账本**:所有消费(LLM + 文件转录 + ByteDance 实时转录)都记在 **LiteLLM key 的 spend** 上,credits 一个余额覆盖全部 |
+| 9 | 单位:**credits = 整数分**,1 credit = $0.01(对齐 `monthly_refresh_credits`);只在 LiteLLM 边界 ÷100 转 USD |
+
+---
+
+# Phase 1 — 升级即时生效(先做)
+
+改动集中在 `web/payment/checkout.py` + `web/payment/webhook.py`,不依赖 Phase 2。
+
+## 设计
+
+`create_or_change_subscription` 的 switch 分支按方向拆开。**降级 / 平级保持不变**(现有 `pending_plan_code` 期末路径)。**升级**改为:
+
+1. **先收全差价、确认到账,再改任何状态**(顺序很关键):
+   - `stripe.InvoiceItem.create(customer, amount=new.price_cents − cur.price_cents, currency, metadata={kind:"upgrade_delta", ...})`
+   - `stripe.Invoice.create(customer, auto_advance=True)` → finalize + 扣默认卡。
+   - **校验 invoice 已 `paid`**;未付成功则**中止、不升级**,返回错误(用户停在原档)。
+2. 付成功后:`Subscription.modify(items=[{id, price:new}], proration_behavior="none", billing_cycle_anchor="unchanged")`——切换续费价,Stripe 不再额外按天 proration,续费日不变,下月自动按新档全价。
+3. **立即提升**:`pai_subscriptions.plan_code = target`(不是 pending),清掉任何 `pending_plan_code`,从 Stripe sub 回同步 status/period。
+4. **LiteLLM 额度立即拔到新档**:`max_budget = 新档 monthly_refresh_credits / 100`,**`reset_spend=False`**(保留已用量)。
+   > Phase 2 落地后,这一步改为统一的 `recompute_litellm_budget`(= 新档额度 + 剩余 credits)。
+5. 返回 `{flow:"upgrade", applied:true}`。
+
+## webhook 适配
+
+`_handle_invoice_paid` 必须**不把升级差价那张一次性 invoice 当成续费**:gate 在 `billing_reason == "subscription_cycle"`(或跳过 `metadata.kind == "upgrade_delta"`),否则它会错误地 reset 预算 / 提升 pending。
+
+## 边界
+
+- **重复点击升级**:升级成功后 `plan_code == target`,再点命中现有「already on plan」400;收费前再加 `plan_code != target` 守卫,防并发双扣。
+- **存在 pending 降级时升级**:清掉 pending,直接提升到新档。
+- **差价扣款失败**:第 1 步就中止,subscription / plan_code / LiteLLM 一律不动。
+- `past_due` 状态:沿用现有 `_MODIFIABLE_STATUSES` 判断。
+
+## 验证
+
+- 单测:升级方向判定、差价金额 = 新档分 − 旧档分、付款失败不提升、`upgrade_delta` invoice 被 webhook 跳过。
+- 本地真栈:Basic→Pro 升级 → 看 Stripe 一次性 invoice 金额 = $60、`plan_code` 立刻变 Pro、LiteLLM `max_budget` 立刻到 Pro、`spend` 未被清零;下月续费按 $99。
+
+---
+
+# Phase 2 — Credits 充值模块(设计已验证)
+
+> **实施状态(2026-06-16):后端核心已实现**,逐任务拆解 + 落地差异见 [2026-06-16-billing-credits-topup-implementation](./2026-06-16-billing-credits-topup-implementation)。前置 gate 实测结论:pass-through `cost_per_request` 会累加到 key.spend(方案 B 机制成立)、`budget_duration` 不可经 API 清空(走对账安全网)、`cost_per_request` 是静态值。**范围决策**:本期做充值核心(两桶 / recompute / topup / 脱 Redis 对账 / 12 月过期);**方案 B 的 ASR 实时进 LiteLLM 暂不做**——ASR 仍记 `pai_provider_usage_events`,对账已把它汇进窗口总额(计费不丢),故下文「落地后 `/usage` 去掉 provider_usage 求和」本期**不执行**。2026-06-18 已补齐充值前端 UI / payment history / payment method 展示,见实施文档修正。
+
+经 3 套独立设计 + 7 个对抗场景压测综合而来(6 个场景发现并修补了缺陷,含两个现有代码 bug)。
+
+## 核心原理:两个桶,一个 LiteLLM 数字
+
+- LiteLLM 每 key 只有**一个** `max_budget` + 一个累计 `spend`。令 `max_budget = 套餐剩余额度 + 未过期充值 credits 剩余`。LiteLLM 的 `spend < max_budget` 实时拦的是**合并上限**。
+- 「先扣套餐、再扣 credits」是**对账时的账务重建**,不是实时——超出套餐额度的那部分,记为吃了 credits。
+- **一个 DB 自管的窗口**(免费 + 付费统一)驱动对账。`invoice.paid` 不再直接 reset LiteLLM,只把窗口标记到期 → 免费用户(没有 invoice.paid)也有可靠对账点。
+
+## 数据表(新增 3 张,均 `pai_` 前缀 + RLS,对标 089)
+
+```sql
+-- 091 充值台账(append-only,一次充值一行)
+CREATE TABLE pai_credit_grants (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  supabase_user_id UUID NOT NULL,
+  grant_cents INTEGER NOT NULL CHECK (grant_cents > 0),
+  consumed_cents INTEGER NOT NULL DEFAULT 0 CHECK (consumed_cents >= 0 AND consumed_cents <= grant_cents),
+  source TEXT NOT NULL DEFAULT 'topup' CHECK (source IN ('topup','promo','adjustment')),
+  stripe_payment_intent_id TEXT,   -- 经济身份 = 幂等锚
+  stripe_event_id TEXT,
+  granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL, -- granted_at + 12 months
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','exhausted','expired')),
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX uq_credit_grants_topup_pi ON pai_credit_grants (stripe_payment_intent_id)
+  WHERE source='topup' AND stripe_payment_intent_id IS NOT NULL;          -- 幂等
+CREATE INDEX idx_credit_grants_user_active ON pai_credit_grants (user_id, expires_at, granted_at)
+  WHERE status='active';                                                  -- FIFO 最早过期先扣
+
+-- 092 每用户额度窗口(一行 open,历史保留)
+CREATE TABLE pai_budget_periods (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  supabase_user_id UUID NOT NULL,
+  plan_code TEXT NOT NULL REFERENCES pai_billing_plans(plan_code),
+  allowance_cents INTEGER NOT NULL,
+  allowance_consumed_cents INTEGER NOT NULL DEFAULT 0,
+  period_start TIMESTAMPTZ NOT NULL,
+  period_end TIMESTAMPTZ NOT NULL,        -- 付费:Stripe current_period_end;免费:start+30d
+  state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open','reconciling','reconciled')),
+  opening_litellm_spend NUMERIC(12,6) NOT NULL DEFAULT 0,
+  closing_litellm_spend NUMERIC(12,6),
+  last_seen_reset_at TIMESTAMPTZ,         -- LiteLLM budget_reset_at 锚(自动重置检测)
+  reset_applied BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX uq_budget_periods_one_open ON pai_budget_periods (user_id)
+  WHERE state IN ('open','reconciling');
+CREATE INDEX idx_budget_periods_due ON pai_budget_periods (period_end) WHERE state='open';
+
+-- 093 扣费审计(append-only;UNIQUE 是跨域重复扣的护栏)
+CREATE TABLE pai_credit_consumption_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  budget_period_id UUID NOT NULL REFERENCES pai_budget_periods(id) ON DELETE CASCADE,
+  grant_id UUID REFERENCES pai_credit_grants(id),
+  bucket TEXT NOT NULL CHECK (bucket IN ('allowance','grant','expiry')),
+  cents INTEGER NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX uq_consumption_period_grant_bucket ON pai_credit_consumption_events
+  (budget_period_id, COALESCE(grant_id,'00000000-0000-0000-0000-000000000000'::uuid), bucket);
+```
+
+复用 `pai_stripe_webhook_events`(027)作外层幂等;`pai_subscriptions` 不加列。092 迁移要 **backfill** 每个现有用户一行 open 窗口。
+
+## LiteLLM 集成:单一 budget 写入口
+
+新增唯一的 `recompute_litellm_budget(conn, user_id, *, reset_spend=False)` 取代现有两处临时写法:
+```
+allowance_remaining = plan.monthly_refresh_credits − period.allowance_consumed_cents   # 新开窗口时 = 满额
+credits_remaining   = Σ(grant_cents − consumed_cents) WHERE active AND expires_at>NOW()
+max_budget_usd = (allowance_remaining + credits_remaining) / 100
+update_key(virtual_key, max_budget_usd, reset_spend=reset_spend)
+```
+- **绝对重算,绝不 read-modify-write**(否则 webhook 重放会重复加、并发会丢更新)。
+- **中途重算(充值/升级)用 GROSS 满额**:窗口内 `allowance_consumed=0`,由 LiteLLM 自己保留的 spend 做唯一一次减法;若再把已用量netting进 max_budget = 双重扣 = 坑掉用户旧额度。
+- **方案 B(ASR 统一)**:ByteDance 实时转录花费经 LiteLLM `cost_per_request` pass-through 计入同一 key spend;落地后 `/usage` 去掉「加 pai_provider_usage_events」那段(否则重复计),provider_usage 降为审计。
+
+## 对账与重置(新 scheduler job)
+
+> ⚠️ **落地修正(2026-06-17)**:下文第 2/3 步的「读 `budget_reset_at` 跳变 → 保守按上限满扣」安全网在稳态会误伤(LiteLLM 月度 auto-reset 锚自然月 1 号、与对账窗口不对齐,每账期都在窗口中途清 `key.spend`,使计数器差值不可靠、安全网几乎每账期触发并清空用户已购 credits)。实现已改为**窗口 LLM 用量从 `LiteLLM SpendLogs` 按 `[period_start, period_end)` 求和**(不受重置影响),删除 reset_detected/保守满扣分支;`recompute(reset_spend=True)` 仅服务实时 `max_budget` 拦截、不参与计费归属。详见 [2026-06-16-billing-credits-topup-implementation](./2026-06-16-billing-credits-topup-implementation) 的「对账用量来源修正」。
+
+`_reconcile_budget_periods(pool)`,放进 `tick_loop`,但**必须脱离 Redis 单独起**(现 `app.py:127` tick_loop 只在配了 Redis 时跑;否则免费用户永不重置)。~60s 一跳,空闲零成本。
+
+每个到期窗口一个 `service_tx` 事务,`FOR UPDATE SKIP LOCKED` 多副本安全,**只有 scheduler 关窗,webhook 只标到期**:
+1. 认领:`state='open' AND period_end<=NOW()` → `'reconciling'`。
+2. **先读 `budget_reset_at`**:若它越过 `last_seen_reset_at`,说明 LiteLLM 已自动重置、当前 spend 属于新窗口 → **绝不把 spend=0 当"0 消费"**;保守按 `max(0, max_budget_at_open − opening_spend)` 关窗(只会略多扣,不会漏扣 = 安全方向),WARN+metric。
+3. `window_total = (closing_spend − opening_spend) + ProviderUsageRepository.sum_cost_usd(period_start)`(把 ASR 等也算进;从累计差算,不累加每跳四舍五入)。
+4. allowance 先扣:`allowance_consumed = min(window_total, allowance)`;溢出按 **FIFO 最早过期先扣** 扣 active grants;写 `pai_credit_consumption_events`(UNIQUE 守护重放幂等)。
+5. 关窗 → `reconciled`;扣满的 grant 置 `exhausted`。
+6. 开新窗口(plan_code 取自 `pai_subscriptions`,allowance 取新档,`opening_spend=0`,`last_seen_reset_at=当前 budget_reset_at`)。
+7. **DB 先 commit,再调 LiteLLM**(`recompute(reset_spend=True)` + `reset_applied=TRUE`);LiteLLM 失败下跳按 `reset_applied=FALSE` 重试(归因是已提交状态的纯函数,重推无害)。
+
+**自动重置竞态结构性修复**(可选增强):修 `client.update_key` 让其能显式清空 `budget_duration`(现 `None` 是 no-op,只是省略字段)+ 一次性 key 重写迁移 → 关掉 LiteLLM 自带 30d 计时,让 scheduler 独占重置。**需先在真 LiteLLM 验证「清空 budget_duration」可行**;未验证前保留自动重置 + 靠上面第 2 步安全网兜底。
+
+## 充值 / 升级 / 降级 / 过期 流程
+
+- **充值**:`POST /api/payment/topup {amountCents}` → Stripe Checkout `mode='payment'`(预设 2000/5000/10000 或自填,带 min/max 守卫),metadata `{kind:'topup', credit_cents}`。**只听 `checkout.session.completed` 且 `kind=='topup'`**(不要同时听 payment_intent.succeeded)。幂等以 `stripe_payment_intent_id` 为锚:`INSERT ... ON CONFLICT DO NOTHING RETURNING id`,**仅当真插入了行**才 `recompute(reset_spend=False)`。先 `ensure_user_litellm_key` 再 recompute,保证当场可用。修 webhook claim+dispatch 同事务回滚洞(claim 单独事务先提交)。
+- **升级**:见 Phase 1,Phase 2 落地后 max_budget 改用 `recompute`(GROSS allowance + credits)。升级差价 invoice 标 `kind='upgrade_delta'`,被 `_handle_invoice_paid` 的 `subscription_cycle` gate 跳过。
+- **降级**:不变;`invoice.paid` 处把 `period_end=NOW()` 让下跳对账开低档窗口;credits 自动保留(max_budget 永远再加 grants_remaining)。
+- **降级/取消到 Free**:`_handle_subscription_event` 从 `sync_litellm_budget_for_plan('free', reset_spend=True)` 改为 `recompute_litellm_budget`,credits 不被清。
+- **过期**:`expires_at = granted_at + 12 months`。两道:(a)读时排除(recompute 只 sum 未过期);(b)`_expire_credit_grants(pool)` 日扫做**部分窗口对账后**才置 `expired`——先把这窗口溢出按 FIFO(含将过期的)扣掉、re-baseline `opening_spend`、`max_budget` 下限取 `current_spend`(防瞬间 429),再置 `expired`(剩余作废,不退)。
+
+## 对抗验证修补的关键边界
+
+| 场景 | 处理 |
+|---|---|
+| 免费用户无 invoice.paid | DB 自管窗口 + scheduler 脱 Redis;credits 永远被 max_budget 再加回 |
+| LiteLLM 自动重置竞态 | 先读 budget_reset_at,检测到跳变就保守按上限扣,绝不漏扣 |
+| 中途充值/升级双重减 | 绝对重算 + GROSS allowance,LiteLLM 保留 spend 做唯一减法 |
+| 充值 webhook 重复 | 单事件 + payment_intent UNIQUE + claim 独立事务 |
+| 升级差价 invoice 触发重置 | `_handle_invoice_paid` gate `billing_reason=='subscription_cycle'` |
+| 跨副本并发对账 | FOR UPDATE SKIP LOCKED + 单关窗者 + consumption UNIQUE |
+| 过期撞已用 | 置 expired 前先部分对账,max_budget floor 在 current_spend |
+
+## 前置 gate(开建 Phase 2 前必做)
+
+1. **真 LiteLLM 验证 `cost_per_request`** 确实写进 SpendLogs + 累加 key.spend(方案 B 成败关键)。
+2. 验证「清空 `budget_duration`」在本版 LiteLLM 可行(决定是否上结构性自动重置关闭;否则只靠安全网)。
+3. **pre-launch**:免费额度现为 $1000(测试用,见 [free-plan-budget-intentional]),上线前调到正式值,backfill 用真实 spend 快照。
+
+---
+
+## 不做(本设计范围外)
+
+- 方案 A(语音流穿过 LiteLLM 传输层统一)——技术可行但要自定义 WS 路由 + 客户端改连,暂缓。
+- 充值自动续充(auto-recharge)。
+- 阶梯折扣("save up",买多省多)。
+- EU/UK 法定 14 天退款。
+- 直接往 key 写 spend 的 out-of-band hack(LiteLLM 无公开 API)。
+
+## 相关
+
+- 现有支付 MVP:[2026-05-24-payment](./2026-05-24-payment)
+- 北极星「所有消费进 credits」与 free 额度测试值见项目记忆。

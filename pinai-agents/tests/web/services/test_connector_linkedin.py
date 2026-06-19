@@ -107,7 +107,7 @@ def _sync_task(toolkit: str, user_id: int, cid: str) -> ScheduledTaskRow:
 def _patch_fetch(monkeypatch, toolkit: str, items_box: dict):
     from pinai_agents.web.services import ingest_runner
 
-    async def fake_fetch(user_id, tk, cid, *, limit=100, since=None):
+    async def fake_fetch(user_id, tk, cid, *, limit=100, since=None, pool=None):
         if tk == toolkit:
             return list(items_box["items"])
         return []

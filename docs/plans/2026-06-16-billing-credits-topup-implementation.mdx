@@ -1,0 +1,169 @@
+---
+title: "Phase 2 实施计划:Credits 充值模块"
+description: "docs/plans/2026-06-15-billing-plan-change-credits.mdx 的 Phase 2 file-level 实施拆解。两个桶(套餐月额度 + 持久充值)、唯一预算写入口 recompute_litellm_budget、脱 Redis 的对账 scheduler、一次性充值 /topup + webhook、12 月过期。TDD,逐任务可验证。"
+---
+
+# Phase 2 实施计划:Credits 充值模块
+
+> **For agentic workers:** 逐任务 TDD 执行。每个 Task 内 `- [ ]` 步骤顺序做完再下一个。每个 Task 末尾 commit。
+
+## 实施状态(2026-06-16,本 worktree 已实现并逐任务提交)
+
+Task 1-7 后端核心全部落地。验证:`cd pinai-agents && uv run ruff format --check . && uv run ruff check . && uv run mypy src` 干净;`uv run pytest tests/web/payment/`(55)全过;全量 pytest 仅 pattern/seed 系 **12 个 main 既有失败**(与计费无关);pinai-web 真栈启动健康、`/api/payment/topup` 已注册、对账 task 挂载无 boot 报错。
+
+**与本计划的差异(已验证更优):**
+- 三个 repository 落在 `web/payment/`(free-function,对齐 `subscriptions.py`),非原计划的 `db/repositories/` class-style——它们是 webhook/scheduler 跨用户**服务侧写入**,reconcile 要一次 claim 多用户窗口,class-style 绑单 user 不合适。
+- `sync_litellm_budget_for_plan` 保留为委托 `recompute_litellm_budget` 的**薄壳**(不碰 Phase 1 代码及其测试),而非删除重接。
+- 新增 migration **102**(`max_budget_cents_at_open`)原为对账安全网而加;新用户在 `litellm_provisioning` 首开窗口(100 backfill 只覆盖迁移时已存在用户)。
+- **invoice.paid 改为 `recompute(reset_spend=False) + set_period_end(NOW())`**:把 spend reset 的归属交给对账(否则 invoice.paid 直接 reset 会丢掉旧窗口的消费归因)。比设计原文「invoice.paid 直接 reset」更正确。
+
+**对账用量来源修正(2026-06-17,验证后):** 原 SSOT 的「读 `budget_reset_at` 跳变 → 保守按上限扣」安全网在稳态会**误伤**:LiteLLM 的月度 auto-reset 锚在自然月 1 号、与对账窗口不对齐,每个账期都在窗口中途把 `key.spend` 清零,于是 `(closing − opening)` 计数器差值不可靠、安全网几乎每个账期触发,按上限满扣 → 把用户已购 credits 全额清空(零使用也清)。**修复:窗口 LLM 用量改从 `LiteLLM SpendLogs`(append-only、按请求留痕、不受重置影响)按 `[period_start, period_end)` 求和**(`client.sum_spend_for_key_window` 走 `/spend/logs`,日聚合、end 日期 EXCLUSIVE,相邻窗口干净切分)。`reset_detected` / 保守满扣分支已删;窗口收尾仍 `recompute(reset_spend=True)`,但只服务实时 `max_budget` 拦截、不再参与计费归属。`max_budget_cents_at_open` / `last_seen_reset_at` / `opening_litellm_spend` 列因此退化为审计/历史字段(reconcile 不再读),可后续迁移清理。回归测试:`test_reconcile_low_usage_keeps_credits`(零使用保住 credits)。
+
+**浏览器 / 沙箱算力进 credits(2026-06-17 新增):** Browserbase 浏览器会话 + Daytona 沙箱算力之前不计 credits,现已接入(走和 ASR 同一条 `pai_provider_usage_events` → 对账 → credits 的路)。计量口径 = **按活跃使用时长 × 单价**:chat 进程把时长 fire-and-forget 上报到新端点 `POST /api/agent/usage/record`(`current_chat_principal` 鉴权,只上报时长、不报金额),web 侧用 `estimate_compute_charge` 按单价折成 cost 写 provider_usage(端点对时长做 6h 上限防滥用)。**两条路都覆盖了**(Mengli 拍板:用户用了多少就计多少):
+- **交互式**(用户聊天里 agent 主动用):`browser_tool` 动作 / `LazyThreadSandbox.aexecute` 的 `finally` 上报,JWT 走 `current_run_jwt` ContextVar。
+- **后台任务**(dream / crystallize / evolve,平台自动跑):one-shot 沙箱走的是另一条路(不经 LazyThreadSandbox),所以在各 agent 的 create→delete `finally` 里按沙箱生命周期上报。**这些跑在 `/agent/run/*`、不在 `run_context` 里,所以 JWT 必须显式传**(`report_compute_usage(run_jwt=...)` → `http_client.post_with_jwt`);crystallize 之前没接 run_jwt,这次从路由 `_verify` 取出来透传(仅用于计费归属,**不**传给 `create_oneshot_sandbox`,以免改动它的 phantom token 行为)。
+
+**单价已按真实厂商价定**(2026-06-17 查实:Browserbase ~$0.12/browser-hr、Daytona 2vCPU/4GB ≈ $0.166/run-hr),`provider_usage.py` 的 `COMPUTE_USD_PER_MINUTE` 取约 2× 成本加成:**browser $0.004/min、daytona $0.005/min**(改 margin 只改这一处)。长期靠「精确计量每用户用量 × 我方单价,再用月度厂商发票做总账校准」收口,不靠推测。口径说明:计的是「活跃使用时长」(动作/exec 墙钟 + one-shot 沙箱 create→delete),不是整会话墙钟——交互式会话空闲(浏览器开着没操作、沙箱 auto-stop 前的 60min 空转)不计;one-shot 跑完即删、无空转尾巴,活跃≈运行。
+
+**挂死兜底(2026-06-17):** one-shot run(dream/crystallize/evolve)的 `agent.ainvoke` 套 `asyncio.wait_for(timeout=ONESHOT_AGENT_RUN_TIMEOUT_SEC)`(默认 10min,env 可调,在 `sandbox.py`)。若某次 run 卡死(如沙箱回连不上 web,in-sandbox SDK 调用阻塞),超时即取消 → `finally` 强删沙箱 + 上报计量 + 返回降级结果,**不再无限挂着烧算力到厂商 60min auto_stop**。回归测试:`tests/chat/agents/test_dream_timeout.py`。端到端验证(本地真栈):用量→credits 扣费、实时端点真签 JWT 落行计价、chat 容器内真实 reporter→web、真起 Daytona 沙箱 + dream finally 真上报,均验通;真机自然触发(需 ngrok 让沙箱回连)未在本地跑。
+
+**本期未做(范围决策 + 设计 out-of-scope):** 方案 B 的 ASR 实时进 LiteLLM(ASR 仍在 `pai_provider_usage_events`,对账已汇入窗口总额,计费不丢,故 `/usage` 仍保留 provider_usage 求和);整会话墙钟计费(当前是活跃使用时长);自动续充;阶梯折扣;EU/UK 退款。
+
+**前端补齐(2026-06-18):** Subscription 面板已接入一次性充值 UI(预设 20/50/100 + 自填)、top-up 成功后 billing history 可展示 `pai_credit_grants` 充值记录、payment method 可展示 Checkout 使用过的 Link / card、plan credits 与 extra credits 分桶展示。其中 plan credits 不由前端硬编码,而是读 `/api/payment/usage.planAllowanceCredits`(DB open budget window 的 `allowance_cents`)。
+
+**踩坑提醒:** 改迁移后 `make migrate` 单独跑**不认**新 SQL(Dockerfile 把 `db/migrations/` 烘焙进镜像),要先 `make build-pinai-agents` 再 `make migrate`。
+
+---
+
+**Goal:** 让用户在套餐月额度之外可以**一次性充值 credits**(预设 20/50/100 + 自填),充值 credits 持久、12 月过期、不退;消费**先扣套餐额度、再扣充值**;所有口径统一在 **LiteLLM key 的一个 `max_budget`/`spend`** 上实时拦截,由一个**脱离 Redis 的对账 job** 做账务重建。
+
+**设计 SSOT:** [2026-06-15-billing-plan-change-credits](./2026-06-15-billing-plan-change-credits) 的 Phase 2 节。本文只做 file-level 落地拆解,设计取舍以 SSOT 为准。
+
+## 前置 gate 结论(2026-06-16 本机 LiteLLM v1.86.2 实测)
+
+| Gate | 结论 | 落地影响 |
+|---|---|---|
+| #1 pass-through `cost_per_request` → SpendLogs + key.spend | ✅ 通过(5×$0.05 → key.spend=$0.25) | 方案 B 机制成立 |
+| #2 清空 `budget_duration` | ❌ `/key/update` 传 null/`""` 无效 | 不上「结构性关自动重置」,走对账**安全网**(检测 `budget_reset_at` 跳变保守按上限扣) |
+| ⚠️ `cost_per_request` 是静态值,ASR 按时长计费 | 需自定义 LiteLLM 回调才能动态计费 | 见下「范围决策」 |
+
+## 范围决策(2026-06-16,Mengli 拍板)
+
+**本期只做 credits 充值核心;ByteDance ASR 暂留 `pai_provider_usage_events`。** 理由:对账 job 本来就把 provider_usage 的 ASR 花费汇入窗口总额(SSOT 第 171 行),所以 ASR 计费不丢,只是少了「实时按 max_budget 拦 ASR」这一层(ASR 很便宜,两次对账间最多多花几分钱)。
+
+- **不做(本期 out of scope):** 方案 B 的 ASR 实时口径(自定义 LiteLLM 回调把 ASR 按时长进 key.spend)。因此 **`/usage` 继续保留「加 pai_provider_usage_events」那段**(SSOT 第 162 行说落地方案 B 后才去掉——本期不去)。
+- **充值前端 UI** 已在 2026-06-18 补齐(桌面本地 Vite 粗看,真机验收仍按 proactive frontend 流程由用户验证)。
+
+**Architecture:** 新增 3 张表(`pai_credit_grants` / `pai_budget_periods` / `pai_credit_consumption_events`)+ 3 个 repository;新增唯一预算写入口 `recompute_litellm_budget`,收编现有 5 处 max_budget 写法;新增脱 Redis 的 `budget_reconcile` loop;新增 `POST /api/payment/topup` + webhook topup 分支;修 webhook claim 独立事务洞;接线升级/降级/取消/过期。
+
+**Tech Stack:** Python / FastAPI / psycopg async / Stripe SDK / LiteLLM REST / yoyo SQL migration / pytest。
+
+---
+
+## 文件结构
+
+| 文件 | 动作 | Task |
+|---|---|---|
+| `db/migrations/099_pai_credit_grants.sql` | 新建 | 1 |
+| `db/migrations/100_pai_budget_periods.sql`(含 backfill) | 新建 | 1 |
+| `db/migrations/101_pai_credit_consumption_events.sql` | 新建 | 1 |
+| `web/db/repositories/credit_grants.py` | 新建 | 2 |
+| `web/db/repositories/budget_periods.py` | 新建 | 2 |
+| `web/db/repositories/credit_consumption.py` | 新建 | 2 |
+| `web/payment/checkout.py` | 改(加 `recompute_litellm_budget`,收编 `sync_litellm_budget_for_plan`) | 3 |
+| `web/services/litellm_provisioning.py` | 改(provision 后调 recompute) | 3 |
+| `web/payment/webhook.py` | 改(invoice.paid / cancel 走 recompute;topup 分支;降级窗口到期) | 3、5、6 |
+| `web/services/budget_reconcile.py` | 新建(对账 loop + 单次) | 4 |
+| `web/app.py` | 改(挂 reconcile task,Redis 门禁之外) | 4 |
+| `web/payment/routes.py` | 改(`POST /topup` + 修 claim 独立事务) | 5 |
+| `web/services/budget_reconcile.py` | 改(加 `_expire_credit_grants` 日扫) | 7 |
+| 对应 `tests/web/...` | 新建 | 各 Task |
+
+---
+
+## Task 1: 3 张迁移 + RLS + backfill
+
+**验证目标:** `make migrate` 干净应用;3 张表 + 索引 + RLS 双策略存在;`pai_budget_periods` 每个现有用户一行 `open`。
+
+- [ ] Step 1: 写 `099_pai_credit_grants.sql`(SSOT 091 DDL,renumber + 089 式 RLS 双策略:`_user_scope` FOR ALL TO PUBLIC `user_id = current_setting('app.user_id',true)::bigint`、`_service_role` TO service_role `app.user_id IS NULL OR = ''`)。
+- [ ] Step 2: 写 `100_pai_budget_periods.sql`(SSOT 092 DDL + RLS + backfill:`INSERT ... SELECT u.id, u.supabase_user_id, COALESCE(s.plan_code,'free'), COALESCE(p.monthly_refresh_credits,0), NOW(), NOW()+INTERVAL '30 days', 'open', 0 FROM users u LEFT JOIN pai_subscriptions s ... LEFT JOIN pai_billing_plans p ON p.plan_code=COALESCE(s.plan_code,'free') WHERE u.supabase_user_id IS NOT NULL`)。
+  - ⚠️ FK `plan_code REFERENCES pai_billing_plans(plan_code)` 要求该列 UNIQUE/PK;`make migrate` 会替我们验。
+  - backfill 的 `period_end`/`opening_litellm_spend` 是近似(NOW+30d / 0),对账安全网自愈。
+- [ ] Step 3: 写 `101_pai_credit_consumption_events.sql`(SSOT 093 DDL,含 `uq_consumption_period_grant_bucket` UNIQUE + RLS)。
+- [ ] Step 4: `make migrate`;`psql` 查三表 + `\d` 看 RLS policy + `SELECT count(*) FROM pai_budget_periods WHERE state='open'` == 用户数。
+- [ ] Step 5: commit `feat(billing): credits 充值三表(grants/periods/consumption)+ RLS + backfill`。
+
+## Task 2: 3 个 repository(class-style,对标 provider_usage.py)
+
+**验证目标:** 针对本地 postgres 的集成测试(`TEST_DATABASE_URL` + 已 apply 的 schema)跑通增删查。
+
+- [ ] `credit_grants.py`:`CreditGrantsRepository(user_id, conn)` — `insert_topup_grant(...)`(`ON CONFLICT (stripe_payment_intent_id) DO NOTHING RETURNING id`,幂等)、`sum_active_remaining_cents()`(Σ `grant_cents-consumed_cents` WHERE active AND `expires_at>NOW()`)、`list_active_fifo()`(`expires_at, granted_at` 升序,供 FIFO 扣)、`apply_consumption(grant_id, cents)`(加 consumed,扣满置 `exhausted`)。
+- [ ] `budget_periods.py`:`get_open(user_id)`、`claim_due()`(服务级 `UPDATE ... WHERE state='open' AND period_end<=NOW() ... FOR UPDATE SKIP LOCKED` → `reconciling`,**模块函数 + service_tx**,非 user-scoped)、`close_period(...)`、`open_period(...)`。
+- [ ] `credit_consumption.py`:`record(budget_period_id, grant_id, bucket, cents)`(`ON CONFLICT (uq) DO NOTHING`,重放幂等)。
+- [ ] 模型用 `@dataclass(slots=True)` + `from_record`;money 用 `Decimal`/`int cents`。
+- [ ] commit `feat(billing): credit grants/periods/consumption repositories`。
+
+## Task 3: `recompute_litellm_budget` —— 唯一预算写入口
+
+**验证目标:** 单测(mock litellm_client + repos):max_budget == (套餐剩余 + 未过期充值)/100;无 key 时 no-op;`reset_spend` 透传;LiteLLMError 被吞不抛。
+
+- [ ] Step 1: 在 `checkout.py` 新增 `async def recompute_litellm_budget(conn, user_id, *, reset_spend=False)`:读 `pai_subscriptions.plan_code`(缺省 `'free'`)→ `plans_repo.find_by_code` 取 `monthly_refresh_credits`;`allowance_remaining = monthly_refresh_credits - period.allowance_consumed_cents`(取 open 窗口,缺省满额);`credits_remaining = CreditGrantsRepository.sum_active_remaining_cents()`;`max_budget_usd=(allowance_remaining+credits_remaining)/100`;`update_key(reset_spend=reset_spend)`;无 key no-op、吞 LiteLLMError(沿用 `sync_litellm_budget_for_plan` 语义)。**绝对重算,不 read-modify-write。**
+- [ ] Step 2: 收编 5 处写法 → 调 recompute(SSOT「中途重算用 GROSS 满额」:中途重算时 `allowance_consumed=0` 的窗口由 LiteLLM 自留 spend 做唯一减法):
+  - `_apply_immediate_upgrade` step3(checkout.py:533)`reset_spend=False`;
+  - `sync_litellm_budget_for_plan` 改薄 shim 或直接 repoint 它的 caller(reconcile×3、webhook cancel);
+  - webhook `_handle_invoice_paid` inline(webhook.py:341)`reset_spend=True`;
+  - 调用前确保 plan_code 已 commit(各 caller 现状已满足)。
+- [ ] Step 3: 更新 `tests/web/payment/test_immediate_upgrade.py` 的 monkeypatch 目标(原 patch `sync_litellm_budget_for_plan`)。
+- [ ] commit `feat(billing): single recompute_litellm_budget budget writer, converge call-sites`。
+
+## Task 4: 对账 scheduler(脱 Redis)
+
+**验证目标:** 单测 `_reconcile_budget_periods` 一次:窗口到期 → allowance 先扣、溢出 FIFO 扣 grants、写 consumption、关窗 → 开新窗、DB commit 后调 recompute(reset_spend=True);budget_reset_at 跳变走安全网。
+
+- [ ] Step 1: `web/services/budget_reconcile.py`:`_reconcile_budget_periods(pool)`(`claim_due` → 每窗口一个 service_tx:读 `closing_litellm_spend`=get_key_info spend;安全网:`budget_reset_at` 越过 `last_seen_reset_at` 则按 `max(0, max_budget_at_open - opening_spend)` 保守关窗 + WARN;`window_total=(closing-opening)+ProviderUsageRepository.sum_cost_usd(period_start)`;allowance 先扣、FIFO 扣 grants、写 consumption;关窗→reconciled;开新窗;**DB commit 后**调 recompute(reset_spend=True)+置 reset_applied)+ `loop(pool)`(world_ingest 骨架,60s,初始 stagger)。
+- [ ] Step 2: `app.py` lifespan:`if pool is not None:` 内、`if settings.redis_url:` **之外**,`recon_task = asyncio.create_task(reconcile_loop(pool), name="pinai-budget-reconcile")`;声明 handle;shutdown tuple 加 `recon_task`。
+- [ ] commit `feat(billing): redis-independent budget reconcile scheduler`。
+
+## Task 5: 充值 `/topup` + webhook topup 分支 + claim 独立事务
+
+**验证目标:** 单测:topup checkout 用 `mode='payment'` + dynamic `price_data`;webhook `checkout.session.completed` 且 `kind=='topup'` → 幂等 insert grant + recompute;claim 在 dispatch 失败时仍持久。
+
+- [ ] Step 1: `checkout.py` 新增 `create_topup_checkout(pool, *, user, amount_cents, ...)`:`ensure_stripe_customer` → `stripe.checkout.Session.create(mode='payment', line_items=[{price_data:{currency,unit_amount,product_data}}], payment_intent_data={metadata}, metadata={supabase_user_id, internal_user_id, kind:'topup', credit_cents})`;min/max 守卫(预设 2000/5000/10000)。
+- [ ] Step 2: `routes.py` 加 inline `class TopupRequest(BaseModel): amountCents:int` + `@router.post("/topup")`(`current_user`+`get_pool`,delegate)。
+- [ ] Step 3: webhook `_handle_checkout_completed` 在「subscription-only 早 return」之前加 `session.mode=='payment' / metadata.kind=='topup'` 分支:`CreditGrantsRepository.insert_topup_grant(..., expires_at=granted_at+12mo)`(payment_intent 幂等),**仅真插入了行**才 `ensure_user_litellm_key` + `recompute(reset_spend=False)`。
+- [ ] Step 4: 修 `routes.py` webhook 的 claim+dispatch 同事务洞:claim 单独 `service_tx` 提交,再开第二个 `service_tx` 跑 dispatch+mark。
+- [ ] commit `feat(billing): one-off credit topup checkout + webhook grant + claim tx fix`。
+
+## Task 6: 降级 / 取消到 Free 接线
+
+**验证目标:** 单测:cancel→free 走 recompute(credits 不清);降级 invoice.paid 把当前窗口 `period_end=NOW()` 让下跳对账开低档窗口。
+
+- [ ] webhook `_handle_subscription_event` cancel 分支:`sync_litellm_budget_for_plan('free', reset_spend=True)` → `recompute_litellm_budget(reset_spend=False)`(SSOT 第 184 行,credits 不被清)。
+- [ ] webhook `_handle_invoice_paid` 降级场景:把当前 open 窗口 `period_end=NOW()`(SSOT 第 183 行)。
+- [ ] commit `feat(billing): downgrade/cancel route through recompute, keep credits`。
+
+## Task 7: 过期日扫
+
+**验证目标:** 单测:`expires_at<=NOW()` 的 grant 在置 `expired` 前先部分对账(FIFO 扣溢出、re-baseline opening_spend、max_budget floor 取 current_spend)。
+
+- [ ] `budget_reconcile.py` 加 `_expire_credit_grants(pool)`(SSOT 第 185 行两道:读时排除 + 日扫 partial-reconcile-then-expire);挂进 reconcile loop(低频,每日一次)。
+- [ ] commit `feat(billing): 12-month credit expiry with pre-expire reconcile`。
+
+## Task 8: 静态检查 + 全量回归 + 本地真栈验收
+
+- [ ] `cd pinai-agents && uv run ruff format --check . && uv run ruff check . && uv run mypy src && uv run pytest`。
+- [ ] 本地真栈:`stripe listen` + 走一次 topup(测试卡)→ 看 grant 行、LiteLLM max_budget 涨、`/usage` spend 不变;触发一次对账看 consumption 行。
+- [ ] 文档:更新 SSOT Phase 2 节标注「已实现」+ 本文标 done;`docs/modules/` 相关(payment/runtime)补一行。
+
+---
+
+## 自检对照(SSOT 覆盖)
+
+- 两个桶 + 先扣套餐再扣 credits(对账重建)→ Task 2/4 ✓
+- 单一 LiteLLM 数字 = allowance_remaining + credits_remaining,绝对重算 → Task 3 ✓
+- 脱 Redis 对账 + FOR UPDATE SKIP LOCKED + consumption UNIQUE → Task 4 ✓
+- 充值 mode=payment + payment_intent 幂等 + 仅真插入才 recompute + claim 独立事务 → Task 5 ✓
+- 降级窗口到期 / 取消到 Free 不清 credits → Task 6 ✓
+- 12 月过期 partial-reconcile-then-expire → Task 7 ✓
+- 自动重置竞态安全网(读 budget_reset_at 跳变)→ Task 4 ✓
+- ASR 方案 B 实时口径、自动续充、阶梯折扣、EU/UK 退款 → **本期不做**(范围决策)

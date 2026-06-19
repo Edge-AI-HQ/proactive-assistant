@@ -68,6 +68,15 @@ logger = logging.getLogger(__name__)
 # commands (e.g. package install) hit this ceiling.
 _DEFAULT_COMMAND_TIMEOUT_SEC = 5 * 60
 
+# Overall ceiling for a one-shot agent run (dream / crystallize / evolve).
+# A hung tool call (e.g. the sandbox can't reach web, so an in-sandbox SDK call
+# blocks) must NOT wedge the run indefinitely: on timeout the run is cancelled,
+# the run's finally force-deletes the sandbox + reports usage, and the handler
+# returns a degraded result instead of hanging until Daytona's own 60min
+# auto_stop. 10min matches the generator's run ceiling (see scheduler
+# dispatcher). Env-tunable for ops.
+ONESHOT_AGENT_RUN_TIMEOUT_SEC = int(os.environ.get("ONESHOT_AGENT_RUN_TIMEOUT_SEC", str(10 * 60)))
+
 # Daytona-side TTL. Layered:
 #   auto_stop:   idle 60min  → STOPPED (compute released, fs preserved)
 #   auto_delete: 1440min     → DESTROYED (fs gone, cost zero)

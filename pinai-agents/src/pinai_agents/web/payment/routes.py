@@ -16,13 +16,19 @@ us the bytes; we hand them to Stripe.Webhook.construct_event verbatim.
 from __future__ import annotations
 
 import logging
+import re
+from datetime import datetime, timedelta
 
+import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from ..auth.deps import User, current_user, get_pool
 from ..db.rls import service_tx, user_scoped_tx
+from ..litellm import client as litellm_client
+from . import budget_periods as periods_repo
 from . import checkout as checkout_flow
+from . import credit_grants as grants_repo
 from . import plans as plans_repo
 from . import subscriptions as subs_repo
 from . import webhook as webhook_handler
@@ -114,6 +120,33 @@ async def create_checkout(
     )
 
 
+# ── /topup ──
+
+
+class TopupRequest(BaseModel):
+    amountCents: int = Field(ge=1)
+    successUrl: str | None = None
+    cancelUrl: str | None = None
+
+
+@router.post("/topup")
+async def topup(
+    body: TopupRequest,
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+) -> dict:
+    """Buy a one-off credit topup. Returns a Stripe Checkout (mode='payment')
+    URL; the grant lands via the checkout.session.completed webhook. Amount
+    is in integer cents (1 credit = $0.01, bought 1:1)."""
+    return await checkout_flow.create_topup_checkout(
+        pool,
+        user=user,
+        amount_cents=body.amountCents,
+        success_url_override=body.successUrl,
+        cancel_url_override=body.cancelUrl,
+    )
+
+
 # ── /cancel ──
 
 
@@ -196,7 +229,67 @@ async def invoices(
     return await checkout_flow.list_invoices_for_user(pool, user=user, limit=limit)
 
 
+# ── /history ──
+
+
+@router.get("/history")
+async def payment_history(
+    user: User = Depends(current_user),
+    pool=Depends(get_pool),
+    limit: int = 12,
+) -> dict:
+    """List the user's payment history across Stripe invoices and top-ups."""
+    return await checkout_flow.list_payment_history_for_user(pool, user=user, limit=limit)
+
+
 # ── /usage ──
+
+_DURATION_RE = re.compile(r"(\d+)\s*(mo|[smhdw])")
+_DURATION_UNIT = {
+    "s": "seconds",
+    "m": "minutes",
+    "h": "hours",
+    "d": "days",
+    "w": "weeks",
+}
+
+
+def _parse_budget_duration(value: object) -> timedelta | None:
+    """Parse a LiteLLM budget_duration like '30d' / '24h' / '1mo' into a
+    timedelta. Returns None if the shape is unrecognized."""
+    if not isinstance(value, str):
+        return None
+    m = _DURATION_RE.fullmatch(value.strip())
+    if not m:
+        return None
+    n = int(m.group(1))
+    unit = m.group(2)
+    if unit == "mo":
+        return timedelta(days=30 * n)
+    return timedelta(**{_DURATION_UNIT[unit]: n})
+
+
+def _parse_dt(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
+def _current_period_start(info: dict) -> datetime | None:
+    """Start of the LiteLLM key's current budget window, derived as
+    budget_reset_at - budget_duration. Used to sum provider usage over the
+    SAME period the LiteLLM spend covers. None if the window can't be
+    derived (caller then sums all-time)."""
+    reset = _parse_dt(info.get("budget_reset_at"))
+    dur = _parse_budget_duration(info.get("budget_duration"))
+    if reset and dur:
+        return reset - dur
+    return None
 
 
 @router.get("/usage")
@@ -204,28 +297,73 @@ async def usage(
     user: User = Depends(current_user),
     pool=Depends(get_pool),
 ) -> dict:
-    """Return the user's LiteLLM spend / max_budget / reset time.
+    """Return the user's total spend / max_budget / reset time.
 
     The UI uses this to render a budget progress bar in the Subscription
-    page. Real data — comes straight from LiteLLM via /key/info."""
-    from ..litellm import client as litellm_client
-
+    page. spendUsd is the user's UNIFIED consumption: LiteLLM token spend
+    (from /key/info) PLUS non-LiteLLM provider spend (e.g. ByteDance
+    streaming ASR, tracked in pai_provider_usage_events), summed over the
+    same budget period."""
     async with user_scoped_tx(pool, user.id) as conn:
         key = await checkout_flow._virtual_key_for_user(conn, user.id)
+        period = await periods_repo.get_open_period(conn, user.id)
+        topup_credits_available = await grants_repo.sum_active_remaining_cents(conn, user.id)
+    plan_allowance_credits = period.allowance_cents if period else 0
     if not key:
-        return {"spendUsd": 0.0, "maxBudgetUsd": 0.0, "budgetResetAt": None, "budgetDuration": None}
-    info = await litellm_client.get_key_info(key)
+        return {
+            "spendUsd": 0.0,
+            "maxBudgetUsd": 0.0,
+            "planAllowanceCredits": plan_allowance_credits,
+            "topupCreditsAvailable": topup_credits_available,
+            "budgetResetAt": None,
+            "budgetDuration": None,
+        }
+    try:
+        info = await litellm_client.get_key_info(key)
+    except (litellm_client.LiteLLMError, httpx.HTTPError) as exc:
+        logger.warning("payment usage: LiteLLM key info unavailable user=%d: %s", user.id, exc)
+        info = {}
     spend = info.get("spend")
     if not isinstance(spend, (int, float)):
         spend = 0.0
+    fallback_max_budget_cents = 0
+    if period:
+        fallback_max_budget_cents = (
+            period.max_budget_cents_at_open
+            if period.max_budget_cents_at_open is not None
+            else max(0, period.allowance_cents - period.allowance_consumed_cents)
+            + topup_credits_available
+        )
     max_budget = info.get("max_budget")
     if not isinstance(max_budget, (int, float)):
-        max_budget = 0.0
+        max_budget = fallback_max_budget_cents / 100.0
+    if not period:
+        plan_allowance_credits = max(
+            0,
+            round(float(max_budget) * 100) - topup_credits_available,
+        )
+
+    # Fold in non-LiteLLM provider spend so the total reflects ALL of the
+    # user's consumption, aligned to the DB budget window.
+    period_start = period.period_start if period else _current_period_start(info)
+    from ..db.repositories.provider_usage import ProviderUsageRepository
+
+    async with user_scoped_tx(pool, user.id) as conn:
+        provider_cost = await ProviderUsageRepository(user.id, conn).sum_cost_usd(
+            since=period_start
+        )
+
     return {
-        "spendUsd": float(spend),
+        "spendUsd": float(spend) + float(provider_cost),
         "maxBudgetUsd": float(max_budget),
-        "budgetResetAt": info.get("budget_reset_at"),
-        "budgetDuration": info.get("budget_duration"),
+        "planAllowanceCredits": plan_allowance_credits,
+        "topupCreditsAvailable": topup_credits_available,
+        "budgetResetAt": period.period_end.isoformat() if period else info.get("budget_reset_at"),
+        "budgetDuration": (
+            checkout_flow._budget_duration_for_period_window(period)
+            if period
+            else info.get("budget_duration")
+        ),
     }
 
 
@@ -253,17 +391,26 @@ async def webhook(
         logger.warning("stripe webhook: signature verify failed: %s", e)
         raise HTTPException(400, "invalid signature") from e
 
+    # Claim in its OWN committed transaction first. If claim + dispatch shared
+    # one tx, a dispatch failure (re-raised below) would roll back the claim
+    # row too — losing the 'failed' audit marker. With the claim committed,
+    # mark_failed records on the persisted row and the next Stripe retry
+    # re-claims it (claim_event re-claims 'failed' rows).
     async with service_tx(pool) as conn:
         claimed = await webhook_handler.claim_event(conn, event)
-        if not claimed:
-            logger.info("stripe webhook: skipped already-processed event=%s", event.id)
-            return {"received": True, "skipped": True}
-        try:
+    if not claimed:
+        logger.info("stripe webhook: skipped already-processed event=%s", event.id)
+        return {"received": True, "skipped": True}
+
+    # Dispatch in a second transaction so its DB writes are atomic per attempt.
+    try:
+        async with service_tx(pool) as conn:
             handled = await webhook_handler.dispatch(conn, event)
             await webhook_handler.mark_processed(conn, event.id, skipped=not handled)
-            return {"received": True, "skipped": not handled}
-        except Exception as e:
+        return {"received": True, "skipped": not handled}
+    except Exception as e:
+        async with service_tx(pool) as conn:
             await webhook_handler.mark_failed(conn, event.id, str(e))
-            logger.exception("stripe webhook handler failed event=%s", event.id)
-            # Re-raise so Stripe gets a 5xx and retries.
-            raise HTTPException(500, "webhook handler error") from e
+        logger.exception("stripe webhook handler failed event=%s", event.id)
+        # Re-raise so Stripe gets a 5xx and retries (re-claims the 'failed' row).
+        raise HTTPException(500, "webhook handler error") from e

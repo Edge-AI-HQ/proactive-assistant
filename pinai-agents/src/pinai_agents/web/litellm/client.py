@@ -13,6 +13,7 @@ admin key is master-credential — it MUST stay in the web process only.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -256,11 +257,10 @@ async def update_key(
     """Update an existing LiteLLM virtual key in-place. Only fields with
     non-None values are sent; LiteLLM preserves untouched fields.
 
-    Note on monthly refresh: setting `budget_duration='30d'` rebases the
-    budget tracking window to NOW. Combined with a fresh `max_budget` and
-    `reset_spend=True`, this gives the user a clean N USD ceiling for the
-    next 30 days — equivalent to PIN Claw's "spend reset on invoice.paid"
-    behavior.
+    Note on budget refresh: LiteLLM standardizes `budget_duration` to its
+    own calendar boundaries (for example `30d` resets on the first day of the
+    next month), so product billing anchors that need an exact timestamp must
+    be synced outside this public API.
     """
     body: dict[str, Any] = {"key": virtual_key}
     if max_budget_usd is not None:
@@ -299,6 +299,53 @@ async def get_key_info(virtual_key: str) -> dict[str, Any]:
         if "max_budget" in r or "spend" in r:
             return r
     return {}
+
+
+async def sum_spend_for_key_window(
+    *,
+    virtual_key: str,
+    start: datetime,
+    end: datetime,
+) -> float:
+    """Sum a virtual key's actual spend (USD) over the half-open window
+    [start, end) from LiteLLM SpendLogs.
+
+    SpendLogs are append-only per-request rows, so this is immune to the
+    key's monthly ``budget_reset_at`` auto-reset. That reset zeroes the live
+    ``spend`` counter mid-window, which makes a closing-minus-opening counter
+    diff under-count and would otherwise trip a "reset raced" safety net that
+    charged the full ceiling — draining a user's purchased credits regardless
+    of real usage. Summing SpendLogs is the true window draw.
+
+    ``/spend/logs?start_date&end_date`` returns one daily-aggregated entry per
+    day. The range is ``[start_date, end_date)`` — start inclusive, end
+    EXCLUSIVE (verified against LiteLLM v1.86.2), which cleanly partitions
+    adjacent budget windows that share a boundary instant (no double-count, no
+    gap). Dates are UTC to match SpendLogs' UTC ``startTime``.
+
+    Returns 0.0 for a sub-day window (start_date == end_date) — at daily
+    granularity that day's spend is attributed to the next window instead.
+    Raises LiteLLMError on transport failure so the caller can leave the
+    window unclosed and retry (never charge a guessed amount).
+    """
+    start_date = start.astimezone(UTC).date().isoformat()
+    end_date = end.astimezone(UTC).date().isoformat()
+    if end_date <= start_date:
+        return 0.0
+    parsed = await _request(
+        "GET",
+        "/spend/logs",
+        params={"api_key": virtual_key, "start_date": start_date, "end_date": end_date},
+    )
+    if not isinstance(parsed, list):
+        return 0.0
+    total = 0.0
+    for entry in parsed:
+        if isinstance(entry, dict):
+            spend = entry.get("spend")
+            if isinstance(spend, (int, float)):
+                total += float(spend)
+    return total
 
 
 async def delete_keys(tokens: list[str]) -> None:

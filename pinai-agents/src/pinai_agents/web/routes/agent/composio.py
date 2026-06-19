@@ -36,6 +36,10 @@ from ... import composio_service as cs
 from ...auth.deps import AgentRun, current_agent_run, get_pool
 from ...auth.user_service import User, load_user_by_id
 from ...services import custom_mcp
+from ...services.provider_usage import (
+    estimate_composio_tool_call_charge,
+    record_provider_usage_charge,
+)
 from .raw import raw_sources_for_composio_toolkit
 
 logger = logging.getLogger(__name__)
@@ -98,6 +102,7 @@ async def meta_call(
     tool_name: str,
     body: _MetaCallBody = Body(default_factory=_MetaCallBody),
     user: User = Depends(_agent_user),
+    pool=Depends(get_pool),
 ) -> dict[str, Any]:
     """Forward one Composio meta-tool call through the user's Tool
     Router session. The session is created (or reused from cache) on
@@ -110,7 +115,7 @@ async def meta_call(
         )
     composio_slug = f"COMPOSIO_{tool_name}"
     try:
-        return await cs.execute_meta_tool(
+        result = await cs.execute_meta_tool(
             user,
             composio_slug,
             body.args,
@@ -119,6 +124,14 @@ async def meta_call(
         )
     except cs.ComposioError as e:
         raise _map_error(e) from e
+    await _record_composio_tool_calls(
+        pool,
+        user,
+        tool_calls=_meta_tool_call_count(tool_name, body.args),
+        source=f"composio:meta:{tool_name.lower()}",
+        metadata={"tool_name": composio_slug},
+    )
+    return result
 
 
 # ── SDK direct path ────────────────────────────────────────────────────
@@ -161,6 +174,7 @@ class _SearchBody(BaseModel):
 async def search_tools(
     body: _SearchBody,
     user: User = Depends(_agent_user),
+    pool=Depends(get_pool),
 ) -> dict[str, Any]:
     try:
         hits = await cs.search_tools(
@@ -171,6 +185,13 @@ async def search_tools(
         )
     except cs.ComposioError as e:
         raise _map_error(e) from e
+    await _record_composio_tool_calls(
+        pool,
+        user,
+        tool_calls=1,
+        source="composio:agent_search",
+        metadata={"toolkit": body.toolkit, "limit": body.limit},
+    )
     return {"items": [h.model_dump() for h in hits]}
 
 
@@ -178,12 +199,22 @@ async def search_tools(
 async def get_tool_schema(
     slug: str,
     run: AgentRun = Depends(current_agent_run),
+    pool=Depends(get_pool),
 ) -> dict[str, Any]:
-    _ = run  # reserved for future per-user filtering
+    user = await load_user_by_id(pool, run.user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail=f"user {run.user_id} not found")
     try:
         schema = await cs.get_tool_schema(slug)
     except cs.ComposioError as e:
         raise _map_error(e) from e
+    await _record_composio_tool_calls(
+        pool,
+        user,
+        tool_calls=1,
+        source="composio:agent_schema",
+        metadata={"slug": slug},
+    )
     return schema.model_dump()
 
 
@@ -197,6 +228,7 @@ class _ExecuteBody(BaseModel):
 async def execute(
     body: _ExecuteBody,
     user: User = Depends(_agent_user),
+    pool=Depends(get_pool),
 ) -> dict[str, Any]:
     try:
         result = await cs.execute(
@@ -207,6 +239,14 @@ async def execute(
         )
     except cs.ComposioError as e:
         raise _map_error(e) from e
+    await _record_composio_tool_calls(
+        pool,
+        user,
+        tool_calls=1,
+        source="composio:agent_execute",
+        metadata={"slug": body.slug, "successful": result.successful},
+        status="succeeded" if result.successful else "failed",
+    )
     return result.model_dump()
 
 
@@ -219,6 +259,7 @@ class _MultiExecuteBody(BaseModel):
 async def multi_execute(
     body: _MultiExecuteBody,
     user: User = Depends(_agent_user),
+    pool=Depends(get_pool),
 ) -> dict[str, Any]:
     try:
         results = await cs.multi_execute(
@@ -228,4 +269,48 @@ async def multi_execute(
         )
     except cs.ComposioError as e:
         raise _map_error(e) from e
+    await _record_composio_tool_calls(
+        pool,
+        user,
+        tool_calls=len(body.calls),
+        source="composio:agent_multi_execute",
+        metadata={
+            "parallelism": body.parallelism,
+            "slugs": [call.slug for call in body.calls],
+            "successful": sum(1 for result in results if result.successful),
+        },
+    )
     return {"results": [r.model_dump() for r in results]}
+
+
+def _meta_tool_call_count(tool_name: str, args: dict[str, Any]) -> int:
+    if tool_name == "MULTI_EXECUTE_TOOL":
+        tools = args.get("tools")
+        if isinstance(tools, list):
+            return max(1, len(tools))
+    return 1
+
+
+async def _record_composio_tool_calls(
+    pool,
+    user: User,
+    *,
+    tool_calls: int,
+    source: str,
+    metadata: dict[str, Any],
+    status: str = "succeeded",
+) -> None:
+    if tool_calls <= 0:
+        return
+    charge = estimate_composio_tool_call_charge(
+        tool_calls=tool_calls,
+        source=source,
+        metadata=metadata,
+        status="succeeded" if status == "succeeded" else "failed",
+    )
+    await record_provider_usage_charge(
+        pool,
+        user_id=user.id,
+        supabase_user_id=user.supabase_user_id,
+        charge=charge,
+    )

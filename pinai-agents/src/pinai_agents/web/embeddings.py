@@ -47,12 +47,52 @@ class EmbeddingError(Exception):
     """Raised when embedding fails — caller decides retry vs. mark failed."""
 
 
-async def embed_batch(texts: list[str]) -> list[list[float]]:
+# Billing target for an embed under the shared master key — distinct from
+# None, which means "skip this row for now".
+_MASTER_BILL = "__master__"
+
+
+def _embedding_bill_target(
+    table_name: str,
+    user_id: int,
+    keys: dict[int, str | None],
+) -> str | None:
+    """Decide how a queued embedding's token spend is billed.
+
+    Returns one of:
+      * ``_MASTER_BILL`` — embed under the master key. Used for
+        pai_world_signals, which is global/shared system data with no single
+        beneficiary (a platform cost). The queue stores a sentinel user_id
+        on those rows (world_ingest.py) that must NOT be charged.
+      * a virtual key string — embed under that user's key (personal data).
+      * ``None`` — SKIP. Personal data for a user who has no key yet; leave
+        the row pending so a later drain re-embeds it once the key is
+        provisioned (at onboarding completion). Personal data is NEVER
+        billed to master.
+    """
+    if table_name == "pai_world_signals":
+        return _MASTER_BILL
+    return keys.get(user_id)
+
+
+async def embed_batch(
+    texts: list[str],
+    *,
+    virtual_key: str | None = None,
+) -> list[list[float]]:
     """Call LiteLLM's /embeddings endpoint with a batch of texts.
 
     Uses a fresh httpx.AsyncClient per call — embedding is a low-rate
     background task; no need for connection pooling. Failed responses
     raise EmbeddingError; caller increments attempts.
+
+    `virtual_key`: when the texts belong to a single user, pass that
+    user's LiteLLM virtual key so the embedding spend is attributed to
+    them (it then shows up in /api/payment/usage, which reads the key's
+    spend). Falls back to the master key when no per-user key is
+    available (keyless user / genuinely service-internal call) so
+    embedding never silently stops — attribution is best-effort, the
+    search index must keep filling.
     """
     settings = get_web_settings()
     base = (settings.litellm_base_url or "").rstrip("/")
@@ -64,12 +104,11 @@ async def embed_batch(texts: list[str]) -> list[list[float]]:
         return []
 
     headers: dict[str, str] = {"Content-Type": "application/json"}
-    # LiteLLM proxy: master key is fine for service-internal calls.
-    # Per-user budgets stay enforced via virtual_key for chat-side
-    # LLM calls; the embedding worker is service-side.
-    master = settings.litellm_master_key or ""
-    if master:
-        headers["Authorization"] = f"Bearer {master}"
+    # Prefer the per-user virtual key so spend lands on that user's key;
+    # fall back to master for keyless / service-internal callers.
+    auth = virtual_key or settings.litellm_master_key or ""
+    if auth:
+        headers["Authorization"] = f"Bearer {auth}"
 
     body: dict[str, Any] = {"model": _MODEL, "input": texts}
     async with httpx.AsyncClient(timeout=30.0) as cli:
@@ -134,6 +173,16 @@ async def drain_queue(conn, *, batch_size: int = _BATCH) -> int:
     queue rows in one batch. The write-back to pai_memory etc. is
     user-scoped per row (each UPDATE uses the row's user_id directly,
     not RLS-derived).
+
+    Embedding is billed per user (see _embedding_bill_target): personal
+    rows (pai_memory / pai_personal_signals) embed under that user's
+    LiteLLM virtual key, so the spend lands on their key (visible in
+    /api/payment/usage). Shared pai_world_signals embed under the master
+    key (global system cost, no single beneficiary). A personal row for a
+    user who has no key yet is SKIPPED — left pending so a later drain
+    embeds it once the key is provisioned at onboarding; personal data is
+    never billed to master. One embed call per distinct billing key in
+    the batch — fine for a low-rate background drain.
     """
     async with conn.cursor() as cur:
         await cur.execute(
@@ -151,14 +200,55 @@ async def drain_queue(conn, *, batch_size: int = _BATCH) -> int:
     if not rows:
         return 0
 
-    texts = [r["text"] for r in rows]
-    try:
-        vectors = await embed_batch(texts)
-    except EmbeddingError as e:
-        logger.warning("embedding batch failed: %s", e)
-        # Bump attempts; status stays 'pending' until cap hit.
+    # Map each user in this batch to their virtual key (one query), so
+    # personal-data embedding spend can be billed to the right key.
+    user_ids = list({int(r["user_id"]) for r in rows})
+    async with conn.cursor() as cur:
+        await cur.execute(
+            "SELECT id, litellm_virtual_key FROM users WHERE id = ANY(%s)",
+            (user_ids,),
+        )
+        key_rows = await cur.fetchall()
+    keys: dict[int, str | None] = {int(kr["id"]): kr.get("litellm_virtual_key") for kr in key_rows}
+
+    # Group rows by billing target. Personal rows for a keyless user
+    # (target None) are skipped — left pending so a later drain embeds
+    # them once their key exists, instead of billing master.
+    groups: dict[str, list[dict[str, Any]]] = {}
+    group_vk: dict[str, str | None] = {}
+    skipped = 0
+    for r in rows:
+        target = _embedding_bill_target(r["table_name"], int(r["user_id"]), keys)
+        if target is None:
+            skipped += 1
+            continue
+        groups.setdefault(target, []).append(r)
+        group_vk[target] = None if target == _MASTER_BILL else target
+    if skipped:
+        logger.info(
+            "drain: deferred %d keyless personal embedding row(s) (left pending)",
+            skipped,
+        )
+
+    embedded: list[tuple[dict[str, Any], list[float]]] = []  # (row, vector) ok
+    failed: list[tuple[dict[str, Any], str]] = []  # (row, error) for retry
+    for token, group in groups.items():
+        try:
+            vectors = await embed_batch(
+                [r["text"] for r in group],
+                virtual_key=group_vk[token],
+            )
+        except EmbeddingError as e:
+            logger.warning("embedding batch failed (bill=%s): %s", token, e)
+            failed.extend((r, str(e)[:500]) for r in group)
+            continue
+        embedded.extend(zip(group, vectors, strict=True))
+
+    # Bump attempts for rows whose embed call failed; status stays
+    # 'pending' until the attempt cap is hit.
+    if failed:
         async with conn.cursor() as cur:
-            for r in rows:
+            for r, err in failed:
                 new_attempts = int(r["attempts"]) + 1
                 new_status = "failed" if new_attempts >= _MAX_ATTEMPTS else "pending"
                 await cur.execute(
@@ -170,18 +260,17 @@ async def drain_queue(conn, *, batch_size: int = _BATCH) -> int:
                     (
                         new_attempts,
                         new_status,
-                        str(e)[:500],
+                        err,
                         r["user_id"],
                         r["table_name"],
                         r["row_id"],
                     ),
                 )
-        return 0
 
     # Write embeddings back to source tables + mark queue done.
     written = 0
     async with conn.cursor() as cur:
-        for r, vec in zip(rows, vectors, strict=True):
+        for r, vec in embedded:
             table = r["table_name"]
             uid = int(r["user_id"])
             rid = r["row_id"]
@@ -234,10 +323,17 @@ async def drain_queue(conn, *, batch_size: int = _BATCH) -> int:
     return written
 
 
-async def text_to_query_vector(text: str) -> list[float]:
-    """Embed a single query string for similarity search."""
+async def text_to_query_vector(
+    text: str,
+    *,
+    virtual_key: str | None = None,
+) -> list[float]:
+    """Embed a single query string for similarity search.
+
+    Pass the searching user's `virtual_key` so the query embedding spend
+    is billed to them (see `embed_batch`)."""
     if not text.strip():
         msg = "query text required"
         raise ValueError(msg)
-    vecs = await embed_batch([text])
+    vecs = await embed_batch([text], virtual_key=virtual_key)
     return vecs[0]

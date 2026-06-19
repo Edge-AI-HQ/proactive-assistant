@@ -10,12 +10,19 @@ a brief reasoning summary returned as JSON for the audit log.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from typing import Any
 
 from ..harness.factory import build_agent
 from ..harness.llm import make_chat_model
-from ..tools.code_mode.sandbox import create_oneshot_sandbox, delete_sandbox_now
+from ..tools.code_mode.sandbox import (
+    ONESHOT_AGENT_RUN_TIMEOUT_SEC,
+    create_oneshot_sandbox,
+    delete_sandbox_now,
+)
+from ..tools.usage_report import report_compute_usage
 from .prompts import CODE_MODE_GUIDANCE, GROUNDING_POLICY, SANDBOX_PREAMBLE, lang_clause
 
 logger = logging.getLogger(__name__)
@@ -147,6 +154,7 @@ async def run_dream(
     model: str | None = None,
     output_language: str = "en",
 ) -> dict[str, Any]:
+    _t0 = time.monotonic()
     backend, raw = await create_oneshot_sandbox(
         run_jwt=run_jwt,
         scope_label="dream",
@@ -157,26 +165,46 @@ async def run_dream(
             system_prompt=_dream_system_prompt(output_language),
             backend=backend,
         )
-        result: dict[str, Any] = await agent.ainvoke(
-            {
-                "messages": [
+        result: dict[str, Any] = {"messages": []}
+        try:
+            result = await asyncio.wait_for(
+                agent.ainvoke(
                     {
-                        "role": "user",
-                        "content": (
-                            f"Run nightly dream for user_id={user_id} run_id={run_id}. "
-                            "Before analysis, gather the full daily context with "
-                            f"client.signals.recent(status='all', hours={_DREAM_LOOKBACK_HOURS}, "
-                            f"limit={_DREAM_MAX_ROWS}, include_payload=True) and same-window raw.list calls "
-                            f"with limit={_DREAM_MAX_ROWS}. Use signals as the primary "
-                            "source and raw as supporting evidence. Distill into "
-                            "memory/profile updates only when the evidence is direct."
-                        ),
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"Run nightly dream for user_id={user_id} run_id={run_id}. "
+                                    "Before analysis, gather the full daily context with "
+                                    f"client.signals.recent(status='all', hours={_DREAM_LOOKBACK_HOURS}, "
+                                    f"limit={_DREAM_MAX_ROWS}, include_payload=True) and same-window "
+                                    f"raw.list calls with limit={_DREAM_MAX_ROWS}. Use signals as the "
+                                    "primary source and raw as supporting evidence. Distill into "
+                                    "memory/profile updates only when the evidence is direct."
+                                ),
+                            }
+                        ],
                     }
-                ],
-            }
-        )
+                ),
+                timeout=ONESHOT_AGENT_RUN_TIMEOUT_SEC,
+            )
+        except TimeoutError:
+            logger.warning(
+                "dream run timed out after %ds user=%d — sandbox force-deleted",
+                ONESHOT_AGENT_RUN_TIMEOUT_SEC,
+                user_id,
+            )
     finally:
         await delete_sandbox_now(raw)
+        # One-shot sandbox: create→delete ≈ active compute time (deleted
+        # immediately, no idle tail). Bill it to this run's user (credits).
+        report_compute_usage(
+            provider="daytona",
+            duration_seconds=time.monotonic() - _t0,
+            source="daytona:dream",
+            run_jwt=run_jwt,
+            metadata={"scope": "oneshot"},
+        )
     msgs = result.get("messages", [])
     final = msgs[-1] if msgs else None
     final_text = _final_message_text(final)

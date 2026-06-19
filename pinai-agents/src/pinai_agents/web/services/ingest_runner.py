@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 
 from .. import composio_service as cs
 from ..auth.user_service import User
+from .provider_usage import estimate_composio_tool_call_charge, record_provider_usage_charge
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +203,7 @@ async def run_fetch(
     *,
     limit: int = 100,
     since: datetime | None = None,
+    pool: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Run the fetch half of an ingest cycle (Composio call → list of
     items). Returns [] if the recipe is connect_only or missing.
@@ -231,6 +233,14 @@ async def run_fetch(
             pre.slug,
             pre.args,
             connected_account_id=connected_account_id,
+        )
+        await _record_composio_fetch_call(
+            pool,
+            user,
+            source="composio:ingest_prereq",
+            slug=pre.slug,
+            successful=pre_result.successful,
+            toolkit=toolkit,
         )
         if not pre_result.successful:
             logger.warning(
@@ -272,6 +282,14 @@ async def run_fetch(
         args,
         connected_account_id=connected_account_id,
     )
+    await _record_composio_fetch_call(
+        pool,
+        user,
+        source="composio:ingest_fetch",
+        slug=recipe.slug or "",
+        successful=result.successful,
+        toolkit=toolkit,
+    )
     if not result.successful:
         logger.warning(
             "[ingest_runner] %s exec failed: %s",
@@ -297,3 +315,28 @@ async def run_fetch(
         )
         return []
     return [x for x in items if isinstance(x, dict)]
+
+
+async def _record_composio_fetch_call(
+    pool: Any | None,
+    user: User,
+    *,
+    source: str,
+    slug: str,
+    successful: bool,
+    toolkit: str,
+) -> None:
+    if pool is None:
+        return
+    charge = estimate_composio_tool_call_charge(
+        tool_calls=1,
+        source=source,
+        metadata={"slug": slug, "toolkit": toolkit, "successful": successful},
+        status="succeeded" if successful else "failed",
+    )
+    await record_provider_usage_charge(
+        pool,
+        user_id=user.id,
+        supabase_user_id=user.supabase_user_id,
+        charge=charge,
+    )

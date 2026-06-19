@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Header, HTTPException, Path, Query
@@ -24,6 +25,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from ...auth.run_jwt import RunJWTError, RunPrincipal, verify_run_jwt
+from ..usage_report import report_compute_usage
 from .control_state import normalize_mode
 from .events import browser_events
 from .manager import get_browser_manager
@@ -57,6 +59,12 @@ def _principal_or_401(authorization: str | None) -> RunPrincipal:
     except RunJWTError as e:
         logger.warning("browser routes: invalid run JWT — %s", e)
         raise HTTPException(401, "invalid run JWT") from e
+
+
+def _bearer_token(authorization: str | None) -> str | None:
+    if not (authorization and authorization.lower().startswith("bearer ")):
+        return None
+    return authorization[len("bearer ") :].strip() or None
 
 
 # ── SSE ──
@@ -209,5 +217,15 @@ async def browser_context_clear_site(
     if not context_id:
         raise HTTPException(400, "no browserbase context for this user")
     domain = body.site_domain.strip().lower()
-    await get_browser_manager().clear_site_cookies(context_id, domain)
+    start = time.monotonic()
+    try:
+        await get_browser_manager().clear_site_cookies(context_id, domain)
+    finally:
+        report_compute_usage(
+            provider="browserbase",
+            duration_seconds=time.monotonic() - start,
+            source="browser:clear_site",
+            metadata={"siteDomain": domain},
+            run_jwt=_bearer_token(authorization),
+        )
     return {"ok": True, "siteDomain": domain}

@@ -25,6 +25,7 @@ Action surface (~one tool, 14 actions):
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from langchain_core.tools import tool
@@ -35,6 +36,7 @@ from ...harness.ctx import (
     current_client_hints,
     current_session_key,
 )
+from ..usage_report import report_compute_usage
 from .control_state import BrowserControlDenied, BrowserControlMode
 from .manager import DeviceKind, get_browser_manager
 
@@ -118,6 +120,7 @@ async def browser_tool(
 
     mgr = get_browser_manager()
 
+    start = time.monotonic()
     try:
         if action == "open":
             ctx_id = current_browserbase_context_id.get() or None
@@ -209,3 +212,11 @@ async def browser_tool(
     except Exception as e:
         logger.exception("browser_tool action=%s failed", action)
         return {"ok": False, "action": action, "error": f"{type(e).__name__}: {e}"}
+    finally:
+        # Bill active browser-session time to the run's user (credits).
+        report_compute_usage(
+            provider="browserbase",
+            duration_seconds=time.monotonic() - start,
+            source=f"browser:{action}",
+            metadata={"sessionKey": session_key},
+        )

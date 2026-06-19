@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ...config import get_web_settings
 from ..litellm.client import LiteLLMError
+from ..llm_json import parse_json_object
 
 DEFAULT_AMBIENT_SUMMARY_MODEL = "claude-sonnet-4-6"
 
@@ -111,10 +112,13 @@ async def generate_ambient_summary(
     content = _message_content(parsed)
     if content is None:
         raise LiteLLMError(502, "/chat/completions response missing content")
-    try:
-        draft_payload = json.loads(content)
-    except ValueError as exc:
-        raise LiteLLMError(502, "ambient summary response was not JSON") from exc
+    # Tolerant parse: even with response_format=json_object the model
+    # occasionally wraps the object in ```json fences / prose, which a bare
+    # json.loads rejects. parse_json_object unwraps those; an empty dict means
+    # genuinely-unparseable output → 502.
+    draft_payload = parse_json_object(content)
+    if not draft_payload:
+        raise LiteLLMError(502, "ambient summary response was not JSON")
     try:
         return AmbientSummaryDraft.model_validate(draft_payload)
     except Exception as exc:

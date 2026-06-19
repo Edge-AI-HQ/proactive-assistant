@@ -151,7 +151,7 @@ async def test_github_sync_inserts_then_state_flip_updates(
 
     from pinai_agents.web.services import ingest_runner
 
-    async def fake_fetch(user_id, tk, cid, *, limit=100, since=None):
+    async def fake_fetch(user_id, tk, cid, *, limit=100, since=None, pool=None):
         if tk == "github":
             return list(state["items"])
         return []

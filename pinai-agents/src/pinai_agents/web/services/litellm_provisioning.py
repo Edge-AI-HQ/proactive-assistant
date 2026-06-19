@@ -164,16 +164,14 @@ async def _provision_and_persist(
         free_plan = await plans_repo.find_by_code(conn, "free")
     if free_plan is not None:
         budget_usd = free_plan.monthly_refresh_credits / 100.0
-        budget_duration = "30d"
     else:
         budget_usd = s.litellm_default_budget_usd
-        budget_duration = s.litellm_default_budget_duration
 
     raw_key = await generate_key(
         user_id=litellm_uid,
         key_alias=alias,
         max_budget_usd=budget_usd,
-        budget_duration=budget_duration,
+        budget_duration=None,
         rpm_limit=s.litellm_default_rpm_limit,
         tpm_limit=s.litellm_default_tpm_limit,
         models=_allowed_models(required_models or ()),
@@ -186,9 +184,26 @@ async def _provision_and_persist(
             (raw_key, user.id),
         )
         # Also make sure they have a pai_subscriptions row on Free tier.
-        from ..payment.checkout import ensure_user_free_subscription
+        from ..payment.checkout import ensure_user_free_subscription, recompute_litellm_budget
 
         await ensure_user_free_subscription(conn, user.id)
+
+        # Open the user's first budget window so the reconcile job tracks them
+        # (the 100 migration backfill only covered users existing at migration
+        # time). Idempotent — no-op if a window already exists.
+        from ..payment import budget_periods as periods_repo
+
+        free_allowance_cents = (
+            free_plan.monthly_refresh_credits if free_plan else round(budget_usd * 100)
+        )
+        await periods_repo.ensure_open_period(
+            conn,
+            user_id=user.id,
+            supabase_user_id=user.supabase_user_id,
+            plan_code="free",
+            allowance_cents=free_allowance_cents,
+        )
+        await recompute_litellm_budget(conn, user.id, reset_spend=False)
     logger.info(
         "litellm: provisioned virtual key user=%d alias=%s last4=%s budget=$%.2f (Free tier)",
         user.id,

@@ -1,0 +1,550 @@
+---
+title: "Phase 1 实施计划:升级即时生效"
+description: "docs/plans/2026-06-15-billing-plan-change-credits.mdx 的 Phase 1 file-level 实施拆解。升级当场收全差价→确认到账→切价(proration_behavior=none)→立即提升 plan + LiteLLM 额度(保留 spend);降级不变;webhook 跳过 upgrade_delta invoice。TDD,逐任务可验证。"
+---
+
+# Phase 1 实施计划:升级即时生效
+
+> **For agentic workers:** 逐任务 TDD 执行。每个 Task 内 `- [ ]` 步骤顺序做完再下一个。每个 Task 末尾 commit。
+
+**Goal:** 让套餐升级当期即时生效——当场收取「新档价 − 旧档价」的全差价,确认到账后立即切换 Stripe 价格(不按天 proration)、立即提升 `plan_code` 与 LiteLLM 预算(保留已用 spend);降级保持期末生效不变。
+
+**Architecture:** 改 `web/payment/checkout.py`(升级方向走新 helper `_apply_immediate_upgrade`,降级走原 `pending_plan_code` 路径)+ `web/payment/webhook.py`(`_handle_invoice_paid` 跳过 `kind="upgrade_delta"` 的一次性差价 invoice,避免它触发续费式预算重置/提升)。
+
+**Tech Stack:** Python / FastAPI / Stripe Python SDK / LiteLLM REST / pytest(异步用 `@pytest.mark.asyncio`,Stripe 与 DB 全 mock,模式见 `tests/web/payment/test_webhook_helpers.py`)。
+
+**设计 SSOT:** [2026-06-15-billing-plan-change-credits](./2026-06-15-billing-plan-change-credits) 的 Phase 1 节。
+
+---
+
+## 文件结构
+
+- `pinai-agents/src/pinai_agents/web/payment/webhook.py` — `_handle_invoice_paid` 顶部加 `upgrade_delta` 短路(Task 1)。
+- `pinai-agents/src/pinai_agents/web/payment/checkout.py` — 新增 `_apply_immediate_upgrade()`(Task 2);`create_or_change_subscription` 的 switch 分支把升级路由给它(Task 3)。
+- `pinai-agents/tests/web/payment/test_webhook_helpers.py` — 加 1 个 gate 测试(Task 1)。
+- `pinai-agents/tests/web/payment/test_immediate_upgrade.py` — 新建,覆盖 helper + 路由(Task 2、3)。
+
+---
+
+## Task 1: webhook 跳过升级差价 invoice
+
+升级差价是我们自己开的一次性 invoice(`metadata.kind="upgrade_delta"`)。它也会触发 `invoice.paid`,但**不是续费**——升级流程已同步提升了 plan + 预算,这张 invoice 必须被 `_handle_invoice_paid` 跳过,否则会错误地 reset spend / 重新提升 pending。
+
+**Files:**
+- Modify: `pinai-agents/src/pinai_agents/web/payment/webhook.py`(`_handle_invoice_paid` 开头,约 229 行)
+- Test: `pinai-agents/tests/web/payment/test_webhook_helpers.py`
+
+- [ ] **Step 1: 写失败测试**
+
+加到 `test_webhook_helpers.py` 末尾(复用文件内 `invoice_paid_harness` fixture):
+
+```python
+@pytest.mark.asyncio
+async def test_invoice_paid_skips_upgrade_delta_invoice(invoice_paid_harness):
+    """The one-off difference charge from an immediate upgrade is tagged
+    metadata.kind='upgrade_delta'. It is NOT a renewal — _handle_invoice_paid
+    must short-circuit so it doesn't reset spend or re-promote a plan."""
+    delta_invoice = SimpleNamespace(
+        id="in_upgrade_delta",
+        subscription="sub_y",
+        customer="cus_x",
+        metadata={"kind": "upgrade_delta"},
+    )
+
+    await _handle_invoice_paid(conn=None, invoice=delta_invoice)
+
+    invoice_paid_harness.sync_mock.assert_not_awaited()
+    invoice_paid_harness.clear_mock.assert_not_awaited()
+```
+
+- [ ] **Step 2: 跑测试确认失败**
+
+Run: `cd pinai-agents && uv run pytest tests/web/payment/test_webhook_helpers.py::test_invoice_paid_skips_upgrade_delta_invoice -v`
+Expected: FAIL(当前无 gate,`sync_mock` 会被 await → `assert_not_awaited` 抛 AssertionError)
+
+- [ ] **Step 3: 加 gate**
+
+在 `webhook.py` 的 `_handle_invoice_paid` 函数体最前面(`sub_id = _attr(invoice, "subscription")` 之前)插入:
+
+```python
+    meta = _attr(invoice, "metadata") or {}
+    if meta.get("kind") == "upgrade_delta":
+        # One-off immediate-upgrade difference charge — NOT a renewal. The
+        # upgrade flow (checkout._apply_immediate_upgrade) already promoted
+        # plan_code + set the LiteLLM budget synchronously. Skip the renewal
+        # logic so we don't reset spend or re-promote a pending plan.
+        return
+```
+
+- [ ] **Step 4: 跑测试确认通过 + 不回归**
+
+Run: `cd pinai-agents && uv run pytest tests/web/payment/test_webhook_helpers.py -v`
+Expected: 全部 PASS(新测试 + 原有 pending-resolution 测试都过)
+
+- [ ] **Step 5: commit**
+
+```bash
+git add pinai-agents/src/pinai_agents/web/payment/webhook.py pinai-agents/tests/web/payment/test_webhook_helpers.py
+git commit -m "fix(payment): skip upgrade_delta invoice in invoice.paid handler"
+```
+
+---
+
+## Task 2: `_apply_immediate_upgrade` helper
+
+升级核心:**先收差价、确认到账,再改任何状态**。
+
+**Files:**
+- Modify: `pinai-agents/src/pinai_agents/web/payment/checkout.py`(在 `create_or_change_subscription` 之后新增 helper)
+- Test: `pinai-agents/tests/web/payment/test_immediate_upgrade.py`(新建)
+
+- [ ] **Step 1: 写失败测试(成功路径 + 付款失败路径)**
+
+新建 `tests/web/payment/test_immediate_upgrade.py`:
+
+```python
+from __future__ import annotations
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from fastapi import HTTPException
+
+from pinai_agents.web.payment import checkout as checkout_mod
+
+
+def _plan(code: str, price_cents: int, credits: int):
+    return SimpleNamespace(
+        plan_code=code,
+        price_cents_monthly=price_cents,
+        monthly_refresh_credits=credits,
+        stripe_price_id=f"price_{code}",
+    )
+
+
+def _existing_sub():
+    return SimpleNamespace(
+        stripe_subscription_id="sub_y",
+        stripe_customer_id="cus_x",
+        plan_code="basic",
+        pending_plan_code=None,
+        status="active",
+    )
+
+
+class _FakeTx:
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self._conn
+
+    async def __aexit__(self, *args):
+        return False
+
+
+@pytest.fixture
+def upgrade_harness(monkeypatch):
+    """Mock Stripe + DB + LiteLLM so the test isolates the upgrade
+    orchestration. Mirrors tests/web/payment/test_webhook_helpers.py."""
+    paid_invoice = SimpleNamespace(id="in_x", status="paid")
+    stripe = SimpleNamespace(
+        InvoiceItem=SimpleNamespace(create=MagicMock()),
+        Invoice=SimpleNamespace(
+            create=MagicMock(return_value=SimpleNamespace(id="in_x", status="draft")),
+            finalize_invoice=MagicMock(return_value=SimpleNamespace(id="in_x", status="open")),
+            pay=MagicMock(return_value=paid_invoice),
+            void_invoice=MagicMock(),
+        ),
+        Subscription=SimpleNamespace(modify=MagicMock(return_value=SimpleNamespace(id="sub_y"))),
+    )
+    monkeypatch.setattr(checkout_mod, "requires_stripe", lambda: stripe)
+    monkeypatch.setattr(checkout_mod, "get_subscription_item_id", lambda _sid: "si_x")
+    monkeypatch.setattr(checkout_mod, "service_tx", lambda _pool: _FakeTx(object()))
+
+    sync_mock = AsyncMock()
+    clear_mock = AsyncMock()
+    monkeypatch.setattr(checkout_mod.subs_repo, "sync_from_stripe_subscription", sync_mock)
+    monkeypatch.setattr(checkout_mod.subs_repo, "clear_pending_plan_code", clear_mock)
+    budget_mock = AsyncMock()
+    monkeypatch.setattr(checkout_mod, "sync_litellm_budget_for_plan", budget_mock)
+
+    return SimpleNamespace(
+        stripe=stripe, sync_mock=sync_mock, clear_mock=clear_mock, budget_mock=budget_mock
+    )
+
+
+@pytest.mark.asyncio
+async def test_immediate_upgrade_charges_flat_difference_and_promotes(upgrade_harness):
+    user = SimpleNamespace(id=42, supabase_user_id="u-abc", email="a@b.c")
+    result = await checkout_mod._apply_immediate_upgrade(
+        pool=None,
+        user=user,
+        existing_sub=_existing_sub(),
+        current_plan=_plan("basic", 3900, 3900),
+        target_plan=_plan("pro", 9900, 9900),
+    )
+
+    # flat difference, NOT day-prorated: 9900 - 3900 = 6000 cents
+    _, item_kwargs = upgrade_harness.stripe.InvoiceItem.create.call_args
+    assert item_kwargs["amount"] == 6000
+    assert item_kwargs["metadata"]["kind"] == "upgrade_delta"
+
+    # price swapped with NO time-proration; renewal date preserved
+    _, mod_kwargs = upgrade_harness.stripe.Subscription.modify.call_args
+    assert mod_kwargs["proration_behavior"] == "none"
+    assert mod_kwargs["billing_cycle_anchor"] == "unchanged"
+
+    # plan promoted immediately + budget raised keeping spend
+    _, sync_kwargs = upgrade_harness.sync_mock.await_args
+    assert sync_kwargs["plan_code"] == "pro"
+    assert sync_kwargs["update_plan_code"] is True
+    _, budget_kwargs = upgrade_harness.budget_mock.await_args
+    assert budget_kwargs["reset_spend"] is False
+
+    assert result["flow"] == "upgrade"
+    assert result["applied"] is True
+
+
+@pytest.mark.asyncio
+async def test_immediate_upgrade_aborts_when_payment_fails(upgrade_harness):
+    upgrade_harness.stripe.Invoice.pay.side_effect = RuntimeError("card_declined")
+    user = SimpleNamespace(id=42, supabase_user_id="u-abc", email="a@b.c")
+
+    with pytest.raises(HTTPException) as exc:
+        await checkout_mod._apply_immediate_upgrade(
+            pool=None,
+            user=user,
+            existing_sub=_existing_sub(),
+            current_plan=_plan("basic", 3900, 3900),
+            target_plan=_plan("pro", 9900, 9900),
+        )
+
+    assert exc.value.status_code == 402
+    # nothing promoted when the difference charge fails
+    upgrade_harness.stripe.Subscription.modify.assert_not_called()
+    upgrade_harness.sync_mock.assert_not_awaited()
+    upgrade_harness.budget_mock.assert_not_awaited()
+    upgrade_harness.stripe.Invoice.void_invoice.assert_called_once()
+```
+
+- [ ] **Step 2: 跑测试确认失败**
+
+Run: `cd pinai-agents && uv run pytest tests/web/payment/test_immediate_upgrade.py -v`
+Expected: FAIL(`AttributeError: module ... has no attribute '_apply_immediate_upgrade'`)
+
+- [ ] **Step 3: 实现 helper**
+
+在 `checkout.py` 的 `create_or_change_subscription` 函数**之后**新增(`_apply_immediate_upgrade` 用到的 `requires_stripe` / `service_tx` / `subs_repo` / `sync_litellm_budget_for_plan` / `get_subscription_item_id` / `_get_user_stripe_customer_id` / `_stripe_attr` / `HTTPException` / `User` / `logger` 均已在本文件 import):
+
+```python
+async def _apply_immediate_upgrade(
+    pool,
+    *,
+    user: User,
+    existing_sub: Any,
+    current_plan: Any,
+    target_plan: Any,
+) -> dict[str, Any]:
+    """Immediate upgrade: charge the flat (new − old) price difference now,
+    and ONLY after it clears swap the Stripe price + promote plan_code +
+    raise the LiteLLM budget (spend preserved).
+
+    Flat difference, not Stripe day-proration: our unit of value is credits
+    (a quota), not days of access. Upgrading buys the bigger bucket, so the
+    charge is the full price delta and the user immediately gets the full
+    new allowance. Renewal date is unchanged; next renewal bills full new
+    price via the swapped subscription item.
+    """
+    stripe = requires_stripe()
+    customer_id = existing_sub.stripe_customer_id or await _get_user_stripe_customer_id(
+        pool, user.id
+    )
+    if not customer_id:
+        raise HTTPException(400, "no Stripe customer for upgrade")
+
+    delta_cents = target_plan.price_cents_monthly - current_plan.price_cents_monthly
+    if delta_cents <= 0:
+        # Defensive: create_or_change_subscription only routes true upgrades here.
+        raise HTTPException(400, "upgrade difference must be positive")
+
+    meta = {
+        "kind": "upgrade_delta",
+        "supabase_user_id": user.supabase_user_id,
+        "from_plan": current_plan.plan_code,
+        "to_plan": target_plan.plan_code,
+    }
+
+    # 1. Charge the difference NOW and confirm it's paid BEFORE touching any
+    #    subscription / plan / budget state. (Sequence verified against Stripe
+    #    test mode 2026-06-16 — see "Stripe 验证修正" below.)
+    invoice = stripe.Invoice.create(
+        customer=customer_id,
+        collection_method="charge_automatically",
+        auto_advance=False,
+        metadata=meta,
+    )
+    stripe.InvoiceItem.create(
+        customer=customer_id,
+        invoice=invoice.id,  # attach explicitly, else Invoice totals $0
+        amount=delta_cents,
+        currency="usd",
+        description=(
+            f"Upgrade {current_plan.plan_code} → {target_plan.plan_code} (difference)"
+        ),
+        metadata=meta,
+    )
+    invoice = stripe.Invoice.finalize_invoice(invoice.id)
+    if _stripe_attr(invoice, "status") != "paid":  # skip pay() if already settled
+        try:
+            invoice = stripe.Invoice.pay(invoice.id)
+        except Exception as e:
+            try:
+                stripe.Invoice.void_invoice(invoice.id)
+            except Exception:
+                logger.warning("failed to void unpaid upgrade invoice %s", invoice.id)
+            raise HTTPException(
+                status_code=402,
+                detail=f"upgrade payment failed: {type(e).__name__}",
+            ) from e
+    if _stripe_attr(invoice, "status") != "paid":
+        stripe.Invoice.void_invoice(invoice.id)
+        raise HTTPException(402, "upgrade payment not completed")
+
+    # 2. Difference paid → swap the recurring price (no day-proration; next
+    #    renewal bills full new price) and revoke any scheduled switch.
+    item_id = get_subscription_item_id(existing_sub.stripe_subscription_id)
+    modified = stripe.Subscription.modify(
+        existing_sub.stripe_subscription_id,
+        items=[{"id": item_id, "price": target_plan.stripe_price_id}],
+        proration_behavior="none",
+        billing_cycle_anchor="unchanged",
+        cancel_at_period_end=False,
+        metadata={
+            "supabase_user_id": user.supabase_user_id,
+            "plan_code": target_plan.plan_code,
+            "pending_plan_code": "",
+        },
+    )
+
+    # 3. Promote plan_code immediately + raise LiteLLM budget, keeping spend.
+    async with service_tx(pool) as conn:
+        await subs_repo.sync_from_stripe_subscription(
+            conn,
+            user_id=user.id,
+            plan_code=target_plan.plan_code,
+            stripe_subscription=modified,
+            update_plan_code=True,
+        )
+        await subs_repo.clear_pending_plan_code(conn, user.id)
+        await sync_litellm_budget_for_plan(
+            conn,
+            user.id,
+            target_plan.plan_code,
+            reset_spend=False,
+        )
+
+    logger.info(
+        "immediate upgrade applied: user=%d %s → %s (charged %d cents)",
+        user.id,
+        current_plan.plan_code,
+        target_plan.plan_code,
+        delta_cents,
+    )
+    return {
+        "checkoutUrl": None,
+        "flow": "upgrade",
+        "applied": True,
+        "pendingPlanCode": None,
+    }
+```
+
+- [ ] **Step 4: 跑测试确认通过**
+
+Run: `cd pinai-agents && uv run pytest tests/web/payment/test_immediate_upgrade.py -v`
+Expected: 2 PASS
+
+- [ ] **Step 5: commit**
+
+```bash
+git add pinai-agents/src/pinai_agents/web/payment/checkout.py pinai-agents/tests/web/payment/test_immediate_upgrade.py
+git commit -m "feat(payment): add _apply_immediate_upgrade (charge flat difference, promote now)"
+```
+
+---
+
+## Task 3: 把升级路由到 helper(降级不变)
+
+`create_or_change_subscription` 的 switch 分支当前对升级/降级用同一段 pending 逻辑。改成:升级 → `_apply_immediate_upgrade`;降级/平级 → 原 pending 路径不动。
+
+**Files:**
+- Modify: `pinai-agents/src/pinai_agents/web/payment/checkout.py`(`create_or_change_subscription` 的 `is_upgrade = ...` 之后,约 358 行)
+- Test: `pinai-agents/tests/web/payment/test_immediate_upgrade.py`
+
+- [ ] **Step 1: 写失败测试**
+
+追加到 `test_immediate_upgrade.py`:
+
+```python
+@pytest.mark.asyncio
+async def test_create_or_change_routes_upgrade_to_immediate(monkeypatch):
+    """Upgrade direction must call _apply_immediate_upgrade; the deferred
+    pending path must NOT run for an upgrade."""
+    applied = AsyncMock(return_value={"flow": "upgrade", "applied": True})
+    monkeypatch.setattr(checkout_mod, "_apply_immediate_upgrade", applied)
+
+    async def fake_find_by_code(conn, code):
+        prices = {"basic": 3900, "pro": 9900, "max": 19900}
+        return _plan(code, prices[code], prices[code])
+
+    monkeypatch.setattr(checkout_mod.plans_repo, "find_by_code", fake_find_by_code)
+
+    async def fake_get_for_user(conn, user_id):
+        return _existing_sub()  # currently 'basic', modifiable, has stripe sub
+
+    monkeypatch.setattr(checkout_mod.subs_repo, "get_for_user", fake_get_for_user)
+    monkeypatch.setattr(checkout_mod, "user_scoped_tx", lambda _p, _u: _FakeTx(object()))
+    monkeypatch.setattr(checkout_mod, "requires_stripe", lambda: SimpleNamespace())
+    monkeypatch.setattr(checkout_mod, "get_web_settings", lambda: SimpleNamespace(payment_public_base_url=""))
+
+    user = SimpleNamespace(id=42, supabase_user_id="u-abc", email="a@b.c")
+    result = await checkout_mod.create_or_change_subscription(
+        None, user=user, plan_code="pro"
+    )
+
+    applied.assert_awaited_once()
+    assert result["flow"] == "upgrade"
+```
+
+- [ ] **Step 2: 跑测试确认失败**
+
+Run: `cd pinai-agents && uv run pytest tests/web/payment/test_immediate_upgrade.py::test_create_or_change_routes_upgrade_to_immediate -v`
+Expected: FAIL(当前升级走 pending 路径,`_apply_immediate_upgrade` 不会被调)
+
+- [ ] **Step 3: 接线**
+
+> ⚠️ 插入点关键:原代码里 `item_id = get_subscription_item_id(existing_sub.stripe_subscription_id)`(会调 Stripe `Subscription.retrieve`)**在** `is_upgrade = ...` 之前。升级路由必须放在 `item_id` 这行**之前**,否则升级也会先打一次多余的 Stripe 调用。
+
+把 `create_or_change_subscription` 里原本的这两行(`item_id` 在前、`is_upgrade` 在后):
+
+```python
+    item_id = get_subscription_item_id(existing_sub.stripe_subscription_id)
+    is_upgrade = target_plan.price_cents_monthly > current_plan.price_cents_monthly
+```
+
+改为(先算 `is_upgrade`,升级直接 return,再算 `item_id`;删掉原来重复的 `is_upgrade` 行):
+
+```python
+    is_upgrade = target_plan.price_cents_monthly > current_plan.price_cents_monthly
+    if is_upgrade:
+        # Immediate upgrade: charge the flat difference now + promote now.
+        # Downgrades fall through to the deferred pending_plan_code path below.
+        return await _apply_immediate_upgrade(
+            pool,
+            user=user,
+            existing_sub=existing_sub,
+            current_plan=current_plan,
+            target_plan=target_plan,
+        )
+
+    item_id = get_subscription_item_id(existing_sub.stripe_subscription_id)
+```
+
+(其余 downgrade/pending 代码原样保留——后续那段只会在降级时执行,`is_upgrade` 恒为 False,末尾 `"flow": "upgrade" if is_upgrade else "downgrade"` 自然恒为 `"downgrade"`。)
+
+- [ ] **Step 4: 跑测试确认通过**
+
+Run: `cd pinai-agents && uv run pytest tests/web/payment/test_immediate_upgrade.py -v`
+Expected: 3 PASS
+
+- [ ] **Step 5: commit**
+
+```bash
+git add pinai-agents/src/pinai_agents/web/payment/checkout.py pinai-agents/tests/web/payment/test_immediate_upgrade.py
+git commit -m "feat(payment): route plan upgrades to immediate path, downgrades stay deferred"
+```
+
+---
+
+## Task 4: 静态检查 + 全量回归
+
+**Files:** 无(只跑校验)
+
+- [ ] **Step 1: ruff format + lint**
+
+Run: `cd pinai-agents && uv run ruff format --check src/pinai_agents/web/payment/ tests/web/payment/ && uv run ruff check src/pinai_agents/web/payment/ tests/web/payment/`
+Expected: All checks passed(不过就 `uv run ruff format src/... tests/...` 再 `ruff check --fix`)
+
+- [ ] **Step 2: mypy**
+
+Run: `cd pinai-agents && uv run mypy src`
+Expected: `Success: no issues found`
+
+- [ ] **Step 3: 支付相关测试全跑**
+
+Run: `cd pinai-agents && uv run pytest tests/web/payment/ -v`
+Expected: 全 PASS(新测试 + 原 webhook/subscription 测试无回归)
+
+- [ ] **Step 4: commit(若 ruff 有 format 改动)**
+
+```bash
+git add -A pinai-agents/
+git commit -m "chore(payment): ruff format for immediate-upgrade changes"
+```
+
+---
+
+## Task 5: 本地真栈手工验收(Stripe test mode)
+
+代码 mock 验过逻辑;真正的 Stripe 收费 + LiteLLM 即时提额要在跑起来的栈上看。Stripe webhook 本地需 `stripe listen`(见项目记忆「Stripe webhook 本地测试」)。
+
+**Files:** 无
+
+- [ ] **Step 1: 起栈 + webhook 转发**
+
+```bash
+make up && make status
+stripe listen --forward-to localhost:8000/api/payment/webhook   # 用 test mode key
+```
+
+- [ ] **Step 2: 用测试卡走一次升级**
+
+前端用一个已订阅 Basic 的测试用户,点升级到 Pro(测试卡 `4242 4242 4242 4242`)。
+
+- [ ] **Step 3: 核对(全部满足才算过)**
+
+```bash
+# Stripe 侧:有一张 ~$60 的一次性 invoice(metadata.kind=upgrade_delta)已 paid;订阅 item 价已是 pro;续费日未变
+# DB:plan_code 立刻是 pro、pending_plan_code 为空
+docker compose exec postgres psql -U postgres -d postgres -c \
+  "SELECT plan_code, pending_plan_code FROM pai_subscriptions WHERE user_id=<id>;"
+# LiteLLM:max_budget 立刻到 pro($99=9900cr),spend 未被清零
+docker compose exec postgres psql -U postgres -d litellm -c \
+  "SELECT key_alias, max_budget, spend FROM \"LiteLLM_VerificationToken\" WHERE key_alias='pinai-<supabase_uuid>';"
+```
+
+- [ ] **Step 4: 降级回归**
+
+点 Pro → Basic 降级 → 确认**不**立即生效:`plan_code` 仍 Pro、`pending_plan_code=basic`,无一次性收费(沿用原行为)。
+
+---
+
+## Stripe 验证修正(2026-06-16,test mode 真跑)
+
+Task 5 提前用 Stripe test mode 复刻了一次升级调用序列(建一次性测试客户+订阅、跑序列、删掉),**抓到两个 mock 验不出的真 bug,已修**:
+
+1. **`InvoiceItem` 必须 `invoice=<id>` 显式挂到 invoice 上**。`Invoice.create` 默认**不**卷入 customer-pending 的 InvoiceItem → invoice total 变 $0、升级白送。修法:先 `Invoice.create`,再 `InvoiceItem.create(invoice=inv.id, ...)`。
+2. **finalize 后先查状态,paid 就别再 `pay()`**。`finalize_invoice` 会自动 settle($0 invoice 直接 paid),此时再 `pay()` 抛 `"Invoice is already paid"`,旧代码 `except` 把它当付款失败、错退 402。修法:`if status != "paid": pay()`。
+
+验证实测:修正序列下 delta invoice `amount_paid=6000`($60)、订阅切到 pro、客户名下只有 `subscription_create($39)` + `manual(upgrade_delta $60)` 两张 invoice、**无意外 proration 收费**(确认 `proration_behavior="none"` 正确)。新增回归测试 `test_immediate_upgrade_skips_pay_when_finalize_already_paid` 锁住第 2 点。
+
+## 自检结论(spec 覆盖)
+
+- 升级即时 + 收全差价(非按天)→ Task 2/3 ✓
+- 先收费确认到账再改状态、付款失败不提升 → Task 2 `test_immediate_upgrade_aborts_when_payment_fails` ✓
+- `proration_behavior=none` + 续费日不变 + 下月全价 → Task 2 ✓
+- 立即提升 plan_code + LiteLLM 额度、保留 spend(reset_spend=False)→ Task 2 ✓
+- 降级不变 → Task 3(只路由 upgrade)+ Task 5 Step 4 ✓
+- webhook 跳过 upgrade_delta invoice → Task 1 ✓
+- credits / ByteDance 统一 = Phase 2,不在本计划 ✓

@@ -111,6 +111,37 @@ export async function createCheckout(
   return (await res.json()) as CreateCheckoutResponse;
 }
 
+export interface TopupResponse {
+  checkoutUrl: string;
+  sessionId?: string;
+  flow: "topup";
+}
+
+/**
+ * Buy a one-off credit topup. `amountCents` is integer cents (1 credit =
+ * $0.01, bought 1:1). Returns a Stripe Checkout (mode='payment') URL to
+ * redirect to; the credits land via the checkout.session.completed webhook,
+ * so the balance updates after the user completes payment (poll getUsage).
+ */
+export async function createTopup(
+  amountCents: number,
+  opts?: { successUrl?: string; cancelUrl?: string },
+): Promise<TopupResponse> {
+  const res = await pinaiFetch("/api/payment/topup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      amountCents,
+      successUrl: opts?.successUrl,
+      cancelUrl: opts?.cancelUrl,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`/payment/topup failed: ${await readErrorMessage(res)}`);
+  }
+  return (await res.json()) as TopupResponse;
+}
+
 export async function cancelCurrentSubscription(): Promise<CancelSubscriptionResponse> {
   const res = await pinaiFetch("/api/payment/cancel", { method: "POST" });
   if (!res.ok) {
@@ -154,6 +185,8 @@ export interface ReconcileResult {
 export interface UsageInfo {
   spendUsd: number;
   maxBudgetUsd: number;
+  planAllowanceCredits?: number;
+  topupCreditsAvailable?: number;
   budgetResetAt: string | null;
   budgetDuration: string | null;
 }
@@ -185,6 +218,8 @@ export interface PaymentMethodEntry {
   // "Link · email" for link, etc.).
   type: string;
   isDefault: boolean;
+  isSaved?: boolean;
+  source?: "saved" | "checkout";
   // Card-specific (null when type != "card"):
   brand: string | null;
   last4: string | null;
@@ -230,5 +265,30 @@ export async function listInvoices(limit = 12): Promise<InvoiceEntry[]> {
     );
   }
   const data = (await res.json()) as { items?: InvoiceEntry[] };
+  return data.items ?? [];
+}
+
+export interface PaymentHistoryEntry {
+  id: string;
+  kind: "invoice" | "topup";
+  status: string;
+  amountPaidCents: number;
+  currency: string;
+  description: string;
+  createdAt: number;  // unix epoch seconds
+  hostedInvoiceUrl: string | null;
+  pdfUrl: string | null;
+}
+
+export async function listPaymentHistory(limit = 12): Promise<PaymentHistoryEntry[]> {
+  const res = await pinaiFetch(
+    `/api/payment/history?limit=${encodeURIComponent(String(limit))}`,
+  );
+  if (!res.ok) {
+    throw new Error(
+      `/payment/history failed: ${await readErrorMessage(res)}`,
+    );
+  }
+  const data = (await res.json()) as { items?: PaymentHistoryEntry[] };
   return data.items ?? [];
 }

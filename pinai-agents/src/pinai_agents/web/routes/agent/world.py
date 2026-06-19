@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Depends, Query, status
 
 from ...auth.deps import AgentRun, current_agent_run, get_pool
+from ...auth.user_service import load_user_by_id
 from ...db.repositories.world_signals import WorldSignalsRepository
 from ...db.rls import user_scoped_tx
 from ...embeddings import EmbeddingError, embed_batch
@@ -147,8 +148,13 @@ async def search_world_signals(
       * Single tunable (k); no per-domain weight calibration.
     """
     # 1. Embed the query via LiteLLM (single text → 1536d vector).
+    #    Bill the query embedding to the searching user's virtual key.
+    searcher = await load_user_by_id(pool, run.user_id)
     try:
-        vectors = await embed_batch([q])
+        vectors = await embed_batch(
+            [q],
+            virtual_key=searcher.litellm_virtual_key if searcher else None,
+        )
     except EmbeddingError as e:
         logger.warning("world.search embedding failed: %s", e)
         # Fall through to keyword-only — partial result better than 500.

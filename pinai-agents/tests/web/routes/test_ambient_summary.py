@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -8,9 +10,12 @@ from pinai_agents.web.auth.deps import current_user, get_pool
 from pinai_agents.web.auth.user_service import User
 from pinai_agents.web.litellm.client import LiteLLMError
 from pinai_agents.web.routes.ui import ambient as ambient_routes
+from pinai_agents.web.services import ambient_summary as ambient_service
 from pinai_agents.web.services.ambient_summary import (
     _SYSTEM_PROMPT,
     DEFAULT_AMBIENT_SUMMARY_MODEL,
+    AmbientSummaryContext,
+    generate_ambient_summary,
 )
 
 
@@ -118,6 +123,58 @@ async def test_ambient_summary_rejects_empty_context():
         response = await client.post("/api/ambient/summary", json=payload)
 
     assert response.status_code == 422
+
+
+class _FakeResponse:
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+        self.status_code = 200
+        self.text = ""
+
+    @property
+    def is_success(self) -> bool:
+        return True
+
+    def json(self) -> dict:
+        return self._payload
+
+
+class _FakeClient:
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+
+    async def __aenter__(self) -> _FakeClient:
+        return self
+
+    async def __aexit__(self, *_a: object) -> bool:
+        return False
+
+    async def post(self, *_a: object, **_k: object) -> _FakeResponse:
+        return _FakeResponse(self._payload)
+
+
+@pytest.mark.asyncio
+async def test_generate_ambient_summary_recovers_fenced_json(monkeypatch):
+    # Regression: the model sometimes wraps the JSON object in a ```json fence
+    # even with response_format=json_object. A bare json.loads 502'd here;
+    # parse_json_object now unwraps it.
+    draft_obj = {
+        "title": "Product review",
+        "summary": "You reviewed product work with the team.",
+        "tags": ["meeting"],
+        "confidence": 0.82,
+        "confidenceLabel": "certain",
+    }
+    fenced = "```json\n" + json.dumps(draft_obj) + "\n```"
+    envelope = {"choices": [{"message": {"content": fenced}}]}
+    monkeypatch.setattr(ambient_service.httpx, "AsyncClient", lambda *a, **k: _FakeClient(envelope))
+
+    context = AmbientSummaryContext.model_validate(_payload()["context"])
+    draft = await generate_ambient_summary(context=context, bearer_token="sk-x")
+
+    assert draft.title == "Product review"
+    assert draft.confidence == 0.82
+    assert draft.confidence_label == "certain"
 
 
 @pytest.mark.asyncio

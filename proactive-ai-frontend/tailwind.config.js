@@ -37,6 +37,13 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 /** @type {import('tailwindcss').Config} */
 export default {
+  // 触屏(iOS WKWebView)无 mouseleave 事件，`hover:` 状态会"粘滞"在最后点过的
+  // 元素上直到点别处 → Setting 卡片等被卡在 hover 样式(看起来像一直被按住)。
+  // 这个 flag 把所有 `hover:` 包进 @media (hover: hover)，只在真有指针的设备生效，
+  // 触屏永不触发。Tailwind v4 已默认开启。
+  future: {
+    hoverOnlyWhenSupported: true,
+  },
   content: [
     path.join(here, "index.html"),
     path.join(here, "src/**/*.{ts,tsx}"),

@@ -20,20 +20,19 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
-from ..litellm import client as litellm_client
+from . import budget_periods as periods_repo
+from . import credit_grants as grants_repo
 from . import plans, subscriptions
 from .stripe_client import requires_stripe, requires_webhook_secret
 
 logger = logging.getLogger(__name__)
 
-# 100 LiteLLM credits == $1 USD spend ceiling. PIN Claw mapping; we keep
-# it 1:1 with pai_billing_plans.monthly_refresh_credits.
-_CREDITS_PER_USD = 100
-
-# LiteLLM budget window: refreshes monthly on each invoice.paid.
-_BUDGET_DURATION = "30d"
+# Credit grants expire 12 calendar months after the current budget period end.
+# Not refundable. Design SSOT Phase 2.
+_GRANT_TTL_MONTHS = 12
 
 
 class WebhookSignatureError(Exception):
@@ -62,12 +61,19 @@ async def claim_event(conn, event: Any) -> bool:
             INSERT INTO pai_stripe_webhook_events
               (event_id, event_type, user_id, status, raw_data)
             VALUES (%s, %s, %s, 'claimed', %s::jsonb)
-            ON CONFLICT (event_id) DO NOTHING
+            ON CONFLICT (event_id) DO UPDATE
+              SET status = 'claimed', claimed_at = NOW(), error_message = NULL
+              WHERE pai_stripe_webhook_events.status = 'failed'
             RETURNING event_id
             """,
             (event.id, event.type, user_id, json.dumps(_event_to_dict(event))),
         )
         row = await cur.fetchone()
+    # True = newly inserted OR re-claimed a prior 'failed' attempt (Stripe
+    # retry). False = a 'processed' / 'skipped' / in-flight 'claimed' row
+    # already owns it, so skip. The claim commits in its own tx (see
+    # routes.webhook) so a dispatch failure can't roll it back — the 'failed'
+    # marker persists for audit AND makes the next retry re-claimable here.
     return row is not None
 
 
@@ -125,6 +131,90 @@ async def dispatch(conn, event: Any) -> bool:
     return False
 
 
+async def _handle_topup_completed(conn, session: Any, user_id: int, meta: dict) -> None:
+    """Land a one-off credit topup. Idempotent on the PaymentIntent (the
+    pai_credit_grants partial-unique index): ONLY when a new grant row is
+    inserted do we recompute the LiteLLM budget, so a Stripe retry can't
+    double-credit. credit_cents == amount paid (1:1, no discount)."""
+    try:
+        credit_cents = int(meta.get("credit_cents") or 0)
+    except (TypeError, ValueError):
+        credit_cents = 0
+    pi = _attr(session, "payment_intent")
+    pi_id = pi if isinstance(pi, str) else _attr(pi, "id")
+    if credit_cents <= 0 or not pi_id:
+        logger.warning(
+            "topup checkout.completed missing credit_cents/payment_intent (session=%s)",
+            _attr(session, "id"),
+        )
+        return
+
+    # supabase_user_id is NOT NULL on the grant; trust the row of record over
+    # session metadata (user_id may have come from the customer fallback).
+    supabase_uuid = meta.get("supabase_user_id")
+    if not supabase_uuid:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT supabase_user_id FROM users WHERE id = %s", (user_id,))
+            row = await cur.fetchone()
+        supabase_uuid = (
+            str(row["supabase_user_id"]) if row and row.get("supabase_user_id") else None
+        )
+    if not supabase_uuid:
+        logger.warning("topup: cannot resolve supabase_user_id for user=%d", user_id)
+        return
+
+    expires_at = await _topup_expires_at(conn, user_id)
+    grant_id = await grants_repo.insert_topup_grant(
+        conn,
+        user_id=user_id,
+        supabase_user_id=supabase_uuid,
+        grant_cents=credit_cents,
+        expires_at=expires_at,
+        stripe_payment_intent_id=pi_id,
+        stripe_event_id=None,
+    )
+    if grant_id is None:
+        logger.info("topup grant already recorded for payment_intent=%s — skip", pi_id)
+        return
+    logger.info("topup grant %s: user=%d +%d credits", grant_id, user_id, credit_cents)
+
+    # Apply the new credits to the LiteLLM ceiling immediately (reset_spend=
+    # False: credits add on top of the current window, usage so far kept).
+    from . import checkout as checkout_flow
+
+    await checkout_flow.recompute_litellm_budget(conn, user_id, reset_spend=False)
+
+
+async def _topup_expires_at(conn, user_id: int) -> datetime:
+    now = datetime.now(UTC)
+    period = await periods_repo.get_open_period(conn, user_id)
+    anchor = period.period_end if period and period.period_end > now else now
+    return _add_calendar_months(anchor, _GRANT_TTL_MONTHS)
+
+
+def _add_calendar_months(dt: datetime, months: int) -> datetime:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    month_index = dt.month - 1 + months
+    year = dt.year + month_index // 12
+    month = month_index % 12 + 1
+    month_lengths = {
+        1: 31,
+        2: 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28,
+        3: 31,
+        4: 30,
+        5: 31,
+        6: 30,
+        7: 31,
+        8: 31,
+        9: 30,
+        10: 31,
+        11: 30,
+        12: 31,
+    }
+    return dt.replace(year=year, month=month, day=min(dt.day, month_lengths[month]))
+
+
 async def _handle_checkout_completed(conn, session: Any) -> None:
     """A user finished Stripe Checkout. The session contains:
     - customer (id we should pin onto users.stripe_customer_id)
@@ -144,6 +234,13 @@ async def _handle_checkout_completed(conn, session: Any) -> None:
         logger.warning(
             "checkout.completed without resolvable user (session=%s)", _attr(session, "id")
         )
+        return
+
+    # One-off credit topup (mode='payment', tagged kind='topup') — not a
+    # subscription. Handle + return before the subscription path below.
+    meta = _attr(session, "metadata") or {}
+    if _attr(session, "mode") == "payment" or meta.get("kind") == "topup":
+        await _handle_topup_completed(conn, session, user_id, meta)
         return
 
     sub_id = _attr(session, "subscription")
@@ -212,18 +309,17 @@ async def _handle_subscription_event(conn, sub: Any) -> None:
 
     fresh_status = _attr(fresh, "status")
     if fresh_status == "canceled":
-        # On terminal cancel, demote the user back to Free tier (not zero
-        # budget — Free is the default state, $5/30d). Note:
-        # cancel_at_period_end=True alone does NOT trigger this — Stripe
-        # only fires deleted (status=canceled) when the period actually
-        # ends. Customer Portal "cancel immediately" also lands here.
+        # On terminal cancel, demote to Free. recompute (NOT a hard reset to
+        # Free's window) KEEPS the user's purchased credits — max_budget always
+        # re-adds active grants on top of the Free allowance (credits are paid
+        # for, survive cancel). reset_spend=False preserves the spend so the
+        # reconcile can attribute this window; period_end=NOW() rolls the window
+        # so the next reconcile tick opens a fresh Free window. Note:
+        # cancel_at_period_end=True alone does NOT trigger this — Stripe only
+        # fires deleted (status=canceled) when the period actually ends.
         await checkout_flow.ensure_user_free_subscription(conn, user_id)
-        await checkout_flow.sync_litellm_budget_for_plan(
-            conn,
-            user_id,
-            "free",
-            reset_spend=True,
-        )
+        await periods_repo.set_period_end(conn, user_id=user_id, period_end=datetime.now(UTC))
+        await checkout_flow.recompute_litellm_budget(conn, user_id, reset_spend=False)
 
 
 async def _handle_invoice_paid(conn, invoice: Any) -> None:
@@ -241,6 +337,13 @@ async def _handle_invoice_paid(conn, invoice: Any) -> None:
     (it only syncs status/period metadata) because Stripe.items[0].price
     can change mid-period without an actual billing event.
     """
+    meta = _attr(invoice, "metadata") or {}
+    if meta.get("kind") == "upgrade_delta":
+        # One-off immediate-upgrade difference charge — NOT a renewal. The
+        # upgrade flow (checkout._apply_immediate_upgrade) already promoted
+        # plan_code + set the LiteLLM budget synchronously. Skip the renewal
+        # logic so we don't reset spend or re-promote a pending plan.
+        return
     sub_id = _attr(invoice, "subscription")
     if isinstance(sub_id, dict):
         sub_id = sub_id.get("id")
@@ -319,39 +422,19 @@ async def _handle_invoice_paid(conn, invoice: Any) -> None:
             user_id,
         )
         return
-    plan = await plans.find_by_code(conn, plan_code)
-    if plan is None:
-        return
-    virtual_key = await _virtual_key_for_user(conn, user_id)
-    if not virtual_key:
-        logger.warning(
-            "invoice.paid: user=%d has no litellm_virtual_key; budget not refreshed",
-            user_id,
-        )
-        return
-    budget_usd = plan.monthly_refresh_credits / _CREDITS_PER_USD
-    try:
-        await litellm_client.update_key(
-            virtual_key=virtual_key,
-            max_budget_usd=budget_usd,
-            budget_duration=_BUDGET_DURATION,
-            reset_spend=True,
-        )
-        logger.info(
-            "litellm budget refreshed: user=%d plan=%s max_budget=$%.2f",
-            user_id,
-            plan_code,
-            budget_usd,
-        )
-    except litellm_client.LiteLLMError as e:
-        # Don't fail the whole webhook on LiteLLM hiccup — Stripe state
-        # is already persisted; spend tracking just drifts until next
-        # invoice.paid retry. Log and continue.
-        logger.exception(
-            "litellm /key/update failed for user=%d: %s",
-            user_id,
-            e,
-        )
+    # Plan promotion above already committed plan_code to pai_subscriptions.
+    # Renewal rolls the budget window: recompute(reset_spend=False) raises the
+    # LiteLLM ceiling to (new plan allowance + active credits) NOW (instant for
+    # a fresh subscriber) while KEEPING spend so the reconcile can attribute
+    # this window; period_end=NOW() then has the next reconcile tick close the
+    # old window (correct attribution) + open the new cycle's window + reset
+    # spend. Reconcile — not invoice.paid — owns the spend reset, so a
+    # downgrade opens a lower-tier window and free users (no invoice.paid) stay
+    # on the same reconcile path. LiteLLM failures are swallowed in recompute.
+    from . import checkout as checkout_flow
+
+    await periods_repo.set_period_end(conn, user_id=user_id, period_end=datetime.now(UTC))
+    await checkout_flow.recompute_litellm_budget(conn, user_id, reset_spend=False)
 
 
 # ── helpers ──
@@ -423,26 +506,6 @@ async def _plan_code_for_subscription(conn, sub: Any) -> str | None:
         return None
     plan = await plans.find_by_stripe_price(conn, price_id)
     return plan.plan_code if plan else None
-
-
-async def _virtual_key_for_user(conn, user_id: int) -> str | None:
-    """Fetch the user's LiteLLM virtual key from users table. Returns
-    None if the user has no key provisioned yet (will be set on next
-    chat-side `ensure_user_litellm_key` call).
-
-    Mirrors checkout._virtual_key_for_user — duplicated here to avoid
-    a webhook → checkout circular import (checkout already imports
-    plans + subscriptions which webhook also uses)."""
-    async with conn.cursor() as cur:
-        await cur.execute(
-            "SELECT litellm_virtual_key FROM users WHERE id = %s",
-            (user_id,),
-        )
-        row = await cur.fetchone()
-    if not row:
-        return None
-    key = row.get("litellm_virtual_key")
-    return key if isinstance(key, str) and key else None
 
 
 def _event_to_dict(event: Any) -> dict[str, Any]:

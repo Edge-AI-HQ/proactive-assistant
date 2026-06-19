@@ -89,3 +89,34 @@ class ProviderUsageRepository(UserScopedRepository):
                 "ended_at": event.ended_at,
             },
         )
+
+    async def sum_cost_usd(self, *, since: datetime | None = None) -> Decimal:
+        """Total succeeded provider cost for this user (optionally only
+        events created at/after `since`).
+
+        Used to fold non-LiteLLM provider spend (e.g. ByteDance streaming
+        ASR) into the user's unified usage total. Only 'succeeded' events
+        count — a failed call isn't charged. Failures-to-charge stay out
+        of the user's bill.
+        """
+        if since is not None:
+            cur = await self.conn.execute(
+                """
+                SELECT COALESCE(SUM(cost_usd), 0) AS total
+                FROM pai_provider_usage_events
+                WHERE user_id = %s AND status = 'succeeded' AND created_at >= %s
+                """,
+                (self.user_id, since),
+            )
+        else:
+            cur = await self.conn.execute(
+                """
+                SELECT COALESCE(SUM(cost_usd), 0) AS total
+                FROM pai_provider_usage_events
+                WHERE user_id = %s AND status = 'succeeded'
+                """,
+                (self.user_id,),
+            )
+        row = await cur.fetchone()
+        total = row["total"] if row else 0
+        return Decimal(total)

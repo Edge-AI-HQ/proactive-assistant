@@ -120,7 +120,7 @@ def _patch_fetch(monkeypatch, toolkit: str, items: list[dict]):
     without hitting Composio. Real upserter still runs against the DB."""
     from pinai_agents.web.services import ingest_runner
 
-    async def fake_fetch(user_id, tk, cid, *, limit=100, since=None):
+    async def fake_fetch(user_id, tk, cid, *, limit=100, since=None, pool=None):
         if tk == toolkit:
             return list(items)
         return []

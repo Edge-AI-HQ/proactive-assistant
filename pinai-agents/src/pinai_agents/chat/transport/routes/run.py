@@ -97,7 +97,7 @@ async def post_run_crystallize(
     timeout — moved to scheduler so the run is observable + retryable
     + survives chat-worker restart, same lifecycle as dream/evolve).
     """
-    user_id, run_id, _ = _verify(authorization)
+    user_id, run_id, run_jwt = _verify(authorization)
     if user_id != body.get("user_id"):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "user_id mismatch")
     virtual_key = body.get("virtual_key", "")
@@ -111,6 +111,7 @@ async def post_run_crystallize(
         user_id=user_id,
         run_id=run_id,
         session_key=session_key,
+        run_jwt=run_jwt,
         model=body.get("model"),
         output_language=str(body.get("generation_language") or "en"),
     )

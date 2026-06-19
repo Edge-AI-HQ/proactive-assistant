@@ -19,14 +19,21 @@ window.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import time
 from typing import Any
 
 from ..harness.factory import build_agent
 from ..harness.llm import make_chat_model
-from ..tools.code_mode.sandbox import create_oneshot_sandbox, delete_sandbox_now
+from ..tools.code_mode.sandbox import (
+    ONESHOT_AGENT_RUN_TIMEOUT_SEC,
+    create_oneshot_sandbox,
+    delete_sandbox_now,
+)
+from ..tools.usage_report import report_compute_usage
 from .prompts import CODE_MODE_GUIDANCE, GROUNDING_POLICY, SANDBOX_PREAMBLE, lang_clause
 
 logger = logging.getLogger(__name__)
@@ -134,6 +141,7 @@ async def run_evolve(
     # run_jwt is forwarded into create_oneshot_sandbox so it can mint a
     # phantom token for the sandbox; without it sandbox-side SDK calls
     # would 401 against /api/agent/* (no auth header).
+    _t0 = time.monotonic()
     backend, raw = await create_oneshot_sandbox(
         run_jwt=run_jwt,
         scope_label=f"evolve:{connector}",
@@ -155,23 +163,43 @@ async def run_evolve(
             system_prompt=_evolve_system_prompt(output_language),
             backend=backend,
         )
-        result: dict[str, Any] = await agent.ainvoke(
-            {
-                "messages": [
+        result: dict[str, Any] = {"messages": []}
+        try:
+            result = await asyncio.wait_for(
+                agent.ainvoke(
                     {
-                        "role": "user",
-                        "content": (
-                            f"Run evolve for user_id={user_id} run_id={run_id} "
-                            f"connector={connector}. Distill the latest raw window "
-                            f"into signals, memory, profile, and goal updates per "
-                            f"the goal block + hard_rules.\n\n{raw_sources_hint}"
-                        ),
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"Run evolve for user_id={user_id} run_id={run_id} "
+                                    f"connector={connector}. Distill the latest raw window "
+                                    f"into signals, memory, profile, and goal updates per "
+                                    f"the goal block + hard_rules.\n\n{raw_sources_hint}"
+                                ),
+                            }
+                        ],
                     }
-                ],
-            }
-        )
+                ),
+                timeout=ONESHOT_AGENT_RUN_TIMEOUT_SEC,
+            )
+        except TimeoutError:
+            logger.warning(
+                "evolve run timed out after %ds user=%d connector=%s — sandbox force-deleted",
+                ONESHOT_AGENT_RUN_TIMEOUT_SEC,
+                user_id,
+                connector,
+            )
     finally:
         await delete_sandbox_now(raw)
+        # One-shot sandbox lifetime ≈ active compute time → bill to the user.
+        report_compute_usage(
+            provider="daytona",
+            duration_seconds=time.monotonic() - _t0,
+            source=f"daytona:evolve:{connector}",
+            run_jwt=run_jwt,
+            metadata={"scope": "oneshot", "connector": connector},
+        )
     msgs = result.get("messages", [])
     final = msgs[-1] if msgs else None
     final_text = (

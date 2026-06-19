@@ -53,3 +53,48 @@ class FakeConnection:
 
     async def execute(self, sql: str, params: dict[str, Any]) -> None:
         self.executed.append((sql, params))
+
+
+class _FakeCursor:
+    def __init__(self, row: dict[str, Any]) -> None:
+        self._row = row
+
+    async def fetchone(self) -> dict[str, Any]:
+        return self._row
+
+
+class FakeReadConnection:
+    def __init__(self, total: Any) -> None:
+        self._total = total
+        self.executed: list[tuple[str, Any]] = []
+
+    async def execute(self, sql: str, params: Any = None) -> _FakeCursor:
+        self.executed.append((sql, params))
+        return _FakeCursor({"total": self._total})
+
+
+@pytest.mark.asyncio
+async def test_sum_cost_usd_since_filters_period_and_succeeded():
+    conn = FakeReadConnection(Decimal("0.420000"))
+    since = datetime(2026, 6, 1, tzinfo=UTC)
+
+    total = await ProviderUsageRepository(7, conn).sum_cost_usd(since=since)
+
+    assert total == Decimal("0.420000")
+    sql, params = conn.executed[0]
+    assert "SUM(cost_usd)" in sql
+    assert "status = 'succeeded'" in sql
+    assert "created_at >= " in sql
+    assert params == (7, since)
+
+
+@pytest.mark.asyncio
+async def test_sum_cost_usd_all_time_when_since_none():
+    conn = FakeReadConnection(Decimal("1.5"))
+
+    total = await ProviderUsageRepository(7, conn).sum_cost_usd()
+
+    assert total == Decimal("1.5")
+    sql, params = conn.executed[0]
+    assert "created_at" not in sql
+    assert params == (7,)

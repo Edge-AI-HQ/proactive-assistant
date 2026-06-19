@@ -7,8 +7,10 @@ Branch table (called from routes.py /create-checkout):
   -------------------------+------------------+--------------------------------
   none                     | any              | Checkout Session w/ trial
   modifiable, same plan    | any              | 400 already-on-this-plan
-  modifiable, target > cur | upgrade          | Subscription.modify(
-                           |                  |   proration=always_invoice)
+  modifiable, target > cur | upgrade          | charge flat delta, then
+                           |                  | Subscription.modify(
+                           |                  |   proration=none,
+                           |                  |   trial_end=next month)
   modifiable, target < cur | downgrade        | Subscription.modify(
                            |                  |   proration=none,
                            |                  |   billing_cycle_anchor=unchanged)
@@ -23,13 +25,19 @@ directly (which holds the master STRIPE_SECRET_KEY via stripe_client).
 from __future__ import annotations
 
 import logging
+import math
+from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import HTTPException
 
 from ...config import get_web_settings
 from ..auth.deps import User
 from ..db.rls import service_tx, user_scoped_tx
+from . import budget_periods as periods_repo
+from . import credit_grants as grants_repo
 from . import plans as plans_repo
 from . import subscriptions as subs_repo
 from .stripe_client import requires_stripe
@@ -41,6 +49,10 @@ logger = logging.getLogger(__name__)
 # past_due included — Stripe still allows modify; LiteLLM budget won't
 # reset until invoice.paid clears.
 _MODIFIABLE_STATUSES = frozenset({"trialing", "active", "past_due"})
+
+# Credits are integer cents of USD (100 credits = $1). Conversion to dollars
+# happens only at the LiteLLM boundary. Mirrors webhook._CREDITS_PER_USD.
+_CREDITS_PER_USD = 100
 
 
 # ── customer / item helpers ──
@@ -83,6 +95,153 @@ async def _virtual_key_for_user(conn, user_id: int) -> str | None:
     return key if isinstance(key, str) and key else None
 
 
+def _coerce_dt(v: Any) -> datetime | None:
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v.astimezone(UTC) if v.tzinfo else v.replace(tzinfo=UTC)
+    if isinstance(v, int | float):
+        return datetime.fromtimestamp(float(v), tz=UTC)
+    if isinstance(v, str):
+        try:
+            s = v[:-1] + "+00:00" if v.endswith("Z") else v
+            return datetime.fromisoformat(s).astimezone(UTC)
+        except ValueError:
+            return None
+    return None
+
+
+def _now_utc() -> datetime:
+    return datetime.now(UTC)
+
+
+def _append_checkout_session_id(url: str) -> str:
+    parts = urlsplit(url)
+    session_param = "session_id={CHECKOUT_SESSION_ID}"
+    query = f"{parts.query}&{session_param}" if parts.query else session_param
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
+
+
+def _add_one_calendar_month(dt: datetime) -> datetime:
+    """Add one calendar month, preserving the day when possible."""
+    year = dt.year + (1 if dt.month == 12 else 0)
+    month = 1 if dt.month == 12 else dt.month + 1
+    month_lengths = {
+        1: 31,
+        2: 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28,
+        3: 31,
+        4: 30,
+        5: 31,
+        6: 30,
+        7: 31,
+        8: 31,
+        9: 30,
+        10: 31,
+        11: 30,
+        12: 31,
+    }
+    return dt.replace(year=year, month=month, day=min(dt.day, month_lengths[month]))
+
+
+def _duration_seconds(start: datetime, end: datetime) -> str:
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=UTC)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=UTC)
+    seconds = max(1, math.ceil((end - start).total_seconds()))
+    return f"{seconds}s"
+
+
+def _budget_duration_for_period_window(period: Any | None) -> str | None:
+    period_start = getattr(period, "period_start", None)
+    period_end = getattr(period, "period_end", None)
+    if not isinstance(period_start, datetime) or not isinstance(period_end, datetime):
+        return None
+    return _duration_seconds(period_start, period_end)
+
+
+async def _sync_litellm_budget_reset_at(conn, user_id: int, period: Any | None) -> None:
+    """Pin LiteLLM's live reset timestamp to the DB budget period.
+
+    LiteLLM's public ``budget_duration`` API standardizes values to calendar
+    boundaries (for example ``30d`` means the first day of next month), so it
+    cannot represent our per-user Stripe/DB billing anchor. LiteLLM and
+    pinai-agents share the same Postgres database; the reset timestamp lives in
+    the isolated ``litellm`` schema, so we update only this one scheduler field
+    directly.
+    """
+    period_end = getattr(period, "period_end", None)
+    if not isinstance(period_end, datetime):
+        return
+    if period_end.tzinfo is None:
+        period_end = period_end.replace(tzinfo=UTC)
+    else:
+        period_end = period_end.astimezone(UTC)
+    async with conn.cursor() as cur:
+        await cur.execute(
+            """
+            UPDATE litellm."LiteLLM_VerificationToken"
+            SET budget_reset_at = %s,
+                budget_duration = '30d',
+                updated_at = NOW()
+            WHERE metadata->>'source' = 'pinai-agents'
+              AND metadata->>'internal_user_id' = %s
+            """,
+            (period_end, str(user_id)),
+        )
+
+
+def _subscription_period_bounds(
+    stripe_subscription: Any,
+    *,
+    fallback_start: datetime | None = None,
+    fallback_end: datetime | None = None,
+) -> tuple[datetime, datetime]:
+    period_start = fallback_start or _coerce_dt(
+        _stripe_attr(stripe_subscription, "current_period_start")
+    )
+    if period_start is None:
+        period_start = _now_utc()
+    period_end = _coerce_dt(_stripe_attr(stripe_subscription, "current_period_end"))
+    if period_end is None:
+        period_end = fallback_end
+    if period_end is None or period_end <= period_start:
+        period_end = _add_one_calendar_month(period_start)
+    return period_start, period_end
+
+
+async def _read_litellm_anchor_for_user(
+    pool,
+    user_id: int,
+) -> tuple[Decimal, datetime | None]:
+    """Read the LiteLLM spend/reset snapshot used to anchor a new DB window.
+
+    Best-effort only: the accounting source of truth is SpendLogs, while this
+    value preserves the live counter snapshot for audit and cap recompute.
+    """
+    from ..litellm import client as litellm_client
+
+    async with service_tx(pool) as conn:
+        virtual_key = await _virtual_key_for_user(conn, user_id)
+    if not virtual_key:
+        return Decimal("0"), None
+    try:
+        info = await litellm_client.get_key_info(virtual_key)
+    except litellm_client.LiteLLMError as e:
+        logger.warning("failed to read LiteLLM spend anchor user=%d: %s", user_id, e)
+        return Decimal("0"), None
+    except Exception:
+        logger.exception("unexpected failure reading LiteLLM spend anchor user=%d", user_id)
+        return Decimal("0"), None
+
+    raw_spend = info.get("spend")
+    try:
+        spend = Decimal(str(raw_spend)) if raw_spend is not None else Decimal("0")
+    except (InvalidOperation, ValueError):
+        spend = Decimal("0")
+    return spend, _coerce_dt(info.get("budget_reset_at"))
+
+
 async def ensure_user_free_subscription(conn, user_id: int) -> None:
     """Upsert the user's pai_subscriptions row to Free state.
     Idempotent — safe to call repeatedly. Preserves stripe_customer_id
@@ -109,6 +268,89 @@ async def ensure_user_free_subscription(conn, user_id: int) -> None:
         )
 
 
+async def recompute_litellm_budget(
+    conn,
+    user_id: int,
+    *,
+    reset_spend: bool = False,
+    floor_usd: float | None = None,
+) -> bool:
+    """Single source of truth for a user's LiteLLM max_budget (Phase 2).
+
+    Absolute recompute, never read-modify-write (so a webhook replay can't
+    double-add and concurrent writers can't lose updates). The ceiling is::
+
+        max_budget = (plan allowance remaining + active credit grants) / 100
+
+    - Plan is resolved from pai_subscriptions (default 'free'); callers
+      commit the plan there BEFORE calling.
+    - Allowance remaining = plan.monthly_refresh_credits − the open window's
+      allowance_consumed_cents. An OPEN window always has consumed=0 (it's
+      only set when the window is reconciled), so mid-cycle this is the FULL
+      (GROSS) allowance — LiteLLM's retained spend already nets usage, so
+      netting consumed here too would double-deduct the user's own quota.
+    - Credits = Σ(grant_cents − consumed_cents) over active, un-expired grants.
+
+    reset_spend=True zeroes the LiteLLM spend window (renewal / reset to a
+    fresh cycle); reset_spend=False preserves it (mid-cycle topup / upgrade —
+    the cap rises, usage so far is kept).
+
+    Returns True when the LiteLLM key was updated, False on no-op (user has
+    no key yet — set on next ensure_user_litellm_key) or a swallowed
+    LiteLLMError. Callers that need to know whether the spend reset actually
+    applied (the reconcile job's reset_applied flag) use the return value.
+    LiteLLMError is swallowed (logged): Stripe/DB state is already persisted;
+    the budget self-heals on the next recompute.
+    """
+    from ..litellm import client as litellm_client
+
+    virtual_key = await _virtual_key_for_user(conn, user_id)
+    if not virtual_key:
+        return False
+
+    sub = await subs_repo.get_for_user(conn, user_id)
+    plan_code = sub.plan_code if sub and sub.plan_code else "free"
+    plan = await plans_repo.find_by_code(conn, plan_code)
+    allowance_cents = plan.monthly_refresh_credits if plan else 0
+
+    period = await periods_repo.get_open_period(conn, user_id)
+    allowance_consumed = period.allowance_consumed_cents if period else 0
+    allowance_remaining = max(0, allowance_cents - allowance_consumed)
+
+    credits_remaining = await grants_repo.sum_active_remaining_cents(conn, user_id)
+    max_budget_usd = (allowance_remaining + credits_remaining) / _CREDITS_PER_USD
+    # floor_usd protects against an instant 429 when the ceiling drops below
+    # spend already incurred (credit expiry): forfeit the unused remainder but
+    # don't retroactively block what the user already spent this window.
+    if floor_usd is not None and floor_usd > max_budget_usd:
+        max_budget_usd = floor_usd
+
+    try:
+        await litellm_client.update_key(
+            virtual_key=virtual_key,
+            max_budget_usd=max_budget_usd,
+            reset_spend=reset_spend,
+        )
+        await _sync_litellm_budget_reset_at(conn, user_id, period)
+        logger.info(
+            "litellm budget recomputed: user=%d plan=%s allowance_remaining=%d "
+            "credits=%d max_budget=$%.2f reset_spend=%s",
+            user_id,
+            plan_code,
+            allowance_remaining,
+            credits_remaining,
+            max_budget_usd,
+            reset_spend,
+        )
+        return True
+    except litellm_client.LiteLLMError as e:
+        logger.exception("litellm budget recompute failed user=%d: %s", user_id, e)
+        return False
+    except Exception:
+        logger.exception("litellm budget reset timestamp sync failed user=%d", user_id)
+        return False
+
+
 async def sync_litellm_budget_for_plan(
     conn,
     user_id: int,
@@ -116,40 +358,16 @@ async def sync_litellm_budget_for_plan(
     *,
     reset_spend: bool = True,
 ) -> None:
-    """Update the user's LiteLLM key max_budget to match their plan.
-    Looks up plan.monthly_refresh_credits / 100 for the USD amount.
-    Silent no-op when the user has no LiteLLM key yet (will be set on
-    next ensure_user_litellm_key call)."""
-    from ..litellm import client as litellm_client
+    """Compatibility wrapper around recompute_litellm_budget.
 
-    plan = await plans_repo.find_by_code(conn, plan_code)
-    if plan is None:
-        logger.warning("sync_litellm_budget: unknown plan_code=%s user=%d", plan_code, user_id)
-        return
-    virtual_key = await _virtual_key_for_user(conn, user_id)
-    if not virtual_key:
-        return
-    budget_usd = plan.monthly_refresh_credits / 100.0
-    try:
-        await litellm_client.update_key(
-            virtual_key=virtual_key,
-            max_budget_usd=budget_usd,
-            budget_duration="30d",
-            reset_spend=reset_spend,
-        )
-        logger.info(
-            "litellm budget set: user=%d plan=%s max_budget=$%.2f",
-            user_id,
-            plan_code,
-            budget_usd,
-        )
-    except litellm_client.LiteLLMError as e:
-        logger.exception(
-            "litellm /key/update failed user=%d plan=%s: %s",
-            user_id,
-            plan_code,
-            e,
-        )
+    Phase 2 made recompute_litellm_budget the single budget writer — it
+    resolves the plan from pai_subscriptions and adds active credit grants on
+    top of the plan allowance. This wrapper is kept so existing call sites
+    (immediate upgrade, reconcile, cancel-to-free) and their tests stay
+    unchanged. `plan_code` is now informational: every caller commits the
+    plan to pai_subscriptions before calling, and recompute reads it there.
+    """
+    await recompute_litellm_budget(conn, user_id, reset_spend=reset_spend)
 
 
 async def ensure_stripe_customer(pool, *, user: User) -> str:
@@ -175,6 +393,79 @@ async def ensure_stripe_customer(pool, *, user: User) -> str:
             stripe_customer_id=customer.id,
         )
     return customer.id
+
+
+# Credit topup bounds (integer cents). Presets 2000/5000/10000 are a UI
+# concern; the backend only enforces min/max. 1:1 (no discount) per design.
+_TOPUP_MIN_CENTS = 500  # $5
+_TOPUP_MAX_CENTS = 100_000  # $1000 per one-off topup
+
+
+async def create_topup_checkout(
+    pool,
+    *,
+    user: User,
+    amount_cents: int,
+    success_url_override: str | None = None,
+    cancel_url_override: str | None = None,
+) -> dict[str, Any]:
+    """Create a one-off Stripe Checkout Session (mode='payment') that buys
+    `amount_cents` of credits 1:1. The grant is written when Stripe fires
+    checkout.session.completed (webhook), idempotent on the PaymentIntent.
+
+    Mirrors the mode='subscription' branch of create_or_change_subscription
+    but with a dynamic price (price_data, not a catalog price), no
+    subscription_data, and a kind='topup' metadata tag the webhook keys on.
+    """
+    if amount_cents < _TOPUP_MIN_CENTS or amount_cents > _TOPUP_MAX_CENTS:
+        raise HTTPException(
+            400,
+            f"topup amount must be between ${_TOPUP_MIN_CENTS / 100:.0f} "
+            f"and ${_TOPUP_MAX_CENTS / 100:.0f}",
+        )
+    settings = get_web_settings()
+    stripe = requires_stripe()
+    customer_id = await ensure_stripe_customer(pool, user=user)
+    base = settings.payment_public_base_url or ""
+    success = success_url_override or (f"{base}/payment/success" if base else None)
+    cancel = cancel_url_override or (f"{base}/payment/cancel" if base else None)
+    if not success or not cancel:
+        raise HTTPException(
+            500,
+            "checkout success / cancel URLs not configured "
+            "(set PAYMENT_PUBLIC_BASE_URL or pass successUrl/cancelUrl)",
+        )
+
+    # Stripe metadata values must be strings. credit_cents == amount paid (1:1).
+    meta = {
+        "supabase_user_id": user.supabase_user_id,
+        "internal_user_id": str(user.id),
+        "kind": "topup",
+        "credit_cents": str(amount_cents),
+    }
+    session = stripe.checkout.Session.create(
+        mode="payment",
+        customer=customer_id,
+        line_items=[
+            {
+                "price_data": {
+                    "currency": "usd",
+                    "unit_amount": amount_cents,
+                    "product_data": {"name": f"PIN AI credits (${amount_cents / 100:.2f})"},
+                },
+                "quantity": 1,
+            }
+        ],
+        success_url=_append_checkout_session_id(success),
+        cancel_url=cancel,
+        metadata=meta,
+        payment_intent_data={"metadata": meta},
+    )
+    return {
+        "checkoutUrl": session.url,
+        "sessionId": session.id,
+        "flow": "topup",
+    }
 
 
 def get_subscription_item_id(stripe_subscription_id: str) -> str:
@@ -261,7 +552,7 @@ async def create_or_change_subscription(
             mode="subscription",
             customer=customer_id,
             line_items=[{"price": target_plan.stripe_price_id, "quantity": 1}],
-            success_url=success + "?session_id={CHECKOUT_SESSION_ID}",
+            success_url=_append_checkout_session_id(success),
             cancel_url=cancel,
             allow_promotion_codes=True,
             metadata=sub_metadata,
@@ -354,8 +645,19 @@ async def create_or_change_subscription(
             f"{existing_sub.plan_code!r}; manual data fix required",
         )
 
-    item_id = get_subscription_item_id(existing_sub.stripe_subscription_id)
     is_upgrade = target_plan.price_cents_monthly > current_plan.price_cents_monthly
+    if is_upgrade:
+        # Immediate upgrade: charge the flat difference now + promote now.
+        # Downgrades fall through to the deferred pending_plan_code path below.
+        return await _apply_immediate_upgrade(
+            pool,
+            user=user,
+            existing_sub=existing_sub,
+            current_plan=current_plan,
+            target_plan=target_plan,
+        )
+
+    item_id = get_subscription_item_id(existing_sub.stripe_subscription_id)
     # pending_plan_code is replicated to Stripe subscription metadata so the
     # webhook on a *different* backend can still resolve it on next renewal.
     # Without this, a switch scheduled locally + invoice.paid handled in the
@@ -410,6 +712,165 @@ async def create_or_change_subscription(
         "checkoutUrl": None,
         "flow": "upgrade" if is_upgrade else "downgrade",
         "pendingPlanCode": target_plan.plan_code,
+    }
+
+
+async def _apply_immediate_upgrade(
+    pool,
+    *,
+    user: User,
+    existing_sub: Any,
+    current_plan: Any,
+    target_plan: Any,
+) -> dict[str, Any]:
+    """Immediate upgrade: charge the flat (new − old) price difference now,
+    and ONLY after it clears swap the Stripe price + promote plan_code +
+    raise the LiteLLM budget (spend preserved) + re-anchor the DB budget
+    window to the upgraded billing period.
+
+    Flat difference, not Stripe day-proration: our unit of value is credits
+    (a quota), not days of access. Upgrading buys the bigger bucket, so the
+    charge is the full price delta and the user immediately gets the full
+    new allowance. The upgrade starts a new monthly period: a user who moves
+    Basic → Pro on the 20th next resets on the following month's 20th. We use
+    trial_end for that next renewal anchor because billing_cycle_anchor=now
+    would make Stripe send another immediate subscription invoice.
+    """
+    stripe = requires_stripe()
+    customer_id = existing_sub.stripe_customer_id or await _get_user_stripe_customer_id(
+        pool, user.id
+    )
+    if not customer_id:
+        raise HTTPException(400, "no Stripe customer for upgrade")
+
+    delta_cents = target_plan.price_cents_monthly - current_plan.price_cents_monthly
+    if delta_cents <= 0:
+        # Defensive: create_or_change_subscription only routes true upgrades here.
+        raise HTTPException(400, "upgrade difference must be positive")
+
+    meta = {
+        "kind": "upgrade_delta",
+        "supabase_user_id": user.supabase_user_id,
+        "from_plan": current_plan.plan_code,
+        "to_plan": target_plan.plan_code,
+    }
+
+    # 1. Charge the difference NOW and confirm it's paid BEFORE touching any
+    #    subscription / plan / budget state.
+    #
+    # Order matters (verified against Stripe test mode 2026-06-16): create the
+    # invoice FIRST, then attach the one-off line item via `invoice=`.
+    # Invoice.create does NOT pull in customer-pending InvoiceItems by
+    # default — a customer-only item would be left off and the invoice would
+    # total $0 (the user would get the upgrade for free).
+    invoice = stripe.Invoice.create(
+        customer=customer_id,
+        collection_method="charge_automatically",
+        auto_advance=False,
+        metadata=meta,
+    )
+    stripe.InvoiceItem.create(
+        customer=customer_id,
+        invoice=invoice.id,
+        amount=delta_cents,
+        currency="usd",
+        description=(f"Upgrade {current_plan.plan_code} → {target_plan.plan_code} (difference)"),
+        metadata=meta,
+    )
+    invoice = stripe.Invoice.finalize_invoice(invoice.id)
+    # finalize auto-settles a $0 invoice but leaves a real charge 'open'.
+    # Only pay() when not already paid — pay() on an already-paid invoice
+    # raises "Invoice is already paid", which would wrongly look like a
+    # payment failure (verified against Stripe test mode 2026-06-16).
+    if _stripe_attr(invoice, "status") != "paid":
+        try:
+            invoice = stripe.Invoice.pay(invoice.id)
+        except Exception as e:
+            try:
+                stripe.Invoice.void_invoice(invoice.id)
+            except Exception:
+                logger.warning("failed to void unpaid upgrade invoice %s", invoice.id)
+            raise HTTPException(
+                status_code=402,
+                detail=f"upgrade payment failed: {type(e).__name__}",
+            ) from e
+    if _stripe_attr(invoice, "status") != "paid":
+        stripe.Invoice.void_invoice(invoice.id)
+        raise HTTPException(402, "upgrade payment not completed")
+
+    opening_litellm_spend, last_seen_reset_at = await _read_litellm_anchor_for_user(
+        pool,
+        user.id,
+    )
+
+    upgrade_period_start = _now_utc()
+    upgrade_period_end = _add_one_calendar_month(upgrade_period_start)
+
+    # 2. Difference paid → swap the recurring price, anchor the next full
+    #    subscription invoice one month from now, and revoke any scheduled
+    #    switch. The already-paid one-off invoice covers the upgraded period.
+    item_id = get_subscription_item_id(existing_sub.stripe_subscription_id)
+    modified = stripe.Subscription.modify(
+        existing_sub.stripe_subscription_id,
+        items=[{"id": item_id, "price": target_plan.stripe_price_id}],
+        proration_behavior="none",
+        trial_end=int(upgrade_period_end.timestamp()),
+        cancel_at_period_end=False,
+        metadata={
+            "supabase_user_id": user.supabase_user_id,
+            "plan_code": target_plan.plan_code,
+            "pending_plan_code": "",
+        },
+    )
+    period_start, period_end = _subscription_period_bounds(
+        modified,
+        fallback_start=upgrade_period_start,
+        fallback_end=upgrade_period_end,
+    )
+
+    # 3. Promote plan_code immediately + move the DB ledger to the upgraded
+    #    period + raise LiteLLM budget, keeping spend.
+    async with service_tx(pool) as conn:
+        await subs_repo.sync_from_stripe_subscription(
+            conn,
+            user_id=user.id,
+            plan_code=target_plan.plan_code,
+            stripe_subscription=modified,
+            update_plan_code=True,
+        )
+        await subs_repo.clear_pending_plan_code(conn, user.id)
+        credits_remaining = await grants_repo.sum_active_remaining_cents(conn, user.id)
+        await periods_repo.reanchor_open_period_for_upgrade(
+            conn,
+            user_id=user.id,
+            supabase_user_id=user.supabase_user_id,
+            plan_code=target_plan.plan_code,
+            allowance_cents=target_plan.monthly_refresh_credits,
+            period_start=period_start,
+            period_end=period_end,
+            opening_litellm_spend=opening_litellm_spend,
+            last_seen_reset_at=last_seen_reset_at,
+            max_budget_cents_at_open=target_plan.monthly_refresh_credits + credits_remaining,
+        )
+        await sync_litellm_budget_for_plan(
+            conn,
+            user.id,
+            target_plan.plan_code,
+            reset_spend=False,
+        )
+
+    logger.info(
+        "immediate upgrade applied: user=%d %s → %s (charged %d cents)",
+        user.id,
+        current_plan.plan_code,
+        target_plan.plan_code,
+        delta_cents,
+    )
+    return {
+        "checkoutUrl": None,
+        "flow": "upgrade",
+        "applied": True,
+        "pendingPlanCode": None,
     }
 
 
@@ -505,6 +966,112 @@ def _stripe_attr(obj: Any, name: str) -> Any:
         if v is not None:
             return v
     return getattr(obj, name, None)
+
+
+def _payment_method_entry(
+    *,
+    pm_id: str,
+    pm_type: str,
+    is_default: bool,
+    is_saved: bool,
+    source: str,
+) -> dict[str, Any]:
+    return {
+        "id": pm_id,
+        "type": pm_type,
+        "isDefault": is_default,
+        "isSaved": is_saved,
+        "source": source,
+        "brand": None,
+        "last4": None,
+        "expMonth": None,
+        "expYear": None,
+        "linkEmail": None,
+    }
+
+
+def _entry_from_checkout_charge(
+    charge: Any,
+    *,
+    is_default: bool = False,
+    fallback_email: str | None = None,
+) -> dict[str, Any] | None:
+    details = _stripe_attr(charge, "payment_method_details")
+    pm_type = _stripe_attr(details, "type")
+    charge_id = _stripe_attr(charge, "id")
+    if not isinstance(pm_type, str) or not pm_type:
+        return None
+    if not isinstance(charge_id, str) or not charge_id:
+        return None
+
+    entry = _payment_method_entry(
+        pm_id=charge_id,
+        pm_type=pm_type,
+        is_default=is_default,
+        is_saved=False,
+        source="checkout",
+    )
+    if pm_type == "card":
+        card = _stripe_attr(details, "card")
+        entry["brand"] = _stripe_attr(card, "brand")
+        entry["last4"] = _stripe_attr(card, "last4")
+        entry["expMonth"] = _stripe_attr(card, "exp_month")
+        entry["expYear"] = _stripe_attr(card, "exp_year")
+    elif pm_type == "link":
+        link = _stripe_attr(details, "link")
+        link_email = _stripe_attr(link, "email")
+        entry["linkEmail"] = (
+            link_email if isinstance(link_email, str) and link_email else fallback_email
+        )
+    return entry
+
+
+async def _latest_topup_payment_intent_id(pool, user_id: int) -> str | None:
+    async with user_scoped_tx(pool, user_id) as conn, conn.cursor() as cur:
+        await cur.execute(
+            """
+            SELECT stripe_payment_intent_id
+            FROM pai_credit_grants
+            WHERE user_id = %s
+              AND source = 'topup'
+              AND stripe_payment_intent_id IS NOT NULL
+            ORDER BY granted_at DESC
+            LIMIT 1
+            """,
+            (user_id,),
+        )
+        row = await cur.fetchone()
+    pi_id = (row or {}).get("stripe_payment_intent_id")
+    return pi_id if isinstance(pi_id, str) and pi_id else None
+
+
+async def _topup_history_items(pool, user_id: int, *, limit: int) -> list[dict[str, Any]]:
+    async with user_scoped_tx(pool, user_id) as conn, conn.cursor() as cur:
+        await cur.execute(
+            """
+            SELECT id, grant_cents, granted_at
+            FROM pai_credit_grants
+            WHERE user_id = %s AND source = 'topup'
+            ORDER BY granted_at DESC
+            LIMIT %s
+            """,
+            (user_id, limit),
+        )
+        rows = await cur.fetchall()
+    return [
+        {
+            "id": str(row["id"]),
+            "kind": "topup",
+            "status": "paid",
+            "amountPaidCents": int(row["grant_cents"]),
+            "currency": "usd",
+            "description": "PIN AI credits",
+            "createdAt": int(row["granted_at"].timestamp()),
+            "hostedInvoiceUrl": None,
+            "pdfUrl": None,
+        }
+        for row in rows
+    ]
 
 
 def _resolve_price_id_from_subscription(stripe_sub: Any) -> str | None:
@@ -720,16 +1287,13 @@ async def list_payment_methods_for_user(
         try:
             pm = stripe.PaymentMethod.retrieve(pm_id)
             pm_type = _stripe_attr(pm, "type") or "unknown"
-            entry: dict[str, Any] = {
-                "id": pm_id,
-                "type": pm_type,
-                "isDefault": pm_id == default_pm_id,
-                "brand": None,
-                "last4": None,
-                "expMonth": None,
-                "expYear": None,
-                "linkEmail": None,
-            }
+            entry = _payment_method_entry(
+                pm_id=pm_id,
+                pm_type=pm_type,
+                is_default=pm_id == default_pm_id,
+                is_saved=True,
+                source="saved",
+            )
             identity: tuple[str, ...]
             if pm_type == "card":
                 card = _stripe_attr(pm, "card")
@@ -758,6 +1322,27 @@ async def list_payment_methods_for_user(
     # (Stripe applied it to their subscription).
     if not default_pm_id and len(items) == 1:
         items[0]["isDefault"] = True
+
+    if not items:
+        pi_id = await _latest_topup_payment_intent_id(pool, user.id)
+        if pi_id:
+            try:
+                payment_intent = stripe.PaymentIntent.retrieve(pi_id, expand=["latest_charge"])
+                charge = _stripe_attr(payment_intent, "latest_charge")
+                if isinstance(charge, str) and hasattr(stripe, "Charge"):
+                    charge = stripe.Charge.retrieve(charge)
+                user_email = getattr(user, "email", None)
+                checkout_entry = _entry_from_checkout_charge(
+                    charge,
+                    is_default=True,
+                    fallback_email=user_email
+                    if isinstance(user_email, str) and user_email
+                    else None,
+                )
+                if checkout_entry is not None:
+                    items.append(checkout_entry)
+            except Exception as e:
+                logger.warning("PaymentIntent.retrieve %s for checkout PM failed: %s", pi_id, e)
 
     return {"items": items}
 
@@ -804,4 +1389,30 @@ async def list_invoices_for_user(
                 "pdfUrl": getattr(inv, "invoice_pdf", None),
             }
         )
+    return {"items": items}
+
+
+async def list_payment_history_for_user(
+    pool,
+    *,
+    user: User,
+    limit: int = 12,
+) -> dict[str, Any]:
+    """Return UI billing history across Stripe invoices and credit top-ups."""
+    invoice_items = []
+    try:
+        invoice_items = (await list_invoices_for_user(pool, user=user, limit=limit)).get(
+            "items", []
+        )
+    except Exception as e:
+        logger.warning("list invoices for payment history failed: %s", e)
+    for item in invoice_items:
+        item["kind"] = "invoice"
+
+    topup_items = await _topup_history_items(pool, user.id, limit=limit)
+    items = sorted(
+        [*invoice_items, *topup_items],
+        key=lambda item: int(item.get("createdAt") or 0),
+        reverse=True,
+    )[:limit]
     return {"items": items}

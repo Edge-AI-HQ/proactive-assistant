@@ -68,6 +68,20 @@ async def post(path: str, body: dict[str, Any]) -> Any:
     return resp.json()
 
 
+async def post_with_jwt(path: str, body: dict[str, Any], *, jwt: str) -> Any:
+    """Like `post` but with an EXPLICIT bearer instead of the run-context JWT.
+
+    Used by callers that hold the run JWT directly but run outside
+    `run_context()` — e.g. the background one-shot sandbox jobs
+    (dream / crystallize / evolve), whose usage reporting must still attribute
+    to the right user even though `current_run_jwt` isn't set on that path."""
+    resp = await _get_client().post(path, json=body, headers={"Authorization": f"Bearer {jwt}"})
+    if resp.status_code >= 400:
+        logger.warning("native tool POST %s → %d: %s", path, resp.status_code, resp.text[:200])
+        return {"error": f"http_{resp.status_code}", "detail": resp.text[:500]}
+    return resp.json()
+
+
 async def post_status(path: str, body: dict[str, Any]) -> tuple[int, Any]:
     """POST returning (status_code, parsed_body).
 

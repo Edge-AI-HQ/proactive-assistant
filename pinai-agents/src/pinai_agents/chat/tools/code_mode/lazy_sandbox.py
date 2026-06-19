@@ -31,6 +31,8 @@ provisioning.
 from __future__ import annotations
 
 import asyncio
+import time
+from collections.abc import Awaitable, Callable
 
 import daytona
 from deepagents.backends.protocol import (
@@ -47,6 +49,7 @@ from deepagents.backends.protocol import (
 )
 from langchain_daytona import DaytonaSandbox
 
+from ..usage_report import report_compute_usage
 from .sandbox import get_or_create_thread_sandbox
 
 
@@ -86,22 +89,47 @@ class LazyThreadSandbox(SandboxBackendProtocol):
 
     # ── async surface (the only path the async agent uses) ──
 
+    async def _metered[T](self, source: str, fn: Callable[[], Awaitable[T]]) -> T:
+        start = time.monotonic()
+        try:
+            return await fn()
+        finally:
+            report_compute_usage(
+                provider="daytona",
+                duration_seconds=time.monotonic() - start,
+                source=source,
+                metadata={"threadId": self._thread_id},
+                run_jwt=self._run_jwt,
+            )
+
     async def aexecute(
         self,
         command: str,
         *,
         timeout: int | None = None,  # noqa: ASYNC109  # forwarded to the real backend
     ) -> ExecuteResponse:
-        return await (await self._ensure()).aexecute(command, timeout=timeout)
+        async def _run() -> ExecuteResponse:
+            return await (await self._ensure()).aexecute(command, timeout=timeout)
+
+        return await self._metered("daytona:exec", _run)
 
     async def als(self, path: str) -> LsResult:
-        return await (await self._ensure()).als(path)
+        async def _run() -> LsResult:
+            return await (await self._ensure()).als(path)
+
+        return await self._metered("daytona:ls", _run)
 
     async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
-        return await (await self._ensure()).aread(file_path, offset, limit)
+        async def _run() -> ReadResult:
+            return await (await self._ensure()).aread(file_path, offset, limit)
+
+        return await self._metered("daytona:read", _run)
 
     async def awrite(self, file_path: str, content: str) -> WriteResult:
-        return await (await self._ensure()).awrite(file_path, content)
+        async def _run() -> WriteResult:
+            return await (await self._ensure()).awrite(file_path, content)
+
+        return await self._metered("daytona:write", _run)
 
     async def aedit(
         self,
@@ -110,18 +138,35 @@ class LazyThreadSandbox(SandboxBackendProtocol):
         new_string: str,
         replace_all: bool = False,  # noqa: FBT001, FBT002  # matches protocol signature
     ) -> EditResult:
-        return await (await self._ensure()).aedit(file_path, old_string, new_string, replace_all)
+        async def _run() -> EditResult:
+            return await (await self._ensure()).aedit(
+                file_path, old_string, new_string, replace_all
+            )
+
+        return await self._metered("daytona:edit", _run)
 
     async def agrep(
         self, pattern: str, path: str | None = None, glob: str | None = None
     ) -> GrepResult:
-        return await (await self._ensure()).agrep(pattern, path, glob)
+        async def _run() -> GrepResult:
+            return await (await self._ensure()).agrep(pattern, path, glob)
+
+        return await self._metered("daytona:grep", _run)
 
     async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
-        return await (await self._ensure()).aglob(pattern, path)
+        async def _run() -> GlobResult:
+            return await (await self._ensure()).aglob(pattern, path)
+
+        return await self._metered("daytona:glob", _run)
 
     async def aupload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
-        return await (await self._ensure()).aupload_files(files)
+        async def _run() -> list[FileUploadResponse]:
+            return await (await self._ensure()).aupload_files(files)
+
+        return await self._metered("daytona:upload", _run)
 
     async def adownload_files(self, paths: list[str]) -> list[FileDownloadResponse]:
-        return await (await self._ensure()).adownload_files(paths)
+        async def _run() -> list[FileDownloadResponse]:
+            return await (await self._ensure()).adownload_files(paths)
+
+        return await self._metered("daytona:download", _run)

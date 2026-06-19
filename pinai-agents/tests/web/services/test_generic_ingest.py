@@ -269,7 +269,7 @@ async def test_run_init_generic_full_wiring(pool, user_ids, monkeypatch):
     )
     monkeypatch.setattr(connector_ingest.ingest_runner, "load_recipe", lambda tk: recipe)
 
-    async def _fake_fetch(user, toolkit, cid, *, limit=100, since=None):
+    async def _fake_fetch(user, toolkit, cid, *, limit=100, since=None, pool=None):
         assert toolkit == "acme"
         return [
             {"id": "t-1", "name": "Thing one", "updated_at": "2026-06-09T10:00:00Z"},
@@ -374,7 +374,7 @@ async def test_run_init_fanout(pool, user_ids, monkeypatch):
     recipes = _fanout_recipes()
     monkeypatch.setattr(connector_ingest.ingest_runner, "load_recipe", lambda tk: recipes.get(tk))
 
-    async def _fake_fetch(user, toolkit, cid, *, limit=100, since=None):
+    async def _fake_fetch(user, toolkit, cid, *, limit=100, since=None, pool=None):
         return [{"id": f"{toolkit}-1", "name": f"{toolkit} one", "ts": "2026-06-09T10:00:00Z"}]
 
     monkeypatch.setattr(connector_ingest.ingest_runner, "run_fetch", _fake_fetch)
@@ -435,7 +435,7 @@ async def test_run_sync_fanout_partial_failure(pool, user_ids, monkeypatch):
     recipes = _fanout_recipes()
     monkeypatch.setattr(connector_ingest.ingest_runner, "load_recipe", lambda tk: recipes.get(tk))
 
-    async def _fake_fetch(user, toolkit, cid, *, limit=100, since=None):
+    async def _fake_fetch(user, toolkit, cid, *, limit=100, since=None, pool=None):
         if toolkit == "beta":
             msg = "composio 500"
             raise RuntimeError(msg)
@@ -491,7 +491,7 @@ async def test_run_sync_fanout_missing_sub_cursor_fetches_latest_page(pool, user
 
     seen_since: dict[str, datetime | None] = {}
 
-    async def _fake_fetch(user, toolkit, cid, *, limit=100, since=None):
+    async def _fake_fetch(user, toolkit, cid, *, limit=100, since=None, pool=None):
         seen_since[toolkit] = since
         return [{"id": f"{toolkit}-3", "name": "fresh", "ts": "2026-06-09T13:00:00Z"}]
 
