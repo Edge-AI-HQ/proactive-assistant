@@ -1,0 +1,63 @@
+---
+title: "前端主线 — RN 迁移台账"
+description: "当前前端主线:把 proactive-ai-frontend(Capacitor)逐屏迁移到 apps/mobile(Expo RN),达 iOS 生产 parity 后删除 proactive-ai-frontend。本页是轻量入口 + 逐页进度台账,详细计划见两份 SSOT。任何新 worktree 从这里上手。"
+---
+
+# 前端主线 — RN 迁移台账
+
+> 这是一份**轻量入口 + 进度台账**,不是设计细节文档。细节在两份 SSOT 里(见下「详细计划」),本页只回答三个问题:**我们在做什么 / 做到哪了 / 下一步看哪。**
+
+## 使命(一句话)
+
+把 **`proactive-ai-frontend`(Capacitor,当前生产 iOS 前端)逐屏迁移到 `apps/mobile`(Expo React Native)**,做到 iOS 生产功能持平后,**删除 `proactive-ai-frontend`**。最终 iOS 产品由 RN 提供。
+
+- 节奏:**一屏一屏改**,每屏独立可验、单独 PR。
+- 路线:**「Share logic, not UI」** —— `@pin-ai/core`(逻辑)/ `@pin-ai/state`(状态)/ `@pin-ai/ui-kit`(组件契约)/ `@pin-ai/design`(token)跨端共享、**直接复用**;UI 在 RN 各写;原生能力(ambient/device)走 port + Expo native module。
+- 不动:`apps/web`(桌面端)、后端 `pinai-agents`、`ops/` / `loops/` / `internal-reward-dashboard/`。
+
+## 新 worktree 上手顺序
+
+1. 读本页(知道主线 + 进度)。
+2. 读详细计划 SSOT:
+   - 工程执行:[`docs/plans/2026-06-14-rn-mobile-rebuild.mdx`](../plans/2026-06-14-rn-mobile-rebuild.mdx) — 路线、现状缺口、4 批顺序、退场标准、谁来验。
+   - 逐页 UI 复刻:[`docs/plans/2026-06-12-rn-ui-parity.mdx`](../plans/2026-06-12-rn-ui-parity.mdx) — 七大页逐块拆解 + 对应 web 源文件 + 视觉介质映射表。
+3. 背景调研(可选):[`research/2026-06-10-frontend-layering.mdx`](../../research/2026-06-10-frontend-layering.mdx)、[`research/2026-06-12-web-to-rn-ui-parity.mdx`](../../research/2026-06-12-web-to-rn-ui-parity.mdx)。
+4. 挑下面台账里一行 `☐ 待办` 的屏开工。
+
+## 逐屏进度台账
+
+> 状态图例:`☐ 待办` / `🔨 进行中` / `✅ 对齐完成(真机验收过)`。
+> 改完一屏就把这一行状态更新掉,并在 PR 里带上本文件的改动。
+> 现状基线:RN 9 屏脚手架都已存在(早期实现),按计划**逐屏重写对齐**;视觉介质基建(aurora 背景 / glass / 球面 / 动效,rn-ui-parity 刀 0-12)已 merge 但真机有差距,重写时复用并校准。
+
+| 屏 | web 源(`proactive-ai-frontend/src/`) | RN 目标(`apps/mobile/src/`) | 状态 |
+|---|---|---|---|
+| NOW | `components/now/NowView.tsx` + `Sphere3DCards.tsx` | `screens/NowScreen.tsx` | ☐ 待办 |
+| AMBIENT | `components/ambient/AmbientView.tsx` | `screens/AmbientScreen.tsx` | ☐ 待办 |
+| TASKS | `components/tasks/CardTimeline.tsx` | `screens/TasksScreen.tsx` | 🔨 进行中（刀 1-5：分类图标/2行标题/needs_input 呼吸/来源标签/点卡分流到详情面板·confirm·snooze·dismiss/聊天 Done·Dismiss 真上报——落码 + type-check 过，待真机验收。待办：Comment 反馈栏、i18n、高级聊天控件） |
+| CONNECT | `components/connect/ControlPanel.tsx` | `screens/ConnectScreen.tsx` | ☐ 待办 |
+| PROFILE | `components/profile/MirrorMobile.tsx` | `screens/ProfileScreen.tsx` | ☐ 待办 |
+| SETTING | `components/account/AccountPanel.tsx` | `screens/SettingScreen.tsx` | ☐ 待办 |
+| CHAT | `components/chat/ChatDetailView.tsx` | `screens/ChatScreen.tsx` | ☐ 待办 |
+| CARD CHAT | card chat overlay(`AppLayout` 内) | `screens/CardChatScreen.tsx` | ☐ 待办 |
+| LOGIN / AUTH | `components/auth/*` | `screens/LoginScreen.tsx` | ☐ 待办 |
+| ONBOARDING | `components/onboarding/*` | (RN 端未建,按需新建) | ☐ 待办 |
+
+## 非屏类收尾(来自 rn-mobile-rebuild 缺口)
+
+不属于"某一屏"、但 sunset 前必须补齐的横切项(详见 SSOT 的 Batch 1/3):
+
+- `App.tsx` wire 4 个注册点:`registerSignOutCleanup` / `registerFeedbackOutbox` / `registerLocalThreadStore` / `registerExternalMicAcquirer`。
+- `apps/mobile/src/lib/devices.ts`:`ensureDevice` + expo-secure-store(DeviceCredentials)。
+- `ambient/ingest.ts`:内存 buffer → DatabasePort durable outbox。
+- ambient 原生 Swift 移植:`capacitor-plugins/ambient-ai`(Capacitor)→ `apps/mobile/modules/ambient-{audio,visit}/ios/`(Expo Module)。
+
+## 完成定义(可以删 proactive-ai-frontend 的前提)
+
+以 [`2026-06-14-rn-mobile-rebuild.mdx`](../plans/2026-06-14-rn-mobile-rebuild.mdx) 的 **Exit criteria** 为准(不在此重复)。一句话:**RN 不再缺 frontend 的功能 + ambient 真数据链路真机验过**,才删 `proactive-ai-frontend` 与 ui-web 的 RN 绑定。
+
+## 验证方式(每屏改完最少跑)
+
+- `cd apps/mobile && npm run type-check`(纯 TS 地基,必过)。
+- 动了 `packages/` 共享层:`npm run check:packages`。
+- 视觉 / 交互 / 传感器:**真机验收**(模拟器有禁令,见项目记忆);AI 只产代码 + type-check,真机由用户验。

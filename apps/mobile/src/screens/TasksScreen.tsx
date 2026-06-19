@@ -1,28 +1,47 @@
 /**
- * TASKS 页——web CardTimeline 的 RN 对应物（UI 刀 3）：日期分组
- * （Today/Yesterday/Mon d）+ 玻璃行（标题 + 状态环 + previewText +
- * 时间）。状态语义来自 core deriveCardUiStatus（服务端 runStatus 真相
- * 源；RN 无 web 的乐观 id 集，resolved 由 latestOutcome 派生——同一
- * 服务端语义）。
+ * TASKS 页——web CardTimeline 的 RN 对应物：日期分组（Today/Yesterday/Mon d）
+ * + 玻璃行（分类图标 + 标题 + 状态环 + previewText + 时间）。状态语义来自 core
+ * deriveCardUiStatus（服务端 runStatus 真相源；RN 无 web 的乐观 id 集，resolved
+ * 由 latestOutcome 派生——同一服务端语义）。
+ *
+ * 点行分流（对齐 web CardTimeline:166）：活跃卡（processing/needs_input/ready/
+ * failed）→ card chat；新卡（normal）→ 详情面板（confirm/steer/snooze/dismiss），
+ * 复用 NOW 同款 CardDetailSheet + useCardActions（动作两屏唯一真源）。
  */
-import { SectionList, Pressable, StyleSheet, Text, View, ActivityIndicator } from "react-native";
+import { useEffect, useState, type ReactNode } from "react";
+import { ActivityIndicator, Pressable, SectionList, StyleSheet, Text, View } from "react-native";
 import {
+  Bell,
   CheckCircle2,
   Circle,
   CircleAlert,
+  Plug,
   Sparkles,
   XCircle,
 } from "lucide-react-native";
+import Animated, {
+  Easing,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withTiming,
+} from "react-native-reanimated";
 import {
+  basketToLovableCategory,
+  connectorSlugFromIntentKey,
   deriveCardUiStatus,
   isReminderCard,
+  sourceAppMeta,
   type IntentCard,
   type VisibleCardEntry,
 } from "@pin-ai/core";
 import { useCardsQuery } from "@pin-ai/state";
 
 import PageHeader from "../components/app/PageHeader";
+import CardDetailSheet from "../components/now/CardDetailSheet";
+import { CATEGORIES } from "../components/now/SphereCards";
 import { GlassCard } from "../ui/GlassCard";
+import { useCardActions } from "../hooks/useCardActions";
 import type { HeaderProps } from "./AmbientScreen";
 
 function formatTime(iso: string): string {
@@ -43,7 +62,39 @@ function formatDate(iso: string): string {
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-function Row({ entry, onPress }: { entry: VisibleCardEntry; onPress: () => void }) {
+/** 行左侧分类图标（对齐 web CardTimeline:108-117 三选一）：连接器卡 → Plug；
+ *  提醒卡 → Bell；否则 basket 类目图标。复用 NOW 球面同款 CATEGORIES，保证
+ *  同一张卡两处图标一致。 */
+function categoryIcon(card: IntentCard) {
+  if (connectorSlugFromIntentKey(card.intentKey)) return Plug;
+  if (isReminderCard(card)) return Bell;
+  const cat = basketToLovableCategory(card.goalBasket);
+  return (CATEGORIES[cat] ?? CATEGORIES.life).icon;
+}
+
+/** needs_input 徽章呼吸闪烁（web animate-pulse 的 RN 对应物）。 */
+function Pulse({ children }: { children: ReactNode }) {
+  const o = useSharedValue(1);
+  useEffect(() => {
+    o.value = withRepeat(
+      withTiming(0.35, { duration: 700, easing: Easing.inOut(Easing.ease) }),
+      -1,
+      true,
+    );
+  }, [o]);
+  const style = useAnimatedStyle(() => ({ opacity: o.value }));
+  return <Animated.View style={style}>{children}</Animated.View>;
+}
+
+function Row({
+  entry,
+  onOpenChat,
+  onOpenDetail,
+}: {
+  entry: VisibleCardEntry;
+  onOpenChat: (card: IntentCard) => void;
+  onOpenDetail: (entry: VisibleCardEntry) => void;
+}) {
   const card = entry.card;
   const resolved =
     entry.latestOutcome === "dismiss"
@@ -59,6 +110,7 @@ function Row({ entry, onPress }: { entry: VisibleCardEntry; onPress: () => void 
       });
   const reminder = isReminderCard(card);
   const actionCount = card.secondaryActions?.length ?? 0;
+  const CatIcon = categoryIcon(card);
   const previewText =
     entry.latestOutcome === "complete"
       ? "Completed"
@@ -78,20 +130,21 @@ function Row({ entry, onPress }: { entry: VisibleCardEntry; onPress: () => void 
       ? card.summary
       : card.primaryAction
       ? `${actionCount + 1} operations · ${card.primaryAction.label}`
-      : card.sources.join(" · ");
+      : (card.sourceApps ?? []).map((s) => sourceAppMeta(s).label).join(" · ");
 
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={card.title}
-      onPress={onPress}
+      onPress={() => (runUi !== "normal" ? onOpenChat(card) : onOpenDetail(entry))}
     >
       <GlassCard className="mb-2 px-3.5 py-3.5">
         <View style={styles.rowTop}>
+          <CatIcon size={16} color="rgba(29,33,48,0.5)" strokeWidth={1.8} />
           <Text
             className={resolved ? "flex-1 text-[13px] text-foreground/35 line-through" : "flex-1 text-[13px] text-foreground"}
             style={{ fontFamily: "Inter_500Medium" }}
-            numberOfLines={1}
+            numberOfLines={2}
           >
             {card.title}
           </Text>
@@ -101,7 +154,9 @@ function Row({ entry, onPress }: { entry: VisibleCardEntry; onPress: () => void 
             ) : runUi === "processing" ? (
               <ActivityIndicator size="small" color="#f59e0b" />
             ) : runUi === "needs_input" ? (
-              <CircleAlert size={15} color="#f59e0b" />
+              <Pulse>
+                <CircleAlert size={15} color="#f59e0b" />
+              </Pulse>
             ) : runUi === "ready" ? (
               <CheckCircle2 size={15} color="#22c55e" />
             ) : runUi === "failed" ? (
@@ -126,12 +181,21 @@ function Row({ entry, onPress }: { entry: VisibleCardEntry; onPress: () => void 
 
 export default function TasksScreen({
   headerProps,
-  onOpenCard,
+  onOpenChat,
 }: {
   headerProps: HeaderProps;
-  onOpenCard: (card: IntentCard) => void;
+  onOpenChat: (card: IntentCard, bootstrap: string) => void;
 }) {
   const { cards, loading } = useCardsQuery();
+  const [detail, setDetail] = useState<VisibleCardEntry | null>(null);
+
+  // 历史列表是服务端真相视图：dismiss/snooze 不立即移除行，靠下次轮询把
+  // latestOutcome 翻成 resolved（strikethrough）。所以 onHide 传 noop。
+  const actions = useCardActions({
+    onOpenChat,
+    onHide: () => {},
+    onClose: () => setDetail(null),
+  });
 
   const groups = new Map<string, VisibleCardEntry[]>();
   for (const entry of cards) {
@@ -157,7 +221,13 @@ export default function TasksScreen({
             {section.title.toUpperCase()}
           </Text>
         )}
-        renderItem={({ item }) => <Row entry={item} onPress={() => onOpenCard(item.card)} />}
+        renderItem={({ item }) => (
+          <Row
+            entry={item}
+            onOpenChat={(card) => onOpenChat(card, "")}
+            onOpenDetail={setDetail}
+          />
+        )}
         contentContainerClassName="pb-10"
         ListEmptyComponent={
           loading ? (
@@ -175,12 +245,20 @@ export default function TasksScreen({
           )
         }
       />
+      <CardDetailSheet
+        entry={detail}
+        onClose={() => setDetail(null)}
+        onConfirm={actions.confirm}
+        onSteer={actions.steer}
+        onSnooze={actions.snooze}
+        onDismiss={actions.dismiss}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  rowTop: { flexDirection: "row", alignItems: "center", gap: 6 },
+  rowTop: { flexDirection: "row", alignItems: "center", gap: 8 },
   badge: { width: 18, height: 18, alignItems: "center", justifyContent: "center" },
   rowBottom: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 6 },
 });

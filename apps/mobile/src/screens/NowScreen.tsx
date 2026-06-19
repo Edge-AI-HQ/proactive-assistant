@@ -8,7 +8,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { Radio } from "lucide-react-native";
-import * as Haptics from "expo-haptics";
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -18,14 +17,8 @@ import Animated, {
 } from "react-native-reanimated";
 import {
   basketToLovableCategory,
-  cardActionFeedbackBody,
-  confirmBootstrap,
   deriveCardUiStatus,
-  dismissFeedbackBody,
   isHiddenCardOutcome,
-  proxyPost,
-  snoozeFeedbackBody,
-  steerBootstrap,
   type IntentCard,
   type VisibleCardEntry,
 } from "@pin-ai/core";
@@ -38,17 +31,9 @@ import CardDetailSheet from "../components/now/CardDetailSheet";
 import SphereCards, { type SphereItem } from "../components/now/SphereCards";
 import { GradientText } from "../ui/GradientText";
 import { EM_TIGHT, leading, tracking } from "../ui/typography";
-import { enqueueFeedback } from "../lib/sync/sync-bootstrap";
+import { useCardActions } from "../hooks/useCardActions";
 import { supabase } from "../lib/supabase";
 import type { HeaderProps } from "./AmbientScreen";
-
-async function postFeedback(body: Record<string, unknown>, dedupeKey?: string): Promise<void> {
-  try {
-    await proxyPost("/feedback", body);
-  } catch {
-    await enqueueFeedback(body, dedupeKey);
-  }
-}
 
 /** web ambient-{toggle,icon}-breathe 对应物：emerald 扩散波（boxShadow
  *  0→spread 扩散不可动画，用同形叠层 scale+fade 模拟）。 */
@@ -213,31 +198,12 @@ export default function NowScreen({
     setEngaged((prev) => new Set(prev).add(id));
   }, []);
 
-  const confirm = (e: VisibleCardEntry) => {
-    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    engage(e.card.id);
-    void postFeedback(cardActionFeedbackBody("confirm", e.card), `fb:confirm:${e.card.id}`);
-    setDetail(null);
-    onOpenChat(e.card, confirmBootstrap(e.card));
-  };
-  const steer = (e: VisibleCardEntry) => {
-    engage(e.card.id);
-    void postFeedback(cardActionFeedbackBody("modify", e.card), `fb:modify:${e.card.id}`);
-    setDetail(null);
-    onOpenChat(e.card, steerBootstrap(e.card));
-  };
-  const snooze = (e: VisibleCardEntry) => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    hide(e.card.id);
-    setDetail(null);
-    void postFeedback(snoozeFeedbackBody(e.card), `fb:snooze:${e.card.id}`);
-  };
-  const dismiss = (e: VisibleCardEntry) => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    hide(e.card.id);
-    setDetail(null);
-    void postFeedback(dismissFeedbackBody(e.card), `fb:dismiss:${e.card.id}`);
-  };
+  const { confirm, steer, snooze, dismiss } = useCardActions({
+    onOpenChat,
+    onHide: hide,
+    onEngage: engage,
+    onClose: () => setDetail(null),
+  });
 
   return (
     <View className="flex-1">

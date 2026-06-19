@@ -77,7 +77,10 @@ export default function AppShell({
       ) : null}
       {view === "tasks" ? (
         <PageFade>
-          <TasksScreen headerProps={headerProps} onOpenCard={(card) => setCardChat({ card, bootstrap: "" })} />
+          <TasksScreen
+            headerProps={headerProps}
+            onOpenChat={(card, bootstrap) => setCardChat({ card, bootstrap })}
+          />
         </PageFade>
       ) : null}
       {view === "connect" ? (

@@ -102,6 +102,9 @@ docs/*
 # Pattern library SSOT — seeded into pai_card_patterns by scripts/seed_patterns.py.
 !docs/data/
 !docs/data/**
+# RN 前端迁移台账（A-RN-frontend skill 的入口；逐屏进度 + SSOT plan 索引）
+!docs/frontend/
+!docs/frontend/**
 
 # Payment module specific
 apps/master-bot-api/.env
