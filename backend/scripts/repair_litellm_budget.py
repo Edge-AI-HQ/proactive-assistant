@@ -45,9 +45,9 @@ def _setup_path() -> None:
 
 _setup_path()
 
-from pinai_api.payment import checkout as checkout_flow  # noqa: E402
-from pinai_api.payment.stripe_client import requires_stripe  # noqa: E402
-from pinai_api.platform.db.pool import close_pool, open_pool  # noqa: E402
+from pinai_api.domains.billing.payments import checkout as checkout_flow  # noqa: E402
+from pinai_api.domains.billing.payments.stripe_client import requires_stripe  # noqa: E402
+from pinai_db.pool import close_pool, open_pool  # noqa: E402
 
 logger = logging.getLogger("repair_litellm_budget")
 

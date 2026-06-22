@@ -119,7 +119,7 @@ async def _sync_candidate(
         return result
 
     if recompute is None:
-        from pinai_api.payment import checkout as checkout_flow
+        from pinai_api.domains.billing.payments import checkout as checkout_flow
 
         recompute = checkout_flow.recompute_litellm_budget
 
@@ -130,8 +130,8 @@ async def _sync_candidate(
 
 
 async def _run(args: argparse.Namespace) -> int:
-    from pinai_api.platform.db.pool import close_pool, open_pool
-    from pinai_api.platform.db.rls import service_tx
+    from pinai_db.pool import close_pool, open_pool
+    from pinai_db.rls import service_tx
 
     pool = await open_pool()
     try:

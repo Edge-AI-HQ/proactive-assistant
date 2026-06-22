@@ -18,8 +18,8 @@ import logging
 import sys
 
 from pinai_api.domains.generation.card_fanout import dispatch_card_bootstrap
-from pinai_api.platform.db.pool import close_pool, open_pool
-from pinai_api.platform.db.rls import service_tx
+from pinai_db.pool import close_pool, open_pool
+from pinai_db.rls import service_tx
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 

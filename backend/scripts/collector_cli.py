@@ -40,8 +40,8 @@ from pinai_api.platform.db.repositories.scheduled_tasks import (
     ScheduledTaskRow,
     requeue_once,
 )
-from pinai_api.platform.db.rls import user_scoped_tx
 from pinai_api.routes.agent.raw import _RAW_TABLES
+from pinai_db.rls import user_scoped_tx
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 

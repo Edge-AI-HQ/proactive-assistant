@@ -22,8 +22,8 @@ import sys
 from datetime import UTC, datetime
 from typing import cast
 
-from pinai_api.platform.db.pool import close_pool, open_pool
-from pinai_api.platform.db.rls import user_scoped_tx
+from pinai_db.pool import close_pool, open_pool
+from pinai_db.rls import user_scoped_tx
 from psycopg import AsyncConnection
 from psycopg.rows import DictRow
 from psycopg_pool import AsyncConnectionPool
