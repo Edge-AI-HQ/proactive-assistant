@@ -74,6 +74,17 @@ _FORBIDDEN_ENVS: tuple[str, ...] = (
     "APNS_AUTH_KEY",
 )
 
+# Scoped-role DSN aliases. Each carries one non-superuser role's connection
+# string; --database-url-from swaps the named one into DATABASE_URL. They are
+# dropped from EVERY app so no app ever holds another app's scoped DSN (the
+# engine must not see REWARD_DATABASE_URL, etc). Not master credentials, but
+# least-privilege hygiene — keep in sync with the env files' DSN aliases.
+_SCOPED_DSN_ALIASES: tuple[str, ...] = (
+    "ENGINE_DATABASE_URL",
+    "REWARD_DATABASE_URL",
+    "APP_DATABASE_URL",
+)
+
 
 def _filter_for_app(
     kvs: dict[str, str],
@@ -99,7 +110,11 @@ def _filter_for_app(
                 f"(add the scoped-role DSN there before scoping this app)"
             )
         out["DATABASE_URL"] = scoped
-        out.pop(database_url_from, None)
+    # Drop every scoped-role DSN alias from every app — the one named by
+    # --database-url-from was swapped into DATABASE_URL above; the rest are
+    # simply not this app's and must not cross the trust boundary.
+    for alias in _SCOPED_DSN_ALIASES:
+        out.pop(alias, None)
     return out
 
 

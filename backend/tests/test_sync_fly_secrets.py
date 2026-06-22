@@ -77,3 +77,33 @@ def test_engine_scoping_combo_drops_master_and_scopes_dsn():
         "LITELLM_VIRTUAL_KEY": "sk-virtual",
         "DAYTONA_API_KEY": "dt",
     }
+
+
+def test_scoping_drops_other_apps_scoped_dsn():
+    # Over-sharing guard: an app must not hold ANOTHER app's scoped DSN. The
+    # engine scopes to ENGINE_DATABASE_URL, but the env file also carries
+    # REWARD_DATABASE_URL / APP_DATABASE_URL — those must NOT reach engine.
+    kvs = {
+        "DATABASE_URL": "super",
+        "ENGINE_DATABASE_URL": "pai_chat_dsn",
+        "REWARD_DATABASE_URL": "pai_reward_dsn",
+        "APP_DATABASE_URL": "pai_app_dsn",
+        "A": "1",
+    }
+    out = sync_fly_secrets._filter_for_app(
+        kvs, exclude_master=True, database_url_from="ENGINE_DATABASE_URL"
+    )
+    assert out == {"DATABASE_URL": "pai_chat_dsn", "A": "1"}
+
+
+def test_api_full_set_still_drops_scoped_aliases():
+    # Even the trusted api app (no flags) shouldn't carry the engine/reward
+    # scoped DSNs — it connects with the superuser DATABASE_URL.
+    kvs = {
+        "DATABASE_URL": "super",
+        "ENGINE_DATABASE_URL": "e",
+        "REWARD_DATABASE_URL": "r",
+        "X": "1",
+    }
+    out = sync_fly_secrets._filter_for_app(kvs, exclude_master=False, database_url_from=None)
+    assert out == {"DATABASE_URL": "super", "X": "1"}
