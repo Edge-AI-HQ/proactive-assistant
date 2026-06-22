@@ -69,8 +69,8 @@ Local 模式固定使用：
 | 服务 | 地址 |
 |---|---|
 | Frontend | `http://localhost:3000` |
-| pinai-web | `http://localhost:8000` |
-| pinai-chat | `http://localhost:8001` |
+| api | `http://localhost:8000` |
+| agent-engine | `http://localhost:8001` |
 | Postgres | 固定本地 dev DB 地址 |
 | LiteLLM | 固定本地 LiteLLM 地址 |
 
@@ -123,7 +123,7 @@ Local 模式的所有入口共用同一份 dev DB：
 |---|---|
 | `make up` | Docker isolated 全栈启动，随机端口，按 worktree 隔离。 |
 | `make urls` | 打印当前 Docker group 的随机端口。 |
-| `make restart` | 重建并重启 Docker pinai-web / pinai-chat。 |
+| `make restart` | 重建并重启 Docker api / agent-engine。 |
 | `make restart-frontend` | 重建并重启 Docker frontend。 |
 | `make ios` / `make android` | 仍保留当前 Docker/ngrok 驱动流程，后续可新增 local 变体。 |
 
@@ -154,9 +154,9 @@ flowchart LR
   WebView["WebView"] --> Vite
   IPhone["iPhone local build"] --> Public["ngrok / LAN URL"]
 
-  Vite -->|/api proxy| Web["pinai-web localhost:8000"]
+  Vite -->|/api proxy| Web["api localhost:8000"]
   Public --> Web
-  Web --> Chat["pinai-chat localhost:8001"]
+  Web --> Chat["agent-engine localhost:8001"]
   Web --> DB[("fixed local dev DB")]
   Chat --> DB
   Web --> LLM["fixed local LiteLLM"]
@@ -172,7 +172,7 @@ flowchart LR
 
 后端当前已有 dashboard 专用 dev bypass：
 
-- `pinai-agents/src/pinai_agents/web/auth/deps.py`
+- `backend/src/pinai_agents/web/auth/deps.py`
 - header：`X-Dev-Auth: pinai-dev-reviewer`
 - user：`dev-reviewer@local.invalid`
 
@@ -195,9 +195,9 @@ _DEV_AUTH_LOCAL_USER_SUB = "00000000-0000-0000-0000-00000000d0d0"
 验证：
 
 ```bash
-cd pinai-agents && uv run pytest tests/web/auth
-cd pinai-agents && uv run pytest tests/web/routes
-cd pinai-agents && uv run ruff check src/pinai_agents/web/auth
+cd backend && uv run pytest tests/web/auth
+cd backend && uv run pytest tests/web/routes
+cd backend && uv run ruff check src/pinai_agents/web/auth
 ```
 
 ### Phase 2：前端 local dev 自动身份
@@ -248,8 +248,8 @@ cd proactive-ai-frontend && npm test -- src/hooks/useAuth.test.ts src/lib/api.te
 
 1. 确保 env 已解密。
 2. 确保固定 local DB / LiteLLM 可用。
-3. 启动 pinai-web reload。
-4. 启动 pinai-chat reload。
+3. 启动 api reload。
+4. 启动 agent-engine reload。
 5. 启动 Vite dev server。
 6. 打印固定地址。
 
@@ -369,7 +369,7 @@ Dev auth bypass 必须满足：
 
 - `make local` 后，浏览器长期使用 `http://localhost:3000`。
 - 改 `proactive-ai-frontend/src/**` 后页面热更新，不需要 `make restart-frontend`。
-- 改 `pinai-agents/src/**` 后后端 reload，不需要 `make restart`。
+- 改 `backend/src/**` 后后端 reload，不需要 `make restart`。
 - 刷新页面后仍是固定 dev user，不出现 OAuth 登录页。
 - 浏览器和真机写入同一份 local dev DB。
 - 现有 `make up && make urls` 仍能按 worktree 隔离启动。
@@ -396,9 +396,9 @@ cd proactive-ai-frontend && npm test
 后端：
 
 ```bash
-cd pinai-agents && uv run ruff check
-cd pinai-agents && uv run mypy src
-cd pinai-agents && uv run pytest tests/web/auth tests/web/routes
+cd backend && uv run ruff check
+cd backend && uv run mypy src
+cd backend && uv run pytest tests/web/auth tests/web/routes
 ```
 
 Docker isolated 回归：

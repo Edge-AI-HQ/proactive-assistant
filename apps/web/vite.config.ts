@@ -5,10 +5,10 @@ import path from "node:path";
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   // Supabase VITE_* fallback：与 proactive-ai-frontend 同一套路——本地
-  // worktree 没有 .env.local 时，从 pinai-agents/.env（make ensure-env 解密
+  // worktree 没有 .env.local 时，从 backend/.env（make ensure-env 解密
   // 产物）回填两把公开 key。显式 process env / .env.local 优先；只有 VITE_
   // 前缀会进 client bundle，master secrets 不会泄漏。
-  const agentsEnv = loadEnv(mode, path.resolve(__dirname, "../../pinai-agents"), "");
+  const agentsEnv = loadEnv(mode, path.resolve(__dirname, "../../backend"), "");
   for (const key of ["VITE_SUPABASE_URL", "VITE_SUPABASE_PUBLISHABLE_KEY"]) {
     if (!String(env[key] ?? "").trim() && String(agentsEnv[key] ?? "").trim()) {
       process.env[key] = agentsEnv[key];
@@ -17,10 +17,10 @@ export default defineConfig(({ mode }) => {
   }
   if (mode === "development" && !String(env.VITE_SUPABASE_URL ?? "").trim()) {
     console.warn(
-      "[vite] VITE_SUPABASE_URL 仍缺失(pinai-agents/.env 也没有)——先跑 `make ensure-env`,否则页面会白屏。",
+      "[vite] VITE_SUPABASE_URL 仍缺失(backend/.env 也没有)——先跑 `make ensure-env`,否则页面会白屏。",
     );
   }
-  // 本地 dev：/api 直打本 worktree 的 pinai-web（host 端口随机，`make urls`
+  // 本地 dev：/api 直打本 worktree 的 api（host 端口随机，`make urls`
   // 查后通过 VITE_PIN_API_PROXY_TARGET 覆盖）。
   const pinApiTarget = env.VITE_PIN_API_PROXY_TARGET || "http://127.0.0.1:8000";
 

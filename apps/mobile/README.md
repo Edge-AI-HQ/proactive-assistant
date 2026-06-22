@@ -19,7 +19,7 @@ make rn PROD=1   # 连 fly prod（连 Supabase 一起切）
 LAN IP（手机需与 Mac 同 WiFi）。
 
 首次会 `expo prebuild`（CNG：`ios/` 是生成产物，gitignore）+ pod install +
-xcodebuild，之后增量秒级。裸启动：source `pinai-agents/.env` 后把 `VITE_*`
+xcodebuild，之后增量秒级。裸启动：source `backend/.env` 后把 `VITE_*`
 映射到 `EXPO_PUBLIC_*` 再 `npm run ios --workspace=@pin-ai/mobile`。
 
 ## 复用结构（「新端只写壳」的 RN 实证）

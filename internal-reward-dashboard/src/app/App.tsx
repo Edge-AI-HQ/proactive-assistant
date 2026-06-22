@@ -153,7 +153,7 @@ export default function App() {
     return (
       <StateBlock
         title="缺少 Supabase 环境变量"
-        detail="需要设置 VITE_SUPABASE_URL 和 VITE_SUPABASE_PUBLISHABLE_KEY。Vite 配置会从 pinai-agents/.env 读取。"
+        detail="需要设置 VITE_SUPABASE_URL 和 VITE_SUPABASE_PUBLISHABLE_KEY。Vite 配置会从 backend/.env 读取。"
       />
     );
   }

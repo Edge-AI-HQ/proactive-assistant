@@ -331,7 +331,7 @@ migration forward-only(021/069 不改,加新表 + 切换后另起 migration 删�
 - **CORE-3 ✅** `post → worker drain → ChatRunClient → chat → 真跑 Anthropic → FrameBus 收帧 → run succeeded`,DB 终态(run / message consumed / lease 释放 / chat_messages)全对。chat `/agent/chat` 扩展 `messages` 字段收多条 → fan 成多个 `role=user`(**不拼接**,符合 §四.3 原设计);单条 `message` 路径保留给前端。
 - **CORE-4** merge ✅(2 条 message → 1 run,2 条**独立** user turn,无 notify 时 interval 轮询兜底)· cancel ✅(run→cancelled + lease 释放;reason 权威在 `service.cancel`;shutdown 留 message replay)· **HITL ✅**(实测**推翻 06-01「SSE 与 interrupt 不兼容」**:`interrupt_on` → langgraph `interrupt()` 捕获于 `astream_events` 的 `on_chain_stream` chunk `__interrupt__` → `requires_action` 帧 → worker `awaiting_input` + 暂停即记 user turn → decision message → `Command(resume={"decisions":[…]})` 同 thread 续 → **approve 工具真执行 / reject 跳过**,resume 记 assistant turn,run succeeded;用真副作用工具 `preference_add` 端到端验证)· 心跳完整(timeline 窗口 + silent 记账)属 RC-1。
 
-每步:`env -u ANTHROPIC_API_KEY` 跑 make(防注入空 key 污染);`make logs-pinai-web`/`pinai-chat` 看起得来;改 Python 后 `ruff check && ruff format && mypy src`。**docker healthy ≠ 功能对**:依赖真实数据的链路如实声明只验了启动+表+repo。
+每步:`env -u ANTHROPIC_API_KEY` 跑 make(防注入空 key 污染);`make logs-api`/`agent-engine` 看起得来;改 Python 后 `ruff check && ruff format && mypy src`。**docker healthy ≠ 功能对**:依赖真实数据的链路如实声明只验了启动+表+repo。
 
 **RC 阶段:逐个切(每个 agent 一个 PR,可灰度回滚,每步本地端到端验证)**
 RC-1 proactive → RC-2 main_chat+card(fanout 去 drain-and-discard)→ RC-3 batch(scheduler→start_run)→ RC-4 chat 5 endpoint→1 → RC-5 前端统一 `useAgentRun`(waiting 模式)+ 删 3 套 runtime。

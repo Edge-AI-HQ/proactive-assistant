@@ -1,0 +1,73 @@
+app = 'proactive-ai-agents-prod'
+primary_region = 'iad'
+
+# Mirrors fly.dev.toml. Differences: app name + DEPLOY_ENV = 'production'
+# and larger VM sizes (see [[vm]] below).
+#
+# See docs/plans/2026-05-04-pinai-agents-backend-consolidation.mdx § 部署形态.
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[env]
+  DEPLOY_ENV = 'production'
+  # Inter-process URLs — see fly.dev.toml comment block for the full
+  # rationale (asymmetric web/chat exposure: chat→web via public anycast,
+  # web→chat via 6PN IPv6 service-discovery).
+  WEB_INTERNAL_URL = "https://proactive-ai-agents-prod.fly.dev"
+  CHAT_INTERNAL_URL = "http://chat.process.proactive-ai-agents-prod.internal:8001"
+  # Daytona sandboxes run OUTSIDE fly's 6PN — PAI_API_URL is the public
+  # callback URL pinai_sdk uses from inside the sandbox to reach web.
+  PAI_API_URL = "https://proactive-ai-agents-prod.fly.dev"
+  LITELLM_BASE_URL = "https://proactive-ai-litellm-prod.fly.dev/v1"
+  # Daytona snapshot — pre-baked image (see infra/daytona/Dockerfile)
+  # rebuilt by Deploy Prod on every dispatch. Without this set,
+  # sandbox.py falls back to declarative build (~30-50s first-message
+  # cold start). See .github/workflows/deploy-prod.yml.
+  PINAI_DAYTONA_SNAPSHOT = "pinai-sandbox:production"
+
+[processes]
+  # Secrets come from `flyctl secrets set --process-group=<web|chat> ...` —
+  # chat MUST NOT receive master credentials. See fly.dev.toml comment
+  # block for the full trust-boundary rationale.
+  #
+  # chat binds `::` (IPv6) so it is only reachable via Fly's IPv6-only
+  # 6PN service-discovery DNS; no fly-proxy listener exists for chat,
+  # so the public internet has no path in.
+  web  = "uvicorn pinai_api.asgi:app --host 0.0.0.0 --port 8000"
+  chat = "uvicorn agent_engine.asgi:app --host :: --port 8001"
+
+# Public HTTPS edge → web only.
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = 'suspend'
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['web']
+
+  [http_service.concurrency]
+    type = 'connections'
+    hard_limit = 80
+    soft_limit = 50
+
+# chat has NO fly-proxy services entry on purpose. Reachable only via
+# Fly's 6PN service-discovery DNS (chat.process.<app>.internal:8001).
+# Adding [[services.ports]] would expose chat on both flycast AND
+# public anycast, leaking the LLM loop + its credentials.
+
+[deploy]
+  release_command = "sh -c 'exec yoyo apply --batch -d \"postgresql+psycopg://${DATABASE_URL#*://}\"'"
+  strategy = 'rolling'
+
+[[vm]]
+  processes = ['web']
+  memory = '4gb'
+  cpu_kind = 'shared'
+  cpus = 2
+
+[[vm]]
+  processes = ['chat']
+  memory = '2gb'
+  cpu_kind = 'shared'
+  cpus = 2

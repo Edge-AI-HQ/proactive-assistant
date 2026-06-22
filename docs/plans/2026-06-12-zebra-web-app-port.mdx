@@ -136,7 +136,7 @@ apps/web 路由用干净路径（`/now`、`/tasks`…），不带 `zebra-` 前�
 - ZebraShell / ZebraBackdrop / ZebraLogin / ZebraCommandPalette 搬入 apps/web（React 18→19 适配，依赖版本全部对齐 workspace；mock 计时器删除，球面先空数据）。
 - 背景视频从 Lovable CDN 下载打包（保留 videoReady fade-in + aurora 兜底）。
 - 下沉 `useAuth`；ZebraLogin 接真实 Google OAuth（web redirect 分支），auth guard + 登录态进壳。
-- 部署：fly app `proactive-ai-web-dev`（nginx same-origin `/api` 反代 pinai-agents，照抄 frontend 模式）+ 独立 CI workflow（PR：type-check/test/build；main push 且 `apps/web/**` / `packages/ui-web/**` 变化才 deploy，仿 `internal-reward-dashboard-dev.yml`）。
+- 部署：fly app `proactive-ai-web-dev`（nginx same-origin `/api` 反代 backend，照抄 frontend 模式）+ 独立 CI workflow（PR：type-check/test/build；main push 且 `apps/web/**` / `packages/ui-web/**` 变化才 deploy，仿 `internal-reward-dashboard-dev.yml`）。
 - 验收：dev 域名打开 → Google 登录 → 进壳，六项导航切换、⌘K/⌘B/Esc 可用，背景视频播放。
 
 ### M1 — NOW + card detail（最薄真实链路）
@@ -185,5 +185,5 @@ apps/web 路由用干净路径（`/now`、`/tasks`…），不带 `zebra-` 前�
 ## 验证方式
 
 - 每个 PR：`cd apps/web && npm run type-check && npm test`；动了 ui-web/frontend 时加 `cd proactive-ai-frontend && npm run type-check && npm test`。
-- 本地联调：`make up` 起后端，apps/web `npm run dev`（vite proxy `/api` 到本 worktree 的 pinai-web 随机端口，`make urls` 查）。
+- 本地联调：`make up` 起后端，apps/web `npm run dev`（vite proxy `/api` 到本 worktree 的 api 随机端口，`make urls` 查）。
 - 每个 milestone 在 `proactive-ai-web-dev` 上用真实 dev 账号过一遍该页验收清单。

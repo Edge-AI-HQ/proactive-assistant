@@ -1,6 +1,6 @@
 ---
 title: "V2 → V3 功能迁移计划"
-description: "把 proactive-ai-v2 在分叉点 c63f56f7 之后开发的功能挑选性地迁移到 proactive-ai-v3(pinai-agents 单仓 + Python 后端)。"
+description: "把 proactive-ai-v2 在分叉点 c63f56f7 之后开发的功能挑选性地迁移到 proactive-ai-v3(backend 单仓 + Python 后端)。"
 ---
 
 # V2 → V3 功能迁移计划
@@ -8,7 +8,7 @@ description: "把 proactive-ai-v2 在分叉点 c63f56f7 之后开发的功能挑
 ## 结论
 
 - 分叉点:`c63f56f7`(2026-05-04 18:25 UTC,`chore: update OPENCLAW_IMAGE digest`)。
-- V2 在分叉点之后 **63 commits**,V3 在分叉点之后 **46 commits**。V3 的 46 commits 是后端大重构(`apis/` + `pinai-openclaw/` + `miniapp/` 三个老仓搬进 `pinai-agents/`,Python / FastAPI / LangChain + DeepAgents,web/chat 双进程 + 强 trust boundary)。
+- V2 在分叉点之后 **63 commits**,V3 在分叉点之后 **46 commits**。V3 的 46 commits 是后端大重构(`apis/` + `pinai-openclaw/` + `miniapp/` 三个老仓搬进 `backend/`,Python / FastAPI / LangChain + DeepAgents,web/chat 双进程 + 强 trust boundary)。
 - V2 的 63 commits 集中在 **两块**(原以为三块,proactive-engine 那块需要剔除):
   1. Capacitor 插件统一为 `@pin/capacitor-ambient-ai` + 补 iOS native;
   2. 前端 ambient ingest 链路 + 调试面板 + 健康观测 metric-scoped replace。
@@ -24,8 +24,8 @@ description: "把 proactive-ai-v2 在分叉点 c63f56f7 之后开发的功能挑
 
 | 维度 | V2 | V3 |
 |---|---|---|
-| 后端 | `apis/`(TS / Express) + `pinai-openclaw/plugins/proactive-ai/`(TS / Per-user 容器) + `miniapp/` | `pinai-agents/`(Python / FastAPI / LangChain + DeepAgents,web + chat 双进程,Daytona sandbox) |
-| 容器编排 | `apis/src/domain/container/`(Docker + Fly 双 provider)+ OpenClaw 用户机器 | 退役。前端直接打 `pinai-agents` HTTP/SSE,LLM 工具跑在 Daytona |
+| 后端 | `apis/`(TS / Express) + `pinai-openclaw/plugins/proactive-ai/`(TS / Per-user 容器) + `miniapp/` | `backend/`(Python / FastAPI / LangChain + DeepAgents,web + chat 双进程,Daytona sandbox) |
+| 容器编排 | `apis/src/domain/container/`(Docker + Fly 双 provider)+ OpenClaw 用户机器 | 退役。前端直接打 `backend` HTTP/SSE,LLM 工具跑在 Daytona |
 | Capacitor 插件 | `capacitor-plugins/ambient-ai/` + `capacitor-plugins/proactive-engine/` + `capacitor-plugins/demo/` | **不存在**。V3 frontend 只依赖 stock `@capacitor/*` + `@aparajita/capacitor-secure-storage`,没有自研插件 |
 | 前端 ambient 链路 | `proactive-ai-frontend/src/services/ambient/`(outbox / buffer / sync-scheduler / ingest-bridge / sound-classifier 等) | **不存在**。V3 frontend 没有 `services/` 目录 |
 | 前端 Data Studio | `proactive-ai-frontend/src/features/data-studio/` | **不存在**(用户拍板砍掉) |
@@ -222,7 +222,7 @@ outbox 无法区分这三种 → 没法决定 retry 还是 abandon。
 
 ## V3 device ingest 契约(step 3 启动前必须先验证完成)
 
-来源:`pinai-agents/src/pinai_agents/web/routes/ui/devices.py`(2026-05-12 实测)。下表是前端 `services/ambient/sync-scheduler.ts` cp 之前的硬契约,不要靠"先 copy + 跑起来对一对"。
+来源:`backend/src/pinai_agents/web/routes/ui/devices.py`(2026-05-12 实测)。下表是前端 `services/ambient/sync-scheduler.ts` cp 之前的硬契约,不要靠"先 copy + 跑起来对一对"。
 
 ### Routes(prefix `/api/devices`)
 
@@ -311,16 +311,16 @@ outbox 无法区分这三种 → 没法决定 retry 还是 abandon。
 
 ### 已有测试覆盖 + 缺口
 
-V3 现有测试(在 `pinai-agents/tests/web/devices/`):
+V3 现有测试(在 `backend/tests/web/devices/`):
 - `test_policies.py`:**单元测试** policy 解析、kind 路由、`normalize_sync_mode`、parse_apps / parse_contacts / parse_health 的字段提取、unknown kind fallback。
 - `test_token.py`:device token 生成 + 校验。
 
 **契约缺口**(step 3 之前必须补):
-- **没有 HTTP-level 端到端测试**触发 `/api/devices/ingest`,所以 response shape / 错误码 / multi-item part-success 行为目前只靠代码读出来。grep `client.post.*devices.*ingest` 在整个 `pinai-agents/tests/` 是空。
+- **没有 HTTP-level 端到端测试**触发 `/api/devices/ingest`,所以 response shape / 错误码 / multi-item part-success 行为目前只靠代码读出来。grep `client.post.*devices.*ingest` 在整个 `backend/tests/` 是空。
 - **任务 D 的 5 个 V2 contract test**(metric-scoped replace、v1 envelope、legacy iOS flat payload、sensor-fallback metadata、metric-scoped preserve siblings)在 V3 仍未移植,要先补。
 
 **建议**:step 3 之前补两类测试:
-1. 一组 `pinai-agents/tests/web/devices/test_ingest_http.py` 端到端,覆盖:200 + accepted/inserted/ignored 计数、part-success(单 item bad)、401 缺 token、400 缺 deviceId、wrapper + array 两种 body shape、`source: device:<id>` 路由、跨 device 静默丢弃。
+1. 一组 `backend/tests/web/devices/test_ingest_http.py` 端到端,覆盖:200 + accepted/inserted/ignored 计数、part-success(单 item bad)、401 缺 token、400 缺 deviceId、wrapper + array 两种 body shape、`source: device:<id>` 路由、跨 device 静默丢弃。
 2. 任务 D 的 5 个 health metric-scoped contract test 平移。
 
 ## 推荐执行顺序
@@ -334,7 +334,7 @@ V3 现有测试(在 `pinai-agents/tests/web/devices/`):
    - **D-4**:**不改后端 policy**。`_HEALTH_POLICY` 留 `raw_only`。**新增 `GET /api/devices/{deviceId}/timeline`**——server 端 UNION signals + raw health 按 `occurred_at DESC` 排序 + keyset cursor,统一 envelope `{ items: [{ type: "signal" | "health", row }], next_cursor, has_more }`(详见 D-4 section)。前端在 step 3 把 `DeviceTimeline` 从 `fetchSignals` 切到 `fetchDeviceTimeline`,加 `HealthObservationCard` 渲染。
    - **D-5(新增)**:user settings schema 加 `ambient_sources` 字段。`pai_user_settings`(verify 是否存在,如果没,加 migration)新增 JSON 列或新表 `pai_ambient_source_consents(user_id, source_key, enabled, created_at, updated_at)`。`GET / PUT /api/user/settings` 增加 `ambientSources: { [key]: { enabled: boolean } }`。
    - **测试**:平移 V2 `089e1f94` 的 5 个 health 契约测试 + 新增 `tests/web/devices/test_ingest_http.py` 端到端覆盖 wrapper/array、5 态 status(尤其 `retryable_failed` 的 fault-injection 用例)、reference_count 保护、缺/错 header、跨 device rejected。新增 `test_timeline.py` 覆盖 D-4 的 `/api/devices/{deviceId}/timeline`(只 signal / 只 health / 两个交错 / cursor 边界 / empty)。**不**测 health signal 写入(D-4 决定不走 dual)。
-   - **完成标志**:`uv run pytest pinai-agents/tests/web/devices/` 全绿 + D-4 timeline endpoint + D-5 settings schema 上线。step 3 在这之前不开始。
+   - **完成标志**:`uv run pytest backend/tests/web/devices/` 全绿 + D-4 timeline endpoint + D-5 settings schema 上线。step 3 在这之前不开始。
 2. **Capacitor 插件平移 + web/iOS 双 build 验证**(原 A)——和 step 1 平行。
    - 根目录 `package.json` workspaces 加 `"capacitor-plugins/*"` + `postinstall: patch-package`。
    - `cp -r capacitor-plugins/ambient-ai/` + `cp -r capacitor-plugins/demo/` 从 V2 worktree 到 V3(proactive-engine 不要,V2 自己已删)。Demo 顺带,workspaces glob `capacitor-plugins/*` 一并收。

@@ -1,6 +1,6 @@
 /**
  * Device ambient signal wire protocol — the single front-end mirror of the
- * PersonalSignal envelope that pinai-agents `/api/devices/ingest` accepts.
+ * PersonalSignal envelope that backend `/api/devices/ingest` accepts.
  *
  * SSOT for web (proactive-ai-frontend) and RN (apps/mobile). Both ends used
  * to hand-copy these shapes (web `lib/devices.ts`, RN `src/ambient/types.ts`)
@@ -37,7 +37,7 @@ export interface PersonalSignalInput {
  *                              (deferred-sink kind) → drop, don't retry
  *   rejected | parse_failed  → permanent failure, drop + log
  *   retryable_failed         → transient server-side failure, keep + retry
- * Contract owner: pinai-agents `/api/devices/ingest`.
+ * Contract owner: backend `/api/devices/ingest`.
  */
 export type IngestItemStatus =
   | "inserted"

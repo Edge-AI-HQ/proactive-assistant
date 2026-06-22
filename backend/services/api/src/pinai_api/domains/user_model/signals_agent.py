@@ -1,0 +1,248 @@
+"""/api/agent/signals/* — agent personal signal queries."""
+
+from __future__ import annotations
+
+import json
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pinai_db.rls import user_scoped_tx
+
+from ...platform.auth.deps import AgentRun, current_agent_run, get_pool
+from .personal_signals import (
+    IngestSignalInput,
+    PersonalSignalsRepository,
+)
+
+router = APIRouter(prefix="/api/agent/signals", tags=["agent-signals"])
+
+
+@router.get("/recent")
+async def list_signals(
+    run: AgentRun = Depends(current_agent_run),
+    pool=Depends(get_pool),
+    status_filter: str = Query("open", alias="status", pattern="^(open|consumed|archived|all)$"),
+    kind: str | None = Query(None),
+    hours: int | None = Query(None, ge=1, le=24 * 14),
+    since: datetime | None = Query(None),
+    until: datetime | None = Query(None),
+    min_salience: float | None = Query(None, ge=0, le=1, alias="minSalience"),
+    limit: int = Query(30, ge=1, le=10_000),
+    offset: int = Query(0, ge=0),
+    include_payload: bool = Query(False, alias="includePayload"),
+):
+    actual_status = None if status_filter == "all" else status_filter
+    lower_bound = since
+    before = until
+    if hours is not None:
+        from datetime import UTC, timedelta
+
+        now = datetime.now(UTC)
+        lower_bound = now - timedelta(hours=hours)
+        # `hours` means "past N hours"; without an upper bound, future
+        # calendar-derived signals can crowd out genuinely recent device
+        # signals in the DESC/LIMIT page that generator consumes.
+        before = now
+    async with user_scoped_tx(pool, run.user_id) as conn:
+        repo = PersonalSignalsRepository(run.user_id, conn)
+        rows, _total = await repo.list_recent(
+            status=actual_status,
+            kind=kind,
+            min_salience=min_salience,
+            since=lower_bound,
+            before=before,
+            limit=limit,
+            offset=offset,
+        )
+    items = []
+    for r in rows:
+        item = {
+            "id": r.id,
+            "kind": r.kind,
+            "title": r.title,
+            "summary": r.summary,
+            "salience": r.salience,
+            "occurredAt": r.occurred_at.isoformat(),
+            "status": r.status,
+            "subject": r.subject,
+        }
+        if r.kind == "ambient.candidate_window":
+            item.update(_ambient_speaker_preview(r.payload))
+        if include_payload:
+            item.update(
+                {
+                    "payload": r.payload,
+                    "confidence": r.confidence,
+                    "source": r.source,
+                    "deviceId": r.device_id,
+                }
+            )
+        items.append(item)
+    return {"items": items, "total": _total, "limit": limit, "offset": offset}
+
+
+def _ambient_speaker_preview(payload: dict[str, Any]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    self_text = _clean_text(payload.get("self_text"))
+    if self_text:
+        out["selfText"] = self_text
+    speaker_text = _clean_text(
+        payload.get("speaker_text"), preserve_lines=True
+    ) or _speaker_text_from_segments(
+        payload.get("speaker_segments"),
+    )
+    if speaker_text:
+        out["speakerText"] = speaker_text
+    return out
+
+
+def _speaker_text_from_segments(value: Any) -> str | None:
+    if not isinstance(value, list):
+        return None
+    lines: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        speaker = _clean_text(item.get("speaker"))
+        text = _clean_text(item.get("text"))
+        if speaker and text:
+            lines.append(f"{speaker}: {json.dumps(text, ensure_ascii=False)}")
+    return "\n".join(lines) if lines else None
+
+
+def _clean_text(value: Any, *, preserve_lines: bool = False) -> str | None:
+    if not isinstance(value, str):
+        return None
+    if preserve_lines:
+        lines = [" ".join(line.split()) for line in value.splitlines()]
+        text = "\n".join(line for line in lines if line)
+    else:
+        text = " ".join(value.split())
+    return text or None
+
+
+@router.get("/kinds")
+async def list_kinds(
+    run: AgentRun = Depends(current_agent_run),
+    pool=Depends(get_pool),
+    status_filter: str = Query(
+        "all",
+        alias="status",
+        pattern="^(open|consumed|archived|all)$",
+    ),
+    hours: int | None = Query(None, ge=1, le=24 * 14),
+):
+    """Discover what `kind`s of personal signals exist for this user, with
+    count + a short preview of the most recent row per kind. Lets the chat
+    agent pick a `kind` for `signals_recent` instead of guessing from a fixed
+    example list (gmail.message / gcal.event) baked into the tool description.
+    """
+    actual_status = None if status_filter == "all" else status_filter
+    since = None
+    if hours is not None:
+        from datetime import timedelta
+
+        since = datetime.now(UTC) - timedelta(hours=hours)
+    async with user_scoped_tx(pool, run.user_id) as conn:
+        repo = PersonalSignalsRepository(run.user_id, conn)
+        stats = await repo.list_kinds(status=actual_status, since=since)
+    return {
+        "items": [
+            {
+                "kind": s.kind,
+                "count": s.count,
+                "latestAt": s.latest_at.isoformat(),
+                "latestTitle": s.latest_title,
+                "latestSummaryPreview": s.latest_summary_preview,
+            }
+            for s in stats
+        ],
+    }
+
+
+@router.get("/get/{signal_id}")
+async def get_signal(
+    signal_id: str,
+    run: AgentRun = Depends(current_agent_run),
+    pool=Depends(get_pool),
+):
+    """Full payload for one signal — drill-down from `/recent` summary.
+    404 if the id doesn't belong to the caller (RLS already blocks
+    cross-user reads, this just turns an empty result into the right code)."""
+    async with user_scoped_tx(pool, run.user_id) as conn:
+        repo = PersonalSignalsRepository(run.user_id, conn)
+        row = await repo.get_one(signal_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="signal not found")
+    return {
+        "id": row.id,
+        "kind": row.kind,
+        "title": row.title,
+        "summary": row.summary,
+        "payload": row.payload,
+        "salience": row.salience,
+        "confidence": row.confidence,
+        "occurredAt": row.occurred_at.isoformat(),
+        "status": row.status,
+        "subject": row.subject,
+        "source": row.source,
+        "deviceId": row.device_id,
+        "consumedByRunId": row.consumed_by_run_id,
+    }
+
+
+@router.post("/consume", status_code=status.HTTP_204_NO_CONTENT)
+async def consume_signal(
+    body: dict,
+    run: AgentRun = Depends(current_agent_run),
+    pool=Depends(get_pool),
+):
+    sig_id = body.get("id")
+    if not sig_id:
+        return None
+    target_run = body.get("runId") or run.run_id
+    async with user_scoped_tx(pool, run.user_id) as conn:
+        repo = PersonalSignalsRepository(run.user_id, conn)
+        await repo.mark_consumed(sig_id, target_run)
+    return None
+
+
+@router.post("/ingest")
+async def ingest_signal(
+    body: dict,
+    run: AgentRun = Depends(current_agent_run),
+    pool=Depends(get_pool),
+):
+    sig_id = body.get("id") or f"sig_{uuid.uuid4().hex[:16]}"
+    # `occurred_at` is NOT NULL on the table. Agents (especially LLM-driven
+    # evolve) routinely omit the field when the underlying event has no
+    # natural timestamp; default to "now" so the insert succeeds. Callers
+    # that *do* know the event time (gmail messageTimestamp, gcal start)
+    # still pass it through unchanged.
+    occurred = body.get("occurredAt")
+    if isinstance(occurred, str):
+        occurred_at = datetime.fromisoformat(occurred.replace("Z", "+00:00"))
+    elif isinstance(occurred, datetime):
+        occurred_at = occurred
+    else:
+        occurred_at = datetime.now(UTC)
+    async with user_scoped_tx(pool, run.user_id) as conn:
+        repo = PersonalSignalsRepository(run.user_id, conn)
+        row = await repo.ingest_one(
+            IngestSignalInput(
+                id=sig_id,
+                kind=body["kind"],
+                title=body["title"],
+                summary=body.get("summary", ""),
+                occurred_at=occurred_at,
+                payload=body.get("payload") or {},
+                salience=float(body.get("salience", 0)),
+                confidence=float(body.get("confidence", 0)),
+                dedupe_key=body.get("dedupeKey"),
+                source=body.get("source", "agent"),
+                subject=body.get("subject"),
+            )
+        )
+    return {"id": row.id, "status": row.status}

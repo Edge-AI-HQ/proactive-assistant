@@ -215,7 +215,7 @@ score = pattern.base_hit_rate            # 全用户上的命中率
 ### Pattern 匹配在 web 侧执行(不在 chat 进程内)
 
 ```python
-# pinai-agents/src/pinai_agents/web/services/pattern_matcher.py(新建)
+# backend/src/pinai_agents/web/services/pattern_matcher.py(新建)
 def match_patterns(user_id: int, phase1: Phase1Data) -> list[MatchedPattern]:
     """
     cheap DSL trigger evaluation,不调 LLM。
@@ -353,7 +353,7 @@ flowchart LR
 ### LLM 批量抽取(weekly job)
 
 ```python
-# pinai-agents/src/pinai_agents/web/jobs/pattern_extractor.py(新建)
+# backend/src/pinai_agents/web/jobs/pattern_extractor.py(新建)
 def extract_new_patterns():
     """
     每周 sunday 23:00 跑一次。
@@ -496,7 +496,7 @@ reviewer 一眼看到这张卡属于哪个 pattern、是否满足 skeleton、是
 
 ## DB Schema(migration)
 
-**新建 migration**: `pinai-agents/db/migrations/043_pai_card_patterns.sql`
+**新建 migration**: `backend/db/migrations/043_pai_card_patterns.sql`
 
 ```sql
 -- Pattern 库本体
@@ -597,7 +597,7 @@ ALTER TABLE pai_user_intent_pref ENABLE ROW LEVEL SECURITY;
 
 ## API 设计
 
-新增/扩展 `pinai-agents/src/pinai_agents/web/routes/ui/reward_dashboard.py`:
+新增/扩展 `backend/src/pinai_agents/web/routes/ui/reward_dashboard.py`:
 
 | Endpoint | 用途 |
 |---|---|
@@ -618,17 +618,17 @@ ALTER TABLE pai_user_intent_pref ENABLE ROW LEVEL SECURITY;
 
 | 层 | 文件 | 改动 |
 |---|---|---|
-| migration | `pinai-agents/db/migrations/043_pai_card_patterns.sql` | 上面 schema |
-| repository | `pinai-agents/src/pinai_agents/web/db/repositories/patterns.py`(新) | pattern CRUD + hits 记录 |
-| repository | `pinai-agents/src/pinai_agents/web/db/repositories/user_fingerprint.py`(新) | fingerprint 更新 / 查询 |
-| service | `pinai-agents/src/pinai_agents/web/services/pattern_matcher.py`(新) | DSL evaluator + matching |
-| dispatcher | `pinai-agents/src/pinai_agents/web/scheduler/dispatcher.py` | `_run_generator` 之前调 `match_patterns()`,把结果塞 payload |
-| shared model | `pinai-agents/src/pinai_agents/shared/api_models.py` | `GenerateRequest` 加 `matched_patterns: list[MatchedPattern]` 字段 |
-| generator | `pinai-agents/src/pinai_agents/chat/agents/generator.py` | planner / card-generator / evaluator prompt 各加段;matched payload 带 `humanInsight` + `cardSkeleton.title_strategy`;`PlanOutput` 加 `selected_pattern_ids`;`EvalReport` 加 `pattern_grounding` |
-| route | `pinai-agents/src/pinai_agents/chat/routes/generate.py` | 接收 matched_patterns 字段,持久化 hits 到 `pai_card_pattern_hits` |
-| job | `pinai-agents/src/pinai_agents/web/jobs/pattern_extractor.py`(新) | weekly LLM 抽取候选 pattern |
-| job | `pinai-agents/src/pinai_agents/web/jobs/pattern_health.py`(新) | daily 健康指标聚合 + 自动退役 |
-| seed | `pinai-agents/scripts/seed_patterns.py`(新) | 从 `docs/data/patterns.yaml` + `demo_cards.yaml` 灌库 |
+| migration | `backend/db/migrations/043_pai_card_patterns.sql` | 上面 schema |
+| repository | `backend/src/pinai_agents/web/db/repositories/patterns.py`(新) | pattern CRUD + hits 记录 |
+| repository | `backend/src/pinai_agents/web/db/repositories/user_fingerprint.py`(新) | fingerprint 更新 / 查询 |
+| service | `backend/src/pinai_agents/web/services/pattern_matcher.py`(新) | DSL evaluator + matching |
+| dispatcher | `backend/src/pinai_agents/web/scheduler/dispatcher.py` | `_run_generator` 之前调 `match_patterns()`,把结果塞 payload |
+| shared model | `backend/src/pinai_agents/shared/api_models.py` | `GenerateRequest` 加 `matched_patterns: list[MatchedPattern]` 字段 |
+| generator | `backend/src/pinai_agents/chat/agents/generator.py` | planner / card-generator / evaluator prompt 各加段;matched payload 带 `humanInsight` + `cardSkeleton.title_strategy`;`PlanOutput` 加 `selected_pattern_ids`;`EvalReport` 加 `pattern_grounding` |
+| route | `backend/src/pinai_agents/chat/routes/generate.py` | 接收 matched_patterns 字段,持久化 hits 到 `pai_card_pattern_hits` |
+| job | `backend/src/pinai_agents/web/jobs/pattern_extractor.py`(新) | weekly LLM 抽取候选 pattern |
+| job | `backend/src/pinai_agents/web/jobs/pattern_health.py`(新) | daily 健康指标聚合 + 自动退役 |
+| seed | `backend/scripts/seed_patterns.py`(新) | 从 `docs/data/patterns.yaml` + `demo_cards.yaml` 灌库 |
 | ops | `ops/litellm/litellm_config.yaml` | 验证 pattern 库注入后 cache hit ≥ 90% |
 | dashboard | `internal-reward-dashboard/src/routes/PatternsView.tsx` 等 | 上面 5 个新页面 |
 | dashboard | `internal-reward-dashboard/src/api/reward.ts` | 加 pattern 相关 client 方法 |
@@ -759,7 +759,7 @@ ALTER TABLE pai_user_intent_pref ENABLE ROW LEVEL SECURITY;
 5. `docs/modules/internal-reward-dashboard.mdx` → 当前 dashboard 实现事实
 
 判断当前进度:
-- 看 `pinai-agents/db/migrations/` 有没有 `043_pai_card_patterns.sql` → 没有 = Phase 1 未开始
+- 看 `backend/db/migrations/` 有没有 `043_pai_card_patterns.sql` → 没有 = Phase 1 未开始
 - 看 `services/pattern_matcher.py` 是否存在 → 没有 = Phase 2 未开始
 - 看 `pai_user_pattern_pref` 表是否被写入 → 否 = Phase 3 未开始
 - ...

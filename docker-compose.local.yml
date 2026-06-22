@@ -23,11 +23,11 @@ services:
 
   db-migrate:
     build:
-      context: ./pinai-agents
+      context: ./backend
       dockerfile: Dockerfile
       args:
         DEPLOY_ENV: dev
-    image: pinai-agents:latest
+    image: backend:latest
     depends_on:
       postgres:
         condition: service_healthy

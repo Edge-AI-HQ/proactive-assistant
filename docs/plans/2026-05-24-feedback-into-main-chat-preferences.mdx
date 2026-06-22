@@ -31,8 +31,8 @@ description: "Goal 驱动实现规格：反馈走 main chat；用户亲口偏好
 ## 完成定义（全部 goal 的验证门都绿）
 
 ```bash
-cd pinai-agents && uv run ruff check .
-cd pinai-agents && uv run pytest tests/web/db/repositories/test_preferences_repo.py tests/web/routes/test_preferences.py tests/chat/agents/test_generator_preferences.py tests/chat/routes/test_chat_card_context.py tests/web/routes/test_preferences_impersonation.py
+cd backend && uv run ruff check .
+cd backend && uv run pytest tests/web/db/repositories/test_preferences_repo.py tests/web/routes/test_preferences.py tests/chat/agents/test_generator_preferences.py tests/chat/routes/test_chat_card_context.py tests/web/routes/test_preferences_impersonation.py
 cd proactive-ai-frontend && npm run type-check
 cd internal-reward-dashboard && npm run type-check
 ```
@@ -79,25 +79,25 @@ cd internal-reward-dashboard && npm run type-check
 
 ```bash
 # 1. migration 干净应用
-cd pinai-agents && make migrate     # 056 应用成功，无报错
+cd backend && make migrate     # 056 应用成功，无报错
 
 # 2. lint
-cd pinai-agents && uv run ruff check .
+cd backend && uv run ruff check .
 
 # 3. repository 单测（需新写，断言下列行为）
-cd pinai-agents && uv run pytest tests/web/db/repositories/test_preferences_repo.py
+cd backend && uv run pytest tests/web/db/repositories/test_preferences_repo.py
 #   - add() 写入后 list(status='active') 能取回，weight/scope/polarity/source 原样
 #   - supersede(old,new) 后 old.status='superseded' 且 old.superseded_by=new；new 必须先 active（断言）
 #   - RLS：另一个 user_id 看不到本 user 的偏好
 
 # 4. agent route 单测（需新写）
-cd pinai-agents && uv run pytest tests/web/routes/test_preferences.py
+cd backend && uv run pytest tests/web/routes/test_preferences.py
 #   - POST /api/agent/preferences/add 普通 run principal → 落库行 source='user'
 #   - GET  /api/agent/preferences/list 返回 active 行，按 created_at DESC
 #   - settings upsert 改 generation_language 后，pai_user_settings 该字段更新，且对应 schedule payload 的 output_language 同步（断言 re-stamp 发生）
 
 # 5. 工具注册（静态断言）
-cd pinai-agents && uv run python -c "from pinai_agents.chat.tools.native import ALL_TOOLS; names={t.name for t in ALL_TOOLS}; assert {'preference_add','set_generation_language'} <= names, names"
+cd backend && uv run python -c "from pinai_agents.chat.tools.native import ALL_TOOLS; names={t.name for t in ALL_TOOLS}; assert {'preference_add','set_generation_language'} <= names, names"
 ```
 
 **人工验收（循环外）**：本地 `make up`，main chat 说「我要看 A 股新闻」→ DB 出现 active/positive/source=user 行；说「以后用英文」→ `generation_language='en'`。
@@ -116,10 +116,10 @@ cd pinai-agents && uv run python -c "from pinai_agents.chat.tools.native import 
 **验证门（自动）**：
 
 ```bash
-cd pinai-agents && uv run ruff check .
+cd backend && uv run ruff check .
 
 # 新写测试（断言 plumbing，不断言 LLM 输出）
-cd pinai-agents && uv run pytest tests/chat/agents/test_generator_preferences.py
+cd backend && uv run pytest tests/chat/agents/test_generator_preferences.py
 #   - _DATA_COLLECTOR_PROMPT 文本包含 'client.preferences.list' 且 digest keys 含 'preferences'
 #   - _PLANNER_PROMPT 文本包含偏好对齐段的锚点关键词（如 'preference' / 'positive' / 'negative' / 硬约束措辞）
 #   - SDK 暴露 client.preferences.list（import + 属性存在断言）
@@ -144,8 +144,8 @@ cd pinai-agents && uv run pytest tests/chat/agents/test_generator_preferences.py
 **验证门（自动）**：
 
 ```bash
-cd pinai-agents && uv run ruff check .
-cd pinai-agents && uv run pytest tests/chat/routes/test_chat_card_context.py
+cd backend && uv run ruff check .
+cd backend && uv run pytest tests/chat/routes/test_chat_card_context.py
 #   - main chat thread 本轮带 card_context → 注入一条 <card_context> SystemMessage
 #   - main chat thread 本轮不带 card_context → 不注入
 #   - card thread 分支行为不变（首轮 guard 仍生效，回归不破）
@@ -170,8 +170,8 @@ cd proactive-ai-frontend && npm test
 **验证门（自动）**：
 
 ```bash
-cd pinai-agents && uv run ruff check .
-cd pinai-agents && uv run pytest tests/web/routes/test_preferences_impersonation.py
+cd backend && uv run ruff check .
+cd backend && uv run pytest tests/web/routes/test_preferences_impersonation.py
 #   - 普通用户 JWT 调 add → source 恒为 'user'（即使 body 传 source='internal_operator' 也被忽略）
 #   - internal_operator principal 调 add → source 强制 'internal_operator' 且 evidence.operator_id 落库
 #   - 非 internal 鉴权调 impersonation mint endpoint → 拒绝（401/403）

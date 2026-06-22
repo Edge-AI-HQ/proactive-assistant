@@ -59,8 +59,8 @@ flowchart TD
 | `proactive-ai-frontend/src/services/ambient/timeline/pipeline.ts` | `upsertTranscriptWindow()` 用 `captureSessionId` 生成稳定 window id，并把 raw refs / compact context 合并进同一个 candidate window。 |
 | `proactive-ai-frontend/src/services/ambient/timeline/envelope.ts` | `candidateWindowToSignal()` 设置 `payload.local_window_id`、`payload.raw_ref_count`、`summary=compactContext`。 |
 | `proactive-ai-frontend/src/services/ambient/outbox.ts` | `makeRecord()` 使用 item 的 `dedupe_key`；SQLite `enqueue()` 当前是 `INSERT OR IGNORE`，不适合“同 key 但内容更新”的 transcript window。 |
-| `pinai-agents/src/pinai_agents/web/routes/ui/devices.py` | `/api/devices/ingest` 接收 device item，当前优先信任 client 传入的 `dedupeKey`，否则 fallback 到 `device:{device_id}:{item.id}`。 |
-| `pinai-agents/src/pinai_agents/web/db/repositories/personal_signals.py` | `ingest_one()` 已经对 `(user_id, dedupe_key)` 做 `ON CONFLICT DO UPDATE`，但前提是 dedupe key 稳定。 |
+| `backend/src/pinai_agents/web/routes/ui/devices.py` | `/api/devices/ingest` 接收 device item，当前优先信任 client 传入的 `dedupeKey`，否则 fallback 到 `device:{device_id}:{item.id}`。 |
+| `backend/src/pinai_agents/web/db/repositories/personal_signals.py` | `ingest_one()` 已经对 `(user_id, dedupe_key)` 做 `ON CONFLICT DO UPDATE`，但前提是 dedupe key 稳定。 |
 
 ### dev DB 里看到的问题形态
 
@@ -519,7 +519,7 @@ Apply 脚本还必须先检查 canonical key collision：如果 canonical key �
 Apply 不建议手敲 SQL 直接跑。应该写成 repo script：
 
 ```text
-pinai-agents/scripts/cleanup_transcript_window_duplicates.py
+backend/scripts/cleanup_transcript_window_duplicates.py
 ```
 
 脚本模式：
@@ -609,7 +609,7 @@ cd proactive-ai-frontend && npm test -- --run \
 Backend：
 
 ```bash
-cd pinai-agents && uv run pytest \
+cd backend && uv run pytest \
   tests/web/devices/test_ingest_http.py \
   tests/web/db/test_personal_signals_repo.py
 ```
@@ -693,10 +693,10 @@ ORDER BY row_count DESC, max_raw_ref_count DESC;
 | transcript raw -> candidate window | `proactive-ai-frontend/src/services/ambient/timeline/pipeline.ts` |
 | candidate window -> PersonalSignalInput | `proactive-ai-frontend/src/services/ambient/timeline/envelope.ts` |
 | local outbox enqueue/drain/schema | `proactive-ai-frontend/src/services/ambient/outbox.ts` |
-| device ingest route | `pinai-agents/src/pinai_agents/web/routes/ui/devices.py` |
-| signal upsert repository | `pinai-agents/src/pinai_agents/web/db/repositories/personal_signals.py` |
-| device ingest policy | `pinai-agents/src/pinai_agents/web/device_ingest/policies.py` |
-| cloud cleanup script | `pinai-agents/scripts/cleanup_transcript_window_duplicates.py` |
+| device ingest route | `backend/src/pinai_agents/web/routes/ui/devices.py` |
+| signal upsert repository | `backend/src/pinai_agents/web/db/repositories/personal_signals.py` |
+| device ingest policy | `backend/src/pinai_agents/web/device_ingest/policies.py` |
+| cloud cleanup script | `backend/scripts/cleanup_transcript_window_duplicates.py` |
 
 ## 与其它 plan 的关系
 

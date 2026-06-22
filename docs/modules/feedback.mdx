@@ -144,7 +144,7 @@ sequenceDiagram
 
 | 维度 | 当前事实 |
 |---|---|
-| UI 路由 | `pinai-agents/src/pinai_agents/web/routes/ui/feedback.py` 暴露 `POST /api/feedback`、`GET /api/feedback`、`GET /api/feedback/dismissed`、`GET /api/feedback/completed`。 |
+| UI 路由 | `backend/src/pinai_agents/web/routes/ui/feedback.py` 暴露 `POST /api/feedback`、`GET /api/feedback`、`GET /api/feedback/dismissed`、`GET /api/feedback/completed`。 |
 | 鉴权 | Supabase JWT（`current_user`）+ `user_scoped_tx`。 |
 | Repository | `FeedbackRepository.log()` 先写 `pai_feedback_events`，再按输入类型决定是否 fan-out 到 fingerprint / preference。 |
 | `/api/cards` | `runs_and_cards.py` 从最新 feedback event 推导每张卡的 `latestOutcome` / `outcomeAt`；不依赖 intent state 表。 |
@@ -160,35 +160,35 @@ sequenceDiagram
 
 | 改动 | 先看 |
 |---|---|
-| Feedback UI route | `pinai-agents/src/pinai_agents/web/routes/ui/feedback.py` |
-| Agent feedback route | `pinai-agents/src/pinai_agents/web/routes/agent/feedback.py` |
-| Repository / SQL | `pinai-agents/src/pinai_agents/web/db/repositories/feedback.py` |
-| Preference repository / route | `pinai-agents/src/pinai_agents/web/db/repositories/preferences.py`、`web/routes/agent/preferences.py` |
-| Fingerprint repository | `pinai-agents/src/pinai_agents/web/db/repositories/user_fingerprint.py` |
-| Card latestOutcome 推导 | `pinai-agents/src/pinai_agents/web/routes/ui/runs_and_cards.py` |
+| Feedback UI route | `backend/src/pinai_agents/web/routes/ui/feedback.py` |
+| Agent feedback route | `backend/src/pinai_agents/web/routes/agent/feedback.py` |
+| Repository / SQL | `backend/src/pinai_agents/web/db/repositories/feedback.py` |
+| Preference repository / route | `backend/src/pinai_agents/web/db/repositories/preferences.py`、`web/routes/agent/preferences.py` |
+| Fingerprint repository | `backend/src/pinai_agents/web/db/repositories/user_fingerprint.py` |
+| Card latestOutcome 推导 | `backend/src/pinai_agents/web/routes/ui/runs_and_cards.py` |
 | Schema | `011_pai_memory_signals.sql`、`043_pai_card_patterns.sql`、`056_pai_preference_records.sql`、`057_pai_preference_lifetime.sql`、`051_drop_intent_state_tables.sql` |
-| Generation 端使用 | `pinai-agents/src/pinai_agents/chat/agents/generator.py` |
-| Native feedback tool | `pinai-agents/src/pinai_agents/chat/tools/native/feedback.py` |
-| Native preference/profile tools | `pinai-agents/src/pinai_agents/chat/tools/native/preferences.py`、`profile.py:profile_preference_merge` |
+| Generation 端使用 | `backend/src/pinai_agents/chat/agents/generator.py` |
+| Native feedback tool | `backend/src/pinai_agents/chat/tools/native/feedback.py` |
+| Native preference/profile tools | `backend/src/pinai_agents/chat/tools/native/preferences.py`、`profile.py:profile_preference_merge` |
 | 前端卡片反馈 UI | `proactive-ai-frontend/src/components/AppShell.tsx`、`NowFeed.tsx`、`CardDetailBody.tsx` |
 | 前端 main chat thumbs | `proactive-ai-frontend/src/components/main-chat/MessageActionBar.tsx` |
-| 开发建议收集 | `pinai-agents/src/pinai_agents/web/routes/ui/chat.py`、`pinai-agents/src/pinai_agents/web/routes/agent/development_feedback.py`、`pinai-agents/src/pinai_agents/chat/tools/direct/development_feedback.py`、`pinai-agents/src/pinai_agents/chat/agents/main_chat.py` |
+| 开发建议收集 | `backend/src/pinai_agents/web/routes/ui/chat.py`、`backend/src/pinai_agents/web/routes/agent/development_feedback.py`、`backend/src/pinai_agents/chat/tools/direct/development_feedback.py`、`backend/src/pinai_agents/chat/agents/main_chat.py` |
 
 ## 验证方式
 
 ```bash
 # Repository + end-to-end route flow
-cd pinai-agents && uv run pytest tests/web/db/repositories/test_feedback_repo.py tests/web/routes/test_feedback_flow.py
+cd backend && uv run pytest tests/web/db/repositories/test_feedback_repo.py tests/web/routes/test_feedback_flow.py
 
 # Preference + generator read surface
-cd pinai-agents && uv run pytest tests/web/db/repositories/test_preferences_repo.py tests/web/routes/test_preferences.py tests/chat/agents/test_generator_preferences.py
+cd backend && uv run pytest tests/web/db/repositories/test_preferences_repo.py tests/web/routes/test_preferences.py tests/chat/agents/test_generator_preferences.py
 
 # Related card route / native tools
-cd pinai-agents && uv run pytest tests/web/routes/test_cards_route.py tests/chat/test_native_tools.py
+cd backend && uv run pytest tests/web/routes/test_cards_route.py tests/chat/test_native_tools.py
 
 # Static checks
-cd pinai-agents && uv run ruff check .
-cd pinai-agents && uv run mypy src
+cd backend && uv run ruff check .
+cd backend && uv run mypy src
 
 # Frontend feedback helpers and card feedback state
 cd proactive-ai-frontend && npm test -- MessageActionBar.feedback.test.ts useCardActions.test.tsx card-feedback.test.ts card-chat-session.test.ts

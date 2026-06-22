@@ -174,7 +174,7 @@ type CloudTimelineItem =
 
 ### Phase 1：Cloud summary + timeline
 
-- [ ] 在 `pinai-agents/src/pinai_agents/web/routes/ui/devices.py` 新增 `GET /summary`。
+- [ ] 在 `backend/src/pinai_agents/web/routes/ui/devices.py` 新增 `GET /summary`。
 - [ ] 统计 active devices：来自 `pai_user_devices`。
 - [ ] 统计 device signals：`pai_personal_signals` 按 `device_id/source/kind` 聚合，排除 `archived`。
 - [ ] 统计 health：`pai_raw_device_health_observations` 按 `device_id` 聚合 count、max occurred、max ingested。
@@ -187,8 +187,8 @@ type CloudTimelineItem =
 测试：
 
 ```bash
-cd pinai-agents && uv run pytest tests/web/devices/test_timeline.py
-cd pinai-agents && uv run pytest tests/web/routes/test_device_summary.py
+cd backend && uv run pytest tests/web/devices/test_timeline.py
+cd backend && uv run pytest tests/web/routes/test_device_summary.py
 ```
 
 如果测试文件还不存在，新建到对应目录。
@@ -265,12 +265,12 @@ cd proactive-ai-frontend && npm run type-check
 
 必须让卡片生成实际使用 uploaded mobile/device context。
 
-- [ ] 在 `pinai-agents/src/pinai_agents/web/services/phase1_seed.py` 增加 `device` section：
+- [ ] 在 `backend/src/pinai_agents/web/services/phase1_seed.py` 增加 `device` section：
   - recent health summary
   - recent ambient/device signals summary
   - apps / contacts snapshot freshness
   - device stale flags
-- [ ] 在 `pinai-agents/src/pinai_agents/chat/agents/generator.py` 的 data-collector canonical script 中加入 device raw：
+- [ ] 在 `backend/src/pinai_agents/chat/agents/generator.py` 的 data-collector canonical script 中加入 device raw：
   - `client.raw.list("device", "health", hours=24, limit=50)`
   - `client.raw.list("device", "apps", hours=168, limit=20)`
   - `client.raw.list("device", "contacts", hours=168, limit=20)`
@@ -282,9 +282,9 @@ cd proactive-ai-frontend && npm run type-check
 测试：
 
 ```bash
-cd pinai-agents && uv run pytest tests/web/services/test_phase1_seed.py
-cd pinai-agents && uv run pytest tests/chat/
-cd pinai-agents/packages/pinai_sdk && uv run pytest
+cd backend && uv run pytest tests/web/services/test_phase1_seed.py
+cd backend && uv run pytest tests/chat/
+cd backend/packages/pinai_sdk && uv run pytest
 ```
 
 手工验收：
@@ -313,11 +313,11 @@ cd pinai-agents/packages/pinai_sdk && uv run pytest
 | 设备列表 / timeline | `proactive-ai-frontend/src/components/DeviceConnections.tsx`、`DeviceTimeline.tsx` |
 | Profile raw/device 展示 | `proactive-ai-frontend/src/components/GoalsView.tsx` |
 | 前端 API client | `proactive-ai-frontend/src/lib/api.ts` |
-| 设备 routes | `pinai-agents/src/pinai_agents/web/routes/ui/devices.py` |
-| raw device repo | `pinai-agents/src/pinai_agents/web/db/repositories/raw_device.py` |
-| Web-side phase1 seed | `pinai-agents/src/pinai_agents/web/services/phase1_seed.py` |
-| Chat generator data-collector | `pinai-agents/src/pinai_agents/chat/agents/generator.py` |
-| Agent raw route / SDK | `pinai-agents/src/pinai_agents/web/routes/agent/raw.py`、`pinai-agents/packages/pinai_sdk/src/pinai_sdk/_client.py` |
+| 设备 routes | `backend/src/pinai_agents/web/routes/ui/devices.py` |
+| raw device repo | `backend/src/pinai_agents/web/db/repositories/raw_device.py` |
+| Web-side phase1 seed | `backend/src/pinai_agents/web/services/phase1_seed.py` |
+| Chat generator data-collector | `backend/src/pinai_agents/chat/agents/generator.py` |
+| Agent raw route / SDK | `backend/src/pinai_agents/web/routes/agent/raw.py`、`backend/packages/pinai_sdk/src/pinai_sdk/_client.py` |
 
 ## 与现有 plans 的关系
 

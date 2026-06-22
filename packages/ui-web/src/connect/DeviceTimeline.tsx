@@ -207,7 +207,7 @@ export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) 
 
 // ── Single row renderer ─────────────────────────────────────────────────
 
-// Resolve the signed URL for a storage_path lazily — pinai-agents only
+// Resolve the signed URL for a storage_path lazily — backend only
 // hands out TTL-bounded URLs, so we don't bake a permanent URL into
 // the row at render time.
 function useDeviceMediaUrl(filePath: string | null): string | null {
@@ -226,7 +226,7 @@ function useDeviceMediaUrl(filePath: string | null): string | null {
 function SignalRow({ signal }: { signal: PersonalSignal }) {
   const { t } = useTranslation("connect");
   const filePath = useMemo(() => {
-    // pinai-agents writes payload.storage_path; legacy plugin wrote file_path.
+    // backend writes payload.storage_path; legacy plugin wrote file_path.
     // Read both during the cutover; storage_path takes precedence.
     const p = signal.payload as { storage_path?: unknown; file_path?: unknown };
     const sp = typeof p.storage_path === "string" && p.storage_path.length > 0

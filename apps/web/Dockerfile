@@ -2,7 +2,7 @@
 #
 # Multi-stage（同 proactive-ai-frontend 的机制，去掉 capacitor-plugins 部分）：
 #   1. node20-slim — npm install + vite build (produces dist/).
-#   2. nginx:alpine — copy dist/ + SPA routing config（/api 反代 pinai-agents，
+#   2. nginx:alpine — copy dist/ + SPA routing config（/api 反代 backend，
 #      same-origin 免 CORS，SSE 不缓冲）。
 #
 # Build context = repo root（CI: `flyctl deploy . --config apps/web/fly.toml
@@ -39,13 +39,13 @@ FROM nginx:1.27-alpine
 # SPA at the root path (vite `base: "/"`).
 #   /                  → index.html
 #   /assets/...        → hashed JS/CSS/media, immutable cache
-#   /api/*, /health    → reverse-proxied to pinai-agents web (same-origin
+#   /api/*, /health    → reverse-proxied to backend web (same-origin
 #                        from the browser's POV, so no CORS preflight)
 #   /<anything else>   → SPA fallback to index.html (React Router)
 #
 # Runtime config via nginx:alpine's standard envsubst template mechanism；
 # 同 proactive-ai-frontend/Dockerfile（rationale 见那边注释）：
-#   * docker-compose: NGINX_UPSTREAM_URL=http://pinai-web:8000,
+#   * docker-compose: NGINX_UPSTREAM_URL=http://api:8000,
 #                     NGINX_RESOLVER="127.0.0.11 ipv6=off"
 #   * fly dev/prod:   NGINX_UPSTREAM_URL=https://<agents-app>.fly.dev,
 #                     NGINX_RESOLVER=[fdaa::3]
@@ -67,7 +67,7 @@ server {
         add_header Cache-Control "public, immutable";
     }
 
-    # /api/* — reverse proxy to pinai-agents web. Host/SNI 设为 upstream
+    # /api/* — reverse proxy to backend web. Host/SNI 设为 upstream
     # 自己的 hostname（fly-proxy 路由需要）；`proxy_buffering off` 保 SSE
     # 实时推流；长超时覆盖多分钟 agent turn。
     location /api/ {

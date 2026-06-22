@@ -57,11 +57,11 @@ flowchart LR
 - Modify `proactive-ai-frontend/src/services/ambient/capture-transcription.test.ts`
   - Verify no `language` query is sent in the default Ambient path.
   - Verify diarize failure still falls back to plain transcription.
-- Modify `pinai-agents/src/pinai_agents/web/services/voice_transcription.py`
+- Modify `backend/src/pinai_agents/web/services/voice_transcription.py`
   - Add a single constant for the mixed-language prompt.
   - Send `prompt` for ordinary `gpt-4o-transcribe` requests.
   - Keep diarized request body unchanged.
-- Modify `pinai-agents/tests/web/routes/test_voice_transcribe.py`
+- Modify `backend/tests/web/routes/test_voice_transcribe.py`
   - Verify `/api/voice/transcribe` sends `prompt`.
   - Verify `/api/voice/transcribe-diarized` does not send `prompt`.
 
@@ -251,8 +251,8 @@ Expected: PASS.
 ### Task 3: Plain Transcription Prompt
 
 **Files:**
-- Modify: `pinai-agents/src/pinai_agents/web/services/voice_transcription.py`
-- Modify: `pinai-agents/tests/web/routes/test_voice_transcribe.py`
+- Modify: `backend/src/pinai_agents/web/services/voice_transcription.py`
+- Modify: `backend/tests/web/routes/test_voice_transcribe.py`
 
 - [ ] **Step 1: Add tests for prompt behavior**
 
@@ -278,7 +278,7 @@ assert "prompt" not in captured["data"]
 Run:
 
 ```bash
-cd pinai-agents && uv run pytest tests/web/routes/test_voice_transcribe.py -q
+cd backend && uv run pytest tests/web/routes/test_voice_transcribe.py -q
 ```
 
 Expected before implementation: FAIL because ordinary transcription does not send `prompt`.
@@ -324,7 +324,7 @@ Do not add `prompt` to `transcribe_audio_diarized` — UNLESS Task 0 Step 1 foun
 Run:
 
 ```bash
-cd pinai-agents && uv run pytest tests/web/routes/test_voice_transcribe.py -q
+cd backend && uv run pytest tests/web/routes/test_voice_transcribe.py -q
 ```
 
 Expected: PASS.
@@ -359,7 +359,7 @@ Expected: PASS.
 Run:
 
 ```bash
-cd pinai-agents && uv run pytest tests/web/routes/test_voice_transcribe.py -q
+cd backend && uv run pytest tests/web/routes/test_voice_transcribe.py -q
 ```
 
 Expected: PASS.
@@ -369,7 +369,7 @@ Expected: PASS.
 Run:
 
 ```bash
-cd pinai-agents && uv run ruff check src tests/web/routes/test_voice_transcribe.py && uv run mypy src
+cd backend && uv run ruff check src tests/web/routes/test_voice_transcribe.py && uv run mypy src
 ```
 
 Expected: PASS.

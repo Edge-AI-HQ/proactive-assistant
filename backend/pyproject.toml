@@ -1,0 +1,193 @@
+# backend — uv workspace root.
+#
+# This file is a *pure workspace root*: it builds no package of its own. The
+# runtime code lives in workspace members (see [tool.uv.workspace] below):
+#   * libs/contracts        → pinai_contracts (pure model / protocol, leaf)
+#   * libs/db               → pinai_db        (shared db base: pool/rls/audit/repo base, leaf)
+#   * services/api          → pinai_api        (web: master-credential process)
+#   * services/agent-engine → agent_engine (LLM loop, untrusted surface)
+#
+# Phase 5 of the backend re-architecture physically split the old monolithic
+# `pinai_agents` package into these members; the trust boundary is now enforced
+# by the package dependency graph (api does not depend on agent-engine and vice
+# versa) plus import-linter + ruff banned-api below.
+#
+# The root keeps only the shared dev tooling (pytest / ruff / mypy /
+# import-linter) and the cross-cutting tool config so `uv run <tool>` works at
+# the repo root over every member at once. See
+# docs/plans/2026-06-21-backend-rearchitecture.mdx.
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.27.0",
+    "ruff>=0.7.0",
+    "mypy>=1.13.0",
+    # In-process Redis fake for RedisFrameBus tests (no real server in CI).
+    "fakeredis>=2.26.0",
+    "import-linter>=2.11",
+    # The services are separate workspace members. They are pulled into the
+    # *root* dev environment (not as runtime deps of each other — that would
+    # break the trust boundary) so the cross-package test suite under tests/
+    # and import-linter can import / analyze every package from the repo root.
+    # Production images install each service's own [project.dependencies] only,
+    # so the api venv never contains engine / reward-dashboard code and vice
+    # versa.
+    "pinai-api",
+    "agent-engine",
+    "pinai-reward-dashboard",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "TID"]
+ignore = [
+  "E501",   # line length handled by formatter
+  "TID252", # 允许相对 import — Python 包内 sibling 模块用相对路径是社区主流写法
+  "B008",   # FastAPI 的 Depends() / Query() / Body() 必须在 default 里 call,B008 跟它冲突
+]
+
+# Trust-boundary 第 1 道墙(对应 docs/plans/2026-05-04-pinai-agents-backend-consolidation.mdx).
+# api(pinai_api)持 master credentials,agent-engine 是 LLM loop / 不可信 input
+# 入口。两者都已拆成独立 workspace package,物理隔离靠 pyproject 依赖图(api 不
+# 依赖 agent-engine,反之亦然)。这里只保留 "api 不能 import engine" 一侧:
+# 误 import engine 会在 ruff 这层被拦(engine 是 api 的运行时 HTTP 下游,绝不该
+# 被 import 进 api 进程)。
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"agent_engine" = { msg = "api 进程不能 import agent_engine(防 LLM 入侵面扩散到 master 进程);跨边界走 HTTPS + EdDSA JWT。engine 是独立 service,只经 HTTP 调用。" }
+
+# Per-file-ignore：banned-api 只对 api 子树(services/api/src/pinai_api)有意义。
+#
+# 注意:ruff 把相对 import 解析成 absolute 路径再匹配 banned-api,所以 engine
+# 子树内部的 sibling import(`from ..harness.reasoning` → 解析成
+# `agent_engine.harness.reasoning`)会被自己的禁令误伤。engine 是独立包,
+# 本就不该被这条 banned-api 约束(它的 trust 隔离靠依赖图),所以整个 engine 子树
+# 走逃生口。tests/scripts 也放开——它们不跑在 api 进程里,允许 import engine 做
+# 断言 / dry-run。
+#
+# 真正的方向性检查靠 import-linter(root_packages 双向 contract)+
+# scripts/check_trust_boundary.sh 兜底,加上 engine 物理拆包后的依赖图隔离。
+[tool.ruff.lint.per-file-ignores]
+"services/agent-engine/**/*.py" = ["TID251"]
+"tests/**/*.py"                 = ["TID251"]
+# scripts/ 是 dev/CI 工具,不跑在 api 进程里,允许直接 import 服务做 dry-run 验证。
+"scripts/**/*.py"               = ["TID251"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+# mypy — minimal baseline so CI can run `uv run mypy services libs` without
+# forcing strict mode across a codebase that doesn't have full type coverage
+# yet. Tighten as we add annotations (disallow_untyped_defs, strict_optional,
+# etc.). ignore_missing_imports keeps third-party packages without type stubs
+# (langchain, deepagents, daytona, ...) from drowning the run in import errors
+# — flip it off per-module once we've covered them.
+#
+# mypy_path lists the workspace members' src roots so `pinai_api`,
+# `agent_engine`, `pinai_reward_dashboard`, `pinai_contracts` and
+# `pinai_db` resolve as top-level packages under explicit_package_bases
+# (each src/ is a namespace package base).
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = "services/api/src:services/agent-engine/src:services/reward-dashboard/src:libs/contracts/src:libs/db/src"
+exclude = ["packages/", "tests/", "infra/"]
+
+# ── import-linter：trust boundary + 领域边界的依赖图护栏 ──
+# 见 docs/plans/2026-06-21-backend-rearchitecture.mdx。ruff banned-api 因相对
+# import 解析成 absolute 会误伤 sibling、只能 per-file-ignore 整子树，失去方向
+# 表达力；import-linter 在 import graph 上做真正的方向性检查，是重构期间每步
+# 验证"边界没被破坏"的护栏。
+#
+# Phase 5：api / agent-engine / reward-dashboard 都已拆成独立 workspace package
+# (pinai_api / agent_engine / pinai_reward_dashboard)。三个 package 都纳入
+# root_packages，importlinter 在合并 import graph 上做方向性 trust-boundary 检查
+# ——比单包 banned-api 更强，且物理隔离(互不依赖)是第一道防线，这里是第二道。
+# reward-dashboard 是内部 review 工具：能读产品 DB(经 pinai_db),但不得 import
+# pinai_api(否则够到 master credentials)。跑：uv run lint-imports
+[tool.importlinter]
+root_packages = ["pinai_api", "agent_engine", "pinai_reward_dashboard"]
+
+[[tool.importlinter.contracts]]
+name = "engine 不依赖 api (trust boundary：LLM loop 不得 reach master-credential 进程)"
+type = "forbidden"
+source_modules = ["agent_engine"]
+forbidden_modules = ["pinai_api"]
+
+[[tool.importlinter.contracts]]
+name = "api 不依赖 engine (trust boundary：master 进程不扩散到 LLM 入侵面)"
+type = "forbidden"
+source_modules = ["pinai_api"]
+forbidden_modules = ["agent_engine"]
+
+[[tool.importlinter.contracts]]
+name = "reward-dashboard 不依赖 api (trust boundary：内部工具不得 reach master-credential 进程)"
+type = "forbidden"
+source_modules = ["pinai_reward_dashboard"]
+forbidden_modules = ["pinai_api"]
+
+[[tool.importlinter.contracts]]
+name = "api 不依赖 reward-dashboard (产品进程不依赖内部 review 工具)"
+type = "forbidden"
+source_modules = ["pinai_api"]
+forbidden_modules = ["pinai_reward_dashboard"]
+
+[[tool.importlinter.contracts]]
+name = "reward-dashboard 不依赖 engine (内部工具不 reach LLM 执行面)"
+type = "forbidden"
+source_modules = ["pinai_reward_dashboard"]
+forbidden_modules = ["agent_engine"]
+
+[[tool.importlinter.contracts]]
+name = "engine 不依赖 reward-dashboard (LLM 执行面不依赖内部 review 工具)"
+type = "forbidden"
+source_modules = ["agent_engine"]
+forbidden_modules = ["pinai_reward_dashboard"]
+
+# ── api 内部分层：platform 是底座 ──
+# platform（db/auth/llm/storage/notification/embeddings/speech）被 domains /
+# control / orchestration 依赖，不得反向 import 上层（分层倒置）。这是 api 内部
+# 第一条 CI 护栏的方向；domains↔domains / domains→control 的层间契约因现有反向边
+# 较多暂记为 follow-up（见 docs/plans/2026-06-21-backend-rearchitecture.mdx §十二
+# 已知债）。下面 2 条 ignore 是重构归位暴露的已知反向，记录在案待解耦。
+[[tool.importlinter.contracts]]
+name = "platform 是底座（不反向依赖 domains/control/orchestration）"
+type = "forbidden"
+source_modules = ["pinai_api.platform"]
+forbidden_modules = [
+    "pinai_api.domains",
+    "pinai_api.control",
+    "pinai_api.orchestration",
+]
+ignore_imports = [
+    # notification 读用户通知偏好 → 应改注入 ProfileRepository 而非直 import。
+    "pinai_api.platform.notification -> pinai_api.domains.user_model.profile",
+    # 首登 bootstrap seed default goals（lazy import 规避循环）→ 应上移 identity/orchestration。
+    "pinai_api.platform.auth.user_service -> pinai_api.orchestration.default_goals",
+]
+
+# ── uv workspace（Phase 5：物理拆 monorepo）──
+# 见 docs/plans/2026-06-21-backend-rearchitecture.mdx。libs/contracts
+# (pinai_contracts) 与 libs/db(pinai_db,共享 db 基础)都是 leaf；services/api
+# (pinai_api)是持 master credentials 的 web 进程；services/agent-engine
+# (agent_engine)是无信任 LLM 执行面；services/reward-dashboard
+# (pinai_reward_dashboard)是内部 review 工具(读产品 DB,不持 master credentials,
+# 不依赖 pinai_api)。三个 service 互不依赖;agent-engine 自带 langgraph
+# checkpointer,不依赖 libs/db;reward-dashboard 只依赖 libs/db。glob members
+# 自动覆盖全部成员。
+[tool.uv.workspace]
+members = ["libs/*", "services/*"]
+
+[tool.uv.sources]
+pinai-contracts = { workspace = true }
+pinai-db = { workspace = true }
+pinai-api = { workspace = true }
+agent-engine = { workspace = true }
+pinai-reward-dashboard = { workspace = true }

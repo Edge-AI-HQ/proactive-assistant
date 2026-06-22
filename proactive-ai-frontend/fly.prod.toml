@@ -2,7 +2,7 @@
 #
 # Static SPA served by nginx (see Dockerfile). Build-time VITE_* args
 # are injected by deploy-prod.yml via --build-arg, sourced from
-# pinai-agents/.env.production.
+# backend/.env.production.
 #
 # Sibling tomls: fly.toml (dev), fly.test.toml (test).
 

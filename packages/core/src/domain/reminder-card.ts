@@ -2,7 +2,7 @@
  * Reminder-card detection — the acknowledge-only card class.
  *
  * Reminder cards ("drink water", "take meds") come from the zero-LLM
- * reminder subsystem (pinai-agents web/services/reminder_cards.py), not the
+ * reminder subsystem (backend web/services/reminder_cards.py), not the
  * generator. They carry `cardKind: "reminder"` stamped at creation; cards
  * persisted BEFORE that field existed are recognized by their `card-rem-`
  * id prefix (history JSONB is never backfilled).

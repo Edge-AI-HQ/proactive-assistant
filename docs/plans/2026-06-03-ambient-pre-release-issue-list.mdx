@@ -143,7 +143,7 @@ description: "Ambient AI 6/15 发布前的 P0/P1/P2/P3 问题清单，跨 iOS pl
 
 ### 2.6 后端 ingest / summary
 
-- **[P0-F1] `pinai-agents/src/pinai_agents/web/routes/ui/devices.py:482-595`** — `/api/devices/ingest` body 大小、item 数量**完全不限**。单设备可上传单 batch 几 GB 拖死 worker。
+- **[P0-F1] `backend/src/pinai_agents/web/routes/ui/devices.py:482-595`** — `/api/devices/ingest` body 大小、item 数量**完全不限**。单设备可上传单 batch 几 GB 拖死 worker。
 
 - **[P0-F2] `web/storage.py:97-122`** — Base64 媒体直接 `b64decode(validate=False)` 进内存，无大小校验、无 MIME 校验，`upsert=true` → 同 `item_id` 可覆盖，路径无 content hash。DoS + 任意覆盖。
 
@@ -310,7 +310,7 @@ description: "Ambient AI 6/15 发布前的 P0/P1/P2/P3 问题清单，跨 iOS pl
 2. **`capacitor-plugins/ambient-ai/ios/Sources/AmbientAi/Models/LlamaTextGenerationEngine.swift`** — chat-template 不是 Jinja、greedy 无 rep penalty、tokenize buffer 不够、prompt-decode 无 deadline、UTF-8 跨 token 丢字、strdup double-free 路径、冷加载每 cycle 重跑。
 3. **`proactive-ai-frontend/src/services/ambient/timeline/pipeline.ts`** — 无锁、无 processing 状态、attemptCount 不复位、永久错误共享退避、`includeRecentPending` 名实不符、每 tick 重 replay 全天 raw。
 4. **`proactive-ai-frontend/src/services/ambient/sources/sound-classifier.ts`** — runId 捕获时机错、dedup set 不清、inflight/post-stop 漏 `markProcessed`、locale 不同步、null `start_ms`。
-5. **`pinai-agents/src/pinai_agents/web/routes/ui/devices.py`** — body/item 无限制、media upsert 覆盖、signed-url prefix 错、设备 id 不校验、savepoint N×N、`normalize_iso` NaN/Inf 500。
+5. **`backend/src/pinai_agents/web/routes/ui/devices.py`** — body/item 无限制、media upsert 覆盖、signed-url prefix 错、设备 id 不校验、savepoint N×N、`normalize_iso` NaN/Inf 500。
 
 ---
 
@@ -327,8 +327,8 @@ description: "Ambient AI 6/15 发布前的 P0/P1/P2/P3 问题清单，跨 iOS pl
 
 ## 8. 验证清单（每条 P0 修完后跑）
 
-- `cd pinai-agents && uv run ruff check && uv run mypy src`
-- `cd pinai-agents && uv run pytest tests/web/services/test_ambient_summary.py tests/web/routes/test_devices_ingest.py tests/web/db/repositories/test_personal_signals.py`
+- `cd backend && uv run ruff check && uv run mypy src`
+- `cd backend && uv run pytest tests/web/services/test_ambient_summary.py tests/web/routes/test_devices_ingest.py tests/web/db/repositories/test_personal_signals.py`
 - `cd proactive-ai-frontend && npm run type-check`
 - `cd proactive-ai-frontend && npm test -- ambient`
 - `npm --prefix capacitor-plugins/ambient-ai run build`

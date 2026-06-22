@@ -62,7 +62,7 @@ export default defineConfig({
     },
     server: {
       proxy: {
-        // 与 web dev 同构：/api 同源代理到本地 compose 的 pinai-web（端口
+        // 与 web dev 同构：/api 同源代理到本地 compose 的 api（端口
         // 随机，make urls 查后经 VITE_PIN_API_PROXY_TARGET 传入）。
         "/api": {
           target: process.env.VITE_PIN_API_PROXY_TARGET || "http://127.0.0.1:8000",

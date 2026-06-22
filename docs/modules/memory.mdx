@@ -157,7 +157,7 @@ HNSW 索引 + RLS(WHERE user_id 先短路再做 vector op),hot path:
 
 ## pinai_sdk(sandbox 内对端)
 
-`pinai-agents/packages/pinai_sdk/`,sandbox image 里 baked。chat 端工具或 `python_exec` 里都通过 `from pinai_sdk import client` 调,SDK 读 `PAI_API_URL` + `PAI_SANDBOX_TOKEN` env,打 `/api/agent/*`:
+`backend/packages/pinai_sdk/`,sandbox image 里 baked。chat 端工具或 `python_exec` 里都通过 `from pinai_sdk import client` 调,SDK 读 `PAI_API_URL` + `PAI_SANDBOX_TOKEN` env,打 `/api/agent/*`:
 
 ```python
 await client.memory.list(min_quality=0.6, subject="topic:", limit=20)
@@ -241,7 +241,7 @@ async with user_scoped_tx(pool, user_id) as conn:
 
 | 改动 | 先看 |
 |---|---|
-| Schema 改 / 加表 | `pinai-agents/db/migrations/`(NNN 顺序,只向前,RLS policy 同步加在 023 风格的新文件里) |
+| Schema 改 / 加表 | `backend/db/migrations/`(NNN 顺序,只向前,RLS policy 同步加在 023 风格的新文件里) |
 | Memory repository | `web/db/repositories/memory.py`(`list_active`、`add`、`supersede`、`archive`) |
 | Personal signals repository | `web/db/repositories/personal_signals.py`(`list`、`consume`、`add`、`mark_referenced`) |
 | World signals repository / 全局 ingest | `web/db/repositories/world_signals.py`、`web/services/world_ingest.py` |
@@ -252,32 +252,32 @@ async with user_scoped_tx(pool, user_id) as conn:
 | UI 路由 | `web/routes/ui/{memory,signals,profile,skills,raw,dreaming}.py` |
 | Agent 路由 | `web/routes/agent/{memory,signals,profile,skills,raw,world,evolution,cards,feedback,state}.py` |
 | pgvector embedding | `web/embeddings.py`、`pai_embedding_queue` migration `029` |
-| pinai_sdk client | `pinai-agents/packages/pinai_sdk/src/pinai_sdk/` |
-| dream / evolve / crystallize agent | `pinai-agents/src/pinai_agents/chat/agents/{dream,evolve,crystallize}.py` |
-| RLS helper | `pinai-agents/src/pinai_agents/web/db/rls.py` |
+| pinai_sdk client | `backend/packages/pinai_sdk/src/pinai_sdk/` |
+| dream / evolve / crystallize agent | `backend/src/pinai_agents/chat/agents/{dream,evolve,crystallize}.py` |
+| RLS helper | `backend/src/pinai_agents/web/db/rls.py` |
 | 前端 memory / profile / skill | `proactive-ai-frontend/src/hooks/{useMemories,useSkills}.ts`、`components/{MemoriesPanel,SkillsPanel,ControlPanel,GoalsView}.tsx` |
 
 ## 验证方式
 
 ```bash
 # Repository 单测
-cd pinai-agents && uv run pytest tests/web/db/                       # 全 repository 套件
-cd pinai-agents && uv run pytest tests/web/db/test_memory_repo.py
-cd pinai-agents && uv run pytest tests/web/db/test_personal_signals_repo.py
-cd pinai-agents && uv run pytest tests/web/db/test_profile_repo.py
+cd backend && uv run pytest tests/web/db/                       # 全 repository 套件
+cd backend && uv run pytest tests/web/db/test_memory_repo.py
+cd backend && uv run pytest tests/web/db/test_personal_signals_repo.py
+cd backend && uv run pytest tests/web/db/test_profile_repo.py
 
 # Agent / UI 路由集成
-cd pinai-agents && uv run pytest tests/web/routes/test_agent_profile_routes.py
-cd pinai-agents && uv run pytest tests/web/routes/                   # 全 route 套件
+cd backend && uv run pytest tests/web/routes/test_agent_profile_routes.py
+cd backend && uv run pytest tests/web/routes/                   # 全 route 套件
 
 # chat-side evolution agent
-cd pinai-agents && uv run pytest tests/chat/agents/                  # dream / evolve / crystallize(若存在)
+cd backend && uv run pytest tests/chat/agents/                  # dream / evolve / crystallize(若存在)
 
 # pinai_sdk
-cd pinai-agents/packages/pinai_sdk && uv run pytest
+cd backend/packages/pinai_sdk && uv run pytest
 
 # 类型 + lint
-cd pinai-agents && uv run ruff check .
+cd backend && uv run ruff check .
 cd proactive-ai-frontend && npm run type-check
 ```
 

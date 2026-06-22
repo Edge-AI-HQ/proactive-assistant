@@ -79,7 +79,7 @@ services:
   # ── apis + openclaw retired ──
   # The legacy Node apis service (auth / container-orchestration / payment /
   # gateway / mobile-proxy) and the per-user OpenClaw runtime image have
-  # both been folded into pinai-agents. See
+  # both been folded into backend. See
   # docs/plans/2026-05-04-pinai-agents-backend-consolidation.mdx § retirement.
   # Source code stays in the repo for git history; nothing builds or runs.
 
@@ -87,15 +87,15 @@ services:
   # One-shot: creates the litellm database (LiteLLM expects it to exist
   # before its own migrations run), then applies pai_* yoyo migrations.
   # Combining both into one container removes the confusing two-migrate-
-  # container layout. Uses the pinai-agents image which already ships
+  # container layout. Uses the backend image which already ships
   # postgresql-client + yoyo.
   db-migrate:
     build: &pinai-build
-      context: ./pinai-agents
+      context: ./backend
       dockerfile: Dockerfile
       args:
         DEPLOY_ENV: dev
-    image: pinai-agents:latest
+    image: backend:latest
     depends_on:
       postgres:
         condition: service_healthy
@@ -127,15 +127,15 @@ services:
         yoyo apply --batch -d "$$DATABASE_URL"
         echo "→ db-migrate complete."
 
-  # ── pinai-agents WEB process group ──
+  # ── backend WEB process group ──
   # Trust-bearing: holds Supabase service_role + HMAC signing key + Composio
   # master (all to be added in Step A-C). Currently only /health is mounted.
-  # Single image, single source — see pinai-chat below for the LLM-loop
+  # Single image, single source — see agent-engine below for the LLM-loop
   # process group sharing this image. Reference:
   # docs/plans/2026-05-04-pinai-agents-backend-consolidation.mdx § 部署形态.
-  pinai-web:
+  api:
     build: *pinai-build
-    image: pinai-agents:latest
+    image: backend:latest
     restart: unless-stopped
     depends_on:
       litellm:
@@ -145,12 +145,12 @@ services:
       redis:
         condition: service_healthy
     env_file:
-      - ./pinai-agents/.env
+      - ./backend/.env
     environment:
-      ENTRYPOINT_MODULE: pinai_agents.web.asgi:app
+      ENTRYPOINT_MODULE: pinai_api.asgi:app
       ENTRYPOINT_PORT: "8000"
       LITELLM_BASE_URL: http://litellm:4000/v1
-      # Master credentials live in pinai-agents/.env (encrypted source:
+      # Master credentials live in backend/.env (encrypted source:
       # .env.dev). The DB URL is overridden here only because the in-
       # cluster compose Postgres uses service-name DNS, not the prod
       # Supabase URL stored in .env.
@@ -158,7 +158,7 @@ services:
       # Agent Core FrameBus (Redis Streams) — per-worktree compose redis.
       REDIS_URL: redis://redis:6379/0
       # web → chat HTTP proxy target.
-      CHAT_INTERNAL_URL: http://pinai-chat:8001
+      CHAT_INTERNAL_URL: http://agent-engine:8001
       # 本 worktree 的 git 分支名（Makefile export）→ /health dev_label，
       # DebugPanel 的 Connected backend 卡靠它分辨手机连的是哪个 worktree。
       PINAI_DEV_LABEL: ${PINAI_DEV_LABEL:-}
@@ -172,44 +172,44 @@ services:
       retries: 20
       start_period: 30s
 
-  # ── pinai-agents CHAT process group ──
+  # ── backend CHAT process group ──
   # Untrusted runtime: runs DeepAgents / LangGraph LLM loop. Same image as
-  # pinai-web; entrypoint flipped to chat/asgi which fail-fasts on master
+  # api; entrypoint flipped to chat/asgi which fail-fasts on master
   # credential leak. Step F-1 will swap APIs proxy target to call web first
   # and have web HS256-sign + forward to here.
-  pinai-chat:
+  agent-engine:
     build: *pinai-build
-    image: pinai-agents:latest
+    image: backend:latest
     restart: unless-stopped
     depends_on:
       litellm:
         condition: service_healthy
       db-migrate:
         condition: service_completed_successfully
-      pinai-web:
+      api:
         condition: service_started
     env_file:
       # Chat-only env: master credentials stripped (PAI_HMAC_SECRET,
       # DATABASE_URL, COMPOSIO_API_KEY, STRIPE_*). Auto-derived from
-      # .env in `make ensure-env-pinai-agents`. The trust-boundary
-      # fail-fast in chat/asgi.py crashes if any of those leak in.
-      - ./pinai-agents/.env.chat
+      # .env in `make ensure-env-backend`. The trust-boundary
+      # fail-fast in agent_engine/asgi.py crashes if any leak in.
+      - ./backend/.env.chat
     environment:
-      ENTRYPOINT_MODULE: pinai_agents.chat.asgi:app
+      ENTRYPOINT_MODULE: agent_engine.asgi:app
       ENTRYPOINT_PORT: "8001"
       LITELLM_BASE_URL: http://litellm:4000/v1
       # LangGraph checkpointer Postgres URL — separate role from web's
       # service_role (post-migration 024_pai_chat_role.sql).
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
-      WEB_INTERNAL_URL: http://pinai-web:8000
+      WEB_INTERNAL_URL: http://api:8000
       # PAI_API_URL is what python_exec injects into the Daytona sandbox
       # so pinai_sdk can call /api/agent/*. The compose internal URL
-      # (pinai-web:8000) only resolves inside this docker network — a
+      # (api:8000) only resolves inside this docker network — a
       # cloud sandbox can't reach it. For real SDK usage, override via
       # `make tunnel-up`, which puts a public ngrok URL in shell env
       # (sourced from ./.env). Default keeps internal URL so chat still
       # boots when the tunnel is down.
-      PAI_API_URL: ${PAI_API_URL:-http://pinai-web:8000}
+      PAI_API_URL: ${PAI_API_URL:-http://api:8000}
       # Local-only generator debug path: run DeepAgents code execution in
       # the chat container instead of Daytona so pinai_sdk can use docker DNS.
       PINAI_LOCAL_SANDBOX: ${PINAI_LOCAL_SANDBOX:-0}
@@ -232,12 +232,47 @@ services:
       retries: 20
       start_period: 30s
 
+  # ── reward-dashboard service (internal review tool backend) ──
+  # Standalone untrusted service: read-only product DB + langsmith, NO master
+  # credentials (env_file = .env.chat, master stripped — same as agent-engine).
+  # Serves the read-only review routes /api/reward-dashboard/*; impersonation's
+  # master-cred route stays in the api service under /api/operator/*. The
+  # internal-reward-dashboard Vite app proxies by prefix to both (see its
+  # vite.config). Nothing depends_on it — only needed when working on the
+  # internal-reward-dashboard app.
+  reward-dashboard:
+    build: *pinai-build
+    image: backend:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+    env_file:
+      - ./backend/.env.chat
+    environment:
+      ENTRYPOINT_MODULE: pinai_reward_dashboard.asgi:app
+      ENTRYPOINT_PORT: "8002"
+      # Local superuser DSN; the scoped read-only role is a deploy-time TODO
+      # (backend/deploy/fly-split/README.md § DB roles).
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
+    ports:
+      - "8002"
+    healthcheck:
+      test:
+        ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8002/health')\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+
   # ── Frontend (proactive-ai-frontend) ──
   # Static SPA built with Vite + served by nginx. In web/browser mode the SPA
   # talks to the backend same-origin (PIN_API_BASE = "" — see platform.ts):
-  # nginx in this image reverse-proxies /api/* + /health to pinai-web:8000
+  # nginx in this image reverse-proxies /api/* + /health to api:8000
   # via compose service-name DNS, inside the network. So the browser only
-  # ever hits the frontend's own host port — pinai-web's host port can be
+  # ever hits the frontend's own host port — api's host port can be
   # random without affecting web. Find the frontend port with `make urls`.
   # (Native/mobile builds use an absolute VITE_PIN_API_URL instead; that path
   # goes through ngrok, not this container.)
@@ -258,15 +293,15 @@ services:
     # these via [env] in proactive-ai-frontend/fly.<env>.toml.
     environment:
       NGINX_RESOLVER: "127.0.0.11 ipv6=off"
-      NGINX_UPSTREAM_URL: "http://pinai-web:8000"
+      NGINX_UPSTREAM_URL: "http://api:8000"
     ports:
       - "8080"
     depends_on:
-      pinai-web:
+      api:
         condition: service_healthy
 
   # apps/web — zebra 桌面 web 端，与 frontend 并存的独立 SPA（同一份 nginx
-  # 机制：same-origin /api 反代 pinai-web:8000，见 apps/web/Dockerfile）。
+  # 机制：same-origin /api 反代 api:8000，见 apps/web/Dockerfile）。
   # apps/web 是 same-origin，web build 用空 base，不需要 VITE_PIN_API_URL。
   # host 端口随机（容器内同样 8080，与 frontend 不冲突），`make urls` 查 Web 行。
   web:
@@ -281,15 +316,15 @@ services:
     restart: unless-stopped
     environment:
       NGINX_RESOLVER: "127.0.0.11 ipv6=off"
-      NGINX_UPSTREAM_URL: "http://pinai-web:8000"
+      NGINX_UPSTREAM_URL: "http://api:8000"
     ports:
       - "8080"
     depends_on:
-      pinai-web:
+      api:
         condition: service_healthy
 
   # ── ngrok tunnel (opt-in via --profile tunnel) ──
-  # Exposes pinai-web:8000 to the public internet so Daytona cloud
+  # Exposes api:8000 to the public internet so Daytona cloud
   # sandboxes can reach the SDK endpoints (/api/agent/*). Only needed
   # for local development of the generator/dreaming agents; chat without
   # python_exec works fine without this.
@@ -304,13 +339,13 @@ services:
     restart: unless-stopped
     profiles: ["tunnel"]
     depends_on:
-      pinai-web:
+      api:
         condition: service_healthy
     environment:
       NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:-}
     command:
       - "http"
-      - "pinai-web:8000"
+      - "api:8000"
       # Per-worktree subdomain (paid plan): each group gets a distinct, stable
       # .ngrok.app URL = its project name, so multiple worktrees / teammates on
       # the shared token never collide on the single dev domain (ERR_NGROK_334).

@@ -28,9 +28,9 @@ Current implementation baseline:
 
 Important current architecture paths:
 
-- Scheduler dispatcher: `pinai-agents/src/pinai_agents/web/scheduler/dispatcher.py`
-- Scheduled task repository: `pinai-agents/src/pinai_agents/web/db/repositories/scheduled_tasks.py`
-- Web app router registration: `pinai-agents/src/pinai_agents/web/app.py`
+- Scheduler dispatcher: `backend/src/pinai_agents/web/scheduler/dispatcher.py`
+- Scheduled task repository: `backend/src/pinai_agents/web/db/repositories/scheduled_tasks.py`
+- Web app router registration: `backend/src/pinai_agents/web/app.py`
 - Main Chat router: `proactive-ai-frontend/src/components/chat/MainChat.tsx`
 - Conversation UI: `proactive-ai-frontend/src/components/chat/conversation/ConversationView.tsx`
 - Conversation runtime: `proactive-ai-frontend/src/components/chat/conversation/useConversationRuntime.ts`
@@ -117,11 +117,11 @@ Expected: no conflicts and the scheduled generator implementation files return a
 
 **Files:**
 
-- Create: `pinai-agents/src/pinai_agents/web/services/scheduled_generators.py`
-- Create: `pinai-agents/src/pinai_agents/web/routes/ui/scheduled_generators.py`
-- Modify: `pinai-agents/src/pinai_agents/web/db/repositories/scheduled_tasks.py`
-- Modify: `pinai-agents/src/pinai_agents/web/app.py`
-- Test: `pinai-agents/tests/web/routes/test_scheduled_generators.py`
+- Create: `backend/src/pinai_agents/web/services/scheduled_generators.py`
+- Create: `backend/src/pinai_agents/web/routes/ui/scheduled_generators.py`
+- Modify: `backend/src/pinai_agents/web/db/repositories/scheduled_tasks.py`
+- Modify: `backend/src/pinai_agents/web/app.py`
+- Test: `backend/tests/web/routes/test_scheduled_generators.py`
 
 - [x] Add `ScheduledTasksRepository` helpers scoped by kind.
 
@@ -165,7 +165,7 @@ Required auth boundary:
 Expected route test:
 
 ```bash
-cd pinai-agents
+cd backend
 PYTHONPATH=src python3 -m pytest tests/web/routes/test_scheduled_generators.py -q
 ```
 
@@ -183,15 +183,15 @@ DB-backed tests may skip without `TEST_DATABASE_URL`; do not treat those skips a
 
 **Files:**
 
-- Modify: `pinai-agents/src/pinai_agents/web/scheduler/dispatcher.py`
-- Modify: `pinai-agents/src/pinai_agents/web/services/chat_proxy.py`
-- Modify: `pinai-agents/src/pinai_agents/shared/api_models.py`
-- Modify: `pinai-agents/src/pinai_agents/chat/transport/routes/generate.py`
-- Modify: `pinai-agents/src/pinai_agents/chat/agents/generator.py`
-- Test: `pinai-agents/tests/web/scheduler/test_dispatcher.py`
-- Test: `pinai-agents/tests/web/services/test_chat_proxy.py`
-- Test: `pinai-agents/tests/chat/routes/test_generate.py`
-- Test: `pinai-agents/tests/chat/agents/test_generator_preferences.py`
+- Modify: `backend/src/pinai_agents/web/scheduler/dispatcher.py`
+- Modify: `backend/src/pinai_agents/web/services/chat_proxy.py`
+- Modify: `backend/src/pinai_agents/shared/api_models.py`
+- Modify: `backend/src/pinai_agents/chat/transport/routes/generate.py`
+- Modify: `backend/src/pinai_agents/chat/agents/generator.py`
+- Test: `backend/tests/web/scheduler/test_dispatcher.py`
+- Test: `backend/tests/web/services/test_chat_proxy.py`
+- Test: `backend/tests/chat/routes/test_generate.py`
+- Test: `backend/tests/chat/agents/test_generator_preferences.py`
 
 - [x] Add `generator.scheduled` to generator scheduler kinds.
 
@@ -231,7 +231,7 @@ Prompt boundary:
 Run:
 
 ```bash
-cd pinai-agents
+cd backend
 PYTHONPATH=src python3 -m pytest \
   tests/web/routes/test_scheduled_generators.py \
   tests/web/services/test_chat_proxy.py \
@@ -252,7 +252,7 @@ Observed result on 2026-06-08:
 Run:
 
 ```bash
-cd pinai-agents
+cd backend
 PYTHONPATH=src python3 -m compileall -q \
   src/pinai_agents/web/routes/ui/scheduled_generators.py \
   src/pinai_agents/web/services/scheduled_generators.py \
@@ -277,7 +277,7 @@ Observed result on 2026-06-08: both commands passed.
 `uv` and `ruff` were not available in the current shell on 2026-06-08. If they become available, also run:
 
 ```bash
-cd pinai-agents
+cd backend
 uv run ruff check
 uv run mypy src
 ```
@@ -288,11 +288,11 @@ uv run mypy src
 
 **Files:**
 
-- Create: `pinai-agents/src/pinai_agents/chat/tools/direct/scheduled_generators.py`
-- Modify: `pinai-agents/src/pinai_agents/chat/tools/direct/__init__.py`
-- Modify: `pinai-agents/src/pinai_agents/chat/agents/main_chat.py`
-- Test: `pinai-agents/tests/chat/tools/test_scheduled_generators_tools.py`
-- Test: `pinai-agents/tests/chat/agents/test_main_chat_scheduled_generator_prompt.py`
+- Create: `backend/src/pinai_agents/chat/tools/direct/scheduled_generators.py`
+- Modify: `backend/src/pinai_agents/chat/tools/direct/__init__.py`
+- Modify: `backend/src/pinai_agents/chat/agents/main_chat.py`
+- Test: `backend/tests/chat/tools/test_scheduled_generators_tools.py`
+- Test: `backend/tests/chat/agents/test_main_chat_scheduled_generator_prompt.py`
 
 - [ ] Add native tools that call the existing `/api/scheduled-generators/*` API.
 
@@ -309,7 +309,7 @@ scheduled_generator_delete
 
 Required implementation boundary:
 
-- Use `pinai-agents/src/pinai_agents/chat/tools/http_client.py`.
+- Use `backend/src/pinai_agents/chat/tools/http_client.py`.
 - Do not import `pinai_agents.web` from chat.
 - Do not give chat process web master credentials.
 - Do not add a second auth path; use current agent-run JWT through `http_client`.
@@ -423,9 +423,9 @@ Placement:
 
 **Files to inspect before editing:**
 
-- `pinai-agents/src/pinai_agents/web/scheduler/dispatcher.py`
-- `pinai-agents/src/pinai_agents/chat/agents/generator.py`
-- card serialization files under `pinai-agents/src/pinai_agents/web/`
+- `backend/src/pinai_agents/web/scheduler/dispatcher.py`
+- `backend/src/pinai_agents/chat/agents/generator.py`
+- card serialization files under `backend/src/pinai_agents/web/`
 - card rendering files under `proactive-ai-frontend/src/components/now/` and `proactive-ai-frontend/src/components/card/`
 
 - [ ] First inspect whether card output already receives enough run/source metadata from `generation_request`.
@@ -447,7 +447,7 @@ Scheduled · AI 新闻
 Backend:
 
 ```bash
-cd pinai-agents
+cd backend
 PYTHONPATH=src python3 -m pytest \
   tests/web/routes/test_scheduled_generators.py \
   tests/web/services/test_chat_proxy.py \

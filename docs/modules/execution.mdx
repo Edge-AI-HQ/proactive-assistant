@@ -127,7 +127,7 @@ sequenceDiagram
 ### worker → chat 执行
 
 - `web/agent_core/worker.py`:per-session lease drain mailbox → 创建 run → `ChatRunClient` 调 chat → 帧 publish 到 RedisFrameBus + `ChatTurnRecorder` 累积 → finalize 写 `pai_chat_messages`。
-- `web/agent_core/client.py:ChatRunClient` 签 EdDSA agent-run JWT,claims 带 `user_id` / `run_id` / `virtual_key` / `browserbase_context_id` / 1h TTL / `jti`。POST `CHAT_INTERNAL_URL=http://pinai-chat:8001/agent/chat`,解析 SSE 成帧。
+- `web/agent_core/client.py:ChatRunClient` 签 EdDSA agent-run JWT,claims 带 `user_id` / `run_id` / `virtual_key` / `browserbase_context_id` / 1h TTL / `jti`。POST `CHAT_INTERNAL_URL=http://agent-engine:8001/agent/chat`,解析 SSE 成帧。
 - `web/services/chat_proxy.py` 只剩一次性代理:`call_chat_history`(conversation backfill)、`call_proactive_history`(proactive 分页)、`call_generate`。
 - `web/services/card_fanout.py`:generator 完成后对前 N 张卡 `post_message`(`idempotency_key=card-bootstrap-<id>`)预跑 bootstrap turn。
 
@@ -185,7 +185,7 @@ chat 端验签 + `jti` 黑名单(`pai_jti_revocations`),失败 401。
 - 每个 LangGraph thread 一个 sandbox(LRU 100,5min auto_stop,24h auto_delete,详见 [Runtime & Deployment](./runtime-deployment))。
 - 注入 env:`PAI_API_URL`(本地 ngrok / 生产公网)+ `PAI_SANDBOX_TOKEN` phantom token + `PAI_RUN_JWT`。
 - sandbox 里 baked `pinai_sdk`,`from pinai_sdk import client`,所有 `/api/agent/*` 走 phantom token 鉴权。
-- 本地只想验证 chat/generator 质量、不想走 Daytona/ngrok 时,设置 `PINAI_LOCAL_SANDBOX=1` 并重建 `pinai-chat`;chat route 和 generator 都会用 `LocalShellBackend` 在 `pinai-chat` 容器内执行,`pinai_sdk` 通过 `http://pinai-web:8000` 回连 web。
+- 本地只想验证 chat/generator 质量、不想走 Daytona/ngrok 时,设置 `PINAI_LOCAL_SANDBOX=1` 并重建 `agent-engine`;chat route 和 generator 都会用 `LocalShellBackend` 在 `agent-engine` 容器内执行,`pinai_sdk` 通过 `http://api:8000` 回连 web。
 - 适合多步组合调用(`run_query=fetch + filter + reduce + memory.add`),不要为每步都开 native tool。
 - 退出 thread 时 `evict_thread(thread_id)` 主动回收;`auto_stop` 兜底防 sandbox 泄漏。
 
@@ -207,7 +207,7 @@ Browserbase context(`ensure_browserbase_context`)在 onboarding 完成时(`profi
 
 ### Composio 副作用闭环(当前状态:prompt + allowlist,**没有运行时 verb 闸**)
 
-文件 `pinai-agents/src/pinai_agents/web/routes/agent/composio.py` 顶部 docstring 写得很清楚:
+文件 `backend/src/pinai_agents/web/routes/agent/composio.py` 顶部 docstring 写得很清楚:
 
 > Side-effect gate: deferred. The plan currently relies on session `tools=` allowlist as the physical guard; per-call HITL approval is TBD pending DeepAgents permission middleware integration.
 
@@ -274,23 +274,23 @@ history 真相是 `pai_chat_messages`(worker finalize 写入,`/api/conversation/
 
 | 改动 | 先看 |
 |---|---|
-| conversation UI 路由 | `pinai-agents/src/pinai_agents/web/routes/ui/conversation.py` |
-| actor kernel(worker / mailbox / runs / FrameBus) | `pinai-agents/src/pinai_agents/web/agent_core/` |
-| card pre-run fanout | `pinai-agents/src/pinai_agents/web/services/card_fanout.py` |
-| web → chat 一次性代理(history/generate) | `pinai-agents/src/pinai_agents/web/services/chat_proxy.py` |
-| chat 端 SSE 端点 | `pinai-agents/src/pinai_agents/chat/transport/routes/chat.py` |
-| chat agent prompt | `pinai-agents/src/pinai_agents/chat/agents/main_chat.py`、`chat/agents/card_execution.py` |
-| Native @tool 套件 | `pinai-agents/src/pinai_agents/chat/tools/native/` |
-| Tool HTTP client(签 run JWT) | `pinai-agents/src/pinai_agents/chat/tools/http_client.py` |
-| python_exec sandbox 工具 | `pinai-agents/src/pinai_agents/chat/tools/sandbox.py` |
-| 本地 sandbox helper | `pinai-agents/src/pinai_agents/chat/tools/local_sandbox.py` |
-| Browser tool / 状态 / 路由 | `pinai-agents/src/pinai_agents/chat/browser/{manager,tool,control_state,events,routes}.py` |
-| Composio meta-tool 转发 / 副作用约束 | `pinai-agents/src/pinai_agents/chat/tools/native/composio_meta.py`、`web/routes/agent/composio.py`(顶部 docstring 说明 verb gate deferred)、`web/composio_service.py` 的 session `tools=` allowlist |
-| LangGraph checkpointer | `pinai-agents/src/pinai_agents/chat/harness/checkpoint.py` |
-| context compaction(token/message 触发的 in-place LLM 压缩) | `pinai-agents/src/pinai_agents/chat/harness/compaction.py` |
-| SSE 信封 / 帧转换 | `pinai-agents/src/pinai_agents/shared/sse_envelope.py`、`chat/transport/sse.py` |
-| Thread metadata 表 | `pinai-agents/db/migrations/035_pai_chat_threads.sql`、`web/db/repositories/chat_threads.py` |
-| 共享 api 模型 | `pinai-agents/src/pinai_agents/shared/api_models.py`(`ChatInitRequest` / `ChatSendRequest` / `ChatHistoryResponse` 等) |
+| conversation UI 路由 | `backend/src/pinai_agents/web/routes/ui/conversation.py` |
+| actor kernel(worker / mailbox / runs / FrameBus) | `backend/src/pinai_agents/web/agent_core/` |
+| card pre-run fanout | `backend/src/pinai_agents/web/services/card_fanout.py` |
+| web → chat 一次性代理(history/generate) | `backend/src/pinai_agents/web/services/chat_proxy.py` |
+| chat 端 SSE 端点 | `backend/src/pinai_agents/chat/transport/routes/chat.py` |
+| chat agent prompt | `backend/src/pinai_agents/chat/agents/main_chat.py`、`chat/agents/card_execution.py` |
+| Native @tool 套件 | `backend/src/pinai_agents/chat/tools/native/` |
+| Tool HTTP client(签 run JWT) | `backend/src/pinai_agents/chat/tools/http_client.py` |
+| python_exec sandbox 工具 | `backend/src/pinai_agents/chat/tools/sandbox.py` |
+| 本地 sandbox helper | `backend/src/pinai_agents/chat/tools/local_sandbox.py` |
+| Browser tool / 状态 / 路由 | `backend/src/pinai_agents/chat/browser/{manager,tool,control_state,events,routes}.py` |
+| Composio meta-tool 转发 / 副作用约束 | `backend/src/pinai_agents/chat/tools/native/composio_meta.py`、`web/routes/agent/composio.py`(顶部 docstring 说明 verb gate deferred)、`web/composio_service.py` 的 session `tools=` allowlist |
+| LangGraph checkpointer | `backend/src/pinai_agents/chat/harness/checkpoint.py` |
+| context compaction(token/message 触发的 in-place LLM 压缩) | `backend/src/pinai_agents/chat/harness/compaction.py` |
+| SSE 信封 / 帧转换 | `backend/src/pinai_agents/shared/sse_envelope.py`、`chat/transport/sse.py` |
+| Thread metadata 表 | `backend/db/migrations/035_pai_chat_threads.sql`、`web/db/repositories/chat_threads.py` |
+| 共享 api 模型 | `backend/src/pinai_agents/shared/api_models.py`(`ChatInitRequest` / `ChatSendRequest` / `ChatHistoryResponse` 等) |
 | 前端 chat runtime | `proactive-ai-frontend/src/components/chat/conversation/useConversationRuntime.ts` |
 | 共享 chat 视图 | `proactive-ai-frontend/src/components/chat/conversation/ConversationView.tsx`、`chat/MainChat.tsx`、`chat/CardChat.tsx` |
 | 工具活动行 | `proactive-ai-frontend/src/components/chat/tool-steps.ts`、`main-chat/ToolActivityCard.tsx` |
@@ -301,18 +301,18 @@ history 真相是 `pai_chat_messages`(worker finalize 写入,`/api/conversation/
 
 ```bash
 # 路由 / conversation + thread metadata
-cd pinai-agents && uv run pytest tests/web/routes/test_chat_threads_routes.py
-cd pinai-agents && uv run pytest tests/web/db/repositories/test_chat_threads_repo.py
-cd pinai-agents && uv run pytest tests/web/routes/                    # 全 route 套件
+cd backend && uv run pytest tests/web/routes/test_chat_threads_routes.py
+cd backend && uv run pytest tests/web/db/repositories/test_chat_threads_repo.py
+cd backend && uv run pytest tests/web/routes/                    # 全 route 套件
 
 # chat agent / native tools / browser
-cd pinai-agents && uv run pytest tests/chat/test_native_tools.py
-cd pinai-agents && uv run pytest tests/chat/browser/test_event_bus.py
-cd pinai-agents && uv run pytest tests/chat/browser/test_control_state.py
-cd pinai-agents && uv run pytest tests/chat/                          # 全 chat 套件
+cd backend && uv run pytest tests/chat/test_native_tools.py
+cd backend && uv run pytest tests/chat/browser/test_event_bus.py
+cd backend && uv run pytest tests/chat/browser/test_control_state.py
+cd backend && uv run pytest tests/chat/                          # 全 chat 套件
 
 # 类型 + 前端
-cd pinai-agents && uv run ruff check .
+cd backend && uv run ruff check .
 cd proactive-ai-frontend && npm run type-check
 cd proactive-ai-frontend && npm test
 ```
@@ -328,7 +328,7 @@ cd proactive-ai-frontend && npm test
 LangSmith trace:
 
 ```bash
-set -a && . pinai-agents/.env && set +a
+set -a && . backend/.env && set +a
 langsmith trace list --project pinai-agents-dev --format pretty | head -20
 langsmith thread list --project pinai-agents-dev                   # chat session
 ```
@@ -336,8 +336,8 @@ langsmith thread list --project pinai-agents-dev                   # chat sessio
 容器日志:
 
 ```bash
-make logs-pinai-web | grep -E "conversation|fanout|agent worker"
-make logs-pinai-chat | grep -E "/agent/chat|chat:tool|browser:"
+make logs-api | grep -E "conversation|fanout|agent worker"
+make logs-agent-engine | grep -E "/agent/chat|chat:tool|browser:"
 ```
 
 ## 踩坑
@@ -345,7 +345,7 @@ make logs-pinai-chat | grep -E "/agent/chat|chat:tool|browser:"
 - chat agent prompt 的 stable / volatile 边界没像旧 OpenClaw plugin 那样有硬测试断言,改 prompt 时要自觉把 `card_context` / firstMessage 这种 volatile 字段放在最末,不要污染前缀(否则 LiteLLM cache 失效)。
 - Composio side-effect gate 当前是 **prompt-only**(`web/routes/agent/composio.py` docstring 明说 "Side-effect gate: deferred"),没有 verb 黑/白名单硬闸 — 改 toolkit / 改 agent prompt 时**不要**假设代码会兜底拦截危险 slug。等 DeepAgents permission middleware 落地之后才会补 verb 闸。
 - `GMAIL_SEND_EMAIL` 不会被代码拒;agent 走不走 draft 链路完全靠 prompt 控住,改 prompt 别去掉这条规则。
-- python_exec 在 sandbox 里跑,sandbox 跟 chat 进程异步;`/state/*.json` 文件是 sandbox 文件系统,前端拿不到,只能通过 agent 输出的文本看。本地 `PINAI_LOCAL_SANDBOX=1` 时这些文件在 `pinai-chat` 容器的 `/state` 下。
+- python_exec 在 sandbox 里跑,sandbox 跟 chat 进程异步;`/state/*.json` 文件是 sandbox 文件系统,前端拿不到,只能通过 agent 输出的文本看。本地 `PINAI_LOCAL_SANDBOX=1` 时这些文件在 `agent-engine` 容器的 `/state` 下。
 - Browser session 上限 5,开第六个会 reject;开 session 后 5min 空闲会自动 close,前端 reconnect 时 server 会主推 `browser:closed`,前端用过期 session id 调 `/input` 打死。
 - AI / user control 切换只对写动作生效,`snapshot` / `get_text` / `screenshot` 在 user 接管期间也允许 — 设计就是让 AI 保留情境感知。
 - LangGraph checkpointer 写 `langgraph` schema,清 chat 状态不要 truncate `pai_chat_threads`(那是 metadata),要清 `langgraph.*` 表。

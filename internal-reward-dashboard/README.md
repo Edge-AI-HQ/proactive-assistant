@@ -6,7 +6,7 @@ building a casebook, and inspecting generation traces.
 ## Local Run
 
 The app reads `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` from
-`../pinai-agents/.env` through Vite's `envDir`.
+`../backend/.env` through Vite's `envDir`.
 
 ```bash
 cd internal-reward-dashboard
@@ -20,7 +20,7 @@ may fall back to the configured Fly site URL.
 
 Local API calls use same-origin `/api/*` and Vite proxies them to
 `http://127.0.0.1:8000` by default. Override with
-`VITE_PIN_API_PROXY_TARGET` in `pinai-agents/.env` if the web process runs
+`VITE_PIN_API_PROXY_TARGET` in `backend/.env` if the web process runs
 elsewhere.
 
 Authentication uses Supabase Google OAuth. Use the same Google account as the

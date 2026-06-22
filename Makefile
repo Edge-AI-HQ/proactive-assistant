@@ -1,14 +1,14 @@
-.PHONY: help init env-local ensure-env ensure-env-litellm ensure-env-pinai-agents ensure-env-root
-.PHONY: up down build build-pinai-agents build-frontend build-web restart restart-frontend restart-web status urls
+.PHONY: help init env-local ensure-env ensure-env-litellm ensure-env-backend ensure-env-root
+.PHONY: up down build build-backend build-frontend build-web restart restart-frontend restart-web status urls
 .PHONY: local local-stop local-status
-.PHONY: logs logs-litellm logs-postgres logs-pinai-agents logs-pinai-web logs-pinai-chat logs-frontend logs-web
+.PHONY: logs logs-litellm logs-postgres logs-backend logs-api logs-agent-engine logs-frontend logs-web logs-reward
 .PHONY: migrate reset clean
 .PHONY: deploy-pinai-dev deploy-pinai-prod deploy-frontend-dev deploy-frontend-prod deploy-reward-dashboard-dev deploy-web-dev deploy-web-prod
 .PHONY: deploy-litellm-dev deploy-litellm-prod
 .PHONY: ios android macos rn ngrok githooks install
 .PHONY: tunnel-up tunnel-down tunnel-status
 
-# Running stack: postgres + litellm + pinai-agents (web + chat) +
+# Running stack: postgres + litellm + backend (web + chat) +
 # proactive-ai-frontend. apis/ and pinai-openclaw/ are retired (source
 # kept for git history only). ensure-env auto-decrypts the dotenvx-
 # encrypted .env.dev → .env on each `make up`.
@@ -42,11 +42,11 @@ NPM_REGISTRY := $(shell \
 endif
 export NPM_REGISTRY
 
-# VITE_* build args sourced from pinai-agents/.env (single source of
-# truth, decrypted by ensure-env-pinai-agents). Used by `docker compose
+# VITE_* build args sourced from backend/.env (single source of
+# truth, decrypted by ensure-env-backend). Used by `docker compose
 # build frontend` and the Capacitor ios/android targets.
 define export_vite
-set -a && . ./pinai-agents/.env && set +a
+set -a && . ./backend/.env && set +a
 endef
 
 help: ## Show this help
@@ -79,13 +79,13 @@ node_modules/.install-stamp: package-lock.json
 # dotenvx binary (a root devDependency) is auto-installed before first use — no
 # manual `npm install` needed before `make up`/`reset`/`restart`.
 
-ensure-env: ensure-env-litellm ensure-env-pinai-agents ensure-env-root ## Auto-decrypt all .env files if needed
+ensure-env: ensure-env-litellm ensure-env-backend ensure-env-root ## Auto-decrypt all .env files if needed
 
 ensure-env-litellm: install
 	@bash scripts/decrypt_env.sh ops/litellm
 
-ensure-env-pinai-agents: install
-	@bash scripts/decrypt_env.sh pinai-agents
+ensure-env-backend: install
+	@bash scripts/decrypt_env.sh backend
 	@# Re-derive .env.chat (master creds stripped) whenever .env changes —
 	@# atomically, and only with a valid FORBIDDEN_ENVS filter (an empty regex
 	@# from a trust_boundary import failure would strip every line to nothing).
@@ -93,28 +93,28 @@ ensure-env-pinai-agents: install
 	@# assert that (total lines == KEY= lines) before stripping, so a future
 	@# multi-line secret fails loudly here instead of silently leaking its
 	@# continuation lines past the trust boundary into the chat container.
-	@if [ ! -s pinai-agents/.env.chat ] || [ pinai-agents/.env -nt pinai-agents/.env.chat ]; then \
-		echo "Deriving pinai-agents/.env.chat (master creds stripped for chat process)"; \
-		FORBIDDEN_RE=$$(PYTHONPATH=pinai-agents/src python3 -c \
-			"from pinai_agents.chat.trust_boundary import FORBIDDEN_ENVS; print('^(' + '|'.join(FORBIDDEN_ENVS) + ')=')"); \
+	@if [ ! -s backend/.env.chat ] || [ backend/.env -nt backend/.env.chat ]; then \
+		echo "Deriving backend/.env.chat (master creds stripped for chat process)"; \
+		FORBIDDEN_RE=$$(PYTHONPATH=backend/services/agent-engine/src python3 -c \
+			"from agent_engine.trust_boundary import FORBIDDEN_ENVS; print('^(' + '|'.join(FORBIDDEN_ENVS) + ')=')"); \
 		if [ -z "$$FORBIDDEN_RE" ]; then \
 			echo "ERROR: could not compute FORBIDDEN_ENVS regex (trust_boundary import failed)."; \
 			exit 1; \
 		fi; \
-		total=$$(grep -c '^' pinai-agents/.env); \
-		kvlines=$$(grep -cE '^[A-Za-z_][A-Za-z0-9_]*=' pinai-agents/.env); \
+		total=$$(grep -c '^' backend/.env); \
+		kvlines=$$(grep -cE '^[A-Za-z_][A-Za-z0-9_]*=' backend/.env); \
 		if [ "$$total" != "$$kvlines" ]; then \
-			echo "ERROR: pinai-agents/.env has multi-line values ($$total lines vs $$kvlines KEY= lines)."; \
+			echo "ERROR: backend/.env has multi-line values ($$total lines vs $$kvlines KEY= lines)."; \
 			echo "  The line-based strip below would leak secret continuation lines into .env.chat."; \
 			echo "  Store every secret on one line (e.g. base64-encode PEM keys)."; \
 			exit 1; \
 		fi; \
-		grep -vE "$$FORBIDDEN_RE" pinai-agents/.env > pinai-agents/.env.chat.tmp; \
-		if [ -s pinai-agents/.env.chat.tmp ]; then \
-			mv pinai-agents/.env.chat.tmp pinai-agents/.env.chat; \
+		grep -vE "$$FORBIDDEN_RE" backend/.env > backend/.env.chat.tmp; \
+		if [ -s backend/.env.chat.tmp ]; then \
+			mv backend/.env.chat.tmp backend/.env.chat; \
 		else \
-			rm -f pinai-agents/.env.chat.tmp; \
-			echo "ERROR: deriving pinai-agents/.env.chat produced no output."; \
+			rm -f backend/.env.chat.tmp; \
+			echo "ERROR: deriving backend/.env.chat produced no output."; \
 			exit 1; \
 		fi; \
 	fi
@@ -126,7 +126,7 @@ ensure-env-root: install
 	@bash scripts/decrypt_env.sh .
 
 env-local: ## Force re-decrypt all .env files
-	@rm -f ops/litellm/.env pinai-agents/.env pinai-agents/.env.chat ./.env
+	@rm -f ops/litellm/.env backend/.env backend/.env.chat ./.env
 	@$(MAKE) --no-print-directory ensure-env
 
 # ── Setup ──
@@ -138,21 +138,21 @@ init: ## First-time setup: install deps and show next steps
 	@echo "Next steps:"
 	@echo "  1. Get .env.keys from team members"
 	@echo "     Place:  ops/litellm/.env.keys"
-	@echo "             pinai-agents/.env.keys"
+	@echo "             backend/.env.keys"
 	@echo "  2. make up  (auto-decrypts and starts everything)"
 
 # ── Build ──
 
-build: ensure-env ## Build all images (pinai-agents + frontend + web)
-	$(export_vite) && $(COMPOSE) build pinai-web pinai-chat frontend web
+build: ensure-env ## Build all images (backend + frontend + web)
+	$(export_vite) && $(COMPOSE) build api agent-engine frontend web
 
-build-pinai-agents: ensure-env-pinai-agents ## Build only pinai-agents image (shared by web + chat + db-migrate)
-	$(COMPOSE) build pinai-web
+build-backend: ensure-env-backend ## Build only backend image (shared by web + chat + db-migrate)
+	$(COMPOSE) build api
 
-build-frontend: ensure-env-pinai-agents ## Build only frontend image
+build-frontend: ensure-env-backend ## Build only frontend image
 	$(export_vite) && $(COMPOSE) build frontend
 
-build-web: ensure-env-pinai-agents ## Build only apps/web (zebra) image
+build-web: ensure-env-backend ## Build only apps/web (zebra) image
 	$(export_vite) && $(COMPOSE) build web
 
 # ── Run ──
@@ -164,21 +164,21 @@ up: build ## Build and start the full local stack (no tunnel — run `make tunne
 down: ## Stop all services
 	$(COMPOSE) down
 
-restart: ensure-env ## Rebuild + recreate pinai-web + pinai-chat (most common dev loop)
-	$(COMPOSE) build pinai-web
+restart: ensure-env ## Rebuild + recreate api + agent-engine (most common dev loop)
+	$(COMPOSE) build api
 	@url=$$(bash scripts/ngrok_url.sh 2>/dev/null || true); \
 	if [ -n "$$url" ]; then \
-		echo "→ injecting PAI_API_URL=$$url into pinai-chat"; \
-		PAI_API_URL="$$url" $(COMPOSE) up -d --force-recreate --no-deps pinai-web pinai-chat; \
+		echo "→ injecting PAI_API_URL=$$url into agent-engine"; \
+		PAI_API_URL="$$url" $(COMPOSE) up -d --force-recreate --no-deps api agent-engine; \
 	else \
-		$(COMPOSE) up -d --force-recreate --no-deps pinai-web pinai-chat; \
+		$(COMPOSE) up -d --force-recreate --no-deps api agent-engine; \
 	fi
 
-restart-frontend: ensure-env-pinai-agents ## Rebuild + recreate frontend container
+restart-frontend: ensure-env-backend ## Rebuild + recreate frontend container
 	$(export_vite) && $(COMPOSE) build frontend
 	$(COMPOSE) up -d --force-recreate --no-deps frontend
 
-restart-web: ensure-env-pinai-agents ## Rebuild + recreate apps/web (zebra) container
+restart-web: ensure-env-backend ## Rebuild + recreate apps/web (zebra) container
 	$(export_vite) && $(COMPOSE) build web
 	$(COMPOSE) up -d --force-recreate --no-deps web
 
@@ -189,7 +189,8 @@ urls: ## Show this group's project name + live host ports
 	@echo "Project:  $(COMPOSE_PROJECT_NAME)"
 	@echo "Frontend: http://localhost:$$($(COMPOSE) port frontend 8080 2>/dev/null | cut -d: -f2)"
 	@echo "Web(zebra): http://localhost:$$($(COMPOSE) port web 8080 2>/dev/null | cut -d: -f2)"
-	@echo "API:      http://localhost:$$($(COMPOSE) port pinai-web 8000 2>/dev/null | cut -d: -f2)"
+	@echo "API:      http://localhost:$$($(COMPOSE) port api 8000 2>/dev/null | cut -d: -f2)"
+	@echo "Reward:   http://localhost:$$($(COMPOSE) port reward-dashboard 8002 2>/dev/null | cut -d: -f2)  (internal-reward-dashboard 后端)"
 	@echo "Postgres: localhost:$$($(COMPOSE) port postgres 5432 2>/dev/null | cut -d: -f2)"
 	@echo "LiteLLM:  http://localhost:$$($(COMPOSE) port litellm 4000 2>/dev/null | cut -d: -f2)"
 	@url=$$(bash scripts/ngrok_url.sh 2>/dev/null) && echo "ngrok:    $$url" || true
@@ -216,20 +217,23 @@ logs-litellm: ## Tail LiteLLM logs
 logs-postgres: ## Tail Postgres logs
 	$(COMPOSE) logs -f postgres
 
-logs-pinai-agents: ## Tail both pinai-web and pinai-chat logs
-	$(COMPOSE) logs -f pinai-web pinai-chat
+logs-backend: ## Tail both api and agent-engine logs
+	$(COMPOSE) logs -f api agent-engine
 
-logs-pinai-web: ## Tail pinai-web (master-cred process) logs
-	$(COMPOSE) logs -f pinai-web
+logs-api: ## Tail api (master-cred process) logs
+	$(COMPOSE) logs -f api
 
-logs-pinai-chat: ## Tail pinai-chat (LLM-loop process) logs
-	$(COMPOSE) logs -f pinai-chat
+logs-agent-engine: ## Tail agent-engine (LLM-loop process) logs
+	$(COMPOSE) logs -f agent-engine
 
 logs-frontend: ## Tail frontend (nginx) logs
 	$(COMPOSE) logs -f frontend
 
 logs-web: ## Tail apps/web (zebra nginx) logs
 	$(COMPOSE) logs -f web
+
+logs-reward: ## Tail reward-dashboard (internal review tool) logs
+	$(COMPOSE) logs -f reward-dashboard
 
 # ── Database ──
 
@@ -270,29 +274,29 @@ reset: ## Stop everything, delete volumes, rebuild and start fresh (incl. ngrok 
 	fi
 
 # ── Deploy (Fly.io) ──
-# pinai-agents has two process groups (web + chat) that share one fly
+# backend has two process groups (web + chat) that share one fly
 # app via [processes] in fly.dev.toml / fly.prod.toml. Frontend and
 # internal reward dashboard are separate static SPA fly apps. LiteLLM is
 # its own fly app under ops/litellm.
 
 define extract_vite_args
-$(shell $(DOTENVX) get -f pinai-agents/.env.$(1) --format json 2>/dev/null \
+$(shell $(DOTENVX) get -f backend/.env.$(1) --format json 2>/dev/null \
 	| python3 -c 'import json,sys;d=json.load(sys.stdin);[print("--build-arg "+k+"="+v) for k,v in d.items() if k.startswith("VITE_")]')
 endef
 
 define extract_reward_dashboard_vite_args
-$(shell $(DOTENVX) get -f pinai-agents/.env.$(1) --format json 2>/dev/null \
+$(shell $(DOTENVX) get -f backend/.env.$(1) --format json 2>/dev/null \
 	| python3 -c 'import json,sys;d=json.load(sys.stdin);[print("--build-arg "+k+"="+v) for k,v in d.items() if k in {"VITE_SUPABASE_URL","VITE_SUPABASE_PUBLISHABLE_KEY"}]')
 endef
 
-deploy-pinai-dev: ## Deploy pinai-agents (web + chat) to dev
-	cd pinai-agents && env -u all_proxy -u http_proxy -u https_proxy \
+deploy-pinai-dev: ## Deploy backend (web + chat) to dev
+	cd backend && env -u all_proxy -u http_proxy -u https_proxy \
 		flyctl deploy --config fly.dev.toml --remote-only
 
-deploy-pinai-prod: ## Deploy pinai-agents to prod (requires review)
-	@echo "Deploying pinai-agents to PRODUCTION. Ctrl+C to cancel."
+deploy-pinai-prod: ## Deploy backend to prod (requires review)
+	@echo "Deploying backend to PRODUCTION. Ctrl+C to cancel."
 	@sleep 3
-	cd pinai-agents && env -u all_proxy -u http_proxy -u https_proxy \
+	cd backend && env -u all_proxy -u http_proxy -u https_proxy \
 		flyctl deploy --config fly.prod.toml --remote-only
 
 deploy-frontend-dev: ## Deploy frontend SPA to dev (Fly nginx)
@@ -343,28 +347,28 @@ deploy-litellm-prod: ## Deploy LiteLLM to prod
 # default = project .env PAI_API_URL. No LAN-IP fallback: mobile packages
 # should keep working off the current Wi-Fi or fail loudly.
 
-ngrok: ## Expose local pinai-web over public ngrok (foreground CLI; prefer `make tunnel-up`)
+ngrok: ## Expose local api over public ngrok (foreground CLI; prefer `make tunnel-up`)
 	@command -v ngrok >/dev/null 2>&1 || { echo "ngrok not found. brew install ngrok"; exit 1; }
-	@port=$$($(COMPOSE) port pinai-web 8000 2>/dev/null | cut -d: -f2); \
-	[ -n "$$port" ] || { echo "pinai-web not running — run 'make up' first."; exit 1; }; \
+	@port=$$($(COMPOSE) port api 8000 2>/dev/null | cut -d: -f2); \
+	[ -n "$$port" ] || { echo "api not running — run 'make up' first."; exit 1; }; \
 	echo "Starting ngrok → http://localhost:$$port (foreground CLI)."; \
-	echo "Prefer 'make tunnel-up' (docker ngrok + auto-inject into pinai-chat; 'make ios' picks it up)."; \
+	echo "Prefer 'make tunnel-up' (docker ngrok + auto-inject into agent-engine; 'make ios' picks it up)."; \
 	ngrok http $$port
 
 # ── Daytona sandbox tunnel ──
 # Generator / dreaming agents run code in Daytona cloud sandboxes. The
-# pinai_sdk inside the sandbox calls back into pinai-web via PAI_API_URL.
+# pinai_sdk inside the sandbox calls back into api via PAI_API_URL.
 # That URL must be reachable from the public internet — compose-internal
 # DNS won't resolve from the cloud. tunnel-up runs an ngrok service
-# (docker, profile=tunnel) that gives pinai-web a stable public URL,
-# then re-creates pinai-chat so it picks up the public URL from ./.env
+# (docker, profile=tunnel) that gives api a stable public URL,
+# then re-creates agent-engine so it picks up the public URL from ./.env
 # and injects it into the sandbox env.
 #
 # Config: project-root ./.env (per-developer, gitignored). See
 # .env.example for first-time setup. Different developer = different
 # ngrok account + reserved domain (free tier: 1 simultaneous tunnel).
 
-tunnel-up: ensure-env-root ## Open ngrok tunnel (this worktree's .ngrok.app subdomain) and inject it into pinai-chat
+tunnel-up: ensure-env-root ## Open ngrok tunnel (this worktree's .ngrok.app subdomain) and inject it into agent-engine
 	@if ! grep -qE '^NGROK_AUTHTOKEN=.+' .env 2>/dev/null; then \
 		echo "NGROK_AUTHTOKEN missing from ./.env — ./.env.dev did not decrypt."; \
 		echo "  Set DOTENV_PRIVATE_KEY_DEV in your shell (team key), then retry."; \
@@ -373,27 +377,27 @@ tunnel-up: ensure-env-root ## Open ngrok tunnel (this worktree's .ngrok.app subd
 	@echo "→ starting ngrok (this worktree's .ngrok.app subdomain)..."
 	@$(COMPOSE) --profile tunnel up -d ngrok
 	@url=$$(bash scripts/ngrok_url.sh) || exit 1; \
-	echo "→ injecting PAI_API_URL=$$url into pinai-chat"; \
-	PAI_API_URL="$$url" $(COMPOSE) up -d --force-recreate --no-deps pinai-chat; \
+	echo "→ injecting PAI_API_URL=$$url into agent-engine"; \
+	PAI_API_URL="$$url" $(COMPOSE) up -d --force-recreate --no-deps agent-engine; \
 	echo ""; \
 	echo "Tunnel ready: $$url"; \
-	echo "  (Daytona sandbox python_exec / mobile reach pinai-web through this URL.)"
+	echo "  (Daytona sandbox python_exec / mobile reach api through this URL.)"
 
 tunnel-down: ## Close ngrok tunnel and revert chat to internal PAI_API_URL
 	$(COMPOSE) --profile tunnel rm -sf ngrok
-	@echo "→ recreating pinai-chat with internal PAI_API_URL"
-	@PAI_API_URL= $(COMPOSE) up -d --force-recreate --no-deps pinai-chat
+	@echo "→ recreating agent-engine with internal PAI_API_URL"
+	@PAI_API_URL= $(COMPOSE) up -d --force-recreate --no-deps agent-engine
 	@echo "Tunnel closed. Sandbox SDK calls will fail until reopened."
 
 tunnel-status: ## Show whether the tunnel is up and at what URL
 	@url=$$(bash scripts/ngrok_url.sh 2>/dev/null) && echo "Tunnel UP at $$url" || echo "Tunnel DOWN. Start with: make tunnel-up"
 
 ios: install ensure-env ## Build frontend, sync iOS, open Xcode
-	@set -a && . ./pinai-agents/.env && set +a && \
+	@set -a && . ./backend/.env && set +a && \
 	if [ -n "$(NGROK)" ]; then \
 		echo "Using ngrok at $(NGROK)"; VITE_PIN_API_URL="$(NGROK)"; \
 	elif [ "$(PROD)" = "1" ]; then \
-		PROD_URL=$$(npx --no-install @dotenvx/dotenvx get VITE_PIN_API_URL -f pinai-agents/.env.production 2>/dev/null); \
+		PROD_URL=$$(npx --no-install @dotenvx/dotenvx get VITE_PIN_API_URL -f backend/.env.production 2>/dev/null); \
 		if [ -z "$$PROD_URL" ]; then echo "VITE_PIN_API_URL missing in prod env"; exit 1; fi; \
 		VITE_PIN_API_URL="$$PROD_URL"; \
 	elif [ "$(DEV)" = "1" ]; then \
@@ -410,11 +414,11 @@ ios: install ensure-env ## Build frontend, sync iOS, open Xcode
 
 android: install ensure-env ## Build frontend, sync Android, install on USB device
 	@set -e; \
-	set -a && . ./pinai-agents/.env && set +a; \
+	set -a && . ./backend/.env && set +a; \
 	if [ -n "$(NGROK)" ]; then \
 		VITE_PIN_API_URL="$(NGROK)"; \
 	elif [ "$(PROD)" = "1" ]; then \
-		PROD_URL=$$(npx --no-install @dotenvx/dotenvx get VITE_PIN_API_URL -f pinai-agents/.env.production 2>/dev/null); \
+		PROD_URL=$$(npx --no-install @dotenvx/dotenvx get VITE_PIN_API_URL -f backend/.env.production 2>/dev/null); \
 		[ -z "$$PROD_URL" ] && { echo "VITE_PIN_API_URL missing in prod env"; exit 1; }; \
 		VITE_PIN_API_URL="$$PROD_URL"; \
 	elif [ "$(DEV)" = "1" ]; then \
@@ -432,41 +436,41 @@ android: install ensure-env ## Build frontend, sync Android, install on USB devi
 		cd android && ./gradlew installDebug && \
 		adb shell am start -n ai.pin.proactive.dev/.MainActivity
 
-macos: install ensure-env-pinai-agents ## Run the Electron desktop shell (this worktree's backend; DEV=1 fly dev, PROD=1 fly prod)
+macos: install ensure-env-backend ## Run the Electron desktop shell (this worktree's backend; DEV=1 fly dev, PROD=1 fly prod)
 	@set -e; \
-	set -a && . ./pinai-agents/.env && set +a; \
+	set -a && . ./backend/.env && set +a; \
 	if [ "$(PROD)" = "1" ]; then \
-		TARGET=$$(npx --no-install @dotenvx/dotenvx get VITE_PIN_API_URL -f pinai-agents/.env.production 2>/dev/null); \
+		TARGET=$$(npx --no-install @dotenvx/dotenvx get VITE_PIN_API_URL -f backend/.env.production 2>/dev/null); \
 		[ -z "$$TARGET" ] && { echo "VITE_PIN_API_URL missing in prod env"; exit 1; }; \
-		export VITE_SUPABASE_URL=$$(npx --no-install @dotenvx/dotenvx get VITE_SUPABASE_URL -f pinai-agents/.env.production 2>/dev/null); \
-		export VITE_SUPABASE_PUBLISHABLE_KEY=$$(npx --no-install @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f pinai-agents/.env.production 2>/dev/null); \
+		export VITE_SUPABASE_URL=$$(npx --no-install @dotenvx/dotenvx get VITE_SUPABASE_URL -f backend/.env.production 2>/dev/null); \
+		export VITE_SUPABASE_PUBLISHABLE_KEY=$$(npx --no-install @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f backend/.env.production 2>/dev/null); \
 		echo "→ Electron vs fly prod ($$TARGET) + prod Supabase"; \
 	elif [ "$(DEV)" = "1" ]; then \
 		TARGET="$$VITE_PIN_API_URL"; \
 		echo "→ Electron vs fly dev ($$TARGET)"; \
 	else \
-		PORT=$$($(COMPOSE) port pinai-web 8000 2>/dev/null | cut -d: -f2); \
-		[ -z "$$PORT" ] && { echo "pinai-web not running in this worktree — run 'make up' first, or use DEV=1 / PROD=1."; exit 1; }; \
+		PORT=$$($(COMPOSE) port api 8000 2>/dev/null | cut -d: -f2); \
+		[ -z "$$PORT" ] && { echo "api not running in this worktree — run 'make up' first, or use DEV=1 / PROD=1."; exit 1; }; \
 		TARGET="http://127.0.0.1:$$PORT"; \
 		echo "→ Electron vs this worktree's backend ($$TARGET)"; \
 	fi; \
 	VITE_PIN_API_PROXY_TARGET="$$TARGET" npm run dev --workspace=@pin-ai/desktop
 
-rn: install ensure-env-pinai-agents ## Run Expo RN on your iPhone vs this worktree's backend (SIM=1 simulator, DEV=1 fly dev, PROD=1 fly prod; TUNNEL=1 Metro 走 ngrok 公网,手机不必与 Mac 同 LAN,corp/远程网用)
+rn: install ensure-env-backend ## Run Expo RN on your iPhone vs this worktree's backend (SIM=1 simulator, DEV=1 fly dev, PROD=1 fly prod; TUNNEL=1 Metro 走 ngrok 公网,手机不必与 Mac 同 LAN,corp/远程网用)
 	@set -e; \
-	set -a && . ./pinai-agents/.env && set +a; \
+	set -a && . ./backend/.env && set +a; \
 	if [ "$(PROD)" = "1" ]; then \
-		TARGET=$$(npx --no-install @dotenvx/dotenvx get VITE_PIN_API_URL -f pinai-agents/.env.production 2>/dev/null); \
+		TARGET=$$(npx --no-install @dotenvx/dotenvx get VITE_PIN_API_URL -f backend/.env.production 2>/dev/null); \
 		[ -z "$$TARGET" ] && { echo "VITE_PIN_API_URL missing in prod env"; exit 1; }; \
-		export EXPO_PUBLIC_SUPABASE_URL=$$(npx --no-install @dotenvx/dotenvx get VITE_SUPABASE_URL -f pinai-agents/.env.production 2>/dev/null); \
-		export EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=$$(npx --no-install @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f pinai-agents/.env.production 2>/dev/null); \
+		export EXPO_PUBLIC_SUPABASE_URL=$$(npx --no-install @dotenvx/dotenvx get VITE_SUPABASE_URL -f backend/.env.production 2>/dev/null); \
+		export EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=$$(npx --no-install @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f backend/.env.production 2>/dev/null); \
 		echo "→ RN vs fly prod ($$TARGET) + prod Supabase"; \
 	elif [ "$(DEV)" = "1" ]; then \
 		TARGET="$$VITE_PIN_API_URL"; \
 		echo "→ RN vs fly dev ($$TARGET)"; \
 	else \
-		PORT=$$($(COMPOSE) port pinai-web 8000 2>/dev/null | cut -d: -f2); \
-		[ -z "$$PORT" ] && { echo "pinai-web not running in this worktree — run 'make up' first, or use DEV=1 / PROD=1."; exit 1; }; \
+		PORT=$$($(COMPOSE) port api 8000 2>/dev/null | cut -d: -f2); \
+		[ -z "$$PORT" ] && { echo "api not running in this worktree — run 'make up' first, or use DEV=1 / PROD=1."; exit 1; }; \
 		if [ "$(SIM)" = "1" ]; then \
 			TARGET="http://127.0.0.1:$$PORT"; \
 			echo "→ RN (simulator) vs this worktree's backend ($$TARGET)"; \

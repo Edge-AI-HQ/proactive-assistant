@@ -7,9 +7,9 @@ description: "pai_scheduled_tasks 队列 + tick loop + dispatcher 的当前事�
 
 ## 结论
 
-后台任务系统跑在 **pinai-web 进程**里,基于两张 Postgres 表 + 一个 asyncio tick loop:
+后台任务系统跑在 **api 进程**里,基于两张 Postgres 表 + 一个 asyncio tick loop:
 
-`enqueue → pai_scheduled_tasks → tick_loop.claim_due_tasks(SKIP LOCKED) → DefaultDispatcher.dispatch → in-process handler 或 HTTP 调 pinai-chat → 写 pai_scheduled_task_runs → 续 lease / 写结果`
+`enqueue → pai_scheduled_tasks → tick_loop.claim_due_tasks(SKIP LOCKED) → DefaultDispatcher.dispatch → in-process handler 或 HTTP 调 agent-engine → 写 pai_scheduled_task_runs → 续 lease / 写结果`
 
 框架本身只管调度(claim、lease、retry、reaper、PG NOTIFY 唤醒),具体业务在各 kind 的 handler 里。多 replica 安全靠 `FOR UPDATE SKIP LOCKED`,不需要单进程 mutex。
 
@@ -64,7 +64,7 @@ sequenceDiagram
   participant DB as pai_scheduled_tasks
   participant Tick as web tick_loop
   participant Disp as DefaultDispatcher
-  participant Chat as pinai-chat
+  participant Chat as agent-engine
 
   Caller->>DB: enqueue_once(kind, payload, trigger_kind)
   Caller->>DB: NOTIFY pai_scheduler_wake
@@ -122,7 +122,7 @@ reaper 索引:`idx_pai_schedrun_lease (status, lease_expires_at) WHERE status='r
 
 ### tick_loop
 
-`pinai-agents/src/pinai_agents/web/scheduler/tick_loop.py`:
+`backend/src/pinai_agents/web/scheduler/tick_loop.py`:
 
 | 维度 | 当前事实 |
 |---|---|
@@ -176,7 +176,7 @@ dispatcher 调用 chat 走 EdDSA 每 run JWT(`web/auth/agent_jwt.py`),凭证不�
 | `connector_ingest._enqueue_evolve` | `connector.evolve` | init / 非空 sync 之后入一次 once-shot。 |
 | `POST /api/dreaming/run`(`web/routes/ui/dreaming.py`)| `auto.dreaming` | 手动触发;auto-dreaming 设置走的也是同一个 kind,只是用 `trigger_kind='schedule'`。 |
 | `POST /api/tasks/*`(`web/routes/ui/tasks.py`)| `user.prompt` | 给 agent 投递 synthetic prompt,目前接入面少。 |
-| (无 producer) | `crystallize` | dispatcher 已注册路由,但**没有路由 / service 入队**;`grep -r 'kind=.crystallize.' pinai-agents/src/` 返回空。chat 端 inline 触发 crystallize,详见 [Execution](./execution)。 |
+| (无 producer) | `crystallize` | dispatcher 已注册路由,但**没有路由 / service 入队**;`grep -r 'kind=.crystallize.' backend/src/` 返回空。chat 端 inline 触发 crystallize,详见 [Execution](./execution)。 |
 
 所有入队走 `web/db/repositories/scheduled_tasks.py:enqueue_once`,内部 INSERT ON CONFLICT 按 `(user_id, id)` 幂等,并在事务里跟一次 `notify_scheduler_wake` 唤醒。
 
@@ -228,32 +228,32 @@ cron / interval 任务只有外部显式关掉时才会 archive(例如用户关�
 
 | 改动 | 先看 |
 |---|---|
-| Tick loop / claim / 唤醒 | `pinai-agents/src/pinai_agents/web/scheduler/tick_loop.py` |
+| Tick loop / claim / 唤醒 | `backend/src/pinai_agents/web/scheduler/tick_loop.py` |
 | Dispatcher 路由表 / 长 lease 列表 | `web/scheduler/dispatcher.py`(`_handle_kind`、`_GENERATOR_KINDS`、`_LONG_RUNNING_KINDS`)|
 | 加新 kind | 1)dispatcher 路由分支;2)入队点(routes/service);3)如果 HTTP 调 chat,加 `chat/routes/run.py` 对应 handler。 |
 | cron 计算 | `web/scheduler/cron.py:next_fire` |
 | 入队 / claim / 完成 / 重试 SQL | `web/db/repositories/scheduled_tasks.py`(`enqueue_once`、`claim_due_tasks`、`insert_run`、`complete_run`、`heartbeat_run`、`reap_stale_runs`、`record_failure_and_decide`)|
-| 配置默认值 | `pinai-agents/src/pinai_agents/config.py`(`scheduler_tick_seconds=3`、`scheduler_lease_seconds=60`) |
+| 配置默认值 | `backend/src/pinai_agents/config.py`(`scheduler_tick_seconds=3`、`scheduler_lease_seconds=60`) |
 | Composio preview/init/sync handler | `web/services/connector_ingest.py`(`run`、`_run_preview`、`_ensure_sync_schedule`、`_enqueue_evolve`)|
 | auto-generate schedule sync | `web/routes/ui/profile.py:_sync_auto_generate_schedule` |
 | auto-dreaming schedule sync | `web/routes/ui/profile.py:_sync_auto_dreaming_schedule` |
 | auto.dreaming run row 包装 | `web/scheduler/dispatcher.py:_dispatch_dream` |
-| chat 端 long-running handler | `pinai-agents/src/pinai_agents/chat/routes/run.py`(dream / evolve / crystallize) |
+| chat 端 long-running handler | `backend/src/pinai_agents/chat/routes/run.py`(dream / evolve / crystallize) |
 | 前端任务状态 polling | `proactive-ai-frontend/src/hooks/useInitTask.ts`、`useActiveAgentRuns.ts`、`useGenerationStatus.ts` |
-| Schema 迁移 | `pinai-agents/db/migrations/021_pai_scheduler.sql`、`031_consolidate_task_queue.sql`、`039_split_generator_kinds.sql` |
+| Schema 迁移 | `backend/db/migrations/021_pai_scheduler.sql`、`031_consolidate_task_queue.sql`、`039_split_generator_kinds.sql` |
 
 ## 验证方式
 
 ```bash
-cd pinai-agents && uv run pytest tests/web/scheduler              # 全 scheduler 套件
-cd pinai-agents && uv run pytest tests/web/scheduler/test_tick_loop.py
-cd pinai-agents && uv run pytest tests/web/scheduler/test_claim.py     # SKIP LOCKED 多 replica
-cd pinai-agents && uv run pytest tests/web/scheduler/test_cron.py      # next_fire 算法
-cd pinai-agents && uv run pytest tests/web/scheduler/test_retry.py     # backoff + archive
-cd pinai-agents && uv run pytest tests/web/services/test_connector_ingest.py
-cd pinai-agents && uv run pytest tests/web/services/test_world_ingest.py
-cd pinai-agents && uv run pytest tests/web/test_composio_service.py
-cd pinai-agents && uv run ruff check .
+cd backend && uv run pytest tests/web/scheduler              # 全 scheduler 套件
+cd backend && uv run pytest tests/web/scheduler/test_tick_loop.py
+cd backend && uv run pytest tests/web/scheduler/test_claim.py     # SKIP LOCKED 多 replica
+cd backend && uv run pytest tests/web/scheduler/test_cron.py      # next_fire 算法
+cd backend && uv run pytest tests/web/scheduler/test_retry.py     # backoff + archive
+cd backend && uv run pytest tests/web/services/test_connector_ingest.py
+cd backend && uv run pytest tests/web/services/test_world_ingest.py
+cd backend && uv run pytest tests/web/test_composio_service.py
+cd backend && uv run ruff check .
 ```
 
 手工验证(SQL,连本地 compose Postgres `54322:5432`):
@@ -274,8 +274,8 @@ SELECT * FROM pai_scheduled_task_runs WHERE task_id = '<id>' ORDER BY fired_at D
 容器日志:
 
 ```bash
-make logs-pinai-web | grep -E "scheduler|dispatch|claim|reap|run_id"
-make logs-pinai-chat | grep -E "run/dream|run/evolve|run/crystallize|run/generate"
+make logs-api | grep -E "scheduler|dispatch|claim|reap|run_id"
+make logs-agent-engine | grep -E "run/dream|run/evolve|run/crystallize|run/generate"
 ```
 
 ## 踩坑

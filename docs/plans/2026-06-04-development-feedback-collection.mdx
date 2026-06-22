@@ -80,13 +80,13 @@ flowchart LR
 
 | 层 | 入口 |
 |---|---|
-| Schema | `pinai-agents/db/migrations/080_pai_development_feedback.sql` |
-| Repository | `pinai-agents/src/pinai_agents/web/db/repositories/development_feedback.py` |
+| Schema | `backend/db/migrations/080_pai_development_feedback.sql` |
+| Repository | `backend/src/pinai_agents/web/db/repositories/development_feedback.py` |
 | 用户 route | `POST /api/development-feedback` |
 | Agent route | `POST /api/agent/development-feedback/log` |
 | Main Chat tool | `development_feedback_log` |
 | Main Chat fast path | `/api/chat-stream/send` 对明显 UI / 功能诉求先写库并返回短回执 |
-| Main Chat prompt | `pinai-agents/src/pinai_agents/chat/agents/main_chat.py` |
+| Main Chat prompt | `backend/src/pinai_agents/chat/agents/main_chat.py` |
 
 ## 分类规则
 
@@ -119,10 +119,10 @@ flowchart LR
 ## 验证方式
 
 ```bash
-cd pinai-agents && uv run pytest tests/web/db/repositories/test_development_feedback_repo.py tests/web/routes/test_development_feedback.py
-cd pinai-agents && TAVILY_API_KEY=dummy uv run pytest tests/chat/test_native_tools.py tests/chat/agents/test_main_chat_development_feedback.py
-cd pinai-agents && uv run ruff check .
-cd pinai-agents && uv run mypy src
+cd backend && uv run pytest tests/web/db/repositories/test_development_feedback_repo.py tests/web/routes/test_development_feedback.py
+cd backend && TAVILY_API_KEY=dummy uv run pytest tests/chat/test_native_tools.py tests/chat/agents/test_main_chat_development_feedback.py
+cd backend && uv run ruff check .
+cd backend && uv run mypy src
 ```
 
 DB 速查：

@@ -1,7 +1,7 @@
 /**
  * Local-dev auth bypass constants — the wire SSOT shared by web
  * (proactive-ai-frontend), RN (apps/mobile) and the backend
- * (pinai-agents `auth/deps.py`). All three must agree on the header value and
+ * (backend `auth/deps.py`). All three must agree on the header value and
  * synthetic user id; this used to be hand-copied in three places.
  *
  * The platform-specific enable guard (Vite `import.meta.env.DEV` vs RN

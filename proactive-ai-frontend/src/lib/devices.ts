@@ -3,7 +3,7 @@
  *
  * On first launch the app generates a UUID v4 device id and exchanges
  * it for a long-lived token via POST /api/devices/register on
- * pinai-agents. Native clients persist the token in secure storage
+ * backend. Native clients persist the token in secure storage
  * (iOS Keychain / Android Keystore-backed storage) and attach it as
  * X-Device-Id + X-Device-Token to every POST /api/devices/ingest
  * request.
@@ -303,7 +303,7 @@ async function getNativeDeviceProfile(platform: DevicePlatform): Promise<NativeD
 }
 
 interface RegisterResponse {
-  // pinai-agents shape: flat object with camelCase + the secret token.
+  // backend shape: flat object with camelCase + the secret token.
   deviceId: string;
   deviceToken: string;
   platform: DevicePlatform;
@@ -473,7 +473,7 @@ export async function clearDeviceCredentials(): Promise<void> {
 export type { IngestItemResult, IngestItemStatus, IngestResult, PersonalSignalInput };
 
 /**
- * Push a batch of PersonalSignals from this client up to pinai-agents.
+ * Push a batch of PersonalSignals from this client up to backend.
  * Auth is the X-Device-Id + X-Device-Token PSK we got back from
  * /api/devices/register; the token never leaves the device.
  *

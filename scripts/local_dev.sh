@@ -108,7 +108,7 @@ start_dependencies() {
   COMPOSE_PROJECT_NAME="$PINAI_LOCAL_COMPOSE_PROJECT" "${LOCAL_COMPOSE[@]}" build db-migrate
   COMPOSE_PROJECT_NAME="$PINAI_LOCAL_COMPOSE_PROJECT" "${LOCAL_COMPOSE[@]}" run --rm db-migrate
   (
-    cd "$ROOT_DIR/pinai-agents"
+    cd "$ROOT_DIR/backend"
     DATABASE_URL="$PINAI_LOCAL_DATABASE_URL" uv run python -m scripts.seed_patterns
   )
   COMPOSE_PROJECT_NAME="$PINAI_LOCAL_COMPOSE_PROJECT" "${LOCAL_COMPOSE[@]}" up -d litellm
@@ -123,24 +123,24 @@ start_host_processes() {
   ensure_port_free 8000
   ensure_port_free 8001
 
-  echo "==> Starting pinai-web with uvicorn --reload"
+  echo "==> Starting api with uvicorn --reload"
   (
     set -a
-    . "$ROOT_DIR/pinai-agents/.env"
+    . "$ROOT_DIR/backend/.env"
     set +a
     export DEPLOY_ENV=dev
     export DATABASE_URL="$PINAI_LOCAL_DATABASE_URL"
     export LITELLM_BASE_URL="$PINAI_LOCAL_LITELLM_BASE_URL"
     export CHAT_INTERNAL_URL="$PINAI_LOCAL_CHAT_URL"
-    cd "$ROOT_DIR/pinai-agents"
-    exec uv run uvicorn pinai_agents.web.asgi:app --reload --host 127.0.0.1 --port 8000
+    cd "$ROOT_DIR/backend"
+    exec uv run uvicorn pinai_api.asgi:app --reload --host 127.0.0.1 --port 8000
   ) &
   echo "$!" >> "$PIDS_FILE"
 
-  echo "==> Starting pinai-chat with uvicorn --reload"
+  echo "==> Starting agent-engine with uvicorn --reload"
   (
     set -a
-    . "$ROOT_DIR/pinai-agents/.env.chat"
+    . "$ROOT_DIR/backend/.env.chat"
     set +a
     export DEPLOY_ENV=dev
     export DATABASE_URL="$PINAI_LOCAL_DATABASE_URL"
@@ -149,15 +149,15 @@ start_host_processes() {
     export PAI_API_URL="${PAI_API_URL:-$PINAI_LOCAL_WEB_URL}"
     export PINAI_LOCAL_SANDBOX="${PINAI_LOCAL_SANDBOX:-1}"
     export PINAI_LOCAL_SANDBOX_ROOT="${PINAI_LOCAL_SANDBOX_ROOT:-$STATE_DIR/state/chat}"
-    cd "$ROOT_DIR/pinai-agents"
-    exec uv run uvicorn pinai_agents.chat.asgi:app --reload --host 127.0.0.1 --port 8001
+    cd "$ROOT_DIR/backend"
+    exec uv run uvicorn agent_engine.asgi:app --reload --host 127.0.0.1 --port 8001
   ) &
   echo "$!" >> "$PIDS_FILE"
 
   echo "==> Starting proactive-ai-frontend Vite dev server"
   (
     set -a
-    . "$ROOT_DIR/pinai-agents/.env"
+    . "$ROOT_DIR/backend/.env"
     set +a
     export VITE_PIN_LOCAL_DEV_AUTH=1
     export VITE_PIN_API_PROXY_TARGET="$PINAI_LOCAL_WEB_URL"
@@ -191,8 +191,8 @@ case "$cmd" in
   start)
     trap 'stop_host_processes; cleanup_temp_docker_config' INT TERM EXIT
     bash "$ROOT_DIR/scripts/decrypt_env.sh" ops/litellm
-    bash "$ROOT_DIR/scripts/decrypt_env.sh" pinai-agents
-    make --no-print-directory ensure-env-pinai-agents >/dev/null
+    bash "$ROOT_DIR/scripts/decrypt_env.sh" backend
+    make --no-print-directory ensure-env-backend >/dev/null
     start_dependencies
     start_host_processes
     monitor_processes

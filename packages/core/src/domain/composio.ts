@@ -14,7 +14,7 @@
  * server-returned task id through component state.
  *
  * Must stay in lockstep with `init_task_id()` in
- * pinai-agents/src/pinai_agents/web/routes/ui/composio.py.
+ * backend/src/pinai_agents/web/routes/ui/composio.py.
  */
 export function buildConnectorInitTaskId(toolkit: string, connectedAccountId: string): string {
   return `init.${toolkit.toLowerCase()}.${connectedAccountId}`;

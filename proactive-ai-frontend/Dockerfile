@@ -47,7 +47,7 @@ FROM nginx:1.27-alpine
 # SPA at the root path (vite `base: "/"`).
 #   /                  → index.html
 #   /assets/...        → hashed JS/CSS, immutable cache
-#   /api/*, /health    → reverse-proxied to pinai-agents web (same-origin
+#   /api/*, /health    → reverse-proxied to backend web (same-origin
 #                        from the browser's POV, so no CORS preflight)
 #   /<anything else>   → SPA fallback to index.html (React Router)
 #
@@ -57,7 +57,7 @@ FROM nginx:1.27-alpine
 # One image, three envs — the upstream is a full URL with scheme so
 # the same template handles plain-HTTP (compose) and HTTPS-via-fly-proxy
 # (fly) without branching:
-#   * docker-compose: NGINX_UPSTREAM_URL=http://pinai-web:8000,
+#   * docker-compose: NGINX_UPSTREAM_URL=http://api:8000,
 #                     NGINX_RESOLVER="127.0.0.11 ipv6=off"
 #   * fly test/dev/prod: NGINX_UPSTREAM_URL=https://<agents-app>.fly.dev,
 #                        NGINX_RESOLVER=[fdaa::3]
@@ -65,7 +65,7 @@ FROM nginx:1.27-alpine
 # Fly path goes through public anycast (rather than 6PN direct) because
 # the agents `web` process binds only IPv4 (fly-proxy needs IPv4 for
 # same-machine forwarding); 6PN direct would require dual-stack on the
-# app side. See pinai-agents/fly.test.toml for the bind rationale.
+# app side. See backend/fly.test.toml for the bind rationale.
 #
 # NGINX_ENVSUBST_FILTER restricts substitution to NGINX_* so nginx's own
 # $host / $remote_addr / etc. variables are left alone.
@@ -87,7 +87,7 @@ server {
         add_header Cache-Control "public, immutable";
     }
 
-    # /api/* — reverse proxy to pinai-agents web. Same-origin from the
+    # /api/* — reverse proxy to backend web. Same-origin from the
     # browser, so no CORS preflight + the Authorization header rides
     # straight through.
     #

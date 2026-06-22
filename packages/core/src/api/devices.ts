@@ -33,7 +33,7 @@ export interface RegisterDeviceInput {
 export async function listUserDevices(): Promise<UserDevice[]> {
   const res = await pinaiFetch("/api/devices/list");
   if (!res.ok) throw new Error(`/devices/list failed: ${await readErrorMessage(res)}`);
-  // pinai-agents returns { items: [...] } with camelCase fields; normalize
+  // backend returns { items: [...] } with camelCase fields; normalize
   // back to the snake_case UserDevice shape callers expect.
   const data = (await res.json()) as {
     items?: Array<{

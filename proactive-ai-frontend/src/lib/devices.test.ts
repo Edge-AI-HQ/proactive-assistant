@@ -1,7 +1,7 @@
 /**
  * Tests for the device registration helper.
  * Mocks global fetch + secure storage to isolate the SDK contract from
- * the network. The endpoint is /api/devices/register on pinai-agents
+ * the network. The endpoint is /api/devices/register on backend
  * (no longer /api/proactive/devices/register on legacy apis).
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";

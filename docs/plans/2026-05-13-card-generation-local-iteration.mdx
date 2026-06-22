@@ -7,16 +7,16 @@ description: "2026-05-13 把 /agent/generate 从 Daytona 切到本地 Python 跑
 
 ## 背景与目标
 
-主线诉求:迭代 `/agent/generate` 的卡片生成质量。Daytona 沙盒方案要求 `pinai-web` 暴露公网地址(sandbox 在云端跑 `pinai_sdk` 回调 web `/api/agent/*`),本地开发挂 ngrok 麻烦,所以这一轮直接把 sandbox 后端换成本地 Python(deepagents 的 `LocalShellBackend`),避免对外地址依赖。
+主线诉求:迭代 `/agent/generate` 的卡片生成质量。Daytona 沙盒方案要求 `api` 暴露公网地址(sandbox 在云端跑 `pinai_sdk` 回调 web `/api/agent/*`),本地开发挂 ngrok 麻烦,所以这一轮直接把 sandbox 后端换成本地 Python(deepagents 的 `LocalShellBackend`),避免对外地址依赖。
 
 只在本机 docker compose 内跑,所有数据在本机 postgres,不污染 dev/prod。
 
 ## 实际跑通的拓扑
 
 ```
-pinai-web (FastAPI 8000) ──┐
+api (FastAPI 8000) ──┐
                             ├── local docker network
-pinai-chat (FastAPI 8001) ─┤   (pinai-web 内部 DNS 可解析)
+agent-engine (FastAPI 8001) ─┤   (api 内部 DNS 可解析)
    └─ generator subagents  │
        (LocalShellBackend) │
        /state on /         │
@@ -26,7 +26,7 @@ litellm (4000) — 走 master key 直挂,LLM 调用全部经它路由
 postgres (54322) — pgvector pg15,本地 fresh DB
 ```
 
-关键点:**没有 Daytona、没有 ngrok**。LLM 直接在 `pin-ai-pinai-chat` 容器里 `subprocess.run("python3 /tmp/collect.py", shell=True, env={...})`,脚本 `from pinai_sdk import client` 通过 docker 内部 DNS `http://pinai-web:8000` 回连。
+关键点:**没有 Daytona、没有 ngrok**。LLM 直接在 `pin-ai-agent-engine` 容器里 `subprocess.run("python3 /tmp/collect.py", shell=True, env={...})`,脚本 `from pinai_sdk import client` 通过 docker 内部 DNS `http://api:8000` 回连。
 
 ## 排通过程踩到的 5 个坑
 
@@ -37,13 +37,13 @@ postgres (54322) — pgvector pg15,本地 fresh DB
 3. **`LocalShellBackend(virtual_mode=True)` 只重写 filesystem op,不重写 shell exec**。`/state/phase1.json` 这条 path 在 data-collector 那里通过 `subprocess.run` 写 *literal* `/state/phase1.json`,planner 那边 `read_file('/state/phase1.json')` 又被 virtual mode 重定向到 `<root_dir>/state/phase1.json`,两边读不到同一份。改成 `virtual_mode=False` + 提前 `os.makedirs("/state", exist_ok=True)`,两边都拿 literal path。
 4. **`inherit_env=False` 砍掉 DNS / locale / SSL 相关 env**。最终在 subprocess 里 httpx 报 `ConnectError: [Errno -2] Name or service not known`,看起来像 DNS 失败实际是 env 残缺。改成 `inherit_env=True` 然后只覆盖 `PATH / PYTHONPATH / PAI_API_URL / PAI_RUN_JWT`。
 5. **`PATH` 必须把 `/app/.venv/bin` 排在 system path 前**。系统 `python3` 没有 `httpx / pydantic`(都装在 chat 容器 uv venv 里),`shell=True` subprocess 起的 `python3` 默认走系统的就 `ImportError`。`PATH=/app/.venv/bin:/usr/local/bin:/usr/bin:/bin`。
-6. (额外:`docker compose up -d --build pinai-chat` 不带 `PINAI_LOCAL_SANDBOX=1` env 会把开关默认拉回 0,继续走 Daytona 路径。env override 必须每次都带,或者写到 `pinai-agents/.env`。)
+6. (额外:`docker compose up -d --build agent-engine` 不带 `PINAI_LOCAL_SANDBOX=1` env 会把开关默认拉回 0,继续走 Daytona 路径。env override 必须每次都带,或者写到 `backend/.env`。)
 
 ## 代码改动(临时,迭代用)
 
-`pinai-agents/src/pinai_agents/chat/agents/generator.py` 加 `PINAI_LOCAL_SANDBOX=1` 开关:本地用 `LocalShellBackend(root_dir="/state", virtual_mode=False, inherit_env=True, env={...})`,清理 `/state` 旧文件,不去 Daytona。默认为 0 不影响线上路径。
+`backend/src/pinai_agents/chat/agents/generator.py` 加 `PINAI_LOCAL_SANDBOX=1` 开关:本地用 `LocalShellBackend(root_dir="/state", virtual_mode=False, inherit_env=True, env={...})`,清理 `/state` 旧文件,不去 Daytona。默认为 0 不影响线上路径。
 
-`docker-compose.yml` 给 pinai-chat 加了 `PINAI_LOCAL_SANDBOX: ${PINAI_LOCAL_SANDBOX:-0}` 透传。
+`docker-compose.yml` 给 agent-engine 加了 `PINAI_LOCAL_SANDBOX: ${PINAI_LOCAL_SANDBOX:-0}` 透传。
 
 `.claude/settings.local.json` 加了一条 `Bash(docker exec pin-ai-postgres psql:*)` 允许规则,绕过 classifier 对 docker exec psql 的默认拦截(本地迭代用,不要 commit)。
 
@@ -72,8 +72,8 @@ postgres (54322) — pgvector pg15,本地 fresh DB
 ## 运行参数
 
 每轮:
-- 端点 `POST http://pinai-chat:8001/agent/generate`
-- JWT:本地用 `cryptography` 拿 `PAI_JWT_SIGNING_KEY` 在 `pin-ai-pinai-web` 容器里现签 EdDSA,claim 含 `vk=sk-REDACTED / user_id=5296 / iss=pinai-agents-web / aud=pinai-agents-internal`
+- 端点 `POST http://agent-engine:8001/agent/generate`
+- JWT:本地用 `cryptography` 拿 `PAI_JWT_SIGNING_KEY` 在 `pin-ai-api` 容器里现签 EdDSA,claim 含 `vk=sk-REDACTED / user_id=5296 / iss=pinai-agents-web / aud=pinai-agents-internal`
 - body:`{"cards_to_generate": 6, "output_language": "en", "run_id": "round<N>"}`
 - LLM 链路:经 LiteLLM 4000 → 真 GPT-5.5 / Sonnet 4.6(LangSmith project `pinai-agents-dev` 留 trace)
 - 数据:每轮**不重新 seed**,DB 状态完全相同,世界信号也没变;只有运行 ID 不同
@@ -158,7 +158,7 @@ planner 提示词里写了 "intent_key is a stable slug — kebab-case, ≤120 c
 
 ### F7. 后台 ingest 在并发干活
 
-每轮跑完后再查 `pai_world_signals`,从 5 行涨到 136 行,provider 包括 `google_news / sec / federal_reserve / tavily`。说明 pinai-web 的 world signal ingest scheduler 一直在后台拉真实(或 mock 的)新闻,把 raw 行注入 DB 并给 user 5296 打 user_view score。
+每轮跑完后再查 `pai_world_signals`,从 5 行涨到 136 行,provider 包括 `google_news / sec / federal_reserve / tavily`。说明 api 的 world signal ingest scheduler 一直在后台拉真实(或 mock 的)新闻,把 raw 行注入 DB 并给 user 5296 打 user_view score。
 
 对本次迭代没什么影响(seed 的 5 条 tavily 还在,salience 也没被覆盖),但对线上意义不小——**ingest 速度和 generate 速度的赛跑**会影响 phase1 拿到的 world 集合。
 
@@ -197,18 +197,18 @@ LiteLLM master key 直挂、走 cache,prompt cache 的命中能省掉重复的 s
 ```bash
 # 1. 起栈
 cd /Users/ec2-user/Desktop/01PINAI/01code/PIN-AI-ASSISTANT
-make up  # 需要 pinai-agents/.env.keys + ops/litellm/.env.keys
+make up  # 需要 backend/.env.keys + ops/litellm/.env.keys
 
 # 2. seed
 docker compose cp /tmp/seed_5296.sql postgres:/tmp/seed_5296.sql
 docker compose exec postgres psql -U postgres -d postgres -f /tmp/seed_5296.sql
 
 # 3. 切到本地 sandbox 路径并重启 chat
-PINAI_LOCAL_SANDBOX=1 docker compose up -d --force-recreate pinai-chat
+PINAI_LOCAL_SANDBOX=1 docker compose up -d --force-recreate agent-engine
 
 # 4. 跑一轮
-docker compose cp /tmp/run_gen.py pinai-web:/tmp/run_gen.py
-docker compose exec pinai-web python3 /tmp/run_gen.py \
+docker compose cp /tmp/run_gen.py api:/tmp/run_gen.py
+docker compose exec api python3 /tmp/run_gen.py \
   --virtual-key <sk-...> \
   --signing-key '<PAI_JWT_SIGNING_KEY base64>' \
   --cards 6 --lang en --run-id testN

@@ -44,14 +44,14 @@ per-user；每个动作走 `pai_evolution_runs`（`trigger_kind='consolidation'`
 ## 完成定义（全部 goal 的验证门都绿）
 
 ```bash
-cd pinai-agents && uv run ruff check .
-cd pinai-agents && uv run pytest \
+cd backend && uv run ruff check .
+cd backend && uv run pytest \
   tests/web/db/repositories/test_preferences_repo.py \
   tests/web/routes/test_preferences.py \
   tests/chat/agents/test_consolidate_agent.py \
   tests/chat/routes/test_run_routes.py \
   tests/web/scheduler/test_consolidation_dispatch.py
-cd pinai-agents/packages/pinai_sdk && uv run pytest
+cd backend/packages/pinai_sdk && uv run pytest
 ```
 
 以上全过 + 每个 goal 的「验证门」全绿 = 完成。（测试文件名按上面建；若仓里已有同名文件就追加用例，不要新建重名。）
@@ -95,21 +95,21 @@ cd pinai-agents/packages/pinai_sdk && uv run pytest
 **验证门（自动，全绿才算完成）**：
 
 ```bash
-cd pinai-agents && uv run ruff check .
+cd backend && uv run ruff check .
 
 # repository 行为（仓里已有 test_preferences_repo.py，追加用例）
-cd pinai-agents && uv run pytest tests/web/db/repositories/test_preferences_repo.py
+cd backend && uv run pytest tests/web/db/repositories/test_preferences_repo.py
 #   - add() 一条 active → archive(id) 后 status='archived'，返回非 None；不存在/已 archived → None
 #   - set_weight(id, weight=0.3) 后该行 weight==0.3、confidence 不变；只传 confidence 同理；不存在 id → None
 
 # agent route（仓里已有 test_preferences.py，追加用例）
-cd pinai-agents && uv run pytest tests/web/routes/test_preferences.py
+cd backend && uv run pytest tests/web/routes/test_preferences.py
 #   - POST /api/agent/preferences/archive/{id} 命中 active → 200 status='archived'；不存在 → 404
 #   - POST /api/agent/preferences/reweight {id, weight} → 200 且行 weight 更新；不存在 → 404
 
 # SDK 方法存在（静态断言）
-cd pinai-agents/packages/pinai_sdk && uv run python -c "from pinai_sdk._client import Preferences; assert hasattr(Preferences,'archive') and hasattr(Preferences,'reweight')"
-cd pinai-agents/packages/pinai_sdk && uv run pytest
+cd backend/packages/pinai_sdk && uv run python -c "from pinai_sdk._client import Preferences; assert hasattr(Preferences,'archive') and hasattr(Preferences,'reweight')"
+cd backend/packages/pinai_sdk && uv run pytest
 ```
 
 **人工验收（循环外）**：无（纯 plumbing，验证门已覆盖）。
@@ -161,9 +161,9 @@ cd pinai-agents/packages/pinai_sdk && uv run pytest
 **验证门（自动，只断言 plumbing，不断言 LLM 输出文本质量）**：
 
 ```bash
-cd pinai-agents && uv run ruff check .
+cd backend && uv run ruff check .
 
-cd pinai-agents && uv run pytest tests/chat/agents/test_consolidate_agent.py
+cd backend && uv run pytest tests/chat/agents/test_consolidate_agent.py
 #   - import pinai_agents.chat.agents.consolidate as m; assert callable(m.run_consolidate)
 #   - 其 system prompt 文本包含锚点关键词（全部命中）：
 #       'preferences.list'、'profile.get'、'supersede'、'archive'、'reweight'、
@@ -172,7 +172,7 @@ cd pinai-agents && uv run pytest tests/chat/agents/test_consolidate_agent.py
 #   - system prompt **不含** 'preferences.add'（v1 严禁合成新行；断言它不出现，防回归）
 #   - 复用了共享 prompt 段（断言含 SANDBOX_PREAMBLE / CODE_MODE_GUIDANCE / GROUNDING_POLICY 的标志串）
 
-cd pinai-agents && uv run pytest tests/chat/routes/test_run_routes.py
+cd backend && uv run pytest tests/chat/routes/test_run_routes.py
 #   - POST /agent/run/consolidate 路由存在（app routes 里有该 path）
 #   - 用 monkeypatch 把 run_consolidate 替成返回固定 dict 的 stub → 200 且回传 summary
 #     （不真起 sandbox / 不真调 LLM）
@@ -198,19 +198,19 @@ cd pinai-agents && uv run pytest tests/chat/routes/test_run_routes.py
 **验证门（自动）**：
 
 ```bash
-cd pinai-agents && uv run ruff check .
+cd backend && uv run ruff check .
 
-cd pinai-agents && uv run pytest tests/web/scheduler/test_consolidation_dispatch.py
+cd backend && uv run pytest tests/web/scheduler/test_consolidation_dispatch.py
 #   - dispatcher 收到 kind='consolidation' 的 task → 走 _dispatch_consolidate（mock _call_chat）
 #   - 护栏 OFF（新增偏好数 >= N）：建了一行 pai_evolution_runs trigger_kind='consolidation'
 #     status 最终 'completed'（mock chat 返回正常）
 #   - 护栏 ON（新增偏好数 < N）：_call_chat 未被调用、未建 evolution 行（log skip）
 #   - chat 抛异常：evolution 行翻 'failed'，不留 'running' ghost（镜像 dream 的回归）
 
-cd pinai-agents && uv run python -c "from pinai_agents.web.scheduler.dispatcher import _LONG_RUNNING_KINDS; assert 'consolidation' in _LONG_RUNNING_KINDS"
+cd backend && uv run python -c "from pinai_agents.web.scheduler.dispatcher import _LONG_RUNNING_KINDS; assert 'consolidation' in _LONG_RUNNING_KINDS"
 ```
 
-**人工验收（循环外）**：本地把某 user 的 consolidation schedule `next_run_at` 临时改到当下，`make up` 等它触发一次，`make logs-pinai-web | grep consolidat` 看 dispatch + lifecycle；新增偏好不足 N 时看到 skip 日志、不调 chat。
+**人工验收（循环外）**：本地把某 user 的 consolidation schedule `next_run_at` 临时改到当下，`make up` 等它触发一次，`make logs-api | grep consolidat` 看 dispatch + lifecycle；新增偏好不足 N 时看到 skip 日志、不调 chat。
 
 ---
 

@@ -102,7 +102,7 @@ sequenceDiagram
 
 ## chat 端 generator agent
 
-`pinai-agents/src/pinai_agents/chat/routes/generate.py` → `chat/agents/generator.py:run_generator()`。
+`backend/src/pinai_agents/chat/routes/generate.py` → `chat/agents/generator.py:run_generator()`。
 
 ### Stage 拓扑
 
@@ -161,14 +161,14 @@ generator 走 LiteLLM 时,`ops/litellm/litellm_config.yaml` 的 `cache_control_i
 
 | 改动 | 先看 |
 |---|---|
-| 生成 HTTP 入口 / dedupe / lazy virtual key / persist | `pinai-agents/src/pinai_agents/web/routes/ui/generate.py` |
-| Auto-generate settings → schedule 同步 | `pinai-agents/src/pinai_agents/web/routes/ui/profile.py`(`_sync_auto_generate_schedule`、`_ensure_auto_generate_schedule`)|
-| Scheduler dispatcher generator handler | `pinai-agents/src/pinai_agents/web/scheduler/dispatcher.py`(`_run_generator`、`call_generate`)|
-| chat 端 indexed parallel pipeline + GeneratorOutput | `pinai-agents/src/pinai_agents/chat/agents/generator.py`(`_build_source_index` / `_source_bundle_for_plan_item` / `_PLANNER_PROMPT` / `_CARD_GENERATOR_PROMPT` / `_EVALUATOR_PROMPT`) 和 `chat/agents/generation_context.py` |
-| chat HTTP route | `pinai-agents/src/pinai_agents/chat/routes/generate.py` |
-| 输出 schema(GeneratorOutput / PlanOutput / CardsList / EvalReport) | `pinai-agents/src/pinai_agents/chat/agents/generator.py` 顶部 pydantic |
-| 共享 api models | `pinai-agents/src/pinai_agents/shared/api_models.py`(`GenerateRequest` 等) |
-| 持久化表 schema | `pinai-agents/db/migrations/014_pai_pipeline.sql`(`pai_pipeline_runs`、`pai_card_evaluations`、`pai_intent_card_state`、`pai_intent_thread_state`)、`039_split_generator_kinds.sql` |
+| 生成 HTTP 入口 / dedupe / lazy virtual key / persist | `backend/src/pinai_agents/web/routes/ui/generate.py` |
+| Auto-generate settings → schedule 同步 | `backend/src/pinai_agents/web/routes/ui/profile.py`(`_sync_auto_generate_schedule`、`_ensure_auto_generate_schedule`)|
+| Scheduler dispatcher generator handler | `backend/src/pinai_agents/web/scheduler/dispatcher.py`(`_run_generator`、`call_generate`)|
+| chat 端 indexed parallel pipeline + GeneratorOutput | `backend/src/pinai_agents/chat/agents/generator.py`(`_build_source_index` / `_source_bundle_for_plan_item` / `_PLANNER_PROMPT` / `_CARD_GENERATOR_PROMPT` / `_EVALUATOR_PROMPT`) 和 `chat/agents/generation_context.py` |
+| chat HTTP route | `backend/src/pinai_agents/chat/routes/generate.py` |
+| 输出 schema(GeneratorOutput / PlanOutput / CardsList / EvalReport) | `backend/src/pinai_agents/chat/agents/generator.py` 顶部 pydantic |
+| 共享 api models | `backend/src/pinai_agents/shared/api_models.py`(`GenerateRequest` 等) |
+| 持久化表 schema | `backend/db/migrations/014_pai_pipeline.sql`(`pai_pipeline_runs`、`pai_card_evaluations`、`pai_intent_card_state`、`pai_intent_thread_state`)、`039_split_generator_kinds.sql` |
 | Settings 默认值 migration | `037_pai_user_settings_auto_generate_interval.sql`、`038_auto_generate_default_on.sql` |
 | 前端 pipeline hook | `proactive-ai-frontend/src/hooks/usePipeline.ts`、`useGenerationStatus.ts`、`useActiveAgentRuns.ts`、`useCards.ts` |
 | 前端 UI | `proactive-ai-frontend/src/components/NowFeed.tsx`、`AutoGenerateSettings.tsx`、`GenerationIndicator.tsx`、`GenerationLanguageSettings.tsx` |
@@ -177,17 +177,17 @@ generator 走 LiteLLM 时,`ops/litellm/litellm_config.yaml` 的 `cache_control_i
 
 ```bash
 # 路由 / persist
-cd pinai-agents && uv run pytest tests/web/routes/                    # 含 /api/generate
-cd pinai-agents && uv run pytest tests/web/db/repositories/test_scheduled_tasks_repo.py
+cd backend && uv run pytest tests/web/routes/                    # 含 /api/generate
+cd backend && uv run pytest tests/web/db/repositories/test_scheduled_tasks_repo.py
 
 # scheduler
-cd pinai-agents && uv run pytest tests/web/scheduler                  # 含 generator dispatch
+cd backend && uv run pytest tests/web/scheduler                  # 含 generator dispatch
 
 # chat 端 generator(如已有)
-cd pinai-agents && uv run pytest tests/chat/                          # 含 generator.py / routes/generate
+cd backend && uv run pytest tests/chat/                          # 含 generator.py / routes/generate
 
 # 类型 + lint
-cd pinai-agents && uv run ruff check .
+cd backend && uv run ruff check .
 cd proactive-ai-frontend && npm run type-check
 cd proactive-ai-frontend && npm test                                  # 包括 usePipeline 单测
 ```
@@ -226,7 +226,7 @@ langsmith trace list --project pinai-agents-dev --run-type chain --format pretty
 - writer / evaluator 是 per-card 并发调用,final-selection 也只看小的 card/eval summaries;不要重新把 full phase1 放回每张卡或终选 prompt,否则 8 张会重新退化成大上下文超时问题。
 - 生成后 card fanout 默认只预热前 2 张卡,其余卡用户打开时按 existing fallback bootstrap;不要把 8 张卡全部同步预热。
 - `cards[i].sources[]` 必须非空且能在 sandbox 里 verbatim 验证(signal id 真存在、gmail id 能 fetch 到),evaluator 把"grounding violation"当 hard fail。这是 LLM 编卡内容的一道闸,实施层别削弱它。
-- 本地只想验证 generator 质量、不想走 Daytona/ngrok 时,可以用 `PINAI_LOCAL_SANDBOX=1 docker compose up -d --force-recreate pinai-chat`。这会让 generator 的 DeepAgents code execution 在 `pinai-chat` 容器里跑,`pinai_sdk` 通过 docker DNS 调 `http://pinai-web:8000`。默认值仍是 `0`,线上不走这条。
+- 本地只想验证 generator 质量、不想走 Daytona/ngrok 时,可以用 `PINAI_LOCAL_SANDBOX=1 docker compose up -d --force-recreate agent-engine`。这会让 generator 的 DeepAgents code execution 在 `agent-engine` 容器里跑,`pinai_sdk` 通过 docker DNS 调 `http://api:8000`。默认值仍是 `0`,线上不走这条。
 - `persist_generator_run` 失败只 log warn 不阻断(`pai_pipeline_runs` 持久化是 best-effort,卡片已经返回客户端),所以失败需要主动查 `pai_scheduled_task_runs.error`。
 - `output_language` 走 user_settings,不是请求体覆盖 — 改语言要去 settings(`/api/settings`)。
 - auto-generate 在新用户首次 `GET /api/profile` 时 lazy CREATE schedule 行(`_ensure_auto_generate_schedule`),避免空 settings 时无 schedule。改 settings 路由别绕过这步。

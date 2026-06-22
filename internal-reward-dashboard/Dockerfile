@@ -1,7 +1,7 @@
 # internal-reward-dashboard — static SPA served by nginx on Fly.
 #
 # Build-time VITE_SUPABASE_* args are baked into the Vite bundle. Runtime
-# nginx proxies /api/* to pinai-agents so the browser keeps a same-origin API
+# nginx proxies /api/* to backend so the browser keeps a same-origin API
 # surface and the Supabase Authorization header can pass through unchanged.
 
 FROM node:20-slim AS builder

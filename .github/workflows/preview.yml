@@ -47,8 +47,8 @@ jobs:
           echo "$files"
           # 路径 → 服务映射（packages/ 是前端共享层，算前端）
           grep -qE '^(proactive-ai-frontend|packages|apps/web)/' <<<"$files" && fe=true || fe=false
-          grep -qE '^pinai-agents/' <<<"$files" && be=true || be=false
-          grep -qE '^pinai-agents/db/migrations/' <<<"$files" && mig=true || mig=false
+          grep -qE '^backend/' <<<"$files" && be=true || be=false
+          grep -qE '^backend/db/migrations/' <<<"$files" && mig=true || mig=false
           echo "frontend=$fe" >> "$GITHUB_OUTPUT"
           echo "backend=$be" >> "$GITHUB_OUTPUT"
           echo "migration=$mig" >> "$GITHUB_OUTPUT"
@@ -97,7 +97,7 @@ jobs:
         run: |
           api="${{ steps.urls.outputs.api }}"
           # db 机器跟后端 web/chat 同区（fly.dev.toml 的 primary_region），避免跨区查询延迟
-          reg=$(sed -n "s/^primary_region *= *'\([^']*\)'.*/\1/p" pinai-agents/fly.dev.toml | head -1)
+          reg=$(sed -n "s/^primary_region *= *'\([^']*\)'.*/\1/p" backend/fly.dev.toml | head -1)
           reg="${reg:-$REGION}"
           echo "db region: $reg"
           # 同款 pgvector（迁移需要 vector 扩展）。throwaway、无卷（preview 不需持久化）。
@@ -116,7 +116,7 @@ jobs:
           sleep 15  # 等 postgres initdb 起来
 
       - name: Inject all dev secrets (+ 独立库时覆盖 DATABASE_URL)
-        working-directory: pinai-agents
+        working-directory: backend
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
@@ -141,11 +141,11 @@ jobs:
           sed \
             -e "s/^app = .*/app = '$api'/" \
             -e "s#proactive-ai-agents-dev#$api#g" \
-            pinai-agents/fly.dev.toml > pinai-agents/fly.pr.toml
-          echo "----- fly.pr.toml [app/env] -----"; grep -E "^app|PAI_API_URL|WEB_INTERNAL_URL|CHAT_INTERNAL_URL" pinai-agents/fly.pr.toml || true
+            backend/fly.dev.toml > backend/fly.pr.toml
+          echo "----- fly.pr.toml [app/env] -----"; grep -E "^app|PAI_API_URL|WEB_INTERNAL_URL|CHAT_INTERNAL_URL" backend/fly.pr.toml || true
 
       - name: Deploy backend preview (web + chat)
-        working-directory: pinai-agents
+        working-directory: backend
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
@@ -186,7 +186,7 @@ jobs:
         env:
           DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
         run: |
-          json=$(npx --yes @dotenvx/dotenvx get -f pinai-agents/.env.dev --format json)
+          json=$(npx --yes @dotenvx/dotenvx get -f backend/.env.dev --format json)
           python3 - "$json" <<'PY' >> "$GITHUB_ENV"
           import json, sys
           d = json.loads(sys.argv[1])

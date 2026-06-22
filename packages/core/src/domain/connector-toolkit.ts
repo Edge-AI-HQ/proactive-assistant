@@ -3,7 +3,7 @@
  * 后端 connections.toolkit 的无下划线形)→ canonical slug + 展示 label + 语义图标键。
  * 平台无关纯数据;图标组件绑定交各端(web: ui-web/connect/toolkit-icons)。
  *
- * 与 pinai-agents generator.py / main_chat.py 的 slug 白名单、DataConnections 的
+ * 与 backend generator.py / main_chat.py 的 slug 白名单、DataConnections 的
  * INPUT_CATEGORIES composioId 保持同步。
  */
 

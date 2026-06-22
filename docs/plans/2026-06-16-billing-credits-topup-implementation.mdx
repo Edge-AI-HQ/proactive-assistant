@@ -9,7 +9,7 @@ description: "docs/plans/2026-06-15-billing-plan-change-credits.mdx 的 Phase 2 
 
 ## 实施状态(2026-06-16,本 worktree 已实现并逐任务提交)
 
-Task 1-7 后端核心全部落地。验证:`cd pinai-agents && uv run ruff format --check . && uv run ruff check . && uv run mypy src` 干净;`uv run pytest tests/web/payment/`(55)全过;全量 pytest 仅 pattern/seed 系 **12 个 main 既有失败**(与计费无关);pinai-web 真栈启动健康、`/api/payment/topup` 已注册、对账 task 挂载无 boot 报错。
+Task 1-7 后端核心全部落地。验证:`cd backend && uv run ruff format --check . && uv run ruff check . && uv run mypy src` 干净;`uv run pytest tests/web/payment/`(55)全过;全量 pytest 仅 pattern/seed 系 **12 个 main 既有失败**(与计费无关);api 真栈启动健康、`/api/payment/topup` 已注册、对账 task 挂载无 boot 报错。
 
 **与本计划的差异(已验证更优):**
 - 三个 repository 落在 `web/payment/`(free-function,对齐 `subscriptions.py`),非原计划的 `db/repositories/` class-style——它们是 webhook/scheduler 跨用户**服务侧写入**,reconcile 要一次 claim 多用户窗口,class-style 绑单 user 不合适。
@@ -31,7 +31,7 @@ Task 1-7 后端核心全部落地。验证:`cd pinai-agents && uv run ruff forma
 
 **前端补齐(2026-06-18):** Subscription 面板已接入一次性充值 UI(预设 20/50/100 + 自填)、top-up 成功后 billing history 可展示 `pai_credit_grants` 充值记录、payment method 可展示 Checkout 使用过的 Link / card、plan credits 与 extra credits 分桶展示。其中 plan credits 不由前端硬编码,而是读 `/api/payment/usage.planAllowanceCredits`(DB open budget window 的 `allowance_cents`)。
 
-**踩坑提醒:** 改迁移后 `make migrate` 单独跑**不认**新 SQL(Dockerfile 把 `db/migrations/` 烘焙进镜像),要先 `make build-pinai-agents` 再 `make migrate`。
+**踩坑提醒:** 改迁移后 `make migrate` 单独跑**不认**新 SQL(Dockerfile 把 `db/migrations/` 烘焙进镜像),要先 `make build-backend` 再 `make migrate`。
 
 ---
 
@@ -151,7 +151,7 @@ Task 1-7 后端核心全部落地。验证:`cd pinai-agents && uv run ruff forma
 
 ## Task 8: 静态检查 + 全量回归 + 本地真栈验收
 
-- [ ] `cd pinai-agents && uv run ruff format --check . && uv run ruff check . && uv run mypy src && uv run pytest`。
+- [ ] `cd backend && uv run ruff format --check . && uv run ruff check . && uv run mypy src && uv run pytest`。
 - [ ] 本地真栈:`stripe listen` + 走一次 topup(测试卡)→ 看 grant 行、LiteLLM max_budget 涨、`/usage` spend 不变;触发一次对账看 consumption 行。
 - [ ] 文档:更新 SSOT Phase 2 节标注「已实现」+ 本文标 done;`docs/modules/` 相关(payment/runtime)补一行。
 

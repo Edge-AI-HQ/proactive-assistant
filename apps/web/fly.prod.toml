@@ -2,7 +2,7 @@
 #
 # Static SPA served by nginx（见 Dockerfile）。Build-time VITE_* 经
 # deploy-prod.yml（_deploy.yml 的 deploy-web job）`--build-arg` 注入，取自
-# pinai-agents/.env.production。随 prod 版本 release（v* tag）一起部署。
+# backend/.env.production。随 prod 版本 release（v* tag）一起部署。
 #
 # Sibling tomls: fly.toml (dev)。
 

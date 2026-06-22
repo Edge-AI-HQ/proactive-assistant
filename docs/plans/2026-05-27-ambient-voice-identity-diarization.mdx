@@ -67,7 +67,7 @@ If current docs conflict with this plan, update this plan section first, then im
 sequenceDiagram
   participant User
   participant UI as Setting > Ambient
-  participant Web as pinai-web
+  participant Web as api
   participant Storage as Supabase Storage
   participant Ambient as Ambient sound_classifier
   participant OpenAI as LiteLLM -> OpenAI
@@ -92,17 +92,17 @@ sequenceDiagram
 
 Backend:
 
-- Create `pinai-agents/db/migrations/057_pai_voice_identity_profiles.sql`
+- Create `backend/db/migrations/057_pai_voice_identity_profiles.sql`
   - Owns the user-level self voice reference metadata.
-- Create `pinai-agents/src/pinai_agents/web/db/repositories/voice_identity.py`
+- Create `backend/src/pinai_agents/web/db/repositories/voice_identity.py`
   - CRUD for the voice identity profile row.
-- Modify `pinai-agents/src/pinai_agents/web/storage.py`
+- Modify `backend/src/pinai_agents/web/storage.py`
   - Add generic byte upload/download/delete helpers for user-owned non-device media.
-- Modify `pinai-agents/src/pinai_agents/web/services/voice_transcription.py`
+- Modify `backend/src/pinai_agents/web/services/voice_transcription.py`
   - Add diarized transcription request/response parsing while preserving plain transcription.
-- Modify `pinai-agents/src/pinai_agents/web/routes/ui/voice.py`
+- Modify `backend/src/pinai_agents/web/routes/ui/voice.py`
   - Add voice identity profile endpoints and `POST /api/voice/transcribe-diarized`.
-- Modify `pinai-agents/src/pinai_agents/web/services/account_deletion.py` only if the new storage path is not already under the user's existing Storage prefix.
+- Modify `backend/src/pinai_agents/web/services/account_deletion.py` only if the new storage path is not already under the user's existing Storage prefix.
 
 Frontend:
 
@@ -240,7 +240,7 @@ Rules:
 
 **Files:**
 - Inspect only first; no committed code required unless the probe script is useful.
-- Optional create: `pinai-agents/scripts/probe_voice_diarization.py`
+- Optional create: `backend/scripts/probe_voice_diarization.py`
 
 - [ ] Check current OpenAI docs for `gpt-4o-transcribe-diarize`, `diarized_json`, `known_speaker_names`, and `known_speaker_references`.
 - [ ] Confirm whether LiteLLM passes these multipart/text fields through to OpenAI.
@@ -250,7 +250,7 @@ Rules:
 Verification:
 
 ```bash
-cd pinai-agents
+cd backend
 uv run pytest tests/web/routes/test_voice_transcribe.py -q
 ```
 
@@ -259,9 +259,9 @@ Expected: existing plain transcription tests still pass.
 ### Task 2: Backend voice identity storage
 
 **Files:**
-- Create: `pinai-agents/db/migrations/057_pai_voice_identity_profiles.sql`
-- Create: `pinai-agents/src/pinai_agents/web/db/repositories/voice_identity.py`
-- Test: `pinai-agents/tests/web/db/test_voice_identity_repo.py`
+- Create: `backend/db/migrations/057_pai_voice_identity_profiles.sql`
+- Create: `backend/src/pinai_agents/web/db/repositories/voice_identity.py`
+- Test: `backend/tests/web/db/test_voice_identity_repo.py`
 
 - [ ] Add the migration exactly as defined in "Backend voice identity profile", using yoyo SQL style used by existing migrations.
 - [ ] Implement repository methods:
@@ -274,7 +274,7 @@ Expected: existing plain transcription tests still pass.
 Verification:
 
 ```bash
-cd pinai-agents
+cd backend
 uv run pytest tests/web/db/test_voice_identity_repo.py -q
 ```
 
@@ -283,8 +283,8 @@ Expected: new repository tests pass.
 ### Task 3: Generic user media storage helpers
 
 **Files:**
-- Modify: `pinai-agents/src/pinai_agents/web/storage.py`
-- Test: `pinai-agents/tests/web/test_storage.py` or nearest existing storage test file
+- Modify: `backend/src/pinai_agents/web/storage.py`
+- Test: `backend/tests/web/test_storage.py` or nearest existing storage test file
 
 - [ ] Add `upload_user_media_bytes(supabase_user_id, storage_path, data, content_type)`.
 - [ ] Add `download_media_bytes(storage_path)`.
@@ -295,7 +295,7 @@ Expected: new repository tests pass.
 Verification:
 
 ```bash
-cd pinai-agents
+cd backend
 uv run pytest tests/web/test_storage.py -q
 ```
 
@@ -304,8 +304,8 @@ Expected: helper tests pass or are skipped cleanly when Supabase Storage is not 
 ### Task 4: Voice identity API
 
 **Files:**
-- Modify: `pinai-agents/src/pinai_agents/web/routes/ui/voice.py`
-- Test: `pinai-agents/tests/web/routes/test_voice_identity_routes.py`
+- Modify: `backend/src/pinai_agents/web/routes/ui/voice.py`
+- Test: `backend/tests/web/routes/test_voice_identity_routes.py`
 
 - [ ] Add `GET /api/voice/identity`.
 - [ ] Add `POST /api/voice/identity/reference`.
@@ -321,7 +321,7 @@ Expected: helper tests pass or are skipped cleanly when Supabase Storage is not 
 Verification:
 
 ```bash
-cd pinai-agents
+cd backend
 uv run pytest tests/web/routes/test_voice_identity_routes.py -q
 ```
 
@@ -330,9 +330,9 @@ Expected: route tests cover no-profile, upload, too-short reject, disable, delet
 ### Task 5: Diarized transcription service and route
 
 **Files:**
-- Modify: `pinai-agents/src/pinai_agents/web/services/voice_transcription.py`
-- Modify: `pinai-agents/src/pinai_agents/web/routes/ui/voice.py`
-- Test: `pinai-agents/tests/web/routes/test_voice_transcribe.py`
+- Modify: `backend/src/pinai_agents/web/services/voice_transcription.py`
+- Modify: `backend/src/pinai_agents/web/routes/ui/voice.py`
+- Test: `backend/tests/web/routes/test_voice_transcribe.py`
 
 - [ ] Add a structured parser that normalizes OpenAI diarized response segments into `{ speaker, text, start_ms, end_ms }`.
 - [ ] Add `transcribe_audio_diarized(...)`.
@@ -345,7 +345,7 @@ Expected: route tests cover no-profile, upload, too-short reject, disable, delet
 Verification:
 
 ```bash
-cd pinai-agents
+cd backend
 uv run pytest tests/web/routes/test_voice_transcribe.py tests/web/routes/test_voice_identity_routes.py -q
 ```
 
@@ -564,8 +564,8 @@ LIMIT 5;
 Run after implementation:
 
 ```bash
-cd pinai-agents && uv run ruff check
-cd pinai-agents && uv run pytest tests/web/routes/test_voice_transcribe.py tests/web/routes/test_voice_identity_routes.py tests/web/db/test_voice_identity_repo.py -q
+cd backend && uv run ruff check
+cd backend && uv run pytest tests/web/routes/test_voice_transcribe.py tests/web/routes/test_voice_identity_routes.py tests/web/db/test_voice_identity_repo.py -q
 cd proactive-ai-frontend && npm run type-check
 cd proactive-ai-frontend && npm test -- --run src/components/VoiceIdentitySettings.test.tsx src/services/voiceIdentityApi.test.ts src/services/ambient/capture-transcription.test.ts src/services/ambient/sources/sound-classifier.test.ts
 ```

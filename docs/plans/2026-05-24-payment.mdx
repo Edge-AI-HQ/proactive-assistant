@@ -9,7 +9,7 @@ description: "把已有 ~910 行支付骨架(web/payment/)补齐到可用:升降
 
 PIN AI 走**纯订阅模型**(对标 ChatGPT / Claude.ai),3 档 basic $39 / pro $99 / max $199,每档每月对应 N credits(`monthly_refresh_credits`),credits 翻译成 LiteLLM `max_budget` USD 上限(100 credits = $1)。7 天免费试用,Stripe Checkout 跳转付款。
 
-后端骨架(`pinai-agents/src/pinai_agents/web/payment/` ~910 行 + 027 三张表)已存在。本 plan 补齐 4 块缺失:**升降级 / 取消 / LiteLLM 同步 / 前端接线**。**不上 Stripe Meters** ── B2C 聊天助手行业不走按量,等 6 个月后再评估加超量档。
+后端骨架(`backend/src/pinai_agents/web/payment/` ~910 行 + 027 三张表)已存在。本 plan 补齐 4 块缺失:**升降级 / 取消 / LiteLLM 同步 / 前端接线**。**不上 Stripe Meters** ── B2C 聊天助手行业不走按量,等 6 个月后再评估加超量档。
 
 ## 总目标
 
@@ -64,7 +64,7 @@ PIN AI 走**纯订阅模型**(对标 ChatGPT / Claude.ai),3 档 basic $39 / pro 
 | **没有** `/api/payment/customer-portal` endpoint | 同上 |
 | 前端 `PlanPaymentForm.tsx` 100% mock(无 fetch `/api/payment/*`) | `proactive-ai-frontend/src/components/constellation/PlanPaymentForm.tsx` |
 | 前端 `AccountPanel.tsx` `SubscriptionSubPage` 100% mock | `proactive-ai-frontend/src/components/constellation/AccountPanel.tsx:230-353` |
-| 最新 migration 号 = 056(被同日 preferences plan 占) → 下一空号 **057** | `pinai-agents/db/migrations/` |
+| 最新 migration 号 = 056(被同日 preferences plan 占) → 下一空号 **057** | `backend/db/migrations/` |
 | 部署环境: dev `proactive-ai-agents-dev.fly.dev` | `AGENTS.md` 部署节 |
 
 ## 完成定义
@@ -74,8 +74,8 @@ PIN AI 走**纯订阅模型**(对标 ChatGPT / Claude.ai),3 档 basic $39 / pro 
 总验证门:
 
 ```bash
-cd pinai-agents && uv run ruff check .
-cd pinai-agents && uv run pytest tests/web/payment/
+cd backend && uv run ruff check .
+cd backend && uv run pytest tests/web/payment/
 cd proactive-ai-frontend && npm run type-check
 cd proactive-ai-frontend && npm test
 ```
@@ -118,7 +118,7 @@ COMMIT;
 **验证门(自动)**:
 
 ```bash
-cd pinai-agents && make migrate
+cd backend && make migrate
 docker compose exec postgres psql -U postgres -d pinai_agents -c \
   "SELECT plan_code, stripe_price_id, price_cents_monthly, trial_period_days
      FROM pai_billing_plans ORDER BY sort_order;"
@@ -230,8 +230,8 @@ async def customer_portal(user=Depends(supabase_user), conn=Depends(db_conn)) ->
 **验证门(自动)**:
 
 ```bash
-cd pinai-agents && uv run ruff check .
-cd pinai-agents && uv run pytest tests/web/payment/test_checkout.py \
+cd backend && uv run ruff check .
+cd backend && uv run pytest tests/web/payment/test_checkout.py \
                                   tests/web/payment/test_cancel.py \
                                   tests/web/payment/test_customer_portal.py
 # 单测覆盖:
@@ -289,7 +289,7 @@ async def _handle_subscription_deleted(conn, sub: Any) -> None:
 **验证门(自动)**:
 
 ```bash
-cd pinai-agents && uv run pytest tests/web/payment/test_webhook_litellm.py
+cd backend && uv run pytest tests/web/payment/test_webhook_litellm.py
 # Mock litellm_client HTTP,断言:
 # - invoice.paid (basic plan) 触发 update_key(max_budget=32.0) + reset_key_spend
 # - invoice.paid (pro plan)  触发 update_key(max_budget=128.0) + reset_key_spend
@@ -349,7 +349,7 @@ cd proactive-ai-frontend && npm test
 2. 在 Stripe Dashboard → Developers → Webhooks → Add endpoint:
    - URL: `https://proactive-ai-agents-dev.fly.dev/api/payment/webhook`
    - Events: `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`
-3. 拿到 webhook signing secret(`whsec_...`)→ 加密写进 `pinai-agents/.env.dev`(用 `dotenvx set STRIPE_WEBHOOK_SECRET ...`)→ commit `.env.dev` → 推送触发 CI → CI 自动跑 `scripts/sync_fly_secrets.py` 推 fly。
+3. 拿到 webhook signing secret(`whsec_...`)→ 加密写进 `backend/.env.dev`(用 `dotenvx set STRIPE_WEBHOOK_SECRET ...`)→ commit `.env.dev` → 推送触发 CI → CI 自动跑 `scripts/sync_fly_secrets.py` 推 fly。
 4. **本地端到端测试**: 用 [Stripe CLI](https://docs.stripe.com/stripe-cli) `stripe listen --forward-to localhost:8000/api/payment/webhook` 转发到本地容器,用 `stripe trigger invoice.paid` 模拟事件。
 5. 旧的 `we_1T4zz22K5fzHJAlcVQfYitmR`(指向 `pinclaw-api-dev.fly.dev`,状态 disabled) → Stripe Dashboard 里 delete,清理历史残留。
 

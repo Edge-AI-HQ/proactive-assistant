@@ -37,7 +37,7 @@
 # 2. 前置检查
 确认 `gh auth status`、`flyctl auth whoami`、`langsmith`、`git` 可用。任一缺失 → 跳过对应源并在报告显著标注。
 - **LangSmith key 走解密,别依赖 `.env`**（worktree 里没有 `.env`,但有 `.env.dev` + 私钥在环境）:
-  `export LANGSMITH_API_KEY=$(env -u ANTHROPIC_API_KEY npx -y @dotenvx/dotenvx get LANGSMITH_API_KEY -f pinai-agents/.env.dev 2>/dev/null)`（`env -u ANTHROPIC_API_KEY` 防 Claude 注入空值污染 dotenvx 解密）。
+  `export LANGSMITH_API_KEY=$(env -u ANTHROPIC_API_KEY npx -y @dotenvx/dotenvx get LANGSMITH_API_KEY -f backend/.env.dev 2>/dev/null)`（`env -u ANTHROPIC_API_KEY` 防 Claude 注入空值污染 dotenvx 解密）。
 - **flyctl 没登录 = fly 全部源(dev+prod 的 logs/status)全废,prod 当轮几乎零可观测**。这是交互登录,prompt 修不了 → 报告里显著标红,提示用户 `flyctl auth login`（无人值守场景建议改用 `FLY_API_TOKEN` 环境变量,免交互、不掉线）。
 
 # 3. 时间窗
@@ -77,7 +77,7 @@ fly logs 只能看近窗,每小时跑天然覆盖近 1h。`last_run_at` 主要�
 - 标题:`[ops-monitor][<env>] <app/组件>: <一句话现象>`。
 - 正文:环境/组件 · 发现时间窗(UTC) · 严重度+为什么算铁证 · 证据(log 摘录[PII 打码] / LangSmith trace 链接·run id / fly status 输出) · 影响面 · 推测根因(**标注「推测,未验证」**,monitor 不下结论) · 持续观测/复现方法 · 频次/首见时间。
 - **负责人 @(发 issue / 评论时)**:按故障对应的代码目录找最近改动者,在 issue 正文 @ 他(第一联系人,非定责,不是 assignee)。
-  - **app → 目录**:`proactive-ai-agents-*`→`pinai-agents/`;`proactive-ai-frontend-*`→`proactive-ai-frontend/`;`proactive-ai-litellm-*`→`ops/litellm/`;`proactive-ai-reward-dashboard-dev`→`internal-reward-dashboard/`;`proactive-ai-web-*`(device raw `/mirror`)→`pinai-agents/`(目录待核实);apps/web(zebra)→`apps/web/`+`packages/`。
+  - **app → 目录**:`proactive-ai-agents-*`→`backend/`;`proactive-ai-frontend-*`→`proactive-ai-frontend/`;`proactive-ai-litellm-*`→`ops/litellm/`;`proactive-ai-reward-dashboard-dev`→`internal-reward-dashboard/`;`proactive-ai-web-*`(device raw `/mirror`)→`backend/`(目录待核实);apps/web(zebra)→`apps/web/`+`packages/`。
   - **取 handle**:`git log -n 8 --format='%H %an' -- <目录>` 找最近主要作者 → `gh api repos/Edge-AI-HQ/PIN-AI-ASSISTANT/commits/<sha> --jq '.author.login'` 拿 GitHub handle;取最近 1–2 人(按 login 去重,gh api 已归一同人多 alias),正文写 `@handle`。
   - **防呆 + 克制**:跳过 bot(login 含 `[bot]` 或为 null);解析不到 login → 不 @,正文注明「未解析到负责人,请人工指派」;纯运行时信号(配额/网络/第三方)落不到具体目录 → 不强行 blame,注明「未定位到对应代码改动」;@ 仅代表「最近改这块的人,可能不是根因负责人,仅作第一联系人 / 转派起点」;§6 去重命中已有 open issue 评论时,负责人没变就不重复 @,避免反复打扰。
 - **候选首发 issue**:prod 默认关 LangSmith tracing、无 APM/Sentry,运行时几乎只有 fly logs 可观测——这是确凿的可观测性缺陷,去重后可作为 `enhancement` 发一个。

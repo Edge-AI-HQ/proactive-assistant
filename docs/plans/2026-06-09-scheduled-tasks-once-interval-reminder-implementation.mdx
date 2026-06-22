@@ -20,8 +20,8 @@ description: "设计 SSOT 是 2026-06-09-scheduled-tasks-once-interval-reminder;
 **全局验证命令**(每个 Task 的收尾都跑相关子集):
 
 ```bash
-cd pinai-agents && uv run ruff check && uv run mypy src
-cd pinai-agents && uv run pytest tests/web/services tests/web/routes/test_scheduled_generators.py tests/web/scheduler tests/chat -q
+cd backend && uv run ruff check && uv run mypy src
+cd backend && uv run pytest tests/web/services tests/web/routes/test_scheduled_generators.py tests/web/scheduler tests/chat -q
 cd proactive-ai-frontend && npm run type-check && npm test
 ```
 
@@ -31,19 +31,19 @@ cd proactive-ai-frontend && npm run type-check && npm test
 
 | 文件 | 动作 | 职责 |
 |---|---|---|
-| `pinai-agents/src/pinai_agents/config.py` | Modify | +4 个护栏配置 |
-| `pinai-agents/src/pinai_agents/web/services/schedule_spec.py` | **Create** | 纯函数:schedule 结构 → trigger 字段/label/gap,无 IO |
-| `pinai-agents/src/pinai_agents/web/db/repositories/scheduled_tasks.py` | Modify | `*_by_kind` 单数方法泛化为 `*_by_kinds`(ANY)+ `count_by_kinds` |
-| `pinai-agents/src/pinai_agents/web/services/scheduled_generators.py` | Modify | preview/create 结构化、create_once、resume-once 修复、serialize v2、相似检查 v2;正则 `_parse_request` 退役 |
-| `pinai-agents/src/pinai_agents/web/routes/ui/scheduled_generators.py` | Modify | 请求模型 v2 + `POST /once` |
-| `pinai-agents/src/pinai_agents/web/services/pipeline_persistence.py` | **Create** | 从 routes/ui/generate.py 平移卡片落库函数(strict + best-effort 两层) |
-| `pinai-agents/src/pinai_agents/web/routes/ui/generate.py` | Modify | 改为从 pipeline_persistence import(re-export 保住既有调用方) |
-| `pinai-agents/src/pinai_agents/web/services/reminder_cards.py` | **Create** | `fire_reminder`:构造提醒卡 + 落库 + 推送 |
-| `pinai-agents/src/pinai_agents/web/services/push_notifier.py` | Modify | +`notify_reminder`(无 opt-in gate,对齐 `notify_proactive_message`) |
-| `pinai-agents/src/pinai_agents/web/scheduler/dispatcher.py` | Modify | +`reminder.card` 路由分支(默认 60s lease,不进 `_AGENT_RUN_KIND`) |
-| `pinai-agents/src/pinai_agents/chat/tools/direct/scheduled_generators.py` | Modify | preview/create 输入 v2 + 新 `scheduled_generator_create_once` |
-| `pinai-agents/src/pinai_agents/chat/tools/direct/__init__.py` | Modify | 注册新工具 |
-| `pinai-agents/src/pinai_agents/chat/agents/main_chat.py` | Modify | 重写 tool_routing 定时任务段 |
+| `backend/src/pinai_agents/config.py` | Modify | +4 个护栏配置 |
+| `backend/src/pinai_agents/web/services/schedule_spec.py` | **Create** | 纯函数:schedule 结构 → trigger 字段/label/gap,无 IO |
+| `backend/src/pinai_agents/web/db/repositories/scheduled_tasks.py` | Modify | `*_by_kind` 单数方法泛化为 `*_by_kinds`(ANY)+ `count_by_kinds` |
+| `backend/src/pinai_agents/web/services/scheduled_generators.py` | Modify | preview/create 结构化、create_once、resume-once 修复、serialize v2、相似检查 v2;正则 `_parse_request` 退役 |
+| `backend/src/pinai_agents/web/routes/ui/scheduled_generators.py` | Modify | 请求模型 v2 + `POST /once` |
+| `backend/src/pinai_agents/web/services/pipeline_persistence.py` | **Create** | 从 routes/ui/generate.py 平移卡片落库函数(strict + best-effort 两层) |
+| `backend/src/pinai_agents/web/routes/ui/generate.py` | Modify | 改为从 pipeline_persistence import(re-export 保住既有调用方) |
+| `backend/src/pinai_agents/web/services/reminder_cards.py` | **Create** | `fire_reminder`:构造提醒卡 + 落库 + 推送 |
+| `backend/src/pinai_agents/web/services/push_notifier.py` | Modify | +`notify_reminder`(无 opt-in gate,对齐 `notify_proactive_message`) |
+| `backend/src/pinai_agents/web/scheduler/dispatcher.py` | Modify | +`reminder.card` 路由分支(默认 60s lease,不进 `_AGENT_RUN_KIND`) |
+| `backend/src/pinai_agents/chat/tools/direct/scheduled_generators.py` | Modify | preview/create 输入 v2 + 新 `scheduled_generator_create_once` |
+| `backend/src/pinai_agents/chat/tools/direct/__init__.py` | Modify | 注册新工具 |
+| `backend/src/pinai_agents/chat/agents/main_chat.py` | Modify | 重写 tool_routing 定时任务段 |
 | `proactive-ai-frontend/src/lib/api.ts` | Modify | Task 类型 +triggerKind/intervalSeconds/scheduleLabel;schedule/mode/reminder 类型 |
 | `proactive-ai-frontend/src/components/account/ScheduledTasksSettings.tsx` | Modify | 副标题优先 `scheduleLabel` |
 | `docs/modules/background-tasks.mdx` | Modify | kind 清单/dispatcher 表/入队点 +reminder.card |
@@ -54,14 +54,14 @@ cd proactive-ai-frontend && npm run type-check && npm test
 ### Task 1: 护栏配置 + `schedule_spec.py` 纯函数模块
 
 **Files:**
-- Modify: `pinai-agents/src/pinai_agents/config.py:75-77` 附近
-- Create: `pinai-agents/src/pinai_agents/web/services/schedule_spec.py`
-- Test: `pinai-agents/tests/web/services/test_schedule_spec.py`
+- Modify: `backend/src/pinai_agents/config.py:75-77` 附近
+- Create: `backend/src/pinai_agents/web/services/schedule_spec.py`
+- Test: `backend/tests/web/services/test_schedule_spec.py`
 
 - [ ] **Step 1: 写失败测试**
 
 ```python
-# pinai-agents/tests/web/services/test_schedule_spec.py
+# backend/tests/web/services/test_schedule_spec.py
 """schedule_spec 纯函数测试 — 无 DB。覆盖 once/interval/cron 解析、
 label 渲染、gap 计算、非法输入。时间全部显式传 now,杜绝壁钟依赖。"""
 
@@ -176,7 +176,7 @@ def test_invalid_specs_raise(spec):
 - [ ] **Step 2: 跑测试确认失败**
 
 ```bash
-cd pinai-agents && uv run pytest tests/web/services/test_schedule_spec.py -q
+cd backend && uv run pytest tests/web/services/test_schedule_spec.py -q
 ```
 Expected: FAIL,`ModuleNotFoundError: pinai_agents.web.services.schedule_spec`。
 
@@ -198,7 +198,7 @@ Expected: FAIL,`ModuleNotFoundError: pinai_agents.web.services.schedule_spec`。
 - [ ] **Step 4: 实现 `schedule_spec.py`**
 
 ```python
-# pinai-agents/src/pinai_agents/web/services/schedule_spec.py
+# backend/src/pinai_agents/web/services/schedule_spec.py
 """结构化 schedule 意图 → pai_scheduled_tasks 触发字段。
 
 纯函数、无 IO:agent 解析语言(传 type=once/interval/cron 的结构),
@@ -395,16 +395,16 @@ def _next_two_fires(cron_expr: str, *, tz: ZoneInfo, now: datetime) -> tuple[dat
 - [ ] **Step 5: 跑测试确认通过 + 静态检查**
 
 ```bash
-cd pinai-agents && uv run pytest tests/web/services/test_schedule_spec.py -q   # Expected: all PASS
-cd pinai-agents && uv run ruff check && uv run mypy src                        # Expected: clean
+cd backend && uv run pytest tests/web/services/test_schedule_spec.py -q   # Expected: all PASS
+cd backend && uv run ruff check && uv run mypy src                        # Expected: clean
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add pinai-agents/src/pinai_agents/config.py \
-        pinai-agents/src/pinai_agents/web/services/schedule_spec.py \
-        pinai-agents/tests/web/services/test_schedule_spec.py
+git add backend/src/pinai_agents/config.py \
+        backend/src/pinai_agents/web/services/schedule_spec.py \
+        backend/tests/web/services/test_schedule_spec.py
 git commit -m "feat(scheduled-tasks): schedule_spec resolver + guardrail settings"
 ```
 
@@ -415,13 +415,13 @@ git commit -m "feat(scheduled-tasks): schedule_spec resolver + guardrail setting
 `reminder.card` 和 `generator.scheduled` 共用一套管理 API,repo 的单数 `*_by_kind` 方法改成 `*_by_kinds`(SQL `kind = ANY(%s)`),并加 `count_by_kinds` 给"每用户最大任务数"护栏。**唯一调用方是 scheduled_generators service(PR65 引入),先 grep 证实再改名,不留单数死方法。**
 
 **Files:**
-- Modify: `pinai-agents/src/pinai_agents/web/db/repositories/scheduled_tasks.py:215-325`
-- Modify: `pinai-agents/src/pinai_agents/web/services/scheduled_generators.py`(同步改调用,本 Task 只机械替换,签名 v2 在 Task 3)
+- Modify: `backend/src/pinai_agents/web/db/repositories/scheduled_tasks.py:215-325`
+- Modify: `backend/src/pinai_agents/web/services/scheduled_generators.py`(同步改调用,本 Task 只机械替换,签名 v2 在 Task 3)
 
 - [ ] **Step 1: 确认调用面**
 
 ```bash
-grep -rn "by_kind\b\|by_kind(" pinai-agents/src/pinai_agents --include="*.py"
+grep -rn "by_kind\b\|by_kind(" backend/src/pinai_agents --include="*.py"
 ```
 Expected: 仅 `web/db/repositories/scheduled_tasks.py`(定义)+ `web/services/scheduled_generators.py`(调用)。若出现其他调用方,停下来报告再动。
 
@@ -537,15 +537,15 @@ Expected: 仅 `web/db/repositories/scheduled_tasks.py`(定义)+ `web/services/sc
 - [ ] **Step 3: service 机械替换调用**(`kind=SCHEDULED_GENERATOR_KIND` → `kinds=(SCHEDULED_GENERATOR_KIND,)`,方法名加 s),让 mypy 收敛:
 
 ```bash
-cd pinai-agents && uv run mypy src && uv run pytest tests/web/routes/test_scheduled_generators.py -q
+cd backend && uv run mypy src && uv run pytest tests/web/routes/test_scheduled_generators.py -q
 ```
 Expected: mypy clean;路由测试 PASS(行为没变,只是签名)。
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add pinai-agents/src/pinai_agents/web/db/repositories/scheduled_tasks.py \
-        pinai-agents/src/pinai_agents/web/services/scheduled_generators.py
+git add backend/src/pinai_agents/web/db/repositories/scheduled_tasks.py \
+        backend/src/pinai_agents/web/services/scheduled_generators.py
 git commit -m "refactor(scheduler-repo): generalize per-kind CRUD to kind sets"
 ```
 
@@ -554,8 +554,8 @@ git commit -m "refactor(scheduler-repo): generalize per-kind CRUD to kind sets"
 ### Task 3: Service v2(结构化 preview/create + create_once + 3 个 bug 修复)
 
 **Files:**
-- Modify: `pinai-agents/src/pinai_agents/web/services/scheduled_generators.py`
-- Test: `pinai-agents/tests/web/services/test_scheduled_generators.py`(保留 normalize 测试,新增签名/兼容测试)
+- Modify: `backend/src/pinai_agents/web/services/scheduled_generators.py`
+- Test: `backend/tests/web/services/test_scheduled_generators.py`(保留 normalize 测试,新增签名/兼容测试)
 
 核心改动清单(对照设计文档"已确认决策"):
 
@@ -927,15 +927,15 @@ def test_find_similar_matches_on_signature():
 - [ ] **Step 4: 验证**
 
 ```bash
-cd pinai-agents && uv run pytest tests/web/services -q && uv run ruff check && uv run mypy src
+cd backend && uv run pytest tests/web/services -q && uv run ruff check && uv run mypy src
 ```
 Expected: services 测试全 PASS。**routes 测试此刻预期是红的**(契约已变,Task 4 重写)。
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add pinai-agents/src/pinai_agents/web/services/scheduled_generators.py \
-        pinai-agents/tests/web/services/test_scheduled_generators.py
+git add backend/src/pinai_agents/web/services/scheduled_generators.py \
+        backend/tests/web/services/test_scheduled_generators.py
 git commit -m "feat(scheduled-tasks): structured schedule service, create_once, resume-once fix"
 ```
 
@@ -944,8 +944,8 @@ git commit -m "feat(scheduled-tasks): structured schedule service, create_once, 
 ### Task 4: 路由 v2 + `POST /once` + 路由测试重写
 
 **Files:**
-- Modify: `pinai-agents/src/pinai_agents/web/routes/ui/scheduled_generators.py`
-- Test: `pinai-agents/tests/web/routes/test_scheduled_generators.py`(保留 1-80 行 helpers/fixtures,重写测试体)
+- Modify: `backend/src/pinai_agents/web/routes/ui/scheduled_generators.py`
+- Test: `backend/tests/web/routes/test_scheduled_generators.py`(保留 1-80 行 helpers/fixtures,重写测试体)
 
 - [ ] **Step 1: 请求模型 v2 + create/preview/once 端点**
 
@@ -1040,15 +1040,15 @@ async def create_once(
 - [ ] **Step 3: 跑通**
 
 ```bash
-cd pinai-agents && uv run pytest tests/web/routes/test_scheduled_generators.py -q
+cd backend && uv run pytest tests/web/routes/test_scheduled_generators.py -q
 ```
 Expected: 全 PASS。
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add pinai-agents/src/pinai_agents/web/routes/ui/scheduled_generators.py \
-        pinai-agents/tests/web/routes/test_scheduled_generators.py
+git add backend/src/pinai_agents/web/routes/ui/scheduled_generators.py \
+        backend/tests/web/routes/test_scheduled_generators.py
 git commit -m "feat(scheduled-tasks): structured preview/create API + POST /once"
 ```
 
@@ -1057,17 +1057,17 @@ git commit -m "feat(scheduled-tasks): structured preview/create API + POST /once
 ### Task 5: 卡片落库抽取 + `reminder.card` 执行链路
 
 **Files:**
-- Create: `pinai-agents/src/pinai_agents/web/services/pipeline_persistence.py`
-- Modify: `pinai-agents/src/pinai_agents/web/routes/ui/generate.py`(函数搬走,留 re-export)
-- Modify: `pinai-agents/src/pinai_agents/web/scheduler/dispatcher.py`(import 改道 + reminder 分支)
-- Modify: `pinai-agents/src/pinai_agents/web/services/push_notifier.py`(+notify_reminder)
-- Create: `pinai-agents/src/pinai_agents/web/services/reminder_cards.py`
-- Test: `pinai-agents/tests/web/scheduler/test_dispatcher.py`(+2 测试)
+- Create: `backend/src/pinai_agents/web/services/pipeline_persistence.py`
+- Modify: `backend/src/pinai_agents/web/routes/ui/generate.py`(函数搬走,留 re-export)
+- Modify: `backend/src/pinai_agents/web/scheduler/dispatcher.py`(import 改道 + reminder 分支)
+- Modify: `backend/src/pinai_agents/web/services/push_notifier.py`(+notify_reminder)
+- Create: `backend/src/pinai_agents/web/services/reminder_cards.py`
+- Test: `backend/tests/web/scheduler/test_dispatcher.py`(+2 测试)
 
 - [ ] **Step 1: 摸清 persist_generator_run 调用面**
 
 ```bash
-grep -rn "persist_generator_run\|_persist_evaluations\|_persist_pattern_hits" pinai-agents/src pinai-agents/tests --include="*.py"
+grep -rn "persist_generator_run\|_persist_evaluations\|_persist_pattern_hits" backend/src backend/tests --include="*.py"
 ```
 把列出的每个 import 处记下来,Step 2 全部改道。
 
@@ -1162,7 +1162,7 @@ async def notify_reminder(
 - [ ] **Step 4: `reminder_cards.py`**
 
 ```python
-# pinai-agents/src/pinai_agents/web/services/reminder_cards.py
+# backend/src/pinai_agents/web/services/reminder_cards.py
 """reminder.card 到点执行 — web 进程直接写一张提醒卡,零 LLM。
 
 设计 SSOT: docs/plans/2026-06-09-scheduled-tasks-once-interval-reminder.mdx。
@@ -1324,14 +1324,14 @@ async def test_reminder_card_dispatch_writes_card_and_notifies(pool, user_ids, m
 - [ ] **Step 7: 验证 + Commit**
 
 ```bash
-cd pinai-agents && uv run pytest tests/web/scheduler tests/web/routes/test_agent_generate_route.py -q
-cd pinai-agents && uv run ruff check && uv run mypy src
-git add pinai-agents/src/pinai_agents/web/services/pipeline_persistence.py \
-        pinai-agents/src/pinai_agents/web/services/reminder_cards.py \
-        pinai-agents/src/pinai_agents/web/services/push_notifier.py \
-        pinai-agents/src/pinai_agents/web/routes/ui/generate.py \
-        pinai-agents/src/pinai_agents/web/scheduler/dispatcher.py \
-        pinai-agents/tests/web/scheduler/test_dispatcher.py
+cd backend && uv run pytest tests/web/scheduler tests/web/routes/test_agent_generate_route.py -q
+cd backend && uv run ruff check && uv run mypy src
+git add backend/src/pinai_agents/web/services/pipeline_persistence.py \
+        backend/src/pinai_agents/web/services/reminder_cards.py \
+        backend/src/pinai_agents/web/services/push_notifier.py \
+        backend/src/pinai_agents/web/routes/ui/generate.py \
+        backend/src/pinai_agents/web/scheduler/dispatcher.py \
+        backend/tests/web/scheduler/test_dispatcher.py
 git commit -m "feat(scheduled-tasks): reminder.card kind — zero-LLM card write + notify_reminder"
 ```
 
@@ -1340,9 +1340,9 @@ git commit -m "feat(scheduled-tasks): reminder.card kind — zero-LLM card write
 ### Task 6: Chat 工具 v2 + `scheduled_generator_create_once`
 
 **Files:**
-- Modify: `pinai-agents/src/pinai_agents/chat/tools/direct/scheduled_generators.py`
-- Modify: `pinai-agents/src/pinai_agents/chat/tools/direct/__init__.py`
-- Test: `pinai-agents/tests/chat/tools/test_scheduled_generators_tools.py`
+- Modify: `backend/src/pinai_agents/chat/tools/direct/scheduled_generators.py`
+- Modify: `backend/src/pinai_agents/chat/tools/direct/__init__.py`
+- Test: `backend/tests/chat/tools/test_scheduled_generators_tools.py`
 
 - [ ] **Step 1: 先改测试**(现有 preview/create 测试 body 换 v2;新增 create_once 测试):
 
@@ -1451,10 +1451,10 @@ async def scheduled_generator_create_once(
 - [ ] **Step 4: 验证 + Commit**
 
 ```bash
-cd pinai-agents && uv run pytest tests/chat/tools -q && uv run ruff check && uv run mypy src
-git add pinai-agents/src/pinai_agents/chat/tools/direct/scheduled_generators.py \
-        pinai-agents/src/pinai_agents/chat/tools/direct/__init__.py \
-        pinai-agents/tests/chat/tools/test_scheduled_generators_tools.py
+cd backend && uv run pytest tests/chat/tools -q && uv run ruff check && uv run mypy src
+git add backend/src/pinai_agents/chat/tools/direct/scheduled_generators.py \
+        backend/src/pinai_agents/chat/tools/direct/__init__.py \
+        backend/tests/chat/tools/test_scheduled_generators_tools.py
 git commit -m "feat(scheduled-tasks): structured tool inputs + create_once tool"
 ```
 
@@ -1463,8 +1463,8 @@ git commit -m "feat(scheduled-tasks): structured tool inputs + create_once tool"
 ### Task 7: main_chat prompt 重写
 
 **Files:**
-- Modify: `pinai-agents/src/pinai_agents/chat/agents/main_chat.py:167-190`
-- Test: `pinai-agents/tests/chat/agents/test_main_chat_scheduled_generator_prompt.py`
+- Modify: `backend/src/pinai_agents/chat/agents/main_chat.py:167-190`
+- Test: `backend/tests/chat/agents/test_main_chat_scheduled_generator_prompt.py`
 
 - [ ] **Step 1: 测试先行**(原 4 个断言保留,补):
 
@@ -1533,9 +1533,9 @@ def test_create_once_tool_registered_and_not_hitl():
 - [ ] **Step 3: 验证 + Commit**
 
 ```bash
-cd pinai-agents && uv run pytest tests/chat/agents -q && uv run ruff check && uv run mypy src
-git add pinai-agents/src/pinai_agents/chat/agents/main_chat.py \
-        pinai-agents/tests/chat/agents/test_main_chat_scheduled_generator_prompt.py
+cd backend && uv run pytest tests/chat/agents -q && uv run ruff check && uv run mypy src
+git add backend/src/pinai_agents/chat/agents/main_chat.py \
+        backend/tests/chat/agents/test_main_chat_scheduled_generator_prompt.py
 git commit -m "feat(main-chat): teach one-off/interval/reminder scheduled task routing"
 ```
 
@@ -1636,7 +1636,7 @@ git commit -m "feat(settings): scheduled task scheduleLabel + once/interval task
 - [ ] **Step 3: 全量验证**
 
 ```bash
-cd pinai-agents && uv run ruff check && uv run mypy src && uv run pytest -q
+cd backend && uv run ruff check && uv run mypy src && uv run pytest -q
 cd proactive-ai-frontend && npm run type-check && npm test
 ```
 Expected: 全绿(已知 xfail 除外)。失败回到对应 Task 修,**最多 2 轮**仍不通就停下来报告。
@@ -1644,7 +1644,7 @@ Expected: 全绿(已知 xfail 除外)。失败回到对应 Task 修,**最多 2 �
 - [ ] **Step 4: 本地 e2e smoke**(docker healthy ≠ 功能对,真聊一次):
 
 ```bash
-make restart && make logs-pinai-web &
+make restart && make logs-api &
 # 浏览器(make urls 查端口)登录 → Main Chat 输入:"1 分钟后提醒我喝水"
 # 预期 1:agent 直接回复"已设定 … 一次 · HH:MM …"(无确认轮)
 # 预期 2:~1 分钟后 NowFeed 出现"喝水"卡,带 "Scheduled · 喝水" 角标

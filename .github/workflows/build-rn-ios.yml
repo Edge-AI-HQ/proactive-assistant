@@ -44,9 +44,9 @@ jobs:
           DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
         run: |
           {
-          echo "EXPO_PUBLIC_SUPABASE_URL=$(npx -y @dotenvx/dotenvx get VITE_SUPABASE_URL -f pinai-agents/.env.dev)"
-          echo "EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=$(npx -y @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f pinai-agents/.env.dev)"
-          echo "EXPO_PUBLIC_PIN_API_URL=$(npx -y @dotenvx/dotenvx get VITE_PIN_API_URL -f pinai-agents/.env.dev)"
+          echo "EXPO_PUBLIC_SUPABASE_URL=$(npx -y @dotenvx/dotenvx get VITE_SUPABASE_URL -f backend/.env.dev)"
+          echo "EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=$(npx -y @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f backend/.env.dev)"
+          echo "EXPO_PUBLIC_PIN_API_URL=$(npx -y @dotenvx/dotenvx get VITE_PIN_API_URL -f backend/.env.dev)"
           } >> "$GITHUB_ENV"
 
       # CNG：从 app.json 生成 ios/（本仓不入库原生工程）。

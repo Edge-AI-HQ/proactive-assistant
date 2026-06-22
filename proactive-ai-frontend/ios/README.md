@@ -44,7 +44,7 @@ Apple Development cert 的**私钥只存在生成它那台 Mac 上**——你不
 ### Build + 开 Xcode 让你点 Run
 
 ```bash
-make ios              # 默认连 fly dev（VITE_PIN_API_URL in pinai-agents/.env）
+make ios              # 默认连 fly dev（VITE_PIN_API_URL in backend/.env）
 DEV=1 make ios        # 显式连 fly dev（同默认，覆盖 ./.env 里的 PAI_API_URL）
 NGROK=<url> make ios  # 指定 ngrok URL
 PROD=1 make ios       # 连 fly prod

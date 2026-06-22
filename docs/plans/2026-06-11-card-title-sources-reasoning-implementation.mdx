@@ -20,8 +20,8 @@ description: "2026-06-11 设计的 file-level 拆解:12 个任务,每个任务 =
 ## Task 1: 后端 schema — `ReasoningStep` + `GeneratedCard.reasoning_steps`
 
 **Files:**
-- Modify: `pinai-agents/src/pinai_agents/shared/api_models.py`(`GeneratedCard` 在 577 行,`CardAction` 上方插入新类)
-- Test: `pinai-agents/tests/shared/test_reasoning_steps.py`(新建)
+- Modify: `backend/src/pinai_agents/shared/api_models.py`(`GeneratedCard` 在 577 行,`CardAction` 上方插入新类)
+- Test: `backend/tests/shared/test_reasoning_steps.py`(新建)
 
 - [ ] **Step 1.1: 写失败测试**
 
@@ -91,7 +91,7 @@ def test_reasoning_step_detail_clipped_not_rejected() -> None:
 - [ ] **Step 1.2: 跑测试确认失败**
 
 ```bash
-cd pinai-agents && uv run pytest tests/shared/test_reasoning_steps.py -v
+cd backend && uv run pytest tests/shared/test_reasoning_steps.py -v
 ```
 预期:FAIL,`ImportError: cannot import name 'ReasoningStep'`。
 
@@ -140,14 +140,14 @@ class ReasoningStep(_AgentModel):
 - [ ] **Step 1.4: 跑测试确认通过 + 不破坏现有**
 
 ```bash
-cd pinai-agents && uv run pytest tests/shared/ -q && uv run ruff check && uv run mypy src
+cd backend && uv run pytest tests/shared/ -q && uv run ruff check && uv run mypy src
 ```
 预期:全部 PASS(`test_agent_model_clip.py` 的 `_full_card` fixture 不带 reasoningSteps,因 default 不受影响)。
 
 - [ ] **Step 1.5: Commit**
 
 ```bash
-git add pinai-agents/src/pinai_agents/shared/api_models.py pinai-agents/tests/shared/test_reasoning_steps.py
+git add backend/src/pinai_agents/shared/api_models.py backend/tests/shared/test_reasoning_steps.py
 git commit -m "feat(generation): GeneratedCard 增加 reasoningSteps 结构化推理字段"
 ```
 
@@ -156,8 +156,8 @@ git commit -m "feat(generation): GeneratedCard 增加 reasoningSteps 结构化�
 ## Task 2: 后端 `derive_source_apps` 纯函数
 
 **Files:**
-- Modify: `pinai-agents/src/pinai_agents/chat/agents/generator.py`(紧跟 `_citation_for`,708 行后)
-- Test: `pinai-agents/tests/chat/agents/test_source_apps.py`(新建)
+- Modify: `backend/src/pinai_agents/chat/agents/generator.py`(紧跟 `_citation_for`,708 行后)
+- Test: `backend/tests/chat/agents/test_source_apps.py`(新建)
 
 - [ ] **Step 2.1: 写失败测试**
 
@@ -212,7 +212,7 @@ def test_unparseable_citations_dropped() -> None:
 - [ ] **Step 2.2: 跑测试确认失败**
 
 ```bash
-cd pinai-agents && TAVILY_API_KEY=dummy-local-test uv run pytest tests/chat/agents/test_source_apps.py -v
+cd backend && TAVILY_API_KEY=dummy-local-test uv run pytest tests/chat/agents/test_source_apps.py -v
 ```
 预期:FAIL,`ImportError: cannot import name 'derive_source_apps'`。
 
@@ -260,14 +260,14 @@ def derive_source_apps(sources: list[str]) -> list[str]:
 - [ ] **Step 2.4: 跑测试确认通过**
 
 ```bash
-cd pinai-agents && TAVILY_API_KEY=dummy-local-test uv run pytest tests/chat/agents/test_source_apps.py -v && uv run ruff check && uv run mypy src
+cd backend && TAVILY_API_KEY=dummy-local-test uv run pytest tests/chat/agents/test_source_apps.py -v && uv run ruff check && uv run mypy src
 ```
 预期:PASS。
 
 - [ ] **Step 2.5: Commit**
 
 ```bash
-git add pinai-agents/src/pinai_agents/chat/agents/generator.py pinai-agents/tests/chat/agents/test_source_apps.py
+git add backend/src/pinai_agents/chat/agents/generator.py backend/tests/chat/agents/test_source_apps.py
 git commit -m "feat(generation): 引文前缀确定性派生 sourceApps 纯函数"
 ```
 
@@ -276,8 +276,8 @@ git commit -m "feat(generation): 引文前缀确定性派生 sourceApps 纯函�
 ## Task 3: 注入 `sourceApps` 到卡片 dict
 
 **Files:**
-- Modify: `pinai-agents/src/pinai_agents/chat/transport/routes/generate.py`(import 区 21 行附近;`_serialize_passing_cards` 175-176 行)
-- Test: `pinai-agents/tests/chat/routes/test_source_apps_injection.py`(新建)
+- Modify: `backend/src/pinai_agents/chat/transport/routes/generate.py`(import 区 21 行附近;`_serialize_passing_cards` 175-176 行)
+- Test: `backend/tests/chat/routes/test_source_apps_injection.py`(新建)
 
 - [ ] **Step 3.1: 写失败测试**
 
@@ -341,7 +341,7 @@ def test_serialize_stamps_source_apps() -> None:
 - [ ] **Step 3.2: 跑测试确认失败**
 
 ```bash
-cd pinai-agents && TAVILY_API_KEY=dummy-local-test uv run pytest tests/chat/routes/test_source_apps_injection.py -v
+cd backend && TAVILY_API_KEY=dummy-local-test uv run pytest tests/chat/routes/test_source_apps_injection.py -v
 ```
 预期:FAIL,`KeyError: 'sourceApps'`。
 
@@ -366,14 +366,14 @@ from ...agents.generator import derive_source_apps, run_generator
 - [ ] **Step 3.4: 跑测试确认通过 + 回归**
 
 ```bash
-cd pinai-agents && TAVILY_API_KEY=dummy-local-test uv run pytest tests/chat/routes/ tests/chat/agents/test_source_apps.py -q && uv run ruff check && uv run mypy src
+cd backend && TAVILY_API_KEY=dummy-local-test uv run pytest tests/chat/routes/ tests/chat/agents/test_source_apps.py -q && uv run ruff check && uv run mypy src
 ```
 预期:新测试 PASS;`tests/chat/routes/` 既有测试不回归。
 
 - [ ] **Step 3.5: Commit**
 
 ```bash
-git add pinai-agents/src/pinai_agents/chat/transport/routes/generate.py pinai-agents/tests/chat/routes/test_source_apps_injection.py
+git add backend/src/pinai_agents/chat/transport/routes/generate.py backend/tests/chat/routes/test_source_apps_injection.py
 git commit -m "feat(generation): 选卡序列化时注入确定性 sourceApps"
 ```
 
@@ -382,8 +382,8 @@ git commit -m "feat(generation): 选卡序列化时注入确定性 sourceApps"
 ## Task 4: 后端 prompt — 标题公式 + reasoningSteps 规则 + evaluator 同步
 
 **Files:**
-- Modify: `pinai-agents/src/pinai_agents/chat/agents/generator.py`(`_CARD_GENERATOR_PROMPT` 365-369、387 后;`_EVALUATOR_PROMPT` 540-544、557-559)
-- Test: `pinai-agents/tests/chat/agents/test_generator_prompts.py`(追加)
+- Modify: `backend/src/pinai_agents/chat/agents/generator.py`(`_CARD_GENERATOR_PROMPT` 365-369、387 后;`_EVALUATOR_PROMPT` 540-544、557-559)
+- Test: `backend/tests/chat/agents/test_generator_prompts.py`(追加)
 
 - [ ] **Step 4.1: 写失败测试**(追加到 `test_generator_prompts.py` 末尾;import 区按需补 `_EVALUATOR_PROMPT`)
 
@@ -427,7 +427,7 @@ def test_evaluator_caps_actionability_for_fact_first_titles() -> None:
 - [ ] **Step 4.2: 跑测试确认失败**
 
 ```bash
-cd pinai-agents && TAVILY_API_KEY=dummy-local-test uv run pytest tests/chat/agents/test_generator_prompts.py -v
+cd backend && TAVILY_API_KEY=dummy-local-test uv run pytest tests/chat/agents/test_generator_prompts.py -v
 ```
 预期:新增 6 个 FAIL(断言不成立),旧测试 PASS。(原写 3 个;追加三条搭车 prompt 优化后,执行时实测新增 6 个测试)
 
@@ -536,14 +536,14 @@ AND (pattern_id is null OR pattern_grounding >= 5).
 - [ ] **Step 4.4: 跑测试确认通过**
 
 ```bash
-cd pinai-agents && TAVILY_API_KEY=dummy-local-test uv run pytest tests/chat/agents/test_generator_prompts.py -v && uv run ruff check && uv run mypy src
+cd backend && TAVILY_API_KEY=dummy-local-test uv run pytest tests/chat/agents/test_generator_prompts.py -v && uv run ruff check && uv run mypy src
 ```
 预期:全部 PASS。
 
 - [ ] **Step 4.5: Commit**
 
 ```bash
-git add pinai-agents/src/pinai_agents/chat/agents/generator.py pinai-agents/tests/chat/agents/test_generator_prompts.py
+git add backend/src/pinai_agents/chat/agents/generator.py backend/tests/chat/agents/test_generator_prompts.py
 git commit -m "feat(generation): 标题动作先行公式 + reasoningSteps 生成与审计规则"
 ```
 

@@ -10,7 +10,7 @@ export const isNative = Capacitor.isNativePlatform();
 export const isElectron = !!getDesktopBridge();
 
 /**
- * Base URL for the pinai-agents backend. Single backend for the product —
+ * Base URL for the backend backend. Single backend for the product —
  * chat / generate / memory / signals / profile / devices / payment all
  * land here.
  *

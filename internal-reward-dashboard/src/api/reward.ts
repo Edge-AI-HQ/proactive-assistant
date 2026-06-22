@@ -327,7 +327,7 @@ export function apiErrorMessage(status: number, bodyText: string): string {
 
 // Dev-only marker recognized by the backend `current_user` dep when
 // DEPLOY_ENV=dev. Mirrors `_DEV_AUTH_BYPASS_HEADER_VALUE` in
-// pinai-agents/.../web/auth/deps.py. Inert outside DEV builds + outside
+// backend/.../web/auth/deps.py. Inert outside DEV builds + outside
 // DEPLOY_ENV=dev backends.
 const DEV_AUTH_BYPASS_VALUE = "pinai-dev-reviewer";
 
@@ -512,7 +512,7 @@ async function requestWithBearer<T>(path: string, token: string, init?: RequestI
 export function mintImpersonationToken(
   targetSupabaseUserId: string,
 ): Promise<ImpersonationToken> {
-  return request("/api/reward-dashboard/impersonate/chat-token", {
+  return request("/api/operator/impersonate/chat-token", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ targetSupabaseUserId }),

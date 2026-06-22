@@ -130,7 +130,7 @@
 
 **7. `connectors-ingest` — 连接器与 Ingest**
 - 范围：把用户私人数据（Composio SaaS、device）拉进系统——connector 生命周期、ingest 管线、declarative recipe 推断、custom MCP、Composio 服务、device ingest、raw source 管理。
-- 起点：`web/composio_service.py`（Composio 服务）、`web/device_ingest/`、`web/services/` 里"connector / ingest / recipe / mcp / raw-source"相关、composio/devices/raw 相关路由、`pinai-agents/db/ingest_recipes/`。
+- 起点：`web/composio_service.py`（Composio 服务）、`web/device_ingest/`、`web/services/` 里"connector / ingest / recipe / mcp / raw-source"相关、composio/devices/raw 相关路由、`backend/db/ingest_recipes/`。
 - 视角：Composio 集成是否干净？ingest 管线的错误处理 / 幂等 / 重试？recipe 系统是否过度设计？多账户处理？这是产品护城河（私人数据），数据完整性是 P0。
 - 文档：`docs/modules/data-connectors.mdx`
 
@@ -184,7 +184,7 @@
 
 **15. `platform-delivery` — Platform & Delivery**
 - 范围：交付与运维底座——CI/CD、密钥管理（dotenvx / fly secrets）、部署拓扑（fly / docker）、LiteLLM ops、可观测性、migration 纪律、支付 / billing。
-- 起点：`.github/workflows/`、`Makefile`、`docker-compose*.yml`、`ops/litellm/`、`web/payment/`、fly secrets 同步脚本、`pinai-agents/db/migrations/`、配置中心（`pinai-agents/config.py`）。
+- 起点：`.github/workflows/`、`Makefile`、`docker-compose*.yml`、`ops/litellm/`、`web/payment/`、fly secrets 同步脚本、`backend/db/migrations/`、配置中心（`backend/config.py`）。
 - 视角：CI/CD gate 是否有洞（DB 测试 skip、无 preview）？密钥管理（dotenvx / fly secrets）是否健全？多 worktree 开发体验？**可观测性**（日志 / trace 是否够定位线上问题，有无 structured logging / metrics / 告警）？migration 纪律（additive / expand-contract）？支付 webhook 幂等？
 - 文档：`docs/modules/runtime-deployment.mdx`
 

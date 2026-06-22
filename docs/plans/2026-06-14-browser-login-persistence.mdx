@@ -157,5 +157,5 @@ P0 端到端(本地 `make up` + dev 真 `BROWSERBASE_API_KEY`):
 
 - 模块:`docs/modules/execution.mdx`(browser tool / control mode / BrowserView)。
 - 前序 plan:[手机端远端浏览器原生触摸操控](./2026-06-14-mobile-browser-touch-control)(同一套 live view + CDP input)。
-- 关键文件:`pinai-agents/src/pinai_agents/web/services/browserbase_provisioning.py`、`web/agent_core/worker.py:807`、`web/services/browser_proxy.py`、`chat/tools/browser/{manager,tools,routes,control_state}.py`、`web/auth/agent_jwt.py`、`chat/auth/run_jwt.py`、`db/migrations/033_users_browserbase_context.sql`。
+- 关键文件:`backend/src/pinai_agents/web/services/browserbase_provisioning.py`、`web/agent_core/worker.py:807`、`web/services/browser_proxy.py`、`chat/tools/browser/{manager,tools,routes,control_state}.py`、`web/auth/agent_jwt.py`、`chat/auth/run_jwt.py`、`db/migrations/033_users_browserbase_context.sql`。
 - 调研依据:两轮 deep research(① Browserbase Contexts 能力 + Chrome 登录态导入不可行(ABE/DBSC);② 生产可靠性 benchmark + ToS/CFAA + 凭证 vault 原则)。

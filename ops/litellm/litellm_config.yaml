@@ -222,7 +222,7 @@ model_list:
 
   # Embeddings — drives pgvector semantic memory search.
   # Pinned at 1536 dims to match the vector column declared in
-  # pinai-agents/db/migrations/029_pgvector_semantic_memory.sql.
+  # backend/db/migrations/029_pgvector_semantic_memory.sql.
   # Bumping to a different-dim model requires a schema migration
   # (drop + recreate the embedding columns).
   - model_name: text-embedding-3-small

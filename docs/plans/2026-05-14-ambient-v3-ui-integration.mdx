@@ -127,7 +127,7 @@ c21f635e feat(frontend): drive ambient Live card with real transcript events
 
 - `services/auth/supabase.ts` 在模块顶层读 `import.meta.env.VITE_SUPABASE_URL` 并抛 `throw`。
 - 本地直接 `docker compose build frontend` 会跳过 `make build` 里的 `export_vite` step → image 启动时整页白屏 + 控制台 `Missing VITE_SUPABASE_URL...`。
-- **规范**：rebuild frontend 走 `make build frontend` 或 `make up`，自动从 `pinai-agents/.env` `set -a` 注入 `VITE_*` 到 build-arg。
+- **规范**：rebuild frontend 走 `make build frontend` 或 `make up`，自动从 `backend/.env` `set -a` 注入 `VITE_*` 到 build-arg。
 
 ### 3. Lock 视觉跟 ambient row 的 status badge 还没对齐
 

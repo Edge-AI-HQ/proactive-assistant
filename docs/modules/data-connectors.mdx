@@ -72,7 +72,7 @@ flowchart LR
 
 ## 当前 Composio toolkit 状态
 
-`pinai-agents/db/ingest_recipes/` 下的老 typed toolkit 仍是 recipe + raw 表 + `_UPSERTERS` mapper 三者齐全;新增/长尾 toolkit 默认只需要 recipe,数据落 `pai_raw_events`。前端 `DataConnections.tsx` 只把产品主推源列在首屏,全量目录走 catalog。
+`backend/db/ingest_recipes/` 下的老 typed toolkit 仍是 recipe + raw 表 + `_UPSERTERS` mapper 三者齐全;新增/长尾 toolkit 默认只需要 recipe,数据落 `pai_raw_events`。前端 `DataConnections.tsx` 只把产品主推源列在首屏,全量目录走 catalog。
 
 | Toolkit | Composio action(来自 recipe) | raw 表 | 状态 |
 |---|---|---|---|
@@ -102,7 +102,7 @@ flowchart LR
 - **recipe 推断**:`web/services/recipe_infer.py`。无 yaml 的 toolkit 在首次 `connector.init` 时从 Composio tool schema 推断(挑无副作用 list action、推 result_path/id_field/timestamp_path),置信度 high(直接跑)/ mid(dedupe 退化 hash,标记补 yaml)/ 无可读 action → connect_only 降级。手写 yaml 永远优先;进程内缓存,sync 不重复打 meta API。
 - **googlesuper 一键连**:`db/ingest_recipes/googlesuper.yaml` 声明 `fanout: [gmail, googlecalendar, googledrive, googledocs, googlesheets]`——一次 OAuth、一个 cid,init/sync 内部扇出跑五个 sub recipe。Gmail/Calendar/Drive 复用 typed 表,Docs/Sheets 走 `pai_raw_events`;cursor 按 **sub** toolkit 各自推进,sync schedule 只有一条 `sync.googlesuper.<cid>`,单 sub 失败不拖垮其余。identity 复用 `GMAIL_GET_PROFILE`。与单独连 sub-toolkit 共存,dedupe 天然去重。Slides 目前通过 Drive 文件元数据覆盖,因为 Composio Google Slides 没有批量 list/search action。
 - **全量目录 + 自定义 auth**:`GET /api/composio/catalog`(分页浏览 1000+ toolkit;`connect` 本来就接受任意 slug);`POST /connect` 带 `authConfig: {authScheme, credentials}` 走 `use_custom_auth`(用户自带 OAuth client / API key)。
-- **命令行验收**:`pinai-agents/scripts/collector_cli.py` — `catalog`/`infer`/`connect`/`connections`/`ingest`(伪造 task 直调 `connector_ingest.run()`,绕过 scheduler)/`raw`/`evolve`(入队+轮询)/`signals`/`memory`/`pipeline`(一条龙)。后台链路全程不依赖前端。
+- **命令行验收**:`backend/scripts/collector_cli.py` — `catalog`/`infer`/`connect`/`connections`/`ingest`(伪造 task 直调 `connector_ingest.run()`,绕过 scheduler)/`raw`/`evolve`(入队+轮询)/`signals`/`memory`/`pipeline`(一条龙)。后台链路全程不依赖前端。
 
 migration 历史:
 - `036_drop_unused_raw_tables.sql` 把 `pai_raw_gdocs_*` / `pai_raw_outlook_*` / `pai_raw_notion_*` / `pai_raw_asana_*` / `pai_raw_zoom_*` / `pai_raw_clickup_*` 等不在主线上的 raw 表删除。
@@ -237,7 +237,7 @@ sequenceDiagram
 - **隐私不变量**:登录本身**绝不**启动任何 source。`startAmbientUpload({ enabledSources })`(`services/ambient/lifecycle.ts`)只对用户在 `pai_user_settings.ambient_sources`(migration `041_pai_user_settings_ambient_sources.sql`)里显式 opt-in 的 source 调 `runtime.startSource(<key>)`,**不调** `runtime.autoStart()`。
 - `bindAmbientLifecycle()`(`main.tsx` 在 `isNative` 分支动态 import)只负责把 `App.appStateChange` 绑到 `runtime.drain()` — 这条只 flush 已经在队列里的事件,不会引起任何新采集。
 - 用户 UI:`components/AmbientSourcesPanel.tsx`(挂在 `DebugPanel` 里,`React.lazy` + `isNative` 守 web build)读 `useUserSettings().ambientSources`,toggle 一旦 flip 既 PATCH 到 server 又同步调 `runtime.start/stop(key)`,做到 UI 立即反映 + server 是持久真源。
-- Voice Identity 开启时,Ambient 云转录先走 `/api/voice/transcribe-diarized` + `gpt-4o-transcribe-diarize` 保留 `self` / speaker labels,再用 `gpt-5-nano` 对每个 diarized segment 的 `text` 做后处理纠错。speaker / start / end 结构只由代码保留和拼回,后处理 prompt 只允许改文本,热词在 `pinai-agents/src/pinai_agents/web/services/voice_transcription.py` 的 `TRANSCRIPTION_POSTPROCESS_TERMS`。
+- Voice Identity 开启时,Ambient 云转录先走 `/api/voice/transcribe-diarized` + `gpt-4o-transcribe-diarize` 保留 `self` / speaker labels,再用 `gpt-5-nano` 对每个 diarized segment 的 `text` 做后处理纠错。speaker / start / end 结构只由代码保留和拼回,后处理 prompt 只允许改文本,热词在 `backend/src/pinai_agents/web/services/voice_transcription.py` 的 `TRANSCRIPTION_POSTPROCESS_TERMS`。
 - 改 ambient source 列表 / lifecycle 行为 / `pai_user_settings.ambient_sources` schema 前必读 [Ambient AI Plugin](../plans/2026-05-10-ambient-ai-plugin) + [V2 → V3 功能迁移计划 D-5](../plans/2026-05-12-v2-to-v3-migration)。
 
 ### 设备统一时间线
@@ -271,7 +271,7 @@ sequenceDiagram
 
 ### Ingest recipe 机制
 
-`pinai-agents/db/ingest_recipes/<toolkit>.yaml`:
+`backend/db/ingest_recipes/<toolkit>.yaml`:
 
 ```yaml
 toolkit: gmail
@@ -287,7 +287,7 @@ id_field: messageId
 sync_interval_hours: 12
 ```
 
-`web/services/ingest_runner.py:Recipe.load_recipe()` 读、`run_fetch(user_id, toolkit, cid, limit, since)` 执行。校验脚本:`pinai-agents/scripts/validate_ingest_recipe.py`。
+`web/services/ingest_runner.py:Recipe.load_recipe()` 读、`run_fetch(user_id, toolkit, cid, limit, since)` 执行。校验脚本:`backend/scripts/validate_ingest_recipe.py`。
 
 加新 toolkit 步骤(generic 路径,当前默认):
 1. 加 `db/ingest_recipes/<toolkit>.yaml`,声明 `entity_type` + `id_field` + `timestamp_path`(可选 `title_path`/`snippet_path`)。没有 yaml 也能跑——首次 init 会走 `recipe_infer` 自动推断,yaml 是推断不准时的覆盖手段(`collector_cli infer <tk> --dump-yaml` 可生成草稿)。
@@ -332,7 +332,7 @@ device 三张表(`pai_raw_device_apps_snapshot`、`pai_raw_device_contacts_snaps
 | 改动 | 先看 |
 |---|---|
 | Composio UI 按钮 / OAuth / init chip | `proactive-ai-frontend/src/components/DataConnections.tsx`、`hooks/useComposio.ts`、`hooks/useInitTask.ts` |
-| Composio web 路由 + `/wait` 入队钩子 | `pinai-agents/src/pinai_agents/web/routes/ui/composio.py` |
+| Composio web 路由 + `/wait` 入队钩子 | `backend/src/pinai_agents/web/routes/ui/composio.py` |
 | Composio sandbox 路由 | `web/routes/agent/composio.py` |
 | Composio SDK / session pool / label resolution (`_IDENTITY_SPECS`) | `web/composio_service.py` |
 | `pai_connector_labels` 持久化 | `web/db/repositories/connector_labels.py`, migration `040_pai_connector_labels.sql` |
@@ -341,25 +341,25 @@ device 三张表(`pai_raw_device_apps_snapshot`、`pai_raw_device_contacts_snaps
 | Cursor 推进 | `web/db/repositories/connectors.py`(`pai_connector_sync_cursors` 读写) |
 | Device 注册 / token / rotate | `web/routes/ui/devices.py`、`web/db/repositories/devices.py` |
 | Device ingest policy / health 解析 | `web/device_ingest/policies.py`、`web/device_ingest/health.py` |
-| Raw schema | `pinai-agents/db/migrations/016_pai_raw_workspace.sql`、`017_pai_raw_collab.sql`、`018_pai_raw_personal.sql`、`019_pai_raw_device.sql`、`036_drop_unused_raw_tables.sql` |
+| Raw schema | `backend/db/migrations/016_pai_raw_workspace.sql`、`017_pai_raw_collab.sql`、`018_pai_raw_personal.sql`、`019_pai_raw_device.sql`、`036_drop_unused_raw_tables.sql` |
 | 前端设备列表 / 注册 UI | `proactive-ai-frontend/src/components/DeviceConnections.tsx`、`src/hooks/useUserDevices.ts` |
 
 ## 验证方式
 
 ```bash
-cd pinai-agents && uv run pytest tests/web/services/test_connector_ingest.py
-cd pinai-agents && uv run pytest tests/web/services/test_connector_sync.py
-cd pinai-agents && uv run pytest tests/web/services/test_connector_slack.py
-cd pinai-agents && uv run pytest tests/web/services/test_connector_drive.py
-cd pinai-agents && uv run pytest tests/web/services/test_connector_calendly.py
-cd pinai-agents && uv run pytest tests/web/services/test_connector_github.py
-cd pinai-agents && uv run pytest tests/web/services/test_connector_linkedin.py
-cd pinai-agents && uv run pytest tests/web/services/test_connector_stripe.py
-cd pinai-agents && uv run pytest tests/web/services/test_connector_youtube.py
-cd pinai-agents && uv run pytest tests/web/test_composio_service.py            # SDK wrapper / label extractors
-cd pinai-agents && uv run pytest tests/web/devices                              # token + ingest policies
-cd pinai-agents && uv run pytest tests/web/db/repositories/test_connectors_repo.py
-cd pinai-agents && uv run pytest tests/web/routes/                              # 路由集成
+cd backend && uv run pytest tests/web/services/test_connector_ingest.py
+cd backend && uv run pytest tests/web/services/test_connector_sync.py
+cd backend && uv run pytest tests/web/services/test_connector_slack.py
+cd backend && uv run pytest tests/web/services/test_connector_drive.py
+cd backend && uv run pytest tests/web/services/test_connector_calendly.py
+cd backend && uv run pytest tests/web/services/test_connector_github.py
+cd backend && uv run pytest tests/web/services/test_connector_linkedin.py
+cd backend && uv run pytest tests/web/services/test_connector_stripe.py
+cd backend && uv run pytest tests/web/services/test_connector_youtube.py
+cd backend && uv run pytest tests/web/test_composio_service.py            # SDK wrapper / label extractors
+cd backend && uv run pytest tests/web/devices                              # token + ingest policies
+cd backend && uv run pytest tests/web/db/repositories/test_connectors_repo.py
+cd backend && uv run pytest tests/web/routes/                              # 路由集成
 npm run type-check --workspace proactive-ai-frontend
 ```
 
@@ -387,7 +387,7 @@ FROM pai_user_devices WHERE user_id = $1;
 容器日志:
 
 ```bash
-make logs-pinai-web | grep -E "connector\.|composio|/devices/ingest"
+make logs-api | grep -E "connector\.|composio|/devices/ingest"
 ```
 
 ## 踩坑
@@ -404,7 +404,7 @@ make logs-pinai-web | grep -E "connector\.|composio|/devices/ingest"
 - `pai_user_devices.device_fingerprint_hash` 不能放 raw fingerprint,只能放 sha256 hash;app 端 fingerprint 用 secure storage 持久化,换 device_id 时复用同一逻辑设备。
 - `sync_mode=full` 对 health 是 `(device_id, local_date)` scope 替换,且只删 `reference_count=0` 的;多 date payload 自动 fallback incremental,不要靠它做"今天数据整体覆盖"。
 - 旧的 `apis/src/domain/proactive/mobile_proxy.ts` 和 `MOBILE_SYNC_TARGET_USER_ID` 默认容器兜底全部退役,mobile 数据现在唯一入口是 `/api/devices/ingest`,跟 chat 路径同进程。
-- `/api/composio/wait` 入队失败不影响 ACTIVE 状态(只 log warning),前端 chip 拿不到 `initTaskId` 时不渲染,等 reconciler 兜底 — 但当前 pinai-agents 还没有专门的 reconciler 服务,失败的 OAuth-but-no-init 暂时需要手动 reconnect。
+- `/api/composio/wait` 入队失败不影响 ACTIVE 状态(只 log warning),前端 chip 拿不到 `initTaskId` 时不渲染,等 reconciler 兜底 — 但当前 backend 还没有专门的 reconciler 服务,失败的 OAuth-but-no-init 暂时需要手动 reconnect。
 
 ## 相关模块
 

@@ -1,7 +1,7 @@
 name: _deploy
 
 # Reusable deploy workflow — the single source of truth for deploying
-# pinai-agents + LiteLLM + frontend to a Fly environment. The dev / test /
+# backend + LiteLLM + frontend to a Fly environment. The dev / test /
 # prod callers (deploy-{dev,test,prod}.yml) are thin: each only declares its
 # trigger + concurrency, then calls this with its environment's parameters.
 #
@@ -89,17 +89,17 @@ jobs:
         with:
           filters: |
             agents:
-              - 'pinai-agents/**'
+              - 'backend/**'
             litellm:
               - 'ops/litellm/**'
             frontend:
               - 'proactive-ai-frontend/**'
               - 'packages/**'
-              - 'pinai-agents/.env.dev'
+              - 'backend/.env.dev'
             web:
               - 'apps/web/**'
               - 'packages/**'
-              - 'pinai-agents/.env.dev'
+              - 'backend/.env.dev'
 
   build-daytona-snapshot:
     needs: changes
@@ -120,7 +120,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
 
       - name: Decrypt DAYTONA_API_KEY from ${{ inputs.env_file }}
-        working-directory: pinai-agents
+        working-directory: backend
         env:
           DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
           DOTENV_PRIVATE_KEY_TEST: ${{ secrets.DOTENV_PRIVATE_KEY_TEST }}
@@ -132,7 +132,7 @@ jobs:
           echo "DAYTONA_API_KEY=$DAYTONA_API_KEY" >> "$GITHUB_ENV"
 
       - name: Build/refresh Daytona snapshot (pinai-sandbox:${{ inputs.daytona_version }})
-        working-directory: pinai-agents
+        working-directory: backend
         run: |
           uv sync --no-dev
           uv run python infra/daytona/build_snapshot.py --version ${{ inputs.daytona_version }} --recreate
@@ -150,7 +150,7 @@ jobs:
       - uses: superfly/flyctl-actions/setup-flyctl@v1
 
       - name: Sync fly secrets from ${{ inputs.env_file }}
-        working-directory: pinai-agents
+        working-directory: backend
         env:
           DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
           DOTENV_PRIVATE_KEY_TEST: ${{ secrets.DOTENV_PRIVATE_KEY_TEST }}
@@ -161,8 +161,8 @@ jobs:
             --app ${{ inputs.agents_app }} \
             --env-file ${{ inputs.env_file }}
 
-      - name: Deploy pinai-agents to ${{ inputs.daytona_version }}
-        working-directory: pinai-agents
+      - name: Deploy backend to ${{ inputs.daytona_version }}
+        working-directory: backend
         run: flyctl deploy --config ${{ inputs.agents_toml }} --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
@@ -222,7 +222,7 @@ jobs:
           DOTENV_PRIVATE_KEY_TEST: ${{ secrets.DOTENV_PRIVATE_KEY_TEST }}
           DOTENV_PRIVATE_KEY_PRODUCTION: ${{ secrets.DOTENV_PRIVATE_KEY_PRODUCTION }}
         run: |
-          envf="pinai-agents/${{ inputs.env_file }}"
+          envf="backend/${{ inputs.env_file }}"
           {
             echo "VITE_PIN_API_URL=$(npx @dotenvx/dotenvx get VITE_PIN_API_URL -f "$envf")"
             echo "VITE_SUPABASE_URL=$(npx @dotenvx/dotenvx get VITE_SUPABASE_URL -f "$envf")"
@@ -271,7 +271,7 @@ jobs:
           DOTENV_PRIVATE_KEY_TEST: ${{ secrets.DOTENV_PRIVATE_KEY_TEST }}
           DOTENV_PRIVATE_KEY_PRODUCTION: ${{ secrets.DOTENV_PRIVATE_KEY_PRODUCTION }}
         run: |
-          envf="pinai-agents/${{ inputs.env_file }}"
+          envf="backend/${{ inputs.env_file }}"
           {
             echo "VITE_SUPABASE_URL=$(npx @dotenvx/dotenvx get VITE_SUPABASE_URL -f "$envf")"
             echo "VITE_SUPABASE_PUBLISHABLE_KEY=$(npx @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f "$envf")"

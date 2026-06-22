@@ -15,7 +15,7 @@ description: "为主动 AI 卡片生成搭建可长期迭代的 reward ledger、
 4. 每个 generation run 能看到 LangSmith / DeepAgents 过程图,帮助人判断问题出在 data-collector、planner、card-generator 还是 evaluator。
 5. dashboard 能按 run / card / casebook / trace 组织内部迭代,服务"单位时间内修更多问题,更快提高 AHA moment 命中率"。
 
-第一阶段只新增独立内部前端和 pinai-agents 后端 surface,不改 generation 主链路,不把内部 reviewer 分数直接喂回线上 planner。等 reward 数据稳定后,再决定哪些信号进入 prompt / selector / evaluator。
+第一阶段只新增独立内部前端和 backend 后端 surface,不改 generation 主链路,不把内部 reviewer 分数直接喂回线上 planner。等 reward 数据稳定后,再决定哪些信号进入 prompt / selector / evaluator。
 
 ```mermaid
 flowchart LR
@@ -70,7 +70,7 @@ flowchart LR
 ### 工程目标
 
 - 新建独立 Vite React app:`internal-reward-dashboard/`。
-- 后端改在 `pinai-agents/`,新增 migration、repository、route。
+- 后端改在 `backend/`,新增 migration、repository、route。
 - 数据读取复用现有 `pai_pipeline_runs`、`pai_card_evaluations`、`pai_feedback_events`。
 - 数据写入新增 reward / casebook / trace artifact 表。
 - 不修改 `proactive-ai-frontend` 主产品 UI,用户侧 open event 后续单独接入。
@@ -106,10 +106,10 @@ internal-reward-dashboard/
 ### 后端新增模块
 
 ```text
-pinai-agents/src/pinai_agents/web/routes/ui/reward_dashboard.py
-pinai-agents/src/pinai_agents/web/db/repositories/reward.py
-pinai-agents/src/pinai_agents/web/services/trace_artifacts.py
-pinai-agents/db/migrations/0XX_pai_card_reward_infra.sql
+backend/src/pinai_agents/web/routes/ui/reward_dashboard.py
+backend/src/pinai_agents/web/db/repositories/reward.py
+backend/src/pinai_agents/web/services/trace_artifacts.py
+backend/db/migrations/0XX_pai_card_reward_infra.sql
 ```
 
 路由仍使用 Supabase JWT `current_user`,默认只读写当前 user 的 runs / cards / rewards / casebook。这样每个人评自己的卡片,不需要第一版引入 admin 权限模型。
@@ -357,9 +357,9 @@ flowchart LR
 
 文件:
 
-- `pinai-agents/db/migrations/0XX_pai_card_reward_infra.sql`
-- `pinai-agents/src/pinai_agents/web/db/repositories/reward.py`
-- `pinai-agents/tests/web/db/repositories/test_reward_repo.py`
+- `backend/db/migrations/0XX_pai_card_reward_infra.sql`
+- `backend/src/pinai_agents/web/db/repositories/reward.py`
+- `backend/tests/web/db/repositories/test_reward_repo.py`
 
 验收:
 
@@ -372,9 +372,9 @@ flowchart LR
 
 文件:
 
-- `pinai-agents/src/pinai_agents/web/routes/ui/reward_dashboard.py`
-- `pinai-agents/src/pinai_agents/web/app.py`
-- `pinai-agents/tests/web/routes/test_reward_dashboard.py`
+- `backend/src/pinai_agents/web/routes/ui/reward_dashboard.py`
+- `backend/src/pinai_agents/web/app.py`
+- `backend/tests/web/routes/test_reward_dashboard.py`
 
 验收:
 
@@ -394,7 +394,7 @@ flowchart LR
 验收:
 
 - `cd internal-reward-dashboard && npm install && npm run dev -- --host 127.0.0.1 --port 3004` 可启动。
-- 能用 Supabase session 调 pinai-agents API。
+- 能用 Supabase session 调 backend API。
 - `/runs` 显示真实 run。
 - `/runs/:runId` 显示真实 cards 和 evaluator score。
 
@@ -411,8 +411,8 @@ flowchart LR
 
 文件:
 
-- `pinai-agents/src/pinai_agents/web/services/trace_artifacts.py`
-- `pinai-agents/tests/web/services/test_trace_artifacts.py`
+- `backend/src/pinai_agents/web/services/trace_artifacts.py`
+- `backend/tests/web/services/test_trace_artifacts.py`
 - `internal-reward-dashboard/src/routes/TraceView.tsx`
 
 验收:
@@ -440,9 +440,9 @@ flowchart LR
 后端:
 
 ```bash
-cd pinai-agents && uv run ruff check .
-cd pinai-agents && uv run pytest tests/web/db/repositories/test_reward_repo.py
-cd pinai-agents && uv run pytest tests/web/routes/test_reward_dashboard.py
+cd backend && uv run ruff check .
+cd backend && uv run pytest tests/web/db/repositories/test_reward_repo.py
+cd backend && uv run pytest tests/web/routes/test_reward_dashboard.py
 ```
 
 内部前端:

@@ -2,7 +2,7 @@
  * Tests for the scheduled generator API client.
  * Mocks global fetch + supabase auth + platform to isolate the HTTP
  * contract (path / method / body) from the network. Endpoints live under
- * /api/scheduled-generators on pinai-agents.
+ * /api/scheduled-generators on backend.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 

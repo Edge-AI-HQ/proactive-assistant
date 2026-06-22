@@ -199,7 +199,7 @@ health 继续 raw-only，不写 `pai_personal_signals`。但本 plan 的“用�
 
 - `health.observation` 经 `/api/devices/ingest` 写入 `pai_raw_device_health_observations`。
 - 生成/agent 使用的 `phase1_seed` 必须包含最近 device health 摘要。
-- 在 `pinai-agents/src/pinai_agents/web/services/phase1_seed.py` 新增 device health summary collector；不能只依赖 `/api/devices/{device_id}/timeline` UI endpoint。
+- 在 `backend/src/pinai_agents/web/services/phase1_seed.py` 新增 device health summary collector；不能只依赖 `/api/devices/{device_id}/timeline` UI endpoint。
 - 验收测试必须证明一条 health observation 能进入 generator/dream seed payload。
 
 ## 当前问题
@@ -525,7 +525,7 @@ health 保持后端 raw-only：`health.observation` 仍写 `pai_raw_device_healt
 目标：补齐“用户看到 = AI 看到”的后端闭环。
 
 - 保持 `health.observation` raw-only，不写 `pai_personal_signals`。
-- 在 `pinai-agents/src/pinai_agents/web/services/phase1_seed.py` 增加最近 device health summary collector。
+- 在 `backend/src/pinai_agents/web/services/phase1_seed.py` 增加最近 device health summary collector。
 - 新增后端测试：
   - 插入一条 `pai_raw_device_health_observations`。
   - 构建 generator/dream seed。
@@ -564,7 +564,7 @@ health 保持后端 raw-only：`health.observation` 仍写 `pai_raw_device_healt
 | Ambient 页面 | `proactive-ai-frontend/src/components/constellation/AmbientView.tsx` |
 | Home Live Session | `proactive-ai-frontend/src/hooks/useAmbientLiveSession.ts` / `services/ambient/live-session.ts` |
 | health cadence | `capacitor-plugins/ambient-ai/src/modules/health-connect/adapter.ts` |
-| AI context health raw | `pinai-agents/src/pinai_agents/web/services/phase1_seed.py` |
+| AI context health raw | `backend/src/pinai_agents/web/services/phase1_seed.py` |
 | docs | `docs/modules/data-connectors.mdx`、本 plan |
 
 ## 旧设计替代关系

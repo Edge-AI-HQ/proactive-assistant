@@ -70,7 +70,7 @@ description: "修复 summarization 泄漏与 subagent 工具混流，前端重�
 
 ## 机制依据（deepagents/langgraph 源码实证）
 
-源码路径根：`pinai-agents/.venv/lib/python3.12/site-packages/`。以下结论均经 probe 脚本在真实 `create_deep_agent` 图上实证（2026-06-09）。
+源码路径根：`backend/.venv/lib/python3.12/site-packages/`。以下结论均经 probe 脚本在真实 `create_deep_agent` 图上实证（2026-06-09）。
 
 ### summarization
 
@@ -269,8 +269,8 @@ turn 标识直接用帧上已有的 `traceId`（= run_id，`chat:thinking` 到 `
 
 ```bash
 # 后端每个 task
-cd pinai-agents && uv run ruff check && uv run ruff format && uv run mypy src
-cd pinai-agents && uv run pytest tests/chat/
+cd backend && uv run ruff check && uv run ruff format && uv run mypy src
+cd backend && uv run pytest tests/chat/
 
 # 前端
 cd proactive-ai-frontend && npm run type-check && npm test

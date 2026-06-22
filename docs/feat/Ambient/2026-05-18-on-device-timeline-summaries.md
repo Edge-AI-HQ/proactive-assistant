@@ -483,7 +483,7 @@ const handleAmbientAction = useCallback((entry: AmbientTimelineEntry) => {
 
 ### 12.4 影响范围
 
-- **后端**（`pinai-agents` / chat-stream / supabase db schema）：**零改动**。`card-thread-ambient-*` 复用既有 `card-thread-` 前缀检测，没有新表、新字段、新 endpoint。
+- **后端**（`backend` / chat-stream / supabase db schema）：**零改动**。`card-thread-ambient-*` 复用既有 `card-thread-` 前缀检测，没有新表、新字段、新 endpoint。
 - **iOS native plugin**（`capacitor-plugins/ambient-ai`）：**零改动**。本节描述的是 cloud LLM 路径，与 §6 / §7 的端上 LLM 完全解耦。
 - **既有 NOW Intent Card 体验**：**零回归**。虚拟 card 不入库，只在 React state 里活；NOW feed 的真实卡片流程不变。
 - 测试：`npm --prefix proactive-ai-frontend run type-check` 干净；vitest constellation suite 10/10 通过。

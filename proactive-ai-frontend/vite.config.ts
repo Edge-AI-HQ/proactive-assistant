@@ -7,12 +7,12 @@ export default defineConfig(({ mode }) => {
   // Supabase VITE_* fallback: lib/supabase.ts throws at import when these
   // are unset, which blanks the whole SPA. .env.local is gitignored, so a
   // fresh worktree has no local copy — backfill the two keys from
-  // pinai-agents/.env (the decrypted output every worktree gets from
+  // backend/.env (the decrypted output every worktree gets from
   // `make ensure-env`; internal-reward-dashboard reads the same source via
   // envDir). Explicit process env / .env.local still win; only VITE_-prefixed
   // vars ever reach the client bundle, so the master secrets in that file
   // stay server-side.
-  const agentsEnv = loadEnv(mode, path.resolve(__dirname, "../pinai-agents"), "");
+  const agentsEnv = loadEnv(mode, path.resolve(__dirname, "../backend"), "");
   for (const key of ["VITE_SUPABASE_URL", "VITE_SUPABASE_PUBLISHABLE_KEY"]) {
     if (!String(env[key] ?? "").trim() && String(agentsEnv[key] ?? "").trim()) {
       process.env[key] = agentsEnv[key];
@@ -21,11 +21,11 @@ export default defineConfig(({ mode }) => {
   }
   if (mode === "development" && !String(env.VITE_SUPABASE_URL ?? "").trim()) {
     console.warn(
-      "[vite] VITE_SUPABASE_URL 仍缺失(pinai-agents/.env 也没有)——先跑 `make ensure-env`,否则页面会白屏。",
+      "[vite] VITE_SUPABASE_URL 仍缺失(backend/.env 也没有)——先跑 `make ensure-env`,否则页面会白屏。",
     );
   }
-  // pinai-agents is the only backend after the apis + openclaw retirement.
-  // /api/* in dev hits pinai-web:8000 directly via the proxy below.
+  // backend is the only backend after the apis + openclaw retirement.
+  // /api/* in dev hits api:8000 directly via the proxy below.
   const pinApiTarget = env.VITE_PIN_API_PROXY_TARGET || "http://127.0.0.1:8000";
   const isCapacitor = !!(process.env.VITE_CAPACITOR || env.VITE_CAPACITOR);
 
@@ -99,7 +99,7 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 3000,
       proxy: {
-        // pinai-agents: every /api/* call. The legacy /api/proactive/*
+        // backend: every /api/* call. The legacy /api/proactive/*
         // entry was removed along with the apis service.
         "/api": {
           target: pinApiTarget,

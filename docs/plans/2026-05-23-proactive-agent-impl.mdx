@@ -123,6 +123,6 @@ turn 可能跑在与服务 `/stream`、`/cancel` 不同的 web 实例。`Proacti
 ## 踩坑
 
 1. **心跳靠手动 seed**:`scripts/seed_proactive_tick.py <user_id>` 建 `pai_scheduled_tasks` 行;不自动建,`make reset` 后消失(见 memory「proactive heartbeat seed」)。
-2. **多 worktree image stale**:动了 migrations(064/068-077)后,新 worktree 跑 DB 前必须 `make build-pinai-agents`,否则复用别 worktree 的旧 image,proactive 表建不出来报 `UndefinedTable`(见 memory「多 worktree docker image stale」)。
+2. **多 worktree image stale**:动了 migrations(064/068-077)后,新 worktree 跑 DB 前必须 `make build-backend`,否则复用别 worktree 的旧 image,proactive 表建不出来报 `UndefinedTable`(见 memory「多 worktree docker image stale」)。
 3. **window_start 不可为 None**:`pai_proactive_state.last_tick_at` DEFAULT NOW() NOT NULL,`_ensure_state` 保证行存在,`_format_heartbeat` 才不会 `None.astimezone()`。
 4. **silent 只记 tick**:user turn 内联回复,不是 silent,不进账本(否则污染语料 + card 线程)。

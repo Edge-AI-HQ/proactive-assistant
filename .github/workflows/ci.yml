@@ -34,7 +34,7 @@ jobs:
         with:
           filters: |
             agents:
-              - 'pinai-agents/**'
+              - 'backend/**'
               - '.github/workflows/ci.yml'
             frontend:
               - 'proactive-ai-frontend/**'
@@ -45,6 +45,11 @@ jobs:
               - 'package-lock.json'
               - '.github/workflows/ci.yml'
 
+  # Job name kept as `pinai-agents-checks` across the pinai-agents → backend
+  # rename: it's the required status check in the main branch ruleset, so it's
+  # an external gate identifier (like the fly app name `proactive-ai-agents-*`).
+  # Renaming it would need a synchronized GitHub ruleset edit AND would block
+  # every other open PR whose CI still emits the old name — not worth it.
   pinai-agents-checks:
     needs: changes
     if: needs.changes.outputs.agents == 'true'
@@ -80,32 +85,32 @@ jobs:
 
       - uses: astral-sh/setup-uv@v7
 
-      - name: Install pinai-agents (with dev group)
-        working-directory: pinai-agents
+      - name: Install backend (with dev group)
+        working-directory: backend
         run: uv sync
 
       - name: ruff check
-        working-directory: pinai-agents
+        working-directory: backend
         run: uv run ruff check
 
       - name: ruff format check
-        working-directory: pinai-agents
+        working-directory: backend
         run: uv run ruff format --check
 
       - name: mypy
-        working-directory: pinai-agents
-        run: uv run mypy src
+        working-directory: backend
+        run: uv run mypy services libs
 
       - name: Apply migrations (pai_* schema + RLS policies + roles)
-        working-directory: pinai-agents
+        working-directory: backend
         run: uv run yoyo apply --batch -d "postgresql+psycopg://postgres:postgres@localhost:5432/postgres"
 
       - name: Seed patterns (pattern route/matcher tests assume 111 patterns seeded)
-        working-directory: pinai-agents
+        working-directory: backend
         run: uv run python -m scripts.seed_patterns --dsn "postgresql://postgres:postgres@localhost:5432/postgres"
 
       - name: pytest
-        working-directory: pinai-agents
+        working-directory: backend
         # DB-backed tests run against the postgres service above
         # (TEST_DATABASE_URL is set at job level). Dummy values satisfy
         # import-time client construction (e.g. tavily.py) without reaching
@@ -122,7 +127,7 @@ jobs:
         run: uv run pytest -q
 
       - name: trust boundary check
-        working-directory: pinai-agents
+        working-directory: backend
         run: bash scripts/check_trust_boundary.sh
 
   frontend-check:

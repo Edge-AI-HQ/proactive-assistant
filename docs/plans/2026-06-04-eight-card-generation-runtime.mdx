@@ -87,10 +87,10 @@ flowchart TD
 
 修改:
 
-- `pinai-agents/src/pinai_agents/shared/api_models.py`
-- `pinai-agents/src/pinai_agents/chat/transport/routes/generate.py`
-- `pinai-agents/src/pinai_agents/web/scheduler/dispatcher.py`
-- `pinai-agents/src/pinai_agents/web/routes/ui/profile.py`
+- `backend/src/pinai_agents/shared/api_models.py`
+- `backend/src/pinai_agents/chat/transport/routes/generate.py`
+- `backend/src/pinai_agents/web/scheduler/dispatcher.py`
+- `backend/src/pinai_agents/web/routes/ui/profile.py`
 - 对应 tests。
 
 验证:
@@ -103,7 +103,7 @@ flowchart TD
 
 修改:
 
-- `pinai-agents/src/pinai_agents/chat/agents/generator.py`
+- `backend/src/pinai_agents/chat/agents/generator.py`
 
 新增内部 helper:
 
@@ -120,12 +120,12 @@ flowchart TD
 
 修改:
 
-- `pinai-agents/src/pinai_agents/chat/agents/generation_context.py`
-- `pinai-agents/src/pinai_agents/chat/agents/generator.py`
-- `pinai-agents/src/pinai_agents/chat/transport/routes/generate.py`
-- `pinai-agents/src/pinai_agents/web/scheduler/dispatcher.py`
-- `pinai-agents/src/pinai_agents/web/routes/agent/raw.py`
-- `pinai-agents/src/pinai_agents/web/routes/agent/signals.py`
+- `backend/src/pinai_agents/chat/agents/generation_context.py`
+- `backend/src/pinai_agents/chat/agents/generator.py`
+- `backend/src/pinai_agents/chat/transport/routes/generate.py`
+- `backend/src/pinai_agents/web/scheduler/dispatcher.py`
+- `backend/src/pinai_agents/web/routes/agent/raw.py`
+- `backend/src/pinai_agents/web/routes/agent/signals.py`
 
 关键规则:
 
@@ -188,7 +188,7 @@ flowchart TD
 
 修改:
 
-- `pinai-agents/src/pinai_agents/web/services/card_fanout.py`
+- `backend/src/pinai_agents/web/services/card_fanout.py`
 
 规则:
 
@@ -206,9 +206,9 @@ flowchart TD
 验证命令:
 
 ```bash
-cd pinai-agents && uv run ruff check
-cd pinai-agents && uv run mypy src
-cd pinai-agents && TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:55436/postgres uv run pytest tests/shared/test_generate_request.py tests/web/scheduler/test_dispatcher.py tests/web/routes/test_generate_route.py tests/chat/agents/test_generator_preferences.py tests/chat/routes/test_generate_filtering.py tests/web/services/test_card_fanout.py
+cd backend && uv run ruff check
+cd backend && uv run mypy src
+cd backend && TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:55436/postgres uv run pytest tests/shared/test_generate_request.py tests/web/scheduler/test_dispatcher.py tests/web/routes/test_generate_route.py tests/chat/agents/test_generator_preferences.py tests/chat/routes/test_generate_filtering.py tests/web/services/test_card_fanout.py
 ```
 
 真实验收:

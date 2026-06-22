@@ -1,0 +1,347 @@
+---
+title: "后端重构：领域垂直化 + 三 service 物理拆分（api / agent-engine / reward-dashboard）"
+description: "把当前 backend（单 Python package、单镜像、fly [processes] 切 web/chat 两进程）重构成『三平面 + 一底座』架构。水平切分（控制面 vs LLM 执行面）早已做完且干净，真正缺的是 web 内部的垂直切分（按业务领域 bounded context 重组）+ trust boundary 在 fly 上的物理生效（单 app 无法 per-process secret，chat 实际能看到 master credentials）。终态：monorepo uv workspace，backend/{libs,services}，三个独立 service —— api(受信任：控制面+领域+编排)、agent-engine(无信任：LLM 执行面)、reward-dashboard(内部只读工具，不持 master credentials、零产品代码依赖)。三个独立 fly app + per-app secret，trust boundary 从 lint 约定升级成依赖图物理强制。含完整目录、命名约定、领域清单、改名映射、分阶段路线，及 §十一 基于代码的 final review。设计讨论阶段，动后端目录结构 / 拆 service / 改 trust boundary 前必读。"
+---
+
+# 后端重构：领域垂直化 + 三 service 物理拆分
+
+> 状态：**brainstorm 草稿（设计讨论阶段，未实施）**。综合 2026-06-21 多轮讨论 + 一轮基于代码的 5-agent 验证（§十一）。
+> 前序：[Agent Core 控制平面](./2026-06-04-agentrun-control-plane)（actor kernel，本次保留不动）。
+
+## 结论（先读）
+
+1. **水平切分已做完、且做得好**。web/chat 早已是两个 app、两进程、HTTP+SSE+EdDSA JWT 网络边界、配置分离、import 墙；chat 不碰业务库，业务数据全走 `http_client` 回调 `/api/agent/*`。actor kernel + harness 三处 facade 是亮点，**本次不动**。
+2. **真正的债在 web 内部：按技术层平铺、缺领域边界**。要做**垂直切分**（按 bounded context 重组），不是再拆 web/chat。
+3. **trust boundary 在 fly 上没真生效**。根因在 `fly.dev.toml:11`：单 fly app 无法给两个 process group 发不同 secret。**拆成独立 fly app 是唯一正解。**
+4. **终态 = 三平面 + 一底座，物理走 monorepo uv workspace，三个独立 service**：`api`（受信任）/ `agent-engine`（无信任 LLM 执行）/ `reward-dashboard`（内部只读工具，不持 master credentials）。各自独立 pyproject + Dockerfile + fly app + per-app secret。
+5. **trust boundary 命门已验证（§十一）**：agent-engine 对 `web/` 的 import = 0，只依赖 `contracts` + 自带 config → `libs` 只需 `contracts`，trust boundary 靠依赖图物理强制。
+6. **reward-dashboard 彻底拎出产品架构**：内部 review 工具不是产品 `api` 的 domain，而是独立 service，只读产品 DB 做分析、零产品代码依赖、不被产品依赖、不持 master credentials。
+
+---
+
+## 一、为什么重构（诊断）
+
+agent app 后端 = **三个平面 + 一个底座**：
+
+```
+   Human (前端) ─┐
+                 ├──►  ① API Edge ───────────────────────────────────┐
+   Agent (LLM)  ─┘      ui 路由 = 人类 API ; agent 路由 = Tool Plane    │
+                                                                        ▼
+   ┌────────────────────────────────────────────────────────────────────┐
+   │ ② Domain Plane (产品 bounded contexts) — 本次主战场                  │
+   │   identity · user_model · connector · billing · generation ·         │
+   │   feedback · chat_history · browser     ← 不含 reward-dashboard       │
+   └────────────────────────────────────────────────────────────────────┘
+        ▲ 向下调                                       │ 只能依赖底座
+   ┌────┴──────────────────┐          ┌────────────────▼───────────────────┐
+   │ ③ Orchestration        │          │ ④ Platform / Infra 底座             │
+   │   scheduler+dispatcher │          │   db · auth(deps/user_service/User) │
+   │   account_lifecycle    │          │   llm · storage · notification ·    │
+   │   phase1_seed          │          │   speech · embeddings               │
+   └────────────────────────┘          └─────────────────────────────────────┘
+
+   ┌──────────── Agent Runtime ─────────────┐   ┌──── 内部工具（独立 service）────┐
+   │ Control(api) ─HTTP+SSE→ Execution       │   │ reward-dashboard                │
+   │ kernel/worker/conversation/recorder     │   │ 只读产品 DB + langsmith         │
+   │      agent-engine: harness/agents/tools │   │ 无 master credentials           │
+   └─────────────────────────────────────────┘   └─────────────────────────────────┘
+```
+
+三个 agent app 本质判断（显式化）：**agent 是领域的一等 consumer**（agent 路由=tool plane，与 ui 对称）；**control / execution 分离**；**工具层是 agent 触达世界的窄接口**。
+
+---
+
+## 二、目标架构与依赖铁律
+
+依赖方向（Clean / Hexagonal），用 **import-linter** 强制：
+
+```
+deployment(api/agent-engine/reward-dashboard asgi)
+  api:    orchestration → control → domains → platform   (domains 互不 import；唯一例外单向依赖 billing)
+  agent-engine: → libs/contracts（纯协议，无 credentials）+ 自带底座
+  reward-dashboard: → 产品 DB（只读）+ langsmith ；零 import 产品代码
+libs/contracts → 叶子
+```
+
+- **`agent-engine` 禁止依赖 api 内部**（domains/platform/control）——trust boundary 的代码层实现，依赖图物理强制。
+- **`reward-dashboard` 禁止 import 产品任何 service/domain 代码**——它和产品只有"共享 DB schema"的数据级耦合（只读），无代码耦合。
+
+---
+
+## 三、物理形态：monorepo uv workspace，三 service ✅
+
+一个 repo，三个独立 deployable（`services/{api, agent-engine, reward-dashboard}`）+ 共享 `libs/contracts`。uv `[tool.uv.workspace]`，path 依赖，改协议即时生效（dev 不发版）。三个独立 fly app + per-app secret。
+
+| service | 信任档 | 持有 | 不持 |
+|---|---|---|---|
+| `api` | 受信任 | master credentials + DB(读写) | — |
+| `agent-engine` | 无信任 | contracts + 执行环境凭证(daytona/browserbase/tavily/litellm vk)；DB=langgraph scoped DSN | master credentials、产品 DB 可见性 |
+| `reward-dashboard` | 内部只读 | 只读 DB role + langsmith + reviewer 鉴权(`internal_operator_subs`) | master credentials、写产品数据的能力 |
+
+---
+
+## 四、trust boundary 四道防线（拆 app 后全部立起来）
+
+1. **依赖图物理隔离**：`agent-engine` 的 `pyproject.toml` 只依赖 `libs/contracts`，列不到 api 的任何代码 → `import` 不到。`reward-dashboard` 同理不依赖产品代码。
+2. **镜像隔离**：各 service 的 Dockerfile 只 COPY 自己 + 所需 lib，凭据/领域代码不进别的镜像。
+3. **部署隔离**：三个 fly app，`agent-engine` 与 `reward-dashboard` app 都**不下发** master credentials（单 app 做不到的那步）。
+4. **运行时 fail-fast**：`agent-engine/asgi.py` 启动检查 `FORBIDDEN_ENVS`（重启用）。
+
+> **§十一 硬施工项**：`agent-engine` 的 `DATABASE_URL` 换 `pai_chat` scoped DSN（只见 langgraph schema）；`reward-dashboard` 用只读 DB role。否则即使代码隔离，运行时仍能看/动 `pai_*`。
+
+---
+
+## 五、命名
+
+### 5.1 顶层改名
+
+| 现名 | 是什么 | 新名 |
+|---|---|---|
+| `pinai-agents`（原目录名） | PIN AI 整个后端 | `backend/` ✅ 已改 |
+| `web` 进程 | 受信任主 API：控制面+领域+公网 edge | `services/api/`（`pinai_api`） |
+| `chat` 进程 | agent 执行引擎：无信任、跑全部 agent | `services/agent-engine/`（`agent_engine`） |
+| `/api/reward-dashboard/*`（现在在 web 进程） | 内部 review 工具后端 | `services/reward-dashboard/`（`pinai_reward_dashboard`，独立 service） |
+| `shared/` | control↔execution 协议 | `libs/contracts/`（`pinai_contracts`） |
+
+### 5.2 六条命名约定
+
+1. 统一语言优先。2. 按概念命名不按供应商（`payments` 不叫 `stripe`）。3. 包名 ≠ 模块名（`user_model/memory.py`）。4. 同组子模块同维度互斥（`apps/device/world`）。5. 边界靠 import-linter（`ingest/` 不用 `_ingest/`）。6. 领域名单数、表名复数。
+
+### 5.3 模块改名 / 归位映射（已含 §十一 修正 + reward-dashboard 独立）
+
+| 旧 | 新 |
+|---|---|
+| `web/agent_core/` | `api/control/`（`service.py`→`kernel.py`、`client.py`→`execution_client.py`）+ 纳入 `conversation.py` + `chat_turn_recorder.py` |
+| 领域 `memory`（广义） | `api/domains/user_model/`（memory CRUD=`user_model/memory.py`）+ `evolution`；**不含 patterns** |
+| `routes/{agent,ui}/<x>` | `api/domains/<x>/api/{agent.py, ui.py}` |
+| `services/provider_usage.py` | `api/domains/billing/metering.py` |
+| `payment/` | `api/domains/billing/payments/`（`stripe_adapter.py`） |
+| `composio_service` + connector ingest 簇 | `api/domains/connector/apps/`（含自己的 `ingest/`，非统一框架） |
+| `device_ingest/` + devices/raw_device | `api/domains/connector/device/`（含 `ambient.py`） |
+| `world_*` + world_signals | `api/domains/connector/world/`（全局 loop 由 api lifespan 启动） |
+| `routes/ui/conversation.py` | `api/control/`（执行入口，非历史） |
+| `sync` + `chat_turn_recorder` + chat_* repo | chat_turn_recorder→`api/control/`；其余→`api/domains/chat_history/` |
+| `pattern_matcher` + `user_fingerprint` | `api/domains/generation/`（生成时用） |
+| `auth/{deps,user_service,agent_jwt,supabase_jwt}` + `User`(拆 UserIdentity/UserContext) | `api/platform/auth/`（**底座，非 domain**） |
+| `account_deletion` / `personal_data_snapshot`(产品侧无) / `phase1_seed` / `dispatcher` | `api/orchestration/`（account_lifecycle / phase1_seed / dispatcher；personal_data_snapshot 见下→reward-dashboard） |
+| `voice/ASR(bytedance_*)` | `api/platform/speech/` |
+| `reward` repo + `trace_artifacts` + `casebook` + `pattern_extractor` + `pattern_health` + `personal_data_snapshot` + `routes/*/reward_dashboard` | **`services/reward-dashboard/`**（独立 service，只读产品 DB） |
+| `impersonation`（需 master credential 签 JWT） | 留 `api`（`identity` 或 operator 域）；reward-dashboard 前端调它 |
+
+---
+
+## 六、完整目录结构（终态）
+
+```
+backend/                              # 原 backend（uv workspace 根）
+  pyproject.toml  uv.lock             #   members = libs/* services/*
+  db/                                 #   yoyo migrations（api release_command 跑）
+
+  libs/contracts/                     #   pinai_contracts：control↔execution 协议（唯一共享 lib）
+
+  services/
+    api/                              # ── pinai_api（受信任）= 原 web 的产品部分 ──
+      src/pinai_api/
+        platform/                     #   私有底座（agent-engine / reward-dashboard 都够不到）
+          db/  auth/                  #     auth = deps + user_service + UserIdentity/UserContext；被 44 route 依赖
+          llm/  storage/  notification/  embeddings/  speech/
+        domains/                      #   产品领域；每域 api/{ui,agent}+service+repository+models
+          identity/                   #     token 生命周期:jti / sandbox_phantom / jwt_revoke + impersonation(需 master cred,留此)
+          user_model/                 #     memory.py + profile + signals + skills + settings + goals + evolution（6 核心表）
+          connector/
+            apps/                     #       Composio + apps 自己的 ingest/
+            device/                   #       device_ingest + ambient.py + raw snapshots
+            world/                    #       全局 RSS loop（api lifespan 启动）
+          billing/                    #       payments(stripe_adapter)/credits/metering.py/provisioning.py/service.py
+          generation/                 #       card pipeline + pattern_matcher + fingerprint + scheduled generators + reminder
+          feedback/                   #       纯用户反馈（confirm/dismiss/snooze/text）→ 学习回流写 user_model
+          chat_history/               #       sync + chat_messages/threads repo + /history
+          browser/                    #       provisioning(公开接口) + proxy + logins + route
+        control/                      #   kernel.py/worker/session/mailbox/runs/framebus/bus/execution_client
+                                      #     + conversation.py + chat_turn_recorder
+        orchestration/                #   scheduler(cron/dispatcher/tick) + account_lifecycle + phase1_seed
+        asgi.py  app.py
+
+    agent-engine/                     # ── agent_engine（无信任）= 原 chat ──
+      src/agent_engine/
+        trust_boundary.py  transport/ harness/ agents/ tools/ config.py
+        asgi.py  app.py               #   只依赖 libs/contracts；DATABASE_URL = pai_chat scoped DSN
+
+    reward-dashboard/                 # ── pinai_reward_dashboard（内部只读工具）──
+      src/pinai_reward_dashboard/
+        routes/                       #   /api/reward-dashboard/*（review/casebook/trace/pattern studio/data snapshot）
+        reward.py  casebook.py  trace_artifacts.py
+        pattern_extractor.py  pattern_health.py   #   curate pai_card_patterns 库（产品 matcher 只读消费）
+        personal_data_snapshot.py     #   给 reviewer 看的用户数据快照（只读聚合）
+        db.py                         #   只读 DB role 连接；零 import 产品代码
+        asgi.py  app.py
+```
+
+每域统一形态：`api/ui.py`（`current_user`）+ `api/agent.py`（`current_agent_run`）+ `service.py`（route 薄 service 厚）+ `repository.py` + `models.py`。
+
+---
+
+## 七、领域 / service 清单（含 §十一 verdict）
+
+| 模块 | verdict | 职责 + 关键边界 |
+|---|---|---|
+| `libs/contracts` | ✅ | 纯协议（pydantic model + SSE 常量），api↔agent-engine 共享 |
+| `platform`（含 auth/user_service/User） | ✅ | db/auth/llm/storage/notification/speech/embeddings；被 44 route 依赖的底座 |
+| `agent-engine` | ✅ | harness/agents/tools/transport；只依赖 contracts；**DATABASE_URL 换 scoped DSN（硬）** |
+| **`reward-dashboard`** | ✅ | **独立 service**；reward/casebook/trace/pattern curate/data snapshot；只读产品 DB，零产品代码依赖，无 master credentials |
+| `billing` | ✅ | payments/credits/metering/provisioning；metering 单向依赖成立；`guard` 预留无消费 |
+| `user_model` | ✅ | memory/profile/signals/skills/settings/goals/evolution（6 核心表）；切起来干净≠业务内聚（共享 user_id scope 多切片）；patterns 已移出 |
+| `orchestration` | ✅ | scheduler+dispatcher + account_lifecycle + phase1_seed；向下调域，方向干净 |
+| `identity` | ⚠️ | 瘦身=token 生命周期(jti/phantom/jwt_revoke) + impersonation(需 master cred 留此)；auth/user_service 已下沉 platform |
+| `connector` | ⚠️ | apps/device/world 可切；**ingest 非统一框架**（三套独立）；world loop 归 lifespan；`personal_signals` 经 user_model 接口写 |
+| `generation` | ⚠️ | card pipeline + pattern_matcher + fingerprint；执行编排 dispatcher 在 orchestration；复用 chat_history 表（显式契约）；`pai_card_patterns` 只读消费（reward-dashboard curate） |
+| `feedback` | ⚠️ | 纯用户反馈；→ user_model(preferences/fingerprint) 学习回流边 |
+| `chat_history` | ⚠️ | sync + repos + /history；conversation.py + chat_turn_recorder 已移 control |
+| `browser` | ⚠️ | proxy/provisioning(公开接口)/logins/route；users.browserbase_context_id 列跨域共享 |
+| `control` | ⚠️ | actor kernel + conversation.py + chat_turn_recorder；**裸 SELECT users 改 platform/auth 公开接口（硬）** |
+
+---
+
+## 八、关键决策记录
+
+★1 control 留 api（要 DB+credentials），经 `execution_client` 调 agent-engine。★2 routes 双轴（域内 ui.py+agent.py）。★3 billing 暴露 metering/guard 单向依赖。★4 user_model 广义。★5 拆 service（三个）。★6 删冗余。命名见 §五。**reward-dashboard 独立成 service**（不进产品 domain）。**User 拆 UserIdentity/UserContext**。**patterns 簇=card/reward 链路**（matcher+fingerprint→generation、extractor/health→reward-dashboard）。**impersonation 留 api**（需 master cred）。**evolution→user_model**（memory 进化记账）。
+
+---
+
+## 九、分阶段路线（每阶段独立可 merge，import-linter 全程把关）
+
+`Phase 1` 是枢纽（同时是「拆 service（安全）」和「领域垂直化（可维护）」的前置）：
+
+```
+Phase 0 ─► Phase 1 ─┬─► Phase 5  (安全关键路径：trust boundary 物理生效)
+                    └─► Phase 2 ─► Phase 3 ─► Phase 4  (可维护性路径)
+```
+
+| Phase | 做什么 |
+|---|---|
+| **0 立护栏 + workspace 骨架** | import-linter contract + uv workspace 空壳（不搬代码） |
+| **1 剥共享库 + 底座（枢纽）** | `shared`→`libs/contracts`；api 私有底座归 `api/platform/`（含 auth/user_service、speech）；agent-engine 底座本就自带 |
+| **2 领域垂直归位 + reward-dashboard 拆出** | browser→world→ambient→**reward-dashboard(抽独立 service)**→connector→generation→billing→user_model；含 §十一 归位修正 |
+| **3 解耦计费** | provider_usage→`billing/metering`，跨域改依赖 billing 接口 |
+| **4 control 归位** | agent_core→`control`；**裸 SELECT 改 platform/auth 公开接口（硬）**；conversation.py + chat_turn_recorder 搬入 |
+| **5 物理拆 3 个 fly app** | 各独立 pyproject + Dockerfile + fly app + per-app secret；agent-engine **DATABASE_URL 换 pai_chat scoped DSN（硬）**；reward-dashboard 用只读 role；check_trust_boundary.sh 适配 |
+
+依据：repository 层几乎纯净、`payment/` 已是模板、跨域硬边只有计费——散落不是纠缠。
+
+---
+
+## 十、决策状态（全部已定）
+
+1. 形态：✅ monorepo workspace，**三 service**（api / agent-engine / reward-dashboard）。
+2. 共享库：✅ 只 `libs/contracts`（§十一 实证 agent-engine 对 web import=0）。
+3. `agent-engine` 命名：✅（否决 chat engine——它跑非 chat 的 generator/dream/evolve/crystallize）。
+4. reward-dashboard：✅ 独立 service，只读产品 DB，零产品代码依赖，无 master credentials。
+5. User：✅ 拆 `UserIdentity`（platform/auth）+ `UserContext`（按需，billing/browser 填）。
+6. patterns：✅ card/reward 链路（matcher+fingerprint→generation、extractor/health→reward-dashboard）。
+7. impersonation：✅ 留 api（需 master cred）。8. evolution：✅ user_model。
+
+---
+
+## 十一、基于代码的 final review（2026-06-21，5-agent 验证）
+
+5 个 agent 逐模块对照真实代码。**总判断：领域骨架成立，无 ❌（无不可行项），trust boundary 命门通过；一批 ⚠️ 是边界细节按代码事实校准。**
+
+### 11.1 两条必须做的硬动作
+
+1. **control 裸 `SELECT … FROM users`（worker.py:749）→ platform/auth 公开接口**（如 `get_run_credentials(user_id)`）。control 唯一一处 reach 进 users 实现。
+2. **agent-engine `DATABASE_URL` → `pai_chat` scoped DSN**。现用 superuser DSN 能看 `pai_*`；024_pai_chat_role.sql role split 从没 wire。不补则 trust boundary 只到"代码隔离"未到"运行时隔离"。
+
+### 11.2 域归属修正（含本轮 reward-dashboard 调整）
+
+- **reward-dashboard 提升为独立 service**（非产品 domain）：reward/casebook/trace/pattern_extractor/pattern_health/personal_data_snapshot 全归它，只读产品 DB、零产品代码依赖、无 master credentials。产品 `api` 从此与内部工具物理无关。
+- **patterns 整块是 card/reward 链路**（verify-usermodel 纠正，推翻初版 fingerprint→user_model）：读 casebook/evaluations/reward_events、无 user-facing 入口。归位：`matcher`+`fingerprint`→generation（生成用）、`extractor`/`health`→reward-dashboard（curate）。`pai_card_patterns` 是共享表（产品只读、reward-dashboard curate）。**user_model 核心 = 6 表**。
+- **conversation.py + chat_turn_recorder 归 control**（执行入口/SSE 累加器，非历史）。chat_history 缩为 sync+repos+/history。
+- **feedback 拆出 reward-dashboard 后彻底干净**（纯用户反馈）；evolution 移出 feedback→user_model（memory 进化记账）；补漏列的 `ui/dreaming.py`。
+- **auth 整体（deps/user_service/User）下沉 platform/auth**（`deps` 被 44 route 依赖）；identity 瘦身为 token 生命周期 + impersonation（impersonation 需 master cred 留 api）。
+- **dispatcher / phase1_seed / account_lifecycle 归 orchestration**；generation 是被 dispatcher 逆向驱动的 service 集合。
+
+### 11.3 跨域接口要显式（边界契约）
+
+- **provisioning（browserbase + litellm）= 被 control/identity 反向依赖的公共层**，定为域公开接口（worker 里的 browserbase 兜底是 smell，记一笔）。
+- **personal_signals**：connector 写、user_model 拥有 → user_model 暴露 ingest 接口，connector 单向调。
+- **scheduled_tasks**：多域 enqueue + orchestration dispatch → 任务队列做成 platform 设施/orchestration enqueue 接口。
+- **cron.next_fire**：generation→scheduler 这条边，靠把 next_fire 当 orchestration 公开纯函数化解。
+- **User 拆分**：`UserIdentity`（platform/auth）+ `UserContext`（按需，billing/browser 字段填），胖对象不再横跨域。
+- **generation 复用 chat_history 表**（card_fanout 读 chat_messages 判幂等 + 写 chat_threads 元数据）→ card thread=chat thread，显式契约。
+
+### 11.4 表级耦合（import-lint 抓不到，人工记录）
+
+- `reward-dashboard` 只读产品多表（pai_card_*/pai_feedback_events/pai_pipeline_runs/pai_personal_signals/pai_card_patterns）——数据级耦合（共享 schema），代码隔离。
+- `pai_card_patterns`：产品 generation 只读、reward-dashboard curate 读写。
+- `runs_and_cards.py`(generation) 读时 JOIN `pai_feedback_events`(feedback) + `pai_agent_runs`(control)。
+- `users` 表多列被多域读（billing 的 virtual_key、browser 的 context_id）。
+- card thread 与普通 chat thread 同 `pai_chat_messages`/`pai_chat_threads` 命名空间。
+
+### 11.5 死代码 / 提醒
+
+- `billing/guard.has_active_subscription` 零消费（预留 paywall 接口）。
+- `chat_turn_recorder.feed()` 无调用方（疑似死代码）。
+- agent-engine 的第三方凭证（daytona/browserbase/tavily/langsmith/litellm）是执行环境凭证，不属 master credentials。
+
+### 11.6 待拍板
+
+全部已定（见 §十）。剩一个长期可选：`User` 拆分后，是否进一步把"后台 agent run 记账"（evolution + pipeline_runs + agent_runs）统一成一个 `background-tasks` 读模型——非必需，现按各域记账。
+
+---
+
+## 十二、实施进度（2026-06-21/22，分支 `refactor/backend-rearchitecture`）
+
+### 代码结构层：✅ 完成（每 phase 全绿，分支 `refactor/backend-rearchitecture`）
+
+逐 phase 落地，每步对照 baseline 验证（`mypy` + `pytest 882 passed/296 skipped` + `pytest --co 0 error` + `lint-imports` + `import` 真实图，**不靠 mypy 判 import**——它 `ignore_missing_imports` 会漏）：
+
+- **Phase 0** import-linter 护栏（现状 web/chat/shared 互禁 baseline）。
+- **Phase 1** platform 底座剥离：`web/{db,auth,llm,storage,embeddings,middleware,notification}` → `web/platform/`。
+- **Phase 2** 领域垂直归位：`domains/{browser,world,feedback,identity,chat_history,billing,user_model,generation,connector/{apps,device,world}}` + `reward_dashboard/` 抽独立子包。每域 routes(ui+agent)+service+repository 收拢。
+- **Phase 3** voice 域（ASR）；metering（provider_usage→billing/metering，调用方改路径引用）。
+- **Phase 4** control 归位（`agent_core→control`，service→kernel/client→execution_client，纳入 conversation/agent_runs/chat_turn_recorder/chat_proxy）+ **硬动作**（worker 裸 `SELECT users` → `platform/auth.get_run_credentials`）+ orchestration（`scheduler→orchestration` + account_deletion→account_lifecycle + phase1_seed）+ onboarding→identity + crystallize stub→chat_history。
+- **Phase 5** uv workspace + 5 独立包：`libs/contracts`(pinai_contracts) + `libs/db`(pinai_db，共享 db 基础 pool/rls/audit/base) / `services/api`(pinai_api) / `services/agent-engine`(agent_engine) / `services/reward-dashboard`(pinai_reward_dashboard，内部只读工具)。**trust boundary 代码层物理隔离成立**：engine 与 reward-dashboard 包对 `pinai_api`/`pinai_agents` 真 import = 0（pyproject 依赖图 + import-linter 6 条 forbidden 契约 + `check_trust_boundary.sh` grep + 实测）。patterns/user_fingerprint（跨 service 共享纯 SQL repo，generation 与 reward-dashboard 共用）下沉 `pinai_db.repositories` 零重复。docker-compose/Makefile/Dockerfile/fly entrypoint/local_dev 已适配新包名 + `uv sync --all-packages`。
+
+### 实施中的自我调整（doc 允许的细微出入）
+
+- **voice → 独立 domain**（非 §十.voice→platform/speech）：ASR 按用量计费依赖 billing，放 platform 底座会 platform→domain 反向；做 domain 则 domain→billing 横切（合规）。
+- **User 拆分 → 务实方案**（采 §十一.4 的"承认 users 共享列"而非强拆 dataclass）：真拆 invasive（15+ 处 route 用 `user.litellm_virtual_key/browserbase_context_id` + `current_user` 返回类型），而 control 的 `get_run_credentials` 已解决 trust 关键路径；按 CLAUDE.md 改动最小化，承认 users 是跨域共享实体表、凭证列=资源引用。
+- **reward-dashboard 已独立成 service**（pinai_reward_dashboard）：解耦了对 pinai_api 的全部 import——自带 verify-only Supabase 鉴权（不签发、不碰 PAI_JWT）+ 自带 `RewardDashboardSettings`（无任何 master 字段）+ raw_sources 最小副本，只依赖 `libs/db`+`libs/contracts`，trust grep 双向 0。`impersonation`（签 chat-token，需 master cred）按 §十.7 留 api，dashboard 经 HTTP 调它 = 自身不持 master credentials。剩独立 fly app + 只读 DB role 归部署层。
+- **若干 repo 留 platform**：jti_revocations/sandbox_phantom_tokens（auth/deps 底座用）、devices（notification 底座用）；移走会 platform→domain 反向。`default_goals` 留 api/orchestration（auth bootstrap 调，bootstrap 解耦留后续）。
+
+### 部署落地：配置 ready-inactive 已进 PR；激活需部署环境（运维按 runbook）
+
+代码层 trust 已物理隔离。把它落到**部署形态**（per-app secret 物理生效）的配置已写进 PR，但**默认不激活**：不切 CI 默认路径、fail-fast 默认 OFF。现有单 app `fly.{dev,test,prod}.toml` + CI `deploy-agents` 仍是真路径、不受影响。激活步骤见 [`backend/deploy/fly-split/README.md`](../../backend/deploy/fly-split/README.md) runbook（需 fly 环境，本地无法验证）：
+
+1. **fly app 拆分**：✅ 配置 ready（`deploy/fly-split/fly.{api,engine,reward}.dev.toml` + README runbook），未被任何 CI 引用（grep 验证）。把单 fly app（`[processes]` web+chat）拆成 3 独立 app（api 持全量 secret / engine flycast-only 不持 master / reward 内部工具）。激活=运维新建 fly app + per-app sync + 改 CI `deploy-agents` 多 app + 切流量。
+2. **per-app secret**：✅ `sync_fly_secrets.py --exclude-master`（丢 FORBIDDEN_ENVS）+ `--database-url-from`（换 scoped DSN），默认无 flag = 现有行为不破坏。FORBIDDEN_ENVS 内嵌副本（CI 系统 python3 无 venv）+ 单测守护与 SSOT 一致。
+3. **engine boot fail-fast**：✅ `agent-engine/asgi.py` flag-gated（`ENGINE_TRUST_FAILFAST` 默认 OFF，单 app 不炸；拆 app 后 engine app 设 =1 激活）。`trust_boundary` 抽 `failfast_enabled`/`leaked_master_creds` 纯函数 + 17 测。
+4. **DB scoped role**：engine 用 `pai_chat`（024 已存在，经 `--database-url-from ENGINE_DATABASE_URL` wire，运维提供 DSN）；reward 的 scoped role **非纯只读**（读产品表 / 写自己表 / curate patterns / upsert users），精确权限 + migration 待运维拆 app 时设计（含 `users` INSERT 的 trust review，故不预写不可改 migration——见 fly-split README DB roles）。
+5. **reward-dashboard 独立 service**：✅ 代码层已完成（解耦 pinai_api import、自带 verify-only 鉴权/config、只依赖 `libs/db`+`libs/contracts`、trust grep 双向 0、import-linter 6 条契约）。剩部署：独立 fly app（`fly.reward.dev.toml` ready）+ scoped role。
+6. **`pinai-agents/` → `backend/` 目录改名**：✅ 已完成（`git mv` 571 文件 + 全仓 465+ 路径引用、docker image tag `backend:latest`、docker-compose build context、Makefile target、CI working-directory/paths 全改）。验证：ruff/mypy/pytest + lint-imports、compose + 全部 CI workflow yaml 解析、残留 `pinai-agents*` 仅保护项（见下）。
+   - **CI gate 标识符不改名（merge 无 blocker）**：`ci.yml` 的 `pinai-agents-checks` job 名**保留**（不随目录改成 backend-checks）——它是 main 分支 ruleset 的 required status check，改它要同步改 GitHub ruleset 且会卡住其他 ci.yml 仍 emit 旧名的开放 PR。当作外部 gate 标识符（同 fly app 名 `proactive-ai-agents-*`）保留 → 本 PR 与其他 PR 都无 blocker、零 ruleset 改动。
+   - **保留的 `pinai-agents-*` 标识符**（与目录改名解耦，改动有运行时风险故不动）：JWT iss/aud `pinai-agents-web` / `pinai-agents-internal`（api 签 / engine 验，改了 chat 链路 401）、LangSmith project `pinai-agents-{chat,dev,test,prod}`（改了 trace 上报到不存在的 project）、Daytona label `pinai-agents-thread-id`、User-Agent `pinai-agents-world-ingest`、FastAPI app service 名、plan slug `2026-05-04-pinai-agents-backend-consolidation`。这些是协议常量 / 历史 slug，非目录路径。
+
+### 端到端验证 + 全模块 review（2026-06-22）
+
+docker 全栈真起（`make up`），8 service 全 healthy，container 对齐 `api-1` / `agent-engine-1` / `reward-dashboard-1`：
+- 三 service `/health` + DB 连通；service 间 DNS（api↔agent-engine、前端 nginx→api、reward→DB）全通；reward 路由 401（在 reward service + auth 工作）、impersonate 新前缀 `/api/operator` 401、旧前缀 404。
+- 激活本地 skip 的 DB 测试（`seed_patterns` + `docker pause` live scheduler 避免与 api 容器 poll `pai_scheduled_tasks` 竞争）：**1197 passed / 0 failed**。
+- 5-agent 全模块 review：**trust 边界一致确认干净**（engine/reward 零 import `pinai_api`、零 master credential 读取）。
+
+本轮修复（重构引入、端到端 DB 测试暴露）：
+- **`memory.py` embeddings import 漏 platform 层**（high，运行时 ModuleNotFoundError；lazy import 逃过 mypy / `--co`）。
+- 3 个 scripts stale import（`pinai_api.services.*` 已删 → `domains.{generation,connector.apps}`）。
+- DB 测试遗留（profile import 旧路径、reward review 路由测试改用 `pinai_reward_dashboard.app`）。
+- 死代码：`routes/` 空壳、`pinai_agents_service_token`、factory `create_deep_agent` 死 re-export（注：review 报的 `feed()`/`is_empty()` 经核实有测试依赖，非死代码，保留）。
+- import-linter **platform 底座契约**（platform 不反向依赖 domains/control/orchestration，7 kept）。
+
+### 已知债 follow-up（review 发现，多数非本 PR 引入，记录待解耦）
+
+- **域边界 import-linter 层间契约**：当前只守进程级 trust（6）+ platform 底座（1）；`domains↔domains` / `domains→control/orchestration` 的层间契约因现有反向边较多未加，域边界铁律此向暂无 CI 护栏（review 称"最该先做"）。
+- **域反向依赖**（多数 origin/main 即有，搬位置后更显）：`generation↔user_model` 顶层循环（`retime_user_cron_tasks` 双向）、`card_fanout→control.kernel`（真调 `post_message`）、`connector→identity` 私有符号、`feedback→user_model` / `connector→user_model` 直戳 Repository、`platform.notification→profile`。解耦走注入/端口/下沉，invasive，独立后续。
+- **billing pre-existing 死代码 / 重复 helper**（`_coerce_dt`/`_stripe_attr`/calendar-months 三处重复、若干零调用函数）：origin/main 即存在，非本次重构，不在本 PR 清。
+- **陈旧注释**：多处 docstring 引用旧路径（`chat/asgi.py`、`web/db/rls.py`、退役 `proactive_loop` 等）+ FastAPI app service 名仍 `pinai-agents-{web,chat}`（与 JWT iss 同串，改有运行时风险）。
+- **metering 接口解耦**：调用方仍直接 import `billing.metering` 函数而非走 `billing.service`。
+- **connector_ingest 测试 flaky**（仅本地）：DB 测试与 live scheduler 容器并发 poll `pai_scheduled_tasks` 竞争；CI 用独立 postgres 无此问题，属测试基础设施，非产品 bug。

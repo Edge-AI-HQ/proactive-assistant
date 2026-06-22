@@ -18,7 +18,7 @@ import { formatRelativeTime } from "../lib/format";
 
 /**
  * Hardware Devices section in Control Center.
- * - Lists active devices from /api/devices on pinai-agents.
+ * - Lists active devices from /api/devices on backend.
  * - Native phones and hardware devices register from their own apps.
  * - Manual/developer registration controls stay out of the main UI.
  * - Tapping a device drills into its time-axis waterfall view.

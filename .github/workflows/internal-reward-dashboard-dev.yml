@@ -74,8 +74,8 @@ jobs:
 
       - name: Extract dev VITE_* build args from encrypted env
         run: |
-          VITE_SUPABASE_URL=$(npx @dotenvx/dotenvx get VITE_SUPABASE_URL -f pinai-agents/.env.dev)
-          VITE_SUPABASE_PUBLISHABLE_KEY=$(npx @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f pinai-agents/.env.dev)
+          VITE_SUPABASE_URL=$(npx @dotenvx/dotenvx get VITE_SUPABASE_URL -f backend/.env.dev)
+          VITE_SUPABASE_PUBLISHABLE_KEY=$(npx @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f backend/.env.dev)
           echo "VITE_SUPABASE_URL=$VITE_SUPABASE_URL" >> "$GITHUB_ENV"
           echo "VITE_SUPABASE_PUBLISHABLE_KEY=$VITE_SUPABASE_PUBLISHABLE_KEY" >> "$GITHUB_ENV"
         env:

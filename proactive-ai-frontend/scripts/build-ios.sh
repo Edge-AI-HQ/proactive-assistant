@@ -40,13 +40,13 @@ print_log_diagnostics() {
 ENV="${1:-dev}"
 case "$ENV" in
   dev)
-    ENV_FILE="$REPO_ROOT/pinai-agents/.env.dev"
+    ENV_FILE="$REPO_ROOT/backend/.env.dev"
     BUNDLE_ID="ai.pin.proactive.development"
     APP_DISPLAY_NAME="PIN AI Dev"
     PROFILE_NAME="PIN AI Dev AppStore Distribution"
     ;;
   prod)
-    ENV_FILE="$REPO_ROOT/pinai-agents/.env.production"
+    ENV_FILE="$REPO_ROOT/backend/.env.production"
     BUNDLE_ID="ai.pin.proactive"
     APP_DISPLAY_NAME="PIN AI"
     PROFILE_NAME="PIN AI AppStore Distribution"

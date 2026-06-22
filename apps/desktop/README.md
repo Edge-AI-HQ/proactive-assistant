@@ -15,7 +15,7 @@ make macos PROD=1   # 连 fly prod（连 Supabase 也切 prod 的）
 - `/api` 走 dev server 同源 proxy（`changeOrigin`，本地/fly 都通）——与
   web dev 完全一致，零 CORS。
 - web UI 改动即热更（renderer 就是 apps/web 的源码）。
-- 不走 make 的裸启动：`set -a && . pinai-agents/.env && set +a &&
+- 不走 make 的裸启动：`set -a && . backend/.env && set +a &&
   VITE_PIN_API_PROXY_TARGET=<url> npm run dev --workspace=@pin-ai/desktop`。
 
 ## OAuth（PKCE + 内嵌登录窗 + localhost loopback）

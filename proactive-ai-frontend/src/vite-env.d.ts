@@ -5,7 +5,7 @@ interface ImportMetaEnv {
   readonly VITE_SUPABASE_URL: string;
   readonly VITE_SUPABASE_PUBLISHABLE_KEY: string;
 
-  // pinai-agents backend.
+  // backend backend.
   // Native (Capacitor) bundle: absolute cloud URL, required.
   // Web bundle: ignored — same-origin fetches are reverse-proxied
   // through nginx in production / Vite dev server in development.
