@@ -49,6 +49,66 @@ def assert_browser_action_allowed(
     )
 
 
+# ── destructive-action gate (P0-3) ──
+#
+# AI holding control + clicking "Pay" / "Place Order" / "Confirm Transfer"
+# goes through the same click_ref path as clicking a plain link — zero
+# gating on *what* the action does. This catches the high-signal cases
+# where the action is plausibly irreversible (payment / money movement /
+# deletion / order submission) and forces a takeover so a human confirms.
+#
+# Design notes:
+#   * Conservative on purpose — a false positive only costs one UX hop
+#     (the user takes over, sees it's harmless, sends a message to hand
+#     control back to the AI; takeover is fully reversible). A false
+#     NEGATIVE lets the agent silently spend money / delete data, so we
+#     bias toward over-triggering on strong words only, not weak ones
+#     ("send" alone is too noisy — "send money" / "send payment" aren't).
+#   * Substring match on the element's accessible name (lowercased). No
+#     regex / NLP / semantic model — keep it a flat keyword set so the
+#     behavior is auditable and predictable. This is a safety backstop
+#     behind the prompt's voluntary `request_takeover`, not a classifier.
+#   * Always takeover even if the user enabled bypass-permissions: these
+#     actions are irreversible, so human-in-the-loop is the whole point.
+_DESTRUCTIVE_LABEL_KEYWORDS = frozenset(
+    {
+        # English — payment / purchase / money movement
+        "pay",
+        "buy",
+        "order",
+        "place order",
+        "checkout",
+        "purchase",
+        "subscribe",
+        "confirm",
+        "submit payment",
+        "transfer",
+        "send money",
+        "send payment",
+        # English — destructive
+        "delete",
+        "remove",
+        # 中文 — 付款 / 购买 / 转账 / 订阅 / 删除
+        "付款",
+        "支付",
+        "下单",
+        "确认支付",
+        "立即购买",
+        "订阅",
+        "转账",
+        "提交订单",
+        "删除",
+    }
+)
+
+
+def is_destructive_label(name: str) -> bool:
+    """True if an element's accessible name reads like an irreversible /
+    payment-class action (case-insensitive substring match)."""
+    lowered = name.casefold()
+    return any(kw in lowered for kw in _DESTRUCTIVE_LABEL_KEYWORDS)
+
+
 def normalize_mode(value: str | BrowserControlMode) -> BrowserControlMode:
     if isinstance(value, BrowserControlMode):
         return value

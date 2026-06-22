@@ -111,6 +111,13 @@ async def browser_tool(
          to drive and return control before continuing.
       4. Call `close` when done.
 
+    Safety: a `click` whose target looks like an irreversible / payment
+    action (Pay / Place Order / Confirm / Transfer / Delete / 付款 / 下单
+    / 删除 …) is NOT executed — the browser is handed to the user for
+    confirmation and the result comes back with `requiresTakeover: true`.
+    Treat that exactly like your own `request_takeover`: stop and wait for
+    the user (pair it with `propose_action`), don't retry the click.
+
     Element refs only work via this tool's actions — do NOT pass
     `aria-ref=eN` directly to `execute()` or any other tool.
     """

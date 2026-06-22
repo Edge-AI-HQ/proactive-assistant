@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 from collections import OrderedDict, deque
 from contextlib import suppress
@@ -60,6 +61,7 @@ from playwright.async_api import (
 from .control_state import (
     BrowserControlMode,
     assert_browser_action_allowed,
+    is_destructive_label,
 )
 from .events import browser_events
 
@@ -146,6 +148,24 @@ def _clamp_viewport(w: int, h: int) -> tuple[int, int]:
         max(_VIEWPORT_W_MIN, min(_VIEWPORT_W_MAX, int(w))),
         max(_VIEWPORT_H_MIN, min(_VIEWPORT_H_MAX, int(h))),
     )
+
+
+# Playwright ai-mode aria snapshot renders an element as
+#   - button "Pay $99" [ref=e1]
+# i.e. role, then the accessible name in double quotes. We pull the first
+# quoted run as the accessible name for the destructive-action gate; this
+# captures aria-label-only (icon) buttons that inner_text() would miss.
+_ARIA_NAME_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
+
+
+def _accessible_name_from_snapshot(element_snapshot: str) -> str:
+    """Extract the accessible name from a single-element ai-mode aria
+    snapshot (depth=0). Returns "" if the element has no name."""
+    match = _ARIA_NAME_RE.search(element_snapshot)
+    if not match:
+        return ""
+    # Unescape the snapshot's \" / \\ so the name matches the on-screen text.
+    return match.group(1).replace('\\"', '"').replace("\\\\", "\\")
 
 
 def _normalize_profile(
@@ -563,8 +583,62 @@ class BrowserManager:
 
     async def click_ref(self, session_key: str, ref: str) -> dict[str, Any]:
         internal = await self._gate(session_key, "click")
-        await internal.page.locator(f"aria-ref={ref}").click(timeout=10_000)
+        loc = internal.page.locator(f"aria-ref={ref}")
+        takeover = await self._takeover_if_destructive_click(session_key, internal, loc)
+        if takeover is not None:
+            return takeover
+        await loc.click(timeout=10_000)
         return await self._post_action_snapshot(session_key, "click")
+
+    async def _takeover_if_destructive_click(
+        self,
+        session_key: str,
+        internal: _Internal,
+        loc: Any,
+    ) -> dict[str, Any] | None:
+        """P0-3 safety gate: when the AI is driving and the click target's
+        accessible name reads like an irreversible / payment-class action
+        ("Pay", "Place Order", "确认支付", "Delete"), DON'T click — hand
+        control to the user for confirmation instead, reusing the same
+        takeover path as the agent's voluntary `request_takeover`.
+
+        Returns a `requires_takeover` result dict when it intervenes, or
+        None to let the caller click normally. We deliberately only gate
+        AI-driven clicks; user-driven input has its own takeover semantics.
+
+        Conservative + fail-safe: takeover is reversible (the user can hand
+        control back), so a false positive is one UX hop, while a false
+        negative is the agent silently spending money / deleting data."""
+        if internal.session.control_mode != BrowserControlMode.AI:
+            return None
+        try:
+            element_snapshot = await loc.aria_snapshot(mode="ai", depth=0, timeout=10_000)
+        except PlaywrightError:
+            # Can't read the element (detached / timeout): fall through and
+            # let the normal click attempt surface the real error.
+            return None
+        name = _accessible_name_from_snapshot(element_snapshot)
+        if not name or not is_destructive_label(name):
+            return None
+        reason = (
+            f"Detected a possibly irreversible / payment-type action "
+            f"(“{name}”). Handed the browser to you — confirm and complete "
+            f"it yourself, then send a message to let me continue."
+        )
+        logger.info(
+            "browser: destructive click gated sk=%s name=%r — forcing takeover",
+            session_key,
+            name,
+        )
+        await self.set_control_mode(session_key, BrowserControlMode.USER, reason=reason)
+        return {
+            "ok": True,
+            "action": "click",
+            "requiresTakeover": True,
+            "controlMode": BrowserControlMode.USER.value,
+            "reason": reason,
+            "label": name,
+        }
 
     async def type_ref(
         self,
@@ -585,6 +659,14 @@ class BrowserManager:
 
     async def press_key(self, session_key: str, key: str) -> dict[str, Any]:
         internal = await self._gate(session_key, "press_key")
+        # TODO(P0-3): Enter can submit a focused form (a payment / order form
+        # too). Unlike click, the destructive intent isn't on the focused
+        # element's accessible name — it's on the form's submit target, which
+        # needs walking document.activeElement.form to find reliably. The
+        # primary destructive vector (clicking Pay / 下单) is gated in
+        # click_ref; gating Enter-submit is left out of this MVP rather than
+        # shipped as a fragile heuristic. The agent is still prompted to
+        # request_takeover at payment-confirm steps.
         await internal.page.keyboard.press(key)
         return await self._post_action_snapshot(session_key, "press_key")
 

@@ -19,9 +19,12 @@ Both groups authenticate via the agent-run JWT (chat) or phantom token
 (sandbox); the JWT carries `user_id` so the underlying service knows
 whose Composio account to target.
 
-Side-effect gate: deferred. The plan currently relies on session
-`tools=` allowlist as the physical guard; per-call HITL approval is
-TBD pending DeepAgents permission middleware integration.
+Side-effect gate (sandbox path): the SDK code-mode `/execute` and
+`/multi_execute` routes below block side-effecting Composio slugs
+(`is_side_effecting`, fail-closed by VERB). Sandbox scripts have no
+interactive HITL, so a side-effecting tool must go through the native
+COMPOSIO_MULTI_EXECUTE_TOOL meta-tool (human-gated in the engine).
+Read-only slugs run freely.
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException
+from pinai_contracts.composio_policy import is_side_effecting
 from pydantic import BaseModel, Field
 
 from ....domains.billing.metering import (
@@ -230,6 +234,24 @@ async def execute(
     user: User = Depends(_agent_user),
     pool=Depends(get_pool),
 ) -> dict[str, Any]:
+    if is_side_effecting(body.slug):
+        logger.warning(
+            "sandbox composio execute blocked: side-effecting slug %s (user %s)",
+            body.slug,
+            user.id,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "side_effect_blocked_in_sandbox",
+                "slug": body.slug,
+                "hint": (
+                    "This tool has side effects and cannot run from sandbox "
+                    "code-mode. Use the COMPOSIO_MULTI_EXECUTE_TOOL meta-tool "
+                    "(human-gated) instead."
+                ),
+            },
+        )
     try:
         result = await cs.execute(
             user,
@@ -261,6 +283,25 @@ async def multi_execute(
     user: User = Depends(_agent_user),
     pool=Depends(get_pool),
 ) -> dict[str, Any]:
+    blocked = sorted({c.slug for c in body.calls if is_side_effecting(c.slug)})
+    if blocked:
+        logger.warning(
+            "sandbox composio multi_execute blocked: side-effecting slugs %s (user %s)",
+            blocked,
+            user.id,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "side_effect_blocked_in_sandbox",
+                "slugs": blocked,
+                "hint": (
+                    "These tools have side effects and cannot run from sandbox "
+                    "code-mode. Use the COMPOSIO_MULTI_EXECUTE_TOOL meta-tool "
+                    "(human-gated) instead."
+                ),
+            },
+        )
     try:
         results = await cs.multi_execute(
             user,

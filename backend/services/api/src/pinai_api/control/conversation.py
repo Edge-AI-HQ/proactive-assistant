@@ -38,6 +38,7 @@ from fastapi.responses import StreamingResponse
 from pinai_db.rls import user_scoped_tx
 from psycopg.types.json import Jsonb
 
+from ..domains.user_model.profile import ProfileRepository
 from ..platform.auth.deps import User, current_user, get_pool
 from ..platform.db.repositories.chat_messages import ChatMessagesRepository, row_to_history_message
 from ..platform.db.repositories.chat_threads import ChatThreadsRepository, ThreadKind
@@ -233,12 +234,6 @@ async def send(
     client_hints = body.get("clientHints")
     if client_hints is not None and not isinstance(client_hints, dict):
         raise HTTPException(status_code=400, detail="clientHints must be an object")
-    # Per-run "bypass permissions" opt-in (composer toggle). Rides in the
-    # mailbox row's meta → worker → chat's agent factory (which skips the HITL
-    # approval middleware). Boolean pass-through; absent/false keeps the gate.
-    bypass_permissions = body.get("bypassPermissions")
-    if bypass_permissions is not None and not isinstance(bypass_permissions, bool):
-        raise HTTPException(status_code=400, detail="bypassPermissions must be a boolean")
     # Client message id (FE crypto.randomUUID). Doubles as the mailbox
     # idempotency_key — a retried POST (timeout, the first one actually
     # landed) can't enqueue twice — and flows through to the history row +
@@ -254,6 +249,14 @@ async def send(
 
     async with user_scoped_tx(pool, user.id) as conn:
         kind, _card_id = await _resolve_owned(session_key, user.id, conn)
+        settings = await ProfileRepository(user.id, conn).get_settings()
+
+    # "Bypass permissions" (skip this turn's HITL approval) is a persisted,
+    # cross-device user setting (pai_user_settings.permission_mode), derived
+    # server-side here — NOT trusted from the request body, so a client can't
+    # disable side-effect approval just by sending a bool. Rides the mailbox
+    # row's meta → worker → chat's agent factory.
+    bypass_permissions = settings.permission_mode == "bypass"
 
     meta: dict[str, Any] = {}
     if card_context:

@@ -97,11 +97,6 @@ export async function conversationSend(
     /** Cancel the current in-flight run and make this message the next user
      *  input. Used by queued-message "send now". */
     interrupt?: boolean;
-    /** "Bypass permissions": when true the run is tagged so chat builds the
-     *  agent without the HITL approval middleware (side-effect tools run
-     *  without the per-call approval pause). Sourced from the user's setting
-     *  by the composer; absent/false keeps the gate. */
-    bypassPermissions?: boolean;
     signal?: AbortSignal;
   },
 ): Promise<void> {
@@ -109,7 +104,6 @@ export async function conversationSend(
   if (opts?.cardContext) body.cardContext = opts.cardContext;
   if (opts?.clientMsgId) body.clientMsgId = opts.clientMsgId;
   if (opts?.interrupt) body.interrupt = true;
-  if (opts?.bypassPermissions) body.bypassPermissions = true;
   // Display device hints for the remote browser (viewport + mobile/desktop
   // UA). Platform-injected; null when unconfigured / no probe — never throws.
   const clientHints = resolveClientHints();
