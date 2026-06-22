@@ -6,10 +6,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from pinai_api.domains.billing.payments.subscriptions import (
-    SubscriptionRow,
-    _coerce_dt,
-)
+from pinai_api.domains.billing.payments.stripe_client import coerce_dt as _coerce_dt
+from pinai_api.domains.billing.payments.subscriptions import SubscriptionRow
 
 
 def _row(status: str) -> SubscriptionRow:

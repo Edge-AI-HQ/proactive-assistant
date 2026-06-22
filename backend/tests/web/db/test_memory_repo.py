@@ -105,39 +105,3 @@ async def test_archive_and_supersede_state_machine(pool, user_ids):
         repo = MemoryRepository(user_a, conn)
         active, _ = await repo.list_active(min_quality=0.0)
         assert {m.id for m in active} == {"m_new"}
-
-
-@pytest.mark.asyncio
-async def test_bump_reference_appends_run_id_uniquely(pool, user_ids):
-    user_a, _ = user_ids
-    async with user_scoped_tx(pool, user_a) as conn:
-        repo = MemoryRepository(user_a, conn)
-        await repo.add(AddMemoryInput(id="m_ref", text="x", source="t"))
-
-    # First bump: count 0 → 1
-    async with user_scoped_tx(pool, user_a) as conn:
-        repo = MemoryRepository(user_a, conn)
-        n = await repo.bump_reference(["m_ref"], "run_one")
-        assert n == 1
-        got = await repo.get("m_ref")
-        assert got is not None
-        assert got.reference_count == 1
-        assert got.referenced_by_runs == ["run_one"]
-
-    # Second bump same run_id: count goes up but list is dedup'd
-    async with user_scoped_tx(pool, user_a) as conn:
-        repo = MemoryRepository(user_a, conn)
-        await repo.bump_reference(["m_ref"], "run_one")
-        got = await repo.get("m_ref")
-        assert got is not None
-        assert got.reference_count == 2
-        assert got.referenced_by_runs == ["run_one"]  # dedup'd
-
-    # Third bump different run_id: count up, list grows
-    async with user_scoped_tx(pool, user_a) as conn:
-        repo = MemoryRepository(user_a, conn)
-        await repo.bump_reference(["m_ref"], "run_two")
-        got = await repo.get("m_ref")
-        assert got is not None
-        assert got.reference_count == 3
-        assert set(got.referenced_by_runs) == {"run_one", "run_two"}

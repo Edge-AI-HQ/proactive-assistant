@@ -32,10 +32,10 @@ flowchart LR
   Tick --> Disp["DefaultDispatcher.dispatch"]
   Disp --> R[("pai_scheduled_task_runs (lease)")]
   Disp --> H1["in-process: connector_ingest.run"]
-  Disp --> H2["HTTP: POST chat /agent/run/dream"]
-  Disp --> H3["HTTP: POST chat /agent/run/evolve"]
-  Disp --> H4["HTTP: POST chat /agent/run/crystallize"]
-  Disp --> H5["HTTP: POST chat /agent/generate (generator.*)"]
+  Disp --> H2["HTTP: POST agent-engine /agent/run/dream"]
+  Disp --> H3["HTTP: POST agent-engine /agent/run/evolve"]
+  Disp --> H4["HTTP: POST agent-engine /agent/run/crystallize"]
+  Disp --> H5["HTTP: POST agent-engine /agent/generate (generator.*)"]
   Tick -. reap_stale_runs .-> R
 ```
 
@@ -45,7 +45,7 @@ flowchart LR
 
 - `pai_scheduled_tasks` 和 `pai_scheduled_task_runs` schema 与索引。
 - `tick_loop.run_tick_once` 的 claim / dispatch / NOTIFY 唤醒。
-- `DefaultDispatcher` 按 kind 路由,以及哪些 kind 走 in-process、哪些走 HTTP 到 chat。
+- `DefaultDispatcher` 按 kind 路由,以及哪些 kind 走 in-process、哪些走 HTTP 到 agent-engine。
 - lease + heartbeat + reaper 多 replica 语义。
 - retry / backoff / max_attempts / archive 策略。
 - 三处常驻 background task:scheduler tick loop、world signals ingest、Daytona sandbox idle GC。
@@ -53,7 +53,7 @@ flowchart LR
 不包含:
 
 - 各 kind 的具体业务(connector 拉数据、generator 出卡、dreaming 沉淀 memory),分别看 [Data Connectors](./data-connectors)、[Generation](./generation)、[Memory](./memory)。
-- chat 端 `/agent/run/*` 内部 agent 实现,看 [Execution](./execution)、[Generation](./generation)。
+- agent-engine 端 `/agent/run/*` 内部 agent 实现,看 [Execution](./execution)、[Generation](./generation)。
 - conversation(actor kernel)聊天链路,看 [Execution](./execution)。
 
 ## 核心链路
@@ -62,7 +62,7 @@ flowchart LR
 sequenceDiagram
   participant Caller as route / 内部 enqueuer
   participant DB as pai_scheduled_tasks
-  participant Tick as web tick_loop
+  participant Tick as api tick_loop
   participant Disp as DefaultDispatcher
   participant Chat as agent-engine
 
@@ -122,22 +122,22 @@ reaper 索引:`idx_pai_schedrun_lease (status, lease_expires_at) WHERE status='r
 
 ### tick_loop
 
-`backend/src/pinai_agents/web/scheduler/tick_loop.py`:
+`backend/services/api/src/pinai_api/orchestration/tick_loop.py`:
 
 | 维度 | 当前事实 |
 |---|---|
 | tick 频率 | `SCHEDULER_TICK_SECONDS` env,默认 **3 秒**(`config.py` `scheduler_tick_seconds`)。 |
-| 唤醒机制 | `_listen_for_wake` LISTEN `pai_scheduler_wake`;每次 enqueue 都 `notify_scheduler_wake(conn)`,~50ms 唤醒一次 tick(`web/db/repositories/scheduled_tasks.py:411`)。 |
+| 唤醒机制 | `_listen_for_wake` LISTEN `pai_scheduler_wake`;每次 enqueue 都 `notify_scheduler_wake(conn)`,~50ms 唤醒一次 tick(`pinai_api/platform/db/repositories/scheduled_tasks.py:411`)。 |
 | 批量 | `claim_due_tasks(limit=16)`,每 tick 最多 16 个任务,避免一次性 explode。 |
 | Claim 原子性 | CTE + `FOR UPDATE SKIP LOCKED` — 多 replica 同时 tick 不会重复领同一 row。 |
 | 多 replica | 没单进程 mutex(刻意),并发安全完全靠 SKIP LOCKED + `(task_id, scheduled_for) UNIQUE`。 |
 | Reaper | tick 第一步调 `reap_stale_runs`:`status='running' AND lease_expires_at < now()` → `status='failed'`,`error='lease expired (worker crashed)'`。 |
 | Dispatcher 调用 | `_safe_dispatch` 包 `asyncio.create_task`,handler 跑慢不会拖 tick;同一 owner 长任务靠 lease 长度兜住。 |
-| 起停 | `web/app.py` lifespan;DB pool 未设置(`DATABASE_URL` 缺)时整个 loop 不起,只 log warning。 |
+| 起停 | `pinai_api/app.py` lifespan;DB pool 未设置(`DATABASE_URL` 缺)时整个 loop 不起,只 log warning。 |
 
 ### Dispatcher
 
-`web/scheduler/dispatcher.py:DefaultDispatcher`:
+`pinai_api/orchestration/dispatcher.py:DefaultDispatcher`:
 
 | Kind | 入口 | Lease | 备注 |
 |---|---|---|---|
@@ -148,16 +148,16 @@ reaper 索引:`idx_pai_schedrun_lease (status, lease_expires_at) WHERE status='r
 | `connector.preview` | in-process `connector_ingest.run` | **600s** | Onboarding 独立快速反馈:后台等 Composio ACTIVE,拉 summary source 最多 50 条,写 raw 并生成 summary cache;同时保证 full `connector.init` 入队。 |
 | `connector.init` | in-process `connector_ingest.run` | 60s | 拉一批 Composio 数据写 `pai_raw_*` + `pai_personal_signals` + 一次 `connector.evolve` once-shot。 |
 | `connector.sync` | 同上 | 60s | 增量拉取,用 cursor;成功才前推 cursor + 入 evolve。`connector.init` 跑完会保证一行 sync schedule(`cron */30 * * * *`)。 |
-| `connector.evolve` | HTTP POST `/agent/run/evolve` | **600s**(long-running) | chat 端 DeepAgents 把刚拉的 raw / signal 沉淀成 memory / skill。 |
-| `auto.dreaming` | HTTP POST `/agent/run/dream`(`_dispatch_dream` wrap) | **600s** | 包 `pai_evolution_runs` 行的 lifecycle,web 进程持有 run row 的生死;chat 进程跑 LLM。 |
-| `crystallize` | HTTP POST `/agent/run/crystallize` | 60s | dispatcher 路由已就位,但**当前没有 producer 入队** — `dispatcher.py` 顶部注释明说 "crystallize → not scheduled (chat worker fires inline)"。今天 crystallize 走 chat 端 inline 调用,不走这套队列。 |
+| `connector.evolve` | HTTP POST `/agent/run/evolve` | **600s**(long-running) | agent-engine 端 DeepAgents 把刚拉的 raw / signal 沉淀成 memory / skill。 |
+| `auto.dreaming` | HTTP POST `/agent/run/dream`(`_dispatch_dream` wrap) | **600s** | 包 `pai_evolution_runs` 行的 lifecycle,api 进程持有 run row 的生死;agent-engine 进程跑 LLM。 |
+| `crystallize` | HTTP POST `/agent/run/crystallize` | 60s | dispatcher 路由已就位,但**当前没有 producer 入队** — `dispatcher.py` 顶部注释明说 "crystallize → not scheduled (chat worker fires inline)"。今天 crystallize 走 agent-engine 端 inline 调用,不走这套队列。 |
 | `user.prompt` | HTTP POST `/agent/run/dream`(复用 dream entry) | **600s** | 后续的 synthetic-prompt 通道,目前 placeholder。 |
 | `reminder.card` | in-process `services/reminder_cards.fire_reminder`(写卡+推送,零 LLM) | 60s | 用户自建提醒;once/interval/cron 三种触发,`payload.reminder` 携带文案。卡片出生时打 `cardKind:"reminder"` + `scheduleTaskId:<task.id>`:前端 drawer 据此渲染 Dismiss/Chat/Done(不出 Approve,Done 直接 complete 不烧 LLM),card chat agent 按 `<reminder_cards>` prompt 分支用 `scheduled_generator_*` 工具改这条任务;老卡(无 cardKind)前端按 `card-rem-` id 前缀兜底(`proactive-ai-frontend/src/lib/reminder-card.ts`)。 |
 | `proactive.tick` | **producer** `_dispatch_producer` → in-process build heartbeat → enqueue actor mailbox + notify worker | —(无 per-run ledger) | per-user 心跳;interval 由 `pai_user_settings.proactive_interval_seconds`(60/300/1800)经 profile route 同步进 task。**不写 `pai_scheduled_task_runs`**,真实执行在 worker(`pai_agent_runs`)。详见 [Execution](./execution) proactive 段。 |
 
-`_GENERATOR_KINDS = {generator.manual, generator.auto, generator.chat, generator.scheduled}` 走 `_GENERATOR_LEASE_SECONDS=600`;web→chat `/agent/generate` read timeout 和 chat route 内部 timeout 也都是 600s。`_LONG_RUNNING_KINDS = {auto.dreaming, connector.preview, connector.evolve, user.prompt}` 走 `_LONG_LEASE_SECONDS=600`,跟普通 60s 区分,防止 LLM 中段或 Composio ACTIVE wait 被 reaper 误判 crash。generator 虽然也是 LLM 链路,但产品上是即时生成,所以 10 分钟是硬失败边界。`_PRODUCER_KINDS = {proactive.tick}` 完全不走 lease / ledger —— `_dispatch_producer` 只跑 handler + `record_recurring_success` / `record_failure_and_decide`,per-run 账本由 worker 的 `pai_agent_runs` 持有(见上表 proactive.tick 行)。
+`_GENERATOR_KINDS = {generator.manual, generator.auto, generator.chat, generator.scheduled}` 走 `_GENERATOR_LEASE_SECONDS=600`;api→agent-engine `/agent/generate` read timeout 和 agent-engine route 内部 timeout 也都是 600s。`_LONG_RUNNING_KINDS = {auto.dreaming, connector.preview, connector.evolve, user.prompt}` 走 `_LONG_LEASE_SECONDS=600`,跟普通 60s 区分,防止 LLM 中段或 Composio ACTIVE wait 被 reaper 误判 crash。generator 虽然也是 LLM 链路,但产品上是即时生成,所以 10 分钟是硬失败边界。`_PRODUCER_KINDS = {proactive.tick}` 完全不走 lease / ledger —— `_dispatch_producer` 只跑 handler + `record_recurring_success` / `record_failure_and_decide`,per-run 账本由 worker 的 `pai_agent_runs` 持有(见上表 proactive.tick 行)。
 
-dispatcher 调用 chat 走 EdDSA 每 run JWT(`web/auth/agent_jwt.py`),凭证不跨 run 复用。chat 验签 + check `pai_jti_revocations` 黑名单(`chat/auth/run_jwt.py`)。
+dispatcher 调用 agent-engine 走 EdDSA 每 run JWT(`pinai_api/platform/auth/agent_jwt.py`),凭证不跨 run 复用。agent-engine 验签 + check `pai_jti_revocations` 黑名单(`agent_engine/auth/run_jwt.py`)。
 
 未知 kind 不抛,只 `logger.warning`,方便加新 kind 时灰度。
 
@@ -165,20 +165,20 @@ dispatcher 调用 chat 走 EdDSA 每 run JWT(`web/auth/agent_jwt.py`),凭证不�
 
 | 入口 | kind | 触发 |
 |---|---|---|
-| `POST /api/generate`(`web/routes/ui/generate.py`) | `generator.manual` | 前端手动 generate。一个用户同时只能有一个 active generator,duplicate 直接返回既有 taskId。 |
-| `POST /api/agent/generate`(`web/routes/agent/generate.py`)| `generator.chat` | Main Chat agent 的 `generate_card` 工具触发即时生成;per-user 最多 3 个 active。 |
-| `POST /api/scheduled-generators[/once]`(`web/routes/ui/scheduled_generators.py`)| `generator.scheduled` / `reminder.card` | Main Chat 工具或前端;once 直接创建,recurring 走 preview+confirm。**时区永远跟手机**:服务端用 profile.timezone(由前端每个请求带的 `X-Pin-Client-Timezone` 头维护——无档案建档、漂移就更新,见 `routes/ui/profile.py`)覆盖 agent 传入的时区;设备时区变化时 `retime_user_cron_tasks` 把周期任务的"每天 X 点"重排到新时区(once 任务定格不动)。不支持"按上海时间提醒"这类跨时区诉求(设计内取舍)。 |
-| Profile settings `auto_generate=true`(`web/routes/ui/profile.py`)| `generator.auto` | `_sync_auto_generate_schedule` upsert,`interval_seconds = auto_generate_interval_minutes * 60`,关掉切 `status='archived'`。 |
-| Profile settings `auto_dreaming=true`(`web/routes/ui/profile.py`)| `auto.dreaming` | `_sync_auto_dreaming_schedule` upsert,每天用户 profile timezone 的 06:00 触发,关掉切 `status='archived'`。 |
-| `POST /api/composio/connect`(`web/routes/ui/composio.py`)| `connector.preview` | OAuth link 创建后立即入队,不等用户完成 OAuth;handler 自己后台等 ACTIVE。 |
-| `POST /api/composio/wait`(`web/routes/ui/composio.py`)| `connector.init` | OAuth ACTIVE 兼容回调。若同账号已有 `connector.preview` 负责后续 init,这里只返回 ACTIVE;旧连接 / 无 preview 时才 `enqueue_once`。 |
-| `connector_ingest._ensure_sync_schedule`(`web/services/connector_ingest.py`)| `connector.sync` | init 跑成功后立即 INSERT ON CONFLICT DO NOTHING,cron `*/30 * * * *`。 |
+| `POST /api/generate`(`domains/generation/generate_ui.py`) | `generator.manual` | 前端手动 generate。一个用户同时只能有一个 active generator,duplicate 直接返回既有 taskId。 |
+| `POST /api/agent/generate`(`domains/generation/generate_agent.py`)| `generator.chat` | Main Chat agent 的 `generate_card` 工具触发即时生成;per-user 最多 3 个 active。 |
+| `POST /api/scheduled-generators[/once]`(`domains/generation/scheduled_generators_ui.py`)| `generator.scheduled` / `reminder.card` | Main Chat 工具或前端;once 直接创建,recurring 走 preview+confirm。**时区永远跟手机**:服务端用 profile.timezone(由前端每个请求带的 `X-Pin-Client-Timezone` 头维护——无档案建档、漂移就更新,见 `domains/user_model/profile_ui.py`)覆盖 agent 传入的时区;设备时区变化时 `retime_user_cron_tasks` 把周期任务的"每天 X 点"重排到新时区(once 任务定格不动)。不支持"按上海时间提醒"这类跨时区诉求(设计内取舍)。 |
+| Profile settings `auto_generate=true`(`domains/user_model/profile_ui.py`)| `generator.auto` | `_sync_auto_generate_schedule` upsert,`interval_seconds = auto_generate_interval_minutes * 60`,关掉切 `status='archived'`。 |
+| Profile settings `auto_dreaming=true`(`domains/user_model/profile_ui.py`)| `auto.dreaming` | `_sync_auto_dreaming_schedule` upsert,每天用户 profile timezone 的 06:00 触发,关掉切 `status='archived'`。 |
+| `POST /api/composio/connect`(`domains/connector/apps/composio_ui.py`)| `connector.preview` | OAuth link 创建后立即入队,不等用户完成 OAuth;handler 自己后台等 ACTIVE。 |
+| `POST /api/composio/wait`(`domains/connector/apps/composio_ui.py`)| `connector.init` | OAuth ACTIVE 兼容回调。若同账号已有 `connector.preview` 负责后续 init,这里只返回 ACTIVE;旧连接 / 无 preview 时才 `enqueue_once`。 |
+| `connector_ingest._ensure_sync_schedule`(`domains/connector/apps/connector_ingest.py`)| `connector.sync` | init 跑成功后立即 INSERT ON CONFLICT DO NOTHING,cron `*/30 * * * *`。 |
 | `connector_ingest._enqueue_evolve` | `connector.evolve` | init / 非空 sync 之后入一次 once-shot。 |
-| `POST /api/dreaming/run`(`web/routes/ui/dreaming.py`)| `auto.dreaming` | 手动触发;auto-dreaming 设置走的也是同一个 kind,只是用 `trigger_kind='schedule'`。 |
-| `POST /api/tasks/*`(`web/routes/ui/tasks.py`)| `user.prompt` | 给 agent 投递 synthetic prompt,目前接入面少。 |
-| (无 producer) | `crystallize` | dispatcher 已注册路由,但**没有路由 / service 入队**;`grep -r 'kind=.crystallize.' backend/src/` 返回空。chat 端 inline 触发 crystallize,详见 [Execution](./execution)。 |
+| `POST /api/dreaming/run`(`domains/user_model/dreaming_ui.py`)| `auto.dreaming` | 手动触发;auto-dreaming 设置走的也是同一个 kind,只是用 `trigger_kind='schedule'`。 |
+| `POST /api/tasks/*`(`domains/generation/tasks.py`)| `user.prompt` | 给 agent 投递 synthetic prompt,目前接入面少。 |
+| (无 producer) | `crystallize` | dispatcher 已注册路由,但**没有路由 / service 入队**;`grep -rn 'kind=.crystallize.' backend/services/` 返回空。agent-engine 端 inline 触发 crystallize,详见 [Execution](./execution)。 |
 
-所有入队走 `web/db/repositories/scheduled_tasks.py:enqueue_once`,内部 INSERT ON CONFLICT 按 `(user_id, id)` 幂等,并在事务里跟一次 `notify_scheduler_wake` 唤醒。
+所有入队走 `pinai_api/platform/db/repositories/scheduled_tasks.py:enqueue_once`,内部 INSERT ON CONFLICT 按 `(user_id, id)` 幂等,并在事务里跟一次 `notify_scheduler_wake` 唤醒。
 
 ### Retry 与 archive
 
@@ -202,25 +202,25 @@ cron / interval 任务只有外部显式关掉时才会 archive(例如用户关�
 ### Lease + heartbeat
 
 - claim 时 dispatcher 起 `lease_expires_at = NOW() + lease_seconds`(per-kind 决定)。
-- 长任务可调 `heartbeat_run(user_id, run_id, lease_owner, lease_seconds)` 续约;目前 chat 端的 run loop 不主动续,统一靠 dispatcher 设的 kind-specific lease 兜住(generator 600s,其它长任务 600s)。
+- 长任务可调 `heartbeat_run(user_id, run_id, lease_owner, lease_seconds)` 续约;目前 agent-engine 端的 run loop 不主动续,统一靠 dispatcher 设的 kind-specific lease 兜住(generator 600s,其它长任务 600s)。
 - reaper 每 tick 跑一次,`status='running' AND lease_expires_at < NOW()` → `failed`。
 - handler 写完结果通过 `complete_run` 翻 `success` / `failed`;race 输的 dispatcher(`insert_run` 返回 False)直接 return,不写 result。
 
 ### 长任务的 evolution_run lifecycle
 
-`auto.dreaming` 比较特殊:dispatcher 直接拿 `run_id` 写 `pai_evolution_runs` 行,chat 端只跑 agent 不动这张表。理由(`dispatcher.py:_dispatch_dream` docstring):
+`auto.dreaming` 比较特殊:dispatcher 直接拿 `run_id` 写 `pai_evolution_runs` 行,agent-engine 端只跑 agent 不动这张表。理由(`dispatcher.py:_dispatch_dream` docstring):
 
-- web 跟 DB 同进程,避免 HTTP roundtrip + JWT TTL 风险。
-- chat 容器 OOM 时,外层 try/except 仍然能把 `pai_evolution_runs.status` 从 `running` 翻 `failed`,不留 ghost row。
+- api 跟 DB 同进程,避免 HTTP roundtrip + JWT TTL 风险。
+- agent-engine 容器 OOM 时,外层 try/except 仍然能把 `pai_evolution_runs.status` 从 `running` 翻 `failed`,不留 ghost row。
 - `run_id` 在 `pai_scheduled_task_runs` 和 `pai_evolution_runs` 上是同一个,LangSmith trace + UI 都能 JOIN。
 
 ### 其他常驻 background task(不在 pai_scheduled_tasks 上)
 
 | 任务 | 频率 | 入口 | 备注 |
 |---|---|---|---|
-| World signals ingest | 30 分钟 / 次(`INGEST_INTERVAL_SEC = 30 * 60`) | `web/services/world_ingest.py:loop`,`app.py` lifespan 起 | 全局,不 per-user;靠 `pai_world_signals.UNIQUE(normalized_url)` 做多 replica 幂等。 |
-| Daytona sandbox idle GC | 5 分钟 / 次(`_SANDBOX_GC_INTERVAL_SEC = 5 * 60`) | `chat/app.py:_sandbox_gc_loop` | chat 进程内部,清 LRU 缓存里跟云端不一致的项。 |
-| LangGraph checkpointer | 持续连接 | `chat/runtime/checkpoint.py` | Postgres pool,跟主 pool 共享。 |
+| World signals ingest | 30 分钟 / 次(`INGEST_INTERVAL_SEC = 30 * 60`) | `domains/connector/world/world_ingest.py:loop`,`pinai_api/app.py` lifespan 起 | 全局,不 per-user;靠 `pai_world_signals.UNIQUE(normalized_url)` 做多 replica 幂等。 |
+| Daytona sandbox idle GC | 5 分钟 / 次(`_SANDBOX_GC_INTERVAL_SEC = 5 * 60`) | `agent_engine/app.py:_sandbox_gc_loop` | agent-engine 进程内部,清 LRU 缓存里跟云端不一致的项。 |
+| LangGraph checkpointer | 持续连接 | `agent_engine/harness/checkpoint.py` | Postgres pool,跟主 pool 共享。 |
 
 这三个跟 `pai_scheduled_tasks` 完全独立,改 scheduler 时不要碰它们。
 
@@ -228,28 +228,28 @@ cron / interval 任务只有外部显式关掉时才会 archive(例如用户关�
 
 | 改动 | 先看 |
 |---|---|
-| Tick loop / claim / 唤醒 | `backend/src/pinai_agents/web/scheduler/tick_loop.py` |
-| Dispatcher 路由表 / 长 lease 列表 | `web/scheduler/dispatcher.py`(`_handle_kind`、`_GENERATOR_KINDS`、`_LONG_RUNNING_KINDS`)|
-| 加新 kind | 1)dispatcher 路由分支;2)入队点(routes/service);3)如果 HTTP 调 chat,加 `chat/routes/run.py` 对应 handler。 |
-| cron 计算 | `web/scheduler/cron.py:next_fire` |
-| 入队 / claim / 完成 / 重试 SQL | `web/db/repositories/scheduled_tasks.py`(`enqueue_once`、`claim_due_tasks`、`insert_run`、`complete_run`、`heartbeat_run`、`reap_stale_runs`、`record_failure_and_decide`)|
-| 配置默认值 | `backend/src/pinai_agents/config.py`(`scheduler_tick_seconds=3`、`scheduler_lease_seconds=60`) |
-| Composio preview/init/sync handler | `web/services/connector_ingest.py`(`run`、`_run_preview`、`_ensure_sync_schedule`、`_enqueue_evolve`)|
-| auto-generate schedule sync | `web/routes/ui/profile.py:_sync_auto_generate_schedule` |
-| auto-dreaming schedule sync | `web/routes/ui/profile.py:_sync_auto_dreaming_schedule` |
-| auto.dreaming run row 包装 | `web/scheduler/dispatcher.py:_dispatch_dream` |
-| chat 端 long-running handler | `backend/src/pinai_agents/chat/routes/run.py`(dream / evolve / crystallize) |
+| Tick loop / claim / 唤醒 | `backend/services/api/src/pinai_api/orchestration/tick_loop.py` |
+| Dispatcher 路由表 / 长 lease 列表 | `pinai_api/orchestration/dispatcher.py`(`_handle_kind`、`_GENERATOR_KINDS`、`_LONG_RUNNING_KINDS`)|
+| 加新 kind | 1)dispatcher 路由分支;2)入队点(routes/service);3)如果 HTTP 调 agent-engine,加 `agent_engine/transport/routes/run.py` 对应 handler。 |
+| cron 计算 | `pinai_api/orchestration/cron.py:next_fire` |
+| 入队 / claim / 完成 / 重试 SQL | `pinai_api/platform/db/repositories/scheduled_tasks.py`(`enqueue_once`、`claim_due_tasks`、`insert_run`、`complete_run`、`heartbeat_run`、`reap_stale_runs`、`record_failure_and_decide`)|
+| 配置默认值 | `backend/services/api/src/pinai_api/config.py`(`scheduler_tick_seconds=3`、`scheduler_lease_seconds=60`) |
+| Composio preview/init/sync handler | `domains/connector/apps/connector_ingest.py`(`run`、`_run_preview`、`_ensure_sync_schedule`、`_enqueue_evolve`)|
+| auto-generate schedule sync | `domains/user_model/profile_ui.py:_sync_auto_generate_schedule` |
+| auto-dreaming schedule sync | `domains/user_model/profile_ui.py:_sync_auto_dreaming_schedule` |
+| auto.dreaming run row 包装 | `pinai_api/orchestration/dispatcher.py:_dispatch_dream` |
+| agent-engine 端 long-running handler | `backend/services/agent-engine/src/agent_engine/transport/routes/run.py`(dream / evolve / crystallize) |
 | 前端任务状态 polling | `proactive-ai-frontend/src/hooks/useInitTask.ts`、`useActiveAgentRuns.ts`、`useGenerationStatus.ts` |
 | Schema 迁移 | `backend/db/migrations/021_pai_scheduler.sql`、`031_consolidate_task_queue.sql`、`039_split_generator_kinds.sql` |
 
 ## 验证方式
 
 ```bash
-cd backend && uv run pytest tests/web/scheduler              # 全 scheduler 套件
-cd backend && uv run pytest tests/web/scheduler/test_tick_loop.py
-cd backend && uv run pytest tests/web/scheduler/test_claim.py     # SKIP LOCKED 多 replica
-cd backend && uv run pytest tests/web/scheduler/test_cron.py      # next_fire 算法
-cd backend && uv run pytest tests/web/scheduler/test_retry.py     # backoff + archive
+cd backend && uv run pytest tests/web/orchestration              # 全 scheduler 套件
+cd backend && uv run pytest tests/web/orchestration/test_tick_loop.py
+cd backend && uv run pytest tests/web/orchestration/test_claim.py     # SKIP LOCKED 多 replica
+cd backend && uv run pytest tests/web/orchestration/test_cron.py      # next_fire 算法
+cd backend && uv run pytest tests/web/orchestration/test_retry.py     # backoff + archive
 cd backend && uv run pytest tests/web/services/test_connector_ingest.py
 cd backend && uv run pytest tests/web/services/test_world_ingest.py
 cd backend && uv run pytest tests/web/test_composio_service.py
@@ -283,10 +283,10 @@ make logs-agent-engine | grep -E "run/dream|run/evolve|run/crystallize|run/gener
 - `enqueue_once` 是按 `(user_id, id)` 幂等,不是按 `(user_id, kind, payload)`。同一个 user 不同 task id 但相同语义会重复入队,自己上层去重。
 - `claim_due_tasks` 用 SKIP LOCKED,事务里抛错会让 row 短暂被锁,但下次 tick 还能领;不要在 claim 后的 dispatch 里手开新事务而忘记 commit。
 - handler 跑完但 lease 已过期是已知 race:`complete_run` 仍会写 status,但 reaper 已经先一步把它标 `failed`;靠业务上的 idempotency key 兜底(connector 用 raw 表 dedupe_key;generator 写 `pai_pipeline_runs` 时 INSERT ON CONFLICT)。
-- 长 lease 不是免死金牌:chat 真挂掉时 reaper 还是会在 lease 过期后翻成 `failed`;handler 自己长跑要主动 `heartbeat_run` 续约。
+- 长 lease 不是免死金牌:agent-engine 真挂掉时 reaper 还是会在 lease 过期后翻成 `failed`;handler 自己长跑要主动 `heartbeat_run` 续约。
 - once 任务在 `_persist_next` 就 archive(`status='archived'`、`next_run_at=NULL`);失败重试靠 `record_failure_and_decide` 把 status 翻回 `active`。直接对着这张行的 status 做判断要注意已经 fire 过一次。
 - 加新 kind **不**用改 schema(开 enum),但加新 kind 后必须同时改 dispatcher 路由分支,否则 `unknown task.kind` 只 warning 不报错,任务就一直 `success`-但-啥都没做。
-- `_LONG_RUNNING_KINDS` 改动要跟 chat 端 handler 的真实跑时一起 review;调短会让 reaper 误杀,调长会让真挂的 worker 占着 lease 不放。
+- `_LONG_RUNNING_KINDS` 改动要跟 agent-engine 端 handler 的真实跑时一起 review;调短会让 reaper 误杀,调长会让真挂的 worker 占着 lease 不放。
 - `NOTIFY pai_scheduler_wake` 是 best-effort 提速,不要依赖它做正确性保证 — tick interval 默认 3s 已经够低,LISTEN/NOTIFY 只是把 50ms 唤醒延迟省下来。
 - world ingest 和 sandbox GC 跟 scheduler 完全独立,改 scheduler 别误碰它们的 lifespan 注册。
 - LangGraph checkpointer 不走这套调度;chat thread state 是它自己管的 schema(`langgraph.*`)。

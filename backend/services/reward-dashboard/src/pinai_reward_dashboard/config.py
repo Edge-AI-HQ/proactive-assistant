@@ -34,7 +34,6 @@ class RewardDashboardSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=None, extra="ignore")
 
-    service_name: str = "pinai-reward-dashboard"
     deploy_env: str = "dev"
 
     # ── DB ──

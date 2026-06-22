@@ -27,8 +27,7 @@ process.
 from __future__ import annotations
 
 import logging
-from contextlib import asynccontextmanager
-from typing import Any, cast
+from typing import cast
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from psycopg import AsyncConnection
@@ -213,33 +212,3 @@ def get_checkpointer(*, background: bool = False) -> AsyncPostgresSaver:
         msg = "Checkpointer not initialized; ensure FastAPI lifespan has run"
         raise RuntimeError(msg)
     return cp
-
-
-async def count_thread_checkpoints(thread_id: str, *, background: bool = False) -> int:
-    """Count a thread's checkpoint rows — drives proactive history compaction.
-
-    Uses the matching pool; returns 0 if it isn't open. `search_path` already
-    points at the langgraph schema, so `checkpoints` is unqualified.
-    """
-    pool = _background_pool if background else _interactive_pool
-    if pool is None:
-        return 0
-    async with pool.connection() as conn:
-        cur = await conn.execute(
-            "SELECT count(*) AS n FROM checkpoints WHERE thread_id = %s",
-            (thread_id,),
-        )
-        row = await cur.fetchone()
-    # Pool yields dict rows (kwargs row_factory=dict_row); the pool type can't
-    # carry that through, so cast at this boundary (mirrors the saver cast above).
-    return int(cast("dict[str, Any]", row)["n"]) if row else 0
-
-
-@asynccontextmanager
-async def lifespan_checkpointer() -> Any:
-    """Convenience async context manager for app lifespan integration."""
-    await init_checkpointer()
-    try:
-        yield
-    finally:
-        await close_checkpointer()

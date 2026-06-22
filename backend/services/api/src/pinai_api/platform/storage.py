@@ -68,10 +68,6 @@ def _client() -> Client | None:
     return create_client(s.supabase_url, s.supabase_secret_key)
 
 
-def storage_enabled() -> bool:
-    return _client() is not None
-
-
 async def upload_media(
     *,
     supabase_user_id: str,

@@ -294,10 +294,6 @@ def _canonicalize_device_groups(rows: list[UserDeviceRow]) -> list[CanonicalDevi
     return [groups[key] for key in order]
 
 
-def _canonicalize_device_list(rows: list[UserDeviceRow]) -> list[UserDeviceRow]:
-    return [group.row for group in _canonicalize_device_groups(rows)]
-
-
 # ── register / list / revoke / rotate (Supabase JWT) ──
 
 

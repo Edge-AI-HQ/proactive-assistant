@@ -21,9 +21,9 @@ from psycopg.rows import DictRow
 
 from ...domains.billing.provisioning import ensure_user_litellm_key
 from ...domains.browser.provisioning import ensure_browserbase_context
+from ...orchestration.retime import retime_user_cron_tasks
 from ...platform.auth.deps import User, current_user, get_pool
 from ...platform.db.repositories.scheduled_tasks import ScheduledTasksRepository
-from ..generation.scheduled_generators import retime_user_cron_tasks
 from .profile import ProfileRepository, ProfileRow, UserSettingsRow
 
 

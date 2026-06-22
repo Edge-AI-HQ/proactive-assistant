@@ -109,7 +109,7 @@ future-negative 的确定性识别只覆盖明确未来禁忌表达，例如 `st
 - “这个页面手机上太难点了。”
 - “希望设置里能关掉这个功能。”
 
-这类诉求是产品团队 triage 数据，不是用户个性化信号。唯一写入路径是 agent 的 `development_feedback_log` 工具（`POST /api/agent/development-feedback/log`）——web 层没有 keyword fast path，普通聊天消息永远原样进入 agent（有测试锁这一点）。回执必须诚实：已记录给团队评估，不能假装已经实现。
+这类诉求是产品团队 triage 数据，不是用户个性化信号。唯一写入路径是 agent 的 `development_feedback_log` 工具（`POST /api/agent/development-feedback/log`）——agent-engine 层没有 keyword fast path，普通聊天消息永远原样进入 agent（有测试锁这一点）。回执必须诚实：已记录给团队评估，不能假装已经实现。
 
 ## 核心链路
 
@@ -144,13 +144,13 @@ sequenceDiagram
 
 | 维度 | 当前事实 |
 |---|---|
-| UI 路由 | `backend/src/pinai_agents/web/routes/ui/feedback.py` 暴露 `POST /api/feedback`、`GET /api/feedback`、`GET /api/feedback/dismissed`、`GET /api/feedback/completed`。 |
+| UI 路由 | `backend/services/api/src/pinai_api/domains/feedback/ui.py` 暴露 `POST /api/feedback`、`GET /api/feedback`、`GET /api/feedback/dismissed`、`GET /api/feedback/completed`。 |
 | 鉴权 | Supabase JWT（`current_user`）+ `user_scoped_tx`。 |
 | Repository | `FeedbackRepository.log()` 先写 `pai_feedback_events`，再按输入类型决定是否 fan-out 到 fingerprint / preference。 |
-| `/api/cards` | `runs_and_cards.py` 从最新 feedback event 推导每张卡的 `latestOutcome` / `outcomeAt`；不依赖 intent state 表。 |
+| `/api/cards` | generation 域的 runs/cards UI 路由从最新 feedback event 推导每张卡的 `latestOutcome` / `outcomeAt`；不依赖 intent state 表。 |
 | Agent feedback | `GET /api/agent/feedback/list` 给 `feedback_list` native tool 读取；`POST /api/agent/feedback/log` 保留 agent-originated feedback 写入，默认 `source='agent'`。 |
 | Preference 写入 | 常规 chat agent 仍通过 `preference_add` 写 `/api/agent/preferences/add`；现在 future-negative card text feedback 也会在 repository 内直接写一条 `source='user'` 的 active preference。 |
-| Generation 使用 | `generator.py` 的 data-collector 同时拉 `client.feedback.list(limit=50)` 和 `client.preferences.list(status="active", limit=50)`；planner 规则里 active preference 强于冷 basket 推断。 |
+| Generation 使用 | `agent_engine/agents/generator.py` 的 data-collector 同时拉 `client.feedback.list(limit=50)` 和 `client.preferences.list(status="active", limit=50)`；planner 规则里 active preference 强于冷 basket 推断。 |
 | 开发建议 | `pai_development_feedback` 独立记录产品/UI/功能诉求；唯一写入方是 agent 的 `development_feedback_log` 工具；generation 不读取这张表。 |
 | `metadata` | object / JSON string 都接；非法 string 存 `{ raw: <原文> }`，避免打断 feedback 写入。 |
 | `intentKey` / `basket` | route 不做补齐；前端需要尽量传齐。缺字段时 event 仍写入，但 fingerprint 只能更新已有的 intent / basket 维度。 |
@@ -160,19 +160,19 @@ sequenceDiagram
 
 | 改动 | 先看 |
 |---|---|
-| Feedback UI route | `backend/src/pinai_agents/web/routes/ui/feedback.py` |
-| Agent feedback route | `backend/src/pinai_agents/web/routes/agent/feedback.py` |
-| Repository / SQL | `backend/src/pinai_agents/web/db/repositories/feedback.py` |
-| Preference repository / route | `backend/src/pinai_agents/web/db/repositories/preferences.py`、`web/routes/agent/preferences.py` |
-| Fingerprint repository | `backend/src/pinai_agents/web/db/repositories/user_fingerprint.py` |
-| Card latestOutcome 推导 | `backend/src/pinai_agents/web/routes/ui/runs_and_cards.py` |
+| Feedback UI route | `backend/services/api/src/pinai_api/domains/feedback/ui.py` |
+| Agent feedback route | `backend/services/api/src/pinai_api/domains/feedback/agent.py` |
+| Repository / SQL | `backend/services/api/src/pinai_api/domains/feedback/repository.py` |
+| Preference repository / route | `backend/services/api/src/pinai_api/domains/user_model/preferences.py`、`domains/user_model/preferences_agent.py` |
+| Fingerprint repository | `backend/libs/db/src/pinai_db/repositories/user_fingerprint.py` |
+| Card latestOutcome 推导 | `backend/services/api/src/pinai_api/domains/generation/runs_and_cards.py` |
 | Schema | `011_pai_memory_signals.sql`、`043_pai_card_patterns.sql`、`056_pai_preference_records.sql`、`057_pai_preference_lifetime.sql`、`051_drop_intent_state_tables.sql` |
-| Generation 端使用 | `backend/src/pinai_agents/chat/agents/generator.py` |
-| Native feedback tool | `backend/src/pinai_agents/chat/tools/native/feedback.py` |
-| Native preference/profile tools | `backend/src/pinai_agents/chat/tools/native/preferences.py`、`profile.py:profile_preference_merge` |
+| Generation 端使用 | `backend/services/agent-engine/src/agent_engine/agents/generator.py` |
+| Native feedback tool | `backend/services/agent-engine/src/agent_engine/tools/direct/feedback.py` |
+| Native preference/profile tools | `backend/services/agent-engine/src/agent_engine/tools/direct/preferences.py`、`profile.py:profile_preference_merge` |
 | 前端卡片反馈 UI | `proactive-ai-frontend/src/components/AppShell.tsx`、`NowFeed.tsx`、`CardDetailBody.tsx` |
 | 前端 main chat thumbs | `proactive-ai-frontend/src/components/main-chat/MessageActionBar.tsx` |
-| 开发建议收集 | `backend/src/pinai_agents/web/routes/ui/chat.py`、`backend/src/pinai_agents/web/routes/agent/development_feedback.py`、`backend/src/pinai_agents/chat/tools/direct/development_feedback.py`、`backend/src/pinai_agents/chat/agents/main_chat.py` |
+| 开发建议收集 | `backend/services/agent-engine/src/agent_engine/transport/routes/chat.py`、`backend/services/api/src/pinai_api/domains/feedback/dev_agent.py`、`backend/services/agent-engine/src/agent_engine/tools/direct/development_feedback.py`、`backend/services/agent-engine/src/agent_engine/agents/main_chat.py` |
 
 ## 验证方式
 
@@ -188,7 +188,7 @@ cd backend && uv run pytest tests/web/routes/test_cards_route.py tests/chat/test
 
 # Static checks
 cd backend && uv run ruff check .
-cd backend && uv run mypy src
+cd backend && uv run mypy services libs
 
 # Frontend feedback helpers and card feedback state
 cd proactive-ai-frontend && npm test -- MessageActionBar.feedback.test.ts useCardActions.test.tsx card-feedback.test.ts card-chat-session.test.ts

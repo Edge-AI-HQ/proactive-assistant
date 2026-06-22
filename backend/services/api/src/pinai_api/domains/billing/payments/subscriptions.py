@@ -14,8 +14,10 @@ user-scope policy.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
+
+from .stripe_client import coerce_dt, stripe_attr
 
 # These statuses count as "user has access". Stripe statuses we don't
 # explicitly map fall through to no-access (defensive default).
@@ -87,26 +89,6 @@ async def upsert_user_stripe_customer(
         )
 
 
-async def get_user_stripe_customer(conn, user_id: int) -> str | None:
-    """Read users.stripe_customer_id for a user. Returns None when the
-    user has never started a Stripe Checkout (no customer created yet).
-
-    This is the canonical "does this user have a Stripe customer?" lookup
-    — it answers BEFORE any subscription is created (pai_subscriptions
-    might be empty even when users.stripe_customer_id is set, because
-    the user might have abandoned Checkout)."""
-    async with conn.cursor() as cur:
-        await cur.execute(
-            "SELECT stripe_customer_id FROM users WHERE id = %s",
-            (user_id,),
-        )
-        row = await cur.fetchone()
-    if not row:
-        return None
-    cid = row.get("stripe_customer_id")
-    return cid if isinstance(cid, str) and cid else None
-
-
 async def sync_from_stripe_subscription(
     conn,
     *,
@@ -147,8 +129,8 @@ async def sync_from_stripe_subscription(
         if hasattr(sub, "cancel_at_period_end")
         else sub.get("cancel_at_period_end", False)
     )
-    p_start = _coerce_dt(_get(sub, "current_period_start"))
-    p_end = _coerce_dt(_get(sub, "current_period_end"))
+    p_start = coerce_dt(stripe_attr(sub, "current_period_start"))
+    p_end = coerce_dt(stripe_attr(sub, "current_period_end"))
 
     # Three modes:
     #   plan_code is None              → never touch plan_code (delete events)
@@ -214,30 +196,6 @@ async def sync_from_stripe_subscription(
             stripe_customer_id=customer_id,
         )
     return SubscriptionRow.from_record(row)
-
-
-def _get(obj: Any, attr: str) -> Any:
-    if hasattr(obj, attr):
-        return getattr(obj, attr)
-    if isinstance(obj, dict):
-        return obj.get(attr)
-    return None
-
-
-def _coerce_dt(v: Any) -> datetime | None:
-    if v is None:
-        return None
-    if isinstance(v, datetime):
-        return v if v.tzinfo else v.replace(tzinfo=UTC)
-    if isinstance(v, (int, float)):
-        return datetime.fromtimestamp(float(v), tz=UTC)
-    if isinstance(v, str):
-        try:
-            s = v if not v.endswith("Z") else v[:-1] + "+00:00"
-            return datetime.fromisoformat(s).astimezone(UTC)
-        except ValueError:
-            return None
-    return None
 
 
 # ── User lookup by Stripe identifiers (webhook side) ──

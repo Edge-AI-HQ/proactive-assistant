@@ -28,8 +28,6 @@ export * from "./api/health";
 export * from "./api/memory";
 export * from "./api/payment";
 export * from "./api/profile";
-export * from "./api/raw";
-export * from "./api/reward";
 export * from "./api/scheduled-generators";
 export * from "./api/skills";
 

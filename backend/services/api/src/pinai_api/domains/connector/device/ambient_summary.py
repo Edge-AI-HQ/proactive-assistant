@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pinai_api.config import get_web_settings
 
 from ....platform.litellm.client import LiteLLMError
+from ....platform.litellm.response import error_message, message_content
 from ....platform.llm_json import parse_json_object
 
 DEFAULT_AMBIENT_SUMMARY_MODEL = "claude-sonnet-4-6"
@@ -108,9 +109,9 @@ async def generate_ambient_summary(
     except ValueError:
         parsed = {"message": response.text}
     if not response.is_success:
-        raise LiteLLMError(response.status_code, _error_message(parsed) or response.text[:300])
+        raise LiteLLMError(response.status_code, error_message(parsed) or response.text[:300])
 
-    content = _message_content(parsed)
+    content = message_content(parsed)
     if content is None:
         raise LiteLLMError(502, "/chat/completions response missing content")
     # Tolerant parse: even with response_format=json_object the model
@@ -124,37 +125,6 @@ async def generate_ambient_summary(
         return AmbientSummaryDraft.model_validate(draft_payload)
     except Exception as exc:
         raise LiteLLMError(502, f"ambient summary response invalid: {type(exc).__name__}") from exc
-
-
-def _message_content(payload: Any) -> str | None:
-    if not isinstance(payload, dict):
-        return None
-    choices = payload.get("choices")
-    if not isinstance(choices, list) or not choices:
-        return None
-    first = choices[0]
-    if not isinstance(first, dict):
-        return None
-    message = first.get("message")
-    if not isinstance(message, dict):
-        return None
-    content = message.get("content")
-    return content if isinstance(content, str) and content.strip() else None
-
-
-def _error_message(payload: Any) -> str | None:
-    if not isinstance(payload, dict):
-        return None
-    error = payload.get("error")
-    if isinstance(error, dict):
-        message = error.get("message") or error.get("detail")
-        if isinstance(message, str) and message.strip():
-            return message.strip()
-    for key in ("message", "detail", "error"):
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
 
 
 _SYSTEM_PROMPT = """You summarize user ambient events into one short timeline card.

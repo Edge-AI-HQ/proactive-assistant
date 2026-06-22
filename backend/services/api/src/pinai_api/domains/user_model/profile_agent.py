@@ -18,8 +18,8 @@ from pinai_contracts.api_models import (
 )
 from pinai_db.rls import user_scoped_tx
 
+from ...orchestration.retime import retime_user_cron_tasks
 from ...platform.auth.deps import AgentRun, current_agent_run, get_pool
-from ..generation.scheduled_generators import retime_user_cron_tasks
 from .profile import ProfileRepository
 
 router = APIRouter(prefix="/api/agent/profile", tags=["agent-profile"])

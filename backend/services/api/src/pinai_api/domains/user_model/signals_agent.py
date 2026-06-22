@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import UTC, datetime
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pinai_db.rls import user_scoped_tx
 
+from ...domains.connector.device.ambient_speaker import ambient_speaker_preview
 from ...platform.auth.deps import AgentRun, current_agent_run, get_pool
 from .personal_signals import (
     IngestSignalInput,
@@ -69,7 +68,7 @@ async def list_signals(
             "subject": r.subject,
         }
         if r.kind == "ambient.candidate_window":
-            item.update(_ambient_speaker_preview(r.payload))
+            item.update(ambient_speaker_preview(r.payload))
         if include_payload:
             item.update(
                 {
@@ -81,46 +80,6 @@ async def list_signals(
             )
         items.append(item)
     return {"items": items, "total": _total, "limit": limit, "offset": offset}
-
-
-def _ambient_speaker_preview(payload: dict[str, Any]) -> dict[str, str]:
-    out: dict[str, str] = {}
-    self_text = _clean_text(payload.get("self_text"))
-    if self_text:
-        out["selfText"] = self_text
-    speaker_text = _clean_text(
-        payload.get("speaker_text"), preserve_lines=True
-    ) or _speaker_text_from_segments(
-        payload.get("speaker_segments"),
-    )
-    if speaker_text:
-        out["speakerText"] = speaker_text
-    return out
-
-
-def _speaker_text_from_segments(value: Any) -> str | None:
-    if not isinstance(value, list):
-        return None
-    lines: list[str] = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        speaker = _clean_text(item.get("speaker"))
-        text = _clean_text(item.get("text"))
-        if speaker and text:
-            lines.append(f"{speaker}: {json.dumps(text, ensure_ascii=False)}")
-    return "\n".join(lines) if lines else None
-
-
-def _clean_text(value: Any, *, preserve_lines: bool = False) -> str | None:
-    if not isinstance(value, str):
-        return None
-    if preserve_lines:
-        lines = [" ".join(line.split()) for line in value.splitlines()]
-        text = "\n".join(line for line in lines if line)
-    else:
-        text = " ".join(value.split())
-    return text or None
 
 
 @router.get("/kinds")

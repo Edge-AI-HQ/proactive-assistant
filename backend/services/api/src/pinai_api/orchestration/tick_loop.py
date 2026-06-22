@@ -10,8 +10,8 @@ Every N seconds:
      - dispatch            — async, doesn't block tick
 
 Multi-replica safe: SKIP LOCKED ensures only one web instance claims any
-particular row. heartbeat is the dispatcher's responsibility (long-running
-runs renew lease via heartbeat_run).
+particular row. Crashed-worker leases are reclaimed by reap_stale_runs
+(step 1) once they expire; there is no per-run lease heartbeat.
 """
 
 from __future__ import annotations

@@ -299,25 +299,3 @@ class MemoryRepository(UserScopedRepository):
             )
             row = await cur.fetchone()
         return MemoryRow.from_record(row) if row else None
-
-    async def bump_reference(self, memory_ids: list[str], run_id: str) -> int:
-        """Increment reference_count + append run_id to referenced_by_runs.
-
-        Caller (agent run wrapper) tracks which memories the run consumed
-        and bumps in batch at run end. Returns number of rows updated.
-        """
-        if not memory_ids:
-            return 0
-        async with self._conn.cursor() as cur:
-            await cur.execute(
-                """
-                UPDATE pai_memory
-                SET reference_count = reference_count + 1,
-                    last_referenced_at = NOW(),
-                    referenced_by_runs =
-                      (referenced_by_runs - %s) || to_jsonb(%s::text)
-                WHERE user_id = %s AND id = ANY(%s)
-                """,
-                (run_id, run_id, self._user_id, memory_ids),
-            )
-            return cur.rowcount or 0

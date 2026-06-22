@@ -157,9 +157,8 @@ export default function ViewRouter({
           </div>
         ) : activeView === "connect" ? (
           /* Real data + device connections + auto settings (old AppShell
-             CONTROL view). Replaces Lovable's hardcoded ConnectPanel
-             so users can actually wire Composio, devices, auto-generate
-             and auto-dreaming. */
+             CONTROL view): wire Composio, devices, auto-generate and
+             auto-dreaming. */
           <div className="h-full overflow-y-auto">
             <RealControlPanel composio={composio} />
           </div>

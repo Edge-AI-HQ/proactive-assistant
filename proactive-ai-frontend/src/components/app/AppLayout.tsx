@@ -17,9 +17,6 @@ import {
   MapPin, Sun, Activity, Users, ChevronUp, Target,
 } from "lucide-react";
 import VideoBackdrop from "@/components/app/VideoBackdrop";
-import AiSphere from "@/components/now/AiSphere";
-
-import ConnectPanel from "@/components/connect/ConnectPanel";
 import { type TimelineEntry as AmbientTimelineEntry } from "@/components/ambient/AmbientView";
 import { type ChatCard, brandSvg, detectToolIcon } from "@/components/chat/ChatDetailView";
 import CardChatOverlay from "@/components/chat/CardChatOverlay";

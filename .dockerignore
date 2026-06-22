@@ -4,8 +4,6 @@
 .env
 .env.local
 .env.keys
-!apis/.env.dev
-!apis/.env.production
 /data
 .git
 .DS_Store
@@ -16,9 +14,6 @@
 /docs
 /ops
 /pin-cli
-apis/data
 # Stale local build artifacts — Docker builds from scratch in each stage
-apis/dist
-apis/public/proactive
 proactive-ai-frontend/dist
 proactive-ai-frontend/ios/DerivedData

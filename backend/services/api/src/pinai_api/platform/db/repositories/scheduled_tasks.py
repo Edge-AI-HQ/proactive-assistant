@@ -687,29 +687,6 @@ async def insert_run(
         return (cur.rowcount or 0) > 0
 
 
-async def heartbeat_run(
-    conn: AsyncConnection[DictRow],
-    *,
-    user_id: int,
-    run_id: str,
-    lease_owner: str,
-    lease_seconds: int,
-) -> bool:
-    """Renew lease. Only succeeds if we still own the lease (no race-stolen)."""
-    async with conn.cursor() as cur:
-        await cur.execute(
-            """
-            UPDATE pai_scheduled_task_runs
-            SET lease_expires_at = NOW() + (%s::int * INTERVAL '1 second')
-            WHERE user_id = %s AND id = %s
-              AND lease_owner = %s
-              AND status = 'running'
-            """,
-            (lease_seconds, user_id, run_id, lease_owner),
-        )
-        return (cur.rowcount or 0) > 0
-
-
 async def complete_run(
     conn: AsyncConnection[DictRow],
     *,

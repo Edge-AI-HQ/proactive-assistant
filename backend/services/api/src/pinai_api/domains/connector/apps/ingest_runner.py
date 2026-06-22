@@ -118,16 +118,6 @@ def supported_toolkits() -> set[str]:
     return {p.stem for p in _recipes_dir().glob("*.yaml")}
 
 
-def ingestable_toolkits() -> set[str]:
-    """Toolkits that actually run ingest (excludes connect_only)."""
-    out: set[str] = set()
-    for tk in supported_toolkits():
-        r = load_recipe(tk)
-        if r is not None and r.is_ingestable():
-            out.add(tk)
-    return out
-
-
 # ── since formatting ───────────────────────────────────────────────────
 
 

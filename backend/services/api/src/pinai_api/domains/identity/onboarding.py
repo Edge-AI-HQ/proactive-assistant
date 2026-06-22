@@ -28,6 +28,7 @@ from pinai_api.config import get_web_settings
 from ...domains.billing.provisioning import ensure_user_litellm_key
 from ...platform.auth.deps import User, current_user, get_pool
 from ...platform.litellm.client import LiteLLMError
+from ...platform.litellm.response import error_message, message_content
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
@@ -786,9 +787,9 @@ async def generate_onboarding_connector_summary(
     except ValueError:
         parsed = {"message": response.text}
     if not response.is_success:
-        raise LiteLLMError(response.status_code, _error_message(parsed) or response.text[:300])
+        raise LiteLLMError(response.status_code, error_message(parsed) or response.text[:300])
 
-    content = _message_content(parsed)
+    content = message_content(parsed)
     if content is None:
         raise LiteLLMError(502, "/chat/completions response missing content")
     return _parse_summary_payload(content)
@@ -1344,37 +1345,6 @@ def _iso(value: Any) -> str:
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return str(value)
-
-
-def _message_content(payload: Any) -> str | None:
-    if not isinstance(payload, dict):
-        return None
-    choices = payload.get("choices")
-    if not isinstance(choices, list) or not choices:
-        return None
-    first = choices[0]
-    if not isinstance(first, dict):
-        return None
-    message = first.get("message")
-    if not isinstance(message, dict):
-        return None
-    content = message.get("content")
-    return content if isinstance(content, str) and content.strip() else None
-
-
-def _error_message(payload: Any) -> str | None:
-    if not isinstance(payload, dict):
-        return None
-    error = payload.get("error")
-    if isinstance(error, dict):
-        message = error.get("message") or error.get("detail")
-        if isinstance(message, str) and message.strip():
-            return message.strip()
-    for key in ("message", "detail", "error"):
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
 
 
 def _empty_connector_summary() -> OnboardingConnectorSummary:

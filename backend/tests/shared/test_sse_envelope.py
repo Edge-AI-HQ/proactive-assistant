@@ -13,7 +13,6 @@ from pinai_contracts.sse_envelope import (
     EV_CHAT_THINKING,
     EV_CHAT_TOOL_RESULT,
     EV_CHAT_TOOL_START,
-    EV_TASK_PROGRESS,
     SSEEvent,
     emit,
     validate_event,
@@ -109,11 +108,10 @@ def test_to_wire_camel_cases_trace_id():
     assert "trace_id" not in wire
 
 
-def test_namespaces_cover_three_domains():
-    """Sanity: the inventory mentions each of chat/browser/task at least once."""
+def test_namespaces_cover_two_domains():
+    """Sanity: the inventory mentions each of chat/browser at least once."""
     assert EV_CHAT_DELTA.startswith("chat:")
     assert EV_BROWSER_OPENED.startswith("browser:")
-    assert EV_TASK_PROGRESS.startswith("task:")
 
 
 def test_safe_args_returns_value_when_under_cap():

@@ -41,7 +41,7 @@ flowchart LR
 - pgvector embedding 队列(`pai_embedding_queue`)与异步生成。
 - `/api/memory|signals|profile|skills|raw|evolution|world` 路由(UI + agent 双表面)。
 - `pinai_sdk` 在 sandbox 内的对端调用。
-- 三个 chat-side agent(crystallize / dream / evolve)的写入语义。
+- 三个 agent-engine-side agent(crystallize / dream / evolve)的写入语义。
 - RLS(`SET LOCAL app.user_id`)的多租户隔离。
 
 不包含:
@@ -100,7 +100,7 @@ active                            (当前事实)
 
 | `trigger_kind` | 触发源 |
 |---|---|
-| `chat_burst` | crystallize agent(当前由 chat 进程内联触发;scheduler `crystallize` kind 路由已就位但没接 producer) |
+| `chat_burst` | crystallize agent(当前由 agent-engine 进程内联触发;scheduler `crystallize` kind 路由已就位但没接 producer) |
 | `daily_dream` | scheduler kind `auto.dreaming` |
 | `manual` | CLI / 内部 / 测试触发 |
 | `on_event` | scheduler kind `connector.evolve`(init / 非空 sync 之后) |
@@ -110,13 +110,13 @@ active                            (当前事实)
 
 ## pgvector 与 embedding
 
-migration `029_pgvector_semantic_memory.sql` 给 `pai_memory` / `pai_personal_signals` / `pai_world_signals` 各加一列 `embedding vector(1536)` + `embedding_model TEXT` + `embedded_at TIMESTAMPTZ`,model pin `text-embedding-3-small`(`web/embeddings.py:_MODEL`)。
+migration `029_pgvector_semantic_memory.sql` 给 `pai_memory` / `pai_personal_signals` / `pai_world_signals` 各加一列 `embedding vector(1536)` + `embedding_model TEXT` + `embedded_at TIMESTAMPTZ`,model pin `text-embedding-3-small`(`pinai_api/platform/embeddings.py:_MODEL`)。
 
 异步队列 `pai_embedding_queue`:
 
 - `(user_id, table_name, row_id)` PK,`status` ∈ `pending / running / done / failed`。
 - 写入侧:repository 在 `memory.add` / `signals.add` / `world_signals.add` 之后 `embeddings.enqueue(conn, user_id, table_name, row_id, text)`。
-- 消费侧:`web/scheduler/tick_loop.py` 每轮顺手 `embeddings.drain_queue()`(batch 32 条,调 LiteLLM `/embeddings` master key,写回 source 表的 embedding 列,翻 queue 行 `done`)。
+- 消费侧:`pinai_api/orchestration/tick_loop.py` 每轮顺手 `embeddings.drain_queue()`(batch 32 条,调 LiteLLM `/embeddings` master key,写回 source 表的 embedding 列,翻 queue 行 `done`)。
 - 失败 attempts 上限 5,`last_error TEXT(500)`。
 
 HNSW 索引 + RLS(WHERE user_id 先短路再做 vector op),hot path:
@@ -150,14 +150,14 @@ HNSW 索引 + RLS(WHERE user_id 先短路再做 vector op),hot path:
 | `/api/agent/skills` | list / get / add |
 | `/api/agent/raw` | list / get(toolkit-aware) |
 | `/api/agent/world` | recent / search / score / consume / reference |
-| `/api/agent/evolution` | create / list / get / complete / fail(`_dispatch_dream` 在 web 侧管 lifecycle,agent 调写) |
+| `/api/agent/evolution` | create / list / get / complete / fail(`_dispatch_dream` 在 api 侧管 lifecycle,agent 调写) |
 | `/api/agent/feedback` | list / log |
 | `/api/agent/cards` | recent(读 generation 卡片做上下文) |
 | `/api/agent/state` | KV(sandbox 跑 python 时持久 state) |
 
 ## pinai_sdk(sandbox 内对端)
 
-`backend/packages/pinai_sdk/`,sandbox image 里 baked。chat 端工具或 `python_exec` 里都通过 `from pinai_sdk import client` 调,SDK 读 `PAI_API_URL` + `PAI_SANDBOX_TOKEN` env,打 `/api/agent/*`:
+`backend/packages/pinai_sdk/`,sandbox image 里 baked。agent-engine 端工具或 `python_exec` 里都通过 `from pinai_sdk import client` 调,SDK 读 `PAI_API_URL` + `PAI_SANDBOX_TOKEN` env,打 `/api/agent/*`:
 
 ```python
 await client.memory.list(min_quality=0.6, subject="topic:", limit=20)
@@ -192,7 +192,7 @@ SDK 顶层 `client.sys.schema()` 列出当前 sandbox 能调的全部 endpoint(�
 
 ### `connector.evolve`(`on_event`)
 
-scheduler 派 → POST `chat /agent/run/evolve` → `chat/agents/evolve.py`:
+scheduler 派 → POST `agent-engine /agent/run/evolve` → `agent_engine/agents/evolve.py`:
 
 输入:刚 ingest 的 raw 行(20 条 sample,从 `task.payload.refs` 取)+ 现有 memory subjects(去重)+ profile summary(避免矛盾)。
 
@@ -207,15 +207,15 @@ LLM 失败:`evolution_runs.status='failed'` + `error_message`,raw + signals 保�
 
 ### `auto.dreaming`(`daily_dream`)
 
-scheduler 派(每日按用户 timezone 06:00 左右一次)→ web 侧 `_dispatch_dream` 先写 `pai_evolution_runs` 行(`status='running'`)→ POST `chat /agent/run/dream` → chat agent 跑长 loop → web 侧根据 HTTP 结果翻 `completed` / `failed`。
+scheduler 派(每日按用户 timezone 06:00 左右一次)→ api 侧 `_dispatch_dream`(`orchestration/dispatcher.py`)先写 `pai_evolution_runs` 行(`status='running'`)→ POST `agent-engine /agent/run/dream` → agent-engine agent 跑长 loop → api 侧根据 HTTP 结果翻 `completed` / `failed`。
 
 输入:过去 24h 的 personal_signals 全量窗口是主输入,`auto.dreaming` 必须用 `status=all, hours=24, limit=10000, includePayload=true` 拉取,避免默认 20–50 条分页漏掉当天 ambient transcript / connector summary,同时保证 transcript payload 正文也进入分析窗口。raw 是同一 24h 窗口的补充证据,通过 `raw.list(..., hours=24, limit=10000)` 按支持的 typed raw source 拉取;再叠加当前 memory / profile / goals。
 
-输出:`memory.add` / `memory.supersede`(整理矛盾)/ `profile.upsert`(每日漂移)/ 偶尔 `goals.upsert`。失败 lifecycle 包在 dispatcher 里,chat OOM 也能翻成 `failed` 不留 ghost row。
+输出:`memory.add` / `memory.supersede`(整理矛盾)/ `profile.upsert`(每日漂移)/ 偶尔 `goals.upsert`。失败 lifecycle 包在 dispatcher 里,agent-engine OOM 也能翻成 `failed` 不留 ghost row。
 
 ### `crystallize`(`chat_burst`)
 
-`chat/agents/crystallize.py`,**当前 chat 进程 inline 触发**(不走 scheduler 队列;dispatcher 的 `crystallize` kind 路由已实现 POST `chat /agent/run/crystallize`,但 web 端没有 producer 入队 — 详见 [Background Tasks](./background-tasks))。
+`agent_engine/agents/crystallize.py`,**当前 agent-engine 进程 inline 触发**(不走 scheduler 队列;dispatcher 的 `crystallize` kind 路由已实现 POST `agent-engine /agent/run/crystallize`,但 api 端没有 producer 入队 — 详见 [Background Tasks](./background-tasks))。
 
 输入:chat agent 从 LangGraph checkpointer 读完整 transcript + recent personal_signals + 当前 memory / profile,生成 `source='crystallize'` 的 memory / skill。
 
@@ -225,7 +225,7 @@ scheduler 派(每日按用户 timezone 06:00 左右一次)→ web 侧 `_dispatch
 
 `023_pai_rls.sql` 给所有 per-user 表(22 张)挂 `USING (user_id = current_setting('app.user_id', true)::bigint)`。
 
-repository 层 `user_scoped_tx(pool, user_id)`(`web/db/rls.py`)异步 context manager 包所有读写:
+repository 层 `user_scoped_tx(pool, user_id)`(`libs/db/src/pinai_db/rls.py`)异步 context manager 包所有读写:
 
 ```python
 async with user_scoped_tx(pool, user_id) as conn:
@@ -242,19 +242,19 @@ async with user_scoped_tx(pool, user_id) as conn:
 | 改动 | 先看 |
 |---|---|
 | Schema 改 / 加表 | `backend/db/migrations/`(NNN 顺序,只向前,RLS policy 同步加在 023 风格的新文件里) |
-| Memory repository | `web/db/repositories/memory.py`(`list_active`、`add`、`supersede`、`archive`) |
-| Personal signals repository | `web/db/repositories/personal_signals.py`(`list`、`consume`、`add`、`mark_referenced`) |
-| World signals repository / 全局 ingest | `web/db/repositories/world_signals.py`、`web/services/world_ingest.py` |
-| Profile / goals repository | `web/db/repositories/profile.py` |
-| Skills repository | `web/db/repositories/skills.py`(`body` inline TEXT,有 `revision` + `body_hash`) |
-| Raw device repository | `web/db/repositories/raw_device.py` |
-| Evolution repository | `web/db/repositories/evolution.py` |
-| UI 路由 | `web/routes/ui/{memory,signals,profile,skills,raw,dreaming}.py` |
-| Agent 路由 | `web/routes/agent/{memory,signals,profile,skills,raw,world,evolution,cards,feedback,state}.py` |
-| pgvector embedding | `web/embeddings.py`、`pai_embedding_queue` migration `029` |
+| Memory repository | `pinai_api/domains/user_model/memory.py`(`list_active`、`add`、`supersede`、`archive`) |
+| Personal signals repository | `pinai_api/domains/user_model/personal_signals.py`(`list`、`consume`、`add`、`mark_referenced`) |
+| World signals repository / 全局 ingest | `pinai_api/domains/connector/world/world_signals.py`、`pinai_api/domains/connector/world/world_ingest.py` |
+| Profile / goals repository | `pinai_api/domains/user_model/profile.py` |
+| Skills repository | `pinai_api/domains/user_model/skills.py`(`body` inline TEXT,有 `revision` + `body_hash`) |
+| Raw device repository | `pinai_api/domains/connector/device/raw_device.py` |
+| Evolution repository | `pinai_api/domains/user_model/evolution.py` |
+| UI 路由 | `pinai_api/domains/user_model/{memory_ui,signals_ui,profile_ui,skills_ui,dreaming_ui}.py`、`domains/connector/apps/raw_ui.py` |
+| Agent 路由 | `pinai_api/domains/user_model/{memory_agent,signals_agent,profile_agent,skills_agent,evolution_agent}.py`、`domains/connector/{apps/raw_agent.py,world/agent.py}`、`domains/generation/cards_agent.py`、`domains/feedback/agent.py` |
+| pgvector embedding | `pinai_api/platform/embeddings.py`、`pai_embedding_queue` migration `029` |
 | pinai_sdk client | `backend/packages/pinai_sdk/src/pinai_sdk/` |
-| dream / evolve / crystallize agent | `backend/src/pinai_agents/chat/agents/{dream,evolve,crystallize}.py` |
-| RLS helper | `backend/src/pinai_agents/web/db/rls.py` |
+| dream / evolve / crystallize agent | `backend/services/agent-engine/src/agent_engine/agents/{dream,evolve,crystallize}.py` |
+| RLS helper | `backend/libs/db/src/pinai_db/rls.py` |
 | 前端 memory / profile / skill | `proactive-ai-frontend/src/hooks/{useMemories,useSkills}.ts`、`components/{MemoriesPanel,SkillsPanel,ControlPanel,GoalsView}.tsx` |
 
 ## 验证方式
@@ -270,7 +270,7 @@ cd backend && uv run pytest tests/web/db/test_profile_repo.py
 cd backend && uv run pytest tests/web/routes/test_agent_profile_routes.py
 cd backend && uv run pytest tests/web/routes/                   # 全 route 套件
 
-# chat-side evolution agent
+# agent-engine evolution agent(测试目录仍是 tests/chat/)
 cd backend && uv run pytest tests/chat/agents/                  # dream / evolve / crystallize(若存在)
 
 # pinai_sdk
@@ -312,7 +312,7 @@ SELECT status, count(*) FROM pai_embedding_queue GROUP BY status;
 - `pai_world_signals` 没 `user_id`,RLS policy 跟 per-user 表不一样;写代码时不要套同一个 `user_scoped_tx`。
 - `pai_memory.embedding` / `pai_personal_signals.embedding` / `pai_world_signals.embedding` 是异步队列写的,不要在 INSERT 之后立刻 vector 搜 — 给至少一轮 tick(默认 3s)让 `drain_queue` 跑。
 - skill `body` 现在 inline 在 `pai_skill_index.body TEXT` 列,**没有**文件系统路径 `/opt/pinai/skills/<id>/SKILL.md`(OpenClaw 退役),代码读 SKILL.md 走 DB,不要再回到 `existsSync` candidate 模式。
-- `pai_evolution_runs` 的 `_dispatch_dream` lifecycle 在 web 进程拿着,chat 端只算 LLM;chat OOM 时 web 仍能把行翻 `failed`,不要在 chat 端自己写 `status='completed'`。
+- `pai_evolution_runs` 的 `_dispatch_dream` lifecycle 在 api 进程拿着,agent-engine 端只算 LLM;agent-engine OOM 时 api 仍能把行翻 `failed`,不要在 agent-engine 端自己写 `status='completed'`。
 - v2 satellite 表已经全部撤掉:`profile_signals` / `profile_interests` / `dream_runs` / `auto_loop_state` / `chat_crystallize_state` / `push_records` / `push_outcomes` 不存在,代码里不要再 grep。
 - `mobile_items.db` / `raw.db` / `proactive.db` 三个 SQLite 文件**完全不在用了**,所有数据在 Postgres `pai_*`。
 - `pai_goals.key` 是 `UNIQUE (user_id, key)`,upsert 用 key 当 dedup 锚,不要按 id 重复 INSERT。

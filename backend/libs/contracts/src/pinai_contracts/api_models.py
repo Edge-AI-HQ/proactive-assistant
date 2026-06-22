@@ -96,10 +96,6 @@ class PersonalSignalItem(_CamelModel):
     ingested_at: datetime
 
 
-class PersonalSignalListResponse(_CamelModel):
-    items: list[PersonalSignalItem]
-
-
 class PersonalSignalIngestRequest(_CamelModel):
     id: str | None = None
     kind: str
@@ -276,27 +272,6 @@ DevelopmentFeedbackStatus = Literal["new", "reviewed", "planned", "closed"]
 DevelopmentFeedbackSource = Literal["user", "internal_operator", "agent"]
 
 
-class PreferenceItem(_CamelModel):
-    id: str
-    statement: str
-    scope: PreferenceScope
-    polarity: PreferencePolarity
-    weight: float
-    confidence: float | None = None
-    source: str
-    evidence: dict[str, Any] = Field(default_factory=dict)
-    durability: PreferenceDurability
-    expires_at: datetime | None = None
-    status: str
-    superseded_by: str | None = None
-    created_at: datetime
-    updated_at: datetime
-
-
-class PreferenceListResponse(_CamelModel):
-    items: list[PreferenceItem]
-
-
 class PreferenceAddRequest(_CamelModel):
     """Agent-supplied preference fields. `source` is NOT here on purpose —
     the route stamps it from the JWT principal so the agent cannot claim
@@ -393,11 +368,6 @@ class DevelopmentFeedbackItem(_CamelModel):
 class DevelopmentFeedbackCreateResponse(_CamelModel):
     received: bool
     item: DevelopmentFeedbackItem
-
-
-# ── App State KV ──
-class AppStateValue(_CamelModel):
-    value: Any
 
 
 # ── Generate / Run ──
@@ -699,32 +669,3 @@ class GeneratorOutput(_AgentModel):
         description="Evaluation audit rows. Empty is allowed for error/no-grounded-candidate shells.",
     )
     batch_feedback: str = Field(max_length=3000)
-
-
-# ── Scheduled Tasks ──
-class ScheduledTaskItem(_CamelModel):
-    id: str
-    kind: str
-    name: str | None = None
-    trigger_kind: str
-    cron_expr: str | None = None
-    interval_seconds: int | None = None
-    status: str
-    next_run_at: datetime | None = None
-    last_run_at: datetime | None = None
-    last_run_status: str | None = None
-    run_count: int
-
-
-class ScheduledTaskUpsertRequest(_CamelModel):
-    id: str
-    kind: str
-    trigger_kind: Literal["schedule", "event", "once"]
-    cron_expr: str | None = None
-    interval_seconds: int | None = None
-    next_run_at: datetime | None = None
-    name: str | None = None
-    prompt: str | None = None
-    payload: dict[str, Any] = Field(default_factory=dict)
-    timezone: str = "UTC"
-    status: str = "active"

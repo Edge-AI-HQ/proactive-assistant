@@ -21,7 +21,6 @@ from pinai_api.domains.user_model.personal_signals import (
     IngestSignalInput,
     PersonalSignalsRepository,
 )
-from pinai_api.domains.user_model.signals_agent import _ambient_speaker_preview
 from pinai_api.platform.auth.agent_jwt import sign_agent_run_jwt
 from pinai_db.rls import service_tx, user_scoped_tx
 
@@ -61,28 +60,6 @@ async def client(pool):
 def _auth(user_id: int) -> dict[str, str]:
     token, _ = sign_agent_run_jwt(user_id=user_id, virtual_key=None)
     return {"Authorization": f"Bearer {token}"}
-
-
-def test_ambient_speaker_preview_derives_text_from_payload():
-    assert _ambient_speaker_preview(
-        {
-            "self_text": " I need to finish the review first ",
-            "speaker_text": 'speaker_1: "lunch?"\nself: "review first"',
-        }
-    ) == {
-        "selfText": "I need to finish the review first",
-        "speakerText": 'speaker_1: "lunch?"\nself: "review first"',
-    }
-    assert _ambient_speaker_preview(
-        {
-            "speaker_segments": [
-                {"speaker": "speaker_1", "text": "lunch?"},
-                {"speaker": "self", "text": "review first"},
-            ],
-        }
-    ) == {
-        "speakerText": 'speaker_1: "lunch?"\nself: "review first"',
-    }
 
 
 @pytest.mark.asyncio

@@ -38,19 +38,3 @@ MessageSource = Literal[
 # "fanout 走 actor" 的预留 source：当前 card bootstrap 走老 card_fanout.stream_chat()
 # 直打 chat、不经 mailbox，所以从未写入。不收进上面的 Literal —— worker 的
 # _pick_trigger / _input_rows 不处理它，补进来反而埋雷。RC-2 fanout 迁移时再启用。
-
-RunStatus = Literal[
-    "pending",
-    "running",
-    "awaiting_input",  # HITL: blocked on a tool decision
-    "succeeded",
-    "failed",
-    "cancelled",
-]
-
-# awaiting_input: 'requires_action'. terminal: 'end_turn' / 'error' / 'cancelled'.
-RunStopReason = Literal["requires_action", "end_turn", "error", "cancelled"]
-
-# cancel(reason) discriminates whether partial output is kept (interrupt) or
-# discarded (cancel) — see plan §十一.
-CancelReason = Literal["user_cancel", "user_interrupt"]

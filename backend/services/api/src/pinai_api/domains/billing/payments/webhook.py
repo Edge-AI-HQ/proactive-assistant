@@ -26,7 +26,7 @@ from typing import Any
 from . import budget_periods as periods_repo
 from . import credit_grants as grants_repo
 from . import plans, subscriptions
-from .stripe_client import requires_stripe, requires_webhook_secret
+from .stripe_client import add_calendar_months, requires_stripe, requires_webhook_secret
 
 logger = logging.getLogger(__name__)
 
@@ -189,30 +189,7 @@ async def _topup_expires_at(conn, user_id: int) -> datetime:
     now = datetime.now(UTC)
     period = await periods_repo.get_open_period(conn, user_id)
     anchor = period.period_end if period and period.period_end > now else now
-    return _add_calendar_months(anchor, _GRANT_TTL_MONTHS)
-
-
-def _add_calendar_months(dt: datetime, months: int) -> datetime:
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    month_index = dt.month - 1 + months
-    year = dt.year + month_index // 12
-    month = month_index % 12 + 1
-    month_lengths = {
-        1: 31,
-        2: 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28,
-        3: 31,
-        4: 30,
-        5: 31,
-        6: 30,
-        7: 31,
-        8: 31,
-        9: 30,
-        10: 31,
-        11: 30,
-        12: 31,
-    }
-    return dt.replace(year=year, month=month, day=min(dt.day, month_lengths[month]))
+    return add_calendar_months(anchor, _GRANT_TTL_MONTHS)
 
 
 async def _handle_checkout_completed(conn, session: Any) -> None:
@@ -466,6 +443,13 @@ async def _user_id_from_metadata(conn, obj: Any) -> int | None:
 
 
 def _attr(obj: Any, name: str) -> Any:
+    # NOT consolidated with stripe_client.stripe_attr: this reads attribute
+    # first, .get second — the opposite order. `_plan_code_for_subscription`
+    # below calls `_attr(sub, "items")`, where "items" collides with dict's
+    # own .items() method; attribute-first returns the bound method (so the
+    # current code resolves no plan_code), while stripe_attr (get-first)
+    # would return the real line-items field. Swapping would change runtime
+    # behavior, so this stays private. See stripe_attr's docstring.
     if obj is None:
         return None
     if hasattr(obj, name):

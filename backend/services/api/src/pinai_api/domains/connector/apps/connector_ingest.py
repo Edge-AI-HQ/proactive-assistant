@@ -2050,6 +2050,6 @@ _UPSERTERS.update(
 def supported_toolkits() -> frozenset[str]:
     """Public read-only view of toolkits with a working upserter.
     Used by tests + diagnostics. A toolkit must additionally have an
-    ingestable recipe (see ingest_runner.ingestable_toolkits()) for
+    ingestable recipe (recipe.is_ingestable() in ingest_runner) for
     end-to-end ingest to actually run."""
     return frozenset(_UPSERTERS.keys())

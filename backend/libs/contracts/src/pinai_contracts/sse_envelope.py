@@ -140,8 +140,3 @@ EV_BROWSER_NAVIGATED = "browser:navigated"
 EV_BROWSER_CONTROL_GRANTED = "browser:control:granted"
 EV_BROWSER_CONTROL_TAKEOVER = "browser:control:takeover"
 EV_BROWSER_ERROR = "browser:error"
-
-# task:* (long-running tasks — scheduler / dream / evolve)
-EV_TASK_PROGRESS = "task:progress"
-EV_TASK_DONE = "task:done"
-EV_TASK_ERROR = "task:error"

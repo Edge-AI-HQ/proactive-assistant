@@ -41,7 +41,7 @@ from . import budget_periods as periods_repo
 from . import credit_grants as grants_repo
 from . import plans as plans_repo
 from . import subscriptions as subs_repo
-from .stripe_client import requires_stripe
+from .stripe_client import add_calendar_months, coerce_dt, requires_stripe, stripe_attr
 
 logger = logging.getLogger(__name__)
 
@@ -73,15 +73,6 @@ async def _get_user_stripe_customer_id(pool, user_id: int) -> str | None:
     return (row or {}).get("stripe_customer_id")
 
 
-async def _free_tier_budget_usd(conn) -> float:
-    """Read Free plan's monthly budget from pai_billing_plans (SSOT).
-    Falls back to $5 if 'free' row missing for some reason."""
-    plan = await plans_repo.find_by_code(conn, "free")
-    if plan is None:
-        return 5.0
-    return plan.monthly_refresh_credits / 100.0
-
-
 async def _virtual_key_for_user(conn, user_id: int) -> str | None:
     """Fetch the user's LiteLLM virtual key from users table."""
     async with conn.cursor() as cur:
@@ -96,22 +87,6 @@ async def _virtual_key_for_user(conn, user_id: int) -> str | None:
     return key if isinstance(key, str) and key else None
 
 
-def _coerce_dt(v: Any) -> datetime | None:
-    if v is None:
-        return None
-    if isinstance(v, datetime):
-        return v.astimezone(UTC) if v.tzinfo else v.replace(tzinfo=UTC)
-    if isinstance(v, int | float):
-        return datetime.fromtimestamp(float(v), tz=UTC)
-    if isinstance(v, str):
-        try:
-            s = v[:-1] + "+00:00" if v.endswith("Z") else v
-            return datetime.fromisoformat(s).astimezone(UTC)
-        except ValueError:
-            return None
-    return None
-
-
 def _now_utc() -> datetime:
     return datetime.now(UTC)
 
@@ -121,27 +96,6 @@ def _append_checkout_session_id(url: str) -> str:
     session_param = "session_id={CHECKOUT_SESSION_ID}"
     query = f"{parts.query}&{session_param}" if parts.query else session_param
     return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
-
-
-def _add_one_calendar_month(dt: datetime) -> datetime:
-    """Add one calendar month, preserving the day when possible."""
-    year = dt.year + (1 if dt.month == 12 else 0)
-    month = 1 if dt.month == 12 else dt.month + 1
-    month_lengths = {
-        1: 31,
-        2: 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28,
-        3: 31,
-        4: 30,
-        5: 31,
-        6: 30,
-        7: 31,
-        8: 31,
-        9: 30,
-        10: 31,
-        11: 30,
-        12: 31,
-    }
-    return dt.replace(year=year, month=month, day=min(dt.day, month_lengths[month]))
 
 
 def _duration_seconds(start: datetime, end: datetime) -> str:
@@ -198,16 +152,16 @@ def _subscription_period_bounds(
     fallback_start: datetime | None = None,
     fallback_end: datetime | None = None,
 ) -> tuple[datetime, datetime]:
-    period_start = fallback_start or _coerce_dt(
-        _stripe_attr(stripe_subscription, "current_period_start")
+    period_start = fallback_start or coerce_dt(
+        stripe_attr(stripe_subscription, "current_period_start")
     )
     if period_start is None:
         period_start = _now_utc()
-    period_end = _coerce_dt(_stripe_attr(stripe_subscription, "current_period_end"))
+    period_end = coerce_dt(stripe_attr(stripe_subscription, "current_period_end"))
     if period_end is None:
         period_end = fallback_end
     if period_end is None or period_end <= period_start:
-        period_end = _add_one_calendar_month(period_start)
+        period_end = add_calendar_months(period_start, 1)
     return period_start, period_end
 
 
@@ -240,7 +194,7 @@ async def _read_litellm_anchor_for_user(
         spend = Decimal(str(raw_spend)) if raw_spend is not None else Decimal("0")
     except (InvalidOperation, ValueError):
         spend = Decimal("0")
-    return spend, _coerce_dt(info.get("budget_reset_at"))
+    return spend, coerce_dt(info.get("budget_reset_at"))
 
 
 async def ensure_user_free_subscription(conn, user_id: int) -> None:
@@ -783,7 +737,7 @@ async def _apply_immediate_upgrade(
     # Only pay() when not already paid — pay() on an already-paid invoice
     # raises "Invoice is already paid", which would wrongly look like a
     # payment failure (verified against Stripe test mode 2026-06-16).
-    if _stripe_attr(invoice, "status") != "paid":
+    if stripe_attr(invoice, "status") != "paid":
         try:
             invoice = stripe.Invoice.pay(invoice.id)
         except Exception as e:
@@ -795,7 +749,7 @@ async def _apply_immediate_upgrade(
                 status_code=402,
                 detail=f"upgrade payment failed: {type(e).__name__}",
             ) from e
-    if _stripe_attr(invoice, "status") != "paid":
+    if stripe_attr(invoice, "status") != "paid":
         stripe.Invoice.void_invoice(invoice.id)
         raise HTTPException(402, "upgrade payment not completed")
 
@@ -805,7 +759,7 @@ async def _apply_immediate_upgrade(
     )
 
     upgrade_period_start = _now_utc()
-    upgrade_period_end = _add_one_calendar_month(upgrade_period_start)
+    upgrade_period_end = add_calendar_months(upgrade_period_start, 1)
 
     # 2. Difference paid → swap the recurring price, anchor the next full
     #    subscription invoice one month from now, and revoke any scheduled
@@ -952,23 +906,6 @@ _STRIPE_LIVE_STATUSES = frozenset(
 )
 
 
-def _stripe_attr(obj: Any, name: str) -> Any:
-    """Read a field from a Stripe SDK object.
-
-    Python Stripe SDK's StripeObject subclasses dict — that means certain
-    field names collide with dict's own methods ('items', 'keys', 'values',
-    'pop', ...). For those, attribute access returns the dict method, not
-    the field. Always use bracket / .get access for fields that might
-    collide. Safe fallback: try .get first, then attribute access."""
-    if obj is None:
-        return None
-    if hasattr(obj, "get") and callable(obj.get):
-        v = obj.get(name)
-        if v is not None:
-            return v
-    return getattr(obj, name, None)
-
-
 def _payment_method_entry(
     *,
     pm_id: str,
@@ -997,9 +934,9 @@ def _entry_from_checkout_charge(
     is_default: bool = False,
     fallback_email: str | None = None,
 ) -> dict[str, Any] | None:
-    details = _stripe_attr(charge, "payment_method_details")
-    pm_type = _stripe_attr(details, "type")
-    charge_id = _stripe_attr(charge, "id")
+    details = stripe_attr(charge, "payment_method_details")
+    pm_type = stripe_attr(details, "type")
+    charge_id = stripe_attr(charge, "id")
     if not isinstance(pm_type, str) or not pm_type:
         return None
     if not isinstance(charge_id, str) or not charge_id:
@@ -1013,14 +950,14 @@ def _entry_from_checkout_charge(
         source="checkout",
     )
     if pm_type == "card":
-        card = _stripe_attr(details, "card")
-        entry["brand"] = _stripe_attr(card, "brand")
-        entry["last4"] = _stripe_attr(card, "last4")
-        entry["expMonth"] = _stripe_attr(card, "exp_month")
-        entry["expYear"] = _stripe_attr(card, "exp_year")
+        card = stripe_attr(details, "card")
+        entry["brand"] = stripe_attr(card, "brand")
+        entry["last4"] = stripe_attr(card, "last4")
+        entry["expMonth"] = stripe_attr(card, "exp_month")
+        entry["expYear"] = stripe_attr(card, "exp_year")
     elif pm_type == "link":
-        link = _stripe_attr(details, "link")
-        link_email = _stripe_attr(link, "email")
+        link = stripe_attr(details, "link")
+        link_email = stripe_attr(link, "email")
         entry["linkEmail"] = (
             link_email if isinstance(link_email, str) and link_email else fallback_email
         )
@@ -1079,17 +1016,17 @@ def _resolve_price_id_from_subscription(stripe_sub: Any) -> str | None:
     """Return the price id of the subscription's first line item.
     Returns None when the subscription has no items (data anomaly).
     Caller resolves price id → plan_code via plans_repo."""
-    items_obj = _stripe_attr(stripe_sub, "items")
+    items_obj = stripe_attr(stripe_sub, "items")
     if items_obj is None:
         return None
-    data = _stripe_attr(items_obj, "data")
+    data = stripe_attr(items_obj, "data")
     if not data:
         return None
     first = data[0]
-    price = _stripe_attr(first, "price")
+    price = stripe_attr(first, "price")
     if price is None:
         return None
-    return _stripe_attr(price, "id")
+    return stripe_attr(price, "id")
 
 
 async def reconcile_subscription_from_stripe(
@@ -1235,11 +1172,11 @@ async def list_payment_methods_for_user(
     # (1) Customer.invoice_settings.default_payment_method
     try:
         customer = stripe.Customer.retrieve(customer_id)
-        dpm = _stripe_attr(_stripe_attr(customer, "invoice_settings"), "default_payment_method")
+        dpm = stripe_attr(stripe_attr(customer, "invoice_settings"), "default_payment_method")
         if isinstance(dpm, str) and dpm:
             default_pm_id = dpm
         elif dpm is not None:
-            default_pm_id = _stripe_attr(dpm, "id")
+            default_pm_id = stripe_attr(dpm, "id")
     except Exception as e:
         logger.warning("retrieving customer for default PM failed: %s", e)
 
@@ -1251,8 +1188,8 @@ async def list_payment_methods_for_user(
     try:
         sub_listing = stripe.Subscription.list(customer=customer_id, status="all", limit=10)
         for sub in sub_listing.data or []:
-            spm = _stripe_attr(sub, "default_payment_method")
-            spm_id = spm if isinstance(spm, str) else _stripe_attr(spm, "id")
+            spm = stripe_attr(sub, "default_payment_method")
+            spm_id = spm if isinstance(spm, str) else stripe_attr(spm, "id")
             if isinstance(spm_id, str) and spm_id and spm_id not in seen:
                 seen.add(spm_id)
                 ordered_pm_ids.append(spm_id)
@@ -1267,7 +1204,7 @@ async def list_payment_methods_for_user(
             limit=limit,
         )
         for pm in attached.data or []:
-            pm_id = pm.id if hasattr(pm, "id") else _stripe_attr(pm, "id")
+            pm_id = pm.id if hasattr(pm, "id") else stripe_attr(pm, "id")
             if pm_id and pm_id not in seen:
                 seen.add(pm_id)
                 ordered_pm_ids.append(pm_id)
@@ -1287,7 +1224,7 @@ async def list_payment_methods_for_user(
     for pm_id in ordered_pm_ids[: limit * 2]:
         try:
             pm = stripe.PaymentMethod.retrieve(pm_id)
-            pm_type = _stripe_attr(pm, "type") or "unknown"
+            pm_type = stripe_attr(pm, "type") or "unknown"
             entry = _payment_method_entry(
                 pm_id=pm_id,
                 pm_type=pm_type,
@@ -1297,15 +1234,15 @@ async def list_payment_methods_for_user(
             )
             identity: tuple[str, ...]
             if pm_type == "card":
-                card = _stripe_attr(pm, "card")
-                entry["brand"] = _stripe_attr(card, "brand")
-                entry["last4"] = _stripe_attr(card, "last4")
-                entry["expMonth"] = _stripe_attr(card, "exp_month")
-                entry["expYear"] = _stripe_attr(card, "exp_year")
+                card = stripe_attr(pm, "card")
+                entry["brand"] = stripe_attr(card, "brand")
+                entry["last4"] = stripe_attr(card, "last4")
+                entry["expMonth"] = stripe_attr(card, "exp_month")
+                entry["expYear"] = stripe_attr(card, "exp_year")
                 identity = ("card", entry["brand"] or "", entry["last4"] or "")
             elif pm_type == "link":
-                link = _stripe_attr(pm, "link")
-                entry["linkEmail"] = _stripe_attr(link, "email")
+                link = stripe_attr(pm, "link")
+                entry["linkEmail"] = stripe_attr(link, "email")
                 identity = ("link", entry["linkEmail"] or "")
             else:
                 identity = ("other", pm_id)
@@ -1329,7 +1266,7 @@ async def list_payment_methods_for_user(
         if pi_id:
             try:
                 payment_intent = stripe.PaymentIntent.retrieve(pi_id, expand=["latest_charge"])
-                charge = _stripe_attr(payment_intent, "latest_charge")
+                charge = stripe_attr(payment_intent, "latest_charge")
                 if isinstance(charge, str) and hasattr(stripe, "Charge"):
                     charge = stripe.Charge.retrieve(charge)
                 user_email = getattr(user, "email", None)

@@ -17,7 +17,7 @@ description: "内部卡片 reward review 工具的当前事实。"
 
 Pattern 子链路(matcher → generator → fingerprint 回流):
 
-`dispatcher → match_patterns(phase1, fingerprint) → chat /agent/generate → persist_generator_run → pai_card_pattern_hits`
+`dispatcher → match_patterns(phase1, fingerprint) → agent-engine /agent/generate → persist_generator_run → pai_card_pattern_hits`
 
 `pai_card_reward_events / pai_feedback_events 写入 → fingerprint fan-out → pai_user_pattern_pref + pai_user_intent_pref`
 
@@ -41,7 +41,7 @@ flowchart LR
   Dispatcher["scheduler dispatcher"] --> Matcher["pattern_matcher.match_patterns"]
   Matcher --> Patterns
   Matcher --> FP[("pai_user_pattern_pref")]
-  Dispatcher --> ChatGen["chat /agent/generate"]
+  Dispatcher --> ChatGen["agent-engine /agent/generate"]
   ChatGen --> Hits
   HealthJob["pattern_health daily job"] --> Patterns
 ```
@@ -75,20 +75,20 @@ flowchart LR
 | 登录 | 复用 Supabase Google OAuth,读取 `../backend/.env` 里的 `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY`。 |
 | API 代理 | 本地开发时走 same-origin `/api/*`,Vite proxy 默认转到 `http://127.0.0.1:8000`;可用 `VITE_PIN_API_PROXY_TARGET` 覆盖。 |
 | Fly dev | 独立 Fly app `proactive-ai-reward-dashboard-dev`,默认 URL `https://proactive-ai-reward-dashboard-dev.fly.dev`;nginx 运行时把 `/api/*` 反代到 `https://proactive-ai-agents-dev.fly.dev`。 |
-| 后端 route | `backend/src/pinai_agents/web/routes/ui/reward_dashboard.py`,prefix 是 `/api/reward-dashboard`。 |
-| Repository | `backend/src/pinai_agents/web/db/repositories/reward.py`,必须在 `user_scoped_tx` 内构造,所有查询按 `user_id` scope。 |
+| 后端 service | reward 后端是**独立 service** `pinai_reward_dashboard`(`backend/services/reward-dashboard/`),只读产品 DB、零产品代码依赖、不持 master credentials。route 在 `pinai_reward_dashboard/routes.py`,prefix `/api/reward-dashboard`。 |
+| Repository | `backend/services/reward-dashboard/src/pinai_reward_dashboard/reward.py`(`RewardRepository`),必须在 `user_scoped_tx` 内构造,所有查询按 `user_id` scope。 |
 | Reward ledger | `pai_card_reward_events` 是 append-only ledger。`card_open` / `user_score` 来源是 `user`,`reviewer_score` 来源是 `reviewer`,`imported_feedback` 来源是 `system`。 |
 | Casebook | `pai_card_casebook` 存 reviewer 选出的好/坏/惊喜/重复/幻觉/弱来源等案例,用于后续人工分析,不直接改 generation 主链路。 |
 | Trace artifact | `TraceArtifactService` 用 LangSmith metadata `pinai_run_id` 定位 generator root trace,生成可重复渲染的 `trace_tree` / `summary` / SVG。 |
 | Personal data | `/personal-data` 是给 reviewer 查 generator 可见上下文的只读 snapshot,不作为 agent runtime 依赖。 |
 | Pattern library SSOT | `docs/data/patterns.yaml` (111 条 abstract pattern) + `docs/data/demo_cards.yaml` (111 张 demo) 是 checkin 真源;由 `backend/scripts/seed_patterns.py` upsert 到 `pai_card_patterns` / `pai_card_pattern_demos`。每条 pattern 必须带 `human_insight` 和 `title_strategy`;每张 demo 必须带 `card.title` 和具体 `source_data`。新增 / 修改 pattern 改这两个 YAML,跑 seed 即可。 |
-| Pattern matcher | `backend/src/pinai_agents/web/services/pattern_matcher.py`,Python DSL evaluator(后缀族 + op-specific evaluators)。**只在 web 进程跑**,chat 进程禁止读 pattern DB,matched 结果通过 generate payload 传过去(信任边界)。 |
-| Phase1 seed | `backend/src/pinai_agents/web/services/phase1_seed.py`:web 侧从 `pai_personal_signals` / `pai_memory` / `pai_world_signal_user_view` / `pai_profile` 拉一份 coarse phase1,供 matcher 在 chat data-collector 跑之前先评估。 |
+| Pattern matcher | `backend/services/api/src/pinai_api/domains/generation/pattern_matcher.py`,Python DSL evaluator(后缀族 + op-specific evaluators)。**只在 api 进程跑**(生成时),agent-engine 进程无 DB access 禁止读 pattern DB,matched 结果通过 generate payload 传过去(信任边界)。 |
+| Phase1 seed | `backend/services/api/src/pinai_api/orchestration/phase1_seed.py`:api 侧从 `pai_personal_signals` / `pai_memory` / `pai_world_signal_user_view` / `pai_profile` 拉一份 coarse phase1,供 matcher 在 agent-engine data-collector 跑之前先评估。 |
 | Per-user fingerprint | `pai_user_pattern_pref` / `pai_user_intent_pref`,`UserFingerprintRepository.record_open` / `record_dismiss` 由 reward / feedback 事件自动调用;`score_for(pattern, base)` 用 hit_rate × recency_decay 做 per-user 排序,3 次连续 dismiss 触发 `suppress_until`。 |
-| Pattern health | `backend/src/pinai_agents/web/services/pattern_health.py`:`hit_rate_7d < 0.15` / `dismiss_rate_30d > 0.6` / `evaluator_human_gap > 3` / 30d 趋势 < -0.5 任一触发就把 active pattern 切 retired。每次跑也会刷新 `base_hit_rate`。 |
-| Hit 持久化 | chat /agent/generate 返回后,`persist_generator_run` 把 evaluator 标注的 `pattern_id` 配合 matcher evidence 写入 `pai_card_pattern_hits`。FK 不存在的 pattern_id(LLM 幻觉)在 INSERT 前过滤,避免把整个 transaction 拖崩。 |
+| Pattern health | `backend/services/reward-dashboard/src/pinai_reward_dashboard/pattern_health.py`:`hit_rate_7d < 0.15` / `dismiss_rate_30d > 0.6` / `evaluator_human_gap > 3` / 30d 趋势 < -0.5 任一触发就把 active pattern 切 retired。每次跑也会刷新 `base_hit_rate`。 |
+| Hit 持久化 | agent-engine /agent/generate 返回后,`persist_generator_run` 把 evaluator 标注的 `pattern_id` 配合 matcher evidence 写入 `pai_card_pattern_hits`。FK 不存在的 pattern_id(LLM 幻觉)在 INSERT 前过滤,避免把整个 transaction 拖崩。 |
 | Pending review | reviewer 在 `/patterns/pending` 审批 AI 抽取的候选(`status = 'pending_review'`);approve → `active`,reject → 删除。从详情页不能直接 flip pending,会被 UI 拒掉并提示走 pending 流程。 |
-| Generator 注入 | chat 端 `generator.py` 把 matched_patterns 写到 sandbox 的 `/state/matched_patterns.json`;payload 里带 `humanInsight` 和 `cardSkeleton.title_strategy`;planner / card-generator / evaluator system prompt 引导它们读该文件、在卡片 `sources[]` 引用 pattern 需要的 signal、emit `pattern_id` + `pattern_grounding`(6 维之一)。 |
+| Generator 注入 | agent-engine 端 `agents/generator.py` 把 matched_patterns 写到 sandbox 的 `/state/matched_patterns.json`;payload 里带 `humanInsight` 和 `cardSkeleton.title_strategy`;planner / card-generator / evaluator system prompt 引导它们读该文件、在卡片 `sources[]` 引用 pattern 需要的 signal、emit `pattern_id` + `pattern_grounding`(6 维之一)。 |
 
 ## 页面工作流
 
@@ -153,24 +153,24 @@ API client 组 query string 时只允许有限数字和白名单 enum。`NaN` / 
 | dashboard auth | `internal-reward-dashboard/src/auth/supabase.ts` |
 | shared trace 文本摘要 | `internal-reward-dashboard/src/lib/traceText.ts` |
 | review components | `internal-reward-dashboard/src/components/CasebookEditor.tsx`、`ScoreControl.tsx`、`MetricStrip.tsx` |
-| backend route | `backend/src/pinai_agents/web/routes/ui/reward_dashboard.py` |
-| reward SQL/read model | `backend/src/pinai_agents/web/db/repositories/reward.py` |
-| personal-data snapshot | `backend/src/pinai_agents/web/services/personal_data_snapshot.py` |
-| LangSmith trace artifact | `backend/src/pinai_agents/web/services/trace_artifacts.py` |
+| backend route | `backend/services/reward-dashboard/src/pinai_reward_dashboard/routes.py` |
+| reward SQL/read model | `backend/services/reward-dashboard/src/pinai_reward_dashboard/reward.py` |
+| personal-data snapshot | `backend/services/reward-dashboard/src/pinai_reward_dashboard/personal_data_snapshot.py` |
+| LangSmith trace artifact | `backend/services/reward-dashboard/src/pinai_reward_dashboard/trace_artifacts.py` |
 | schema (reward) | `backend/db/migrations/042_pai_card_reward_infra.sql` |
 | schema (pattern) | `backend/db/migrations/043_pai_card_patterns.sql` + `046_pai_card_patterns_human_insight.sql` |
 | 用户侧 card open 打点 | `proactive-ai-frontend/src/components/AppShell.tsx`、`src/lib/api.ts:recordCardOpen` |
 | Pattern Studio shell | `internal-reward-dashboard/src/routes/PatternsView.tsx`、`PatternDetailView.tsx`、`PatternsPendingView.tsx`、`PatternsHealthView.tsx`、`PatternsRetiredView.tsx` |
 | Pattern SSOT YAML | `docs/data/patterns.yaml`、`docs/data/demo_cards.yaml`(都 checkin) |
 | Pattern seed 脚本 | `backend/scripts/seed_patterns.py` |
-| Pattern repository | `backend/src/pinai_agents/web/db/repositories/patterns.py` |
-| Pattern matcher | `backend/src/pinai_agents/web/services/pattern_matcher.py` |
-| Web-side phase1 | `backend/src/pinai_agents/web/services/phase1_seed.py` |
-| Pattern health 服务 | `backend/src/pinai_agents/web/services/pattern_health.py` |
-| 行为指纹 | `backend/src/pinai_agents/web/db/repositories/user_fingerprint.py` |
-| Hit 持久化 | `backend/src/pinai_agents/web/routes/ui/generate.py:_persist_pattern_hits` |
-| Generator 注入 | `backend/src/pinai_agents/chat/agents/generator.py`(planner / card-generator / evaluator prompts + `/state/matched_patterns.json` 暂存) |
-| Dev auth 旁路 | `backend/src/pinai_agents/web/auth/deps.py`(DEPLOY_ENV=dev + `X-Dev-Auth: pinai-dev-reviewer` header,本地 reviewer 测 dashboard 用,prod 上死路) + `internal-reward-dashboard/src/api/reward.ts` 自动带 header(DEV build + `localStorage.__devAuthBypass='1'` 或 URL query `?__devAuthBypass=1`)。 |
+| Pattern repository | `backend/libs/db/src/pinai_db/repositories/patterns.py`(跨 service 共享纯 SQL repo,generation 与 reward-dashboard 共用) |
+| Pattern matcher | `backend/services/api/src/pinai_api/domains/generation/pattern_matcher.py` |
+| api-side phase1 | `backend/services/api/src/pinai_api/orchestration/phase1_seed.py` |
+| Pattern health 服务 | `backend/services/reward-dashboard/src/pinai_reward_dashboard/pattern_health.py` |
+| 行为指纹 | `backend/libs/db/src/pinai_db/repositories/user_fingerprint.py`（跨 service 共享） |
+| Hit 持久化 | `backend/services/api/src/pinai_api/domains/generation/pipeline_persistence.py:_persist_pattern_hits` |
+| Generator 注入 | `backend/services/agent-engine/src/agent_engine/agents/generator.py`(planner / card-generator / evaluator prompts + `/state/matched_patterns.json` 暂存) |
+| Dev auth 旁路 | `backend/services/reward-dashboard/src/pinai_reward_dashboard/auth.py`(reward service 自己的 `current_user`:DEPLOY_ENV=dev + `X-Dev-Auth: pinai-dev-reviewer` header → reviewer 用户 `…d0d1`,本地 reviewer 测 dashboard 用,prod 上死路) + `internal-reward-dashboard/src/api/reward.ts` 自动带 header(DEV build + `localStorage.__devAuthBypass='1'` 或 URL query `?__devAuthBypass=1`)。 |
 
 ## 本地运行
 
@@ -179,7 +179,7 @@ API client 组 query string 时只允许有限数字和白名单 enum。`NaN` / 
 ```bash
 make up
 # 或轻量本地:
-cd backend && uv run uvicorn pinai_agents.web.asgi:app --reload --port 8000
+cd backend && uv run uvicorn pinai_api.asgi:app --reload --port 8000
 ```
 
 dashboard:
@@ -244,7 +244,7 @@ dev 环境是独立 Fly 静态站点:
 make deploy-reward-dashboard-dev
 ```
 
-CI/CD 入口是独立 workflow `.github/workflows/internal-reward-dashboard-dev.yml`:PR 只跑 `type-check` / `test` / `build`;push 到 `proactive-ai-v3` 时,只要 `internal-reward-dashboard/**` 变化,就会从 `backend/.env.dev` 解出 `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY` 作为 build args,再执行 `flyctl deploy --config internal-reward-dashboard/fly.toml --remote-only`。部署后的默认地址是 `https://proactive-ai-reward-dashboard-dev.fly.dev`。
+CI/CD 入口是独立 workflow `.github/workflows/internal-reward-dashboard-dev.yml`:PR 只跑 `type-check` / `test` / `build`;push 到 `main` 时,只要 `internal-reward-dashboard/**` 变化,就会从 `backend/.env.dev` 解出 `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY` 作为 build args,再执行 `flyctl deploy --config internal-reward-dashboard/fly.toml --remote-only`。部署后的默认地址是 `https://proactive-ai-reward-dashboard-dev.fly.dev`。
 
 这个 app 不使用自定义域名,也不复用 `proactive-ai-frontend` 镜像。`internal-reward-dashboard/Dockerfile` 只构建 dashboard 静态产物,运行时 nginx 负责 SPA fallback 和 `/api/*` same-origin proxy。
 
@@ -288,20 +288,20 @@ cd proactive-ai-frontend && npm run type-check
 - personal-data snapshot 是 reviewer inspection surface,不要让 chat/generator runtime 依赖它。
 - reward event 的 `source/event_type` 配对要保持严格,否则 dashboard 指标会混掉用户信号和 reviewer 信号。
 - Pattern 库的真源是 `docs/data/patterns.yaml` + `docs/data/demo_cards.yaml`。直接改 DB 不算数,下次有人重跑 `seed_patterns.py` 会被覆盖。要改 pattern 一律先改 YAML、再跑 seed,或者在 reviewer dashboard 上改后**同步回写 YAML**(目前是手动同步,后续可以加 export 按钮)。这两个 YAML 必须保留 `human_insight`、`title_strategy`、demo `card.title` 和 `source_data`,否则 3004 列表会退回到抽象调试视图。
-- pattern_matcher **只在 web 进程**跑;chat 进程不允许 import `pinai_agents.web.db.repositories.patterns`(ruff banned-api + `scripts/check_trust_boundary.sh` 兜底)。chat 端只读 sandbox 里 web 写下来的 `/state/matched_patterns.json`。
+- pattern_matcher **只在 api 进程**跑;agent-engine 进程物理无 DB access、也不允许 import `pinai_api`（import-linter forbidden 契约 + ruff banned-api + `scripts/check_trust_boundary.sh` 兜底）。agent-engine 端只读 sandbox 里 api 写下来的 `/state/matched_patterns.json`。pattern repo 本身在 `pinai_db.repositories.patterns`（generation 与 reward-dashboard 共用）。
 - `pai_card_pattern_hits` 是 user-scoped(RLS),`pai_card_patterns` / `pai_card_pattern_demos` 是全用户共享(无 RLS)。新增 pattern-相关 query 要分清这一点,user_scoped_tx 仍然能读全局表,但不要把全用户行误当成单用户 hit。
 - LLM 偶尔会 emit 不存在的 `pattern_id`(幻觉)。`_persist_pattern_hits` 在 INSERT 前 `SELECT id FROM pai_card_patterns WHERE id = ANY(...)` 过滤,避免 FK 违例把整个 `pai_pipeline_runs` 持久化事务一起拖崩。改 hit 持久化逻辑时不要去掉这层过滤。
 - `pai_pipeline_runs` 的 INSERT 必须带 `ON CONFLICT (user_id, id) DO UPDATE`,否则 dispatcher 重试同一 run_id 会撞主键 → 一直失败。
 - pending_review pattern 不能从详情页直接 flip status,UI 已经禁用按钮并提示去 `/patterns/pending`。如果有脚本绕过 UI 直接 SQL flip,审批审计会丢。
 - 编辑 pattern 时 reviewer 输入的 trigger DSL / card_skeleton 是 JSON,前端在提交前先 `JSON.parse` 校验。如果文档需要新增字段,得同步前端 textarea + 后端 `_opt_json_*` 校验。
-- 一次 dispatcher 跑只让 web 收到一份 phase1 snapshot(从 `pai_personal_signals` / `pai_memory` / `pai_world_signal_user_view` / `pai_profile` 抽,不是 chat sandbox 的深度 phase1);很多需要"chat 才能 reach 到"的 signal source 在 web 这一侧拿不到,导致 90+ 条 seed pattern 在当前阶段不会 fire。要 fire 更多 pattern,要么扩 phase1_seed 的查询面,要么等 chat data-collector 跑完再 round-trip 回 web matcher(目前没做,Phase 2 之后再说)。
+- 一次 dispatcher 跑只让 api 进程收到一份 phase1 snapshot(从 `pai_personal_signals` / `pai_memory` / `pai_world_signal_user_view` / `pai_profile` 抽,不是 agent-engine sandbox 的深度 phase1);很多需要"agent-engine 才能 reach 到"的 signal source 在 api 这一侧拿不到,导致 90+ 条 seed pattern 在当前阶段不会 fire。要 fire 更多 pattern,要么扩 phase1_seed 的查询面,要么等 agent-engine data-collector 跑完再 round-trip 回 api matcher(目前没做,Phase 2 之后再说)。
 
 ## 相关模块
 
 - [Generation](./generation):`pai_pipeline_runs`、`pai_card_evaluations`、LangSmith metadata 的来源。
 - [Feedback](./feedback):用户 feedback 和 reward ledger 的边界。
 - [Background Tasks](./background-tasks):`generator.manual` / `generator.auto` 任务状态来源。
-- [Runtime & Deployment](./runtime-deployment):本地启动、web 进程和环境变量。
+- [Runtime & Deployment](./runtime-deployment):本地启动、api 进程和环境变量。
 
 ## 相关 AI Plans
 

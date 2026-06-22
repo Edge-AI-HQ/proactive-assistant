@@ -2,16 +2,16 @@
 
 Trust boundary: the engine is the untrusted LLM execution surface. It runs
 the agent loop over un-trusted input and MUST NOT see master credentials
-(Supabase service_role, HMAC signing key, Composio key, …). As a standalone
-workspace package `agent_engine` does not depend on `backend`
-(web) at all, so it physically cannot import `WebSettings` / the master
-credentials — the isolation is enforced by the package dependency graph, not
-just a lint rule.
+(Supabase service_role, Ed25519 JWT signing key, Composio key, …). As a
+standalone workspace package `agent_engine` does not depend on `pinai_api`
+(the api process) at all, so it physically cannot import `WebSettings` / the
+master credentials — the isolation is enforced by the package dependency
+graph, not just a lint rule.
 
-`ChatSettings` here is a copy of the chat-process slice that used to live in
-`pinai_agents.config`: the shared `_BaseAppSettings` base fields plus the
-engine-only fields (web URL, JWT verify pubkey, checkpointer DSN, LangSmith).
-The web package keeps its own `WebSettings` with the master credentials.
+`ChatSettings` is the engine-process settings slice: the shared
+`_BaseAppSettings` base fields plus the engine-only fields (JWT verify
+pubkey, checkpointer DSN, LangSmith). The api process keeps its own
+`WebSettings` with the master credentials.
 
 Usage:
 
@@ -30,7 +30,6 @@ class _BaseAppSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=None, extra="ignore")
 
-    service_name: str = "backend"
     deploy_env: str = "dev"
     # Default LLM for agent runs — a LiteLLM model alias from
     # ops/litellm/litellm_config.yaml. Chat falls back to it when a run
@@ -56,16 +55,13 @@ class _BaseAppSettings(BaseSettings):
 
 
 class ChatSettings(_BaseAppSettings):
-    """Chat process settings — no master credentials.
+    """Engine process settings — no master credentials.
 
-    Step F-1 will add PAI_HMAC_VERIFY_SECRET (HS256 verify-only),
-    WEB_INTERNAL_URL (for native @tool HTTPS calls). DAYTONA_API_KEY is
+    JWT auth is Ed25519 verify-only (pai_jwt_verify_pubkey below); the
+    matching private key never leaves the api process. DAYTONA_API_KEY is
     consumed directly by the daytona SDK from env, no field needed here.
     """
 
-    # web URL the chat process reaches (Fly 6PN internal in prod,
-    # docker-compose service-name DNS in dev).
-    web_internal_url: str = "http://api:8000"
     # Ed25519 public key, base64(raw 32 bytes). Chat verifies-only; never
     # has the private key (one-way trust direction enforced at the env level).
     pai_jwt_verify_pubkey: str | None = None

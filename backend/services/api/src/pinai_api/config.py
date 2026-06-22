@@ -27,7 +27,6 @@ class _BaseAppSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=None, extra="ignore")
 
-    service_name: str = "backend"
     deploy_env: str = "dev"
     # Default LLM for agent runs — a LiteLLM model alias from
     # ops/litellm/litellm_config.yaml. Chat falls back to it when a run
@@ -192,13 +191,10 @@ class WebSettings(_BaseAppSettings):
     bytedance_asr_resource_id: str = "volc.bigasr.sauc.duration"
 
     # Per-user virtual key provisioning. `default_budget_usd` is the cap
-    # we burn through a budget cycle; `default_budget_duration` is the
-    # rolling reset window LiteLLM enforces (e.g. "30d", "7d"); allowed
-    # models is the list passed to /key/generate so users can't switch
-    # to a model the deploy hasn't whitelisted. RPM/TPM stay None unless
-    # ops want per-key rate limits.
+    # we burn through a budget cycle; allowed models is the list passed to
+    # /key/generate so users can't switch to a model the deploy hasn't
+    # whitelisted. RPM/TPM stay None unless ops want per-key rate limits.
     litellm_default_budget_usd: float = 1000.0
-    litellm_default_budget_duration: str = "30d"
     # Comma-separated list of LiteLLM model aliases (e.g.
     # "claude-sonnet-4-6,gpt-4o"). Empty = let LiteLLM apply its own
     # global allowlist (typically all configured models).

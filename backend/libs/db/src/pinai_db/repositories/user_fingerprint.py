@@ -53,20 +53,6 @@ def _row_to_pattern_pref(row: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
-def _row_to_intent_pref(row: dict[str, Any] | None) -> dict[str, Any] | None:
-    if row is None:
-        return None
-    return {
-        "intent": row["intent"],
-        "basket": row.get("basket") or "",
-        "ctr7d": float(row["ctr_7d"]) if row.get("ctr_7d") is not None else None,
-        "ctr30d": float(row["ctr_30d"]) if row.get("ctr_30d") is not None else None,
-        "lastOpenAt": _iso(row.get("last_open_at")),
-        "lastDismissAt": _iso(row.get("last_dismiss_at")),
-        "updatedAt": _iso(row.get("updated_at")),
-    }
-
-
 class UserFingerprintRepository(UserScopedRepository):
     """Phase 3 read/write fingerprint repository."""
 
@@ -97,22 +83,6 @@ class UserFingerprintRepository(UserScopedRepository):
             )
             row = await cur.fetchone()
         return _row_to_pattern_pref(row)
-
-    async def get_intent_pref(
-        self,
-        intent: str,
-        basket: str | None = None,
-    ) -> dict[str, Any] | None:
-        async with self._conn.cursor() as cur:
-            await cur.execute(
-                """
-                SELECT * FROM pai_user_intent_pref
-                WHERE user_id = %s AND intent = %s AND basket = %s
-                """,
-                (self._user_id, intent, basket or ""),
-            )
-            row = await cur.fetchone()
-        return _row_to_intent_pref(row)
 
     async def record_open(
         self,

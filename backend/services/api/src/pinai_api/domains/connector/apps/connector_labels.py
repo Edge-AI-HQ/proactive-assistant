@@ -54,21 +54,6 @@ class ConnectorLabelsRepository(UserScopedRepository):
             rows = await cur.fetchall()
         return [_row_to_label(r) for r in rows]
 
-    async def get(self, connected_account_id: str) -> ConnectorLabel | None:
-        async with self._conn.cursor() as cur:
-            await cur.execute(
-                """
-                SELECT user_id, connected_account_id, toolkit, label,
-                       raw_user_info, resolved_at, resolve_attempts,
-                       last_attempt_at, last_attempt_error
-                FROM pai_connector_labels
-                WHERE user_id = %s AND connected_account_id = %s
-                """,
-                (self._user_id, connected_account_id),
-            )
-            row = await cur.fetchone()
-        return _row_to_label(row) if row else None
-
     async def upsert_resolved(
         self,
         *,

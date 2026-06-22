@@ -12,10 +12,9 @@ from collections.abc import Sequence
 from datetime import date, datetime
 from typing import Any, Literal
 
+from pinai_db import raw_sources
 from psycopg import AsyncConnection
 from psycopg.rows import DictRow
-
-from pinai_reward_dashboard import raw_sources
 
 PersonalDataCategory = Literal[
     "all",

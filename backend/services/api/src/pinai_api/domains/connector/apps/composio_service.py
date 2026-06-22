@@ -1085,14 +1085,3 @@ async def evict_session(user: User) -> None:
         stale = [k for k in _SESSION_REGISTRY if k.startswith(prefix)]
         for k in stale:
             _SESSION_REGISTRY.pop(k, None)
-
-
-# ── Diagnostics ────────────────────────────────────────────────────────
-
-
-def metrics_snapshot() -> dict[str, int]:
-    """Counters for diagnostics. No lock — counters are not strict."""
-    return {
-        "session_registry_size": len(_SESSION_REGISTRY),
-        "session_registry_max": _SESSION_MAX,
-    }
