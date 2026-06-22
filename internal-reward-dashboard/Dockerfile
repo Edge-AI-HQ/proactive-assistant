@@ -40,6 +40,30 @@ server {
         add_header Cache-Control "public, immutable";
     }
 
+    # Reward-dashboard backend (pinai_reward_dashboard) endpoints live under
+    # /api/reward-dashboard/*. After the fly three-app split these go to the
+    # dedicated reward app; everything else under /api/* stays on the api app.
+    # nginx matches the LONGEST prefix, so this block wins over /api/ below for
+    # reward-dashboard paths. Single-app mode: set NGINX_REWARD_UPSTREAM_URL to
+    # the same value as NGINX_UPSTREAM_URL and both proxy to the one app (the
+    # current default — see fly.toml). Split mode: point it at the reward app's
+    # flycast/public address (see backend/deploy/fly-split/README.md runbook).
+    location /api/reward-dashboard/ {
+        proxy_pass ${NGINX_REWARD_UPSTREAM_URL};
+        proxy_http_version 1.1;
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_ssl_server_name on;
+        proxy_ssl_name $proxy_host;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_request_buffering off;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+    }
+
     location /api/ {
         proxy_pass ${NGINX_UPSTREAM_URL};
         proxy_http_version 1.1;

@@ -1,0 +1,43 @@
+# ⚠️ READY BUT NOT ACTIVE — not referenced by any CI workflow. See README.md.
+# Independent fly app for the internal reward-dashboard backend
+# (pinai_reward_dashboard). Internal review tool: NO master credentials,
+# connects with a scoped DB role (reads product tables, writes its own —
+# see README.md DB roles). App name + call path are PLACEHOLDERS.
+# Copied from fly.reward.dev.toml; differences: app name (-test), DEPLOY_ENV.
+# (test had no reward app on the single-app topology; VM size = dev's 1gb/1cpu.)
+app = 'proactive-ai-reward-test'
+primary_region = 'iad'
+
+[build]
+  dockerfile = '../../Dockerfile'
+
+[env]
+  DEPLOY_ENV = 'test'
+  # NOTE: secrets are synced with `--exclude-master` (no FORBIDDEN_ENVS) and
+  # `--database-url-from REWARD_DATABASE_URL` (scoped role DSN — see README.md
+  # DB roles; reward reads product tables but writes its own). The verify-
+  # only Supabase keys (VITE_SUPABASE_* / SUPABASE_PUBLISHABLE_KEY — public, not
+  # master) and LANGSMITH_* (trace artifacts) come through as secrets too.
+
+[processes]
+  app = "uvicorn pinai_reward_dashboard.asgi:app --host 0.0.0.0 --port 8002"
+
+# Call path TBD (see README): the internal-reward-dashboard Vite app must point
+# its /api/reward-dashboard/* here after the split. If served via an nginx
+# same-origin proxy this app can be flycast-only (no public IP); if the browser
+# calls it directly it needs a public IP + force_https. Written as public for
+# now — CONFIRM with ops before activating.
+[http_service]
+  internal_port = 8002
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+# NO [deploy] release_command — scoped role can't migrate; api owns migrations.
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1

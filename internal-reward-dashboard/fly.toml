@@ -13,6 +13,20 @@ primary_region = "ord"
 [env]
   NGINX_RESOLVER = "[fdaa::3]"
   NGINX_UPSTREAM_URL = "https://proactive-ai-agents-dev.fly.dev"
+  # /api/reward-dashboard/* upstream. Defaults to the same single agents app as
+  # NGINX_UPSTREAM_URL, so today nothing changes — both prefixes hit one app.
+  # After the fly three-app split, ops repoints THIS one var at the reward app
+  # (e.g. https://proactive-ai-reward-dev.fly.dev, or its flycast address if the
+  # reward app is flycast-only). See backend/deploy/fly-split/README.md.
+  # NOTE 1: the reward backend's /api/reward-dashboard/* routes are not mounted
+  # on the single agents app yet (reward is currently 404 on fly); pointing this
+  # at the agents app is harmless until the reward app exists and this is
+  # repointed.
+  # NOTE 2: after envsubst this value becomes a literal host in `proxy_pass`, so
+  # nginx resolves it at STARTUP — only repoint to the reward app AFTER that app
+  # exists (runbook step 1), or the container fails boot with "host not found in
+  # upstream". Same property as NGINX_UPSTREAM_URL above.
+  NGINX_REWARD_UPSTREAM_URL = "https://proactive-ai-agents-dev.fly.dev"
 
 [http_service]
   internal_port = 8080

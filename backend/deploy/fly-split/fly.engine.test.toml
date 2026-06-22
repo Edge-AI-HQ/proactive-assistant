@@ -1,0 +1,51 @@
+# ⚠️ READY BUT NOT ACTIVE — not referenced by any CI workflow. See README.md.
+# Split-app variant of fly.test.toml's `chat` process group: the UNTRUSTED LLM
+# loop. Holds NO master credentials. App name + URLs are PLACEHOLDERS.
+# Copied from fly.engine.dev.toml; differences: app name (-test), all URLs
+# (-test), DEPLOY_ENV='test', Daytona snapshot tag. VM size = 1gb/1cpu,
+# matching fly.test.toml's `chat` group.
+app = 'proactive-ai-engine-test'
+primary_region = 'iad'
+
+[build]
+  dockerfile = '../../Dockerfile'
+
+[env]
+  DEPLOY_ENV = 'test'
+  # engine → api: callbacks + internal calls go to the api app's public URL.
+  WEB_INTERNAL_URL = "https://proactive-ai-api-test.fly.dev"
+  # Injected into Daytona sandboxes so pinai_sdk inside can call back to api.
+  # Sandboxes run OUTSIDE fly 6PN — must be the api app's public anycast URL.
+  PAI_API_URL = "https://proactive-ai-api-test.fly.dev"
+  LITELLM_BASE_URL = "https://proactive-ai-litellm-test.fly.dev/v1"
+  PINAI_DAYTONA_SNAPSHOT = "pinai-sandbox:test"
+  # Arms the boot fail-fast (agent-engine/asgi.py): now that secrets are scoped
+  # per app (sync_fly_secrets --exclude-master), seeing any master credential
+  # is a deploy bug — crash rather than run the LLM loop with creds it must
+  # never hold. SAFE only on this split app; do NOT set on the single app.
+  ENGINE_TRUST_FAILFAST = "1"
+  # NOTE: master credentials (FORBIDDEN_ENVS) are kept out by syncing this app
+  # with `--exclude-master`. DATABASE_URL is swapped to the pai_chat scoped DSN
+  # via `--database-url-from ENGINE_DATABASE_URL` — it is a SECRET, not set here.
+
+[processes]
+  app = "uvicorn agent_engine.asgi:app --host :: --port 8001"
+
+# flycast-only: NO public IP. Allocate a private IPv6 (`fly ips allocate-v6
+# --private`) and NONE public, so the LLM loop is unreachable from the internet
+# and only the api app reaches it via `proactive-ai-engine-test.flycast`.
+# Verify the bind/host + flycast routing with ops on first deploy.
+[http_service]
+  internal_port = 8001
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+# NO [deploy] release_command — the engine's scoped DSN can't run migrations;
+# the api app owns migrations.
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1

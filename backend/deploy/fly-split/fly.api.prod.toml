@@ -1,0 +1,56 @@
+# ⚠️ READY BUT NOT ACTIVE — not referenced by any CI workflow. See README.md.
+# Split-app variant of fly.prod.toml's `web` process group: the trusted API edge
+# (holds master credentials). App name + URLs are PLACEHOLDERS — verify with ops.
+# Copied from fly.api.dev.toml; differences: app name (-prod), all URLs (-prod),
+# DEPLOY_ENV='production', Daytona snapshot tag, and VM size aligned to
+# fly.prod.toml (api = 4gb).
+app = 'proactive-ai-api-prod'
+primary_region = 'iad'
+
+[build]
+  # build context = backend/ (flyctl deploy run from there, --config
+  # pointing here). Dockerfile is the shared image; per-service Dockerfiles
+  # (image isolation, §四 防线 2) are a later step — single image + per-app
+  # secret already gives deploy-layer isolation.
+  dockerfile = '../../Dockerfile'
+
+[env]
+  DEPLOY_ENV = 'production'
+  # api → engine: the engine app has NO public IP; reach it over fly's private
+  # network (flycast). Verify the engine app's flycast name with ops.
+  CHAT_INTERNAL_URL = "http://proactive-ai-engine-prod.flycast:8001"
+  # Public anycast URL of THIS app — used for sandbox callbacks (PAI_API_URL)
+  # and engine→api internal calls.
+  WEB_INTERNAL_URL = "https://proactive-ai-api-prod.fly.dev"
+  PAI_API_URL = "https://proactive-ai-api-prod.fly.dev"
+  LITELLM_BASE_URL = "https://proactive-ai-litellm-prod.fly.dev/v1"
+  PINAI_DAYTONA_SNAPSHOT = "pinai-sandbox:production"
+
+[processes]
+  # Single process per app (the old web/chat [processes] split is now the
+  # app split). Secrets = full set: sync_fly_secrets with no flags.
+  app = "uvicorn pinai_api.asgi:app --host 0.0.0.0 --port 8000"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = 'suspend'
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+  [http_service.concurrency]
+    type = 'connections'
+    hard_limit = 80
+    soft_limit = 50
+
+[deploy]
+  # ONLY the api app runs migrations — it holds the superuser DATABASE_URL.
+  # engine/reward apps use scoped DSNs that can't migrate, by design.
+  release_command = "sh -c 'exec yoyo apply --batch -d \"postgresql+psycopg://${DATABASE_URL#*://}\"'"
+  strategy = 'rolling'
+
+[[vm]]
+  memory = '4gb'
+  cpu_kind = 'shared'
+  cpus = 2
