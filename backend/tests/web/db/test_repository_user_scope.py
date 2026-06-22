@@ -1,4 +1,9 @@
-"""user_scoped_tx + cross-user isolation through Repository.
+"""user_scoped_tx mechanics + cross-user isolation through Repository.
+
+These assert the *repository* layer (the `WHERE user_id = self._user_id`
+in UserScopedRepository) and the transaction-scoping of app.user_id. The
+complementary DB-layer guarantee — that RLS policies fire in Postgres even
+without a repository WHERE — lives in test_rls_enforced.py.
 
 Test that:
   * SET LOCAL app.user_id is per-transaction (no leakage to next acquire).

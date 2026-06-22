@@ -530,8 +530,9 @@ async def test_run_sync_fanout_missing_sub_cursor_fetches_latest_page(pool, user
 async def test_upsert_generic_user_scoping(pool, user_ids):
     """Reader-path scoping: the raw.py envelope query always filters
     user_id, so user_b's window over the same (toolkit, entity) must not
-    see user_a's rows. (RLS itself doesn't fire under the test's
-    table-owner connection — same convention as test_rls.py.)"""
+    see user_a's rows. (user_scoped_tx now also enforces this at the RLS
+    layer via SET ROLE pai_app — see test_rls_enforced.py; this test
+    asserts the repository WHERE, like test_repository_user_scope.py.)"""
     user_a, user_b = user_ids
     recipe = _recipe(timestamp_path=[], title_path=[], snippet_path=[])
     async with user_scoped_tx(pool, user_a) as conn:
