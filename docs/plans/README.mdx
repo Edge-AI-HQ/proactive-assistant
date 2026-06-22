@@ -24,6 +24,7 @@ description: "AI coding 过程中保留的设计和实施计划。"
 
 | Plan | 状态 | 什么时候看 |
 |---|---|---|
+| [AI Dev Pipeline（需求 → Agent 反复改 → PR → Preview）](./2026-06-13-ai-dev-pipeline) | brainstorm 草稿（待实施） | 内部 dogfood 研发流水线：Linear 当需求总线 + AgentSession，coding agent（Codex/Claude/Cursor 可换）出 PR，crabbox/preview-vm 出 preview 链接，对话式反复改 + 收敛控制。新建 `ops/dev-pipeline/`、接 Linear/Codex/crabbox、或评估这套自动化前必读。含 4 个 self-runnable 验收用例和凭证清单。 |
 | [Zebra 桌面 Web 端移植（apps/web + packages/ui-web）](./2026-06-12-zebra-web-app-port) | 已实施(M0-M5) | 把原型仓 zebra 桌面设计移植成生产 web 端:新建 `apps/web`(zebra 壳+桌面皮肤)+ `packages/ui-web`(双端共享 React DOM 层),按 M0-M5 逐页接真实功能;部署到新 fly app `proactive-ai-web-dev` 与现有前端并存。新建 `apps/web/`、`packages/ui-web/`,或从 `proactive-ai-frontend` 下沉组件前必读。 |
 | [2026-06-12-rn-ui-parity](./2026-06-12-rn-ui-parity.mdx) | 已定稿 | 改 apps/mobile UI、做 web↔RN 视觉对齐时 |
 | [RN 重构 — apps/mobile 接替 frontend](./2026-06-14-rn-mobile-rebuild) | 实施中(Batch 1) | apps/mobile(Expo RN)接替 Capacitor `proactive-ai-frontend`。路线 A「Share logic, not UI」:逻辑/契约共享、UI 各写、原生走 port。port-first 4 批:①平台集成 TS 地基(register* port 下沉 core + DeviceCredentials + ambient durable ingest)②屏 UI 重写 ③ambient native Swift(capacitor-plugins→Expo module 移植)④MVP。改 apps/mobile / ambient / register* port / Swift 移植前必读。 |
