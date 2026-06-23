@@ -5,7 +5,7 @@
  * - 右侧抽屉（汉堡/右缘手势）、ASK PIN AI 上拉 chat、card chat modal
  */
 import { useState } from "react";
-import { Modal, StyleSheet, View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { FadeIn, FadeOut, runOnJS } from "react-native-reanimated";
 import type { User } from "@supabase/supabase-js";
@@ -119,20 +119,9 @@ export default function AppShell({
 
       <DebugPanel open={debugOpen} onClose={() => setDebugOpen(false)} onSignOut={onSignOut} />
 
-      <Modal
-        visible={cardChat !== null}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setCardChat(null)}
-      >
-        {cardChat ? (
-          <CardChatScreen
-            card={cardChat.card}
-            bootstrap={cardChat.bootstrap}
-            onClose={() => setCardChat(null)}
-          />
-        ) : null}
-      </Modal>
+      {/* card chat：和 ChatSheet 同款 in-tree 下沉 sheet（不是 Modal 独立窗口，
+          否则没法下沉露出底下页面）。常 mount，target 驱动上弹/下沉。 */}
+      <CardChatScreen target={cardChat} onClose={() => setCardChat(null)} />
     </View>
   );
 }

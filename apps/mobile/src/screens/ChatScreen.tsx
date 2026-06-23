@@ -21,41 +21,30 @@ import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import {
+  cardActionFeedbackBody,
   conversationInit,
+  deriveCardResultMessageId,
   feedbackChannelForSession,
-  type ConversationContentPart,
+  segmentAssistantParts,
+  textFeedbackBody,
   type ConversationEntry,
   type HitlRequiresAction,
+  type IntentCard,
 } from "@pin-ai/core";
 import { useConversationRuntime } from "@pin-ai/state";
 
 import AiSphere from "../ui/AiSphere";
+import { ShimmerText } from "../ui/ShimmerText";
 import MarkdownText from "../components/chat/MarkdownText";
 import MessageActions from "../components/chat/MessageActions";
-import ReasoningBlock from "../components/chat/ReasoningBlock";
+import UserEntry from "../components/chat/UserEntry";
 import TodoStrip from "../components/chat/TodoStrip";
-import ToolRow from "../components/chat/ToolRow";
+import WorkGroup, { SpecialCard } from "../components/chat/WorkGroup";
+import ProposeActionCard from "../components/chat/ProposeActionCard";
+import CardResultFeedbackBar from "../components/chat/CardResultFeedbackBar";
 
 import { notifyThreadActivity, readLocalHistory } from "../lib/sync/sync-bootstrap";
-
-function Part({
-  part,
-  isTail,
-  running,
-}: {
-  part: ConversationContentPart;
-  /** 该 part 是 entry 的最后一个（流式追加的活跃尾部）。 */
-  isTail: boolean;
-  running: boolean;
-}) {
-  if (part.type === "text") {
-    return part.text ? <MarkdownText text={part.text} /> : null;
-  }
-  if (part.type === "reasoning") {
-    return part.text ? <ReasoningBlock text={part.text} streaming={running && isTail} /> : null;
-  }
-  return <ToolRow part={part} running={running} />;
-}
+import { postCardFeedback } from "../hooks/useCardActions";
 
 /** memo 边界：流式时只有正在更新的 entry 重渲（runtime reducer 不可变
  *  更新，未变 entry 保持引用同一；回调用 ref-latest 保持身份稳定）。 */
@@ -63,26 +52,32 @@ const Entry = memo(function Entry({
   entry,
   channel,
   onRetry,
+  onUpdateQueued,
+  onDeleteQueued,
+  onSendNow,
+  onReply,
+  busy,
 }: {
   entry: ConversationEntry;
   channel: string;
   onRetry: (id: string, text: string) => void;
+  onUpdateQueued: (id: string, text: string) => void;
+  onDeleteQueued: (id: string) => void;
+  onSendNow: (id: string) => void;
+  onReply: (text: string) => void;
+  busy: boolean;
 }) {
   // 行入场 = web 消息卡 initial{opacity:0,y:6} 0.26s 的对应物。
   if (entry.kind === "user") {
     return (
-      <Animated.View style={styles.userRow} entering={FadeInDown.duration(260)}>
-        <Pressable
-          style={styles.userBubble}
-          disabled={!entry.failed}
-          onPress={() => onRetry(entry.id, entry.text)}
-        >
-          <Text style={styles.userText}>{entry.text}</Text>
-          {entry.failed ? <Text style={styles.failed}>failed — tap to retry</Text> : null}
-        </Pressable>
-        <Text style={styles.timestamp}>
-          {new Date(entry.ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
-        </Text>
+      <Animated.View entering={FadeInDown.duration(260)}>
+        <UserEntry
+          entry={entry}
+          onRetry={onRetry}
+          onUpdateQueued={onUpdateQueued}
+          onDeleteQueued={onDeleteQueued}
+          onSendNow={onSendNow}
+        />
       </Animated.View>
     );
   }
@@ -92,16 +87,21 @@ const Entry = memo(function Entry({
       .join("\n");
     return (
       <Animated.View style={styles.assistantRow} entering={FadeInDown.duration(260)}>
-        {entry.parts.map((p, i) => (
-          <Part
-            key={i}
-            part={p}
-            isTail={i === entry.parts.length - 1}
-            running={entry.running}
-          />
-        ))}
+        {segmentAssistantParts(entry.parts).map((seg) =>
+          seg.kind === "text" ? (
+            <MarkdownText key={seg.key} text={seg.text} />
+          ) : seg.kind === "group" ? (
+            <WorkGroup key={seg.key} group={seg.group} streamingTail={entry.running} />
+          ) : seg.part.toolName === "propose_action" ? (
+            <ProposeActionCard key={seg.key} args={seg.part.args} onReply={onReply} busy={busy} />
+          ) : (
+            <SpecialCard key={seg.key} part={seg.part} />
+          ),
+        )}
         {entry.running && entry.parts.length === 0 ? (
-          <ActivityIndicator size="small" color="#71717a" style={styles.spinner} />
+          <View style={styles.thinkingPill}>
+            <ShimmerText text="Thinking…" style={styles.thinkingText} />
+          </View>
         ) : null}
         {!entry.running && fullText ? (
           <MessageActions
@@ -122,6 +122,12 @@ export interface ChatScreenProps {
   cardId?: string;
   /** 进入后自动作为首条用户消息发出（confirm/steer 的 agent 指令）。 */
   bootstrap?: string;
+  /** card 模式：卡片本体——驱动底部结果反馈条（Was this helpful? + Comment + Done）。 */
+  card?: IntentCard;
+  /** card 模式：结果条 Done 完成卡片后关闭会话（= CardChatScreen onClose）。 */
+  onCardClose?: () => void;
+  /** card 满屏 sheet：底部 home-indicator 安全区，垫高 composer。 */
+  bottomInset?: number;
 }
 
 /** HITL 审批条：agent 暂停在 side-effect 工具上（chat:requires_action），
@@ -167,7 +173,7 @@ function HitlBar({
   );
 }
 
-export default function ChatScreen({ kind, cardId, bootstrap }: ChatScreenProps) {
+export default function ChatScreen({ kind, cardId, bootstrap, card, onCardClose, bottomInset }: ChatScreenProps) {
   const [sessionKey, setSessionKey] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const listRef = useRef<FlatList<ConversationEntry>>(null);
@@ -199,6 +205,9 @@ export default function ChatScreen({ kind, cardId, bootstrap }: ChatScreenProps)
       draft={draft}
       setDraft={setDraft}
       listRef={listRef}
+      card={card}
+      onCardClose={onCardClose}
+      bottomInset={bottomInset}
     />
   );
 }
@@ -209,12 +218,18 @@ function Conversation({
   draft,
   setDraft,
   listRef,
+  card,
+  onCardClose,
+  bottomInset,
 }: {
   sessionKey: string;
   bootstrap?: string;
   draft: string;
   setDraft: (s: string) => void;
   listRef: React.RefObject<FlatList<ConversationEntry> | null>;
+  card?: IntentCard;
+  onCardClose?: () => void;
+  bottomInset?: number;
 }) {
   const {
     transcript,
@@ -224,6 +239,9 @@ function Conversation({
     stop,
     connection,
     retryMessage,
+    updateQueuedMessage,
+    deleteQueuedMessage,
+    interruptQueuedMessage,
     awaitingDecision,
     submitDecision,
     threadId,
@@ -239,6 +257,24 @@ function Conversation({
 
   const channel = feedbackChannelForSession(sessionKey);
 
+  // card 模式结果条：末尾 assistant turn 已结束、有可见文本、无 propose_action 时
+  // 显示（core 纯 transcript 规则；messageId 未落库前 null → 👍/👎 禁用）。
+  const [doneBusy, setDoneBusy] = useState(false);
+  const cardResultMessageId = card ? deriveCardResultMessageId(visible) : undefined;
+  const handleComment = useCallback(
+    (text: string) => {
+      if (!card) return;
+      void postCardFeedback(textFeedbackBody(card, text), `fb:text:${card.id}`);
+    },
+    [card],
+  );
+  const handleCardDone = useCallback(() => {
+    if (!card) return;
+    setDoneBusy(true);
+    void postCardFeedback(cardActionFeedbackBody("complete", card), `fb:complete:${card.id}`);
+    onCardClose?.();
+  }, [card, onCardClose]);
+
   const send = useCallback(() => {
     const text = draft.trim();
     if (!text || busy) return;
@@ -253,6 +289,24 @@ function Conversation({
   const handleRetry = useCallback((id: string, text: string) => {
     void retryRef.current(id, text);
   }, []);
+  // ref-latest（同 retry）：给 memo(Entry) 稳定的排队操作回调身份。
+  const queuedRef = useRef({
+    update: updateQueuedMessage,
+    del: deleteQueuedMessage,
+    interrupt: interruptQueuedMessage,
+  });
+  queuedRef.current = {
+    update: updateQueuedMessage,
+    del: deleteQueuedMessage,
+    interrupt: interruptQueuedMessage,
+  };
+  const onUpdateQueued = useCallback((id: string, text: string) => void queuedRef.current.update(id, text), []);
+  const onDeleteQueued = useCallback((id: string) => void queuedRef.current.del(id), []);
+  const onSendNow = useCallback((id: string) => void queuedRef.current.interrupt(id), []);
+  // ProposeActionCard 回复 = sendMessage（ref-latest 稳定身份给 memo(Entry)）。
+  const sendRef = useRef(sendMessage);
+  sendRef.current = sendMessage;
+  const onReply = useCallback((text: string) => void sendRef.current(text), []);
 
   return (
     <KeyboardAvoidingView
@@ -273,6 +327,11 @@ function Conversation({
             entry={item}
             channel={channel}
             onRetry={handleRetry}
+            onUpdateQueued={onUpdateQueued}
+            onDeleteQueued={onDeleteQueued}
+            onSendNow={onSendNow}
+            onReply={onReply}
+            busy={busy}
           />
         )}
         onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
@@ -296,7 +355,16 @@ function Conversation({
           onDecide={(decision) => void submitDecision(decision)}
         />
       ) : null}
-      <View style={styles.composer}>
+      {card && cardResultMessageId !== undefined ? (
+        <CardResultFeedbackBar
+          messageId={cardResultMessageId}
+          channel={channel}
+          onComment={handleComment}
+          onDone={handleCardDone}
+          doneBusy={doneBusy}
+        />
+      ) : null}
+      <View style={[styles.composer, bottomInset ? { paddingBottom: 12 + bottomInset } : null]}>
         {/* web composer 玻璃条（blur 16-20px + 半透底）的 RN 介质版。 */}
         <BlurView intensity={40} tint="light" style={StyleSheet.absoluteFill} />
         <View style={[StyleSheet.absoluteFill, styles.composerTint]} />
@@ -368,6 +436,8 @@ const styles = StyleSheet.create({
   reasoning: { color: "#a1a1aa", fontSize: 13, fontStyle: "italic", lineHeight: 18, marginTop: 4 },
   toolCall: { color: "#71717a", fontSize: 13, marginTop: 4 },
   spinner: { alignSelf: "flex-start", marginTop: 6 },
+  thinkingPill: { alignSelf: "flex-start", marginTop: 2, marginLeft: -2, paddingVertical: 2 },
+  thinkingText: { fontSize: 15, fontFamily: "Inter_500Medium", color: "rgba(29,33,48,0.65)" },
   composer: {
     flexDirection: "row",
     alignItems: "flex-end",
