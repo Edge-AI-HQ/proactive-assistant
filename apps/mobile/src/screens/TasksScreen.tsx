@@ -9,13 +9,13 @@
  * 复用 NOW 同款 CardDetailSheet + useCardActions（动作两屏唯一真源）。
  */
 import { useEffect, useState, type ReactNode } from "react";
-import { ActivityIndicator, Pressable, SectionList, StyleSheet, Text, View } from "react-native";
+import { Pressable, SectionList, StyleSheet, Text, View } from "react-native";
 import {
   Bell,
   CheckCircle2,
   Circle,
   CircleAlert,
-  Plug,
+  Loader2,
   Sparkles,
   XCircle,
 } from "lucide-react-native";
@@ -41,6 +41,7 @@ import PageHeader from "../components/app/PageHeader";
 import CardDetailSheet from "../components/now/CardDetailSheet";
 import { CATEGORIES } from "../components/now/SphereCards";
 import { GlassCard } from "../ui/GlassCard";
+import { getToolkitIcon } from "../lib/toolkit-icons";
 import { useCardActions } from "../hooks/useCardActions";
 import type { HeaderProps } from "./AmbientScreen";
 
@@ -62,11 +63,14 @@ function formatDate(iso: string): string {
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-/** 行左侧分类图标（对齐 web CardTimeline:108-117 三选一）：连接器卡 → Plug；
- *  提醒卡 → Bell；否则 basket 类目图标。复用 NOW 球面同款 CATEGORIES，保证
- *  同一张卡两处图标一致。 */
+/** 行左侧分类图标（对齐 web CardTimeline:112-117 三选一）：连接器卡 → toolkit
+ *  语义图标（lucide，Gmail→Mail / Calendar→Calendar…，与 web getToolkit 同源）；
+ *  连接器解析失败再降级提醒卡 → Bell；否则 basket 类目图标。绝不用通用 Plug
+ *  （web 也不用）。类目复用 NOW 球面同款 CATEGORIES，保证同一卡两处图标一致。 */
 function categoryIcon(card: IntentCard) {
-  if (connectorSlugFromIntentKey(card.intentKey)) return Plug;
+  const connectorSlug = connectorSlugFromIntentKey(card.intentKey);
+  const toolkit = connectorSlug ? getToolkitIcon(connectorSlug) : null;
+  if (toolkit) return toolkit;
   if (isReminderCard(card)) return Bell;
   const cat = basketToLovableCategory(card.goalBasket);
   return (CATEGORIES[cat] ?? CATEGORIES.life).icon;
@@ -83,6 +87,16 @@ function Pulse({ children }: { children: ReactNode }) {
     );
   }, [o]);
   const style = useAnimatedStyle(() => ({ opacity: o.value }));
+  return <Animated.View style={style}>{children}</Animated.View>;
+}
+
+/** processing 徽章旋转（web Loader2 animate-spin 的 RN 对应物，替代原生 ActivityIndicator）。 */
+function Spin({ children }: { children: ReactNode }) {
+  const r = useSharedValue(0);
+  useEffect(() => {
+    r.value = withRepeat(withTiming(360, { duration: 800, easing: Easing.linear }), -1, false);
+  }, [r]);
+  const style = useAnimatedStyle(() => ({ transform: [{ rotate: `${r.value}deg` }] }));
   return <Animated.View style={style}>{children}</Animated.View>;
 }
 
@@ -129,7 +143,7 @@ function Row({
       : reminder
       ? card.summary
       : card.primaryAction
-      ? `${actionCount + 1} operations · ${card.primaryAction.label}`
+      ? `${actionCount + 1} operation${actionCount + 1 === 1 ? "" : "s"} · ${card.primaryAction.label}`
       : (card.sourceApps ?? []).map((s) => sourceAppMeta(s).label).join(" · ");
 
   return (
@@ -137,42 +151,51 @@ function Row({
       accessibilityRole="button"
       accessibilityLabel={card.title}
       onPress={() => (runUi !== "normal" ? onOpenChat(card) : onOpenDetail(entry))}
+      style={({ pressed }) => (pressed ? styles.pressed : null)}
     >
-      <GlassCard className="mb-2 px-3.5 py-3.5">
-        <View style={styles.rowTop}>
-          <CatIcon size={16} color="rgba(29,33,48,0.5)" strokeWidth={1.8} />
-          <Text
-            className={resolved ? "flex-1 text-[13px] text-foreground/35 line-through" : "flex-1 text-[13px] text-foreground"}
-            style={{ fontFamily: "Inter_500Medium" }}
-            numberOfLines={2}
-          >
-            {card.title}
-          </Text>
-          <View style={styles.badge}>
-            {resolved ? (
-              <CheckCircle2 size={15} color="rgba(34,197,94,0.6)" />
-            ) : runUi === "processing" ? (
-              <ActivityIndicator size="small" color="#f59e0b" />
-            ) : runUi === "needs_input" ? (
-              <Pulse>
-                <CircleAlert size={15} color="#f59e0b" />
-              </Pulse>
-            ) : runUi === "ready" ? (
-              <CheckCircle2 size={15} color="#22c55e" />
-            ) : runUi === "failed" ? (
-              <XCircle size={15} color="#f43f5e" />
-            ) : (
-              <Circle size={15} color="#fb7185" fill="#fb7185" />
-            )}
+      <GlassCard className="mb-2 px-3.5 py-4">
+        {/* web CardTimeline:172 —— 图标 items-center 对齐整列；标题行 + 预览行
+            嵌在图标右侧的文字列里，预览第二行因此缩进对齐标题（而非顶到最左）。 */}
+        <View style={styles.row}>
+          <CatIcon size={16} color="rgba(29,33,48,0.5)" />
+          <View style={styles.col}>
+            <View style={styles.titleRow}>
+              <Text
+                className={resolved ? "flex-1 text-[13px] text-foreground/35 line-through" : "flex-1 text-[13px] text-foreground"}
+                style={{ fontFamily: "Inter_500Medium", lineHeight: 18 }}
+                numberOfLines={2}
+              >
+                {card.title}
+              </Text>
+              <View style={styles.badge}>
+                {resolved ? (
+                  <CheckCircle2 size={15} color="rgba(34,197,94,0.6)" />
+                ) : runUi === "processing" ? (
+                  <Spin>
+                    <Loader2 size={15} color="#f59e0b" />
+                  </Spin>
+                ) : runUi === "needs_input" ? (
+                  <Pulse>
+                    <CircleAlert size={15} color="#f59e0b" />
+                  </Pulse>
+                ) : runUi === "ready" ? (
+                  <CheckCircle2 size={15} color="#22c55e" />
+                ) : runUi === "failed" ? (
+                  <XCircle size={15} color="#f43f5e" />
+                ) : (
+                  <Circle size={15} color="#fb7185" fill="#fb7185" />
+                )}
+              </View>
+            </View>
+            <View style={styles.bottomRow}>
+              <Text className="flex-1 text-[11px] text-foreground/40" numberOfLines={1} style={{ fontFamily: "Inter_400Regular" }}>
+                {previewText}
+              </Text>
+              <Text className="text-[10px] text-muted-foreground" style={{ fontFamily: "Inter_400Regular" }}>
+                {formatTime(entry.runCompletedAt)}
+              </Text>
+            </View>
           </View>
-        </View>
-        <View style={styles.rowBottom}>
-          <Text className="flex-1 text-[11px] text-foreground/40" numberOfLines={1} style={{ fontFamily: "Inter_400Regular" }}>
-            {previewText}
-          </Text>
-          <Text className="text-[10px] text-muted-foreground" style={{ fontFamily: "Inter_400Regular" }}>
-            {formatTime(entry.runCompletedAt)}
-          </Text>
         </View>
       </GlassCard>
     </Pressable>
@@ -209,13 +232,14 @@ export default function TasksScreen({
     <View className="flex-1">
       <PageHeader title="Tasks" subtitle="AI is running these for you" {...headerProps} />
       <SectionList
-        className="flex-1 px-5"
+        className="flex-1 px-4"
         sections={sections}
         keyExtractor={(e) => `${e.runId}-${e.card.id}`}
         stickySectionHeadersEnabled={false}
         renderSectionHeader={({ section }) => (
           <Text
-            className="mb-2 mt-3 text-[11px] tracking-[1.5px] text-muted-foreground"
+            // web CardTimeline:103 —— text-xs(12) font-semibold uppercase tracking-wider(0.05em≈0.6px) mb-3
+            className="mb-3 mt-3 text-[12px] tracking-[0.6px] text-muted-foreground"
             style={{ fontFamily: "Inter_600SemiBold" }}
           >
             {section.title.toUpperCase()}
@@ -231,11 +255,22 @@ export default function TasksScreen({
         contentContainerClassName="pb-10"
         ListEmptyComponent={
           loading ? (
-            <ActivityIndicator color="#71717a" style={{ marginTop: 60 }} />
+            // web CardTimeline:94 —— Loader2 spin + "Loading history..."（foreground/40, py-8 gap-2）
+            <View className="flex-row items-center justify-center py-8 gap-2">
+              <Spin>
+                <Loader2 size={16} color="rgba(29,33,48,0.4)" />
+              </Spin>
+              <Text className="text-[13px] text-foreground/40" style={{ fontFamily: "Inter_400Regular" }}>
+                Loading history...
+              </Text>
+            </View>
           ) : (
-            <View className="items-center pt-16 gap-2">
-              <Sparkles size={28} color="rgba(0,0,0,0.35)" strokeWidth={1.5} />
-              <Text className="text-[15px] text-foreground/60" style={{ fontFamily: "Inter_600SemiBold" }}>
+            // web CardTimeline:214 —— Sparkles 套玻璃圆环（glass-card p-4 rounded-full）, gap-3
+            <View className="items-center py-16 gap-3">
+              <GlassCard radius={40} className="p-4">
+                <Sparkles size={28} color="rgba(29,33,48,0.4)" strokeWidth={1.5} />
+              </GlassCard>
+              <Text className="text-[15px] text-foreground/60" style={{ fontFamily: "Inter_600SemiBold", letterSpacing: -0.3 }}>
                 No cards yet
               </Text>
               <Text className="max-w-[260px] text-center text-[13px] leading-5 text-foreground/40" style={{ fontFamily: "Inter_400Regular" }}>
@@ -248,17 +283,21 @@ export default function TasksScreen({
       <CardDetailSheet
         entry={detail}
         onClose={() => setDetail(null)}
-        onConfirm={actions.confirm}
-        onSteer={actions.steer}
-        onSnooze={actions.snooze}
         onDismiss={actions.dismiss}
+        onComplete={actions.complete}
+        onApprove={actions.confirm}
+        onChat={actions.chat}
       />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  rowTop: { flexDirection: "row", alignItems: "center", gap: 8 },
+  // web CardTimeline:172 —— icon items-center 对齐整列；col 承载标题行+预览行。
+  row: { flexDirection: "row", alignItems: "center", gap: 10 },
+  col: { flex: 1, minWidth: 0 },
+  titleRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   badge: { width: 18, height: 18, alignItems: "center", justifyContent: "center" },
-  rowBottom: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 6 },
+  bottomRow: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 6 },
+  pressed: { transform: [{ scale: 0.98 }] },
 });

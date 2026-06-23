@@ -198,7 +198,7 @@ export default function NowScreen({
     setEngaged((prev) => new Set(prev).add(id));
   }, []);
 
-  const { confirm, steer, snooze, dismiss } = useCardActions({
+  const { confirm, dismiss, complete, chat } = useCardActions({
     onOpenChat,
     onHide: hide,
     onEngage: engage,
@@ -239,10 +239,10 @@ export default function NowScreen({
       <CardDetailSheet
         entry={detail}
         onClose={() => setDetail(null)}
-        onConfirm={confirm}
-        onSteer={steer}
-        onSnooze={snooze}
         onDismiss={dismiss}
+        onComplete={complete}
+        onApprove={confirm}
+        onChat={chat}
       />
     </View>
   );

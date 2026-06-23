@@ -21,13 +21,13 @@ export default function PageHeader({
   onOpenMenu: () => void;
 }) {
   return (
-    <View className="flex-row items-start justify-between px-6 pt-4 pb-2">
+    <View className="flex-row items-start justify-between px-4 pt-4 pb-2">
       <View className="flex-1 pr-4">
         {typeof title === "string" ? (
           <Text
-            className="text-[28px] leading-9 text-foreground"
-            // web .text-display：标题统一 -0.02em 紧排。
-            style={{ fontFamily: "Inter_700Bold", letterSpacing: tracking(28, EM_DISPLAY) }}
+            className="text-[24px] leading-8 text-foreground"
+            // web 页头：text-2xl(24) + .text-display(600 / -0.02em 紧排)。
+            style={{ fontFamily: "Inter_600SemiBold", letterSpacing: tracking(24, EM_DISPLAY) }}
           >
             {title}
           </Text>
@@ -36,7 +36,7 @@ export default function PageHeader({
         )}
         {subtitle ? (
           typeof subtitle === "string" ? (
-            <Text className="mt-1 text-[13px] text-muted-foreground" style={{ fontFamily: "Inter_400Regular" }}>
+            <Text className="mt-1 text-[14px] text-muted-foreground" style={{ fontFamily: "Inter_400Regular" }}>
               {subtitle}
             </Text>
           ) : (

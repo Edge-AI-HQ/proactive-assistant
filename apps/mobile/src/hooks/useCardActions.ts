@@ -69,5 +69,18 @@ export function useCardActions({ onOpenChat, onHide, onEngage, onClose }: CardAc
     onClose();
     void postCardFeedback(dismissFeedbackBody(e.card), `fb:dismiss:${e.card.id}`);
   };
-  return { confirm, steer, snooze, dismiss };
+  // Done = acknowledge + retire（web CardDrawerContent onComplete）。core
+  // CardActionKind "complete"；同 dismiss 乐观退场，但语义是「办好了/知道了」。
+  const complete = (e: VisibleCardEntry) => {
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    onHide(e.card.id);
+    onClose();
+    void postCardFeedback(cardActionFeedbackBody("complete", e.card), `fb:complete:${e.card.id}`);
+  };
+  // Chat = 纯开 card chat（web reminder 卡的主操作，无 execute bootstrap）。
+  const chat = (e: VisibleCardEntry) => {
+    onClose();
+    onOpenChat(e.card, "");
+  };
+  return { confirm, steer, snooze, dismiss, complete, chat };
 }

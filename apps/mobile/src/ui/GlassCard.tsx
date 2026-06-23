@@ -32,23 +32,24 @@ const VARIANTS = {
   },
 } as const;
 
-const RADIUS = 24; // rounded-3xl
+const RADIUS = 24; // rounded-3xl 默认（圆形徽章传大 radius，如空状态 Sparkles 圈）
 
 export function GlassCard({
   strong = false,
+  radius = RADIUS,
   className = "",
   style,
   children,
   ...rest
-}: PropsWithChildren<ViewProps & { strong?: boolean; className?: string }>) {
+}: PropsWithChildren<ViewProps & { strong?: boolean; radius?: number; className?: string }>) {
   const v = VARIANTS[strong ? "strong" : "regular"];
   return (
     <View
-      className={`rounded-3xl ${className}`}
-      style={[{ boxShadow: v.outerShadow }, style]}
+      className={className}
+      style={[{ borderRadius: radius, boxShadow: v.outerShadow }, style]}
       {...rest}
     >
-      <View style={styles.clip} pointerEvents="none">
+      <View style={[styles.clip, { borderRadius: radius }]} pointerEvents="none">
         <BlurView
           intensity={v.intensity}
           tint="light"
@@ -62,7 +63,7 @@ export function GlassCard({
               backgroundColor: v.overlay,
               borderWidth: StyleSheet.hairlineWidth * 2,
               borderColor: v.border,
-              borderRadius: RADIUS,
+              borderRadius: radius,
               boxShadow: v.insetHighlight,
             },
           ]}
@@ -80,7 +81,6 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    borderRadius: RADIUS,
     overflow: "hidden",
   },
 });

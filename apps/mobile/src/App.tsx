@@ -23,7 +23,7 @@ import { clearDeviceCredentials } from "./lib/devices";
 import { startSync } from "./lib/sync/sync-bootstrap";
 import { resumeAmbientIfEnabled } from "./ambient/runtime";
 import AppShell from "./components/app/AppShell";
-import AuroraBackground from "./ui/AuroraBackground";
+import VideoBackdrop from "./ui/VideoBackdrop";
 import { registerPush } from "./lib/push";
 import LoginScreen from "./screens/LoginScreen";
 
@@ -74,8 +74,9 @@ export default function App() {
     <GestureHandlerRootView style={styles.safe}>
       <QueryClientProvider client={queryClient}>
         <SafeAreaProvider>
-          {/* Aurora 流动背景（web .animate-bg-flow 对应物）。 */}
-          <AuroraBackground />
+          {/* 主壳背景：web VideoBackdrop（constellation-bg.mp4 缓动视频，white/70
+              白罩）。chat / card chat 各自盖自己的 AuroraBackground，不吃这层。 */}
+          <VideoBackdrop />
           <SafeAreaView style={styles.safeTransparent} edges={["top", "bottom"]}>
             <StatusBar style="dark" />
             <Root />
