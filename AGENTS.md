@@ -49,7 +49,7 @@ PIN AI 后端是 `backend/` 下的一个 **uv workspace monorepo**（Python / Fa
 - LLM 链路（chat / generate / dreaming agents + Daytona sandbox 工具）→ **agent-engine 进程**（`agent_engine`）。
 - 内部 reward review 后端（reward ledger / casebook / trace / pattern curate / data snapshot）→ **reward-dashboard 进程**（`pinai_reward_dashboard`），只读产品 DB。
 - 用户级 OpenClaw 容器和 gateway 代理整套都退役了，前端直接打 `pinai_api` 的 HTTP/SSE。
-- **当前 fly 部署形态**：api+agent-engine 仍共用一个 fly app（`fly.*.toml` 的 `[processes]` 切 `web`/`chat` 两个进程组，共用一份镜像）；§五 终态是三个独立 fly app + per-app secret，物理拆分待运维落地（见 backend-rearchitecture plan §十二）。
+- **当前 fly 部署形态**：**dev 已切到三个独立 fly app**——`proactive-ai-api-dev`（trusted edge，持 master credentials）/ `proactive-ai-engine-dev`（无信任 LLM loop，scoped secret）/ `proactive-ai-reward-dev`（只读 review 后端），配置在 `backend/deploy/fly-split/fly.{api,engine,reward}.dev.toml`，CI 由 `deploy-dev.yml` 的 `agents_split: true` 激活、跑 `_deploy.yml` 的 `deploy-agents-split`（per-app scoped secrets + deploy）。旧单 app `proactive-ai-agents-dev` 已停（machine=0）保留作回滚。**prod/test 仍是单 app**（`proactive-ai-agents-{prod,test}`，`fly.*.toml` 的 `[processes]` 切 `web`/`chat` 两进程组、共用一份镜像）。§五 终态 = 三环境都拆三-app，prod/test 待单独落地（见 backend-rearchitecture plan §十二）。api→engine 在 fly 内网走 **6PN service discovery**（`proactive-ai-engine-dev.internal:8001`，**不是 flycast**——见踩坑 §9）。
 
 ## 进程信任边界（api vs agent-engine）
 
@@ -60,16 +60,19 @@ PIN AI 后端是 `backend/` 下的一个 **uv workspace monorepo**（Python / Fa
 - **reward-dashboard 进程**（`pinai_reward_dashboard`）：内部 review 工具，只读产品 DB（经 `pinai_db`），**不**持 master credentials，**不**依赖 `pinai_api`。
 - **运行时防线现状**（FORBIDDEN_ENVS 单一真源：`backend/services/agent-engine/src/agent_engine/trust_boundary.py`）：
   - **本地 compose 仍生效**：Makefile `ensure-env-backend` 派生 `.env.chat`，本地 agent-engine 容器看不到 master credentials。
-  - **fly 部署上暂时降级**：api+agent-engine 共用一个 fly app，flyctl 没有 per-process-group secret，fly 上 agent-engine 进程实际能看到 master credentials。`agent_engine/asgi.py` 的 boot fail-fast 由 `ENGINE_TRUST_FAILFAST`（默认 OFF）gate、`scripts/sync_fly_secrets.py` 退化成 app-level 整体推（详见 script docstring 和 `agent_engine/asgi.py` 文件头）。三个 service 拆成独立 fly app 后再启用运行时防线。
+  - **fly dev 已启用运行时防线**：dev 拆三-app 后 engine 是独立 fly app（`proactive-ai-engine-dev`），CI `sync_fly_secrets.py --exclude-master` 把 master credentials 挡在外面，`fly.engine.dev.toml` 设 `ENGINE_TRUST_FAILFAST="1"` armed boot fail-fast——engine 进程一旦拿到 master credential 直接 exit。
+  - **fly prod/test 仍暂时降级**：prod/test 还是单 app（api+agent-engine 共用），flyctl 没有 per-process-group secret，agent-engine 进程实际能看到 master credentials，failfast 默认 OFF、`scripts/sync_fly_secrets.py` 退化成 app-level 整体推（详见 script docstring 和 `agent_engine/asgi.py` 文件头）。prod/test 拆三-app 后才启用运行时防线。
 - **静态防线（仍生效）**：ruff `flake8-tidy-imports.banned-api` 禁止 `pinai_api` import `agent_engine`；import-linter（`uv run lint-imports`）在合并 import graph 上跑 6 条 forbidden 契约（三个 service 两两互禁）+ api 内部分层契约（platform 是底座）；CI 跑 `scripts/check_trust_boundary.sh` 兜底 grep 检查方向性；共享类型放 `libs/contracts`（`pinai_contracts`，纯 model / protocol）。改动 trust boundary 前必读 `agent_engine/trust_boundary.py` 的 docstring。
 
 ## 环境拓扑
 
-| 环境 | backend (api+agent-engine) | Frontend | Web (zebra) | Internal reward dashboard | LiteLLM |
-|------|--------------------------|----------|-------------|---------------------------|---------|
-| dev | `proactive-ai-agents-dev` | `proactive-ai-frontend-dev` | `proactive-ai-web-dev` | `proactive-ai-reward-dashboard-dev` | `proactive-ai-litellm-dev` |
-| test | `proactive-ai-agents-test` | `proactive-ai-frontend-test` | 暂无（CI 跳过） | 暂无独立 app | `proactive-ai-litellm-test` |
-| prod | `proactive-ai-agents-prod` | `proactive-ai-frontend-prod` | `proactive-ai-web-prod` | 暂无独立 app | `proactive-ai-litellm-prod` |
+| 环境 | backend | Frontend | Web (zebra) | Internal reward dashboard | LiteLLM |
+|------|---------|----------|-------------|---------------------------|---------|
+| dev | `proactive-ai-{api,engine,reward}-dev`（三-app） | `proactive-ai-frontend-dev` | `proactive-ai-web-dev` | `proactive-ai-reward-dashboard-dev` | `proactive-ai-litellm-dev` |
+| test | `proactive-ai-agents-test`（单 app） | `proactive-ai-frontend-test` | 暂无（CI 跳过） | 暂无独立 app | `proactive-ai-litellm-test` |
+| prod | `proactive-ai-agents-prod`（单 app） | `proactive-ai-frontend-prod` | `proactive-ai-web-prod` | 暂无独立 app | `proactive-ai-litellm-prod` |
+
+> ⚠️ backend 列的 dev `proactive-ai-reward-dev` 是**三-app 拆分里的 reward-dashboard 后端服务**（`pinai_reward_dashboard`），和「Internal reward dashboard」列的 `proactive-ai-reward-dashboard-dev`（reviewer 用的 internal-reward-dashboard Vite **前端** app）是两个不同的 app，别混。reward-dev 由本次三-app 激活新部署，merge 后需验证。
 
 所有 fly app 都在 `iad` / `ord` region。Daytona sandbox 是 agent-engine 进程的远端执行环境（python_exec、browser tool 跑在那里），不算 fly app。
 
@@ -321,7 +324,7 @@ Snapshot 构建脚本在 `backend/infra/daytona/`，CI（`deploy-test.yml` 的 `
 
 ### Dev 环境
 push 到 `main` 后按改动范围自动部署（CI workflow：`.github/workflows/deploy-dev.yml` → 复用 `_deploy.yml`）：
-- 改 `backend/` 或 `proactive-ai-frontend/` → 部署 backend + 前端
+- 改 `backend/` 或 `proactive-ai-frontend/` → 部署 backend + 前端。**dev backend 走三-app**：`deploy-dev.yml` 传 `agents_split: true`，CI 跑 `deploy-agents-split`，分别 sync per-app scoped secret + deploy `proactive-ai-{api,engine,reward}-dev`（不再部署旧单 app `agents-dev`）；切回单 app 只需删掉 `deploy-dev.yml` 里那组 split inputs。
 - 改 `apps/web/` 或 `packages/`（共用层）→ 部署 apps/web（zebra）；改 `packages/` 同时触发前端重部署
 - 改 `ops/litellm/` → 部署 LiteLLM
 - Daytona snapshot 跟随 backend 部署刷新
@@ -378,7 +381,7 @@ make deploy-litellm-prod    # LiteLLM → prod
 - RLS 策略在 `023_pai_rls.sql`，新增表如果涉及用户数据必须同时加 RLS policy。
 
 ## 踩坑速查
-1. **agent-engine 进程拿到 master credential（且 `ENGINE_TRUST_FAILFAST` armed）会启动失败**：`agent_engine/asgi.py` 的 fail-fast assert 会直接 exit，看 log 第一行就能定位是哪个 forbidden var 漏过来了（当前共用一个 fly app，failfast 默认 OFF）。
+1. **agent-engine 进程拿到 master credential（且 `ENGINE_TRUST_FAILFAST` armed）会启动失败**：`agent_engine/asgi.py` 的 fail-fast assert 会直接 exit，看 log 第一行就能定位是哪个 forbidden var 漏过来了（**dev engine 独立 app、`ENGINE_TRUST_FAILFAST=1` armed**；prod/test 仍单 app、failfast OFF）。
 2. **Daytona sandbox 回连 api 必须用公网 URL**：compose 内部 DNS 在 cloud sandbox 里解析不到，本地必须 `make tunnel-up` 起 ngrok，否则 `python_exec` 报 ConnectError。
 3. **`make restart` 只重建 api/agent-engine**：动了 frontend 用 `make restart-frontend`，动了 LiteLLM 配置要 `make up` 全栈。restart 带 `--no-deps`，**不会创建合并 main 后 compose 新增的服务**（例：redis）——拉完 main 先 `make up` 一次再回到 restart 循环，否则新代码会依赖一个根本没起来的服务（实例：缺 redis 时消息无人消费、会话页 500，2026-06-10 踩过）。
 4. **本机全局代理会导致 `flyctl` 失败**：Makefile 已在 deploy 命令内置 `env -u`，但如果直接跑 `flyctl deploy` 要自己 unset。
@@ -386,6 +389,7 @@ make deploy-litellm-prod    # LiteLLM → prod
 6. **`apis/` / `pinai-openclaw/` / `miniapp/` 是退役时代的路径**：如果旧脚本、旧文档或本地残留目录提到它们，不要复活旧服务；当前后端事实以 `backend/` 为准，用户产品前端类型检查走 `cd proactive-ai-frontend && npm run type-check`。
 7. **`internal-reward-dashboard/` 是独立内部工具**：不要把 dashboard 页面放进 `proactive-ai-frontend/src/`，不要把 `/api/reward-dashboard/*` 当普通用户产品 API 扩散。用户 confirm / dismiss / snooze / text feedback 仍写 `pai_feedback_events`，只有 card open / score / reviewer score / casebook / trace 走 reward dashboard 链路。
 8. **容器无固定名（多 worktree 隔离）**：compose 去掉了 `container_name`，每个 worktree 是独立 group（`pinai-<路径hash>`，可同时 `make up` 互不撞）。旧的 `docker exec pin-ai-xxx` 全失效，改用 `docker compose exec <service>` / `docker compose logs <service>`（在对应 worktree 目录跑，自动命中那个 group）。host 端口随机，`make urls` 查；`make up` 不自动起 tunnel，generator/mobile 要 tunnel 时 `make tunnel-up` / `make ios`（各 worktree 自己的 `.ngrok.app` 子域，可并发，付费版）。
+9. **三-app 里 api→engine 必须走 6PN `.internal`、不是 flycast**：engine 是私有 app（无 public IP），`CHAT_INTERNAL_URL` 要用 `http://proactive-ai-engine-<env>.internal:8001`（6PN service discovery 直连容器端口）。**flycast 是错的**——flycast 暴露的是 `[http_service]` 的 external port（80/443）、不是容器的 8001，连 `flycast:8001` 必 `ConnectError: No address`。且 engine 必须 `auto_stop_machines='off'` 常驻：6PN 会解析 app 的**所有** machine（含 suspended），挂起的 host 会让 api→engine 间歇 ConnectError。前端（web 形态）则相反——走 nginx 反代（`NGINX_UPSTREAM_URL` 指 api app 的公网 URL，同源 `/api/*`），native/Electron 打包件才用 `VITE_PIN_API_URL` 绝对 URL。（2026-06-22 dev 实测踩通，这是一次 chat 全挂的根因。）
 
 ## 提交规范
 - Conventional Commits：`feat(...)` / `fix(...)` / `chore(...)` / `docs(...)`。

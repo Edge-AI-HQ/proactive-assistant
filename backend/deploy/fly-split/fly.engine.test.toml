@@ -31,14 +31,16 @@ primary_region = 'iad'
 [processes]
   app = "uvicorn agent_engine.asgi:app --host :: --port 8001"
 
-# flycast-only: NO public IP. Allocate a private IPv6 (`fly ips allocate-v6
-# --private`) and NONE public, so the LLM loop is unreachable from the internet
-# and only the api app reaches it via `proactive-ai-engine-test.flycast`.
-# Verify the bind/host + flycast routing with ops on first deploy.
+# NO public IP: the api app reaches the engine's uvicorn (binds `::`:8001)
+# directly over 6PN service discovery (proactive-ai-engine-test.internal:8001),
+# never the internet. http_service stays for the internal_port declaration, but
+# autostop is OFF: 6PN resolves ALL of the app's machines (suspended included),
+# so a suspended host would intermittently fail the api→engine call with
+# ConnectError. Always-on keeps every 6PN target answerable. (Verified on dev.)
 [http_service]
   internal_port = 8001
-  auto_stop_machines = false
-  auto_start_machines = true
+  auto_stop_machines = 'off'
+  auto_start_machines = false
   min_machines_running = 1
   processes = ['app']
 

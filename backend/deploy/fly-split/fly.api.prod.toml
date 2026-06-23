@@ -16,9 +16,14 @@ primary_region = 'iad'
 
 [env]
   DEPLOY_ENV = 'production'
-  # api → engine: the engine app has NO public IP; reach it over fly's private
-  # network (flycast). Verify the engine app's flycast name with ops.
-  CHAT_INTERNAL_URL = "http://proactive-ai-engine-prod.flycast:8001"
+  # api → engine: the engine app has NO public IP. Reach its uvicorn (binds
+  # `::`:8001) directly over fly's 6PN service-discovery DNS. NOTE: flycast:8001
+  # is WRONG — flycast exposes the http_service external port (80/443), not the
+  # container's 8001, so api→engine fails ConnectError. 6PN .internal hits the
+  # container port directly, skips fly-proxy (no TLS/redirect/SSE-buffer) — the
+  # same model the single app used for web→chat. Engine keeps machines always-on
+  # (auto_stop off) so 6PN never resolves a suspended host. (Verified on dev.)
+  CHAT_INTERNAL_URL = "http://proactive-ai-engine-prod.internal:8001"
   # Public anycast URL of THIS app — used for sandbox callbacks (PAI_API_URL)
   # and engine→api internal calls.
   WEB_INTERNAL_URL = "https://proactive-ai-api-prod.fly.dev"

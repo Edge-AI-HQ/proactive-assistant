@@ -14,7 +14,8 @@ primary_region = "ord"
 # Runtime nginx config — envsubst'd by nginx:alpine's template mechanism.
 [env]
   NGINX_RESOLVER = "[fdaa::3]"
-  NGINX_UPSTREAM_URL = "https://proactive-ai-agents-dev.fly.dev"
+  # dev 切三-app 后,前端 /api/* 反代到 api 进程(trusted edge),不是已停的单 app。
+  NGINX_UPSTREAM_URL = "https://proactive-ai-api-dev.fly.dev"
 
 [http_service]
   internal_port = 8080
