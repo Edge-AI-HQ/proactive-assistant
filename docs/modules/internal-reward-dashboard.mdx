@@ -73,8 +73,8 @@ flowchart LR
 |---|---|
 | 前端位置 | `internal-reward-dashboard/` 是独立 Vite app,端口 `3004`,包名 `@pin-ai/internal-reward-dashboard`。不要放进 `proactive-ai-frontend/src/`,也不要默认加入 root npm workspace。 |
 | 登录 | 复用 Supabase Google OAuth,读取 `../backend/.env` 里的 `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY`。 |
-| API 代理 | 本地开发时走 same-origin `/api/*`,Vite proxy 默认转到 `http://127.0.0.1:8000`;可用 `VITE_PIN_API_PROXY_TARGET` 覆盖。 |
-| Fly dev | 独立 Fly app `proactive-ai-reward-dashboard-dev`,默认 URL `https://proactive-ai-reward-dashboard-dev.fly.dev`;nginx 运行时把 `/api/*` 反代到 `https://proactive-ai-agents-dev.fly.dev`。 |
+| API 代理 | 本地开发时走 same-origin `/api/*`,Vite 按前缀分流：`/api/reward-dashboard/*` 默认转到 `http://127.0.0.1:8002`，其余 `/api/*` 默认转到 `http://127.0.0.1:8000`。可分别用 `VITE_REWARD_PROXY_TARGET` / `VITE_PIN_API_PROXY_TARGET` 覆盖。 |
+| Fly dev | 独立 Fly app `proactive-ai-reward-dashboard-dev`,默认 URL `https://proactive-ai-reward-dashboard-dev.fly.dev`。**当前 `internal-reward-dashboard/fly.toml` 仍把 `NGINX_UPSTREAM_URL` 和 `NGINX_REWARD_UPSTREAM_URL` 都指到 `https://proactive-ai-agents-dev.fly.dev`**；也就是说本地开发已是双 upstream，Fly dev 静态站点还没切到 `proactive-ai-api-dev` + `proactive-ai-reward-dev`。 |
 | 后端 service | reward 后端是**独立 service** `pinai_reward_dashboard`(`backend/services/reward-dashboard/`),只读产品 DB、零产品代码依赖、不持 master credentials。route 在 `pinai_reward_dashboard/routes.py`,prefix `/api/reward-dashboard`。 |
 | Repository | `backend/services/reward-dashboard/src/pinai_reward_dashboard/reward.py`(`RewardRepository`),必须在 `user_scoped_tx` 内构造,所有查询按 `user_id` scope。 |
 | Reward ledger | `pai_card_reward_events` 是 append-only ledger。`card_open` / `user_score` 来源是 `user`,`reviewer_score` 来源是 `reviewer`,`imported_feedback` 来源是 `system`。 |
@@ -174,12 +174,18 @@ API client 组 query string 时只允许有限数字和白名单 enum。`NaN` / 
 
 ## 本地运行
 
-后端先起 `api`:
+后端至少要起 `api` 和 `reward-dashboard`。最省事直接:
 
 ```bash
 make up
-# 或轻量本地:
+make urls
+```
+
+轻量模式则分开起两个 service:
+
+```bash
 cd backend && uv run uvicorn pinai_api.asgi:app --reload --port 8000
+cd backend && uv run uvicorn pinai_reward_dashboard.asgi:app --reload --port 8002
 ```
 
 dashboard:
@@ -190,7 +196,7 @@ npm install
 npm run dev -- --host 127.0.0.1 --port 3004
 ```
 
-打开 `http://127.0.0.1:3004/runs`。本地 API 请求走 Vite proxy 到 `api:8000`,浏览器里不需要额外 CORS 配置。
+打开 `http://127.0.0.1:3004/runs`。本地 API 请求走 Vite prefix proxy：`/api/reward-dashboard/*` → `reward-dashboard:8002`，其余 `/api/*` → `api:8000`，浏览器里不需要额外 CORS 配置。
 
 不想走 Google OAuth 时(本地 review pattern Studio 用),浏览器 console 跑:
 
@@ -244,7 +250,7 @@ dev 环境是独立 Fly 静态站点:
 make deploy-reward-dashboard-dev
 ```
 
-CI/CD 入口是独立 workflow `.github/workflows/internal-reward-dashboard-dev.yml`:PR 只跑 `type-check` / `test` / `build`;push 到 `main` 时,只要 `internal-reward-dashboard/**` 变化,就会从 `backend/.env.dev` 解出 `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY` 作为 build args,再执行 `flyctl deploy --config internal-reward-dashboard/fly.toml --remote-only`。部署后的默认地址是 `https://proactive-ai-reward-dashboard-dev.fly.dev`。
+CI/CD 入口是独立 workflow `.github/workflows/internal-reward-dashboard-dev.yml`:PR 只跑 `type-check` / `test` / `build`;push 到 `main` 时,只要 `internal-reward-dashboard/**` 变化,就会从 `backend/.env.dev` 解出 `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY` 作为 build args,再执行 `flyctl deploy --config internal-reward-dashboard/fly.toml --remote-only`。部署后的默认地址是 `https://proactive-ai-reward-dashboard-dev.fly.dev`。注意：**当前 fly.toml 还没把 `/api/reward-dashboard/*` 的 upstream 切到 `proactive-ai-reward-dev`**，如果要让 dev 静态站点真正走拆分后的 reward service，还要补这一步。
 
 这个 app 不使用自定义域名,也不复用 `proactive-ai-frontend` 镜像。`internal-reward-dashboard/Dockerfile` 只构建 dashboard 静态产物,运行时 nginx 负责 SPA fallback 和 `/api/*` same-origin proxy。
 
