@@ -119,9 +119,9 @@ make up
 | 模式            | 命令                             | 适合场景                                 | 端口                                    | 数据                 | 登录                                     |
 | --------------- | -------------------------------- | ---------------------------------------- | --------------------------------------- | -------------------- | ---------------------------------------- |
 | Docker Isolated | `make up`                        | 默认入口；多 worktree 并行、完整镜像验收 | 随机 host port,`make urls` 查看         | worktree 独立 volume | 原 Supabase OAuth / dashboard dev bypass |
-| Lightweight     | 手动起 `uvicorn` / `npm run dev` | 单服务排障、轻量调试                     | 常用 `8000 / 8001 / 3003 / 3004 / 3005` | 复用本机环境         | 取决于你起的是哪个前端壳                 |
+| Lightweight     | 手动起 `uvicorn` / `npm run dev` | 单服务排障、轻量调试                     | 常用 `8000 / 8001 / 8002 / 3003 / 3004 / 3005` | 复用本机环境         | 取决于你起的是哪个前端壳                 |
 
-默认 `make up` 会解密 `.env.dev`、构建并启动 postgres + litellm + api + agent-engine + proactive-ai-frontend + apps/web。端口是**按 worktree 隔离的随机 host 端口**，用 `make urls` 看当前组的真实地址。
+默认 `make up` 会解密 `.env.dev`、构建并启动 postgres + litellm + api + agent-engine + reward-dashboard + proactive-ai-frontend + apps/web。端口是**按 worktree 隔离的随机 host 端口**，用 `make urls` 看当前组的真实地址。
 
 ```bash
 make up
@@ -136,6 +136,7 @@ make restart-frontend
 ```bash
 cd backend && uv run uvicorn pinai_api.asgi:app --reload --port 8000
 cd backend && uv run uvicorn agent_engine.asgi:app --reload --port 8001
+cd backend && uv run uvicorn pinai_reward_dashboard.asgi:app --reload --port 8002
 cd proactive-ai-frontend && npm run dev          # 3003
 cd apps/web && npm run dev                       # 3005
 cd internal-reward-dashboard && npm run dev -- --host 127.0.0.1 --port 3004
@@ -148,9 +149,10 @@ cd internal-reward-dashboard && npm run dev -- --host 127.0.0.1 --port 3004
 | backend Python 代码              | `make restart`；轻量排障用 `uvicorn --reload`                                                   |
 | proactive-ai-frontend / apps/web | 各自 `npm run dev`；容器版验收用 `make restart-frontend`                                        |
 | 内部 reward dashboard            | `cd internal-reward-dashboard && npm run dev -- --host 127.0.0.1 --port 3004`                   |
+| reward-dashboard 后端           | `make up` 自带；轻量排障用 `uvicorn pinai_reward_dashboard.asgi:app --reload --port 8002`       |
 | docker-compose / Dockerfile      | `make up`(会重 build)                                                                           |
 | 翻数据丢档从头来                 | `make reset`                                                                                    |
-| 状态/日志                        | `make status` / `make logs` / `make logs-api` / `make logs-agent-engine` / `make logs-frontend` |
+| 状态/日志                        | `make status` / `make logs` / `make logs-api` / `make logs-agent-engine` / `make logs-reward` / `make logs-frontend` |
 | DB 强制重 migrate                | `make migrate`                                                                                  |
 
 Daytona / mobile 用 ngrok:

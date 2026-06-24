@@ -14,14 +14,25 @@ npm install
 npm run dev -- --host 127.0.0.1 --port 3004
 ```
 
+This frontend expects both backend services to be running locally:
+
+- `pinai_api` on `127.0.0.1:8000`
+- `pinai_reward_dashboard` on `127.0.0.1:8002`
+
+The simplest path is `make up` from the repo root. For lightweight local
+debugging, start both uvicorn entrypoints manually.
+
 The OAuth callback is normalized to `http://localhost:3004` for local loopback
 hosts. Use `localhost:3004` as the Supabase redirect URL; otherwise Supabase
 may fall back to the configured Fly site URL.
 
-Local API calls use same-origin `/api/*` and Vite proxies them to
-`http://127.0.0.1:8000` by default. Override with
-`VITE_PIN_API_PROXY_TARGET` in `backend/.env` if the web process runs
-elsewhere.
+Local API calls use same-origin `/api/*` and Vite proxies them by prefix:
+
+- `/api/reward-dashboard/*` → `http://127.0.0.1:8002` by default
+- other `/api/*` → `http://127.0.0.1:8000` by default
+
+Override with `VITE_REWARD_PROXY_TARGET` and `VITE_PIN_API_PROXY_TARGET`
+in `backend/.env` if those processes run elsewhere.
 
 Authentication uses Supabase Google OAuth. Use the same Google account as the
 main PIN AI app.
@@ -43,11 +54,14 @@ make deploy-reward-dashboard-dev
 ```
 
 The deployed URL is `https://proactive-ai-reward-dashboard-dev.fly.dev`.
-Pushes to `proactive-ai-v3` that touch `internal-reward-dashboard/**` trigger
+Pushes to `main` that touch `internal-reward-dashboard/**` trigger
 the standalone `.github/workflows/internal-reward-dashboard-dev.yml` workflow.
 The workflow verifies the app, builds this app's Dockerfile, and serves the
-static bundle with nginx; runtime `/api/*` traffic is proxied to
-`https://proactive-ai-agents-dev.fly.dev`.
+static bundle with nginx. Current `fly.toml` still points both
+`NGINX_UPSTREAM_URL` and `NGINX_REWARD_UPSTREAM_URL` at
+`https://proactive-ai-agents-dev.fly.dev`, so the Fly dev frontend has not
+yet been cut over to the split `proactive-ai-api-dev` +
+`proactive-ai-reward-dev` backends.
 
 Useful local checks after logging in:
 
