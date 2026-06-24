@@ -4,7 +4,7 @@
  * 重连游标、HITL 状态全部共用），本文件只有 RN 渲染层（FlatList +
  * composer），不重新实现任何协议逻辑。
  */
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -16,7 +16,7 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { Mic, SendHorizontal, Square } from "lucide-react-native";
+import { Check, Mic, SendHorizontal, Square, X } from "lucide-react-native";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import Animated, { FadeInDown } from "react-native-reanimated";
@@ -25,6 +25,7 @@ import {
   conversationInit,
   deriveCardResultMessageId,
   feedbackChannelForSession,
+  findHitlHostId,
   segmentAssistantParts,
   textFeedbackBody,
   type ConversationEntry,
@@ -57,6 +58,8 @@ const Entry = memo(function Entry({
   onSendNow,
   onReply,
   busy,
+  hitlAction,
+  onDecide,
 }: {
   entry: ConversationEntry;
   channel: string;
@@ -66,6 +69,8 @@ const Entry = memo(function Entry({
   onSendNow: (id: string) => void;
   onReply: (text: string) => void;
   busy: boolean;
+  hitlAction?: HitlRequiresAction | null;
+  onDecide?: (decision: "approve" | "reject", message?: string) => void;
 }) {
   // 行入场 = web 消息卡 initial{opacity:0,y:6} 0.26s 的对应物。
   if (entry.kind === "user") {
@@ -85,22 +90,37 @@ const Entry = memo(function Entry({
     const fullText = entry.parts
       .flatMap((p) => (p.type === "text" ? [p.text] : []))
       .join("\n");
+    const showHitl = !!hitlAction && !!onDecide;
+    const segments = segmentAssistantParts(entry.parts);
     return (
       <Animated.View style={styles.assistantRow} entering={FadeInDown.duration(260)}>
-        {segmentAssistantParts(entry.parts).map((seg) =>
+        {segments.map((seg, idx) =>
           seg.kind === "text" ? (
             <MarkdownText key={seg.key} text={seg.text} />
           ) : seg.kind === "group" ? (
-            <WorkGroup key={seg.key} group={seg.group} streamingTail={entry.running} />
+            <WorkGroup
+              key={seg.key}
+              group={seg.group}
+              streamingTail={entry.running && idx === segments.length - 1}
+            />
           ) : seg.part.toolName === "propose_action" ? (
             <ProposeActionCard key={seg.key} args={seg.part.args} onReply={onReply} busy={busy} />
           ) : (
             <SpecialCard key={seg.key} part={seg.part} />
           ),
         )}
-        {entry.running && entry.parts.length === 0 ? (
+        {entry.running && entry.parts.length === 0 && !showHitl ? (
           <View style={styles.thinkingPill}>
             <ShimmerText text="Thinking…" style={styles.thinkingText} />
+          </View>
+        ) : null}
+        {showHitl ? (
+          <View style={styles.hitlInlineWrap}>
+            <HitlApprovalCard
+              action={hitlAction}
+              disabled={busy}
+              onDecide={onDecide}
+            />
           </View>
         ) : null}
         {!entry.running && fullText ? (
@@ -130,45 +150,145 @@ export interface ChatScreenProps {
   bottomInset?: number;
 }
 
-/** HITL 审批条：agent 暂停在 side-effect 工具上（chat:requires_action），
- *  approve/reject 后运行续流——web 的 HitlApprovalCard 的 RN 对应物。
- *  不渲染它 = 用户看不到暂停原因，流看起来「卡死」（真机实测的坑）。 */
-function HitlBar({
+/** Turn an upper/snake-case tool or SaaS slug into readable sentence case:
+ *  `GMAIL_SEND_DRAFT` → `Gmail send draft`. Mirrors ui-web HitlApprovalCard. */
+function humanizeSlug(slug: string): string {
+  const s = slug.replace(/[_-]+/g, " ").trim().toLowerCase();
+  return s ? s[0].toUpperCase() + s.slice(1) : slug;
+}
+
+/** Turn a paused side-effect tool call into human-friendly card copy so the
+ *  user sees an action, not the internal Composio meta-tool JSON. */
+function describeApproval(
+  toolName: string,
+  args: Record<string, unknown> | undefined,
+  argsPreview: string | undefined,
+): { title: string; detail?: string } {
+  const a = args ?? {};
+
+  switch (toolName) {
+    case "preference_add": {
+      const statement = typeof a.statement === "string" ? a.statement : undefined;
+      return { title: "Save a preference", detail: statement ?? argsPreview };
+    }
+    case "COMPOSIO_MULTI_EXECUTE_TOOL": {
+      const calls = Array.isArray(a.calls) ? a.calls : [];
+      const actions = calls
+        .map((c) =>
+          c && typeof c === "object"
+            ? (c as Record<string, unknown>).tool_slug
+            : undefined,
+        )
+        .filter((s): s is string => typeof s === "string")
+        .map(humanizeSlug);
+      if (actions.length === 0) return { title: "Run an action", detail: argsPreview };
+      if (actions.length === 1) return { title: actions[0] };
+      return {
+        title: `Run ${actions.length} actions`,
+        detail: actions.map((s) => `• ${s}`).join("\n"),
+      };
+    }
+    default:
+      return { title: humanizeSlug(toolName), detail: argsPreview };
+  }
+}
+
+/** HITL 审批卡：RN 对齐 packages/ui-web/src/chat/conversation/HitlApprovalCard.tsx。 */
+function HitlApprovalCard({
   action,
+  disabled,
   onDecide,
 }: {
   action: HitlRequiresAction;
-  onDecide: (decision: "approve" | "reject") => void;
+  disabled: boolean;
+  onDecide: (decision: "approve" | "reject", message?: string) => void;
 }) {
+  const allowed = action.allowedDecisions;
+  const canReject = allowed.length === 0 || allowed.includes("reject");
+  const canApprove = allowed.length === 0 || allowed.includes("approve");
+  const { title, detail } = describeApproval(action.toolName, action.args, action.argsPreview);
+  const [rejecting, setRejecting] = useState(false);
+  const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const decide = (decision: "approve" | "reject") => {
+  const decide = (decision: "approve" | "reject", message?: string) => {
     setSubmitting(true);
-    onDecide(decision);
+    onDecide(decision, message);
   };
   return (
-    <View style={styles.hitlBar}>
-      <Text style={styles.hitlTitle}>PIN AI wants to run: {action.toolName}</Text>
-      {action.argsPreview ? (
-        <Text style={styles.hitlArgs} numberOfLines={3}>
-          {action.argsPreview}
-        </Text>
-      ) : null}
-      <View style={styles.hitlActions}>
-        <Pressable
-          style={[styles.hitlButton, styles.hitlApprove, submitting && styles.hitlDisabled]}
-          disabled={submitting}
-          onPress={() => decide("approve")}
-        >
-          <Text style={styles.hitlApproveText}>Approve</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.hitlButton, submitting && styles.hitlDisabled]}
-          disabled={submitting}
-          onPress={() => decide("reject")}
-        >
-          <Text style={styles.hitlRejectText}>Reject</Text>
-        </Pressable>
+    <View style={styles.hitlCard}>
+      <View style={styles.hitlHeader}>
+        <View style={styles.hitlIconBox}>
+          <Text style={styles.hitlIcon}>⚠️</Text>
+        </View>
+        <View style={styles.hitlHeaderCopy}>
+          <Text style={styles.hitlKicker}>NEEDS YOUR APPROVAL</Text>
+          <Text style={styles.hitlTitle} numberOfLines={1}>
+            {title}
+          </Text>
+        </View>
       </View>
+
+      {detail ? (
+        <View style={styles.hitlDetailWrap}>
+          <Text style={styles.hitlDetail}>{detail}</Text>
+        </View>
+      ) : null}
+
+      {rejecting ? (
+        <View style={styles.hitlRejectPanel}>
+          <TextInput
+            value={reason}
+            onChangeText={setReason}
+            placeholder="Optional: tell the agent why (it continues without running the tool)"
+            placeholderTextColor="rgba(29,33,48,0.35)"
+            editable={!disabled && !submitting}
+            multiline
+            style={styles.hitlReasonInput}
+          />
+          <View style={styles.hitlRejectActions}>
+            <Pressable
+              style={[styles.hitlButton, styles.hitlGhostButton, (disabled || submitting) && styles.hitlDisabled]}
+              disabled={disabled || submitting}
+              onPress={() => {
+                setRejecting(false);
+                setReason("");
+              }}
+            >
+              <Text style={styles.hitlRejectText}>Back</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.hitlButton, styles.hitlDangerButton, (disabled || submitting) && styles.hitlDisabled]}
+              disabled={disabled || submitting}
+              onPress={() => decide("reject", reason.trim() || undefined)}
+            >
+              <Text style={styles.hitlApproveText}>Reject</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : (
+        <View style={[styles.hitlActions, styles.hitlActionBar]}>
+          {canReject ? (
+            <Pressable
+              style={[styles.hitlButton, styles.hitlGhostButton, (disabled || submitting) && styles.hitlDisabled]}
+              disabled={disabled || submitting}
+              onPress={() => setRejecting(true)}
+            >
+              <X size={14} color="#1d2130" strokeWidth={2} />
+              <Text style={styles.hitlRejectText}>Reject</Text>
+            </Pressable>
+          ) : null}
+          {canApprove ? (
+            <Pressable
+              style={[styles.hitlButton, styles.hitlApprove, (disabled || submitting) && styles.hitlDisabled]}
+              disabled={disabled || submitting}
+              onPress={() => decide("approve")}
+            >
+              <Check size={14} color="#fff" strokeWidth={2} />
+              <Text style={styles.hitlApproveText}>Approve</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      )}
     </View>
   );
 }
@@ -181,6 +301,8 @@ export default function ChatScreen({ kind, cardId, bootstrap, card, onCardClose,
   // thread 解析（与 web 同一 init 协议：main 单例 / card-thread-<cardId>）。
   useEffect(() => {
     let cancelled = false;
+    setDraft("");
+    setSessionKey(null);
     void conversationInit(kind === "card" ? { kind, cardId } : { kind })
       .then((r) => {
         if (!cancelled) setSessionKey(r.sessionKey);
@@ -200,6 +322,7 @@ export default function ChatScreen({ kind, cardId, bootstrap, card, onCardClose,
   }
   return (
     <Conversation
+      key={sessionKey}
       sessionKey={sessionKey}
       bootstrap={bootstrap}
       draft={draft}
@@ -250,10 +373,20 @@ function Conversation({
     bootstrap,
     // 与 web 同一根门铃/本地优先注入——RN 的同步引擎吃同一套 core。
     onTurnPersisted: notifyThreadActivity,
-    localHistory: readLocalHistory,
+    // Card chat stays cloud-authoritative for now: opening one card must never
+    // paint another card's stale SQLite rows. The doorbell below can still keep
+    // SQLite warm for future offline/search use, but it is not a render source.
+    localHistory: card ? undefined : readLocalHistory,
   });
+  useEffect(() => {
+    notifyThreadActivity(sessionKey);
+  }, [sessionKey]);
 
   const visible = transcript;
+  const hitlHostId = useMemo(
+    () => findHitlHostId(visible, !!awaitingDecision),
+    [awaitingDecision, visible],
+  );
 
   const channel = feedbackChannelForSession(sessionKey);
 
@@ -332,6 +465,8 @@ function Conversation({
             onSendNow={onSendNow}
             onReply={onReply}
             busy={busy}
+            hitlAction={item.kind === "assistant" && item.id === hitlHostId ? awaitingDecision : null}
+            onDecide={(decision, message) => void submitDecision(decision, message)}
           />
         )}
         onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
@@ -348,12 +483,15 @@ function Conversation({
         }
       />
       {threadId ? <TodoStrip sessionKey={threadId} /> : null}
-      {awaitingDecision ? (
-        <HitlBar
-          key={awaitingDecision.toolUseId}
-          action={awaitingDecision}
-          onDecide={(decision) => void submitDecision(decision)}
-        />
+      {awaitingDecision && !hitlHostId ? (
+        <View style={styles.hitlFallbackWrap}>
+          <HitlApprovalCard
+            key={awaitingDecision.toolUseId}
+            action={awaitingDecision}
+            disabled={busy}
+            onDecide={(decision, message) => void submitDecision(decision, message)}
+          />
+        </View>
       ) : null}
       {card && cardResultMessageId !== undefined ? (
         <CardResultFeedbackBar
@@ -425,7 +563,7 @@ const styles = StyleSheet.create({
   // Message content uses the system font so iOS can fall back to Apple Color Emoji.
   userText: { color: "#fff", fontSize: 16, lineHeight: 22 },
   failed: { color: "#fca5a5", fontSize: 12, marginTop: 4 },
-  assistantRow: { marginVertical: 6, maxWidth: "92%" },
+  assistantRow: { marginVertical: 6, width: "100%" },
   assistantText: {
     color: "#1a1a1a",
     fontSize: 16,
@@ -471,26 +609,109 @@ const styles = StyleSheet.create({
   },
   composerIcons: { flexDirection: "row", alignItems: "center", gap: 10 },
   timestamp: { marginTop: 3, fontSize: 10, color: "#a1a1aa", textAlign: "right" },
-  hitlBar: {
-    marginHorizontal: 12,
-    marginBottom: 4,
-    padding: 14,
-    borderRadius: 16,
-    backgroundColor: "#fffbeb",
+  hitlInlineWrap: { paddingTop: 4 },
+  hitlFallbackWrap: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 8 },
+  hitlCard: {
+    borderRadius: 12,
+    backgroundColor: "rgba(255,251,235,0.4)",
     borderWidth: 1,
-    borderColor: "#fde68a",
+    borderColor: "rgba(251,191,36,0.3)",
+    overflow: "hidden",
   },
-  hitlTitle: { fontSize: 14, fontWeight: "600", color: "#92400e" },
-  hitlArgs: { marginTop: 6, fontSize: 12, color: "#78716c", fontFamily: "Menlo" },
-  hitlActions: { flexDirection: "row", gap: 8, marginTop: 10 },
-  hitlButton: {
-    borderRadius: 10,
+  hitlHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  hitlIconBox: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: "#fef3c7",
+    borderWidth: 1,
+    borderColor: "rgba(252,211,77,0.5)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  hitlIcon: { fontSize: 13 },
+  hitlHeaderCopy: { flex: 1, minWidth: 0 },
+  hitlKicker: {
+    marginBottom: 4,
+    fontSize: 10,
+    lineHeight: 12,
+    letterSpacing: 0.8,
+    color: "rgba(180,83,9,0.7)",
+    fontFamily: "Inter_600SemiBold",
+  },
+  hitlTitle: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: "rgba(29,33,48,0.85)",
+    fontFamily: "Inter_600SemiBold",
+  },
+  hitlDetailWrap: { paddingHorizontal: 12, paddingBottom: 8 },
+  hitlDetail: {
+    borderRadius: 8,
+    paddingHorizontal: 10,
     paddingVertical: 8,
-    paddingHorizontal: 18,
-    backgroundColor: "#f4f4f5",
+    backgroundColor: "rgba(29,33,48,0.03)",
+    color: "rgba(29,33,48,0.7)",
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  hitlRejectPanel: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "rgba(29,33,48,0.08)",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  hitlReasonInput: {
+    minHeight: 56,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "rgba(29,33,48,0.12)",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    color: "#1d2130",
+    fontSize: 12,
+    lineHeight: 16,
+    textAlignVertical: "top",
+    backgroundColor: "rgba(255,255,255,0.55)",
+  },
+  hitlActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    gap: 8,
+  },
+  hitlActionBar: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "rgba(29,33,48,0.08)",
+  },
+  hitlRejectActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    gap: 8,
+  },
+  hitlButton: {
+    minHeight: 32,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
   },
   hitlApprove: { backgroundColor: "#1a1a1a" },
-  hitlApproveText: { color: "#fff", fontSize: 14, fontWeight: "600" },
-  hitlRejectText: { color: "#3f3f46", fontSize: 14, fontWeight: "500" },
+  hitlGhostButton: { backgroundColor: "transparent" },
+  hitlDangerButton: { backgroundColor: "#ef4444" },
+  hitlApproveText: { color: "#fff", fontSize: 13, lineHeight: 18, fontFamily: "Inter_600SemiBold" },
+  hitlRejectText: { color: "#1d2130", fontSize: 13, lineHeight: 18, fontFamily: "Inter_600SemiBold" },
   hitlDisabled: { opacity: 0.5 },
 });

@@ -8,10 +8,10 @@
  * 折叠 → RN LayoutAnimation。web 的 web-search favicon LinksList + 工具输出展开为
  * 后续细化项（先显示动词 + args 预览）。
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { LayoutAnimation, Pressable, StyleSheet, Text, View } from "react-native";
 import { BlurView } from "expo-blur";
-import { AlertCircle, Check, ChevronDown, Clock, Loader2 } from "lucide-react-native";
+import { AlertCircle, Check, ChevronDown, ChevronUp, Clock, Loader2 } from "lucide-react-native";
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -57,21 +57,74 @@ function StatusDot({ status }: { status: "running" | "ok" | "error" }) {
   return <Check size={11} color="#059669" strokeWidth={2.5} />;
 }
 
-/** 单工具行（web ToolNodeRow）：状态点 + 动作动词 + args 预览。 */
+function stringArg(part: ToolCallPart, key: string): string {
+  const value = part.args[key];
+  return typeof value === "string" ? value : "";
+}
+
+/** 单工具行（web ToolNodeRow）：状态点 + 动作动词 + args 预览；点开看工具详情。 */
 function ToolNodeRow({ part, nested }: { part: ToolCallPart; nested?: boolean }) {
+  const [expanded, setExpanded] = useState(false);
   const { verb } = resolveToolPresentation(part.toolName);
+  const status = toolStatus(part);
+  const argsPreview = stringArg(part, "argsPreview");
+  const target =
+    stringArg(part, "pinCommand") ||
+    stringArg(part, "meta") ||
+    argsPreview;
+  const links = part.links ?? [];
+  const canExpand = status !== "running" && (target.length > 0 || links.length > 0);
+
   return (
-    <View style={[styles.toolRow, nested && styles.nestedRow]}>
-      <View style={styles.dot}>
-        <StatusDot status={toolStatus(part)} />
-      </View>
-      <Text style={styles.verb} numberOfLines={1}>
-        {verb}
-      </Text>
-      {part.argsText ? (
-        <Text style={styles.preview} numberOfLines={1}>
-          {part.argsText}
+    <View style={styles.toolNode}>
+      <Pressable
+        onPress={() => {
+          if (!canExpand) return;
+          easeNext();
+          setExpanded((v) => !v);
+        }}
+        disabled={!canExpand}
+        accessibilityRole={canExpand ? "button" : undefined}
+        style={[styles.toolRow, nested && styles.nestedRow, canExpand && styles.toolRowPressable]}
+      >
+        <View style={styles.dot}>
+          <StatusDot status={status} />
+        </View>
+        <Text style={styles.verb} numberOfLines={1}>
+          {verb}
         </Text>
+        <Text style={styles.preview} numberOfLines={1}>
+          {argsPreview}
+        </Text>
+        {links.length > 0 ? (
+          <Text style={styles.resultCount}>
+            {links.length} result{links.length === 1 ? "" : "s"}
+          </Text>
+        ) : null}
+        {canExpand ? (
+          <View style={styles.toolChevron}>
+            {expanded ? (
+              <ChevronUp size={15} color={`rgba(${FG},0.45)`} strokeWidth={1.8} />
+            ) : (
+              <ChevronDown size={15} color={`rgba(${FG},0.45)`} strokeWidth={1.8} />
+            )}
+          </View>
+        ) : null}
+      </Pressable>
+      {expanded ? (
+        <View style={styles.toolDetailsWrap}>
+          {links.length > 0 ? (
+            <View style={styles.linksBox}>
+              {links.map((link) => (
+                <Text key={link.url} style={styles.linkText} numberOfLines={1}>
+                  {link.title || link.url}
+                </Text>
+              ))}
+            </View>
+          ) : target ? (
+            <Text style={styles.toolDetails}>{target}</Text>
+          ) : null}
+        </View>
       ) : null}
     </View>
   );
@@ -151,24 +204,33 @@ function TaskCard({ part, subParts }: { part: ToolCallPart; subParts: ToolCallPa
   );
 }
 
-/** 工作组标签：流式→最近 running 工具/任务的动词；结束→LLM 标题 ?? 兜底计数。 */
-function groupLabel(group: WorkGroupData): string {
-  if (group.hasRunning) {
-    for (let i = group.items.length - 1; i >= 0; i--) {
-      const it = group.items[i];
-      if (it.kind === "tool" && toolStatus(it.part) === "running") {
-        return resolveToolPresentation(it.part.toolName).verb;
-      }
-      if (it.kind === "task" && toolStatus(it.part) === "running") {
-        return taskDescription(it.part) || "Working…";
-      }
+/** 流式状态行：对齐 web WorkGroup.currentActivity。 */
+function currentActivity(group: WorkGroupData): string {
+  const runningTasks = group.items.filter(
+    (i) => i.kind === "task" && toolStatus(i.part) === "running",
+  );
+  if (runningTasks.length > 1) return `${runningTasks.length} subtasks running`;
+  for (let i = group.items.length - 1; i >= 0; i--) {
+    const it = group.items[i];
+    if (it.kind === "tool" && toolStatus(it.part) === "running") {
+      return resolveToolPresentation(it.part.toolName).verb;
     }
-    return "Working…";
+    if (it.kind === "task" && toolStatus(it.part) === "running") {
+      return taskDescription(it.part) || "Working…";
+    }
+  }
+  return "Working…";
+}
+
+/** 工作组标签：流式→当前动作；结束→LLM 标题 ?? 兜底计数。 */
+function groupLabel(group: WorkGroupData, live: boolean, stepCount: number): string {
+  if (live) {
+    return currentActivity(group);
   }
   if (group.title) return group.title;
   const tasks = group.items.filter((i) => i.kind === "task").length;
   if (tasks > 0) return `Ran ${tasks} subtask${tasks === 1 ? "" : "s"}`;
-  if (group.toolCount > 0) return `Used ${group.toolCount} tool${group.toolCount === 1 ? "" : "s"}`;
+  if (stepCount > 0) return `Used ${stepCount} tool${stepCount === 1 ? "" : "s"}`;
   return "Thought";
 }
 
@@ -180,17 +242,16 @@ export default function WorkGroup({
   /** 该组所属 assistant turn 仍在流式（最后一个 turn）。 */
   streamingTail: boolean;
 }) {
-  const live = group.hasRunning && streamingTail;
+  const live = streamingTail;
+  const stepCount = group.items.filter((i) => i.kind !== "reasoning").length;
   const [expanded, setExpanded] = useState(live);
-  // 流式结束（不再 running）→ 自动收起（web：文本到达后 auto-collapse）。
-  const wasLive = useRef(live);
+  // 对齐 web：只要 turn 还在流式/等待审批就展开；一旦 settle 就自动收起。
   useEffect(() => {
-    if (wasLive.current && !group.hasRunning) {
+    if (!live) {
       easeNext();
       setExpanded(false);
     }
-    wasLive.current = group.hasRunning;
-  }, [group.hasRunning]);
+  }, [live]);
 
   return (
     <View style={styles.group}>
@@ -214,11 +275,11 @@ export default function WorkGroup({
           )}
         </View>
         <Text style={[styles.groupLabelText, !live && styles.groupLabelDone]} numberOfLines={1}>
-          {groupLabel(group)}
+          {groupLabel(group, live, stepCount)}
         </Text>
-        {!live && group.toolCount > 0 ? (
+        {!live && stepCount > 0 ? (
           <Text style={styles.stepCount}>
-            {group.toolCount} STEP{group.toolCount === 1 ? "" : "S"}
+            {stepCount} STEP{stepCount === 1 ? "" : "S"}
           </Text>
         ) : null}
         <ChevronDown size={13} color={`rgba(${FG},0.35)`} style={expanded ? styles.chevUp : undefined} />
@@ -227,7 +288,7 @@ export default function WorkGroup({
         <View style={styles.groupBody}>
           {group.items.map((item, i) => {
             if (item.kind === "reasoning") {
-              return <ThinkingNode key={`r-${i}`} text={item.text} streaming={live} />;
+              return <ThinkingNode key={`r-${i}`} text={item.text} streaming={live && i === group.items.length - 1} />;
             }
             if (item.kind === "task") {
               return <TaskCard key={item.part.toolCallId} part={item.part} subParts={item.children} />;
@@ -271,10 +332,51 @@ const styles = StyleSheet.create({
   stepCount: { fontSize: 10, letterSpacing: 1.2, color: `rgba(${FG},0.35)`, fontFamily: "Inter_500Medium" },
   groupBody: { marginLeft: 18, borderLeftWidth: 1, borderLeftColor: `rgba(${FG},0.08)`, paddingLeft: 12, paddingRight: 12, paddingBottom: 10, paddingTop: 2, gap: 4 },
   dot: { width: 16, alignItems: "center", justifyContent: "center" },
-  toolRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 3 },
+  toolNode: { alignSelf: "stretch", width: "100%" },
+  toolRow: {
+    alignSelf: "stretch",
+    width: "100%",
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 5,
+  },
+  toolRowPressable: { borderRadius: 8, paddingHorizontal: 2 },
   nestedRow: { marginLeft: 8 },
-  verb: { fontSize: 13, fontFamily: "Inter_500Medium", color: `rgba(${FG},0.8)`, flexShrink: 0 },
-  preview: { flex: 1, fontSize: 12, color: `rgba(${FG},0.4)`, fontFamily: "Inter_400Regular" },
+  verb: { fontSize: 13, fontFamily: "Inter_500Medium", color: `rgba(${FG},0.8)`, flexShrink: 0, maxWidth: "58%" },
+  preview: { flex: 1, minWidth: 0, fontSize: 12, color: `rgba(${FG},0.4)`, fontFamily: "Inter_400Regular" },
+  resultCount: { fontSize: 11, color: `rgba(${FG},0.45)`, fontFamily: "Inter_400Regular" },
+  toolChevron: { width: 18, alignItems: "flex-end", justifyContent: "center", flexShrink: 0 },
+  toolDetailsWrap: { alignSelf: "stretch", paddingLeft: 20, paddingRight: 2, paddingBottom: 8 },
+  toolDetails: {
+    marginTop: 4,
+    borderRadius: 14,
+    backgroundColor: `rgba(${FG},0.03)`,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 13,
+    lineHeight: 20,
+    color: `rgba(${FG},0.72)`,
+    fontFamily: "Inter_400Regular",
+  },
+  linksBox: {
+    marginTop: 4,
+    borderRadius: 10,
+    backgroundColor: "rgba(255,255,255,0.6)",
+    borderWidth: 1,
+    borderColor: `rgba(${FG},0.06)`,
+    overflow: "hidden",
+  },
+  linkText: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: `rgba(${FG},0.04)`,
+    fontSize: 12,
+    color: `rgba(${FG},0.8)`,
+    fontFamily: "Inter_400Regular",
+  },
   thinkRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 4 },
   thinkIcon: { marginTop: 1 },
   thinkText: { flex: 1, fontSize: 12, fontStyle: "italic", color: `rgba(${FG},0.45)`, fontFamily: "Inter_400Regular", lineHeight: 17 },

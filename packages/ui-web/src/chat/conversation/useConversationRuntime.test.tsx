@@ -675,6 +675,51 @@ describe("useConversationRuntime B3b local-first read", () => {
   });
 });
 
+describe("useConversationRuntime session switching", () => {
+  beforeEach(() => {
+    fetchHistoryMock.mockReset();
+    streamMock.mockReset();
+    streamMock.mockImplementation(() => emptyStream());
+  });
+
+  test("clears the previous thread transcript while the next thread loads", async () => {
+    fetchHistoryMock.mockResolvedValueOnce(
+      page([{ id: "a-u1", role: "user", parts: [{ type: "text", text: "from card A" }] }]),
+    );
+    let resolveB: (p: ConversationHistoryPage) => void = () => {};
+    fetchHistoryMock.mockImplementationOnce(
+      () => new Promise<ConversationHistoryPage>((resolve) => {
+        resolveB = resolve;
+      }),
+    );
+
+    const { result, rerender } = renderHook(
+      ({ session }) => useConversationRuntime({ session }),
+      { initialProps: { session: "card-thread-a" } },
+    );
+
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    expect(result.current.transcript).toHaveLength(1);
+    expect((result.current.transcript[0] as ConversationUserEntry).text).toBe("from card A");
+
+    await act(async () => {
+      rerender({ session: "card-thread-b" });
+    });
+
+    expect(result.current.ready).toBe(false);
+    expect(result.current.transcript).toEqual([]);
+
+    await act(async () => {
+      resolveB(
+        page([{ id: "b-u1", role: "user", parts: [{ type: "text", text: "from card B" }] }]),
+      );
+    });
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    expect(result.current.transcript).toHaveLength(1);
+    expect((result.current.transcript[0] as ConversationUserEntry).text).toBe("from card B");
+  });
+});
+
 describe("turn boundary on traceId change", () => {
   test("a cancelled HITL turn is closed when the next turn starts streaming", async () => {
     // 场景（真机实测 bug）：turn1 暂停在 requires_action（无 chat:done），

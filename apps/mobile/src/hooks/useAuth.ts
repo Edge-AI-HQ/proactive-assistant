@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import type { Session, User } from "@supabase/supabase-js";
+import { Platform } from "react-native";
 import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
 import { runSignOutCleanups } from "@pin-ai/core";
@@ -17,6 +18,22 @@ interface AuthState {
   loading: boolean;
   session: Session | null;
   user: User | null;
+}
+
+async function exchangeOauthCallback(url: string): Promise<void> {
+  const params = new URL(url).searchParams;
+  const oauthError = params.get("error");
+  if (oauthError) {
+    console.error("[auth] OAuth provider error:", params.get("error_description") || oauthError);
+    return;
+  }
+  const code = params.get("code");
+  if (!code) {
+    console.error("[auth] OAuth callback missing authorization code");
+    return;
+  }
+  const { error } = await supabase.auth.exchangeCodeForSession(code);
+  if (error) console.error("[auth] code exchange failed:", error.message);
 }
 
 export function useAuth() {
@@ -36,36 +53,38 @@ export function useAuth() {
     return () => subscription.unsubscribe();
   }, []);
 
+  useEffect(() => {
+    if (isPinLocalDevAuthEnabled() || Platform.OS !== "web" || typeof window === "undefined") {
+      return;
+    }
+    if (!window.location.pathname.includes("/auth/callback")) return;
+    void exchangeOauthCallback(window.location.href).finally(() => {
+      window.history.replaceState({}, "", "/");
+    });
+  }, []);
+
   const signInWithGoogle = useCallback(async () => {
     // scheme://auth/callback（app.json 的 scheme = 本环境 bundle id，与
     // Capacitor 时代同一 Supabase Redirect URLs 条目，零新增配置）。
-    const redirectTo = Linking.createURL("auth/callback");
+    const redirectTo =
+      Platform.OS === "web" && typeof window !== "undefined"
+        ? `${window.location.origin}/auth/callback`
+        : Linking.createURL("auth/callback");
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
         redirectTo,
-        skipBrowserRedirect: true,
+        skipBrowserRedirect: Platform.OS !== "web",
         queryParams: { prompt: "select_account" },
       },
     });
     if (error) throw error;
+    if (Platform.OS === "web") return;
     if (!data?.url) return;
 
     const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
     if (result.type !== "success") return; // 用户取消/关闭面板
-    const params = new URL(result.url).searchParams;
-    const oauthError = params.get("error");
-    if (oauthError) {
-      console.error("[auth] OAuth provider error:", params.get("error_description") || oauthError);
-      return;
-    }
-    const code = params.get("code");
-    if (!code) {
-      console.error("[auth] OAuth callback missing authorization code");
-      return;
-    }
-    const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
-    if (exchangeError) console.error("[auth] code exchange failed:", exchangeError.message);
+    await exchangeOauthCallback(result.url);
   }, []);
 
   const signOut = useCallback(async () => {

@@ -29,7 +29,8 @@
       "appleTeamId": "58AXBDC7K4"
     },
     "platforms": [
-      "ios"
+      "ios",
+      "web"
     ],
     "experiments": {
       "typedRoutes": false

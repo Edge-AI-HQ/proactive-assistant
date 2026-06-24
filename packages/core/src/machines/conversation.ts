@@ -373,6 +373,7 @@ export function initConversationState(session: string): ConversationState {
 }
 
 export type ConversationAction =
+  | { type: "reset"; session: string }
   // 标量
   | { type: "set_connection"; connection: ConversationConnectionState }
   | { type: "set_ready"; ready: boolean }
@@ -402,6 +403,8 @@ export function conversationReducer(
   action: ConversationAction,
 ): ConversationState {
   switch (action.type) {
+    case "reset":
+      return initConversationState(action.session);
     case "set_connection":
       return { ...state, connection: action.connection };
     case "set_ready":

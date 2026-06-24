@@ -194,7 +194,7 @@ const styles = StyleSheet.create({
     borderBottomColor: `rgba(${FG},0.08)`,
   },
   backBtn: { marginLeft: -4, padding: 8, borderRadius: 999 },
-  // web h2 text-display text-body(15) text-foreground，截断。
-  title: { flex: 1, fontSize: 15, fontWeight: "600", color: "#1a1a1a" },
+  // web h2 text-display text-body(15) text-foreground + pr-12，截断避开右上浮动菜单。
+  title: { flex: 1, paddingRight: 48, fontSize: 15, fontWeight: "600", color: "#1a1a1a" },
   edgeZone: { position: "absolute", left: 0, bottom: 0, width: LEFT_EDGE_PX },
 });

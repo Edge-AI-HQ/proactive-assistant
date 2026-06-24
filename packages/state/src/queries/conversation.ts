@@ -157,6 +157,10 @@ export function useConversationRuntime(
   // Card context is sent on the first message only, then cleared.
   const cardCtxRef = useRef<Record<string, unknown> | null>(opts?.cardContext ?? null);
   const bootstrappedRef = useRef(false);
+  useEffect(() => {
+    cardCtxRef.current = opts?.cardContext ?? null;
+    bootstrappedRef.current = false;
+  }, [session, opts?.cardContext, bootstrap]);
 
   // All runtime state lives in the core conversationReducer — transcript,
   // connection, ready, busy, awaitingDecision, threadId, hasMoreHistory + the
@@ -235,6 +239,14 @@ export function useConversationRuntime(
     // connect rebuilds from history. Mid-cycle reconnects keep the cursor the
     // stream loop sets below and resume via replay instead.
     lastEventIdRef.current = null;
+    oldestCursorRef.current = null;
+    loadingMoreRef.current = false;
+    threadIdRef.current = session || null;
+    builderRef.current = null;
+    turnIdRef.current = null;
+    turnTraceRef.current = null;
+    placeholderTurnIdRef.current = null;
+    dispatch({ type: "reset", session });
 
     const connect = async () => {
       if (cancelled) return;
