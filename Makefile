@@ -237,7 +237,7 @@ logs-reward: ## Tail reward-dashboard (internal review tool) logs
 
 # ── Database ──
 
-migrate: ## Run db-migrate one-shot (creates litellm db + applies pai_* migrations)
+migrate: ## Run db-migrate one-shot (ensures litellm schema + applies pai_* migrations)
 	@# `run --rm`, not `up`: db-migrate is a one-shot job. `up
 	@# --abort-on-container-exit` (implied by --exit-code-from) stops EVERY
 	@# container it touched the moment db-migrate exits — including a shared
