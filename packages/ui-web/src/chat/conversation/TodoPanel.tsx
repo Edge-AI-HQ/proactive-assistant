@@ -103,17 +103,24 @@ export default function TodoPanel({ sessionKey, composerFocused }: TodoPanelProp
   return (
     <div className="mx-2 mb-1 rounded-xl border border-foreground/10 bg-white/70 backdrop-blur-sm shadow-sm overflow-hidden">
       <div className="flex items-center gap-2 px-3 py-2">
-        <Text variant="bodySm" weight="medium" className="text-foreground/80">
-          {plan.done && allDone ? t("todoPanel.planDone") : t("todoPanel.plan")}
-        </Text>
-        <span
-          className={cn(
-            "text-label",
-            allDone ? "text-emerald-600" : "text-foreground/45",
-          )}
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-label={expanded ? t("todoPanel.collapsePlan") : t("todoPanel.expandPlan")}
+          className="-ml-1 flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 text-left transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/20"
         >
-          · {t("todoPanel.progress", { completed, total: plan.todos.length })}
-        </span>
+          <Text variant="bodySm" weight="medium" className="text-foreground/80">
+            {plan.done && allDone ? t("todoPanel.planDone") : t("todoPanel.plan")}
+          </Text>
+          <span
+            className={cn(
+              "text-label",
+              allDone ? "text-emerald-600" : "text-foreground/45",
+            )}
+          >
+            · {t("todoPanel.progress", { completed, total: plan.todos.length })}
+          </span>
+        </button>
         <div className="ml-auto flex items-center gap-0.5">
           <button
             type="button"
