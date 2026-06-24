@@ -7,19 +7,21 @@ description: "本地启动、运行拓扑、部署、安全和 billing 概览。
 
 ## 结论
 
-整个后端是 **backend** 下的 uv workspace monorepo(Python / FastAPI / DeepAgents):三个互不依赖的 service —— `api`(控制面)、`agent-engine`(LLM loop)、`reward-dashboard`(内部 review 后端)—— 加两个共享 lib(`libs/contracts`、`libs/db`)。当前 `api` 与 `agent-engine` 共用一个镜像、用 fly `[processes]` 切成 `web` / `chat` 两个进程组:`api` 进程拿 master credentials 做控制面,`agent-engine` 进程跑 LLM loop。用户产品前端是 **proactive-ai-frontend**,直接打 backend,中间没有 proxy。内部卡片 review 工具是独立 Vite app **internal-reward-dashboard**。LLM 走 **LiteLLM**,长任务通过 api 进程的 scheduler tick loop 派到 agent-engine。旧的 `apis/`(Node) + `pinai-openclaw/`(用户容器)整套已经退役。
+整个后端是 **backend** 下的 uv workspace monorepo(Python / FastAPI / DeepAgents):三个互不依赖的 service —— `api`(控制面)、`agent-engine`(LLM loop)、`reward-dashboard`(内部 review 后端)—— 加两个共享 lib(`libs/contracts`、`libs/db`)。**当前 Fly 拓扑是 dev 已拆三 app、test/prod 仍单 app**：dev 用 `proactive-ai-{api,engine,reward}-dev`，其中 `api` 持 master credentials，`agent-engine` 不持 master credentials 并启用 fail-fast；test/prod 仍是 `proactive-ai-agents-{test,prod}` 单 app、靠 `[processes]` 切 `web` / `chat`。用户产品前端有两个 web 壳：**proactive-ai-frontend**（当前生产 iOS 前端对应的 web/static 壳）和 **apps/web**（zebra 桌面 web 端）；内部卡片 review 工具是独立 Vite app **internal-reward-dashboard**。LLM 走 **LiteLLM**，长任务通过 api 进程的 scheduler tick loop 派到 agent-engine。旧的 `apis/`(Node) + `pinai-openclaw/`(用户容器)整套已经退役。
 
 ```mermaid
 flowchart LR
-  FE["proactive-ai-frontend"] --> Web["api :8000"]
-  RewardDash["internal-reward-dashboard :3004"] --> Web
-  Web --> Auth["Supabase Auth"]
-  Web --> PG[("Postgres pai_* + langgraph schema")]
-  Web --> Chat["agent-engine :8001"]
-  Chat --> LiteLLM["LiteLLM"]
-  Chat --> Sandbox["Daytona sandbox (python_exec)"]
-  Sandbox --> Web
-  Web --> Stripe["Stripe"]
+  PAF["proactive-ai-frontend"] --> API["api"]
+  WEB["apps/web"] --> API
+  RFE["internal-reward-dashboard"] --> RWD["reward-dashboard"]
+  API --> Auth["Supabase Auth"]
+  API --> PG[("Postgres pai_* + langgraph schema")]
+  RWD --> PG
+  API --> ENG["agent-engine"]
+  ENG --> LiteLLM["LiteLLM"]
+  ENG --> Sandbox["Daytona sandbox (python_exec)"]
+  Sandbox --> API
+  API --> Stripe["Stripe"]
 ```
 
 ## 边界
@@ -41,22 +43,23 @@ flowchart LR
 
 ## 进程拓扑
 
-| 进程 | 端口 | 入口 | 角色 |
-|---|---|---|---|
-| `api` | 8000 | `pinai_api.asgi:app` | 控制面 + 出口流量。持有 master credentials(`SUPABASE_SECRET_KEY` / `PAI_JWT_SIGNING_KEY` / `COMPOSIO_API_KEY` / `STRIPE_*` / `LITELLM_MASTER_KEY`)。挂 `/api/*`、`/api/agent/*`、`/payment/*`、`/health`。lifespan 起 scheduler tick loop + world signals ingest。 |
-| `agent-engine` | 8001 | `agent_engine.asgi:app` | LLM loop。**不能**看到 master credentials,启动前 `agent_engine/asgi.py` 检测到 forbidden var 直接 exit(由 `ENGINE_TRUST_FAILFAST` gate,当前默认 OFF —— api+agent-engine 仍共用一个 fly app)。挂 `/agent/chat`、`/agent/generate`、`/agent/run/*`、`/agent/history`、`/health`。lifespan 起 LangGraph Postgres checkpointer + Daytona sandbox idle GC(5 分钟一轮)。 |
+| 进程               | 端口 | 入口                              | 角色                                                                                                                                                                                                                                                                                                    |
+| ------------------ | ---- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api`              | 8000 | `pinai_api.asgi:app`              | 控制面 + 出口流量。持有 master credentials(`SUPABASE_SECRET_KEY` / `PAI_JWT_SIGNING_KEY` / `COMPOSIO_API_KEY` / `STRIPE_*` / `LITELLM_MASTER_KEY`)。挂 `/api/*`、`/api/agent/*`、`/payment/*`、`/health`。lifespan 起 scheduler tick loop + world signals ingest。                                      |
+| `agent-engine`     | 8001 | `agent_engine.asgi:app`           | LLM loop。dev 拆三-app 后**正常态不该看到** master credentials；`ENGINE_TRUST_FAILFAST=1` 时启动前检测到 forbidden var 直接 exit。挂 `/agent/chat`、`/agent/generate`、`/agent/run/*`、`/agent/history`、`/health`。lifespan 起 LangGraph Postgres checkpointer + Daytona sandbox idle GC(5 分钟一轮)。 |
+| `reward-dashboard` | 8002 | `pinai_reward_dashboard.asgi:app` | 内部 review 后端。只读产品 DB，不持 master credentials，不依赖 `pinai_api`。对外服务 `internal-reward-dashboard` 前端使用的 `/api/reward-dashboard/*`。                                                                                                                                                 |
 
-两个进程共用一个镜像、共用 Postgres pool;api → agent-engine 的内部调用走 `WEB_INTERNAL_URL` / `CHAT_INTERNAL_URL`,签 EdDSA (Ed25519) 每 run JWT。
+三者都在 `backend/` monorepo 里物理拆包（互不 import）。**部署上分环境不同**：dev 是三个独立 fly app；test/prod 目前仍是 api + agent-engine 共用一个镜像/一个 app、通过 `[processes]` 切 `web` / `chat`；reward-dashboard 当前只在 dev 独立部署。api → agent-engine 的内部调用走 `WEB_INTERNAL_URL` / `CHAT_INTERNAL_URL`，签 EdDSA (Ed25519) 每 run JWT。
 
 ## 信任边界
 
 `backend/services/agent-engine/src/agent_engine/trust_boundary.py` 是 `FORBIDDEN_ENVS` 的单一真源。改动这里前先读 docstring。三道防线:
 
-| 层 | 实现 |
-|---|---|
-| 启动 fail-fast | `agent_engine/asgi.py` import 时 `assert_no_forbidden_envs()`,任何 forbidden var 存在直接 exit(由 `ENGINE_TRUST_FAILFAST` gate;当前 api+agent-engine 共用一个 fly app,fly 没有 per-process-group secret,所以默认 OFF,等 web/chat 拆成独立 fly app 后再启用)。 |
-| 本地 compose | `make ensure-env-backend` 从 `backend/.env` 派生 `.env.chat`,把 FORBIDDEN_ENVS 剔掉,只给 `agent-engine` 容器读。 |
-| 部署 | `scripts/sync_fly_secrets.py` 在 CI 同步 fly secrets;当前共用 fly app 时退化成 app-level 整体推,等拆 app 后再按 process group 剥离。 |
+| 层             | 实现                                                                                                                                                                                                                       |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 启动 fail-fast | `agent_engine/asgi.py` import 时 `assert_no_forbidden_envs()`,任何 forbidden var 存在直接 exit。**dev 三-app 已 armed**（`proactive-ai-engine-dev` 设 `ENGINE_TRUST_FAILFAST="1"`）；test/prod 因仍是单 app 暂时默认 OFF。 |
+| 本地 compose   | `make ensure-env-backend` 从 `backend/.env` 派生 `.env.chat`,把 FORBIDDEN_ENVS 剔掉,只给 `agent-engine` 容器读。                                                                                                           |
+| 部署           | `scripts/sync_fly_secrets.py` 在 CI 同步 fly secrets。dev 三-app 走 per-app scoped secrets,其中 engine/reward 用 `--exclude-master`；test/prod 仍因单 app 退化成 app-level 整体推。                                        |
 
 外加静态防线:ruff `flake8-tidy-imports.banned-api` 禁止 `pinai_api` ↔ `agent_engine` 互相 import,公共类型放共享 lib `pinai_contracts`(`backend/libs/contracts/src/pinai_contracts/`,纯 model / protocol,无副作用)。
 
@@ -75,12 +78,12 @@ flowchart LR
 
 ## 鉴权
 
-| 链路 | 算法 | 单一真源文件 |
-|---|---|---|
-| 前端 → api | Supabase JWT(RS256,public key from `SUPABASE_JWT_SECRET`) | `pinai_api/platform/auth/supabase_jwt.py`、`platform/auth/deps.py`(`current_user` 依赖) |
-| api → agent-engine | EdDSA (Ed25519) 每 run JWT,默认 1 小时 TTL,`jti` 在 `pai_jti_revocations` 黑名单 | `pinai_api/platform/auth/agent_jwt.py` 签发(私钥 `PAI_JWT_SIGNING_KEY`,base64 raw 32B);`agent_engine/auth/run_jwt.py` 用公钥验签 |
-| sandbox → api `/api/agent/*` | Phantom token(opaque,1 小时 TTL,sandbox 关闭即吊销) | `pinai_api/domains/identity/sandbox_phantom.py` mint;`pinai_api/platform/db/repositories/sandbox_phantom_tokens.py`;agent-engine 端 sandbox 启动时把 token 注入 `PAI_SANDBOX_TOKEN` env |
-| 设备 → api | `X-Device-Id` + `X-Device-Token`(bcrypt rounds=10) | `pinai_api/domains/connector/device/devices_ui.py`、`pinai_api/platform/db/repositories/devices.py` |
+| 链路                         | 算法                                                                             | 单一真源文件                                                                                                                                                                            |
+| ---------------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 前端 → api                   | Supabase JWT(RS256,public key from `SUPABASE_JWT_SECRET`)                        | `pinai_api/platform/auth/supabase_jwt.py`、`platform/auth/deps.py`(`current_user` 依赖)                                                                                                 |
+| api → agent-engine           | EdDSA (Ed25519) 每 run JWT,默认 1 小时 TTL,`jti` 在 `pai_jti_revocations` 黑名单 | `pinai_api/platform/auth/agent_jwt.py` 签发(私钥 `PAI_JWT_SIGNING_KEY`,base64 raw 32B);`agent_engine/auth/run_jwt.py` 用公钥验签                                                        |
+| sandbox → api `/api/agent/*` | Phantom token(opaque,1 小时 TTL,sandbox 关闭即吊销)                              | `pinai_api/domains/identity/sandbox_phantom.py` mint;`pinai_api/platform/db/repositories/sandbox_phantom_tokens.py`;agent-engine 端 sandbox 启动时把 token 注入 `PAI_SANDBOX_TOKEN` env |
+| 设备 → api                   | `X-Device-Id` + `X-Device-Token`(bcrypt rounds=10)                               | `pinai_api/domains/connector/device/devices_ui.py`、`pinai_api/platform/db/repositories/devices.py`                                                                                     |
 
 `/api/agent/*` 跟前端的 `/api/*` 是同一进程不同前缀:前者走 phantom token / agent-run JWT,后者走 Supabase JWT,鉴权依赖在 route 级别区分。
 
@@ -103,52 +106,52 @@ sandbox 内通过 `PAI_API_URL` + `PAI_SANDBOX_TOKEN` 回连 api `/api/agent/*`,
 首次设置:
 
 ```bash
-make init                      # npm install root + proactive-ai-frontend(只跑一次)
+npm install
+cd backend && uv sync && cd -
 cd internal-reward-dashboard && npm install && cd -
-# 找团队成员要 .env.keys,放到:
-#   backend/.env.keys
-#   ops/litellm/.env.keys
-make up                        # 解密 .env.dev → .env,build 全栈,起 postgres + litellm + db-migrate + api + agent-engine + frontend
+# 找团队成员要 dotenvx 私钥，放到 ~/.zshrc 的 DOTENV_PRIVATE_KEY_DEV
+# （或用 backend/.env.keys + ops/litellm/.env.keys 的老办法，二选一）
+make up
 ```
 
-本地开发现在有两条入口:
+本地开发推荐两条入口:
 
-| 模式 | 命令 | 适合场景 | 端口 | 数据 | 登录 |
-|---|---|---|---|---|---|
-| Local Hot | `make local` | 单机日常开发、AI 快速改代码 | 固定 `3000 / 8000 / 8001` | 固定 local DB (`localhost:54322`) | `X-Dev-Auth: pinai-local-dev-user` 固定用户 |
-| Docker Isolated | `make up` | 多 worktree 并行、完整镜像验收 | 随机 host port,`make urls` 查看 | worktree 独立 volume | 原 Supabase OAuth / dashboard dev bypass |
+| 模式            | 命令                             | 适合场景                                 | 端口                                    | 数据                 | 登录                                     |
+| --------------- | -------------------------------- | ---------------------------------------- | --------------------------------------- | -------------------- | ---------------------------------------- |
+| Docker Isolated | `make up`                        | 默认入口；多 worktree 并行、完整镜像验收 | 随机 host port,`make urls` 查看         | worktree 独立 volume | 原 Supabase OAuth / dashboard dev bypass |
+| Lightweight     | 手动起 `uvicorn` / `npm run dev` | 单服务排障、轻量调试                     | 常用 `8000 / 8001 / 3003 / 3004 / 3005` | 复用本机环境         | 取决于你起的是哪个前端壳                 |
 
-Local Hot 只把 Postgres/pgvector 和 LiteLLM 放在固定依赖容器里;`api`、`agent-engine`、`proactive-ai-frontend` 都跑在本机热重载:
+默认 `make up` 会解密 `.env.dev`、构建并启动 postgres + litellm + api + agent-engine + proactive-ai-frontend + apps/web。端口是**按 worktree 隔离的随机 host 端口**，用 `make urls` 看当前组的真实地址。
 
 ```bash
-make local        # foreground: uvicorn --reload + Vite dev server
-make local-status # 看固定 URL、host 进程和依赖容器
-make local-stop   # 停 host 进程 + 依赖容器,保留 DB volume
+make up
+make urls
+make logs
+make restart
+make restart-frontend
 ```
 
-固定入口:
+轻量模式常用命令:
 
-```text
-Frontend:    http://localhost:3000
-api:         http://localhost:8000
-agent-engine: http://localhost:8001
-DB:          postgresql://postgres:postgres@127.0.0.1:54322/postgres
-LiteLLM:     http://127.0.0.1:4000/v1
+```bash
+cd backend && uv run uvicorn pinai_api.asgi:app --reload --port 8000
+cd backend && uv run uvicorn agent_engine.asgi:app --reload --port 8001
+cd proactive-ai-frontend && npm run dev          # 3003
+cd apps/web && npm run dev                       # 3005
+cd internal-reward-dashboard && npm run dev -- --host 127.0.0.1 --port 3004
 ```
-
-Local Hot 前端会设置 `VITE_PIN_LOCAL_DEV_AUTH=1`,`useAuth()` 返回固定 local user,API client 自动带 `X-Dev-Auth: pinai-local-dev-user`。后端只有 `DEPLOY_ENV=dev` 且 header 显式存在时接受;test/prod 会忽略该 header 并继续走 Supabase JWT。
 
 常用循环:
 
-| 改动 | 用什么 |
-|---|---|
-| backend Python 代码 | `make local` 热重载;Docker 验收用 `make restart` |
-| 前端代码 | `make local` 热更新;容器版验收用 `make restart-frontend` |
-| 内部 reward dashboard | `cd internal-reward-dashboard && npm run dev -- --host 127.0.0.1 --port 3004` |
-| docker-compose / Dockerfile | `make up`(会重 build) |
-| 翻数据丢档从头来 | `make clean && make up`(`reset` 同语义 + 自动起 ngrok) |
-| 状态/日志 | `make status` / `make logs` / `make logs-api` / `make logs-agent-engine` / `make logs-frontend` |
-| DB 强制重 migrate | `make migrate` |
+| 改动                             | 用什么                                                                                          |
+| -------------------------------- | ----------------------------------------------------------------------------------------------- |
+| backend Python 代码              | `make restart`；轻量排障用 `uvicorn --reload`                                                   |
+| proactive-ai-frontend / apps/web | 各自 `npm run dev`；容器版验收用 `make restart-frontend`                                        |
+| 内部 reward dashboard            | `cd internal-reward-dashboard && npm run dev -- --host 127.0.0.1 --port 3004`                   |
+| docker-compose / Dockerfile      | `make up`(会重 build)                                                                           |
+| 翻数据丢档从头来                 | `make reset`                                                                                    |
+| 状态/日志                        | `make status` / `make logs` / `make logs-api` / `make logs-agent-engine` / `make logs-frontend` |
+| DB 强制重 migrate                | `make migrate`                                                                                  |
 
 Daytona / mobile 用 ngrok:
 
@@ -158,17 +161,13 @@ make tunnel-status
 make tunnel-down
 ```
 
-Mobile(Capacitor):
+本地移动端 / 桌面壳入口:
 
 ```bash
 make ios            # build frontend(VITE_CAPACITOR=1),sync iOS,打开 Xcode
 make android        # 同理,装到 USB Android 设备
-# 后端选择:
-#   NGROK=<url> make ios      # 临时公网 URL,优先级最高
-#   PROD=1 make ios           # fly prod
-#   DEV=1 make ios            # fly dev
-#   make ios                  # 默认优先用 ./.env 的 PAI_API_URL(ngrok)
-#                             # 没配 PAI_API_URL 时直接失败,不退回 LAN IP
+make macos          # Electron 桌面壳，复用 apps/web renderer
+make rn             # Expo RN 真机；SIM=1 跑模拟器，DEV=1 / PROD=1 切远端环境
 ```
 
 ## Secrets 与环境变量
@@ -225,34 +224,38 @@ ByteDance / Volcengine ASR 是直接 provider 调用,不进入 LiteLLM token 账
 
 ## 部署
 
-| Fly app | dev | test | prod |
-|---|---|---|---|
-| backend(api + agent-engine 同 app,fly `[processes]` 切成 `web` / `chat` 进程组) | `proactive-ai-agents-dev` | `proactive-ai-agents-test` | `proactive-ai-agents-prod` |
-| Frontend SPA(nginx + Vite static) | `proactive-ai-frontend-dev` | `proactive-ai-frontend-test` | `proactive-ai-frontend-prod` |
-| Internal reward dashboard(nginx + Vite static) | `proactive-ai-reward-dashboard-dev` | 暂无独立 app | 暂无独立 app |
-| LiteLLM | `proactive-ai-litellm-dev` | `proactive-ai-litellm-test` | `proactive-ai-litellm-prod` |
+| Fly app                                        | dev                                                                            | test                         | prod                         |
+| ---------------------------------------------- | ------------------------------------------------------------------------------ | ---------------------------- | ---------------------------- |
+| backend                                        | `proactive-ai-api-dev` + `proactive-ai-engine-dev` + `proactive-ai-reward-dev` | `proactive-ai-agents-test`   | `proactive-ai-agents-prod`   |
+| Frontend SPA(nginx + Vite static)              | `proactive-ai-frontend-dev`                                                    | `proactive-ai-frontend-test` | `proactive-ai-frontend-prod` |
+| Web (zebra)                                    | `proactive-ai-web-dev`                                                         | 暂无（CI 跳过）              | `proactive-ai-web-prod`      |
+| Internal reward dashboard(nginx + Vite static) | `proactive-ai-reward-dashboard-dev`                                            | 暂无独立 app                 | 暂无独立 app                 |
+| LiteLLM                                        | `proactive-ai-litellm-dev`                                                     | `proactive-ai-litellm-test`  | `proactive-ai-litellm-prod`  |
 
 primary region `iad`(部分 dev/test 跨到 `ord`)。Daytona sandbox 不是 fly app。
 
 GitHub Actions 入口在 `.github/workflows/`:
 
-| Workflow | 触发 | 做什么 |
-|---|---|---|
-| `ci.yml` | PR | type-check + lint。 |
-| `deploy-dev.yml` | push 到 `proactive-ai-v3` 或手动 | 按 path filter 部署 backend / frontend / litellm。 |
-| `internal-reward-dashboard-dev.yml` | PR / push 到 `proactive-ai-v3` / 手动 | 独立验证并部署内部 reward dashboard 到 Fly dev。 |
-| `deploy-test.yml` | 手动 | 先 refresh Daytona snapshot,再部署三个 app;跑 `sync_fly_secrets.py` 守 trust boundary。 |
-| `deploy-prod.yml` | 手动 / `v*` tag | 创建 GitHub release,promote dev → prod env,部署三个 app(需要 environment approval)。 |
-| `build-ios.yml` | 手动 | build frontend、sync Capacitor、装 iOS Xcode 项目工件。 |
+| Workflow                            | 触发                       | 做什么                                                                                  |
+| ----------------------------------- | -------------------------- | --------------------------------------------------------------------------------------- |
+| `ci.yml`                            | PR                         | type-check + lint。                                                                     |
+| `deploy-dev.yml`                    | push 到 `main` 或手动      | 按 path filter 部署 dev；backend caller 已传 `agents_split: true`，会走 dev 三-app。    |
+| `internal-reward-dashboard-dev.yml` | PR / push 到 `main` / 手动 | 独立验证并部署内部 reward dashboard 到 Fly dev。                                        |
+| `deploy-test.yml`                   | 手动                       | 先 refresh Daytona snapshot,再部署三个 app;跑 `sync_fly_secrets.py` 守 trust boundary。 |
+| `deploy-prod.yml`                   | 手动 / `v*` tag            | 创建 GitHub release,promote dev → prod env,部署三个 app(需要 environment approval)。    |
+| `build-ios.yml`                     | main push / 手动           | build `proactive-ai-frontend` 的 Capacitor iOS 工件（dev TestFlight / prod dispatch）。 |
+| `build-rn-ios.yml`                  | 手动                       | build `apps/mobile` 的 RN iOS 工件；当前未开自动触发。                                  |
 
 本地部署兜底(CI 不可用时):
 
 ```bash
-make deploy-pinai-dev
+make deploy-pinai-dev       # 旧单-app backend dev 兜底，不是当前默认 dev 形态
 make deploy-pinai-prod
 make deploy-frontend-dev
 make deploy-frontend-prod
 make deploy-reward-dashboard-dev
+make deploy-web-dev
+make deploy-web-prod
 make deploy-litellm-dev
 make deploy-litellm-prod
 ```
@@ -298,25 +301,25 @@ cd internal-reward-dashboard && npm test             # 内部 review app 单测
 
 ## 开发入口
 
-| 改动 | 先看 |
-|---|---|
-| FastAPI app 装配 / lifespan | `backend/services/api/src/pinai_api/app.py`、`pinai_api/asgi.py` |
-| agent-engine app 装配 / lifespan / sandbox GC | `backend/services/agent-engine/src/agent_engine/app.py`、`agent_engine/asgi.py` |
-| 信任边界 / FORBIDDEN_ENVS | `backend/services/agent-engine/src/agent_engine/trust_boundary.py` |
-| Supabase JWT 鉴权 | `pinai_api/platform/auth/`(`supabase_jwt.py`、`deps.py`、`user_service.py`) |
-| Agent-run JWT 签发 / 验证 | `pinai_api/platform/auth/agent_jwt.py`、`agent_engine/auth/run_jwt.py` |
-| Sandbox phantom token | `pinai_api/domains/identity/sandbox_phantom.py`、`pinai_api/platform/db/repositories/sandbox_phantom_tokens.py` |
-| LiteLLM key 配额 | `pinai_api/domains/billing/provisioning.py` |
-| Daytona sandbox 缓存 / GC | `agent_engine/tools/code_mode/sandbox.py`、`agent_engine/app.py` `_sandbox_gc_loop` |
-| Daytona snapshot 构建 | `backend/infra/daytona/` |
-| Postgres pool / RLS | `backend/libs/db/src/pinai_db/pool.py`、`pinai_db/rls.py` |
-| yoyo 迁移 | `backend/yoyo.ini`、`backend/db/migrations/` |
-| Stripe + 订阅 | `pinai_api/domains/billing/payments/` |
-| CORS / audit 中间件 | `pinai_api/app.py` 装配段,`pinai_api/platform/middleware/audit.py` |
-| docker-compose / Makefile | `docker-compose.yml`、`Makefile` |
-| CI / fly secrets 守门 | `.github/workflows/`、`backend/scripts/sync_fly_secrets.py` |
-| 前端 API base | `proactive-ai-frontend/src/lib/platform.ts`、`src/lib/api.ts` |
-| 内部 reward dashboard | `internal-reward-dashboard/`、`internal-reward-dashboard/fly.toml`、`backend/services/reward-dashboard/src/pinai_reward_dashboard/routes.py` |
+| 改动                                          | 先看                                                                                                                                         |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| FastAPI app 装配 / lifespan                   | `backend/services/api/src/pinai_api/app.py`、`pinai_api/asgi.py`                                                                             |
+| agent-engine app 装配 / lifespan / sandbox GC | `backend/services/agent-engine/src/agent_engine/app.py`、`agent_engine/asgi.py`                                                              |
+| 信任边界 / FORBIDDEN_ENVS                     | `backend/services/agent-engine/src/agent_engine/trust_boundary.py`                                                                           |
+| Supabase JWT 鉴权                             | `pinai_api/platform/auth/`(`supabase_jwt.py`、`deps.py`、`user_service.py`)                                                                  |
+| Agent-run JWT 签发 / 验证                     | `pinai_api/platform/auth/agent_jwt.py`、`agent_engine/auth/run_jwt.py`                                                                       |
+| Sandbox phantom token                         | `pinai_api/domains/identity/sandbox_phantom.py`、`pinai_api/platform/db/repositories/sandbox_phantom_tokens.py`                              |
+| LiteLLM key 配额                              | `pinai_api/domains/billing/provisioning.py`                                                                                                  |
+| Daytona sandbox 缓存 / GC                     | `agent_engine/tools/code_mode/sandbox.py`、`agent_engine/app.py` `_sandbox_gc_loop`                                                          |
+| Daytona snapshot 构建                         | `backend/infra/daytona/`                                                                                                                     |
+| Postgres pool / RLS                           | `backend/libs/db/src/pinai_db/pool.py`、`pinai_db/rls.py`                                                                                    |
+| yoyo 迁移                                     | `backend/yoyo.ini`、`backend/db/migrations/`                                                                                                 |
+| Stripe + 订阅                                 | `pinai_api/domains/billing/payments/`                                                                                                        |
+| CORS / audit 中间件                           | `pinai_api/app.py` 装配段,`pinai_api/platform/middleware/audit.py`                                                                           |
+| docker-compose / Makefile                     | `docker-compose.yml`、`Makefile`                                                                                                             |
+| CI / fly secrets 守门                         | `.github/workflows/`、`backend/scripts/sync_fly_secrets.py`                                                                                  |
+| 前端 API base                                 | `proactive-ai-frontend/src/lib/platform.ts`、`src/lib/api.ts`                                                                                |
+| 内部 reward dashboard                         | `internal-reward-dashboard/`、`internal-reward-dashboard/fly.toml`、`backend/services/reward-dashboard/src/pinai_reward_dashboard/routes.py` |
 
 ## 生产环境硬性规则
 
