@@ -16,9 +16,7 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { Check, Mic, SendHorizontal, Square, X } from "lucide-react-native";
-import { BlurView } from "expo-blur";
-import { LinearGradient } from "expo-linear-gradient";
+import { Check, X } from "lucide-react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import {
   cardActionFeedbackBody,
@@ -43,6 +41,8 @@ import TodoStrip from "../components/chat/TodoStrip";
 import WorkGroup, { SpecialCard } from "../components/chat/WorkGroup";
 import ProposeActionCard from "../components/chat/ProposeActionCard";
 import CardResultFeedbackBar from "../components/chat/CardResultFeedbackBar";
+import ChatComposer from "../components/chat/ChatComposer";
+import { VoiceButton } from "../voice";
 
 import { notifyThreadActivity, readLocalHistory } from "../lib/sync/sync-bootstrap";
 import { postCardFeedback } from "../hooks/useCardActions";
@@ -236,15 +236,18 @@ function HitlApprovalCard({
 
       {rejecting ? (
         <View style={styles.hitlRejectPanel}>
-          <TextInput
-            value={reason}
-            onChangeText={setReason}
-            placeholder="Optional: tell the agent why (it continues without running the tool)"
-            placeholderTextColor="rgba(29,33,48,0.35)"
-            editable={!disabled && !submitting}
-            multiline
-            style={styles.hitlReasonInput}
-          />
+          <View style={styles.hitlReasonInputRow}>
+            <TextInput
+              value={reason}
+              onChangeText={setReason}
+              placeholder="Optional: tell the agent why (it continues without running the tool)"
+              placeholderTextColor="rgba(29,33,48,0.35)"
+              editable={!disabled && !submitting}
+              multiline
+              style={styles.hitlReasonInput}
+            />
+            <VoiceButton prefill={reason} onUpdate={setReason} disabled={disabled || submitting} />
+          </View>
           <View style={styles.hitlRejectActions}>
             <Pressable
               style={[styles.hitlButton, styles.hitlGhostButton, (disabled || submitting) && styles.hitlDisabled]}
@@ -408,12 +411,15 @@ function Conversation({
     onCardClose?.();
   }, [card, onCardClose]);
 
-  const send = useCallback(() => {
-    const text = draft.trim();
-    if (!text || busy) return;
-    setDraft("");
-    void sendMessage(text);
-  }, [draft, busy, sendMessage, setDraft]);
+  const send = useCallback(
+    async (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      setDraft("");
+      await sendMessage(trimmed);
+    },
+    [sendMessage, setDraft],
+  );
 
   // ref-latest：给 memo(Entry) 稳定的回调身份（runtime 返回的函数身份
   // 不保证稳定，inline lambda 则每 render 必击穿 memo）。
@@ -502,42 +508,15 @@ function Conversation({
           doneBusy={doneBusy}
         />
       ) : null}
-      <View style={[styles.composer, bottomInset ? { paddingBottom: 12 + bottomInset } : null]}>
-        {/* web composer 玻璃条（blur 16-20px + 半透底）的 RN 介质版。 */}
-        <BlurView intensity={40} tint="light" style={StyleSheet.absoluteFill} />
-        <View style={[StyleSheet.absoluteFill, styles.composerTint]} />
-        <TextInput
-          style={styles.input}
-          value={draft}
-          onChangeText={setDraft}
-          placeholder="Message PIN AI…"
-          placeholderTextColor="#a1a1aa"
-          multiline
-          editable
-        />
-        <View style={styles.composerIcons}>
-          <Mic size={18} color="#a1a1aa" strokeWidth={1.8} />
-          <Pressable
-            style={({ pressed }) => [styles.sendButton, pressed && { opacity: 0.7 }]}
-            onPress={busy ? () => void stop() : send}
-            accessibilityRole="button"
-            accessibilityLabel={busy ? "Stop" : "Send"}
-          >
-            {/* web 同款品红渐变 135° + 彩影（ConversationView 发送钮）。 */}
-            <LinearGradient
-              colors={["hsl(292, 78%, 63%)", "hsl(330, 80%, 65%)"]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={StyleSheet.absoluteFill}
-            />
-            {busy ? (
-              <Square size={14} color="#fff" fill="#fff" />
-            ) : (
-              <SendHorizontal size={16} color="#fff" strokeWidth={2} />
-            )}
-          </Pressable>
-        </View>
-      </View>
+      <ChatComposer
+        value={draft}
+        onChangeText={setDraft}
+        onSend={send}
+        streaming={busy}
+        onStop={() => void stop()}
+        placeholder={card ? "Message about this card..." : "Message PIN AI..."}
+        bottomInset={bottomInset}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -576,38 +555,6 @@ const styles = StyleSheet.create({
   spinner: { alignSelf: "flex-start", marginTop: 6 },
   thinkingPill: { alignSelf: "flex-start", marginTop: 2, marginLeft: -2, paddingVertical: 2 },
   thinkingText: { fontSize: 15, fontFamily: "Inter_500Medium", color: "rgba(29,33,48,0.65)" },
-  composer: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    padding: 12,
-    gap: 8,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "rgba(228,228,231,0.6)",
-    overflow: "hidden",
-  },
-  composerTint: { backgroundColor: "rgba(250,249,247,0.55)" },
-  input: {
-    flex: 1,
-    minHeight: 40,
-    maxHeight: 120,
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 10,
-    backgroundColor: "#fff",
-    fontSize: 16,
-    color: "#1a1a1a",
-  },
-  sendButton: {
-    borderRadius: 19,
-    width: 38,
-    height: 38,
-    alignItems: "center",
-    justifyContent: "center",
-    overflow: "hidden",
-    boxShadow: "0 4px 12px hsla(292, 78%, 63%, 0.35)",
-  },
-  composerIcons: { flexDirection: "row", alignItems: "center", gap: 10 },
   timestamp: { marginTop: 3, fontSize: 10, color: "#a1a1aa", textAlign: "right" },
   hitlInlineWrap: { paddingTop: 4 },
   hitlFallbackWrap: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 8 },
@@ -668,18 +615,28 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     gap: 8,
   },
-  hitlReasonInput: {
+  hitlReasonInputRow: {
     minHeight: 56,
-    borderRadius: 8,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: "rgba(29,33,48,0.12)",
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingLeft: 10,
+    paddingRight: 6,
+    paddingVertical: 6,
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 6,
+    backgroundColor: "rgba(255,255,255,0.55)",
+  },
+  hitlReasonInput: {
+    flex: 1,
+    minHeight: 56,
+    paddingHorizontal: 0,
+    paddingVertical: 2,
     color: "#1d2130",
     fontSize: 12,
     lineHeight: 16,
     textAlignVertical: "top",
-    backgroundColor: "rgba(255,255,255,0.55)",
   },
   hitlActions: {
     flexDirection: "row",

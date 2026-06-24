@@ -16,6 +16,8 @@ import * as Haptics from "expo-haptics";
 import { AlertCircle, Check, Copy, Pencil, RotateCcw, Send, Trash2, X } from "lucide-react-native";
 import type { ConversationEntry } from "@pin-ai/core";
 
+import { VoiceButton } from "../../voice";
+
 type UserEntryData = Extract<ConversationEntry, { kind: "user" }>;
 
 const FG = "29,33,48";
@@ -62,14 +64,22 @@ export default function UserEntry({
     <View style={styles.wrap}>
       <View style={[styles.bubble, entry.failed && styles.faded, editing && styles.bubbleWide]}>
         {editing ? (
-          <TextInput
-            value={draft}
-            onChangeText={setDraft}
-            multiline
-            autoFocus
-            style={styles.editInput}
-            placeholderTextColor="rgba(255,255,255,0.5)"
-          />
+          <View style={styles.editRow}>
+            <TextInput
+              value={draft}
+              onChangeText={setDraft}
+              multiline
+              autoFocus
+              style={styles.editInput}
+              placeholderTextColor="rgba(255,255,255,0.5)"
+            />
+            <VoiceButton
+              prefill={draft}
+              onUpdate={setDraft}
+              iconColor="rgba(255,255,255,0.72)"
+              buttonStyle={styles.editVoiceButton}
+            />
+          </View>
         ) : (
           <Text style={styles.text}>{entry.text}</Text>
         )}
@@ -148,7 +158,9 @@ const styles = StyleSheet.create({
   faded: { opacity: 0.5 },
   // web user 气泡 = text-bodySm（@pin-ai/design bodySm = 13px）leading-relaxed。
   text: { color: "#fff", fontSize: 13, lineHeight: 20 },
-  editInput: { color: "#fff", fontSize: 13, lineHeight: 20, minHeight: 44, maxHeight: 120, padding: 0 },
+  editRow: { flexDirection: "row", alignItems: "flex-end", gap: 6 },
+  editInput: { flex: 1, color: "#fff", fontSize: 13, lineHeight: 20, minHeight: 44, maxHeight: 120, padding: 0 },
+  editVoiceButton: { backgroundColor: "rgba(255,255,255,0.1)" },
   actions: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4, paddingRight: 2 },
   time: { fontSize: 11, color: `rgba(${FG},0.4)`, fontFamily: "Inter_500Medium" },
   queuedBadge: { borderRadius: 999, backgroundColor: `rgba(${FG},0.06)`, paddingHorizontal: 8, paddingVertical: 2 },

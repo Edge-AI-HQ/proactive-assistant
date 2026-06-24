@@ -24,7 +24,18 @@ public final class AmbientAudioModule: Module {
   public func definition() -> ModuleDefinition {
     Name("AmbientAudio")
 
-    Events("soundClassification", "captureReady", "transcript", "speechBurst", "audioState", "audioError")
+    Events(
+      "soundClassification",
+      "captureReady",
+      "captureDiscarded",
+      "transcript",
+      "transcriptDraft",
+      "transcriptRefined",
+      "transcriptReady",
+      "speechBurst",
+      "audioState",
+      "audioError"
+    )
 
     OnCreate {
       self.registerLifecycleObservers()

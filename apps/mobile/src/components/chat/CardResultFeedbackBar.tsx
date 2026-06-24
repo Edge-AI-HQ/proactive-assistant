@@ -12,6 +12,8 @@ import { BlurView } from "expo-blur";
 import { Check, MessageSquarePlus, Send, ThumbsDown, ThumbsUp } from "lucide-react-native";
 import { buildAssistantMessageFeedbackBody, proxyPost } from "@pin-ai/core";
 
+import { VoiceButton } from "../../voice";
+
 const FG = "29,33,48";
 
 export default function CardResultFeedbackBar({
@@ -122,6 +124,7 @@ export default function CardResultFeedbackBar({
             style={styles.commentInput}
             returnKeyType="send"
           />
+          <VoiceButton prefill={commentText} onUpdate={setCommentText} disabled={commentSent} />
           <Pressable
             onPress={submitComment}
             disabled={!commentText.trim()}
@@ -182,7 +185,7 @@ const styles = StyleSheet.create({
   },
   doneLabel: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#fff" },
   dim: { opacity: 0.4 },
-  commentRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 },
+  commentRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 8 },
   commentInput: {
     flex: 1,
     height: 36,

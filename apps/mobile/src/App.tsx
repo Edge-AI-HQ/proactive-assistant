@@ -17,6 +17,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { User } from "@supabase/supabase-js";
 
 import { registerSignOutCleanup } from "@pin-ai/core";
+import { useUserSettings } from "@pin-ai/state";
 
 import { useAuth } from "./hooks/useAuth";
 import { clearDeviceCredentials } from "./lib/devices";
@@ -26,6 +27,7 @@ import AppShell from "./components/app/AppShell";
 import VideoBackdrop from "./ui/VideoBackdrop";
 import { registerPush } from "./lib/push";
 import LoginScreen from "./screens/LoginScreen";
+import { VoiceProvider } from "./voice";
 
 const queryClient = new QueryClient();
 
@@ -36,6 +38,9 @@ registerSignOutCleanup(clearDeviceCredentials);
 
 function Root() {
   const { loading, user, signInWithGoogle, signOut } = useAuth();
+  // Composer permission mode is a shared /settings value. Root fetches it once
+  // after auth so every composer/menu instance follows the same TQ cache.
+  useUserSettings(user?.id ?? null);
   // 品牌字体（web 同源：Inter 全局 + Geist chat 面）。加载极快（本地
   // bundle 资源），未就绪时沿用系统字体渲染，不 gate 首屏。
   useFonts({
@@ -79,7 +84,9 @@ export default function App() {
           <VideoBackdrop />
           <SafeAreaView style={styles.safeTransparent} edges={["top", "bottom"]}>
             <StatusBar style="dark" />
-            <Root />
+            <VoiceProvider>
+              <Root />
+            </VoiceProvider>
           </SafeAreaView>
         </SafeAreaProvider>
       </QueryClientProvider>

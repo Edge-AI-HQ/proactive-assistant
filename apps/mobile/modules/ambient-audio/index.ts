@@ -99,6 +99,10 @@ type AudioEventName =
   | "soundClassification"
   | "captureReady"
   | "transcript"
+  | "transcriptReady"
+  | "transcriptDraft"
+  | "transcriptRefined"
+  | "captureDiscarded"
   | "speechBurst"
   | "audioState"
   | "audioError";

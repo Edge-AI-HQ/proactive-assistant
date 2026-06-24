@@ -6,14 +6,15 @@
  * sendMessage），agent 下一轮作为 HumanMessage 收到。解析（args.input.{message,
  * drafts,options}）照搬 web parseArgs（纯函数）。
  *
- * 与 web 的差异（标注）：web 的语音输入（useVoiceInput / Waveform）apps/mobile 尚
- * 未接，先省去 mic，保留文本 + chips 主路径；plan / dangerous_actions / risks 不在
- * 会话卡渲染（审计字段，归卡片详情，与 web 一致）。
+ * 与 web 的差异（标注）：plan / dangerous_actions / risks 不在会话卡渲染
+ * （审计字段，归卡片详情，与 web 一致）。
  */
 import { useEffect, useState } from "react";
 import { ActivityIndicator, LayoutAnimation, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { ArrowRight, Check, ChevronUp, FileText, Mail, MessageSquare } from "lucide-react-native";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from "react-native-reanimated";
+
+import { VoiceButton } from "../../voice";
 
 const FG = "29,33,48";
 /** --primary hsl(292 78% 63%) ≈ rgb(215,87,234)。 */
@@ -187,6 +188,7 @@ export default function ProposeActionCard({
             style={styles.input}
             returnKeyType="send"
           />
+          <VoiceButton prefill={inputValue} onUpdate={setInputValue} disabled={locked} />
         </View>
 
         <Pressable
@@ -236,8 +238,20 @@ const styles = StyleSheet.create({
   radio: { width: 16, height: 16, borderRadius: 8, borderWidth: 1, borderColor: `rgba(${FG},0.18)`, alignItems: "center", justifyContent: "center" },
   radioOn: { backgroundColor: `rgb(${FG})`, borderColor: `rgb(${FG})` },
 
-  inputRow: { marginTop: 10, borderRadius: 12, borderWidth: 1, borderColor: `rgba(${FG},0.1)`, backgroundColor: "rgba(255,255,255,0.55)", paddingHorizontal: 12 },
-  input: { minHeight: 40, fontSize: 14, color: `rgb(${FG})`, fontFamily: "Inter_400Regular" },
+  inputRow: {
+    marginTop: 10,
+    minHeight: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: `rgba(${FG},0.1)`,
+    backgroundColor: "rgba(255,255,255,0.55)",
+    paddingLeft: 12,
+    paddingRight: 4,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  input: { flex: 1, minHeight: 40, fontSize: 14, color: `rgb(${FG})`, fontFamily: "Inter_400Regular" },
 
   continue: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 12, height: 44, borderRadius: 12, backgroundColor: "#1d2130" },
   continueText: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#fff" },
