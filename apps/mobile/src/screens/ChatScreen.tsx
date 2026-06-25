@@ -476,6 +476,7 @@ function Conversation({
           />
         )}
         onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
+        onLayout={() => listRef.current?.scrollToEnd({ animated: false })}
         ListEmptyComponent={
           ready ? (
             // web MinimalistLanding 同构：水晶球 + 引导文案。

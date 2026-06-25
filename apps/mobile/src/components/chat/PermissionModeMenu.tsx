@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { Check, ChevronDown, Shield, ShieldOff } from "lucide-react-native";
+import { Check, ChevronDown, ChevronUp, Shield, ShieldOff } from "lucide-react-native";
 import { useUserSettings, type PermissionMode } from "@pin-ai/state";
 
 const FG = "29,33,48";
-const DESTRUCTIVE = "#dc2626";
+const DESTRUCTIVE = "hsl(0, 72%, 60%)";
 const MODES: readonly PermissionMode[] = ["ask", "bypass"];
 
 const LABELS: Record<PermissionMode, string> = {
@@ -46,22 +46,24 @@ export default function PermissionModeMenu() {
         accessibilityState={{ expanded: open, disabled: saving }}
         style={({ pressed }) => [styles.trigger, pressed && styles.triggerPressed, saving && styles.dim]}
       >
-        {bypassed ? (
-          <ShieldOff size={12} color={DESTRUCTIVE} strokeWidth={2} />
-        ) : (
-          <Shield size={12} color={`rgba(${FG},0.48)`} strokeWidth={2} />
-        )}
-        <Text style={[styles.triggerText, bypassed && styles.dangerText]}>{LABELS[mode]}</Text>
-        <ChevronDown
-          size={13}
-          color={`rgba(${FG},0.5)`}
-          strokeWidth={2}
-        />
+        <View style={styles.triggerInner}>
+          {bypassed ? (
+            <ShieldOff size={13} color={DESTRUCTIVE} strokeWidth={2} />
+          ) : (
+            <Shield size={13} color={`rgba(${FG},0.4)`} strokeWidth={2} />
+          )}
+          <Text style={[styles.triggerText, bypassed && styles.dangerText]}>{LABELS[mode]}</Text>
+          {open ? (
+            <ChevronUp size={12} color={`rgba(${FG},0.4)`} strokeWidth={2} />
+          ) : (
+            <ChevronDown size={12} color={`rgba(${FG},0.4)`} strokeWidth={2} />
+          )}
+        </View>
       </Pressable>
 
       {open ? (
         <View style={styles.menu}>
-          <Text style={styles.menuTitle}>Permission mode</Text>
+          <Text style={styles.menuTitle}>Mode</Text>
           {MODES.map((item) => {
             const active = item === mode;
             const danger = item === "bypass";
@@ -73,10 +75,12 @@ export default function PermissionModeMenu() {
                 accessibilityState={{ selected: active }}
                 style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
               >
-                <View style={styles.checkSlot}>
-                  {active ? <Check size={15} color={`rgba(${FG},0.72)`} strokeWidth={2.5} /> : null}
+                <View style={styles.menuItemInner}>
+                  <View style={styles.checkSlot}>
+                    {active ? <Check size={14} color={`rgba(${FG},0.7)`} strokeWidth={2.5} /> : null}
+                  </View>
+                  <Text style={[styles.menuLabel, danger && styles.dangerText]}>{LABELS[item]}</Text>
                 </View>
-                <Text style={[styles.menuLabel, danger && styles.dangerText]}>{LABELS[item]}</Text>
               </Pressable>
             );
           })}
@@ -86,7 +90,7 @@ export default function PermissionModeMenu() {
       {pendingBypass ? (
         <View style={styles.confirm}>
           <Text style={styles.confirmText}>
-            Bypass Permissions lets the agent run side-effect actions without asking each time.
+            AI will act for you — send email, pay, and other outbound actions — without asking you to approve each one. Browser takeover is unaffected.
           </Text>
           <View style={styles.confirmActions}>
             <Pressable onPress={() => setPendingBypass(false)} style={styles.confirmGhost}>
@@ -100,7 +104,7 @@ export default function PermissionModeMenu() {
               }}
               style={[styles.confirmDanger, saving && styles.dim]}
             >
-              <Text style={styles.confirmDangerText}>Confirm</Text>
+              <Text style={styles.confirmDangerText}>Switch to Bypass</Text>
             </Pressable>
           </View>
         </View>
@@ -112,29 +116,33 @@ export default function PermissionModeMenu() {
 }
 
 const styles = StyleSheet.create({
-  wrap: { position: "relative", paddingHorizontal: 8, paddingTop: 8, alignItems: "flex-start" },
+  wrap: { position: "relative", paddingHorizontal: 8, paddingTop: 6, alignItems: "flex-start" },
   trigger: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
     minHeight: 22,
     borderRadius: 8,
     paddingHorizontal: 4,
+    justifyContent: "center",
+    alignSelf: "flex-start",
+  },
+  triggerInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
   },
   triggerPressed: { backgroundColor: `rgba(${FG},0.06)` },
-  triggerText: { fontSize: 12, lineHeight: 16, color: `rgba(${FG},0.58)`, fontFamily: "Inter_400Regular" },
+  triggerText: { fontSize: 12, lineHeight: 16, color: `rgba(${FG},0.55)`, fontFamily: "Geist_400Regular" },
   dangerText: { color: DESTRUCTIVE },
   dim: { opacity: 0.45 },
   menu: {
     position: "absolute",
     left: 8,
     bottom: 30,
-    minWidth: 210,
-    borderRadius: 18,
+    minWidth: 200,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: `rgba(${FG},0.08)`,
-    backgroundColor: "#f8f8fb",
-    paddingVertical: 6,
+    backgroundColor: "#f2f4f8",
+    paddingVertical: 4,
     shadowColor: "#000",
     shadowOpacity: 0.12,
     shadowRadius: 18,
@@ -143,31 +151,33 @@ const styles = StyleSheet.create({
     zIndex: 20,
   },
   menuTitle: {
-    paddingHorizontal: 14,
-    paddingVertical: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
     fontSize: 12,
+    lineHeight: 16,
     color: `rgba(${FG},0.4)`,
-    fontFamily: "Inter_600SemiBold",
+    fontFamily: "Geist_400Regular",
   },
-  menuItem: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, paddingVertical: 8 },
+  menuItem: {},
+  menuItemInner: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 10, paddingHorizontal: 12 },
   menuItemPressed: { backgroundColor: `rgba(${FG},0.06)` },
-  checkSlot: { width: 18, alignItems: "center" },
-  menuLabel: { fontSize: 14, color: `rgba(${FG},0.82)`, fontFamily: "Inter_500Medium" },
+  checkSlot: { width: 16, alignItems: "center" },
+  menuLabel: { fontSize: 12, lineHeight: 16, color: `rgba(${FG},0.8)`, fontFamily: "Geist_400Regular" },
   confirm: {
     marginTop: 6,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: "rgba(220,38,38,0.28)",
-    backgroundColor: "rgba(220,38,38,0.06)",
+    borderColor: "hsla(0, 72%, 60%, 0.3)",
+    backgroundColor: "hsla(0, 72%, 60%, 0.06)",
     paddingHorizontal: 12,
     paddingVertical: 10,
-    maxWidth: 330,
+    alignSelf: "stretch",
   },
-  confirmText: { fontSize: 12, lineHeight: 17, color: `rgba(${FG},0.7)`, fontFamily: "Inter_500Medium" },
+  confirmText: { fontSize: 12, lineHeight: 17, color: `rgba(${FG},0.7)`, fontFamily: "Geist_400Regular" },
   confirmActions: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 8, marginTop: 8 },
-  confirmGhost: { borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6 },
-  confirmGhostText: { fontSize: 12, color: `rgba(${FG},0.58)`, fontFamily: "Inter_600SemiBold" },
-  confirmDanger: { borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6, backgroundColor: DESTRUCTIVE },
-  confirmDangerText: { fontSize: 12, color: "#fff", fontFamily: "Inter_700Bold" },
-  error: { marginTop: 4, paddingHorizontal: 4, fontSize: 12, color: DESTRUCTIVE, fontFamily: "Inter_500Medium" },
+  confirmGhost: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 },
+  confirmGhostText: { fontSize: 12, color: `rgba(${FG},0.55)`, fontFamily: "Geist_400Regular" },
+  confirmDanger: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4, backgroundColor: DESTRUCTIVE },
+  confirmDangerText: { fontSize: 12, color: "#fff", fontFamily: "Geist_500Medium" },
+  error: { marginTop: 4, paddingHorizontal: 4, fontSize: 12, color: DESTRUCTIVE, fontFamily: "Geist_500Medium" },
 });

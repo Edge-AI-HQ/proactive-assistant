@@ -11,7 +11,7 @@ import {
 } from "react-native";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
-import { Check, ChevronDown, Mic, SendHorizontal, Square, X } from "lucide-react-native";
+import { Check, ChevronDown, Mic, Send, Square, X } from "lucide-react-native";
 
 import PermissionModeMenu from "./PermissionModeMenu";
 import { Waveform } from "../../voice/Waveform";
@@ -114,7 +114,7 @@ export default function ChatComposer({
   const canSend = hasText && !disabled && !sending;
   const showStop = streaming && !canSend;
   const actionDisabled = disabled || sending || (!canSend && !showStop);
-  const bottomPadding = bottomInset > 0 ? 16 : 24;
+  const bottomPadding = Math.max(bottomInset, 24);
 
   if (recording) {
     return (
@@ -173,9 +173,10 @@ export default function ChatComposer({
             onPress={() => Keyboard.dismiss()}
             accessibilityRole="button"
             accessibilityLabel="Dismiss keyboard"
-            style={styles.iconButton}
           >
-            <ChevronDown size={20} color={`rgba(${FG},0.5)`} strokeWidth={2} />
+            <View style={styles.iconButton}>
+              <ChevronDown size={20} color={`rgba(${FG},0.5)`} strokeWidth={2} />
+            </View>
           </Pressable>
         ) : null}
         <Pressable
@@ -183,37 +184,40 @@ export default function ChatComposer({
           disabled={disabled || isCapturing}
           accessibilityRole="button"
           accessibilityLabel="Voice input"
-          style={({ pressed }) => [styles.iconButton, pressed && styles.iconPressed, (disabled || isCapturing) && styles.dim]}
         >
-          <Mic size={18} color={`rgba(${FG},0.55)`} strokeWidth={1.8} />
+          <View style={[styles.iconButton, (disabled || isCapturing) && styles.dim]}>
+            <Mic size={18} color={`rgba(${FG},0.55)`} strokeWidth={1.6} />
+          </View>
         </Pressable>
         <Pressable
           onPress={showStop ? () => void onStop() : () => void submit()}
           disabled={actionDisabled}
           accessibilityRole="button"
           accessibilityLabel={showStop ? "Stop" : "Send"}
-          style={({ pressed }) => [
-            styles.sendButton,
-            !canSend && !showStop && styles.sendDisabled,
-            showStop && styles.stopButton,
-            pressed && !actionDisabled && styles.pressed,
-          ]}
         >
-          {canSend ? (
-            <LinearGradient
-              colors={[PRIMARY, PINK]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={StyleSheet.absoluteFill}
-            />
-          ) : null}
-          {sending ? (
-            <ActivityIndicator size="small" color={canSend || showStop ? "#fff" : `rgba(${FG},0.35)`} />
-          ) : showStop ? (
-            <Square size={12} color="#fff" fill="#fff" strokeWidth={2} />
-          ) : (
-            <SendHorizontal size={16} color={canSend ? "#fff" : `rgba(${FG},0.35)`} strokeWidth={2} />
-          )}
+          <View
+            style={[
+              styles.sendButton,
+              !canSend && !showStop && styles.sendDisabled,
+              showStop && styles.stopButton,
+            ]}
+          >
+            {canSend ? (
+              <LinearGradient
+                colors={[PRIMARY, PINK]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={StyleSheet.absoluteFill}
+              />
+            ) : null}
+            {sending ? (
+              <ActivityIndicator size="small" color={canSend || showStop ? "#fff" : `rgba(${FG},0.35)`} />
+            ) : showStop ? (
+              <Square size={12} color="#fff" fill="#fff" strokeWidth={2} />
+            ) : (
+              <Send size={15} color={canSend ? "#fff" : `rgba(${FG},0.35)`} strokeWidth={2} />
+            )}
+          </View>
         </Pressable>
       </View>
       <PermissionModeMenu />
@@ -228,12 +232,12 @@ const styles = StyleSheet.create({
   },
   inputBar: {
     minHeight: 52,
-    borderRadius: 26,
+    borderRadius: 24,
     borderWidth: 1,
     borderColor: `rgba(${FG},0.08)`,
     overflow: "hidden",
     flexDirection: "row",
-    alignItems: "flex-end",
+    alignItems: "center",
     gap: 8,
     paddingLeft: 16,
     paddingRight: 8,
@@ -243,7 +247,7 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 8 },
   },
-  rounded: { borderRadius: 26 },
+  rounded: { borderRadius: 24 },
   glassTint: { backgroundColor: "rgba(255,255,255,0.46)" },
   input: {
     flex: 1,
@@ -252,7 +256,7 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 8,
     paddingHorizontal: 0,
-    fontSize: 16,
+    fontSize: 15,
     lineHeight: 20,
     color: `rgba(${FG},0.9)`,
     fontFamily: "Inter_400Regular",
@@ -273,7 +277,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     overflow: "hidden",
   },
-  sendDisabled: { backgroundColor: `rgba(${FG},0.1)` },
+  sendDisabled: { backgroundColor: `rgba(${FG},0.12)` },
   stopButton: { backgroundColor: `rgba(${FG},0.92)` },
   pressed: { opacity: 0.75 },
   dim: { opacity: 0.4 },
