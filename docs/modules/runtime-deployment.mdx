@@ -153,7 +153,7 @@ cd internal-reward-dashboard && npm run dev -- --host 127.0.0.1 --port 3004
 | docker-compose / Dockerfile      | `make up`(会重 build)                                                                           |
 | 翻数据丢档从头来                 | `make reset`                                                                                    |
 | 状态/日志                        | `make status` / `make logs` / `make logs-api` / `make logs-agent-engine` / `make logs-reward` / `make logs-frontend` |
-| DB 强制重 migrate                | `make migrate`                                                                                  |
+| DB 强制重 migrate                | 先 `make build-backend`，再 `make migrate`                                                      |
 
 Daytona / mobile 用 ngrok:
 
@@ -212,8 +212,8 @@ ByteDance / Volcengine ASR 是直接 provider 调用,不进入 LiteLLM token 账
 - Postgres,本地 compose 用 `pgvector/pgvector:pg15`,prod 用 Supabase。
 - 命名前缀:`pai_*`(用户表 + 业务表,public schema)、LangGraph checkpointer 独占 `langgraph` schema。
 - yoyo migration 配置:`backend/yoyo.ini`(`sources = db/migrations`,`migration_table = pai_yoyo_migration_log`)。
-- 迁移目录:`backend/db/migrations/`,命名 `NNN_pai_<topic>.sql`,目前到 `039_split_generator_kinds.sql`,**只向前,不回滚**。
-- 本地:`make migrate` 一次性容器先 `CREATE DATABASE litellm` 再 `yoyo apply --batch`。
+- 迁移目录:`backend/db/migrations/`,命名 `NNN_pai_<topic>.sql`,**只向前,不回滚**。最新 migration 以目录里的最新文件为准,不要依赖本文里写死的旧编号。
+- 本地:改了 `backend/db/migrations/` 后,先 `make build-backend`,再 `make migrate`。原因是 migration SQL 会跟 backend image 一起构建;只跑 `make migrate` 可能沿用旧镜像,看起来成功但没执行新 SQL。`make migrate` 的一次性容器会先 `CREATE DATABASE litellm` 再 `yoyo apply --batch`。
 - 部署:Fly app 的 `release_command` 调 `yoyo apply --batch`,在 rolling restart 前完成。
 
 ## LiteLLM
@@ -243,8 +243,8 @@ GitHub Actions 入口在 `.github/workflows/`:
 | `ci.yml`                            | PR                         | type-check + lint。                                                                     |
 | `deploy-dev.yml`                    | push 到 `main` 或手动      | 按 path filter 部署 dev；backend caller 已传 `agents_split: true`，会走 dev 三-app。    |
 | `internal-reward-dashboard-dev.yml` | PR / push 到 `main` / 手动 | 独立验证并部署内部 reward dashboard 到 Fly dev。                                        |
-| `deploy-test.yml`                   | 手动                       | 先 refresh Daytona snapshot,再部署三个 app;跑 `sync_fly_secrets.py` 守 trust boundary。 |
-| `deploy-prod.yml`                   | 手动 / `v*` tag            | 创建 GitHub release,promote dev → prod env,部署三个 app(需要 environment approval)。    |
+| `deploy-test.yml`                   | 手动                       | 先 refresh Daytona snapshot,再部署 test 当前单-app backend + frontend + LiteLLM。       |
+| `deploy-prod.yml`                   | 手动 / `v*` tag            | 创建 GitHub release,promote dev → prod env,部署 prod 当前单-app backend + frontend + web + LiteLLM。 |
 | `build-ios.yml`                     | main push / 手动           | build `proactive-ai-frontend` 的 Capacitor iOS 工件（dev TestFlight / prod dispatch）。 |
 | `build-rn-ios.yml`                  | 手动                       | build `apps/mobile` 的 RN iOS 工件；当前未开自动触发。                                  |
 
