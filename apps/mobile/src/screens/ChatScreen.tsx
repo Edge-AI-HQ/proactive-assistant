@@ -22,6 +22,7 @@ import {
   cardActionFeedbackBody,
   conversationInit,
   deriveCardResultMessageId,
+  describeApproval,
   feedbackChannelForSession,
   findHitlHostId,
   segmentAssistantParts,
@@ -148,49 +149,6 @@ export interface ChatScreenProps {
   onCardClose?: () => void;
   /** card 满屏 sheet：底部 home-indicator 安全区，垫高 composer。 */
   bottomInset?: number;
-}
-
-/** Turn an upper/snake-case tool or SaaS slug into readable sentence case:
- *  `GMAIL_SEND_DRAFT` → `Gmail send draft`. Mirrors ui-web HitlApprovalCard. */
-function humanizeSlug(slug: string): string {
-  const s = slug.replace(/[_-]+/g, " ").trim().toLowerCase();
-  return s ? s[0].toUpperCase() + s.slice(1) : slug;
-}
-
-/** Turn a paused side-effect tool call into human-friendly card copy so the
- *  user sees an action, not the internal Composio meta-tool JSON. */
-function describeApproval(
-  toolName: string,
-  args: Record<string, unknown> | undefined,
-  argsPreview: string | undefined,
-): { title: string; detail?: string } {
-  const a = args ?? {};
-
-  switch (toolName) {
-    case "preference_add": {
-      const statement = typeof a.statement === "string" ? a.statement : undefined;
-      return { title: "Save a preference", detail: statement ?? argsPreview };
-    }
-    case "COMPOSIO_MULTI_EXECUTE_TOOL": {
-      const calls = Array.isArray(a.calls) ? a.calls : [];
-      const actions = calls
-        .map((c) =>
-          c && typeof c === "object"
-            ? (c as Record<string, unknown>).tool_slug
-            : undefined,
-        )
-        .filter((s): s is string => typeof s === "string")
-        .map(humanizeSlug);
-      if (actions.length === 0) return { title: "Run an action", detail: argsPreview };
-      if (actions.length === 1) return { title: actions[0] };
-      return {
-        title: `Run ${actions.length} actions`,
-        detail: actions.map((s) => `• ${s}`).join("\n"),
-      };
-    }
-    default:
-      return { title: humanizeSlug(toolName), detail: argsPreview };
-  }
 }
 
 /** HITL 审批卡：RN 对齐 packages/ui-web/src/chat/conversation/HitlApprovalCard.tsx。 */
@@ -555,7 +513,7 @@ const styles = StyleSheet.create({
   toolCall: { color: "#71717a", fontSize: 13, marginTop: 4 },
   spinner: { alignSelf: "flex-start", marginTop: 6 },
   thinkingPill: { alignSelf: "flex-start", marginTop: 2, marginLeft: -2, paddingVertical: 2 },
-  thinkingText: { fontSize: 15, fontFamily: "Inter_500Medium", color: "rgba(29,33,48,0.65)" },
+  thinkingText: { fontSize: 15, fontFamily: "Geist_500Medium", color: "rgba(29,33,48,0.65)" },
   timestamp: { marginTop: 3, fontSize: 10, color: "#a1a1aa", textAlign: "right" },
   hitlInlineWrap: { paddingTop: 4 },
   hitlFallbackWrap: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 8 },
@@ -591,13 +549,13 @@ const styles = StyleSheet.create({
     lineHeight: 12,
     letterSpacing: 0.8,
     color: "rgba(180,83,9,0.7)",
-    fontFamily: "Inter_600SemiBold",
+    fontFamily: "Geist_600SemiBold",
   },
   hitlTitle: {
     fontSize: 13,
     lineHeight: 18,
     color: "rgba(29,33,48,0.85)",
-    fontFamily: "Inter_600SemiBold",
+    fontFamily: "Geist_600SemiBold",
   },
   hitlDetailWrap: { paddingHorizontal: 12, paddingBottom: 8 },
   hitlDetail: {
@@ -669,7 +627,7 @@ const styles = StyleSheet.create({
   hitlApprove: { backgroundColor: "#1a1a1a" },
   hitlGhostButton: { backgroundColor: "transparent" },
   hitlDangerButton: { backgroundColor: "#ef4444" },
-  hitlApproveText: { color: "#fff", fontSize: 13, lineHeight: 18, fontFamily: "Inter_600SemiBold" },
-  hitlRejectText: { color: "#1d2130", fontSize: 13, lineHeight: 18, fontFamily: "Inter_600SemiBold" },
+  hitlApproveText: { color: "#fff", fontSize: 13, lineHeight: 18, fontFamily: "Geist_600SemiBold" },
+  hitlRejectText: { color: "#1d2130", fontSize: 13, lineHeight: 18, fontFamily: "Geist_600SemiBold" },
   hitlDisabled: { opacity: 0.5 },
 });

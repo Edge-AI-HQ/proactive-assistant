@@ -62,7 +62,7 @@ const styles = StyleSheet.create({
   blurRound: { borderRadius: 16 },
   row: { flexDirection: "row", alignItems: "flex-start", gap: 8, paddingHorizontal: 16, paddingVertical: 12 },
   col: { flex: 1, minWidth: 0 },
-  label: { fontSize: 11, fontFamily: "Inter_600SemiBold", letterSpacing: 0.55, color: `rgba(${FG},0.4)`, marginBottom: 4 },
-  brief: { fontSize: 13, fontFamily: "Inter_400Regular", color: `rgba(${FG},0.8)`, lineHeight: 18 },
+  label: { fontSize: 11, fontFamily: "Geist_600SemiBold", letterSpacing: 0.55, color: `rgba(${FG},0.4)`, marginBottom: 4 },
+  brief: { fontSize: 13, fontFamily: "Geist_400Regular", color: `rgba(${FG},0.8)`, lineHeight: 18 },
   chevron: { marginTop: 2 },
 });

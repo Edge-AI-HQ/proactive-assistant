@@ -157,6 +157,6 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontSize: 11,
     color: `rgba(${FG},0.55)`,
-    fontFamily: "Inter_500Medium",
+    fontFamily: "Geist_500Medium",
   },
 });

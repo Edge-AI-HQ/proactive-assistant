@@ -44,9 +44,9 @@ export default function PermissionModeMenu() {
         accessibilityRole="button"
         accessibilityLabel={LABELS[mode]}
         accessibilityState={{ expanded: open, disabled: saving }}
-        style={({ pressed }) => [styles.trigger, pressed && styles.triggerPressed, saving && styles.dim]}
+        style={styles.trigger}
       >
-        <View style={styles.triggerInner}>
+        <View style={[styles.triggerInner, open && styles.triggerActive, saving && styles.dim]}>
           {bypassed ? (
             <ShieldOff size={13} color={DESTRUCTIVE} strokeWidth={2} />
           ) : (
@@ -60,6 +60,19 @@ export default function PermissionModeMenu() {
           )}
         </View>
       </Pressable>
+
+      {/* Tap anywhere outside → close the menu. Web closes on document
+          click-outside; RN has no such listener, so a full-screen transparent
+          Pressable sits behind the menu (below it, above everything else) and
+          catches the tap. Only mounted while open. */}
+      {open ? (
+        <Pressable
+          style={styles.backdrop}
+          onPress={() => setOpen(false)}
+          accessibilityLabel="Close menu"
+          accessibilityRole="button"
+        />
+      ) : null}
 
       {open ? (
         <View style={styles.menu}>
@@ -117,22 +130,29 @@ export default function PermissionModeMenu() {
 
 const styles = StyleSheet.create({
   wrap: { position: "relative", paddingHorizontal: 8, paddingTop: 6, alignItems: "flex-start" },
-  trigger: {
-    minHeight: 22,
-    borderRadius: 8,
-    paddingHorizontal: 4,
-    justifyContent: "center",
-    alignSelf: "flex-start",
-  },
+  // NativeWind swallows Pressable's own `style` in this project (#216) → the
+  // visual button (padding / radius / grey bg) must live on the inner View.
+  trigger: { alignSelf: "flex-start" },
   triggerInner: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
+    minHeight: 22,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    borderRadius: 8,
   },
-  triggerPressed: { backgroundColor: `rgba(${FG},0.06)` },
+  // Web's hover:bg-foreground/[0.06] has no touch equivalent → map it to the
+  // menu-open state: the trigger stays grey while its menu is showing, and
+  // clears when the menu closes (incl. tapping away once outside-close lands).
+  triggerActive: { backgroundColor: `rgba(${FG},0.06)` },
   triggerText: { fontSize: 12, lineHeight: 16, color: `rgba(${FG},0.55)`, fontFamily: "Geist_400Regular" },
   dangerText: { color: DESTRUCTIVE },
   dim: { opacity: 0.45 },
+  // Full-screen tap-catcher behind the open menu. Negative insets escape the
+  // small `wrap` to blanket the screen; transparent (no scrim, matches web);
+  // zIndex 10 keeps it under the menu (20) but over the rest of the UI.
+  backdrop: { position: "absolute", top: -1000, left: -1000, right: -1000, bottom: -1000, zIndex: 10 },
   menu: {
     position: "absolute",
     left: 8,
@@ -173,7 +193,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     alignSelf: "stretch",
   },
-  confirmText: { fontSize: 12, lineHeight: 17, color: `rgba(${FG},0.7)`, fontFamily: "Geist_400Regular" },
+  confirmText: { fontSize: 12, lineHeight: 20, color: `rgba(${FG},0.7)`, fontFamily: "Geist_400Regular" },
   confirmActions: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 8, marginTop: 8 },
   confirmGhost: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 },
   confirmGhostText: { fontSize: 12, color: `rgba(${FG},0.55)`, fontFamily: "Geist_400Regular" },

@@ -9,7 +9,7 @@
  * 与 web 的差异（标注）：plan / dangerous_actions / risks 不在会话卡渲染
  * （审计字段，归卡片详情，与 web 一致）。
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, LayoutAnimation, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { ArrowRight, Check, ChevronUp, FileText, Mail, MessageSquare } from "lucide-react-native";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from "react-native-reanimated";
@@ -106,18 +106,24 @@ export default function ProposeActionCard({
   const [selectedOption, setSelectedOption] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [sent, setSent] = useState(false);
+  const [inputFocused, setInputFocused] = useState(false);
+  const inputRef = useRef<TextInput>(null);
 
   // agent 换了问题（message 变）→ 重置面板（un-sent 干净默认）。
   useEffect(() => {
     setSelectedOption(0);
     setInputValue("");
     setSent(false);
+    setInputFocused(false);
   }, [parsed?.message]);
 
   if (!parsed) return null;
   const { message, drafts, options } = parsed;
   const isRunning = busy || submitting;
   const locked = isRunning || sent;
+  // Focused (or typed-in) input becomes the selected choice → option chips
+  // de-highlight. (Web keeps the chip lit until you type; this reads clearer.)
+  const inputActive = inputFocused || !!inputValue.trim();
 
   const submitReply = async () => {
     const typed = inputValue.trim();
@@ -152,12 +158,14 @@ export default function ProposeActionCard({
         {options.length > 0 ? (
           <View style={styles.options}>
             {options.map((opt, i) => {
-              const isSelected = i === selectedOption && !inputValue.trim();
+              const isSelected = i === selectedOption && !inputActive;
               return (
                 <Pressable
                   key={i}
                   disabled={locked}
                   onPress={() => {
+                    inputRef.current?.blur();
+                    setInputFocused(false);
                     setSelectedOption(i);
                     if (inputValue) setInputValue("");
                   }}
@@ -175,14 +183,17 @@ export default function ProposeActionCard({
           </View>
         ) : null}
 
-        <View style={styles.inputRow}>
+        <View style={[styles.inputRow, inputActive && styles.inputRowActive]}>
           <TextInput
+            ref={inputRef}
             value={inputValue}
             onChangeText={setInputValue}
             onSubmitEditing={() => void submitReply()}
             editable={!locked}
+            onFocus={() => setInputFocused(true)}
+            onBlur={() => setInputFocused(false)}
             placeholder={
-              sent ? "Reply sent" : options.length > 0 ? "…or type your own reply" : "Type your reply"
+              sent ? "Reply sent" : options.length > 0 ? "Or type your own reply..." : "Type your reply..."
             }
             placeholderTextColor={`rgba(${FG},0.35)`}
             style={styles.input}
@@ -216,44 +227,45 @@ const styles = StyleSheet.create({
   draft: { borderRadius: 12, overflow: "hidden", borderWidth: 1, borderColor: `rgba(${FG},0.08)`, backgroundColor: "rgba(255,255,255,0.65)" },
   draftHeader: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 12, paddingVertical: 10 },
   draftIcon: { width: 28, height: 28, borderRadius: 8, backgroundColor: "#fff", borderWidth: 1, borderColor: `rgba(${FG},0.1)`, alignItems: "center", justifyContent: "center" },
-  draftLabel: { fontSize: 10, fontFamily: "Inter_600SemiBold", letterSpacing: 0.5, color: `rgba(${FG},0.4)`, marginBottom: 2 },
-  draftTitle: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: `rgba(${FG},0.85)` },
+  draftLabel: { fontSize: 10, fontFamily: "Geist_600SemiBold", letterSpacing: 0.5, color: `rgba(${FG},0.4)`, marginBottom: 2 },
+  draftTitle: { fontSize: 13, fontFamily: "Geist_600SemiBold", color: `rgba(${FG},0.85)` },
   draftBody: { paddingHorizontal: 14, paddingTop: 8, paddingBottom: 12, borderTopWidth: 1, borderTopColor: `rgba(${FG},0.06)` },
-  draftText: { fontSize: 13, color: `rgba(${FG},0.75)`, lineHeight: 19, fontFamily: "Inter_400Regular" },
+  draftText: { fontSize: 13, color: `rgba(${FG},0.75)`, lineHeight: 19, fontFamily: "Geist_400Regular" },
   flex1: { flex: 1, minWidth: 0 },
   flip: { transform: [{ rotate: "180deg" }] },
 
   panel: { borderRadius: 16, paddingHorizontal: 16, paddingVertical: 14, borderWidth: 1, borderColor: `rgba(${PRIMARY},0.35)`, backgroundColor: "rgba(255,255,255,0.6)" },
   panelHead: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 12 },
   pulseDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: `rgb(${PRIMARY})` },
-  needsInput: { fontSize: 11, fontFamily: "Inter_700Bold", letterSpacing: 0.6, color: `rgb(${PRIMARY})` },
-  message: { fontSize: 14, fontFamily: "Inter_500Medium", color: `rgba(${FG},0.85)`, lineHeight: 19, marginBottom: 10 },
+  needsInput: { fontSize: 11, fontFamily: "Geist_700Bold", letterSpacing: 0.6, color: `rgb(${PRIMARY})` },
+  message: { fontSize: 13, fontFamily: "Geist_500Medium", color: `rgba(${FG},0.85)`, lineHeight: 19, marginBottom: 10 },
 
-  options: { gap: 6, marginBottom: 4 },
+  options: { gap: 12 },
   option: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, borderWidth: 1 },
   optionIdle: { backgroundColor: "rgba(255,255,255,0.5)", borderColor: `rgba(${FG},0.08)` },
   optionSelected: { backgroundColor: `rgba(${FG},0.04)`, borderColor: `rgba(${FG},0.55)` },
-  optionText: { flex: 1, fontSize: 14, color: `rgba(${FG},0.7)`, fontFamily: "Inter_400Regular" },
-  optionTextSelected: { color: `rgb(${FG})`, fontFamily: "Inter_500Medium" },
+  optionText: { flex: 1, fontSize: 13, color: `rgba(${FG},0.7)`, fontFamily: "Geist_400Regular" },
+  optionTextSelected: { color: `rgb(${FG})`, fontFamily: "Geist_500Medium" },
   radio: { width: 16, height: 16, borderRadius: 8, borderWidth: 1, borderColor: `rgba(${FG},0.18)`, alignItems: "center", justifyContent: "center" },
   radioOn: { backgroundColor: `rgb(${FG})`, borderColor: `rgb(${FG})` },
 
   inputRow: {
-    marginTop: 10,
+    marginTop: 12,
     minHeight: 44,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: `rgba(${FG},0.1)`,
     backgroundColor: "rgba(255,255,255,0.55)",
     paddingLeft: 12,
-    paddingRight: 4,
+    paddingRight: 12,
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
   },
-  input: { flex: 1, minHeight: 40, fontSize: 14, color: `rgb(${FG})`, fontFamily: "Inter_400Regular" },
+  inputRowActive: { borderColor: `rgba(${FG},0.55)`, backgroundColor: `rgba(${FG},0.04)` },
+  input: { flex: 1, minHeight: 40, fontSize: 13, color: `rgb(${FG})`, fontFamily: "Geist_400Regular" },
 
   continue: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 12, height: 44, borderRadius: 12, backgroundColor: "#1d2130" },
-  continueText: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#fff" },
+  continueText: { fontSize: 14, fontFamily: "Geist_600SemiBold", color: "#fff" },
   dim: { opacity: 0.4 },
 });

@@ -43,6 +43,7 @@ export * from "./domain/dev-auth";
 export * from "./domain/work-group";
 export * from "./domain/chat-feedback";
 export * from "./domain/device-timeline-filters";
+export * from "./domain/hitl-approval";
 export * from "./domain/intent-card";
 export * from "./domain/markdown-blocks";
 export * from "./domain/reminder-card";

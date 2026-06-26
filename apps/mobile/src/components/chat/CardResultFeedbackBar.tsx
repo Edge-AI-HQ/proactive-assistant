@@ -157,7 +157,7 @@ const styles = StyleSheet.create({
   // expo-blur iOS 不跟随父级 overflow 裁圆角，borderRadius 直接给 BlurView + tint。
   tint: { backgroundColor: "rgba(255,255,255,0.5)", borderRadius: 16 },
   blurRound: { borderRadius: 16 },
-  prompt: { fontSize: 12, fontFamily: "Inter_500Medium", color: `rgba(${FG},0.55)` },
+  prompt: { fontSize: 12, fontFamily: "Geist_500Medium", color: `rgba(${FG},0.55)` },
   actions: { flexDirection: "row", alignItems: "center", gap: 4 },
   iconBtn: { width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center" },
   iconBtnIdle: { backgroundColor: `rgba(${FG},0.05)` },
@@ -173,7 +173,7 @@ const styles = StyleSheet.create({
     backgroundColor: `rgba(${FG},0.05)`,
     marginLeft: 2,
   },
-  commentLabel: { fontSize: 12, fontFamily: "Inter_500Medium", color: `rgba(${FG},0.65)` },
+  commentLabel: { fontSize: 12, fontFamily: "Geist_500Medium", color: `rgba(${FG},0.65)` },
   doneBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -183,7 +183,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     backgroundColor: "#1d2130",
   },
-  doneLabel: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#fff" },
+  doneLabel: { fontSize: 12, fontFamily: "Geist_600SemiBold", color: "#fff" },
   dim: { opacity: 0.4 },
   commentRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 8 },
   commentInput: {
@@ -195,6 +195,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.6)",
     paddingHorizontal: 16,
     fontSize: 14,
+    fontFamily: "Geist_400Regular",
     color: "#1d2130",
   },
   sendBtn: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", backgroundColor: "#1d2130" },

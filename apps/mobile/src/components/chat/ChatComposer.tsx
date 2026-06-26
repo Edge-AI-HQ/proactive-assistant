@@ -215,7 +215,14 @@ export default function ChatComposer({
             ) : showStop ? (
               <Square size={12} color="#fff" fill="#fff" strokeWidth={2} />
             ) : (
-              <Send size={15} color={canSend ? "#fff" : `rgba(${FG},0.35)`} strokeWidth={2} />
+              // lucide-react-native ignores `transform` in its own style (same
+              // gotcha as chevron rotate) → wrap in a View to optically center
+              // the paper-plane (its visual mass sits up-right of the glyph's
+              // geometric center; web's flex-center has no nudge but RN reads
+              // it as off-center). Nudge left+down.
+              <View style={styles.sendIcon}>
+                <Send size={15} color={canSend ? "#fff" : `rgba(${FG},0.35)`} strokeWidth={2} />
+              </View>
             )}
           </View>
         </Pressable>
@@ -259,7 +266,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 20,
     color: `rgba(${FG},0.9)`,
-    fontFamily: "Inter_400Regular",
+    fontFamily: "Geist_400Regular",
   },
   iconButton: {
     width: 36,
@@ -278,6 +285,8 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   sendDisabled: { backgroundColor: `rgba(${FG},0.12)` },
+  // optical-center nudge for the lucide paper-plane (left 1 / down 1).
+  sendIcon: { transform: [{ translateX: -1 }, { translateY: 1 }] },
   stopButton: { backgroundColor: `rgba(${FG},0.92)` },
   pressed: { opacity: 0.75 },
   dim: { opacity: 0.4 },
@@ -310,7 +319,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 14,
     color: `rgba(${FG},0.45)`,
-    fontFamily: "Inter_600SemiBold",
+    fontFamily: "Geist_600SemiBold",
     textTransform: "uppercase",
   },
   recordTranscript: {
@@ -318,14 +327,14 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 21,
     color: `rgba(${FG},0.78)`,
-    fontFamily: "Inter_500Medium",
+    fontFamily: "Geist_500Medium",
   },
   recordTimer: {
     width: 38,
     textAlign: "center",
     fontSize: 12,
     color: `rgba(${FG},0.55)`,
-    fontFamily: "Inter_600SemiBold",
+    fontFamily: "Geist_600SemiBold",
   },
   recordWave: { width: 72 },
 });
