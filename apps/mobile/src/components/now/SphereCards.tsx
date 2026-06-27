@@ -38,6 +38,18 @@ const CARD_W = 160;
 const CARD_H = 68;
 const Y_MAX = 0.62;
 const IDLE_VEL_YAW = 0.05; // 度/帧（web 同值）
+// web autoRx/autoRy + 球心 同款常量（保证卡不出界、布局与 web 一致）。
+const MAX_SCALE = 1.25;
+const POLAR_SCALE = 0.83;
+const Y_EXTENT = 0.75;
+// 椭球 sizing 用的球心比例（web 原值 0.36）：此值让上半球卡片顶边贴到容器顶 ~32px、
+// 椭球纵半径据此最大化不裁切。⚠️ 它和 ry 耦合——**别拿它当"位置"调**：f<0.5 时
+// topSafe 恒为 min，单独调它只会把顶边钉死、向下拉伸，不会整体下移（踩过的坑）。
+const SPHERE_CENTER_TOP = 0.36;
+// 整体下移量（占容器高度比例）。⚠️ 这是"球星云高度"的**唯一真旋钮**：顶端包络
+// screenY = H×SHIFT − 2，只随 SHIFT 变（SPHERE_CENTER_TOP 在位置和 ry 两处出现、
+// 数学上互相抵消，调它对顶端零影响——别再动 CENTER_TOP）。0 = 贴顶；越大越低。
+const SPHERE_SHIFT = 0.095;
 
 /** web SphereCardStatus 同名。 */
 export type SphereCardStatus =
@@ -212,7 +224,9 @@ export default function SphereCards({
 }) {
   const cached = rotationCache.get(cacheKey);
   const yaw = useSharedValue(cached?.yaw ?? 0);
-  const pitch = useSharedValue(cached?.pitch ?? -10);
+  // pitch 锁死 -10：web 拖动是 yaw-only、idle velPitch=0 → pitch 恒为初始 -10。
+  // 不从 cache 恢复，避免旧缓存里的非 -10 值复活。
+  const pitch = useSharedValue(-10);
   const velYaw = useSharedValue(IDLE_VEL_YAW);
   const dragging = useSharedValue(false);
 
@@ -223,47 +237,54 @@ export default function SphereCards({
     };
   }, [cacheKey, yaw, pitch]);
 
-  const points = useMemo(() => fibonacciPoints(items.length), [items.length]);
+  // web 同款：至少 12 个布点（少卡时也铺开成星云，不挤成一小撮）。
+  const points = useMemo(() => fibonacciPoints(Math.max(items.length, 12)), [items.length]);
 
-  // 自动旋转 + 惯性衰减回 idle 速度（web rAF loop 对应物）。
+  // 自转 + 惯性衰减回 idle 速度（web rAF idle 回路同款：衰减系数 0.015）。
+  // pitch 锁死，不再缓动。
   useFrameCallback(() => {
     if (dragging.value) return;
     yaw.value += velYaw.value;
-    velYaw.value += (IDLE_VEL_YAW - velYaw.value) * 0.02;
-    pitch.value += (-10 - pitch.value) * 0.02;
+    velYaw.value += (IDLE_VEL_YAW - velYaw.value) * 0.015;
   });
 
   const lastX = useSharedValue(0);
-  const lastY = useSharedValue(0);
   const pan = Gesture.Pan()
     .onBegin(() => {
       dragging.value = true;
       lastX.value = 0;
-      lastY.value = 0;
+      velYaw.value = 0; // 抓住即停（web onPointerDown 同款）
     })
     .onUpdate((e) => {
+      // web onPointerMove：仅转 yaw（pitch 锁死，防卡片越界）；灵敏度 0.3；
+      // 速度按 web 累积式 velYaw*0.7 + dx*0.09，松手由它带出甩动惯性。
       const dx = e.translationX - lastX.value;
-      const dy = e.translationY - lastY.value;
       lastX.value = e.translationX;
-      lastY.value = e.translationY;
-      yaw.value += dx * 0.35;
-      pitch.value = Math.max(-40, Math.min(25, pitch.value - dy * 0.2));
-    })
-    .onEnd((e) => {
-      velYaw.value = Math.max(-3, Math.min(3, e.velocityX * 0.006));
+      yaw.value += dx * 0.3;
+      velYaw.value = velYaw.value * 0.7 + dx * 0.09;
     })
     .onFinalize(() => {
+      // 不重置 velYaw：累积值 → 甩动惯性 → idle 回路衰减回 IDLE_VEL_YAW。
       dragging.value = false;
     });
 
-  // 椭球半径（web autoRx/autoRy 简化版：同样保证卡不出界）。
-  const rx = Math.max(40, width / 2 - (CARD_W / 2) * 1.25 - 4);
-  const ry = Math.max(40, (height / 2 - CARD_H / 2 - 6) / 0.75);
+  // 椭球半径 = web autoRx/autoRy 原式：横向预留 maxScale 卡半宽；纵向取
+  // min(居中, 顶安全, 底安全)/yExtent——球心在 36% 处顶部余量更小，纵向据此收窄，
+  // 上半球卡片才不会被 overflow 裁掉。
+  const halfW = (CARD_W / 2) * MAX_SCALE;
+  const halfH = (CARD_H / 2) * POLAR_SCALE;
+  const rx = Math.max(40, width / 2 - halfW - 4);
+  const verticalMargin = halfH + 4;
+  const centeredRy = height / 2 - halfH - 2;
+  const topSafeRy = height * SPHERE_CENTER_TOP - verticalMargin;
+  const bottomSafeRy = height * (1 - SPHERE_CENTER_TOP) - verticalMargin;
+  const ry =
+    height > 0 ? Math.max(1, Math.min(centeredRy, topSafeRy, bottomSafeRy) / Y_EXTENT) : 40;
 
   return (
     <GestureDetector gesture={pan}>
       <View style={[styles.stage, { width, height }]}>
-        <View style={[styles.center, { top: height * 0.42, left: width / 2 }]}>
+        <View style={[styles.center, { top: height * (SPHERE_CENTER_TOP + SPHERE_SHIFT), left: width / 2 }]}>
           {items.map((item, i) => (
             <Card
               key={item.id}

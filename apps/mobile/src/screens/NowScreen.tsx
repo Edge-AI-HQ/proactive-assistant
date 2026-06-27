@@ -5,7 +5,7 @@
  * 底部 ASK PIN AI。协议层（cards query / feedback builders / outbox
  * 兜底）与此前一致。
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { Radio } from "lucide-react-native";
 import Animated, {
@@ -175,9 +175,21 @@ export default function NowScreen({
   const [engaged, setEngaged] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<VisibleCardEntry | null>(null);
 
-  const visible = cards.filter(
-    (e) => !isHiddenCardOutcome(e.latestOutcome) && !hidden.has(e.card.id),
-  );
+  // web AppLayout sphereCards 同款筛选：① 去掉隐藏/本地 hide 的卡 ② 按 intentKey
+  // 去重（同一意图跨多次 run 只上一次；cards 按 completed_at DESC，首个即最新 run）
+  // ③ 限量 14 张。RN 之前全量上球 → "渲染太多"，此处对齐 web 的 .slice(0,14)。
+  const visible = useMemo(() => {
+    const seen = new Set<string>();
+    return cards
+      .filter((e) => !isHiddenCardOutcome(e.latestOutcome) && !hidden.has(e.card.id))
+      .filter((e) => {
+        const key = e.card.intentKey || e.card.id;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, 14);
+  }, [cards, hidden]);
   const sphereItems: SphereItem[] = visible.map((e) => ({
     id: e.card.id,
     title: e.card.title,

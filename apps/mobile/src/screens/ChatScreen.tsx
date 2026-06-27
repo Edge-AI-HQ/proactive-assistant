@@ -11,11 +11,13 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from "react-native";
+import type { NativeScrollEvent, NativeSyntheticEvent } from "react-native";
 import { Check, X } from "lucide-react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import {
@@ -43,10 +45,15 @@ import WorkGroup, { SpecialCard } from "../components/chat/WorkGroup";
 import ProposeActionCard from "../components/chat/ProposeActionCard";
 import CardResultFeedbackBar from "../components/chat/CardResultFeedbackBar";
 import ChatComposer from "../components/chat/ChatComposer";
+import MainChatLanding from "../components/chat/MainChatLanding";
+import JumpToLatest from "../components/chat/JumpToLatest";
 import { VoiceButton } from "../voice";
 
 import { notifyThreadActivity, readLocalHistory } from "../lib/sync/sync-bootstrap";
 import { postCardFeedback } from "../hooks/useCardActions";
+
+/** 离底多少 px 内算「贴底」（跟随态）。略松，掩盖流式贴底动画的中间帧抖动。 */
+const AT_BOTTOM_THRESHOLD = 80;
 
 /** memo 边界：流式时只有正在更新的 entry 重渲（runtime reducer 不可变
  *  更新，未变 entry 保持引用同一；回调用 ref-latest 保持身份稳定）。 */
@@ -149,6 +156,9 @@ export interface ChatScreenProps {
   onCardClose?: () => void;
   /** card 满屏 sheet：底部 home-indicator 安全区，垫高 composer。 */
   bottomInset?: number;
+  /** 面板「打开」信号：false→true 时强制回到底部（面板常 mount 保流、不 remount，
+   *  故靠此显式落底，让每次进来都停在最新一条）。 */
+  open?: boolean;
 }
 
 /** HITL 审批卡：RN 对齐 packages/ui-web/src/chat/conversation/HitlApprovalCard.tsx。 */
@@ -254,7 +264,7 @@ function HitlApprovalCard({
   );
 }
 
-export default function ChatScreen({ kind, cardId, bootstrap, card, onCardClose, bottomInset }: ChatScreenProps) {
+export default function ChatScreen({ kind, cardId, bootstrap, card, onCardClose, bottomInset, open }: ChatScreenProps) {
   const [sessionKey, setSessionKey] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const listRef = useRef<FlatList<ConversationEntry>>(null);
@@ -292,6 +302,7 @@ export default function ChatScreen({ kind, cardId, bootstrap, card, onCardClose,
       card={card}
       onCardClose={onCardClose}
       bottomInset={bottomInset}
+      open={open}
     />
   );
 }
@@ -305,6 +316,7 @@ function Conversation({
   card,
   onCardClose,
   bottomInset,
+  open,
 }: {
   sessionKey: string;
   bootstrap?: string;
@@ -314,6 +326,7 @@ function Conversation({
   card?: IntentCard;
   onCardClose?: () => void;
   bottomInset?: number;
+  open?: boolean;
 }) {
   const {
     transcript,
@@ -405,6 +418,42 @@ function Conversation({
   sendRef.current = sendMessage;
   const onReply = useCallback((text: string) => void sendRef.current(text), []);
 
+  // 倒置列表（业界标准聊天做法：RN 官方文档 + react-native-gifted-chat 同款）：
+  // data 反转，最新一条 = index 0 = 视觉底部，FlatList `inverted` 让其**天生停在
+  // 底部**——首屏 / 重开都无需 scrollToEnd、无需补帧；流式新内容长在底部、自动留
+  // 底，历史往上加载时底部纹丝不动。整套「跟随状态机」由此消失。
+  const data = useMemo(() => visible.slice().reverse(), [visible]);
+  const isEmpty = data.length === 0;
+
+  // JumpToLatest：倒置下 offset.y≈0 即贴最新（视觉底部）；离底则显示按钮。
+  const [showJump, setShowJump] = useState(false);
+  const [hasNewBelow, setHasNewBelow] = useState(false);
+  const showJumpRef = useRef(false);
+  const onScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const atBottom = e.nativeEvent.contentOffset.y <= AT_BOTTOM_THRESHOLD;
+    showJumpRef.current = !atBottom;
+    setShowJump(!atBottom);
+    if (atBottom) setHasNewBelow(false);
+  }, []);
+  const jumpToLatest = useCallback(() => {
+    setHasNewBelow(false);
+    listRef.current?.scrollToOffset({ offset: 0, animated: true });
+  }, [listRef]);
+
+  // 离底时来了新一条 → 点亮 attention 红点（对齐 web hasNewBelow：下方有新内容）。
+  const prevLenRef = useRef(visible.length);
+  useEffect(() => {
+    if (visible.length > prevLenRef.current && showJumpRef.current) setHasNewBelow(true);
+    prevLenRef.current = visible.length;
+  }, [visible.length]);
+
+  // 每次「打开」面板回到底部（用户预期：进来永远停在最新一条）。面板常 mount 保流、
+  // open false→true 不 remount，故显式落底。倒置列表 offset 0 永远精确 = 最新一条，
+  // **单次** scrollToOffset 即可，无需 scrollToEnd 的多帧补位。
+  useEffect(() => {
+    if (open) listRef.current?.scrollToOffset({ offset: 0, animated: false });
+  }, [open, listRef]);
+
   return (
     <KeyboardAvoidingView
       style={styles.root}
@@ -413,40 +462,59 @@ function Conversation({
       {connection === "reconnecting" ? (
         <Text style={styles.connection}>reconnecting…</Text>
       ) : null}
-      <FlatList
-        ref={listRef}
-        style={styles.list}
-        contentContainerStyle={styles.listContent}
-        data={visible}
-        keyExtractor={(e) => `${e.kind}-${e.id}`}
-        renderItem={({ item }) => (
-          <Entry
-            entry={item}
-            channel={channel}
-            onRetry={handleRetry}
-            onUpdateQueued={onUpdateQueued}
-            onDeleteQueued={onDeleteQueued}
-            onSendNow={onSendNow}
-            onReply={onReply}
-            busy={busy}
-            hitlAction={item.kind === "assistant" && item.id === hitlHostId ? awaitingDecision : null}
-            onDecide={(decision, message) => void submitDecision(decision, message)}
-          />
-        )}
-        onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
-        onLayout={() => listRef.current?.scrollToEnd({ animated: false })}
-        ListEmptyComponent={
-          ready ? (
-            // web MinimalistLanding 同构：水晶球 + 引导文案。
+      <View style={styles.listWrap}>
+        {isEmpty ? (
+          !ready ? (
             <View style={styles.emptyWrap}>
-              <AiSphere size={216} mode="idle" />
-              <Text style={styles.empty}>Ask PIN AI anything.</Text>
+              <ActivityIndicator color="#71717a" />
+            </View>
+          ) : card ? (
+            // card chat 空状态短暂可见（永远 bootstrap）：仅留水晶球。
+            <View style={styles.emptyWrap}>
+              <AiSphere size={200} mode="idle" />
             </View>
           ) : (
-            <ActivityIndicator color="#71717a" style={{ marginTop: 48 }} />
+            // main chat landing：web MinimalistLanding 同构（球 + 问候 + 建议 chip）。
+            // 倒置 FlatList 的 ListEmptyComponent 会被 scaleY(-1) 翻转，故 landing 不进
+            // 列表，单独用 ScrollView 渲染（内容超屏可滚、键盘弹起不挤）。
+            <ScrollView
+              contentContainerStyle={styles.landingScroll}
+              keyboardShouldPersistTaps="handled"
+            >
+              <MainChatLanding onSubmit={send} />
+            </ScrollView>
           )
-        }
-      />
+        ) : (
+          <FlatList
+            ref={listRef}
+            inverted
+            style={styles.list}
+            contentContainerStyle={styles.listContent}
+            data={data}
+            keyExtractor={(e) => `${e.kind}-${e.id}`}
+            renderItem={({ item }) => (
+              <Entry
+                entry={item}
+                channel={channel}
+                onRetry={handleRetry}
+                onUpdateQueued={onUpdateQueued}
+                onDeleteQueued={onDeleteQueued}
+                onSendNow={onSendNow}
+                onReply={onReply}
+                busy={busy}
+                hitlAction={item.kind === "assistant" && item.id === hitlHostId ? awaitingDecision : null}
+                onDecide={(decision, message) => void submitDecision(decision, message)}
+              />
+            )}
+            onScroll={onScroll}
+            scrollEventThrottle={16}
+          />
+        )}
+        {/* 回到最新：视口离开底部时悬浮（对齐 web JumpToLatest）。 */}
+        {!isEmpty && showJump ? (
+          <JumpToLatest attention={hasNewBelow || !!awaitingDecision} onPress={jumpToLatest} />
+        ) : null}
+      </View>
       {threadId ? <TodoStrip sessionKey={threadId} /> : null}
       {awaitingDecision && !hitlHostId ? (
         <View style={styles.hitlFallbackWrap}>
@@ -485,10 +553,14 @@ const styles = StyleSheet.create({
   // 透明：aurora 从容器透出（加载态短暂可见）。
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   connection: { textAlign: "center", paddingVertical: 4, fontSize: 12, color: "#a16207" },
+  // FlatList + 悬浮 JumpToLatest 的相对定位容器（按钮 absolute 贴此容器底部）。
+  listWrap: { flex: 1 },
   list: { flex: 1 },
-  listContent: { padding: 16, paddingBottom: 8 },
+  listContent: { padding: 16 },
+  // main chat 空 landing 的滚动容器（倒置列表外，单独渲染）。paddingHorizontal 16
+  // 对齐聊天内容左右边距，保证 landing 的建议 chip 宽度与会话态一致。
+  landingScroll: { flexGrow: 1, paddingHorizontal: 16, paddingTop: 8 },
   emptyWrap: { alignItems: "center", marginTop: 48 },
-  empty: { textAlign: "center", marginTop: 8, color: "#a1a1aa", fontSize: 15 },
   userRow: { alignItems: "flex-end", marginVertical: 6 },
   userBubble: {
     backgroundColor: "#1a1a1a",
