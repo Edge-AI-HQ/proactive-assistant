@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { fetchWeather, type WeatherSnapshot } from "@pin-ai/core";
+import { fetchWeather, type WeatherCoords, type WeatherSnapshot } from "@pin-ai/core";
 
 export const weatherKeys = {
   all: ["weather"] as const,
@@ -18,10 +18,13 @@ const STALE_TIME_MS = 30 * 60 * 1000; // 30min,与原 web 端 sessionStorage TTL
  * 返回平台无关 snapshot(含语义 iconKey)。web 端 ui-web/now/useWeather 再包一层
  * 把 iconKey 绑成 lucide 图标;RN 自绑 lucide-react-native。
  */
-export function useWeatherData(): WeatherSnapshot | null {
+export function useWeatherData(
+  resolveCoords?: () => Promise<WeatherCoords | null>,
+): WeatherSnapshot | null {
   const { data } = useQuery({
     queryKey: weatherKeys.all,
-    queryFn: fetchWeather,
+    // resolveCoords 由各端可选注入设备 GPS（RN expo-location）；不传 → fetchWeather 走 IP 兜底。
+    queryFn: async () => fetchWeather(resolveCoords ? await resolveCoords() : null),
     staleTime: STALE_TIME_MS,
     gcTime: STALE_TIME_MS,
     retry: false,

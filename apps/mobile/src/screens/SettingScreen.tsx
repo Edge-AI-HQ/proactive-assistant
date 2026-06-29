@@ -9,18 +9,24 @@
  * crystallize 开关；Notifications = notifyNewCards；Ambient = per-source
  * consents（useUserSettings.patch，与 web 同协议）。
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Linking,
   Pressable,
   ScrollView,
   Switch,
   Text,
   View,
 } from "react-native";
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
 import {
-  ArrowLeft,
   Bell,
+  ChevronLeft,
   ChevronRight,
   Radio,
   Settings2,
@@ -36,7 +42,9 @@ import {
 import { useUserSettings } from "@pin-ai/state";
 
 import { GlassCard } from "../ui/GlassCard";
+import { EM_TIGHT, tracking } from "../ui/typography";
 import PageHeader from "../components/app/PageHeader";
+import { usePushNotifications } from "../hooks/usePushNotifications";
 import type { HeaderProps } from "./AmbientScreen";
 
 type SubPage = "main" | "subscription" | "preferences" | "notifications" | "ambient";
@@ -115,20 +123,131 @@ function ToggleRow({
 
 function SubHeader({ title, onBack }: { title: string; onBack: () => void }) {
   return (
-    <View className="flex-row items-center gap-3 px-6 pt-4 pb-2">
+    <View className="flex-row items-center gap-1 px-6 pt-4 pb-2">
+      {/* 设计仓 main BackButton：ChevronLeft 22/1.8、无底色、foreground/70；按下 → foreground +
+          bg foreground/0.06（= web `hover:bg-foreground/[0.06] transition-colors` 的触屏等价）。
+          用 Pressable children-as-function 拿 pressed 态放内层 View（避开本项目 Pressable style 不渲染）。
+          设计稿是箭头/标题分 2 行，本项目按用户要求保持 1 行（箭头 + 标题同行）。 */}
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`Back from ${title}`}
         onPress={onBack}
         hitSlop={8}
-        className="h-10 w-10 items-center justify-center rounded-full bg-white/70 border border-white/60"
       >
-        <ArrowLeft size={17} color="#3f3f46" strokeWidth={1.8} />
+        {({ pressed }) => (
+          <View
+            style={{
+              padding: 8,
+              marginLeft: -8,
+              borderRadius: 999,
+              backgroundColor: pressed ? "hsla(230, 25%, 15%, 0.06)" : "transparent",
+            }}
+          >
+            <ChevronLeft
+              size={22}
+              strokeWidth={1.8}
+              color={pressed ? "hsl(230, 25%, 15%)" : "hsla(230, 25%, 15%, 0.7)"}
+            />
+          </View>
+        )}
       </Pressable>
-      <Text className="text-[22px] text-foreground" style={{ fontFamily: "Inter_700Bold" }}>
+      {/* 标题对齐设计仓 h1：text-2xl(24)/font-semibold(600)/tracking-tight/leading-tight(30)。单行截断。 */}
+      <Text
+        numberOfLines={1}
+        className="flex-1 text-[24px] text-foreground"
+        style={{ fontFamily: "Inter_600SemiBold", letterSpacing: tracking(24, EM_TIGHT), lineHeight: 30 }}
+      >
         {title}
       </Text>
     </View>
+  );
+}
+
+// --foreground / --background 通道值（对齐 AmbientScreen 的 token）。NativeWind 的
+// hsl(var()) 无 alpha 槽 → 带透明度色一律内联 hsla，保证渲染。
+const NOTIFY_FG = "hsl(230, 25%, 15%)";
+const NOTIFY_FG_20 = "hsla(230, 25%, 15%, 0.2)";
+const NOTIFY_BG = "hsl(220, 30%, 96%)";
+
+/**
+ * web NotificationsSubPage 卡片的 RN 对应物：标题 + 权限感知副标题 + 右侧开关。
+ * 注：web 是「整卡可点」，本项目按用户要求改成「只有开关可点」——所以卡片本身
+ * 不可点（普通 GlassCard），交互全在 NotifyToggle（它才是触发权限流程的按钮）。
+ */
+function NotificationCard({
+  on,
+  subtitle,
+  disabled,
+  onPress,
+}: {
+  on: boolean;
+  subtitle: string;
+  disabled: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <GlassCard strong className="flex-row items-center gap-3 px-4 py-4">
+      <View className="flex-1">
+        <Text className="text-[14px] text-foreground" style={{ fontFamily: "Inter_600SemiBold" }}>
+          Card generation
+        </Text>
+        <Text className="mt-0.5 text-[12px] text-muted-foreground" style={{ fontFamily: "Inter_400Regular" }}>
+          {subtitle}
+        </Text>
+      </View>
+      <NotifyToggle on={on} disabled={disabled} onPress={onPress} />
+    </GlassCard>
+  );
+}
+
+/**
+ * 权限开关按钮（web w-10 h-6 = 40×24 轨 + 20 拇指，off x=2 / on x=18，tween 200ms）。
+ * 这是卡片里唯一可点的元素：点它触发权限流程（弹询问 / 跳系统设置 / 切偏好）。
+ * Pressable 只管 onPress（本项目 Pressable 的 style 不渲染 → 视觉全在内层 View），
+ * hitSlop 10 把 40×24 的小目标扩到 ≥44 易点。
+ */
+function NotifyToggle({ on, disabled, onPress }: { on: boolean; disabled: boolean; onPress: () => void }) {
+  const x = useSharedValue(on ? 16 : 0);
+  useEffect(() => {
+    x.value = withTiming(on ? 16 : 0, { duration: 200 });
+  }, [on, x]);
+  const thumbStyle = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }] }));
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      hitSlop={10}
+      accessibilityRole="switch"
+      accessibilityState={{ checked: on, disabled }}
+    >
+      <View
+        style={{
+          width: 40,
+          height: 24,
+          borderRadius: 12,
+          justifyContent: "center",
+          backgroundColor: on ? NOTIFY_FG : NOTIFY_FG_20,
+        }}
+      >
+        <Animated.View
+          style={[
+            {
+              position: "absolute",
+              left: 2,
+              width: 20,
+              height: 20,
+              borderRadius: 10,
+              backgroundColor: NOTIFY_BG,
+              shadowColor: "#000",
+              shadowOpacity: 0.12,
+              shadowRadius: 3,
+              shadowOffset: { width: 0, height: 1 },
+            },
+            thumbStyle,
+          ]}
+        />
+      </View>
+    </Pressable>
   );
 }
 
@@ -142,7 +261,8 @@ export default function SettingScreen({
   onSignOut: () => Promise<void>;
 }) {
   const [page, setPage] = useState<SubPage>("main");
-  const { settings, patch } = useUserSettings(user.id ?? null);
+  const { settings, patch, loading, saving } = useUserSettings(user.id ?? null);
+  const push = usePushNotifications(user.id ?? null);
   const subscription = useQuery({
     queryKey: ["payment", "subscription"],
     queryFn: () => getCurrentSubscription(),
@@ -153,6 +273,40 @@ export default function SettingScreen({
   const displayName =
     (user.user_metadata?.full_name as string | undefined) ?? user.email ?? user.id;
   const initial = (displayName[0] ?? "?").toUpperCase();
+
+  // Push Notifications：OS 权限（能力）gate 住产品偏好 notifyNewCards，
+  // 对齐 web AccountPanel 的 NotificationsSubPage。isOn = 已授权 && 偏好开。
+  const pushUnsupported = push.permissionState === "unsupported";
+  const pushGranted = push.permissionState === "granted";
+  const pushDenied = push.permissionState === "denied";
+  const pushPromptable = push.permissionState === "prompt";
+  const notifyNewCards = settings?.notifyNewCards ?? false;
+  const notifyOn = pushGranted && notifyNewCards;
+  const notifyBusy = !push.ready || loading || saving;
+  const notifySubtitle = pushUnsupported
+    ? "Available only in the iOS app."
+    : pushDenied
+      ? "Disabled in system settings — tap to open."
+      : notifyOn
+        ? "Notify me when AI surfaces a new proactive card."
+        : pushGranted
+          ? "Paused in PIN AI — tap to resume card alerts."
+          : "Tap to enable system notifications.";
+  const handleNotifyToggle = async () => {
+    if (pushUnsupported || notifyBusy) return;
+    if (!pushGranted) {
+      if (pushPromptable) {
+        const next = await push.requestPermission();
+        if (next === "granted") void patch({ notifyNewCards: true });
+        return;
+      }
+      // iOS 通知权限一旦被拒，只有系统设置能再开（web 用 app-settings:）。
+      void Linking.openSettings();
+      return;
+    }
+    if (!settings) return;
+    void patch({ notifyNewCards: !notifyNewCards });
+  };
 
   if (page !== "main") {
     const titles: Record<Exclude<SubPage, "main">, string> = {
@@ -232,12 +386,12 @@ export default function SettingScreen({
             </>
           ) : null}
 
-          {page === "notifications" && settings ? (
-            <ToggleRow
-              title="New card notifications"
-              subtitle="Push when PIN AI prepares a new card — even during quiet hours"
-              value={settings.notifyNewCards}
-              onChange={(v) => void patch({ notifyNewCards: v })}
+          {page === "notifications" ? (
+            <NotificationCard
+              on={notifyOn}
+              subtitle={notifySubtitle}
+              disabled={pushUnsupported || notifyBusy}
+              onPress={() => void handleNotifyToggle()}
             />
           ) : null}
 
@@ -265,7 +419,7 @@ export default function SettingScreen({
             </>
           ) : null}
 
-          {!settings && page !== "subscription" ? (
+          {!settings && page !== "subscription" && page !== "notifications" ? (
             <ActivityIndicator color="#a1a1aa" style={{ marginTop: 30 }} />
           ) : null}
         </ScrollView>
@@ -275,11 +429,7 @@ export default function SettingScreen({
 
   return (
     <View className="flex-1">
-      <PageHeader
-        title="Setting"
-        subtitle="Subscription · Preferences · Notifications · Ambient"
-        {...headerProps}
-      />
+      <PageHeader title="Setting" {...headerProps} />
       <ScrollView className="flex-1 px-5" contentContainerClassName="pb-12">
         {/* 账号卡 */}
         <GlassCard strong className="mb-4 flex-row items-center gap-3 px-4 py-3.5">

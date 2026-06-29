@@ -23,6 +23,7 @@ import {
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
   Easing,
   runOnJS,
@@ -44,6 +45,7 @@ import {
 } from "@pin-ai/core";
 import { useCardExecutionRun } from "@pin-ai/state";
 
+import { useSinkDismissGesture } from "../chat/useSinkDismiss";
 import { CATEGORIES } from "./SphereCards";
 import { sourceIcon, sourceLabel } from "../../lib/source-icons";
 import { toolIcon } from "../../lib/tool-icons";
@@ -233,7 +235,8 @@ export default function CardDetailSheet({
   /** web onChat（reminder 卡的主操作）：纯开会话，不带 execute bootstrap。 */
   onChat: (e: VisibleCardEntry) => void;
 }) {
-  const { height } = useWindowDimensions();
+  const { height, width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const open = entry !== null;
   const [mounted, setMounted] = useState(open);
   const y = useSharedValue(height);
@@ -261,6 +264,11 @@ export default function CardDetailSheet({
         y.value = withSpring(0, { stiffness: 500, damping: 40, overshootClamping: true });
       }
     });
+
+  // 横滑下沉手势（= chat sheets 的 useSinkDismiss = web ChatSheetOverlay：右滑 → 下沉退出，
+  // failOffsetY 让位竖直滚动）。与下拉 Race 组合后包住整个面板：下拉 或 右滑都把 drawer 挤下屏幕。
+  const sinkGesture = useSinkDismissGesture(y, height, width, onClose);
+  const panelGesture = Gesture.Race(dragDown, sinkGesture);
 
   const panelStyle = useAnimatedStyle(() => ({ transform: [{ translateY: y.value }] }));
   const dimStyle = useAnimatedStyle(() => ({ opacity: 1 - Math.min(1, y.value / height) }));
@@ -296,102 +304,107 @@ export default function CardDetailSheet({
 
   return (
     <View style={StyleSheet.absoluteFill}>
-      <Animated.View style={[StyleSheet.absoluteFill, dimStyle]}>
+      <Animated.View style={[StyleSheet.absoluteFill, { bottom: -insets.bottom }, dimStyle]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose}>
           <BlurView intensity={10} tint="light" style={StyleSheet.absoluteFill} />
           <View style={[StyleSheet.absoluteFill, styles.dimTint]} />
         </Pressable>
       </Animated.View>
 
-      <Animated.View style={[styles.panelWrap, { maxHeight: height * 0.92 }, panelStyle]}>
-        <GestureDetector gesture={dragDown}>
-          <View style={styles.panel}>
-            <BlurView intensity={65} tint="light" style={StyleSheet.absoluteFill} />
-            <LinearGradient
-              colors={["rgba(255,255,255,0.5)", "rgba(255,255,255,0.7)"]}
-              style={StyleSheet.absoluteFill}
-            />
-            <View style={styles.handle} />
-            <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
-              {/* 类目行：图标 + 类目名 + Urgent */}
-              <View style={styles.catRow}>
-                <CatIcon size={14} color="rgba(29,33,48,0.5)" strokeWidth={1.5} />
-                <Text style={styles.catLabel}>{cat.label.toUpperCase()}</Text>
-                {isUrgent ? (
-                  <View style={styles.urgentPill}>
-                    <Text style={styles.urgentText}>Urgent</Text>
-                  </View>
-                ) : null}
-              </View>
-
-              {/* 标题（web text-display text-subheading 17/600/-0.02em） */}
-              <Text style={styles.title}>{card.title}</Text>
-
-              {/* 简略行 */}
-              {brief ? <Text style={styles.brief}>{brief}</Text> : null}
-
-              {/* WHY NOW（绿框） */}
-              {showWhyNow ? (
-                <View style={styles.whyNowBox}>
-                  <Text style={styles.whyNowLabel}>WHY NOW</Text>
-                  <Text style={styles.whyNowBody}>{card.whyNow}</Text>
+      <Animated.View style={[styles.panelWrap, { maxHeight: height * 0.92, bottom: -insets.bottom }, panelStyle]}>
+        {/* 手势包住整个面板（用户要求）：Race(下拉, 横滑) —— 下拉 或 右滑都把面板下沉退出（对齐 web
+            vaul 下拉 + ChatSheetOverlay 横滑下沉）。横滑 failOffsetY 让位竖直滚动、不抢按钮 tap。 */}
+        <GestureDetector gesture={panelGesture}>
+        <View style={styles.panel}>
+          <BlurView intensity={65} tint="light" style={StyleSheet.absoluteFill} />
+          <LinearGradient
+            colors={["rgba(255,255,255,0.5)", "rgba(255,255,255,0.7)"]}
+            style={StyleSheet.absoluteFill}
+          />
+          <View style={styles.handle} />
+          <ScrollView
+            style={styles.scroll}
+            contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom }]}
+          >
+            {/* 类目行：图标 + 类目名 + Urgent */}
+            <View style={styles.catRow}>
+              <CatIcon size={14} color="rgba(29,33,48,0.5)" strokeWidth={1.5} />
+              <Text style={styles.catLabel}>{cat.label.toUpperCase()}</Text>
+              {isUrgent ? (
+                <View style={styles.urgentPill}>
+                  <Text style={styles.urgentText}>Urgent</Text>
                 </View>
               ) : null}
+            </View>
 
-              {/* EXECUTION PLAN（实时 run plan + events 兜底 + 准备中态） */}
-              <ExecutionPlan steps={planSteps} preparing={planPreparing} />
+            {/* 标题（web text-display text-subheading 17/600/-0.02em） */}
+            <Text style={styles.title}>{card.title}</Text>
 
-              {/* SOURCES */}
-              {sources.length > 0 ? (
-                <View style={styles.section}>
-                  <Text style={styles.sectionLabel}>SOURCES</Text>
-                  <View style={styles.sourceWrap}>
-                    {sources.map((s) => (
-                      <SourcePill key={s} slug={s} />
-                    ))}
-                  </View>
-                </View>
-              ) : null}
+            {/* 简略行 */}
+            {brief ? <Text style={styles.brief}>{brief}</Text> : null}
 
-              {/* HOW I REASONED（可折叠） */}
-              <HowReasoned steps={steps} />
-
-              {/* 动作行：Dismiss / Done / Approve（reminder → Chat） */}
-              <View style={styles.actions}>
-                <Pressable
-                  onPress={() => onDismiss(entry)}
-                  style={styles.btnSecondary}
-                  accessibilityRole="button"
-                  accessibilityLabel="Dismiss"
-                >
-                  <X size={13} color="rgba(29,33,48,0.55)" strokeWidth={2} />
-                  <Text style={styles.btnSecondaryText}>Dismiss</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => onComplete(entry)}
-                  style={styles.btnDone}
-                  accessibilityRole="button"
-                  accessibilityLabel="Done"
-                >
-                  <Check size={12} color="rgba(29,33,48,0.55)" strokeWidth={2.5} />
-                  <Text style={styles.btnDoneText}>Done</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => (reminder ? onChat(entry) : onApprove(entry))}
-                  style={styles.btnPrimary}
-                  accessibilityRole="button"
-                  accessibilityLabel={reminder ? "Chat" : "Approve"}
-                >
-                  {reminder ? (
-                    <MessageCircle size={13} color="#fff" strokeWidth={2} />
-                  ) : (
-                    <Check size={13} color="#fff" strokeWidth={2.5} />
-                  )}
-                  <Text style={styles.btnPrimaryText}>{reminder ? "Chat" : "Approve"}</Text>
-                </Pressable>
+            {/* WHY NOW（绿框） */}
+            {showWhyNow ? (
+              <View style={styles.whyNowBox}>
+                <Text style={styles.whyNowLabel}>WHY NOW</Text>
+                <Text style={styles.whyNowBody}>{card.whyNow}</Text>
               </View>
-            </ScrollView>
-          </View>
+            ) : null}
+
+            {/* EXECUTION PLAN（实时 run plan + events 兜底 + 准备中态） */}
+            <ExecutionPlan steps={planSteps} preparing={planPreparing} />
+
+            {/* SOURCES */}
+            {sources.length > 0 ? (
+              <View style={styles.section}>
+                <Text style={styles.sectionLabel}>SOURCES</Text>
+                <View style={styles.sourceWrap}>
+                  {sources.map((s) => (
+                    <SourcePill key={s} slug={s} />
+                  ))}
+                </View>
+              </View>
+            ) : null}
+
+            {/* HOW I REASONED（可折叠） */}
+            <HowReasoned steps={steps} />
+
+            {/* 动作行：Dismiss / Done / Approve（reminder → Chat） */}
+            <View style={styles.actions}>
+              <Pressable
+                onPress={() => onDismiss(entry)}
+                style={styles.btnSecondary}
+                accessibilityRole="button"
+                accessibilityLabel="Dismiss"
+              >
+                <X size={13} color="rgba(29,33,48,0.55)" strokeWidth={2} />
+                <Text style={styles.btnSecondaryText}>Dismiss</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => onComplete(entry)}
+                style={styles.btnDone}
+                accessibilityRole="button"
+                accessibilityLabel="Done"
+              >
+                <Check size={12} color="rgba(29,33,48,0.55)" strokeWidth={2.5} />
+                <Text style={styles.btnDoneText}>Done</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => (reminder ? onChat(entry) : onApprove(entry))}
+                style={styles.btnPrimary}
+                accessibilityRole="button"
+                accessibilityLabel={reminder ? "Chat" : "Approve"}
+              >
+                {reminder ? (
+                  <MessageCircle size={13} color="#fff" strokeWidth={2} />
+                ) : (
+                  <Check size={13} color="#fff" strokeWidth={2.5} />
+                )}
+                <Text style={styles.btnPrimaryText}>{reminder ? "Chat" : "Approve"}</Text>
+              </Pressable>
+            </View>
+          </ScrollView>
+        </View>
         </GestureDetector>
       </Animated.View>
     </View>

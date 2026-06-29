@@ -22,7 +22,7 @@ import {
   type IntentCard,
   type VisibleCardEntry,
 } from "@pin-ai/core";
-import { useCardsQuery } from "@pin-ai/state";
+import { useCardsQuery, useWeatherData } from "@pin-ai/state";
 
 import { isAmbientEnabled, startAmbient, stopAmbient } from "../ambient/runtime";
 import AskPinAiBar from "../components/app/AskPinAiBar";
@@ -33,6 +33,7 @@ import { GradientText } from "../ui/GradientText";
 import { EM_TIGHT, leading, tracking } from "../ui/typography";
 import { useCardActions } from "../hooks/useCardActions";
 import { supabase } from "../lib/supabase";
+import { getDeviceWeatherCoords } from "../lib/weather-location";
 import type { HeaderProps } from "./AmbientScreen";
 
 /** web ambient-{toggle,icon}-breathe 对应物：emerald 扩散波（boxShadow
@@ -66,6 +67,9 @@ function BreatheHalo({
  *  自绘 w-11 h-6 pill toggle（knob tween 0.2s + breathe halo）。 */
 function AmbientStatusCard({ onOpenAmbient }: { onOpenAmbient: () => void }) {
   const [on, setOn] = useState(false);
+  // ambient 开时副标题 = 位置·天气·温度。复用 @pin-ai/state 共享 hook + 注入设备 GPS（已授权时，
+  // 复用 ambient 的 expo-location 权限；未授权回退 IP 定位）。weather=null（加载/失败）时回退文案。
+  const weather = useWeatherData(getDeviceWeatherCoords);
   useEffect(() => {
     void isAmbientEnabled().then(setOn);
   }, []);
@@ -91,11 +95,15 @@ function AmbientStatusCard({ onOpenAmbient }: { onOpenAmbient: () => void }) {
   return (
     <View className="mx-5 mt-4 flex-row items-center gap-3 rounded-2xl px-3 py-2.5 bg-foreground/[0.04] border border-foreground/[0.06]">
       <Pressable onPress={onOpenAmbient} className="flex-1 flex-row items-center gap-3">
-        <View
-          className={`h-8 w-8 items-center justify-center rounded-full ${on ? "bg-foreground" : "bg-foreground/30"}`}
-        >
-          {on ? <BreatheHalo borderRadius={16} scaleTo={1.38} duration={2400} /> : null}
-          <Radio size={14} color={on ? "#ffffff" : "rgba(255,255,255,0.6)"} strokeWidth={2} />
+        <View className="h-8 w-8 items-center justify-center">
+          {/* 绿环只在圆「外圈」扩散：halo 放实心圆「背后」（先渲染），实心圆盖住中心，
+              只有超出圆的部分显绿 → 外圈闪、内部不闪。scaleTo 1.38→1.5（移到背后需更大才看得见）。 */}
+          {on ? <BreatheHalo borderRadius={16} scaleTo={1.5} duration={2400} /> : null}
+          <View
+            className={`absolute inset-0 items-center justify-center rounded-full ${on ? "bg-foreground" : "bg-foreground/30"}`}
+          >
+            <Radio size={14} color={on ? "#ffffff" : "rgba(255,255,255,0.6)"} strokeWidth={2} />
+          </View>
           {on ? <View style={styles.sensingDot} /> : null}
         </View>
         <View className="flex-1">
@@ -105,19 +113,35 @@ function AmbientStatusCard({ onOpenAmbient }: { onOpenAmbient: () => void }) {
           >
             {on ? "Ambient is on" : "Ambient is off"}
           </Text>
-          <Text className="mt-0.5 text-[12px] text-foreground/50" style={{ fontFamily: "Inter_400Regular" }}>
-            {on ? "Sensing context around you" : "Tap to start sensing context"}
+          <Text
+            numberOfLines={1}
+            className="mt-0.5 text-[12px] text-foreground/50"
+            style={{ fontFamily: "Inter_400Regular" }}
+          >
+            {/* web NowView 1:1：开 + 有天气 → 城市·天气·温度°；开 + 天气未到 → 回退；关 → 提示。
+                城市可能缺失（IP 定位失败）→ 优雅省略该段，不显示 "undefined"。 */}
+            {!on
+              ? "Tap to start sensing context"
+              : weather
+                ? `${weather.city ? `${weather.city} · ` : ""}${weather.label} · ${weather.temp}°`
+                : "Sensing context around you"}
           </Text>
         </View>
       </Pressable>
-      {/* web 自绘 w-11 h-6 pill toggle。 */}
-      <Pressable
-        onPress={() => void toggle(!on)}
-        hitSlop={8}
-        className={`h-6 w-11 rounded-full ${on ? "bg-foreground" : "bg-foreground/20"}`}
-      >
-        {on ? <BreatheHalo borderRadius={12} scaleTo={1.4} duration={2000} /> : null}
-        <Animated.View style={[styles.knob, knobStyle]} />
+      {/* web 自绘 w-11 h-6 pill toggle。轨道用「显式 px」尺寸——NativeWind 下 className h-6/w-11 的实际
+          像素不一定正好 = 24/44，而白球按 px 定位（top2/left2/20×20/travel20），轨道一旦不是 24×44
+          白球就错位，所以轨道写死 px。Pressable 只管 onPress。按用户要求开关无绿光 halo（绿光只留雷达图标）。 */}
+      <Pressable onPress={() => void toggle(!on)} hitSlop={8}>
+        <View
+          style={{
+            width: 44,
+            height: 24,
+            borderRadius: 12,
+            backgroundColor: on ? "hsl(230, 25%, 15%)" : "hsla(230, 25%, 15%, 0.2)",
+          }}
+        >
+          <Animated.View style={[styles.knob, knobStyle]} />
+        </View>
       </Pressable>
     </View>
   );
@@ -179,6 +203,9 @@ export default function NowScreen({
   // 去重（同一意图跨多次 run 只上一次；cards 按 completed_at DESC，首个即最新 run）
   // ③ 限量 14 张。RN 之前全量上球 → "渲染太多"，此处对齐 web 的 .slice(0,14)。
   const visible = useMemo(() => {
+    // web AppLayout sphereCards 1:1 过滤：去 dismissed/done（按 card.id，本地 hidden——dismiss/done
+    // 时乐观加 + mount 时从后端 /feedback/{dismissed,completed} 恢复，见 useCardActions）
+    // + 隐藏 outcome，再按 intentKey dedup（同意图多 run 只上最新一条），slice 14。
     const seen = new Set<string>();
     return cards
       .filter((e) => !isHiddenCardOutcome(e.latestOutcome) && !hidden.has(e.card.id))

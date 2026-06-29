@@ -33,6 +33,13 @@ export interface WeatherSnapshot {
   city?: string;
 }
 
+/** 设备精确坐标（各端可选注入：RN 走 expo-location GPS，web 不传 → IP 兜底）。 */
+export interface WeatherCoords {
+  lat: number;
+  lon: number;
+  city?: string;
+}
+
 /** WMO weather code → 展示文案 + 语义图标键 + 语义文案键。各端绑各自图标 / i18n。 */
 export function weatherMeta(code: number): {
   label: string;
@@ -126,9 +133,10 @@ async function lookupGeo(): Promise<GeoLookup | null> {
   return null;
 }
 
-/** IP 定位 + open-meteo 当前天气 → snapshot;失败返回 null(各端 widget 隐藏)。 */
-export async function fetchWeather(): Promise<WeatherSnapshot | null> {
-  const geo = await lookupGeo();
+/** open-meteo 当前天气 → snapshot；失败返回 null(各端 widget 隐藏)。传 coords（设备 GPS，
+ *  各端可选注入）则用精确坐标，否则 IP 定位兜底。 */
+export async function fetchWeather(coords?: WeatherCoords | null): Promise<WeatherSnapshot | null> {
+  const geo = coords ?? (await lookupGeo());
   if (!geo) return null;
   try {
     const res = await fetch(

@@ -5,10 +5,12 @@
  * 关闭详情面板 / 乐观隐藏 + confirm/steer 跳转 card chat（带 bootstrap 首条
  * 指令）。从 NowScreen 原内联实现提纯，两屏唯一真源。
  */
+import { useEffect, useRef } from "react";
 import {
   cardActionFeedbackBody,
   confirmBootstrap,
   dismissFeedbackBody,
+  proxyFetch,
   proxyPost,
   snoozeFeedbackBody,
   steerBootstrap,
@@ -44,6 +46,51 @@ export interface CardActionsConfig {
 }
 
 export function useCardActions({ onOpenChat, onHide, onEngage, onClose }: CardActionsConfig) {
+  // mount-restore（= web useCardActions 同款，本轮缺失补齐）：从后端拉「已 dismiss / 已 complete」
+  // 的卡 id 喂回 onHide 恢复隐藏。不做的话，切走 NOW 再回来 → NowScreen 重挂载、本地 hidden 清空
+  // → 已退场的卡重现星云（web 注释原话：resolved cards reappear on the sphere until re-clicking）。
+  const onHideRef = useRef(onHide);
+  onHideRef.current = onHide;
+  useEffect(() => {
+    let abort = false;
+    void (async () => {
+      const [dismissedRes, completedRes] = await Promise.allSettled([
+        proxyFetch("/feedback/dismissed"),
+        proxyFetch("/feedback/completed"),
+      ]);
+      if (abort) return;
+      if (dismissedRes.status === "fulfilled" && dismissedRes.value.ok) {
+        try {
+          const data = (await dismissedRes.value.json()) as {
+            ok?: boolean;
+            dismissedCardIds?: string[];
+          };
+          if (!abort && data?.ok && Array.isArray(data.dismissedCardIds)) {
+            for (const id of data.dismissedCardIds) onHideRef.current(id);
+          }
+        } catch {
+          /* dismissed 恢复失败只影响一次启动 */
+        }
+      }
+      if (completedRes.status === "fulfilled" && completedRes.value.ok) {
+        try {
+          const data = (await completedRes.value.json()) as {
+            ok?: boolean;
+            completedCardIds?: string[];
+          };
+          if (!abort && data?.ok && Array.isArray(data.completedCardIds)) {
+            for (const id of data.completedCardIds) onHideRef.current(id);
+          }
+        } catch {
+          /* completed 恢复失败只影响一次启动 */
+        }
+      }
+    })();
+    return () => {
+      abort = true;
+    };
+  }, []);
+
   const confirm = (e: VisibleCardEntry) => {
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     onEngage?.(e.card.id);
