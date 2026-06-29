@@ -98,6 +98,7 @@ export interface AudioConfig {
 type AudioEventName =
   | "soundClassification"
   | "captureReady"
+  | "captureSessionRotated"
   | "transcript"
   | "transcriptReady"
   | "transcriptDraft"
@@ -105,7 +106,8 @@ type AudioEventName =
   | "captureDiscarded"
   | "speechBurst"
   | "audioState"
-  | "audioError";
+  | "audioError"
+  | "audioDiagnostic";
 
 interface AmbientAudioModuleType {
   requestPermissions(): Promise<{ microphone: string; speechRecognition: string }>;

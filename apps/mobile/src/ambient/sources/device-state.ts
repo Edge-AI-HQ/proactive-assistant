@@ -2,6 +2,10 @@
  * Device-state 源（RN 直替：expo-battery 覆盖电量/充电/低电量模式）。
  * 信号形状与 web sources/device-state.ts 对齐（schema_version
  * device_state.v1）。
+ *
+ * thermal（发热档位）有意未迁（2026-06，迁移台账有记）：iOS thermalState 无
+ * JS 接口、需原生；且 device_state 在后端是 _FILTERED_POLICY（故意丢弃，连
+ * web 也从未进核心功能消费）；价值极低 → 不迁。
  */
 import * as Battery from "expo-battery";
 

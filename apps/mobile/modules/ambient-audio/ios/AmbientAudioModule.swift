@@ -24,17 +24,22 @@ public final class AmbientAudioModule: Module {
   public func definition() -> ModuleDefinition {
     Name("AmbientAudio")
 
+    // 必须覆盖 AudioStreamManager 实际 emit 的全部事件名——Expo 会丢弃未在此
+    // 声明的事件，JS 端 addListener 收不到。captureSessionRotated（会话轮换，
+    // 实时转写 UI 据此重置）+ audioDiagnostic（调试遥测）此前漏声明。
     Events(
       "soundClassification",
       "captureReady",
       "captureDiscarded",
+      "captureSessionRotated",
       "transcript",
       "transcriptDraft",
       "transcriptRefined",
       "transcriptReady",
       "speechBurst",
       "audioState",
-      "audioError"
+      "audioError",
+      "audioDiagnostic"
     )
 
     OnCreate {

@@ -33,7 +33,7 @@ description: "当前前端主线:把 proactive-ai-frontend(Capacitor)逐屏迁�
 | 屏 | web 源(`proactive-ai-frontend/src/`) | RN 目标(`apps/mobile/src/`) | 状态 |
 |---|---|---|---|
 | NOW | `components/now/NowView.tsx` + `Sphere3DCards.tsx` | `screens/NowScreen.tsx` | 🔨 进行中（旋转星云对齐 web：① 卡片量——`NowScreen` 加 intentKey 去重 + `.slice(0,14)` 限量（对齐 web `AppLayout` sphereCards，之前全量上球＝"渲染太多"）；② 旋转手感对齐 web `ui-web/now/Sphere3DCards`——pitch 锁死（yaw-only 拖动）/ 拖动灵敏度 0.35→0.3 / 甩动动量改 web 累积式 `velYaw*0.7+dx*0.09`（弃用手势 velocity）/ idle 衰减 0.02→0.015 / 球心 0.42→0.36 / 椭球 ry 用 web top-safe 原式 / fibonacci 布点 ≥12。投影数学本就同源。type-check + bundle 过，待设备验收。待办：稳定 id→slot 槽位分配（增删卡不重排）、卡面 liquid-glass 渐变） |
-| AMBIENT | `components/ambient/AmbientView.tsx` | `screens/AmbientScreen.tsx` | ☐ 待办 |
+| AMBIENT | `components/ambient/AmbientView.tsx` | `screens/AmbientScreen.tsx` | 🔨 进行中（本轮 web-parity：① **页头**对齐 web（标题 24/600/tracking-tight/leading 30、副标题 bodySm 13/foreground-60、中点 foreground-30、"on-device TEE"、设备数单复数化；整屏 inset `px-5→px-4` 对齐 web 容器 + 页头）；② **hero 开关卡**重写对齐 web `AmbientView` switch——自建渐变玻璃卡（`expo-blur` + `LinearGradient` 白渐变 on/off + rounded-2xl 16 + border + on 态外影，替 `GlassCard strong`）、雷达图标（Radio 14 / 32 圆 + Tailwind `animate-ping` 等价脉冲 reanimated + 绿点）、自定义开关（48×28 = w-12 h-7 + 24 拇指 spring 500/35，替原生 `Switch` 太宽）、**功能性 upload 软锁钮**（`ingest.ts` uploadsLocked：锁=暂停上传保留本地采集、AsyncStorage 持久化，对齐 web sync-scheduler）、状态文案随 on/lock 切换；NativeWind 的 `hsl(var())` 无 `<alpha-value>` 槽 → 透明度色一律内联 `hsla`；状态副标题保持 web 同款 1 行截断（行业标准，窄屏降级、Pro Max 显示全）；③ **薄 hook 铺路**：`hooks/useAmbientToggle`（派生 `useUserSettings` + runtime）、`hooks/usePushNotifications`（包 `expo-notifications`）、`ambient/keys.ts`。type-check + Metro bundle 验证，**待真机（Pro Max 宽度）终验**。**待办**：接 useAmbientToggle/usePushNotifications 进屏、设备条点击、时间线富化（本地 timeline store）、live session 卡、叙事摘要） |
 | TASKS | `components/tasks/CardTimeline.tsx` | `screens/TasksScreen.tsx` | 🔨 进行中（刀 1-5 已落 + 本轮视觉对齐 pass：行结构（预览行缩进对齐标题）/间距 py-4·gap 10·6/header 24px·600·px-4/日期标签 12px·tracking 0.6/processing 旋转 Loader2/按压缩放/加载态 "Loading history…"/空状态玻璃圆环/连接器卡用 toolkit 语义图标（lucide，同 web getToolkit）替 Plug/"1 operation" 单复数——落码 + type-check 过 + 模拟器 build 起，待用户设备验收。待办：snooze 语义对齐 web、inConversation/confirmed 乐观态、Comment 反馈栏、i18n） |
 | CONNECT | `components/connect/ControlPanel.tsx` | `screens/ConnectScreen.tsx` | ☐ 待办 |
 | PROFILE | `components/profile/MirrorMobile.tsx` | `screens/ProfileScreen.tsx` | ☐ 待办 |
@@ -50,7 +50,11 @@ description: "当前前端主线:把 proactive-ai-frontend(Capacitor)逐屏迁�
 - `App.tsx` wire 4 个注册点:`registerSignOutCleanup` / `registerFeedbackOutbox` / `registerLocalThreadStore` / `registerExternalMicAcquirer`。
 - `apps/mobile/src/lib/devices.ts`:`ensureDevice` + expo-secure-store(DeviceCredentials)。
 - `ambient/ingest.ts`:内存 buffer → DatabasePort durable outbox。
-- ambient 原生 Swift 移植:`capacitor-plugins/ambient-ai`(Capacitor)→ `apps/mobile/modules/ambient-{audio,visit}/ios/`(Expo Module)。
+- ambient 原生 Swift 移植(✅ 已完成 + 2026-06 parity 审计):`capacitor-plugins/ambient-ai`(Capacitor)→ `apps/mobile/modules/ambient-{audio,visit}/ios/`(Expo Module)。audio/visit/geocode 核心 Swift 逐字节移植,9 个在用源全覆盖。审计收尾决定:
+  - 音频 `Events()` 漏声明 `captureSessionRotated` / `audioDiagnostic` → **已补**(做实时转写会话 UI 才用得上)。
+  - **thermal(device_state 发热档位)有意不迁(路 C)**:iOS thermalState 无 JS 接口、device_state 后端 `_FILTERED_POLICY` 故意丢弃(连 web 也没进核心消费)、价值极低。
+  - **focus(`device.focus_state`)真实现**:`ambient-visit` 接 `INFocusStatusCenter`(前端源 / ingest / 后端 `_SIGNAL_POLICY` 存储 / generator·dream 通用消费 均已就绪,只差原生)。⚠️ 需 `com.apple.developer.focus-status` entitlement——个人 team 签不了(本地真机会像 push 一样被剥),仅 CI / 付费 team build 生效;模拟器无专注模式,真值测不出。
+  - OLD 其余 plugin(Photos / Bluetooth / NotificationUsage 计数 / on-device LLM)= web 从未接进运行时的死代码,**不迁**。
 
 ## 完成定义(可以删 proactive-ai-frontend 的前提)
 

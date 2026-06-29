@@ -3,6 +3,7 @@
  * flush POST /api/devices/ingest。app kill 不丢信号(此前是内存 buffer)。wire 协议同
  * web lib/devices.ts ingestSignals(X-Device 头、id 客户端生成);401 清凭证下轮重注册。
  */
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { SqliteOutboxStore } from "@pin-ai/core";
 
 import { ENV } from "../lib/env";
@@ -19,6 +20,20 @@ const outbox = new SqliteOutboxStore(createExpoDatabase("ambient"));
 let timer: ReturnType<typeof setInterval> | null = null;
 let flushing = false;
 let ownerUserId: string | null = null;
+
+// Upload soft-lock（对齐 web sync-scheduler.uploadsLocked / pin.ambient.uploadsLocked）：
+// 锁上时继续往 durable outbox 攒信号，但不 POST（暂停 sync、保留本地采集）；解锁后补传。
+const UPLOADS_LOCKED_KEY = "pinai:ambient-uploads-locked";
+let uploadsLocked = false;
+
+export async function isUploadsLocked(): Promise<boolean> {
+  return (await AsyncStorage.getItem(UPLOADS_LOCKED_KEY)) === "1";
+}
+
+export async function setUploadsLocked(value: boolean): Promise<void> {
+  uploadsLocked = value;
+  await AsyncStorage.setItem(UPLOADS_LOCKED_KEY, value ? "1" : "0");
+}
 
 export function pushSignal(item: PersonalSignalInput): void {
   void outbox.enqueue([item]).catch((err) => console.warn("[ambient] enqueue failed:", err));
@@ -53,7 +68,7 @@ async function postBatch(creds: DeviceCredentials, items: PersonalSignalInput[])
 }
 
 export async function flushSignals(): Promise<void> {
-  if (flushing || !ownerUserId) return;
+  if (flushing || !ownerUserId || uploadsLocked) return;
   flushing = true;
   const owner = ownerUserId;
   const backendUrl = ENV.pinApiUrl;
@@ -82,6 +97,9 @@ export async function flushSignals(): Promise<void> {
 
 export function startIngestLoop(userId: string): void {
   ownerUserId = userId;
+  void AsyncStorage.getItem(UPLOADS_LOCKED_KEY).then((v) => {
+    uploadsLocked = v === "1";
+  });
   if (timer) return;
   timer = setInterval(() => void flushSignals(), FLUSH_INTERVAL_MS);
   void outbox.prune().catch(() => {}); // 启动清过期(synced 超 24h / pending 超 TTL)

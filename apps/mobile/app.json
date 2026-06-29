@@ -20,11 +20,15 @@
         "NSMotionUsageDescription": "PIN AI uses motion activity (walking, driving) to understand context.",
         "NSMicrophoneUsageDescription": "PIN AI listens for ambient sounds and conversations (on-device gated) to understand context.",
         "NSSpeechRecognitionUsageDescription": "PIN AI transcribes ambient speech on-device to capture useful moments.",
+        "NSFocusStatusUsageDescription": "PIN AI reads whether you're in a Focus mode to gauge your availability for proactive suggestions.",
         "UIBackgroundModes": [
           "audio",
           "fetch",
           "remote-notification"
         ]
+      },
+      "entitlements": {
+        "com.apple.developer.focus-status": true
       },
       "appleTeamId": "58AXBDC7K4"
     },

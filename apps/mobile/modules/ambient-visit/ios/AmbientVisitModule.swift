@@ -2,6 +2,7 @@ import CoreLocation
 import CoreMotion
 import ExpoModulesCore
 import Foundation
+import Intents
 
 /// Expo Module 桥 —— 替代 capacitor VisitMonitorPlugin(CAPPlugin)。CLVisit 监听
 /// (durable VisitEventStore 队列 + drain/ack)+ CMMotionActivity 识别 + 反地理编码
@@ -10,9 +11,10 @@ import Foundation
 /// 与原 plugin 的差异(对照 TS 契约 modules/ambient-visit/index.ts):
 ///   - 不暴露 getCurrentPosition / requestPermissions(location)—— RN 层用 expo-location
 ///     请求 always 权限,Module 只在已授权前提下 startMonitoring。
-///   - focus(requestFocusPermissions/start/stopFocusMonitoring)= **stub**:iOS 无公开
-///     Focus/ScreenTime API,capacitor 也未实现;requestFocusPermissions 返回 "denied",
-///     start/stop no-op,不发 focus 事件。
+///   - focus(requestFocusPermissions/start/stopFocusMonitoring)= 真实现 INFocusStatusCenter
+///     (Intents framework;移植自 capacitor NotificationUsagePlugin.emitFocusStatus,并补上
+///     OLD 缺的授权请求)。真值需 com.apple.developer.focus-status entitlement——个人 team
+///     签不了(本地真机 / 模拟器拿不到真值),仅 CI / 付费 team build 生效;未授权静默不发。
 public final class AmbientVisitModule: Module {
   private let store = VisitEventStore()
   private let monitoringEnabledKey = "pin.visitMonitoring.enabled"
@@ -21,6 +23,8 @@ public final class AmbientVisitModule: Module {
   private var activityManager: CMMotionActivityManager?
   private var isMonitoring = false
   private var isRecognizingActivity = false
+  private var isMonitoringFocus = false
+  private var focusTimer: DispatchSourceTimer?
   private var lastError: String?
 
   public func definition() -> ModuleDefinition {
@@ -39,6 +43,7 @@ public final class AmbientVisitModule: Module {
       self.stopMonitoringInternal()
       self.activityManager?.stopActivityUpdates()
       self.activityManager = nil
+      self.stopFocusInternal()
     }
 
     AsyncFunction("startMonitoring") {
@@ -77,10 +82,20 @@ public final class AmbientVisitModule: Module {
       self.isRecognizingActivity = false
     }
 
-    // focus stub(iOS 无公开 Focus API;capacitor 未实现)。
-    AsyncFunction("requestFocusPermissions") { () -> String in "denied" }
-    AsyncFunction("startFocusMonitoring") { /* no-op */ }
-    AsyncFunction("stopFocusMonitoring") { /* no-op */ }
+    // Focus 真实现(INFocusStatusCenter / Intents)——见下方 startFocusInternal。
+    AsyncFunction("requestFocusPermissions") { (promise: Promise) in
+      INFocusStatusCenter.default.requestAuthorization { status in
+        promise.resolve(Self.focusAuthString(status))
+      }
+    }
+
+    AsyncFunction("startFocusMonitoring") {
+      self.startFocusInternal()
+    }
+
+    AsyncFunction("stopFocusMonitoring") {
+      self.stopFocusInternal()
+    }
   }
 
   // MARK: - Visit monitoring
@@ -185,6 +200,53 @@ public final class AmbientVisitModule: Module {
     case .medium: return "medium"
     case .low: return "low"
     @unknown default: return "low"
+    }
+  }
+
+  // MARK: - Focus monitoring (INFocusStatusCenter)
+
+  /// 真值需 com.apple.developer.focus-status entitlement;未授权静默不发(与
+  /// web focus 源注释一致)。无公开变更通知 → 定时轮询,源侧(focus.ts)按值去重。
+  private func startFocusInternal() {
+    guard INFocusStatusCenter.default.authorizationStatus == .authorized else { return }
+    if isMonitoringFocus { return }
+    isMonitoringFocus = true
+    emitFocusStatus()
+    let queue = DispatchQueue(label: "ai.pin.focus.timer", qos: .utility)
+    let timer = DispatchSource.makeTimerSource(queue: queue)
+    timer.schedule(deadline: .now() + Self.focusPollInterval, repeating: Self.focusPollInterval)
+    timer.setEventHandler { [weak self] in
+      DispatchQueue.main.async { self?.emitFocusStatus() }
+    }
+    timer.resume()
+    focusTimer = timer
+  }
+
+  private func stopFocusInternal() {
+    focusTimer?.cancel()
+    focusTimer = nil
+    isMonitoringFocus = false
+  }
+
+  private func emitFocusStatus() {
+    let center = INFocusStatusCenter.default
+    guard center.authorizationStatus == .authorized else { return }
+    let isFocused = center.focusStatus.isFocused ?? false
+    sendEvent("focus", [
+      "focused": isFocused,
+      "timestamp": Int(Date().timeIntervalSince1970 * 1000),
+    ])
+  }
+
+  private static let focusPollInterval: TimeInterval = 300
+
+  private static func focusAuthString(_ status: INFocusStatusAuthorizationStatus) -> String {
+    switch status {
+    case .authorized: return "authorized"
+    case .denied: return "denied"
+    case .restricted: return "restricted"
+    case .notDetermined: return "prompt"
+    @unknown default: return "prompt"
     }
   }
 
