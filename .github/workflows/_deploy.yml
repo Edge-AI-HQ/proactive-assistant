@@ -55,9 +55,8 @@ on:
       # skipped and deploy-agents-split runs the three per-app sync + deploy
       # (api / engine / reward). The split inputs below are only read by that
       # job; callers that don't opt in leave them empty. Activating the split is
-      # an ops decision (see backend/deploy/fly-split/README.md) — NO caller
-      # passes agents_split=true today, so current deploys are byte-for-byte
-      # unchanged.
+      # an ops decision (see backend/deploy/fly-split/README.md). dev and test
+      # pass agents_split=true (three-app); prod still deploys the single app.
       agents_split:
         description: Deploy the three split apps (api/engine/reward) instead of the single app
         type: boolean

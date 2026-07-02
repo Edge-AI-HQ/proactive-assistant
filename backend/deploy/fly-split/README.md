@@ -1,4 +1,4 @@
-# fly app split — ready, NOT active
+# fly app split — ACTIVE on dev + test, prod pending
 
 These toml files are the **deploy-layer landing** of the backend
 re-architecture (docs/plans/2026-06-21-backend-rearchitecture.mdx §四/§十二).
@@ -6,14 +6,13 @@ They split the single `proactive-ai-agents-*` fly app (`[processes]` web+chat)
 into independent fly apps so the trust boundary becomes physical at the deploy
 layer too — the engine app simply never receives master credentials.
 
-> ⚠️ **READY BUT NOT ACTIVE.** No CI caller activates this. By default
-> `.github/workflows/_deploy.yml` still deploys the single app via
-> `backend/fly.{dev,test,prod}.toml`. The split is gated behind an opt-in CI
-> input (`agents_split`, default `false`) that no caller passes — see
-> **Activation runbook** step 5. These files are templates + a runbook. **App
-> names, flycast addresses, IP allocation and the reward-dashboard call path are
-> PLACEHOLDERS** — verified by ops against the real fly apps before first deploy.
-> Nothing here has run on fly; treat every value as a proposal, not a fact.
+> **Status: dev activated 2026-06-22, test activated 2026-07-02
+> (`deploy-{dev,test}.yml` pass `agents_split: true`); prod still deploys the
+> single app via `backend/fly.prod.toml`.** The runbook below was written
+> pre-activation; treat it as the prod activation guide. One correction learned
+> on dev: api→engine goes over **6PN `.internal:8001`**, NOT flycast — flycast
+> exposes the http_service external port (80/443), not the container port. See
+> AGENTS.md 踩坑 §9 and the NOTE in `fly.api.*.toml`.
 >
 > What ships ready-inactive in this directory + repo:
 > - `fly.{api,engine,reward}.{dev,prod,test}.toml` — all three apps × three envs.

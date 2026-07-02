@@ -1,5 +1,6 @@
 # Test env mirror of fly.toml.
-# VITE_PIN_API_URL points at proactive-ai-agents-test fly URL.
+# VITE_PIN_API_URL points at proactive-ai-api-test fly URL (test runs the
+# three-app split — there is no single agents-test app).
 # VITE_SUPABASE_* point at the dedicated test Supabase project.
 
 app = "proactive-ai-frontend-test"
@@ -13,7 +14,7 @@ primary_region = "ord"
 # above the `templates/default.conf.template` heredoc for the rationale.
 [env]
   NGINX_RESOLVER = "[fdaa::3]"
-  NGINX_UPSTREAM_URL = "https://proactive-ai-agents-test.fly.dev"
+  NGINX_UPSTREAM_URL = "https://proactive-ai-api-test.fly.dev"
 
 [http_service]
   internal_port = 8080
