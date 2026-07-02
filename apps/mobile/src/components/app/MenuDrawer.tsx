@@ -27,7 +27,6 @@ import { useTranslation } from "react-i18next";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import {
   ListChecks,
@@ -44,6 +43,8 @@ import Animated, {
   useSharedValue,
   withSpring,
 } from "react-native-reanimated";
+
+import { FullBleedOverlay } from "./FullBleedOverlay";
 
 export type MenuId = "now" | "ambient" | "tasks" | "connect" | "profile" | "setting";
 
@@ -100,7 +101,6 @@ export default function MenuDrawerHost({
   onNavigate: (id: MenuId) => void;
 }) {
   const { t } = useTranslation();
-  const insets = useSafeAreaInsets();
 
   const progress = useSharedValue(0);
   /** 本次拖拽起点的 progress（支持半路接住飞行中的面板）。 */
@@ -191,68 +191,65 @@ export default function MenuDrawerHost({
         <View style={styles.pages}>{children}</View>
       </GestureDetector>
       {mounted ? (
-        <GestureDetector gesture={closePan}>
-          {/* 负 inset 逃出 SafeAreaView（ChatSheet 出血同款）：dev 面板/蒙层是
-              fixed top-0 bottom-0，刘海与 home-indicator 区域必须一并覆盖。 */}
-          <View
-            style={[
-              styles.overlay,
-              { top: -insets.top, bottom: -insets.bottom },
-            ]}
-          >
-            {/* dev 蒙层：bg-foreground/10 + backdrop-blur-sm(4px)。 */}
-            <Animated.View style={[StyleSheet.absoluteFill, dimStyle]}>
-              <Pressable onPress={onRequestClose} className="absolute inset-0">
-                <BlurView intensity={8} tint="light" style={StyleSheet.absoluteFill} />
-                <View style={[StyleSheet.absoluteFill, styles.scrimTint]} />
-              </Pressable>
-            </Animated.View>
-            {/* dev 面板：白渐变 180°(0.85→0.95) + blur(48) + 左缘 white/50 边。 */}
-            <Animated.View style={[styles.panel, panelStyle]}>
-              <BlurView intensity={75} tint="light" style={StyleSheet.absoluteFill} />
-              <LinearGradient
-                colors={["rgba(255,255,255,0.85)", "rgba(255,255,255,0.95)"]}
-                style={StyleSheet.absoluteFill}
-              />
-              {/* dev: pt-14 px-5；X 钮 p-1.5 圆底 mb-8。 */}
-              <View style={styles.panelContent}>
-                <Pressable onPress={onRequestClose} hitSlop={6} accessibilityRole="button">
-                  <View style={styles.closeButton}>
-                    <X size={20} color={fg(0.6)} strokeWidth={1.5} />
-                  </View>
+        <FullBleedOverlay>
+          {/* closePan 包整块出血区（蒙层 + 面板皆可右滑关）；absoluteFill 撑满
+              FullBleedOverlay 的出血 root（顶到刘海、底到 home-indicator）。 */}
+          <GestureDetector gesture={closePan}>
+            <View style={StyleSheet.absoluteFill}>
+              {/* dev 蒙层：bg-foreground/10 + backdrop-blur-sm(4px)。 */}
+              <Animated.View style={[StyleSheet.absoluteFill, dimStyle]}>
+                <Pressable onPress={onRequestClose} className="absolute inset-0">
+                  <BlurView intensity={8} tint="light" style={StyleSheet.absoluteFill} />
+                  <View style={[StyleSheet.absoluteFill, styles.scrimTint]} />
                 </Pressable>
-                <View style={styles.items}>
-                  {/* 用户实测 dev：激活/按压均无背景变化，只有字色 fg50→fg + 字重
-                      medium→semibold + icon stroke 1.5→2（源码里的 bg-foreground/8
-                      /hover:bg-foreground/4 是死类，本版 Tailwind 不编译）。 */}
-                  {ITEMS.map(({ id, labelKey, Icon }) => {
-                    const isActive = id === active;
-                    const label = t(labelKey);
-                    return (
-                      <Pressable
-                        key={id}
-                        onPress={() => onNavigate(id)}
-                        accessibilityRole="button"
-                        accessibilityLabel={label}
-                      >
-                        <View style={styles.itemRow}>
-                          <Icon
-                            size={18}
-                            color={isActive ? fg() : fg(0.5)}
-                            strokeWidth={isActive ? 2 : 1.5}
-                          />
-                          <Text style={[styles.itemLabel, isActive && styles.itemLabelActive]}>
-                            {label}
-                          </Text>
-                        </View>
-                      </Pressable>
-                    );
-                  })}
+              </Animated.View>
+              {/* dev 面板：白渐变 180°(0.85→0.95) + blur(48) + 左缘 white/50 边。 */}
+              <Animated.View style={[styles.panel, panelStyle]}>
+                <BlurView intensity={75} tint="light" style={StyleSheet.absoluteFill} />
+                <LinearGradient
+                  colors={["rgba(255,255,255,0.85)", "rgba(255,255,255,0.95)"]}
+                  style={StyleSheet.absoluteFill}
+                />
+                {/* dev: pt-14 px-5；X 钮 p-1.5 圆底 mb-8。 */}
+                <View style={styles.panelContent}>
+                  <Pressable onPress={onRequestClose} hitSlop={6} accessibilityRole="button">
+                    <View style={styles.closeButton}>
+                      <X size={20} color={fg(0.6)} strokeWidth={1.5} />
+                    </View>
+                  </Pressable>
+                  <View style={styles.items}>
+                    {/* 用户实测 dev：激活/按压均无背景变化，只有字色 fg50→fg + 字重
+                        medium→semibold + icon stroke 1.5→2（源码里的 bg-foreground/8
+                        /hover:bg-foreground/4 是死类，本版 Tailwind 不编译）。 */}
+                    {ITEMS.map(({ id, labelKey, Icon }) => {
+                      const isActive = id === active;
+                      const label = t(labelKey);
+                      return (
+                        <Pressable
+                          key={id}
+                          onPress={() => onNavigate(id)}
+                          accessibilityRole="button"
+                          accessibilityLabel={label}
+                        >
+                          <View style={styles.itemRow}>
+                            <Icon
+                              size={18}
+                              color={isActive ? fg() : fg(0.5)}
+                              strokeWidth={isActive ? 2 : 1.5}
+                            />
+                            <Text style={[styles.itemLabel, isActive && styles.itemLabelActive]}>
+                              {label}
+                            </Text>
+                          </View>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
                 </View>
-              </View>
-            </Animated.View>
-          </View>
-        </GestureDetector>
+              </Animated.View>
+            </View>
+          </GestureDetector>
+        </FullBleedOverlay>
       ) : null}
     </View>
   );
@@ -261,7 +258,6 @@ export default function MenuDrawerHost({
 const styles = StyleSheet.create({
   host: { flex: 1 },
   pages: { flex: 1 },
-  overlay: { position: "absolute", left: 0, right: 0 },
   scrimTint: { backgroundColor: fg(0.1) },
   panel: {
     position: "absolute",

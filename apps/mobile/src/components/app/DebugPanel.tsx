@@ -44,6 +44,7 @@ import {
   type ComposioState,
 } from "@pin-ai/state";
 
+import { FullBleedOverlay } from "./FullBleedOverlay";
 import CrystallizePanel from "../debug/CrystallizePanel";
 import SkillsPanel from "../profile/SkillsPanel";
 import MemoriesPanel from "../profile/MemoriesPanel";
@@ -412,9 +413,9 @@ export default function DebugPanel({
   if (!mounted) return null;
 
   return (
-    // 负 inset 逃出 SafeAreaView（= MenuDrawer 同款出血）：面板要顶到刘海、
-    // 底到屏幕底，否则顶部露一条、底部 Delete Account 溢出可视区滑不到。
-    <View style={[styles.root, { top: -insets.top, bottom: -insets.bottom }]}>
+    // 出血到物理屏满高（FullBleedOverlay），否则面板顶部露一条、底部 Delete
+    // Account 溢出可视区滑不到。内容用 insets 避开刘海/home-indicator。
+    <FullBleedOverlay>
       <Animated.View style={[StyleSheet.absoluteFill, dimStyle]}>
         <Pressable style={[StyleSheet.absoluteFill, styles.dim]} onPress={onClose} />
       </Animated.View>
@@ -615,13 +616,11 @@ export default function DebugPanel({
           </SectionCard>
         </ScrollView>
       </Animated.View>
-    </View>
+    </FullBleedOverlay>
   );
 }
 
 const styles = StyleSheet.create({
-  // 出血 root（top/bottom 由 inline 负 inset 撑到物理屏满高）。
-  root: { position: "absolute", left: 0, right: 0 },
   dim: { backgroundColor: "rgba(0,0,0,0.2)" },
   panel: {
     position: "absolute",

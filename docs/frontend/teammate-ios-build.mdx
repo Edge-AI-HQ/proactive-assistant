@@ -1,0 +1,160 @@
+---
+title: 同事上手 — 从 main 把 RN app build 到自己 iPhone
+---
+
+# 从 main build RN app 到自己 iPhone（团队成员自助）
+
+`apps/mobile`（Expo React Native）是 PIN AI 的下一代 iOS 前端（开发中，未上线）。这份指南让**任何团队成员用自己的免费 Apple ID + 自己的 iPhone** 把它 build 上手体验，不需要付费开发者账号、不需要加入某个 team。
+
+> 为什么是文档而不是一个共享脚本：Mengli 本机那套 build 脚本在 `.claude/skills/` 里、不进 git（你 clone 拿不到），且签名参数（team / bundle / 设备）每个人都不同。下面的命令是从那套脚本提炼的，**复制即用**，把 `<尖括号>` 换成你自己的值。想要全自动脚本，见文末「捷径」。
+
+---
+
+## 0. 一次性前置
+
+1. **Xcode**：App Store 装最新 Xcode，打开一次让它装好命令行组件。
+2. **Xcode 登录你自己的 Apple ID**：Xcode → Settings → Accounts → 加你自己的 Apple ID。
+   签名是在**你的登录态**里发生的，命令行 build 靠它自动签发证书。没登录会报 `No Account for Team`。
+3. **工具链**：
+   ```bash
+   brew install cocoapods
+   brew install node@22        # 已有 node 可跳过
+   ```
+4. **clone 到无空格路径**（重要）：
+   ```bash
+   git clone <repo-url> ~/code/pin-ai      # ⚠️ 路径别带空格
+   cd ~/code/pin-ai
+   npm install
+   ```
+   > Mengli 本机的目录是 `~/code/PIN AI/`（带空格），Xcode 的几个 build 脚本会被空格搞崩（`bash: .../PIN: No such file or directory`）。**你 clone 到无空格路径就完全绕过这个坑**，省掉一个补丁步骤。
+5. **dev 后端配置的解密私钥**（登录 + 连云端用）：跟团队要 `DOTENV_PRIVATE_KEY_DEV`，放进 `~/.zshrc`：
+   ```bash
+   export DOTENV_PRIVATE_KEY_DEV=...
+   ```
+   （后端连的是 dev 云端 `proactive-ai-api-dev.fly.dev`，不需要你本地起后端。）
+
+---
+
+## 1. 一次性 — 确定你的签名两要素
+
+免费个人 team 有条铁律：**bundle id 在 Apple 全局唯一，不能和别人重复**。所以你必须用**你自己的**：
+
+**① 你的 team id**（= 证书的 `OU` 字段，**不是** `security find-identity` 括号里那串 —— 用错会报 `No Account for Team`）：
+
+先在 Xcode 里随便触发一次签名（下一步建描述文件时会生成证书），然后：
+```bash
+security find-certificate -c "Apple Development" -p | openssl x509 -noout -subject
+```
+输出里找 `OU=XXXXXXXXXX`，那 10 位就是你的 team id。
+
+**② 你的 bundle 后缀**：用 `ai.pin.proactive.dev.<你的名字>`（例如 `ai.pin.proactive.dev.zhang`）。
+**别用 `.mengli`**（已被 Mengli 的 team 注册，你签不了）。
+
+---
+
+## 2. 首次 — Xcode GUI 建一次描述文件
+
+免费 team 的 provisioning profile 必须在 Xcode 图形界面**首次**生成一次，之后命令行 `-allowProvisioningUpdates` 才能接手。
+
+```bash
+cd apps/mobile
+npx expo prebuild --platform ios      # 生成 ios/ 原生工程（gitignore 产物）
+open ios/PINAIDev.xcworkspace          # 用 Xcode 打开
+```
+
+在 Xcode 里：
+1. 左侧选 target **PINAIDev** → **Signing & Capabilities**
+2. **Team** = 下拉选你自己的 Apple ID（Personal Team）
+3. **Bundle Identifier** = `ai.pin.proactive.dev.<你的名字>`
+4. 勾 **Automatically manage signing**，等它生成 profile（不报红就成）
+
+然后**剥掉免费 team 签不了的两个权限**（推送 + 专注模式）——编辑 `apps/mobile/ios/PINAIDev/PINAIDev.entitlements`，删掉这两项：
+- `aps-environment`
+- `com.apple.developer.focus-status`
+
+> HealthKit / 定位 / 运动 / 麦克风（ambient 采集）/ 日历 / 录音都保留、能正常签。只有推送和专注模式是 Apple 对免费 team 的限制（不是代码问题）——所以你这个 build 收不到推送，属正常，付费 team / TestFlight build 才有。
+> ⚠️ 每次重跑 `expo prebuild` 会重新生成 `ios/`、覆盖这个改动，要重删。
+
+---
+
+## 3. build + 装机
+
+手机 USB 连 Mac 一次（首次配对），之后同 Wi-Fi 可无线；全程保持手机**解锁**。
+
+```bash
+cd apps/mobile
+export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8   # 不设 CocoaPods 会报编码错
+export RCT_USE_PREBUILT_RNCORE=0             # RN 0.85 的 prebuilt RNCore 有坑，从源码编
+
+# 找你 iPhone 的 UDID
+xcrun devicectl list devices                  # 记下你 iPhone 一行的 UDID
+
+# build（首次 ~15–20 分钟：RN 从源码编，之后快很多）
+xcrun xcodebuild -workspace ios/PINAIDev.xcworkspace -scheme PINAIDev -configuration Debug \
+  -destination "id=<你的UDID>" -allowProvisioningUpdates -derivedDataPath ios/build \
+  CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=<你的TEAMID> \
+  PRODUCT_BUNDLE_IDENTIFIER=ai.pin.proactive.dev.<你的名字> build
+
+# 装到手机
+xcrun devicectl device install app --device <你的UDID> \
+  ios/build/Build/Products/Debug-iphoneos/PINAIDev.app
+```
+
+---
+
+## 4. 起 Metro（连 dev 云端后端）
+
+app 要连后端才能用。Metro 在**启动时**把后端 URL 注入进 JS，所以后端是在这里决定的：
+
+```bash
+cd apps/mobile
+export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+
+# 从仓库里加密的 backend/.env.dev 解出 dev 云端 Supabase 配置（需要上面的 DOTENV_PRIVATE_KEY_DEV）
+SB_URL=$(npx --yes @dotenvx/dotenvx get VITE_SUPABASE_URL -f ../../backend/.env.dev)
+SB_KEY=$(npx --yes @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f ../../backend/.env.dev)
+
+EXPO_PUBLIC_PIN_API_URL=https://proactive-ai-api-dev.fly.dev \
+EXPO_PUBLIC_SUPABASE_URL="$SB_URL" \
+EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY="$SB_KEY" \
+  npx expo start --dev-client --host lan
+```
+
+手机上：
+1. **首次**：Settings → General → VPN & Device Management → **信任你的开发者证书**
+2. 打开 **"PIN AI Dev"**。连不上 bundler 时：摇一摇 → **Debug server host & port** 填 `<你Mac的LAN-IP>:8081`（`ipconfig getifaddr en0` 查 IP）→ 再摇 → **Reload**
+3. **Google 登录一次**，session 存手机、之后每次启动自动已登录
+
+---
+
+## 5. 之后日常迭代
+
+改 **JS/TS** → 手机**摇一摇 → Reload**（几秒，不用重 build）。
+只有改 **原生模块**（`apps/mobile/modules/`）或换签名才需要重跑第 3 步。
+
+---
+
+## 坑速查
+
+| 症状 | 原因 / 解法 |
+|---|---|
+| `No Account for Team <X>` | Xcode 没登录该 team 的 Apple ID；或 team id 用错了（要证书 **OU**，不是 `find-identity` 括号那串）|
+| CocoaPods 报编码错 | 没设 `export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8` |
+| `bash: .../PIN: No such file` (exit 65) | 仓库路径带空格 → **clone 到无空格路径**（见 §0.4）|
+| build 卡在 RNCore / 链接报错 | 没设 `export RCT_USE_PREBUILT_RNCORE=0`（从源码编）|
+| 无线装机失败 | USB 连一次配对；确认同 Wi-Fi + 手机解锁 |
+| 收不到推送 | 预期——免费 team 剥了推送权限，TestFlight / 付费 team build 才有 |
+| bundle id 冲突 / 签名失败 | 你用了别人的后缀（如 `.mengli`）→ 换成 `.<你自己名字>` |
+| 登录失败 / 白屏 | Metro 没带 Supabase env（缺 `DOTENV_PRIVATE_KEY_DEV` 或没解密）|
+
+---
+
+## 捷径（想要全自动的话）
+
+Mengli 本机那套脚本（自动找 UDID、剥权限、起 Metro、修空格路径）在 `.claude/skills/A-RN-frontend/scripts/`：`build-rn-device.sh` + `ensure-metro.sh` + `fix-space-paths.sh`。跟他要这三个文件，然后：
+
+```bash
+TEAM=<你的TEAMID> DEV_UDID=<你的UDID> bash build-rn-device.sh
+```
+
+> ⚠️ 那个脚本目前把 bundle 写死成 `ai.pin.proactive.dev.mengli`。你要么让 Mengli 把 `BUNDLE` 也改成可覆盖的环境变量（`BUNDLE="${BUNDLE:-...}"`，一行），要么直接用上面 §3 的手动命令（bundle 作命令参数，最灵活）。
