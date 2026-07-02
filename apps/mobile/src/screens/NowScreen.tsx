@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { Radio } from "lucide-react-native";
+import { useTranslation } from "react-i18next";
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -24,15 +25,14 @@ import {
 } from "@pin-ai/core";
 import { useCardsQuery, useWeatherData } from "@pin-ai/state";
 
-import { isAmbientEnabled, startAmbient, stopAmbient } from "../ambient/runtime";
 import AskPinAiBar from "../components/app/AskPinAiBar";
 import PageHeader from "../components/app/PageHeader";
 import CardDetailSheet from "../components/now/CardDetailSheet";
 import SphereCards, { type SphereItem } from "../components/now/SphereCards";
 import { GradientText } from "../ui/GradientText";
 import { EM_TIGHT, leading, tracking } from "../ui/typography";
+import { useAmbientToggle } from "../hooks/useAmbientToggle";
 import { useCardActions } from "../hooks/useCardActions";
-import { supabase } from "../lib/supabase";
 import { getDeviceWeatherCoords } from "../lib/weather-location";
 import type { HeaderProps } from "./AmbientScreen";
 
@@ -65,15 +65,21 @@ function BreatheHalo({
 
 /** web NowView ambient 行 1:1：灰调淡卡（非玻璃）+ 黑图标圆（breathe）+
  *  自绘 w-11 h-6 pill toggle（knob tween 0.2s + breathe halo）。 */
-function AmbientStatusCard({ onOpenAmbient }: { onOpenAmbient: () => void }) {
-  const [on, setOn] = useState(false);
+function AmbientStatusCard({
+  userId,
+  onOpenAmbient,
+}: {
+  userId: string | null;
+  onOpenAmbient: () => void;
+}) {
+  const { t } = useTranslation(["card", "common"]);
+  // 主开关走共享 useAmbientToggle（与 Ambient tab 同一真源：patch consent + 启停 runtime，本机闸走
+  // runtime 共享 store）——任一处翻转两处都同步。别名 ambientOn→on，下方视觉沿用 on 不改。
+  const { ambientOn: on, togglePending, toggle } = useAmbientToggle(userId);
   // ambient 开时副标题 = 位置·天气·温度。复用 @pin-ai/state 共享 hook + 注入设备 GPS（已授权时，
   // 复用 ambient 的 expo-location 权限；未授权回退 IP 定位）。weather=null（加载/失败）时回退文案。
   const weather = useWeatherData(getDeviceWeatherCoords);
-  useEffect(() => {
-    void isAmbientEnabled().then(setOn);
-  }, []);
-  const knob = useSharedValue(0);
+  const knob = useSharedValue(on ? 1 : 0);
   useEffect(() => {
     knob.value = withTiming(on ? 1 : 0, { duration: 200, easing: Easing.inOut(Easing.ease) });
   }, [on, knob]);
@@ -81,17 +87,6 @@ function AmbientStatusCard({ onOpenAmbient }: { onOpenAmbient: () => void }) {
     transform: [{ translateX: knob.value * 20 }],
   }));
 
-  const toggle = async (next: boolean) => {
-    setOn(next);
-    if (next) {
-      const { data } = await supabase.auth.getUser();
-      if (!data.user?.id) return;
-      const started = await startAmbient(data.user.id);
-      if (started.length === 0) setOn(false);
-    } else {
-      await stopAmbient();
-    }
-  };
   return (
     <View className="mx-5 mt-4 flex-row items-center gap-3 rounded-2xl px-3 py-2.5 bg-foreground/[0.04] border border-foreground/[0.06]">
       <Pressable onPress={onOpenAmbient} className="flex-1 flex-row items-center gap-3">
@@ -111,7 +106,7 @@ function AmbientStatusCard({ onOpenAmbient }: { onOpenAmbient: () => void }) {
             className={`text-[14px] ${on ? "text-foreground" : "text-foreground/70"}`}
             style={{ fontFamily: "Inter_600SemiBold" }}
           >
-            {on ? "Ambient is on" : "Ambient is off"}
+            {on ? t("now.ambientOn") : t("now.ambientOff")}
           </Text>
           <Text
             numberOfLines={1}
@@ -119,11 +114,12 @@ function AmbientStatusCard({ onOpenAmbient }: { onOpenAmbient: () => void }) {
             style={{ fontFamily: "Inter_400Regular" }}
           >
             {/* web NowView 1:1：开 + 有天气 → 城市·天气·温度°；开 + 天气未到 → 回退；关 → 提示。
-                城市可能缺失（IP 定位失败）→ 优雅省略该段，不显示 "undefined"。 */}
+                城市可能缺失（IP 定位失败）→ 优雅省略该段，不显示 "undefined"。
+                天气条件走 i18n 语义键（common:weather.*，与 web 同键）。 */}
             {!on
-              ? "Tap to start sensing context"
+              ? t("now.ambientTapToStart")
               : weather
-                ? `${weather.city ? `${weather.city} · ` : ""}${weather.label} · ${weather.temp}°`
+                ? `${weather.city ? `${weather.city} · ` : ""}${t(`common:weather.${weather.conditionKey}`)} · ${weather.temp}°`
                 : "Sensing context around you"}
           </Text>
         </View>
@@ -131,7 +127,7 @@ function AmbientStatusCard({ onOpenAmbient }: { onOpenAmbient: () => void }) {
       {/* web 自绘 w-11 h-6 pill toggle。轨道用「显式 px」尺寸——NativeWind 下 className h-6/w-11 的实际
           像素不一定正好 = 24/44，而白球按 px 定位（top2/left2/20×20/travel20），轨道一旦不是 24×44
           白球就错位，所以轨道写死 px。Pressable 只管 onPress。按用户要求开关无绿光 halo（绿光只留雷达图标）。 */}
-      <Pressable onPress={() => void toggle(!on)} hitSlop={8}>
+      <Pressable onPress={() => void toggle()} disabled={togglePending} hitSlop={8}>
         <View
           style={{
             width: 44,
@@ -181,17 +177,23 @@ const greetingStyle = {
 
 export default function NowScreen({
   displayName,
+  userId,
   headerProps,
   onOpenChat,
   onOpenAmbient,
   onAskPinAi,
+  active = true,
 }: {
   displayName: string;
+  userId: string | null;
   headerProps: HeaderProps;
   onOpenChat: (card: IntentCard, bootstrap: string) => void;
   onOpenAmbient: () => void;
   onAskPinAi: () => void;
+  /** false = NOW 当前不可见(切到别的页 / 被 chat 盖住)→ 球体停帧省电。 */
+  active?: boolean;
 }) {
+  const { t } = useTranslation("card");
   const { cards } = useCardsQuery();
   const { width } = useWindowDimensions();
   const [hidden, setHidden] = useState<Set<string>>(new Set());
@@ -260,14 +262,15 @@ export default function NowScreen({
             />
           </View>
         }
-        subtitle={`Your proactive feed · ${visible.length} cards today`}
+        subtitle={t("now.feedSummary", { count: visible.length })}
         {...headerProps}
       />
-      <AmbientStatusCard onOpenAmbient={onOpenAmbient} />
+      <AmbientStatusCard userId={userId} onOpenAmbient={onOpenAmbient} />
       <View className="flex-1">
         <SphereView
           items={sphereItems}
           width={width}
+          active={active}
           onTap={(id) => {
             const entry = visible.find((e) => e.card.id === id);
             if (entry) setDetail(entry);
@@ -291,17 +294,19 @@ export default function NowScreen({
 function SphereView({
   items,
   width,
+  active,
   onTap,
 }: {
   items: SphereItem[];
   width: number;
+  active: boolean;
   onTap: (id: string) => void;
 }) {
   const [height, setHeight] = useState(0);
   return (
     <View className="flex-1" onLayout={(e) => setHeight(e.nativeEvent.layout.height)}>
       {height > 0 && items.length > 0 ? (
-        <SphereCards items={items} width={width} height={height} onTap={onTap} />
+        <SphereCards items={items} width={width} height={height} active={active} onTap={onTap} />
       ) : items.length === 0 ? (
         <View className="flex-1 items-center justify-center px-10">
           <Text className="text-center text-[14px] text-muted-foreground" style={{ fontFamily: "Inter_400Regular" }}>

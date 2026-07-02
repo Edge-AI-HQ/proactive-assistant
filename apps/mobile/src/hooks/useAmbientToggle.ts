@@ -9,11 +9,18 @@
  *    新装 / 换机清零 → 那台显示 off（隐私不变量：本机没显式开过就不采集）。
  *  ambientOn = server 有源开 && 本机 flag 开。
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { useUserSettings } from "@pin-ai/state";
 
 import { AMBIENT_SOURCE_KEYS } from "../ambient/keys";
-import { isAmbientEnabled, startAmbient, stopAmbient } from "../ambient/runtime";
+import {
+  getAmbientEnabledSnapshot,
+  isAmbientEnabled,
+  setAmbientEnabledFlag,
+  startAmbient,
+  stopAmbient,
+  subscribeAmbientEnabled,
+} from "../ambient/runtime";
 
 export interface UseAmbientToggleResult {
   /** 主开关是否打开（server consent 有源开 && 本机 opt-in）。 */
@@ -26,19 +33,15 @@ export interface UseAmbientToggleResult {
 
 export function useAmbientToggle(userId: string | null): UseAmbientToggleResult {
   const { settings, patch } = useUserSettings();
-  // AsyncStorage flag 是异步的（web 用同步 localStorage）；load 一次。
-  // null = 还没读到，先按 off 渲染，读到再翻（冷启一帧 off 闪，可接受）。
-  const [deviceEnabled, setDeviceEnabled] = useState<boolean | null>(null);
+  // 本机 opt-in 闸走 runtime 的共享 store（useSyncExternalStore）——NOW 与 Ambient 两处
+  // 开关读同一个值、任一处翻转都同步（web 靠同步 localStorage + fan-out，RN 靠这个镜像）。
+  // null = 还没读到 AsyncStorage，先按 off 渲染（冷启一帧 off 闪，可接受）。
+  const deviceEnabled = useSyncExternalStore(subscribeAmbientEnabled, getAmbientEnabledSnapshot);
   const [togglePending, setTogglePending] = useState(false);
 
+  // 首次挂载把 AsyncStorage 闸读进共享 store（幂等；多实例同时读也无妨）。
   useEffect(() => {
-    let cancelled = false;
-    void isAmbientEnabled().then((v) => {
-      if (!cancelled) setDeviceEnabled(v);
-    });
-    return () => {
-      cancelled = true;
-    };
+    void isAmbientEnabled();
   }, []);
 
   const consentOn = settings
@@ -58,23 +61,26 @@ export function useAmbientToggle(userId: string | null): UseAmbientToggleResult 
         AMBIENT_SOURCE_KEYS.map((key) => [key, { enabled: next }]),
       );
       if (!next) {
-        // 关：先停采集（runtime 清 AsyncStorage flag），再落 consent。
+        // 关：先乐观清本机闸（UI 立刻 off），再停采集 + 落 consent。
+        await setAmbientEnabledFlag(false);
         await stopAmbient();
-        setDeviceEnabled(false);
         await patch({ ambientSources: consentPatch });
         return;
       }
       if (!userId) return; // 没登录拿不到 owner，起不了采集。
-      // 开：先落 consent；patch 失败就不启（避免「server off 但本机在采」）。
+      // 开：先乐观置本机闸（UI 立刻 on，不等原生启源——对齐 dev 的 setPersistedAmbientEnabled）。
+      // ambientOn = consent && 闸；随后 patch 落 consent（~一次 settings 往返），源在后台启。
+      await setAmbientEnabledFlag(true);
       const updated = await patch({ ambientSources: consentPatch });
-      if (!updated) return;
-      const started = await startAmbient(userId); // 设 flag + 启 sources
+      if (!updated) {
+        // consent 没落 → 回滚本机闸，别留「本机开着但 server off」。
+        await setAmbientEnabledFlag(false);
+        return;
+      }
+      const started = await startAmbient(userId); // 启 sources（闸已置）
       if (started.length === 0) {
-        // 一个源都没起来（权限全拒）→ 回滚本机闸，别留「开着但没采」。
+        // 一个源都没起来（权限全拒）→ stopAmbient 清闸，别留「开着但没采」。
         await stopAmbient();
-        setDeviceEnabled(false);
-      } else {
-        setDeviceEnabled(true);
       }
     } finally {
       setTogglePending(false);

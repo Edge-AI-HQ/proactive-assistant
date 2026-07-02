@@ -3,48 +3,55 @@
  * 球 + 问候标题 + 副标题 + 3 个建议玻璃 chip（点击直接发进单例主线程，对齐
  * web handleSuggestionTap → onSubmit 立即提交）。
  *
- * 只用于 main chat 空线程：card chat 永远带 bootstrap，不会落到空状态。文案、
- * 字号、间距对齐 web（heading=display 30、subheading=bodySm 13/leading-snug、
- * chip=bodySm 13、suggestions 三条与 en/chat.json 一致）。玻璃 = expo-blur +
- * 白覆盖（同 CardContextHeaderSlot：圆角要同时给 BlurView 和覆盖层，否则毛玻璃
- * 填成方角）。chip 入场 = web 的交错 fade-up（FadeInDown 对应 initial y:8）。
+ * 只用于 main chat 空线程：card chat 永远带 bootstrap，不会落到空状态。文案走
+ * i18n（heading/subheading/chip 三条 = chat.json landing.*，与 web 同键）；字号、
+ * 间距对齐 web（heading=display 30、subheading=bodySm 13/leading-snug、
+ * chip=bodySm 13）。玻璃 = expo-blur + 白覆盖（同 CardContextHeaderSlot：圆角要
+ * 同时给 BlurView 和覆盖层，否则毛玻璃填成方角）。chip 入场 = web 的交错 fade-up
+ * （FadeInDown 对应 initial y:8）。
  */
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { BlurView } from "expo-blur";
 import Animated, { FadeInDown } from "react-native-reanimated";
+import { useTranslation } from "react-i18next";
 
 import AiSphere from "../../ui/AiSphere";
 
 const FG = "29,33,48";
 
-/** en/chat.json landing.suggestions —— 与 web 一字一致（发给 LLM 的 prompt 固定英文）。 */
+/** 对齐 web MinimalistLanding：chip 显示文案走 i18n（labelKey），发给 LLM 的
+ *  prompt 固定英文（model-facing 文本不进 i18n）。 */
 const SUGGESTIONS = [
-  "What should I focus on today?",
-  "Summarize my week so far",
-  "What's on my mind lately?",
-];
+  { labelKey: "landing.suggestions.focusToday", prompt: "What should I focus on today?" },
+  { labelKey: "landing.suggestions.summarizeWeek", prompt: "Summarize my week so far" },
+  { labelKey: "landing.suggestions.onMyMind", prompt: "What's on my mind lately?" },
+] as const;
 
 export default function MainChatLanding({
   onSubmit,
   disabled = false,
+  active = true,
 }: {
   onSubmit: (text: string) => void;
   disabled?: boolean;
+  /** false = main chat 关闭(常驻挂载、滑出屏外)→ 水晶球视频暂停解码省电。 */
+  active?: boolean;
 }) {
+  const { t } = useTranslation("chat");
   return (
     <View style={styles.root}>
       <View style={styles.hero}>
-        <AiSphere size={216} mode="idle" />
+        <AiSphere size={216} mode="idle" active={active} />
       </View>
-      <Text style={styles.heading}>What&apos;s on your mind?</Text>
-      <Text style={styles.subheading}>Ask anything — I have your context.</Text>
+      <Text style={styles.heading}>{t("landing.heading")}</Text>
+      <Text style={styles.subheading}>{t("landing.subheading")}</Text>
 
       <View style={styles.chips}>
-        {SUGGESTIONS.map((label, i) => (
-          <Animated.View key={label} entering={FadeInDown.delay(120 + i * 50).duration(320)}>
+        {SUGGESTIONS.map((s, i) => (
+          <Animated.View key={s.labelKey} entering={FadeInDown.delay(120 + i * 50).duration(320)}>
             <Pressable
               onPress={() => {
-                if (!disabled) onSubmit(label);
+                if (!disabled) onSubmit(s.prompt);
               }}
               disabled={disabled}
               accessibilityRole="button"
@@ -54,7 +61,7 @@ export default function MainChatLanding({
                 <BlurView intensity={20} tint="light" style={[StyleSheet.absoluteFill, styles.chipRound]} />
                 <View style={[StyleSheet.absoluteFill, styles.chipTint, styles.chipRound]} />
                 <Text style={styles.chipText} numberOfLines={2}>
-                  {label}
+                  {t(s.labelKey)}
                 </Text>
                 <Text style={styles.chipArrow}>→</Text>
               </View>

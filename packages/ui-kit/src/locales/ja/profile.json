@@ -1,0 +1,341 @@
+{
+  "goalsView": {
+    "title": "プロフィール",
+    "subtitle": "AIが捉えたあなたの姿 — あなたのデータから導き出されたものです。",
+    "loadingSnapshot": "プロフィールのスナップショットを読み込み中…",
+    "refreshError": "プロフィールのスナップショットを更新できませんでした。",
+    "loadFailed": "プロフィールの読み込みに失敗しました",
+    "loadMoreMemoriesFailed": "メモリーの追加読み込みに失敗しました",
+    "loadMoreSignalsFailed": "シグナルの追加読み込みに失敗しました",
+    "tabs": {
+      "identity": "アイデンティティ",
+      "goals": "目標"
+    },
+    "identityLabel": "アイデンティティ",
+    "unnamedUser": "名前未設定のユーザー",
+    "noSummary": "まだ要約は保存されていません。アシスタントは下のメモリー・シグナル・目標を引き続き活用します。",
+    "subTabs": {
+      "profile": "プロフィール",
+      "memory": "メモリー",
+      "empty": "空"
+    },
+    "status": {
+      "normal": "正常",
+      "alert": "警告",
+      "watch": "注意"
+    },
+    "profileGroups": {
+      "facts": {
+        "title": "事実",
+        "description": "アシスタントが把握しているあなたの基本的な情報です。",
+        "emptyTitle": "まだ事実はありません"
+      },
+      "preferences": {
+        "title": "好み",
+        "description": "アシスタントの振る舞いに関するあなたの好みです。",
+        "emptyTitle": "まだ好みはありません"
+      },
+      "constraints": {
+        "title": "制約",
+        "description": "アシスタントが守るべきルールと境界です。",
+        "emptyTitle": "まだ制約はありません"
+      }
+    },
+    "groupEmptyDescription": "このグループは現在空です。",
+    "mirror": {
+      "title": "プロフィール",
+      "description": "事実、好み、制約、メタデータ — あなたのデータから導き出されたものです。"
+    },
+    "memory": {
+      "title": "メモリー",
+      "description": "AIが気づいて保存した内容です。新しい順に表示されます。",
+      "emptyTitle": "まだメモリーはありません",
+      "emptyDescription": "まだ長期メモリーとして保存されたものはありません。",
+      "countZero": "メモリー0件",
+      "countOfTotal": "{{total}}件中{{shown}}件",
+      "loadMore": "さらに読み込む",
+      "endOfList": "これ以上ありません",
+      "inferredFrom": "{{source}}から推定",
+      "today": "今日",
+      "yesterday": "昨日",
+      "unknownDate": "不明"
+    },
+    "signals": {
+      "title": "シグナル",
+      "description": "最近の観察記録です。十分なコンテキストが揃うとメモリーになることがあります。",
+      "total": "合計",
+      "emptyTitle": "まだシグナルはありません",
+      "emptyDescription": "接続したソースからデータが届くと、最近の観察記録がここに表示されます。",
+      "loadMore": "シグナルをさらに読み込む",
+      "payload": "ペイロード"
+    },
+    "pills": {
+      "salience": "重要度 {{value}}",
+      "confidence": "確信度 {{value}}"
+    },
+    "raw": {
+      "title": "生データ",
+      "description": "接続したアプリやデバイスから届いた、メモリーやプロフィールになる前のソースデータです。",
+      "dataSourceLabel": "データソース",
+      "noSourceOption": "接続中のデータソースなし",
+      "deviceKind": "デバイス",
+      "connectorKind": "コネクタ",
+      "rowCount_other": "{{count}}行",
+      "noSourceTitle": "接続中のデータソースがありません",
+      "noSourceDescription": "アプリを接続するかデバイスを同期すると、ここにソースデータが表示されます。",
+      "noGmailTitle": "Gmailのデータがありません",
+      "noGmailDescription": "現在表示できるGmailのメッセージはありません。",
+      "noCalendarTitle": "カレンダーのデータがありません",
+      "noCalendarDescription": "現在表示できるカレンダーの予定はありません。",
+      "noDeviceTitle": "デバイスのデータがありません",
+      "noDeviceRegisteredDescription": "このデバイスは登録済みですが、まだ生データの行は取り込まれていません。",
+      "noDeviceRowsDescription": "このソースには現在・過去ともに表示できるデバイスの行がありません。",
+      "noDeviceSourceDescription": "このデバイスソースは現在利用できません。",
+      "loadingSource": "{{label}}を読み込み中…",
+      "notLoadedTitle": "まだ読み込まれていません",
+      "notLoadedDescription": "このソースに切り替えると行データを取得します。",
+      "noSourceDataTitle": "{{label}}のデータがありません",
+      "noSourceDataDescription": "このコネクタは接続済みですが、まだ行データは取り込まれていません。通常は10分ほどで同期が追いつきます。",
+      "rawFields": "生データのフィールド",
+      "deviceFallbackLabel": "デバイス {{id}}",
+      "devicePlatformFallback": "デバイス"
+    },
+    "deviceSources": {
+      "apps": "アプリ",
+      "contacts": "連絡先",
+      "health": "ヘルスケア"
+    },
+    "rawSources": {
+      "gmail": "Gmail",
+      "gcal": "カレンダー",
+      "slackMessages": "Slackメッセージ",
+      "notionPages": "Notionページ",
+      "gdriveFiles": "Driveファイル",
+      "githubIssues": "GitHub Issue",
+      "outlook": "Outlook",
+      "gdocs": "Google Docs",
+      "gsheets": "Google Sheets",
+      "stripeInvoices": "Stripe請求書",
+      "spotifyHistory": "Spotify履歴",
+      "stravaActivities": "Stravaアクティビティ",
+      "todoistTasks": "Todoistタスク",
+      "youtubeSubs": "YouTube登録チャンネル",
+      "trelloBoards": "Trelloボード",
+      "jiraProjects": "Jiraプロジェクト",
+      "calendlyEvents": "Calendlyイベント",
+      "linkedinProfile": "LinkedInプロフィール",
+      "linkedinOrgs": "LinkedIn組織",
+      "figmaUser": "Figmaユーザー",
+      "zoomUser": "Zoomユーザー",
+      "zoomApps": "Zoomアプリ",
+      "dropboxAccount": "Dropboxアカウント",
+      "dropboxFiles": "Dropboxファイル",
+      "asanaWorkspaces": "Asanaワークスペース",
+      "asanaTasks": "Asanaタスク",
+      "hubspotContacts": "HubSpotコンタクト",
+      "clickupUser": "ClickUpユーザー",
+      "clickupWorkspaces": "ClickUpワークスペース"
+    },
+    "goals": {
+      "title": "目標",
+      "description": "目標を共有して、AIにあなたを知ってもらいましょう。バスケットをタップすると展開します。",
+      "emptyTitle": "アクティブな目標はありません",
+      "emptyDescription": "目標はミラー層で独立したコレクションとして保持されます。",
+      "drawerFallbackTitle": "目標",
+      "drawerDescription": "目標の詳細表示",
+      "weeklyActions": "AIの今週のアクション",
+      "monitoring": "モニタリング",
+      "aiWantsToKnow": "AIが知りたいこと",
+      "lockGoals": "目標をロック — AIは見守るだけで変更しません"
+    }
+  },
+  "goalDetail": {
+    "ariaLabel": "{{label}}の目標詳細",
+    "close": "目標を閉じる"
+  },
+  "goalMeta": {
+    "work": {
+      "weeklyActions": [
+        "今スプリントのプロジェクトマイルストーンを確認する",
+        "保留中の意思決定をフォローアップする",
+        "チームのブロッカーを確認して解消する"
+      ],
+      "monitoring": [
+        "キャリアの成長軌道",
+        "スキルギャップ分析",
+        "業界トレンド"
+      ],
+      "aiQuestions": [
+        "いま重点的に伸ばしているスキルは何ですか？",
+        "今四半期で変わりそうなキャリア目標はありますか？"
+      ]
+    },
+    "health": {
+      "weeklyActions": [
+        "今サイクルの新しい健康シグナルはありません"
+      ],
+      "monitoring": [
+        "運動の継続性",
+        "睡眠の質の推移",
+        "年次健康診断のスケジュール"
+      ],
+      "aiQuestions": [
+        "現在どんな健康トラッキングをしていますか？",
+        "特に気にかけている健康トピックはありますか？"
+      ]
+    },
+    "finance": {
+      "weeklyActions": [
+        "今月の支出サマリーを確認する",
+        "今後の請求とサブスクリプションを確認する"
+      ],
+      "monitoring": [
+        "予算と実支出の比較",
+        "貯蓄率",
+        "投資パフォーマンス"
+      ],
+      "aiQuestions": [
+        "今四半期の予算で気になることはありますか？",
+        "貯蓄の分析を用意しましょうか？"
+      ]
+    },
+    "growth": {
+      "weeklyActions": [
+        "現在の学習パスを続ける",
+        "ブックマークした記事を読み返す"
+      ],
+      "monitoring": [
+        "学習時間の配分",
+        "新しい関心トピック",
+        "スキル習得の進捗"
+      ],
+      "aiQuestions": [
+        "いま一番気になっているトピックは何ですか？",
+        "新しい学習リソースを探しましょうか？"
+      ]
+    },
+    "family": {
+      "weeklyActions": [
+        "週末の家族の予定を立てる",
+        "親しい友人に近況を聞く"
+      ],
+      "monitoring": [
+        "家族イベントのカレンダー",
+        "人間関係の近況確認の頻度"
+      ],
+      "aiQuestions": [
+        "近々家族のイベントはありますか？",
+        "ワークライフバランスはどんな感じですか？"
+      ]
+    },
+    "life": {
+      "weeklyActions": [
+        "カレンダーに自分の時間を確保する",
+        "ストレスレベルを振り返る"
+      ],
+      "monitoring": [
+        "自分の時間の配分",
+        "バーンアウトリスクの指標",
+        "趣味への取り組み"
+      ],
+      "aiQuestions": [
+        "優先したい個人プロジェクトはありますか？",
+        "いま一番リフレッシュできることは何ですか？"
+      ]
+    }
+  },
+  "baskets": {
+    "work": "仕事",
+    "health": "健康",
+    "family": "家族",
+    "finance": "お金",
+    "growth": "成長",
+    "life": "生活",
+    "general": "全般"
+  },
+  "starterGoals": {
+    "career-growth": "キャリアと専門スキルを伸ばす",
+    "stay-healthy": "運動と健康的な習慣を続ける",
+    "financial-plan": "貯蓄を増やし、賢いお金の判断をする",
+    "learn-and-grow": "新しいスキルや考え方を学ぶ時間をつくる",
+    "relationships": "家族や親しい友人とつながりを保つ",
+    "life-balance": "自分の時間を守り、燃え尽きを防ぐ"
+  },
+  "memoriesPanel": {
+    "title": "メモリー",
+    "refresh": "更新",
+    "new": "新規",
+    "tabs": {
+      "active": "アクティブ",
+      "archived": "アーカイブ済み",
+      "superseded": "置き換え済み"
+    },
+    "subjectAny": "対象: すべて",
+    "minQuality": "最低品質",
+    "zeroRows": "0行",
+    "rowRange": "{{total}}件中 {{first}}-{{last}}",
+    "emptyList": {
+      "active": "アクティブなメモリーはありません。",
+      "archived": "アーカイブ済みのメモリーはありません。",
+      "superseded": "置き換え済みのメモリーはありません。"
+    },
+    "pageOf": "ページ {{page}} / {{total}}",
+    "previousPage": "前のページ",
+    "nextPage": "次のページ",
+    "status": {
+      "active": "アクティブ",
+      "archived": "アーカイブ済み",
+      "superseded": "置き換え済み"
+    },
+    "fields": {
+      "text": "テキスト",
+      "subject": "対象",
+      "quality": "品質",
+      "tags": "タグ（カンマ区切り）"
+    },
+    "subjectPlaceholder": "self / person:alice / topic:coffee",
+    "save": "保存",
+    "supersede": "置き換え",
+    "archive": "アーカイブ",
+    "replacementText": "置き換え後のテキスト",
+    "replacementPlaceholder": "このメモリーの新しい修正版",
+    "confirmSupersede": "置き換えを確定",
+    "createTextPlaceholder": "ユーザーに関する事実や蓄積された洞察",
+    "create": "作成"
+  },
+  "skillsPanel": {
+    "title": "スキル",
+    "refresh": "更新",
+    "new": "新規",
+    "tabs": {
+      "enabled": "有効",
+      "disabled": "無効",
+      "archived": "アーカイブ済み"
+    },
+    "searchPlaceholder": "タイトル・説明・トリガーを検索",
+    "emptyList": {
+      "enabled": "有効なスキルはありません。",
+      "disabled": "無効なスキルはありません。",
+      "archived": "アーカイブ済みのスキルはありません。"
+    },
+    "status": {
+      "enabled": "有効",
+      "disabled": "無効",
+      "archived": "アーカイブ済み"
+    },
+    "fields": {
+      "title": "タイトル",
+      "description": "説明",
+      "triggers": "トリガー（1行に1つ）",
+      "body": "本文（SKILL.md）"
+    },
+    "optionalPlaceholder": "任意",
+    "loadingBody": "本文を読み込み中…",
+    "bodyPlaceholder": "## When to use...",
+    "save": "保存",
+    "disable": "無効化",
+    "enable": "有効化",
+    "archive": "アーカイブ",
+    "create": "作成"
+  }
+}

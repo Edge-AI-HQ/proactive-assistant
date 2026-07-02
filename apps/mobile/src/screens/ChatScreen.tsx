@@ -19,6 +19,7 @@ import {
 } from "react-native";
 import type { NativeScrollEvent, NativeSyntheticEvent } from "react-native";
 import { Check, X } from "lucide-react-native";
+import { useTranslation } from "react-i18next";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import {
   cardActionFeedbackBody,
@@ -80,6 +81,7 @@ const Entry = memo(function Entry({
   hitlAction?: HitlRequiresAction | null;
   onDecide?: (decision: "approve" | "reject", message?: string) => void;
 }) {
+  const { t } = useTranslation("common");
   // 行入场 = web 消息卡 initial{opacity:0,y:6} 0.26s 的对应物。
   if (entry.kind === "user") {
     return (
@@ -119,7 +121,7 @@ const Entry = memo(function Entry({
         )}
         {entry.running && entry.parts.length === 0 && !showHitl ? (
           <View style={styles.thinkingPill}>
-            <ShimmerText text="Thinking…" style={styles.thinkingText} />
+            <ShimmerText text={t("status.thinking")} style={styles.thinkingText} />
           </View>
         ) : null}
         {showHitl ? (
@@ -171,6 +173,7 @@ function HitlApprovalCard({
   disabled: boolean;
   onDecide: (decision: "approve" | "reject", message?: string) => void;
 }) {
+  const { t } = useTranslation("chat");
   const allowed = action.allowedDecisions;
   const canReject = allowed.length === 0 || allowed.includes("reject");
   const canApprove = allowed.length === 0 || allowed.includes("approve");
@@ -189,7 +192,7 @@ function HitlApprovalCard({
           <Text style={styles.hitlIcon}>⚠️</Text>
         </View>
         <View style={styles.hitlHeaderCopy}>
-          <Text style={styles.hitlKicker}>NEEDS YOUR APPROVAL</Text>
+          <Text style={styles.hitlKicker}>{t("hitl.needsApproval").toUpperCase()}</Text>
           <Text style={styles.hitlTitle} numberOfLines={1}>
             {title}
           </Text>
@@ -208,7 +211,7 @@ function HitlApprovalCard({
             <TextInput
               value={reason}
               onChangeText={setReason}
-              placeholder="Optional: tell the agent why (it continues without running the tool)"
+              placeholder={t("hitl.rejectReasonPlaceholder")}
               placeholderTextColor="rgba(29,33,48,0.35)"
               editable={!disabled && !submitting}
               multiline
@@ -225,14 +228,14 @@ function HitlApprovalCard({
                 setReason("");
               }}
             >
-              <Text style={styles.hitlRejectText}>Back</Text>
+              <Text style={styles.hitlRejectText}>{t("hitl.back")}</Text>
             </Pressable>
             <Pressable
               style={[styles.hitlButton, styles.hitlDangerButton, (disabled || submitting) && styles.hitlDisabled]}
               disabled={disabled || submitting}
               onPress={() => decide("reject", reason.trim() || undefined)}
             >
-              <Text style={styles.hitlApproveText}>Reject</Text>
+              <Text style={styles.hitlApproveText}>{t("hitl.reject")}</Text>
             </Pressable>
           </View>
         </View>
@@ -245,7 +248,7 @@ function HitlApprovalCard({
               onPress={() => setRejecting(true)}
             >
               <X size={14} color="#1d2130" strokeWidth={2} />
-              <Text style={styles.hitlRejectText}>Reject</Text>
+              <Text style={styles.hitlRejectText}>{t("hitl.reject")}</Text>
             </Pressable>
           ) : null}
           {canApprove ? (
@@ -255,7 +258,7 @@ function HitlApprovalCard({
               onPress={() => decide("approve")}
             >
               <Check size={14} color="#fff" strokeWidth={2} />
-              <Text style={styles.hitlApproveText}>Approve</Text>
+              <Text style={styles.hitlApproveText}>{t("hitl.approve")}</Text>
             </Pressable>
           ) : null}
         </View>
@@ -328,6 +331,7 @@ function Conversation({
   bottomInset?: number;
   open?: boolean;
 }) {
+  const { t } = useTranslation(["chat", "common"]);
   const {
     transcript,
     ready,
@@ -470,8 +474,9 @@ function Conversation({
             </View>
           ) : card ? (
             // card chat 空状态短暂可见（永远 bootstrap）：仅留水晶球。
+            // active={open}：card chat 关闭(常驻挂载、滑出屏外)时暂停视频解码省电。
             <View style={styles.emptyWrap}>
-              <AiSphere size={200} mode="idle" />
+              <AiSphere size={200} mode="idle" active={open} />
             </View>
           ) : (
             // main chat landing：web MinimalistLanding 同构（球 + 问候 + 建议 chip）。
@@ -481,7 +486,7 @@ function Conversation({
               contentContainerStyle={styles.landingScroll}
               keyboardShouldPersistTaps="handled"
             >
-              <MainChatLanding onSubmit={send} />
+              <MainChatLanding onSubmit={send} active={open} />
             </ScrollView>
           )
         ) : (
@@ -541,7 +546,7 @@ function Conversation({
         onSend={send}
         streaming={busy}
         onStop={() => void stop()}
-        placeholder={card ? "Message about this card..." : "Message PIN AI..."}
+        placeholder={card ? t("cardContext.messagePlaceholder") : t("composer.placeholder")}
         bottomInset={bottomInset}
       />
     </KeyboardAvoidingView>

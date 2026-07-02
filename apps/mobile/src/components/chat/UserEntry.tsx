@@ -14,6 +14,7 @@ import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { AlertCircle, Check, Copy, Pencil, RotateCcw, Send, Trash2, X } from "lucide-react-native";
+import { useTranslation } from "react-i18next";
 import type { ConversationEntry } from "@pin-ai/core";
 
 import { VoiceButton } from "../../voice";
@@ -39,6 +40,7 @@ export default function UserEntry({
   onDeleteQueued: (id: string) => void;
   onSendNow: (id: string) => void;
 }) {
+  const { t } = useTranslation(["chat", "common"]);
   const [copied, setCopied] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(entry.text);
@@ -93,23 +95,23 @@ export default function UserEntry({
           accessibilityLabel="Retry sending"
         >
           <AlertCircle size={11} color="#ef4444" strokeWidth={2} />
-          <Text style={styles.failText}>Not sent</Text>
+          <Text style={styles.failText}>{t("userEntry.notSent")}</Text>
           <Text style={styles.failDot}>·</Text>
           <RotateCcw size={10} color="#ef4444" strokeWidth={2} />
-          <Text style={styles.failText}>Retry</Text>
+          <Text style={styles.failText}>{t("common:status.retry")}</Text>
         </Pressable>
       ) : (
         <View style={styles.actions}>
           {isQueued ? (
             <View style={styles.queuedBadge}>
-              <Text style={styles.queuedText}>Queued</Text>
+              <Text style={styles.queuedText}>{t("queued.badge")}</Text>
             </View>
           ) : (
             <Text style={styles.time}>{clockTime(entry.ts)}</Text>
           )}
 
           {!isQueued ? (
-            <Pressable onPress={copy} style={styles.actBtn} hitSlop={6} accessibilityRole="button" accessibilityLabel="Copy">
+            <Pressable onPress={copy} style={styles.actBtn} hitSlop={6} accessibilityRole="button" accessibilityLabel={t("actionBar.copy")}>
               {copied ? (
                 <Check size={13} color="#059669" strokeWidth={2} />
               ) : (
@@ -118,22 +120,22 @@ export default function UserEntry({
             </Pressable>
           ) : editing ? (
             <>
-              <Pressable onPress={saveEdit} style={styles.actBtn} hitSlop={6} accessibilityRole="button" accessibilityLabel="Save">
+              <Pressable onPress={saveEdit} style={styles.actBtn} hitSlop={6} accessibilityRole="button" accessibilityLabel={t("queued.save")}>
                 <Check size={13} color={`rgba(${FG},0.6)`} strokeWidth={2} />
               </Pressable>
-              <Pressable onPress={cancelEdit} style={styles.actBtn} hitSlop={6} accessibilityRole="button" accessibilityLabel="Cancel">
+              <Pressable onPress={cancelEdit} style={styles.actBtn} hitSlop={6} accessibilityRole="button" accessibilityLabel={t("common:status.cancel")}>
                 <X size={13} color={`rgba(${FG},0.6)`} strokeWidth={2} />
               </Pressable>
             </>
           ) : (
             <>
-              <Pressable onPress={() => setEditing(true)} style={styles.actBtn} hitSlop={6} accessibilityRole="button" accessibilityLabel="Edit">
+              <Pressable onPress={() => setEditing(true)} style={styles.actBtn} hitSlop={6} accessibilityRole="button" accessibilityLabel={t("queued.edit")}>
                 <Pencil size={12} color={`rgba(${FG},0.4)`} strokeWidth={1.8} />
               </Pressable>
-              <Pressable onPress={() => onSendNow(entry.id)} style={styles.actBtn} hitSlop={6} accessibilityRole="button" accessibilityLabel="Send now">
+              <Pressable onPress={() => onSendNow(entry.id)} style={styles.actBtn} hitSlop={6} accessibilityRole="button" accessibilityLabel={t("queued.sendNow")}>
                 <Send size={12} color={`rgba(${FG},0.4)`} strokeWidth={1.8} />
               </Pressable>
-              <Pressable onPress={() => onDeleteQueued(entry.id)} style={styles.actBtn} hitSlop={6} accessibilityRole="button" accessibilityLabel="Delete">
+              <Pressable onPress={() => onDeleteQueued(entry.id)} style={styles.actBtn} hitSlop={6} accessibilityRole="button" accessibilityLabel={t("queued.delete")}>
                 <Trash2 size={12} color={`rgba(${FG},0.4)`} strokeWidth={1.8} />
               </Pressable>
             </>

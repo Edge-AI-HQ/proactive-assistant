@@ -1,324 +1,255 @@
 /**
- * CONNECT 页——web DataConnections 的 RN 对应物（UI 刀 4）：
- * 双统计卡（DATA SOURCES n of 7 / DEVICES n paired）→ AMBIENT SOURCES
- * （Devices 卡）→ DATA SOURCES Recommended 折叠组（品牌 logo 走
- * logos.composio.dev，Google Workspace 子行缩进 + 账户标签列表，
- * Connected 绿点 / Connect 黑 pill）→ More data connectors 入口。
+ * CONNECT 页——web `ui-web/connect/ControlPanel.tsx` 的 RN 对应物：
+ * 页头 → 双统计卡（DATA SOURCES n of 7 / DEVICES n paired）→ AMBIENT SOURCES
+ * 品红 mesh 卡（可展开 → DeviceConnections 设备列表，点设备下钻 DeviceTimeline）
+ * → DATA SOURCES（DataConnections：Recommended 折叠组 + catalog + custom MCP +
+ * Website logins）。
+ *
+ * composio state 由 AppShell 持有传入（= web AppLayout 持 useComposio 跨 view
+ * 保活）。mesh 卡的 `backdrop-blur-xl` 是 tailwind utility、**不被
+ * native-power-save 砍**（它只砍 .glass-card/.aurora-layer 类）→ dev 真机有
+ * blur(24) → BlurView 40。统计卡/分组卡是 .glass-card{,-strong} → 无 blur →
+ * GlassCard。
  */
-import { useState } from "react";
-import {
-  ActivityIndicator,
-  Image,
-  Pressable,
-  ScrollView,
-  Text,
-  View,
-} from "react-native";
-import * as WebBrowser from "expo-web-browser";
-import { ChevronDown, ChevronUp, Globe, Smartphone } from "lucide-react-native";
-import { useQuery } from "@tanstack/react-query";
-import {
-  connectComposioToolkit,
-  fetchComposioConnections,
-  getComposioConnectionsForToolkit,
-  isComposioToolkitConnected,
-  type ComposioConnection,
-} from "@pin-ai/core";
-import { useUserDevices } from "@pin-ai/state";
+import { useEffect, useMemo, useState } from "react";
+import { LayoutAnimation, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { BlurView } from "expo-blur";
+import Animated, { FadeInUp } from "react-native-reanimated";
+import { useTranslation } from "react-i18next";
+import { ChevronDown, ChevronUp, Smartphone } from "lucide-react-native";
+import { useUserDevices, type ComposioState } from "@pin-ai/state";
 
-import PageHeader from "../components/app/PageHeader";
 import { GlassCard } from "../ui/GlassCard";
+import PageHeader from "../components/app/PageHeader";
+import DataConnections, {
+  INPUT_CATEGORIES,
+  isDataSourceConnected,
+} from "../components/connect/DataConnections";
+import DeviceConnections from "../components/connect/DeviceConnections";
+import { EM_TIGHT, tracking } from "../ui/typography";
 import type { HeaderProps } from "./AmbientScreen";
 
-interface SourceDef {
-  name: string;
-  toolkit: string;
-  children?: { name: string; toolkit: string; note?: string }[];
-}
+const FG = "29,33,48";
+const fg = (a: number) => `rgba(${FG},${a})`;
+const MUTED_FG = "rgb(115,123,140)"; // --muted-foreground hsl(220 10% 50%)
+/** web mesh 卡品红 hsl(304 75% 63%) ≈ rgb(231,90,222)。 */
+const PINK = "231,90,222";
+const pink = (a: number) => `rgba(${PINK},${a})`;
 
-// web RECOMMENDED_SOURCES 同构（7 顶级 + Google children）。
-const RECOMMENDED: SourceDef[] = [
-  {
-    name: "Google Workspace",
-    toolkit: "google",
-    children: [
-      { name: "Gmail", toolkit: "gmail" },
-      { name: "Calendar", toolkit: "googlecalendar" },
-      { name: "Drive", toolkit: "googledrive" },
-      { name: "Docs", toolkit: "googledocs" },
-      { name: "Sheets", toolkit: "googlesheets" },
-      { name: "Slides", toolkit: "googledrive", note: "via Drive metadata" },
-    ],
-  },
-  { name: "Slack", toolkit: "slack" },
-  { name: "GitHub", toolkit: "github" },
-  { name: "LinkedIn", toolkit: "linkedin" },
-  { name: "Stripe", toolkit: "stripe" },
-  { name: "YouTube", toolkit: "youtube" },
-  { name: "Calendly", toolkit: "calendly" },
-];
+/** web motion.div initial opacity 0 / y 12。 */
+const sectionEntering = FadeInUp.duration(240).withInitialValues({
+  opacity: 0,
+  transform: [{ translateY: 12 }],
+});
 
-const logoUrl = (toolkit: string) => `https://logos.composio.dev/api/${toolkit}`;
-
-function StatusPill({
-  connected,
-  connecting,
-  onConnect,
+export default function ConnectScreen({
+  headerProps,
+  composio,
 }: {
-  connected: boolean;
-  connecting: boolean;
-  onConnect: () => void;
+  headerProps: HeaderProps;
+  composio: ComposioState;
 }) {
-  if (connected) {
-    return (
-      <View className="flex-row items-center gap-1.5">
-        <View className="h-1.5 w-1.5 rounded-full bg-green-500" />
-        <Text className="text-[12px] text-green-600" style={{ fontFamily: "Inter_500Medium" }}>
-          Connected
-        </Text>
-      </View>
-    );
-  }
-  return (
-    <Pressable
-      onPress={onConnect}
-      disabled={connecting}
-      className="rounded-full bg-foreground px-3.5 py-1.5"
-      style={connecting ? { opacity: 0.5 } : undefined}
-    >
-      <Text className="text-[12px] text-white" style={{ fontFamily: "Inter_600SemiBold" }}>
-        {connecting ? "Connecting…" : "Connect"}
-      </Text>
-    </Pressable>
+  const { t } = useTranslation("connect");
+  const [meshExpanded, setMeshExpanded] = useState(false);
+
+  // 与 DeviceConnections 同一 hook（共享 TQ 缓存，注册即同步计数）。
+  const { devices } = useUserDevices(true);
+  const configured = composio.keyStatus?.configured;
+  const { loadConnections } = composio;
+  // web ControlPanel 同款依赖：只跟 configured + 稳定的 loadConnections 回调。
+  // ⚠️ 不能依赖 composio 整对象——useComposio 每 render 返回新字面量，会
+  // effect→setState→re-render 无限循环。
+  useEffect(() => {
+    if (configured !== true) return;
+    void loadConnections();
+  }, [configured, loadConnections]);
+
+  const peerCount = useMemo(() => devices.filter((d) => d.platform !== "web").length, [devices]);
+
+  const dataSourceTotal = useMemo(
+    () =>
+      INPUT_CATEGORIES.reduce(
+        (sum, cat) => sum + cat.sources.filter((s) => Boolean(s.composioId)).length,
+        0,
+      ),
+    [],
   );
-}
-
-function SourceRow({
-  def,
-  depth,
-  connections,
-  connecting,
-  onConnect,
-}: {
-  def: { name: string; toolkit: string; note?: string };
-  depth: number;
-  connections: ComposioConnection[];
-  connecting: string | null;
-  onConnect: (toolkit: string) => void;
-}) {
-  // fanout-aware（与 web 同一套 @pin-ai/core 匹配）：一个 googlesuper 聚合
-  // 账户能覆盖 gmail/gcal 等子 toolkit，精确匹配会漏。
-  const matched = getComposioConnectionsForToolkit(connections, def.toolkit);
-  const connected = matched.length > 0;
-  return (
-    <View>
-      <View
-        className="flex-row items-center gap-2.5 py-2.5"
-        style={{ paddingLeft: depth * 18 }}
-      >
-        <Image
-          source={{ uri: logoUrl(def.toolkit) }}
-          style={{ width: 20, height: 20, borderRadius: 4 }}
-        />
-        <Text className="flex-1 text-[14px] text-foreground" style={{ fontFamily: "Inter_500Medium" }} numberOfLines={1}>
-          {def.name}
-          {def.note ? <Text className="text-[11px] text-muted-foreground">  {def.note}</Text> : null}
-        </Text>
-        <StatusPill
-          connected={connected}
-          connecting={connecting === def.toolkit}
-          onConnect={() => onConnect(def.toolkit)}
-        />
-      </View>
-      {matched.map((c) =>
-        c.label ? (
-          <Text
-            key={c.connectedAccountId ?? c.label}
-            className="text-[12px] text-muted-foreground py-0.5"
-            style={{ paddingLeft: depth * 18 + 30 }}
-          >
-            {c.label}
-          </Text>
-        ) : null,
-      )}
-    </View>
-  );
-}
-
-export default function ConnectScreen({ headerProps }: { headerProps: HeaderProps }) {
-  const connectionsQuery = useQuery({
-    queryKey: ["composio", "connections"],
-    queryFn: ({ signal }) => fetchComposioConnections(signal),
-    refetchInterval: 30_000,
-  });
-  const { devices } = useUserDevices();
-  const [connecting, setConnecting] = useState<string | null>(null);
-  const [recommendedOpen, setRecommendedOpen] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const connections = connectionsQuery.data ?? [];
-  const connectedTop = RECOMMENDED.filter((s) =>
-    s.children
-      ? s.children.some((c) => isComposioToolkitConnected(connections, c.toolkit))
-      : isComposioToolkitConnected(connections, s.toolkit),
-  ).length;
-  const activeDevices = devices.filter((d) => d.status === "active");
-
-  const connect = async (toolkit: string) => {
-    setConnecting(toolkit);
-    setError(null);
-    try {
-      const r = await connectComposioToolkit(toolkit);
-      if (!r.ok) {
-        setError(r.error ?? "Connect failed");
-        return;
+  const dataSourceConnected = useMemo(() => {
+    let n = 0;
+    for (const cat of INPUT_CATEGORIES) {
+      for (const src of cat.sources) {
+        if (isDataSourceConnected(src, composio.connections)) n++;
       }
-      if (r.redirectUrl) await WebBrowser.openBrowserAsync(r.redirectUrl);
-      await connectionsQuery.refetch();
-    } finally {
-      setConnecting(null);
     }
+    return n;
+  }, [composio.connections]);
+
+  const toggleMesh = () => {
+    LayoutAnimation.configureNext(LayoutAnimation.create(250, "easeInEaseOut", "opacity"));
+    setMeshExpanded((v) => !v);
   };
 
   return (
-    <View className="flex-1">
-      <PageHeader title="Connect" subtitle="Data sources & devices powering your AI" {...headerProps} />
-      <ScrollView className="flex-1 px-5" contentContainerClassName="pb-12">
-        <View className="flex-row gap-3">
-          <GlassCard className="flex-1 px-4 py-3.5">
-            <Text className="text-[10px] tracking-[1.2px] text-muted-foreground" style={{ fontFamily: "Inter_600SemiBold" }}>
-              DATA SOURCES
-            </Text>
-            <View className="mt-1 flex-row items-baseline gap-1">
-              <Text className="text-[24px] text-foreground" style={{ fontFamily: "Inter_700Bold" }}>
-                {connectedTop}
-              </Text>
-              <Text className="text-[14px] text-muted-foreground">of {RECOMMENDED.length}</Text>
+    <View style={styles.flex1}>
+      <PageHeader
+        title={
+          // web h1：text-2xl(24) / font-semibold / tracking-tight / mb-0.5。
+          <Text
+            style={{
+              fontSize: 24,
+              fontFamily: "Inter_600SemiBold",
+              letterSpacing: tracking(24, EM_TIGHT),
+              lineHeight: 32,
+              color: "#1d2130",
+              marginBottom: 2,
+            }}
+          >
+            {t("controlPanel.title")}
+          </Text>
+        }
+        subtitle={
+          // web 副标题：text-xs(12) text-muted-foreground。
+          <Text
+            style={{ fontSize: 12, lineHeight: 16, fontFamily: "Inter_400Regular", color: MUTED_FG }}
+          >
+            {t("controlPanel.subtitle")}
+          </Text>
+        }
+        {...headerProps}
+      />
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* 顶部双统计卡 */}
+        <View style={styles.statsRow}>
+          <GlassCard style={[styles.flex1, styles.statCard]}>
+            <Text style={styles.statLabel}>{t("controlPanel.dataSources").toUpperCase()}</Text>
+            <View style={styles.statValueRow}>
+              <Text style={styles.statValue}>{dataSourceConnected}</Text>
+              <Text style={styles.statTotal}>{t("controlPanel.ofTotal", { total: dataSourceTotal })}</Text>
             </View>
-            <View className="mt-1 flex-row items-center gap-1.5">
-              <View className="h-1.5 w-1.5 rounded-full bg-green-500" />
-              <Text className="text-[11px] text-muted-foreground">All synced</Text>
+            <View style={styles.statStatusRow}>
+              <View style={styles.dotEmerald} />
+              <Text style={styles.statStatusText}>{t("controlPanel.allSynced")}</Text>
             </View>
           </GlassCard>
-          <GlassCard className="flex-1 px-4 py-3.5">
-            <Text className="text-[10px] tracking-[1.2px] text-muted-foreground" style={{ fontFamily: "Inter_600SemiBold" }}>
-              DEVICES
-            </Text>
-            <View className="mt-1 flex-row items-baseline gap-1">
-              <Text className="text-[24px] text-foreground" style={{ fontFamily: "Inter_700Bold" }}>
-                {activeDevices.length}
-              </Text>
-              <Text className="text-[14px] text-muted-foreground">paired</Text>
+          <GlassCard style={[styles.flex1, styles.statCard]}>
+            <Text style={styles.statLabel}>{t("controlPanel.devices").toUpperCase()}</Text>
+            <View style={styles.statValueRow}>
+              <Text style={styles.statValue}>{peerCount}</Text>
+              <Text style={styles.statTotal}>{t("controlPanel.paired")}</Text>
             </View>
-            <View className="mt-1 flex-row items-center gap-1.5">
-              <View className="h-1.5 w-1.5 rounded-full bg-green-500" />
-              <Text className="text-[11px] text-muted-foreground">All synced</Text>
+            <View style={styles.statStatusRow}>
+              <View style={styles.dotEmerald} />
+              <Text style={styles.statStatusText}>{t("controlPanel.allSynced")}</Text>
             </View>
           </GlassCard>
         </View>
 
-        <Text className="mt-5 mb-2 text-[11px] tracking-[1.5px] text-pink-500" style={{ fontFamily: "Inter_600SemiBold" }}>
-          · AMBIENT SOURCES
-        </Text>
-        <GlassCard strong className="flex-row items-center gap-3 px-4 py-3.5">
-          <View className="h-9 w-9 items-center justify-center rounded-xl bg-pink-100">
-            <Smartphone size={16} color="#ec4899" strokeWidth={1.8} />
+        {/* AMBIENT SOURCES —— 品红 mesh 卡（真 DeviceConnections 在里面） */}
+        <View>
+          <View style={styles.sectionLabelRow}>
+            <View style={[styles.sectionDot, { backgroundColor: pink(1) }]} />
+            <Text style={[styles.sectionLabel, { color: pink(1) }]}>{t("controlPanel.ambientSources").toUpperCase()}</Text>
           </View>
-          <View className="flex-1">
-            <View className="flex-row items-center gap-2">
-              <Text className="text-[15px] text-foreground" style={{ fontFamily: "Inter_600SemiBold" }}>
-                Devices
-              </Text>
-              <View className="rounded-full bg-pink-100 px-2 py-0.5">
-                <Text className="text-[10px] text-pink-600" style={{ fontFamily: "Inter_600SemiBold" }}>
-                  {activeDevices.length} active
-                </Text>
-              </View>
-            </View>
-            <Text className="mt-0.5 text-[12px] leading-4 text-muted-foreground">
-              Phones, laptops, wearables, glasses, cameras — encrypted peer-to-peer
-            </Text>
-          </View>
-        </GlassCard>
-        {activeDevices.map((d) => (
-          <View key={d.device_id} className="flex-row items-center gap-2.5 px-4 py-2">
-            <View className="h-1.5 w-1.5 rounded-full bg-green-500" />
-            <Text className="flex-1 text-[13px] text-foreground/80" numberOfLines={1}>
-              {d.display_name ?? d.model ?? d.device_id}
-            </Text>
-            <Text className="text-[11px] text-muted-foreground">{d.platform}</Text>
-          </View>
-        ))}
-
-        <Text className="mt-5 mb-2 text-[11px] tracking-[1.5px] text-muted-foreground" style={{ fontFamily: "Inter_600SemiBold" }}>
-          · DATA SOURCES
-        </Text>
-        {error ? <Text className="mb-2 text-[12px] text-red-600">{error}</Text> : null}
-        <GlassCard strong className="px-4 py-3">
-          <Pressable
-            onPress={() => setRecommendedOpen((v) => !v)}
-            className="flex-row items-center gap-2"
-          >
-            <Text className="flex-1 text-[15px] text-foreground" style={{ fontFamily: "Inter_600SemiBold" }}>
-              Recommended{"  "}
-              <Text className="text-[12px] text-muted-foreground">
-                {connectedTop} / {RECOMMENDED.length}
-              </Text>
-            </Text>
-            {recommendedOpen ? (
-              <ChevronUp size={16} color="#a1a1aa" />
-            ) : (
-              <ChevronDown size={16} color="#a1a1aa" />
-            )}
-          </Pressable>
-          <Text className="text-[12px] text-muted-foreground">Best first-party data sources</Text>
-          {recommendedOpen ? (
-            <View className="mt-2">
-              <Text className="mb-1 mt-1 text-[10px] tracking-[1.2px] text-muted-foreground" style={{ fontFamily: "Inter_600SemiBold" }}>
-                · CORE SOURCES
-              </Text>
-              {connectionsQuery.isLoading ? (
-                <ActivityIndicator color="#a1a1aa" style={{ marginVertical: 14 }} />
-              ) : (
-                RECOMMENDED.map((s) => (
-                  <View key={s.name}>
-                    <SourceRow
-                      def={s}
-                      depth={0}
-                      connections={connections}
-                      connecting={connecting}
-                      onConnect={(tk) => void connect(tk)}
-                    />
-                    {s.children?.map((c) => (
-                      <SourceRow
-                        key={c.name}
-                        def={c}
-                        depth={1}
-                        connections={connections}
-                        connecting={connecting}
-                        onConnect={(tk) => void connect(tk)}
-                      />
-                    ))}
+          <Animated.View entering={sectionEntering} style={styles.meshCard}>
+            {/* web backdrop-blur-xl（utility，dev 真机有 blur(24)）→ BlurView 40 */}
+            <BlurView intensity={40} tint="light" style={StyleSheet.absoluteFill} />
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: pink(0.04) }]} />
+            <Pressable onPress={toggleMesh} accessibilityRole="button" accessibilityState={{ expanded: meshExpanded }}>
+              <View style={styles.meshHeader}>
+                <View style={styles.meshIconBox}>
+                  <Smartphone size={18} strokeWidth={1.5} color={pink(1)} />
+                </View>
+                <View style={styles.flex1}>
+                  <View style={styles.meshTitleRow}>
+                    <Text style={styles.meshTitle}>{t("controlPanel.devices")}</Text>
+                    <View style={styles.meshBadge}>
+                      <Text style={styles.meshBadgeText}>{t("controlPanel.activeCount", { count: peerCount })}</Text>
+                    </View>
                   </View>
-                ))
-              )}
-            </View>
-          ) : null}
-        </GlassCard>
+                  <Text style={styles.meshDesc}>{t("controlPanel.meshDescription")}</Text>
+                </View>
+                {meshExpanded ? (
+                  <ChevronUp size={16} color={fg(0.3)} />
+                ) : (
+                  <ChevronDown size={16} color={fg(0.3)} />
+                )}
+              </View>
+            </Pressable>
+            {meshExpanded ? (
+              <View style={styles.meshBody}>
+                <View style={styles.meshDivider} />
+                <DeviceConnections />
+              </View>
+            ) : null}
+          </Animated.View>
+        </View>
 
-        <GlassCard className="mt-3 flex-row items-center gap-3 px-4 py-4">
-          <View className="h-9 w-9 items-center justify-center rounded-xl bg-white/80 border border-white/70">
-            <Globe size={16} color="#71717a" strokeWidth={1.8} />
+        {/* DATA SOURCES —— composio 分类（真 OAuth） */}
+        <View>
+          <View style={styles.sectionLabelRow}>
+            <View style={[styles.sectionDot, { backgroundColor: fg(0.4) }]} />
+            <Text style={[styles.sectionLabel, { color: fg(0.5) }]}>{t("controlPanel.dataSources").toUpperCase()}</Text>
           </View>
-          <View className="flex-1">
-            <Text className="text-[15px] text-foreground" style={{ fontFamily: "Inter_600SemiBold" }}>
-              More data connectors
-            </Text>
-            <Text className="mt-0.5 text-[12px] text-muted-foreground">1000+ supported sources</Text>
-          </View>
-          <ChevronDown size={16} color="#a1a1aa" />
-        </GlassCard>
+          <DataConnections composio={composio} />
+        </View>
       </ScrollView>
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  flex1: { flex: 1 },
+  // 页头块 web mb-5(20)：PageHeader pb-2(8) → 内容 pt 12。
+  scroll: { flex: 1 },
+  scrollContent: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 48, gap: 16 },
+
+  statsRow: { flexDirection: "row", gap: 10 },
+  statCard: { padding: 16 },
+  statLabel: {
+    fontSize: 10,
+    lineHeight: 14,
+    fontFamily: "Inter_600SemiBold",
+    letterSpacing: 10 * 0.12,
+    color: fg(0.5),
+    marginBottom: 4,
+  },
+  statValueRow: { flexDirection: "row", alignItems: "baseline", gap: 6 },
+  statValue: { fontSize: 24, lineHeight: 24, fontFamily: "Inter_600SemiBold", color: "#1d2130" },
+  statTotal: { fontSize: 14, lineHeight: 14, fontFamily: "Inter_400Regular", color: fg(0.4) },
+  statStatusRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 8 },
+  dotEmerald: { width: 6, height: 6, borderRadius: 999, backgroundColor: "#10b981" },
+  statStatusText: { fontSize: 10, lineHeight: 14, fontFamily: "Inter_500Medium", color: fg(0.6) },
+
+  sectionLabelRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8, paddingHorizontal: 4 },
+  sectionDot: { width: 4, height: 4, borderRadius: 999 },
+  sectionLabel: { fontSize: 10, lineHeight: 14, fontFamily: "Inter_600SemiBold", letterSpacing: 10 * 0.12 },
+
+  meshCard: {
+    borderRadius: 24,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: pink(0.25),
+    boxShadow: "0 8px 24px -12px rgba(231,90,222,0.25)",
+  },
+  meshHeader: { flexDirection: "row", alignItems: "center", gap: 12, padding: 16 },
+  meshIconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: pink(0.12),
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  meshTitleRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  meshTitle: { fontSize: 14, lineHeight: 20, fontFamily: "Inter_600SemiBold", color: "#1d2130" },
+  meshBadge: { backgroundColor: pink(0.1), paddingHorizontal: 6, paddingVertical: 2, borderRadius: 18 },
+  meshBadgeText: { fontSize: 10, lineHeight: 14, fontFamily: "Inter_600SemiBold", color: pink(1) },
+  meshDesc: { marginTop: 2, fontSize: 11, lineHeight: 15, fontFamily: "Inter_400Regular", color: fg(0.5) },
+  meshBody: { paddingHorizontal: 16, paddingBottom: 16 },
+  meshDivider: { height: 1, backgroundColor: pink(0.15), marginBottom: 12 },
+});

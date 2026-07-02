@@ -19,8 +19,10 @@ import {
   Sparkles,
   XCircle,
 } from "lucide-react-native";
+import { useTranslation } from "react-i18next";
 import Animated, {
   Easing,
+  cancelAnimation,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
@@ -37,7 +39,10 @@ import {
 } from "@pin-ai/core";
 import { useCardsQuery } from "@pin-ai/state";
 
+import i18n from "../i18n";
+
 import PageHeader from "../components/app/PageHeader";
+import { usePageActive } from "../components/app/KeepAlivePage";
 import CardDetailSheet from "../components/now/CardDetailSheet";
 import { CATEGORIES } from "../components/now/SphereCards";
 import { GlassCard } from "../ui/GlassCard";
@@ -76,26 +81,40 @@ function categoryIcon(card: IntentCard) {
   return (CATEGORIES[cat] ?? CATEGORIES.life).icon;
 }
 
-/** needs_input 徽章呼吸闪烁（web animate-pulse 的 RN 对应物）。 */
+/** needs_input 徽章呼吸闪烁（web animate-pulse 的 RN 对应物）。
+ *  页面隐藏时停帧（keep-alive 常驻后无限循环不能空跑）。 */
 function Pulse({ children }: { children: ReactNode }) {
+  const pageActive = usePageActive();
   const o = useSharedValue(1);
   useEffect(() => {
+    if (!pageActive) return;
     o.value = withRepeat(
       withTiming(0.35, { duration: 700, easing: Easing.inOut(Easing.ease) }),
       -1,
       true,
     );
-  }, [o]);
+    return () => {
+      cancelAnimation(o);
+      o.value = 1;
+    };
+  }, [o, pageActive]);
   const style = useAnimatedStyle(() => ({ opacity: o.value }));
   return <Animated.View style={style}>{children}</Animated.View>;
 }
 
-/** processing 徽章旋转（web Loader2 animate-spin 的 RN 对应物，替代原生 ActivityIndicator）。 */
+/** processing 徽章旋转（web Loader2 animate-spin 的 RN 对应物，替代原生 ActivityIndicator）。
+ *  页面隐藏时停帧，同 Pulse。 */
 function Spin({ children }: { children: ReactNode }) {
+  const pageActive = usePageActive();
   const r = useSharedValue(0);
   useEffect(() => {
+    if (!pageActive) return;
     r.value = withRepeat(withTiming(360, { duration: 800, easing: Easing.linear }), -1, false);
-  }, [r]);
+    return () => {
+      cancelAnimation(r);
+      r.value = 0;
+    };
+  }, [r, pageActive]);
   const style = useAnimatedStyle(() => ({ transform: [{ rotate: `${r.value}deg` }] }));
   return <Animated.View style={style}>{children}</Animated.View>;
 }
@@ -109,6 +128,7 @@ function Row({
   onOpenChat: (card: IntentCard) => void;
   onOpenDetail: (entry: VisibleCardEntry) => void;
 }) {
+  const { t } = useTranslation("tasks");
   const card = entry.card;
   const resolved =
     entry.latestOutcome === "dismiss"
@@ -127,24 +147,31 @@ function Row({
   const CatIcon = categoryIcon(card);
   const previewText =
     entry.latestOutcome === "complete"
-      ? "Completed"
+      ? t("preview.completed")
       : entry.latestOutcome === "dismiss"
-      ? "Dismissed"
+      ? t("preview.dismissed")
       : entry.latestOutcome === "snooze"
       ? "Snoozed"
       : runUi === "processing"
-      ? "Processing..."
+      ? t("preview.processing")
       : runUi === "needs_input"
-      ? "Waiting for your input"
+      ? t("preview.needsInput")
       : runUi === "ready"
-      ? "Ready for review"
+      ? t("preview.ready")
       : runUi === "failed"
-      ? "Failed"
+      ? t("preview.failed")
       : reminder
       ? card.summary
       : card.primaryAction
-      ? `${actionCount + 1} operation${actionCount + 1 === 1 ? "" : "s"} · ${card.primaryAction.label}`
-      : (card.sourceApps ?? []).map((s) => sourceAppMeta(s).label).join(" · ");
+      ? t("preview.operationsSummary", { count: actionCount + 1, action: card.primaryAction.label })
+      : (card.sourceApps ?? [])
+          .map((s) => {
+            // 对齐 web sourceAppDisplay：普通词走 i18n（card:sourceApp.*），品牌词
+            // （无 labelKey）保留英文 brand 名。
+            const meta = sourceAppMeta(s);
+            return meta.labelKey ? i18n.t(`card:sourceApp.${meta.labelKey}`) : meta.label;
+          })
+          .join(" · ");
 
   return (
     <Pressable
@@ -209,6 +236,7 @@ export default function TasksScreen({
   headerProps: HeaderProps;
   onOpenChat: (card: IntentCard, bootstrap: string) => void;
 }) {
+  const { t } = useTranslation("tasks");
   const { cards, loading } = useCardsQuery();
   const [detail, setDetail] = useState<VisibleCardEntry | null>(null);
 
@@ -230,7 +258,7 @@ export default function TasksScreen({
 
   return (
     <View className="flex-1">
-      <PageHeader title="Tasks" subtitle="AI is running these for you" {...headerProps} />
+      <PageHeader title={t("header.title")} subtitle={t("header.subtitle")} {...headerProps} />
       <SectionList
         className="flex-1 px-4"
         sections={sections}
@@ -261,7 +289,7 @@ export default function TasksScreen({
                 <Loader2 size={16} color="rgba(29,33,48,0.4)" />
               </Spin>
               <Text className="text-[13px] text-foreground/40" style={{ fontFamily: "Inter_400Regular" }}>
-                Loading history...
+                {t("loadingHistory")}
               </Text>
             </View>
           ) : (
@@ -271,10 +299,10 @@ export default function TasksScreen({
                 <Sparkles size={28} color="rgba(29,33,48,0.4)" strokeWidth={1.5} />
               </GlassCard>
               <Text className="text-[15px] text-foreground/60" style={{ fontFamily: "Inter_600SemiBold", letterSpacing: -0.3 }}>
-                No cards yet
+                {t("empty.title")}
               </Text>
               <Text className="max-w-[260px] text-center text-[13px] leading-5 text-foreground/40" style={{ fontFamily: "Inter_400Regular" }}>
-                Generate intent cards from the NOW tab. All cards will appear here.
+                {t("empty.body")}
               </Text>
             </View>
           )

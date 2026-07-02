@@ -1,0 +1,341 @@
+{
+  "goalsView": {
+    "title": "画像",
+    "subtitle": "AI 眼中的你——由你的数据推导而来。",
+    "loadingSnapshot": "正在加载画像快照…",
+    "refreshError": "无法刷新画像快照。",
+    "loadFailed": "画像加载失败",
+    "loadMoreMemoriesFailed": "加载更多记忆失败",
+    "loadMoreSignalsFailed": "加载更多信号失败",
+    "tabs": {
+      "identity": "身份",
+      "goals": "目标"
+    },
+    "identityLabel": "身份",
+    "unnamedUser": "未命名用户",
+    "noSummary": "尚未保存摘要。助手仍会使用下方的记忆、信号和目标。",
+    "subTabs": {
+      "profile": "画像",
+      "memory": "记忆",
+      "empty": "空"
+    },
+    "status": {
+      "normal": "正常",
+      "alert": "警示",
+      "watch": "关注"
+    },
+    "profileGroups": {
+      "facts": {
+        "title": "事实",
+        "description": "助手已知的关于你的稳定信息。",
+        "emptyTitle": "暂无事实"
+      },
+      "preferences": {
+        "title": "偏好",
+        "description": "你希望助手如何表现。",
+        "emptyTitle": "暂无偏好"
+      },
+      "constraints": {
+        "title": "约束",
+        "description": "助手应遵守的规则与边界。",
+        "emptyTitle": "暂无约束"
+      }
+    },
+    "groupEmptyDescription": "该分组目前为空。",
+    "mirror": {
+      "title": "画像",
+      "description": "事实、偏好、约束与元数据——由你的数据推导而来。"
+    },
+    "memory": {
+      "title": "记忆",
+      "description": "AI 注意到并保存的内容，最新的在前。",
+      "emptyTitle": "还没有记忆",
+      "emptyDescription": "尚未有内容被保存为长期记忆。",
+      "countZero": "0 条记忆",
+      "countOfTotal": "{{shown}} / {{total}}",
+      "loadMore": "加载更多",
+      "endOfList": "已到底部",
+      "inferredFrom": "由 {{source}} 推断",
+      "today": "今天",
+      "yesterday": "昨天",
+      "unknownDate": "未知"
+    },
+    "signals": {
+      "title": "信号",
+      "description": "近期观察记录，待助手获得足够上下文后可能转化为记忆。",
+      "total": "总计",
+      "emptyTitle": "还没有信号",
+      "emptyDescription": "已连接的数据源提供数据后，近期观察会显示在这里。",
+      "loadMore": "加载更多信号",
+      "payload": "载荷"
+    },
+    "pills": {
+      "salience": "显著度 {{value}}",
+      "confidence": "置信度 {{value}}"
+    },
+    "raw": {
+      "title": "原始数据",
+      "description": "来自已连接应用与设备的源数据，尚未转化为记忆或画像信息。",
+      "dataSourceLabel": "数据来源",
+      "noSourceOption": "无已连接的数据来源",
+      "deviceKind": "设备",
+      "connectorKind": "连接器",
+      "rowCount_other": "{{count}} 条",
+      "noSourceTitle": "无已连接的数据来源",
+      "noSourceDescription": "连接应用或同步设备后，源数据会显示在这里。",
+      "noGmailTitle": "暂无 Gmail 数据",
+      "noGmailDescription": "目前没有可用的 Gmail 邮件。",
+      "noCalendarTitle": "暂无日历数据",
+      "noCalendarDescription": "目前没有可用的日历事件。",
+      "noDeviceTitle": "暂无设备数据",
+      "noDeviceRegisteredDescription": "该设备已注册，但尚未摄取任何原始数据。",
+      "noDeviceRowsDescription": "该来源没有任何当前或历史设备数据。",
+      "noDeviceSourceDescription": "该设备来源目前不可用。",
+      "loadingSource": "正在加载 {{label}}…",
+      "notLoadedTitle": "尚未加载",
+      "notLoadedDescription": "切换到此来源后将拉取其数据。",
+      "noSourceDataTitle": "暂无 {{label}} 数据",
+      "noSourceDataDescription": "该连接器已连接，但尚未摄取任何数据。同步通常会在约 10 分钟内补齐。",
+      "rawFields": "原始字段",
+      "deviceFallbackLabel": "设备 {{id}}",
+      "devicePlatformFallback": "设备"
+    },
+    "deviceSources": {
+      "apps": "应用",
+      "contacts": "通讯录",
+      "health": "健康"
+    },
+    "rawSources": {
+      "gmail": "Gmail",
+      "gcal": "日历",
+      "slackMessages": "Slack 消息",
+      "notionPages": "Notion 页面",
+      "gdriveFiles": "Drive 文件",
+      "githubIssues": "GitHub Issues",
+      "outlook": "Outlook",
+      "gdocs": "Google Docs",
+      "gsheets": "Google Sheets",
+      "stripeInvoices": "Stripe 发票",
+      "spotifyHistory": "Spotify 历史",
+      "stravaActivities": "Strava 活动",
+      "todoistTasks": "Todoist 任务",
+      "youtubeSubs": "YouTube 订阅",
+      "trelloBoards": "Trello 看板",
+      "jiraProjects": "Jira 项目",
+      "calendlyEvents": "Calendly 日程",
+      "linkedinProfile": "LinkedIn 个人资料",
+      "linkedinOrgs": "LinkedIn 组织",
+      "figmaUser": "Figma 用户",
+      "zoomUser": "Zoom 用户",
+      "zoomApps": "Zoom 应用",
+      "dropboxAccount": "Dropbox 账户",
+      "dropboxFiles": "Dropbox 文件",
+      "asanaWorkspaces": "Asana 工作区",
+      "asanaTasks": "Asana 任务",
+      "hubspotContacts": "HubSpot 联系人",
+      "clickupUser": "ClickUp 用户",
+      "clickupWorkspaces": "ClickUp 工作区"
+    },
+    "goals": {
+      "title": "目标",
+      "description": "分享你的目标，帮 AI 更了解你。点按任意分类即可展开。",
+      "emptyTitle": "暂无进行中的目标",
+      "emptyDescription": "目标会作为一级集合保留在镜像层中。",
+      "drawerFallbackTitle": "目标",
+      "drawerDescription": "目标详情",
+      "weeklyActions": "AI 每周行动",
+      "monitoring": "监测中",
+      "aiWantsToKnow": "AI 想了解",
+      "lockGoals": "锁定目标——AI 仅观察，不做修改"
+    }
+  },
+  "goalMeta": {
+    "work": {
+      "weeklyActions": [
+        "回顾本迭代的项目里程碑",
+        "跟进待定决策",
+        "排查团队阻塞并协助解决"
+      ],
+      "monitoring": [
+        "职业发展轨迹",
+        "技能差距分析",
+        "行业趋势"
+      ],
+      "aiQuestions": [
+        "你目前重点提升哪项技能？",
+        "本季度职业目标有变化吗？"
+      ]
+    },
+    "health": {
+      "weeklyActions": [
+        "本周期没有新的健康信号"
+      ],
+      "monitoring": [
+        "运动规律性",
+        "睡眠质量趋势",
+        "年度体检安排"
+      ],
+      "aiQuestions": [
+        "你目前在做哪些健康追踪？",
+        "有特别关注的健康话题吗？"
+      ]
+    },
+    "finance": {
+      "weeklyActions": [
+        "查看月度支出汇总",
+        "检查即将到期的账单和订阅"
+      ],
+      "monitoring": [
+        "预算与实际支出对比",
+        "储蓄率",
+        "投资表现"
+      ],
+      "aiQuestions": [
+        "本季度有预算方面的顾虑吗？",
+        "要我准备一份储蓄分析吗？"
+      ]
+    },
+    "growth": {
+      "weeklyActions": [
+        "继续当前学习路径",
+        "回顾收藏的文章"
+      ],
+      "monitoring": [
+        "学习时间分配",
+        "新的兴趣话题",
+        "技能习得进度"
+      ],
+      "aiQuestions": [
+        "你现在最好奇什么话题？",
+        "要我找些新的学习资源吗？"
+      ]
+    },
+    "family": {
+      "weeklyActions": [
+        "计划周末家庭活动",
+        "和好友联络近况"
+      ],
+      "monitoring": [
+        "家庭活动日程",
+        "亲友联络频率"
+      ],
+      "aiQuestions": [
+        "近期有家庭活动吗？",
+        "最近工作与生活的平衡感觉如何？"
+      ]
+    },
+    "life": {
+      "weeklyActions": [
+        "在日历上预留个人时间",
+        "审视压力水平"
+      ],
+      "monitoring": [
+        "个人时间分配",
+        "倦怠风险指标",
+        "兴趣爱好投入度"
+      ],
+      "aiQuestions": [
+        "有想优先推进的个人项目吗？",
+        "现在什么最能给你充电？"
+      ]
+    }
+  },
+  "baskets": {
+    "work": "工作",
+    "health": "健康",
+    "family": "家庭",
+    "finance": "财务",
+    "growth": "成长",
+    "life": "生活",
+    "general": "通用"
+  },
+  "starterGoals": {
+    "career-growth": "推进职业发展与专业技能",
+    "stay-healthy": "保持规律运动和健康习惯",
+    "financial-plan": "增加储蓄，做出明智的财务决策",
+    "learn-and-grow": "抽时间学习新技能和新想法",
+    "relationships": "与家人和好友保持联系",
+    "life-balance": "守住个人时间，避免过度消耗"
+  },
+  "memoriesPanel": {
+    "title": "记忆",
+    "refresh": "刷新",
+    "new": "新建",
+    "tabs": {
+      "active": "生效中",
+      "archived": "已归档",
+      "superseded": "已替换"
+    },
+    "subjectAny": "主题：任意",
+    "minQuality": "最低质量",
+    "zeroRows": "0 条",
+    "rowRange": "第 {{first}}-{{last}} 条，共 {{total}} 条",
+    "emptyList": {
+      "active": "没有生效中的记忆。",
+      "archived": "没有已归档的记忆。",
+      "superseded": "没有已替换的记忆。"
+    },
+    "pageOf": "第 {{page}} / {{total}} 页",
+    "previousPage": "上一页",
+    "nextPage": "下一页",
+    "status": {
+      "active": "生效中",
+      "archived": "已归档",
+      "superseded": "已替换"
+    },
+    "fields": {
+      "text": "内容",
+      "subject": "主题",
+      "quality": "质量",
+      "tags": "标签（逗号分隔）"
+    },
+    "subjectPlaceholder": "self / person:alice / topic:coffee",
+    "save": "保存",
+    "supersede": "替换",
+    "archive": "归档",
+    "replacementText": "替换文本",
+    "replacementPlaceholder": "这条记忆修正后的新版本",
+    "confirmSupersede": "确认替换",
+    "createTextPlaceholder": "关于用户的事实或沉淀下来的洞察",
+    "create": "创建"
+  },
+  "skillsPanel": {
+    "title": "技能",
+    "refresh": "刷新",
+    "new": "新建",
+    "tabs": {
+      "enabled": "已启用",
+      "disabled": "已停用",
+      "archived": "已归档"
+    },
+    "searchPlaceholder": "搜索标题 / 描述 / 触发词",
+    "emptyList": {
+      "enabled": "没有已启用的技能。",
+      "disabled": "没有已停用的技能。",
+      "archived": "没有已归档的技能。"
+    },
+    "status": {
+      "enabled": "已启用",
+      "disabled": "已停用",
+      "archived": "已归档"
+    },
+    "fields": {
+      "title": "标题",
+      "description": "描述",
+      "triggers": "触发词（每行一个）",
+      "body": "正文（SKILL.md）"
+    },
+    "optionalPlaceholder": "选填",
+    "loadingBody": "正在加载正文…",
+    "bodyPlaceholder": "## 何时使用…",
+    "save": "保存",
+    "disable": "停用",
+    "enable": "启用",
+    "archive": "归档",
+    "create": "创建"
+  },
+  "goalDetail": {
+    "ariaLabel": "{{label}}目标详情",
+    "close": "关闭目标"
+  }
+}

@@ -20,6 +20,7 @@ import { useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft } from "lucide-react-native";
+import { useTranslation } from "react-i18next";
 import { GestureDetector } from "react-native-gesture-handler";
 import Animated, {
   Easing,
@@ -56,6 +57,7 @@ export default function CardChatScreen({
   target: CardChatTarget | null;
   onClose: () => void;
 }) {
+  const { t } = useTranslation("chat");
   const { height, width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const y = useSharedValue(height); // 0 = 全开，height = 收起在屏外。
@@ -102,7 +104,7 @@ export default function CardChatScreen({
                   hitSlop={8}
                   style={styles.backBtn}
                   accessibilityRole="button"
-                  accessibilityLabel="Back"
+                  accessibilityLabel={t("header.back")}
                 >
                   <ArrowLeft size={20} strokeWidth={1.5} color={`rgba(${FG},0.65)`} />
                 </Pressable>

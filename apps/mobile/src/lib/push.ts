@@ -44,7 +44,17 @@ export async function registerPush(ownerUserId: string): Promise<void> {
     registered = true;
     console.log(`[push] APNs token registered device=${creds.deviceId}`);
   } catch (err) {
-    // 推送链路失败不影响主功能；下次启动重试。
-    console.warn("[push] registration failed (will retry next launch):", err);
+    // 本地个人签名 build 会主动剥掉 aps-environment entitlement（免费 team 签不了
+    // 推送，见 skill build 脚本）——这里注册必失败，是**预期**的本地 dev 现象，不是
+    // bug。dev/prod（TestFlight，付费 team distribution profile）保留 entitlement、
+    // 不走这个分支。故把"缺 entitlement"降级为 info：既不再刷 RN 底部黄框，也让真正
+    // 的推送故障（有 entitlement 却失败）仍以 warn 冒头、不被淹没。
+    const message = err instanceof Error ? err.message : String(err);
+    const expectedNoEntitlement = message.includes("aps-environment");
+    if (expectedNoEntitlement) {
+      console.log("[push] no aps-environment entitlement (local personal-team build) — push off");
+    } else {
+      console.warn("[push] registration failed (will retry next launch):", err);
+    }
   }
 }

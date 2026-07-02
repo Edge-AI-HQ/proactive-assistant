@@ -4,7 +4,14 @@
  * 滤 + 同标签折叠）、speech burst、转写（实时事件 + 启动 drain 积压）。
  * web 版（622 行）的 capture recovery / 健康检查等高级逻辑随后续刀补齐。
  */
-import { SoundRunAggregator, getTransportConfig } from "@pin-ai/core";
+import {
+  SoundRunAggregator,
+  getTransportConfig,
+  fetchVoiceIdentity,
+  speakerAwareTranscriptText,
+  type DiarizationStatus,
+  type SpeakerSegment,
+} from "@pin-ai/core";
 import { EncodingType, File, Paths, UploadType } from "expo-file-system";
 import {
   AmbientAudio,
@@ -13,6 +20,7 @@ import {
   type SpeechBurstEvent,
   type TranscriptEvent,
 } from "../../../modules/ambient-audio";
+import { applyAmbientLiveTranscriptUpdate } from "../live/live-transcript-store";
 import {
   type AmbientSource,
   type AmbientSourceStartOptions,
@@ -39,6 +47,40 @@ const LIVE_AUDIO_CONFIG = {
   maxSessionDurationMs: 5 * 60_000,
 } as const;
 
+// 转译结果（plain 或 diarized）。对齐 dev CaptureTranscriptionResult 的形状。
+interface TranscriptResult {
+  text: string;
+  selfText: string;
+  speakerLabels: string[];
+  segments: SpeakerSegment[];
+  provider: string;
+  diarizationStatus: DiarizationStatus;
+  diarizationModel?: "gpt-4o-transcribe-diarize";
+}
+
+function plainTranscriptResult(text: string, status: DiarizationStatus): TranscriptResult {
+  return {
+    text: text.trim(),
+    selfText: "",
+    speakerLabels: [],
+    segments: [],
+    provider: "cloud_whisper",
+    diarizationStatus: status,
+  };
+}
+
+/** SpeakerSegment[] → payload.speaker_segments 形状（snake_case，对齐 dev + core
+ *  speakerAwareTranscriptText 读取的 start_ms/end_ms）。 */
+function payloadSpeakerSegments(
+  segments: SpeakerSegment[],
+): Array<{ speaker: string; text: string; start_ms: number | null; end_ms: number | null }> {
+  return segments.flatMap((segment) => {
+    const text = segment.text.trim();
+    if (!text) return [];
+    return [{ speaker: segment.speaker || "other", text, start_ms: segment.startMs, end_ms: segment.endMs }];
+  });
+}
+
 export function createSoundClassifierSource(
   ctx: SourceContext,
   opts?: { recognitionLocale?: () => string | undefined },
@@ -48,6 +90,8 @@ export function createSoundClassifierSource(
   let lastLabel: string | null = null;
   const handledCaptureIds = new Set<string>();
   const inFlightCaptureIds = new Set<string>();
+  // 已 push 过的转录 burst id（对齐 web storedTranscriptBurstIds，push 前预去重）。
+  const storedTranscriptBurstIds = new Set<string>();
   const runs = new SoundRunAggregator();
 
   function handleClassification(event: SoundClassificationEvent): void {
@@ -86,9 +130,15 @@ export function createSoundClassifierSource(
   function handleTranscript(event: TranscriptEvent): void {
     const text = event.text?.trim();
     if (!text) return;
+    const dedupeId = event.burstId ?? event.wavId;
+    // 预去重(对齐 web storedTranscriptBurstIds)：已 push 过的 burst 直接跳过，连 push 都不做。
+    // outbox 的 dedupe_key 仍是正确性兜底；这里只提前一步省功，凑足与 web 逐字一致。
+    if (dedupeId && storedTranscriptBurstIds.has(dedupeId)) {
+      ctx.onEvent("sound_classifier", `discard:dedup_stored burst=${dedupeId}`);
+      return;
+    }
     const occurredAt = transcriptOccurredAt(event);
     const captureSessionId = event.captureSessionId ?? event.sessionId;
-    const dedupeId = event.burstId ?? event.wavId;
     ctx.push({
       kind: TRANSCRIPT_KIND,
       title: "Voice summary",
@@ -116,6 +166,7 @@ export function createSoundClassifierSource(
         ended_at: event.endedAt,
       },
     });
+    if (dedupeId) storedTranscriptBurstIds.add(dedupeId);
     ctx.onEvent("sound_classifier", `transcript ${text.slice(0, 40)}`);
   }
 
@@ -125,10 +176,10 @@ export function createSoundClassifierSource(
     ctx.onEvent("sound_classifier", `capture ready ${Math.round(event.durationMs / 1000)}s`);
     inFlightCaptureIds.add(id);
     try {
-      const text = await transcribeCapture(event);
+      const result = await transcribeCapture(event);
       handledCaptureIds.add(id);
-      if (text) {
-        handleTranscript(captureTranscriptEvent(event, text));
+      if (result.text) {
+        pushCaptureTranscript(event, result);
       }
       await AmbientAudio.markCaptureProcessed(event.wavId);
     } catch (err) {
@@ -139,15 +190,39 @@ export function createSoundClassifierSource(
     }
   }
 
-  async function transcribeCapture(event: CaptureReadyEvent): Promise<string> {
+  // 转译一段采集：voice identity 启用则走 diarized（分离 + 后端后处理），否则/失败退回 plain。
+  // 对齐 dev transcribeAmbientCapture。
+  async function transcribeCapture(event: CaptureReadyEvent): Promise<TranscriptResult> {
     const capture = await AmbientAudio.readCapture(event.wavId);
     const file = writeCaptureTempFile(capture);
+    const language = opts?.recognitionLocale?.();
     try {
-      return await withTranscribeRetry(() =>
-        transcribeVoiceFile(file, capture.contentType, {
-          language: opts?.recognitionLocale?.(),
-        }),
+      let profileEnabled = false;
+      let disabledStatus: DiarizationStatus = "not_enrolled";
+      try {
+        const profile = await fetchVoiceIdentity();
+        profileEnabled = profile?.enabled === true;
+        disabledStatus = profile ? "disabled" : "not_enrolled";
+      } catch {
+        profileEnabled = false;
+        disabledStatus = "not_enrolled";
+      }
+      if (profileEnabled) {
+        try {
+          return await withTranscribeRetry(() =>
+            transcribeVoiceFileDiarized(file, capture.contentType, { language }),
+          );
+        } catch {
+          const text = await withTranscribeRetry(() =>
+            transcribeVoiceFile(file, capture.contentType, { language }),
+          );
+          return plainTranscriptResult(text, "fallback_plain_text");
+        }
+      }
+      const text = await withTranscribeRetry(() =>
+        transcribeVoiceFile(file, capture.contentType, { language }),
       );
+      return plainTranscriptResult(text, disabledStatus);
     } finally {
       try {
         file.delete();
@@ -155,6 +230,58 @@ export function createSoundClassifierSource(
         // Best-effort cache cleanup only.
       }
     }
+  }
+
+  // 建转写信号（含 diarized 载荷）+ 实时喂 live 卡。对齐 dev sound-classifier 的 push。
+  function pushCaptureTranscript(event: CaptureReadyEvent, result: TranscriptResult): void {
+    const dedupeId = event.burstId ?? event.wavId;
+    if (dedupeId && storedTranscriptBurstIds.has(dedupeId)) {
+      ctx.onEvent("sound_classifier", `discard:dedup_stored burst=${dedupeId}`);
+      return;
+    }
+    const speakerSegments = payloadSpeakerSegments(result.segments);
+    const endMs = captureOccurredAtMs(event);
+    const durationMs = Number.isFinite(event.durationMs) ? event.durationMs : undefined;
+    const captureSessionId = event.captureSessionId ?? event.sessionId;
+    if (event.burstId && captureSessionId) {
+      applyAmbientLiveTranscriptUpdate({
+        captureSessionId,
+        id: event.burstId,
+        text: speakerAwareTranscriptText(speakerSegments, result.text),
+        source: result.provider,
+        receivedAt: endMs,
+      });
+    }
+    ctx.push({
+      kind: TRANSCRIPT_KIND,
+      title: "Voice summary",
+      summary: result.text,
+      occurred_at: new Date(endMs).toISOString(),
+      salience: TRANSCRIPT_SALIENCE,
+      confidence: TRANSCRIPT_CONFIDENCE,
+      dedupe_key: dedupeId ? `ios:audio:${dedupeId}` : undefined,
+      payload: {
+        schema_version: "audio_transcript.v1",
+        platform: event.platform ?? "ios",
+        text: result.text,
+        wavId: event.wavId,
+        burstId: event.burstId,
+        captureSessionId,
+        durationMs,
+        provider: result.provider,
+        fallback: result.provider === "cloud_whisper",
+        triggerSource: event.triggerSource,
+        speaker_segments: speakerSegments,
+        speaker_labels: result.speakerLabels,
+        self_text: result.selfText,
+        diarization_status: result.diarizationStatus,
+        ...(result.diarizationModel ? { diarization_model: result.diarizationModel } : {}),
+        started_at: durationMs !== undefined ? endMs - durationMs : undefined,
+        ended_at: endMs,
+      },
+    });
+    if (dedupeId) storedTranscriptBurstIds.add(dedupeId);
+    ctx.onEvent("sound_classifier", `transcript ${result.text.slice(0, 40)}`);
   }
 
   async function recoverPendingCaptures(): Promise<void> {
@@ -271,6 +398,89 @@ async function transcribeVoiceFile(
   return data.text.trim();
 }
 
+/** diarized 转译（说话人分离 + 后端 gpt-5-nano 后处理）——对齐 dev transcribeVoiceAudioDiarized，
+ *  但走 RN 的原生文件上传（core 版吃 Blob，RN fetch 不可靠）。响应解析复制 core normalizeSegments。 */
+async function transcribeVoiceFileDiarized(
+  file: File,
+  contentType: string,
+  options: { language?: string } = {},
+): Promise<TranscriptResult> {
+  const params = new URLSearchParams();
+  if (options.language) params.set("language", options.language);
+  const path = `/voice/transcribe-diarized${params.size > 0 ? `?${params.toString()}` : ""}`;
+  const cfg = getTransportConfig();
+  const headers = {
+    ...(cfg.defaultHeaders ?? {}),
+    ...(await cfg.getAuthHeaders()),
+    "Content-Type": contentType || "audio/wav",
+    "X-Audio-Filename": filenameForContentType(contentType),
+  };
+  let result = await uploadVoiceFile(file, `${cfg.baseUrl}/api${path}`, headers, contentType);
+  if (result.status === 401 && cfg.refreshAuth) {
+    const token = await cfg.refreshAuth();
+    if (token) {
+      result = await uploadVoiceFile(
+        file,
+        `${cfg.baseUrl}/api${path}`,
+        { ...headers, Authorization: `Bearer ${token}` },
+        contentType,
+      );
+    }
+  }
+  if (result.status < 200 || result.status >= 300) {
+    throw new Error(`/voice/transcribe-diarized failed: ${result.status} ${result.body}`);
+  }
+  const data = JSON.parse(result.body) as {
+    text?: unknown;
+    selfText?: unknown;
+    speakerLabels?: unknown;
+    segments?: unknown;
+    diarizationStatus?: unknown;
+  };
+  if (typeof data.text !== "string") {
+    throw new Error("/voice/transcribe-diarized response missing text");
+  }
+  return {
+    text: data.text.trim(),
+    selfText: typeof data.selfText === "string" ? data.selfText.trim() : "",
+    speakerLabels: Array.isArray(data.speakerLabels)
+      ? data.speakerLabels.filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+      : [],
+    segments: normalizeDiarizeSegments(data.segments),
+    provider: "cloud_diarize",
+    diarizationStatus: normalizeDiarizationStatus(data.diarizationStatus),
+    diarizationModel: "gpt-4o-transcribe-diarize",
+  };
+}
+
+function normalizeDiarizeSegments(value: unknown): SpeakerSegment[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item): SpeakerSegment[] => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as Record<string, unknown>;
+    if (typeof row.text !== "string" || !row.text.trim()) return [];
+    return [{
+      speaker: typeof row.speaker === "string" && row.speaker.trim() ? row.speaker.trim() : "other",
+      text: row.text.trim(),
+      startMs: typeof row.startMs === "number" ? row.startMs : null,
+      endMs: typeof row.endMs === "number" ? row.endMs : null,
+    }];
+  });
+}
+
+function normalizeDiarizationStatus(value: unknown): DiarizationStatus {
+  switch (value) {
+    case "matched_reference":
+    case "diarized_without_reference":
+    case "fallback_plain_text":
+    case "disabled":
+    case "not_enrolled":
+      return value;
+    default:
+      return "diarized_without_reference";
+  }
+}
+
 async function uploadVoiceFile(
   file: File,
   url: string,
@@ -288,7 +498,7 @@ async function uploadVoiceFile(
   });
 }
 
-async function withTranscribeRetry(attempt: () => Promise<string>): Promise<string> {
+async function withTranscribeRetry<T>(attempt: () => Promise<T>): Promise<T> {
   let lastErr: unknown;
   for (let index = 0; index <= RETRY_DELAYS_MS.length; index += 1) {
     try {
@@ -336,26 +546,6 @@ function filenameForContentType(contentType: string): string {
 
 function captureDedupeId(event: CaptureReadyEvent): string {
   return event.burstId ?? event.wavId;
-}
-
-function captureTranscriptEvent(event: CaptureReadyEvent, text: string): TranscriptEvent {
-  const endMs = captureOccurredAtMs(event);
-  const durationMs = Number.isFinite(event.durationMs) ? event.durationMs : 0;
-  return {
-    platform: event.platform ?? "ios",
-    text,
-    wavId: event.wavId,
-    burstId: event.burstId,
-    captureSessionId: event.captureSessionId ?? event.sessionId,
-    capturedAt: new Date(endMs).toISOString(),
-    durationMs,
-    startedAt: Math.max(0, endMs - durationMs),
-    endedAt: endMs,
-    provider: "cloud_whisper",
-    sessionId: event.captureSessionId ?? event.sessionId,
-    fallback: false,
-    triggerSource: event.triggerSource,
-  };
 }
 
 function transcriptOccurredAt(event: TranscriptEvent): string {

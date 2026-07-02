@@ -20,20 +20,22 @@ export function createVisitSource(ctx: SourceContext): AmbientSource {
   let started = false;
   let drainTimer: ReturnType<typeof setInterval> | null = null;
 
-  async function place(lat: number, lng: number): Promise<string | undefined> {
-    try {
-      const geo = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lng });
-      const g = geo[0];
-      return g ? [g.name, g.district, g.city].filter(Boolean).join(", ") : undefined;
-    } catch {
-      return undefined;
-    }
-  }
-
   async function pushVisit(event: VisitEvent): Promise<void> {
     const isArrival = event.departureAt === null;
-    const resolved = await place(event.latitude, event.longitude);
-    const summary = `${isArrival ? "Arrived" : "Left"}${resolved ? ` · ${resolved}` : ""}`;
+    // place 由原生到访时 GeocodeService（CLGeocoder + MapKit POI）反编码补全 = event.place。
+    // 万一 drain 早于原生反编码完成（placeStatus 尚 pending），用同一原生服务补一次（有 LRU 缓存）。
+    let place = event.place ?? null;
+    if (!place) {
+      try {
+        place = await AmbientVisit.reverseGeocode(event.latitude, event.longitude);
+      } catch {
+        /* best-effort */
+      }
+    }
+    // 与 web visit 源一致：label ?? place_name ?? address。共享 normalize 读 place.label →
+    // "Arrived near <地名>." → live 卡渲染 "Near <地名>"。
+    const placeLabel = place?.label ?? place?.place_name ?? place?.address;
+    const summary = `${isArrival ? "Arrived" : "Left"}${placeLabel ? ` · ${placeLabel}` : ""}`;
     const ts = isArrival ? event.arrivalAt : (event.departureAt ?? event.arrivalAt);
     ctx.push({
       kind: SIGNAL_KINDS.visit,
@@ -47,7 +49,8 @@ export function createVisitSource(ctx: SourceContext): AmbientSource {
         latitude: event.latitude,
         longitude: event.longitude,
         accuracy: event.accuracy,
-        place: resolved,
+        // 富 PlaceInfo（含 label / candidates / area），normalize 读 .label 渲染 "Near <地名>"。
+        place: place ?? undefined,
       },
     });
     ctx.onEvent("visit", summary);

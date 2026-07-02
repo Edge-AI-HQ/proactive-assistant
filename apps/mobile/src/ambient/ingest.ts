@@ -10,6 +10,15 @@ import { ENV } from "../lib/env";
 import { ensureDevice, clearDeviceCredentials, type DeviceCredentials } from "../lib/devices";
 import { createExpoDatabase } from "../lib/sync/expo-database";
 import type { PersonalSignalInput } from "./types";
+import {
+  describeError,
+  recordDrainAttempt,
+  recordDrainError,
+  recordDrainSuccess,
+  recordIngestedItems,
+  setOutboxPending,
+  setUploadsLockedStatus,
+} from "./status";
 
 const FLUSH_INTERVAL_MS = 30_000;
 const PENDING_BATCH = 200;
@@ -32,6 +41,7 @@ export async function isUploadsLocked(): Promise<boolean> {
 
 export async function setUploadsLocked(value: boolean): Promise<void> {
   uploadsLocked = value;
+  setUploadsLockedStatus(value);
   await AsyncStorage.setItem(UPLOADS_LOCKED_KEY, value ? "1" : "0");
 }
 
@@ -72,6 +82,7 @@ export async function flushSignals(): Promise<void> {
   flushing = true;
   const owner = ownerUserId;
   const backendUrl = ENV.pinApiUrl;
+  recordDrainAttempt(Date.now());
   try {
     const records = await outbox.pending(PENDING_BATCH, Date.now(), owner, backendUrl);
     if (records.length === 0) return;
@@ -80,18 +91,23 @@ export async function flushSignals(): Promise<void> {
     const ids = records.map((r) => r.id);
     if (res.ok) {
       await outbox.markSynced(ids, Date.now(), owner, backendUrl);
+      recordDrainSuccess(ids.length, Date.now());
+      recordIngestedItems(records.map((r) => r.item)); // 按 kind 归账到对应源（同 web）
       console.log(`[ambient] ingested ${ids.length} signals`);
     } else {
       // 401 = device token 失效:清凭证,下轮 ensureDevice 重注册换新 token。
       if (res.status === 401) await clearDeviceCredentials();
       await outbox.markFailed(ids, `ingest ${res.status}`, Date.now() + RETRY_BACKOFF_MS);
+      recordDrainError(`ingest ${res.status}`);
       console.warn(`[ambient] ingest failed ${res.status}, will retry`);
     }
   } catch (err) {
     // 网络等异常:不 markFailed(保 pending 下轮即重试,不累加 backoff)。
+    recordDrainError(describeError(err));
     console.warn("[ambient] flush failed:", err);
   } finally {
     flushing = false;
+    void refreshOutboxCount();
   }
 }
 
@@ -99,7 +115,9 @@ export function startIngestLoop(userId: string): void {
   ownerUserId = userId;
   void AsyncStorage.getItem(UPLOADS_LOCKED_KEY).then((v) => {
     uploadsLocked = v === "1";
+    setUploadsLockedStatus(uploadsLocked);
   });
+  void refreshOutboxCount();
   if (timer) return;
   timer = setInterval(() => void flushSignals(), FLUSH_INTERVAL_MS);
   void outbox.prune().catch(() => {}); // 启动清过期(synced 超 24h / pending 超 TTL)
@@ -109,4 +127,17 @@ export function stopIngestLoop(): void {
   if (timer) clearInterval(timer);
   timer = null;
   void flushSignals();
+}
+
+/** 刷新 outboxPendingCount 到遥测仓（reconcile / flush 后 + 每轮 drain 末调）。 */
+export async function refreshOutboxCount(): Promise<void> {
+  if (!ownerUserId) {
+    setOutboxPending(0);
+    return;
+  }
+  try {
+    setOutboxPending(await outbox.count(ownerUserId, ENV.pinApiUrl));
+  } catch {
+    /* count best-effort */
+  }
 }

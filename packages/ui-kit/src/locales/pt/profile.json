@@ -1,0 +1,343 @@
+{
+  "goalsView": {
+    "title": "Perfil",
+    "subtitle": "Quem sua IA acha que você é — com base nos seus dados.",
+    "loadingSnapshot": "Carregando dados do perfil…",
+    "refreshError": "Não foi possível atualizar os dados do perfil.",
+    "loadFailed": "Falha ao carregar o perfil",
+    "loadMoreMemoriesFailed": "Falha ao carregar mais memórias",
+    "loadMoreSignalsFailed": "Falha ao carregar mais sinais",
+    "tabs": {
+      "identity": "Identidade",
+      "goals": "Metas"
+    },
+    "identityLabel": "IDENTIDADE",
+    "unnamedUser": "Usuário sem nome",
+    "noSummary": "Nenhum resumo salvo ainda. O assistente continua usando as memórias, os sinais e as metas abaixo.",
+    "subTabs": {
+      "profile": "Perfil",
+      "memory": "Memória",
+      "empty": "Vazio"
+    },
+    "status": {
+      "normal": "Normal",
+      "alert": "Alerta",
+      "watch": "Observação"
+    },
+    "profileGroups": {
+      "facts": {
+        "title": "Fatos",
+        "description": "Informações estáveis que o assistente sabe sobre você.",
+        "emptyTitle": "Nenhum fato ainda"
+      },
+      "preferences": {
+        "title": "Preferências",
+        "description": "Como você prefere que o assistente se comporte.",
+        "emptyTitle": "Nenhuma preferência ainda"
+      },
+      "constraints": {
+        "title": "Restrições",
+        "description": "Regras e limites que o assistente deve respeitar.",
+        "emptyTitle": "Nenhuma restrição ainda"
+      }
+    },
+    "groupEmptyDescription": "Este grupo está vazio no momento.",
+    "mirror": {
+      "title": "Perfil",
+      "description": "Fatos, preferências, restrições e metadados — com base nos seus dados."
+    },
+    "memory": {
+      "title": "Memória",
+      "description": "O que sua IA percebeu e salvou. Mais recentes primeiro.",
+      "emptyTitle": "Nenhuma memória ainda",
+      "emptyDescription": "Nada foi salvo como memória de longo prazo ainda.",
+      "countZero": "0 memórias",
+      "countOfTotal": "{{shown}} de {{total}}",
+      "loadMore": "Carregar mais",
+      "endOfList": "Fim da lista",
+      "inferredFrom": "Inferido de {{source}}",
+      "today": "HOJE",
+      "yesterday": "ONTEM",
+      "unknownDate": "SEM DATA"
+    },
+    "signals": {
+      "title": "Sinais",
+      "description": "Observações recentes que podem virar memória quando o assistente tiver contexto suficiente.",
+      "total": "Total",
+      "emptyTitle": "Nenhum sinal ainda",
+      "emptyDescription": "Observações recentes vão aparecer aqui quando as fontes conectadas enviarem dados.",
+      "loadMore": "Carregar mais sinais",
+      "payload": "Payload"
+    },
+    "pills": {
+      "salience": "saliência {{value}}",
+      "confidence": "confiança {{value}}"
+    },
+    "raw": {
+      "title": "Dados brutos",
+      "description": "Dados de origem de apps e dispositivos conectados, antes de virarem memórias ou detalhes do perfil.",
+      "dataSourceLabel": "Fonte de dados",
+      "noSourceOption": "Nenhuma fonte de dados conectada",
+      "deviceKind": "Dispositivo",
+      "connectorKind": "Conector",
+      "rowCount_one": "{{count}} linha",
+      "rowCount_many": "{{count}} linhas",
+      "rowCount_other": "{{count}} linhas",
+      "noSourceTitle": "Nenhuma fonte de dados conectada",
+      "noSourceDescription": "Conecte um app ou sincronize um dispositivo para ver os dados de origem aqui.",
+      "noGmailTitle": "Sem dados do Gmail",
+      "noGmailDescription": "Nenhuma mensagem do Gmail disponível no momento.",
+      "noCalendarTitle": "Sem dados da Agenda",
+      "noCalendarDescription": "Nenhum evento de agenda disponível no momento.",
+      "noDeviceTitle": "Sem dados do dispositivo",
+      "noDeviceRegisteredDescription": "Este dispositivo está registrado, mas nenhuma linha de dados brutos foi recebida ainda.",
+      "noDeviceRowsDescription": "Não há linhas atuais ou antigas do dispositivo para esta fonte.",
+      "noDeviceSourceDescription": "Esta fonte de dispositivo não está disponível no momento.",
+      "loadingSource": "Carregando {{label}}…",
+      "notLoadedTitle": "Ainda não carregado",
+      "notLoadedDescription": "Ao trocar para esta fonte, as linhas dela serão carregadas.",
+      "noSourceDataTitle": "Sem dados de {{label}}",
+      "noSourceDataDescription": "Este conector está conectado, mas nenhuma linha foi recebida ainda. O reconciliador costuma atualizar em ~10 minutos.",
+      "rawFields": "Campos brutos",
+      "deviceFallbackLabel": "Dispositivo {{id}}",
+      "devicePlatformFallback": "DISPOSITIVO"
+    },
+    "deviceSources": {
+      "apps": "Apps",
+      "contacts": "Contatos",
+      "health": "Saúde"
+    },
+    "rawSources": {
+      "gmail": "Gmail",
+      "gcal": "Agenda",
+      "slackMessages": "Mensagens do Slack",
+      "notionPages": "Páginas do Notion",
+      "gdriveFiles": "Arquivos do Drive",
+      "githubIssues": "Issues do GitHub",
+      "outlook": "Outlook",
+      "gdocs": "Documentos Google",
+      "gsheets": "Planilhas Google",
+      "stripeInvoices": "Faturas do Stripe",
+      "spotifyHistory": "Histórico do Spotify",
+      "stravaActivities": "Atividades do Strava",
+      "todoistTasks": "Tarefas do Todoist",
+      "youtubeSubs": "Inscrições do YouTube",
+      "trelloBoards": "Quadros do Trello",
+      "jiraProjects": "Projetos do Jira",
+      "calendlyEvents": "Eventos do Calendly",
+      "linkedinProfile": "Perfil do LinkedIn",
+      "linkedinOrgs": "Organizações do LinkedIn",
+      "figmaUser": "Usuário do Figma",
+      "zoomUser": "Usuário do Zoom",
+      "zoomApps": "Apps do Zoom",
+      "dropboxAccount": "Conta do Dropbox",
+      "dropboxFiles": "Arquivos do Dropbox",
+      "asanaWorkspaces": "Espaços de trabalho da Asana",
+      "asanaTasks": "Tarefas da Asana",
+      "hubspotContacts": "Contatos do HubSpot",
+      "clickupUser": "Usuário do ClickUp",
+      "clickupWorkspaces": "Espaços de trabalho do ClickUp"
+    },
+    "goals": {
+      "title": "Metas",
+      "description": "Compartilhe suas metas — ajude a IA a conhecer você. Toque em uma cesta para expandir.",
+      "emptyTitle": "Nenhuma meta ativa",
+      "emptyDescription": "As metas permanecem como uma coleção de primeira classe na camada de espelho.",
+      "drawerFallbackTitle": "Meta",
+      "drawerDescription": "Visualização de detalhes da meta",
+      "weeklyActions": "Ações semanais da IA",
+      "monitoring": "Monitoramento",
+      "aiWantsToKnow": "A IA quer saber",
+      "lockGoals": "Bloquear metas — a IA só observa, sem modificar"
+    }
+  },
+  "goalMeta": {
+    "work": {
+      "weeklyActions": [
+        "Revisar os marcos do projeto desta sprint",
+        "Acompanhar decisões pendentes",
+        "Verificar bloqueios do time e destravar"
+      ],
+      "monitoring": [
+        "Trajetória de desenvolvimento de carreira",
+        "Análise de lacunas de habilidades",
+        "Tendências do setor"
+      ],
+      "aiQuestions": [
+        "Qual habilidade você está se dedicando a desenvolver?",
+        "Alguma meta de carreira mudando neste trimestre?"
+      ]
+    },
+    "health": {
+      "weeklyActions": [
+        "Nenhum sinal novo de saúde neste ciclo"
+      ],
+      "monitoring": [
+        "Consistência dos exercícios",
+        "Tendências de qualidade do sono",
+        "Agenda de check-up anual"
+      ],
+      "aiQuestions": [
+        "Que acompanhamento de saúde você faz atualmente?",
+        "Algum tema de saúde específico que você está acompanhando?"
+      ]
+    },
+    "finance": {
+      "weeklyActions": [
+        "Revisar o resumo de gastos do mês",
+        "Verificar contas e assinaturas a vencer"
+      ],
+      "monitoring": [
+        "Orçamento vs. gastos reais",
+        "Taxa de poupança",
+        "Desempenho dos investimentos"
+      ],
+      "aiQuestions": [
+        "Alguma preocupação com o orçamento neste trimestre?",
+        "Quer que eu prepare uma análise de poupança?"
+      ]
+    },
+    "growth": {
+      "weeklyActions": [
+        "Continuar a trilha de aprendizado atual",
+        "Revisar artigos salvos"
+      ],
+      "monitoring": [
+        "Tempo dedicado ao aprendizado",
+        "Novos temas de interesse",
+        "Progresso na aquisição de habilidades"
+      ],
+      "aiQuestions": [
+        "Qual tema mais desperta sua curiosidade agora?",
+        "Quer que eu busque novos materiais de aprendizado?"
+      ]
+    },
+    "family": {
+      "weeklyActions": [
+        "Planejar uma atividade em família no fim de semana",
+        "Manter contato com amigos próximos"
+      ],
+      "monitoring": [
+        "Agenda de eventos da família",
+        "Frequência de contato nos relacionamentos"
+      ],
+      "aiQuestions": [
+        "Algum evento em família por vir?",
+        "Como está o equilíbrio entre trabalho e vida pessoal?"
+      ]
+    },
+    "life": {
+      "weeklyActions": [
+        "Reservar tempo pessoal na agenda",
+        "Avaliar os níveis de estresse"
+      ],
+      "monitoring": [
+        "Tempo dedicado à vida pessoal",
+        "Indicadores de risco de burnout",
+        "Envolvimento com hobbies"
+      ],
+      "aiQuestions": [
+        "Algum projeto pessoal que você quer priorizar?",
+        "O que mais recarrega suas energias agora?"
+      ]
+    }
+  },
+  "baskets": {
+    "work": "Trabalho",
+    "health": "Saúde",
+    "family": "Família",
+    "finance": "Finanças",
+    "growth": "Crescimento",
+    "life": "Vida",
+    "general": "Geral"
+  },
+  "starterGoals": {
+    "career-growth": "Avançar na carreira e nas habilidades profissionais",
+    "stay-healthy": "Manter exercícios regulares e hábitos saudáveis",
+    "financial-plan": "Aumentar as economias e tomar decisões financeiras inteligentes",
+    "learn-and-grow": "Reservar tempo para aprender novas habilidades e ideias",
+    "relationships": "Manter contato com a família e os amigos próximos",
+    "life-balance": "Proteger o tempo pessoal e evitar o esgotamento"
+  },
+  "memoriesPanel": {
+    "title": "Memórias",
+    "refresh": "Atualizar",
+    "new": "Nova",
+    "tabs": {
+      "active": "Ativas",
+      "archived": "Arquivadas",
+      "superseded": "Substituídas"
+    },
+    "subjectAny": "assunto: qualquer",
+    "minQuality": "q mín",
+    "zeroRows": "0 linhas",
+    "rowRange": "{{first}}-{{last}} de {{total}}",
+    "emptyList": {
+      "active": "Nenhuma memória ativa.",
+      "archived": "Nenhuma memória arquivada.",
+      "superseded": "Nenhuma memória substituída."
+    },
+    "pageOf": "Página {{page}} / {{total}}",
+    "previousPage": "Página anterior",
+    "nextPage": "Próxima página",
+    "status": {
+      "active": "ativa",
+      "archived": "arquivada",
+      "superseded": "substituída"
+    },
+    "fields": {
+      "text": "Texto",
+      "subject": "Assunto",
+      "quality": "Qualidade",
+      "tags": "Tags (separadas por vírgula)"
+    },
+    "subjectPlaceholder": "self / person:alice / topic:coffee",
+    "save": "Salvar",
+    "supersede": "Substituir",
+    "archive": "Arquivar",
+    "replacementText": "Texto de substituição",
+    "replacementPlaceholder": "Versão nova e corrigida desta memória",
+    "confirmSupersede": "Confirmar substituição",
+    "createTextPlaceholder": "Um fato ou insight consolidado sobre o usuário",
+    "create": "Criar"
+  },
+  "skillsPanel": {
+    "title": "Skills",
+    "refresh": "Atualizar",
+    "new": "Nova",
+    "tabs": {
+      "enabled": "Ativadas",
+      "disabled": "Desativadas",
+      "archived": "Arquivadas"
+    },
+    "searchPlaceholder": "Buscar título / descrição / gatilho",
+    "emptyList": {
+      "enabled": "Nenhuma skill ativada.",
+      "disabled": "Nenhuma skill desativada.",
+      "archived": "Nenhuma skill arquivada."
+    },
+    "status": {
+      "enabled": "ativada",
+      "disabled": "desativada",
+      "archived": "arquivada"
+    },
+    "fields": {
+      "title": "Título",
+      "description": "Descrição",
+      "triggers": "Gatilhos (um por linha)",
+      "body": "Corpo (SKILL.md)"
+    },
+    "optionalPlaceholder": "opcional",
+    "loadingBody": "Carregando corpo…",
+    "bodyPlaceholder": "## Quando usar…",
+    "save": "Salvar",
+    "disable": "Desativar",
+    "enable": "Ativar",
+    "archive": "Arquivar",
+    "create": "Criar"
+  },
+  "goalDetail": {
+    "ariaLabel": "Detalhe da meta {{label}}",
+    "close": "Fechar meta"
+  }
+}

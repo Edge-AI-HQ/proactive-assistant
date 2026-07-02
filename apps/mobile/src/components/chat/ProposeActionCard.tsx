@@ -12,6 +12,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, LayoutAnimation, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { ArrowRight, Check, ChevronUp, FileText, Mail, MessageSquare } from "lucide-react-native";
+import { useTranslation } from "react-i18next";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from "react-native-reanimated";
 
 import { VoiceButton } from "../../voice";
@@ -48,9 +49,10 @@ function parseArgs(raw: unknown): Parsed | null {
 }
 
 const ARTIFACT_ICON = { email_draft: Mail, message: MessageSquare, doc: FileText, other: FileText } as const;
-const ARTIFACT_LABEL = { email_draft: "EMAIL DRAFT", message: "MESSAGE DRAFT", doc: "DOCUMENT", other: "DRAFT" } as const;
+const ARTIFACT_LABEL_KEY = { email_draft: "emailDraft", message: "messageDraft", doc: "document", other: "draft" } as const;
 
 function DraftItem({ artifact, index }: { artifact: Artifact; index: number }) {
+  const { t } = useTranslation("chat");
   const [expanded, setExpanded] = useState(index === 0);
   const Icon = ARTIFACT_ICON[artifact.kind] ?? FileText;
   return (
@@ -67,7 +69,7 @@ function DraftItem({ artifact, index }: { artifact: Artifact; index: number }) {
           <Icon size={14} color={`rgba(${FG},0.65)`} strokeWidth={1.8} />
         </View>
         <View style={styles.flex1}>
-          <Text style={styles.draftLabel}>{ARTIFACT_LABEL[artifact.kind] ?? "DRAFT"}</Text>
+          <Text style={styles.draftLabel}>{t(`artifact.${ARTIFACT_LABEL_KEY[artifact.kind] ?? "draft"}`).toUpperCase()}</Text>
           <Text style={styles.draftTitle} numberOfLines={1}>
             {artifact.title}
           </Text>
@@ -101,6 +103,7 @@ export default function ProposeActionCard({
   onReply: (text: string) => void | Promise<void>;
   busy: boolean;
 }) {
+  const { t } = useTranslation("chat");
   const parsed = parseArgs(args);
   const [inputValue, setInputValue] = useState("");
   const [selectedOption, setSelectedOption] = useState(0);
@@ -150,7 +153,7 @@ export default function ProposeActionCard({
       <View style={styles.panel}>
         <View style={styles.panelHead}>
           <PulseDot />
-          <Text style={styles.needsInput}>NEEDS YOUR INPUT</Text>
+          <Text style={styles.needsInput}>{t("proposeAction.needsInput").toUpperCase()}</Text>
         </View>
 
         <Text style={styles.message}>{message}</Text>
@@ -193,7 +196,11 @@ export default function ProposeActionCard({
             onFocus={() => setInputFocused(true)}
             onBlur={() => setInputFocused(false)}
             placeholder={
-              sent ? "Reply sent" : options.length > 0 ? "Or type your own reply..." : "Type your reply..."
+              sent
+                ? t("proposeAction.replySent")
+                : options.length > 0
+                  ? t("proposeAction.typeOwnReplyPlaceholder")
+                  : t("proposeAction.typeReplyPlaceholder")
             }
             placeholderTextColor={`rgba(${FG},0.35)`}
             style={styles.input}
@@ -207,14 +214,16 @@ export default function ProposeActionCard({
           disabled={!canContinue}
           style={[styles.continue, !canContinue && styles.dim]}
           accessibilityRole="button"
-          accessibilityLabel="Continue"
+          accessibilityLabel={t("proposeAction.continue")}
         >
           {sent ? (
             <Check size={13} strokeWidth={2.5} color="#fff" />
           ) : isRunning ? (
             <ActivityIndicator size="small" color="#fff" />
           ) : null}
-          <Text style={styles.continueText}>{sent ? "Sent" : isRunning ? "Sending…" : "Continue"}</Text>
+          <Text style={styles.continueText}>
+            {sent ? t("proposeAction.sent") : isRunning ? t("proposeAction.sending") : t("proposeAction.continue")}
+          </Text>
           {!sent && !isRunning ? <ArrowRight size={13} strokeWidth={2.5} color="#fff" /> : null}
         </Pressable>
       </View>

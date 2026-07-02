@@ -13,6 +13,7 @@
  */
 import { useEffect, useMemo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
+import { useTranslation } from "react-i18next";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import {
   BookOpen,
@@ -69,14 +70,17 @@ export interface SphereItem {
   status: SphereCardStatus;
 }
 
-/** web card-model CATEGORIES 同源（lucide 同名图标）。 */
-export const CATEGORIES: Record<string, { icon: LucideIcon; label: string }> = {
-  growth: { icon: Sprout, label: "Growth" },
-  work: { icon: Briefcase, label: "Work" },
-  finance: { icon: TrendingUp, label: "Finance" },
-  health: { icon: Heart, label: "Health" },
-  learn: { icon: BookOpen, label: "Learn" },
-  life: { icon: Sparkles, label: "Life" },
+/** 类目文案 i18n 键（web card-model CATEGORY_LABEL_KEYS 同源，card.json category.*）。 */
+type CategoryLabelKey = `category.${"growth" | "work" | "finance" | "health" | "learn" | "life"}`;
+
+/** web card-model CATEGORIES 同源（lucide 同名图标；label 走 i18n labelKey）。 */
+export const CATEGORIES: Record<string, { icon: LucideIcon; labelKey: CategoryLabelKey }> = {
+  growth: { icon: Sprout, labelKey: "category.growth" },
+  work: { icon: Briefcase, labelKey: "category.work" },
+  finance: { icon: TrendingUp, labelKey: "category.finance" },
+  health: { icon: Heart, labelKey: "category.health" },
+  learn: { icon: BookOpen, labelKey: "category.learn" },
+  life: { icon: Sparkles, labelKey: "category.life" },
 };
 
 /** web ringClass 色表（pink/amber/green/rose 400 系）。 */
@@ -88,12 +92,12 @@ const RING: Partial<Record<SphereCardStatus, string>> = {
   failed: "rgba(251, 113, 133, 0.5)",
 };
 
-const BADGE: Partial<Record<SphereCardStatus, { text: string; color: string }>> = {
-  new: { text: "NEW", color: "#ec4899" },
-  needs_input: { text: "INPUT", color: "#f59e0b" },
-  ready: { text: "READY", color: "#22c55e" },
-  done: { text: "DONE", color: "#22c55e" },
-  failed: { text: "FAILED", color: "#f43f5e" },
+const BADGE: Partial<Record<SphereCardStatus, { labelKey: "badgeNew" | "badgeInput" | "badgeReady" | "badgeDone" | "badgeFailed"; color: string }>> = {
+  new: { labelKey: "badgeNew", color: "#ec4899" },
+  needs_input: { labelKey: "badgeInput", color: "#f59e0b" },
+  ready: { labelKey: "badgeReady", color: "#22c55e" },
+  done: { labelKey: "badgeDone", color: "#22c55e" },
+  failed: { labelKey: "badgeFailed", color: "#f43f5e" },
 };
 
 /** 姿态记忆：unmount 时存 yaw/pitch，切页回来续转（web rotationCache 同构）。 */
@@ -139,6 +143,7 @@ function Card({
   ry: number;
   onTap: (id: string) => void;
 }) {
+  const { t } = useTranslation("card");
   const depthSV = useSharedValue(1);
 
   const style = useAnimatedStyle(() => {
@@ -166,8 +171,11 @@ function Card({
       opacity: 0.32 + depth * 0.68,
       zIndex: Math.round(1000 + z),
       backgroundColor: `rgba(255,255,255,${(0.55 + frontBoost * 0.4).toFixed(2)})`,
-      // web：z>0 才有深度投影（背面卡无影），0.2s transition 用插值平滑。
-      shadowOpacity: 0.12 * Math.min(1, Math.max(0, (depth - 0.5) * 4)),
+      // web 现役 Sphere3DCards 同款「二值」阴影(z>0 前半球有影 / 背面 none),
+      // 不是每帧连续 ramp——连续 shadowOpacity 每帧触发 iOS 阴影重绘(14 卡 × 60fps)
+      // 是真机发热源(见 Mengli 的 perf(now) f3294c1b:发热来自每帧重绘,非动画本身)。
+      // 二值 → 卡片跨 z=0 才翻一下,近乎零逐帧重绘。
+      shadowOpacity: z > 0 ? 0.12 : 0,
     };
   });
 
@@ -195,11 +203,11 @@ function Card({
         <View style={styles.cardTop}>
           <Icon size={12} strokeWidth={1.5} color="rgba(29,33,48,0.6)" />
           <Text style={styles.category} numberOfLines={1}>
-            {cat.label.toUpperCase()}
+            {t(cat.labelKey).toUpperCase()}
           </Text>
           <View style={styles.spacerFlex} />
           {item.status === "processing" ? <Spinner /> : null}
-          {badge ? <Text style={[styles.badge, { color: badge.color }]}>{badge.text}</Text> : null}
+          {badge ? <Text style={[styles.badge, { color: badge.color }]}>{t(`sphere.${badge.labelKey}`).toUpperCase()}</Text> : null}
         </View>
         <Text style={styles.title} numberOfLines={3}>
           {item.title}
@@ -214,12 +222,15 @@ export default function SphereCards({
   width,
   height,
   onTap,
+  active = true,
   cacheKey = "now-sphere",
 }: {
   items: SphereItem[];
   width: number;
   height: number;
   onTap: (id: string) => void;
+  /** false = NOW 被 chat 盖住 / 切到别的页 → 停帧(NOW 常驻挂载,不停会空跑发热)。 */
+  active?: boolean;
   cacheKey?: string;
 }) {
   const cached = rotationCache.get(cacheKey);
@@ -241,15 +252,25 @@ export default function SphereCards({
   const points = useMemo(() => fibonacciPoints(Math.max(items.length, 12)), [items.length]);
 
   // 自转 + 惯性衰减回 idle 速度（web rAF idle 回路同款：衰减系数 0.015）。
-  // pitch 锁死，不再缓动。
-  useFrameCallback(() => {
+  // pitch 锁死，不再缓动。帧回调直接写 SharedValue（UI 线程，不过 React），
+  // 对齐 web 现役 Sphere3DCards 的「直接写、不 setState」思路。
+  // ⚠️ NOW 屏在 AppShell 里常驻挂载（display:none 切换、不卸载）——若不门控，
+  // 切到别的页 / 被 chat 盖住时这个 60fps 回路仍空跑发热。active=false 时
+  // setActive(false) 彻底停帧；yaw/velYaw 是 SharedValue，恢复时从原值续转。
+  const frame = useFrameCallback(() => {
     if (dragging.value) return;
     yaw.value += velYaw.value;
     velYaw.value += (IDLE_VEL_YAW - velYaw.value) * 0.015;
-  });
+  }, false);
+  useEffect(() => {
+    frame.setActive(active);
+  }, [active, frame]);
 
   const lastX = useSharedValue(0);
   const pan = Gesture.Pan()
+    // 右缘 28px 让给全局抽屉左滑（负 hitSlop 收缩手势响应区；只影响本 pan
+    // 的起手判定，卡片本身的点按不受影响）。
+    .hitSlop({ right: -28 })
     .onBegin(() => {
       dragging.value = true;
       lastX.value = 0;

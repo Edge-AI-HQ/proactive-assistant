@@ -1,20 +1,26 @@
 /**
  * App 壳——web AppLayout 导航范式的 RN 对应物：
  * - MenuId 状态机（六页，无 bottom tab）
- * - 每页 = PageHeader + 内容；NOW/Chat 常 mount 保流，其余按需挂载
- * - 右侧抽屉（汉堡/右缘手势）、ASK PIN AI 上拉 chat、card chat modal
+ * - 页面 keep-alive 栈：每页首访挂载后常驻（display:none 隐藏，不卸载），
+ *   切回零重载、滚动/状态原位；KeepAlivePage 的 PageActiveContext 把常驻页的
+ *   动画循环按可见性停帧（防发热）。
+ * - MenuDrawerHost 全局抽屉：任意页左滑跟手拉出、开态右滑关闭（见 MenuDrawer.tsx）。
+ * - 登录后空闲预取 Profile/Devices/Memories → 首访任何页也无 loading。
+ * - ASK PIN AI 上拉 chat、card chat modal。
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
-import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import Animated, { FadeIn, FadeOut, runOnJS } from "react-native-reanimated";
+import { useTranslation } from "react-i18next";
+import { useQueryClient } from "@tanstack/react-query";
 import type { User } from "@supabase/supabase-js";
 import type { IntentCard } from "@pin-ai/core";
+import { fetchMemories, fetchProfileSnapshot, listUserDevices, deleteAccount, DeleteAccountError } from "@pin-ai/core";
+import { profileKeys, profileMemoriesKeys, userDevicesKeys, useComposio } from "@pin-ai/state";
 
-import AskPinAiBar from "./AskPinAiBar";
 import ChatSheet from "./ChatSheet";
 import DebugPanel from "./DebugPanel";
-import MenuDrawer, { type MenuId } from "./MenuDrawer";
+import { KeepAlivePage } from "./KeepAlivePage";
+import MenuDrawerHost, { type MenuId } from "./MenuDrawer";
 import CardChatScreen from "../../screens/CardChatScreen";
 import ConnectScreen from "../../screens/ConnectScreen";
 import SettingScreen from "../../screens/SettingScreen";
@@ -31,17 +37,56 @@ export default function AppShell({
   onSignOut: () => Promise<void>;
 }) {
   const [view, setView] = useState<MenuId>("now");
+  // 首访过的页集合：进过就常驻挂载（keep-alive），永不回退。
+  const [visited, setVisited] = useState<ReadonlySet<MenuId>>(() => new Set<MenuId>(["now"]));
   const [menuOpen, setMenuOpen] = useState(false);
   const [debugOpen, setDebugOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [cardChat, setCardChat] = useState<{ card: IntentCard; bootstrap: string } | null>(null);
+  // web AppLayout 同位：composio state 壳级持有、跨 view 保活（CONNECT 页消费）。
+  const composio = useComposio();
+  const { t } = useTranslation(["common", "card"]);
+  const queryClient = useQueryClient();
 
-  // web AppLayout 同构：full_name 首词 → email 前缀 → "there"。
+  // 登录后空闲预取：把用户迟早会进的页面数据先填进 TQ 缓存（SWR——进页秒出
+  // 缓存、后台再刷新）。cards/settings/composio 已由常驻消费者（NOW/Root/本壳）
+  // 天然暖着，无需重复。延迟 1.2s 避开首屏渲染与 NOW 首拉的窗口。
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void queryClient.prefetchQuery({
+        queryKey: profileKeys.snapshot(),
+        queryFn: ({ signal }) => fetchProfileSnapshot(signal),
+      });
+      void queryClient.prefetchQuery({
+        queryKey: userDevicesKeys.all,
+        queryFn: () => listUserDevices(),
+      });
+      // 参数须与 packages/state/queries/profile.ts useProfileMemories 首页一致（页宽 5）。
+      void queryClient.prefetchInfiniteQuery({
+        queryKey: profileMemoriesKeys.list(),
+        queryFn: ({ pageParam, signal }) =>
+          fetchMemories(
+            {
+              status: "active",
+              limit: 5,
+              offset: pageParam,
+              orderBy: "created_at",
+              orderDirection: "desc",
+            },
+            signal,
+          ),
+        initialPageParam: 0,
+      });
+    }, 1_200);
+    return () => clearTimeout(timer);
+  }, [queryClient]);
+
+  // web AppLayout 同构：full_name 首词 → email 前缀 → t(card:now.greetingFallbackName)。
   const userMeta = user.user_metadata as { full_name?: string; name?: string } | undefined;
   const fullName = userMeta?.full_name || userMeta?.name || "";
   const firstName = fullName ? fullName.split(" ")[0] : "";
   const emailPrefix = user.email ? user.email.split("@")[0] : "";
-  const displayName = firstName || emailPrefix || "there";
+  const displayName = firstName || emailPrefix || t("card:now.greetingFallbackName");
 
   const headerProps = {
     // web 同位：齿轮 = DebugPanel；Setting 页从抽屉菜单进。
@@ -49,75 +94,106 @@ export default function AppShell({
     onOpenMenu: () => setMenuOpen(true),
   };
 
-  // 右缘左滑开菜单（web 的 right-edge swipe 对应物）。
-  const edgeSwipe = Gesture.Pan()
-    .activeOffsetX(-14)
-    .onEnd((e) => {
-      if (e.translationX < -40) runOnJS(setMenuOpen)(true);
-    });
+  const navigate = (id: MenuId) => {
+    setVisited((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+    setView(id);
+  };
+
+  // web AppLayout handleDeleteAccount 同构：删账链路（Composio→LiteLLM→Stripe→
+  // Browserbase→Storage→Supabase Auth→DB CASCADE）走 core deleteAccount；外部非
+  // 致命失败只 warn（cascade 已成功），fail-fast 抛 DeleteAccountError；成功即登出
+  // （JWT 已死，任何后续调用会 401）。
+  const handleDeleteAccount = async () => {
+    let result;
+    try {
+      result = await deleteAccount();
+    } catch (err) {
+      if (err instanceof DeleteAccountError && err.partial) {
+        console.warn("[account] delete partial state:", err.partial);
+      }
+      throw err;
+    }
+    if (
+      result.composioErrors.length > 0
+      || result.litellmError
+      || result.stripeError
+      || result.browserbaseError
+      || result.storageError
+    ) {
+      console.warn("[account] delete: non-fatal external failures", result);
+    }
+    await onSignOut();
+  };
 
   return (
     <View style={styles.root}>
-      {/* NOW 常 mount（球面/数据保活），其余按需。 */}
-      <View style={[styles.page, view !== "now" && styles.hidden]}>
-        <NowScreen
-          displayName={displayName}
-          headerProps={headerProps}
-          onOpenChat={(card, bootstrap) => setCardChat({ card, bootstrap })}
-          onOpenAmbient={() => setView("ambient")}
-          onAskPinAi={() => setChatOpen(true)}
-        />
-      </View>
-      {/* 页面转场：web ViewRouter AnimatePresence opacity 0.2s 对应物
-          （exiting 视图脱离布局以 overlay 形式淡出 → cross-fade）。 */}
-      {view === "ambient" ? (
-        <PageFade>
-          <AmbientScreen headerProps={headerProps} userId={user.id} />
-        </PageFade>
-      ) : null}
-      {view === "tasks" ? (
-        <PageFade>
-          <TasksScreen
-            headerProps={headerProps}
-            onOpenChat={(card, bootstrap) => setCardChat({ card, bootstrap })}
-          />
-        </PageFade>
-      ) : null}
-      {view === "connect" ? (
-        <PageFade>
-          <ConnectScreen headerProps={headerProps} />
-        </PageFade>
-      ) : null}
-      {view === "profile" ? (
-        <PageFade>
-          <ProfileScreen headerProps={headerProps} />
-        </PageFade>
-      ) : null}
-      {view === "setting" ? (
-        <PageFade>
-          <SettingScreen headerProps={headerProps} user={user} onSignOut={onSignOut} />
-        </PageFade>
-      ) : null}
-
-      {/* 右缘手势热区（窄条，不抢页面手势）。 */}
-      <GestureDetector gesture={edgeSwipe}>
-        <View style={styles.edgeZone} pointerEvents="box-only" />
-      </GestureDetector>
-
-      <ChatSheet open={chatOpen} onClose={() => setChatOpen(false)} />
-
-      <MenuDrawer
+      <MenuDrawerHost
         open={menuOpen}
         active={view}
+        onRequestOpen={() => setMenuOpen(true)}
+        onRequestClose={() => setMenuOpen(false)}
         onNavigate={(id) => {
-          setView(id);
+          navigate(id);
           setMenuOpen(false);
           setChatOpen(false);
         }}
-        onClose={() => setMenuOpen(false)}
-      />
+      >
+        {/* NOW 常驻（球面/数据保活）。active 门控球体自转：仅当 NOW 是当前页
+            且无 chat 盖在上面才转——否则 60fps 帧回路空跑发热。 */}
+        <KeepAlivePage active={view === "now"}>
+          <NowScreen
+            displayName={displayName}
+            userId={user.id}
+            headerProps={headerProps}
+            active={view === "now" && !chatOpen && !cardChat}
+            onOpenChat={(card, bootstrap) => setCardChat({ card, bootstrap })}
+            onOpenAmbient={() => navigate("ambient")}
+            onAskPinAi={() => setChatOpen(true)}
+          />
+        </KeepAlivePage>
+        {visited.has("ambient") ? (
+          <KeepAlivePage active={view === "ambient"}>
+            <AmbientScreen
+              headerProps={headerProps}
+              userId={user.id}
+              onOpenConnect={() => navigate("connect")}
+            />
+          </KeepAlivePage>
+        ) : null}
+        {visited.has("tasks") ? (
+          <KeepAlivePage active={view === "tasks"}>
+            <TasksScreen
+              headerProps={headerProps}
+              onOpenChat={(card, bootstrap) => setCardChat({ card, bootstrap })}
+            />
+          </KeepAlivePage>
+        ) : null}
+        {visited.has("connect") ? (
+          <KeepAlivePage active={view === "connect"}>
+            <ConnectScreen headerProps={headerProps} composio={composio} />
+          </KeepAlivePage>
+        ) : null}
+        {visited.has("profile") ? (
+          <KeepAlivePage active={view === "profile"}>
+            <ProfileScreen headerProps={headerProps} />
+          </KeepAlivePage>
+        ) : null}
+        {visited.has("setting") ? (
+          <KeepAlivePage active={view === "setting"}>
+            <SettingScreen headerProps={headerProps} user={user} onSignOut={onSignOut} />
+          </KeepAlivePage>
+        ) : null}
+      </MenuDrawerHost>
 
-      <DebugPanel open={debugOpen} onClose={() => setDebugOpen(false)} onSignOut={onSignOut} />
+      <ChatSheet open={chatOpen} onClose={() => setChatOpen(false)} />
+
+      <DebugPanel
+        open={debugOpen}
+        onClose={() => setDebugOpen(false)}
+        onSignOut={onSignOut}
+        composio={composio}
+        onDeleteAccount={handleDeleteAccount}
+      />
 
       {/* card chat：和 ChatSheet 同款 in-tree 下沉 sheet（不是 Modal 独立窗口，
           否则没法下沉露出底下页面）。常 mount，target 驱动上弹/下沉。 */}
@@ -126,23 +202,6 @@ export default function AppShell({
   );
 }
 
-/** 页面淡入淡出壳。exiting 时 Reanimated 把视图脱离布局以 overlay 淡出，
- *  与新页的 FadeIn 形成 cross-fade（NOW 的 display:none 切换不受影响）。 */
-function PageFade({ children }: { children: React.ReactNode }) {
-  return (
-    <Animated.View
-      style={styles.page}
-      entering={FadeIn.duration(200)}
-      exiting={FadeOut.duration(200)}
-    >
-      {children}
-    </Animated.View>
-  );
-}
-
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  page: { flex: 1 },
-  hidden: { display: "none" },
-  edgeZone: { position: "absolute", right: 0, top: 80, bottom: 80, width: 16 },
 });

@@ -5,6 +5,7 @@
  */
 import { useEffect } from "react";
 import { Pressable, Text } from "react-native";
+import { useTranslation } from "react-i18next";
 import { ChevronUp } from "lucide-react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
@@ -38,6 +39,7 @@ function FloatingChevron() {
 }
 
 export default function AskPinAiBar({ onOpen }: { onOpen: () => void }) {
+  const { t } = useTranslation("common");
   const swipeUp = Gesture.Pan()
     .activeOffsetY(-12)
     .onEnd((e) => {
@@ -48,15 +50,17 @@ export default function AskPinAiBar({ onOpen }: { onOpen: () => void }) {
       <Pressable
         onPress={onOpen}
         accessibilityRole="button"
-        accessibilityLabel="Ask PIN AI"
+        accessibilityLabel={t("appShell.openMainChat")}
         className="items-center pb-2 pt-1"
       >
         <FloatingChevron />
+        {/* dev 是 t(appShell.askPinAi) + CSS uppercase；RN 用 textTransform 等价
+            （原来烤死大写 "ASK PIN AI"，切语言不会翻，故改回 dev 形态）。 */}
         <Text
           className="text-[11px] tracking-[3px] text-muted-foreground"
-          style={{ fontFamily: "Inter_500Medium" }}
+          style={{ fontFamily: "Inter_500Medium", textTransform: "uppercase" }}
         >
-          ASK PIN AI
+          {t("appShell.askPinAi")}
         </Text>
       </Pressable>
     </GestureDetector>

@@ -1,25 +1,22 @@
 /**
- * SETTING 页——web AccountPanel 的 RN 对应物（UI 刀 7）：
- * 账号卡（avatar 圈 + 名 + email + Sign out pill）→ 四子页行
- * （Subscription & Billing[PRO 徽] / Preferences / Push Notifications /
- * Ambient）→ 子页内联导航（返回箭头）。
- * Subscription 子页 = plan 状态 + checkout 跳系统浏览器（Stripe 表单
- * dev 期走 web checkout 链接——RN 内嵌 Stripe Elements 不可复用，上线
- * 前按审核政策定稿）；Preferences = 语言 + auto-generate/dreaming/
- * crystallize 开关；Notifications = notifyNewCards；Ambient = per-source
- * consents（useUserSettings.patch，与 web 同协议）。
+ * SETTING 页——web AccountPanel 的 RN 对应物：
+ * 账号卡（avatar 圈 + 名 + email + Sign out 边框 pill）→ 四子页行
+ * （Subscription & Billing[Pro 徽] / Preferences / Push Notifications / Ambient）
+ * → 子页内联导航（返回箭头 + 左缘滑动返回 SwipeBackLayer）。
+ * - Subscription = components/account/SubscriptionPanel（web ui-web 同名组件全量
+ *   RN 移植：Stripe 状态/换档/加购/支付方式/账单/取消）；
+ * - Preferences = Dreaming(AutoDreamingSettings) + Generation(AutoGenerate +
+ *   GenerationLanguage) + Scheduled Tasks 三个 section（对齐 web PreferencesSubPage）；
+ * - Notifications = 权限感知通知卡（有意偏离 web：仅开关可点、onHint 去 "your"，用户定）；
+ * - Ambient = per-source consents + voice identity + timeline summary + on-device
+ *   models 四面板。
+ * 用户定偏离（2026-06-29 三轮）：主页与子页均无副标题；返回箭头按设计仓 BackButton。
  */
 import { useEffect, useState } from "react";
-import {
-  ActivityIndicator,
-  Linking,
-  Pressable,
-  ScrollView,
-  Switch,
-  Text,
-  View,
-} from "react-native";
+import { useTranslation } from "react-i18next";
+import { Linking, Pressable, ScrollView, Text, View } from "react-native";
 import Animated, {
+  FadeIn,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
@@ -29,26 +26,47 @@ import {
   ChevronLeft,
   ChevronRight,
   Radio,
-  Settings2,
+  SlidersHorizontal,
   Sparkles,
 } from "lucide-react-native";
-import { useQuery } from "@tanstack/react-query";
 import type { User } from "@supabase/supabase-js";
-import {
-  GENERATION_LANGUAGE_OPTIONS,
-  getCurrentSubscription,
-  type SupportedGenerationLanguage,
-} from "@pin-ai/core";
+import { useQuery } from "@tanstack/react-query";
+import { getCurrentSubscription } from "@pin-ai/core";
 import { useUserSettings } from "@pin-ai/state";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { GlassCard } from "../ui/GlassCard";
 import { EM_TIGHT, tracking } from "../ui/typography";
 import PageHeader from "../components/app/PageHeader";
+import SwipeBackLayer from "../components/app/SwipeBackLayer";
+import AmbientSourceControlsPanel from "../components/ambient/AmbientSourceControlsPanel";
+import VoiceIdentitySettings from "../components/ambient/VoiceIdentitySettings";
+import AmbientTimelineSummaryStatusPanel from "../components/ambient/AmbientTimelineSummaryStatusPanel";
+import AmbientModelsPanel from "../components/ambient/AmbientModelsPanel";
+import { SubscriptionPanel } from "../components/account/SubscriptionPanel";
+import AutoDreamingSettings from "../components/account/AutoDreamingSettings";
+import AutoGenerateSettings from "../components/account/AutoGenerateSettings";
+import GenerationLanguageSettings from "../components/account/GenerationLanguageSettings";
+import ScheduledTasksSettings from "../components/account/ScheduledTasksSettings";
 import { usePushNotifications } from "../hooks/usePushNotifications";
 import type { HeaderProps } from "./AmbientScreen";
 
 type SubPage = "main" | "subscription" | "preferences" | "notifications" | "ambient";
 
+// --foreground / --background 通道值（对齐 AmbientScreen 的 token）。NativeWind 的
+// hsl(var()) 无 alpha 槽 → 带透明度色一律内联 hsla，保证渲染。
+const FG = "230, 25%, 15%";
+const fg = (a?: number) => (a === undefined ? `hsl(${FG})` : `hsla(${FG}, ${a})`);
+const NOTIFY_BG = "hsl(220, 30%, 96%)";
+// Subscription 行 Pro 徽章（web bg-[hsl(304_75%_63%/0.12)] text-[hsl(304_75%_63%)]，
+// 文案是 web 里写死的 "Pro"，与实际 plan 无关——parity 照搬）。
+const PINK = "hsl(304, 75%, 63%)";
+
+/**
+ * 主页行卡 —— web AccountPanel 的入口 button（glass-card-strong p-4 · 40 图标格
+ * rounded-xl bg-foreground/[0.06] · 图标 16/1.5/fg70 · 标题 14/600 · 副标题
+ * caption fg/50 · chevron 16/1.5/fg35）。
+ */
 function SettingRow({
   Icon,
   title,
@@ -68,62 +86,55 @@ function SettingRow({
       accessibilityLabel={title}
       onPress={onPress}
     >
-      <GlassCard className="mb-2.5 flex-row items-center gap-3 px-4 py-3.5">
-        <View className="h-9 w-9 items-center justify-center rounded-full bg-white/85 border border-white/70">
-          <Icon size={15} color="#71717a" strokeWidth={1.8} />
+      <GlassCard strong className="flex-row items-center gap-3 p-4">
+        <View
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 12,
+            backgroundColor: fg(0.06),
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Icon size={16} color={fg(0.7)} strokeWidth={1.5} />
         </View>
-        <View className="flex-1">
-          <Text className="text-[15px] text-foreground" style={{ fontFamily: "Inter_600SemiBold" }}>
+        <View className="flex-1" style={{ minWidth: 0 }}>
+          <Text className="text-[14px] leading-5 text-foreground" style={{ fontFamily: "Inter_600SemiBold" }}>
             {title}
           </Text>
-          <Text className="mt-0.5 text-[12px] text-muted-foreground" style={{ fontFamily: "Inter_400Regular" }}>
+          <Text
+            className="mt-0.5 text-[11px] leading-[15px]"
+            style={{ fontFamily: "Inter_400Regular", color: fg(0.5) }}
+          >
             {subtitle}
           </Text>
         </View>
         {badge ? (
-          <View className="rounded-full bg-pink-100 px-2 py-0.5">
-            <Text className="text-[10px] text-pink-600" style={{ fontFamily: "Inter_700Bold" }}>
+          <View style={{ borderRadius: 18, paddingHorizontal: 8, paddingVertical: 2, backgroundColor: "hsla(304, 75%, 63%, 0.12)" }}>
+            <Text
+              style={{
+                fontFamily: "Inter_700Bold",
+                fontSize: 10,
+                lineHeight: 14,
+                letterSpacing: 0.5,
+                textTransform: "uppercase",
+                color: PINK,
+              }}
+            >
               {badge}
             </Text>
           </View>
         ) : null}
-        <ChevronRight size={16} color="#a1a1aa" />
+        <ChevronRight size={16} color={fg(0.35)} strokeWidth={1.5} />
       </GlassCard>
     </Pressable>
   );
 }
 
-function ToggleRow({
-  title,
-  subtitle,
-  value,
-  onChange,
-}: {
-  title: string;
-  subtitle?: string;
-  value: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  return (
-    <GlassCard className="mb-2 flex-row items-center px-4 py-3.5">
-      <View className="flex-1">
-        <Text className="text-[14px] text-foreground" style={{ fontFamily: "Inter_500Medium" }}>
-          {title}
-        </Text>
-        {subtitle ? (
-          <Text className="mt-0.5 text-[12px] text-muted-foreground" style={{ fontFamily: "Inter_400Regular" }}>
-            {subtitle}
-          </Text>
-        ) : null}
-      </View>
-      <Switch value={value} onValueChange={onChange} />
-    </GlassCard>
-  );
-}
-
 function SubHeader({ title, onBack }: { title: string; onBack: () => void }) {
   return (
-    <View className="flex-row items-center gap-1 px-6 pt-4 pb-2">
+    <View className="flex-row items-center gap-1 pt-4 pb-2">
       {/* 设计仓 main BackButton：ChevronLeft 22/1.8、无底色、foreground/70；按下 → foreground +
           bg foreground/0.06（= web `hover:bg-foreground/[0.06] transition-colors` 的触屏等价）。
           用 Pressable children-as-function 拿 pressed 态放内层 View（避开本项目 Pressable style 不渲染）。
@@ -163,12 +174,6 @@ function SubHeader({ title, onBack }: { title: string; onBack: () => void }) {
   );
 }
 
-// --foreground / --background 通道值（对齐 AmbientScreen 的 token）。NativeWind 的
-// hsl(var()) 无 alpha 槽 → 带透明度色一律内联 hsla，保证渲染。
-const NOTIFY_FG = "hsl(230, 25%, 15%)";
-const NOTIFY_FG_20 = "hsla(230, 25%, 15%, 0.2)";
-const NOTIFY_BG = "hsl(220, 30%, 96%)";
-
 /**
  * web NotificationsSubPage 卡片的 RN 对应物：标题 + 权限感知副标题 + 右侧开关。
  * 注：web 是「整卡可点」，本项目按用户要求改成「只有开关可点」——所以卡片本身
@@ -185,11 +190,12 @@ function NotificationCard({
   disabled: boolean;
   onPress: () => void;
 }) {
+  const { t } = useTranslation("account");
   return (
     <GlassCard strong className="flex-row items-center gap-3 px-4 py-4">
       <View className="flex-1">
         <Text className="text-[14px] text-foreground" style={{ fontFamily: "Inter_600SemiBold" }}>
-          Card generation
+          {t("notifications.cardGeneration")}
         </Text>
         <Text className="mt-0.5 text-[12px] text-muted-foreground" style={{ fontFamily: "Inter_400Regular" }}>
           {subtitle}
@@ -226,7 +232,7 @@ function NotifyToggle({ on, disabled, onPress }: { on: boolean; disabled: boolea
           height: 24,
           borderRadius: 12,
           justifyContent: "center",
-          backgroundColor: on ? NOTIFY_FG : NOTIFY_FG_20,
+          backgroundColor: on ? fg() : fg(0.2),
         }}
       >
         <Animated.View
@@ -251,6 +257,20 @@ function NotifyToggle({ on, disabled, onPress }: { on: boolean; disabled: boolea
   );
 }
 
+/** Preferences section 头（web：h2 text-sm/600 + caption fg/42 mt-1，块 mb-3）。 */
+function SectionHeader({ title, description }: { title: string; description: string }) {
+  return (
+    <View style={{ marginBottom: 12 }}>
+      <Text style={{ fontFamily: "Inter_600SemiBold", fontSize: 14, lineHeight: 20, color: fg() }}>
+        {title}
+      </Text>
+      <Text style={{ marginTop: 4, fontFamily: "Inter_400Regular", fontSize: 11, lineHeight: 15, color: fg(0.42) }}>
+        {description}
+      </Text>
+    </View>
+  );
+}
+
 export default function SettingScreen({
   headerProps,
   user,
@@ -260,19 +280,24 @@ export default function SettingScreen({
   user: User;
   onSignOut: () => Promise<void>;
 }) {
+  const { t } = useTranslation("account");
   const [page, setPage] = useState<SubPage>("main");
+  const insets = useSafeAreaInsets();
   const { settings, patch, loading, saving } = useUserSettings(user.id ?? null);
   const push = usePushNotifications(user.id ?? null);
+  // Subscription 行徽章显示真实 plan（用户定，有意偏离 dev——dev 源码写死 "Pro"）。
+  // free 不显示徽章。
   const subscription = useQuery({
     queryKey: ["payment", "subscription"],
     queryFn: () => getCurrentSubscription(),
     staleTime: 60_000,
   });
-
   const planCode = subscription.data?.planCode ?? "free";
+
   const displayName =
-    (user.user_metadata?.full_name as string | undefined) ?? user.email ?? user.id;
+    (user.user_metadata?.full_name as string | undefined) ?? user.email ?? t("panel.accountFallback");
   const initial = (displayName[0] ?? "?").toUpperCase();
+  const subtitle = user.email ?? t("panel.signedIn");
 
   // Push Notifications：OS 权限（能力）gate 住产品偏好 notifyNewCards，
   // 对齐 web AccountPanel 的 NotificationsSubPage。isOn = 已授权 && 偏好开。
@@ -283,15 +308,16 @@ export default function SettingScreen({
   const notifyNewCards = settings?.notifyNewCards ?? false;
   const notifyOn = pushGranted && notifyNewCards;
   const notifyBusy = !push.ready || loading || saving;
+  // onHint 保持硬编码：用户定的偏离（去 "your"，web i18n 原文是 "…when your AI…"）。
   const notifySubtitle = pushUnsupported
-    ? "Available only in the iOS app."
+    ? t("notifications.iosOnly")
     : pushDenied
-      ? "Disabled in system settings — tap to open."
+      ? t("notifications.deniedHint")
       : notifyOn
         ? "Notify me when AI surfaces a new proactive card."
         : pushGranted
-          ? "Paused in PIN AI — tap to resume card alerts."
-          : "Tap to enable system notifications.";
+          ? t("notifications.pausedHint")
+          : t("notifications.enableHint");
   const handleNotifyToggle = async () => {
     if (pushUnsupported || notifyBusy) return;
     if (!pushGranted) {
@@ -310,177 +336,158 @@ export default function SettingScreen({
 
   if (page !== "main") {
     const titles: Record<Exclude<SubPage, "main">, string> = {
-      subscription: "Subscription & Billing",
-      preferences: "Preferences",
-      notifications: "Push Notifications",
-      ambient: "Ambient",
+      subscription: "Subscription", // dev ui-web SubscriptionPanel 同样硬编码
+      preferences: t("preferences.pageTitle"),
+      notifications: t("notifications.pageTitle"),
+      ambient: t("ambientPage.pageTitle"),
     };
     return (
-      <View className="flex-1">
-        <SubHeader title={titles[page]} onBack={() => setPage("main")} />
-        <ScrollView className="flex-1 px-5" contentContainerClassName="pb-12 pt-2">
-          {page === "subscription" ? (
-            <>
-              <GlassCard strong className="px-4 py-4">
-                <Text className="text-[10px] tracking-[1.5px] text-muted-foreground" style={{ fontFamily: "Inter_600SemiBold" }}>
-                  CURRENT PLAN
-                </Text>
-                <Text className="mt-1 text-[24px] text-foreground" style={{ fontFamily: "Inter_700Bold" }}>
-                  {planCode.toUpperCase()}
-                </Text>
-                {subscription.data?.status ? (
-                  <Text className="mt-0.5 text-[12px] text-muted-foreground" style={{ fontFamily: "Inter_400Regular" }}>
-                    {subscription.data.status}
-                  </Text>
-                ) : null}
-              </GlassCard>
-              <Text className="mt-3 text-[12px] leading-5 text-muted-foreground" style={{ fontFamily: "Inter_400Regular" }}>
-                Plan changes and payment management are handled on the web app
-                during the dev period.
-              </Text>
-            </>
-          ) : null}
+      // 每个子页保留自己的返回箭头；SwipeBackLayer 加 iOS 式左缘拖动返回（= dev）。
+      <SwipeBackLayer onBack={() => setPage("main")}>
+        <View className="flex-1">
+          {/* SubHeader 挪进 ScrollView 当第一项 → 标题跟随内容滚动(与 dev「整页滚动」一致);
+              px-4 对齐 dev 容器。marginTop/Bottom 负 inset → 视口铺到屏幕上/下物理边(内容
+              可滚到刘海/home-indicator 下、视频连续无截断);contentContainerStyle 的 padding
+              保证首/末内容静止时仍在安全区内。 */}
+          <ScrollView
+            className="flex-1 px-4"
+            contentContainerStyle={{ paddingTop: insets.top, paddingBottom: 48 }}
+            style={{ marginTop: -insets.top, marginBottom: -insets.bottom }}
+          >
+            <SubHeader title={titles[page]} onBack={() => setPage("main")} />
+            {page === "subscription" ? <SubscriptionPanel /> : null}
 
-          {page === "preferences" && settings ? (
-            <>
-              <Text className="mb-2 text-[11px] tracking-[1.5px] text-muted-foreground" style={{ fontFamily: "Inter_600SemiBold" }}>
-                GENERATION LANGUAGE
-              </Text>
-              <GlassCard className="mb-4 px-2 py-2">
-                {GENERATION_LANGUAGE_OPTIONS.map((opt) => (
-                  <Pressable
-                    key={opt.value}
-                    onPress={() => void patch({ generationLanguage: opt.value as SupportedGenerationLanguage })}
-                    className="flex-row items-center justify-between px-2 py-2.5"
-                  >
-                    <Text className="text-[14px] text-foreground" style={{ fontFamily: "Inter_500Medium" }}>
-                      {opt.label}
-                    </Text>
-                    {settings.generationLanguage === opt.value ? (
-                      <View className="h-2 w-2 rounded-full bg-foreground" />
-                    ) : null}
-                  </Pressable>
-                ))}
-              </GlassCard>
-              <Text className="mb-2 text-[11px] tracking-[1.5px] text-muted-foreground" style={{ fontFamily: "Inter_600SemiBold" }}>
-                AUTOMATION
-              </Text>
-              <ToggleRow
-                title="Auto-generate cards"
-                subtitle="Proactively draft new cards from your signals"
-                value={settings.autoGenerate}
-                onChange={(v) => void patch({ autoGenerate: v })}
-              />
-              <ToggleRow
-                title="Auto-dreaming"
-                subtitle="Background reflection over your day"
-                value={settings.autoDreaming}
-                onChange={(v) => void patch({ autoDreaming: v })}
-              />
-              <ToggleRow
-                title="Auto-crystallize"
-                subtitle="Distill long chats into memory"
-                value={settings.autoCrystallize}
-                onChange={(v) => void patch({ autoCrystallize: v })}
-              />
-            </>
-          ) : null}
-
-          {page === "notifications" ? (
-            <NotificationCard
-              on={notifyOn}
-              subtitle={notifySubtitle}
-              disabled={pushUnsupported || notifyBusy}
-              onPress={() => void handleNotifyToggle()}
-            />
-          ) : null}
-
-          {page === "ambient" && settings ? (
-            <>
-              <Text className="mb-2 text-[11px] tracking-[1.5px] text-muted-foreground" style={{ fontFamily: "Inter_600SemiBold" }}>
-                SOURCE CONSENTS
-              </Text>
-              {Object.entries(settings.ambientSources ?? {}).length === 0 ? (
-                <Text className="text-[13px] text-muted-foreground" style={{ fontFamily: "Inter_400Regular" }}>
-                  No source consents yet — turn on Ambient from the NOW page.
-                </Text>
-              ) : (
-                Object.entries(settings.ambientSources ?? {}).map(([key, consent]) => (
-                  <ToggleRow
-                    key={key}
-                    title={key.replace(/_/g, " ")}
-                    value={consent?.enabled === true}
-                    onChange={(v) =>
-                      void patch({ ambientSources: { [key]: { enabled: v } } })
-                    }
+            {page === "preferences" ? (
+              <Animated.View entering={FadeIn.duration(300)} style={{ gap: 12 }}>
+                <GlassCard strong className="p-4">
+                  <SectionHeader
+                    title={t("preferences.dreamingTitle")}
+                    description={t("preferences.dreamingDescription")}
                   />
-                ))
-              )}
-            </>
-          ) : null}
+                  <AutoDreamingSettings />
+                </GlassCard>
+                <GlassCard strong className="p-4">
+                  <SectionHeader
+                    title={t("preferences.generationTitle")}
+                    description={t("preferences.generationDescription")}
+                  />
+                  <AutoGenerateSettings />
+                  <GenerationLanguageSettings />
+                </GlassCard>
+                <GlassCard strong className="p-4">
+                  <SectionHeader
+                    title={t("preferences.scheduledTasksTitle")}
+                    description={t("preferences.scheduledTasksDescription")}
+                  />
+                  <ScheduledTasksSettings />
+                </GlassCard>
+              </Animated.View>
+            ) : null}
 
-          {!settings && page !== "subscription" && page !== "notifications" ? (
-            <ActivityIndicator color="#a1a1aa" style={{ marginTop: 30 }} />
-          ) : null}
-        </ScrollView>
-      </View>
+            {page === "notifications" ? (
+              <NotificationCard
+                on={notifyOn}
+                subtitle={notifySubtitle}
+                disabled={pushUnsupported || notifyBusy}
+                onPress={() => void handleNotifyToggle()}
+              />
+            ) : null}
+
+            {page === "ambient" ? (
+              <Animated.View entering={FadeIn.duration(300)}>
+                <AmbientSourceControlsPanel userId={user.id ?? null} />
+                <VoiceIdentitySettings userId={user.id ?? null} />
+                <AmbientTimelineSummaryStatusPanel />
+                <AmbientModelsPanel />
+              </Animated.View>
+            ) : null}
+          </ScrollView>
+        </View>
+      </SwipeBackLayer>
     );
   }
 
   return (
     <View className="flex-1">
-      <PageHeader title="Setting" {...headerProps} />
-      <ScrollView className="flex-1 px-5" contentContainerClassName="pb-12">
-        {/* 账号卡 */}
-        <GlassCard strong className="mb-4 flex-row items-center gap-3 px-4 py-3.5">
-          <View className="h-11 w-11 items-center justify-center rounded-full bg-white/90 border border-white/70">
-            <Text className="text-[16px] text-foreground/70" style={{ fontFamily: "Inter_600SemiBold" }}>
-              {initial}
-            </Text>
-          </View>
-          <View className="flex-1">
-            <Text className="text-[15px] text-foreground" style={{ fontFamily: "Inter_600SemiBold" }} numberOfLines={1}>
-              {displayName}
-            </Text>
-            <Text className="mt-0.5 text-[12px] text-muted-foreground" numberOfLines={1} style={{ fontFamily: "Inter_400Regular" }}>
-              {user.email}
-            </Text>
-          </View>
-          <Pressable
-            onPress={() => void onSignOut()}
-            className="rounded-full bg-white/85 border border-white/70 px-3.5 py-2"
-          >
-            <Text className="text-[12px] text-foreground/80" style={{ fontFamily: "Inter_600SemiBold" }}>
-              Sign out
-            </Text>
-          </Pressable>
-        </GlassCard>
+      <PageHeader title={t("panel.title")} {...headerProps} />
+      <ScrollView className="flex-1 px-4" contentContainerClassName="pb-12" style={{ marginBottom: -insets.bottom }}>
+        <Animated.View entering={FadeIn.duration(300)} style={{ gap: 12 }}>
+          {/* 账号卡 —— web：avatar 48 圆 bg-foreground/10 + initial 16/600/fg70、
+              名 14/600、email caption fg/50、Sign out 边框 pill（border-foreground/12
+              rounded-lg(20) px-3 py-1 caption/500）。 */}
+          <GlassCard strong className="flex-row items-center gap-3 p-4">
+            <View
+              style={{
+                width: 48,
+                height: 48,
+                borderRadius: 24,
+                backgroundColor: fg(0.1),
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Text style={{ fontFamily: "Inter_600SemiBold", fontSize: 16, lineHeight: 24, color: fg(0.7) }}>
+                {initial}
+              </Text>
+            </View>
+            <View className="flex-1" style={{ minWidth: 0 }}>
+              <Text
+                numberOfLines={1}
+                className="text-[14px] leading-5 text-foreground"
+                style={{ fontFamily: "Inter_600SemiBold" }}
+              >
+                {displayName}
+              </Text>
+              <Text
+                numberOfLines={1}
+                style={{ fontFamily: "Inter_400Regular", fontSize: 11, lineHeight: 15, color: fg(0.5) }}
+              >
+                {subtitle}
+              </Text>
+            </View>
+            <Pressable onPress={() => void onSignOut()} hitSlop={6}>
+              <View
+                style={{
+                  borderWidth: 1,
+                  borderColor: fg(0.12),
+                  borderRadius: 20,
+                  paddingHorizontal: 12,
+                  paddingVertical: 4,
+                }}
+              >
+                <Text style={{ fontFamily: "Inter_500Medium", fontSize: 11, lineHeight: 15, color: fg() }}>
+                  {t("panel.signOut")}
+                </Text>
+              </View>
+            </Pressable>
+          </GlassCard>
 
-        <SettingRow
-          Icon={Sparkles}
-          title="Subscription & Billing"
-          subtitle="Manage plan, billing, payment"
-          badge={planCode !== "free" ? planCode.toUpperCase() : undefined}
-          onPress={() => setPage("subscription")}
-        />
-        <SettingRow
-          Icon={Settings2}
-          title="Preferences"
-          subtitle="Tone, formatting, defaults"
-          onPress={() => setPage("preferences")}
-        />
-        <SettingRow
-          Icon={Bell}
-          title="Push Notifications"
-          subtitle="What gets through — even during quiet hours"
-          onPress={() => setPage("notifications")}
-        />
-        <SettingRow
-          Icon={Radio}
-          title="Ambient"
-          subtitle="Source consents, summaries"
-          onPress={() => setPage("ambient")}
-        />
+          <SettingRow
+            Icon={Sparkles}
+            title={t("panel.subscriptionTitle")}
+            subtitle={t("panel.subscriptionDescription")}
+            badge={planCode !== "free" ? planCode : undefined}
+            onPress={() => setPage("subscription")}
+          />
+          <SettingRow
+            Icon={SlidersHorizontal}
+            title={t("panel.preferencesTitle")}
+            subtitle={t("panel.preferencesDescription")}
+            onPress={() => setPage("preferences")}
+          />
+          <SettingRow
+            Icon={Bell}
+            title={t("panel.notificationsTitle")}
+            subtitle={t("panel.notificationsDescription")}
+            onPress={() => setPage("notifications")}
+          />
+          <SettingRow
+            Icon={Radio}
+            title={t("panel.ambientTitle")}
+            subtitle={t("panel.ambientDescription")}
+            onPress={() => setPage("ambient")}
+          />
+        </Animated.View>
       </ScrollView>
     </View>
   );

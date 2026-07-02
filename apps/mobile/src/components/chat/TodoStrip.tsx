@@ -5,9 +5,11 @@
  */
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
+import { useTranslation } from "react-i18next";
 import { useTodoPlan } from "@pin-ai/state";
 
 export default function TodoStrip({ sessionKey }: { sessionKey: string }) {
+  const { t } = useTranslation("chat");
   const plan = useTodoPlan(sessionKey);
   const [expanded, setExpanded] = useState(false);
   if (!plan || plan.todos.length === 0) return null;
@@ -19,10 +21,10 @@ export default function TodoStrip({ sessionKey }: { sessionKey: string }) {
     <Pressable style={styles.strip} onPress={() => setExpanded((v) => !v)}>
       <View style={styles.header}>
         <Text style={styles.progress}>
-          {doneCount}/{plan.todos.length}
+          {t("todoPanel.progress", { completed: doneCount, total: plan.todos.length })}
         </Text>
         <Text style={styles.current} numberOfLines={1}>
-          {current ? current.content : "Plan complete"}
+          {current ? current.content : t("todoPanel.planDone")}
         </Text>
         <Text style={styles.chevron}>{expanded ? "▾" : "▸"}</Text>
       </View>

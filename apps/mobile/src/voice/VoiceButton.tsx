@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-native";
+import { useTranslation } from "react-i18next";
 import { Check, Mic, X } from "lucide-react-native";
 
 import { Waveform } from "./Waveform";
@@ -22,6 +23,7 @@ export function VoiceButton({
   buttonStyle?: StyleProp<ViewStyle>;
   recordingStyle?: StyleProp<ViewStyle>;
 }) {
+  const { t } = useTranslation(["voice", "common"]);
   const { startCapture, stopCapture, isCapturing } = useVoiceInput();
   const [recording, setRecording] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -101,7 +103,7 @@ export function VoiceButton({
       onPress={start}
       disabled={disabled || isCapturing}
       accessibilityRole="button"
-      accessibilityLabel={error ? `Voice input failed: ${error}` : "Voice input"}
+      accessibilityLabel={error ? `Voice input failed: ${error}` : t("voice:button.voiceInputAria")}
       style={({ pressed }) => [
         styles.button,
         buttonStyle,

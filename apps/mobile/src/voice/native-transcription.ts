@@ -1,10 +1,10 @@
 import { EncodingType, File, Paths, UploadType } from "expo-file-system";
 import { getTransportConfig } from "@pin-ai/core";
 
-import type { CaptureReadyEvent } from "../../modules/ambient-audio";
+import { AmbientAudio, type CaptureReadyEvent } from "../../modules/ambient-audio";
 
 export async function transcribeCaptureReadyEvent(event: CaptureReadyEvent): Promise<string> {
-  const { AmbientAudio } = await import("../../modules/ambient-audio");
+  // 静态 import(见 App.tsx 注释):dynamic import() 在本 Hermes/Metro setup 跑不通。
   const capture = await AmbientAudio.readCapture(event.wavId);
   const file = writeCaptureTempFile(capture);
   try {

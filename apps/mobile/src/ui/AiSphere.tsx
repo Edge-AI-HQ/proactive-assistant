@@ -5,6 +5,7 @@
  * mask 用 svg RadialGradient（black 50% → transparent 55%，web 同参）。
  * thinking 态 playbackRate 1.4（web 同值）。
  */
+import { useEffect } from "react";
 import { StyleSheet, View } from "react-native";
 import MaskedView from "@react-native-masked-view/masked-view";
 import Svg, { Circle, Defs, RadialGradient, Stop } from "react-native-svg";
@@ -15,16 +16,25 @@ const source = require("../assets/sphere.mp4");
 export default function AiSphere({
   size = 216,
   mode = "idle",
+  active = true,
 }: {
   size?: number;
   mode?: "idle" | "thinking";
+  /** false = 所在聊天面已关闭 / 滑出屏外 → 暂停视频解码。 */
+  active?: boolean;
 }) {
   const player = useVideoPlayer(source, (p) => {
     p.loop = true;
     p.muted = true;
-    p.play();
   });
   player.playbackRate = mode === "thinking" ? 1.4 : 1;
+  // 视频解码是持续 GPU/电力开销。web 现役离开 chat 会 unmount 视频自然停;RN 的
+  // ChatSheet / CardChatScreen 常驻挂载(滑出屏外不卸载,保 SSE),所以必须显式
+  // pause——否则关着的聊天里这个循环水晶球一直在后台解码发热。
+  useEffect(() => {
+    if (active) player.play();
+    else player.pause();
+  }, [active, player]);
 
   // web: inset 6% 的圆 + radial mask（black 50% → transparent 55%）。
   const inner = size * 0.88;

@@ -1,6 +1,13 @@
+import type { ReactNode } from "react";
 import { Image, StyleSheet, View } from "react-native";
 
-export default function AuroraBackground() {
+export default function AuroraBackground({
+  veilOpacity = 0.35,
+  children,
+}: {
+  veilOpacity?: number;
+  children?: ReactNode;
+}) {
   return (
     <View style={[StyleSheet.absoluteFill, styles.root]} pointerEvents="none">
       <Image
@@ -11,7 +18,8 @@ export default function AuroraBackground() {
       <View style={[styles.spot, styles.spotOne]} />
       <View style={[styles.spot, styles.spotTwo]} />
       <View style={[styles.spot, styles.spotThree]} />
-      <View style={[StyleSheet.absoluteFill, styles.veil]} />
+      {children}
+      <View style={[StyleSheet.absoluteFill, { backgroundColor: `rgba(255,255,255,${veilOpacity})` }]} />
     </View>
   );
 }
@@ -46,5 +54,4 @@ const styles = StyleSheet.create({
     bottom: "-12%",
     backgroundColor: "hsl(320, 65%, 80%)",
   },
-  veil: { backgroundColor: "rgba(255,255,255,0.35)" },
 });

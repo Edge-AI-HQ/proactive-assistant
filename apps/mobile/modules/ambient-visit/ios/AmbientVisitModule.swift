@@ -59,6 +59,12 @@ public final class AmbientVisitModule: Module {
       try self.store.listPending(limit: limit)
     }
 
+    // 反地理编码（CLGeocoder + MapKit POI，见 GeocodeService）暴露给 JS 的 location 源，
+    // 对齐 capacitor GeocoderPlugin.reverseGeocode —— 返回同一份 PlaceInfo dict。
+    AsyncFunction("reverseGeocode") { (latitude: Double, longitude: Double) -> [String: Any] in
+      await GeocodeService.shared.lookup(lat: latitude, lng: longitude).toDict()
+    }
+
     AsyncFunction("ackPendingVisits") { (ids: [String]) in
       try self.store.ack(ids: ids)
     }

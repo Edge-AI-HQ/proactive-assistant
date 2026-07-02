@@ -1,70 +1,60 @@
 /**
- * 玻璃卡片基类——web `.glass-card` / `.glass-card-strong` 的 RN 对应物。
- * web 真源（proactive-ai-frontend/src/index.css @layer components）：
- *   regular: bg white/45 + border white/50 + blur(32px) saturate(1.3)
- *            + shadow `0 4px 24px hsla(280,20%,60%,.06)` + inset 顶高光 white/30
- *   strong : bg white/60 + border white/65 + blur(48px) saturate(1.5)
- *            + shadow `0 4px 20px` 同色 + inset white/40
- * RN 介质映射：backdrop-filter → expo-blur（iOS UIVisualEffectView，light
- * tint 自带 saturate 增益）；inset 高光 → RN 0.76+ boxShadow inset；外影
- * 不能进 overflow:hidden 的裁剪层，所以阴影挂外层、blur/border 挂内裁剪层。
- * 性能红线：每屏常驻 BlurView 控制在个位数；球面卡片云暂不接本组件。
+ * 玻璃卡片基类——参考 **dev**(proactive-ai-frontend 经 Capacitor build 到 iOS 的实际渲染),
+ * 不是 **web**(浏览器)。dev 上 native-power-save(packages/ui-web/src/auth/platform.ts:72,
+ * isNative 时永远开)砍掉 backdrop-filter → web 的 `.glass-card{,-strong}` 在 native 上只剩
+ * 同一条半透明白渐变(blur 没了,strong / regular 长一样)→ 背景云朵 **sharp 透出**。
+ * web(浏览器)反而因为 backdrop-filter blur(40px) 把视频磨成一片、看不出云朵——那不是参考对象。
+ *
+ * 所以这里照 dev 渲染:135° 半透明渐变(0.55→0.25,让云朵透出)+ 1px 白边 + inset 顶高光 +
+ * 轻外影,**不用 BlurView**(dev 无 blur;BlurView 的 light tint 自带白会把云朵盖死 = test 之前不透的根因)。
  */
 import type { PropsWithChildren } from "react";
 import { StyleSheet, View, type ViewProps } from "react-native";
-import { BlurView } from "expo-blur";
+import { LinearGradient } from "expo-linear-gradient";
 
-/** 真机校准点：intensity ↔ web blur px 无线性公式，底色补偿 light tint 自带的白。 */
-const VARIANTS = {
-  regular: {
-    intensity: 50,
-    overlay: "rgba(255,255,255,0.28)",
-    border: "rgba(255,255,255,0.5)",
-    outerShadow: "0 4px 24px hsla(280, 20%, 60%, 0.06)",
-    insetHighlight: "inset 0 1px 0 rgba(255,255,255,0.3)",
-  },
-  strong: {
-    intensity: 75,
-    overlay: "rgba(255,255,255,0.42)",
-    border: "rgba(255,255,255,0.65)",
-    outerShadow: "0 4px 20px hsla(280, 20%, 60%, 0.06)",
-    insetHighlight: "inset 0 1px 0 rgba(255,255,255,0.4)",
-  },
-} as const;
-
-const RADIUS = 24; // rounded-3xl 默认（圆形徽章传大 radius，如空状态 Sparkles 圈）
+// dev `.glass-card` / `.glass-card-strong` 同一 recipe(native 砍 backdrop-filter 后无 blur 差异):
+//   background: linear-gradient(135deg, rgba(255,255,255,.55) 0%, rgba(255,255,255,.25) 100%)
+//   border: 1px solid rgba(255,255,255,.45)
+//   box-shadow: inset 0 1px 1px rgba(255,255,255,.6), 0 4px 16px rgba(0,0,0,.04), 0 1px 4px rgba(0,0,0,.02)
+const GRADIENT = ["rgba(255,255,255,0.55)", "rgba(255,255,255,0.25)"] as const;
+const BORDER = "rgba(255,255,255,0.45)";
+const OUTER_SHADOW = "0 4px 16px rgba(0,0,0,0.04), 0 1px 4px rgba(0,0,0,0.02)";
+const INSET_HIGHLIGHT = "inset 0 1px 1px rgba(255,255,255,0.6)";
+const RADIUS = 24; // rounded-3xl
 
 export function GlassCard({
-  strong = false,
+  // dev(native)上 strong 与 regular 渲染一致(无 blur 差异)→ strong 不再改变外观,
+  // 仅保留 prop 兼容现有调用方(同时把它从 ...rest 摘掉,避免漏传给 <View>)。
+  strong: _strong = false,
   radius = RADIUS,
   className = "",
   style,
   children,
   ...rest
 }: PropsWithChildren<ViewProps & { strong?: boolean; radius?: number; className?: string }>) {
-  const v = VARIANTS[strong ? "strong" : "regular"];
   return (
     <View
       className={className}
-      style={[{ borderRadius: radius, boxShadow: v.outerShadow }, style]}
+      style={[{ borderRadius: radius, boxShadow: OUTER_SHADOW }, style]}
       {...rest}
     >
       <View style={[styles.clip, { borderRadius: radius }]} pointerEvents="none">
-        <BlurView
-          intensity={v.intensity}
-          tint="light"
-          blurMethod="dimezisBlurView"
+        {/* dev: 半透明白渐变(无 backdrop-filter)→ 背景云朵 sharp 透出 */}
+        <LinearGradient
+          colors={GRADIENT}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
           style={StyleSheet.absoluteFill}
         />
+        {/* 1px 白边 + inset 顶高光 */}
         <View
           style={[
             StyleSheet.absoluteFill,
             {
-              backgroundColor: v.overlay,
               borderWidth: StyleSheet.hairlineWidth * 2,
-              borderColor: v.border,
+              borderColor: BORDER,
               borderRadius: radius,
-              boxShadow: v.insetHighlight,
+              boxShadow: INSET_HIGHLIGHT,
             },
           ]}
         />

@@ -1,13 +1,17 @@
 /**
- * AMBIENT 页——web AmbientView 的 RN 对应物（UI 刀 5）：
- * 页头（N device(s) · on-device TEE，对齐 web AmbientView）→ 开关卡 → 设备 avatar 行 →
- * TODAY · SIGNALS 时间线（来源标签 + 标题 + 描述 + #kind tag）。
- * 数据源 = 服务端 personal signals（GET /api/signals——RN ingest 上去
- * 的同一批数据读回，与 web 本地 timeline store 等价的服务端真相）。
- * 叙事摘要（web 的 NARRATIVE SUMMARY 卡）依赖 timeline 汇总管道，
- * 该管道在 RN 落地后接入。
+ * AMBIENT 页——web AmbientView 的 RN 对应物：
+ * 页头 → hero 开关卡（接 useAmbientToggle，与 NOW 页开关同步）→ 设备条 →
+ * 叙事摘要卡（TODAY · LOCAL SUMMARY）→ TODAY 时间线（图标格 + 时间·来源 + 隐私/置信徽章 +
+ * tag + dismiss + load-more）→ 底部 hint。
+ *
+ * 时间线数据源 = 本地 SqliteTimelineStore（= dev on-device 架构）。runtime 的 ctx.push 已把
+ * 采集信号写进 store，useAmbientTimeline 读回三路合成 TimelineEntry（对齐 dev）：LLM 摘要
+ * 事件（缺 llama 时为空）+ latestRawEvents（每源最新一条）+ pendingTranscriptWindows（待转写
+ * 窗口）。三路都空才显示 dev 同款空卡「No local timeline events yet」。LLM 摘要卡待端侧 llama。
+ * 延后：triggered-card「Open→」handoff。
  */
 import { type ReactNode, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   ActivityIndicator,
   Pressable,
@@ -18,6 +22,7 @@ import {
 } from "react-native";
 import Animated, {
   Easing,
+  cancelAnimation,
   interpolate,
   useAnimatedStyle,
   useSharedValue,
@@ -27,14 +32,40 @@ import Animated, {
 } from "react-native-reanimated";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
-import { Lock, Radio, Smartphone, Unlock } from "lucide-react-native";
-import { useQuery } from "@tanstack/react-query";
-import { fetchSignals } from "@pin-ai/core";
+import {
+  Activity,
+  ChevronRight,
+  Laptop,
+  Lightbulb,
+  Lock,
+  Plus,
+  Radio,
+  Smartphone,
+  Sparkles,
+  Unlock,
+  Watch,
+  X,
+  type LucideIcon,
+} from "lucide-react-native";
+import { type UserDevice, type UserDevicePlatform } from "@pin-ai/core";
 import { useUserDevices } from "@pin-ai/state";
 
+import i18n from "../i18n";
 import { GlassCard } from "../ui/GlassCard";
 import PageHeader from "../components/app/PageHeader";
-import { isAmbientEnabled, startAmbient, stopAmbient } from "../ambient/runtime";
+import { usePageActive } from "../components/app/KeepAlivePage";
+import { useAmbientToggle } from "../hooks/useAmbientToggle";
+import { useAmbientTimeline } from "../hooks/useAmbientTimeline";
+import { useAmbientLiveSession } from "../hooks/useAmbientLiveSession";
+import LiveSessionCard from "../components/ambient/LiveSessionCard";
+import LiveFullscreen from "../components/ambient/LiveFullscreen";
+import type { LiveSession } from "../ambient/live/live-session";
+import {
+  latestRawEventToEntry,
+  pendingTranscriptWindowToEntry,
+  timelineEventToEntry,
+  type TimelineEntry,
+} from "../ambient/timeline-entries";
 import { isUploadsLocked, setUploadsLocked } from "../ambient/ingest";
 import { EM_TIGHT, tracking } from "../ui/typography";
 
@@ -43,14 +74,41 @@ export interface HeaderProps {
   onOpenMenu: () => void;
 }
 
-function timeLabel(iso: string): string {
-  return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+// ── 设备条 helpers（对齐 dev AmbientView 的 iconForUserDevice / signalClassForUserDevice
+//    / deviceStripSummary；文案照 dev 走 i18n（key 一致），色值沿用本文件 hex）──
+
+/** 平台 → lucide 图标（wearable→Watch / sensor→Activity / embedded→Laptop / 其余→Smartphone）。 */
+function iconForUserDevice(platform: UserDevicePlatform): LucideIcon {
+  if (platform === "wearable") return Watch;
+  if (platform === "sensor") return Activity;
+  if (platform === "embedded") return Laptop;
+  return Smartphone;
 }
 
-/** kind → 短标签（device.location → location）。 */
-function kindTag(kind: string): string {
-  return kind.split(".").pop() ?? kind;
+/** 信号点色：无 last_seen 或超 24h 未见 → amber-500，否则 emerald-500（dev signalClassForUserDevice）。 */
+function signalColorForDevice(device: UserDevice): string {
+  if (!device.last_seen_at) return "#f59e0b"; // amber-500
+  const ageMs = Date.now() - new Date(device.last_seen_at).getTime();
+  return ageMs > 24 * 60 * 60 * 1000 ? "#f59e0b" : "#10b981"; // amber-500 / emerald-500
 }
+
+/** 设备条汇总文案（dev deviceStripSummary，i18n key 与 dev 一致）。 */
+function deviceStripSummary(
+  count: number,
+  loading: boolean,
+  error: string | null,
+  hidden: number,
+): string {
+  if (loading && count === 0) return i18n.t("ambient:view.deviceCountLoading");
+  if (error && count === 0) return i18n.t("ambient:deviceStrip.unavailable");
+  if (hidden > 0) return i18n.t("ambient:deviceStrip.moreConnected", { count: hidden });
+  if (count > 0) return i18n.t("ambient:deviceStrip.manage");
+  return i18n.t("ambient:deviceStrip.nonePaired");
+}
+
+// 时间线条目模型 + mapper（event/raw/pending → TimelineEntry）在 ambient/timeline-entries.ts。
+const INITIAL_TIMELINE_COUNT = 10;
+const TIMELINE_LOAD_MORE = 10;
 
 // web 副标题各段共用：bodySm(13) Inter_400 + 显式 lineHeight（RN 必写）。
 const subtitlePartStyle = { fontFamily: "Inter_400Regular", lineHeight: 18 };
@@ -60,47 +118,72 @@ const subtitlePartStyle = { fontFamily: "Inter_400Regular", lineHeight: 18 };
 const FG = "230, 25%, 15%";
 const fg = (alpha?: number) => (alpha === undefined ? `hsl(${FG})` : `hsla(${FG}, ${alpha})`);
 const BG = "hsl(220, 30%, 96%)";
+// dev 时间线 device 芯片 / 摘要标签用的品红（hsl(304 75% 45/55%)）。
+const PINK = "hsl(304, 75%, 45%)";
+const PINK_BRIGHT = "hsl(304, 75%, 55%)";
 
 export default function AmbientScreen({
   headerProps,
   userId,
+  onOpenConnect,
 }: {
   headerProps: HeaderProps;
   userId: string;
+  onOpenConnect: () => void;
 }) {
-  const [on, setOn] = useState(false);
+  const { t } = useTranslation("ambient");
+  const { ambientOn, togglePending, toggle } = useAmbientToggle(userId);
   const [locked, setLocked] = useState(false);
-  const { devices } = useUserDevices();
-  const activeDevices = devices.filter((d) => d.status === "active");
-  // web AmbientView deviceCount：单复数化（"1 device" / "2 devices"）。
-  const deviceCountLabel = `${activeDevices.length} ${activeDevices.length === 1 ? "device" : "devices"}`;
+  const [visibleCount, setVisibleCount] = useState(INITIAL_TIMELINE_COUNT);
+  const { devices, loading: devicesLoading, error: devicesError } = useUserDevices();
+  // dev AmbientView：连接设备 = active 且非 web 平台（web 会话不算真实配对设备）。
+  // header 计数与下方设备条同源，避免两处数字打架。
+  const connectedDevices = devices.filter(
+    (d) => d.status === "active" && d.platform !== "web",
+  );
+  const connectedCount = connectedDevices.length;
+  const visibleConnectedDevices = connectedDevices.slice(0, 5);
+  const hiddenDeviceCount = Math.max(0, connectedCount - visibleConnectedDevices.length);
+  // dev view.deviceCountLabel：loading / error 回退 + 单复数化（i18n plural）。
+  const deviceCountLabel =
+    devicesLoading && connectedCount === 0
+      ? t("view.deviceCountLoading")
+      : devicesError && connectedCount === 0
+        ? t("view.deviceCountUnavailable")
+        : t("view.deviceCount", { count: connectedCount });
 
-  const startOfDay = new Date();
-  startOfDay.setHours(0, 0, 0, 0);
-  const signalsQuery = useQuery({
-    queryKey: ["ambient", "signals", startOfDay.toDateString()],
-    queryFn: ({ signal }) =>
-      fetchSignals(
-        { status: "all", since: startOfDay.toISOString(), limit: 50 },
-        signal,
-      ),
-    refetchInterval: 60_000,
-  });
-  const signals = signalsQuery.data?.signals ?? [];
+  // 时间线读本地 store（= dev on-device 架构）：三路合成 TimelineEntry + 时间倒序。
+  const {
+    events,
+    pendingTranscriptWindows,
+    latestRawEvents,
+    localDate,
+    loading: timelineLoading,
+    narrativeSummary,
+    dismiss,
+  } = useAmbientTimeline();
+  const timelineEntries: TimelineEntry[] = [
+    ...events.map((e) => timelineEventToEntry(e, dismiss)),
+    ...pendingTranscriptWindows.map(pendingTranscriptWindowToEntry),
+    ...latestRawEvents.map(latestRawEventToEntry),
+  ].sort((a, b) => (b.sortTs ?? 0) - (a.sortTs ?? 0));
+  // dev：LLM 事件(priority) 先显示,其余(raw/pending)按剩余槽位补。
+  const priorityEntries = timelineEntries.filter((e) => e.priority);
+  const otherEntries = timelineEntries.filter((e) => !e.priority);
+  const visibleTimelineEntries = [
+    ...priorityEntries,
+    ...otherEntries.slice(0, Math.max(0, visibleCount - priorityEntries.length)),
+  ];
 
+  // 实时 live session（转写驱动）+ 全屏 focus overlay 目标（对齐 dev AmbientView）。
+  const { session: liveSession, previewVisibleCount, dismiss: dismissLiveSession } =
+    useAmbientLiveSession({ ambientOn, dismissible: true });
+  const [fullscreenSession, setFullscreenSession] = useState<LiveSession | null>(null);
+
+  // 跨天 → 重置 load-more（对齐 dev localDate 重置）。
   useEffect(() => {
-    void isAmbientEnabled().then(setOn);
-  }, []);
-
-  const toggle = async (next: boolean) => {
-    setOn(next);
-    if (next) {
-      const started = await startAmbient(userId);
-      if (started.length === 0) setOn(false);
-    } else {
-      await stopAmbient();
-    }
-  };
+    setVisibleCount(INITIAL_TIMELINE_COUNT);
+  }, [localDate]);
 
   // upload soft-lock：开时显示锁钮；锁上 = 暂停上传（继续本地采集）。持久化在 ingest。
   useEffect(() => {
@@ -121,7 +204,7 @@ export default function AmbientScreen({
             className="text-[24px] text-foreground"
             style={{ fontFamily: "Inter_600SemiBold", letterSpacing: tracking(24, EM_TIGHT), lineHeight: 30 }}
           >
-            Ambient
+            {t("view.title")}
           </Text>
         }
         subtitle={
@@ -132,7 +215,7 @@ export default function AmbientScreen({
             </Text>
             <Text className="text-[13px]" style={[subtitlePartStyle, { color: fg(0.3) }]}>·</Text>
             <Text className="text-[13px]" style={[subtitlePartStyle, { color: fg(0.6) }]}>
-              on-device TEE
+              {t("view.onDeviceTee")}
             </Text>
           </View>
         }
@@ -140,110 +223,341 @@ export default function AmbientScreen({
       />
       <ScrollView className="flex-1 px-4" contentContainerClassName="pb-12">
         {/* 开关卡（web AmbientView hero switch）：渐变玻璃 + 雷达图标 + 文案 + 锁 + 开关 */}
-        <AmbientHeroCard on={on}>
+        <AmbientHeroCard on={ambientOn}>
           <View className="flex-1 flex-row items-center" style={{ gap: 12 }}>
-            <AmbientStatusIcon on={on} />
+            <AmbientStatusIcon on={ambientOn} />
             <View className="flex-1">
               <Text
                 numberOfLines={1}
                 className="text-[13px]"
                 style={{ fontFamily: "Inter_600SemiBold", lineHeight: 16, color: fg() }}
               >
-                {on ? "Ambient is on" : "Ambient is off"}
+                {ambientOn ? t("view.ambientOn") : t("view.ambientOff")}
               </Text>
               <Text
                 numberOfLines={1}
                 className="mt-0.5 text-[11px]"
                 style={{ fontFamily: "Inter_400Regular", lineHeight: 14, color: fg(0.55) }}
               >
-                {!on
-                  ? "AI is paused from sensing your surroundings"
+                {!ambientOn
+                  ? t("view.statusPaused")
                   : locked
-                    ? "Sensing locally — uploads paused"
-                    : "Listening, sensing, understanding context"}
+                    ? t("view.statusUploadsPaused")
+                    : t("view.statusListening")}
               </Text>
             </View>
           </View>
           <View className="flex-row items-center" style={{ gap: 8 }}>
-            {on ? <LockButton locked={locked} onPress={() => void toggleLock()} /> : null}
-            <AmbientToggle on={on} onPress={() => void toggle(!on)} />
+            {ambientOn ? <LockButton locked={locked} onPress={() => void toggleLock()} /> : null}
+            <AmbientToggle on={ambientOn} pending={togglePending} onPress={() => void toggle()} />
           </View>
         </AmbientHeroCard>
 
-        {/* 设备行 */}
-        <GlassCard className="mt-3 flex-row items-center gap-3 px-4 py-3">
-          <View className="flex-row">
-            {activeDevices.slice(0, 3).map((d, i) => (
-              <View
-                key={d.device_id}
-                className="h-8 w-8 items-center justify-center rounded-full bg-white border border-white/80"
-                style={{ marginLeft: i > 0 ? -8 : 0 }}
-              >
-                <Smartphone size={13} color="#71717a" strokeWidth={1.8} />
-              </View>
-            ))}
-          </View>
-          <View className="flex-1" />
-          <View className="items-end">
-            <Text className="text-[13px] text-foreground" style={{ fontFamily: "Inter_600SemiBold" }}>
-              Manage devices
-            </Text>
-            <Text className="text-[11px] text-muted-foreground">Connect in Control ›</Text>
-          </View>
-        </GlassCard>
+        {/* Live session 卡（dev AmbientView：ambient 开且检测到实时会话时显示）*/}
+        <LiveSessionCard
+          session={liveSession}
+          previewVisibleCount={previewVisibleCount}
+          variant="ambient"
+          onFocus={setFullscreenSession}
+          onDismiss={dismissLiveSession}
+        />
 
-        {/* TODAY 时间线 */}
-        <View className="mt-5 flex-row items-center">
-          <Text className="flex-1 text-[11px] tracking-[1.5px] text-pink-500" style={{ fontFamily: "Inter_600SemiBold" }}>
-            ✦ TODAY · SIGNALS
-          </Text>
-          <Text className="text-[11px] text-muted-foreground" style={{ fontFamily: "Inter_400Regular" }}>
-            {signals.length} entries
+        {/* 设备条（web AmbientView "Devices strip"）：可点跳 Connect + 平台图标 +
+            信号点（绿=近期活跃 / 黄=超 24h 或未见）+ 溢出气泡 +N + 动态汇总文案 */}
+        <Pressable
+          onPress={onOpenConnect}
+          accessibilityRole="button"
+          accessibilityLabel={t("view.manageConnectedDevices")}
+          className="mt-5"
+        >
+          <GlassCard className="flex-row items-center" style={{ padding: 10, gap: 8 }}>
+            {/* 设备 avatar 行（-space-x-1.5 = -6 重叠）*/}
+            <View className="flex-1 flex-row items-center">
+              {visibleConnectedDevices.map((device, i) => {
+                const Icon = iconForUserDevice(device.platform);
+                return (
+                  <View
+                    key={device.device_id}
+                    style={{
+                      width: 28,
+                      height: 28,
+                      borderRadius: 14,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      backgroundColor: BG,
+                      borderWidth: 1,
+                      borderColor: fg(0.1),
+                      marginLeft: i > 0 ? -6 : 0,
+                    }}
+                  >
+                    <Icon size={13} strokeWidth={1.8} color={fg(0.8)} />
+                    {/* 信号点：6px 实心 + 1px 背景色环（对齐 web w-1.5 ring-background）*/}
+                    <View
+                      style={{
+                        position: "absolute",
+                        bottom: -2,
+                        right: -2,
+                        width: 8,
+                        height: 8,
+                        borderRadius: 4,
+                        backgroundColor: signalColorForDevice(device),
+                        borderWidth: 1,
+                        borderColor: BG,
+                      }}
+                    />
+                  </View>
+                );
+              })}
+              {/* 溢出/添加气泡（虚线圈；hidden>0 显 +N，否则 Plus）*/}
+              <View
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 14,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: fg(0.05),
+                  borderWidth: 1,
+                  borderColor: fg(0.25),
+                  borderStyle: "dashed",
+                  marginLeft: visibleConnectedDevices.length > 0 ? -6 : 0,
+                }}
+              >
+                {hiddenDeviceCount > 0 ? (
+                  <Text style={{ fontFamily: "Inter_600SemiBold", fontSize: 10, lineHeight: 10, color: fg(0.5) }}>
+                    +{hiddenDeviceCount}
+                  </Text>
+                ) : (
+                  <Plus size={12} strokeWidth={2.2} color={fg(0.5)} />
+                )}
+              </View>
+            </View>
+
+            {/* 右侧文案：汇总（caption 11 medium）+ Connect in Control ›（micro 10）*/}
+            <View style={{ alignItems: "flex-end", paddingRight: 4 }}>
+              <Text
+                numberOfLines={1}
+                style={{ fontFamily: "Inter_500Medium", fontSize: 11, lineHeight: 14, color: fg(0.75) }}
+              >
+                {deviceStripSummary(connectedCount, devicesLoading, devicesError, hiddenDeviceCount)}
+              </Text>
+              <View style={{ marginTop: 2, flexDirection: "row", alignItems: "center", gap: 2 }}>
+                <Text style={{ fontFamily: "Inter_400Regular", fontSize: 10, lineHeight: 13, color: fg(0.45) }}>
+                  {t("view.connectInControl")}
+                </Text>
+                <ChevronRight size={9} strokeWidth={2} color={fg(0.45)} />
+              </View>
+            </View>
+          </GlassCard>
+        </Pressable>
+
+        {/* 叙事摘要卡（dev AmbientView "TODAY · LOCAL SUMMARY"）：≥2 条可见事件才出。 */}
+        {narrativeSummary ? (
+          <View style={{ marginTop: 20, borderRadius: 16, overflow: "hidden" }}>
+            <LinearGradient
+              colors={["hsl(220, 50%, 98%)", "hsl(260, 40%, 97%)"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={{ padding: 16, borderRadius: 16, borderWidth: 1, borderColor: "hsla(0, 0%, 100%, 0.5)" }}
+            >
+              <View className="flex-row items-center justify-between" style={{ marginBottom: 8 }}>
+                <View className="flex-row items-center" style={{ gap: 6 }}>
+                  <Sparkles size={11} color={PINK_BRIGHT} />
+                  <Text style={{ fontFamily: "Inter_700Bold", fontSize: 10, letterSpacing: 1.6, color: PINK }}>
+                    {t("view.todayLocalSummary")}
+                  </Text>
+                </View>
+                <Text style={{ fontFamily: "Inter_400Regular", fontSize: 10, color: fg(0.45) }}>
+                  {t("view.entries", { count: timelineEntries.length })}
+                </Text>
+              </View>
+              <Text style={{ fontFamily: "Inter_400Regular", fontSize: 13, lineHeight: 20, color: fg(0.85) }}>
+                {narrativeSummary}
+              </Text>
+            </LinearGradient>
+          </View>
+        ) : null}
+
+        {/* TODAY 时间线：三路 TimelineEntry(LLM 事件 + 最近原始事件 + 待转写窗口)。图标格 +
+            时间·来源 + 隐私/置信徽章 + tag + dismiss + load-more。空/加载态文案逐字对齐 dev。 */}
+        {timelineEntries.length === 0 ? (
+          <GlassCard className="mt-5" style={{ padding: 16, alignItems: "center" }}>
+            {timelineLoading ? (
+              <ActivityIndicator color="#a1a1aa" style={{ marginBottom: 8 }} />
+            ) : null}
+            <Text
+              className="text-center"
+              style={{ fontFamily: "Inter_600SemiBold", fontSize: 13, lineHeight: 18, color: fg(0.8) }}
+            >
+              {timelineLoading ? t("view.buildingTimeline") : t("view.noTimelineEvents")}
+            </Text>
+            {!timelineLoading ? (
+              <Text
+                className="text-center"
+                style={{ fontFamily: "Inter_400Regular", fontSize: 12, lineHeight: 17, color: fg(0.5), marginTop: 4 }}
+              >
+                {ambientOn
+                  ? t("view.emptyKeepOn")
+                  : t("view.emptyTurnOn")}
+              </Text>
+            ) : null}
+          </GlassCard>
+        ) : (
+          <View style={{ marginTop: 20, gap: 10 }}>
+            {visibleTimelineEntries.map((entry) => {
+              const Tile = entry.icon;
+              const Chip = entry.device.icon;
+              const privacyLabel =
+                entry.privacyTag === "private"
+                  ? t("view.privateBadge")
+                  : entry.privacyTag === "sensitive"
+                    ? t("view.sensitiveBadge")
+                    : null;
+              return (
+                <GlassCard key={entry.id ?? entry.time + entry.title} style={{ padding: 14 }}>
+                  <View className="flex-row" style={{ gap: 12 }}>
+                    {/* 图标格 40 rounded-xl */}
+                    <View
+                      style={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: 12,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        backgroundColor: fg(0.04),
+                        borderWidth: 1,
+                        borderColor: fg(0.06),
+                      }}
+                    >
+                      <Tile size={17} strokeWidth={1.7} color={fg(0.75)} />
+                    </View>
+                    <View className="flex-1">
+                      {/* 头部行：[time · device · 隐私 · uncertain] 左，dismiss ✕ 右 */}
+                      <View className="flex-row items-start justify-between" style={{ gap: 8 }}>
+                        <View className="flex-1 flex-row items-center" style={{ flexWrap: "wrap", gap: 6 }}>
+                          <Text style={{ fontFamily: "Inter_600SemiBold", fontSize: 11, lineHeight: 15, color: fg(0.7) }}>
+                            {entry.time}
+                          </Text>
+                          <Text style={{ fontSize: 11, lineHeight: 15, color: fg(0.3) }}>·</Text>
+                          <View className="flex-row items-center" style={{ gap: 4 }}>
+                            <Chip size={11} strokeWidth={2} color={PINK} />
+                            <Text style={{ fontFamily: "Inter_500Medium", fontSize: 11, lineHeight: 15, color: PINK }}>
+                              {entry.device.name}
+                            </Text>
+                          </View>
+                          {privacyLabel ? (
+                            <>
+                              <Text style={{ fontSize: 11, lineHeight: 15, color: fg(0.3) }}>·</Text>
+                              <View className="flex-row items-center" style={{ gap: 3 }}>
+                                <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: "hsl(304, 75%, 63%)" }} />
+                                <Text style={{ fontFamily: "Inter_500Medium", fontSize: 11, lineHeight: 15, color: PINK_BRIGHT }}>
+                                  {privacyLabel}
+                                </Text>
+                              </View>
+                            </>
+                          ) : null}
+                          {entry.confidenceLabel === "uncertain" ? (
+                            <>
+                              <Text style={{ fontSize: 11, lineHeight: 15, color: fg(0.3) }}>·</Text>
+                              <Text style={{ fontFamily: "Inter_500Medium", fontSize: 11, lineHeight: 15, color: fg(0.45) }}>
+                                {t("view.uncertainBadge")}
+                              </Text>
+                            </>
+                          ) : null}
+                        </View>
+                        {entry.onDismiss ? (
+                          <Pressable
+                            onPress={entry.onDismiss}
+                            hitSlop={8}
+                            accessibilityRole="button"
+                            accessibilityLabel={t("view.dismissAria")}
+                          >
+                            <X size={13} color={fg(0.3)} />
+                          </Pressable>
+                        ) : null}
+                      </View>
+                      {/* 标题 */}
+                      <Text
+                        style={{
+                          fontFamily: "Inter_600SemiBold",
+                          fontSize: 13,
+                          lineHeight: 18,
+                          color: fg(),
+                          marginTop: 4,
+                          marginBottom: 4,
+                        }}
+                      >
+                        {entry.title}
+                      </Text>
+                      {/* 正文 */}
+                      {entry.body ? (
+                        <Text style={{ fontFamily: "Inter_400Regular", fontSize: 13, lineHeight: 18, color: fg(0.65) }}>
+                          {entry.body}
+                        </Text>
+                      ) : null}
+                      {/* tags */}
+                      {entry.tags.length > 0 ? (
+                        <View className="flex-row" style={{ flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                          {entry.tags.map((tag) => (
+                            <View
+                              key={tag}
+                              style={{ borderRadius: 999, backgroundColor: fg(0.05), paddingHorizontal: 8, paddingVertical: 2 }}
+                            >
+                              <Text style={{ fontFamily: "Inter_400Regular", fontSize: 10, lineHeight: 14, color: fg(0.55) }}>
+                                #{tag}
+                              </Text>
+                            </View>
+                          ))}
+                        </View>
+                      ) : null}
+                    </View>
+                  </View>
+                </GlassCard>
+              );
+            })}
+            {visibleTimelineEntries.length < timelineEntries.length ? (
+              <Pressable
+                onPress={() => setVisibleCount((c) => Math.min(c + TIMELINE_LOAD_MORE, timelineEntries.length))}
+                accessibilityRole="button"
+              >
+                <View
+                  style={{
+                    borderRadius: 16,
+                    borderWidth: 1,
+                    borderColor: fg(0.08),
+                    backgroundColor: fg(0.035),
+                    paddingHorizontal: 16,
+                    paddingVertical: 12,
+                    alignItems: "center",
+                  }}
+                >
+                  <Text style={{ fontFamily: "Inter_600SemiBold", fontSize: 12, lineHeight: 16, color: fg(0.65) }}>
+                    {t("view.loadMore", { count: timelineEntries.length - visibleTimelineEntries.length })}
+                  </Text>
+                </View>
+              </Pressable>
+            ) : null}
+          </View>
+        )}
+
+        {/* 底部 hint（web AmbientView bottom hint）*/}
+        <View
+          className="flex-row items-center justify-center"
+          style={{ marginTop: 20, gap: 6 }}
+        >
+          <Lightbulb size={10} color={fg(0.4)} />
+          <Text style={{ fontFamily: "Inter_400Regular", fontSize: 10, lineHeight: 14, color: fg(0.4), flexShrink: 1 }}>
+            {ambientOn
+              ? t("view.hintLiveAssist")
+              : t("view.hintEnableAssist")}
           </Text>
         </View>
-
-        {signalsQuery.isLoading ? (
-          <ActivityIndicator color="#a1a1aa" style={{ marginTop: 24 }} />
-        ) : signals.length === 0 ? (
-          <Text className="mt-6 text-center text-[13px] text-muted-foreground" style={{ fontFamily: "Inter_400Regular" }}>
-            {on
-              ? "Listening — signals will appear here as your day unfolds."
-              : "Turn on ambient sensing to start building today's timeline."}
-          </Text>
-        ) : (
-          signals.map((s) => (
-            <GlassCard key={s.id} className="mt-2.5 px-4 py-3.5">
-              <View className="flex-row items-center gap-2">
-                <Text className="text-[11px] text-muted-foreground" style={{ fontFamily: "Inter_500Medium" }}>
-                  {timeLabel(s.occurred_at)}
-                </Text>
-                <Text className="text-[11px] text-muted-foreground">·</Text>
-                <View className="flex-row items-center gap-1">
-                  <Smartphone size={10} color="#a1a1aa" strokeWidth={1.8} />
-                  <Text className="text-[11px] text-muted-foreground" style={{ fontFamily: "Inter_500Medium" }}>
-                    {s.source?.startsWith("device:") ? "iPhone" : (s.source ?? "device")}
-                  </Text>
-                </View>
-              </View>
-              <Text className="mt-1.5 text-[15px] text-foreground" style={{ fontFamily: "Inter_600SemiBold" }}>
-                {s.title}
-              </Text>
-              {s.summary ? (
-                <Text className="mt-1 text-[13px] leading-5 text-foreground/70" style={{ fontFamily: "Inter_400Regular" }}>
-                  {s.summary}
-                </Text>
-              ) : null}
-              <View className="mt-2 flex-row gap-1.5">
-                <View className="rounded-full bg-white/80 border border-white/70 px-2 py-0.5">
-                  <Text className="text-[10px] text-muted-foreground" style={{ fontFamily: "Inter_500Medium" }}>
-                    #{kindTag(s.kind)}
-                  </Text>
-                </View>
-              </View>
-            </GlassCard>
-          ))
-        )}
       </ScrollView>
+
+      {/* 全屏 focus overlay（Focus 钮打开；Modal 全屏接管）*/}
+      {fullscreenSession ? (
+        <LiveFullscreen session={fullscreenSession} onClose={() => setFullscreenSession(null)} />
+      ) : null}
     </View>
   );
 }
@@ -287,12 +601,13 @@ function AmbientHeroCard({ on, children }: { on: boolean; children: ReactNode })
 
 /** upload 软锁钮（web w-9 h-9=36 圆 + border；锁=实心 foreground，开=极淡）。 */
 function LockButton({ locked, onPress }: { locked: boolean; onPress: () => void }) {
+  const { t } = useTranslation("ambient");
   return (
     <Pressable
       onPress={onPress}
       hitSlop={6}
       accessibilityRole="button"
-      accessibilityLabel={locked ? "Unlock uploads" : "Lock uploads"}
+      accessibilityLabel={locked ? t("view.unlockUploads") : t("view.lockUploads")}
     >
       <View
         style={{
@@ -356,14 +671,21 @@ function AmbientStatusIcon({ on }: { on: boolean }) {
  *  渐隐、后 25% 停在不可见再 snap 回，形成"雷达 blip"节奏），bezier(0,0,.2,1)。
  *  底色用 fg() 满不透明，由动画 opacity 控到峰值 15%（= web bg-foreground/15）。 */
 function PingRing() {
+  const pageActive = usePageActive();
   const t = useSharedValue(0);
   useEffect(() => {
+    // 页面隐藏时停帧（keep-alive 常驻后无限循环不能空跑）。
+    if (!pageActive) return;
     t.value = withRepeat(
       withTiming(1, { duration: 1000, easing: Easing.bezier(0, 0, 0.2, 1) }),
       -1,
       false,
     );
-  }, [t]);
+    return () => {
+      cancelAnimation(t);
+      t.value = 0;
+    };
+  }, [t, pageActive]);
   const style = useAnimatedStyle(() => ({
     transform: [{ scale: interpolate(t.value, [0, 0.75, 1], [1, 2, 2]) }],
     opacity: interpolate(t.value, [0, 0.75, 1], [0.15, 0, 0]),
@@ -379,21 +701,29 @@ function PingRing() {
   );
 }
 
-/** 自定义开关（web w-12 h-7 = 48×28 + 24 拇指，spring 500/35），替原生 Switch。 */
-function AmbientToggle({ on, onPress }: { on: boolean; onPress: () => void }) {
+/** 自定义开关（web w-12 h-7 = 48×28 + 24 拇指，spring 500/35），替原生 Switch。
+ *  pending（翻转在途）时降透明 + 禁点，对齐 dev disabled:opacity-60。 */
+function AmbientToggle({ on, pending = false, onPress }: { on: boolean; pending?: boolean; onPress: () => void }) {
   const x = useSharedValue(on ? 20 : 0);
   useEffect(() => {
     x.value = withSpring(on ? 20 : 0, { stiffness: 500, damping: 35 });
   }, [on, x]);
   const thumbStyle = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }] }));
   return (
-    <Pressable onPress={onPress} hitSlop={8} accessibilityRole="switch" accessibilityState={{ checked: on }}>
+    <Pressable
+      onPress={onPress}
+      disabled={pending}
+      hitSlop={8}
+      accessibilityRole="switch"
+      accessibilityState={{ checked: on, disabled: pending }}
+    >
       <View
         style={{
           width: 48,
           height: 28,
           borderRadius: 14,
           justifyContent: "center",
+          opacity: pending ? 0.6 : 1,
           backgroundColor: on ? fg() : fg(0.2),
         }}
       >

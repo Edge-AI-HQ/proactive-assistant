@@ -1,0 +1,177 @@
+{
+  "controlPanel": {
+    "title": "Connect",
+    "subtitle": "Data sources & devices powering your AI",
+    "dataSources": "Data Sources",
+    "ofTotal": "of {{total}}",
+    "allSynced": "All synced",
+    "devices": "Devices",
+    "paired": "paired",
+    "ambientSources": "Ambient Sources",
+    "activeCount": "{{count}} active",
+    "meshDescription": "Phones, laptops, wearables, glasses, cameras — encrypted peer-to-peer"
+  },
+  "dataConnections": {
+    "notConfigured": "Composio is not configured on this deployment. Connections will be unavailable until the backend operator sets it up.",
+    "categories": {
+      "recommended": {
+        "name": "Recommended",
+        "description": "Best first-party data sources"
+      }
+    },
+    "noConnectors": "No connectors available yet",
+    "tiers": {
+      "core": "Core sources",
+      "more": "More sources",
+      "optional": "Optional"
+    },
+    "connect": "Connect",
+    "connected": "Connected",
+    "disconnect": "Disconnect",
+    "add": "Add",
+    "save": "Save",
+    "addAccountAria": "Add {{name}} account",
+    "authorizeHint": "Authorize in your browser — this will update automatically",
+    "initTask": {
+      "initializing": "Initializing…",
+      "initializingDetail": "Initializing · {{detail}}",
+      "skipped": "Initialization skipped · {{reason}}",
+      "initialized": "Initialized · {{fetched}} fetched",
+      "memories_one": "{{count}} memory",
+      "memories_other": "{{count}} memories",
+      "skills_one": "{{count}} skill",
+      "skills_other": "{{count}} skills",
+      "failed": "Initialization failed — {{error}}",
+      "unknownError": "Unknown error",
+      "stageQueued": "Queued",
+      "stageFetch": "Fetching data",
+      "stageFetchWithLimit": "Fetching data (limit {{limit}})",
+      "stageRaw": "Saving locally",
+      "stageSignals": "Extracting signals",
+      "stageEvolve": "Distilling memories"
+    },
+    "customMcp": {
+      "syncFailed": "Sync failed",
+      "fetched": "{{value}} fetched",
+      "distilling": "Distilling",
+      "connected": "Connected",
+      "addTitle": "Add custom connector",
+      "editTitle": "Edit custom connector",
+      "dialogDescription": "Connect PIN AI to your data and tools with a remote MCP server.",
+      "closeAria": "Close custom connector dialog",
+      "namePlaceholder": "Name",
+      "urlPlaceholder": "Remote MCP server URL",
+      "trustNote": "Only use connectors from developers you trust. PIN AI cannot verify that third-party tools will work as intended or remain unchanged.",
+      "editAria": "Edit {{name}}",
+      "deleteAria": "Delete {{name}}",
+      "nameRequired": "Enter a connector name",
+      "httpsRequired": "Remote MCP server URL must use https",
+      "urlInvalid": "Enter a valid Remote MCP server URL",
+      "failed": "Custom connector failed",
+      "deleteFailed": "Delete custom connector failed",
+      "addButton": "Add custom connector"
+    },
+    "catalog": {
+      "title": "More data connectors",
+      "supportedCount": "{{total}} supported sources",
+      "supportedFallback": "1000+ supported sources",
+      "searchPlaceholder": "Search connectors",
+      "loading": "Loading connectors",
+      "empty": "No connectors found",
+      "load": "Load connectors",
+      "resultsAria": "Connector results",
+      "scrollForMore": "Scroll for more",
+      "categories": {
+        "all": "All",
+        "email": "Email",
+        "calendar": "Calendar",
+        "teamChat": "Team chat",
+        "productivity": "Productivity",
+        "devTools": "Dev tools",
+        "crm": "CRM",
+        "projects": "Projects",
+        "documents": "Documents",
+        "databases": "Databases",
+        "analytics": "Analytics",
+        "marketing": "Marketing",
+        "ecommerce": "Ecommerce",
+        "scheduling": "Scheduling",
+        "files": "Files",
+        "videoAudio": "Video & audio"
+      }
+    },
+    "coverage": {
+      "viaDriveMetadata": "via Drive metadata"
+    },
+    "errors": {
+      "connectFailed": "Connect failed",
+      "missingRedirect": "Connect succeeded but missing redirect info — please try again",
+      "notConfirmed": "Connection not confirmed — please try again",
+      "unexpected": "Unexpected error",
+      "catalogUnavailable": "Catalog unavailable",
+      "disconnectFailed": "Disconnect failed"
+    }
+  },
+  "deviceConnections": {
+    "loading": "Loading devices…",
+    "empty": "No other devices paired yet. Sign in on the mobile app to have it appear here.",
+    "removeConfirm": "Remove \"{{name}}\"?",
+    "refresh": "Refresh",
+    "never": "never",
+    "lastSeen": "last seen {{time}}",
+    "deviceAria": "{{platform}} device",
+    "platform": {
+      "ios": "iOS",
+      "android": "Android",
+      "wearable": "Wearable",
+      "sensor": "Sensor",
+      "embedded": "Embedded",
+      "web": "Web"
+    },
+    "revokeDevice": "Revoke device",
+    "openTimeline": "Open timeline"
+  },
+  "browserLogins": {
+    "title": "Website logins",
+    "subtitle": "The assistant stays signed in to these sites for you — remove any anytime",
+    "loading": "Loading",
+    "needsRelogin": "Needs re-login",
+    "removeAria": "Remove {{domain}} login"
+  },
+  "deviceTimeline": {
+    "back": "Back",
+    "loaded": "{{count}} loaded",
+    "filters": {
+      "all": "All",
+      "today": "Today"
+    },
+    "range": {
+      "allDays": "All days",
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "last7d": "Last 7 days",
+      "customDay": "Custom day"
+    },
+    "filterByDay": "Filter by day",
+    "shownCount": "{{count}} shown",
+    "emptyTimeline": "No data yet from this device.",
+    "loadMore": "Load {{count}} more",
+    "end": "— end —",
+    "download": "Download {{name}}"
+  },
+  "connectChip": {
+    "connect": "Connect {{name}}",
+    "connected": "{{name}} connected",
+    "alreadyConnected": "{{name}} already connected"
+  },
+  "toolkits": {
+    "calendar": "Calendar",
+    "drive": "Drive",
+    "docs": "Docs",
+    "sheets": "Sheets"
+  },
+  "identity": {
+    "connectorFallback": "Connector",
+    "accountUnavailable": "Account details unavailable"
+  }
+}

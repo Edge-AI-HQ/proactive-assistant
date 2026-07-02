@@ -35,10 +35,13 @@ import Animated, {
 } from "react-native-reanimated";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { Brain, Check, ChevronDown, Loader2, MessageCircle, X, Zap } from "lucide-react-native";
+import { useTranslation } from "react-i18next";
 import {
   basketToLovableCategory,
   isReminderCard,
+  reasoningStepKey,
   reasoningStepLabel,
+  sourceAppMeta,
   type ReasoningStep,
   type SSEEvent,
   type VisibleCardEntry,
@@ -47,7 +50,8 @@ import { useCardExecutionRun } from "@pin-ai/state";
 
 import { useSinkDismissGesture } from "../chat/useSinkDismiss";
 import { CATEGORIES } from "./SphereCards";
-import { sourceIcon, sourceLabel } from "../../lib/source-icons";
+import i18n from "../../i18n";
+import { sourceIcon } from "../../lib/source-icons";
 import { toolIcon } from "../../lib/tool-icons";
 import { readLocalHistory } from "../../lib/sync/sync-bootstrap";
 
@@ -70,7 +74,10 @@ function eventsToFallbackPlan(events: SSEEvent[]): { text: string; tool: string 
     if (!name || name === "propose_action" || seen.has(name)) continue;
     seen.add(name);
     const preview = typeof ev.data?.argsPreview === "string" ? ev.data.argsPreview.trim() : "";
-    rows.push({ text: preview && preview.length <= 140 ? preview : `Called ${name}`, tool: name });
+    rows.push({
+      text: preview && preview.length <= 140 ? preview : i18n.t("card:fallback.calledTool", { name }),
+      tool: name,
+    });
   }
   return rows;
 }
@@ -98,19 +105,25 @@ function GradientLabel({ text }: { text: string }) {
 
 /** SOURCES chip——web SourcePill：圆角 + 白底图标盒 + label。 */
 function SourcePill({ slug }: { slug: string }) {
+  const { t } = useTranslation("card");
   const Icon = sourceIcon(slug);
+  // 对齐 web sourceAppDisplay：普通词走 i18n（card:sourceApp.*），品牌词
+  // （无 labelKey）保留英文 brand 名。
+  const meta = sourceAppMeta(slug);
+  const label = meta.labelKey ? t(`sourceApp.${meta.labelKey}`) : meta.label;
   return (
     <View style={styles.pill}>
       <View style={styles.pillIcon}>
         <Icon size={12} color="rgba(29,33,48,0.7)" strokeWidth={1.8} />
       </View>
-      <Text style={styles.pillLabel}>{sourceLabel(slug)}</Text>
+      <Text style={styles.pillLabel}>{label}</Text>
     </View>
   );
 }
 
 /** HOW I REASONED——web HowGeneratedSection：默认折叠，点开展开 reasoning steps。 */
 function HowReasoned({ steps }: { steps: ReasoningStep[] }) {
+  const { t } = useTranslation("card");
   const [open, setOpen] = useState(false);
   if (steps.length === 0) return null;
   const toggle = () => {
@@ -122,8 +135,8 @@ function HowReasoned({ steps }: { steps: ReasoningStep[] }) {
       <Pressable onPress={toggle} style={styles.collapHeader} accessibilityRole="button">
         <View style={styles.rowCenter}>
           <Brain size={13} color="rgba(29,33,48,0.55)" strokeWidth={2.2} />
-          <Text style={styles.sectionLabelMuted}>HOW I REASONED</Text>
-          <Text style={styles.stepCount}>· {steps.length} {steps.length === 1 ? "step" : "steps"}</Text>
+          <Text style={styles.sectionLabelMuted}>{t("detail.howReasoned").toUpperCase()}</Text>
+          <Text style={styles.stepCount}>· {t("detail.stepCount", { count: steps.length })}</Text>
         </View>
         <ChevronDown
           size={16}
@@ -137,7 +150,13 @@ function HowReasoned({ steps }: { steps: ReasoningStep[] }) {
             <View key={i} style={styles.stepRow}>
               <Text style={styles.stepNum}>{i + 1}</Text>
               <View style={styles.flex1}>
-                <Text style={styles.stepLabel}>{reasoningStepLabel(s.label).toUpperCase()}</Text>
+                <Text style={styles.stepLabel}>
+                  {(() => {
+                    // 对齐 web HowGeneratedSection：已知枚举走 i18n，未知回落英文 prettify。
+                    const key = reasoningStepKey(s.label);
+                    return (key ? t(`reasoningStep.${key}`) : reasoningStepLabel(s.label)).toUpperCase();
+                  })()}
+                </Text>
                 <Text style={styles.stepDetail}>{s.detail}</Text>
               </View>
             </View>
@@ -167,6 +186,7 @@ function ExecutionStepRow({ step }: { step: { text: string; tool: string } }) {
 /** EXECUTION PLAN——web DrawerDetailBody 粉色可折叠区（默认展开 + 时间轴轨）。
  *  来自实时 run 的 lastMessagePayload.plan。 */
 function ExecutionPlan({ steps, preparing }: { steps: { text: string; tool: string }[]; preparing: boolean }) {
+  const { t } = useTranslation("card");
   const [open, setOpen] = useState(true);
   if (steps.length === 0 && !preparing) return null;
   // 有 run 但 plan 还没到（agent 准备中）：web statusBanner.preparing。
@@ -176,7 +196,7 @@ function ExecutionPlan({ steps, preparing }: { steps: { text: string; tool: stri
         <Spin>
           <Loader2 size={13} color={`rgba(${FG},0.55)`} />
         </Spin>
-        <Text style={styles.preparingText}>Agent is preparing the plan — give it a moment.</Text>
+        <Text style={styles.preparingText}>{t("statusBanner.preparing")}</Text>
       </View>
     );
   }
@@ -195,8 +215,8 @@ function ExecutionPlan({ steps, preparing }: { steps: { text: string; tool: stri
       <Pressable onPress={toggle} style={styles.collapHeader} accessibilityRole="button">
         <View style={styles.rowCenter}>
           <Zap size={13} color={`rgb(${PRIMARY})`} strokeWidth={2.5} />
-          <GradientLabel text="EXECUTION PLAN" />
-          <Text style={styles.stepCount}>· {steps.length} {steps.length === 1 ? "step" : "steps"}</Text>
+          <GradientLabel text={t("detail.executionPlan").toUpperCase()} />
+          <Text style={styles.stepCount}>· {t("detail.stepCount", { count: steps.length })}</Text>
         </View>
         <ChevronDown
           size={16}
@@ -235,6 +255,7 @@ export default function CardDetailSheet({
   /** web onChat（reminder 卡的主操作）：纯开会话，不带 execute bootstrap。 */
   onChat: (e: VisibleCardEntry) => void;
 }) {
+  const { t } = useTranslation(["card", "common"]);
   const { height, width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const open = entry !== null;
@@ -329,10 +350,10 @@ export default function CardDetailSheet({
             {/* 类目行：图标 + 类目名 + Urgent */}
             <View style={styles.catRow}>
               <CatIcon size={14} color="rgba(29,33,48,0.5)" strokeWidth={1.5} />
-              <Text style={styles.catLabel}>{cat.label.toUpperCase()}</Text>
+              <Text style={styles.catLabel}>{t(cat.labelKey).toUpperCase()}</Text>
               {isUrgent ? (
                 <View style={styles.urgentPill}>
-                  <Text style={styles.urgentText}>Urgent</Text>
+                  <Text style={styles.urgentText}>{t("tag.urgent")}</Text>
                 </View>
               ) : null}
             </View>
@@ -346,7 +367,7 @@ export default function CardDetailSheet({
             {/* WHY NOW（绿框） */}
             {showWhyNow ? (
               <View style={styles.whyNowBox}>
-                <Text style={styles.whyNowLabel}>WHY NOW</Text>
+                <Text style={styles.whyNowLabel}>{t("detail.whyNow").toUpperCase()}</Text>
                 <Text style={styles.whyNowBody}>{card.whyNow}</Text>
               </View>
             ) : null}
@@ -357,7 +378,7 @@ export default function CardDetailSheet({
             {/* SOURCES */}
             {sources.length > 0 ? (
               <View style={styles.section}>
-                <Text style={styles.sectionLabel}>SOURCES</Text>
+                <Text style={styles.sectionLabel}>{t("detail.sourcesTitle").toUpperCase()}</Text>
                 <View style={styles.sourceWrap}>
                   {sources.map((s) => (
                     <SourcePill key={s} slug={s} />
@@ -375,32 +396,32 @@ export default function CardDetailSheet({
                 onPress={() => onDismiss(entry)}
                 style={styles.btnSecondary}
                 accessibilityRole="button"
-                accessibilityLabel="Dismiss"
+                accessibilityLabel={t("drawer.dismiss")}
               >
                 <X size={13} color="rgba(29,33,48,0.55)" strokeWidth={2} />
-                <Text style={styles.btnSecondaryText}>Dismiss</Text>
+                <Text style={styles.btnSecondaryText}>{t("drawer.dismiss")}</Text>
               </Pressable>
               <Pressable
                 onPress={() => onComplete(entry)}
                 style={styles.btnDone}
                 accessibilityRole="button"
-                accessibilityLabel="Done"
+                accessibilityLabel={t("common:status.done")}
               >
                 <Check size={12} color="rgba(29,33,48,0.55)" strokeWidth={2.5} />
-                <Text style={styles.btnDoneText}>Done</Text>
+                <Text style={styles.btnDoneText}>{t("common:status.done")}</Text>
               </Pressable>
               <Pressable
                 onPress={() => (reminder ? onChat(entry) : onApprove(entry))}
                 style={styles.btnPrimary}
                 accessibilityRole="button"
-                accessibilityLabel={reminder ? "Chat" : "Approve"}
+                accessibilityLabel={reminder ? t("drawer.chat") : t("drawer.approve")}
               >
                 {reminder ? (
                   <MessageCircle size={13} color="#fff" strokeWidth={2} />
                 ) : (
                   <Check size={13} color="#fff" strokeWidth={2.5} />
                 )}
-                <Text style={styles.btnPrimaryText}>{reminder ? "Chat" : "Approve"}</Text>
+                <Text style={styles.btnPrimaryText}>{reminder ? t("drawer.chat") : t("drawer.approve")}</Text>
               </Pressable>
             </View>
           </ScrollView>

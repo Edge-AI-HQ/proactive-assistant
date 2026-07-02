@@ -12,6 +12,7 @@ import {
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import { Check, ChevronDown, Mic, Send, Square, X } from "lucide-react-native";
+import { useTranslation } from "react-i18next";
 
 import PermissionModeMenu from "./PermissionModeMenu";
 import { Waveform } from "../../voice/Waveform";
@@ -28,7 +29,7 @@ export default function ChatComposer({
   onSend,
   streaming,
   onStop,
-  placeholder = "Message PIN AI...",
+  placeholder,
   bottomInset = 0,
   disabled,
 }: {
@@ -41,6 +42,7 @@ export default function ChatComposer({
   bottomInset?: number;
   disabled?: boolean;
 }) {
+  const { t } = useTranslation(["chat", "common"]);
   const { startCapture, stopCapture, isCapturing, captureStatus } = useVoiceInput();
   const [sending, setSending] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
@@ -125,14 +127,14 @@ export default function ChatComposer({
           <Pressable
             onPress={() => void finishRecording(false)}
             accessibilityRole="button"
-            accessibilityLabel="Cancel voice input"
+            accessibilityLabel={t("composer.cancelRecording")}
             style={styles.recordIconButton}
           >
             <X size={18} color={`rgba(${FG},0.58)`} strokeWidth={2.1} />
           </Pressable>
           <View style={styles.recordCopy}>
             <Text style={styles.recordStatus}>
-              {voiceError ?? (captureStatus === "connecting" ? "Preparing microphone..." : "Listening...")}
+              {voiceError ?? (captureStatus === "connecting" ? t("common:status.connecting") : t("common:status.listening"))}
             </Text>
             <Text style={styles.recordTranscript} numberOfLines={1}>
               {value.trim() || "Speak now"}
@@ -143,7 +145,7 @@ export default function ChatComposer({
           <Pressable
             onPress={() => void finishRecording(true)}
             accessibilityRole="button"
-            accessibilityLabel="Use voice input"
+            accessibilityLabel={t("composer.useTranscript")}
             style={[styles.recordIconButton, styles.recordConfirm]}
           >
             <Check size={18} color="#fff" strokeWidth={2.3} />
@@ -161,7 +163,7 @@ export default function ChatComposer({
         <TextInput
           value={value}
           onChangeText={onChangeText}
-          placeholder={placeholder}
+          placeholder={placeholder ?? t("composer.placeholder")}
           placeholderTextColor={`rgba(${FG},0.35)`}
           editable={!disabled}
           multiline
@@ -172,7 +174,7 @@ export default function ChatComposer({
           <Pressable
             onPress={() => Keyboard.dismiss()}
             accessibilityRole="button"
-            accessibilityLabel="Dismiss keyboard"
+            accessibilityLabel={t("composer.dismissKeyboard")}
           >
             <View style={styles.iconButton}>
               <ChevronDown size={20} color={`rgba(${FG},0.5)`} strokeWidth={2} />
@@ -183,7 +185,7 @@ export default function ChatComposer({
           onPress={startRecording}
           disabled={disabled || isCapturing}
           accessibilityRole="button"
-          accessibilityLabel="Voice input"
+          accessibilityLabel={t("composer.voiceInput")}
         >
           <View style={[styles.iconButton, (disabled || isCapturing) && styles.dim]}>
             <Mic size={18} color={`rgba(${FG},0.55)`} strokeWidth={1.6} />
@@ -193,7 +195,7 @@ export default function ChatComposer({
           onPress={showStop ? () => void onStop() : () => void submit()}
           disabled={actionDisabled}
           accessibilityRole="button"
-          accessibilityLabel={showStop ? "Stop" : "Send"}
+          accessibilityLabel={showStop ? t("composer.stop") : t("composer.send")}
         >
           <View
             style={[

@@ -5,6 +5,8 @@
  */
 import * as Location from "expo-location";
 
+import { AmbientVisit, type PlaceInfo } from "../../../modules/ambient-visit";
+import { buildLocationSignal } from "./geocode";
 import {
   SIGNAL_KINDS,
   type AmbientSource,
@@ -23,29 +25,27 @@ export function createLocationSource(ctx: SourceContext): AmbientSource {
     if (Date.now() - lastPushed < MIN_INTERVAL_MS) return;
     lastPushed = Date.now();
     const { latitude, longitude, accuracy, altitude, speed, heading } = pos.coords;
-    let place: string | undefined;
+    // 反地理编码走原生 GeocodeService（CLGeocoder + MapKit POI 带距离），对齐 web 的
+    // AmbientAi.geocoder.reverseGeocode。expo-location 只给扁平地址、拿不到 POI 距离，
+    // 不足以复刻 nearby_poi 判定，所以改用原生模块（能力与 dev 一致，不阉割）。
+    let place: PlaceInfo | null = null;
     try {
-      const geo = await Location.reverseGeocodeAsync({ latitude, longitude });
-      const g = geo[0];
-      if (g) place = [g.name, g.district, g.city].filter(Boolean).join(", ");
+      place = await AmbientVisit.reverseGeocode(latitude, longitude);
     } catch {
-      /* geocode best-effort */
+      /* geocode best-effort；拿不到就退回坐标（见 buildLocationSignal） */
     }
-    const summary = place ?? `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+    // display_place / place / candidates / place_resolution 组装与 web 一致；共享 normalize
+    // 从 display_place.label 生成 "Location: <地名>."，live 卡据此渲染 "Near <地名>"。
+    const { summary, payload } = buildLocationSignal(
+      { latitude, longitude, accuracy, altitude, speed, heading },
+      place,
+    );
     ctx.push({
       kind: SIGNAL_KINDS.location,
       title: "Location update",
       summary,
       occurred_at: new Date(pos.timestamp).toISOString(),
-      payload: {
-        latitude,
-        longitude,
-        accuracy,
-        altitude,
-        speed,
-        heading,
-        place,
-      },
+      payload,
     });
     ctx.onEvent("location", summary);
   }

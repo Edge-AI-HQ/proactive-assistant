@@ -1,6 +1,6 @@
 /**
  * Card chat 结果反馈条——web ui-web/chat/conversation/CardResultFeedbackBar 的
- * RN 介质版。AI 出最终结果后显示在 composer 上方：「Was this helpful?」+ 👍/👎
+ * RN 介质版。AI 出最终结果后显示在 composer 上方：「Helpful?」+ 👍/👎
  * + Comment（text_feedback 学习信号，喂下一次生成，不发给 agent）+ Done（完成
  * 卡片 + 关闭会话）。👍/👎 走 buildAssistantMessageFeedbackBody（与气泡反馈同
  * 管线；messageId 未落库前为 null → 禁用到 chat:persisted 落 id）。web blur(16)
@@ -10,6 +10,7 @@ import { useCallback, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { BlurView } from "expo-blur";
 import { Check, MessageSquarePlus, Send, ThumbsDown, ThumbsUp } from "lucide-react-native";
+import { useTranslation } from "react-i18next";
 import { buildAssistantMessageFeedbackBody, proxyPost } from "@pin-ai/core";
 
 import { VoiceButton } from "../../voice";
@@ -30,6 +31,7 @@ export default function CardResultFeedbackBar({
   onDone: () => void;
   doneBusy: boolean;
 }) {
+  const { t } = useTranslation(["chat", "common"]);
   const [feedback, setFeedback] = useState<"up" | "down" | null>(null);
   const [commentOpen, setCommentOpen] = useState(false);
   const [commentText, setCommentText] = useState("");
@@ -63,13 +65,13 @@ export default function CardResultFeedbackBar({
       <View style={styles.bar}>
         <BlurView intensity={20} tint="light" style={[StyleSheet.absoluteFill, styles.blurRound]} />
         <View style={[StyleSheet.absoluteFill, styles.tint]} />
-        <Text style={styles.prompt}>Was this helpful?</Text>
+        <Text style={styles.prompt}>{t("cardFeedback.helpfulPrompt")}</Text>
         <View style={styles.actions}>
           <Pressable
             onPress={() => sendThumbs("up")}
             disabled={disabled}
             accessibilityRole="button"
-            accessibilityLabel="Helpful"
+            accessibilityLabel={t("cardFeedback.helpful")}
             style={[styles.iconBtn, feedback === "up" ? styles.upActive : styles.iconBtnIdle, disabled && styles.dim]}
           >
             <ThumbsUp size={13} strokeWidth={2} color={feedback === "up" ? "#16a34a" : `rgba(${FG},0.55)`} />
@@ -78,7 +80,7 @@ export default function CardResultFeedbackBar({
             onPress={() => sendThumbs("down")}
             disabled={disabled}
             accessibilityRole="button"
-            accessibilityLabel="Not helpful"
+            accessibilityLabel={t("cardFeedback.notHelpful")}
             style={[styles.iconBtn, feedback === "down" ? styles.downActive : styles.iconBtnIdle, disabled && styles.dim]}
           >
             <ThumbsDown size={13} strokeWidth={2} color={feedback === "down" ? "#dc2626" : `rgba(${FG},0.55)`} />
@@ -87,7 +89,7 @@ export default function CardResultFeedbackBar({
             onPress={() => setCommentOpen((v) => !v)}
             disabled={commentSent}
             accessibilityRole="button"
-            accessibilityLabel="Comment"
+            accessibilityLabel={t("cardFeedback.comment")}
             style={[styles.commentBtn, commentSent && styles.dim]}
           >
             {commentSent ? (
@@ -95,13 +97,13 @@ export default function CardResultFeedbackBar({
             ) : (
               <MessageSquarePlus size={12} strokeWidth={2} color={`rgba(${FG},0.65)`} />
             )}
-            <Text style={styles.commentLabel}>{commentSent ? "Sent" : "Comment"}</Text>
+            <Text style={styles.commentLabel}>{commentSent ? t("cardFeedback.sent") : t("cardFeedback.comment")}</Text>
           </Pressable>
           <Pressable
             onPress={onDone}
             disabled={doneBusy}
             accessibilityRole="button"
-            accessibilityLabel="Done"
+            accessibilityLabel={t("common:status.done")}
             style={[styles.doneBtn, doneBusy && styles.dim]}
           >
             {doneBusy ? (
@@ -109,7 +111,7 @@ export default function CardResultFeedbackBar({
             ) : (
               <Check size={13} strokeWidth={2.5} color="#fff" />
             )}
-            <Text style={styles.doneLabel}>Done</Text>
+            <Text style={styles.doneLabel}>{t("common:status.done")}</Text>
           </Pressable>
         </View>
       </View>
@@ -119,7 +121,7 @@ export default function CardResultFeedbackBar({
             value={commentText}
             onChangeText={setCommentText}
             onSubmitEditing={submitComment}
-            placeholder="Add a comment…"
+            placeholder={t("cardFeedback.commentPlaceholder")}
             placeholderTextColor={`rgba(${FG},0.35)`}
             style={styles.commentInput}
             returnKeyType="send"
@@ -129,7 +131,7 @@ export default function CardResultFeedbackBar({
             onPress={submitComment}
             disabled={!commentText.trim()}
             accessibilityRole="button"
-            accessibilityLabel="Send feedback"
+            accessibilityLabel={t("cardFeedback.sendFeedback")}
             style={[styles.sendBtn, !commentText.trim() && styles.dim]}
           >
             <Send size={14} strokeWidth={2} color="#fff" />

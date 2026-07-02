@@ -59,7 +59,9 @@
       "expo-notifications",
       "@kingstinct/react-native-healthkit",
       "expo-font",
-      "expo-video"
+      "expo-video",
+      "expo-audio",
+      "@react-native-community/datetimepicker"
     ]
   }
 }

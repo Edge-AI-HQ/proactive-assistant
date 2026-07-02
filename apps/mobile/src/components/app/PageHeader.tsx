@@ -4,6 +4,7 @@
  */
 import type { ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
+import { useTranslation } from "react-i18next";
 import { Menu, Settings } from "lucide-react-native";
 
 import { EM_DISPLAY, tracking } from "../../ui/typography";
@@ -20,6 +21,7 @@ export default function PageHeader({
   onOpenDebug: () => void;
   onOpenMenu: () => void;
 }) {
+  const { t } = useTranslation("common");
   return (
     <View className="flex-row items-start justify-between px-4 pt-4 pb-2">
       <View className="flex-1 pr-4">
@@ -58,7 +60,7 @@ export default function PageHeader({
           onPress={onOpenMenu}
           hitSlop={8}
           accessibilityRole="button"
-          accessibilityLabel="Open menu"
+          accessibilityLabel={t("appShell.openMenu")}
           className="h-10 w-10 items-center justify-center rounded-full bg-white/70 border border-white/60"
         >
           <Menu size={17} color="#3f3f46" strokeWidth={1.8} />

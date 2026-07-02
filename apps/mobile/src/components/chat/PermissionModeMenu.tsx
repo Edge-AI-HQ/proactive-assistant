@@ -1,18 +1,15 @@
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Check, ChevronDown, ChevronUp, Shield, ShieldOff } from "lucide-react-native";
+import { useTranslation } from "react-i18next";
 import { useUserSettings, type PermissionMode } from "@pin-ai/state";
 
 const FG = "29,33,48";
 const DESTRUCTIVE = "hsl(0, 72%, 60%)";
 const MODES: readonly PermissionMode[] = ["ask", "bypass"];
 
-const LABELS: Record<PermissionMode, string> = {
-  ask: "Ask Permissions",
-  bypass: "Bypass Permissions",
-};
-
 export default function PermissionModeMenu() {
+  const { t } = useTranslation("chat");
   const { settings, saving, error: settingsError, patch } = useUserSettings();
   const mode = settings?.permissionMode ?? "ask";
   const [open, setOpen] = useState(false);
@@ -23,7 +20,7 @@ export default function PermissionModeMenu() {
   const apply = async (next: PermissionMode) => {
     setError(null);
     const result = await patch({ permissionMode: next });
-    if (!result) setError(settingsError ?? "Failed to save permission mode");
+    if (!result) setError(settingsError ?? t("composer.permission.saveFailed"));
   };
 
   const select = (next: PermissionMode) => {
@@ -42,7 +39,7 @@ export default function PermissionModeMenu() {
         onPress={() => setOpen((v) => !v)}
         disabled={saving}
         accessibilityRole="button"
-        accessibilityLabel={LABELS[mode]}
+        accessibilityLabel={t(`composer.permission.${mode}`)}
         accessibilityState={{ expanded: open, disabled: saving }}
         style={styles.trigger}
       >
@@ -52,7 +49,7 @@ export default function PermissionModeMenu() {
           ) : (
             <Shield size={13} color={`rgba(${FG},0.4)`} strokeWidth={2} />
           )}
-          <Text style={[styles.triggerText, bypassed && styles.dangerText]}>{LABELS[mode]}</Text>
+          <Text style={[styles.triggerText, bypassed && styles.dangerText]}>{t(`composer.permission.${mode}`)}</Text>
           {open ? (
             <ChevronUp size={12} color={`rgba(${FG},0.4)`} strokeWidth={2} />
           ) : (
@@ -76,7 +73,7 @@ export default function PermissionModeMenu() {
 
       {open ? (
         <View style={styles.menu}>
-          <Text style={styles.menuTitle}>Mode</Text>
+          <Text style={styles.menuTitle}>{t("composer.permission.menuTitle")}</Text>
           {MODES.map((item) => {
             const active = item === mode;
             const danger = item === "bypass";
@@ -92,7 +89,7 @@ export default function PermissionModeMenu() {
                   <View style={styles.checkSlot}>
                     {active ? <Check size={14} color={`rgba(${FG},0.7)`} strokeWidth={2.5} /> : null}
                   </View>
-                  <Text style={[styles.menuLabel, danger && styles.dangerText]}>{LABELS[item]}</Text>
+                  <Text style={[styles.menuLabel, danger && styles.dangerText]}>{t(`composer.permission.${item}`)}</Text>
                 </View>
               </Pressable>
             );
@@ -102,12 +99,10 @@ export default function PermissionModeMenu() {
 
       {pendingBypass ? (
         <View style={styles.confirm}>
-          <Text style={styles.confirmText}>
-            AI will act for you — send email, pay, and other outbound actions — without asking you to approve each one. Browser takeover is unaffected.
-          </Text>
+          <Text style={styles.confirmText}>{t("composer.permission.confirmBody")}</Text>
           <View style={styles.confirmActions}>
             <Pressable onPress={() => setPendingBypass(false)} style={styles.confirmGhost}>
-              <Text style={styles.confirmGhostText}>Cancel</Text>
+              <Text style={styles.confirmGhostText}>{t("composer.permission.cancel")}</Text>
             </Pressable>
             <Pressable
               disabled={saving}
@@ -117,7 +112,7 @@ export default function PermissionModeMenu() {
               }}
               style={[styles.confirmDanger, saving && styles.dim]}
             >
-              <Text style={styles.confirmDangerText}>Switch to Bypass</Text>
+              <Text style={styles.confirmDangerText}>{t("composer.permission.confirm")}</Text>
             </Pressable>
           </View>
         </View>

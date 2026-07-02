@@ -16,5 +16,6 @@ export * from "./summary-scheduler";
 export * from "./summary-context";
 export * from "./speaker-transcript";
 export * from "./timeline-store";
+export * from "./sqlite-timeline-store";
 export * from "./pipeline-models";
 export * from "./pipeline";

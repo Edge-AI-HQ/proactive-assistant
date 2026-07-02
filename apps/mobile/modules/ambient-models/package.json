@@ -1,0 +1,6 @@
+{
+  "name": "ambient-models",
+  "version": "0.1.0",
+  "description": "PIN AI on-device model management (whisper.cpp ASR + llama.cpp LLM: download / verify / delete / inference) — Expo local module, Swift core migrated from capacitor-plugins/ambient-ai",
+  "main": "index.ts"
+}

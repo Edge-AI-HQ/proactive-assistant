@@ -28,7 +28,7 @@ import {
   DrawerDescription,
 } from "../ui/drawer";
 import i18n from "../i18n";
-import type profileEn from "../locales/en/profile.json";
+import type profileEn from "../../../ui-kit/src/locales/en/profile.json";
 import { basketMeta } from "../card/basket-meta";
 import { useMediaQuery } from "../lib/use-media-query";
 import { Text } from "../primitives/Text";

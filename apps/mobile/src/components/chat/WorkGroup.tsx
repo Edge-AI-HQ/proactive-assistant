@@ -12,6 +12,8 @@ import { useEffect, useState } from "react";
 import { LayoutAnimation, Pressable, StyleSheet, Text, View } from "react-native";
 import { BlurView } from "expo-blur";
 import { AlertCircle, Check, ChevronDown, ChevronUp, Clock, Loader2 } from "lucide-react-native";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -64,6 +66,7 @@ function stringArg(part: ToolCallPart, key: string): string {
 
 /** 单工具行（web ToolNodeRow）：状态点 + 动作动词 + args 预览；点开看工具详情。 */
 function ToolNodeRow({ part, nested }: { part: ToolCallPart; nested?: boolean }) {
+  const { t } = useTranslation("chat");
   const [expanded, setExpanded] = useState(false);
   const { verb } = resolveToolPresentation(part.toolName);
   const status = toolStatus(part);
@@ -97,9 +100,7 @@ function ToolNodeRow({ part, nested }: { part: ToolCallPart; nested?: boolean })
           {argsPreview}
         </Text>
         {links.length > 0 ? (
-          <Text style={styles.resultCount}>
-            {links.length} result{links.length === 1 ? "" : "s"}
-          </Text>
+          <Text style={styles.resultCount}>{t("toolNode.results", { count: links.length })}</Text>
         ) : null}
         {canExpand ? (
           <View style={styles.toolChevron}>
@@ -132,6 +133,7 @@ function ToolNodeRow({ part, nested }: { part: ToolCallPart; nested?: boolean })
 
 /** 推理节点（web ThinkingNode）：Clock + 斜体首行；流式显示尾窗，结束点开看全文。 */
 function ThinkingNode({ text, streaming }: { text: string; streaming: boolean }) {
+  const { t } = useTranslation("chat");
   const [expanded, setExpanded] = useState(false);
   if (streaming) {
     return (
@@ -143,7 +145,7 @@ function ThinkingNode({ text, streaming }: { text: string; streaming: boolean })
       </View>
     );
   }
-  const firstLine = text.split("\n").find((l) => l.trim()) ?? "Thought";
+  const firstLine = text.split("\n").find((l) => l.trim()) ?? t("workGroup.thought");
   return (
     <View>
       <Pressable
@@ -167,8 +169,9 @@ function ThinkingNode({ text, streaming }: { text: string; streaming: boolean })
 
 /** 子代理任务卡（web TaskCard）：任务描述 + agent 标签 + 嵌套子工具行（可展开）。 */
 function TaskCard({ part, subParts }: { part: ToolCallPart; subParts: ToolCallPart[] }) {
+  const { t } = useTranslation("chat");
   const [expanded, setExpanded] = useState(false);
-  const desc = taskDescription(part) || part.agentName || "Subtask";
+  const desc = taskDescription(part) || part.agentName || t("taskCard.subtask");
   const canExpand = subParts.length > 0;
   return (
     <View style={styles.taskCard}>
@@ -205,33 +208,33 @@ function TaskCard({ part, subParts }: { part: ToolCallPart; subParts: ToolCallPa
 }
 
 /** 流式状态行：对齐 web WorkGroup.currentActivity。 */
-function currentActivity(group: WorkGroupData): string {
+function currentActivity(group: WorkGroupData, t: TFunction<"chat">): string {
   const runningTasks = group.items.filter(
     (i) => i.kind === "task" && toolStatus(i.part) === "running",
   );
-  if (runningTasks.length > 1) return `${runningTasks.length} subtasks running`;
+  if (runningTasks.length > 1) return t("workGroup.subtasksRunning", { count: runningTasks.length });
   for (let i = group.items.length - 1; i >= 0; i--) {
     const it = group.items[i];
     if (it.kind === "tool" && toolStatus(it.part) === "running") {
       return resolveToolPresentation(it.part.toolName).verb;
     }
     if (it.kind === "task" && toolStatus(it.part) === "running") {
-      return taskDescription(it.part) || "Working…";
+      return taskDescription(it.part) || t("workGroup.runningSubtask");
     }
   }
-  return "Working…";
+  return t("workGroup.working");
 }
 
 /** 工作组标签：流式→当前动作；结束→LLM 标题 ?? 兜底计数。 */
-function groupLabel(group: WorkGroupData, live: boolean, stepCount: number): string {
+function groupLabel(group: WorkGroupData, live: boolean, stepCount: number, t: TFunction<"chat">): string {
   if (live) {
-    return currentActivity(group);
+    return currentActivity(group, t);
   }
   if (group.title) return group.title;
   const tasks = group.items.filter((i) => i.kind === "task").length;
-  if (tasks > 0) return `Ran ${tasks} subtask${tasks === 1 ? "" : "s"}`;
-  if (stepCount > 0) return `Used ${stepCount} tool${stepCount === 1 ? "" : "s"}`;
-  return "Thought";
+  if (tasks > 0) return t("workGroup.ranSubtasks", { count: tasks });
+  if (stepCount > 0) return t("workGroup.usedTools", { count: stepCount });
+  return t("workGroup.thought");
 }
 
 export default function WorkGroup({
@@ -242,6 +245,7 @@ export default function WorkGroup({
   /** 该组所属 assistant turn 仍在流式（最后一个 turn）。 */
   streamingTail: boolean;
 }) {
+  const { t } = useTranslation("chat");
   const live = streamingTail;
   const stepCount = group.items.filter((i) => i.kind !== "reasoning").length;
   const [expanded, setExpanded] = useState(live);
@@ -275,11 +279,11 @@ export default function WorkGroup({
           )}
         </View>
         <Text style={[styles.groupLabelText, !live && styles.groupLabelDone]} numberOfLines={1}>
-          {groupLabel(group, live, stepCount)}
+          {groupLabel(group, live, stepCount, t)}
         </Text>
         {!live && stepCount > 0 ? (
           <Text style={styles.stepCount}>
-            {stepCount} STEP{stepCount === 1 ? "" : "S"}
+            {t("workGroup.steps", { count: stepCount }).toUpperCase()}
           </Text>
         ) : null}
         <ChevronDown size={13} color={`rgba(${FG},0.35)`} style={expanded ? styles.chevUp : undefined} />

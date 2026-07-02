@@ -15,6 +15,7 @@ import { Pressable, StyleSheet, View } from "react-native";
 import { BlurView } from "expo-blur";
 import { ChevronDown } from "lucide-react-native";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
+import { useTranslation } from "react-i18next";
 
 const FG = "29,33,48";
 /** web --primary = hsl(292 78% 63%)（与 ChatComposer 发送键渐变起点同源）。 */
@@ -27,6 +28,7 @@ export default function JumpToLatest({
   attention: boolean;
   onPress: () => void;
 }) {
+  const { t } = useTranslation("chat");
   return (
     <Animated.View
       entering={FadeIn.duration(180)}
@@ -38,7 +40,7 @@ export default function JumpToLatest({
         onPress={onPress}
         hitSlop={8}
         accessibilityRole="button"
-        accessibilityLabel="Scroll to latest"
+        accessibilityLabel={t("transcript.scrollToLatest")}
       >
         <View style={styles.wrap}>
           <View style={styles.button}>

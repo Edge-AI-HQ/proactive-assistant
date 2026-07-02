@@ -49,6 +49,7 @@ export * from "./domain/markdown-blocks";
 export * from "./domain/reminder-card";
 export * from "./domain/signals";
 export * from "./domain/voice-language";
+export * from "./domain/voice-identity-api";
 export * from "./domain/basket-category";
 export * from "./domain/source-app";
 export * from "./domain/tool-presentation";
@@ -58,6 +59,7 @@ export * from "./domain/browser-session";
 export * from "./domain/browser-login";
 export * from "./domain/connector-toolkit";
 export * from "./domain/connector-card";
+export * from "./domain/ui-language";
 
 export * from "./machines/card-execution";
 export * from "./machines/conversation";

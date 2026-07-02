@@ -20,20 +20,26 @@ interface AuthState {
   user: User | null;
 }
 
+/** 解析 OAuth 回调并换取 session。失败时 throw——调用方（LoginScreen）把它映射到
+ *  dev web 同款的登录错误横幅（dev 的 initialOAuthError 抓的正是这三类错误）。 */
 async function exchangeOauthCallback(url: string): Promise<void> {
   const params = new URL(url).searchParams;
   const oauthError = params.get("error");
   if (oauthError) {
-    console.error("[auth] OAuth provider error:", params.get("error_description") || oauthError);
-    return;
+    const description = params.get("error_description") || oauthError;
+    console.error("[auth] OAuth provider error:", description);
+    throw new Error(description);
   }
   const code = params.get("code");
   if (!code) {
     console.error("[auth] OAuth callback missing authorization code");
-    return;
+    throw new Error("Missing authorization code in OAuth callback.");
   }
   const { error } = await supabase.auth.exchangeCodeForSession(code);
-  if (error) console.error("[auth] code exchange failed:", error.message);
+  if (error) {
+    console.error("[auth] code exchange failed:", error.message);
+    throw new Error(error.message);
+  }
 }
 
 export function useAuth() {
@@ -58,9 +64,13 @@ export function useAuth() {
       return;
     }
     if (!window.location.pathname.includes("/auth/callback")) return;
-    void exchangeOauthCallback(window.location.href).finally(() => {
-      window.history.replaceState({}, "", "/");
-    });
+    void exchangeOauthCallback(window.location.href)
+      // RN-web（dev 便利形态）无登录横幅可挂：错误已在函数内 console，吞掉防
+      // unhandled rejection；真机路径由 LoginScreen catch 接住进横幅。
+      .catch(() => undefined)
+      .finally(() => {
+        window.history.replaceState({}, "", "/");
+      });
   }, []);
 
   const signInWithGoogle = useCallback(async () => {
