@@ -231,15 +231,19 @@ services:
       # Local-only generator debug path: run DeepAgents code execution in
       # the chat container instead of Daytona so pinai_sdk can use docker DNS.
       PINAI_LOCAL_SANDBOX: ${PINAI_LOCAL_SANDBOX:-0}
-      # Daytona sandbox source. Default to the prebuilt dev snapshot (same as
-      # fly.dev.toml) so local sandbox creates take ~1s. Without it, every
-      # cold create falls back to the declarative image-build path, which can
-      # stall in Daytona `pending_build` indefinitely and time out at 150s —
-      # this breaks the oneshot path used by /agent/run/evolve and /generate
-      # (LazyThreadSandbox in chat/history honors PINAI_LOCAL_SANDBOX instead,
-      # but the oneshot path does not). Set PINAI_DAYTONA_SNAPSHOT= (empty) to
-      # opt back into image-build when iterating on packages/pinai_sdk locally.
-      PINAI_DAYTONA_SNAPSHOT: ${PINAI_DAYTONA_SNAPSHOT-pinai-sandbox:dev}
+      # Daytona sandbox source. Default to the local-dev snapshot: `make up` /
+      # `make restart` rebuild it (scripts/ensure_daytona_snapshot.sh) whenever
+      # the sandbox inputs (packages/pinai_sdk + builder def) change, so local
+      # runs always test the latest SDK with ~1s sandbox creates. Do NOT point
+      # local at pinai-sandbox:{dev,test,production} — those are CI-owned and
+      # delete+recreated on every deploy. Without a snapshot (set
+      # PINAI_DAYTONA_SNAPSHOT= empty), every cold create falls back to the
+      # declarative image-build path, which can stall in Daytona
+      # `pending_build` indefinitely and time out at 150s — this breaks the
+      # oneshot path used by /agent/run/evolve and /generate (LazyThreadSandbox
+      # in chat/history honors PINAI_LOCAL_SANDBOX instead, but the oneshot
+      # path does not).
+      PINAI_DAYTONA_SNAPSHOT: ${PINAI_DAYTONA_SNAPSHOT-pinai-sandbox:local}
     ports:
       - "8001"
     healthcheck:

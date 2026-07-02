@@ -256,7 +256,7 @@ npm run check:packages                              # core/state/ui-kit/ui-web �
 - 改 `internal-reward-dashboard/` → `npm run type-check` + `npm test` + `npm run dev -- --host 127.0.0.1 --port 3004`，在 `/runs` / `/traces/:runId` 点真实流程
 - 改 `/api/reward-dashboard/*` 或 reward schema → `uv run ruff check .` + `uv run pytest tests/web/db/repositories/test_reward_repo.py tests/web/routes/test_reward_dashboard.py tests/web/services/test_trace_artifacts.py`
 - 改 db migration（新 SQL 文件到 `db/migrations/`）→ 先 `make build-backend` **再** `make migrate`，确认 schema 应用成功。⚠️ 迁移 SQL 被烘焙进镜像（Dockerfile `COPY db`），只跑 `make migrate` 不重建镜像会执行**旧** SQL、悄悄忽略新文件（仍显示「db-migrate complete」但表没建出来）
-- 动 Daytona sandbox / pinai_sdk → `make tunnel-up` + 跑一次 generate，观察 sandbox 是否能回连 web
+- 动 Daytona sandbox / pinai_sdk → `make restart`（自动把 `pinai-sandbox:local` snapshot 刷成最新 SDK）+ `make tunnel-up` + 跑一次 generate，观察 sandbox 是否能回连 web
 
 **测试-修复 loop 边界**：失败先看 log 找根因再改，**最多 2 轮**仍不通就停下来，把现象、已尝试的修复、当前怀疑点报给 user，不要继续硬改。
 
@@ -316,7 +316,7 @@ daytona snapshot list               # 看可用快照（chat/generate 默认 for
 ```
 注意：`organization` 子命令在 API key auth 下不可用（CLI 会要求改用浏览器登录）。完整文档：<https://www.daytona.io/docs/en/tools/cli/>。
 
-Snapshot 构建脚本在 `backend/infra/daytona/`，CI（`deploy-test.yml` 的 `build-daytona-snapshot` job）在每次部署前会刷新 snapshot，本地需要手动 rebuild 时跑那个目录下的脚本。
+Snapshot 构建脚本在 `backend/infra/daytona/`，CI（`_deploy.yml` 的 `build-daytona-snapshot` job）在每次部署前刷新各环境的 `pinai-sandbox:{dev,test,production}`。本地 compose 用独立的 `pinai-sandbox:local`：`make up` / `make restart` 检测到 `packages/pinai_sdk` 或 builder 定义变化时自动重建（`scripts/ensure_daytona_snapshot.sh`，内容 hash 判断），强制重建用 `make daytona-snapshot-local`。不要把本地指到 CI 那三个名字——每次部署会被 delete+recreate。
 
 ## 变更与部署
 

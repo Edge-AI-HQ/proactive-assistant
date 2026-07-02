@@ -1,5 +1,6 @@
 .PHONY: help init env-local ensure-env ensure-env-litellm ensure-env-backend ensure-env-root
 .PHONY: up down build build-backend build-frontend build-web restart restart-frontend restart-web status urls
+.PHONY: ensure-daytona-snapshot daytona-snapshot-local
 .PHONY: local local-stop local-status
 .PHONY: logs logs-litellm logs-postgres logs-backend logs-api logs-agent-engine logs-frontend logs-web logs-reward
 .PHONY: migrate reset clean
@@ -155,9 +156,22 @@ build-frontend: ensure-env-backend ## Build only frontend image
 build-web: ensure-env-backend ## Build only apps/web (zebra) image
 	$(export_vite) && $(COMPOSE) build web
 
+# ── Daytona local snapshot ──
+# agent-engine defaults to PINAI_DAYTONA_SNAPSHOT=pinai-sandbox:local (see
+# docker-compose.yml). up/restart re-sync it whenever the sandbox inputs
+# (packages/pinai_sdk + builder def) change; soft-fail so a Daytona outage
+# never blocks local boot.
+
+ensure-daytona-snapshot: ensure-env-backend
+	@bash scripts/ensure_daytona_snapshot.sh || echo "WARN: pinai-sandbox:local refresh failed — sandbox creates may use a stale snapshot; retry with 'make daytona-snapshot-local'"
+
+daytona-snapshot-local: ensure-env-backend ## Force-rebuild the local Daytona snapshot (pinai-sandbox:local)
+	@FORCE=1 bash scripts/ensure_daytona_snapshot.sh
+
 # ── Run ──
 
 up: build ## Build and start the full local stack (no tunnel — run `make tunnel-up` for generator/mobile)
+	@$(MAKE) --no-print-directory ensure-daytona-snapshot
 	$(COMPOSE) up -d --remove-orphans
 	@$(MAKE) --no-print-directory urls
 
@@ -165,6 +179,7 @@ down: ## Stop all services
 	$(COMPOSE) down
 
 restart: ensure-env ## Rebuild + recreate api + agent-engine (most common dev loop)
+	@$(MAKE) --no-print-directory ensure-daytona-snapshot
 	$(COMPOSE) build api
 	@url=$$(bash scripts/ngrok_url.sh 2>/dev/null || true); \
 	if [ -n "$$url" ]; then \

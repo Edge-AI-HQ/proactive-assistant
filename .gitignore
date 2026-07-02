@@ -118,5 +118,8 @@ capacitor-plugins/ambient-ai/.build
 # Xcode / SwiftPM per-user state (xcshareddata is shared and stays tracked)
 xcuserdata/
 
+# Daytona local snapshot marker (scripts/ensure_daytona_snapshot.sh, per-worktree)
+.daytona-snapshot-local.hash
+
 # Architecture-review loop runtime state (regenerated each run, per-dev — prompt itself stays tracked)
 loops/*.state.json
