@@ -77,6 +77,16 @@ export interface AudioErrorEvent {
   source: string;
 }
 
+export interface VoicePcmChunkEvent {
+  streamId: string;
+  sequence: number;
+  base64: string;
+  byteSize: number;
+  durationMs: number;
+  sampleRate: number;
+  channels: number;
+}
+
 export interface AudioConfig {
   recognitionLocale?: string;
   cloudMode?: "off" | "refine";
@@ -105,6 +115,7 @@ type AudioEventName =
   | "transcriptRefined"
   | "captureDiscarded"
   | "speechBurst"
+  | "voicePcmChunk"
   | "audioState"
   | "audioError"
   | "audioDiagnostic";
@@ -129,6 +140,8 @@ interface AmbientAudioModuleType {
   startClassification(): Promise<void>;
   stopClassification(): Promise<void>;
   setExternalMicSuppressed(suppressed: boolean): Promise<void>;
+  startVoicePcmStream(options?: { sampleRate?: number; chunkDurationMs?: number }): Promise<{ streamId: string }>;
+  stopVoicePcmStream(streamId?: string | null): Promise<void>;
   addListener(eventName: AudioEventName, listener: (event: never) => void): EventSubscription;
 }
 

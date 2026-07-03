@@ -9,9 +9,9 @@ import type { Session, User } from "@supabase/supabase-js";
 import { Platform } from "react-native";
 import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
-import { runSignOutCleanups } from "@pin-ai/core";
 
 import { isPinLocalDevAuthEnabled, pinLocalDevAuthUser } from "../lib/dev-auth";
+import { performSignOut } from "../lib/sign-out";
 import { supabase } from "../lib/supabase";
 
 interface AuthState {
@@ -98,10 +98,9 @@ export function useAuth() {
   }, []);
 
   const signOut = useCallback(async () => {
-    await supabase.auth.signOut();
-    // 平台清理(清 device 凭据等)——各 app 经 registerSignOutCleanup 注册;
-    // 无注册则 no-op(core/ports/sign-out-cleanup)。
-    await runSignOutCleanups();
+    // 完整登出收口（停 sync/ambient、sweep storage、跑注册清理、supabase
+    // signOut、清 TQ 缓存）——与传输层 onAuthInvalid 共用同一 performSignOut。
+    await performSignOut();
   }, []);
 
   return { ...state, signInWithGoogle, signOut };

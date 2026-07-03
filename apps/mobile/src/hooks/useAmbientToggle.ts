@@ -17,6 +17,7 @@ import {
   getAmbientEnabledSnapshot,
   isAmbientEnabled,
   setAmbientEnabledFlag,
+  setAmbientTranscriptionLanguage,
   startAmbient,
   stopAmbient,
   subscribeAmbientEnabled,
@@ -77,15 +78,22 @@ export function useAmbientToggle(userId: string | null): UseAmbientToggleResult 
         await setAmbientEnabledFlag(false);
         return;
       }
+      // 转写语言 hint（dev useAmbientToggle:96-97：settings.generationLanguage
+      // → lifecycle transcriptionLanguage → sound-classifier locale + ?language=）。
+      setAmbientTranscriptionLanguage(
+        updated.generationLanguage ?? settings?.generationLanguage ?? null,
+      );
       const started = await startAmbient(userId); // 启 sources（闸已置）
-      if (started.length === 0) {
-        // 一个源都没起来（权限全拒）→ stopAmbient 清闸，别留「开着但没采」。
+      if (!started.includes("sound_classifier")) {
+        // 核心源 sound_classifier 没起来（权限拒/原生失败）→ 回滚（dev
+        // hasMissingCoreSource:99-102,122-130 语义：其余数据源可等 reconciler
+        // 重试，核心音频源起不来则整个开关回滚）。stopAmbient 会清本机闸。
         await stopAmbient();
       }
     } finally {
       setTogglePending(false);
     }
-  }, [ambientOn, deviceEnabled, patch, togglePending, userId]);
+  }, [ambientOn, deviceEnabled, patch, settings?.generationLanguage, togglePending, userId]);
 
   return { ambientOn, togglePending, toggle };
 }

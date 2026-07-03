@@ -55,14 +55,19 @@ async function registerDevice(
   return { deviceId: data.deviceId, deviceToken: data.deviceToken };
 }
 
-/** 取本机 device 凭证；不存在/属于别的账号则注册。并发去重。 */
-export async function ensureDevice(ownerUserId: string): Promise<DeviceCredentials> {
+/** 取本机 device 凭证；不存在/属于别的账号则注册。并发去重。
+ *  forceRefresh：跳过缓存直接重注册（登录时机用——dev App.tsx 的
+ *  ensureDevice({ forceRefresh: true }) 同语义，服务端顺带刷新 device 行）。 */
+export async function ensureDevice(
+  ownerUserId: string,
+  opts: { forceRefresh?: boolean } = {},
+): Promise<DeviceCredentials> {
   const [storedId, storedToken, storedOwner] = await Promise.all([
     SecureStore.getItemAsync(DEVICE_ID_KEY),
     SecureStore.getItemAsync(DEVICE_TOKEN_KEY),
     SecureStore.getItemAsync(DEVICE_OWNER_KEY),
   ]);
-  if (storedId && storedToken && storedOwner === ownerUserId) {
+  if (!opts.forceRefresh && storedId && storedToken && storedOwner === ownerUserId) {
     return { deviceId: storedId, deviceToken: storedToken };
   }
   if (inFlight?.ownerUserId === ownerUserId) return inFlight.promise;

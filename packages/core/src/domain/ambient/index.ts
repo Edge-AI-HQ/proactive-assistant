@@ -14,6 +14,8 @@ export * from "./runtime-lifecycle";
 export * from "./narrative";
 export * from "./summary-scheduler";
 export * from "./summary-context";
+export * from "./scheduled-summary";
+export * from "./summary-preference";
 export * from "./speaker-transcript";
 export * from "./timeline-store";
 export * from "./sqlite-timeline-store";

@@ -2,13 +2,22 @@ import { EncodingType, File, Paths, UploadType } from "expo-file-system";
 import { getTransportConfig } from "@pin-ai/core";
 
 import { AmbientAudio, type CaptureReadyEvent } from "../../modules/ambient-audio";
+import { WAV_CONTENT_TYPE } from "./recording";
 
-export async function transcribeCaptureReadyEvent(event: CaptureReadyEvent): Promise<string> {
+export interface TranscribeOptions {
+  /** 转写语言 hint（normalizeVoiceLanguage(...).openai），unset 不带 → 后端 auto。 */
+  language?: string;
+}
+
+export async function transcribeCaptureReadyEvent(
+  event: CaptureReadyEvent,
+  options: TranscribeOptions = {},
+): Promise<string> {
   // 静态 import(见 App.tsx 注释):dynamic import() 在本 Hermes/Metro setup 跑不通。
   const capture = await AmbientAudio.readCapture(event.wavId);
   const file = writeCaptureTempFile(capture);
   try {
-    return await transcribeVoiceFile(file, capture.contentType);
+    return await transcribeVoiceFile(file, capture.contentType, options);
   } finally {
     try {
       file.delete();
@@ -18,7 +27,23 @@ export async function transcribeCaptureReadyEvent(event: CaptureReadyEvent): Pro
   }
 }
 
-async function transcribeVoiceFile(file: File, contentType: string): Promise<string> {
+/** 听写独立采集路径（expo-audio 录成 WAV 文件，见 VoiceProvider）的整段转写。 */
+export async function transcribeVoiceFileUri(
+  uri: string,
+  options: TranscribeOptions = {},
+): Promise<string> {
+  return transcribeVoiceFile(new File(uri), WAV_CONTENT_TYPE, options);
+}
+
+async function transcribeVoiceFile(
+  file: File,
+  contentType: string,
+  options: TranscribeOptions,
+): Promise<string> {
+  // ?language= 对齐 dev transcription-api.ts（query param，unset 不带）。
+  const params = new URLSearchParams();
+  if (options.language) params.set("language", options.language);
+  const path = `/api/voice/transcribe${params.size > 0 ? `?${params.toString()}` : ""}`;
   const cfg = getTransportConfig();
   const headers = {
     ...(cfg.defaultHeaders ?? {}),
@@ -26,13 +51,13 @@ async function transcribeVoiceFile(file: File, contentType: string): Promise<str
     "Content-Type": contentType || "audio/wav",
     "X-Audio-Filename": filenameForContentType(contentType),
   };
-  let result = await uploadVoiceFile(file, `${cfg.baseUrl}/api/voice/transcribe`, headers, contentType);
+  let result = await uploadVoiceFile(file, `${cfg.baseUrl}${path}`, headers, contentType);
   if (result.status === 401 && cfg.refreshAuth) {
     const token = await cfg.refreshAuth();
     if (token) {
       result = await uploadVoiceFile(
         file,
-        `${cfg.baseUrl}/api/voice/transcribe`,
+        `${cfg.baseUrl}${path}`,
         { ...headers, Authorization: `Bearer ${token}` },
         contentType,
       );

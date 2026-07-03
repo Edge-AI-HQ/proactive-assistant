@@ -16,7 +16,7 @@
  * `useSinkDismissGesture`（任意处右滑 → 跟手下沉，过阈值退出 / 不到弹回），和
  * main chat ChatSheet 同一份，体感一致。
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft } from "lucide-react-native";
@@ -30,8 +30,12 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import {
+  basketToLovableCategory,
+  buildCardContext,
   cardActionFeedbackBody,
   dismissFeedbackBody,
+  isReminderCard,
+  REMINDER_CARD_KIND,
   type IntentCard,
 } from "@pin-ai/core";
 
@@ -41,12 +45,50 @@ import CardContextHeaderSlot from "../components/chat/CardContextHeaderSlot";
 import CardDetailSheet from "../components/now/CardDetailSheet";
 import { useSinkDismissGesture } from "../components/chat/useSinkDismiss";
 import { postCardFeedback } from "../hooks/useCardActions";
+import i18n from "../i18n";
 
 const FG = "29,33,48";
 
 export interface CardChatTarget {
   card: IntentCard;
   bootstrap?: string;
+}
+
+/** IntentCard → core buildCardContext 的输入投影——对齐 dev 链路
+ *  ui-web/now/card-model.ts realIntentToChatCard(只投 card_context 会消费的
+ *  字段;数值 id / line2 / reasoningSteps 等纯展示字段不进 card_context)。 */
+function intentCardContext(card: IntentCard): Record<string, unknown> {
+  return buildCardContext({
+    title: card.title,
+    category: basketToLovableCategory(card.goalBasket),
+    tag: card.urgency >= 0.85 ? i18n.t("card:tag.urgent") : undefined,
+    // Derive (not just copy) the kind: legacy reminder cards predate the
+    // cardKind field(dev 同款兜底,drawer 与 agent 对卡片类型保持一致)。
+    ...(isReminderCard(card)
+      ? { cardKind: REMINDER_CARD_KIND }
+      : card.cardKind
+        ? { cardKind: card.cardKind }
+        : {}),
+    ...(card.scheduleTaskId ? { scheduleTaskId: card.scheduleTaskId } : {}),
+    line1: card.whyNow || card.summary,
+    whyNow:
+      card.whyNow && card.whyNow.trim() && card.whyNow !== card.summary
+        ? card.whyNow
+        : undefined,
+    sourceApps: card.sourceApps,
+    detail: {
+      scores: [
+        { label: i18n.t("card:score.confidence"), value: Math.round(card.confidence * 100) },
+        { label: i18n.t("card:score.importance"), value: Math.round(card.importance * 100) },
+        { label: i18n.t("card:score.urgency"), value: Math.round(card.urgency * 100) },
+      ],
+      willExecute: card.primaryAction?.label ?? "",
+      executionPlan: [],
+      dataSources: card.sources,
+      impact: "",
+      permissions: "",
+    },
+  });
 }
 
 export default function CardChatScreen({
@@ -70,6 +112,13 @@ export default function CardChatScreen({
   if (target) lastTarget.current = target;
   const shown = target ?? lastTarget.current;
   const card = shown?.card ?? null;
+
+  // <card_context>:首条 /send 附带给 agent(runtime 只送一次)。memo 保持引用
+  // 稳定——runtime 以 cardContext 身份变化重置首发标记(web ChatDetailView 同构)。
+  const cardContext = useMemo(
+    () => (card ? intentCardContext(card) : undefined),
+    [card],
+  );
 
   useEffect(() => {
     // overshootClamping：欠阻尼过冲会让 sheet 冲过屏顶再落回（弹跳感）。
@@ -119,6 +168,7 @@ export default function CardChatScreen({
                 kind="card"
                 cardId={card.id}
                 bootstrap={shown?.bootstrap}
+                cardContext={cardContext}
                 card={card}
                 onCardClose={onClose}
                 bottomInset={insets.bottom}

@@ -4,7 +4,7 @@
  * 重连游标、HITL 状态全部共用），本文件只有 RN 渲染层（FlatList +
  * composer），不重新实现任何协议逻辑。
  */
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -21,6 +21,7 @@ import type { NativeScrollEvent, NativeSyntheticEvent } from "react-native";
 import { Check, X } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import Animated, { FadeInDown } from "react-native-reanimated";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   cardActionFeedbackBody,
   conversationInit,
@@ -34,7 +35,7 @@ import {
   type HitlRequiresAction,
   type IntentCard,
 } from "@pin-ai/core";
-import { useConversationRuntime } from "@pin-ai/state";
+import { cardsKeys, useConversationRuntime } from "@pin-ai/state";
 
 import AiSphere from "../ui/AiSphere";
 import { ShimmerText } from "../ui/ShimmerText";
@@ -42,12 +43,18 @@ import MarkdownText from "../components/chat/MarkdownText";
 import MessageActions from "../components/chat/MessageActions";
 import UserEntry from "../components/chat/UserEntry";
 import TodoStrip from "../components/chat/TodoStrip";
-import WorkGroup, { SpecialCard } from "../components/chat/WorkGroup";
+import WorkGroup from "../components/chat/WorkGroup";
+import NotifyCard, { notifyUserText } from "../components/chat/NotifyCard";
 import ProposeActionCard from "../components/chat/ProposeActionCard";
 import CardResultFeedbackBar from "../components/chat/CardResultFeedbackBar";
 import ChatComposer from "../components/chat/ChatComposer";
 import MainChatLanding from "../components/chat/MainChatLanding";
 import JumpToLatest from "../components/chat/JumpToLatest";
+import {
+  BrowserHeaderBar,
+  BrowserPanel,
+  useBrowserPanel,
+} from "../components/chat/BrowserPanel";
 import { VoiceButton } from "../voice";
 
 import { notifyThreadActivity, readLocalHistory } from "../lib/sync/sync-bootstrap";
@@ -97,29 +104,48 @@ const Entry = memo(function Entry({
     );
   }
   if (entry.kind === "assistant") {
-    const fullText = entry.parts
+    // web assistantPlainText 同款(Copy 用):text parts 以空行拼接。
+    const plainText = entry.parts
       .flatMap((p) => (p.type === "text" ? [p.text] : []))
-      .join("\n");
+      .join("\n\n")
+      .trim();
     const showHitl = !!hitlAction && !!onDecide;
+    // web AssistantEntry 同构:segments → blocks(notify_user 无正文时产出空块)。
     const segments = segmentAssistantParts(entry.parts);
+    const blocks: ReactNode[] = [];
+    segments.forEach((seg, idx) => {
+      if (seg.kind === "text") {
+        blocks.push(<MarkdownText key={seg.key} text={seg.text} />);
+        return;
+      }
+      if (seg.kind === "group") {
+        blocks.push(
+          <WorkGroup
+            key={seg.key}
+            group={seg.group}
+            streamingTail={entry.running && idx === segments.length - 1}
+          />,
+        );
+        return;
+      }
+      if (seg.part.toolName === "propose_action") {
+        blocks.push(
+          <ProposeActionCard key={seg.key} args={seg.part.args} onReply={onReply} busy={busy} />,
+        );
+        return;
+      }
+      // notify_user——agent 主动通知,自带 "Notify you" chrome(web NotifyCard)。
+      const msg = notifyUserText(seg.part.args);
+      if (msg) blocks.push(<NotifyCard key={seg.key} text={msg} />);
+    });
+    // First-token-pending: turn is running but nothing has streamed yet(web 同款,
+    // HITL 暂停不算 thinking)。三者皆空 → 不渲染(web return null 同构)。
+    const showThinkingPill = entry.running && entry.parts.length === 0 && !showHitl;
+    if (blocks.length === 0 && !showThinkingPill && !showHitl) return null;
     return (
       <Animated.View style={styles.assistantRow} entering={FadeInDown.duration(260)}>
-        {segments.map((seg, idx) =>
-          seg.kind === "text" ? (
-            <MarkdownText key={seg.key} text={seg.text} />
-          ) : seg.kind === "group" ? (
-            <WorkGroup
-              key={seg.key}
-              group={seg.group}
-              streamingTail={entry.running && idx === segments.length - 1}
-            />
-          ) : seg.part.toolName === "propose_action" ? (
-            <ProposeActionCard key={seg.key} args={seg.part.args} onReply={onReply} busy={busy} />
-          ) : (
-            <SpecialCard key={seg.key} part={seg.part} />
-          ),
-        )}
-        {entry.running && entry.parts.length === 0 && !showHitl ? (
+        {blocks}
+        {showThinkingPill ? (
           <View style={styles.thinkingPill}>
             <ShimmerText text={t("status.thinking")} style={styles.thinkingText} />
           </View>
@@ -133,10 +159,12 @@ const Entry = memo(function Entry({
             />
           </View>
         ) : null}
-        {!entry.running && fullText ? (
+        {/* web AssistantActionBar 同门控:turn settle 即渲;👍/👎 只在后端
+            (纯数字)serverId 落地后出现,流式临时 id 不发反馈。 */}
+        {!entry.running ? (
           <MessageActions
-            text={fullText}
-            messageId={entry.id}
+            text={plainText}
+            messageId={entry.serverId ?? ""}
             channel={channel}
           />
         ) : null}
@@ -152,6 +180,9 @@ export interface ChatScreenProps {
   cardId?: string;
   /** 进入后自动作为首条用户消息发出（confirm/steer 的 agent 指令）。 */
   bootstrap?: string;
+  /** card 模式：首条消息随 /send 附带的 <card_context>（core buildCardContext
+   *  产物，runtime 只送一次后清除——与 web ChatDetailView 同一时机）。 */
+  cardContext?: Record<string, unknown>;
   /** card 模式：卡片本体——驱动底部结果反馈条（Was this helpful? + Comment + Done）。 */
   card?: IntentCard;
   /** card 模式：结果条 Done 完成卡片后关闭会话（= CardChatScreen onClose）。 */
@@ -267,7 +298,7 @@ function HitlApprovalCard({
   );
 }
 
-export default function ChatScreen({ kind, cardId, bootstrap, card, onCardClose, bottomInset, open }: ChatScreenProps) {
+export default function ChatScreen({ kind, cardId, bootstrap, cardContext, card, onCardClose, bottomInset, open }: ChatScreenProps) {
   const [sessionKey, setSessionKey] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const listRef = useRef<FlatList<ConversationEntry>>(null);
@@ -299,6 +330,7 @@ export default function ChatScreen({ kind, cardId, bootstrap, card, onCardClose,
       key={sessionKey}
       sessionKey={sessionKey}
       bootstrap={bootstrap}
+      cardContext={cardContext}
       draft={draft}
       setDraft={setDraft}
       listRef={listRef}
@@ -313,6 +345,7 @@ export default function ChatScreen({ kind, cardId, bootstrap, card, onCardClose,
 function Conversation({
   sessionKey,
   bootstrap,
+  cardContext,
   draft,
   setDraft,
   listRef,
@@ -323,6 +356,7 @@ function Conversation({
 }: {
   sessionKey: string;
   bootstrap?: string;
+  cardContext?: Record<string, unknown>;
   draft: string;
   setDraft: (s: string) => void;
   listRef: React.RefObject<FlatList<ConversationEntry> | null>;
@@ -332,6 +366,14 @@ function Conversation({
   open?: boolean;
 }) {
   const { t } = useTranslation(["chat", "common"]);
+  const queryClient = useQueryClient();
+  // card chat:agent turn settle(chat:done / HITL 暂停)→ 立即 + 1.5s 双刷
+  // /cards,球面/timeline 状态即时翻转不等 30s 轮询(对齐 dev AppLayout
+  // onAgentTurnDone;chat:done 帧先于 worker 的 finalize 落库,尾随一次盖住竞态)。
+  const handleTurnDone = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: cardsKeys.all });
+    setTimeout(() => void queryClient.invalidateQueries({ queryKey: cardsKeys.all }), 1500);
+  }, [queryClient]);
   const {
     transcript,
     ready,
@@ -346,19 +388,42 @@ function Conversation({
     awaitingDecision,
     submitDecision,
     threadId,
+    hasMoreHistory,
+    loadMoreHistory,
   } = useConversationRuntime({
     session: sessionKey,
     bootstrap,
+    // card chat 首条消息附带 <card_context>(runtime 只送一次)。
+    cardContext,
     // 与 web 同一根门铃/本地优先注入——RN 的同步引擎吃同一套 core。
     onTurnPersisted: notifyThreadActivity,
     // Card chat stays cloud-authoritative for now: opening one card must never
     // paint another card's stale SQLite rows. The doorbell below can still keep
     // SQLite warm for future offline/search use, but it is not a render source.
     localHistory: card ? undefined : readLocalHistory,
+    // 卡片层门铃:web 只在 card chat 接(ChatDetailView onTurnDone),main chat 不接。
+    onTurnDone: card ? handleTurnDone : undefined,
   });
   useEffect(() => {
     notifyThreadActivity(sessionKey);
   }, [sessionKey]);
+
+  // Browser live view(state + 前台重挂 wiring 在 useBrowserPanel,web 同名 hook)。
+  const browser = useBrowserPanel(threadId);
+
+  // 向旧翻页:倒置列表滚到旧消息端(onEndReached)时拉上一页(web TranscriptView
+  // startReached → loadMoreHistory,hasMoreHistory 门控)。loading 态驱动旧端
+  // 的加载指示;runtime 自带重入守卫,这里的本地态只管指示器。
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadOlder = useCallback(async () => {
+    if (!hasMoreHistory || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      await loadMoreHistory();
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [hasMoreHistory, loadMoreHistory, loadingMore]);
 
   const visible = transcript;
   const hitlHostId = useMemo(
@@ -513,6 +578,15 @@ function Conversation({
             )}
             onScroll={onScroll}
             scrollEventThrottle={16}
+            // 倒置列表的"末端"= 最旧一条(视觉顶部)→ 滚近旧端时向旧翻页。
+            onEndReached={() => void loadOlder()}
+            onEndReachedThreshold={0.4}
+            // inverted 下 Footer 渲在旧端(视觉顶部)= 向旧加载指示。
+            ListFooterComponent={
+              loadingMore ? (
+                <ActivityIndicator size="small" color="#71717a" style={styles.historyLoading} />
+              ) : null
+            }
           />
         )}
         {/* 回到最新：视口离开底部时悬浮（对齐 web JumpToLatest）。 */}
@@ -520,6 +594,18 @@ function Conversation({
           <JumpToLatest attention={hasNewBelow || !!awaitingDecision} onPress={jumpToLatest} />
         ) : null}
       </View>
+      {/* Browser 入口条:session 在、面板收起时贴 composer 上沿(web ConversationView
+          footer 同位;attention = AI request_takeover 呼救,琥珀高亮)。 */}
+      {browser.session && !browser.panelOpen ? (
+        <View style={styles.browserHeaderWrap}>
+          <BrowserHeaderBar
+            currentUrl={browser.session.currentUrl}
+            attention={browser.attention}
+            attentionReason={browser.session.takeoverReason}
+            onOpen={browser.openFromHeader}
+          />
+        </View>
+      ) : null}
       {threadId ? <TodoStrip sessionKey={threadId} /> : null}
       {awaitingDecision && !hitlHostId ? (
         <View style={styles.hitlFallbackWrap}>
@@ -549,6 +635,20 @@ function Conversation({
         placeholder={card ? t("cardContext.messagePlaceholder") : t("composer.placeholder")}
         bottomInset={bottomInset}
       />
+      {/* Browser live view 面板:全屏 bottom-sheet 盖住会话(web BrowserDrawer
+          同构;手机窄屏无 split 分支)。开关驱动挂载(= web AnimatePresence 内容
+          随关闭卸载),退场动画由 BrowserPanel exiting 播。 */}
+      {browser.session && browser.panelOpen ? (
+        <BrowserPanel
+          session={browser.session}
+          reloadKey={browser.reloadKey}
+          bottomInset={bottomInset}
+          onControlChange={browser.setControl}
+          sendInput={browser.sendInput}
+          onCollapse={browser.closePanel}
+          onRequestClose={browser.close}
+        />
+      ) : null}
     </KeyboardAvoidingView>
   );
 }
@@ -562,6 +662,10 @@ const styles = StyleSheet.create({
   listWrap: { flex: 1 },
   list: { flex: 1 },
   listContent: { padding: 16 },
+  // 向旧翻页的加载指示(倒置列表 Footer = 视觉顶部旧端)。
+  historyLoading: { paddingVertical: 12 },
+  // web: px-3 pb-1(browser 入口条与 composer 同缘)。
+  browserHeaderWrap: { paddingHorizontal: 12, paddingBottom: 4 },
   // main chat 空 landing 的滚动容器（倒置列表外，单独渲染）。paddingHorizontal 16
   // 对齐聊天内容左右边距，保证 landing 的建议 chip 宽度与会话态一致。
   landingScroll: { flexGrow: 1, paddingHorizontal: 16, paddingTop: 8 },

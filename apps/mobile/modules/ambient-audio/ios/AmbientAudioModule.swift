@@ -16,6 +16,9 @@ public final class AmbientAudioModule: Module {
       DispatchQueue.main.async { self?.sendEvent(eventName, payload) }
     }
   ))
+  private lazy var voicePcmStream = VoicePcmStream { [weak self] payload in
+    DispatchQueue.main.async { self?.sendEvent("voicePcmChunk", payload) }
+  }
 
   private var playbackPlayer: AVAudioPlayer?
   private var playbackDelegate: PlaybackDelegate?
@@ -37,6 +40,7 @@ public final class AmbientAudioModule: Module {
       "transcriptRefined",
       "transcriptReady",
       "speechBurst",
+      "voicePcmChunk",
       "audioState",
       "audioError",
       "audioDiagnostic"
@@ -172,6 +176,28 @@ public final class AmbientAudioModule: Module {
 
     AsyncFunction("setExternalMicSuppressed") { (suppressed: Bool) in
       await self.audioManager.setExternalMicSuppressed(suppressed)
+    }
+
+    AsyncFunction("startVoicePcmStream") { (options: [String: Any]?) -> [String: Any] in
+      guard self.microphonePermissionState() == "granted" else {
+        throw AudioCaptureException("Microphone permission not granted")
+      }
+      let sampleRate = options?["sampleRate"] as? Int ?? 16_000
+      let chunkDurationMs = options?["chunkDurationMs"] as? Int ?? 100
+      do {
+        let streamId = try self.voicePcmStream.start(
+          sampleRate: sampleRate,
+          chunkDurationMs: chunkDurationMs
+        )
+        return ["streamId": streamId]
+      } catch {
+        self.emitError(error.localizedDescription, source: "voicePcmStream")
+        throw error
+      }
+    }
+
+    AsyncFunction("stopVoicePcmStream") { (streamId: String?) in
+      self.voicePcmStream.stop(streamId: streamId)
     }
   }
 

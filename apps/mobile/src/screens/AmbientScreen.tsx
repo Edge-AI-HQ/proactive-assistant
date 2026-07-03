@@ -47,7 +47,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react-native";
-import { type UserDevice, type UserDevicePlatform } from "@pin-ai/core";
+import { type IntentCard, type UserDevice, type UserDevicePlatform } from "@pin-ai/core";
 import { useUserDevices } from "@pin-ai/state";
 
 import i18n from "../i18n";
@@ -59,6 +59,7 @@ import { useAmbientTimeline } from "../hooks/useAmbientTimeline";
 import { useAmbientLiveSession } from "../hooks/useAmbientLiveSession";
 import LiveSessionCard from "../components/ambient/LiveSessionCard";
 import LiveFullscreen from "../components/ambient/LiveFullscreen";
+import AmbientModelRequiredCard from "../components/ambient/AmbientModelRequiredCard";
 import type { LiveSession } from "../ambient/live/live-session";
 import {
   latestRawEventToEntry,
@@ -67,6 +68,8 @@ import {
   type TimelineEntry,
 } from "../ambient/timeline-entries";
 import { isUploadsLocked, setUploadsLocked } from "../ambient/ingest";
+import { ambientStatusSnapshot, subscribeAmbientStatus } from "../ambient/runtime";
+import type { RuntimeStatus } from "../ambient/status";
 import { EM_TIGHT, tracking } from "../ui/typography";
 
 export interface HeaderProps {
@@ -126,15 +129,33 @@ export default function AmbientScreen({
   headerProps,
   userId,
   onOpenConnect,
+  onOpenChat,
+  onOpenModelSetup,
 }: {
   headerProps: HeaderProps;
   userId: string;
   onOpenConnect: () => void;
+  /** Ambient→Action handoff（dev AppLayout.handleAmbientAction）：LLM 时间线
+   *  事件的 "Open →" 把虚拟 IntentCard 送进 card chat。AppShell 传
+   *  (card, bootstrap) => setCardChat({ card, bootstrap })（与 NowScreen 同款）。 */
+  onOpenChat?: (card: IntentCard, bootstrap: string) => void;
+  /** ModelRequiredCard 的 "Download" 引导：跳 Settings → Ambient 子页（模型
+   *  面板在那里）。AppShell 传 () => navigate("setting")。 */
+  onOpenModelSetup?: () => void;
 }) {
   const { t } = useTranslation("ambient");
   const { ambientOn, togglePending, toggle } = useAmbientToggle(userId);
   const [locked, setLocked] = useState(false);
   const [visibleCount, setVisibleCount] = useState(INITIAL_TIMELINE_COUNT);
+  // runtime 遥测订阅：hero 副标题显示第一个源错误（dev AmbientView:438-439,604-606）。
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
+  useEffect(() => {
+    const update = () => setRuntimeStatus(ambientStatusSnapshot());
+    update();
+    return subscribeAmbientStatus(update);
+  }, []);
+  const firstSourceError =
+    runtimeStatus?.sources.find((s) => s.lastError)?.lastError ?? null;
   const { devices, loading: devicesLoading, error: devicesError } = useUserDevices();
   // dev AmbientView：连接设备 = active 且非 web 平台（web 会话不算真实配对设备）。
   // header 计数与下方设备条同源，避免两处数字打架。
@@ -159,6 +180,8 @@ export default function AmbientScreen({
     latestRawEvents,
     localDate,
     loading: timelineLoading,
+    error: timelineError,
+    storeStatus,
     narrativeSummary,
     dismiss,
   } = useAmbientTimeline();
@@ -179,6 +202,46 @@ export default function AmbientScreen({
   const { session: liveSession, previewVisibleCount, dismiss: dismissLiveSession } =
     useAmbientLiveSession({ ambientOn, dismissible: true });
   const [fullscreenSession, setFullscreenSession] = useState<LiveSession | null>(null);
+
+  /** Ambient Action handoff（dev AppLayout.handleAmbientAction:633-670 逐字）：
+   *  把 AmbientTimelineEntry 包成虚拟 IntentCard，交给现有 card-chat 运行时
+   *  （sessionKey 落到 card-thread-ambient-<entry.id>，服务端零改动）。 */
+  const handleAmbientAction = (entry: TimelineEntry) => {
+    if (!entry.action || !onOpenChat) return;
+    const entryId = entry.id ?? `${entry.time}-${entry.title}`.replace(/\s+/g, "-").toLowerCase();
+    const ambientCardId = `ambient-${entryId}`;
+    const virtualCard: IntentCard = {
+      id: ambientCardId,
+      goalBasket: entry.action.goalBasket ?? "life",
+      title: entry.title,
+      whyNow: `Ambient event captured at ${entry.time} on ${entry.device.name}.`,
+      summary: entry.body,
+      primaryAction: { label: entry.action.label, type: "confirm" },
+      secondaryActions: [],
+      confidence: entry.confidenceLabel === "uncertain" ? 0.5 : 0.85,
+      urgency: 0.5,
+      importance: 0.6,
+      sources: [entry.device.name, ...entry.tags],
+      sourceApps: [],
+      reasoningSteps: [],
+      agentChain: ["ambient"],
+      createdAt: new Date().toISOString(),
+    };
+    const bootstrap = [
+      "The user clicked an action from an Ambient Timeline event.",
+      "",
+      "Event:",
+      entry.title,
+      entry.body,
+      "",
+      "Action:",
+      entry.action.label,
+      "",
+      "Goal:",
+      entry.action.goal,
+    ].join("\n");
+    onOpenChat(virtualCard, bootstrap);
+  };
 
   // 跨天 → 重置 load-more（对齐 dev localDate 重置）。
   useEffect(() => {
@@ -243,7 +306,9 @@ export default function AmbientScreen({
                   ? t("view.statusPaused")
                   : locked
                     ? t("view.statusUploadsPaused")
-                    : t("view.statusListening")}
+                    : firstSourceError
+                      ? firstSourceError
+                      : t("view.statusListening")}
               </Text>
             </View>
           </View>
@@ -378,6 +443,11 @@ export default function AmbientScreen({
           </View>
         ) : null}
 
+        {/* 待摘要转写积压但零时间线事件 → 引导装端侧模型卡（dev AmbientView:727-729）。 */}
+        {pendingTranscriptWindows.length > 0 && timelineEntries.length === 0 && onOpenModelSetup ? (
+          <AmbientModelRequiredCard onOpenSetup={onOpenModelSetup} />
+        ) : null}
+
         {/* TODAY 时间线：三路 TimelineEntry(LLM 事件 + 最近原始事件 + 待转写窗口)。图标格 +
             时间·来源 + 隐私/置信徽章 + tag + dismiss + load-more。空/加载态文案逐字对齐 dev。 */}
         {timelineEntries.length === 0 ? (
@@ -391,14 +461,24 @@ export default function AmbientScreen({
             >
               {timelineLoading ? t("view.buildingTimeline") : t("view.noTimelineEvents")}
             </Text>
-            {!timelineLoading ? (
-              <Text
-                className="text-center"
-                style={{ fontFamily: "Inter_400Regular", fontSize: 12, lineHeight: 17, color: fg(0.5), marginTop: 4 }}
-              >
-                {ambientOn
+            {/* dev :774-780：有错误显示错误，否则按开关状态给提示。 */}
+            <Text
+              className="text-center"
+              style={{ fontFamily: "Inter_400Regular", fontSize: 12, lineHeight: 17, color: fg(0.5), marginTop: 4 }}
+            >
+              {timelineError
+                ? timelineError
+                : ambientOn
                   ? t("view.emptyKeepOn")
                   : t("view.emptyTurnOn")}
+            </Text>
+            {/* dev :781-785：本地 store 故障单独一行红字。 */}
+            {storeStatus?.lastError ? (
+              <Text
+                className="text-center"
+                style={{ fontFamily: "Inter_400Regular", fontSize: 11, lineHeight: 15, color: "#ef4444", marginTop: 8 }}
+              >
+                {storeStatus.lastError}
               </Text>
             ) : null}
           </GlassCard>
@@ -510,6 +590,59 @@ export default function AmbientScreen({
                           ))}
                         </View>
                       ) : null}
+                      {/* Triggered NOW card（dev AmbientView:867-906）：带 action 的条目
+                          "Open →" 把事件送进现有 CardChat 运行时（Ambient→Action 唯一
+                          handoff）；无 action 的保持装饰性展示。 */}
+                      {entry.triggeredCard ? (
+                        <View style={{ marginTop: 10, borderRadius: 12, overflow: "hidden" }}>
+                          <LinearGradient
+                            colors={["hsla(304, 75%, 63%, 0.07)", "hsla(304, 75%, 63%, 0.02)"]}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={{
+                              padding: 10,
+                              borderRadius: 12,
+                              borderWidth: 1,
+                              borderColor: "hsla(304, 75%, 63%, 0.18)",
+                            }}
+                          >
+                            <Text
+                              style={{
+                                fontFamily: "Inter_700Bold",
+                                fontSize: 10,
+                                lineHeight: 14,
+                                letterSpacing: 1.4,
+                                textTransform: "uppercase",
+                                color: PINK,
+                                marginBottom: 4,
+                              }}
+                            >
+                              {t("view.triggeredThisCard")}
+                            </Text>
+                            <View className="flex-row items-center justify-between" style={{ gap: 8 }}>
+                              <View className="flex-1 flex-row items-center" style={{ gap: 6 }}>
+                                <Sparkles size={11} color={PINK_BRIGHT} />
+                                <Text
+                                  numberOfLines={1}
+                                  className="flex-1"
+                                  style={{ fontFamily: "Inter_400Regular", fontSize: 12, lineHeight: 16, color: fg(0.85) }}
+                                >
+                                  {entry.triggeredCard}
+                                </Text>
+                              </View>
+                              <Pressable
+                                onPress={entry.action && onOpenChat ? () => handleAmbientAction(entry) : undefined}
+                                hitSlop={8}
+                                accessibilityRole="button"
+                              >
+                                <Text style={{ fontFamily: "Inter_600SemiBold", fontSize: 11, lineHeight: 15, color: PINK }}>
+                                  {t("view.open")}
+                                </Text>
+                              </Pressable>
+                            </View>
+                          </LinearGradient>
+                        </View>
+                      ) : null}
                     </View>
                   </View>
                 </GlassCard>
@@ -554,9 +687,14 @@ export default function AmbientScreen({
         </View>
       </ScrollView>
 
-      {/* 全屏 focus overlay（Focus 钮打开；Modal 全屏接管）*/}
+      {/* 全屏 focus overlay（Focus 钮打开；Modal 全屏接管）。渲染用
+          liveSession ?? fullscreenSession（dev LiveOverlay:32）：有实时流时跟流
+          （新转写继续进来），fullscreenSession 只当「保持打开」的快照兜底。 */}
       {fullscreenSession ? (
-        <LiveFullscreen session={fullscreenSession} onClose={() => setFullscreenSession(null)} />
+        <LiveFullscreen
+          session={liveSession ?? fullscreenSession}
+          onClose={() => setFullscreenSession(null)}
+        />
       ) : null}
     </View>
   );

@@ -23,6 +23,7 @@
         "NSFocusStatusUsageDescription": "PIN AI reads whether you're in a Focus mode to gauge your availability for proactive suggestions.",
         "UIBackgroundModes": [
           "audio",
+          "location",
           "fetch",
           "remote-notification"
         ]

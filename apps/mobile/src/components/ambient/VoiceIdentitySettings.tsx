@@ -15,7 +15,6 @@ import { Pressable, Text, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { runOnJS } from "react-native-reanimated";
 import {
-  RecordingPresets,
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
   useAudioPlayer,
@@ -38,6 +37,7 @@ import {
 import { useUserSettings } from "@pin-ai/state";
 
 import i18n from "../../i18n";
+import { WAV_CONTENT_TYPE, WAV_RECORDING_OPTIONS } from "../../voice/recording";
 import { GlassCard } from "../../ui/GlassCard";
 import { AirplayRouteButton } from "../../../modules/airplay-route";
 
@@ -47,18 +47,6 @@ const MAX_DURATION_MS = 10_000;
 const ENGLISH_PROMPT =
   "This morning I checked my schedule, and this afternoon I will reply to a colleague.";
 const CHINESE_PROMPT = "今天早上我整理了日程，下午会给同事回一条消息。";
-
-// 16kHz 单声道 voice（对齐 web REFERENCE_SAMPLE_RATE：声纹够用、文件小）。基于 LOW_QUALITY
-// (iOS = MPEG4AAC + MIN quality，voice 取向) + 显式 32kbps bitRate。
-// ⚠️ 不要 spread HIGH_QUALITY：它的 bitRate=128kbps/quality=MAX 是给 44.1kHz 立体声的，
-// 压到 16kHz 单声道后 128kbps 超出该采样率上限，iOS AAC encoder 在 prepareToRecordAsync
-// 直接拒绝（"Failed to prepare recorder"）。32kbps@16kHz mono 是 voice 的合法档位。
-const RECORDING_OPTIONS = {
-  ...RecordingPresets.LOW_QUALITY,
-  sampleRate: 16_000,
-  numberOfChannels: 1,
-  bitRate: 32_000,
-};
 
 const FG = "230, 25%, 15%";
 const fg = (a?: number) => (a === undefined ? `hsl(${FG})` : `hsla(${FG}, ${a})`);
@@ -99,7 +87,9 @@ async function uploadVoiceReference(
   const file = new File(uri);
   const baseHeaders = {
     ...(cfg.defaultHeaders ?? {}),
-    "Content-Type": "audio/mp4",
+    // 后端 wave.open 校验：必须是 WAV（录音档位见 voice/recording.ts），对齐 dev
+    // uploadVoiceIdentityReference 的 Content-Type audio/wav。
+    "Content-Type": WAV_CONTENT_TYPE,
     "X-Audio-Duration-Ms": String(Math.round(durationMs)),
   };
   const url = `${cfg.baseUrl}/api/voice/identity/reference`;
@@ -108,7 +98,7 @@ async function uploadVoiceReference(
       httpMethod: "POST",
       uploadType: UploadType.BINARY_CONTENT,
       headers,
-      mimeType: "audio/mp4",
+      mimeType: WAV_CONTENT_TYPE,
       sessionType: "foreground",
     });
 
@@ -299,7 +289,7 @@ export default function VoiceIdentitySettings({ userId }: { userId: string | nul
   const [reviewDurationMs, setReviewDurationMs] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
-  const recorder = useAudioRecorder(RECORDING_OPTIONS);
+  const recorder = useAudioRecorder(WAV_RECORDING_OPTIONS);
   const player = useAudioPlayer(reviewUri ?? undefined);
   const startedAtRef = useRef(0);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);

@@ -2,9 +2,26 @@
  * Ambient 运行时（RN）：source 生命周期 + ingest loop。开关 = 本地
  * opt-in（AsyncStorage，per-device 授权语义与 Capacitor 版一致：本机没
  * 显式打开就绝不采集）。
+ *
+ * 对齐 dev AmbientRuntime（services/ambient/index.ts）的关键语义：
+ *  - 采集信号一律先过本地 timeline pipeline（ingestSignal），**蒸馏产物**进
+ *    上传 outbox——raw 源信号只落本地 store，不上传（dev ingestLocalSignal）。
+ *  - boot 恢复按 server per-source consent 决定启哪些源（dev App.tsx:77-133
+ *    "which sources start follows the server consent, not all of them"）。
+ *  - 60s source watchdog（refreshActiveSources）+ 15min context snapshot +
+ *    15min scheduled summary（cloud-first）三个定时器随采集生命周期起停。
+ *  - AppState 前台 → reconcile + drain，切后台 → 最后 drain 一次（dev
+ *    lifecycle.ts bindAmbientLifecycle）。
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { AmbientLifecycleController, type AmbientStartSession } from "@pin-ai/core";
+import { AppState } from "react-native";
+import {
+  AmbientLifecycleController,
+  effectiveAmbientSummaryMode,
+  maybeRunScheduledAmbientSummary,
+  proxyFetch,
+  type AmbientStartSession,
+} from "@pin-ai/core";
 
 import {
   flushSignals,
@@ -12,7 +29,9 @@ import {
   refreshOutboxCount,
   startIngestLoop,
   stopIngestLoop,
+  uploadsLockedSnapshot,
 } from "./ingest";
+import { AMBIENT_SOURCE_KEYS } from "./keys";
 import { createActivitySource } from "./sources/activity";
 import { createAudioRouteSource } from "./sources/audio-route";
 import { createCalendarSource } from "./sources/calendar";
@@ -23,7 +42,10 @@ import { createLocationSource } from "./sources/location";
 import { createSoundClassifierSource } from "./sources/sound-classifier";
 import { createVisitSource } from "./sources/visit";
 import type { AmbientSource, PersonalSignalInput, SourceContext } from "./types";
-import { getAmbientTimelinePipeline } from "./timeline";
+import { getAmbientTimelinePipeline, refreshTimeline } from "./timeline";
+import { getAmbientTimelineStore } from "./timeline/store";
+import { createCloudFirstAmbientSummaryBridge, createLocalAmbientSummaryBridge } from "./summary-bridges";
+import { loadAmbientSummaryPreference } from "./summary-preference";
 import {
   clearSourceError,
   describeError,
@@ -32,32 +54,49 @@ import {
   notifyStatus,
   recordSourceError,
   recordSourceEvent,
+  setLastIngestError,
   subscribeStatus,
   type RuntimeStatus,
 } from "./status";
 
 const ENABLED_KEY = "pinai:ambient-enabled";
 const SOURCE_START_TIMEOUT_MS = 8_000;
+const SOURCE_WATCHDOG_INTERVAL_MS = 60_000;
+const TIMELINE_SUMMARY_INTERVAL_MS = 15 * 60_000;
+const CONTEXT_SNAPSHOT_INTERVAL_MS = 15 * 60_000;
+const POWER_LOG_PREFIX = "[ambient-power]";
 
 // 生命周期标记只打 log，不当数据事件计数；真实捕获摘要才进遥测（lastEvent + 计数）。
 const LIFECYCLE_MARKERS = new Set(["starting", "started", "stopping", "stopped"]);
 
-// 把每条采集信号也写进本地 timeline store（= dev on-device 架构）：ingestSignal 先
-// upsertRawEvent（raw event 落库 → live 卡 replay 转写 + context chips + timeline 原始条目），
-// 再窗口化 + 端侧生成。LLM 生成缺 llama 会失败，但 raw event 已先落库、不影响 live/context；
-// fire-and-forget，不阻塞上传。
-async function ingestToTimelineStore(item: PersonalSignalInput): Promise<void> {
+// 采集信号 → 本地 timeline pipeline（= dev runtime.ingestLocalSignal）：
+// ingestSignal 先 upsertRawEvent（raw event 落库 → live 卡 replay 转写 + context
+// chips + timeline 原始条目），再窗口化 + 端侧生成；返回的**蒸馏信号**
+// （ambient.timeline_event / ambient.candidate_window）才进上传 outbox。
+// raw 源信号本身不再上传（上传形态对齐 dev；ingest 侧另有 SYNCABLE 白名单兜底）。
+async function ingestLocalSignal(item: PersonalSignalInput): Promise<void> {
   try {
-    await getAmbientTimelinePipeline().ingestSignal(item);
+    const timelineSignals = await getAmbientTimelinePipeline().ingestSignal(item);
+    for (const signal of timelineSignals) pushSignal(signal);
   } catch (err) {
-    console.warn("[ambient] timeline store ingest failed:", err);
+    setLastIngestError(describeError(err));
+    console.warn("[ambient] timeline pipeline ingest failed:", err);
   }
+}
+
+// Ambient 转写语言 hint（= dev runtime.transcriptionLanguage）：settings.
+// generationLanguage 经 useAmbientToggle / useAmbientConsentReconcile 写入，
+// sound-classifier 读它派生 recognitionLocale + ?language=。
+let transcriptionLanguage: string | null = null;
+
+export function setAmbientTranscriptionLanguage(language: string | null | undefined): void {
+  const normalized = language?.trim();
+  transcriptionLanguage = normalized ? normalized : null;
 }
 
 const ctx: SourceContext = {
   push: (item) => {
-    pushSignal(item); // 上传 outbox（服务端）
-    void ingestToTimelineStore(item); // 写本地 store（喂 live 卡 + timeline）
+    void ingestLocalSignal(item);
   },
   onEvent: (key, summary) => {
     console.log(`[ambient:${key}] ${summary}`);
@@ -70,7 +109,7 @@ const lifecycle = new AmbientLifecycleController();
 const sources: AmbientSource[] = [
   createLocationSource(ctx),
   createDeviceStateSource(ctx),
-  createSoundClassifierSource(ctx),
+  createSoundClassifierSource(ctx, { getTranscriptionLanguage: () => transcriptionLanguage }),
   createAudioRouteSource(ctx),
   createCalendarSource(ctx),
   createHealthSource(ctx),
@@ -85,6 +124,27 @@ let startPromiseSession: AmbientStartSession | null = null;
 interface StartAmbientOptions {
   interactivePermissions?: boolean;
 }
+
+// ── 源启停串行化 ──
+// dev 的 reconcileDesiredSources 有 sourceReconcilePromise 队列；RN 有三个并发
+// 入口（master toggle 的 startAmbient、consent reconcile hook、60s watchdog、
+// AppState 前台恢复），源的 start/stop 不可重入（重复 addListener / subs 覆盖
+// 泄漏），全部排进同一条 promise 链。
+let sourceMutationQueue: Promise<unknown> = Promise.resolve();
+
+function enqueueSourceMutation<T>(task: () => Promise<T>): Promise<T> {
+  const run = sourceMutationQueue.then(task, task);
+  sourceMutationQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+// watchdog / AppState 恢复要用的「期望源集合」+ owner（= dev desiredSourceKeys；
+// lifecycle.ownerUserId 在全源启动失败时会是 null，watchdog 重试需要独立记住 owner）。
+let desiredSourceKeys = new Set<string>();
+let runtimeOwnerUserId: string | null = null;
 
 // ── 本机 opt-in 闸的共享可订阅镜像 ──
 // dev 用同步 localStorage + useUserSettings fan-out 让 NOW / Ambient 两处开关共享同一值。
@@ -138,7 +198,7 @@ export async function startAmbient(
   if (lifecycle.running || startPromise) await stopAmbient();
   const session = lifecycle.beginStart(userId, opts.interactivePermissions ?? true);
   startPromiseSession = session;
-  startPromise = startAmbientSources(session).finally(() => {
+  startPromise = enqueueSourceMutation(() => startAmbientSources(session)).finally(() => {
     if (startPromiseSession?.id === session.id) {
       startPromise = null;
       startPromiseSession = null;
@@ -149,8 +209,17 @@ export async function startAmbient(
 
 async function startAmbientSources(session: AmbientStartSession): Promise<string[]> {
   await writeEnabledFlag(true);
-  if (!lifecycle.isCurrentStart(session)) return [];
+  if (!lifecycle.isCurrentStart(session)) {
+    // 一个 stop 抢在 writeEnabledFlag 的 await 窗口里插了进来（本次 start 已作废）。
+    // 回滚 flag，否则开关会显示"开着"但没有源在跑（旧竞态：早退残留 flag=true）。
+    await writeEnabledFlag(false);
+    return [];
+  }
+  desiredSourceKeys = new Set(sources.map((s) => s.key));
+  runtimeOwnerUserId = session.userId;
   startIngestLoop(session.userId);
+  startRuntimeTimers();
+  bindAmbientAppStateLifecycle();
   const started: string[] = [];
   for (const s of sources) {
     if (!lifecycle.isCurrentStart(session)) break;
@@ -168,6 +237,9 @@ async function startAmbientSources(session: AmbientStartSession): Promise<string
   const result = lifecycle.completeStart(session, started);
   if (result !== "started") {
     await writeEnabledFlag(false);
+    desiredSourceKeys = new Set();
+    runtimeOwnerUserId = null;
+    stopRuntimeTimers("start-failed");
     stopIngestLoop();
   }
   return result === "started" ? started : [];
@@ -178,9 +250,14 @@ export async function stopAmbient(): Promise<void> {
   lifecycle.stop();
   startPromise = null;
   startPromiseSession = null;
-  for (const s of sources) {
-    await s.stop().catch(() => {});
-  }
+  desiredSourceKeys = new Set();
+  runtimeOwnerUserId = null;
+  stopRuntimeTimers("stopAmbient");
+  await enqueueSourceMutation(async () => {
+    for (const s of sources) {
+      await s.stop().catch(() => {});
+    }
+  });
   stopIngestLoop();
 }
 
@@ -188,51 +265,111 @@ export function ambientRunning(): boolean {
   return lifecycle.running;
 }
 
-/** 登录后恢复：本机此前显式开过才自动续采。 */
+/**
+ * 登录后恢复：本机此前显式开过才自动续采；启动哪些源跟 server per-source
+ * consent（= dev App.tsx:77-133 boot 效应——"Once authorized, which sources
+ * start follows the server consent, not 'all of them'"）。consent 拉不到时
+ * 宁可不启（隐私不变量优先于可用性）。
+ */
 export async function resumeAmbientIfEnabled(userId: string): Promise<void> {
-  if (await isAmbientEnabled()) {
-    await startAmbient(userId, { interactivePermissions: false });
+  if (!(await isAmbientEnabled())) return;
+  let consent: { keys: string[]; generationLanguage: string | null };
+  try {
+    consent = await fetchServerAmbientConsent();
+  } catch (err) {
+    console.warn("[ambient] consent fetch failed; skipping auto-start", err);
+    return;
   }
+  setAmbientTranscriptionLanguage(consent.generationLanguage);
+  if (consent.keys.length === 0) return; // server 端全关：不启动（本机闸保留，等 consent 恢复）
+  await reconcileEnabledSources(userId, consent.keys, { interactivePermissions: false });
+  await flushSignals();
+}
+
+/** GET /settings → 已开 consent 的源键 + 生成语言（dev App.tsx 的 enabledKey 数据源）。 */
+async function fetchServerAmbientConsent(): Promise<{
+  keys: string[];
+  generationLanguage: string | null;
+}> {
+  const res = await proxyFetch("/settings");
+  if (!res.ok) throw new Error(`/settings ${res.status}`);
+  const data = (await res.json()) as {
+    ambientSources?: Record<string, { enabled?: boolean } | null>;
+    generationLanguage?: string | null;
+  };
+  return {
+    keys: AMBIENT_SOURCE_KEYS.filter((key) => data.ambientSources?.[key]?.enabled === true),
+    generationLanguage: data.generationLanguage ?? null,
+  };
 }
 
 // ── per-source reconcile + 遥测快照（settings Permissions & sources 面板用）──
 
+interface ReconcileOptions {
+  interactivePermissions?: boolean;
+}
+
 /**
  * 把"正在跑的源集合"调和到 desiredKeys（consent 真集）。web AmbientRuntime
- * .reconcileEnabledSources 的 RN 对应物：desired&&未跑→启，未 desired&&在跑→停。
- * ≥1 desired 时确保 ingest loop 在跑、本机 opt-in；全停时关 loop + opt-out。
- * 与 master 开关（startAmbient）共享同一 sources 数组，按 isStarted() 收口真相。
+ * .reconcileEnabledSources 的 RN 对应物：desired&&未跑→启，未 desired&&在跑→停，
+ * desired&&在跑→refresh() 自愈（= dev runReconcileDesiredSources 的第三分支，
+ * watchdog 靠它把 stale/failed 的 sound-classifier 复活）。
+ * ≥1 desired 时确保 ingest loop + 定时器在跑、本机 opt-in；desired 为空（显式
+ * 全关）才关 loop + opt-out——源启动失败**不**清闸，留给 watchdog 每 60s 重试
+ * （dev watchdog 语义）。与 master 开关（startAmbient）共享同一 sources 数组，
+ * 按 isStarted() 收口真相。
  */
-export async function reconcileEnabledSources(userId: string, keys: string[]): Promise<void> {
+export async function reconcileEnabledSources(
+  userId: string,
+  keys: string[],
+  opts: ReconcileOptions = {},
+): Promise<void> {
   const desired = new Set(keys);
+  desiredSourceKeys = new Set(keys);
   if (desired.size > 0) {
+    runtimeOwnerUserId = userId;
     await writeEnabledFlag(true);
     startIngestLoop(userId);
+    startRuntimeTimers();
+    bindAmbientAppStateLifecycle();
   }
-  for (const s of sources) {
-    const shouldRun = desired.has(s.key);
-    if (shouldRun && !s.isStarted()) {
-      try {
-        ctx.onEvent(s.key, "starting");
-        await s.start({ interactivePermissions: true });
-        clearSourceError(s.key);
-        ctx.onEvent(s.key, "started");
-      } catch (err) {
-        // 单源失败（权限拒绝/超时）不影响其他源，错误进遥测让面板显示。
-        recordSourceError(s.key, describeError(err));
+  await enqueueSourceMutation(async () => {
+    for (const s of sources) {
+      const shouldRun = desired.has(s.key);
+      if (shouldRun && !s.isStarted()) {
+        try {
+          ctx.onEvent(s.key, "starting");
+          await s.start({ interactivePermissions: opts.interactivePermissions ?? true });
+          clearSourceError(s.key);
+          ctx.onEvent(s.key, "started");
+        } catch (err) {
+          // 单源失败（权限拒绝/超时）不影响其他源，错误进遥测让面板显示。
+          recordSourceError(s.key, describeError(err));
+        }
+      } else if (!shouldRun && s.isStarted()) {
+        await s.stop().catch(() => {});
+      } else if (shouldRun && s.isStarted() && typeof s.refresh === "function") {
+        // 在跑的源做健康检查/自愈（dev reconcile 的 refresh 分支）。
+        try {
+          await s.refresh();
+          clearSourceError(s.key);
+        } catch (err) {
+          recordSourceError(s.key, describeError(err));
+        }
       }
-    } else if (!shouldRun && s.isStarted()) {
-      await s.stop().catch(() => {});
     }
-  }
+  });
   const startedKeys = sources.filter((s) => s.isStarted()).map((s) => s.key);
   const running = startedKeys.length > 0;
   // 收口 lifecycle 视图，ambientRunning()/startedSourceKeys 保持真相。
   lifecycle.running = running;
   lifecycle.ownerUserId = running ? userId : null;
   lifecycle.startedSourceKeys = startedKeys;
-  if (!running) {
+  if (desired.size === 0) {
+    // 显式全关（consent 清空 / 面板全 Off）才落 opt-out；启动失败不清闸。
+    runtimeOwnerUserId = null;
     await writeEnabledFlag(false);
+    stopRuntimeTimers("reconcile-empty");
     stopIngestLoop();
   }
   await refreshOutboxCount();
@@ -279,6 +416,156 @@ export function ambientStatusSnapshot(): RuntimeStatus {
 /** 订阅遥测变更（面板 useEffect 用，返回退订函数）。 */
 export function subscribeAmbientStatus(listener: () => void): () => void {
   return subscribeStatus(listener);
+}
+
+// ── 定时器：60s watchdog + 15min context snapshot + 15min scheduled summary ──
+// （dev AmbientRuntime 构造时起、shutdown 停；RN 随「有 desired 源」起停。）
+
+let sourceWatchdogTimer: ReturnType<typeof setInterval> | null = null;
+let timelineSummaryTimer: ReturnType<typeof setInterval> | null = null;
+let contextSnapshotTimer: ReturnType<typeof setInterval> | null = null;
+let timelineSummaryInFlight = false;
+let contextSnapshotInFlight = false;
+
+function startRuntimeTimers(): void {
+  if (!sourceWatchdogTimer) {
+    sourceWatchdogTimer = setInterval(() => {
+      void runSourceWatchdog();
+    }, SOURCE_WATCHDOG_INTERVAL_MS);
+    console.info(`${POWER_LOG_PREFIX} source watchdog started`, {
+      intervalMs: SOURCE_WATCHDOG_INTERVAL_MS,
+    });
+  }
+  if (!timelineSummaryTimer) {
+    timelineSummaryTimer = setInterval(() => {
+      void runScheduledTimelineSummary();
+    }, TIMELINE_SUMMARY_INTERVAL_MS);
+    console.info(`${POWER_LOG_PREFIX} timeline summary timer started`, {
+      intervalMs: TIMELINE_SUMMARY_INTERVAL_MS,
+    });
+  }
+  if (!contextSnapshotTimer) {
+    contextSnapshotTimer = setInterval(() => {
+      void runScheduledContextSnapshot();
+    }, CONTEXT_SNAPSHOT_INTERVAL_MS);
+    console.info(`${POWER_LOG_PREFIX} context snapshot timer started`, {
+      intervalMs: CONTEXT_SNAPSHOT_INTERVAL_MS,
+    });
+  }
+}
+
+function stopRuntimeTimers(reason: string): void {
+  let stopped = 0;
+  if (sourceWatchdogTimer) {
+    clearInterval(sourceWatchdogTimer);
+    sourceWatchdogTimer = null;
+    stopped += 1;
+  }
+  if (timelineSummaryTimer) {
+    clearInterval(timelineSummaryTimer);
+    timelineSummaryTimer = null;
+    stopped += 1;
+  }
+  if (contextSnapshotTimer) {
+    clearInterval(contextSnapshotTimer);
+    contextSnapshotTimer = null;
+    stopped += 1;
+  }
+  if (stopped > 0) {
+    console.info(`${POWER_LOG_PREFIX} runtime timers stopped`, { reason, stopped });
+  }
+}
+
+/** 60s 自愈（dev startSourceWatchdog → refreshActiveSources）：按 desired 集
+ *  重新调和——挂掉的源重启、在跑的源 refresh() 健康检查。 */
+async function runSourceWatchdog(): Promise<void> {
+  const owner = runtimeOwnerUserId;
+  if (!owner || desiredSourceKeys.size === 0) return;
+  await reconcileEnabledSources(owner, Array.from(desiredSourceKeys), {
+    interactivePermissions: false,
+  });
+}
+
+/** 15min context snapshot（dev runScheduledContextSnapshot → refreshContextSnapshot）：
+ *  近 15min 各源 raw 聚合成 context_snapshot candidate window → 上传 outbox。 */
+async function runScheduledContextSnapshot(): Promise<void> {
+  if (contextSnapshotInFlight) return;
+  contextSnapshotInFlight = true;
+  try {
+    const signal = await getAmbientTimelinePipeline().generateContextSnapshot(new Date());
+    if (signal) pushSignal(signal);
+  } catch (err) {
+    setLastIngestError(describeError(err));
+    console.warn("[ambient] context snapshot failed:", err);
+  } finally {
+    contextSnapshotInFlight = false;
+  }
+}
+
+/**
+ * 15min scheduled summary（dev runScheduledTimelineSummary:467-497）：
+ * cloud-first 桥（uploads 未锁 & 偏好 cloud_when_unlocked）或端侧桥生成当日
+ * 摘要事件；成功后 refreshTimeline 把蒸馏产物送进上传 outbox。锁上后中途
+ * 复查（shouldUseCloud / shouldPersistResult），锁下产物不外发。
+ */
+export async function runScheduledTimelineSummary(nowOverride?: Date): Promise<void> {
+  if (timelineSummaryInFlight) return;
+  timelineSummaryInFlight = true;
+  try {
+    const now = nowOverride ?? new Date();
+    const localDate = now.toISOString().slice(0, 10);
+    const uploadsLockedAtStart = uploadsLockedSnapshot();
+    const preference = await loadAmbientSummaryPreference();
+    const bridge =
+      effectiveAmbientSummaryMode({ uploadsLocked: uploadsLockedAtStart, preference }) === "cloud_llm"
+        ? createCloudFirstAmbientSummaryBridge({
+          shouldUseCloud: () => !uploadsLockedSnapshot(),
+        })
+        : createLocalAmbientSummaryBridge();
+    const result = await maybeRunScheduledAmbientSummary({
+      store: getAmbientTimelineStore(),
+      bridge,
+      now,
+      localDate,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+      localUserId: runtimeOwnerUserId ?? "local",
+      shouldPersistResult: (summaryResult) =>
+        summaryResult.generationMethod !== "cloud_llm" || !uploadsLockedSnapshot(),
+    });
+    if (result.ran && result.status === "success") {
+      await refreshTimeline(localDate);
+    }
+  } catch (err) {
+    console.warn("[ambient] scheduled summary failed:", err);
+  } finally {
+    timelineSummaryInFlight = false;
+  }
+}
+
+// ── AppState 前后台钩子（dev lifecycle.ts bindAmbientLifecycle）──
+// 前台恢复：reconcile 自愈 + drain；切后台：把已排队的信号最后 drain 一次。
+// drain 永远安全（只 flush 已排队事件，绝不自行启源——隐私不变量）。
+
+let appStateBound = false;
+
+function bindAmbientAppStateLifecycle(): void {
+  if (appStateBound) return;
+  appStateBound = true;
+  AppState.addEventListener("change", (state) => {
+    const owner = runtimeOwnerUserId;
+    if (!owner) {
+      console.info(`${POWER_LOG_PREFIX} appStateChange skipped; ambient not running`, { state });
+      return;
+    }
+    if (state === "active") {
+      void (async () => {
+        await runSourceWatchdog();
+        await flushSignals();
+      })();
+      return;
+    }
+    void flushSignals();
+  });
 }
 
 async function startSourceForSession(

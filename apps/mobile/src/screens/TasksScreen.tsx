@@ -1,12 +1,14 @@
 /**
- * TASKS 页——web CardTimeline 的 RN 对应物：日期分组（Today/Yesterday/Mon d）
- * + 玻璃行（分类图标 + 标题 + 状态环 + previewText + 时间）。状态语义来自 core
- * deriveCardUiStatus（服务端 runStatus 真相源；RN 无 web 的乐观 id 集，resolved
- * 由 latestOutcome 派生——同一服务端语义）。
+ * TASKS 页——web CardTimeline 的 RN 对应物：日期分组（today/yesterday/Mon d）
+ * + 玻璃行（分类图标 + 标题 + 状态环 + previewText + 时间）。状态语义逐字对齐
+ * web CardTimeline:119-134：resolved（划线）来自壳级共享的乐观 id 集
+ * （dismissedIds/doneIds，mount 时已从 /feedback/{dismissed,completed} 恢复，
+ * dismiss/done 立即划线）；runUi 由 core deriveCardUiStatus 从服务端
+ * runStatus + 乐观 processing/chatted 合成。
  *
- * 点行分流（对齐 web CardTimeline:166）：活跃卡（processing/needs_input/ready/
- * failed）→ card chat；新卡（normal）→ 详情面板（confirm/steer/snooze/dismiss），
- * 复用 NOW 同款 CardDetailSheet + useCardActions（动作两屏唯一真源）。
+ * 点行分流（对齐 web CardTimeline:166）：活跃卡（runUi!=="normal"）或聊过的卡
+ * → card chat；新卡 → 详情面板，复用 NOW 同款 CardDetailSheet + 壳级
+ * CardActionsProvider 单实例（动作与集合两屏唯一真源）。
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { Pressable, SectionList, StyleSheet, Text, View } from "react-native";
@@ -41,13 +43,13 @@ import { useCardsQuery } from "@pin-ai/state";
 
 import i18n from "../i18n";
 
+import { useCardActionsContext } from "../components/app/CardActionsProvider";
 import PageHeader from "../components/app/PageHeader";
 import { usePageActive } from "../components/app/KeepAlivePage";
 import CardDetailSheet from "../components/now/CardDetailSheet";
 import { CATEGORIES } from "../components/now/SphereCards";
 import { GlassCard } from "../ui/GlassCard";
 import { getToolkitIcon } from "../lib/toolkit-icons";
-import { useCardActions } from "../hooks/useCardActions";
 import type { HeaderProps } from "./AmbientScreen";
 
 function formatTime(iso: string): string {
@@ -63,8 +65,12 @@ function formatDate(iso: string): string {
   const d = new Date(iso);
   const today = new Date();
   const yesterday = new Date(Date.now() - 86400000);
-  if (d.toDateString() === today.toDateString()) return "Today";
-  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
+  // web CardTimeline 用 Intl.RelativeTimeFormat(numeric:"auto") 拿本地化的
+  // today/yesterday 词——Hermes 没实现 RelativeTimeFormat（构造即崩，见
+  // lib/format.ts 文件头），照该文件先例手写 en CLDR 同款措辞（渲染处统一
+  // toUpperCase，与 web 的 uppercase class 等价）。
+  if (d.toDateString() === today.toDateString()) return "today";
+  if (d.toDateString() === yesterday.toDateString()) return "yesterday";
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
@@ -130,54 +136,67 @@ function Row({
 }) {
   const { t } = useTranslation("tasks");
   const card = entry.card;
-  const resolved =
-    entry.latestOutcome === "dismiss"
-    || entry.latestOutcome === "complete"
-    || entry.latestOutcome === "snooze";
-  const runUi = resolved
+  // 壳级共享集合（web CardTimeline:119-134 逐字）：resolved = 本地
+  // dismissed/done（乐观 + mount-restore），立即划线；execution 态服务端
+  // runStatus 优先，乐观 processingIds 只桥接 send → run-row 的空窗。
+  const { dismissedIds, confirmedIds, processingIds, doneIds, chattedIds } =
+    useCardActionsContext();
+  const isDismissed = dismissedIds.has(card.id);
+  const isConfirmed = confirmedIds.has(card.id);
+  const isProcessing = processingIds.has(card.id);
+  const isDone = doneIds.has(card.id);
+  const isChatted = chattedIds.has(card.id);
+  const isResolved = isDismissed || isDone;
+  const runUi = isResolved
     ? "normal"
     : deriveCardUiStatus({
         runStatus: entry.runStatus,
         latestOutcome: entry.latestOutcome,
-        optimisticProcessing: false,
-        chatted: false,
+        optimisticProcessing: isProcessing,
+        chatted: isChatted,
       });
   const reminder = isReminderCard(card);
   const actionCount = card.secondaryActions?.length ?? 0;
   const CatIcon = categoryIcon(card);
-  const previewText =
-    entry.latestOutcome === "complete"
-      ? t("preview.completed")
-      : entry.latestOutcome === "dismiss"
-      ? t("preview.dismissed")
-      : entry.latestOutcome === "snooze"
-      ? "Snoozed"
-      : runUi === "processing"
-      ? t("preview.processing")
-      : runUi === "needs_input"
-      ? t("preview.needsInput")
-      : runUi === "ready"
-      ? t("preview.ready")
-      : runUi === "failed"
-      ? t("preview.failed")
-      : reminder
-      ? card.summary
-      : card.primaryAction
-      ? t("preview.operationsSummary", { count: actionCount + 1, action: card.primaryAction.label })
-      : (card.sourceApps ?? [])
-          .map((s) => {
-            // 对齐 web sourceAppDisplay：普通词走 i18n（card:sourceApp.*），品牌词
-            // （无 labelKey）保留英文 brand 名。
-            const meta = sourceAppMeta(s);
-            return meta.labelKey ? i18n.t(`card:sourceApp.${meta.labelKey}`) : meta.label;
-          })
-          .join(" · ");
+  // previewText 链（web CardTimeline:135-160 逐字；snooze 归入 dismissedIds →
+  // "Dismissed"，web 无独立 Snoozed 文案）。
+  const previewText = isDone
+    ? t("preview.completed")
+    : isDismissed
+    ? t("preview.dismissed")
+    : runUi === "processing"
+    ? t("preview.processing")
+    : runUi === "needs_input"
+    ? t("preview.needsInput")
+    : runUi === "ready"
+    ? t("preview.ready")
+    : runUi === "failed"
+    ? t("preview.failed")
+    : isChatted
+    ? t("preview.inConversation")
+    : isConfirmed
+    ? t("preview.confirmed")
+    : reminder
+    // A reminder has no operations —— 显示 nudge 正文，不显示 "2 operations · Done"
+    // （web 同注释）。
+    ? card.summary
+    : card.primaryAction
+    ? t("preview.operationsSummary", { count: actionCount + 1, action: card.primaryAction.label })
+    : (card.sourceApps ?? [])
+        .map((s) => {
+          // 对齐 web sourceAppDisplay：普通词走 i18n（card:sourceApp.*），品牌词
+          // （无 labelKey）保留英文 brand 名。
+          const meta = sourceAppMeta(s);
+          return meta.labelKey ? i18n.t(`card:sourceApp.${meta.labelKey}`) : meta.label;
+        })
+        .join(" · ");
 
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={card.title}
-      onPress={() => (runUi !== "normal" ? onOpenChat(card) : onOpenDetail(entry))}
+      // web CardTimeline:166-170：活跃 run 或聊过 → 回到 card chat；否则开详情。
+      onPress={() => (runUi !== "normal" || isChatted ? onOpenChat(card) : onOpenDetail(entry))}
       style={({ pressed }) => (pressed ? styles.pressed : null)}
     >
       <GlassCard className="mb-2 px-3.5 py-4">
@@ -188,14 +207,14 @@ function Row({
           <View style={styles.col}>
             <View style={styles.titleRow}>
               <Text
-                className={resolved ? "flex-1 text-[13px] text-foreground/35 line-through" : "flex-1 text-[13px] text-foreground"}
+                className={isResolved ? "flex-1 text-[13px] text-foreground/35 line-through" : "flex-1 text-[13px] text-foreground"}
                 style={{ fontFamily: "Inter_500Medium", lineHeight: 18 }}
                 numberOfLines={2}
               >
                 {card.title}
               </Text>
               <View style={styles.badge}>
-                {resolved ? (
+                {isResolved ? (
                   <CheckCircle2 size={15} color="rgba(34,197,94,0.6)" />
                 ) : runUi === "processing" ? (
                   <Spin>
@@ -240,13 +259,9 @@ export default function TasksScreen({
   const { cards, loading } = useCardsQuery();
   const [detail, setDetail] = useState<VisibleCardEntry | null>(null);
 
-  // 历史列表是服务端真相视图：dismiss/snooze 不立即移除行，靠下次轮询把
-  // latestOutcome 翻成 resolved（strikethrough）。所以 onHide 传 noop。
-  const actions = useCardActions({
-    onOpenChat,
-    onHide: () => {},
-    onClose: () => setDetail(null),
-  });
+  // 壳级单实例动作（CardActionsProvider）：dismiss/done 立即翻本地集合 →
+  // 行内即刻划线（web CardTimeline 同语义），且与 NOW 球面同步退场。
+  const cardActions = useCardActionsContext();
 
   const groups = new Map<string, VisibleCardEntry[]>();
   for (const entry of cards) {
@@ -311,10 +326,22 @@ export default function TasksScreen({
       <CardDetailSheet
         entry={detail}
         onClose={() => setDetail(null)}
-        onDismiss={actions.dismiss}
-        onComplete={actions.complete}
-        onApprove={actions.confirm}
-        onChat={actions.chat}
+        onDismiss={(e) => {
+          cardActions.dismiss(e.card);
+          setDetail(null);
+        }}
+        onComplete={(e) => {
+          cardActions.complete(e.card);
+          setDetail(null);
+        }}
+        onApprove={(e) => {
+          void cardActions.confirm(e.card);
+          setDetail(null);
+        }}
+        onChat={(e) => {
+          cardActions.chat(e.card);
+          setDetail(null);
+        }}
       />
     </View>
   );

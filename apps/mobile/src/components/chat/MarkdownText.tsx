@@ -6,15 +6,78 @@
  * 消息」的 O(N) 退化。代价：跨块的 link reference 定义不解析（LLM
  * 输出几乎全用 inline link，可接受，web streamdown 同样取舍）。
  * 样式贴品牌（#1a1a1a 正文 / 代码块浅底圆角 / 链接蓝）。
+ *
+ * 自定义 rule（对齐 web MarkdownContent）：
+ * - text：字面 `[connect:<slug>]` tag → 内联 ConnectChip（web transformChildren
+ *   同款正则替换；无 tag 的字符串零开销直通）。
+ * - fence：CodeBlock（语言标签头 + 复制按钮 + 等宽横滚正文）。
  */
-import { memo } from "react";
-import { StyleSheet } from "react-native";
-import Markdown from "react-native-markdown-display";
+import { memo, type ReactNode } from "react";
+import { StyleSheet, Text } from "react-native";
+import Markdown, { type ASTNode, type RenderRules } from "react-native-markdown-display";
 import { splitBlocks } from "@pin-ai/core";
+
+import CodeBlock from "./CodeBlock";
+import { ConnectChip } from "./ConnectChip";
+
+// Matches the literal `[connect:<slug>]` tag the chat agent emits per the
+// <connector_nudges> prompt section in main_chat.py. Slugs are lower-case
+// ASCII + underscore (gmail, google_calendar, …).（web MarkdownContent 同款）
+const CONNECT_TAG_RE = /\[connect:([a-z_]+)\]/g;
+
+/** markdown-it fence info 串（"ts title=…"）→ 语言标签；web extractLanguage 对应物。 */
+function fenceLanguage(node: ASTNode & { sourceInfo?: string }): string | null {
+  const info = typeof node.sourceInfo === "string" ? node.sourceInfo.trim() : "";
+  if (!info) return null;
+  return info.split(/\s+/)[0].toLowerCase() || null;
+}
+
+const rules: RenderRules = {
+  // 默认 text rule + [connect:slug] → ConnectChip（web transformChildren 的
+  // 字符串分段替换；React key 用 match.index，dev 同款）。
+  text: (node, _children, _parent, styles, inheritedStyles = {}) => {
+    const content = node.content;
+    if (!content.includes("[connect:")) {
+      return (
+        <Text key={node.key} style={[inheritedStyles, styles.text]}>
+          {content}
+        </Text>
+      );
+    }
+    const parts: ReactNode[] = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    CONNECT_TAG_RE.lastIndex = 0;
+    while ((match = CONNECT_TAG_RE.exec(content)) !== null) {
+      if (match.index > lastIndex) parts.push(content.slice(lastIndex, match.index));
+      parts.push(<ConnectChip key={`c-${match.index}`} toolkit={match[1]} />);
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex < content.length) parts.push(content.slice(lastIndex));
+    return (
+      <Text key={node.key} style={[inheritedStyles, styles.text]}>
+        {parts}
+      </Text>
+    );
+  },
+  // 围栏代码块 → CodeBlock（语言头 + 复制）。尾部多出的 \n 是 parser 附赠，裁掉
+  //（库默认 fence rule 同款处理）。
+  fence: (node: ASTNode & { sourceInfo?: string }) => {
+    let content = node.content;
+    if (typeof content === "string" && content.charAt(content.length - 1) === "\n") {
+      content = content.substring(0, content.length - 1);
+    }
+    return <CodeBlock key={node.key} language={fenceLanguage(node)} content={content} />;
+  },
+};
 
 /** memo 边界：text 不变（= 已完成的块）跳过整棵 parse + render。 */
 const Block = memo(function Block({ text }: { text: string }) {
-  return <Markdown style={markdownStyles}>{text}</Markdown>;
+  return (
+    <Markdown style={markdownStyles} rules={rules}>
+      {text}
+    </Markdown>
+  );
 });
 
 export default function MarkdownText({ text }: { text: string }) {
@@ -55,15 +118,8 @@ const markdownStyles = StyleSheet.create({
     fontFamily: "Menlo",
     fontSize: 12,
   },
+  // 缩进代码块（无围栏语言信息，LLM 几乎不产出）：保持浅底等宽样式。
   code_block: {
-    backgroundColor: "#f4f4f5",
-    borderRadius: 10,
-    padding: 12,
-    fontFamily: "Menlo",
-    fontSize: 13,
-    borderWidth: 0,
-  },
-  fence: {
     backgroundColor: "#f4f4f5",
     borderRadius: 10,
     padding: 12,

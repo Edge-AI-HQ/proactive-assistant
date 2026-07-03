@@ -1,12 +1,8 @@
 /**
  * RN ambient timeline hook —— dev useAmbientTimeline 的精简对应物。
  * 读本地 SqliteTimelineStore（= dev 架构），产出当天「可见」的 AmbientTimelineEvent +
- * 叙事摘要（core buildAmbientNarrativeSummary，纯模板）。
- *
- * 现状：RN 的 ingest 只写上传 outbox（不写 timeline store）、端侧 LLM(llama) 未接 →
- * 本地 store 现为空 → events 恒空 → UI 显示 dev 同款空卡「No local timeline events yet」。
- * 等 llama + ingest→store 落地后，这里再补：① 轮询拾取新生成事件；② refreshTimeline 触发
- * 端侧生成；③ latestRawEvents / pendingTranscriptWindows（dev 也一起并进时间线）。
+ * 叙事摘要（core buildAmbientNarrativeSummary，纯模板）。LLM 摘要事件经
+ * isDisplayableTimelineEvent 过滤（占位符文案 / 坏时间戳不显示，dev :214-241）。
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -17,6 +13,7 @@ import {
   type AmbientSourceType,
   type AmbientTimelineEvent,
   type AmbientTimelineStore,
+  type TimelineStoreStatus,
 } from "@pin-ai/core";
 
 import { getAmbientTimelineStore } from "../ambient/timeline";
@@ -30,6 +27,8 @@ export interface UseAmbientTimelineResult {
   localDate: string;
   loading: boolean;
   error: string | null;
+  /** 本地 store 状态（空态里显示 lastError，对齐 dev :781-785）。 */
+  storeStatus: TimelineStoreStatus | null;
   /** 当天叙事摘要（<2 条可见事件时为 null，对齐 dev）。 */
   narrativeSummary: string | null;
   dismiss: (id: string) => Promise<void>;
@@ -42,6 +41,7 @@ export function useAmbientTimeline(localDate = todayLocalDate()): UseAmbientTime
   const [latestRawEvents, setLatestRawEvents] = useState<AmbientRawEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [storeStatus, setStoreStatus] = useState<TimelineStoreStatus | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -62,16 +62,18 @@ export function useAmbientTimeline(localDate = todayLocalDate()): UseAmbientTime
           w.rawRefs.filter((ref) => ref.sourceType === "transcript").map((ref) => ref.id),
         ),
       );
-      setEvents(rows);
+      setEvents(rows.filter(isDisplayableTimelineEvent));
       setPendingTranscriptWindows(pending);
       setLatestRawEvents(
         latestRaw.filter(
           (raw) => raw.sourceType !== "transcript" || !pendingRawTranscriptIds.has(raw.id),
         ),
       );
+      setStoreStatus(store.status());
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      setStoreStatus(store.status());
     } finally {
       setLoading(false);
     }
@@ -102,6 +104,7 @@ export function useAmbientTimeline(localDate = todayLocalDate()): UseAmbientTime
     localDate,
     loading,
     error,
+    storeStatus,
     narrativeSummary,
     dismiss,
   };
@@ -128,4 +131,36 @@ async function loadLatestRawEvents(
     }),
   );
   return rows.filter((row): row is AmbientRawEvent => Boolean(row));
+}
+
+// ── 占位符事件过滤（dev useAmbientTimeline.ts:214-241 逐字复制）：LLM 摘要
+// 事件若时间戳非法或标题/正文是模型吐的占位符字面量，不进 UI。 ──
+
+function isDisplayableTimelineEvent(event: AmbientTimelineEvent): boolean {
+  if (!event.sourceTypes.includes("transcript")) return true;
+  const isLlmSummary = event.generationSource === "llm_summary"
+    || event.generationMethod === "local_llm";
+  if (!isLlmSummary) return true;
+  const invalidTime = !Number.isFinite(Date.parse(event.occurredAt));
+  const placeholderText = isPlaceholderTimelineText(event.title)
+    || isPlaceholderTimelineText(event.summary);
+  return !invalidTime && !placeholderText;
+}
+
+function isPlaceholderTimelineText(value: string): boolean {
+  return [
+    "title",
+    "short title",
+    "summary",
+    "one sentence",
+    "specific title",
+    "specific title from context",
+    "specific summary",
+    "specific summary from context",
+    "title from context",
+    "summary from context",
+    "iso",
+  ].includes(
+    value.trim().toLowerCase(),
+  );
 }

@@ -11,7 +11,7 @@
  * 注：卡面不上 BlurView——14 张卡 × 每帧采样底图超性能红线（调研
  * §直通档），用 web 同款 depth 驱动的白底浓度替代。
  */
-import { useEffect, useMemo } from "react";
+import { useEffect, useRef } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
@@ -248,8 +248,30 @@ export default function SphereCards({
     };
   }, [cacheKey, yaw, pitch]);
 
-  // web 同款：至少 12 个布点（少卡时也铺开成星云，不挤成一小撮）。
-  const points = useMemo(() => fibonacciPoints(Math.max(items.length, 12)), [items.length]);
+  // id → 槽位「首见分配」（web Sphere3DCards:243-267 同构）：增删卡不整球重排。
+  // 布点至少 12（少卡也铺开成星云）+ 4 个余量；新 id 找第一个空闲槽占住，
+  // 已分配的 id 永远坐原槽。dev 同款不回收槽位（卡可能回来）。
+  const pointsRef = useRef<{ x: number; y: number; z: number }[]>([]);
+  const idToPointIdx = useRef<Map<string, number>>(new Map());
+  const ensurePoints = (count: number) => {
+    if (pointsRef.current.length < count) {
+      pointsRef.current = fibonacciPoints(Math.max(count, 12));
+    }
+  };
+  ensurePoints(items.length + 4);
+  const assignedSlots = new Set(idToPointIdx.current.values());
+  items.forEach((item) => {
+    if (!idToPointIdx.current.has(item.id)) {
+      // find first unused point index（web 同注释）
+      for (let i = 0; i < pointsRef.current.length; i++) {
+        if (!assignedSlots.has(i)) {
+          idToPointIdx.current.set(item.id, i);
+          assignedSlots.add(i);
+          break;
+        }
+      }
+    }
+  });
 
   // 自转 + 惯性衰减回 idle 速度（web rAF idle 回路同款：衰减系数 0.015）。
   // pitch 锁死，不再缓动。帧回调直接写 SharedValue（UI 线程，不过 React），
@@ -306,18 +328,24 @@ export default function SphereCards({
     <GestureDetector gesture={pan}>
       <View style={[styles.stage, { width, height }]}>
         <View style={[styles.center, { top: height * (SPHERE_CENTER_TOP + SPHERE_SHIFT), left: width / 2 }]}>
-          {items.map((item, i) => (
-            <Card
-              key={item.id}
-              item={item}
-              point={points[i]}
-              yaw={yaw}
-              pitch={pitch}
-              rx={rx}
-              ry={ry}
-              onTap={onTap}
-            />
-          ))}
+          {items.map((item) => {
+            const idx = idToPointIdx.current.get(item.id);
+            const point = idx === undefined ? undefined : pointsRef.current[idx];
+            // 槽位耗尽的极端情形（web rAF 循环同款 `if (!p) continue`）：不渲染。
+            if (!point) return null;
+            return (
+              <Card
+                key={item.id}
+                item={item}
+                point={point}
+                yaw={yaw}
+                pitch={pitch}
+                rx={rx}
+                ry={ry}
+                onTap={onTap}
+              />
+            );
+          })}
         </View>
       </View>
     </GestureDetector>

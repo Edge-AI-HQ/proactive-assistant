@@ -1,13 +1,19 @@
 /**
  * Sound-classifier 源（Swift 保留件：SoundAnalysis + 采集管道经
- * ambient-audio Expo module）。第一版覆盖核心链路：分类事件（低置信过
- * 滤 + 同标签折叠）、speech burst、转写（实时事件 + 启动 drain 积压）。
- * web 版（622 行）的 capture recovery / 健康检查等高级逻辑随后续刀补齐。
+ * ambient-audio Expo module）。覆盖：分类事件（低置信过滤 + 同标签折叠）、
+ * speech burst、转写（实时事件 + 启动/refresh 时 drain 积压 + recent capture
+ * 扫描补录）、可重入 refresh() 健康自愈（watchdog 每 60s 调）——对齐 dev
+ * services/ambient/sources/sound-classifier.ts。
+ *
+ * 转写清洗走 core cleanAmbientTranscriptText（无意义 burst 不显示不上传），
+ * 转写失败 live 卡显示 "Transcription unavailable"（= dev :427-434）。
  */
 import {
   SoundRunAggregator,
+  cleanAmbientTranscriptText,
   getTransportConfig,
   fetchVoiceIdentity,
+  normalizeVoiceLanguage,
   speakerAwareTranscriptText,
   type DiarizationStatus,
   type SpeakerSegment,
@@ -15,6 +21,7 @@ import {
 import { EncodingType, File, Paths, UploadType } from "expo-file-system";
 import {
   AmbientAudio,
+  type AudioStateEvent,
   type CaptureReadyEvent,
   type SoundClassificationEvent,
   type SpeechBurstEvent,
@@ -36,6 +43,10 @@ const SPEECH_LABEL = "speech";
 const RECENT_CAPTURE_RECOVERY_BATCH_SIZE = 25;
 const RECENT_CAPTURE_RECOVERY_MAX_PAGES = 20;
 const RETRY_DELAYS_MS = [300, 1_000] as const;
+// refresh() 健康检查阈值（dev sound-classifier.ts:52-54）。
+const INTENTIONAL_SUPPRESSION_REASONS = new Set(["playback", "external_mic"]);
+const UNHEALTHY_ENGINE_STATES = new Set(["failed", "stale", "suspended"]);
+const CLASSIFICATION_STALE_MS = 15_000;
 
 // 与 web LIVE_AUDIO_CONFIG 一致（分段节奏参数）。
 const LIVE_AUDIO_CONFIG = {
@@ -46,6 +57,13 @@ const LIVE_AUDIO_CONFIG = {
   sessionSilenceGapMs: 30_000,
   maxSessionDurationMs: 5 * 60_000,
 } as const;
+
+/** getState() 原生 payload 已带、TS 绑定未声明的诊断字段（真源
+ *  modules/ambient-audio/ios/AudioCaptureModels.swift 的 payload）。 */
+interface AudioStateDiagnostics extends AudioStateEvent {
+  suppressedReason?: string;
+  lastClassificationAt?: number;
+}
 
 // 转译结果（plain 或 diarized）。对齐 dev CaptureTranscriptionResult 的形状。
 interface TranscriptResult {
@@ -70,12 +88,13 @@ function plainTranscriptResult(text: string, status: DiarizationStatus): Transcr
 }
 
 /** SpeakerSegment[] → payload.speaker_segments 形状（snake_case，对齐 dev + core
- *  speakerAwareTranscriptText 读取的 start_ms/end_ms）。 */
+ *  speakerAwareTranscriptText 读取的 start_ms/end_ms）。逐段过 core 清洗
+ *  （dev sound-classifier.ts:486-495——脏段丢弃、干净段保留清洗后文本）。 */
 function payloadSpeakerSegments(
   segments: SpeakerSegment[],
 ): Array<{ speaker: string; text: string; start_ms: number | null; end_ms: number | null }> {
   return segments.flatMap((segment) => {
-    const text = segment.text.trim();
+    const text = cleanAmbientTranscriptText(segment.text);
     if (!text) return [];
     return [{ speaker: segment.speaker || "other", text, start_ms: segment.startMs, end_ms: segment.endMs }];
   });
@@ -83,7 +102,7 @@ function payloadSpeakerSegments(
 
 export function createSoundClassifierSource(
   ctx: SourceContext,
-  opts?: { recognitionLocale?: () => string | undefined },
+  opts?: { getTranscriptionLanguage?: () => string | null },
 ): AmbientSource {
   let subs: { remove(): void }[] = [];
   let started = false;
@@ -93,6 +112,38 @@ export function createSoundClassifierSource(
   // 已 push 过的转录 burst id（对齐 web storedTranscriptBurstIds，push 前预去重）。
   const storedTranscriptBurstIds = new Set<string>();
   const runs = new SoundRunAggregator();
+  // run 生命周期（dev beginRun/endRun/isRunActive）：stop/restart 后到达的
+  // 陈旧转写只更新 live 卡、不再 push 信号（防 outbox 重复）。
+  let activeRunId: number | null = null;
+  let nextRunId = 0;
+  let recoveryRequestedWhileRunning = false;
+  let pendingAudioRecovery: Promise<void> | null = null;
+
+  // settings.generationLanguage → 语音语言 hint（dev voiceLanguage()：browser
+  // locale 喂原生识别、openai code 拼 ?language= 给云转写）。
+  function voiceLanguage() {
+    return normalizeVoiceLanguage(opts?.getTranscriptionLanguage?.());
+  }
+
+  function transcriptionLanguage(): string | undefined {
+    return voiceLanguage().openai;
+  }
+
+  function beginRun(): number {
+    nextRunId += 1;
+    activeRunId = nextRunId;
+    recoveryRequestedWhileRunning = false;
+    return activeRunId;
+  }
+
+  function endRun(): void {
+    activeRunId = null;
+    recoveryRequestedWhileRunning = false;
+  }
+
+  function isRunActive(runId: number): boolean {
+    return started && activeRunId === runId;
+  }
 
   function handleClassification(event: SoundClassificationEvent): void {
     const top = event.classifications?.[0];
@@ -127,14 +178,32 @@ export function createSoundClassifierSource(
     ctx.onEvent("sound_classifier", summary);
   }
 
-  function handleTranscript(event: TranscriptEvent): void {
-    const text = event.text?.trim();
-    if (!text) return;
+  function handleTranscript(event: TranscriptEvent, runId?: number): void {
     const dedupeId = event.burstId ?? event.wavId;
+    const rawText = event.text?.trim();
+    if (!rawText) {
+      ctx.onEvent("sound_classifier", `discard:empty_text burst=${dedupeId}`);
+      return;
+    }
+    // core 清洗（dev :322-329）：无意义 burst 不显示不上传，WAV 直接清理。
+    const text = cleanAmbientTranscriptText(rawText);
+    if (!text) {
+      ctx.onEvent("sound_classifier", `discard:meaningless_text burst=${dedupeId}`);
+      if (event.wavId && (!dedupeId || !inFlightCaptureIds.has(dedupeId))) {
+        void markCaptureProcessed(event.wavId);
+      }
+      return;
+    }
     // 预去重(对齐 web storedTranscriptBurstIds)：已 push 过的 burst 直接跳过，连 push 都不做。
     // outbox 的 dedupe_key 仍是正确性兜底；这里只提前一步省功，凑足与 web 逐字一致。
     if (dedupeId && storedTranscriptBurstIds.has(dedupeId)) {
       ctx.onEvent("sound_classifier", `discard:dedup_stored burst=${dedupeId}`);
+      return;
+    }
+    // 信号 push 按 run 生命周期 gate（dev :349-352）：stop/restart 后 replay 的
+    // 陈旧转写不再进 outbox（防重复）。
+    if (runId !== undefined && !isRunActive(runId)) {
+      ctx.onEvent("sound_classifier", `discard:runid_skip_signal burst=${dedupeId}`);
       return;
     }
     const occurredAt = transcriptOccurredAt(event);
@@ -168,23 +237,70 @@ export function createSoundClassifierSource(
     });
     if (dedupeId) storedTranscriptBurstIds.add(dedupeId);
     ctx.onEvent("sound_classifier", `transcript ${text.slice(0, 40)}`);
+    if (event.wavId && (!dedupeId || !inFlightCaptureIds.has(dedupeId))) {
+      void markCaptureProcessed(event.wavId);
+    }
   }
 
-  async function handleCaptureReady(event: CaptureReadyEvent): Promise<void> {
+  async function handleCaptureReady(event: CaptureReadyEvent, runId?: number): Promise<void> {
     const id = captureDedupeId(event);
-    if (handledCaptureIds.has(id) || inFlightCaptureIds.has(id)) return;
+    if (storedTranscriptBurstIds.has(id)) {
+      ctx.onEvent("sound_classifier", `discard:dedup_stored burst=${id}`);
+      return;
+    }
+    if (handledCaptureIds.has(id)) {
+      ctx.onEvent("sound_classifier", `discard:dedup_handled burst=${id}`);
+      return;
+    }
+    if (inFlightCaptureIds.has(id)) {
+      ctx.onEvent("sound_classifier", `discard:dedup_inflight burst=${id}`);
+      return;
+    }
     ctx.onEvent("sound_classifier", `capture ready ${Math.round(event.durationMs / 1000)}s`);
     inFlightCaptureIds.add(id);
     try {
       const result = await transcribeCapture(event);
-      handledCaptureIds.add(id);
-      if (result.text) {
-        pushCaptureTranscript(event, result);
+      const rawText = result.text.trim();
+      if (!rawText) {
+        handledCaptureIds.add(id);
+        await markCaptureProcessed(event.wavId);
+        return;
       }
-      await AmbientAudio.markCaptureProcessed(event.wavId);
+      const text = cleanAmbientTranscriptText(rawText);
+      if (!text) {
+        handledCaptureIds.add(id);
+        ctx.onEvent("sound_classifier", `discard:meaningless_text burst=${id}`);
+        await markCaptureProcessed(event.wavId);
+        return;
+      }
+      // 信号 push / WAV 清理 / handled 标记都按 run 生命周期 gate（dev :408-425）：
+      // 陈旧 capture 不进 outbox、不删原生 WAV、不标 handled——留给下个 run 的
+      // recovery 扫描。live 卡更新在 pushCaptureTranscript 内（按 captureSessionId
+      // 路由，与 run 无关）。
+      const runStillActive = runId === undefined || isRunActive(runId);
+      if (runStillActive && !storedTranscriptBurstIds.has(id)) {
+        handledCaptureIds.add(id);
+        pushCaptureTranscript(event, result, text);
+        await markCaptureProcessed(event.wavId);
+      } else if (!runStillActive) {
+        ctx.onEvent("sound_classifier", `discard:runid_skip_signal burst=${id}`);
+      }
     } catch (err) {
-      console.warn("[ambient:audio] voice transcription failed:", err);
-      ctx.onEvent("sound_classifier", `transcription failed ${id}`);
+      // 转写失败：live 卡占位 "Transcription unavailable"（dev :427-434）。
+      const captureSessionId = event.captureSessionId ?? event.sessionId;
+      if (event.burstId && captureSessionId) {
+        applyAmbientLiveTranscriptUpdate({
+          captureSessionId,
+          id: event.burstId,
+          text: "Transcription unavailable",
+          source: "microphone",
+          receivedAt: Date.now(),
+        });
+      }
+      ctx.onEvent("sound_classifier", `Voice transcription failed: ${errorMessage(err)}`);
+      if (storedTranscriptBurstIds.has(id)) {
+        await markCaptureProcessed(event.wavId);
+      }
     } finally {
       inFlightCaptureIds.delete(id);
     }
@@ -195,7 +311,7 @@ export function createSoundClassifierSource(
   async function transcribeCapture(event: CaptureReadyEvent): Promise<TranscriptResult> {
     const capture = await AmbientAudio.readCapture(event.wavId);
     const file = writeCaptureTempFile(capture);
-    const language = opts?.recognitionLocale?.();
+    const language = transcriptionLanguage();
     try {
       let profileEnabled = false;
       let disabledStatus: DiarizationStatus = "not_enrolled";
@@ -233,12 +349,9 @@ export function createSoundClassifierSource(
   }
 
   // 建转写信号（含 diarized 载荷）+ 实时喂 live 卡。对齐 dev sound-classifier 的 push。
-  function pushCaptureTranscript(event: CaptureReadyEvent, result: TranscriptResult): void {
+  // text = core 清洗后的文本（调用方已判空）。
+  function pushCaptureTranscript(event: CaptureReadyEvent, result: TranscriptResult, text: string): void {
     const dedupeId = event.burstId ?? event.wavId;
-    if (dedupeId && storedTranscriptBurstIds.has(dedupeId)) {
-      ctx.onEvent("sound_classifier", `discard:dedup_stored burst=${dedupeId}`);
-      return;
-    }
     const speakerSegments = payloadSpeakerSegments(result.segments);
     const endMs = captureOccurredAtMs(event);
     const durationMs = Number.isFinite(event.durationMs) ? event.durationMs : undefined;
@@ -247,7 +360,7 @@ export function createSoundClassifierSource(
       applyAmbientLiveTranscriptUpdate({
         captureSessionId,
         id: event.burstId,
-        text: speakerAwareTranscriptText(speakerSegments, result.text),
+        text: speakerAwareTranscriptText(speakerSegments, text),
         source: result.provider,
         receivedAt: endMs,
       });
@@ -255,7 +368,7 @@ export function createSoundClassifierSource(
     ctx.push({
       kind: TRANSCRIPT_KIND,
       title: "Voice summary",
-      summary: result.text,
+      summary: text,
       occurred_at: new Date(endMs).toISOString(),
       salience: TRANSCRIPT_SALIENCE,
       confidence: TRANSCRIPT_CONFIDENCE,
@@ -263,7 +376,7 @@ export function createSoundClassifierSource(
       payload: {
         schema_version: "audio_transcript.v1",
         platform: event.platform ?? "ios",
-        text: result.text,
+        text,
         wavId: event.wavId,
         burstId: event.burstId,
         captureSessionId,
@@ -273,7 +386,7 @@ export function createSoundClassifierSource(
         triggerSource: event.triggerSource,
         speaker_segments: speakerSegments,
         speaker_labels: result.speakerLabels,
-        self_text: result.selfText,
+        self_text: cleanAmbientTranscriptText(result.selfText) ?? "",
         diarization_status: result.diarizationStatus,
         ...(result.diarizationModel ? { diarization_model: result.diarizationModel } : {}),
         started_at: durationMs !== undefined ? endMs - durationMs : undefined,
@@ -281,27 +394,114 @@ export function createSoundClassifierSource(
       },
     });
     if (dedupeId) storedTranscriptBurstIds.add(dedupeId);
-    ctx.onEvent("sound_classifier", `transcript ${result.text.slice(0, 40)}`);
+    ctx.onEvent("sound_classifier", `transcript ${text.slice(0, 40)}`);
   }
 
-  async function recoverPendingCaptures(): Promise<void> {
+  async function markCaptureProcessed(wavId: string): Promise<void> {
+    try {
+      await AmbientAudio.markCaptureProcessed(wavId);
+    } catch (error) {
+      ctx.onEvent("sound_classifier", `Processed capture cleanup failed: ${errorMessage(error)}`);
+    }
+  }
+
+  // ── pending audio recovery（dev :211-297）：drain 原生积压转写 + 扫描
+  // 未处理的 recent captures 补转写。start / refresh 后跑；同一时间只跑一个
+  // loop，期间再请求则排队一轮。 ──
+
+  function schedulePendingAudioRecovery(reason: string): void {
+    const runId = activeRunId;
+    if (runId === null) return;
+    if (pendingAudioRecovery) {
+      recoveryRequestedWhileRunning = true;
+      return;
+    }
+    pendingAudioRecovery = recoverPendingAudioLoop(runId, reason)
+      .catch((error) => {
+        ctx.onEvent("sound_classifier", `Pending audio recovery failed: ${errorMessage(error)}`);
+      })
+      .finally(() => {
+        pendingAudioRecovery = null;
+      });
+    void pendingAudioRecovery;
+  }
+
+  async function recoverPendingAudioLoop(runId: number, reason: string): Promise<void> {
+    let currentReason = reason;
+    do {
+      recoveryRequestedWhileRunning = false;
+      if (!isRunActive(runId)) return;
+      await recoverPendingAudio(runId, currentReason);
+      currentReason = "queuedRefresh";
+    } while (recoveryRequestedWhileRunning && isRunActive(runId));
+  }
+
+  async function recoverPendingAudio(runId: number, reason: string): Promise<void> {
+    await drainPendingNativeTranscripts(runId);
+    if (!isRunActive(runId)) return;
+    await transcribeUnhandledRecentCaptures(runId);
+    if (!isRunActive(runId)) return;
+    ctx.onEvent("sound_classifier", `Recovered pending audio after ${reason}`);
+  }
+
+  async function drainPendingNativeTranscripts(runId: number): Promise<void> {
+    let transcripts: TranscriptEvent[];
+    try {
+      ({ transcripts } = await AmbientAudio.drainPendingTranscripts());
+    } catch (error) {
+      ctx.onEvent("sound_classifier", `Pending transcript drain failed: ${errorMessage(error)}`);
+      return;
+    }
+    if (!isRunActive(runId)) return;
+    for (const event of transcripts) {
+      if (!isRunActive(runId)) return;
+      handleTranscript(event, runId);
+    }
+  }
+
+  async function transcribeUnhandledRecentCaptures(runId: number): Promise<void> {
     let cursor: string | null = null;
     for (let page = 0; page < RECENT_CAPTURE_RECOVERY_MAX_PAGES; page += 1) {
-      if (!started) return;
-      const { captures } = await AmbientAudio.listRecentCaptures(
-        RECENT_CAPTURE_RECOVERY_BATCH_SIZE,
-        cursor,
-        "asc",
-      );
-      if (!started || captures.length === 0) return;
+      let captures: CaptureReadyEvent[];
+      try {
+        ({ captures } = await AmbientAudio.listRecentCaptures(
+          RECENT_CAPTURE_RECOVERY_BATCH_SIZE,
+          cursor,
+          "desc",
+        ));
+      } catch (error) {
+        ctx.onEvent("sound_classifier", `Recent capture scan failed: ${errorMessage(error)}`);
+        return;
+      }
+      if (!isRunActive(runId) || captures.length === 0) return;
       for (const capture of captures) {
-        if (!started) return;
-        await handleCaptureReady(capture);
+        if (!isRunActive(runId)) return;
+        if (!capture.burstId || !capture.captureSessionId) continue;
+        if (storedTranscriptBurstIds.has(capture.burstId)) continue;
+        if (handledCaptureIds.has(capture.burstId)) continue;
+        if (inFlightCaptureIds.has(capture.burstId)) continue;
+        await handleCaptureReady({ ...capture, triggerSource: "recent_capture_scan" }, runId);
       }
       if (captures.length < RECENT_CAPTURE_RECOVERY_BATCH_SIZE) return;
       cursor = captures[captures.length - 1]?.capturedAt ?? null;
       if (!cursor) return;
     }
+  }
+
+  async function getAudioStateDiagnostics(): Promise<AudioStateDiagnostics> {
+    // 原生 snapshot payload 带 suppressedReason / lastClassificationAt，TS 绑定
+    // （modules/ambient-audio/index.ts）未声明——本地扩展类型收窄，不动模块绑定。
+    return (await AmbientAudio.getState()) as AudioStateDiagnostics;
+  }
+
+  async function cleanupNativeStartFailure(): Promise<void> {
+    await Promise.allSettled([
+      AmbientAudio.stopClassification(),
+      AmbientAudio.stopCapture(),
+    ]);
+    for (const s of subs) s.remove();
+    subs = [];
+    started = false;
   }
 
   function handleSpeechBurst(event: SpeechBurstEvent): void {
@@ -321,44 +521,117 @@ export function createSoundClassifierSource(
       if (perm.microphone !== "granted") throw new Error("microphone permission denied");
       await AmbientAudio.configure({
         ...LIVE_AUDIO_CONFIG,
-        recognitionLocale: opts?.recognitionLocale?.(),
+        recognitionLocale: voiceLanguage().browser,
       });
-      subs = [
-        AmbientAudio.addListener("soundClassification", handleClassification),
-        AmbientAudio.addListener("captureReady", (event: CaptureReadyEvent) => {
-          void handleCaptureReady(event);
-        }),
-        AmbientAudio.addListener("transcript", handleTranscript),
-        AmbientAudio.addListener("speechBurst", handleSpeechBurst),
-        AmbientAudio.addListener("audioError", (e: { message: string; source: string }) =>
-          console.warn(`[ambient:audio] error ${e.source}: ${e.message}`),
-        ),
-      ];
-      await AmbientAudio.startCapture();
-      started = true;
-      const state = await AmbientAudio.getState().catch(() => null);
-      ctx.onEvent(
-        "sound_classifier",
-        state?.running ? "audio capture running" : "audio capture start requested",
-      );
-      // 上次后台攒下的转写积压。
-      const { transcripts } = await AmbientAudio.drainPendingTranscripts();
-      for (const t of transcripts) handleTranscript(t);
-      void recoverPendingCaptures().catch((err) => {
-        console.warn("[ambient:audio] pending capture recovery failed:", err);
-      });
+      let runId: number | null = null;
+      try {
+        subs = [
+          AmbientAudio.addListener("soundClassification", handleClassification),
+          AmbientAudio.addListener("captureReady", (event: CaptureReadyEvent) => {
+            void handleCaptureReady(event, activeRunId ?? undefined);
+          }),
+          AmbientAudio.addListener("transcript", (event: TranscriptEvent) => {
+            handleTranscript(event, activeRunId ?? undefined);
+          }),
+          AmbientAudio.addListener("speechBurst", handleSpeechBurst),
+          AmbientAudio.addListener("audioError", (e: { message: string; source: string }) =>
+            console.warn(`[ambient:audio] error ${e.source}: ${e.message}`),
+          ),
+        ];
+        runId = beginRun();
+        await AmbientAudio.startCapture();
+        await AmbientAudio.startClassification();
+        started = true;
+        // 上次后台/停摆攒下的积压（原生 pending 转写 + 未处理 capture）。
+        schedulePendingAudioRecovery("start");
+      } catch (err) {
+        if (runId !== null && activeRunId === runId) activeRunId = null;
+        await cleanupNativeStartFailure();
+        throw err;
+      }
     },
     async stop() {
-      for (const s of subs) s.remove();
-      subs = [];
-      await AmbientAudio.stopCapture().catch(() => {});
-      const finalized = runs.stop();
-      if (finalized) ctx.push(finalized);
-      started = false;
-      lastLabel = null;
-      inFlightCaptureIds.clear();
+      endRun();
+      try {
+        await AmbientAudio.stopClassification().catch(() => {});
+        await AmbientAudio.stopCapture().catch(() => {});
+      } finally {
+        for (const s of subs) s.remove();
+        subs = [];
+        const finalized = runs.stop();
+        if (finalized) ctx.push(finalized);
+        started = false;
+        lastLabel = null;
+        inFlightCaptureIds.clear();
+      }
+    },
+    /**
+     * 可重入健康自愈（dev refresh():154-205，watchdog 每 60s 调）：
+     * 刻意抑制（playback / external_mic）→ 只补扫积压；全健康 → 补扫积压；
+     * engine failed/stale/suspended、分类 15s 停更、错过 interruption-ended →
+     * startCapture/startClassification 复活，再验一次，不健康则抛错进遥测。
+     */
+    async refresh() {
+      if (!started) return;
+
+      const state = await getAudioStateDiagnostics();
+      if (
+        state.suppressed &&
+        state.suppressedReason &&
+        INTENTIONAL_SUPPRESSION_REASONS.has(state.suppressedReason)
+      ) {
+        schedulePendingAudioRecovery("refreshSuppressed");
+        return;
+      }
+
+      const analyzerUnhealthy = UNHEALTHY_ENGINE_STATES.has(state.engineState);
+      const classificationsStale = isClassificationStale(state.lastClassificationAt);
+      if (
+        state.running
+        && state.classificationRunning
+        && state.engineRunning !== false
+        && !analyzerUnhealthy
+        && !classificationsStale
+      ) {
+        schedulePendingAudioRecovery("refreshHealthy");
+        return;
+      }
+
+      if (!state.running || state.engineRunning === false || analyzerUnhealthy || classificationsStale) {
+        await AmbientAudio.startCapture();
+      }
+      if (!state.classificationRunning || state.engineRunning === false || analyzerUnhealthy || classificationsStale) {
+        await AmbientAudio.startClassification();
+      }
+
+      const nextState = await getAudioStateDiagnostics();
+      if (!nextState.running) {
+        throw new Error("audio capture not running");
+      }
+      if (!nextState.classificationRunning) {
+        throw new Error("sound classification not running");
+      }
+      if (nextState.engineRunning === false && !nextState.suppressed) {
+        throw new Error("sound classifier engine not running");
+      }
+      if (nextState.engineState && UNHEALTHY_ENGINE_STATES.has(nextState.engineState)) {
+        throw new Error(`sound classifier engine ${nextState.engineState}`);
+      }
+      if (isClassificationStale(nextState.lastClassificationAt)) {
+        throw new Error("sound classifier classifications stale");
+      }
+      schedulePendingAudioRecovery("refreshRecovered");
     },
   };
+}
+
+function isClassificationStale(lastClassificationAt: number | undefined): boolean {
+  return typeof lastClassificationAt === "number"
+    && Date.now() - lastClassificationAt > CLASSIFICATION_STALE_MS;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function transcribeVoiceFile(

@@ -92,15 +92,17 @@ export default function ChatComposer({
       prefill: value,
       onUpdate: onChangeText,
       onError: (message) => {
+        // dev 语义(ui-web VoiceButton onError):错误显示在录音条内、条不退、
+        // 可 Cancel。同时必须停掉采集——否则 mic 悬空 + isCapturing 守卫锁死重开。
         setVoiceError(message);
-        setRecording(false);
+        void stopCapture(false);
       },
       onResult: (text) => {
         onChangeText(text);
         setRecording(false);
       },
     });
-  }, [disabled, isCapturing, onChangeText, recording, startCapture, value]);
+  }, [disabled, isCapturing, onChangeText, recording, startCapture, stopCapture, value]);
 
   const finishRecording = useCallback(
     async (commit: boolean) => {
@@ -114,8 +116,6 @@ export default function ChatComposer({
 
   const hasText = value.trim().length > 0;
   const canSend = hasText && !disabled && !sending;
-  const showStop = streaming && !canSend;
-  const actionDisabled = disabled || sending || (!canSend && !showStop);
   const bottomPadding = Math.max(bottomInset, 24);
 
   if (recording) {
@@ -191,43 +191,50 @@ export default function ChatComposer({
             <Mic size={18} color={`rgba(${FG},0.55)`} strokeWidth={1.6} />
           </View>
         </Pressable>
-        <Pressable
-          onPress={showStop ? () => void onStop() : () => void submit()}
-          disabled={actionDisabled}
-          accessibilityRole="button"
-          accessibilityLabel={showStop ? t("composer.stop") : t("composer.send")}
-        >
-          <View
-            style={[
-              styles.sendButton,
-              !canSend && !showStop && styles.sendDisabled,
-              showStop && styles.stopButton,
-            ]}
+        {/* 与 web Composer 同构:streaming 时 Stop 常驻;有草稿时 Send 并列在旁
+            (= 排队下一条,Claude/ChatGPT 模型:先停或排队)。 */}
+        {streaming ? (
+          <Pressable
+            onPress={() => void onStop()}
+            accessibilityRole="button"
+            accessibilityLabel={t("composer.stop")}
           >
-            {canSend ? (
-              <LinearGradient
-                colors={[PRIMARY, PINK]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={StyleSheet.absoluteFill}
-              />
-            ) : null}
-            {sending ? (
-              <ActivityIndicator size="small" color={canSend || showStop ? "#fff" : `rgba(${FG},0.35)`} />
-            ) : showStop ? (
+            <View style={[styles.sendButton, styles.stopButton]}>
               <Square size={12} color="#fff" fill="#fff" strokeWidth={2} />
-            ) : (
-              // lucide-react-native ignores `transform` in its own style (same
-              // gotcha as chevron rotate) → wrap in a View to optically center
-              // the paper-plane (its visual mass sits up-right of the glyph's
-              // geometric center; web's flex-center has no nudge but RN reads
-              // it as off-center). Nudge left+down.
-              <View style={styles.sendIcon}>
-                <Send size={15} color={canSend ? "#fff" : `rgba(${FG},0.35)`} strokeWidth={2} />
-              </View>
-            )}
-          </View>
-        </Pressable>
+            </View>
+          </Pressable>
+        ) : null}
+        {streaming && !canSend ? null : (
+          <Pressable
+            onPress={() => void submit()}
+            disabled={!canSend}
+            accessibilityRole="button"
+            accessibilityLabel={streaming ? t("queued.queueMessage") : t("composer.send")}
+          >
+            <View style={[styles.sendButton, !canSend && styles.sendDisabled]}>
+              {canSend ? (
+                <LinearGradient
+                  colors={[PRIMARY, PINK]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={StyleSheet.absoluteFill}
+                />
+              ) : null}
+              {sending ? (
+                <ActivityIndicator size="small" color={canSend ? "#fff" : `rgba(${FG},0.35)`} />
+              ) : (
+                // lucide-react-native ignores `transform` in its own style (same
+                // gotcha as chevron rotate) → wrap in a View to optically center
+                // the paper-plane (its visual mass sits up-right of the glyph's
+                // geometric center; web's flex-center has no nudge but RN reads
+                // it as off-center). Nudge left+down.
+                <View style={styles.sendIcon}>
+                  <Send size={15} color={canSend ? "#fff" : `rgba(${FG},0.35)`} strokeWidth={2} />
+                </View>
+              )}
+            </View>
+          </Pressable>
+        )}
       </View>
       <PermissionModeMenu />
     </View>

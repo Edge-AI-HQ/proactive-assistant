@@ -275,13 +275,26 @@ export default function SettingScreen({
   headerProps,
   user,
   onSignOut,
+  pendingPage,
+  onConsumePendingPage,
 }: {
   headerProps: HeaderProps;
   user: User;
   onSignOut: () => Promise<void>;
+  /** 外部深链请求打开的子页（NOW 空态 Review permissions / Ambient 模型引导）。 */
+  pendingPage?: SubPage | null;
+  onConsumePendingPage?: () => void;
 }) {
   const { t } = useTranslation("account");
   const [page, setPage] = useState<SubPage>("main");
+  // pendingPage 由 null→目标 的变化触发跳转并消费；SettingScreen 是 keep-alive
+  // 常驻，靠消费后复位 null 支持重复深链（否则第二次点同一入口不会再跳）。
+  useEffect(() => {
+    if (pendingPage) {
+      setPage(pendingPage);
+      onConsumePendingPage?.();
+    }
+  }, [pendingPage, onConsumePendingPage]);
   const insets = useSafeAreaInsets();
   const { settings, patch, loading, saving } = useUserSettings(user.id ?? null);
   const push = usePushNotifications(user.id ?? null);

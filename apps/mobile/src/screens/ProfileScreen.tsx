@@ -13,7 +13,7 @@
  * web framer 手写 commit 阈值 0.3/300px·s——架构差异，行为等价：跟手横滑 + 松手
  * snap，纵向滚动交给 pane 内 ScrollView）。
  */
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Image,
   LayoutAnimation,
@@ -44,9 +44,11 @@ import Animated, {
 import { ChevronDown, ChevronRight, Loader2 } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import type { Goal, Memory, ProfileSnapshot } from "@pin-ai/core";
-import { useProfileMemories, useProfileSnapshot } from "@pin-ai/state";
+import { profileKeys, profileMemoriesKeys, useProfileMemories, useProfileSnapshot } from "@pin-ai/state";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { GlassCard } from "../ui/GlassCard";
+import { usePageActive } from "../components/app/KeepAlivePage";
 import PageHeader from "../components/app/PageHeader";
 import GoalDetailSheet from "../components/profile/GoalDetailSheet";
 import {
@@ -484,6 +486,19 @@ export default function ProfileScreen({ headerProps }: { headerProps: HeaderProp
   const { t } = useTranslation("profile");
   const { profile, activeGoals, loading, error } = useProfileSnapshot();
   const memory = useProfileMemories();
+
+  // KeepAlive 常驻不卸载 → 复刻 dev「每次进 tab 重挂载必 refetch」语义：
+  // 切回本页时失效 profile/memories（active query 立即后台重拉，SWR 不闪 loading）。
+  const pageActive = usePageActive();
+  const queryClient = useQueryClient();
+  const wasActiveRef = useRef(pageActive);
+  useEffect(() => {
+    if (pageActive && !wasActiveRef.current) {
+      void queryClient.invalidateQueries({ queryKey: profileKeys.all });
+      void queryClient.invalidateQueries({ queryKey: profileMemoriesKeys.all });
+    }
+    wasActiveRef.current = pageActive;
+  }, [pageActive, queryClient]);
 
   const [activeTab, setActiveTab] = useState<TopTab>("identity");
   const [identitySubTab, setIdentitySubTab] = useState<"profile" | "memory">("profile");

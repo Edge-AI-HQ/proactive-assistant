@@ -8,6 +8,7 @@ import {
   type AmbientTimelinePipeline,
 } from "@pin-ai/core";
 
+import { pushSignal } from "../ingest";
 import { getAmbientTimelineStore } from "./store";
 import { createAmbientTimelineModelBridge } from "./models";
 
@@ -23,10 +24,19 @@ export function getAmbientTimelinePipeline(): AmbientTimelinePipeline {
   return singleton;
 }
 
-/** 立即（重新）生成某天的时间线摘要——状态面板 Trigger 钮调用。 */
+/**
+ * 立即（重新）生成某天的时间线摘要——状态面板 Trigger 钮 + runtime 定时摘要
+ * 成功后调用。与 dev runtime.refreshTimeline 同语义：regenerateDay 返回的蒸馏
+ * 信号（ambient.timeline_event / ambient.candidate_window）进上传 outbox。
+ */
 export async function refreshTimeline(
   localDate?: string,
-  options?: { force?: boolean },
+  options: { force?: boolean; forceReady?: boolean } = {},
 ): Promise<void> {
-  await getAmbientTimelinePipeline().regenerateDay(localDate, options);
+  const signals = await getAmbientTimelinePipeline().regenerateDay(localDate, {
+    includeRecentPending: true,
+    forceReady: options.force === true,
+    ...options,
+  });
+  for (const signal of signals) pushSignal(signal);
 }

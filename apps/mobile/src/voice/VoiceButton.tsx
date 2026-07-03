@@ -47,10 +47,14 @@ export function VoiceButton({
     setRecording(true);
     startCapture({
       prefill,
-      onUpdate,
+      onUpdate: (text) => {
+        // 新转写覆盖错误显示（dev VoiceButton：transcript 与 error 同一行互斥）。
+        setError(null);
+        onUpdate(text);
+      },
       onError: (message) => {
+        // dev VoiceButton 同语义：条保持打开、错误文本可见，用户 ✕/✓ 自行收尾。
         setError(message);
-        setRecording(false);
       },
       onResult: (text) => {
         onUpdate(text);
@@ -83,8 +87,16 @@ export function VoiceButton({
         >
           <X size={14} color={`rgba(${FG},0.55)`} strokeWidth={2.2} />
         </Pressable>
-        <Waveform active={!stopping} style={styles.waveform} />
-        <Text style={styles.timer}>{formatDuration(elapsedMs)}</Text>
+        {error ? (
+          <Text numberOfLines={1} style={styles.errorText}>
+            {error}
+          </Text>
+        ) : (
+          <>
+            <Waveform active={!stopping} style={styles.waveform} />
+            <Text style={styles.timer}>{formatDuration(elapsedMs)}</Text>
+          </>
+        )}
         <Pressable
           onPress={() => void finish(true)}
           disabled={stopping}
@@ -160,5 +172,15 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: `rgba(${FG},0.55)`,
     fontFamily: "Geist_500Medium",
+  },
+  // 错误文本占 waveform+timer 的中段位置，样式跟随条内文本（timer）。
+  errorText: {
+    flex: 1,
+    minWidth: 62,
+    textAlign: "center",
+    fontSize: 11,
+    color: `rgba(${FG},0.55)`,
+    fontFamily: "Geist_500Medium",
+    paddingHorizontal: 2,
   },
 });

@@ -1,12 +1,12 @@
 /**
  * NOW 首页——web NowView 的完整 RN 对应物（UI 刀 2）：
  * 问候页头（Hi, Name 粉渐变）→ Ambient 状态卡（圆图标+toggle，点卡体
- * 进 Ambient 页）→ 3D 球面卡片云（tap → 详情抽屉 → 四操作）→
- * 底部 ASK PIN AI。协议层（cards query / feedback builders / outbox
- * 兜底）与此前一致。
+ * 进 Ambient 页）→ 3D 球面卡片云（tap 分流：执行态直进 card chat，新卡
+ * → 详情抽屉 → 四操作）/ 零卡空态引导（HomeEmptyState）→ 底部 ASK
+ * PIN AI。动作与乐观集合来自壳级 CardActionsProvider（NOW/TASKS 单实例）。
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { AppState, Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { Radio } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import Animated, {
@@ -25,14 +25,16 @@ import {
 } from "@pin-ai/core";
 import { useCardsQuery, useWeatherData } from "@pin-ai/state";
 
+import { AmbientAudio } from "../../modules/ambient-audio";
 import AskPinAiBar from "../components/app/AskPinAiBar";
+import { useCardActionsContext } from "../components/app/CardActionsProvider";
 import PageHeader from "../components/app/PageHeader";
 import CardDetailSheet from "../components/now/CardDetailSheet";
+import HomeEmptyState, { type VoicePermissionState } from "../components/now/HomeEmptyState";
 import SphereCards, { type SphereItem } from "../components/now/SphereCards";
 import { GradientText } from "../ui/GradientText";
 import { EM_TIGHT, leading, tracking } from "../ui/typography";
 import { useAmbientToggle } from "../hooks/useAmbientToggle";
-import { useCardActions } from "../hooks/useCardActions";
 import { getDeviceWeatherCoords } from "../lib/weather-location";
 import type { HeaderProps } from "./AmbientScreen";
 
@@ -113,14 +115,15 @@ function AmbientStatusCard({
             className="mt-0.5 text-[12px] text-foreground/50"
             style={{ fontFamily: "Inter_400Regular" }}
           >
-            {/* web NowView 1:1：开 + 有天气 → 城市·天气·温度°；开 + 天气未到 → 回退；关 → 提示。
+            {/* web NowView 1:1：开 + 有天气 → 城市·天气·温度°；开 + 天气未到 → 回退
+                t("now.ambientQuiet")（web NowView:131 同键）；关 → 提示。
                 城市可能缺失（IP 定位失败）→ 优雅省略该段，不显示 "undefined"。
                 天气条件走 i18n 语义键（common:weather.*，与 web 同键）。 */}
             {!on
               ? t("now.ambientTapToStart")
               : weather
                 ? `${weather.city ? `${weather.city} · ` : ""}${t(`common:weather.${weather.conditionKey}`)} · ${weather.temp}°`
-                : "Sensing context around you"}
+                : t("now.ambientQuiet")}
           </Text>
         </View>
       </Pressable>
@@ -175,6 +178,53 @@ const greetingStyle = {
   lineHeight: leading(30, 1.05),
 } as const;
 
+/** web hooks/useVoicePermission 的 RN 版（空态 "Turn on voice" 行的数据源）：
+ *  读 AmbientAudio（ambient 声源同一原生模块）的 OS 麦克风权限，mount 不触发
+ *  系统弹窗；request() 才弹。RN 恒 native → 无 web 的 "unsupported" 分支。 */
+function useVoicePermission(): {
+  state: VoicePermissionState;
+  request: () => Promise<VoicePermissionState>;
+  refresh: () => Promise<void>;
+} {
+  const [state, setState] = useState<VoicePermissionState>("missing");
+
+  const refresh = useCallback(async () => {
+    try {
+      const perm = await AmbientAudio.checkPermissions();
+      setState(perm.microphone === "granted" ? "granted" : "missing");
+    } catch {
+      // 读失败按 "missing"——nudge 保持可见是安全默认（web 同注释）。
+      setState("missing");
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  // 前台回归重读：用户可能在 iOS 设置里改了麦克风权限（web appStateChange 同构）。
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s === "active") void refresh();
+    });
+    return () => sub.remove();
+  }, [refresh]);
+
+  const request = useCallback(async (): Promise<VoicePermissionState> => {
+    try {
+      const perm = await AmbientAudio.requestPermissions();
+      const next: VoicePermissionState = perm.microphone === "granted" ? "granted" : "missing";
+      setState(next);
+      return next;
+    } catch {
+      setState("missing");
+      return "missing";
+    }
+  }, []);
+
+  return { state, request, refresh };
+}
+
 export default function NowScreen({
   displayName,
   userId,
@@ -182,6 +232,8 @@ export default function NowScreen({
   onOpenChat,
   onOpenAmbient,
   onAskPinAi,
+  onOpenConnect,
+  onReviewPermissions,
   active = true,
 }: {
   displayName: string;
@@ -190,27 +242,36 @@ export default function NowScreen({
   onOpenChat: (card: IntentCard, bootstrap: string) => void;
   onOpenAmbient: () => void;
   onAskPinAi: () => void;
+  /** 空态 "Connect your apps" 行 → Connect 页（AppShell wiring：navigate("connect")）。 */
+  onOpenConnect?: () => void;
+  /** 空态 "Review permissions" / 麦克风被拒的兜底 → 权限面板（web: Account →
+   *  Ambient 子页；AppShell wiring：navigate("setting")）。未接线时退回 Ambient 页。 */
+  onReviewPermissions?: () => void;
   /** false = NOW 当前不可见(切到别的页 / 被 chat 盖住)→ 球体停帧省电。 */
   active?: boolean;
 }) {
   const { t } = useTranslation("card");
-  const { cards } = useCardsQuery();
+  const { cards, loading: feedLoading } = useCardsQuery();
   const { width } = useWindowDimensions();
-  const [hidden, setHidden] = useState<Set<string>>(new Set());
-  // 本地乐观「用户碰过这张卡」集合（web processingIds/chattedIds 的合并简化）。
-  const [engaged, setEngaged] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<VisibleCardEntry | null>(null);
+  // 壳级单实例动作 + 五个乐观集合（web AppLayout cardActions 经 CardStateProvider
+  // 同构）：NOW/TASKS 共享，dismiss/done 立即跨屏同步，mount-restore 只跑一次。
+  const cardActions = useCardActionsContext();
+  const { dismissedIds, doneIds, processingIds, chattedIds, composio } = cardActions;
 
-  // web AppLayout sphereCards 同款筛选：① 去掉隐藏/本地 hide 的卡 ② 按 intentKey
-  // 去重（同一意图跨多次 run 只上一次；cards 按 completed_at DESC，首个即最新 run）
-  // ③ 限量 14 张。RN 之前全量上球 → "渲染太多"，此处对齐 web 的 .slice(0,14)。
+  // web AppLayout sphereCards 同款筛选：① 去 dismissed/done（本地乐观集合，
+  // mount 时已从 /feedback/{dismissed,completed} 恢复）+ 隐藏 outcome ② 按
+  // intentKey 去重（同一意图跨多次 run 只上一次；cards 按 completed_at DESC，
+  // 首个即最新 run）③ 限量 14 张（web .slice(0,14)）。
   const visible = useMemo(() => {
-    // web AppLayout sphereCards 1:1 过滤：去 dismissed/done（按 card.id，本地 hidden——dismiss/done
-    // 时乐观加 + mount 时从后端 /feedback/{dismissed,completed} 恢复，见 useCardActions）
-    // + 隐藏 outcome，再按 intentKey dedup（同意图多 run 只上最新一条），slice 14。
     const seen = new Set<string>();
     return cards
-      .filter((e) => !isHiddenCardOutcome(e.latestOutcome) && !hidden.has(e.card.id))
+      .filter(
+        (e) =>
+          !dismissedIds.has(e.card.id) &&
+          !doneIds.has(e.card.id) &&
+          !isHiddenCardOutcome(e.latestOutcome),
+      )
       .filter((e) => {
         const key = e.card.intentKey || e.card.id;
         if (seen.has(key)) return false;
@@ -218,33 +279,47 @@ export default function NowScreen({
         return true;
       })
       .slice(0, 14);
-  }, [cards, hidden]);
+  }, [cards, dismissedIds, doneIds]);
   const sphereItems: SphereItem[] = visible.map((e) => ({
     id: e.card.id,
     title: e.card.title,
     category: basketToLovableCategory(e.card.goalBasket),
-    // web AppLayout 同一推导函数（core 共享）：engagement gate + run 状态。
+    // web AppLayout 同一推导函数（core 共享）：engagement gate + run 状态；
+    // 乐观 processing / chatted 分别喂（web sphereCards 同参）。
     status: deriveCardUiStatus({
       runStatus: e.runStatus,
       latestOutcome: e.latestOutcome,
-      optimisticProcessing: engaged.has(e.card.id),
-      chatted: engaged.has(e.card.id),
+      optimisticProcessing: processingIds.has(e.card.id),
+      chatted: chattedIds.has(e.card.id),
     }),
   }));
 
-  const hide = useCallback((id: string) => {
-    setHidden((prev) => new Set(prev).add(id));
-  }, []);
-  const engage = useCallback((id: string) => {
-    setEngaged((prev) => new Set(prev).add(id));
-  }, []);
-
-  const { confirm, dismiss, complete, chat } = useCardActions({
-    onOpenChat,
-    onHide: hide,
-    onEngage: engage,
-    onClose: () => setDetail(null),
-  });
+  // ── 空态引导数据（web AppLayout:203-241 同构）──
+  // ACTIVE 连接数 + 「列表确已加载」闸（加载前 0 不算没连接）+ OS 麦克风权限。
+  const connectorCount = composio.connections.filter((c) => c.status === "ACTIVE").length;
+  const connectorsKnown =
+    !composio.statusLoading && !composio.loadingConns && composio.keyStatus?.configured === true;
+  const { state: voiceState, request: requestVoicePermission, refresh: refreshVoicePermission } =
+    useVoicePermission();
+  const { ambientOn, toggle: toggleAmbient } = useAmbientToggle(userId);
+  // 回到 NOW 时重读麦克风权限（web activeView==="now" 同构）：用户在权限面板
+  // 授权后 nudge 才会自清。
+  useEffect(() => {
+    if (active) void refreshVoicePermission();
+  }, [active, refreshVoicePermission]);
+  // 未接线的兜底：Review permissions / 拒麦跳 Ambient 页（真目标 = Setting →
+  // Ambient 权限子页，见 prop 注释）。
+  const reviewPermissions = onReviewPermissions ?? onOpenAmbient;
+  // web handleEnableVoice：就地弹 OS 麦克风请求；授权成功顺手把 ambient 打开，
+  // 否则跳权限面板（OS 拒过一次就不再弹）。
+  const handleEnableVoice = useCallback(async () => {
+    const next = await requestVoicePermission();
+    if (next === "granted") {
+      if (!ambientOn) await toggleAmbient();
+    } else {
+      reviewPermissions();
+    }
+  }, [requestVoicePermission, ambientOn, toggleAmbient, reviewPermissions]);
 
   return (
     <View className="flex-1">
@@ -267,30 +342,67 @@ export default function NowScreen({
       />
       <AmbientStatusCard userId={userId} onOpenAmbient={onOpenAmbient} />
       <View className="flex-1">
-        <SphereView
-          items={sphereItems}
-          width={width}
-          active={active}
-          onTap={(id) => {
-            const entry = visible.find((e) => e.card.id === id);
-            if (entry) setDetail(entry);
-          }}
-        />
+        {/* 卡片区（web NowView:162-170）：有卡上球；零卡且首拉已回 → 空态引导
+            （connect / voice checklist），加载中不闪空态。 */}
+        {!feedLoading && visible.length === 0 ? (
+          <HomeEmptyState
+            connectorCount={connectorCount}
+            connectorsKnown={connectorsKnown}
+            voiceState={voiceState}
+            onEnableVoice={() => void handleEnableVoice()}
+            onConnect={onOpenConnect ?? (() => {})}
+            onReviewPermissions={reviewPermissions}
+          />
+        ) : (
+          <SphereView
+            items={sphereItems}
+            width={width}
+            active={active}
+            onTap={(id) => {
+              const entry = visible.find((e) => e.card.id === id);
+              if (!entry) return;
+              // web AppLayout handleSphereCardTap:711-749：已进入执行态的卡
+              // （processing/needs_input/ready/failed = runUi!=="normal"）直进
+              // card chat 看现状，**不带 bootstrap**（重进已有 run 不再踢新
+              // agent turn，drawer 的 Approve 会重复 POST confirm）；否则开抽屉。
+              const item = sphereItems.find((s) => s.id === id);
+              if (item && item.status !== "normal") {
+                onOpenChat(entry.card, "");
+              } else {
+                setDetail(entry);
+              }
+            }}
+          />
+        )}
       </View>
       <AskPinAiBar onOpen={onAskPinAi} />
       <CardDetailSheet
         entry={detail}
         onClose={() => setDetail(null)}
-        onDismiss={dismiss}
-        onComplete={complete}
-        onApprove={confirm}
-        onChat={chat}
+        onDismiss={(e) => {
+          cardActions.dismiss(e.card);
+          setDetail(null);
+        }}
+        onComplete={(e) => {
+          cardActions.complete(e.card);
+          setDetail(null);
+        }}
+        onApprove={(e) => {
+          void cardActions.confirm(e.card);
+          setDetail(null);
+        }}
+        onChat={(e) => {
+          cardActions.chat(e.card);
+          setDetail(null);
+        }}
       />
     </View>
   );
 }
 
-/** 球面区域：自适应高度（onLayout 量出后渲染——SphereCards 需要确定尺寸）。 */
+/** 球面区域：自适应高度（onLayout 量出后渲染——SphereCards 需要确定尺寸）。
+ *  零卡空态由 NowScreen 渲染 HomeEmptyState 接管（web NowView 同位），这里
+ *  只负责有卡的球面。 */
 function SphereView({
   items,
   width,
@@ -307,12 +419,6 @@ function SphereView({
     <View className="flex-1" onLayout={(e) => setHeight(e.nativeEvent.layout.height)}>
       {height > 0 && items.length > 0 ? (
         <SphereCards items={items} width={width} height={height} active={active} onTap={onTap} />
-      ) : items.length === 0 ? (
-        <View className="flex-1 items-center justify-center px-10">
-          <Text className="text-center text-[14px] text-muted-foreground" style={{ fontFamily: "Inter_400Regular" }}>
-            All clear — PIN AI is watching for what's next.
-          </Text>
-        </View>
       ) : null}
     </View>
   );

@@ -32,8 +32,10 @@ export * from "./api/scheduled-generators";
 export * from "./api/skills";
 
 export * from "./domain/ambient";
+export * from "./domain/ambient-transcript-clean";
 export * from "./domain/card-actions";
 export * from "./domain/card-chat-session";
+export * from "./domain/card-context";
 export * from "./domain/card-feedback";
 export * from "./domain/card-run-status";
 export * from "./domain/cards";
@@ -49,6 +51,7 @@ export * from "./domain/markdown-blocks";
 export * from "./domain/reminder-card";
 export * from "./domain/signals";
 export * from "./domain/voice-language";
+export * from "./domain/voice-stream";
 export * from "./domain/voice-identity-api";
 export * from "./domain/basket-category";
 export * from "./domain/source-app";
@@ -73,6 +76,7 @@ export * from "./ports/local-thread-store";
 export * from "./ports/external-mic";
 
 export * from "./sync/ambient-outbox";
+export * from "./sync/ingest-buckets";
 export * from "./sync/sqlite-outbox";
 export * from "./sync/engine";
 export * from "./sync/local-read";

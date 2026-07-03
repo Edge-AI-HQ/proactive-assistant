@@ -5,11 +5,12 @@
  * 「Used N tools / Ran N subtasks / Thought」兜底。分组逻辑（segmentAssistantParts /
  * toolStatus / taskDescription / WorkGroupData）100% 复用 @pin-ai/core，本文件只
  * 渲染。web blur(20) saturate(1.3) → RN expo-blur + 白覆盖；framer cubic ease 的
- * 折叠 → RN LayoutAnimation。web 的 web-search favicon LinksList + 工具输出展开为
- * 后续细化项（先显示动词 + args 预览）。
+ * 折叠 → RN LayoutAnimation。web-search 结果 = favicon + 标题 + 域名的可点来源列
+ * （web LinksList，favicon 走 google s2 端点，点击 Linking.openURL）；工具输出
+ * 展开走 MarkdownText（web ToolNodeRow 的 MarkdownContent）。
  */
 import { useEffect, useState } from "react";
-import { LayoutAnimation, Pressable, StyleSheet, Text, View } from "react-native";
+import { Image, LayoutAnimation, Linking, Pressable, StyleSheet, Text, View } from "react-native";
 import { BlurView } from "expo-blur";
 import { AlertCircle, Check, ChevronDown, ChevronUp, Clock, Loader2 } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
@@ -25,9 +26,11 @@ import {
   taskDescription,
   toolStatus,
   type ToolCallPart,
+  type ToolResultLink,
   type WorkGroupData,
 } from "@pin-ai/core";
 
+import MarkdownText from "./MarkdownText";
 import { resolveToolPresentation } from "./tool-presentation";
 
 const FG = "29,33,48";
@@ -64,6 +67,58 @@ function stringArg(part: ToolCallPart, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
+/** favicon 解析（web WorkGroupNodes 同款 google s2 端点，域名取自结果 URL）。 */
+function faviconUrl(url: string): string | null {
+  try {
+    const domain = new URL(url).hostname;
+    return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32`;
+  } catch {
+    return null;
+  }
+}
+
+function domainOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+/** web-search 来源列（web LinksList）：favicon + 标题 + 域名，点击外开浏览器
+ *  （web `<a target=_blank>` 的 RN 对应 = Linking.openURL）。 */
+function LinksList({ links }: { links: ToolResultLink[] }) {
+  return (
+    <View style={styles.linksBox}>
+      {links.map((link, i) => {
+        const icon = faviconUrl(link.url);
+        return (
+          <Pressable
+            key={link.url}
+            onPress={() => void Linking.openURL(link.url).catch(() => {})}
+            accessibilityRole="link"
+          >
+            {/* web last:border-b-0——末行不画分隔线。 */}
+            <View style={[styles.linkRow, i === links.length - 1 && styles.linkRowLast]}>
+              {icon ? (
+                <Image source={{ uri: icon }} style={styles.linkFavicon} />
+              ) : (
+                <View style={[styles.linkFavicon, styles.linkFaviconFallback]} />
+              )}
+              <Text style={styles.linkTitle} numberOfLines={1}>
+                {link.title}
+              </Text>
+              <Text style={styles.linkDomain} numberOfLines={1}>
+                {domainOf(link.url)}
+              </Text>
+            </View>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 /** 单工具行（web ToolNodeRow）：状态点 + 动作动词 + args 预览；点开看工具详情。 */
 function ToolNodeRow({ part, nested }: { part: ToolCallPart; nested?: boolean }) {
   const { t } = useTranslation("chat");
@@ -75,8 +130,8 @@ function ToolNodeRow({ part, nested }: { part: ToolCallPart; nested?: boolean })
     stringArg(part, "pinCommand") ||
     stringArg(part, "meta") ||
     argsPreview;
-  const links = part.links ?? [];
-  const canExpand = status !== "running" && (target.length > 0 || links.length > 0);
+  // 与 web ToolNodeRow 同判：links 有无按字段存在算（含空数组），展开分支互斥。
+  const canExpand = status !== "running" && (Boolean(target) || Boolean(part.links));
 
   return (
     <View style={styles.toolNode}>
@@ -99,8 +154,8 @@ function ToolNodeRow({ part, nested }: { part: ToolCallPart; nested?: boolean })
         <Text style={styles.preview} numberOfLines={1}>
           {argsPreview}
         </Text>
-        {links.length > 0 ? (
-          <Text style={styles.resultCount}>{t("toolNode.results", { count: links.length })}</Text>
+        {part.links ? (
+          <Text style={styles.resultCount}>{t("toolNode.results", { count: part.links.length })}</Text>
         ) : null}
         {canExpand ? (
           <View style={styles.toolChevron}>
@@ -114,16 +169,13 @@ function ToolNodeRow({ part, nested }: { part: ToolCallPart; nested?: boolean })
       </Pressable>
       {expanded ? (
         <View style={styles.toolDetailsWrap}>
-          {links.length > 0 ? (
-            <View style={styles.linksBox}>
-              {links.map((link) => (
-                <Text key={link.url} style={styles.linkText} numberOfLines={1}>
-                  {link.title || link.url}
-                </Text>
-              ))}
-            </View>
+          {part.links ? (
+            <LinksList links={part.links} />
           ) : target ? (
-            <Text style={styles.toolDetails}>{target}</Text>
+            // web ToolNodeRow 展开:rounded-lg bg-foreground/[0.03] 内 MarkdownContent。
+            <View style={styles.toolDetails}>
+              <MarkdownText text={target} />
+            </View>
           ) : null}
         </View>
       ) : null}
@@ -305,19 +357,6 @@ export default function WorkGroup({
   );
 }
 
-/** propose_action / notify_user 段——AI 面向用户的卡（暂停征询 / 通知）。完整富
- *  交互（选项 chips / 回复）是 ② 流式刀的 ProposeActionCard；此处先稳妥显示动词 +
- *  预览，避免段消失。 */
-export function SpecialCard({ part }: { part: ToolCallPart }) {
-  const { verb } = resolveToolPresentation(part.toolName);
-  return (
-    <View style={styles.special}>
-      <Text style={styles.specialLabel}>{verb}</Text>
-      {part.argsText ? <Text style={styles.specialBody}>{part.argsText}</Text> : null}
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   group: {
     marginTop: 4,
@@ -353,32 +392,51 @@ const styles = StyleSheet.create({
   resultCount: { fontSize: 11, color: `rgba(${FG},0.45)`, fontFamily: "Geist_400Regular" },
   toolChevron: { width: 18, alignItems: "flex-end", justifyContent: "center", flexShrink: 0 },
   toolDetailsWrap: { alignSelf: "stretch", paddingLeft: 20, paddingRight: 2, paddingBottom: 8 },
+  // web: mt-1 rounded-lg bg-foreground/[0.03] px-2.5 py-2（内容 = MarkdownContent）。
   toolDetails: {
     marginTop: 4,
-    borderRadius: 14,
+    borderRadius: 8,
     backgroundColor: `rgba(${FG},0.03)`,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 13,
-    lineHeight: 20,
-    color: `rgba(${FG},0.72)`,
-    fontFamily: "Geist_400Regular",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
   },
+  // web: mt-1.5 rounded-lg border-foreground/[0.06] bg-white/60 overflow-hidden。
   linksBox: {
-    marginTop: 4,
+    marginTop: 6,
     borderRadius: 10,
     backgroundColor: "rgba(255,255,255,0.6)",
     borderWidth: 1,
     borderColor: `rgba(${FG},0.06)`,
     overflow: "hidden",
   },
-  linkText: {
+  // web: flex gap-2 px-2.5 py-1.5 border-b fg/[0.04]。
+  linkRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
     paddingHorizontal: 10,
-    paddingVertical: 7,
+    paddingVertical: 6,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: `rgba(${FG},0.04)`,
+  },
+  linkRowLast: { borderBottomWidth: 0 },
+  // web: h-3.5 w-3.5 rounded-sm。
+  linkFavicon: { width: 14, height: 14, borderRadius: 3, flexShrink: 0 },
+  linkFaviconFallback: { backgroundColor: `rgba(${FG},0.1)` },
+  // web: flex-1 truncate text-label(12) text-foreground/80。
+  linkTitle: {
+    flex: 1,
+    minWidth: 0,
     fontSize: 12,
     color: `rgba(${FG},0.8)`,
+    fontFamily: "Geist_400Regular",
+  },
+  // web: caption(11) text-foreground/40。
+  linkDomain: {
+    flexShrink: 0,
+    maxWidth: "38%",
+    fontSize: 11,
+    color: `rgba(${FG},0.4)`,
     fontFamily: "Geist_400Regular",
   },
   thinkRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 4 },
@@ -391,7 +449,4 @@ const styles = StyleSheet.create({
   taskTitle: { flex: 1, fontSize: 13, fontFamily: "Geist_500Medium", color: `rgba(${FG},0.78)` },
   taskAgent: { fontSize: 11, color: `rgba(${FG},0.4)`, fontFamily: "Geist_400Regular" },
   taskChildren: { marginLeft: 16, borderLeftWidth: 1, borderLeftColor: `rgba(${FG},0.08)`, paddingLeft: 10, paddingBottom: 4 },
-  special: { marginTop: 4, marginBottom: 12, borderRadius: 14, borderWidth: 1, borderColor: `rgba(${FG},0.1)`, backgroundColor: "rgba(255,255,255,0.5)", paddingHorizontal: 14, paddingVertical: 10 },
-  specialLabel: { fontSize: 11, fontFamily: "Geist_600SemiBold", letterSpacing: 0.4, color: `rgba(${FG},0.5)`, marginBottom: 4, textTransform: "uppercase" },
-  specialBody: { fontSize: 14, color: `rgba(${FG},0.85)`, fontFamily: "Geist_400Regular", lineHeight: 20 },
 });

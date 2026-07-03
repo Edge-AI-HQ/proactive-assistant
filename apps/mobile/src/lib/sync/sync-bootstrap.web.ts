@@ -4,6 +4,10 @@ export function startSync(_userId: string): void {
   // Web preview does not run the durable Expo SQLite sync loop.
 }
 
+export function stopSync(): void {
+  // No local sync scheduler in Web preview.
+}
+
 export function notifyThreadActivity(_threadId: string): void {
   // No local sync scheduler in Web preview.
 }

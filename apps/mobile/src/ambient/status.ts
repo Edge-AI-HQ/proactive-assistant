@@ -141,6 +141,16 @@ export function recordDrainError(error: string): void {
   notifyStatus();
 }
 
+/**
+ * drain 成功但有 retryable 条目保留在队里：错误计数 +1、不设 lastIngestError
+ * （= dev runtime.drain 的 `totalIngestErrors += result.failed > 0 ? 1 : 0` +
+ * scheduler 成功后 lastError=null 的组合语义）。
+ */
+export function recordDrainRetryable(): void {
+  agg.totalIngestErrors += 1;
+  notifyStatus();
+}
+
 // 源 → 主信号 kind（逐字对齐 web index.ts SOURCE_TO_KIND；RN 各源 emit 同一套 kind）。
 const SOURCE_TO_KIND: Record<AmbientSourceKey, string> = {
   sound_classifier: "device.sound_classification",
@@ -174,6 +184,13 @@ export function recordIngestedItems(items: ReadonlyArray<{ kind: string }>): voi
     }
   }
   if (changed) notifyStatus();
+}
+
+/** 采集→管线蒸馏失败时记 lastIngestError（= dev runtime.ingestLocalSignal 的
+ *  catch 分支；不计入 totalIngestErrors——那是 drain 维度的计数）。 */
+export function setLastIngestError(error: string): void {
+  agg.lastIngestError = error;
+  notifyStatus();
 }
 
 export function setOutboxPending(n: number): void {

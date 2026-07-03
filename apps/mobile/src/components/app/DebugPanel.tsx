@@ -14,7 +14,7 @@
  * （web AppLayout 同位）。
  */
 import { useCallback, useEffect, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { BlurView } from "expo-blur";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Bell, Clock, Loader2, Plug, RefreshCw, Trash2, X, Zap } from "lucide-react-native";
@@ -493,13 +493,14 @@ export default function DebugPanel({
               <View style={styles.flexSpacer} />
               <Text style={styles.eventCount}>{run.logEntries.length} events</Text>
             </View>
-            <View style={styles.logBox}>
+            {/* dev 同为全量渲染（新→旧）；长列表随面板 body ScrollView 滚动
+                （不设 maxHeight 内滚，避免嵌套纵向滚动手势冲突）。 */}
+            <View>
               {run.logEntries.length === 0 ? (
                 <Text style={styles.logEmpty}>No events yet</Text>
               ) : (
                 [...run.logEntries]
                   .reverse()
-                  .slice(0, 30)
                   .map((entry) => (
                     <View key={entry.id} style={styles.logRow}>
                       <View style={styles.logMeta}>
@@ -599,8 +600,18 @@ export default function DebugPanel({
             <Text style={styles.sectionLabel}>ACCOUNT</Text>
             <Pressable
               onPress={() => {
-                setSigningOut(true);
-                void onSignOut().finally(() => setSigningOut(false));
+                // dev DebugPanel: confirm("Sign out?") 通过才 signOut。RN 的系统
+                // 对话框等价物 = Alert.alert（同 DeviceConnections 移除设备的既有模式）。
+                Alert.alert("Sign out?", undefined, [
+                  { text: "Cancel", style: "cancel" },
+                  {
+                    text: "Sign Out",
+                    onPress: () => {
+                      setSigningOut(true);
+                      void onSignOut().finally(() => setSigningOut(false));
+                    },
+                  },
+                ]);
               }}
               disabled={signingOut}
               accessibilityRole="button"
@@ -711,7 +722,6 @@ const styles = StyleSheet.create({
   phaseHint: { fontSize: 11, color: ink(0.4), fontFamily: "Inter_400Regular", fontStyle: "italic" },
 
   // event log
-  logBox: { maxHeight: 240 },
   logEmpty: { fontSize: 11, color: ink(0.3), textAlign: "center", paddingVertical: 16, fontFamily: "Inter_400Regular" },
   logRow: { borderLeftWidth: 2, borderLeftColor: ink(0.1), paddingLeft: 10, paddingVertical: 6 },
   logMeta: { flexDirection: "row", alignItems: "center", gap: 8 },

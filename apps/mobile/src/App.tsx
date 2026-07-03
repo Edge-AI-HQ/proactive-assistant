@@ -24,32 +24,35 @@ import { useFonts, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_7
 import { Geist_400Regular, Geist_500Medium, Geist_600SemiBold, Geist_700Bold } from "@expo-google-fonts/geist";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 
-import { registerExternalMicAcquirer, registerSignOutCleanup } from "@pin-ai/core";
+import { registerExternalMicAcquirer, registerFeedbackOutbox, registerSignOutCleanup } from "@pin-ai/core";
 import { useUserSettings } from "@pin-ai/state";
 
 import { useAuth } from "./hooks/useAuth";
 import { detectDeviceLanguage } from "./i18n";
 import { useUiLanguageSync } from "./i18n/useUiLanguageSync";
-import { clearDeviceCredentials } from "./lib/devices";
-import { startSync } from "./lib/sync/sync-bootstrap";
+import { clearDeviceCredentials, ensureDevice } from "./lib/devices";
+import { persistOptions, queryClient, setupAppFocusManager } from "./lib/query-client";
+import { enqueueFeedback, startSync } from "./lib/sync/sync-bootstrap";
 import { resumeAmbientIfEnabled } from "./ambient/runtime";
 import { acquireExternalMic } from "./ambient/external-mic";
 import AppShell from "./components/app/AppShell";
 import OnboardingFlow from "./components/onboarding/OnboardingFlow";
 import VideoBackdrop from "./ui/VideoBackdrop";
-import { registerPush } from "./lib/push";
+import { ensurePushRegistration } from "./lib/push";
 import BootScreen, { BootstrapError } from "./screens/BootScreen";
 import LoginScreen from "./screens/LoginScreen";
 import { VoiceProvider } from "./voice";
 
-const queryClient = new QueryClient();
-
-// signOut 时清 device 凭据(secure-store)——注册进 core 的 signOut 清理链
-// (useAuth.signOut → runSignOutCleanups)。registerFeedbackOutbox /
-// registerLocalThreadStore 待对应实现就绪后续 wire。
+// signOut 清理链由 performSignOut 收口（lib/sign-out.ts）；这里把 device 凭据
+// (secure-store)清理注册进 core 清理链(useAuth.signOut → runSignOutCleanups)。
+// registerFeedbackOutbox 已接 sync outbox；registerLocalThreadStore 不注册——
+// RN 在 ChatScreen/CardDetailSheet 显式传 readLocalHistory/notifyThreadActivity。
 registerSignOutCleanup(clearDeviceCredentials);
+registerFeedbackOutbox((body, key) => void enqueueFeedback(body, key));
+// AppState → focusManager（TanStack RN 配方）：回前台等价 web 的窗口聚焦刷新。
+setupAppFocusManager();
 // voice 录音与 ambient 采集的麦克风互斥（对齐 web main.tsx）：录音前让出 native
 // ambient 麦、录完恢复。web 用 dynamic import（代码分割）；RN 是单体 bundle，且
 // dynamic import() 在本 Hermes/Metro setup 跑不通（Requiring unknown module 4012），
@@ -85,9 +88,14 @@ function Root() {
   useEffect(() => {
     if (!user?.id) return;
     startSync(user.id);
-    // 登录后立即注册推送（权限弹窗在 onboarding 时机问，不做 in-context
-    // 延迟——async-heavy app 的通知是核心体验）。
-    void registerPush(user.id);
+    // 登录后注册/刷新本机 device 行（dev App.tsx ensureDevice({forceRefresh:true})
+    // 同语义）；失败只 warn——推送注册链下次启动会再走 ensureDevice。
+    void ensureDevice(user.id, { forceRefresh: true }).catch((err) => {
+      console.warn("[devices] registration failed after sign-in", err);
+    });
+    // 静默推送注册：OS 已 granted 才上报 token；权限询问归 PreNotificationPrompt
+    // 预询流（= dev AppLayout 时序）。
+    void ensurePushRegistration(user.id);
     // ambient：本机此前显式开过才续采（per-device opt-in 隐私不变量）。
     void resumeAmbientIfEnabled(user.id);
   }, [user?.id]);
@@ -127,9 +135,11 @@ function Root() {
           白罩）。chat / card chat 各自盖自己的 AuroraBackground，不吃这层。
           全出血（SafeAreaView 之外），内容层再走安全区。 */}
       <VideoBackdrop />
-      <SafeAreaView style={styles.safeTransparent} edges={["top", "bottom"]}>
-        <AppShell user={user} onSignOut={signOut} />
-      </SafeAreaView>
+      <VoiceProvider transcriptionLanguage={settings.generationLanguage}>
+        <SafeAreaView style={styles.safeTransparent} edges={["top", "bottom"]}>
+          <AppShell user={user} onSignOut={signOut} />
+        </SafeAreaView>
+      </VoiceProvider>
     </>
   );
 }
@@ -137,14 +147,14 @@ function Root() {
 export default function App() {
   return (
     <GestureHandlerRootView style={styles.safe}>
-      <QueryClientProvider client={queryClient}>
+      {/* Sync-A：persister 恢复白名单缓存（settings/cards），冷启先渲染上次
+          数据、后台 refetch——见 lib/query-client.ts。 */}
+      <PersistQueryClientProvider client={queryClient} persistOptions={persistOptions}>
         <SafeAreaProvider>
           <StatusBar style="dark" />
-          <VoiceProvider>
-            <Root />
-          </VoiceProvider>
+          <Root />
         </SafeAreaProvider>
-      </QueryClientProvider>
+      </PersistQueryClientProvider>
     </GestureHandlerRootView>
   );
 }

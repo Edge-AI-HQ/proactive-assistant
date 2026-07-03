@@ -54,6 +54,13 @@ export function createAudioRouteSource(ctx: SourceContext): AmbientSource {
     async start() {
       if (sub) return;
       sub = AmbientAudio.addListener("audioState", handle);
+      // 启动即取一次当前路由快照（dev sources/audio-route.ts:26-29）——
+      // 已连着的车载/耳机不用等下一次路由变化才被看见。
+      try {
+        handle(await AmbientAudio.getState());
+      } catch (err) {
+        console.warn("[ambient:audio_route] getState failed", err);
+      }
     },
     async stop() {
       sub?.remove();
