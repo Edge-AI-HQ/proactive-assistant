@@ -137,12 +137,27 @@ class _Cursor:
         return None
 
 
+class _Txn:
+    """Mimics psycopg's conn.transaction() savepoint CM: on exit it does NOT
+    suppress an in-flight exception (returns False), so _sync's own try/except
+    is what swallows a failed cross-schema write."""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
 class _Conn:
     def __init__(self):
         self.cur = _Cursor()
 
     def cursor(self):
         return self.cur
+
+    def transaction(self):
+        return _Txn()
 
 
 async def test_sync_litellm_budget_reset_at_pins_shared_litellm_table():
@@ -168,3 +183,23 @@ async def test_sync_litellm_budget_reset_at_noops_without_period_end():
     await checkout_mod._sync_litellm_budget_reset_at(conn, 42, None)
 
     conn.cur.execute.assert_not_awaited()
+
+
+async def test_sync_litellm_budget_reset_at_swallows_write_failure():
+    """A failed cross-schema UPDATE must be swallowed, never propagated into the
+    caller's key-mint transaction (the #197 regression: a missing litellm grant
+    poisoned the tx and rolled back the freshly-minted virtual key). The real
+    savepoint isolation is exercised against Postgres in
+    tests/web/payment/test_mint_tx_isolation.py; here we lock the contract that
+    _sync itself does not raise."""
+    conn = _Conn()
+    conn.cur.execute.side_effect = RuntimeError("permission denied for schema litellm")
+
+    # Must NOT raise.
+    await checkout_mod._sync_litellm_budget_reset_at(
+        conn,
+        42,
+        SimpleNamespace(period_end=datetime(2026, 7, 17, 12, 0, tzinfo=UTC)),
+    )
+
+    conn.cur.execute.assert_awaited_once()

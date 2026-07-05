@@ -124,6 +124,16 @@ async def _sync_litellm_budget_reset_at(conn, user_id: int, period: Any | None) 
     backend share the same Postgres database; the reset timestamp lives in
     the isolated ``litellm`` schema, so we update only this one scheduler field
     directly.
+
+    Best-effort and transaction-isolated. This cross-schema write is wrapped in
+    a SAVEPOINT and its failure is swallowed, because ``recompute_litellm_budget``
+    runs inside the key-mint ``service_tx`` (``provisioning._provision_and_persist``)
+    and in PostgreSQL a single failed statement aborts the ENTIRE transaction.
+    Without the savepoint, a failure here (e.g. a missing ``litellm`` schema
+    grant) rolls back the freshly-minted virtual key along with it — the #197
+    regression that left every post-onboarding user with a NULL key until
+    migration 127 restored the grant. The reset timestamp is not load-bearing;
+    it self-heals on the next recompute.
     """
     period_end = getattr(period, "period_end", None)
     if not isinstance(period_end, datetime):
@@ -132,17 +142,25 @@ async def _sync_litellm_budget_reset_at(conn, user_id: int, period: Any | None) 
         period_end = period_end.replace(tzinfo=UTC)
     else:
         period_end = period_end.astimezone(UTC)
-    async with conn.cursor() as cur:
-        await cur.execute(
-            """
-            UPDATE litellm."LiteLLM_VerificationToken"
-            SET budget_reset_at = %s,
-                budget_duration = '30d',
-                updated_at = NOW()
-            WHERE metadata->>'source' = 'backend'
-              AND metadata->>'internal_user_id' = %s
-            """,
-            (period_end, str(user_id)),
+    try:
+        # Nested transaction == SAVEPOINT: a failure rolls back only this
+        # statement, never the caller's (key-mint) transaction. See docstring.
+        async with conn.transaction(), conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE litellm."LiteLLM_VerificationToken"
+                SET budget_reset_at = %s,
+                    budget_duration = '30d',
+                    updated_at = NOW()
+                WHERE metadata->>'source' = 'backend'
+                  AND metadata->>'internal_user_id' = %s
+                """,
+                (period_end, str(user_id)),
+            )
+    except Exception:
+        logger.warning(
+            "litellm budget reset timestamp sync failed (non-fatal) user=%d",
+            user_id,
         )
 
 
@@ -302,7 +320,7 @@ async def recompute_litellm_budget(
         logger.exception("litellm budget recompute failed user=%d: %s", user_id, e)
         return False
     except Exception:
-        logger.exception("litellm budget reset timestamp sync failed user=%d", user_id)
+        logger.exception("litellm budget recompute failed unexpectedly user=%d", user_id)
         return False
 
 
