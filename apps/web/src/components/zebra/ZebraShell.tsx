@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Zap, Radio, ListChecks, Plug, Eye, Settings,
+  Zap, Radio, ListChecks, Plug, Eye, Settings, Activity,
   PanelLeft, PanelLeftClose, Bug,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -35,6 +35,7 @@ import ZebraTasksSplit from "./ZebraTasksSplit";
 import ZebraAmbient from "./ZebraAmbient";
 import ZebraConnect from "./ZebraConnect";
 import ZebraMirror from "./ZebraMirror";
+import ZebraEvents from "./ZebraEvents";
 import { ZebraSetting, ZebraSubscription, ZebraNotifications, ZebraPreferences } from "./ZebraSettings";
 import ZebraCommandPalette, { type PaletteCard } from "./ZebraCommandPalette";
 
@@ -61,6 +62,7 @@ const NAV_ITEMS = [
   { id: "tasks", label: "TASKS", icon: ListChecks, path: "/tasks" },
   { id: "connect", label: "CONNECT", icon: Plug, path: "/connect" },
   { id: "mirror", label: "MIRROR", icon: Eye, path: "/mirror" },
+  { id: "events", label: "EVENTS", icon: Activity, path: "/events" },
   { id: "setting", label: "SETTING", icon: Settings, path: "/setting" },
 ] as const;
 
@@ -517,6 +519,8 @@ export default function ZebraShell() {
               <ZebraConnect composio={composio} />
             ) : mainPath === "/mirror" ? (
               <ZebraMirror />
+            ) : mainPath === "/events" ? (
+              <ZebraEvents />
             ) : mainPath === "/setting" ? (
               <ZebraSetting />
             ) : mainPath === "/subscription" ? (

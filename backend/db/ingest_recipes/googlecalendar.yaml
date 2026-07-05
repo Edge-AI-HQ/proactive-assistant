@@ -3,16 +3,42 @@ slug: GOOGLECALENDAR_EVENTS_LIST
 args_template:
   calendarId: "primary"
   singleEvents: true
+  # Cancellations MUST flow in: the projector's supersede pass turns a
+  # status=cancelled update into a [cancelled] tombstone revision of the
+  # meeting event (projector._TOMBSTONE_MAP), and never first-projects an
+  # already-cancelled item (no untitled empty rows — the old failure mode
+  # when this was false).
+  showDeleted: true
+  orderBy: startTime  # allowed with singleEvents; orders the paginated init window by start
   maxResults: 100
 since_param: updatedMin
 since_format: iso
+# init bootstrap pulls an EXPLICIT past+future window (timeMin/timeMax) and
+# paginates it, instead of the toolkit's default first-100. sync stays
+# incremental on updatedMin. 30d back / 90d forward = recent history + upcoming
+# meetings (180d back over-expanded recurring history into noise); init_max_items caps the total.
+init_since_param: timeMin
+init_until_param: timeMax
+init_since_format: iso
+init_lookback_days: 30
+init_lookahead_days: 90
+init_max_items: 1000
+page_token_response_path: [nextPageToken]
+page_token_arg: pageToken
 result_path: [items]
 id_field: id
+entity_type: events
+timestamp_path: [start, dateTime]
+timestamp_fallback_path: [start, date]  # all-day events carry start.date, not start.dateTime
+title_path: [summary]
+snippet_path: [description]
 sync_interval_hours: 12
 description: "User's primary calendar events (recurring expanded to single instances)."
 notes: |
-  - Use updatedMin, NOT timeMin. timeMin filters by event start, missing events updated in the past but starting later.
+  - SYNC uses updatedMin (catches events updated in the past but starting later);
+    INIT uses timeMin/timeMax to pull an explicit past+future window snapshot (paginated).
   - singleEvents=true expands recurring series; downstream needn't expand.
-  - All-day uses start.date; timed uses start.dateTime — mapper handles both.
+  - All-day uses start.date; timed uses start.dateTime — timestamp_fallback_path=[start,date]
+    catches all-day (without it they'd get occurred_at=NOW and pile onto the ingest day).
   - Pagination via nextPageToken; syncToken also supported but expires after ~30 days.
   - For free-text search use GOOGLECALENDAR_FIND_EVENT (with query); sync still uses EVENTS_LIST.

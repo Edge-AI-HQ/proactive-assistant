@@ -14,9 +14,12 @@ import logging
 
 from fastapi import APIRouter, Body, Header, HTTPException, status
 
-from ...agents.crystallize import run_crystallize
-from ...agents.dream import run_dream
-from ...agents.evolve import run_evolve
+from ...agents.evolve import (
+    TRIGGER_DAILY,
+    TRIGGER_ON_EVENT,
+    run_evolve,
+)
+from ...agents.rollup_semantic import run_rollup_semantic
 from ...auth.run_jwt import RunJWTError, verify_run_jwt
 
 logger = logging.getLogger(__name__)
@@ -50,15 +53,30 @@ async def post_run_dream(
     virtual_key = body.get("virtual_key", "")
     if not virtual_key:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "virtual_key required")
-    summary = await run_dream(
+    output_language = str(body.get("generation_language") or "en")
+    model = body.get("model")
+    # Daily sweep order matters (rollup R5): rollup_semantic FIRST — it rolls the
+    # 24h ambient firehose into episode events in L1. THEN evolve — it curates +
+    # distils, now seeing those episodes. Reversed, evolve would miss the day's
+    # firehose (episodes not yet written).
+    rollup_summary = await run_rollup_semantic(
         virtual_key=virtual_key,
         user_id=user_id,
         run_id=run_id,
         run_jwt=run_jwt,
-        model=body.get("model"),
-        output_language=str(body.get("generation_language") or "en"),
+        model=model,
+        output_language=output_language,
     )
-    return summary
+    evolve_summary = await run_evolve(
+        trigger_kind=TRIGGER_DAILY,
+        virtual_key=virtual_key,
+        user_id=user_id,
+        run_id=run_id,
+        run_jwt=run_jwt,
+        model=model,
+        output_language=output_language,
+    )
+    return {"rollup_semantic": rollup_summary, "evolve": evolve_summary}
 
 
 @router.post("/agent/run/evolve", status_code=status.HTTP_200_OK)
@@ -73,6 +91,7 @@ async def post_run_evolve(
     if not virtual_key:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "virtual_key required")
     summary = await run_evolve(
+        trigger_kind=TRIGGER_ON_EVENT,
         virtual_key=virtual_key,
         user_id=user_id,
         run_id=run_id,
@@ -85,34 +104,7 @@ async def post_run_evolve(
     return summary
 
 
-@router.post("/agent/run/crystallize", status_code=status.HTTP_200_OK)
-async def post_run_crystallize(
-    body: dict = Body(...),
-    authorization: str | None = Header(default=None),
-):
-    """Distill one chat session into memories + skill triggers.
-
-    Triggered by web's scheduler dispatcher when a `crystallize` task
-    fires (was previously fired inline from the chat worker on session
-    timeout — moved to scheduler so the run is observable + retryable
-    + survives chat-worker restart, same lifecycle as dream/evolve).
-    """
-    user_id, run_id, run_jwt = _verify(authorization)
-    if user_id != body.get("user_id"):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "user_id mismatch")
-    virtual_key = body.get("virtual_key", "")
-    if not virtual_key:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "virtual_key required")
-    session_key = body.get("session_key") or ""
-    if not session_key:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "session_key required")
-    summary = await run_crystallize(
-        virtual_key=virtual_key,
-        user_id=user_id,
-        run_id=run_id,
-        session_key=session_key,
-        run_jwt=run_jwt,
-        model=body.get("model"),
-        output_language=str(body.get("generation_language") or "en"),
-    )
-    return summary
+# (the /agent/run/crystallize endpoint is gone — crystallize / chat_burst
+# distillation was deleted, design §八: single-session distillation was two-sided
+# dead, covered by the hot path + daily evolve. The web dispatcher no longer
+# routes a crystallize task here.)

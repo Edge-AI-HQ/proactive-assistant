@@ -1,12 +1,11 @@
-"""/api/agent/raw/{toolkit}/{entity} — raw reader over both stores.
+"""/api/agent/raw/{toolkit}/{entity} — one raw reader, routed by domain.
 
-Typed toolkits resolve via the _RAW_TABLES allowlist (so callers can't
-probe arbitrary table names — defense against a confused-LLM injection
-where a tool param ends up in a table name). Every other (toolkit,
-entity) pair reads the generic pai_raw_events store, where both values
-are SQL parameters, not identifiers. A toolkit's storage is exclusively
-one or the other; _RAW_TABLES is the routing truth. Both share the
-envelope: id + occurred_at + ingested_at + dedupe_key (+ payload).
+This is the single retrieval interface over L0 (doc §62 原则 7); storage is split
+by domain (doc §三): toolkit='device' reads pai_raw_device (kind discriminator),
+every other source reads pai_raw_apps (toolkit + entity_type). toolkit/entity are
+SQL *parameters* (not identifiers) — arbitrary slugs are safe, an unknown pair
+just returns zero rows, and a confused-LLM tool param can never become a table
+name. Envelope: id + occurred_at + ingested_at + dedupe_key (+ payload).
 
 Filters: ?since=<iso> ?until=<iso> ?limit=N ?offset=N.
 Optional ?dedupeKey=<exact>.
@@ -30,13 +29,12 @@ from . import custom_mcp, ingest_runner, raw_sources, recipe_infer
 router = APIRouter(prefix="/api/agent/raw", tags=["agent-raw"])
 
 
-# (toolkit, entity) → physical table name. Only entries listed here are
-# readable; everything else 404s. Derived from the raw_sources registry
-# (the single source of truth for storage routing) so this allowlist and
-# the UI/dashboard enumerations can't drift apart.
-_RAW_TABLES: dict[tuple[str, str], str] = raw_sources.typed_path_table_map()
-
-_RAW_CONNECTOR_TOOLKITS: dict[tuple[str, str], str] = raw_sources.typed_path_composio_map()
+# (path_toolkit, entity) → Composio slug for the known sources, for the
+# connection-active check. Derived from the raw_sources registry (the single
+# source of truth) so this and the UI/dashboard enumerations can't drift apart.
+# No table-name map: domain picks the table (pai_raw_apps / pai_raw_device),
+# toolkit/entity stay SQL params.
+_RAW_CONNECTOR_TOOLKITS: dict[tuple[str, str], str] = raw_sources.path_composio_map()
 
 
 def _raw_key(toolkit: str, entity: str) -> tuple[str, str]:
@@ -131,19 +129,39 @@ async def list_raw(
     offset: int = Query(0, ge=0),
     dedupe_key: str | None = Query(None, alias="dedupeKey"),
 ):
-    """Read recent rows for (toolkit, entity). Typed toolkits resolve via
-    the _RAW_TABLES allowlist; everything else reads the generic
-    pai_raw_events store (toolkit/entity are SQL *parameters* there, so
-    arbitrary slugs are safe — unknown pairs just return zero rows).
+    """Read recent rows for (toolkit, entity), routed to the source's L0 domain
+    table. toolkit/entity are SQL *parameters* (not identifiers), so arbitrary
+    slugs are safe — unknown pairs just return zero rows.
 
-    Order: occurred_at DESC (most-recent-first). Both branches share the
-    user_id + id + occurred_at + ingested_at + dedupe_key envelope.
+    Routing (doc §62 原则 7 — one retrieval interface, storage split by domain):
+    toolkit='device' (or a registered device source) reads pai_raw_device by
+    kind=entity; every other source reads pai_raw_apps by toolkit(slug) +
+    entity_type.
+
+    Order: occurred_at DESC (most-recent-first). Envelope:
+    user_id + id + occurred_at + ingested_at + dedupe_key (+ payload).
     """
     key = _raw_key(toolkit, entity)
-    table = _RAW_TABLES.get(key)
-    # Generic store: the path toolkit IS the composio slug.
-    composio_toolkit = _RAW_CONNECTOR_TOOLKITS.get(key) if table is not None else key[0]
-    if table is None and await custom_mcp.is_custom_mcp_active(pool, run.user_id, key[0]):
+    source = raw_sources.by_path(toolkit, entity)
+    # Domain routes the read: device → pai_raw_device (kind discriminator, no
+    # Composio connection behind it); apps → pai_raw_apps (Composio slug +
+    # entity_type; short path aliases gcal→googlecalendar resolve via the
+    # registry). A registered source carries its domain; a dynamic long-tail
+    # (custom MCP / inferred) is apps unless the path toolkit is literally
+    # 'device'. composio_toolkit drives the connection check, None for device.
+    if source is not None:
+        is_device = source.domain == "device"
+        stored_toolkit = source.composio_toolkit or source.path_toolkit
+        composio_toolkit = source.composio_toolkit
+    else:
+        is_device = key[0] == "device"
+        stored_toolkit = key[0]
+        composio_toolkit = None if is_device else key[0]
+    if (
+        source is None
+        and not is_device
+        and await custom_mcp.is_custom_mcp_active(pool, run.user_id, key[0])
+    ):
         connector_active: bool | None = True
     else:
         connector_active = (
@@ -159,11 +177,14 @@ async def list_raw(
             limit=limit,
             offset=offset,
         )
-    if table is not None:
-        # Table name comes from a static allowlist; safe to format into SQL.
-        sql = f"""
-            SELECT * FROM {table}
+    # Route to the domain table. Discriminator values are SQL params — arbitrary
+    # slugs are safe, unknown pairs just return zero rows. Shared envelope: id +
+    # occurred_at + ingested_at + dedupe_key (+ payload).
+    if is_device:
+        sql = """
+            SELECT * FROM pai_raw_device
             WHERE user_id = %s
+              AND kind = %s
               AND (%s::timestamptz IS NULL OR occurred_at >= %s)
               AND (%s::timestamptz IS NULL OR occurred_at <= %s)
               AND (%s::text IS NULL OR dedupe_key = %s)
@@ -172,6 +193,7 @@ async def list_raw(
         """
         params: tuple[Any, ...] = (
             run.user_id,
+            key[1],
             since,
             since,
             until,
@@ -183,7 +205,7 @@ async def list_raw(
         )
     else:
         sql = """
-            SELECT * FROM pai_raw_events
+            SELECT * FROM pai_raw_apps
             WHERE user_id = %s
               AND toolkit = %s
               AND entity_type = %s
@@ -195,7 +217,7 @@ async def list_raw(
         """
         params = (
             run.user_id,
-            key[0],
+            stored_toolkit,
             key[1],
             since,
             since,

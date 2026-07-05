@@ -68,62 +68,6 @@ def test_clamp_limit_defaults_and_bounds():
     assert connector_ingest._clamp_limit(42) == 42
 
 
-def test_map_gmail_message_basic():
-    raw = {
-        "id": "abc123",
-        "threadId": "thread-1",
-        "subject": "Hi",
-        "sender": "alice@example.com",
-        "to": "bob@example.com, carol@example.com",
-        "messageText": "Hello there",
-        "messageTimestamp": "2026-04-24T00:50:54Z",
-        "labelIds": ["INBOX", "UNREAD"],
-    }
-    mapped = connector_ingest._map_gmail_message(raw)
-    assert mapped is not None
-    assert mapped["message_id"] == "abc123"
-    assert mapped["thread_id"] == "thread-1"
-    assert mapped["from_addr"] == "alice@example.com"
-    assert mapped["to_addrs"] == ["bob@example.com", "carol@example.com"]
-    assert mapped["subject"] == "Hi"
-    assert mapped["body"] == "Hello there"
-    assert mapped["label_ids"] == ["INBOX", "UNREAD"]
-    assert mapped["occurred_at"].year == 2026
-
-
-def test_map_gmail_message_returns_none_without_id():
-    # Caller (_upsert_gmail) is the boundary that filters non-dicts,
-    # so the mapper trusts the input is a dict.
-    assert connector_ingest._map_gmail_message({"subject": "no id"}) is None
-
-
-def test_map_gcal_event_basic():
-    raw = {
-        "id": "evt-9",
-        "summary": "Lunch",
-        "location": "Cafe",
-        "start": {"dateTime": "2026-05-10T12:00:00Z"},
-        "end": {"dateTime": "2026-05-10T13:00:00Z"},
-        "attendees": [
-            {"email": "alice@example.com"},
-            {"email": "bob@example.com"},
-        ],
-        "status": "confirmed",
-    }
-    mapped = connector_ingest._map_gcal_event(raw)
-    assert mapped is not None
-    assert mapped["event_id"] == "evt-9"
-    assert mapped["calendar_id"] == "primary"  # falls back when missing
-    assert mapped["title"] == "Lunch"
-    assert mapped["attendees"] == ["alice@example.com", "bob@example.com"]
-    assert mapped["start_at"] is not None
-    assert mapped["end_at"] is not None
-
-
-def test_map_gcal_event_returns_none_without_id():
-    assert connector_ingest._map_gcal_event({"summary": "no id"}) is None
-
-
 # ── unsupported toolkit short-circuits ─────────────────────────────────
 
 

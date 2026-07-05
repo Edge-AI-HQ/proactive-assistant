@@ -164,8 +164,11 @@ export class AmbientRuntime {
     }
     if (options.enableTimers !== false) {
       this.startDrainTimer();
-      this.startTimelineSummaryTimer(options.timelineSummaryIntervalMs);
-      this.startContextSnapshotTimer(options.contextSnapshotIntervalMs);
+      // 方案 A (2026-07-01): 手机不再做本地聚合 / LLM summary(下沉后端 memory 架构)。
+      // 停掉 timeline summary(本地 LLM)+ context snapshot(15min 聚合)两个定时器 —
+      // 各 source event 由 ingestLocalSignal 直接上报。方法保留,恢复时取消注释即可。
+      // this.startTimelineSummaryTimer(options.timelineSummaryIntervalMs);
+      // this.startContextSnapshotTimer(options.contextSnapshotIntervalMs);
       this.startSourceWatchdog(options.sourceWatchdogIntervalMs);
     }
     console.info(`${POWER_LOG_PREFIX} runtime created`, {
@@ -366,6 +369,9 @@ export class AmbientRuntime {
       this.lastFlushTs = Date.now();
       this.lastIngestError = null;
       await this.refreshOutboxCount();
+      // 方案 A (2026-07-01): 入 outbox 后立即 drain 上报,不等 drain 定时器 →
+      // 事件级实时上报。定时器保留作兜底(网络失败重试)。
+      void this.drain();
     } catch (err) {
       this.lastIngestError = describeError(err);
       throw err;
@@ -376,10 +382,11 @@ export class AmbientRuntime {
 
   private async ingestLocalSignal(item: PersonalSignalInput): Promise<void> {
     try {
-      const timelineSignals = await this.timelinePipeline.ingestSignal(item);
-      for (const signal of timelineSignals) {
-        this.buffer.push(signal);
-      }
+      // 方案 A (2026-07-01): 手机是哑采集器。各 source 信号直接进 outbox 上报,
+      // 不再走本地 timeline pipeline 聚合成 candidate_window、不做本地 LLM summary。
+      // 后端 recipe 按 source kind (device.location / session_summary / ...) 处理 →
+      // projector 实时投 L1 event。聚合/去噪/摘要全部下沉后端 memory 架构。
+      this.buffer.push(item);
       this.lastIngestError = null;
       await this.refreshOutboxCount();
     } catch (err) {

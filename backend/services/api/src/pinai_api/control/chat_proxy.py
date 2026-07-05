@@ -154,9 +154,8 @@ async def call_generate(
     virtual_key: str,
     run_id: str | None = None,
     focus: str | None = None,
-    matched_patterns: list[dict[str, Any]] | None = None,
-    context_since: datetime | None = None,
-    context_until: datetime | None = None,
+    anchor: datetime | None = None,
+    cache_ttl: str | None = None,
     generation_request: dict[str, Any] | None = None,
     timezone: str | None = None,
 ) -> dict[str, Any]:
@@ -170,10 +169,6 @@ async def call_generate(
     pai_scheduled_tasks → pai_scheduled_task_runs → pai_pipeline_runs.
     Sync /api/generate callers leave it None and accept the chat
     worker's own id (legacy behavior).
-
-    `matched_patterns` is the web-side pattern matcher output (see
-    docs/plans/2026-05-15-pattern-driven-card-generation.mdx Phase 2).
-    Chat reads it from the payload; chat must NOT query the pattern DB.
     """
     token, jwt_run_id = sign_agent_run_jwt(
         user_id=user_id,
@@ -190,12 +185,12 @@ async def call_generate(
         body["run_id"] = run_id
     if focus:
         body["focus"] = focus
-    if matched_patterns:
-        body["matched_patterns"] = matched_patterns
-    if context_since is not None:
-        body["context_since"] = context_since.isoformat()
-    if context_until is not None:
-        body["context_until"] = context_until.isoformat()
+    if anchor is not None:
+        # Per-user context anchor (design §4.2) — the engine rebuilds the
+        # cache-stable arrival log deterministically from it.
+        body["anchor"] = anchor.isoformat()
+    if cache_ttl:
+        body["cache_ttl"] = cache_ttl
     if generation_request is not None:
         body["generation_request"] = generation_request
     if timezone:

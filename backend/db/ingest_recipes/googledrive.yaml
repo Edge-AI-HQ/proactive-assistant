@@ -9,6 +9,9 @@ since_param: q
 since_format: gdrive_query
 result_path: [files]
 id_field: id
+entity_type: files
+timestamp_path: [modifiedTime]
+title_path: [name]
 sync_interval_hours: 12
 description: "User's recently modified / shared Drive files (excluding trash and folders)."
 notes: |

@@ -73,7 +73,7 @@ async def post_with_jwt(path: str, body: dict[str, Any], *, jwt: str) -> Any:
 
     Used by callers that hold the run JWT directly but run outside
     `run_context()` — e.g. the background one-shot sandbox jobs
-    (dream / crystallize / evolve), whose usage reporting must still attribute
+    (dream / evolve), whose usage reporting must still attribute
     to the right user even though `current_run_jwt` isn't set on that path."""
     resp = await _get_client().post(path, json=body, headers={"Authorization": f"Bearer {jwt}"})
     if resp.status_code >= 400:

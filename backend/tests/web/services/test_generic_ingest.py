@@ -1,8 +1,8 @@
-"""Unit tests for generic_ingest (pai_raw_events mapper + upserter) and
+"""Unit tests for generic_ingest (pai_raw mapper + upserter) and
 the generic fallback wiring in connector_ingest.
 
 Pure mapper tests run anywhere; the upsert/read-back tests need
-TEST_DATABASE_URL with migration 089 applied.
+TEST_DATABASE_URL with migration 110 (pai_raw) applied.
 """
 
 from __future__ import annotations
@@ -109,20 +109,109 @@ def test_map_item_truncates_oversized_payload():
     assert mapped["dedupe_key"] == "foo:items:big-1"
 
 
+def test_map_item_all_day_uses_timestamp_fallback_path():
+    """GCal all-day events carry start.date, not start.dateTime. Without a
+    fallback the mapper yields occurred_at=None → the upsert's COALESCE turns it
+    into NOW, piling every all-day recurring instance onto the ingest day (the
+    "100 Office events all on today" bug). timestamp_fallback_path=[start,date]
+    fixes it; timed events still take the primary [start,dateTime] path."""
+    recipe = _recipe(
+        toolkit="googlecalendar",
+        entity_type="events",
+        timestamp_path=["start", "dateTime"],
+        timestamp_fallback_path=["start", "date"],
+        title_path=["summary"],
+        snippet_path=[],
+    )
+    all_day = {"id": "evt-allday", "summary": "Office", "start": {"date": "2024-12-30"}}
+    mapped = generic_ingest.map_item(
+        all_day, toolkit="googlecalendar", entity_type="events", recipe=recipe
+    )
+    assert mapped is not None
+    assert mapped["occurred_at"] == datetime(2024, 12, 30, 0, 0)  # from start.date, not NOW
+
+    timed = {"id": "evt-timed", "summary": "Sync", "start": {"dateTime": "2026-06-30T15:00:00Z"}}
+    mapped2 = generic_ingest.map_item(
+        timed, toolkit="googlecalendar", entity_type="events", recipe=recipe
+    )
+    assert mapped2 is not None
+    assert mapped2["occurred_at"] == datetime(2026, 6, 30, 15, 0, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_run_fetch_init_window_and_pagination(monkeypatch):
+    """init (since=None): inject an explicit timeMin/timeMax window AND follow
+    the page token across pages, instead of the toolkit's opaque default first
+    page. (This is the 'only got last few days' fix.)"""
+    from types import SimpleNamespace
+
+    from pinai_api.domains.connector.apps import ingest_runner
+
+    recipe = Recipe.model_validate(
+        {
+            "toolkit": "googlecalendar",
+            "slug": "GCAL_LIST",
+            "entity_type": "events",
+            "result_path": ["items"],
+            "id_field": "id",
+            "init_since_param": "timeMin",
+            "init_until_param": "timeMax",
+            "init_since_format": "iso",
+            "init_lookback_days": 180,
+            "init_lookahead_days": 90,
+            "init_max_items": 1000,
+            "page_token_response_path": ["nextPageToken"],
+            "page_token_arg": "pageToken",
+        }
+    )
+    monkeypatch.setattr(ingest_runner, "load_recipe", lambda tk: recipe)
+
+    pages = [
+        SimpleNamespace(
+            successful=True,
+            error=None,
+            data={"items": [{"id": "e1"}, {"id": "e2"}], "nextPageToken": "tok2"},
+        ),
+        SimpleNamespace(
+            successful=True,
+            error=None,
+            data={"items": [{"id": "e3"}], "nextPageToken": None},
+        ),
+    ]
+    seen_args: list[dict] = []
+    calls = {"n": 0}
+
+    async def _fake_execute(user, slug, args, *, connected_account_id):
+        seen_args.append(dict(args))
+        r = pages[calls["n"]]
+        calls["n"] += 1
+        return r
+
+    monkeypatch.setattr(ingest_runner.cs, "execute", _fake_execute)
+
+    items = await ingest_runner.run_fetch(
+        SimpleNamespace(id=1), "googlecalendar", "cid", since=None, pool=None
+    )
+    assert [i["id"] for i in items] == ["e1", "e2", "e3"]  # paginated across both pages
+    assert "timeMin" in seen_args[0] and "timeMax" in seen_args[0]  # init window injected
+    assert seen_args[1].get("pageToken") == "tok2"  # token carried to page 2
+
+
 # ── generic fallback wiring ─────────────────────────────────────────────
 
 
-def test_resolve_upserter_prefers_typed():
+def test_resolve_upserter_is_always_generic():
+    """Unified L0: every toolkit — even gmail — resolves to the recipe-driven
+    generic pai_raw upserter. There are no per-toolkit typed upserters anymore."""
     recipe = _recipe(toolkit="gmail")
-    assert (
-        connector_ingest._resolve_upserter("gmail", recipe) is connector_ingest._UPSERTERS["gmail"]
-    )
+    upserter = connector_ingest._resolve_upserter("gmail", recipe)
+    assert callable(upserter)
 
 
 def test_resolve_upserter_falls_back_to_generic():
     recipe = _recipe()
     upserter = connector_ingest._resolve_upserter("notion", recipe)
-    assert upserter not in connector_ingest._UPSERTERS.values()
+    assert callable(upserter)
 
 
 def test_cron_for_interval():
@@ -174,7 +263,7 @@ async def test_upsert_generic_roundtrip_and_dedupe(pool, user_ids):
         cur = await conn.execute(
             """
             SELECT external_id, occurred_at, title, snippet, payload, dedupe_key
-            FROM pai_raw_events
+            FROM pai_raw_apps
             WHERE user_id = %s AND toolkit = %s AND entity_type = %s
             ORDER BY occurred_at DESC
             """,
@@ -199,7 +288,7 @@ async def test_upsert_generic_no_timestamp_keeps_original_occurred_at(pool, user
             await generic_ingest.upsert_generic(conn, user_a, "foo", "items", recipe, [item]) == 1
         )
         cur = await conn.execute(
-            "SELECT occurred_at FROM pai_raw_events WHERE user_id=%s AND dedupe_key=%s",
+            "SELECT occurred_at FROM pai_raw_apps WHERE user_id=%s AND dedupe_key=%s",
             (user_a, "foo:items:stable-1"),
         )
         first = (await cur.fetchone())["occurred_at"]
@@ -210,7 +299,7 @@ async def test_upsert_generic_no_timestamp_keeps_original_occurred_at(pool, user
     async with user_scoped_tx(pool, user_a) as conn:
         await generic_ingest.upsert_generic(conn, user_a, "foo", "items", recipe, [item])
         cur = await conn.execute(
-            "SELECT occurred_at FROM pai_raw_events WHERE user_id=%s AND dedupe_key=%s",
+            "SELECT occurred_at FROM pai_raw_apps WHERE user_id=%s AND dedupe_key=%s",
             (user_a, "foo:items:stable-1"),
         )
         second = (await cur.fetchone())["occurred_at"]
@@ -253,7 +342,7 @@ def _make_task(
 @pytest.mark.asyncio
 async def test_run_init_generic_full_wiring(pool, user_ids, monkeypatch):
     """connector.init for a toolkit with a generic recipe but no typed
-    upserter: items land in pai_raw_events, a REAL evolve task is
+    upserter: items land in pai_raw, a REAL evolve task is
     enqueued, and the sync schedule cron derives from the recipe's
     sync_interval_hours (not the typed 30-minute cadence)."""
     user_a, _ = user_ids
@@ -297,7 +386,7 @@ async def test_run_init_generic_full_wiring(pool, user_ids, monkeypatch):
 
     async with service_tx(pool) as conn:
         cur = await conn.execute(
-            "SELECT external_id, title, occurred_at FROM pai_raw_events "
+            "SELECT external_id, title, occurred_at FROM pai_raw_apps "
             "WHERE user_id=%s AND toolkit='acme' AND entity_type='things' "
             "ORDER BY external_id",
             (user_a,),
@@ -310,8 +399,18 @@ async def test_run_init_generic_full_wiring(pool, user_ids, monkeypatch):
             (user_a,),
         )
         sched_rows = await cur.fetchall()
+        # The ingest tx also projected the raw rows → L1 events (pending).
+        cur = await conn.execute(
+            "SELECT event_type, source_ref, curated_at FROM pai_events "
+            "WHERE user_id=%s AND source='composio' ORDER BY occurred_at",
+            (user_a,),
+        )
+        event_rows = await cur.fetchall()
 
     assert [r["external_id"] for r in raw_rows] == ["t-1", "t-2"]
+    assert len(event_rows) == 2  # projector ran in the same ingest tx
+    assert all(e["curated_at"] is None for e in event_rows)  # projector writes uncurated
+    assert all(e["event_type"] == "interaction" for e in event_rows)  # acme unknown → interaction
     assert raw_rows[0]["title"] == "Thing one"
     assert [r["id"] for r in sched_rows] == ["evolve.acme.cid-1", "sync.acme.cid-1"]
     evolve_row, sync_row = sched_rows
@@ -398,7 +497,7 @@ async def test_run_init_fanout(pool, user_ids, monkeypatch):
 
     async with service_tx(pool) as conn:
         cur = await conn.execute(
-            "SELECT toolkit, external_id FROM pai_raw_events WHERE user_id=%s ORDER BY toolkit",
+            "SELECT toolkit, external_id FROM pai_raw_apps WHERE user_id=%s ORDER BY toolkit",
             (user_a,),
         )
         raw_rows = await cur.fetchall()
@@ -541,7 +640,7 @@ async def test_upsert_generic_user_scoping(pool, user_ids):
         )
     async with user_scoped_tx(pool, user_b) as conn:
         cur = await conn.execute(
-            "SELECT count(*) AS n FROM pai_raw_events WHERE user_id=%s AND toolkit='foo'",
+            "SELECT count(*) AS n FROM pai_raw_apps WHERE user_id=%s AND toolkit='foo'",
             (user_b,),
         )
         row = await cur.fetchone()

@@ -3,7 +3,7 @@
 
 Guards one leg of the "three hand-written copies" drift — the agent data
 plane is reachable three ways (`/api/agent/*` route ← native `@tool` ←
-`pinai_sdk`), and the sdk is hand-written (object-style `client.memory.list()`,
+`pinai_sdk`), and the sdk is hand-written (object-style `client.events.search()`,
 kept hand-written on purpose: `openapi-python-client` emits a function-style
 API that would break every Code Mode script + SDK_CHEAT_SHEET — see plan
 2026-06-02 §PR-A). If a web resource group is renamed/removed and the sdk
@@ -46,7 +46,9 @@ def _web_agent_paths() -> set[str]:
 def test_sdk_resource_prefixes_have_web_endpoints() -> None:
     web = _web_agent_paths()
     prefixes = _sdk_prefixes()
-    assert len(prefixes) >= 9, f"expected ≥9 sdk resource prefixes, got {sorted(prefixes)}"
+    # 5 resources since cards retired (recently-proposed cards are
+    # agent_decision events — read via client.events, not a cards resource).
+    assert len(prefixes) >= 5, f"expected ≥5 sdk resource prefixes, got {sorted(prefixes)}"
     missing = [p for p in prefixes if not any(w == p or w.startswith(p + "/") for w in web)]
     assert not missing, (
         f"sdk resource prefixes with no matching web /api/agent endpoint: {missing} "

@@ -9,6 +9,10 @@ since_param: since
 since_format: iso
 result_path: [issues]
 id_field: id
+entity_type: issues
+timestamp_path: [updated_at]
+title_path: [title]
+snippet_path: [body]
 sync_interval_hours: 12
 description: "Issues + PRs the user is involved in (assigned/created/mentioned/subscribed)."
 notes: |

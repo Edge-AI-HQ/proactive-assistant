@@ -27,12 +27,11 @@ router = APIRouter(prefix="/api/agent-runs", tags=["agent-runs"])
 # omitted — it runs on a recurring schedule every ~15min and would
 # clutter the indicator with non-user-initiated activity. The user only
 # needs to see things they kicked off (or that follow-up automatically:
-# init→evolve, dream, generator, crystallize).
+# init→evolve, dream, generator).
 _AGENT_KINDS = (
     "auto.dreaming",
     "connector.init",
     "connector.evolve",
-    "crystallize",
     "generator.manual",
     "generator.auto",
     "generator.chat",

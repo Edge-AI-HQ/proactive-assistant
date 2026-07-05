@@ -45,9 +45,7 @@ import {
 } from "@pin-ai/state";
 
 import { FullBleedOverlay } from "./FullBleedOverlay";
-import CrystallizePanel from "../debug/CrystallizePanel";
 import SkillsPanel from "../profile/SkillsPanel";
-import MemoriesPanel from "../profile/MemoriesPanel";
 
 const PANEL_WIDTH = 340;
 
@@ -525,10 +523,10 @@ export default function DebugPanel({
             </View>
           </SectionCard>
 
-          {/* dev 顺序：Event Log 后接 Crystallize / Skills / Memories 三诊断子面板。 */}
-          <CrystallizePanel enabled={open} />
+          {/* dev 顺序：Event Log 后接 Skills 诊断子面板。Crystallize/Memories
+              面板随 lifelong-memory 退役（web DebugPanel 同步已删）：crystallize
+              agent 已删除，pai_memory 已被 L2 portrait 取代。 */}
           <SkillsPanel enabled={open} />
-          <MemoriesPanel enabled={open} />
 
           <SectionCard>
             <Text style={styles.sectionLabel}>RUN INFO</Text>

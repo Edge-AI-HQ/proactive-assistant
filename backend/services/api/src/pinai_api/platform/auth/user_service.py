@@ -91,7 +91,7 @@ async def upsert_user_by_supabase_id(
     # minted here (see module docstring): every consumer lazy-provisions
     # via ensure_user_litellm_key, so external calls stay off the auth path.
     if row.get("inserted"):
-        from pinai_api.orchestration.default_goals import seed_default_goals  # noqa: PLC0415
+        from pinai_api.domains.memory.portrait import seed_default_goals  # noqa: PLC0415
 
         await seed_default_goals(pool, user.id)
 

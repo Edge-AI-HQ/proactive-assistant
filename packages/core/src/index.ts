@@ -22,12 +22,11 @@ export * from "./api/ambient";
 export * from "./api/cards";
 export * from "./api/composio";
 export * from "./api/conversation";
-export * from "./api/crystallize";
 export * from "./api/devices";
+export * from "./api/events";
 export * from "./api/health";
-export * from "./api/memory";
 export * from "./api/payment";
-export * from "./api/profile";
+export * from "./api/portrait";
 export * from "./api/scheduled-generators";
 export * from "./api/skills";
 

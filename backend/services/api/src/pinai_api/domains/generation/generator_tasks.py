@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import uuid
 
-from ...domains.user_model.profile import ProfileRepository
+from ...domains.user_model.settings import SettingsRepository
 from ...platform.db.repositories.scheduled_tasks import enqueue_once
 
 
@@ -38,7 +38,7 @@ async def enqueue_generator_task(
     as a normal signal-driven batch.
     """
     if output_language is None:
-        settings = await ProfileRepository(user_id, conn).get_settings()
+        settings = await SettingsRepository(user_id, conn).get_settings()
         output_language = settings.generation_language
     task_id = f"gen.{uuid.uuid4().hex[:12]}"
     payload: dict[str, object] = {

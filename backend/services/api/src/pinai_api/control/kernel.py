@@ -189,7 +189,7 @@ class AgentRunService:
         pai_agent_runs ledger row (status 'running') and return its id.
 
         RC-3: the scheduler dispatcher calls this to enter a batch agent
-        (dream / evolve / crystallize / generator) into the same run ledger as
+        (dream / evolve / generator) into the same run ledger as
         conversational agents, then drives the executor (chat /agent/run/{kind}
         or /agent/generate) + domain bookkeeping itself, and calls finish_run
         with the outcome. The executor stays in the dispatcher (plan §十七.5:

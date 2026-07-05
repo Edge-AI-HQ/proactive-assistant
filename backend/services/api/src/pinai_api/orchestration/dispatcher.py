@@ -6,7 +6,6 @@ Per-kind routing:
   connector.init     → in-process Composio ingest (services/connector_ingest)
   connector.sync     → in-process Composio incremental ingest (same handler,
                         routes by task.kind internally)
-  crystallize        → not scheduled (chat worker fires inline)
   user.prompt        → HTTP POST chat-worker /agent/chat (synthetic message)
   reminder.card      → in-process reminder card write (services/reminder_cards)
 
@@ -31,7 +30,7 @@ import logging
 import os
 import time
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from typing import Any, Protocol
 
 import httpx
@@ -40,8 +39,8 @@ from pinai_db.rls import service_tx, user_scoped_tx
 from psycopg_pool import AsyncConnectionPool
 
 from ..control.kernel import AgentRunService
-from ..domains.user_model.evolution import EvolutionRepository
-from ..domains.user_model.profile import ProfileRepository
+from ..domains.memory.curation import EvolutionRepository
+from ..domains.user_model.settings import SettingsRepository
 from ..platform.auth.agent_jwt import sign_agent_run_jwt
 from ..platform.db.repositories.scheduled_tasks import (
     ScheduledTaskRow,
@@ -113,25 +112,6 @@ _GENERATOR_KINDS: frozenset[str] = frozenset(
 )
 
 
-def _aware_utc(value: datetime) -> datetime:
-    if value.tzinfo is None or value.utcoffset() is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
-
-
-def _generation_context_since(
-    *,
-    now: datetime,
-    last_success_at: datetime | None,
-) -> datetime:
-    min_since = _aware_utc(now) - timedelta(hours=24)
-    if last_success_at is not None:
-        last = _aware_utc(last_success_at)
-        if last < min_since:
-            return last
-    return min_since
-
-
 def _generation_request_from_task(task: ScheduledTaskRow) -> dict[str, Any] | None:
     if task.kind != "generator.scheduled":
         return None
@@ -160,7 +140,6 @@ _LONG_LEASE_SECONDS = 600
 _AGENT_RUN_KIND: dict[str, AgentKind] = {
     "auto.dreaming": "dream",
     "connector.evolve": "evolve",
-    "crystallize": "crystallize",
     "generator.manual": "generator",
     "generator.auto": "generator",
     "generator.chat": "generator",
@@ -198,7 +177,7 @@ class DefaultDispatcher:
         """读用户语言设置给 agent prompt;读失败回落 en(语言错不该挡 run)。"""
         try:
             async with user_scoped_tx(self._pool, user_id) as conn:
-                settings = await ProfileRepository(user_id, conn).get_settings()
+                settings = await SettingsRepository(user_id, conn).get_settings()
                 return settings.generation_language
         except Exception:
             logger.exception("generation_language read failed user=%d — fallback en", user_id)
@@ -405,16 +384,6 @@ class DefaultDispatcher:
                 run_id,  # reuse dream as a generic synthetic-prompt path
                 extra={"generation_language": await self._generation_language(task.user_id)},
             )
-        elif kind == "crystallize":
-            await self._call_chat(
-                "/agent/run/crystallize",
-                task,
-                run_id,
-                extra={
-                    "session_key": (task.payload or {}).get("session_key", ""),
-                    "generation_language": await self._generation_language(task.user_id),
-                },
-            )
         elif kind == "reminder.card":
             # 用户自建提醒:web 进程直接写卡 + 推送,零 LLM。默认 60s
             # lease 足够(纯 DB 写),不进 _AGENT_RUN_KIND(不是 agent run)。
@@ -552,21 +521,14 @@ class DefaultDispatcher:
         persistence here so the FE only needs to read pai_pipeline_runs
         keyed by `run_id == task.id`.
         """
-        from pinai_db.repositories.patterns import PatternsRepository  # noqa: PLC0415
-        from pinai_db.repositories.user_fingerprint import (  # noqa: PLC0415
-            UserFingerprintRepository,
-        )
         from pinai_db.rls import user_scoped_tx  # noqa: PLC0415
 
         from ..control.chat_proxy import call_generate  # noqa: PLC0415
         from ..domains.billing.provisioning import (  # noqa: PLC0415
             ensure_user_litellm_key,
         )
-        from ..domains.generation.pattern_matcher import match_patterns  # noqa: PLC0415
         from ..domains.generation.pipeline_persistence import persist_generator_run  # noqa: PLC0415
-        from ..domains.user_model.profile import ProfileRepository  # noqa: PLC0415
         from ..platform.auth.user_service import User  # noqa: PLC0415
-        from .phase1_seed import build_phase1_seed  # noqa: PLC0415
 
         # Lazy-provision the LiteLLM key. The manual /generate path uses
         # `_ensure_virtual_key` for this — without mirroring it here,
@@ -608,71 +570,36 @@ class DefaultDispatcher:
         # Already normalized at the /api/agent/generate boundary; trust it.
         focus = payload.get("focus")
 
-        # Phase 2: pattern matcher runs in the web process so the chat
-        # process never has to query the pattern DB. The web-side phase1
-        # collector pulls a coarse snapshot of the user's signals before
-        # chat fires its full data-collector subagent — enough for the
-        # matcher to surface cold-start hits even though the deep phase1
-        # only exists inside the chat sandbox.
-        # docs/plans/2026-05-15-pattern-driven-card-generation.mdx.
-        matched_payload: list[dict[str, Any]] = []
-        try:
-            payload_phase1 = (
-                payload.get("phase1") if isinstance(payload.get("phase1"), dict) else None
-            )
-            async with user_scoped_tx(self._pool, task.user_id) as conn:
-                phase1_seed = payload_phase1 or await build_phase1_seed(conn, task.user_id)
-                repo = PatternsRepository(task.user_id, conn)
-                fp = UserFingerprintRepository(task.user_id, conn)
-                match_result = await match_patterns(
-                    repo,
-                    phase1_seed or {},
-                    fingerprint=fp,
-                )
-            matched_payload = [m.to_payload() for m in match_result.matched]
-        except Exception:  # noqa: BLE001
-            # Pattern matching is best-effort in Phase 2 — never block
-            # generation if the matcher trips on a malformed DSL row.
-            logger.exception(
-                "pattern matcher failed user=%d run=%s (continuing with empty match list)",
-                task.user_id,
-                run_id,
-            )
-
-        # Profile timezone → generator's "Today is …" uses the user-local
+        # User timezone → generator's "Today is …" uses the user-local
         # date (bare UTC shows yesterday to an Asia/Shanghai user before
         # 08:00 local).
         async with user_scoped_tx(self._pool, task.user_id) as conn:
-            prof = await ProfileRepository(task.user_id, conn).get_profile()
-        user_timezone = (prof.timezone if prof and prof.timezone else None) or "UTC"
+            settings = await SettingsRepository(task.user_id, conn).get_settings()
+        user_timezone = settings.timezone or "UTC"
+        # Cache TTL follows the user's tick cadence (design §4.3): intervals
+        # ≤5min ride the default 5m entry (refreshed on every hit — the chain
+        # never goes cold); anything slower needs the 1h tier or every tick
+        # pays the cache-write premium for an entry that expires unused.
+        # manual/chat triggers share the SAME context line, so they inherit
+        # the same TTL decision.
+        cache_ttl = (
+            "5m"
+            if settings.auto_generate and settings.auto_generate_interval_minutes <= 5
+            else "1h"
+        )
 
-        context_until = datetime.now(UTC)
-        context_since = context_until - timedelta(hours=24)
-        try:
-            async with user_scoped_tx(self._pool, task.user_id) as conn:
-                cur = await conn.execute(
-                    """
-                    SELECT completed_at
-                    FROM pai_pipeline_runs
-                    WHERE user_id = %s
-                      AND status = 'completed'
-                      AND completed_at IS NOT NULL
-                    ORDER BY completed_at DESC
-                    LIMIT 1
-                    """,
-                    (task.user_id,),
-                )
-                last_success = await cur.fetchone()
-            context_since = _generation_context_since(
-                now=context_until,
-                last_success_at=last_success.get("completed_at") if last_success else None,
-            )
-        except Exception:  # noqa: BLE001
-            logger.exception(
-                "generator context window lookup failed user=%d run=%s; falling back to 24h",
-                task.user_id,
-                run_id,
-            )
+        # Context anchor (design §4.2/§4.6): the ONE piece of state behind the
+        # generator's cache-stable prompt. Resolve applies the reset rules
+        # (fresh / token budget / max age); the engine rebuilds the arrival
+        # log deterministically from it, so consecutive ticks share a
+        # byte-identical prefix and the provider prompt cache hits.
+        from ..domains.generation.context_anchor import (  # noqa: PLC0415
+            resolve_anchor,
+            store_anchor,
+        )
+
+        async with user_scoped_tx(self._pool, task.user_id) as conn:
+            decision = await resolve_anchor(conn, task.user_id)
 
         result = await call_generate(
             user_id=task.user_id,
@@ -681,25 +608,41 @@ class DefaultDispatcher:
             virtual_key=virtual_key,
             run_id=run_id,
             focus=focus,
-            matched_patterns=matched_payload or None,
-            context_since=context_since,
-            context_until=context_until,
+            anchor=decision.anchor,
+            cache_ttl=cache_ttl,
             generation_request=_generation_request_from_task(task),
             timezone=user_timezone,
         )
-        # Persist into pai_pipeline_runs / pai_card_evaluations using the
-        # same id the task / FE polled with — `run_id` here equals
-        # `task.id` thanks to the dispatch-level alignment above.
-        # matched_payload is forwarded so pai_card_pattern_hits gets the
-        # original matcher evidence per pattern (chat-side cannot read
-        # the pattern DB — see trust boundary).
+        # Persist into pai_pipeline_runs using the same id the task / FE
+        # polled with — `run_id` here equals `task.id` thanks to the
+        # dispatch-level alignment above. Each card also lands one L1
+        # agent_decision event in the same transaction (design §4.3).
         await persist_generator_run(
             self._pool,
             user_id=task.user_id,
             payload=result,
             trigger=str(payload.get("trigger") or "manual"),
-            matched_patterns=matched_payload or None,
         )
+        # Store the anchor the engine ACTUALLY built on (== requested, or ==
+        # now after an in-place budget reset) + real usage for estimate
+        # calibration. Best-effort: a failed write costs one cache miss,
+        # never the run.
+        raw_effective = result.get("effective_anchor")
+        try:
+            effective_anchor = (
+                datetime.fromisoformat(raw_effective)
+                if isinstance(raw_effective, str)
+                else decision.anchor
+            )
+            async with user_scoped_tx(self._pool, task.user_id) as conn:
+                await store_anchor(
+                    conn,
+                    task.user_id,
+                    anchor=effective_anchor,
+                    prompt_tokens=result.get("prompt_tokens"),
+                )
+        except Exception:  # noqa: BLE001
+            logger.exception("generation anchor store failed user=%d run=%s", task.user_id, run_id)
 
         # Fan out one card-thread bootstrap turn per card so the card-
         # execution agent runs ahead of the user opening the card: enqueue

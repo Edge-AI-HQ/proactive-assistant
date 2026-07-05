@@ -1,0 +1,39 @@
+# Memory retrieval eval — objective ranking by reference signal (design §5.5 / §七).
+#
+# ANSWER KEY (synthetic demo). See retrieval_structured.yaml for the ground-truth /
+# tamper-evidence conventions.
+#
+# This fixture pins the WP3 objective-ranking behaviour: on the agent-retrieval
+# path (run_id given), a frequently-referenced event outranks an un-referenced one
+# in the SAME recency window — "usage drives importance", no LLM score. seed_events
+# may carry an optional `reference_count`; the harness driver stamps it onto the row
+# after append (AppendEventInput has no such field — reference_count is bumped by
+# retrieval in production, seeded directly here).
+name: retrieval_reference
+description: >
+  Objective ranking — within one recency window, the event with the higher
+  reference_count ranks first on the run_id (agent) path. Pins the WP3 reference
+  signal chain so a regression that kills the bump (痛点⑦ dead chain) is caught.
+
+# Both meetings share occurred_at (recency factor equal) so reference_count is the
+# only differentiator. with_run_id queries take the objective-score ORDER BY.
+seed_events:
+  - id: ref_hi
+    event_type: meeting
+    title: "Recurring board sync"
+    occurred_at: "2026-06-20T10:00:00Z"
+    curated: true
+    reference_count: 8
+  - id: ref_lo
+    event_type: meeting
+    title: "One-off intro call"
+    occurred_at: "2026-06-20T10:00:00Z"
+    curated: true
+    reference_count: 0
+
+queries:
+  # Agent retrieval (run_id) → objective score → high-reference event first.
+  - name: high_reference_ranks_first
+    params: {event_type: meeting, limit: 10, with_run_id: true}
+    expected_ids: [ref_hi, ref_lo]
+    thresholds: {mrr: 1.0, "ndcg@10": 1.0}

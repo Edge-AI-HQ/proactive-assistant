@@ -1,26 +1,40 @@
 """Pipeline-run persistence — write completed runs to pai_pipeline_runs.
 
-Moved verbatim from routes/ui/generate.py so the service layer can share
-it: generator persistence (dispatcher `_run_generator`) and reminder-card
-persistence (services/reminder_cards) both land cards through here.
-
 Two entry points:
   * :func:`persist_pipeline_run_strict` — the kernel; raises on failure
     (reminder.card relies on the raise to trigger scheduler retry).
-  * :func:`persist_generator_run` — best-effort wrapper with the exact
-    pre-split semantics (log + swallow); generator cards already returned
-    to the client, so persistence failure must not fail the run.
+  * :func:`persist_generator_run` — best-effort wrapper; generator cards
+    already returned to the client, so persistence failure must not fail
+    the run.
+
+Card decisions → L1 (design §4.3): each generated card also appends one
+`agent_decision` event in the SAME transaction — the generation side's ONLY
+L1 write. Silent runs (0 cards) write nothing anywhere. Reminder cards
+(zero-LLM scheduled nudges) are not AI proposals, so they skip the decision
+write (`record_decisions=False`).
+
+Pattern hits persistence is retired with the pattern matcher (design §六
+后续迭代); `pai_card_evaluations` keeps its write path for wire compat but
+the agentic generator sends no evaluations, so it no-ops.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
+from datetime import UTC, datetime
 from typing import Any
 
 from pinai_db.rls import user_scoped_tx
 
+from ..memory.events import AppendEventInput, EventsRepository, gen_event_id
+
 logger = logging.getLogger(__name__)
+
+# Card citations are `{toolkit} event id={event id}, title=…` — pull the
+# event ids back out so the decision event can anchor to its evidence.
+_EVENT_ID_RE = re.compile(r"id=(evt_[a-z0-9_-]+)", re.IGNORECASE)
 
 
 async def persist_pipeline_run_strict(
@@ -29,18 +43,17 @@ async def persist_pipeline_run_strict(
     user_id: int,
     payload: dict,
     trigger: str,
-    matched_patterns: list[dict[str, Any]] | None = None,
+    record_decisions: bool = True,
 ) -> None:
     """落库内核:失败抛异常(reminder.card 靠它触发 retry)。
 
-    Writes the completed run to pai_pipeline_runs + pai_card_evaluations
-    so /api/cards + UI recovery flows can find them. Also persists
-    pai_card_pattern_hits when the agent emits pattern_id annotations on
-    its evaluations (Phase 2).
+    Writes the completed run to pai_pipeline_runs (+ pai_card_evaluations
+    when the payload carries evaluations) and appends one L1 agent_decision
+    event per card in the same transaction (`record_decisions=True`).
 
     Note on `id` vs `run_id`: the legacy schema kept these separate to
-    let one pipeline span multiple LangGraph runs. Step 1 generator is
-    a single agent invocation, so we set both columns to the same value
+    let one pipeline span multiple LangGraph runs. The generator is a
+    single agent invocation, so we set both columns to the same value
     — the run_id the client got from /api/generate is also what they
     send to /api/runs/{id} for polling.
     """
@@ -85,14 +98,13 @@ async def persist_pipeline_run_strict(
             cards=cards,
             evaluations=evaluations,
         )
-        await _persist_pattern_hits(
-            conn,
-            user_id=user_id,
-            run_id=run_id,
-            cards=cards,
-            evaluations=evaluations,
-            matched_patterns=matched_patterns or [],
-        )
+        if record_decisions:
+            await _append_card_decisions(
+                conn,
+                user_id=user_id,
+                run_id=run_id,
+                cards=cards,
+            )
 
 
 async def persist_generator_run(
@@ -101,17 +113,15 @@ async def persist_generator_run(
     user_id: int,
     payload: dict,
     trigger: str,
-    matched_patterns: list[dict[str, Any]] | None = None,
 ) -> None:
-    """Best-effort 包装(行为与 PR65 前完全一致):generator 卡片已经
-    返回给客户端,落库失败只 log 不阻塞。"""
+    """Best-effort 包装:generator 卡片已经返回给客户端,落库失败只 log
+    不阻塞。"""
     try:
         await persist_pipeline_run_strict(
             pool,
             user_id=user_id,
             payload=payload,
             trigger=trigger,
-            matched_patterns=matched_patterns,
         )
     except Exception:
         logger.exception(
@@ -121,130 +131,55 @@ async def persist_generator_run(
         )
 
 
-async def _persist_pattern_hits(
+async def _append_card_decisions(
     conn,
     *,
     user_id: int,
     run_id: str,
     cards: list[dict[str, Any]],
-    evaluations: list[dict[str, Any]],
-    matched_patterns: list[dict[str, Any]],
 ) -> None:
-    """Record one pai_card_pattern_hits row per card that the agent
-    annotated with a pattern_id.
+    """One L1 `agent_decision` event per generated card — the generation
+    side's only L1 write (design §4.3: 出卡才进 L1,静默零写入).
 
-    Phase 2 sourcing rule:
-      * Prefer evaluation.patternId (the evaluator decided which pattern
-        this card actually realizes after seeing sources[]).
-      * Fall back to card.patternId if the card-generator stamped it.
-      * If neither is set, no hit row.
-
-    Hallucinated pattern_ids (LLM emits a pattern that doesn't exist in
-    pai_card_patterns) are dropped *before* the INSERT: the FK constraint
-    would otherwise abort the surrounding transaction and lose the
-    evaluations / pipeline_runs rows that already committed.
-    """
-    if not cards:
-        return
-    by_pattern = {
-        str(m.get("patternId")): m
-        for m in matched_patterns
-        if isinstance(m, dict) and isinstance(m.get("patternId"), str)
-    }
-    eval_pattern_by_card: dict[str, dict[str, Any]] = {}
-    for ev in evaluations:
-        if not isinstance(ev, dict):
-            continue
-        cid = ev.get("cardId") or ev.get("card_id")
-        if isinstance(cid, str) and cid:
-            eval_pattern_by_card[cid] = ev
-
-    # First pass: collect candidate (card_id, pattern_id, eval, match) rows.
-    candidates: list[tuple[str, str, dict[str, Any], dict[str, Any]]] = []
+    `structured.kind="proactive_proposal"` keeps these distinguishable from
+    memory_edit's portrait-change events (same source/event_type).
+    `dedupe_key` is derived from the card id, so re-persisting the same run
+    (ON CONFLICT upsert above) no-ops here too. `curated=True` — an agent
+    proposal needs no evolve judgement (same stance as the memory_edit
+    double-write)."""
+    now = datetime.now(UTC)
+    repo = EventsRepository(user_id, conn)
     for card in cards:
         if not isinstance(card, dict):
             continue
         card_id = card.get("id")
-        if not isinstance(card_id, str) or not card_id:
+        title = card.get("title")
+        if not isinstance(card_id, str) or not card_id or not title:
             continue
-        ev = eval_pattern_by_card.get(card_id, {})
-        pattern_id = (
-            ev.get("patternId")
-            or ev.get("pattern_id")
-            or card.get("patternId")
-            or card.get("pattern_id")
+        sources = [s for s in (card.get("sources") or []) if isinstance(s, str)]
+        related_event_ids = sorted({m.group(1) for s in sources for m in _EVENT_ID_RE.finditer(s)})
+        await repo.append(
+            AppendEventInput(
+                id=gen_event_id(),
+                source="agent_action",
+                event_type="agent_decision",
+                occurred_at=now,
+                title=f"Card proposed: {title}"[:200],
+                body=card.get("whyNow"),
+                structured={
+                    "kind": "proactive_proposal",
+                    "card_id": card_id,
+                    "run_id": run_id,
+                    "related_event_ids": related_event_ids,
+                },
+                dedupe_key=f"card_decision:{card_id}",
+                curated=True,
+            )
         )
-        if not isinstance(pattern_id, str) or not pattern_id:
-            continue
-        candidates.append((card_id, pattern_id, ev, by_pattern.get(pattern_id, {})))
-
-    if not candidates:
-        return
-
-    # Filter out pattern_ids that don't exist in the library (LLM
-    # hallucinations) before issuing INSERTs that would otherwise trip
-    # the FK and abort the surrounding transaction.
-    requested = {p for _, p, _, _ in candidates}
-    async with conn.cursor() as cur:
-        await cur.execute(
-            "SELECT id FROM pai_card_patterns WHERE id = ANY(%s)",
-            (list(requested),),
-        )
-        existing_rows = await cur.fetchall()
-    existing = {r["id"] for r in existing_rows}
-    dropped = requested - existing
-    if dropped:
+    if cards:
         logger.info(
-            "persist pattern hits: dropping %d hallucinated pattern_ids user=%d run=%s ids=%s",
-            len(dropped),
-            user_id,
-            run_id,
-            sorted(dropped),
-        )
-
-    inserted = 0
-    for card_id, pattern_id, ev, match in candidates:
-        if pattern_id not in existing:
-            continue
-        evidence = match.get("evidence") or {}
-        base_hit_rate = match.get("baseHitRate")
-        combined_score = (
-            match.get("combinedScore") if match.get("combinedScore") is not None else base_hit_rate
-        )
-        await conn.execute(
-            """
-            INSERT INTO pai_card_pattern_hits
-              (user_id, run_id, card_id, pattern_id, subtype,
-               evidence, user_fit_score, combined_score,
-               pattern_grounding_ok)
-            VALUES (%s, %s, %s, %s, %s,
-                    %s::jsonb, %s, %s,
-                    %s)
-            ON CONFLICT (user_id, card_id, pattern_id) DO UPDATE SET
-              run_id = EXCLUDED.run_id,
-              subtype = EXCLUDED.subtype,
-              evidence = EXCLUDED.evidence,
-              user_fit_score = EXCLUDED.user_fit_score,
-              combined_score = EXCLUDED.combined_score,
-              pattern_grounding_ok = EXCLUDED.pattern_grounding_ok
-            """,
-            (
-                user_id,
-                run_id,
-                card_id,
-                pattern_id,
-                match.get("subtype"),
-                json.dumps(evidence),
-                match.get("userFitScore"),
-                combined_score,
-                bool(ev.get("patternGroundingOk") or ev.get("pattern_grounding_ok")),
-            ),
-        )
-        inserted += 1
-    if inserted:
-        logger.info(
-            "persisted %d pattern hits user=%d run=%s",
-            inserted,
+            "appended %d card-decision events user=%d run=%s",
+            len(cards),
             user_id,
             run_id,
         )
@@ -260,19 +195,14 @@ async def _persist_evaluations(
 ) -> None:
     """Insert one pai_card_evaluations row per evaluation entry.
 
-    Each entry is a CardEvaluation serialized with model_dump(by_alias=True):
-    the five dimension scores sit flat at the top level in camelCase
-    (relevance / actionability / whyNowClarity / novelty / decisionCompression).
+    The agentic generator sends no evaluations (the evaluator stage is
+    retired), so this is a no-op on the main path — kept because the table
+    still exists (expand-contract) and legacy payload replays remain valid.
 
     Best-effort within the same RLS-scoped transaction; if the rows are
     malformed we log and skip the bad ones rather than rolling the whole
     transaction back — the pipeline_runs row + final_cards JSONB above
     is the canonical record, evaluations are scoring metadata.
-
-    `cards` is used to derive `basket` per card (the goalBasket field).
-    The agent rewrites evaluation.cardId to match cards[i].id before
-    handing the payload back to web (see chat/routes/generate.py), so
-    we trust that mapping here.
     """
     if not evaluations:
         return

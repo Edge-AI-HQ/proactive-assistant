@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 from pinai_api.app import create_app
-from pinai_api.domains.user_model.profile import ProfileRepository
 from pinai_api.platform.auth.deps import AgentRun, current_agent_run, current_user
 from pinai_api.platform.auth.user_service import User
 from pinai_db.rls import user_scoped_tx
@@ -72,14 +71,6 @@ async def test_feedback_flow_for_silicon_valley_ai_engineer(pool, user_ids) -> N
     ]
 
     async with user_scoped_tx(pool, user_a) as conn:
-        await ProfileRepository(user_a, conn).upsert_profile(
-            display_name="Avery",
-            locale="en-US",
-            timezone="America/Los_Angeles",
-            summary="Silicon Valley AI engineer building infra products.",
-            facts={"role": "AI engineer", "location": "San Francisco Bay Area"},
-            preferences={"content_depth": "technical, source-backed, low hype"},
-        )
         await conn.execute(
             """
             INSERT INTO pai_pipeline_runs
@@ -141,7 +132,6 @@ async def test_feedback_flow_for_silicon_valley_ai_engineer(pool, user_ids) -> N
         completed = await client.get("/api/feedback/completed")
         card_res = await client.get("/api/cards")
         agent_feedback = await client.get("/api/agent/feedback/list", params={"limit": 20})
-        agent_preferences = await client.get("/api/agent/preferences/list")
 
     assert set(dismissed.json()["dismissedCardIds"]) == {
         "card_calendar_digest",
@@ -158,16 +148,12 @@ async def test_feedback_flow_for_silicon_valley_ai_engineer(pool, user_ids) -> N
         == "Stop showing me VC funding rumor cards; I want technical AI infra papers."
         for item in agent_feedback.json()["items"]
     )
-    assert [item["statement"] for item in agent_preferences.json()["items"]] == [
-        "Stop showing me VC funding rumor cards; I want technical AI infra papers."
-    ]
-
     async with user_scoped_tx(pool, user_a) as conn:
         cur = await conn.execute(
             """
-            SELECT statement, polarity, source, evidence
-            FROM pai_preference_records
-            WHERE user_id = %s AND status = 'active'
+            SELECT title, source, structured
+            FROM pai_events
+            WHERE user_id = %s AND event_type = 'preference' AND superseded_by_id IS NULL
             """,
             (user_a,),
         )
@@ -183,13 +169,13 @@ async def test_feedback_flow_for_silicon_valley_ai_engineer(pool, user_ids) -> N
         )
         fingerprint_rows = await cur.fetchall()
 
-    assert pref["statement"] == (
+    assert pref["title"] == (
         "Stop showing me VC funding rumor cards; I want technical AI infra papers."
     )
-    assert pref["polarity"] == "negative"
-    assert pref["source"] == "user"
-    assert pref["evidence"]["card_id"] == "card_vc_rumors"
-    assert pref["evidence"]["surface"] == "card_thread_reply"
+    assert pref["source"] == "pinai_feedback"
+    assert pref["structured"]["polarity"] == "negative"
+    assert pref["structured"]["card_id"] == "card_vc_rumors"
+    assert pref["structured"]["surface"] == "card_thread_reply"
 
     fp_by_intent = {r["intent"]: r for r in fingerprint_rows}
     assert fp_by_intent["work:ai-pr-review"]["ctr_7d"] == 1.0

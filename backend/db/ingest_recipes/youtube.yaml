@@ -8,6 +8,10 @@ since_param: null
 since_format: null
 result_path: [items]
 id_field: id
+entity_type: subscriptions
+timestamp_path: [snippet, publishedAt]
+title_path: [snippet, title]
+snippet_path: [snippet, description]
 sync_interval_hours: 168
 description: "Channels the user subscribes to (taste graph snapshot, no incremental cursor)."
 notes: |

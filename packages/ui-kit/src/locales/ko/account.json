@@ -29,7 +29,7 @@
   },
   "autoGenerate": {
     "title": "자동 생성",
-    "description": "연결된 소스의 새 데이터를 바탕으로 카드를 자동으로 생성해요."
+    "description": "타임라인을 주기적으로 확인하고 정말 주목할 만한 것이 있을 때만 카드를 생성합니다. 대부분의 확인에서는 아무것도 생성되지 않습니다."
   },
   "proactive": {
     "title": "프로액티브 하트비트",
@@ -86,17 +86,31 @@
     "basic": {
       "name": "Basic",
       "credits": "월 3,900 크레딧",
-      "perks": ["매일 카드 피드", "앱 3개 연결", "이메일 + 캘린더"]
+      "perks": [
+        "매일 카드 피드",
+        "앱 3개 연결",
+        "이메일 + 캘린더"
+      ]
     },
     "pro": {
       "name": "Pro",
       "credits": "월 9,900 크레딧",
-      "perks": ["Basic의 모든 기능", "앱 무제한 연결", "음성 + 앰비언트 모드", "우선 실행"]
+      "perks": [
+        "Basic의 모든 기능",
+        "앱 무제한 연결",
+        "음성 + 앰비언트 모드",
+        "우선 실행"
+      ]
     },
     "max": {
       "name": "Max",
       "credits": "월 19,900 크레딧",
-      "perks": ["Pro의 모든 기능", "커스텀 페르소나", "팀 공유", "신규 모델 먼저 이용"]
+      "perks": [
+        "Pro의 모든 기능",
+        "커스텀 페르소나",
+        "팀 공유",
+        "신규 모델 먼저 이용"
+      ]
     }
   },
   "paywall": {
@@ -204,8 +218,8 @@
     "pageSubtitle": "AI의 동작 방식 — 말투, 형식, 기본값.",
     "proactiveTitle": "프로액티브",
     "proactiveDescription": "프로액티브 AI가 나를 확인하는 주기예요.",
-    "dreamingTitle": "드리밍",
-    "dreamingDescription": "백그라운드 드리밍 실행, 프로필 변경 내역, 후보 카드를 확인해요.",
+    "evolutionTitle": "드리밍",
+    "evolutionDescription": "백그라운드 드리밍 실행, 프로필 변경 내역, 후보 카드를 확인해요.",
     "generationTitle": "생성",
     "generationDescription": "카드 생성과 표시 방식을 조정해요.",
     "scheduledTasksTitle": "예약된 작업",
@@ -230,7 +244,7 @@
     "iosOnlyModels": "온디바이스 모델은 iOS 앱에서만 사용할 수 있어요. Whisper / 로컬 LLM 프로필을 다운로드, 검증, 삭제하려면 네이티브 빌드에서 이 페이지를 열어 주세요.",
     "localStorageNote": "모델은 로컬에만 저장되고 다시 업로드되지 않아요. 다운로드에 실패하면 플러그인이 자동으로 보조 미러로 전환해요."
   },
-  "dreaming": {
+  "evolution": {
     "title": "자동 드리밍",
     "runsDaily": "매일 {{time}}에 실행돼요",
     "enabledNotice": "자동 드리밍이 켜졌어요.",

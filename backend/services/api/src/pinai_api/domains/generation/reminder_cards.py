@@ -73,6 +73,9 @@ async def fire_reminder(
         user_id=task.user_id,
         payload={"runId": run_id, "cards": [card]},
         trigger="reminder",
+        # A reminder is the user's own scheduled nudge, not an AI proposal —
+        # no agent_decision event (design §4.3 covers generated cards only).
+        record_decisions=False,
     )
     logger.info(
         "reminder.card fired user=%d task=%s run=%s title=%r",

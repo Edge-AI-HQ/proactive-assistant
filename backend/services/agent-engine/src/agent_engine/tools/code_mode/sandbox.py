@@ -68,7 +68,7 @@ logger = logging.getLogger(__name__)
 # commands (e.g. package install) hit this ceiling.
 _DEFAULT_COMMAND_TIMEOUT_SEC = 5 * 60
 
-# Overall ceiling for a one-shot agent run (dream / crystallize / evolve).
+# Overall ceiling for a one-shot agent run (dream / evolve).
 # A hung tool call (e.g. the sandbox can't reach web, so an in-sandbox SDK call
 # blocks) must NOT wedge the run indefinitely: on timeout the run is cancelled,
 # the run's finally force-deletes the sandbox + reports usage, and the handler

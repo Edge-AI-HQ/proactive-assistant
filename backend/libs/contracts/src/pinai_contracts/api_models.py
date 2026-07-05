@@ -33,94 +33,7 @@ def _to_camel(snake: str) -> str:
     return parts[0] + "".join(p.capitalize() for p in parts[1:])
 
 
-# ── Memory ──
-class MemoryItem(_CamelModel):
-    id: str
-    text: str
-    source: str
-    source_run_id: str | None = None
-    subject: str | None = None
-    quality: float
-    confidence: float
-    status: str
-    superseded_by: str | None = None
-    occurred_at: datetime | None = None
-    created_at: datetime
-    tags: list[str] = Field(default_factory=list)
-    related_memory_ids: list[str] = Field(default_factory=list)
-    reference_count: int = 0
-    last_referenced_at: datetime | None = None
-
-
-class MemoryListResponse(_CamelModel):
-    items: list[MemoryItem]
-
-
-class MemoryCreateRequest(_CamelModel):
-    text: str = Field(min_length=1, max_length=10_000)
-    source: str = Field(min_length=1, max_length=200)
-    subject: str | None = Field(default=None, max_length=200)
-    quality: float = Field(default=0.5, ge=0, le=1)
-    confidence: float = Field(default=0.5, ge=0, le=1)
-    source_run_id: str | None = None
-    occurred_at: datetime | None = None
-    tags: list[str] = Field(default_factory=list)
-    id: str | None = None  # caller can supply; auto-generate if None
-
-
-class MemorySupersedeRequest(_CamelModel):
-    old_id: str
-    new_id: str
-
-
-# ── Personal Signals ──
-class PersonalSignalItem(_CamelModel):
-    id: str
-    kind: str
-    title: str
-    summary: str
-    payload: dict[str, Any] = Field(default_factory=dict)
-    salience: float
-    confidence: float
-    dedupe_key: str | None = None
-    occurred_at: datetime
-    available_at: datetime
-    expires_at: datetime | None = None
-    source: str
-    device_id: str | None = None
-    subject: str | None = None
-    source_raw_table: str | None = None
-    source_raw_ids: list[str] = Field(default_factory=list)
-    status: str
-    consumed_by_run_id: str | None = None
-    ingested_at: datetime
-
-
-class PersonalSignalIngestRequest(_CamelModel):
-    id: str | None = None
-    kind: str
-    title: str
-    summary: str
-    occurred_at: datetime
-    payload: dict[str, Any] = Field(default_factory=dict)
-    salience: float = 0.0
-    confidence: float = 0.0
-    dedupe_key: str | None = None
-    available_at: datetime | None = None
-    expires_at: datetime | None = None
-    source: str = "device"
-    device_id: str | None = None
-    subject: str | None = None
-    source_raw_table: str | None = None
-    source_raw_ids: list[str] = Field(default_factory=list)
-
-
-class PersonalSignalConsumeRequest(_CamelModel):
-    id: str
-    run_id: str
-
-
-# ── Profile / Goals / Settings ──
+# ── Settings ──
 # Generation language whitelist — server bound, frontend mirrors this in
 # `types/intent-card.ts:GENERATION_LANGUAGE_OPTIONS`. Keep in sync.
 SupportedLanguage = Literal[
@@ -151,11 +64,13 @@ class AmbientSourceConsent(_CamelModel):
 class SettingsResponse(_CamelModel):
     """User-settings wire shape — typed counterpart to UserSettingsRow."""
 
+    # User IANA timezone (device-followed via X-Pin-Client-Timezone). Was on
+    # the retired pai_profile; moved to pai_user_settings in the sunset.
+    timezone: str
     generation_language: SupportedLanguage
     auto_generate: bool
     auto_generate_interval_minutes: int
     auto_dreaming: bool
-    auto_crystallize: bool
     # Per-user "permission mode" for side-effect tools: 'ask' (pause for HITL
     # approval) or 'bypass' (no per-call pause). The composer shows this as a
     # mode menu; persisted, cross-device SSOT. Delivered to chat per-run via
@@ -186,42 +101,11 @@ class SettingsResponse(_CamelModel):
     updated_at: datetime
 
 
-class ProfileResponse(_CamelModel):
-    profile: dict[str, Any] | None
-    goals: list[dict[str, Any]]
-    settings: SettingsResponse | None
-
-
-class GoalUpsertRequest(_CamelModel):
-    id: str | None = None
-    key: str
-    title: str
-    priority: Literal["low", "medium", "high"] = "medium"
-    status: str = "active"
-    summary: str | None = None
-
-
-class ProfileUpsertRequest(_CamelModel):
-    """Partial-update payload — every field optional. Missing fields keep
-    the existing value (server-side COALESCE). Profile id is implicit
-    ("primary") — we don't expose multi-profile to the agent surface."""
-
-    display_name: str | None = Field(default=None, max_length=200)
-    locale: str | None = Field(default=None, max_length=20)
-    timezone: str | None = Field(default=None, max_length=64)
-    summary: str | None = Field(default=None, max_length=2000)
-    facts: dict[str, Any] | None = None
-    preferences: dict[str, Any] | None = None
-    constraints: dict[str, Any] | None = None
-    metadata: dict[str, Any] | None = None
-
-
 class SettingsUpdateRequest(_CamelModel):
     generation_language: SupportedLanguage | None = None
     auto_generate: bool | None = None
-    auto_generate_interval_minutes: int | None = Field(default=None, ge=15, le=1440)
+    auto_generate_interval_minutes: int | None = Field(default=None, ge=1, le=1440)
     auto_dreaming: bool | None = None
-    auto_crystallize: bool | None = None
     permission_mode: Literal["ask", "bypass"] | None = None
     proactive_enabled: bool | None = None
     # One of the three UI buckets (seconds). Literal pins them so a bad client
@@ -245,14 +129,6 @@ class SettingsUpdateRequest(_CamelModel):
     onboarding_completed: bool | None = None
 
 
-# ── Preference records ──
-# Expression-layer preferences the user states in plain words in main chat.
-# `scope` / `polarity` mirror the CHECK constraints in
-# 056_pai_preference_records.sql. Frontend has no direct write surface —
-# these come through the chat agent's native tools only.
-PreferenceScope = Literal["topic", "source", "timing", "format", "global"]
-PreferencePolarity = Literal["positive", "negative"]
-PreferenceDurability = Literal["temporary", "persistent"]
 DevelopmentFeedbackCategory = Literal[
     "ui",
     "feature",
@@ -270,52 +146,6 @@ DevelopmentFeedbackSurface = Literal[
 ]
 DevelopmentFeedbackStatus = Literal["new", "reviewed", "planned", "closed"]
 DevelopmentFeedbackSource = Literal["user", "internal_operator", "agent"]
-
-
-class PreferenceAddRequest(_CamelModel):
-    """Agent-supplied preference fields. `source` is NOT here on purpose —
-    the route stamps it from the JWT principal so the agent cannot claim
-    a write came from the user when it came from an internal operator
-    (and vice-versa). `weight` / `confidence` are optional; the route
-    defaults them (user-stated preferences are high-weight by design)."""
-
-    statement: str = Field(min_length=1, max_length=2000)
-    scope: PreferenceScope
-    polarity: PreferencePolarity
-    weight: float | None = Field(default=None, ge=0, le=1)
-    confidence: float | None = Field(default=None, ge=0, le=1)
-    durability: PreferenceDurability = "persistent"
-    expires_at: datetime | None = None
-    # Free-form provenance the agent may attach (e.g. `{"card_id": "..."}`
-    # when the preference came from feedback on a specific card). The route
-    # overwrites `operator_id` here for internal-operator writes.
-    evidence: dict[str, Any] | None = None
-
-    @model_validator(mode="after")
-    def validate_lifetime(self) -> PreferenceAddRequest:
-        if self.durability == "temporary" and self.expires_at is None:
-            raise ValueError("temporary preferences require expires_at")
-        if self.durability == "persistent" and self.expires_at is not None:
-            raise ValueError("persistent preferences must not set expires_at")
-        return self
-
-
-class PreferenceSupersedeRequest(_CamelModel):
-    old_id: str
-    new_id: str
-
-
-class ProfilePreferenceMergeRequest(_CamelModel):
-    """Merge a single durable preference into pai_profile.preferences.
-
-    The profile JSONB bucket is normally wholesale-replaced by
-    ProfileUpsertRequest. This request is the safe one-key merge path for
-    chat tools so adding a durable preference cannot wipe sibling profile
-    entries.
-    """
-
-    key: str = Field(min_length=1, max_length=120)
-    value: str = Field(min_length=1, max_length=2000)
 
 
 class ImpersonationMintRequest(_CamelModel):
@@ -572,36 +402,49 @@ class CardAction(_AgentModel):
 
 class GeneratedCard(_AgentModel):
     """A complete card — wire-compatible with the frontend's IntentCard
-    contract (proactive-ai-frontend reads these fields)."""
+    contract (proactive-ai-frontend reads these fields). This model doubles
+    as the generator's `submit_card` args_schema, so every description below
+    is agent-facing prompt text — keep it consistent with the generator
+    instructions (a stale description here once contradicted them)."""
 
-    intent_key: str = Field(min_length=1, max_length=120)
-    goal_basket: Literal["work", "health", "family", "wealth", "growth", "life"]
+    intent_key: str = Field(
+        min_length=1,
+        max_length=120,
+        description="Stable kebab-case slug naming the underlying decision, verb-object-qualifier style (e.g. 'review-tech-concentration-selloff'). Same decision → same key: it is the dedupe anchor.",
+    )
+    goal_basket: Literal["work", "health", "family", "wealth", "growth", "life"] = Field(
+        description="Life area served: work=job/career, health=body/mind, family=relationships/people, wealth=money/investments, growth=learning/skills, life=everything else (errands, travel, leisure).",
+    )
     title: str = Field(min_length=1, max_length=120)
     why_now: str = Field(min_length=1, max_length=300)
     summary: str = Field(min_length=1, max_length=1500)
     primary_action: CardAction
-    secondary_actions: list[CardAction] = Field(default_factory=list)
-    confidence: float = Field(ge=0, le=1)
-    urgency: float = Field(ge=0, le=1)
-    importance: float = Field(ge=0, le=1)
+    secondary_actions: list[CardAction] = Field(
+        default_factory=list,
+        description="0-2 genuinely different handlings of the same decision (not variants of the primary). Usually empty.",
+    )
+    confidence: float = Field(
+        ge=0,
+        le=1,
+        description="Grounding solidity: 0.9+ = every claim verified against cited events; 0.6-0.8 = core fact verified, some inference; below 0.6 = speculative — don't submit those.",
+    )
+    urgency: float = Field(
+        ge=0,
+        le=1,
+        description="Time pressure: 0.9+ = acting today prevents a real loss (the UI shows an Urgent tag from 0.85 up — reserve it accordingly); 0.6-0.8 = should be handled this week; 0.5 and below = no clock attached.",
+    )
+    importance: float = Field(
+        ge=0,
+        le=1,
+        description="Stakes if ignored: 0.9+ = material impact (money/career/health/relationships); 0.6-0.8 = meaningful but recoverable; 0.5 and below = minor convenience.",
+    )
     sources: list[str] = Field(
         min_length=1,
-        description="Verbatim citations from phase 1 data: 'signal id=..., title=...', 'memory id=..., text=...', 'gmail message id=..., subject=...', 'slack message id=..., text=...', 'gdrive file id=..., name=...', etc. min_length=1 enforces grounding at the schema layer.",
+        description="Verbatim citations of events you actually saw, each exactly '{toolkit} event id={event id}, title={title}' — toolkit from the event's `toolkit` field (e.g. gmail, googlecalendar), or the event source for non-connector events (world, device, ambient). Never cite an id you did not see; min_length=1 enforces grounding at the schema layer.",
     )
     reasoning_steps: list[ReasoningStep] = Field(
         default_factory=list,
         description="2-4 user-visible steps narrating how this card came to be, in order: observed -> cross_referenced -> decided. Each detail must reference data already cited in sources[]. Serializes to camelCase reasoningSteps.",
-    )
-
-
-class CardsList(_AgentModel):
-    cards: list[GeneratedCard] = Field(
-        default_factory=list,
-        description="Generated cards. Empty is allowed for no-grounded-candidate/error shells; the HTTP route must reject empty user-facing batches before persistence.",
-    )
-    skipped_plan_items: list[str] = Field(
-        default_factory=list,
-        description="intent_keys from the plan that were dropped during generation (insufficient grounding, duplicate angle, etc.).",
     )
 
 
@@ -650,22 +493,29 @@ class EvalReport(_AgentModel):
 
 
 class GeneratorOutput(_AgentModel):
-    """Top-level structured response from the orchestrator main agent.
-
-    The orchestrator assembles cards (from card-generator subagent) +
-    evaluations (from evaluator subagent) + dropping any cards that
-    failed self-review."""
+    """The generator tick's return envelope (code-constructed — no longer an
+    LLM structured output since the agentic rewrite; the agent submits cards
+    through the submit_card tool and this wraps the collected result)."""
 
     reasoning: str = Field(
         max_length=3000,
-        description="One-paragraph rationale: which subagents fired, dedup decisions, basket distribution, why count == N.",
+        description="The agent's closing summary: what it saw, why these cards / no cards.",
     )
     cards: list[GeneratedCard] = Field(
         default_factory=list,
-        description="Passing generated cards, or empty when the orchestrator returns an error/no-grounded-candidate shell.",
+        description="Cards submitted this tick (0..N; 0 is a normal outcome).",
     )
     evaluations: list[CardEvaluation] = Field(
         default_factory=list,
-        description="Evaluation audit rows. Empty is allowed for error/no-grounded-candidate shells.",
+        description="Always empty — the evaluator stage is retired; kept for wire compat.",
     )
     batch_feedback: str = Field(max_length=3000)
+    # Usage of the tick's largest model call — observability (real-usage
+    # calibration against the engine's token estimate). None/0 when the
+    # provider returned no usage.
+    prompt_tokens: int | None = Field(default=None, ge=0)
+    cache_read_tokens: int | None = Field(default=None, ge=0)
+    # The anchor this tick actually built on: == the request anchor normally,
+    # == now after an in-place budget reset (design §4.2). The api side
+    # persists THIS value — it is the one piece of generator state.
+    effective_anchor: datetime | None = Field(default=None)

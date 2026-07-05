@@ -151,6 +151,26 @@
       "lockGoals": "Bloquear metas: la IA solo observa, sin modificar"
     }
   },
+  "portrait": {
+    "user": {
+      "title": "About you",
+      "description": "What your AI knows about you — identity, context, and preferences.",
+      "emptyTitle": "Nothing here yet",
+      "emptyDescription": "As you chat and connect data, your AI builds up a picture of you here."
+    },
+    "memory": {
+      "title": "Memory",
+      "description": "What your AI has noticed and saved. Newest first.",
+      "emptyTitle": "No memories yet",
+      "emptyDescription": "Nothing has been saved as long-term memory yet."
+    },
+    "goals": {
+      "title": "Goals",
+      "description": "What you're working toward — your AI keeps these in mind.",
+      "emptyTitle": "No goals yet",
+      "emptyDescription": "Share your goals so your AI can help you make progress."
+    }
+  },
   "goalMeta": {
     "work": {
       "weeklyActions": [

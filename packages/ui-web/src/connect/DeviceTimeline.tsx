@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, Activity, Loader2 } from "lucide-react";
-import { deviceMediaUrl, fetchDeviceTimeline, type DeviceHealthObservation, type DeviceTimelineItem, type PersonalSignal, type UserDevice } from "@pin-ai/core";
+import { deviceMediaUrl, fetchDeviceTimeline, type DeviceContextRow, type DeviceHealthObservation, type DeviceTimelineItem, type UserDevice } from "@pin-ai/core";
 import {
   DEVICE_TIMELINE_QUICK_FILTERS,
   formatLocalDateInput,
@@ -19,11 +19,12 @@ interface DeviceTimelineProps {
 
 /**
  * Timeline waterfall for a single device. Pulls the unified
- * ``/api/devices/{deviceId}/timeline`` endpoint which UNIONs
- * pai_personal_signals + pai_raw_device_health_observations server-side,
- * ordered by occurred_at DESC, with a single keyset cursor. Signal items
- * render as before (image / video / audio / summary); health items
- * render via HealthObservationCard.
+ * ``/api/devices/{deviceId}/timeline`` endpoint which returns the device's
+ * `pai_raw` rows server-side, ordered by occurred_at DESC, with a single keyset
+ * cursor. Each item's `type` is the row's entity_type: `health` rows render via
+ * HealthRow; every other ambient / device context bucket (utterance / visit /
+ * calendar / motion / focus / transcript_window / context) renders via
+ * ContextRow (kind + media).
  *
  * Date filters from the frontend filter chips are applied client-side
  * post-fetch to avoid plumbing since/until into the new endpoint — the
@@ -176,13 +177,16 @@ export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) 
       )}
 
       <ul className="space-y-2">
-        {items.map((it) => (
-          it.type === "signal" ? (
-            <SignalRow key={`s-${it.row.id}`} signal={it.row} />
+        {items.map((it) =>
+          // `type` is the row's entity_type: `health` → HealthRow, every other
+          // ambient / device context bucket → ContextRow. The row union can't
+          // be narrowed on the open entity_type set, so assert per branch.
+          it.type === "health" ? (
+            <HealthRow key={`h-${it.row.id}`} obs={it.row as DeviceHealthObservation} />
           ) : (
-            <HealthRow key={`h-${it.row.id}`} obs={it.row} />
-          )
-        ))}
+            <ContextRow key={`c-${it.row.id}`} row={it.row as DeviceContextRow} entityType={it.type} />
+          ),
+        )}
       </ul>
 
       <div className="flex justify-center pt-2">
@@ -223,41 +227,44 @@ function useDeviceMediaUrl(filePath: string | null): string | null {
   return url;
 }
 
-function SignalRow({ signal }: { signal: PersonalSignal }) {
+function readPayloadString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * A non-health device timeline row (ambient / device context event). Since the
+ * L0 unification the row is the `pai_raw` payload flattened to the top level
+ * (kind / salience / confidence + the source payload like storage_path) plus
+ * id / occurred_at / device_id / reference_count. The endpoint does NOT fold in
+ * the raw `title` / `snippet` columns, so there's no summary text — we render
+ * the kind (falling back to the entity_type) + media + occurred_at.
+ */
+function ContextRow({ row, entityType }: { row: DeviceContextRow; entityType: string }) {
   const { t } = useTranslation("connect");
+  const label = (typeof row.kind === "string" && row.kind) || entityType;
   const filePath = useMemo(() => {
-    // backend writes payload.storage_path; legacy plugin wrote file_path.
-    // Read both during the cutover; storage_path takes precedence.
-    const p = signal.payload as { storage_path?: unknown; file_path?: unknown };
-    const sp = typeof p.storage_path === "string" && p.storage_path.length > 0
-      ? p.storage_path : null;
-    const fp = typeof p.file_path === "string" && p.file_path.length > 0
-      ? p.file_path : null;
-    return sp ?? fp;
-  }, [signal.payload]);
+    // backend writes storage_path; legacy plugin wrote file_path. The timeline
+    // flattens payload to the row top level, so read both from there.
+    return readPayloadString(row.storage_path) ?? readPayloadString(row.file_path);
+  }, [row.storage_path, row.file_path]);
 
   const mediaUrl = useDeviceMediaUrl(filePath);
-  const mediaKind = useMemo(() => classifyMediaKind(signal.kind, filePath), [signal.kind, filePath]);
-  const occurred = useMemo(() => formatTime(signal.occurred_at), [signal.occurred_at]);
+  const mediaKind = useMemo(() => classifyMediaKind(label, filePath), [label, filePath]);
+  const occurred = useMemo(() => formatTime(row.occurred_at), [row.occurred_at]);
 
   return (
     <li className="glass-card p-3 space-y-1.5">
       <div className="flex items-baseline gap-2">
         <Text variant="micro" className="text-foreground/40 tabular-nums shrink-0">{occurred}</Text>
         <Text variant="micro" className="text-foreground/60 px-1.5 py-0.5 rounded bg-foreground/5 shrink-0">
-          {signal.kind}
+          {label}
         </Text>
-        <span className="text-xs font-medium truncate">{signal.title}</span>
       </div>
-
-      {signal.summary && (
-        <Text variant="caption" className="block text-foreground/60 leading-relaxed">{signal.summary}</Text>
-      )}
 
       {mediaKind === "image" && mediaUrl && (
         <img
           src={mediaUrl}
-          alt={signal.title}
+          alt={label}
           loading="lazy"
           className="w-full max-h-80 object-contain rounded-md bg-foreground/5"
         />

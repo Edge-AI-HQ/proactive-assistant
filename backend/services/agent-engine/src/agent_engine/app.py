@@ -6,7 +6,7 @@ This process must NOT hold master credentials — see
 Mounts the agent-facing routes the web process proxies to (all behind the
 per-run EdDSA JWT): /agent/chat (conversation SSE — main / card / proactive),
 /agent/chat/history, /agent/generate (card pipeline), /agent/run/{kind}
-(scheduler-dispatched batch runs — dream / evolve / crystallize), and the
+(scheduler-dispatched batch runs — dream / evolve), and the
 browser-tool routes.
 
 Lifespan owns the LangGraph checkpointer + Daytona sandbox GC loop + browser

@@ -20,79 +20,6 @@ from pinai_api.platform.db.repositories.scheduled_tasks import (
 )
 from pinai_db.rls import service_tx, user_scoped_tx
 
-# ── pure mappers ────────────────────────────────────────────────────────
-
-
-def test_map_github_issue_basic():
-    raw = {
-        "id": 123,
-        "number": 42,
-        "title": "fix the thing",
-        "state": "open",
-        "html_url": "https://github.com/acme/widgets/issues/42",
-        "body": "When you do X, it does Y." * 100,  # > 800 chars
-        "repository_url": "https://api.github.com/repos/acme/widgets",
-        "labels": [{"name": "bug"}, {"name": "p1"}, "stringy-label"],
-        "assignees": [{"login": "alice"}, {"login": "bob"}],
-        "created_at": "2026-04-01T12:00:00Z",
-        "updated_at": "2026-04-15T08:30:00Z",
-        "pull_request": None,
-    }
-    mapped = connector_ingest._map_github_issue(raw)
-    assert mapped is not None
-    assert mapped["issue_id"] == "123"
-    assert mapped["number"] == 42
-    assert mapped["repo_full_name"] == "acme/widgets"
-    assert mapped["title"] == "fix the thing"
-    assert mapped["state"] == "open"
-    assert mapped["html_url"].endswith("/42")
-    assert mapped["is_pull_request"] is False
-    assert mapped["labels"] == ["bug", "p1", "stringy-label"]
-    assert mapped["assignees"] == ["alice", "bob"]
-    # Full body is stored untruncated; body_preview stays a short summary.
-    assert mapped["body"] == raw["body"]
-    assert len(mapped["body"]) > 800
-    assert len(mapped["body_preview"]) <= 800
-    assert mapped["created_at_remote"].year == 2026
-    assert mapped["updated_at_remote"].month == 4
-    # occurred_at picks updated_at when present
-    assert mapped["occurred_at"] == mapped["updated_at_remote"]
-
-
-def test_map_github_issue_pull_request_flag():
-    raw = {
-        "id": 9,
-        "title": "PR title",
-        "pull_request": {"url": "https://api.github.com/repos/x/y/pulls/9"},
-    }
-    mapped = connector_ingest._map_github_issue(raw)
-    assert mapped is not None
-    assert mapped["is_pull_request"] is True
-
-
-def test_map_github_issue_falls_back_to_repository_object():
-    """When repository_url is absent, repository.full_name picks up."""
-    raw = {
-        "id": 99,
-        "title": "X",
-        "repository": {"full_name": "octo/cat"},
-    }
-    mapped = connector_ingest._map_github_issue(raw)
-    assert mapped is not None
-    assert mapped["repo_full_name"] == "octo/cat"
-
-
-def test_map_github_issue_returns_none_without_id():
-    assert connector_ingest._map_github_issue({"title": "no id"}) is None
-
-
-def test_map_github_issue_occurred_at_falls_back_to_now_when_no_dates():
-    raw = {"id": 5, "title": "X"}
-    mapped = connector_ingest._map_github_issue(raw)
-    assert mapped is not None
-    assert mapped["occurred_at"] is not None  # NOT NULL column gets NOW()
-
-
 # ── DB-backed sync round-trip with mocked fetch ─────────────────────────
 
 
@@ -173,7 +100,8 @@ async def test_github_sync_inserts_then_state_flip_updates(
 
     async with service_tx(pool) as conn:
         cur = await conn.execute(
-            "SELECT issue_id, state FROM pai_raw_github_issues WHERE user_id = %s",
+            "SELECT external_id AS issue_id, payload->>'state' AS state FROM pai_raw_apps "
+            "WHERE user_id = %s AND toolkit = 'github' AND entity_type = 'issues'",
             (user_a,),
         )
         rows = await cur.fetchall()
@@ -192,7 +120,8 @@ async def test_github_sync_inserts_then_state_flip_updates(
 
     async with service_tx(pool) as conn:
         cur = await conn.execute(
-            "SELECT issue_id, state FROM pai_raw_github_issues WHERE user_id = %s",
+            "SELECT external_id AS issue_id, payload->>'state' AS state FROM pai_raw_apps "
+            "WHERE user_id = %s AND toolkit = 'github' AND entity_type = 'issues'",
             (user_a,),
         )
         rows = await cur.fetchall()
@@ -203,6 +132,6 @@ async def test_github_sync_inserts_then_state_flip_updates(
 
 @pytest.mark.asyncio
 async def test_github_registered_as_supported():
-    """Smoke: registry resolves and points at the github upserter."""
+    """Smoke: github is an ingestable toolkit (lands in pai_raw_apps via the generic
+    upserter; there are no per-toolkit upserters anymore)."""
     assert "github" in connector_ingest.supported_toolkits()
-    assert connector_ingest._UPSERTERS["github"] is connector_ingest._upsert_github_issues

@@ -1,6 +1,6 @@
 """Shared prompt blocks for chat sub-agents.
 
-Per-agent prompts (`chat`, `generator`, `dream`, `evolve`, `crystallize`)
+Per-agent prompts (`chat`, `generator`, `dream`, `evolve`)
 embed these constants via f-string. NOT a runtime composition framework
 — just a few text blocks that 4-5 agents would otherwise duplicate.
 

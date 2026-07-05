@@ -33,7 +33,7 @@ from pinai_db.rls import user_scoped_tx
 
 from pinai_api.config import WebSettings, get_web_settings
 
-from ..domains.user_model.profile import ProfileRepository
+from ..domains.user_model.settings import SettingsRepository
 from .db.repositories.devices import DevicesRepository, UserDeviceRow
 
 logger = logging.getLogger(__name__)
@@ -256,7 +256,7 @@ async def notify_new_cards(
         return 0
     try:
         async with user_scoped_tx(pool, user_id) as conn:
-            settings = await ProfileRepository(user_id, conn).get_settings()
+            settings = await SettingsRepository(user_id, conn).get_settings()
             if not settings.notify_new_cards:
                 logger.info(
                     "push.skip user=%s reason=opted_out card_count=%d",

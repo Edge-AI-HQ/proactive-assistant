@@ -1,7 +1,7 @@
 /**
  * DebugPanel — slide-over panel triggered by gear icon in header.
  * Shows pipeline phases, event log, run info,
- * crystallize / skills / memories diagnostics, connectors, sign-out.
+ * skills / memories diagnostics, connectors, sign-out.
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -18,9 +18,7 @@ import {
   formatOptionalComposioConnectionIdentity,
   formatComposioToolkitName,
 } from "../connect/composio-display-identity";
-import CrystallizePanel from "./CrystallizePanel";
 import SkillsPanel from "../profile/SkillsPanel";
-import MemoriesPanel from "../profile/MemoriesPanel";
 import type { RunState, PipelinePhase } from "@pin-ai/core";
 import type { ComposioState } from "@pin-ai/state";
 import { Text } from "../primitives/Text";
@@ -557,14 +555,8 @@ export default function DebugPanel({
                   </div>
                 </div>
 
-                {/* Conversation Crystallize */}
-                <CrystallizePanel enabled={open} />
-
                 {/* User Skills */}
                 <SkillsPanel enabled={open} />
-
-                {/* User Memories */}
-                <MemoriesPanel enabled={open} />
 
                 {/* Run Info */}
                 <div className="rounded-xl border border-foreground/10 bg-foreground/[0.03] p-3.5">

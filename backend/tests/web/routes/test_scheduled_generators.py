@@ -9,7 +9,7 @@ import pytest_asyncio
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from pinai_api.app import create_app
-from pinai_api.domains.user_model.profile import ProfileRepository
+from pinai_api.domains.user_model.settings import SettingsRepository
 from pinai_api.platform.auth.agent_jwt import sign_agent_run_jwt
 from pinai_api.platform.auth.deps import current_user
 from pinai_api.platform.auth.user_service import User
@@ -106,6 +106,11 @@ def test_scheduled_generator_routes_are_mounted() -> None:
 @pytest.mark.asyncio
 async def test_preview_and_create_daily_generate(client, user_ids, pool):
     user_a, _ = user_ids
+    # 任务时区跟手机(由设备头写进 pai_user_settings);settings 行总在,默认
+    # 'UTC' 会覆盖 body 里 agent 传的值,所以先把设备时区落到 LA(等价于前端
+    # X-Pin-Client-Timezone 引导过),body 的 America/Los_Angeles 才能持久化。
+    async with user_scoped_tx(pool, user_a) as conn:
+        await SettingsRepository(user_a, conn).upsert_settings(timezone="America/Los_Angeles")
     headers = _agent_auth(user_a)
     # 同轮硬闸:create 必须发生在用户确认后的下一轮,用不同 run JWT 模拟
     confirm_headers = _agent_auth(user_a, run_id="run_confirm_turn")
@@ -200,12 +205,12 @@ async def test_once_reminder_direct_create(client, user_ids, pool):
 
 @pytest.mark.asyncio
 async def test_once_create_timezone_follows_profile_not_agent(client, user_ids, pool):
-    """建任务时区永远跟手机:服务端用 profile 时区(由设备头维护)覆盖 agent
+    """建任务时区永远跟手机:服务端用 settings 时区(由设备头维护)覆盖 agent
     传入的值——LLM 没有来源时会按语言瞎猜(中文 → Asia/Shanghai),不能再
     影响任务何时触发。"""
     user_a, _ = user_ids
     async with user_scoped_tx(pool, user_a) as conn:
-        await ProfileRepository(user_a, conn).upsert_profile(timezone="America/Los_Angeles")
+        await SettingsRepository(user_a, conn).upsert_settings(timezone="America/Los_Angeles")
 
     created = await client.post(
         "/api/scheduled-generators/once",

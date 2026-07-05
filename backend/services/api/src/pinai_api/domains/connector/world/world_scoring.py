@@ -1,29 +1,23 @@
-"""Per-user salience scoring for world signals.
+"""Per-user salience scoring + world→event projection.
 
-Called by world_ingest.run_once() after a batch of new pai_world_signals
-rows lands. For every user with last_active_at within the last 30 days,
-INSERT a pai_world_signal_user_view row with a precomputed salience
-(status='open' so the next /api/agent/world/recent call surfaces it).
+Called by world_ingest.run_once() after a batch of new pai_world_signals rows
+lands. For every user active in the last 30 days, compute a per-user salience and
+PROJECT the salience-gated signals into the L1 event stream as `world_news`
+events (W6: the old pai_world_signal_user_view is gone — salience lives in the
+event's structured, the agent reads world via events_search like any other
+event; world_recent / world_search are retired).
 
-Scoring formula (matches the user-confirmed Q2 = "D: profile preferences
-+ active goal keys + recent card baskets/sources" union):
+Scoring formula (preferences from L1 preference events + goals from the L2 GOALS
+portrait slot + recent card baskets/sources):
 
   topic_match    = Jaccard(signal.topics ∪ signal.regions, user_topics)
   importance     = 0.6 if signal.importance == "high" else 0.3
   recency_decay  = max(0, 1 - hours_since_published / 168)   # 1 week half-life
-
   salience       = clip(0, 1, 0.4 * topic_match + 0.4 * importance + 0.2 * recency_decay)
 
-  scored_reason  = brief audit string ("topics=[...] match=[...]")
-
-Why pre-compute (vs the old plugin's runtime scoring):
-  * Cheap reads: /api/agent/world/recent is hot-path during generator
-    phase 1 — no per-call Jaccard math needed.
-  * RLS-natural: each pai_world_signal_user_view row already user-scoped.
-  * Re-scoring on profile changes is a future scheduled task, not part
-    of this MVP. Salience reflects user state at ingest time; changing
-    your profile only impacts cards from the NEXT ingest cycle. That's
-    acceptable for a 30-min loop.
+The临界 path is rule-only (no LLM): salience is objective math, projection is a
+plain event_append. Re-scoring on profile changes is a future scheduled task;
+salience reflects user state at ingest time (acceptable for a 30-min loop).
 """
 
 from __future__ import annotations
@@ -36,14 +30,29 @@ from typing import Any
 
 from pinai_db.rls import service_tx, user_scoped_tx
 
-from .world_signals import WorldSignalsRepository
+from ...memory.events import AppendEventInput, EventsRepository, gen_event_id
 
 logger = logging.getLogger(__name__)
 
 
-# How fresh a user must be to receive new world-signal user_view rows.
+# How fresh a user must be to get world_news events projected for them.
 # 30 days matches Q1 = "A: all last_active_at >= 30d".
 _ACTIVE_USER_DAYS = 30
+
+# Salience floor for projecting a world signal into the L1 pai_events stream
+# (doc §四/§331: world IS a normal event, gated by salience). Below this a
+# signal stays only in L0 pai_world_signals + the per-user view (no longer
+# agent-readable since W5 retired world_recent / world_search); at/above it the
+# signal lands as a `world_news` event so it joins unified retrieval
+# (events_search) + portrait distillation. 0.5 keeps the L1 stream to genuinely
+# user-relevant news —
+# topic-matched or high-importance-and-fresh — instead of flooding it.
+_PROJECT_SALIENCE_MIN = 0.5
+
+# Cap per user per ingest cycle (doc §196): even above the salience floor, project
+# only the top-K most relevant signals — a busy news day shouldn't bury the user's
+# own events under world_news. Threshold gates relevance; top-K gates volume.
+_PROJECT_TOP_K = 10
 
 
 # ── topic extraction ───────────────────────────────────────────────
@@ -64,35 +73,43 @@ def _slug_tokens(s: str | None) -> set[str]:
 
 
 def _user_topic_set(
-    profile_row: dict[str, Any] | None,
-    goal_rows: list[dict[str, Any]],
+    preference_rows: list[dict[str, Any]],
+    goals_text: str | None,
     recent_card_rows: list[dict[str, Any]],
 ) -> set[str]:
     """Build the user's interest fingerprint as a flat token set:
-    profile.preferences.topics ∪ active_goals.key tokens ∪
-    recent cards (basket + intentKey + source-id tokens)
+    active preference events (statement + scope tokens) ∪ GOALS portrait
+    entry tokens ∪ recent cards (basket + intentKey + source-id tokens).
+
+    Preferences and goals used to live in the retired `pai_profile` /
+    `pai_goals` tables; they now come from the L1 event stream
+    (`event_type='preference'`) and the L2 `pai_user_strings` GOALS slot.
+    The fingerprint is still just a flat token bag fed to Jaccard, so the
+    source change is transparent to scoring — we tokenize the new surfaces
+    the same way the old key/title tokens were tokenized.
     """
     topics: set[str] = set()
 
-    # 1. profile.preferences.topics (an explicit array if present)
-    if profile_row:
-        prefs = profile_row.get("preferences") or {}
-        if isinstance(prefs, str):
+    # 1. active preference events — the statement (title) carries the
+    #    interest; scope narrows it (e.g. scope='travel'). Both feed tokens,
+    #    replacing the old explicit profile.preferences.topics array.
+    for p in preference_rows:
+        topics |= _slug_tokens(p.get("title"))
+        structured = p.get("structured") or {}
+        if isinstance(structured, str):
             try:
-                prefs = json.loads(prefs)
+                structured = json.loads(structured)
             except json.JSONDecodeError:
-                prefs = {}
-        if isinstance(prefs, dict):
-            t = prefs.get("topics")
-            if isinstance(t, list):
-                for x in t:
-                    if isinstance(x, str):
-                        topics |= _slug_tokens(x)
+                structured = {}
+        if isinstance(structured, dict):
+            scope = structured.get("scope")
+            topics |= _slug_tokens(scope if isinstance(scope, str) else None)
 
-    # 2. active goal keys — kebab → tokens (e.g. "sub3-marathon" → {sub3, marathon}).
-    for g in goal_rows:
-        topics |= _slug_tokens(g.get("key"))
-        topics |= _slug_tokens(g.get("title"))
+    # 2. active goals — the GOALS portrait slot is §-separated markdown
+    #    entries (free text). Tokenize the whole block; equivalent to the
+    #    old per-goal key/title tokenization (both were fed straight into
+    #    _slug_tokens).
+    topics |= _slug_tokens(goals_text)
 
     # 3. recent cards — basket tokens + intent_key tokens + a glance at
     #    sources[] strings (covers e.g. confirmed cards on "OpenAI" boosting
@@ -174,21 +191,23 @@ def compute_salience(
 
 async def score_for_active_users(pool, *, world_signal_ids: list[str]) -> int:
     """Score `world_signal_ids` for every user active in the last
-    _ACTIVE_USER_DAYS days. Returns count of (user, signal) rows
-    upserted into pai_world_signal_user_view.
+    _ACTIVE_USER_DAYS days. Returns count of world_news events projected
+    into pai_events.
 
     Three-pass design:
       1. Service-role pull of (active users) and (signal payloads).
       2. Per-user RLS-scoped tx: pull profile + goals + recent cards
          (used to build user_topics), then compute salience for each
-         signal and call repo.score(...) which UPSERTs the view row.
+         signal and project the salience-gated ones into pai_events as
+         world_news events (event_append, salience in structured).
       3. Aggregate count return.
     """
     # ── 1. service-role: list signals + active users ──
     async with service_tx(pool) as conn:
         cur = await conn.execute(
             """
-            SELECT id, topics, regions, importance, published_at
+            SELECT id, title, summary, url, provider,
+                   topics, regions, importance, published_at
             FROM pai_world_signals
             WHERE id = ANY(%s::text[])
             """,
@@ -220,6 +239,10 @@ async def score_for_active_users(pool, *, world_signal_ids: list[str]) -> int:
         signal_payloads.append(
             {
                 "id": r["id"],
+                "title": r["title"],
+                "summary": r.get("summary"),
+                "url": r["url"],
+                "provider": r["provider"],
                 "topics": topics,
                 "regions": regions,
                 "importance": r.get("importance"),
@@ -235,12 +258,13 @@ async def score_for_active_users(pool, *, world_signal_ids: list[str]) -> int:
         user_id = int(user_row["id"])
         try:
             async with user_scoped_tx(pool, user_id) as conn:
-                profile_row, goal_rows, card_rows = await _fetch_user_context(conn, user_id)
-                user_topics = _user_topic_set(profile_row, goal_rows, card_rows)
+                preference_rows, goals_text, card_rows = await _fetch_user_context(conn, user_id)
+                user_topics = _user_topic_set(preference_rows, goals_text, card_rows)
 
-                repo = WorldSignalsRepository(user_id, conn)
+                events_repo = EventsRepository(user_id, conn)
+                eligible: list[tuple[float, dict[str, Any]]] = []
                 for sig in signal_payloads:
-                    salience, reason = compute_salience(
+                    salience, _reason = compute_salience(
                         signal_topics=sig["topics"],
                         signal_regions=sig["regions"],
                         signal_importance=sig["importance"],
@@ -248,11 +272,39 @@ async def score_for_active_users(pool, *, world_signal_ids: list[str]) -> int:
                         user_topics=user_topics,
                         now=now,
                     )
-                    await repo.score(
-                        world_signal_id=sig["id"],
-                        salience=salience,
-                        scored_reason=reason,
-                        status="open",
+                    if salience >= _PROJECT_SALIENCE_MIN:
+                        eligible.append((salience, sig))
+
+                # Project the salience-gated signals into the L1 event stream —
+                # world joins unified retrieval (events_search) + portrait
+                # distillation (doc §四/§331: world IS an event, gated by salience).
+                # This is now the ONLY per-user landing for world (W6: the
+                # pai_world_signal_user_view is dropped, the salience lives in the
+                # event's structured). Cap at top-K per user per cycle (doc §196):
+                # threshold gates relevance, top-K gates volume. dedupe_key keeps it
+                # idempotent — re-scoring the same signal hits the events unique
+                # index and no-ops.
+                eligible.sort(key=lambda x: x[0], reverse=True)
+                for salience, sig in eligible[:_PROJECT_TOP_K]:
+                    await events_repo.append(
+                        AppendEventInput(
+                            id=gen_event_id(),
+                            source="world",
+                            event_type="world_news",
+                            occurred_at=sig["published_at"] or now,
+                            dedupe_key=f"world:{sig['id']}",
+                            title=sig["title"],
+                            body=sig["summary"],
+                            structured={
+                                "provider": sig["provider"],
+                                "salience": salience,
+                                "topics": sig["topics"],
+                                "url": sig["url"],
+                                "importance": sig["importance"],
+                            },
+                            source_ref=sig["id"],
+                            curated=False,
+                        )
                     )
                     written += 1
         except Exception:
@@ -283,20 +335,34 @@ def _coerce_list(v: Any) -> list[str]:
 
 async def _fetch_user_context(
     conn, user_id: int
-) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], str | None, list[dict[str, Any]]]:
     """Pull the three context sources used to build user_topics. Single
-    user_scoped_tx — RLS guarantees we only see this user's rows."""
+    user_scoped_tx — RLS guarantees we only see this user's rows.
+
+    Preferences come from active `pai_events` (event_type='preference') and
+    goals from the L2 `pai_user_strings` GOALS slot; the retired `pai_profile`
+    / `pai_goals` tables are gone.
+    """
     cur = await conn.execute(
-        "SELECT preferences FROM pai_profile WHERE user_id = %s",
+        """
+        SELECT title, structured
+        FROM pai_events
+        WHERE user_id = %s
+          AND event_type = 'preference'
+          AND superseded_by_id IS NULL
+        ORDER BY occurred_at DESC
+        LIMIT 50
+        """,
         (user_id,),
     )
-    profile_row = await cur.fetchone()
+    preference_rows = await cur.fetchall() or []
 
     cur = await conn.execute(
-        "SELECT key, title FROM pai_goals WHERE user_id = %s AND status = 'active' LIMIT 50",
+        "SELECT content FROM pai_user_strings WHERE user_id = %s AND slot = 'GOALS'",
         (user_id,),
     )
-    goal_rows = await cur.fetchall() or []
+    goals_row = await cur.fetchone()
+    goals_text = goals_row.get("content") if goals_row else None
 
     # Recent cards: pull last 20 cards from pai_pipeline_runs.final_cards.
     # That JSONB column holds a list of card dicts (structure assembled
@@ -325,4 +391,4 @@ async def _fetch_user_context(
             if len(card_rows) >= 20:
                 break
 
-    return profile_row, goal_rows, card_rows[:20]
+    return preference_rows, goals_text, card_rows[:20]

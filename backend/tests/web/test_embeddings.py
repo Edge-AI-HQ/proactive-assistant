@@ -69,25 +69,16 @@ async def test_embed_batch_falls_back_to_master_key(monkeypatch):
     assert captured["headers"]["Authorization"] == "Bearer sk-master"
 
 
-def test_bill_target_world_signal_is_master_not_sentinel_user():
-    """World signals are global/shared; even though the queue stores a
-    sentinel user_id, their embedding bills to master, never to that user."""
-    keys = {1: "sk-user-1", 2: "sk-user-2"}
-    assert service._embedding_bill_target("pai_world_signals", 1, keys) == service._MASTER_BILL
-
-
 def test_bill_target_personal_row_uses_that_users_key():
     keys = {1: "sk-user-1", 2: "sk-user-2"}
-    assert service._embedding_bill_target("pai_memory", 2, keys) == "sk-user-2"
-    assert service._embedding_bill_target("pai_personal_signals", 1, keys) == "sk-user-1"
+    assert service._embedding_bill_target(2, keys) == "sk-user-2"
+    assert service._embedding_bill_target(1, keys) == "sk-user-1"
 
 
 def test_bill_target_keyless_personal_row_is_skip_not_master():
     """A keyless user's personal row must be skipped (None), NOT billed to
-    master — distinct from the world-signal master case."""
-    assert service._embedding_bill_target("pai_memory", 99, {}) is None
-    # And the distinction holds: world signal for the same keyless id → master.
-    assert service._embedding_bill_target("pai_world_signals", 99, {}) == service._MASTER_BILL
+    master — personal data is never billed to the master key."""
+    assert service._embedding_bill_target(99, {}) is None
 
 
 @pytest.mark.asyncio

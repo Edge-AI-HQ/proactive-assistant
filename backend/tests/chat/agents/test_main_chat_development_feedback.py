@@ -14,9 +14,8 @@ def test_main_chat_prompt_routes_product_requests_to_development_feedback():
     prompt = _INSTRUCTIONS.lower()
 
     assert "development_feedback_log" in prompt
-    assert "preference_add" in prompt
     assert "button" in prompt
     assert "ui" in prompt
     assert "feature" in prompt
-    assert "do not use `preference_add`" in prompt
+    assert "do not record it as a preference" in prompt
     assert "already implemented" in prompt

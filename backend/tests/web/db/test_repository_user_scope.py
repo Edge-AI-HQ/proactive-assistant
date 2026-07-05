@@ -12,10 +12,12 @@ Test that:
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
-from pinai_api.domains.user_model.memory import (
-    AddMemoryInput,
-    MemoryRepository,
+from pinai_api.domains.memory.events.repository import (
+    AppendEventInput,
+    EventsRepository,
 )
 from pinai_db.rls import user_scoped_tx
 
@@ -50,24 +52,27 @@ async def test_user_scoped_tx_does_not_leak(pool, user_ids):
 async def test_repository_user_id_invariant(pool, user_ids):
     user_a, user_b = user_ids
     async with user_scoped_tx(pool, user_a) as conn:
-        repo_a = MemoryRepository(user_a, conn)
-        await repo_a.add(
-            AddMemoryInput(
-                id="mem_a_only",
-                text="A's secret",
+        repo_a = EventsRepository(user_a, conn)
+        await repo_a.append(
+            AppendEventInput(
+                id="evt_a_only",
                 source="test",
-                quality=0.8,
+                event_type="interaction",
+                occurred_at=datetime.now(UTC),
+                title="A's secret",
+                dedupe_key="evt_a_only",
+                curated=True,
             )
         )
 
     async with user_scoped_tx(pool, user_b) as conn:
-        repo_b = MemoryRepository(user_b, conn)
-        # B should not see A's memory (Repository WHERE user_id = self._user_id)
-        got = await repo_b.get("mem_a_only")
+        repo_b = EventsRepository(user_b, conn)
+        # B should not see A's event (Repository WHERE user_id = self._user_id)
+        got = await repo_b.get("evt_a_only")
         assert got is None
-        # B's own list of active memories should not include A's row
-        rows, _ = await repo_b.list_active(min_quality=0.0)
-        assert all(r.id != "mem_a_only" for r in rows)
+        # B's own recent events should not include A's row
+        rows = await repo_b.search_structured(limit=100)
+        assert all(r.id != "evt_a_only" for r in rows)
 
 
 def test_repository_rejects_invalid_user_id():

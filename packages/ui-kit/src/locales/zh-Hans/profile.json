@@ -149,6 +149,26 @@
       "lockGoals": "锁定目标——AI 仅观察，不做修改"
     }
   },
+  "portrait": {
+    "user": {
+      "title": "关于你",
+      "description": "你的 AI 对你的了解——身份、背景与偏好。",
+      "emptyTitle": "还没有内容",
+      "emptyDescription": "随着你的对话和数据连接，AI 会在这里逐渐勾勒出你的画像。"
+    },
+    "memory": {
+      "title": "记忆",
+      "description": "AI 注意到并保存下来的内容，最新在前。",
+      "emptyTitle": "还没有记忆",
+      "emptyDescription": "目前还没有任何内容被保存为长期记忆。"
+    },
+    "goals": {
+      "title": "目标",
+      "description": "你正在努力的方向——AI 会一直放在心上。",
+      "emptyTitle": "还没有目标",
+      "emptyDescription": "分享你的目标，让 AI 帮你不断推进。"
+    }
+  },
   "goalMeta": {
     "work": {
       "weeklyActions": [

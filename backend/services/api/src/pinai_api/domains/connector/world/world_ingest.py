@@ -15,13 +15,11 @@ Per-source dedup is via `normalized_url` (UNIQUE in pai_world_signals);
 ON CONFLICT in the repository's `ingest_world` returns the existing
 row's id, so re-pulling unchanged feeds is idempotent.
 
-After each newly-inserted (or updated) row, we:
-  1. enqueue an embedding job (pai_embedding_queue) — the queue worker
-     fills `pai_world_signals.embedding` async, normally < 30s after.
-  2. invoke `world_scoring.score_for_active_users()` so every user with
-     last_active_at within the last 30 days gets an open user_view row
-     pre-scored. Subsequent /api/agent/world/recent calls then return
-     a list ordered by salience.
+After each newly-inserted (or updated) row, we invoke
+`world_scoring.score_for_active_users()` so every user active in the last
+30 days gets the salience-gated signals projected into pai_events as
+world_news events (salience in structured). The agent reads them via
+events_search (event_type=world_news), like any event.
 
 Scheduling is via a single asyncio.Task launched in web/app.py
 lifespan, NOT through pai_scheduled_tasks. That table is per-user
@@ -45,7 +43,6 @@ import feedparser
 import httpx
 from pinai_db.rls import service_tx
 
-from ....platform.embeddings import enqueue as enqueue_embedding
 from . import world_scoring
 from .world_signals import IngestWorldSignalInput, WorldSignalsRepository
 
@@ -285,13 +282,12 @@ async def run_once(pool) -> dict[str, int]:
             continue
 
         async with service_tx(pool) as conn:
-            # WorldSignalsRepository ingest_world doesn't actually use
-            # user_id on the global table, but the base class requires
-            # one — pass a sentinel valid user_id (the lowest active).
-            # Ingest writes pai_world_signals (no RLS scoping needed),
-            # not pai_world_signal_user_view, so the user_id is unused
-            # in practice. We still keep the abstraction so the SQL
-            # path goes through the repository, not raw cur.execute.
+            # WorldSignalsRepository.ingest_world writes the globally-shared
+            # pai_world_signals table (no user_id column), but the base class
+            # requires a user_id — pass a sentinel valid user_id (the lowest
+            # active). The user_id is unused in practice (the shared table
+            # needs no RLS scoping); we keep the repository abstraction so the
+            # SQL path doesn't go through raw cur.execute.
             cur = await conn.execute(
                 "SELECT id FROM users ORDER BY id ASC LIMIT 1",
             )
@@ -313,49 +309,18 @@ async def run_once(pool) -> dict[str, int]:
                     IngestWorldSignalInput(
                         id=sig_id,
                         provider=source.provider,
-                        stream_type="rss",
                         title=item.title,
                         url=item.url,
                         normalized_url=norm,
-                        external_id=item.external_id,
                         summary=item.summary,
                         published_at=item.published_at,
                         topics=source.topics,
                         regions=source.regions,
                         importance=source.importance,
-                        metadata={
-                            "source_url": source.url,
-                            "ingest_at": datetime.now(UTC).isoformat(),
-                        },
                     )
                 )
                 stats["inserted_or_updated"] += 1
                 inserted_ids.append(row.id)
-
-                # Enqueue embedding. Text is the corpus the semantic
-                # index will use for the cosine search; matches the
-                # field selection the old plugin used (title + summary
-                # + topics).
-                emb_text = " ".join(
-                    [
-                        item.title,
-                        item.summary or "",
-                        " ".join(source.topics),
-                        " ".join(source.regions),
-                    ]
-                ).strip()
-                if emb_text:
-                    # enqueue() needs a user_id but the queue table is
-                    # only used as a worklist — for the shared world
-                    # table the worker writes back via WHERE id only,
-                    # ignoring user_id (see embeddings.py:186-196).
-                    await enqueue_embedding(
-                        conn,
-                        user_id=sentinel_uid,
-                        table_name="pai_world_signals",
-                        row_id=row.id,
-                        text=emb_text,
-                    )
 
     if inserted_ids:
         # Per-user scoring runs in a separate tx so the ingest commit

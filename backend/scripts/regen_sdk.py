@@ -7,7 +7,7 @@ package. It's installed into the Daytona sandbox image (see
 sandbox-side `from pinai_sdk import client` works at agent runtime.
 
 It is hand-written on purpose and stays that way: object-style
-(`client.memory.list()`), which every Code Mode script + SDK_CHEAT_SHEET
+(`client.events.search()`), which every Code Mode script + SDK_CHEAT_SHEET
 depends on. `openapi-python-client` emits a function-style API that would
 break all of that, so there is NO codegen step (plan 2026-06-02 §PR-A
 overturned the original codegen idea).
@@ -65,7 +65,7 @@ def _check() -> int:
     if client is None:
         print("FAIL: pinai_sdk.client missing", file=sys.stderr)
         return 1
-    for ns in ("memory", "signals", "profile", "world", "raw", "cards", "feedback"):
+    for ns in ("events", "user_strings", "world", "raw", "cards", "feedback"):
         if not hasattr(client, ns):
             print(f"FAIL: pinai_sdk.client.{ns} missing", file=sys.stderr)
             return 1

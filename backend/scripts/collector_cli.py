@@ -7,7 +7,7 @@ from the command line, no frontend, no waiting on the scheduler tick.
     ingest      fabricate a connector.init/sync task → connector_ingest.run()
                 directly (bypasses the tick loop; the evolve enqueue and sync
                 schedule it writes are REAL rows)
-    raw         dump recent raw rows (typed table or pai_raw_events)
+    raw         dump recent raw rows from pai_raw (toolkit + entity)
     evolve      requeue connector.evolve and poll it to a terminal state
                 (the running web tick loop dispatches it — needs `make up`)
     signals     dump recent pai_personal_signals
@@ -40,7 +40,6 @@ from pinai_api.platform.db.repositories.scheduled_tasks import (
     ScheduledTaskRow,
     requeue_once,
 )
-from pinai_api.routes.agent.raw import _RAW_TABLES
 from pinai_db.rls import user_scoped_tx
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
@@ -242,31 +241,17 @@ async def cmd_raw(args: argparse.Namespace) -> None:
     try:
         user = await _resolve_user(pool, args)
         since = datetime.now(UTC) - timedelta(hours=args.since_hours)
-        key = (args.toolkit.lower(), args.entity.lower())
-        table = _RAW_TABLES.get(key)
+        # Unified L0: every source reads pai_raw (toolkit + entity_type).
         async with user_scoped_tx(pool, user.id) as conn:
-            if table is not None:
-                cur = await conn.execute(
-                    f"SELECT * FROM {table} WHERE user_id=%s AND occurred_at >= %s "
-                    "ORDER BY occurred_at DESC LIMIT %s",
-                    (user.id, since, args.limit),
-                )
-            else:
-                cur = await conn.execute(
-                    "SELECT * FROM pai_raw_events WHERE user_id=%s AND toolkit=%s "
-                    "AND entity_type=%s AND occurred_at >= %s "
-                    "ORDER BY occurred_at DESC LIMIT %s",
-                    (user.id, key[0], key[1], since, args.limit),
-                )
+            cur = await conn.execute(
+                "SELECT * FROM pai_raw WHERE user_id=%s AND toolkit=%s "
+                "AND entity_type=%s AND occurred_at >= %s "
+                "ORDER BY occurred_at DESC LIMIT %s",
+                (user.id, args.toolkit.lower(), args.entity.lower(), since, args.limit),
+            )
             rows = await cur.fetchall()
-        store = table or "pai_raw_events"
-        print(f"{len(rows)} rows from {store} (last {args.since_hours}h)")
-        fields = (
-            ["external_id", "occurred_at", "title", "snippet", "dedupe_key"]
-            if table is None
-            else ["id", "occurred_at", "dedupe_key"]
-        )
-        _print_rows(rows, fields=fields)
+        print(f"{len(rows)} rows from pai_raw (last {args.since_hours}h)")
+        _print_rows(rows, fields=["external_id", "occurred_at", "title", "snippet", "dedupe_key"])
     finally:
         await pool.close()
 
@@ -326,17 +311,19 @@ async def cmd_evolve(args: argparse.Namespace) -> None:
 
 
 async def _dump_signals(pool: AsyncConnectionPool, user: User, since_hours: int, limit: int) -> int:
+    # signals 退役并入 L1 pai_events(device 摄入→pai_raw→projector→event)。这里
+    # dump 最近事件,pipeline 第 3 步用它验证 evolve 后有产出。
     since = datetime.now(UTC) - timedelta(hours=since_hours)
     async with user_scoped_tx(pool, user.id) as conn:
         cur = await conn.execute(
-            "SELECT id, kind, title, status, salience, ingested_at "
-            "FROM pai_personal_signals WHERE user_id=%s AND ingested_at >= %s "
-            "ORDER BY ingested_at DESC LIMIT %s",
+            "SELECT id, event_type, title, curated_at, occurred_at "
+            "FROM pai_events WHERE user_id=%s AND occurred_at >= %s "
+            "ORDER BY occurred_at DESC LIMIT %s",
             (user.id, since, limit),
         )
         rows = await cur.fetchall()
-    print(f"{len(rows)} signals (last {since_hours}h)")
-    _print_rows(rows, fields=["kind", "title", "status", "salience", "ingested_at"])
+    print(f"{len(rows)} events (last {since_hours}h)")
+    _print_rows(rows, fields=["event_type", "title", "curated_at", "occurred_at"])
     return len(rows)
 
 
@@ -354,15 +341,17 @@ async def cmd_memory(args: argparse.Namespace) -> None:
     try:
         user = await _resolve_user(pool, args)
         async with user_scoped_tx(pool, user.id) as conn:
+            # memory 退役并入 L1 pai_events;dump 已 curate 的事件
+            # (evolve 处理后 curated_at 非 NULL,等价老 memory 的"已沉淀")。
             cur = await conn.execute(
-                "SELECT id, text, source, quality, status, created_at "
-                "FROM pai_memory WHERE user_id=%s "
-                "ORDER BY created_at DESC LIMIT %s",
+                "SELECT id, event_type, title, source, curated_at, occurred_at "
+                "FROM pai_events WHERE user_id=%s AND curated_at IS NOT NULL "
+                "ORDER BY occurred_at DESC LIMIT %s",
                 (user.id, args.limit),
             )
             rows = await cur.fetchall()
-        print(f"{len(rows)} memory rows")
-        _print_rows(rows, fields=["text", "source", "quality", "status", "created_at"])
+        print(f"{len(rows)} curated events")
+        _print_rows(rows, fields=["event_type", "title", "source", "curated_at", "occurred_at"])
     finally:
         await pool.close()
 

@@ -37,7 +37,6 @@ def test_main_chat_prompt_treats_card_context_as_current_card() -> None:
 
     assert "<card_context>" in text
     assert "exact card" in text
-    assert "Do not call `cards_recent`" in text
 
 
 def test_card_execution_prompt_treats_user_correction_as_card_feedback() -> None:
@@ -50,11 +49,10 @@ def test_card_execution_prompt_treats_user_correction_as_card_feedback() -> None
 
     assert "<card_context>" in text
     assert "feedback on this exact card" in text
-    assert "preference_add" in text
-    assert "MUST call `preference_add`" in text
+    assert "event_append" in text
+    assert "MUST record an `event_append`" in text
     assert "Do not say you remembered" in text
     assert "card_id" in text
-    assert "Do not call `cards_recent`" in text
 
 
 def test_reasoning_extractor_reads_openai_response_summary() -> None:

@@ -17,54 +17,6 @@ from pinai_api.platform.db.repositories.scheduled_tasks import (
 )
 from pinai_db.rls import service_tx, user_scoped_tx
 
-# ── Calendly extractor + mapper ────────────────────────────────────────
-
-
-def test_map_calendly_event_basic():
-    raw = {
-        "uri": "https://api.calendly.com/scheduled_events/evt-1",
-        "name": "1:1 with Alice",
-        "status": "active",
-        "start_time": "2026-05-10T15:00:00Z",
-        "end_time": "2026-05-10T15:30:00Z",
-        "location": {
-            "type": "google_conference",
-            "join_url": "https://meet.google.com/xyz",
-        },
-        "event_memberships": [
-            {"user_name": "Alice", "user_email": "alice@x.com"},
-        ],
-    }
-    mapped = connector_ingest._map_calendly_event(raw)
-    assert mapped is not None
-    assert mapped["event_uri"].endswith("evt-1")
-    assert mapped["status"] == "active"
-    assert mapped["start_at"].year == 2026
-    assert mapped["location_type"] == "google_conference"
-    assert mapped["meeting_url"] == "https://meet.google.com/xyz"
-    assert mapped["location_value"] == "https://meet.google.com/xyz"
-    assert mapped["invitees"] == [
-        {"name": "Alice", "email": "alice@x.com"},
-    ]
-    assert mapped["occurred_at"] == mapped["start_at"]
-
-
-def test_map_calendly_event_handles_in_person_location():
-    raw = {
-        "uri": "evt-2",
-        "location": {"type": "physical", "location": "Cafe Sutro"},
-    }
-    mapped = connector_ingest._map_calendly_event(raw)
-    assert mapped is not None
-    assert mapped["location_type"] == "physical"
-    assert mapped["location_value"] == "Cafe Sutro"
-    assert mapped["meeting_url"] is None
-
-
-def test_map_calendly_event_returns_none_without_uri():
-    assert connector_ingest._map_calendly_event({"name": "no uri"}) is None
-
-
 # ── DB-backed sync round-trips ─────────────────────────────────────────
 
 
@@ -139,7 +91,8 @@ async def test_calendly_sync_status_flips_to_canceled(pool, user_ids, monkeypatc
 
     async with service_tx(pool) as conn:
         cur = await conn.execute(
-            "SELECT status FROM pai_raw_calendly_events WHERE user_id = %s",
+            "SELECT payload->>'status' AS status FROM pai_raw_apps "
+            "WHERE user_id = %s AND toolkit = 'calendly' AND entity_type = 'events'",
             (user_a,),
         )
         rows = await cur.fetchall()

@@ -82,7 +82,6 @@ const labelMap: Record<string, string> = {
   generation_language: "生成语言",
   auto_generate: "自动生成",
   auto_dreaming: "自动 dreaming",
-  auto_crystallize: "自动 crystallize",
   dreaming: "后台生成",
   sourceStats: "来源统计",
   cards: "卡片",

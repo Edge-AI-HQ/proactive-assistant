@@ -30,7 +30,7 @@ import {
   type DeviceHealthObservation,
   type DeviceTimelineDayFilter,
   type DeviceTimelineItem,
-  type PersonalSignal,
+  type DeviceContextRow,
   type UserDevice,
 } from "@pin-ai/core";
 
@@ -210,10 +210,12 @@ export default function DeviceTimeline({ device, onBack }: DeviceTimelineProps) 
 
       <View style={{ gap: 8 }}>
         {items.map((it) =>
+          // type 是后端契约的 discriminator（"signal"→context row / 其余→health），
+          // union 无 literal tag 供 TS 窄化——边界处显式断言。
           it.type === "signal" ? (
-            <SignalRow key={`s-${it.row.id}`} signal={it.row} />
+            <SignalRow key={`s-${it.row.id}`} signal={it.row as DeviceContextRow} />
           ) : (
-            <HealthRow key={`h-${it.row.id}`} obs={it.row} />
+            <HealthRow key={`h-${it.row.id}`} obs={it.row as DeviceHealthObservation} />
           ),
         )}
       </View>
@@ -312,7 +314,7 @@ function TimelineAudio({ url }: { url: string }) {
   );
 }
 
-function SignalRow({ signal }: { signal: PersonalSignal }) {
+function SignalRow({ signal }: { signal: DeviceContextRow }) {
   const { t } = useTranslation("connect");
   const filePath = useMemo(() => {
     // 后端写 payload.storage_path；legacy plugin 写 file_path。过渡期两个都读。
@@ -323,8 +325,11 @@ function SignalRow({ signal }: { signal: PersonalSignal }) {
   }, [signal.payload]);
 
   const mediaUrl = useDeviceMediaUrl(filePath);
-  const mediaKind = useMemo(() => classifyMediaKind(signal.kind, filePath), [signal.kind, filePath]);
+  const mediaKind = useMemo(() => classifyMediaKind(signal.kind ?? "", filePath), [signal.kind, filePath]);
   const occurred = useMemo(() => formatTime(signal.occurred_at), [signal.occurred_at]);
+  // title/summary 走 DeviceContextRow 的透传索引签名（unknown）——边界处字符串化。
+  const title = typeof signal.title === "string" ? signal.title : "";
+  const summary = typeof signal.summary === "string" ? signal.summary : null;
 
   return (
     <GlassCard style={styles.itemCard}>
@@ -334,11 +339,11 @@ function SignalRow({ signal }: { signal: PersonalSignal }) {
           <Text style={styles.kindBadgeText}>{signal.kind}</Text>
         </View>
         <Text style={styles.itemTitle} numberOfLines={1}>
-          {signal.title}
+          {title}
         </Text>
       </View>
 
-      {signal.summary ? <Text style={styles.itemSummary}>{signal.summary}</Text> : null}
+      {summary ? <Text style={styles.itemSummary}>{summary}</Text> : null}
 
       {mediaKind === "image" && mediaUrl ? (
         <Image source={{ uri: mediaUrl }} style={styles.media} resizeMode="contain" />

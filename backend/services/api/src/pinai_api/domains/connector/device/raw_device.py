@@ -1,15 +1,19 @@
-"""Raw device snapshot tables — pai_raw_device_apps_snapshot,
-pai_raw_device_contacts_snapshot, pai_raw_device_health_observations.
+"""Raw device snapshots — apps / contacts / health + ambient — into the
+device-domain L0 table pai_raw_device.
 
-Schema: 019_pai_raw_device.sql.
+Device data is its own L0 domain (doc §三): every snapshot lands in
+pai_raw_device with `kind` in {apps, contacts, health, utterance,
+transcript_window, visit, …} — no toolkit column (that discriminator is the
+apps domain's; device's domain IS "device"). The source-specific fields live in
+payload JSONB; external_id carries the device_id so the full-sync replace can
+scope its DELETE to one device.
 
-Two write modes per table:
-  * incremental — INSERT ... ON CONFLICT (user_id, dedupe_key) DO NOTHING.
-  * full — bracket the insert with a DELETE that scopes to the device
-    (and for health, narrows further by local_date when known).
-
-The ingest route runs both modes via the policy registry; this repo just
-exposes one method per (table, mode) pair.
+Two write modes per kind:
+  * incremental — INSERT ... ON CONFLICT (user_id, kind, dedupe_key) DO NOTHING
+    (snapshots are immutable).
+  * full — bracket the insert with a DELETE scoped to the device (health
+    narrows further by local_date / metric and skips reference-pinned rows —
+    rows already cited by a memory / evolution run are immutable evidence).
 """
 
 from __future__ import annotations
@@ -20,10 +24,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from pinai_db.base import UserScopedRepository
+from psycopg import AsyncCursor
+from psycopg.rows import DictRow
 
 from .device_ingest.policies import (
     DeviceAppSnapshotItem,
     DeviceContactSnapshotItem,
+    DeviceIngestItem,
 )
 
 
@@ -39,7 +46,145 @@ def _gen_id(prefix: str) -> str:
 
 
 class RawDeviceRepository(UserScopedRepository):
-    # ── apps_snapshot ──
+    async def _insert_raw(
+        self,
+        cur: AsyncCursor[DictRow],
+        *,
+        kind: str,
+        device_id: str,
+        platform: str | None = None,
+        dedupe_key: str,
+        occurred_at: str,
+        title: str | None,
+        snippet: str | None,
+        payload: dict[str, Any],
+        on_conflict_update: bool = False,
+        on_conflict_guard: str = "",
+    ) -> int:
+        """One pai_raw_device row for a device item. Snapshots are immutable
+        (``on_conflict_update=False`` → conflicts on the (kind, dedupe_key) key
+        are left untouched). Latest-wins context events (a transcript window
+        that grows with more audio) pass ``on_conflict_update=True`` so a
+        re-ingest refreshes the row in place; ``on_conflict_guard`` adds a WHERE
+        clause so a stale re-ingest can be rejected (rowcount=0)."""
+        if on_conflict_update:
+            conflict_action = (
+                "DO UPDATE SET title = EXCLUDED.title, snippet = EXCLUDED.snippet, "
+                "payload = EXCLUDED.payload, occurred_at = EXCLUDED.occurred_at"
+            )
+            if on_conflict_guard:
+                conflict_action += f" WHERE {on_conflict_guard}"
+        else:
+            conflict_action = "DO NOTHING"
+        await cur.execute(
+            f"""
+            INSERT INTO pai_raw_device (
+              user_id, id, kind, external_id, platform,
+              occurred_at, title, snippet, payload, dedupe_key
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
+            ON CONFLICT (user_id, external_id, kind, dedupe_key) {conflict_action}
+            """,
+            (
+                self._user_id,
+                _gen_id("dev"),
+                kind,
+                device_id,
+                platform,
+                occurred_at,
+                title,
+                snippet,
+                json.dumps(payload),
+                dedupe_key,
+            ),
+        )
+        return cur.rowcount or 0
+
+    def _context_payload(self, item: DeviceIngestItem) -> dict[str, Any]:
+        """Carry the context event's signal-shaped metadata into payload so the
+        L1 event projector and downstream readers keep source kind / salience /
+        confidence / device_id alongside the original payload. The payload `kind`
+        is the RAW source kind (e.g. "ambient.utterance") — deliberately distinct
+        from the table's `kind` column, which holds the normalized bucket
+        ("utterance" via the item's DeviceRecipe). Both are kept: the column drives
+        routing/dedupe, the payload preserves the original ambient/device origin."""
+        return {
+            **item.payload,
+            "kind": item.kind,
+            "salience": item.salience,
+            "confidence": item.confidence,
+            "device_id": item.device_id,
+        }
+
+    # ── context events (signal_only / dual) ──
+
+    async def ingest_context_event(self, item: DeviceIngestItem) -> RawIngestResult:
+        """Immutable pai_raw_device row for an ambient / device context event.
+        The kind is the normalized bucket (utterance / visit / calendar /
+        motion / focus / context); dedupe_key dedupes re-uploads."""
+        async with self._conn.cursor() as cur:
+            inserted = await self._insert_raw(
+                cur,
+                kind=item.entity_type,
+                device_id=item.device_id,
+                platform=item.platform,
+                dedupe_key=item.dedupe_key,
+                occurred_at=item.occurred_at,
+                title=item.title,
+                snippet=item.summary,
+                payload=self._context_payload(item),
+            )
+        return RawIngestResult(1, inserted, 1 - inserted)
+
+    async def upsert_transcript_window(self, item: DeviceIngestItem) -> RawIngestResult:
+        """Latest-wins pai_raw_device row for a transcript candidate window
+        (``ambient.candidate_window``) — the window grows as more audio lands,
+        so a re-ingest on the canonical dedupe_key refreshes title / snippet /
+        payload / occurred_at in place."""
+        async with self._conn.cursor() as cur:
+            n = await self._insert_raw(
+                cur,
+                kind="transcript_window",
+                device_id=item.device_id,
+                platform=item.platform,
+                dedupe_key=item.dedupe_key,
+                occurred_at=item.occurred_at,
+                title=item.title,
+                snippet=item.summary,
+                payload=self._context_payload(item),
+                on_conflict_update=True,
+                # Monotonic freshness guard: the window grows with more audio, so
+                # a re-ingest only wins when its raw_ref_count is >= the stored
+                # one. A stale upload (fewer aggregated chunks) leaves the richer
+                # row untouched (rowcount=0 → duplicate), matching the old
+                # ingest_transcript_candidate_window_latest contract.
+                on_conflict_guard=(
+                    "COALESCE((EXCLUDED.payload->>'raw_ref_count')::int, 0) >= "
+                    "COALESCE((pai_raw_device.payload->>'raw_ref_count')::int, 0)"
+                ),
+            )
+        # n=1 on insert or a winning refresh; n=0 when the guard rejected a stale
+        # re-ingest. Map that straight to inserted/ignored.
+        return RawIngestResult(1, n, 1 - n)
+
+    async def _delete_device_scope(
+        self,
+        cur: AsyncCursor[DictRow],
+        *,
+        kind: str,
+        device_id: str,
+        extra_sql: str = "",
+        extra_params: tuple[Any, ...] = (),
+    ) -> None:
+        await cur.execute(
+            f"""
+            DELETE FROM pai_raw_device
+            WHERE user_id = %s AND kind = %s
+              AND external_id = %s{extra_sql}
+            """,
+            (self._user_id, kind, device_id, *extra_params),
+        )
+
+    # ── apps ──
 
     async def ingest_apps(
         self,
@@ -55,29 +200,23 @@ class RawDeviceRepository(UserScopedRepository):
         inserted = 0
         async with self._conn.cursor() as cur:
             for a in apps:
-                dedupe = f"{snapshot_id}:{a.bundle_id}"
-                await cur.execute(
-                    """
-                    INSERT INTO pai_raw_device_apps_snapshot
-                      (user_id, id, snapshot_id, device_id, bundle_id,
-                       app_name, version, last_used_at, occurred_at, dedupe_key)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
-                    """,
-                    (
-                        self._user_id,
-                        _gen_id("app"),
-                        snapshot_id,
-                        device_id,
-                        a.bundle_id,
-                        a.app_name,
-                        a.version,
-                        a.last_used_at,
-                        occurred_at,
-                        dedupe,
-                    ),
+                inserted += await self._insert_raw(
+                    cur,
+                    kind="apps",
+                    device_id=device_id,
+                    dedupe_key=f"{snapshot_id}:{a.bundle_id}",
+                    occurred_at=occurred_at,
+                    title=a.app_name or a.bundle_id,
+                    snippet=a.bundle_id,
+                    payload={
+                        "device_id": device_id,
+                        "snapshot_id": snapshot_id,
+                        "bundle_id": a.bundle_id,
+                        "app_name": a.app_name,
+                        "version": a.version,
+                        "last_used_at": a.last_used_at,
+                    },
                 )
-                inserted += cur.rowcount or 0
         return RawIngestResult(accepted, inserted, accepted - inserted)
 
     async def replace_apps(
@@ -89,10 +228,7 @@ class RawDeviceRepository(UserScopedRepository):
         apps: list[DeviceAppSnapshotItem],
     ) -> RawIngestResult:
         async with self._conn.cursor() as cur:
-            await cur.execute(
-                "DELETE FROM pai_raw_device_apps_snapshot WHERE user_id = %s AND device_id = %s",
-                (self._user_id, device_id),
-            )
+            await self._delete_device_scope(cur, kind="apps", device_id=device_id)
         return await self.ingest_apps(
             device_id=device_id,
             occurred_at=occurred_at,
@@ -100,7 +236,7 @@ class RawDeviceRepository(UserScopedRepository):
             apps=apps,
         )
 
-    # ── contacts_snapshot ──
+    # ── contacts ──
 
     async def ingest_contacts(
         self,
@@ -116,32 +252,25 @@ class RawDeviceRepository(UserScopedRepository):
         inserted = 0
         async with self._conn.cursor() as cur:
             for i, c in enumerate(contacts):
-                # Contacts have no natural unique key; combine snapshot_id
-                # with index + display_name to deduplicate identical
-                # uploads of the same snapshot.
-                dedupe = f"{snapshot_id}:{i}:{c.display_name or ''}"
-                await cur.execute(
-                    """
-                    INSERT INTO pai_raw_device_contacts_snapshot
-                      (user_id, id, snapshot_id, device_id, display_name,
-                       emails, phones, last_modified, occurred_at, dedupe_key)
-                    VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s)
-                    ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
-                    """,
-                    (
-                        self._user_id,
-                        _gen_id("ct"),
-                        snapshot_id,
-                        device_id,
-                        c.display_name,
-                        json.dumps(c.emails),
-                        json.dumps(c.phones),
-                        c.last_modified,
-                        occurred_at,
-                        dedupe,
-                    ),
+                # Contacts have no natural unique key; combine snapshot_id with
+                # index + display_name to deduplicate identical re-uploads.
+                inserted += await self._insert_raw(
+                    cur,
+                    kind="contacts",
+                    device_id=device_id,
+                    dedupe_key=f"{snapshot_id}:{i}:{c.display_name or ''}",
+                    occurred_at=occurred_at,
+                    title=c.display_name,
+                    snippet=None,
+                    payload={
+                        "device_id": device_id,
+                        "snapshot_id": snapshot_id,
+                        "display_name": c.display_name,
+                        "emails": c.emails,
+                        "phones": c.phones,
+                        "last_modified": c.last_modified,
+                    },
                 )
-                inserted += cur.rowcount or 0
         return RawIngestResult(accepted, inserted, accepted - inserted)
 
     async def replace_contacts(
@@ -153,10 +282,7 @@ class RawDeviceRepository(UserScopedRepository):
         contacts: list[DeviceContactSnapshotItem],
     ) -> RawIngestResult:
         async with self._conn.cursor() as cur:
-            await cur.execute(
-                "DELETE FROM pai_raw_device_contacts_snapshot WHERE user_id = %s AND device_id = %s",
-                (self._user_id, device_id),
-            )
+            await self._delete_device_scope(cur, kind="contacts", device_id=device_id)
         return await self.ingest_contacts(
             device_id=device_id,
             occurred_at=occurred_at,
@@ -164,7 +290,7 @@ class RawDeviceRepository(UserScopedRepository):
             contacts=contacts,
         )
 
-    # ── health_observations ──
+    # ── health ──
 
     async def ingest_health(
         self,
@@ -178,38 +304,31 @@ class RawDeviceRepository(UserScopedRepository):
         inserted = 0
         async with self._conn.cursor() as cur:
             for o in observations:
-                row_id = o.id or _gen_id("hlt")
                 dedupe = (
                     o.dedupe_key
                     or f"{device_id}:{o.observation_type}:{o.metric or ''}:{o.start_at or o.occurred_at}"
                 )
-                await cur.execute(
-                    """
-                    INSERT INTO pai_raw_device_health_observations
-                      (user_id, id, device_id, observation_type, metric, value,
-                       unit, start_at, end_at, local_date, source_app,
-                       payload, occurred_at, dedupe_key)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)
-                    ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
-                    """,
-                    (
-                        self._user_id,
-                        row_id,
-                        device_id,
-                        o.observation_type,
-                        o.metric,
-                        o.value,
-                        o.unit,
-                        o.start_at,
-                        o.end_at,
-                        o.local_date,
-                        o.source_app,
-                        json.dumps(o.payload or {}),
-                        o.occurred_at,
-                        dedupe,
-                    ),
+                inserted += await self._insert_raw(
+                    cur,
+                    kind="health",
+                    device_id=device_id,
+                    dedupe_key=dedupe,
+                    occurred_at=o.occurred_at,
+                    title=o.metric or o.observation_type,
+                    snippet=None,
+                    payload={
+                        **(o.payload or {}),
+                        "device_id": device_id,
+                        "observation_type": o.observation_type,
+                        "metric": o.metric,
+                        "value": o.value,
+                        "unit": o.unit,
+                        "start_at": o.start_at,
+                        "end_at": o.end_at,
+                        "local_date": o.local_date,
+                        "source_app": o.source_app,
+                    },
                 )
-                inserted += cur.rowcount or 0
         return RawIngestResult(accepted, inserted, accepted - inserted)
 
     async def replace_health(
@@ -222,29 +341,26 @@ class RawDeviceRepository(UserScopedRepository):
     ) -> RawIngestResult:
         """Full-sync replace for health observations.
 
-        Always filters by ``reference_count = 0`` so rows already pinned
-        by a memory / evolution run survive the replace — those are
-        immutable raw evidence per the architecture doc. ``metric``
-        narrows scope when the envelope carries a single metric so a
-        steps push doesn't wipe a sibling heart_rate row for the same
-        ``local_date``.
+        Always filters by ``reference_count = 0`` so rows already pinned by a
+        memory / evolution run survive the replace — those are immutable raw
+        evidence per the architecture doc. ``local_date`` / ``metric`` narrow
+        scope (in payload JSONB) so a steps push doesn't wipe a sibling
+        heart_rate row for the same day.
         """
-        clauses = [
-            "user_id = %s",
-            "device_id = %s",
-            "reference_count = 0",
-        ]
-        params: list[Any] = [self._user_id, device_id]
+        extra_sql = " AND reference_count = 0"
+        extra_params: list[Any] = []
         if local_date:
-            clauses.append("local_date = %s")
-            params.append(local_date)
+            extra_sql += " AND payload->>'local_date' = %s"
+            extra_params.append(local_date)
         if metric:
-            clauses.append("metric = %s")
-            params.append(metric)
-        sql = "DELETE FROM pai_raw_device_health_observations WHERE " + " AND ".join(clauses)
+            extra_sql += " AND payload->>'metric' = %s"
+            extra_params.append(metric)
         async with self._conn.cursor() as cur:
-            await cur.execute(sql, tuple(params))
-        return await self.ingest_health(
-            device_id=device_id,
-            observations=observations,
-        )
+            await self._delete_device_scope(
+                cur,
+                kind="health",
+                device_id=device_id,
+                extra_sql=extra_sql,
+                extra_params=tuple(extra_params),
+            )
+        return await self.ingest_health(device_id=device_id, observations=observations)

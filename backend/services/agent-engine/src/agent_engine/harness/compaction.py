@@ -41,10 +41,10 @@ recovery) and never self-deletes. Storage is bounded by THREAD LIFECYCLE, not by
 compaction — main chat's row count is naturally finite (conversations end);
 proactive's grows slowly (small blobs now) and is bounded separately by thread
 roll-over if it ever matters. This matches LangGraph's design: checkpoints are
-short-term per-thread state, long-term memory lives in a Store (our pai_memory).
+short-term per-thread state, long-term memory lives outside the thread (our L1 pai_events + L2 pai_user_strings portrait).
 
 Nothing is lost to the user: full history lives in pai_chat_messages (display)
-and durable facts in pai_memory (recall). The thread is only the agent's
+and durable facts in the memory layers (pai_events retrieval + portrait recall). The thread is only the agent's
 short-term working set. The in-place rewrite is atomic and the control plane serializes
 a session's turns, so no concurrent turn observes a half-written window.
 
@@ -191,7 +191,7 @@ def _summary_message(summary_text: str) -> HumanMessage:
         content=(
             "Earlier turns of this conversation were summarized to save "
             "context. Full history is in the chat log; durable facts are in "
-            "memory (use memory_search). Condensed summary:\n\n"
+            "memory (use events_search). Condensed summary:\n\n"
             f"<conversation_summary>\n{summary_text}\n</conversation_summary>"
         ),
         additional_kwargs={"lc_source": "summarization"},

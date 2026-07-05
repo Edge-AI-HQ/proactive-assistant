@@ -167,10 +167,11 @@ forbidden_modules = [
     "pinai_api.orchestration",
 ]
 ignore_imports = [
-    # notification 读用户通知偏好 → 应改注入 ProfileRepository 而非直 import。
-    "pinai_api.platform.notification -> pinai_api.domains.user_model.profile",
-    # 首登 bootstrap seed default goals（lazy import 规避循环）→ 应上移 identity/orchestration。
-    "pinai_api.platform.auth.user_service -> pinai_api.orchestration.default_goals",
+    # notification 读用户通知偏好 → 应改注入 SettingsRepository 而非直 import。
+    "pinai_api.platform.notification -> pinai_api.domains.user_model.settings",
+    # 首登 bootstrap seed starter GOALS（lazy import 规避循环）→ seed 已归位
+    # memory.portrait（职责归属：Portrait 模块的 GOALS seed,design doc 七节）。
+    "pinai_api.platform.auth.user_service -> pinai_api.domains.memory.portrait",
 ]
 
 # ── api 内部分层：user_model 是 generation 的上游数据域 ──
@@ -184,6 +185,61 @@ name = "user_model 不依赖 generation（generation→user_model 单向取数�
 type = "forbidden"
 source_modules = ["pinai_api.domains.user_model"]
 forbidden_modules = ["pinai_api.domains.generation"]
+
+# ── memory 模块间依赖方向（lifelong-memory design doc §十一）──
+# 模块图：①Ingest→③、②Projection→③、⑥World→③、④Curation→③+⑤、
+# ⑤Portrait→③(memory_edit 双写变更事件)；③Events 是唯一的底。
+# 4 条锁 memory 内部方向 + 1 条锁 memory 是被消费方(不反向够管线/消费者)。
+[[tool.importlinter.contracts]]
+name = "memory.events 是底（③ 不依赖其它 memory 模块）"
+type = "forbidden"
+source_modules = ["pinai_api.domains.memory.events"]
+forbidden_modules = [
+    "pinai_api.domains.memory.projection",
+    "pinai_api.domains.memory.portrait",
+    "pinai_api.domains.memory.curation",
+]
+ignore_imports = [
+    # platform 底座契约已豁免的反向边(user_service 首登 lazy seed GOALS)的
+    # 传递假阳性:events.ui→user_service(取 auth deps)→portrait,不是 ③ 对 ⑤
+    # 的真依赖。治本随 platform 那条边解耦(见 platform 契约注释)。
+    "pinai_api.platform.auth.user_service -> pinai_api.domains.memory.portrait",
+]
+
+[[tool.importlinter.contracts]]
+name = "memory.projection 只依赖 events（②→③）"
+type = "forbidden"
+source_modules = ["pinai_api.domains.memory.projection"]
+forbidden_modules = [
+    "pinai_api.domains.memory.portrait",
+    "pinai_api.domains.memory.curation",
+]
+
+[[tool.importlinter.contracts]]
+name = "memory.portrait 只依赖 events（⑤→③ 双写变更事件）"
+type = "forbidden"
+source_modules = ["pinai_api.domains.memory.portrait"]
+forbidden_modules = [
+    "pinai_api.domains.memory.projection",
+    "pinai_api.domains.memory.curation",
+]
+
+[[tool.importlinter.contracts]]
+name = "memory.curation 只依赖 events+portrait（④→③+⑤）"
+type = "forbidden"
+source_modules = ["pinai_api.domains.memory.curation"]
+forbidden_modules = ["pinai_api.domains.memory.projection"]
+
+[[tool.importlinter.contracts]]
+name = "memory 是被消费方（不反向 import 管线/消费者）"
+type = "forbidden"
+source_modules = ["pinai_api.domains.memory"]
+forbidden_modules = [
+    "pinai_api.domains.connector",
+    "pinai_api.domains.generation",
+    "pinai_api.control",
+    "pinai_api.orchestration",
+]
 
 # ── uv workspace（Phase 5：物理拆 monorepo）──
 # 见 docs/plans/2026-06-21-backend-rearchitecture.mdx。libs/contracts

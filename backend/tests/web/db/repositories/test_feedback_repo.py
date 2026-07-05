@@ -4,8 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 from pinai_api.domains.feedback.repository import FeedbackRepository
-from pinai_api.domains.user_model.preferences import PreferenceRepository
-from pinai_api.domains.user_model.profile import ProfileRepository
+from pinai_api.domains.memory.events.repository import EventsRepository
 from pinai_db.rls import user_scoped_tx
 
 pytestmark = pytest.mark.asyncio
@@ -110,14 +109,6 @@ async def test_frontend_kind_dismiss_updates_intent_fingerprint():
 async def test_future_card_text_feedback_creates_active_preference(pool, user_ids):
     user_a, _ = user_ids
     async with user_scoped_tx(pool, user_a) as conn:
-        await ProfileRepository(user_a, conn).upsert_profile(
-            display_name="Avery",
-            locale="en-US",
-            timezone="America/Los_Angeles",
-            summary="Silicon Valley AI engineer building infra products.",
-            facts={"role": "AI engineer", "location": "San Francisco Bay Area"},
-            preferences={"content_depth": "technical, source-backed, low hype"},
-        )
         repo = FeedbackRepository(user_a, conn)
 
         feedback = await repo.log(
@@ -139,25 +130,27 @@ async def test_future_card_text_feedback_creates_active_preference(pool, user_id
             channel="card_thread",
         )
 
-        preferences = await PreferenceRepository(user_a, conn).list(status="active")
+        events = await EventsRepository(user_a, conn).search_structured(
+            event_type="preference", status="active", limit=10
+        )
 
-    assert len(preferences) == 1
-    pref = preferences[0]
-    assert pref.statement == (
+    assert len(events) == 1
+    ev = events[0]
+    # Statement is the event title; source marks the feedback origin;
+    # scope/polarity/weight/durability + evidence all live in structured.
+    assert ev.title == (
         "Stop showing me VC funding rumor cards again; focus on deeply technical AI infra papers."
     )
-    assert pref.scope == "topic"
-    assert pref.polarity == "negative"
-    assert pref.durability == "persistent"
-    assert pref.source == "user"
-    assert pref.weight == 1.0
-    assert pref.evidence == {
-        "card_id": "card_vc_rumors",
-        "feedback_id": feedback.id,
-        "intent_key": "tech:vc-rumors",
-        "basket": "tech",
-        "surface": "card_thread_reply",
-    }
+    assert ev.source == "pinai_feedback"
+    assert ev.structured["scope"] == "topic"
+    assert ev.structured["polarity"] == "negative"
+    assert ev.structured["durability"] == "persistent"
+    assert ev.structured["weight"] == 1.0
+    assert ev.structured["card_id"] == "card_vc_rumors"
+    assert ev.structured["feedback_id"] == feedback.id
+    assert ev.structured["intent_key"] == "tech:vc-rumors"
+    assert ev.structured["basket"] == "tech"
+    assert ev.structured["surface"] == "card_thread_reply"
 
 
 async def test_future_card_text_feedback_accepts_metadata_json_string(pool, user_ids):
@@ -173,16 +166,17 @@ async def test_future_card_text_feedback_accepts_metadata_json_string(pool, user
             channel="card_thread",
         )
 
-        preferences = await PreferenceRepository(user_a, conn).list(status="active")
+        events = await EventsRepository(user_a, conn).search_structured(
+            event_type="preference", status="active", limit=10
+        )
 
-    assert len(preferences) == 1
-    assert preferences[0].evidence == {
-        "card_id": "card_less_vc",
-        "feedback_id": feedback.id,
-        "intent_key": "tech:funding-rumors",
-        "basket": "tech",
-        "surface": "legacy_card_thread",
-    }
+    assert len(events) == 1
+    structured = events[0].structured
+    assert structured["card_id"] == "card_less_vc"
+    assert structured["feedback_id"] == feedback.id
+    assert structured["intent_key"] == "tech:funding-rumors"
+    assert structured["basket"] == "tech"
+    assert structured["surface"] == "legacy_card_thread"
 
 
 async def test_card_complete_updates_intent_fingerprint_as_positive(pool, user_ids):

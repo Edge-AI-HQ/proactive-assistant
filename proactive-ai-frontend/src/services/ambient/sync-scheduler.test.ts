@@ -287,7 +287,19 @@ describe("AmbientSyncScheduler", () => {
     expect(retryable[0]?.lastError).toBe("network down");
   });
 
-  test("drops local-only raw source records instead of uploading them", async () => {
+  test("passthrough uploads every kind incl. local-only raw sources (data-flow open)", async () => {
+    // AMBIENT_SYNC_PASSTHROUGH === true (2026-06-30): the SYNCABLE_AMBIENT_KINDS
+    // allowlist is bypassed so device.* raw sensors (location/activity/…) upload
+    // too — we want to see the real volume before designing gates. Flip the flag
+    // back to false to restore whitelist-only upload (then a local-only kind drops
+    // again, ignored=1). The allowlist Set stays wired as that "narrow again" list.
+    mockedIngestBatch.mockResolvedValueOnce({
+      ok: true,
+      accepted: 1,
+      inserted: 1,
+      ignored: 0,
+      results: [{ id: "raw-location", dedupe_key: "location:raw", status: "inserted" }],
+    });
     const outbox = new MemoryOutboxStore();
     await outbox.enqueue([
       {
@@ -302,8 +314,10 @@ describe("AmbientSyncScheduler", () => {
 
     const result = await scheduler.drain();
 
-    expect(mockedIngestBatch).not.toHaveBeenCalled();
-    expect(result.ignored).toBe(1);
+    expect(mockedIngestBatch).toHaveBeenCalledWith([
+      expect.objectContaining({ kind: "device.location" }),
+    ]);
+    expect(result.synced).toBe(1);
     expect(await outbox.count()).toBe(0);
   });
 });

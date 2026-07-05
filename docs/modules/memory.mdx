@@ -1,333 +1,328 @@
 ---
 title: "Memory"
-description: "raw、signals、memory、profile、skill、evolution 的当前事实。"
+description: "三层记忆架构 L0 pai_raw_apps/device / L1 pai_events / L2 pai_user_strings 的当前事实。"
 ---
 
 # Memory
 
 ## 结论
 
-Memory 模块负责把已接入的数据沉淀为生成链路可用的上下文。数据进入 `pai_raw_*` / `pai_personal_signals` / `pai_world_signals` 之后,本模块管它怎么存、怎么读、怎么演进。所有表都在 Postgres 同一 DB 的 public schema(前缀 `pai_*`);LangGraph chat checkpointer 独占 `langgraph` schema。**老的 SQLite `raw.db` / `proactive.db` / `mobile_items.db` 已经彻底退役**,代码里没有任何引用。
+Memory 模块把用户的 digital + physical + interaction context 收敛成**三层**:
+
+- **L0 · Raw**(`pai_raw_apps` + `pai_raw_device` + `pai_chat_messages` + `pai_world_signals`)—— 原始日志,append-only,需追溯的大内容。
+- **L1 · Events**(`pai_events`)—— 不可变 bi-temporal 语义事件流,带 `curation_status` 状态机,是 agent 检索的唯一入口。
+- **L2 · Profile**(`pai_user_strings`)—— 常驻 markdown 画像(6 slot),agent 自维护 + 用户 customize,注入 system prompt 让 agent「懂你」。
+
+写入两个延迟档:**projector**(即时,无 LLM,把 L0 投影成 L1 `pending` 事件)+ **evolve**(异步 LLM,curate 事件 + 蒸馏画像)。读取一个入口:`events_search`(L1)+ 常驻注入(L2)。所有表都在 Postgres 同一 DB 的 public schema(前缀 `pai_*`);LangGraph chat checkpointer 独占 `langgraph` schema。
+
+agent 工具从老的 21 个收敛到 **3 个**:`events_search`(读 L1)/ `event_append`(追加 L1)/ `memory_edit`(改 L2 画像)。
+
+> **退役**:老的 `pai_memory` / `pai_personal_signals` / `pai_profile` / `pai_goals` / `pai_preference_records` 五张表已在 migration `114_drop_legacy_memory.sql` 里 **DROP**;`pai_timeline_events` 死表在 `111` 里 drop。代码里不要再 grep 这些表。设计 SSOT 见 [Lifelong Memory 系统重构](../plans/2026-06-23-lifelong-memory-system)。
 
 上游接入看 [Data Connectors](./data-connectors)。
 
 ```mermaid
 flowchart LR
-  Raw["pai_raw_*"] --> Evo["pai_evolution_runs"]
-  PS["pai_personal_signals"] --> Evo
-  WS["pai_world_signals + view"] --> Evo
-  PS --> Gen["generation prompt"]
-  WS --> Gen
-  Evo --> Mem["pai_memory"]
-  Evo --> Prof["pai_profile + pai_goals"]
-  Evo --> Skill["pai_skill_index"]
-  Mem --> Gen
-  Prof --> Gen
-  Skill --> Gen
-  Mem -. embedding queue .-> Vec[("pgvector")]
-  PS -. embedding queue .-> Vec
-  WS -. embedding queue .-> Vec
+  subgraph L0["L0 Raw (append-only + TTL)"]
+    Apps["pai_raw_apps (Composio/connector)"]
+    Device["pai_raw_device (device)"]
+    Chat["pai_chat_messages"]
+    WS["pai_world_signals (全局)"]
+  end
+  subgraph L1["L1 Events (bi-temporal, 可检索)"]
+    Ev["pai_events"]
+  end
+  subgraph L2["L2 Profile (常驻注入)"]
+    US["pai_user_strings (6 slot)"]
+    AG["AGENTS (代码常量)"]
+  end
+  Apps -- projector(即时) --> Ev
+  Device -- projector(即时) --> Ev
+  Chat -. interaction .-> Ev
+  WS -- "world_scoring (salience→world_news)" --> Ev
+  Ev -- "evolve curate (pending→active)" --> Ev
+  Ev -- "evolve 蒸馏 (单向 L1→L2)" --> US
+  Ev -- events_search --> Agent["chat / generation / proactive"]
+  US --> Agent
+  AG --> Agent
+  Ev -. embedding queue .-> Vec[("pgvector")]
 ```
 
 ## 边界
 
 包含:
 
-- `pai_raw_*` 各 typed 表的 schema 与共用结构(reference 三元组、`occurred_at` / `ingested_at`、`dedupe_key`)。
-- `pai_personal_signals` 的 `open → consumed → archived` 状态机。
-- `pai_world_signals`(全局共享)+ `pai_world_signal_user_view`(per-user 投影)的双表设计。
-- `pai_memory`(`active → archived / superseded` + `superseded_by` 链)、`pai_profile` + `pai_goals`、`pai_skill_index`(body inline)。
-- `pai_evolution_runs` 的 5 种 `trigger_kind` + status 生命周期。
-- pgvector embedding 队列(`pai_embedding_queue`)与异步生成。
-- `/api/memory|signals|profile|skills|raw|evolution|world` 路由(UI + agent 双表面)。
-- `pinai_sdk` 在 sandbox 内的对端调用。
-- 三个 agent-engine-side agent(crystallize / dream / evolve)的写入语义。
-- RLS(`SET LOCAL app.user_id`)的多租户隔离。
+- **L0** 按域分两张表(`119` 拆分):`pai_raw_apps`(Composio/connector 域,`toolkit` + `entity_type` 判别)+ `pai_raw_device`(device 域,`kind` 判别、无 toolkit、`external_id`=device_id)。两表共用 envelope(`payload JSONB`/`occurred_at`/`expires_at` reference-aware TTL/reference 三元组)。
+- **L1** `pai_events`(`111`)的 schema、bi-temporal 双时间轴(`occurred_at` / `recorded_at`)、`curation_status` 状态机(`pending → active / filtered_out / archived`)、append + supersede 修正链、HNSW 语义检索。
+- **L2** `pai_user_strings`(`112`)6 slot 画像、hermes MemoryStore 编辑算法(乐观锁 + char_budget 防截断 + 威胁扫描)、`AGENTS` 代码常量、PortraitMiddleware 注入。
+- `pai_world_signals`(全局共享 L0,无 user_id)→ `world_scoring` 按 salience 投成 `pai_events` 的 `world_news` 事件(per-user view 已 `121` DROP,world 不再是独立检索 source)。
+- `pai_skill_index`(body inline)。
+- `pai_evolution_runs` 的 `trigger_kind` + status 生命周期(evolve 审计 + provenance)。
+- pgvector embedding 队列(`pai_embedding_queue`,allowlist = `pai_events` only)。
+- `/api/events` / `/api/user-strings`(UI 面)+ `/api/agent/events` / `/api/agent/user-strings` / `/api/agent/preferences`(agent 面)路由。
+- 三个 agent-engine 触发收敛进 **evolve**(on_event / daily / chat_burst)的写入语义。
+- RLS(`SET LOCAL app.user_id` + `SET LOCAL ROLE pai_app`)的多租户隔离。
 
 不包含:
 
 - 数据怎么进来(Composio / device ingest),看 [Data Connectors](./data-connectors)。
-- 卡片 pipeline 怎么读 memory,看 [Generation](./generation)。
+- 卡片 pipeline 怎么读 events / portrait,看 [Generation](./generation)。
 - 反馈事件如何生成,看 [Feedback](./feedback)。
-- scheduler 怎么派 `auto.dreaming` / `connector.evolve`(以及 `crystallize` 的预留 kind 现状),看 [Background Tasks](./background-tasks)。
+- scheduler 怎么派 `auto.dreaming` / `connector.evolve` / `crystallize`,看 [Background Tasks](./background-tasks)。
 
-## 表层级
+## 三层结构
 
-| Tier | 表 | 作用 |
-|---|---|---|
-| 0 raw | `pai_raw_gmail_messages` / `pai_raw_gcal_events` / `pai_raw_gdrive_files` / `pai_raw_slack_messages` / `pai_raw_github_issues` / `pai_raw_calendly_events` / `pai_raw_stripe_invoices` / `pai_raw_twitter_bookmarks` / `pai_raw_youtube_subscriptions` / `pai_raw_linkedin_profile` / `pai_raw_events` / `pai_raw_device_apps_snapshot` / `pai_raw_device_contacts_snapshot` / `pai_raw_device_health_observations` | 字段化批量数据。老 connector 保留 typed 表;长尾 / generic connector 统一落 `pai_raw_events`(`toolkit`,`entity_type`,`payload`);device source 仍按 policy 落 typed 表或 signal。 |
-| 1 signals | `pai_personal_signals` / `pai_world_signals`(+ `pai_world_signal_user_view`) | 短期观察,先给 pipeline / evolution 消费。 |
-| 2 memory | `pai_memory` | evolution / manual 沉淀出的长期事实,带 `quality` / `confidence` / `status` / `superseded_by`。 |
-| 3 profile / skill | `pai_profile` / `pai_goals` / `pai_skill_index` | 高浓缩画像、长期目标、可执行 skill。 |
+| 层 | 表 | 可变性 | 谁写 |
+|---|---|---|---|
+| **L0 · Raw** | `pai_raw_apps`(Composio/connector)+ `pai_raw_device`(device)+ `pai_chat_messages`(对话)+ `pai_world_signals`(全局)| **append-only + TTL** | 系统 ingest |
+| **L1 · Events** | `pai_events` | **append-only**(修正 = append supersede)| projector(系统)+ `event_append`(agent 纯追加)|
+| **L2 · Profile** | `pai_user_strings`(markdown 6 slot)+ `AGENTS`(代码常量)| **mutable**(原地改)| 用户 customize + agent `memory_edit` + evolve 蒸馏 |
 
-每张 `pai_raw_*` 共用结构:
+> **核心对称:历史(L0/L1)不可变,当前(L2)可变。** event-sourcing 内核——事件流记「发生了什么」(只能 append),投影出「现在是什么样」(随便改)。想「edit 一条 event」时,落在 L2 画像,不是事件层。
 
-- `(user_id, id)` PK + 业务 natural key。
-- `occurred_at`(事件时间)、`ingested_at`(写入 PIN 的时间)。
-- `dedupe_key`:`UNIQUE (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL`。
-- reference 三元组:`reference_count INT`、`last_referenced_at TIMESTAMPTZ`、`referenced_by_runs JSONB`(被 evolve / generate 引用后 bump)。
+### L0 · `pai_raw_apps` / `pai_raw_device`(`119`)
 
-## 状态机
+L0 按**域**分两张表(`119` 把早先的单一 `pai_raw` 拆开——统一发生在投影管线 + source→table registry,不在物理表)。两表共用同一套 envelope:`(user_id, id)` PK / `external_id` / `occurred_at` / `ingested_at` / `expires_at`(reference-aware TTL)/ `title` / `snippet`(可选展示投影)/ `payload JSONB`(source-specific 全字段)/ `dedupe_key` + reference 三元组——只判别列不同:
 
-### `pai_personal_signals.status`
+| 表 | 域 | 判别列 | 唯一键 |
+|---|---|---|---|
+| `pai_raw_apps` | Composio app / 通用 connector | `toolkit` + `entity_type` | `(user_id, toolkit, entity_type, dedupe_key)` |
+| `pai_raw_device` | 设备(snapshot + ambient) | `kind`(无 toolkit;`external_id`=device_id) | `(user_id, kind, dedupe_key)` |
 
-```
-open                              (刚 ingest)
-  ↓ signals.consume(id, run_id)   (evolve / generation 引用)
-consumed                          (consumed_by_run_id 锁定)
-  ↓ expires_at 到期 / 手动 archive
-archived
-```
+**写入路径**:
+- **Composio connector ingest** → `connector_ingest` → `generic_ingest.upsert_generic` → `pai_raw_apps`(toolkit 来自 task,entity_type 来自 `db/ingest_recipes/<toolkit>.yaml`)。
+- **device ingest** → `raw_device.py` → `pai_raw_device`:snapshot 的 `raw_only`/`dual` kind(apps/contacts/health)+ ambient 的 `signal_only` kind(utterance/visit/motion 等 context event)都写这一张表,没有 typed 分流。`external_id`=device_id 让 full-sync replace 把 DELETE 限定到单台设备。
 
-关键字段:`status`、`consumed_by_run_id`、`expires_at`、reference 三元组、`source_raw_table` + `source_raw_ids JSONB`。
+> projector(`event_projector.py` 的 `project_unprojected`)读 **`pai_raw_apps` + `pai_raw_device` 两表 UNION** 投成 pending 事件:apps 行带真实 toolkit、device 行以 `toolkit='device'` / `entity=kind` 归一,`(toolkit, entity)` 经 `_EVENT_TYPE_MAP` 映射出 event_type。device 跳过 semantic firehose(utterance/transcript,evolve rollup 合成 episode)+ apps/contacts(state 非事件)。
 
-### `pai_memory.status`
+### L1 · `pai_events`(`111`)
 
-```
-active                            (当前事实)
-  ├→ archived                     (不再相信 / 不再相关)
-  └→ superseded                   (被新陈述替换;superseded_by → 新 id)
-       新行 status='active',形成链 mem_old ← mem_new ← mem_current
-```
+一行 = 一个**语义事件**(发生的事 + 用户反馈)。核心字段:
 
-查询默认只看 `status='active'`;追溯链路时 follow `superseded_by`。
-
-### `pai_world_signal_user_view.status`
-
-`new → open → consumed → archived`。world signal 全局共享,但每用户单独存 `salience` / `scored_reason` / `consumed_by_run_id` 和自己的 reference 三元组。
-
-### `pai_evolution_runs.status` + `trigger_kind`
-
-| `trigger_kind` | 触发源 |
+| 字段 | 含义 |
 |---|---|
-| `chat_burst` | crystallize agent(当前由 agent-engine 进程内联触发;scheduler `crystallize` kind 路由已就位但没接 producer) |
-| `daily_dream` | scheduler kind `auto.dreaming` |
-| `manual` | CLI / 内部 / 测试触发 |
-| `on_event` | scheduler kind `connector.evolve`(init / 非空 sync 之后) |
-| `consolidation` | 预留,未启用 |
+| `(user_id, id)` | 主键(`id` TEXT,per-user 唯一)|
+| `source` | 来源**类别**:`composio` / `device` / `ambient` / `chat` / `pinai_feedback` / `internal_operator` / `user` |
+| `event_type` | 语义大类:`communication` / `meeting` / `utterance` / `movement` / `transaction` / `interaction` / `agent_decision` / `preference` |
+| `occurred_at` / `end_at` | **事件发生时刻**(过去/未来同轴)+ 区间事件的结束 |
+| `recorded_at` | **系统写入时刻**(事务时间;bi-temporal 另一轴,backfill 旧邮件=今天)|
+| `title` / `body` | 一句话摘要 + 可选长文 |
+| `structured JSONB` | 结构化字段(participants/location;preference 的 `{scope,polarity,weight,confidence,durability,expires_at}`)|
+| `source_ref` | 指回 L0 raw 的 id(projector 幂等依据)|
+| `importance` | salience 0–1(gating/检索核心,projector 默认 0.5 → evolve 校准)|
+| `curation_status` | `pending` / `active` / `filtered_out` / `archived`(CHECK 约束)|
+| `supersedes_id` / `superseded_by_id` | append-as-correction 链 |
+| `dedupe_key` | 幂等键(`UNIQUE (user_id, dedupe_key)`)|
+| `embedding` | `vector(1536)` HNSW cosine,复用 `pai_embedding_queue` |
+| `reference_count` / `last_referenced_at` | forgetting 客观依据 |
 
-`status`:`running` / `completed` / `failed`。所有 run 都写 `refs_consumed JSONB`(`{table: [id, ...]}`)+ `refs_produced JSONB` 做审计;LLM 失败时 `status='failed'` + `error_message`,raw / signals 不回滚。
+**bi-temporal**:`occurred_at`(何时发生)+ `recorded_at`(何时记下),学 Graphiti。「我去年这时在忙什么」= 查 `occurred_at` 落在去年的事件(append-only 全保留)。不再有第三个 `valid_from/valid_to` 时间轴(fact 走 L2 markdown)。
+
+**修正 = append + supersede**:「删除/更新」不物理改行,append 新版本 + 关旧版本链。`EventsRepository.supersede(old_id, new_id)` 把旧行标 `superseded_by_id` + `curation_status='archived'`,断言 `new_id` 已是该用户该 `event_type` 的 active 事件。**agent 的 `event_append` 纯追加,碰不到改写历史**;supersede 是系统/evolve/preference 路由内部操作。
+
+**fact / preference 归属**:durable fact / 画像型偏好("住上海"、"喜欢简洁")→ **L2 USER markdown**(纯文本真源)。硬约束 / 负向偏好指令("别再推 crypto"、dismiss)→ **L1 `event_type=preference` 事件**(`structured` 带 `polarity/weight/expires_at`,给 generation 当硬约束)。preference 路由(`/api/agent/preferences`)内部就是写 `pai_events`,`_event_to_preference_dict` 把事件投影回历史 PreferenceRow wire shape 让 internal dashboard 不动。
+
+### L2 · `pai_user_strings`(`112`)+ AGENTS
+
+6 slot markdown 画像,`(user_id, slot)` PK,`content TEXT`(`§` 分隔 entry)+ `version INT`(乐观锁)+ `char_budget INT` + `updated_at`。第 7 段 `AGENTS` 是 agent-engine 代码常量(`agents/prompts/portrait.py`),**不落盘**——agent/用户工具都够不着。
+
+**切分按「谁编辑」分三类(关键安全边界)**:
+
+| slot | 职责 | 谁编辑 |
+|---|---|---|
+| **AGENTS** | 行为规范 + 安全强约束 | 开发者(代码常量,谁都不能改)|
+| **IDENTITY / SOUL / TOOLS** | agent 是谁 / 人设 / 工具说明 | **用户** customize(settings UI;注入时 `<untrusted-text>` 包裹防注入)|
+| **USER** | 用户 durable facts + 画像型偏好 | agent `memory_edit` + evolve(纯文本真源,replace 更新)|
+| **MEMORY** | agent 主观长期笔记 / 解读 / 负向信号教训 | agent `memory_edit` + evolve(自身真源,不对应具体 event)|
+| **GOALS** | 长期目标(90+ 天)| agent `memory_edit` + evolve(≥3 事件持续证据才升级)|
+
+**编辑算法 = adapt hermes MemoryStore**(`UserStringsRepository.edit`):entry add/replace/remove + batch;乐观锁 `version`(并发 edit → WHERE version 失败 → no-op 逼 re-read);**超 char_budget 的 add 失败 → 回吐全部 entry 逼 agent 整合**(hermes 防截断,绝不静默 drop);**batch 只校验最终预算**;成功只返回新 version 不回吐 entry(防 thrash);**威胁扫描**(`<untrusted-text>` 标记 / NUL 拒写,在 api 信任侧做)。
+
+**注入**:`PortraitMiddleware`(`harness/middleware.py`)每个 agent instance fetch 一次 `/api/agent/user-strings/`,`build_portrait(slots)` 组装 `AGENTS` + 6 slot(用户 slot `<untrusted-text>` 包裹、agent slot 可信),prepend 成 transient SystemMessage(不落 checkpoint,放最前保 cache 稳定)。fetch 失败降级成只注入 AGENTS,不杀对话轮。
+
+## `curation_status` 状态机(检索 quality gate)
+
+```
+pending                                    (projector 投影 L0→L1 的落点)
+  │ evolve curate (client.events.curate)
+  ├→ active        (保留,可被 search_semantic 召回)
+  ├→ filtered_out  (噪声:newsletter/自动回执,留 L0 但不进检索)
+  └→ archived      (被 supersede / 过期)
+```
+
+> **⚠️ 检索 quality gate(关键踩坑)**:projector 投影的事件落 `pending`,**必须经 evolve curate 成 `active` 才被 `search_semantic` 召回**(repo 里 `search_semantic` 硬过滤 `curation_status='active'`)。agent 主动 `event_append` 的事件**直接落 `active` 立即可见**(agent 选择记录的事件跳过 pending)。preference 路由 `/add` 的偏好也直接 `active`。
+>
+> 所以 **connector ingest → chat 搜到** 之间夹着一次 evolve:connector_ingest 写 raw → projector 投影 pending 事件 → 入队 `connector.evolve` task → evolve curate 成 active → chat 才搜得到。**evolve 调度必须在线**,否则新 ingest 的事件永远卡在 pending 搜不到。
+
+## evolve(三合一)
+
+**evolve = 原 evolve / dream / crystallize 三合一**(`agents/evolve.py`,Code Mode sandbox agent),一个 agent、三种 trigger kind,统一两个 job:
+
+1. **CURATE L1**:读 `client.events.search(status="pending")`,逐个 `client.events.curate(id, status, importance)` 判定 active / filtered_out / archived + 校准 importance。
+2. **DISTIL L2**:从事件(正向 + 负向)单向蒸馏画像进 USER / MEMORY / GOALS(`client.user_strings.edit`),硬约束偏好顺手 `client.events.append(event_type="preference")`。**单向 L1→L2、画像是 events 的派生**——防双真源漂移。
+
+三种 trigger:
+
+| trigger_kind | 触发源 | scope |
+|---|---|---|
+| `on_event` | scheduler kind `connector.evolve`(connector ingest 写 raw 后入队)| curate 该 connector 的新 pending 事件 + 蒸馏画像 |
+| `daily` | scheduler kind `auto.dreaming`(每日按用户 timezone 06:00)| 全 pending 队列;roll up + forget + 刷新画像 |
+| `chat_burst` | chat session 结束(agent-engine 内联触发;修复了老 crystallize dormant)| 蒸馏对话表达的偏好/计划/事实 |
+
+**HTTP 端点**:dispatcher 仍 POST 三个独立端点 `/agent/run/{dream,evolve,crystallize}`(`transport/routes/run.py`),但它们都是瘦 shell,内部全调 `run_evolve(trigger_kind=...)`——`dream.py` / `crystallize.py` agent 文件已删,只剩 `evolve.py`。`auto.dreaming` 的 `pai_evolution_runs` lifecycle 包在 api 侧 `dispatcher._dispatch_dream`(agent-engine OOM 也能翻 `failed`)。
+
+**provenance**:evolve 每次蒸馏在 `pai_evolution_runs` 记 `refs_consumed` / `refs_produced`(目前 skill 维度可按 `created_run_id` / `last_updated_run_id` 聚合;`pai_events` 还没 run-association 列,per-run 事件账是 evolve-audit gap)。
 
 ## pgvector 与 embedding
 
-migration `029_pgvector_semantic_memory.sql` 给 `pai_memory` / `pai_personal_signals` / `pai_world_signals` 各加一列 `embedding vector(1536)` + `embedding_model TEXT` + `embedded_at TIMESTAMPTZ`,model pin `text-embedding-3-small`(`pinai_api/platform/embeddings.py:_MODEL`)。
+`pai_events.embedding vector(1536)`(`111`)+ HNSW cosine 索引(`WHERE embedding IS NOT NULL`),model pin `text-embedding-3-small`(`platform/embeddings.py`)。
 
-异步队列 `pai_embedding_queue`:
+异步队列 `pai_embedding_queue`(`(user_id, table_name, row_id)` PK,`status` ∈ `pending/running/done/failed`):
 
-- `(user_id, table_name, row_id)` PK,`status` ∈ `pending / running / done / failed`。
-- 写入侧:repository 在 `memory.add` / `signals.add` / `world_signals.add` 之后 `embeddings.enqueue(conn, user_id, table_name, row_id, text)`。
-- 消费侧:`pinai_api/orchestration/tick_loop.py` 每轮顺手 `embeddings.drain_queue()`(batch 32 条,调 LiteLLM `/embeddings` master key,写回 source 表的 embedding 列,翻 queue 行 `done`)。
-- 失败 attempts 上限 5,`last_error TEXT(500)`。
+- **allowlist = `pai_events` only**(`122` 把 `pai_world_signals` 移出——world 迁进 events 后它自己的 embedding/FTS 列已没有检索消费者,连列带索引带队列项一并删)。
+- 写入侧:`EventsRepository.append` 在同一事务里 `enqueue(conn, user_id, "pai_events", row_id, title+body)`(仅新插入时)。
+- 消费侧:`orchestration/tick_loop.py` 每轮 `drain_queue()`(batch 调 LiteLLM `/embeddings`,写回 `pai_events.embedding`)。每条事件按该用户 virtual key 计费;keyless 用户的行留 pending,等 onboarding 配 key 后补算(个人数据从不计到 master)。
 
-HNSW 索引 + RLS(WHERE user_id 先短路再做 vector op),hot path:
+## world signals
 
-- `pai_memory.embedding`:`USING hnsw (embedding vector_cosine_ops) WHERE embedding IS NOT NULL`。
-- world signals 多一层 `title_summary_tsv tsvector`(`034_pai_world_signals_fts.sql`,GENERATED STORED),做语义 + 关键词 RRF 混合搜索。
+`pai_world_signals`(全局共享 L0,无 user_id,`020`)是唯一保留的 world 表:`world_ingest` 拉 RSS 写这里(RLS 公开 SELECT + service-role-only INSERT,`normalized_url` 去重)。**world IS an event**——`world_scoring` 给每个活跃用户按 salience(≥阈值)+ top-K 把信号投成 `pai_events` 的 `world_news` 事件(`source='world'`,salience 在 `structured`),agent 经 `events_search(event_type="world_news")` 读,和任何 event 一样。per-user `pai_world_signal_user_view` 已 `121` DROP;world 不再 LEFT JOIN、不再有 `world_recent` / `world_search` 工具或 `/api/world` / `/api/agent/world` 路由(W5/W6 退役)。
 
 ## HTTP 路由
-
-两份对称的路由,共用同一份 repository,只换鉴权层。
 
 ### UI 面(`/api/*`,Supabase JWT)
 
 | Prefix | 作用 |
 |---|---|
-| `/api/memory` | list / get / add / archive / supersede / search |
-| `/api/signals` | list / get / add / archive(写动作受限) |
-| `/api/profile` | get / patch / goal CRUD |
-| `/api/skills` | list / get / add / patch / disable |
-| `/api/raw` | get(只读 raw 表;e.g. `/api/raw/gmail/recent`) |
-| `/api/evolution-runs` 或 `/api/dreaming/runs` | 列 evolution_runs 给 dreaming panel |
-| `/api/world` | recent / search(可读 world signals + 自己的 view) |
+| `/api/events` | list(active 事件时间线,Ambient / Mirror 渲染,只读)|
+| `/api/user-strings` | get(6 slot 画像 markdown,Mirror 渲染,无 UI 写路径)|
+| `/api/settings` | get / patch(含 timezone)|
+| `/api/evolution` | 列 evolution_runs 给 dreaming panel |
+| `/api/skills` | list / get / patch / disable |
 
-### Agent 面(`/api/agent/*`,EdDSA agent-run JWT 或 phantom token)
+### Agent 面(`/api/agent/*`,EdDSA agent-run JWT)
 
 | Prefix | 作用 |
 |---|---|
-| `/api/agent/memory` | list / get / add / search / archive / supersede |
-| `/api/agent/signals` | recent / get / add / consume |
-| `/api/agent/profile` | get / upsert / preferences/merge / upsert_goal |
+| `/api/agent/events` | `search`(语义/recency/gating)/ `append`(纯追加)/ `curate`(evolve 用,pending→active/...)|
+| `/api/agent/user-strings` | `/`(读 6 slot 画像)/ `edit`(memory_edit;只允许 USER/MEMORY/GOALS)|
+| `/api/agent/preferences` | `add` / `list` / `supersede`(底层写 `pai_events` event_type=preference;source 从 JWT principal 强制派生)|
 | `/api/agent/skills` | list / get / add |
-| `/api/agent/raw` | list / get(toolkit-aware) |
-| `/api/agent/world` | recent / search / score / consume / reference |
-| `/api/agent/evolution` | create / list / get / complete / fail(`_dispatch_dream` 在 api 侧管 lifecycle,agent 调写) |
-| `/api/agent/feedback` | list / log |
-| `/api/agent/cards` | recent(读 generation 卡片做上下文) |
-| `/api/agent/state` | KV(sandbox 跑 python 时持久 state) |
+| `/api/agent/evolution` | create / list / get / complete / fail |
+| `/api/agent/raw` | list / get(按域路由:device→`pai_raw_device` by kind,其余→`pai_raw_apps` by toolkit+entity)|
 
-## pinai_sdk(sandbox 内对端)
+## agent 工具(21 → 3)
 
-`backend/packages/pinai_sdk/`,sandbox image 里 baked。agent-engine 端工具或 `python_exec` 里都通过 `from pinai_sdk import client` 调,SDK 读 `PAI_API_URL` + `PAI_SANDBOX_TOKEN` env,打 `/api/agent/*`:
+| 工具 | 替代掉 | 落点 |
+|---|---|---|
+| **`events_search`**(读)| memory_search / signals_recent / raw_list / world reads | `/api/agent/events/search` |
+| **`event_append`**(纯追加一条事件)| (新增)| `/api/agent/events/append`(直接 active)|
+| **`memory_edit`**(改 L2 画像 add/replace/remove/batch)| memory_add / profile_upsert / goal_upsert / preference_add | `/api/agent/user-strings/edit` |
 
-```python
-await client.memory.list(min_quality=0.6, subject="topic:", limit=20)
-await client.memory.search(q="投资偏好", min_quality=0.5, limit=10)
-await client.memory.add(text="...", source="dream", source_run_id=run_id, quality=0.8)
-await client.memory.supersede(old_id="...", new_id="...")
-
-await client.signals.recent(status="open", kind="connector.gmail.message", limit=20)
-await client.signals.consume(id="...", run_id=run_id)
-await client.signals.add(kind="...", title="...", payload={...}, dedupe_key="...")
-
-await client.profile.get()                       # {profile, goals}
-await client.profile.upsert(facts={...}, preferences={...}, constraints={...})
-await client.profile.merge_preference(key="card_topics", value="Prefers proactive AI and market-news cards.")
-await client.profile.upsert_goal(key="health_marathon", title="...", priority="high")
-
-await client.skills.list(status="enabled")
-await client.skills.add(title="...", body="<markdown>", triggers=[...], created_run_id=run_id)
-
-await client.raw.gmail.recent(hours=24, limit=10)
-await client.raw.gcal.today(timezone="Asia/Shanghai")
-await client.raw.list(toolkit="github", entity="issues", since="...", limit=50)
-
-await client.world.recent(status="open", hours=24, limit=20)
-await client.world.search(q="fed rate decision", limit=10)
-await client.world.consume(id="...", run_id=run_id)
-```
-
-SDK 顶层 `client.sys.schema()` 列出当前 sandbox 能调的全部 endpoint(给 agent 自检用)。
-
-## evolution 链路
-
-### `connector.evolve`(`on_event`)
-
-scheduler 派 → POST `agent-engine /agent/run/evolve` → `agent_engine/agents/evolve.py`:
-
-输入:刚 ingest 的 raw 行(20 条 sample,从 `task.payload.refs` 取)+ 现有 memory subjects(去重)+ profile summary(避免矛盾)。
-
-输出顺序:
-
-1. `personal_signals`(最多 — 高 salience open signals)。
-2. `memory`(自由 fact,`source='connector_init:<toolkit>'` 或 `'connector_sync:<toolkit>'`,`source_run_id=evolution_run.id`)。
-3. `profile`(结构化 upsert,`facts` / `preferences` / `constraints` JSONB 桶里写描述性整句,不是 tag 词)。
-4. `goals`(罕见 — 只在 ≥3 个事件跨周持续才升级成 goal,带 `key` 稳定 slug)。
-
-LLM 失败:`evolution_runs.status='failed'` + `error_message`,raw + signals 保留。skill 写入比 memory 更保守 — 只有可形成可执行流程 + 置信度达阈值的 candidate 才落 `pai_skill_index`,普通事实只写 memory。
-
-### `auto.dreaming`(`daily_dream`)
-
-scheduler 派(每日按用户 timezone 06:00 左右一次)→ api 侧 `_dispatch_dream`(`orchestration/dispatcher.py`)先写 `pai_evolution_runs` 行(`status='running'`)→ POST `agent-engine /agent/run/dream` → agent-engine agent 跑长 loop → api 侧根据 HTTP 结果翻 `completed` / `failed`。
-
-输入:过去 24h 的 personal_signals 全量窗口是主输入,`auto.dreaming` 必须用 `status=all, hours=24, limit=10000, includePayload=true` 拉取,避免默认 20–50 条分页漏掉当天 ambient transcript / connector summary,同时保证 transcript payload 正文也进入分析窗口。raw 是同一 24h 窗口的补充证据,通过 `raw.list(..., hours=24, limit=10000)` 按支持的 typed raw source 拉取;再叠加当前 memory / profile / goals。
-
-输出:`memory.add` / `memory.supersede`(整理矛盾)/ `profile.upsert`(每日漂移)/ 偶尔 `goals.upsert`。失败 lifecycle 包在 dispatcher 里,agent-engine OOM 也能翻成 `failed` 不留 ghost row。
-
-### `crystallize`(`chat_burst`)
-
-`agent_engine/agents/crystallize.py`,**当前 agent-engine 进程 inline 触发**(不走 scheduler 队列;dispatcher 的 `crystallize` kind 路由已实现 POST `agent-engine /agent/run/crystallize`,但 api 端没有 producer 入队 — 详见 [Background Tasks](./background-tasks))。
-
-输入:chat agent 从 LangGraph checkpointer 读完整 transcript + recent personal_signals + 当前 memory / profile,生成 `source='crystallize'` 的 memory / skill。
-
-跟 [Feedback](./feedback) 模块的 `card_chat_interest` 不一样:crystallize 写长期 memory / skill,feedback 只生成 next-generation 偏置。两者共用同一份 transcript 归一化。
+> 对应三层可变性:events 工具只有 search + append(**没有 edit/delete,历史不可改**);画像工具 `memory_edit` 有 add/replace/remove(当前状态会变)。IDENTITY/SOUL/TOOLS 走用户设置 UI(不在 agent 工具)。chat agent 的工具集真源在 `agent-engine/.../tools/direct/__init__.py` 的 `ALL_TOOLS`;`memory_edit`(USER/MEMORY/GOALS)+ `event_append` 是频繁自治写,**故意不进 HITL gate**(否则 approval 刷屏)。
 
 ## RLS 多租户
 
-`023_pai_rls.sql` 给所有 per-user 表(22 张)挂 `USING (user_id = current_setting('app.user_id', true)::bigint)`。
-
-repository 层 `user_scoped_tx(pool, user_id)`(`libs/db/src/pinai_db/rls.py`)异步 context manager 包所有读写:
+新三层表(`pai_raw_apps` / `pai_raw_device` / `pai_events` / `pai_user_strings`)沿用 `user_scoped_tx`(`libs/db/src/pinai_db/rls.py`):`SET LOCAL ROLE pai_app`(非-BYPASSRLS)+ `SET LOCAL app.user_id`,双 policy(`user_scope` PUBLIC + `service_role` fallback)+ `FORCE ROW LEVEL SECURITY`。RLS 现已真激活(PR #200-204,之前「superuser bypass、名存实亡」已修)。
 
 ```python
 async with user_scoped_tx(pool, user_id) as conn:
-    await conn.execute("SET LOCAL app.user_id = $1", (user_id,))
-    # 跑 SELECT / INSERT / UPDATE,RLS 自动按 user_id 过滤
+    repo = EventsRepository(user_id, conn)
+    rows = await repo.search_structured(status="active", limit=20)
 ```
 
-`service_tx(pool)`(不带 user)用于 scheduler / world_ingest / migration 这类不属于任何用户的 batch job,policy 里有 fallback 允许 `app.user_id` 为空时通过。
-
-`pai_world_signals` / `pai_yoyo_migration_log` 是例外,跟 user_id 无关,policy 单独写。
+`service_tx(pool)`(不带 user)用于 scheduler / world_ingest / migration batch job(policy 有空 `app.user_id` fallback)。`pai_world_signals` 无 user_id,policy 单独写。
 
 ## 开发入口
 
 | 改动 | 先看 |
 |---|---|
-| Schema 改 / 加表 | `backend/db/migrations/`(NNN 顺序,只向前,RLS policy 同步加在 023 风格的新文件里) |
-| Memory repository | `pinai_api/domains/user_model/memory.py`(`list_active`、`add`、`supersede`、`archive`) |
-| Personal signals repository | `pinai_api/domains/user_model/personal_signals.py`(`list`、`consume`、`add`、`mark_referenced`) |
-| World signals repository / 全局 ingest | `pinai_api/domains/connector/world/world_signals.py`、`pinai_api/domains/connector/world/world_ingest.py` |
-| Profile / goals repository | `pinai_api/domains/user_model/profile.py` |
-| Skills repository | `pinai_api/domains/user_model/skills.py`(`body` inline TEXT,有 `revision` + `body_hash`) |
-| Raw device repository | `pinai_api/domains/connector/device/raw_device.py` |
+| Schema 改 / 加表 | `backend/db/migrations/`(`110`-`114` 是本次 sunset;NNN 顺序只向前,RLS policy 同款双 policy + FORCE)|
+| L1 events repository | `pinai_api/domains/user_model/events.py`(`append` / `search_semantic` / `search_structured` / `mark_curated` / `supersede` / `list_pending`)|
+| L0→L1 projector | `pinai_api/domains/user_model/event_projector.py`(`raw_to_event_input` 纯函数 + `project_unprojected`;`_EVENT_TYPE_MAP` 是唯一 domain 知识)|
+| L2 画像 repository | `pinai_api/domains/user_model/user_strings.py`(hermes `edit`:乐观锁 + char_budget + 威胁扫描)|
+| timezone / settings | `pinai_api/domains/user_model/settings.py`(`pai_user_settings.timezone`,`113` 从退役的 `pai_profile` 迁来)|
+| preference(event_type=preference)| `pinai_api/domains/user_model/preferences_agent.py` |
 | Evolution repository | `pinai_api/domains/user_model/evolution.py` |
-| UI 路由 | `pinai_api/domains/user_model/{memory_ui,signals_ui,profile_ui,skills_ui,dreaming_ui}.py`、`domains/connector/apps/raw_ui.py` |
-| Agent 路由 | `pinai_api/domains/user_model/{memory_agent,signals_agent,profile_agent,skills_agent,evolution_agent}.py`、`domains/connector/{apps/raw_agent.py,world/agent.py}`、`domains/generation/cards_agent.py`、`domains/feedback/agent.py` |
-| pgvector embedding | `pinai_api/platform/embeddings.py`、`pai_embedding_queue` migration `029` |
-| pinai_sdk client | `backend/packages/pinai_sdk/src/pinai_sdk/` |
-| dream / evolve / crystallize agent | `backend/services/agent-engine/src/agent_engine/agents/{dream,evolve,crystallize}.py` |
+| World signals / 全局 ingest | `pinai_api/domains/connector/world/world_signals.py`、`world_ingest.py` |
+| Skills repository | `pinai_api/domains/user_model/skills.py`(`body` inline TEXT)|
+| UI 路由 | `pinai_api/domains/user_model/{events_ui,user_strings_ui,settings_ui,evolution_ui,skills_ui}.py` |
+| Agent 路由 | `pinai_api/domains/user_model/{events_agent,user_strings_agent,preferences_agent,settings_agent,skills_agent,evolution_agent}.py` |
+| evolve agent(LLM)| `backend/services/agent-engine/src/agent_engine/agents/evolve.py`(三 trigger 合一)|
+| evolve 调度 | `pinai_api/orchestration/dispatcher.py`(`_dispatch_dream` + `connector.evolve` / `crystallize` 路由)、`cron.py` |
+| AGENTS 常量 + 画像组装 | `agent-engine/.../agents/prompts/portrait.py`(`AGENTS` + `build_portrait`)|
+| 画像注入 middleware | `agent-engine/.../harness/middleware.py`(`PortraitMiddleware`)|
+| chat 工具集 | `agent-engine/.../tools/direct/__init__.py`(`ALL_TOOLS`)、`tools/direct/{events,user_strings}.py` |
+| pgvector embedding | `pinai_api/platform/embeddings.py`、`pai_embedding_queue`(`029` + `111`/`122` 收窄 allowlist 到 `pai_events` only)|
 | RLS helper | `backend/libs/db/src/pinai_db/rls.py` |
-| 前端 memory / profile / skill | `proactive-ai-frontend/src/hooks/{useMemories,useSkills}.ts`、`components/{MemoriesPanel,SkillsPanel,ControlPanel,GoalsView}.tsx` |
 
 ## 验证方式
 
 ```bash
 # Repository 单测
 cd backend && uv run pytest tests/web/db/                       # 全 repository 套件
-cd backend && uv run pytest tests/web/db/test_memory_repo.py
-cd backend && uv run pytest tests/web/db/test_personal_signals_repo.py
-cd backend && uv run pytest tests/web/db/test_profile_repo.py
 
 # Agent / UI 路由集成
-cd backend && uv run pytest tests/web/routes/test_agent_profile_routes.py
-cd backend && uv run pytest tests/web/routes/                   # 全 route 套件
+cd backend && uv run pytest tests/web/routes/
 
-# agent-engine evolution agent(测试目录仍是 tests/chat/)
-cd backend && uv run pytest tests/chat/agents/                  # dream / evolve / crystallize(若存在)
-
-# pinai_sdk
-cd backend/packages/pinai_sdk && uv run pytest
+# agent-engine evolve agent
+cd backend && uv run pytest tests/chat/agents/
 
 # 类型 + lint
 cd backend && uv run ruff check .
-cd proactive-ai-frontend && npm run type-check
+cd backend && uv run lint-imports
+cd backend && uv run mypy services libs
 ```
 
 手工 SQL(本地 compose Postgres):
 
 ```sql
--- memory 概览
-SELECT count(*) FILTER (WHERE status='active') AS active,
-       count(*) FILTER (WHERE status='archived') AS archived,
-       count(*) FILTER (WHERE status='superseded') AS superseded
-FROM pai_memory WHERE user_id = $1;
+-- 事件流概览(按 curation_status)
+SELECT curation_status, count(*) FROM pai_events
+WHERE user_id = $1 GROUP BY curation_status;
+
+-- pending 队列(等 evolve curate)
+SELECT id, event_type, occurred_at, title FROM pai_events
+WHERE user_id = $1 AND curation_status = 'pending' ORDER BY occurred_at DESC LIMIT 20;
 
 -- supersede 链
-SELECT id, text, status, superseded_by FROM pai_memory
-WHERE user_id = $1 AND subject = $2 ORDER BY created_at;
+SELECT id, title, curation_status, supersedes_id, superseded_by_id FROM pai_events
+WHERE user_id = $1 AND event_type = $2 ORDER BY recorded_at;
 
--- signal pipeline
-SELECT status, count(*) FROM pai_personal_signals WHERE user_id = $1 GROUP BY status;
+-- L2 画像 6 slot
+SELECT slot, length(content) AS chars, version, updated_at FROM pai_user_strings
+WHERE user_id = $1 ORDER BY slot;
 
 -- 最近 evolution runs
-SELECT id, trigger_kind, status, started_at,
-       memories_written, memories_superseded, skills_added
+SELECT id, trigger_kind, status, started_at, skills_added, profile_updated
 FROM pai_evolution_runs WHERE user_id = $1 ORDER BY started_at DESC LIMIT 10;
 
 -- embedding queue 状态
-SELECT status, count(*) FROM pai_embedding_queue GROUP BY status;
+SELECT table_name, status, count(*) FROM pai_embedding_queue GROUP BY table_name, status;
 ```
 
 ## 踩坑
 
-- 不要在端侧或 ingest 层直接写高 `quality` memory;高质量长期事实必须经过 evolve / dream / manual 三个有 `pai_evolution_runs` 审计的路径。
-- `pai_world_signals` 没 `user_id`,RLS policy 跟 per-user 表不一样;写代码时不要套同一个 `user_scoped_tx`。
-- `pai_memory.embedding` / `pai_personal_signals.embedding` / `pai_world_signals.embedding` 是异步队列写的,不要在 INSERT 之后立刻 vector 搜 — 给至少一轮 tick(默认 3s)让 `drain_queue` 跑。
-- skill `body` 现在 inline 在 `pai_skill_index.body TEXT` 列,**没有**文件系统路径 `/opt/pinai/skills/<id>/SKILL.md`(OpenClaw 退役),代码读 SKILL.md 走 DB,不要再回到 `existsSync` candidate 模式。
-- `pai_evolution_runs` 的 `_dispatch_dream` lifecycle 在 api 进程拿着,agent-engine 端只算 LLM;agent-engine OOM 时 api 仍能把行翻 `failed`,不要在 agent-engine 端自己写 `status='completed'`。
-- v2 satellite 表已经全部撤掉:`profile_signals` / `profile_interests` / `dream_runs` / `auto_loop_state` / `chat_crystallize_state` / `push_records` / `push_outcomes` 不存在,代码里不要再 grep。
-- `mobile_items.db` / `raw.db` / `proactive.db` 三个 SQLite 文件**完全不在用了**,所有数据在 Postgres `pai_*`。
-- `pai_goals.key` 是 `UNIQUE (user_id, key)`,upsert 用 key 当 dedup 锚,不要按 id 重复 INSERT。
-- `superseded_by` 链不要写成循环;`memory.supersede(old_id, new_id)` 必须保证 new_id 之前是 `status='active'`,repository 里有断言。
-- pgvector cosine 距离 `<=>` 越小越像,跟 langchain 默认 similarity score 方向相反 — 自己查 raw SQL 时注意。
-- LangGraph checkpointer 在 `langgraph` schema,跟 `pai_chat_threads`(memory 关心的)是两个东西;清 chat 状态时不要误删 metadata 行。
+- **检索 quality gate**:projector 投影的事件落 `pending`,只有 evolve curate 成 `active` 才被 `events_search`(`search_semantic`)召回;agent `event_append` / preference `/add` 直接落 `active`。connector ingest 后新事件搜不到,先确认 `connector.evolve` task 跑没跑、evolve 调度在不在线。
+- **L0 raw 是两张域表,不是 generic 单表也不是 typed 多表**:`119` 把早先的单一 `pai_raw` 拆成 `pai_raw_apps`(Composio)+ `pai_raw_device`(device)并 DROP 了 `pai_raw`;backend DB 里 raw 只有这两张,代码零 typed 表写入。apis 时代的 typed raw 表不在 backend migration 管辖,别照旧文档/旧注释以为还有 generic `pai_raw` 或 `pai_raw_device_*`。
+- **事件不按内容去重**:同一动作不同时刻是 N 行(频率本身是 evolve 蒸馏画像的信号);`dedupe_key` 只防同一事件被写两次(backfill + webhook 撞一封邮件)。
+- **`pai_events.embedding` 是异步队列写的**:INSERT 后不要立刻 vector 搜,给至少一轮 tick(默认 3s)让 `drain_queue` 跑;没 embedding 的行 `search_semantic` 直接跳过,要 recency 用 `search_structured`。
+- **画像 edit 超预算不是静默截断**:`memory_edit` over_budget 会回吐全部 entry 逼 agent 整合后重发(hermes 防失明);乐观锁 `version` 冲突会 no-op,agent 要 re-read 重试。
+- **AGENTS 不落盘**:安全强约束是 `agents/prompts/portrait.py` 的代码常量,agent/用户工具够不着;用户可改的 IDENTITY/SOUL/TOOLS 注入时 `<untrusted-text>` 包裹,改注入顺序/包裹要同步测试。
+- **evolve 三端点都指向同一个 agent**:`/agent/run/{dream,evolve,crystallize}` 全 `run_evolve(trigger_kind)`;`dream.py` / `crystallize.py` 已删,改 consolidation 逻辑只动 `evolve.py`。
+- **`pai_world_signals` 没 `user_id`**:RLS policy 跟 per-user 表不一样,不要套 `user_scoped_tx`,用 `service_tx`。world 的 per-user 落点是 `pai_events` 的 `world_news` 事件(`world_scoring` 投),不是 view——`pai_world_signal_user_view` 已 `121` DROP。
+- **timezone 在 `pai_user_settings` 不在 `pai_profile`**:`pai_profile` 已 DROP(`114`);timezone 是它唯一有运行时消费者的字段,已迁 `pai_user_settings`(`113`),`locale` / `display_name` 无消费者随表删。
+- **退役表别再 grep**:`pai_memory` / `pai_personal_signals` / `pai_profile` / `pai_goals` / `pai_preference_records` / `pai_timeline_events` 全 DROP;旧的 `superseded_by` 链 / 三桶 JSONB profile / signals 队列语义都没了。
+- **LangGraph checkpointer 在 `langgraph` schema**,跟 `pai_chat_threads`(memory 关心的)是两个东西;清 chat 状态时不要误删 metadata 行。
 
 ## 相关模块
 
-- [Data Connectors](./data-connectors):raw / signal 是怎么写进来的(Composio init/sync、device ingest)。
-- [Generation](./generation):卡片生成怎么读 memory / signals / profile / skills。
-- [Background Tasks](./background-tasks):`auto.dreaming` / `connector.evolve` 的派发框架(`crystallize` kind 已预留但当前未接 producer)。
-- [Execution](./execution):conversation 聊天沉淀触发 crystallize 的入口。
+- [Data Connectors](./data-connectors):raw 怎么写进来(Composio init/sync、device ingest)+ projector 投影 L1。
+- [Generation](./generation):卡片生成怎么读 events / portrait / preference。
+- [Background Tasks](./background-tasks):`auto.dreaming`(daily evolve)/ `connector.evolve`(on_event)/ `crystallize`(chat_burst)的派发框架。
+- [Execution](./execution):chat session 结束触发 chat_burst evolve 的入口。
 - [Runtime & Deployment](./runtime-deployment):RLS / Postgres pool / yoyo migration 通用基建。
 
 ## 相关 AI Plans
 
-- [反馈并入 Main Chat + 高权重偏好](../plans/2026-05-24-feedback-into-main-chat-preferences):main chat 把用户亲口偏好写进新表 `pai_preference_records`(表达层),和 `pai_profile`(聚合画像)/ `pai_user_fingerprint`(行为层)分工;不走 Personal Evolution Agent。
+- [Lifelong Memory 系统重构](../plans/2026-06-23-lifelong-memory-system):三层架构(L0 Raw / L1 Events / L2 Profile)+ 工具收敛 + evolve 三合一的设计 SSOT。
+- [Proactive + 卡片生成](../plans/2026-06-23-proactive-card-generation):本 memory 的消费侧(proactive agent + 卡片生成)。

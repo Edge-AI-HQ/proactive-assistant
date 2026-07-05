@@ -1,6 +1,5 @@
 import { readErrorMessage } from "../transport/errors";
 import { pinaiFetch, proxyFetch } from "../transport/http";
-import type { PersonalSignal } from "./profile";
 
 // ── User devices (multi-device registry) ──
 
@@ -182,9 +181,41 @@ export interface DeviceHealthObservation {
   reference_count: number;
 }
 
-export type DeviceTimelineItem =
-  | { type: "signal"; occurred_at: string; row: PersonalSignal }
-  | { type: "health"; occurred_at: string; row: DeviceHealthObservation };
+/**
+ * A non-health device timeline row (ambient / device context events:
+ * utterance / visit / calendar / motion / focus / transcript_window / context).
+ *
+ * Since the lifelong-memory L0 unification these land in `pai_raw` and the
+ * timeline endpoint returns each row as `payload || {id, occurred_at,
+ * device_id, reference_count}`. The context payload carries the signal-shaped
+ * metadata (kind / salience / confidence) plus whatever the source put in
+ * `payload` (e.g. `storage_path` for media). NOTE: the raw `title` / `snippet`
+ * columns are NOT folded into this row by the current endpoint, so there is no
+ * title/summary text here — render `kind` + media + occurred_at.
+ */
+export interface DeviceContextRow {
+  id: string;
+  device_id: string | null;
+  occurred_at: string;
+  reference_count?: number;
+  kind?: string;
+  salience?: number;
+  confidence?: number;
+  /** Original source payload fields pass through (storage_path, file_path, …). */
+  [key: string]: unknown;
+}
+
+/**
+ * One unified device timeline item. `type` is the row's `entity_type`
+ * (`health` for raw health observations; otherwise an ambient / device
+ * context bucket). The `health` row is a {@link DeviceHealthObservation};
+ * every other entity_type is a {@link DeviceContextRow}.
+ */
+export interface DeviceTimelineItem {
+  type: string;
+  occurred_at: string;
+  row: DeviceHealthObservation | DeviceContextRow;
+}
 
 export interface DeviceTimelineResponse {
   ok: boolean;
@@ -194,8 +225,9 @@ export interface DeviceTimelineResponse {
 }
 
 /**
- * Unified device timeline (signals + raw health observations) ordered
- * by ``occurred_at DESC`` with a single keyset cursor. Backed by
+ * Unified device timeline — the device's `pai_raw` rows (health + ambient /
+ * device context events), ordered by ``occurred_at DESC`` with a single keyset
+ * cursor. Each item's `type` is the row's entity_type. Backed by
  * `GET /api/devices/{deviceId}/timeline`.
  */
 export async function fetchDeviceTimeline(

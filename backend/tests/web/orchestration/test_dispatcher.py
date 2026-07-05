@@ -7,7 +7,6 @@ from pinai_api.orchestration.dispatcher import (
     _AGENT_RUN_KIND,
     DefaultDispatcher,
     _dream_result_fields,
-    _generation_context_since,
 )
 from pinai_api.platform.db.repositories.scheduled_tasks import ScheduledTasksRepository
 from pinai_db.rls import service_tx, user_scoped_tx
@@ -34,20 +33,6 @@ def test_reminder_card_uses_default_lease():
 
 def test_scheduled_generator_maps_to_existing_generator_agent_kind():
     assert _AGENT_RUN_KIND["generator.scheduled"] == "generator"
-
-
-def test_generation_context_since_covers_24h_or_last_success_cycle():
-    now = datetime(2026, 6, 4, 12, 0, tzinfo=UTC)
-
-    assert _generation_context_since(now=now, last_success_at=None) == now - timedelta(hours=24)
-    assert _generation_context_since(
-        now=now,
-        last_success_at=now - timedelta(hours=6),
-    ) == now - timedelta(hours=24)
-    assert _generation_context_since(
-        now=now,
-        last_success_at=now - timedelta(hours=30),
-    ) == now - timedelta(hours=30)
 
 
 def test_dream_result_fields_extracts_fenced_json_from_text_block_string():
@@ -148,16 +133,22 @@ async def test_dream_dispatch_persists_summary_and_output_counts(
 
     async def fake_call_chat(self, path, task_arg, run_id, *, extra=None):
         assert path == "/agent/run/dream"
+        # Skills are the only run-attributable output summarize_outputs still
+        # aggregates (memory/signals reads were retired — that audit dimension
+        # is now an events-based gap). Write two skills tagged with this run.
         async with service_tx(pool) as conn:
             await conn.execute(
                 """
-                INSERT INTO pai_memory
-                  (user_id, id, text, source, source_run_id, subject)
+                INSERT INTO pai_skill_index
+                  (user_id, id, title, status, body_hash, source, created_run_id,
+                   last_updated_run_id)
                 VALUES
-                  (%s, 'mem_dream_one', 'Dream memory one', 'agent', %s, 'work'),
-                  (%s, 'mem_dream_two', 'Dream memory two', 'agent', %s, 'life')
+                  (%s, 'skill_dream_one', 'Dream skill one', 'enabled', 'h1',
+                   'agent', %s, %s),
+                  (%s, 'skill_dream_two', 'Dream skill two', 'enabled', 'h2',
+                   'agent', %s, %s)
                 """,
-                (user_a, run_id, user_a, run_id),
+                (user_a, run_id, run_id, user_a, run_id, run_id),
             )
         return {
             "summary": (
@@ -175,7 +166,7 @@ async def test_dream_dispatch_persists_summary_and_output_counts(
     async with service_tx(pool) as conn:
         cur = await conn.execute(
             """
-            SELECT id, status, context_summary, memories_written,
+            SELECT id, status, context_summary, skills_added,
                    profile_updated, profile_changed_keys, refs_produced, details
             FROM pai_evolution_runs
             WHERE user_id = %s AND id LIKE 'dream.auto.test.%%'
@@ -198,15 +189,18 @@ async def test_dream_dispatch_persists_summary_and_output_counts(
 
     assert evol is not None
     assert evol["status"] == "completed"
+    # context_summary + profile fields still flow from the agent report,
+    # independent of summarize_outputs' SQL aggregation.
     assert evol["context_summary"] == "Wrote two useful memories."
-    assert evol["memories_written"] == 2
     assert evol["profile_updated"] is True
     assert evol["profile_changed_keys"] == ["facts"]
-    assert evol["refs_produced"]["pai_memory"] == [
-        "mem_dream_one",
-        "mem_dream_two",
+    # summarize_outputs now audits only skills (the run-attributable output).
+    assert evol["skills_added"] == 2
+    assert sorted(evol["refs_produced"]["pai_skill_index"]) == [
+        "skill_dream_one",
+        "skill_dream_two",
     ]
-    assert evol["details"]["outputSummary"]["memories_written"] == 2
+    assert evol["details"]["outputSummary"]["skills_added"] == 2
     assert task_run is not None
     assert task_run["status"] == "success"
 

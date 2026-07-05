@@ -38,7 +38,7 @@ from fastapi.responses import StreamingResponse
 from pinai_db.rls import user_scoped_tx
 from psycopg.types.json import Jsonb
 
-from ..domains.user_model.profile import ProfileRepository
+from ..domains.user_model.settings import SettingsRepository
 from ..platform.auth.deps import User, current_user, get_pool
 from ..platform.db.repositories.chat_messages import ChatMessagesRepository, row_to_history_message
 from ..platform.db.repositories.chat_threads import ChatThreadsRepository, ThreadKind
@@ -249,7 +249,7 @@ async def send(
 
     async with user_scoped_tx(pool, user.id) as conn:
         kind, _card_id = await _resolve_owned(session_key, user.id, conn)
-        settings = await ProfileRepository(user.id, conn).get_settings()
+        settings = await SettingsRepository(user.id, conn).get_settings()
 
     # "Bypass permissions" (skip this turn's HITL approval) is a persisted,
     # cross-device user setting (pai_user_settings.permission_mode), derived

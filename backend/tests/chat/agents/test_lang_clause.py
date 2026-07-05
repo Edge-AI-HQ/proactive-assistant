@@ -31,11 +31,12 @@ def test_lang_clause_unknown_falls_back_to_english() -> None:
     assert "English" in lang_clause("")
 
 
-def test_dream_crystallize_evolve_prompts_inject_language() -> None:
-    from agent_engine.agents.crystallize import _crystallize_system_prompt
-    from agent_engine.agents.dream import _dream_system_prompt
-    from agent_engine.agents.evolve import _evolve_system_prompt
+def test_evolve_prompt_injects_language() -> None:
+    from agent_engine.agents.evolve import TRIGGER_DAILY, _evolve_system_prompt
 
-    for build in (_dream_system_prompt, _crystallize_system_prompt, _evolve_system_prompt):
-        assert "Use Japanese for all user-visible text fields" in build("ja")
-        assert "Use English for all user-visible text fields" in build("en")
+    assert "Use Japanese for all user-visible text fields" in _evolve_system_prompt(
+        TRIGGER_DAILY, "ja"
+    )
+    assert "Use English for all user-visible text fields" in _evolve_system_prompt(
+        TRIGGER_DAILY, "en"
+    )

@@ -1,0 +1,54 @@
+# Memory retrieval eval — structured filter + recency (design §十 P0).
+#
+# This is the ANSWER KEY. `expected_ids` is ground truth: changing it changes the
+# eval's verdict, so a diff here gets the same scrutiny as editing a test
+# assertion (the harness stamps a sha256 of the answer key into the run output so
+# a silent edit is visible).
+#
+# ⚠️ Synthetic demo data. Real ground truth is human-labelled against a real
+# user's events (collection strategy TBD — design §八.1 onboarding seed note).
+# Add real fixtures as *.yaml siblings; the harness picks up every file here.
+name: retrieval_structured
+description: >
+  Structured retrieval baseline — event_type filter + recency ordering on the
+  no-run_id path (UI/internal contract: occurred_at DESC). Verifies the
+  deterministic floor of events_search before the objective-ranking path
+  (reference/recency, covered by retrieval_reference.yaml).
+
+# AppendEventInput kwargs. curated=true → out of the evolve queue (these are
+# settled events). occurred_at drives the recency order.
+seed_events:
+  - id: mtg_near
+    event_type: meeting
+    title: "Q3 planning with Diana"
+    occurred_at: "2026-06-24T10:00:00Z"
+    curated: true
+  - id: mtg_far
+    event_type: meeting
+    title: "Project kickoff"
+    occurred_at: "2026-03-01T10:00:00Z"
+    curated: true
+  - id: comm1
+    event_type: communication
+    title: "Weekly engineering newsletter"
+    occurred_at: "2026-06-23T08:00:00Z"
+    curated: true
+  - id: txn1
+    event_type: transaction
+    title: "AWS invoice paid"
+    occurred_at: "2026-06-22T12:00:00Z"
+    curated: true
+
+queries:
+  # event_type filter must return exactly the two meetings, nothing else.
+  - name: type_filter_meeting
+    params: {event_type: meeting, limit: 10}
+    expected_ids: [mtg_near, mtg_far]
+    thresholds: {recall@10: 1.0, precision@10: 1.0}
+
+  # Within the meeting window, the more recent meeting ranks first
+  # (occurred_at DESC on the no-run_id path).
+  - name: recency_order_meeting
+    params: {event_type: meeting, limit: 10}
+    expected_ids: [mtg_near, mtg_far]
+    thresholds: {mrr: 1.0, "ndcg@10": 1.0}

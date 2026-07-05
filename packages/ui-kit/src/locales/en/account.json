@@ -30,7 +30,7 @@
   },
   "autoGenerate": {
     "title": "Auto Generate",
-    "description": "Automatically generate cards based on new data from your connected sources."
+    "description": "Periodically review your timeline and surface a card only when something is worth your attention — most checks produce nothing."
   },
   "proactive": {
     "title": "Proactive Heartbeat",
@@ -87,17 +87,31 @@
     "basic": {
       "name": "Basic",
       "credits": "3,900 credits / mo",
-      "perks": ["Daily card feed", "Connect 3 apps", "Email + Calendar"]
+      "perks": [
+        "Daily card feed",
+        "Connect 3 apps",
+        "Email + Calendar"
+      ]
     },
     "pro": {
       "name": "Pro",
       "credits": "9,900 credits / mo",
-      "perks": ["Everything in Basic", "Connect unlimited apps", "Voice + Ambient mode", "Priority execution"]
+      "perks": [
+        "Everything in Basic",
+        "Connect unlimited apps",
+        "Voice + Ambient mode",
+        "Priority execution"
+      ]
     },
     "max": {
       "name": "Max",
       "credits": "19,900 credits / mo",
-      "perks": ["Everything in Pro", "Custom personas", "Team sharing", "Early access models"]
+      "perks": [
+        "Everything in Pro",
+        "Custom personas",
+        "Team sharing",
+        "Early access models"
+      ]
     }
   },
   "paywall": {
@@ -205,8 +219,8 @@
     "pageSubtitle": "How your AI behaves — tone, formatting, and defaults.",
     "proactiveTitle": "Proactive",
     "proactiveDescription": "How often your Proactive AI checks in on you.",
-    "dreamingTitle": "Dreaming",
-    "dreamingDescription": "Review background dreaming runs, profile diffs, and candidate cards.",
+    "evolutionTitle": "Evolution",
+    "evolutionDescription": "Review background evolution runs, profile diffs, and candidate cards.",
     "generationTitle": "Generation",
     "generationDescription": "Tune how cards are generated and shown to you.",
     "scheduledTasksTitle": "Scheduled Tasks",
@@ -231,24 +245,24 @@
     "iosOnlyModels": "On-device models are only available inside the iOS app. Open this page in the native build to download, verify, or delete the Whisper / local LLM profiles.",
     "localStorageNote": "Models are stored locally and never re-uploaded. If a download fails, the plugin automatically falls back to the secondary mirror."
   },
-  "dreaming": {
-    "title": "Auto Dreaming",
+  "evolution": {
+    "title": "Auto Evolution",
     "runsDaily": "Runs every day at {{time}}",
-    "enabledNotice": "Auto Dreaming enabled.",
-    "disabledNotice": "Auto Dreaming disabled.",
-    "saveFailed": "Failed to save auto dreaming",
-    "loadRunsFailed": "Failed to load dreaming runs",
-    "loadHistoryFailed": "Failed to load dreaming history",
+    "enabledNotice": "Auto Evolution enabled.",
+    "disabledNotice": "Auto Evolution disabled.",
+    "saveFailed": "Failed to save auto evolution",
+    "loadRunsFailed": "Failed to load evolution runs",
+    "loadHistoryFailed": "Failed to load evolution history",
     "runNotStarted": "Run not started yet — try again in a moment",
-    "loadDetailFailed": "Failed to load dream run detail",
-    "startFailed": "Failed to start dreaming",
-    "started": "Dreaming started",
-    "startedWithRef": "Dreaming started: {{ref}}",
+    "loadDetailFailed": "Failed to load evolution run detail",
+    "startFailed": "Failed to start evolution",
+    "started": "Evolution started",
+    "startedWithRef": "Evolution started: {{ref}}",
     "starting": "Starting...",
-    "runNow": "Run Dreaming",
+    "runNow": "Run Evolution",
     "viewHistory": "View History",
-    "latestRun": "Latest Dream Run",
-    "historyTitle": "Dreaming History",
+    "latestRun": "Latest Evolution Run",
+    "historyTitle": "Evolution History",
     "unknownDay": "Unknown",
     "runCount_one": "{{count}} run",
     "runCount_other": "{{count}} runs",
@@ -264,15 +278,15 @@
     "superseded": "Superseded",
     "notApplied": "Not applied",
     "loadOlderDays": "Load older days",
-    "noRunsYet": "No dreaming runs yet.",
-    "detailTitle": "Dream Run Detail",
+    "noRunsYet": "No evolution runs yet.",
+    "detailTitle": "Evolution Run Detail",
     "runStatus": "Run Status",
     "startedAt": "Started {{time}}",
     "completedAt": "Completed {{time}}",
     "profileApplied": "Profile applied",
     "profilePending": "Profile pending apply",
-    "journalTitle": "Dream Journal",
-    "noJournalYet": "No dream journal yet.",
+    "journalTitle": "Evolution Journal",
+    "noJournalYet": "No evolution journal yet.",
     "collectedContext": "Collected Context",
     "sourceItems_one": "{{source}} · {{count}} item",
     "sourceItems_other": "{{source}} · {{count}} items",
@@ -283,7 +297,7 @@
     "noSourceResults": "No source results recorded yet.",
     "candidateCards": "Candidate Cards",
     "noCandidateCards": "No candidate cards for this run.",
-    "logsTitle": "Dreaming Logs",
+    "logsTitle": "Evolution Logs",
     "noLogsYet": "No run logs yet.",
     "profileDiff": "Profile Diff",
     "goalDiff": "Goal Diff",
@@ -293,10 +307,10 @@
     "rawConnectorPayloads": "Raw Connector Payloads",
     "rawInputs": "Raw Inputs",
     "profileChanges": "Profile changes",
-    "applyPending": "Pending — dream still in progress",
-    "applySkipped": "Skipped — dream failed",
+    "applyPending": "Pending — evolution still in progress",
+    "applySkipped": "Skipped — evolution failed",
     "appliedDuringRun": "Applied during the run",
-    "supersededByNewer": "Superseded by a newer dream",
+    "supersededByNewer": "Superseded by a newer evolution",
     "noSummaryAvailable": "No summary available.",
     "goalFallback": "Goal {{index}}",
     "itemFallback": "{{source}} item {{index}}"

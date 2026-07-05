@@ -35,6 +35,15 @@ const SYNCABLE_AMBIENT_KINDS = new Set([
   "health.observation",
 ]);
 
+// DATA-FLOW OPEN (2026-06-30): upload EVERY captured ambient kind (voice
+// session_summary, visit, motion, location, activity, …) so we can see the real
+// volume/shape in pai_raw + events before designing gates. When true, the
+// SYNCABLE_AMBIENT_KINDS allowlist below is bypassed — it stays wired as the
+// "narrow again" list: flip this to false to restore whitelist-only upload.
+// The backend keeps its own per-kind policy (device_ingest/policies.py) as the
+// second, independent gate, so this only opens the client half.
+const AMBIENT_SYNC_PASSTHROUGH = true;
+
 const DEFAULT_OPTIONS: Required<SyncSchedulerOptions> = {
   batchLimit: 50,
   intervalMs: 60_000,
@@ -93,11 +102,11 @@ export class AmbientSyncScheduler {
         backendUrl,
       );
       const records = pendingRecords.filter(
-        (row) => SYNCABLE_AMBIENT_KINDS.has(row.item.kind),
+        (row) => AMBIENT_SYNC_PASSTHROUGH || SYNCABLE_AMBIENT_KINDS.has(row.item.kind),
       );
-      const localOnlyRecords = pendingRecords.filter(
-        (row) => !SYNCABLE_AMBIENT_KINDS.has(row.item.kind),
-      );
+      const localOnlyRecords = AMBIENT_SYNC_PASSTHROUGH
+        ? []
+        : pendingRecords.filter((row) => !SYNCABLE_AMBIENT_KINDS.has(row.item.kind));
       if (localOnlyRecords.length > 0) {
         console.warn("[ambient] dropping local-only source items before sync", {
           count: localOnlyRecords.length,

@@ -1,12 +1,18 @@
-"""Generic raw ingest — land any toolkit's items in pai_raw_events.
+"""Generic raw ingest — land EVERY app/connector toolkit's items in the L0
+apps-domain table pai_raw_apps.
 
-Counterpart to the per-toolkit `_upsert_<tk>` functions in
-connector_ingest.py: toolkits WITHOUT a typed pai_raw_* table fall back
-to this module. The recipe supplies the (light) semantics — entity_type,
-id_field, timestamp_path, title_path, snippet_path — everything else is
-stored verbatim in the payload JSONB for the evolve agent to read.
+This is the ONLY ingest path for the apps domain: all Composio app + generic
+connector toolkits land in pai_raw_apps (device data has its own writer +
+table — see device/raw_device.py → pai_raw_device). The recipe supplies the
+(light) semantics — entity_type, id_field, timestamp_path, title_path,
+snippet_path — and everything else is stored verbatim in the payload JSONB for
+the L1 projector / evolve agent to read.
 
-Must not import connector_ingest (it imports us for the fallback).
+`toolkit` here is the Composio slug (gmail / googlecalendar / googledocs);
+the raw reader (raw_agent) translates the path alias (gcal) → slug before
+querying, so pai_raw_apps.toolkit is uniformly the slug.
+
+Must not import connector_ingest (it imports us).
 """
 
 from __future__ import annotations
@@ -50,7 +56,14 @@ def parse_any_ts(value: Any) -> datetime | None:
         try:
             return datetime.fromisoformat(s.replace("Z", "+00:00"))
         except ValueError:
+            pass
+        # Slack-style epoch carrying fractional seconds as a string
+        # ("1700000000.123456") — not all-digits, not ISO. float() it.
+        try:
+            secs = float(s)
+        except ValueError:
             return None
+        return datetime.fromtimestamp(secs / 1000.0 if secs > 1e11 else secs, tz=UTC)
     return None
 
 
@@ -83,7 +96,7 @@ def map_item(
     entity_type: str,
     recipe: Recipe,
 ) -> dict[str, Any] | None:
-    """Any source item → pai_raw_events row dict. None for non-dicts
+    """Any source item → pai_raw_apps row dict. None for non-dicts
     (run_fetch already filters, second line of defense)."""
     if not isinstance(item, dict):
         return None
@@ -100,6 +113,11 @@ def map_item(
     occurred_at: datetime | None = None
     if recipe.timestamp_path:
         occurred_at = parse_any_ts(_walk_path(item, recipe.timestamp_path))
+    # Shape-variant fallback (e.g. GCal all-day: start.date instead of the timed
+    # start.dateTime). Without this, all-day items yield occurred_at=None → the
+    # upsert's COALESCE(..., NOW()) piles them all onto today.
+    if occurred_at is None and recipe.timestamp_fallback_path:
+        occurred_at = parse_any_ts(_walk_path(item, recipe.timestamp_fallback_path))
 
     title = (
         _as_text(_walk_path(item, recipe.title_path), max_len=512) if recipe.title_path else None
@@ -140,11 +158,11 @@ async def upsert_generic(
     recipe: Recipe,
     items: list[dict[str, Any]],
 ) -> int:
-    """INSERT ... ON CONFLICT DO UPDATE into pai_raw_events. Long-tail
-    entities are mostly mutable, so refresh-on-conflict is the safe
-    default (matches github/gdrive/calendly typed upserters). Returns
-    newly-inserted count (updates excluded), same semantics as the
-    typed upserters."""
+    """INSERT ... ON CONFLICT DO UPDATE into the apps-domain table pai_raw_apps.
+    Entities are mostly mutable, so refresh-on-conflict is the safe
+    default. Returns newly-inserted count (updates excluded). expires_at
+    / reference tracking use table defaults (NULL / 0 / '[]'); the evolve
+    forgetting pass sets TTLs later."""
     inserted = 0
     for item in items:
         mapped = map_item(item, toolkit=toolkit, entity_type=entity_type, recipe=recipe)
@@ -153,7 +171,7 @@ async def upsert_generic(
         async with conn.cursor() as cur:
             await cur.execute(
                 """
-                INSERT INTO pai_raw_events (
+                INSERT INTO pai_raw_apps (
                   user_id, id, toolkit, entity_type, external_id,
                   occurred_at, title, snippet, payload, dedupe_key
                 ) VALUES (
@@ -162,12 +180,23 @@ async def upsert_generic(
                 )
                 ON CONFLICT (user_id, toolkit, entity_type, dedupe_key)
                 DO UPDATE SET
+                  -- content_updated_at moves ONLY on a real payload change
+                  -- (title/snippet/occurred_at are all derived from payload,
+                  -- so one IS DISTINCT FROM covers them). It feeds the
+                  -- projector's supersede re-projection (design §6.3):
+                  -- changed row → new event revision superseding the old.
+                  -- An identical re-sync must NOT touch it, or every sync
+                  -- would churn L1 revisions.
+                  content_updated_at = CASE
+                    WHEN pai_raw_apps.payload IS DISTINCT FROM EXCLUDED.payload
+                    THEN NOW() ELSE pai_raw_apps.content_updated_at
+                  END,
                   payload = EXCLUDED.payload,
                   -- Only move occurred_at when a real timestamp was
                   -- extracted; otherwise EXCLUDED carries NOW() and a
                   -- re-synced row would stay "fresh" forever, polluting
                   -- the generation 24h window.
-                  occurred_at = COALESCE(%s, pai_raw_events.occurred_at),
+                  occurred_at = COALESCE(%s, pai_raw_apps.occurred_at),
                   ingested_at = NOW(),
                   title = EXCLUDED.title,
                   snippet = EXCLUDED.snippet

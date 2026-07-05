@@ -10,6 +10,9 @@ since_param: query
 since_format: slack_query
 result_path: [messages, matches]
 id_field: ts
+entity_type: messages
+timestamp_path: [ts]
+snippet_path: [text]
 sync_interval_hours: 12
 description: "Workspace messages reachable to the user (DMs + member channels), full-query sweep."
 notes: |

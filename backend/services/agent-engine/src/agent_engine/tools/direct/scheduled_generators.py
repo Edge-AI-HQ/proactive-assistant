@@ -125,8 +125,8 @@ class ScheduledGeneratorPreviewInput(BaseModel):
         description=(
             "IANA timezone the schedule should fire in, e.g. "
             "'America/Los_Angeles'. Prefer the user's device timezone when "
-            "you know it; otherwise fall back to their profile timezone "
-            "(profile_get). The schedule is stored in this timezone."
+            "you know it; otherwise fall back to their user timezone. "
+            "The schedule is stored in this timezone."
         ),
     )
     schedule: ScheduleSpecInput = Field(
@@ -313,7 +313,7 @@ class ScheduledGeneratorCreateOnceInput(BaseModel):
         description=(
             "IANA timezone the task fires in, e.g. 'Asia/Shanghai'. Prefer "
             "the user's device timezone when you know it; otherwise fall "
-            "back to their profile timezone (profile_get)."
+            "back to their user timezone."
         ),
     )
     schedule: ScheduleSpecInput = Field(

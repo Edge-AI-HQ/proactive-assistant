@@ -19,7 +19,7 @@ app.user_id now fails closed instead of leaking.
 Usage pattern:
 
     async with user_scoped_tx(pool, user_id) as conn:
-        rows = await conn.execute("SELECT * FROM pai_memory")
+        rows = await conn.execute("SELECT * FROM pai_events")
 
 The context manager opens a transaction, downgrades the role, sets
 app.user_id, yields the connection, and commits on success / rolls back on

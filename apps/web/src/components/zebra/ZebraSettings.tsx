@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import { deleteAccount, DeleteAccountError } from "@pin-ai/core";
 import {
-  AutoDreamingSettings,
+  AutoEvolutionSettings,
   AutoGenerateSettings,
   GenerationLanguageSettings,
   ScheduledTasksSettings,
@@ -218,7 +218,7 @@ export function ZebraPreferences() {
         <AutoGenerateSettings />
         <GenerationLanguageSettings />
         <ScheduledTasksSettings />
-        <AutoDreamingSettings />
+        <AutoEvolutionSettings />
       </div>
     </SettingsColumn>
   );

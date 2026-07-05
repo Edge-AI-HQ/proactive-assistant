@@ -17,77 +17,6 @@ from pinai_api.platform.db.repositories.scheduled_tasks import (
 )
 from pinai_db.rls import service_tx, user_scoped_tx
 
-
-def test_flatten_drive_owners_prefers_email():
-    raw = {
-        "owners": [
-            {"emailAddress": "alice@x.com", "displayName": "Alice"},
-            {"displayName": "Bob"},
-            {"emailAddress": ""},  # empty email skipped
-            {},
-        ]
-    }
-    out = connector_ingest._flatten_drive_owners(raw)
-    assert out == ["alice@x.com", "Bob"]
-
-
-def test_flatten_drive_last_modifying_user():
-    assert (
-        connector_ingest._flatten_drive_last_modifying_user(
-            {"lastModifyingUser": {"emailAddress": "u@x.com"}},
-        )
-        == "u@x.com"
-    )
-    assert (
-        connector_ingest._flatten_drive_last_modifying_user(
-            {"lastModifyingUser": {"displayName": "Carol"}},
-        )
-        == "Carol"
-    )
-    assert connector_ingest._flatten_drive_last_modifying_user({}) is None
-
-
-# ── gdrive mapper ───────────────────────────────────────────────────────
-
-
-def test_map_gdrive_file_basic():
-    raw = {
-        "id": "1abc",
-        "name": "design.pdf",
-        "mimeType": "application/pdf",
-        "modifiedTime": "2026-04-15T10:00:00Z",
-        "createdTime": "2026-04-01T00:00:00Z",
-        "size": "12345",  # Drive returns size as string
-        "webViewLink": "https://drive.google.com/file/d/1abc",
-        "owners": [{"emailAddress": "alice@x.com"}],
-    }
-    mapped = connector_ingest._map_gdrive_file(raw)
-    assert mapped is not None
-    assert mapped["file_id"] == "1abc"
-    assert mapped["name"] == "design.pdf"
-    assert mapped["mime_type"] == "application/pdf"
-    assert mapped["size_bytes"] == 12345
-    assert mapped["owners"] == ["alice@x.com"]
-    assert mapped["modified_time"].year == 2026
-    assert mapped["occurred_at"] == mapped["modified_time"]
-
-
-def test_map_gdrive_file_handles_int_size():
-    mapped = connector_ingest._map_gdrive_file({"id": "x", "size": 99})
-    assert mapped is not None
-    assert mapped["size_bytes"] == 99
-
-
-def test_map_gdrive_file_unparseable_size_is_none():
-    mapped = connector_ingest._map_gdrive_file({"id": "x", "size": "abc"})
-    assert mapped is not None
-    assert mapped["size_bytes"] is None
-
-
-def test_map_gdrive_file_returns_none_without_id():
-    assert connector_ingest._map_gdrive_file({"name": "no id"}) is None
-
-
 # ── DB round-trip: gdrive sync mutates row on second fire ──────────────
 
 
@@ -168,12 +97,13 @@ async def test_gdrive_sync_renames_file_in_place(pool, user_ids, monkeypatch):
 
     async with service_tx(pool) as conn:
         cur = await conn.execute(
-            "SELECT name FROM pai_raw_gdrive_files WHERE user_id = %s",
+            "SELECT title FROM pai_raw_apps "
+            "WHERE user_id = %s AND toolkit = 'googledrive' AND entity_type = 'files'",
             (user_a,),
         )
         rows = await cur.fetchall()
     assert len(rows) == 1
-    assert rows[0]["name"] == "final.pdf"
+    assert rows[0]["title"] == "final.pdf"
 
 
 @pytest.mark.asyncio

@@ -11,7 +11,6 @@ export type AgentRunKind =
   | "auto.dreaming"
   | "connector.init"
   | "connector.evolve"
-  | "crystallize"
   | "generator.manual"
   | "generator.auto"
   | "user.prompt"

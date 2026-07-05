@@ -30,7 +30,7 @@
   },
   "autoGenerate": {
     "title": "Automatisch generieren",
-    "description": "Karten automatisch auf Basis neuer Daten aus Ihren verbundenen Quellen generieren."
+    "description": "Überprüft regelmäßig deine Timeline und erstellt nur dann eine Karte, wenn etwas deine Aufmerksamkeit verdient — die meisten Prüfungen ergeben nichts."
   },
   "proactive": {
     "title": "Proactive Heartbeat",
@@ -87,17 +87,31 @@
     "basic": {
       "name": "Basic",
       "credits": "3.900 Credits / Monat",
-      "perks": ["Täglicher Karten-Feed", "3 Apps verbinden", "E-Mail + Kalender"]
+      "perks": [
+        "Täglicher Karten-Feed",
+        "3 Apps verbinden",
+        "E-Mail + Kalender"
+      ]
     },
     "pro": {
       "name": "Pro",
       "credits": "9.900 Credits / Monat",
-      "perks": ["Alles aus Basic", "Unbegrenzt Apps verbinden", "Voice- + Ambient-Modus", "Priorisierte Ausführung"]
+      "perks": [
+        "Alles aus Basic",
+        "Unbegrenzt Apps verbinden",
+        "Voice- + Ambient-Modus",
+        "Priorisierte Ausführung"
+      ]
     },
     "max": {
       "name": "Max",
       "credits": "19.900 Credits / Monat",
-      "perks": ["Alles aus Pro", "Eigene Personas", "Team-Freigabe", "Früher Zugang zu neuen Modellen"]
+      "perks": [
+        "Alles aus Pro",
+        "Eigene Personas",
+        "Team-Freigabe",
+        "Früher Zugang zu neuen Modellen"
+      ]
     }
   },
   "paywall": {
@@ -205,8 +219,8 @@
     "pageSubtitle": "Wie sich Ihre KI verhält — Tonfall, Formatierung und Standardwerte.",
     "proactiveTitle": "Proactive",
     "proactiveDescription": "Wie oft Ihre Proactive AI bei Ihnen nachsieht.",
-    "dreamingTitle": "Dreaming",
-    "dreamingDescription": "Dreaming-Läufe im Hintergrund, Profil-Diffs und Kandidaten-Karten prüfen.",
+    "evolutionTitle": "Dreaming",
+    "evolutionDescription": "Dreaming-Läufe im Hintergrund, Profil-Diffs und Kandidaten-Karten prüfen.",
     "generationTitle": "Generierung",
     "generationDescription": "Passen Sie an, wie Karten generiert und angezeigt werden.",
     "scheduledTasksTitle": "Geplante Aufgaben",
@@ -231,7 +245,7 @@
     "iosOnlyModels": "On-Device-Modelle sind nur in der iOS-App verfügbar. Öffnen Sie diese Seite im nativen Build, um Whisper- / lokale LLM-Profile herunterzuladen, zu verifizieren oder zu löschen.",
     "localStorageNote": "Modelle werden lokal gespeichert und nie erneut hochgeladen. Schlägt ein Download fehl, weicht das Plugin automatisch auf den sekundären Spiegel aus."
   },
-  "dreaming": {
+  "evolution": {
     "title": "Auto Dreaming",
     "runsDaily": "Läuft täglich um {{time}}",
     "enabledNotice": "Auto Dreaming aktiviert.",

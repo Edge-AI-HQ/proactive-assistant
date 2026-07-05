@@ -5,7 +5,7 @@ import {
   Sparkles, Check, Bell, SlidersHorizontal, Radio, ChevronRight, ArrowLeft,
   CreditCard, Calendar, AlertTriangle, Receipt,
 } from "lucide-react";
-import AutoDreamingSettings from "@/components/account/AutoDreamingSettings";
+import AutoEvolutionSettings from "@/components/account/AutoEvolutionSettings";
 import AutoGenerateSettings from "@/components/account/AutoGenerateSettings";
 import ScheduledTasksSettings from "@/components/account/ScheduledTasksSettings";
 import GenerationLanguageSettings from "@/components/account/GenerationLanguageSettings";
@@ -218,12 +218,12 @@ function PreferencesSubPage({ onBack }: { onBack: () => void }) {
       >
         <section className="glass-card-strong p-4">
           <div className="mb-3">
-            <h2 className="text-sm font-semibold text-foreground">{t("preferences.dreamingTitle")}</h2>
+            <h2 className="text-sm font-semibold text-foreground">{t("preferences.evolutionTitle")}</h2>
             <Text variant="caption" className="block text-foreground/42 mt-1">
-              {t("preferences.dreamingDescription")}
+              {t("preferences.evolutionDescription")}
             </Text>
           </div>
-          <AutoDreamingSettings />
+          <AutoEvolutionSettings />
         </section>
 
         <section className="glass-card-strong p-4">

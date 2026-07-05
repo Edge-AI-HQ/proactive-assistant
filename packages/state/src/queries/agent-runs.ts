@@ -26,7 +26,7 @@ const POLL_IDLE_MS = 30_000;
  * Polls /api/agent-runs/active to surface in-flight agent runs to the UI.
  *
  * Single source of truth — chip UIs (DebugPanel reconnect chip,
- * AutoDreamingSettings notice, NowFeed generator banner, AgentRunIndicator)
+ * AutoEvolutionSettings notice, NowFeed generator banner, AgentRunIndicator)
  * all subscribe here instead of holding their own task state. F5 →
  * re-fetch from server → state restored.
  *
@@ -69,7 +69,7 @@ export function useActiveAgentRuns(): UseActiveAgentRunsState {
  * or evolve finishes; etc.
  *
  * Pass an array of kinds so a single panel can react to multiple agent
- * types (e.g. memory invalidates on dream OR evolve OR crystallize).
+ * types (e.g. memory invalidates on dream OR evolve).
  */
 export function useAgentRunSuccess(
   runs: ActiveAgentRun[],

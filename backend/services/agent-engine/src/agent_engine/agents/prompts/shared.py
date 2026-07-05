@@ -22,53 +22,25 @@ from __future__ import annotations
 
 # Mirror of `pinai_sdk._client.SDK_CHEAT_SHEET`. Update both together.
 _SDK_CHEAT_SHEET = """\
-client.memory
-  .list(*, min_quality=0.7, subject=None, subject_prefix=None,
-        since=None, limit=30, offset=0, order_by="created_at_desc") -> list
-  .search(*, q, min_quality=None, limit=10) -> list
-  .get(id) -> dict | None
-  .add(*, text, source="agent", subject=None, quality=0.6,
-       confidence=0.5, source_run_id=None, tags=None, id=None) -> dict
-  .archive(id) -> dict | None
-  .supersede(*, old_id, new_id) -> dict | None
+client.events                                        # L1 event stream — unified retrieval + append
+  .search(*, q=None, event_type=None, since=None,    # q → semantic; no q → recency/type window
+          until=None, status="active", limit=20) -> list  # status: active|pending (pending = evolve's queue)
+  .append(*, event_type, title, source="agent_action",  # idempotent on dedupe_key; source must be in {pinai_chat, agent_action, device}
+          body=None, structured=None, occurred_at=None,
+          end_at=None, dedupe_key=None) -> dict
+  .curate(*, id) -> dict                              # mark curated — evolve processed it (no status/importance)
 
-client.signals
-  .kinds(*, status="all", hours=None) -> list       # discover what kinds exist
-                                                     # → [{kind, count, latestAt, latestTitle, latestSummaryPreview}]
-  .recent(*, status="open", kind=None, hours=24,
-          min_salience=None, limit=30,
-          include_payload=False) -> list            # status: open|consumed|archived|all
-  .get(id) -> dict | None
-  .consume(*, id, run_id) -> None
-  .add(*, kind, title, summary="", salience=0.0, confidence=0.0,
-       dedupe_key=None, subject=None, source="agent",
-       payload=None, occurred_at=None, id=None) -> dict
-  .ingest(**fields) -> dict                          # legacy; prefer .add
-
-client.profile
-  .get() -> {"profile": ... | None, "goals": [...]}
-  .upsert(*, display_name=None, locale=None, timezone=None,
-          summary=None, facts=None, preferences=None,
-          constraints=None) -> dict                  # JSONB buckets replaced wholesale
-  .merge_preference(*, key, value) -> dict           # safe one-key merge into profile.preferences
-  .upsert_goal(*, key, title, id=None, priority="medium",
-               status="active", summary=None) -> dict
-
-client.cards
-  .recent(*, limit=30) -> list
+client.user_strings                                  # L2 portrait — five-slot markdown profile
+  .get_all() -> dict                                 # {IDENTITY, SOUL, TOOLS, USER, GOALS}
+  .edit(*, slot, operations) -> dict                 # slot: any of IDENTITY/SOUL/TOOLS/USER/GOALS
+                                                      # operations: [{op:"add"|"replace"|"remove", text, target}]
+                                                      # over_budget → {ok:False, entries:[...]} consolidate+resend
 
 client.feedback
   .list(*, kind=None, action=None, since=None, limit=50) -> list
   .log(*, kind, action=None, intent_card_id=None, intent_key=None,
        source="agent", basket=None, value=None, text=None,
        metadata=None, channel=None) -> dict
-
-client.world
-  .recent(*, status="open", provider=None, hours=None,
-          min_salience=None, limit=30) -> list
-  .score(*, id, salience, scored_reason=None, status="open") -> None
-  .consume(*, id, run_id) -> None
-  .reference(*, id, run_id) -> None
 
 client.raw                                           # canonical entry: .list(toolkit, entity, ...)
   .list(toolkit, entity, *, hours=None, since=None, until=None,
@@ -83,7 +55,7 @@ Typed (toolkit, entity) for raw.list:
   gmail/messages, gcal/events, gdrive/files, slack/messages,
   github/issues, calendly/events, stripe/invoices,
   youtube/subscriptions, linkedin/profile,
-  device/{apps,contacts,health}
+  device/{apps,contacts,health,utterance,transcript_window}
 Any other connected toolkit reads the generic event store — call
 .list("<toolkit>", "<entity>") with the recipe's entity_type (e.g.
 .list("notion", "pages")); rows carry title/snippet plus the full
@@ -97,14 +69,6 @@ client.composio                                      # live SaaS access via Comp
            connected_account_id=None) -> dict        # → {successful, data, error}
   .multi_execute(calls, *, parallelism=8) -> list    # run many in parallel
                                                       # calls: [{slug, args, connected_account_id?}]
-
-client.preferences                                   # high-weight stated preferences (main-chat)
-  .list(*, status="active", scope=None, limit=50) -> list  # newest first; read active for generation
-  .add(*, statement, scope, polarity, weight=None,   # source stamped server-side, not here
-       confidence=None, durability="persistent",
-       expires_at=None, evidence=None) -> dict        # scope: topic|source|timing|format|global
-                                                      # polarity: positive|negative
-  .supersede(*, old_id, new_id) -> dict | None       # new_id must already be active
 
 client.settings                                      # user settings the agent may change
   .set_generation_language(language) -> dict         # 'en' | 'zh-Hans' | ...; deterministic, re-stamps schedule
@@ -127,8 +91,8 @@ You have a sandbox where you can write and run Python. The
 import and call:
 
     from pinai_sdk import client
-    rows = await client.memory.list(min_quality=0.7, limit=30)
-    signals = await client.signals.recent(status="open", hours=24)
+    events = await client.events.search(q="market news", limit=20)
+    recent = await client.events.search(event_type="meeting", limit=10)
 
 The chat-driving JWT and the user's virtual_key are NOT in the
 sandbox — the SDK uses an opaque per-sandbox token.
@@ -148,7 +112,7 @@ fetching a URL the user mentioned) but no other internal hosts.
 CODE_MODE_GUIDANCE = """\
 <tool_paradigm>
 You can act two ways — choose per task:
-- Direct tool calls (memory_search / signals_recent / Composio meta / …):
+- Direct tool calls (events_search / Composio meta / …):
   single-step, immediate, and the user sees each step. DEFAULT to these for
   everyday lookups, single reads/writes, and anything the user should review.
 - Code Mode (write Python in your sandbox, `from pinai_sdk import client`):
@@ -170,8 +134,8 @@ shot — typically:
 
     async def gather():
         return await asyncio.gather(
-            client.memory.list(min_quality=0.7, limit=30),
-            client.signals.recent(status="open", hours=24),
+            client.events.search(q="market news", limit=20),
+            client.events.search(event_type="world_news", limit=20),
             # ... more in parallel
             return_exceptions=True,
         )
@@ -185,7 +149,7 @@ outputs in `print` — your context window is the bottleneck, not the SDK.
 
 
 # No-fabrication rule. Phrased to fit both side-effect agents
-# (dream/evolve/crystallize/generator) and the conversational chat
+# (dream/evolve/generator) and the conversational chat
 # agent — the spirit is the same: ground in real data or admit gap.
 GROUNDING_POLICY = """\
 <grounding>
@@ -237,7 +201,7 @@ narrate trivial work as todos.
 
 
 # UI 的 8 种 SupportedGenerationLanguage(packages/core intent-card.ts 同步)
-# → prompt 语言指令。generator / dream / crystallize / evolve 共用。
+# → prompt 语言指令。generator / dream / evolve 共用。
 _LANGUAGE_NAMES = {
     "en": "English",
     "zh-Hans": "Simplified Chinese",

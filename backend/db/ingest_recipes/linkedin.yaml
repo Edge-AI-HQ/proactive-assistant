@@ -5,6 +5,11 @@ since_param: null
 since_format: null
 result_path: []
 id_field: id
+entity_type: profile
+# Profile is a current-state snapshot with no natural event time — exempt from
+# the timestamp_path gate (occurred_at = ingest time is expected; reference data,
+# not part of the 24h window).
+timeless: true
 sync_interval_hours: 720
 description: "User's LinkedIn profile (identity signal — title, company, education)."
 notes: |

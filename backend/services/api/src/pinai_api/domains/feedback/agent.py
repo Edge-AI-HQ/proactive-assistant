@@ -2,7 +2,7 @@
 
 Used by chat / generator agents to surface recent user reactions
 ("user dismissed last 3 health cards" → don't push another). Writes
-also live here for crystallize / dream agents that want to log
+also live here for dream / evolve agents that want to log
 agent-derived feedback signals.
 """
 

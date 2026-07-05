@@ -14,7 +14,7 @@ import logging
 import pytest
 from pinai_contracts.api_models import (
     CardAction,
-    CardsList,
+    GeneratedCard,
     PlanItem,
 )
 
@@ -52,11 +52,10 @@ def test_cardaction_clips_overlong_agent_prompt() -> None:
 
 
 def test_nested_overlong_agent_prompt_does_not_raise() -> None:
-    # The exact production failure: cards.0.primaryAction.agentPrompt > 600.
-    # The nested CardAction inherits the clip validator, so the batch survives.
-    cards = CardsList.model_validate({"cards": [_full_card("x" * 700)]})
-    assert len(cards.cards) == 1
-    clipped = cards.cards[0].primary_action.agent_prompt
+    # The exact production failure: primaryAction.agentPrompt > 600. The
+    # nested CardAction inherits the clip validator, so the card survives.
+    card = GeneratedCard.model_validate(_full_card("x" * 700))
+    clipped = card.primary_action.agent_prompt
     assert clipped is not None and len(clipped) == 600
 
 

@@ -41,7 +41,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { ArrowRightCircle, Check, Mic } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
-import type { Goal } from "@pin-ai/core";
+import type { Goal } from "./mirror-helpers";
 
 import {
   basketMeta,

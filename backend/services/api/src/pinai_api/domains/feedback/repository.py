@@ -11,12 +11,12 @@ import json
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from pinai_db.base import UserScopedRepository
 
-from ...domains.user_model.preferences import AddPreferenceInput, PreferenceRepository
+from ...domains.memory.events import AppendEventInput, EventsRepository
 
 _FUTURE_NEGATIVE_TEXT_RE = re.compile(
     r"(stop showing|do not show|don't show|no more|less of|"
@@ -191,16 +191,27 @@ class FeedbackRepository(UserScopedRepository):
             surface = metadata_obj.get("surface")
             if isinstance(surface, str) and surface:
                 pref_evidence["surface"] = surface
-            await PreferenceRepository(self._user_id, self._conn).add(
-                AddPreferenceInput(
-                    id=f"pref_{uuid.uuid4().hex[:12]}",
-                    statement=text or "",
-                    scope="topic",
-                    polarity="negative",
-                    weight=1.0,
-                    source="user",
-                    evidence=pref_evidence,
-                    durability="persistent",
+            # Durable negative card-preference → an L1 preference event.
+            # feedback-authored (like event_append), so it lands curated
+            # immediately (curated=True, skips the projector's uncurated queue).
+            # evolve distils these into the USER portrait over time. Idempotent
+            # on the feedback id so a retried write is a no-op.
+            await EventsRepository(self._user_id, self._conn).append(
+                AppendEventInput(
+                    id=f"evt_{uuid.uuid4().hex[:16]}",
+                    source="pinai_feedback",
+                    event_type="preference",
+                    occurred_at=datetime.now(UTC),
+                    title=text or "",
+                    structured={
+                        "scope": "topic",
+                        "polarity": "negative",
+                        "weight": 1.0,
+                        "durability": "persistent",
+                        **pref_evidence,
+                    },
+                    dedupe_key=f"pref:{fid}",
+                    curated=True,
                 )
             )
         return FeedbackRow.from_record(row)

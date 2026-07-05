@@ -1,0 +1,505 @@
+---
+title: "Lifelong Memory 系统设计"
+description: "把用户的 digital + physical + interaction context 收敛成三层记忆(L0 Raw 按域分表的原始日志 / L1 Events append-only 事件流 / L2 Profile 常驻 markdown 画像),经统一投影管线(无 LLM)写、统一检索读。"
+---
+
+# Lifelong Memory 系统设计
+
+> **状态**:设计定稿(2026-06-21 起多轮 socratic + 代码核实;2026-07-01 吸收实现期决策修订)。**这是一份 design doc:只描述系统终态设计与依据,不跟踪执行进度**——实现状态以代码为准。本份 = memory 基础设施;消费侧(proactive + 卡片生成)见 [Proactive + 卡片生成](./2026-06-23-proactive-card-generation)。
+> **依据**:[Lifelong Memory 调研](../research/2026-06-10-lifelong-memory-architecture.mdx)、openclaw/hermes 源码逆向、重构前系统代码核实(第二节)。
+
+---
+
+## 〇、一句话结论 + 三层总览
+
+> **记忆按「提炼程度」分三层,各层用最适合的形态和可变性**:`L0 Raw`(原始日志,append-only)→ `L1 Events`(append-only 事件流,可检索)→ `L2 Profile`(常驻 markdown 画像,可改)。agent 只经**一个检索入口**读、经 **markdown 自维护工具**改画像;系统经**投影管线(即时,无 LLM)**写 event、**evolve(异步,LLM)**蒸馏画像。
+
+```
+  写入(两条管线)                                读取(消费者)
+  ──────────                                    ──────────
+  A·个人域: apps device chat feedback           proactive
+        │    │    │    │   各自 raw 域表          chat
+        └────┴────┴────┘                         generation
+            │ 统一 ingest 入口                       ▲
+            │ [rollup 可选] → projector(无 LLM)      │
+            ▼ source_ref 指回域表                    │
+       L1 Events ─────────── events_search ─────────┘
+       (pai_events)◄──┐     (语义+FTS+结构化过滤)
+            │         │ salience gating fan-out(1→N user,无 LLM)
+            │    B·全局域: world RSS → pai_world_signals(全局一份)
+            │
+            │ 画像蒸馏: evolve(bg) / memory_edit(hot)
+            ▼
+       L2 Profile(常驻注入,不检索)
+       pai_user_strings(markdown) + AGENTS(代码常量)
+```
+
+> **两条写管线在 Events 汇合**:A 个人域(1:1 投给自己)、B 全局域 world(gated fan-out,原文留全局 `pai_world_signals`,见五节);用户明确输入走 **hot 蒸馏**(chat agent 即时写画像,见 6.1)。
+
+| 层 | 是什么 | 存储 | 可变性 | 谁写 |
+|---|---|---|---|---|
+| **L0 · Raw** | 原始日志(需追溯的大内容) | **按域分表**(apps/device/world/chat/feedback) | **append-only + TTL** | 系统 ingest |
+| **L1 · Events** | 语义事件流(发生了什么 + 用户反馈) | `pai_events` | **append-only**(修正 = append supersede) | 投影管线 + agent(纯追加) |
+| **L2 · Profile** | 常驻画像(你是谁 / agent 是谁) | `pai_user_strings`(markdown) + `AGENTS`(代码常量) | **mutable**(原地改) | agent 自维护(hot = chat / bg = evolve;用户经对话表达意图、agent 执行) |
+
+> **核心对称:历史(L0/L1)不可变,当前(L2)可变。** 事件流记「发生了什么」(只能 append),投影出「现在是什么样」(随便改)。想「edit 一条 event」的冲动应落在 L2 画像,不是事件层。**对称的闭环:L2 虽可变,但每次画像变更本身作为一条 event 进 L1 不可变流**(`memory_edit` 服务端同事务双写,见 6.1)——当前态随便改,改动历史永远可追。
+>
+> **与调研五层的关系**:语义图谱层**跳过**(语义检索直接在 L1 embedding 上做);user model 被 **L2 markdown 的 USER 段吸收**。规模大、多跳推理扛不住时再加图谱层(插在 Events 和 Profile 之间)。
+
+---
+
+## 一、设计原则
+
+带正反两面教训:
+
+1. **log ≠ memory**。"存档"(无限增长、不进 context)和"工作记忆"(检索出的小撮 + 常驻画像)是两件事。混为一谈 → 要么塞爆 context、要么用久变蠢。
+2. **抗退化 > 存储容量**。遗忘、消解冲突、预算纪律才是命门;记得越多越容易"取出旧偏好却不应用新的"(benchmark 实证的结构性天花板)。
+3. **历史不可变,当前可变**。事件 append-only、画像 mutable;修正历史靠追加新版本(supersede)。
+4. **形态服从职责,别一种形态扛所有**。该结构化的结构化(可查询/可观测/有客观质量信号),该自然语言的自然语言(懂你/零抽取损失)。**旧架构全结构化 → 四层穿透太重;纯 markdown → 黑盒、丢可观测。clean ≠ 一张表,也 ≠ 一团 markdown。**
+5. **写入是选择性的,formation 决定质量**。什么该记/忘/够 durable,judgment 差就全是噪声;高频原始流先 rollup 成语义单元再进可读层。
+6. **常驻 + 检索两条腿**。核心画像常驻注入,长尾事件按需检索;**常驻层有硬预算,满了挤出整合,绝不无限膨胀**。
+7. **统一消费接口,不强求统一存储**。一个检索入口给所有消费者,但 L0 存储按访问模式分(强行一张物理表反引冗余)。统一发生在检索/管线层,不在存储层。
+8. **可追溯 + 可 eval**。每条记忆可追溯(哪来/何时=质量信号 + 调试锚点);配不可篡改回归 eval,否则不知道某次"优化"是变好还是退化。
+9. **记忆是最敏感数据面**。召回当不可信(防注入)、写入扫威胁、删除级联、加密。
+10. **信息到达才记,时间流逝不记**。event 记录「信息的到达」(改期/取消/新内容);「发生」是 `now()` 对未被 supersede 计划的解读——算出来,不写 confirm 事件(见 6.4)。
+
+---
+
+## 二、重构前基线(设计出发点;旧五层已整体退役)
+
+**重构前 = 五层 Postgres-native + 三个 LLM agent 当「层间搬运工」**,所有读写经 `pinai_sdk → /api/agent/*`,agent 不直连 DB。本节保留作设计 rationale——痛点驱动了三层设计:
+
+| 旧层 | 表 | 状态机 |
+|---|---|---|
+| L0 raw | `pai_raw_*`(9 typed Composio + 3 typed device + 1 generic)| 不可变,无 status |
+| L1 signals | `pai_personal_signals`(open→consumed→archived)+ `pai_world_signals`(全局)+ `_user_view` | 消费队列 |
+| L2 memory | `pai_memory`(active→superseded + 链)| 长期 ledger |
+| L3 profile | `pai_profile`(三 JSONB 桶)+ `pai_goals` + `pai_preference_records` | 结构化 |
+| skills | `pai_skill_index`(enabled↔disabled,body markdown)| — |
+| 审计 | `pai_evolution_runs`(running→completed/failed)| — |
+
+三个提炼 agent:**evolve**(connector 后,✅活)、**dream**(每日,✅活)、**crystallize**(对话后,**❌ dormant**——无 producer 触发 + SDK 缺 namespace,对话蒸馏实际没跑)。**关键:重构前 raw 落库已无 LLM,但 raw→signal 这步是 evolve(LLM)做的**(第四节据此改造)。embedding:仅 3 表有,异步 queue + tick drain。**RLS:✅ 已真激活**(PR #200-204,`SET LOCAL ROLE pai_app` 非-BYPASSRLS + FORCE RLS)。
+
+**旧架构痛点(三层设计要解决的)**:① crystallize dormant;② 过度结构化(四层穿透各自状态机;profile 三桶 JSONB 全量替换易丢 sibling key);③ 画像不常驻(main chat 靠工具现查,"懂你"弱);④ 三套并行记忆读取(generation 9-endpoint + phase1_seed + chat 工具)= 接口冗余;⑤ 无 episode rollup(firehose 淹没);⑥ 死 schema(`pai_timeline_events` + `pai_raw_twitter_bookmarks` 零引用);⑦ **reference 三元组在 `pai_memory`/`pai_personal_signals`/`pai_skill_index` 是死字段**(代码核实:只 `pai_world_signals` 真 bump,客观质量信号实际没通电)。
+
+**旧架构优点(三层设计要保住的)**:结构化的可观测/可查询/可程序化、bi-temporal supersede 链、`pai_preference_records` 的 weight/expires 程序化偏好、RLS 刚做对、embedding 在跑。reference 三元组**设计在但半残**(痛点⑦,新设计修活——见6.6 bump)。
+
+**旧架构 → 新架构映射**:
+
+| 旧 | 去向 |
+|---|---|
+| `pai_raw_*`(12 typed + generic)| **按域分表对齐**(apps/device 域表)+ 统一投影管线(第三、四节)——**不**合并成一张 generic |
+| `pai_personal_signals` | **sunset**(队列语义被 importance 检索取代)|
+| `pai_world_signals` + `_user_view` | **`pai_world_signals` 保留为 L0 域表;`_user_view` 退役** → world 经独立 World 管线(五节,salience fan-out)进 `pai_events`(消除特殊表 + 检索 LEFT JOIN)|
+| `pai_memory` | **退役** → durable fact 蒸馏进 USER markdown |
+| `pai_profile`/`pai_goals`/`pai_preference_records` | **退役** → USER/GOALS markdown;硬约束偏好作 `event_type=preference` 事件 |
+| `pai_skill_index` | **保留**(执行引擎线,不在本 doc)|
+| `pai_evolution_runs` | **保留**(evolve 审计 + provenance)|
+| evolve / dream | **合并**(evolve,on_event / daily 两触发)|
+| crystallize(dormant)| **删除** — 对话蒸馏由 hot(明确输入)+ daily evolve(推断)+ event_append 覆盖,单 session 两头不靠 |
+| `pai_timeline_events`(死表)| 建 `pai_events` 时顺手 drop |
+
+---
+
+## 三、L0 · Raw:契约,不是表
+
+**raw 是一个抽象契约,不是一张物理表**:有 `id` / `occurred_at` / `payload` / `dedupe_key` + reference triple、能被 `pai_events.source_ref` 指回。各来源域各自建表 align 这个契约;**统一只发生在投影管线和 source_ref 指针,不在存储**(原则 7)。
+
+**按「域」分表,不按「connector」分表**(关键——按 connector 会退回长尾爆炸):
+
+| 域表 | 装什么 | discriminator |
+|---|---|---|
+| `pai_raw_apps` | 所有 Composio app connector(gmail/slack/github…)| `toolkit` + `entity_type` + `payload` |
+| `pai_raw_device` | 设备数据(snapshot/health/contacts/utterance)| `kind` |
+| `pai_world_signals` | 全局新闻/外部(现有,全局共享一份)| `provider` |
+| `pai_chat_messages` | 对话(现有,不动)| — |
+| `pai_feedback_events` | 反馈(现有,不动)| `kind` |
+
+域有限(5–6 个),connector 无限——域内用 discriminator 区分。新域(如 finance)再加表,不碰别人。
+
+- **source_ref polymorphic**:event 存 raw 行 id,`source` 大类决定域表——**source→table registry**(composio→`pai_raw_apps`、device→`pai_raw_device`、world→`pai_world_signals` 全局行)住 Events 模块读面;`event_source` 工具(§九)是它的消费者。registry 是纯 SQL 读(触表不算模块依赖,③ 仍是底)。
+- **无 raw 的 event**:`agent_action` 等结构化小记录(agent 决策)**直接写 L1**,`source_ref` 为空——不是所有 event 都有 raw 原文。
+- **TTL 各域各管**:chat history 不该和 gmail raw 同一个 TTL。被 event 引用的 raw 别到点就删;删了也行——event 的 `title` 已提炼,追溯降级为 best-effort。
+
+> raw 怎么变成 event(投影 / rollup / 各 source 的路径),个人域在**第四节投影管线**、全局域在**第五节 World 管线**。本节只管"raw 存哪"。typed raw 的结构化查询能力("今天的会议")**不丢、转移到 L1**(`pai_events` 有 `event_type` + `occurred_at` + indexed);raw 退化成纯档案。
+
+---
+
+## 四、投影管线:raw → event(无 LLM)
+
+raw 怎么变成 event,是一条**固定的声明式管线**,临界路径**零 LLM**(实时 + 省 token):
+
+```
+raw 落库(L0) ──► [rollup 可选] ──► projector ──► event(L1)
+                 off/window/semantic  规则字段映射
+```
+
+**为什么能无 LLM**(对比旧架构):旧架构 raw 落库已无 LLM(typed 硬编码 mapper / generic 声明式 recipe),但 **raw→signal 是 evolve(LLM)做的**——因为 signal 要"提炼判断"(salience 多高?抽什么 fact?)。我们的 **event 只是结构化重组**(一封 gmail = 一条 `communication` event),不做提炼判断——那些推迟到检索时(重要性客观算,6.5)和 evolve(L1→L2 画像蒸馏)。所以 raw→event 能纯规则。**省 token 大头在此**:旧架构每次 connector sync 都跑 evolve;新设计 ingest 只做规则投影,LLM 只在 background 画像蒸馏按需跑。
+
+### 4.1 projector:规则字段映射
+
+职责切分:**recipe(`ingest_recipes/*.yaml`)只管 raw 落库**(slug / result_path / id_field / timestamp_path / title_path / since_param);**`(toolkit, entity) → event_type` 映射住 projector 代码 map**——十几行集中在一处、一眼可查,比散在每个 recipe yaml 里好维护(修订:早期设计想让 recipe 带 `event_type` 字段,实现期改为代码 map,理由如上)。未知 pair 默认 `interaction`,evolve 可再定性。
+
+投影字段:`title`=raw.title、`body`=raw.snippet、`source_ref`=raw id、`dedupe_key` 派生自 raw 的 dedupe_key(幂等)。两个**待补的设计意图**:
+- **`end_at` 区间**:日历类 raw 应带出 `end`(会议区间),点事件留空——「接下来 7 天的会议」排程需要结束时间。
+- **structured 白名单**:`structured` 应挑窄字段(participants/location 等),不是整个 payload 展开——L1 行保持瘦,大内容留 L0 追溯。
+
+1 raw → 1 event,可 backfill(对历史 raw 重跑规则)。**收编技术债**:旧 9 个 typed 表各有 ~120 行硬编码 mapper,统一成 1 `pai_raw_apps` + recipe 落库 + projector 一个 map。
+
+### 4.2 rollup 中间层:管线的可选 stage(三档)
+
+rollup **不是新存储层**,是 raw→event 管线里的可选 stage,per-source 声明:
+
+| 档 | 谁用 | 怎么卷 | LLM? |
+|---|---|---|---|
+| **off**(默认)| 离散数据(邮件/会议/feedback/**成品转写**)| 不卷,1 raw → 1 event | ❌ |
+| **window**(规则)| 周期状态(device health 观测)| 按 (天 × metric) 聚合成 1 event;**只卷已关闭的天**(in-progress 天的聚合写了就 stale、dedupe 又不让更新——等天关闭,接受一天延迟换幂等,期间 L0 可查)| ❌ |
+| **semantic**(LLM)| firehose(transcript_window 中间证据窗 / 截图)| 按"连续同主题"判边界 + 摘要,N 窗 → 1 episode | ✅ **evolve(bg)** |
+
+> **firehose 判别要看清「中间态 vs 终态」**:真 firehose 是**中间证据窗口**(几秒一个的 transcript_window / 截图)——高频、海量、单条价值低、要拼起来才有意义,**绝不逐条上 L1**(淹没真信号 + 烧 token),落 raw(可 TTL)、semantic 卷成 episode、`source_ref` 指回 id 区间。而 **session_summary(一次会话的成品转写)是离散终态**,不是 firehose——走 off 1→1 实时进 L1(用户要实时看到 ambient 事件)。**这道 LLM 恰恰是为省**(N→1,不是省不掉)。
+> **红线**:strategy 就这三档,**别造可配置 rollup DSL**(自定义边界函数/多级聚合树);window 一个参数(时间窗或 by-session),semantic prompt 固定。window 的聚合函数先最简(count/last/sum/min/max),per-metric 语义(步数看 sum、心率看 avg/max)按需扩。
+>
+> **逻辑统一、物理分居**:三档是**一处声明 + 按进程分两处实现**——声明收口 `pinai_contracts.rollup_policy`(单一真源,trust boundary 两侧纯数据读、互不 import);off/window 无 LLM 且临界(raw 落库即投)住 **api**(projector 旁,同步);semantic 要 LLM 且异步住 **agent-engine** 的独立专职 agent(`rollup_semantic`,固定 prompt、可独立测试:给定 firehose → 期望 episode)。这不是妥协,是「临界路径零 LLM」+ trust boundary 两条硬约束的必然。**semantic rollup 属投影管线(L0→L1),不是 evolve(L1→L2 画像蒸馏)的兼职**——两个 LLM 用途分属两层,各自独立(编排顺序见第八节)。
+
+### 4.3 source pipeline 配置:每个 source 走哪些 stage
+
+所有 source 走**同一条管线**,差异收敛成声明(轻量档:先声明 `rollup` + `project`;完整档:六 stage 统一 registry,整合 recipe + device policy):
+
+| source | rollup | →event | event_type | 画像蒸馏 |
+|---|---|---|---|---|
+| gmail / gcal / slack | off | ✓ | communication / meeting | evolve(bg) |
+| device health | window(天 × metric)| ✓ | movement | evolve(bg) |
+| device location | off(**端上 change-only**,见下)| ✓ | movement | evolve(bg) |
+| device visit / motion | off | ✓ | movement | evolve(bg) |
+| ambient session_summary(成品转写)| off(实时 1→1)| ✓ | utterance | evolve(bg) |
+| ambient transcript_window(证据窗)| semantic | ✓(卷成 episode)| utterance | evolve(bg) |
+| device apps / contacts(装机列表/通讯录)| — | **✗ 不投影**(状态/参考数据不是事件,留 L0 供 raw 查询)| — | — |
+| **world news**(走独立 World 管线,五节)| —(gated fan-out)| ✓ **gated** | world_news | evolve(bg) |
+| feedback | off | ✓ | preference | evolve(bg) |
+| **用户 chat 输入** | — | ✓(经 memory_edit 双写,6.1)| agent_decision / preference | **hot(memory_edit)** |
+
+- **location 端上 change-only**:传感器层判「位置变了才上报」——用**距离阈值**(`distance(cur, last) < N 米` 视为没变,不上报;GPS 噪声下坐标相等判别不成立,必须用阈值,同 iOS significant-location-change 思路)。这是**源头抑制重复,不是聚合**,不违反「端侧哑采集」;server 端 window 档(按小时/天聚合)留作量再超时的升级位。
+- **embedding:当前全 embed**(有 title/body 文本即入 embedding queue,简单优先);per-event_type 关闭(纯结构化类型跳过 ANN)是 embedding 成本超预算时的升级位——不 embed 仍可结构化 filter + FTS 检索(6.6),不损召回。
+- **运行档位:当前 = 全量放开(观察期)**。端侧各 source 独立实时上报、最高频率(用户拍板,先看真实数据形态);rollup / salience gating / 不投影 这些「卡子」是**结构**,收紧到哪一档由产品按观察结果调,不推翻管线。
+
+特例从此为 0——所有 source 一条路。两个**不在 projector 这层**的(诚实划界):
+
+1. **从内容抽语义 fact**(对话 / 邮件 → 画像)= evolve / hot agent 的活,不是机械投影。
+2. **world→event 要 gated by salience**(world 全局共享、只投相关的,替代旧 `_user_view` 特殊表 + 检索 LEFT JOIN)——完整构建(源/ingest/gating)见五节。
+
+---
+
+## 五、World:全局信号管线(全局源 → per-user event)
+
+world(新闻/外部)是**独立的写管线(管线 B)**,和个人域管线(Ingest→Projection)平级汇入 Events 写面——不是 Projection 的一条策略,因为它是**另一台机器**:不走 recipe/统一 ingest(自己拉 RSS + 归一化)、不走 projector 的 unprojected 扫描(自己在评分 loop 里 fan-out append)、有自己独有的概念(全局一份 L0、active users 集合、用户指纹、salience)。它和个人域管线唯一共享的是下游(Events 写面)。**本质维度 = per-user vs global**:个人域是「用户自己的数据 1:1 投给自己」,world 是「全局一份数据 gated fan-out 给 N 个用户」——形态差异是机器差异,不是配置差异。
+
+- **新模块的门槛 = 新机器,不是新数据源**(防模块增生):将来出现第二个全局 fan-out 源(股价/天气),**进本模块当 provider**(泛化成 GlobalSignals),不加新模块;feedback/chat 直接调 Events 写面、没有自己的机器,不是模块。
+- **消费侧零特殊性**:world_news 就是普通 event,从 `events_search`(6.6)出来——模块化只发生在生产侧。
+
+管线构成:
+
+- **源(先 3 个,接口可扩展)**:Google News(WORLD/BUSINESS)+ SEC + Fed RSS。**先做好源接口**(provider 注册),后续加源只填配置、不改管线。
+- **ingest(无 LLM)**:RSS 拉取 → 归一化 URL(去 UTM)→ 写全局 `pai_world_signals`(`provider`/`title`/`url`/`summary`/`published_at`/`topics`/`regions`/`importance`)。**全局一份,不 per-user 复制**(省存储核心)。
+- **salience gating(topic Jaccard,无 LLM)**:`salience = 0.4·Jaccard(news.topics∪regions, user.topics) + 0.4·importance + 0.2·recency`,过阈值才投成 per-user event(`event_type=world_news`、`structured:{salience,topics}`、`source_ref` 指回全局原文)。用户 topics 从用户指纹/画像取。
+- **投影量控制**:阈值 + 每周期 top-K per user,别让 world 淹没个人 events。
+- **embedding 住 event 层,全局表不 embed**:per-user 检索统一发生在 `pai_events`(6.6),全局表 embedding 没有读者 = 纯死负载,所以**只有投影出的 world_news event 走标准 embedding 管线**,量被 top-K 卡住(修订:早期设计想"全局 embed 一份、event 复用指回",前提是检索还在 world 表上跑;检索统一到 events 后结论反转)。
+- **读路径无特例(一条路是硬要求,不是洁癖)**:不设 world 专用读 API——agent / UI 都经 `events_search` 读 world_news(旧 `world_recent`/`world_search` 双路退役)。双路的真实代价:同一条新闻两条路到达消费者 → generation 可能拿两次、重复出卡;同一个状态(salience/reference)两处各写一份 → 漂移。
+- **旧 per-user 状态机各有去处,不整体搬**:`salience`→event `structured`;`reference`→events 自己的 reference 链(6.6);`new`(未评分)= 没投影,天然无 event;`open`≈ 未整理(`curated_at IS NULL`);`archived`≈ supersede;**`consumed`(出过卡)→ 不进 events,下放 generation 去重**(六节「消费态不进事件流」)。
+- **排序权重:外部信号 < 个人事件**:`world_news` 的 `event_type` 结构先验(6.5)应低于 meeting/transaction——新闻是背景,不该压过用户自己的生活事件。
+
+> gating 当下就用 topic Jaccard(够用、无 LLM);语义相似(画像向量 × 新闻向量)留作"不够再上"的升级位,不提前做。
+
+---
+
+## 六、L1 · Events:存储 + 检索(核心表 `pai_events`)
+
+一行 = 一个**语义事件**(发生的事 + 用户反馈)。durable fact / 画像走 L2 markdown;只有「用户表达的偏好指令」作 `event_type=preference` 留 L1(给 generation 当硬约束)。
+
+> **消费态不进事件流**(与「历史不可变」对称的边界):event 记「发生了什么」,**不记「下游消费者对这条做过什么」**(出过卡没 / 推送过没 / 用没用过)。那是各消费者自己的去重职责——例:generation 防同一条新闻重复出卡,靠查自己最近卡片的 `sources[]` 排除已用过的 `source_ref`,不靠在 event 上盖 `consumed` 章。旧 world `_user_view` 的 `consumed` 状态机就是反例(per-user 消费态寄生在信号存储里,和事件语义纠缠)——迁移时下放到 generation,不带进 `pai_events`。划界:`curated_at`(evolve 处理交接)和 `reference_count`(检索引用信号)是 **memory 管线自身**的字段,不算消费态——前者是层间 handoff,后者是所有消费者共享的客观质量信号;「某一个消费者用没用过」才是要挡在外面的。
+
+| 字段 | 含义 |
+|---|---|
+| `user_id` + `id` | 主键(`id` TEXT,`evt_` 前缀,caller 生成)|
+| `source` | 来源大类 discriminator(`composio`/`device`/`ambient`/`pinai_chat`/`pinai_feedback`/`agent_action`/`world`/`predicted.*`)。**信任契约:agent 可写值由服务端白名单强制**(仅 `agent_action`/`pinai_chat`/`predicted.*`),管道来源由投影管线自己盖章;actor/operator 由 JWT **server-stamp** 进 `structured`——不信 body 自报 |
+| `event_type` | 语义大类(`communication`/`meeting`/`utterance`/`movement`/`transaction`/`interaction`/`agent_decision`/`preference`/`world_news`);兼作**结构性重要性先验** |
+| `occurred_at` | 事件发生时刻(过去/未来同轴)|
+| `end_at` | NULL=点事件;非 NULL=区间(会议/visit/录音段)|
+| `recorded_at` | 系统写入时刻(审计戳;轻量 bi-temporal 第二轴,**不做认知重放**)|
+| `title` | 一句话摘要(≤200)|
+| `body` | 可选长文——raw 的短摘录(snippet)或合成内容(episode/agent_action);大原文永远留 L0,body 只到"检索/展示够用"为止 |
+| `structured` | 窄结构化插槽(participants/location;preference 的 `{polarity,weight,topic,expires}`;world 的 `{salience,topics}`)|
+| `source_ref` | 指回 raw 域表 `{source, table, id}`(无 raw 时空)|
+| `supersedes_id` / `superseded_by_id` | append-as-correction 链(改期/纠正/取消)|
+| `dedupe_key` | 幂等键,per-user unique(重投影/重追加撞键 = no-op)|
+| `embedding` | 语义检索向量(复用 `pai_embedding_queue`;当前有文本即全 embed,per-type 关闭是成本升级位——见 4.3)|
+| `reference_count` / `last_referenced_at` | 被引用次数 + recency(**客观质量信号 + 重要性依据**)|
+| `curated_at` | NULL=projector 刚写(evolve 的待整理队列);非 NULL=evolve 已处理,**或写入时就不需要 evolve 判断的 event 直接盖章**(agent event_append / feedback / hot 路径,用户显式表达无需再蒸馏判重要性)|
+
+> **删掉 `importance` / `confidence` 列**:LLM 打的主观分 bias 重(同条跨 run 打分近随机、量表 round-number/anchoring bias),不存。重要性改客观信号即时算(6.5);predicted 的 confidence 降为 `structured` 里可选弱信号。`curation_status` 三态压成 `curated_at`——噪声直接不进 L1(raw 域表已留底),不写 `filtered_out` 行。
+
+### 6.1 fact / preference 归属 + 画像蒸馏路径
+
+**归属**(去哪层,按软硬):
+- **durable fact / 画像型偏好**("住上海"、"喜欢简洁")→ **L2 USER markdown**(软画像;慢变、不需 weight)。代价:丢 fact 的时间点回溯,但画像每次变更都有 L1 变更事件可追(见下)。
+- **硬约束 / 负向偏好指令**("别再推 crypto"、dismiss/snooze)→ **L1 `event_type=preference` 事件**(`structured:{polarity,weight,topic,expires}`)。generation 检索它当**程序化硬约束**(塞进 markdown 会降级成"agent 看着办",不可靠)。**供给端两个**:用户显式(chat `event_append`)+ **evolve 负信号蒸馏**(反复 dismiss / 忽略 / 失败的动作,由 evolve 归纳成 standing preference event——负反馈自动变硬约束)。
+
+**画像蒸馏两路径**(event → L2,按来源分,**用户输入最高优先级**):
+- **hot**(对话中即时习得):用户明确说了 durable 的事,chat agent 当场调 `memory_edit` 写画像,不等 evolve。
+- **background**:raw / event 流由 **evolve agent 异步批量蒸馏**(噪声重,要 formation 判断),同样经 `memory_edit`。
+- 两路一个写口,区别在 **agent**(chat vs evolve)+ **时机**(即时 vs 批量)。别让 chat agent 对所有 event 都 hot 写——hot 只在用户明确说时,raw / event 流一律走 evolve。
+
+**`memory_edit` 服务端原子双写(画像变更本身进事件流)**:`memory_edit` 的 api handler(信任侧)成功改画像后,**同事务**追加一条画像变更 event——`source=agent_action`、`event_type=agent_decision`、`structured:{slot, ops 摘要, evidence_event_ids?}`(evidence 可选:agent 想引证据就带上支撑 event 的 id)。要点:
+
+1. **三层可变性对称闭环**:L2 当前态随便改,但每次改动落 L1 不可变流——「画像什么时候改的、从什么改成什么」永远可追。
+2. **服务端做,不靠 agent 自觉**:双写在一个事务里原子完成,agent 只调一次工具;不存在「画像改了、事件漏记」的中间态(修订:早期设计是"chat 先投影 event、agent 再把画像锚过去"两步,依赖 agent 按顺序双调用——服务端双写把顺序问题连根消掉)。
+3. **forgetting 有了程序化依据**:某画像 entry「有没有新证据」可以查它最近一次变更 event + 引用信号,不再纯靠 LLM 印象(8.1③)。
+
+### 6.2 时间轴(轻量 bi-temporal)
+
+- `occurred_at`——事件何时发生(过去/未来,proactive「过去 vs 未来」靠它)。
+- `recorded_at`——何时被系统记下(backfill 旧邮件=今天)。**只作审计戳,不做「按 recorded_at 切片重放历史认知」的查询**——保留两轴的低成本,不付完整 bi-temporal 的查询复杂度。断言有效期 `valid_from/valid_to` 不设(随 fact 移 L2)。
+
+### 6.3 写入修正 = append + supersede
+
+「删除/更新」不物理改行,append 新版本 + 关旧版本链:默认查 `superseded_by_id IS NULL`(当前版本),回溯顺链走,取消=append tombstone。
+
+> **supersede 只系统/evolve 做,不暴露 agent**:connector 重新 ingest 到改期 → projector 写 supersede;evolve 整理矛盾/predicted 被证实 → supersede。**agent 的 `event_append` 纯追加,碰不到改写历史**(记错了 append 一条更正,evolve 去消解)。当前态查询有索引即可,慢了再加物化视图(优化非架构)。
+>
+> **读侧:链是内部机制,永远服务端消化,不做 agent 的负担**——检索(6.6)只返回链头(`superseded_by_id IS NULL`);by-id 读(`event_source`)对旧版 id **自动 resolve 到当前版本**(WITH RECURSIVE,深度上限防御)并回 `resolvedTo` + 修订提示——卡片 sources / evidence 锚 / agent 上下文里的过期 id 永远落在最终状态。不给 agent「顺链遍历」工具(那是把内部结构泄漏成 token 开销);「改期历史」查询是 `include_superseded` filter 的升级位。
+
+### 6.4 未来事件 + 写入铁律
+
+`occurred_at` 同轴表过去/未来:`occurred_at > now()` 即未来事件(日历、predicted)。"接下来 7 天" = `WHERE occurred_at BETWEEN now() AND now()+7d`。
+
+**「预测 vs 兑现」靠 `source`/状态 + supersede,不靠时间戳**——未来事件本质是预测,有两种结局(兑现/落空),时间戳承载不了。
+
+**铁律:只在「信息到达」时 append;时间到点不是信息。**"发生" = `now()` 对未被 supersede 计划的解读,算出来,不写 confirm:
+
+| 情况 | 处置 |
+|---|---|
+| 改期 / 取消 | append supersede(有信号)|
+| 兑现且有新内容(transcript/结果)| 为**内容** append 新事件(如 utterance)|
+| 兑现但无新信息 | **不写**,靠 `occurred_at < now() AND superseded_by_id IS NULL` 推断 |
+| 无声落空 | **不写**(没信号,confirm 也救不了)|
+
+`missed`(没发生且要触发动作,如错过 deadline)仅对少数「重要 + 可观测」的 predicted 开,需独立「没发生」信号源(如打卡缺失证伪),不全量。
+
+### 6.5 重要性 = 客观信号即时算(替代 importance 列)
+
+不存 LLM 主观 importance 分,重要性在检索时用客观信号算:
+
+- **检索排序** = `reference_count`(被引用多)× recency(`last_referenced_at`)× `event_type` 结构权重 × 语义相似度。**全客观,无 LLM 打分。**
+- **冷启动**(新 event `reference_count=0` 没先验)= `event_type` 给结构性先验(transaction/meeting 天生重于 random utterance)。
+
+### 6.6 检索:`events_search` 统一消费者
+
+一个 `events_search` **替代** generation 的 9-endpoint + chat 的 `signals_recent`/`raw_list`/`world_recent` 一堆工具。三消费者(proactive/chat/generation)读同一份记忆——这是「减接口冗余」的真抓手。
+
+**hybrid 三路,按查询用,不是全靠 ANN**:
+
+| 路 | 靠什么 | 需 embed? | 典型查询 |
+|---|---|---|---|
+| **结构化 filter** | `occurred_at` / `event_type` / `entity` / `source` 索引 | ❌ | "接下来 7 天的会议" |
+| **FTS**(关键词) | `tsvector` | ❌ | "提到 Diana 的事件" |
+| **语义 ANN** | `embedding` + pgvector HNSW | ✅ | "用户对投资的看法"(模糊语义) |
+
+> **硬约束**:① **结构化过滤优先**——时间窗 / `event_type` / `source` 能表达的查询绝不靠纯语义(会被向量召回废掉),工具面要把时间窗等过滤参数暴露给 agent(可选参数,"接下来 7 天的会议"必须能表达;修订:早期措辞"必带"——强制参数对 LLM 工具面不现实,agent 会乱填,改为可选但优先);② **`user_id` 必须 pre-filter**(RLS + 多租户,先缩小集合再 ANN/FTS)。很多查询纯结构化、根本不碰 ANN;ANN 只在"模糊语义匹配"才用。语义 + 关键词两路用 **RRF 融合**(rank-based,k=60——cosine 与 ts_rank 两种分数尺度不可比,按名次融合才干净)。
+
+**排序 = 客观信号(无 LLM,6.5)**:`reference_count` × recency(`last_referenced_at`)× `event_type` 权重 × 语义相似度。
+
+- **reference 生产侧 = agent 检索命中即 bump**:`events_search` 命中的 event **bump `reference_count` + `last_referenced_at` + `referenced_by_runs`**——这是客观信号链的**源头**(喂排序 6.5 / formation gating 8.1 / forgetting)。**不在这 bump,整条 reference 链就是死的**(旧架构痛点⑦的根因)。三个防污染细节:**只有 agent 检索 bump**(带 run_id;UI 时间轴浏览 / 内部 sweep 不 bump——被动浏览不是"使用",不许灌水);**`referenced_by_runs` 按 run 去重**(一个 run 读 10 次 ≠ 10 个独立 run 引用,后者才是重要性);**bump 是读路径上的 best-effort 副作用**(SAVEPOINT 隔离,bump 失败绝不拖垮检索本身)。
+- **反馈循环 + 马太效应对冲**:被检索多 → reference 高 → 排序靠前 → 更进画像(**使用驱动重要性**,不靠 LLM)。防老 event 霸榜:**recency 项**(新近引用加权)+ **新 event 探索期**(reference=0 时 `event_type` 先验兜底,同 6.5 冷启动)。
+- **world 就是普通 event**:经 World 管线(五节)投进 `pai_events`,不再特殊 LEFT JOIN;全局原文留 `pai_world_signals`(L0),`source_ref` 指回。
+- **L2 画像不检索**——run 启动常驻注入。
+- **检索预算**:top-K + 时间窗,别让检索变新 firehose。
+
+---
+
+## 七、L2 · Profile:常驻 markdown 画像(6 段)
+
+画像不再是 `pai_profile` 的 JSONB 桶,而是 **markdown string**,常驻注入 system prompt(让 agent「懂你」)。类比 openclaw bootstrap / hermes MEMORY.md。
+
+**切分 = AGENTS(代码常量,唯一不可编辑层)vs 五段 user_strings(agent 经唯一信任写口维护)**。**所有 `pai_user_strings` 段用户都不手动编辑——想改就和 agent 说、agent 经 `memory_edit` 写**(没有"设置 UI 直接改 markdown"这条路)。信任模型:**写口可信**(唯一写路径 = api 信任侧 `memory_edit`,写时威胁扫描),**内容当 prior**——画像是 agent 维护的先验,AGENTS 常量 outrank 一切段落(详见下方安全条款,含这个模型的残余风险)。
+
+| 段 | 职责 | 谁写 | 写入触发 |
+|---|---|---|---|
+| **AGENTS** | 行为规范 + **安全强约束** | **开发者**(代码常量,不落盘,agent/用户都碰不到)| — |
+| **IDENTITY/SOUL/TOOLS** | agent 人设/工具说明 | agent(`memory_edit`)| **用户对话指令**("把你设得更专业";初始=默认模板 seed)|
+| **USER** | 用户 durable facts + 偏好(含对 agent 行为的偏好)| agent(`memory_edit`)| 用户指令(hot)+ evolve 学(bg)|
+| **GOALS** | 按 bucket 的目标 | agent(`memory_edit`)| agent + evolve(新用户 seed 几条 starter goals)|
+
+- **MEMORY 段已砍**:原"agent 主观笔记"和 USER/events 定位重叠、是 drift 雷区(LLM 自由编辑无约束文本)。功能重分配——关于用户 → USER;agent 想记一条 → `event_append` 进 events;程序性学习 → skills;run 内草稿 → run-time context(不进常驻画像)。
+- **USER 双 writer**:见 6.1 画像蒸馏两路径(hot = chat agent 即时 / bg = evolve)。硬约束/负向偏好不进 USER——走 L1 `event_type=preference`。
+- **IDENTITY/SOUL/TOOLS vs USER**:都由 agent 经 `memory_edit` 写,区别在**触发来源**——前者由**用户对话明确要求改人设**触发("把你设得更简洁";初始=默认模板 seed,各用户经对话个性化);后者由 **agent 从 events 学**(+ 用户指令)触发。**用户全程不直接编辑 markdown,只表达意图、agent 执行。**
+- **写入防 drift**(两个 writer 都过):写时威胁扫描、每条带来源/绝对时间锚(8.2)、超预算走 hermes batch 整合(**不静默截断**)。
+- **写并发(hot vs evolve 同写 USER)**:**OCC 乐观锁为主**——`version` 列 + `WHERE version = <读到的>` 条件写,冲突返回 `version_conflict`、agent 重读重试(低频写下冲突罕见,重试成本可忽略;修订:早期设计以 advisory lock 为主、OCC 作升级位,实现期反转——OCC 更简且够用,`pg_advisory_xact_lock` 降为冲突频繁时的升级位)+ hermes **entry 级 add/replace/remove**(改不同 entry 不冲突)。evolve 间并发由 per-user coalesce(8 节)从源头消除,这里主要兜 hot vs evolve。
+- **GOALS**:纯 markdown(bucket: health/work/family);有时间性的 goal,evolve 顺手在 **scheduler 建一条 checkpoint 定时任务**(复用 agent 自管理的 scheduled-task 机制,recurring 免费)——**时间触发统一走 scheduler,不单独扫 goal 表;`pai_events` 只记用户世界的事实(过去/未来),agent 的注意力排程是意图、不是事件**(消费侧触发设计见 proactive doc)。
+- `pai_user_strings` schema:`(user_id, slot)` PK,slot ∈ {identity,soul,tools,user,goals};`content TEXT`(`§` 分隔 entry)+ `version INT`(乐观锁)+ `char_budget INT` + `updated_at`。
+
+**安全(多租户必须)**:
+
+1. **AGENTS = 代码常量、不落盘**(agent/用户工具够不着),注入最前、outrank 一切段落——安全是常量不是文件(openclaw 教训)。
+2. **单层信任模型:信任写口,不包裹读侧**。五段的唯一写路径是 api 信任侧 `memory_edit` + 写时威胁扫描(reserved marker 拒写:伪造 `<agent_safety>`/`<portrait>` 边界、NUL 注入;语义模式扫描是加强位),用户没有直接落盘路径——所以读侧不再逐段 `<untrusted-text>` 包裹,靠 AGENTS 常量压制(修订:早期设计是"全段当不可信 + 读时包裹"双层;实现期砍掉用户直接编辑路径后,写口变成可控单点,读侧包裹去掉——包着 untrusted 的 IDENTITY 也让 agent 不信自己的人设)。**残余风险要认账**:间接注入面还在(对话内容可以操纵 agent 把恶意指令写成画像 entry,marker 扫描挡不住语义注入),防线是 AGENTS outrank + 写时扫描 + prompt 把画像定位成 prior 而非指令。**若发生注入事故,读时包裹是现成的升级位**(一行 build_portrait 的事)。
+3. **固定注入顺序**(硬编码 + 测试锁死):AGENTS/Safety → 人设(IDENTITY/SOUL)→ USER → TOOLS → GOALS,全进 stable prefix(cache 友好)。
+4. **超预算拒绝,不截断**:over-budget 的写直接失败并回吐全部条目逼 agent 整合(7.1 hermes 契约)——不存在「静默截断丢安全行」这条失败路径。
+5. **TOOLS 只是 prompt 提示**:工具真可用性由代码 registry / Composio allowlist 决定。
+
+### 7.1 自维护 = adapt hermes MemoryStore
+
+所有 user_strings 段(IDENTITY/SOUL/TOOLS/USER/GOALS)的编辑 adapt hermes-agent 的 `MemoryStore`(已读源码):
+
+- **算法照搬**(纯 list[str] 操作):entry(`§` 分隔)的 add/replace/remove/**batch**;`old_text` 子串唯一定位;**超预算 add 失败 → 回吐全部条目逼 batch 整合**(别学 openclaw 静默截断=失明);**batch 只校验最终预算**;**成功不回吐条目** + `done`(防 thrash)。
+- **存储/并发/调用换成我们的**:文件 → Postgres `pai_user_strings` 行;文件锁 → 行级乐观锁 `version`(OCC,见上);in-process → **engine 瘦 tool 经 agent 面 HTTP,CRUD/预算/威胁扫描全在 api 信任侧**;**frozen snapshot**(portrait 中间件每 run 只取一次、组装后当 transient SystemMessage 注入,当轮不重建,保 prompt cache;取失败降级为只有 AGENTS 常量,不掐死对话);**防注入 = 写时扫威胁拒写**(单层模型,安全条款 2)。
+
+---
+
+## 八、evolve(on_event / daily)+ formation + 收敛清单
+
+**evolve = 原 evolve/dream 合并**(crystallize 删除,见下),一个 agent、**两触发**(on_event connector 后 / daily 每日),**只管 background 蒸馏**(hot 蒸馏走 chat agent,6.1):
+
+1. **L1**:curate 未整理队列(`curated_at`)、抽 predicted、forgetting。**semantic rollup 不是 evolve 的活**——firehose→episode 属投影管线(L0→L1),由独立的 `rollup_semantic` 承担(4.2);把它塞进 evolve 是职责越界(一个 agent 混两层的 LLM 用途),prompt 变长且互相干扰。
+2. **L1→L2**:从 events **单向蒸馏**画像进 USER/GOALS。**单向 L1→L2、画像是 events 派生**——防双真源漂移。
+
+> **daily 编排顺序(load-bearing)**:先跑 `rollup_semantic`(L0→L1,把昨天的 firehose 卷成 episode 落进 L1 待整理队列)、**再**跑 evolve(L1→L2,episode 已在队列里、能被蒸馏)。两个独立 background step,顺序反了当天的 firehose 就进不了画像。
+
+> **扫描机制(增量 + 并发,robust)**:
+> - **增量游标 = `curated_at`**(per-row flag,**非时间 cursor**):evolve 扫 `curated_at IS NULL` → 蒸馏 → 设 `curated_at=now()`。event 是 bi-temporal(backfill / 乱序),时间 cursor 会漏旧 event;flag 扫所有 NULL 不漏(业界 job-queue 模式,同 `embedding_queue`);batch 循环到清空,**无静默上限**。
+> - **per-user task + coalesce**:evolve 扫 per-user events(不再 per-connector),task=`evolve.{user_id}`,`requeue_once` coalesce → **同一用户同时只一个 evolve**(多 connector sync / daily 全合并成一个),从源头消除 evolve 间并发写画像。
+> - **claim + 原子**:`FOR UPDATE SKIP LOCKED` claim events;蒸馏写画像 + 设 `curated_at` 同事务 / 幂等(防崩溃后重蒸馏)。
+
+> **crystallize 删除**:对话蒸馏由 hot path(用户明确输入,6.1)+ daily evolve(跨对话推断,看全局才能归纳)+ event_append(对话中主动记 event)覆盖。单 session 蒸馏**两头不靠**(及时被 hot 抢、归纳被 daily 强)——这也是它一直 dormant 的根因。
+
+### 8.1 formation:什么进画像 / 什么忘(命门)
+
+judgment 差则画像全是噪声(mem0 #4573 97.8% 垃圾;Harvard D³ [2505.16067](https://arxiv.org/abs/2505.16067) 实证 add-all 比无记忆还差)。三条:
+
+1. **gating 分层 — gate 在「进 L2」,不在「进 L1」**:L1 event = 收录派(projector 机械投影都进,客观 importance 排序兜底,不淹没画像);**L2 画像 = 保守派**(常驻、空间贵、drift 高 → 高门槛)。**formation 发生在 L1→L2,不在 ingest。**
+2. **门槛用客观信号,不用 LLM 打分**(D³:LLM 当 gate 37 分 ≪ ground-truth 51;Rating Roulette 2510.27106:LLM 数值打分近随机):进 L2 = `reference_count 高`(被反复引用=真有用)∨ `用户显式`(hot,直接进)∨ `durable pattern`(≥N 次 / 时间稳)。**复用 6.5 客观重要性,不引入 importance 1-10 分。**
+3. **forgetting(旧架构完全没有,抗退化命门)**:画像 entry 长期没被引用 + 无新证据 → evolve **evict(合并/降级,不硬删**,学 MemGPT)。**保护名单**:用户显式 + 高 reference 不忘(规避删掉罕见但关键)。简单档 `last_referenced 衰减 + 保护名单`,别造遗忘曲线。
+4. **冷启动(新用户 USER 空白)**:**backfill** = 首次 connector `init` 拉 last N events(复用 connector init 的 `since=None` 默认窗口,如 gmail 100 封)→ 投影成 events → **立即触发 evolve**(高优先级 dispatch,不等定期 tick)蒸馏 USER。**gating 退化**:`reference` 项(events 刚建、没被引用)换成 **backfill 内频次**(同类 ≥N 次 = durable),用户显式仍有效——同 6.5 检索冷启动套路。**onboarding 种子**:onboarding 问答 → agent 写几条核心 fact 进 USER(用户不直接编辑;placeholder,采集策略后讨论)。**不造冷启动专用 agent**,就是一次 init 的 evolve。
+
+> **reflection(可选增强,非结构)**:蒸馏可先归纳(多 event → 1 insight)+ 证据回指(`insight (因 event 1,5,3)`,学 Generative Agents),provenance 落 evolution_runs。先做基础蒸馏也行。
+
+### 8.2 蒸馏 prompt(借最强 agent 逐字)
+
+进画像 prompt 骨架,每段标借鉴源:
+
+```text
+<gating>             # 保守门槛,借 Cursor
+Err on the side of NOT writing to the profile. Rate VAGUE or OBVIOUS low —
+skip. Promote only when referenced/reinforced repeatedly (objective), OR
+the user explicitly stated it (then always keep).
+<durable>            # 持久 vs 暂时,借 mem0-V3
+"User stressed today" = transient, skip. "User switched jobs to X" =
+persistent — write, and capture the TRANSITION (what it changed FROM).
+<time>               # 画像持久 ⇒ 绝对时间,借 Letta/mem0
+Profile is persisted indefinitely. Never "today"/"recently" — absolute date.
+<dedupe / contradict>  # 借三家共识 + 我们的 supersede
+Semantically equivalent → skip. Contradicts existing → supersede (append
+correction), never silently overwrite.
+```
+
+> **架构共识**:写入裁决独立成 background agent(Letta sleeptime / mem0 update 都这样);唯一例外是 hot path(边聊边写),其克制见 6.1(只在用户明确说、推断留 evolve)——否则 hot 变 drift 入口。
+> **provenance**:evolve 每次蒸馏在 `pai_evolution_runs`(`refs_consumed`/`refs_produced`)记录从哪些 events 改了哪些画像 entry。markdown 注入纯净,可观测在审计层。
+
+> 各表处置(sunset / 退役 → L2 / 域表对齐 / drop / 保留)见第二节「旧架构 → 新架构映射」,不重列。
+
+---
+
+## 九、agent 工具:21 → 4
+
+| 工具 | 替代 | 说明 |
+|---|---|---|
+| **`events_search`**(读)| memory/signals/raw/world 一堆读工具 | 内部 hybrid + 结构化过滤(6.6);返回 200 字符 snippet + `hasSource` 标记(可下钻与否)|
+| **`event_source`**(读原文)| 老 raw 读工具 | 按 event id 取其 L0 原文(完整邮件/日历项/新闻)——服务端经 source→table registry 路由域表(§三),**supersede 链自动 resolve 到当前版本**(6.3),无档案/已 TTL 的优雅降级 |
+| **`event_append`**(纯追加)| (新)| agent 主动记一条事件,**无 edit/delete**(历史不可改)|
+| **`memory_edit`**(画像 add/replace/remove/batch)| memory_add/profile_upsert/goal_upsert/preference_add/…| 改 L2 markdown(当前态可变;hot 蒸馏也用它);**服务端同事务追加画像变更 event 进 L1**(原子双写,6.1)|
+
+> 三层可变性对应:events 工具是读(检索 + 下钻原文)+ 纯追加(历史不可改);画像工具有 add/replace/remove(当前态会变)。4 个工具职责边界清晰到「人一眼能说出该用哪个」——找(events_search)/看原文(event_source)/记(event_append)/画像(memory_edit)——满足 Anthropic「少而精」工具设计,别做成语义模糊的「上帝工具」。**`memory_edit` 写所有 user_strings 段(含 IDENTITY/SOUL/TOOLS)**——用户改人设就对话、agent 执行,**没有"设置 UI 直接编辑 markdown"这条路**(统一写入口 + 威胁扫描)。
+
+---
+
+## 十、落地原则(结构性变更怎么推进)
+
+本 doc 不跟踪执行进度,但「怎么推进结构性变更」本身是设计的一部分,三条原则长期有效:
+
+1. **验证门不是时间线**:每步结构性变更(换检索、迁消费者、drop 表)以 eval 不退为前进条件,退了就停在原地修——「退化看起来像正常运行」,没有不可篡改回归集(固定问题集 + 人工 ground truth + answer-key 哈希防篡改)就无法证明一次"优化"是变好还是变坏(原则 8)。
+2. **expand-contract**:新旧并存验证后再收缩,不 big-bang 全量重写;新消费者(零迁移风险)先切,存量消费者验证后跟进,旧表零引用后才 drop。
+3. **增量治理优先**:能不动存储解决的痛点(修死字段、画像常驻、收敛读接口)先做,按需再上结构。
+
+---
+
+## 十一、模块地图与接口(modular monolith)
+
+memory 是 api 进程内的 **modular monolith**:模块 = 目录边界 + 窄腰接口(`__init__` 显式导出)+ 工具强制依赖方向(import-linter 契约)。api 侧四模块物理住 `domains/memory/{events, projection, portrait, curation}`;① Ingest 住 connector domain(与连接管理同域内聚)、⑥ World 住 `connector/world/`(独立写管线);engine 侧组件(evolve / rollup_semantic / portrait 注入)按 engine 自己的维度组织,经落点表映射。**章节即模块**:三节=①、四节=②、五节=⑥、六节=③、七节=⑤、八节=④。三条模块化原则:
+
+- **窄腰(deep module)**:接口窄、实现深(Ousterhout)——`events_search` 对外 5 个参数,内部藏 hybrid+RRF+客观排序+bump 四层机制,消费者全不用知道。不把内部 helper 接口化(单实现不引入 Protocol/ABC,协议只在 trust boundary 两侧的 contracts 才值得)。
+- **信息隐藏(Parnas)**:模块边界藏住「会变的决策」——排序公式会调、rollup 档位会收紧、并发控制可能换,全在模块内部,接口不暴露。
+- **模块的门槛 = 独立的机器 + 独立的变化原因;数据源是 provider,不是模块**:gmail/slack/device 是插进 ①Ingest 的插件,新加 connector 不新增模块(「按域分表不按 connector 分表」在模块层的同一思想)。**World 配得上模块**,因为它是另一台机器(独立写管线 B:全局 L0 + salience fan-out,与 ①② 零实现共享,五节)且变化原因独立(产品要什么外部信息 vs 第三方 API 形态);feedback/chat 直接调 ③ 写面、没有自己的机器,不是模块。第二个全局 fan-out 源进 ⑥ 当 provider,不加新模块。
+
+```
+                      ┌─────────────────────────────────────────┐
+  providers ────────►│ ① INGEST(L0)                             │
+  (gmail/slack/      │  raw 域表 + recipe 契约 + dedupe          │
+   device/…)         └──────────────┬──────────────────────────┘
+                                     │ raw 契约 {id, occurred_at, payload, dedupe_key}
+                      ┌──────────────▼──────────────────────────┐
+                      │ ② PROJECTION(L0→L1,无 LLM)              │
+                      │  projector + rollup(off/window)          │◄── rollup_semantic
+                      └──────────────┬──────────────────────────┘    (engine,LLM 档)
+                                     │ append / supersede
+  ┌───────────────────┐              │
+  │ ⑥ WORLD(管线 B)    │──────────────┤ append(salience gated fan-out,1→N user)
+  │  RSS→全局 L0 一份   │              │
+  │  评分 + top-K 投影  │              │
+  └───────────────────┘              │
+                      ┌──────────────▼──────────────────────────┐
+                      │ ③ EVENTS(L1 存储+检索,一个模块两个面)     │
+                      │  写面: append/supersede/curate 队列       │
+                      │  读面: events_search(hybrid+排序+bump)    │
+                      └───────┬──────────────────▲──────────────┘
+              pending 队列读   │                  │ 检索(读)
+                      ┌───────▼──────────┐  ┌────┴──────────────┐
+                      │ ④ CURATION(evolve)│  │ 消费者             │
+                      │  formation/forget │  │ chat/proactive/gen│
+                      └───────┬──────────┘  └────▲──────────────┘
+              memory_edit(写) │                  │ portrait 注入(读)
+                      ┌───────▼──────────────────┴──────────────┐
+                      │ ⑤ PORTRAIT(L2)                           │
+                      │  user_strings(hermes+OCC+威胁扫描)        │
+                      │  + 组装注入(AGENTS + build_portrait)      │
+                      └──────────────────────────────────────────┘
+  EVAL(横切):回归集盯 ③④⑤⑥ 行为不退(§十原则 1)
+```
+
+| 模块 | 设计节 | 职责 | 对外接口(窄腰)| 藏住的决策(内部自由)| 物理落点 |
+|---|---|---|---|---|---|
+| **① Ingest**(L0)| 三 | provider 拉数 → raw 落库 | `ingest(source, items)`;raw 契约 | recipe 格式、分页、since 游标、provider 实现 | `connector` domain(apps/device)+ 域表 migration |
+| **② Projection**(L0→L1)| 四 | raw→event 规则投影 | `project_unprojected(user)` | event_type map、rollup 档位、window 聚合函数 | `memory/projection/`(projector + window)+ `pinai_contracts.rollup_policy`(声明真源)+ engine `rollup_semantic`(LLM 档)|
+| **③ Events**(L1)| 六 | 事件存储 + 统一检索(**一个模块**:读写共享 supersede/curated 不变量,不拆)| 写面:`append / supersede / mark_curated`;读面:`events_search(query?, event_type?, since?, until?, limit)`、`event_source(event_id)`(L0 下钻 + 链 resolve)| 排序公式、RRF、bump 策略、索引、dedupe | `memory/events/` + `pai_events` |
+| **④ Curation**(evolve)| 八 | L1 整理 + L1→L2 蒸馏 | `run_evolve(trigger, user)` | formation 门槛、forgetting 规则、蒸馏 prompt | engine `agents/`(evolve);api 侧审计+面 `memory/curation/`;调度 `api/orchestration/`(task kind `auto.dreaming` / 路由 `run/dream` 是 daily evolve 的 legacy 命名)|
+| **⑤ Portrait**(L2)| 七 | 画像存储 + 编辑 + 常驻注入 | `memory_edit(slot, ops)`、`render_portrait(user)` | hermes 编辑语义、OCC、预算、威胁扫描、注入顺序 | `memory/portrait/`(信任侧,含新用户 GOALS seed)+ engine `prompts/portrait` + portrait 中间件(AGENTS 常量不入库)|
+| **⑥ World**(管线 B)| 五 | 全局源拉取 + per-user gated fan-out 投影 | `run_world_cycle()`(cron 驱动;对消费者零接口)| RSS 源列表、URL 归一化、salience 公式、阈值/top-K、用户指纹 | `connector/world/`(ingest + scoring + 投影)+ 全局 `pai_world_signals` |
+
+- **依赖方向(单向无环,import-linter 契约锁)**:①→③、②→③、⑥→③、④→③+⑤、**⑤→③**(memory_edit 服务端双写变更事件,6.1——所以 ⑤ 不是底);**③ Events 是唯一的底,不依赖任何人**;memory 整体是被消费方(不反向 import 管线/消费者);消费者(chat/proactive/generation)只碰 ③ 读面 + ⑤ render。
+- **接口三级稳定性**:**frozen** = 对 agent 的 3 工具(§九)+ 对消费者的 events_search / portrait 注入——改动过设计讨论;**stable** = 模块间接口(上表第四列)——改动同步本 doc;**free** = 模块内部——随便改。
+- **trust boundary 叠加在模块图之上**:engine 侧组件(rollup_semantic / evolve / chat 工具)不直连模块——engine scoped DSN 只见 langgraph schema,读写 memory 必经 api agent 面 HTTP(`/api/agent/*`),CRUD/预算/威胁扫描全在 api 信任侧。
+- **RLS**:memory 各表沿用 `user_scoped_tx`(`SET LOCAL ROLE pai_app`)+ 双 policy(RLS role 模型见相邻 plan,已激活);全局表 `pai_world_signals` 无 per-user 行,不在此列。
+
+---
+
+## 十二、待讨论
+
+1. **onboarding 种子采集策略**(偏产品):onboarding 问答采集几条核心 fact、agent 写进 USER(用户不直接编辑),采多少 = 多了烦/少了没用的取舍——接口在(8.1④),策略待产品定。
+
+> **prod 数据迁移 / KMS 加密不在本 doc**——迁移随实现节奏定;加密走独立隐私 plan(见文末「相邻」)。
+> **eval 见第十节落地原则 1**——不可篡改回归集是一切结构性改动的前进条件。
+
+---
+
+## 相关
+
+- **消费侧**:[Proactive + 卡片生成(基于本 memory)](./2026-06-23-proactive-card-generation)。
+- **依据**:[Lifelong Memory 调研](../research/2026-06-10-lifelong-memory-architecture.mdx)、openclaw/hermes 源码逆向、[后端重构 #197](./2026-06-21-backend-rearchitecture)。
+- **相邻**:`064_pai_timeline_events`(已 drop,复用 schema)、[RLS role 模型](./2026-06-08-rls-role-model)(已被 #200-204 解决)、[隐私加密](./2026-06-02-user-data-encryption-and-isolation)(独立 plan)。
+- **模块**:[Memory](../modules/memory)、[Data Connectors](../modules/data-connectors)、[Background Tasks](../modules/background-tasks)。

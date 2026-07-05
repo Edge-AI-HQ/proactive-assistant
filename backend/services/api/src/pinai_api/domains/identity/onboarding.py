@@ -138,30 +138,27 @@ class ConnectorSummaryPrewarmResponse(BaseModel):
 
 @dataclass(frozen=True)
 class RawSourceSpec:
+    """A connector-summary read against pai_raw_apps. `toolkit` is the stored
+    pai_raw_apps.toolkit (Composio slug); `entity` filters entity_type
+    (None = every entity under the toolkit)."""
+
     source: str
-    table: str | None = None
-    raw_events_toolkit: str | None = None
-    raw_events_entity: str | None = None
+    toolkit: str
+    entity: str | None = None
 
 
 _TOOLKIT_SOURCE_SPECS: dict[str, tuple[RawSourceSpec, ...]] = {
-    "gmail": (RawSourceSpec("gmail", table="pai_raw_gmail_messages"),),
-    "googlecalendar": (RawSourceSpec("googlecalendar", table="pai_raw_gcal_events"),),
-    "googledrive": (RawSourceSpec("googledrive", table="pai_raw_gdrive_files"),),
-    "googledocs": (
-        RawSourceSpec("googledocs", raw_events_toolkit="googledocs", raw_events_entity="documents"),
-    ),
-    "googlesheets": (
-        RawSourceSpec(
-            "googlesheets", raw_events_toolkit="googlesheets", raw_events_entity="spreadsheets"
-        ),
-    ),
-    "slack": (RawSourceSpec("slack", table="pai_raw_slack_messages"),),
-    "github": (RawSourceSpec("github", table="pai_raw_github_issues"),),
-    "calendly": (RawSourceSpec("calendly", table="pai_raw_calendly_events"),),
-    "stripe": (RawSourceSpec("stripe", table="pai_raw_stripe_invoices"),),
-    "youtube": (RawSourceSpec("youtube", table="pai_raw_youtube_subscriptions"),),
-    "linkedin": (RawSourceSpec("linkedin", table="pai_raw_linkedin_profile"),),
+    "gmail": (RawSourceSpec("gmail", "gmail", "messages"),),
+    "googlecalendar": (RawSourceSpec("googlecalendar", "googlecalendar", "events"),),
+    "googledrive": (RawSourceSpec("googledrive", "googledrive", "files"),),
+    "googledocs": (RawSourceSpec("googledocs", "googledocs", "documents"),),
+    "googlesheets": (RawSourceSpec("googlesheets", "googlesheets", "spreadsheets"),),
+    "slack": (RawSourceSpec("slack", "slack", "messages"),),
+    "github": (RawSourceSpec("github", "github", "issues"),),
+    "calendly": (RawSourceSpec("calendly", "calendly", "events"),),
+    "stripe": (RawSourceSpec("stripe", "stripe", "invoices"),),
+    "youtube": (RawSourceSpec("youtube", "youtube", "subscriptions"),),
+    "linkedin": (RawSourceSpec("linkedin", "linkedin", "profile"),),
 }
 
 _TITLE_KEYS = (
@@ -430,41 +427,26 @@ async def collect_connector_summary_items(
     clamped_limit = max(1, min(int(limit), MAX_CONNECTOR_SUMMARY_ITEMS))
     specs = _TOOLKIT_SOURCE_SPECS.get(normalized)
     if specs is None:
-        specs = (RawSourceSpec(normalized, raw_events_toolkit=normalized),)
+        specs = (RawSourceSpec(normalized, normalized),)
 
     rows: list[ConnectorSummaryItem] = []
     async with user_scoped_tx(pool, user_id) as conn:
         for spec in specs:
-            if spec.table:
-                cur = await conn.execute(
-                    f"""
-                    SELECT *
-                    FROM {spec.table}
-                    WHERE user_id = %s
-                    ORDER BY occurred_at DESC
-                    LIMIT %s
-                    """,
-                    (user_id, clamped_limit),
-                )
-            else:
-                cur = await conn.execute(
-                    """
-                    SELECT *
-                    FROM pai_raw_events
-                    WHERE user_id = %s
-                      AND toolkit = %s
-                      AND (%s::text IS NULL OR entity_type = %s)
-                    ORDER BY occurred_at DESC
-                    LIMIT %s
-                    """,
-                    (
-                        user_id,
-                        spec.raw_events_toolkit or spec.source,
-                        spec.raw_events_entity,
-                        spec.raw_events_entity,
-                        clamped_limit,
-                    ),
-                )
+            # apps-domain L0: connector summaries read pai_raw_apps (toolkit +
+            # entity_type). _compact_row pulls title/text from the envelope
+            # columns or payload.
+            cur = await conn.execute(
+                """
+                SELECT *
+                FROM pai_raw_apps
+                WHERE user_id = %s
+                  AND toolkit = %s
+                  AND (%s::text IS NULL OR entity_type = %s)
+                ORDER BY occurred_at DESC
+                LIMIT %s
+                """,
+                (user_id, spec.toolkit, spec.entity, spec.entity, clamped_limit),
+            )
             for row in await cur.fetchall():
                 item = _compact_row(spec.source, row)
                 if item is not None:

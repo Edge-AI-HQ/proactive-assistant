@@ -1,4 +1,4 @@
-from agent_engine.agents.dream import _final_message_text
+from agent_engine.agents.evolve import _final_message_text
 
 
 class _Message:

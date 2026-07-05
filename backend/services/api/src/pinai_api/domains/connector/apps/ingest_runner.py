@@ -6,18 +6,17 @@ Schema is `Recipe` below — see
 docs/plans/2026-05-07-composio-architecture-redesign.mdx for full
 field reference.
 
-This runner replaces the per-toolkit `_fetch_*` functions in
-connector_ingest.py for the 11 first-batch toolkits. Toolkit-specific
-upsert (typed raw tables, dedupe_key shape, ON CONFLICT semantics)
-stays in connector_ingest.py — that's where the per-toolkit logic
-genuinely belongs. The fetcher half is now table-driven.
+This runner owns the fetch half of ingest (Composio call → list of items),
+table-driven by the yaml recipe. The upsert half is the recipe-driven
+generic_ingest mapper, which writes every toolkit into the unified pai_raw
+store — there is no per-toolkit upsert code anymore.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -58,6 +57,22 @@ class Recipe(BaseModel):
     args_template: dict[str, Any] = Field(default_factory=dict)
     since_param: str | None = None
     since_format: str | None = None
+    # init bootstrap window. Design: init pulls an EXPLICIT [now-lookback,
+    # now+lookahead] snapshot (so history reaches back + future meetings reach
+    # forward) and paginates it, instead of the toolkit's opaque default window
+    # (which just returns the first `maxResults` — the "only got last few days"
+    # bug). sync stays incremental via since_param. All-empty/zero → init keeps
+    # the legacy since=None single-shot default-window behavior.
+    init_since_param: str | None = None  # e.g. gcal timeMin
+    init_until_param: str | None = None  # e.g. gcal timeMax (future window)
+    init_since_format: str | None = None  # reuses the _format_since formats
+    init_lookback_days: int = 0  # how far back the init snapshot reaches
+    init_lookahead_days: int = 0  # how far forward (0 for sources with no future)
+    init_max_items: int = 100  # cap on total items pulled across pages per init
+    # pagination: follow the response's next-page token until exhausted or the
+    # cap is hit. Empty page_token_response_path → single-shot (legacy).
+    page_token_response_path: list[str] = Field(default_factory=list)
+    page_token_arg: str | None = None
     result_path: list[str] = Field(default_factory=list)
     id_field: str | None = None
     sync_interval_hours: int = 12
@@ -65,12 +80,33 @@ class Recipe(BaseModel):
     prereqs: list[Prereq] = Field(default_factory=list)
     description: str = ""
     notes: str = ""
-    # Generic-storage fields: toolkits without a typed pai_raw_* table land
-    # in pai_raw_events; these drive the generic mapper (generic_ingest).
+    # Projection fields: every recipe lands in the unified pai_raw store via
+    # the generic mapper (generic_ingest); these drive the projection.
     entity_type: str | None = None
     timestamp_path: list[str] = Field(default_factory=list)
+    # Fallback timestamp path, tried when timestamp_path yields nothing — for
+    # sources whose time field moves with item shape. Canonical case: GCal
+    # all-day events carry start.date (not start.dateTime), so a recipe with
+    # timestamp_path=[start,dateTime] must fall back to [start,date] — without
+    # it, all-day items get occurred_at=NOW and pile onto the ingest day.
+    timestamp_fallback_path: list[str] = Field(default_factory=list)
     title_path: list[str] = Field(default_factory=list)
     snippet_path: list[str] = Field(default_factory=list)
+    # Timeless sources (e.g. a profile snapshot) have no natural event time, so
+    # occurred_at = ingest time is expected and they're exempt from the
+    # timestamp_path gate — they're reference data, not part of the 24h window.
+    timeless: bool = False
+    # Rollup strategy — the raw→event pipeline's optional stage (design §4.2):
+    #   off      — 1 raw → 1 event (discrete data: email / meeting / feedback).
+    #   window   — periodic-state sources (app usage / location points): a fixed
+    #              time window is deduped / aggregated (rule-based, no LLM).
+    #   semantic — firehose (utterance / screenshots): NOT projected one-by-one
+    #              (would flood L1); evolve's semantic rollup collapses them into
+    #              episode events. The projector skips these.
+    # Composio recipes are all "off" today; the device sources that use window /
+    # semantic have no recipe — their strategy lives in the shared
+    # pinai_contracts.rollup_policy (doc §4.2).
+    rollup: str = "off"
     # Inferred-recipe confidence (recipe_infer writes mid/low; handwritten
     # yaml defaults to high).
     confidence: str = "high"
@@ -201,10 +237,10 @@ async def run_fetch(
     """Run the fetch half of an ingest cycle (Composio call → list of
     items). Returns [] if the recipe is connect_only or missing.
 
-    The upsert half is intentionally NOT here — typed-raw tables have
-    toolkit-specific columns and ON CONFLICT semantics that don't
-    generalize. Caller (connector_ingest._run_init / _run_sync) hands
-    these items to its toolkit-specific `_upsert_<toolkit>` after.
+    The upsert half is intentionally NOT here — the caller
+    (connector_ingest._run_init / _run_sync) hands these items to the
+    recipe-driven generic upserter (generic_ingest), which writes the
+    unified pai_raw store.
     """
     recipe = load_recipe(toolkit)
     if recipe is None:
@@ -254,7 +290,13 @@ async def run_fetch(
             return []
         args[pre.inject_arg] = injected
 
-    # Apply incremental cursor if recipe supports it.
+    # Time window — two modes:
+    #   sync (since given):  incremental cursor via since_param.
+    #   init (since is None): explicit [now-lookback, now+lookahead] window via
+    #     init_since_param / init_until_param, so history reaches back AND future
+    #     meetings reach forward — not the toolkit's opaque default window (which
+    #     just returns the first maxResults). Recipes without init_since_param
+    #     keep the legacy since=None default-window behavior.
     if since is not None and recipe.since_param:
         try:
             since_value = _format_since(since, recipe.since_format)
@@ -262,52 +304,66 @@ async def run_fetch(
             logger.warning("[ingest_runner] %s", e)
             return []
         _set_dotted(args, recipe.since_param, since_value)
+    elif since is None and recipe.init_since_param:
+        now = datetime.now(UTC)
+        if recipe.init_lookback_days:
+            lo = now - timedelta(days=recipe.init_lookback_days)
+            _set_dotted(args, recipe.init_since_param, _format_since(lo, recipe.init_since_format))
+        if recipe.init_until_param and recipe.init_lookahead_days:
+            hi = now + timedelta(days=recipe.init_lookahead_days)
+            _set_dotted(args, recipe.init_until_param, _format_since(hi, recipe.init_since_format))
 
-    # Optional pagination knob — recipes set their own limit field
-    # (per_page / max_results / count / etc.) so we just clamp here.
-    # A future iteration could add a `limit_param` field to Recipe.
-    _ = limit  # reserved for future explicit limit override
-
-    # Main call.
-    result = await cs.execute(
-        user,
-        recipe.slug or "",
-        args,
-        connected_account_id=connected_account_id,
-    )
-    await _record_composio_fetch_call(
-        pool,
-        user,
-        source="composio:ingest_fetch",
-        slug=recipe.slug or "",
-        successful=result.successful,
-        toolkit=toolkit,
-    )
-    if not result.successful:
-        logger.warning(
-            "[ingest_runner] %s exec failed: %s",
-            recipe.slug,
-            result.error,
+    # Fetch, following the recipe's page token until exhausted or the cap is hit.
+    # Single-shot when the recipe declares no pagination (page_token_response_path
+    # empty). Cap: init pulls up to init_max_items across pages; sync clamps to
+    # `limit` (its per-cycle budget).
+    cap = recipe.init_max_items if since is None else limit
+    collected: list[dict[str, Any]] = []
+    page_token: Any = None
+    while True:
+        if page_token is not None and recipe.page_token_arg:
+            args[recipe.page_token_arg] = page_token
+        result = await cs.execute(
+            user,
+            recipe.slug or "",
+            args,
+            connected_account_id=connected_account_id,
         )
-        return []
-
-    # Walk to the items list.
-    items: Any = _walk_path(result.data, recipe.result_path) if recipe.result_path else result.data
-    if items is None:
-        return []
-    if isinstance(items, dict):
-        # Single-object endpoints (e.g. LinkedIn profile) — wrap so
-        # downstream upserter sees one row.
-        items = [items]
-    if not isinstance(items, list):
-        logger.warning(
-            "[ingest_runner] %s: result_path %s did not yield a list (got %s)",
-            recipe.slug,
-            recipe.result_path,
-            type(items).__name__,
+        await _record_composio_fetch_call(
+            pool,
+            user,
+            source="composio:ingest_fetch",
+            slug=recipe.slug or "",
+            successful=result.successful,
+            toolkit=toolkit,
         )
-        return []
-    return [x for x in items if isinstance(x, dict)]
+        if not result.successful:
+            logger.warning("[ingest_runner] %s exec failed: %s", recipe.slug, result.error)
+            break
+        items: Any = (
+            _walk_path(result.data, recipe.result_path) if recipe.result_path else result.data
+        )
+        if isinstance(items, dict):
+            # Single-object endpoints (e.g. LinkedIn profile) — wrap so the
+            # downstream upserter sees one row.
+            items = [items]
+        if isinstance(items, list):
+            collected.extend(x for x in items if isinstance(x, dict))
+        elif items is not None:
+            logger.warning(
+                "[ingest_runner] %s: result_path %s did not yield a list (got %s)",
+                recipe.slug,
+                recipe.result_path,
+                type(items).__name__,
+            )
+        # Next page? Stop when there's no pagination configured, the cap is hit,
+        # or the token runs out.
+        if not recipe.page_token_response_path or len(collected) >= cap:
+            break
+        page_token = _walk_path(result.data, recipe.page_token_response_path)
+        if not page_token:
+            break
+    return collected[:cap]
 
 
 async def _record_composio_fetch_call(

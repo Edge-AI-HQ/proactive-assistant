@@ -68,7 +68,7 @@ async def test_create_custom_mcp_lands_metadata_in_generic_raw(
         cur = await conn.execute(
             """
             SELECT title, snippet
-            FROM pai_raw_events
+            FROM pai_raw_apps
             WHERE user_id = %s AND toolkit = %s AND entity_type = 'items'
             ORDER BY external_id
             """,

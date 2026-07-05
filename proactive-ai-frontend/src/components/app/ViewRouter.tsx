@@ -158,7 +158,7 @@ export default function ViewRouter({
         ) : activeView === "connect" ? (
           /* Real data + device connections + auto settings (old AppShell
              CONTROL view): wire Composio, devices, auto-generate and
-             auto-dreaming. */
+             auto-evolution. */
           <div className="h-full overflow-y-auto">
             <RealControlPanel composio={composio} />
           </div>

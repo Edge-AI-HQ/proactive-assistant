@@ -146,9 +146,9 @@ reaper 索引:`idx_pai_schedrun_lease (status, lease_expires_at) WHERE status='r
 | `generator.chat` | 同上 | **600s** | Main Chat agent 的 `generate_card` 工具经 `POST /api/agent/generate` 入队;不按 focus 去重,但 per-user 最多 3 个 in-flight。 |
 | `generator.scheduled` | 同上 | **600s** | 用户自建定时生成(`/api/scheduled-generators`);payload 的 `confirmed_brief` / `parsed_intent` 注入 generator 请求。once + generate(事件 briefing,如会前准备卡)payload 另带 `fallback_reminder`:重试耗尽(once 任务 archived)时 dispatcher 降级用 `fire_reminder` 写一张普通提醒卡 + 不受 gate 的 `notify_reminder` 推送,保证到点至少有个笨提醒。 |
 | `connector.preview` | in-process `connector_ingest.run` | **600s** | Onboarding 独立快速反馈:后台等 Composio ACTIVE,拉 summary source 最多 50 条,写 raw 并生成 summary cache;同时保证 full `connector.init` 入队。 |
-| `connector.init` | in-process `connector_ingest.run` | 60s | 拉一批 Composio 数据写 `pai_raw_*` + `pai_personal_signals` + 一次 `connector.evolve` once-shot。 |
+| `connector.init` | in-process `connector_ingest.run` | 60s | 拉一批 Composio 数据写 generic `pai_raw` → `project_unprojected` 投影 L1 `pai_events`(pending) + 一次 `connector.evolve` once-shot。 |
 | `connector.sync` | 同上 | 60s | 增量拉取,用 cursor;成功才前推 cursor + 入 evolve。`connector.init` 跑完会保证一行 sync schedule(`cron */30 * * * *`)。 |
-| `connector.evolve` | HTTP POST `/agent/run/evolve` | **600s**(long-running) | agent-engine 端 DeepAgents 把刚拉的 raw / signal 沉淀成 memory / skill。 |
+| `connector.evolve` | HTTP POST `/agent/run/evolve`(`run_evolve(on_event)`) | **600s**(long-running) | agent-engine 端 evolve agent curate 刚投影的 pending `pai_events` + 蒸馏 L2 画像 / skill。 |
 | `auto.dreaming` | HTTP POST `/agent/run/dream`(`_dispatch_dream` wrap) | **600s** | 包 `pai_evolution_runs` 行的 lifecycle,api 进程持有 run row 的生死;agent-engine 进程跑 LLM。 |
 | `crystallize` | HTTP POST `/agent/run/crystallize` | 60s | dispatcher 路由已就位,但**当前没有 producer 入队** — `dispatcher.py` 顶部注释明说 "crystallize → not scheduled (chat worker fires inline)"。今天 crystallize 走 agent-engine 端 inline 调用,不走这套队列。 |
 | `user.prompt` | HTTP POST `/agent/run/dream`(复用 dream entry) | **600s** | 后续的 synthetic-prompt 通道,目前 placeholder。 |
@@ -295,6 +295,6 @@ make logs-agent-engine | grep -E "run/dream|run/evolve|run/crystallize|run/gener
 
 - [Data Connectors](./data-connectors):`connector.init` / `connector.sync` / `connector.evolve` 的业务侧。
 - [Generation](./generation):`generator.manual` / `generator.auto` 的业务侧 + 前端轮询。
-- [Memory](./memory):`auto.dreaming` / `connector.evolve` / `crystallize` 写入的 memory / signals / evolution_runs。
+- [Memory](./memory):`auto.dreaming`(daily)/ `connector.evolve`(on_event)/ `crystallize`(chat_burst)三种 trigger 收敛进 evolve,curate 的 `pai_events` + 蒸馏的 L2 画像 + `pai_evolution_runs`。
 - [Execution](./execution):conversation 聊天跑在 agent_core mailbox/worker 上,跟这套 background_tasks 队列是两套独立机制。
 - [Runtime & Deployment](./runtime-deployment):scheduler 的 lifespan 起停、tunable 默认值、信任边界。

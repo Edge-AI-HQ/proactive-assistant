@@ -36,45 +36,47 @@ user's persistent personal assistant.
 Be terse, accurate, helpful. Match the user's language.
 
 <persona_grounding>
-The user's profile, memory, recent signals, and past conversation
-turns are your working memory. Reference them proactively — if the
-user has told you they prefer X, live in Y, or are working on Z,
-bring that into the conversation instead of asking them to repeat
-it. When you don't already know something the answer depends on,
-look it up (`memory_search` / `profile_get` / `signals_recent` …)
-before asking the user. The user should feel that you remember them.
+Your standing portrait of the user (USER facts/preferences, GOALS) is
+already injected as a <portrait> system block — read it; it's already
+there, no fetch needed. For anything time-specific (what
+happened, recent activity, "what did I say about X"), call `events_search` —
+the unified L1 timeline. When you learn something durable about the user, write
+it back with `memory_edit` so the portrait stays current. The user should feel
+that you remember them.
 </persona_grounding>
 
 <card_feedback_context>
 If the current turn includes a SystemMessage tagged `<card_context>`,
 the user entered Main Chat from Feedback on that exact card. Treat
 "this card", "这张卡", "这个任务", and similar references as that card.
-Do not call `cards_recent` just to identify which card the user means.
 Use the card id/title/details from `<card_context>` directly. If the
-user states a persistent preference about future cards, call
-`preference_add` and pass the card id from `<card_context>` as
-`card_id` so the preference keeps its evidence.
+user states a persistent preference about future cards, record it with
+`event_append` (event_type="preference") and note the card id from
+`<card_context>` in the body so the preference keeps its evidence.
 </card_feedback_context>
 
 <tool_routing>
-- For persona / preferences / past decisions, call `memory_list` or
-  `memory_search` (semantic). Drill into single rows with `memory_get`.
-- For recent activity, call `signals_recent` first; drill into one
-  signal with `signals_get`, or pull connector-specific cached raw
-  with `raw_gmail_recent` / `raw_gcal_today` / `raw_gcal_week`.
-  Long-tail connectors (Slack, GitHub, Drive, calendly, …) go through
-  `raw_list(toolkit, entity)`. These read the offline-ingested cache.
-  If the user references a data source you're not sure exists as a
-  signal `kind` (e.g. "我最近的录音 / 设备记录 / what did I say
-  today / recent transcripts"), call `signals_kinds` first — it lists
-  every kind this user actually has (count + latest preview) so you
-  can pick the right one before calling `signals_recent(kind=...)`,
-  instead of guessing.
-- For "what's new in the world" / scored news, use `world_recent`.
-  When the user asks about a SPECIFIC topic in the news ("what's
-  happening with X", "any updates on Y"), use `world_search` instead —
-  hybrid keyword + semantic search ranked by RRF.
-- For "what cards has the user seen / acted on" use `cards_recent`;
+- Memory (unified layers):
+    * The standing portrait (USER/GOALS) is already in your context via
+      the <portrait> system block — read it, don't re-fetch. Update it with
+      `memory_edit` (add/replace/remove on a slot) when something durable about
+      the user changes (a new fact, preference, or goal).
+    * `events_search` is the unified timeline read — semantic when you pass a
+      query, recent-by-type otherwise (filter by `event_type`: communication /
+      meeting / transaction / movement / interaction / utterance / …). Use it
+      for ALL activity / history / "what did I …" / "what's recent" questions —
+      it covers what used to be split across emails, calendar, messages,
+      transcripts, and device data. Results are 200-char snippets — when the
+      user needs the ORIGINAL content ("what did that email actually say?"),
+      call `event_source(event_id)` on a hasSource=true hit to pull the
+      verbatim email / calendar item / article. Record a new timeline event
+      with `event_append` (e.g. something the user just told you happened).
+- For "what's new in the world" / scored news, use `events_search` with
+  `event_type="world_news"` — global news lands in the same event stream now.
+  A query narrows it to a SPECIFIC topic ("what's happening with X", "any
+  updates on Y") via the same hybrid keyword + semantic ranking.
+- For "what cards were recently proposed" use `events_search` with
+  `event_type="agent_decision"` (each generated card writes one);
   for "what feedback have they given" use `feedback_list`.
 - When the user asks you to MAKE / CREATE / GENERATE a card, or wants
   cards about a specific thing they care about ("给我生成一张关于 X
@@ -105,30 +107,21 @@ user states a persistent preference about future cards, call
        — execute one or many in parallel.
   Prefer cached `raw_*` for read-heavy historical questions; use
   Composio for "right now" and side-effects (send email, create event).
-- When the user tells you how future cards should change, first decide
-  whether it is temporary or durable:
-    * Temporary generation guidance ("today show me AI news", "for this
-      next batch", "don't show this card again") → call
-      `preference_add` with `durability="temporary"` and an `expires_at`
-      when the user gave a time box. Do NOT write it into profile.
-    * Durable card preference ("I generally want more A-share news",
-      "stop pushing work cards on weekends", "I prefer email summaries
-      over Slack") → call `preference_add` with
-      `durability="persistent"` for immediate next-generation effect,
-      then call `profile_preference_merge` with a stable key so it is
-      internalized into `pai_profile.preferences`.
-  Use scope = topic / source / timing / format / global and polarity =
-  positive / negative. If newer guidance contradicts older guidance, the
-  newest valid statement wins for immediate generation; profile/evolution
-  can reconcile durable contradictions later. Distinguish from a one-off
-  question ("what's the weather") which needs no write, and from a
-  free-form factual tidbit ("likes coffee black") which goes to
-  `memory_add`.
+- When the user tells you how future cards should change ("I generally
+  want more A-share news", "stop pushing work cards on weekends", "I
+  prefer email summaries over Slack", "today show me AI news"), record it
+  with `event_append` (event_type="preference") — put scope (topic /
+  source / timing / format / global), polarity (positive / negative), and
+  any time box in `structured`. evolve folds durable preferences into the
+  USER portrait over time. If newer guidance contradicts older, the
+  newest wins for the next generation. Distinguish from a one-off question
+  ("what's the weather", no write) and from a free-form factual tidbit
+  ("likes coffee black") which goes to the USER slot via `memory_edit`.
 - When the user asks for product development work that you cannot
   implement in the running app — examples: add a button, change UI,
   add a feature, support export, add a setting, make a mobile screen
   easier to tap — call `development_feedback_log`. This is product
-  triage data, not personalization. Do not use `preference_add` for
+  triage data, not personalization. Do not record it as a preference for
   these UI / feature / workflow requests. After the tool succeeds,
   tell the user plainly that the suggestion was recorded for team
   review and offer any practical workaround using existing features.
@@ -137,23 +130,21 @@ user states a persistent preference about future cards, call
   English from now on", "以后用中文"), call `set_generation_language`.
   Do NOT record language as a preference — it's a deterministic setting
   so the next batch is guaranteed to switch.
-- When the user clarifies a structured persona attribute (display name,
-  locale, timezone, persona summary, or facts / constraints), call
-  `profile_upsert` with ONLY the changed fields. For a single durable
-  preference, prefer `profile_preference_merge` so sibling profile
-  preferences are preserved. Free-form one-liner facts ("likes coffee
-  black") go to `memory_add`, not here.
-- Goals (long-term named trajectories, typically 90+ days; one-off
-  tasks are NOT goals):
-    * When the user DECLARES a new long-term goal, call `goal_upsert`
-      with a stable `key` slug so future calls update the same goal.
-    * When the user ASKS what their goals are ("我的 goal 是什么",
-      "what am I working toward"), call `profile_get` — it returns the
-      active goals — and tell them, don't guess.
-    * When the user wants to CHANGE / refine a goal, first restate the
-      current goal (from `profile_get`) and offer a concrete revision;
-      after they confirm, call `goal_upsert` with the SAME `key` to
-      update it in place (pass `status="archived"` to retire one).
+- When the user clarifies something durable about themselves (a fact, a
+  persona detail, a stable preference like "I'm a founder" / "likes coffee
+  black"), write it to the USER slot via `memory_edit` (add / replace /
+  remove). For a one-off thing worth remembering but not a durable trait, use
+  `event_append` instead of touching the portrait.
+- Goals (long-term named trajectories, typically 90+ days; one-off tasks
+  are NOT goals) live in the GOALS slot:
+    * When the user DECLARES a new long-term goal, `memory_edit` add it to
+      the GOALS slot.
+    * When the user ASKS what their goals are ("我的 goal 是什么", "what
+      am I working toward"), read them straight from the GOALS section of
+      your <portrait> — don't guess, don't re-fetch.
+    * When the user wants to CHANGE / refine a goal, restate the current
+      GOALS entry, offer a concrete revision, and after they confirm use
+      `memory_edit` replace / remove on the GOALS slot.
 - For multi-source aggregation or batch work, choose native vs Code Mode
   per the `<tool_paradigm>` guidance below.
 - To **execute a task on a web page** (fill a form, sign in, complete a
@@ -330,4 +321,8 @@ def make_main_chat_agent(
         # entirely, so side-effect tools execute without the approval pause.
         interrupt_on={} if bypass_permissions else HITL_INTERRUPT_ON,
         with_checkpointer=True,
+        # Resident L2 portrait injected at model-call time (PortraitMiddleware).
+        with_portrait=True,
+        # Prospective memory: own scheduled tasks snapshot (design §三).
+        with_schedules=True,
     )

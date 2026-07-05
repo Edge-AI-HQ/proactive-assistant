@@ -1,4 +1,12 @@
-"""Ambient → signals ingest routing."""
+"""Ambient → pai_raw context-event ingest routing.
+
+Since the lifelong-memory L0 unification, signal_only / dual device kinds no
+longer write pai_personal_signals — every ambient / device context event lands
+in pai_raw (toolkit='device', entity_type = the normalized context bucket) and
+the event projector turns it into an L1 pai_events row in the same ingest tx.
+These tests assert that routing: which kinds land (and under which entity_type)
+vs. which are filtered-dropped.
+"""
 
 from __future__ import annotations
 
@@ -113,20 +121,41 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-async def _signal_rows(pool, user_id: int) -> list[dict]:
+async def _raw_rows(pool, user_id: int) -> list[dict]:
+    """Device context events land in pai_raw_device (kind = the normalized
+    context bucket). title / snippet are the display projections; the original
+    source ``kind`` is carried in payload — aliased ``payload_kind`` here to
+    avoid clashing with the table's own ``kind`` column — so it's still
+    assertable."""
     async with user_scoped_tx(pool, user_id) as conn, conn.cursor() as cur:
         await cur.execute(
-            "SELECT kind, title, summary FROM pai_personal_signals WHERE user_id=%s",
+            """
+            SELECT kind, title, snippet, payload->>'kind' AS payload_kind
+            FROM pai_raw_device
+            WHERE user_id = %s
+            ORDER BY occurred_at DESC
+            """,
             (user_id,),
         )
         return list(await cur.fetchall())
 
 
-# ── utterance / session_summary → signals (allowlisted) ───────────────
+async def _event_types(pool, user_id: int) -> list[str]:
+    """L1 event_types projected from this user's device raw rows (newest
+    first) — proves the synchronous projector ran inside the ingest tx."""
+    async with user_scoped_tx(pool, user_id) as conn, conn.cursor() as cur:
+        await cur.execute(
+            "SELECT event_type FROM pai_events WHERE user_id = %s ORDER BY occurred_at DESC",
+            (user_id,),
+        )
+        return [r["event_type"] for r in await cur.fetchall()]
+
+
+# ── utterance / session_summary → pai_raw (entity=utterance) ──────────
 
 
 @pytest.mark.asyncio
-async def test_ambient_utterance_lands_in_signals(device, pool):
+async def test_ambient_utterance_lands_in_raw(device, pool):
     c, device_id, device_token, user_id = device
     occurred = _now() - timedelta(seconds=10)
     item = {
@@ -149,15 +178,21 @@ async def test_ambient_utterance_lands_in_signals(device, pool):
     assert r.status_code == 200, r.text
     assert r.json()["results"][0]["status"] == "inserted"
 
-    rows = await _signal_rows(pool, user_id)
+    rows = await _raw_rows(pool, user_id)
     assert len(rows) == 1
-    assert rows[0]["kind"] == "ambient.utterance"
-    assert "call mom" in (rows[0]["summary"] or "")
+    assert rows[0]["kind"] == "utterance"
+    assert rows[0]["payload_kind"] == "ambient.utterance"
+    assert "call mom" in (rows[0]["snippet"] or "")
+    # utterance (session_summary / ambient.utterance = 一次会话的成品转写) 从 2026-06-30
+    # 起走 off/1→1:rollup_policy 把 utterance 移出 semantic,projector 实时投成 utterance
+    # event(只 transcript_window 仍走 daily rollup)。raw 落库 + L1 event 立即出。
+    assert await _event_types(pool, user_id) == ["utterance"]
 
 
 @pytest.mark.asyncio
-async def test_session_summary_lands_in_signals(device, pool):
-    """`session_summary` is the V3 voice-transcript primary path → signals."""
+async def test_session_summary_lands_in_raw(device, pool):
+    """`session_summary` is the V3 voice-transcript primary path → pai_raw
+    entity=utterance (the projector maps it to an `utterance` event)."""
     c, device_id, device_token, user_id = device
     occurred = _now() - timedelta(seconds=10)
     item = {
@@ -180,16 +215,20 @@ async def test_session_summary_lands_in_signals(device, pool):
     assert r.status_code == 200, r.text
     assert r.json()["results"][0]["status"] == "inserted"
 
-    rows = await _signal_rows(pool, user_id)
+    rows = await _raw_rows(pool, user_id)
     assert len(rows) == 1
-    assert rows[0]["kind"] == "session_summary"
+    assert rows[0]["kind"] == "utterance"
+    assert rows[0]["payload_kind"] == "session_summary"
 
 
-# ── high-value aggregate ambient/device kinds → signals ──────────────
+# ── high-value aggregate ambient/device kinds → pai_raw ──────────────
 
 
 @pytest.mark.asyncio
-async def test_ambient_location_is_filtered_not_signaled(device, pool):
+async def test_ambient_location_lands_in_raw(device, pool):
+    """location was _FILTERED_POLICY (accepted-but-dropped). DATA-FLOW OPEN
+    (2026-06-30) flipped it to signal_only so every ambient sensor lands in
+    pai_raw. No _CONTEXT_ENTITY_TYPE mapping → normalized kind 'context'."""
     c, device_id, device_token, user_id = device
     occurred = _now() - timedelta(seconds=30)
     item = {
@@ -210,13 +249,15 @@ async def test_ambient_location_is_filtered_not_signaled(device, pool):
         json={"deviceId": device_id, "items": [item]},
     )
     assert r.status_code == 200, r.text
-    assert r.json()["results"][0]["status"] == "filtered"
-    rows = await _signal_rows(pool, user_id)
-    assert rows == []
+    assert r.json()["results"][0]["status"] == "inserted"
+    rows = await _raw_rows(pool, user_id)
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "context"
+    assert rows[0]["payload_kind"] == "ambient.location"
 
 
 @pytest.mark.asyncio
-async def test_device_visit_lands_in_signals(device, pool):
+async def test_device_visit_lands_in_raw(device, pool):
     """`device.*` is what the Expo/RN client actually emits."""
     c, device_id, device_token, user_id = device
     occurred = _now() - timedelta(seconds=30)
@@ -239,21 +280,24 @@ async def test_device_visit_lands_in_signals(device, pool):
     )
     assert r.status_code == 200, r.text
     assert r.json()["results"][0]["status"] == "inserted"
-    rows = await _signal_rows(pool, user_id)
+    rows = await _raw_rows(pool, user_id)
     assert len(rows) == 1
-    assert rows[0]["kind"] == "device.visit"
-    assert rows[0]["summary"] == "30 min at Cafe"
+    assert rows[0]["kind"] == "visit"
+    assert rows[0]["payload_kind"] == "device.visit"
+    assert rows[0]["snippet"] == "30 min at Cafe"
+    # entity=visit projects to a `movement` L1 event.
+    assert await _event_types(pool, user_id) == ["movement"]
 
 
-# ── legacy V2 signal path unchanged ───────────────────────────────────
+# ── transcript candidate window → pai_raw (entity=transcript_window) ──
 
 
 @pytest.mark.asyncio
-async def test_legacy_candidate_window_still_signal(device, pool):
-    """`ambient.candidate_window` is the V2 aggregated-transcript path that
-    lands in pai_personal_signals. Unchanged by the sunset — old builds keep
-    working."""
-    c, device_id, device_token, _user_id = device
+async def test_candidate_window_lands_in_transcript_window_raw(device, pool):
+    """`ambient.candidate_window` (V2 aggregated-transcript path) now lands in
+    pai_raw entity=transcript_window via the latest-wins upsert; the projector
+    maps it to an `utterance` event."""
+    c, device_id, device_token, user_id = device
     occurred = _now() - timedelta(seconds=30)
     item = {
         "id": f"cand_{uuid.uuid4().hex[:12]}",
@@ -281,3 +325,11 @@ async def test_legacy_candidate_window_still_signal(device, pool):
     )
     assert r.status_code == 200, r.text
     assert r.json()["results"][0]["status"] == "inserted"
+
+    rows = await _raw_rows(pool, user_id)
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "transcript_window"
+    assert rows[0]["payload_kind"] == "ambient.candidate_window"
+    # transcript_window is a semantic-rollup firehose source — projector skips
+    # it (evolve collapses into an episode event), so no L1 event here (§4.2).
+    assert await _event_types(pool, user_id) == []

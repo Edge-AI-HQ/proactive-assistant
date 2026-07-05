@@ -17,13 +17,34 @@ import {
   Users,
   type LucideIcon,
 } from "lucide-react-native";
-import {
-  basketCategory,
-  type BasketIconKey,
-  type Goal,
-  type Memory,
-  type ProfileSnapshot,
-} from "@pin-ai/core";
+import { basketCategory, type BasketIconKey } from "@pin-ai/core";
+
+// ---------------------------------------------------------------------------
+// 视图模型（lifelong-memory）：老 pai_profile/pai_memory 的 Goal/Memory 结构化
+// API 已退役，PROFILE 屏数据 = L2 portrait（USER/GOALS markdown entries）+
+// L1 events。下面两个类型是本屏的**视图模型**（#224 UI 的消费形态），由
+// goalsFromPortraitEntries / ProfileScreen 的 shim 从新数据映射而来。
+// ---------------------------------------------------------------------------
+
+export interface Goal {
+  id: string;
+  user_id: string;
+  key: string;
+  title: string;
+  priority: string;
+  status: string;
+  summary: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Memory {
+  id: string;
+  text: string;
+  source: string;
+  occurred_at: string | null;
+  created_at: string;
+}
 
 import i18n from "../../i18n";
 import type profileEn from "../../../../../packages/ui-kit/src/locales/en/profile.json";
@@ -156,6 +177,27 @@ const STARTER_GOALS: readonly { key: StarterGoalKey; title: string; priority: st
  * 脏 key 会让逐 goal 渲染全落 General，正确展示以 prod（种子数据）为准，只改
  * RN 端、不动 dev。
  */
+/** GOALS portrait entries → Goal 视图模型。seed 用户的 entry 文本与
+ *  STARTER_GOALS title（= seed.py _STARTER_GOALS，逐字同源）精确匹配 → 归进
+ *  规范 basket 槽位；未命中的（用户自定/evolve 学的自由文本）给顺序 key，
+ *  按 canonicalBasketGoals 既有决策（归不进 6 类不展示，用户 2026-07-01 定）。 */
+export function goalsFromPortraitEntries(entries: string[]): Goal[] {
+  return entries.map((text, i) => {
+    const starter = STARTER_GOALS.find((sg) => sg.title === text.trim());
+    return {
+      id: `portrait-goal-${i}`,
+      user_id: "",
+      key: starter?.key ?? `entry-${i}`,
+      title: text.trim(),
+      priority: starter?.priority ?? "medium",
+      status: "active",
+      summary: null,
+      created_at: "",
+      updated_at: "",
+    };
+  });
+}
+
 export function canonicalBasketGoals(goals: Goal[]): Goal[] {
   return STARTER_GOALS.map((starter) => {
     const slotIcon = basketCategory(starter.key).iconKey;
@@ -201,66 +243,10 @@ export const PROFILE_GROUP_META = [
 // ---------------------------------------------------------------------------
 
 /** snake_case → "UPPER SPACED"。 */
-export function prettyFieldKey(key: string): string {
-  return key.replace(/_+/g, " ").trim().toUpperCase();
-}
-
-export function formatValue(value: unknown): string {
-  if (value === null) return "null";
-  if (value === undefined) return "undefined";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-const PROFILE_SUMMARY_KEYS = [
-  "summary",
-  "identity",
-  "identify",
-  "bio",
-  "about",
-  "description",
-  "persona",
-] as const;
-
-function firstTextValue(value: unknown): string | null {
-  if (typeof value === "string") {
-    const text = value.trim();
-    return text.length > 0 ? text : null;
-  }
-  if (Array.isArray(value)) {
-    const text = value
-      .map(firstTextValue)
-      .filter((item): item is string => Boolean(item))
-      .join(" ");
-    return text.trim() || null;
-  }
-  if (!value || typeof value !== "object") return null;
-
-  const record = value as Record<string, unknown>;
-  for (const key of PROFILE_SUMMARY_KEYS) {
-    const text = firstTextValue(record[key]);
-    if (text) return text;
-  }
-  return null;
-}
-
-export function profileSummaryText(profile: ProfileSnapshot["profile"]): string {
-  const fallback = i18n.t("profile:goalsView.noSummary");
-  if (!profile) return fallback;
-
-  return (
-    firstTextValue(profile.summary) ??
-    firstTextValue(profile.facts) ??
-    firstTextValue(profile.preferences) ??
-    firstTextValue(profile.constraints) ??
-    firstTextValue(profile.metadata) ??
-    fallback
-  );
+/** Identity 摘要卡文案：USER portrait 首条 entry（agent 蒸馏的 durable fact，
+ *  天然是"最像一句话自我介绍"的内容）；空画像走 noSummary 兜底。 */
+export function portraitSummaryText(entries: string[]): string {
+  return entries[0]?.trim() || i18n.t("profile:goalsView.noSummary");
 }
 
 export interface MemoryGroup {

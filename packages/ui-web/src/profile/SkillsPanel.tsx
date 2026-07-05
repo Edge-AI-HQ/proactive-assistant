@@ -6,8 +6,8 @@
  * archive-based soft delete. "New" opens an inline form that calls
  * POST /skills with source='manual'.
  *
- * Matches the visual language of CrystallizePanel — the same compact sizing
- * and Tailwind tokens.
+ * Matches the visual language of the other debug-panel cards — the same
+ * compact sizing and Tailwind tokens.
  */
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";

@@ -1,4 +1,4 @@
-"""Device ingest policy registry + parsers — no DB needed."""
+"""Device ingest recipes + snapshot parsers — no DB needed."""
 
 from __future__ import annotations
 
@@ -6,15 +6,15 @@ from pinai_api.domains.connector.device.device_ingest.health import (
     health_full_replace_scope,
 )
 from pinai_api.domains.connector.device.device_ingest.policies import (
-    DEVICE_INGEST_POLICIES,
-    UNKNOWN_KIND_POLICY,
     DeviceIngestItem,
     _parse_apps,
     _parse_contacts,
     _parse_health,
-    build_default_signal,
     normalize_sync_mode,
-    resolve_policy,
+)
+from pinai_api.domains.connector.device.device_ingest.recipes import (
+    DEVICE_RECIPES,
+    resolve_recipe,
 )
 
 
@@ -43,57 +43,67 @@ def test_normalize_sync_mode():
     assert normalize_sync_mode(None) == "incremental"
 
 
-def test_resolve_policy_known_kinds():
-    assert resolve_policy("moment").mode == "signal_only"
-    assert resolve_policy("ambient.timeline_event").mode == "signal_only"
-    assert resolve_policy("ambient.candidate_window").mode == "signal_only"
-    assert resolve_policy("app_inventory").mode == "dual"
-    assert resolve_policy("health.observation").mode == "raw_only"
+def test_resolve_recipe_entity_and_snapshot():
+    assert resolve_recipe("moment").entity_type == "context"
+    assert resolve_recipe("ambient.utterance").entity_type == "utterance"
+    assert resolve_recipe("session_summary").entity_type == "utterance"
+    assert resolve_recipe("device.visit").entity_type == "visit"
+    assert resolve_recipe("device.motion_segment").entity_type == "motion"
+    # snapshot kinds route to the typed parser + full-replace path.
+    assert resolve_recipe("app_inventory").snapshot == "apps"
+    assert resolve_recipe("contact_directory").snapshot == "contacts"
+    assert resolve_recipe("health.observation").snapshot == "health"
 
 
-def test_resolve_policy_ambient_signal_routing_after_sunset():
-    for kind in (
-        "ambient.utterance",
-        "session_summary",
-        "ambient.visit",
-        "device.visit",
-        "device.motion_segment",
-        "device.sound_scene_run",
-        "ambient.calendar_event",
-        "device.calendar_event",
-        "ambient.focus_state",
-        "device.focus_state",
-        "ambient.audio_route",
-        "device.audio_route",
+def test_resolve_recipe_transcript_window_is_latest_wins():
+    r = resolve_recipe("ambient.candidate_window")
+    assert r.entity_type == "transcript_window"
+    assert r.latest_wins is True
+    assert r.snapshot is None
+
+
+def test_resolve_recipe_ambient_signal_routing():
+    for kind, entity in (
+        ("ambient.visit", "visit"),
+        ("device.visit", "visit"),
+        ("ambient.calendar_event", "calendar"),
+        ("device.calendar_event", "calendar"),
+        ("ambient.focus_state", "focus"),
+        ("device.audio_route", "focus"),
+        ("device.sound_scene_run", "motion"),
+        # DATA-FLOW OPEN (2026-06-30): 放开的 sensor → context(投 interaction)。
+        ("ambient.location", "context"),
+        ("device.location", "context"),
+        ("ambient.activity", "context"),
+        ("device.activity", "context"),
+        ("ambient.sound", "context"),
+        ("device.sound_classification", "context"),
+        ("ambient.device_state", "context"),
+        ("device.device_state", "context"),
     ):
-        assert resolve_policy(kind).mode == "signal_only", kind
+        r = resolve_recipe(kind)
+        assert not r.filtered, kind
+        assert r.snapshot is None, kind
+        assert r.entity_type == entity, kind
 
 
-def test_resolve_policy_filters_raw_or_noisy_ambient_frames():
-    for kind in (
-        "ambient.location",
-        "device.location",
-        "ambient.activity",
-        "device.activity",
-        "ambient.sound",
-        "device.sound_classification",
-        "ambient.device_state",
-        "device.device_state",
-        "ambient.health",
-    ):
-        assert resolve_policy(kind).mode == "filtered", kind
+def test_resolve_recipe_filters_deprecated_ambient_health_alias():
+    # DATA-FLOW OPEN (2026-06-30): 只 ambient.health 保持 filtered —— 真 health 走
+    # health.observation(snapshot, typed 解析 + window rollup),放开会双写。
+    assert resolve_recipe("ambient.health").filtered is True
 
 
-def test_resolve_policy_media_prefix_falls_back_to_signal_only():
-    assert resolve_policy("device.media.thumbnail").mode == "signal_only"
+def test_resolve_recipe_media_prefix_is_context():
+    r = resolve_recipe("device.media.thumbnail")
+    assert r.entity_type == "context"
+    assert r.snapshot is None
 
 
-def test_resolve_policy_unknown_kind_uses_unknown_policy():
-    p = resolve_policy("nonsense.kind")
-    assert p is UNKNOWN_KIND_POLICY
-    sig = p.build_signal(_item("nonsense.kind"))  # type: ignore[arg-type]
-    assert sig is not None
-    assert sig["payload"].get("ingest_fallback_reason") == "unknown_kind"
+def test_resolve_recipe_unknown_kind_falls_back_to_context():
+    r = resolve_recipe("nonsense.kind")
+    assert r.entity_type == "context"
+    assert r.filtered is False
+    assert r.snapshot is None
 
 
 def test_parse_apps_extracts_under_multiple_aliases():
@@ -109,9 +119,7 @@ def test_parse_apps_extracts_under_multiple_aliases():
             ],
         },
     )
-    out = _parse_apps(item)
-    assert len(out) == 1
-    apps = out[0].payload["apps"]
+    apps = _parse_apps(item)
     assert len(apps) == 2  # third dropped
     assert {a.bundle_id for a in apps} == {"com.x", "com.y"}
 
@@ -134,9 +142,7 @@ def test_parse_contacts_handles_json_blob_alias():
             ),
         },
     )
-    out = _parse_contacts(item)
-    assert len(out) == 1
-    contacts = out[0].payload["contacts"]
+    contacts = _parse_contacts(item)
     assert {c.display_name for c in contacts} == {"Alice", "Bob"}
     assert contacts[1].phones == ["555-1"]
 
@@ -151,15 +157,9 @@ def test_parse_health_skips_rows_without_observation_type():
             ]
         },
     )
-    out = _parse_health(item)
-    assert len(out) == 1
-    obs = out[0].payload["observations"]
+    obs = _parse_health(item)
     assert len(obs) == 1
-
-
-def test_build_default_signal_includes_fallback_reason():
-    sig = build_default_signal(_item("moment"), {"fallback_reason": "test"})
-    assert sig["payload"]["ingest_fallback_reason"] == "test"
+    assert obs[0].observation_type == "heart_rate"
 
 
 def test_health_full_scope_payload_metric_narrows():
@@ -297,4 +297,4 @@ def test_known_kinds_are_a_complete_minimum_set():
         "contact_directory_snapshot",
         "health.observation",
     }
-    assert expected.issubset(DEVICE_INGEST_POLICIES.keys())
+    assert expected.issubset(DEVICE_RECIPES.keys())

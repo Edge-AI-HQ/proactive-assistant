@@ -19,64 +19,6 @@ from pinai_api.platform.db.repositories.scheduled_tasks import (
 )
 from pinai_db.rls import service_tx, user_scoped_tx
 
-# ── Stripe mapper ──────────────────────────────────────────────────────
-
-
-def test_map_stripe_invoice_basic():
-    raw = {
-        "id": "in_1",
-        "number": "INV-001",
-        "status": "open",
-        "amount_due": 12500,
-        "amount_paid": 0,
-        "amount_remaining": 12500,
-        "currency": "usd",
-        "customer": "cus_abc",
-        "customer_email": "buyer@x.com",
-        "collection_method": "charge_automatically",
-        "created": 1714521600,  # 2024-05-01 (unix)
-        "due_date": 1717113600,  # 2024-05-31
-        "hosted_invoice_url": "https://stripe.com/i/in_1",
-        "invoice_pdf": "https://stripe.com/i/in_1.pdf",
-    }
-    mapped = connector_ingest._map_stripe_invoice(raw)
-    assert mapped is not None
-    assert mapped["invoice_id"] == "in_1"
-    assert mapped["amount_due"] == 12500
-    assert isinstance(mapped["amount_due"], int)
-    assert mapped["currency"] == "usd"
-    assert mapped["customer_id"] == "cus_abc"
-    assert mapped["customer_email"] == "buyer@x.com"
-    assert mapped["created_at_remote"].year == 2024
-    assert mapped["due_date"].isoformat() == "2024-05-31"
-    assert mapped["occurred_at"] == mapped["created_at_remote"]
-
-
-def test_map_stripe_invoice_handles_expanded_customer():
-    raw = {"id": "in_2", "customer": {"id": "cus_xyz", "name": "Acme Co"}}
-    mapped = connector_ingest._map_stripe_invoice(raw)
-    assert mapped is not None
-    assert mapped["customer_id"] == "cus_xyz"
-
-
-def test_map_stripe_invoice_amounts_reject_floats_and_bools():
-    raw = {
-        "id": "in_3",
-        "amount_due": True,  # bool — must NOT count as int
-        "amount_paid": "5000",  # numeric string — accept
-        "amount_remaining": 1.5,  # float — reject (cents are int)
-    }
-    mapped = connector_ingest._map_stripe_invoice(raw)
-    assert mapped is not None
-    assert mapped["amount_due"] is None
-    assert mapped["amount_paid"] == 5000
-    assert mapped["amount_remaining"] is None
-
-
-def test_map_stripe_invoice_returns_none_without_id():
-    assert connector_ingest._map_stripe_invoice({"status": "paid"}) is None
-
-
 # ── DB-backed sync round-trip ──────────────────────────────────────────
 
 
@@ -161,8 +103,10 @@ async def test_stripe_sync_status_flips_open_to_paid(
 
     async with service_tx(pool) as conn:
         cur = await conn.execute(
-            "SELECT status, amount_paid, amount_remaining "
-            "FROM pai_raw_stripe_invoices WHERE user_id = %s",
+            "SELECT payload->>'status' AS status, "
+            "(payload->>'amount_paid')::int AS amount_paid, "
+            "(payload->>'amount_remaining')::int AS amount_remaining "
+            "FROM pai_raw_apps WHERE user_id = %s AND toolkit = 'stripe' AND entity_type = 'invoices'",
             (user_a,),
         )
         rows = await cur.fetchall()

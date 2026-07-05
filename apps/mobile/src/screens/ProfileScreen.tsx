@@ -13,7 +13,7 @@
  * web framer 手写 commit 阈值 0.3/300px·s——架构差异，行为等价：跟手横滑 + 松手
  * snap，纵向滚动交给 pane 内 ScrollView）。
  */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Image,
   LayoutAnimation,
@@ -43,8 +43,8 @@ import Animated, {
 } from "react-native-reanimated";
 import { ChevronDown, ChevronRight, Loader2 } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
-import type { Goal, Memory, ProfileSnapshot } from "@pin-ai/core";
-import { profileKeys, profileMemoriesKeys, useProfileMemories, useProfileSnapshot } from "@pin-ai/state";
+import { splitPortraitEntries } from "@pin-ai/core";
+import { eventsKeys, portraitKeys, useEvents, usePortrait } from "@pin-ai/state";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { GlassCard } from "../ui/GlassCard";
@@ -55,15 +55,14 @@ import {
   basketMeta,
   canonicalBasketGoals,
   formatClockTime,
-  formatValue,
   getVisualMeta,
+  goalsFromPortraitEntries,
   groupMemoriesByDay,
-  prettyFieldKey,
+  portraitSummaryText,
   priorityToStatus,
-  profileSummaryText,
   statusLabel,
-  PROFILE_GROUP_META,
-  type ProfileGroupKey,
+  type Goal,
+  type Memory,
   type VisualStatus,
 } from "../components/profile/mirror-helpers";
 import { EM_TIGHT, tracking } from "../ui/typography";
@@ -145,16 +144,17 @@ function EmptyState({ title, description }: { title: string; description: string
   );
 }
 
-/** web IdentitySummaryCard——label + name + summary（有意无头像：真实 profile 无 per-user 头像）。 */
-function IdentitySummaryCard({ profile }: { profile: ProfileSnapshot["profile"] }) {
+/** web IdentitySummaryCard 的 lifelong-memory 版——label + USER portrait 摘要。
+ *  老版的 display_name 来自已退役的 pai_profile；portrait 无姓名字段（durable
+ *  facts 是自由 entries），name 行随之下线，摘要 = 首条 entry。 */
+function IdentitySummaryCard({ entries }: { entries: string[] }) {
   const { t } = useTranslation("profile");
   return (
     <Animated.View entering={sectionEntering}>
       <GlassCard style={styles.identityCard}>
         <Text style={styles.idLabel}>{t("goalsView.identityLabel")}</Text>
-        <Text style={styles.idName}>{profile?.display_name?.trim() || t("goalsView.unnamedUser")}</Text>
         <Text style={styles.idSummary} numberOfLines={6}>
-          {profileSummaryText(profile)}
+          {portraitSummaryText(entries)}
         </Text>
       </GlassCard>
     </Animated.View>
@@ -207,77 +207,11 @@ function WorkbenchTabButton({
   );
 }
 
-/** web ProfileGroupCard——单个折叠组（Facts/Preferences/Constraints）。 */
-function ProfileGroupCard({
-  groupKey,
-  title,
-  description,
-  emptyTitle,
-  values,
-  expanded,
-  onToggle,
-}: {
-  groupKey: ProfileGroupKey;
-  title: string;
-  description: string;
-  emptyTitle: string;
-  values: Record<string, unknown>;
-  expanded: boolean;
-  onToggle: () => void;
-}) {
-  const { t } = useTranslation("profile");
-  const entries = Object.entries(values);
-  return (
-    <GlassCard key={groupKey}>
-      <Pressable onPress={onToggle} accessibilityRole="button" accessibilityState={{ expanded }}>
-        <View style={styles.groupHeader}>
-          <View style={styles.flex1}>
-            <View style={styles.groupTitleRow}>
-              <Text style={styles.groupTitle}>{title}</Text>
-              <View style={styles.countPill}>
-                <Text style={styles.countPillText}>{entries.length}</Text>
-              </View>
-            </View>
-            <Text style={styles.groupDesc}>{description}</Text>
-          </View>
-          <ChevronDown
-            size={14}
-            strokeWidth={1.5}
-            color={`rgba(${FG},0.25)`}
-            style={{ transform: [{ rotate: expanded ? "180deg" : "0deg" }] }}
-          />
-        </View>
-      </Pressable>
-      {expanded ? (
-        <View style={styles.groupBody}>
-          {entries.length === 0 ? (
-            <EmptyState title={emptyTitle} description={t("goalsView.groupEmptyDescription")} />
-          ) : (
-            <View style={styles.entriesWrap}>
-              {entries.map(([key, value]) => (
-                <View key={key} style={styles.entryRow}>
-                  <Text style={styles.entryKey}>{prettyFieldKey(key)}</Text>
-                  <Text style={styles.entryValue}>{formatValue(value)}</Text>
-                </View>
-              ))}
-            </View>
-          )}
-        </View>
-      ) : null}
-    </GlassCard>
-  );
-}
-
-/** web ProfilePanel——标题区 + 三个折叠组。文案经 i18n goalsView.mirror / profileGroups.*（同 web）。 */
-function ProfilePanel({
-  profile,
-  openGroups,
-  onToggleGroup,
-}: {
-  profile: ProfileSnapshot["profile"];
-  openGroups: Record<ProfileGroupKey, boolean>;
-  onToggleGroup: (group: ProfileGroupKey) => void;
-}) {
+/** web ProfilePanel 的 lifelong-memory 版——标题区 + USER portrait entries 列表
+ *  （web Mirror 同款决策：渲染 L2 markdown entries）。老版的 Facts/Preferences/
+ *  Constraints 折叠组渲染的是已退役 pai_profile 的 JSONB 桶，数据形态不复存在；
+ *  portrait 是 agent 蒸馏的自由 entries，逐条平铺。 */
+function ProfilePanel({ entries }: { entries: string[] }) {
   const { t } = useTranslation("profile");
   return (
     <View>
@@ -285,20 +219,20 @@ function ProfilePanel({
         <Text style={styles.panelTitle}>{t("goalsView.mirror.title")}</Text>
         <Text style={styles.panelDesc}>{t("goalsView.mirror.description")}</Text>
       </View>
-      <View style={styles.groupsWrap}>
-        {PROFILE_GROUP_META.map((group) => (
-          <ProfileGroupCard
-            key={group.key}
-            groupKey={group.key}
-            title={t(`goalsView.profileGroups.${group.key}.title`)}
-            description={t(`goalsView.profileGroups.${group.key}.description`)}
-            emptyTitle={t(`goalsView.profileGroups.${group.key}.emptyTitle`)}
-            values={(profile?.[group.key] ?? {}) as Record<string, unknown>}
-            expanded={openGroups[group.key]}
-            onToggle={() => onToggleGroup(group.key)}
-          />
-        ))}
-      </View>
+      {entries.length === 0 ? (
+        <EmptyState
+          title={t("goalsView.profileGroups.facts.emptyTitle")}
+          description={t("goalsView.groupEmptyDescription")}
+        />
+      ) : (
+        <View style={styles.entriesWrap}>
+          {entries.map((entry, i) => (
+            <View key={i} style={styles.entryRow}>
+              <Text style={styles.entryValue}>{entry}</Text>
+            </View>
+          ))}
+        </View>
+      )}
     </View>
   );
 }
@@ -484,8 +418,33 @@ function GoalsGrid({ goals, onOpen }: { goals: Goal[]; onOpen: (key: string) => 
 
 export default function ProfileScreen({ headerProps }: { headerProps: HeaderProps }) {
   const { t } = useTranslation("profile");
-  const { profile, activeGoals, loading, error } = useProfileSnapshot();
-  const memory = useProfileMemories();
+  // Lifelong-memory 数据层：L2 portrait（USER/GOALS markdown entries）+ L1 events。
+  // 老 useProfileSnapshot/useProfileMemories（pai_profile/pai_memory）已退役；
+  // 下面把新数据映射成本屏的视图模型（Goal/Memory，见 mirror-helpers）。
+  const { slots, loading, error } = usePortrait();
+  const userEntries = useMemo(() => splitPortraitEntries(slots.USER ?? ""), [slots.USER]);
+  const goalEntries = useMemo(() => splitPortraitEntries(slots.GOALS ?? ""), [slots.GOALS]);
+  const eventsQ = useEvents({ limit: 50 });
+  // Memory 子 tab = 近期 L1 events（title 优先、body 兜底；occurred/recorded 双时轴映射）。
+  const memories = useMemo<Memory[]>(
+    () =>
+      eventsQ.events.map((ev) => ({
+        id: ev.id,
+        text: ev.title ?? ev.body ?? "",
+        source: ev.source,
+        occurred_at: ev.occurredAt,
+        created_at: ev.recordedAt ?? ev.occurredAt,
+      })),
+    [eventsQ.events],
+  );
+  // 老 useProfileMemories 的分页形态 shim：events 一次拉 50、无 load-more。
+  const memory = {
+    memories,
+    total: memories.length,
+    hasMore: false,
+    loadingMore: false,
+    loadMore: () => {},
+  };
 
   // KeepAlive 常驻不卸载 → 复刻 dev「每次进 tab 重挂载必 refetch」语义：
   // 切回本页时失效 profile/memories（active query 立即后台重拉，SWR 不闪 loading）。
@@ -494,20 +453,14 @@ export default function ProfileScreen({ headerProps }: { headerProps: HeaderProp
   const wasActiveRef = useRef(pageActive);
   useEffect(() => {
     if (pageActive && !wasActiveRef.current) {
-      void queryClient.invalidateQueries({ queryKey: profileKeys.all });
-      void queryClient.invalidateQueries({ queryKey: profileMemoriesKeys.all });
+      void queryClient.invalidateQueries({ queryKey: portraitKeys.all });
+      void queryClient.invalidateQueries({ queryKey: eventsKeys.all });
     }
     wasActiveRef.current = pageActive;
   }, [pageActive, queryClient]);
 
   const [activeTab, setActiveTab] = useState<TopTab>("identity");
   const [identitySubTab, setIdentitySubTab] = useState<"profile" | "memory">("profile");
-  const [openGroups, setOpenGroups] = useState<Record<ProfileGroupKey, boolean>>({
-    facts: false,
-    preferences: false,
-    constraints: false,
-    metadata: false,
-  });
   const [expandedGoal, setExpandedGoal] = useState<string | null>(null);
 
   const pagerRef = useAnimatedRef<Animated.ScrollView>();
@@ -520,14 +473,9 @@ export default function ProfileScreen({ headerProps }: { headerProps: HeaderProp
   // pager 滚动进度（UI 线程共享值）：驱动 pill thumb 位移 + 文字色渐变。
   const scrollX = useSharedValue(0);
 
-  const toggleGroup = (group: ProfileGroupKey) => {
-    // web AnimatePresence height auto 展开/收起 → RN LayoutAnimation（既定模式）。
-    LayoutAnimation.configureNext(LayoutAnimation.create(200, "easeInEaseOut", "opacity"));
-    setOpenGroups((prev) => ({ ...prev, [group]: !prev[group] }));
-  };
-
   // Goals 网格 = 6 个规范 basket 槽位（prod 种子展示效果；见 canonicalBasketGoals 注释）。
-  const displayGoals = canonicalBasketGoals(activeGoals);
+  // GOALS portrait entries → Goal 视图模型（seed 文本精确归槽，见 goalsFromPortraitEntries）。
+  const displayGoals = canonicalBasketGoals(goalsFromPortraitEntries(goalEntries));
   const selectedGoal = expandedGoal
     ? displayGoals.find((goal) => goal.key === expandedGoal) ?? null
     : null;
@@ -697,7 +645,7 @@ export default function ProfileScreen({ headerProps }: { headerProps: HeaderProp
                   showsVerticalScrollIndicator={false}
                   contentContainerStyle={styles.paneContent}
                 >
-                  <IdentitySummaryCard profile={profile} />
+                  <IdentitySummaryCard entries={userEntries} />
 
                   {/* Profile / Memory sub-tab（移动端二选一）。切换 = LayoutAnimation
                       交叉淡入（selectSubTab），面板不再挂 entering（避免双动画打架）。 */}
@@ -705,7 +653,9 @@ export default function ProfileScreen({ headerProps }: { headerProps: HeaderProp
                     <WorkbenchTabButton
                       active={identitySubTab === "profile"}
                       label={t("goalsView.subTabs.profile")}
-                      value={profile ? t("goalsView.subTabs.profile") : t("goalsView.subTabs.empty")}
+                      value={
+                        userEntries.length > 0 ? String(userEntries.length) : t("goalsView.subTabs.empty")
+                      }
                       onPress={() => selectSubTab("profile")}
                     />
                     <WorkbenchTabButton
@@ -718,11 +668,7 @@ export default function ProfileScreen({ headerProps }: { headerProps: HeaderProp
 
                   {identitySubTab === "profile" ? (
                     <GlassCard style={styles.panelSection}>
-                      <ProfilePanel
-                        profile={profile}
-                        openGroups={openGroups}
-                        onToggleGroup={toggleGroup}
-                      />
+                      <ProfilePanel entries={userEntries} />
                     </GlassCard>
                   ) : (
                     <GlassCard style={styles.panelSection}>

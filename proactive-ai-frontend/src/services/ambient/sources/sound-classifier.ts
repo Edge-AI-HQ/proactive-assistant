@@ -508,7 +508,10 @@ export class SoundClassifierSource implements AmbientSource {
 
     this.ctx.push({
       kind: "session_summary",
-      title: "Voice summary",
+      // title 用转写首段作一行摘要(不再是通用 "Voice summary")—— 让 event.title 有实
+      // 际内容,前端 timeline 统一 title||body 规则即可显示转写;body(summary)保留全文。
+      // 后端 devices/ingest 校验 title 非空,所以不能留空。
+      title: text.length > 80 ? `${text.slice(0, 80)}…` : text,
       summary: text,
       occurred_at: event.capturedAt,
       payload,

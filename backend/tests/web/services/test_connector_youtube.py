@@ -18,50 +18,6 @@ from pinai_api.platform.db.repositories.scheduled_tasks import (
 )
 from pinai_db.rls import service_tx, user_scoped_tx
 
-# ── YouTube mapper ─────────────────────────────────────────────────────
-
-
-def test_map_youtube_subscription_basic():
-    raw = {
-        "id": "sub-1",
-        "snippet": {
-            "title": "Veritasium",
-            "description": "Science",
-            "publishedAt": "2024-01-15T10:00:00Z",
-            "resourceId": {"kind": "youtube#channel", "channelId": "UC-x"},
-            "thumbnails": {"default": {"url": "https://i.ytimg.com/x.jpg"}},
-        },
-    }
-    mapped = connector_ingest._map_youtube_subscription(raw)
-    assert mapped is not None
-    assert mapped["subscription_id"] == "sub-1"
-    assert mapped["channel_id"] == "UC-x"
-    assert mapped["channel_title"] == "Veritasium"
-    assert mapped["thumbnail_url"] == "https://i.ytimg.com/x.jpg"
-    assert mapped["subscribed_at"].year == 2024
-    assert mapped["occurred_at"] == mapped["subscribed_at"]
-
-
-def test_map_youtube_subscription_falls_back_to_flat_channel_id():
-    raw = {
-        "id": "sub-2",
-        "snippet": {"title": "Flat", "channelId": "UC-flat"},
-    }
-    mapped = connector_ingest._map_youtube_subscription(raw)
-    assert mapped is not None
-    assert mapped["channel_id"] == "UC-flat"
-
-
-def test_map_youtube_subscription_returns_none_without_channel():
-    raw = {"id": "sub-3", "snippet": {"title": "noChannel"}}
-    assert connector_ingest._map_youtube_subscription(raw) is None
-
-
-def test_map_youtube_subscription_returns_none_without_id():
-    raw = {"snippet": {"resourceId": {"channelId": "UC-x"}}}
-    assert connector_ingest._map_youtube_subscription(raw) is None
-
-
 # ── DB-backed sync round-trip ──────────────────────────────────────────
 
 
@@ -141,12 +97,13 @@ async def test_youtube_sync_refreshes_channel_title_in_place(
 
     async with service_tx(pool) as conn:
         cur = await conn.execute(
-            "SELECT channel_title FROM pai_raw_youtube_subscriptions WHERE user_id = %s",
+            "SELECT title FROM pai_raw_apps "
+            "WHERE user_id = %s AND toolkit = 'youtube' AND entity_type = 'subscriptions'",
             (user_a,),
         )
         rows = await cur.fetchall()
     assert len(rows) == 1
-    assert rows[0]["channel_title"] == "New Name"
+    assert rows[0]["title"] == "New Name"
 
 
 @pytest.mark.asyncio

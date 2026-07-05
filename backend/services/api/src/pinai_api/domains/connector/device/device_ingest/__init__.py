@@ -1,36 +1,34 @@
-"""Device ingest policy registry — port of plugin device-ingest/.
+"""Device ingest — kind → DeviceRecipe → 单表 pai_raw_device。
 
-Each ingest item carries a `kind` field that picks how it lands:
-  * signal_only — write into pai_personal_signals
-  * raw_only    — write into a typed pai_raw_device_* table
-  * dual        — both
-
-`UNKNOWN_KIND_POLICY` falls back to signal_only with a fallback_reason
-tag so we don't silently drop unrecognized payloads.
+每个 device kind 由 `recipes.DeviceRecipe` 决定入口行为(entity_type / filtered /
+latest_wins / snapshot)。snapshot(apps/contacts/health)额外经 `policies` 的解析器
+展开成 typed 行,喂 raw_device.ingest_<snapshot>。未知 kind 兜底落 context event
+(不丢数据)。历史上的四 mode(signal_only/dual/raw_only/filtered)dispatch 已收敛。
 """
 
 from __future__ import annotations
 
 from .policies import (
-    DEVICE_INGEST_POLICIES,
-    UNKNOWN_KIND_POLICY,
+    DeviceAppSnapshotItem,
+    DeviceContactSnapshotItem,
     DeviceIngestItem,
-    DeviceIngestPolicy,
-    DeviceRawWrite,
     DeviceSyncMode,
-    build_default_signal,
+    _parse_apps,
+    _parse_contacts,
+    _parse_health,
     normalize_sync_mode,
-    resolve_policy,
 )
+from .recipes import DeviceRecipe, resolve_recipe
 
 __all__ = [
-    "DEVICE_INGEST_POLICIES",
-    "UNKNOWN_KIND_POLICY",
+    "DeviceAppSnapshotItem",
+    "DeviceContactSnapshotItem",
     "DeviceIngestItem",
-    "DeviceIngestPolicy",
-    "DeviceRawWrite",
+    "DeviceRecipe",
     "DeviceSyncMode",
-    "build_default_signal",
+    "_parse_apps",
+    "_parse_contacts",
+    "_parse_health",
     "normalize_sync_mode",
-    "resolve_policy",
+    "resolve_recipe",
 ]

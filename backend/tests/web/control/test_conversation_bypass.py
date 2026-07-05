@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 from pinai_api.control import conversation
-from pinai_api.domains.user_model.profile import ProfileRepository
+from pinai_api.domains.user_model.settings import SettingsRepository
 from pinai_api.platform.auth.user_service import User
 from pinai_db.rls import user_scoped_tx
 
@@ -49,7 +49,7 @@ async def test_send_ignores_client_bypass_when_permission_mode_ask(user_ids, poo
 async def test_send_derives_bypass_from_permission_mode(user_ids, pool):
     user_id, _ = user_ids
     async with user_scoped_tx(pool, user_id) as conn:
-        await ProfileRepository(user_id, conn).upsert_settings(permission_mode="bypass")
+        await SettingsRepository(user_id, conn).upsert_settings(permission_mode="bypass")
     captured: dict[str, Any] = {}
     request = _request_capturing(captured)
     # Client sends no bypass field at all — it must be derived from the DB.

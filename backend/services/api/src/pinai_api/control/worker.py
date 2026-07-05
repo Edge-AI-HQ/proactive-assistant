@@ -32,7 +32,7 @@ from pinai_db.rls import service_tx, user_scoped_tx
 from psycopg_pool import AsyncConnectionPool
 
 from ..domains.browser.provisioning import ensure_browserbase_context_id
-from ..domains.user_model.profile import ProfileRepository
+from ..domains.user_model.settings import SettingsRepository
 from ..platform.auth.user_service import get_run_credentials
 from ..platform.db.repositories.chat_messages import ChatMessagesRepository, Role, Trigger
 from ..platform.notification import notify_turn_completed
@@ -388,11 +388,11 @@ class AgentRunWorker:
                 session_id=session_id, agent_kind=agent_kind, trigger=trigger
             )
             await MailboxRepository(user_id, conn).mark_claimed(message_ids=msg_ids, run_id=run_id)
-            # Same-tx profile read: the user's timezone rides to chat so it
+            # Same-tx settings read: the user's timezone rides to chat so it
             # can anchor a <current_datetime> note (chat has no DB and must
             # not guess dates — the at_local date-guess bug).
-            prof = await ProfileRepository(user_id, conn).get_profile()
-        timezone = (prof.timezone if prof and prof.timezone else None) or "UTC"
+            settings = await SettingsRepository(user_id, conn).get_settings()
+        timezone = settings.timezone or "UTC"
         vk, bbctx = await self._user_keys(user_id)
         frames = self._chat.run(
             kind=agent_kind,

@@ -374,8 +374,8 @@ export default function SettingScreen({
               <Animated.View entering={FadeIn.duration(300)} style={{ gap: 12 }}>
                 <GlassCard strong className="p-4">
                   <SectionHeader
-                    title={t("preferences.dreamingTitle")}
-                    description={t("preferences.dreamingDescription")}
+                    title={t("preferences.evolutionTitle")}
+                    description={t("preferences.evolutionDescription")}
                   />
                   <AutoDreamingSettings />
                 </GlassCard>

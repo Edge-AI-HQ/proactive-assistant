@@ -20,7 +20,11 @@ from deepagents import SubAgent, create_deep_agent
 from deepagents.backends.protocol import BackendProtocol
 
 from .checkpoint import get_checkpointer
-from .middleware import CurrentDatetimeMiddleware
+from .middleware import (
+    CurrentDatetimeMiddleware,
+    PortraitMiddleware,
+    ScheduledTasksMiddleware,
+)
 
 __all__ = ["BackendProtocol", "SubAgent", "build_agent"]
 
@@ -35,13 +39,15 @@ def build_agent(
     interrupt_on: dict[str, Any] | None = None,
     with_checkpointer: bool = False,
     background: bool = False,
+    with_portrait: bool = False,
+    with_schedules: bool = False,
 ) -> Any:
     """Wrap `create_deep_agent` with the business spec.
 
     `model` is built by the caller via `harness.llm.make_chat_model` (model
     tier / thinking budget / streaming are business choices). `with_checkpointer`
     is opt-in: only the persistent main + card chat threads checkpoint; the
-    one-shot batch agents (crystallize / evolve / dream / generator) don't.
+    one-shot batch agents (evolve / dream / generator) don't.
     `interrupt_on` maps side-effect tool names → HITL gate: deepagents wires
     `HumanInTheLoopMiddleware`, so the run pauses on langgraph `interrupt()`
     BEFORE the tool runs; web translates that into a requires_action frame and
@@ -64,10 +70,23 @@ def build_agent(
         # onto the isolated background checkpoint pool so their large/slow
         # checkpoint reads never starve the interactive (main/card) pool.
         kwargs["checkpointer"] = get_checkpointer(background=background)
+    middleware: list[Any] = [CurrentDatetimeMiddleware()]
+    if with_schedules:
+        # Prospective memory: the agent's own scheduled tasks, one bounded
+        # snapshot per run (design §三). Listed BEFORE PortraitMiddleware on
+        # purpose — later middlewares prepend ahead of earlier ones, so the
+        # portrait block ends up in front of this more-volatile block and a
+        # task change only invalidates the prompt cache from here onward.
+        middleware.append(ScheduledTasksMiddleware())
+    if with_portrait:
+        # Resident L2 portrait, injected at model-call time (needs the run JWT,
+        # available once run_context is entered). Only the interactive chat /
+        # card agents enable it; batch agents pull memory via the SDK instead.
+        middleware.append(PortraitMiddleware())
     return create_deep_agent(
         model=model,
         system_prompt=system_prompt,
         backend=backend,
-        middleware=[CurrentDatetimeMiddleware()],
+        middleware=middleware,
         **kwargs,
     )

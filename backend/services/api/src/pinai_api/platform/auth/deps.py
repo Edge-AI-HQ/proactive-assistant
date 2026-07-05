@@ -33,9 +33,25 @@ class AgentRun:
     scope: str
     # Impersonation provenance. 'user' = the account owner drives this run.
     # 'internal_operator' = an internal reviewer acting on the user's behalf;
-    # routes use this (not agent-reported body) to stamp write `source`.
+    # routes use this (not agent-reported body) to stamp write provenance.
     actor: str = "user"
     operator_id: str | None = None
+
+
+def agent_write_provenance(run: AgentRun) -> dict[str, str]:
+    """Server-stamped write provenance derived from the run principal — NEVER
+    agent-reported. Merge into an event's `structured` so an internal operator
+    impersonating a user can't disguise the write as the user's own.
+
+    Empty `{}` for a normal user run (the default, no marker needed). Carries
+    `{actor, operator_id}` only when an internal reviewer drives the run. This is
+    the trust-boundary contract for writes (impersonation Goal 4): provenance is
+    a property of the JWT, not of the request body. `event.source` stays the
+    *pipeline* discriminator (pinai_chat / agent_action / …, design §五-210);
+    the actor identity lives here, in structured, not overloaded onto source."""
+    if run.actor == "internal_operator" and run.operator_id:
+        return {"actor": "internal_operator", "operator_id": run.operator_id}
+    return {}
 
 
 @dataclass(slots=True)

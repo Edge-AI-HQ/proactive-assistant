@@ -29,7 +29,7 @@
   },
   "autoGenerate": {
     "title": "自动生成",
-    "description": "根据已连接数据源的新数据自动生成卡片。"
+    "description": "定期检查你的事件时间线，只在真正值得提醒时生成卡片——多数检查不会产生卡片。"
   },
   "proactive": {
     "title": "主动心跳",
@@ -86,17 +86,31 @@
     "basic": {
       "name": "Basic",
       "credits": "每月 3,900 积分",
-      "perks": ["每日卡片信息流", "连接 3 个应用", "邮件 + 日历"]
+      "perks": [
+        "每日卡片信息流",
+        "连接 3 个应用",
+        "邮件 + 日历"
+      ]
     },
     "pro": {
       "name": "Pro",
       "credits": "每月 9,900 积分",
-      "perks": ["包含 Basic 全部功能", "连接应用不限数量", "语音 + 环境感知模式", "优先执行"]
+      "perks": [
+        "包含 Basic 全部功能",
+        "连接应用不限数量",
+        "语音 + 环境感知模式",
+        "优先执行"
+      ]
     },
     "max": {
       "name": "Max",
       "credits": "每月 19,900 积分",
-      "perks": ["包含 Pro 全部功能", "自定义人格", "团队共享", "新模型抢先体验"]
+      "perks": [
+        "包含 Pro 全部功能",
+        "自定义人格",
+        "团队共享",
+        "新模型抢先体验"
+      ]
     }
   },
   "paywall": {
@@ -204,8 +218,8 @@
     "pageSubtitle": "你的 AI 的行为方式——语气、格式与默认设置。",
     "proactiveTitle": "主动模式",
     "proactiveDescription": "你的主动 AI 多久来关注你一次。",
-    "dreamingTitle": "梦境",
-    "dreamingDescription": "查看后台梦境运行、画像变更与候选卡片。",
+    "evolutionTitle": "梦境",
+    "evolutionDescription": "查看后台梦境运行、画像变更与候选卡片。",
     "generationTitle": "生成",
     "generationDescription": "调整卡片的生成与展示方式。",
     "scheduledTasksTitle": "定时任务",
@@ -230,7 +244,7 @@
     "iosOnlyModels": "设备端模型仅在 iOS 应用内可用。请在原生版本中打开本页，以下载、校验或删除 Whisper / 本地 LLM 模型档案。",
     "localStorageNote": "模型仅存储在本地，绝不会被重新上传。下载失败时，插件会自动切换到备用镜像。"
   },
-  "dreaming": {
+  "evolution": {
     "title": "自动梦境",
     "runsDaily": "每天 {{time}} 运行",
     "enabledNotice": "已开启自动梦境。",

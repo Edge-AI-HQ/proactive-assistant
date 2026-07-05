@@ -6,6 +6,9 @@ since_param: created.gte
 since_format: stripe_nested_unix
 result_path: [data]
 id_field: id
+entity_type: invoices
+timestamp_path: [created]
+title_path: [number]
 sync_interval_hours: 12
 description: "Stripe invoices created since cursor (B2B only; non-merchant users return empty)."
 notes: |

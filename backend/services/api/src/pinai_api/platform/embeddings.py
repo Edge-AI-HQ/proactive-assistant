@@ -1,7 +1,7 @@
 """Embeddings client + worker — semantic memory search backbone.
 
 Pipeline:
-  1. Memory / signal write inserts the row + adds (table, id, text) to
+  1. Event write inserts the row + adds (table, id, text) to
      pai_embedding_queue with status='pending'.
   2. Scheduler tick wakes _drain_embedding_queue every N seconds.
   3. Worker batches up to BATCH_SIZE pending rows, calls LiteLLM
@@ -12,9 +12,9 @@ Pipeline:
 
 Why a queue not synchronous embed: the LiteLLM call is a few hundred ms
 on a good day; doing it inline doubles user-visible write latency. Async
-queue keeps memory_add fast and decouples model availability from write
-path. Trade-off: search index lags inserts by one tick interval (~30s
-default), which is fine — semantic search isn't a strict-consistency
+queue keeps the event append fast and decouples model availability from
+the write path. Trade-off: search index lags inserts by one tick interval
+(~30s default), which is fine — semantic search isn't a strict-consistency
 read path.
 """
 
@@ -47,31 +47,17 @@ class EmbeddingError(Exception):
     """Raised when embedding fails — caller decides retry vs. mark failed."""
 
 
-# Billing target for an embed under the shared master key — distinct from
-# None, which means "skip this row for now".
-_MASTER_BILL = "__master__"
-
-
 def _embedding_bill_target(
-    table_name: str,
     user_id: int,
     keys: dict[int, str | None],
 ) -> str | None:
     """Decide how a queued embedding's token spend is billed.
 
-    Returns one of:
-      * ``_MASTER_BILL`` — embed under the master key. Used for
-        pai_world_signals, which is global/shared system data with no single
-        beneficiary (a platform cost). The queue stores a sentinel user_id
-        on those rows (world_ingest.py) that must NOT be charged.
-      * a virtual key string — embed under that user's key (personal data).
-      * ``None`` — SKIP. Personal data for a user who has no key yet; leave
-        the row pending so a later drain re-embeds it once the key is
-        provisioned (at onboarding completion). Personal data is NEVER
-        billed to master.
+    Returns the user's LiteLLM virtual key (personal data → bill that user),
+    or ``None`` to SKIP — a user who has no key yet; leave the row pending so
+    a later drain re-embeds it once the key is provisioned (at onboarding
+    completion). Personal data is NEVER billed to master.
     """
-    if table_name == "pai_world_signals":
-        return _MASTER_BILL
     return keys.get(user_id)
 
 
@@ -144,7 +130,7 @@ async def enqueue(
     status to 'pending' and snapshots the latest text (handles updates)."""
     if not text.strip():
         return  # skip empty bodies — nothing to embed
-    if table_name not in ("pai_memory", "pai_personal_signals", "pai_world_signals"):
+    if table_name != "pai_events":
         msg = f"unsupported embedding table: {table_name}"
         raise ValueError(msg)
     async with conn.cursor() as cur:
@@ -170,19 +156,17 @@ async def drain_queue(conn, *, batch_size: int = _BATCH) -> int:
     done. Returns count of successfully embedded rows.
 
     Runs as service_role (no app.user_id) — touches multiple users'
-    queue rows in one batch. The write-back to pai_memory etc. is
+    queue rows in one batch. The write-back to pai_events etc. is
     user-scoped per row (each UPDATE uses the row's user_id directly,
     not RLS-derived).
 
-    Embedding is billed per user (see _embedding_bill_target): personal
-    rows (pai_memory / pai_personal_signals) embed under that user's
-    LiteLLM virtual key, so the spend lands on their key (visible in
-    /api/payment/usage). Shared pai_world_signals embed under the master
-    key (global system cost, no single beneficiary). A personal row for a
-    user who has no key yet is SKIPPED — left pending so a later drain
-    embeds it once the key is provisioned at onboarding; personal data is
-    never billed to master. One embed call per distinct billing key in
-    the batch — fine for a low-rate background drain.
+    Embedding is billed per user (see _embedding_bill_target): each row
+    (pai_events) embeds under that user's LiteLLM virtual key, so the spend
+    lands on their key (visible in /api/payment/usage). A row for a user who
+    has no key yet is SKIPPED — left pending so a later drain embeds it once
+    the key is provisioned at onboarding; personal data is never billed to
+    master. One embed call per distinct billing key in the batch — fine for
+    a low-rate background drain.
     """
     async with conn.cursor() as cur:
         await cur.execute(
@@ -218,12 +202,12 @@ async def drain_queue(conn, *, batch_size: int = _BATCH) -> int:
     group_vk: dict[str, str | None] = {}
     skipped = 0
     for r in rows:
-        target = _embedding_bill_target(r["table_name"], int(r["user_id"]), keys)
+        target = _embedding_bill_target(int(r["user_id"]), keys)
         if target is None:
             skipped += 1
             continue
         groups.setdefault(target, []).append(r)
-        group_vk[target] = None if target == _MASTER_BILL else target
+        group_vk[target] = target
     if skipped:
         logger.info(
             "drain: deferred %d keyless personal embedding row(s) (left pending)",
@@ -279,30 +263,16 @@ async def drain_queue(conn, *, batch_size: int = _BATCH) -> int:
             # We use the string form for portability.
             vec_lit = "[" + ",".join(f"{x:.6f}" for x in vec) + "]"
             try:
-                # Embeddings on shared pai_world_signals don't have user_id
-                # column — write by id only. Per-user tables include it.
-                if table == "pai_world_signals":
-                    await cur.execute(
-                        f"""
-                        UPDATE {table}
-                        SET embedding = %s::vector,
-                            embedding_model = %s,
-                            embedded_at = NOW()
-                        WHERE id = %s
-                        """,
-                        (vec_lit, _MODEL, rid),
-                    )
-                else:
-                    await cur.execute(
-                        f"""
-                        UPDATE {table}
-                        SET embedding = %s::vector,
-                            embedding_model = %s,
-                            embedded_at = NOW()
-                        WHERE user_id = %s AND id = %s
-                        """,
-                        (vec_lit, _MODEL, uid, rid),
-                    )
+                await cur.execute(
+                    f"""
+                    UPDATE {table}
+                    SET embedding = %s::vector,
+                        embedding_model = %s,
+                        embedded_at = NOW()
+                    WHERE user_id = %s AND id = %s
+                    """,
+                    (vec_lit, _MODEL, uid, rid),
+                )
                 await cur.execute(
                     """
                     UPDATE pai_embedding_queue

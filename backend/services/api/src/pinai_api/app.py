@@ -44,22 +44,16 @@ from .control.conversation import router as ui_conversation_router
 from .domains.billing.agent import router as agent_usage_router
 from .domains.billing.payments.routes import router as ui_payment_router
 from .domains.browser.ui import router as ui_browser_router
-from .domains.chat_history.crystallize import (
-    crystallize_router as ui_crystallize_router,
-)
 from .domains.chat_history.sync import router as ui_sync_router
 from .domains.connector.apps.composio_agent import router as agent_composio_router
 from .domains.connector.apps.composio_ui import router as ui_composio_router
 from .domains.connector.apps.raw_agent import router as agent_raw_router
-from .domains.connector.apps.raw_ui import router as ui_raw_router
 from .domains.connector.device.ambient_ui import router as ui_ambient_router
 from .domains.connector.device.devices_ui import router as ui_devices_router
-from .domains.connector.world.agent import router as agent_world_router
 from .domains.feedback.agent import router as agent_feedback_router
 from .domains.feedback.dev_agent import router as agent_development_feedback_router
 from .domains.feedback.dev_ui import router as ui_development_feedback_router
 from .domains.feedback.ui import router as ui_feedback_router
-from .domains.generation.cards_agent import router as agent_cards_router
 from .domains.generation.generate_agent import router as agent_generate_router
 from .domains.generation.generate_ui import router as ui_generate_router
 from .domains.generation.pipeline_agent import router as agent_pipeline_router
@@ -71,16 +65,14 @@ from .domains.identity.impersonation import router as ui_impersonation_router
 from .domains.identity.jwt_revoke import router as ui_jwt_revoke_router
 from .domains.identity.onboarding import router as ui_onboarding_router
 from .domains.identity.sandbox_phantom import router as agent_sandbox_phantom_router
-from .domains.user_model.dreaming_ui import router as ui_dreaming_router_real
-from .domains.user_model.evolution_agent import router as agent_evolution_router
-from .domains.user_model.memory_agent import router as agent_memory_router
-from .domains.user_model.memory_ui import router as ui_memory_router
-from .domains.user_model.preferences_agent import router as agent_preferences_router
-from .domains.user_model.profile_agent import router as agent_profile_router
-from .domains.user_model.profile_ui import router as ui_profile_router
-from .domains.user_model.profile_ui import settings_router as ui_settings_router
-from .domains.user_model.signals_agent import router as agent_signals_router
-from .domains.user_model.signals_ui import router as ui_signals_router
+from .domains.memory.curation.agent import router as agent_evolution_router
+from .domains.memory.curation.ui import router as ui_evolution_router
+from .domains.memory.events.agent import router as agent_events_router
+from .domains.memory.events.ui import router as ui_events_router
+from .domains.memory.portrait.agent import router as agent_user_strings_router
+from .domains.memory.portrait.ui import router as ui_user_strings_router
+from .domains.user_model.settings_agent import router as agent_settings_router
+from .domains.user_model.settings_ui import settings_router as ui_settings_router
 from .domains.user_model.skills_agent import router as agent_skills_router
 from .domains.user_model.skills_ui import router as ui_skills_router
 from .domains.voice.ui import router as ui_voice_router
@@ -221,10 +213,9 @@ def create_app() -> FastAPI:
     app.add_middleware(AgentAuditMiddleware)
 
     # ── /api/* (frontend, Supabase JWT) ──
-    app.include_router(ui_memory_router)
+    app.include_router(ui_user_strings_router)
+    app.include_router(ui_events_router)
     app.include_router(ui_onboarding_router)
-    app.include_router(ui_signals_router)
-    app.include_router(ui_profile_router)
     app.include_router(ui_settings_router)
     app.include_router(ui_runs_router)
     app.include_router(ui_conversation_router)
@@ -232,12 +223,10 @@ def create_app() -> FastAPI:
     app.include_router(ui_generate_router)
     app.include_router(ui_skills_router)
     app.include_router(ui_feedback_router)
-    app.include_router(ui_crystallize_router)
-    app.include_router(ui_dreaming_router_real)
+    app.include_router(ui_evolution_router)
     app.include_router(ui_composio_router)
     app.include_router(ui_tasks_router)
     app.include_router(ui_scheduled_generators_router)
-    app.include_router(ui_raw_router)
     app.include_router(ui_impersonation_router)
     app.include_router(ui_agent_runs_router)
     app.include_router(ui_devices_router)
@@ -250,15 +239,12 @@ def create_app() -> FastAPI:
     app.include_router(ui_development_feedback_router)
 
     # ── /api/agent/* (sandbox / chat, EdDSA JWT) ──
-    app.include_router(agent_memory_router)
-    app.include_router(agent_signals_router)
-    app.include_router(agent_world_router)
-    app.include_router(agent_profile_router)
-    app.include_router(agent_preferences_router)
+    app.include_router(agent_events_router)
+    app.include_router(agent_user_strings_router)
+    app.include_router(agent_settings_router)
     app.include_router(agent_skills_router)
     app.include_router(agent_composio_router)
     app.include_router(agent_raw_router)
-    app.include_router(agent_cards_router)
     app.include_router(agent_generate_router)
     app.include_router(agent_feedback_router)
     app.include_router(agent_evolution_router)

@@ -1,38 +1,27 @@
-"""Device ingest policy registry — port of plugin device-ingest/policies.ts.
+"""Device ingest item + snapshot parsers.
 
-Each kind picks one of four modes:
-  * signal_only   — only write personal_signals (legacy device events +
-    ambient context events that chat / memory should be able to read).
-  * raw_only      — only write a typed raw table (health observations).
-  * dual          — write raw table + personal_signal in same call (apps,
-    contacts directories — agents read raw, generator surfaces signals).
-  * filtered      — accept but drop (no write). Reserved for deprecated or
-    intentionally suppressed kinds.
+一个 device kind 的入口行为由 device_ingest/recipes.py 的 `DeviceRecipe` 决定
+(entity_type / filtered / latest_wins / snapshot)。本模块只留数据形状 + 解析工具:
+  * `DeviceIngestItem` — 归一化后的单条 ingest 项(devices_ui 构造,喂 raw_device 写入)。
+  * snapshot 解析器 `_parse_apps` / `_parse_contacts` / `_parse_health` — 把一个 push
+    item 的 payload 展开成 typed 行列表,喂 raw_device.ingest_<snapshot>。
 
-The signal/raw split mirrors memory architecture §一:
-  signals = increment / consumption layer, raw = source of truth.
+所有 device 数据落单表 pai_raw_device(kind 判别 + payload JSONB)。历史上曾有 per-source
+typed 表 + 四 mode(signal_only/dual/raw_only/filtered)dispatch;typed 表已在 118 删、
+统一表在 119 拆出,四 mode dispatch 在本次 recipe 化(recipes.py)收敛掉。
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from .health import (
     DeviceHealthObservationInput,
-    DeviceHealthReplaceScope,
-    health_full_replace_scope,
     parse_health_observations,
 )
 
-type DeviceIngestMode = Literal["raw_only", "signal_only", "dual", "filtered"]
 type DeviceSyncMode = Literal["incremental", "full"]
-type DeviceRawTable = Literal[
-    "device_apps_snapshot",
-    "device_contacts_snapshot",
-    "device_health_observations",
-]
 
 
 @dataclass(slots=True)
@@ -50,6 +39,13 @@ class DeviceIngestItem:
     occurred_at: str  # ISO8601
     available_at: str
     expires_at: str | None
+    # Normalized pai_raw_device.kind, filled from the item's DeviceRecipe at
+    # ingest (recipes.resolve_recipe). Default keeps existing constructors
+    # working; the ingest handler always sets it.
+    entity_type: str = "context"
+    # Source platform (ios/android/wearable/…), denormalized from the verified
+    # device row at ingest so it rides into pai_raw_device.platform.
+    platform: str | None = None
 
 
 @dataclass(slots=True)
@@ -68,39 +64,15 @@ class DeviceContactSnapshotItem:
     last_modified: str | None
 
 
-@dataclass(slots=True)
-class DeviceRawWrite:
-    table: DeviceRawTable
-    # Type-erased by design — table picks which dataclass payload comes out.
-    payload: Any
-
-
-@dataclass(slots=True)
-class DeviceRawReplaceScope:
-    table: DeviceRawTable
-    device_id: str
-    # Health-only — narrows replace to a (deviceId, localDate) pair, and
-    # optionally further to a single metric (the common per-metric path).
-    local_date: str | None = None
-    metric: str | None = None
-
-
-@dataclass(slots=True)
-class DeviceIngestPolicy:
-    mode: DeviceIngestMode
-    raw_table: DeviceRawTable | None = None
-    parse_raw: Callable[[DeviceIngestItem], list[DeviceRawWrite]] | None = None
-    full_replace_scope: Callable[[DeviceIngestItem], DeviceRawReplaceScope | None] | None = None
-    build_signal: (
-        Callable[[DeviceIngestItem, dict[str, Any] | None], dict[str, Any] | None] | None
-    ) = None
-
-
 def normalize_sync_mode(raw: Any) -> DeviceSyncMode:
     return "full" if raw == "full" else "incremental"
 
 
-# ── parsers ──
+# ── snapshot parsers ──
+# Each expands one push item's payload into a list of typed rows; the ingest
+# handler feeds the list straight to raw_device.ingest_<snapshot>. Empty list
+# when the payload carries nothing parseable (handler falls back to a context
+# event so the data isn't lost).
 
 
 def _coerce_dict_list(payload: dict[str, Any], *keys: str) -> list[dict[str, Any]]:
@@ -120,7 +92,7 @@ def _str_or(row: dict[str, Any], *keys: str) -> str | None:
     return None
 
 
-def _parse_apps(item: DeviceIngestItem) -> list[DeviceRawWrite]:
+def _parse_apps(item: DeviceIngestItem) -> list[DeviceAppSnapshotItem]:
     rows = _coerce_dict_list(item.payload, "apps", "installedApps", "items", "entries")
     apps: list[DeviceAppSnapshotItem] = []
     for row in rows:
@@ -136,24 +108,12 @@ def _parse_apps(item: DeviceIngestItem) -> list[DeviceRawWrite]:
                 last_used_at=_str_or(row, "lastUsedAt", "last_used_at"),
             )
         )
-    if not apps:
-        return []
-    return [
-        DeviceRawWrite(
-            table="device_apps_snapshot",
-            payload={
-                "device_id": item.device_id,
-                "occurred_at": item.occurred_at,
-                "snapshot_id": item.dedupe_key,
-                "apps": apps,
-            },
-        )
-    ]
+    return apps
 
 
-def _parse_contacts(item: DeviceIngestItem) -> list[DeviceRawWrite]:
+def _parse_contacts(item: DeviceIngestItem) -> list[DeviceContactSnapshotItem]:
     candidates = _coerce_dict_list(item.payload, "contacts", "items", "entries")
-    # contacts_json — older clients ship JSON-encoded blob.
+    # contacts_json — older clients ship a JSON-encoded blob.
     for k in ("contacts_json", "contactsJson"):
         s = item.payload.get(k)
         if isinstance(s, str) and s.strip():
@@ -184,170 +144,8 @@ def _parse_contacts(item: DeviceIngestItem) -> list[DeviceRawWrite]:
                 last_modified=_str_or(row, "lastModified", "last_modified"),
             )
         )
-    if not contacts:
-        return []
-    return [
-        DeviceRawWrite(
-            table="device_contacts_snapshot",
-            payload={
-                "device_id": item.device_id,
-                "occurred_at": item.occurred_at,
-                "snapshot_id": item.dedupe_key,
-                "contacts": contacts,
-            },
-        )
-    ]
+    return contacts
 
 
-def _parse_health(item: DeviceIngestItem) -> list[DeviceRawWrite]:
-    obs: list[DeviceHealthObservationInput] = parse_health_observations(item)
-    if not obs:
-        return []
-    return [
-        DeviceRawWrite(
-            table="device_health_observations",
-            payload={
-                "device_id": item.device_id,
-                "observations": obs,
-            },
-        )
-    ]
-
-
-# ── signal builders ──
-
-
-def build_default_signal(
-    item: DeviceIngestItem,
-    opts: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Personal-signal repo input shape. Caller writes via PersonalSignalsRepository.ingest_one."""
-    fallback_reason = (opts or {}).get("fallback_reason")
-    payload = item.payload
-    if fallback_reason:
-        payload = {**payload, "ingest_fallback_reason": fallback_reason}
-    return {
-        "id": item.id,
-        "kind": item.kind,
-        "title": item.title,
-        "summary": item.summary,
-        "payload": payload,
-        "salience": item.salience,
-        "confidence": item.confidence,
-        "dedupe_key": item.dedupe_key,
-        "occurred_at": item.occurred_at,
-        "available_at": item.available_at,
-        "expires_at": item.expires_at,
-        "source": "device",
-        "device_id": item.device_id,
-    }
-
-
-# ── registry ──
-
-
-_APP_POLICY = DeviceIngestPolicy(
-    mode="dual",
-    raw_table="device_apps_snapshot",
-    parse_raw=_parse_apps,
-    full_replace_scope=lambda i: DeviceRawReplaceScope("device_apps_snapshot", i.device_id),
-    build_signal=build_default_signal,
-)
-_CONTACT_POLICY = DeviceIngestPolicy(
-    mode="dual",
-    raw_table="device_contacts_snapshot",
-    parse_raw=_parse_contacts,
-    full_replace_scope=lambda i: DeviceRawReplaceScope("device_contacts_snapshot", i.device_id),
-    build_signal=build_default_signal,
-)
-
-
-def _health_full_scope(i: DeviceIngestItem) -> DeviceRawReplaceScope | None:
-    s: DeviceHealthReplaceScope | None = health_full_replace_scope(i)
-    if s is None:
-        return None
-    return DeviceRawReplaceScope(
-        table="device_health_observations",
-        device_id=s.device_id,
-        local_date=s.local_date,
-        metric=s.metric,
-    )
-
-
-_HEALTH_POLICY = DeviceIngestPolicy(
-    mode="raw_only",
-    raw_table="device_health_observations",
-    parse_raw=_parse_health,
-    full_replace_scope=_health_full_scope,
-)
-_SIGNAL_POLICY = DeviceIngestPolicy(mode="signal_only", build_signal=build_default_signal)
-
-# Accepted-but-dropped: the ingest route short-circuits these to status
-# 'filtered' (no raw / signal / timeline write). Raw/high-frequency Ambient
-# frames stay here until they have aggregation, retention, and privacy rules.
-_FILTERED_POLICY = DeviceIngestPolicy(mode="filtered")
-
-
-DEVICE_INGEST_POLICIES: dict[str, DeviceIngestPolicy] = {
-    # V3 ambient → pai_personal_signals. The Expo/RN client emits `device.*`
-    # for context sources; older builds may still emit `ambient.*` aliases.
-    # Health observations stay raw-only because they already have a typed table.
-    "ambient.utterance": _SIGNAL_POLICY,
-    # `session_summary` carries the V3 voice transcript (speaker_segments +
-    # full text in `summary`) — the primary utterance path.
-    "session_summary": _SIGNAL_POLICY,
-    "ambient.location": _FILTERED_POLICY,
-    "ambient.visit": _SIGNAL_POLICY,
-    "ambient.activity": _FILTERED_POLICY,
-    "ambient.sound": _FILTERED_POLICY,
-    "ambient.audio_route": _SIGNAL_POLICY,
-    "ambient.calendar_event": _SIGNAL_POLICY,
-    "ambient.focus_state": _SIGNAL_POLICY,
-    "ambient.device_state": _FILTERED_POLICY,
-    "ambient.health": _FILTERED_POLICY,
-    "device.location": _FILTERED_POLICY,
-    "device.visit": _SIGNAL_POLICY,
-    "device.activity": _FILTERED_POLICY,
-    "device.motion_segment": _SIGNAL_POLICY,
-    "device.sound_classification": _FILTERED_POLICY,
-    "device.sound_scene_run": _SIGNAL_POLICY,
-    "device.calendar_event": _SIGNAL_POLICY,
-    "device.focus_state": _SIGNAL_POLICY,
-    "device.audio_route": _SIGNAL_POLICY,
-    "device.device_state": _FILTERED_POLICY,
-    # Legacy device events (signal layer) — kept for any client still on
-    # the V2 ambient pipeline / older builds.
-    "moment": _SIGNAL_POLICY,
-    "attention_item": _SIGNAL_POLICY,
-    "ambient.image_chunk": _SIGNAL_POLICY,
-    "ambient.audio_chunk": _SIGNAL_POLICY,
-    "ambient.video_chunk": _SIGNAL_POLICY,
-    "ambient.timeline_event": _SIGNAL_POLICY,
-    "ambient.candidate_window": _SIGNAL_POLICY,
-    "app_inventory": _APP_POLICY,
-    "app_inventory_bootstrap": _APP_POLICY,
-    "app_inventory_snapshot": _APP_POLICY,
-    "contact_directory": _CONTACT_POLICY,
-    "contact_bootstrap": _CONTACT_POLICY,
-    "contact_directory_snapshot": _CONTACT_POLICY,
-    "health.observation": _HEALTH_POLICY,
-}
-
-
-def _unknown_kind_signal(
-    item: DeviceIngestItem,
-    _opts: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    return build_default_signal(item, {"fallback_reason": "unknown_kind"})
-
-
-UNKNOWN_KIND_POLICY = DeviceIngestPolicy(
-    mode="signal_only",
-    build_signal=_unknown_kind_signal,
-)
-
-
-def resolve_policy(kind: str) -> DeviceIngestPolicy:
-    if kind.startswith("device.media."):
-        return _SIGNAL_POLICY
-    return DEVICE_INGEST_POLICIES.get(kind, UNKNOWN_KIND_POLICY)
+def _parse_health(item: DeviceIngestItem) -> list[DeviceHealthObservationInput]:
+    return parse_health_observations(item)

@@ -12,9 +12,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-# The 7 agent kinds. Conversational (Session + mailbox): main_chat /
+# The 6 agent kinds. Conversational (Session + mailbox): main_chat /
 # card_execution / proactive. Batch (one-shot, no Session): generator /
-# dream / evolve / crystallize.
+# dream / evolve.
 AgentKind = Literal[
     "main_chat",
     "card_execution",
@@ -22,7 +22,6 @@ AgentKind = Literal[
     "generator",
     "dream",
     "evolve",
-    "crystallize",
 ]
 
 # What the worker routes/accounts on (NOT what the LLM sees — message.role

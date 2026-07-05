@@ -1,16 +1,47 @@
-"""Deterministic context builder for generator runs.
+"""Cache-efficient tick context for the generator (design §4.1–4.3).
 
-The builder reads web's agent APIs with the per-run JWT already installed
-in ``run_context``. It collects complete rows for the selected window,
-then generator.py is responsible for source-index compaction before any
-LLM prompt sees the data.
+Three-segment structure — "timeline 即 context, anchor 即状态":
+
+  * arrival log  — what became known, in arrival order (`recorded_at, id`),
+    chunked into FULL BLOCKS of K events. Two sub-segments:
+      history  (anchor − LOOKBACK, anchor]: the arrival set before anchor is
+               CLOSED (recorded_at is transaction time — later writes carry
+               later stamps), so budget-truncating it from anchor backwards
+               (keep the newest ≤ INITIAL_LOG_TOKEN_BUDGET) is deterministic
+               and the blocks stay byte-identical across ticks.
+      growth   (anchor, now]: append-only; every tick re-reads the full
+               range so late-visible rows (long ingest transactions commit
+               after their recorded_at) are never lost — worst case they
+               land inside an already-sealed block and cost one cache miss,
+               self-healing next tick.
+    Superseded rows stay in — the log is immutable history; a reschedule
+    shows both arrivals.
+  * tail          — the not-yet-full remainder (most recent arrivals), recomputed
+    every tick inside the (uncached) tick message.
+  * future view   — the authoritative CURRENT upcoming schedule: occurred_at
+    axis, supersede resolved, soonest-first, one line each. The log records
+    how things arrived; the view says what is valid NOW.
+
+Budget enforcement is IMMEDIATE, not last-run-usage-based: if the whole log
+estimates past LOG_TOKEN_BUDGET (connector backfill flood, or ordinary
+growth), the build resets IN PLACE — anchor := now, history re-truncated to
+the newest INITIAL budget, growth empty — and returns the new
+`effective_anchor` for the api side to store. A reset build is ≤ INITIAL
+budget by construction, so one step terminates (this also kills the old
+failure mode where reset didn't shrink the log at all and every tick paid a
+full cache write).
+
+Determinism is load-bearing (Manus: unstable serialization silently breaks
+the cache): fixed projection field order + sort_keys JSON + compact
+separators + the API's (recorded_at, id) total order + closed-set
+truncation.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -18,82 +49,31 @@ from ..tools import http_client
 
 logger = logging.getLogger(__name__)
 
-_MIN_CONTEXT_HOURS = 24
-_DEFAULT_PAGE_SIZE = 500
-_MAX_PAGES = 1_000
+# ── behavior tunables (design §4.7) ─────────────────────────────────────────
+LOG_LOOKBACK_DAYS = 3  # history time bound (low-density users: don't reach back months)
+INITIAL_LOG_TOKEN_BUDGET = 30_000  # history segment cap — the post-reset starting size
+LOG_TOKEN_BUDGET = 80_000  # whole-log cap (estimated); past it → in-place reset.
+#   80k estimated ≈ ≤120k real prompt after system/portrait + in-run tool
+#   growth — safe inside a 128k-window model. NOT a knob to raise casually.
+FUTURE_VIEW_DAYS = 7
+FUTURE_VIEW_LIMIT = 30
+BLOCK_SIZE_EVENTS = 50
+_BODY_CAP = 280
 
-_RAW_SOURCE_BY_TOOLKIT: dict[str, tuple[str, str]] = {
-    "gmail": ("gmail", "messages"),
-    "googlecalendar": ("gcal", "events"),
-    "gcal": ("gcal", "events"),
-    "googledrive": ("gdrive", "files"),
-    "gdrive": ("gdrive", "files"),
-    "googledocs": ("googledocs", "documents"),
-    "gdocs": ("googledocs", "documents"),
-    "googlesheets": ("googlesheets", "spreadsheets"),
-    "gsheets": ("googlesheets", "spreadsheets"),
-    "slack": ("slack", "messages"),
-    "github": ("github", "issues"),
-    "calendly": ("calendly", "events"),
-    "stripe": ("stripe", "invoices"),
-    "youtube": ("youtube", "subscriptions"),
-    "linkedin": ("linkedin", "profile"),
-}
-
-_BASE_RAW_SOURCES: tuple[tuple[str, str], ...] = (
-    ("gmail", "messages"),
-    ("gcal", "events"),
-)
+# Transport guards, not behavior: sized so the token budgets bind first
+# (~25 tokens is the smallest realistic projection, so 1500 rows ≥ 30k budget
+# and 5000 growth rows would estimate far past 80k → in-place reset anyway).
+# If one ever clips, truncation still yields a deterministic, correct log.
+_HISTORY_FETCH_LIMIT = 1500
+_GROWTH_FETCH_LIMIT = 5000
 
 
-@dataclass(frozen=True)
-class GenerationContextWindow:
-    since: datetime
-    until: datetime
-    reason: str
-
-    def as_dict(self) -> dict[str, str]:
-        return {
-            "since": self.since.isoformat(),
-            "until": self.until.isoformat(),
-            "reason": self.reason,
-        }
-
-
-def _aware_utc(value: datetime) -> datetime:
-    if value.tzinfo is None or value.utcoffset() is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
-
-
-def compute_context_window(
-    *,
-    now: datetime,
-    last_success_at: datetime | None = None,
-    min_hours: int = _MIN_CONTEXT_HOURS,
-) -> GenerationContextWindow:
-    """Cover at least the past 24h, and extend to the previous cycle if older."""
-    until = _aware_utc(now)
-    min_since = until - timedelta(hours=min_hours)
-    if last_success_at is None:
-        return GenerationContextWindow(since=min_since, until=until, reason="min_24h")
-
-    last = _aware_utc(last_success_at)
-    if last < min_since:
-        return GenerationContextWindow(since=last, until=until, reason="last_success")
-    return GenerationContextWindow(since=min_since, until=until, reason="min_24h")
-
-
-def explicit_context_window(
-    *,
-    since: datetime,
-    until: datetime,
-) -> GenerationContextWindow:
-    return GenerationContextWindow(
-        since=_aware_utc(since),
-        until=_aware_utc(until),
-        reason="explicit",
-    )
+def _estimate_tokens(text: str) -> int:
+    """Deterministic cheap estimate (chars/3). Biased HIGH for English JSON
+    (~3.5-4 chars/token), i.e. the real prompt runs *smaller* than budgeted —
+    errors land on the safe side. Real usage is logged per tick for
+    calibration."""
+    return len(text) // 3
 
 
 def _items(payload: Any) -> list[dict[str, Any]]:
@@ -106,201 +86,213 @@ def _items(payload: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _error_payload(exc: BaseException) -> dict[str, str]:
-    return {"_error": f"{type(exc).__name__}: {exc}"}
-
-
-def _profile_row(payload: Any) -> dict[str, Any]:
-    if isinstance(payload, dict) and isinstance(payload.get("profile"), dict):
-        return payload["profile"]
-    return payload if isinstance(payload, dict) else {}
-
-
 async def _safe_get(path: str, **params: Any) -> Any:
     try:
         return await http_client.get(path, **params)
     except Exception as e:  # noqa: BLE001
         logger.warning("generation context GET failed path=%s error=%s", path, e)
-        return _error_payload(e)
+        return {"_error": f"{type(e).__name__}: {e}"}
 
 
-async def _paged_items(
-    path: str,
-    *,
-    page_size: int = _DEFAULT_PAGE_SIZE,
-    **params: Any,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    offset = int(params.pop("offset", 0) or 0)
-    pages = 0
-    error: str | None = None
-    while pages < _MAX_PAGES:
-        payload = await _safe_get(
-            path,
-            **params,
-            limit=page_size,
-            offset=offset,
-        )
-        if isinstance(payload, dict) and (payload.get("error") or payload.get("_error")):
-            error = str(payload.get("detail") or payload.get("error") or payload.get("_error"))
-            break
-        page = _items(payload)
-        rows.extend(page)
-        pages += 1
-        if len(page) < page_size:
-            break
-        offset += page_size
-    return rows, {
-        "count": len(rows),
-        "pages": pages,
-        "pageSize": page_size,
-        "truncated": pages >= _MAX_PAGES,
-        "error": error,
+def _log_event(e: dict[str, Any]) -> dict[str, Any]:
+    """Narrow, deterministic projection of one arrival for the log.
+
+    Keeps the citation toolkit and the `supersedes` pointer (append-only log
+    can't delete the old version — the pointer is how the model knows a later
+    arrival REPLACES an earlier one). agent_decision arrivals additionally
+    keep kind/card_id/related_event_ids — the agent's own past proposals ARE
+    the dedupe basis (no separate recent-proposals pull; note this memory is
+    bounded: a reset truncates old proposals with everything else, so a rare
+    re-proposal after reset is accepted by design). The full structured
+    payload stays out (a whole connector payload once blew past the
+    summarization threshold and provisioned a Daytona sandbox for nothing)."""
+    raw_structured = e.get("structured")
+    structured = raw_structured if isinstance(raw_structured, dict) else {}
+    body = e.get("body")
+    projected: dict[str, Any] = {
+        "id": e.get("id"),
+        "eventType": e.get("eventType"),
+        "source": e.get("source"),
+        "toolkit": structured.get("toolkit"),
+        "occurredAt": e.get("occurredAt"),
+        "endAt": e.get("endAt"),
+        "title": e.get("title"),
+        "body": body[:_BODY_CAP] if isinstance(body, str) else None,
+        "supersedes": e.get("supersedesId"),
     }
+    if e.get("eventType") == "agent_decision":
+        projected["kind"] = structured.get("kind")
+        projected["cardId"] = structured.get("card_id")
+        projected["relatedEventIds"] = structured.get("related_event_ids")
+    return {k: v for k, v in projected.items() if v is not None}
 
 
-def _connection_toolkit(connection: dict[str, Any]) -> str | None:
-    raw = connection.get("toolkit")
-    if isinstance(raw, dict):
-        raw = raw.get("slug") or raw.get("name")
-    if raw is None:
-        raw = connection.get("toolkit_slug") or connection.get("toolkitSlug")
-    return str(raw).strip().lower() if raw else None
+def _render_block(events: list[dict[str, Any]]) -> str:
+    """One log block → deterministic JSON text (sort_keys + compact — JSON key
+    order is part of the byte-identity contract)."""
+    return json.dumps(events, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def _raw_sources_from_connections(connections: list[dict[str, Any]]) -> list[tuple[str, str]]:
-    sources = list(_BASE_RAW_SOURCES)
-    seen = set(sources)
-    for connection in connections:
-        # Server-provided rawSources covers generic + fanout toolkits
-        # (googlesuper expands to gmail/gcal/gdrive); static map stays
-        # as fallback for payloads without it.
-        connection_sources: list[tuple[str, str]] = []
-        raw_sources = connection.get("rawSources")
-        if isinstance(raw_sources, list):
-            for raw_source in raw_sources:
-                if not isinstance(raw_source, dict):
-                    continue
-                tk, ent = raw_source.get("toolkit"), raw_source.get("entity")
-                if isinstance(tk, str) and isinstance(ent, str) and tk and ent:
-                    connection_sources.append((tk, ent))
-        if not connection_sources and not isinstance(raw_sources, list):
-            toolkit_slug = _connection_toolkit(connection)
-            fallback = _RAW_SOURCE_BY_TOOLKIT.get(toolkit_slug or "")
-            if fallback is not None:
-                connection_sources.append(fallback)
-        for source in connection_sources:
-            if source in seen:
-                continue
-            seen.add(source)
-            sources.append(source)
-    return sources
+def _event_tokens(projected: dict[str, Any]) -> int:
+    return _estimate_tokens(_render_block([projected]))
 
 
-async def build_generation_context(
+def truncate_history(
+    projected: list[dict[str, Any]],
     *,
-    now: datetime,
-    context_since: datetime | None = None,
-    context_until: datetime | None = None,
-    last_success_at: datetime | None = None,
-    raw_page_size: int = _DEFAULT_PAGE_SIZE,
-    page_size: int = _DEFAULT_PAGE_SIZE,
-) -> dict[str, Any]:
-    until = context_until or now
-    window = (
-        explicit_context_window(since=context_since, until=until)
-        if context_since is not None
-        else compute_context_window(now=until, last_success_at=last_success_at)
-    )
-    since_iso = window.since.isoformat()
-    until_iso = window.until.isoformat()
+    budget: int = INITIAL_LOG_TOKEN_BUDGET,
+) -> list[dict[str, Any]]:
+    """Keep the largest SUFFIX (newest arrivals) whose estimated tokens stay
+    within budget — the first event that would overflow is excluded.
 
-    (
-        profile,
-        memory_payload,
-        signals,
-        cards_recent,
-        feedback,
-        world,
-        preferences,
-        connections_payload,
-    ) = await asyncio.gather(
-        _safe_get("/api/agent/profile/get"),
-        _safe_get("/api/agent/memory/list", minQuality=0.7, limit=200, offset=0),
-        _paged_items(
-            "/api/agent/signals/recent",
-            status="all",
-            since=since_iso,
-            until=until_iso,
-            includePayload=True,
-            page_size=page_size,
-        ),
-        _safe_get("/api/agent/cards/recent", limit=30),
-        _safe_get("/api/agent/feedback/list", since=since_iso, limit=200),
+    Deterministic on a closed set (fixed projection + fixed estimator + fixed
+    rule), which is what keeps the history blocks byte-identical across
+    ticks."""
+    kept: list[dict[str, Any]] = []
+    total = 0
+    for event in reversed(projected):
+        cost = _event_tokens(event)
+        if total + cost > budget:
+            break
+        kept.append(event)
+        total += cost
+    kept.reverse()
+    return kept
+
+
+def chunk_log(
+    projected: list[dict[str, Any]],
+    *,
+    block_size: int = BLOCK_SIZE_EVENTS,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Split the arrival-ordered projections into (full blocks, tail).
+
+    Full blocks are rendered text (cache-stable); the tail (< block_size most
+    recent arrivals) rides in the tick message and is re-sent every tick —
+    the price of keeping full blocks immutable."""
+    full_count = (len(projected) // block_size) * block_size
+    blocks = [
+        _render_block(projected[i : i + block_size]) for i in range(0, full_count, block_size)
+    ]
+    return blocks, projected[full_count:]
+
+
+def _view_line(e: dict[str, Any]) -> str:
+    """One upcoming item, one line: time span + type + title + id anchor."""
+    when = str(e.get("occurredAt") or "?")
+    end = e.get("endAt")
+    span = f"{when} → {end}" if end else when
+    return f"- {span} [{e.get('eventType')}] {e.get('title')} (id={e.get('id')})"
+
+
+async def _fetch_log_segments(
+    *, anchor: datetime, now: datetime
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """(history projections, growth projections), both in arrival order.
+
+    History wants the NEWEST rows of its window (newestFirst — a plain ASC
+    limit would keep the oldest and discard exactly the rows that matter);
+    growth re-reads its full range every tick."""
+    log_since = anchor - timedelta(days=LOG_LOOKBACK_DAYS)
+    history_payload, growth_payload = await asyncio.gather(
         _safe_get(
-            "/api/agent/world/recent", status="open", since=since_iso, until=until_iso, limit=200
+            "/api/agent/events/search",
+            recordedSince=log_since.isoformat(),
+            recordedUntil=anchor.isoformat(),
+            arrivalsLimit=_HISTORY_FETCH_LIMIT,
+            newestFirst="true",
         ),
-        _safe_get("/api/agent/preferences/list", status="active", limit=200),
-        _safe_get("/api/agent/composio/connections"),
+        _safe_get(
+            "/api/agent/events/search",
+            recordedSince=anchor.isoformat(),
+            recordedUntil=now.isoformat(),
+            arrivalsLimit=_GROWTH_FETCH_LIMIT,
+        ),
     )
+    history = [_log_event(e) for e in _items(history_payload)]
+    growth = [_log_event(e) for e in _items(growth_payload)]
+    return history, growth
 
-    signal_rows, signal_stats = signals
-    profile_payload = profile
-    profile = _profile_row(profile_payload)
-    goals = _items(profile_payload.get("goals") if isinstance(profile_payload, dict) else [])
-    connections = _items(connections_payload)
-    raw_sources = _raw_sources_from_connections(connections)
-    raw_results = await asyncio.gather(
-        *(
-            _paged_items(
-                f"/api/agent/raw/{toolkit}/{entity}",
-                since=since_iso,
-                until=until_iso,
-                page_size=raw_page_size,
-            )
-            for toolkit, entity in raw_sources
-        )
+
+async def build_tick_context(
+    *,
+    anchor: datetime,
+    now: datetime,
+) -> dict[str, Any]:
+    """Everything one tick needs, rebuilt deterministically from (anchor, now):
+    cache-stable full log blocks + the volatile tail + the future view +
+    `effective_anchor` (== anchor normally; == now after an in-place reset —
+    the caller must persist it)."""
+    view_until = now + timedelta(days=FUTURE_VIEW_DAYS)
+    (history, growth), future_payload = await asyncio.gather(
+        _fetch_log_segments(anchor=anchor, now=now),
+        _safe_get(
+            "/api/agent/events/search",
+            since=now.isoformat(),
+            until=view_until.isoformat(),
+            status="active",
+            limit=100,
+        ),
     )
-    connected_raw: dict[str, list[dict[str, Any]]] = {}
-    raw_stats: dict[str, dict[str, Any]] = {}
-    for (toolkit, entity), (rows, stats) in zip(raw_sources, raw_results, strict=True):
-        key = f"{toolkit}/{entity}"
-        connected_raw[key] = rows
-        raw_stats[key] = stats
+    history = truncate_history(history)
+    log = history + growth
 
-    context = {
-        "context_window": window.as_dict(),
-        "profile": profile,
-        "goals": goals,
-        "memory": _items(memory_payload),
-        "signals": signal_rows,
-        "gmail": connected_raw.get("gmail/messages", []),
-        "gcal": connected_raw.get("gcal/events", []),
-        "cards_recent": _items(cards_recent),
-        "feedback": _items(feedback),
-        "world": _items(world),
-        "preferences": _items(preferences),
-        "connections": connections,
-        "connected_raw": connected_raw,
-        "ambient_signal_details": [],
-        "context_stats": {
-            "window": window.as_dict(),
-            "signals": signal_stats,
-            "connected_raw": raw_stats,
-            "goals": {"count": len(goals)},
-            "memory": {"count": len(_items(memory_payload))},
-            "cards_recent": {"count": len(_items(cards_recent))},
-            "feedback": {"count": len(_items(feedback))},
-            "world": {"count": len(_items(world))},
-            "preferences": {"count": len(_items(preferences))},
+    effective_anchor = anchor
+    was_reset = False
+    log_tokens = _estimate_tokens(_render_block(log)) if log else 0
+    if log_tokens > LOG_TOKEN_BUDGET:
+        # In-place reset (design §4.2): the log outgrew its budget — restart
+        # the line from now. Re-FETCH (not just re-slice): the growth guard
+        # may have clipped the newest rows, and a fresh newestFirst query is
+        # exactly what next tick's history segment will see, so the cache
+        # entry this reset build writes gets hit immediately.
+        was_reset = True
+        effective_anchor = now
+        history, growth = await _fetch_log_segments(anchor=now, now=now)
+        history = truncate_history(history)
+        log = history + growth  # growth spans (now, now] — empty by construction
+        log_tokens = _estimate_tokens(_render_block(log)) if log else 0
+        # ≤ INITIAL budget < LOG budget by construction — no second reset.
+
+    log_blocks, tail_events = chunk_log(log)
+
+    # The API returns occurred_at DESC (farthest first) — re-sort soonest-first
+    # and cap; the view must read as "what's next".
+    upcoming = sorted(_items(future_payload), key=lambda e: str(e.get("occurredAt") or ""))[
+        :FUTURE_VIEW_LIMIT
+    ]
+    future_view = [_view_line(e) for e in upcoming]
+
+    logger.info(
+        "tick context built anchor=%s effective=%s reset=%s history=%d growth=%d "
+        "log_tokens~%d blocks=%d tail=%d upcoming=%d",
+        anchor.isoformat(),
+        effective_anchor.isoformat(),
+        was_reset,
+        len(history),
+        len(growth),
+        log_tokens,
+        len(log_blocks),
+        len(tail_events),
+        len(future_view),
+    )
+    return {
+        "log_blocks": log_blocks,
+        "tail_events": tail_events,
+        "future_view": future_view,
+        "effective_anchor": effective_anchor,
+        "stats": {
+            "history": len(history),
+            "growth": len(growth),
+            "log_tokens_estimate": log_tokens,
+            "was_reset": was_reset,
+            "full_blocks": len(log_blocks),
+            "tail": len(tail_events),
+            "upcoming": len(future_view),
         },
     }
-    logger.info(
-        "generation context built window=%s..%s signals=%d raw_rows=%d raw_sources=%d",
-        since_iso,
-        until_iso,
-        len(signal_rows),
-        sum(len(rows) for rows in connected_raw.values()),
-        len(connected_raw),
-    )
-    return context
+
+
+def default_anchor(now: datetime | None = None) -> datetime:
+    """A fresh anchor (reset semantics): the log restarts from now."""
+    return now or datetime.now(UTC)

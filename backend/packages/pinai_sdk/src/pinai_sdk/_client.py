@@ -3,17 +3,14 @@
 Single module-level `client` singleton — sandbox scripts do:
 
     from pinai_sdk import client
-    rows = await client.memory.list(min_quality=0.7, limit=30)
+    events = await client.events.search(q="market news", limit=20)
 
 Public surface (one-liner per method, full signatures in the class
 bodies below):
 
-    client.memory.list / search / get / add / archive / supersede
-    client.signals.recent / get / consume / add (alias: ingest)
-    client.profile.get / upsert / merge_preference / upsert_goal
-    client.cards.recent
+    client.events.search / append / curate         ← L1 timeline (read + write)
+    client.user_strings.get_all / edit             ← L2 portrait
     client.feedback.list / log
-    client.world.recent / score / consume / reference
     client.raw.list(toolkit, entity, ...)         ← canonical raw access
     client.raw.gmail.recent / client.raw.gcal.today  ← convenience
 
@@ -47,8 +44,10 @@ SUPPORTED_RAW_SOURCES: dict[str, tuple[str, ...]] = {
     "stripe": ("invoices",),
     "youtube": ("subscriptions",),
     "linkedin": ("profile",),
-    # Device (mobile sync)
-    "device": ("apps", "contacts", "health"),
+    # Device (mobile sync) — snapshots + the ambient firehose. utterance /
+    # transcript_window are the semantic-rollup sources (projector skips them
+    # 1→1; evolve reads them via raw.list to collapse into episode events, §4.2).
+    "device": ("apps", "contacts", "health", "utterance", "transcript_window"),
 }
 
 
@@ -73,280 +72,6 @@ class _Endpoint:
 
     async def _post(self, path: str, body: dict[str, Any]) -> Any:
         return await self._parent._post(f"{self._prefix}{path}", body)
-
-
-class Memory(_Endpoint):
-    def __init__(self, parent: _Client) -> None:
-        super().__init__(parent, "/api/agent/memory")
-
-    async def list(
-        self,
-        *,
-        min_quality: float = 0.7,
-        subject: str | None = None,
-        subject_prefix: str | None = None,
-        since: datetime | str | None = None,
-        limit: int = 30,
-        offset: int = 0,
-        order_by: str = "created_at_desc",
-    ) -> list[dict[str, Any]]:
-        payload = await self._get(
-            "/list",
-            minQuality=min_quality,
-            subject=subject,
-            subjectPrefix=subject_prefix,
-            since=_iso(since) if since is not None else None,
-            limit=limit,
-            offset=offset,
-            orderBy=order_by,
-        )
-        return payload.get("items", []) if isinstance(payload, dict) else []
-
-    async def search(
-        self,
-        *,
-        q: str,
-        min_quality: float | None = None,
-        limit: int = 10,
-    ) -> list[dict[str, Any]]:
-        """Semantic search via pgvector. Falls back via 503 if the
-        embedding service is down — caller can switch to .list with
-        `subject_prefix` for keyword filtering."""
-        payload = await self._get(
-            "/search",
-            q=q,
-            minQuality=min_quality,
-            limit=limit,
-        )
-        return payload.get("items", []) if isinstance(payload, dict) else []
-
-    async def get(self, id: str) -> dict[str, Any] | None:
-        return await self._get(f"/get/{id}")
-
-    async def add(
-        self,
-        *,
-        text: str,
-        source: str = "agent",
-        subject: str | None = None,
-        quality: float = 0.6,
-        confidence: float = 0.5,
-        source_run_id: str | None = None,
-        tags: list[str] | None = None,
-        id: str | None = None,
-    ) -> dict[str, Any]:
-        return await self._post(
-            "/add",
-            {
-                "id": id,
-                "text": text,
-                "source": source,
-                "subject": subject,
-                "quality": quality,
-                "confidence": confidence,
-                "sourceRunId": source_run_id,
-                "tags": tags or [],
-            },
-        )
-
-    async def archive(self, id: str) -> dict[str, Any] | None:
-        """Mark a memory archived. Returns the archived row, or None if
-        the id was already archived / missing."""
-        return await self._post(f"/archive/{id}", {})
-
-    async def supersede(
-        self,
-        *,
-        old_id: str,
-        new_id: str,
-    ) -> dict[str, Any] | None:
-        """Atomically replace old_id with new_id (used by dream/crystallize
-        when restating a fact more accurately). Prefer one supersede over
-        two archives + an add."""
-        return await self._post(
-            "/supersede",
-            {"oldId": old_id, "newId": new_id},
-        )
-
-
-class Signals(_Endpoint):
-    def __init__(self, parent: _Client) -> None:
-        super().__init__(parent, "/api/agent/signals")
-
-    async def kinds(
-        self,
-        *,
-        status: str = "all",
-        hours: int | None = None,
-    ) -> list[dict[str, Any]]:
-        """List distinct signal `kind`s for the current user, with count +
-        latest preview. Use to discover what data sources exist before
-        drilling with `.recent(kind=...)`. status ∈ {open, consumed,
-        archived, all}; default 'all' so already-consumed kinds still show
-        up. Returns items shaped {kind, count, latestAt, latestTitle,
-        latestSummaryPreview}, ordered by latestAt DESC."""
-        payload = await self._get("/kinds", status=status, hours=hours)
-        return payload.get("items", []) if isinstance(payload, dict) else []
-
-    async def recent(
-        self,
-        *,
-        status: str = "open",
-        kind: str | None = None,
-        hours: int | None = 24,
-        min_salience: float | None = None,
-        limit: int = 30,
-        include_payload: bool = False,
-    ) -> list[dict[str, Any]]:
-        """status ∈ {open, consumed, archived, all}. hours filters by
-        occurred_at window (server-side translation to since)."""
-        payload = await self._get(
-            "/recent",
-            status=status,
-            kind=kind,
-            hours=hours,
-            minSalience=min_salience,
-            limit=limit,
-            includePayload=include_payload,
-        )
-        return payload.get("items", []) if isinstance(payload, dict) else []
-
-    async def get(self, id: str) -> dict[str, Any] | None:
-        """Full payload for one signal — drill-down from .recent summary."""
-        return await self._get(f"/get/{id}")
-
-    async def consume(self, *, id: str, run_id: str) -> None:
-        await self._post("/consume", {"id": id, "runId": run_id})
-
-    async def add(
-        self,
-        *,
-        kind: str,
-        title: str,
-        summary: str = "",
-        salience: float = 0.0,
-        confidence: float = 0.0,
-        dedupe_key: str | None = None,
-        subject: str | None = None,
-        source: str = "agent",
-        payload: dict[str, Any] | None = None,
-        occurred_at: datetime | str | None = None,
-        id: str | None = None,
-    ) -> dict[str, Any]:
-        """Create a new personal signal (ingest into the open queue).
-        Use connector-natural keys for dedupe_key (gmail.<thread_id>,
-        gcal.<event_id>) to avoid duplicates across evolve runs."""
-        body: dict[str, Any] = {
-            "kind": kind,
-            "title": title,
-            "summary": summary,
-            "salience": salience,
-            "confidence": confidence,
-            "source": source,
-        }
-        if dedupe_key is not None:
-            body["dedupeKey"] = dedupe_key
-        if subject is not None:
-            body["subject"] = subject
-        if payload is not None:
-            body["payload"] = payload
-        if occurred_at is not None:
-            body["occurredAt"] = _iso(occurred_at)
-        if id is not None:
-            body["id"] = id
-        return await self._post("/ingest", body)
-
-    async def ingest(self, **fields: Any) -> dict[str, Any]:
-        """Backward-compatible alias for `add`. Prefer `add` — its
-        signature is self-documenting."""
-        return await self._post("/ingest", fields)
-
-
-class Profile(_Endpoint):
-    def __init__(self, parent: _Client) -> None:
-        super().__init__(parent, "/api/agent/profile")
-
-    async def get(self) -> dict[str, Any]:
-        """Returns `{"profile": {...} | None, "goals": [...]}` — both
-        the persona row and active goals in one call."""
-        return await self._get("/get")
-
-    async def upsert(
-        self,
-        *,
-        display_name: str | None = None,
-        locale: str | None = None,
-        timezone: str | None = None,
-        summary: str | None = None,
-        facts: dict[str, Any] | None = None,
-        preferences: dict[str, Any] | None = None,
-        constraints: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Partial upsert — pass only fields you want to change. Server
-        COALESCEs missing fields against the existing row, so a single-
-        field call doesn't clobber the rest. JSONB buckets (facts /
-        preferences / constraints) are *replaced wholesale* — read-merge-
-        write client-side if you want to preserve sibling keys."""
-        return await self._post(
-            "/upsert",
-            {
-                "displayName": display_name,
-                "locale": locale,
-                "timezone": timezone,
-                "summary": summary,
-                "facts": facts,
-                "preferences": preferences,
-                "constraints": constraints,
-            },
-        )
-
-    async def upsert_goal(
-        self,
-        *,
-        key: str,
-        title: str,
-        id: str | None = None,
-        priority: str = "medium",
-        status: str = "active",
-        summary: str | None = None,
-    ) -> dict[str, Any]:
-        """Insert or update a long-term named goal. Conflict-on-`key`,
-        so passing the same `key` twice updates in place. Use a stable
-        slug (`'sub3-marathon'`, `'staff-promo-2026'`)."""
-        return await self._post(
-            "/goals/upsert",
-            {
-                "id": id,
-                "key": key,
-                "title": title,
-                "priority": priority,
-                "status": status,
-                "summary": summary,
-            },
-        )
-
-    async def merge_preference(self, *, key: str, value: str) -> dict[str, Any]:
-        """Merge one durable preference into pai_profile.preferences.
-        Safer than `upsert(preferences=...)` because it preserves sibling
-        keys server-side."""
-        return await self._post(
-            "/preferences/merge",
-            {
-                "key": key,
-                "value": value,
-            },
-        )
-
-
-class Cards(_Endpoint):
-    def __init__(self, parent: _Client) -> None:
-        super().__init__(parent, "/api/agent/cards")
-
-    async def recent(self, *, limit: int = 30) -> list[dict[str, Any]]:
-        """Recent cards across pipeline runs — used by generator to avoid
-        repeating cards already pushed in prior runs."""
-        payload = await self._get("/recent", limit=limit)
-        return payload.get("items", []) if isinstance(payload, dict) else []
 
 
 class Feedback(_Endpoint):
@@ -405,75 +130,15 @@ class Feedback(_Endpoint):
         )
 
 
-class World(_Endpoint):
-    def __init__(self, parent: _Client) -> None:
-        super().__init__(parent, "/api/agent/world")
-
-    async def recent(
-        self,
-        *,
-        status: str = "open",
-        provider: str | None = None,
-        hours: int | None = None,
-        min_salience: float | None = None,
-        limit: int = 30,
-    ) -> list[dict[str, Any]]:
-        payload = await self._get(
-            "/recent",
-            status=status,
-            provider=provider,
-            hours=hours,
-            minSalience=min_salience,
-            limit=limit,
-        )
-        return payload.get("items", []) if isinstance(payload, dict) else []
-
-    async def search(
-        self,
-        *,
-        q: str,
-        limit: int = 10,
-        status: str = "open",
-    ) -> list[dict[str, Any]]:
-        """Hybrid keyword + semantic search. Server runs tsvector full-text
-        and pgvector cosine in parallel, fuses by RRF (k=60). Use when
-        you need world-news context for a SPECIFIC topic — `recent()` is
-        for the "what's salient lately" pull."""
-        payload = await self._get("/search", q=q, limit=limit, status=status)
-        return payload.get("items", []) if isinstance(payload, dict) else []
-
-    async def score(
-        self,
-        *,
-        id: str,
-        salience: float,
-        scored_reason: str | None = None,
-        status: str = "open",
-    ) -> None:
-        await self._post(
-            "/score",
-            {
-                "id": id,
-                "salience": salience,
-                "scoredReason": scored_reason,
-                "status": status,
-            },
-        )
-
-    async def consume(self, *, id: str, run_id: str) -> None:
-        await self._post("/consume", {"id": id, "runId": run_id})
-
-    async def reference(self, *, id: str, run_id: str) -> None:
-        await self._post("/reference", {"id": id, "runId": run_id})
-
-
 class Raw:
     """Generic raw-row access. `list(toolkit, entity, ...)` is the
-    canonical entry — typed sources are listed in `SUPPORTED_RAW_SOURCES`;
-    any other connected toolkit reads the generic pai_raw_events store
-    (rows carry title/snippet + the full source item in `payload`). The
-    `gmail` / `gcal` properties exist as convenience wrappers; everything
-    else goes through `list()`.
+    canonical entry — known sources are listed in `SUPPORTED_RAW_SOURCES`;
+    any other connected toolkit reads through the same call (rows carry
+    title/snippet + the full source item in `payload`). The server routes
+    each read to its L0 domain table (apps connectors → pai_raw_apps, on-device
+    data via toolkit="device" → pai_raw_device); the SDK surface is unchanged
+    by that split. The `gmail` / `gcal` properties exist as convenience
+    wrappers; everything else goes through `list()`.
 
     Important: there is NO `__getattr__` magic here. `client.raw.slack`
     does NOT exist — use `client.raw.list("slack", "messages", ...)`.
@@ -497,8 +162,8 @@ class Raw:
         offset: int = 0,
         dedupe_key: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Read recent rows from a raw source (typed table or the
-        generic event store — the server routes by toolkit).
+        """Read recent rows from a raw source (the server routes by toolkit
+        to its L0 domain table — apps connectors or device).
 
         Time window: pass `hours=N` for the last N hours, OR `since=` /
         `until=` for an absolute range. `hours` is translated to
@@ -509,10 +174,9 @@ class Raw:
         Returns rows ordered by `occurred_at DESC`, capped at `limit`.
         Use `offset` for deterministic paging.
         """
-        # Typed toolkits get early entity validation (clearer error than
-        # the server's). Unknown toolkits pass through — they read the
-        # generic pai_raw_events store server-side; the server is the
-        # enforcer either way.
+        # Known toolkits get early entity validation (clearer error than
+        # the server's). Unknown toolkits pass through — the server routes
+        # them to pai_raw_apps and is the enforcer either way.
         if toolkit in SUPPORTED_RAW_SOURCES and entity not in SUPPORTED_RAW_SOURCES[toolkit]:
             msg = (
                 f"unknown raw entity for {toolkit!r}: {entity!r}. "
@@ -672,74 +336,13 @@ class Composio(_Endpoint):
         return []
 
 
-class Preferences(_Endpoint):
-    """High-weight user preferences stated in plain words in main chat.
-    Read by generation context collection so the planner can treat the
-    most recent / highest-weight ones as near-hard constraints. Writes go
-    through the chat agent's native tool, not usually the sandbox — but
-    `add` / `supersede` are here for code-mode agents that distil a
-    preference."""
-
-    def __init__(self, parent: _Client) -> None:
-        super().__init__(parent, "/api/agent/preferences")
-
-    async def list(
-        self,
-        *,
-        status: str = "active",
-        scope: str | None = None,
-        limit: int = 50,
-    ) -> list[dict[str, Any]]:
-        """List preferences, newest first. status ∈ {active, superseded,
-        archived}; default 'active' is what generation should read."""
-        payload = await self._get("/list", status=status, scope=scope, limit=limit)
-        return payload.get("items", []) if isinstance(payload, dict) else []
-
-    async def add(
-        self,
-        *,
-        statement: str,
-        scope: str,
-        polarity: str,
-        weight: float | None = None,
-        confidence: float | None = None,
-        durability: str = "persistent",
-        expires_at: datetime | str | None = None,
-        evidence: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Persist a stated preference. `source` is stamped server-side
-        from the run principal — you cannot set it here."""
-        return await self._post(
-            "/add",
-            {
-                "statement": statement,
-                "scope": scope,
-                "polarity": polarity,
-                "weight": weight,
-                "confidence": confidence,
-                "durability": durability,
-                "expiresAt": _iso(expires_at) if expires_at is not None else None,
-                "evidence": evidence or {},
-            },
-        )
-
-    async def supersede(
-        self,
-        *,
-        old_id: str,
-        new_id: str,
-    ) -> dict[str, Any] | None:
-        """Mark old_id superseded by new_id (new_id must already be active)."""
-        return await self._post("/supersede", {"oldId": old_id, "newId": new_id})
-
-
 class Settings(_Endpoint):
     """User settings the agent may change from chat. Language is the only
     one wired today — and it MUST flow through here (not a preference row)
     so it takes effect deterministically on the next generation."""
 
     def __init__(self, parent: _Client) -> None:
-        super().__init__(parent, "/api/agent/profile/settings")
+        super().__init__(parent, "/api/agent/settings")
 
     async def set_generation_language(self, language: str) -> dict[str, Any]:
         """Flip generation_language and re-stamp the auto-generate schedule
@@ -751,18 +354,111 @@ class Settings(_Endpoint):
         )
 
 
+class Events(_Endpoint):
+    """L1 event stream — the unified retrieval + append surface (supersedes
+    memory/signals/raw reads). search is semantic when `q` is given, else a
+    recency/type window; append records one event (idempotent on dedupe_key)."""
+
+    def __init__(self, parent: _Client) -> None:
+        super().__init__(parent, "/api/agent/events")
+
+    async def source(self, event_id: str) -> dict[str, Any]:
+        """Verbatim L0 content behind an event (email body / calendar item /
+        news article). Supersede-aware: a stale id resolves to the current
+        revision server-side; events without raw archives return source=None."""
+        return await self._get(f"/{event_id}/source")
+
+    async def search(
+        self,
+        *,
+        q: str | None = None,
+        event_type: str | None = None,
+        since: datetime | str | None = None,
+        until: datetime | str | None = None,
+        status: str = "active",
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        payload = await self._get(
+            "/search",
+            q=q,
+            eventType=event_type,
+            since=_iso(since) if since is not None else None,
+            until=_iso(until) if until is not None else None,
+            status=status,
+            limit=limit,
+        )
+        return payload.get("items", []) if isinstance(payload, dict) else []
+
+    async def append(
+        self,
+        *,
+        event_type: str,
+        title: str,
+        # Must be in the api endpoint's _AGENT_WRITABLE_SOURCES allowlist
+        # ({pinai_chat, agent_action, device}) or /api/agent/events/append 422s.
+        # "agent_action" = the agent authored this event itself.
+        source: str = "agent_action",
+        body: str | None = None,
+        structured: dict[str, Any] | None = None,
+        occurred_at: datetime | str | None = None,
+        end_at: datetime | str | None = None,
+        dedupe_key: str | None = None,
+    ) -> dict[str, Any]:
+        return await self._post(
+            "/append",
+            {
+                "source": source,
+                "eventType": event_type,
+                "title": title,
+                "body": body,
+                "structured": structured,
+                "occurredAt": _iso(occurred_at) if occurred_at is not None else None,
+                "endAt": _iso(end_at) if end_at is not None else None,
+                "dedupeKey": dedupe_key,
+            },
+        )
+
+    async def curate(self, *, id: str) -> dict[str, Any]:
+        """Curation write — mark an event curated (evolve has processed it,
+        stamping curated_at so it leaves the uncurated queue). No status/
+        importance: noise is ordered down by the objective score, not flagged."""
+        return await self._post("/curate", {"id": id})
+
+
+class UserStrings(_Endpoint):
+    """L2 profile portrait — read the five-slot portrait + memory_edit. All five
+    slots are agent-maintained (the user only reads them):
+    IDENTITY/SOUL/TOOLS (the agent's persona) + USER/GOALS (the user
+    view). The AGENTS safety constant is not a slot."""
+
+    def __init__(self, parent: _Client) -> None:
+        super().__init__(parent, "/api/agent/user-strings")
+
+    async def get_all(self) -> dict[str, Any]:
+        payload = await self._get("/")
+        return payload.get("slots", {}) if isinstance(payload, dict) else {}
+
+    async def edit(
+        self,
+        *,
+        slot: str,
+        operations: list[dict[str, Any]],
+        evidence_event_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {"slot": slot, "operations": operations}
+        if evidence_event_ids:
+            body["evidenceEventIds"] = evidence_event_ids
+        return await self._post("/edit", body)
+
+
 class _Client:
     def __init__(self) -> None:
         self._client: httpx.AsyncClient | None = None
-        self.memory = Memory(self)
-        self.signals = Signals(self)
-        self.profile = Profile(self)
-        self.cards = Cards(self)
+        self.events = Events(self)
+        self.user_strings = UserStrings(self)
         self.feedback = Feedback(self)
-        self.world = World(self)
         self.raw = Raw(self)
         self.composio = Composio(self)
-        self.preferences = Preferences(self)
         self.settings = Settings(self)
 
     def _ensure_client(self) -> httpx.AsyncClient:
@@ -812,53 +508,25 @@ client = _Client()
 # in evolve / dream / generator traces. If you change the public surface
 # above, update this string AND the prompt-side embedding.
 SDK_CHEAT_SHEET = """\
-client.memory
-  .list(*, min_quality=0.7, subject=None, subject_prefix=None,
-        since=None, limit=30, offset=0, order_by="created_at_desc") -> list
-  .search(*, q, min_quality=None, limit=10) -> list
-  .get(id) -> dict | None
-  .add(*, text, source="agent", subject=None, quality=0.6,
-       confidence=0.5, source_run_id=None, tags=None, id=None) -> dict
-  .archive(id) -> dict | None
-  .supersede(*, old_id, new_id) -> dict | None
+client.events                                        # L1 event stream — unified retrieval + append
+  .search(*, q=None, event_type=None, since=None,    # q → semantic; no q → recency/type window
+          until=None, status="active", limit=20) -> list  # status: active|pending (pending = evolve's queue)
+  .append(*, event_type, title, source="agent_action",  # idempotent on dedupe_key; source must be in {pinai_chat, agent_action, device}
+          body=None, structured=None, occurred_at=None,
+          end_at=None, dedupe_key=None) -> dict
+  .curate(*, id) -> dict                              # mark curated — evolve processed it (no status/importance)
 
-client.signals
-  .kinds(*, status="all", hours=None) -> list       # discover what kinds exist
-                                                     # → [{kind, count, latestAt, latestTitle, latestSummaryPreview}]
-  .recent(*, status="open", kind=None, hours=24,
-          min_salience=None, limit=30,
-          include_payload=False) -> list            # status: open|consumed|archived|all
-  .get(id) -> dict | None
-  .consume(*, id, run_id) -> None
-  .add(*, kind, title, summary="", salience=0.0, confidence=0.0,
-       dedupe_key=None, subject=None, source="agent",
-       payload=None, occurred_at=None, id=None) -> dict
-  .ingest(**fields) -> dict                          # legacy; prefer .add
-
-client.profile
-  .get() -> {"profile": ... | None, "goals": [...]}
-  .upsert(*, display_name=None, locale=None, timezone=None,
-          summary=None, facts=None, preferences=None,
-          constraints=None) -> dict                  # JSONB buckets replaced wholesale
-  .merge_preference(*, key, value) -> dict           # safe one-key merge into profile.preferences
-  .upsert_goal(*, key, title, id=None, priority="medium",
-               status="active", summary=None) -> dict
-
-client.cards
-  .recent(*, limit=30) -> list
+client.user_strings                                  # L2 portrait — five-slot markdown profile
+  .get_all() -> dict                                 # {IDENTITY, SOUL, TOOLS, USER, GOALS}
+  .edit(*, slot, operations) -> dict                 # slot: any of IDENTITY/SOUL/TOOLS/USER/GOALS
+                                                      # operations: [{op:"add"|"replace"|"remove", text, target}]
+                                                      # over_budget → {ok:False, entries:[...]} consolidate+resend
 
 client.feedback
   .list(*, kind=None, action=None, since=None, limit=50) -> list
   .log(*, kind, action=None, intent_card_id=None, intent_key=None,
        source="agent", basket=None, value=None, text=None,
        metadata=None, channel=None) -> dict
-
-client.world
-  .recent(*, status="open", provider=None, hours=None,
-          min_salience=None, limit=30) -> list
-  .score(*, id, salience, scored_reason=None, status="open") -> None
-  .consume(*, id, run_id) -> None
-  .reference(*, id, run_id) -> None
 
 client.raw                                           # canonical entry: .list(toolkit, entity, ...)
   .list(toolkit, entity, *, hours=None, since=None, until=None,
@@ -873,7 +541,7 @@ Typed (toolkit, entity) for raw.list:
   gmail/messages, gcal/events, gdrive/files, slack/messages,
   github/issues, calendly/events, stripe/invoices,
   youtube/subscriptions, linkedin/profile,
-  device/{apps,contacts,health}
+  device/{apps,contacts,health,utterance,transcript_window}
 Any other connected toolkit reads the generic event store — call
 .list("<toolkit>", "<entity>") with the recipe's entity_type (e.g.
 .list("notion", "pages")); rows carry title/snippet plus the full
@@ -887,14 +555,6 @@ client.composio                                      # live SaaS access via Comp
            connected_account_id=None) -> dict        # → {successful, data, error}
   .multi_execute(calls, *, parallelism=8) -> list    # run many in parallel
                                                       # calls: [{slug, args, connected_account_id?}]
-
-client.preferences                                   # high-weight stated preferences (main-chat)
-  .list(*, status="active", scope=None, limit=50) -> list  # newest first; read active for generation
-  .add(*, statement, scope, polarity, weight=None,   # source stamped server-side, not here
-       confidence=None, durability="persistent",
-       expires_at=None, evidence=None) -> dict        # scope: topic|source|timing|format|global
-                                                      # polarity: positive|negative
-  .supersede(*, old_id, new_id) -> dict | None       # new_id must already be active
 
 client.settings                                      # user settings the agent may change
   .set_generation_language(language) -> dict         # 'en' | 'zh-Hans' | ...; deterministic, re-stamps schedule

@@ -24,7 +24,6 @@ const SETTINGS_BODY = {
   autoGenerate: false,
   autoGenerateIntervalMinutes: 60,
   autoDreaming: false,
-  autoCrystallize: false,
   metadata: {},
   ambientSources: {},
   notifyNewCards: false,

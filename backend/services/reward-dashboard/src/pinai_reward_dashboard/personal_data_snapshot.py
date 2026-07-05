@@ -31,12 +31,12 @@ PersonalDataCategory = Literal[
 ]
 
 CATEGORY_LABELS: dict[str, tuple[str, str]] = {
-    "profile": ("画像", "用户画像、长期偏好和约束。"),
-    "goals": ("目标", "长期目标和正在推进的方向。"),
+    "profile": ("画像", "身份字段（语言/时区）加上 L2 画像 USER 段 markdown。"),
+    "goals": ("目标", "L2 画像 GOALS 段 markdown，由 agent 维护。"),
     "settings": ("设置", "生成、dreaming、ambient source 等偏好。"),
-    "memory": ("记忆", "系统沉淀出的长期事实。"),
+    "memory": ("记忆", "L1 事件时间线（pai_events，curated active/pending）。"),
     "skills": ("技能", "系统学到的可复用工作方式。"),
-    "signals": ("个人信号", "最近从连接器、设备或反馈中提炼出的短期观察。"),
+    "signals": ("个人信号", "L1 事件里来自设备的观察（source='device'）。"),
     "world": ("世界信号", "按用户打分后的外部世界信息。"),
     "raw": ("原始数据", "Gmail、日历、文件、设备、Slack、GitHub 等 typed raw 行。"),
     "devices": ("设备", "已注册设备、最近在线状态和端侧 metadata。"),
@@ -211,36 +211,60 @@ class PersonalDataSnapshotService:
         return _section(key, [_item(row) for row in rows], total)
 
     async def _fetch_profile(self, **kwargs: Any) -> dict[str, Any]:
+        # pai_profile retired (DROP migration 114). Identity now lives in
+        # pai_user_settings — timezone (113) + generation_language (the locale
+        # successor); display_name has no new home and is gone. The persona —
+        # summary / facts / preferences / constraints — moved to the L2 portrait
+        # (pai_user_strings slot 'USER', markdown). So this section is identity
+        # (from settings) + the USER-slot markdown surfaced as `summary`; the
+        # structured persona buckets the old snapshot carried are gone. Driven
+        # from pai_user_settings (every user has a row) LEFT JOIN the USER slot
+        # so the section still renders before the agent writes a portrait.
         return await self._fetch_rows(
             "profile",
             """
             SELECT
               'profile' AS category,
-              p.id AS item_id,
+              s.user_id AS item_id,
               'profile' AS source_key,
               '画像' AS source_label,
               'profile' AS kind,
-              COALESCE(NULLIF(p.display_name, ''), '用户画像') AS title,
-              CONCAT_WS(' · ', p.locale, p.timezone) AS subtitle,
-              p.summary,
+              '用户画像' AS title,
+              CONCAT_WS(' · ', s.generation_language, s.timezone) AS subtitle,
+              us.content AS summary,
               NULL::text AS status,
               NULL::float AS score,
-              p.updated_at AS occurred_at,
-              p.updated_at,
-              jsonb_build_array(p.locale, p.timezone) AS chips,
-              to_jsonb(p) - 'user_id' AS payload,
+              GREATEST(s.updated_at, COALESCE(us.updated_at, s.updated_at)) AS occurred_at,
+              GREATEST(s.updated_at, COALESCE(us.updated_at, s.updated_at)) AS updated_at,
+              jsonb_build_array(s.generation_language, s.timezone) AS chips,
+              jsonb_build_object(
+                'user_id', s.user_id,
+                'locale', s.generation_language,
+                'timezone', s.timezone,
+                'portrait_user', us.content,
+                'portrait_version', us.version,
+                'updated_at', GREATEST(s.updated_at, COALESCE(us.updated_at, s.updated_at))
+              ) AS payload,
               COUNT(*) OVER() AS total
-            FROM pai_profile p
-            WHERE p.user_id = %s
-              AND (%s::timestamptz IS NULL OR p.updated_at >= %s)
-              AND (%s::timestamptz IS NULL OR p.updated_at <= %s)
+            FROM pai_user_settings s
+            LEFT JOIN pai_user_strings us
+              ON us.user_id = s.user_id AND us.slot = 'USER'
+            WHERE s.user_id = %s
+              AND (
+                %s::timestamptz IS NULL
+                OR GREATEST(s.updated_at, COALESCE(us.updated_at, s.updated_at)) >= %s
+              )
+              AND (
+                %s::timestamptz IS NULL
+                OR GREATEST(s.updated_at, COALESCE(us.updated_at, s.updated_at)) <= %s
+              )
               AND (
                 %s::text IS NULL
-                OR p.display_name ILIKE %s
-                OR COALESCE(p.summary, '') ILIKE %s
-                OR to_jsonb(p)::text ILIKE %s
+                OR COALESCE(us.content, '') ILIKE %s
+                OR CONCAT_WS(' ', s.generation_language, s.timezone) ILIKE %s
+                OR COALESCE(us.content, '') ILIKE %s
               )
-            ORDER BY p.updated_at DESC
+            ORDER BY GREATEST(s.updated_at, COALESCE(us.updated_at, s.updated_at)) DESC
             LIMIT %s
             OFFSET %s
             """,
@@ -266,8 +290,7 @@ class PersonalDataSnapshotService:
               s.updated_at,
               jsonb_build_array(
                 CASE WHEN s.auto_generate THEN 'auto_generate:on' ELSE 'auto_generate:off' END,
-                CASE WHEN s.auto_dreaming THEN 'dreaming:on' ELSE 'dreaming:off' END,
-                CASE WHEN s.auto_crystallize THEN 'crystallize:on' ELSE 'crystallize:off' END
+                CASE WHEN s.auto_dreaming THEN 'dreaming:on' ELSE 'dreaming:off' END
               ) AS chips,
               to_jsonb(s) - 'user_id' AS payload,
               COUNT(*) OVER() AS total
@@ -284,36 +307,46 @@ class PersonalDataSnapshotService:
         )
 
     async def _fetch_goals(self, **kwargs: Any) -> dict[str, Any]:
+        # Goals retired into the L2 portrait: pai_goals (structured rows) is
+        # replaced by the GOALS markdown slot in pai_user_strings, maintained by
+        # the agent. One item — the GOALS slot — surfaced as a markdown summary.
         return await self._fetch_rows(
             "goals",
             """
             SELECT
               'goals' AS category,
-              g.id AS item_id,
+              us.slot AS item_id,
               'goals' AS source_key,
               '目标' AS source_label,
-              g.key AS kind,
-              g.title,
-              g.priority AS subtitle,
-              g.summary,
-              g.status,
+              us.slot AS kind,
+              '长期目标' AS title,
+              CONCAT('版本 ', us.version::text) AS subtitle,
+              us.content AS summary,
+              NULL::text AS status,
               NULL::float AS score,
-              g.updated_at AS occurred_at,
-              g.updated_at,
-              jsonb_build_array(g.priority, g.status, g.key) AS chips,
-              to_jsonb(g) - 'user_id' AS payload,
+              us.updated_at AS occurred_at,
+              us.updated_at,
+              jsonb_build_array(us.slot, CONCAT('v', us.version::text)) AS chips,
+              jsonb_build_object(
+                'slot', us.slot,
+                'content', us.content,
+                'version', us.version,
+                'char_budget', us.char_budget,
+                'updated_at', us.updated_at
+              ) AS payload,
               COUNT(*) OVER() AS total
-            FROM pai_goals g
-            WHERE g.user_id = %s
-              AND (%s::timestamptz IS NULL OR g.updated_at >= %s)
-              AND (%s::timestamptz IS NULL OR g.updated_at <= %s)
+            FROM pai_user_strings us
+            WHERE us.user_id = %s
+              AND us.slot = 'GOALS'
+              AND (%s::timestamptz IS NULL OR us.updated_at >= %s)
+              AND (%s::timestamptz IS NULL OR us.updated_at <= %s)
               AND (
                 %s::text IS NULL
-                OR g.title ILIKE %s
-                OR COALESCE(g.summary, '') ILIKE %s
-                OR to_jsonb(g)::text ILIKE %s
+                OR us.content ILIKE %s
+                OR us.slot ILIKE %s
+                OR us.content ILIKE %s
               )
-            ORDER BY g.updated_at DESC
+            ORDER BY us.updated_at DESC
             LIMIT %s
             OFFSET %s
             """,
@@ -321,55 +354,63 @@ class PersonalDataSnapshotService:
         )
 
     async def _fetch_memory(self, **kwargs: Any) -> dict[str, Any]:
+        # pai_memory retired into the L1 event stream (pai_events). This section
+        # is now the semantic timeline: every event_type, the live rows only
+        # (superseded_by_id IS NULL; superseded rows hidden). status reflects the
+        # curated_at handoff (pending / curated); score is reference_count — the
+        # objective usage signal that replaced the importance column. The
+        # bi-temporal occurred_at / recorded_at both ride along in the payload.
+        # since/until filter on occurred_at; query matches title / body / event_type.
         return await self._fetch_rows(
             "memory",
             """
             SELECT
               'memory' AS category,
-              m.id AS item_id,
-              'memory' AS source_key,
+              e.id AS item_id,
+              e.source AS source_key,
               '记忆' AS source_label,
-              m.subject AS kind,
-              COALESCE(NULLIF(m.subject, ''), '记忆') AS title,
-              m.source AS subtitle,
-              m.text AS summary,
-              m.status,
-              m.quality::float AS score,
-              COALESCE(m.occurred_at, m.created_at) AS occurred_at,
-              COALESCE(m.last_referenced_at, m.created_at) AS updated_at,
-              jsonb_build_array(m.source, m.status, CONCAT('quality ', ROUND(m.quality::numeric, 2)::text)) AS chips,
+              e.event_type AS kind,
+              COALESCE(NULLIF(e.title, ''), e.event_type, '事件') AS title,
+              e.source AS subtitle,
+              e.body AS summary,
+              CASE WHEN e.curated_at IS NULL THEN 'pending' ELSE 'curated' END AS status,
+              e.reference_count::float AS score,
+              e.occurred_at,
+              e.recorded_at AS updated_at,
+              jsonb_build_array(e.source, e.event_type, CASE WHEN e.curated_at IS NULL THEN 'pending' ELSE 'curated' END, CONCAT('refs ', e.reference_count::text)) AS chips,
               jsonb_build_object(
-                'id', m.id,
-                'text', m.text,
-                'source', m.source,
-                'source_run_id', m.source_run_id,
-                'subject', m.subject,
-                'quality', m.quality,
-                'confidence', m.confidence,
-                'status', m.status,
-                'superseded_by', m.superseded_by,
-                'occurred_at', m.occurred_at,
-                'created_at', m.created_at,
-                'tags', m.tags,
-                'related_memory_ids', m.related_memory_ids,
-                'reference_count', m.reference_count,
-                'last_referenced_at', m.last_referenced_at,
-                'referenced_by_runs', m.referenced_by_runs,
-                'embedding_model', m.embedding_model,
-                'embedded_at', m.embedded_at
+                'id', e.id,
+                'source', e.source,
+                'event_type', e.event_type,
+                'title', e.title,
+                'body', e.body,
+                'structured', e.structured,
+                'source_ref', e.source_ref,
+                'curated_at', e.curated_at,
+                'occurred_at', e.occurred_at,
+                'end_at', e.end_at,
+                'recorded_at', e.recorded_at,
+                'supersedes_id', e.supersedes_id,
+                'superseded_by_id', e.superseded_by_id,
+                'dedupe_key', e.dedupe_key,
+                'reference_count', e.reference_count,
+                'last_referenced_at', e.last_referenced_at,
+                'embedding_model', e.embedding_model,
+                'embedded_at', e.embedded_at
               ) AS payload,
               COUNT(*) OVER() AS total
-            FROM pai_memory m
-            WHERE m.user_id = %s
-              AND (%s::timestamptz IS NULL OR COALESCE(m.occurred_at, m.created_at) >= %s)
-              AND (%s::timestamptz IS NULL OR COALESCE(m.occurred_at, m.created_at) <= %s)
+            FROM pai_events e
+            WHERE e.user_id = %s
+              AND e.superseded_by_id IS NULL
+              AND (%s::timestamptz IS NULL OR e.occurred_at >= %s)
+              AND (%s::timestamptz IS NULL OR e.occurred_at <= %s)
               AND (
                 %s::text IS NULL
-                OR m.text ILIKE %s
-                OR COALESCE(m.subject, '') ILIKE %s
-                OR COALESCE(m.tags::text, '') ILIKE %s
+                OR COALESCE(e.title, '') ILIKE %s
+                OR COALESCE(e.body, '') ILIKE %s
+                OR e.event_type ILIKE %s
               )
-            ORDER BY COALESCE(m.occurred_at, m.created_at) DESC
+            ORDER BY e.occurred_at DESC
             LIMIT %s
             OFFSET %s
             """,
@@ -414,61 +455,60 @@ class PersonalDataSnapshotService:
         )
 
     async def _fetch_signals(self, **kwargs: Any) -> dict[str, Any]:
+        # pai_personal_signals retired into pai_events. Device observations now
+        # land as events with source='device', so this section is the device
+        # slice of the L1 stream (the memory section above is the whole stream —
+        # device events appear in both; this one keeps the historical "device /
+        # short-term observation" lens). Live rows only (superseded_by_id IS NULL).
         return await self._fetch_rows(
             "signals",
             """
             SELECT
               'signals' AS category,
-              ps.id AS item_id,
-              ps.source AS source_key,
+              e.id AS item_id,
+              e.source AS source_key,
               '个人信号' AS source_label,
-              ps.kind,
-              ps.title,
-              ps.subject AS subtitle,
-              ps.summary,
-              ps.status,
-              ps.salience::float AS score,
-              ps.occurred_at,
-              ps.ingested_at AS updated_at,
-              jsonb_build_array(ps.kind, ps.source, ps.status, CONCAT('salience ', ROUND(ps.salience::numeric, 2)::text)) AS chips,
+              e.event_type AS kind,
+              COALESCE(NULLIF(e.title, ''), e.event_type, '设备信号') AS title,
+              e.source AS subtitle,
+              e.body AS summary,
+              CASE WHEN e.curated_at IS NULL THEN 'pending' ELSE 'curated' END AS status,
+              e.reference_count::float AS score,
+              e.occurred_at,
+              e.recorded_at AS updated_at,
+              jsonb_build_array(e.source, e.event_type, CASE WHEN e.curated_at IS NULL THEN 'pending' ELSE 'curated' END, CONCAT('refs ', e.reference_count::text)) AS chips,
               jsonb_build_object(
-                'id', ps.id,
-                'kind', ps.kind,
-                'title', ps.title,
-                'summary', ps.summary,
-                'payload', ps.payload,
-                'salience', ps.salience,
-                'confidence', ps.confidence,
-                'dedupe_key', ps.dedupe_key,
-                'occurred_at', ps.occurred_at,
-                'available_at', ps.available_at,
-                'expires_at', ps.expires_at,
-                'source', ps.source,
-                'device_id', ps.device_id,
-                'subject', ps.subject,
-                'source_raw_table', ps.source_raw_table,
-                'source_raw_ids', ps.source_raw_ids,
-                'status', ps.status,
-                'consumed_by_run_id', ps.consumed_by_run_id,
-                'ingested_at', ps.ingested_at,
-                'reference_count', ps.reference_count,
-                'last_referenced_at', ps.last_referenced_at,
-                'referenced_by_runs', ps.referenced_by_runs,
-                'embedding_model', ps.embedding_model,
-                'embedded_at', ps.embedded_at
+                'id', e.id,
+                'source', e.source,
+                'event_type', e.event_type,
+                'title', e.title,
+                'body', e.body,
+                'structured', e.structured,
+                'source_ref', e.source_ref,
+                'curated_at', e.curated_at,
+                'occurred_at', e.occurred_at,
+                'end_at', e.end_at,
+                'recorded_at', e.recorded_at,
+                'dedupe_key', e.dedupe_key,
+                'reference_count', e.reference_count,
+                'last_referenced_at', e.last_referenced_at,
+                'embedding_model', e.embedding_model,
+                'embedded_at', e.embedded_at
               ) AS payload,
               COUNT(*) OVER() AS total
-            FROM pai_personal_signals ps
-            WHERE ps.user_id = %s
-              AND (%s::timestamptz IS NULL OR ps.occurred_at >= %s)
-              AND (%s::timestamptz IS NULL OR ps.occurred_at <= %s)
+            FROM pai_events e
+            WHERE e.user_id = %s
+              AND e.source = 'device'
+              AND e.superseded_by_id IS NULL
+              AND (%s::timestamptz IS NULL OR e.occurred_at >= %s)
+              AND (%s::timestamptz IS NULL OR e.occurred_at <= %s)
               AND (
                 %s::text IS NULL
-                OR ps.title ILIKE %s
-                OR ps.summary ILIKE %s
-                OR COALESCE(ps.payload::text, '') ILIKE %s
+                OR COALESCE(e.title, '') ILIKE %s
+                OR COALESCE(e.body, '') ILIKE %s
+                OR e.event_type ILIKE %s
               )
-            ORDER BY ps.occurred_at DESC
+            ORDER BY e.occurred_at DESC
             LIMIT %s
             OFFSET %s
             """,
@@ -476,57 +516,57 @@ class PersonalDataSnapshotService:
         )
 
     async def _fetch_world(self, **kwargs: Any) -> dict[str, Any]:
+        # World news is an L1 event now (event_type='world_news', source='world';
+        # W6: pai_world_signal_user_view is dropped). Per-user salience lives in
+        # the event's structured; recency is occurred_at.
         return await self._fetch_rows(
             "world",
             """
             SELECT
               'world' AS category,
-              w.id AS item_id,
-              w.provider AS source_key,
+              e.id AS item_id,
+              COALESCE(e.structured->>'provider', e.source) AS source_key,
               '世界信号' AS source_label,
-              w.stream_type AS kind,
-              w.title,
-              w.url AS subtitle,
-              w.summary,
-              v.status,
-              v.salience::float AS score,
-              COALESCE(w.published_at, w.created_at) AS occurred_at,
-              COALESCE(v.scored_at, w.updated_at) AS updated_at,
-              jsonb_build_array(w.provider, w.stream_type, w.importance, v.status) AS chips,
+              e.event_type AS kind,
+              COALESCE(NULLIF(e.title, ''), '世界信号') AS title,
+              e.structured->>'url' AS subtitle,
+              e.body AS summary,
+              CASE WHEN e.curated_at IS NULL THEN 'pending' ELSE 'curated' END AS status,
+              (e.structured->>'salience')::float AS score,
+              e.occurred_at,
+              e.recorded_at AS updated_at,
+              jsonb_build_array(e.structured->>'provider', e.structured->>'importance', CASE WHEN e.curated_at IS NULL THEN 'pending' ELSE 'curated' END) AS chips,
               jsonb_build_object(
-                'id', w.id,
-                'provider', w.provider,
-                'stream_type', w.stream_type,
-                'title', w.title,
-                'url', w.url,
-                'normalized_url', w.normalized_url,
-                'external_id', w.external_id,
-                'summary', w.summary,
-                'published_at', w.published_at,
-                'search_queries', w.search_queries,
-                'topics', w.topics,
-                'regions', w.regions,
-                'importance', w.importance,
-                'metadata', w.metadata,
-                'created_at', w.created_at,
-                'updated_at', w.updated_at,
-                'embedding_model', w.embedding_model,
-                'embedded_at', w.embedded_at,
-                'user_view', to_jsonb(v) - 'user_id'
+                'id', e.id,
+                'source', e.source,
+                'event_type', e.event_type,
+                'title', e.title,
+                'body', e.body,
+                'structured', e.structured,
+                'source_ref', e.source_ref,
+                'curated_at', e.curated_at,
+                'occurred_at', e.occurred_at,
+                'recorded_at', e.recorded_at,
+                'dedupe_key', e.dedupe_key,
+                'reference_count', e.reference_count,
+                'last_referenced_at', e.last_referenced_at,
+                'embedding_model', e.embedding_model,
+                'embedded_at', e.embedded_at
               ) AS payload,
               COUNT(*) OVER() AS total
-            FROM pai_world_signal_user_view v
-            JOIN pai_world_signals w ON w.id = v.world_signal_id
-            WHERE v.user_id = %s
-              AND (%s::timestamptz IS NULL OR COALESCE(w.published_at, w.created_at) >= %s)
-              AND (%s::timestamptz IS NULL OR COALESCE(w.published_at, w.created_at) <= %s)
+            FROM pai_events e
+            WHERE e.user_id = %s
+              AND e.event_type = 'world_news'
+              AND e.superseded_by_id IS NULL
+              AND (%s::timestamptz IS NULL OR e.occurred_at >= %s)
+              AND (%s::timestamptz IS NULL OR e.occurred_at <= %s)
               AND (
                 %s::text IS NULL
-                OR w.title ILIKE %s
-                OR COALESCE(w.summary, '') ILIKE %s
-                OR COALESCE(w.topics::text, '') ILIKE %s
+                OR COALESCE(e.title, '') ILIKE %s
+                OR COALESCE(e.body, '') ILIKE %s
+                OR COALESCE(e.structured->>'topics', '') ILIKE %s
               )
-            ORDER BY COALESCE(w.published_at, w.created_at) DESC
+            ORDER BY e.occurred_at DESC
             LIMIT %s
             OFFSET %s
             """,
@@ -659,9 +699,9 @@ class PersonalDataSnapshotService:
         like = f"%{query}%" if query else None
         limit = kwargs.get("limit")
         offset = kwargs.get("offset")
-        # One UNION-ALL branch per registered raw source — typed tables and
-        # the generic pai_raw_events store alike (registry is the single
-        # source of truth, so generic sources show up here too).
+        # One UNION-ALL branch per registered raw source — each routed to its L0
+        # domain table (pai_raw_apps / pai_raw_device) by snapshot_fragment; the
+        # registry is the single source of truth for that routing.
         selects = []
         params: list[Any] = []
         for source in raw_sources.ALL_SOURCES:

@@ -19,62 +19,6 @@ from pinai_api.platform.db.repositories.scheduled_tasks import (
 )
 from pinai_db.rls import service_tx, user_scoped_tx
 
-# ── LinkedIn mapper ────────────────────────────────────────────────────
-
-
-def test_map_linkedin_profile_flat_shape():
-    raw = {
-        "id": "lid-1",
-        "firstName": "Alice",
-        "lastName": "Lee",
-        "headline": "Eng @ X",
-        "vanityName": "alice-lee",
-    }
-    mapped = connector_ingest._map_linkedin_profile(raw)
-    assert mapped is not None
-    assert mapped["linkedin_id"] == "lid-1"
-    assert mapped["first_name"] == "Alice"
-    assert mapped["last_name"] == "Lee"
-    assert mapped["localized_name"] == "Alice Lee"
-    assert mapped["headline"] == "Eng @ X"
-    assert mapped["vanity_name"] == "alice-lee"
-    assert mapped["profile_url"] == "https://www.linkedin.com/in/alice-lee"
-
-
-def test_map_linkedin_profile_nested_name_shape():
-    raw = {
-        "id": "lid-2",
-        "name": {"first_name": "Bob", "last_name": "Wu", "localized": "Bob Wu"},
-        "headline": "PM",
-    }
-    mapped = connector_ingest._map_linkedin_profile(raw)
-    assert mapped is not None
-    assert mapped["first_name"] == "Bob"
-    assert mapped["last_name"] == "Wu"
-    assert mapped["localized_name"] == "Bob Wu"
-    assert mapped["profile_url"] is None  # no vanity → no URL fallback
-
-
-def test_map_linkedin_profile_picture_from_displayimage():
-    raw = {
-        "id": "lid-3",
-        "profilePicture": {
-            "displayImage~": {
-                "elements": [
-                    {"identifiers": [{"identifier": "https://media/large.jpg"}]},
-                ],
-            },
-        },
-    }
-    mapped = connector_ingest._map_linkedin_profile(raw)
-    assert mapped is not None
-    assert mapped["picture_url"] == "https://media/large.jpg"
-
-
-def test_map_linkedin_profile_returns_none_without_id():
-    assert connector_ingest._map_linkedin_profile({"headline": "x"}) is None
-
-
 # ── DB-backed sync round-trip ──────────────────────────────────────────
 
 
@@ -144,7 +88,8 @@ async def test_linkedin_sync_refreshes_headline_in_place(
 
     async with service_tx(pool) as conn:
         cur = await conn.execute(
-            "SELECT headline FROM pai_raw_linkedin_profile WHERE user_id = %s",
+            "SELECT payload->>'headline' AS headline FROM pai_raw_apps "
+            "WHERE user_id = %s AND toolkit = 'linkedin' AND entity_type = 'profile'",
             (user_a,),
         )
         rows = await cur.fetchall()

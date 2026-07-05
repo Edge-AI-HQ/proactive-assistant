@@ -64,7 +64,7 @@ async def development_feedback_log(
     Use for requests like "add a button", "make this screen easier on
     mobile", "support export", or "add a setting". Do not use for content
     preferences such as "show fewer finance cards"; those go through
-    `preference_add`.
+    an `event_append` with event_type="preference".
     """
     effective_conversation_id = conversation_id or current_session_key.get() or None
     return await http_client.post(

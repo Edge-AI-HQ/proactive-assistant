@@ -22,7 +22,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from pinai_api.config import get_web_settings
 
-from ...domains.user_model.profile import ProfileRepository
+from ...domains.user_model.settings import SettingsRepository
 from ...orchestration.cron import next_fire
 from ...platform.db.repositories.scheduled_tasks import ScheduledTaskRow, ScheduledTasksRepository
 from .schedule_spec import ResolvedSchedule, ScheduleSpecError, resolve_schedule
@@ -112,13 +112,15 @@ def _resolve_and_guard(
 
 
 async def _follow_device_timezone(pool: AsyncConnectionPool, *, user_id: int, supplied: str) -> str:
-    """永远跟手机:profile.timezone(由前端 X-Pin-Client-Timezone 头跟随设备,
-    见 routes/ui/profile.py)是时区的事实源;agent 传入的时区只在用户还没有
-    档案时兜底。服务端把这个事实拿回来,任务时区不再依赖 LLM 选对(实测它在
-    没有来源时会按用户语言猜,中文 → Asia/Shanghai)。"""
+    """永远跟手机:pai_user_settings.timezone(由前端 X-Pin-Client-Timezone 头
+    跟随设备,见 settings_ui.py)是时区的事实源。get_settings lazy-create 保证
+    settings 行总在、timezone 总非空(建行默认 'UTC'),所以服务端总能拿到确定
+    时区,任务时区不再依赖 agent/LLM 选对(实测 LLM 没来源时会按语言瞎猜,中文
+    → Asia/Shanghai)。没引导过时区的用户因此回退到保守的 'UTC' 而非 LLM 猜的
+    值;supplied 仅作 settings.timezone 意外为空时的防御兜底,正常路径不触发。"""
     async with user_scoped_tx(pool, user_id) as conn:
-        profile = await ProfileRepository(user_id, conn).get_profile()
-    stored = (profile.timezone or "").strip() if profile else ""
+        settings = await SettingsRepository(user_id, conn).get_settings()
+    stored = (settings.timezone or "").strip()
     return stored or supplied
 
 

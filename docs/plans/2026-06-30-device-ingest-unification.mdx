@@ -1,0 +1,77 @@
+---
+title: Device Ingest 统一入口（recipe 化 + platform + 清死抽象）
+status: 已实现（P1-P3；rollup collapse 暂缓）
+created: 2026-06-30
+---
+
+# Device Ingest 统一入口
+
+把 device 侧 ingest 收敛成和 apps 侧**完全对称**的形态：`(platform, kind)` 判别 + 单表
+`pai_raw_device` + recipe 驱动。加新平台 / 新 kind = 加一条 recipe，零 dispatch 代码。
+
+前序讨论见 memory `project_lifelong_memory_rebuild`；本 doc 是 device ingest 这一支的执行 SSOT。
+
+## 真实起点（反直觉，先读这段）
+
+审计时踩过一个坑：一个 subagent 报告「有 3 张 typed 表要删、signal_only 写 personal_signals」，
+**全错**。核实真源后的真实状态是——**存储层的收编早就做完了**：
+
+- `118_drop_typed_raw.sql` 已经 DROP 了所有 per-source typed 表（apps/contacts/health snapshot 等）。
+- `119_split_raw_domain.sql` 把统一 `pai_raw` 拆成 `pai_raw_apps` + `pai_raw_device` 两张域表。
+- `raw_device.py` 的 `ingest_apps` / `ingest_contacts` / `ingest_health` **全都调 `_insert_raw` 写
+  `pai_raw_device`**（`kind` = apps/contacts/health，结构化字段进 `payload` JSONB）。
+- full-replace scope 用 `_delete_device_scope`（`DELETE ... WHERE kind AND external_id=device_id`）**已实现**。
+- `external_id` 恒设为 `device_id`（`_insert_raw`）。
+- raw→event 投影早已统一（`project_unprojected` UNION 扫两张域表）。
+
+**结论**：这不是「删表 + 数据迁移」的大重构。`pai_raw_device` 已经是那张统一表。剩下的纯粹是
+**入口代码层还留着 typed 时代的死抽象**，加上 platform / dedupe 两个增强。
+
+## 终态
+
+```
+apps 侧:   (toolkit,  entity_type) → pai_raw_apps     ← 已是终态
+device 侧: (platform, kind)        → pai_raw_device   ← 本 plan 要达到的
+```
+
+- `pai_raw_device` 保持单表，`kind` 判语义、`external_id`(=device_id) 判来源设备、`platform` 是来源平台上下文。
+- 入口由 `DeviceRecipe` registry 驱动（每个 kind 一条），不再有 mode 分支 / 死表名 dispatch / parse_* 中间类型。
+
+## 已完成（118/119/raw_device，不用再做）
+
+- 单表 `pai_raw_device`
+- apps/contacts/health 收编进 payload JSONB
+- full-replace scope（kind + external_id）
+- raw→event 投影统一
+
+## 剩余工作
+
+1. **清死抽象**：`policies.py` 的 `DeviceRawWrite.table = "device_apps_snapshot"`（**已删表名**）、
+   `devices_ui._apply_raw_write`（拿死表名 dispatch）、`_parse_apps/_parse_contacts/_parse_health`
+   （payload → dataclass → payload 的绕路）。这些最终都写 `pai_raw_device`，是误导性冗余。
+2. **recipe 化**：`kind→entity`(`_CONTEXT_ENTITY_TYPE`) / `kind→rollup`(`rollup_policy`) /
+   `kind→mode`(`DEVICE_INGEST_POLICIES`) / `kind→project`(`_DEVICE_NO_PROJECT`) 现散在 4 处，收成一个
+   `DeviceRecipe` registry。snapshot kind（apps/contacts/health）的「一个 push item 展开成多行 +
+   full-replace scope」由 recipe 声明保留。
+3. **platform 列**：加 `pai_raw_device.platform`，ingest 时从已鉴权的 device 行写时反规范化，
+   带进 event structured 供 agent 读上下文。
+4. **dedupe unique 修正**：`(user_id, kind, dedupe_key)` → `(user_id, external_id, kind, dedupe_key)`，
+   让同 platform 的多台设备（两台 iPhone）物理隔离，不再因 dedupe_key 撞而互相覆盖。
+
+## 拍板记录（讨论定稿）
+
+- **只用一张表**：typed 表不复活，health 结构化查询降级为 `payload->>'metric'` + 表达式索引（数据量小，可接受）。
+- **platform 加列，不作 recipe 分支输入**：先只当存储 + event 上下文（YAGNI；真需要按平台分支再加）。
+- **不建 origin 子设备层**：device = 能独立 register+POST 的上报单元；哑外设（蓝牙麦）算 host 设备的来源，
+  信息塞 payload 即可。智能设备（自带联网）自己就是独立 device（platform=sensor/wearable）。
+- **dedupe 靠 external_id 不靠 platform**：两台 iPhone platform 相同，只有 device_id 能区分。
+- **device = 上报单元**：两台物理 iPhone = registry 两行（不同 fingerprint）；「当一台」发生在 event/memory
+  消费层，不在 registry / raw 层。
+
+## 3-PR 计划
+
+| PR | 内容 | 验证 |
+|----|------|------|
+| **P1** schema | migration `123`：platform 列 + backfill；dedupe unique 加 external_id。`_insert_raw` ON CONFLICT 同步改 + 写入填 platform | mypy / ruff / devices 测试；migrate 应用成功 |
+| **P2** recipe | `DeviceRecipe` registry；`_ingest_for_device` 切 recipe 单路径；删 `policies` 四 mode / `parse_*` / `DeviceRawWrite` / `_apply_raw_write` | e2e：各 kind（含 apps/health snapshot full-sync）落 raw 正确 |
+| **P3** 投影收口 | platform 进 `raw_to_event_input` 的 structured；`rollup_policy` / `_DEVICE_NO_PROJECT` collapse 进 recipe | projector 测试；event 带 platform |

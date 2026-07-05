@@ -7,7 +7,7 @@
  *   candidate cards / logs / profile & goal diff / goal changes / raw payloads /
  *   两条 apply 状态徽章，running 时 1.5s 轮询。
  * 数据走 core proxyFetch/proxyPost（/dreaming/runs 系，零重写）；文案走 i18n
- * （account:dreaming.*，与 dev 同 key）。web `<details>` → Pressable 折叠（WebKit
+ * （account:evolution.*，与 dev 同 key）。web `<details>` → Pressable 折叠（WebKit
  * 默认三角盘 → ChevronRight 旋转）；`<pre>` → Menlo Text（长行 RN 自动换行，
  * web 是横向滚动——手机上换行更可读）。
  */
@@ -98,7 +98,7 @@ const DEFAULT_VISIBLE_RUNS_PER_DAY = 3;
 function scheduleLabel(schedule: AutoDreamingSchedule | null): string {
   const at = new Date();
   at.setHours(schedule?.hour ?? 6, schedule?.minute ?? 0, 0, 0);
-  return i18n.t("account:dreaming.runsDaily", { time: formatTime(at) });
+  return i18n.t("account:evolution.runsDaily", { time: formatTime(at) });
 }
 
 function formatStatusLabel(status: string): string {
@@ -185,7 +185,7 @@ function itemSummaryText(item: Record<string, unknown>): string {
   for (const candidate of [item.preview, item.reason, item.context, item.body, item.description]) {
     if (typeof candidate === "string" && candidate.trim().length > 0) return candidate;
   }
-  return i18n.t("account:dreaming.noSummaryAvailable");
+  return i18n.t("account:evolution.noSummaryAvailable");
 }
 
 function goalChangeTitle(change: Record<string, unknown>, index: number): string {
@@ -195,7 +195,7 @@ function goalChangeTitle(change: Record<string, unknown>, index: number): string
   const before = change.before && typeof change.before === "object" && !Array.isArray(change.before)
     ? change.before as Record<string, unknown>
     : null;
-  return String(after?.title ?? before?.title ?? change.key ?? i18n.t("account:dreaming.goalFallback", { index: index + 1 }));
+  return String(after?.title ?? before?.title ?? change.key ?? i18n.t("account:evolution.goalFallback", { index: index + 1 }));
 }
 
 function normalizedSourceGroups(normalizedInputs: Record<string, unknown>): Array<{
@@ -210,7 +210,7 @@ function normalizedSourceGroups(normalizedInputs: Record<string, unknown>): Arra
         const title =
           (typeof item.title === "string" && item.title.trim().length > 0 ? item.title : null)
           ?? (typeof item.subject === "string" && item.subject.trim().length > 0 ? item.subject : null)
-          ?? i18n.t("account:dreaming.itemFallback", { source: sourceId, index: index + 1 });
+          ?? i18n.t("account:evolution.itemFallback", { source: sourceId, index: index + 1 });
         return {
           key: `${sourceId}-${typeof item.connector === "string" ? item.connector : "item"}-${index}`,
           title,
@@ -353,7 +353,7 @@ export default function AutoDreamingSettings() {
         setRuns(runsData.runs ?? []);
       } catch {
         if (!mounted) return;
-        setError(i18n.t("account:dreaming.loadRunsFailed"));
+        setError(i18n.t("account:evolution.loadRunsFailed"));
       } finally {
         if (mounted) setRunsLoading(false);
       }
@@ -405,9 +405,9 @@ export default function AutoDreamingSettings() {
     setNotice(null);
     const result = await patch({ autoDreaming: next });
     if (result) {
-      setNotice(next ? t("dreaming.enabledNotice") : t("dreaming.disabledNotice"));
+      setNotice(next ? t("evolution.enabledNotice") : t("evolution.disabledNotice"));
     } else {
-      setError(settingsError ?? t("dreaming.saveFailed"));
+      setError(settingsError ?? t("evolution.saveFailed"));
     }
   };
 
@@ -423,7 +423,7 @@ export default function AutoDreamingSettings() {
       if (!background) setVisibleHistoryDays(DEFAULT_VISIBLE_HISTORY_DAYS);
       if (!background) setView("history");
     } catch {
-      if (!background) setError(t("dreaming.loadHistoryFailed"));
+      if (!background) setError(t("evolution.loadHistoryFailed"));
     }
   };
 
@@ -441,7 +441,7 @@ export default function AutoDreamingSettings() {
       // next tick will succeed.
       if (!res.ok) {
         if (!options?.background) {
-          setError(res.status === 404 ? t("dreaming.runNotStarted") : t("dreaming.loadDetailFailed"));
+          setError(res.status === 404 ? t("evolution.runNotStarted") : t("evolution.loadDetailFailed"));
         }
         return;
       }
@@ -450,7 +450,7 @@ export default function AutoDreamingSettings() {
       if (!options?.background) setExpandedGroups({});
       if (!options?.background) setView("detail");
     } catch {
-      if (!options?.background) setError(t("dreaming.loadDetailFailed"));
+      if (!options?.background) setError(t("evolution.loadDetailFailed"));
     } finally {
       if (!options?.background) setDetailLoading(false);
     }
@@ -464,17 +464,17 @@ export default function AutoDreamingSettings() {
       const res = await proxyPost("/dreaming/run", {});
       const data = await res.json() as { ok?: boolean; runId?: string; taskId?: string; status?: string; error?: string };
       if (!res.ok) {
-        setError(data.error ?? t("dreaming.startFailed"));
+        setError(data.error ?? t("evolution.startFailed"));
         return;
       }
       const runRef = data.runId ?? data.taskId;
-      setNotice(runRef ? t("dreaming.startedWithRef", { ref: runRef }) : t("dreaming.started"));
+      setNotice(runRef ? t("evolution.startedWithRef", { ref: runRef }) : t("evolution.started"));
       // Don't loadDetail — the dispatcher hasn't created the run row
       // yet; loadHistory's background poll will surface it once the
       // scheduler tick claims the task.
       await loadHistory(true);
     } catch {
-      setError(t("dreaming.startFailed"));
+      setError(t("evolution.startFailed"));
     } finally {
       setStartingRun(false);
     }
@@ -486,7 +486,7 @@ export default function AutoDreamingSettings() {
       <GlassCard strong className="p-4" style={{ gap: 12 }}>
         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
           <Text style={{ fontFamily: "Inter_600SemiBold", fontSize: 14, lineHeight: 20, color: fg() }}>
-            {t("dreaming.historyTitle")}
+            {t("evolution.historyTitle")}
           </Text>
           <Pressable onPress={() => setView("home")} hitSlop={8}>
             <Text style={{ fontFamily: "Inter_400Regular", fontSize: 12, lineHeight: 16, color: fg(0.6) }}>{t("back")}</Text>
@@ -515,14 +515,14 @@ export default function AutoDreamingSettings() {
                           {run.id}
                         </Text>
                         <Text style={{ fontFamily: "Inter_400Regular", fontSize: 11, lineHeight: 15, color: fg(0.55) }}>
-                          {run.summary?.text ?? t("dreaming.noSummaryYet")}
+                          {run.summary?.text ?? t("evolution.noSummaryYet")}
                         </Text>
                         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                           {[
                             run.trigger ?? "manual",
                             formatTimestamp(run.started_at),
-                            t("dreaming.activeSourceCount", { count: activeSourceCount }),
-                            run.applied_at ? t("dreaming.applied") : run.superseded ? t("dreaming.superseded") : t("dreaming.notApplied"),
+                            t("evolution.activeSourceCount", { count: activeSourceCount }),
+                            run.applied_at ? t("evolution.applied") : run.superseded ? t("evolution.superseded") : t("evolution.notApplied"),
                           ].map((meta, i) => (
                             <Text key={i} style={{ fontFamily: "Inter_400Regular", fontSize: 10, lineHeight: 14, color: fg(0.45) }}>
                               {meta}
@@ -540,15 +540,15 @@ export default function AutoDreamingSettings() {
                 <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                   <View>
                     <Text style={{ fontFamily: "Inter_500Medium", fontSize: 12, lineHeight: 16, color: fg() }}>
-                      {group.day === "Unknown" ? t("dreaming.unknownDay") : group.day}
+                      {group.day === "Unknown" ? t("evolution.unknownDay") : group.day}
                     </Text>
                     <Text style={{ fontFamily: "Inter_400Regular", fontSize: 10, lineHeight: 14, color: fg(0.45) }}>
-                      {t("dreaming.runCount", { count: group.runs.length })}
+                      {t("evolution.runCount", { count: group.runs.length })}
                     </Text>
                   </View>
                   <Pressable onPress={() => toggleGroup(`history:${group.day}`)} hitSlop={8}>
                     <Text style={{ fontFamily: "Inter_400Regular", fontSize: 10, lineHeight: 14, color: fg(0.55) }}>
-                      {expanded ? t("dreaming.collapse") : t("dreaming.expand")}
+                      {expanded ? t("evolution.collapse") : t("evolution.expand")}
                     </Text>
                   </Pressable>
                 </View>
@@ -557,13 +557,13 @@ export default function AutoDreamingSettings() {
                     <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                       <Text style={{ fontFamily: "Inter_400Regular", fontSize: 10, lineHeight: 14, color: fg(0.45) }}>
                         {scrollable && !showingAll
-                          ? t("dreaming.showingLatest", { visible: DEFAULT_VISIBLE_RUNS_PER_DAY, total: group.runs.length })
-                          : t("dreaming.runCount", { count: group.runs.length })}
+                          ? t("evolution.showingLatest", { visible: DEFAULT_VISIBLE_RUNS_PER_DAY, total: group.runs.length })
+                          : t("evolution.runCount", { count: group.runs.length })}
                       </Text>
                       {scrollable ? (
                         <Pressable onPress={() => toggleGroup(`history-all:${group.day}`)} hitSlop={8}>
                           <Text style={{ fontFamily: "Inter_400Regular", fontSize: 10, lineHeight: 14, color: fg(0.55) }}>
-                            {showingAll ? t("dreaming.showLatestOnly") : t("dreaming.showAllRuns")}
+                            {showingAll ? t("evolution.showLatestOnly") : t("evolution.showAllRuns")}
                           </Text>
                         </Pressable>
                       ) : null}
@@ -584,14 +584,14 @@ export default function AutoDreamingSettings() {
             <Pressable onPress={() => setVisibleHistoryDays((current) => current + DEFAULT_VISIBLE_HISTORY_DAYS)}>
               <View style={{ borderRadius: 16, backgroundColor: fg(0.06), paddingHorizontal: 12, paddingVertical: 8, alignItems: "center" }}>
                 <Text style={{ fontFamily: "Inter_500Medium", fontSize: 12, lineHeight: 16, color: fg() }}>
-                  {t("dreaming.loadOlderDays")}
+                  {t("evolution.loadOlderDays")}
                 </Text>
               </View>
             </Pressable>
           ) : null}
           {runs.length === 0 ? (
             <Text style={{ fontFamily: "Inter_400Regular", fontSize: 11, lineHeight: 15, color: fg(0.45) }}>
-              {t("dreaming.noRunsYet")}
+              {t("evolution.noRunsYet")}
             </Text>
           ) : null}
         </View>
@@ -607,7 +607,7 @@ export default function AutoDreamingSettings() {
         <View style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={{ fontFamily: "Inter_600SemiBold", fontSize: 14, lineHeight: 20, color: fg() }}>
-              {t("dreaming.detailTitle")}
+              {t("evolution.detailTitle")}
             </Text>
             <Text style={{ marginTop: 4, fontFamily: "Inter_400Regular", fontSize: 11, lineHeight: 15, color: fg(0.45) }}>
               {formatDreamRunTitle(detail.run)}
@@ -623,7 +623,7 @@ export default function AutoDreamingSettings() {
 
         <View style={{ borderRadius: 16, backgroundColor: fg(0.04), paddingHorizontal: 12, paddingVertical: 12, gap: 8 }}>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-            <Text style={{ fontFamily: "Inter_500Medium", fontSize: 12, lineHeight: 16, color: fg() }}>{t("dreaming.runStatus")}</Text>
+            <Text style={{ fontFamily: "Inter_500Medium", fontSize: 12, lineHeight: 16, color: fg() }}>{t("evolution.runStatus")}</Text>
             <StatusChip status={detail.run.status} />
           </View>
           <Text style={{ fontFamily: "Inter_400Regular", fontSize: 12, lineHeight: 16, color: fg(0.7) }}>
@@ -631,9 +631,9 @@ export default function AutoDreamingSettings() {
           </Text>
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
             {[
-              t("dreaming.startedAt", { time: formatTimestamp(detail.run.started_at) }),
-              t("dreaming.completedAt", { time: formatTimestamp(detail.run.completed_at) }),
-              detail.run.applied_at ? t("dreaming.profileApplied") : t("dreaming.profilePending"),
+              t("evolution.startedAt", { time: formatTimestamp(detail.run.started_at) }),
+              t("evolution.completedAt", { time: formatTimestamp(detail.run.completed_at) }),
+              detail.run.applied_at ? t("evolution.profileApplied") : t("evolution.profilePending"),
             ].map((meta, i) => (
               <Text key={i} style={{ fontFamily: "Inter_400Regular", fontSize: 10, lineHeight: 14, color: fg(0.45) }}>
                 {meta}
@@ -643,19 +643,19 @@ export default function AutoDreamingSettings() {
         </View>
 
         <View style={{ gap: 8 }}>
-          <SectionH3>{t("dreaming.journalTitle")}</SectionH3>
+          <SectionH3>{t("evolution.journalTitle")}</SectionH3>
           <View style={{ borderRadius: 16, backgroundColor: fg(0.04), paddingHorizontal: 12, paddingVertical: 12, gap: 8 }}>
             {detail.detail.dreamMarkdownPath ? (
               <Text style={{ fontFamily: "Inter_400Regular", fontSize: 10, lineHeight: 14, color: fg(0.45) }}>
                 {detail.detail.dreamMarkdownPath}
               </Text>
             ) : null}
-            <Pre text={detail.detail.dreamMarkdown || t("dreaming.noJournalYet")} size={11} color={fg(0.75)} />
+            <Pre text={detail.detail.dreamMarkdown || t("evolution.noJournalYet")} size={11} color={fg(0.75)} />
           </View>
         </View>
 
         <View style={{ gap: 8 }}>
-          <SectionH3>{t("dreaming.collectedContext")}</SectionH3>
+          <SectionH3>{t("evolution.collectedContext")}</SectionH3>
           {normalizedGroups.length > 0 ? (
             normalizedGroups.map((group) => {
               const expanded = Boolean(expandedGroups[`normalized:${group.sourceId}`]);
@@ -664,12 +664,12 @@ export default function AutoDreamingSettings() {
                 <View key={`normalized-${group.sourceId}`} style={{ borderRadius: 16, backgroundColor: fg(0.04), paddingHorizontal: 12, paddingVertical: 12, gap: 8 }}>
                   <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                     <Text style={{ flex: 1, fontFamily: "Inter_500Medium", fontSize: 12, lineHeight: 16, color: fg() }}>
-                      {t("dreaming.sourceItems", { source: group.sourceId, count: group.items.length })}
+                      {t("evolution.sourceItems", { source: group.sourceId, count: group.items.length })}
                     </Text>
                     {group.items.length > DEFAULT_VISIBLE_ITEMS ? (
                       <Pressable onPress={() => toggleGroup(`normalized:${group.sourceId}`)} hitSlop={8}>
                         <Text style={{ fontFamily: "Inter_400Regular", fontSize: 10, lineHeight: 14, color: fg(0.55) }}>
-                          {expanded ? t("dreaming.showLess") : t("dreaming.showAll", { count: group.items.length })}
+                          {expanded ? t("evolution.showLess") : t("evolution.showAll", { count: group.items.length })}
                         </Text>
                       </Pressable>
                     ) : null}
@@ -709,13 +709,13 @@ export default function AutoDreamingSettings() {
             })
           ) : (
             <Text style={{ fontFamily: "Inter_400Regular", fontSize: 11, lineHeight: 15, color: fg(0.45) }}>
-              {t("dreaming.noNormalizedItems")}
+              {t("evolution.noNormalizedItems")}
             </Text>
           )}
         </View>
 
         <View style={{ gap: 8 }}>
-          <SectionH3>{t("dreaming.sourceStatus")}</SectionH3>
+          <SectionH3>{t("evolution.sourceStatus")}</SectionH3>
           <View style={{ gap: 8 }}>
             {detail.detail.sourceBreakdown.map((source) => (
               <View key={source.sourceId} style={{ borderRadius: 16, backgroundColor: fg(0.04), paddingHorizontal: 12, paddingVertical: 12, gap: 8 }}>
@@ -753,14 +753,14 @@ export default function AutoDreamingSettings() {
             ))}
             {detail.detail.sourceBreakdown.length === 0 ? (
               <Text style={{ fontFamily: "Inter_400Regular", fontSize: 11, lineHeight: 15, color: fg(0.45) }}>
-                {t("dreaming.noSourceResults")}
+                {t("evolution.noSourceResults")}
               </Text>
             ) : null}
           </View>
         </View>
 
         <View style={{ gap: 8 }}>
-          <SectionH3>{t("dreaming.candidateCards")}</SectionH3>
+          <SectionH3>{t("evolution.candidateCards")}</SectionH3>
           {detail.detail.candidates.length > 0 ? (
             detail.detail.candidates.map((candidate) => (
               <View key={String(candidate.id)} style={{ borderRadius: 16, backgroundColor: fg(0.04), paddingHorizontal: 12, paddingVertical: 8 }}>
@@ -774,12 +774,12 @@ export default function AutoDreamingSettings() {
             ))
           ) : (
             <Text style={{ fontFamily: "Inter_400Regular", fontSize: 11, lineHeight: 15, color: fg(0.45) }}>
-              {t("dreaming.noCandidateCards")}
+              {t("evolution.noCandidateCards")}
             </Text>
           )}
         </View>
 
-        <Details summary={t("dreaming.logsTitle")}>
+        <Details summary={t("evolution.logsTitle")}>
           <View style={{ marginTop: 8, gap: 8 }}>
             {detail.detail.logPath ? (
               <Text style={{ fontFamily: "Inter_400Regular", fontSize: 10, lineHeight: 14, color: fg(0.45) }}>
@@ -787,25 +787,25 @@ export default function AutoDreamingSettings() {
               </Text>
             ) : null}
             <ScrollView style={{ maxHeight: 192, borderRadius: 16, backgroundColor: fg(0.04) }} contentContainerStyle={{ padding: 12 }} nestedScrollEnabled>
-              <Pre text={detail.detail.logText || t("dreaming.noLogsYet")} />
+              <Pre text={detail.detail.logText || t("evolution.noLogsYet")} />
             </ScrollView>
           </View>
         </Details>
 
-        <Details summary={t("dreaming.profileDiff")}>
+        <Details summary={t("evolution.profileDiff")}>
           <ScrollView style={{ marginTop: 8, maxHeight: 192, borderRadius: 16, backgroundColor: fg(0.04) }} contentContainerStyle={{ padding: 12 }} nestedScrollEnabled>
             <Pre text={JSON.stringify(detail.detail.profileDelta, null, 2)} />
           </ScrollView>
         </Details>
 
-        <Details summary={t("dreaming.goalDiff")}>
+        <Details summary={t("evolution.goalDiff")}>
           <ScrollView style={{ marginTop: 8, maxHeight: 192, borderRadius: 16, backgroundColor: fg(0.04) }} contentContainerStyle={{ padding: 12 }} nestedScrollEnabled>
             <Pre text={JSON.stringify(detail.detail.goalDelta, null, 2)} />
           </ScrollView>
         </Details>
 
         <View style={{ gap: 8 }}>
-          <SectionH3>{t("dreaming.goalChanges")}</SectionH3>
+          <SectionH3>{t("evolution.goalChanges")}</SectionH3>
           {goalChanges.length > 0 ? (
             goalChanges.map((change, index) => (
               <View key={`goal-change-${index}`} style={{ borderRadius: 16, backgroundColor: fg(0.04), paddingHorizontal: 12, paddingVertical: 12, gap: 4 }}>
@@ -829,19 +829,19 @@ export default function AutoDreamingSettings() {
             ))
           ) : (
             <Text style={{ fontFamily: "Inter_400Regular", fontSize: 11, lineHeight: 15, color: fg(0.45) }}>
-              {t("dreaming.noGoalChanges")}
+              {t("evolution.noGoalChanges")}
             </Text>
           )}
         </View>
 
         <View style={{ gap: 8 }}>
-          <SectionH3>{t("dreaming.rawConnectorPayloads")}</SectionH3>
+          <SectionH3>{t("evolution.rawConnectorPayloads")}</SectionH3>
           {connectorGroups.length > 0 ? connectorGroups.map((group) => (
             <View key={`raw-${group.sourceId}`} style={{ gap: 8 }}>
               {group.connectors.map((connector) => (
                 <Details
                   key={`raw-${group.sourceId}-${connector.connectorId}`}
-                  summary={t("dreaming.sourceItems", { source: connector.connectorId, count: connector.itemCount })}
+                  summary={t("evolution.sourceItems", { source: connector.connectorId, count: connector.itemCount })}
                 >
                   <ScrollView style={{ marginTop: 8, maxHeight: 256, borderRadius: 16, backgroundColor: fg(0.04) }} contentContainerStyle={{ padding: 12 }} nestedScrollEnabled>
                     <Pre text={JSON.stringify(connector.raw, null, 2)} />
@@ -850,7 +850,7 @@ export default function AutoDreamingSettings() {
               ))}
             </View>
           )) : (
-            <Details summary={t("dreaming.rawInputs")}>
+            <Details summary={t("evolution.rawInputs")}>
               <ScrollView style={{ marginTop: 8, maxHeight: 256, borderRadius: 16, backgroundColor: fg(0.04) }} contentContainerStyle={{ padding: 12 }} nestedScrollEnabled>
                 <Pre text={JSON.stringify(detail.detail.rawInputs, null, 2)} />
               </ScrollView>
@@ -860,21 +860,21 @@ export default function AutoDreamingSettings() {
 
         {/* Phase 2a status badges — dreams write through automatically */}
         {[
-          { label: t("dreaming.profileChanges"), appliedAt: detail.run.applied_at },
-          { label: t("dreaming.goalChangesBadge"), appliedAt: detail.run.goals_applied_at },
+          { label: t("evolution.profileChanges"), appliedAt: detail.run.applied_at },
+          { label: t("evolution.goalChangesBadge"), appliedAt: detail.run.goals_applied_at },
         ].map(({ label, appliedAt }) => (
           <View key={label} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderRadius: 16, backgroundColor: fg(0.04), paddingHorizontal: 12, paddingVertical: 8 }}>
             <Text style={{ fontFamily: "Inter_400Regular", fontSize: 12, lineHeight: 16, color: fg(0.7) }}>{label}</Text>
             <Text style={{ fontFamily: "Inter_500Medium", fontSize: 12, lineHeight: 16, color: fg() }}>
               {detail.run.status === "running"
-                ? t("dreaming.applyPending")
+                ? t("evolution.applyPending")
                 : detail.run.status === "failed"
-                  ? t("dreaming.applySkipped")
+                  ? t("evolution.applySkipped")
                   : appliedAt
-                    ? t("dreaming.appliedDuringRun")
+                    ? t("evolution.appliedDuringRun")
                     : detail.run.superseded
-                      ? t("dreaming.supersededByNewer")
-                      : t("dreaming.applied")}
+                      ? t("evolution.supersededByNewer")
+                      : t("evolution.applied")}
             </Text>
           </View>
         ))}
@@ -888,7 +888,7 @@ export default function AutoDreamingSettings() {
       <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={{ fontFamily: "Inter_600SemiBold", fontSize: 12, lineHeight: 16, color: fg() }}>
-            {t("dreaming.title")}
+            {t("evolution.title")}
           </Text>
           <Text style={{ marginTop: 4, fontFamily: "Inter_400Regular", fontSize: 11, lineHeight: 15, color: fg(0.42) }}>
             {scheduleLabel(schedule)}
@@ -899,7 +899,7 @@ export default function AutoDreamingSettings() {
           on={enabled}
           disabled={loading || saving}
           onPress={() => void handleToggle()}
-          accessibilityLabel={t("dreaming.title")}
+          accessibilityLabel={t("evolution.title")}
         />
       </View>
 
@@ -907,12 +907,12 @@ export default function AutoDreamingSettings() {
         <View style={{ borderRadius: 16, backgroundColor: fg(0.04), paddingHorizontal: 12, paddingVertical: 12, gap: 4 }}>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
             <Text style={{ fontFamily: "Inter_500Medium", fontSize: 12, lineHeight: 16, color: fg() }}>
-              {t("dreaming.latestRun")}
+              {t("evolution.latestRun")}
             </Text>
             <StatusChip status={latestRun.status} />
           </View>
           <Text style={{ fontFamily: "Inter_400Regular", fontSize: 11, lineHeight: 15, color: fg(0.6) }}>
-            {latestRun.summary?.text ?? t("dreaming.noSummaryYet")}
+            {latestRun.summary?.text ?? t("evolution.noSummaryYet")}
           </Text>
           <Text style={{ fontFamily: "Inter_400Regular", fontSize: 10, lineHeight: 14, color: fg(0.4) }}>
             {formatTimestamp(latestRun.started_at)}
@@ -935,7 +935,7 @@ export default function AutoDreamingSettings() {
               }}
             >
               <Text style={{ fontFamily: "Inter_500Medium", fontSize: 12, lineHeight: 16, color: BG }}>
-                {startingRun ? t("dreaming.starting") : t("dreaming.runNow")}
+                {startingRun ? t("evolution.starting") : t("evolution.runNow")}
               </Text>
             </View>
           </Pressable>
@@ -944,7 +944,7 @@ export default function AutoDreamingSettings() {
           <Pressable onPress={() => void loadHistory()}>
             <View style={{ borderRadius: 16, backgroundColor: fg(0.06), paddingHorizontal: 12, paddingVertical: 8, alignItems: "center" }}>
               <Text style={{ fontFamily: "Inter_500Medium", fontSize: 12, lineHeight: 16, color: fg() }}>
-                {t("dreaming.viewHistory")}
+                {t("evolution.viewHistory")}
               </Text>
             </View>
           </Pressable>

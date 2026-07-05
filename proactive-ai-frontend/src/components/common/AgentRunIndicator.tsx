@@ -22,7 +22,6 @@ const KIND_LABEL_KEYS = {
   "auto.dreaming": "common:agentRuns.kind.autoDreaming",
   "connector.init": "common:agentRuns.kind.connectorInit",
   "connector.evolve": "common:agentRuns.kind.connectorEvolve",
-  crystallize: "common:agentRuns.kind.crystallize",
   "generator.manual": "common:agentRuns.kind.generatorManual",
   "generator.auto": "common:agentRuns.kind.generatorAuto",
   "user.prompt": "common:agentRuns.kind.userPrompt",

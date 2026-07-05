@@ -1,199 +1,162 @@
-"""persist_generator_run — pattern hits + idempotency under retry."""
+"""persist_generator_run — pipeline_runs 落库 + L1 agent_decision 写回 + 幂等。
+
+Pattern hits 持久化随 pattern matcher 一起退役;evaluations 写口保留
+(agentic generator 恒发空,legacy payload 回放仍有效)。
+"""
 
 from __future__ import annotations
 
 import pytest
-from pinai_api.domains.generation.pipeline_persistence import persist_generator_run
+from pinai_api.domains.generation.pipeline_persistence import (
+    persist_generator_run,
+    persist_pipeline_run_strict,
+)
 from pinai_contracts.api_models import CardEvaluation
 from pinai_db.rls import service_tx, user_scoped_tx
 
 
+def _card(card_id: str, *, title: str = "smoke card") -> dict:
+    return {
+        "id": card_id,
+        "intentKey": f"intent-{card_id}",
+        "goalBasket": "work",
+        "title": title,
+        "whyNow": "collides with tomorrow's onsite",
+        "summary": "summary",
+        "sources": [
+            "gmail event id=evt_e9, title=Diana rescheduled",
+            "googlecalendar event id=evt_m1, title=Diana sync",
+        ],
+    }
+
+
+async def _cleanup(pool, user_id: int, run_id: str, card_ids: list[str]) -> None:
+    async with service_tx(pool) as conn:
+        for card_id in card_ids:
+            await conn.execute(
+                "DELETE FROM pai_events WHERE user_id = %s AND dedupe_key = %s",
+                (user_id, f"card_decision:{card_id}"),
+            )
+            await conn.execute(
+                "DELETE FROM pai_card_evaluations WHERE user_id = %s AND card_id = %s",
+                (user_id, card_id),
+            )
+        await conn.execute(
+            "DELETE FROM pai_pipeline_runs WHERE user_id = %s AND id = %s",
+            (user_id, run_id),
+        )
+
+
 @pytest.mark.asyncio
-async def test_persist_records_pattern_hits_and_is_idempotent(pool, user_ids) -> None:
+async def test_persist_appends_card_decision_events_and_is_idempotent(pool, user_ids) -> None:
+    """每张出卡 → 一条 L1 agent_decision(structured.kind=proactive_proposal,
+    related_event_ids 从 sources 引文解析);重试(retry path)靠 dedupe_key
+    幂等,不产生第二条。"""
     user_a, _ = user_ids
     run_id = "smoke_run_001"
     card_id = "smoke_card_001"
-    payload = {
-        "runId": run_id,
-        "cards": [
-            {
-                "id": card_id,
-                "intentKey": "smoke-intent",
-                "goalBasket": "work",
-                "title": "smoke card",
-                "whyNow": "now",
-                "summary": "summary",
-                "sources": ["signal id=sig_smoke"],
-            },
-        ],
-        "evaluations": [
-            {
-                "cardId": card_id,
-                "intentKey": "smoke-intent",
-                "relevance": 7,
-                "actionability": 7,
-                "whyNowClarity": 7,
-                "novelty": 7,
-                "decisionCompression": 7,
-                "overall": 7,
-                "pass": True,
-                "patternId": "routine_anchor_detected",
-                "patternGroundingOk": True,
-            },
-        ],
-    }
-    matched = [
-        {
-            "patternId": "routine_anchor_detected",
-            "category": "routine_observation",
-            "intent": "routine_assistance",
-            "abstract": "abc",
-            "evidence": {"trajectory_similarity_gte": {"value": 0.9}},
-            "baseHitRate": 0.5,
-            "userFitScore": None,
-            "combinedScore": 0.5,
-            "subtype": "commute_route",
-        },
-    ]
+    payload = {"runId": run_id, "cards": [_card(card_id)]}
 
-    # First persist
-    await persist_generator_run(
-        pool,
-        user_id=user_a,
-        payload=payload,
-        trigger="test",
-        matched_patterns=matched,
-    )
-    # Second persist (retry path) — must not raise
-    await persist_generator_run(
-        pool,
-        user_id=user_a,
-        payload=payload,
-        trigger="test",
-        matched_patterns=matched,
-    )
+    await persist_generator_run(pool, user_id=user_a, payload=payload, trigger="test")
+    # Second persist (retry path) — must not raise, must not duplicate.
+    await persist_generator_run(pool, user_id=user_a, payload=payload, trigger="test")
 
-    async with user_scoped_tx(pool, user_a) as conn, conn.cursor() as cur:
-        await cur.execute(
-            "SELECT status FROM pai_pipeline_runs WHERE user_id = %s AND id = %s",
-            (user_a, run_id),
-        )
-        run_row = await cur.fetchone()
-        await cur.execute(
-            "SELECT count(*)::int AS n FROM pai_card_evaluations "
-            "WHERE user_id = %s AND card_id = %s",
-            (user_a, card_id),
-        )
-        eval_row = await cur.fetchone()
-        await cur.execute(
-            "SELECT subtype, pattern_grounding_ok, combined_score "
-            "FROM pai_card_pattern_hits "
-            "WHERE user_id = %s AND card_id = %s",
-            (user_a, card_id),
-        )
-        hit_row = await cur.fetchone()
+    try:
+        async with user_scoped_tx(pool, user_a) as conn, conn.cursor() as cur:
+            await cur.execute(
+                "SELECT status FROM pai_pipeline_runs WHERE user_id = %s AND id = %s",
+                (user_a, run_id),
+            )
+            run_row = await cur.fetchone()
+            await cur.execute(
+                "SELECT source, event_type, title, body, structured "
+                "FROM pai_events WHERE user_id = %s AND dedupe_key = %s",
+                (user_a, f"card_decision:{card_id}"),
+            )
+            decision_rows = await cur.fetchall()
 
-    assert run_row is not None and run_row["status"] == "completed"
-    assert eval_row is not None and eval_row["n"] == 1
-    assert hit_row is not None
-    assert hit_row["subtype"] == "commute_route"
-    assert hit_row["pattern_grounding_ok"] is True
-    assert hit_row["combined_score"] == pytest.approx(0.5)
-
-    # Cleanup
-    async with service_tx(pool) as conn:
-        await conn.execute(
-            "DELETE FROM pai_card_pattern_hits WHERE user_id = %s AND card_id = %s",
-            (user_a, card_id),
-        )
-        await conn.execute(
-            "DELETE FROM pai_card_evaluations WHERE user_id = %s AND card_id = %s",
-            (user_a, card_id),
-        )
-        await conn.execute(
-            "DELETE FROM pai_pipeline_runs WHERE user_id = %s AND id = %s",
-            (user_a, run_id),
-        )
+        assert run_row is not None and run_row["status"] == "completed"
+        assert len(decision_rows) == 1
+        decision = decision_rows[0]
+        assert decision["source"] == "agent_action"
+        assert decision["event_type"] == "agent_decision"
+        assert decision["title"] == "Card proposed: smoke card"
+        assert decision["body"] == "collides with tomorrow's onsite"
+        structured = decision["structured"]
+        assert structured["kind"] == "proactive_proposal"
+        assert structured["card_id"] == card_id
+        assert structured["run_id"] == run_id
+        assert structured["related_event_ids"] == ["evt_e9", "evt_m1"]
+    finally:
+        await _cleanup(pool, user_a, run_id, [card_id])
 
 
 @pytest.mark.asyncio
-async def test_persist_tolerates_unknown_pattern_id(pool, user_ids) -> None:
-    """If the agent claims a pattern_id that doesn't exist, the pipeline_runs
-    + evaluations rows still land — the pattern hit silently drops."""
+async def test_persist_zero_cards_writes_run_row_but_no_events(pool, user_ids) -> None:
+    """静默 run(0 卡)落 run 行(前端轮询要 completed),但 L1 零写入。"""
     user_a, _ = user_ids
     run_id = "smoke_run_002"
-    card_id = "smoke_card_002"
-    payload = {
-        "runId": run_id,
-        "cards": [
-            {
-                "id": card_id,
-                "intentKey": "smoke",
-                "goalBasket": "work",
-                "title": "t",
-                "whyNow": "n",
-                "summary": "s",
-                "sources": ["signal id=sig"],
-            }
-        ],
-        "evaluations": [
-            {
-                "cardId": card_id,
-                "intentKey": "smoke",
-                "relevance": 5,
-                "actionability": 5,
-                "whyNowClarity": 5,
-                "novelty": 5,
-                "decisionCompression": 5,
-                "overall": 5,
-                "pass": True,
-                "patternId": "__never_seen_pattern__",
-            }
-        ],
-    }
 
     await persist_generator_run(
-        pool,
-        user_id=user_a,
-        payload=payload,
-        trigger="test",
-        matched_patterns=None,
+        pool, user_id=user_a, payload={"runId": run_id, "cards": []}, trigger="test"
     )
 
-    async with user_scoped_tx(pool, user_a) as conn, conn.cursor() as cur:
-        await cur.execute(
-            "SELECT 1 FROM pai_pipeline_runs WHERE user_id = %s AND id = %s",
-            (user_a, run_id),
-        )
-        assert await cur.fetchone() is not None
-        await cur.execute(
-            "SELECT count(*)::int AS n FROM pai_card_pattern_hits "
-            "WHERE user_id = %s AND card_id = %s",
-            (user_a, card_id),
-        )
-        row = await cur.fetchone()
-        assert row is not None and row["n"] == 0
+    try:
+        async with user_scoped_tx(pool, user_a) as conn, conn.cursor() as cur:
+            await cur.execute(
+                "SELECT status FROM pai_pipeline_runs WHERE user_id = %s AND id = %s",
+                (user_a, run_id),
+            )
+            run_row = await cur.fetchone()
+            await cur.execute(
+                "SELECT count(*)::int AS n FROM pai_events "
+                "WHERE user_id = %s AND source = 'agent_action' "
+                "AND structured->>'run_id' = %s",
+                (user_a, run_id),
+            )
+            n_row = await cur.fetchone()
 
-    async with service_tx(pool) as conn:
-        await conn.execute(
-            "DELETE FROM pai_card_evaluations WHERE user_id = %s AND card_id = %s",
-            (user_a, card_id),
-        )
-        await conn.execute(
-            "DELETE FROM pai_pipeline_runs WHERE user_id = %s AND id = %s",
-            (user_a, run_id),
-        )
+        assert run_row is not None and run_row["status"] == "completed"
+        assert n_row is not None and n_row["n"] == 0
+    finally:
+        await _cleanup(pool, user_a, run_id, [])
+
+
+@pytest.mark.asyncio
+async def test_persist_reminder_skips_decision_events(pool, user_ids) -> None:
+    """reminder.card 是用户自设 nudge,不是 AI 提议 — record_decisions=False
+    不写 agent_decision。"""
+    user_a, _ = user_ids
+    run_id = "smoke_run_003"
+    card_id = "smoke_card_003"
+
+    await persist_pipeline_run_strict(
+        pool,
+        user_id=user_a,
+        payload={"runId": run_id, "cards": [_card(card_id, title="drink water")]},
+        trigger="reminder",
+        record_decisions=False,
+    )
+
+    try:
+        async with user_scoped_tx(pool, user_a) as conn, conn.cursor() as cur:
+            await cur.execute(
+                "SELECT count(*)::int AS n FROM pai_events WHERE user_id = %s AND dedupe_key = %s",
+                (user_a, f"card_decision:{card_id}"),
+            )
+            row = await cur.fetchone()
+        assert row is not None and row["n"] == 0
+    finally:
+        await _cleanup(pool, user_a, run_id, [card_id])
 
 
 @pytest.mark.asyncio
 async def test_persist_evaluations_fills_dims_from_flat_camelcase(pool, user_ids) -> None:
-    """Chat serializes CardEvaluation via model_dump(by_alias=True): the five
-    dimension scores arrive flat at the top level (relevance/whyNowClarity/...),
-    not nested under a "dimensions" key. The dim_* columns must be populated
-    from that real shape — built here through the actual model to stay honest."""
+    """evaluations 写口保留(legacy payload 回放):五维 camelCase 平铺 →
+    dim_* 列。agentic generator 主路径恒发空 evaluations,此路径 no-op。"""
     user_a, _ = user_ids
-    run_id = "smoke_run_003"
-    card_id = "smoke_card_003"
+    run_id = "smoke_run_004"
+    card_id = "smoke_card_004"
     evaluation = CardEvaluation.model_validate(
         {
             "intentKey": "smoke-flat",
@@ -210,38 +173,22 @@ async def test_persist_evaluations_fills_dims_from_flat_camelcase(pool, user_ids
     evaluation["cardId"] = card_id
     payload = {
         "runId": run_id,
-        "cards": [
-            {
-                "id": card_id,
-                "intentKey": "smoke-flat",
-                "goalBasket": "work",
-                "title": "flat dims card",
-                "whyNow": "now",
-                "summary": "summary",
-                "sources": ["signal id=sig_flat"],
-            }
-        ],
+        "cards": [_card(card_id, title="flat dims card")],
         "evaluations": [evaluation],
     }
 
-    await persist_generator_run(
-        pool,
-        user_id=user_a,
-        payload=payload,
-        trigger="test",
-        matched_patterns=None,
-    )
-
-    async with user_scoped_tx(pool, user_a) as conn, conn.cursor() as cur:
-        await cur.execute(
-            "SELECT dim_relevance, dim_actionability, dim_why_now, dim_novelty, "
-            "dim_decision_compress, overall, pass, feedback_text "
-            "FROM pai_card_evaluations WHERE user_id = %s AND card_id = %s",
-            (user_a, card_id),
-        )
-        row = await cur.fetchone()
+    await persist_generator_run(pool, user_id=user_a, payload=payload, trigger="test")
 
     try:
+        async with user_scoped_tx(pool, user_a) as conn, conn.cursor() as cur:
+            await cur.execute(
+                "SELECT dim_relevance, dim_actionability, dim_why_now, dim_novelty, "
+                "dim_decision_compress, overall, pass, feedback_text "
+                "FROM pai_card_evaluations WHERE user_id = %s AND card_id = %s",
+                (user_a, card_id),
+            )
+            row = await cur.fetchone()
+
         assert row is not None
         assert row["dim_relevance"] == pytest.approx(7.5)
         assert row["dim_actionability"] == pytest.approx(6.5)
@@ -252,12 +199,4 @@ async def test_persist_evaluations_fills_dims_from_flat_camelcase(pool, user_ids
         assert row["pass"] is True
         assert row["feedback_text"] == "flat shape audit note"
     finally:
-        async with service_tx(pool) as conn:
-            await conn.execute(
-                "DELETE FROM pai_card_evaluations WHERE user_id = %s AND card_id = %s",
-                (user_a, card_id),
-            )
-            await conn.execute(
-                "DELETE FROM pai_pipeline_runs WHERE user_id = %s AND id = %s",
-                (user_a, run_id),
-            )
+        await _cleanup(pool, user_a, run_id, [card_id])

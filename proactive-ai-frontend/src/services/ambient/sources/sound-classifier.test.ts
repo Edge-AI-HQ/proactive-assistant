@@ -132,7 +132,8 @@ describe("SoundClassifierSource transcript ingest", () => {
     expect(pushed).toEqual([
       {
         kind: "session_summary",
-        title: "Voice summary",
+        // title 现在是转写首段(≤80 字全文,否则截断) — 见 sound-classifier pushTranscript。
+        title: "This is a meaningful ambient transcript worth storing.",
         summary: "This is a meaningful ambient transcript worth storing.",
         occurred_at: "2026-05-10T12:00:00.000Z",
         payload: {
@@ -210,7 +211,7 @@ describe("SoundClassifierSource transcript ingest", () => {
     expect(pushed).toEqual([
       expect.objectContaining({
         kind: "session_summary",
-        title: "Voice summary",
+        title: "我现在说话应该尽快显示出来，并且进入 ambient transcript session summary。",
         summary: "我现在说话应该尽快显示出来，并且进入 ambient transcript session summary。",
         occurred_at: "2026-05-17T05:15:12.000Z",
         payload: expect.objectContaining({

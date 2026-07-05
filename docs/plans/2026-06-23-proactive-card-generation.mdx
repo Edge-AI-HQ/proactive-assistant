@@ -1,0 +1,197 @@
+---
+title: "卡片生成(Lifelong Memory 消费侧)"
+description: "触发保留现状(manual/chat/scheduled/reminder);生成收敛为一次多轮 agent run,context 采用 cache-efficient 三段结构——静态段 + 到达流 log(append-only,确定性重建,prompt cache 命中)+ 每 tick 重算的尾部(now + 最近事件 + 未来有效日程视图),支撑分钟级高频触发。状态只有一个 anchor 时间戳,reset 即遗忘。出 0/1/N 张卡(0 张是常态)。旧 26–48 次 LLM 的 batch pipeline 整体退役。"
+---
+
+# 卡片生成(Lifelong Memory 消费侧)
+
+> **状态**:设计定稿(2026-06-23 起多轮 socratic;2026-07-02 **大幅简化**——触发保留现状、生成收敛为单次多轮 agent run;2026-07-04 **context 定稿为 cache-efficient 三段结构**——为高频触发利用 prompt caching,连续 user block + 显式 cache_control 经 litellm→Anthropic/glm 全链路实测通过)。**纯 design doc,不跟踪执行进度**——实现状态以代码为准。
+> **前提**:memory 三层已落地(见 [Lifelong Memory 系统设计](./2026-06-23-lifelong-memory-system)):`pai_events` 客观分检索、bi-temporal 双轴(`occurred_at`/`recorded_at`)、L2 portrait 注入、supersede 修订链、preference 经 evolve/hot 蒸馏进 USER。
+> **依据**:旧 batch pipeline 与触发链路代码核实(第二节);cache 行为实测(§4.3);[Manus context engineering](https://manus.im/blog/Context-Engineering-for-AI-Agents-Lessons-from-Building-Manus)(KV-cache 命中率是生产 agent 最重要指标;stable prefix / append-only / 勿放时间戳在前部——本设计与其原则逐条对齐,并扩展到它没覆盖的定时触发场景)。
+
+---
+
+## 〇、一句话结论
+
+> **触发不动,生成换心脏;timeline 即 context,anchor 即状态,reset 即遗忘。** 触发保留现状 4 种,任何触发都是同一条 context 线上的一次 tick;context = 静态段 + **到达流 log**(append-only,prompt cache 命中)+ **每 tick 重算的尾部**(now + 最近事件 + 未来有效日程),agent **多轮调工具**探索与验证,出 **0..N 张卡**(0 = 常态)。重要性不存储、不预判:agent 在出卡时结合上下文与时间自己判(importance 是 `(event × 上下文 × 时间)` 的函数,"消费时算 importance"的落点)。
+
+```
+触发(现状,零新建;高频定时也是 tick)
+  generator.manual(首页按钮) / generator.chat(chat 工具) /
+  generator.scheduled(定时,agent 可自建 cron,分钟级可行) / reminder.card(零 LLM 预设)
+        │
+        ▼ 每次触发 = 一次 tick(共用同一条 context 线)
+┌─ system(cached,日更 bust 一次)────────────────────────────┐
+│ 静态 prompt + 工具 schema + portrait + date(天粒度)        │
+├─ 到达流 log(cached,append-only,字节永不变)────────────────┤
+│ [满块1: 事件1..K] [满块2] ... [满块M]  ← recorded_at 全序   │
+│  含未来事件的「到达通知」与 supersede 修订,事件穿越 now 不失踪│
+├─ tick 消息(唯一 miss 段,每次全新)─────────────────────────┤
+│ now(分钟级) + 最近到达(未满块) + 未来有效日程视图(时间序,   │
+│ supersede 已消解,≤30 条一行式) + focus?/指令               │
+└───────────────────────────────────────────────────────────┘
+        │ agent 多轮: events_search(补充/核实) → submit_card × 0..N
+        ▼
+出卡收尾: 卡入 pai_pipeline_runs + 写一条 L1 agent_decision(唯一 L1 写回)
+          → 下一 tick 它作为新到达事件回到 log = 去重闭环自带
+        ▼
+交付 = 现状卡片流;T2 副作用卡审批后执行 = Agent Core HITL(现成)
+```
+
+---
+
+## 一、设计原则
+
+1. **importance 是判断不是属性**。同一条"投资人改期"周一不痛不痒、周四成最高优先级——重要性不存进 event(memory 已删 importance 列),由 agent 在生成时结合当前时间与上下文判。
+2. **L1 events 是唯一数据基准**。种子窗口与工具检索全在 `pai_events`;L0 raw 不扫描(按 `source_ref` 下钻取原文是升级位)。
+3. **宁缺毋滥,0 张是常态**。一张烂卡毁掉用户对全部主动推送的信任;prompt 写死"没把握就不出",出卡数没有下限指标。
+4. **画像即约束**。用户偏好("别再推 crypto")经 hot/evolve 蒸馏进 USER 画像常驻注入,生成不再单独拉 preference——**一个约束入口,不做双通道**。
+5. **提议与执行分离**。出卡自主;副作用(发邮件/改日历)必须用户审批(HITL),控制权可逆 ≠ 后果可逆。
+6. **触发而非轮询,本期时间驱动即够**。`generator.scheduled` 承担主动性;事件驱动触发(改期秒级响应)推迟——数据新鲜度本被 connector sync(12h 级)卡着,现在建也是假实时。
+7. **context 是 timeline 的可丢弃视图**。真源在 `pai_events`,context 随时可从 (anchor, now) 确定性重建——所以状态只需一个时间戳、reset 零成本、永不压缩(压缩丢信息且 bust cache)。
+8. **KV-cache 命中率优先**(Manus:生产 agent 最重要单一指标;输入:输出 ≈ 100:1,cached/uncached 10× 价差)。前缀稳定 = 分钟级时间戳永远在尾部、log 永不改写、序列化确定性(排序/分块/JSON key 序全部固定)。
+9. **可解释**。每次 run 一条 LangSmith trace,出没出卡、为什么,全可回查。
+
+---
+
+## 二、现状基线(设计出发点,代码核实)
+
+- **触发 4 种(全部保留)**:`generator.manual` / `generator.chat` / `generator.scheduled` / `reminder.card`;`generator.auto` 是死代码,本期保持死。
+- **旧生成 pipeline(退役对象)**:planner(1)→ writer(每卡 1,候选 12)→ evaluator(每卡 1)→ top-up(≤2 轮)→ final_selection(1),一次 8 卡 run = **26–48 次 LLM**,为"一次性出 8 张"设计。种子上下文经 9 端点聚合 + `connected_raw` 直读 raw + pattern matcher。**全部被单次多轮 agent run 取代。**
+- **卡的形态(保留)**:无 `pai_card` 表,卡 = `pai_pipeline_runs.final_cards` JSONB;`GeneratedCard` 带 `sources[]`(min_length=1)+ `primary_action.agent_prompt`(审批后执行的任务)。
+- **memory 地基(已就绪)**:`events_search`(结构化窗口 / hybrid / 客观分排序,新 event 即时可见)、portrait 中间件注入、supersede 修订链(改期/取消是结构化事件)、preference→USER 蒸馏(hot + evolve)。
+
+---
+
+## 三、触发(保留现状,零新建)
+
+| 触发 | 形态 | 说明 |
+|---|---|---|
+| `generator.manual` | 首页按钮 | 用户主动,现状不动 |
+| `generator.chat` | chat 工具 | 对话中出卡,现状不动 |
+| `generator.scheduled` | 定时任务 | **本期唯一"主动"形态**;用户或 agent 经 chat 创建(scheduled-task 机制现成),cron 语义免费 |
+| `reminder.card` | 零 LLM 预设卡 | 现状不动 |
+
+- **agent 对自己的 cron 可见**:scheduled 任务快照注入 system prompt(有界渲染:何时 + 干什么,per-run 取一次)——chat agent 能看见、修改、取消自己排的生成任务,不重复创建。
+- 事件驱动触发(revision/tombstone 到达即评估、coalesce/debounce)→ **后续迭代**(§六)。
+
+---
+
+## 四、生成 = 一次多轮 agent run(核心)
+
+### 4.1 context 三段结构(cache-efficient)
+
+| 段 | 内容 | 变化频率 / cache |
+|---|---|---|
+| **system** | 静态 prompt + 工具 schema + portrait(USER/GOALS,偏好已蒸馏在内,**不单独拉 preference**)+ date(**天粒度**) | 日更 bust 一次;portrait 变更(evolve)同 bust,低频可接受 |
+| **到达流 log** | 按 `(recorded_at, id)` 全序、每 K 条封一个**满块**(连续 user block)。**两段式**:历史段 `(anchor − LOOKBACK, anchor]` 取**最新**到达、按 token 预算(30k)截断——anchor 前的到达集**封闭**(recorded_at 是事务时间),截断确定性、跨 tick 字节稳定;增量段 `(anchor, now]` 全保留 append-only。窄投影(id/type/source/toolkit/occurredAt/title/body≤280/**supersedes**);`agent_decision` 型额外带 kind/card_id/related_event_ids | **满块字节永不变** → cache 命中 |
+| **tick 消息** | now(分钟级)+ 最近到达(满块之后的散事件,确定性)+ **未来有效日程视图** + focus?/generation_request?/指令 | 每次全新,唯一 miss 段 |
+
+**双时序分工**(bi-temporal 双轴在 context 层的投影,同 L1→L2 的「事件流 + 物化视图」刀法):
+
+- **log 按 `recorded_at`(到达轴)记一切**——含未来事件的「到达通知」("周一收到周四会议的邀请"本身是过去的事实)和 supersede 修订。事件穿越 now 不失踪,改期轨迹可追("这个会改了三次"是信号)。
+- **尾部视图按 `occurred_at`(事件轴)给权威当前态**:`superseded_by_id IS NULL AND occurred_at ∈ (now, +FUTURE_VIEW_DAYS]`,时间序,≤30 条一行式。时间序正确、supersede 已消解——模型不必在乱序 log 里心算时间线,旧版本复活被直接杜绝。
+- 同一 event id 跨两份互相引用:视图说"现在什么算数",log 说"这事怎么来的"。冗余成本 ≈ 每 tick 400-1200 token(uncached),买的是正确性。
+
+**prompt 铁律**(进静态段):"Events appear in ARRIVAL order. An event carrying `supersedes: X` REPLACES X — treat X as gone. The upcoming-schedule view in the tick message is authoritative for what's currently valid."
+
+### 4.2 状态与重建:一个 anchor 时间戳,确定性全量重建
+
+- **状态只有 `anchor`**(`last_prompt_tokens` 仅观测,校准估算),存一张小表(`user_id` PK)。**不存 message log、不存游标数组**——每次 tick 两段查询、确定性投影、历史段封闭集截断、固定分块,**字节必然与上轮一致** → 前缀命中。engine 返回 `effective_anchor`(正常 = 传入;就地 reset = now),api 持久化。
+- **agent 回复不保留**:决策彻底无状态(每 tick = 全部事件 + 当前时间 → 判断);有意义的输出(出卡)已写回 L1,下轮作为新到达事件回到 log。run 内多轮工具轮次用完即弃。
+- 未满块(最近散事件)每轮在 tick 段重算,平均 K/2 条 ≈ 1k token——简单性的价格,K 可调。
+- 竞态从简:同用户两 run 并发时后写 anchor 者胜,代价 = 下轮一次 cache miss(context 可重建,无正确性风险)。
+
+### 4.3 cache 断点、TTL 与实测
+
+- **断点在代码里显式标**(不依赖 litellm config):最后一个满块尾 + tick 尾各一个 `cache_control`。命中路径:无新满块 → 满块断点精确命中;新封满块 → 回溯(≤20 block)命中上一满块,增量只写新块。
+- **实测通过(2026-07-04,经本地 litellm 全链路)**:连续 user block 三家全接受(Anthropic 直连 merge 成单 turn 多 content block 且 **cache_control 保留**、Bedrock 路径、glm 原生允许),内容零丢失,**无需 assistant 占位**;增量 append 逐数字符合预期——首写 4344 → 同前缀新 tick 读 4322/写 22 → append 新块读 4322/写 2181。**glm 隐式缓存命中同样可观测**(`cached_tokens=3776`,增量 append 照常命中);glm 剩余未知:TTL 不可控、账单折扣未确认(命中 ≠ 打折,上线前查 Z.AI 定价)。**实现后 docker e2e(2026-07-05,123 事件 seed,glm)**:tick1 `prompt=17932 blocks=2 tail=23` 首建;60s 后 tick2 同 anchor 重建 `prompt=17998 cache_read=17920` — **99.6% 前缀命中**,未命中仅 78 token(分钟级 now)——确定性重建 byte-identical 的直接证明。
+- **TTL 按触发频率选档**(配置位):
+
+| 触发间隔 | TTL 选择 | 说明 |
+|---|---|---|
+| ≤5min | 默认 `5m` | TTL 每次命中自动续命,连续触发永不冷 |
+| 5min–1h | **必须 `1h`**(写 2×/读 0.1×)| 5m 档下每次都是 cache write(1.25×)——**比不用 cache 还贵** |
+| >1h | 不指望 cache | 回到无状态 full input |
+
+### 4.4 agent 多轮工作(探索 → 验证 → 出卡)
+
+- **工具两个**:`events_search`(log 外的补充检索;核实候选 event 是当前版本——supersede 链保证改期/取消可见)+ `submit_card`(run-scoped 收集,schema/cap/重复 intent_key 在工具层校验)。
+- **去重零额外机制**:出卡历史就是事件流的一部分——log 里的 `agent_decision` 到达记录(带 card_id/related_event_ids)天然是"我最近提议过什么";尾部视图 + log 双保险。**不再有独立的 recent_proposals 查询/种子段**(被到达流吸收)。
+- **验证内建于生成**:决定出一张卡时 `sources[]` 已核实(event 真实、未被 supersede、未重复)——无后置校验步。
+- **输出 0..N 张**:每个值得说的点一张,没有就 0 张;prompt 写死宁缺毋滥(原则 3)。
+
+### 4.5 出卡收尾
+
+1. 卡入 `pai_pipeline_runs`(现状形态不变,前端零改动)。
+2. **写一条 L1 `agent_decision` event**(`source=agent_action`、`structured:{kind:"proactive_proposal", card_id, related_event_ids}`)——消费侧对 L1 的**唯一写入**;没出卡的 run 零写入。`structured.kind` 与 `memory_edit` 双写的画像变更事件区分。**下一 tick 它回到 log,去重闭环自动闭合。**
+
+### 4.6 reset(遗忘)
+
+- **两个维度、各一处判**:时间维度在 api(`fresh` 无行 / `max_age` anchor>3d → anchor=now);空间维度在 engine **构建时即时判**——log 估算 token > `LOG_TOKEN_BUDGET` → **就地 reset**(anchor:=now、历史段按最新 30k 重截、增量清空,同一 tick 内完成)。即时判修掉了"看上一轮 usage"的滞后缺口:connector backfill 灌 5000 条也炸不了单轮(当场消化);也根除了旧死循环(reset 不缩 log → 每 tick full write)。
+- **动作**:三种触发在 engine 侧同构——历史段 = 从新 anchor 往回预算内的最新到达(一次 ~30k full write),之后回到稳态。engine 回传 `effective_anchor`,api 持久化。
+- **永不压缩**:压缩丢信息(尤其未来事件)、改写前缀 bust 全部 cache、还多花一次 LLM 调用;timeline 是真源,reset 重建天然完整(原则 7)。
+- **已知边界(接受)**:①去重记忆有界——reset 截掉老的 agent_decision 到达,极低频下可能对仍活跃的老 source 重复提案(后果=一张重复卡;将来可用 pipeline_runs.sources[] 兜底,零架构改动);②`recorded_at` 是事务开始时间,长 ingest 事务的行可能"迟到可见"——不丢事件(增量段每 tick 全查),最坏插进已封满块 → 一次 cache miss 自愈。
+
+### 4.7 变量表(全部可调)
+
+| 变量 | 默认 | 语义 |
+|---|---|---|
+| `LOG_LOOKBACK_DAYS` | 3 | 历史段时间界(低密度用户不回溯到几个月前)|
+| `INITIAL_LOG_TOKEN_BUDGET` | 30_000 | 历史段截断(reset 后的起步背景;估算 len/3)|
+| `LOG_TOKEN_BUDGET` | 80_000 | 全 log 上限(估算);超 → 构建时就地 reset。80k 估算 ≈ 实际 prompt ≤120k(加 system/portrait/run 内工具轮),128k 窗口安全——**不是随手调大的旋钮** |
+| `RESET_MAX_AGE_DAYS` | 3 | anchor 年龄上限(api 侧时间维度)|
+| `BLOCK_SIZE_EVENTS` | 50 | 满块事件数 |
+| `FUTURE_VIEW_DAYS / LIMIT` | 7 / 30 | 尾部视图窗口(天然双界:30 条 × title≤200 字符)|
+| `CACHE_TTL` | 按用户 tick 节奏 | interval ≤5min → `5m`(续命链);更慢 → `1h`;api 决定随请求传 |
+
+条数上限(旧 `_ARRIVALS_LIMIT=2000`)已删——token 预算全覆盖;SQL/HTTP 层留传输护栏(1500/5000,实现细节非行为参数,命中时截断仍确定性)。
+
+**成本**:一次多轮 run(cached log + 几次工具调用),对比旧 batch 的 26–48 次独立 LLM 调用数量级下降;高频档(1min tick)下 log 全程 0.1× 计价,每 tick 增量 ≈ 未满块 + 视图 + 指令。run 频率 = 触发频率;无新事件 tick 的 SQL 预门是后续 trigger 模块的活(§六),本期靠 scheduled 节奏控制。
+
+---
+
+## 五、执行:复用 Agent Core("替你做了" = 准备 + 一次审批 + 自动完成)
+
+- **准备做厚**:卡片呈现前把草稿/资料备好(agent 在 run 内经工具检索历史往来),卡片只差"点确认"。准备永远安全、可丢弃。
+- **审批 = 唯一 HITL 断点**:T2 副作用卡的 `primary_action.agent_prompt` 审批后执行,复用 [Agent Core](./2026-06-04-agentrun-control-plane) `interrupt()` + `Command(resume)`;不可逆动作(Composio side-effecting / browser 破坏性点击)即使开 bypass 也强制断点。
+- **本期范围**:单步副作用(发邮件/改日历);多步编排后续。
+
+---
+
+## 六、后续迭代(本期明确不做)
+
+| 推迟项 | 一句话 |
+|---|---|
+| 事件驱动触发 + SQL 预门 | revision/tombstone 到达即评估 + per-user coalesce/debounce;高频定时下"无新事件 ∧ 无临近事件 → skip 零 LLM"的确定性预门——都归将来的 trigger 模块 |
+| checkpoint 预约唤醒 | evolve/chat 建"到点看一眼 X"的 scheduler 任务(意图进任务表,不进事件流)|
+| 评估/生成分层 | 独立评估 tick、小模型闸、preset 参数矩阵——单 run 形态不够用了再拆 |
+| 质检 eval 器 | 独立 critic 评卡;本期靠 agent 自验 + 宁缺毋滥 prompt |
+| 呈现分级 | T0.5 surface 状态机、push 频率预算、节律窗口;本期 = 现状卡片流 |
+| reward 回流 | 隐式 dismiss 降权(快通道)+ evolve 负信号蒸馏(慢通道);显式偏好已经走画像 |
+| 安全加固 | event 内容 untrusted 处理、卡面内容策略、provenance 展示(用户拍板:暂不考虑)|
+| pattern 激活 | tier 门控 + feature 层;冷启动先验,数据稀疏期再评估要不要 |
+| source_ref 下钻 | 按 `{source, table, id}` 取 L0 原文的端点;event snippet 不够写卡时再建 |
+| shadow / journal | 外部用户 cohort 前加 delivery gate;静默噪声超标再加 decision journal |
+
+---
+
+## 七、贯穿例子:Alex 的一天(简化版)
+
+> 前夜:L1 有周四 17:00 "Diana sync"(后被改期 supersede 成周五 10:00)、周五 14:00 "候选人 onsite";USER 画像含 "founder @ PIN AI" 和"不看 crypto 类内容"。scheduler 有每天 08:00 的 `generator.scheduled`。
+
+- **08:00 scheduled tick**:log(anchor 起的到达流,cached)里有 Diana 会议的**修订链**(改期通知周三就到了);tick 尾部的未来视图给出当前有效日程——周五 10:00 Diana(改期后版本)与 14:00 onsite 同天 → agent 核实 → 出 **1 张待确认卡**「周五 10:00 与 14:00 onsite 同天,要我回复 Diana 确认吗?」;log 里还有 newsletter 类到达,agent 判不值得 → 没出。**L1 写 1 条 agent_decision。**
+- **08:01–11:29 若开着分钟级 tick**:log 前缀全程 cache 命中(0.1× 计价),每 tick 只付"now + 未满块 + 视图"的增量;08:00 出的卡以 agent_decision 到达记录回到 log → 后续 tick 天然不重复提案。
+- **11:30 用户在 chat 里说"每天晚上 8 点也帮我看一眼"** → chat agent 建一条 `generator.scheduled`(cron 任务快照下轮起注入 prompt,agent 可见可管理)。
+- **16:20 用户点首页按钮**(manual):**同一条 context 线上的一次 tick**(focus 进 tick 指令)→ 出 2 张。
+- **20:00 新建的 scheduled tick**:无新增值得说的 → **0 张,零写入**(正常结果,trace 可查为什么)。
+
+> 全天出 3 张卡,L1 只多 3 条 agent_decision;没出卡的 tick 不留痕;log 只在 reset(构建时估算>80k 就地 ∨ anchor>3d)时重建。
+
+---
+
+## 相关
+
+- **基础设施**:[Lifelong Memory 系统设计](./2026-06-23-lifelong-memory-system)(`pai_events` / `events_search` / portrait / supersede / evolve)。
+- **复用/依据**:[Agent Core 控制平面](./2026-06-04-agentrun-control-plane)(HITL)、[卡片防谄媚](./2026-05-13-card-reward-infra)(reward 回流的将来时)、[Eight-card Generation Runtime](./2026-06-04-eight-card-generation-runtime)(被退役的旧 batch pipeline 来历)、[Pattern-Driven Card Generation](./2026-05-15-pattern-driven-card-generation)(pattern 先验,推迟)。
+- **模块**:[Generation](../modules/generation)、[Feedback](../modules/feedback)、[Background Tasks](../modules/background-tasks)。

@@ -7,7 +7,13 @@ args_template:
 since_param: query
 since_format: gmail_query
 result_path: [messages]
-id_field: messageId
+id_field: id
+# Generic L0 mapping (unified pai_raw): map_item extracts the envelope from
+# the raw Composio item via these paths (was the typed _map_gmail_message).
+entity_type: messages
+timestamp_path: [messageTimestamp]
+title_path: [subject]
+snippet_path: [snippet]
 sync_interval_hours: 12
 description: "User's recent inbox / sent / labelled email, decoded full body (messageText) included."
 notes: |

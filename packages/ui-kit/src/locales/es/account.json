@@ -31,7 +31,7 @@
   },
   "autoGenerate": {
     "title": "Generación automática",
-    "description": "Genera tarjetas automáticamente a partir de los datos nuevos de tus fuentes conectadas."
+    "description": "Revisa periódicamente tu línea de tiempo y genera una tarjeta solo cuando algo merece tu atención — la mayoría de las revisiones no producen nada."
   },
   "proactive": {
     "title": "Pulso proactivo",
@@ -88,17 +88,31 @@
     "basic": {
       "name": "Basic",
       "credits": "3.900 créditos / mes",
-      "perks": ["Feed diario de tarjetas", "Conecta 3 apps", "Correo + Calendario"]
+      "perks": [
+        "Feed diario de tarjetas",
+        "Conecta 3 apps",
+        "Correo + Calendario"
+      ]
     },
     "pro": {
       "name": "Pro",
       "credits": "9.900 créditos / mes",
-      "perks": ["Todo lo de Basic", "Conecta apps ilimitadas", "Modo Voz + Ambiente", "Ejecución prioritaria"]
+      "perks": [
+        "Todo lo de Basic",
+        "Conecta apps ilimitadas",
+        "Modo Voz + Ambiente",
+        "Ejecución prioritaria"
+      ]
     },
     "max": {
       "name": "Max",
       "credits": "19.900 créditos / mes",
-      "perks": ["Todo lo de Pro", "Personalidades a medida", "Compartir en equipo", "Acceso anticipado a modelos"]
+      "perks": [
+        "Todo lo de Pro",
+        "Personalidades a medida",
+        "Compartir en equipo",
+        "Acceso anticipado a modelos"
+      ]
     }
   },
   "paywall": {
@@ -206,8 +220,8 @@
     "pageSubtitle": "Cómo se comporta tu IA: tono, formato y valores predeterminados.",
     "proactiveTitle": "Proactivo",
     "proactiveDescription": "Con qué frecuencia tu IA proactiva revisa tu actividad.",
-    "dreamingTitle": "Sueños",
-    "dreamingDescription": "Revisa las sesiones de sueño en segundo plano, los cambios de perfil y las tarjetas candidatas.",
+    "evolutionTitle": "Sueños",
+    "evolutionDescription": "Revisa las sesiones de sueño en segundo plano, los cambios de perfil y las tarjetas candidatas.",
     "generationTitle": "Generación",
     "generationDescription": "Ajusta cómo se generan y se muestran las tarjetas.",
     "scheduledTasksTitle": "Tareas programadas",
@@ -232,7 +246,7 @@
     "iosOnlyModels": "Los modelos en el dispositivo solo están disponibles en la app de iOS. Abre esta página en la versión nativa para descargar, verificar o eliminar los perfiles de Whisper / LLM local.",
     "localStorageNote": "Los modelos se guardan localmente y nunca se vuelven a subir. Si una descarga falla, el plugin pasa automáticamente al mirror secundario."
   },
-  "dreaming": {
+  "evolution": {
     "title": "Sueños automáticos",
     "runsDaily": "Se ejecuta cada día a las {{time}}",
     "enabledNotice": "Sueños automáticos activados.",

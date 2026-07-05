@@ -34,7 +34,8 @@ export class DeviceStateSource implements AmbientSource {
     this.latestBattery = battery;
     this.handleDevice(device);
     await AmbientAi.device.startMonitoring();
-    await AmbientAi.battery.startMonitoring({ intervalMs: 5 * 60_000 });
+    // 方案 A (2026-07-01): battery 5min → 1min(电量变化慢,再高频没意义)。
+    await AmbientAi.battery.startMonitoring({ intervalMs: 60_000 });
     this.started = true;
   }
 

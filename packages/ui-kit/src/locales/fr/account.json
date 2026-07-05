@@ -31,7 +31,7 @@
   },
   "autoGenerate": {
     "title": "Génération automatique",
-    "description": "Génère automatiquement des cartes à partir des nouvelles données de vos sources connectées."
+    "description": "Passe régulièrement en revue ta timeline et ne crée une carte que lorsque quelque chose mérite ton attention — la plupart des vérifications ne produisent rien."
   },
   "proactive": {
     "title": "Rythme proactif",
@@ -88,17 +88,31 @@
     "basic": {
       "name": "Basic",
       "credits": "3 900 crédits / mois",
-      "perks": ["Flux de cartes quotidien", "Connectez 3 apps", "E-mail + Calendrier"]
+      "perks": [
+        "Flux de cartes quotidien",
+        "Connectez 3 apps",
+        "E-mail + Calendrier"
+      ]
     },
     "pro": {
       "name": "Pro",
       "credits": "9 900 crédits / mois",
-      "perks": ["Tout dans Basic", "Connectez des apps en illimité", "Mode Voix + Ambient", "Exécution prioritaire"]
+      "perks": [
+        "Tout dans Basic",
+        "Connectez des apps en illimité",
+        "Mode Voix + Ambient",
+        "Exécution prioritaire"
+      ]
     },
     "max": {
       "name": "Max",
       "credits": "19 900 crédits / mois",
-      "perks": ["Tout dans Pro", "Personas personnalisés", "Partage en équipe", "Modèles en avant-première"]
+      "perks": [
+        "Tout dans Pro",
+        "Personas personnalisés",
+        "Partage en équipe",
+        "Modèles en avant-première"
+      ]
     }
   },
   "paywall": {
@@ -206,8 +220,8 @@
     "pageSubtitle": "Le comportement de votre IA — ton, mise en forme et valeurs par défaut.",
     "proactiveTitle": "Proactif",
     "proactiveDescription": "À quelle fréquence votre IA proactive prend de vos nouvelles.",
-    "dreamingTitle": "Rêverie",
-    "dreamingDescription": "Consultez les sessions de rêverie en arrière-plan, les changements de profil et les cartes candidates.",
+    "evolutionTitle": "Rêverie",
+    "evolutionDescription": "Consultez les sessions de rêverie en arrière-plan, les changements de profil et les cartes candidates.",
     "generationTitle": "Génération",
     "generationDescription": "Ajustez la façon dont les cartes sont générées et présentées.",
     "scheduledTasksTitle": "Tâches planifiées",
@@ -232,7 +246,7 @@
     "iosOnlyModels": "Les modèles sur l'appareil ne sont disponibles que dans l'app iOS. Ouvrez cette page dans la version native pour télécharger, vérifier ou supprimer les profils Whisper / LLM local.",
     "localStorageNote": "Les modèles sont stockés localement et ne sont jamais renvoyés en ligne. Si un téléchargement échoue, le plugin bascule automatiquement sur le miroir secondaire."
   },
-  "dreaming": {
+  "evolution": {
     "title": "Rêverie automatique",
     "runsDaily": "S'exécute chaque jour à {{time}}",
     "enabledNotice": "Rêverie automatique activée.",

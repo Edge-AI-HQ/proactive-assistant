@@ -186,20 +186,18 @@ export {
 // import @pin-ai/core，ui-web 不再转出。
 
 // ── profile：MIRROR 共享展示层（apps/web MirrorDesktop + proactive
-//    MirrorMobile 复用；数据走 @pin-ai/state 的 useProfileSnapshot /
-//    useProfileMemories；各 app 的 layout shell 自己持 tab/openGroups/expandedGoal）。──
+//    MirrorMobile 复用；数据走 @pin-ai/state 的 usePortrait——L2 画像 markdown；
+//    Identity tab 渲染 USER+MEMORY、Goals tab 渲染 GOALS；各 app 的 layout
+//    shell 自己持 tab 切换的 ephemeral state）。──
 export {
-  ProfilePanel,
-  MemoryPanel,
-  GoalsGrid,
-  GoalDetail,
-  IdentitySummaryCard,
-  WorkbenchTabButton,
-  type ProfileGroupKey,
+  EmptyState,
+  PortraitSection,
+  IdentityPanel,
+  GoalsPanel,
 } from "./profile/mirror";
 
 // ── account：SETTING sections + 订阅（真实 Stripe 链路） ──
-export { default as AutoDreamingSettings } from "./account/AutoDreamingSettings";
+export { default as AutoEvolutionSettings } from "./account/AutoEvolutionSettings";
 export { default as AutoGenerateSettings } from "./account/AutoGenerateSettings";
 export { default as GenerationLanguageSettings } from "./account/GenerationLanguageSettings";
 export { default as ScheduledTasksSettings } from "./account/ScheduledTasksSettings";
@@ -221,7 +219,7 @@ export {
   DrawerDescription,
 } from "./ui/drawer";
 
-// ── debug：开发调试面板（pipeline run / generate / skills / memories /
-//    crystallize）。支持可选受控（open/onOpenChange/hideTrigger）：iOS 不传=
+// ── debug：开发调试面板（pipeline run / generate / skills / memories）。
+//    支持可选受控（open/onOpenChange/hideTrigger）：iOS 不传=
 //    自管+自带 gear，apps/web sidebar 传受控+自画 debug icon。 ──
 export { default as DebugPanel } from "./debug/DebugPanel";

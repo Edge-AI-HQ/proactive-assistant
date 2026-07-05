@@ -10,8 +10,10 @@ export interface BufferOptions {
 }
 
 const DEFAULT_OPTS: Required<BufferOptions> = {
-  maxItems: 20,
-  maxAgeMs: 5_000,
+  // 方案 A (2026-07-01): 每个 source event 立即 flush → outbox → 立即 drain 上报,
+  // 事件级实时。maxAgeMs 只作兜底。原来是 20 条 / 5s 批处理。
+  maxItems: 1,
+  maxAgeMs: 500,
 };
 
 /**

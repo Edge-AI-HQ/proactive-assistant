@@ -43,7 +43,6 @@ def _setup_path() -> None:
 _setup_path()
 
 from pinai_api.domains.connector.apps import ingest_runner as ir  # noqa: E402
-from pinai_api.domains.connector.apps import raw_sources  # noqa: E402
 
 
 async def _main(args: argparse.Namespace) -> int:
@@ -56,11 +55,12 @@ async def _main(args: argparse.Namespace) -> int:
         print(f"ℹ {args.toolkit} is connect_only — ingest skipped by design")
         return 0
 
-    # Generic-store recipes (no typed table) must declare timestamp_path,
-    # else occurred_at falls back to NOW() and pollutes the 24h window.
-    # Mirrors the CI gate in tests/web/services/test_recipes_static.py.
-    is_generic = not recipe.fanout and args.toolkit not in raw_sources.typed_composio_toolkits()
-    if is_generic and not recipe.timestamp_path:
+    # Every non-fanout recipe writes pai_raw via the generic mapper, so it must
+    # declare timestamp_path — else occurred_at falls back to NOW() and pollutes
+    # the 24h window. Timeless sources (profile snapshots) are exempt. Mirrors
+    # the CI gate in tests/web/services/test_recipes_static.py.
+    needs_timestamp = not recipe.fanout and not recipe.timeless
+    if needs_timestamp and not recipe.timestamp_path:
         print(
             f"❌ {args.toolkit}: generic-store recipe must set timestamp_path "
             "(occurred_at would fall back to NOW() and pollute the 24h window)",

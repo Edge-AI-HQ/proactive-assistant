@@ -2,7 +2,7 @@
 
 Custom connectors are intentionally narrow for now: validate a Remote MCP
 HTTP endpoint, pull server/tool/resource metadata, and store that data in
-the generic pai_raw_events table so existing agent context reads it.
+the unified pai_raw table so existing agent context reads it.
 """
 
 from __future__ import annotations

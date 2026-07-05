@@ -1,19 +1,15 @@
-"""_serialize_passing_cards 给每张选中卡注入 sourceApps(确定性,非 LLM)。"""
+"""_serialize_cards 给每张提交卡注入 sourceApps + run-scoped id(确定性,非 LLM)。"""
 
 from __future__ import annotations
 
-from agent_engine.transport.routes.generate import _serialize_passing_cards
-from pinai_contracts.api_models import (
-    CardEvaluation,
-    GeneratedCard,
-    GeneratorOutput,
-)
+from agent_engine.transport.routes.generate import _serialize_cards
+from pinai_contracts.api_models import GeneratedCard, GeneratorOutput
 
 
-def _output_with_one_card() -> GeneratorOutput:
-    card = GeneratedCard.model_validate(
+def _card(intent_key: str) -> GeneratedCard:
+    return GeneratedCard.model_validate(
         {
-            "intentKey": "k1",
+            "intentKey": intent_key,
             "goalBasket": "work",
             "title": "t",
             "whyNow": "w",
@@ -23,30 +19,31 @@ def _output_with_one_card() -> GeneratorOutput:
             "urgency": 0.5,
             "importance": 0.5,
             "sources": [
-                "world id=w1, title=news",
-                "gmail message id=m1, subject=s",
+                "world event id=evt_w1, title=news",
+                "gmail event id=evt_m1, title=s",
             ],
         }
     )
-    evaluation = CardEvaluation.model_validate(
-        {
-            "intentKey": "k1",
-            "relevance": 7,
-            "actionability": 7,
-            "whyNowClarity": 7,
-            "novelty": 7,
-            "decisionCompression": 7,
-            "overall": 7,
-            "pass": True,
-            "feedback": "ok",
-        }
-    )
-    return GeneratorOutput.model_validate(
-        {"reasoning": "r", "cards": [card], "evaluations": [evaluation], "batchFeedback": "b"}
-    )
 
 
-def test_serialize_stamps_source_apps() -> None:
-    cards, _evals = _serialize_passing_cards(_output_with_one_card(), run_id="run1", max_cards=1)
+def _output(*cards: GeneratedCard) -> GeneratorOutput:
+    return GeneratorOutput(reasoning="r", cards=list(cards), evaluations=[], batch_feedback="")
+
+
+def test_serialize_stamps_source_apps_and_ids() -> None:
+    cards = _serialize_cards(_output(_card("k1")), run_id="run1", max_cards=1)
     assert cards[0]["sourceApps"] == ["web", "gmail"]
     assert cards[0]["id"] == "run1_card_00"
+
+
+def test_serialize_zero_cards_is_valid() -> None:
+    # 0 张是正常结果(宁缺毋滥)——不抛错、不造 fallback 卡。
+    assert _serialize_cards(_output(), run_id="run1", max_cards=8) == []
+
+
+def test_serialize_caps_to_max_cards() -> None:
+    cards = _serialize_cards(
+        _output(_card("k1"), _card("k2"), _card("k3")), run_id="run1", max_cards=2
+    )
+    assert [c["intentKey"] for c in cards] == ["k1", "k2"]
+    assert [c["id"] for c in cards] == ["run1_card_00", "run1_card_01"]

@@ -1,11 +1,12 @@
 """设备时区漂移 → 用户周期任务跟随重算。
 
-profile.timezone（跟随设备）变化时，把该用户所有 cron 调度任务的 timezone
-改写并按新时区重算 next_run_at。这是纯调度操作（只碰 pai_scheduled_tasks +
-orchestration.cron.next_fire），不依赖任何业务域；放在 orchestration 层，和
-cron / dispatcher / tick_loop 同属调度编排。此前历史上挂在 generation 的
-scheduled_generators，导致 user_model.profile_* 反向 import generation、与
-generation → user_model（ProfileRepository）构成互相依赖的环，归位至此即解环。
+用户时区（pai_user_settings.timezone，跟随设备）变化时，把该用户所有 cron
+调度任务的 timezone 改写并按新时区重算 next_run_at。这是纯调度操作（只碰
+pai_scheduled_tasks + orchestration.cron.next_fire），不依赖任何业务域；放在
+orchestration 层，和 cron / dispatcher / tick_loop 同属调度编排。此前历史上挂
+在 generation 的 scheduled_generators，导致 user_model.settings_* 反向 import
+generation、与 generation → user_model（SettingsRepository）构成互相依赖的环，
+归位至此即解环。
 """
 
 from __future__ import annotations

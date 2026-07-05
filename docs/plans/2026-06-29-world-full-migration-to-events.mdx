@@ -1,0 +1,136 @@
+---
+title: "World 完整迁移进 pai_events"
+status: brainstorm
+date: 2026-06-29
+---
+
+# World 完整迁移进 pai_events
+
+> Block5 落地的是**缩小版**(只投影、不下线读 API),本 spec 设计**完整版**:让 world 只走
+> 一条路(`pai_events` + `events_search`),退役 `pai_world_signal_user_view` + 下线
+> `world_recent`/`world_search` 读 API。完整版的前置依赖见 [lifelong-memory 系统
+> §四/§331/§十三](./2026-06-23-lifelong-memory-system)。
+
+## 一、为什么要做(缩小版留的债)
+
+Block5 让高 salience 的 world 信号投成 `world_news` event 进 L1,但**保留了** world 的
+专用读/写链路。代价:
+
+1. **双路重复**:world 现在两条路到 agent——`events_search`(投影的 `world_news` event)
+   + `world_recent`/`world_search`(`pai_world_signal_user_view` JOIN)。generator 若同时
+   用两者,同一条新闻可能被拿两次、卡片重复(generation_context 当前两路都拉:`/world/recent`
+   limit 200 + `/events/search`)。这是缩小版最直接的副作用。
+2. **两套存储 + 两套状态**:`pai_world_signal_user_view`(salience/status/consumed/reference)
+   和 `pai_events`(curated_at/reference_count/structured) 并存,salience 在两边各写一份
+   (Block5 投影时 structured 一份、view 一份),漂移风险。
+3. **检索不统一**:doc §62 原则 7 要「一个检索入口」,world 却还有自己的 `world_search`。
+
+完整版消除这三点:world 只在 `pai_events`,只经 `events_search`。
+
+## 二、目标终态
+
+| 维度 | 缩小版(现状) | 完整版(本 spec) |
+|---|---|---|
+| L0 全局原文 | `pai_world_signals` | `pai_world_signals`(不变,`source_ref` 指回) |
+| per-user 状态 | `pai_world_signal_user_view` | **退役** → 状态落 `pai_events` |
+| 投影 | salience≥0.5 投 `world_news` event(additive) | 同,但成为**唯一** per-user 落点 |
+| agent 读 | `world_recent` + `world_search` + `events_search` | **只** `events_search`(加 hybrid) |
+| agent 写 | `/world/{score,consume,reference}` 写 view | 改写 `pai_events`(或退役,见 §四) |
+| 检索能力 | world_search=hybrid / events_search=semantic-only | `events_search`=hybrid(全 events 受益) |
+
+## 三、三个真实障碍 + 解法
+
+### 障碍 1:events_search 是 semantic-only,下线 world_search 会降级
+
+`pai_events` 只有 `embedding`(pgvector HNSW),没有 tsvector;`events_search.search_semantic`
+是纯 cosine。`world_search` 是 **keyword(ts_rank) + semantic(cosine) + RRF 融合**——搜新闻
+靠 keyword 精确命中标题。直接下线 = 丢 keyword。
+
+**解法**:给 `events_search` 加 hybrid keyword,**惠及全 events**(不只 world):
+- migration:`pai_events` 加 `title_body_tsv tsvector` generated 列(`to_tsvector('english', title||' '||coalesce(body,''))`)+ GIN index。
+- `EventsRepository` 加 `search_keyword`(ts_rank_cd over `title_body_tsv @@ plainto_tsquery`)。
+- `search_semantic` + `search_keyword` 用 RRF(k=60)融合,复刻 `world_search` 现有逻辑(api/.../world/agent.py 的 `_rrf_blend` 可抽成共享 util)。
+- events_search native tool/route 加 query → hybrid;无 query → 现有 recency 路径不变。
+- **注意**:hybrid 是 events_search 的**通用增强**,不是 world 专属。这块可以**独立先做**(不依赖 world 迁移),做完先让普通 events 检索也变强。
+
+### 障碍 2:world 的 per-user 状态机在 pai_events 无对应(尤其 consumed)
+
+| world view 字段 | 含义 | pai_events 映射 |
+|---|---|---|
+| `salience` | per-user 相关性评分 | `structured.salience`(Block5 已写)✅ |
+| `reference_count` / `referenced_by_runs` | 被 evolve 引用 | `pai_events.reference_count` / `referenced_by_runs` ✅ |
+| `status: new` | 刚 ingest 未评分 | 不投影(salience 未算)= 没有 event,天然 ✅ |
+| `status: open` | 评分后活跃 | `curated_at IS NULL`(uncurated)≈ open ✅ |
+| `status: archived` | 用户/系统归档 | `superseded_by_id` 或新增——低频,可后置 |
+| **`status: consumed`** | **出过卡片,别再出** | **events 无对应(核心障碍)** ⚠️ |
+
+`consumed` 是 **generation 去重**用的:一条新闻出过卡就标记,下个周期不再出同一条。
+`pai_events` 是 bi-temporal 事件流(记「发生了什么」),没有「这条用过没」的 per-user 消费态。
+
+**两个候选解(本 spec 推荐 B)**:
+
+- **方案 A:`structured.consumed_by_run_id`**。投影的 `world_news` event 在 structured 标记
+  出过卡的 run;`/consume` 改写这个字段;generation 过滤 `structured->>'consumed_by_run_id' IS NULL`。
+  改动小,但「consumed」仍寄生在 events 的 structured 里,且 JSONB 过滤无索引。
+
+- **方案 B(推荐):consumed 移出状态机,变 generation 的去重逻辑**。出卡时卡片已记 `sources[]`
+  (含 world signal id);generation 出卡前查最近 N 张卡片的 sources、排除已用过的 `source_ref`。
+  这样 `pai_events` 完全不需要 consumed 概念——它本就不该有 per-user 消费态。`/consume` 端点
+  退役。**理由**:consumed 不是事件属性,是「我对这条做过什么」,属于 generation 的职责;把它
+  从存储状态机下放到消费逻辑,才是 events 该有的样子(对称于 doc「事件流不可变、消费态在别处」)。
+
+> 拍板项:consumed 用 A(留状态)还是 B(下放 generation)。B 更干净但要改 generation 去重;
+> A 改动小但留技术债。
+
+### 障碍 3:全局共享 → per-user 投影的量控制
+
+`pai_world_signals` 全局一份,投影是 per-user(每个 active user 把高 salience 的投成自己的
+event)。Block5 只做了 `salience ≥ 0.5` 阈值;doc §196 还要 **top-K per user**(别让 world
+淹没个人 events)。
+
+**解法**:`score_for_active_users` 投影前按 salience 排序、每用户每周期只投 top-K(K≈10)。
+阈值 + top-K 双重 gate。这块小,可并入投影逻辑。
+
+## 四、写 API 的去向
+
+| 端点 | 现状 | 完整版 |
+|---|---|---|
+| `/world/score` | world_scoring 内部调 `repo.score` 写 view | 投影时直接写 `pai_events`(已是 Block5 路径);外部 `/score` 端点退役或保留给手动重评 |
+| `/world/consume` | 写 view status=consumed | **方案 B → 退役**;方案 A → 改写 `pai_events.structured` |
+| `/world/reference` | bump view reference_count | 改 bump `pai_events.reference_count`(events 已有 reference 链,WP3)|
+| `/world/recent` | JOIN view | **下线** → `events_search`(event_type=world_news, 无 query, by salience/recency)|
+| `/world/search` | hybrid RRF over view | **下线** → `events_search`(加 hybrid 后, event_type=world_news filter)|
+
+`pai_world_signals`(全局原文 + 去重 normalized_url + embedding)**保留不动**:它是 L0 档案,
+`world_news` event 的 `source_ref` 指回它取全文。
+
+## 五、Work Packages(建议拆分,W1 可独立先行)
+
+| WP | 内容 | 依赖 | 可独立? |
+|---|---|---|---|
+| **W1** | events_search 加 hybrid(migration tsvector+GIN + search_keyword + RRF 融合 + native tool/route)| — | ✅ 独立增强,先做惠及全 events |
+| **W2** | 投影 top-K per user(score_for_active_users 加 top-K gate)| — | ✅ 小,可并入 |
+| **W3** | consumed 决策落地(方案 A 改 structured / 方案 B 改 generation 去重 + 退役 /consume)| 拍板 | 需先定 A/B |
+| **W4** | reference 写改道(`/world/reference` → bump pai_events)| — | ✅ |
+| **W5** | 下线读 API:`world_recent`/`world_search` native tool + route → events_search(world_news filter);generation_context 改只走 events_search(**消除双路重复**)| W1, W3 | 依赖 W1 hybrid + W3 consumed |
+| **W6** | `pai_world_signal_user_view` 退役:数据迁移(salience/reference → pai_events structured/reference_count)+ migration drop view | W3,W4,W5 | 最后,contract 步 |
+
+> **W1 + W5 合起来就治好缩小版的双路重复**:events_search 有了 hybrid 不降级,world 读 API
+> 下线后只剩一条路。W6 是收尾的 contract(drop view)。
+
+## 六、风险
+
+- **hybrid 性能**:全 events 加 tsvector generated 列 + GIN,写入有开销(每 append 重算 tsv);
+  events 写频远低于 raw,可接受。GIN 体积监控。
+- **consumed 语义变更冲击 generation**:方案 B 要改 generation 去重逻辑,若漏改 = 同一新闻重复
+  出卡。W3 必须配 generation 侧的端到端验。
+- **prod 数据迁移**:W6 drop view 前要把 view 的 salience/reference 迁进对应 world_news event;
+  没有 event 的(salience<阈值未投影)直接丢(本就不该进 L1)。迁移幂等 + 先于 drop。
+- **`world_news` 已在 events 排序权重表(0.6)**:无需改排序;但要确认 0.6 对新闻合适(可能偏高,
+  外部新闻不该压过用户自己的 meeting/transaction)。
+
+## 相关
+
+- **母 plan**:[Lifelong Memory 系统](./2026-06-23-lifelong-memory-system)(§四 world 投影、§十三 实现进度)。
+- **缩小版实现**:Block5(commit `5c66a74b`),`api/domains/connector/world/world_scoring.py`。
+- **消费侧**:[Proactive + 卡片生成](./2026-06-23-proactive-card-generation)(consumed 方案 B 涉及 generation 去重)。

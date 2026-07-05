@@ -14,8 +14,8 @@ import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import type { User } from "@supabase/supabase-js";
 import type { IntentCard } from "@pin-ai/core";
-import { fetchMemories, fetchProfileSnapshot, listUserDevices, deleteAccount, DeleteAccountError } from "@pin-ai/core";
-import { cardsKeys, profileKeys, profileMemoriesKeys, userDevicesKeys, useComposio, usePipeline } from "@pin-ai/state";
+import { fetchPortrait, listUserDevices, deleteAccount, DeleteAccountError } from "@pin-ai/core";
+import { cardsKeys, portraitKeys, userDevicesKeys, useComposio, usePipeline } from "@pin-ai/state";
 
 import AgentRunIndicator from "./AgentRunIndicator";
 import { CardActionsProvider } from "./CardActionsProvider";
@@ -99,29 +99,16 @@ export default function AppShell({
   // 天然暖着，无需重复。延迟 1.2s 避开首屏渲染与 NOW 首拉的窗口。
   useEffect(() => {
     const timer = setTimeout(() => {
+      // Lifelong-memory：老 profile snapshot / memories 预取退役，PROFILE 屏
+      // 数据 = L2 portrait（usePortrait 同 key，SWR 秒出）。events 由 NOW/
+      // Ambient 常驻消费者天然暖着，不重复预取。
       void queryClient.prefetchQuery({
-        queryKey: profileKeys.snapshot(),
-        queryFn: ({ signal }) => fetchProfileSnapshot(signal),
+        queryKey: portraitKeys.slots(),
+        queryFn: ({ signal }) => fetchPortrait(signal),
       });
       void queryClient.prefetchQuery({
         queryKey: userDevicesKeys.all,
         queryFn: () => listUserDevices(),
-      });
-      // 参数须与 packages/state/queries/profile.ts useProfileMemories 首页一致（页宽 5）。
-      void queryClient.prefetchInfiniteQuery({
-        queryKey: profileMemoriesKeys.list(),
-        queryFn: ({ pageParam, signal }) =>
-          fetchMemories(
-            {
-              status: "active",
-              limit: 5,
-              offset: pageParam,
-              orderBy: "created_at",
-              orderDirection: "desc",
-            },
-            signal,
-          ),
-        initialPageParam: 0,
       });
     }, 1_200);
     return () => clearTimeout(timer);

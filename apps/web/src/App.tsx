@@ -126,6 +126,7 @@ export default function App() {
                   <Route path="/tasks" element={null} />
                   <Route path="/connect" element={null} />
                   <Route path="/mirror" element={null} />
+                  <Route path="/events" element={null} />
                   <Route path="/setting" element={null} />
                   <Route path="/subscription" element={null} />
                   <Route path="/notifications" element={null} />

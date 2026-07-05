@@ -37,14 +37,18 @@ class GenerateRequest(BaseModel):
     # default-generated run_<uuid>.
     run_id: str | None = Field(default=None, max_length=64)
     # Optional user-requested topic for chat-triggered generation. When set,
-    # the planner biases candidates toward this focus (still grounding-strict).
+    # the agent biases candidates toward this focus (still grounding-strict).
     # Omitted by the home "Generate" button / auto-fires → normal batch.
     focus: str | None = Field(default=None, max_length=400)
-    # Web-side pattern matcher output. Chat receives this read-only so it
-    # never has to query the pattern DB (trust boundary).
-    matched_patterns: list[dict[str, Any]] = Field(default_factory=list)
-    context_since: datetime | None = Field(default=None)
-    context_until: datetime | None = Field(default=None)
+    # Per-user context anchor (api-managed, design §4.2): the arrival log is
+    # rebuilt deterministically from (anchor − LOOKBACK, now] so the prompt
+    # prefix stays byte-identical across ticks (cache hits). None = fresh
+    # line (reset semantics — log starts from now − LOOKBACK).
+    anchor: datetime | None = Field(default=None)
+    # Prompt-cache TTL for the log/tick breakpoints ("5m" | "1h") — decided
+    # api-side from the user's tick cadence (≤5min interval → 5m refresh
+    # chain; slower → 1h so entries survive between ticks). Design §4.3.
+    cache_ttl: str = Field(default="5m", pattern="^(5m|1h)$")
     generation_request: dict[str, Any] | None = Field(default=None)
     # User's IANA timezone (profile truth, web-resolved — chat has no DB).
     # "Today is …" in the generator prompt is computed in THIS timezone:
@@ -61,131 +65,32 @@ class GenerateResponse(BaseModel):
     cards: list[dict[str, Any]]
     evaluations: list[dict[str, Any]]
     batch_feedback: str | None = None
+    # Tick usage (largest model call) — observability for cache health and
+    # estimate calibration.
+    prompt_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    # The anchor the tick actually built on (== request anchor, or == now
+    # after an in-place budget reset). The api side persists this value.
+    effective_anchor: datetime | None = None
 
 
-_INFRA_ERROR_CARD_MARKERS = (
-    "_error=",
-    "connecterror",
-    "name or service not known",
-    "no-grounded-source-fallback",
-    "system-error tombstone",
-    "should never reach the user-facing pipeline",
-    "数据源暂时无法连接",
-    "无法生成个性化卡片",
-)
-
-_DUPLICATE_REJECTION_MARKERS = (
-    "duplicate",
-    "near-duplicate",
-    "near duplicate",
-    "novelty is critically low",
-    "novelty is severely penalized",
-    "重复",
-    "近重复",
-)
-
-
-def _is_infra_error_card(card: dict[str, Any], evaluation: dict[str, Any] | None) -> bool:
-    sources = card.get("sources")
-    source_text = " ".join(str(item) for item in sources) if isinstance(sources, list) else ""
-    text = " ".join(
-        str(value)
-        for value in (
-            card.get("intentKey"),
-            card.get("title"),
-            card.get("whyNow"),
-            card.get("summary"),
-            source_text,
-            (evaluation or {}).get("feedback"),
-        )
-        if value
-    ).lower()
-    return any(marker in text for marker in _INFRA_ERROR_CARD_MARKERS)
-
-
-def _is_duplicate_rejection(evaluation: dict[str, Any] | None) -> bool:
-    if not evaluation or evaluation.get("pass") is True:
-        return False
-    feedback = str(evaluation.get("feedback") or "").lower()
-    return any(marker in feedback for marker in _DUPLICATE_REJECTION_MARKERS)
-
-
-def _serialize_passing_cards(
+def _serialize_cards(
     parsed,
     *,
     run_id: str,
     max_cards: int,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Serialize generator output and select cards for the web response.
+) -> list[dict[str, Any]]:
+    """Serialize the agent's submitted cards for the web response.
 
-    Passing evaluator rows win. If the evaluator fails every candidate,
-    keep the highest-scored candidate instead of turning the whole
-    user-facing generation into a 502; the failed evaluation remains
-    attached for audit.
+    The agent already verified each card before `submit_card` (design §四) —
+    there is no evaluator filter, no fallback selection. 0 cards is a valid
+    outcome (silence is normal); the cap is a hard maximum.
     """
-    raw_cards: list[dict[str, Any]] = [c.model_dump(by_alias=True) for c in parsed.cards]
-    if not raw_cards:
-        raise ValueError("generator returned no cards")
-    evals: list[dict[str, Any]] = [e.model_dump(by_alias=True) for e in parsed.evaluations]
-    eval_by_intent = {
-        str(ev.get("intentKey")): ev for ev in evals if isinstance(ev.get("intentKey"), str)
-    }
-    passing_intents = {
-        str(ev.get("intentKey")) for ev in evals if ev.get("pass") is True and ev.get("intentKey")
-    }
-    cards = [
-        card
-        for card in raw_cards
-        if str(card.get("intentKey")) in passing_intents
-        and not _is_infra_error_card(card, eval_by_intent.get(str(card.get("intentKey"))))
-    ]
-    if cards and len(cards) < max_cards:
-        selected_intents = {str(card.get("intentKey")) for card in cards}
-        fill_candidates = [
-            card
-            for card in raw_cards
-            if str(card.get("intentKey")) not in selected_intents
-            and not _is_infra_error_card(card, eval_by_intent.get(str(card.get("intentKey"))))
-            and not _is_duplicate_rejection(eval_by_intent.get(str(card.get("intentKey"))))
-            and float(eval_by_intent.get(str(card.get("intentKey")), {}).get("overall") or -1) >= 5
-        ]
-        cards.extend(
-            sorted(
-                fill_candidates,
-                key=lambda card: float(
-                    eval_by_intent.get(str(card.get("intentKey")), {}).get("overall") or -1
-                ),
-                reverse=True,
-            )[: max_cards - len(cards)]
-        )
-    if not cards:
-        fallback_cards = [
-            card
-            for card in raw_cards
-            if not _is_infra_error_card(card, eval_by_intent.get(str(card.get("intentKey"))))
-        ]
-        if not fallback_cards:
-            raise ValueError("generator returned only infrastructure-error cards")
-        cards = sorted(
-            fallback_cards,
-            key=lambda card: float(
-                eval_by_intent.get(str(card.get("intentKey")), {}).get("overall") or -1
-            ),
-            reverse=True,
-        )[:1]
-        logger.warning(
-            "generator returned no passing cards run=%s candidates=%d; keeping best-scored candidate",
-            run_id,
-            len(raw_cards),
-        )
-    cards = cards[:max_cards]
+    cards: list[dict[str, Any]] = [c.model_dump(by_alias=True) for c in parsed.cards[:max_cards]]
     for i, card in enumerate(cards):
         card["id"] = f"{run_id}_card_{i:02d}"
         card["sourceApps"] = derive_source_apps(card.get("sources") or [])
-    intent_to_id = {c["intentKey"]: c["id"] for c in cards}
-    for ev in evals:
-        ev["cardId"] = intent_to_id.get(ev["intentKey"])
-    return cards, evals
+    return cards
 
 
 def _extract_bearer(authorization: str | None) -> str:
@@ -242,8 +147,7 @@ async def generate(
     # Caller-supplied run_id wins (scheduler dispatch path); else mint
     # a fresh one (legacy sync /api/generate path).
     run_id = req.run_id or f"run_{uuid.uuid4().hex[:16]}"
-    context_until = req.context_until or datetime.now(UTC)
-    current_date = _local_date(context_until, req.timezone)
+    current_date = _local_date(datetime.now(UTC), req.timezone)
     t0 = time.perf_counter()
     # Guarded by _verify_principal — virtual_key is non-None here.
     virtual_key = principal.virtual_key
@@ -257,12 +161,11 @@ async def generate(
                 user_id=principal.user_id,
                 run_id=run_id,
                 run_jwt=raw_jwt,
+                anchor=req.anchor,
+                cache_ttl=req.cache_ttl,
                 cards_to_generate=req.cards_to_generate,
                 output_language=req.output_language,
                 focus=req.focus,
-                matched_patterns=req.matched_patterns,
-                context_since=req.context_since,
-                context_until=context_until,
                 generation_request=req.generation_request,
             )
     except TimeoutError as e:
@@ -284,17 +187,9 @@ async def generate(
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
 
     duration_ms = int((time.perf_counter() - t0) * 1000)
-    # Convert each card / evaluation to dict, filter out evaluator-failed
-    # cards, then assign run-scoped ids so downstream selection / evaluation
-    # joins are stable. We dump with by_alias=True so `pass_` round-trips
-    # back as `pass` on the wire.
-    try:
-        cards, evals = _serialize_passing_cards(
-            parsed, run_id=run_id, max_cards=req.cards_to_generate
-        )
-    except ValueError as e:
-        logger.warning("generator shape error run_id=%s: %s", run_id, e)
-        raise HTTPException(status_code=502, detail=f"generator shape error: {e}") from e
+    # Serialize the submitted cards and assign run-scoped ids. No evaluator
+    # filter (the stage is retired) — 0 cards is a valid, normal outcome.
+    cards = _serialize_cards(parsed, run_id=run_id, max_cards=req.cards_to_generate)
     # Stamp scheduled-generator provenance onto each card so the UI can show a
     # lightweight "Scheduled · <label>" marker. Source comes from the
     # dispatcher's generation_request (absent on manual / auto runs); cards are
@@ -308,11 +203,10 @@ async def generate(
             if source_label:
                 card.setdefault("sourceLabel", source_label)
     logger.info(
-        "generator ok run_id=%s duration=%dms cards=%d evals=%d",
+        "generator ok run_id=%s duration=%dms cards=%d",
         run_id,
         duration_ms,
         len(cards),
-        len(evals),
     )
     return GenerateResponse(
         run_id=run_id,
@@ -320,6 +214,10 @@ async def generate(
         duration_ms=duration_ms,
         reasoning=parsed.reasoning,
         cards=cards,
-        evaluations=evals,
-        batch_feedback=parsed.batch_feedback,
+        # Evaluator stage retired — kept in the wire shape for compat.
+        evaluations=[],
+        batch_feedback=parsed.batch_feedback or None,
+        prompt_tokens=parsed.prompt_tokens,
+        cache_read_tokens=parsed.cache_read_tokens,
+        effective_anchor=parsed.effective_anchor,
     )

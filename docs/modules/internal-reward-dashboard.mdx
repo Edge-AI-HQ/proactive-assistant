@@ -83,7 +83,7 @@ flowchart LR
 | Personal data | `/personal-data` 是给 reviewer 查 generator 可见上下文的只读 snapshot,不作为 agent runtime 依赖。 |
 | Pattern library SSOT | `docs/data/patterns.yaml` (111 条 abstract pattern) + `docs/data/demo_cards.yaml` (111 张 demo) 是 checkin 真源;由 `backend/scripts/seed_patterns.py` upsert 到 `pai_card_patterns` / `pai_card_pattern_demos`。每条 pattern 必须带 `human_insight` 和 `title_strategy`;每张 demo 必须带 `card.title` 和具体 `source_data`。新增 / 修改 pattern 改这两个 YAML,跑 seed 即可。 |
 | Pattern matcher | `backend/services/api/src/pinai_api/domains/generation/pattern_matcher.py`,Python DSL evaluator(后缀族 + op-specific evaluators)。**只在 api 进程跑**(生成时),agent-engine 进程无 DB access 禁止读 pattern DB,matched 结果通过 generate payload 传过去(信任边界)。 |
-| Phase1 seed | `backend/services/api/src/pinai_api/orchestration/phase1_seed.py`:api 侧从 `pai_personal_signals` / `pai_memory` / `pai_world_signal_user_view` / `pai_profile` 拉一份 coarse phase1,供 matcher 在 agent-engine data-collector 跑之前先评估。 |
+| Phase1 seed | `backend/services/api/src/pinai_api/orchestration/phase1_seed.py`:api 侧从 L1 `pai_events`(birthday / 周期义务 / `event_type=meeting` / `is_vip communication`)+ `pai_world_signal_user_view` 拉一份 coarse phase1(老 `pai_personal_signals` / `pai_memory` / `pai_profile` 已退役),供 matcher 在 agent-engine data-collector 跑之前先评估。 |
 | Per-user fingerprint | `pai_user_pattern_pref` / `pai_user_intent_pref`,`UserFingerprintRepository.record_open` / `record_dismiss` 由 reward / feedback 事件自动调用;`score_for(pattern, base)` 用 hit_rate × recency_decay 做 per-user 排序,3 次连续 dismiss 触发 `suppress_until`。 |
 | Pattern health | `backend/services/reward-dashboard/src/pinai_reward_dashboard/pattern_health.py`:`hit_rate_7d < 0.15` / `dismiss_rate_30d > 0.6` / `evaluator_human_gap > 3` / 30d 趋势 < -0.5 任一触发就把 active pattern 切 retired。每次跑也会刷新 `base_hit_rate`。 |
 | Hit 持久化 | agent-engine /agent/generate 返回后,`persist_generator_run` 把 evaluator 标注的 `pattern_id` 配合 matcher evidence 写入 `pai_card_pattern_hits`。FK 不存在的 pattern_id(LLM 幻觉)在 INSERT 前过滤,避免把整个 transaction 拖崩。 |
@@ -132,7 +132,7 @@ API client 组 query string 时只允许有限数字和白名单 enum。`NaN` / 
 | `GET /api/reward-dashboard/runs/{run_id}/trace` | 读取已有 trace artifact;不存在时返回 explicit missing。 |
 | `POST /api/reward-dashboard/runs/{run_id}/trace` | 按需从 LangSmith 生成/刷新 trace artifact。 |
 | `GET /api/reward-dashboard/metrics` | dashboard 时间序列指标。 |
-| `GET /api/reward-dashboard/personal-data` | reviewer inspect 用的 profile/settings/memory/signals/raw/device/connector snapshot。 |
+| `GET /api/reward-dashboard/personal-data` | reviewer inspect 用的 snapshot(`personal_data_snapshot.py`)。reviewer-facing category 名不变,底层已切新架构:profile→`pai_user_settings`+`pai_user_strings`(USER) / goals→`pai_user_strings`(GOALS) / memory + signals→`pai_events` / skills→`pai_skill_index` / world→`pai_world_signal_user_view` / raw→`pai_raw*` / device / connector。 |
 | `GET /api/reward-dashboard/patterns` | 列 pattern,可按 category / status / surprise / tier / intent 筛;`facets` 字段返回分类 + intent 的 distinct 列表给前端 select。 |
 | `GET /api/reward-dashboard/patterns/{pattern_id}` | 单 pattern 详情 + `demos` + `recentHits`(最近 25 行命中)+ `health`(只算这一行,不扫全库)。 |
 | `POST /api/reward-dashboard/patterns/{pattern_id}` | upsert pattern 字段(abstract / human_insight / category / intent / tier / surprise_init / practical_init / signals_required / trigger_dsl / card_skeleton / specializations)。None 字段保持原值。 |
@@ -300,7 +300,7 @@ cd proactive-ai-frontend && npm run type-check
 - `pai_pipeline_runs` 的 INSERT 必须带 `ON CONFLICT (user_id, id) DO UPDATE`,否则 dispatcher 重试同一 run_id 会撞主键 → 一直失败。
 - pending_review pattern 不能从详情页直接 flip status,UI 已经禁用按钮并提示去 `/patterns/pending`。如果有脚本绕过 UI 直接 SQL flip,审批审计会丢。
 - 编辑 pattern 时 reviewer 输入的 trigger DSL / card_skeleton 是 JSON,前端在提交前先 `JSON.parse` 校验。如果文档需要新增字段,得同步前端 textarea + 后端 `_opt_json_*` 校验。
-- 一次 dispatcher 跑只让 api 进程收到一份 phase1 snapshot(从 `pai_personal_signals` / `pai_memory` / `pai_world_signal_user_view` / `pai_profile` 抽,不是 agent-engine sandbox 的深度 phase1);很多需要"agent-engine 才能 reach 到"的 signal source 在 api 这一侧拿不到,导致 90+ 条 seed pattern 在当前阶段不会 fire。要 fire 更多 pattern,要么扩 phase1_seed 的查询面,要么等 agent-engine data-collector 跑完再 round-trip 回 api matcher(目前没做,Phase 2 之后再说)。
+- 一次 dispatcher 跑只让 api 进程收到一份 phase1 snapshot(从 L1 `pai_events` + `pai_world_signal_user_view` 抽,老 `pai_personal_signals` / `pai_memory` / `pai_profile` 已退役,不是 agent-engine sandbox 的深度 phase1);很多需要"agent-engine 才能 reach 到"的 signal source 在 api 这一侧拿不到,导致 90+ 条 seed pattern 在当前阶段不会 fire。要 fire 更多 pattern,要么扩 phase1_seed 的查询面,要么等 agent-engine data-collector 跑完再 round-trip 回 api matcher(目前没做,Phase 2 之后再说)。
 
 ## 相关模块
 

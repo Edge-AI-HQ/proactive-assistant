@@ -13,6 +13,9 @@ since_param: min_start_time
 since_format: iso
 result_path: [collection]
 id_field: uri
+entity_type: events
+timestamp_path: [start_time]
+title_path: [name]
 sync_interval_hours: 12
 description: "User's Calendly scheduled meetings (event_memberships includes hosts, not invitees)."
 notes: |

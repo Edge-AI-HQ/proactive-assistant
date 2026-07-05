@@ -25,8 +25,7 @@ export interface AmbientSourceConsent {
 
 // Mirrors backend `SettingsResponse` (camelCase via _CamelModel alias).
 // Single source of truth for every user-settings toggle: language,
-// auto-generate (+ interval), auto-dreaming, auto-crystallize, ambient
-// capture consent.
+// auto-generate (+ interval), auto-dreaming, ambient capture consent.
 /** Chat agent permission mode (composer mode menu). Add future modes here +
  *  a matching backend CHECK + i18n label. 'bypass' drops the HITL approval
  *  gate on side-effect tools; 'ask' (default) keeps it. */
@@ -37,7 +36,6 @@ export interface UserSettings {
   autoGenerate: boolean;
   autoGenerateIntervalMinutes: number;
   autoDreaming: boolean;
-  autoCrystallize: boolean;
   /** Per-user "permission mode" for the chat agent's side-effect tools:
    * 'ask' (pause for HITL approval) or 'bypass' (no per-call pause). Shown as
    * a mode menu under the composer; persisted + cross-device via /settings.

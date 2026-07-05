@@ -9,8 +9,8 @@ description: "Composio、device 注册、mobile ingest 与 connector.preview/ini
 
 Data Connectors 负责"数据源怎么接进来",不负责后续记忆提炼。两条主链路:
 
-- **Composio**:用户在前端 OAuth 连 SaaS 账号 → `/api/composio/connect` 立即入队 `connector.preview`(onboarding 快速反馈,后台等 ACTIVE 后只拉最多 50 条并生成 summary cache)→ preview 完成后再入队 `connector.init` → scheduler 派给 `domains/connector/apps/connector_ingest.py` in-process handler → handler 从 Composio 拉一批数据写到 `pai_raw_<toolkit>` typed 表 + `pai_personal_signals` → 同时入一次 once-shot `connector.evolve`(LLM 沉淀)和一行 recurring `connector.sync`(cron `*/30 * * * *`)。`connector.sync` 用 `pai_connector_sync_cursors.last_synced_at` 当 since 下界做增量。
-- **Device / mobile**:用户在前端注册设备拿一次性 token(bcrypt 存 `pai_user_devices`),后续走 `POST /api/devices/ingest`(`X-Device-Id` + `X-Device-Token` 鉴权)写入 `pai_personal_signals` 或 `pai_raw_device_*`。落点由 `domains/connector/device/device_ingest/policies.py:DEVICE_INGEST_POLICIES` 决定,unknown kind 默认 fallback 到 signal。
+- **Composio**:用户在前端 OAuth 连 SaaS 账号 → `/api/composio/connect` 立即入队 `connector.preview`(onboarding 快速反馈,后台等 ACTIVE 后只拉最多 50 条并生成 summary cache)→ preview 完成后再入队 `connector.init` → scheduler 派给 `domains/connector/apps/connector_ingest.py` in-process handler → handler 从 Composio 拉一批数据写到 **L0 generic `pai_raw`**(lifelong-memory L0 统一后所有 toolkit 走 generic upserter,`_resolve_upserter` 恒返回 `generic_ingest.upsert_generic`;typed `pai_raw_<toolkit>` upserter 保留但已不驱动写入,P7 删)→ 调 `project_unprojected` 把新 raw 投影成 L1 `pai_events`(`pending`)→ 同时入一次 once-shot `connector.evolve`(LLM curate 事件 + 蒸馏画像)和一行 recurring `connector.sync`(cron `*/30 * * * *`)。`connector.sync` 用 `pai_connector_sync_cursors.last_synced_at` 当 since 下界做增量。
+- **Device / mobile**:用户在前端注册设备拿一次性 token(bcrypt 存 `pai_user_devices`),后续走 `POST /api/devices/ingest`(`X-Device-Id` + `X-Device-Token` 鉴权)。落点由 `domains/connector/device/device_ingest/policies.py:DEVICE_INGEST_POLICIES` 决定:`raw_only` / `dual` kind 写 typed `pai_raw_device_*`,`signal_only`(ambient utterance / visit / motion 等)写 generic `pai_raw` context event,两条都经 `project_unprojected` 投影成 L1 `pai_events`(不再写退役的 `pai_personal_signals`)。unknown kind 默认 fallback 到 `signal_only`。
 
 ```mermaid
 flowchart LR
@@ -23,20 +23,21 @@ flowchart LR
   Wait --> Q
   Q --> Sched["api tick_loop"]
   Sched --> InitH["connector_ingest.run (_run_init)"]
-  InitH --> Raw[("pai_raw_<toolkit>")]
-  InitH --> PS[("pai_personal_signals")]
+  InitH --> Raw[("pai_raw (generic L0)")]
+  Raw --> Proj["project_unprojected"]
+  Proj --> Events[("pai_events (L1, pending)")]
   InitH --> Q2[("connector.evolve once + connector.sync schedule")]
   Q2 --> Sched
   Sched --> SyncH["connector_ingest.run (_run_sync)"]
   SyncH --> Cursors[("pai_connector_sync_cursors")]
   SyncH --> Raw
-  SyncH --> PS
   Mobile["Mobile / web client"] --> Reg["/api/devices/register"]
   Reg --> Devices[("pai_user_devices (bcrypt)")]
   Mobile --> Ingest["/api/devices/ingest"]
   Ingest --> Policy["DeviceIngestPolicyRegistry"]
-  Policy --> PS
+  Policy --> Raw
   Policy --> RawDev[("pai_raw_device_*")]
+  RawDev --> Proj
 ```
 
 ## 边界
@@ -65,10 +66,10 @@ flowchart LR
 |---|---|---|---|
 | Composio(`/api/composio/*`) | OAuth、ACTIVE 状态、label 展示、入队 connector.preview / connector.init | `domains/connector/apps/composio_ui.py`、`domains/connector/apps/composio_service.py`、`useComposio.ts` | 状态来自 Composio API;label 持久化在 `pai_connector_labels`(eager resolve on /wait,lazy retry on /connections);`/connect` 入队 `connector.preview`;preview 完成后入队 `connector.init`;旧连接 / 无 preview 时 `/wait` 仍会 ACTIVE 入队 init;支持多账号(`allow_multiple=True`) |
 | `connector.preview` handler | onboarding 独立快速反馈 | `domains/connector/apps/connector_ingest.py:_run_preview` | 后台等 ACTIVE,只拉 summary source 最多 50 条,写 raw 后生成 `pai_onboarding_connector_summary_cache`;同时保证 `connector.init` 入队 |
-| `connector.init` handler | ACTIVE 后首次拉一批 | `domains/connector/apps/connector_ingest.py:_run_init` | `pai_raw_<toolkit>` + `pai_personal_signals` + 入 `connector.evolve` + 建立 `connector.sync` schedule |
-| `connector.sync` handler | 周期增量拉取(cron `*/30 * * * *`) | `domains/connector/apps/connector_ingest.py:_run_sync` | 同上 raw / signals;成功才前推 `pai_connector_sync_cursors.last_synced_at` |
+| `connector.init` handler | ACTIVE 后首次拉一批 | `domains/connector/apps/connector_ingest.py:_run_init` | generic `pai_raw` → `project_unprojected` 投影 `pai_events`(pending) + 入 `connector.evolve` + 建立 `connector.sync` schedule |
+| `connector.sync` handler | 周期增量拉取(cron `*/30 * * * *`) | `domains/connector/apps/connector_ingest.py:_run_sync` | 同上 raw → projector → events;成功才前推 `pai_connector_sync_cursors.last_synced_at` |
 | Device registry | 给 web / iOS / Android / wearable 等设备发 token | `domains/connector/device/devices_ui.py`、`platform/db/repositories/devices.py` | `pai_user_devices`(`device_token_hash` 是 bcrypt rounds=10) |
-| Device ingest | 接收端侧整理后的 item / snapshot / health observation | `domains/connector/device/devices_ui.py:POST /ingest`、`domains/connector/device/device_ingest/policies.py`、`domains/connector/device/device_ingest/health.py` | 由 policy 决定:`pai_personal_signals` / `pai_raw_device_apps_snapshot` / `pai_raw_device_contacts_snapshot` / `pai_raw_device_health_observations` |
+| Device ingest | 接收端侧整理后的 item / snapshot / health observation | `domains/connector/device/devices_ui.py:POST /ingest`、`domains/connector/device/device_ingest/policies.py`、`domains/connector/device/device_ingest/health.py` | 由 policy 决定:`signal_only`→generic `pai_raw` context event / `raw_only`+`dual`→`pai_raw_device_apps_snapshot` / `pai_raw_device_contacts_snapshot` / `pai_raw_device_health_observations`;都经 projector 投影 `pai_events` |
 
 ## 当前 Composio toolkit 状态
 
@@ -102,7 +103,7 @@ flowchart LR
 - **recipe 推断**:`domains/connector/apps/recipe_infer.py`。无 yaml 的 toolkit 在首次 `connector.init` 时从 Composio tool schema 推断(挑无副作用 list action、推 result_path/id_field/timestamp_path),置信度 high(直接跑)/ mid(dedupe 退化 hash,标记补 yaml)/ 无可读 action → connect_only 降级。手写 yaml 永远优先;进程内缓存,sync 不重复打 meta API。
 - **googlesuper 一键连**:`db/ingest_recipes/googlesuper.yaml` 声明 `fanout: [gmail, googlecalendar, googledrive, googledocs, googlesheets]`——一次 OAuth、一个 cid,init/sync 内部扇出跑五个 sub recipe。Gmail/Calendar/Drive 复用 typed 表,Docs/Sheets 走 `pai_raw_events`;cursor 按 **sub** toolkit 各自推进,sync schedule 只有一条 `sync.googlesuper.<cid>`,单 sub 失败不拖垮其余。identity 复用 `GMAIL_GET_PROFILE`。与单独连 sub-toolkit 共存,dedupe 天然去重。Slides 目前通过 Drive 文件元数据覆盖,因为 Composio Google Slides 没有批量 list/search action。
 - **全量目录 + 自定义 auth**:`GET /api/composio/catalog`(分页浏览 1000+ toolkit;`connect` 本来就接受任意 slug);`POST /connect` 带 `authConfig: {authScheme, credentials}` 走 `use_custom_auth`(用户自带 OAuth client / API key)。
-- **命令行验收**:`backend/scripts/collector_cli.py` — `catalog`/`infer`/`connect`/`connections`/`ingest`(伪造 task 直调 `connector_ingest.run()`,绕过 scheduler)/`raw`/`evolve`(入队+轮询)/`signals`/`memory`/`pipeline`(一条龙)。后台链路全程不依赖前端。
+- **命令行验收**:`backend/scripts/collector_cli.py` — `catalog`/`infer`/`connect`/`connections`/`ingest`(伪造 task 直调 `connector_ingest.run()`,绕过 scheduler)/`raw`/`evolve`(入队+轮询)/`signals`/`memory`/`pipeline`(一条龙)。后台链路全程不依赖前端。⚠️ `signals` / `memory` 子命令(`_dump_signals` / `cmd_memory`)仍查 `pai_personal_signals` / `pai_memory`——这两张表已在 `114` DROP,命令会报 UndefinedTable,验收改看 `pai_events`(见下文 SQL)。
 
 migration 历史:
 - `036_drop_unused_raw_tables.sql` 把 `pai_raw_gdocs_*` / `pai_raw_outlook_*` / `pai_raw_notion_*` / `pai_raw_asana_*` / `pai_raw_zoom_*` / `pai_raw_clickup_*` 等不在主线上的 raw 表删除。
@@ -136,7 +137,7 @@ sequenceDiagram
   Sched->>Q: claim due task (SKIP LOCKED)
   Sched->>H: connector_ingest.run(pool, task, run_id)
   H->>Composio: ingest_runner.run_fetch(toolkit, cid, limit, since=None)
-  H->>H: write pai_raw_<toolkit> + pai_personal_signals
+  H->>H: write generic pai_raw → project_unprojected → pai_events (pending)
   H->>Q: enqueue connector.evolve once + ensure connector.sync schedule
   H-->>Sched: succeeded
 ```
@@ -153,7 +154,7 @@ Onboarding 会先进入 Connect data,并在 `/api/composio/connect` 返回时立
 
 服务端有一层 summary cache:cache key = `schema version + model + toolkit + connected_account_id + raw fingerprint`。同一批 raw 数据重复进入 onboarding / 刷新 / 前端重复触发时,直接返回 `pai_onboarding_connector_summary_cache.summary`,不再打 LLM。每次请求都会写 `pai_onboarding_connector_summary_runs`,记录 `item_count / collect_ms / llm_ms / total_ms / status(empty|cached|succeeded|failed)` 便于持续观察首轮生成是否能压到 5-6 秒。
 
-这条链路只负责**用户可见的 onboarding 反馈**:不写 memory / profile / skill,也不替代后台 `connector.evolve`。长期沉淀仍由 `connector.init` 入队的 `connector.evolve` 完成。
+这条链路只负责**用户可见的 onboarding 反馈**:不 curate 事件、不写 L2 画像 / skill,也不替代后台 `connector.evolve`。长期沉淀(L1 事件 curate + L2 画像蒸馏)仍由 `connector.init` 入队的 `connector.evolve` 完成。
 
 ### `connector.sync` 增量
 
@@ -172,7 +173,7 @@ sequenceDiagram
     H->>H: since = now - 24h (bootstrap lookback)
   end
   H->>Composio: ingest_runner.run_fetch(..., since)
-  H->>H: write pai_raw_<toolkit> + pai_personal_signals
+  H->>H: write generic pai_raw → project_unprojected → pai_events (pending)
   alt inserted > 0
     H->>Cur: upsert last_synced_at = started_at
     H->>Q: enqueue connector.evolve once
@@ -205,7 +206,7 @@ sequenceDiagram
   FE->>Ing: items[] + X-Device-Id + X-Device-Token
   Ing->>DB: bcrypt.compare validate
   Ing->>Policy: resolve(kind) → policy
-  Policy->>DB: write pai_personal_signals / pai_raw_device_*
+  Policy->>DB: write generic pai_raw (signal_only) / pai_raw_device_* (raw_only,dual) → projector → pai_events
   Ing-->>FE: { results: [...] }
 ```
 
@@ -242,20 +243,20 @@ sequenceDiagram
 
 ### 设备统一时间线
 
-`GET /api/devices/{deviceId}/timeline` 在 server 端 UNION `pai_personal_signals` + `pai_raw_device_health_observations`,按 `occurred_at DESC` 排序 + 单一 keyset cursor。返回 envelope:
+`GET /api/devices/{deviceId}/timeline`(`devices_ui.py:get_device_timeline`)自 lifelong-memory L0 统一后**只查 `pai_raw`**(`toolkit='device' AND external_id=device_id`)——该设备的所有 source(health observation、apps/contacts snapshot、ambient/device context event)都落在 generic `pai_raw`,`entity_type` 当 `type` 区分 source,按 `occurred_at DESC` 排序 + 单一 keyset cursor。返回 envelope:
 
 ```json
 {
   "ok": true,
   "items": [
-    {"type": "signal" | "health", "occurred_at": "...", "row": {...}}
+    {"type": "<entity_type>", "occurred_at": "...", "row": {...}}
   ],
   "next_cursor": "..." | null,
   "has_more": true
 }
 ```
 
-`_HEALTH_POLICY` 留 `raw_only`(health 频率高,per-observation 写 signal 会让 `pai_personal_signals` 行数爆,影响 memory pipeline / generator 选卡)。前端 `DeviceTimeline.tsx` 用 `fetchDeviceTimeline` 一次拉合并流,signal 走 `SignalRow`,health 走 `HealthRow`,不做 client-side k-way merge。
+`_HEALTH_POLICY` 留 `raw_only`(health 频率高,逐 observation 写不进 L1 retrieval,留 L0 档案即可)。前端 `DeviceTimeline.tsx` 用 `fetchDeviceTimeline` 一次拉合并流,按 `type` 分流渲染,不做 client-side k-way merge。
 
 ## 当前设计
 
@@ -315,10 +316,12 @@ device 三张表(`pai_raw_device_apps_snapshot`、`pai_raw_device_contacts_snaps
 
 | Kind | 模式 | 落点 |
 |---|---|---|
-| `app_inventory` / `app_inventory_bootstrap` / `app_inventory_snapshot` | dual | `pai_raw_device_apps_snapshot` + `pai_personal_signals` |
-| `contact_directory` / `contact_bootstrap` / `contact_directory_snapshot` | dual | `pai_raw_device_contacts_snapshot` + `pai_personal_signals` |
+| `app_inventory` / `app_inventory_bootstrap` / `app_inventory_snapshot` | dual | `pai_raw_device_apps_snapshot` + generic `pai_raw` context event |
+| `contact_directory` / `contact_bootstrap` / `contact_directory_snapshot` | dual | `pai_raw_device_contacts_snapshot` + generic `pai_raw` context event |
 | `health.observation` | raw_only | `pai_raw_device_health_observations`(`domains/connector/device/device_ingest/health.py:parse_health_observations` 解析) |
-| `moment.*` / `attention.*` / 未知 kind | signal_only(fallback) | `pai_personal_signals`,payload 带 `ingest_fallback_reason` |
+| ambient(`ambient.utterance` / `ambient.visit` / `device.motion_segment` 等)/ `moment.*` / `attention.*` / 未知 kind | signal_only(fallback) | generic `pai_raw` context event(`entity_type` 见 policies `_kind_to_entity`),payload 带 `ingest_fallback_reason` |
+
+> signal_only / dual 写进 generic `pai_raw` 的 context event 经 `project_unprojected` 投影成 L1 `pai_events`(`source='device'`),不再写退役的 `pai_personal_signals`。
 
 `sync_mode`(item envelope 字段):
 
@@ -372,9 +375,10 @@ FROM pai_scheduled_tasks
 WHERE kind LIKE 'connector.%' AND user_id = $1
 ORDER BY updated_at DESC LIMIT 20;
 
--- 单 toolkit 的 raw 行
-SELECT count(*), max(occurred_at) FROM pai_raw_gmail_messages WHERE user_id = $1;
-SELECT count(*) FROM pai_personal_signals WHERE user_id = $1 AND kind LIKE 'connector.%';
+-- 单 toolkit 的 raw 行(Composio 现在落 generic pai_raw)
+SELECT count(*), max(occurred_at) FROM pai_raw WHERE user_id = $1 AND toolkit = 'gmail';
+-- 投影出的 L1 事件(取代退役的 pai_personal_signals)
+SELECT curation_status, count(*) FROM pai_events WHERE user_id = $1 GROUP BY curation_status;
 
 -- Cursor 状态
 SELECT * FROM pai_connector_sync_cursors WHERE user_id = $1;
@@ -410,7 +414,7 @@ make logs-api | grep -E "connector\.|composio|/devices/ingest"
 
 - [Memory](./memory):evolve agent 把 `pai_evolution_runs.refs_consumed` 沉淀成 memory / skill 的下游链路。
 - [Background Tasks](./background-tasks):`connector.init` / `connector.sync` / `connector.evolve` 在 scheduler 上的派发。
-- [Generation](./generation):卡片 prompt 读 `pai_raw_*` + `pai_personal_signals` + `pai_world_signals`。
+- [Generation](./generation):卡片生成读 L1 `pai_events`(`events_search`)+ `pai_world_signals` + L2 portrait。
 - [Runtime & Deployment](./runtime-deployment):api/agent-engine 信任边界、Composio master key、device token bcrypt。
 
 ## 相关 AI Plans

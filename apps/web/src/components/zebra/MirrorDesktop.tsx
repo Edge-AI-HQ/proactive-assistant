@@ -2,46 +2,21 @@ import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import {
-  GoalDetail,
-  GoalsGrid,
-  IdentitySummaryCard,
-  MemoryPanel,
-  ProfilePanel,
-  type ProfileGroupKey,
-  Text,
-} from "@pin-ai/ui-web";
-import { useProfileMemories, useProfileSnapshot } from "@pin-ai/state";
+import { GoalsPanel, PortraitSection, Text } from "@pin-ai/ui-web";
+import { usePortrait } from "@pin-ai/state";
 
 /**
- * Desktop (zebra) MIRROR —— 桌面布局 shell。数据走 @pin-ai/state 的
- * useProfileSnapshot / useProfileMemories；展示复用 @pin-ai/ui-web 的共享
- * panel。桌面相对移动端的赢点：Identity 下 Profile | Memory **并排两栏**
- * （不再 sub-tab 二选一），标题 + Identity/Goals pill 同一行，内容居中限宽。
- * tab / openGroups / expandedGoal 是 ephemeral UI state，留在这层。
+ * Desktop (zebra) MIRROR —— 桌面布局 shell。数据走 @pin-ai/state 的 usePortrait
+ * （L2 画像六段 markdown）；展示复用 @pin-ai/ui-web 的共享 panel。Identity tab
+ * 渲染 USER + MEMORY 两段画像，桌面相对移动端的赢点：两段 **并排两栏**（不再上下
+ * 堆叠）；Goals tab 渲染 GOALS。tab 是 ephemeral UI state，留在这层。
  */
 const TABS = ["identity", "goals"] as const;
 
 export default function MirrorDesktop() {
   const { t } = useTranslation("profile");
   const [activeTab, setActiveTab] = useState<(typeof TABS)[number]>("identity");
-  const { profile, activeGoals, loading, error } = useProfileSnapshot();
-  // Memory only renders inside the Identity tab — skip the fetch on Goals.
-  const memory = useProfileMemories(activeTab === "identity");
-  const [openGroups, setOpenGroups] = useState<Record<ProfileGroupKey, boolean>>({
-    facts: true,
-    preferences: false,
-    constraints: false,
-    metadata: false,
-  });
-  const [expandedGoal, setExpandedGoal] = useState<string | null>(null);
-
-  const toggleGroup = (group: ProfileGroupKey) =>
-    setOpenGroups((prev) => ({ ...prev, [group]: !prev[group] }));
-
-  const selectedGoal = expandedGoal
-    ? activeGoals.find((goal) => goal.key === expandedGoal) ?? null
-    : null;
+  const { slots, loading, error } = usePortrait();
 
   return (
     <div className="h-full overflow-y-auto px-8 pt-10 pb-12">
@@ -107,43 +82,34 @@ export default function MirrorDesktop() {
               transition={{ duration: 0.22, ease: [0.32, 0.72, 0, 1] }}
             >
               {activeTab === "identity" ? (
-                <>
-                  <div className="mb-5">
-                    <IdentitySummaryCard profile={profile} />
+                /* USER | MEMORY side by side — the desktop win. */
+                <div className="grid grid-cols-2 gap-5 items-start">
+                  <div className="glass-card-strong p-4">
+                    <PortraitSection
+                      title={t("portrait.user.title")}
+                      description={t("portrait.user.description")}
+                      content={slots.USER}
+                      emptyTitle={t("portrait.user.emptyTitle")}
+                      emptyDescription={t("portrait.user.emptyDescription")}
+                    />
                   </div>
-                  {/* Profile | Memory side by side — the desktop win (no sub-tab). */}
-                  <div className="grid grid-cols-2 gap-5 items-start">
-                    <div className="glass-card-strong p-4">
-                      <ProfilePanel profile={profile} openGroups={openGroups} onToggleGroup={toggleGroup} />
-                    </div>
-                    <div className="glass-card-strong p-4">
-                      {memory.loading && memory.memories.length === 0 ? (
-                        <div className="flex items-center justify-center gap-2 py-10">
-                          <Loader2 size={14} className="animate-spin text-foreground/40" />
-                          <Text variant="bodySm" className="text-foreground/40">{t("goalsView.loadingSnapshot")}</Text>
-                        </div>
-                      ) : (
-                        <MemoryPanel
-                          memories={memory.memories}
-                          total={memory.total}
-                          hasMore={memory.hasMore}
-                          loadingMore={memory.loadingMore}
-                          onLoadMore={memory.loadMore}
-                        />
-                      )}
-                    </div>
+                  <div className="glass-card-strong p-4">
+                    <PortraitSection
+                      title={t("portrait.memory.title")}
+                      description={t("portrait.memory.description")}
+                      content={slots.MEMORY}
+                      emptyTitle={t("portrait.memory.emptyTitle")}
+                      emptyDescription={t("portrait.memory.emptyDescription")}
+                    />
                   </div>
-                </>
+                </div>
               ) : (
-                <GoalsGrid goals={activeGoals} onOpen={setExpandedGoal} />
+                <GoalsPanel slots={slots} />
               )}
             </motion.div>
           </AnimatePresence>
         )}
       </div>
-
-      {/* Wide-screen goal detail = centered glass popup (GoalDetail picks it). */}
-      <GoalDetail goal={selectedGoal} onClose={() => setExpandedGoal(null)} />
     </div>
   );
 }

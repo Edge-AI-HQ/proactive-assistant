@@ -1,7 +1,7 @@
 """Feedback native @tool — read recent feedback events.
 
 Read-only here; agent-originated feedback writes go through the SDK or
-crystallize/dream agents, not the chat surface.
+dream / evolve agents, not the chat surface.
 """
 
 from __future__ import annotations

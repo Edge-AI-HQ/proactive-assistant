@@ -23,7 +23,7 @@ docs/plans/2026-05-07-composio-architecture-redesign.mdx.
 from __future__ import annotations
 
 from ..browser.tools import browser_tool
-from .cards import cards_recent, generate_card
+from .cards import generate_card
 from .composio_meta import (
     composio_get_tool_schemas,
     composio_manage_connections,
@@ -31,16 +31,9 @@ from .composio_meta import (
     composio_search_tools,
 )
 from .development_feedback import development_feedback_log
+from .events import event_append, event_source, events_search
 from .feedback import feedback_list
-from .memory import memory_add, memory_get, memory_list, memory_search
-from .preferences import preference_add, set_generation_language
-from .profile import (
-    goal_upsert,
-    profile_get,
-    profile_preference_merge,
-    profile_upsert,
-)
-from .raw import raw_gcal_today, raw_gcal_week, raw_gmail_recent, raw_list
+from .preferences import set_generation_language
 from .scheduled_generators import (
     scheduled_generator_create,
     scheduled_generator_create_once,
@@ -50,44 +43,27 @@ from .scheduled_generators import (
     scheduled_generator_preview,
     scheduled_generator_resume,
 )
-from .signals import signals_get, signals_kinds, signals_recent
 from .tavily import tavily_extract, tavily_search
-from .world import world_recent, world_search
+from .user_strings import memory_edit
 
 ALL_TOOLS = [
-    # Memory (long-term user fact layer)
-    memory_list,
-    memory_search,
-    memory_get,
-    memory_add,
-    # Signals (increment layer — open / consumed / archived).
-    # `signals_kinds` is the discovery entry point; `signals_recent` /
-    # `signals_get` drill into a chosen kind.
-    signals_kinds,
-    signals_recent,
-    signals_get,
-    # Profile + goals (persona / trajectory) + world context
-    profile_get,
-    profile_upsert,
-    profile_preference_merge,
-    goal_upsert,
-    world_recent,
-    world_search,
-    # Stated preferences (expression layer) + language switch. preference_add
-    # is the high-weight content-preference write; set_generation_language
-    # flips the deterministic output-language setting.
-    preference_add,
+    # Memory — unified layers. events_search/event_append are the L1 timeline
+    # (supersede the old memory_search / signals_recent / raw reads); memory_edit
+    # maintains the L2 portrait (USER/GOALS), which is also injected into
+    # the system prompt by PortraitMiddleware.
+    events_search,
+    event_source,
+    event_append,
+    memory_edit,
+    # World news now lives in the unified events stream (event_type=world_news);
+    # the agent reads it via events_search like any other event (W5: the dedicated
+    # world_recent / world_search tools are retired). Persona / facts / goals /
+    # stated preferences live in the L2 portrait (written via memory_edit).
+    # Output-language switch — a deterministic runtime setting, not a portrait edit.
     set_generation_language,
-    # Raw (high-frequency named tools + generic long-tail). These read
-    # the offline-ingested raw tables (gmail / gcal / etc.) — for
-    # FRESH SaaS data the model goes through the Composio meta-tools.
-    raw_gmail_recent,
-    raw_gcal_today,
-    raw_gcal_week,
-    raw_list,
-    # Cards + feedback (recency-bounded reference). generate_card lets the
-    # user trigger a fresh Now-page card from chat (optional topic focus).
-    cards_recent,
+    # generate_card lets the user trigger a fresh Now-page card from chat
+    # (optional topic focus). Recently-proposed cards are agent_decision
+    # events — read them via events_search, not a dedicated cards tool.
     generate_card,
     feedback_list,
     # Product-team triage suggestions. This is not a personalization signal.
@@ -126,12 +102,12 @@ ALL_TOOLS = [
 # surfaces a requires_action frame, a human decision resumes via
 # Command(resume=) (plan §五). Scope is deliberately narrow to protect UX:
 # outbound SaaS actions + high-weight EXPLICIT user writes only. Frequent
-# autonomous writes (memory_add) are intentionally excluded — gating them would
-# flood the user with approvals. Extend as new outbound/irreversible tools land.
+# autonomous writes (memory_edit / event_append) are intentionally excluded —
+# gating them would flood the user with approvals. Extend as new
+# outbound/irreversible tools land.
 SIDE_EFFECT_TOOL_NAMES = frozenset(
     {
         "COMPOSIO_MULTI_EXECUTE_TOOL",  # outbound SaaS action (send email / pay / …) — P0
-        "preference_add",  # high-weight explicit stated-preference write
     }
 )
 
@@ -146,27 +122,16 @@ __all__ = [
     "HITL_INTERRUPT_ON",
     "SIDE_EFFECT_TOOL_NAMES",
     "browser_tool",
-    "cards_recent",
     "composio_get_tool_schemas",
     "composio_manage_connections",
     "composio_multi_execute_tool",
     "composio_search_tools",
     "development_feedback_log",
+    "event_append",
+    "events_search",
     "feedback_list",
-    "goal_upsert",
-    "memory_add",
-    "memory_get",
-    "memory_list",
-    "memory_search",
-    "preference_add",
-    "profile_get",
-    "profile_preference_merge",
-    "profile_upsert",
+    "memory_edit",
     "set_generation_language",
-    "raw_gcal_today",
-    "raw_gcal_week",
-    "raw_gmail_recent",
-    "raw_list",
     "scheduled_generator_create",
     "scheduled_generator_create_once",
     "scheduled_generator_delete",
@@ -174,11 +139,6 @@ __all__ = [
     "scheduled_generator_pause",
     "scheduled_generator_preview",
     "scheduled_generator_resume",
-    "signals_get",
-    "signals_kinds",
-    "signals_recent",
     "tavily_extract",
     "tavily_search",
-    "world_recent",
-    "world_search",
 ]

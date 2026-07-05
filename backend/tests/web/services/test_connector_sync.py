@@ -85,7 +85,7 @@ def fake_adapter(monkeypatch):
     """Stub a 'fake' toolkit so `connector_ingest._run_sync` proceeds:
       * `ingest_runner.load_recipe('fake')` → a fake ingestable Recipe
       * `ingest_runner.run_fetch(...)` → returns whatever the test stages
-      * `_UPSERTERS['fake']` → ack-all upserter
+      * `_resolve_upserter` → an ack-all upserter (no real pai_raw write)
 
     Returns (captures, set_items): captures['since'] shows the `since`
     arg the runner saw; set_items(list) swaps what fetch returns."""
@@ -118,7 +118,9 @@ def fake_adapter(monkeypatch):
 
     monkeypatch.setattr(ingest_runner, "load_recipe", fake_load_recipe)
     monkeypatch.setattr(ingest_runner, "run_fetch", fake_fetch)
-    monkeypatch.setitem(connector_ingest._UPSERTERS, "fake", fake_upsert)
+    # Stub the upserter (there's no _UPSERTERS registry anymore — every toolkit
+    # resolves to the generic pai_raw upserter). fake_upsert acks without writing.
+    monkeypatch.setattr(connector_ingest, "_resolve_upserter", lambda tk, recipe: fake_upsert)
 
     def set_items(items: list[dict]) -> None:
         state["items"] = items
@@ -220,7 +222,7 @@ async def test_sync_failure_leaves_cursor_untouched(pool, user_ids, monkeypatch)
 
     monkeypatch.setattr(ingest_runner, "load_recipe", fake_load_recipe)
     monkeypatch.setattr(ingest_runner, "run_fetch", boom_fetch)
-    monkeypatch.setitem(connector_ingest._UPSERTERS, "fake", noop_upsert)
+    monkeypatch.setattr(connector_ingest, "_resolve_upserter", lambda tk, recipe: noop_upsert)
 
     async with user_scoped_tx(pool, user_a) as conn:
         await ConnectorsRepository(user_a, conn).set_cursor(
@@ -334,7 +336,10 @@ async def test_init_creates_sync_schedule(pool, user_ids, fake_adapter):
         )
         row = await cur.fetchone()
     assert row is not None
-    assert row["cron_expr"] == connector_ingest._SYNC_CRON_EXPR
+    # 'fake' isn't a fast-cadence toolkit, so it gets the recipe-interval cron
+    # (not the fixed 30-min _SYNC_CRON_EXPR); the point here is the schedule
+    # exists with a cron set.
+    assert row["cron_expr"]
     assert row["status"] == "active"
     assert row["trigger_kind"] == "schedule"
 

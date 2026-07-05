@@ -27,10 +27,6 @@ from fastapi import APIRouter, Body, Depends, Header, HTTPException, status
 from pinai_db.rls import service_tx, user_scoped_tx
 from pydantic import BaseModel, Field
 
-from ....domains.user_model.personal_signals import (
-    IngestSignalInput,
-    PersonalSignalsRepository,
-)
 from ....platform.auth.deps import User, current_user, get_pool
 from ....platform.auth.user_service import load_user_by_id
 from ....platform.db.repositories.devices import (
@@ -43,11 +39,14 @@ from ....platform.db.repositories.devices import (
 from ....platform.storage import media_ext_for_kind, signed_url, upload_media
 from .device_ingest import (
     DeviceIngestItem,
-    build_default_signal,
+    _parse_apps,
+    _parse_contacts,
+    _parse_health,
     normalize_sync_mode,
-    resolve_policy,
+    resolve_recipe,
 )
-from .raw_device import RawDeviceRepository
+from .device_ingest.health import health_full_replace_scope
+from .raw_device import RawDeviceRepository, RawIngestResult
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/devices", tags=["devices"])
@@ -580,17 +579,21 @@ async def ingest_devices(
 
     item_results: list[dict[str, Any]] = list(pre_results)
     async with user_scoped_tx(pool, device.user_id) as conn:
-        signals_repo = PersonalSignalsRepository(device.user_id, conn)
         raw_repo = RawDeviceRepository(device.user_id, conn)
         for did, items in by_device.items():
             r = await _ingest_for_device(
                 user=device_user,
                 device_id=did,
+                platform=device.platform,
                 raw_items=items,
-                signals_repo=signals_repo,
                 raw_repo=raw_repo,
             )
             item_results.extend(r["results"])
+        # Project freshly-ingested device raw → the L1 event stream (pending),
+        # same tx. Idempotent (skips raws already projected via source_ref).
+        from ...memory.projection import project_unprojected  # noqa: PLC0415
+
+        await project_unprojected(conn, device.user_id)
     accepted = len(items_raw)
     inserted = sum(1 for r in item_results if r["status"] == "inserted")
     ignored = accepted - inserted
@@ -607,8 +610,8 @@ async def _ingest_for_device(
     *,
     user: User | None,
     device_id: str,
+    platform: str,
     raw_items: list[dict[str, Any]],
-    signals_repo: PersonalSignalsRepository,
     raw_repo: RawDeviceRepository,
 ) -> dict[str, Any]:
     """Per-device leg of the ingest. Returns ``{"results": [...]}`` only —
@@ -726,7 +729,9 @@ async def _ingest_for_device(
         n = DeviceIngestItem(
             id=item.id,
             device_id=device_id,
+            platform=platform,
             kind=kind,
+            entity_type=resolve_recipe(kind).entity_type,
             sync_mode=sync_mode,
             title=item.title,
             summary=summary,
@@ -748,197 +753,114 @@ async def _ingest_for_device(
         )
         normalized.append((result_idx, n))
 
-    # Write pipeline — per-item SAVEPOINT keeps single-row faults from
-    # poisoning the batch.
+    # Write pipeline — one recipe per kind decides where the row lands, each in
+    # its own transaction so a single-row fault doesn't poison the batch:
+    #   filtered    → accepted-but-dropped (卡子)
+    #   snapshot    → typed parse + pai_raw_device (full-sync replaces the
+    #                 device's slice; parse-empty falls back to context event)
+    #   latest_wins → transcript window upsert (grows with more audio)
+    #   else        → generic context event the projector turns into an L1 event
     for result_idx, n in normalized:
-        policy = resolve_policy(n.kind)
+        recipe = resolve_recipe(n.kind)
 
-        if policy.mode == "filtered":
-            # Accepted but intentionally not persisted (no cloud sink yet).
-            # The client keeps reporting these kinds; we drop them server-side
-            # so they don't pile up in the outbox. To enable a kind, point it
-            # at _SIGNAL_POLICY in device_ingest/policies.py.
+        if recipe.filtered:
+            # Accepted but intentionally not persisted. The client keeps
+            # reporting; we drop server-side so it doesn't pile up in the outbox.
+            # To enable a kind, flip its recipe in device_ingest/recipes.py.
             results[result_idx]["status"] = "filtered"
             continue
 
-        # Per-item state: raw_inserted = raw row actually written;
-        # raw_failed = server-side exception during raw writes;
-        # signal_payload = signal to attempt (or None);
-        # rejected_reason = deterministic semantic failure that should
-        #   short-circuit (the result is already set to "rejected").
-        raw_inserted = False
-        raw_failed_exc: Exception | None = None
-        signal_payload: dict[str, Any] | None = None
-        rejected_reason: str | None = None
-
-        if policy.mode in ("raw_only", "dual") and policy.parse_raw:
-            raw_writes = policy.parse_raw(n)
-            if not raw_writes:
-                # Parser couldn't pull anything out — record the fallback
-                # signal so the data isn't lost. Per-item success will be
-                # decided by whether the signal write lands.
-                signal_payload = build_default_signal(
-                    n,
-                    {"fallback_reason": "raw_parse_failed"},
-                )
-            else:
-                scope = (
-                    policy.full_replace_scope(n)
-                    if (n.sync_mode == "full" and policy.full_replace_scope)
-                    else None
-                )
-                if n.sync_mode == "full" and not scope:
-                    # Deterministic client bug: ambiguous full-sync
-                    # payload (multi-localDate health, etc.). Don't retry.
-                    rejected_reason = "unsupported_full_sync (ambiguous local_date)"
+        try:
+            async with raw_repo.conn.transaction():
+                if recipe.snapshot is not None:
+                    res = await _write_snapshot(raw_repo, recipe.snapshot, n)
+                elif recipe.latest_wins:
+                    res = await raw_repo.upsert_transcript_window(n)
                 else:
-                    try:
-                        async with raw_repo.conn.transaction():
-                            for w in raw_writes:
-                                r = await _apply_raw_write(
-                                    raw_repo,
-                                    w,
-                                    n.sync_mode,
-                                    scope,
-                                )
-                                raw_inserted = raw_inserted or r.inserted > 0
-                    except Exception as e:
-                        raw_failed_exc = e
-                        logger.warning(
-                            "device ingest: raw policy %s failed: %s",
-                            n.kind,
-                            e,
-                        )
-
-        if rejected_reason is not None:
+                    res = await raw_repo.ingest_context_event(n)
+        except _UnsupportedFullSync:
+            # Deterministic client bug: ambiguous full-sync payload
+            # (multi-localDate health). Don't retry.
             results[result_idx]["status"] = "rejected"
-            results[result_idx]["reason"] = rejected_reason
+            results[result_idx]["reason"] = "unsupported_full_sync (ambiguous local_date)"
+            continue
+        except Exception as e:
+            logger.warning("device ingest: write failed (kind=%s id=%s): %s", n.kind, n.id, e)
+            results[result_idx]["status"] = "retryable_failed"
+            results[result_idx]["reason"] = f"{type(e).__name__}: {str(e)[:160]}"
             continue
 
-        if raw_failed_exc is not None and policy.mode == "raw_only":
-            # raw_only kind blew up server-side. Don't fall back to a
-            # signal — surface as retryable so outbox keeps the item.
-            results[result_idx]["status"] = "retryable_failed"
-            results[result_idx]["reason"] = (
-                f"raw write failed: {type(raw_failed_exc).__name__}: {str(raw_failed_exc)[:160]}"
-            )
-            continue
-
-        if signal_payload is None and policy.mode in ("signal_only", "dual"):
-            signal_payload = (
-                policy.build_signal(n, None) if policy.build_signal else build_default_signal(n)
-            )
-
-        signal_inserted = False
-        signal_failed_exc: Exception | None = None
-        if signal_payload is not None:
-            sig = signal_payload
-            signal_input = IngestSignalInput(
-                id=sig["id"],
-                kind=sig["kind"],
-                title=sig["title"],
-                summary=sig["summary"],
-                occurred_at=datetime.fromisoformat(
-                    sig["occurred_at"]
-                    if not sig["occurred_at"].endswith("Z")
-                    else sig["occurred_at"][:-1] + "+00:00",
-                ),
-                payload=sig["payload"],
-                salience=sig["salience"],
-                confidence=sig["confidence"],
-                dedupe_key=sig["dedupe_key"],
-                source=sig["source"],
-                device_id=sig["device_id"],
-                subject=sig.get("subject"),
-            )
-            try:
-                async with signals_repo.conn.transaction():
-                    if _is_transcript_candidate_window(sig["kind"], sig["payload"]):
-                        result = await signals_repo.ingest_transcript_candidate_window_latest(
-                            signal_input,
-                        )
-                        signal_inserted = result.changed
-                    else:
-                        await signals_repo.ingest_one(signal_input)
-                        signal_inserted = True
-                # Generic ingest_one is always INSERT-or-UPDATE. Transcript
-                # candidate windows use a stricter latest-wins method that
-                # can return changed=False for stale/exact duplicate uploads.
-            except Exception as e:
-                signal_failed_exc = e
-                logger.warning(
-                    "device ingest: signal write failed (id=%s): %s",
-                    n.id,
-                    e,
-                )
-
-        # Decide per-item status.
-        if raw_inserted or signal_inserted:
-            results[result_idx]["status"] = "inserted"
-        elif raw_failed_exc is not None or signal_failed_exc is not None:
-            # raw_only items hit the explicit branch above; this catches
-            # signal_only and dual where a server-side write blew up.
-            exc = raw_failed_exc or signal_failed_exc
-            assert exc is not None
-            results[result_idx]["status"] = "retryable_failed"
-            results[result_idx]["reason"] = f"{type(exc).__name__}: {str(exc)[:160]}"
-        else:
-            # Wrote nothing, no exception → ON CONFLICT no-op for every
-            # write attempted on this item. True idempotent duplicate.
-            results[result_idx]["status"] = "duplicate"
+        # inserted vs idempotent duplicate (every write was an ON CONFLICT no-op).
+        results[result_idx]["status"] = "inserted" if res.inserted > 0 else "duplicate"
 
     return {"results": results}
 
 
-async def _apply_raw_write(repo: RawDeviceRepository, write, sync_mode, scope):
-    """Dispatch a parsed DeviceRawWrite to the right repo method."""
-    p = write.payload
-    if write.table == "device_apps_snapshot":
-        if sync_mode == "full":
+class _UnsupportedFullSync(Exception):
+    """Full-sync payload too ambiguous to scope a safe replace (a health
+    multi-localDate batch). Surfaces as a deterministic 'rejected' — the client
+    should split the payload per date, not retry."""
+
+
+async def _write_snapshot(
+    repo: RawDeviceRepository, snapshot: str, n: DeviceIngestItem
+) -> RawIngestResult:
+    """Snapshot kind (apps / contacts / health) → parse + write pai_raw_device.
+
+    Full-sync replaces the device's slice (health narrows by local_date / metric
+    so a steps push doesn't wipe a sibling heart_rate row); incremental upserts.
+    Parse-empty falls back to a context event so the data isn't lost. Raises
+    _UnsupportedFullSync when a health full-sync can't be scoped safely."""
+    full = n.sync_mode == "full"
+    if snapshot == "apps":
+        apps = _parse_apps(n)
+        if not apps:
+            return await repo.ingest_context_event(n)
+        if full:
             return await repo.replace_apps(
-                device_id=p["device_id"],
-                occurred_at=p["occurred_at"],
-                snapshot_id=p["snapshot_id"],
-                apps=p["apps"],
+                device_id=n.device_id,
+                occurred_at=n.occurred_at,
+                snapshot_id=n.dedupe_key,
+                apps=apps,
             )
         return await repo.ingest_apps(
-            device_id=p["device_id"],
-            occurred_at=p["occurred_at"],
-            snapshot_id=p["snapshot_id"],
-            apps=p["apps"],
+            device_id=n.device_id,
+            occurred_at=n.occurred_at,
+            snapshot_id=n.dedupe_key,
+            apps=apps,
         )
-    if write.table == "device_contacts_snapshot":
-        if sync_mode == "full":
+    if snapshot == "contacts":
+        contacts = _parse_contacts(n)
+        if not contacts:
+            return await repo.ingest_context_event(n)
+        if full:
             return await repo.replace_contacts(
-                device_id=p["device_id"],
-                occurred_at=p["occurred_at"],
-                snapshot_id=p["snapshot_id"],
-                contacts=p["contacts"],
+                device_id=n.device_id,
+                occurred_at=n.occurred_at,
+                snapshot_id=n.dedupe_key,
+                contacts=contacts,
             )
         return await repo.ingest_contacts(
-            device_id=p["device_id"],
-            occurred_at=p["occurred_at"],
-            snapshot_id=p["snapshot_id"],
-            contacts=p["contacts"],
+            device_id=n.device_id,
+            occurred_at=n.occurred_at,
+            snapshot_id=n.dedupe_key,
+            contacts=contacts,
         )
-    if write.table == "device_health_observations":
-        if sync_mode == "full":
-            local_date = scope.local_date if scope else None
-            metric = scope.metric if scope else None
-            return await repo.replace_health(
-                device_id=p["device_id"],
-                local_date=local_date,
-                metric=metric,
-                observations=p["observations"],
-            )
-        return await repo.ingest_health(
-            device_id=p["device_id"],
-            observations=p["observations"],
+    # health
+    obs = _parse_health(n)
+    if not obs:
+        return await repo.ingest_context_event(n)
+    if full:
+        scope = health_full_replace_scope(n)
+        if scope is None:
+            raise _UnsupportedFullSync
+        return await repo.replace_health(
+            device_id=n.device_id,
+            local_date=scope.local_date,
+            metric=scope.metric,
+            observations=obs,
         )
-    # Unknown table — record as zero-impact.
-    from .raw_device import RawIngestResult
-
-    return RawIngestResult(0, 0, 0)
+    return await repo.ingest_health(device_id=n.device_id, observations=obs)
 
 
 # ── unified timeline (Supabase JWT auth) ──
@@ -952,19 +874,19 @@ async def get_device_timeline(
     before: datetime | None = None,
     limit: int = 30,
 ) -> dict[str, Any]:
-    """Unified device timeline — UNION of pai_personal_signals and
-    pai_raw_device_health_observations, ordered by ``occurred_at DESC``
-    with a single keyset cursor.
+    """Unified device timeline — the device's pai_raw_device rows (health +
+    ambient / device context events), ordered by ``occurred_at DESC`` with a
+    single keyset cursor.
 
-    Health observations live in raw-only land (``_HEALTH_POLICY`` mode is
-    ``raw_only``) so the frontend's ``DeviceTimeline`` needs to merge
-    them with personal_signals to show health alongside other signals.
-    Doing the union server-side keeps the cursor clean (one keyset
-    instead of two per-source buffers that drift on skewed streams).
+    Every device source — health observations, apps / contacts snapshots, and
+    ambient / device context events (utterance / visit / calendar / motion /
+    focus / transcript_window / context) — lands in pai_raw_device with
+    external_id = device_id. ``type`` carries the row's kind so the frontend's
+    ``DeviceTimeline`` can render each source.
 
     Envelope:
         {"ok": True,
-         "items": [{"type": "signal"|"health", "occurred_at": "...", "row": {...}}, ...],
+         "items": [{"type": "<entity_type>", "occurred_at": "...", "row": {...}}, ...],
          "next_cursor": "..." | null,
          "has_more": bool}
 
@@ -982,24 +904,17 @@ async def get_device_timeline(
     async with user_scoped_tx(pool, user.id) as conn:
         cur = await conn.execute(
             """
-            WITH unified AS (
-              SELECT 'signal'::text AS type, id::text AS row_id,
-                     occurred_at, to_jsonb(s) AS row
-              FROM pai_personal_signals s
-              WHERE user_id = %(user_id)s
-                AND device_id = %(device_id)s
-                AND status <> 'archived'
-                AND (%(before)s::timestamptz IS NULL OR occurred_at < %(before)s)
-              UNION ALL
-              SELECT 'health'::text AS type, id::text AS row_id,
-                     occurred_at, to_jsonb(h) AS row
-              FROM pai_raw_device_health_observations h
-              WHERE user_id = %(user_id)s
-                AND device_id = %(device_id)s
-                AND (%(before)s::timestamptz IS NULL OR occurred_at < %(before)s)
-            )
-            SELECT type, row_id, occurred_at, row
-            FROM unified
+            SELECT kind::text AS type, id::text AS row_id,
+                   occurred_at,
+                   payload || jsonb_build_object(
+                     'id', id, 'occurred_at', occurred_at,
+                     'device_id', external_id, 'reference_count', reference_count,
+                     'title', title, 'snippet', snippet
+                   ) AS row
+            FROM pai_raw_device
+            WHERE user_id = %(user_id)s
+              AND external_id = %(device_id)s
+              AND (%(before)s::timestamptz IS NULL OR occurred_at < %(before)s)
             ORDER BY occurred_at DESC, type ASC, row_id ASC
             LIMIT %(fetch_n)s
             """,

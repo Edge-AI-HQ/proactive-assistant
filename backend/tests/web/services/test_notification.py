@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pytest
-from pinai_api.domains.user_model.profile import ProfileRepository
+from pinai_api.domains.user_model.settings import SettingsRepository
 from pinai_api.platform import notification
 from pinai_api.platform.db.repositories.devices import DevicesRepository
 from pinai_api.platform.notification import (
@@ -90,7 +90,7 @@ async def _setup_user_with_push_device(
     opt_in: bool,
 ) -> None:
     async with user_scoped_tx(pool, user_id) as conn:
-        await ProfileRepository(user_id, conn).upsert_settings(
+        await SettingsRepository(user_id, conn).upsert_settings(
             notify_new_cards=opt_in,
         )
         devices = DevicesRepository(user_id, conn)
@@ -124,7 +124,7 @@ async def test_notify_skips_when_no_push_targets(pool, user_ids, monkeypatch):
     quietly exit, NOT crash on an empty target list."""
     user_a, _ = user_ids
     async with user_scoped_tx(pool, user_a) as conn:
-        await ProfileRepository(user_a, conn).upsert_settings(notify_new_cards=True)
+        await SettingsRepository(user_a, conn).upsert_settings(notify_new_cards=True)
     fake = _FakeTransport()
     monkeypatch.setattr(notification, "_transport", fake)
 

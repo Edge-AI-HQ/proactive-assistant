@@ -84,15 +84,14 @@ The user entered this thread from the current card. If they say "this
 card", "current card", "这张卡", "当前卡片", or give a correction such
 as "do not show this again", "this appeared too often", "wrong time",
 "not useful", treat it as feedback on this exact card from
-<card_context>. Do not call `cards_recent` just to identify which card
-they mean.
+<card_context>.
 
-For durable future-card preferences, you MUST call `preference_add`
-and pass the `card_id` from <card_context>. Use `memory_add` only for
-stable personal facts that are not preferences. Continue the card
-execution only after you have acknowledged or applied the feedback
-instruction. Do not say you remembered, saved, or recorded the
-preference unless the `preference_add` tool call succeeded.
+For durable future-card preferences, you MUST record an `event_append`
+(event_type="preference") and note the `card_id` from <card_context> in
+the body. Use `memory_edit` only for stable personal facts that are not
+preferences. Continue the card execution only after you have acknowledged
+or applied the feedback instruction. Do not say you remembered, saved, or
+recorded the preference unless the `event_append` call succeeded.
 </card_feedback_context>
 
 <when_to_speak>
@@ -213,11 +212,12 @@ in this order, every time:
 </browser_takeover>
 
 <tool_routing>
-- Reads: `memory_list` / `memory_search` / `memory_get`,
-  `signals_recent` / `signals_get`, `raw_gmail_recent` /
-  `raw_gcal_today` / `raw_gcal_week` / `raw_list(toolkit, entity)`,
-  `cards_recent`, `feedback_list`, `world_recent`, `tavily_search`,
-  `tavily_extract` (full-text fetch for 1-20 URLs, markdown output).
+- Reads: `events_search` (the unified timeline — emails / meetings / messages /
+  transactions / activity / world news via `event_type="world_news"`; semantic
+  with a query, recent-by-type otherwise; `event_type="agent_decision"` for
+  recently-proposed cards), `feedback_list`,
+  `tavily_search`, `tavily_extract` (full-text fetch for 1-20 URLs, markdown
+  output). The user's standing portrait is already in context via <portrait>.
 - Live SaaS access (Gmail / GCal / GitHub / Slack / 1000+ apps):
   `COMPOSIO_SEARCH_TOOLS` to discover slugs, optionally
   `COMPOSIO_GET_TOOL_SCHEMAS` / `COMPOSIO_MANAGE_CONNECTIONS`,
@@ -228,9 +228,11 @@ in this order, every time:
   liveViewUrl plus an aria snapshot with refs (e1, e2, …). Every
   action returns the new post-action snapshot — do NOT call
   snapshot separately.
-- `memory_add` if execution surfaces a durable fact worth remembering.
-- `preference_add` when the user gives durable card-generation
-  feedback or a future-card preference; include the current `card_id`.
+- `memory_edit` (USER/MEMORY/GOALS) or `event_append` if execution surfaces a
+  durable fact or a timeline-worthy event worth remembering.
+- `event_append` (event_type="preference") when the user gives durable
+  card-generation feedback or a future-card preference; note the current
+  `card_id` in the body.
 - For multi-source aggregation or batch work, choose native vs Code Mode
   per the `<tool_paradigm>` guidance below.
 </tool_routing>
@@ -266,4 +268,8 @@ def make_card_execution_agent(
         # entirely, so side-effect tools execute without the approval pause.
         interrupt_on={} if bypass_permissions else HITL_INTERRUPT_ON,
         with_checkpointer=True,
+        # Resident L2 portrait injected at model-call time (PortraitMiddleware).
+        with_portrait=True,
+        # Prospective memory: own scheduled tasks snapshot (design §三).
+        with_schedules=True,
     )

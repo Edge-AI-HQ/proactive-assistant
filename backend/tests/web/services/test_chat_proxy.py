@@ -55,12 +55,13 @@ async def test_call_generate_forwards_generation_request(monkeypatch):
         output_language="zh-Hans",
         virtual_key="sk-test",
         run_id="run_sched",
-        matched_patterns=[{"patternId": "pat_1"}],
-        context_since=datetime(2026, 6, 8, 0, 0, tzinfo=UTC),
-        context_until=datetime(2026, 6, 8, 1, 0, tzinfo=UTC),
+        anchor=datetime(2026, 6, 8, 0, 0, tzinfo=UTC),
         generation_request=generation_request,
     )
 
     assert result == {"ok": True}
     assert captured["json"]["generation_request"] == generation_request
     assert captured["json"]["run_id"] == "run_sched"
+    assert captured["json"]["anchor"] == "2026-06-08T00:00:00+00:00"
+    # Pattern matching retired — the body must not carry matched_patterns.
+    assert "matched_patterns" not in captured["json"]

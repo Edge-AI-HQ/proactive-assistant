@@ -2,24 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { animate, motion, useMotionValue, type PanInfo } from "framer-motion";
 import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import {
-  GoalDetail,
-  GoalsGrid,
-  IdentitySummaryCard,
-  MemoryPanel,
-  ProfilePanel,
-  WorkbenchTabButton,
-  type ProfileGroupKey,
-  Text,
-} from "@pin-ai/ui-web";
-import { useProfileMemories, useProfileSnapshot } from "@pin-ai/state";
+import { GoalsPanel, IdentityPanel, Text } from "@pin-ai/ui-web";
+import { usePortrait } from "@pin-ai/state";
 
 /**
  * Mobile (iOS / 手机浏览器) MIRROR —— 移动布局 shell。数据走 @pin-ai/state 的
- * useProfileSnapshot / useProfileMemories；展示复用 @pin-ai/ui-web panel。
- * 交互与原 GoalsView 一致：Identity/Goals 横向 swipe pager + Identity 下
- * Profile/Memory sub-tab 二选一；goal 详情底部 Drawer。tab / openGroups /
- * expandedGoal 是 ephemeral UI state，留这层。
+ * usePortrait（L2 画像六段 markdown）；展示复用 @pin-ai/ui-web panel。Identity
+ * tab 渲染 USER + MEMORY 两段画像（窄屏上下堆叠），Goals tab 渲染 GOALS；
+ * Identity/Goals 横向 swipe pager。tab 是 ephemeral UI state，留这层。
  */
 
 // Identity / Goals 两个 pane 并排在 track 上，横向 swipe 切换。
@@ -28,26 +18,11 @@ const TOP_TABS = ["identity", "goals"] as const;
 const TAB_COMMIT_FRACTION = 0.3;
 const TAB_COMMIT_VELOCITY_PX_S = 300;
 
-const sectionMotion = {
-  initial: { opacity: 0, y: 12 },
-  animate: { opacity: 1, y: 0 },
-  transition: { duration: 0.24 },
-};
-
 export default function MirrorMobile() {
   const { t } = useTranslation("profile");
-  const { profile, activeGoals, loading, error } = useProfileSnapshot();
-  const memory = useProfileMemories();
+  const { slots, loading, error } = usePortrait();
 
   const [activeTab, setActiveTab] = useState<(typeof TOP_TABS)[number]>("identity");
-  const [identitySubTab, setIdentitySubTab] = useState<"profile" | "memory">("profile");
-  const [openGroups, setOpenGroups] = useState<Record<ProfileGroupKey, boolean>>({
-    facts: false,
-    preferences: false,
-    constraints: false,
-    metadata: false,
-  });
-  const [expandedGoal, setExpandedGoal] = useState<string | null>(null);
 
   // 横向 carousel：两个 pane 并排在 track 上。trackX(px) 是 track 实时偏移
   // ——拖动时跟手，松手 spring 到 active pane。pagerWidth 是一个 pane 的宽度
@@ -55,13 +30,6 @@ export default function MirrorMobile() {
   const trackX = useMotionValue(0);
   const pagerRef = useRef<HTMLDivElement>(null);
   const [pagerWidth, setPagerWidth] = useState(0);
-
-  const toggleGroup = (group: ProfileGroupKey) =>
-    setOpenGroups((prev) => ({ ...prev, [group]: !prev[group] }));
-
-  const selectedGoal = expandedGoal
-    ? activeGoals.find((goal) => goal.key === expandedGoal) ?? null
-    : null;
 
   // 量一个 pane 的宽度（carousel viewport），resize 时保持最新，drag 距离与
   // snap 目标才是真实像素。
@@ -125,7 +93,12 @@ export default function MirrorMobile() {
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">
           {error && (
-            <motion.section {...sectionMotion} className="glass-card-strong mb-4 p-4">
+            <motion.section
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.24 }}
+              className="glass-card-strong mb-4 p-4"
+            >
               <p className="text-sm font-medium text-rose-500">{t("goalsView.refreshError")}</p>
               <p className="mt-1 text-xs leading-5 text-foreground/55">{error}</p>
             </motion.section>
@@ -171,62 +144,25 @@ export default function MirrorMobile() {
               dragElastic={0.06}
               onDragEnd={(_, info) => settleDrag(info)}
             >
-              {/* Identity pane */}
-              <div
-                className="h-full w-full shrink-0 space-y-4 overflow-y-auto overscroll-contain pb-2"
-                style={{ WebkitOverflowScrolling: "touch" }}
-              >
-                <IdentitySummaryCard profile={profile} />
-
-                {/* Profile / Memory sub-tab（移动端二选一；桌面并排） */}
-                <div className="grid grid-cols-2 gap-2.5">
-                  <WorkbenchTabButton
-                    active={identitySubTab === "profile"}
-                    label={t("goalsView.subTabs.profile")}
-                    value={profile ? t("goalsView.subTabs.profile") : t("goalsView.subTabs.empty")}
-                    onClick={() => setIdentitySubTab("profile")}
-                  />
-                  <WorkbenchTabButton
-                    active={identitySubTab === "memory"}
-                    label={t("goalsView.subTabs.memory")}
-                    value={String(memory.total)}
-                    onClick={() => setIdentitySubTab("memory")}
-                  />
-                </div>
-
-                {identitySubTab === "profile" && (
-                  <motion.section {...sectionMotion} className="glass-card-strong p-4">
-                    <ProfilePanel profile={profile} openGroups={openGroups} onToggleGroup={toggleGroup} />
-                  </motion.section>
-                )}
-
-                {identitySubTab === "memory" && (
-                  <motion.section {...sectionMotion} className="glass-card-strong p-4">
-                    <MemoryPanel
-                      memories={memory.memories}
-                      total={memory.total}
-                      hasMore={memory.hasMore}
-                      loadingMore={memory.loadingMore}
-                      onLoadMore={memory.loadMore}
-                    />
-                  </motion.section>
-                )}
-              </div>
-
-              {/* Goals pane */}
+              {/* Identity pane — USER + MEMORY portrait, stacked */}
               <div
                 className="h-full w-full shrink-0 overflow-y-auto overscroll-contain pb-2"
                 style={{ WebkitOverflowScrolling: "touch" }}
               >
-                <GoalsGrid goals={activeGoals} onOpen={setExpandedGoal} />
+                <IdentityPanel slots={slots} />
+              </div>
+
+              {/* Goals pane — GOALS portrait */}
+              <div
+                className="h-full w-full shrink-0 overflow-y-auto overscroll-contain pb-2"
+                style={{ WebkitOverflowScrolling: "touch" }}
+              >
+                <GoalsPanel slots={slots} />
               </div>
             </motion.div>
           </div>
         </div>
       )}
-
-      {/* 手机：goal 详情走底部 Drawer（detailLayout="drawer" 强制） */}
-      <GoalDetail goal={selectedGoal} detailLayout="drawer" onClose={() => setExpandedGoal(null)} />
     </div>
   );
 }

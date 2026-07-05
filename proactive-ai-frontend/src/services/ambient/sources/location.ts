@@ -51,7 +51,13 @@ export interface LocationSourceOptions {
 }
 
 const DEFAULT_OPTS: Required<LocationSourceOptions> = {
-  intervalMs: 5 * 60 * 1000,
+  // 端上 change-only(memory design doc §4.3): 位置"变了"才上报 — 距离阈值判别
+  // (GPS 噪声下坐标相等判别不成立,必须用阈值,同 iOS significant-location-change
+  // 思路)。这是源头抑制重复、不是聚合,不违反端侧哑采集: 15s 高频轮询保留(变化
+  // 检测灵敏),但静止时不再 1:1 灌 L1(此前 minDelta=0 时 ~5760 条/天全进
+  // pai_events)。minGeocodeDeltaMeters 另管反地理编码 — CLGeocoder 苹果限频,
+  // >100m 才重查地址。
+  intervalMs: 15 * 1000,
   timeoutMs: 30 * 1000,
   minDeltaMeters: 25,
   minGeocodeDeltaMeters: 100,

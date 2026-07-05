@@ -121,7 +121,7 @@ async def test_phantom_cannot_mint_phantom(client, user_ids):
     assert r2.status_code == 403
 
 
-# ── resolve on /api/agent/* (memory.list as canary) ──
+# ── resolve on /api/agent/* (events.search as canary) ──
 
 
 @pytest.mark.asyncio
@@ -137,10 +137,10 @@ async def test_phantom_resolves_on_agent_route(client, user_ids):
 
     # Use phantom on a sandbox-facing route.
     r = await client.get(
-        "/api/agent/memory/list",
+        "/api/agent/events/search",
         headers={"Authorization": f"Bearer {phantom}"},
     )
-    # 200 even when user has zero memory rows — endpoint returns {"items": []}.
+    # 200 even when user has zero events — endpoint returns {"items": []}.
     assert r.status_code == 200, r.text
 
 
@@ -149,7 +149,7 @@ async def test_jwt_still_works_on_agent_route(client, user_ids):
     """No regression: chat-driving JWTs continue to authenticate /api/agent/*."""
     user_a, _ = user_ids
     r = await client.get(
-        "/api/agent/memory/list",
+        "/api/agent/events/search",
         headers={"Authorization": f"Bearer {_chat_jwt(user_a)}"},
     )
     assert r.status_code == 200, r.text
@@ -171,7 +171,7 @@ async def test_revoke_kills_phantom(client, user_ids):
 
     # Pre-revoke: phantom works.
     r = await client.get(
-        "/api/agent/memory/list",
+        "/api/agent/events/search",
         headers={"Authorization": f"Bearer {phantom}"},
     )
     assert r.status_code == 200
@@ -187,7 +187,7 @@ async def test_revoke_kills_phantom(client, user_ids):
 
     # Cache is invalidated by the revoke path; next call re-resolves and 401s.
     r = await client.get(
-        "/api/agent/memory/list",
+        "/api/agent/events/search",
         headers={"Authorization": f"Bearer {phantom}"},
     )
     assert r.status_code == 401

@@ -390,9 +390,8 @@ async def test_inserted_then_duplicate_via_dedupe_key(device):
     assert first.status_code == 200, first.text
     assert first.json()["results"][0]["status"] == "inserted"
 
-    # Same payload, different envelope item.id so we don't trip the
-    # signal-side UPSERT — what we're testing is the raw_only DO NOTHING
-    # path. The observation's dedupe_key is what matters.
+    # Same observation payload, different envelope item.id / dedupe_key — the
+    # observation's own dedupe_key is what the raw_only DO NOTHING path keys on.
     second_item = dict(item, id="hlt-dup-test-2", dedupe_key="device:diff:hlt-dup-test-2")
     second = await c.post(
         "/api/devices/ingest",
@@ -409,6 +408,10 @@ async def test_transcript_candidate_window_uses_server_canonical_latest_upsert(
     device,
     pool,
 ):
+    """Transcript candidate windows collapse onto a server canonical dedupe_key
+    (device + local_date + local_window_id) and land in pai_raw_device
+    entity=transcript_window via a monotonic upsert: a richer upload (higher
+    raw_ref_count) refreshes the one row in place; a stale upload is rejected."""
     c, device_id, dtoken = device
     canonical_key = (
         f"ambient:candidate_window:{device_id}:2026-05-15:transcript_session:win-transcript"
@@ -466,29 +469,50 @@ async def test_transcript_candidate_window_uses_server_canonical_latest_upsert(
     assert latest.json()["results"][0]["status"] == "inserted"
     assert latest.json()["results"][0]["dedupeKey"] == canonical_key
 
+    # A richer re-upload (more chunks → higher raw_ref_count) refreshes the row
+    # in place (ON CONFLICT DO UPDATE … WHERE raw_ref_count grows) → `inserted`.
+    third = await c.post(
+        "/api/devices/ingest",
+        headers=_ingest_headers(device_id, dtoken),
+        json=_wrap(
+            device_id,
+            [item("candidate-3", 7, "hash-7", "Transcript segment: seven chunks")],
+        ),
+    )
+    assert third.status_code == 200, third.text
+    assert third.json()["inserted"] == 1
+    assert third.json()["results"][0]["status"] == "inserted"
+
+    # Monotonic freshness guard: a STALE re-upload (fewer chunks than the stored
+    # window) is rejected — the richer row survives, status is `duplicate`.
     stale = await c.post(
         "/api/devices/ingest",
         headers=_ingest_headers(device_id, dtoken),
-        json=_wrap(device_id, [item("candidate-3", 3, "hash-3", "stale chunks")]),
+        json=_wrap(
+            device_id,
+            [item("candidate-stale", 2, "hash-2", "Transcript segment: stale two chunks")],
+        ),
     )
     assert stale.status_code == 200, stale.text
-    assert stale.json()["inserted"] == 0
     assert stale.json()["results"][0]["status"] == "duplicate"
 
     async with pool.connection() as conn:
         cur = await conn.execute(
-            """SELECT id, dedupe_key, summary, payload
-               FROM pai_personal_signals
-               WHERE device_id = %s AND kind = 'ambient.candidate_window'""",
+            """SELECT id, dedupe_key, snippet, payload
+               FROM pai_raw_device
+               WHERE kind = 'transcript_window'
+                 AND external_id = %s""",
             (device_id,),
         )
         rows = await cur.fetchall()
 
+    # One row collapsed onto the canonical key; it holds the LAST upload, with
+    # the "Transcript segment:" label stripped and content_hash dropped.
     assert len(rows) == 1
     assert rows[0]["dedupe_key"] == canonical_key
-    assert rows[0]["summary"] == "five chunks latest"
-    assert rows[0]["payload"]["compact_context"] == "five chunks latest"
-    assert rows[0]["payload"]["raw_ref_count"] == 5
+    assert rows[0]["snippet"] == "seven chunks"
+    assert rows[0]["payload"]["compact_context"] == "seven chunks"
+    assert rows[0]["payload"]["raw_ref_count"] == 7
     assert "content_hash" not in rows[0]["payload"]
 
 
@@ -655,7 +679,7 @@ async def test_retryable_failed_on_server_side_write_exception(device, monkeypat
 @pytest.mark.asyncio
 async def test_health_observation_v1_lands_all_metrics_raw(device, pool):
     """v1 envelope with steps + heart_rate + sleep — all three land in
-    pai_raw_device_health_observations; nothing in pai_personal_signals
+    pai_raw_device (toolkit=device, entity=health); nothing in pai_personal_signals
     (raw_only policy)."""
     c, device_id, dtoken = device
     item = {
@@ -709,8 +733,11 @@ async def test_health_observation_v1_lands_all_metrics_raw(device, pool):
 
     async with pool.connection() as conn:
         cur = await conn.execute(
-            """SELECT metric, value, unit FROM pai_raw_device_health_observations
-               WHERE device_id = %s ORDER BY metric""",
+            """SELECT payload->>'metric' AS metric, (payload->>'value')::float AS value,
+                      payload->>'unit' AS unit
+               FROM pai_raw_device
+               WHERE kind = 'health' AND external_id = %s
+               ORDER BY payload->>'metric'""",
             (device_id,),
         )
         rows = await cur.fetchall()
@@ -819,8 +846,10 @@ async def test_health_metric_scope_preserves_siblings(device, pool):
 
     async with pool.connection() as conn:
         cur = await conn.execute(
-            """SELECT metric, value FROM pai_raw_device_health_observations
-               WHERE device_id = %s ORDER BY metric""",
+            """SELECT payload->>'metric' AS metric, (payload->>'value')::float AS value
+               FROM pai_raw_device
+               WHERE kind = 'health' AND external_id = %s
+               ORDER BY payload->>'metric'""",
             (device_id,),
         )
         rows = await cur.fetchall()
@@ -858,16 +887,17 @@ async def test_timeline_empty_for_new_device(client, pool):
 
 
 @pytest.mark.asyncio
-async def test_timeline_interleaves_signal_and_health_by_occurred_at(client, pool):
-    """Mint health + signal items with known occurred_at, verify they
-    come back in occurred_at DESC order with correct ``type`` tags."""
+async def test_timeline_interleaves_context_and_health_by_occurred_at(client, pool):
+    """Mint health + context items with known occurred_at, verify they
+    come back in occurred_at DESC order with correct ``type`` tags (the
+    entity_type — health vs. context)."""
     c, mk_jwt = client
     sub = str(uuid.uuid4())
     token = mk_jwt(sub)
     device_id = f"tl-mix-{uuid.uuid4().hex[:8]}"
     dtoken = await _register_device(c, token, device_id)
 
-    # 3 events at distinct timestamps — 2 health, 1 signal, interleaved.
+    # 3 events at distinct timestamps — 2 health, 1 context, interleaved.
     items = [
         {
             "id": "tl-moment-1",
@@ -933,8 +963,8 @@ async def test_timeline_interleaves_signal_and_health_by_occurred_at(client, poo
     timeline = body["items"]
     types_in_order = [t["type"] for t in timeline]
     occurred = [t["occurred_at"] for t in timeline]
-    # Newest first: health@16:00, signal@12:00, health@10:00
-    assert types_in_order == ["health", "signal", "health"], types_in_order
+    # Newest first: health@16:00, context@12:00, health@10:00
+    assert types_in_order == ["health", "context", "health"], types_in_order
     assert occurred == sorted(occurred, reverse=True)
 
     await _cleanup_user(pool, sub)
@@ -1033,9 +1063,10 @@ async def test_health_replace_preserves_reference_count_rows(device, pool):
     # Simulate downstream memory/run pinning this row.
     async with pool.connection() as conn, conn.transaction():
         await conn.execute(
-            """UPDATE pai_raw_device_health_observations
+            """UPDATE pai_raw_device
                SET reference_count = 1, last_referenced_at = NOW()
-               WHERE device_id = %s AND metric = 'steps'""",
+               WHERE kind = 'health'
+                 AND external_id = %s AND payload->>'metric' = 'steps'""",
             (device_id,),
         )
 
@@ -1075,10 +1106,11 @@ async def test_health_replace_preserves_reference_count_rows(device, pool):
 
     async with pool.connection() as conn:
         cur = await conn.execute(
-            """SELECT value, reference_count
-               FROM pai_raw_device_health_observations
-               WHERE device_id = %s AND metric = 'steps'
-               ORDER BY value""",
+            """SELECT (payload->>'value')::float AS value, reference_count
+               FROM pai_raw_device
+               WHERE kind = 'health'
+                 AND external_id = %s AND payload->>'metric' = 'steps'
+               ORDER BY (payload->>'value')::float""",
             (device_id,),
         )
         rows: list[dict[str, Any]] = await cur.fetchall()
