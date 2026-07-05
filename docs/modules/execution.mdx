@@ -62,14 +62,14 @@ flowchart LR
 - Browser tool(Browserbase session 管理、AI/user control、SSE 事件总线)。
 - Composio meta-tool 转发 + 当前的 prompt-only 副作用约束(代码层 verb gate 还没实现)。
 - `tavily_search` / `tavily_extract` web read 工具。
-- conversation crystallize(agent-engine 进程内联触发的长期沉淀;scheduler `crystallize` kind 已预留路由但未接 producer)。
+- chat 的 memory 工具面(`events_search` / `event_source` / `event_append` / `memory_edit`)+ `PortraitMiddleware` 画像常驻注入。
 - 前端 chat runtime 与工具活动渲染。
 
 不包含:
 
 - 卡片怎么生成,看 [Generation](./generation)。
 - `card_action:confirm/dismiss/modify` 反馈写入,看 [Feedback](./feedback)。
-- crystallize 写入 memory / skill 的 schema,看 [Memory](./memory)。
+- memory 三层的 schema 与 evolve 蒸馏,看 [Memory](./memory)。
 - `connector.init` / `auto.dreaming` 等异步任务,看 [Background Tasks](./background-tasks)。
 - scheduler 框架,看 [Background Tasks](./background-tasks)。
 
@@ -139,7 +139,7 @@ agent-engine 端验签 + `jti` 黑名单(`pai_jti_revocations`),失败 401。
 - verify run JWT → `RunPrincipal`。
 - 看 session_key prefix 选 agent:`card-thread-` → `make_card_execution_agent`,`proactive-` → `make_proactive_agent`,否则 `make_main_chat_agent`。
 - 拿 LangGraph checkpointer(`agent_engine/harness/checkpoint.py` 在 Postgres `langgraph` schema 持久化);thread_id = session_key。
-- 每个普通发送 turn 都注入隐藏 `turn_context` SystemMessage,包含当前 UTC 时间;agent 用它解析"今天 / 明天 / 下一批"等相对时间,尤其是写临时 `preference_add.expires_at` 时必须保证过期时间在未来。
+- 每个普通发送 turn 都注入隐藏 `turn_context` SystemMessage,包含当前 UTC 时间;agent 用它解析"今天 / 明天 / 下一批"等相对时间,尤其是写临时 preference(`event_append` `event_type="preference"` 的 `structured.expires`)时必须保证过期时间在未来。
 - card_context 注入分两种线程(`agent_engine/transport/routes/chat.py:_build_send_messages`):**card thread** 首次 + 有 `card_context` 时把 `SystemMessage(json.dumps(card_context))` push 进 thread state,之后不需要前端再传;**main thread** 是每用户单例(migration 053),首轮一辈子只真一次,所以改成**本轮带 `card_context` 就注入**(从某张卡打开 main chat 给反馈时),不看是不是首轮。两种都被 `/history` 过滤掉,不进前端渲染。
 - 跑 agent loop,把 LangGraph stream 转成 SSE 帧:`chat:thinking` / `chat:delta` / `chat:reasoning:delta` / `chat:tool:start` / `chat:tool:result` / `chat:group:title` / `chat:requires_action`(HITL)/ `chat:error` / `chat:done`,每帧 `traceId=run_id`(`agent_engine/transport/sse.py:langgraph_to_sse`)。SSE 层同时负责:过滤 summarization 内部 LLM 输出(`lc_source` 标)、压制 subagent 内部 write_todos 帧、按 `checkpoint_ns` 给嵌套工具事件标 `parentTaskId` 归属、tavily 结果提取 `links`、组封口异步调 Haiku 出组标题(`agent_engine/harness/group_title.py`)。前端按 work group + 垂直 rail 渲染(text 段打断分组,`work-group.ts` 分段 → `WorkGroup`/`TaskCard`),TodoPanel 是 turn 级计划(chat:done 收尾)。设计 SSOT 见相关 AI Plans。
 - **context compaction**(turn 尾部统一压缩,`agent_engine/harness/compaction.py:compact_thread`):把 thread 的工作上下文限定在有界窗口。在 response generator 内(SSE 流关闭前)按两个信号触发——上一轮 reported input tokens > `DEFAULT_TOKEN_TRIGGER`(150k)**或** message 数 > `DEFAULT_MESSAGE_TRIGGER`(200)。命中后:LLM(用户 default model)把旧 turns 压成一条 summary → `aupdate_state` 用 `RemoveMessage(REMOVE_ALL_MESSAGES) + [summary, *最近 DEFAULT_KEEP_RECENT_TURNS=12 个 user-turn]` **原地重写** messages(mutating,turn 边界切分不孤立 ToolMessage)。main + proactive 同一条路。这压的是 **checkpoint state 存储**(blob 真变小)——不是 deepagents 内建 summarization 那种 non-mutating「只压喂 LLM 的视图、state 仍全量」(proactive 5.6GB 就是后者:LLM 读的是压缩视图,但存储留了全量 400k-token messages)。代价:blob 有上限了,但 checkpoint **行数仍随 super-step append**(LangGraph 是 append-only 历史,永不自删)——行数有界靠 **thread 生命周期**(main chat 对话有限天然有界;proactive never-ending 慢涨,真到量级再 thread roll-over),不靠压缩。**为什么是 in-place REMOVE_ALL 而非物理删行**(2026-06-10 端到端实测):`adelete_thread` 删掉 messages DeltaChannel 重建所需的 ancestor 链 → `aget_state` 静默重建为空(rows 40→1 但 msgs 16→0);手搓 force-snapshot checkpoint → snapshot 本身读对但**下一轮 append 不上去**;只有 in-place REMOVE_ALL 三项全过。安全:agent_core per-session lease + worker `await` 整个 chat 流(compaction 在流内),同 session 下一个 turn 不并发。card thread 短命不压;HITL pending 跳过。只动 `langgraph` checkpoint,不碰 RedisFrameBus `frames:<session>` 和 `pai_chat_messages`,前端 streaming / replay / `/history` 不受影响;summary 用用户 default model(可能是 reasoning model 如 kimi,故 timeout 300s)。
@@ -166,16 +166,16 @@ agent-engine 端验签 + `jti` 黑名单(`pai_jti_revocations`),失败 401。
 
 | 文件 | 工具 |
 |---|---|
-| `cards.py` | `cards_recent`、`cards_get` |
-| `composio_meta.py` | `COMPOSIO_SEARCH_TOOLS`、`COMPOSIO_GET_TOOL_SCHEMAS`、`COMPOSIO_MULTI_EXECUTE_TOOL`、`COMPOSIO_MANAGE_CONNECTIONS` |
-| `feedback.py` | `feedback_list`、`feedback_get` |
-| `memory.py` | `memory_list`、`memory_search`、`memory_get`、`memory_add`、`memory_upsert` |
-| `preferences.py` | `preference_add`(持续性内容偏好 → `pai_preference_records`,高权重)、`set_generation_language`(改输出语言 → `generation_language` 设置,确定性,非偏好行)。详见 [Feedback](./feedback) 偏好层 |
-| `profile.py` | `profile_get`、`profile_upsert`、`goal_list`、`goal_upsert` |
-| `raw.py` | `raw_list`、`raw_get`、`raw_gmail_recent`、`raw_gcal_today`、`raw_gcal_week` |
-| `signals.py` | `signals_recent`、`signals_get` |
-| `tavily.py` | `tavily_search`、`tavily_extract`(LangChain Tavily 工具,API key 在 api 进程,agent-engine 通过 api 转发) |
-| `world.py` | `world_recent`、`world_search` |
+| `events.py` | **memory 检索/写入的统一面**:`events_search`(L1 hybrid 检索,query/event_type/since/until,返回 snippet + `hasSource`)、`event_source`(按 event 下钻 L0 原文,supersede 链自动 resolve)、`event_append`(纯追加;preference 也走这,`structured{polarity,weight,scope,expires}`)。老的 memory_*/signals_*/raw_*/world_* 工具全部退役 |
+| `user_strings.py` | `memory_edit`(L2 画像 5 slot add/replace/remove/batch,可带 `evidence_event_ids`;服务端同事务把画像变更写回 L1)。画像本身经 `PortraitMiddleware` 常驻注入,不用工具读 |
+| `cards.py` | `cards_recent`、`generate_card` |
+| `composio_meta.py` | `composio_search_tools`、`composio_get_tool_schemas`、`composio_multi_execute`、连接管理(Tool Router meta 工具) |
+| `feedback.py` | `feedback_list` |
+| `preferences.py` | `set_generation_language`(改输出语言 → 确定性设置,非偏好行;内容偏好走 `event_append`) |
+| `propose_action.py` | `propose_action`(HITL 提议) |
+| `scheduled_generators.py` | `scheduled_generator_{preview,create,create_once,list,pause,resume,delete}` |
+| `development_feedback.py` | `development_feedback_log`(产品团队 triage,非个性化信号) |
+| `tavily.py` | `tavily_search`、`tavily_extract` |
 
 ### python_exec(Code Mode)
 
@@ -224,15 +224,11 @@ Browserbase context(`ensure_browserbase_context`)在 onboarding 完成时(`domai
 
 实施 HITL middleware 之后才会在 api 端补 verb 分类闸 — 在那之前,任何"新接 toolkit 副作用安全"的判断都得靠 prompt 控住,不能依赖代码。
 
-### Conversation crystallize
+### 对话怎么进长期记忆(crystallize 已删除)
 
-`agent_engine/agents/crystallize.py` 沉淀 chat session 成长期 memory / skill(详见 [Memory](./memory))。
+老的 conversation crystallize(agent/路由/stub 全套)已随 lifelong-memory 重构删除——单 session 蒸馏两头不靠。现在对话进入长期记忆走两条路:**hot**(用户明确说了 durable 的事,chat agent 当场 `memory_edit` 写画像 / `event_append` 记事件)+ **periodic evolve**(每 4h 跨对话推断,看 [Memory](./memory))。chat agent 的 system prompt 经 `PortraitMiddleware` 常驻注入画像(AGENTS 安全常量 + 5 slot,每 agent instance fetch 一次、transient SystemMessage 保 cache),这是「懂你」的读路径。
 
-**当前触发路径**:agent-engine 进程 inline 调用 — 没有走 scheduler 队列。`orchestration/dispatcher.py` 顶部注释明确说 `crystallize → not scheduled (chat worker fires inline)`,grep `kind="crystallize"` 在 api 端没有任何 enqueue 点。前端 UI 的 `/api/crystallize/state` / `/api/crystallize/config` 路由当前是 stubs(`domains/chat_history/crystallize.py`),返回静态状态,不真触发任何东西。
-
-预留 schedule 通路:dispatcher 已经实现了 `crystallize` kind → POST `agent-engine /agent/run/crystallize`(`agent_engine/transport/routes/run.py`)的路由;后续要把"session 阈值触发"换成 scheduler enqueue 时,只需要加一个 enqueuer service 写 `kind='crystallize'` 行,不需要再改 dispatcher。
-
-- 与 chat-feedback 区分:crystallize 写长期 memory / skill;chat-feedback 写单卡偏置只影响下一轮 generation(看 [Feedback](./feedback))。两者消费同一份 transcript 但下游分流。
+- 与 chat-feedback 区分:hot/evolve 写长期画像与 events;chat-feedback 写单卡偏置只影响下一轮 generation(看 [Feedback](./feedback))。两者消费同一份 transcript 但下游分流。
 
 ### SSE 事件
 
@@ -351,15 +347,15 @@ make logs-agent-engine | grep -E "/agent/chat|chat:tool|browser:"
 - LangGraph checkpointer 写 `langgraph` schema,清 chat 状态不要 truncate `pai_chat_threads`(那是 metadata),要清 `langgraph.*` 表。
 - `pai_chat_threads.message_count` / `last_message_at` bump 在 `/send` 的 finalizer 里 — 流被客户端早断(SSE 链路 ~10min 默认 timeout)时 finalizer 仍会跑,但 agent 在后台跑的剩余 tool 帧丢失。
 - card context 解析失败时,prompt 退到 raw string 模式,结构化字段(`primaryAction` / `sources` 等)拿不到,Tier 1 source_kind hint 不会注入。
-- conversation crystallize 跟 chat-feedback 都消费同一份 transcript 但下游分流,改归一化逻辑要同时跑两套测试。
+- 对话蒸馏(hot memory_edit / periodic evolve)跟 chat-feedback 都消费同一份 transcript 但下游分流,改归一化逻辑要同时跑两套测试。
 - `_ALLOWED_META_TOOLS = {SEARCH_TOOLS, GET_TOOL_SCHEMAS, MULTI_EXECUTE_TOOL, MANAGE_CONNECTIONS}` 是当前 api 端**唯一**的 Composio 路由白名单;扩 meta-tool(比如未来引入 `REMOTE_WORKBENCH`)必须显式加进这里,不然 404。
 
 ## 相关模块
 
 - [Generation](./generation):上游 — IntentCard 从这里出,本模块通过 `card_context` 接入。
 - [Feedback](./feedback):兄弟 — `card_action` 和 `intent_card_state` 走 feedback 路径,不进 chat SSE。
-- [Memory](./memory):下游 — crystallize 沉淀的 memory / skill 在这里读。
-- [Background Tasks](./background-tasks):兄弟 — `connector.*` / `auto.dreaming` / `crystallize` 跑在异步队列上,跟 chat 链路完全分离。
+- [Memory](./memory):下游 — events / 画像的 schema 与 evolve 蒸馏在这里读。
+- [Background Tasks](./background-tasks):兄弟 — `connector.*` / `auto.dreaming`(periodic evolve)跑在异步队列上,跟 chat 链路完全分离。
 - [Runtime & Deployment](./runtime-deployment):api/agent-engine 进程信任边界、agent-run JWT 签发、Daytona sandbox 生命周期、Browserbase 配置。
 
 ## 相关 AI Plans

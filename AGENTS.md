@@ -20,7 +20,7 @@
 PIN AI 后端是 `backend/` 下的一个 **uv workspace monorepo**（Python / FastAPI / LangChain + DeepAgents），拆成三个互不依赖的 service + 两个共享 lib：
 
 - **api**（`services/api/`，包 `pinai_api`）— 受信任主进程：控制面 + 领域 + 公网 edge，持 master credentials。
-- **agent-engine**（`services/agent-engine/`，包 `agent_engine`）— 无信任 agent 执行引擎：跑全部 agent（chat / generator / dream / evolve / crystallize），只依赖 `libs/contracts`。
+- **agent-engine**（`services/agent-engine/`，包 `agent_engine`）— 无信任 agent 执行引擎：跑全部 agent（chat / generator / evolve / rollup_semantic），只依赖 `libs/contracts`。
 - **reward-dashboard**（`services/reward-dashboard/`，包 `pinai_reward_dashboard`）— 内部 review 工具后端：只读产品 DB，零产品代码依赖，不持 master credentials。
 - **libs/contracts**（`pinai_contracts`）— api↔agent-engine 共享协议（SSE envelope、api models、agent_run）；**libs/db**（`pinai_db`）— 跨 service 共享的 db 基础（pool / rls / audit / base）+ 共享纯 SQL repo（patterns / user_fingerprint）。
 
@@ -46,7 +46,7 @@ PIN AI 后端是 `backend/` 下的一个 **uv workspace monorepo**（Python / Fa
 `apis/`（Node 后端 + 容器编排 + gateway）、`pinai-openclaw/`（用户容器镜像 + plugin）、`miniapp/`（Telegram mini app）三个老仓目录已经移除，所有职责都搬到 `backend/`：
 
 - 控制面（auth / device / connector / payment / scheduler / migrations）→ **api 进程**（`pinai_api`）。
-- LLM 链路（chat / generate / dreaming agents + Daytona sandbox 工具）→ **agent-engine 进程**（`agent_engine`）。
+- LLM 链路（chat / generate / evolve agents + Daytona sandbox 工具）→ **agent-engine 进程**（`agent_engine`）。
 - 内部 reward review 后端（reward ledger / casebook / trace / pattern curate / data snapshot）→ **reward-dashboard 进程**（`pinai_reward_dashboard`），只读产品 DB。
 - 用户级 OpenClaw 容器和 gateway 代理整套都退役了，前端直接打 `pinai_api` 的 HTTP/SSE。
 - **当前 fly 部署形态**：**dev 和 test 已切到三个独立 fly app**——`proactive-ai-{api,engine,reward}-{dev,test}`（api = trusted edge 持 master credentials / engine = 无信任 LLM loop，scoped secret / reward = 只读 review 后端），配置在 `backend/deploy/fly-split/fly.{api,engine,reward}.{dev,test}.toml`，CI 由 `deploy-{dev,test}.yml` 的 `agents_split: true` 激活、跑 `_deploy.yml` 的 `deploy-agents-split`（per-app scoped secrets + deploy）。旧单 app `proactive-ai-agents-dev` 已停（machine=0）保留作回滚；test 从未有过单 app（`agents-test` 不存在，2026-07-02 直接按三-app 建）。**prod 仍是单 app**（`proactive-ai-agents-prod`，`fly.prod.toml` 的 `[processes]` 切 `web`/`chat` 两进程组、共用一份镜像）。§五 终态 = 三环境都拆三-app，prod 待单独落地（见 backend-rearchitecture plan §十二）。api→engine 在 fly 内网走 **6PN service discovery**（`proactive-ai-engine-<env>.internal:8001`，**不是 flycast**——见踩坑 §9）。
@@ -101,12 +101,12 @@ backend/.env / backend/.env.chat / ops/litellm/.env / ./.env  # 本地明文，m
 - `backend/services/api/src/pinai_api/config.py`：pydantic-settings 配置中心，所有 env 读取从这里走。
 - `backend/services/api/src/pinai_api/`：api 进程（FastAPI app + 控制面 + 领域 + 公网 edge）。入口 `app.py` / `asgi.py`。
 - `backend/services/api/src/pinai_api/platform/`：私有底座（agent-engine / reward-dashboard 都够不到），含 `auth/`（deps + user_service + supabase/agent JWT）、`db/`（含 `repositories/` = chat_messages/threads、devices、scheduled_tasks 等 api 私有 repo）、`litellm/`、`storage.py`、`notification.py`、`embeddings.py`、语音 ASR。
-- `backend/services/api/src/pinai_api/domains/`：产品领域垂直化，每域 `ui.py`（`current_user` 前端面向）+ `agent.py`（`current_agent_run` JWT 鉴权内部 API，多路由域加 topic 前缀如 `memory_ui.py` / `composio_agent.py`）+ service + repository。域含 `identity/`、`user_model/`（memory/profile/signals/skills/evolution）、`connector/{apps,device,world}/`、`billing/`（含 `payments/`、`metering.py`）、`generation/`（含 `card_fanout.py`、`pattern_matcher.py`）、`feedback/`、`chat_history/`、`browser/`、`voice/`。
+- `backend/services/api/src/pinai_api/domains/`：产品领域垂直化，每域 `ui.py`（`current_user` 前端面向）+ `agent.py`（`current_agent_run` JWT 鉴权内部 API，多路由域加 topic 前缀如 `memory_ui.py` / `composio_agent.py`）+ service + repository。域含 `identity/`、`memory/`（lifelong-memory 四子包 `events/`（L1 存储+检索+event_source 下钻）/`projection/`（L0→L1 投影+rollup window）/`portrait/`（L2 画像+seed）/`curation/`（evolve 审计+面），模块地图见 [`docs/plans/2026-06-23-lifelong-memory-system.mdx`](docs/plans/2026-06-23-lifelong-memory-system.mdx) §十一）、`user_model/`（settings/skills）、`connector/{apps,device,world}/`、`billing/`（含 `payments/`、`metering.py`）、`generation/`（单次多轮 agent run,含 `context_anchor.py`、`card_fanout.py`）、`feedback/`、`chat_history/`、`browser/`、`voice/`。
 - `backend/services/api/src/pinai_api/control/`：actor 控制内核（`kernel.py` / `worker.py` / `sessions.py` / `mailbox.py` / `runs.py` / `framebus.py` / `bus.py` + `execution_client.py` 调 agent-engine + `conversation.py` 执行入口 + `chat_turn_recorder.py`）。
 - `backend/services/api/src/pinai_api/orchestration/`：scheduler（`tick_loop.py` / `dispatcher.py` / `cron.py`）+ `account_lifecycle.py` + `phase1_seed.py`。
 - `backend/services/agent-engine/src/agent_engine/`：agent-engine 进程（LLM loop + DeepAgents harness + Daytona sandbox）。入口 `app.py` / `asgi.py`；`trust_boundary.py` = FORBIDDEN_ENVS 真源。
 - `backend/services/agent-engine/src/agent_engine/transport/routes/`：`chat.py`、`generate.py`、`history.py`、`run.py`。
-- `backend/services/agent-engine/src/agent_engine/agents/`：generator / main_chat / card_execution / dream / evolve / crystallize 等 agent 实现。
+- `backend/services/agent-engine/src/agent_engine/agents/`：generator / main_chat / card_execution / evolve（合并原 dream，crystallize 已删）/ rollup_semantic / generation_context 等 agent 实现。
 - `backend/services/agent-engine/src/agent_engine/tools/` + `tools/browser/`：sandbox 工具（python_exec、browser via Browserbase）；`harness/` = deepagents 适配（factory / compaction / checkpoint / middleware）。
 - `backend/services/reward-dashboard/src/pinai_reward_dashboard/`：内部 reward review 后端（`routes.py` = `/api/reward-dashboard/*` + `reward.py` / `trace_artifacts.py` / `pattern_extractor.py` / `pattern_health.py` / `personal_data_snapshot.py`）。只读产品 DB，零产品代码依赖。
 - `backend/libs/contracts/src/pinai_contracts/`：api/agent-engine 共用的 pure model / protocol（`sse_envelope.py` / `api_models.py` / `agent_run.py`），不能 import 任何 service。
@@ -150,12 +150,12 @@ backend/.env / backend/.env.chat / ops/litellm/.env / ./.env  # 本地明文，m
 
 ## 当前模块文档
 - [`docs/modules/data-connectors.mdx`](docs/modules/data-connectors.mdx) — Composio、device registry、mobile ingest、连接状态矩阵。
-- [`docs/modules/memory.mdx`](docs/modules/memory.mdx) — `pai_raw_*` / personal_signals / world_signals / memory / profile / skill / evolution。**改动 memory / profile / skill / signals / evolution_runs / raw schema 相关代码前必读**。
+- [`docs/modules/memory.mdx`](docs/modules/memory.mdx) — lifelong-memory 三层（L0 `pai_raw_apps`/`pai_raw_device`/`pai_world_signals` / L1 `pai_events` / L2 `pai_user_strings` 画像）+ 投影管线 + evolve。**改动 `domains/memory/`、events/portrait/raw schema、evolve 相关代码前必读**；设计 SSOT = [`docs/plans/2026-06-23-lifelong-memory-system.mdx`](docs/plans/2026-06-23-lifelong-memory-system.mdx)。
 - [`docs/modules/generation.mdx`](docs/modules/generation.mdx) — `/generate`、pipeline、unified generator、evaluation、card selection、auto-generate。
-- [`docs/modules/execution.mdx`](docs/modules/execution.mdx) — chat-stream、card chat、agent prompt、browser tool、control mode、conversation crystallize。**改动 `agent_engine/transport` / `agent_engine/agents` / `agent_engine/tools/browser` / `pinai_api/control` / 前端 MainChatView 相关代码前必读**。
+- [`docs/modules/execution.mdx`](docs/modules/execution.mdx) — chat-stream、card chat、agent prompt + memory 工具面（events_search/event_source/event_append/memory_edit + portrait 注入）、browser tool、control mode。**改动 `agent_engine/transport` / `agent_engine/agents` / `agent_engine/tools/browser` / `pinai_api/control` / 前端 MainChatView 相关代码前必读**。
 - [`docs/modules/feedback.mdx`](docs/modules/feedback.mdx) — feedback events、card action、card chat feedback、intent state、学习回流。
 - [`docs/modules/internal-reward-dashboard.mdx`](docs/modules/internal-reward-dashboard.mdx) — 内部卡片 review Vite app、reward ledger、reviewer score、casebook、LangSmith trace artifact。**改动 `internal-reward-dashboard/`、`/api/reward-dashboard/*`、`pai_card_reward_events` / `pai_card_casebook` / `pai_trace_artifacts` 前必读**。
-- [`docs/modules/background-tasks.mdx`](docs/modules/background-tasks.mdx) — `background_tasks` 队列、scheduler tick、reconciler、connector init/sync/evolve、auto-dreaming。
+- [`docs/modules/background-tasks.mdx`](docs/modules/background-tasks.mdx) — `background_tasks` 队列、scheduler tick、reconciler、connector init/sync/evolve（per-user coalesce）、auto evolution（periodic sweep,kind 仍叫 `auto.dreaming`）。
 - [`docs/modules/runtime-deployment.mdx`](docs/modules/runtime-deployment.mdx) — 本地启动、运行拓扑、部署、安全、billing 概览。**当前文档仍是 apis/openclaw 时代的描述，待按 backend 重写**；在那之前，运行/部署的事实以本 AGENTS.md「本地开发」「变更与部署」两节为准。
 
 ## 本地开发
@@ -262,14 +262,14 @@ npm run check:packages                              # core/state/ui-kit/ui-web �
 
 **docker healthy ≠ 功能对**：本地容器起来只是"代码能站起来"。依赖 Supabase token / 真实用户数据 / Stripe webhook / Composio OAuth 的链路本地验不出来，如实声明"本地只验证启动 + 类型"，不要把容器 healthy 当通过。
 
-**测试用空库可以 mock 数据**：本地 DB 里 personal_signals / memory / cards / feedback 等表为空时，链路跑不到要测的分支。可以临时插一批最小可用的 mock 行（同一 user_id + 必要的 status / created_at 字段）把测试跑通，但要做到：(1) 仅本地/dev，禁止灌 prod；(2) mock 数据用可识别的 marker（比如 `note='__mock__'` 或固定前缀 id）方便清理；(3) 测完清掉，不要留在共享 dev DB 里污染别人。优先用脚本（`backend/scripts/` 下加一次性 seed）而不是手敲 SQL。
+**测试用空库可以 mock 数据**：本地 DB 里 pai_events / pai_raw_* / cards / feedback 等表为空时，链路跑不到要测的分支。可以临时插一批最小可用的 mock 行（同一 user_id + 必要的 status / created_at 字段）把测试跑通，但要做到：(1) 仅本地/dev，禁止灌 prod；(2) mock 数据用可识别的 marker（比如 `note='__mock__'` 或固定前缀 id）方便清理；(3) 测完清掉，不要留在共享 dev DB 里污染别人。优先用脚本（`backend/scripts/` 下加一次性 seed）而不是手敲 SQL。
 
 **不用担心 LLM token 或 Daytona 计费**：测试时直接跑就行，不要为了"省调用"刻意缩小用例、跳过链路、或者改成 mock。该真跑就真跑。
 
 完整命令：`make help`
 
 ## Tracing 调试（LangSmith）
-agent 链路（chat / generator / dreaming / crystallize 等）通过 LangChain 自动上报到 [LangSmith](https://docs.langchain.com/langsmith)。要 debug prompt、工具调用、token、错误时，用 LangSmith CLI 直接拉 trace，不用打开 web UI。
+agent 链路（chat / generator / evolve / rollup_semantic 等）通过 LangChain 自动上报到 [LangSmith](https://docs.langchain.com/langsmith)。要 debug prompt、工具调用、token、错误时，用 LangSmith CLI 直接拉 trace，不用打开 web UI。
 
 安装（一次性，已装可跳过）：
 ```bash

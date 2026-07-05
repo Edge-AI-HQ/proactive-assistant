@@ -80,7 +80,7 @@ flowchart LR
 | `polarity` | `structured.polarity` | `positive` / `negative`。 |
 | `durability`、`expires_at` | `structured.{durability,expires_at}` | `temporary` 有过期时间；`persistent` 长期有效（`list(active)` 隐藏过期行）。 |
 | `weight`、`confidence` | `structured.{weight,confidence}` + `pai_events.importance` | 用户明确表达默认高权重。 |
-| `source`、`status` | `pai_events.source`（JWT principal 派生：`user` / `internal_operator`）+ `curation_status` / supersede 链 | 来源、active/superseded/archived 状态。 |
+| `source`、`status` | `pai_events.source`（feedback 域写入 = `pinai_feedback`,actor 经 JWT server-stamp 进 `structured`）+ supersede 链（`superseded_by_id IS NULL` = 当前版） | 来源与当前/被替代状态。 |
 
 `pai_intent_card_state` / `pai_intent_thread_state` 已由 migration `051_drop_intent_state_tables.sql` 删除。当前卡片 outcome 从 `pai_feedback_events` 推导，不再维护独立 intent state 表。
 
@@ -149,7 +149,7 @@ sequenceDiagram
 | Repository | `FeedbackRepository.log()` 先写 `pai_feedback_events`，再按输入类型决定是否 fan-out 到 fingerprint / preference。 |
 | `/api/cards` | generation 域的 runs/cards UI 路由从最新 feedback event 推导每张卡的 `latestOutcome` / `outcomeAt`；不依赖 intent state 表。 |
 | Agent feedback | `GET /api/agent/feedback/list` 给 `feedback_list` native tool 读取；`POST /api/agent/feedback/log` 保留 agent-originated feedback 写入，默认 `source='agent'`。 |
-| Preference 写入 | 常规 chat agent 仍通过 `preference_add` 写 `/api/agent/preferences/add`（路由内部 append 一条 `event_type=preference` 的 active `pai_events`）；future-negative card text feedback 也会在 repository 内直接写一条 `source='user'` 的 active preference 事件。 |
+| Preference 写入 | 常规 chat agent 经 `event_append`（`event_type=preference` + `structured{polarity,weight,scope,expires}`；独立 preferences 路由已随 Block2 删除）；future-negative card text feedback 在 feedback repository 内直接 append 一条 `source='pinai_feedback'` 的 preference 事件（写入即盖 `curated_at`）。evolve 还会把反复 dismiss 蒸馏成 standing preference 事件。 |
 | Generation 使用 | `agent_engine/agents/generator.py` 的 data-collector 同时拉 `client.feedback.list(limit=50)` 和 `client.preferences.list(status="active", limit=50)`；planner 规则里 active preference 强于冷 basket 推断。 |
 | 开发建议 | `pai_development_feedback` 独立记录产品/UI/功能诉求；唯一写入方是 agent 的 `development_feedback_log` 工具；generation 不读取这张表。 |
 | `metadata` | object / JSON string 都接；非法 string 存 `{ raw: <原文> }`，避免打断 feedback 写入。 |
@@ -224,7 +224,7 @@ SELECT title AS statement,
        structured->>'durability' AS durability,
        source, recorded_at
 FROM pai_events
-WHERE user_id = $1 AND event_type = 'preference' AND curation_status = 'active'
+WHERE user_id = $1 AND event_type = 'preference' AND superseded_by_id IS NULL
 ORDER BY recorded_at DESC
 LIMIT 20;
 ```

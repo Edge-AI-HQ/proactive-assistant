@@ -10,7 +10,7 @@ description: "Composio、device 注册、mobile ingest 与 connector.preview/ini
 Data Connectors 负责"数据源怎么接进来",不负责后续记忆提炼。两条主链路:
 
 - **Composio**:用户在前端 OAuth 连 SaaS 账号 → `/api/composio/connect` 立即入队 `connector.preview`(onboarding 快速反馈,后台等 ACTIVE 后只拉最多 50 条并生成 summary cache)→ preview 完成后再入队 `connector.init` → scheduler 派给 `domains/connector/apps/connector_ingest.py` in-process handler → handler 从 Composio 拉一批数据写到 **L0 generic `pai_raw`**(lifelong-memory L0 统一后所有 toolkit 走 generic upserter,`_resolve_upserter` 恒返回 `generic_ingest.upsert_generic`;typed `pai_raw_<toolkit>` upserter 保留但已不驱动写入,P7 删)→ 调 `project_unprojected` 把新 raw 投影成 L1 `pai_events`(`pending`)→ 同时入一次 once-shot `connector.evolve`(LLM curate 事件 + 蒸馏画像)和一行 recurring `connector.sync`(cron `*/30 * * * *`)。`connector.sync` 用 `pai_connector_sync_cursors.last_synced_at` 当 since 下界做增量。
-- **Device / mobile**:用户在前端注册设备拿一次性 token(bcrypt 存 `pai_user_devices`),后续走 `POST /api/devices/ingest`(`X-Device-Id` + `X-Device-Token` 鉴权)。落点由 `domains/connector/device/device_ingest/policies.py:DEVICE_INGEST_POLICIES` 决定:`raw_only` / `dual` kind 写 typed `pai_raw_device_*`,`signal_only`(ambient utterance / visit / motion 等)写 generic `pai_raw` context event,两条都经 `project_unprojected` 投影成 L1 `pai_events`(不再写退役的 `pai_personal_signals`)。unknown kind 默认 fallback 到 `signal_only`。
+- **Device / mobile**:用户在前端注册设备拿一次性 token(bcrypt 存 `pai_user_devices`),后续走 `POST /api/devices/ingest`(`X-Device-Id` + `X-Device-Token` 鉴权)。落点由 `domains/connector/device/device_ingest/recipes.py:DEVICE_RECIPES` 决定(P2 recipe 化,typed 时代的 `DEVICE_INGEST_POLICIES`/typed 表已删):所有 kind 统一写单表 `pai_raw_device`(`kind` + `platform` 判别,`124` 前的 `123` 加 platform 列),经 `project_unprojected` 投影成 L1 `pai_events`(location/visit/motion→movement、session_summary→utterance;transcript_window 走 rollup_semantic 卷 episode;apps/contacts 状态类不投影)。
 
 ```mermaid
 flowchart LR
@@ -321,7 +321,7 @@ device 三张表(`pai_raw_device_apps_snapshot`、`pai_raw_device_contacts_snaps
 | `health.observation` | raw_only | `pai_raw_device_health_observations`(`domains/connector/device/device_ingest/health.py:parse_health_observations` 解析) |
 | ambient(`ambient.utterance` / `ambient.visit` / `device.motion_segment` 等)/ `moment.*` / `attention.*` / 未知 kind | signal_only(fallback) | generic `pai_raw` context event(`entity_type` 见 policies `_kind_to_entity`),payload 带 `ingest_fallback_reason` |
 
-> signal_only / dual 写进 generic `pai_raw` 的 context event 经 `project_unprojected` 投影成 L1 `pai_events`(`source='device'`),不再写退役的 `pai_personal_signals`。
+> device 各 kind 统一写 `pai_raw_device`,经 `project_unprojected` 投影成 L1 `pai_events`(`source='device'`),不再写退役的 `pai_personal_signals`。
 
 `sync_mode`(item envelope 字段):
 
@@ -378,7 +378,7 @@ ORDER BY updated_at DESC LIMIT 20;
 -- 单 toolkit 的 raw 行(Composio 现在落 generic pai_raw)
 SELECT count(*), max(occurred_at) FROM pai_raw WHERE user_id = $1 AND toolkit = 'gmail';
 -- 投影出的 L1 事件(取代退役的 pai_personal_signals)
-SELECT curation_status, count(*) FROM pai_events WHERE user_id = $1 GROUP BY curation_status;
+SELECT (curated_at IS NULL) AS uncurated, count(*) FROM pai_events WHERE user_id = $1 GROUP BY 1;
 
 -- Cursor 状态
 SELECT * FROM pai_connector_sync_cursors WHERE user_id = $1;
