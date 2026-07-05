@@ -230,6 +230,41 @@ async def test_search_hybrid_keyword_lane_matches_exact_terms(pool, user_ids):
 
 
 @pytest.mark.asyncio
+async def test_search_hybrid_until_bounds_the_window(pool, user_ids):
+    """`until` genuinely narrows the q path (was a silent no-op: the route
+    accepted it, repo hybrid/semantic had no such parameter — SDK callers
+    passing q+until got unfiltered results). Both hybrid lanes now carry it."""
+    user_a, _ = user_ids
+    async with user_scoped_tx(pool, user_a) as conn:
+        repo = EventsRepository(user_a, conn)
+        for id_, day in (("ev_win_in", 10), ("ev_win_out", 20)):
+            await repo.append(
+                AppendEventInput(
+                    id=id_,
+                    source="composio",
+                    event_type="meeting",
+                    occurred_at=datetime(2026, 7, day, tzinfo=UTC),
+                    dedupe_key=f"k_{id_}",
+                    title="Budget review meeting",
+                    curated=True,
+                )
+            )
+
+    async with user_scoped_tx(pool, user_a) as conn:
+        repo = EventsRepository(user_a, conn)
+        rows = await repo.search_hybrid(
+            query_vector=[0.0] * 1536,
+            query_text="budget review",
+            limit=10,
+            since=datetime(2026, 7, 1, tzinfo=UTC),
+            until=datetime(2026, 7, 15, tzinfo=UTC),
+            run_id="r_win",
+        )
+    ids = [r.id for r in rows]
+    assert ids == ["ev_win_in"]  # the 07-20 hit is outside the window
+
+
+@pytest.mark.asyncio
 async def test_project_unprojected_is_idempotent(pool, user_ids):
     user_a, _ = user_ids
     async with user_scoped_tx(pool, user_a) as conn:

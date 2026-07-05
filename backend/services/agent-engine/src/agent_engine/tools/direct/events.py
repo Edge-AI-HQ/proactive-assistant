@@ -33,21 +33,45 @@ class EventsSearchInput(BaseModel):
             "interaction / utterance / preference. Omit for all types."
         ),
     )
+    since: str | None = Field(
+        default=None,
+        max_length=40,
+        description=(
+            "ISO-8601 lower bound on when events occurred. Combine with `until` "
+            "for a window — e.g. meetings in the next 7 days: since=now, "
+            "until=now+7d (occurred_at covers FUTURE events too)."
+        ),
+    )
+    until: str | None = Field(
+        default=None,
+        max_length=40,
+        description="ISO-8601 upper bound on when events occurred.",
+    )
     limit: int = Field(
         default=20, ge=1, le=50, description="Max results. Keep small to save context."
     )
 
 
 @tool("events_search", args_schema=EventsSearchInput)
-async def events_search(query: str | None, event_type: str | None, limit: int):
+async def events_search(
+    query: str | None,
+    event_type: str | None,
+    since: str | None,
+    until: str | None,
+    limit: int,
+):
     """Search the user's event stream — their emails / meetings / messages /
     transactions / activity, plus anything you've recorded. With a query it's
-    semantic; without one it returns the most recent events. This is your
-    primary window into what's happening in the user's life."""
+    semantic; without one it returns the most recent events. `since`/`until`
+    bound WHEN things occurred (works with or without a query; occurred_at
+    covers future events, so "next 7 days" is a since/until window). This is
+    your primary window into what's happening in the user's life."""
     payload = await http_client.get(
         "/api/agent/events/search",
         q=query,
         eventType=event_type,
+        since=since,
+        until=until,
         limit=limit,
     )
     if isinstance(payload, dict) and payload.get("error"):

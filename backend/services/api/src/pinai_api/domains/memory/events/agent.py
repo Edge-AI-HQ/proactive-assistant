@@ -191,6 +191,7 @@ async def search_events(
                 limit=limit,
                 event_type=event_type,
                 since=since,
+                until=until,
                 run_id=run.run_id,
             )
     else:

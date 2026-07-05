@@ -370,6 +370,7 @@ class EventsRepository(UserScopedRepository):
         limit: int = 10,
         event_type: str | None = None,
         since: datetime | None = None,
+        until: datetime | None = None,
         run_id: str | None = None,
     ) -> list[EventRow]:
         """Semantic search over `active` events (pending / filtered_out / archived
@@ -401,6 +402,7 @@ class EventsRepository(UserScopedRepository):
                       AND superseded_by_id IS NULL
                       AND (%s::text IS NULL OR event_type = %s)
                       AND (%s::timestamptz IS NULL OR occurred_at >= %s)
+                      AND (%s::timestamptz IS NULL OR occurred_at <= %s)
                     ORDER BY embedding <=> %s::vector
                     LIMIT %s
                 )
@@ -417,6 +419,8 @@ class EventsRepository(UserScopedRepository):
                     event_type,
                     since,
                     since,
+                    until,
+                    until,
                     vec_lit,
                     candidate_limit,
                     _EVENT_TYPE_WEIGHT_JSON,
@@ -437,6 +441,7 @@ class EventsRepository(UserScopedRepository):
         limit: int = 10,
         event_type: str | None = None,
         since: datetime | None = None,
+        until: datetime | None = None,
         run_id: str | None = None,
     ) -> list[EventRow]:
         """Hybrid keyword + semantic search over `active` events, RRF-fused
@@ -467,6 +472,7 @@ class EventsRepository(UserScopedRepository):
                       AND superseded_by_id IS NULL
                       AND (%s::text IS NULL OR event_type = %s)
                       AND (%s::timestamptz IS NULL OR occurred_at >= %s)
+                      AND (%s::timestamptz IS NULL OR occurred_at <= %s)
                     ORDER BY embedding <=> %s::vector
                     LIMIT %s
                 )
@@ -483,6 +489,8 @@ class EventsRepository(UserScopedRepository):
                     event_type,
                     since,
                     since,
+                    until,
+                    until,
                     vec_lit,
                     candidate_limit,
                     _EVENT_TYPE_WEIGHT_JSON,
@@ -502,6 +510,7 @@ class EventsRepository(UserScopedRepository):
                   AND title_body_tsv @@ plainto_tsquery('english', %s)
                   AND (%s::text IS NULL OR event_type = %s)
                   AND (%s::timestamptz IS NULL OR occurred_at >= %s)
+                  AND (%s::timestamptz IS NULL OR occurred_at <= %s)
                 ORDER BY kw_score DESC, occurred_at DESC
                 LIMIT %s
                 """,
@@ -513,6 +522,8 @@ class EventsRepository(UserScopedRepository):
                     event_type,
                     since,
                     since,
+                    until,
+                    until,
                     candidate_limit,
                 ),
             )
