@@ -303,7 +303,7 @@ async def test_sync_with_inserts_enqueues_evolve(pool, user_ids, fake_adapter):
         )
         rows = await cur.fetchall()
     assert len(rows) == 1
-    assert rows[0]["id"] == "evolve.fake.cid5"
+    assert rows[0]["id"] == "evolve"  # per-user coalesced singleton (§八)
 
 
 # ── _run_init enqueues a recurring sync schedule ────────────────────────

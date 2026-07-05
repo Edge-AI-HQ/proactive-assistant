@@ -132,9 +132,10 @@ L1; you then curate + distil them like any other event.)
 # Per-trigger <trigger> context appended to the system prompt.
 _TRIGGER_CONTEXT: dict[str, str] = {
     TRIGGER_ON_EVENT: (
-        "Fires right after one connector (Gmail / GCal / Slack / …) finished an "
-        "ingest sweep. The fresh rows are already projected into pending events. "
-        "Scope: curate this connector's new events + distil what they reveal. "
+        "Fires after one or more connectors (Gmail / GCal / Slack / …) finished "
+        "ingest sweeps (same-window triggers coalesce into one run per user). "
+        "The fresh rows are already projected into pending events. Scope: curate "
+        "the new events from the named connectors + distil what they reveal. "
         "Read long-tail source detail via client.raw.list(toolkit, entity) when "
         "an event's payload isn't enough."
     ),
@@ -172,8 +173,8 @@ def _user_message(
     base = f"Run evolve (trigger={trigger_kind}) for user_id={user_id} run_id={run_id}. "
     if trigger_kind == TRIGGER_ON_EVENT:
         return (
-            base + f"A connector ingest just finished: connector={connector}. Curate the "
-            "fresh uncurated events from it and distil the portrait per the job + "
+            base + f"Connector ingest just finished for: {connector}. Curate the "
+            "fresh uncurated events from them and distil the portrait per the job + "
             f"hard_rules.\n\n{_raw_sources_hint(connector or 'unknown', raw_sources)}"
         )
     return (

@@ -95,7 +95,7 @@ description: "把用户的 digital + physical + interaction context 收敛成三
 | `pai_profile`/`pai_goals`/`pai_preference_records` | **退役** → USER/GOALS markdown;硬约束偏好作 `event_type=preference` 事件 |
 | `pai_skill_index` | **保留**(执行引擎线,不在本 doc)|
 | `pai_evolution_runs` | **保留**(evolve 审计 + provenance)|
-| evolve / dream | **合并**(evolve,on_event / daily 两触发)|
+| evolve / dream | **合并**(evolve,on_event / periodic-4h 两触发)|
 | crystallize(dormant)| **删除** — 对话蒸馏由 hot(明确输入)+ daily evolve(推断)+ event_append 覆盖,单 session 两头不靠 |
 | `pai_timeline_events`(死表)| 建 `pai_events` 时顺手 drop |
 
@@ -353,21 +353,21 @@ world(新闻/外部)是**独立的写管线(管线 B)**,和个人域管线(Inges
 
 ---
 
-## 八、evolve(on_event / daily)+ formation + 收敛清单
+## 八、evolve(on_event / periodic)+ formation + 收敛清单
 
-**evolve = 原 evolve/dream 合并**(crystallize 删除,见下),一个 agent、**两触发**(on_event connector 后 / daily 每日),**只管 background 蒸馏**(hot 蒸馏走 chat agent,6.1):
+**evolve = 原 evolve/dream 合并**(crystallize 删除,见下),一个 agent、**两触发**(on_event connector 后 / periodic **每 4 小时**,用户时区整点边界 0/4/8/…——画像/偏好蒸馏的滞后以小时计而非天计),**只管 background 蒸馏**(hot 蒸馏走 chat agent,6.1):
 
 1. **L1**:curate 未整理队列(`curated_at`)、抽 predicted、forgetting。**semantic rollup 不是 evolve 的活**——firehose→episode 属投影管线(L0→L1),由独立的 `rollup_semantic` 承担(4.2);把它塞进 evolve 是职责越界(一个 agent 混两层的 LLM 用途),prompt 变长且互相干扰。
 2. **L1→L2**:从 events **单向蒸馏**画像进 USER/GOALS。**单向 L1→L2、画像是 events 派生**——防双真源漂移。
 
-> **daily 编排顺序(load-bearing)**:先跑 `rollup_semantic`(L0→L1,把昨天的 firehose 卷成 episode 落进 L1 待整理队列)、**再**跑 evolve(L1→L2,episode 已在队列里、能被蒸馏)。两个独立 background step,顺序反了当天的 firehose 就进不了画像。
+> **periodic 编排顺序(load-bearing)**:先跑 `rollup_semantic`(L0→L1,把上个周期的 firehose 卷成 episode 落进 L1 待整理队列)、**再**跑 evolve(L1→L2,episode 已在队列里、能被蒸馏)。两个独立 background step,顺序反了本周期的 firehose 就进不了画像。episode 的 dedupe_key 让高频重跑天然幂等。
 
 > **扫描机制(增量 + 并发,robust)**:
 > - **增量游标 = `curated_at`**(per-row flag,**非时间 cursor**):evolve 扫 `curated_at IS NULL` → 蒸馏 → 设 `curated_at=now()`。event 是 bi-temporal(backfill / 乱序),时间 cursor 会漏旧 event;flag 扫所有 NULL 不漏(业界 job-queue 模式,同 `embedding_queue`);batch 循环到清空,**无静默上限**。
-> - **per-user task + coalesce**:evolve 扫 per-user events(不再 per-connector),task=`evolve.{user_id}`,`requeue_once` coalesce → **同一用户同时只一个 evolve**(多 connector sync / daily 全合并成一个),从源头消除 evolve 间并发写画像。
+> - **per-user task + coalesce + debounce**:evolve 扫 per-user events(不再 per-connector),task = per-user 单例(`"evolve"`,PK 含 user_id)→ **同一用户同时只一个 evolve**,多 connector 触发合并进同一任务(`connectors`/`rawSources` 并集),从源头消除 evolve 间并发写画像。**debounce 是合并的承重件**:sync 触发把到期设 ~2min 后(不立即唤醒 scheduler)——否则第一个 sync 一完成任务就被 claim,3 秒后完成的兄弟 connector 只能再开一轮;合并时保留**更早**的到期(后来者不能无限顺延)。init 冷启动 / 用户手动刷新是例外(immediate:用户在等,立即触发)。已跑完(archived)的任务重新武装时**不携带**旧 connectors(它们已蒸馏过)。
 > - **claim + 原子**:`FOR UPDATE SKIP LOCKED` claim events;蒸馏写画像 + 设 `curated_at` 同事务 / 幂等(防崩溃后重蒸馏)。
 
-> **crystallize 删除**:对话蒸馏由 hot path(用户明确输入,6.1)+ daily evolve(跨对话推断,看全局才能归纳)+ event_append(对话中主动记 event)覆盖。单 session 蒸馏**两头不靠**(及时被 hot 抢、归纳被 daily 强)——这也是它一直 dormant 的根因。
+> **crystallize 删除**:对话蒸馏由 hot path(用户明确输入,6.1)+ daily evolve(跨对话推断,看全局才能归纳)+ event_append(对话中主动记 event)覆盖。单 session 蒸馏**两头不靠**(及时被 hot 抢、归纳被 periodic 强)——这也是它一直 dormant 的根因。
 
 ### 8.1 formation:什么进画像 / 什么忘(命门)
 
@@ -477,7 +477,7 @@ memory 是 api 进程内的 **modular monolith**:模块 = 目录边界 + 窄腰�
 | **① Ingest**(L0)| 三 | provider 拉数 → raw 落库 | `ingest(source, items)`;raw 契约 | recipe 格式、分页、since 游标、provider 实现 | `connector` domain(apps/device)+ 域表 migration |
 | **② Projection**(L0→L1)| 四 | raw→event 规则投影 | `project_unprojected(user)` | event_type map、rollup 档位、window 聚合函数 | `memory/projection/`(projector + window)+ `pinai_contracts.rollup_policy`(声明真源)+ engine `rollup_semantic`(LLM 档)|
 | **③ Events**(L1)| 六 | 事件存储 + 统一检索(**一个模块**:读写共享 supersede/curated 不变量,不拆)| 写面:`append / supersede / mark_curated`;读面:`events_search(query?, event_type?, since?, until?, limit)`、`event_source(event_id)`(L0 下钻 + 链 resolve)| 排序公式、RRF、bump 策略、索引、dedupe | `memory/events/` + `pai_events` |
-| **④ Curation**(evolve)| 八 | L1 整理 + L1→L2 蒸馏 | `run_evolve(trigger, user)` | formation 门槛、forgetting 规则、蒸馏 prompt | engine `agents/`(evolve);api 侧审计+面 `memory/curation/`;调度 `api/orchestration/`(task kind `auto.dreaming` / 路由 `run/dream` 是 daily evolve 的 legacy 命名)|
+| **④ Curation**(evolve)| 八 | L1 整理 + L1→L2 蒸馏 | `run_evolve(trigger, user)` | formation 门槛、forgetting 规则、蒸馏 prompt | engine `agents/`(evolve);api 侧审计+面 `memory/curation/`;调度 `api/orchestration/`(task kind `auto.dreaming` / 路由 `run/dream` 是 periodic evolve 的 legacy 命名)|
 | **⑤ Portrait**(L2)| 七 | 画像存储 + 编辑 + 常驻注入 | `memory_edit(slot, ops)`、`render_portrait(user)` | hermes 编辑语义、OCC、预算、威胁扫描、注入顺序 | `memory/portrait/`(信任侧,含新用户 GOALS seed)+ engine `prompts/portrait` + portrait 中间件(AGENTS 常量不入库)|
 | **⑥ World**(管线 B)| 五 | 全局源拉取 + per-user gated fan-out 投影 | `run_world_cycle()`(cron 驱动;对消费者零接口)| RSS 源列表、URL 归一化、salience 公式、阈值/top-K、用户指纹 | `connector/world/`(ingest + scoring + 投影)+ 全局 `pai_world_signals` |
 

@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from croniter import croniter
 from fastapi import APIRouter, Depends, Header
 from pinai_contracts.api_models import (
     SettingsResponse,
@@ -35,7 +36,10 @@ def _auto_dreaming_task_id(user_id: int) -> str:
     return f"dream.auto.{user_id}"
 
 
-_AUTO_DREAMING_CRON_EXPR = "0 6 * * *"
+# Every 4 hours in the user's timezone (0/4/8/…/20 local). Was daily 06:00 —
+# raised so portrait/preference distillation lags hours, not a day (per-user
+# evolve coalescing keeps concurrent-run pressure flat despite the frequency).
+_AUTO_DREAMING_CRON_EXPR = "0 */4 * * *"
 _LOCALE_LANGUAGE_PREFIXES = {
     "zh": "zh-Hans",
     "ja": "ja",
@@ -60,15 +64,15 @@ def _next_auto_dreaming_fire(
     timezone: str,
     after: datetime | None = None,
 ) -> datetime:
+    """Next fire per _AUTO_DREAMING_CRON_EXPR in the user's timezone —
+    croniter over the SAME expression the task row carries (single source of
+    truth; the old hand-rolled 06:00 arithmetic could drift from the cron)."""
     now = after or datetime.now(UTC)
     if now.tzinfo is None:
         now = now.replace(tzinfo=UTC)
-    tz = ZoneInfo(timezone)
-    local_now = now.astimezone(tz)
-    target = local_now.replace(hour=6, minute=0, second=0, microsecond=0)
-    if target <= local_now:
-        target += timedelta(days=1)
-    return target.astimezone(UTC)
+    local_now = now.astimezone(ZoneInfo(timezone))
+    nxt = croniter(_AUTO_DREAMING_CRON_EXPR, local_now).get_next(datetime)
+    return nxt.astimezone(UTC)
 
 
 async def _user_timezone(conn: AsyncConnection[DictRow], *, user_id: int) -> str:
@@ -109,7 +113,7 @@ async def _sync_auto_dreaming_schedule(
             cron_expr=_AUTO_DREAMING_CRON_EXPR,
             next_run_at=_next_auto_dreaming_fire(timezone=timezone),
             payload={"trigger": "auto"},
-            name="Daily auto dreaming",
+            name="Auto evolution sweep",
             timezone=timezone,
             status="active",
         )

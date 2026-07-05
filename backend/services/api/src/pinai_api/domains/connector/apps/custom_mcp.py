@@ -23,7 +23,6 @@ from psycopg.rows import DictRow
 from psycopg_pool import AsyncConnectionPool
 
 from ....platform.auth.user_service import User
-from ....platform.db.repositories.scheduled_tasks import requeue_once
 from .generic_ingest import upsert_generic
 from .ingest_runner import Recipe
 
@@ -765,22 +764,21 @@ async def _enqueue_custom_mcp_evolve(
     *,
     user_id: int,
     slug: str,
-    connector_id: str,
+    connector_id: str,  # noqa: ARG001 — coalesced task is per-user (design §八)
 ) -> str:
-    task_id = f"evolve.{slug}.{connector_id}"
-    await requeue_once(
+    """Fold into the user's single evolve task (enqueue_user_evolve).
+    Custom-MCP pulls are user-initiated (connect / manual refresh) — a user is
+    waiting, so fire immediately. rawSources carries the dynamic-entity hint
+    the evolve prompt needs for client.raw.list on custom connectors."""
+    from .connector_ingest import enqueue_user_evolve  # noqa: PLC0415 — sibling, avoids cycle
+
+    return await enqueue_user_evolve(
         conn,
         user_id=user_id,
-        task_id=task_id,
-        kind="connector.evolve",
-        payload={
-            "connector": slug,
-            "connectedAccountId": connector_id,
-            "rawSources": [{"toolkit": slug, "entity": CUSTOM_MCP_ENTITY}],
-        },
-        max_attempts=2,
+        connector=slug,
+        raw_sources=[{"toolkit": slug, "entity": CUSTOM_MCP_ENTITY}],
+        immediate=True,
     )
-    return task_id
 
 
 def _fetched_item_count(items: list[dict[str, Any]]) -> int:

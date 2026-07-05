@@ -40,7 +40,7 @@ from ....platform.auth.user_service import load_user_by_id
 from ....platform.db.repositories.scheduled_tasks import (
     ScheduledTaskRow,
     enqueue_once,
-    requeue_once,
+    notify_scheduler_wake,
     update_progress,
 )
 from ...memory.projection import project_unprojected
@@ -283,24 +283,110 @@ async def _mark_preview_not_active(
     )
 
 
+# Per-user evolve coalescing (design §八: 同一用户同时只一个 evolve). The task
+# id is a per-user SINGLETON ("evolve"; PK is (user_id, id)) — every connector
+# trigger folds into it instead of spawning evolve.{toolkit}.{cid} siblings
+# that then race each other writing the same USER portrait slot (OCC catches
+# the race, but coalescing removes it at the source).
+_EVOLVE_TASK_ID = "evolve"
+# Debounce window for non-urgent triggers. Load-bearing: requeue-with-NOW would
+# let the scheduler (NOTIFY-woken) claim the task the instant the FIRST sync
+# finishes — a sibling connector finishing 3s later would then spawn a second
+# run instead of merging. Holding the due time ~2min lets the same-cadence
+# syncs (30-min cron fires them together) fold into ONE evolve pass.
+_EVOLVE_DEBOUNCE_SECONDS = 120
+
+
+async def enqueue_user_evolve(
+    conn: AsyncConnection[DictRow],
+    *,
+    user_id: int,
+    connector: str,
+    raw_sources: list[dict[str, Any]] | None = None,
+    immediate: bool = False,
+) -> str:
+    """Fold one connector trigger into the user's single evolve task.
+
+    Merges with a not-yet-fired task under a row lock: `connectors` accumulate
+    (the run's prompt names every trigger), `rawSources` union (dedup by value)
+    so the agent gets every long-tail read hint. An archived row (previous run
+    finished) is NOT merged — its connectors were already distilled; the task
+    is simply re-armed fresh. Due time: `immediate` (init cold-start / manual
+    reconnect — a user is waiting) fires NOW + wakes the scheduler; otherwise
+    NOW()+debounce, keeping the EARLIEST due when merging so later triggers
+    never push an armed task out indefinitely.
+    """
+    async with conn.cursor() as cur:
+        await cur.execute(
+            """
+            SELECT payload, next_run_at, status FROM pai_scheduled_tasks
+            WHERE user_id = %s AND id = %s
+            FOR UPDATE
+            """,
+            (user_id, _EVOLVE_TASK_ID),
+        )
+        row = await cur.fetchone()
+
+    connectors: list[str] = []
+    sources: list[dict[str, Any]] = []
+    if row is not None and row["status"] != "archived":
+        old_payload = row["payload"] or {}
+        connectors = [c for c in old_payload.get("connectors", []) if isinstance(c, str)]
+        sources = [s for s in old_payload.get("rawSources", []) if isinstance(s, dict)]
+    if connector not in connectors:
+        connectors.append(connector)
+    for src in raw_sources or []:
+        if src not in sources:
+            sources.append(src)
+    payload: dict[str, Any] = {"connectors": connectors}
+    if sources:
+        payload["rawSources"] = sources
+
+    now = datetime.now(UTC)
+    if immediate:
+        due = now
+    elif row is not None and row["status"] == "active" and row["next_run_at"] is not None:
+        due = min(row["next_run_at"], now + timedelta(seconds=_EVOLVE_DEBOUNCE_SECONDS))
+    else:
+        due = now + timedelta(seconds=_EVOLVE_DEBOUNCE_SECONDS)
+
+    async with conn.cursor() as cur:
+        await cur.execute(
+            """
+            INSERT INTO pai_scheduled_tasks
+              (user_id, id, kind, trigger_kind, next_run_at, payload,
+               max_attempts, status, attempts)
+            VALUES (%s, %s, 'connector.evolve', 'once', %s, %s::jsonb, 2, 'active', 0)
+            ON CONFLICT (user_id, id) DO UPDATE SET
+              kind = EXCLUDED.kind,
+              trigger_kind = 'once',
+              next_run_at = EXCLUDED.next_run_at,
+              payload = EXCLUDED.payload,
+              max_attempts = EXCLUDED.max_attempts,
+              status = 'active',
+              attempts = 0,
+              last_error = NULL,
+              progress = '{}'::jsonb,
+              last_run_status = NULL,
+              updated_at = NOW()
+            """,
+            (user_id, _EVOLVE_TASK_ID, due, json.dumps(payload)),
+        )
+    if immediate:
+        await notify_scheduler_wake(conn)
+    return _EVOLVE_TASK_ID
+
+
 async def _enqueue_evolve(
     conn: AsyncConnection[DictRow],
     *,
     user_id: int,
     toolkit: str,
-    cid: str,
+    cid: str,  # noqa: ARG001 — kept for call-site clarity; coalesced task is per-user
+    immediate: bool = False,
 ) -> str:
-    """Reset-or-insert connector.evolve task and return its id."""
-    evolve_task_id = f"evolve.{toolkit}.{cid}"
-    await requeue_once(
-        conn,
-        user_id=user_id,
-        task_id=evolve_task_id,
-        kind="connector.evolve",
-        payload={"connector": toolkit, "connectedAccountId": cid},
-        max_attempts=2,
-    )
-    return evolve_task_id
+    """Back-compat shim over enqueue_user_evolve (call sites pass toolkit/cid)."""
+    return await enqueue_user_evolve(conn, user_id=user_id, connector=toolkit, immediate=immediate)
 
 
 async def _ensure_sync_schedule(
@@ -637,13 +723,14 @@ async def _run_init(
             sub_items = items_by_sub[sub_tk]
             sub_inserted = await sub_upserter(conn, user_id, sub_items)
             total_inserted += sub_inserted
-            # Evolve is per sub-connector: the evolve agent reads raw by
-            # the SUB toolkit, so each sub gets its own task.
+            # init cold-start: a user is waiting on onboarding insight —
+            # fire the (per-user coalesced) evolve immediately.
             evolve_task_id = await _enqueue_evolve(
                 conn,
                 user_id=user_id,
                 toolkit=sub_tk,
                 cid=cid,
+                immediate=True,
             )
             per_toolkit[sub_tk] = {
                 "fetched": len(sub_items),

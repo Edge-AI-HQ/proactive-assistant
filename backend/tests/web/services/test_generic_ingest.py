@@ -394,7 +394,7 @@ async def test_run_init_generic_full_wiring(pool, user_ids, monkeypatch):
         raw_rows = await cur.fetchall()
         cur = await conn.execute(
             "SELECT id, kind, cron_expr, payload FROM pai_scheduled_tasks "
-            "WHERE user_id=%s AND id IN ('evolve.acme.cid-1', 'sync.acme.cid-1') "
+            "WHERE user_id=%s AND id IN ('evolve', 'sync.acme.cid-1') "
             "ORDER BY id",
             (user_a,),
         )
@@ -412,10 +412,10 @@ async def test_run_init_generic_full_wiring(pool, user_ids, monkeypatch):
     assert all(e["curated_at"] is None for e in event_rows)  # projector writes uncurated
     assert all(e["event_type"] == "interaction" for e in event_rows)  # acme unknown → interaction
     assert raw_rows[0]["title"] == "Thing one"
-    assert [r["id"] for r in sched_rows] == ["evolve.acme.cid-1", "sync.acme.cid-1"]
+    assert [r["id"] for r in sched_rows] == ["evolve", "sync.acme.cid-1"]
     evolve_row, sync_row = sched_rows
     assert evolve_row["kind"] == "connector.evolve"
-    assert evolve_row["payload"]["connector"] == "acme"
+    assert evolve_row["payload"]["connectors"] == ["acme"]
     assert sync_row["cron_expr"] == "0 */12 * * *"  # derived, not */30
 
 
@@ -516,8 +516,9 @@ async def test_run_init_fanout(pool, user_ids, monkeypatch):
         ("alpha", "alpha-1"),
         ("beta", "beta-1"),
     ]
-    assert sched.get("evolve.alpha.cid-9") == "connector.evolve"
-    assert sched.get("evolve.beta.cid-9") == "connector.evolve"
+    # Per-user coalescing (§八): both subs fold into the ONE evolve task —
+    # the run's payload names each sub so the agent still knows what landed.
+    assert sched.get("evolve") == "connector.evolve"
     assert sched.get("sync.gsuper.cid-9") == "connector.sync"
     assert "sync.alpha.cid-9" not in sched  # one schedule, fans out at fire
     assert progress["stage"] == "evolve"

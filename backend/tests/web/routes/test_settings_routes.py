@@ -217,7 +217,7 @@ async def test_settings_auto_dreaming_creates_daily_schedule(pool, user_ids):
     assert row["kind"] == "auto.dreaming"
     assert row["trigger_kind"] == "schedule"
     assert row["status"] == "active"
-    assert row["cron_expr"] == "0 6 * * *"
+    assert row["cron_expr"] == "0 */4 * * *"  # every-4h auto evolution
     assert row["timezone"] == "Asia/Shanghai"
     assert row["next_run_at"] is not None
     assert row["payload"] == {"trigger": "auto"}
@@ -406,7 +406,7 @@ async def test_settings_get_repairs_missing_auto_dreaming_schedule(pool, user_id
     assert row["kind"] == "auto.dreaming"
     assert row["trigger_kind"] == "schedule"
     assert row["status"] == "active"
-    assert row["cron_expr"] == "0 6 * * *"
+    assert row["cron_expr"] == "0 */4 * * *"  # every-4h auto evolution
     assert row["timezone"] == "Asia/Shanghai"
 
 

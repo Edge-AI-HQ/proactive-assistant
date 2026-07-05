@@ -54,7 +54,7 @@ async def test_create_custom_mcp_lands_metadata_in_generic_raw(
 
     assert result.fetched == 2
     assert result.raw_inserted == 2
-    assert result.evolve_task_id == f"evolve.{result.connector.slug}.{result.connector.id}"
+    assert result.evolve_task_id == "evolve"  # per-user coalesced singleton (§八)
     assert result.connector.slug.startswith("mcp_")
     assert result.connector.last_fetched_count == 2
     assert result.connector.last_raw_inserted_count == 2

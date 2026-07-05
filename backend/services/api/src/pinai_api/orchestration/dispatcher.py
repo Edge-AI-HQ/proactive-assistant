@@ -366,13 +366,21 @@ class DefaultDispatcher:
         if kind == "auto.dreaming":
             await self._dispatch_dream(task, run_id)
         elif kind == "connector.evolve":
-            raw_sources = (task.payload or {}).get("rawSources")
+            payload = task.payload or {}
+            raw_sources = payload.get("rawSources")
+            # Per-user coalesced task carries `connectors` (list, §八); a
+            # pre-coalesce row still in flight carries the old singular
+            # `connector` — read both, join for the engine's scope label.
+            connectors = payload.get("connectors")
+            if not isinstance(connectors, list) or not connectors:
+                single = payload.get("connector")
+                connectors = [single] if isinstance(single, str) and single else []
             await self._call_chat(
                 "/agent/run/evolve",
                 task,
                 run_id,
                 extra={
-                    "connector": (task.payload or {}).get("connector", "unknown"),
+                    "connector": ", ".join(connectors) or "unknown",
                     "generation_language": await self._generation_language(task.user_id),
                     **({"raw_sources": raw_sources} if isinstance(raw_sources, list) else {}),
                 },
