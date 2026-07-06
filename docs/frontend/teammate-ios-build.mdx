@@ -134,6 +134,54 @@ EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY="$SB_KEY" \
 
 ---
 
+## 6. Release 版（连 dev 后端的独立包，可选）
+
+§3–§5 是**日常 Debug 流程**：JS 靠 Metro 实时喂、改代码摇→Reload 即时看，但**必须一直开着电脑的 Metro**。
+
+如果你想要一个**脱开电脑也能独立跑**的包（交给别人试用、或测真机性能），用 **Release 构建**——它把 JS bundle 直接烘进 App，运行时**不需要 Metro**。
+
+> ⚠️ **「Release」指的是构建方式（优化 + 打包独立），不是「生产环境」**。它连的后端**默认还是 dev 云端**（`proactive-ai-api-dev.fly.dev`），和 Debug 版同一个后端——区别只在 JS 是「实时喂」还是「烘死在 App 里」。
+
+Debug 靠 Metro 在**启动时**注入后端 URL；Release 没有 Metro，所以必须在 **build 时**就把同样的 dev env 烘进 bundle（下面手动 export 那几个 `EXPO_PUBLIC_*`，等价于 Metro 平时替你做的事）：
+
+```bash
+cd apps/mobile
+export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+export RCT_USE_PREBUILT_RNCORE=0
+
+# 把 dev 后端 + Supabase 烘进 bundle（Metro 平时在启动时做，Release 要在 build 时做）
+SB_URL=$(npx --yes @dotenvx/dotenvx get VITE_SUPABASE_URL -f ../../backend/.env.dev)
+SB_KEY=$(npx --yes @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f ../../backend/.env.dev)
+
+EXPO_PUBLIC_PIN_API_URL=https://proactive-ai-api-dev.fly.dev \
+EXPO_PUBLIC_SUPABASE_URL="$SB_URL" \
+EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY="$SB_KEY" \
+  xcrun xcodebuild -workspace ios/PINAIDev.xcworkspace -scheme PINAIDev -configuration Release \
+    -destination "id=<你的UDID>" -allowProvisioningUpdates -derivedDataPath ios/build \
+    CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=<你的TEAMID> \
+    PRODUCT_BUNDLE_IDENTIFIER=ai.pin.proactive.dev.<你的名字> build
+
+# 装到手机（注意：路径是 Release-iphoneos，不是 Debug-iphoneos）
+xcrun devicectl device install app --device <你的UDID> \
+  ios/build/Build/Products/Release-iphoneos/PINAIDev.app
+```
+
+装完**直接开 App 就能用，不用起 Metro**。第一次装某 bundle 仍要在手机上信任开发者证书（同 §4.1）。
+
+**Debug vs Release 一览**（两者后端都是 dev，只是构建方式不同）：
+
+| | Debug（§3–§5，日常） | Release（本节，独立包） |
+|---|---|---|
+| JS 来源 | Metro 实时喂，改代码摇→Reload | 烘进 App，改 JS 要**重 build** |
+| 要不要开电脑 Metro | 要 | **不要**（脱电脑独立跑） |
+| 性能 | 未优化（偏慢） | 优化后 = 真实性能上限 |
+| 后端环境 | **dev 云端**（Metro 启动时注入） | **dev 云端**（build 时烘进 bundle） |
+| 用途 | 日常改代码迭代 | 交人试用 / 测性能 / 脱电脑演示 |
+
+> 一句话：**Release 版 = 用发布配置打的、连 dev 开发后端的独立包**。它对应的是 **dev 环境**，不是生产。
+
+---
+
 ## 坑速查
 
 | 症状 | 原因 / 解法 |
