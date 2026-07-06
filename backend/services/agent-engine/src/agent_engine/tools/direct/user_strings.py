@@ -3,10 +3,10 @@
 `memory_edit` applies add/replace/remove ops to any of the five portrait slots
 via api /api/agent/user-strings/edit: USER/GOALS (the standing view of the user)
 AND IDENTITY/SOUL/TOOLS (the agent's own standing persona — who you are to this
-user, your voice, your tool preferences). This is how the agent durably updates
-both who-the-user-is and who-it-is between turns; events_search/event_append
-handle the timeline, memory_edit the standing portrait. (The AGENTS safety
-constant is not a slot and can't be edited.)
+user, your voice, how the user wants you to use your tools). This is how the
+agent durably updates both who-the-user-is and who-it-is between turns;
+events_search/event_append handle the timeline, memory_edit the standing
+portrait. (The AGENTS safety constant is not a slot and can't be edited.)
 """
 
 from __future__ import annotations
@@ -28,10 +28,13 @@ class MemoryEditOp(BaseModel):
 class MemoryEditInput(BaseModel):
     slot: str = Field(
         description=(
-            "Portrait section. About the user: USER (durable facts/preferences) "
-            "| GOALS (long-term goals). About yourself (your standing persona): "
-            "IDENTITY (who you are to this user) | SOUL (personality/voice) | "
-            "TOOLS (tool-use preferences)."
+            "Portrait section. About the user: USER (durable facts & preferences "
+            "about the user) | GOALS (their long-term goals). About yourself "
+            "(your standing persona): IDENTITY (who you are to this user) | "
+            "SOUL (personality/voice) | TOOLS (how the user wants you to use "
+            "your tools — standing requirements they stated plus durable "
+            "specifics you learned, e.g. which account/channel to use; NOT an "
+            "inventory of apps the user uses — that is a USER fact)."
         )
     )
     operations: list[MemoryEditOp] = Field(description="Ops applied in order (a batch).")
@@ -53,11 +56,12 @@ async def memory_edit(
     evidence_event_ids: list[str] | None = None,
 ):
     """Update the durable portrait — about the user (USER facts/preferences,
-    GOALS) or about yourself (IDENTITY/SOUL/TOOLS persona). `add` a new entry;
-    `replace`/`remove` with a `target` substring to revise one. On `over_budget`
-    you get every entry back — consolidate and resend as one batch. Don't churn:
-    edit only when something durable actually changed. Every successful edit is
-    recorded as a change event in the timeline automatically (no extra call)."""
+    GOALS) or about yourself (IDENTITY/SOUL persona, TOOLS = how the user wants
+    you to use your tools). `add` a new entry; `replace`/`remove` with a
+    `target` substring to revise one. On `over_budget` you get every entry
+    back — consolidate and resend as one batch. Don't churn: edit only when
+    something durable actually changed. Every successful edit is recorded as a
+    change event in the timeline automatically (no extra call)."""
     body: dict = {
         "slot": slot,
         "operations": [{"op": o.op, "text": o.text, "target": o.target} for o in operations],

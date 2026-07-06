@@ -3,7 +3,7 @@
 The only agent-facing setting is `generation_language` (the chat agent's
 set_generation_language tool, when the user says "use English from now
 on"). Profile/goals agent endpoints (the retired pai_profile/pai_goals)
-moved to memory_edit (USER/MEMORY/GOALS portrait slots) + event_append
+moved to memory_edit (USER/GOALS portrait slots) + event_append
 (preferences) in the lifelong-memory sunset.
 """
 

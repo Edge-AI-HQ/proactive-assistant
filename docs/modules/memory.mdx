@@ -130,15 +130,18 @@ L0 按**域**分两张表(`119` 把早先的单一 `pai_raw` 拆开——统一�
 | slot | 职责 | 写入触发 |
 |---|---|---|
 | **AGENTS** | 行为规范 + 安全强约束 | 开发者(代码常量,谁都不能改)|
-| **IDENTITY / SOUL / TOOLS** | agent 是谁 / 人设 / 工具说明 | 用户对话明确要求改人设 |
+| **IDENTITY / SOUL** | agent 是谁 / 人设(voice)| 用户对话明确要求改人设;新用户默认 persona seed(`portrait/seed.py`)|
+| **TOOLS** | 用户对 agent 用工具的要求 + agent 学到的 durable 具体情况(账户/渠道;**不是**用户自用 app 清单——那是 USER fact)| 用户明说 tool-use 要求 / agent 学到具体情况(hot)|
 | **USER** | 用户 durable facts + 画像型偏好 + 负向信号教训 | 用户指令(hot)+ evolve 学(bg)|
 | **GOALS** | 长期目标(90+ 天)| evolve(≥3 事件持续证据)+ 新用户 starter seed(`portrait/seed.py`)|
+
+新用户 seed 只播 IDENTITY/SOUL(默认 persona baseline,让「把你设得更正式」有基线可改)+ GOALS(starter);**USER/TOOLS 有意不 seed**——它们装的是 agent 对这个具体用户学到的东西,首触没有可写的真话,空槽由注入侧占位说明兜底(见下)。
 
 **编辑算法 = adapt hermes MemoryStore**(`UserStringsRepository.edit`):entry add/replace/remove + batch;乐观锁 `version`(并发 edit → WHERE version 失败 → no-op 逼 re-read);**超 char_budget 的 add 失败 → 回吐全部 entry 逼 agent 整合**(hermes 防截断,绝不静默 drop);**batch 只校验最终预算**;成功只返回新 version 不回吐 entry(防 thrash);**威胁扫描**(伪造 `<agent_safety>`/`<portrait>` 边界、NUL 拒写,在 api 信任侧做)。
 
 **原子双写(画像变更进事件流)**:`/api/agent/user-strings/edit` 成功后**同事务** append 一条 `agent_decision` 变更事件进 L1(`structured:{slot, ops, evidence_event_ids?}`,dedupe = `user_strings:{slot}:v{version}`)——L2 随便改,改动历史永远可追;失败(version_conflict/over_budget/threat)零写入。
 
-**注入(单层信任模型)**:`PortraitMiddleware`(`harness/middleware.py`)每个 agent instance fetch 一次 `/api/agent/user-strings/`,`build_portrait(slots)` 组装 `AGENTS` + 5 slot,prepend 成 transient SystemMessage(不落 checkpoint,放最前保 cache 稳定)。读侧**不再** `<untrusted-text>` 逐段包裹——唯一写口在 api 信任侧且有威胁扫描,AGENTS 常量注入最前 outrank 一切段落(残余风险 = 间接注入,读时包裹留作事故升级位;设计取舍见 plan §七安全)。fetch 失败降级成只注入 AGENTS,不杀对话轮。
+**注入(单层信任模型)**:`PortraitMiddleware`(`harness/middleware.py`)每个 agent instance fetch 一次 `/api/agent/user-strings/`,`build_portrait(slots)` 组装 `AGENTS` + 5 slot,prepend 成 transient SystemMessage(不落 checkpoint,放最前保 cache 稳定)。每段 header 带一行语义标注(`_SLOT_NOTES` 代码常量,和 `memory_edit` slot schema 的写侧语义呼应,agent 改不掉);fetch 成功时五段**全渲染**,空槽给占位说明(让 agent 知道该维度存在、有地方可写);fetch 失败(`slots={}`)降级成只注入 AGENTS——不渲染任何段,避免把「拉取失败」谎报成「画像为空」,不杀对话轮。读侧**不再** `<untrusted-text>` 逐段包裹——唯一写口在 api 信任侧且有威胁扫描,AGENTS 常量注入最前 outrank 一切段落(残余风险 = 间接注入,读时包裹留作事故升级位;设计取舍见 plan §七安全)。
 
 ## `curated_at` 队列(projector→evolve 交接,不是检索 gate)
 
@@ -237,7 +240,7 @@ async with user_scoped_tx(pool, user_id) as conn:
 | **模块地图** | `pinai_api/domains/memory/` 四子包(events/projection/portrait/curation),目录=模块=设计节,依赖方向 import-linter 锁(5 条契约);地图见 plan §十一 |
 | L1 events repository(③)| `pinai_api/domains/memory/events/repository.py`(`append` / `search_semantic` / `search_hybrid` / `search_structured` / `list_arrivals` / `resolve_head` / `fetch_source_content` / `mark_curated` / `supersede`)|
 | L0→L1 projector(②)| `pinai_api/domains/memory/projection/projector.py`(`raw_to_event_input` 纯函数 + `project_unprojected` 含 supersede pass;`_EVENT_TYPE_MAP`/`_TOMBSTONE_MAP` 是 domain 知识)+ `window.py`(health 按天聚合)+ `pinai_contracts.rollup_policy`(三档声明)|
-| L2 画像 repository(⑤)| `pinai_api/domains/memory/portrait/repository.py`(hermes `edit`:乐观锁 + char_budget + 威胁扫描)+ `seed.py`(新用户 GOALS starter)|
+| L2 画像 repository(⑤)| `pinai_api/domains/memory/portrait/repository.py`(hermes `edit`:乐观锁 + char_budget + 威胁扫描)+ `seed.py`(新用户 IDENTITY/SOUL persona + GOALS starter)|
 | Evolution 审计(④)| `pinai_api/domains/memory/curation/runs.py` |
 | timezone / settings | `pinai_api/domains/user_model/settings.py`(`pai_user_settings.timezone`,`113` 从退役的 `pai_profile` 迁来)|
 | World signals / 全局 ingest | `pinai_api/domains/connector/world/world_signals.py`、`world_ingest.py`、`world_scoring.py`(salience fan-out 投影)|

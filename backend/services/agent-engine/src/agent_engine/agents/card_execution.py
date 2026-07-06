@@ -228,7 +228,7 @@ in this order, every time:
   liveViewUrl plus an aria snapshot with refs (e1, e2, …). Every
   action returns the new post-action snapshot — do NOT call
   snapshot separately.
-- `memory_edit` (USER/MEMORY/GOALS) or `event_append` if execution surfaces a
+- `memory_edit` (USER/GOALS) or `event_append` if execution surfaces a
   durable fact or a timeline-worthy event worth remembering.
 - `event_append` (event_type="preference") when the user gives durable
   card-generation feedback or a future-card preference; note the current

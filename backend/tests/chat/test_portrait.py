@@ -15,9 +15,11 @@ from agent_engine.tools import http_client
 
 
 def test_empty_portrait_is_agent_constant_only():
+    """slots={} means the portrait FETCH FAILED — degrade to the AGENTS
+    constant alone (no sections), never claim the slots are empty."""
     p = build_portrait({})
     assert "<agent_safety>" in p  # AGENTS safety constant always present
-    assert "## USER" not in p  # no DB slots → constant only
+    assert "## USER" not in p  # failed fetch → constant only, no sections
     assert "<untrusted-text>" not in p  # the wrapper is gone entirely
 
 
@@ -26,11 +28,26 @@ def test_all_five_slots_are_trusted_no_untrusted_wrapper():
         {"IDENTITY": "playful tone please", "SOUL": "warm", "USER": "founder @ PIN AI"}
     )
     # No untrusted wrapper anymore — every slot is trusted content the agent
-    # can edit, including its own persona (IDENTITY/SOUL/TOOLS).
+    # can edit, including its own persona (IDENTITY/SOUL/TOOLS). Each section
+    # header carries its one-line definition (read-side slot semantics).
     assert "<untrusted-text>" not in p
-    assert "## IDENTITY\nplayful tone please" in p
-    assert "## SOUL\nwarm" in p
-    assert "## USER\nfounder @ PIN AI" in p
+    assert "## IDENTITY — who you are to this user\nplayful tone please" in p
+    assert "## SOUL — your personality and voice\nwarm" in p
+    assert "## USER — durable facts and preferences about the user\nfounder @ PIN AI" in p
+
+
+def test_fetched_portrait_renders_all_slots_with_semantics():
+    """A successful fetch returns all five keys (some empty): every section
+    renders with its definition, and an empty slot carries the placeholder so
+    the agent still sees the dimension exists (vs the failed-fetch case above,
+    which renders no sections at all)."""
+    p = build_portrait({"IDENTITY": "", "SOUL": "", "USER": "founder", "TOOLS": "", "GOALS": ""})
+    # TOOLS semantics disambiguated in the header: how the agent should use
+    # tools for this user — not the user's own app inventory.
+    assert "## TOOLS — how the user wants you to use your tools" in p
+    assert "not an inventory of the user's apps" in p
+    assert p.count("(empty — nothing durable recorded yet; write via memory_edit)") == 4
+    assert "## USER — durable facts and preferences about the user\nfounder" in p
 
 
 def test_agent_constant_comes_first():

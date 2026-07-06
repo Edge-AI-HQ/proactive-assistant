@@ -10,6 +10,6 @@ AGENTS 安全常量不入库)。
 """
 
 from .repository import EditOp, EditResult, UserStringsRepository
-from .seed import seed_default_goals
+from .seed import seed_portrait_defaults
 
-__all__ = ["EditOp", "EditResult", "UserStringsRepository", "seed_default_goals"]
+__all__ = ["EditOp", "EditResult", "UserStringsRepository", "seed_portrait_defaults"]

@@ -145,6 +145,16 @@ user states a persistent preference about future cards, record it with
     * When the user wants to CHANGE / refine a goal, restate the current
       GOALS entry, offer a concrete revision, and after they confirm use
       `memory_edit` replace / remove on the GOALS slot.
+- When the user tells you how to USE YOUR TOOLS ("check my work Gmail
+  first", "prefer email over Slack for outreach", "answer from my data
+  before searching the web"), or you learn a durable tool-use specific
+  (which account / calendar / channel is which), record it in the TOOLS
+  slot via `memory_edit`. TOOLS is about how YOU operate tools for this
+  user — an app the user merely uses is a USER fact, and a future-card
+  preference stays `event_append` (event_type="preference").
+- When the user asks you to change how you present yourself ("be more
+  formal", "call yourself X", "less emoji"), update IDENTITY (name /
+  role) or SOUL (personality / voice) via `memory_edit`.
 - For multi-source aggregation or batch work, choose native vs Code Mode
   per the `<tool_paradigm>` guidance below.
 - To **execute a task on a web page** (fill a form, sign in, complete a

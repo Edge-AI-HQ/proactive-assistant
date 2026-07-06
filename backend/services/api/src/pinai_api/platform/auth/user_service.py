@@ -85,15 +85,16 @@ async def upsert_user_by_supabase_id(
     )
 
     # First-touch bootstrap on the INSERT branch (xmax=0 means the row
-    # came from INSERT, not ON CONFLICT). Seed default goals only —
-    # idempotent local-DB work, recoverable via the agent's evolve /
-    # goal_upsert path if it fails. The LiteLLM key is deliberately not
-    # minted here (see module docstring): every consumer lazy-provisions
-    # via ensure_user_litellm_key, so external calls stay off the auth path.
+    # came from INSERT, not ON CONFLICT). Seed portrait defaults only
+    # (IDENTITY/SOUL persona baseline + starter GOALS) — idempotent
+    # local-DB work, recoverable via the agent's memory_edit path if it
+    # fails. The LiteLLM key is deliberately not minted here (see module
+    # docstring): every consumer lazy-provisions via
+    # ensure_user_litellm_key, so external calls stay off the auth path.
     if row.get("inserted"):
-        from pinai_api.domains.memory.portrait import seed_default_goals  # noqa: PLC0415
+        from pinai_api.domains.memory.portrait import seed_portrait_defaults  # noqa: PLC0415
 
-        await seed_default_goals(pool, user.id)
+        await seed_portrait_defaults(pool, user.id)
 
     return user
 
