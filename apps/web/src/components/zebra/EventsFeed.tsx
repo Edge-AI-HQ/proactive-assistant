@@ -12,7 +12,8 @@
  * jump). We only write the row + now-line visuals, in the zebra light-glass
  * language (frosted white + dark --foreground text + per-type accent color).
  */
-import { Virtuoso } from "react-virtuoso";
+import { useRef, useState } from "react";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { EventItem } from "@pin-ai/core";
 
 /** event_type swimlane/legend order — heaviest structural prior first. */
@@ -102,43 +103,74 @@ interface Props {
 
 export default function EventsFeed({ items, nowIndex, selectedId, onSelect }: Props) {
   const now = Date.now();
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
+  // Rendered row range — drives the "Now" jump pill (shown only while the
+  // now-line is out of view). Initial null = in view (the initial anchor
+  // centers it), so the pill never flashes on mount.
+  const [range, setRange] = useState<{ startIndex: number; endIndex: number } | null>(null);
+  const nowInView = range === null || (nowIndex >= range.startIndex && nowIndex <= range.endIndex);
   return (
-    <Virtuoso
-      className="h-full w-full"
-      data={items}
-      initialTopMostItemIndex={nowIndex > 0 ? nowIndex : 0}
-      computeItemKey={(_, item) => (isNow(item) ? "__now__" : item.id)}
-      itemContent={(_, item) => {
-        if (isNow(item)) return <NowLine />;
-        const color = EVENT_TYPE_COLOR[item.eventType] ?? FALLBACK_COLOR;
-        const active = item.id === selectedId;
-        return (
-          <button
-            type="button"
-            onClick={() => onSelect(active ? null : item.id)}
-            className={`flex w-full items-start gap-3 border-b border-foreground/5 px-4 py-2.5 text-left transition-colors hover:bg-white/40 ${
-              active ? "bg-white/55" : ""
-            }`}
-          >
-            <span
-              className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ring-2 ring-white/70"
-              style={{ background: color }}
-            />
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm leading-snug text-foreground/85">
-                {eventLabel(item)}
+    <>
+      <Virtuoso
+        ref={virtuosoRef}
+        className="h-full w-full"
+        data={items}
+        // Anchor the FIRST viewport on the now-line, centered — the mount-time
+        // one-shot; ZebraEvents only mounts the feed once both query sides have
+        // landed so nowIndex is final by then (a late prepend would silently
+        // shift this anchor: initialTopMostItemIndex never re-fires).
+        initialTopMostItemIndex={{ index: nowIndex, align: "center" }}
+        rangeChanged={setRange}
+        computeItemKey={(_, item) => (isNow(item) ? "__now__" : item.id)}
+        itemContent={(_, item) => {
+          if (isNow(item)) return <NowLine />;
+          const color = EVENT_TYPE_COLOR[item.eventType] ?? FALLBACK_COLOR;
+          const active = item.id === selectedId;
+          return (
+            <button
+              type="button"
+              onClick={() => onSelect(active ? null : item.id)}
+              className={`flex w-full items-start gap-3 border-b border-foreground/5 px-4 py-2.5 text-left transition-colors hover:bg-white/40 ${
+                active ? "bg-white/55" : ""
+              }`}
+            >
+              <span
+                className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ring-2 ring-white/70"
+                style={{ background: color }}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm leading-snug text-foreground/85">
+                  {eventLabel(item)}
+                </div>
+                <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-foreground/40">
+                  <span style={{ color }}>
+                    {EVENT_TYPE_LABEL[item.eventType] ?? item.eventType}
+                  </span>
+                  <span>·</span>
+                  <span>{relTime(item.occurredAt, now)}</span>
+                  {!item.curatedAt && <span className="text-amber-600/70">· pending</span>}
+                </div>
               </div>
-              <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-foreground/40">
-                <span style={{ color }}>{EVENT_TYPE_LABEL[item.eventType] ?? item.eventType}</span>
-                <span>·</span>
-                <span>{relTime(item.occurredAt, now)}</span>
-                {!item.curatedAt && <span className="text-amber-600/70">· pending</span>}
-              </div>
-            </div>
-          </button>
-        );
-      }}
-    />
+            </button>
+          );
+        }}
+      />
+      {!nowInView && range !== null && (
+        <button
+          type="button"
+          onClick={() =>
+            virtuosoRef.current?.scrollToIndex({
+              index: nowIndex,
+              align: "center",
+              behavior: "smooth",
+            })
+          }
+          className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-full bg-rose-500 px-3 py-1 text-[11px] font-semibold tracking-wide text-white shadow-md transition-colors hover:bg-rose-600"
+        >
+          {nowIndex < range.startIndex ? "↑ Now" : "↓ Now"}
+        </button>
+      )}
+    </>
   );
 }
 

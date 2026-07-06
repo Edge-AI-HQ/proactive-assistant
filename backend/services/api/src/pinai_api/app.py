@@ -68,6 +68,7 @@ from .domains.identity.sandbox_phantom import router as agent_sandbox_phantom_ro
 from .domains.memory.curation.agent import router as agent_evolution_router
 from .domains.memory.curation.ui import router as ui_evolution_router
 from .domains.memory.events.agent import router as agent_events_router
+from .domains.memory.events.notify import EventsChangeListener
 from .domains.memory.events.ui import router as ui_events_router
 from .domains.memory.portrait.agent import router as agent_user_strings_router
 from .domains.memory.portrait.ui import router as ui_user_strings_router
@@ -88,6 +89,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("backend WEB starting (deploy_env=%s)", settings.deploy_env)
 
     pool: AsyncConnectionPool | None = None
+    events_listener: EventsChangeListener | None = None
     if settings.database_url:
         # pinai_db is service-agnostic — inject DSN + pool sizing from web
         # settings here (the lifespan owns the pool lifecycle).
@@ -97,6 +99,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             max_size=settings.db_pool_max,
         )
         app.state.pool = pool
+        # L1 events SSE signal plane: one LISTEN connection per instance,
+        # fanned out to /api/events/stream subscribers (see events/notify.py).
+        events_listener = EventsChangeListener(settings.database_url)
+        events_listener.start()
+        app.state.events_listener = events_listener
     else:
         # Useful in pure-unit-test runs that don't need a DB. Logs loudly
         # so you notice if a real env forgot to set the URL.
@@ -170,6 +177,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 t.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await t
+        if events_listener is not None:
+            await events_listener.stop()
         if redis_client is not None:
             await redis_client.aclose()
         if pool is not None:

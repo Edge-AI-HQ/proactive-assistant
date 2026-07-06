@@ -29,6 +29,8 @@ from typing import Any
 
 from pinai_db.base import UserScopedRepository
 
+from .notify import EVENTS_CHANGED_CHANNEL
+
 logger = logging.getLogger(__name__)
 
 
@@ -245,6 +247,15 @@ class EventsRepository(UserScopedRepository):
                 msg = f"append conflict but no existing row (user={self._user_id} key={input.dedupe_key})"
                 raise RuntimeError(msg)
             return existing
+
+        # Realtime signal plane (notify.py): delivered on COMMIT, deduped
+        # per-tx by Postgres, so a batch ingest lands as one notification.
+        # Dedupe no-ops above return early — nothing changed, no signal.
+        async with self._conn.cursor() as cur:
+            await cur.execute(
+                "SELECT pg_notify(%s, %s)",
+                (EVENTS_CHANGED_CHANNEL, str(self._user_id)),
+            )
 
         text = _embed_text(input.title, input.body)
         if text:

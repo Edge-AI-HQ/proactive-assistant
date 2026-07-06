@@ -54,6 +54,7 @@ export {
   eventsKeys,
   usePortrait,
   useEvents,
+  useEventsLiveRefresh,
   type UsePortraitResult,
   type UseEventsResult,
 } from "./queries/portrait";

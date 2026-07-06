@@ -4,13 +4,23 @@
  * Web-only surface (mounted by ZebraShell, not exposed in the capacitor / mobile
  * navs). Vertical live feed (EventsFeed / virtuoso): future above the now-line,
  * newest-past just below it, older past scrolling down — you watch the top for
- * the latest. Two useEvents queries anchor on now (past: until=now / future:
- * since=now) so we get ~200 each side instead of a single 200-by-recency cap.
+ * the latest. Realtime = SSE signal plane (useEventsLiveRefresh invalidates on
+ * each pai_events write) + a slow fallback poll; the now-line is a CLIENT-side
+ * tick boundary (30s), decoupled from the query keys so it moves without ever
+ * churning the cache.
+ *
+ * Query shape (the load-bearing bit): `recent` has NO time filter — newest 200
+ * by occurredAt DESC — so a freshly ingested event is always inside its window
+ * (an `until=mount` bound would orphan everything ingested after mount, and a
+ * DESC `since=mount` window truncates NEAREST-first once ambient outgrows the
+ * limit — the two dead ends this shape replaces). `future` (since=mount, slow
+ * poll) only guards the far tail: upcoming events pushed out of recent's 200
+ * cap by newer rows. Merge dedupes by id, sorts DESC, and splits at the tick.
  * Per-type legend filter + click-to-inspect detail panel. Zebra light-glass
  * language (frosted white + dark --foreground text + per-type accent color).
  */
-import { useMemo, useState } from "react";
-import { useEvents } from "@pin-ai/state";
+import { useEffect, useMemo, useState } from "react";
+import { useEvents, useEventsLiveRefresh } from "@pin-ai/state";
 import type { EventItem } from "@pin-ai/core";
 import EventsFeed, {
   EVENT_TYPES,
@@ -20,7 +30,12 @@ import EventsFeed, {
   type FeedItem,
 } from "./EventsFeed";
 
-const POLL_MS = 10_000;
+/** Fallback poll — SSE is the primary freshness channel; this only covers
+ * signal-plane gaps (dropped LISTEN, mark_curated which doesn't notify). */
+const RECENT_POLL_MS = 60_000;
+const FUTURE_POLL_MS = 300_000;
+/** now-line boundary tick — also refreshes the rows' relative timestamps. */
+const TICK_MS = 30_000;
 const FALLBACK_COLOR = "#64748b";
 
 function fmt(iso: string | null): string {
@@ -30,39 +45,74 @@ function fmt(iso: string | null): string {
 }
 
 export default function ZebraEvents() {
-  // now fixed at mount so the two queries share one boundary (polls refresh
-  // rows, not the anchor). past = newest 200 before now; future = events after
-  // now (few — meetings / predicted.*; one DESC pull catches them all).
-  const nowISO = useMemo(() => new Date().toISOString(), []);
-  const past = useEvents({ until: nowISO, limit: 200 }, true, POLL_MS);
-  const future = useEvents({ since: nowISO, limit: 200 }, true, POLL_MS * 6);
+  // Mount instant — only the far-future guard query anchors on it; the
+  // now-line boundary is the live tick below, NOT this (a frozen boundary
+  // was why fresh events used to land above the line marked "2m ago").
+  const mountISO = useMemo(() => new Date().toISOString(), []);
+  const recent = useEvents({ limit: 200 }, true, RECENT_POLL_MS);
+  const future = useEvents({ since: mountISO, limit: 200 }, true, FUTURE_POLL_MS);
+
+  // SSE signal plane: every pai_events write invalidates both queries above —
+  // a fresh ambient event shows up within ~1s of landing in L1.
+  useEventsLiveRefresh(true);
+
+  // Live now-line: re-splits the merged list every 30s so the boundary drifts
+  // with wall-clock time (a just-ended meeting slides below the line) and the
+  // rows' relative timestamps re-render. Pure client state — query keys never
+  // change, so the tick costs zero network and zero cache churn.
+  const [tickMs, setTickMs] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setTickMs(Date.now()), TICK_MS);
+    return () => clearInterval(t);
+  }, []);
+  // Data arrival also advances the boundary: a just-ingested event's
+  // occurredAt sits between the last tick and now, and would otherwise render
+  // ABOVE the line as "0s ago upcoming" until the next tick. Structural
+  // sharing keeps the reference stable on no-op refetches, so this only fires
+  // on real changes.
+  useEffect(() => {
+    setTickMs(Date.now());
+  }, [recent.events]);
 
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const loading = past.loading && past.events.length === 0;
-  const error = past.error ?? future.error;
+  // Gate the feed until BOTH sides land: EventsFeed's center-on-now anchor is
+  // a mount-time one-shot, so mounting on partial data would lock a stale
+  // nowIndex and leave the viewport parked at the top of the future block
+  // (the "opens on the farthest future event" bug).
+  const loading =
+    (recent.loading && recent.events.length === 0) ||
+    (future.loading && future.events.length === 0);
+  const error = recent.error ?? future.error;
 
-  // both sides for legend presence + detail lookup.
-  const allEvents = useMemo(
-    () => [...future.events, ...past.events],
-    [future.events, past.events],
-  );
+  // Merge both queries (they overlap by design), dedupe by id, global
+  // occurredAt DESC — future's farthest at the top, oldest past at the bottom.
+  const allEvents = useMemo(() => {
+    const byId = new Map<string, EventItem>();
+    for (const e of [...recent.events, ...future.events]) byId.set(e.id, e);
+    return [...byId.values()].sort(
+      (a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt),
+    );
+  }, [recent.events, future.events]);
 
-  // feed items, top→down time-descending: future (DESC) · NOW · past (DESC).
-  // Both sides already return occurred_at DESC, so no reverse — future's
-  // farthest sits at the top and its nearest touches NOW; past's nearest touches
-  // NOW and its oldest sits at the bottom. Realtime: a new past event lands at
-  // pastV[0] (just under NOW) and pushes history down.
+  // Feed items: split the DESC list at the tick boundary and weave NOW in.
+  // Realtime: a fresh event (occurredAt ≈ now) lands just under the line and
+  // pushes history down; when the tick passes an upcoming event's time, only
+  // it and the marker swap places — every other row's index is untouched.
   const { items, nowIndex } = useMemo(() => {
-    const visible = (e: EventItem) => !hidden.has(e.eventType);
-    const futureV = future.events.filter(visible);
-    const pastV = past.events.filter(visible);
+    const visible = allEvents.filter((e) => !hidden.has(e.eventType));
+    const split = visible.findIndex((e) => Date.parse(e.occurredAt) <= tickMs);
+    const boundary = split === -1 ? visible.length : split;
     return {
-      items: [...futureV, NOW_MARKER, ...pastV] as FeedItem[],
-      nowIndex: futureV.length,
+      items: [
+        ...visible.slice(0, boundary),
+        NOW_MARKER,
+        ...visible.slice(boundary),
+      ] as FeedItem[],
+      nowIndex: boundary,
     };
-  }, [future.events, past.events, hidden]);
+  }, [allEvents, hidden, tickMs]);
 
   const selected: EventItem | null = useMemo(
     () => allEvents.find((e) => e.id === selectedId) ?? null,
@@ -91,7 +141,7 @@ export default function ZebraEvents() {
       <div className="flex items-baseline gap-2">
         <h1 className="text-base font-semibold tracking-tight text-foreground">Events</h1>
         <span className="text-xs text-muted-foreground">
-          {past.events.length} past · {future.events.length} upcoming
+          {items.length - 1 - nowIndex} past · {nowIndex} upcoming
         </span>
       </div>
 

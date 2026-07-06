@@ -2,22 +2,33 @@
 
 /api/events — Supabase JWT (current_user), under user_scoped_tx (RLS).
 Read-only timeline: active events, optional eventType / since / until / limit.
-The agent-facing semantic search + append live in events_agent.py.
+/api/events/stream is the SSE signal plane (see notify.py): it pushes bare
+"changed" frames when this user's pai_events gets a write; the client refetches
+the REST reads. The agent-facing semantic search + append live in events_agent.py.
 """
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from pinai_db.rls import user_scoped_tx
 
 from ....platform.auth.deps import current_user, get_pool
 from ....platform.auth.user_service import User
+from .notify import EventsChangeListener
 from .repository import EventRow, EventsRepository, visual_importance
 
 router = APIRouter(prefix="/api/events", tags=["events"])
+
+# Keepalive cadence for /stream. Lesson from the chat SSE incident
+# (main_chat_streaming keepalive anti-pattern): keepalives are PROACTIVE pings
+# on a quiet stream, never an idle-timeout that severs it.
+_PING_SECONDS = 15.0
 
 
 def _to_dict(e: EventRow) -> dict[str, Any]:
@@ -41,6 +52,42 @@ def _to_dict(e: EventRow) -> dict[str, Any]:
         "referenceCount": e.reference_count,
         "importance": visual_importance(e.event_type, e.reference_count),
     }
+
+
+@router.get("/stream")
+async def stream_events_changed(
+    request: Request,
+    user: User = Depends(current_user),
+) -> StreamingResponse:
+    """SSE signal plane: one `{"type":"changed"}` frame per burst of pai_events
+    writes for this user (publisher: EventsRepository.append → pg_notify;
+    fan-out: EventsChangeListener). Carries no data — the client invalidates its
+    events queries and refetches over REST. Quiet periods get `: ping` comments
+    every 15s so proxies keep the connection open."""
+    listener: EventsChangeListener | None = getattr(request.app.state, "events_listener", None)
+    if listener is None:
+        raise HTTPException(503, "events stream unavailable (no DB)")
+
+    async def gen() -> AsyncIterator[str]:
+        queue = listener.subscribe(user.id)
+        try:
+            while True:
+                try:
+                    await asyncio.wait_for(queue.get(), timeout=_PING_SECONDS)
+                    yield 'data: {"type":"changed"}\n\n'
+                except TimeoutError:
+                    yield ": ping\n\n"
+        finally:
+            listener.unsubscribe(user.id, queue)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/")

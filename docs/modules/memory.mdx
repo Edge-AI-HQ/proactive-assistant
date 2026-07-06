@@ -190,6 +190,7 @@ L0 按**域**分两张表(`119` 把早先的单一 `pai_raw` 拆开——统一�
 | Prefix | 作用 |
 |---|---|
 | `/api/events` | list(active 事件时间线,Ambient / Mirror 渲染,只读)|
+| `/api/events/stream` | SSE 信号面:`pai_events` 有写入时推一帧 `{"type":"changed"}`(不带数据,前端收到后 invalidate + refetch list)。发布端收口在 `EventsRepository.append` 的 `pg_notify`(COMMIT 才投递、同事务去重),每台 api 实例一条 LISTEN 连接分发(`events/notify.py`);掉信号退化为前端兜底 poll。消费端:`useEventsLiveRefresh`(state)+ zebra web Events 面板 |
 | `/api/user-strings` | get(6 slot 画像 markdown,Mirror 渲染,无 UI 写路径)|
 | `/api/settings` | get / patch(含 timezone)|
 | `/api/evolution` | 列 evolution_runs 给 dreaming panel |

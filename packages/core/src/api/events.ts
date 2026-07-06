@@ -1,5 +1,6 @@
 import { readErrorMessage } from "../transport/errors";
 import { proxyFetch } from "../transport/http";
+import { proxyGetSSE } from "../transport/sse";
 
 // ── L1 event timeline (Ambient / Mirror) ──────────────────────────────────
 //
@@ -58,6 +59,20 @@ function normalizeEvent(raw: Partial<EventItem>): EventItem {
     referenceCount: raw.referenceCount ?? 0,
     importance: raw.importance ?? 0,
   };
+}
+
+/**
+ * SSE signal plane for the events timeline (`GET /api/events/stream`): yields
+ * once per burst of pai_events writes for this user (the server folds bursts
+ * into one frame). Frames carry no data — on each yield the caller refetches
+ * `fetchEvents`. `: ping` keepalives are filtered inside proxyGetSSE. The
+ * generator ends when the server closes the stream or `signal` aborts; the
+ * caller owns the reconnect loop.
+ */
+export async function* streamEventsChanged(signal?: AbortSignal): AsyncGenerator<void> {
+  for await (const _frame of proxyGetSSE("/events/stream", signal)) {
+    yield;
+  }
 }
 
 export async function fetchEvents(

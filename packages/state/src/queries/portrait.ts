@@ -5,12 +5,13 @@
  * `/api/events` 返回 L1 事件时间线（Ambient / Mirror 渲染活动流）。都是只读
  * server state，纯 React + TanStack Query，三端（web/Electron/RN）同一接口。
  */
-import { useCallback } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   fetchEvents,
   fetchPortrait,
+  streamEventsChanged,
   type EventItem,
   type EventsFilter,
   type Portrait,
@@ -62,6 +63,50 @@ export interface UseEventsResult {
   loading: boolean;
   error: string | null;
   refetch: () => Promise<void>;
+}
+
+/**
+ * Live refresh for the events timeline: subscribe the SSE signal plane
+ * (`streamEventsChanged`) and invalidate every events query on each frame —
+ * active `useEvents` hooks refetch over REST (signal plane / data plane
+ * split). Reconnects with capped exponential backoff; a RE-connect starts by
+ * invalidating once, because signals emitted while disconnected are gone (the
+ * refetch closes the gap). The first connect doesn't — mounting `useEvents`
+ * hooks just fetched. Callers keep a slow fallback poll as the safety net for
+ * anything the signal plane misses (e.g. evolve's mark_curated, which doesn't
+ * notify by design).
+ */
+export function useEventsLiveRefresh(enabled = true): void {
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!enabled) return;
+    const ctl = new AbortController();
+    let stopped = false;
+    void (async () => {
+      let attempt = 0;
+      while (!stopped) {
+        try {
+          if (attempt > 0) {
+            await queryClient.invalidateQueries({ queryKey: eventsKeys.all });
+          }
+          for await (const _signal of streamEventsChanged(ctl.signal)) {
+            attempt = 0;
+            await queryClient.invalidateQueries({ queryKey: eventsKeys.all });
+          }
+        } catch {
+          // network / HTTP failure — fall through to the backoff retry
+        }
+        if (stopped) return;
+        attempt += 1;
+        const delayMs = Math.min(30_000, 1000 * 2 ** Math.min(attempt, 5));
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    })();
+    return () => {
+      stopped = true;
+      ctl.abort();
+    };
+  }, [enabled, queryClient]);
 }
 
 export function useEvents(
