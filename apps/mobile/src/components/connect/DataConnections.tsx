@@ -17,19 +17,17 @@
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  FlatList,
   Image,
   KeyboardAvoidingView,
   LayoutAnimation,
   Modal,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
-  type NativeScrollEvent,
-  type NativeSyntheticEvent,
 } from "react-native";
 import Animated, { FadeIn, FadeInUp } from "react-native-reanimated";
 import { useTranslation } from "react-i18next";
@@ -643,16 +641,6 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
   const toggleCategory = (name: string, isExpanded: boolean) => {
     LayoutAnimation.configureNext(LayoutAnimation.create(250, "easeInEaseOut", "opacity"));
     setExpandedCategory(isExpanded ? null : name);
-  };
-
-  /** 内嵌结果区滚近底部 32px 时续页（web handleCatalogScroll）。 */
-  const handleCatalogScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    if (catalogLoading || !catalogCursor) return;
-    const { contentSize, contentOffset, layoutMeasurement } = event.nativeEvent;
-    const distanceToBottom = contentSize.height - contentOffset.y - layoutMeasurement.height;
-    if (distanceToBottom <= 32) {
-      void loadCatalogPage(false);
-    }
   };
 
   const catalogTotalLabel =
@@ -1281,69 +1269,70 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
                 </Pressable>
               ) : (
                 <View style={{ gap: 8 }}>
-                  <ScrollView
+                  <FlatList
                     style={styles.catalogList}
-                    onScroll={handleCatalogScroll}
-                    scrollEventThrottle={100}
+                    contentContainerStyle={{ gap: 4, paddingRight: 4 }}
+                    data={catalogDisplayItems}
+                    keyExtractor={(item) => item.slug}
                     nestedScrollEnabled
-                  >
-                    <View style={{ gap: 4, paddingRight: 4 }}>
-                      {catalogDisplayItems.map((item) => {
-                        const isConnecting = connectingToolkit === item.slug;
-                        const itemAccounts = getComposioConnectionsForToolkit(connections, item.slug);
-                        const primaryAccount = itemAccounts[0];
-                        const isConnected = itemAccounts.length > 0;
-                        return (
-                          <View
-                            key={item.slug}
-                            style={[
-                              styles.sourceRow,
-                              { backgroundColor: isConnected ? "rgba(16,185,129,0.06)" : fg(0.02) },
-                            ]}
-                          >
-                            <ConnectorIconSlot
-                              logo={item.logo ?? getComposioLogoUrl(item.slug)}
-                              Icon={Globe2}
-                              iconColor={fg(0.35)}
-                            />
-                            <View style={styles.flex1MinW0}>
-                              <Text style={styles.catalogItemName} numberOfLines={1}>
-                                {item.name || item.slug}
-                              </Text>
-                              <Text style={styles.identityText} numberOfLines={1}>
-                                {item.auth_schemes.length > 0 ? item.auth_schemes.join(", ") : "auth"}
-                                {item.categories.length > 0 ? ` · ${item.categories.join(", ")}` : ""}
-                              </Text>
-                              {primaryAccount?.connectedAccountId ? (
-                                <InitTaskChip
-                                  toolkit={primaryAccount.toolkit}
-                                  connectedAccountId={primaryAccount.connectedAccountId}
-                                  sourceToolkit={item.slug}
-                                />
-                              ) : null}
-                            </View>
-                            {isConnecting ? (
-                              <PillButton muted wide onPress={handleCancel}>
-                                {t("common:status.cancel")}
-                              </PillButton>
-                            ) : isConnected ? (
-                              <View style={styles.rowGap6}>
-                                <PillButton onPress={() => void handleConnect(item.slug)}>
-                                  <Plus size={10} color={fg(1)} />
-                                  <Text style={styles.pillBtnText}>{t("dataConnections.add")}</Text>
-                                </PillButton>
-                                <Text style={styles.connectedText}>{t("dataConnections.connected")}</Text>
-                              </View>
-                            ) : (
-                              <PillButton wide onPress={() => void handleConnect(item.slug)}>
-                                {t("dataConnections.connect")}
-                              </PillButton>
-                            )}
+                    onEndReachedThreshold={0.3}
+                    onEndReached={() => {
+                      if (!catalogLoading && catalogCursor) void loadCatalogPage(false);
+                    }}
+                    renderItem={({ item }) => {
+                      const isConnecting = connectingToolkit === item.slug;
+                      const itemAccounts = getComposioConnectionsForToolkit(connections, item.slug);
+                      const primaryAccount = itemAccounts[0];
+                      const isConnected = itemAccounts.length > 0;
+                      return (
+                        <View
+                          style={[
+                            styles.sourceRow,
+                            { backgroundColor: isConnected ? "rgba(16,185,129,0.06)" : fg(0.02) },
+                          ]}
+                        >
+                          <ConnectorIconSlot
+                            logo={item.logo ?? getComposioLogoUrl(item.slug)}
+                            Icon={Globe2}
+                            iconColor={fg(0.35)}
+                          />
+                          <View style={styles.flex1MinW0}>
+                            <Text style={styles.catalogItemName} numberOfLines={1}>
+                              {item.name || item.slug}
+                            </Text>
+                            <Text style={styles.identityText} numberOfLines={1}>
+                              {item.auth_schemes.length > 0 ? item.auth_schemes.join(", ") : "auth"}
+                              {item.categories.length > 0 ? ` · ${item.categories.join(", ")}` : ""}
+                            </Text>
+                            {primaryAccount?.connectedAccountId ? (
+                              <InitTaskChip
+                                toolkit={primaryAccount.toolkit}
+                                connectedAccountId={primaryAccount.connectedAccountId}
+                                sourceToolkit={item.slug}
+                              />
+                            ) : null}
                           </View>
-                        );
-                      })}
-                    </View>
-                  </ScrollView>
+                          {isConnecting ? (
+                            <PillButton muted wide onPress={handleCancel}>
+                              {t("common:status.cancel")}
+                            </PillButton>
+                          ) : isConnected ? (
+                            <View style={styles.rowGap6}>
+                              <PillButton onPress={() => void handleConnect(item.slug)}>
+                                <Plus size={10} color={fg(1)} />
+                                <Text style={styles.pillBtnText}>{t("dataConnections.add")}</Text>
+                              </PillButton>
+                              <Text style={styles.connectedText}>{t("dataConnections.connected")}</Text>
+                            </View>
+                          ) : (
+                            <PillButton wide onPress={() => void handleConnect(item.slug)}>
+                              {t("dataConnections.connect")}
+                            </PillButton>
+                          )}
+                        </View>
+                      );
+                    }}
+                  />
                   {catalogCursor ? (
                     <Text style={styles.scrollForMore}>
                       {catalogLoading ? t("common:status.loading") : t("dataConnections.catalog.scrollForMore")}
@@ -1429,7 +1418,10 @@ export default function DataConnections({ composio }: DataConnectionsProps) {
         </Animated.View>
       ) : null}
 
-      {/* Custom MCP dialog */}
+      {/* Custom MCP dialog。
+          键盘避让**刻意**保留 RN 内建 KeyboardAvoidingView（不迁 keyboard-controller）:
+          本 dialog 在 RN <Modal> 独立 host view 里,库版 KAV 在 Modal 内测量已知不稳；且这是
+          居中弹窗、非满屏出血,无 chat 那种双算/常驻离屏问题。chat 的键盘整改不覆盖这里。 */}
       <Modal visible={customOpen} transparent animationType="fade" onRequestClose={closeCustomConnectorDialog}>
         <KeyboardAvoidingView
           behavior={Platform.OS === "ios" ? "padding" : undefined}

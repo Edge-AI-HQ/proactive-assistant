@@ -28,6 +28,7 @@ import Animated, {
 import ChatScreen from "../../screens/ChatScreen";
 import AuroraBackground from "../../ui/AuroraBackground";
 import { useSinkDismissGesture } from "../chat/useSinkDismiss";
+import { PageActiveProvider } from "./KeepAlivePage";
 
 const FG = "29,33,48";
 
@@ -44,8 +45,9 @@ export default function ChatSheet({ open, onClose }: { open: boolean; onClose: (
       : withTiming(height, { duration: 500, easing: Easing.bezier(0.32, 0.72, 0, 1) });
   }, [open, height, y]);
 
-  // 退出手势：任意处右滑 → 跟手下沉（main chat / card chat 统一，见 useSinkDismiss）。
-  const sink = useSinkDismissGesture(y, height, width, onClose);
+  // 退出手势：左缘窄条右滑 → 跟手下沉退出（dev ChatSheetOverlay 的左缘模型）。
+  // 只在最左 24px 起拖 → 结构上不和消息列表的竖滚打架 = 可靠触发（这正是 dev 稳的原因）。
+  const edgeSink = useSinkDismissGesture(y, height, width, onClose, { activateX: 10, failY: 12 });
   const style = useAnimatedStyle(() => ({ transform: [{ translateY: y.value }] }));
 
   return (
@@ -57,23 +59,28 @@ export default function ChatSheet({ open, onClose }: { open: boolean; onClose: (
       {/* web ChatSheetOverlay 同构：不透明底 + 同款 aurora 层，面板下滑时
           作为整体一起走，不透出下层。 */}
       <AuroraBackground />
-      {/* 整张内容包进手势：任意处右滑都能下沉退出。 */}
-      <GestureDetector gesture={sink}>
-        <View style={styles.content}>
-          {/* header：单个 ChevronDown（dismiss-down）；paddingTop 用 insets.top 避刘海。 */}
-          <View style={[styles.header, { paddingTop: 12 + insets.top }]}>
-            <Pressable
-              onPress={onClose}
-              hitSlop={8}
-              style={styles.backBtn}
-              accessibilityRole="button"
-              accessibilityLabel="Close chat"
-            >
-              <ChevronDown size={20} strokeWidth={1.5} color={`rgba(${FG},0.65)`} />
-            </Pressable>
-          </View>
-          <ChatScreen kind="main" bottomInset={insets.bottom} open={open} />
+      <View style={styles.content}>
+        {/* header：单个 ChevronDown（dismiss-down）；paddingTop 用 insets.top 避刘海。 */}
+        <View style={[styles.header, { paddingTop: 12 + insets.top }]}>
+          <Pressable
+            onPress={onClose}
+            hitSlop={8}
+            style={styles.backBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Close chat"
+          >
+            <ChevronDown size={20} strokeWidth={1.5} color={`rgba(${FG},0.65)`} />
+          </Pressable>
         </View>
+        {/* 关闭时（open=false）内部动画循环停帧,但 ChatScreen 仍常驻保住 SSE 流（WS6）。 */}
+        <PageActiveProvider value={open}>
+          <ChatScreen kind="main" bottomInset={insets.bottom} topInset={insets.top} open={open} />
+        </PageActiveProvider>
+      </View>
+      {/* 左缘退出条（dev 模型）：树里最后 + 盖在内容上，只最左 24px 起拖；
+          纯 tap（无横移）不激活手势 → 落到下层 header 按钮 / 列表，不吞点击。 */}
+      <GestureDetector gesture={edgeSink}>
+        <View style={styles.edgeZone} accessibilityElementsHidden />
       </GestureDetector>
     </Animated.View>
   );
@@ -87,4 +94,6 @@ const styles = StyleSheet.create({
   // web header: px-4 pb-2，按钮 p-2 -ml-1。main chat 无标题、无下边框（无 headerSlot）。
   header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingBottom: 8 },
   backBtn: { marginLeft: -4, padding: 8, borderRadius: 999 },
+  // 左缘退出条（dev w-6=24px）：绝对定位、全高、盖在内容最上层。
+  edgeZone: { position: "absolute", left: 0, top: 0, bottom: 0, width: 24 },
 });

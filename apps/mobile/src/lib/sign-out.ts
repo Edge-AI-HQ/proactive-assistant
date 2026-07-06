@@ -14,7 +14,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { runSignOutCleanups } from "@pin-ai/core";
 
+import { clearAmbientLiveTranscript } from "../ambient/live/live-transcript-store";
 import { stopAmbient } from "../ambient/runtime";
+import { resetAmbientTimelineStore } from "../ambient/timeline";
 import { isPinLocalDevAuthEnabled } from "./dev-auth";
 import { queryClient } from "./query-client";
 import { supabase } from "./supabase";
@@ -54,6 +56,15 @@ export async function performSignOut(): Promise<void> {
     } catch {
       // 停采失败不阻断登出。
     }
+    // 清本地 ambient 数据（跨账号隐私）：停采后再清，避开采集写入竞态。时间线
+    // durable SQLite + 实时转写内存态都是 device-global，登出必清，否则下个账号
+    // 能看到上个账号的时间线/转录（dev native 有同样潜在泄露，见 reset-sqlite.ts）。
+    try {
+      await resetAmbientTimelineStore();
+    } catch {
+      // 清时间线失败不阻断登出。
+    }
+    clearAmbientLiveTranscript();
 
     await sweepAsyncStorage();
 

@@ -71,6 +71,18 @@ export function applyCaptureSessionRotation(event: CaptureSessionRotatedEvent): 
   notify();
 }
 
+/**
+ * 登出清空实时转写内存态（current + history），通知订阅者重渲空。跨账号隐私：
+ * dev（web）靠 window.location.reload 清模块内存，RN 无 reload，sign-out.ts
+ * 显式调，防下个账号看到上个账号的转录。保留 listeners：仍挂载的订阅组件在
+ * 卸载时自会摘除自己，这里只清数据。
+ */
+export function clearAmbientLiveTranscript(): void {
+  current = null;
+  history = [];
+  notify();
+}
+
 function notify(): void {
   for (const listener of listeners) listener();
 }

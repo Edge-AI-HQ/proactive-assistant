@@ -59,18 +59,13 @@ export default function InitTaskChip({
 }) {
   const { t } = useTranslation("connect");
   const taskId = buildConnectorInitTaskId(toolkit, connectedAccountId);
-  const { task, error, terminal } = useInitTask(taskId);
-  if (!task) {
-    if (error) return null;
-    return (
-      <View style={styles.row}>
-        <Spinner size={9} color={`rgba(${FG},0.4)`} />
-        <Text style={styles.muted} numberOfLines={1}>
-          {t("dataConnections.initTask.initializing")}
-        </Text>
-      </View>
-    );
-  }
+  const { task, terminal } = useInitTask(taskId);
+  // 首次 /tasks 轮询返回前 task 为 null。此时**不要**乐观渲染 "Initializing…"：
+  // 打开 Connect 时 Core sources 里每个已连接 source 都挂一个 chip，它们的真实状态
+  // 几乎都是"早已完成/无任务"——乐观 chip 会闪现一瞬再消失，导致整行收起、下方内容
+  // 跳动。等第一份结果回来再按真实状态渲染：真正在跑的 init 会走下面 running 分支
+  // （tick() 挂载即发首个请求，反馈仍即时）。
+  if (!task) return null;
   if (!isInitTaskFresh(task)) return null; // stale terminal — silent
   if (terminal) {
     if (task.status === "succeeded") {

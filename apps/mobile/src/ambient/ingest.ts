@@ -37,6 +37,8 @@ import {
   setOutboxPending,
   setUploadsLockedStatus,
 } from "./status";
+// __HEAT_PROBE__ 临时发热探针(排查完删)。
+import { probeSet } from "../lib/heat-probe";
 
 const FLUSH_INTERVAL_MS = 30_000;
 const PENDING_BATCH = 200;
@@ -213,12 +215,14 @@ export function startIngestLoop(userId: string): void {
   void refreshOutboxCount();
   if (timer) return;
   timer = setInterval(() => void flushSignals(), FLUSH_INTERVAL_MS);
+  probeSet("ambient.ingestLoop", "on"); // __HEAT_PROBE__
   void outbox.prune().catch(() => {}); // 启动清过期(synced 超 24h / pending 超 TTL)
 }
 
 export function stopIngestLoop(): void {
   if (timer) clearInterval(timer);
   timer = null;
+  probeSet("ambient.ingestLoop", "off"); // __HEAT_PROBE__
   void flushSignals();
 }
 

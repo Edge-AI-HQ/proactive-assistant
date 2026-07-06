@@ -7,7 +7,7 @@ import { Pressable, Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { Menu, Settings } from "lucide-react-native";
 
-import { EM_DISPLAY, tracking } from "../../ui/typography";
+import { EM_TIGHT, tracking } from "../../ui/typography";
 
 export default function PageHeader({
   title,
@@ -23,13 +23,14 @@ export default function PageHeader({
 }) {
   const { t } = useTranslation("common");
   return (
-    <View className="flex-row items-start justify-between px-4 pt-4 pb-2">
+    <View className="flex-row items-start justify-between px-4 pt-1 pb-2">
       <View className="flex-1 pr-4">
         {typeof title === "string" ? (
           <Text
-            className="text-[24px] leading-8 text-foreground"
-            // web 页头：text-2xl(24) + .text-display(600 / -0.02em 紧排)。
-            style={{ fontFamily: "Inter_600SemiBold", letterSpacing: tracking(24, EM_DISPLAY) }}
+            className="text-[24px] text-foreground"
+            // 统一 section 标题:24px / 行高 28 / EM_TIGHT 字距(和 Ambient/Connect/Profile
+            // 一致,消除各屏内联样式漂移)。NOW 的大标题走自定义节点、另调。
+            style={{ fontFamily: "Inter_600SemiBold", letterSpacing: tracking(24, EM_TIGHT), lineHeight: 28 }}
           >
             {title}
           </Text>

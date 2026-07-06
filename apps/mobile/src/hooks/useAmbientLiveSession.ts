@@ -17,6 +17,8 @@ import {
 } from "@pin-ai/core";
 
 import { getAmbientTimelineStore } from "../ambient/timeline";
+// __HEAT_PROBE__ 临时发热探针(排查完删)。
+import { probeCount } from "../lib/heat-probe";
 import {
   candidateWindowsToLiveSessionContextItems,
   liveSessionDataToSession,
@@ -43,6 +45,10 @@ import {
 
 interface UseAmbientLiveSessionOptions {
   ambientOn: boolean;
+  /** 页面可见时才 5s 轮询本地 store + 订阅转写 store（省电/减热，WS8）；隐藏时停、
+   *  切回先取快照补齐再恢复。native 桥（addAmbientLiveTranscriptListeners）与它无关、
+   *  恒开——后台采集持续把转写写进 store；这里门控的只是"要不要为 store 变化重渲 UI"。 */
+  active?: boolean;
   dismissible?: boolean;
 }
 
@@ -68,6 +74,7 @@ const LIVE_SESSION_TODAY_LIMIT = 10_000;
 
 export function useAmbientLiveSession({
   ambientOn,
+  active = true,
   dismissible = false,
 }: UseAmbientLiveSessionOptions): UseAmbientLiveSessionResult {
   const [liveSessionData, setLiveSessionData] = useState<LiveSessionData | null>(
@@ -81,12 +88,19 @@ export function useAmbientLiveSession({
   const [rawContextEvents, setRawContextEvents] = useState<AmbientRawEvent[]>([]);
   const [liveDismissed, setLiveDismissed] = useState(false);
 
+  // 转写 store 订阅 → 驱动本组件重渲。页面隐藏时退订（省电/减热，WS8）：隐藏态每个
+  // 语音事件都 notify 会让整棵隐藏树空转重渲（批 1 残余 ~5 次/min，切 tab/锁屏期间）。
+  // native 桥恒开、后台采集持续入 store；这里门控的只是 UI 重渲。切回可见先取一次快照
+  // 补齐隐藏期间的变化，再重新订阅（与下方 5s 轮询同款范式）。
   useEffect(() => {
+    if (!active) return;
+    setLiveSessionData(getAmbientLiveTranscriptSnapshot());
+    setLocalHistory(getAmbientLiveTranscriptHistorySnapshot());
     return subscribeAmbientLiveTranscript(() => {
       setLiveSessionData(getAmbientLiveTranscriptSnapshot());
       setLocalHistory(getAmbientLiveTranscriptHistorySnapshot());
     });
-  }, []);
+  }, [active]);
 
   useEffect(() => {
     if (!ambientOn) return;
@@ -100,6 +114,8 @@ export function useAmbientLiveSession({
       setRawContextEvents([]);
       return;
     }
+    // 页面隐藏时停 5s 轮询（省电/减热，WS8）；保留已有数据 → 切回即时刷新。
+    if (!active) return;
 
     let cancelled = false;
     let interval: ReturnType<typeof setInterval> | null = null;
@@ -131,13 +147,16 @@ export function useAmbientLiveSession({
     };
 
     void refreshWindows();
-    interval = setInterval(() => void refreshWindows(), 5000);
+    interval = setInterval(() => {
+      probeCount("ambient.livePoll"); // __HEAT_PROBE__
+      void refreshWindows();
+    }, 5000);
 
     return () => {
       cancelled = true;
       if (interval) clearInterval(interval);
     };
-  }, [ambientOn]);
+  }, [ambientOn, active]);
 
   const contextItems = useMemo(
     () => dedupeContextItems([

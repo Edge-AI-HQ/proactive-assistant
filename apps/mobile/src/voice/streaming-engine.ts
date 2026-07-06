@@ -11,6 +11,8 @@ import {
 import type { EventSubscription } from "expo-modules-core";
 
 import { AmbientAudio, type VoicePcmChunkEvent } from "../../modules/ambient-audio";
+// __HEAT_PROBE__ 临时发热探针(排查完删)。
+import { probeSet } from "../lib/heat-probe";
 
 interface NativeByteDanceStreamingEngineOptions {
   language?: string;
@@ -64,6 +66,7 @@ async function createNativePcmStreamRecorder(
       chunkDurationMs: options.chunkDurationMs ?? 100,
     });
     streamId = started.streamId;
+    probeSet("voice.pcmStream", "on"); // __HEAT_PROBE__
   } catch (err) {
     subscription?.remove();
     throw err;
@@ -82,6 +85,7 @@ async function createNativePcmStreamRecorder(
         await delay(80);
       } finally {
         subscription?.remove();
+        probeSet("voice.pcmStream", "off"); // __HEAT_PROBE__
       }
     },
   };

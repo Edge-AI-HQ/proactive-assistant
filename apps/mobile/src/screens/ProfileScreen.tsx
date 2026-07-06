@@ -1,22 +1,21 @@
 /**
- * PROFILE 页——web `MirrorMobile.tsx`（移动布局 shell）+ `ui-web/profile/mirror.tsx`
- * （panel 层）的 RN 对应物。
+ * PROFILE 页——dev `MirrorMobile.tsx`（移动布局 shell）+ `ui-web/profile/mirror.tsx`
+ * （panel 层）的 RN 对应物（lifelong-memory 迁移后的极简画像设计）。
  *
- * 结构对齐 web：页头 → [error 卡] → Identity/Goals 胶囊 switcher（inline
- * blur 玻璃 + 黑 pill）→ 横向 swipe pager（Identity pane = IdentitySummaryCard
- * + Profile/Memory 双钮 + 折叠组/Memory 面板；Goals pane = GoalsGrid）→ goal
- * 详情底部抽屉（GoalDetailSheet）。
+ * 结构对齐 dev：页头 → [error 卡] → Identity/Goals 胶囊 switcher → 横向 swipe pager：
+ *   - Identity pane = USER 段 + MEMORY 段（各 glass-card-strong 包一个 PortraitSection，
+ *     竖直堆叠 space-y-5），对齐 dev IdentityPanel。
+ *   - Goals pane = GOALS 段（glass-card-strong 包 PortraitSection），对齐 dev GoalsPanel。
+ * PortraitSection = 标题 + 计数药丸 + 描述 → 一串 entry 卡（glass-card p-4 内 markdown），
+ * 空则 EmptyState（dev PortraitSection / EmptyState 同构）。
  *
- * 数据 = @pin-ai/state 的 useProfileSnapshot / useProfileMemories（与 web 同源，
- * memory 5 条/页 load-more 累积）。纯派生 helper 在 ./mirror-helpers（mirror.tsx
- * 的 RN 复制版）。pager 用 RN 标准 ScrollView pagingEnabled（原生分页物理，替代
- * web framer 手写 commit 阈值 0.3/300px·s——架构差异，行为等价：跟手横滑 + 松手
- * snap，纵向滚动交给 pane 内 ScrollView）。
+ * 数据 = @pin-ai/state 的 usePortrait（L2 画像六段 slot：USER/MEMORY/GOALS…）；每段 content
+ * 是 `§`-分隔的 entry（core splitPortraitEntries），逐条用 MarkdownText 渲染（与 dev
+ * MarkdownContent 同源）。pager 用 RN 标准 ScrollView pagingEnabled（原生分页物理，替代
+ * web framer 手写 commit 阈值——架构差异，行为等价：跟手横滑 + 松手 snap）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  Image,
-  LayoutAnimation,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -35,36 +34,21 @@ import Animated, {
   useAnimatedRef,
   useAnimatedScrollHandler,
   useAnimatedStyle,
-  useDerivedValue,
   useSharedValue,
   withRepeat,
   withTiming,
   type SharedValue,
 } from "react-native-reanimated";
-import { ChevronDown, ChevronRight, Loader2 } from "lucide-react-native";
+import { Loader2 } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import { splitPortraitEntries } from "@pin-ai/core";
-import { eventsKeys, portraitKeys, useEvents, usePortrait } from "@pin-ai/state";
+import { portraitKeys, usePortrait } from "@pin-ai/state";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { GlassCard } from "../ui/GlassCard";
 import { usePageActive } from "../components/app/KeepAlivePage";
 import PageHeader from "../components/app/PageHeader";
-import GoalDetailSheet from "../components/profile/GoalDetailSheet";
-import {
-  basketMeta,
-  canonicalBasketGoals,
-  formatClockTime,
-  getVisualMeta,
-  goalsFromPortraitEntries,
-  groupMemoriesByDay,
-  portraitSummaryText,
-  priorityToStatus,
-  statusLabel,
-  type Goal,
-  type Memory,
-  type VisualStatus,
-} from "../components/profile/mirror-helpers";
+import MarkdownText from "../components/chat/MarkdownText";
 import { EM_TIGHT, tracking } from "../ui/typography";
 import type { HeaderProps } from "./AmbientScreen";
 
@@ -73,38 +57,17 @@ const BACKGROUND = "#f2f4f8"; // --background hsl(220 30% 96%)
 const MUTED_FG = "rgb(115,123,140)"; // --muted-foreground hsl(220 10% 50%)
 const ROSE_500 = "#f43f5e";
 
-// dev `.glass-card` recipe（native-power-save 砍 blur 后）——与 ui/GlassCard 同一
-// 配方；WorkbenchTabButton / goal 卡需要黑底 underlay / 圆角裁切，GlassCard 组件
-// 的层次做不到，这里自组同款层。
-const GLASS_GRADIENT = ["rgba(255,255,255,0.55)", "rgba(255,255,255,0.25)"] as const;
-const GLASS_BORDER = "rgba(255,255,255,0.45)";
-const GLASS_SHADOW = "0 4px 16px rgba(0,0,0,0.04), 0 1px 4px rgba(0,0,0,0.02)";
-
-// Identity / Goals 两个 pane 并排，横向 swipe 切换（web TOP_TABS）。
+// Identity / Goals 两个 pane 并排，横向 swipe 切换（dev TOP_TABS）。
 const TOP_TABS = ["identity", "goals"] as const;
 type TopTab = (typeof TOP_TABS)[number];
 
-/** web statusBarColor：bg-{emerald,rose,amber}-400/50。 */
-const STATUS_BAR_COLOR: Record<VisualStatus, string> = {
-  Normal: "rgba(52,211,153,0.5)",
-  Alert: "rgba(251,113,133,0.5)",
-  Watch: "rgba(251,191,36,0.5)",
-};
-
-/** web grid statusPillColor：bg-{emerald,rose,amber}-500/10 + text-{emerald,rose,amber}-700。 */
-const GRID_PILL: Record<VisualStatus, { bg: string; text: string }> = {
-  Normal: { bg: "rgba(16,185,129,0.1)", text: "#047857" },
-  Alert: { bg: "rgba(244,63,94,0.1)", text: "#be123c" },
-  Watch: { bg: "rgba(245,158,11,0.1)", text: "#b45309" },
-};
-
-/** web sectionMotion：opacity 0→1 / y 12→0 / 0.24s。 */
+/** dev sectionMotion：opacity 0→1 / y 12→0 / 0.24s。 */
 const sectionEntering = FadeInUp.duration(240).withInitialValues({
   opacity: 0,
   transform: [{ translateY: 12 }],
 });
 
-/** 旋转（web Loader2 animate-spin）。 */
+/** 旋转（dev Loader2 animate-spin）。 */
 function Spin({ children }: { children: ReactNode }) {
   const r = useSharedValue(0);
   useEffect(() => {
@@ -134,7 +97,7 @@ function PillLabel({
   return <Animated.Text style={[styles.pillText, st]}>{text}</Animated.Text>;
 }
 
-/** web EmptyState：虚线框空态。⚠️ RN iOS 圆角+dashed 可能渲染成实线（已知限制），真机确认。 */
+/** dev EmptyState：虚线框空态。⚠️ RN iOS 圆角+dashed 可能渲染成实线（已知限制），真机确认。 */
 function EmptyState({ title, description }: { title: string; description: string }) {
   return (
     <View style={styles.emptyBox}>
@@ -144,324 +107,118 @@ function EmptyState({ title, description }: { title: string; description: string
   );
 }
 
-/** web IdentitySummaryCard 的 lifelong-memory 版——label + USER portrait 摘要。
- *  老版的 display_name 来自已退役的 pai_profile；portrait 无姓名字段（durable
- *  facts 是自由 entries），name 行随之下线，摘要 = 首条 entry。 */
-function IdentitySummaryCard({ entries }: { entries: string[] }) {
-  const { t } = useTranslation("profile");
+/** dev PortraitEntryCard——单条 §-entry 卡（glass-card p-4 内 markdown）。 */
+function PortraitEntryCard({ entry }: { entry: string }) {
+  return (
+    <GlassCard style={styles.entryCard}>
+      <MarkdownText text={entry} />
+    </GlassCard>
+  );
+}
+
+/**
+ * dev PortraitSection——标题（title + 计数药丸 + 描述）叠一串 entry 卡，空则 EmptyState。
+ * `content` 是 slot 原始 markdown，这里按 `§` 切成 entries。
+ */
+function PortraitSection({
+  title,
+  description,
+  content,
+  emptyTitle,
+  emptyDescription,
+}: {
+  title: string;
+  description: string;
+  content: string | undefined;
+  emptyTitle: string;
+  emptyDescription: string;
+}) {
+  const entries = useMemo(() => splitPortraitEntries(content), [content]);
   return (
     <Animated.View entering={sectionEntering}>
-      <GlassCard style={styles.identityCard}>
-        <Text style={styles.idLabel}>{t("goalsView.identityLabel")}</Text>
-        <Text style={styles.idSummary} numberOfLines={6}>
-          {portraitSummaryText(entries)}
-        </Text>
-      </GlassCard>
-    </Animated.View>
-  );
-}
-
-/** web WorkbenchTabButton——Profile/Memory 分段钮。active = glass-card 叠 bg-foreground
- *  （白渐变合成在黑底上，web 同一合成结果），文字换 background 色。切换用 150ms
- *  过渡（web transition-all 默认时长），黑底 opacity + 文字 interpolateColor。 */
-function WorkbenchTabButton({
-  active,
-  label,
-  value,
-  onPress,
-}: {
-  active: boolean;
-  label: string;
-  value: string;
-  onPress: () => void;
-}) {
-  const progress = useDerivedValue(() => withTiming(active ? 1 : 0, { duration: 150 }), [active]);
-  const blackStyle = useAnimatedStyle(() => ({ opacity: progress.value }));
-  const labelStyle = useAnimatedStyle(() => ({
-    color: interpolateColor(progress.value, [0, 1], [`rgba(${FG},0.35)`, "rgba(242,244,248,0.6)"]),
-  }));
-  const valueStyle = useAnimatedStyle(() => ({
-    color: interpolateColor(progress.value, [0, 1], ["#1d2130", BACKGROUND]),
-  }));
-  return (
-    <View style={styles.flex1}>
-      <Pressable onPress={onPress} accessibilityRole="button" accessibilityState={{ selected: active }}>
-        <View style={styles.wtbShadow}>
-          <View style={styles.wtbClip}>
-            <Animated.View style={[StyleSheet.absoluteFill, styles.wtbBlack, blackStyle]} />
-            <LinearGradient
-              colors={GLASS_GRADIENT}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={StyleSheet.absoluteFill}
-            />
-            <View style={styles.wtbBorder} pointerEvents="none" />
-            <View style={styles.wtbBody}>
-              <Animated.Text style={[styles.wtbLabel, labelStyle]}>{label.toUpperCase()}</Animated.Text>
-              <Animated.Text style={[styles.wtbValue, valueStyle]}>{value}</Animated.Text>
-            </View>
+      <View style={styles.sectionHeader}>
+        <View style={styles.sectionTitleRow}>
+          <Text style={styles.panelTitle}>{title}</Text>
+          <View style={styles.countPill}>
+            <Text style={styles.countPillText}>{entries.length}</Text>
           </View>
         </View>
-      </Pressable>
-    </View>
-  );
-}
-
-/** web ProfilePanel 的 lifelong-memory 版——标题区 + USER portrait entries 列表
- *  （web Mirror 同款决策：渲染 L2 markdown entries）。老版的 Facts/Preferences/
- *  Constraints 折叠组渲染的是已退役 pai_profile 的 JSONB 桶，数据形态不复存在；
- *  portrait 是 agent 蒸馏的自由 entries，逐条平铺。 */
-function ProfilePanel({ entries }: { entries: string[] }) {
-  const { t } = useTranslation("profile");
-  return (
-    <View>
-      <View style={styles.panelHeader}>
-        <Text style={styles.panelTitle}>{t("goalsView.mirror.title")}</Text>
-        <Text style={styles.panelDesc}>{t("goalsView.mirror.description")}</Text>
+        <Text style={styles.panelDesc}>{description}</Text>
       </View>
       {entries.length === 0 ? (
-        <EmptyState
-          title={t("goalsView.profileGroups.facts.emptyTitle")}
-          description={t("goalsView.groupEmptyDescription")}
-        />
+        <EmptyState title={emptyTitle} description={emptyDescription} />
       ) : (
         <View style={styles.entriesWrap}>
           {entries.map((entry, i) => (
-            <View key={i} style={styles.entryRow}>
-              <Text style={styles.entryValue}>{entry}</Text>
-            </View>
+            <PortraitEntryCard key={i} entry={entry} />
           ))}
         </View>
       )}
-    </View>
-  );
-}
-
-/** web MemoryListItem——正文在上、归因行在下。 */
-function MemoryListItem({ memory }: { memory: Memory }) {
-  const { t } = useTranslation("profile");
-  const when = memory.occurred_at ?? memory.created_at;
-  const time = formatClockTime(when);
-  return (
-    <View>
-      <Text style={styles.memText}>{memory.text}</Text>
-      <Text style={styles.memAttr}>
-        {t("goalsView.memory.inferredFrom", { source: memory.source })}
-        {time ? ` · ${time}` : ""}
-      </Text>
-    </View>
-  );
-}
-
-/** web MemoryPanel——按天分组 + 分页 footer（shown of total / Load more）。 */
-function MemoryPanel({
-  memories,
-  total,
-  hasMore,
-  loadingMore,
-  onLoadMore,
-}: {
-  memories: Memory[];
-  total: number;
-  hasMore: boolean;
-  loadingMore: boolean;
-  onLoadMore: () => void;
-}) {
-  const { t } = useTranslation(["profile", "common"]);
-  const groups = groupMemoriesByDay(memories);
-  const disabled = !hasMore || loadingMore;
-  return (
-    <View>
-      <View style={styles.panelHeader}>
-        <Text style={styles.panelTitle}>{t("goalsView.memory.title")}</Text>
-        <Text style={styles.panelDesc}>{t("goalsView.memory.description")}</Text>
-      </View>
-      <View style={styles.memGroups}>
-        {memories.length === 0 ? (
-          <EmptyState
-            title={t("goalsView.memory.emptyTitle")}
-            description={t("goalsView.memory.emptyDescription")}
-          />
-        ) : (
-          groups.map((group) => (
-            <View key={group.key}>
-              <View style={styles.memGroupHeader}>
-                <Text style={styles.memGroupLabel}>{group.label}</Text>
-                <Text style={styles.memGroupCount}>{group.items.length}</Text>
-              </View>
-              <View style={styles.memItems}>
-                {group.items.map((memory) => (
-                  <MemoryListItem key={memory.id} memory={memory} />
-                ))}
-              </View>
-            </View>
-          ))
-        )}
-      </View>
-      <View style={styles.memFooter}>
-        <Text style={styles.memCount}>
-          {total === 0
-            ? t("goalsView.memory.countZero")
-            : t("goalsView.memory.countOfTotal", { shown: memories.length, total })}
-        </Text>
-        <Pressable onPress={onLoadMore} disabled={disabled} accessibilityRole="button">
-          <View style={[styles.loadMoreBtn, disabled && styles.loadMoreDisabled]}>
-            {loadingMore ? (
-              <>
-                <Spin>
-                  <Loader2 size={12} color={`rgba(${FG},0.55)`} />
-                </Spin>
-                <Text style={styles.loadMoreText}>{t("common:status.loading")}</Text>
-              </>
-            ) : (
-              <Text style={styles.loadMoreText}>
-                {hasMore ? t("goalsView.memory.loadMore") : t("goalsView.memory.endOfList")}
-              </Text>
-            )}
-          </View>
-        </Pressable>
-      </View>
-    </View>
-  );
-}
-
-/** web GoalsGrid 里的单张 goal 卡（2 列网格）。 */
-function GoalCard({ goal, width, onOpen }: { goal: Goal; width: number; onOpen: (key: string) => void }) {
-  const visual = getVisualMeta(goal.key);
-  const basket = basketMeta(goal.key);
-  const status = priorityToStatus(goal.priority);
-  const Icon = basket.icon;
-  const pill = GRID_PILL[status];
-  // web：Growth 配图 h-[62%]，其余 h-[85%]（图区 h-24=96）。web 比 basket.label
-  // 是因其 label 恒英文；RN label 已本地化，改比语言无关的 iconKey。
-  const imgHeight = basket.iconKey === "growth" ? 96 * 0.62 : 96 * 0.85;
-
-  return (
-    <Pressable onPress={() => onOpen(goal.key)} accessibilityRole="button">
-      {({ pressed }) => (
-        <View style={[styles.goalShadow, { width }, pressed && styles.goalPressed]}>
-          <View style={styles.goalClip}>
-            <LinearGradient
-              colors={GLASS_GRADIENT}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={StyleSheet.absoluteFill}
-            />
-            <View style={styles.goalImageArea}>
-              <Image
-                source={visual.image}
-                style={{ width: "100%", height: imgHeight }}
-                resizeMode="contain"
-              />
-            </View>
-            <View style={styles.goalBody}>
-              <View style={styles.goalTitleRow}>
-                <Icon size={16} color="#1d2130" />
-                <Text style={styles.goalTitle}>{basket.label}</Text>
-              </View>
-              <View style={styles.goalBar}>
-                <View
-                  style={[
-                    styles.goalBarFill,
-                    { width: `${visual.pct}%`, backgroundColor: STATUS_BAR_COLOR[status] },
-                  ]}
-                />
-              </View>
-              <View style={styles.goalPctRow}>
-                <Text style={styles.goalPct}>{visual.pct}%</Text>
-                <View style={[styles.goalPill, { backgroundColor: pill.bg }]}>
-                  <Text style={[styles.goalPillText, { color: pill.text }]}>{statusLabel(status)}</Text>
-                </View>
-              </View>
-              <View style={styles.goalSummaryRow}>
-                <Text style={styles.goalSummary} numberOfLines={2}>
-                  {goal.summary || goal.title}
-                </Text>
-                <ChevronRight size={14} color={`rgba(${FG},0.3)`} />
-              </View>
-            </View>
-            <View style={styles.goalBorder} pointerEvents="none" />
-          </View>
-        </View>
-      )}
-    </Pressable>
-  );
-}
-
-/** web GoalsGrid——Goals pane 的 2 列网格 section。goals 已经 canonicalBasketGoals
- *  归一化为固定 6 槽（空态分支不可达，删）。 */
-function GoalsGrid({ goals, onOpen }: { goals: Goal[]; onOpen: (key: string) => void }) {
-  const { t } = useTranslation("profile");
-  const [gridWidth, setGridWidth] = useState(0);
-  const cardWidth = gridWidth > 0 ? (gridWidth - 12) / 2 : 0;
-  return (
-    <Animated.View entering={sectionEntering}>
-      <GlassCard style={styles.panelSection}>
-        <View style={styles.panelHeader}>
-          <Text style={styles.panelTitle}>{t("goalsView.goals.title")}</Text>
-          <Text style={styles.panelDesc}>{t("goalsView.goals.description")}</Text>
-        </View>
-        <View
-          style={styles.goalsGrid}
-          onLayout={(e: LayoutChangeEvent) => setGridWidth(e.nativeEvent.layout.width)}
-        >
-          {cardWidth > 0
-            ? goals.map((goal) => (
-                <GoalCard key={goal.key} goal={goal} width={cardWidth} onOpen={onOpen} />
-              ))
-            : null}
-        </View>
-      </GlassCard>
     </Animated.View>
+  );
+}
+
+/** dev IdentityPanel：USER 画像 + MEMORY 画像，竖直堆叠（space-y-5）。 */
+function IdentityPanel({ slots }: { slots: Record<string, string> }) {
+  const { t } = useTranslation("profile");
+  return (
+    <View style={styles.paneStack}>
+      <GlassCard style={styles.panelSection}>
+        <PortraitSection
+          title={t("portrait.user.title")}
+          description={t("portrait.user.description")}
+          content={slots.USER}
+          emptyTitle={t("portrait.user.emptyTitle")}
+          emptyDescription={t("portrait.user.emptyDescription")}
+        />
+      </GlassCard>
+      <GlassCard style={styles.panelSection}>
+        <PortraitSection
+          title={t("portrait.memory.title")}
+          description={t("portrait.memory.description")}
+          content={slots.MEMORY}
+          emptyTitle={t("portrait.memory.emptyTitle")}
+          emptyDescription={t("portrait.memory.emptyDescription")}
+        />
+      </GlassCard>
+    </View>
+  );
+}
+
+/** dev GoalsPanel：GOALS 画像 entries。 */
+function GoalsPanel({ slots }: { slots: Record<string, string> }) {
+  const { t } = useTranslation("profile");
+  return (
+    <GlassCard style={styles.panelSection}>
+      <PortraitSection
+        title={t("portrait.goals.title")}
+        description={t("portrait.goals.description")}
+        content={slots.GOALS}
+        emptyTitle={t("portrait.goals.emptyTitle")}
+        emptyDescription={t("portrait.goals.emptyDescription")}
+      />
+    </GlassCard>
   );
 }
 
 export default function ProfileScreen({ headerProps }: { headerProps: HeaderProps }) {
   const { t } = useTranslation("profile");
-  // Lifelong-memory 数据层：L2 portrait（USER/GOALS markdown entries）+ L1 events。
-  // 老 useProfileSnapshot/useProfileMemories（pai_profile/pai_memory）已退役；
-  // 下面把新数据映射成本屏的视图模型（Goal/Memory，见 mirror-helpers）。
+  // Lifelong-memory 数据层：L2 portrait 六段 markdown slot（USER/MEMORY/GOALS…）。
   const { slots, loading, error } = usePortrait();
-  const userEntries = useMemo(() => splitPortraitEntries(slots.USER ?? ""), [slots.USER]);
-  const goalEntries = useMemo(() => splitPortraitEntries(slots.GOALS ?? ""), [slots.GOALS]);
-  const eventsQ = useEvents({ limit: 50 });
-  // Memory 子 tab = 近期 L1 events（title 优先、body 兜底；occurred/recorded 双时轴映射）。
-  const memories = useMemo<Memory[]>(
-    () =>
-      eventsQ.events.map((ev) => ({
-        id: ev.id,
-        text: ev.title ?? ev.body ?? "",
-        source: ev.source,
-        occurred_at: ev.occurredAt,
-        created_at: ev.recordedAt ?? ev.occurredAt,
-      })),
-    [eventsQ.events],
-  );
-  // 老 useProfileMemories 的分页形态 shim：events 一次拉 50、无 load-more。
-  const memory = {
-    memories,
-    total: memories.length,
-    hasMore: false,
-    loadingMore: false,
-    loadMore: () => {},
-  };
 
   // KeepAlive 常驻不卸载 → 复刻 dev「每次进 tab 重挂载必 refetch」语义：
-  // 切回本页时失效 profile/memories（active query 立即后台重拉，SWR 不闪 loading）。
+  // 切回本页时失效 portrait（active query 立即后台重拉，SWR 不闪 loading）。
   const pageActive = usePageActive();
   const queryClient = useQueryClient();
   const wasActiveRef = useRef(pageActive);
   useEffect(() => {
     if (pageActive && !wasActiveRef.current) {
       void queryClient.invalidateQueries({ queryKey: portraitKeys.all });
-      void queryClient.invalidateQueries({ queryKey: eventsKeys.all });
     }
     wasActiveRef.current = pageActive;
   }, [pageActive, queryClient]);
 
   const [activeTab, setActiveTab] = useState<TopTab>("identity");
-  const [identitySubTab, setIdentitySubTab] = useState<"profile" | "memory">("profile");
-  const [expandedGoal, setExpandedGoal] = useState<string | null>(null);
 
   const pagerRef = useAnimatedRef<Animated.ScrollView>();
   // pane 要显式宽高：横向 ScrollView 里的子 View 无界时，内嵌竖向 ScrollView 不滚。
@@ -473,14 +230,7 @@ export default function ProfileScreen({ headerProps }: { headerProps: HeaderProp
   // pager 滚动进度（UI 线程共享值）：驱动 pill thumb 位移 + 文字色渐变。
   const scrollX = useSharedValue(0);
 
-  // Goals 网格 = 6 个规范 basket 槽位（prod 种子展示效果；见 canonicalBasketGoals 注释）。
-  // GOALS portrait entries → Goal 视图模型（seed 文本精确归槽，见 goalsFromPortraitEntries）。
-  const displayGoals = canonicalBasketGoals(goalsFromPortraitEntries(goalEntries));
-  const selectedGoal = expandedGoal
-    ? displayGoals.find((goal) => goal.key === expandedGoal) ?? null
-    : null;
-
-  // pill 点击：滚 pager 到目标 pane（web animate trackX spring）；thumb/文字由 scrollX 跟随。
+  // pill 点击：滚 pager 到目标 pane（dev animate trackX spring）；thumb/文字由 scrollX 跟随。
   const selectTab = (tab: TopTab) => {
     setActiveTab(tab);
     pagerRef.current?.scrollTo({ x: TOP_TABS.indexOf(tab) * pagerWidth, animated: true });
@@ -510,33 +260,34 @@ export default function ProfileScreen({ headerProps }: { headerProps: HeaderProp
     return { transform: [{ translateX: p * (thumbWidth + 4) }] };
   }, [pagerWidth, thumbWidth]);
 
-  // Profile/Memory 子 tab：LayoutAnimation 交叉淡入 + 高度过渡（替换硬切）。
-  const selectSubTab = (tab: "profile" | "memory") => {
-    if (tab === identitySubTab) return;
-    LayoutAnimation.configureNext(LayoutAnimation.create(200, "easeInEaseOut", "opacity"));
-    setIdentitySubTab(tab);
-  };
-
-  // 视口（重）量时把 pager 对回 active pane（web pagerWidth effect）。
+  // 视口（重）量 或 切回本页（pageActive）时，把 pager 强制对回当前 activeTab pane。
+  // 加 pageActive 是修「切回 Profile 时停在半态、露出隔壁 pane 一条」：分页被全局抽屉
+  // 左滑手势拦腰打断会停在没吸附的中间位（原生 paging 的 snap 没触发），带上 pageActive
+  // 每次回到本页强制吸附回整页。
   useEffect(() => {
     if (pagerWidth > 0) {
-      pagerRef.current?.scrollTo({ x: TOP_TABS.indexOf(activeTab) * pagerWidth, animated: false });
+      const x = TOP_TABS.indexOf(activeTab) * pagerWidth;
+      pagerRef.current?.scrollTo({ x, animated: false });
+      // 同步 pill 黑 thumb：scrollTo(animated:false) 未必回吐 onScroll,不显式设 scrollX
+      // 则 thumb 可能停在半态旧值、和已吸附回整页的 pane 对不上。
+      scrollX.value = x;
     }
-    // 只跟宽度：tab 切换的滚动由 selectTab / 手势自己完成。
+    // activeTab 不进 deps：tab 切换的滚动由 selectTab 的 animated scrollTo / 手势自己完成，
+    // 进 deps 会和那个 animated 滚动打架。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pagerWidth]);
+  }, [pagerWidth, pageActive]);
 
   return (
     <View style={styles.flex1}>
       <PageHeader
         title={
-          // web MirrorMobile h1：text-2xl(24) / font-semibold / tracking-tight(-0.025em) / 默认 lh 32。
+          // dev MirrorMobile h1：text-2xl(24) / font-semibold / tracking-tight(-0.025em) / 默认 lh 32。
           <Text
             style={{
               fontSize: 24,
               fontFamily: "Inter_600SemiBold",
               letterSpacing: tracking(24, EM_TIGHT),
-              lineHeight: 32,
+              lineHeight: 28,
               color: "#1d2130",
             }}
           >
@@ -544,7 +295,7 @@ export default function ProfileScreen({ headerProps }: { headerProps: HeaderProp
           </Text>
         }
         subtitle={
-          // web 副标题：mt-0.5 text-xs(12) text-muted-foreground。
+          // dev 副标题：mt-0.5 text-xs(12) text-muted-foreground。
           <Text
             style={{
               marginTop: 2,
@@ -561,7 +312,7 @@ export default function ProfileScreen({ headerProps }: { headerProps: HeaderProp
       />
 
       {loading ? (
-        // web：Loader2 16 spin + bodySm foreground/40，py-14。
+        // dev：Loader2 16 spin + bodySm foreground/40，py-14。
         <View style={styles.loadingRow}>
           <Spin>
             <Loader2 size={16} color={`rgba(${FG},0.4)`} />
@@ -579,10 +330,8 @@ export default function ProfileScreen({ headerProps }: { headerProps: HeaderProp
             </Animated.View>
           ) : null}
 
-          {/* Identity / Goals pill switcher（web inline 玻璃：blur(20) + 180° 白渐变 .7→.5 +
-              white/50 边——inline style 不被 native-power-save 砍，dev 真机有 blur → BlurView）。
-              黑 pill = 滑动 thumb，由 pager scrollX 实时驱动（行业标准 tab-pager 同步，
-              替代「momentum 结束才切态」的滞后跳变）。 */}
+          {/* Identity / Goals pill switcher（dev inline 玻璃：blur(20) + 180° 白渐变 .7→.5 +
+              white/50 边）。黑 pill = 滑动 thumb，由 pager scrollX 实时驱动。 */}
           <View
             style={styles.pillWrap}
             onLayout={(e: LayoutChangeEvent) => setPillWidth(e.nativeEvent.layout.width)}
@@ -620,7 +369,7 @@ export default function ProfileScreen({ headerProps }: { headerProps: HeaderProp
             </View>
           </View>
 
-          {/* 横向 pager：两个 pane 并排，跟手横滑 + 原生 snap（web framer drag track） */}
+          {/* 横向 pager：两个 pane 并排，跟手横滑 + 原生 snap（dev framer drag track） */}
           <View
             style={styles.pager}
             onLayout={(e: LayoutChangeEvent) =>
@@ -638,80 +387,41 @@ export default function ProfileScreen({ headerProps }: { headerProps: HeaderProp
                 onScroll={pagerScrollHandler}
                 scrollEventThrottle={16}
               >
-              {/* Identity pane */}
-              <View style={{ width: pagerSize.w, height: pagerSize.h }}>
-                <ScrollView
-                  style={styles.flex1}
-                  showsVerticalScrollIndicator={false}
-                  contentContainerStyle={styles.paneContent}
-                >
-                  <IdentitySummaryCard entries={userEntries} />
+                {/* Identity pane — USER + MEMORY portrait, stacked */}
+                <View style={{ width: pagerSize.w, height: pagerSize.h }}>
+                  <ScrollView
+                    style={styles.flex1}
+                    showsVerticalScrollIndicator={false}
+                    contentContainerStyle={styles.paneContent}
+                  >
+                    <IdentityPanel slots={slots} />
+                  </ScrollView>
+                </View>
 
-                  {/* Profile / Memory sub-tab（移动端二选一）。切换 = LayoutAnimation
-                      交叉淡入（selectSubTab），面板不再挂 entering（避免双动画打架）。 */}
-                  <View style={styles.subTabRow}>
-                    <WorkbenchTabButton
-                      active={identitySubTab === "profile"}
-                      label={t("goalsView.subTabs.profile")}
-                      value={
-                        userEntries.length > 0 ? String(userEntries.length) : t("goalsView.subTabs.empty")
-                      }
-                      onPress={() => selectSubTab("profile")}
-                    />
-                    <WorkbenchTabButton
-                      active={identitySubTab === "memory"}
-                      label={t("goalsView.subTabs.memory")}
-                      value={String(memory.total)}
-                      onPress={() => selectSubTab("memory")}
-                    />
-                  </View>
-
-                  {identitySubTab === "profile" ? (
-                    <GlassCard style={styles.panelSection}>
-                      <ProfilePanel entries={userEntries} />
-                    </GlassCard>
-                  ) : (
-                    <GlassCard style={styles.panelSection}>
-                      <MemoryPanel
-                        memories={memory.memories}
-                        total={memory.total}
-                        hasMore={memory.hasMore}
-                        loadingMore={memory.loadingMore}
-                        onLoadMore={memory.loadMore}
-                      />
-                    </GlassCard>
-                  )}
-                </ScrollView>
-              </View>
-
-              {/* Goals pane */}
-              <View style={{ width: pagerSize.w, height: pagerSize.h }}>
-                <ScrollView
-                  style={styles.flex1}
-                  showsVerticalScrollIndicator={false}
-                  contentContainerStyle={styles.paneContentGoals}
-                >
-                  <GoalsGrid goals={displayGoals} onOpen={setExpandedGoal} />
-                </ScrollView>
-              </View>
+                {/* Goals pane — GOALS portrait */}
+                <View style={{ width: pagerSize.w, height: pagerSize.h }}>
+                  <ScrollView
+                    style={styles.flex1}
+                    showsVerticalScrollIndicator={false}
+                    contentContainerStyle={styles.paneContent}
+                  >
+                    <GoalsPanel slots={slots} />
+                  </ScrollView>
+                </View>
               </Animated.ScrollView>
             </GestureDetector>
           </View>
         </View>
       )}
-
-      {/* 手机：goal 详情走底部 Drawer（web detailLayout="drawer" 强制） */}
-      <GoalDetailSheet goal={selectedGoal} onClose={() => setExpandedGoal(null)} />
     </View>
   );
 }
 
-// RN 0.85 类型无 StyleSheet.absoluteFillObject → 手写四边定位（ui/GlassCard 同做法）。
 const absoluteFill = { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 } as const;
 
 const styles = StyleSheet.create({
   flex1: { flex: 1 },
-  // 页头块 web mb-6(24)：PageHeader 自带 pb-2(8) → 内容区补 pt 16。
+  // 页头块 dev mb-6(24)：PageHeader 自带 pb-2(8) → 内容区补 pt 16。
   content: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
 
   loadingRow: {
@@ -749,56 +459,20 @@ const styles = StyleSheet.create({
   pillText: { fontSize: 14, lineHeight: 20, fontFamily: "Inter_600SemiBold" },
 
   pager: { flex: 1, marginTop: 16 },
-  // web pane：space-y-4(16) pb-2(8)
-  paneContent: { gap: 16, paddingBottom: 8 },
-  paneContentGoals: { paddingBottom: 8 },
-
-  // IdentitySummaryCard：glass p-5(20)
-  identityCard: { padding: 20 },
-  idLabel: {
-    fontSize: 11,
-    lineHeight: 15,
-    fontFamily: "Inter_600SemiBold",
-    letterSpacing: 11 * 0.18,
-    color: `rgba(${FG},0.45)`,
-  },
-  idName: {
-    marginTop: 8,
-    fontSize: 20,
-    lineHeight: 28,
-    fontFamily: "Inter_600SemiBold",
-    letterSpacing: 20 * -0.025,
-    color: "#1d2130",
-  },
-  idSummary: { marginTop: 8, fontSize: 13, lineHeight: 24, fontFamily: "Inter_400Regular", color: `rgba(${FG},0.65)` },
-
-  // WorkbenchTabButton：grid gap-2.5(10)、glass p-4(16)
-  subTabRow: { flexDirection: "row", gap: 10 },
-  wtbShadow: { borderRadius: 24, boxShadow: GLASS_SHADOW },
-  wtbClip: { borderRadius: 24, overflow: "hidden" },
-  wtbBlack: { backgroundColor: "#1d2130" },
-  wtbBorder: {
-    ...absoluteFill,
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: GLASS_BORDER,
-    boxShadow: "inset 0 1px 1px rgba(255,255,255,0.6)",
-  },
-  wtbBody: { padding: 16 },
-  wtbLabel: { fontSize: 10, lineHeight: 14, fontFamily: "Inter_400Regular", letterSpacing: 10 * 0.16 },
-  wtbValue: { marginTop: 4, fontSize: 16, lineHeight: 24, fontFamily: "Inter_600SemiBold" },
+  // dev pane：Identity space-y-5(20) / 两 pane 都 pb-2(8)
+  paneContent: { paddingBottom: 8 },
+  // dev IdentityPanel space-y-5(20)
+  paneStack: { gap: 20 },
 
   // panel section：glass-card-strong p-4（native 与 glass-card 同渲染）
   panelSection: { padding: 16 },
-  panelHeader: { marginBottom: 12 },
-  panelTitle: { fontSize: 14, lineHeight: 20, fontFamily: "Inter_600SemiBold", color: "#1d2130" },
-  panelDesc: { marginTop: 4, fontSize: 11, lineHeight: 20, fontFamily: "Inter_400Regular", color: `rgba(${FG},0.42)` },
+  // entry 卡：glass-card p-4
+  entryCard: { padding: 16 },
 
-  // 折叠组
-  groupsWrap: { gap: 10 },
-  groupHeader: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingVertical: 12 },
-  groupTitleRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  groupTitle: { fontSize: 14, lineHeight: 20, fontFamily: "Inter_600SemiBold", color: "#1d2130" },
+  // PortraitSection 标题区（dev mb-3）
+  sectionHeader: { marginBottom: 12 },
+  sectionTitleRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  panelTitle: { fontSize: 14, lineHeight: 20, fontFamily: "Inter_600SemiBold", color: "#1d2130" },
   countPill: {
     borderRadius: 999,
     backgroundColor: `rgba(${FG},0.05)`,
@@ -806,25 +480,11 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   countPillText: { fontSize: 10, lineHeight: 14, fontFamily: "Inter_500Medium", color: `rgba(${FG},0.45)` },
-  groupDesc: { marginTop: 4, fontSize: 12, lineHeight: 20, fontFamily: "Inter_400Regular", color: `rgba(${FG},0.42)` },
-  groupBody: {
-    borderTopWidth: 1,
-    borderTopColor: `rgba(${FG},0.08)`,
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 16,
-  },
-  entriesWrap: { gap: 4 },
-  entryRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "baseline",
-    columnGap: 12,
-    rowGap: 2,
-    paddingVertical: 4,
-  },
-  entryKey: { fontSize: 10, lineHeight: 14, fontFamily: "Inter_600SemiBold", letterSpacing: 10 * 0.12, color: `rgba(${FG},0.45)` },
-  entryValue: { minWidth: "60%", flex: 1, fontSize: 13, lineHeight: 20, fontFamily: "Inter_400Regular", color: `rgba(${FG},0.8)` },
+  // dev caption(11) + leading-5(20) + mt-1(4) + foreground/42
+  panelDesc: { marginTop: 4, fontSize: 11, lineHeight: 20, fontFamily: "Inter_400Regular", color: `rgba(${FG},0.42)` },
+
+  // dev space-y-2.5(10)
+  entriesWrap: { gap: 10 },
 
   // 空态（虚线框）
   emptyBox: {
@@ -839,63 +499,4 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { fontSize: 14, lineHeight: 20, fontFamily: "Inter_500Medium", color: `rgba(${FG},0.7)`, textAlign: "center" },
   emptyDesc: { marginTop: 4, fontSize: 12, lineHeight: 20, fontFamily: "Inter_400Regular", color: `rgba(${FG},0.45)`, textAlign: "center" },
-
-  // Memory
-  memGroups: { gap: 20 },
-  memGroupHeader: { flexDirection: "row", alignItems: "baseline", gap: 8, marginBottom: 8, paddingHorizontal: 4 },
-  memGroupLabel: { fontSize: 10, lineHeight: 14, fontFamily: "Inter_600SemiBold", letterSpacing: 10 * 0.16, color: `rgba(${FG},0.45)` },
-  memGroupCount: { fontSize: 10, lineHeight: 14, fontFamily: "Inter_500Medium", color: `rgba(${FG},0.3)` },
-  memItems: { gap: 12 },
-  memText: { fontSize: 13, lineHeight: 24, fontFamily: "Inter_400Regular", color: `rgba(${FG},0.85)` },
-  memAttr: { marginTop: 4, fontSize: 11, lineHeight: 15, fontFamily: "Inter_400Regular", color: `rgba(${FG},0.45)` },
-  memFooter: {
-    marginTop: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
-    borderRadius: 16,
-    backgroundColor: "rgba(255,255,255,0.45)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.6)",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  memCount: { fontSize: 11, lineHeight: 15, fontFamily: "Inter_400Regular", color: `rgba(${FG},0.45)`, fontVariant: ["tabular-nums"] },
-  loadMoreBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    borderRadius: 12,
-    backgroundColor: `rgba(${FG},0.05)`,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  loadMoreDisabled: { opacity: 0.4 },
-  loadMoreText: { fontSize: 11, lineHeight: 15, fontFamily: "Inter_500Medium", color: `rgba(${FG},0.55)` },
-
-  // Goals grid
-  goalsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
-  goalShadow: { borderRadius: 24, boxShadow: GLASS_SHADOW },
-  goalPressed: { transform: [{ scale: 0.98 }] },
-  goalClip: { borderRadius: 24, overflow: "hidden" },
-  goalBorder: {
-    ...absoluteFill,
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: GLASS_BORDER,
-    boxShadow: "inset 0 1px 1px rgba(255,255,255,0.6)",
-  },
-  goalImageArea: { height: 96, backgroundColor: `rgba(${FG},0.03)`, alignItems: "center", justifyContent: "center" },
-  goalBody: { padding: 12 },
-  goalTitleRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 },
-  goalTitle: { fontSize: 14, lineHeight: 20, fontFamily: "Inter_600SemiBold", color: "#1d2130" },
-  goalBar: { height: 6, borderRadius: 999, backgroundColor: `rgba(${FG},0.1)`, overflow: "hidden", marginBottom: 8 },
-  goalBarFill: { height: "100%", borderRadius: 999 },
-  goalPctRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8 },
-  goalPct: { fontSize: 18, lineHeight: 28, fontFamily: "Inter_600SemiBold", color: "#1d2130", fontVariant: ["tabular-nums"] },
-  goalPill: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
-  goalPillText: { fontSize: 10, lineHeight: 14, fontFamily: "Inter_500Medium" },
-  goalSummaryRow: { flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", gap: 8 },
-  goalSummary: { flex: 1, fontSize: 11, lineHeight: 15, fontFamily: "Inter_400Regular", color: `rgba(${FG},0.55)` },
 });

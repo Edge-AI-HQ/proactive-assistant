@@ -9,6 +9,6 @@ export type {
   TimelineStoreStatus,
 } from "@pin-ai/core";
 
-export { getAmbientTimelineStore } from "./store";
+export { getAmbientTimelineStore, resetAmbientTimelineStore } from "./store";
 export { createAmbientTimelineModelBridge } from "./models";
 export { getAmbientTimelinePipeline, refreshTimeline } from "./pipeline";

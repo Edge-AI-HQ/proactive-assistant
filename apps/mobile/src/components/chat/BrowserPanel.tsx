@@ -16,9 +16,10 @@
  * CDP 输入；RN WebView 是真 WKWebView，用户接管后触摸直接落在 live view 页面里
  * （无需自建转发层）。AI 驾驶时与 dev 同构：透明层捕获首次点按 → 隐式 takeover。
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AppState,
+  Modal,
   Pressable,
   StyleSheet,
   Text,
@@ -26,6 +27,7 @@ import {
   View,
 } from "react-native";
 import { WebView } from "react-native-webview";
+import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
 import {
   Bot,
   ChevronLeft,
@@ -39,7 +41,14 @@ import {
   X,
 } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
-import Animated, { SlideInDown, SlideOutDown } from "react-native-reanimated";
+import Animated, {
+  runOnJS,
+  SlideInDown,
+  SlideOutDown,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+} from "react-native-reanimated";
 import type { BrowserControlMode, BrowserInput, BrowserSession } from "@pin-ai/core";
 import { useBrowserSession } from "@pin-ai/state";
 
@@ -203,6 +212,7 @@ export function BrowserPanel({
   session,
   reloadKey,
   bottomInset = 0,
+  topInset = 0,
   onControlChange,
   sendInput,
   onCollapse,
@@ -212,6 +222,9 @@ export function BrowserPanel({
   reloadKey: number;
   /** 满屏 sheet 场景的 home-indicator 底部安全区。 */
   bottomInset?: number;
+  /** 顶部刘海安全区。全屏 Modal 逃出根 SafeAreaProvider，Modal 内 useSafeAreaInsets
+   *  读数不可靠 → 由宿主（ChatSheet）显式传 insets.top，面板自己垫下来避刘海。 */
+  topInset?: number;
   onControlChange: (mode: BrowserControlMode) => void;
   sendInput: (input: BrowserInput) => Promise<Record<string, unknown> | null>;
   onCollapse: () => void;
@@ -242,18 +255,46 @@ export function BrowserPanel({
     ? `${session.liveViewUrl}&navbar=false`
     : `${session.liveViewUrl}?navbar=false`;
 
+  // 顶部把手手势（对齐 dev BrowserDrawer 的 drag-down dismiss）：只把手起拖 → 不和
+  // 下面的 WebView 抢手势。下拉跟手（往上 clamp 0）；松手过 120px 或快速下滑
+  // （vy>600）即 collapse，否则 spring 回弹。轻点把手仍收起（Tap 与 Pan 竞速）。
+  const dragY = useSharedValue(0);
+  const dragStyle = useAnimatedStyle(() => ({ transform: [{ translateY: dragY.value }] }));
+  const handleGesture = useMemo(() => {
+    const pan = Gesture.Pan()
+      .onUpdate((e) => {
+        dragY.value = Math.max(0, e.translationY);
+      })
+      .onEnd((e) => {
+        if (e.translationY > 120 || e.velocityY > 600) {
+          runOnJS(onCollapse)();
+        } else {
+          dragY.value = withSpring(0, { stiffness: 500, damping: 40, overshootClamping: true });
+        }
+      });
+    const tap = Gesture.Tap().onEnd(() => runOnJS(onCollapse)());
+    return Gesture.Race(pan, tap);
+  }, [dragY, onCollapse]);
+
   return (
+    // 全屏 Modal：逃出 ChatScreen 容器（那被夹在 ChatSheet header + 刘海之下），
+    // 让面板真正盖住整屏。Modal 内手势须自带 GestureHandlerRootView。
+    <Modal visible transparent statusBarTranslucent animationType="none" onRequestClose={onCollapse}>
+    <GestureHandlerRootView style={styles.modalRoot}>
+    {/* 上滑入场 / 退场（对齐 dev BrowserDrawer 的 slide-up）。panelSlide 持暗底铺满
+        整屏（含刘海后面）；内层 panel 承接下拉手势位移，用 topInset 垫开刘海。 */}
     <Animated.View
       entering={SlideInDown.duration(300)}
       exiting={SlideOutDown.duration(250)}
-      style={[styles.panel, { paddingBottom: bottomInset }]}
+      style={styles.panelSlide}
     >
-      {/* 顶部把手（dev drawer grab handle）：点按收起。 */}
-      <Pressable onPress={onCollapse} accessibilityRole="button" accessibilityLabel={t("browser:view.collapse")}>
+    <Animated.View style={[styles.panel, dragStyle, { paddingTop: topInset, paddingBottom: bottomInset }]}>
+      {/* 顶部把手（dev drawer grab handle）：下拉退出（Pan）/ 轻点收起（Tap）。 */}
+      <GestureDetector gesture={handleGesture}>
         <View style={styles.handleRow}>
           <View style={styles.handle} />
         </View>
-      </Pressable>
+      </GestureDetector>
 
       {/* Top control bar — control toggle on the left; collapse / end-session
           on the right（dev BrowserView 同构，无 status pill）。 */}
@@ -397,6 +438,9 @@ export function BrowserPanel({
         ) : null}
       </View>
     </Animated.View>
+    </Animated.View>
+    </GestureHandlerRootView>
+    </Modal>
   );
 }
 
@@ -465,15 +509,12 @@ const styles = StyleSheet.create({
   headerHost: { color: `rgba(${FG},0.9)` },
 
   // ── panel ──
-  panel: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    top: 0,
-    bottom: 0,
-    zIndex: 40,
-    backgroundColor: PANEL_BG,
-  },
+  // GestureHandlerRootView 须铺满，Modal 内的把手手势才生效。
+  modalRoot: { flex: 1 },
+  // 入/退场滑动层：持暗底铺满整屏（含刘海后面），dev BrowserDrawer 的暗底同源。
+  panelSlide: { flex: 1, backgroundColor: PANEL_BG },
+  // 内容层：承接下拉手势的 translateY 位移（topInset 由 inline 垫刘海）。
+  panel: { flex: 1 },
   handleRow: { alignItems: "center", paddingVertical: 8 },
   handle: { height: 6, width: 48, borderRadius: 3, backgroundColor: "rgba(255,255,255,0.4)" },
   controlBar: {

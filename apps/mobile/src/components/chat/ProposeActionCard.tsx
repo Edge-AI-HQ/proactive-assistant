@@ -13,7 +13,9 @@ import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, LayoutAnimation, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { ArrowRight, Check, ChevronUp, FileText, Mail, MessageSquare } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
-import Animated, { Easing, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from "react-native-reanimated";
+import Animated, { cancelAnimation, Easing, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from "react-native-reanimated";
+
+import { usePageActive } from "../app/KeepAlivePage";
 
 import { VoiceButton } from "../../voice";
 
@@ -87,9 +89,15 @@ function DraftItem({ artifact, index }: { artifact: Artifact; index: number }) {
 
 function PulseDot() {
   const v = useSharedValue(0);
+  const active = usePageActive();
   useEffect(() => {
+    if (!active) {
+      cancelAnimation(v);
+      return;
+    }
     v.value = withRepeat(withTiming(1, { duration: 1800, easing: Easing.inOut(Easing.ease) }), -1, true);
-  }, [v]);
+    return () => cancelAnimation(v);
+  }, [v, active]);
   const st = useAnimatedStyle(() => ({ opacity: 0.55 + v.value * 0.45, transform: [{ scale: 1 + v.value * 0.15 }] }));
   return <Animated.View style={[styles.pulseDot, st]} />;
 }

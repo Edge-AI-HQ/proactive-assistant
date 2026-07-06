@@ -10,7 +10,7 @@
  * Dismiss/Done/Approve（reminder → Chat）。EXECUTION PLAN（实时 run，
  * useCardExecutionRun）是后续刀，本刀先不接。
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   LayoutAnimation,
   Linking,
@@ -589,17 +589,32 @@ export default function CardDetailSheet({
   const open = entry !== null;
   const [mounted, setMounted] = useState(open);
   const y = useSharedValue(height);
+  // 面板实测高度（onLayout 填），退场动画滑出距离 = 面板自身高度、不是整屏 height。
+  // 这是「下拉秒退场」的真凶：面板底部锚定、只有 maxHeight 0.92 屏高，短卡片时把 y 一路
+  // 动到整屏 height + ease-out 前重 → 面板在头 ~50ms 就滑出可视区，剩下 270ms 在屏外空跑
+  // = 看着像瞬间消失。动到 panelH 后，整段 320ms 都在可视区内滑，才丝滑。fallback=height。
+  const panelH = useSharedValue(height);
+  // 退场存活门（同 CardChatScreen 的 lastTarget 范式）：entry 置空后退场动画还要再
+  // 渲染若干帧，否则 `if (!card || !shown) return null` 会在动画播放前就卸载 = 「秒退场」。
+  // 渲染一律用 shown（= 最后一次非空 entry），下滑动画播完（setMounted(false)）才真正卸载。
+  const lastEntry = useRef<VisibleCardEntry | null>(null);
+  if (entry) lastEntry.current = entry;
+  const shown = entry ?? lastEntry.current;
 
+  // deps 含 shown.card.id：退场动画途中（open 恒为 true）若换开另一张卡（entry A→B），
+  // 光靠 open 布尔不变 → 开场 spring 不会重跑 → 新卡跟着旧退场滑出屏、被吞掉。带上卡片
+  // 身份后，A→B 会重跑本 effect 的 open 分支 spring(0) 把新卡弹回来（并取消上一条 withTiming
+  // 的完成回调：动画被替换 → finished=false → 那句 onClose 不触发，新卡不会误关）。
   useEffect(() => {
     if (open) {
       setMounted(true);
       y.value = withSpring(0, { stiffness: 320, damping: 32, mass: 0.9, overshootClamping: true });
     } else {
-      y.value = withTiming(height, { duration: 320, easing: Easing.out(Easing.cubic) }, (done) => {
+      y.value = withTiming(panelH.value, { duration: 320, easing: Easing.out(Easing.cubic) }, (done) => {
         if (done) runOnJS(setMounted)(false);
       });
     }
-  }, [open, height, y]);
+  }, [open, shown?.card?.id, panelH, y]);
 
   const dragDown = Gesture.Pan()
     .activeOffsetY(12)
@@ -608,26 +623,31 @@ export default function CardDetailSheet({
     })
     .onEnd((e) => {
       if (e.translationY > height * 0.18 || e.velocityY > 600) {
-        runOnJS(onClose)();
+        // 过阈值 → 在 worklet 里从松手位置续着滑出屏外（跟手连续、无 JS 往返卡顿）。
+        // 滑到 panelH（面板自身高度）而非整屏 height：短卡片才不会头 50ms 就没影 =「秒退场」。
+        // 动画播完才 onClose（→ entry 置空 → 面板此时已在屏外，卸载不可见）。
+        y.value = withTiming(panelH.value, { duration: 320, easing: Easing.out(Easing.cubic) }, (done) => {
+          if (done) runOnJS(onClose)();
+        });
       } else {
         y.value = withSpring(0, { stiffness: 500, damping: 40, overshootClamping: true });
       }
     });
 
-  // 横滑下沉手势（= chat sheets 的 useSinkDismiss = web ChatSheetOverlay：右滑 → 下沉退出，
-  // failOffsetY 让位竖直滚动）。与下拉 Race 组合后包住整个面板：下拉 或 右滑都把 drawer 挤下屏幕。
-  const sinkGesture = useSinkDismissGesture(y, height, width, onClose);
-  const panelGesture = Gesture.Race(dragDown, sinkGesture);
+  // 右滑退出：改用 chat 同款「左缘窄条」模型（= dev）——只在面板最左 24px 起拖右滑 → 跟手
+  // 下沉退出。不再整幅 swipe-anywhere（那会和内层 ScrollView 竖滚抢手势 = 之前「右滑不顺手」
+  // 的根因）。下拉退出仍是整幅 dragDown（主手势），右滑只作边缘辅助（挂在下方 edgeZone）。
+  const edgeSink = useSinkDismissGesture(y, height, width, onClose, { activateX: 10, failY: 12 });
 
   const panelStyle = useAnimatedStyle(() => ({ transform: [{ translateY: y.value }] }));
-  const dimStyle = useAnimatedStyle(() => ({ opacity: 1 - Math.min(1, y.value / height) }));
+  const dimStyle = useAnimatedStyle(() => ({ opacity: 1 - Math.min(1, y.value / panelH.value) }));
   // Part B：card 执行 run（web useCardExecutionRun）——拿 lastMessagePayload.plan
   // 渲染 EXECUTION PLAN。runId=null（抽屉关）时 hook no-op；本地历史源同主 chat。
-  const run = useCardExecutionRun(entry?.card?.id ?? null, { localHistory: readLocalHistory });
+  const run = useCardExecutionRun(shown?.card?.id ?? null, { localHistory: readLocalHistory });
 
   if (!mounted) return null;
-  const card = entry?.card;
-  if (!card || !entry) return null;
+  const card = shown?.card;
+  if (!card || !shown) return null;
 
   const cat = CATEGORIES[basketToLovableCategory(card.goalBasket)] ?? CATEGORIES.life;
   const CatIcon = cat.icon;
@@ -643,7 +663,7 @@ export default function CardDetailSheet({
   // completed 视图（web CardDrawerContent:50）：本地 doneIds / 服务端 complete
   // outcome / run 已 done，三者任一即收敛成单 Close 按钮。
   const completed =
-    (cardActions?.doneIds.has(card.id) ?? false) || isCompletedCardOutcome(entry.latestOutcome);
+    (cardActions?.doneIds.has(card.id) ?? false) || isCompletedCardOutcome(shown.latestOutcome);
   const showCompletedView = completed || run.snapshot?.status === "done";
   // pending（web CardDrawer pending prop = processingIds）：动作按钮禁用 +
   // Approve 显 "Opening..."。
@@ -677,10 +697,16 @@ export default function CardDetailSheet({
         </Pressable>
       </Animated.View>
 
-      <Animated.View style={[styles.panelWrap, { maxHeight: height * 0.92, bottom: -insets.bottom }, panelStyle]}>
-        {/* 手势包住整个面板（用户要求）：Race(下拉, 横滑) —— 下拉 或 右滑都把面板下沉退出（对齐 web
-            vaul 下拉 + ChatSheetOverlay 横滑下沉）。横滑 failOffsetY 让位竖直滚动、不抢按钮 tap。 */}
-        <GestureDetector gesture={panelGesture}>
+      <Animated.View
+        onLayout={(e) => {
+          // 实测面板高度 → 退场滑出距离用它（见 panelH 注释）。忽略 0（初次布局前）。
+          const h = e.nativeEvent.layout.height;
+          if (h > 0) panelH.value = h;
+        }}
+        style={[styles.panelWrap, { maxHeight: height * 0.92, bottom: -insets.bottom }, panelStyle]}
+      >
+        {/* 整幅下拉退出（web vaul 下拉）：dragDown 包住面板。右滑退出改挂左缘窄条（见下方 edgeSink）。 */}
+        <GestureDetector gesture={dragDown}>
         <View style={styles.panel}>
           <BlurView intensity={65} tint="light" style={StyleSheet.absoluteFill} />
           <LinearGradient
@@ -766,7 +792,7 @@ export default function CardDetailSheet({
             ) : (
               <View style={styles.actions}>
                 <Pressable
-                  onPress={() => onDismiss(entry)}
+                  onPress={() => onDismiss(shown)}
                   disabled={pending}
                   style={[styles.btnSecondary, pending ? styles.btnDisabledSecondary : null]}
                   accessibilityRole="button"
@@ -776,7 +802,7 @@ export default function CardDetailSheet({
                   <Text style={styles.btnSecondaryText}>{t("drawer.dismiss")}</Text>
                 </Pressable>
                 <Pressable
-                  onPress={() => onComplete(entry)}
+                  onPress={() => onComplete(shown)}
                   disabled={pending}
                   style={[styles.btnDone, pending ? styles.btnDisabledSecondary : null]}
                   accessibilityRole="button"
@@ -786,7 +812,7 @@ export default function CardDetailSheet({
                   <Text style={styles.btnDoneText}>{t("common:status.done")}</Text>
                 </Pressable>
                 <Pressable
-                  onPress={() => (reminder ? onChat(entry) : onApprove(entry))}
+                  onPress={() => (reminder ? onChat(shown) : onApprove(shown))}
                   disabled={pending}
                   style={[styles.btnPrimary, pending ? styles.btnDisabledPrimary : null]}
                   accessibilityRole="button"
@@ -816,6 +842,11 @@ export default function CardDetailSheet({
           </ScrollView>
         </View>
         </GestureDetector>
+        {/* 左缘退出条（dev 模型）：只最左 24px 起拖右滑 → 下沉退出;盖在面板上、纯 tap 不激活
+            → 落到下层内容/按钮。handle 居中(不在此 24px 内),整幅下拉不受影响。 */}
+        <GestureDetector gesture={edgeSink}>
+          <View style={styles.edgeZone} accessibilityElementsHidden />
+        </GestureDetector>
       </Animated.View>
     </View>
   );
@@ -842,6 +873,8 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     backgroundColor: `rgba(${FG},0.15)`,
   },
+  // 左缘退出条（dev w-6=24px）：绝对定位、盖满面板高、只最左 24px。
+  edgeZone: { position: "absolute", left: 0, top: 0, bottom: 0, width: 24 },
   scroll: { flexShrink: 1 },
   scrollContent: { paddingHorizontal: 20, paddingTop: 6, paddingBottom: 36 },
 

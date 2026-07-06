@@ -24,10 +24,13 @@ import { GlassCard } from "../../ui/GlassCard";
 import { AMBIENT_SOURCE_KEYS, type AmbientSourceKey } from "../../ambient/keys";
 import {
   ambientStatusSnapshot,
+  currentGateEpoch,
   flushAmbient,
+  getAmbientEnabledSnapshot,
   reconcileEnabledSources,
   subscribeAmbientStatus,
 } from "../../ambient/runtime";
+import { usePageActive } from "../app/KeepAlivePage";
 import type { RuntimeStatus, SourceStatus } from "../../ambient/status";
 
 // --foreground / --background 通道值（对齐 AmbientScreen / SettingScreen）。NativeWind 的
@@ -181,7 +184,12 @@ export default function AmbientSourceControlsPanel({ userId }: { userId: string 
   const [status, setStatus] = useState<RuntimeStatus | null>(null);
 
   // 订阅 runtime 遥测：mount 取一次快照 + 后续变更推送（源捕获/启停/drain 都会 notify）。
+  // 按页面可见性门控：settings 是 keep-alive 页,进过 Ambient 子页后本面板常驻挂载,
+  // 不门控则每个采集事件都重渲整棵隐藏 settings 树（审查 F4,同 AmbientScreen 一类）。
+  // onboarding 挂载点无 Provider → context 默认 true,行为不变。
+  const pageActive = usePageActive();
   useEffect(() => {
+    if (!pageActive) return;
     let mounted = true;
     const update = () => {
       if (mounted) setStatus(ambientStatusSnapshot());
@@ -192,7 +200,7 @@ export default function AmbientSourceControlsPanel({ userId }: { userId: string 
       mounted = false;
       unsub();
     };
-  }, []);
+  }, [pageActive]);
 
   const statusByKey = useMemo(() => {
     const m = new Map<string, SourceStatus>();
@@ -207,12 +215,19 @@ export default function AmbientSourceControlsPanel({ userId }: { userId: string 
   const enabledCount = enabledSet.size;
   const allOn = enabledCount === AMBIENT_SOURCE_KEYS.length;
 
-  // consent patch 成功后，把"正在跑的源"调和到新的 consent 集（实时启停）。
+  // consent patch 成功后：**主闸开着**才把"正在跑的源"调和到新 consent 集（实时启停,
+  // 交互式补权限）。主闸关着 = 纯授权记录——绝不启动采集、绝不翻闸（2026-07-05 语义
+  // 拍板：本面板是权限管理、不是 ambient 开关;采集运行 ⇔ 主闸开 && 有授权。此前实现
+  // 经 reconcile 顺手置闸+开采,是"授权即开采"bug 的入口）。
   const reconcileFrom = useCallback(
     async (ambientSources: Record<string, { enabled?: boolean } | null> | undefined) => {
       if (!userId) return;
+      // 同步读镜像（非 AsyncStorage 往返）+ 捕获关闸代际：读闸后闸被关 → reconcile
+      // 整体作废（F1）。镜像未预热(null)按关处理——安全方向。
+      const gateEpoch = currentGateEpoch();
+      if (getAmbientEnabledSnapshot() !== true) return;
       const enabled = AMBIENT_SOURCE_KEYS.filter((k) => ambientSources?.[k]?.enabled === true);
-      await reconcileEnabledSources(userId, enabled);
+      await reconcileEnabledSources(userId, enabled, { gateEpoch });
     },
     [userId],
   );

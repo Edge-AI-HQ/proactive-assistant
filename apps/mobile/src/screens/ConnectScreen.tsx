@@ -99,7 +99,7 @@ export default function ConnectScreen({
               fontSize: 24,
               fontFamily: "Inter_600SemiBold",
               letterSpacing: tracking(24, EM_TIGHT),
-              lineHeight: 32,
+              lineHeight: 28,
               color: "#1d2130",
               marginBottom: 2,
             }}
@@ -219,7 +219,10 @@ const styles = StyleSheet.create({
   },
   statValueRow: { flexDirection: "row", alignItems: "baseline", gap: 6 },
   statValue: { fontSize: 24, lineHeight: 24, fontFamily: "Inter_600SemiBold", color: "#1d2130" },
-  statTotal: { fontSize: 14, lineHeight: 14, fontFamily: "Inter_400Regular", color: fg(0.4) },
+  // dev leading-none(line-height:1) 在 CSS 下中文溢出行框仍画全、不裁；RN 里
+  // lineHeight==fontSize 会裁掉中文字形顶部（"已配对"）→ 提到 20(~1.4×)给 CJK 头部
+  // 留空间。baseline 对齐下数字与文字仍齐，且 <statValue 的 24 行高、不撑高该行。
+  statTotal: { fontSize: 14, lineHeight: 20, fontFamily: "Inter_400Regular", color: fg(0.4) },
   statStatusRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 8 },
   dotEmerald: { width: 6, height: 6, borderRadius: 999, backgroundColor: "#10b981" },
   statStatusText: { fontSize: 10, lineHeight: 14, fontFamily: "Inter_500Medium", color: fg(0.6) },

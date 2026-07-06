@@ -35,6 +35,11 @@ import Animated, {
   type SharedValue,
 } from "react-native-reanimated";
 
+// __HEAT_PROBE__ 临时发热探针(排查完删)。
+import { probeSet } from "../../lib/heat-probe";
+// __HEAT_AB__ 混合渲染的 Skia 背景层(底+影+边,缓存贴图,凉)。
+import SphereCardsSkiaBg from "./SphereCardsSkia";
+
 const CARD_W = 160;
 const CARD_H = 68;
 const Y_MAX = 0.62;
@@ -134,6 +139,7 @@ function Card({
   rx,
   ry,
   onTap,
+  chrome,
 }: {
   item: SphereItem;
   point: { x: number; y: number; z: number };
@@ -142,6 +148,9 @@ function Card({
   rx: number;
   ry: number;
   onTap: (id: string) => void;
+  /** true = 卡片自带底/影/边(纯原生);false = 混合模式,底/影/边由 Skia 背景层提供,
+   *  本卡透明只叠文字/图标/状态环(只做 transform 不重绘 = 凉)。 */
+  chrome: boolean;
 }) {
   const { t } = useTranslation("card");
   const depthSV = useSharedValue(1);
@@ -170,12 +179,14 @@ function Card({
       transform: [{ translateX: x - CARD_W / 2 }, { translateY: y - CARD_H / 2 }, { scale }],
       opacity: 0.32 + depth * 0.68,
       zIndex: Math.round(1000 + z),
-      backgroundColor: `rgba(255,255,255,${(0.55 + frontBoost * 0.4).toFixed(2)})`,
-      // web 现役 Sphere3DCards 同款「二值」阴影(z>0 前半球有影 / 背面 none),
-      // 不是每帧连续 ramp——连续 shadowOpacity 每帧触发 iOS 阴影重绘(14 卡 × 60fps)
-      // 是真机发热源(见 Mengli 的 perf(now) f3294c1b:发热来自每帧重绘,非动画本身)。
-      // 二值 → 卡片跨 z=0 才翻一下,近乎零逐帧重绘。
-      shadowOpacity: z > 0 ? 0.12 : 0,
+      // 底色:两种模式都用**不透明**深度白底(前实后透,随深度浓淡),量化到 0.05 台阶
+      // (0.05 alpha 差肉眼不可见,跨台阶才变字符串→Reanimated 差分跳过未变帧→每帧重绘
+      // ~60/s 降到几次/s,视觉无损)。原生整卡不透明 = 正确遮挡后排卡(混合两层结构下,
+      // 底必须由原生卡自己画不透明,否则后排卡文字会透过前排卡的 Skia 底显出来)。
+      backgroundColor: `rgba(255,255,255,${(Math.round((0.55 + frontBoost * 0.4) / 0.05) * 0.05).toFixed(2)})`,
+      // 二值阴影仅纯原生模式(chrome)才出——混合模式影由 Skia 背景层画(缓存贴图、凉),
+      // 原生卡不再投原生影(连续 shadowOpacity 每帧触发 iOS 阴影重绘是发热源 f3294c1b)。
+      shadowOpacity: chrome && z > 0 ? 0.12 : 0,
     };
   });
 
@@ -191,7 +202,12 @@ function Card({
 
   return (
     <Animated.View
-      style={[styles.card, ring ? { borderWidth: 1, borderColor: ring } : null, style]}
+      style={[
+        styles.card,
+        chrome ? styles.cardChrome : null, // 纯原生才自带底影边;混合模式底影边走 Skia 层
+        ring ? { borderWidth: 1, borderColor: ring } : null,
+        style,
+      ]}
       animatedProps={tapGate}
     >
       <Pressable
@@ -224,6 +240,7 @@ export default function SphereCards({
   onTap,
   active = true,
   cacheKey = "now-sphere",
+  skiaBg = false,
 }: {
   items: SphereItem[];
   width: number;
@@ -232,6 +249,8 @@ export default function SphereCards({
   /** false = NOW 被 chat 盖住 / 切到别的页 → 停帧(NOW 常驻挂载,不停会空跑发热)。 */
   active?: boolean;
   cacheKey?: string;
+  /** true = 混合渲染:底/影/边走 Skia 背景层(凉),本层卡片透明只叠文字/图标/交互。 */
+  skiaBg?: boolean;
 }) {
   const cached = rotationCache.get(cacheKey);
   const yaw = useSharedValue(cached?.yaw ?? 0);
@@ -286,6 +305,7 @@ export default function SphereCards({
   }, false);
   useEffect(() => {
     frame.setActive(active);
+    probeSet("now.sphereFrames", active ? "running" : "stopped"); // __HEAT_PROBE__
   }, [active, frame]);
 
   const lastX = useSharedValue(0);
@@ -324,28 +344,51 @@ export default function SphereCards({
   const ry =
     height > 0 ? Math.max(1, Math.min(centeredRy, topSafeRy, bottomSafeRy) / Y_EXTENT) : 40;
 
+  // 每张可见卡解析出球面 point(首见槽位;槽位耗尽的极端情形 point 为 undefined → 剔除)。
+  // Skia 背景层与原生文字层共用同一份 renderItems + 同一 yaw,保证严丝合缝对齐。
+  const renderItems = items
+    .map((item) => {
+      const idx = idToPointIdx.current.get(item.id);
+      const point = idx === undefined ? undefined : pointsRef.current[idx];
+      return point ? { item, point } : null;
+    })
+    .filter(
+      (x): x is { item: SphereItem; point: { x: number; y: number; z: number } } => x !== null,
+    );
+  const cx = width / 2;
+  const cy = height * (SPHERE_CENTER_TOP + SPHERE_SHIFT);
+
   return (
     <GestureDetector gesture={pan}>
       <View style={[styles.stage, { width, height }]}>
-        <View style={[styles.center, { top: height * (SPHERE_CENTER_TOP + SPHERE_SHIFT), left: width / 2 }]}>
-          {items.map((item) => {
-            const idx = idToPointIdx.current.get(item.id);
-            const point = idx === undefined ? undefined : pointsRef.current[idx];
-            // 槽位耗尽的极端情形（web rAF 循环同款 `if (!p) continue`）：不渲染。
-            if (!point) return null;
-            return (
-              <Card
-                key={item.id}
-                item={item}
-                point={point}
-                yaw={yaw}
-                pitch={pitch}
-                rx={rx}
-                ry={ry}
-                onTap={onTap}
-              />
-            );
-          })}
+        {/* 混合模式:Skia 背景层(底+影+边,缓存贴图,凉)铺在原生卡片之下,共享 yaw。 */}
+        {skiaBg ? (
+          <SphereCardsSkiaBg
+            renderItems={renderItems.map((r) => ({ id: r.item.id, point: r.point }))}
+            yaw={yaw}
+            pitch={pitch}
+            rx={rx}
+            ry={ry}
+            cx={cx}
+            cy={cy}
+            width={width}
+            height={height}
+          />
+        ) : null}
+        <View style={[styles.center, { top: cy, left: cx }]}>
+          {renderItems.map(({ item, point }) => (
+            <Card
+              key={item.id}
+              item={item}
+              point={point}
+              yaw={yaw}
+              pitch={pitch}
+              rx={rx}
+              ry={ry}
+              onTap={onTap}
+              chrome={!skiaBg}
+            />
+          ))}
         </View>
       </View>
     </GestureDetector>
@@ -360,13 +403,17 @@ const styles = StyleSheet.create({
     width: CARD_W,
     minHeight: CARD_H,
     borderRadius: 14,
+    // 卡面本体(两模式都有):白细边 + inset 顶高光(glass-card-strong;blur 因性能红线
+    // 不上,见文件头)。混合模式下原生卡是不透明的可见卡面,边/高光都在它身上。
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "rgba(255,255,255,0.7)",
+    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.4)",
+  },
+  // 原生投影,仅纯原生模式应用;混合模式由 Skia 背景层画(缓存贴图,凉),原生不投影。
+  cardChrome: {
     shadowColor: "#000",
     shadowRadius: 9,
     shadowOffset: { width: 0, height: 4 },
-    // glass-card-strong 的 inset 顶高光（blur 因性能红线不上，见文件头）。
-    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.4)",
   },
   cardInner: { flex: 1, paddingHorizontal: 10, paddingVertical: 8 },
   cardTop: { flexDirection: "row", alignItems: "center", gap: 4, marginBottom: 4 },

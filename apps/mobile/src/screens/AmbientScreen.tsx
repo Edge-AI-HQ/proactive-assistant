@@ -51,9 +51,12 @@ import { type IntentCard, type UserDevice, type UserDevicePlatform } from "@pin-
 import { useUserDevices } from "@pin-ai/state";
 
 import i18n from "../i18n";
+// __HEAT_PROBE__ 临时发热探针(排查完删)。
+import { probeCount } from "../lib/heat-probe";
 import { GlassCard } from "../ui/GlassCard";
 import PageHeader from "../components/app/PageHeader";
 import { usePageActive } from "../components/app/KeepAlivePage";
+import { useFullCover } from "../lib/full-cover";
 import { useAmbientToggle } from "../hooks/useAmbientToggle";
 import { useAmbientTimeline } from "../hooks/useAmbientTimeline";
 import { useAmbientLiveSession } from "../hooks/useAmbientLiveSession";
@@ -143,17 +146,27 @@ export default function AmbientScreen({
    *  面板在那里）。AppShell 传 () => navigate("setting")。 */
   onOpenModelSetup?: () => void;
 }) {
+  probeCount("render.AmbientScreen"); // __HEAT_PROBE__
   const { t } = useTranslation("ambient");
   const { ambientOn, togglePending, toggle } = useAmbientToggle(userId);
   const [locked, setLocked] = useState(false);
   const [visibleCount, setVisibleCount] = useState(INITIAL_TIMELINE_COUNT);
+  // UI 可见性 = tab 可见（KeepAlivePage context）&& 未被全屏 sheet/debug 面板盖住
+  // （审查 F3：从时间线打开 card chat 时 view 仍是 "ambient"，只看 pageActive 会在
+  // 全屏 sheet 底下继续订阅+轮询）。下面的遥测订阅和 5s 本地轮询都按它门控。
+  const pageActive = usePageActive();
+  const covered = useFullCover();
+  const uiActive = pageActive && !covered;
   // runtime 遥测订阅：hero 副标题显示第一个源错误（dev AmbientView:438-439,604-606）。
+  // 只在可见时订阅——每个采集事件都 notify，隐藏时保持订阅 = 整棵隐藏树跟着空转
+  // 重渲（2026-07-05 真机探针实测 264 次/11min，含锁屏期间）。切回时先取一次快照补齐。
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
   useEffect(() => {
+    if (!uiActive) return;
     const update = () => setRuntimeStatus(ambientStatusSnapshot());
     update();
     return subscribeAmbientStatus(update);
-  }, []);
+  }, [uiActive]);
   const firstSourceError =
     runtimeStatus?.sources.find((s) => s.lastError)?.lastError ?? null;
   const { devices, loading: devicesLoading, error: devicesError } = useUserDevices();
@@ -174,6 +187,7 @@ export default function AmbientScreen({
         : t("view.deviceCount", { count: connectedCount });
 
   // 时间线读本地 store（= dev on-device 架构）：三路合成 TimelineEntry + 时间倒序。
+  // 5s 本地轮询按 pageActive 门控（省电/减热，WS8）；切回即时刷新。
   const {
     events,
     pendingTranscriptWindows,
@@ -184,7 +198,7 @@ export default function AmbientScreen({
     storeStatus,
     narrativeSummary,
     dismiss,
-  } = useAmbientTimeline();
+  } = useAmbientTimeline(undefined, uiActive);
   const timelineEntries: TimelineEntry[] = [
     ...events.map((e) => timelineEventToEntry(e, dismiss)),
     ...pendingTranscriptWindows.map(pendingTranscriptWindowToEntry),
@@ -200,7 +214,7 @@ export default function AmbientScreen({
 
   // 实时 live session（转写驱动）+ 全屏 focus overlay 目标（对齐 dev AmbientView）。
   const { session: liveSession, previewVisibleCount, dismiss: dismissLiveSession } =
-    useAmbientLiveSession({ ambientOn, dismissible: true });
+    useAmbientLiveSession({ ambientOn, active: uiActive, dismissible: true });
   const [fullscreenSession, setFullscreenSession] = useState<LiveSession | null>(null);
 
   /** Ambient Action handoff（dev AppLayout.handleAmbientAction:633-670 逐字）：
@@ -265,7 +279,7 @@ export default function AmbientScreen({
           // web AmbientView h1：text-2xl(24) / font-semibold(600) / tracking-tight(-0.025em) / leading-tight(1.25→30)。
           <Text
             className="text-[24px] text-foreground"
-            style={{ fontFamily: "Inter_600SemiBold", letterSpacing: tracking(24, EM_TIGHT), lineHeight: 30 }}
+            style={{ fontFamily: "Inter_600SemiBold", letterSpacing: tracking(24, EM_TIGHT), lineHeight: 28 }}
           >
             {t("view.title")}
           </Text>
@@ -810,10 +824,12 @@ function AmbientStatusIcon({ on }: { on: boolean }) {
  *  底色用 fg() 满不透明，由动画 opacity 控到峰值 15%（= web bg-foreground/15）。 */
 function PingRing() {
   const pageActive = usePageActive();
+  const covered = useFullCover();
   const t = useSharedValue(0);
   useEffect(() => {
-    // 页面隐藏时停帧（keep-alive 常驻后无限循环不能空跑）。
-    if (!pageActive) return;
+    // 页面隐藏/被全屏 sheet 盖住时停帧（keep-alive 常驻后无限循环不能空跑；
+    // covered 维度=审查 F3,与 NowScreen BreatheHalo 同款双门控）。
+    if (!pageActive || covered) return;
     t.value = withRepeat(
       withTiming(1, { duration: 1000, easing: Easing.bezier(0, 0, 0.2, 1) }),
       -1,
@@ -823,7 +839,7 @@ function PingRing() {
       cancelAnimation(t);
       t.value = 0;
     };
-  }, [t, pageActive]);
+  }, [t, pageActive, covered]);
   const style = useAnimatedStyle(() => ({
     transform: [{ scale: interpolate(t.value, [0, 0.75, 1], [1, 2, 2]) }],
     opacity: interpolate(t.value, [0, 0.75, 1], [0.15, 0, 0]),

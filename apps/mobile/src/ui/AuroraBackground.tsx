@@ -2,22 +2,22 @@
  * Aurora 静态背景——对齐 dev 的 native-power-save(唯一视觉真源)。
  *
  * dev(proactive-ai-frontend 经 Capacitor 到 iOS)在 native 上永远开
- * `html.native-power-save`(见 packages/ui-web/src/auth/platform.ts),
- * 把 aurora 层的 `animation / filter(模糊) / mix-blend-mode / transform`
- * 全部关掉(index.css `html.native-power-save .aurora-layer`),只留一张
- * 静态柔和色斑。早期 RN 版却用了 Skia Blur(sigma 30)+ 3 层 screen 混合
- * + 3 个 `withRepeat(-1)` 无限动画——每帧重新合成 = 真机发热主因之一,且
- * 与 dev 的省电策略相悖。这里改成「画一次」的静态实现:
- *   底图 @60% + 3 组柔和 RadialGradient 色斑(color 0% → transparent 60%,
- *   自带羽化,无需额外 blur / blend / 动画) + white/35 蒙版。
- * 零逐帧开销;chat / card chat 常驻挂载也几乎不耗电。
+ * `html.native-power-save`(见 packages/ui-web/src/auth/platform.ts),把 aurora
+ * 层的 `animation / filter(模糊) / mix-blend-mode / transform` 全关，只留一张
+ * 静态柔和色斑。此前 RN 版用 Skia Canvas 画这张静止图，代价是引入
+ * `@shopify/react-native-skia`(~85MB 原生库)+ 常驻 GPU surface——为一张不动的
+ * 图养一个重型绘图引擎，纯浪费。改用已在依赖里、已原生链接的 react-native-svg
+ * (RadialGradient) 1:1 复刻同样的静态色斑，删掉 Skia：
+ *   底图 @60% + 6 组柔和 RadialGradient 色斑(color 0% → transparent 60%，自带
+ *   羽化，无需 blur / blend / 动画) + white 蒙版。零逐帧开销；chat / card chat
+ *   常驻挂载也几乎不耗电。
  */
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { Image, StyleSheet, View, useWindowDimensions } from "react-native";
-import { Canvas, Oval, RadialGradient, vec } from "@shopify/react-native-skia";
+import Svg, { Defs, Ellipse, RadialGradient, Stop } from "react-native-svg";
 
 /** web radial-gradient(ellipse rx% ry% at cx% cy%, color 0%, transparent 60%)。
- *  位置/色值沿用早先动画版的三层色斑(去掉 drift 动画,取静止姿态)。 */
+ *  位置/色值沿用早先动画版的三层色斑(去掉 drift 动画，取静止姿态)。 */
 type Spot = { cx: number; cy: number; rx: number; ry: number; color: string };
 
 const SPOTS: Spot[] = [
@@ -29,23 +29,16 @@ const SPOTS: Spot[] = [
   { cx: 0.6, cy: 0.9, rx: 0.4, ry: 0.35, color: "hsla(290, 60%, 82%, 0.4)" },
 ];
 
-/** 单斑:Oval + 同形 RadialGradient,0% 色 → 60% 处透明(同色 alpha 0,防灰边)。 */
-function SkiaSpot({ spot, w, h }: { spot: Spot; w: number; h: number }) {
-  const cx = spot.cx * w;
-  const cy = spot.cy * h;
-  const rx = spot.rx * w;
-  const ry = spot.ry * h;
-  const transparent = spot.color.replace(/[\d.]+\)$/, "0)");
-  return (
-    <Oval x={cx - rx} y={cy - ry} width={rx * 2} height={ry * 2}>
-      <RadialGradient
-        c={vec(cx, cy)}
-        r={Math.max(rx, ry)}
-        colors={[spot.color, transparent]}
-        positions={[0, 0.6]}
-      />
-    </Oval>
-  );
+/** "hsla(h, s%, l%, a)" → { hsl: "hsl(h, s%, l%)", alpha: a }。把 alpha 拆给 Stop
+ *  的 stopOpacity——react-native-svg 对 stopColor 里 hsla 的 alpha 处理跨版本不
+ *  一致，显式拆开最稳。 */
+function splitHsla(hsla: string): { hsl: string; alpha: number } {
+  const m = hsla.match(/^hsla\(([^,]+),([^,]+),([^,]+),([^)]+)\)$/);
+  if (!m) return { hsl: hsla, alpha: 1 };
+  return {
+    hsl: `hsl(${m[1].trim()}, ${m[2].trim()}, ${m[3].trim()})`,
+    alpha: parseFloat(m[4]),
+  };
 }
 
 export default function AuroraBackground({
@@ -58,6 +51,9 @@ export default function AuroraBackground({
   children?: ReactNode;
 }) {
   const { width: w, height: h } = useWindowDimensions();
+  // 每个实例一套唯一 gradient id（登录页 + 聊天背景可能同时挂载，避免 url(#id)
+  // 跨 Svg 撞车）。冒号在 url() 片段里不合法，去掉。
+  const gid = useId().replace(/:/g, "");
   return (
     <View style={[StyleSheet.absoluteFill, styles.isolate]} pointerEvents="none">
       <Image
@@ -65,12 +61,38 @@ export default function AuroraBackground({
         style={[StyleSheet.absoluteFill, styles.baseImage]}
         resizeMode="cover"
       />
-      {/* 静态 Skia 画布:所有色斑画一次,无 Blur / 无 mixBlend / 无动画。 */}
-      <Canvas style={StyleSheet.absoluteFill}>
+      {/* 静态色斑：react-native-svg 画一次，无 Blur / 无 mixBlend / 无动画。 */}
+      <Svg style={StyleSheet.absoluteFill} width={w} height={h}>
+        <Defs>
+          {SPOTS.map((spot, i) => {
+            const { hsl, alpha } = splitHsla(spot.color);
+            return (
+              <RadialGradient
+                key={i}
+                id={`${gid}-spot-${i}`}
+                cx={spot.cx * w}
+                cy={spot.cy * h}
+                rx={spot.rx * w}
+                ry={spot.ry * h}
+                gradientUnits="userSpaceOnUse"
+              >
+                <Stop offset="0" stopColor={hsl} stopOpacity={alpha} />
+                <Stop offset="0.6" stopColor={hsl} stopOpacity={0} />
+              </RadialGradient>
+            );
+          })}
+        </Defs>
         {SPOTS.map((spot, i) => (
-          <SkiaSpot key={i} spot={spot} w={w} h={h} />
+          <Ellipse
+            key={i}
+            cx={spot.cx * w}
+            cy={spot.cy * h}
+            rx={spot.rx * w}
+            ry={spot.ry * h}
+            fill={`url(#${gid}-spot-${i})`}
+          />
         ))}
-      </Canvas>
+      </Svg>
       {children}
       <View style={[StyleSheet.absoluteFill, { backgroundColor: `rgba(255,255,255,${veilOpacity})` }]} />
     </View>

@@ -16,6 +16,7 @@ import { AlertCircle, Check, ChevronDown, ChevronUp, Clock, Loader2 } from "luci
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import Animated, {
+  cancelAnimation,
   Easing,
   useAnimatedStyle,
   useSharedValue,
@@ -32,6 +33,7 @@ import {
 
 import MarkdownText from "./MarkdownText";
 import { resolveToolPresentation } from "./tool-presentation";
+import { usePageActive } from "../app/KeepAlivePage";
 
 const FG = "29,33,48";
 /** web running StatusDot 的品红 hsl(304 75% 50%) ≈ rgb(199,32,199)。 */
@@ -44,9 +46,15 @@ function easeNext() {
 /** Loader2 旋转（web animate-spin 的 RN 对应物）。 */
 function Spin({ size, color }: { size: number; color: string }) {
   const r = useSharedValue(0);
+  const active = usePageActive();
   useEffect(() => {
+    if (!active) {
+      cancelAnimation(r);
+      return;
+    }
     r.value = withRepeat(withTiming(360, { duration: 800, easing: Easing.linear }), -1, false);
-  }, [r]);
+    return () => cancelAnimation(r);
+  }, [r, active]);
   const st = useAnimatedStyle(() => ({ transform: [{ rotate: `${r.value}deg` }] }));
   return (
     <Animated.View style={st}>

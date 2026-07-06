@@ -1,12 +1,10 @@
 /**
- * Boot 态两屏 —— dev `proactive-ai-frontend/src/App.tsx` 顶部 Spinner /
- * BootstrapError 的 RN 对应物（authLoading 与 settings bootstrap 共用）。
+ * Boot 态共享件 —— dev `proactive-ai-frontend/src/App.tsx` 顶部 boot 背景 +
+ * BootstrapError 的 RN 对应物。
  *
- * dev Spinner = `animate-bg-flow opacity-60` 流动渐变 + `bg-white/20` +
- * 32px 转环（border-2 fg/15 + border-t-primary，animate-spin 1s linear）。
- * native-power-save（iOS 恒开）把 bg-flow 的 animation 关掉 → 渐变是**静止**的
- * （index.css:281），转环 animate-spin 不在关停清单里 → 照转。RN 按此渲染：
- * 静态 LinearGradient + 白罩 + reanimated 转环。
+ * - FlowBackdrop：静止流动渐变 + 白罩，BootstrapError 与 OnboardingFlow 共用背景层。
+ *   （原冷启 Spinner 已被 SplashScreen 取代，转环那块删除。）
+ * - BootstrapError：settings 首拉重试后仍失败 → 原地 Retry 屏。
  *
  * 渐变静止取景换算：CSS background-size 400% + position 0% 0% 意味着屏幕只露出
  * 135deg 渐变头部 0%→25% 段；落在该段的停点 = 0%: hsl(220 30% 94%)、15%:
@@ -15,22 +13,11 @@
  */
 import { StyleSheet, Text, View, Pressable } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
-import { useEffect } from "react";
-import Animated, {
-  Easing,
-  cancelAnimation,
-  useAnimatedStyle,
-  useSharedValue,
-  withRepeat,
-  withTiming,
-} from "react-native-reanimated";
 
 /** token --background: 220 30% 96%（dev body 底色，App.tsx styles.safe 同源）。 */
 const BG = "#f2f4f8";
 const FG = "230, 25%, 15%";
 const fg = (a?: number) => (a === undefined ? `hsl(${FG})` : `hsla(${FG}, ${a})`);
-/** token --primary: 292 78% 63%。 */
-const PRIMARY = "hsl(292, 78%, 63%)";
 
 /** dev Spinner 背景层（BootScreen / BootstrapError / OnboardingFlow 共用）。
  *  白罩浓度：dev Spinner=white/20，onboarding 壳=white/30。 */
@@ -49,27 +36,6 @@ export function FlowBackdrop({ veilOpacity = 0.2 }: { veilOpacity?: number }) {
         style={[StyleSheet.absoluteFill, { backgroundColor: `rgba(255,255,255,${veilOpacity})` }]}
       />
     </>
-  );
-}
-
-/** dev Spinner 转环（h-8 w-8 border-2 fg/15 border-t-primary animate-spin=1s linear）。 */
-function SpinRing() {
-  const r = useSharedValue(0);
-  useEffect(() => {
-    r.value = withRepeat(withTiming(360, { duration: 1000, easing: Easing.linear }), -1, false);
-    return () => cancelAnimation(r);
-  }, [r]);
-  const style = useAnimatedStyle(() => ({ transform: [{ rotate: `${r.value}deg` }] }));
-  return <Animated.View style={[styles.ring, style]} />;
-}
-
-/** dev App.tsx Spinner：authLoading / settingsLoading 两处 boot 等待共用。 */
-export default function BootScreen() {
-  return (
-    <View style={styles.root}>
-      <FlowBackdrop />
-      <SpinRing />
-    </View>
   );
 }
 
@@ -107,14 +73,6 @@ const styles = StyleSheet.create({
   root: { flex: 1, alignItems: "center", justifyContent: "center", overflow: "hidden" },
   base: { backgroundColor: BG },
   flow: { opacity: 0.6 },
-  ring: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    borderWidth: 2,
-    borderColor: fg(0.15),
-    borderTopColor: PRIMARY,
-  },
   errorCard: {
     width: "100%",
     maxWidth: 384, // dev max-w-sm

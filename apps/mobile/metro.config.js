@@ -12,6 +12,20 @@ const config = withNativeWind(getDefaultConfig(__dirname), {
   input: "./global.css",
 });
 
+// inlineRequires：把每个模块的求值推迟到「首次真正 import 时」，而不是启动时把整个
+// 模块图（7 屏 + lucide barrel + markdown/skia 等）全 eval 一遍——冷启动 JS 时间的最大杠杆。
+// 只翻开 inlineRequires，其余 transform 选项（含 experimentalImportSupport）沿用 Expo 默认
+// ——不硬 override 整个 getTransformOptions，避免吞掉 Expo 自己设的默认。
+// 改后必须 `npx expo start -c` 清缓存重启（陈旧 transform 缓存是已知坑）。
+const baseGetTransformOptions = config.transformer.getTransformOptions;
+config.transformer.getTransformOptions = async (...args) => {
+  const base = baseGetTransformOptions ? await baseGetTransformOptions(...args) : {};
+  return {
+    ...base,
+    transform: { ...(base.transform ?? {}), inlineRequires: true },
+  };
+};
+
 // 单一 react-native 守卫。iOS Pods 按嵌套的 apps/mobile/node_modules/react-native
 // 编译（0.85.3 = 本 app 钉死的版本）；Expo SDK 传递依赖会在 repo 根另拉一份
 // react-native（0.86.0）进 JS bundle → 运行时报 version mismatch（JS 0.86.0 vs

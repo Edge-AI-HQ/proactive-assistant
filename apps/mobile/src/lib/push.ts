@@ -85,6 +85,15 @@ export async function ensurePushRegistration(ownerUserId: string): Promise<void>
 }
 
 /**
+ * 登出复位注册闸。同一 JS 进程里换账号后（RN 无 reload）需重新注册 APNs
+ * token——新账号是不同 device owner，latch 不复位会导致「换账号收不到通知」。
+ * App.tsx 经 registerSignOutCleanup 挂载。
+ */
+export function resetPushRegistration(): void {
+  registered = false;
+}
+
+/**
  * 弹 OS 权限询问并返回结果态（granted 顺手注册 token）。iOS 每次安装只真弹
  * 一次——denied / granted 后是返回现状的 no-op。ownerUserId 为 null 时只询问
  * 不注册（实际消费方都在登录树内）。失败按 dev usePushNotifications 语义

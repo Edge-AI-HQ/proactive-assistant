@@ -17,6 +17,8 @@ import {
 } from "@pin-ai/core";
 
 import { getAmbientTimelineStore } from "../ambient/timeline";
+// __HEAT_PROBE__ 临时发热探针(排查完删)。
+import { probeCount } from "../lib/heat-probe";
 
 export interface UseAmbientTimelineResult {
   events: AmbientTimelineEvent[];
@@ -34,7 +36,10 @@ export interface UseAmbientTimelineResult {
   dismiss: (id: string) => Promise<void>;
 }
 
-export function useAmbientTimeline(localDate = todayLocalDate()): UseAmbientTimelineResult {
+export function useAmbientTimeline(
+  localDate = todayLocalDate(),
+  active = true,
+): UseAmbientTimelineResult {
   const store = useMemo(() => getAmbientTimelineStore(), []);
   const [events, setEvents] = useState<AmbientTimelineEvent[]>([]);
   const [pendingTranscriptWindows, setPendingTranscriptWindows] = useState<AmbientCandidateWindow[]>([]);
@@ -88,12 +93,18 @@ export function useAmbientTimeline(localDate = todayLocalDate()): UseAmbientTime
   );
 
   useEffect(() => {
-    setLoading(true);
+    // 初次 load 与可见性解耦：总跑一次让 loading 收敛 + 数据就绪。否则页面以隐藏态
+    // 挂载（keep-alive，active=false）时 load() 从不跑、loading 永远 true，首次切到
+    // Ambient 会卡 spinner。切回不再 setLoading(true)（load 的 finally 收敛）免闪。
     void load();
-    // store 随采集持续写入 → 5s 轮询拾取新数据（对齐 dev）。
-    const interval = setInterval(() => void load(), 5_000);
+    // 5s 轮询才按可见性 gate（省电/减热，WS8）：隐藏时停、保留 events → 切回即时显示。
+    if (!active) return;
+    const interval = setInterval(() => {
+      probeCount("ambient.timelinePoll"); // __HEAT_PROBE__
+      void load();
+    }, 5_000);
     return () => clearInterval(interval);
-  }, [load]);
+  }, [load, active]);
 
   const narrativeSummary = useMemo(() => buildAmbientNarrativeSummary(events), [events]);
 

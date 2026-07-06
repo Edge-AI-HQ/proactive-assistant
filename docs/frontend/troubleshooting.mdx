@@ -1,0 +1,23 @@
+---
+title: "前端踩坑记录（Troubleshooting）"
+description: "前端 / RN 开发按时间倒序记录的踩坑：现象 / 根因 / 正解 / 怎么避免。由 A-Error skill 维护，遇到报错先搜这里。"
+---
+
+# 前端踩坑记录
+
+> 按**时间倒序**（最新在最上）。每条记 **现象 / 根因 / 正解 / 怎么避免**，遇到报错先在本页 `Cmd+F` 搜关键词。
+> 由 `A-Error` skill 追加，也可手动加。相关：个人本机环境速查 = 根目录 `log.md`（gitignored）；AI 跨会话记忆 = `.claude/…/memory/`。本页专收团队该知道的前端 / RN 踩坑。
+
+<!-- A-ERROR:INSERT-BELOW —— 新条目插到这行正下方，保持本行不动 -->
+
+## 2026-07-06 · RN Pressable 的 style 整段不渲染 → 视觉样式放内层 View
+
+**现象**：给 `<Pressable style={...}>` 设的圆角 / 背景 / padding 在真机上整体不生效，像根本没写；`npm run type-check` 过、Metro 也打包成功，所以很容易误判成"没改到代码"。
+
+**根因**：本项目这套 RN 用法下，`Pressable` 的 `style` prop 不落到可视层（尤其把 Pressable 直接当 flex row 容器、里面套一排子元素时），外层样式被吞掉。
+
+**正解**：让 `Pressable` 只当"可点区域"，把视觉样式（圆角 / 背景 / border / padding）搬到它**内层包一个 `<View style={...}>`** 上，Pressable 自身不带视觉样式。
+
+**怎么避免**：RN 里 `Pressable` / `TouchableOpacity` 只负责手势，视觉一律交给内层 `View`。看到"样式像没生效"先查是不是把样式设在了 Pressable 上，别急着改数值。
+
+**相关**：`apps/mobile` RN 迁移；记忆 `rn-dev-iteration-flow`；`A-RN-frontend` skill `references/rn-pitfalls.md` §④。

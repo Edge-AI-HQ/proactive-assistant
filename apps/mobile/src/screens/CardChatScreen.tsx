@@ -24,6 +24,7 @@ import { useTranslation } from "react-i18next";
 import { GestureDetector } from "react-native-gesture-handler";
 import Animated, {
   Easing,
+  runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
@@ -105,6 +106,10 @@ export default function CardChatScreen({
   const y = useSharedValue(height); // 0 = 全开，height = 收起在屏外。
   const open = target !== null;
   const [detailOpen, setDetailOpen] = useState(false);
+  // 内容挂载门（WS8 泄漏修复）：card chat 关闭后,内层 ChatScreen（带 conversation runtime
+  // + browser/conversation SSE）不能永久常驻——否则每开过一次 card chat 就留一个僵尸聊天
+  // 在后台连着 SSE。lastTarget 只为退场动画多渲一帧,下沉动画播完就卸载内容(SSE 随之断开)。
+  const [contentShown, setContentShown] = useState(false);
 
   // 锁存最后一次 target：target 清空后退场动画还要再渲染一帧，否则卡片内容会闪空
   // （与 web CardChatOverlay 的 lastTarget 同构）。
@@ -121,14 +126,26 @@ export default function CardChatScreen({
   );
 
   useEffect(() => {
-    // overshootClamping：欠阻尼过冲会让 sheet 冲过屏顶再落回（弹跳感）。
-    y.value = open
-      ? withSpring(0, { stiffness: 320, damping: 32, mass: 0.9, overshootClamping: true })
-      : withTiming(height, { duration: 500, easing: Easing.bezier(0.32, 0.72, 0, 1) });
+    if (open) {
+      setContentShown(true);
+      // overshootClamping：欠阻尼过冲会让 sheet 冲过屏顶再落回（弹跳感）。
+      y.value = withSpring(0, { stiffness: 320, damping: 32, mass: 0.9, overshootClamping: true });
+    } else {
+      // 下沉动画播完（finished）才卸载内层 ChatScreen → 退场动画完整,且 conversation/
+      // browser SSE 随卸载断开,不再留僵尸连接。
+      y.value = withTiming(
+        height,
+        { duration: 500, easing: Easing.bezier(0.32, 0.72, 0, 1) },
+        (finished) => {
+          if (finished) runOnJS(setContentShown)(false);
+        },
+      );
+    }
   }, [open, height, y]);
 
-  // 退出手势：任意处右滑 → 跟手下沉（main chat / card chat 统一，见 useSinkDismiss）。
-  const sink = useSinkDismissGesture(y, height, width, onClose);
+  // 退出手势：左缘窄条右滑 → 跟手下沉退出（dev ChatSheetOverlay 左缘模型）。
+  // 只在最左 24px 起拖 → 不和消息列表竖滚打架 = 可靠触发（和 ChatSheet 同构）。
+  const edgeSink = useSinkDismissGesture(y, height, width, onClose, { activateX: 10, failY: 12 });
   const style = useAnimatedStyle(() => ({ transform: [{ translateY: y.value }] }));
 
   return (
@@ -139,42 +156,44 @@ export default function CardChatScreen({
     >
       {/* 不透明底 + aurora：sheet 下沉时整体一起走、不透出下层（web 同构）。 */}
       <AuroraBackground />
-      {card ? (
+      {card && contentShown ? (
         <>
-          {/* 整张内容包进手势：任意处右滑都能下沉退出（CardDetailSheet 是独立浮层，
-              不进手势区）。 */}
-          <GestureDetector gesture={sink}>
-            <View style={styles.content}>
-              {/* header：← + 卡片标题（对齐 web ConversationView backIcon="left"，
-                  无右侧按钮）；paddingTop 用 insets.top 避刘海。 */}
-              <View style={[styles.header, { paddingTop: 12 + insets.top }]}>
-                <Pressable
-                  onPress={onClose}
-                  hitSlop={8}
-                  style={styles.backBtn}
-                  accessibilityRole="button"
-                  accessibilityLabel={t("header.back")}
-                >
-                  <ArrowLeft size={20} strokeWidth={1.5} color={`rgba(${FG},0.65)`} />
-                </Pressable>
-                <Text style={styles.title} numberOfLines={1}>
-                  {card.title}
-                </Text>
-              </View>
-
-              <CardContextHeaderSlot card={card} onOpen={() => setDetailOpen(true)} />
-
-              <ChatScreen
-                kind="card"
-                cardId={card.id}
-                bootstrap={shown?.bootstrap}
-                cardContext={cardContext}
-                card={card}
-                onCardClose={onClose}
-                bottomInset={insets.bottom}
-                open={open}
-              />
+          <View style={styles.content}>
+            {/* header：← + 卡片标题（对齐 web ConversationView backIcon="left"，
+                无右侧按钮）；paddingTop 用 insets.top 避刘海。 */}
+            <View style={[styles.header, { paddingTop: 12 + insets.top }]}>
+              <Pressable
+                onPress={onClose}
+                hitSlop={8}
+                style={styles.backBtn}
+                accessibilityRole="button"
+                accessibilityLabel={t("header.back")}
+              >
+                <ArrowLeft size={20} strokeWidth={1.5} color={`rgba(${FG},0.65)`} />
+              </Pressable>
+              <Text style={styles.title} numberOfLines={1}>
+                {card.title}
+              </Text>
             </View>
+
+            <CardContextHeaderSlot card={card} onOpen={() => setDetailOpen(true)} />
+
+            <ChatScreen
+              kind="card"
+              cardId={card.id}
+              bootstrap={shown?.bootstrap}
+              cardContext={cardContext}
+              card={card}
+              onCardClose={onClose}
+              bottomInset={insets.bottom}
+              open={open}
+            />
+          </View>
+
+          {/* 左缘退出条（dev 模型）：盖在内容最上、CardDetailSheet 之下（详情开时详情
+              在更上层、边条被盖住不误触）；纯 tap 不激活 → 落到下层按钮 / 列表。 */}
+          <GestureDetector gesture={edgeSink}>
+            <View style={styles.edgeZone} accessibilityElementsHidden />
           </GestureDetector>
 
           <CardDetailSheet
@@ -228,4 +247,6 @@ const styles = StyleSheet.create({
   backBtn: { marginLeft: -4, padding: 8, borderRadius: 999 },
   // web h2 text-display text-body(15) text-foreground + pr-12，截断避开右上浮动菜单。
   title: { flex: 1, paddingRight: 48, fontSize: 15, fontWeight: "600", color: "#1a1a1a" },
+  // 左缘退出条（dev w-6=24px）：绝对定位、全高、盖在内容最上层。
+  edgeZone: { position: "absolute", left: 0, top: 0, bottom: 0, width: 24 },
 });

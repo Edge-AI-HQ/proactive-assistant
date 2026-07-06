@@ -43,7 +43,8 @@ export interface UseBrowserSessionResult {
 }
 
 const HEARTBEAT_INTERVAL_MS = 25_000;
-const RECONNECT_BACKOFF_MS = 1500;
+const RECONNECT_BACKOFF_MIN_MS = 1500;
+const RECONNECT_BACKOFF_MAX_MS = 30_000;
 
 /** SSE 行缓冲解析(hook plumbing):切出整行 `data: ` envelope,残行回传下次拼接。 */
 function parseSSEBuffer(
@@ -89,6 +90,7 @@ export function useBrowserSession(sessionKey: string): UseBrowserSessionResult {
     };
 
     const connect = async () => {
+      let backoff = RECONNECT_BACKOFF_MIN_MS;
       while (!cancelled) {
         const controller = new AbortController();
         activeController = controller;
@@ -106,6 +108,8 @@ export function useBrowserSession(sessionKey: string): UseBrowserSessionResult {
           while (!cancelled) {
             const { done, value } = await reader.read();
             if (done) break;
+            // 收到任何数据即证明连接可用 → 退避重置回 min（防「连上即断」的抖动被指数放大）。
+            backoff = RECONNECT_BACKOFF_MIN_MS;
             buffer += decoder.decode(value, { stream: true });
             buffer = parseSSEBuffer(buffer, handle);
           }
@@ -114,7 +118,9 @@ export function useBrowserSession(sessionKey: string): UseBrowserSessionResult {
           console.warn("[useBrowserSession] SSE dropped, reconnecting:", err);
         }
         if (cancelled) return;
-        await new Promise((r) => setTimeout(r, RECONNECT_BACKOFF_MS));
+        // 指数退避（1.5s → 3s → … → 30s 封顶）：持续失败时不再每 1.5s 硬重连打耗电。
+        await new Promise((r) => setTimeout(r, backoff));
+        backoff = Math.min(backoff * 2, RECONNECT_BACKOFF_MAX_MS);
       }
     };
     void connect();

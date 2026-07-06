@@ -9,6 +9,7 @@ import { useTranslation } from "react-i18next";
 import { ChevronUp } from "lucide-react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
+  cancelAnimation,
   Easing,
   interpolate,
   runOnJS,
@@ -18,15 +19,27 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 
+import { usePageActive } from "./KeepAlivePage";
+import { useFullCover } from "../../lib/full-cover";
+
 function FloatingChevron() {
   const t = useSharedValue(0);
+  // NOW 页不可见（切走 / 被 chat 盖住）时停帧,不空转 UI 线程（WS6）。
+  const active = usePageActive();
+  const covered = useFullCover();
+  const running = active && !covered;
   useEffect(() => {
+    if (!running) {
+      cancelAnimation(t);
+      return;
+    }
     t.value = withRepeat(
       withTiming(1, { duration: 1100, easing: Easing.inOut(Easing.ease) }),
       -1,
       true,
     );
-  }, [t]);
+    return () => cancelAnimation(t);
+  }, [t, running]);
   const style = useAnimatedStyle(() => ({
     transform: [{ translateY: interpolate(t.value, [0, 1], [0, -4]) }],
     opacity: interpolate(t.value, [0, 1], [0.45, 0.75]),

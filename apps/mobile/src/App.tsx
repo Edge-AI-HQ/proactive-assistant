@@ -17,9 +17,10 @@ import "../src/lib/transport-bootstrap";
 // 必须先于任何用 t() 的组件渲染。首屏跟设备语言，登录后 useUiLanguageSync 覆盖。
 import "./i18n";
 
-import { useEffect } from "react";
-import { StyleSheet } from "react-native";
+import { useEffect, useState, type ReactNode } from "react";
+import { InteractionManager, StyleSheet, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { KeyboardProvider } from "react-native-keyboard-controller";
 import { useFonts, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold } from "@expo-google-fonts/inter";
 import { Geist_400Regular, Geist_500Medium, Geist_600SemiBold, Geist_700Bold } from "@expo-google-fonts/geist";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
@@ -39,9 +40,9 @@ import { resumeAmbientIfEnabled } from "./ambient/runtime";
 import { acquireExternalMic } from "./ambient/external-mic";
 import AppShell from "./components/app/AppShell";
 import OnboardingFlow from "./components/onboarding/OnboardingFlow";
-import VideoBackdrop from "./ui/VideoBackdrop";
-import { ensurePushRegistration } from "./lib/push";
-import BootScreen, { BootstrapError } from "./screens/BootScreen";
+import { ensurePushRegistration, resetPushRegistration } from "./lib/push";
+import { BootstrapError } from "./screens/BootScreen";
+import SplashScreen from "./screens/SplashScreen";
 import LoginScreen from "./screens/LoginScreen";
 import { VoiceProvider } from "./voice";
 
@@ -50,6 +51,8 @@ import { VoiceProvider } from "./voice";
 // registerFeedbackOutbox 已接 sync outbox；registerLocalThreadStore 不注册——
 // RN 在 ChatScreen/CardDetailSheet 显式传 readLocalHistory/notifyThreadActivity。
 registerSignOutCleanup(clearDeviceCredentials);
+// 换账号需重新注册 APNs token（不同 device owner）；RN 无 reload，复位 push latch。
+registerSignOutCleanup(resetPushRegistration);
 registerFeedbackOutbox((body, key) => void enqueueFeedback(body, key));
 // AppState → focusManager（TanStack RN 配方）：回前台等价 web 的窗口聚焦刷新。
 setupAppFocusManager();
@@ -87,74 +90,106 @@ function Root() {
 
   useEffect(() => {
     if (!user?.id) return;
-    startSync(user.id);
-    // 登录后注册/刷新本机 device 行（dev App.tsx ensureDevice({forceRefresh:true})
-    // 同语义）；失败只 warn——推送注册链下次启动会再走 ensureDevice。
-    void ensureDevice(user.id, { forceRefresh: true }).catch((err) => {
-      console.warn("[devices] registration failed after sign-in", err);
-    });
-    // 静默推送注册：OS 已 granted 才上报 token；权限询问归 PreNotificationPrompt
-    // 预询流（= dev AppLayout 时序）。
-    void ensurePushRegistration(user.id);
+    const uid = user.id;
+    startSync(uid);
     // ambient：本机此前显式开过才续采（per-device opt-in 隐私不变量）。
-    void resumeAmbientIfEnabled(user.id);
+    void resumeAmbientIfEnabled(uid);
+    // device 注册 + 静默推送注册都是幂等、fire-and-forget 的非紧急动作——错峰到首帧
+    // 交互之后再跑,避开 AppShell 首挂载/动画帧（WS7）。语义不变、都是 best-effort。
+    const task = InteractionManager.runAfterInteractions(() => {
+      // 登录后注册/刷新本机 device 行；失败只 warn——下次启动会再走 ensureDevice。
+      void ensureDevice(uid, { forceRefresh: true }).catch((err) => {
+        console.warn("[devices] registration failed after sign-in", err);
+      });
+      // 静默推送注册：OS 已 granted 才上报 token；权限询问归 PreNotificationPrompt 预询流。
+      void ensurePushRegistration(uid);
+    });
+    return () => task.cancel();
   }, [user?.id]);
 
-  // dev App.tsx 启动链（顺序同构）：
-  if (loading) return <BootScreen />;
-  if (!user) return <LoginScreen onSignIn={signInWithGoogle} />;
-  // 进壳前 gate 首份 /settings（dev：in-flight → spinner；重试后仍 null →
-  // 可操作的 Retry 屏，绝不无限转圈）。
-  if (settingsLoading) return <BootScreen />;
-  if (settings === null) return <BootstrapError onRetry={() => void refetchSettings()} />;
+  // 开屏 splash 最短停留 gate：即使 auth/settings 秒回，也保证品牌开屏球至少露
+  // ~1.8s（用户选的「最短停一会 + 加载完为止，取长的」）。加载更慢则由下面的
+  // loading / settingsLoading 继续按住 splash——两者取长。
+  const [minSplashElapsed, setMinSplashElapsed] = useState(false);
+  // splash 盖层淡出结束后置 true → 卸载盖层。
+  const [splashGone, setSplashGone] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setMinSplashElapsed(true), 1800);
+    return () => clearTimeout(t);
+  }, []);
 
-  // dev App.tsx 同位：首启（onboardingCompletedAt 未盖章）→ 三步 onboarding，
-  // Done 时盖章 + 把检测到的设备语言写成正式生成语言。patch 必须走本实例的
-  // useUserSettings（同一 TQ cache，成功即触发本组件重渲切进主壳）。
-  if (!settings.onboardingCompletedAt) {
-    return (
-      <OnboardingFlow
-        userId={user.id}
-        onComplete={async () => {
-          const next = await patchSettings({
-            onboardingCompleted: true,
-            // 新用户首启：把检测到的设备语言写成正式设置，生成语言同步对齐。
-            generationLanguage: detectDeviceLanguage(),
-          });
-          if (next === null) {
-            throw new Error("Couldn't save your onboarding progress. Check your connection and try again.");
-          }
-        }}
-      />
-    );
+  // dev App.tsx 启动链（顺序同构）：解析要展示的真实内容。booting 期间（auth /
+  // settings 未就绪）为 null——此刻只有 splash 盖层在场、底下无内容。关键：一拿到
+  // 内容就先挂上（哪怕最短停留没到），让主壳在 splash 底下**提前预热**，淡出时露出
+  // 的是已就绪的界面 = 丝滑（对齐抖音 / IG / 微信的 cross-fade，取代原先硬切）。
+  let content: ReactNode = null;
+  if (!loading) {
+    if (!user) {
+      content = <LoginScreen onSignIn={signInWithGoogle} />;
+    } else if (!settingsLoading) {
+      // 进壳前 gate 首份 /settings：拿到才解析下游（null → 可操作 Retry 屏，绝不无限
+      // 转圈；未 onboarding → 三步流；就绪 → 主壳）。
+      if (settings === null) {
+        content = <BootstrapError onRetry={() => void refetchSettings()} />;
+      } else if (!settings.onboardingCompletedAt) {
+        // dev App.tsx 同位：首启盖章 onboarding + 把设备语言写成正式生成语言。patch
+        // 走本实例 useUserSettings（同一 TQ cache，成功即重渲切进主壳）。
+        content = (
+          <OnboardingFlow
+            userId={user.id}
+            onComplete={async () => {
+              const next = await patchSettings({
+                onboardingCompleted: true,
+                generationLanguage: detectDeviceLanguage(),
+              });
+              if (next === null) {
+                throw new Error("Couldn't save your onboarding progress. Check your connection and try again.");
+              }
+            }}
+          />
+        );
+      } else {
+        // 主壳背景 VideoBackdrop 挂在 MenuDrawer 玻璃卡内；chat / card chat 各自盖
+        // 自己的 AuroraBackground、不吃这层。
+        content = (
+          <VoiceProvider transcriptionLanguage={settings.generationLanguage}>
+            <SafeAreaView style={styles.safeTransparent} edges={["top", "bottom"]}>
+              <AppShell user={user} onSignOut={signOut} />
+            </SafeAreaView>
+          </VoiceProvider>
+        );
+      }
+    }
   }
 
+  // boot 完成 = 内容已就绪 且 最短停留到 → splash 盖层淡出（露出已预热的内容）。
+  const bootComplete = content !== null && minSplashElapsed;
+
   return (
-    <>
-      {/* 主壳背景：web VideoBackdrop（constellation-bg.mp4 缓动视频，white/70
-          白罩）。chat / card chat 各自盖自己的 AuroraBackground，不吃这层。
-          全出血（SafeAreaView 之外），内容层再走安全区。 */}
-      <VideoBackdrop />
-      <VoiceProvider transcriptionLanguage={settings.generationLanguage}>
-        <SafeAreaView style={styles.safeTransparent} edges={["top", "bottom"]}>
-          <AppShell user={user} onSignOut={signOut} />
-        </SafeAreaView>
-      </VoiceProvider>
-    </>
+    <View style={styles.safeTransparent}>
+      {content}
+      {!splashGone ? (
+        <SplashScreen visible={!bootComplete} onHidden={() => setSplashGone(true)} />
+      ) : null}
+    </View>
   );
 }
 
 export default function App() {
   return (
     <GestureHandlerRootView style={styles.safe}>
-      {/* Sync-A：persister 恢复白名单缓存（settings/cards），冷启先渲染上次
-          数据、后台 refetch——见 lib/query-client.ts。 */}
-      <PersistQueryClientProvider client={queryClient} persistOptions={persistOptions}>
-        <SafeAreaProvider>
-          <StatusBar style="dark" />
-          <Root />
-        </SafeAreaProvider>
-      </PersistQueryClientProvider>
+      {/* KeyboardProvider：全树单一「正确测量」的键盘值源（切后台自动重置）——取代 RN 内建
+          KeyboardAvoidingView 的安全区双算/不重置/卡死。挂最外层,做 chat KAV + 库 hook 的地基。 */}
+      <KeyboardProvider>
+        {/* Sync-A：persister 恢复白名单缓存（settings/cards），冷启先渲染上次
+            数据、后台 refetch——见 lib/query-client.ts。 */}
+        <PersistQueryClientProvider client={queryClient} persistOptions={persistOptions}>
+          <SafeAreaProvider>
+            <StatusBar style="dark" />
+            <Root />
+          </SafeAreaProvider>
+        </PersistQueryClientProvider>
+      </KeyboardProvider>
     </GestureHandlerRootView>
   );
 }

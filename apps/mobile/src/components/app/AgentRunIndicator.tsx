@@ -27,6 +27,8 @@ import { useActiveAgentRuns } from "@pin-ai/state";
 import type { ActiveAgentRun, AgentRunKind, AgentRunStatus } from "@pin-ai/core";
 
 import i18n from "../../i18n";
+// __HEAT_PROBE__ 临时发热探针(排查完删)。
+import { probeCount } from "../../lib/heat-probe";
 import { GlassCard } from "../../ui/GlassCard";
 
 const FG = "29,33,48"; // --foreground ≈ rgb(29,33,48)
@@ -93,7 +95,10 @@ export default function AgentRunIndicator() {
   // elapsed 每秒走字（web 同注释：一秒一 setState，便宜；无可见 run 时不跑）。
   useEffect(() => {
     if (runs.length === 0) return;
-    const id = setInterval(() => setNow(Date.now()), 1000);
+    const id = setInterval(() => {
+      probeCount("agentRun.elapsedTick"); // __HEAT_PROBE__
+      setNow(Date.now());
+    }, 1000);
     return () => clearInterval(id);
   }, [runs.length]);
 

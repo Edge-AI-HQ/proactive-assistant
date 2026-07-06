@@ -2,13 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Keyboard,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from "react-native";
+import { useKeyboardState, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
+import Animated, { interpolate, useAnimatedStyle } from "react-native-reanimated";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import { Check, ChevronDown, Mic, Send, Square, X } from "lucide-react-native";
@@ -45,23 +46,16 @@ export default function ChatComposer({
   const { t } = useTranslation(["chat", "common"]);
   const { startCapture, stopCapture, isCapturing, captureStatus } = useVoiceInput();
   const [sending, setSending] = useState(false);
-  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  // 键盘可见性走 keyboard-controller 的单一真源（切后台不会漏配对的 hide 事件而卡在 true——
+  // 那是旧手写 Keyboard.addListener 的坑之一）。仅驱动收键盘 chevron 的显隐（离散 OK）。
+  const keyboardVisible = useKeyboardState((s) => s.isVisible);
+  // 键盘动画进度共享值（UI 线程，0=关 1=开）：驱动 composer 底 padding 平滑收放。
+  const { progress } = useReanimatedKeyboardAnimation();
   const [recording, setRecording] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
   const recordStartedAtRef = useRef(0);
   const draftBeforeRecordRef = useRef("");
-
-  useEffect(() => {
-    const showName = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
-    const hideName = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
-    const show = Keyboard.addListener(showName, () => setKeyboardVisible(true));
-    const hide = Keyboard.addListener(hideName, () => setKeyboardVisible(false));
-    return () => {
-      show.remove();
-      hide.remove();
-    };
-  }, []);
 
   useEffect(() => {
     if (!recording) return;
@@ -116,11 +110,18 @@ export default function ChatComposer({
 
   const hasText = value.trim().length > 0;
   const canSend = hasText && !disabled && !sending;
-  const bottomPadding = Math.max(bottomInset, 24);
+  // 底 padding 随键盘进度动画（progress 0→1），和 KAV 的抬升同帧收放：键盘开→缩到 12(composer
+  // 已被 KAV 顶到键盘上沿,只留一点呼吸);关→垫足底部安全区(home indicator)。用动画而非 keyboardVisible
+  // 布尔离散切:布尔在「开始开」就翻 true、却在「关完」才翻 false(不对称),离散切会和抬升错拍跳动。
+  const closedPad = Math.max(bottomInset, 24);
+  const rootPadStyle = useAnimatedStyle(
+    () => ({ paddingBottom: interpolate(progress.value, [0, 1], [closedPad, 12]) }),
+    [closedPad],
+  );
 
   if (recording) {
     return (
-      <View style={[styles.root, { paddingBottom: bottomPadding }]}>
+      <Animated.View style={[styles.root, rootPadStyle]}>
         <View style={styles.recordingBar}>
           <BlurView intensity={30} tint="light" style={[StyleSheet.absoluteFill, styles.rounded]} />
           <View style={[StyleSheet.absoluteFill, styles.glassTint, styles.rounded]} />
@@ -151,12 +152,12 @@ export default function ChatComposer({
             <Check size={18} color="#fff" strokeWidth={2.3} />
           </Pressable>
         </View>
-      </View>
+      </Animated.View>
     );
   }
 
   return (
-    <View style={[styles.root, { paddingBottom: bottomPadding }]}>
+    <Animated.View style={[styles.root, rootPadStyle]}>
       <View style={styles.inputBar}>
         <BlurView intensity={34} tint="light" style={[StyleSheet.absoluteFill, styles.rounded]} />
         <View style={[StyleSheet.absoluteFill, styles.glassTint, styles.rounded]} />
@@ -237,7 +238,7 @@ export default function ChatComposer({
         )}
       </View>
       <PermissionModeMenu />
-    </View>
+    </Animated.View>
   );
 }
 

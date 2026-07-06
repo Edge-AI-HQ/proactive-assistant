@@ -8,8 +8,6 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode
 import {
   ActivityIndicator,
   FlatList,
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -18,6 +16,7 @@ import {
   View,
 } from "react-native";
 import type { NativeScrollEvent, NativeSyntheticEvent } from "react-native";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { Check, X } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import Animated, { FadeInDown } from "react-native-reanimated";
@@ -58,6 +57,8 @@ import {
 import { VoiceButton } from "../voice";
 
 import { notifyThreadActivity, readLocalHistory } from "../lib/sync/sync-bootstrap";
+// __HEAT_PROBE__ 临时发热探针(排查完删)。
+import { probeCount } from "../lib/heat-probe";
 import { postCardFeedback } from "../hooks/useCardActions";
 
 /** 离底多少 px 内算「贴底」（跟随态）。略松，掩盖流式贴底动画的中间帧抖动。 */
@@ -189,6 +190,9 @@ export interface ChatScreenProps {
   onCardClose?: () => void;
   /** card 满屏 sheet：底部 home-indicator 安全区，垫高 composer。 */
   bottomInset?: number;
+  /** 顶部刘海安全区：BrowserPanel 全屏 Modal 逃出 SafeAreaProvider，须由宿主显式
+   *  传入 insets.top（Modal 内 useSafeAreaInsets 读数不可靠）。 */
+  topInset?: number;
   /** 面板「打开」信号：false→true 时强制回到底部（面板常 mount 保流、不 remount，
    *  故靠此显式落底，让每次进来都停在最新一条）。 */
   open?: boolean;
@@ -298,7 +302,8 @@ function HitlApprovalCard({
   );
 }
 
-export default function ChatScreen({ kind, cardId, bootstrap, cardContext, card, onCardClose, bottomInset, open }: ChatScreenProps) {
+export default function ChatScreen({ kind, cardId, bootstrap, cardContext, card, onCardClose, bottomInset, topInset, open }: ChatScreenProps) {
+  probeCount("render.ChatScreen"); // __HEAT_PROBE__ main+card 两实例合计
   const [sessionKey, setSessionKey] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const listRef = useRef<FlatList<ConversationEntry>>(null);
@@ -337,6 +342,7 @@ export default function ChatScreen({ kind, cardId, bootstrap, cardContext, card,
       card={card}
       onCardClose={onCardClose}
       bottomInset={bottomInset}
+      topInset={topInset}
       open={open}
     />
   );
@@ -352,6 +358,7 @@ function Conversation({
   card,
   onCardClose,
   bottomInset,
+  topInset,
   open,
 }: {
   sessionKey: string;
@@ -363,6 +370,7 @@ function Conversation({
   card?: IntentCard;
   onCardClose?: () => void;
   bottomInset?: number;
+  topInset?: number;
   open?: boolean;
 }) {
   const { t } = useTranslation(["chat", "common"]);
@@ -486,6 +494,14 @@ function Conversation({
   const sendRef = useRef(sendMessage);
   sendRef.current = sendMessage;
   const onReply = useCallback((text: string) => void sendRef.current(text), []);
+  // ref-latest（同上）：给 memo(Entry) 稳定的 HITL 决策回调身份——之前 renderItem 里是
+  // inline lambda,每 render 换新身份、击穿 memo → 打字/流式每 tick 可见消息行全体重渲（P7）。
+  const decideRef = useRef(submitDecision);
+  decideRef.current = submitDecision;
+  const onDecide = useCallback(
+    (decision: "approve" | "reject", message?: string) => void decideRef.current(decision, message),
+    [],
+  );
 
   // 倒置列表（业界标准聊天做法：RN 官方文档 + react-native-gifted-chat 同款）：
   // data 反转，最新一条 = index 0 = 视觉底部，FlatList `inverted` 让其**天生停在
@@ -526,7 +542,12 @@ function Conversation({
   return (
     <KeyboardAvoidingView
       style={styles.root}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      behavior="padding"
+      // 不设 automaticOffset / keyboardVerticalOffset（默认 0 即正确）：chat sheet 满屏出血
+      // （ChatSheet/CardChatScreen 用负 inset 铺到物理屏底），KAV 底边本就在屏幕底、无安全区
+      // 偏移要补 → 抬「键盘高」把 composer 顶到键盘上沿即可。**不能用 automaticOffset**：sheet
+      // 常驻挂载 + translateY，关闭时被推到离屏，automaticOffset 会量到离屏坐标（frame.y≈屏高）
+      // 烘进近一屏的过量 padding = 缝隙/卡死复发（对抗审查 CRITICAL）。库版仍修好切后台不重置。
     >
       {connection === "reconnecting" ? (
         <Text style={styles.connection}>reconnecting…</Text>
@@ -541,7 +562,7 @@ function Conversation({
             // card chat 空状态短暂可见（永远 bootstrap）：仅留水晶球。
             // active={open}：card chat 关闭(常驻挂载、滑出屏外)时暂停视频解码省电。
             <View style={styles.emptyWrap}>
-              <AiSphere size={200} mode="idle" active={open} />
+              <AiSphere size={200} mode="idle" active={open} probeKey="card" />
             </View>
           ) : (
             // main chat landing：web MinimalistLanding 同构（球 + 问候 + 建议 chip）。
@@ -573,7 +594,7 @@ function Conversation({
                 onReply={onReply}
                 busy={busy}
                 hitlAction={item.kind === "assistant" && item.id === hitlHostId ? awaitingDecision : null}
-                onDecide={(decision, message) => void submitDecision(decision, message)}
+                onDecide={onDecide}
               />
             )}
             onScroll={onScroll}
@@ -581,6 +602,12 @@ function Conversation({
             // 倒置列表的"末端"= 最旧一条(视觉顶部)→ 滚近旧端时向旧翻页。
             onEndReached={() => void loadOlder()}
             onEndReachedThreshold={0.4}
+            // 窗口化（P7）：只渲染视口附近的消息行,长会话快滚不掉帧。inverted + reanimated
+            // 入场动画下不设 removeClippedSubviews（已知白格来源）。
+            windowSize={7}
+            maxToRenderPerBatch={6}
+            initialNumToRender={12}
+            updateCellsBatchingPeriod={50}
             // inverted 下 Footer 渲在旧端(视觉顶部)= 向旧加载指示。
             ListFooterComponent={
               loadingMore ? (
@@ -613,7 +640,7 @@ function Conversation({
             key={awaitingDecision.toolUseId}
             action={awaitingDecision}
             disabled={busy}
-            onDecide={(decision, message) => void submitDecision(decision, message)}
+            onDecide={onDecide}
           />
         </View>
       ) : null}
@@ -643,6 +670,7 @@ function Conversation({
           session={browser.session}
           reloadKey={browser.reloadKey}
           bottomInset={bottomInset}
+          topInset={topInset}
           onControlChange={browser.setControl}
           sendInput={browser.sendInput}
           onCollapse={browser.closePanel}

@@ -45,6 +45,10 @@ import {
 } from "@pin-ai/state";
 
 import { FullBleedOverlay } from "./FullBleedOverlay";
+// __HEAT_PROBE__ 临时发热探针(排查完删)。
+import { heatProbeSnapshot } from "../../lib/heat-probe";
+// __HEAT_AB__ 临时发热对照开关(定位完删)。
+import { setHeatAbFlag, useHeatAbFlags, type HeatAbFlags } from "../../lib/heat-ab";
 import SkillsPanel from "../profile/SkillsPanel";
 
 const PANEL_WIDTH = 340;
@@ -104,6 +108,103 @@ function Spin({ size, color, strokeWidth = 2 }: { size: number; color: string; s
 function SectionCard({ children }: { children: React.ReactNode }) {
   return <View style={styles.section}>{children}</View>;
 }
+
+/** __HEAT_PROBE__ 临时发热探针面板(随探针整体删)。Release 真机看不到 console,
+ *  这里把功耗状态(采集/视频/动画门控/渲染计数)开面板时 1s 轮询展示。 */
+function HeatProbeSection({ open }: { open: boolean }) {
+  const [snap, setSnap] = useState(() => heatProbeSnapshot());
+  useEffect(() => {
+    if (!open) return;
+    setSnap(heatProbeSnapshot());
+    const id = setInterval(() => setSnap(heatProbeSnapshot()), 1000);
+    return () => clearInterval(id);
+  }, [open]);
+  return (
+    <SectionCard>
+      <Text style={styles.sectionLabel}>HEAT PROBE · up {snap.uptimeSec}s</Text>
+      {snap.gauges.map(([k, v]) => (
+        <View key={k} style={probeStyles.row}>
+          <Text style={probeStyles.key}>{k}</Text>
+          <Text style={probeStyles.val} numberOfLines={1}>{v}</Text>
+        </View>
+      ))}
+      {snap.counters.map(([k, n]) => (
+        <View key={k} style={probeStyles.row}>
+          <Text style={probeStyles.key}>{k}</Text>
+          <Text style={probeStyles.val}>{n}</Text>
+        </View>
+      ))}
+      <Text style={[styles.sectionLabel, probeStyles.transHeader]}>TRANSITIONS</Text>
+      {snap.transitions.slice(0, 12).map((tr, i) => (
+        <Text key={`${tr.at}-${i}`} style={probeStyles.trans} numberOfLines={1}>
+          {new Date(tr.at).toLocaleTimeString([], { hour12: false })} {tr.key} → {tr.value}
+        </Text>
+      ))}
+    </SectionCard>
+  );
+}
+
+const probeStyles = StyleSheet.create({
+  row: { flexDirection: "row", justifyContent: "space-between", gap: 8, marginTop: 2 },
+  key: { fontSize: 11, color: ink(0.55), fontFamily: "Menlo" },
+  val: { fontSize: 11, color: ink(0.85), fontFamily: "Menlo", flexShrink: 1 },
+  transHeader: { marginTop: 8 },
+  trans: { fontSize: 10, color: ink(0.5), fontFamily: "Menlo", marginTop: 2 },
+});
+
+/** __HEAT_AB__ 临时发热对照开关面板(随探针整体删)。三个渲染变体实时切换,同一
+ *  散热基线下真机对比,定位 GPU 大头 = backdrop 视频 / sphere 混合 / sphere 遮罩。
+ *  on(amber)=当前重路径仍在跑;off(green)=换成便宜变体。翻 off 后关面板感受降温。 */
+function HeatAbSection() {
+  const flags = useHeatAbFlags();
+  const rows: Array<{ key: keyof HeatAbFlags; label: string; on: string; off: string }> = [
+    // 卡片渲染引擎:原生 vs Skia GPU,对比发热(A/B 主开关)
+    { key: "cardsSkia", label: "Cards engine", on: "SKIA", off: "native" },
+    // 背景视频(已洗清,留作对照)
+    { key: "backdropVideo", label: "Backdrop", on: "video", off: "static img" },
+    // 水晶球相关(只影响 Ask PIN AI / 卡片聊天,NOW 无效)
+    { key: "sphereBlend", label: "Sphere blend", on: "multiply", off: "off" },
+    { key: "sphereMask", label: "Sphere mask", on: "feather", off: "hard circle" },
+  ];
+  return (
+    <SectionCard>
+      <Text style={styles.sectionLabel}>HEAT A/B</Text>
+      {rows.map(({ key, label, on, off }) => {
+        const isOn = flags[key];
+        return (
+          <Pressable
+            key={key}
+            onPress={() => setHeatAbFlag(key, !isOn)}
+            accessibilityRole="switch"
+            accessibilityState={{ checked: isOn }}
+          >
+            <View style={heatAbStyles.row}>
+              <Text style={heatAbStyles.label}>{label}</Text>
+              <View style={[heatAbStyles.pill, isOn ? heatAbStyles.pillOn : heatAbStyles.pillOff]}>
+                <Text style={[heatAbStyles.pillText, isOn ? heatAbStyles.pillTextOn : heatAbStyles.pillTextOff]}>
+                  {isOn ? on : off}
+                </Text>
+              </View>
+            </View>
+          </Pressable>
+        );
+      })}
+      <Text style={heatAbStyles.hint}>Flip each off, close panel, feel heat drop → isolates the GPU hog.</Text>
+    </SectionCard>
+  );
+}
+
+const heatAbStyles = StyleSheet.create({
+  row: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8, paddingVertical: 5 },
+  label: { fontSize: 12, color: ink(0.7), fontFamily: "Inter_500Medium" },
+  pill: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3, minWidth: 84, alignItems: "center" },
+  pillOn: { backgroundColor: "#fef3c7" },
+  pillOff: { backgroundColor: "#d1fae5" },
+  pillText: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
+  pillTextOn: { color: "#b45309" },
+  pillTextOff: { color: "#047857" },
+  hint: { marginTop: 4, fontSize: 10, lineHeight: 14, color: ink(0.4), fontFamily: "Inter_400Regular" },
+});
 
 /** dev PhaseTimer：pipeline 运行时长（m s）。仅运行时显示。 */
 function PhaseTimer({ isRunning }: { isRunning: boolean }) {
@@ -445,6 +546,11 @@ export default function DebugPanel({
               </View>
             </View>
           ) : null}
+
+          {/* __HEAT_PROBE__ 临时发热探针(随探针整体删)。 */}
+          <HeatProbeSection open={open} />
+          {/* __HEAT_AB__ 临时发热对照开关(随探针整体删)。 */}
+          <HeatAbSection />
 
           <SectionCard>
             <View style={styles.sectionTitleRow}>

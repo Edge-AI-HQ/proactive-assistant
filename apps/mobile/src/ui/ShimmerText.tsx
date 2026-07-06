@@ -8,12 +8,15 @@ import { StyleSheet, Text, View, type StyleProp, type TextStyle } from "react-na
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import Animated, {
+  cancelAnimation,
   interpolate,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
   withTiming,
 } from "react-native-reanimated";
+
+import { usePageActive } from "../components/app/KeepAlivePage";
 
 /** foreground token（230 25% 15%）。 */
 const INK = (a: number) => `rgba(29, 33, 48, ${a})`;
@@ -27,10 +30,17 @@ export function ShimmerText({
 }) {
   const [width, setWidth] = useState(0);
   const t = useSharedValue(0);
+  const active = usePageActive();
 
   useEffect(() => {
+    // 页面不可见（如 chat 收起）时停帧,不再空转 UI 线程（WS6）。
+    if (!active) {
+      cancelAnimation(t);
+      return;
+    }
     t.value = withRepeat(withTiming(1, { duration: 2400 }), -1, false);
-  }, [t]);
+    return () => cancelAnimation(t);
+  }, [t, active]);
 
   const sweep = useAnimatedStyle(() => ({
     // web backgroundPosition 100%→-100%：亮带从右端扫到左端。

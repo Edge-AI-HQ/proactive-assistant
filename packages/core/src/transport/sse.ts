@@ -42,7 +42,15 @@ export async function* proxySSE<T = unknown>(
       }
     }
   } finally {
-    reader.releaseLock();
+    // 早退（消费者 break / for-await 的 .return()）时仅 releaseLock 不关底层 fetch
+    // 流，连接会悬挂到服务端超时。cancel() 主动取消流 → 立刻关连接（省电/防泄漏），
+    // 正常结束时 no-op、abort 后可能 reject 故 catch。注入的 fetch（RN expo/fetch）
+    // reader 万一无 cancel 则退回 releaseLock，零回归。
+    if (typeof reader.cancel === "function") {
+      await reader.cancel().catch(() => {});
+    } else {
+      reader.releaseLock();
+    }
   }
 }
 
@@ -95,6 +103,14 @@ export async function* proxyGetSSE<T = unknown>(
       }
     }
   } finally {
-    reader.releaseLock();
+    // 早退（消费者 break / for-await 的 .return()）时仅 releaseLock 不关底层 fetch
+    // 流，连接会悬挂到服务端超时。cancel() 主动取消流 → 立刻关连接（省电/防泄漏），
+    // 正常结束时 no-op、abort 后可能 reject 故 catch。注入的 fetch（RN expo/fetch）
+    // reader 万一无 cancel 则退回 releaseLock，零回归。
+    if (typeof reader.cancel === "function") {
+      await reader.cancel().catch(() => {});
+    } else {
+      reader.releaseLock();
+    }
   }
 }

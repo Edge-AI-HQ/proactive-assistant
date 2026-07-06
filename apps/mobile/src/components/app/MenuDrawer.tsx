@@ -1,42 +1,26 @@
 /**
- * 全局侧边抽屉（右侧滑出）—— 视觉逐字对齐 dev `SideMenu.tsx`，手势保留
- * ChatGPT 级跟手范式（MenuDrawerHost 包住整个页面栈）：
+ * 全局侧边抽屉 —— 内容推移式(Claude / ChatGPT iOS 同款,用户 2026-07-04 定):
+ * 不是「窄面板盖在静止页面上」,而是「当前 tab 整体被推开成一张圆角玻璃卡、菜单从
+ * 底下露出」。保持右侧:页面向左滑、玻璃卡在左侧露一条(PEEK),菜单在右侧。
  *
- * 视觉（dev 真源）：面板 w-56=224、fixed top-0 bottom-0 **竖直全出血**（RN 用
- * ChatSheet 同款负 inset 逃出 SafeAreaView，刘海/home-indicator 全覆盖）；
- * 蒙层 = bg-foreground/10 + backdrop-blur-sm(4px→BlurView 8)；面板 = 白渐变
- * 180°(0.85→0.95) + blur(48→BlurView 75) + 左缘 white/50 边；内容 pt-14 px-5，
- * X(20/1.5 fg60, p-1.5 圆底 press fg/8) + 条目（px-4 py-3 rounded-xl=12,
- * 激活=fg/8 药丸底+fg 全色+粗 stroke, 未激活=fg/50, 文字 14/tracking-wider）。
+ * 关键:玻璃卡 = 完整的 tab —— 内含 VideoBackdrop(星空视频背景,从 App.tsx root 搬进
+ * 来)+ 安全区内的页面。卡不透明、全出血(FullBleedOverlay 逃出根 SafeAreaView,视频
+ * 铺到刘海/home-indicator),关闭态盖住菜单、切换时整卡带背景左移。菜单层垫在卡后面
+ * (淡色主题底,当前页项加较深药丸底)。
  *
- * 手势：
- * - 关闭态：任意页面任意位置左滑跟手拉出（progress 1:1 吃手指位移）。页面内横向
- *   交互面（球面/pager/进度条）RNGH 仲裁天然优先；球面负 hitSlop 让出右缘。
- * - 打开态：整屏右滑跟手关闭（面板/蒙层皆可，可半路接住），蒙层点按也关。
- * - 松手 = 位置 + 甩动速度定归宿，velocity 无缝带入 spring（dev 同参 300/28）；
- *   跨越开/关的提交瞬间轻触觉。
- * - 单一动画驱动：手势在 UI 线程直接续 spring 并记 visualTarget；effect 只响应
- *   外部命令（汉堡/导航/蒙层点按）且目标未被手势覆盖时才起 spring。
+ * 交互:关闭态左滑推开;打开态玻璃卡左右滑跟手 / 点玻璃卡关闭;点菜单项 = 导航 + 卡
+ * 带新页滑回占满全屏(新页已由 AppShell 预挂载)。开/关跨态各一次 Haptic 震动(手势与
+ * 按钮都触发)。
  *
- * ⚠️ 本仓 NativeWind 会吞 Pressable 的 style prop——所有可按元素一律
- * children-as-function + 内层 View 承载样式（SettingScreen BackButton 同款）。
+ * 视觉:玻璃卡不缩小、只加圆角;暗罩改浅色薄玻璃(黑字变灰、彩字基本保留)。
  */
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { useEffect, useRef, type ReactNode } from "react";
+import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
-import { BlurView } from "expo-blur";
-import { LinearGradient } from "expo-linear-gradient";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import * as Haptics from "expo-haptics";
-import {
-  ListChecks,
-  Plug,
-  Radio,
-  Settings,
-  Target,
-  X,
-  Zap,
-} from "lucide-react-native";
+import { ListChecks, Plug, Radio, Settings, Target, Zap } from "lucide-react-native";
 import Animated, {
   runOnJS,
   useAnimatedStyle,
@@ -45,10 +29,11 @@ import Animated, {
 } from "react-native-reanimated";
 
 import { FullBleedOverlay } from "./FullBleedOverlay";
+import VideoBackdrop from "../../ui/VideoBackdrop";
 
 export type MenuId = "now" | "ambient" | "tasks" | "connect" | "profile" | "setting";
 
-// dev SideMenu MENU_ITEMS 同构：labelKey → common:menu.*，渲染经 t()。
+// dev SideMenu MENU_ITEMS 同构:labelKey → common:menu.*,渲染经 t()。
 const ITEMS = [
   { id: "now", labelKey: "menu.now", Icon: Zap },
   { id: "ambient", labelKey: "menu.ambient", Icon: Radio },
@@ -62,13 +47,16 @@ const ITEMS = [
 const FG = "230, 25%, 15%";
 const fg = (a?: number) => (a === undefined ? `hsl(${FG})` : `hsla(${FG}, ${a})`);
 
-/** dev SideMenu 面板宽：w-56 = 224px。 */
-const PANEL_WIDTH = 224;
-/** dev SideMenu 同参 spring(damping 28, stiffness 300)；clamp 防面板冲出屏缘露缝。 */
-const SPRING = { damping: 28, stiffness: 300, overshootClamping: true };
-/** 松手甩速（px/s）超过它直接按方向定归宿，不看位置。 */
+/** 玻璃卡露出屏宽的比例(左侧一条)。 */
+const PEEK = 0.28;
+/** 打开时玻璃卡圆角(偏圆)。 */
+const CARD_RADIUS = 40;
+/** 打开时薄玻璃暗罩最大不透明度(白色薄雾:黑字变灰、彩字基本保留)。 */
+const SCRIM_MAX = 0.25;
+/** spring;clamp 防冲出。 */
+const SPRING = { damping: 26, stiffness: 260, overshootClamping: true };
+/** 松手甩速(px/s)超过它直接按方向定归宿。 */
 const FLING_VELOCITY = 500;
-/** 左滑拉出的激活门槛：横向位移 18px（竖向 ±14 内漂移交还页面滚动）。 */
 const OPEN_ACTIVATE_X = 18;
 const CLOSE_ACTIVATE_X = 10;
 
@@ -77,7 +65,7 @@ function clamp01(v: number): number {
   return Math.min(1, Math.max(0, v));
 }
 
-/** 松手归宿：先看甩速方向，再看停在哪半边。 */
+/** 松手归宿:先看甩速方向,再看停在哪半边。 */
 function decideTarget(p: number, velocityX: number): 0 | 1 {
   "worklet";
   if (velocityX < -FLING_VELOCITY) return 1;
@@ -101,193 +89,170 @@ export default function MenuDrawerHost({
   onNavigate: (id: MenuId) => void;
 }) {
   const { t } = useTranslation();
+  const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  /** 页面向左推的距离(露出 PEEK 一条,菜单占其余)。 */
+  const pushDistance = width * (1 - PEEK);
 
   const progress = useSharedValue(0);
-  /** 本次拖拽起点的 progress（支持半路接住飞行中的面板）。 */
+  /** 本次拖拽起点的 progress(支持半路接住)。 */
   const startP = useSharedValue(0);
   const dragging = useSharedValue(false);
-  // overlay 挂载态：拖拽激活即挂（面板要在手指下出现），关闭动画播完才卸。
-  const [mounted, setMounted] = useState(open);
-  // 手势侧最近把视觉送往的目标；effect 据此跳过重复 spring。
+  /** 手势侧最近把视觉送往的目标;effect 据此跳过重复 spring / 重复震动。 */
   const visualTarget = useRef<0 | 1>(open ? 1 : 0);
 
-  const mountOverlay = () => setMounted(true);
-  const unmountOverlay = () => setMounted(false);
+  const haptic = () => void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
-  /** 手势提交：视觉已在 UI 线程续飞，这里只同步 React 状态 + 跨态触觉。 */
+  /** 手势提交:视觉已在 UI 线程续飞,这里同步 React 状态 + 跨态震动。 */
   const commitFromGesture = (target: 0 | 1) => {
     visualTarget.current = target;
-    if ((target === 1) !== open) {
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    }
+    if ((target === 1) !== open) haptic();
     if (target === 1) onRequestOpen();
     else onRequestClose();
   };
 
-  /** 松手/被取消统一收尾（worklet）：spring 到归宿并带入甩速。 */
+  /** 松手/取消统一收尾(worklet):spring 到归宿并带入甩速。 */
   const release = (e: { velocityX: number }) => {
     "worklet";
     if (!dragging.value) return;
     dragging.value = false;
     const target = decideTarget(progress.value, e.velocityX);
-    progress.value = withSpring(
-      target,
-      { ...SPRING, velocity: -e.velocityX / PANEL_WIDTH },
-      (finished) => {
-        if (finished && target === 0) runOnJS(unmountOverlay)();
-      },
-    );
+    progress.value = withSpring(target, { ...SPRING, velocity: -e.velocityX / pushDistance });
     runOnJS(commitFromGesture)(target);
   };
 
-  // 关闭态：页面栈上的全局左滑拉出。竖向 ±14 内先动交还页面滚动；右滑交还
-  // 页内手势（Setting 子页的滑动返回等）。
+  // 关闭态:页面上左滑把当前页推开。竖向 ±14 内先动交还页面滚动;右滑交还页内手势。
   const openPan = Gesture.Pan()
+    .enabled(!open)
     .activeOffsetX(-OPEN_ACTIVATE_X)
     .failOffsetX(OPEN_ACTIVATE_X)
     .failOffsetY([-14, 14])
     .onStart(() => {
       dragging.value = true;
       startP.value = progress.value;
-      runOnJS(mountOverlay)();
     })
     .onUpdate((e) => {
-      progress.value = clamp01(startP.value - e.translationX / PANEL_WIDTH);
+      progress.value = clamp01(startP.value - e.translationX / pushDistance);
     })
     .onFinalize(release);
 
-  // 打开态：整屏（蒙层 + 面板）右滑跟手关闭。
+  // 打开态:玻璃卡左右滑跟手(可半路接住关/开)。
   const closePan = Gesture.Pan()
-    .activeOffsetX(CLOSE_ACTIVATE_X)
+    .enabled(open)
+    .activeOffsetX([-CLOSE_ACTIVATE_X, CLOSE_ACTIVATE_X])
     .onStart(() => {
       dragging.value = true;
       startP.value = progress.value;
     })
     .onUpdate((e) => {
-      progress.value = clamp01(startP.value - e.translationX / PANEL_WIDTH);
+      progress.value = clamp01(startP.value - e.translationX / pushDistance);
     })
     .onFinalize(release);
 
-  // 外部命令（汉堡 / 导航 / 蒙层点按）→ spring；手势已覆盖同目标时跳过。
+  // 打开态:点玻璃卡 = 关闭回原页。
+  const tapClose = Gesture.Tap()
+    .enabled(open)
+    .onEnd(() => {
+      runOnJS(onRequestClose)();
+    });
+
+  // 卡上手势:关闭态左滑推开(openPan)、打开态点卡关闭(tapClose)。收起(右滑)交给
+  // 外层全屏 closePan——这样在打开后露出的「菜单区」右滑也能收起、玻璃卡顺势滑回(对齐
+  // Claude);否则菜单区在卡外、没有手势层,右滑无反应。
+  const cardGesture = Gesture.Race(openPan, tapClose);
+
+  // 外部命令(汉堡 / 导航 / 点玻璃卡)→ spring 到归宿 + 跨态震动。手势已覆盖同目标时
+  // 跳过(visualTarget 守卫),避免和手势 commit 双触发。
   useEffect(() => {
     const target: 0 | 1 = open ? 1 : 0;
-    if (open) setMounted(true);
     if (visualTarget.current === target) return;
     visualTarget.current = target;
-    progress.value = withSpring(target, SPRING, (finished) => {
-      if (finished && target === 0) runOnJS(unmountOverlay)();
-    });
+    haptic();
+    progress.value = withSpring(target, SPRING);
   }, [open, progress]);
 
-  const dimStyle = useAnimatedStyle(() => ({ opacity: progress.value }));
-  const panelStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: (1 - progress.value) * PANEL_WIDTH }],
+  // 玻璃卡:仅左移 + 圆角(不缩小)。
+  const cardStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: -progress.value * pushDistance }],
+    borderRadius: progress.value * CARD_RADIUS,
   }));
+  // 薄玻璃暗罩:内容随打开变灰(白雾:黑字→灰,彩字基本保留)。
+  const scrimStyle = useAnimatedStyle(() => ({ opacity: progress.value * SCRIM_MAX }));
 
   return (
     <View style={styles.host}>
-      {/* 用户定：不做内容视差（tab 页保持原位），蒙层模糊保留。 */}
-      <GestureDetector gesture={openPan}>
-        <View style={styles.pages}>{children}</View>
-      </GestureDetector>
-      {mounted ? (
-        <FullBleedOverlay>
-          {/* closePan 包整块出血区（蒙层 + 面板皆可右滑关）；absoluteFill 撑满
-              FullBleedOverlay 的出血 root（顶到刘海、底到 home-indicator）。 */}
-          <GestureDetector gesture={closePan}>
-            <View style={StyleSheet.absoluteFill}>
-              {/* dev 蒙层：bg-foreground/10 + backdrop-blur-sm(4px)。 */}
-              <Animated.View style={[StyleSheet.absoluteFill, dimStyle]}>
-                <Pressable onPress={onRequestClose} className="absolute inset-0">
-                  <BlurView intensity={8} tint="light" style={StyleSheet.absoluteFill} />
-                  <View style={[StyleSheet.absoluteFill, styles.scrimTint]} />
-                </Pressable>
-              </Animated.View>
-              {/* dev 面板：白渐变 180°(0.85→0.95) + blur(48) + 左缘 white/50 边。 */}
-              <Animated.View style={[styles.panel, panelStyle]}>
-                <BlurView intensity={75} tint="light" style={StyleSheet.absoluteFill} />
-                <LinearGradient
-                  colors={["rgba(255,255,255,0.85)", "rgba(255,255,255,0.95)"]}
-                  style={StyleSheet.absoluteFill}
-                />
-                {/* dev: pt-14 px-5；X 钮 p-1.5 圆底 mb-8。 */}
-                <View style={styles.panelContent}>
-                  <Pressable onPress={onRequestClose} hitSlop={6} accessibilityRole="button">
-                    <View style={styles.closeButton}>
-                      <X size={20} color={fg(0.6)} strokeWidth={1.5} />
-                    </View>
-                  </Pressable>
-                  <View style={styles.items}>
-                    {/* 用户实测 dev：激活/按压均无背景变化，只有字色 fg50→fg + 字重
-                        medium→semibold + icon stroke 1.5→2（源码里的 bg-foreground/8
-                        /hover:bg-foreground/4 是死类，本版 Tailwind 不编译）。 */}
-                    {ITEMS.map(({ id, labelKey, Icon }) => {
-                      const isActive = id === active;
-                      const label = t(labelKey);
-                      return (
-                        <Pressable
-                          key={id}
-                          onPress={() => onNavigate(id)}
-                          accessibilityRole="button"
-                          accessibilityLabel={label}
-                        >
-                          <View style={styles.itemRow}>
-                            <Icon
-                              size={18}
-                              color={isActive ? fg() : fg(0.5)}
-                              strokeWidth={isActive ? 2 : 1.5}
-                            />
-                            <Text style={[styles.itemLabel, isActive && styles.itemLabelActive]}>
-                              {label}
-                            </Text>
-                          </View>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-                </View>
-              </Animated.View>
+      {/* 全出血:逃出根 SafeAreaView,菜单底 + 玻璃卡视频铺到刘海/home-indicator。 */}
+      <FullBleedOverlay>
+        {/* 外层全屏滑动手势:打开态右滑(菜单区或卡上任意处)→ closePan 收起、玻璃卡顺势滑回
+            (对齐 Claude);菜单项点按不触发 pan、照常导航。关闭态左滑推开由卡上 openPan 处理。 */}
+        <GestureDetector gesture={closePan}>
+          <View style={StyleSheet.absoluteFill}>
+            {/* 菜单层(垫在玻璃卡底下,淡色主题底;条目在右侧露出区、避刘海)。 */}
+            <View style={styles.menu}>
+              <View style={[styles.menuInner, { left: width * PEEK, paddingTop: insets.top + 24 }]}>
+                {ITEMS.map(({ id, labelKey, Icon }) => {
+                  const isActive = id === active;
+                  const label = t(labelKey);
+                  return (
+                    <Pressable
+                      key={id}
+                      onPress={() => onNavigate(id)}
+                      accessibilityRole="button"
+                      accessibilityLabel={label}
+                    >
+                      <View style={[styles.itemRow, isActive && styles.itemRowActive]}>
+                        <Icon size={18} color={isActive ? fg() : fg(0.5)} strokeWidth={isActive ? 2 : 1.5} />
+                        <Text style={[styles.itemLabel, isActive && styles.itemLabelActive]}>{label}</Text>
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </View>
             </View>
-          </GestureDetector>
-        </FullBleedOverlay>
-      ) : null}
+
+            {/* 玻璃卡 = VideoBackdrop(=tab 背景)+ 安全区内页面 + 变灰薄玻璃。关闭态左滑推开、
+                打开态点卡关闭(cardGesture)。不透明、全出血、关闭态盖住菜单。 */}
+            <GestureDetector gesture={cardGesture}>
+              <Animated.View style={[styles.card, cardStyle]}>
+                <VideoBackdrop />
+                {/* 页面走安全区:绝对定位 top/bottom=insets 内缩(children 是 absoluteFill、会
+                    忽略 padding)。打开态 inert:点灰卡=关闭,不误触页内按钮。 */}
+                <View
+                  style={[styles.cardPages, { top: insets.top, bottom: insets.bottom }]}
+                  pointerEvents={open ? "none" : "auto"}
+                >
+                  {children}
+                </View>
+                <Animated.View
+                  style={[StyleSheet.absoluteFill, styles.scrim, scrimStyle]}
+                  pointerEvents="none"
+                />
+              </Animated.View>
+            </GestureDetector>
+          </View>
+        </GestureDetector>
+      </FullBleedOverlay>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   host: { flex: 1 },
-  pages: { flex: 1 },
-  scrimTint: { backgroundColor: fg(0.1) },
-  panel: {
-    position: "absolute",
-    right: 0,
-    top: 0,
-    bottom: 0,
-    width: PANEL_WIDTH,
-    borderLeftWidth: 1,
-    borderLeftColor: "rgba(255,255,255,0.5)",
-    overflow: "hidden",
-  },
-  // dev: pt-14(56，自物理屏顶；WKWebView viewport-fit=cover 同基准) px-5(20)。
-  panelContent: { paddingTop: 56, paddingHorizontal: 20 },
-  // dev: p-1.5(6) rounded-full mb-8(32)。
-  closeButton: {
-    alignSelf: "flex-start",
-    padding: 6,
-    borderRadius: 999,
-    marginBottom: 32,
-  },
-  items: { gap: 4 }, // dev: flex-col gap-1
-  // dev: px-4(16) py-3(12) gap-3(12)。
+  // 淡色主题底(可再调)。全出血(在 FullBleedOverlay 内)。
+  menu: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "hsl(228, 30%, 96%)" },
+  menuInner: { position: "absolute", right: 0, top: 0, bottom: 0, paddingHorizontal: 20 },
+  // dev: px-4(16) py-3(12) gap-3(12);圆角 rounded-xl=12。
   itemRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
     paddingHorizontal: 16,
     paddingVertical: 12,
+    borderRadius: 12,
+    marginBottom: 4,
   },
-  // dev: text-sm(14) tracking-wider(0.05em≈0.7px)，active font-semibold / 默认 medium。
+  // 当前页:较深药丸底(用户定「偏深一点」;可再调)。
+  itemRowActive: { backgroundColor: fg(0.1) },
   itemLabel: {
     fontSize: 14,
     lineHeight: 20,
@@ -295,8 +260,17 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_500Medium",
     color: fg(0.5),
   },
-  itemLabelActive: {
-    fontFamily: "Inter_600SemiBold",
-    color: fg(),
+  itemLabelActive: { fontFamily: "Inter_600SemiBold", color: fg() },
+  card: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    overflow: "hidden",
+    borderWidth: 0.5,
+    borderColor: "rgba(255,255,255,0.5)",
   },
+  cardPages: { position: "absolute", left: 0, right: 0 },
+  scrim: { backgroundColor: "#fff" },
 });

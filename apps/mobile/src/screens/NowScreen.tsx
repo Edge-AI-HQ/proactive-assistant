@@ -11,6 +11,7 @@ import { Radio } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import Animated, {
   Easing,
+  cancelAnimation,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
@@ -32,9 +33,15 @@ import PageHeader from "../components/app/PageHeader";
 import CardDetailSheet from "../components/now/CardDetailSheet";
 import HomeEmptyState, { type VoicePermissionState } from "../components/now/HomeEmptyState";
 import SphereCards, { type SphereItem } from "../components/now/SphereCards";
+// __HEAT_AB__ 混合渲染开关(Skia 背景层 + 原生文字);定位完删。
+import { useHeatAbFlags } from "../lib/heat-ab";
 import { GradientText } from "../ui/GradientText";
-import { EM_TIGHT, leading, tracking } from "../ui/typography";
+import { EM_TIGHT, tracking } from "../ui/typography";
+import { usePageActive } from "../components/app/KeepAlivePage";
 import { useAmbientToggle } from "../hooks/useAmbientToggle";
+import { useFullCover } from "../lib/full-cover";
+// __HEAT_PROBE__ 临时发热探针(排查完删)。
+import { probeCount, probeSet } from "../lib/heat-probe";
 import { getDeviceWeatherCoords } from "../lib/weather-location";
 import type { HeaderProps } from "./AmbientScreen";
 
@@ -50,9 +57,23 @@ function BreatheHalo({
   duration: number;
 }) {
   const t = useSharedValue(0);
+  // 页面可见 && 未被全屏 sheet 盖住才循环(AskPinAiBar chevron 同款双门控);隐藏时
+  // cancel 并归零——NOW 常驻挂载(keep-alive),不门控这个 withRepeat 会永远空转
+  // (阶段 2 审计漏网点,2026-07-05 补)。
+  const pageActive = usePageActive();
+  const covered = useFullCover();
+  const running = pageActive && !covered;
   useEffect(() => {
+    if (!running) {
+      cancelAnimation(t);
+      t.value = 0;
+      probeSet("now.breatheHalo", "stopped"); // __HEAT_PROBE__
+      return;
+    }
     t.value = withRepeat(withTiming(1, { duration, easing: Easing.out(Easing.ease) }), -1, false);
-  }, [t, duration]);
+    probeSet("now.breatheHalo", "looping"); // __HEAT_PROBE__
+    return () => cancelAnimation(t);
+  }, [t, duration, running]);
   const style = useAnimatedStyle(() => ({
     transform: [{ scale: 1 + t.value * (scaleTo - 1) }],
     opacity: 0.35 * (1 - t.value),
@@ -175,7 +196,9 @@ const greetingStyle = {
   fontFamily: "Inter_600SemiBold",
   fontSize: 30,
   letterSpacing: tracking(30, EM_TIGHT),
-  lineHeight: leading(30, 1.05),
+  // 行高 = 字号 + 4(和各 section 标题 24+4=28 同规则):上方留白一致 → 顶部与 24px 的
+  // section 标题对齐;比 +8 再紧一点让标题整体上移一点点(用户 2026-07-04)。
+  lineHeight: 34,
 } as const;
 
 /** web hooks/useVoicePermission 的 RN 版（空态 "Turn on voice" 行的数据源）：
@@ -250,6 +273,7 @@ export default function NowScreen({
   /** false = NOW 当前不可见(切到别的页 / 被 chat 盖住)→ 球体停帧省电。 */
   active?: boolean;
 }) {
+  probeCount("render.NowScreen"); // __HEAT_PROBE__
   const { t } = useTranslation("card");
   const { cards, loading: feedLoading } = useCardsQuery();
   const { width } = useWindowDimensions();
@@ -415,10 +439,20 @@ function SphereView({
   onTap: (id: string) => void;
 }) {
   const [height, setHeight] = useState(0);
+  // __HEAT_AB__ cardsSkia=true → 混合渲染(Skia 背景层画底/影 + 原生层叠文字/图标/交互,凉);
+  // false = 纯原生(底/影/边全在原生视图,量化过但仍有一丝丝阴影残热)。默认 false。
+  const { cardsSkia } = useHeatAbFlags();
   return (
     <View className="flex-1" onLayout={(e) => setHeight(e.nativeEvent.layout.height)}>
       {height > 0 && items.length > 0 ? (
-        <SphereCards items={items} width={width} height={height} active={active} onTap={onTap} />
+        <SphereCards
+          items={items}
+          width={width}
+          height={height}
+          active={active}
+          onTap={onTap}
+          skiaBg={cardsSkia}
+        />
       ) : null}
     </View>
   );

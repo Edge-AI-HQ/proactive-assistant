@@ -8,20 +8,23 @@
  * - 登录后空闲预取 Profile/Devices/Memories → 首访任何页也无 loading。
  * - ASK PIN AI 上拉 chat、card chat modal。
  */
-import { useCallback, useEffect, useRef, useState } from "react";
-import { StyleSheet, View } from "react-native";
+import { memo, useCallback, useEffect, useState } from "react";
+import { InteractionManager, StyleSheet, View } from "react-native";
 import { useTranslation } from "react-i18next";
-import { useQueryClient } from "@tanstack/react-query";
 import type { User } from "@supabase/supabase-js";
 import type { IntentCard } from "@pin-ai/core";
-import { fetchPortrait, listUserDevices, deleteAccount, DeleteAccountError } from "@pin-ai/core";
-import { cardsKeys, portraitKeys, userDevicesKeys, useComposio, usePipeline } from "@pin-ai/state";
+import { deleteAccount, DeleteAccountError } from "@pin-ai/core";
+import { useComposio } from "@pin-ai/state";
 
 import AgentRunIndicator from "./AgentRunIndicator";
 import { CardActionsProvider } from "./CardActionsProvider";
 import ChatSheet from "./ChatSheet";
 import DebugPanel from "./DebugPanel";
+import ShellEffects from "./ShellEffects";
+import { setFullCover } from "../../lib/full-cover";
 import { KeepAlivePage } from "./KeepAlivePage";
+// __HEAT_PROBE__ 临时发热探针(排查完删)。
+import { probeCount } from "../../lib/heat-probe";
 import MenuDrawerHost, { type MenuId } from "./MenuDrawer";
 import PreNotificationPrompt from "../account/PreNotificationPrompt";
 import CardChatScreen from "../../screens/CardChatScreen";
@@ -31,17 +34,15 @@ import NowScreen from "../../screens/NowScreen";
 import TasksScreen from "../../screens/TasksScreen";
 import AmbientScreen from "../../screens/AmbientScreen";
 import ProfileScreen from "../../screens/ProfileScreen";
-import { useAmbientConsentReconcile } from "../../hooks/useAmbientConsentReconcile";
-import { useAmbientToggle } from "../../hooks/useAmbientToggle";
-import { bindSystemShortcutActions } from "../../lib/system-shortcuts";
 
-export default function AppShell({
+function AppShell({
   user,
   onSignOut,
 }: {
   user: User;
   onSignOut: () => Promise<void>;
 }) {
+  probeCount("render.AppShell"); // __HEAT_PROBE__
   const [view, setView] = useState<MenuId>("now");
   // 首访过的页集合：进过就常驻挂载（keep-alive），永不回退。
   const [visited, setVisited] = useState<ReadonlySet<MenuId>>(() => new Set<MenuId>(["now"]));
@@ -52,67 +53,36 @@ export default function AppShell({
   // web AppLayout 同位：composio state 壳级持有、跨 view 保活（CONNECT 页消费）。
   const composio = useComposio();
   const { t } = useTranslation(["common", "card"]);
-  const queryClient = useQueryClient();
 
-  // consent → 采集源实时调和（dev App.tsx boot/settings 效应同位，挂登录后
-  // 常驻树）：server ambientSources 变化时把在采源集合调和到 consent 真集。
-  useAmbientConsentReconcile(user.id);
-
-  // Siri Shortcuts 深链（dev AppLayout 同款 ref 间接层）：绑定只挂一次
-  // （冷启 URL 重放 + 前台监听），动作经 ref 永远打到最新 toggle/pipeline。
-  // useAmbientToggle 是纯编排 hook（态在共享 TQ cache + runtime store），
-  // AppShell 再实例化与 NOW/Ambient 的开关同步，安全。
-  const { toggle } = useAmbientToggle(user.id);
-  const pipeline = usePipeline();
-  const shortcutRef = useRef({ onToggleAmbient: () => {}, onGenerateCards: () => {} });
-  useEffect(
-    () =>
-      bindSystemShortcutActions({
-        onToggleAmbient: () => shortcutRef.current.onToggleAmbient(),
-        onGenerateCards: () => shortcutRef.current.onGenerateCards(),
-      }),
-    [],
-  );
+  // chat/card-chat 全屏盖住主壳 → 通知根部 VideoBackdrop 暂停背景视频解码省电（WS6）。
+  // debug 面板也算：340pt 毛玻璃罩在动视频上=每帧重采样，开着面板测发热会自热
+  // （2026-07-05 探针数据佐证），暂停背景视频让测量干净。
   useEffect(() => {
-    shortcutRef.current = {
-      onToggleAmbient: () => {
-        void toggle();
-      },
-      onGenerateCards: () => {
-        pipeline.generate();
-      },
+    setFullCover(chatOpen || cardChat !== null || debugOpen);
+  }, [chatOpen, cardChat, debugOpen]);
+
+  // 登录后空闲预挂载其余 5 个 tab（NOW 已常驻）：错峰一次挂一个，别一帧挤 5 个大页
+  // 造成卡顿。切页时目标页早已渲染好在抽屉底下 → 抽屉一消失即完整新页，无「现搭+淡入」
+  // （丝滑切换北极星）。复用 ShellEffects 已有的空闲预取范式（数据）——这里预挂载 UI。
+  useEffect(() => {
+    // setting 不预挂载：它极少访问（抽屉末项），且其 usePushNotifications 会在 mount
+    // 时静默查权限 + 幂等注册 token——虽无害（不弹框、App.tsx 登录已注册），但没必要
+    // 在隐藏态提前跑。首次进 setting 走 navigate 的 rAF 兜底懒挂载即可。
+    const order: MenuId[] = ["ambient", "tasks", "connect", "profile"];
+    let i = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const mountNext = () => {
+      const id = order[i++];
+      if (!id) return;
+      setVisited((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+      timer = setTimeout(mountNext, 150);
     };
-  }, [toggle, pipeline.generate]);
-
-  // 生成完成 → 立即刷卡（dev AppLayout:312-317 同构；generate 跑完球面不再等
-  // 30s 轮询）。runId 去重防 run state 重渲重复触发。
-  const lastCompleteRunIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (pipeline.run.status !== "complete" || !pipeline.run.runId) return;
-    if (pipeline.run.runId === lastCompleteRunIdRef.current) return;
-    lastCompleteRunIdRef.current = pipeline.run.runId;
-    void queryClient.invalidateQueries({ queryKey: cardsKeys.all });
-  }, [pipeline.run.runId, pipeline.run.status, queryClient]);
-
-  // 登录后空闲预取：把用户迟早会进的页面数据先填进 TQ 缓存（SWR——进页秒出
-  // 缓存、后台再刷新）。cards/settings/composio 已由常驻消费者（NOW/Root/本壳）
-  // 天然暖着，无需重复。延迟 1.2s 避开首屏渲染与 NOW 首拉的窗口。
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      // Lifelong-memory：老 profile snapshot / memories 预取退役，PROFILE 屏
-      // 数据 = L2 portrait（usePortrait 同 key，SWR 秒出）。events 由 NOW/
-      // Ambient 常驻消费者天然暖着，不重复预取。
-      void queryClient.prefetchQuery({
-        queryKey: portraitKeys.slots(),
-        queryFn: ({ signal }) => fetchPortrait(signal),
-      });
-      void queryClient.prefetchQuery({
-        queryKey: userDevicesKeys.all,
-        queryFn: () => listUserDevices(),
-      });
-    }, 1_200);
-    return () => clearTimeout(timer);
-  }, [queryClient]);
+    const task = InteractionManager.runAfterInteractions(mountNext);
+    return () => {
+      task.cancel();
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
 
   // web AppLayout 同构：full_name 首词 → email 前缀 → t(card:now.greetingFallbackName)。
   const userMeta = user.user_metadata as { full_name?: string; name?: string } | undefined;
@@ -128,8 +98,17 @@ export default function AppShell({
   };
 
   const navigate = (id: MenuId) => {
-    setVisited((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
-    setView(id);
+    // 已挂载（首访过或已被下面的空闲预挂载 warm 过）→ 即时切页，无延帧、无淡入，
+    // 目标页早已就绪 → 抽屉一消失就是完整新页（丝滑，对齐主流 App 的 tab 秒切）。
+    if (visited.has(id)) {
+      setView(id);
+      return;
+    }
+    // 未挂载（预挂载还没轮到，少见）→ 延一帧再现搭，别阻塞点击当帧的反馈（WS2 兜底）。
+    requestAnimationFrame(() => {
+      setVisited((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+      setView(id);
+    });
   };
 
   // 深链到 Settings 子页（NOW 空态 Review permissions / Ambient 模型引导 → 直接进
@@ -175,6 +154,8 @@ export default function AppShell({
         composio={composio}
         onOpenChat={(card, bootstrap) => setCardChat({ card, bootstrap })}
       >
+        {/* 壳级副作用宿主（WS1）：轮询/settings 订阅集中在此 null 组件，与 AppShell 渲染隔离。 */}
+        <ShellEffects userId={user.id} />
         <MenuDrawerHost
           open={menuOpen}
           active={view}
@@ -267,6 +248,11 @@ export default function AppShell({
     </View>
   );
 }
+
+// memo：Root 订阅 useUserSettings，任何 settings 写入都会重渲 Root → AppShell。AppShell
+// 从 Root 拿的 props（user / onSignOut）稳定（onSignOut useCallback、user 仅 auth 事件变），
+// memo 截断 settings 写入引发的整壳重渲级联（WS1）。
+export default memo(AppShell);
 
 const styles = StyleSheet.create({
   root: { flex: 1 },

@@ -58,6 +58,8 @@ import {
   subscribeStatus,
   type RuntimeStatus,
 } from "./status";
+// __HEAT_PROBE__ 临时发热探针(排查完删)。
+import { probeCount, probeSet } from "../lib/heat-probe";
 
 const ENABLED_KEY = "pinai:ambient-enabled";
 const SOURCE_START_TIMEOUT_MS = 8_000;
@@ -159,10 +161,30 @@ function setEnabledSnapshot(enabled: boolean): void {
   for (const listener of enabledListeners) listener();
 }
 
-/** 改本机闸的唯一入口：写 AsyncStorage + 更新镜像 + 通知订阅者（所有改闸处都走这里）。 */
+// ── 关闸代际（stop-epoch）──
+// 「读闸 → 真正启源」之间隔着 await（AsyncStorage/网络/源变更队列），stopAmbient 可以
+// 插进缝里 → 停完又被在途的 reconcile 把源启回来 =「开关显示关、麦克风在采」（隐私
+// 红线,2026-07-05 对抗审查 F1）。修法：任何关闸动作让代际 +1；带闸判定的调用方在
+// **读闸时**捕获代际、随 reconcile 传入，reconcile 在入口/队列内/收尾三处校验，
+// 代际过期整体作废。代际在 writeEnabledFlag(false) 同步段递增（先于一切 await）。
+let gateCloseEpoch = 0;
+// 任意方向的闸写入序号：isAmbientEnabled 用它丢弃「读盘期间闸被写过」的过时回写
+// （复核 F-1——stale 读数会把刚关/刚开的镜像翻回去）。与关闸代际分开：这个双向递增，
+// 只管镜像回写；gateCloseEpoch 只在关闸递增，管 reconcile 作废（隐私方向）。
+let gateWriteSeq = 0;
+
+/** 读闸时捕获，配对传给 reconcileEnabledSources({ gateEpoch })。 */
+export function currentGateEpoch(): number {
+  return gateCloseEpoch;
+}
+
+/** 改本机闸的唯一入口：先更新内存镜像（UI/hook 同步可见，缩小 stale 读窗），再落
+ *  AsyncStorage。关闸同时递增代际，作废所有在途的「闸开」调和。 */
 async function writeEnabledFlag(enabled: boolean): Promise<void> {
-  await AsyncStorage.setItem(ENABLED_KEY, enabled ? "1" : "0");
+  gateWriteSeq += 1;
+  if (!enabled) gateCloseEpoch += 1;
   setEnabledSnapshot(enabled);
+  await AsyncStorage.setItem(ENABLED_KEY, enabled ? "1" : "0");
 }
 
 /** useSyncExternalStore 订阅端（两处开关共享）。 */
@@ -184,7 +206,13 @@ export async function setAmbientEnabledFlag(enabled: boolean): Promise<void> {
 }
 
 export async function isAmbientEnabled(): Promise<boolean> {
+  const seq = gateWriteSeq;
   const enabled = (await AsyncStorage.getItem(ENABLED_KEY)) === "1";
+  if (seq !== gateWriteSeq) {
+    // 读盘期间有人写闸：盘上读数已过时，以镜像（writeEnabledFlag 同步更新）为准，
+    // 不许 stale 读数把镜像翻回去（复核 F-1）。
+    return enabledSnapshot === true;
+  }
   setEnabledSnapshot(enabled);
   return enabled;
 }
@@ -235,6 +263,7 @@ async function startAmbientSources(session: AmbientStartSession): Promise<string
     }
   }
   const result = lifecycle.completeStart(session, started);
+  probeSet("ambient.sources", result === "started" ? started.join(",") || "none" : "none"); // __HEAT_PROBE__
   if (result !== "started") {
     await writeEnabledFlag(false);
     desiredSourceKeys = new Set();
@@ -259,6 +288,8 @@ export async function stopAmbient(): Promise<void> {
     }
   });
   stopIngestLoop();
+  // 全停后主动广播一次，running 徽章即时消失（此前要等下一次采集事件才刷新）。
+  notifyStatus();
 }
 
 export function ambientRunning(): boolean {
@@ -272,6 +303,9 @@ export function ambientRunning(): boolean {
  * 宁可不启（隐私不变量优先于可用性）。
  */
 export async function resumeAmbientIfEnabled(userId: string): Promise<void> {
+  // 代际在读闸**之前**捕获：consent 网络往返长达数百 ms，用户在这个窗口里点关
+  // 主开关 → 代际过期 → reconcile 整体作废（此前 stop 之后 resume 仍会把源启回来）。
+  const gateEpoch = currentGateEpoch();
   if (!(await isAmbientEnabled())) return;
   let consent: { keys: string[]; generationLanguage: string | null };
   try {
@@ -282,7 +316,7 @@ export async function resumeAmbientIfEnabled(userId: string): Promise<void> {
   }
   setAmbientTranscriptionLanguage(consent.generationLanguage);
   if (consent.keys.length === 0) return; // server 端全关：不启动（本机闸保留，等 consent 恢复）
-  await reconcileEnabledSources(userId, consent.keys, { interactivePermissions: false });
+  await reconcileEnabledSources(userId, consent.keys, { interactivePermissions: false, gateEpoch });
   await flushSignals();
 }
 
@@ -307,6 +341,10 @@ async function fetchServerAmbientConsent(): Promise<{
 
 interface ReconcileOptions {
   interactivePermissions?: boolean;
+  /** 必传：调用方**读闸时**捕获的 currentGateEpoch()。之后任何关闸动作都会使其过期，
+   *  reconcile 据此整体作废本次调和（防「读闸后闸被关、调和仍启源」复活竞态）。
+   *  设为必传是为了让未来新增调用方无法静默绕过保护（复核 F-4）。 */
+  gateEpoch: number;
 }
 
 /**
@@ -314,32 +352,51 @@ interface ReconcileOptions {
  * .reconcileEnabledSources 的 RN 对应物：desired&&未跑→启，未 desired&&在跑→停，
  * desired&&在跑→refresh() 自愈（= dev runReconcileDesiredSources 的第三分支，
  * watchdog 靠它把 stale/failed 的 sound-classifier 复活）。
- * ≥1 desired 时确保 ingest loop + 定时器在跑、本机 opt-in；desired 为空（显式
- * 全关）才关 loop + opt-out——源启动失败**不**清闸，留给 watchdog 每 60s 重试
- * （dev watchdog 语义）。与 master 开关（startAmbient）共享同一 sources 数组，
- * 按 isStarted() 收口真相。
+ * ≥1 desired 时确保 ingest loop + 定时器在跑；desired 为空（显式全关）才关 loop。
+ * **本函数绝不读写本机主闸**（2026-07-05 语义拍板：主闸只归主开关
+ * useAmbientToggle/startAmbient/stopAmbient 与 sign-out 所有；settings 源面板
+ * 是纯权限管理。采集运行 ⇔ 主闸开 && consent 有源——调用方负责主闸判定：
+ * resumeAmbientIfEnabled/consent-reconcile hook 都先查闸再给 keys）。
+ * 源启动失败**不**影响闸，留给 watchdog 每 60s 重试（dev watchdog 语义）。
+ * 与 master 开关（startAmbient）共享同一 sources 数组，按 isStarted() 收口真相。
  */
 export async function reconcileEnabledSources(
   userId: string,
   keys: string[],
-  opts: ReconcileOptions = {},
+  opts: ReconcileOptions,
 ): Promise<void> {
+  // 关闸代际校验①（入口）：调用方读闸之后、走到这里之前闸被关上 → 整体作废，
+  // 连 owner/loop/timers 都不碰（stopAmbient 已清场，不能再填回去）。
+  const epochValid = () => opts.gateEpoch === gateCloseEpoch;
+  if (!epochValid()) return;
   const desired = new Set(keys);
   desiredSourceKeys = new Set(keys);
   if (desired.size > 0) {
     runtimeOwnerUserId = userId;
-    await writeEnabledFlag(true);
     startIngestLoop(userId);
     startRuntimeTimers();
     bindAmbientAppStateLifecycle();
   }
   await enqueueSourceMutation(async () => {
+    // 校验②（队列内）：排队期间 stopAmbient 插了队 → 本次启停作废（stop-all 已经
+    // 或即将在同一队列执行，胜者必须是 stop）。
+    if (!epochValid()) return;
     for (const s of sources) {
+      // 校验②'（逐源）：关闸落在循环中途时，剩余源（麦克风在启动序第 3 位）不再
+      // 启动，交给紧随其后的 stop-all 收尾（复核 F-2，与主路径 per-iteration
+      // isCurrentStart 对称）。
+      if (!epochValid()) return;
       const shouldRun = desired.has(s.key);
       if (shouldRun && !s.isStarted()) {
         try {
           ctx.onEvent(s.key, "starting");
-          await s.start({ interactivePermissions: opts.interactivePermissions ?? true });
+          // 8s 超时与主路径 startSourceForSession 对称：裸 await 挂死会卡住整条
+          // 源变更队列，排在后面的 stop-all 永不执行 = 关不掉的麦克风（复核 F-3）。
+          await withTimeout(
+            s.start({ interactivePermissions: opts.interactivePermissions ?? true }),
+            SOURCE_START_TIMEOUT_MS,
+            s.key,
+          );
           clearSourceError(s.key);
           ctx.onEvent(s.key, "started");
         } catch (err) {
@@ -349,9 +406,10 @@ export async function reconcileEnabledSources(
       } else if (!shouldRun && s.isStarted()) {
         await s.stop().catch(() => {});
       } else if (shouldRun && s.isStarted() && typeof s.refresh === "function") {
-        // 在跑的源做健康检查/自愈（dev reconcile 的 refresh 分支）。
+        // 在跑的源做健康检查/自愈（dev reconcile 的 refresh 分支）。同样包超时——
+        // refresh 内也有原生 await，挂死后果与 F-3 相同（队列堵死）。
         try {
-          await s.refresh();
+          await withTimeout(s.refresh(), SOURCE_START_TIMEOUT_MS, s.key);
           clearSourceError(s.key);
         } catch (err) {
           recordSourceError(s.key, describeError(err));
@@ -359,16 +417,19 @@ export async function reconcileEnabledSources(
       }
     }
   });
+  // 校验③（收尾）：源操作期间闸被关 → 不写 lifecycle/遥测（stop 之后的收尾会把
+  // running=true 的幽灵态写回，害下一次主开关 ON 被 runningFor 短路空转——审查 F2）。
+  if (!epochValid()) return;
   const startedKeys = sources.filter((s) => s.isStarted()).map((s) => s.key);
+  probeSet("ambient.sources", startedKeys.join(",") || "none"); // __HEAT_PROBE__
   const running = startedKeys.length > 0;
   // 收口 lifecycle 视图，ambientRunning()/startedSourceKeys 保持真相。
   lifecycle.running = running;
   lifecycle.ownerUserId = running ? userId : null;
   lifecycle.startedSourceKeys = startedKeys;
   if (desired.size === 0) {
-    // 显式全关（consent 清空 / 面板全 Off）才落 opt-out；启动失败不清闸。
+    // 显式全关（consent 清空 / 主闸关）：停 loop + 定时器。不碰主闸（见函数注释）。
     runtimeOwnerUserId = null;
-    await writeEnabledFlag(false);
     stopRuntimeTimers("reconcile-empty");
     stopIngestLoop();
   }
@@ -452,6 +513,7 @@ function startRuntimeTimers(): void {
       intervalMs: CONTEXT_SNAPSHOT_INTERVAL_MS,
     });
   }
+  probeSet("ambient.timers", "on"); // __HEAT_PROBE__
 }
 
 function stopRuntimeTimers(reason: string): void {
@@ -473,16 +535,20 @@ function stopRuntimeTimers(reason: string): void {
   }
   if (stopped > 0) {
     console.info(`${POWER_LOG_PREFIX} runtime timers stopped`, { reason, stopped });
+    probeSet("ambient.timers", `off:${reason}`); // __HEAT_PROBE__
   }
 }
 
 /** 60s 自愈（dev startSourceWatchdog → refreshActiveSources）：按 desired 集
  *  重新调和——挂掉的源重启、在跑的源 refresh() 健康检查。 */
 async function runSourceWatchdog(): Promise<void> {
+  const gateEpoch = currentGateEpoch(); // tick 开始时捕获,stop 插队即作废本轮自愈
   const owner = runtimeOwnerUserId;
   if (!owner || desiredSourceKeys.size === 0) return;
+  probeCount("ambient.watchdogTick"); // __HEAT_PROBE__
   await reconcileEnabledSources(owner, Array.from(desiredSourceKeys), {
     interactivePermissions: false,
+    gateEpoch,
   });
 }
 
@@ -559,7 +625,12 @@ function bindAmbientAppStateLifecycle(): void {
     }
     if (state === "active") {
       void (async () => {
-        await runSourceWatchdog();
+        // F5(2026-07-06 Mengli 拍板):回前台重拉 server consent + reconcile——远端(web/
+        // 另一设备)重开某源授权后,主闸开着则本机自动恢复采集(含麦克风)。resumeAmbientIfEnabled
+        // 内含查闸(gate 关则 no-op)+ 拉 /settings consent + reconcile;reconcile 会把
+        // desiredSourceKeys 更新成新 consent 集供 60s watchdog 续用,并顺带做健康自愈(挂掉的源
+        // 重启)——取代原来只 reconcile 本地 desired 的 runSourceWatchdog(检测不到远端 consent 变化)。
+        await resumeAmbientIfEnabled(owner);
         await flushSignals();
       })();
       return;

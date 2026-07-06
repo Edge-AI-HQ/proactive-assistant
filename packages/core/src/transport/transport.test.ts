@@ -23,6 +23,7 @@ function sseResponse(chunks: string[]): Response {
           ? { done: false, value: encoder.encode(chunks[i++]) }
           : { done: true, value: undefined },
       releaseLock: () => {},
+      cancel: async () => {},
     }),
   };
   return { ok: true, status: 200, body } as unknown as Response;

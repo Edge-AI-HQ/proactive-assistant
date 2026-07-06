@@ -33,6 +33,8 @@ import {
   type AmbientSourceStartOptions,
   type SourceContext,
 } from "../types";
+// __HEAT_PROBE__ 临时发热探针(排查完删)。
+import { probeCount, probeSet } from "../../lib/heat-probe";
 
 const SOUND_KIND = "device.sound_classification";
 const TRANSCRIPT_KIND = "session_summary";
@@ -45,7 +47,10 @@ const RECENT_CAPTURE_RECOVERY_MAX_PAGES = 20;
 const RETRY_DELAYS_MS = [300, 1_000] as const;
 // refresh() 健康检查阈值（dev sound-classifier.ts:52-54）。
 const INTENTIONAL_SUPPRESSION_REASONS = new Set(["playback", "external_mic"]);
-const UNHEALTHY_ENGINE_STATES = new Set(["failed", "stale", "suspended"]);
+// "suspended" 是后台故意省电态(startCapturePipelineOnly 关 analyzer、采集管线仍跑),不是
+// 故障——不列入 unhealthy,否则 watchdog 每 60s 无谓 restart(重激活 AVAudioSession churn/扰
+// 音乐)。真故障是 failed/stale。回前台由 recoverClassifierIfNeeded(appDidBecomeActive)复活。
+const UNHEALTHY_ENGINE_STATES = new Set(["failed", "stale"]);
 const CLASSIFICATION_STALE_MS = 15_000;
 
 // 与 web LIVE_AUDIO_CONFIG 一致（分段节奏参数）。
@@ -542,6 +547,7 @@ export function createSoundClassifierSource(
         await AmbientAudio.startCapture();
         await AmbientAudio.startClassification();
         started = true;
+        probeSet("ambient.mic", "capturing"); // __HEAT_PROBE__
         // 上次后台/停摆攒下的积压（原生 pending 转写 + 未处理 capture）。
         schedulePendingAudioRecovery("start");
       } catch (err) {
@@ -561,6 +567,7 @@ export function createSoundClassifierSource(
         const finalized = runs.stop();
         if (finalized) ctx.push(finalized);
         started = false;
+        probeSet("ambient.mic", "off"); // __HEAT_PROBE__
         lastLabel = null;
         inFlightCaptureIds.clear();
       }
@@ -584,6 +591,16 @@ export function createSoundClassifierSource(
         return;
       }
 
+      // 后台故意 suspended:analyzer 关省电、采集管线仍在跑,lastClassificationAt 自然
+      // 变旧(classificationsStale)——但这不是故障,不能重启(否则每 60s 白重激活
+      // AVAudioSession churn/扰音乐、又立刻 re-suspend)。只补扫积压;回前台由
+      // recoverClassifierIfNeeded(appDidBecomeActive)复活 analyzer。真故障 failed/stale
+      // 仍走下面的恢复。
+      if (state.engineState === "suspended") {
+        schedulePendingAudioRecovery("refreshSuspended");
+        return;
+      }
+
       const analyzerUnhealthy = UNHEALTHY_ENGINE_STATES.has(state.engineState);
       const classificationsStale = isClassificationStale(state.lastClassificationAt);
       if (
@@ -603,6 +620,7 @@ export function createSoundClassifierSource(
       if (!state.classificationRunning || state.engineRunning === false || analyzerUnhealthy || classificationsStale) {
         await AmbientAudio.startClassification();
       }
+      probeCount("ambient.micRecover"); // __HEAT_PROBE__ watchdog 复活了采集管线
 
       const nextState = await getAudioStateDiagnostics();
       if (!nextState.running) {

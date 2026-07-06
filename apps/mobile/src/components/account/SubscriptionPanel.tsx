@@ -20,7 +20,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Pressable, Text, TextInput, View } from "react-native";
+import { Pressable, Text, TextInput, View, type DimensionValue } from "react-native";
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import * as WebBrowser from "expo-web-browser";
 import { AlertTriangle, Calendar, Check, CreditCard, Receipt, Sparkles } from "lucide-react-native";
@@ -42,6 +42,7 @@ import {
 } from "@pin-ai/core";
 
 import { GlassCard } from "../../ui/GlassCard";
+import { Spinner } from "../../ui/Spinner";
 import { PLANS, planCredits, planName, planPerks } from "./plans";
 
 const FG = "230, 25%, 15%";
@@ -193,9 +194,46 @@ function PlanCreditsBar({ pct, color }: { pct: number; color: string }) {
   );
 }
 
+/** 灰色占位条。骨架屏用，不出现任何"loading"字样。 */
+function SkeletonBar({ w, h = 12, mt = 0, r = 6 }: { w: DimensionValue; h?: number; mt?: number; r?: number }) {
+  return <View style={{ width: w, height: h, marginTop: mt, borderRadius: r, backgroundColor: fg(0.06) }} />;
+}
+
+/**
+ * 冷启动骨架屏——替代原来的 "Loading…" 文案（用户要求任何页面不出现 loading 字样）。
+ * 结构对齐加载完成后的顶部（当前计划卡 + 两个快捷卡），把内容替换时的跳动降到最小。
+ * 只在本 session 首次进入、模块缓存未 primed 时出现一瞬；再次进入走缓存、零骨架。
+ */
+function SubscriptionSkeleton() {
+  return (
+    <View>
+      <GlassCard strong className="mb-3 p-4">
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 12 }}>
+          <View style={{ width: 40, height: 40, borderRadius: 12, backgroundColor: fg(0.06) }} />
+          <View style={{ flex: 1 }}>
+            <SkeletonBar w="45%" h={16} />
+            <SkeletonBar w="60%" h={11} mt={8} />
+          </View>
+        </View>
+        <SkeletonBar w="100%" h={6} r={999} />
+      </GlassCard>
+      <View style={{ flexDirection: "row", gap: 10, marginBottom: 12 }}>
+        {[0, 1].map((i) => (
+          <View key={i} style={{ flex: 1 }}>
+            <GlassCard strong className="p-3">
+              <SkeletonBar w="50%" h={10} />
+              <SkeletonBar w="70%" h={13} mt={6} />
+            </GlassCard>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
 export function SubscriptionPanel() {
-  // account 为默认 ns（subscription.*/plans.* 免前缀）；common 供 status.loading 跨 ns 用。
-  const { t } = useTranslation(["account", "common"]);
+  // account 为默认 ns（subscription.*/plans.* 免前缀）。
+  const { t } = useTranslation("account");
   // Initial values come from the module cache: if the user has visited
   // this page before this session, we render those values instantly and
   // refresh silently in the background. First-ever mount has primed=false
@@ -471,11 +509,7 @@ export function SubscriptionPanel() {
 
   return (
     <View>
-      {loading ? (
-        <Text style={{ paddingVertical: 16, fontFamily: "Inter_400Regular", fontSize: 12, lineHeight: 16, color: fg(0.55) }}>
-          {t("subscription.loading")}
-        </Text>
-      ) : null}
+      {loading && !sub ? <SubscriptionSkeleton /> : null}
 
       {error ? (
         <View
@@ -781,11 +815,7 @@ export function SubscriptionPanel() {
                         </Text>
                         <View style={{ flex: 1 }} />
                         {isCurrent ? <MicroBadge text={t("subscription.current")} bg={purple(0.12)} color={PURPLE} /> : null}
-                        {isPending ? (
-                          <Text style={{ fontFamily: "Inter_400Regular", fontSize: 10, lineHeight: 14, color: fg(0.55) }}>
-                            {t("common:status.loading")}
-                          </Text>
-                        ) : null}
+                        {isPending ? <Spinner size={11} color={fg(0.55)} /> : null}
                       </View>
                       <Text style={{ fontFamily: "Inter_400Regular", fontSize: 11, lineHeight: 15, color: fg(0.55) }}>
                         {planCredits(p.id)}

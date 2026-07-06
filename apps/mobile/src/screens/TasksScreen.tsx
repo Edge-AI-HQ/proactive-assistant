@@ -10,7 +10,7 @@
  * → card chat；新卡 → 详情面板，复用 NOW 同款 CardDetailSheet + 壳级
  * CardActionsProvider 单实例（动作与集合两屏唯一真源）。
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Pressable, SectionList, StyleSheet, Text, View } from "react-native";
 import {
   Bell,
@@ -125,7 +125,10 @@ function Spin({ children }: { children: ReactNode }) {
   return <Animated.View style={style}>{children}</Animated.View>;
 }
 
-function Row({
+/** 稳定的 keyExtractor（模块级,避免每 render 新建身份 → 破 SectionList 优化）。 */
+const taskKey = (e: VisibleCardEntry) => `${e.runId}-${e.card.id}`;
+
+const Row = memo(function Row({
   entry,
   onOpenChat,
   onOpenDetail,
@@ -246,7 +249,7 @@ function Row({
       </GlassCard>
     </Pressable>
   );
-}
+});
 
 export default function TasksScreen({
   headerProps,
@@ -263,13 +266,20 @@ export default function TasksScreen({
   // 行内即刻划线（web CardTimeline 同语义），且与 NOW 球面同步退场。
   const cardActions = useCardActionsContext();
 
-  const groups = new Map<string, VisibleCardEntry[]>();
-  for (const entry of cards) {
-    const label = formatDate(entry.runCompletedAt);
-    if (!groups.has(label)) groups.set(label, []);
-    groups.get(label)!.push(entry);
-  }
-  const sections = [...groups.entries()].map(([title, data]) => ({ title, data }));
+  // sections 用 useMemo（cards 不变时不重算分组、稳定 sections 身份）；配合 memo(Row) +
+  // 稳定回调,轮询/详情开关等无关重渲不再让整表 re-reconcile（P6）。
+  const sections = useMemo(() => {
+    const groups = new Map<string, VisibleCardEntry[]>();
+    for (const entry of cards) {
+      const label = formatDate(entry.runCompletedAt);
+      if (!groups.has(label)) groups.set(label, []);
+      groups.get(label)!.push(entry);
+    }
+    return [...groups.entries()].map(([title, data]) => ({ title, data }));
+  }, [cards]);
+
+  // 稳定 onOpenChat 包装 → memo(Row) 生效（setDetail 本就稳定）。
+  const openChat = useCallback((card: IntentCard) => onOpenChat(card, ""), [onOpenChat]);
 
   return (
     <View className="flex-1">
@@ -277,8 +287,14 @@ export default function TasksScreen({
       <SectionList
         className="flex-1 px-4"
         sections={sections}
-        keyExtractor={(e) => `${e.runId}-${e.card.id}`}
+        keyExtractor={taskKey}
         stickySectionHeadersEnabled={false}
+        // 窗口化（P6）：长列表只渲染视口附近的行。removeClippedSubviews 有白格风险、
+        // 真机没法自测,先不加——这几项已够。
+        windowSize={7}
+        maxToRenderPerBatch={8}
+        initialNumToRender={10}
+        updateCellsBatchingPeriod={50}
         renderSectionHeader={({ section }) => (
           <Text
             // web CardTimeline:103 —— text-xs(12) font-semibold uppercase tracking-wider(0.05em≈0.6px) mb-3
@@ -291,7 +307,7 @@ export default function TasksScreen({
         renderItem={({ item }) => (
           <Row
             entry={item}
-            onOpenChat={(card) => onOpenChat(card, "")}
+            onOpenChat={openChat}
             onOpenDetail={setDetail}
           />
         )}

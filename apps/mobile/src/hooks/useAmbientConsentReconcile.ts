@@ -22,6 +22,7 @@ import { useEffect, useMemo } from "react";
 import { useUserSettings } from "@pin-ai/state";
 
 import {
+  currentGateEpoch,
   getAmbientEnabledSnapshot,
   isAmbientEnabled,
   reconcileEnabledSources,
@@ -55,7 +56,12 @@ export function useAmbientConsentReconcile(userId: string | null): void {
   useEffect(() => {
     if (!userId || enabledKey === null) return;
     setAmbientTranscriptionLanguage(generationLanguage);
-    const keys = enabledKey ? enabledKey.split(",") : [];
-    void reconcileEnabledSources(userId, keys, { interactivePermissions: false });
+    // 读闸与下发在同一同步段 + 携带关闸代际：memo 里的闸值可能是 render 时的旧读数
+    // （关闸后 ms 级窗口），effect 时重读最新镜像;之后再关闸则由代际让 reconcile
+    // 整体作废——两层合起来关死「显示关但在采」的复活竞态（2026-07-05 审查 F1）。
+    const gateEpoch = currentGateEpoch();
+    const gateOpen = getAmbientEnabledSnapshot() === true;
+    const keys = gateOpen && enabledKey ? enabledKey.split(",") : [];
+    void reconcileEnabledSources(userId, keys, { interactivePermissions: false, gateEpoch });
   }, [userId, enabledKey, generationLanguage]);
 }
