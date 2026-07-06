@@ -7,11 +7,12 @@
  *
  * 平台介质差异（dev = Capacitor WKWebView，RN 无页面导航）：
  * - dev `window.location.href = checkoutUrl` 整页跳 Stripe、付完回跳 successUrl；
- *   RN 用 expo-web-browser 开 in-app browser（SFSafariViewController，iOS 上
- *   Stripe Checkout 的标准宿主），successUrl/cancelUrl 不传 → 走后端
- *   PAYMENT_PUBLIC_BASE_URL 兜底成功页；用户关掉浏览器后静默 refresh ——
- *   reconcile 直接从 Stripe 拉 canonical 状态，webhook 迟到也能收敛
- *   （web 本就靠同一条 reconcile 兜底本地无 webhook 的场景）。
+ *   RN 用 expo-web-browser 的 openAuthSessionAsync 开 in-app browser
+ *   （ASWebAuthenticationSession）。successUrl/cancelUrl 传 App deep link
+ *   （Linking.createURL("payment/{success,cancel}")）→ Stripe 付完/取消跳该
+ *   deep link 时浏览器**自动关闭、回到 App**（不再停在后端的 404 兜底页）。
+ *   回来后静默 refresh —— reconcile 直接从 Stripe 拉 canonical 状态，webhook
+ *   迟到也能收敛（web 本就靠同一条 reconcile 兜底本地无 webhook 的场景）。
  * - dev `window.open(portalUrl)` 后无法感知关闭；RN openBrowserAsync 关闭即
  *   resolve → 顺手静默刷新（Portal 里可能改了卡/取消了订阅）。
  * - 发票行 `<a href>` → 同样开 in-app browser。
@@ -23,6 +24,7 @@ import { useTranslation } from "react-i18next";
 import { Pressable, Text, TextInput, View, type DimensionValue } from "react-native";
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import * as WebBrowser from "expo-web-browser";
+import * as Linking from "expo-linking";
 import { AlertTriangle, Calendar, Check, CreditCard, Receipt, Sparkles } from "lucide-react-native";
 import {
   cancelCurrentSubscription,
@@ -310,15 +312,18 @@ export function SubscriptionPanel() {
     setActionToast(null);
     setError(null);
     try {
-      // successUrl/cancelUrl 不传 → 后端 PAYMENT_PUBLIC_BASE_URL 兜底成功页
-      // （RN 没有 window.location.origin 可回跳）。
-      const r = await createCheckout(planCode);
+      // successUrl/cancelUrl = App deep link → Stripe 付完/取消跳回来时
+      // openAuthSessionAsync 自动关浏览器回 App（否则停在后端 404 兜底页）。
+      const returnUrl = Linking.createURL("payment/success");
+      const cancelUrl = Linking.createURL("payment/cancel");
+      const r = await createCheckout(planCode, { successUrl: returnUrl, cancelUrl });
       if (r.checkoutUrl) {
-        // new subscription — Stripe Checkout in the in-app browser; the
-        // promise resolves when the user closes it → silent refresh picks
-        // up the paid state (reconcile covers webhook lag).
+        // new subscription — Stripe Checkout in the auth-session browser; it
+        // auto-dismisses when Stripe redirects to returnUrl → back to the app,
+        // then silent refresh picks up the paid state (reconcile covers webhook
+        // lag). A manual close resolves the same way.
         setShowPlanPicker(false);
-        await WebBrowser.openBrowserAsync(r.checkoutUrl);
+        await WebBrowser.openAuthSessionAsync(r.checkoutUrl, returnUrl);
         await refresh(true);
         return;
       }
@@ -352,11 +357,14 @@ export function SubscriptionPanel() {
     setActionToast(null);
     setError(null);
     try {
-      const r = await createTopup(amountCents);
+      const returnUrl = Linking.createURL("payment/success");
+      const cancelUrl = Linking.createURL("payment/cancel");
+      const r = await createTopup(amountCents, { successUrl: returnUrl, cancelUrl });
       // Stripe Checkout (mode=payment) — credits land on the
-      // checkout.session.completed webhook after the user pays; refresh
-      // after the browser closes to pick up the new balance.
-      await WebBrowser.openBrowserAsync(r.checkoutUrl);
+      // checkout.session.completed webhook after the user pays. The auth-session
+      // browser auto-dismisses on the returnUrl redirect → back to the app;
+      // refresh then picks up the new balance.
+      await WebBrowser.openAuthSessionAsync(r.checkoutUrl, returnUrl);
       await refresh(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : t("subscription.topupFailed"));
