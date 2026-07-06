@@ -38,6 +38,10 @@ export interface EventsFilter {
   /** ISO-8601 upper bound (inclusive) on occurredAt. */
   until?: string;
   limit?: number;
+  /** occurredAt order (default desc). `asc` + `since` = nearest-first from the
+   * boundary, so the limit truncates the FAR tail — the upcoming-side shape
+   * (recurring calendar instances would otherwise starve out near-now rows). */
+  order?: "asc" | "desc";
 }
 
 export interface EventsResponse {
@@ -84,6 +88,7 @@ export async function fetchEvents(
   if (filter?.since) qs.set("since", filter.since);
   if (filter?.until) qs.set("until", filter.until);
   if (filter?.limit) qs.set("limit", String(filter.limit));
+  if (filter?.order) qs.set("order", filter.order);
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   // Trailing slash matches the backend route (`/api/events/`, @router.get("/")
   // under prefix="/api/events") — avoids a 307 redirect through the proxy.

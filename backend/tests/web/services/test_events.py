@@ -149,6 +149,32 @@ async def test_append_enqueues_embedding(pool, user_ids):
 
 
 @pytest.mark.asyncio
+async def test_search_structured_ascending_truncates_far_tail(pool, user_ids):
+    """`ascending` + since + limit = nearest-first from the boundary: the cap
+    drops the FAR rows (the upcoming-feed shape — a recurring-heavy calendar
+    must not starve out near-now rows). Default DESC keeps newest-first."""
+    user_a, _ = user_ids
+    boundary = datetime(2026, 6, 10, tzinfo=UTC)
+    async with user_scoped_tx(pool, user_a) as conn:
+        repo = EventsRepository(user_a, conn)
+        for i, day in enumerate((11, 12, 13)):
+            await repo.append(
+                AppendEventInput(
+                    id=f"asc{i}",
+                    source="composio",
+                    event_type="meeting",
+                    occurred_at=datetime(2026, 6, day, tzinfo=UTC),
+                    dedupe_key=f"asck{i}",
+                    title=f"day {day}",
+                )
+            )
+        asc = await repo.search_structured(since=boundary, limit=2, ascending=True)
+        desc = await repo.search_structured(since=boundary, limit=2)
+    assert [r.id for r in asc] == ["asc0", "asc1"]  # nearest two; day-13 truncated
+    assert [r.id for r in desc] == ["asc2", "asc1"]  # newest two; day-11 truncated
+
+
+@pytest.mark.asyncio
 async def test_search_structured_filters_type_and_recency(pool, user_ids):
     user_a, _ = user_ids
     async with user_scoped_tx(pool, user_a) as conn:

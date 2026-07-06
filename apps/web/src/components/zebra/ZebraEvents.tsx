@@ -9,17 +9,20 @@
  * tick boundary (30s), decoupled from the query keys so it moves without ever
  * churning the cache.
  *
- * Query shape (the load-bearing bit): `recent` has NO time filter — newest 200
- * by occurredAt DESC — so a freshly ingested event is always inside its window
- * (an `until=mount` bound would orphan everything ingested after mount, and a
- * DESC `since=mount` window truncates NEAREST-first once ambient outgrows the
- * limit — the two dead ends this shape replaces). `future` (since=mount, slow
- * poll) only guards the far tail: upcoming events pushed out of recent's 200
- * cap by newer rows. Merge dedupes by id, sorts DESC, and splits at the tick.
+ * Query shape (the load-bearing bit): two windows around a boundary (mount
+ * time, nudged forward by the long-session guard). past = `until=boundary`
+ * DESC (newest 200 before it). future = `since=boundary` **order=asc** —
+ * nearest-first, so its 200-cap truncates the FAR tail. Both directions
+ * matter: an unbounded recency query lets a calendar with 200+ recurring
+ * upcoming instances starve out ALL past rows ("0 past" bug), while a DESC
+ * since-window would truncate nearest-first and hide fresh events instead.
+ * Freshly ingested rows (occurredAt > boundary) land in the ASC future query
+ * ahead of every real upcoming event, so SSE refetches surface them in ~1s.
+ * Merge dedupes by id, re-sorts DESC, and splits at the tick.
  * Per-type legend filter + click-to-inspect detail panel. Zebra light-glass
  * language (frosted white + dark --foreground text + per-type accent color).
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useEvents, useEventsLiveRefresh } from "@pin-ai/state";
 import type { EventItem } from "@pin-ai/core";
 import EventsFeed, {
@@ -45,12 +48,17 @@ function fmt(iso: string | null): string {
 }
 
 export default function ZebraEvents() {
-  // Mount instant — only the far-future guard query anchors on it; the
-  // now-line boundary is the live tick below, NOT this (a frozen boundary
-  // was why fresh events used to land above the line marked "2m ago").
-  const mountISO = useMemo(() => new Date().toISOString(), []);
-  const recent = useEvents({ limit: 200 }, true, RECENT_POLL_MS);
-  const future = useEvents({ since: mountISO, limit: 200 }, true, FUTURE_POLL_MS);
+  // Query boundary — starts at mount, nudged forward by the long-session
+  // guard below. This is a DATA-WINDOW split only; the visible now-line is
+  // the live tick further down (a frozen display boundary was why fresh
+  // events used to land above the line marked "2m ago").
+  const [boundaryISO, setBoundaryISO] = useState(() => new Date().toISOString());
+  const recent = useEvents({ until: boundaryISO, limit: 200 }, true, RECENT_POLL_MS);
+  const future = useEvents(
+    { since: boundaryISO, limit: 200, order: "asc" },
+    true,
+    FUTURE_POLL_MS,
+  );
 
   // SSE signal plane: every pai_events write invalidates both queries above —
   // a fresh ambient event shows up within ~1s of landing in L1.
@@ -65,14 +73,34 @@ export default function ZebraEvents() {
     const t = setInterval(() => setTickMs(Date.now()), TICK_MS);
     return () => clearInterval(t);
   }, []);
-  // Data arrival also advances the boundary: a just-ingested event's
-  // occurredAt sits between the last tick and now, and would otherwise render
-  // ABOVE the line as "0s ago upcoming" until the next tick. Structural
-  // sharing keeps the reference stable on no-op refetches, so this only fires
-  // on real changes.
+  // Data arrival also advances the tick: a just-ingested event's occurredAt
+  // sits between the last tick and now, and would otherwise render ABOVE the
+  // line as "0s ago upcoming" until the next tick. Structural sharing keeps
+  // the references stable on no-op refetches, so this only fires on changes.
+  // The mount run is skipped: useState already stamped the tick, and a
+  // first-frame re-split would swap the feed's data array right while
+  // virtuoso is initializing its now-anchor (the cold-load blank-list race).
+  const tickedOnce = useRef(false);
   useEffect(() => {
+    if (!tickedOnce.current) {
+      tickedOnce.current = true;
+      return;
+    }
     setTickMs(Date.now());
-  }, [recent.events]);
+  }, [recent.events, future.events]);
+
+  // Long-session guard: rows ingested after the boundary pile up at the head
+  // of the ASC future query (they sort before every real upcoming event, so
+  // they're never truncated — until they alone approach the 200 cap). Once
+  // enough have drifted below the tick, move the boundary forward: the past
+  // query adopts them and the future query restarts near-empty. Real upcoming
+  // rows never trip this (their occurredAt stays above the tick), so a
+  // recurring-heavy calendar can't loop it. keepPreviousData (useEvents)
+  // keeps the old page on screen while the swapped keys refetch.
+  useEffect(() => {
+    const adopted = future.events.filter((e) => Date.parse(e.occurredAt) <= tickMs).length;
+    if (adopted > 150) setBoundaryISO(new Date().toISOString());
+  }, [future.events, tickMs]);
 
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);

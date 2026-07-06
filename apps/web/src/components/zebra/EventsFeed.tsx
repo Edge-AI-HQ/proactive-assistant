@@ -12,7 +12,7 @@
  * jump). We only write the row + now-line visuals, in the zebra light-glass
  * language (frosted white + dark --foreground text + per-type accent color).
  */
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { EventItem } from "@pin-ai/core";
 
@@ -109,16 +109,34 @@ export default function EventsFeed({ items, nowIndex, selectedId, onSelect }: Pr
   // centers it), so the pill never flashes on mount.
   const [range, setRange] = useState<{ startIndex: number; endIndex: number } | null>(null);
   const nowInView = range === null || (nowIndex >= range.startIndex && nowIndex <= range.endIndex);
+
+  // Center the first viewport on the now-line. initialTopMostItemIndex is the
+  // primary anchor, but alone it proved fragile on cold page loads: its async
+  // init raced early layout/data settling and left a blank zero-row list (SPA
+  // navigations were fine). The post-mount raf scrollToIndex re-drives the
+  // list state out of that dead end; virtuoso retries it internally until
+  // sizes settle. Its target MUST match the initial anchor's (center) — the
+  // init state machine retries its own target and overrides any mismatched
+  // imperative scroll. Mount-scoped via ref: later nowIndex drift must not
+  // yank the viewport around.
+  const initialNowIndex = useRef(nowIndex);
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      virtuosoRef.current?.scrollToIndex({ index: initialNowIndex.current, align: "center" });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
   return (
     <>
       <Virtuoso
         ref={virtuosoRef}
         className="h-full w-full"
         data={items}
-        // Anchor the FIRST viewport on the now-line, centered — the mount-time
-        // one-shot; ZebraEvents only mounts the feed once both query sides have
-        // landed so nowIndex is final by then (a late prepend would silently
-        // shift this anchor: initialTopMostItemIndex never re-fires).
+        // Same center target as the imperative scrolls above — virtuoso's
+        // init state machine retries its OWN target, so any mismatch here
+        // (e.g. the bare-number top-align form) wins over later imperative
+        // centering and parks the now-line at the viewport top.
         initialTopMostItemIndex={{ index: nowIndex, align: "center" }}
         rangeChanged={setRange}
         computeItemKey={(_, item) => (isNow(item) ? "__now__" : item.id)}

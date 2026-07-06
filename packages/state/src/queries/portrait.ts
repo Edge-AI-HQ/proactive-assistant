@@ -6,7 +6,7 @@
  * server state，纯 React + TanStack Query，三端（web/Electron/RN）同一接口。
  */
 import { useCallback, useEffect } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   fetchEvents,
@@ -118,9 +118,13 @@ export function useEvents(
     queryKey: eventsKeys.list(filter),
     queryFn: ({ signal }) => fetchEvents(filter, signal),
     enabled,
-    // Opt-in polling: the Events timeline passes ~10s for a near-live feel
-    // (v1; v2 swaps to an SSE channel). Other callers omit it → no polling.
+    // Opt-in polling: fallback freshness under the SSE signal plane
+    // (useEventsLiveRefresh). Other callers omit it → no polling.
     refetchInterval: pollMs,
+    // Boundary-moving consumers (the events feed's long-session guard) swap
+    // the filter in place; keep the previous page on screen through the
+    // refetch instead of flashing back to a loading state.
+    placeholderData: keepPreviousData,
   });
 
   const refetch = useCallback(async () => {

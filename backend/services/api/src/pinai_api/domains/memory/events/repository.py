@@ -561,6 +561,7 @@ class EventsRepository(UserScopedRepository):
         status: str = "active",
         limit: int = 30,
         run_id: str | None = None,
+        ascending: bool = False,
     ) -> list[EventRow]:
         """Deterministic time/type window (no vector) — the recency path and
         the gating/structured-filter path.
@@ -568,15 +569,21 @@ class EventsRepository(UserScopedRepository):
         Ordering is keyed to `run_id`: an agent relevance retrieval (run_id given)
         ranks by the objective score (doc §5.5: event_type weight × recency ×
         usage), while UI timeline / preference list / pending sweep / internal
-        callers (run_id None) keep strict `occurred_at DESC` — those surfaces have
-        a chronological contract that objective ranking would scramble. Only the
-        agent retrieval (run_id given) bumps the reference signal (§七-329) — UI
-        browse / internal reads don't pollute it."""
+        callers (run_id None) keep strict `occurred_at` order — those surfaces
+        have a chronological contract that objective ranking would scramble.
+        `ascending` flips that chronological order (UI path only; the agent's
+        score ranking has no direction to flip): with `since` + a limit it means
+        "nearest-first from the boundary", so the CAP truncates the FAR tail —
+        the shape the events feed needs for the upcoming side, where a calendar
+        full of recurring instances would otherwise starve out everything near
+        now. Only the agent retrieval (run_id given) bumps the reference signal
+        (§七-329) — UI browse / internal reads don't pollute it."""
         if run_id is not None:
             order_clause = f"ORDER BY ({_objective_score_sql('1')}) DESC, occurred_at DESC, id"
             order_params: tuple[Any, ...] = (_EVENT_TYPE_WEIGHT_JSON, _RECENCY_HALFLIFE_DAYS)
         else:
-            order_clause = "ORDER BY occurred_at DESC"
+            direction = "ASC" if ascending else "DESC"
+            order_clause = f"ORDER BY occurred_at {direction}, id"
             order_params = ()
         async with self._conn.cursor() as cur:
             await cur.execute(

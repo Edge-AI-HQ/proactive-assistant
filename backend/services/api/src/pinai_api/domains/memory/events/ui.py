@@ -98,8 +98,13 @@ async def list_events(
     since: datetime | None = Query(None),
     until: datetime | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
+    order: str = Query("desc", pattern="^(asc|desc)$"),
 ):
-    """Recent active events (timeline) for the Ambient / Mirror pages."""
+    """Recent active events (timeline) for the Ambient / Mirror pages.
+
+    `order=asc` + `since` reads nearest-first from the boundary so the limit
+    truncates the FAR tail — the upcoming side of the events feed (a calendar
+    of recurring instances would otherwise starve out everything near now)."""
     async with user_scoped_tx(pool, user.id) as conn:
         repo = EventsRepository(user.id, conn)
         rows = await repo.search_structured(
@@ -108,5 +113,6 @@ async def list_events(
             until=until,
             status="active",
             limit=limit,
+            ascending=order == "asc",
         )
     return {"items": [_to_dict(r) for r in rows]}
