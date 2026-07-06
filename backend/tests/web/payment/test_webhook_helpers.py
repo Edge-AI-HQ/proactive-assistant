@@ -387,3 +387,38 @@ async def test_cancel_to_free_keeps_credits(monkeypatch):
     recompute.assert_awaited_once()
     _, kwargs = recompute.await_args
     assert kwargs["reset_spend"] is False
+
+
+@pytest.mark.asyncio
+async def test_plan_code_for_subscription_reads_items_field_not_dict_method(monkeypatch):
+    """Regression: a Stripe Subscription is a dict subclass, so `sub.items`
+    is the builtin dict.items() method, NOT the line-items field. Resolving
+    the price with attribute-first access silently yielded no data, so every
+    subscription resolved to plan_code=None and paying users stayed on Free.
+    _plan_code_for_subscription must read the field via stripe_attr (get-first).
+    """
+    import stripe
+
+    async def fake_find(conn, price_id):
+        return SimpleNamespace(plan_code="max") if price_id == "price_max" else None
+
+    monkeypatch.setattr(plans, "find_by_stripe_price", AsyncMock(side_effect=fake_find))
+
+    sub = stripe.Subscription.construct_from(
+        {"id": "sub_x", "items": {"data": [{"price": {"id": "price_max"}}]}},
+        "sk_test_dummy",
+    )
+    # the collision is real: attribute access returns the dict method, not the field
+    assert callable(sub.items)
+    assert await webhook_mod._plan_code_for_subscription(MagicMock(), sub) == "max"
+
+
+@pytest.mark.asyncio
+async def test_plan_code_for_subscription_empty_items_returns_none(monkeypatch):
+    import stripe
+
+    monkeypatch.setattr(plans, "find_by_stripe_price", AsyncMock(return_value=None))
+    sub = stripe.Subscription.construct_from(
+        {"id": "sub_x", "items": {"data": []}}, "sk_test_dummy"
+    )
+    assert await webhook_mod._plan_code_for_subscription(MagicMock(), sub) is None

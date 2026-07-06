@@ -26,7 +26,12 @@ from typing import Any
 from . import budget_periods as periods_repo
 from . import credit_grants as grants_repo
 from . import plans, subscriptions
-from .stripe_client import add_calendar_months, requires_stripe, requires_webhook_secret
+from .stripe_client import (
+    add_calendar_months,
+    requires_stripe,
+    requires_webhook_secret,
+    stripe_attr,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -443,13 +448,12 @@ async def _user_id_from_metadata(conn, obj: Any) -> int | None:
 
 
 def _attr(obj: Any, name: str) -> Any:
-    # NOT consolidated with stripe_client.stripe_attr: this reads attribute
-    # first, .get second — the opposite order. `_plan_code_for_subscription`
-    # below calls `_attr(sub, "items")`, where "items" collides with dict's
-    # own .items() method; attribute-first returns the bound method (so the
-    # current code resolves no plan_code), while stripe_attr (get-first)
-    # would return the real line-items field. Swapping would change runtime
-    # behavior, so this stays private. See stripe_attr's docstring.
+    # Attribute-first read (getattr, then dict.get). Fine ONLY for Stripe
+    # fields whose names don't collide with dict's own methods — metadata,
+    # id, customer, subscription, status, mode, payment_intent. For
+    # collision-prone fields ("items"/"keys"/"values"/...), getattr returns
+    # the bound dict method instead of the field, so use stripe_client's
+    # stripe_attr (get-first) instead — see _plan_code_for_subscription.
     if obj is None:
         return None
     if hasattr(obj, name):
@@ -478,14 +482,21 @@ def _pending_from_stripe_metadata(sub: Any) -> str | None:
 
 
 async def _plan_code_for_subscription(conn, sub: Any) -> str | None:
-    """Resolve our plan_code from the subscription's first item price."""
-    items = _attr(sub, "items") or {}
-    data = _attr(items, "data") or []
+    """Resolve our plan_code from the subscription's first item price.
+
+    MUST use stripe_attr (get-first), NOT _attr (attribute-first): a Stripe
+    Subscription is a dict subclass, so `sub.items` returns the builtin
+    dict.items() method rather than the line-items field. Reading it with
+    _attr silently yielded no data, so every subscription resolved to
+    plan_code=None and users stayed on Free even after paying.
+    """
+    items = stripe_attr(sub, "items") or {}
+    data = stripe_attr(items, "data") or []
     if not data:
         return None
     first = data[0]
-    price = _attr(first, "price") or {}
-    price_id = _attr(price, "id")
+    price = stripe_attr(first, "price") or {}
+    price_id = stripe_attr(price, "id")
     if not price_id:
         return None
     plan = await plans.find_by_stripe_price(conn, price_id)
