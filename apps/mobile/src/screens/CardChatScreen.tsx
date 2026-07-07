@@ -16,7 +16,7 @@
  * `useSinkDismissGesture`（任意处右滑 → 跟手下沉，过阈值退出 / 不到弹回），和
  * main chat ChatSheet 同一份，体感一致。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft } from "lucide-react-native";
@@ -25,7 +25,6 @@ import { GestureDetector } from "react-native-gesture-handler";
 import Animated, {
   Easing,
   runOnJS,
-  useAnimatedStyle,
   useSharedValue,
   withSpring,
   withTiming,
@@ -44,7 +43,11 @@ import ChatScreen from "./ChatScreen";
 import AuroraBackground from "../ui/AuroraBackground";
 import CardContextHeaderSlot from "../components/chat/CardContextHeaderSlot";
 import CardDetailSheet from "../components/now/CardDetailSheet";
-import { useSinkDismissGesture } from "../components/chat/useSinkDismiss";
+import {
+  dismissKeyboardThenClose,
+  useGlassSinkStyles,
+  useSinkDismissGesture,
+} from "../components/chat/useSinkDismiss";
 import { postCardFeedback } from "../hooks/useCardActions";
 import i18n from "../i18n";
 
@@ -146,12 +149,15 @@ export default function CardChatScreen({
   // 退出手势：左缘窄条右滑 → 跟手下沉退出（dev ChatSheetOverlay 左缘模型）。
   // 只在最左 24px 起拖 → 不和消息列表竖滚打架 = 可靠触发（和 ChatSheet 同构）。
   const edgeSink = useSinkDismissGesture(y, height, width, onClose, { activateX: 10, failY: 12 });
-  const style = useAnimatedStyle(() => ({ transform: [{ translateY: y.value }] }));
+  // 下沉时的玻璃卡视觉（MenuDrawer 同语言）：translateY + 圆角 + 白雾罩，全程 y 驱动。
+  const { paneStyle, scrimStyle } = useGlassSinkStyles(y, height);
+  // 按钮/回调类关闭统一走「先收键盘、收完再下沉」（和右滑手势同一时序）。
+  const requestClose = useCallback(() => dismissKeyboardThenClose(onClose), [onClose]);
 
   return (
     <Animated.View
       // 负 inset → escape 根 SafeAreaView，铺满整屏（含刘海后面）。
-      style={[styles.root, { top: -insets.top, bottom: -insets.bottom }, style]}
+      style={[styles.root, { top: -insets.top, bottom: -insets.bottom }, paneStyle]}
       pointerEvents={open ? "auto" : "none"}
     >
       {/* 不透明底 + aurora：sheet 下沉时整体一起走、不透出下层（web 同构）。 */}
@@ -163,7 +169,7 @@ export default function CardChatScreen({
                 无右侧按钮）；paddingTop 用 insets.top 避刘海。 */}
             <View style={[styles.header, { paddingTop: 12 + insets.top }]}>
               <Pressable
-                onPress={onClose}
+                onPress={requestClose}
                 hitSlop={8}
                 style={styles.backBtn}
                 accessibilityRole="button"
@@ -184,7 +190,7 @@ export default function CardChatScreen({
               bootstrap={shown?.bootstrap}
               cardContext={cardContext}
               card={card}
-              onCardClose={onClose}
+              onCardClose={requestClose}
               bottomInset={insets.bottom}
               open={open}
             />
@@ -213,11 +219,11 @@ export default function CardChatScreen({
             onClose={() => setDetailOpen(false)}
             onDismiss={() => {
               void postCardFeedback(dismissFeedbackBody(card), `fb:dismiss:${card.id}`);
-              onClose();
+              requestClose();
             }}
             onComplete={() => {
               void postCardFeedback(cardActionFeedbackBody("complete", card), `fb:complete:${card.id}`);
-              onClose();
+              requestClose();
             }}
             // 已在会话中：Approve / Chat 仅收起详情（不重复开 chat）。
             onApprove={() => setDetailOpen(false)}
@@ -225,14 +231,29 @@ export default function CardChatScreen({
           />
         </>
       ) : null}
+      {/* 玻璃白雾罩（MenuDrawer scrim 同款）：下沉时黑字变灰、彩字基本保留。 */}
+      <Animated.View
+        style={[StyleSheet.absoluteFill, styles.glassScrim, scrimStyle]}
+        pointerEvents="none"
+      />
     </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
   // --background 220 30% 96% ≈ #f2f4f8（web bg-background 同源）。left/right/top/
-  // bottom 由 inline 负 inset 给（满屏出血）。
-  root: { position: "absolute", left: 0, right: 0, backgroundColor: "#f2f4f8" },
+  // bottom 由 inline 负 inset 给（满屏出血）。overflow hidden + 细白边 = 下沉玻璃卡
+  // （圆角由 useGlassSinkStyles 动画驱动，MenuDrawer card 同语言）。
+  root: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    backgroundColor: "#f2f4f8",
+    overflow: "hidden",
+    borderWidth: 0.5,
+    borderColor: "rgba(255,255,255,0.5)",
+  },
+  glassScrim: { backgroundColor: "#fff" },
   content: { flex: 1 },
   header: {
     flexDirection: "row",

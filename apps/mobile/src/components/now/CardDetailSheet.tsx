@@ -601,6 +601,25 @@ export default function CardDetailSheet({
   if (entry) lastEntry.current = entry;
   const shown = entry ?? lastEntry.current;
 
+  // Part B：card 执行 run（web useCardExecutionRun）——拿 lastMessagePayload.plan
+  // 渲染 EXECUTION PLAN。runId=null（抽屉关）时 hook no-op；本地历史源同主 chat。
+  // 声明提前到进场 effect 之前：进场要用 run.loading 做「内容就位」门（见下）。
+  const run = useCardExecutionRun(shown?.card?.id ?? null, { localHistory: readLocalHistory });
+
+  // 「内容就位」门——修「打开时两段式展开闪一下」：EXECUTION PLAN / drafts / status
+  // banner 由 run 异步填充（本地有记录毫秒级、无记录要等网络页）。若面板先带着"矮版"
+  // 内容起浮、数据中途到达，这几段以默认展开态整段挂载，底部锚定的面板顶边被猛地顶高
+  // = 两段式。所以等 run 就位再起浮，面板带完整内容一次浮出（浮出速度不变）。
+  // 350ms 兜底：网络太慢就不再等——宁可偶发长高，不能让点击像没反应。
+  const [slowOpen, setSlowOpen] = useState(false);
+  useEffect(() => {
+    setSlowOpen(false);
+    if (!open || !run.loading) return;
+    const t = setTimeout(() => setSlowOpen(true), 350);
+    return () => clearTimeout(t);
+  }, [open, run.loading, shown?.card?.id]);
+  const contentReady = !run.loading || slowOpen;
+
   // deps 含 shown.card.id：退场动画途中（open 恒为 true）若换开另一张卡（entry A→B），
   // 光靠 open 布尔不变 → 开场 spring 不会重跑 → 新卡跟着旧退场滑出屏、被吞掉。带上卡片
   // 身份后，A→B 会重跑本 effect 的 open 分支 spring(0) 把新卡弹回来（并取消上一条 withTiming
@@ -608,13 +627,19 @@ export default function CardDetailSheet({
   useEffect(() => {
     if (open) {
       setMounted(true);
+      if (!contentReady) {
+        // 数据未就位：面板钉在整屏外等待（防上一张卡的 panelH 残值 < 本卡初始高度时
+        // 顶边露头）。contentReady 翻 true 会重跑本 effect 走下面的 spring。
+        y.value = height;
+        return;
+      }
       y.value = withSpring(0, { stiffness: 320, damping: 32, mass: 0.9, overshootClamping: true });
     } else {
       y.value = withTiming(panelH.value, { duration: 320, easing: Easing.out(Easing.cubic) }, (done) => {
         if (done) runOnJS(setMounted)(false);
       });
     }
-  }, [open, shown?.card?.id, panelH, y]);
+  }, [open, shown?.card?.id, contentReady, height, panelH, y]);
 
   const dragDown = Gesture.Pan()
     .activeOffsetY(12)
@@ -641,9 +666,6 @@ export default function CardDetailSheet({
 
   const panelStyle = useAnimatedStyle(() => ({ transform: [{ translateY: y.value }] }));
   const dimStyle = useAnimatedStyle(() => ({ opacity: 1 - Math.min(1, y.value / panelH.value) }));
-  // Part B：card 执行 run（web useCardExecutionRun）——拿 lastMessagePayload.plan
-  // 渲染 EXECUTION PLAN。runId=null（抽屉关）时 hook no-op；本地历史源同主 chat。
-  const run = useCardExecutionRun(shown?.card?.id ?? null, { localHistory: readLocalHistory });
 
   if (!mounted) return null;
   const card = shown?.card;

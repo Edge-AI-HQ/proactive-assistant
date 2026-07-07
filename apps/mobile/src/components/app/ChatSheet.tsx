@@ -19,7 +19,6 @@ import { ChevronDown } from "lucide-react-native";
 import { GestureDetector } from "react-native-gesture-handler";
 import Animated, {
   Easing,
-  useAnimatedStyle,
   useSharedValue,
   withSpring,
   withTiming,
@@ -27,7 +26,11 @@ import Animated, {
 
 import ChatScreen from "../../screens/ChatScreen";
 import AuroraBackground from "../../ui/AuroraBackground";
-import { useSinkDismissGesture } from "../chat/useSinkDismiss";
+import {
+  dismissKeyboardThenClose,
+  useGlassSinkStyles,
+  useSinkDismissGesture,
+} from "../chat/useSinkDismiss";
 import { PageActiveProvider } from "./KeepAlivePage";
 
 const FG = "29,33,48";
@@ -48,12 +51,13 @@ export default function ChatSheet({ open, onClose }: { open: boolean; onClose: (
   // 退出手势：左缘窄条右滑 → 跟手下沉退出（dev ChatSheetOverlay 的左缘模型）。
   // 只在最左 24px 起拖 → 结构上不和消息列表的竖滚打架 = 可靠触发（这正是 dev 稳的原因）。
   const edgeSink = useSinkDismissGesture(y, height, width, onClose, { activateX: 10, failY: 12 });
-  const style = useAnimatedStyle(() => ({ transform: [{ translateY: y.value }] }));
+  // 下沉时的玻璃卡视觉（MenuDrawer 同语言）：translateY + 圆角 + 白雾罩，全程 y 驱动。
+  const { paneStyle, scrimStyle } = useGlassSinkStyles(y, height);
 
   return (
     <Animated.View
       // 负 inset → escape 根 SafeAreaView，铺满整屏（含刘海后面）。
-      style={[styles.root, { top: -insets.top, bottom: -insets.bottom }, style]}
+      style={[styles.root, { top: -insets.top, bottom: -insets.bottom }, paneStyle]}
       pointerEvents={open ? "auto" : "none"}
     >
       {/* web ChatSheetOverlay 同构：不透明底 + 同款 aurora 层，面板下滑时
@@ -63,7 +67,8 @@ export default function ChatSheet({ open, onClose }: { open: boolean; onClose: (
         {/* header：单个 ChevronDown（dismiss-down）；paddingTop 用 insets.top 避刘海。 */}
         <View style={[styles.header, { paddingTop: 12 + insets.top }]}>
           <Pressable
-            onPress={onClose}
+            // 先收键盘、收完再下沉（和右滑手势同一时序：先键盘后页面）。
+            onPress={() => dismissKeyboardThenClose(onClose)}
             hitSlop={8}
             style={styles.backBtn}
             accessibilityRole="button"
@@ -82,14 +87,29 @@ export default function ChatSheet({ open, onClose }: { open: boolean; onClose: (
       <GestureDetector gesture={edgeSink}>
         <View style={styles.edgeZone} accessibilityElementsHidden />
       </GestureDetector>
+      {/* 玻璃白雾罩（MenuDrawer scrim 同款）：下沉时黑字变灰、彩字基本保留。 */}
+      <Animated.View
+        style={[StyleSheet.absoluteFill, styles.glassScrim, scrimStyle]}
+        pointerEvents="none"
+      />
     </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
   // --background 220 30% 96% ≈ #f2f4f8（web bg-background 同源）。top/bottom 由
-  // inline 负 inset 给（满屏出血，同 CardChatScreen）。
-  root: { position: "absolute", left: 0, right: 0, backgroundColor: "#f2f4f8" },
+  // inline 负 inset 给（满屏出血，同 CardChatScreen）。overflow hidden + 细白边 =
+  // 下沉玻璃卡（圆角由 useGlassSinkStyles 动画驱动，MenuDrawer card 同语言）。
+  root: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    backgroundColor: "#f2f4f8",
+    overflow: "hidden",
+    borderWidth: 0.5,
+    borderColor: "rgba(255,255,255,0.5)",
+  },
+  glassScrim: { backgroundColor: "#fff" },
   content: { flex: 1 },
   // web header: px-4 pb-2，按钮 p-2 -ml-1。main chat 无标题、无下边框（无 headerSlot）。
   header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingBottom: 8 },

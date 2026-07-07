@@ -30,12 +30,14 @@ import { WebView } from "react-native-webview";
 import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
 import {
   Bot,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ChevronUp,
   CircleAlert,
   Globe,
   Hand,
+  Keyboard,
   Minimize2,
   RotateCw,
   X,
@@ -57,6 +59,8 @@ import { Spinner } from "../../ui/Spinner";
 /** web bg-[hsl(230_22%_9%)] / bg-[hsl(230_18%_13%)] 同源暗色。 */
 const PANEL_BG = "hsl(230, 22%, 9%)";
 const BAR_BG = "hsl(230, 18%, 13%)";
+
+const clampTo = (v: number, max: number) => Math.min(Math.max(v, 0), max);
 
 export interface BrowserPanelState {
   session: BrowserSession | null;
@@ -233,11 +237,21 @@ export function BrowserPanel({
   const { t } = useTranslation(["browser", "common"]);
   const [loaded, setLoaded] = useState(false);
   const [confirmingClose, setConfirmingClose] = useState(false);
+  // kbVisible = 隐藏输入框已聚焦（iOS 键盘已弹）。用户接管后 Type 键盘钮常驻——远端是
+  // 桌面 mouse 会话、click 不回传是否可编辑，故不再按字段可编辑性动态显隐。
+  const [kbVisible, setKbVisible] = useState(false);
+  const hiddenInputRef = useRef<TextInput>(null);
   const isAi = session.controlMode === "ai";
 
   // 前台回切 → reloadKey 自增 → WebView 换 key 重挂并重新加载 live view。
-  // 重挂时 loaded 需归零，否则加载遮罩不再出现（重载期间画面空着直到 onLoadEnd）。
-  useEffect(() => setLoaded(false), [reloadKey]);
+  // 重挂时 loaded 归零重新盖遮罩；但仅靠 onLoadEnd 清除有风险——签名 live-view URL
+  // 刷新失败时 onLoadEnd 永不触发、遮罩会永久卡死（只能关重开）。故 onError/onHttpError
+  // 也清（见 WebView），并加 8s 超时兜底：无论加载成功 / 失败 / 静默卡住，遮罩最多盖 8s。
+  useEffect(() => {
+    setLoaded(false);
+    const t = setTimeout(() => setLoaded(true), 8000);
+    return () => clearTimeout(t);
+  }, [reloadKey]);
 
   // ── Address bar: a draft synced to the live URL, editable to navigate. ──
   const [urlDraft, setUrlDraft] = useState(session.currentUrl);
@@ -276,6 +290,136 @@ export function BrowserPanel({
     return Gesture.Race(pan, tap);
   }, [dragY, onCollapse]);
 
+  // ── 页面交互（user 接管后）：移植 dev BrowserView 的 overlay+CDP 模型。vendor live
+  //    view 在触屏上只读（desktop-mouse-only）→ WebView 恒 pointerEvents:none，本层手势
+  //    把 轻点→CDP tap、拖动→CDP scroll 转发给远端；坐标按远端视口 / 框尺寸缩放。 ──
+  // 远端画面按 object-fit: contain 缩放进本地框（保宽高比 + 居中留黑边）。坐标换算必须补
+  //    偏移 + 等比缩放，否则黑边（上下或左右）会让 tap 偏位——小目标点不准 / 点到邻近元素
+  //    （= 你报的搜索历史 X 点成跳转）。scale = 等比系数，offsetX/Y = 单侧黑边宽。运行时读
+  //    session.viewport（真实远端尺寸，默认 desktop 1280×800）。
+  const boxSizeRef = useRef({ w: 0, h: 0 });
+  const remoteMap = useCallback(() => {
+    const { w, h } = boxSizeRef.current;
+    const vp = session.viewport;
+    if (w < 1 || h < 1 || vp.width < 1 || vp.height < 1) return null;
+    const scale = Math.min(w / vp.width, h / vp.height);
+    return {
+      scale,
+      offsetX: (w - vp.width * scale) / 2,
+      offsetY: (h - vp.height * scale) / 2,
+      vpW: vp.width,
+      vpH: vp.height,
+    };
+  }, [session.viewport]);
+
+  // 页面输入串行队列（tap/text/key 保序）：远端按到达顺序 apply，async POST 并发会乱序
+  //    （"退5格 + 打你好" 可能变成 "打你好 + 退5格" → 吞字）。链式 Promise 保证严格有序。
+  const sendQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const enqueueInput = useCallback(
+    (input: BrowserInput): Promise<Record<string, unknown> | null> => {
+      const p = sendQueueRef.current.then(() => sendInput(input)).catch(() => null);
+      sendQueueRef.current = p.catch(() => undefined);
+      return p;
+    },
+    [sendInput],
+  );
+
+  // 本地打字缓冲 = 上次「已发到远端的串」。远端字段是画面(screencast)、client 看不到其
+  //    真实内容 → 每次 tap 都重置缓冲：focus 换字段 / 清内容 / 移光标后，旧缓冲失效。
+  const lastTypedRef = useRef("");
+  const resetTypingBuffer = useCallback(() => {
+    hiddenInputRef.current?.clear();
+    lastTypedRef.current = "";
+  }, []);
+
+  // 轻点 → CDP **click（mouse）**：远端是 desktop / hasTouch=false 会话（manager
+  //    _DEFAULT_VIEWPORT desktop 1280×800、CDP 下 hasTouch 改不了），只认鼠标——合成
+  //    touch 触不动原生 X 清除钮等 mouse-only 元素。改发 mouse click 命中所有桌面元素。
+  //    click 改变 focus/内容 → 先重置打字缓冲。
+  const handleTap = useCallback(
+    (localX: number, localY: number) => {
+      const m = remoteMap();
+      if (!m) return;
+      resetTypingBuffer();
+      const x = Math.round(clampTo((localX - m.offsetX) / m.scale, m.vpW));
+      const y = Math.round(clampTo((localY - m.offsetY) / m.scale, m.vpH));
+      void enqueueInput({ type: "click", x, y });
+    },
+    [remoteMap, enqueueInput, resetTypingBuffer],
+  );
+
+  // 拖动 → CDP scroll（内容跟手：手指上滑=页面下滚，故取负）。累积 + ~30fps 节流合批，
+  //    避免每帧一个 POST 打爆网络（dev 用 rAF flush，此处 setTimeout 合帧等价）。
+  const scrollAccumRef = useRef({ dx: 0, dy: 0 });
+  const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const queueScroll = useCallback(
+    (rawDx: number, rawDy: number) => {
+      const m = remoteMap();
+      if (!m) return;
+      // scroll 位移等比缩放（÷scale = ×远端每本地 px），无偏移（偏移只对绝对坐标点生效）。
+      scrollAccumRef.current.dx += -rawDx / m.scale;
+      scrollAccumRef.current.dy += -rawDy / m.scale;
+      if (scrollTimerRef.current == null) {
+        scrollTimerRef.current = setTimeout(() => {
+          scrollTimerRef.current = null;
+          const { dx, dy } = scrollAccumRef.current;
+          scrollAccumRef.current = { dx: 0, dy: 0 };
+          if (dx !== 0 || dy !== 0) {
+            void sendInput({ type: "scroll", dx: Math.round(dx), dy: Math.round(dy) });
+          }
+        }, 32);
+      }
+    },
+    [remoteMap, sendInput],
+  );
+  useEffect(
+    () => () => {
+      if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
+    },
+    [],
+  );
+
+  // Race：拖过阈值 → Pan（滚动）；轻点静止松手 → Tap（点按）。手势在 UI 线程 worklet，
+  //    处理器走 runOnJS 回 JS（读 ref / 发网络）。本帧位移增量 = translation 差分（panLast
+  //    用 sharedValue 存，worklet 里可读写；本版 RNGH payload 无 changeX/Y）。
+  const panLast = useSharedValue({ x: 0, y: 0 });
+  const pageGesture = useMemo(() => {
+    const tap = Gesture.Tap()
+      .maxDistance(8)
+      .maxDuration(500)
+      .onEnd((e) => runOnJS(handleTap)(e.x, e.y));
+    const pan = Gesture.Pan()
+      .onBegin(() => {
+        panLast.value = { x: 0, y: 0 };
+      })
+      .onUpdate((e) => {
+        const dx = e.translationX - panLast.value.x;
+        const dy = e.translationY - panLast.value.y;
+        panLast.value = { x: e.translationX, y: e.translationY };
+        runOnJS(queueScroll)(dx, dy);
+      });
+    return Gesture.Race(pan, tap);
+  }, [handleTap, queueScroll, panLast]);
+
+  // 逐字实时打字：本地隐藏 TextInput 作编辑缓冲，与「上次已发到远端的串」做**公共前缀
+  //    diff**——删掉变化后缀（Backspace）+ 补打新后缀（text）。这天然正确处理中文 IME：
+  //    待选区把拼音替换成汉字时只 diff 出「退拼音 + 打汉字」的最小编辑，不再整串重打
+  //    （旧版吞字 / 整框刷新的根因）。所有 send 走串行队列保序。Enter 走 onSubmitEditing。
+  const handleTypeText = useCallback(
+    (next: string) => {
+      const prev = lastTypedRef.current;
+      if (next === prev) return;
+      let p = 0;
+      const min = Math.min(prev.length, next.length);
+      while (p < min && prev[p] === next[p]) p += 1;
+      lastTypedRef.current = next;
+      for (let i = 0; i < prev.length - p; i += 1) void enqueueInput({ type: "key", key: "Backspace" });
+      const additions = next.slice(p);
+      if (additions) void enqueueInput({ type: "text", text: additions });
+    },
+    [enqueueInput],
+  );
+
   return (
     // 全屏 Modal：逃出 ChatScreen 容器（那被夹在 ChatSheet header + 刘海之下），
     // 让面板真正盖住整屏。Modal 内手势须自带 GestureHandlerRootView。
@@ -299,23 +443,48 @@ export function BrowserPanel({
       {/* Top control bar — control toggle on the left; collapse / end-session
           on the right（dev BrowserView 同构，无 status pill）。 */}
       <View style={styles.controlBar}>
-        {isAi ? (
-          <Pressable onPress={() => onControlChange("user")} accessibilityRole="button">
-            <View style={[styles.ctrlBtn, styles.ctrlBtnTakeOver]}>
-              <Hand size={12} strokeWidth={2} color="rgba(255,255,255,0.85)" />
-              <Text style={styles.ctrlBtnText}>{t("browser:view.takeOver")}</Text>
-            </View>
-          </Pressable>
-        ) : (
-          <Pressable onPress={() => onControlChange("ai")} accessibilityRole="button">
-            <View style={[styles.ctrlBtn, styles.ctrlBtnReturnAi]}>
-              <Bot size={12} strokeWidth={2} color="#dbeafe" />
-              <Text style={[styles.ctrlBtnText, styles.ctrlBtnTextBlue]}>
-                {t("browser:view.returnToAi")}
-              </Text>
-            </View>
-          </Pressable>
-        )}
+        <View style={styles.controlBarLeft}>
+          {isAi ? (
+            <Pressable onPress={() => onControlChange("user")} accessibilityRole="button">
+              <View style={[styles.ctrlBtn, styles.ctrlBtnTakeOver]}>
+                <Hand size={12} strokeWidth={2} color="rgba(255,255,255,0.85)" />
+                <Text style={styles.ctrlBtnText}>{t("browser:view.takeOver")}</Text>
+              </View>
+            </Pressable>
+          ) : (
+            <Pressable onPress={() => onControlChange("ai")} accessibilityRole="button">
+              <View style={[styles.ctrlBtn, styles.ctrlBtnReturnAi]}>
+                <Bot size={12} strokeWidth={2} color="#dbeafe" />
+                <Text style={[styles.ctrlBtnText, styles.ctrlBtnTextBlue]}>
+                  {t("browser:view.returnToAi")}
+                </Text>
+              </View>
+            </Pressable>
+          )}
+          {/* Type：用户接管后常驻 → 唤起 / 收起 iOS 键盘（先 click 一个远端输入框聚焦它，
+              再点 Type 打字）。放控制条（手势 overlay 之外，点击 100% 可靠）；dev 是 live
+              view 内底部 contextual pill——RN 改顶栏是刻意的平台适配，避免和手势层抢触摸。 */}
+          {!isAi ? (
+            <Pressable
+              onPress={() =>
+                kbVisible ? hiddenInputRef.current?.blur() : hiddenInputRef.current?.focus()
+              }
+              accessibilityRole="button"
+              accessibilityLabel={t("browser:view.summonKeyboard")}
+            >
+              <View style={[styles.ctrlBtn, styles.ctrlBtnType]}>
+                {kbVisible ? (
+                  <ChevronDown size={12} strokeWidth={2} color="rgba(255,255,255,0.85)" />
+                ) : (
+                  <Keyboard size={12} strokeWidth={2} color="rgba(255,255,255,0.85)" />
+                )}
+                <Text style={styles.ctrlBtnText}>
+                  {kbVisible ? t("common:status.done") : t("browser:view.summonKeyboard")}
+                </Text>
+              </View>
+            </Pressable>
+          ) : null}
+        </View>
         <View style={styles.controlBarRight}>
           {confirmingClose ? (
             <>
@@ -406,8 +575,15 @@ export function BrowserPanel({
         />
       </View>
 
-      {/* Live-view box（dev iframe → RN WebView）。 */}
-      <View style={styles.viewBox}>
+      {/* Live-view box（dev iframe → RN WebView）。触屏上 vendor live view 只读
+          (desktop-mouse-only) → WebView 恒 pointerEvents:none 只读，页面交互全走上面的
+          手势层转 CDP（dev BrowserView 同构）。onLayout 量框尺寸供坐标缩放。 */}
+      <View
+        style={styles.viewBox}
+        onLayout={(e) => {
+          boxSizeRef.current = { w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height };
+        }}
+      >
         {!loaded ? (
           <View style={styles.loadingOverlay}>
             <Spinner size={14} color="rgba(255,255,255,0.5)" />
@@ -418,15 +594,18 @@ export function BrowserPanel({
           key={`live-${reloadKey}`}
           source={{ uri: viewSrc }}
           onLoadEnd={() => setLoaded(true)}
+          // 加载失败也揭遮罩（否则 onLoadEnd 不来 → 永久黑遮罩）：onError=网络失败、
+          // onHttpError=HTTP 状态失败（如签名 URL 过期返 403）。配合上面 8s 超时双保险。
+          onError={() => setLoaded(true)}
+          onHttpError={() => setLoaded(true)}
           style={styles.webview}
-          // AI 驾驶时指针属于下面的隐式 takeover 层（dev iframe pointerEvents:none 同构）。
-          pointerEvents={isAi ? "none" : "auto"}
+          // 恒只读：AI 驾驶时指针属于隐式 takeover 层，user 接管后属于下面的手势转发层。
+          pointerEvents="none"
           allowsInlineMediaPlayback
         />
 
-        {/* Implicit takeover: in AI mode a transparent layer catches the first
-            interaction and hands control to the user（与显式 Take over 同态）。 */}
         {isAi ? (
+          /* AI 驾驶：透明层捕获首次点按 → 隐式 takeover（与显式 Take over 同态）。 */
           <Pressable
             onPress={() => onControlChange("user")}
             accessibilityRole="button"
@@ -435,7 +614,38 @@ export function BrowserPanel({
           >
             <View style={StyleSheet.absoluteFill} />
           </Pressable>
-        ) : null}
+        ) : (
+          /* User 接管：全屏手势层（轻点→CDP tap / 拖动→CDP scroll）+ 隐藏输入框（键盘 sink，
+             逐字 diff 转 CDP text/key）。 */
+          <>
+            <GestureDetector gesture={pageGesture}>
+              <View style={StyleSheet.absoluteFill} collapsable={false} />
+            </GestureDetector>
+            <TextInput
+              ref={hiddenInputRef}
+              onChangeText={handleTypeText}
+              onKeyPress={(e) => {
+                // 缓冲已空时的 Backspace = 删「进入本次编辑前远端已有」的旧内容：onChangeText
+                //    删不动空串 → 直接转发一个 Backspace（远端在光标处删一个字符）。
+                if (e.nativeEvent.key === "Backspace" && lastTypedRef.current.length === 0) {
+                  void enqueueInput({ type: "key", key: "Backspace" });
+                }
+              }}
+              onFocus={() => setKbVisible(true)}
+              onBlur={() => {
+                setKbVisible(false);
+                resetTypingBuffer();
+              }}
+              onSubmitEditing={() => void enqueueInput({ type: "key", key: "Enter" })}
+              blurOnSubmit={false}
+              autoCapitalize="none"
+              autoCorrect={false}
+              spellCheck={false}
+              keyboardAppearance="dark"
+              style={styles.hiddenInput}
+            />
+          </>
+        )}
       </View>
     </Animated.View>
     </Animated.View>
@@ -528,6 +738,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
+  controlBarLeft: { flexDirection: "row", alignItems: "center", gap: 6, minWidth: 0, flexShrink: 1 },
   controlBarRight: { flexDirection: "row", alignItems: "center", gap: 2 },
   // web ctrlBtn: px-2.5 py-1 rounded-full text-caption。
   ctrlBtn: {
@@ -540,6 +751,7 @@ const styles = StyleSheet.create({
   },
   ctrlBtnTakeOver: { backgroundColor: "rgba(255,255,255,0.08)" },
   ctrlBtnReturnAi: { backgroundColor: "rgba(59,130,246,0.25)" },
+  ctrlBtnType: { backgroundColor: "rgba(255,255,255,0.08)" },
   ctrlBtnText: { fontSize: 11, lineHeight: 15, color: "rgba(255,255,255,0.85)", fontFamily: "Geist_500Medium" },
   ctrlBtnTextBlue: { color: "#dbeafe" },
   iconBtn: { padding: 6, borderRadius: 6, alignItems: "center", justifyContent: "center" },
@@ -551,6 +763,8 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   endSessionText: { fontSize: 11, lineHeight: 15, color: "#fff", fontFamily: "Geist_500Medium" },
+  // 隐藏输入框：仅作键盘 / 输入 sink，画面外（left -9999），逐字 diff → CDP text/key。
+  hiddenInput: { position: "absolute", left: -9999, top: 0, width: 1, height: 1, opacity: 0 },
   addressBar: {
     flexDirection: "row",
     alignItems: "center",

@@ -11,12 +11,23 @@
  *    （FAIL_Y 略大于 ACTIVATE_X，见下方常量注释）。
  *  - 跟手 1:1（onUpdate 直接写 y，无中间动画）；松手过阈值（0.35 屏宽 或 vx>400）
  *    才提交退出，否则 spring 回弹（= web 同参数）。
+ *
+ * 键盘时序（2026-07-07 用户定）：开着键盘右滑时，**手势一激活键盘就开始自然收起**；
+ * 松手提交时若键盘还没收完，页面停在松手位等键盘完全收好再挤出（dismiss() 的
+ * Promise 在键盘完全隐藏时 resolve）——先键盘、后页面，永远不带着键盘滑出去。
  */
 import { useMemo } from "react";
 import { Gesture } from "react-native-gesture-handler";
 import {
+  KeyboardController,
+  useReanimatedKeyboardAnimation,
+} from "react-native-keyboard-controller";
+import {
   Easing,
+  Extrapolation,
+  interpolate,
   runOnJS,
+  useAnimatedStyle,
   withSpring,
   withTiming,
   type SharedValue,
@@ -38,6 +49,15 @@ const COMMIT_VELOCITY = 400;
 const ACTIVATE_X = 16;
 const FAIL_Y = 20;
 
+/** 键盘 progress 视为「可见」的下限（0=全收 1=全开；避免浮点尾巴误判）。 */
+const KB_VISIBLE_EPS = 0.01;
+
+/** 先收键盘、收完再触发关闭（键盘本就没开时 dismiss() 立即 resolve，等价直接关）。
+ *  给 sheet 的 ←/︾ 等关闭按钮用，和右滑手势的时序保持一致。 */
+export function dismissKeyboardThenClose(onClose: () => void) {
+  void KeyboardController.dismiss().then(onClose);
+}
+
 export function useSinkDismissGesture(
   y: SharedValue<number>,
   height: number,
@@ -52,28 +72,71 @@ export function useSinkDismissGesture(
 ) {
   const activateX = opts?.activateX ?? ACTIVATE_X;
   const failY = opts?.failY ?? FAIL_Y;
-  return useMemo(
-    () =>
-      Gesture.Pan()
-        .activeOffsetX(activateX)
-        .failOffsetY([-failY, failY])
-        .onUpdate((e) => {
-          // 右移 → 下沉，跟手（clamp 0：往回拖不把面板顶过屏顶）。
-          y.value = Math.max(0, e.translationX * SINK_RATIO);
-        })
-        .onEnd((e) => {
-          const commit =
-            e.translationX > width * COMMIT_DISTANCE_FRACTION || e.velocityX > COMMIT_VELOCITY;
-          if (commit) {
+  // 键盘位置（UI 线程共享值，0=收起）：手势起手收键盘、松手判断要不要等它收完。
+  const { progress: kbProgress } = useReanimatedKeyboardAnimation();
+  return useMemo(() => {
+    // runOnJS 只传无参函数（跨线程传函数实参不可靠），回调在 JS 侧先组好。
+    const startKeyboardDismiss = () => void KeyboardController.dismiss();
+    const closeAfterKeyboard = () => dismissKeyboardThenClose(onClose);
+    return Gesture.Pan()
+      .activeOffsetX(activateX)
+      .failOffsetY([-failY, failY])
+      .onStart(() => {
+        // 手指一开始滑就让键盘自然收起（用户定的时序）；没开键盘时不打 JS 往返。
+        if (kbProgress.value > KB_VISIBLE_EPS) {
+          runOnJS(startKeyboardDismiss)();
+        }
+      })
+      .onUpdate((e) => {
+        // 右移 → 下沉，跟手（clamp 0：往回拖不把面板顶过屏顶）。
+        y.value = Math.max(0, e.translationX * SINK_RATIO);
+      })
+      .onEnd((e) => {
+        const commit =
+          e.translationX > width * COMMIT_DISTANCE_FRACTION || e.velocityX > COMMIT_VELOCITY;
+        if (commit) {
+          if (kbProgress.value > KB_VISIBLE_EPS) {
+            // 键盘还没收完：页面停在松手位，等键盘完全隐藏（dismiss Promise resolve）
+            // 再 onClose → 宿主的 open effect 接着播挤出动画。先键盘、后页面。
+            runOnJS(closeAfterKeyboard)();
+          } else {
             y.value = withTiming(height, {
               duration: 500,
               easing: Easing.bezier(0.32, 0.72, 0, 1),
             });
             runOnJS(onClose)();
-          } else {
-            y.value = withSpring(0, { stiffness: 500, damping: 40, overshootClamping: true });
           }
-        }),
-    [y, height, width, onClose, activateX, failY],
-  );
+        } else {
+          y.value = withSpring(0, { stiffness: 500, damping: 40, overshootClamping: true });
+        }
+      });
+  }, [y, height, width, onClose, activateX, failY, kbProgress]);
+}
+
+/* ── 下沉「玻璃卡」视觉（2026-07-07 用户定）──
+ * chat sheet 退场不再是整屏平移，而是和 MenuDrawer 推开 tab 同一套玻璃语言：
+ * 圆角 + 白雾罩（黑字变灰、彩字基本保留）+ 不缩放，全程跟手。
+ * 圆角走短坡道（下沉 GLASS_RADIUS_RAMP px 内到满）——「玻璃已从屏幕剥离」的感觉
+ * 一起手就成立；白雾走长坡道（半屏到满值）随退出渐浓。数值真机可再调。 */
+/** 圆角满值 = MenuDrawer CARD_RADIUS 同值。 */
+const GLASS_RADIUS = 40;
+/** 白雾罩最大不透明度 = MenuDrawer SCRIM_MAX 同值。 */
+const GLASS_SCRIM_MAX = 0.25;
+/** 下沉多少 px 圆角到满。 */
+const GLASS_RADIUS_RAMP = 120;
+
+export function useGlassSinkStyles(y: SharedValue<number>, height: number) {
+  const paneStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: y.value }],
+    borderRadius: interpolate(
+      y.value,
+      [0, GLASS_RADIUS_RAMP],
+      [0, GLASS_RADIUS],
+      Extrapolation.CLAMP,
+    ),
+  }));
+  const scrimStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(y.value, [0, height * 0.5], [0, GLASS_SCRIM_MAX], Extrapolation.CLAMP),
+  }));
+  return { paneStyle, scrimStyle };
 }

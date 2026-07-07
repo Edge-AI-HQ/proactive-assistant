@@ -26,11 +26,13 @@ export function PageActiveProvider({ value, children }: { value: boolean; childr
 }
 
 export function KeepAlivePage({ active, children }: { active: boolean; children: ReactNode }) {
+  // 隐藏只靠 display:none——它本身就不参与布局/触摸，足够。之前叠加的
+  // pointerEvents 翻转（active ? auto : none）是冗余保险，反而是故障面：该 prop
+  // 更新在原生侧偶发不生效，页面显形后整页触摸被钉死（内容可见、按钮/滚动全无
+  // 反应，切走再切回=重新应用 prop 才恢复；2026-07-07 Profile 首切偶发卡死的
+  // 头号嫌疑）。删掉翻转 = 消除该失败面，行为不变。
   return (
-    <View
-      style={[StyleSheet.absoluteFill, active ? null : styles.hidden]}
-      pointerEvents={active ? "auto" : "none"}
-    >
+    <View style={[StyleSheet.absoluteFill, active ? null : styles.hidden]}>
       <PageActiveContext.Provider value={active}>{children}</PageActiveContext.Provider>
     </View>
   );

@@ -1,12 +1,12 @@
 /**
- * Auto Dreaming 设置 —— web `ui-web/account/AutoDreamingSettings.tsx`（843 行）的
- * RN 全量对应物（Preferences 子页 Dreaming section）。三视图：
- * - home：开关 + 最近一次 run + Run Dreaming / View History；
+ * Auto Evolution 设置 —— web `ui-web/account/AutoEvolutionSettings.tsx`（843 行）的
+ * RN 全量对应物（Preferences 子页 Evolution section）。三视图：
+ * - home：开关 + 最近一次 run + Run Evolution / View History；
  * - history：按天分组的 run 列表（展开/收起、每天默认 3 条可展开全部、加载更早）；
- * - detail：run 状态 / dream journal / collected context / source status /
+ * - detail：run 状态 / evolution journal / collected context / source status /
  *   candidate cards / logs / profile & goal diff / goal changes / raw payloads /
  *   两条 apply 状态徽章，running 时 1.5s 轮询。
- * 数据走 core proxyFetch/proxyPost（/dreaming/runs 系，零重写）；文案走 i18n
+ * 数据走 core proxyFetch/proxyPost（/evolution/runs 系，零重写）；文案走 i18n
  * （account:evolution.*，与 dev 同 key）。web `<details>` → Pressable 折叠（WebKit
  * 默认三角盘 → ChevronRight 旋转）；`<pre>` → Menlo Text（长行 RN 自动换行，
  * web 是横向滚动——手机上换行更可读）。
@@ -31,22 +31,22 @@ const EMERALD_600 = "#059669";
 const RED_600 = "#dc2626";
 const AMBER_700 = "#b45309";
 
-// Auto-dreaming runs daily at 06:00 in the user's profile timezone. The
+// Auto-evolution runs daily at 06:00 in the user's profile timezone. The
 // cadence is fixed in the backend scheduler for now, so the UI only
 // mirrors the user-facing label.
-interface AutoDreamingSchedule {
+interface AutoEvolutionSchedule {
   type: "daily";
   hour: number;
   minute: number;
   timezone: string;
 }
 
-const DREAMING_SCHEDULE: AutoDreamingSchedule = {
+const EVOLUTION_SCHEDULE: AutoEvolutionSchedule = {
   type: "daily", hour: 6, minute: 0, timezone: "local",
 };
 
-// The backend returns snake_case keys (mirrors the dream_runs row shape).
-interface AutoDreamingRun {
+// The backend returns snake_case keys (mirrors the pai_evolution_runs row shape).
+interface AutoEvolutionRun {
   id: string;
   trigger?: string;
   status: string;
@@ -59,7 +59,7 @@ interface AutoDreamingRun {
   source_stats?: Record<string, { status?: string; count?: number; message?: string }> | null;
 }
 
-interface DreamSourceBreakdown {
+interface EvolutionSourceBreakdown {
   sourceId: string;
   status: "ok" | "skipped" | "error";
   itemCount: number;
@@ -72,9 +72,9 @@ interface DreamSourceBreakdown {
   }>;
 }
 
-interface DreamRunDetailResponse {
+interface EvolutionRunDetailResponse {
   ok: boolean;
-  run: AutoDreamingRun;
+  run: AutoEvolutionRun;
   detail: {
     rawInputs: Record<string, unknown>;
     normalizedInputs: Record<string, unknown>;
@@ -84,7 +84,7 @@ interface DreamRunDetailResponse {
     profileDelta: Record<string, unknown>;
     goalDelta: { changes?: Array<Record<string, unknown>> };
     candidates: Array<Record<string, unknown>>;
-    sourceBreakdown: DreamSourceBreakdown[];
+    sourceBreakdown: EvolutionSourceBreakdown[];
     logPath: string | null;
     logText: string;
   };
@@ -95,7 +95,7 @@ const DEFAULT_VISIBLE_ITEMS = 5;
 const DEFAULT_VISIBLE_HISTORY_DAYS = 7;
 const DEFAULT_VISIBLE_RUNS_PER_DAY = 3;
 
-function scheduleLabel(schedule: AutoDreamingSchedule | null): string {
+function scheduleLabel(schedule: AutoEvolutionSchedule | null): string {
   const at = new Date();
   at.setHours(schedule?.hour ?? 6, schedule?.minute ?? 0, 0, 0);
   return i18n.t("account:evolution.runsDaily", { time: formatTime(at) });
@@ -119,7 +119,7 @@ function formatTimestamp(value?: string | null): string {
   return formatDateTime(date);
 }
 
-function formatDreamRunTitle(run: AutoDreamingRun): string {
+function formatEvolutionRunTitle(run: AutoEvolutionRun): string {
   if (!run.started_at) return run.id;
   const date = new Date(run.started_at);
   if (Number.isNaN(date.getTime())) return run.id;
@@ -131,7 +131,7 @@ function formatDreamRunTitle(run: AutoDreamingRun): string {
   return `${day} · ${run.trigger ?? "manual"}`;
 }
 
-function runDayKey(run: AutoDreamingRun): string {
+function runDayKey(run: AutoEvolutionRun): string {
   if (!run.started_at) return "Unknown";
   const date = new Date(run.started_at);
   if (Number.isNaN(date.getTime())) return "Unknown";
@@ -142,8 +142,8 @@ function runDayKey(run: AutoDreamingRun): string {
   ].join("-");
 }
 
-function historyGroups(runs: AutoDreamingRun[]): Array<{ day: string; runs: AutoDreamingRun[] }> {
-  const grouped = new Map<string, AutoDreamingRun[]>();
+function historyGroups(runs: AutoEvolutionRun[]): Array<{ day: string; runs: AutoEvolutionRun[] }> {
+  const grouped = new Map<string, AutoEvolutionRun[]>();
   for (const run of runs) {
     const day = runDayKey(run);
     const current = grouped.get(day) ?? [];
@@ -322,15 +322,15 @@ function SectionH3({ children }: { children: string }) {
   );
 }
 
-export default function AutoDreamingSettings() {
+export default function AutoEvolutionSettings() {
   const { t } = useTranslation("account");
   const { settings, loading: settingsLoading, saving, error: settingsError, patch } = useUserSettings();
   const [runsLoading, setRunsLoading] = useState(true);
   const [startingRun, setStartingRun] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [view, setView] = useState<ViewMode>("home");
-  const [runs, setRuns] = useState<AutoDreamingRun[]>([]);
-  const [detail, setDetail] = useState<DreamRunDetailResponse | null>(null);
+  const [runs, setRuns] = useState<AutoEvolutionRun[]>([]);
+  const [detail, setDetail] = useState<EvolutionRunDetailResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
@@ -340,15 +340,15 @@ export default function AutoDreamingSettings() {
   // (migration 086). Server lazy-creates the row at TRUE; this is only the
   // pre-load display fallback.
   const enabled = settings?.autoDreaming ?? true;
-  const schedule = DREAMING_SCHEDULE;
+  const schedule = EVOLUTION_SCHEDULE;
   const loading = settingsLoading || runsLoading;
 
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
-        const runsRes = await proxyFetch("/dreaming/runs");
-        const runsData = await runsRes.json() as { ok: boolean; runs: AutoDreamingRun[] };
+        const runsRes = await proxyFetch("/evolution/runs");
+        const runsData = await runsRes.json() as { ok: boolean; runs: AutoEvolutionRun[] };
         if (!mounted) return;
         setRuns(runsData.runs ?? []);
       } catch {
@@ -417,8 +417,8 @@ export default function AutoDreamingSettings() {
       setNotice(null);
     }
     try {
-      const res = await proxyFetch("/dreaming/runs");
-      const data = await res.json() as { ok: boolean; runs: AutoDreamingRun[] };
+      const res = await proxyFetch("/evolution/runs");
+      const data = await res.json() as { ok: boolean; runs: AutoEvolutionRun[] };
       setRuns(data.runs ?? []);
       if (!background) setVisibleHistoryDays(DEFAULT_VISIBLE_HISTORY_DAYS);
       if (!background) setView("history");
@@ -434,7 +434,7 @@ export default function AutoDreamingSettings() {
       setDetailLoading(true);
     }
     try {
-      const res = await proxyFetch(`/dreaming/runs/${runId}`);
+      const res = await proxyFetch(`/evolution/runs/${runId}`);
       // 404 = dispatcher hasn't materialized the run row yet (manual
       // trigger races scheduler tick). Don't blow away an existing
       // `detail` with the error body — the caller is polling, the
@@ -445,7 +445,7 @@ export default function AutoDreamingSettings() {
         }
         return;
       }
-      const data = await res.json() as DreamRunDetailResponse;
+      const data = await res.json() as EvolutionRunDetailResponse;
       setDetail(data);
       if (!options?.background) setExpandedGroups({});
       if (!options?.background) setView("detail");
@@ -456,12 +456,12 @@ export default function AutoDreamingSettings() {
     }
   };
 
-  const handleRunDreaming = async () => {
+  const handleRunEvolution = async () => {
     setStartingRun(true);
     setError(null);
     setNotice(null);
     try {
-      const res = await proxyPost("/dreaming/run", {});
+      const res = await proxyPost("/evolution/run", {});
       const data = await res.json() as { ok?: boolean; runId?: string; taskId?: string; status?: string; error?: string };
       if (!res.ok) {
         setError(data.error ?? t("evolution.startFailed"));
@@ -507,7 +507,7 @@ export default function AutoDreamingSettings() {
                       <View style={{ borderRadius: 16, backgroundColor: fg(0.04), paddingHorizontal: 12, paddingVertical: 12, gap: 4 }}>
                         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                           <Text style={{ fontFamily: "Inter_500Medium", fontSize: 12, lineHeight: 16, color: fg() }}>
-                            {formatDreamRunTitle(run)}
+                            {formatEvolutionRunTitle(run)}
                           </Text>
                           <StatusChip status={run.status} />
                         </View>
@@ -610,7 +610,7 @@ export default function AutoDreamingSettings() {
               {t("evolution.detailTitle")}
             </Text>
             <Text style={{ marginTop: 4, fontFamily: "Inter_400Regular", fontSize: 11, lineHeight: 15, color: fg(0.45) }}>
-              {formatDreamRunTitle(detail.run)}
+              {formatEvolutionRunTitle(detail.run)}
             </Text>
             <Text style={{ marginTop: 4, fontFamily: "Inter_400Regular", fontSize: 10, lineHeight: 14, color: fg(0.3) }}>
               {detail.run.id}
@@ -858,7 +858,7 @@ export default function AutoDreamingSettings() {
           )}
         </View>
 
-        {/* Phase 2a status badges — dreams write through automatically */}
+        {/* Phase 2a status badges — evolution runs write through automatically */}
         {[
           { label: t("evolution.profileChanges"), appliedAt: detail.run.applied_at },
           { label: t("evolution.goalChangesBadge"), appliedAt: detail.run.goals_applied_at },
@@ -923,7 +923,7 @@ export default function AutoDreamingSettings() {
       {/* Pressable 的 style 不渲染（项目坑）→ flex 由外层 View 承载。 */}
       <View style={{ flexDirection: "row", gap: 8 }}>
         <View style={{ flex: 1 }}>
-          <Pressable onPress={() => void handleRunDreaming()} disabled={startingRun || detailLoading}>
+          <Pressable onPress={() => void handleRunEvolution()} disabled={startingRun || detailLoading}>
             <View
               style={{
                 borderRadius: 16,

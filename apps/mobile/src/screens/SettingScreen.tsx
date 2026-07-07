@@ -5,7 +5,7 @@
  * → 子页内联导航（返回箭头 + 左缘滑动返回 SwipeBackLayer）。
  * - Subscription = components/account/SubscriptionPanel（web ui-web 同名组件全量
  *   RN 移植：Stripe 状态/换档/加购/支付方式/账单/取消）；
- * - Preferences = Dreaming(AutoDreamingSettings) + Generation(AutoGenerate +
+ * - Preferences = Evolution(AutoEvolutionSettings) + Generation(AutoGenerate +
  *   GenerationLanguage) + Scheduled Tasks 三个 section（对齐 web PreferencesSubPage）；
  * - Notifications = 权限感知通知卡（有意偏离 web：仅开关可点、onHint 去 "your"，用户定）；
  * - Ambient = per-source consents + voice identity + timeline summary + on-device
@@ -44,7 +44,7 @@ import VoiceIdentitySettings from "../components/ambient/VoiceIdentitySettings";
 import AmbientTimelineSummaryStatusPanel from "../components/ambient/AmbientTimelineSummaryStatusPanel";
 import AmbientModelsPanel from "../components/ambient/AmbientModelsPanel";
 import { SubscriptionPanel } from "../components/account/SubscriptionPanel";
-import AutoDreamingSettings from "../components/account/AutoDreamingSettings";
+import AutoEvolutionSettings from "../components/account/AutoEvolutionSettings";
 import AutoGenerateSettings from "../components/account/AutoGenerateSettings";
 import GenerationLanguageSettings from "../components/account/GenerationLanguageSettings";
 import ScheduledTasksSettings from "../components/account/ScheduledTasksSettings";
@@ -377,7 +377,7 @@ export default function SettingScreen({
                     title={t("preferences.evolutionTitle")}
                     description={t("preferences.evolutionDescription")}
                   />
-                  <AutoDreamingSettings />
+                  <AutoEvolutionSettings />
                 </GlassCard>
                 <GlassCard strong className="p-4">
                   <SectionHeader

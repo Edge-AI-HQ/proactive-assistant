@@ -1,74 +1,151 @@
-# RN iOS 构建链（Capacitor build-ios.yml 的继任者）——不引 EAS（避免新
-# 账号/计费依赖），复用现有签名 secrets 体系：同 bundle id
-# (ai.pin.proactive.development)，现有 dev distribution profile + ASC API
-# key 直接可用。
+# RN iOS 构建链(Capacitor build-ios.yml 的接替者,2026-07-07 起接管 dev 自动构建)。
+# 不引 EAS(避免新账号/计费依赖),复用现有签名 secrets 体系:
+#   dev  = bundle ai.pin.proactive.development + PROVISIONING_PROFILE_DEV_BASE64(push main 自动 → TestFlight)
+#   prod = bundle ai.pin.proactive            + PROVISIONING_PROFILE_BASE64(仅手动 dispatch → TestFlight)
+# 变体身份(bundle id / scheme / 显示名 / 构建号)由 apps/mobile/app.config.js 按
+# APP_VARIANT / APP_BUILD_NUMBER 注入,与 Capacitor build-ios.sh 的 per-env 约定同构。
 #
-# 触发：暂时停用 main push 自动触发（CICD 不自动 build RN iOS），仅保留手动
-# dispatch。RN iOS 链路尚未就绪，恢复时取消下面 push 块的注释即可。
-name: Build RN iOS (dev)
+# 门禁卡缺口(2026-07-07):现有两张 distribution profile 是给 Capacitor app 生成的,
+# 不含 RN 新增的 focus-status / healthkit.background-delivery 两个 entitlement——
+# "Trim entitlements" step 在 prebuild 后剥掉它们(能力与线上 Capacitor 版持平,零倒退)。
+# 团队在 Apple 后台补开能力 + 重新生成 dev/prod profile + 更新 secrets 后,删掉该 step 即恢复。
+name: Build RN iOS
 
 on:
-  # 暂时移除 CICD 自动触发：先不在 main push 时 build RN iOS。
-  # 恢复：取消下面 push 块的注释。
-  # push:
-  #   branches: [main]
-  #   paths:
-  #     - "apps/mobile/**"
-  #     - "packages/**"
-  #     - ".github/workflows/build-rn-ios.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/mobile/**"
+      # 共享逻辑/UI 层(@pin-ai/core·state·ui-kit·design)变化也要重建 RN app
+      - "packages/**"
+      - ".github/workflows/build-rn-ios.yml"
   workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - prod
 
+# Newer push cancels an in-flight dev build so TestFlight isn't flooded.
 concurrency:
   group: build-rn-ios-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    runs-on: macos-15
-    timeout-minutes: 60
-
+    # macos-26:唯一带 Xcode 26.6 的镜像(见下 Select Xcode)
+    runs-on: macos-26
+    # RN 0.85 必须从源码编译(见下 RCT_USE_PREBUILT_RNCORE),冷启 archive 明显慢于 Capacitor
+    timeout-minutes: 90
+    env:
+      # CocoaPods 要求 UTF-8 locale;RN 0.85 的 prebuilt RNCore 产物损坏,必须
+      # 源码编译(与本地 build-rn-device.sh 同一组修法,踩坑记录见 A-RN-frontend skill)
+      LANG: en_US.UTF-8
+      LC_ALL: en_US.UTF-8
+      RCT_USE_PREBUILT_RNCORE: "0"
+      RCT_USE_RN_DEP: "0"
     steps:
       - uses: actions/checkout@v6
 
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: 22
           cache: npm
+
+      # Apple requires iOS 26 SDK (Xcode 26) for App Store submissions from 2026-04-28.
+      # 必须 26.6(= 本地验证过的版本):expo-modules-jsi(SDK 56)的 Swift 源用了
+      # `weak let`,26.0.1 的 Swift 编译不过("'weak' must be a mutable variable")。
+      - name: Select Xcode 26
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "26.6"
+
+      # push → dev (auto); workflow_dispatch → the chosen input.
+      # 构建号 = 1000 + run#:高于 Capacitor 轨道(200 + run#,现约 330+),同一
+      # TestFlight app 记录、同一 1.0 版本线下 RN 构建恒排最新。
+      - name: Resolve target environment
+        id: target
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then TARGET=dev; else TARGET="${{ inputs.environment }}"; fi
+          echo "env=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "build_number=$((1000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_OUTPUT"
+          if [ "$TARGET" = "dev" ]; then
+            echo "variant=ci-dev" >> "$GITHUB_OUTPUT"
+            echo "bundle_id=ai.pin.proactive.development" >> "$GITHUB_OUTPUT"
+            echo "env_file=backend/.env.dev" >> "$GITHUB_OUTPUT"
+          else
+            echo "variant=prod" >> "$GITHUB_OUTPUT"
+            echo "bundle_id=ai.pin.proactive" >> "$GITHUB_OUTPUT"
+            echo "env_file=backend/.env.production" >> "$GITHUB_OUTPUT"
+          fi
 
       - run: npm ci
 
-      # env：dotenvx 解密 .env.dev 拿 VITE_*（与 build-ios.yml 同模式），
-      # 映射到 EXPO_PUBLIC_*（archive 的 Bundle RN code 阶段 inline）。
-      - name: Resolve dev env
+      # dotenvx 解密对应环境的 VITE_* → EXPO_PUBLIC_*(Release archive 的
+      # "Bundle React Native code and images" 阶段 inline 进 JS bundle,
+      # 与本地 build-rn-device.sh 的 Release 路径同模式)。
+      - name: Resolve app env (EXPO_PUBLIC_*)
         env:
           DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
+          DOTENV_PRIVATE_KEY_PRODUCTION: ${{ secrets.DOTENV_PRIVATE_KEY_PRODUCTION }}
+          ENV_FILE: ${{ steps.target.outputs.env_file }}
         run: |
+          get() { npx -y @dotenvx/dotenvx get "$1" -f "$ENV_FILE" 2>/dev/null; }
+          API_URL="$(get VITE_PIN_API_URL)"
+          SB_URL="$(get VITE_SUPABASE_URL)"
+          SB_KEY="$(get VITE_SUPABASE_PUBLISHABLE_KEY)"
+          for pair in "VITE_PIN_API_URL=$API_URL" "VITE_SUPABASE_URL=$SB_URL" "VITE_SUPABASE_PUBLISHABLE_KEY=$SB_KEY"; do
+            [ -n "${pair#*=}" ] || { echo "Empty ${pair%%=*} from $ENV_FILE" >&2; exit 1; }
+          done
           {
-          echo "EXPO_PUBLIC_SUPABASE_URL=$(npx -y @dotenvx/dotenvx get VITE_SUPABASE_URL -f backend/.env.dev)"
-          echo "EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=$(npx -y @dotenvx/dotenvx get VITE_SUPABASE_PUBLISHABLE_KEY -f backend/.env.dev)"
-          echo "EXPO_PUBLIC_PIN_API_URL=$(npx -y @dotenvx/dotenvx get VITE_PIN_API_URL -f backend/.env.dev)"
+            echo "EXPO_PUBLIC_PIN_API_URL=$API_URL"
+            echo "EXPO_PUBLIC_SUPABASE_URL=$SB_URL"
+            echo "EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=$SB_KEY"
           } >> "$GITHUB_ENV"
+          echo "EXPO_PUBLIC_PIN_API_URL=$API_URL"
 
-      # CNG：从 app.json 生成 ios/（本仓不入库原生工程）。
+      # CNG:从 app.config.js 生成 ios/(原生工程不入库)。
       - name: Expo prebuild
         working-directory: apps/mobile
+        env:
+          APP_VARIANT: ${{ steps.target.outputs.variant }}
+          APP_BUILD_NUMBER: ${{ steps.target.outputs.build_number }}
         run: npx expo prebuild --platform ios --no-install
+
+      # 门禁卡缺口的临时修法(文件头有全文说明):剥掉现有 profile 不含的两个
+      # entitlement;aps-environment 对齐 App Store 分发要求的 production
+      # (expo-notifications 生成的默认值是 development,manual signing 下不匹配即拒签)。
+      - name: Trim entitlements to current provisioning profiles
+        working-directory: apps/mobile
+        run: |
+          ENT="ios/PINAIDev/PINAIDev.entitlements"
+          echo "--- generated entitlements ---"
+          /usr/libexec/PlistBuddy -c "Print" "$ENT"
+          /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.focus-status" "$ENT" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.healthkit.background-delivery" "$ENT" 2>/dev/null || true
+          if /usr/libexec/PlistBuddy -c "Print :aps-environment" "$ENT" >/dev/null 2>&1; then
+            /usr/libexec/PlistBuddy -c "Set :aps-environment production" "$ENT"
+          else
+            /usr/libexec/PlistBuddy -c "Add :aps-environment string production" "$ENT"
+          fi
+          echo "--- after trim ---"
+          /usr/libexec/PlistBuddy -c "Print" "$ENT"
 
       - name: Pod install
         working-directory: apps/mobile/ios
         run: pod install
 
       # Import Apple Distribution certificate into a temporary keychain
-      # (aligned with the working build-ios.yml pattern).
+      # (same steps as the proven build-ios.yml).
       - name: Install Apple certificate
         env:
           P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
           P12_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
-          if [ -z "$P12_BASE64" ]; then
-            echo "Missing secret APPLE_CERTIFICATE_P12_BASE64" >&2
-            exit 1
-          fi
           KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
           KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
 
@@ -81,23 +158,25 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
 
-      # Each bundle id has its own distribution profile:
-      # dev = ai.pin.proactive.development.
+      # Each bundle id has its own distribution profile: prod = ai.pin.proactive,
+      # dev = ai.pin.proactive.development. Pick the matching secret by target env.
       - name: Install provisioning profile
         id: provisioning
         env:
-          PROFILE_BASE64: ${{ secrets.PROVISIONING_PROFILE_DEV_BASE64 }}
+          PROFILE_PROD: ${{ secrets.PROVISIONING_PROFILE_BASE64 }}
+          PROFILE_DEV: ${{ secrets.PROVISIONING_PROFILE_DEV_BASE64 }}
+          TARGET_ENV: ${{ steps.target.outputs.env }}
         run: |
+          if [ "$TARGET_ENV" = "dev" ]; then PROFILE_BASE64="$PROFILE_DEV"; else PROFILE_BASE64="$PROFILE_PROD"; fi
           if [ -z "$PROFILE_BASE64" ]; then
-            echo "Missing secret PROVISIONING_PROFILE_DEV_BASE64" >&2
-            exit 1
+            echo "Missing provisioning profile secret for env=$TARGET_ENV" >&2; exit 1
           fi
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          echo "$PROFILE_BASE64" | base64 --decode \
-            > ~/Library/MobileDevice/Provisioning\ Profiles/pinai-dev.mobileprovision
+          echo "$PROFILE_BASE64" | base64 --decode > ~/Library/MobileDevice/Provisioning\ Profiles/pinai-rn.mobileprovision
           # Extract profile name for PROVISIONING_PROFILE_SPECIFIER
-          PROFILE_NAME="$(/usr/libexec/PlistBuddy -c 'Print :Name' /dev/stdin <<< "$(security cms -D -i ~/Library/MobileDevice/Provisioning\ Profiles/pinai-dev.mobileprovision)")"
+          PROFILE_NAME="$(/usr/libexec/PlistBuddy -c 'Print :Name' /dev/stdin <<< "$(security cms -D -i ~/Library/MobileDevice/Provisioning\ Profiles/pinai-rn.mobileprovision)")"
           echo "profile_name=$PROFILE_NAME" >> "$GITHUB_OUTPUT"
+          echo "Using profile: $PROFILE_NAME"
 
       - name: Archive
         working-directory: apps/mobile/ios
@@ -119,6 +198,7 @@ jobs:
         working-directory: apps/mobile/ios
         env:
           PROFILE_NAME: ${{ steps.provisioning.outputs.profile_name }}
+          BUNDLE_ID: ${{ steps.target.outputs.bundle_id }}
         run: |
           cat > ExportOptions.plist <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
@@ -127,7 +207,7 @@ jobs:
             <key>method</key><string>app-store-connect</string>
             <key>teamID</key><string>7T7C9L7H8F</string>
             <key>provisioningProfiles</key><dict>
-              <key>ai.pin.proactive.development</key><string>$PROFILE_NAME</string>
+              <key>$BUNDLE_ID</key><string>$PROFILE_NAME</string>
             </dict>
           </dict></plist>
           PLIST
@@ -154,4 +234,4 @@ jobs:
         run: |
           security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" 2>/dev/null || true
           rm -f "$RUNNER_TEMP/certificate.p12"
-          rm -rf "$RUNNER_TEMP/private_keys"
+          rm -rf "$RUNNER_TEMP/private_keys" ~/.appstoreconnect/private_keys

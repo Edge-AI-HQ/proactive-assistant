@@ -216,13 +216,16 @@ export default function MenuDrawerHost({
               <Animated.View style={[styles.card, cardStyle]}>
                 <VideoBackdrop />
                 {/* 页面走安全区:绝对定位 top/bottom=insets 内缩(children 是 absoluteFill、会
-                    忽略 padding)。打开态 inert:点灰卡=关闭,不误触页内按钮。 */}
-                <View
-                  style={[styles.cardPages, { top: insets.top, bottom: insets.bottom }]}
-                  pointerEvents={open ? "none" : "auto"}
-                >
+                    忽略 padding)。 */}
+                <View style={[styles.cardPages, { top: insets.top, bottom: insets.bottom }]}>
                   {children}
                 </View>
+                {/* 打开态 inert:透明遮挡层盖住页面(点灰卡=关闭、不误触页内按钮;触摸落
+                    在遮挡层上会冒泡给玻璃卡的 tapClose/closePan,行为同前)。不再用
+                    pointerEvents 翻转实现——长寿命 view 上翻转该 prop 在原生侧偶发不生效,
+                    会把整树触摸钉死(Profile 首切卡死的同类嫌疑,2026-07-07 加固);条件
+                    挂载/卸载走 view 插拔路径,无残留态。 */}
+                {open ? <View style={StyleSheet.absoluteFill} /> : null}
                 <Animated.View
                   style={[StyleSheet.absoluteFill, styles.scrim, scrimStyle]}
                   pointerEvents="none"

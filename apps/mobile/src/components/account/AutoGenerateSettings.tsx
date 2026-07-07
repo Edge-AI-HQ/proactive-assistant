@@ -24,9 +24,11 @@ const BG = "hsl(220, 30%, 96%)";
 const EMERALD_500 = "#10b981";
 const RED_500 = "#ef4444";
 
-// Preset interval buckets surfaced in the UI. Server enforces 15–1440min
-// via Pydantic / DB CHECK; the bucket list here is purely UX.
-const PRESETS_MINUTES = [30, 60, 120, 240, 720, 1440] as const;
+// Preset interval buckets surfaced in the UI. Server enforces 1–1440min
+// via Pydantic / DB CHECK; the bucket list here is purely UX. Minute-level
+// ticks are affordable because the generator's context is prompt-cache
+// stable (anchor architecture) — each tick re-pays only the uncached tail.
+const PRESETS_MINUTES = [1, 3, 5, 15, 30, 60] as const;
 
 function formatPreset(min: number): string {
   if (min < 60) return i18n.t("account:duration.minutes", { value: min });
@@ -47,11 +49,11 @@ export default function AutoGenerateSettings() {
   }, []);
 
   // Defaults match the DB column DEFAULTs (`pai_user_settings`):
-  // auto_generate=TRUE, interval=720min. Server lazy-creates the row
-  // with these on first GET, so this fallback is only the loading-flash
-  // visual before the response lands.
+  // auto_generate=TRUE, interval=60min (migration 126). Server lazy-creates
+  // the row with these on first GET, so this fallback is only the
+  // loading-flash visual before the response lands.
   const enabled = settings?.autoGenerate ?? true;
-  const intervalMinutes = settings?.autoGenerateIntervalMinutes ?? 720;
+  const intervalMinutes = settings?.autoGenerateIntervalMinutes ?? 60;
 
   const flashSaved = () => {
     setSavedAt(Date.now());

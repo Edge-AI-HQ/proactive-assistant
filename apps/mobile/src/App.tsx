@@ -39,6 +39,7 @@ import { enqueueFeedback, startSync } from "./lib/sync/sync-bootstrap";
 import { resumeAmbientIfEnabled } from "./ambient/runtime";
 import { acquireExternalMic } from "./ambient/external-mic";
 import AppShell from "./components/app/AppShell";
+import ErrorBoundary from "./components/app/ErrorBoundary";
 import OnboardingFlow from "./components/onboarding/OnboardingFlow";
 import { ensurePushRegistration, resetPushRegistration } from "./lib/push";
 import { BootstrapError } from "./screens/BootScreen";
@@ -178,18 +179,22 @@ function Root() {
 export default function App() {
   return (
     <GestureHandlerRootView style={styles.safe}>
-      {/* KeyboardProvider：全树单一「正确测量」的键盘值源（切后台自动重置）——取代 RN 内建
-          KeyboardAvoidingView 的安全区双算/不重置/卡死。挂最外层,做 chat KAV + 库 hook 的地基。 */}
-      <KeyboardProvider>
-        {/* Sync-A：persister 恢复白名单缓存（settings/cards），冷启先渲染上次
-            数据、后台 refetch——见 lib/query-client.ts。 */}
-        <PersistQueryClientProvider client={queryClient} persistOptions={persistOptions}>
-          <SafeAreaProvider>
-            <StatusBar style="dark" />
-            <Root />
-          </SafeAreaProvider>
-        </PersistQueryClientProvider>
-      </KeyboardProvider>
+      {/* ErrorBoundary：兜住组件树里未处理的渲染异常（含 dev 明确防过的 iOS React #185
+          无限渲染崩溃）→ 显示可恢复 fallback 而非整 App 白屏（对齐 dev main.tsx 包 <App/>）。 */}
+      <ErrorBoundary>
+        {/* KeyboardProvider：全树单一「正确测量」的键盘值源（切后台自动重置）——取代 RN 内建
+            KeyboardAvoidingView 的安全区双算/不重置/卡死。挂最外层,做 chat KAV + 库 hook 的地基。 */}
+        <KeyboardProvider>
+          {/* Sync-A：persister 恢复白名单缓存（settings/cards），冷启先渲染上次
+              数据、后台 refetch——见 lib/query-client.ts。 */}
+          <PersistQueryClientProvider client={queryClient} persistOptions={persistOptions}>
+            <SafeAreaProvider>
+              <StatusBar style="dark" />
+              <Root />
+            </SafeAreaProvider>
+          </PersistQueryClientProvider>
+        </KeyboardProvider>
+      </ErrorBoundary>
     </GestureHandlerRootView>
   );
 }

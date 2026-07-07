@@ -4,9 +4,12 @@
  * web lib/devices.ts ingestSignals(X-Device 头、id 客户端生成);401 清凭证下轮重注册。
  *
  * 上传形态对齐 dev sync-scheduler：
- *  - flush 前按 SYNCABLE_AMBIENT_KINDS 白名单过滤（ambient.timeline_event /
- *    ambient.candidate_window / health.observation），local-only 源信号直接
- *    markSynced 出队 + 警告——服务端只消费蒸馏后的管线产物。
+ *  - DATA-FLOW OPEN（2026-06-30，对齐 dev `AMBIENT_SYNC_PASSTHROUGH=true`）：上传每一种
+ *    采集到的 ambient kind（voice session_summary / visit / motion / location /
+ *    activity…）的 raw 信号，先在 pai_raw + events 看真实 volume/shape。
+ *    SYNCABLE_AMBIENT_KINDS 白名单保留为「收窄回去」的开关（passthrough=false 时才启用，
+ *    届时 local-only 源信号 markSynced 出队 + 警告）。后端 device_ingest/policies.py
+ *    有自己的 per-kind policy 作第二道独立闸，client 这半只负责放开。
  *  - 服务端 V3 per-item results 三桶分类（core bucketRecords）：settled 出队、
  *    retryable 保留 + 指数退避（2^attempt*5s 封顶 15min），rejected/parse_failed
  *    永久出队并记日志。
@@ -43,6 +46,12 @@ import { probeSet } from "../lib/heat-probe";
 const FLUSH_INTERVAL_MS = 30_000;
 const PENDING_BATCH = 200;
 const MAX_RETRY_DELAY_MS = 15 * 60_000; // dev sync-scheduler maxRetryDelayMs
+
+// DATA-FLOW OPEN（2026-06-30，一比一对齐 dev sync-scheduler.ts:45 AMBIENT_SYNC_PASSTHROUGH）：
+// 上传每一种采集到的 ambient kind 的 raw 信号，先看真实 volume/shape 再设计 gate。为 true 时
+// 下方 SYNCABLE_AMBIENT_KINDS 白名单被 bypass，仅作「收窄回去」的 fallback（flip 回 false 即
+// 恢复白名单-only 上传）。后端 device_ingest/policies.py 有自己的 per-kind policy 作第二道独立闸。
+const AMBIENT_SYNC_PASSTHROUGH = true;
 
 // durable:落 expo-sqlite,app kill / 断连后重启仍能续传(replaced 内存 buffer)。
 const outbox = new SqliteOutboxStore(createExpoDatabase("ambient"));
@@ -113,12 +122,15 @@ export async function flushSignals(): Promise<void> {
   try {
     await outbox.prune(Date.now());
     const pendingRecords = await outbox.pending(PENDING_BATCH, Date.now(), owner, backendUrl);
-    // dev sync-scheduler:95-112 —— 只同步蒸馏产物；raw 源信号是 local-only，
-    // 出队（markSynced）并警告，绝不上传。
-    records = pendingRecords.filter((row) => SYNCABLE_AMBIENT_KINDS.has(row.item.kind));
-    const localOnlyRecords = pendingRecords.filter(
-      (row) => !SYNCABLE_AMBIENT_KINDS.has(row.item.kind),
+    // dev sync-scheduler:104-121 —— AMBIENT_SYNC_PASSTHROUGH=true 时上传全部 kind（raw
+    // 透传）；SYNCABLE_AMBIENT_KINDS 白名单是「收窄回去」的 fallback（passthrough=false 时
+    // 才把 local-only 源信号 markSynced 出队 + 警告，绝不上传）。
+    records = pendingRecords.filter(
+      (row) => AMBIENT_SYNC_PASSTHROUGH || SYNCABLE_AMBIENT_KINDS.has(row.item.kind),
     );
+    const localOnlyRecords = AMBIENT_SYNC_PASSTHROUGH
+      ? []
+      : pendingRecords.filter((row) => !SYNCABLE_AMBIENT_KINDS.has(row.item.kind));
     if (localOnlyRecords.length > 0) {
       console.warn("[ambient] dropping local-only source items before sync", {
         count: localOnlyRecords.length,

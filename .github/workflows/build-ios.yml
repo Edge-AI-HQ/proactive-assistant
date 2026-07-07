@@ -1,5 +1,9 @@
 name: Build iOS
 
+# 2026-07-07 起 dev 自动构建由 RN 接管(build-rn-ios.yml,push main 自动)。
+# 本流水线(Capacitor)只留手动 dispatch 作应急回滚通道——dev/prod 与 RN 版
+# 共用同一对 TestFlight app 记录,应急时手动触发即可用旧代码覆盖发版。
+# proactive-ai-frontend/ 目录退役(删除)时本文件一并删除。
 on:
   workflow_dispatch:
     inputs:
@@ -11,16 +15,6 @@ on:
         options:
           - dev
           - prod
-  # dev auto-builds + uploads to TestFlight on push (path-filtered to app
-  # code). prod is dispatch-only — see deploy convention in AGENTS.md.
-  push:
-    branches: [main]
-    paths:
-      - 'proactive-ai-frontend/**'
-      - 'capacitor-plugins/**'
-      # 共享逻辑/UI 层（@pin-ai/core·@pin-ai/state·@pin-ai/ui-web）变化也要重建 Capacitor app
-      - 'packages/**'
-      - '.github/workflows/build-ios.yml'
 
 # Newer push cancels an in-flight dev build so TestFlight isn't flooded.
 concurrency:

@@ -1,6 +1,6 @@
 /**
  * 设置面开关 —— web account 系组件里两种内联 switch 的 RN 对应物：
- * - md（AutoDreamingSettings / ScheduledTasksSettings）：h-7 w-12(28×48) + 20 拇指，
+ * - md（AutoEvolutionSettings / ScheduledTasksSettings）：h-7 w-12(28×48) + 20 拇指，
  *   on bg-primary / off bg-foreground/10，border-foreground/10，拇指 shadow-md。
  * - sm（AutoGenerateSettings）：h-6 w-11(24×44) + 16 拇指，
  *   on bg-primary border-primary / off bg-foreground/15 border-foreground/15，shadow-sm。

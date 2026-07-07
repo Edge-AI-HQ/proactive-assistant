@@ -54,7 +54,7 @@ description: "当前前端主线:把 proactive-ai-frontend(Capacitor)逐屏迁�
 3. SettingScreen 缺 `initialPage` deep-link prop——NOW 空态「Review permissions」目前只能退回 Setting 主页,进不了 Ambient 子页(`NowScreen` prop 注释有标记)。
 4. ambient runtime start/stop 竞态窗口(main 预存,非本轮引入)——`startAmbientSources` 先落 flag 再查 `isCurrentStart`,极窄窗口早退会残留 flag=true;已挂后台任务。
 5. `runtime.web.ts` stub 未跟进新导出(RN-web 预览形态,iOS 不受影响)。
-6. BrowserPanel 前台回切后 loading 遮罩不复位(纯装饰,`components/chat/BrowserPanel.tsx`)。
+6. **[✅ 已修 2026-07-06(审计升 P1,原判「纯装饰」有误)]** BrowserPanel loading 遮罩曾可能永久卡死:`BrowserPanel.tsx` reload 归零 `loaded`、仅 `onLoadEnd` 清除、缺 onError/超时——签名 live-view URL 前台回切后刷新失败即黑遮罩盖死。已修:WebView 加 `onError`/`onHttpError` 揭遮罩 + reload effect 加 8s 超时兜底,三重保险绝不卡死。
 
 **二、双端共同缺口(不属迁移债,当新功能立项)**
 
@@ -76,7 +76,7 @@ description: "当前前端主线:把 proactive-ai-frontend(Capacitor)逐屏迁�
 
 不属于"某一屏"、但 sunset 前必须补齐的横切项(详见 SSOT 的 Batch 1/3):
 
-- `App.tsx` wire 4 个注册点:`registerSignOutCleanup`(✅) / `registerExternalMicAcquirer`(✅ → `ambient/external-mic.ts` 引用计数协调器,录音时 `AmbientAudio.setExternalMicSuppressed` 让出 native 麦,对齐 web) / `registerFeedbackOutbox`(☐) / `registerLocalThreadStore`(☐)。
+- `App.tsx` wire 4 个注册点:`registerSignOutCleanup`(✅) / `registerExternalMicAcquirer`(✅ → `ambient/external-mic.ts` 引用计数协调器,录音时 `AmbientAudio.setExternalMicSuppressed` 让出 native 麦,对齐 web) / `registerFeedbackOutbox`(✅ `App.tsx:56` → durable expo-sqlite outbox) / `registerLocalThreadStore`(✅ 等价:非 port,改 `ChatScreen`/`CardDetailSheet` 显式传 `readLocalHistory`,per-user expo-sqlite+FTS5)。**(2026-07-06 审计复核:4 port 全接、无一 silence)**
 - **RN 全量 i18n（✅ 2026-07-01 落地,待真机验）**——复刻 Mengli #159（e45ba86a）的 8 语言体系到 RN：① 96 个语料 JSON `git mv` `ui-web/src/locales` → **`ui-kit/src/locales`**（双端共享层;ui-web 静态 en import/懒加载 glob/parity 测试改相对路径引 ui-kit,照 tailwind 引 tokens.cjs 先例——vite alias 只映射包名到 index.ts 不吃子路径;web 三端 type-check + check:packages + parity 15/15 全绿,生产 web 无损）。② RN 运行时 `apps/mobile/src/i18n/`：Metro 无 vite glob → 8 语言 × 12 ns **全部静态打包**（bundle +~800KB）;首屏语言跟 iOS 设备（`NativeModules.SettingsManager.AppleLanguages`,零新原生依赖）;`useUiLanguageSync`（dev 逐字同构,cache-follow root 的 useUserSettings 实例）接 App 根,`settings.generationLanguage` 变化即全 App 切语言;**`i18next.d.ts` typed keys = 写错 key 直接 tsc 报错**（本次接线的质量闸门）;`matchSupportedLanguage` 纯逻辑上移 `@pin-ai/core`（ui-web re-export 保旧路径）;i18next/react-i18next 版本与 web 一致（^26.3.1/^17.0.8）。③ **全屏接 t()**（6 域,~540 调用点）：setting/account（手做,70）+ ambient（201,含 live-session/timeline-entries 模块级 i18n.t）+ connect（112）+ profile（64）+ chat/now/tasks（~90）+ 壳/voice/auth（9+）;铁律 = **dev 用 t() 的才转、key 逐字同 dev、dev 硬编码的保持硬编码**（SubscriptionPanel/BrowserLoginsSection/DebugPanel dev 本就不翻译 → RN 同样英文）。整合 pass 补掉 agents 按"禁改样式"留下的**烤死大写**（dev = t + CSS uppercase → RN t().toUpperCase()/textTransform：ASK PIN AI、DATA SOURCES/DEVICES/AMBIENT SOURCES、NEEDS YOUR APPROVAL/INPUT、artifact 标签、N STEPS、球面徽章、卡详情四区块标题）与**手抄漂移**（RN 串≠dev 原文,回 dev：Helpful?/comment placeholder/todoPanel progress "n/m done"/Running subtask/Connecting…/Listening…/Message PIN AI… 等）。**保留的已知缺口**：NOW 问候 "Hi, {name}"（dev 用 Trans+nameSpan 结构,RN 是 Text+GradientText 组合,串替换无法等价——待单独做）;TasksScreen Today/Yesterday（dev 走 `Intl.RelativeTimeFormat(i18n.language)`,Hermes 没有 → RN 手写 en,切语言不跟）;lib/format 相对时间同因保持 en;用户定偏离不转（notifications onHint 去 your、"Sensing context around you"、STARTER_GOALS 标题、LoginScreen tagline[dev 已删该 UI]）。切语言入口 = Setting → Preferences → Language（保存 + 后端 LLM 输出语言 + 全 App UI 三合一,= dev）。**2026-07-02 residual 修（用户真机发现 4 处不切换,均补齐,type-check + parity 15/15 + check:packages 294 + 两 web 端 tsc + bundle 全绿）**：这 4 处 **dev 本身也硬编码英文不翻译**,应用户要求做**有意升级**(RN 比 dev 多翻译),不算漂移——① **Subscription 整个子页**：SubscriptionPanel 逐串接 `account:subscription.*`（key 8 语言早已存在,dev 组件却没接）、plans.ts 的 planName/credits/perks 改走 `account:plans.*`（perks 网格/档名/额度随之翻译）,补建缺失 key（changePlan/addCredits/planCreditsLabel/extraCredits 等）8 语言;② **Ambient On-device models 卡「模型介绍小字」**：per-model notes 来自 native `ModelManifest.swift`（英文数据）,新建 `ambient:modelNotes.<id>`（6 模型 × 8 语言）,渲染 `t(modelNotes.<id>, {defaultValue: selected.notes})`——有 key 用翻译、native 新增模型没配 key 回退原文不空;③ **Profile Goals 6 目标名 + starter 小字**：basketMeta 改用 `profile:baskets.*`（8 语言已存在,原来用 core 硬编码英文 label）、canonicalBasketGoals 兜底 starter title 改用新建 `profile:starterGoals.<key>`（6 条 × 8 语言）;两者均渲染时 i18n.t（ProfileScreen useTranslation 订阅,切语言即时重算）;④ **Connect → Website Login 子卡**：connect.json 原无 `browserLogins` 段,新建整段 8 语言 + BrowserLoginsSection 全串接 t()。保留不翻的：HF repo/file 标识、镜像域名、推理框架名（whisper.cpp/llama.cpp）、后端真实 goal 数据——数据/专有名词非 UI 文案。
 - `apps/mobile/src/lib/devices.ts`:`ensureDevice` + expo-secure-store(DeviceCredentials)。
 - `ambient/ingest.ts`:内存 buffer → DatabasePort durable outbox。
@@ -85,6 +85,40 @@ description: "当前前端主线:把 proactive-ai-frontend(Capacitor)逐屏迁�
   - **thermal(device_state 发热档位)有意不迁(路 C)**:iOS thermalState 无 JS 接口、device_state 后端 `_FILTERED_POLICY` 故意丢弃(连 web 也没进核心消费)、价值极低。
   - **focus(`device.focus_state`)真实现**:`ambient-visit` 接 `INFocusStatusCenter`(前端源 / ingest / 后端 `_SIGNAL_POLICY` 存储 / generator·dream 通用消费 均已就绪,只差原生)。⚠️ 需 `com.apple.developer.focus-status` entitlement——个人 team 签不了(本地真机会像 push 一样被剥),仅 CI / 付费 team build 生效;模拟器无专注模式,真值测不出。
   - OLD 其余 plugin(Photos / Bluetooth / NotificationUsage 计数 / on-device LLM)= web 从未接进运行时的死代码,**不迁**。
+
+## 对抗式全域审计(2026-07-06,7 域并行 + 端到端追后端)
+
+> 目标:判断 RN 能否替换**现役 Capacitor iOS**(`proactive-ai-frontend`)。方法:7 个域各追 RN↔dev↔后端,别信 UI parity、专猎改名死端点/写死空值/declared-but-dormant 原生。**结论:全域功能 parity,RN 可替换现役 iOS——门禁 = 下方 3 个 P1 修完 + 真机验。** web 部署形态不在本次替换范围(现役 iOS = Capacitor 出包,替换的是这条,非删文件夹)。
+
+**逐域判定**:VOICE 齐(历史 diarization 阉割**已修**,走 `/voice/transcribe-diarized`)/ NOW+cards 齐(共享 `@pin-ai/core` 解析器+feedback 协议)/ PROFILE+billing 齐(共享 `payment.ts` 单 client,端点漂移结构上不可能)/ CONNECT 齐(共享 `useComposio`/`useUserDevices`)/ CHAT 齐(共享 `useConversationRuntime`,browser 面板除外)/ AMBIENT 多处更稳(9 源真原生、durable sqlite outbox、原生 geocode POI)/ AUTH 近乎完美(4 port 全接、8 语言同源、session/401/signout 逐字同构)/ SETTING 本轮已修。
+
+**替换现役 iOS 前必修(3 P1,均已源码复核确认)** ✅ **2026-07-06 全部处理**(①② 代码已修 + type-check 过;③ 已按决定改 RN `AMBIENT_SYNC_PASSTHROUGH=true` 对齐 dev raw 透传):
+1. **RN 缺全局 ErrorBoundary**(`apps/mobile/src/App.tsx`)——dev `main.tsx:52` 明确为 iOS React #185 无限渲染崩溃防过,RN 裸奔、release 会白屏。修:class ErrorBoundary 包 Root,文案走已存在的 `common:errorBoundary.*`。
+2. **Browser loading 遮罩可能永久卡死**(详见 §一.6,`BrowserPanel.tsx` 缺 onError/超时)。
+3. **[✅ 已对齐 2026-07-06] Ambient 数据流 raw vs distilled**——原:dev `sync-scheduler.ts:45` `AMBIENT_SYNC_PASSTHROUGH=true` 传 raw utterance/location(2026-06-30 改),RN `ingest.ts` 按 `SYNCABLE_AMBIENT_KINDS` 只传蒸馏 `candidate_window`(停在旧契约)。**已按决定让 RN `ingest.ts` 一比一照搬 dev 的 `AMBIENT_SYNC_PASSTHROUGH=true`(同名开关 + 同 filter 三元式 + 同注释),两边 raw 透传完全一致;白名单保留作「收窄回去」fallback(flip 回 false 即恢复)。后端 `device_ingest/policies.py` per-kind policy 作第二道独立闸。** type-check 过。
+
+**〔✅ 已修 + 真机验收 2026-07-06,点击/滚动/中文打字/坐标全通〕AI 浏览器接管交互**(`BrowserPanel.tsx`,分四层修复,全程无需改后端——`tap|click|text|key|scroll` 后端早支持):
+- **① 滚动/打字缺失**:RN 原走「原生 WebView 吃手势」捷径,而 vendor live view 触屏只读(desktop-mouse-only,dev BrowserView 头注已警示)→ 移植 dev 的 **overlay+CDP 模型**:WebView 恒 `pointerEvents:none` 只读 + RNGH 手势层(轻点/拖动→CDP)+ 隐藏 TextInput 作键盘 sink + 顶栏 Type 钮唤键盘。
+- **② 中文 IME 吞字/整框刷新**:根因 = 旧「整串重打」兜底分支被拼音→汉字替换命中。改 **公共前缀 diff**(只算最小编辑:退变化后缀 + 补新后缀,天然处理合成替换)+ **串行发送队列**(链式 Promise 保序,防"退5格+打你好"乱序吞字)+ **tap 重置缓冲 / 空缓冲退格转发**(修点 X 清空后错乱 + 删「进入编辑前已有」的旧内容)。
+- **③ mouse-only 元素(X 清除钮等)点不动**:远端是 desktop `hasTouch=false` 会话(manager `_DEFAULT_VIEWPORT` desktop 1280×800),合成 touch 触不动只认鼠标的元素 → page tap 从 CDP `tap`(touch)改 **`click`(mouse)**;Type 钮改常驻(click 不回传 editableFocused)。
+- **④ 点击落点偏**(小目标要试几次 / 搜索历史 X 点成邻行跳转):远端画面 `object-fit: contain` 缩放留黑边 → **contain 感知坐标换算**(补黑边 offset + 等比 scale + `clampTo`,scroll 用同一 scale)。
+真机验收「完美」。**平台适配记录**:Type 钮放顶栏(非 dev 底部 contextual pill)避免和全屏手势层抢触摸;RNGH payload 无 `changeX/Y` → 用 `translationX/Y` 差分(sharedValue 存上帧）。
+
+**SETTING(2026-07-06 本轮已修)**:Auto Generate 间隔补回 1/3/5min(对齐共享层,后端 migration 126 早支持)、Evolution 卡 4 处死端点 `/dreaming`→`/evolution`(PR #215 后端改名 RN 没跟上,整卡曾 404)、`AutoDreaming*`→`AutoEvolution*` 全量改名对齐 dev。
+
+**非能力 P2(多为 dev/RN 共享技术债,不 gate 替换)**:Profile MEMORY 空段(migration 115 删 slot,两端都渲染空卡)、PaywallDrawer 缺(`card.locked` 后端从不设=死代码)、feedback `channel:"web"` 标记(后端不 branch)、通知点击不跳页(两端共缺,见 §二.1)、voice 重复 diarize 解析器 + 装饰性 AirPlay 钮、ambient 死 `"transcript"` 监听(`sound-classifier.ts:538`,其他路径已覆盖)。
+
+**发版 checklist(billing,非 RN 问题)**:DB 里 `free` plan = 10 万 credits(测试预算,GA 前调低)、`TopupResponse.checkoutUrl` 类型标非空但 Stripe 可能返 null。
+
+## CI/CD 切换(2026-07-07)— sunset 第一步
+
+审计结论(上节)落地为交付链切换,**目录本体保留**:
+
+- **dev TestFlight 自动构建切 RN**:`build-rn-ios.yml` 重写(UTF-8 locale / `RCT_USE_PREBUILT_RNCORE=0` 源码编译 / Xcode 26 / 90min,均为本地 `build-rn-device.sh` 已踩通修法上移 CI);push main(`apps/mobile/` `packages/`)自动 → TestFlight。Capacitor `build-ios.yml` 摘掉 push 触发,仅留手动 dispatch 作应急回滚(同一对 TestFlight app 记录,应急时旧代码可覆盖发版)。
+- **prod 流水线就位、仅手动 dispatch**:同 workflow 选 `environment=prod` → bundle `ai.pin.proactive` + `backend/.env.production` + prod distribution profile。发 prod 的时机由 Mengli 决定(先 dev TestFlight 验过)。
+- **三变体身份**:`apps/mobile/app.config.js` 按 `APP_VARIANT` 注入 bundle/scheme/显示名(不设=本地 `ai.pin.proactive.dev` / `ci-dev`=`ai.pin.proactive.development` / `prod`=`ai.pin.proactive`),scheme=bundle id 沿用 Capacitor 约定(Supabase 白名单已有);version 对齐 1.0 轨道,构建号 CI 注入 1000+run#(高于 Capacitor 的 200+run#)。App 图标复用现网 1024px 资源(此前未配,上传必拒)。
+- **entitlement 缺口(临时)**:现有 dev/prod profile 不含 RN 新增的 `focus-status` / `healthkit.background-delivery`,CI prebuild 后剥掉(能力与线上 Capacitor 版持平、零倒退);Apple 后台补开能力 + 重发两张 profile + 更新 secrets 后,删 workflow 的 `Trim entitlements` step 即恢复。
+- **既定决策**:网页版部署形态(fly `proactive-ai-frontend-{dev,test,prod}`)随目录一起在最后一步下线(浏览器用户走 apps/web);**删除目录前必须 Mengli 拍板**(先在 dev、prod 双环境验证 RN)。
 
 ## 完成定义(可以删 proactive-ai-frontend 的前提)
 
