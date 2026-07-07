@@ -42,6 +42,14 @@ model_list:
         # ("Found 5" card-chat 400). Two fixed breakpoints, count-bounded.
         - location: message
           index: 0
+          # ttl 1h on the head: Anthropic rejects any 1h block that comes
+          # after a 5m block (order: tools → system → messages). The generate
+          # path pins its own 1h breakpoint mid-conversation (generator
+          # _cache_block, cache_ttl="1h" for >5min cadences) — a default-5m
+          # head would precede it after the litellm→Anthropic user-message
+          # merge and 400 every slow-cadence generate. 1h(head) →
+          # 1h|5m(generator) → 5m(tail) is legal in every combination.
+          control: { type: ephemeral, ttl: 1h }
         - location: message
           index: -1
     model_info:
@@ -69,6 +77,14 @@ model_list:
         # ("Found 5" card-chat 400). Two fixed breakpoints, count-bounded.
         - location: message
           index: 0
+          # ttl 1h on the head: Anthropic rejects any 1h block that comes
+          # after a 5m block (order: tools → system → messages). The generate
+          # path pins its own 1h breakpoint mid-conversation (generator
+          # _cache_block, cache_ttl="1h" for >5min cadences) — a default-5m
+          # head would precede it after the litellm→Anthropic user-message
+          # merge and 400 every slow-cadence generate. 1h(head) →
+          # 1h|5m(generator) → 5m(tail) is legal in every combination.
+          control: { type: ephemeral, ttl: 1h }
         - location: message
           index: -1
     model_info:
@@ -102,6 +118,14 @@ model_list:
         # ("Found 5" card-chat 400). Two fixed breakpoints, count-bounded.
         - location: message
           index: 0
+          # ttl 1h on the head: Anthropic rejects any 1h block that comes
+          # after a 5m block (order: tools → system → messages). The generate
+          # path pins its own 1h breakpoint mid-conversation (generator
+          # _cache_block, cache_ttl="1h" for >5min cadences) — a default-5m
+          # head would precede it after the litellm→Anthropic user-message
+          # merge and 400 every slow-cadence generate. 1h(head) →
+          # 1h|5m(generator) → 5m(tail) is legal in every combination.
+          control: { type: ephemeral, ttl: 1h }
         - location: message
           index: -1
     model_info:
@@ -123,6 +147,14 @@ model_list:
         # ("Found 5" card-chat 400). Two fixed breakpoints, count-bounded.
         - location: message
           index: 0
+          # ttl 1h on the head: Anthropic rejects any 1h block that comes
+          # after a 5m block (order: tools → system → messages). The generate
+          # path pins its own 1h breakpoint mid-conversation (generator
+          # _cache_block, cache_ttl="1h" for >5min cadences) — a default-5m
+          # head would precede it after the litellm→Anthropic user-message
+          # merge and 400 every slow-cadence generate. 1h(head) →
+          # 1h|5m(generator) → 5m(tail) is legal in every combination.
+          control: { type: ephemeral, ttl: 1h }
         - location: message
           index: -1
     model_info:
