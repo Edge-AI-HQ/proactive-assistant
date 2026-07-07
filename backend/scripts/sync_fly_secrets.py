@@ -1,12 +1,12 @@
 """Sync a dotenvx-encrypted .env file to a fly app's secrets.
 
-Used by `.github/workflows/deploy-test.yml` before each backend
-test deploy. Also runnable locally for emergency rotation:
+Used by `.github/workflows/_deploy.yml` before each backend deploy
+(per-app, all three envs). Also runnable locally for emergency rotation:
 
     cd backend
     DOTENV_PRIVATE_KEY_TEST=... \\
       python scripts/sync_fly_secrets.py \\
-        --app proactive-ai-agents-test \\
+        --app proactive-ai-api-test \\
         --env-file .env.test
 
 Behavior: secrets travel only via stdin pipe to `flyctl secrets
@@ -14,7 +14,7 @@ import` — they never appear in argv, so no Python traceback or shell
 trace can leak them. Default `--stage` so the next `flyctl deploy`
 applies them atomically with the image.
 
-Per-app trust scoping (ready; used once the single app splits):
+Per-app trust scoping (active on all three envs):
 flyctl has NO per-process-group secret (verified on 0.4.48) — secrets
 are app-level, visible to every process group. A single fly app
 therefore cannot keep master credentials away from the engine process

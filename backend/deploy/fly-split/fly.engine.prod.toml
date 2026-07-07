@@ -1,6 +1,5 @@
-# ⚠️ READY BUT NOT ACTIVE — not referenced by any CI workflow. See README.md.
 # Split-app variant of fly.prod.toml's `chat` process group: the UNTRUSTED LLM
-# loop. Holds NO master credentials. App name + URLs are PLACEHOLDERS.
+# loop. Holds NO master credentials.
 # Copied from fly.engine.dev.toml; differences: app name (-prod), all URLs
 # (-prod), DEPLOY_ENV='production', Daytona snapshot tag. VM size = 2gb,
 # matching fly.prod.toml's `chat` group.

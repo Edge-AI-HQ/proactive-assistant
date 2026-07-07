@@ -312,6 +312,8 @@ Phase 0 ─► Phase 1 ─┬─► Phase 5  (安全关键路径：trust boundar
 
 ### 部署落地：配置 ready-inactive 已进 PR；激活需部署环境（运维按 runbook）
 
+> **激活状态（2026-07-07 更新）**：三环境已全部激活——dev 2026-06-22、test 2026-07-02、prod 2026-07-07（`deploy-{dev,test,prod}.yml` 传 `agents_split: true`）。per-app scoped secret + `ENGINE_TRUST_FAILFAST=1` 三环境生效；`pai_reward` role 已由 migration 107 落地（下面第 4 点的「待设计」已完成）。本节以下保留为当时的 ready-inactive 设计记录。
+
 代码层 trust 已物理隔离。把它落到**部署形态**（per-app secret 物理生效）的配置已写进 PR，但**默认不激活**：不切 CI 默认路径、fail-fast 默认 OFF。现有单 app `fly.{dev,test,prod}.toml` + CI `deploy-agents` 仍是真路径、不受影响。激活步骤见 [`backend/deploy/fly-split/README.md`](../../backend/deploy/fly-split/README.md) runbook（需 fly 环境，本地无法验证）：
 
 1. **fly app 拆分**：✅ 配置 ready（`deploy/fly-split/fly.{api,engine,reward}.dev.toml` + README runbook），未被任何 CI 引用（grep 验证）。把单 fly app（`[processes]` web+chat）拆成 3 独立 app（api 持全量 secret / engine flycast-only 不持 master / reward 内部工具）。激活=运维新建 fly app + per-app sync + 改 CI `deploy-agents` 多 app + 切流量。

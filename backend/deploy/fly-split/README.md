@@ -1,4 +1,4 @@
-# fly app split — ACTIVE on dev + test, prod pending
+# fly app split — ACTIVE on all three envs (dev + test + prod)
 
 These toml files are the **deploy-layer landing** of the backend
 re-architecture (docs/plans/2026-06-21-backend-rearchitecture.mdx §四/§十二).
@@ -6,15 +6,15 @@ They split the single `proactive-ai-agents-*` fly app (`[processes]` web+chat)
 into independent fly apps so the trust boundary becomes physical at the deploy
 layer too — the engine app simply never receives master credentials.
 
-> **Status: dev activated 2026-06-22, test activated 2026-07-02
-> (`deploy-{dev,test}.yml` pass `agents_split: true`); prod still deploys the
-> single app via `backend/fly.prod.toml`.** The runbook below was written
-> pre-activation; treat it as the prod activation guide. One correction learned
-> on dev: api→engine goes over **6PN `.internal:8001`**, NOT flycast — flycast
-> exposes the http_service external port (80/443), not the container port. See
+> **Status: ACTIVE on all three envs — dev 2026-06-22, test 2026-07-02,
+> prod 2026-07-07 (`deploy-{dev,test,prod}.yml` pass `agents_split: true`).**
+> The runbook below is kept as the activation reference (it has now run
+> end-to-end on every env). One correction learned on dev: api→engine goes
+> over **6PN `.internal:8001`**, NOT flycast — flycast exposes the
+> http_service external port (80/443), not the container port. See
 > AGENTS.md 踩坑 §9 and the NOTE in `fly.api.*.toml`.
 >
-> What ships ready-inactive in this directory + repo:
+> What ships in this directory + repo:
 > - `fly.{api,engine,reward}.{dev,prod,test}.toml` — all three apps × three envs.
 > - `_deploy.yml` `deploy-agents-split` job — gated `if: inputs.agents_split`
 >   (default false ⇒ skipped ⇒ current single-app `deploy-agents` runs unchanged).
@@ -26,12 +26,12 @@ layer too — the engine app simply never receives master credentials.
 ## Why
 
 Single fly app can't do per-process-group secrets (flyctl 0.4.48 has no such
-flag — see `scripts/sync_fly_secrets.py`). So today the `chat` process group
-sees the same env as `web`, including master credentials; the engine boot guard
-(`agent-engine/asgi.py`, gated by `ENGINE_TRUST_FAILFAST`) stays OFF because
-turning it on would crash boot. Separate apps fix this: per-app secrets +
-`--exclude-master` keep master credentials out of the engine/reward apps, and
-the boot guard arms.
+flag — see `scripts/sync_fly_secrets.py`). On that layout the `chat` process
+group saw the same env as `web`, including master credentials; the engine boot
+guard (`agent-engine/asgi.py`, gated by `ENGINE_TRUST_FAILFAST`) had to stay
+OFF because turning it on would crash boot. Separate apps fix this: per-app
+secrets + `--exclude-master` keep master credentials out of the engine/reward
+apps, and the boot guard arms.
 
 ## Target topology (dev)
 
@@ -188,8 +188,8 @@ re-done). Run for one env (`dev` first) end-to-end before the next.
      404 on fly before — the reward backend was never mounted there; the split
      reward app serves `pinai_reward_dashboard.asgi:app` natively).
    - Verify `CHAT_INTERNAL_URL` in `fly.api.<env>.toml` resolves the engine over
-     flycast (`fly ssh console -a proactive-ai-api-<env> -C 'curl -sf
-     http://proactive-ai-engine-<env>.flycast:8001/health'`).
+     6PN (`fly ssh console -a proactive-ai-api-<env> -C 'curl -sf
+     http://proactive-ai-engine-<env>.internal:8001/health'`).
 8. **[ops]** Verify the trust boundary actually holds (the whole point):
    ```
    # engine must hold ZERO master credentials — expect 0:
@@ -232,12 +232,12 @@ single-app `deploy-agents` job runs and `deploy-agents-split` is skipped.
 
 ## prod / test
 
-`fly.{api,engine,reward}.{prod,test}.toml` are already in this directory,
-copied from the `*.dev.toml` with: `app` → `…-{prod,test}`, all `…-dev` URLs →
-the env's, `DEPLOY_ENV` (`production` / `test`), `PINAI_DAYTONA_SNAPSHOT`
+`fly.{api,engine,reward}.{prod,test}.toml` mirror the `*.dev.toml` set with:
+`app` → `…-{prod,test}`, all `…-dev` URLs → the env's, `DEPLOY_ENV`
+(`production` / `test`), `PINAI_DAYTONA_SNAPSHOT`
 (`pinai-sandbox:{production,test}`), and VM sizes aligned to the single-app
 `fly.{prod,test}.toml` (prod api = 4gb / engine = 2gb / reward = 1gb; test api =
-2gb / engine = 1gb / reward = 1gb). They are templates like the dev set — verify
-app names, flycast addresses and IPs against the real fly apps before the first
-deploy in each env. Do not activate prod/test before the dev split is proven on
-fly.
+2gb / engine = 1gb / reward = 1gb). Both envs are activated (test 2026-07-02,
+prod 2026-07-07) — the apps, IPs (api public, engine/reward private v6) and
+scoped-role DSNs (`{ENGINE,REWARD}_DATABASE_URL` in the dotenvx env files)
+exist on fly.

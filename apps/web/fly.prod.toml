@@ -13,10 +13,10 @@ primary_region = "ord"
   dockerfile = "Dockerfile"
 
 # Runtime nginx config — envsubst'd by nginx:alpine's template mechanism。
-# same-origin /api 反代 prod agents app（机制同 frontend fly.prod.toml）。
+# same-origin /api 反代 prod api app（机制同 frontend fly.prod.toml）。
 [env]
   NGINX_RESOLVER = "[fdaa::3]"
-  NGINX_UPSTREAM_URL = "https://proactive-ai-agents-prod.fly.dev"
+  NGINX_UPSTREAM_URL = "https://proactive-ai-api-prod.fly.dev"
 
 [http_service]
   internal_port = 8080

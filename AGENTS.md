@@ -49,7 +49,7 @@ PIN AI 后端是 `backend/` 下的一个 **uv workspace monorepo**（Python / Fa
 - LLM 链路（chat / generate / evolve agents + Daytona sandbox 工具）→ **agent-engine 进程**（`agent_engine`）。
 - 内部 reward review 后端（reward ledger / casebook / trace / pattern curate / data snapshot）→ **reward-dashboard 进程**（`pinai_reward_dashboard`），只读产品 DB。
 - 用户级 OpenClaw 容器和 gateway 代理整套都退役了，前端直接打 `pinai_api` 的 HTTP/SSE。
-- **当前 fly 部署形态**：**dev 和 test 已切到三个独立 fly app**——`proactive-ai-{api,engine,reward}-{dev,test}`（api = trusted edge 持 master credentials / engine = 无信任 LLM loop，scoped secret / reward = 只读 review 后端），配置在 `backend/deploy/fly-split/fly.{api,engine,reward}.{dev,test}.toml`，CI 由 `deploy-{dev,test}.yml` 的 `agents_split: true` 激活、跑 `_deploy.yml` 的 `deploy-agents-split`（per-app scoped secrets + deploy）。旧单 app `proactive-ai-agents-dev` 已停（machine=0）保留作回滚；test 从未有过单 app（`agents-test` 不存在，2026-07-02 直接按三-app 建）。**prod 仍是单 app**（`proactive-ai-agents-prod`，`fly.prod.toml` 的 `[processes]` 切 `web`/`chat` 两进程组、共用一份镜像）。§五 终态 = 三环境都拆三-app，prod 待单独落地（见 backend-rearchitecture plan §十二）。api→engine 在 fly 内网走 **6PN service discovery**（`proactive-ai-engine-<env>.internal:8001`，**不是 flycast**——见踩坑 §9）。
+- **当前 fly 部署形态**：**三环境都已拆成三个独立 fly app**——`proactive-ai-{api,engine,reward}-{dev,test,prod}`（api = trusted edge 持 master credentials / engine = 无信任 LLM loop，scoped secret / reward = 只读 review 后端），配置在 `backend/deploy/fly-split/fly.{api,engine,reward}.{dev,test,prod}.toml`，CI 由 `deploy-{dev,test,prod}.yml` 的 `agents_split: true` 激活、跑 `_deploy.yml` 的 `deploy-agents-split`（per-app scoped secrets + deploy）。旧单 app 保留作回滚：`proactive-ai-agents-dev` 已停（machine=0，2026-06-22 切），`proactive-ai-agents-prod` 切换验证后停（2026-07-07 切）；test 从未有过单 app（2026-07-02 直接按三-app 建）。api→engine 在 fly 内网走 **6PN service discovery**（`proactive-ai-engine-<env>.internal:8001`，**不是 flycast**——见踩坑 §9）。
 
 ## 进程信任边界（api vs agent-engine）
 
@@ -60,8 +60,7 @@ PIN AI 后端是 `backend/` 下的一个 **uv workspace monorepo**（Python / Fa
 - **reward-dashboard 进程**（`pinai_reward_dashboard`）：内部 review 工具，只读产品 DB（经 `pinai_db`），**不**持 master credentials，**不**依赖 `pinai_api`。
 - **运行时防线现状**（FORBIDDEN_ENVS 单一真源：`backend/services/agent-engine/src/agent_engine/trust_boundary.py`）：
   - **本地 compose 仍生效**：Makefile `ensure-env-backend` 派生 `.env.chat`，本地 agent-engine 容器看不到 master credentials。
-  - **fly dev/test 已启用运行时防线**：dev/test 拆三-app 后 engine 是独立 fly app（`proactive-ai-engine-{dev,test}`），CI `sync_fly_secrets.py --exclude-master` 把 master credentials 挡在外面，`fly.engine.{dev,test}.toml` 设 `ENGINE_TRUST_FAILFAST="1"` armed boot fail-fast——engine 进程一旦拿到 master credential 直接 exit。
-  - **fly prod 仍暂时降级**：prod 还是单 app（api+agent-engine 共用），flyctl 没有 per-process-group secret，agent-engine 进程实际能看到 master credentials，failfast 默认 OFF、`scripts/sync_fly_secrets.py` 退化成 app-level 整体推（详见 script docstring 和 `agent_engine/asgi.py` 文件头）。prod 拆三-app 后才启用运行时防线。
+  - **fly 三环境都已启用运行时防线**：拆三-app 后 engine 是独立 fly app（`proactive-ai-engine-{dev,test,prod}`），CI `sync_fly_secrets.py --exclude-master` 把 master credentials 挡在外面，`fly.engine.{dev,test,prod}.toml` 设 `ENGINE_TRUST_FAILFAST="1"` armed boot fail-fast——engine 进程一旦拿到 master credential 直接 exit。（prod 2026-07-07 拆分前是单 app 降级形态：flyctl 无 per-process-group secret，engine 进程能看到 master credentials、failfast OFF。）
 - **静态防线（仍生效）**：ruff `flake8-tidy-imports.banned-api` 禁止 `pinai_api` import `agent_engine`；import-linter（`uv run lint-imports`）在合并 import graph 上跑 6 条 forbidden 契约（三个 service 两两互禁）+ api 内部分层契约（platform 是底座）；CI 跑 `scripts/check_trust_boundary.sh` 兜底 grep 检查方向性；共享类型放 `libs/contracts`（`pinai_contracts`，纯 model / protocol）。改动 trust boundary 前必读 `agent_engine/trust_boundary.py` 的 docstring。
 
 ## 环境拓扑
@@ -70,9 +69,9 @@ PIN AI 后端是 `backend/` 下的一个 **uv workspace monorepo**（Python / Fa
 |------|---------|----------|-------------|---------------------------|---------|
 | dev | `proactive-ai-{api,engine,reward}-dev`（三-app） | `proactive-ai-frontend-dev` | `proactive-ai-web-dev` | `proactive-ai-reward-dashboard-dev` | `proactive-ai-litellm-dev` |
 | test | `proactive-ai-{api,engine,reward}-test`（三-app） | `proactive-ai-frontend-test` | 暂无（CI 跳过） | 暂无独立 app | `proactive-ai-litellm-test` |
-| prod | `proactive-ai-agents-prod`（单 app） | `proactive-ai-frontend-prod` | `proactive-ai-web-prod` | 暂无独立 app | `proactive-ai-litellm-prod` |
+| prod | `proactive-ai-{api,engine,reward}-prod`（三-app） | `proactive-ai-frontend-prod` | `proactive-ai-web-prod` | 暂无独立 app | `proactive-ai-litellm-prod` |
 
-> ⚠️ backend 列的 dev `proactive-ai-reward-dev` 是**三-app 拆分里的 reward-dashboard 后端服务**（`pinai_reward_dashboard`），和「Internal reward dashboard」列的 `proactive-ai-reward-dashboard-dev`（reviewer 用的 internal-reward-dashboard Vite **前端** app）是两个不同的 app，别混。reward-dev 由本次三-app 激活新部署，merge 后需验证。
+> ⚠️ backend 列的 dev `proactive-ai-reward-dev` 是**三-app 拆分里的 reward-dashboard 后端服务**（`pinai_reward_dashboard`），和「Internal reward dashboard」列的 `proactive-ai-reward-dashboard-dev`（reviewer 用的 internal-reward-dashboard Vite **前端** app）是两个不同的 app，别混。
 
 所有 fly app 都在 `iad` / `ord` region。Daytona sandbox 是 agent-engine 进程的远端执行环境（python_exec、browser tool 跑在那里），不算 fly app。
 
@@ -381,7 +380,7 @@ make deploy-litellm-prod    # LiteLLM → prod
 - RLS 策略在 `023_pai_rls.sql`，新增表如果涉及用户数据必须同时加 RLS policy。
 
 ## 踩坑速查
-1. **agent-engine 进程拿到 master credential（且 `ENGINE_TRUST_FAILFAST` armed）会启动失败**：`agent_engine/asgi.py` 的 fail-fast assert 会直接 exit，看 log 第一行就能定位是哪个 forbidden var 漏过来了（**dev/test engine 独立 app、`ENGINE_TRUST_FAILFAST=1` armed**；prod 仍单 app、failfast OFF）。
+1. **agent-engine 进程拿到 master credential（且 `ENGINE_TRUST_FAILFAST` armed）会启动失败**：`agent_engine/asgi.py` 的 fail-fast assert 会直接 exit，看 log 第一行就能定位是哪个 forbidden var 漏过来了（**三环境 engine 都是独立 app、`ENGINE_TRUST_FAILFAST=1` armed**）。
 2. **Daytona sandbox 回连 api 必须用公网 URL**：compose 内部 DNS 在 cloud sandbox 里解析不到，本地必须 `make tunnel-up` 起 ngrok，否则 `python_exec` 报 ConnectError。
 3. **`make restart` 只重建 api/agent-engine**：动了 frontend 用 `make restart-frontend`，动了 LiteLLM 配置要 `make up` 全栈。restart 带 `--no-deps`，**不会创建合并 main 后 compose 新增的服务**（例：redis）——拉完 main 先 `make up` 一次再回到 restart 循环，否则新代码会依赖一个根本没起来的服务（实例：缺 redis 时消息无人消费、会话页 500，2026-06-10 踩过）。
 4. **本机全局代理会导致 `flyctl` 失败**：Makefile 已在 deploy 命令内置 `env -u`，但如果直接跑 `flyctl deploy` 要自己 unset。

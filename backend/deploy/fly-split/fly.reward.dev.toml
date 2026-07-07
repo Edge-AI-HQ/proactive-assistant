@@ -1,8 +1,7 @@
-# ⚠️ READY BUT NOT ACTIVE — not referenced by any CI workflow. See README.md.
 # Independent fly app for the internal reward-dashboard backend
 # (pinai_reward_dashboard). Internal review tool: NO master credentials,
 # connects with a scoped DB role (reads product tables, writes its own —
-# see README.md DB roles). App name + call path are PLACEHOLDERS.
+# see README.md DB roles).
 app = 'proactive-ai-reward-dev'
 primary_region = 'iad'
 

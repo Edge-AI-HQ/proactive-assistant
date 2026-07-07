@@ -308,11 +308,16 @@ deploy-pinai-dev: ## Deploy backend (web + chat) to dev
 	cd backend && env -u all_proxy -u http_proxy -u https_proxy \
 		flyctl deploy --config fly.dev.toml --remote-only
 
-deploy-pinai-prod: ## Deploy backend to prod (requires review)
-	@echo "Deploying backend to PRODUCTION. Ctrl+C to cancel."
+# api first — its release_command runs migrations; engine/reward have none.
+# Secrets are NOT synced here (CI does that via sync_fly_secrets.py); after
+# changing .env.production run the three per-app syncs manually first.
+deploy-pinai-prod: ## Deploy backend (api + engine + reward) to prod (requires review)
+	@echo "Deploying backend to PRODUCTION (three-app split). Ctrl+C to cancel."
 	@sleep 3
-	cd backend && env -u all_proxy -u http_proxy -u https_proxy \
-		flyctl deploy --config fly.prod.toml --remote-only
+	cd backend && env -u all_proxy -u http_proxy -u https_proxy sh -c '\
+		flyctl deploy --config deploy/fly-split/fly.api.prod.toml --remote-only && \
+		flyctl deploy --config deploy/fly-split/fly.engine.prod.toml --remote-only && \
+		flyctl deploy --config deploy/fly-split/fly.reward.prod.toml --remote-only'
 
 deploy-frontend-dev: ## Deploy frontend SPA to dev (Fly nginx)
 	cd proactive-ai-frontend && env -u all_proxy -u http_proxy -u https_proxy \

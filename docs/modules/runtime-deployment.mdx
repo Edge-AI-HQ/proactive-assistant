@@ -228,7 +228,7 @@ ByteDance / Volcengine ASR 是直接 provider 调用,不进入 LiteLLM token 账
 
 | Fly app                                        | dev                                                                            | test                         | prod                         |
 | ---------------------------------------------- | ------------------------------------------------------------------------------ | ---------------------------- | ---------------------------- |
-| backend                                        | `proactive-ai-api-dev` + `proactive-ai-engine-dev` + `proactive-ai-reward-dev` | `proactive-ai-agents-test`   | `proactive-ai-agents-prod`   |
+| backend                                        | `proactive-ai-{api,engine,reward}-dev`（三-app） | `proactive-ai-{api,engine,reward}-test`（三-app） | `proactive-ai-{api,engine,reward}-prod`（三-app） |
 | Frontend SPA(nginx + Vite static)              | `proactive-ai-frontend-dev`                                                    | `proactive-ai-frontend-test` | `proactive-ai-frontend-prod` |
 | Web (zebra)                                    | `proactive-ai-web-dev`                                                         | 暂无（CI 跳过）              | `proactive-ai-web-prod`      |
 | Internal reward dashboard(nginx + Vite static) | `proactive-ai-reward-dashboard-dev`                                            | 暂无独立 app                 | 暂无独立 app                 |

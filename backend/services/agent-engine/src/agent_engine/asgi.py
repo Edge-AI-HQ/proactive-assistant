@@ -6,20 +6,21 @@ This is a standalone workspace package: it depends only on
 `pinai-contracts`, never on the web package — the trust boundary is
 enforced physically by the dependency graph, not just by lint rules.
 
-Trust boundary — boot fail-fast (flag-gated, ready but not yet active):
-the engine process must NOT see master credentials. On boot it can
-fail-fast if any `FORBIDDEN_ENVS` var is present, refusing to run the
-LLM loop with credentials it should never hold.
+Trust boundary — boot fail-fast (flag-gated, active on all three fly
+envs): the engine process must NOT see master credentials. On boot it
+can fail-fast if any `FORBIDDEN_ENVS` var is present, refusing to run
+the LLM loop with credentials it should never hold.
 
 This is **gated behind `ENGINE_TRUST_FAILFAST`** (default OFF) because
 fly secrets are app-level only (no per-process-group flag in flyctl
-0.4.48): today web+engine share one fly app, so the engine process
-sees the same env as web and an *active* check would crash boot. The
-gate flips ON only after web/engine split into separate fly apps with
-per-app secrets (`sync_fly_secrets.py --exclude-master` scopes the
-engine app's secrets) — then the engine app sets
-`ENGINE_TRUST_FAILFAST=1` and this becomes the runtime defence-in-depth
-behind the deploy-layer isolation. See
+0.4.48): on a single-app layout web+engine share one env, so an
+*active* check would crash boot. All three envs now run the split apps
+with per-app secrets (`sync_fly_secrets.py --exclude-master` scopes the
+engine app's secrets) and arm the guard via `ENGINE_TRUST_FAILFAST=1`
+in `fly.engine.{dev,test,prod}.toml` — the runtime defence-in-depth
+behind the deploy-layer isolation. The default stays OFF so a
+single-app rollback or a mis-derived local compose env degrades safe
+instead of crash-looping. See
 docs/plans/2026-06-21-backend-rearchitecture.mdx §四/§十二.
 """
 

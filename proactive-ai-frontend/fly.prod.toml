@@ -17,7 +17,7 @@ primary_region = "ord"
 # above the `templates/default.conf.template` heredoc for the rationale.
 [env]
   NGINX_RESOLVER = "[fdaa::3]"
-  NGINX_UPSTREAM_URL = "https://proactive-ai-agents-prod.fly.dev"
+  NGINX_UPSTREAM_URL = "https://proactive-ai-api-prod.fly.dev"
 
 [http_service]
   internal_port = 8080

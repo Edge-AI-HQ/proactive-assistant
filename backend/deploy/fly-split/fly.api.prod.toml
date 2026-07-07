@@ -1,6 +1,5 @@
-# ⚠️ READY BUT NOT ACTIVE — not referenced by any CI workflow. See README.md.
 # Split-app variant of fly.prod.toml's `web` process group: the trusted API edge
-# (holds master credentials). App name + URLs are PLACEHOLDERS — verify with ops.
+# (holds master credentials).
 # Copied from fly.api.dev.toml; differences: app name (-prod), all URLs (-prod),
 # DEPLOY_ENV='production', Daytona snapshot tag, and VM size aligned to
 # fly.prod.toml (api = 4gb).

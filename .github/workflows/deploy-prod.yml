@@ -31,6 +31,17 @@ jobs:
       environment: production
       env_file: .env.production
       dotenv_key_name: DOTENV_PRIVATE_KEY_PRODUCTION
+      # prod 已切到三-app 拆分（api/engine/reward），与 dev/test 同构。
+      # agents_split=true 跑 deploy-agents-split（per-app scoped secrets +
+      # api→engine→reward 顺序部署）、跳过单 app deploy-agents。旧单 app
+      # agents-prod 停用保留作回滚——切回单 app 只需删掉这组 split inputs。
+      agents_split: true
+      api_app: proactive-ai-api-prod
+      engine_app: proactive-ai-engine-prod
+      reward_app: proactive-ai-reward-prod
+      api_toml: deploy/fly-split/fly.api.prod.toml
+      engine_toml: deploy/fly-split/fly.engine.prod.toml
+      reward_toml: deploy/fly-split/fly.reward.prod.toml
       agents_app: proactive-ai-agents-prod
       litellm_app: proactive-ai-litellm-prod
       agents_toml: fly.prod.toml

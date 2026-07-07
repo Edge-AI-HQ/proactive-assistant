@@ -1,6 +1,5 @@
-# ⚠️ READY BUT NOT ACTIVE — not referenced by any CI workflow. See README.md.
 # Split-app variant of fly.dev.toml's `chat` process group: the UNTRUSTED LLM
-# loop. Holds NO master credentials. App name + URLs are PLACEHOLDERS.
+# loop. Holds NO master credentials.
 app = 'proactive-ai-engine-dev'
 primary_region = 'iad'
 
