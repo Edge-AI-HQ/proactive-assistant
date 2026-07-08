@@ -52,13 +52,19 @@ import { GlassCard } from "../ui/GlassCard";
 import { getToolkitIcon } from "../lib/toolkit-icons";
 import type { HeaderProps } from "./AmbientScreen";
 
+// Intl formatter 模块级缓存（切页卡顿修复 2026-07-07）：Hermes 的 toLocale* 每次
+// 调用都在内部新建 Intl.DateTimeFormat（毫秒级），此前每行×每渲染都在付；缓存后
+// format() 本身极快。locale 钉 "en" = lib/format.ts 先例（产品 UI 一律英文）。
+const TIME_FMT = new Intl.DateTimeFormat("en", {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+const DATE_FMT = new Intl.DateTimeFormat("en", { month: "short", day: "numeric" });
+
 function formatTime(iso: string): string {
-  return new Date(iso).toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  return TIME_FMT.format(new Date(iso));
 }
 
 function formatDate(iso: string): string {
@@ -71,7 +77,7 @@ function formatDate(iso: string): string {
   // toUpperCase，与 web 的 uppercase class 等价）。
   if (d.toDateString() === today.toDateString()) return "today";
   if (d.toDateString() === yesterday.toDateString()) return "yesterday";
-  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+  return DATE_FMT.format(d);
 }
 
 /** 行左侧分类图标（对齐 web CardTimeline:112-117 三选一）：连接器卡 → toolkit
@@ -251,7 +257,7 @@ const Row = memo(function Row({
   );
 });
 
-export default function TasksScreen({
+function TasksScreen({
   headerProps,
   onOpenChat,
 }: {
@@ -372,3 +378,7 @@ const styles = StyleSheet.create({
   bottomRow: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 6 },
   pressed: { transform: [{ scale: 0.98 }] },
 });
+
+// memo：AppShell 切页/开关抽屉时本屏 props 全稳定（AppShell 侧 useCallback/useMemo），
+// memo 截断整屏无关重渲（切页卡顿修复 2026-07-07）。
+export default memo(TasksScreen);

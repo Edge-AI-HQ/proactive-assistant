@@ -1,14 +1,15 @@
 /**
  * App 壳——web AppLayout 导航范式的 RN 对应物：
  * - MenuId 状态机（六页，无 bottom tab）
- * - 页面 keep-alive 栈：每页首访挂载后常驻（display:none 隐藏，不卸载），
+ * - 页面 keep-alive 栈：每页首访挂载后常驻（屏外平移隐藏、排版保活，不卸载），
  *   切回零重载、滚动/状态原位；KeepAlivePage 的 PageActiveContext 把常驻页的
- *   动画循环按可见性停帧（防发热）。
+ *   动画循环按可见性停帧（防发热）。切页只翻显隐样式：所有屏 memo 导出 + 本壳
+ *   props 全稳定引用，切页/开关抽屉不再整树重渲 6 屏（切页卡顿修复 2026-07-07）。
  * - MenuDrawerHost 全局抽屉：任意页左滑跟手拉出、开态右滑关闭（见 MenuDrawer.tsx）。
  * - 登录后空闲预取 Profile/Devices/Memories → 首访任何页也无 loading。
  * - ASK PIN AI 上拉 chat、card chat modal。
  */
-import { memo, useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { InteractionManager, StyleSheet, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import type { User } from "@supabase/supabase-js";
@@ -67,7 +68,7 @@ function AppShell({
   useEffect(() => {
     // setting 不预挂载：它极少访问（抽屉末项），且其 usePushNotifications 会在 mount
     // 时静默查权限 + 幂等注册 token——虽无害（不弹框、App.tsx 登录已注册），但没必要
-    // 在隐藏态提前跑。首次进 setting 走 navigate 的 rAF 兜底懒挂载即可。
+    // 在隐藏态提前跑。首次进 setting 由 navigate 同步挂载（抽屉动画已在 UI 线程先行）。
     const order: MenuId[] = ["ambient", "tasks", "connect", "profile"];
     let i = 0;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -91,34 +92,50 @@ function AppShell({
   const emailPrefix = user.email ? user.email.split("@")[0] : "";
   const displayName = firstName || emailPrefix || t("card:now.greetingFallbackName");
 
-  const headerProps = {
-    // web 同位：齿轮 = DebugPanel；Setting 页从抽屉菜单进。
-    onOpenDebug: () => setDebugOpen(true),
-    onOpenMenu: () => setMenuOpen(true),
-  };
+  // 切页卡顿修复（2026-07-07）：以下回调 / props 全部身份稳定（useCallback/useMemo），
+  // 配合各屏的 memo 导出——点菜单只翻 KeepAlivePage 的显隐样式，6 个屏本体不再
+  // 整树重算（此前每次开关抽屉/切页都是全屏重渲，commit 结束抽屉动画才启动 =
+  // 点击瞬间的空白）。
+  const headerProps = useMemo(
+    () => ({
+      // web 同位：齿轮 = DebugPanel；Setting 页从抽屉菜单进。
+      onOpenDebug: () => setDebugOpen(true),
+      onOpenMenu: () => setMenuOpen(true),
+    }),
+    [],
+  );
 
-  const navigate = (id: MenuId) => {
-    // 已挂载（首访过或已被下面的空闲预挂载 warm 过）→ 即时切页，无延帧、无淡入，
-    // 目标页早已就绪 → 抽屉一消失就是完整新页（丝滑，对齐主流 App 的 tab 秒切）。
-    if (visited.has(id)) {
-      setView(id);
-      return;
-    }
-    // 未挂载（预挂载还没轮到，少见）→ 延一帧再现搭，别阻塞点击当帧的反馈（WS2 兜底）。
-    requestAnimationFrame(() => {
-      setVisited((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
-      setView(id);
-    });
-  };
+  // 挂载 + 切页一步完成：页面靠空闲预挂载早已排版就绪（KeepAlivePage 屏外保活），
+  // 切页 = 纯样式翻转；唯一冷挂载的 setting（刻意不预挂载）也同步挂——抽屉收回
+  // 动画在点击瞬间已于 UI 线程起飞（MenuDrawer 内），JS 侧挂载不阻塞视觉反馈，
+  // 原先「rAF 延帧兜底」失去存在理由，删。
+  const navigate = useCallback((id: MenuId) => {
+    setVisited((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+    setView(id);
+  }, []);
 
   // 深链到 Settings 子页（NOW 空态 Review permissions / Ambient 模型引导 → 直接进
   // Ambient 子页，对齐 dev 目标；不再只停在设置主页）。SettingScreen 消费后回调复位。
   const [settingPage, setSettingPage] = useState<"ambient" | null>(null);
-  const openSettingPage = (page: "ambient") => {
-    setSettingPage(page);
-    navigate("setting");
-  };
+  const openSettingPage = useCallback(
+    (page: "ambient") => {
+      setSettingPage(page);
+      navigate("setting");
+    },
+    [navigate],
+  );
   const consumeSettingPage = useCallback(() => setSettingPage(null), []);
+
+  // 各屏 props 的稳定引用（memo 生效的前提；内联箭头 = 每 render 新身份 = memo 失效）。
+  const openCardChat = useCallback(
+    (card: IntentCard, bootstrap: string) => setCardChat({ card, bootstrap }),
+    [],
+  );
+  const openAmbient = useCallback(() => navigate("ambient"), [navigate]);
+  const openConnect = useCallback(() => navigate("connect"), [navigate]);
+  const askPinAi = useCallback(() => setChatOpen(true), []);
+  const reviewPermissions = useCallback(() => openSettingPage("ambient"), [openSettingPage]);
+  const openModelSetup = reviewPermissions;
 
   // web AppLayout handleDeleteAccount 同构：删账链路（Composio→LiteLLM→Stripe→
   // Browserbase→Storage→Supabase Auth→DB CASCADE）走 core deleteAccount；外部非
@@ -150,10 +167,7 @@ function AppShell({
     <View style={styles.root}>
       {/* 壳级卡片动作单实例（web CardStateProvider 同位）：NOW 球面 / TASKS /
           CardDetailSheet 经 context 共享同一份乐观集合。 */}
-      <CardActionsProvider
-        composio={composio}
-        onOpenChat={(card, bootstrap) => setCardChat({ card, bootstrap })}
-      >
+      <CardActionsProvider composio={composio} onOpenChat={openCardChat}>
         {/* 壳级副作用宿主（WS1）：轮询/settings 订阅集中在此 null 组件，与 AppShell 渲染隔离。 */}
         <ShellEffects userId={user.id} />
         <MenuDrawerHost
@@ -175,11 +189,11 @@ function AppShell({
               userId={user.id}
               headerProps={headerProps}
               active={view === "now" && !chatOpen && !cardChat}
-              onOpenChat={(card, bootstrap) => setCardChat({ card, bootstrap })}
-              onOpenAmbient={() => navigate("ambient")}
-              onAskPinAi={() => setChatOpen(true)}
-              onOpenConnect={() => navigate("connect")}
-              onReviewPermissions={() => openSettingPage("ambient")}
+              onOpenChat={openCardChat}
+              onOpenAmbient={openAmbient}
+              onAskPinAi={askPinAi}
+              onOpenConnect={openConnect}
+              onReviewPermissions={reviewPermissions}
             />
           </KeepAlivePage>
           {visited.has("ambient") ? (
@@ -187,18 +201,15 @@ function AppShell({
               <AmbientScreen
                 headerProps={headerProps}
                 userId={user.id}
-                onOpenConnect={() => navigate("connect")}
-                onOpenChat={(card, bootstrap) => setCardChat({ card, bootstrap })}
-                onOpenModelSetup={() => openSettingPage("ambient")}
+                onOpenConnect={openConnect}
+                onOpenChat={openCardChat}
+                onOpenModelSetup={openModelSetup}
               />
             </KeepAlivePage>
           ) : null}
           {visited.has("tasks") ? (
             <KeepAlivePage active={view === "tasks"}>
-              <TasksScreen
-                headerProps={headerProps}
-                onOpenChat={(card, bootstrap) => setCardChat({ card, bootstrap })}
-              />
+              <TasksScreen headerProps={headerProps} onOpenChat={openCardChat} />
             </KeepAlivePage>
           ) : null}
           {visited.has("connect") ? (

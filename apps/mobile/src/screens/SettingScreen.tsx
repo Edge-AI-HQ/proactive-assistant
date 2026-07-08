@@ -12,7 +12,7 @@
  *   models 四面板。
  * 用户定偏离（2026-06-29 三轮）：主页与子页均无副标题；返回箭头按设计仓 BackButton。
  */
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Linking, Pressable, ScrollView, Text, View } from "react-native";
 import Animated, {
@@ -271,7 +271,7 @@ function SectionHeader({ title, description }: { title: string; description: str
   );
 }
 
-export default function SettingScreen({
+function SettingScreen({
   headerProps,
   user,
   onSignOut,
@@ -505,3 +505,7 @@ export default function SettingScreen({
     </View>
   );
 }
+
+// memo：AppShell 切页/开关抽屉时本屏 props 全稳定（AppShell 侧 useCallback/useMemo），
+// memo 截断整屏无关重渲（切页卡顿修复 2026-07-07）。
+export default memo(SettingScreen);

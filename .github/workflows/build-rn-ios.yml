@@ -5,10 +5,11 @@
 # 变体身份(bundle id / scheme / 显示名 / 构建号)由 apps/mobile/app.config.js 按
 # APP_VARIANT / APP_BUILD_NUMBER 注入,与 Capacitor build-ios.sh 的 per-env 约定同构。
 #
-# 门禁卡缺口(2026-07-07):现有两张 distribution profile 是给 Capacitor app 生成的,
-# 不含 RN 新增的 focus-status / healthkit.background-delivery 两个 entitlement——
-# "Trim entitlements" step 在 prebuild 后剥掉它们(能力与线上 Capacitor 版持平,零倒退)。
-# 团队在 Apple 后台补开能力 + 重新生成 dev/prod profile + 更新 secrets 后,删掉该 step 即恢复。
+# entitlement 现状(2026-07-08 定):focus-status 已放弃(声明从 app.config.js 移除,
+# 见该文件注释);healthkit.background-delivery 保留——Apple 后台的 HealthKit 能力
+# 开关一并授权 healthkit / .access / .background-delivery 三条 key,现有 profile
+# (HealthKit 早已勾选)即覆盖,无需重发。prebuild 后仅需把 expo-notifications 生成的
+# aps-environment 归一成 production(见 "Normalize entitlements" step)。
 name: Build RN iOS
 
 on:
@@ -29,6 +30,13 @@ on:
         options:
           - dev
           - prod
+      # 编译缓存的"清缓存重跑"开关:构建报从没见过的怪错时勾上它排除缓存嫌疑。
+      # 本次跳过恢复、全量冷编(~23min),结束时存一份新缓存顶掉旧的。
+      clear_cache:
+        description: "Skip restoring the compiler cache (cold rebuild, reseed cache)"
+        required: false
+        default: false
+        type: boolean
 
 # Newer push cancels an in-flight dev build so TestFlight isn't flooded.
 concurrency:
@@ -48,6 +56,9 @@ jobs:
       LC_ALL: en_US.UTF-8
       RCT_USE_PREBUILT_RNCORE: "0"
       RCT_USE_RN_DEP: "0"
+      # 编译产物缓存(ccache):RN 源码编译是构建大头,缓存命中可砍掉大半时长。
+      # 只缓存 C/C++/ObjC(RN core);Swift 编译 ccache 不管。
+      CCACHE_DIR: /Users/runner/.ccache
     steps:
       - uses: actions/checkout@v6
 
@@ -63,6 +74,47 @@ jobs:
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: "26.6"
+
+      # 滚动缓存模式:save 的 key 带 run_id(每次都存新的),restore 用前缀匹配
+      # 自动取最新一份;dispatch 勾 clear_cache 时跳过恢复 = "清缓存重跑"。
+      # key 里锚了 Xcode 版本——升 Xcode 自动从零积累,不会用错旧产物
+      # (ccache 自身还有 compiler_check=content 兜底,见下)。
+      - name: Restore compiler cache
+        if: ${{ inputs.clear_cache != true }}
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.ccache
+          key: ccache-rn-ios-${{ runner.os }}-xcode26.6-${{ github.run_id }}
+          restore-keys: |
+            ccache-rn-ios-${{ runner.os }}-xcode26.6-
+
+      # compiler_check=content 是跨机器复用的关键:CI 每次是新机器,编译器
+      # 二进制的时间戳不同,默认按时间戳比对会全部失配;按内容哈希才能命中。
+      #
+      # 接线走 Xcode 原生 C_COMPILER_LAUNCHER(见 Archive step)。两条歧路已实测排除:
+      # ① RN 自带 ccache-clang.sh 靠 $CCACHE_BINARY env——XCBBuildService 派生的编译
+      #    任务收不到 shell env,静默回退裸编译(缓存 0 字节);② 自制包装换 CC/CXX——
+      #    Xcode 26 explicit modules 不认识非原生编译器,直接拒编。
+      # 编译任务同样收不到 CCACHE_DIR env,但 HOME 在:配置复制到 XDG 路径
+      # (~/.config/ccache/ccache.conf)并写死 cache_dir,编译侧与 shell 侧落同一仓库。
+      - name: Set up ccache
+        run: |
+          command -v ccache >/dev/null || brew install ccache
+          echo "CCACHE_BIN=$(command -v ccache)" >> "$GITHUB_ENV"
+          mkdir -p "$CCACHE_DIR"
+          cat > "$CCACHE_DIR/ccache.conf" <<'EOF'
+          max_size = 4G
+          compiler_check = content
+          direct_mode = true
+          depend_mode = true
+          inode_cache = true
+          sloppiness = ivfsoverlay,pch_defines,modules,include_file_mtime,include_file_ctime,time_macros,file_stat_matches,clang_index_store,system_headers
+          EOF
+          mkdir -p "$HOME/.config/ccache"
+          cp "$CCACHE_DIR/ccache.conf" "$HOME/.config/ccache/ccache.conf"
+          echo "cache_dir = $CCACHE_DIR" >> "$HOME/.config/ccache/ccache.conf"
+          ccache -z
+          ccache -s | head -10
 
       # push → dev (auto); workflow_dispatch → the chosen input.
       # 构建号 = 1000 + run#:高于 Capacitor 轨道(200 + run#,现约 330+),同一
@@ -116,23 +168,20 @@ jobs:
           APP_BUILD_NUMBER: ${{ steps.target.outputs.build_number }}
         run: npx expo prebuild --platform ios --no-install
 
-      # 门禁卡缺口的临时修法(文件头有全文说明):剥掉现有 profile 不含的两个
-      # entitlement;aps-environment 对齐 App Store 分发要求的 production
-      # (expo-notifications 生成的默认值是 development,manual signing 下不匹配即拒签)。
-      - name: Trim entitlements to current provisioning profiles
+      # expo-notifications 在 prebuild 生成 aps-environment=development,manual
+      # signing 对 App Store distribution profile(production)不匹配即拒签,归一之。
+      - name: Normalize entitlements (aps-environment → production)
         working-directory: apps/mobile
         run: |
           ENT="ios/PINAIDev/PINAIDev.entitlements"
           echo "--- generated entitlements ---"
           /usr/libexec/PlistBuddy -c "Print" "$ENT"
-          /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.focus-status" "$ENT" 2>/dev/null || true
-          /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.healthkit.background-delivery" "$ENT" 2>/dev/null || true
           if /usr/libexec/PlistBuddy -c "Print :aps-environment" "$ENT" >/dev/null 2>&1; then
             /usr/libexec/PlistBuddy -c "Set :aps-environment production" "$ENT"
           else
             /usr/libexec/PlistBuddy -c "Add :aps-environment string production" "$ENT"
           fi
-          echo "--- after trim ---"
+          echo "--- after normalize ---"
           /usr/libexec/PlistBuddy -c "Print" "$ENT"
 
       - name: Pod install
@@ -192,7 +241,14 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM=7T7C9L7H8F \
             "CODE_SIGN_IDENTITY=Apple Distribution" \
-            "PROVISIONING_PROFILE_SPECIFIER=$PROFILE_NAME"
+            "PROVISIONING_PROFILE_SPECIFIER=$PROFILE_NAME" \
+            "C_COMPILER_LAUNCHER=$CCACHE_BIN" \
+            "CLANG_ENABLE_EXPLICIT_MODULES_WITH_COMPILER_LAUNCHER=YES"
+
+      # 命中率可观测:hit rate 低于预期(冷缓存除外)= 缓存没生效,查这里。
+      - name: ccache stats
+        if: always()
+        run: command -v ccache >/dev/null && ccache -s || echo "ccache not installed"
 
       - name: Export IPA
         working-directory: apps/mobile/ios
@@ -228,6 +284,15 @@ jobs:
             > ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
           xcrun altool --upload-app -f build/export/*.ipa -t ios \
             --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+
+      # 失败的构建也保存(部分编译产物对下次仍有价值);key 带 run_id 恒唯一,
+      # GitHub 按 10GB/仓库自动淘汰旧条目,无需人工清理。
+      - name: Save compiler cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.ccache
+          key: ccache-rn-ios-${{ runner.os }}-xcode26.6-${{ github.run_id }}
 
       - name: Cleanup
         if: always()

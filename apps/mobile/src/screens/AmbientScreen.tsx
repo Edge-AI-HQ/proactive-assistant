@@ -4,13 +4,15 @@
  * 叙事摘要卡（TODAY · LOCAL SUMMARY）→ TODAY 时间线（图标格 + 时间·来源 + 隐私/置信徽章 +
  * tag + dismiss + load-more）→ 底部 hint。
  *
- * 时间线数据源 = 本地 SqliteTimelineStore（= dev on-device 架构）。runtime 的 ctx.push 已把
- * 采集信号写进 store，useAmbientTimeline 读回三路合成 TimelineEntry（对齐 dev）：LLM 摘要
- * 事件（缺 llama 时为空）+ latestRawEvents（每源最新一条）+ pendingTranscriptWindows（待转写
- * 窗口）。三路都空才显示 dev 同款空卡「No local timeline events yet」。LLM 摘要卡待端侧 llama。
+ * 时间线数据源 = 本地 SqliteTimelineStore。⚠️ 方案 A（2026-07-07 对齐 dev）后
+ * runtime 的 ctx.push 直传云端、**不再喂本地 store**——本地时间线不再新增条目
+ * （dev AmbientView 同状态，Mengli 2026-07-07 拍板接受），数据主战场 =
+ * 云端 pai_raw_device / pai_events。useAmbientTimeline 读回三路合成 TimelineEntry：
+ * LLM 摘要事件 + latestRawEvents + pendingTranscriptWindows；三路都空显示 dev
+ * 同款空卡「No local timeline events yet」。Live 卡（live-transcript-store）不受影响。
  * 延后：triggered-card「Open→」handoff。
  */
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, memo, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   ActivityIndicator,
@@ -128,7 +130,7 @@ const BG = "hsl(220, 30%, 96%)";
 const PINK = "hsl(304, 75%, 45%)";
 const PINK_BRIGHT = "hsl(304, 75%, 55%)";
 
-export default function AmbientScreen({
+function AmbientScreen({
   headerProps,
   userId,
   onOpenConnect,
@@ -902,3 +904,7 @@ function AmbientToggle({ on, pending = false, onPress }: { on: boolean; pending?
     </Pressable>
   );
 }
+
+// memo：AppShell 切页/开关抽屉时本屏 props 全稳定（AppShell 侧 useCallback/useMemo），
+// memo 截断整屏无关重渲（切页卡顿修复 2026-07-07）。
+export default memo(AmbientScreen);

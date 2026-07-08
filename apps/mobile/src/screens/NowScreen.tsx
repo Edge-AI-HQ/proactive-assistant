@@ -5,7 +5,7 @@
  * → 详情抽屉 → 四操作）/ 零卡空态引导（HomeEmptyState）→ 底部 ASK
  * PIN AI。动作与乐观集合来自壳级 CardActionsProvider（NOW/TASKS 单实例）。
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { AppState, Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { Radio } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
@@ -248,7 +248,7 @@ function useVoicePermission(): {
   return { state, request, refresh };
 }
 
-export default function NowScreen({
+function NowScreen({
   displayName,
   userId,
   headerProps,
@@ -457,3 +457,7 @@ function SphereView({
     </View>
   );
 }
+
+// memo：AppShell 切页/开关抽屉时本屏 props 全稳定（AppShell 侧 useCallback/useMemo），
+// memo 截断整屏无关重渲（切页卡顿修复 2026-07-07）。
+export default memo(NowScreen);

@@ -57,10 +57,12 @@ module.exports = {
         NSFocusStatusUsageDescription:
           "PIN AI reads whether you're in a Focus mode to gauge your availability for proactive suggestions.",
         UIBackgroundModes: ["audio", "location", "fetch", "remote-notification"],
+        // NSFocusStatusUsageDescription 保留:ambient 的 focus 源(INFocusStatusCenter)
+        // 代码仍在、无 entitlement 时优雅降级,但权限弹窗若被触发缺该串会崩。
       },
-      entitlements: {
-        "com.apple.developer.focus-status": true,
-      },
+      // focus-status entitlement 2026-07-08 拍板放弃(App ID 不登记该能力,分发
+      // 签名会拒;信号价值不抵证书维护成本)。要恢复:App ID 勾 Focus Status +
+      // 重发 profile + 此处加回 entitlements["com.apple.developer.focus-status"]=true。
       appleTeamId: "58AXBDC7K4",
     },
     platforms: ["ios", "web"],

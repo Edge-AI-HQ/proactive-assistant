@@ -11,7 +11,7 @@
  * 持久化在 sessionStorage（tab 会话级）；RN 无 sessionStorage，内存 Set 的
  * 生命周期 = provider 挂载期 ≈ app 会话，语义等价。
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   canonicalConnectorSlugFromIntentKey,
   cardActionFeedbackBody,
@@ -229,17 +229,23 @@ export function useCardActions({ onOpenChat, composio }: CardActionsConfig): Car
     [onOpenChat, markChatted],
   );
 
-  return {
-    processingIds,
-    doneIds,
-    confirmedIds,
-    dismissedIds,
-    chattedIds,
-    confirm,
-    steer,
-    snooze,
-    dismiss,
-    complete,
-    chat,
-  };
+  // 返回对象 memo 化：字段本就稳定（useState 的 Set + useCallback），身份只在集合
+  // 真变时才变——CardActionsProvider 的 context value 依赖它，才能不被壳级无关
+  // 重渲（开关抽屉/切页）连坐刷新所有消费行（TASKS 每行都订阅 context）。
+  return useMemo(
+    () => ({
+      processingIds,
+      doneIds,
+      confirmedIds,
+      dismissedIds,
+      chattedIds,
+      confirm,
+      steer,
+      snooze,
+      dismiss,
+      complete,
+      chat,
+    }),
+    [processingIds, doneIds, confirmedIds, dismissedIds, chattedIds, confirm, steer, snooze, dismiss, complete, chat],
+  );
 }

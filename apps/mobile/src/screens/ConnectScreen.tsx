@@ -11,7 +11,7 @@
  * blur(24) → BlurView 40。统计卡/分组卡是 .glass-card{,-strong} → 无 blur →
  * GlassCard。
  */
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { LayoutAnimation, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { BlurView } from "expo-blur";
 import Animated, { FadeInUp } from "react-native-reanimated";
@@ -42,7 +42,7 @@ const sectionEntering = FadeInUp.duration(240).withInitialValues({
   transform: [{ translateY: 12 }],
 });
 
-export default function ConnectScreen({
+function ConnectScreen({
   headerProps,
   composio,
 }: {
@@ -256,3 +256,7 @@ const styles = StyleSheet.create({
   meshBody: { paddingHorizontal: 16, paddingBottom: 16 },
   meshDivider: { height: 1, backgroundColor: pink(0.15), marginBottom: 12 },
 });
+
+// memo：AppShell 切页/开关抽屉时本屏 props 全稳定（含 composio——useComposio 返回
+// 对象已 memo 化），memo 截断整屏无关重渲（切页卡顿修复 2026-07-07）。
+export default memo(ConnectScreen);

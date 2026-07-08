@@ -103,6 +103,19 @@ export default function MenuDrawerHost({
 
   const haptic = () => void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
+  /** 点菜单项 = 先响应后干活（切页卡顿修复 2026-07-07）：收回 spring + 震动在点击
+   *  当帧就于 UI 线程起飞，再触发 React 切页——不等整壳 commit 完（此前动画只在
+   *  useEffect 里点火 = commit 之后，点击到画面动之间就是那段空白）。visualTarget
+   *  先行标记，随后的 open-effect 察觉目标一致会跳过重复 spring / 震动。 */
+  const handleItemPress = (id: MenuId) => {
+    if (visualTarget.current !== 0) {
+      visualTarget.current = 0;
+      haptic();
+      progress.value = withSpring(0, SPRING);
+    }
+    onNavigate(id);
+  };
+
   /** 手势提交:视觉已在 UI 线程续飞,这里同步 React 状态 + 跨态震动。 */
   const commitFromGesture = (target: 0 | 1) => {
     visualTarget.current = target;
@@ -196,7 +209,7 @@ export default function MenuDrawerHost({
                   return (
                     <Pressable
                       key={id}
-                      onPress={() => onNavigate(id)}
+                      onPress={() => handleItemPress(id)}
                       accessibilityRole="button"
                       accessibilityLabel={label}
                     >

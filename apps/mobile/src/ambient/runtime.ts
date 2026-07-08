@@ -4,12 +4,17 @@
  * 显式打开就绝不采集）。
  *
  * 对齐 dev AmbientRuntime（services/ambient/index.ts）的关键语义：
- *  - 采集信号一律先过本地 timeline pipeline（ingestSignal），**蒸馏产物**进
- *    上传 outbox——raw 源信号只落本地 store，不上传（dev ingestLocalSignal）。
+ *  - **方案 A（2026-07-01，dev ingestLocalSignal 同款）：手机是哑采集器**——各
+ *    source 原始信号直接进上传 outbox（入队落盘后立即 drain，事件级实时上报），
+ *    不再走本地 timeline pipeline 聚合 candidate_window、不做本地 LLM summary。
+ *    聚合/去噪/摘要全部下沉后端 memory 架构：kind 三端 SSOT（core SIGNAL_KINDS）
+ *    ↔ 后端 device_ingest/recipes.py → pai_raw_device（L0）→ projector 实时投
+ *    pai_events（L1）。Live 卡实时转写走独立 live-transcript-store，不受影响。
  *  - boot 恢复按 server per-source consent 决定启哪些源（dev App.tsx:77-133
  *    "which sources start follows the server consent, not all of them"）。
- *  - 60s source watchdog（refreshActiveSources）+ 15min context snapshot +
- *    15min scheduled summary（cloud-first）三个定时器随采集生命周期起停。
+ *  - 60s source watchdog（refreshActiveSources）随采集生命周期起停；15min
+ *    context snapshot + 15min scheduled summary 两个本地聚合定时器已随方案 A
+ *    停掉（dev index.ts:167-171 同款，函数保留、恢复时取消注释）。
  *  - AppState 前台 → reconcile + drain，切后台 → 最后 drain 一次（dev
  *    lifecycle.ts bindAmbientLifecycle）。
  */
@@ -26,6 +31,7 @@ import {
 import {
   flushSignals,
   pushSignal,
+  pushSignalAndFlush,
   refreshOutboxCount,
   startIngestLoop,
   stopIngestLoop,
@@ -71,20 +77,13 @@ const POWER_LOG_PREFIX = "[ambient-power]";
 // 生命周期标记只打 log，不当数据事件计数；真实捕获摘要才进遥测（lastEvent + 计数）。
 const LIFECYCLE_MARKERS = new Set(["starting", "started", "stopping", "stopped"]);
 
-// 采集信号 → 本地 timeline pipeline（= dev runtime.ingestLocalSignal）：
-// ingestSignal 先 upsertRawEvent（raw event 落库 → live 卡 replay 转写 + context
-// chips + timeline 原始条目），再窗口化 + 端侧生成；返回的**蒸馏信号**
-// （ambient.timeline_event / ambient.candidate_window）才进上传 outbox。
-// raw 源信号本身不再上传（上传形态对齐 dev；ingest 侧另有 SYNCABLE 白名单兜底）。
-async function ingestLocalSignal(item: PersonalSignalInput): Promise<void> {
-  try {
-    const timelineSignals = await getAmbientTimelinePipeline().ingestSignal(item);
-    for (const signal of timelineSignals) pushSignal(signal);
-  } catch (err) {
-    setLastIngestError(describeError(err));
-    console.warn("[ambient] timeline pipeline ingest failed:", err);
-  }
-}
+// 方案 A（2026-07-01，dev index.ts ingestLocalSignal 同款）：手机是哑采集器。
+// 各 source 原始信号**直接**进 durable outbox 上报（kind 与后端
+// device_ingest/recipes.py 的 DEVICE_RECIPES 一一对应：session_summary→utterance、
+// visit→visit、motion_segment→motion、location/activity/sound→context…），不再
+// 经本地 timeline pipeline 蒸馏——此前只上传蒸馏产物（ambient.timeline_event /
+// ambient.candidate_window），导致 RN 用户的原始 ambient 数据进不了
+// pai_raw_device / pai_events（2026-07-07 审计修复）。
 
 // Ambient 转写语言 hint（= dev runtime.transcriptionLanguage）：settings.
 // generationLanguage 经 useAmbientToggle / useAmbientConsentReconcile 写入，
@@ -98,7 +97,7 @@ export function setAmbientTranscriptionLanguage(language: string | null | undefi
 
 const ctx: SourceContext = {
   push: (item) => {
-    void ingestLocalSignal(item);
+    void pushSignalAndFlush(item);
   },
   onEvent: (key, summary) => {
     console.log(`[ambient:${key}] ${summary}`);
@@ -497,22 +496,20 @@ function startRuntimeTimers(): void {
       intervalMs: SOURCE_WATCHDOG_INTERVAL_MS,
     });
   }
-  if (!timelineSummaryTimer) {
-    timelineSummaryTimer = setInterval(() => {
-      void runScheduledTimelineSummary();
-    }, TIMELINE_SUMMARY_INTERVAL_MS);
-    console.info(`${POWER_LOG_PREFIX} timeline summary timer started`, {
-      intervalMs: TIMELINE_SUMMARY_INTERVAL_MS,
-    });
-  }
-  if (!contextSnapshotTimer) {
-    contextSnapshotTimer = setInterval(() => {
-      void runScheduledContextSnapshot();
-    }, CONTEXT_SNAPSHOT_INTERVAL_MS);
-    console.info(`${POWER_LOG_PREFIX} context snapshot timer started`, {
-      intervalMs: CONTEXT_SNAPSHOT_INTERVAL_MS,
-    });
-  }
+  // 方案 A（2026-07-01，dev index.ts:167-171 同款）：手机不再做本地聚合 / LLM
+  // summary（下沉后端 memory 架构）。停掉 timeline summary（本地 LLM）+ context
+  // snapshot（15min 聚合）两个定时器——各 source 信号由 ctx.push 直接上报。
+  // 函数保留，恢复时取消注释即可。
+  // if (!timelineSummaryTimer) {
+  //   timelineSummaryTimer = setInterval(() => {
+  //     void runScheduledTimelineSummary();
+  //   }, TIMELINE_SUMMARY_INTERVAL_MS);
+  // }
+  // if (!contextSnapshotTimer) {
+  //   contextSnapshotTimer = setInterval(() => {
+  //     void runScheduledContextSnapshot();
+  //   }, CONTEXT_SNAPSHOT_INTERVAL_MS);
+  // }
   probeSet("ambient.timers", "on"); // __HEAT_PROBE__
 }
 
@@ -553,8 +550,10 @@ async function runSourceWatchdog(): Promise<void> {
 }
 
 /** 15min context snapshot（dev runScheduledContextSnapshot → refreshContextSnapshot）：
- *  近 15min 各源 raw 聚合成 context_snapshot candidate window → 上传 outbox。 */
-async function runScheduledContextSnapshot(): Promise<void> {
+ *  近 15min 各源 raw 聚合成 context_snapshot candidate window → 上传 outbox。
+ *  方案 A 后定时器已停（startRuntimeTimers 注释块）、当前无调用方；export 保留
+ *  作恢复口（与 runScheduledTimelineSummary 对称）。 */
+export async function runScheduledContextSnapshot(): Promise<void> {
   if (contextSnapshotInFlight) return;
   contextSnapshotInFlight = true;
   try {

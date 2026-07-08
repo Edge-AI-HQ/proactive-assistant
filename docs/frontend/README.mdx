@@ -83,7 +83,7 @@ description: "当前前端主线:把 proactive-ai-frontend(Capacitor)逐屏迁�
 - ambient 原生 Swift 移植(✅ 已完成 + 2026-06 parity 审计):`capacitor-plugins/ambient-ai`(Capacitor)→ `apps/mobile/modules/ambient-{audio,visit}/ios/`(Expo Module)。audio/visit/geocode 核心 Swift 逐字节移植,9 个在用源全覆盖。审计收尾决定:
   - 音频 `Events()` 漏声明 `captureSessionRotated` / `audioDiagnostic` → **已补**(做实时转写会话 UI 才用得上)。
   - **thermal(device_state 发热档位)有意不迁(路 C)**:iOS thermalState 无 JS 接口、device_state 后端 `_FILTERED_POLICY` 故意丢弃(连 web 也没进核心消费)、价值极低。
-  - **focus(`device.focus_state`)真实现**:`ambient-visit` 接 `INFocusStatusCenter`(前端源 / ingest / 后端 `_SIGNAL_POLICY` 存储 / generator·dream 通用消费 均已就绪,只差原生)。⚠️ 需 `com.apple.developer.focus-status` entitlement——个人 team 签不了(本地真机会像 push 一样被剥),仅 CI / 付费 team build 生效;模拟器无专注模式,真值测不出。
+  - **focus(`device.focus_state`)真实现**:`ambient-visit` 接 `INFocusStatusCenter`(前端源 / ingest / 后端 `_SIGNAL_POLICY` 存储 / generator·dream 通用消费 均已就绪,只差原生)。⚠️ 需 `com.apple.developer.focus-status` entitlement——个人 team 签不了(本地真机会像 push 一样被剥)。**2026-07-08 拍板:放弃该 entitlement**(App ID 不登记,分发签名会拒;信号价值不抵证书维护成本)——前端源/ingest/后端链路代码保留,声明已从 `app.config.js` 移除(恢复路径见该文件注释),线上 focus 源永不亮。
   - OLD 其余 plugin(Photos / Bluetooth / NotificationUsage 计数 / on-device LLM)= web 从未接进运行时的死代码,**不迁**。
 
 ## 对抗式全域审计(2026-07-06,7 域并行 + 端到端追后端)
@@ -117,7 +117,7 @@ description: "当前前端主线:把 proactive-ai-frontend(Capacitor)逐屏迁�
 - **dev TestFlight 自动构建切 RN**:`build-rn-ios.yml` 重写(UTF-8 locale / `RCT_USE_PREBUILT_RNCORE=0` 源码编译 / Xcode 26 / 90min,均为本地 `build-rn-device.sh` 已踩通修法上移 CI);push main(`apps/mobile/` `packages/`)自动 → TestFlight。Capacitor `build-ios.yml` 摘掉 push 触发,仅留手动 dispatch 作应急回滚(同一对 TestFlight app 记录,应急时旧代码可覆盖发版)。
 - **prod 流水线就位、仅手动 dispatch**:同 workflow 选 `environment=prod` → bundle `ai.pin.proactive` + `backend/.env.production` + prod distribution profile。发 prod 的时机由 Mengli 决定(先 dev TestFlight 验过)。
 - **三变体身份**:`apps/mobile/app.config.js` 按 `APP_VARIANT` 注入 bundle/scheme/显示名(不设=本地 `ai.pin.proactive.dev` / `ci-dev`=`ai.pin.proactive.development` / `prod`=`ai.pin.proactive`),scheme=bundle id 沿用 Capacitor 约定(Supabase 白名单已有);version 对齐 1.0 轨道,构建号 CI 注入 1000+run#(高于 Capacitor 的 200+run#)。App 图标复用现网 1024px 资源(此前未配,上传必拒)。
-- **entitlement 缺口(临时)**:现有 dev/prod profile 不含 RN 新增的 `focus-status` / `healthkit.background-delivery`,CI prebuild 后剥掉(能力与线上 Capacitor 版持平、零倒退);Apple 后台补开能力 + 重发两张 profile + 更新 secrets 后,删 workflow 的 `Trim entitlements` step 即恢复。
+- **entitlement 终局(2026-07-08 拍板)**:`focus-status` 放弃——App ID 不登记该能力,声明已从 `app.config.js` 移除(恢复路径见该文件注释),ambient 的 focus 信号源线上永不亮(与现役 Capacitor 持平、无倒退);`healthkit.background-delivery` **无需任何后台操作**——Apple 后台 HealthKit 能力开关一并授权 healthkit/.access/.background-delivery 三条 key(portal 悬浮提示实证),现有 profile 覆盖,验证构建带着它过签上传成功。workflow 只剩 `Normalize entitlements`(aps-environment 归一 production);RN TestFlight 包能力反超老 App 一项(健康后台同步)。CI 构建带 ccache 滚动缓存(接线 = Xcode 原生 `C_COMPILER_LAUNCHER`,歧路实录见 workflow 注释):实测热缓存 **9m48s / 100% 命中**,冷缓存(首跑/勾 `clear_cache`/升 Xcode/换分支)~30min,无缓存基线 23min;缓存按分支隔离,merge 后 main 首跑是一次性冷编。
 - **既定决策**:网页版部署形态(fly `proactive-ai-frontend-{dev,test,prod}`)随目录一起在最后一步下线(浏览器用户走 apps/web);**删除目录前必须 Mengli 拍板**(先在 dev、prod 双环境验证 RN)。
 
 ## 完成定义(可以删 proactive-ai-frontend 的前提)

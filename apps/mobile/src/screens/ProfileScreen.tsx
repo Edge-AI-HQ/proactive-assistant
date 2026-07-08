@@ -14,7 +14,7 @@
  * MarkdownContent 同源）。pager 用 RN 标准 ScrollView pagingEnabled（原生分页物理，替代
  * web framer 手写 commit 阈值——架构差异，行为等价：跟手横滑 + 松手 snap）。
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Pressable,
   ScrollView,
@@ -201,7 +201,7 @@ function GoalsPanel({ slots }: { slots: Record<string, string> }) {
   );
 }
 
-export default function ProfileScreen({ headerProps }: { headerProps: HeaderProps }) {
+function ProfileScreen({ headerProps }: { headerProps: HeaderProps }) {
   const { t } = useTranslation("profile");
   // Lifelong-memory 数据层：L2 portrait 六段 markdown slot（USER/MEMORY/GOALS…）。
   const { slots, loading, error } = usePortrait();
@@ -500,3 +500,7 @@ const styles = StyleSheet.create({
   emptyTitle: { fontSize: 14, lineHeight: 20, fontFamily: "Inter_500Medium", color: `rgba(${FG},0.7)`, textAlign: "center" },
   emptyDesc: { marginTop: 4, fontSize: 12, lineHeight: 20, fontFamily: "Inter_400Regular", color: `rgba(${FG},0.45)`, textAlign: "center" },
 });
+
+// memo：AppShell 切页/开关抽屉时本屏 props 全稳定（AppShell 侧 useCallback/useMemo），
+// memo 截断整屏无关重渲（切页卡顿修复 2026-07-07）。
+export default memo(ProfileScreen);

@@ -6,7 +6,7 @@
  * pure helpers so existing `@/hooks/useComposio` importers are unaffected.
  */
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   buildConnectorInitTaskId,
   buildConnectorPreviewTaskId,
@@ -340,5 +340,11 @@ export function useComposio(): ComposioState {
     }
   }, [loadConnections]);
 
-  return { keyStatus, connections, statusLoading, loadingConns, loadStatus, loadConnections, loadCatalog, connectToolkit, disconnectAccount, waitForToolkit, cancelWait, isToolkitConnected, reconnectAccount, createCustomMcpConnector, updateCustomMcpConnector, deleteCustomMcpConnector };
+  // 返回对象 memo 化：所有字段本就稳定（useState 值 + useCallback 函数），包一层
+  // useMemo 让对象身份只在字段真变时才变——消费端（把它当 prop / context 依赖下发）
+  // 才能用 React.memo 截断无关重渲。行为不变，纯身份稳定。
+  return useMemo(
+    () => ({ keyStatus, connections, statusLoading, loadingConns, loadStatus, loadConnections, loadCatalog, connectToolkit, disconnectAccount, waitForToolkit, cancelWait, isToolkitConnected, reconnectAccount, createCustomMcpConnector, updateCustomMcpConnector, deleteCustomMcpConnector }),
+    [keyStatus, connections, statusLoading, loadingConns, loadStatus, loadConnections, loadCatalog, connectToolkit, disconnectAccount, waitForToolkit, cancelWait, isToolkitConnected, reconnectAccount, createCustomMcpConnector, updateCustomMcpConnector, deleteCustomMcpConnector],
+  );
 }

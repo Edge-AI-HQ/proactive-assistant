@@ -10,6 +10,11 @@
  *    SYNCABLE_AMBIENT_KINDS 白名单保留为「收窄回去」的开关（passthrough=false 时才启用，
  *    届时 local-only 源信号 markSynced 出队 + 警告）。后端 device_ingest/policies.py
  *    有自己的 per-kind policy 作第二道独立闸，client 这半只负责放开。
+ *  - 方案 A（2026-07-01，dev SignalBuffer maxItems=1 + flushBatch→drain 同款）：
+ *    源信号入队落盘后**立即** drain（pushSignalAndFlush，事件级实时上报）；
+ *    FLUSH_INTERVAL_MS 定时器只作断网重试兜底。此前 RN 只把本地蒸馏产物送进
+ *    outbox（raw 源信号永不上传）——那是 dev 6-30 的旧架构，7-01 起 dev 已改为
+ *    哑采集器直传（见 runtime.ts ctx.push），RN 2026-07-07 对齐。
  *  - 服务端 V3 per-item results 三桶分类（core bucketRecords）：settled 出队、
  *    retryable 保留 + 指数退避（2^attempt*5s 封顶 15min），rejected/parse_failed
  *    永久出队并记日志。
@@ -82,6 +87,19 @@ export async function setUploadsLocked(value: boolean): Promise<void> {
 
 export function pushSignal(item: PersonalSignalInput): void {
   void outbox.enqueue([item]).catch((err) => console.warn("[ambient] enqueue failed:", err));
+}
+
+/** 方案 A：入队（await 落盘）后立即 drain——事件级实时上报（dev flushBatch →
+ *  void drain() 同款；enqueue 落盘在先，保证本次 flush 能带上这条）。上传失败
+ *  由 flushSignals 内部 markFailed + 指数退避，30s 定时器兜底重试。 */
+export async function pushSignalAndFlush(item: PersonalSignalInput): Promise<void> {
+  try {
+    await outbox.enqueue([item]);
+  } catch (err) {
+    console.warn("[ambient] enqueue failed:", err);
+    return;
+  }
+  void flushSignals();
 }
 
 async function postBatch(creds: DeviceCredentials, items: PersonalSignalInput[]) {

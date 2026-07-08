@@ -11,7 +11,7 @@
  *   </CardActionsProvider>
  * composio 复用 AppShell 已有的壳级 useComposio 实例（web 同位）。
  */
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useMemo, type ReactNode } from "react";
 import type { IntentCard } from "@pin-ai/core";
 import type { ComposioState } from "@pin-ai/state";
 
@@ -34,9 +34,15 @@ export function CardActionsProvider({
   children: ReactNode;
 }) {
   const actions = useCardActions({ onOpenChat, composio });
-  // value 每 render 新建对象——与 web CardStateProvider 的 {{ cardsState, cardActions }}
-  // 同款（集合变更本来就要触发消费者重渲染，无 memo 价值）。
-  const value: CardActionsContextValue = { ...actions, composio };
+  // value memo 化（切页卡顿修复）：Provider 是壳级组件，AppShell 任何状态变更
+  // （开关抽屉/切页/开 chat）都会重渲到这里；value 若每次新建，所有 context 消费者
+  // （TASKS 每一行、NOW 球面、CardDetailSheet）会被连坐重渲——这正是点击菜单
+  // 瞬间 JS 卡一拍的主因之一。actions/composio 已各自 memo 化，集合真变时
+  // value 依旧照常更新消费者。
+  const value: CardActionsContextValue = useMemo(
+    () => ({ ...actions, composio }),
+    [actions, composio],
+  );
   return <CardActionsContext.Provider value={value}>{children}</CardActionsContext.Provider>;
 }
 
