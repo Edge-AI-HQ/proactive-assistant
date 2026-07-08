@@ -89,6 +89,12 @@ if (process.defaultApp && process.argv.length >= 2) {
 
 // 单实例：Win/Linux 的 deep link 以 second-instance argv 到达。
 if (!app.requestSingleInstanceLock()) {
+  // 关窗驻留形态下旧实例常在后台活着(关窗只 hide)——此时新实例(比如换了
+  // DEV=1/PROD=1 后端目标重跑 make macos)会走到这里静默退出,旧窗口被弹回
+  // 前台,看起来像"新环境没生效"。把原因喊出来,别让人白查环境注入。
+  console.error(
+    "[single-instance] another PIN AI desktop instance is already running — it was focused instead of starting this one. Quit it first (Cmd+Q or tray > Quit; closing the window only hides it), then rerun.",
+  );
   app.quit();
 } else {
   app.on("second-instance", (_event, argv) => {

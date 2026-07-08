@@ -7,8 +7,9 @@ import { isElectron } from "@pin-ai/ui-web";
  * 左上角,但窗口顶部默认不可拖。这条透明 drag region 让顶部留白带能拖动窗口
  * (+ 双击 zoom,均为 -webkit-app-region: drag 自带行为)。
  *
- * 不占视觉空间、不挡交互:zebra 布局顶部 0~32px 全是留白(侧栏 top-5 / 主视图
- * pt-10 / traffic lights y:18),drag region 盖在其上无副作用。
+ * 不占视觉空间、不挡交互:Electron 下 zebra 布局顶部 0~40px 全是留白(侧栏与
+ * slide-over panel top-10 避让隐藏 title bar 带 / 主视图 pt-10 / traffic
+ * lights y:18),drag region(h-8)盖在其上无副作用。
  *
  * z 层级(zebra:主内容 z-10/20、侧栏 z-30、panel scrim z-40、conversation/
  * panel 实体 z-50)——取 z-[45]:高于 scrim(panel 打开时顶部边缘仍可拖)、

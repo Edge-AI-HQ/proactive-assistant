@@ -18,6 +18,7 @@ import {
   CATEGORIES,
   categoryLabel,
   DebugPanel,
+  isElectron,
   realCardToLovableIntent,
   useAuth,
   useCardActions,
@@ -358,11 +359,12 @@ export default function ZebraShell() {
       <ZebraBackdrop />
 
       {/* Floating glass sidebar — collapses to a 64px icon rail (auto below
-          1100px, ⌘B manual) */}
+          1100px, ⌘B manual)。Electron 下 top-10：macOS hiddenInset 的隐藏
+          title bar 带(~28px)会裁掉侵入其中的毛玻璃面板，顶部须避让。 */}
       <motion.aside
         animate={{ width: sidebarCollapsed ? 64 : 216 }}
         transition={SLIDE_TRANSITION}
-        className="absolute left-5 top-5 bottom-5 z-30 rounded-3xl flex flex-col overflow-hidden"
+        className={`absolute left-5 bottom-5 z-30 rounded-3xl flex flex-col overflow-hidden ${isElectron ? "top-10" : "top-5"}`}
         style={{
           background: "linear-gradient(180deg, hsl(0 0% 100% / 0.7) 0%, hsl(0 0% 100% / 0.55) 100%)",
           backdropFilter: "blur(48px) saturate(1.5)",
@@ -566,7 +568,7 @@ export default function ZebraShell() {
             animate={{ x: 0 }}
             exit={{ x: "calc(100% + 24px)" }}
             transition={SLIDE_TRANSITION}
-            className="fixed top-4 right-4 bottom-4 z-50 rounded-3xl overflow-hidden"
+            className={`fixed right-4 bottom-4 z-50 rounded-3xl overflow-hidden ${isElectron ? "top-10" : "top-4"}`}
             style={{
               width:
                 (panel.kind === "conversation" && (convExpanded || convBrowserSplit)) ||
