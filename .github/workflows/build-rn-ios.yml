@@ -134,6 +134,16 @@ jobs:
             echo "bundle_id=ai.pin.proactive" >> "$GITHUB_OUTPUT"
             echo "env_file=backend/.env.production" >> "$GITHUB_OUTPUT"
           fi
+          # APP_VARIANT/APP_BUILD_NUMBER 必须进 GITHUB_ENV(全局),不能只挂 prebuild
+          # 一步:Archive 时 expo-constants 的 "Generate app.config" build phase 会
+          # 重新评估 app.config.js 嵌进运行时 manifest——那一刻读不到变体就回落
+          # default(scheme=ai.pin.proactive.dev),prod 包登录回跳用错协议、被
+          # Supabase 白名单拒(2026-07-09 prod 首跑实锤;dev 靠白名单残留的 .dev
+          # 条目侥幸不炸)。运行时 scheme 校验见 "Verify embedded runtime config"。
+          {
+            if [ "$TARGET" = "dev" ]; then echo "APP_VARIANT=ci-dev"; else echo "APP_VARIANT=prod"; fi
+            echo "APP_BUILD_NUMBER=$((1000 + GITHUB_RUN_NUMBER))"
+          } >> "$GITHUB_ENV"
 
       - run: npm ci
 
@@ -160,12 +170,11 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "EXPO_PUBLIC_PIN_API_URL=$API_URL"
 
-      # CNG:从 app.config.js 生成 ios/(原生工程不入库)。
+      # CNG:从 app.config.js 生成 ios/(原生工程不入库)。APP_VARIANT/
+      # APP_BUILD_NUMBER 来自 job env(GITHUB_ENV,Resolve target 写入)——
+      # prebuild 和 Archive 两道工序必须看到同一份变体,勿改回 step env。
       - name: Expo prebuild
         working-directory: apps/mobile
-        env:
-          APP_VARIANT: ${{ steps.target.outputs.variant }}
-          APP_BUILD_NUMBER: ${{ steps.target.outputs.build_number }}
         run: npx expo prebuild --platform ios --no-install
 
       # expo-notifications 在 prebuild 生成 aps-environment=development,manual
@@ -244,6 +253,27 @@ jobs:
             "PROVISIONING_PROFILE_SPECIFIER=$PROFILE_NAME" \
             "C_COMPILER_LAUNCHER=$CCACHE_BIN" \
             "CLANG_ENABLE_EXPLICIT_MODULES_WITH_COMPILER_LAUNCHER=YES"
+
+      # 防"两道工序变体不一致"复发:校验 Archive 产物里 expo-constants 嵌入的
+      # 运行时 manifest(Linking.createURL 的 scheme 真源)确实是本变体的 bundle id。
+      # 不一致 = 登录回跳会用错协议 → 直接红灯,别放行到 TestFlight。
+      - name: Verify embedded runtime config
+        working-directory: apps/mobile/ios
+        env:
+          EXPECTED_SCHEME: ${{ steps.target.outputs.bundle_id }}
+        run: |
+          CFG="$(find build/PINAIDev.xcarchive -name 'app.config' -path '*EXConstants*' | head -1)"
+          if [ -z "$CFG" ]; then
+            echo "::error::embedded app.config not found in archive (EXConstants layout changed?)" >&2
+            find build/PINAIDev.xcarchive -name '*.config' -o -name 'EXConstants*' | head >&2
+            exit 1
+          fi
+          EMBEDDED_SCHEME="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('scheme',''))" "$CFG")"
+          echo "embedded scheme = $EMBEDDED_SCHEME (expected $EXPECTED_SCHEME)"
+          if [ "$EMBEDDED_SCHEME" != "$EXPECTED_SCHEME" ]; then
+            echo "::error::runtime manifest scheme mismatch: embedded=$EMBEDDED_SCHEME expected=$EXPECTED_SCHEME — APP_VARIANT 没贯穿到 Archive(见 Resolve target 注释)" >&2
+            exit 1
+          fi
 
       # 命中率可观测:hit rate 低于预期(冷缓存除外)= 缓存没生效,查这里。
       - name: ccache stats
