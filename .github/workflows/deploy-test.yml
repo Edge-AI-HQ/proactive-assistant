@@ -38,6 +38,5 @@ jobs:
       litellm_app: proactive-ai-litellm-test
       agents_toml: fly.test.toml
       litellm_toml: fly.litellm-test.toml
-      frontend_toml: proactive-ai-frontend/fly.test.toml
       daytona_version: test
       run_filter: false

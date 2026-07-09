@@ -37,7 +37,6 @@ jobs:
               - 'backend/**'
               - '.github/workflows/ci.yml'
             frontend:
-              - 'proactive-ai-frontend/**'
               - 'packages/**'
               - 'apps/**'
               - 'eslint.config.mjs'
@@ -156,12 +155,6 @@ jobs:
       - name: Check packages (boundary lint + type-check + unit tests)
         run: npm run check:packages
 
-      - name: Type check (Frontend)
-        run: npm run type-check --workspace=@pin-ai/proactive-ai-frontend
-
-      - name: Unit tests (Frontend)
-        run: npm test --workspace=@pin-ai/proactive-ai-frontend
-
       - name: Type check (Web / zebra desktop)
         run: npm run type-check --workspace=@pin-ai/web
 
@@ -174,12 +167,9 @@ jobs:
       - name: Type check (Mobile / Expo RN)
         run: npm run type-check --workspace=@pin-ai/mobile
 
-      - name: iOS signing check (canonical DEVELOPMENT_TEAM)
-        run: bash proactive-ai-frontend/scripts/check-ios-signing.sh
-
       # 生产镜像构建验证——流程缺口（PR #101）：Dockerfile 的 COPY 清单
       # （packages/ 等）漏更新只有 docker build 能暴露，tsc/vitest 全绿
       # 拦不住（当时 make reset 与 Deploy Dev 双双失败）。只 build 不 push。
-      # WORKDIR 必须与 docker-compose.yml 的 build args 一致。
-      - name: Docker build (frontend image)
-        run: docker build --build-arg WORKDIR=proactive-ai-frontend -f proactive-ai-frontend/Dockerfile .
+      # 2026-07-09 起对象换成 apps/web（zebra，现存唯一网页部署形态）。
+      - name: Docker build (web image)
+        run: docker build --build-arg WORKDIR=apps/web -f apps/web/Dockerfile .

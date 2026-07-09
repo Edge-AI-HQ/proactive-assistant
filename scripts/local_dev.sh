@@ -119,7 +119,6 @@ start_host_processes() {
   mkdir -p "$STATE_DIR"
   rm -f "$PIDS_FILE"
 
-  ensure_port_free 3000
   ensure_port_free 8000
   ensure_port_free 8001
 
@@ -154,17 +153,6 @@ start_host_processes() {
   ) &
   echo "$!" >> "$PIDS_FILE"
 
-  echo "==> Starting proactive-ai-frontend Vite dev server"
-  (
-    set -a
-    . "$ROOT_DIR/backend/.env"
-    set +a
-    export VITE_PIN_LOCAL_DEV_AUTH=1
-    export VITE_PIN_API_PROXY_TARGET="$PINAI_LOCAL_WEB_URL"
-    cd "$ROOT_DIR/proactive-ai-frontend"
-    exec npm run dev -- --host 127.0.0.1 --port 3000
-  ) &
-  echo "$!" >> "$PIDS_FILE"
 }
 
 monitor_processes() {

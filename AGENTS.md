@@ -39,9 +39,9 @@ PIN AI 后端是 `backend/` 下的一个 **uv workspace monorepo**（Python / Fa
 - **apps/web** — zebra 设计的桌面 web 端（Vite + React 19 + react-router），消费 core/state/ui-web，**已上线 dev/prod**。设计 SSOT：[`docs/plans/2026-06-12-zebra-web-app-port.mdx`](docs/plans/2026-06-12-zebra-web-app-port.mdx)。
 - **apps/desktop** — Electron macOS 壳，renderer 复用 apps/web 的 Vite root（「一套 zebra UI、web + 桌面两个壳」），桌面侧只有 main + preload。仅本地 `make macos`，暂无自动部署。
 - **apps/mobile** — Expo / React Native iOS app，UI 独立实现，业务层消费 core/design/state/ui-kit（不碰 ui-web）。**仍在开发、未上线**；dev TestFlight 自动构建已切到 RN（`build-rn-ios.yml`，push main 自动），prod 流水线就位、仅手动 dispatch。
-- **proactive-ai-frontend** — Capacitor（Vite + Tailwind）React SPA，**当前生产 iOS 前端**，消费 core/state/ui-kit/ui-web/design；apps/mobile（RN）是它的未来接替者，接替前 iOS 仍以它为准。
+- **proactive-ai-frontend**（Capacitor）— **已退役删除（2026-07-09）**：原生产 iOS 前端；TestFlight 交付由 apps/mobile（RN）接管、网页形态由 apps/web 承接，源码在 git 历史。
 
-三个 web 端（proactive-ai-frontend / apps/web / apps/desktop）经 vite alias + tsconfig paths 直引 `packages/*/src`（无 build 步骤，改包即时生效）；apps/mobile 走 npm workspace 依赖（metro 解析）。前端分层 SSOT：[`research/2026-06-10-frontend-layering.mdx`](research/2026-06-10-frontend-layering.mdx)；双端设计系统 SSOT：[`docs/plans/2026-06-13-dual-platform-design-system.mdx`](docs/plans/2026-06-13-dual-platform-design-system.mdx)。
+两个 web 端（apps/web / apps/desktop）经 vite alias + tsconfig paths 直引 `packages/*/src`（无 build 步骤，改包即时生效）；apps/mobile 走 npm workspace 依赖（metro 解析）。前端分层 SSOT：[`research/2026-06-10-frontend-layering.mdx`](research/2026-06-10-frontend-layering.mdx)；双端设计系统 SSOT：[`docs/plans/2026-06-13-dual-platform-design-system.mdx`](docs/plans/2026-06-13-dual-platform-design-system.mdx)。
 
 `apis/`（Node 后端 + 容器编排 + gateway）、`pinai-openclaw/`（用户容器镜像 + plugin）、`miniapp/`（Telegram mini app）三个老仓目录已经移除，所有职责都搬到 `backend/`：
 
@@ -65,17 +65,17 @@ PIN AI 后端是 `backend/` 下的一个 **uv workspace monorepo**（Python / Fa
 
 ## 环境拓扑
 
-| 环境 | backend | Frontend | Web (zebra) | Internal reward dashboard | LiteLLM |
-|------|---------|----------|-------------|---------------------------|---------|
-| dev | `proactive-ai-{api,engine,reward}-dev`（三-app） | `proactive-ai-frontend-dev` | `proactive-ai-web-dev` | `proactive-ai-reward-dashboard-dev` | `proactive-ai-litellm-dev` |
-| test | `proactive-ai-{api,engine,reward}-test`（三-app） | `proactive-ai-frontend-test` | 暂无（CI 跳过） | 暂无独立 app | `proactive-ai-litellm-test` |
-| prod | `proactive-ai-{api,engine,reward}-prod`（三-app） | `proactive-ai-frontend-prod` | `proactive-ai-web-prod` | 暂无独立 app | `proactive-ai-litellm-prod` |
+| 环境 | backend | Web (zebra) | Internal reward dashboard | LiteLLM |
+|------|---------|-------------|---------------------------|---------|
+| dev | `proactive-ai-{api,engine,reward}-dev`（三-app） | `proactive-ai-web-dev` | `proactive-ai-reward-dashboard-dev` | `proactive-ai-litellm-dev` |
+| test | `proactive-ai-{api,engine,reward}-test`（三-app） | 暂无（CI 跳过） | 暂无独立 app | `proactive-ai-litellm-test` |
+| prod | `proactive-ai-{api,engine,reward}-prod`（三-app） | `proactive-ai-web-prod` | 暂无独立 app | `proactive-ai-litellm-prod` |
 
 > ⚠️ backend 列的 dev `proactive-ai-reward-dev` 是**三-app 拆分里的 reward-dashboard 后端服务**（`pinai_reward_dashboard`），和「Internal reward dashboard」列的 `proactive-ai-reward-dashboard-dev`（reviewer 用的 internal-reward-dashboard Vite **前端** app）是两个不同的 app，别混。
 
 所有 fly app 都在 `iad` / `ord` region。Daytona sandbox 是 agent-engine 进程的远端执行环境（python_exec、browser tool 跑在那里），不算 fly app。
 
-上表是 fly app 维度（表中 Frontend 列 = proactive-ai-frontend 的 web/nginx 形态）。**apps/desktop**（Electron 桌面）、**apps/mobile**（Expo RN）、**proactive-ai-frontend 的 iOS** 都不是 fly app，部署形态见「变更与部署」。
+上表是 fly app 维度。**apps/desktop**（Electron 桌面）与 **apps/mobile**（Expo RN，TestFlight 分发）不是 fly app，部署形态见「变更与部署」。原 proactive-ai-frontend 的三个网页 fly app（`proactive-ai-frontend-{dev,test,prod}`）已于 2026-07-09 挂起（machines=0 留壳，`flyctl scale count 1` 可复活，观察期后销毁）。
 
 ## Secrets 管理（dotenvx）
 所有环境变量（后端 secrets + 前端 VITE_*）用 [dotenvx](https://dotenvx.com/) 加密 checkin，每环境一把私钥。
@@ -118,8 +118,7 @@ backend/.env / backend/.env.chat / ops/litellm/.env / ./.env  # 本地明文，m
 - `packages/core/src/`、`packages/state/src/`：跨端纯逻辑层（`@pin-ai/core`=transport/SSE/API/域类型/状态机/ports；`@pin-ai/state`=TanStack Query/zustand/编排 hooks），平台无关，边界由根 eslint 强制。
 - `packages/design/`：跨端设计 token SSOT（`@pin-ai/design`，`tokens.cjs/mjs/json`，web Tailwind + RN NativeWind 共用）。
 - `packages/ui-kit/src/`：双端设计系统层（`@pin-ai/ui-kit`，`cn` / 组件契约 / cva / motion 预设），平台无关，web 与 RN 共享。
-- `packages/ui-web/src/`：web 介质共享层（`@pin-ai/ui-web`：auth/聊天栈/球面/卡片/connect/voice/browser/设置 sections），proactive-ai-frontend 与 apps/web 双端消费，硬标准「纯 web 可运行」，重 native 模块经注册点注入（registerSignOutCleanup / registerFeedbackOutbox / registerLocalThreadStore / registerExternalMicAcquirer）。
-- `proactive-ai-frontend/src/`：Capacitor React SPA（Vite + Tailwind，Web/iOS/Android），**当前生产 iOS 前端**，经 vite alias 直引 packages 共享层。
+- `packages/ui-web/src/`：web 介质共享层（`@pin-ai/ui-web`：auth/聊天栈/球面/卡片/connect/voice/browser/设置 sections），apps/web 消费（原 Capacitor 壳 2026-07 退役），硬标准「纯 web 可运行」，重 native 模块经注册点注入（registerSignOutCleanup / registerFeedbackOutbox / registerLocalThreadStore / registerExternalMicAcquirer）。
 - `apps/web/src/`：zebra 桌面 web 端（独立 Vite app；壳=ZebraShell/panels/⌘K，功能=共享层）。已上线 dev/prod（部署见「变更与部署」）。
 - `apps/desktop/src/`：Electron macOS 壳（`main` + `preload`；renderer 复用 apps/web，见 `electron.vite.config.ts`）。本地 `make macos`，暂无自动部署。
 - `apps/mobile/src/`：Expo / React Native iOS app（UI 独立实现，消费 core/design/state/ui-kit；native 采集在 `apps/mobile/modules/`）。开发中、未上线；本地 `make rn`。
@@ -162,7 +161,7 @@ backend/.env / backend/.env.chat / ops/litellm/.env / ./.env  # 本地明文，m
 首次设置：
 ```bash
 cd backend && uv sync && cd -
-npm install                # root workspace 安装 proactive-ai-frontend + capacitor-plugins；iOS SPM 路径依赖这里的 node_modules
+npm install                # root workspace 安装 packages/* + apps/*
 cd internal-reward-dashboard && npm install && cd -
 # 找团队成员获取 dotenvx 私钥，放进 ~/.zshrc（一把 DEV 私钥解密所有 .env.dev）：
 #   export DOTENV_PRIVATE_KEY_DEV=...
@@ -172,12 +171,12 @@ make up                    # 自动解密 .env.dev → .env，构建并启动所
 
 全栈启动（Docker Compose）：
 ```bash
-make up                    # 启动 postgres + litellm + api + agent-engine + frontend + web(zebra)
+make up                    # 启动 postgres + litellm + api + agent-engine + web(zebra)
 make logs                  # 跟所有 log
 make logs-api              # 单看 api 进程
 make logs-agent-engine     # 单看 agent-engine 进程
 make restart               # 改了 backend 代码后重建 api + agent-engine
-make restart-frontend      # 改了前端代码（容器版本）
+make restart-web           # 改了 apps/web（容器版本）
 make reset                 # 清空数据从头来（数据会丢失）
 make status                # 查看容器状态
 make urls                  # 看本 group 的随机 host 端口 + ngrok URL
@@ -193,12 +192,11 @@ make urls                  # 看本 group 的随机 host 端口 + ngrok URL
 cd backend && uv sync --all-packages           # 装全 workspace Python 依赖
 cd backend && uv run uvicorn pinai_api.asgi:app --reload --port 8000        # api 进程
 cd backend && uv run uvicorn agent_engine.asgi:app --reload --port 8001     # agent-engine 进程
-cd proactive-ai-frontend && npm run dev             # 前端 dev server（端口 3003）
 cd apps/web && npm run dev                          # zebra 桌面 web dev server（端口 3005）
 cd internal-reward-dashboard && npm run dev -- --host 127.0.0.1 --port 3004  # 内部 review app
 ```
 
-`internal-reward-dashboard` 本地通过 Vite same-origin `/api/*` proxy 打 `api:8000`，默认从 `backend/.env` 读取 Supabase `VITE_*`。它当前不是 root npm workspace；dev 环境是独立 Fly app `proactive-ai-reward-dashboard-dev`，不是 `proactive-ai-frontend` 部署产物。
+`internal-reward-dashboard` 本地通过 Vite same-origin `/api/*` proxy 打 `api:8000`，默认从 `backend/.env` 读取 Supabase `VITE_*`。它当前不是 root npm workspace；dev 环境是独立 Fly app `proactive-ai-reward-dashboard-dev`。
 
 Daytona sandbox（generator/dreaming 的 `python_exec`）和 mobile 真机需要公网回连 `api`。`NGROK_AUTHTOKEN` 已加密 checkin 在根 `./.env.dev`（`make ensure-env` 自动解密）；ngrok 给每个 worktree 一个**稳定子域** `https://<project-name>.ngrok.app`（compose 用 `--url=https://${COMPOSE_PROJECT_NAME}.ngrok.app`，付费版特性）。**`make up` 不自动起 tunnel**（web 测试不需要，也省 ngrok endpoint hours）；需要时显式起：
 ```bash
@@ -208,24 +206,17 @@ make tunnel-down
 ```
 每个 worktree 用自己的 `.ngrok.app` 子域（= project hash），所以 **多 worktree、多人共享同一个 token 可以并发各起 tunnel，互不冲突**（各拿各的 URL）。前提是**付费 ngrok**——免费版只能用账户那一个 dev domain，多开会 ERR_NGROK_334；付费版才能用任意 `<name>.ngrok.app` 子域。
 
-Mobile（Capacitor，iOS / Android — proactive-ai-frontend 路线）：
-```bash
-make ios                   # 默认：自动起本 worktree tunnel + 抓 URL → 构建前端 → cap sync → 打开 Xcode
-make android               # 同上，装到 USB device
-```
-`make ios` / `make android` 默认会**自带起本 worktree 的 ngrok tunnel**，把随机 URL bake 进 build —— 在哪个 worktree 跑就连那个 worktree 的后端（一台手机一次一个 worktree）。后端切换：`NGROK=<url>` 走指定公网、`DEV=1` 指 fly dev、`PROD=1` 指 fly prod（这三者跳过本地 tunnel）。
-
-iOS 多环境与签名硬规则：
-- **dev/prod 双 app 是设计内的多环境**：dev = bundle id `ai.pin.proactive.development`（显示名「PIN AI Dev」），prod = `ai.pin.proactive`（「PIN AI」），各走自己的 distribution profile，可同设备并存。bundle id / 显示名 / OAuth scheme：Capacitor 侧由 CI `proactive-ai-frontend/scripts/build-ios.sh <dev|prod>` 注入（archive 时 build-setting override + ExportOptions per-env + `VITE_OAUTH_SCHEME` bake 进 JS），RN 侧由 `apps/mobile/app.config.js` 按 `APP_VARIANT`（ci-dev|prod）注入同一对 bundle id（scheme = bundle id 同约定），都不手改 Xcode。dev 走 push 自动构建上传 TestFlight（2026-07-07 起由 RN `build-rn-ios.yml` 接管，Capacitor `build-ios.yml` 转仅手动应急）、prod 手动 dispatch。本地 `make ios`（Xcode 直接 build）不经 CI 注入，用工程 checkin 的默认值 = dev 同款：显示名「PIN AI Dev」、bundle id `ai.pin.proactive.development`——本地 build 和 dev TestFlight 同 id、同设备互相覆盖，prod 不受影响。本地默认 OAuth scheme 在 `sync-ios.sh` 里写死为同一 dev id（CI 总是显式覆盖），改工程默认 bundle id 必须同步它。push：dev 的 `APNS_BUNDLE_ID=ai.pin.proactive.development` + `APNS_USE_SANDBOX=false`（production endpoint）服务 TestFlight 形态；本地 Xcode build 是 development 签名（sandbox token），收不到 dev/local 后端的 push，这与 bundle id 无关。
+iOS（RN，apps/mobile）多环境与签名硬规则：
+- **dev/prod 双 app 是设计内的多环境**：dev = bundle id `ai.pin.proactive.development`（显示名「PIN AI Dev」），prod = `ai.pin.proactive`（「PIN AI」），各走自己的 distribution profile，可同设备并存。bundle id / 显示名 / OAuth scheme 由 `apps/mobile/app.config.js` 按 `APP_VARIANT`（不设=本地 `ai.pin.proactive.dev` / `ci-dev` / `prod`）注入，scheme = bundle id（Supabase 白名单按此配），不手改 Xcode；CI 里 `APP_VARIANT` 必须贯穿 prebuild 与 Archive 两道工序（踩坑记录见 docs/frontend/troubleshooting.mdx）。dev 走 push 自动构建上传 TestFlight、prod 手动 dispatch（均 `build-rn-ios.yml`）。push：dev 的 `APNS_BUNDLE_ID=ai.pin.proactive.development` + `APNS_USE_SANDBOX=false`（production endpoint）服务 TestFlight 形态；本地个人签名 build 收不到 push（development 签名 sandbox token），与 bundle id 无关。
 - **禁止为绕过问题临时换 id**：不要为了绕过签名失败、权限/能力不满足、验证报错而新增或改 bundle id / 包名 / scheme / target。signing/profile 不满足时停下来报告真实 blocker，不要换 id 绕过。
 - 同一环境内的安装是用该环境原 bundle id 覆盖更新，不要为并存再造这两个之外的第三个 id。
 
-桌面（Electron，apps/desktop）与 RN（Expo，apps/mobile）各自独立 build，不走 Capacitor：
+桌面（Electron，apps/desktop）与 RN（Expo，apps/mobile）本地构建：
 ```bash
 make macos                 # Electron 桌面壳（renderer 复用 apps/web）连本 worktree 后端；DEV=1 fly dev、PROD=1 fly prod
 make rn                    # Expo RN 装真机 iPhone；SIM=1 模拟器、DEV=1 fly dev、PROD=1 fly prod、TUNNEL=1 Metro 走 ngrok
 ```
-`make macos` = `npm run dev --workspace=@pin-ai/desktop`（electron-vite，`/api` 同源 proxy 到 api，与 web dev 同构零 CORS）。`make rn` 先 `expo prebuild` 生成 `ios/`（gitignore 产物）再 `expo run:ios`，把 `VITE_*` 映射成 `EXPO_PUBLIC_*`。**apps/mobile 仍在开发、未上线**；apps/desktop 仅本地运行，打包（`npm run package --workspace=@pin-ai/desktop` 出 dmg）的签名/公证未配。
+`make macos` = `npm run dev --workspace=@pin-ai/desktop`（electron-vite，`/api` 同源 proxy 到 api，与 web dev 同构零 CORS）。`make rn` 先 `expo prebuild` 生成 `ios/`（gitignore 产物）再 `expo run:ios`，把 `VITE_*` 映射成 `EXPO_PUBLIC_*`。**apps/mobile 已接管 iOS 交付**（dev/prod TestFlight 均已验证）；apps/desktop 仅本地运行，打包（`npm run package --workspace=@pin-ai/desktop` 出 dmg）的签名/公证未配。
 
 验证：
 ```bash
@@ -233,8 +224,6 @@ cd backend && uv run ruff check               # 静态检查（含 trust-boundar
 cd backend && uv run lint-imports             # import-linter（trust boundary + 分层契约）
 cd backend && uv run mypy services libs       # 类型检查（CI 硬门禁；增量缓存，重复跑只几秒）
 cd backend && uv run pytest                   # 后端测试
-cd proactive-ai-frontend && npm run type-check     # 前端类型检查
-cd proactive-ai-frontend && npm test               # 前端单测（vitest）
 cd internal-reward-dashboard && npm run type-check  # 内部 review app 类型检查
 cd internal-reward-dashboard && npm test            # 内部 review app 单测
 cd apps/web && npm run type-check && npm test       # zebra web 端
@@ -247,11 +236,10 @@ npm run check:packages                              # core/state/ui-kit/ui-web �
 - 纯 Python 逻辑/类型 → `uv run ruff check` + `uv run lint-imports` + `uv run mypy services libs` + 相关 `uv run pytest tests/<path>`
 - 改 `backend/services/api/` → `make restart`，看 `make logs-api` 起得来 + 打目标接口（端口随机，`make urls` 查）
 - 改 `backend/services/agent-engine/` → `make restart`，看 `make logs-agent-engine` + 用前端发一条消息验证
-- 改 proactive-ai-frontend → `npm run dev`（端口 3003）在浏览器点；或 `make restart-frontend` 看容器版本
 - 改 `apps/web/` → `cd apps/web && npm run dev`（端口 3005）+ `cd apps/web && npm run type-check && npm test`
 - 改 `apps/desktop/` → `cd apps/desktop && npm run type-check` + `make macos` 看 Electron 起得来
 - 改 `apps/mobile/` → `cd apps/mobile && npm run type-check` + `make rn SIM=1` 在模拟器点
-- 改 `packages/`（共享层）→ `npm run check:packages`（core/state/ui-kit/ui-web 边界+类型+单测）；这些包被多端共享，按改动面补跑消费端 type-check（proactive-ai-frontend / apps/web 另跑单测，desktop / mobile 只有 type-check）
+- 改 `packages/`（共享层）→ `npm run check:packages`（core/state/ui-kit/ui-web 边界+类型+单测）；这些包被多端共享，按改动面补跑消费端 type-check（apps/web 另跑单测，desktop / mobile 只有 type-check）
 - 改 `internal-reward-dashboard/` → `npm run type-check` + `npm test` + `npm run dev -- --host 127.0.0.1 --port 3004`，在 `/runs` / `/traces/:runId` 点真实流程
 - 改 `/api/reward-dashboard/*` 或 reward schema → `uv run ruff check .` + `uv run pytest tests/web/db/repositories/test_reward_repo.py tests/web/routes/test_reward_dashboard.py tests/web/services/test_trace_artifacts.py`
 - 改 db migration（新 SQL 文件到 `db/migrations/`）→ 先 `make build-backend` **再** `make migrate`，确认 schema 应用成功。⚠️ 迁移 SQL 被烘焙进镜像（Dockerfile `COPY db`），只跑 `make migrate` 不重建镜像会执行**旧** SQL、悄悄忽略新文件（仍显示「db-migrate complete」但表没建出来）
@@ -323,14 +311,14 @@ Snapshot 构建脚本在 `backend/infra/daytona/`，CI（`_deploy.yml` 的 `buil
 
 ### Dev 环境
 push 到 `main` 后按改动范围自动部署（CI workflow：`.github/workflows/deploy-dev.yml` → 复用 `_deploy.yml`）：
-- 改 `backend/` 或 `proactive-ai-frontend/` → 部署 backend + 前端。**dev backend 走三-app**：`deploy-dev.yml` 传 `agents_split: true`，CI 跑 `deploy-agents-split`，分别 sync per-app scoped secret + deploy `proactive-ai-{api,engine,reward}-dev`（不再部署旧单 app `agents-dev`）；切回单 app 只需删掉 `deploy-dev.yml` 里那组 split inputs。
+- 改 `backend/` → 部署 backend。**dev backend 走三-app**：`deploy-dev.yml` 传 `agents_split: true`，CI 跑 `deploy-agents-split`，分别 sync per-app scoped secret + deploy `proactive-ai-{api,engine,reward}-dev`（不再部署旧单 app `agents-dev`）；切回单 app 只需删掉 `deploy-dev.yml` 里那组 split inputs。
 - 改 `apps/web/` 或 `packages/`（共用层）→ 部署 apps/web（zebra）；改 `packages/` 同时触发前端重部署
 - 改 `ops/litellm/` → 部署 LiteLLM
 - Daytona snapshot 跟随 backend 部署刷新
 
-`apps/web`（zebra 桌面 web 端）与前端走**同一套统一部署管道**（`_deploy.yml` 的 `deploy-web` job + `web_toml` input），dev 跟 main push、prod 跟 `v*` tag——和前端机制完全一致。test 环境暂不部署 web（caller 不传 `web_toml`，job 自动跳过）；PR 上四端（proactive-ai-frontend / apps/web / apps/desktop / apps/mobile）的 type-check + packages 边界 lint/类型/单测，统一由 `ci.yml` 的 frontend-check 覆盖。
+`apps/web`（zebra 桌面 web 端）走统一部署管道（`_deploy.yml` 的 `deploy-web` job + `web_toml` input），dev 跟 main push、prod 跟 `v*` tag。test 环境暂不部署 web（caller 不传 `web_toml`，job 自动跳过）；PR 上三端（apps/web / apps/desktop / apps/mobile）的 type-check + packages 边界 lint/类型/单测，统一由 `ci.yml` 的 frontend-check 覆盖（含 apps/web 镜像 docker build 验证）。
 
-**apps/desktop（Electron）只进 CI type-check，没有自动部署**——仅本地 `make macos`，electron-builder 打包/签名/公证待做。**iOS TestFlight 构建已切到 RN（apps/mobile）**：`build-rn-ios.yml` push main（命中 `apps/mobile/` / `packages/`）自动 build dev → TestFlight，prod 手动 dispatch（bundle id dev=`ai.pin.proactive.development`、prod=`ai.pin.proactive`，沿用 Capacitor 时代同一对 TestFlight app 记录，构建号 1000+run# 高于旧轨道）。entitlement 终局（2026-07-08）：focus-status 已放弃（声明从 `apps/mobile/app.config.js` 移除，恢复路径见该文件注释）；healthkit.background-delivery 无需任何 Apple 后台操作——后台的 HealthKit 能力开关一并授权三条 entitlement key，现有 profile 实测已覆盖（CI 构建过签上传）。workflow 仅保留 `Normalize entitlements`（aps-environment 归一 production）。构建带 ccache 滚动缓存（dispatch 勾 `clear_cache` = 清缓存重跑）：热缓存实测 ~10min（100% 命中），冷缓存 ~30min（首跑/清缓存/升 Xcode），缓存按分支隔离。**proactive-ai-frontend 的 `build-ios.yml`（Capacitor）已转仅手动 dispatch**，作应急回滚通道，目录退役时一并删除。
+**apps/desktop（Electron）只进 CI type-check，没有自动部署**——仅本地 `make macos`，electron-builder 打包/签名/公证待做。**iOS TestFlight 构建已切到 RN（apps/mobile）**：`build-rn-ios.yml` push main（命中 `apps/mobile/` / `packages/`）自动 build dev → TestFlight，prod 手动 dispatch（bundle id dev=`ai.pin.proactive.development`、prod=`ai.pin.proactive`，沿用 Capacitor 时代同一对 TestFlight app 记录，构建号 1000+run# 高于旧轨道）。entitlement 终局（2026-07-08）：focus-status 已放弃（声明从 `apps/mobile/app.config.js` 移除，恢复路径见该文件注释）；healthkit.background-delivery 无需任何 Apple 后台操作——后台的 HealthKit 能力开关一并授权三条 entitlement key，现有 profile 实测已覆盖（CI 构建过签上传）。workflow 仅保留 `Normalize entitlements`（aps-environment 归一 production）。构建带 ccache 滚动缓存（dispatch 勾 `clear_cache` = 清缓存重跑）：热缓存实测 ~10min（100% 命中），冷缓存 ~30min（首跑/清缓存/升 Xcode），缓存按分支隔离。Capacitor 的 `build-ios.yml` 已随 proactive-ai-frontend 目录删除（2026-07-09）；应急回退 = git 历史翻代码。
 
 `internal-reward-dashboard/` 使用独立 workflow `.github/workflows/internal-reward-dashboard-dev.yml`：PR 只跑 type-check / test / build；push 到 `main` 且该目录变化时，部署到 Fly dev app `proactive-ai-reward-dashboard-dev`（默认地址 `https://proactive-ai-reward-dashboard-dev.fly.dev`）。
 
@@ -385,15 +373,15 @@ make deploy-litellm-prod    # LiteLLM → prod
 3. **`make restart` 只重建 api/agent-engine**：动了 frontend 用 `make restart-frontend`，动了 LiteLLM 配置要 `make up` 全栈。restart 带 `--no-deps`，**不会创建合并 main 后 compose 新增的服务**（例：redis）——拉完 main 先 `make up` 一次再回到 restart 循环，否则新代码会依赖一个根本没起来的服务（实例：缺 redis 时消息无人消费、会话页 500，2026-06-10 踩过）。
 4. **本机全局代理会导致 `flyctl` 失败**：Makefile 已在 deploy 命令内置 `env -u`，但如果直接跑 `flyctl deploy` 要自己 unset。
 5. **`.env.chat` 不会自动跟 `.env` 同步**：手动改 `.env` 后，`make ensure-env-backend` 才会重新派生 `.env.chat`；直接 docker compose up 不会触发，必要时 `make env-local` 强制重新解密。
-6. **`apis/` / `pinai-openclaw/` / `miniapp/` 是退役时代的路径**：如果旧脚本、旧文档或本地残留目录提到它们，不要复活旧服务；当前后端事实以 `backend/` 为准，用户产品前端类型检查走 `cd proactive-ai-frontend && npm run type-check`。
-7. **`internal-reward-dashboard/` 是独立内部工具**：不要把 dashboard 页面放进 `proactive-ai-frontend/src/`，不要把 `/api/reward-dashboard/*` 当普通用户产品 API 扩散。用户 confirm / dismiss / snooze / text feedback 仍写 `pai_feedback_events`，只有 card open / score / reviewer score / casebook / trace 走 reward dashboard 链路。
+6. **`apis/` / `pinai-openclaw/` / `miniapp/` 是退役时代的路径**：如果旧脚本、旧文档或本地残留目录提到它们，不要复活旧服务；当前后端事实以 `backend/` 为准；`proactive-ai-frontend/` 与 `capacitor-plugins/` 也于 2026-07-09 退役删除，前端事实以 `packages/*` + `apps/*` 为准。
+7. **`internal-reward-dashboard/` 是独立内部工具**：不要把 dashboard 页面混进用户产品前端（`apps/*`），不要把 `/api/reward-dashboard/*` 当普通用户产品 API 扩散。用户 confirm / dismiss / snooze / text feedback 仍写 `pai_feedback_events`，只有 card open / score / reviewer score / casebook / trace 走 reward dashboard 链路。
 8. **容器无固定名（多 worktree 隔离）**：compose 去掉了 `container_name`，每个 worktree 是独立 group（`pinai-<路径hash>`，可同时 `make up` 互不撞）。旧的 `docker exec pin-ai-xxx` 全失效，改用 `docker compose exec <service>` / `docker compose logs <service>`（在对应 worktree 目录跑，自动命中那个 group）。host 端口随机，`make urls` 查；`make up` 不自动起 tunnel，generator/mobile 要 tunnel 时 `make tunnel-up` / `make ios`（各 worktree 自己的 `.ngrok.app` 子域，可并发，付费版）。
 9. **三-app 里 api→engine 必须走 6PN `.internal`、不是 flycast**：engine 是私有 app（无 public IP），`CHAT_INTERNAL_URL` 要用 `http://proactive-ai-engine-<env>.internal:8001`（6PN service discovery 直连容器端口）。**flycast 是错的**——flycast 暴露的是 `[http_service]` 的 external port（80/443）、不是容器的 8001，连 `flycast:8001` 必 `ConnectError: No address`。且 engine 必须 `auto_stop_machines='off'` 常驻：6PN 会解析 app 的**所有** machine（含 suspended），挂起的 host 会让 api→engine 间歇 ConnectError。前端（web 形态）则相反——走 nginx 反代（`NGINX_UPSTREAM_URL` 指 api app 的公网 URL，同源 `/api/*`），native/Electron 打包件才用 `VITE_PIN_API_URL` 绝对 URL。（2026-06-22 dev 实测踩通，这是一次 chat 全挂的根因。）
 
 ## 提交规范
 - Conventional Commits：`feat(...)` / `fix(...)` / `chore(...)` / `docs(...)`。
 - 每次提交聚焦一个变更点。
-- 提交前最少跑：`cd backend && uv run ruff check && uv run lint-imports && uv run mypy services libs`（改 Python）+ 前端按改动面：动 `packages/` 跑 `npm run check:packages`，动某个端跑该端 `npm run type-check`（proactive-ai-frontend / apps/web 另跑 `npm test`）。
+- 提交前最少跑：`cd backend && uv run ruff check && uv run lint-imports && uv run mypy services libs`（改 Python）+ 前端按改动面：动 `packages/` 跑 `npm run check:packages`，动某个端跑该端 `npm run type-check`（apps/web 另跑 `npm test`）。
 
 ## 规则单一真源
 - `AGENTS.md` 是 SSOT。

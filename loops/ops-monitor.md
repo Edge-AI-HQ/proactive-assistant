@@ -45,7 +45,7 @@ fly logs 只能看近窗,每小时跑天然覆盖近 1h。`last_run_at` 主要�
 
 # 4. 巡检清单（dev + prod 两套各扫,只读）
 - **fly logs**:`timeout 15 flyctl logs -a <app>` 抓近窗,grep ERROR/CRITICAL/Traceback/OOM/5xx/timeout/ConnectError。
-  app:`proactive-ai-agents-{dev,prod}`（web+chat 同 app 两 process group）、`proactive-ai-frontend-{dev,prod}`、`proactive-ai-litellm-{dev,prod}`、`proactive-ai-reward-dashboard-dev`。
+  app:`proactive-ai-agents-{dev,prod}`（web+chat 同 app 两 process group）、`proactive-ai-litellm-{dev,prod}`、`proactive-ai-reward-dashboard-dev`。
 - **fly 健康**:`flyctl status -a <app>` / `flyctl checks list -a <app>` / `flyctl machine list -a <app>`。看 machine 反复 restart、health check 失败、OOM、版本异常。
 - **LangSmith（仅 dev,project `pinai-agents-dev`,先 export key 见 §2）**:用精确过滤,`--last-n-minutes` 天然实现时间窗:
   - 失败:`langsmith trace list --project pinai-agents-dev --error --last-n-minutes 75 --include-io --format pretty`
@@ -77,7 +77,7 @@ fly logs 只能看近窗,每小时跑天然覆盖近 1h。`last_run_at` 主要�
 - 标题:`[ops-monitor][<env>] <app/组件>: <一句话现象>`。
 - 正文:环境/组件 · 发现时间窗(UTC) · 严重度+为什么算铁证 · 证据(log 摘录[PII 打码] / LangSmith trace 链接·run id / fly status 输出) · 影响面 · 推测根因(**标注「推测,未验证」**,monitor 不下结论) · 持续观测/复现方法 · 频次/首见时间。
 - **负责人 @(发 issue / 评论时)**:按故障对应的代码目录找最近改动者,在 issue 正文 @ 他(第一联系人,非定责,不是 assignee)。
-  - **app → 目录**:`proactive-ai-agents-*`→`backend/`;`proactive-ai-frontend-*`→`proactive-ai-frontend/`;`proactive-ai-litellm-*`→`ops/litellm/`;`proactive-ai-reward-dashboard-dev`→`internal-reward-dashboard/`;`proactive-ai-web-*`(device raw `/mirror`)→`backend/`(目录待核实);apps/web(zebra)→`apps/web/`+`packages/`。
+  - **app → 目录**:`proactive-ai-agents-*`→`backend/`;`proactive-ai-litellm-*`→`ops/litellm/`;`proactive-ai-reward-dashboard-dev`→`internal-reward-dashboard/`;`proactive-ai-web-*`(device raw `/mirror`)→`backend/`(目录待核实);apps/web(zebra)→`apps/web/`+`packages/`。
   - **取 handle**:`git log -n 8 --format='%H %an' -- <目录>` 找最近主要作者 → `gh api repos/Edge-AI-HQ/PIN-AI-ASSISTANT/commits/<sha> --jq '.author.login'` 拿 GitHub handle;取最近 1–2 人(按 login 去重,gh api 已归一同人多 alias),正文写 `@handle`。
   - **防呆 + 克制**:跳过 bot(login 含 `[bot]` 或为 null);解析不到 login → 不 @,正文注明「未解析到负责人,请人工指派」;纯运行时信号(配额/网络/第三方)落不到具体目录 → 不强行 blame,注明「未定位到对应代码改动」;@ 仅代表「最近改这块的人,可能不是根因负责人,仅作第一联系人 / 转派起点」;§6 去重命中已有 open issue 评论时,负责人没变就不重复 @,避免反复打扰。
 - **候选首发 issue**:prod 默认关 LangSmith tracing、无 APM/Sentry,运行时几乎只有 fly logs 可观测——这是确凿的可观测性缺陷,去重后可作为 `enhancement` 发一个。

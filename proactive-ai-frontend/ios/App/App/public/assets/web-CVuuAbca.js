@@ -1,0 +1,1 @@
+class r{async requestPermissions(){return{calendar:"prompt"}}async checkPermissions(){return{calendar:"prompt"}}async startMonitoring(){console.warn("[Calendar] startMonitoring is not available on web")}async stopMonitoring(){}async addListener(){return{remove:async()=>{}}}async removeAllListeners(){}}export{r as CalendarWeb};

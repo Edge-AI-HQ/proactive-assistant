@@ -46,7 +46,7 @@ jobs:
           files=$(gh pr diff "${{ inputs.pr }}" --repo "${{ github.repository }}" --name-only)
           echo "$files"
           # 路径 → 服务映射（packages/ 是前端共享层，算前端）
-          grep -qE '^(proactive-ai-frontend|packages|apps/web)/' <<<"$files" && fe=true || fe=false
+          grep -qE '^(packages|apps/web)/' <<<"$files" && fe=true || fe=false
           grep -qE '^backend/' <<<"$files" && be=true || be=false
           grep -qE '^backend/db/migrations/' <<<"$files" && mig=true || mig=false
           echo "frontend=$fe" >> "$GITHUB_OUTPUT"
@@ -194,6 +194,9 @@ jobs:
               print(f"{k}={d[k]}")
           PY
 
+      # 2026-07-09 起前端预览 = apps/web(zebra)。它是 same-origin SPA:API 地址
+      # 不烘进包,靠 nginx 运行时 env NGINX_UPSTREAM_URL 反代(同 deploy-web 机制),
+      # 所以 per-PR 后端 URL 用 --env 注入而非 build-arg。
       - name: Create + deploy frontend preview
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
@@ -201,13 +204,13 @@ jobs:
           app="pinai-pr-${{ inputs.pr }}"
           flyctl apps create "$app" --org "$FLY_ORG" 2>/dev/null || true
           flyctl deploy . \
-            --config proactive-ai-frontend/fly.toml \
-            --dockerfile proactive-ai-frontend/Dockerfile \
+            --config apps/web/fly.toml \
+            --dockerfile apps/web/Dockerfile \
             --remote-only --ha=false --app "$app" \
-            --build-arg WORKDIR=proactive-ai-frontend \
-            --build-arg VITE_PIN_API_URL="${{ steps.api.outputs.url }}" \
+            --build-arg WORKDIR=apps/web \
             --build-arg VITE_SUPABASE_URL="$VITE_SUPABASE_URL" \
-            --build-arg VITE_SUPABASE_PUBLISHABLE_KEY="$VITE_SUPABASE_PUBLISHABLE_KEY"
+            --build-arg VITE_SUPABASE_PUBLISHABLE_KEY="$VITE_SUPABASE_PUBLISHABLE_KEY" \
+            --env NGINX_UPSTREAM_URL="${{ steps.api.outputs.url }}"
 
   # ── 4. 回贴 PR：列出这次起了哪些副本 + 各自 URL ──────────────────────────
   comment:

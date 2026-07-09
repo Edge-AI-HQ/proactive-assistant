@@ -14,6 +14,3 @@
 /docs
 /ops
 /pin-cli
-# Stale local build artifacts — Docker builds from scratch in each stage
-proactive-ai-frontend/dist
-proactive-ai-frontend/ios/DerivedData

@@ -21,7 +21,6 @@ apis/                         # Express APIs, auth, proxy, payment, container or
 pinai-openclaw/plugins/proactive-ai/
                               # 用户容器内 proactive-ai plugin
 pinai-openclaw/image/          # OpenClaw 自定义镜像
-proactive-ai-frontend/         # React SPA
 ops/litellm/                   # LiteLLM 配置和部署
 docs/                          # 团队开发文档
 docs/plans/                    # 可引用 AI 设计计划，不做历史归档
@@ -54,7 +53,7 @@ make help
 
 ```bash
 npm run dev
-cd proactive-ai-frontend && npm run dev
+cd apps/web && npm run dev
 ```
 
 验证：

@@ -1,0 +1,1 @@
+class t{async getState(){return{thermal:"nominal",lowPower:!1,timestamp:Date.now()}}async startMonitoring(){console.warn("[DeviceState] startMonitoring is not available on web")}async stopMonitoring(){}async addListener(){return{remove:async()=>{}}}async removeAllListeners(){}}export{t as DeviceStateWeb};

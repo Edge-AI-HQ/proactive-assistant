@@ -18,8 +18,8 @@
 # 这条命令做三件事:
 #   1) 打 tag + push        → 触发 Deploy Prod(后端 agents+litellm+frontend,无人工审批)
 #   2) gh release create    → 自动生成 changelog,出现在 Releases 页
-#   3) 检测 app 代码改动     → 自上个 tag 起改过 proactive-ai-frontend/ 或
-#      capacitor-plugins/ 就触发 iOS prod 构建(TestFlight),否则跳过。
+#   3) 检测 app 代码改动     → 自上个 tag 起改过 apps/mobile/ 或
+#      packages/ 就触发 RN iOS prod 构建(TestFlight),否则跳过。
 #      (tag push 不支持 paths 过滤,所以这个"自动检测"放脚本里用 git diff 做;
 #       dev 侧靠 build-ios.yml 的 push+paths 过滤,本来就只在动 app 时构建。)
 #
@@ -95,18 +95,18 @@ fi
 
 # --- 3) app 代码有改动才出 iOS prod ---
 if [[ -n "$PREV_TAG" ]]; then
-  app_changed="$(git diff --name-only "$PREV_TAG..HEAD" -- proactive-ai-frontend/ capacitor-plugins/)"
+  app_changed="$(git diff --name-only "$PREV_TAG..HEAD" -- apps/mobile/ packages/)"
 else
   app_changed="first-release"   # 没有上个 tag,首次发版默认出一次 iOS prod
 fi
 
 if [[ -n "$app_changed" ]]; then
   echo "检测到 app 代码改动 → 触发 iOS prod 构建(TestFlight)…"
-  if gh workflow run build-ios.yml -f environment=prod --ref "$VERSION"; then
+  if gh workflow run build-rn-ios.yml -f environment=prod --ref "$VERSION"; then
     echo "✅ iOS prod 构建已触发。"
   else
     echo "⚠️  触发 iOS prod 失败,手动补:" >&2
-    echo "    gh workflow run build-ios.yml -f environment=prod --ref $VERSION" >&2
+    echo "    gh workflow run build-rn-ios.yml -f environment=prod --ref $VERSION" >&2
   fi
 else
   echo "ℹ️  自 $PREV_TAG 起无 app 代码改动,跳过 iOS prod。"

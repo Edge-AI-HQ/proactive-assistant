@@ -164,13 +164,13 @@
 
 **12. `web-desktop` — Web & Desktop App（含 UX 性能）**
 - 范围：web 介质的产品端——zebra 桌面 web 壳、Electron 壳、双端共享的 React DOM 层、chat UI、UX 性能（滚动 / 流式 / 动效）。
-- 起点：`apps/web/`、`apps/desktop/`、`packages/ui-web/`（`proactive-ai-frontend/` **仅看"哪些该迁出"，不深审将死代码**）。
+- 起点：`apps/web/`、`apps/desktop/`、`packages/ui-web/`（`proactive-ai-frontend/` 已于 2026-07 退役删除）。
 - 视角：壳 / 共享层架构是否清晰？ui-web 的注册点注入模式是否合理？**UX 性能**（滚动 / 流式 / 动效是否流畅、有无 jank）？chat 前端的巨石组件是否该拆？sunset 迁移路径是否清晰？
 - 文档：`docs/plans/2026-06-12-zebra-web-app-port.mdx` + `docs/plans/2026-06-15-agent-chat-frontend-refactor.mdx`
 
 **13. `mobile-rn` — Mobile App (RN) & Frontend Sunset**
 - 范围：RN 移动端（接替 Capacitor 路线的终点）+ frontend sunset 这个有终点的迁移项目——RN 接替就绪度、介质映射、迁移终态。
-- 起点：`apps/mobile/`（迁移视角下连带看 proactive-ai-frontend 的迁出项）。
+- 起点：`apps/mobile/`（RN 迁移已完成,proactive-ai-frontend 已退役）。
 - 视角：RN 与 web 的对等度？介质映射（Reanimated / Skia / native module）选型是否合理？逻辑共享就绪度（能否干净复用 core/state）？sunset 迁移终点是否清晰、还差什么？
 - 文档：`docs/plans/2026-06-14-rn-mobile-rebuild.mdx` + `docs/research/2026-06-14-rn-readiness-and-frontend-sunset.mdx`
 

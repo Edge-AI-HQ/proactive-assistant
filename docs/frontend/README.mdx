@@ -120,9 +120,19 @@ description: "当前前端主线:把 proactive-ai-frontend(Capacitor)逐屏迁�
 - **entitlement 终局(2026-07-08 拍板)**:`focus-status` 放弃——App ID 不登记该能力,声明已从 `app.config.js` 移除(恢复路径见该文件注释),ambient 的 focus 信号源线上永不亮(与现役 Capacitor 持平、无倒退);`healthkit.background-delivery` **无需任何后台操作**——Apple 后台 HealthKit 能力开关一并授权 healthkit/.access/.background-delivery 三条 key(portal 悬浮提示实证),现有 profile 覆盖,验证构建带着它过签上传成功。workflow 只剩 `Normalize entitlements`(aps-environment 归一 production);RN TestFlight 包能力反超老 App 一项(健康后台同步)。CI 构建带 ccache 滚动缓存(接线 = Xcode 原生 `C_COMPILER_LAUNCHER`,歧路实录见 workflow 注释):实测热缓存 **9m48s / 100% 命中**,冷缓存(首跑/勾 `clear_cache`/升 Xcode/换分支)~30min,无缓存基线 23min;缓存按分支隔离,merge 后 main 首跑是一次性冷编。
 - **既定决策**:网页版部署形态(fly `proactive-ai-frontend-{dev,test,prod}`)随目录一起在最后一步下线(浏览器用户走 apps/web);**删除目录前必须 Mengli 拍板**(先在 dev、prod 双环境验证 RN)。
 
+## 删除轮(2026-07-09)— sunset 终局
+
+Mengli 批准全量执行(含 prod 网页 app 挂起)。dev/prod TestFlight 均为 RN 且真机验证通过、产品无 App Store 形态(全 TestFlight 分发)→ 风险窗口不存在,执行:
+
+- **仓库**:删 `proactive-ai-frontend/` + `capacitor-plugins/`(463 文件、-5.6 万行);`patch-package` 上移根 devDependencies(expo-constants 补丁是 RN 的);根 workspaces/scripts、eslint 注释、.githooks/.gitignore/.dockerignore/README/loops、`local_dev.sh` 清理;`release.sh` 发版触发改 `apps/mobile`+`packages` → `build-rn-ios.yml`。
+- **CI/CD**:删 `build-ios.yml`(应急回退 = git 历史);`ci.yml` 删老前端三步、Docker 构建验证换 apps/web 镜像;`_deploy.yml` 删 deploy-frontend;`deploy-{dev,test,prod}.yml` 摘 frontend;`preview.yml` 前端预览切 apps/web(per-PR 后端经 `--env NGINX_UPSTREAM_URL` 注入)。
+- **工具链**:Makefile 删 ios/android/build-frontend/restart-frontend/deploy-frontend-* 与 extract_vite_args;compose 删 frontend 服务。
+- **云端**:`proactive-ai-frontend-{dev,test,prod}` 挂起(machines=0 留壳,`flyctl scale count 1` 复活,观察期后销毁)。
+- **保留**:`packages/ui-web`(apps/web 消费)、后端 CORS 里的 `capacitor://localhost`(存量老包用户升级完之前不动)、Supabase 白名单旧条目(无害)。
+
 ## 完成定义(可以删 proactive-ai-frontend 的前提)
 
-以 [`2026-06-14-rn-mobile-rebuild.mdx`](../plans/2026-06-14-rn-mobile-rebuild.mdx) 的 **Exit criteria** 为准(不在此重复)。一句话:**RN 不再缺 frontend 的功能 + ambient 真数据链路真机验过**,才删 `proactive-ai-frontend` 与 ui-web 的 RN 绑定。
+以 [`2026-06-14-rn-mobile-rebuild.mdx`](../plans/2026-06-14-rn-mobile-rebuild.mdx) 的 **Exit criteria** 为准(不在此重复)。一句话:**RN 不再缺 frontend 的功能 + ambient 真数据链路真机验过**,才删 `proactive-ai-frontend` 与 ui-web 的 RN 绑定。**——已达成,删除轮于 2026-07-09 执行(见上节)。**
 
 ## 验证方式(每屏改完最少跑)
 

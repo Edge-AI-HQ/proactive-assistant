@@ -6,17 +6,15 @@
     "npm": ">=10"
   },
   "workspaces": [
-    "proactive-ai-frontend",
-    "capacitor-plugins/*",
     "packages/*",
     "apps/*"
   ],
   "scripts": {
     "postinstall": "node scripts/apply-patches.mjs",
-    "type-check": "npm run type-check --workspace=@pin-ai/proactive-ai-frontend",
+    "type-check": "npm run type-check --workspace=@pin-ai/web",
     "lint:packages": "eslint packages",
     "check:packages": "npm run lint:packages && npm run type-check --workspace=@pin-ai/core --workspace=@pin-ai/state --workspace=@pin-ai/ui-kit --workspace=@pin-ai/ui-web && npm test --workspace=@pin-ai/core --workspace=@pin-ai/state --workspace=@pin-ai/ui-kit --workspace=@pin-ai/ui-web",
-    "build": "npm run build --workspace=@pin-ai/proactive-ai-frontend",
+    "build": "npm run build --workspace=@pin-ai/web",
     "mobile-sync:ngrok": "node scripts/mobile-sync-ngrok.mjs",
     "litellm:up": "bash ops/litellm/litellm.sh up",
     "litellm:restart": "bash ops/litellm/litellm.sh restart",
@@ -27,6 +25,7 @@
   "devDependencies": {
     "@dotenvx/dotenvx": "1.72.0",
     "eslint": "^10.4.1",
+    "patch-package": "^8.0.1",
     "typescript-eslint": "^8.61.0"
   },
   "overrides": {

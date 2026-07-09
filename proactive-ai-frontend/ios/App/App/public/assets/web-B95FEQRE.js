@@ -1,0 +1,1 @@
+class s{async requestPermissions(){return{photos:"prompt"}}async checkPermissions(){return{photos:"prompt"}}async startMonitoring(){console.warn("MediaNotebook: not available on web")}async stopMonitoring(){}async addListener(o,n){return{}}async removeAllListeners(){}}export{s as MediaNotebookWeb};

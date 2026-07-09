@@ -1,18 +1,18 @@
 .PHONY: help init env-local ensure-env ensure-env-litellm ensure-env-backend ensure-env-root
-.PHONY: up down build build-backend build-frontend build-web restart restart-frontend restart-web status urls
+.PHONY: up down build build-backend build-web restart restart-web status urls
 .PHONY: ensure-daytona-snapshot daytona-snapshot-local
 .PHONY: local local-stop local-status
-.PHONY: logs logs-litellm logs-postgres logs-backend logs-api logs-agent-engine logs-frontend logs-web logs-reward
+.PHONY: logs logs-litellm logs-postgres logs-backend logs-api logs-agent-engine logs-web logs-reward
 .PHONY: migrate reset clean
-.PHONY: deploy-pinai-dev deploy-pinai-prod deploy-frontend-dev deploy-frontend-prod deploy-reward-dashboard-dev deploy-web-dev deploy-web-prod
+.PHONY: deploy-pinai-dev deploy-pinai-prod deploy-reward-dashboard-dev deploy-web-dev deploy-web-prod
 .PHONY: deploy-litellm-dev deploy-litellm-prod
-.PHONY: ios android macos rn ngrok githooks install
+.PHONY: macos rn ngrok githooks install
 .PHONY: tunnel-up tunnel-down tunnel-status
 
-# Running stack: postgres + litellm + backend (web + chat) +
-# proactive-ai-frontend. apis/ and pinai-openclaw/ are retired (source
-# kept for git history only). ensure-env auto-decrypts the dotenvx-
-# encrypted .env.dev → .env on each `make up`.
+# Running stack: postgres + litellm + backend (api + agent-engine) +
+# web (apps/web zebra). proactive-ai-frontend (Capacitor) retired 2026-07
+# (RN apps/mobile took over iOS; source in git history). ensure-env
+# auto-decrypts the dotenvx-encrypted .env.dev → .env on each `make up`.
 
 COMPOSE := docker compose
 DOTENVX := npx --no-install @dotenvx/dotenvx
@@ -45,7 +45,7 @@ export NPM_REGISTRY
 
 # VITE_* build args sourced from backend/.env (single source of
 # truth, decrypted by ensure-env-backend). Used by `docker compose
-# build frontend` and the Capacitor ios/android targets.
+# build web` (zebra).
 define export_vite
 set -a && . ./backend/.env && set +a
 endef
@@ -134,7 +134,6 @@ env-local: ## Force re-decrypt all .env files
 
 init: ## First-time setup: install deps and show next steps
 	npm install
-	cd proactive-ai-frontend && npm install
 	@echo ""
 	@echo "Next steps:"
 	@echo "  1. Get .env.keys from team members"
@@ -144,14 +143,11 @@ init: ## First-time setup: install deps and show next steps
 
 # ── Build ──
 
-build: ensure-env ## Build all images (backend + frontend + web)
-	$(export_vite) && $(COMPOSE) build api agent-engine frontend web
+build: ensure-env ## Build all images (backend + web)
+	$(export_vite) && $(COMPOSE) build api agent-engine web
 
 build-backend: ensure-env-backend ## Build only backend image (shared by web + chat + db-migrate)
 	$(COMPOSE) build api
-
-build-frontend: ensure-env-backend ## Build only frontend image
-	$(export_vite) && $(COMPOSE) build frontend
 
 build-web: ensure-env-backend ## Build only apps/web (zebra) image
 	$(export_vite) && $(COMPOSE) build web
@@ -189,10 +185,6 @@ restart: ensure-env ## Rebuild + recreate api + agent-engine (most common dev lo
 		$(COMPOSE) up -d --force-recreate --no-deps api agent-engine; \
 	fi
 
-restart-frontend: ensure-env-backend ## Rebuild + recreate frontend container
-	$(export_vite) && $(COMPOSE) build frontend
-	$(COMPOSE) up -d --force-recreate --no-deps frontend
-
 restart-web: ensure-env-backend ## Rebuild + recreate apps/web (zebra) container
 	$(export_vite) && $(COMPOSE) build web
 	$(COMPOSE) up -d --force-recreate --no-deps web
@@ -202,7 +194,6 @@ status: ## Show running containers
 
 urls: ## Show this group's project name + live host ports
 	@echo "Project:  $(COMPOSE_PROJECT_NAME)"
-	@echo "Frontend: http://localhost:$$($(COMPOSE) port frontend 8080 2>/dev/null | cut -d: -f2)"
 	@echo "Web(zebra): http://localhost:$$($(COMPOSE) port web 8080 2>/dev/null | cut -d: -f2)"
 	@echo "API:      http://localhost:$$($(COMPOSE) port api 8000 2>/dev/null | cut -d: -f2)"
 	@echo "Reward:   http://localhost:$$($(COMPOSE) port reward-dashboard 8002 2>/dev/null | cut -d: -f2)  (internal-reward-dashboard 后端)"
@@ -212,7 +203,7 @@ urls: ## Show this group's project name + live host ports
 
 # ── Local Hot mode ──
 
-local: ## Start fixed-port hot-reload local mode (frontend 3000, web 8000, chat 8001)
+local: ## Start fixed-port hot-reload local mode (api 8000, agent-engine 8001)
 	bash scripts/local_dev.sh start
 
 local-stop: ## Stop Local Hot host processes and dependency containers (keeps DB volume)
@@ -240,9 +231,6 @@ logs-api: ## Tail api (master-cred process) logs
 
 logs-agent-engine: ## Tail agent-engine (LLM-loop process) logs
 	$(COMPOSE) logs -f agent-engine
-
-logs-frontend: ## Tail frontend (nginx) logs
-	$(COMPOSE) logs -f frontend
 
 logs-web: ## Tail apps/web (zebra nginx) logs
 	$(COMPOSE) logs -f web
@@ -290,14 +278,9 @@ reset: ## Stop everything, delete volumes, rebuild and start fresh (incl. ngrok 
 
 # ── Deploy (Fly.io) ──
 # backend has two process groups (web + chat) that share one fly
-# app via [processes] in fly.dev.toml / fly.prod.toml. Frontend and
-# internal reward dashboard are separate static SPA fly apps. LiteLLM is
-# its own fly app under ops/litellm.
-
-define extract_vite_args
-$(shell $(DOTENVX) get -f backend/.env.$(1) --format json 2>/dev/null \
-	| python3 -c 'import json,sys;d=json.load(sys.stdin);[print("--build-arg "+k+"="+v) for k,v in d.items() if k.startswith("VITE_")]')
-endef
+# app via [processes] in fly.dev.toml / fly.prod.toml. Internal reward
+# dashboard is a separate static SPA fly app. LiteLLM is its own fly app
+# under ops/litellm.
 
 define extract_reward_dashboard_vite_args
 $(shell $(DOTENVX) get -f backend/.env.$(1) --format json 2>/dev/null \
@@ -318,18 +301,6 @@ deploy-pinai-prod: ## Deploy backend (api + engine + reward) to prod (requires r
 		flyctl deploy --config deploy/fly-split/fly.api.prod.toml --remote-only && \
 		flyctl deploy --config deploy/fly-split/fly.engine.prod.toml --remote-only && \
 		flyctl deploy --config deploy/fly-split/fly.reward.prod.toml --remote-only'
-
-deploy-frontend-dev: ## Deploy frontend SPA to dev (Fly nginx)
-	cd proactive-ai-frontend && env -u all_proxy -u http_proxy -u https_proxy \
-		flyctl deploy --remote-only \
-		$(call extract_vite_args,dev)
-
-deploy-frontend-prod: ## Deploy frontend SPA to prod (Fly nginx)
-	@echo "Deploying frontend to PRODUCTION. Ctrl+C to cancel."
-	@sleep 3
-	cd proactive-ai-frontend && env -u all_proxy -u http_proxy -u https_proxy \
-		flyctl deploy --remote-only \
-		$(call extract_vite_args,production)
 
 deploy-reward-dashboard-dev: ## Deploy internal reward dashboard to dev (Fly nginx)
 	cd internal-reward-dashboard && env -u all_proxy -u http_proxy -u https_proxy \
@@ -411,50 +382,6 @@ tunnel-down: ## Close ngrok tunnel and revert chat to internal PAI_API_URL
 
 tunnel-status: ## Show whether the tunnel is up and at what URL
 	@url=$$(bash scripts/ngrok_url.sh 2>/dev/null) && echo "Tunnel UP at $$url" || echo "Tunnel DOWN. Start with: make tunnel-up"
-
-ios: install ensure-env ## Build frontend, sync iOS, open Xcode
-	@set -a && . ./backend/.env && set +a && \
-	if [ -n "$(NGROK)" ]; then \
-		echo "Using ngrok at $(NGROK)"; VITE_PIN_API_URL="$(NGROK)"; \
-	elif [ "$(PROD)" = "1" ]; then \
-		PROD_URL=$$(npx --no-install @dotenvx/dotenvx get VITE_PIN_API_URL -f backend/.env.production --overload 2>/dev/null); \
-		if [ -z "$$PROD_URL" ]; then echo "VITE_PIN_API_URL missing in prod env"; exit 1; fi; \
-		VITE_PIN_API_URL="$$PROD_URL"; \
-	elif [ "$(DEV)" = "1" ]; then \
-		echo "Using fly dev at $$VITE_PIN_API_URL"; \
-	else \
-		echo "→ starting this worktree's ngrok tunnel for the mobile build..."; \
-		$(MAKE) --no-print-directory tunnel-up || { echo "tunnel-up failed — check NGROK_AUTHTOKEN / network, or use DEV=1 / PROD=1 / NGROK=<url>."; exit 1; }; \
-		VITE_PIN_API_URL=$$(bash scripts/ngrok_url.sh) || exit 1; \
-		echo "Using this worktree's ngrok tunnel at $$VITE_PIN_API_URL"; \
-	fi; \
-	VITE_PIN_API_URL="$$VITE_PIN_API_URL" \
-		bash proactive-ai-frontend/scripts/sync-ios.sh && \
-		cd proactive-ai-frontend && npx cap open ios
-
-android: install ensure-env ## Build frontend, sync Android, install on USB device
-	@set -e; \
-	set -a && . ./backend/.env && set +a; \
-	if [ -n "$(NGROK)" ]; then \
-		VITE_PIN_API_URL="$(NGROK)"; \
-	elif [ "$(PROD)" = "1" ]; then \
-		PROD_URL=$$(npx --no-install @dotenvx/dotenvx get VITE_PIN_API_URL -f backend/.env.production --overload 2>/dev/null); \
-		[ -z "$$PROD_URL" ] && { echo "VITE_PIN_API_URL missing in prod env"; exit 1; }; \
-		VITE_PIN_API_URL="$$PROD_URL"; \
-	elif [ "$(DEV)" = "1" ]; then \
-		echo "Using fly dev at $$VITE_PIN_API_URL"; \
-	else \
-		echo "→ starting this worktree's ngrok tunnel for the mobile build..."; \
-		$(MAKE) --no-print-directory tunnel-up || { echo "tunnel-up failed — check NGROK_AUTHTOKEN / network, or use DEV=1 / PROD=1 / NGROK=<url>."; exit 1; }; \
-		VITE_PIN_API_URL=$$(bash scripts/ngrok_url.sh) || exit 1; \
-		echo "Using this worktree's ngrok tunnel at $$VITE_PIN_API_URL"; \
-	fi; \
-	cd proactive-ai-frontend && \
-		VITE_CAPACITOR=1 VITE_PIN_API_URL="$$VITE_PIN_API_URL" \
-		VITE_API_BASE_URL="$$VITE_PIN_API_URL" \
-		npx vite build && npx cap sync android && \
-		cd android && ./gradlew installDebug && \
-		adb shell am start -n ai.pin.proactive.dev/.MainActivity
 
 macos: install ensure-env-backend ## Run the Electron desktop shell (this worktree's backend; DEV=1 fly dev, PROD=1 fly prod)
 	@set -e; \

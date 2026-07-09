@@ -9,7 +9,5 @@ set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 
-# iOS signing guard — block commits that drift pbxproj's DEVELOPMENT_TEAM.
-if [ -f "$REPO_ROOT/proactive-ai-frontend/scripts/check-ios-signing.sh" ]; then
-  bash "$REPO_ROOT/proactive-ai-frontend/scripts/check-ios-signing.sh"
-fi
+# (原 iOS signing guard 随 proactive-ai-frontend 退役删除——RN 的 Xcode 工程
+# 不入库,无 pbxproj 漂移面;本 hook 目前无检查,保留作未来挂载点。)

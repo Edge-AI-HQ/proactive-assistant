@@ -289,43 +289,9 @@ services:
       retries: 20
       start_period: 30s
 
-  # ── Frontend (proactive-ai-frontend) ──
-  # Static SPA built with Vite + served by nginx. In web/browser mode the SPA
-  # talks to the backend same-origin (PIN_API_BASE = "" — see platform.ts):
-  # nginx in this image reverse-proxies /api/* + /health to api:8000
-  # via compose service-name DNS, inside the network. So the browser only
-  # ever hits the frontend's own host port — api's host port can be
-  # random without affecting web. Find the frontend port with `make urls`.
-  # (Native/mobile builds use an absolute VITE_PIN_API_URL instead; that path
-  # goes through ngrok, not this container.)
-  frontend:
-    build:
-      context: .
-      dockerfile: ./proactive-ai-frontend/Dockerfile
-      args:
-        WORKDIR: proactive-ai-frontend
-        VITE_PIN_API_URL: ${VITE_PIN_API_URL:-http://localhost:8000}
-        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
-        VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY:-}
-    image: proactive-ai-frontend:latest
-    restart: unless-stopped
-    # nginx upstream + resolver come from env vars at container start
-    # (envsubst'd into the rendered config). docker-compose sets the
-    # internal DNS + the compose-network service name; fly overrides
-    # these via [env] in proactive-ai-frontend/fly.<env>.toml.
-    environment:
-      NGINX_RESOLVER: "127.0.0.11 ipv6=off"
-      NGINX_UPSTREAM_URL: "http://api:8000"
-    ports:
-      - "8080"
-    depends_on:
-      api:
-        condition: service_healthy
-
-  # apps/web — zebra 桌面 web 端，与 frontend 并存的独立 SPA（同一份 nginx
-  # 机制：same-origin /api 反代 api:8000，见 apps/web/Dockerfile）。
-  # apps/web 是 same-origin，web build 用空 base，不需要 VITE_PIN_API_URL。
-  # host 端口随机（容器内同样 8080，与 frontend 不冲突），`make urls` 查 Web 行。
+  # apps/web — zebra 桌面 web 端 SPA（nginx same-origin /api 反代 api:8000，
+  # 见 apps/web/Dockerfile）。web build 用空 base，不需要 VITE_PIN_API_URL。
+  # host 端口随机，`make urls` 查 Web 行。
   web:
     build:
       context: .

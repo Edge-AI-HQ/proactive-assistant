@@ -46,7 +46,6 @@ jobs:
       litellm_app: proactive-ai-litellm-prod
       agents_toml: fly.prod.toml
       litellm_toml: fly.litellm-prod.toml
-      frontend_toml: proactive-ai-frontend/fly.prod.toml
       web_toml: apps/web/fly.prod.toml
       daytona_version: production
       run_filter: false
