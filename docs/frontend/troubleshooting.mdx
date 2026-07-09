@@ -10,6 +10,18 @@ description: "前端 / RN 开发按时间倒序记录的踩坑：现象 / 根因
 
 <!-- A-ERROR:INSERT-BELOW —— 新条目插到这行正下方，保持本行不动 -->
 
+## 2026-07-08 · RN CI prod 包 OAuth 回跳用错 scheme — APP_VARIANT 没贯穿到 Archive
+
+**现象**：prod TestFlight 包(RN,build 1020)Google 授权成功后不跳回 App,浏览器停在 Supabase Site URL 兜底页 `https://proactive-ai-api-prod.fly.dev/proactive/?code=...`,页面显示 `{"detail":"Not Found"}`。dev TestFlight 同代码登录一切正常;prod Supabase 白名单里明明有正确条目 `ai.pin.proactive://auth/callback`。
+
+**根因**：CI 里 `APP_VARIANT` 只挂在 Expo prebuild 那一步的 step env。但打包有**两道工序**读它:prebuild 生成原生工程(拿到了,bundle id/显示名全对);Archive 时 expo-constants 的 `[CP-User] Generate app.config` build phase 会**重新评估** `app.config.js` 并把结果嵌进 App 的运行时 manifest——那一刻读不到 `APP_VARIANT`,回落 default 变体,运行时 `Constants.expoConfig.scheme = ai.pin.proactive.dev`(本地开发值)。`Linking.createURL("auth/callback")` 读的是运行时 manifest → prod 包把 `redirect_to` 发成 `ai.pin.proactive.dev://auth/callback` → 被 prod Supabase 白名单(正确地)拒绝 → GoTrue 回落 Site URL 并附 `?code=`。**dev 没暴露是双重巧合**:dev 项目白名单残留本地开发的 `ai.pin.proactive.dev://auth/callback` 条目,且 iOS `ASWebAuthenticationSession` 拦截回跳只看会话声明的 scheme、不要求 App 在 Info.plist 注册过它。
+
+**正解**：`.github/workflows/build-rn-ios.yml` 里把 `APP_VARIANT` / `APP_BUILD_NUMBER` 从 prebuild 的 step env 改写进 `GITHUB_ENV`(Resolve target environment step),让 prebuild 与 Archive 两道工序看到同一份变体;并新增 `Verify embedded runtime config` step——Archive 后打开产物里 EXConstants 嵌入的 `app.config`,断言 `scheme == 本变体 bundle id`,不一致直接红灯拦在上传前。已验证:prod build 1023 自检输出 `embedded scheme = ai.pin.proactive`,真机 Google 登录成功。
+
+**怎么避免**：① 给 Expo CNG 项目的 CI 传"变体身份"类变量时,一律放 job 级 env/`GITHUB_ENV`,不要只挂在 prebuild 一步——凡是 build phase 会重新评估 `app.config.js` 的(expo-constants manifest、`expo export:embed`),都要能读到同一份;② 排这类"登录跳到兜底页"问题时,先把失败页的**完整 URL**(含 `?`/`#` 后参数)拿到手——`Site URL + ?code=` 这个形态直接指向"redirect_to 被白名单拒",能少猜一半;③ 自检步(校验产物里嵌入的运行时配置)保留勿删,它把这类不一致从"真机登录才炸"提前到"CI 红灯"。
+
+**相关**：PR #254(修复)/ PR #251(RN CI/CD 切换)/ `.github/workflows/build-rn-ios.yml` 的 `Verify embedded runtime config` step / `apps/mobile/app.config.js` 三变体注释
+
 ## 2026-07-06 · RN Pressable 的 style 整段不渲染 → 视觉样式放内层 View
 
 **现象**：给 `<Pressable style={...}>` 设的圆角 / 背景 / padding 在真机上整体不生效，像根本没写；`npm run type-check` 过、Metro 也打包成功，所以很容易误判成"没改到代码"。
