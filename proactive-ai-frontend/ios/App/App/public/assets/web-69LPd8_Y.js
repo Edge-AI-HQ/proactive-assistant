@@ -1,1 +1,0 @@
-class r{async requestPermissions(){return{bluetooth:"prompt"}}async checkPermissions(){return{bluetooth:"prompt"}}async startMonitoring(){console.warn("NearbyConnectivity: not available on web")}async stopMonitoring(){}async addListener(n,t){return{}}async removeAllListeners(){}}export{r as NearbyConnectivityWeb};

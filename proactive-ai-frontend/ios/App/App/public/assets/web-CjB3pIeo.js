@@ -1,1 +1,0 @@
-class t{async requestPermissions(){return{notifications:"prompt"}}async checkPermissions(){return{notifications:"prompt"}}async startMonitoring(){console.warn("NotificationUsage: not available on web")}async stopMonitoring(){}async addListener(e,s){return{}}async removeAllListeners(){}}export{t as NotificationUsageWeb};
