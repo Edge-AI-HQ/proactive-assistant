@@ -288,65 +288,6 @@
       }
     }
   },
-  "summaryStatus": {
-    "title": "时间线摘要",
-    "description": "显示本地 LLM 摘要窗口是待处理、处理中，还是已写入为时间线卡片。",
-    "runNowAria": "立即运行时间线摘要",
-    "running": "运行中",
-    "trigger": "触发",
-    "refreshAria": "刷新时间线摘要状态",
-    "metricStatus": "状态",
-    "metricLlmCards": "LLM 卡片",
-    "metricPending": "待处理窗口",
-    "metricFailed": "失败次数",
-    "loading": "加载中",
-    "status": {
-      "error": "错误",
-      "summarizing": "摘要中",
-      "ready": "就绪",
-      "waiting": "等待中",
-      "idle": "空闲"
-    },
-    "summarizedWindows": "已摘要窗口",
-    "skippedWindows": "已跳过的低价值窗口",
-    "processingWindows": "处理中窗口",
-    "latestCard": "最新卡片：",
-    "lastError": "最近错误：{{code}}",
-    "detail": "详情：{{message}}",
-    "nativeOnly": "时间线摘要生成仅在原生应用中可用。",
-    "storeReady": "就绪",
-    "storeNotReady": "未就绪",
-    "storeUnknown": "未知",
-    "storeLine": "存储：{{mode}} · {{readiness}}",
-    "refreshedAt": " · 刷新于 {{time}}"
-  },
-  "models": {
-    "title": "环境感知模型",
-    "mirror": "镜像",
-    "preferredMirrorAria": "首选镜像",
-    "loadingManifest": "正在加载清单…",
-    "listFailed": "models.list 失败：{{error}}",
-    "activeLabel": "{{kind}} · 使用中",
-    "activeModelAria": "使用中的 {{kind}} 模型",
-    "download": "下载",
-    "redownload": "重新下载",
-    "viaMirror": "经 {{mirror}}",
-    "onDisk": "磁盘占用：{{size}}",
-    "deleteAria": "删除 {{name}}",
-    "manualVerify": "手动校验（运行时首次使用会自动校验）",
-    "runVerify": "运行校验",
-    "verifying": "校验中…",
-    "verified": "已校验",
-    "verifiedWithOutput": "已校验：{{output}}",
-    "verifyFailed": "校验失败",
-    "verifyFailedWithError": "校验失败：{{error}}",
-    "advanced": "高级"
-  },
-  "modelRequired": {
-    "title": "需要设备端 LLM",
-    "body": "下载 {{model}}，把你的环境信号转化为私密的本地摘要。",
-    "download": "下载 {{model}}"
-  },
   "timeline": {
     "narrativeSummary": "你的本地时间线今天有 {{count}} 个事件，最早是{{first}}。关键时刻：{{moments}}"
   },
@@ -363,13 +304,5 @@
     "placeArrival": "到达地点",
     "placeDeparture": "离开地点",
     "morningHealth": "晨间健康"
-  },
-  "modelNotes": {
-    "whisper-base": "适合短时环境音的推荐默认项。",
-    "whisper-small-q5_1": "量化小模型；在精度和体积间取得平衡。",
-    "qwen3-0_6b-q8": "官方 Qwen3 0.6B，上游仅提供 Q8_0。",
-    "qwen3-1_7b-q4": "适合环境摘要的强力 Qwen 选项。",
-    "gemma-2-2b-q4": "Unsloth 量化；在较新 iPhone 上本地摘要更强。",
-    "gemma-3-4b-q4": "更高质量的本地推理配置；需要更多存储和内存。"
   }
 }

@@ -23,7 +23,7 @@
     "notificationsTitle": "Notificaciones push",
     "notificationsDescription": "Lo que te llega, incluso en horas de silencio",
     "ambientTitle": "Ambiente",
-    "ambientDescription": "Consentimientos de fuentes, modelos en el dispositivo, resúmenes",
+    "ambientDescription": "Consentimientos de fuentes e identidad de voz",
     "backToSettings": "Volver a configuración"
   },
   "language": {
@@ -238,13 +238,7 @@
     "enableHint": "Toca para activar las notificaciones del sistema."
   },
   "ambientPage": {
-    "pageTitle": "Ambiente",
-    "pageSubtitle": "Controla qué puede observar PIN AI localmente y qué modelos en el dispositivo usa.",
-    "modelsTitle": "Modelos en el dispositivo",
-    "modelsDescription": "Gestiona los modelos en el dispositivo usados para voz y razonamiento sin conexión.",
-    "loadingManifest": "Cargando el manifiesto de modelos…",
-    "iosOnlyModels": "Los modelos en el dispositivo solo están disponibles en la app de iOS. Abre esta página en la versión nativa para descargar, verificar o eliminar los perfiles de Whisper / LLM local.",
-    "localStorageNote": "Los modelos se guardan localmente y nunca se vuelven a subir. Si una descarga falla, el plugin pasa automáticamente al mirror secundario."
+    "pageTitle": "Ambiente"
   },
   "evolution": {
     "title": "Sueños automáticos",

@@ -1,6 +1,7 @@
 /**
- * RN ambient timeline 公开入口。store / pipeline / 模型桥 + refreshTimeline，
- * 状态面板与 ingest 链路从这里取。类型从 @pin-ai/core 透出（双端同源）。
+ * RN ambient timeline 公开入口（durable store 读取面）。端侧 LLM pipeline /
+ * 模型桥已随 on-device model sunset 删除；timeline 显示读本地 store，聚合/
+ * 摘要由后端 memory 架构承担。类型从 @pin-ai/core 透出。
  */
 export type {
   AmbientCandidateWindow,
@@ -10,5 +11,3 @@ export type {
 } from "@pin-ai/core";
 
 export { getAmbientTimelineStore, resetAmbientTimelineStore } from "./store";
-export { createAmbientTimelineModelBridge } from "./models";
-export { getAmbientTimelinePipeline, refreshTimeline } from "./pipeline";

@@ -21,7 +21,7 @@
     "notificationsTitle": "푸시 알림",
     "notificationsDescription": "방해 금지 시간에도 받을 알림을 정해요",
     "ambientTitle": "앰비언트",
-    "ambientDescription": "소스 동의, 온디바이스 모델, 요약",
+    "ambientDescription": "소스 동의 및 음성 식별",
     "backToSettings": "설정으로 돌아가기"
   },
   "language": {
@@ -236,13 +236,7 @@
     "enableHint": "탭하면 시스템 알림을 켤 수 있어요."
   },
   "ambientPage": {
-    "pageTitle": "앰비언트",
-    "pageSubtitle": "PIN AI가 로컬에서 관찰할 수 있는 범위와 사용할 온디바이스 모델을 설정해요.",
-    "modelsTitle": "온디바이스 모델",
-    "modelsDescription": "오프라인 음성 인식과 추론에 쓰는 온디바이스 모델을 관리해요.",
-    "loadingManifest": "모델 매니페스트를 불러오는 중…",
-    "iosOnlyModels": "온디바이스 모델은 iOS 앱에서만 사용할 수 있어요. Whisper / 로컬 LLM 프로필을 다운로드, 검증, 삭제하려면 네이티브 빌드에서 이 페이지를 열어 주세요.",
-    "localStorageNote": "모델은 로컬에만 저장되고 다시 업로드되지 않아요. 다운로드에 실패하면 플러그인이 자동으로 보조 미러로 전환해요."
+    "pageTitle": "앰비언트"
   },
   "evolution": {
     "title": "자동 드리밍",

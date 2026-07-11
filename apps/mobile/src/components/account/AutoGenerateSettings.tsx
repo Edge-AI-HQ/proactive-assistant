@@ -3,7 +3,7 @@
  * （Preferences 子页 Generation section 第一块）。开关 + 间隔下拉；文案走 i18n
  * （account:autoGenerate.* / duration.* / every，与 dev 同 key）。
  * dev 的间隔 `<select>` 在 iOS WKWebView 被系统渲染成原生菜单 → RN 用 MenuView
- * 拿同一个系统 UIMenu（AmbientModelsPanel Select 同款做法），关闭态触发框逐字对齐
+ * 拿同一个系统 UIMenu（本项目 Select 既定做法），关闭态触发框逐字对齐
  * dev select className：text-caption(11) · bg-background(实底) · border-foreground/15
  * · rounded(4) · px-2 py-1 · disabled:opacity-40。
  */

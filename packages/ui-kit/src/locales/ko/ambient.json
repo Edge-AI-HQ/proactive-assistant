@@ -288,65 +288,6 @@
       }
     }
   },
-  "summaryStatus": {
-    "title": "타임라인 요약",
-    "description": "로컬 LLM 요약 구간이 대기 중인지, 처리 중인지, 이미 타임라인 카드로 작성됐는지 보여줘요.",
-    "runNowAria": "타임라인 요약 지금 실행",
-    "running": "실행 중",
-    "trigger": "실행",
-    "refreshAria": "타임라인 요약 상태 새로고침",
-    "metricStatus": "상태",
-    "metricLlmCards": "LLM 카드",
-    "metricPending": "대기 구간",
-    "metricFailed": "실패 횟수",
-    "loading": "불러오는 중",
-    "status": {
-      "error": "오류",
-      "summarizing": "요약 중",
-      "ready": "준비됨",
-      "waiting": "대기 중",
-      "idle": "유휴"
-    },
-    "summarizedWindows": "요약된 구간",
-    "skippedWindows": "건너뛴 저가치 구간",
-    "processingWindows": "처리 중인 구간",
-    "latestCard": "최신 카드:",
-    "lastError": "마지막 오류: {{code}}",
-    "detail": "상세: {{message}}",
-    "nativeOnly": "타임라인 요약 생성은 네이티브 앱에서만 가능해요.",
-    "storeReady": "준비됨",
-    "storeNotReady": "준비 안 됨",
-    "storeUnknown": "알 수 없음",
-    "storeLine": "저장소: {{mode}} · {{readiness}}",
-    "refreshedAt": " · {{time}} 새로고침"
-  },
-  "models": {
-    "title": "앰비언트 모델",
-    "mirror": "미러",
-    "preferredMirrorAria": "선호 미러",
-    "loadingManifest": "매니페스트 불러오는 중…",
-    "listFailed": "models.list 실패: {{error}}",
-    "activeLabel": "{{kind}} · 활성",
-    "activeModelAria": "활성 {{kind}} 모델",
-    "download": "다운로드",
-    "redownload": "다시 다운로드",
-    "viaMirror": "{{mirror}} 경유",
-    "onDisk": "디스크: {{size}}",
-    "deleteAria": "{{name}} 삭제",
-    "manualVerify": "수동 검증 (런타임이 첫 사용 시 자동 검증해요)",
-    "runVerify": "검증 실행",
-    "verifying": "검증 중…",
-    "verified": "검증됨",
-    "verifiedWithOutput": "검증됨: {{output}}",
-    "verifyFailed": "검증 실패",
-    "verifyFailedWithError": "검증 실패: {{error}}",
-    "advanced": "고급"
-  },
-  "modelRequired": {
-    "title": "온디바이스 LLM 필요",
-    "body": "{{model}}을(를) 다운로드하면 앰비언트 신호를 비공개 로컬 요약으로 바꿀 수 있어요.",
-    "download": "{{model}} 다운로드"
-  },
   "timeline": {
     "narrativeSummary": "오늘 로컬 타임라인에는 {{first}}부터 시작해 이벤트가 {{count}}개 있어요. 주요 순간: {{moments}}"
   },
@@ -363,13 +304,5 @@
     "placeArrival": "장소 도착",
     "placeDeparture": "장소 출발",
     "morningHealth": "아침 건강"
-  },
-  "modelNotes": {
-    "whisper-base": "짧은 주변 소리에 권장되는 기본값입니다.",
-    "whisper-small-q5_1": "양자화된 소형 모델로 정확도와 크기의 균형을 맞춥니다.",
-    "qwen3-0_6b-q8": "공식 Qwen3 0.6B, 업스트림에서는 Q8_0만 제공됩니다.",
-    "qwen3-1_7b-q4": "주변 요약에 적합한 강력한 Qwen 옵션입니다.",
-    "gemma-2-2b-q4": "Unsloth 양자화; 최신 iPhone에서 더 강력한 로컬 요약.",
-    "gemma-3-4b-q4": "더 높은 품질의 로컬 추론 프로파일; 더 많은 저장 공간과 메모리가 필요합니다."
   }
 }

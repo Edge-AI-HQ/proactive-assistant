@@ -48,6 +48,7 @@ public final class AmbientAudioModule: Module {
 
     OnCreate {
       self.registerLifecycleObservers()
+      Self.cleanUpSunsetOnDeviceModels()
     }
 
     OnDestroy {
@@ -198,6 +199,34 @@ public final class AmbientAudioModule: Module {
 
     AsyncFunction("stopVoicePcmStream") { (streamId: String?) in
       self.voicePcmStream.stop(streamId: streamId)
+    }
+  }
+
+  // MARK: - On-device model sunset cleanup
+
+  /// 一次性删除已退役端侧模型的下载残留（GGUF / whisper，曾存于
+  /// Documents/AmbientModels/，单模型最大 2.6GB）。ambient-models 模块已随
+  /// on-device model sunset（docs/plans/2026-06-21-sunset-on-device-models.mdx）
+  /// 删除，无代码再管理该目录——启动时幂等清理，成功才置 UserDefaults flag，
+  /// 失败下次启动重试。路径硬编码，不依赖已删除的 ModelStore。
+  /// FluidAudio（Silero VAD）缓存在 Application Support，与此无关，不能清。
+  private static func cleanUpSunsetOnDeviceModels() {
+    let flagKey = "pinai.ambientModels.sunsetCleanupDone"
+    let defaults = UserDefaults.standard
+    guard !defaults.bool(forKey: flagKey) else { return }
+    let fm = FileManager.default
+    guard let documents = fm.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+    let modelsDir = documents.appendingPathComponent("AmbientModels", isDirectory: true)
+    guard fm.fileExists(atPath: modelsDir.path) else {
+      defaults.set(true, forKey: flagKey)
+      return
+    }
+    do {
+      try fm.removeItem(at: modelsDir)
+      defaults.set(true, forKey: flagKey)
+      NSLog("[AmbientAudio] removed sunset on-device model downloads at %@", modelsDir.path)
+    } catch {
+      NSLog("[AmbientAudio] failed to remove sunset on-device models (will retry next launch): %@", String(describing: error))
     }
   }
 

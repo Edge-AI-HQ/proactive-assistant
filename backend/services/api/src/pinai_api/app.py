@@ -48,7 +48,6 @@ from .domains.chat_history.sync import router as ui_sync_router
 from .domains.connector.apps.composio_agent import router as agent_composio_router
 from .domains.connector.apps.composio_ui import router as ui_composio_router
 from .domains.connector.apps.raw_agent import router as agent_raw_router
-from .domains.connector.device.ambient_ui import router as ui_ambient_router
 from .domains.connector.device.devices_ui import router as ui_devices_router
 from .domains.feedback.agent import router as agent_feedback_router
 from .domains.feedback.dev_agent import router as agent_development_feedback_router
@@ -243,7 +242,6 @@ def create_app() -> FastAPI:
     app.include_router(ui_jwt_revoke_router)
     app.include_router(ui_browser_router)
     app.include_router(ui_voice_router)
-    app.include_router(ui_ambient_router)
     app.include_router(ui_account_router)
     app.include_router(ui_development_feedback_router)
 

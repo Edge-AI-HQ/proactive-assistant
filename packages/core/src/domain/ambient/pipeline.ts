@@ -1,16 +1,14 @@
 // Platform-free ambient timeline pipeline (lifted from web
 // services/ambient/timeline/pipeline.ts). Raw-signal ingest, window building /
 // dedupe, rule-based event generation and context snapshots — all pure data
-// transforms. The store and the model bridge are injected dependencies. The
-// app-side factories (createAmbientTimelinePipeline / getAmbientTimelinePipeline)
-// stay in each app because they wire the Capacitor SQLite store and the native
-// model bridge; they import this class and pass those in.
+// transforms. The store is an injected dependency; the app-side factory wires
+// the durable SQLite store and imports this class.
+// On-device LLM generation (model bridge + processPendingWindows) was sunset in
+// 2026-07 (docs/plans/2026-06-21-sunset-on-device-models.mdx): aggregation and
+// summarization moved to the backend memory architecture; transcript windows
+// remain evidence-only.
 import type { PersonalSignalInput } from "../signals";
 import { candidateWindowToSignal, timelineEventToSignal, type AmbientWindowSourcePayload } from "./envelope";
-import {
-  NoopAmbientTimelineModelBridge,
-  type AmbientTimelineModelBridge,
-} from "./pipeline-models";
 import { rawEventFromSignal, placeLabel } from "./normalize";
 import { normalizeSpeakerSegments, speakerAwareTranscriptTextFromPayload } from "./speaker-transcript";
 import type {
@@ -19,7 +17,6 @@ import type {
   AmbientRawEvent,
   AmbientRawRef,
   AmbientSourceType,
-  AmbientTimelineAction,
   AmbientTimelineEvent,
   AmbientTimelineStore,
   AmbientWindowType,
@@ -41,29 +38,20 @@ import {
   uniqueStrings,
 } from "./utils";
 
-export interface AmbientTimelineProcessOptions {
-  force?: boolean;
-  includeRecentPending?: boolean;
-  forceReady?: boolean;
-}
-
 export interface AmbientTimelinePipeline {
   ingestSignal(item: PersonalSignalInput): Promise<PersonalSignalInput[]>;
-  regenerateDay(localDate?: string, options?: AmbientTimelineProcessOptions): Promise<PersonalSignalInput[]>;
-  processPendingWindows(localDate?: string, options?: AmbientTimelineProcessOptions): Promise<PersonalSignalInput[]>;
+  regenerateDay(localDate?: string): Promise<PersonalSignalInput[]>;
   generateContextSnapshot(now?: Date): Promise<PersonalSignalInput | null>;
 }
 
 export interface AmbientTimelinePipelineOptions {
   store?: AmbientTimelineStore;
-  modelBridge?: AmbientTimelineModelBridge;
   now?: () => Date;
 }
 
 export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
   constructor(
     private store: AmbientTimelineStore,
-    private modelBridge: AmbientTimelineModelBridge = new NoopAmbientTimelineModelBridge(),
     private options: { now?: () => Date } = {},
   ) {}
 
@@ -74,7 +62,6 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
 
   async regenerateDay(
     localDate = localDateFromDate(new Date()),
-    options: AmbientTimelineProcessOptions = {},
   ): Promise<PersonalSignalInput[]> {
     await this.store.init();
     const raws = await this.store.listRawEvents({ localDate, limit: 1_000 });
@@ -82,7 +69,6 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     for (const raw of raws) {
       out.push(...await this.generateForRaw(raw));
     }
-    out.push(...await this.processPendingWindows(localDate, options));
     return out;
   }
 
@@ -141,193 +127,6 @@ export class LocalAmbientTimelinePipeline implements AmbientTimelinePipeline {
     return candidateWindowToSignal(window, {
       sourcePayloads,
       contextHash: stableHash(JSON.stringify({ compactContext, sourcePresence, sourcePayloads })),
-    });
-  }
-
-  async processPendingWindows(
-    localDate = localDateFromDate(new Date()),
-    options: AmbientTimelineProcessOptions = {},
-  ): Promise<PersonalSignalInput[]> {
-    await this.store.init();
-    const windows = await this.listPendingTranscriptWindows(localDate, options);
-    const readyWindows = windows.filter((window) => window.generationPolicy === "llm_allowed"
-      && (options.forceReady || this.isTranscriptWindowReady(window))
-      && (options.force || this.isBackoffExpired(window)));
-    const out: PersonalSignalInput[] = [];
-    if (readyWindows.length === 0) return out;
-    if (this.modelBridge.generateTimelineBatchDecision) {
-      const selected = readyWindows.slice(0, 1);
-      const result = await this.modelBridge.generateTimelineBatchDecision({ windows: selected });
-      if (!result.ok) {
-        for (const window of selected) await this.recordWindowAttempt(window, result.errorCode, result.errorMessage);
-        return out;
-      }
-      for (const decision of result.batch.decisions) {
-        if (decision.action === "skip") {
-          for (const id of decision.sourceWindowIds) {
-            const window = selected.find((item) => item.id === id);
-            if (!window) continue;
-            await this.store.upsertCandidateWindow({
-              ...window,
-              summaryStatus: "skipped_low_value",
-              lastErrorCode: null,
-              updatedAt: this.nowIso(),
-            });
-          }
-          continue;
-        }
-        if (decision.action !== "create") continue;
-        const decisionWindows = selected.filter((window) => decision.sourceWindowIds.includes(window.id));
-        const first = decisionWindows[0];
-        if (!first) continue;
-        const sourceWindowIds = decisionWindows.map((window) => window.id);
-        const event = makeEvent({
-          id: stableId("evt", ["llm_summary", ...sourceWindowIds]),
-          localDate: first.localDate,
-          occurredAt: decision.occurredAt,
-          endedAt: decisionWindows[decisionWindows.length - 1]?.endedAt,
-          eventType: "conversation",
-          title: decision.title,
-          summary: decision.summary,
-          primarySourceLabel: first.deviceLabels[0] ?? sourceLabel("transcript"),
-          deviceLabels: decisionWindows.flatMap((window) => window.deviceLabels),
-          sourceTypes: decisionWindows.flatMap((window) => window.sourceTypes),
-          tags: ["ambient", "summary"],
-          privacy: maxPrivacy(decisionWindows.map((window) => window.privacyHint)),
-          confidence: average(decisionWindows.map((window) => window.confidenceHint)),
-          confidenceLabel: "certain",
-          salience: average(decisionWindows.map((window) => window.salienceHint)),
-          rawRefs: decisionWindows.flatMap((window) => window.rawRefs),
-          windowId: first.id,
-          generationMethod: "local_llm",
-          generationSource: "llm_summary",
-          sourceWindowIds,
-          idempotencyKey: `summary:create:${stableHash(sourceWindowIds.slice().sort().join("|"))}`,
-          dedupeKey: `ambient:timeline:${first.localDate}:llm_summary:${stableHash(sourceWindowIds.slice().sort().join("|"))}`,
-          actionCandidates: decision.actionCandidates,
-        });
-        const signal = await this.upsertVisibleEvent(event);
-        if (signal) out.push(signal);
-        for (const window of decisionWindows) {
-          await this.store.upsertCandidateWindow({
-            ...window,
-            status: "generated",
-            summaryStatus: "summarized",
-            lastErrorCode: null,
-            updatedAt: this.nowIso(),
-          });
-        }
-      }
-      return out;
-    }
-    for (const window of readyWindows) {
-      const result = await this.modelBridge.generateTimelineEvent(window);
-      if (!result.ok) {
-        await this.recordWindowAttempt(window, result.errorCode, result.errorMessage);
-        continue;
-      }
-      const draft = result.draft;
-      const event = makeEvent({
-        id: stableId("evt", ["llm", window.id]),
-        localDate: window.localDate,
-        occurredAt: window.startedAt,
-        endedAt: window.endedAt,
-        eventType: draft.eventType,
-        title: draft.title,
-        summary: draft.summary,
-        primarySourceLabel: window.deviceLabels[0] ?? sourceLabel("transcript"),
-        deviceLabels: window.deviceLabels,
-        sourceTypes: window.sourceTypes,
-        tags: draft.tags,
-        privacy: window.privacyHint,
-        confidence: draft.confidence,
-        confidenceLabel: draft.confidenceLabel,
-        salience: window.salienceHint,
-        rawRefs: window.rawRefs,
-        windowId: window.id,
-        generationMethod: "local_llm",
-        generationSource: "llm_summary",
-        sourceWindowIds: [window.id],
-        dedupeKey: `ambient:timeline:${window.localDate}:llm:${stableHash(window.id)}`,
-      });
-      const signal = await this.upsertVisibleEvent(event);
-      if (signal) out.push(signal);
-      await this.store.upsertCandidateWindow({
-        ...window,
-        status: "generated",
-        summaryStatus: "summarized",
-        lastErrorCode: null,
-        updatedAt: this.nowIso(),
-      });
-    }
-    return out;
-  }
-
-
-  private async listPendingTranscriptWindows(
-    localDate: string,
-    options: AmbientTimelineProcessOptions,
-  ): Promise<AmbientCandidateWindow[]> {
-    const primary = await this.store.listCandidateWindows({
-      localDate,
-      windowType: "transcript_session",
-      status: "pending",
-      limit: 50,
-    });
-    if (!options.includeRecentPending || primary.length > 0) return primary;
-    const recentDates = await this.recentLocalDatesWithPendingTranscriptWindows(localDate);
-    const fallback: AmbientCandidateWindow[] = [];
-    for (const date of recentDates) {
-      fallback.push(...await this.store.listCandidateWindows({
-        localDate: date,
-        windowType: "transcript_session",
-        status: "pending",
-        limit: 10,
-      }));
-    }
-    return fallback;
-  }
-
-  private async recentLocalDatesWithPendingTranscriptWindows(excludedLocalDate: string): Promise<string[]> {
-    const raws = await this.store.listRawEvents({ limit: 1_000 });
-    return uniqueStrings(raws
-      .map((raw) => raw.localDate)
-      .filter((date) => date !== excludedLocalDate))
-      .sort((a, b) => b.localeCompare(a))
-      .slice(0, 2);
-  }
-
-  private isTranscriptWindowReady(window: AmbientCandidateWindow): boolean {
-    const textLength = window.compactContext.trim().length;
-    if (textLength < 80) return false;
-    const startedAt = Date.parse(window.startedAt);
-    const endedAt = Date.parse(window.endedAt ?? window.startedAt);
-    if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt)) return false;
-    if (endedAt - startedAt < 30_000) return false;
-    return this.now().getTime() - endedAt >= 60_000;
-  }
-
-  private isBackoffExpired(window: AmbientCandidateWindow): boolean {
-    if (!window.lastAttemptAt || window.attemptCount <= 0) return true;
-    const lastAttemptAt = Date.parse(window.lastAttemptAt);
-    if (!Number.isFinite(lastAttemptAt)) return true;
-    const cooldownMs = Math.min(30 * 60_000, 60_000 * (2 ** Math.max(0, window.attemptCount - 1)));
-    return this.now().getTime() - lastAttemptAt >= cooldownMs;
-  }
-
-  private async recordWindowAttempt(
-    window: AmbientCandidateWindow,
-    errorCode: string,
-    errorMessage?: string,
-  ): Promise<void> {
-    await this.store.upsertCandidateWindow({
-      ...window,
-      lastAttemptAt: this.nowIso(),
-      attemptCount: window.attemptCount + 1,
-      lastErrorCode: errorCode,
-      summaryErrorCode: errorCode,
-      summaryErrorMessage: errorMessage ?? null,
-      updatedAt: this.nowIso(),
     });
   }
 
@@ -1066,11 +865,6 @@ function makeEvent(args: {
   salience: number;
   rawRefs: AmbientRawRef[];
   windowId?: string;
-  generationMethod?: AmbientTimelineEvent["generationMethod"];
-  generationSource?: AmbientTimelineEvent["generationSource"];
-  sourceWindowIds?: string[];
-  idempotencyKey?: string;
-  actionCandidates?: AmbientTimelineAction[];
   dedupeKey: string;
 }): AmbientTimelineEvent {
   const now = new Date().toISOString();
@@ -1104,13 +898,9 @@ function makeEvent(args: {
     rawRefs: uniqueRawRefs(args.rawRefs),
     observationIds: [],
     windowId: args.windowId,
-    generationMethod: args.generationMethod ?? "rule",
-    generationSource: args.generationSource ?? (args.generationMethod === "local_llm" ? "llm_summary" : "rule_based"),
-    sourceWindowIds: args.sourceWindowIds ?? [],
-    idempotencyKey: args.idempotencyKey,
-    ...(args.actionCandidates && args.actionCandidates.length > 0
-      ? { actionCandidates: args.actionCandidates.map(cloneAction) }
-      : {}),
+    generationMethod: "rule",
+    generationSource: "rule_based",
+    sourceWindowIds: [],
     generationStatus: "visible",
     memoryCandidate: false,
     cardTriggerCandidate: false,
@@ -1122,21 +912,8 @@ function makeEvent(args: {
   };
 }
 
-function average(values: number[]): number {
-  if (values.length === 0) return 0;
-  return clamp01(values.reduce((sum, value) => sum + value, 0) / values.length);
-}
-
 function rawRef(raw: AmbientRawEvent): AmbientRawRef {
   return { sourceType: raw.sourceType, id: raw.id };
-}
-
-function cloneAction(action: AmbientTimelineAction): AmbientTimelineAction {
-  return {
-    label: action.label,
-    goal: action.goal,
-    ...(action.goalBasket ? { goalBasket: action.goalBasket } : {}),
-  };
 }
 
 const MIN_STEPS_FOR_VISIBLE_HEALTH = 100;

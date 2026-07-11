@@ -288,65 +288,6 @@
       }
     }
   },
-  "summaryStatus": {
-    "title": "タイムラインサマリー",
-    "description": "ローカル LLM のサマリーウィンドウが待機中か、処理中か、すでにタイムラインカードとして書き込まれたかを表示します。",
-    "runNowAria": "タイムラインサマリーを今すぐ実行",
-    "running": "実行中",
-    "trigger": "実行",
-    "refreshAria": "タイムラインサマリーの状態を更新",
-    "metricStatus": "状態",
-    "metricLlmCards": "LLM カード",
-    "metricPending": "待機中ウィンドウ",
-    "metricFailed": "失敗回数",
-    "loading": "読み込み中",
-    "status": {
-      "error": "エラー",
-      "summarizing": "要約中",
-      "ready": "準備完了",
-      "waiting": "待機中",
-      "idle": "アイドル"
-    },
-    "summarizedWindows": "要約済みウィンドウ",
-    "skippedWindows": "スキップした低価値ウィンドウ",
-    "processingWindows": "処理中ウィンドウ",
-    "latestCard": "最新カード：",
-    "lastError": "直近のエラー：{{code}}",
-    "detail": "詳細：{{message}}",
-    "nativeOnly": "タイムラインサマリーの生成はネイティブアプリでのみ利用できます。",
-    "storeReady": "準備完了",
-    "storeNotReady": "未準備",
-    "storeUnknown": "不明",
-    "storeLine": "ストア：{{mode}} · {{readiness}}",
-    "refreshedAt": " · {{time}}に更新"
-  },
-  "models": {
-    "title": "アンビエントモデル",
-    "mirror": "ミラー",
-    "preferredMirrorAria": "優先ミラー",
-    "loadingManifest": "マニフェストを読み込み中…",
-    "listFailed": "models.list が失敗しました：{{error}}",
-    "activeLabel": "{{kind}} · アクティブ",
-    "activeModelAria": "アクティブな{{kind}}モデル",
-    "download": "ダウンロード",
-    "redownload": "再ダウンロード",
-    "viaMirror": "{{mirror}}経由",
-    "onDisk": "ディスク使用量：{{size}}",
-    "deleteAria": "{{name}}を削除",
-    "manualVerify": "手動検証（初回使用時にランタイムが自動検証します）",
-    "runVerify": "検証を実行",
-    "verifying": "検証中…",
-    "verified": "検証済み",
-    "verifiedWithOutput": "検証済み：{{output}}",
-    "verifyFailed": "検証失敗",
-    "verifyFailedWithError": "検証失敗：{{error}}",
-    "advanced": "詳細設定"
-  },
-  "modelRequired": {
-    "title": "オンデバイス LLM が必要です",
-    "body": "{{model}}をダウンロードすると、アンビエントシグナルをプライベートなローカルサマリーに変換できます。",
-    "download": "{{model}}をダウンロード"
-  },
   "timeline": {
     "narrativeSummary": "今日のローカルタイムラインには{{count}}件のイベントがあります（最初は{{first}}）。主な出来事：{{moments}}"
   },
@@ -363,13 +304,5 @@
     "placeArrival": "場所に到着",
     "placeDeparture": "場所から出発",
     "morningHealth": "朝のヘルス"
-  },
-  "modelNotes": {
-    "whisper-base": "短時間の環境音向けの推奨デフォルト。",
-    "whisper-small-q5_1": "量子化された小型モデル。精度とサイズのバランスが取れています。",
-    "qwen3-0_6b-q8": "公式 Qwen3 0.6B。アップストリームでは Q8_0 のみ提供。",
-    "qwen3-1_7b-q4": "環境要約に適した強力な Qwen オプション。",
-    "gemma-2-2b-q4": "Unsloth 量子化。最近の iPhone でローカル要約がより強力。",
-    "gemma-3-4b-q4": "より高品質なローカル推論プロファイル。より多くのストレージとメモリが必要。"
   }
 }

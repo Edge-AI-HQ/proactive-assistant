@@ -2,17 +2,17 @@
  * First-run onboarding —— dev `components/onboarding/OnboardingFlow.tsx` 的 RN 全量移植。
  * App.tsx 以 `settings.onboardingCompletedAt == null` gate；最后一步 Done 由
  * onComplete（App.tsx 持有 patch）盖章服务端，成功后 App 切主壳。
- * 三步皆可 Skip；只有第 3 步结束才盖章——中途杀 App 重开从第 1 步重来（dev 同语义）。
+ * 两步皆可 Skip；只有最后一步结束才盖章——中途杀 App 重开从第 1 步重来（dev 同语义）。
+ * （原 step3 端侧模型下载步已随 on-device model sunset 删除。）
  *
  * 步骤复用已迁 RN 的整块组件（与 dev 复用 web 组件同构）：
  *   step1 = DataConnections（连接数据源）
  *   step2 = AmbientSourceControlsPanel + VoiceIdentitySettings（ambient + 声纹）
- *   step3 = AmbientModelSetupStep（Gemma 2B 端侧模型）
  * 退出机 = dev 逐字：Done 时若有 connector insight 在跑 → 800ms 宽限 →
  * InsightWaitPage（等第一次拉取的画像预览）→ ready 后 insight 全页（Enter PIN AI）→ finish。
  *
  * 平台注（非阉割）：dev 的 isNative 分支在 RN 恒为 native——subtitle 用 *Native
- * 文案、step3 直接渲染模型步（web 的占位卡分支在 RN 无意义）；RN 版
+ * 文案；RN 版
  * AmbientSourceControlsPanel / VoiceIdentitySettings 需要显式 userId（web 版
  * 自取 auth），故本组件多一个 userId prop。
  */
@@ -35,7 +35,6 @@ import { FlowBackdrop } from "../../screens/BootScreen";
 import AmbientSourceControlsPanel from "../ambient/AmbientSourceControlsPanel";
 import VoiceIdentitySettings from "../ambient/VoiceIdentitySettings";
 import DataConnections from "../connect/DataConnections";
-import AmbientModelSetupStep from "./AmbientModelSetupStep";
 import ConnectorOnboardingInsight, {
   StrongCard,
   type ConnectorInsightStatus,
@@ -47,7 +46,7 @@ interface OnboardingFlowProps {
   onComplete: () => Promise<void> | void;
 }
 
-type Step = 1 | 2 | 3;
+type Step = 1 | 2;
 type ExitStage = "flow" | "waiting" | "summary";
 
 const INSIGHT_WAIT_GRACE_MS = 800;
@@ -69,7 +68,7 @@ function StepHeader({ step, title, subtitle }: StepHeaderProps) {
   return (
     <View style={styles.stepHeader}>
       <View style={styles.stepMetaRow}>
-        <Text style={styles.stepOf}>{t("stepOf", { step, total: 3 })}</Text>
+        <Text style={styles.stepOf}>{t("stepOf", { step, total: 2 })}</Text>
         <View style={styles.progressTrack}>
           <View style={[styles.progressFill, { width: `${(step / 3) * 100}%` }]} />
         </View>
@@ -284,7 +283,7 @@ export default function OnboardingFlow({ userId, onComplete }: OnboardingFlowPro
                 <DataConnections composio={composio} />
               </ScrollView>
             </>
-          ) : !showInsightPage && step === 2 ? (
+          ) : !showInsightPage ? (
             <>
               <StepHeader step={2} title={t("step1.title")} subtitle={t("step1.subtitleNative")} />
               <ScrollView
@@ -296,13 +295,6 @@ export default function OnboardingFlow({ userId, onComplete }: OnboardingFlowPro
                 <VoiceIdentitySettings userId={userId} />
               </ScrollView>
             </>
-          ) : !showInsightPage ? (
-            <>
-              <StepHeader step={3} title={t("step2.title")} subtitle={t("step2.subtitleNative")} />
-              <ScrollView style={styles.stepScroll} showsVerticalScrollIndicator={false}>
-                <AmbientModelSetupStep />
-              </ScrollView>
-            </>
           ) : null}
         </View>
 
@@ -310,7 +302,7 @@ export default function OnboardingFlow({ userId, onComplete }: OnboardingFlowPro
           <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 24) }]}>
             {error ? <Text style={styles.errorText}>{error}</Text> : null}
             <View style={styles.footerRow}>
-              {step < 3 ? (
+              {step < 2 ? (
                 <>
                   <Pressable onPress={() => setStep((step + 1) as Step)} accessibilityRole="button">
                     {({ pressed }) => (
@@ -330,7 +322,7 @@ export default function OnboardingFlow({ userId, onComplete }: OnboardingFlowPro
                 </>
               ) : (
                 <>
-                  <Pressable onPress={() => setStep(2)} disabled={finishing} accessibilityRole="button">
+                  <Pressable onPress={() => setStep(1)} disabled={finishing} accessibilityRole="button">
                     {({ pressed }) => (
                       <View
                         style={[

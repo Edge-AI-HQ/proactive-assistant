@@ -293,65 +293,6 @@
       }
     }
   },
-  "summaryStatus": {
-    "title": "Timeline-Zusammenfassungen",
-    "description": "Zeigt, ob lokale LLM-Zusammenfassungsfenster ausstehen, verarbeitet werden oder bereits als Timeline-Karten geschrieben wurden.",
-    "runNowAria": "Timeline-Zusammenfassung jetzt ausführen",
-    "running": "Läuft",
-    "trigger": "Auslösen",
-    "refreshAria": "Status der Timeline-Zusammenfassung aktualisieren",
-    "metricStatus": "Status",
-    "metricLlmCards": "LLM-Karten",
-    "metricPending": "Ausstehende Fenster",
-    "metricFailed": "Fehlgeschlagene Versuche",
-    "loading": "Lädt",
-    "status": {
-      "error": "Fehler",
-      "summarizing": "Fasst zusammen",
-      "ready": "Bereit",
-      "waiting": "Wartet",
-      "idle": "Inaktiv"
-    },
-    "summarizedWindows": "Zusammengefasste Fenster",
-    "skippedWindows": "Übersprungene Fenster mit geringem Wert",
-    "processingWindows": "Fenster in Verarbeitung",
-    "latestCard": "Neueste Karte:",
-    "lastError": "Letzter Fehler: {{code}}",
-    "detail": "Detail: {{message}}",
-    "nativeOnly": "Die Erstellung von Timeline-Zusammenfassungen ist nur in der nativen App verfügbar.",
-    "storeReady": "bereit",
-    "storeNotReady": "nicht bereit",
-    "storeUnknown": "unbekannt",
-    "storeLine": "Store: {{mode}} · {{readiness}}",
-    "refreshedAt": " · aktualisiert {{time}}"
-  },
-  "models": {
-    "title": "Ambient-Modelle",
-    "mirror": "Spiegel",
-    "preferredMirrorAria": "Bevorzugter Spiegel",
-    "loadingManifest": "Manifest wird geladen…",
-    "listFailed": "models.list fehlgeschlagen: {{error}}",
-    "activeLabel": "{{kind}} · aktiv",
-    "activeModelAria": "Aktives {{kind}}-Modell",
-    "download": "Laden",
-    "redownload": "Erneut laden",
-    "viaMirror": "via {{mirror}}",
-    "onDisk": "gespeichert: {{size}}",
-    "deleteAria": "{{name}} löschen",
-    "manualVerify": "Manuelle Verifizierung (Runtime verifiziert bei der ersten Nutzung automatisch)",
-    "runVerify": "Verifizieren",
-    "verifying": "Wird verifiziert…",
-    "verified": "verifiziert",
-    "verifiedWithOutput": "verifiziert: {{output}}",
-    "verifyFailed": "Verifizierung fehlgeschlagen",
-    "verifyFailedWithError": "Verifizierung fehlgeschlagen: {{error}}",
-    "advanced": "Erweitert"
-  },
-  "modelRequired": {
-    "title": "On-Device-LLM erforderlich",
-    "body": "Laden Sie {{model}} herunter, um Ihre Ambient-Signale in private lokale Zusammenfassungen zu verwandeln.",
-    "download": "{{model}} laden"
-  },
   "timeline": {
     "narrativeSummary": "Ihre lokale Timeline hat heute {{count}} Ereignisse, beginnend mit {{first}}. Wichtige Momente: {{moments}}"
   },
@@ -368,13 +309,5 @@
     "placeArrival": "Ankunft am Ort",
     "placeDeparture": "Verlassen des Ortes",
     "morningHealth": "Morgendliche Gesundheit"
-  },
-  "modelNotes": {
-    "whisper-base": "Empfohlener Standard für kurze Umgebungssequenzen.",
-    "whisper-small-q5_1": "Kleines quantisiertes Modell; ausgewogen zwischen Genauigkeit und Größe.",
-    "qwen3-0_6b-q8": "Offizielles Qwen3 0.6B, nur Q8_0 wird upstream bereitgestellt.",
-    "qwen3-1_7b-q4": "Starke Qwen-Option für die Umgebungszusammenfassung.",
-    "gemma-2-2b-q4": "Unsloth-Quantisierung; stärkere lokale Zusammenfassung auf neueren iPhones.",
-    "gemma-3-4b-q4": "Hochwertigeres lokales Reasoning-Profil; benötigt mehr Speicher und Arbeitsspeicher."
   }
 }

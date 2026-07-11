@@ -21,7 +21,7 @@
     "notificationsTitle": "プッシュ通知",
     "notificationsDescription": "おやすみ時間中でも届く通知の設定",
     "ambientTitle": "アンビエント",
-    "ambientDescription": "ソースの同意・オンデバイスモデル・サマリー",
+    "ambientDescription": "ソースの許可と声の識別",
     "backToSettings": "設定に戻る"
   },
   "language": {
@@ -236,13 +236,7 @@
     "enableHint": "タップしてシステム通知を有効にします。"
   },
   "ambientPage": {
-    "pageTitle": "アンビエント",
-    "pageSubtitle": "PIN AI がローカルで観測できる範囲と、使用するオンデバイスモデルを管理します。",
-    "modelsTitle": "オンデバイスモデル",
-    "modelsDescription": "オフラインの音声認識と推論に使うオンデバイスモデルを管理します。",
-    "loadingManifest": "モデルマニフェストを読み込み中…",
-    "iosOnlyModels": "オンデバイスモデルは iOS アプリ内でのみ利用できます。Whisper / ローカル LLM プロファイルのダウンロード・検証・削除は、ネイティブビルドでこのページを開いて行ってください。",
-    "localStorageNote": "モデルはローカルに保存され、再アップロードされることはありません。ダウンロードに失敗した場合は、プラグインが自動的に予備ミラーへ切り替えます。"
+    "pageTitle": "アンビエント"
   },
   "evolution": {
     "title": "自動ドリーミング",

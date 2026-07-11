@@ -21,7 +21,7 @@
     "notificationsTitle": "推送通知",
     "notificationsDescription": "决定哪些通知能送达——包括免打扰时段",
     "ambientTitle": "环境感知",
-    "ambientDescription": "数据源授权、设备端模型、摘要",
+    "ambientDescription": "来源授权与声纹",
     "backToSettings": "返回设置"
   },
   "language": {
@@ -236,13 +236,7 @@
     "enableHint": "点击开启系统通知。"
   },
   "ambientPage": {
-    "pageTitle": "环境感知",
-    "pageSubtitle": "控制 PIN AI 可以在本地观察哪些内容，以及使用哪些设备端模型。",
-    "modelsTitle": "设备端模型",
-    "modelsDescription": "管理用于离线语音和推理的设备端模型。",
-    "loadingManifest": "正在加载模型清单…",
-    "iosOnlyModels": "设备端模型仅在 iOS 应用内可用。请在原生版本中打开本页，以下载、校验或删除 Whisper / 本地 LLM 模型档案。",
-    "localStorageNote": "模型仅存储在本地，绝不会被重新上传。下载失败时，插件会自动切换到备用镜像。"
+    "pageTitle": "环境感知"
   },
   "evolution": {
     "title": "自动梦境",

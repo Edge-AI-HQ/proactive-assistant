@@ -298,65 +298,6 @@
       }
     }
   },
-  "summaryStatus": {
-    "title": "Resúmenes de cronología",
-    "description": "Muestra si las ventanas de resumen del LLM local están pendientes, en proceso o ya escritas como tarjetas de cronología.",
-    "runNowAria": "Ejecutar resumen de cronología ahora",
-    "running": "En ejecución",
-    "trigger": "Ejecutar",
-    "refreshAria": "Actualizar estado del resumen de cronología",
-    "metricStatus": "Estado",
-    "metricLlmCards": "Tarjetas LLM",
-    "metricPending": "Ventanas pendientes",
-    "metricFailed": "Intentos fallidos",
-    "loading": "Cargando",
-    "status": {
-      "error": "Error",
-      "summarizing": "Resumiendo",
-      "ready": "Listo",
-      "waiting": "Esperando",
-      "idle": "Inactivo"
-    },
-    "summarizedWindows": "Ventanas resumidas",
-    "skippedWindows": "Ventanas de bajo valor omitidas",
-    "processingWindows": "Ventanas en proceso",
-    "latestCard": "Última tarjeta:",
-    "lastError": "Último error: {{code}}",
-    "detail": "Detalle: {{message}}",
-    "nativeOnly": "La generación de resúmenes de cronología solo está disponible en la app nativa.",
-    "storeReady": "listo",
-    "storeNotReady": "no listo",
-    "storeUnknown": "desconocido",
-    "storeLine": "Almacén: {{mode}} · {{readiness}}",
-    "refreshedAt": " · actualizado {{time}}"
-  },
-  "models": {
-    "title": "Modelos de Ambiente",
-    "mirror": "Espejo",
-    "preferredMirrorAria": "Espejo preferido",
-    "loadingManifest": "Cargando manifiesto…",
-    "listFailed": "models.list falló: {{error}}",
-    "activeLabel": "{{kind}} · activo",
-    "activeModelAria": "Modelo {{kind}} activo",
-    "download": "Descargar",
-    "redownload": "Volver a descargar",
-    "viaMirror": "vía {{mirror}}",
-    "onDisk": "en disco: {{size}}",
-    "deleteAria": "Eliminar {{name}}",
-    "manualVerify": "Verificación manual (el runtime verifica automáticamente en el primer uso)",
-    "runVerify": "Verificar",
-    "verifying": "Verificando…",
-    "verified": "verificado",
-    "verifiedWithOutput": "verificado: {{output}}",
-    "verifyFailed": "verificación fallida",
-    "verifyFailedWithError": "verificación fallida: {{error}}",
-    "advanced": "Avanzado"
-  },
-  "modelRequired": {
-    "title": "Se requiere un LLM en el dispositivo",
-    "body": "Descarga {{model}} para convertir tus señales ambientales en resúmenes locales privados.",
-    "download": "Descargar {{model}}"
-  },
   "timeline": {
     "narrativeSummary": "Tu cronología local tiene {{count}} eventos hoy, empezando con {{first}}. Momentos clave: {{moments}}"
   },
@@ -373,13 +314,5 @@
     "placeArrival": "Llegada a un lugar",
     "placeDeparture": "Salida de un lugar",
     "morningHealth": "Salud matutina"
-  },
-  "modelNotes": {
-    "whisper-base": "Predeterminado recomendado para ráfagas ambientales cortas.",
-    "whisper-small-q5_1": "Cuantización pequeña; equilibra precisión y tamaño.",
-    "qwen3-0_6b-q8": "Qwen3 0.6B oficial, solo se distribuye Q8_0 en origen.",
-    "qwen3-1_7b-q4": "Opción Qwen potente para el resumen ambiental.",
-    "gemma-2-2b-q4": "Cuantización Unsloth; resumen local más potente en iPhones recientes.",
-    "gemma-3-4b-q4": "Perfil de razonamiento local de mayor calidad; requiere más almacenamiento y memoria."
   }
 }

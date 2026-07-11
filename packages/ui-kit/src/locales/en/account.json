@@ -22,7 +22,7 @@
     "notificationsTitle": "Push Notifications",
     "notificationsDescription": "What gets through — even during quiet hours",
     "ambientTitle": "Ambient",
-    "ambientDescription": "Source consents, on-device models, summaries",
+    "ambientDescription": "Source consents and voice identity",
     "backToSettings": "Back to settings"
   },
   "language": {
@@ -237,13 +237,7 @@
     "enableHint": "Tap to enable system notifications."
   },
   "ambientPage": {
-    "pageTitle": "Ambient",
-    "pageSubtitle": "Control what PIN AI can observe locally, and which on-device models it uses.",
-    "modelsTitle": "On-device models",
-    "modelsDescription": "Manage the on-device models used for offline speech and reasoning.",
-    "loadingManifest": "Loading model manifest…",
-    "iosOnlyModels": "On-device models are only available inside the iOS app. Open this page in the native build to download, verify, or delete the Whisper / local LLM profiles.",
-    "localStorageNote": "Models are stored locally and never re-uploaded. If a download fails, the plugin automatically falls back to the secondary mirror."
+    "pageTitle": "Ambient"
   },
   "evolution": {
     "title": "Auto Evolution",

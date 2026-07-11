@@ -1,0 +1,161 @@
+---
+title: "Sunset 本地 LLM + Ambient 语音端侧化(录音不出设备)— RN 单端版"
+description: "以 Capacitor sunset 后的 RN 单端 repo 为基线:① 整删 apps/mobile/modules/ambient-models(llama.cpp 端侧 LLM,RN 里从未接通推理,删除零功能损失)+ 模型下载/管理 UI + core pipeline 的 modelBridge 机器;② 反转 ambient 语音隐私——激活休眠 SFSpeech 端侧转写(requiresOnDeviceRecognition 硬保证),掐断 ambient WAV 上传,只有文本上云。保留 Silero VAD、SoundAnalysis、VoicePcmStream(主聊天 ByteDance 流式)。实施中连带删除零调用方的 summary 机器(含后端 /ambient/summary 死 endpoint)。"
+---
+
+# Sunset 本地 LLM + Ambient 语音端侧化(RN 单端版)
+
+状态:**PR1(删端侧 LLM)已实施**(2026-07-11,见文末「实施状态」);PR2(语音端侧化)待决策 E/F 确认后开工。本文是该项工作的设计 + 实施 SSOT。
+
+版本历史:v1(2026-06-21)基于 Capacitor + RN 双端基线;v2(2026-07-07)加入语音隐私反转(端侧转文本);**v3(2026-07-11)Capacitor 已 sunset(#256 删 proactive-ai-frontend + capacitor-plugins,RN 接管 iOS 交付),按 RN 单端 repo 重新定标——删除范围收敛到一套 native module + 一个 app,且删 LLM 变成零功能损失**。
+
+## 动机(为什么)
+
+**① 删掉「端上跑大模型」的死重。** RN 迁移(#221/#251 等)把 Capacitor 时代的端侧 LLM 栈整套搬进了 `apps/mobile/modules/ambient-models/`(ModelManifest/Downloader/Store/Verifier + LlamaTextGenerationEngine + 下载管理 UI + onboarding 下载步),**但 llama.swift SPM 从未接线**——`AmbientModels.podspec:17-19` 注释明说推理接线留给「Milestone C」,`#if canImport(LlamaSwift)` 恒 false。后果:**当前生产 RN 里用户能下载 0.6–2.6GB GGUF,但 LLM 推理永远不可用**——下载功能是纯死重(白占用户存储),本地 summary 桥是显式 `native_unavailable` stub(`apps/mobile/src/ambient/summary-bridges.ts:6-19`)。删除 = 零功能损失 + 用户存储回收。
+
+**② 反转 ambient 语音隐私(2026-06-21 用户需求,方向不变)。** 用户要求:被动 ambient 录音不允许上云,必须端侧转文本、只有文本上云。当前 RN 现状仍相反:ambient 整段 WAV 上传 → 云端 `gpt-4o-transcribe(-diarize)`(`apps/mobile/src/ambient/sources/sound-classifier.ts:317,334,344`)。休眠的 SFSpeech 端侧转写(含 `requiresOnDeviceRecognition` 硬保证)是激活目标。
+
+**核心约束:不影响当前功能形态。** 采集 / Silero VAD / SoundAnalysis / 录音存盘 / `captureReady` / 云端 summary / 主聊天语音全部保留。
+
+## 现状盘点(2026-07-11 基线,全代码核实)
+
+**repo 结构**:Capacitor 已删(#256,2026-07-09);RN(apps/mobile)已接管 iOS 交付(TestFlight,dev push 自动构建 + prod 手动 dispatch,`build-rn-ios.yml`);on-device 相关只剩一套 native module(`apps/mobile/modules/`:`ambient-audio` / `ambient-models` / `ambient-visit` / `airplay-route`)。
+
+**端上模型清单**:
+
+| 模块 | 是什么 | 状态 | 处置 |
+|---|---|---|---|
+| `modules/ambient-models/` | llama.cpp 端侧 LLM 整套(manifest/下载/存储/校验/推理引擎) | **推理从未接线**(LlamaSwift SPM 未挂,podspec:17-19);下载/删除/列表可用 = 死重 | **整删** |
+| `modules/ambient-audio/` Silero VAD | FluidAudio CoreML/ANE 语音门控(`app.config.js:80-81` extraPods) | 在用,录音总闸 | 保留 |
+| `modules/ambient-audio/` SoundAnalysis | Apple 系统声音分类器 | 在用,场景标签 | 保留 |
+| `modules/ambient-audio/` SFSpeech 段 | 端侧转写完整实现 | 休眠(`AudioStreamManager.swift:22` flag false) | **激活**(PR2) |
+| `modules/ambient-audio/CloudTranscriptionWorker.swift` | native 直连云转写 | 休眠(`:24` flag false) | 删(PR2) |
+| `modules/ambient-audio/VoicePcmStream.swift` | 主聊天 dictation 独立 PCM 流 → `/voice/transcribe-stream`(ByteDance) | 在用 | 保留(决策 E) |
+
+**语音链路(音频出设备现状)**:
+
+| 链路 | 传出设备的数据 | 云端处理 | 处置 |
+|---|---|---|---|
+| ambient 被动录音 | 整段 WAV(`sound-classifier.ts:317` readCapture → `:334/:338/:344` POST `/voice/transcribe(-diarized)`) | LiteLLM → `gpt-4o-transcribe(-diarize)` | **掐断,改端侧转写**(PR2) |
+| 主聊天语音输入 | PCM 实时流(VoicePcmStream → WS `/voice/transcribe-stream`) | ByteDance 流式 ASR | 保留(决策 E) |
+| 声纹 reference | 16kHz WAV → Supabase Storage + 每次 diarize 发 OpenAI `known_speaker_references[]` | OpenAI self 匹配 | 随 diarize 退役(决策 F) |
+
+**后端**(#197 重构后):voice 域 `backend/services/api/src/pinai_api/domains/voice/`(`voice_transcription.py:17-18` 两个 gpt-4o 模型、`:245` reference 发 OpenAI);云端 ambient summary `domains/connector/device/ambient_summary.py` + `ambient_ui.py`(文本进文本出,健在)。**后端零本地模型代码**(实施时发现 `/ambient/summary` 零调用方随之删除,见文末「实施状态」)。
+
+## 范围决策
+
+| # | 决策 | v3 状态 |
+|---|---|---|
+| 删除范围 | `modules/ambient-models/` 整套 + 模型 UI + core modelBridge 机器 + SPM/Pod 残留 | 已拍板 |
+| **A** | 隐私锁时不出 LLM summary 卡 | **已是现实**(RN 本地 LLM 从未可用,锁定态本就无本地兜底);PR1 把 `local_only`/锁定分支收敛为显式 skip |
+| **B** | action candidate / 窗口级 batch 不在云端补 | **已是现实**(RN 从未产出过,删除零损失,无需再权衡) |
+| **C** | 删 onboarding 模型下载步 | 已拍板(RN OnboardingFlow 的 SetupStep 步整删,步数收敛) |
+| **D** | 清理设备已下载 GGUF | 已拍板。TestFlight 用户自 2026-07-09 起可能下过;一次性幂等清理钩子放 `AmbientAudioModule`(硬编码 `AmbientModels` 路径,不依赖被删的 ModelStore;**FluidAudio 缓存不清**,VAD 在用) |
+| **E(推荐默认,待确认)** | 「录音不上云」范围 = 仅 ambient 被动录音;主聊天 dictation 保留 ByteDance(VoicePcmStream 本就与 ambient 采集隔离,注释明言 never writes WAV captures) | 待用户确认 |
+| **F(推荐默认,待确认)** | diarize:Phase 1 砍(ambient 纯文本),声纹录入/上传退役(`VoiceIdentitySettings` 挂载于 OnboardingFlow/SettingScreen/DeviceTimeline);Phase 2 FluidAudio 端侧 diarization + 声纹本地匹配重建 | 待用户确认 |
+
+### 保留 Silero VAD 的依据(不变)
+
+唯一消费者 `AudioStreamManager.swift:35`,被动录音语音门控;~2MB 运行时自动缓存,无 UI 无管理;删它退化 RMS 门控 → 误触发/垃圾录音上涨。**语音端侧化后更重要**:它决定 SFSpeech 的工作量与耗电。
+
+## 关键技术事实(行号为 2026-07-11 RN 代码)
+
+1. **ambient-models 自包含**:JS 消费者仅 5 个文件(`summary-bridges.ts` / `models-selection.ts` / `timeline/models.ts` / `AmbientModelSetupStep.tsx` / `AmbientModelsPanel.tsx`),全在删除/改造范围;native 侧是独立 Expo module(pod `AmbientModels`),无其它模块 import。删后编译无悬空引用。
+2. **core pipeline 的 modelBridge 机器现在只有 RN 一个消费者**(`apps/mobile/src/ambient/timeline/pipeline.ts`;Capacitor 消费者已随 #256 消失),且该路径在 RN 从未成功产出(LLM 不可用 → `!result.ok` 分支)。因此 v3 不再用 v2 的「注入 Noop」最小方案,**直接删 core 的 modelBridge 机器**:`pipeline.ts:59,66` bridge 参数、`:158-244` LLM 生成分支、`pipeline-models.ts` 的 LLM bridge 类型;窗口记账(attempt/backoff)与 LLM 解耦的部分实施时以代码为准决定去留。`pipeline.test.ts`(1401 行)随之重写(最大测试改动面)。
+3. **SFSpeech 休眠实现具备硬隐私保证**:`modules/ambient-audio/ios/AudioStreamManager.swift:872` `request.requiresOnDeviceRecognition = requireOnDevice`;激活时恒 true——locale 不支持端侧就不出转写,**绝不回退云端**。多 locale(zh/en)候选、置信度、分块(`:747` 起)齐备。
+4. **端侧转写复活管线 native 侧现成**:`AmbientAudioModule.swift:41` 已暴露 `transcriptReady` 事件、`:104` `drainPendingTranscripts`;facade 类型 `TranscriptProvider` 含 `local_speech`(`modules/ambient-audio/index.ts:113` 事件已注册)。PR2 只需 JS 侧消费 + 掐断 WAV 上传,信号 schema(`session_summary`)不变。
+5. **`local_llm` 枚举值保留**:历史卡片(Capacitor 时代真产出过并已上云)用它,下游读取/映射不动,只删产出路径。
+6. **VoicePcmStream 与 ambient 物理隔离**(文件头注释:chat dictation 持 external-mic lease 时 ambient 被抑制,独立 AVAudioEngine,never writes WAV captures)——决策 E 的「主聊天保留云端流式」不与 ambient 隐私目标冲突。
+7. **质量代价(不变,诚实声明)**:中英混说 SFSpeech < `gpt-4o-transcribe`;Phase 2 切 iOS 26 SpeechAnalyzer/SpeechTranscriber 缓解;隐私 > 质量是明确取舍。
+8. **成本收益**:ambient 每个 speech burst 省一次 `gpt-4o-transcribe(-diarize)`;下载死重回收(用户侧最多 2.6GB/模型)。
+
+## 删 / 改 / 留 总表
+
+**整删**
+- `apps/mobile/modules/ambient-models/`(整个 Expo module:index.ts / package.json / expo-module.config.json / podspec / AmbientModelsModule.swift / ModelManifest / ModelDownloader / ModelStore / ModelVerifier / LlamaTextGenerationEngine)
+- UI:`src/components/ambient/AmbientModelsPanel.tsx`、`AmbientModelRequiredCard.tsx`、`src/components/onboarding/AmbientModelSetupStep.tsx`
+- 服务:`src/ambient/models-selection.ts`、`models-recommendation.ts`、`src/ambient/timeline/models.ts`
+- PR2:`modules/ambient-audio/ios/CloudTranscriptionWorker.swift`;声纹 `src/components/ambient/VoiceIdentitySettings.tsx`(决策 F)
+- 对应测试文件
+
+**文件内切割/改造**
+- 挂载点:`SettingScreen.tsx:45,414`(Panel section)、`AmbientScreen.tsx:67,138-149,463-464`(RequiredCard + `onOpenModelSetup` modal 接线)、`OnboardingFlow.tsx`(SetupStep 步整删,步数收敛;决策 F 时 step2 的 VoiceIdentitySettings 一并摘)
+- `src/ambient/summary-bridges.ts`:删 local bridge 与 fallback,只留 cloud;`summary-preference.ts`:删 `local_only`,锁定态显式 skip
+- `packages/core/src/domain/ambient/`:`pipeline.ts` 删 modelBridge 参数与 LLM 分支、`pipeline-models.ts` 删 LLM bridge 类型、`pipeline.test.ts` 重写(见技术事实 2)
+- `modules/ambient-audio/ios/AudioStreamManager.swift`(PR2):删 `nativeCloudRefinementEnabled` flag + `cloudWorker` + cloud refinement 段;**激活** SFSpeech(删 `localSpeechTranscriptionEnabled` flag 改常开,`requireOnDevice` 恒 true)
+- `src/ambient/sources/sound-classifier.ts`(PR2):删 captureReady→WAV 上传→云转写调用(`:317-344`),改消费 `transcriptReady`(provider=local_speech)→ `session_summary` 推送
+- 注释级:`DataConnections.tsx:9` / `AutoGenerateSettings.tsx:6` 两处「AmbientModelsPanel Select 同款」pattern 引用注释改词(组件删除后指涉失效)
+
+**保留(一行不动)**
+- Silero VAD(`SileroVadGate`/`SileroChunkBuffer` + FluidAudio extraPod)、SoundAnalysis、被动采集 + 录音存盘 + `captureReady`、WAV 本地 retention、`ambient-visit`/`airplay-route` 模块
+- `VoicePcmStream.swift` + 主聊天语音链路(决策 E)
+- 云端 summary(`/ambient/summary`)、`/api/devices/ingest` 文本信号链路、端上本地 timeline store
+- 后端全部(`/voice/transcribe*` 留给主聊天;ambient diarize 无调用方后是否摘 endpoint 属后续清理)
+
+## 影响分析
+
+**零功能损失(v3 比 v2 更干净)**:RN 里 LLM 推理从未可用——timeline 本就全靠云端 summary 出卡,action candidate 从未产出,隐私锁本就无本地兜底。删除只回收死重。
+
+**变好的**:① ambient 录音不再出设备(PR2,Apple API 硬保证);② 隐私锁期间转写照常本地进行,文本排队解锁补传;③ 省 `gpt-4o-transcribe(-diarize)` 持续成本;④ 用户不再被引导下载几 GB 永远跑不起来的模型。
+
+**变差的(接受)**:① 中英混说转写质量下降(PR2 起,Phase 2 SpeechAnalyzer 缓解);② ambient 暂无 speaker 标签(决策 F,Phase 2 补)。
+
+## 实施计划(2 PR,单端无 ×2 同步)
+
+> 一个 phase 一个 PR;PR 内 commit 分粒度。PR1 / PR2 相互独立可并行,建议 PR1 先行(纯删除,零风险)。
+
+### PR1 — 删 on-device LLM(RN + core)
+整删 `modules/ambient-models/` + 模型 UI 三组件 + 服务三文件 + 挂载点改造 + summary-bridges/preference 收敛 + core modelBridge 机器删除 + `pipeline.test.ts` 重写 + GGUF 清理钩子(决策 D)+ 两处注释改词。
+- 验证:`cd apps/mobile && npm run type-check`;`npm run check:packages`(core 改动);`make rn SIM=1` 走查 onboarding(无模型步)/ Ambient 页(无 RequiredCard)/ Settings(无模型 section)/ timeline 云端 summary 照常;后端零改动。
+
+### PR2 — ambient 语音端侧化(决策 E/F 确认后)
+`AudioStreamManager.swift` 手术(激活 SFSpeech + 删 CloudTranscriptionWorker/cloud refinement)+ `sound-classifier.ts` 切 `transcriptReady` 消费、删 WAV 上传 + 声纹/diarize 退役(`VoiceIdentitySettings` 三挂载点 + ambient 的 `transcribeVoiceFileDiarized` 调用)。
+- 验证:真机——飞行模式说话 → 本地出转写(`requiresOnDeviceRecognition` 生效);联网后仅文本上云落 `pai_personal_signals` → 云端 summary 出卡;后端日志确认 ambient 路径零音频 POST;主聊天 dictation(ByteDance)不受影响。
+
+### 收尾(随各 PR)
+- 文档标 superseded:`docs/feat/Ambient/2026-05-18-on-device-timeline-summaries.md`、`2026-05-15-ambient-timeline-on-device-agent-handoff`、`2026-05-11-Reegan-系统设计`(端上模型部分)、`2026-05-14-ambient-v3-ui-integration`(模型部分)、`2026-06-09-ambient-mixed-language-transcription-quality`(云端混语优化随 ambient 音频上传失效,PR2)
+- 同步 `docs/modules/data-connectors.mdx`(端侧模型/转写段);`apps/mobile/README.md` 迁移台账标注 ambient-models 已 sunset(Milestone C 取消)
+
+## Phase 2(独立后续,不阻塞)
+
+1. **iOS 26 SpeechAnalyzer/SpeechTranscriber 为主引擎**(端侧,长音频/混语质量显著好于 SFSpeech),运行时检测,老系统回落 SFSpeech。
+2. **FluidAudio 端侧 diarization**:恢复 self/speaker 标签,声纹 reference 端侧算 embedding 匹配(不再上传 Supabase/OpenAI);届时评估恢复声纹录入 UI。
+
+## 测试 / CI
+
+- `pipeline.test.ts`(1401 行)重写为无 modelBridge 形态——最大测试改动面。
+- RN 组件测试:删除三组件对应测试;`AmbientScreen`/`OnboardingFlow`/`SettingScreen` 相关断言更新。⚠️ 若存在源码断言测试(readFileSync+正则锁结构),`tsc` 抓不到失配,改完必须跑 vitest。
+- PR2:`sound-classifier` 测试改转写来源;Swift 侧无独立测试工程(RN module),真机验收为准。
+- 门:`npm run check:packages` + `cd apps/mobile && npm run type-check` + vitest;`make rn SIM=1` 真机/模拟器走查。
+
+## 风险与执行顺序
+
+1. `AudioStreamManager.swift` 手术(PR2)是最高风险点(同文件删 CloudWorker / 留 VAD / 激活 SFSpeech 交织);准则:cloud refinement 段删、SFSpeech 段激活、capture/VAD 编排不动。v3 只有一份文件,无 ×2 同步负担。
+2. SFSpeech 中英混说质量与 locale 端侧支持需真机验收;`requireOnDevice=true` 下不支持的 locale 无转写。
+3. core pipeline 机器删除比 v2 Noop 方案改动大,以「RN 是唯一消费者且路径从未成功」为依据;实施时若发现窗口记账被他处依赖,记账保留、只删桥。
+4. `local_llm` 枚举与下游读取保留(历史数据)。
+5. GGUF 清理钩子别漏(TestFlight 用户可能已下)。
+6. 顺序:PR1(纯删除先行)→ PR2(E/F 确认后);两者代码面不重叠可并行。
+
+## 实施状态(2026-07-11,PR1)
+
+PR1 已实施(分支 `feat/sunset-on-device-llm`)。实施中发现的**范围扩大**(比 v3 设计更干净,均为「删干净」方向):
+
+- **整套 summary 机器随之删除(含云端)**:实施时核实「方案 A(2026-07-01)」已把 RN 的 15min scheduled summary / context snapshot 两个定时器注释停掉,`runScheduledTimelineSummary` 是无调用方的恢复口 → 它是 summary 桥/偏好/core 调度器的唯一消费者 → 连锁整删:RN `summary-bridges.ts` / `summary-preference.ts`、core `scheduled-summary.ts` / `summary-scheduler.ts` / `summary-preference.ts` / `summary-context.ts`(+各测试)、core `api/ambient.ts`(`summarizeAmbientWithCloud`)、store 层 scheduler state 表面(types/Memory/Sqlite 三处 + 测试)。
+- **后端从「零改动」变为「删除死 endpoint」**:`POST /api/ambient/summary` 前端零调用方 → 删 `domains/connector/device/ambient_ui.py` + `ambient_summary.py` + `tests/web/routes/test_ambient_summary.py` + `app.py` 注册两行。**当前事实:前端不存在任何 summary 出卡路径,聚合/摘要完全由后端 memory 架构(L0→projector→L1 events)承担**——这是方案 A 拍板的终态,本 PR 只是删掉了它留下的死代码。
+- **`AmbientTimelineSummaryStatusPanel`(设置页③块)整删**:它是「本地 LLM 摘要管线状态 + Trigger」调试面板,管线删除后无意义;RN `timeline/pipeline.ts`(factory + refreshTimeline)一并删,`timeline/index.ts` 收敛为纯 store 读取面。
+- **core pipeline 切割落地**:`processPendingWindows` + 5 个私有 helper + `AmbientTimelineProcessOptions` + makeEvent 的 LLM 参数全删;`pipeline.test.ts` 1401→17 个 rule/window 测试(删 13 个 LLM 测试),全绿。
+- **locale 清理(8 语言)**:onboarding `step2`/`model` 块、ambient `models`/`modelRequired`/`summaryStatus`/`modelNotes` 块、account `ambientPage` 模型 key;`panel.ambientDescription` 改写为「来源授权与声纹」。`summaryLabel.onDevice/cloud` **保留**(历史卡片标签,`local_llm` 枚举保留原则)。
+- **GGUF 清理钩子**:`AmbientAudioModule.swift` OnCreate 幂等删 `Documents/AmbientModels`(成功才置 flag,失败下次重试;FluidAudio 缓存不清)。
+
+**验证**:apps/mobile tsc 全绿(0 error);`npm run check:packages` 全绿(lint + core/state/ui-kit/ui-web 类型 + 221 测试);apps/web / apps/desktop tsc 全绿;backend ruff + format + mypy(240 文件)全绿,`create_app()` 冒烟 140 routes,`tests/web/routes` 128 passed / 88 skipped(无 TEST_DATABASE_URL 的既有基线)。真机走查(onboarding 两步/Ambient 页/Settings)待 TestFlight 构建验收。
+
+**遗留决策点(不在本 PR)**:
+1. **订阅价格页的本地模型营销文案**:`apps/mobile/src/components/account/plans.ts` + `packages/ui-web/src/account/PlanPaymentForm.tsx` 仍展示「Local · Gemma 2B / Llama 3 8B / 70B」档位 chip——模型删除后该文案失实,但改价格页是产品文案决策,待拍板(删 chip / 换文案)。
+2. PR2(语音端侧化)按 v3 设计待 E/F 确认。
+
+## 相关 plan / 模块
+
+- 前置事实:[后端重构](./2026-06-21-backend-rearchitecture)(#197 三 service 拆分)、Capacitor sunset(#256,无独立 plan,见 AGENTS.md)、[Proactive Agent Sunset](./2026-06-14-proactive-agent-sunset)(#151 已实施,正交)
+- 被本方案 supersede(实施时标注):[Ambient 中英混合转录质量优化](./2026-06-09-ambient-mixed-language-transcription-quality)、[Ambient Voice Identity + Diarization](./2026-05-27-ambient-voice-identity-diarization)(随决策 F 退役,Phase 2 端侧重建)
+- 实施后同步模块文档:`docs/modules/data-connectors.mdx`

@@ -72,11 +72,3 @@ export function ambientStatusSnapshot(): RuntimeStatus {
 export function subscribeAmbientStatus(_listener: () => void): () => void {
   return () => {};
 }
-
-export async function runScheduledTimelineSummary(_nowOverride?: Date): Promise<void> {
-  // Ambient capture is native-only.
-}
-
-export async function runScheduledContextSnapshot(): Promise<void> {
-  // Ambient capture is native-only.
-}

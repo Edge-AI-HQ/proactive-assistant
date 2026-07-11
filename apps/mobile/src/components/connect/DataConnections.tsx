@@ -6,7 +6,7 @@
  * 介质映射（web → RN）：
  * - AnimatePresence height 折叠 → LayoutAnimation（本项目既定）。
  * - catalog 类目 `<select>`（dev = WKWebView 自动系统 UIMenu）→
- *   `@react-native-menu/menu` MenuView（AmbientModelsPanel Select 同款系统菜单）。
+ *   `@react-native-menu/menu` MenuView（系统 UIMenu，本项目 Select 既定做法）。
  * - OAuth popup（dev = @capacitor/browser）→ expo-web-browser（./oauth-surface）。
  * - custom MCP 居中 dialog → RN Modal（fade + 卡片 entering y18/scale.98/180ms 对齐
  *   web motion）。
@@ -399,7 +399,7 @@ function SubDisconnectButton({
   );
 }
 
-/** catalog 类目下拉——dev `<select>` 的系统 UIMenu 等价（AmbientModelsPanel Select 同款模式），
+/** catalog 类目下拉——dev `<select>` 的系统 UIMenu 等价（本项目 Select 既定模式），
  *  触发框逐字对齐 web select className：rounded-xl(12) border-fg10 bg-fg3 px-2 py-2 text-xs。 */
 function CatalogCategorySelect({
   value,

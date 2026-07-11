@@ -18,7 +18,6 @@ export { proxySSE, proxyGetSSE } from "./transport/sse";
 
 export * from "./api/account";
 export * from "./api/agent-runs";
-export * from "./api/ambient";
 export * from "./api/cards";
 export * from "./api/composio";
 export * from "./api/conversation";

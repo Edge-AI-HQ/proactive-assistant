@@ -15,10 +15,6 @@ import {
   effectiveGenerationSource,
   timelineVisiblePayloadChanged,
 } from "./timeline-store";
-import {
-  DEFAULT_AMBIENT_SUMMARY_SCHEDULER_STATE,
-  type AmbientSummarySchedulerState,
-} from "./summary-scheduler";
 import type {
   AmbientActionBasket,
   AmbientCandidateWindow,
@@ -34,7 +30,6 @@ import type {
   TimelineStoreStatus,
 } from "./types";
 
-const SUMMARY_SCHEDULER_STATE_KEY = "ambient_summary_scheduler_state_v1";
 
 const CREATE_STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS ambient_raw_events (
@@ -592,22 +587,6 @@ export class SqliteTimelineStore implements AmbientTimelineStore {
     );
   }
 
-  async getSummarySchedulerState(): Promise<AmbientSummarySchedulerState> {
-    await this.init();
-    const rows = await this.db.query(
-      "SELECT value FROM ambient_timeline_meta WHERE key = ? LIMIT 1",
-      [SUMMARY_SCHEDULER_STATE_KEY],
-    );
-    return parseSummarySchedulerState(rows[0]?.value);
-  }
-
-  async setSummarySchedulerState(state: AmbientSummarySchedulerState): Promise<void> {
-    await this.init();
-    await this.db.run(
-      "INSERT OR REPLACE INTO ambient_timeline_meta (key, value) VALUES (?, ?)",
-      [SUMMARY_SCHEDULER_STATE_KEY, JSON.stringify(state)],
-    );
-  }
 }
 
 // ── row mappers + 解析助手（逐字照搬 web store.ts，纯函数）──
@@ -848,22 +827,3 @@ function describeError(err: unknown): string {
   }
 }
 
-function parseSummarySchedulerState(value: unknown): AmbientSummarySchedulerState {
-  if (typeof value !== "string" || value.length === 0) {
-    return DEFAULT_AMBIENT_SUMMARY_SCHEDULER_STATE;
-  }
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return DEFAULT_AMBIENT_SUMMARY_SCHEDULER_STATE;
-    }
-    const row = parsed as Partial<AmbientSummarySchedulerState>;
-    return {
-      ...DEFAULT_AMBIENT_SUMMARY_SCHEDULER_STATE,
-      ...row,
-      retryCount: typeof row.retryCount === "number" ? row.retryCount : 0,
-    };
-  } catch {
-    return DEFAULT_AMBIENT_SUMMARY_SCHEDULER_STATE;
-  }
-}

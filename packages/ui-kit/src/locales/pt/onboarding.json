@@ -9,12 +9,6 @@
     "subtitleNative": "Ative as fontes de ambiente e grave uma breve amostra da sua voz. Você pode alterar as duas opções a qualquer momento na Central de Controle.",
     "subtitleWeb": "Os sensores de ambiente funcionam no app para iOS. Você pode pular esta etapa aqui e concluir a configuração depois pelo celular."
   },
-  "step2": {
-    "title": "Modelo de IA no dispositivo",
-    "subtitleNative": "Baixe o Gemma 2B para que o Ambient resuma seu contexto local de forma privada neste dispositivo.",
-    "subtitleWeb": "Os resumos locais do Ambient funcionam no app para iOS. Você pode pular esta etapa aqui e baixar o modelo pelo celular.",
-    "webPlaceholder": "A configuração do Gemma 2B está disponível no app nativo. Continue aqui e conclua a configuração depois no Ambient pelo celular."
-  },
   "step3": {
     "title": "Conecte seus dados",
     "subtitle": "Escolha os apps que o PIN AI pode ler. Você pode conectar mais (ou desconectar) a qualquer momento na Central de Controle.",
@@ -42,14 +36,5 @@
         "detail": "Transformando a primeira coleta em um perfil curto para você revisar."
       }
     }
-  },
-  "model": {
-    "recommendedBadge": "Recomendado",
-    "description": "Baixe o Gemma 2B para transformar seus sinais de movimento, localização, voz, saúde e som em resumos locais privados.",
-    "downloading": "Baixando {{percent}}",
-    "use": "Usar Gemma 2B",
-    "download": "Baixar Gemma 2B",
-    "skipNote": "Você pode pular esta etapa e baixar depois no Ambient. Sem um LLM no dispositivo, o Ambient coleta eventos, mas não cria cards de resumo locais.",
-    "verificationFailed": "Falha na verificação do modelo."
   }
 }

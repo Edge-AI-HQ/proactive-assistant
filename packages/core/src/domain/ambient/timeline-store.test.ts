@@ -7,7 +7,6 @@ import {
   type AmbientRawEvent,
   type AmbientTimelineEvent,
 } from "./types";
-import { DEFAULT_AMBIENT_SUMMARY_SCHEDULER_STATE } from "./summary-scheduler";
 
 function rawEvent(overrides: Partial<AmbientRawEvent> = {}): AmbientRawEvent {
   return {
@@ -211,24 +210,5 @@ describe("MemoryTimelineStore", () => {
     const byId = Object.fromEntries(rows.map((row) => [row.id, row.syncStatus]));
     expect(byId.evt_1).toBe("synced");
     expect(byId.evt_2).toBe("local_only");
-  });
-
-  test("persists summary scheduler state, defaulting before any write", async () => {
-    const store = new MemoryTimelineStore();
-
-    expect(await store.getSummarySchedulerState()).toEqual(
-      DEFAULT_AMBIENT_SUMMARY_SCHEDULER_STATE,
-    );
-
-    await store.setSummarySchedulerState({
-      ...DEFAULT_AMBIENT_SUMMARY_SCHEDULER_STATE,
-      lastSummarySuccessAt: "2026-05-19T10:00:00.000Z",
-      retryCount: 2,
-    });
-
-    expect(await store.getSummarySchedulerState()).toMatchObject({
-      lastSummarySuccessAt: "2026-05-19T10:00:00.000Z",
-      retryCount: 2,
-    });
   });
 });

@@ -135,7 +135,6 @@ function AppShell({
   const openConnect = useCallback(() => navigate("connect"), [navigate]);
   const askPinAi = useCallback(() => setChatOpen(true), []);
   const reviewPermissions = useCallback(() => openSettingPage("ambient"), [openSettingPage]);
-  const openModelSetup = reviewPermissions;
 
   // web AppLayout handleDeleteAccount 同构：删账链路（Composio→LiteLLM→Stripe→
   // Browserbase→Storage→Supabase Auth→DB CASCADE）走 core deleteAccount；外部非
@@ -203,7 +202,6 @@ function AppShell({
                 userId={user.id}
                 onOpenConnect={openConnect}
                 onOpenChat={openCardChat}
-                onOpenModelSetup={openModelSetup}
               />
             </KeepAlivePage>
           ) : null}

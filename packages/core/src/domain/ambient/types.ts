@@ -1,4 +1,3 @@
-import type { AmbientSummarySchedulerState } from "./summary-scheduler";
 
 export const AMBIENT_TIMELINE_KIND = "ambient.timeline_event";
 export const AMBIENT_CANDIDATE_WINDOW_KIND = "ambient.candidate_window";
@@ -228,6 +227,4 @@ export interface AmbientTimelineStore {
   ): Promise<AmbientTimelineEvent[]>;
   dismissTimelineEvent(id: string, at?: string): Promise<void>;
   markTimelineEventsSynced(ids: string[], at?: string): Promise<void>;
-  getSummarySchedulerState(): Promise<AmbientSummarySchedulerState>;
-  setSummarySchedulerState(state: AmbientSummarySchedulerState): Promise<void>;
 }

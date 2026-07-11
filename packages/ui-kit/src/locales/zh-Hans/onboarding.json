@@ -9,25 +9,10 @@
     "subtitleNative": "开启环境感知数据来源，并录一小段你自己的声音样本。两者都可以随时在控制中心修改。",
     "subtitleWeb": "环境感知传感器在 iOS 应用上运行。这里可以先跳过，稍后在手机上完成环境感知设置。"
   },
-  "step2": {
-    "title": "设备端 AI 模型",
-    "subtitleNative": "下载 Gemma 2B，让环境感知在这台设备上私密地总结你的本地情境。",
-    "subtitleWeb": "本地环境感知摘要在 iOS 应用上运行。这里可以先跳过，稍后在手机上下载模型。",
-    "webPlaceholder": "Gemma 2B 需要在原生应用中设置。可以先继续，稍后在手机上的环境感知页里完成设置。"
-  },
   "step3": {
     "title": "连接你的数据",
     "subtitle": "选择允许 PIN AI 读取的应用。之后随时可以在控制中心连接更多或断开连接。",
     "subtitleConnect": "选择允许 PIN AI 读取的应用。我们会在你继续设置的同时，把首次拉取的数据汇总成摘要。"
-  },
-  "model": {
-    "recommendedBadge": "推荐",
-    "description": "下载 Gemma 2B，把你的运动、位置、语音、健康和声音信号转化为私密的本地摘要。",
-    "downloading": "正在下载 {{percent}}",
-    "use": "使用 Gemma 2B",
-    "download": "下载 Gemma 2B",
-    "skipNote": "可以先跳过，稍后在环境感知页里下载。没有设备端 LLM 时，环境感知只能收集事件，无法生成本地摘要卡片。",
-    "verificationFailed": "模型校验失败。"
   },
   "insightWait": {
     "eyebrow": "连接器预览",

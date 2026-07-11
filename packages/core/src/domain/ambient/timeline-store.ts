@@ -21,10 +21,6 @@ import type {
   TimelineStoreStatus,
 } from "./types";
 import { jsonCloneRecord } from "./utils";
-import {
-  DEFAULT_AMBIENT_SUMMARY_SCHEDULER_STATE,
-  type AmbientSummarySchedulerState,
-} from "./summary-scheduler";
 
 export class MemoryTimelineStore implements AmbientTimelineStore {
   readonly kind = "memory" as const;
@@ -33,7 +29,6 @@ export class MemoryTimelineStore implements AmbientTimelineStore {
   private events = new Map<string, AmbientTimelineEvent>();
   private ready = false;
   private lastError: string | null = null;
-  private summarySchedulerState: AmbientSummarySchedulerState | null = null;
 
   async init(): Promise<void> {
     this.ready = true;
@@ -230,16 +225,6 @@ export class MemoryTimelineStore implements AmbientTimelineStore {
     }
   }
 
-  async getSummarySchedulerState(): Promise<AmbientSummarySchedulerState> {
-    await this.initIfNeeded();
-    return cloneSummarySchedulerState(this.summarySchedulerState ?? DEFAULT_AMBIENT_SUMMARY_SCHEDULER_STATE);
-  }
-
-  async setSummarySchedulerState(state: AmbientSummarySchedulerState): Promise<void> {
-    await this.initIfNeeded();
-    this.summarySchedulerState = cloneSummarySchedulerState(state);
-  }
-
   private async initIfNeeded(): Promise<void> {
     if (!this.ready) await this.init();
   }
@@ -327,8 +312,4 @@ export function timelineVisiblePayloadChanged(
     || existing.salience !== next.salience
     || JSON.stringify(existing.tags) !== JSON.stringify(next.tags)
     || JSON.stringify(existing.sourceTypes) !== JSON.stringify(next.sourceTypes);
-}
-
-function cloneSummarySchedulerState(state: AmbientSummarySchedulerState): AmbientSummarySchedulerState {
-  return { ...state };
 }

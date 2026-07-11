@@ -41,8 +41,6 @@ import PageHeader from "../components/app/PageHeader";
 import SwipeBackLayer from "../components/app/SwipeBackLayer";
 import AmbientSourceControlsPanel from "../components/ambient/AmbientSourceControlsPanel";
 import VoiceIdentitySettings from "../components/ambient/VoiceIdentitySettings";
-import AmbientTimelineSummaryStatusPanel from "../components/ambient/AmbientTimelineSummaryStatusPanel";
-import AmbientModelsPanel from "../components/ambient/AmbientModelsPanel";
 import { SubscriptionPanel } from "../components/account/SubscriptionPanel";
 import AutoEvolutionSettings from "../components/account/AutoEvolutionSettings";
 import AutoGenerateSettings from "../components/account/AutoGenerateSettings";
@@ -410,8 +408,6 @@ function SettingScreen({
               <Animated.View entering={FadeIn.duration(300)}>
                 <AmbientSourceControlsPanel userId={user.id ?? null} />
                 <VoiceIdentitySettings userId={user.id ?? null} />
-                <AmbientTimelineSummaryStatusPanel />
-                <AmbientModelsPanel />
               </Animated.View>
             ) : null}
           </ScrollView>

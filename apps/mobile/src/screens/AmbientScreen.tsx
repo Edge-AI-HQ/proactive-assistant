@@ -64,7 +64,6 @@ import { useAmbientTimeline } from "../hooks/useAmbientTimeline";
 import { useAmbientLiveSession } from "../hooks/useAmbientLiveSession";
 import LiveSessionCard from "../components/ambient/LiveSessionCard";
 import LiveFullscreen from "../components/ambient/LiveFullscreen";
-import AmbientModelRequiredCard from "../components/ambient/AmbientModelRequiredCard";
 import type { LiveSession } from "../ambient/live/live-session";
 import {
   latestRawEventToEntry,
@@ -135,7 +134,6 @@ function AmbientScreen({
   userId,
   onOpenConnect,
   onOpenChat,
-  onOpenModelSetup,
 }: {
   headerProps: HeaderProps;
   userId: string;
@@ -144,9 +142,6 @@ function AmbientScreen({
    *  事件的 "Open →" 把虚拟 IntentCard 送进 card chat。AppShell 传
    *  (card, bootstrap) => setCardChat({ card, bootstrap })（与 NowScreen 同款）。 */
   onOpenChat?: (card: IntentCard, bootstrap: string) => void;
-  /** ModelRequiredCard 的 "Download" 引导：跳 Settings → Ambient 子页（模型
-   *  面板在那里）。AppShell 传 () => navigate("setting")。 */
-  onOpenModelSetup?: () => void;
 }) {
   probeCount("render.AmbientScreen"); // __HEAT_PROBE__
   const { t } = useTranslation("ambient");
@@ -457,11 +452,6 @@ function AmbientScreen({
               </Text>
             </LinearGradient>
           </View>
-        ) : null}
-
-        {/* 待摘要转写积压但零时间线事件 → 引导装端侧模型卡（dev AmbientView:727-729）。 */}
-        {pendingTranscriptWindows.length > 0 && timelineEntries.length === 0 && onOpenModelSetup ? (
-          <AmbientModelRequiredCard onOpenSetup={onOpenModelSetup} />
         ) : null}
 
         {/* TODAY 时间线：三路 TimelineEntry(LLM 事件 + 最近原始事件 + 待转写窗口)。图标格 +

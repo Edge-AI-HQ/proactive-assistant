@@ -298,65 +298,6 @@
       }
     }
   },
-  "summaryStatus": {
-    "title": "Résumés de chronologie",
-    "description": "Indique si les fenêtres de résumé du LLM local sont en attente, en traitement ou déjà écrites comme cartes de chronologie.",
-    "runNowAria": "Lancer le résumé de chronologie maintenant",
-    "running": "En cours",
-    "trigger": "Lancer",
-    "refreshAria": "Actualiser l'état des résumés de chronologie",
-    "metricStatus": "État",
-    "metricLlmCards": "Cartes LLM",
-    "metricPending": "Fenêtres en attente",
-    "metricFailed": "Tentatives échouées",
-    "loading": "Chargement",
-    "status": {
-      "error": "Erreur",
-      "summarizing": "Résumé en cours",
-      "ready": "Prêt",
-      "waiting": "En attente",
-      "idle": "Inactif"
-    },
-    "summarizedWindows": "Fenêtres résumées",
-    "skippedWindows": "Fenêtres à faible valeur ignorées",
-    "processingWindows": "Fenêtres en traitement",
-    "latestCard": "Dernière carte :",
-    "lastError": "Dernière erreur : {{code}}",
-    "detail": "Détail : {{message}}",
-    "nativeOnly": "La génération de résumés de chronologie n'est disponible que dans l'app native.",
-    "storeReady": "prêt",
-    "storeNotReady": "pas prêt",
-    "storeUnknown": "inconnu",
-    "storeLine": "Stockage : {{mode}} · {{readiness}}",
-    "refreshedAt": " · actualisé {{time}}"
-  },
-  "models": {
-    "title": "Modèles Ambient",
-    "mirror": "Miroir",
-    "preferredMirrorAria": "Miroir préféré",
-    "loadingManifest": "Chargement du manifeste…",
-    "listFailed": "models.list a échoué : {{error}}",
-    "activeLabel": "{{kind}} · actif",
-    "activeModelAria": "Modèle {{kind}} actif",
-    "download": "Télécharger",
-    "redownload": "Retélécharger",
-    "viaMirror": "via {{mirror}}",
-    "onDisk": "sur le disque : {{size}}",
-    "deleteAria": "Supprimer {{name}}",
-    "manualVerify": "Vérification manuelle (le runtime vérifie automatiquement à la première utilisation)",
-    "runVerify": "Vérifier",
-    "verifying": "Vérification…",
-    "verified": "vérifié",
-    "verifiedWithOutput": "vérifié : {{output}}",
-    "verifyFailed": "échec de vérification",
-    "verifyFailedWithError": "échec de vérification : {{error}}",
-    "advanced": "Avancé"
-  },
-  "modelRequired": {
-    "title": "LLM sur l'appareil requis",
-    "body": "Téléchargez {{model}} pour transformer vos signaux ambiants en résumés locaux privés.",
-    "download": "Télécharger {{model}}"
-  },
   "timeline": {
     "narrativeSummary": "Votre chronologie locale compte {{count}} événements aujourd'hui, en commençant par {{first}}. Moments clés : {{moments}}"
   },
@@ -373,13 +314,5 @@
     "placeArrival": "Arrivée à un lieu",
     "placeDeparture": "Départ d'un lieu",
     "morningHealth": "Santé du matin"
-  },
-  "modelNotes": {
-    "whisper-base": "Valeur par défaut recommandée pour de courtes salves ambiantes.",
-    "whisper-small-q5_1": "Petit modèle quantifié ; équilibre précision et taille.",
-    "qwen3-0_6b-q8": "Qwen3 0.6B officiel, seul Q8_0 est fourni en amont.",
-    "qwen3-1_7b-q4": "Option Qwen puissante pour le résumé ambiant.",
-    "gemma-2-2b-q4": "Quantification Unsloth ; résumé local plus performant sur iPhone récents.",
-    "gemma-3-4b-q4": "Profil de raisonnement local de meilleure qualité ; nécessite plus de stockage et de mémoire."
   }
 }

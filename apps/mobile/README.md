@@ -59,7 +59,7 @@ Module。对照 `capacitor-plugins/ambient-ai`（Swift 8144 行）+
 | visit（CLVisitMonitor 521） | Swift | **Swift 保留 → Expo Module**（modules/ambient-visit，durable drain/ack 队列） | ✅ 已迁移 |
 | activity（CMMotionActivity）/ focus | Swift 小件 | **Swift 保留**（并入 ambient-visit module） | ✅ 已迁移 |
 | audio-route | 纯 JS（消费 audioState 路由字段） | **共用** | ✅ 已迁移 |
-| 端上模型（Llama 引擎/下载器/Manifest ≈1474 行） | Swift | **删除**（用户拍板 2026-06-12 不再需要端上 LLM；随 Capacitor 退役一并删） | 🗑 划掉 |
+| 端上模型（Llama 引擎/下载器/Manifest ≈1474 行） | Swift | **删除**（曾迁入 `modules/ambient-models` 但 LlamaSwift 始终未接线；2026-07-11 随 on-device model sunset 整删，`AmbientAudioModule` 启动时幂等清理 `Documents/AmbientModels` 下载残留，见 docs/plans/2026-06-21-sunset-on-device-models.mdx） | 🗑 已删 |
 | NearbyConnectivity（152 行） | Swift | **删除**（零 JS 消费的死代码） | 🗑 划掉 |
 
 RN 侧管道（`src/ambient/`）：AmbientSource 接口/SIGNAL_KINDS/ingest wire

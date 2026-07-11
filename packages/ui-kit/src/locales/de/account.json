@@ -22,7 +22,7 @@
     "notificationsTitle": "Push-Mitteilungen",
     "notificationsDescription": "Was Sie erreicht — auch in Ruhezeiten",
     "ambientTitle": "Ambient",
-    "ambientDescription": "Quellen-Einwilligungen, On-Device-Modelle, Zusammenfassungen",
+    "ambientDescription": "Quellen-Freigaben und Stimmprofil",
     "backToSettings": "Zurück zu den Einstellungen"
   },
   "language": {
@@ -237,13 +237,7 @@
     "enableHint": "Tippen, um Systemmitteilungen zu aktivieren."
   },
   "ambientPage": {
-    "pageTitle": "Ambient",
-    "pageSubtitle": "Legen Sie fest, was PIN AI lokal beobachten darf und welche On-Device-Modelle es nutzt.",
-    "modelsTitle": "On-Device-Modelle",
-    "modelsDescription": "Verwalten Sie die On-Device-Modelle für Offline-Spracherkennung und -Reasoning.",
-    "loadingManifest": "Modell-Manifest wird geladen…",
-    "iosOnlyModels": "On-Device-Modelle sind nur in der iOS-App verfügbar. Öffnen Sie diese Seite im nativen Build, um Whisper- / lokale LLM-Profile herunterzuladen, zu verifizieren oder zu löschen.",
-    "localStorageNote": "Modelle werden lokal gespeichert und nie erneut hochgeladen. Schlägt ein Download fehl, weicht das Plugin automatisch auf den sekundären Spiegel aus."
+    "pageTitle": "Ambient"
   },
   "evolution": {
     "title": "Auto Dreaming",

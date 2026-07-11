@@ -293,65 +293,6 @@
       }
     }
   },
-  "summaryStatus": {
-    "title": "Timeline summaries",
-    "description": "Shows whether local LLM summary windows are pending, processing, or already written as Timeline cards.",
-    "runNowAria": "Run timeline summary now",
-    "running": "Running",
-    "trigger": "Trigger",
-    "refreshAria": "Refresh timeline summary status",
-    "metricStatus": "Status",
-    "metricLlmCards": "LLM cards",
-    "metricPending": "Pending windows",
-    "metricFailed": "Failed attempts",
-    "loading": "Loading",
-    "status": {
-      "error": "Error",
-      "summarizing": "Summarizing",
-      "ready": "Ready",
-      "waiting": "Waiting",
-      "idle": "Idle"
-    },
-    "summarizedWindows": "Summarized windows",
-    "skippedWindows": "Skipped low-value windows",
-    "processingWindows": "Processing windows",
-    "latestCard": "Latest card:",
-    "lastError": "Last error: {{code}}",
-    "detail": "Detail: {{message}}",
-    "nativeOnly": "Timeline summary generation is only available in the native app.",
-    "storeReady": "ready",
-    "storeNotReady": "not ready",
-    "storeUnknown": "unknown",
-    "storeLine": "Store: {{mode}} · {{readiness}}",
-    "refreshedAt": " · refreshed {{time}}"
-  },
-  "models": {
-    "title": "Ambient Models",
-    "mirror": "Mirror",
-    "preferredMirrorAria": "Preferred mirror",
-    "loadingManifest": "Loading manifest…",
-    "listFailed": "models.list failed: {{error}}",
-    "activeLabel": "{{kind}} · active",
-    "activeModelAria": "Active {{kind}} model",
-    "download": "Download",
-    "redownload": "Re-download",
-    "viaMirror": "via {{mirror}}",
-    "onDisk": "on disk: {{size}}",
-    "deleteAria": "Delete {{name}}",
-    "manualVerify": "Manual verify (runtime auto-verifies on first use)",
-    "runVerify": "Run verify",
-    "verifying": "Verifying…",
-    "verified": "verified",
-    "verifiedWithOutput": "verified: {{output}}",
-    "verifyFailed": "verify failed",
-    "verifyFailedWithError": "verify failed: {{error}}",
-    "advanced": "Advanced"
-  },
-  "modelRequired": {
-    "title": "On-device LLM required",
-    "body": "Download {{model}} to turn your ambient signals into private local summaries.",
-    "download": "Download {{model}}"
-  },
   "timeline": {
     "narrativeSummary": "Your local timeline has {{count}} events today, starting with {{first}}. Key moments: {{moments}}"
   },
@@ -368,13 +309,5 @@
     "placeArrival": "Place arrival",
     "placeDeparture": "Place departure",
     "morningHealth": "Morning health"
-  },
-  "modelNotes": {
-    "whisper-base": "Recommended default for short ambient bursts.",
-    "whisper-small-q5_1": "Quantized small; balances accuracy and size.",
-    "qwen3-0_6b-q8": "Official Qwen3 0.6B, only Q8_0 shipped upstream.",
-    "qwen3-1_7b-q4": "Strong Qwen option for ambient summarization.",
-    "gemma-2-2b-q4": "Unsloth quant; stronger local summarization on recent iPhones.",
-    "gemma-3-4b-q4": "Higher quality local reasoning profile; requires more storage and memory."
   }
 }

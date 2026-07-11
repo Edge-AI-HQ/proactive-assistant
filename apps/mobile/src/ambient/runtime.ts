@@ -12,9 +12,10 @@
  *    pai_events（L1）。Live 卡实时转写走独立 live-transcript-store，不受影响。
  *  - boot 恢复按 server per-source consent 决定启哪些源（dev App.tsx:77-133
  *    "which sources start follows the server consent, not all of them"）。
- *  - 60s source watchdog（refreshActiveSources）随采集生命周期起停；15min
- *    context snapshot + 15min scheduled summary 两个本地聚合定时器已随方案 A
- *    停掉（dev index.ts:167-171 同款，函数保留、恢复时取消注释）。
+ *  - 60s source watchdog（refreshActiveSources）随采集生命周期起停。15min
+ *    context snapshot / scheduled summary 两个本地聚合定时器随方案 A 停用后，
+ *    已随端侧模型 sunset（docs/plans/2026-06-21-sunset-on-device-models.mdx）
+ *    连函数一起删除——聚合/摘要固定由后端 memory 架构承担。
  *  - AppState 前台 → reconcile + drain，切后台 → 最后 drain 一次（dev
  *    lifecycle.ts bindAmbientLifecycle）。
  */
@@ -22,15 +23,12 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { AppState } from "react-native";
 import {
   AmbientLifecycleController,
-  effectiveAmbientSummaryMode,
-  maybeRunScheduledAmbientSummary,
   proxyFetch,
   type AmbientStartSession,
 } from "@pin-ai/core";
 
 import {
   flushSignals,
-  pushSignal,
   pushSignalAndFlush,
   refreshOutboxCount,
   startIngestLoop,
@@ -48,10 +46,6 @@ import { createLocationSource } from "./sources/location";
 import { createSoundClassifierSource } from "./sources/sound-classifier";
 import { createVisitSource } from "./sources/visit";
 import type { AmbientSource, PersonalSignalInput, SourceContext } from "./types";
-import { getAmbientTimelinePipeline, refreshTimeline } from "./timeline";
-import { getAmbientTimelineStore } from "./timeline/store";
-import { createCloudFirstAmbientSummaryBridge, createLocalAmbientSummaryBridge } from "./summary-bridges";
-import { loadAmbientSummaryPreference } from "./summary-preference";
 import {
   clearSourceError,
   describeError,
@@ -70,8 +64,6 @@ import { probeCount, probeSet } from "../lib/heat-probe";
 const ENABLED_KEY = "pinai:ambient-enabled";
 const SOURCE_START_TIMEOUT_MS = 8_000;
 const SOURCE_WATCHDOG_INTERVAL_MS = 60_000;
-const TIMELINE_SUMMARY_INTERVAL_MS = 15 * 60_000;
-const CONTEXT_SNAPSHOT_INTERVAL_MS = 15 * 60_000;
 const POWER_LOG_PREFIX = "[ambient-power]";
 
 // 生命周期标记只打 log，不当数据事件计数；真实捕获摘要才进遥测（lastEvent + 计数）。
@@ -478,14 +470,9 @@ export function subscribeAmbientStatus(listener: () => void): () => void {
   return subscribeStatus(listener);
 }
 
-// ── 定时器：60s watchdog + 15min context snapshot + 15min scheduled summary ──
-// （dev AmbientRuntime 构造时起、shutdown 停；RN 随「有 desired 源」起停。）
+// ── 定时器：60s source watchdog（RN 随「有 desired 源」起停）──
 
 let sourceWatchdogTimer: ReturnType<typeof setInterval> | null = null;
-let timelineSummaryTimer: ReturnType<typeof setInterval> | null = null;
-let contextSnapshotTimer: ReturnType<typeof setInterval> | null = null;
-let timelineSummaryInFlight = false;
-let contextSnapshotInFlight = false;
 
 function startRuntimeTimers(): void {
   if (!sourceWatchdogTimer) {
@@ -496,20 +483,6 @@ function startRuntimeTimers(): void {
       intervalMs: SOURCE_WATCHDOG_INTERVAL_MS,
     });
   }
-  // 方案 A（2026-07-01，dev index.ts:167-171 同款）：手机不再做本地聚合 / LLM
-  // summary（下沉后端 memory 架构）。停掉 timeline summary（本地 LLM）+ context
-  // snapshot（15min 聚合）两个定时器——各 source 信号由 ctx.push 直接上报。
-  // 函数保留，恢复时取消注释即可。
-  // if (!timelineSummaryTimer) {
-  //   timelineSummaryTimer = setInterval(() => {
-  //     void runScheduledTimelineSummary();
-  //   }, TIMELINE_SUMMARY_INTERVAL_MS);
-  // }
-  // if (!contextSnapshotTimer) {
-  //   contextSnapshotTimer = setInterval(() => {
-  //     void runScheduledContextSnapshot();
-  //   }, CONTEXT_SNAPSHOT_INTERVAL_MS);
-  // }
   probeSet("ambient.timers", "on"); // __HEAT_PROBE__
 }
 
@@ -518,16 +491,6 @@ function stopRuntimeTimers(reason: string): void {
   if (sourceWatchdogTimer) {
     clearInterval(sourceWatchdogTimer);
     sourceWatchdogTimer = null;
-    stopped += 1;
-  }
-  if (timelineSummaryTimer) {
-    clearInterval(timelineSummaryTimer);
-    timelineSummaryTimer = null;
-    stopped += 1;
-  }
-  if (contextSnapshotTimer) {
-    clearInterval(contextSnapshotTimer);
-    contextSnapshotTimer = null;
     stopped += 1;
   }
   if (stopped > 0) {
@@ -547,64 +510,6 @@ async function runSourceWatchdog(): Promise<void> {
     interactivePermissions: false,
     gateEpoch,
   });
-}
-
-/** 15min context snapshot（dev runScheduledContextSnapshot → refreshContextSnapshot）：
- *  近 15min 各源 raw 聚合成 context_snapshot candidate window → 上传 outbox。
- *  方案 A 后定时器已停（startRuntimeTimers 注释块）、当前无调用方；export 保留
- *  作恢复口（与 runScheduledTimelineSummary 对称）。 */
-export async function runScheduledContextSnapshot(): Promise<void> {
-  if (contextSnapshotInFlight) return;
-  contextSnapshotInFlight = true;
-  try {
-    const signal = await getAmbientTimelinePipeline().generateContextSnapshot(new Date());
-    if (signal) pushSignal(signal);
-  } catch (err) {
-    setLastIngestError(describeError(err));
-    console.warn("[ambient] context snapshot failed:", err);
-  } finally {
-    contextSnapshotInFlight = false;
-  }
-}
-
-/**
- * 15min scheduled summary（dev runScheduledTimelineSummary:467-497）：
- * cloud-first 桥（uploads 未锁 & 偏好 cloud_when_unlocked）或端侧桥生成当日
- * 摘要事件；成功后 refreshTimeline 把蒸馏产物送进上传 outbox。锁上后中途
- * 复查（shouldUseCloud / shouldPersistResult），锁下产物不外发。
- */
-export async function runScheduledTimelineSummary(nowOverride?: Date): Promise<void> {
-  if (timelineSummaryInFlight) return;
-  timelineSummaryInFlight = true;
-  try {
-    const now = nowOverride ?? new Date();
-    const localDate = now.toISOString().slice(0, 10);
-    const uploadsLockedAtStart = uploadsLockedSnapshot();
-    const preference = await loadAmbientSummaryPreference();
-    const bridge =
-      effectiveAmbientSummaryMode({ uploadsLocked: uploadsLockedAtStart, preference }) === "cloud_llm"
-        ? createCloudFirstAmbientSummaryBridge({
-          shouldUseCloud: () => !uploadsLockedSnapshot(),
-        })
-        : createLocalAmbientSummaryBridge();
-    const result = await maybeRunScheduledAmbientSummary({
-      store: getAmbientTimelineStore(),
-      bridge,
-      now,
-      localDate,
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
-      localUserId: runtimeOwnerUserId ?? "local",
-      shouldPersistResult: (summaryResult) =>
-        summaryResult.generationMethod !== "cloud_llm" || !uploadsLockedSnapshot(),
-    });
-    if (result.ran && result.status === "success") {
-      await refreshTimeline(localDate);
-    }
-  } catch (err) {
-    console.warn("[ambient] scheduled summary failed:", err);
-  } finally {
-    timelineSummaryInFlight = false;
-  }
 }
 
 // ── AppState 前后台钩子（dev lifecycle.ts bindAmbientLifecycle）──
