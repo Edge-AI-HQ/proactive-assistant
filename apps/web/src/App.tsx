@@ -2,7 +2,7 @@ import { lazy, Suspense, type ReactNode } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Toaster } from "sonner";
 import { useUserSettings } from "@pin-ai/state";
-import { useAuth, VoiceProvider, Text, useUiLanguageSync } from "@pin-ai/ui-web";
+import { useAuth, VoiceProvider, Text, useUiLanguageSync } from "@/ui-web";
 import ZebraShell from "@/components/zebra/ZebraShell";
 import ZebraLogin from "@/components/zebra/ZebraLogin";
 import ZebraOnboarding from "@/components/zebra/ZebraOnboarding";

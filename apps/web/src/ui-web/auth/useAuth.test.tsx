@@ -20,13 +20,6 @@ vi.mock("./supabase", () => ({
   },
 }));
 
-vi.mock("./platform", async (importOriginal) => ({
-  ...(await importOriginal<object>()),
-  isNative: false,
-}));
-vi.mock("@capacitor/browser", () => ({ Browser: { open: vi.fn(), close: vi.fn() } }));
-vi.mock("@capacitor/app", () => ({ App: { addListener: vi.fn() } }));
-
 describe("useAuth local dev auth", () => {
   beforeEach(() => {
     vi.stubEnv("VITE_PIN_LOCAL_DEV_AUTH", "");

@@ -29,7 +29,6 @@ interface BrowserViewProps {
    *  iframe to remount — works around iOS pausing the Browserbase WebSocket
    *  while the app was backgrounded, leaving the iframe blank. */
   iframeReloadKey?: number;
-  isNative: boolean;
   /** Remote viewport CSS px (what the session was created at). Used to map
    *  overlay-pixel gestures → remote coordinates. */
   viewport: { width: number; height: number };
@@ -81,7 +80,6 @@ export default function BrowserView({
   sessionId,
   controlMode,
   iframeReloadKey = 0,
-  isNative,
   viewport,
   onControlChange,
   onUserInputTap,
@@ -105,9 +103,8 @@ export default function BrowserView({
   // desktop user with a narrow window gets a mobile session but still drives
   // with a mouse → must keep the direct-iframe path, not the touch overlay.
   const touchInput =
-    isNative ||
-    (typeof window !== "undefined" &&
-      !!window.matchMedia?.("(pointer: coarse)").matches);
+    typeof window !== "undefined" &&
+    !!window.matchMedia?.("(pointer: coarse)").matches;
 
   // ── Address bar: a draft synced to the live URL, editable to navigate. ──
   const [urlDraft, setUrlDraft] = useState(currentUrl);

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Maximize2, Minimize2 } from "lucide-react";
 import { conversationInit } from "@pin-ai/core";
-import { ConversationView, MinimalistLanding } from "@pin-ai/ui-web";
+import { ConversationView, MinimalistLanding } from "@/ui-web";
 
 /**
  * zebra conversation 面板体 —— proactive-ai-frontend MainChat 的桌面装配

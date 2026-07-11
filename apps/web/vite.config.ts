@@ -37,8 +37,7 @@ export default defineConfig(({ mode }) => {
         "@pin-ai/core": path.resolve(__dirname, "../../packages/core/src/index.ts"),
         "@pin-ai/state": path.resolve(__dirname, "../../packages/state/src/index.ts"),
         "@pin-ai/ui-kit": path.resolve(__dirname, "../../packages/ui-kit/src/index.ts"),
-        "@pin-ai/ui-web": path.resolve(__dirname, "../../packages/ui-web/src/index.ts"),
-        // design token：ui-web primitive 值导入 typeScale/elevation（运行时真值），
+        // design token：src/ui-web primitive 值导入 typeScale/elevation（运行时真值），
         // 容器 node_modules 不含 workspace 包 → 必须 alias 到源码文件。
         // 指 tokens.mjs（ESM 视图）：Vite dev 不对源码 .cjs 合成命名导出会白屏，
         // ESM+JSON dev/prod 双通。（tailwind config 另走相对路径引 tokens.cjs。）
@@ -62,8 +61,10 @@ export default defineConfig(({ mode }) => {
       environment: "jsdom",
       globals: true,
       include: ["src/**/*.{test,spec}.{ts,tsx}"],
-      setupFiles: ["src/test-setup.ts"],
-      // ui-web 的 supabase.ts 在 import 期校验这两个 env；真值是 dotenvx
+      // 壳层 setup（matchMedia）+ src/ui-web 功能层 setup（i18n / storage /
+      // ResizeObserver / lucide stub），对全部测试文件生效。
+      setupFiles: ["src/test-setup.ts", "src/ui-web/test-setup.ts"],
+      // src/ui-web 的 supabase.ts 在 import 期校验这两个 env；真值是 dotenvx
       // 加密的，测试注入无害假值即可加载。
       env: {
         VITE_SUPABASE_URL: "http://localhost:54321",

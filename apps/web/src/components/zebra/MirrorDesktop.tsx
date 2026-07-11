@@ -2,12 +2,12 @@ import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { GoalsPanel, PortraitSection, Text } from "@pin-ai/ui-web";
+import { GoalsPanel, PortraitSection, Text } from "@/ui-web";
 import { usePortrait } from "@pin-ai/state";
 
 /**
  * Desktop (zebra) MIRROR —— 桌面布局 shell。数据走 @pin-ai/state 的 usePortrait
- * （L2 画像六段 markdown）；展示复用 @pin-ai/ui-web 的共享 panel。Identity tab
+ * （L2 画像六段 markdown）；展示复用 @/ui-web 的共享 panel。Identity tab
  * 渲染 USER + MEMORY 两段画像，桌面相对移动端的赢点：两段 **并排两栏**（不再上下
  * 堆叠）；Goals tab 渲染 GOALS。tab 是 ephemeral UI state，留在这层。
  */

@@ -165,8 +165,8 @@ sequenceDiagram
 | Generation 端使用 | `backend/services/agent-engine/src/agent_engine/agents/generator.py` |
 | Native feedback tool | `backend/services/agent-engine/src/agent_engine/tools/direct/feedback.py` |
 | Native preference tool | `backend/services/agent-engine/src/agent_engine/tools/direct/preferences.py`（现在只有 `set_generation_language` 输出语言开关；内容偏好走 `tools/direct/events.py:event_append` 写 `event_type=preference` 事件；老 `profile.py` 画像工具已退役，画像走 `tools/direct/user_strings.py:memory_edit`） |
-| 前端卡片反馈 UI | `packages/ui-web/src/card/useCardActions.ts`（web 共享）、`apps/web` 卡片详情面板、`apps/mobile/src/components/now/CardDetailSheet.tsx`（RN） |
-| 前端 main chat thumbs | `packages/ui-web/src/chat/conversation/CardResultFeedbackBar.tsx`、`packages/core/src/domain/chat-feedback.ts`、`apps/mobile/src/components/chat/MessageActions.tsx` |
+| 前端卡片反馈 UI | `apps/web/src/ui-web/card/useCardActions.ts`（web 共享）、`apps/web` 卡片详情面板、`apps/mobile/src/components/now/CardDetailSheet.tsx`（RN） |
+| 前端 main chat thumbs | `apps/web/src/ui-web/chat/conversation/CardResultFeedbackBar.tsx`、`packages/core/src/domain/chat-feedback.ts`、`apps/mobile/src/components/chat/MessageActions.tsx` |
 | 开发建议收集 | `backend/services/agent-engine/src/agent_engine/transport/routes/chat.py`、`backend/services/api/src/pinai_api/domains/feedback/dev_agent.py`、`backend/services/agent-engine/src/agent_engine/tools/direct/development_feedback.py`、`backend/services/agent-engine/src/agent_engine/agents/main_chat.py` |
 
 ## 验证方式
@@ -186,7 +186,7 @@ cd backend && uv run ruff check .
 cd backend && uv run mypy services libs
 
 # Frontend feedback helpers and card feedback state（在 packages 共享层）
-npm run check:packages    # 覆盖 packages/ui-web/src/card/useCardActions.test.tsx、packages/core/src/domain/chat-feedback.test.ts 等
+npm run check:packages    # 覆盖 apps/web/src/ui-web/card/useCardActions.test.tsx、packages/core/src/domain/chat-feedback.test.ts 等
 ```
 
 手工验证：

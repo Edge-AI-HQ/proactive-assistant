@@ -1,7 +1,7 @@
 /**
  * Desktop (zebra) EVENTS — the L1 event stream as a now-anchored realtime feed.
  *
- * Web-only surface (mounted by ZebraShell, not exposed in the capacitor / mobile
+ * Web-only surface (mounted by ZebraShell, not exposed in the mobile
  * navs). Vertical live feed (EventsFeed / virtuoso): future above the now-line,
  * newest-past just below it, older past scrolling down — you watch the top for
  * the latest. Realtime = SSE signal plane (useEventsLiveRefresh invalidates on

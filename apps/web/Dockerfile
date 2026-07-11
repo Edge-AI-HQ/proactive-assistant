@@ -1,13 +1,13 @@
 # apps/web — PIN AI 桌面 web 端（zebra 设计），static SPA served by nginx on Fly.
 #
-# Multi-stage（同 proactive-ai-frontend 的机制，去掉 capacitor-plugins 部分）：
+# Multi-stage：
 #   1. node20-slim — npm install + vite build (produces dist/).
 #   2. nginx:alpine — copy dist/ + SPA routing config（/api 反代 backend，
 #      same-origin 免 CORS，SSE 不缓冲）。
 #
 # Build context = repo root（CI: `flyctl deploy . --config apps/web/fly.toml
 # --dockerfile apps/web/Dockerfile --build-arg WORKDIR=apps/web`）——packages/
-# 共用层（core/state/ui-web/design）要随 context 进来。
+# 共用层（core/state/ui-kit/design）要随 context 进来。
 
 FROM node:20-slim AS builder
 WORKDIR /app
@@ -23,12 +23,12 @@ COPY ${WORKDIR}/package.json ./
 RUN npm install --no-audit --no-fund --legacy-peer-deps --ignore-scripts
 
 COPY ${WORKDIR}/ .
-# 共用层源码直引：vite alias 把 @pin-ai/core|state|ui-web 指到
+# 共用层源码直引：vite alias 把 @pin-ai/core|state|ui-kit 指到
 # `__dirname/../../packages/*/src`，容器内 __dirname=/app → /packages（
 # path.resolve 在根目录封顶）。包是纯 TS 源码（Vite 直接转译），无各自
 # install/build 步骤。/node_modules symlink 让 /packages/** 里的裸 import
-# （react、@capacitor/*、@supabase/*、@tanstack/*）按 Node resolution 向上
-# 命中 /app 的依赖树——等价于本地 monorepo 的 root hoisting。
+# （react、@supabase/*、@tanstack/*）按 Node resolution 向上命中 /app 的
+# 依赖树——等价于本地 monorepo 的 root hoisting。
 COPY packages/ /packages/
 RUN ln -s /app/node_modules /node_modules
 RUN npm run build

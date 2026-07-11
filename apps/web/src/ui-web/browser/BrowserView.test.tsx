@@ -8,7 +8,6 @@ function renderBrowserView(overrides: Partial<Parameters<typeof BrowserView>[0]>
     liveViewUrl: "https://live.example.test",
     sessionId: "session-1",
     controlMode: "ai",
-    isNative: true,
     viewport: { width: 390, height: 844 },
     onControlChange: vi.fn(),
     onUserInputTap: vi.fn(async () => false),

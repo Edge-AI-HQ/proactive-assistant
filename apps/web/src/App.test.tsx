@@ -11,7 +11,7 @@ const { useAuthMock, useUserSettingsMock } = vi.hoisted(() => ({
 
 // 只替换 useAuth；其余（CATEGORIES / hooks / Sphere3DCards …）用真实实现，
 // 数据 hooks 在 jsdom 里 fetch 失败会落到 TQ error 态，渲染层不受影响。
-vi.mock("@pin-ai/ui-web", async (importOriginal) => ({
+vi.mock("@/ui-web", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   useAuth: useAuthMock,
 }));

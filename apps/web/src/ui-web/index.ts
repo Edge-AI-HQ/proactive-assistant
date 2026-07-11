@@ -1,14 +1,14 @@
-// @pin-ai/ui-web — web 介质共享层（React DOM 组件 + 平台 hooks），
-// proactive-ai-frontend（Capacitor 壳）与 apps/web（zebra 桌面壳）双端共用。
-// 依赖硬标准 =「纯 web 环境可运行」；重 native 模块禁止进入（见 package.json
-// description 与 docs/plans/2026-06-12-zebra-web-app-port.mdx）。
+// @/ui-web — apps/web 的功能层（React DOM 组件 + 平台 hooks）。原共享包
+// @pin-ai/ui-web，Capacitor 壳退役后只剩本 app 消费，2026-07 迁入 app 内
+//（apps/desktop 经复用本 app 的 renderer 一并拿到）。历史设计：
+// docs/plans/2026-06-12-zebra-web-app-port.mdx。
+// 硬标准仍是「纯 web 环境可运行」；Electron 等桌面能力经 desktop-bridge
+// 探测注入，重 native 模块不进本目录。
 //
-// 注意：import 本包即触发 transport-bootstrap 的 configureTransport side
-// effect（与 frontend 旧 `@/lib/api` shim 的「模块加载即配置」语义一致）。
+// 注意：import 本 barrel 即触发 transport-bootstrap 的 configureTransport
+// side effect（「模块加载即配置」）。
 
-export const PIN_AI_UI_WEB = "@pin-ai/ui-web";
-
-// ── i18n：共享 UI 国际化（react-i18next）。import 本包即初始化 i18next（en
+// ── i18n：UI 国际化（react-i18next）。import 本 barrel 即初始化 i18next（en
 //    静态打包为回落层，其余 7 语言懒加载），与 transport-bootstrap 同样的
 //    「模块加载即配置」side effect。语言真源 = settings.generationLanguage，
 //    经 useUiLanguageSync 驱动；同一设置在后端 lang_clause 控制 LLM 输出语言。
@@ -33,7 +33,7 @@ export { Icon } from "./primitives/Icon";
 
 // ── auth：supabase client / 平台判定 / dev auth / OAuth hook / transport 注入 ──
 export { supabase } from "./auth/supabase";
-export { isNative, isElectron, PIN_API_BASE, pinApiRequestHeaders } from "./auth/platform";
+export { isElectron, PIN_API_BASE } from "./auth/platform";
 export { getDesktopBridge, type PinaiDesktopBridge } from "./auth/desktop-bridge";
 export {
   isPinLocalDevAuthEnabled,
@@ -111,7 +111,6 @@ export {
   type VoiceContextValue,
   type VoiceProviderProps,
 } from "./voice";
-export { registerExternalMicAcquirer, type ExternalMicLease } from "./voice/external-mic-bridge";
 export { createPcmRecorder, createPcmStreamRecorder, type PcmRecorder, type PcmStreamRecorder } from "./voice/pcm-recorder";
 export { transcribeVoiceAudio, type TranscribeVoiceAudioOptions } from "./voice/transcription-api";
 export { normalizeVoiceLanguage, type VoiceLanguageHint } from "./voice/language";

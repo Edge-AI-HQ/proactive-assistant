@@ -38,7 +38,7 @@ import {
 } from "@pin-ai/state";
 import { useInitTask, isInitTaskFresh } from "@pin-ai/state";
 import i18n from "../i18n";
-import type connectEn from "../../../ui-kit/src/locales/en/connect.json";
+import type connectEn from "../../../../../packages/ui-kit/src/locales/en/connect.json";
 import { resolveComposioConnectionIdentity } from "./composio-display-identity";
 import { closeOAuthSurface, openOAuthAndAwaitClose } from "./oauth-popup";
 import { Text } from "../primitives/Text";

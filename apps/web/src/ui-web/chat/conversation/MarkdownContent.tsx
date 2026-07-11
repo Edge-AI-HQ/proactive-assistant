@@ -5,8 +5,8 @@
  *   - remark-gfm for tables, task lists, strikethrough, autolinks
  *   - rehype-highlight for syntax highlighting (hljs classes)
  *   - custom components: code blocks (header + copy via CodeBlock),
- *     external links (native Capacitor Browser for iOS/Android),
- *     table wrapper with horizontal scroll, task-list checkboxes.
+ *     external links opened in a new tab, table wrapper with horizontal
+ *     scroll, task-list checkboxes.
  *
  * Visual style matches the minimalist conversation design — 13px body,
  * compact heading hierarchy, muted list markers, glassy code/table chrome.
@@ -24,8 +24,6 @@ import {
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { Browser } from "@capacitor/browser";
-import { isNative } from "../../auth/platform";
 import CodeBlock from "./CodeBlock";
 import { ConnectChip } from "../../connect/ConnectChip";
 
@@ -40,15 +38,7 @@ function isExternalHref(href: string | undefined): boolean {
   return /^https?:\/\//i.test(href);
 }
 
-async function openLink(href: string) {
-  if (isNative) {
-    try {
-      await Browser.open({ url: href });
-      return;
-    } catch {
-      /* fall through to window.open */
-    }
-  }
+function openLink(href: string) {
   window.open(href, "_blank", "noopener,noreferrer");
 }
 
@@ -208,7 +198,7 @@ export default function MarkdownContent({
             href={href}
             onClick={(e) => {
               e.preventDefault();
-              if (href) void openLink(href);
+              if (href) openLink(href);
             }}
             className="text-foreground font-medium underline decoration-foreground/30 underline-offset-[3px] hover:decoration-foreground/65 transition-colors"
             {...rest}

@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import { isElectron, isNative } from "./platform";
+import { isElectron } from "./platform";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
 const supabasePublishableKey = import.meta.env
@@ -17,7 +17,7 @@ if (!supabaseUrl || !supabasePublishableKey) {
  * 约定），也兼容 query。supabase-js 的 detectSessionInUrl 初始化时会异步把
  * URL 清空，所以这里在 createClient 之前同步抓一次存成模块常量，否则用户被
  * 打回登录页却看不到任何原因（典型：改了 Google OAuth test users 后自己的
- * 账号被拒）。native/Electron 走 PKCE deep-link，error 由 useAuth 的
+ * 账号被拒）。Electron 走 PKCE deep-link，error 由 useAuth 的
  * exchangeOauthCallback 处理，不经这里。
  */
 export function parseOAuthError(hash: string, search: string): string | null {
@@ -47,12 +47,12 @@ function captureInitialOAuthError(): string | null {
 export const initialOAuthError = captureInitialOAuthError();
 
 // Defaults from supabase-js (autoRefreshToken / persistSession /
-// detectSessionInUrl all true) cover the SPA flow. Native and the
-// Electron desktop shell override to PKCE so the deep-link callback
-// carries `?code=` (exchanged in-app via exchangeCodeForSession) and
-// tokens never appear in the URL — implicit flow would put
-// `#access_token` in the callback, which the deep-link handler can't
-// consume (it never reaches detectSessionInUrl in another window).
+// detectSessionInUrl all true) cover the SPA flow. The Electron desktop
+// shell overrides to PKCE so the deep-link callback carries `?code=`
+// (exchanged in-app via exchangeCodeForSession) and tokens never appear
+// in the URL — implicit flow would put `#access_token` in the callback,
+// which the deep-link handler can't consume (it never reaches
+// detectSessionInUrl in another window).
 export const supabase = createClient(supabaseUrl, supabasePublishableKey, {
-  ...((isNative || isElectron) && { auth: { flowType: "pkce" as const } }),
+  ...(isElectron && { auth: { flowType: "pkce" as const } }),
 });

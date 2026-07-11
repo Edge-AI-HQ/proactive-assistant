@@ -1,4 +1,4 @@
-import { ControlPanel } from "@pin-ai/ui-web";
+import { ControlPanel } from "@/ui-web";
 import type { ComposioState } from "@pin-ai/state";
 
 /**

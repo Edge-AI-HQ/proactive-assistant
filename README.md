@@ -23,8 +23,8 @@ Mintlify 入口：[`docs/index.mdx`](docs/index.mdx)。
 
 ```text
 backend/                      # Python uv workspace：api / agent-engine / reward-dashboard 三 service + libs/{contracts,db}
-packages/                     # 跨端前端共享层：core / design / state / ui-kit / ui-web
-apps/web/                     # zebra 桌面 web 端（Vite + React，已上线 dev/prod）
+packages/                     # 跨端前端共享层（web/RN 双端）：core / design / state / ui-kit
+apps/web/                     # zebra 桌面 web 端（Vite + React，已上线 dev/prod；功能层 src/ui-web）
 apps/desktop/                 # Electron macOS 壳，renderer 复用 apps/web（仅本地）
 apps/mobile/                  # Expo React Native iOS app（TestFlight 分发）
 internal-reward-dashboard/    # 内部卡片 review 工具前端（独立 Vite app）

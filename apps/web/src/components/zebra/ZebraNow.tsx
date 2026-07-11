@@ -6,7 +6,7 @@ import {
   Sphere3DCards,
   type Intent,
   type WeatherData, Text,
-} from "@pin-ai/ui-web";
+} from "@/ui-web";
 import { shortcutHint } from "@/lib/platform";
 
 /**

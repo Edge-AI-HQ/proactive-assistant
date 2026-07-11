@@ -30,8 +30,8 @@ const sharedFontSize = Object.fromEntries(
 );
 
 // content 用绝对路径：Tailwind v3 按 process.cwd() 解析相对 glob；绝对路径
-// 在任何 cwd 下都成立（同 proactive-ai-frontend 的做法）。ui-web 共享组件
-// 的类名必须被扫到，否则样式静默丢失。
+// 在任何 cwd 下都成立。src/**（含 src/ui-web 功能层）的类名必须被扫到，
+// 否则样式静默丢失。
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 /** @type {import('tailwindcss').Config} */
@@ -39,7 +39,6 @@ export default {
   content: [
     path.join(here, "index.html"),
     path.join(here, "src/**/*.{ts,tsx}"),
-    path.join(here, "../../packages/ui-web/src/**/*.{ts,tsx}"),
     // ui-kit 的 cva 配方含 class 字面量（buttonVariants 等）—— 运行时 cva() 结果
     // 扫不到，必须静态覆盖 ui-kit 源码。
     path.join(here, "../../packages/ui-kit/src/**/*.{ts,tsx}"),

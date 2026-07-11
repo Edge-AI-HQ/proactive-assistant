@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import BrowserView from "../../browser/BrowserView";
 import { useBrowserSession } from "../../browser/useBrowserSession";
-import { isNative } from "../../auth/platform";
 import { useMediaQuery } from "../../lib/use-media-query";
 
 export type BrowserLayout = "hidden" | "split" | "drawer";
@@ -48,9 +47,9 @@ export function useBrowserPanel(
     onBrowserSplitChange?.(browserSplitActive);
   }, [browserSplitActive, onBrowserSplitChange]);
 
-  // On foreground return, iOS may pause the Live View WebSocket + expire its
-  // signed iframe URL. Refresh the URL then bump the iframe key (don't remount
-  // the transcript — that would drop the in-flight stream / composer draft).
+  // On tab foreground return, the Live View's signed iframe URL may have
+  // expired. Refresh the URL then bump the iframe key (don't remount the
+  // transcript — that would drop the in-flight stream / composer draft).
   const [iframeReloadKey, setIframeReloadKey] = useState(0);
   const lastReloadAtRef = useRef(0);
   useEffect(() => {
@@ -67,20 +66,8 @@ export function useBrowserPanel(
       if (document.visibilityState === "visible") bump();
     };
     document.addEventListener("visibilitychange", onVisibility);
-    let capListener: { remove: () => Promise<void> } | null = null;
-    void import("@capacitor/app")
-      .then(({ App }) =>
-        App.addListener("appStateChange", (state) => {
-          if (state.isActive) bump();
-        }),
-      )
-      .then((l) => {
-        capListener = l;
-      })
-      .catch(() => {});
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
-      void capListener?.remove();
     };
   }, [refreshLiveView]);
 
@@ -139,7 +126,6 @@ export function useBrowserPanel(
       sessionId={browserSession.sessionKey}
       controlMode={browserSession.controlMode}
       iframeReloadKey={iframeReloadKey}
-      isNative={isNative}
       viewport={browserSession.viewport}
       currentUrl={browserSession.currentUrl}
       onControlChange={handleBrowserControlChange}

@@ -20,7 +20,7 @@ import {
   sourceAppDisplay,
   useCardActions,
   type Intent, Text,
-} from "@pin-ai/ui-web";
+} from "@/ui-web";
 import type { VisibleCardEntry } from "@pin-ai/core";
 import ZebraCardChat from "./ZebraCardChat";
 import ZebraCardDetailPanel from "./ZebraCardDetailPanel";

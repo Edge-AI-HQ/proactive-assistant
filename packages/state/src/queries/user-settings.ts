@@ -15,7 +15,7 @@ export const userSettingsKeys = {
 /**
  * Per-mobile-source ambient capture consent. Empty map = no ambient
  * capture (privacy invariant per V3 migration plan D-5). Source keys
- * are slugs the @pin/capacitor-ambient-ai facade understands
+ * are slugs the mobile ambient capture modules understand
  * (sound_classifier, visit, activity, location, …).
  */
 export interface AmbientSourceConsent {

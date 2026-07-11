@@ -292,7 +292,7 @@ cd backend && uv run ruff check . && uv run ruff format --check   # 静态 + 格
 cd backend && uv run lint-imports                 # import 契约
 cd backend && uv run mypy services libs           # 类型
 cd apps/web && npm run type-check && npm test        # zebra web 端
-npm run check:packages                               # core/state/ui-kit/ui-web 边界 + 类型 + 单测
+npm run check:packages                               # core/state/ui-kit 边界 + 类型 + 单测
 cd internal-reward-dashboard && npm run type-check   # 内部 review app 类型
 cd internal-reward-dashboard && npm test             # 内部 review app 单测
 ```
@@ -318,7 +318,7 @@ cd internal-reward-dashboard && npm test             # 内部 review app 单测
 | CORS / audit 中间件                           | `pinai_api/app.py` 装配段,`pinai_api/platform/middleware/audit.py`                                                                           |
 | docker-compose / Makefile                     | `docker-compose.yml`、`Makefile`                                                                                                             |
 | CI / fly secrets 守门                         | `.github/workflows/`、`backend/scripts/sync_fly_secrets.py`                                                                                  |
-| 前端 API base / 平台判定                      | `packages/ui-web/src/auth/platform.ts`(web 形态同源 `/api`;native / Electron 打包件用 `VITE_PIN_API_URL` 绝对 URL)                           |
+| 前端 API base / 平台判定                      | `apps/web/src/ui-web/auth/platform.ts`(web 形态同源 `/api`;Electron 打包件用 `VITE_PIN_API_URL` 绝对 URL)                           |
 | 内部 reward dashboard                         | `internal-reward-dashboard/`、`internal-reward-dashboard/fly.toml`、`backend/services/reward-dashboard/src/pinai_reward_dashboard/routes.py` |
 
 ## 生产环境硬性规则

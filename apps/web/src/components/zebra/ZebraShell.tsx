@@ -25,7 +25,7 @@ import {
   useWeather,
   type CardStatus,
   type Intent, Text,
-} from "@pin-ai/ui-web";
+} from "@/ui-web";
 import { hasCmdModifier, shortcutHint } from "@/lib/platform";
 import ZebraBackdrop from "./ZebraBackdrop";
 import ZebraNow from "./ZebraNow";

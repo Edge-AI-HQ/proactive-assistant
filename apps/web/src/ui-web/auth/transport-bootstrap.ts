@@ -1,19 +1,15 @@
 /**
  * web 介质的 transport 组装点（composition root）—— @pin-ai/core 的平台注入。
  *
- * core 不认识 supabase / Capacitor / import.meta.env；auth、baseUrl、平台
- * headers 在这里组装后经 configureTransport 注入。模块加载即配置（side
- * effect）：proactive-ai-frontend 与 apps/web 的入口都 import 本模块（直接
- * 或经 frontend 的 `@/lib/transport-bootstrap` shim），任何路径的 import 都
- * 会先完成注入。web 介质下两端组装完全一致（Capacitor.getPlatform() 在纯
- * web 返回 "web"），所以放 ui-web 共享而非每 app 一份。
- * 设计 SSOT：research/2026-06-10-frontend-layering.mdx §4.2-§4.3。
+ * core 不认识 supabase / import.meta.env；auth、baseUrl、平台 headers 在
+ * 这里组装后经 configureTransport 注入。模块加载即配置（side effect）：
+ * app 入口 import 本模块（直接或经 barrel），任何路径的 import 都会先完成
+ * 注入。设计 SSOT：research/2026-06-10-frontend-layering.mdx §4.2-§4.3。
  */
-import { Capacitor } from "@capacitor/core";
 import { configureTransport, type DeviceClientHints } from "@pin-ai/core";
 
 import { isPinLocalDevAuthEnabled, pinLocalDevAuthHeaders } from "./dev-auth";
-import { PIN_API_BASE, pinApiRequestHeaders } from "./platform";
+import { PIN_API_BASE } from "./platform";
 import { performSignOut } from "./sign-out";
 import { supabase } from "./supabase";
 
@@ -37,9 +33,9 @@ export function profileClientHintHeaders(): Record<string, string> {
   }
 
   // 时区头的采信分级靠它：服务端只让手机(ios/android)完整跟随+retime,
-  // web/Electron(Capacitor 非原生 → "web")只能 seed 未确立的时区——
-  // 防止出差时家里桌面端把时区翻回去(_sync_device_timezone 的平台分级)。
-  headers["X-Pin-Client-Platform"] = Capacitor.getPlatform();
+  // web/Electron 恒 "web"，只能 seed 未确立的时区——防止出差时家里
+  // 桌面端把时区翻回去(_sync_device_timezone 的平台分级)。
+  headers["X-Pin-Client-Platform"] = "web";
 
   return headers;
 }
@@ -125,8 +121,6 @@ configureTransport({
   getAuthHeaders: authHeaders,
   refreshAuth: refreshAndGetToken,
   onAuthInvalid: handleAuthInvalid,
-  // ngrok-skip-browser-warning 等平台 headers（web 同源时为空对象）。
-  defaultHeaders: pinApiRequestHeaders(),
   clientHintHeaders: profileClientHintHeaders,
   getClientHints: probeClientHints,
 });

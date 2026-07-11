@@ -9,7 +9,7 @@ import {
   CommandList,
   CommandSeparator,
 } from "@/components/ui/command";
-import { Text } from "@pin-ai/ui-web";
+import { Text } from "@/ui-web";
 import { shortcutHint } from "@/lib/platform";
 
 export interface PaletteNavItem {

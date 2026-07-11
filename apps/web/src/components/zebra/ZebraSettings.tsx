@@ -13,7 +13,7 @@ import {
   SubPageHeader,
   SubscriptionPanel,
   useAuth, Text,
-} from "@pin-ai/ui-web";
+} from "@/ui-web";
 import { toast } from "sonner";
 
 /**

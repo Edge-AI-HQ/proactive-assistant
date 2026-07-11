@@ -13,9 +13,8 @@
  * BrowserRouter，打包件的客户端路由靠 main 进程 protocol.handle 的 SPA
  * fallback（路由路径无文件 → index.html）兜底，刷新/深链不白屏。
  *
- * apps/web 是纯 web SPA（功能经 @pin-ai/core|state + UI 经 @pin-ai/ui-web），
- * 不依赖重 native 包（ambient/sqlite/geolocation 等），所以这里不需要
- * proactive-ai-frontend 那套 native-plugin-stub。
+ * apps/web 是纯 web SPA（功能经 @pin-ai/core|state + src/ui-web 功能层），
+ * 不依赖重 native 包（ambient/sqlite/geolocation 等）。
  */
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 import react from "@vitejs/plugin-react";
@@ -30,7 +29,6 @@ const rendererAliases = {
   "@": path.resolve(webDir, "src"),
   "@pin-ai/core": path.resolve(packagesDir, "core/src/index.ts"),
   "@pin-ai/state": path.resolve(packagesDir, "state/src/index.ts"),
-  "@pin-ai/ui-web": path.resolve(packagesDir, "ui-web/src/index.ts"),
 };
 
 export default defineConfig({

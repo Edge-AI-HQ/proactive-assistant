@@ -1,6 +1,6 @@
 import { X, Check, Lock as LockIcon, Loader2, MessageCircle } from "lucide-react";
 import { useCardExecutionRun } from "@pin-ai/state";
-import { CATEGORIES, categoryLabel, DrawerDetailBody, type Intent, Text } from "@pin-ai/ui-web";
+import { CATEGORIES, categoryLabel, DrawerDetailBody, type Intent, Text } from "@/ui-web";
 
 /**
  * Desktop (zebra) card detail — the iOS bottom-drawer content re-housed in a

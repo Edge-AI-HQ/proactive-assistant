@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import { motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
 import { useComposio } from "@pin-ai/state";
-import { ConnectorOnboardingInsight, DataConnections, Text } from "@pin-ai/ui-web";
+import { ConnectorOnboardingInsight, DataConnections, Text } from "@/ui-web";
 import ZebraBackdrop from "./ZebraBackdrop";
 
 const EASE = [0.32, 0.72, 0, 1] as const;

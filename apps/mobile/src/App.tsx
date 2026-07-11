@@ -13,7 +13,7 @@
  */
 import "../global.css";
 import "../src/lib/transport-bootstrap";
-// i18n init（side effect，对齐 web「import @pin-ai/ui-web 即 init」）：
+// i18n init（side effect，对齐 apps/web「import src/ui-web barrel 即 init」）：
 // 必须先于任何用 t() 的组件渲染。首屏跟设备语言，登录后 useUiLanguageSync 覆盖。
 import "./i18n";
 

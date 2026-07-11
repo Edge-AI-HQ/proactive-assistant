@@ -1,8 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import i18n from "../i18n";
-import { isNative } from "../auth/platform";
-import type { ExternalMicLease } from "./external-mic-bridge";
 import { ByteDanceStreamingEngine } from "./ByteDanceStreamingEngine";
 import { normalizeVoiceLanguage } from "./language";
 import type {
@@ -134,28 +132,6 @@ export function VoiceProvider({ children, engine, transcriptionLanguage }: Voice
     () => ({ startCapture, stopCapture: finishCapture, isCapturing, captureStatus }),
     [startCapture, finishCapture, isCapturing, captureStatus],
   );
-
-  // Main-chat voice records via the WebView (getUserMedia / SpeechRecognition),
-  // which seizes the shared iOS audio session and kills the native ambient
-  // recorder with no interruption callback. Hold an external-mic lease while a
-  // capture is live and release it after. Keyed on isCapturing so acquire/release
-  // can't desync across the imperative start/cancel/commit paths; if the capture
-  // ends before the lazy import / acquire lands, `cancelled` releases at once.
-  // No-op off-native and when ambient is disabled.
-  useEffect(() => {
-    if (!isNative || !isCapturing) return;
-    let cancelled = false;
-    let lease: ExternalMicLease | null = null;
-    void import("./external-mic-bridge").then(async ({ acquireExternalMic }) => {
-      const acquired = await acquireExternalMic();
-      if (cancelled) void acquired.release();
-      else lease = acquired;
-    });
-    return () => {
-      cancelled = true;
-      void lease?.release();
-    };
-  }, [isCapturing]);
 
   return (
     <VoiceContext.Provider value={value}>

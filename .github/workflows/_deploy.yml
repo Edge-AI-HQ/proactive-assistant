@@ -347,7 +347,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       # Build context = repo root so the Dockerfile's `COPY packages/` picks up
-      # the shared layer (@pin-ai/core|state|ui-web|design). Mirrors
+      # the shared layer (@pin-ai/core|state|ui-kit|design). Mirrors
       # docker-compose.yml's web service + apps/web/fly.toml.
       - name: Deploy apps/web to ${{ inputs.daytona_version }}
         run: |

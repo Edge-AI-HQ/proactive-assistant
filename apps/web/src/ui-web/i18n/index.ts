@@ -7,18 +7,18 @@ import { detectDeviceLanguage } from "./languages";
 // en 全量静态打包 = 永远可用的回落层(缺 key / 加载失败都落到这)。
 // 语料真源在 @pin-ai/ui-kit（双端共享层，RN 也要用）；vite alias 只映射包名到
 // index.ts、不吃子路径，故照 tailwind 引 tokens.cjs 的先例走相对路径。
-import account from "../../../ui-kit/src/locales/en/account.json";
-import ambient from "../../../ui-kit/src/locales/en/ambient.json";
-import auth from "../../../ui-kit/src/locales/en/auth.json";
-import browser from "../../../ui-kit/src/locales/en/browser.json";
-import card from "../../../ui-kit/src/locales/en/card.json";
-import chat from "../../../ui-kit/src/locales/en/chat.json";
-import common from "../../../ui-kit/src/locales/en/common.json";
-import connect from "../../../ui-kit/src/locales/en/connect.json";
-import onboarding from "../../../ui-kit/src/locales/en/onboarding.json";
-import profile from "../../../ui-kit/src/locales/en/profile.json";
-import tasks from "../../../ui-kit/src/locales/en/tasks.json";
-import voice from "../../../ui-kit/src/locales/en/voice.json";
+import account from "../../../../../packages/ui-kit/src/locales/en/account.json";
+import ambient from "../../../../../packages/ui-kit/src/locales/en/ambient.json";
+import auth from "../../../../../packages/ui-kit/src/locales/en/auth.json";
+import browser from "../../../../../packages/ui-kit/src/locales/en/browser.json";
+import card from "../../../../../packages/ui-kit/src/locales/en/card.json";
+import chat from "../../../../../packages/ui-kit/src/locales/en/chat.json";
+import common from "../../../../../packages/ui-kit/src/locales/en/common.json";
+import connect from "../../../../../packages/ui-kit/src/locales/en/connect.json";
+import onboarding from "../../../../../packages/ui-kit/src/locales/en/onboarding.json";
+import profile from "../../../../../packages/ui-kit/src/locales/en/profile.json";
+import tasks from "../../../../../packages/ui-kit/src/locales/en/tasks.json";
+import voice from "../../../../../packages/ui-kit/src/locales/en/voice.json";
 
 export const EN_RESOURCES = {
   account,
@@ -48,7 +48,7 @@ void i18n.use(initReactI18next).init({
 
 // 非 en 语言按需动态加载(vite 切 chunk,不进主 bundle)
 const localeModules = import.meta.glob<{ default: Record<string, unknown> }>(
-  "../../../ui-kit/src/locales/*/*.json",
+  "../../../../../packages/ui-kit/src/locales/*/*.json",
 );
 
 /**

@@ -13,8 +13,7 @@
     "paths": {
       "@/*": ["./src/*"],
       "@pin-ai/core": ["../../packages/core/src/index.ts"],
-      "@pin-ai/state": ["../../packages/state/src/index.ts"],
-      "@pin-ai/ui-web": ["../../packages/ui-web/src/index.ts"]
+      "@pin-ai/state": ["../../packages/state/src/index.ts"]
     },
     "types": ["vite/client", "vitest/globals"]
   },

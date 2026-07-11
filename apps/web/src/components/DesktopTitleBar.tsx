@@ -1,4 +1,4 @@
-import { isElectron } from "@pin-ai/ui-web";
+import { isElectron } from "@/ui-web";
 
 /**
  * Electron 桌面壳顶部的隐藏标题栏(业界 convention 的 hidden draggable bar)。

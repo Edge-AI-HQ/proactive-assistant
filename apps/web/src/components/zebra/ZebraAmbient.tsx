@@ -1,5 +1,5 @@
 import { Radio, Smartphone } from "lucide-react";
-import { DeviceConnections, Text } from "@pin-ai/ui-web";
+import { DeviceConnections, Text } from "@/ui-web";
 
 /**
  * Desktop (zebra) AMBIENT — web 端只读语义（设计 SSOT：

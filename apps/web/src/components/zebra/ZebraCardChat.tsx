@@ -6,7 +6,7 @@ import {
   cardThreadSessionKey,
   ConversationView,
   realIntentToChatCard,
-} from "@pin-ai/ui-web";
+} from "@/ui-web";
 
 /**
  * zebra card chat 面板体 —— production ChatDetailView 的桌面装配（同一条

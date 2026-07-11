@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 
 // eager: 测试时同步拿到所有翻译文件
 const modules = import.meta.glob<{ default: Record<string, unknown> }>(
-  "../../../ui-kit/src/locales/*/*.json",
+  "../../../../../packages/ui-kit/src/locales/*/*.json",
   { eager: true },
 );
 

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Check } from "lucide-react";
-import { Text, Button, Input, Surface } from "@pin-ai/ui-web";
+import { Text, Button, Input, Surface } from "@/ui-web";
 
 /**
  * 设计系统 Gallery —— dev-only living styleguide / 视觉验证基座。

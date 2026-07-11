@@ -28,17 +28,16 @@ PIN AI 后端是 `backend/` 下的一个 **uv workspace monorepo**（Python / Fa
 
 用户产品前端是「**一套共享层 + 多个端壳**」：跨端逻辑与 UI 沉在 `packages/*`，各端只写壳。
 
-共享层 `packages/`（自底向上，包间边界由根 `eslint.config.mjs` 规则强制）：
+共享层 `packages/`（自底向上，包间边界由根 `eslint.config.mjs` 规则强制；四包全部 web 与 RN 双端共享）：
 - `@pin-ai/core` — 纯 TS：transport/SSE、API 域函数、域类型、纯状态机、平台 ports 接口（禁 react / capacitor / electron / 浏览器 globals）。
 - `@pin-ai/design` — 跨端设计 token SSOT（`tokens.cjs/mjs/json`，web Tailwind 与 RN NativeWind 共用，改色值只改这里）。
 - `@pin-ai/state` — 跨端 React hooks：TanStack Query / zustand / 业务编排 / auth glue，依赖 core（禁 react-dom / 平台 API）。
-- `@pin-ai/ui-kit` — 双端设计系统层：`cn` 工具 / 组件契约 / cva variant / motion 预设，平台无关，web 与 RN 共享，依赖 design。
-- `@pin-ai/ui-web` — web 介质层：React DOM 组件 + 平台 hooks，硬标准「纯 web 可运行」，依赖 core/design/ui-kit。
+- `@pin-ai/ui-kit` — 双端设计系统层：`cn` 工具 / 组件契约 / cva variant / motion 预设 / `locales/`（i18n 语料双端真源），平台无关，依赖 design。
 
 端壳：
-- **apps/web** — zebra 设计的桌面 web 端（Vite + React 19 + react-router），消费 core/state/ui-web，**已上线 dev/prod**。设计 SSOT：[`docs/plans/2026-06-12-zebra-web-app-port.mdx`](docs/plans/2026-06-12-zebra-web-app-port.mdx)。
+- **apps/web** — zebra 设计的桌面 web 端（Vite + React 19 + react-router），消费 core/state/ui-kit，**已上线 dev/prod**。功能层在 `src/ui-web/`（原共享包 `@pin-ai/ui-web`，Capacitor 壳退役后只剩本 app 消费，2026-07 迁入）。设计 SSOT：[`docs/plans/2026-06-12-zebra-web-app-port.mdx`](docs/plans/2026-06-12-zebra-web-app-port.mdx)。
 - **apps/desktop** — Electron macOS 壳，renderer 复用 apps/web 的 Vite root（「一套 zebra UI、web + 桌面两个壳」），桌面侧只有 main + preload。仅本地 `make macos`，暂无自动部署。
-- **apps/mobile** — Expo / React Native iOS app，UI 独立实现，业务层消费 core/design/state/ui-kit（不碰 ui-web）。**已接管 iOS 交付（TestFlight，App Store 未上架）**：dev push main 自动构建、prod 手动 dispatch（均 `build-rn-ios.yml`，dev/prod 均实测走通）。
+- **apps/mobile** — Expo / React Native iOS app，UI 独立实现，业务层消费 core/design/state/ui-kit。**已接管 iOS 交付（TestFlight，App Store 未上架）**：dev push main 自动构建、prod 手动 dispatch（均 `build-rn-ios.yml`，dev/prod 均实测走通）。
 - **proactive-ai-frontend**（Capacitor）— **已退役删除（2026-07-09）**：原生产 iOS 前端；TestFlight 交付由 apps/mobile（RN）接管、网页形态由 apps/web 承接，源码在 git 历史。
 
 两个 web 端（apps/web / apps/desktop）经 vite alias + tsconfig paths 直引 `packages/*/src`（无 build 步骤，改包即时生效）；apps/mobile 走 npm workspace 依赖（metro 解析）。前端分层 SSOT：[`research/2026-06-10-frontend-layering.mdx`](research/2026-06-10-frontend-layering.mdx)；双端设计系统 SSOT：[`docs/plans/2026-06-13-dual-platform-design-system.mdx`](docs/plans/2026-06-13-dual-platform-design-system.mdx)。
@@ -118,7 +117,7 @@ backend/.env / backend/.env.chat / ops/litellm/.env / ./.env  # 本地明文，m
 - `packages/core/src/`、`packages/state/src/`：跨端纯逻辑层（`@pin-ai/core`=transport/SSE/API/域类型/状态机/ports；`@pin-ai/state`=TanStack Query/zustand/编排 hooks），平台无关，边界由根 eslint 强制。
 - `packages/design/`：跨端设计 token SSOT（`@pin-ai/design`，`tokens.cjs/mjs/json`，web Tailwind + RN NativeWind 共用）。
 - `packages/ui-kit/src/`：双端设计系统层（`@pin-ai/ui-kit`，`cn` / 组件契约 / cva / motion 预设），平台无关，web 与 RN 共享。
-- `packages/ui-web/src/`：web 介质共享层（`@pin-ai/ui-web`：auth/聊天栈/球面/卡片/connect/voice/browser/设置 sections），apps/web 消费（原 Capacitor 壳 2026-07 退役），硬标准「纯 web 可运行」，重 native 模块经注册点注入（registerSignOutCleanup / registerFeedbackOutbox / registerLocalThreadStore / registerExternalMicAcquirer）。
+- `apps/web/src/ui-web/`：apps/web 功能层（auth/聊天栈/球面/卡片/connect/voice/browser/设置 sections；原共享包 `@pin-ai/ui-web`，2026-07 迁入 app），硬标准「纯 web 可运行」，桌面能力经 desktop-bridge 探测注入（core ports 注册点 registerSignOutCleanup / registerFeedbackOutbox / registerLocalThreadStore 的消费侧在这里）。
 - `apps/web/src/`：zebra 桌面 web 端（独立 Vite app；壳=ZebraShell/panels/⌘K，功能=共享层）。已上线 dev/prod（部署见「变更与部署」）。
 - `apps/desktop/src/`：Electron macOS 壳（`main` + `preload`；renderer 复用 apps/web，见 `electron.vite.config.ts`）。本地 `make macos`，暂无自动部署。
 - `apps/mobile/src/`：Expo / React Native iOS app（UI 独立实现，消费 core/design/state/ui-kit；native 采集在 `apps/mobile/modules/`）。开发中、未上线；本地 `make rn`。
@@ -233,7 +232,7 @@ cd internal-reward-dashboard && npm test            # 内部 review app 单测
 cd apps/web && npm run type-check && npm test       # zebra web 端
 cd apps/desktop && npm run type-check               # Electron 桌面壳（仅类型）
 cd apps/mobile && npm run type-check                # Expo RN（仅类型）
-npm run check:packages                              # core/state/ui-kit/ui-web 边界 lint + 类型 + 单测
+npm run check:packages                              # core/state/ui-kit 边界 lint + 类型 + 单测
 ```
 
 改完怎么验证（按改动范围选最轻的）：
@@ -243,7 +242,7 @@ npm run check:packages                              # core/state/ui-kit/ui-web �
 - 改 `apps/web/` → `cd apps/web && npm run dev`（端口 3005）+ `cd apps/web && npm run type-check && npm test`
 - 改 `apps/desktop/` → `cd apps/desktop && npm run type-check` + `make macos` 看 Electron 起得来
 - 改 `apps/mobile/` → `cd apps/mobile && npm run type-check` + `make rn SIM=1` 在模拟器点
-- 改 `packages/`（共享层）→ `npm run check:packages`（core/state/ui-kit/ui-web 边界+类型+单测）；这些包被多端共享，按改动面补跑消费端 type-check（apps/web 另跑单测，desktop / mobile 只有 type-check）
+- 改 `packages/`（共享层）→ `npm run check:packages`（core/state/ui-kit 边界+类型+单测）；这些包被多端共享，按改动面补跑消费端 type-check（apps/web 另跑单测，desktop / mobile 只有 type-check）
 - 改 `internal-reward-dashboard/` → `npm run type-check` + `npm test` + `npm run dev -- --host 127.0.0.1 --port 3004`，在 `/runs` / `/traces/:runId` 点真实流程
 - 改 `/api/reward-dashboard/*` 或 reward schema → `uv run ruff check .` + `uv run pytest tests/web/db/repositories/test_reward_repo.py tests/web/routes/test_reward_dashboard.py tests/web/services/test_trace_artifacts.py`
 - 改 db migration（新 SQL 文件到 `db/migrations/`）→ 先 `make build-backend` **再** `make migrate`，确认 schema 应用成功。⚠️ 迁移 SQL 被烘焙进镜像（Dockerfile `COPY db`），只跑 `make migrate` 不重建镜像会执行**旧** SQL、悄悄忽略新文件（仍显示「db-migrate complete」但表没建出来）

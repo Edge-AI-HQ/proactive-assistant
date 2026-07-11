@@ -252,9 +252,9 @@ history 真相是 `pai_chat_messages`(worker finalize 写入,`/api/conversation/
 
 ### Card drawer:Sources / How I reasoned(前端)
 
-卡片抽屉的 Sources 和 How I reasoned 两个区块吃 `IntentCard` 的结构化字段(`packages/ui-web/src/card/CardDrawerBody.tsx` 的 `DrawerDetailBody`,chat 侧复用同一组件),不再从展示文本反向解析:
+卡片抽屉的 Sources 和 How I reasoned 两个区块吃 `IntentCard` 的结构化字段(`apps/web/src/ui-web/card/CardDrawerBody.tsx` 的 `DrawerDetailBody`,chat 侧复用同一组件),不再从展示文本反向解析:
 
-- **Sources**:接 `IntentCard.sourceApps`(generation 侧确定性派生的 app slug 数组,派生与注入见 [Generation](./generation)),每个 slug 经 `packages/ui-web/src/card/source-app-display.ts` 查表渲染 `SourcePill`(品牌 logo / 图标 / 首字母 fallback)。`line2` 不再承载 sources 数据:`now/card-model.ts` 只保留 `Scheduled · label` 分支,旧的 `Sources: …` 拼接和 drawer 端 `parseSources` 反向解析已删除。
+- **Sources**:接 `IntentCard.sourceApps`(generation 侧确定性派生的 app slug 数组,派生与注入见 [Generation](./generation)),每个 slug 经 `apps/web/src/ui-web/card/source-app-display.ts` 查表渲染 `SourcePill`(品牌 logo / 图标 / 首字母 fallback)。`line2` 不再承载 sources 数据:`now/card-model.ts` 只保留 `Scheduled · label` 分支,旧的 `Sources: …` 拼接和 drawer 端 `parseSources` 反向解析已删除。
 - **How I reasoned**:`HowGeneratedSection` 接 `IntentCard.reasoningSteps`(LLM 生成的分步推理,`label` + `detail`),默认收起,展开为编号步骤列表;`steps` 为空(旧卡 / 提醒卡)时区块整体隐藏。
 - **旧卡降级**:后端注入 `sourceApps` 之前生成的卡,由 `packages/core` 的 `normalizeIntentCard` 客户端兜底——`sourceApps` 缺失时用 `deriveSourceAppsFromCitations` 从 `sources[]` 引文前缀推断 slug,审计引文不裸渲染到 UI。
 
@@ -280,10 +280,10 @@ history 真相是 `pai_chat_messages`(worker finalize 写入,`/api/conversation/
 | Thread metadata 表 | `backend/db/migrations/035_pai_chat_threads.sql`、`pinai_api/platform/db/repositories/chat_threads.py` |
 | 共享 api 模型 | `backend/libs/contracts/src/pinai_contracts/api_models.py`(`ChatInitRequest` / `ChatSendRequest` / `ChatHistoryResponse` 等) |
 | 前端 chat runtime | `packages/state/src/queries/conversation.ts`(`useConversationRuntime`) |
-| 共享 chat 视图 | `packages/ui-web/src/chat/conversation/ConversationView.tsx`、`packages/ui-web/src/card/card-chat.tsx`(端壳:apps/web 卡片面板、apps/mobile ChatDetailView) |
-| 工具活动行 / work group | `packages/core/src/machines/tool-steps.ts`、`packages/ui-web/src/chat/` 的 work group 渲染 |
-| Card drawer Sources / How I reasoned | `packages/ui-web/src/card/CardDrawerBody.tsx`、`packages/ui-web/src/card/source-app-display.ts`、`packages/core/src/domain/intent-card.ts`(`normalizeIntentCard` / `deriveSourceAppsFromCitations`) |
-| 浏览器子视图 | `packages/ui-web/src/browser/` |
+| 共享 chat 视图 | `apps/web/src/ui-web/chat/conversation/ConversationView.tsx`、`apps/web/src/ui-web/card/card-chat.tsx`(端壳:apps/web 卡片面板、apps/mobile ChatDetailView) |
+| 工具活动行 / work group | `packages/core/src/machines/tool-steps.ts`、`apps/web/src/ui-web/chat/` 的 work group 渲染 |
+| Card drawer Sources / How I reasoned | `apps/web/src/ui-web/card/CardDrawerBody.tsx`、`apps/web/src/ui-web/card/source-app-display.ts`、`packages/core/src/domain/intent-card.ts`(`normalizeIntentCard` / `deriveSourceAppsFromCitations`) |
+| 浏览器子视图 | `apps/web/src/ui-web/browser/` |
 
 ## 验证方式
 
@@ -301,7 +301,7 @@ cd backend && uv run pytest tests/chat/                          # 全 chat 套�
 
 # 类型 + 前端
 cd backend && uv run ruff check .
-npm run check:packages                    # core/state/ui-kit/ui-web 边界 + 类型 + 单测
+npm run check:packages                    # core/state/ui-kit 边界 + 类型 + 单测
 cd apps/web && npm run type-check && npm test
 ```
 
