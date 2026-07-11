@@ -93,7 +93,7 @@ L0 按**域**分两张表(`119` 把早先的单一 `pai_raw` 拆开——统一�
 - **Composio connector ingest** → `connector_ingest` → `generic_ingest.upsert_generic` → `pai_raw_apps`(toolkit 来自 task,entity_type 来自 `db/ingest_recipes/<toolkit>.yaml`)。
 - **device ingest** → `raw_device.py` → `pai_raw_device`:snapshot 的 `raw_only`/`dual` kind(apps/contacts/health)+ ambient 的 `signal_only` kind(utterance/visit/motion 等 context event)都写这一张表,没有 typed 分流。`external_id`=device_id 让 full-sync replace 把 DELETE 限定到单台设备。
 
-> projector(`event_projector.py` 的 `project_unprojected`)读 **`pai_raw_apps` + `pai_raw_device` 两表 UNION** 投成 pending 事件:apps 行带真实 toolkit、device 行以 `toolkit='device'` / `entity=kind` 归一,`(toolkit, entity)` 经 `_EVENT_TYPE_MAP` 映射出 event_type。device 跳过 semantic firehose(utterance/transcript,evolve rollup 合成 episode)+ apps/contacts(state 非事件)。
+> projector(`event_projector.py` 的 `project_unprojected`)读 **`pai_raw_apps` + `pai_raw_device` 两表 UNION** 投成 pending 事件:apps 行带真实 toolkit、device 行以 `toolkit='device'` / `entity=kind` 归一,`(toolkit, entity)` 经 `_EVENT_TYPE_MAP` 映射出 event_type。device 只跳过 `transcript_window` firehose(由 evolve rollup 合成 episode;utterance / session_summary 已改 1→1 实时投影)+ apps/contacts(state 非事件)。
 
 ### L1 · `pai_events`(`111`)
 
@@ -102,7 +102,7 @@ L0 按**域**分两张表(`119` 把早先的单一 `pai_raw` 拆开——统一�
 | 字段 | 含义 |
 |---|---|
 | `(user_id, id)` | 主键(`id` TEXT,per-user 唯一)|
-| `source` | 来源**类别**:`composio` / `device` / `ambient` / `pinai_chat` / `pinai_feedback` / `agent_action` / `world` / `predicted.*`。agent 可写值由服务端白名单强制(仅 `pinai_chat`/`agent_action`/`predicted.*`),actor 由 JWT server-stamp 进 `structured` |
+| `source` | 来源**类别**:`composio` / `device` / `ambient` / `pinai_chat` / `pinai_feedback` / `agent_action` / `world` / `predicted.*`。agent 可写值由服务端白名单强制(仅 `pinai_chat`/`agent_action`/`device` + `predicted.*` 前缀),actor 由 JWT server-stamp 进 `structured` |
 | `event_type` | 语义大类:`communication` / `meeting` / `utterance` / `movement` / `transaction` / `interaction` / `agent_decision` / `preference` / `world_news`;兼作检索排序的结构性先验 |
 | `occurred_at` / `end_at` | **事件发生时刻**(过去/未来同轴)+ 区间事件的结束 |
 | `recorded_at` | **系统写入时刻**(事务时间;bi-temporal 另一轴,backfill 旧邮件=今天)|
@@ -164,7 +164,7 @@ L0 按**域**分两张表(`119` 把早先的单一 `pai_raw` 拆开——统一�
 | trigger_kind | 触发源 | scope |
 |---|---|---|
 | `on_event` | scheduler kind `connector.evolve` —— **per-user 单例任务 `"evolve"`**:所有 connector 的触发合并(`connectors`/`rawSources` 并集),sync 触发带 **~2min debounce**(同拍 sync 折叠成一轮,合并保留更早到期),init 冷启动 / 手动刷新 immediate | 该批 connectors 的新事件 + 蒸馏 |
-| `periodic` | scheduler kind `auto.dreaming`(legacy 命名;**每 4 小时**,用户时区整点边界,cron `0 */4 * * *`)| 全待整理队列;forget + 刷新画像 |
+| `daily`(常量 `TRIGGER_DAILY`,语义=periodic sweep) | scheduler kind `auto.dreaming`(legacy 命名;**每 4 小时**,用户时区整点边界,cron `0 */4 * * *`)| 全待整理队列;forget + 刷新画像 |
 
 **periodic 编排顺序(load-bearing)**:`/agent/run/dream` 先跑 **`rollup_semantic`**(独立 agent:把上个周期的 ambient firehose——transcript_window——卷成 episode 事件落 L1)、**再**跑 evolve;顺序反了本周期 firehose 进不了画像。episode dedupe 让 4h 高频重跑天然幂等。
 
@@ -192,9 +192,9 @@ L0 按**域**分两张表(`119` 把早先的单一 `pai_raw` 拆开——统一�
 
 | Prefix | 作用 |
 |---|---|
-| `/api/events` | list(active 事件时间线,Ambient / Mirror 渲染,只读)|
+| `/api/events` | list(active 事件时间线,Ambient / Mirror 渲染,只读;响应带计算字段 `importance` = visual_importance(event_type, reference_count),非存储列)|
 | `/api/events/stream` | SSE 信号面:`pai_events` 有写入时推一帧 `{"type":"changed"}`(不带数据,前端收到后 invalidate + refetch list)。发布端收口在 `EventsRepository.append` 的 `pg_notify`(COMMIT 才投递、同事务去重),每台 api 实例一条 LISTEN 连接分发(`events/notify.py`);掉信号退化为前端兜底 poll。消费端:`useEventsLiveRefresh`(state)+ zebra web Events 面板 |
-| `/api/user-strings` | get(6 slot 画像 markdown,Mirror 渲染,无 UI 写路径)|
+| `/api/user-strings` | get(5 slot 画像 markdown,Mirror 渲染,无 UI 写路径)|
 | `/api/settings` | get / patch(含 timezone)|
 | `/api/evolution` | 列 evolution_runs 给 dreaming panel |
 | `/api/skills` | list / get / patch / disable |
@@ -205,6 +205,7 @@ L0 按**域**分两张表(`119` 把早先的单一 `pai_raw` 拆开——统一�
 |---|---|
 | `/api/agent/events` | `search`(hybrid/recency + `since`/`until` 时间窗;`recordedSince`+`recordedUntil` 切 **arrival 轴**——按 recorded_at 的到达流、含 superseded,generator 的 cache-stable log 源)/ `append`(纯追加,source 白名单)/ `curate`(evolve 盖章)/ **`{id}/source`**(L0 原文下钻,supersede 链自动 resolve)|
 | `/api/agent/user-strings` | `/`(读 5 slot 画像)/ `edit`(memory_edit;全 5 slot;成功同事务双写 L1 变更事件)|
+| `/api/agent/settings` | get / patch(含 timezone,`settings_agent.py`)|
 | `/api/agent/skills` | list / get / add |
 | `/api/agent/evolution` | create / list / get / complete / fail |
 | `/api/agent/raw` | list / get(按域路由:device→`pai_raw_device` by kind,其余→`pai_raw_apps` by toolkit+entity)|
@@ -327,4 +328,4 @@ SELECT table_name, status, count(*) FROM pai_embedding_queue GROUP BY table_name
 ## 相关 AI Plans
 
 - [Lifelong Memory 系统设计](../plans/2026-06-23-lifelong-memory-system):三层架构 + 六模块地图 + 工具收敛 + evolve 的设计 SSOT(章节即模块)。
-- [Proactive + 卡片生成](../plans/2026-06-23-proactive-card-generation):本 memory 的消费侧(proactive agent + 卡片生成)。
+- [Proactive + 卡片生成](../plans/2026-06-23-proactive-card-generation):本 memory 的消费侧(卡片生成 agentic 单 run)。

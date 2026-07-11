@@ -9,22 +9,22 @@ description: "Chat-driven 执行的当前事实(用户/agent 在 card 或 main �
 
 执行层是 conversation(actor kernel)单一链路:
 
-`用户 → ConversationView(main / card / proactive 同一前端)→ POST /api/conversation/send(202,入 mailbox)→ AgentRunWorker(api 进程)→ control/execution_client.py ChatRunClient(EdDSA agent-run JWT)→ agent-engine /agent/chat (DeepAgents)→ agent 调原生 @tool 或 python_exec(Daytona sandbox + pinai_sdk)→ 帧经 RedisFrameBus(Redis Streams)→ GET /api/conversation/stream(resumable SSE)→ 前端`
+`用户 → ConversationView(main / card 同一前端)→ POST /api/conversation/send(202,入 mailbox)→ AgentRunWorker(api 进程)→ control/execution_client.py ChatRunClient(EdDSA agent-run JWT)→ agent-engine /agent/chat (DeepAgents)→ agent 调原生 @tool 或 python_exec(Daytona sandbox + pinai_sdk)→ 帧经 RedisFrameBus(Redis Streams)→ GET /api/conversation/stream(resumable SSE)→ 前端`
 
 回复是异步的:`/send` 只入队返回 202,turn 的帧从长连 `/stream` 推回(断线带 `lastEventId` 重连 replay gap;刷新靠 `/history` 的 `active` 重建进行中 turn)。turn 结束时 worker 把 user+assistant 行写进 `pai_chat_messages`(history 真相)。
 
-session_key 决定走哪个 agent:`main-<user_id>-<rand>` → `main_chat`;`card-thread-<card_id>` → `card_execution`;`proactive-<user_id>` → `proactive`。card 的 `card_context` 在首轮作为 SystemMessage 写进 LangGraph checkpointer 持久化(后续 turn 不需要前端再传)。卡片生成后,scheduler dispatcher 经 `domains/generation/card_fanout.py` 为前 N 张卡(`PINAI_CARD_FANOUT_LIMIT`,默认 2)直接 post_message 预跑 bootstrap turn(pre-run),agent 跑到 `propose_action` 自然停轮;抽屉(useCardExecutionRun)和 CardChat 现复用**同一个 SSE conversation runtime**(useConversationRuntime),抽屉用 `deriveRunSnapshot` 纯 selector 把 transcript 投影成 RunSnapshot(plan/drafts/result/plan_revisions),取代旧的 1.5s 轮询 `/conversation/history`,与 CardChat 读同一线程。
+session_key 决定走哪个 agent:`card-thread-<card_id>` → `card_execution`;其余(含 `main-<user_id>` 与历史 `proactive-` 前缀)→ `main_chat`。**proactive agent 已随 proactive sunset 删除**(`098_sunset_proactive_drop_tables.sql`),api 侧只剩 session_key 脚手架兼容。card 的 `card_context` 在首轮作为 SystemMessage 写进 LangGraph checkpointer 持久化(后续 turn 不需要前端再传)。卡片生成后,scheduler dispatcher 经 `domains/generation/card_fanout.py` 为前 N 张卡(`PINAI_CARD_FANOUT_LIMIT`,默认 2)直接 post_message 预跑 bootstrap turn(pre-run),agent 跑到 `propose_action` 自然停轮;抽屉(useCardExecutionRun)和 CardChat 现复用**同一个 SSE conversation runtime**(useConversationRuntime),抽屉用 `deriveRunSnapshot` 纯 selector 把 transcript 投影成 RunSnapshot(plan/drafts/result/plan_revisions),取代旧的 1.5s 轮询 `/conversation/history`,与 CardChat 读同一线程。
 
-工具决策 Tier 1-4 政策**完全靠 agent system prompt 和 native tool 命名区分**(没有运行时硬拦截 hook,Composio side-effect 强制门**当前只是 prompt 规则 + tools allowlist,没有 verb 分类硬闸**,详见下方"Composio side-effect"段):
+工具决策 Tier 1-4 由 agent system prompt 分层,**副作用另有运行时硬闸**(不再是 prompt-only,详见下方"Composio side-effect"段):
 
-1. **Tier 1 Local read** — native @tool:`memory_*` / `signals_*` / `profile_*` / `raw_*` / `cards_*` / `feedback_*` / `world_*`
-2. **Tier 2 Composio read** — `COMPOSIO_MULTI_EXECUTE_TOOL` 调 GET / FETCH / SEARCH / LIST 类 slug
-3. **Tier 3 Composio write** — 同一个 meta-tool,prompt 要求先在 chat 起草 + 等用户 OK 才发起;`GMAIL_SEND_EMAIL` 等高风险 slug 走 prompt 规定的 draft 链路 — **代码层面没有 slug verb 黑/白名单**
-4. **Tier 4 Last resort** — `tavily_search` / `tavily_extract`(LangChain Tavily 工具)读 URL,`browser_tool`(Browserbase)做真交互
+1. **Tier 1 Local read** — native @tool:`events_search` / `event_source` / `event_append` / `memory_edit` / `feedback_list` 等(老 `memory_*`/`signals_*`/`raw_*`/`world_*` 已随 lifelong-memory 重构退役)
+2. **Tier 2 Composio read** — `COMPOSIO_MULTI_EXECUTE_TOOL` 调 GET / FETCH / SEARCH / LIST 类只读 slug(只读 VERB 放行)
+3. **Tier 3 Composio write** — 同一个 meta-tool;副作用判定走 `pinai_contracts.composio_policy.is_side_effecting`(slug VERB 启发式,**fail-closed**),命中即走 **HITL 人工审批**(`chat:requires_action`);prompt 的 draft 链路仍在,作为体验层
+4. **Tier 4 Last resort** — `tavily_search` / `tavily_extract`(LangChain Tavily 工具)读 URL,`browser_tool`(Browserbase)做真交互(破坏性 label 运行时强制 takeover)
 
 ```mermaid
 flowchart LR
-  UI["ConversationView (main / card / proactive)"] --> Init["POST /api/conversation/init"]
+  UI["ConversationView (main / card)"] --> Init["POST /api/conversation/init"]
   UI --> Send["POST /api/conversation/send (202)"]
   UI --> Stream["GET /api/conversation/stream (resumable SSE)"]
   UI --> Hist["GET /api/conversation/history"]
@@ -33,7 +33,7 @@ flowchart LR
   Gen["generator 完成 → card_fanout (pre-run)"] --> Mailbox
   Worker --> Client["control/execution_client.py ChatRunClient"]
   Client --> Chat["agent-engine /agent/chat (SSE)"]
-  Chat --> Agent["main_chat / card_execution / proactive agent"]
+  Chat --> Agent["main_chat / card_execution agent"]
   Agent --> Native["native @tool (Tier 1)"]
   Agent --> Composio["COMPOSIO_MULTI_EXECUTE_TOOL (Tier 2/3)"]
   Agent --> Tavily["tavily_search / tavily_extract (Tier 4)"]
@@ -60,7 +60,7 @@ flowchart LR
 - agent-engine 端 `main_chat` / `card_execution` agent prompt 与 native @tool 套件。
 - `python_exec` sandbox 工具(Daytona)+ `pinai_sdk` 回连 `/api/agent/*` 的 code-mode 链路。
 - Browser tool(Browserbase session 管理、AI/user control、SSE 事件总线)。
-- Composio meta-tool 转发 + 当前的 prompt-only 副作用约束(代码层 verb gate 还没实现)。
+- Composio meta-tool 转发 + 副作用双闸(sandbox 路径 403 + native HITL)。
 - `tavily_search` / `tavily_extract` web read 工具。
 - chat 的 memory 工具面(`events_search` / `event_source` / `event_append` / `memory_edit`)+ `PortraitMiddleware` 画像常驻注入。
 - 前端 chat runtime 与工具活动渲染。
@@ -81,7 +81,7 @@ sequenceDiagram
   participant Web as api /api/conversation
   participant Worker as AgentRunWorker
   participant Chat as agent-engine /agent/chat
-  participant Agent as main_chat / card_execution / proactive
+  participant Agent as main_chat / card_execution
   participant Tool as native @tool / python_exec / browser
 
   FE->>Web: POST /init { card_id? | kind? | session_key? }
@@ -122,7 +122,7 @@ sequenceDiagram
 | `POST /api/conversation/decision` | 同上 | HITL approve/reject/edit/respond → mailbox → Command(resume=) 续跑。 |
 | `POST /api/conversation/cancel` | 同上 | 真停 in-flight turn(DB 标记 + 跨实例 NOTIFY abort)。 |
 
-`pai_chat_threads`(migration `035_pai_chat_threads.sql`)字段:`user_id`、`thread_id` 复合 PK、`kind` ∈ `main|card|proactive`、`card_id`、`title`、`archived`、`created_at`、`last_message_at`、`message_count`。
+`pai_chat_threads`(migration `035_pai_chat_threads.sql`)字段:`user_id`、`thread_id` 复合 PK、`kind` ∈ `main|card`(CHECK 约束)、`card_id`、`title`、`archived`、`created_at`、`last_message_at`、`message_count`。
 
 ### worker → chat 执行
 
@@ -137,7 +137,7 @@ agent-engine 端验签 + `jti` 黑名单(`pai_jti_revocations`),失败 401。
 
 `agent_engine/transport/routes/chat.py:POST /agent/chat`:
 - verify run JWT → `RunPrincipal`。
-- 看 session_key prefix 选 agent:`card-thread-` → `make_card_execution_agent`,`proactive-` → `make_proactive_agent`,否则 `make_main_chat_agent`。
+- 看 session_key prefix 选 agent:`card-thread-` → `make_card_execution_agent`,否则 `make_main_chat_agent`(proactive agent 已删)。
 - 拿 LangGraph checkpointer(`agent_engine/harness/checkpoint.py` 在 Postgres `langgraph` schema 持久化);thread_id = session_key。
 - 每个普通发送 turn 都注入隐藏 `turn_context` SystemMessage,包含当前 UTC 时间;agent 用它解析"今天 / 明天 / 下一批"等相对时间,尤其是写临时 preference(`event_append` `event_type="preference"` 的 `structured.expires`)时必须保证过期时间在未来。
 - card_context 注入分两种线程(`agent_engine/transport/routes/chat.py:_build_send_messages`):**card thread** 首次 + 有 `card_context` 时把 `SystemMessage(json.dumps(card_context))` push 进 thread state,之后不需要前端再传;**main thread** 是每用户单例(migration 053),首轮一辈子只真一次,所以改成**本轮带 `card_context` 就注入**(从某张卡打开 main chat 给反馈时),不看是不是首轮。两种都被 `/history` 过滤掉,不进前端渲染。
@@ -149,7 +149,7 @@ agent-engine 端验签 + `jti` 黑名单(`pai_jti_revocations`),失败 401。
 
 `agent_engine/agents/main_chat.py:make_main_chat_agent`:
 
-- LiteLLM (Sonnet 4.6) 通过 langchain-openai `ChatOpenAI` 接到 LiteLLM proxy。
+- 模型经 langchain-openai `ChatOpenAI` 接到 LiteLLM proxy,取部署级默认 `settings.default_model`(`harness/llm.py:make_chat_model`;各环境不同,dev 与 prod 的默认模型见部署配置)。
 - prompt 结构:role + 语言匹配 + persona grounding(memory / signals / past turns)+ tool routing(Tier 1-4 + native tools 清单 + composio meta + browser + python_exec)+ 副作用规则 + 输出风格。
 - 工具集合:全部 `agent_engine/tools/direct/*` + `agent_engine/tools/code_mode/sandbox.py` 的 `python_exec` + `agent_engine/tools/browser/tools.py` + `agent_engine/tools/direct/tavily.py` + `agent_engine/tools/direct/composio_meta.py` 的 4 个 meta-tool。
 
@@ -168,7 +168,7 @@ agent-engine 端验签 + `jti` 黑名单(`pai_jti_revocations`),失败 401。
 |---|---|
 | `events.py` | **memory 检索/写入的统一面**:`events_search`(L1 hybrid 检索,query/event_type/since/until,返回 snippet + `hasSource`)、`event_source`(按 event 下钻 L0 原文,supersede 链自动 resolve)、`event_append`(纯追加;preference 也走这,`structured{polarity,weight,scope,expires}`)。老的 memory_*/signals_*/raw_*/world_* 工具全部退役 |
 | `user_strings.py` | `memory_edit`(L2 画像 5 slot add/replace/remove/batch,可带 `evidence_event_ids`;服务端同事务把画像变更写回 L1)。画像本身经 `PortraitMiddleware` 常驻注入,不用工具读 |
-| `cards.py` | `cards_recent`、`generate_card` |
+| `cards.py` | `generate_card`(`cards_recent` 已删) |
 | `composio_meta.py` | `composio_search_tools`、`composio_get_tool_schemas`、`composio_multi_execute`、连接管理(Tool Router meta 工具) |
 | `feedback.py` | `feedback_list` |
 | `preferences.py` | `set_generation_language`(改输出语言 → 确定性设置,非偏好行;内容偏好走 `event_append`) |
@@ -182,7 +182,7 @@ agent-engine 端验签 + `jti` 黑名单(`pai_jti_revocations`),失败 401。
 `agent_engine/tools/code_mode/sandbox.py:python_exec`:
 
 - DeepAgents 自带的 native tool,把任意 Python 跑在 Daytona sandbox 里。
-- 每个 LangGraph thread 一个 sandbox(LRU 100,5min auto_stop,24h auto_delete,详见 [Runtime & Deployment](./runtime-deployment))。
+- 每个 LangGraph thread 一个 sandbox(LRU 256,60min auto_stop,24h auto_delete,详见 [Runtime & Deployment](./runtime-deployment))。
 - 注入 env:`PAI_API_URL`(本地 ngrok / 生产公网)+ `PAI_SANDBOX_TOKEN` phantom token + `PAI_RUN_JWT`。
 - sandbox 里 baked `pinai_sdk`,`from pinai_sdk import client`,所有 `/api/agent/*` 走 phantom token 鉴权。
 - 本地只想验证 chat/generator 质量、不想走 Daytona/ngrok 时,设置 `PINAI_LOCAL_SANDBOX=1` 并重建 `agent-engine`;chat route 和 generator 都会用 `LocalShellBackend` 在 `agent-engine` 容器内执行,`pinai_sdk` 通过 `http://api:8000` 回连 api 进程。
@@ -197,32 +197,24 @@ agent-engine 端验签 + `jti` 黑名单(`pai_jti_revocations`),失败 401。
 |---|---|
 | `manager.py` | `BrowserbaseManager`,session 上限 5,空闲 5min 回收,60s 远端健康探活。 |
 | `tools.py` | LangChain 工具入口,description 头标 LAST-RESORT TOOL + snapshot-first。 |
-| `control_state.py` | `controlMode='ai' / 'user' / 'idle'`;`MUTATION_ACTIONS` 集合定义可写动作,user 模式只允许只读(`snapshot` / `get_text` / `screenshot`)。 |
-| `events.py` | 事件总线:`browser:opened` / `browser:navigated` / `browser:closed` / `browser:control` / `browser:takeover-requested`。 |
-| `routes.py` | `GET /agent/browser/events?session_key=...`(SSE 重连回放)、`GET /agent/browser/sessions`、`POST /agent/browser/sessions`、`DELETE /agent/browser/sessions/:id`、`POST /agent/browser/sessions/:id/control`。 |
+| `control_state.py` | `controlMode='ai' / 'user'`;user 接管期间 agent 只许只读 allowlist(`snapshot` / `get_text` / `console` / `request_takeover`)。**破坏性 label 硬闸** `is_destructive_label`:点击目标的 accessible name 命中 pay/order/checkout/transfer/delete(含中文 付款/下单/转账/删除 等)即运行时拦截、强制交还用户,bypass 模式也不豁免。 |
+| `events.py` | 事件总线:`browser:opened` / `browser:navigated` / `browser:closed` / `browser:control:granted` / `browser:control:takeover`。 |
+| `routes.py` | `/agent/browser/*`:`events`(SSE 重连回放)、`input`(用户手势直驱)、`heartbeat`、`refresh-live-view`、`login-check`、`control`、`DELETE sessions/:id`、`context/clear-site`(登录站 cookie 清除)。 |
 
 Browser tool 支持的 actions:`open` / `snapshot` / `click` / `type` / `press_key` / `wait` / `scroll` / `navigate` / `go_back` / `go_forward` / `reload` / `get_text` / `console` / `request_takeover` / `close`。每个动作返回新 a11y snapshot 带 ref(`e3` 之类)给后续动作引用。
 
-Browserbase context(`ensure_browserbase_context`)在 onboarding 完成时(`domains/user_model/profile.py` update_settings)provision(和 LiteLLM vk 同模式),session 间复用 cookies,user OAuth 一次后后续 turn 不需要重登。
+Browserbase context(`ensure_browserbase_context`,`domains/browser/provisioning.py`)在 onboarding / settings 更新时(`domains/user_model/settings_ui.py`)provision(和 LiteLLM vk 同模式),session 间复用 cookies,user OAuth 一次后后续 turn 不需要重登。
 
-### Composio 副作用闭环(当前状态:prompt + allowlist,**没有运行时 verb 闸**)
+### Composio 副作用闭环(运行时双闸 + HITL)
 
-文件 `backend/services/api/src/pinai_api/domains/connector/apps/composio_agent.py` 顶部 docstring 写得很清楚:
+副作用判定的单一真源是 `pinai_contracts.composio_policy.is_side_effecting`:按 slug VERB 启发式分类,**fail-closed**——非只读 VERB 即副作用,未知工具默认按副作用处理。当前生效的防线:
 
-> Side-effect gate: deferred. The plan currently relies on session `tools=` allowlist as the physical guard; per-call HITL approval is TBD pending DeepAgents permission middleware integration.
+1. **sandbox code-mode 路径硬拒**:`/api/agent/composio/{execute,multi_execute}`(`domains/connector/apps/composio_agent.py`)对副作用 slug 直接 **403**——沙箱没有交互 HITL 能力,副作用必须改走 native。
+2. **native HITL 人工闸**:`COMPOSIO_MULTI_EXECUTE_TOOL` 注册在 `SIDE_EFFECT_TOOL_NAMES → HITL_INTERRUPT_ON`(`tools/direct/__init__.py`),经 deepagents HumanInTheLoopMiddleware `interrupt()` → 前端 `chat:requires_action` 审批(approve/reject/edit)。`bypass_permissions` 由服务端 `pai_user_settings.permission_mode` 派生、per-run 透传(命中时 `interrupt_on={}`),client 不能绕过;前端入口是 PermissionModeMenu。
+3. **Meta-tool 路由白名单**(`_ALLOWED_META_TOOLS`):只允许 4 个 Composio meta slug — `SEARCH_TOOLS / GET_TOOL_SCHEMAS / MULTI_EXECUTE_TOOL / MANAGE_CONNECTIONS`,其它 404。
+4. **agent prompt**:Tier 表 + "先草稿 → 等用户 OK"draft 链路指引仍在,作为第一层体验约束(在硬闸之上)。
 
-也就是说,**今天的代码没有按 slug 动词(CREATE/UPDATE/DELETE 等)做白/黑名单分类**。当前实际生效的只有两层:
-
-1. **agent prompt**(`main_chat.py` / `card_execution.py`):指令式约束 — 写明 Tier 表、`GMAIL_SEND_EMAIL` 黑名单、"先草稿 → 等用户 OK → 再发起"用户审批闭环。这是软约束,LLM 不遵守时没有运行时拦截。
-2. **Meta-tool 路由白名单**(`domains/connector/apps/composio_agent.py:_ALLOWED_META_TOOLS`):只允许 4 个 Composio meta slug — `SEARCH_TOOLS / GET_TOOL_SCHEMAS / MULTI_EXECUTE_TOOL / MANAGE_CONNECTIONS`,其它 404。
-3. **Session-level tools allowlist**:`COMPOSIO_MULTI_EXECUTE_TOOL` 的 `tools=[...]` 参数限定本次 session 能调的 Composio slug 集合,由 caller(agent prompt 决定)填,没有强制内容。`composio_service.py` 顶部注释明确把它叫"current side-effect guard"。
-
-**待办(代码层面今天没有,跟旧 OpenClaw 的实现不同)**:
-- 没有 slug verb 黑名单(没有"DELETE / CHARGE / PAY 自动拒绝"硬闸)。
-- `allow_side_effect=true` 这种参数当前**不被任何 route 强制要求**。
-- `GMAIL_SEND_EMAIL` 不会被 api 拒,只在 prompt 里建议走 draft 链路。
-
-实施 HITL middleware 之后才会在 api 端补 verb 分类闸 — 在那之前,任何"新接 toolkit 副作用安全"的判断都得靠 prompt 控住,不能依赖代码。
+> 历史注:2026-06 中旬前 side-effect gate 是 prompt-only("Side-effect gate: deferred" 时代,老 docstring 已改写)。现在已翻转成运行时双闸——别再按老版本文档假设"代码不会拦截危险 slug"。
 
 ### 对话怎么进长期记忆(crystallize 已删除)
 
@@ -246,7 +238,7 @@ Browserbase context(`ensure_browserbase_context`)在 onboarding 完成时(`domai
 | `chat:error` | agent / 系统错误 | `error` |
 | `chat:done` | turn 结束(chat 流 finally 保证发出;chat 流没送达的终止——worker `_fail`/cancel/reaper——由 worker `_publish_terminal_frames` 补发 `chat:error`+`chat:done` 到 FrameBus,best-effort) | — |
 | `chat:persisted` | finalize 后回填真实 message id | `messageId` |
-| `proactive:tick` | 心跳输入(proactive 线程) | `text`、`windowStart/End` |
+| `proactive:tick` | 历史遗留:proactive sunset 后无新帧,`history.py` 仍为老线程 replay 合成 | `text`、`windowStart/End` |
 
 所有 chat:* 帧带 `traceId`(= run_id)与 SSE `id:`(Redis Stream entry id,resume 游标)。
 
@@ -260,9 +252,9 @@ history 真相是 `pai_chat_messages`(worker finalize 写入,`/api/conversation/
 
 ### Card drawer:Sources / How I reasoned(前端)
 
-卡片抽屉的 Sources 和 How I reasoned 两个区块吃 `IntentCard` 的结构化字段(`components/card/CardDrawerBody.tsx` 的 `DrawerDetailBody`,chat 侧 `ChatDetailView` 复用同一组件),不再从展示文本反向解析:
+卡片抽屉的 Sources 和 How I reasoned 两个区块吃 `IntentCard` 的结构化字段(`packages/ui-web/src/card/CardDrawerBody.tsx` 的 `DrawerDetailBody`,chat 侧复用同一组件),不再从展示文本反向解析:
 
-- **Sources**:接 `IntentCard.sourceApps`(generation 侧确定性派生的 app slug 数组,派生与注入见 [Generation](./generation)),每个 slug 经 `card/source-app-display.ts` 查表渲染 `SourcePill`(品牌 logo / 图标 / 首字母 fallback)。`line2` 不再承载 sources 数据:`now/card-model.ts` 只保留 `Scheduled · label` 分支,旧的 `Sources: …` 拼接和 drawer 端 `parseSources` 反向解析已删除。
+- **Sources**:接 `IntentCard.sourceApps`(generation 侧确定性派生的 app slug 数组,派生与注入见 [Generation](./generation)),每个 slug 经 `packages/ui-web/src/card/source-app-display.ts` 查表渲染 `SourcePill`(品牌 logo / 图标 / 首字母 fallback)。`line2` 不再承载 sources 数据:`now/card-model.ts` 只保留 `Scheduled · label` 分支,旧的 `Sources: …` 拼接和 drawer 端 `parseSources` 反向解析已删除。
 - **How I reasoned**:`HowGeneratedSection` 接 `IntentCard.reasoningSteps`(LLM 生成的分步推理,`label` + `detail`),默认收起,展开为编号步骤列表;`steps` 为空(旧卡 / 提醒卡)时区块整体隐藏。
 - **旧卡降级**:后端注入 `sourceApps` 之前生成的卡,由 `packages/core` 的 `normalizeIntentCard` 客户端兜底——`sourceApps` 缺失时用 `deriveSourceAppsFromCitations` 从 `sources[]` 引文前缀推断 slug,审计引文不裸渲染到 UI。
 
@@ -281,17 +273,17 @@ history 真相是 `pai_chat_messages`(worker finalize 写入,`/api/conversation/
 | python_exec sandbox 工具 | `backend/services/agent-engine/src/agent_engine/tools/code_mode/sandbox.py` |
 | 本地 sandbox helper | `backend/services/agent-engine/src/agent_engine/tools/code_mode/local_sandbox.py` |
 | Browser tool / 状态 / 路由 | `backend/services/agent-engine/src/agent_engine/tools/browser/{manager,tools,control_state,events,routes}.py` |
-| Composio meta-tool 转发 / 副作用约束 | `backend/services/agent-engine/src/agent_engine/tools/direct/composio_meta.py`、`pinai_api/domains/connector/apps/composio_agent.py`(顶部 docstring 说明 verb gate deferred)、`domains/connector/apps/composio_service.py` 的 session `tools=` allowlist |
+| Composio meta-tool 转发 / 副作用闸 | `backend/libs/contracts/src/pinai_contracts/composio_policy.py`(`is_side_effecting` VERB 判定)、`pinai_api/domains/connector/apps/composio_agent.py`(sandbox 路径 403 闸)、`agent_engine/tools/direct/__init__.py`(`SIDE_EFFECT_TOOL_NAMES` → HITL 注册)、`agent_engine/tools/direct/composio_meta.py`、`domains/connector/apps/composio_service.py`(session `tools=` allowlist) |
 | LangGraph checkpointer | `backend/services/agent-engine/src/agent_engine/harness/checkpoint.py` |
 | context compaction(token/message 触发的 in-place LLM 压缩) | `backend/services/agent-engine/src/agent_engine/harness/compaction.py` |
 | SSE 信封 / 帧转换 | `backend/libs/contracts/src/pinai_contracts/sse_envelope.py`、`agent_engine/transport/sse.py` |
 | Thread metadata 表 | `backend/db/migrations/035_pai_chat_threads.sql`、`pinai_api/platform/db/repositories/chat_threads.py` |
 | 共享 api 模型 | `backend/libs/contracts/src/pinai_contracts/api_models.py`(`ChatInitRequest` / `ChatSendRequest` / `ChatHistoryResponse` 等) |
-| 前端 chat runtime | `proactive-ai-frontend/src/components/chat/conversation/useConversationRuntime.ts` |
-| 共享 chat 视图 | `proactive-ai-frontend/src/components/chat/conversation/ConversationView.tsx`、`chat/MainChat.tsx`、`chat/CardChat.tsx` |
-| 工具活动行 | `proactive-ai-frontend/src/components/chat/tool-steps.ts`、`main-chat/ToolActivityCard.tsx` |
-| Card drawer Sources / How I reasoned | `proactive-ai-frontend/src/components/card/CardDrawerBody.tsx`、`card/source-app-display.ts`、`packages/core/src/domain/intent-card.ts`(`normalizeIntentCard` / `deriveSourceAppsFromCitations`) |
-| 浏览器子视图 | `proactive-ai-frontend/src/components/browser-view/`、`hooks/useBrowserSession.ts` |
+| 前端 chat runtime | `packages/state/src/queries/conversation.ts`(`useConversationRuntime`) |
+| 共享 chat 视图 | `packages/ui-web/src/chat/conversation/ConversationView.tsx`、`packages/ui-web/src/card/card-chat.tsx`(端壳:apps/web 卡片面板、apps/mobile ChatDetailView) |
+| 工具活动行 / work group | `packages/core/src/machines/tool-steps.ts`、`packages/ui-web/src/chat/` 的 work group 渲染 |
+| Card drawer Sources / How I reasoned | `packages/ui-web/src/card/CardDrawerBody.tsx`、`packages/ui-web/src/card/source-app-display.ts`、`packages/core/src/domain/intent-card.ts`(`normalizeIntentCard` / `deriveSourceAppsFromCitations`) |
+| 浏览器子视图 | `packages/ui-web/src/browser/` |
 
 ## 验证方式
 
@@ -309,17 +301,17 @@ cd backend && uv run pytest tests/chat/                          # 全 chat 套�
 
 # 类型 + 前端
 cd backend && uv run ruff check .
-cd proactive-ai-frontend && npm run type-check
-cd proactive-ai-frontend && npm test
+npm run check:packages                    # core/state/ui-kit/ui-web 边界 + 类型 + 单测
+cd apps/web && npm run type-check && npm test
 ```
 
 手工验证 6 个代表场景(本地登录 + chat):
 
-1. **Tier 1**:卡"今日日程亮点" → 点开 → agent 应首调 `raw_gcal_today` 这种 native tool,**无** `browser:opened`。
-2. **Tier 2**:卡"今早 Gmail 有什么"(数据 >12h 没同步)→ agent 走 `COMPOSIO_MULTI_EXECUTE_TOOL` slug=`GMAIL_FETCH_EMAILS`。
-3. **Tier 3**:卡"周三 3pm 和 Sarah 约 1on1" → 先 `raw_gcal_week` 看冲突 → 在 chat 起草 → 等用户 OK 后才 `COMPOSIO_MULTI_EXECUTE_TOOL` slug=`GOOGLECALENDAR_CREATE_EVENT`。代码不会拦"未经确认就直接调",这一步要靠 trace + agent prompt 自觉。
-4. **Tier 4 web read**:卡"读一下 Regan 在 Slack 分享的 Forbes 文章" → `raw_list` slack 找 URL → `tavily_extract` → 总结。
-5. **GMAIL_SEND_EMAIL 走 draft 链路**:观察 agent 是否在 prompt 引导下走 `GMAIL_CREATE_EMAIL_DRAFT` → 用户 OK → `GMAIL_SEND_DRAFT`。注意:web 端**不会拒**直接 `GMAIL_SEND_EMAIL`,完全靠 prompt 自律 — 看到 agent 直接发就改 prompt。
+1. **Tier 1**:卡"今日日程亮点" → 点开 → agent 应首调 `events_search` 这种 native tool,**无** `browser:opened`。
+2. **Tier 2**:卡"今早 Gmail 有什么"(数据 >12h 没同步)→ agent 走 `COMPOSIO_MULTI_EXECUTE_TOOL` slug=`GMAIL_FETCH_EMAILS`(只读 VERB,直接放行)。
+3. **Tier 3**:卡"周三 3pm 和 Sarah 约 1on1" → 先 `events_search` / Composio 只读查冲突 → 在 chat 起草 → 调 `COMPOSIO_MULTI_EXECUTE_TOOL` slug=`GOOGLECALENDAR_CREATE_EVENT` 时应弹 `chat:requires_action` HITL 审批卡,approve 之前不执行。
+4. **Tier 4 web read**:卡"读一下 Regan 在 Slack 分享的 Forbes 文章" → `events_search` 找到 slack 消息里的 URL → `tavily_extract` → 总结。
+5. **GMAIL_SEND_EMAIL(副作用 slug)**:sandbox code-mode 路径应被 403;native 路径应弹 HITL 审批。prompt 的 draft 链路(`GMAIL_CREATE_EMAIL_DRAFT` → 用户 OK → `GMAIL_SEND_DRAFT`)仍是推荐 UX,但兜底不再只靠 prompt。
 
 LangSmith trace:
 
@@ -339,8 +331,8 @@ make logs-agent-engine | grep -E "/agent/chat|chat:tool|browser:"
 ## 踩坑
 
 - chat agent prompt 的 stable / volatile 边界没像旧 OpenClaw plugin 那样有硬测试断言,改 prompt 时要自觉把 `card_context` / firstMessage 这种 volatile 字段放在最末,不要污染前缀(否则 LiteLLM cache 失效)。
-- Composio side-effect gate 当前是 **prompt-only**(`domains/connector/apps/composio_agent.py` docstring 明说 "Side-effect gate: deferred"),没有 verb 黑/白名单硬闸 — 改 toolkit / 改 agent prompt 时**不要**假设代码会兜底拦截危险 slug。等 DeepAgents permission middleware 落地之后才会补 verb 闸。
-- `GMAIL_SEND_EMAIL` 不会被代码拒;agent 走不走 draft 链路完全靠 prompt 控住,改 prompt 别去掉这条规则。
+- Composio 副作用现在是**运行时双闸**(sandbox 403 + native HITL),不再是 prompt-only——但判定是 VERB 启发式(`composio_policy.is_side_effecting`,fail-closed):改 VERB 词表前先理解"未知 VERB 默认按副作用处理"的语义,放宽即扩大免审面。
+- `GMAIL_SEND_EMAIL` 等副作用 slug:sandbox code-mode 会被 403,native 走 HITL,approve 前不执行;draft 链路 prompt 规则仍保留(体验更好),改 prompt 别去掉。
 - python_exec 在 sandbox 里跑,sandbox 跟 agent-engine 进程异步;`/state/*.json` 文件是 sandbox 文件系统,前端拿不到,只能通过 agent 输出的文本看。本地 `PINAI_LOCAL_SANDBOX=1` 时这些文件在 `agent-engine` 容器的 `/state` 下。
 - Browser session 上限 5,开第六个会 reject;开 session 后 5min 空闲会自动 close,前端 reconnect 时 server 会主推 `browser:closed`,前端用过期 session id 调 `/input` 打死。
 - AI / user control 切换只对写动作生效,`snapshot` / `get_text` / `screenshot` 在 user 接管期间也允许 — 设计就是让 AI 保留情境感知。

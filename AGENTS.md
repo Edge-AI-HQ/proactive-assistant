@@ -38,7 +38,7 @@ PIN AI 后端是 `backend/` 下的一个 **uv workspace monorepo**（Python / Fa
 端壳：
 - **apps/web** — zebra 设计的桌面 web 端（Vite + React 19 + react-router），消费 core/state/ui-web，**已上线 dev/prod**。设计 SSOT：[`docs/plans/2026-06-12-zebra-web-app-port.mdx`](docs/plans/2026-06-12-zebra-web-app-port.mdx)。
 - **apps/desktop** — Electron macOS 壳，renderer 复用 apps/web 的 Vite root（「一套 zebra UI、web + 桌面两个壳」），桌面侧只有 main + preload。仅本地 `make macos`，暂无自动部署。
-- **apps/mobile** — Expo / React Native iOS app，UI 独立实现，业务层消费 core/design/state/ui-kit（不碰 ui-web）。**仍在开发、未上线**；dev TestFlight 自动构建已切到 RN（`build-rn-ios.yml`，push main 自动），prod 流水线就位、仅手动 dispatch。
+- **apps/mobile** — Expo / React Native iOS app，UI 独立实现，业务层消费 core/design/state/ui-kit（不碰 ui-web）。**已接管 iOS 交付（TestFlight，App Store 未上架）**：dev push main 自动构建、prod 手动 dispatch（均 `build-rn-ios.yml`，dev/prod 均实测走通）。
 - **proactive-ai-frontend**（Capacitor）— **已退役删除（2026-07-09）**：原生产 iOS 前端；TestFlight 交付由 apps/mobile（RN）接管、网页形态由 apps/web 承接，源码在 git 历史。
 
 两个 web 端（apps/web / apps/desktop）经 vite alias + tsconfig paths 直引 `packages/*/src`（无 build 步骤，改包即时生效）；apps/mobile 走 npm workspace 依赖（metro 解析）。前端分层 SSOT：[`research/2026-06-10-frontend-layering.mdx`](research/2026-06-10-frontend-layering.mdx)；双端设计系统 SSOT：[`docs/plans/2026-06-13-dual-platform-design-system.mdx`](docs/plans/2026-06-13-dual-platform-design-system.mdx)。
@@ -99,17 +99,17 @@ backend/.env / backend/.env.chat / ops/litellm/.env / ./.env  # 本地明文，m
 - `backend/pyproject.toml`：uv workspace 根（`members = libs/* services/*`）+ import-linter 契约 + ruff/mypy 配置。
 - `backend/services/api/src/pinai_api/config.py`：pydantic-settings 配置中心，所有 env 读取从这里走。
 - `backend/services/api/src/pinai_api/`：api 进程（FastAPI app + 控制面 + 领域 + 公网 edge）。入口 `app.py` / `asgi.py`。
-- `backend/services/api/src/pinai_api/platform/`：私有底座（agent-engine / reward-dashboard 都够不到），含 `auth/`（deps + user_service + supabase/agent JWT）、`db/`（含 `repositories/` = chat_messages/threads、devices、scheduled_tasks 等 api 私有 repo）、`litellm/`、`storage.py`、`notification.py`、`embeddings.py`、语音 ASR。
-- `backend/services/api/src/pinai_api/domains/`：产品领域垂直化，每域 `ui.py`（`current_user` 前端面向）+ `agent.py`（`current_agent_run` JWT 鉴权内部 API，多路由域加 topic 前缀如 `memory_ui.py` / `composio_agent.py`）+ service + repository。域含 `identity/`、`memory/`（lifelong-memory 四子包 `events/`（L1 存储+检索+event_source 下钻）/`projection/`（L0→L1 投影+rollup window）/`portrait/`（L2 画像+seed）/`curation/`（evolve 审计+面），模块地图见 [`docs/plans/2026-06-23-lifelong-memory-system.mdx`](docs/plans/2026-06-23-lifelong-memory-system.mdx) §十一）、`user_model/`（settings/skills）、`connector/{apps,device,world}/`、`billing/`（含 `payments/`、`metering.py`）、`generation/`（单次多轮 agent run,含 `context_anchor.py`、`card_fanout.py`）、`feedback/`、`chat_history/`、`browser/`、`voice/`。
-- `backend/services/api/src/pinai_api/control/`：actor 控制内核（`kernel.py` / `worker.py` / `sessions.py` / `mailbox.py` / `runs.py` / `framebus.py` / `bus.py` + `execution_client.py` 调 agent-engine + `conversation.py` 执行入口 + `chat_turn_recorder.py`）。
-- `backend/services/api/src/pinai_api/orchestration/`：scheduler（`tick_loop.py` / `dispatcher.py` / `cron.py`）+ `account_lifecycle.py` + `phase1_seed.py`。
+- `backend/services/api/src/pinai_api/platform/`：私有底座（agent-engine / reward-dashboard 都够不到），含 `auth/`（deps + user_service + supabase/agent JWT）、`db/`（含 `repositories/` = chat_messages/threads、devices、scheduled_tasks、jti_revocations 等 api 私有 repo）、`litellm/`、`middleware/`、`storage.py`、`notification.py`、`embeddings.py`、`llm_json.py`（语音 ASR 在 `domains/voice/`）。
+- `backend/services/api/src/pinai_api/domains/`：产品领域垂直化，每域 `ui.py`（`current_user` 前端面向）+ `agent.py`（`current_agent_run` JWT 鉴权内部 API，多路由域加 topic 前缀如 `composio_agent.py`；memory 是子包内各自 `ui.py`/`agent.py`）+ service + repository。域含 `identity/`、`memory/`（lifelong-memory 四子包 `events/`（L1 存储+检索+event_source 下钻）/`projection/`（L0→L1 投影+rollup window）/`portrait/`（L2 画像+seed）/`curation/`（evolve 审计+面），模块地图见 [`docs/plans/2026-06-23-lifelong-memory-system.mdx`](docs/plans/2026-06-23-lifelong-memory-system.mdx) §十一）、`user_model/`（settings/skills）、`connector/{apps,device,world}/`、`billing/`（含 `payments/`、`metering.py`）、`generation/`（单次多轮 agent run,含 `context_anchor.py`、`card_fanout.py`）、`feedback/`、`chat_history/`、`browser/`、`voice/`。
+- `backend/services/api/src/pinai_api/control/`：actor 控制内核（`kernel.py` / `worker.py` / `sessions.py` / `mailbox.py` / `runs.py` / `framebus.py` / `bus.py` + `execution_client.py` 调 agent-engine + `conversation.py` 执行入口 + `chat_turn_recorder.py` + `chat_proxy.py` history/generate 一次性签名代理 + `agent_runs.py` 前端 agent-run 状态面）。
+- `backend/services/api/src/pinai_api/orchestration/`：scheduler（`tick_loop.py` / `dispatcher.py` / `cron.py`）+ `account_lifecycle.py` + `retime.py`（设备时区漂移重算 cron 任务）。
 - `backend/services/agent-engine/src/agent_engine/`：agent-engine 进程（LLM loop + DeepAgents harness + Daytona sandbox）。入口 `app.py` / `asgi.py`；`trust_boundary.py` = FORBIDDEN_ENVS 真源。
 - `backend/services/agent-engine/src/agent_engine/transport/routes/`：`chat.py`、`generate.py`、`history.py`、`run.py`。
 - `backend/services/agent-engine/src/agent_engine/agents/`：generator / main_chat / card_execution / evolve（合并原 dream，crystallize 已删）/ rollup_semantic / generation_context 等 agent 实现。
 - `backend/services/agent-engine/src/agent_engine/tools/` + `tools/browser/`：sandbox 工具（python_exec、browser via Browserbase）；`harness/` = deepagents 适配（factory / compaction / checkpoint / middleware）。
 - `backend/services/reward-dashboard/src/pinai_reward_dashboard/`：内部 reward review 后端（`routes.py` = `/api/reward-dashboard/*` + `reward.py` / `trace_artifacts.py` / `pattern_extractor.py` / `pattern_health.py` / `personal_data_snapshot.py`）。只读产品 DB，零产品代码依赖。
-- `backend/libs/contracts/src/pinai_contracts/`：api/agent-engine 共用的 pure model / protocol（`sse_envelope.py` / `api_models.py` / `agent_run.py`），不能 import 任何 service。
-- `backend/libs/db/src/pinai_db/`：跨 service 共享的 db 基础（`pool.py` / `rls.py` / `audit.py` / `base.py`）+ `repositories/`（`patterns.py` / `user_fingerprint.py`，generation 与 reward-dashboard 共用的纯 SQL repo）。
+- `backend/libs/contracts/src/pinai_contracts/`：api/agent-engine 共用的 pure model / protocol（`sse_envelope.py` / `api_models.py` / `agent_run.py` / `composio_policy.py` 副作用判定 / `rollup_policy.py`），不能 import 任何 service。
+- `backend/libs/db/src/pinai_db/`：跨 service 共享的 db 基础（`pool.py` / `rls.py` / `audit.py` / `base.py` / `raw_sources.py`）+ `repositories/`（`patterns.py` / `user_fingerprint.py`，generation 与 reward-dashboard 共用的纯 SQL repo）。
 - `backend/packages/pinai_sdk/`：Daytona sandbox 内部用的 Python SDK，sandbox 里通过 `PAI_API_URL` 回连 api 进程。
 - `backend/db/migrations/`：yoyo 风格 SQL migration，命名 `NNN_<topic>.sql`（触碰 pai schema 的表习惯加 `pai_` 前缀，如 `015_pai_background_tasks.sql`）。
 - `backend/db/ingest_recipes/`：connector ingest 的 declarative recipes。
@@ -125,6 +125,8 @@ backend/.env / backend/.env.chat / ops/litellm/.env / ./.env  # 本地明文，m
 - `research/2026-06-10-frontend-layering.mdx`：前端分层 SSOT（core/state/apps 三层，web/Electron/RN 三端）。
 - `internal-reward-dashboard/src/`：内部 reward review app（`/runs`、`/cards/:cardId`、`/casebook`、`/traces/:runId`、`/personal-data`），本地端口 `3004`，不要混进主产品前端。
 - `ops/litellm/`：LiteLLM 配置 + fly toml + 部署脚本。
+- `ops/dev-pipeline/`：内部研发流水线服务（Linear 接需求 → plan → 委派 Codex → Fly PR preview），独立 uv 项目、本地常驻进程，不进产品代码；只有 preview 的 3 个 workflow 进 `.github/workflows/`。见 [`docs/modules/dev-pipeline.mdx`](docs/modules/dev-pipeline.mdx)。
+- `loops/`：`/loop` 用的巡检 prompt（`ops-monitor.md` 每 4h 只读运维巡检开 issue / `architecture-review.md` 模块轮转架构审计）。
 
 ## 文档读取规则（AI 必读）
 `docs/` 是团队开发和 AI agent 查询的统一上下文。读取顺序必须渐进式展开：
@@ -135,7 +137,7 @@ backend/.env / backend/.env.chat / ops/litellm/.env / ./.env  # 本地明文，m
 4. 不要把 `docs/plans/` 当历史归档。plan 只是可引用的 AI 设计计划，不替代模块文档。
 5. 如果代码行为和文档冲突，以代码核实当前事实，并同步更新对应模块文档。
 
-> ⚠️ 部分 `docs/modules/*.mdx` 还残留 `apis/` / `pinai-openclaw/` 时代的描述，和 `backend/` 实际代码冲突时以代码为准，并顺手更新该模块文档。后端三 service 重构的设计 SSOT 在 [`docs/plans/2026-06-21-backend-rearchitecture.mdx`](docs/plans/2026-06-21-backend-rearchitecture.mdx)。
+> 模块文档 2026-07-10 做过一轮全量对齐（三-app 拆分 / lifelong-memory / 卡片生成 v2 / Composio 副作用闸 / RN 接管前端）。此后代码与文档再冲突时，以代码为准并顺手更新该模块文档。后端三 service 重构的设计 SSOT 在 [`docs/plans/2026-06-21-backend-rearchitecture.mdx`](docs/plans/2026-06-21-backend-rearchitecture.mdx)。
 
 ## 文档维护规则
 - `docs/modules/*.mdx`：每个模块一篇当前事实文档，必须包含边界、核心链路、开发入口、验证方式、踩坑。
@@ -153,8 +155,9 @@ backend/.env / backend/.env.chat / ops/litellm/.env / ./.env  # 本地明文，m
 - [`docs/modules/execution.mdx`](docs/modules/execution.mdx) — chat-stream、card chat、agent prompt + memory 工具面（events_search/event_source/event_append/memory_edit + portrait 注入）、browser tool、control mode。**改动 `agent_engine/transport` / `agent_engine/agents` / `agent_engine/tools/browser` / `pinai_api/control` / 前端 MainChatView 相关代码前必读**。
 - [`docs/modules/feedback.mdx`](docs/modules/feedback.mdx) — feedback events、card action、card chat feedback、intent state、学习回流。
 - [`docs/modules/internal-reward-dashboard.mdx`](docs/modules/internal-reward-dashboard.mdx) — 内部卡片 review Vite app、reward ledger、reviewer score、casebook、LangSmith trace artifact。**改动 `internal-reward-dashboard/`、`/api/reward-dashboard/*`、`pai_card_reward_events` / `pai_card_casebook` / `pai_trace_artifacts` 前必读**。
+- [`docs/modules/dev-pipeline.mdx`](docs/modules/dev-pipeline.mdx) — 内部研发流水线（Linear 接需求 → plan → 委派 Codex → Fly PR preview）。服务代码在 `ops/dev-pipeline/`，preview workflows 见「变更与部署」。
 - [`docs/modules/background-tasks.mdx`](docs/modules/background-tasks.mdx) — `background_tasks` 队列、scheduler tick、reconciler、connector init/sync/evolve（per-user coalesce）、auto evolution（periodic sweep,kind 仍叫 `auto.dreaming`）。
-- [`docs/modules/runtime-deployment.mdx`](docs/modules/runtime-deployment.mdx) — 本地启动、运行拓扑、部署、安全、billing 概览。**当前文档仍是 apis/openclaw 时代的描述，待按 backend 重写**；在那之前，运行/部署的事实以本 AGENTS.md「本地开发」「变更与部署」两节为准。
+- [`docs/modules/runtime-deployment.mdx`](docs/modules/runtime-deployment.mdx) — 本地启动、运行拓扑、部署、安全、billing 概览（2026-07-10 已对齐三-app 拆分 + Capacitor 前端退役后的现状）。
 
 ## 本地开发
 
@@ -171,7 +174,7 @@ make up                    # 自动解密 .env.dev → .env，构建并启动所
 
 全栈启动（Docker Compose）：
 ```bash
-make up                    # 启动 postgres + litellm + api + agent-engine + web(zebra)
+make up                    # 启动 postgres + redis + litellm + api + agent-engine + reward-dashboard + web(zebra)
 make logs                  # 跟所有 log
 make logs-api              # 单看 api 进程
 make logs-agent-engine     # 单看 agent-engine 进程
@@ -196,9 +199,9 @@ cd apps/web && npm run dev                          # zebra 桌面 web dev serve
 cd internal-reward-dashboard && npm run dev -- --host 127.0.0.1 --port 3004  # 内部 review app
 ```
 
-`internal-reward-dashboard` 本地通过 Vite same-origin `/api/*` proxy 打 `api:8000`，默认从 `backend/.env` 读取 Supabase `VITE_*`。它当前不是 root npm workspace；dev 环境是独立 Fly app `proactive-ai-reward-dashboard-dev`。
+`internal-reward-dashboard` 本地通过 Vite same-origin proxy 分流两个后端：`/api/reward-dashboard/*` → reward-dashboard（默认 `127.0.0.1:8002`），其余 `/api/*` → api（默认 `127.0.0.1:8000`）；多 worktree 随机端口用 `VITE_REWARD_PROXY_TARGET` / `VITE_PIN_API_PROXY_TARGET` 指到 `make urls` 的实际端口。Supabase `VITE_*` 默认从 `backend/.env` 读取。它当前不是 root npm workspace；dev 环境是独立 Fly app `proactive-ai-reward-dashboard-dev`。
 
-Daytona sandbox（generator/dreaming 的 `python_exec`）和 mobile 真机需要公网回连 `api`。`NGROK_AUTHTOKEN` 已加密 checkin 在根 `./.env.dev`（`make ensure-env` 自动解密）；ngrok 给每个 worktree 一个**稳定子域** `https://<project-name>.ngrok.app`（compose 用 `--url=https://${COMPOSE_PROJECT_NAME}.ngrok.app`，付费版特性）。**`make up` 不自动起 tunnel**（web 测试不需要，也省 ngrok endpoint hours）；需要时显式起：
+Daytona sandbox（generate / evolve 的 `python_exec`）需要公网回连 `api`（RN 真机不需要——`make rn` 默认同 WiFi 用 LAN IP 直连本地 api）。`NGROK_AUTHTOKEN` 已加密 checkin 在根 `./.env.dev`（`make ensure-env` 自动解密）；ngrok 给每个 worktree 一个**稳定子域** `https://<project-name>.ngrok.app`（compose 用 `--url=https://${COMPOSE_PROJECT_NAME}.ngrok.app`，付费版特性）。**`make up` 不自动起 tunnel**（web 测试不需要，也省 ngrok endpoint hours）；需要时显式起：
 ```bash
 make tunnel-up             # 起 ngrok（随机 URL）+ 把 URL 注入 agent-engine（generator 用）
 make tunnel-status         # 看当前 URL
@@ -221,6 +224,7 @@ make rn                    # Expo RN 装真机 iPhone；SIM=1 模拟器、DEV=1 
 验证：
 ```bash
 cd backend && uv run ruff check               # 静态检查（含 trust-boundary banned-api）
+cd backend && uv run ruff format --check      # 格式检查（CI 硬门禁，和 ruff check 是两道不同检查）
 cd backend && uv run lint-imports             # import-linter（trust boundary + 分层契约）
 cd backend && uv run mypy services libs       # 类型检查（CI 硬门禁；增量缓存，重复跑只几秒）
 cd backend && uv run pytest                   # 后端测试
@@ -233,7 +237,7 @@ npm run check:packages                              # core/state/ui-kit/ui-web �
 ```
 
 改完怎么验证（按改动范围选最轻的）：
-- 纯 Python 逻辑/类型 → `uv run ruff check` + `uv run lint-imports` + `uv run mypy services libs` + 相关 `uv run pytest tests/<path>`
+- 纯 Python 逻辑/类型 → `uv run ruff format --check` + `uv run ruff check` + `uv run lint-imports` + `uv run mypy services libs` + 相关 `uv run pytest tests/<path>`
 - 改 `backend/services/api/` → `make restart`，看 `make logs-api` 起得来 + 打目标接口（端口随机，`make urls` 查）
 - 改 `backend/services/agent-engine/` → `make restart`，看 `make logs-agent-engine` + 用前端发一条消息验证
 - 改 `apps/web/` → `cd apps/web && npm run dev`（端口 3005）+ `cd apps/web && npm run type-check && npm test`
@@ -322,6 +326,9 @@ push 到 `main` 后按改动范围自动部署（CI workflow：`.github/workflow
 
 `internal-reward-dashboard/` 使用独立 workflow `.github/workflows/internal-reward-dashboard-dev.yml`：PR 只跑 type-check / test / build；push 到 `main` 且该目录变化时，部署到 Fly dev app `proactive-ai-reward-dashboard-dev`（默认地址 `https://proactive-ai-reward-dashboard-dev.fly.dev`）。
 
+### PR Preview 环境（按需临时）
+GitHub Actions 手动触发 **PR Preview**（`preview.yml`，填 PR 号），按 PR 改动范围起临时 Fly app：只改前端 → 只起 `pinai-pr-<N>`（指共享 dev 后端）；动了后端 → 加起 `pinai-pr-<N>-api`（web+chat，共用 dev 库）；动了 `db/migrations/` → 后端 app 内再带一台独立 pgvector 机器（独立库，dev 零影响）。auth 一律复用共享 dev Supabase。`preview-down.yml` 手动拆、`preview-cleanup.yml` 关 PR 自动拆。通常经 Linear 里的 dev-pipeline 指令驱动（回「部署/preview」「拆」），细节见 [`docs/modules/dev-pipeline.mdx`](docs/modules/dev-pipeline.mdx)。
+
 ### Test 环境
 GitHub Actions 页面手动触发 **Deploy Test**（`deploy-test.yml`）。可以从任意分支部署，用来在合并前在 fly 上跑一次完整链路。
 
@@ -333,10 +340,8 @@ push `v*` tag 自动触发 **Deploy Prod**（tag = 版本真相），也可在 G
 ### 本地部署（备用）
 CI/CD 不可用时走 Makefile：
 ```bash
-make deploy-pinai-dev       # backend (api + agent-engine) → dev
-make deploy-pinai-prod      # backend → prod
-make deploy-frontend-dev    # 前端 → dev
-make deploy-frontend-prod   # 前端 → prod
+make deploy-pinai-dev       # ⚠️ 旧单-app dev 兜底(fly.dev.toml),不是当前三-app 形态
+make deploy-pinai-prod      # backend 三-app(api → engine → reward 依次 deploy)→ prod
 make deploy-reward-dashboard-dev  # 内部 reward dashboard → dev
 make deploy-web-dev         # apps/web (zebra) → dev
 make deploy-web-prod        # apps/web (zebra) → prod
@@ -370,18 +375,18 @@ make deploy-litellm-prod    # LiteLLM → prod
 ## 踩坑速查
 1. **agent-engine 进程拿到 master credential（且 `ENGINE_TRUST_FAILFAST` armed）会启动失败**：`agent_engine/asgi.py` 的 fail-fast assert 会直接 exit，看 log 第一行就能定位是哪个 forbidden var 漏过来了（**三环境 engine 都是独立 app、`ENGINE_TRUST_FAILFAST=1` armed**）。
 2. **Daytona sandbox 回连 api 必须用公网 URL**：compose 内部 DNS 在 cloud sandbox 里解析不到，本地必须 `make tunnel-up` 起 ngrok，否则 `python_exec` 报 ConnectError。
-3. **`make restart` 只重建 api/agent-engine**：动了 frontend 用 `make restart-frontend`，动了 LiteLLM 配置要 `make up` 全栈。restart 带 `--no-deps`，**不会创建合并 main 后 compose 新增的服务**（例：redis）——拉完 main 先 `make up` 一次再回到 restart 循环，否则新代码会依赖一个根本没起来的服务（实例：缺 redis 时消息无人消费、会话页 500，2026-06-10 踩过）。
+3. **`make restart` 只重建 api/agent-engine**：动了 apps/web 容器版本用 `make restart-web`，动了 LiteLLM 配置要 `make up` 全栈。restart 带 `--no-deps`，**不会创建合并 main 后 compose 新增的服务**（例：redis）——拉完 main 先 `make up` 一次再回到 restart 循环，否则新代码会依赖一个根本没起来的服务（实例：缺 redis 时消息无人消费、会话页 500，2026-06-10 踩过）。
 4. **本机全局代理会导致 `flyctl` 失败**：Makefile 已在 deploy 命令内置 `env -u`，但如果直接跑 `flyctl deploy` 要自己 unset。
 5. **`.env.chat` 不会自动跟 `.env` 同步**：手动改 `.env` 后，`make ensure-env-backend` 才会重新派生 `.env.chat`；直接 docker compose up 不会触发，必要时 `make env-local` 强制重新解密。
 6. **`apis/` / `pinai-openclaw/` / `miniapp/` 是退役时代的路径**：如果旧脚本、旧文档或本地残留目录提到它们，不要复活旧服务；当前后端事实以 `backend/` 为准；`proactive-ai-frontend/` 与 `capacitor-plugins/` 也于 2026-07-09 退役删除，前端事实以 `packages/*` + `apps/*` 为准。
 7. **`internal-reward-dashboard/` 是独立内部工具**：不要把 dashboard 页面混进用户产品前端（`apps/*`），不要把 `/api/reward-dashboard/*` 当普通用户产品 API 扩散。用户 confirm / dismiss / snooze / text feedback 仍写 `pai_feedback_events`，只有 card open / score / reviewer score / casebook / trace 走 reward dashboard 链路。
-8. **容器无固定名（多 worktree 隔离）**：compose 去掉了 `container_name`，每个 worktree 是独立 group（`pinai-<路径hash>`，可同时 `make up` 互不撞）。旧的 `docker exec pin-ai-xxx` 全失效，改用 `docker compose exec <service>` / `docker compose logs <service>`（在对应 worktree 目录跑，自动命中那个 group）。host 端口随机，`make urls` 查；`make up` 不自动起 tunnel，generator/mobile 要 tunnel 时 `make tunnel-up` / `make ios`（各 worktree 自己的 `.ngrok.app` 子域，可并发，付费版）。
+8. **容器无固定名（多 worktree 隔离）**：compose 去掉了 `container_name`，每个 worktree 是独立 group（`pinai-<路径hash>`，可同时 `make up` 互不撞）。旧的 `docker exec pin-ai-xxx` 全失效，改用 `docker compose exec <service>` / `docker compose logs <service>`（在对应 worktree 目录跑，自动命中那个 group）。host 端口随机，`make urls` 查；`make up` 不自动起 tunnel，generator 要 tunnel 时 `make tunnel-up`（各 worktree 自己的 `.ngrok.app` 子域，可并发，付费版）；RN 真机 `make rn` 默认同 WiFi LAN 直连、不需要 tunnel。
 9. **三-app 里 api→engine 必须走 6PN `.internal`、不是 flycast**：engine 是私有 app（无 public IP），`CHAT_INTERNAL_URL` 要用 `http://proactive-ai-engine-<env>.internal:8001`（6PN service discovery 直连容器端口）。**flycast 是错的**——flycast 暴露的是 `[http_service]` 的 external port（80/443）、不是容器的 8001，连 `flycast:8001` 必 `ConnectError: No address`。且 engine 必须 `auto_stop_machines='off'` 常驻：6PN 会解析 app 的**所有** machine（含 suspended），挂起的 host 会让 api→engine 间歇 ConnectError。前端（web 形态）则相反——走 nginx 反代（`NGINX_UPSTREAM_URL` 指 api app 的公网 URL，同源 `/api/*`），native/Electron 打包件才用 `VITE_PIN_API_URL` 绝对 URL。（2026-06-22 dev 实测踩通，这是一次 chat 全挂的根因。）
 
 ## 提交规范
 - Conventional Commits：`feat(...)` / `fix(...)` / `chore(...)` / `docs(...)`。
 - 每次提交聚焦一个变更点。
-- 提交前最少跑：`cd backend && uv run ruff check && uv run lint-imports && uv run mypy services libs`（改 Python）+ 前端按改动面：动 `packages/` 跑 `npm run check:packages`，动某个端跑该端 `npm run type-check`（apps/web 另跑 `npm test`）。
+- 提交前最少跑：`cd backend && uv run ruff format --check && uv run ruff check && uv run lint-imports && uv run mypy services libs`（改 Python）+ 前端按改动面：动 `packages/` 跑 `npm run check:packages`，动某个端跑该端 `npm run type-check`（apps/web 另跑 `npm test`）。
 
 ## 规则单一真源
 - `AGENTS.md` 是 SSOT。

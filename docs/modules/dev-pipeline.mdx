@@ -28,9 +28,9 @@ Linear issue @proactive-ai-dev
 
 ## 怎么用（Linear 里的指令）
 
-在 EDG issue 的 agent 对话里说这些关键词(**新 @ 或在已有对话里回复都行**):
+在 EDG issue 的 agent 对话里自然表达即可(**新 @ 或在已有对话里回复都行**)。意图识别主路由是 LLM 分类(`intent.py` IntentRouter,claude-haiku-4-5;意图集含 new_request / refine_plan / confirm / deploy / teardown / forward / clarify / chitchat),下表关键词只是无 `ANTHROPIC_API_KEY` 或 LLM 报错时的兜底集:
 
-| 意图 | 关键词 | 行为 |
+| 意图 | 兜底关键词 | 行为 |
 |---|---|---|
 | 出方案 | (首次 @ 带需求) | planner 出 plan,等你回 ok |
 | 确认 | `ok` / `确认` / `可以` / `go` | 委派 Codex 实现 |

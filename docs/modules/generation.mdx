@@ -9,19 +9,19 @@ description: "卡片生成(agentic 单 run)的当前事实。"
 
 卡片生成全链路异步,生成本体是**一次多轮 agent run**(设计 SSOT:[卡片生成(Lifelong Memory 消费侧)](../plans/2026-06-23-proactive-card-generation)):
 
-`POST /api/generate → enqueue_once(kind=generator.manual) → pai_scheduled_tasks → api tick_loop → dispatcher._run_generator → HTTP POST agent-engine /agent/generate → 种子上下文(过去 + 未来 events 窗口) → 多轮 agent run(events_search / submit_card) → 0..N 张卡 → 返回 JSON → api persist_generator_run → pai_pipeline_runs + 每卡一条 L1 agent_decision`
+`POST /api/generate → enqueue_once(kind=generator.manual) → pai_scheduled_tasks → api tick_loop → dispatcher._run_generator → HTTP POST agent-engine /agent/generate → 确定性上下文日志(到达轴增量 + 未来窗口) → 多轮 agent run(events_search / event_source / tavily / submit_card) → 0..N 张卡 → 返回 JSON → api persist_generator_run → pai_pipeline_runs + 每卡一条 L1 agent_decision`
 
 **0 张是正常结果**(宁缺毋滥,不是错误);`cards_to_generate` 是上限 cap 不是目标数。旧 batch pipeline(planner → writer×12 → evaluator×12 → top-up → final_selection,26–48 次 LLM)与 pattern matcher / phase1_seed 已整体退役。
 
 ```mermaid
 flowchart LR
-  UI["usePipeline / NowFeed"] --> API["POST /api/generate"]
+  UI["usePipeline (packages/state)"] --> API["POST /api/generate"]
   API --> Q[("pai_scheduled_tasks (generator.manual)")]
   Q --> Sched["api tick_loop"]
   Sched --> Disp["dispatcher._run_generator"]
   Disp --> Chat["POST agent-engine /agent/generate"]
   Chat --> Agent["run_generator (一次多轮 agent run)"]
-  Agent --> Resp["GeneratorResponse JSON (0..N 卡)"]
+  Agent --> Resp["GenerateResponse JSON (0..N 卡)"]
   Resp --> Persist["api.persist_generator_run"]
   Persist --> PR[("pai_pipeline_runs")]
   Persist --> EV[("pai_events (agent_decision, 每卡一条)")]
@@ -38,7 +38,7 @@ flowchart LR
 - agent-engine 端 agentic generator(种子窗口 + 工具 + `submit_card`)。
 - 卡 schema(`GeneratedCard`)、citation → `sourceApps` 派生、card id 重写。
 - chat agent 的 scheduled 任务快照注入(prospective memory)。
-- 前端 `usePipeline` / `useGenerationStatus` / `useActiveAgentRuns` 轮询模型。
+- 前端 `usePipeline` / `useActiveAgentRuns` 轮询模型（`packages/state/src/queries/`）。
 
 不包含:
 
@@ -68,10 +68,10 @@ sequenceDiagram
   end
   Sched->>DB: claim
   Sched->>Chat: POST /agent/generate (EdDSA agent-run JWT, run_id)
-  Chat->>Agent: build_generation_context(过去窗口 + 未来 7d 窗口)
-  Agent->>Agent: 多轮:events_search 补充/核实(去重对照种子 recent_proposals)
+  Chat->>Agent: build_tick_context(确定性日志:到达轴增量 + 未来 7d 窗口)
+  Agent->>Agent: 多轮:events_search / event_source / tavily 补充核实(去重对照日志里既有 proposal)
   Agent->>Agent: submit_card × 0..N(工具层校验 schema/cap/重复)
-  Chat-->>Sched: GeneratorResponse { cards, evaluations:[], reasoning }
+  Chat-->>Sched: GenerateResponse { cards, evaluations:[], reasoning }
   Sched->>Save: persist_generator_run(...)
   Save->>DB: pai_pipeline_runs + 每卡一条 pai_events(agent_decision)
   FE->>Web: poll /api/agent-runs/active + /api/cards
@@ -85,11 +85,11 @@ sequenceDiagram
 | 入队 | `enqueue_once(kind='generator.manual', payload={cards_to_generate, output_language, trigger})`。`cards_to_generate` 语义 = **上限 cap**(≤8),不是目标数。 |
 | Virtual key | `_ensure_virtual_key` / dispatcher 侧 `ensure_user_litellm_key` lazy-recover;失败 502/run failed。 |
 | 输出语言 | 读 user_settings 的 `generation_language`,payload 传给 engine。 |
-| **种子上下文** | `generation_context.build_generation_context`:**只拉两个 events 窗口**——过去窗口(`compute_context_window`,≥24h、覆盖到上次成功 run)+ **未来 7d 窗口**(会议/predicted,旧管线 until=now 根本看不到未来)。均经 `/api/agent/events/search`(L1-only,status=active,limit 100);未来窗口按 occurredAt 升序。portrait(USER/GOALS,含蒸馏偏好)走 `PortraitMiddleware` 注入,不进种子。**没有 raw 直读 / world 单查 / feedback / connections 预拉**。 |
+| **上下文日志** | `generation_context.build_tick_context`:**确定性上下文日志 + 未来窗口**。过去侧按**到达轴**增量续写日志——首建 3d lookback,之后从 growth anchor→now 拉新到达事件(`recordedSince/Until + arrivalsLimit + newestFirst`);日志超 token 预算(80k)原地 reset,effective anchor 由 api 侧持久化。未来 7d 窗口经 `/api/agent/events/search`(L1-only,status=active,limit 100,按 occurredAt 升序)。日志作为 prompt-caching cache_control 块注入(ttl 5m/1h 由 api 按用户决定)。portrait(USER/GOALS,含蒸馏偏好)走 `PortraitMiddleware` 注入,不进日志。**没有 raw 直读 / world 单查 / feedback / connections 预拉**。 |
 | 派发 | dispatcher `generator.manual`/`generator.chat`/`generator.scheduled` 走 `_run_generator`;超时预算 600s。**pattern matcher / phase1_seed 已删**(pattern 定位冷启动先验,后续迭代)。`generator.auto` kind 在路由表里但无 producer(死代码)。 |
 | 持久化 | `persist_generator_run` → `persist_pipeline_run_strict`:`pai_pipeline_runs` 一行(`id=run_id` 两列同值、`final_cards JSONB`)+ **同事务每卡一条 L1 `agent_decision` event**(`source=agent_action`、`structured={kind:"proactive_proposal", card_id, run_id, related_event_ids}`,`dedupe_key=card_decision:{card_id}` 幂等,curated 直接盖章)。**静默 run(0 卡)L1 零写入**。reminder.card 传 `record_decisions=False`(用户自设 nudge 不是 AI 提议)。`pai_card_evaluations` 写口保留但主路径恒空(evaluator 退役)。 |
-| Reward review | `/api/reward-dashboard/*` 只读 `pai_pipeline_runs.final_cards`(+历史 `pai_card_evaluations`);新卡无 eval 行。 |
-| 前端轮询 | 不变:`usePipeline` / `useActiveAgentRuns` / `useGenerationStatus`;成功后 `useCardsQuery` 拉 `/api/cards`。注意 **0 卡也是 completed**——产品层按"本轮没有值得说的"呈现,不是失败。 |
+| Reward review | `/api/reward-dashboard/*` 由独立 reward-dashboard service(`pinai_reward_dashboard`)提供,只读 `pai_pipeline_runs.final_cards`(+历史 `pai_card_evaluations`);新卡无 eval 行。 |
+| 前端轮询 | `usePipeline`(`packages/state/src/queries/pipeline.ts`,/status 检查已内联进它)+ `useActiveAgentRuns`;成功后 `useCardsQuery` 拉 `/api/cards`。注意 **0 卡也是 completed**——产品层按"本轮没有值得说的"呈现,不是失败。 |
 | Prospective 注入 | `ScheduledTasksMiddleware`(harness/middleware.py):main_chat + card_execution 每 run 注入自己 scheduled_generator 任务的有界快照(≤8 条一行一条),agent 可回答/修改/去重自己排的 cron。generator 不注入。 |
 
 ## agent-engine 端 generator(一次多轮 agent run)
@@ -97,10 +97,10 @@ sequenceDiagram
 `transport/routes/generate.py` → `agents/generator.py:run_generator()`。
 
 - **形态**:`build_agent`(deepagents)+ `LazyThreadSandbox`(prompt 禁 file/exec 工具 → **永不 provision Daytona**)+ `with_portrait=True`;`recursion_limit=80`;单 run 由 route 的 `asyncio.timeout(600s)` 兜底。
-- **工具两个**:`events_search`(种子外补充检索 / 核实 event 是当前版本——supersede 链保证改期/取消可见)、`submit_card`(run-scoped:args_schema=GeneratedCard,Pydantic 校验失败回可读错误让 agent 修正重交;cap 满 / intent_key 重复直接拒绝)。**去重基准在种子里**:`recent_proposals`(最近 7d 的 agent_decision/kind=proactive_proposal,含 cardId+relatedEventIds,`structured.kind` 过滤掉画像变更双写)——不靠工具自觉。`cards_recent` 工具与 `/api/agent/cards/recent` 端点已删。
+- **工具五个**:`events_search`(日志外补充检索 / 核实 event 是当前版本——supersede 链保证改期/取消可见)、`event_source`(钻取 L0 verbatim,body 投影限 280 字符)、`tavily_search` / `tavily_extract`(world / 新闻类核实)、`submit_card`(run-scoped:args_schema=GeneratedCard,Pydantic 校验失败回可读错误让 agent 修正重交;cap 满 / intent_key 重复直接拒绝)。**去重基准在上下文日志里**:既有 agent_decision(kind=proactive_proposal)折进确定性日志,prompt 指示 agent 丢弃重叠——不靠工具自觉。`cards_recent` 工具与 `/api/agent/cards/recent` 端点已删。
 - **验证内建于生成**:决定出卡时 sources 已经工具核实过——**没有独立 evaluator / final_selection / top-up**。`GeneratorOutput.evaluations` 恒空。
 - **0..N 语义**:每个值得说的点一张,没有就 0 张(prompt 写死宁缺毋滥:一张烂卡比十张漏掉的好卡代价更高)。
-- **种子消息**:`Today is {user-local date}` + focus(chat 触发的话题)+ generation_request(scheduled 的 brief)+ `<seed_json>`(双向窗口)。
+- **上下文消息**:系统段带 `<current_date>` / `<context_map>`;确定性日志以 cache_control 块注入,每轮 `_tick_message` 追加日志尾部增量 + future_view;chat 触发的 focus / scheduled 的 generation_request 一并进上下文(无 `<seed_json>` 标签)。
 
 ### 卡面字段
 
@@ -120,12 +120,12 @@ sequenceDiagram
 | 生成 HTTP 入口 / dedupe / lazy virtual key | `backend/services/api/src/pinai_api/domains/generation/generate_ui.py` |
 | Scheduler dispatcher generator handler | `backend/services/api/src/pinai_api/orchestration/dispatcher.py`(`_run_generator`)+ `control/chat_proxy.py`(`call_generate`) |
 | **agentic generator + prompt + submit_card** | `backend/services/agent-engine/src/agent_engine/agents/generator.py` |
-| **种子上下文(双向窗口)** | `backend/services/agent-engine/src/agent_engine/agents/generation_context.py` |
+| **上下文日志(到达轴 + 未来窗口)** | `backend/services/agent-engine/src/agent_engine/agents/generation_context.py`(`build_tick_context`) |
 | agent-engine HTTP route(0 卡合法 / cap / id 重写) | `backend/services/agent-engine/src/agent_engine/transport/routes/generate.py` |
 | 持久化 + **L1 决策写回** | `backend/services/api/src/pinai_api/domains/generation/pipeline_persistence.py` |
 | 卡 schema | `backend/libs/contracts/src/pinai_contracts/api_models.py`(`GeneratedCard` / `GeneratorOutput`) |
 | Prospective 快照注入 | `backend/services/agent-engine/src/agent_engine/harness/middleware.py`(`ScheduledTasksMiddleware` / `render_scheduled_tasks`) |
-| 前端 pipeline hook | `proactive-ai-frontend/src/hooks/usePipeline.ts`、`useGenerationStatus.ts`、`useActiveAgentRuns.ts` |
+| 前端 pipeline hook | `packages/state/src/queries/pipeline.ts`(`usePipeline`)、`packages/state/src/queries/agent-runs.ts`(`useActiveAgentRuns`) |
 
 ## 验证方式
 
