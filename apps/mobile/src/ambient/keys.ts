@@ -15,6 +15,15 @@ export const AMBIENT_SOURCE_KEYS = [
   "visit",
   "activity",
   "focus",
+  "pin_hardware",
 ] as const;
 
 export type AmbientSourceKey = (typeof AMBIENT_SOURCE_KEYS)[number];
+
+/**
+ * master 开关/设置面板批量操作用的键——pin_hardware 由 Connect > Devices
+ * 的管理页管理（连接即录、与手机收录互斥），不参与「一键全开」；
+ * master 关闸（隐私总开关）时仍然连它一起关。
+ */
+export const AMBIENT_BULK_SOURCE_KEYS: readonly AmbientSourceKey[] =
+  AMBIENT_SOURCE_KEYS.filter((key) => key !== "pin_hardware");

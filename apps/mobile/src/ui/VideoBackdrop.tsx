@@ -16,6 +16,18 @@ import { probeSet } from "../lib/heat-probe";
 import { useHeatAbFlags } from "../lib/heat-ab";
 
 const source = require("../assets/constellation-bg.mp4");
+const stillSource = require("../assets/constellation-bg-still.jpg");
+
+/** Same visual treatment as VideoBackdrop without creating a video player. */
+export function StaticVideoBackdrop() {
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      <View style={[StyleSheet.absoluteFill, styles.base]} />
+      <Image source={stillSource} style={StyleSheet.absoluteFill} resizeMode="cover" />
+      <View style={[StyleSheet.absoluteFill, styles.veil]} />
+    </View>
+  );
+}
 
 export default function VideoBackdrop() {
   const player = useVideoPlayer(source, (p) => {

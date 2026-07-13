@@ -35,12 +35,13 @@ import {
   stopIngestLoop,
   uploadsLockedSnapshot,
 } from "./ingest";
-import { AMBIENT_SOURCE_KEYS } from "./keys";
+import { AMBIENT_BULK_SOURCE_KEYS, AMBIENT_SOURCE_KEYS } from "./keys";
 import { createActivitySource } from "./sources/activity";
 import { createAudioRouteSource } from "./sources/audio-route";
 import { createCalendarSource } from "./sources/calendar";
 import { createDeviceStateSource } from "./sources/device-state";
 import { createFocusSource } from "./sources/focus";
+import { createPinHardwareSource } from "./sources/pin-hardware";
 import { createHealthSource } from "./sources/health";
 import { createLocationSource } from "./sources/location";
 import { createSoundClassifierSource } from "./sources/sound-classifier";
@@ -109,6 +110,7 @@ const sources: AmbientSource[] = [
   createVisitSource(ctx),
   createActivitySource(ctx),
   createFocusSource(ctx),
+  createPinHardwareSource(ctx),
 ];
 
 let startPromise: Promise<string[]> | null = null;
@@ -234,13 +236,18 @@ async function startAmbientSources(session: AmbientStartSession): Promise<string
     await writeEnabledFlag(false);
     return [];
   }
-  desiredSourceKeys = new Set(sources.map((s) => s.key));
+  // master 开只启批量键源:pin_hardware 是设备驱动源(Connect 设备页/consent
+  // reconcile 启停),master ON 刚把它的 consent patch 成 false,无差别启动会
+  // 弹意外的蓝牙权限框并在 consent=false 时扫描采集。
+  const bulkKeys = new Set<string>(AMBIENT_BULK_SOURCE_KEYS);
+  const bulkSources = sources.filter((s) => bulkKeys.has(s.key));
+  desiredSourceKeys = new Set(bulkSources.map((s) => s.key));
   runtimeOwnerUserId = session.userId;
   startIngestLoop(session.userId);
   startRuntimeTimers();
   bindAmbientAppStateLifecycle();
   const started: string[] = [];
-  for (const s of sources) {
+  for (const s of bulkSources) {
     if (!lifecycle.isCurrentStart(session)) break;
     try {
       ctx.onEvent(s.key, "starting");

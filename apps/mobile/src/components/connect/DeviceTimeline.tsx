@@ -368,7 +368,11 @@ function HealthRow({ obs }: { obs: DeviceHealthObservation }) {
   const occurred = useMemo(() => formatTime(obs.occurred_at), [obs.occurred_at]);
   const metric = obs.metric ?? obs.observation_type;
   const valueLabel =
-    obs.value === null ? "—" : Number.isInteger(obs.value) ? String(obs.value) : obs.value.toFixed(2);
+    typeof obs.value !== "number" || !Number.isFinite(obs.value)
+      ? "—"
+      : Number.isInteger(obs.value)
+        ? String(obs.value)
+        : obs.value.toFixed(2);
   return (
     <GlassCard style={styles.itemCard}>
       <View style={styles.itemHeader}>

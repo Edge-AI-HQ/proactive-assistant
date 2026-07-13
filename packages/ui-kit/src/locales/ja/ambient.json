@@ -246,6 +246,11 @@
         "permission": "マイク",
         "hint": "話し声・音楽・環境音のラベルをデバイス上で検出します。"
       },
+      "pin_hardware": {
+        "label": "PIN ハードウェア",
+        "permission": "Bluetooth",
+        "hint": "PINAI ハードウェアを接続してハンズフリーのリアルタイム文字起こしを行います。"
+      },
       "visit": {
         "label": "場所への訪問",
         "permission": "位置情報",

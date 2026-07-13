@@ -39,6 +39,7 @@ FORBIDDEN_ENVS: tuple[str, ...] = (
     "STRIPE_WEBHOOK_SECRET",  # Stripe webhook signing — only web
     "LITELLM_MASTER_KEY",  # LiteLLM master — only web (mints virtual_keys)
     "APNS_AUTH_KEY",  # APNs .p8 private key — only web (signs push JWTs)
+    "TENCENT_ASR_SECRET_KEY",  # Tencent RTASR master — only web (signs BLE mint URLs)
 )
 
 

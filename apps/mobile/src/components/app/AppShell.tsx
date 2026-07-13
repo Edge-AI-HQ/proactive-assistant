@@ -212,7 +212,7 @@ function AppShell({
           ) : null}
           {visited.has("connect") ? (
             <KeepAlivePage active={view === "connect"}>
-              <ConnectScreen headerProps={headerProps} composio={composio} />
+              <ConnectScreen headerProps={headerProps} composio={composio} userId={user.id} onNavigateAmbient={() => navigate("ambient")} />
             </KeepAlivePage>
           ) : null}
           {visited.has("profile") ? (

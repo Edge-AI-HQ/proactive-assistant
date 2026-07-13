@@ -26,6 +26,7 @@ import DataConnections, {
   isDataSourceConnected,
 } from "../components/connect/DataConnections";
 import DeviceConnections from "../components/connect/DeviceConnections";
+import PinHardwareDeviceManager from "../components/connect/PinHardwareDeviceManager";
 import { EM_TIGHT, tracking } from "../ui/typography";
 import type { HeaderProps } from "./AmbientScreen";
 
@@ -45,9 +46,15 @@ const sectionEntering = FadeInUp.duration(240).withInitialValues({
 function ConnectScreen({
   headerProps,
   composio,
+  userId,
+  onNavigateAmbient,
 }: {
   headerProps: HeaderProps;
   composio: ComposioState;
+  /** PIN 硬件管理页开始采集时驱动 ambient runtime 用。 */
+  userId: string;
+  /** PIN 硬件管理页「去 Ambient 来源开启」CTA 的跳转(AppShell navigate)。 */
+  onNavigateAmbient?: () => void;
 }) {
   const { t } = useTranslation("connect");
   const [meshExpanded, setMeshExpanded] = useState(false);
@@ -182,7 +189,10 @@ function ConnectScreen({
             {meshExpanded ? (
               <View style={styles.meshBody}>
                 <View style={styles.meshDivider} />
-                <DeviceConnections />
+                <PinHardwareDeviceManager userId={userId} onOpenAmbientSettings={onNavigateAmbient} />
+                <View style={styles.deviceConnectionsSection}>
+                  <DeviceConnections />
+                </View>
               </View>
             ) : null}
           </Animated.View>
@@ -255,6 +265,7 @@ const styles = StyleSheet.create({
   meshDesc: { marginTop: 2, fontSize: 11, lineHeight: 15, fontFamily: "Inter_400Regular", color: fg(0.5) },
   meshBody: { paddingHorizontal: 16, paddingBottom: 16 },
   meshDivider: { height: 1, backgroundColor: pink(0.15), marginBottom: 12 },
+  deviceConnectionsSection: { marginTop: 12 },
 });
 
 // memo：AppShell 切页/开关抽屉时本屏 props 全稳定（含 composio——useComposio 返回

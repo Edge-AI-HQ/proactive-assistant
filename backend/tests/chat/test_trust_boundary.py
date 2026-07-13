@@ -12,7 +12,7 @@ import pytest
 from agent_engine import trust_boundary
 
 
-def test_forbidden_envs_are_the_seven_master_credentials():
+def test_forbidden_envs_lock_the_master_credential_list():
     # Locks the canonical list. Adding/removing a master credential must be a
     # deliberate edit kept in lockstep with CLAUDE.md and the inline copy in
     # scripts/sync_fly_secrets.py (test_sync_fly_secrets guards that copy).
@@ -24,6 +24,7 @@ def test_forbidden_envs_are_the_seven_master_credentials():
         "STRIPE_WEBHOOK_SECRET",
         "LITELLM_MASTER_KEY",
         "APNS_AUTH_KEY",
+        "TENCENT_ASR_SECRET_KEY",
     }
 
 

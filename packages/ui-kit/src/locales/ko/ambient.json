@@ -246,6 +246,11 @@
         "permission": "마이크",
         "hint": "기기에서 말소리, 음악, 주변 소리 라벨을 감지해요."
       },
+      "pin_hardware": {
+        "label": "PIN 하드웨어",
+        "permission": "Bluetooth",
+        "hint": "PINAI 하드웨어를 연결해 핸즈프리 실시간 전사를 사용해요."
+      },
       "visit": {
         "label": "장소 방문",
         "permission": "위치",

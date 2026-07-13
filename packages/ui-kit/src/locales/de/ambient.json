@@ -251,6 +251,11 @@
         "permission": "Mikrofon",
         "hint": "Erkennt Sprache, Musik und Umgebungsgeräusche direkt auf dem Gerät."
       },
+      "pin_hardware": {
+        "label": "PIN Hardware",
+        "permission": "Bluetooth",
+        "hint": "Verbindet PINAI-Hardware für freihändige Echtzeit-Transkription."
+      },
       "visit": {
         "label": "Ortsbesuche",
         "permission": "Standort",

@@ -55,6 +55,10 @@ interface UseAmbientLiveSessionOptions {
 interface UseAmbientLiveSessionResult {
   session: LiveSession | null;
   history: LiveHistoryTranscript[];
+  /** Raw merged transcript data (today's replayed events + in-memory live
+   *  stream), chronological. For consumers that render their own feed
+   *  (e.g. the PIN hardware page's phone tab) instead of the Live card. */
+  data: LiveSessionData | null;
   previewVisibleCount: number;
   isRealSession: boolean;
   dismiss: () => void;
@@ -208,6 +212,7 @@ export function useAmbientLiveSession({
   return {
     session,
     history,
+    data: mergedLiveSessionData,
     previewVisibleCount: session?.assists.length ?? 0,
     isRealSession: realSession !== null,
     dismiss,

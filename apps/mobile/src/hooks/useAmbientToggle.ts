@@ -58,8 +58,10 @@ export function useAmbientToggle(userId: string | null): UseAmbientToggleResult 
     const next = !ambientOn;
     setTogglePending(true);
     try {
+      // pin_hardware 与手机收录互斥、由 Connect 设备页管理：master 开不带它
+      // （patch false 顺带保证互斥），master 关（隐私总开关）连它一起关。
       const consentPatch = Object.fromEntries(
-        AMBIENT_SOURCE_KEYS.map((key) => [key, { enabled: next }]),
+        AMBIENT_SOURCE_KEYS.map((key) => [key, { enabled: key === "pin_hardware" ? false : next }]),
       );
       if (!next) {
         // 关：先乐观清本机闸（UI 立刻 off），再停采集 + 落 consent。

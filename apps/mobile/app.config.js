@@ -56,7 +56,10 @@ module.exports = {
           "PIN AI transcribes ambient speech on-device to capture useful moments.",
         NSFocusStatusUsageDescription:
           "PIN AI reads whether you're in a Focus mode to gauge your availability for proactive suggestions.",
-        UIBackgroundModes: ["audio", "location", "fetch", "remote-notification"],
+        NSBluetoothAlwaysUsageDescription:
+          "PIN AI connects to PINAI hardware (wearable recorder) over Bluetooth for hands-free realtime transcription.",
+        // bluetooth-central: PIN 硬件(MR20)锁屏后 BLE 音频不断流 + state restoration。
+        UIBackgroundModes: ["audio", "bluetooth-central", "location", "fetch", "remote-notification"],
         // NSFocusStatusUsageDescription 保留:ambient 的 focus 源(INFocusStatusCenter)
         // 代码仍在、无 entitlement 时优雅降级,但权限弹窗若被触发缺该串会崩。
       },

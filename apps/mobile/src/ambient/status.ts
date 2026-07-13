@@ -162,6 +162,7 @@ const SOURCE_TO_KIND: Record<AmbientSourceKey, string> = {
   focus: "device.focus_state",
   audio_route: "device.audio_route",
   device_state: "device.device_state",
+  pin_hardware: "device.pin_hardware_transcript",
 };
 
 /**

@@ -246,6 +246,11 @@
         "permission": "麦克风",
         "hint": "在设备端检测语音、音乐与环境声标签。"
       },
+      "pin_hardware": {
+        "label": "PIN 硬件",
+        "permission": "蓝牙",
+        "hint": "连接 PINAI 硬件，用设备采集实时转录。"
+      },
       "visit": {
         "label": "地点到访",
         "permission": "位置",

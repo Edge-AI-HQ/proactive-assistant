@@ -1,0 +1,6 @@
+{
+  "name": "pin-hardware",
+  "version": "0.1.0",
+  "description": "PINAI hardware (MR20 recorder) BLE session + Tencent RTASR streaming — Expo local module, Swift core migrated from capacitor-plugins/ambient-ai PinHardwarePlugin",
+  "main": "index.ts"
+}

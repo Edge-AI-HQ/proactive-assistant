@@ -82,6 +82,8 @@ export const SIGNAL_KINDS = {
   focusState: "device.focus_state",
   audioRoute: "device.audio_route",
   deviceState: "device.device_state",
+  pinHardwareState: "device.pin_hardware_state",
+  pinHardwareTranscript: "device.pin_hardware_transcript",
 } as const;
 
 export type SignalKind = (typeof SIGNAL_KINDS)[keyof typeof SIGNAL_KINDS];

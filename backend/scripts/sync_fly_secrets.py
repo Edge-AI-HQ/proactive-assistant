@@ -72,6 +72,7 @@ _FORBIDDEN_ENVS: tuple[str, ...] = (
     "STRIPE_WEBHOOK_SECRET",
     "LITELLM_MASTER_KEY",
     "APNS_AUTH_KEY",
+    "TENCENT_ASR_SECRET_KEY",
 )
 
 # Scoped-role DSN aliases. Each carries one non-superuser role's connection

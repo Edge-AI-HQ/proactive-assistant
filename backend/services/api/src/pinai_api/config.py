@@ -190,6 +190,20 @@ class WebSettings(_BaseAppSettings):
     bytedance_asr_endpoint: str = "wss://voice.ap-southeast-1.bytepluses.com/api/v3/sauc/bigmodel"
     bytedance_asr_resource_id: str = "volc.bigasr.sauc.duration"
 
+    # ── PIN hardware realtime ASR (Tencent Cloud) ──
+    # BLE recorder audio is forwarded through Tencent RTASR WebSocket v2
+    # (asr.cloud.tencent.com/asr/v2/<appid>). The SecretKey is a master
+    # credential (forbidden in agent-engine — see trust_boundary.py) and
+    # must never leave the api process. Client fetches a signed short-lived
+    # WSS URL via /api/voice/hardware/tencent-token and opens the websocket
+    # directly to Tencent, so we don't proxy PCM through the fly api app.
+    tencent_asr_secret_id: str | None = None
+    tencent_asr_secret_key: str | None = None
+    tencent_asr_app_id: str | None = None
+    # Signed URL TTL (seconds). Tencent's `expired` param is a wall-clock
+    # unix timestamp; the client should open the socket within this window.
+    tencent_asr_token_ttl_s: int = 60
+
     # Per-user virtual key provisioning. `default_budget_usd` is the cap
     # we burn through a budget cycle; allowed models is the list passed to
     # /key/generate so users can't switch to a model the deploy hasn't

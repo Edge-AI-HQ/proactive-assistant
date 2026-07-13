@@ -21,7 +21,7 @@ import { CheckCircle2, Radio, ShieldCheck } from "lucide-react-native";
 import { useUserSettings } from "@pin-ai/state";
 
 import { GlassCard } from "../../ui/GlassCard";
-import { AMBIENT_SOURCE_KEYS, type AmbientSourceKey } from "../../ambient/keys";
+import { AMBIENT_BULK_SOURCE_KEYS, AMBIENT_SOURCE_KEYS, type AmbientSourceKey } from "../../ambient/keys";
 import {
   ambientStatusSnapshot,
   currentGateEpoch,
@@ -208,12 +208,13 @@ export default function AmbientSourceControlsPanel({ userId }: { userId: string 
     return m;
   }, [status]);
 
+  // 计数/全开判断只看批量键——pin_hardware 由 Connect 设备页管理，不在本面板。
   const enabledSet = useMemo(() => {
     const src = settings?.ambientSources ?? {};
-    return new Set(AMBIENT_SOURCE_KEYS.filter((k) => src[k]?.enabled === true));
+    return new Set(AMBIENT_BULK_SOURCE_KEYS.filter((k) => src[k]?.enabled === true));
   }, [settings?.ambientSources]);
   const enabledCount = enabledSet.size;
-  const allOn = enabledCount === AMBIENT_SOURCE_KEYS.length;
+  const allOn = enabledCount === AMBIENT_BULK_SOURCE_KEYS.length;
 
   // consent patch 成功后：**主闸开着**才把"正在跑的源"调和到新 consent 集（实时启停,
   // 交互式补权限）。主闸关着 = 纯授权记录——绝不启动采集、绝不翻闸（2026-07-05 语义
@@ -236,7 +237,16 @@ export default function AmbientSourceControlsPanel({ userId }: { userId: string 
     async (key: AmbientSourceKey, currentlyEnabled: boolean) => {
       setBusyKeys((prev) => new Set(prev).add(key));
       try {
-        const updated = await patch({ ambientSources: { [key]: { enabled: !currentlyEnabled } } });
+        const ambientSources: Record<string, { enabled: boolean }> = {
+          [key]: { enabled: !currentlyEnabled },
+        };
+        // 手机麦克风与 PIN 硬件收录互斥：开手机源时同一 patch 里关掉硬件源，
+        // reconcileFrom 会停 BLE capture。
+        if (key === "sound_classifier" && !currentlyEnabled
+          && settings?.ambientSources?.pin_hardware?.enabled === true) {
+          ambientSources.pin_hardware = { enabled: false };
+        }
+        const updated = await patch({ ambientSources });
         if (updated) await reconcileFrom(updated.ambientSources);
       } finally {
         setBusyKeys((prev) => {
@@ -246,7 +256,7 @@ export default function AmbientSourceControlsPanel({ userId }: { userId: string 
         });
       }
     },
-    [patch, reconcileFrom],
+    [patch, reconcileFrom, settings?.ambientSources?.pin_hardware?.enabled],
   );
 
   const enableAll = useCallback(async () => {
@@ -254,15 +264,19 @@ export default function AmbientSourceControlsPanel({ userId }: { userId: string 
     setBulkEnabling(true);
     try {
       const ambientSources: Record<string, { enabled: boolean }> = {};
-      AMBIENT_SOURCE_KEYS.forEach((k) => {
+      AMBIENT_BULK_SOURCE_KEYS.forEach((k) => {
         ambientSources[k] = { enabled: true };
       });
+      // 批量开含手机麦克风源，与 PIN 硬件收录互斥——同 patch 关掉硬件源。
+      if (settings?.ambientSources?.pin_hardware?.enabled === true) {
+        ambientSources.pin_hardware = { enabled: false };
+      }
       const updated = await patch({ ambientSources });
       if (updated) await reconcileFrom(updated.ambientSources);
     } finally {
       setBulkEnabling(false);
     }
-  }, [allOn, patch, reconcileFrom]);
+  }, [allOn, patch, reconcileFrom, settings?.ambientSources?.pin_hardware?.enabled]);
 
   const flush = useCallback(async () => {
     await flushAmbient();

@@ -25,6 +25,7 @@ export * from "./api/devices";
 export * from "./api/events";
 export * from "./api/health";
 export * from "./api/payment";
+export * from "./api/pin-hardware";
 export * from "./api/portrait";
 export * from "./api/scheduled-generators";
 export * from "./api/skills";

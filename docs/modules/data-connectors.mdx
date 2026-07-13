@@ -69,6 +69,7 @@ flowchart LR
 | `connector.sync` handler | 周期增量拉取(cron `*/30 * * * *`) | `domains/connector/apps/connector_ingest.py:_run_sync` | 同上 raw → projector → events;成功才前推 `pai_connector_sync_cursors.last_synced_at` |
 | Device registry | 给 web / iOS / Android / wearable 等设备发 token | `domains/connector/device/devices_ui.py`、`platform/db/repositories/devices.py` | `pai_user_devices`(`device_token_hash` 是 bcrypt rounds=10) |
 | Device ingest | 接收端侧整理后的 item / snapshot / health observation | `domains/connector/device/devices_ui.py:POST /ingest`、`domains/connector/device/device_ingest/recipes.py`、`domains/connector/device/device_ingest/health.py` | 由 `resolve_recipe(kind)` 决定 entity_type / snapshot 语义,**全部落单表 `pai_raw_device`**(`kind`+`platform` 判别);经 projector 投影 `pai_events`(state 类 apps/contacts 与 transcript_window firehose 除外) |
+| PIN 硬件(MR20 BLE 录音器) | 专属实时转写设备:BLE 音频 → 腾讯 RTASR → 转写入信号流 | `apps/mobile/modules/pin-hardware/`(Expo module)、`apps/mobile/src/ambient/sources/pin-hardware.ts`、`domains/voice/tencent_realtime_asr.py` | `device.pin_hardware_transcript` → recipe `utterance`(与手机语音同待遇进 L1),`device.pin_hardware_state` → `context`;同走 `/api/devices/ingest` 落 `pai_raw_device` |
 
 ## 当前 Composio toolkit 状态
 
@@ -223,6 +224,14 @@ sequenceDiagram
 - 用户 UI:`apps/mobile/src/components/ambient/AmbientSourceControlsPanel.tsx` + `useAmbientToggle.ts`,toggle 一旦 flip 既 PATCH 到 server 又同步启停本地 source,做到 UI 立即反映 + server 是持久真源。
 - Voice Identity 开启时,Ambient 云转录先走 `/api/voice/transcribe-diarized` + `gpt-4o-transcribe-diarize` 保留 `self` / speaker labels,再用 `gpt-5-nano` 对每个 diarized segment 的 `text` 做后处理纠错。speaker / start / end 结构只由代码保留和拼回,后处理 prompt 只允许改文本,热词在 `backend/services/api/src/pinai_api/domains/voice/voice_transcription.py` 的 `TRANSCRIPTION_POSTPROCESS_TERMS`。
 - 改 ambient source 列表 / lifecycle 行为 / `pai_user_settings.ambient_sources` schema 前必读 [Ambient AI Plugin](../plans/2026-05-10-ambient-ai-plugin) + [V2 → V3 功能迁移计划 D-5](../plans/2026-05-12-v2-to-v3-migration)。
+
+### PIN 硬件实时转写(MR20 BLE 录音器,2026-07)
+
+- **链路**:MR20 经 BLE 推 16kHz mono 16-bit PCM → `apps/mobile/modules/pin-hardware/`(Expo module,Swift 核心自退役 Capacitor 插件原样迁移)攒 20ms chunk → **手机直连腾讯 RTASR WebSocket v2** 流式转写。签名 URL 由 api 进程 `POST /api/voice/hardware/tencent-token` 签发(60s TTL,`Depends(current_user)`);`TENCENT_ASR_SECRET_KEY` 是 master credential(在 `FORBIDDEN_ENVS`,engine 拿不到),**永不出 api 进程**——客户端只拿签好名的 URL,PCM 不过我们的服务器。外发腾讯的参数不含用户标识(`voice_id` 为随机 hex)。
+- **consent 语义(与其他 ambient source 的三个差异)**:① `pin_hardware` 在 `AMBIENT_SOURCE_KEYS` 里(consent reconcile/watchdog 可启停)但**不在** `AMBIENT_BULK_SOURCE_KEYS`——master 总开关开**不**带它(避免无设备用户弹蓝牙权限框),关(隐私总开关)连它一起关;② 与手机收录(`sound_classifier`)**互斥**,开任一方的 consent patch 会在同一 patch 里关另一方;③ 启停入口在 **Connect > Devices 的管理页**(连接即录、断开即停),不在 ambient 设置面板(面板计数/一键全开都排除它)。
+- **JS source**(`apps/mobile/src/ambient/sources/pin-hardware.ts`):状态快照 + final 转写推 `device.pin_hardware_state` / `device.pin_hardware_transcript` 信号(recipes 映射见上表,transcript 与手机语音同待遇投 utterance);**ASR 断流自愈**也在 source 里(签名 URL ~60s 过期/腾讯掉线 → `asr_error` → 1s/3s/8s 退避重新 mint + `restartAsr`,restart 成功即重置预算)——放 source 而非管理页,页面关着也能自愈。
+- **iOS 后台**:app 声明 `bluetooth-central` UIBackgroundModes(锁屏 BLE 不断流) + CoreBluetooth state restoration(restore identifier + `sessionActive` UserDefaults 标记,系统回收后可恢复连接);默认设备记在 UserDefaults,`retrievePeripherals` 自动重连。
+- **环境**:腾讯三键(`TENCENT_ASR_SECRET_ID/KEY/APP_ID`)目前只配了 dev;test/prod 未配时 mint 返回 `503 detail=pin_hardware_asr_not_configured`,客户端按设计回退手机收录(裸 503——如 Fly 部署抖动——不会触发回退)。
 
 ### 设备统一时间线
 

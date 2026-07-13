@@ -75,6 +75,7 @@ from .domains.user_model.settings_agent import router as agent_settings_router
 from .domains.user_model.settings_ui import settings_router as ui_settings_router
 from .domains.user_model.skills_agent import router as agent_skills_router
 from .domains.user_model.skills_ui import router as ui_skills_router
+from .domains.voice.tencent_realtime_asr import router as ui_hardware_asr_router
 from .domains.voice.ui import router as ui_voice_router
 from .orchestration.tick_loop import tick_loop
 from .platform.middleware.audit import AgentAuditMiddleware
@@ -242,6 +243,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_jwt_revoke_router)
     app.include_router(ui_browser_router)
     app.include_router(ui_voice_router)
+    app.include_router(ui_hardware_asr_router)
     app.include_router(ui_account_router)
     app.include_router(ui_development_feedback_router)
 

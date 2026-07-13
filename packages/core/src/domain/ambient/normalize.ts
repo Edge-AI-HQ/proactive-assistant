@@ -77,6 +77,8 @@ export function sourceTypeFromSignal(kind: string): AmbientSourceType {
   if (kind === SIGNAL_KINDS.focusState) return "focus";
   if (kind === SIGNAL_KINDS.audioRoute) return "audio_route";
   if (kind === SIGNAL_KINDS.deviceState) return "device_state";
+  if (kind === SIGNAL_KINDS.pinHardwareState) return "device_state";
+  if (kind === SIGNAL_KINDS.pinHardwareTranscript) return "transcript";
   return "sound";
 }
 
@@ -113,6 +115,8 @@ function rawEventType(
   if (kind === SIGNAL_KINDS.focusState) return "focus.state";
   if (kind === SIGNAL_KINDS.audioRoute) return "audio_route.state";
   if (kind === SIGNAL_KINDS.deviceState) return "device.state";
+  if (kind === SIGNAL_KINDS.pinHardwareState) return "device.pin_hardware_state";
+  if (kind === SIGNAL_KINDS.pinHardwareTranscript) return "transcript.ready";
   if (kind === SIGNAL_KINDS.visit) {
     const visitKind = cleanText(payload.kind);
     return visitKind === "departure" ? "visit.departure" : "visit.arrival";

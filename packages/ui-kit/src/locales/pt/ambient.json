@@ -256,6 +256,11 @@
         "permission": "Microfone",
         "hint": "Detecta fala, música e rótulos de som ambiente no dispositivo."
       },
+      "pin_hardware": {
+        "label": "Hardware PIN",
+        "permission": "Bluetooth",
+        "hint": "Conecta o hardware PINAI para transcrição em tempo real sem usar as mãos."
+      },
       "visit": {
         "label": "Visitas a lugares",
         "permission": "Localização",

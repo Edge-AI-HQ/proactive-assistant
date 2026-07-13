@@ -52,6 +52,10 @@ DEVICE_RECIPES: dict[str, DeviceRecipe] = {
     # ── 语音会话(实时 1→1 投 utterance event,2026-06-30 起) ──
     "ambient.utterance": DeviceRecipe("utterance"),
     "session_summary": DeviceRecipe("utterance"),
+    # PIN 硬件(MR20 BLE 录音器)实时转写:与手机语音同待遇投 utterance;
+    # 连接状态快照是环境上下文。
+    "device.pin_hardware_transcript": DeviceRecipe("utterance"),
+    "device.pin_hardware_state": DeviceRecipe("context"),
     # ── 证据窗口(firehose,latest-wins + semantic rollup;不 1→1 投) ──
     "ambient.candidate_window": DeviceRecipe("transcript_window", latest_wins=True),
     # ── 位置/到访/运动/日历/专注(实时投,各自 entity) ──
