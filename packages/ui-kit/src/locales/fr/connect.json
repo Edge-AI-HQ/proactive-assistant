@@ -173,6 +173,8 @@
     "standby": "En veille",
     "emptyTranscript": "Les tours de parole apparaîtront ici une fois l'appareil connecté et la transcription démarrée.",
     "emptyTranscriptPhoneDisabled": "L'enregistrement via le microphone du téléphone est désactivé. Activez-le dans les sources Ambient pour voir la transcription en direct ici.",
+    "phoneIdlePinActive": "Le matériel PIN enregistre en ce moment — le micro du téléphone est inactif.",
+    "viewPinDevice": "Voir l'appareil PIN",
     "listening": "À l'écoute…",
     "openAmbientSources": "Activer dans les sources Ambient",
     "metrics": {

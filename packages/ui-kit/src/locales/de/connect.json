@@ -171,6 +171,8 @@
     "standby": "Standby",
     "emptyTranscript": "Sprecherbeiträge erscheinen hier, sobald das Gerät verbunden ist und die Transkription startet.",
     "emptyTranscriptPhoneDisabled": "Die Aufnahme über das Telefonmikrofon ist aus. Aktivieren Sie sie in den Ambient-Quellen, um hier das Live-Transkript zu sehen.",
+    "phoneIdlePinActive": "Die PIN-Hardware nimmt gerade auf – das Handymikrofon ist inaktiv.",
+    "viewPinDevice": "PIN-Gerät ansehen",
     "listening": "Hört zu…",
     "openAmbientSources": "In Ambient-Quellen aktivieren",
     "metrics": {

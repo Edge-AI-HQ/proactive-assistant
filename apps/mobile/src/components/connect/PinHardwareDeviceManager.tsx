@@ -646,8 +646,10 @@ function ManagementPage({
           <PhoneLiveView
             transcripts={phoneTranscripts}
             phoneSourceReady={phoneSourceReady}
+            pinCaptureRunning={pinCaptureRunning}
             onToggleMark={onToggleMark}
             onOpenAmbientSources={onOpenAmbientSources}
+            onViewPinDevice={() => onSelectSource("pin")}
           />
         ) : connected ? (
           <ConnectedView
@@ -892,13 +894,18 @@ function ConnectedView({
 function PhoneLiveView({
   transcripts,
   phoneSourceReady,
+  pinCaptureRunning,
   onToggleMark,
   onOpenAmbientSources,
+  onViewPinDevice,
 }: {
   transcripts: TranscriptLine[];
   phoneSourceReady: boolean;
+  /** PIN 硬件是否正在收录——手机/硬件互斥,收录来源必须显式表达。 */
+  pinCaptureRunning: boolean;
   onToggleMark: (lineId: string) => void;
   onOpenAmbientSources: () => void;
+  onViewPinDevice: () => void;
 }) {
   const { t } = useTranslation("connect");
   const lines: TranscriptLine[] = phoneSourceReady
@@ -907,16 +914,31 @@ function PhoneLiveView({
       ...transcripts,
     ]
     : transcripts;
+  // 三种收录状态,横幅/空态各自表达:手机在录(绿活跃横幅)、PIN 设备在录
+  // (中性提示条,收录不在手机这边)、都没录(空态+去开启 CTA)。
   return (
     <View style={styles.phoneView}>
       {phoneSourceReady ? (
         <CaptureBanner label={t("pinHardware.capturingViaPhone")} icon={<Smartphone size={16} color="#fff" />} />
+      ) : pinCaptureRunning ? (
+        <View style={styles.sourceNoticeBar}>
+          <Radio size={15} color={PINK_TEXT} />
+          <Text style={styles.sourceNoticeText} numberOfLines={2}>
+            {t("pinHardware.phoneIdlePinActive")}
+          </Text>
+        </View>
       ) : null}
       <TranscriptPanel
         transcripts={lines}
         anchor="top"
-        emptyLabel={t("pinHardware.emptyTranscriptPhoneDisabled")}
-        emptyAction={phoneSourceReady ? null : (
+        emptyLabel={pinCaptureRunning
+          ? t("pinHardware.phoneIdlePinActive")
+          : t("pinHardware.emptyTranscriptPhoneDisabled")}
+        emptyAction={phoneSourceReady ? null : pinCaptureRunning ? (
+          <Pressable onPress={onViewPinDevice} accessibilityRole="button" style={styles.ctaChip}>
+            <Text style={styles.ctaChipText}>{t("pinHardware.viewPinDevice")}</Text>
+          </Pressable>
+        ) : (
           <Pressable onPress={onOpenAmbientSources} accessibilityRole="button" style={styles.ctaChip}>
             <Text style={styles.ctaChipText}>{t("pinHardware.openAmbientSources")}</Text>
           </Pressable>
@@ -1382,6 +1404,24 @@ const styles = StyleSheet.create({
   },
   listeningText: { alignSelf: "center", fontSize: 12, lineHeight: 16, fontFamily: "Inter_400Regular", fontStyle: "italic", color: fg(0.5) },
 
+  sourceNoticeBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: pink(0.25),
+    backgroundColor: pink(0.08),
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  sourceNoticeText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 16,
+    fontFamily: "Inter_500Medium",
+    color: PINK_TEXT,
+  },
   ctaChip: {
     marginTop: 4,
     borderRadius: 999,

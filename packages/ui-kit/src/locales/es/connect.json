@@ -173,6 +173,8 @@
     "standby": "En espera",
     "emptyTranscript": "Las intervenciones de cada hablante aparecerán aquí cuando el dispositivo esté conectado y comience la transcripción.",
     "emptyTranscriptPhoneDisabled": "La grabación con el micrófono del teléfono está desactivada. Actívala en las fuentes de Ambient para ver la transcripción en vivo aquí.",
+    "phoneIdlePinActive": "El hardware PIN está grabando ahora; el micrófono del teléfono está inactivo.",
+    "viewPinDevice": "Ver dispositivo PIN",
     "listening": "Escuchando…",
     "openAmbientSources": "Activar en fuentes Ambient",
     "metrics": {

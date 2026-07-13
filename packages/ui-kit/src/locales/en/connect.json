@@ -171,6 +171,8 @@
     "standby": "Standby",
     "emptyTranscript": "Speaker turns will appear here after the device is connected and transcription starts.",
     "emptyTranscriptPhoneDisabled": "Phone microphone recording is off. Turn it on in Ambient sources to see live transcript here.",
+    "phoneIdlePinActive": "PIN hardware is recording right now — the phone microphone is idle.",
+    "viewPinDevice": "View PIN device",
     "listening": "Listening…",
     "openAmbientSources": "Turn on in Ambient sources",
     "metrics": {

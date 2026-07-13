@@ -169,6 +169,8 @@
     "standby": "待命",
     "emptyTranscript": "连接设备并开始转录后，Speaker 分段会显示在这里。",
     "emptyTranscriptPhoneDisabled": "手机麦克风录音处于关闭状态。到 Ambient 源里打开它就能看到实时字幕。",
+    "phoneIdlePinActive": "当前由 PIN 设备收录中，手机麦克风未在收录。",
+    "viewPinDevice": "查看 PIN 设备",
     "listening": "正在聆听…",
     "openAmbientSources": "去 Ambient 来源开启",
     "metrics": {

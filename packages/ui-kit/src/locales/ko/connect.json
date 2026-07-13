@@ -169,6 +169,8 @@
     "standby": "대기",
     "emptyTranscript": "기기를 연결하고 전사를 시작하면 화자별 발화가 여기에 표시돼요.",
     "emptyTranscriptPhoneDisabled": "휴대폰 마이크 녹음이 꺼져 있어요. Ambient 소스에서 켜면 실시간 전사를 여기서 볼 수 있어요.",
+    "phoneIdlePinActive": "지금은 PIN 기기가 수음 중입니다 — 휴대폰 마이크는 꺼져 있어요.",
+    "viewPinDevice": "PIN 기기 보기",
     "listening": "듣는 중…",
     "openAmbientSources": "Ambient 소스에서 켜기",
     "metrics": {
