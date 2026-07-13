@@ -173,6 +173,8 @@
     "standby": "Em espera",
     "emptyTranscript": "As falas de cada pessoa aparecerão aqui depois que o dispositivo for conectado e a transcrição começar.",
     "emptyTranscriptPhoneDisabled": "A gravação pelo microfone do celular está desativada. Ative-a em Fontes ambiente para ver a transcrição ao vivo aqui.",
+    "phoneIdlePinActive": "O hardware PIN está gravando agora — o microfone do celular está inativo.",
+    "viewPinDevice": "Ver dispositivo PIN",
     "listening": "Ouvindo…",
     "openAmbientSources": "Ativar nas fontes Ambient",
     "metrics": {

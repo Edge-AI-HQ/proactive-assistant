@@ -169,6 +169,8 @@
     "standby": "待機中",
     "emptyTranscript": "デバイスを接続して文字起こしを開始すると、話者ごとの発言がここに表示されます。",
     "emptyTranscriptPhoneDisabled": "スマートフォンのマイク録音がオフです。Ambient のソースでオンにすると、ここにライブ字幕が表示されます。",
+    "phoneIdlePinActive": "現在 PIN デバイスで収録中です——スマホのマイクは収録していません。",
+    "viewPinDevice": "PIN デバイスを見る",
     "listening": "聞き取り中…",
     "openAmbientSources": "Ambient ソースで有効にする",
     "metrics": {
