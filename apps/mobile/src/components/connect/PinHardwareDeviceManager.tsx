@@ -475,13 +475,16 @@ export default function PinHardwareDeviceManager({
   }, []);
 
   const openManagement = useCallback(() => {
-    // 按当下真实收录状态落视图:硬件在采集→pin;手机收录开着→phone;否则管理。
-    setSource(captureRunningRef.current || !phoneReady ? "pin" : "phone");
+    // PIN 设备是本页第一公民:进来永远先落 PIN tab(手机流是次要视图,
+    // 手动切换查看)。未连接且未采集时立即开扫——startScan 内含
+    // requestPermissions + startMonitoring(记住的默认设备先走自动重连,
+    // 失败回退扫描)。
+    setSource("pin");
     setExpanded(true);
-    if (state?.connected !== true && state?.autoReconnect !== false && state?.preferredDeviceId) {
-      void PinHardware.startMonitoring().catch(() => {});
+    if (state?.connected !== true && !captureRunningRef.current) {
+      void startScan();
     }
-  }, [phoneReady, state?.autoReconnect, state?.connected, state?.preferredDeviceId]);
+  }, [startScan, state?.connected]);
 
   const openAmbientSources = useCallback(() => {
     setExpanded(false);
@@ -620,19 +623,19 @@ function ManagementPage({
         <StatusPill label={status.label} tone={status.tone} />
       </View>
 
-      {/* 固定 tab:纯视图切换 */}
+      {/* 固定 tab:纯视图切换。PIN 设备在前——本页优先管理 PIN 硬件。 */}
       <View style={styles.tabBar} accessibilityRole="tablist">
-        <SourceTab
-          icon={<Smartphone size={15} color={source === "phone" ? PINK_TEXT : fg(0.35)} />}
-          label={t("pinHardware.source.phone")}
-          active={source === "phone"}
-          onPress={() => onSelectSource("phone")}
-        />
         <SourceTab
           icon={<Radio size={15} color={source === "pin" ? PINK_TEXT : fg(0.35)} />}
           label={t("pinHardware.source.pinDevice")}
           active={source === "pin"}
           onPress={() => onSelectSource("pin")}
+        />
+        <SourceTab
+          icon={<Smartphone size={15} color={source === "phone" ? PINK_TEXT : fg(0.35)} />}
+          label={t("pinHardware.source.phone")}
+          active={source === "phone"}
+          onPress={() => onSelectSource("phone")}
         />
       </View>
 
