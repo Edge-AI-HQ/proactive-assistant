@@ -99,12 +99,18 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
     // CoreBluetooth (and its permission prompt) for nothing.
     private static let restoreIdentifier = "pinai.pinHardware.central"
     private static let sessionActiveKey = "pinHardware.sessionActive"
+    private static let captureDesiredKey = "pinHardware.captureDesired"
+
+    private var captureDesired: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.captureDesiredKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.captureDesiredKey) }
+    }
 
     /// Called from the module's OnCreate (was CAPPlugin.load()): if a BLE
     /// session was live when iOS killed the app, recreate the central so
     /// CoreBluetooth can hand the connection back via willRestoreState.
     func bootstrapRestorationIfNeeded() {
-        if UserDefaults.standard.bool(forKey: Self.sessionActiveKey) {
+        if UserDefaults.standard.bool(forKey: Self.sessionActiveKey) || captureDesired {
             ensureCentral(showPowerAlert: false)
         }
     }
@@ -125,7 +131,17 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
     private var audioBytesReceived = 0
     private var lastAudioAtMs: Int?
     private var lastTranscriptAtMs: Int?
-    private var speakerContextId: String?
+    private static let speakerContextIdKey = "pinHardware.speakerContextId"
+    private var speakerContextId: String? {
+        get { UserDefaults.standard.string(forKey: Self.speakerContextIdKey) }
+        set {
+            if let newValue, !newValue.isEmpty {
+                UserDefaults.standard.set(newValue, forKey: Self.speakerContextIdKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Self.speakerContextIdKey)
+            }
+        }
+    }
     private var lastAudioStateEmitAtMs = 0
     private var audioFrameDiagnosticCount = 0
     private static let audioFrameDiagnosticLimit = 3
@@ -283,6 +299,7 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         }
         isMonitoring = false
         captureRequested = false
+        captureDesired = false
         stopScanInternal()
         connectedPeripheral = nil
         writeCharacteristic = nil
@@ -304,6 +321,7 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         }
         invalidatePendingCaptureCommands()
         captureRequested = true
+        captureDesired = true
         updateSessionActiveFlag()
         audioBytesReceived = 0
         lastAudioAtMs = nil
@@ -326,6 +344,7 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
     func stopCapture() {
         invalidatePendingCaptureCommands()
         captureRequested = false
+        captureDesired = false
         updateSessionActiveFlag()
         if writeCharacteristic != nil {
             awaitingStopAck = true
@@ -385,7 +404,7 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
     }
 
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        if central.state == .poweredOn, captureRequested || isMonitoring {
+        if central.state == .poweredOn, captureDesired || isMonitoring {
             if connectedPeripheral?.state != .connected {
                 if connectedPeripheral == nil {
                     attemptPreferredReconnect()
@@ -433,7 +452,7 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         emitState()
 
         if connectedPeripheral == nil,
-           captureRequested
+           captureDesired
             || (isMonitoring && autoReconnectEnabled && peripheral.identifier == preferredDeviceId) {
             connect(peripheral)
         }
@@ -469,9 +488,9 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         captureRunning = false
         updateSessionActiveFlag()
         // One-shot retry for transient flaky handshakes. Only retry if the
-        // user still wants a session (captureRequested or isMonitoring) and
+        // user still wants a session (captureDesired or isMonitoring) and
         // this isn't already the retry itself.
-        let shouldRetry = (captureRequested || isMonitoring)
+        let shouldRetry = (captureDesired || isMonitoring)
             && lastConnectFailurePeripheralId != peripheral.identifier
             && !connectRetryScheduled
         if shouldRetry {
@@ -482,7 +501,7 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.connectRetryDelay) { [weak self] in
                 guard let self else { return }
                 self.connectRetryScheduled = false
-                guard self.captureRequested || self.isMonitoring else { return }
+                guard self.captureDesired || self.isMonitoring else { return }
                 if let cached = self.discoveredPeripherals[peripheral.identifier] {
                     self.connect(cached)
                 } else {
@@ -494,7 +513,7 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         lastConnectFailurePeripheralId = nil
         status = "connect_failed"
         emitState()
-        if isMonitoring || captureRequested {
+        if isMonitoring || captureDesired {
             startScanInternal()
         }
     }
@@ -510,7 +529,7 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         updateSessionActiveFlag()
         status = "disconnected"
         emitState()
-        if isMonitoring || captureRequested {
+        if isMonitoring || captureDesired {
             startScanInternal()
         }
     }
@@ -615,7 +634,7 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
     }
 
     private func updateSessionActiveFlag() {
-        let active = connectedPeripheral != nil || captureRequested
+        let active = connectedPeripheral != nil || captureDesired
         UserDefaults.standard.set(active, forKey: Self.sessionActiveKey)
     }
 
@@ -715,7 +734,7 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         updateSessionActiveFlag()
         status = "disconnected"
         emitState()
-        if isMonitoring || captureRequested {
+        if isMonitoring || captureDesired {
             startScanInternal()
         }
     }
@@ -786,7 +805,7 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         let retry = DispatchWorkItem { [weak self, weak peripheral] in
             guard let self,
                   let peripheral,
-                  self.isMonitoring || self.captureRequested
+                  self.isMonitoring || self.captureDesired
             else { return }
             self.stuckConnectRetryWorkItem = nil
             self.discoveredPeripherals[peripheral.identifier] = peripheral
@@ -813,7 +832,7 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         if peripheral.state != .disconnected {
             central?.cancelPeripheralConnection(peripheral)
         }
-        if isMonitoring || captureRequested {
+        if isMonitoring || captureDesired {
             startScanInternal()
         }
     }
@@ -1269,6 +1288,7 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
             "connected": writeCharacteristic != nil && connectedPeripheral?.state == .connected,
             "scanning": isScanning,
             "captureRunning": captureRunning,
+            "captureDesired": captureDesired,
             "bluetoothState": bluetoothStateName(central?.state),
             "status": status,
             "asrState": asrState,

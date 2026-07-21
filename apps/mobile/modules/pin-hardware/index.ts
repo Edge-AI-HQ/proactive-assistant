@@ -21,6 +21,8 @@ export interface PinHardwareState {
   connected: boolean;
   scanning: boolean;
   captureRunning: boolean;
+  /** Persisted user intent used to resume capture after process restoration. */
+  captureDesired?: boolean;
   bluetoothState?: string;
   deviceId?: string;
   deviceName?: string;
