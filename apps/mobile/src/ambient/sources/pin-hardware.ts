@@ -11,6 +11,10 @@ import {
   type PinHardwareState,
   type PinHardwareTranscriptEvent,
 } from "../../../modules/pin-hardware";
+import {
+  applyPinHardwareTranscriptEvent,
+  pinHardwareSpeakerLabel,
+} from "../live/pin-hardware-transcript-store";
 import { SIGNAL_KINDS, type AmbientSource, type SourceContext } from "../types";
 
 // ASR self-heal backoff per consecutive attempt; the counter resets when a
@@ -25,8 +29,11 @@ export function createPinHardwareSource(ctx: SourceContext): AmbientSource {
   let lastStateKey: string | null = null;
   let asrHealingGeneration: number | null = null;
   let asrHealAttempts = 0;
+  let speakerContextId: string | undefined;
+  const ingestedFinalSentenceKeys = new Set<string>();
 
   function handleState(event: PinHardwareState): void {
+    speakerContextId = event.speakerContextId?.trim() || undefined;
     // Before the dedupe check: repeated asr_error emissions carry the same
     // state key, but each one may need another heal attempt.
     maybeHealAsr(event);
@@ -40,6 +47,8 @@ export function createPinHardwareSource(ctx: SourceContext): AmbientSource {
       deviceName: event.deviceName,
       batteryPercent: event.batteryPercent,
       status: event.status,
+      asrState: event.asrState,
+      speakerContextId: event.speakerContextId,
     });
     if (stateKey === lastStateKey) return;
     lastStateKey = stateKey;
@@ -63,6 +72,11 @@ export function createPinHardwareSource(ctx: SourceContext): AmbientSource {
         battery_percent: event.batteryPercent,
         firmware_version: event.firmwareVersion,
         status: event.status,
+        asr_state: event.asrState,
+        audio_bytes_received: event.audioBytesReceived,
+        last_audio_at: event.lastAudioAt,
+        last_transcript_at: event.lastTranscriptAt,
+        speaker_context_id: event.speakerContextId,
         devices: event.devices ?? [],
         observed_at: observedAt,
       },
@@ -72,15 +86,17 @@ export function createPinHardwareSource(ctx: SourceContext): AmbientSource {
   }
 
   /**
-   * ASR self-heal: the signed WSS URL lives ~60s and Tencent drops the
-   * socket on errors, so a long capture session loses its transcript
-   * stream while BLE keeps delivering audio. The native side surfaces
-   * that as `asr_error` (capture still running); we mint a fresh URL and
-   * hand it back via restartAsr. Capped retries with backoff so a dead
-   * backend doesn't turn into a mint loop.
-   */
+   * ASR self-heal: each new socket needs a freshly signed URL. The native
+   * side surfaces provider/network failures as `asr_error`; we mint a new
+   * URL and hand it back via restartAsr. A restart call only starts the
+   * asynchronous handshake, so the retry budget resets only after real
+   * transcript data proves the replacement stream is healthy.
+  */
   function maybeHealAsr(event: PinHardwareState): void {
-    if (event.status !== "asr_error" || event.captureRunning !== true) return;
+    // A provider can reject the socket before the restarted device stream is
+    // marked active, so connection state — not captureRunning — is the safe
+    // indication that this requested hardware session can still be healed.
+    if (event.status !== "asr_error" || event.connected !== true) return;
     if (!started || asrHealingGeneration !== null || asrHealAttempts >= ASR_HEAL_DELAYS_MS.length) return;
     const generation = lifecycleGeneration;
     asrHealingGeneration = generation;
@@ -91,14 +107,10 @@ export function createPinHardwareSource(ctx: SourceContext): AmbientSource {
       try {
         await new Promise((resolve) => setTimeout(resolve, delay));
         if (!started || generation !== lifecycleGeneration) return;
-        const token = await mintPinHardwareAsrToken();
+        const token = await mintPinHardwareAsrToken({ speakerContextId });
         if (!started || generation !== lifecycleGeneration) return;
         await PinHardware.restartAsr({ asrUrl: token.url });
         ctx.onEvent("pin_hardware", `PIN hardware ASR stream restarted (attempt ${asrHealAttempts})`);
-        // 重启成功 = 本次断流事故已处理完:预算按事故计,不按整场会话计。
-        // 只靠转录事件清零的话,安静环境里每 ~60s 一次的正常 TTL 断流会把
-        // 3 次预算烧光,之后整场不再自愈。
-        asrHealAttempts = 0;
       } catch {
         // Mint or restart failed without a new native event to re-trigger
         // us — self-schedule the next attempt while budget remains.
@@ -116,8 +128,28 @@ export function createPinHardwareSource(ctx: SourceContext): AmbientSource {
     // Text is flowing again — the stream is healthy, so future drops get a
     // full retry budget.
     asrHealAttempts = 0;
-    const text = event.text.trim();
-    if (!event.isFinal || !text) return;
+    if (event.speakerContextId?.trim()) speakerContextId = event.speakerContextId.trim();
+    // The ambient source owns the page-independent live transcript stream.
+    // Apply interim events before the durable-signal final-only guard so the
+    // UI survives page unmounts and still updates partial sentences in place.
+    applyPinHardwareTranscriptEvent(event);
+    const finalizedSegments = (event.segments ?? []).filter(
+      (segment) => segment.isFinal && segment.text.trim().length > 0,
+    );
+    const newFinalizedSegments = finalizedSegments.filter((segment, index) => {
+      const key = `${event.voiceId ?? "s0"}:${segment.sentenceId ?? `${event.sliceIndex ?? "slice"}:${index}`}`;
+      if (ingestedFinalSentenceKeys.has(key)) return false;
+      ingestedFinalSentenceKeys.add(key);
+      return true;
+    });
+    const text = newFinalizedSegments.length > 0
+      ? newFinalizedSegments.map((segment) => segment.text.trim()).join("\n")
+      : event.text.trim();
+    if (finalizedSegments.length > 0 && newFinalizedSegments.length === 0) return;
+    if (finalizedSegments.length === 0 && (!event.isFinal || !text)) return;
+    const finalizedSentenceIds = newFinalizedSegments
+      .map((segment) => segment.sentenceId)
+      .join(",");
 
     ctx.push({
       kind: SIGNAL_KINDS.pinHardwareTranscript,
@@ -130,10 +162,12 @@ export function createPinHardwareSource(ctx: SourceContext): AmbientSource {
         device_id: event.deviceId,
         device_name: event.deviceName,
         is_final: event.isFinal,
-        segments: event.segments ?? [],
-        speaker_segments: speakerSegments(event),
+        segments: newFinalizedSegments.length > 0 ? newFinalizedSegments : (event.segments ?? []),
+        speaker_segments: speakerSegments(
+          newFinalizedSegments.length > 0 ? newFinalizedSegments : (event.segments ?? []),
+        ),
       },
-      dedupe_key: `pin_hardware_transcript:${event.deviceId ?? "unknown"}:${event.capturedAt}:${text}`,
+      dedupe_key: `pin_hardware_transcript:${event.deviceId ?? "unknown"}:${event.voiceId ?? event.capturedAt}:${finalizedSentenceIds || text}`,
     });
     ctx.onEvent("pin_hardware", `PIN hardware transcript: ${text}`);
   }
@@ -180,6 +214,8 @@ export function createPinHardwareSource(ctx: SourceContext): AmbientSource {
       } finally {
         lastStateKey = null;
         asrHealAttempts = 0;
+        speakerContextId = undefined;
+        ingestedFinalSentenceKeys.clear();
       }
     },
   };
@@ -198,12 +234,13 @@ function pinHardwareStateSummary(event: PinHardwareState): string {
   return "PIN hardware ready to connect.";
 }
 
-function speakerSegments(event: PinHardwareTranscriptEvent): Array<{ speaker: string; text: string }> {
-  return (event.segments ?? []).flatMap((segment) => {
+function speakerSegments(
+  segments: NonNullable<PinHardwareTranscriptEvent["segments"]>,
+): Array<{ speaker: string; text: string }> {
+  return segments.flatMap((segment) => {
     const text = segment.text.trim();
     if (!text) return [];
-    const speaker = segment.speakerLabel?.trim()
-      || (segment.speakerId?.trim() ? `Speaker ${segment.speakerId.trim()}` : "PIN hardware");
+    const speaker = pinHardwareSpeakerLabel(segment.speakerId, segment.speakerLabel);
     return [{ speaker, text }];
   });
 }

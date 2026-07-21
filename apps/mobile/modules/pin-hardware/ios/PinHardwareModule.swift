@@ -94,16 +94,27 @@ public final class PinHardwareModule: Module {
       }
     }
 
-    AsyncFunction("startCapture") { (options: [String: Any]?, promise: Promise) in
+    AsyncFunction("startCapture") { (options: [String: Any], promise: Promise) in
       DispatchQueue.main.async {
-        self.controller.startCapture(asrUrl: options?["asrUrl"] as? String)
-        promise.resolve()
+        do {
+          try self.controller.startCapture(asrUrl: options["asrUrl"] as? String)
+          promise.resolve()
+        } catch {
+          promise.reject(PinHardwareException("asrUrl is required"))
+        }
       }
     }
 
     AsyncFunction("stopCapture") { (promise: Promise) in
       DispatchQueue.main.async {
         self.controller.stopCapture()
+        promise.resolve()
+      }
+    }
+
+    AsyncFunction("resetSpeakerContext") { (promise: Promise) in
+      DispatchQueue.main.async {
+        self.controller.resetSpeakerContext()
         promise.resolve()
       }
     }

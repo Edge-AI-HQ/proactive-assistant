@@ -46,6 +46,7 @@ import { createHealthSource } from "./sources/health";
 import { createLocationSource } from "./sources/location";
 import { createSoundClassifierSource } from "./sources/sound-classifier";
 import { createVisitSource } from "./sources/visit";
+import { setPinHardwareTranscriptOwner } from "./live/pin-hardware-transcript-store";
 import type { AmbientSource, PersonalSignalInput, SourceContext } from "./types";
 import {
   clearSourceError,
@@ -368,6 +369,10 @@ export async function reconcileEnabledSources(
   const epochValid = () => opts.gateEpoch === gateCloseEpoch;
   if (!epochValid()) return;
   const desired = new Set(keys);
+  if (desired.has("pin_hardware")) {
+    await setPinHardwareTranscriptOwner(userId);
+    if (!epochValid()) return;
+  }
   desiredSourceKeys = new Set(keys);
   if (desired.size > 0) {
     runtimeOwnerUserId = userId;

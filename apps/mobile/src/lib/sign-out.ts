@@ -14,7 +14,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { runSignOutCleanups } from "@pin-ai/core";
 
+import { PinHardware } from "../../modules/pin-hardware";
 import { clearAmbientLiveTranscript } from "../ambient/live/live-transcript-store";
+import { clearPinHardwareTranscriptHistory } from "../ambient/live/pin-hardware-transcript-store";
 import { stopAmbient } from "../ambient/runtime";
 import { resetAmbientTimelineStore } from "../ambient/timeline";
 import { isPinLocalDevAuthEnabled } from "./dev-auth";
@@ -65,6 +67,12 @@ export async function performSignOut(): Promise<void> {
       // 清时间线失败不阻断登出。
     }
     clearAmbientLiveTranscript();
+    await clearPinHardwareTranscriptHistory();
+    try {
+      await PinHardware.resetSpeakerContext();
+    } catch {
+      // A build without the optional native module still needs to sign out.
+    }
 
     await sweepAsyncStorage();
 
