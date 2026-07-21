@@ -286,7 +286,7 @@ async def test_webhook_topup_grant_expires_12_months_after_current_period_end(
 ):
     recompute = AsyncMock(return_value=True)
     monkeypatch.setattr(checkout_mod, "recompute_litellm_budget", recompute)
-    period_end = datetime(2026, 7, 17, 12, 0, tzinfo=UTC)
+    period_end = datetime(datetime.now(UTC).year + 1, 7, 17, 12, 0, tzinfo=UTC)
     insert_grant = AsyncMock(return_value="grant-x")
     monkeypatch.setattr(grants_repo, "insert_topup_grant", insert_grant)
     monkeypatch.setattr(
@@ -306,7 +306,7 @@ async def test_webhook_topup_grant_expires_12_months_after_current_period_end(
     await webhook_mod._handle_topup_completed(conn=object(), session=session, user_id=42, meta=meta)
 
     _, kwargs = insert_grant.await_args
-    assert kwargs["expires_at"] == datetime(2027, 7, 17, 12, 0, tzinfo=UTC)
+    assert kwargs["expires_at"] == period_end.replace(year=period_end.year + 1)
 
 
 async def test_claim_event_reclaims_failed_but_skips_processed(pool, user_ids, monkeypatch):
