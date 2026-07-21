@@ -44,7 +44,7 @@ def test_signed_url_shape_and_signature() -> None:
         assert required in params, f"missing {required}"
 
     assert params["secretid"] == "AKID_TEST"
-    assert params["engine_model_type"] == "16k_zh_en_speaker_2.0"
+    assert params["engine_model_type"] == "16k_zh_en_speaker"
     assert params["voice_format"] == "8"
     assert params["speaker_diarization"] == "1"
     assert params["enable_speaker_context"] == "1"
@@ -126,7 +126,7 @@ def test_token_route_accepts_empty_body(token_client: TestClient) -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["engine_model_type"] == "16k_zh_en_speaker_2.0"
+    assert payload["engine_model_type"] == "16k_zh_en_speaker"
     assert payload["speaker_diarization"] is True
 
 

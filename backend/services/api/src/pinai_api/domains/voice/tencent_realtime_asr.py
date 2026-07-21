@@ -44,9 +44,10 @@ _TENCENT_PATH_TEMPLATE = "/asr/v2/{app_id}"
 # `voice_format=8` is MP3; `voice_format=1` is raw PCM and silently produces
 # no transcript for this device. Keep these server-controlled so the iOS side
 # cannot accidentally pick incompatible parameters.
-# Speaker context continuity is supported only by Tencent's speaker 2.0
-# engine. Keep this coupled to the context parameters below.
-_DEFAULT_ENGINE_MODEL = "16k_zh_en_speaker_2.0"
+# This Tencent account currently supports the standard speaker engine. The
+# 2.0 variant is a separately provisioned model and rejects the websocket
+# handshake with code 4001 when it is not enabled for the account.
+_DEFAULT_ENGINE_MODEL = "16k_zh_en_speaker"
 _DEFAULT_VOICE_FORMAT = "8"
 
 
