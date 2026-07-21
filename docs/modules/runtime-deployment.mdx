@@ -166,8 +166,13 @@ make tunnel-down
 
 ```bash
 make macos          # Electron 桌面壳，复用 apps/web renderer；DEV=1 / PROD=1 切 fly 环境
-make rn             # Expo RN 装真机 iPhone；SIM=1 模拟器，DEV=1 / PROD=1 切 fly 环境，TUNNEL=1 Metro 走 ngrok
+make rn-start DEV=1 # 已装 Development Build：只起 Metro + Fast Refresh，不编译/重装
+make rn DEV=1       # Debug 编译 + 覆盖安装 + Metro；SIM=1 模拟器，TUNNEL=1 Metro 走 ngrok
 ```
+
+`DEV=1` / `PROD=1` 只选择后端，不决定构建类型。纯 TS/TSX/JS、样式和文案改动用 `make rn-start`；Swift、Pod、原生依赖、Expo Module、权限或 `app.config.js` 改动用 `make rn`。`ios/` 已存在时 `expo run:ios` 不会自动 prebuild；配置或原生依赖图变化要先在 `apps/mobile` 执行 `npx expo prebuild --platform ios --clean`。Release 只用于 TestFlight、正式交付或明确要求的 standalone 验收。
+
+真机 UI 验证默认先跑 `agent-device doctor` / `agent-device help workflow`，再做 open → `snapshot -i`/screenshot → 带 `--settle` 的操作 → 验证 settled diff/screenshot 的闭环；操作后旧 ref 失效，diff 信息不足时才重新 `snapshot -i`。保留 App 数据。XCTest runner 签名/profile 问题必须修根因；签名正确但 agent-device 自身仍失败时，再用 Appium 官方 XCUITest real-device 配置/排障流程定位。Expo MCP、`ios-debugger-agent` 和 XcodeBuildMCP 的 UI 自动化只作为 Simulator 路径，不能替代真机验收。
 
 ## Secrets 与环境变量
 
@@ -339,7 +344,7 @@ cd internal-reward-dashboard && npm test             # 内部 review app 单测
 - LiteLLM budget 报错先看 LiteLLM DB 里 spend / max_budget,不一定是 virtual key 缺;`pinai_api/domains/billing/provisioning.py` 有 lazy provisioning 逻辑。
 - LangGraph checkpointer 在 `langgraph` schema,跟 `pai_*` 物理同库逻辑分离;清 chat 状态 `TRUNCATE langgraph.<tables>` 而不是删 `pai_chat_threads`。
 - 改 docker-compose 后只 `make restart` 不够,要 `make down && make up` 才会让 compose 看到新声明。
-- RN 真机连本地后端要求手机与 Mac 同 WiFi(`make rn` 用 LAN IP 注入 `EXPO_PUBLIC_PIN_API_URL`);不同网时用 `DEV=1` / `PROD=1` 打 fly 环境,或 `TUNNEL=1` 让 Metro 走 ngrok(只解决 JS bundle,API 目标不变)。
+- RN 真机连本地后端要求手机与 Mac 同 WiFi(`make rn` / `make rn-start` 用 LAN IP 注入 `EXPO_PUBLIC_PIN_API_URL`);不同网时用 `DEV=1` / `PROD=1` 打 fly 环境,或叠加 `TUNNEL=1` 让 Metro 走 ngrok(只解决 JS bundle,API 目标不变)。
 
 ## 相关模块
 

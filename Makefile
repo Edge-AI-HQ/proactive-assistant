@@ -6,7 +6,7 @@
 .PHONY: migrate reset clean
 .PHONY: deploy-pinai-dev deploy-pinai-prod deploy-reward-dashboard-dev deploy-web-dev deploy-web-prod
 .PHONY: deploy-litellm-dev deploy-litellm-prod
-.PHONY: macos rn ngrok githooks install
+.PHONY: macos rn rn-start ngrok githooks install
 .PHONY: tunnel-up tunnel-down tunnel-status
 
 # Running stack: postgres + litellm + backend (api + agent-engine) +
@@ -403,7 +403,10 @@ macos: install ensure-env-backend ## Run the Electron desktop shell (this worktr
 	fi; \
 	VITE_PIN_API_PROXY_TARGET="$$TARGET" npm run dev --workspace=@pin-ai/desktop
 
-rn: install ensure-env-backend ## Run Expo RN on your iPhone vs this worktree's backend (SIM=1 simulator, DEV=1 fly dev, PROD=1 fly prod; TUNNEL=1 Metro 走 ngrok 公网,手机不必与 Mac 同 LAN,corp/远程网用)
+rn-start: ## Start Metro only for an installed Expo development build (Fast Refresh; same DEV/PROD/SIM/TUNNEL flags as `make rn`)
+	@$(MAKE) --no-print-directory rn START_ONLY=1 DEV="$(DEV)" PROD="$(PROD)" SIM="$(SIM)" TUNNEL="$(TUNNEL)"
+
+rn: install ensure-env-backend ## Debug build/install Expo RN + Metro (DEV/PROD select backend only; SIM=1 simulator; TUNNEL=1 Metro tunnel)
 	@set -e; \
 	set -a && . ./backend/.env && set +a; \
 	if [ "$(PROD)" = "1" ]; then \
@@ -435,7 +438,13 @@ rn: install ensure-env-backend ## Run Expo RN on your iPhone vs this worktree's 
 		echo "→ killing stale Metro on :8081 (EXPO_PUBLIC_* 在 Metro 打包时 inline，旧 Metro 会沿用旧后端 URL)"; \
 		kill -9 $$OLD_METRO 2>/dev/null || true; sleep 1; \
 	fi; \
-	if [ "$(SIM)" = "1" ]; then \
+	if [ "$(START_ONLY)" = "1" ]; then \
+		if [ "$(TUNNEL)" = "1" ]; then METRO_NETWORK="--tunnel"; \
+		elif [ "$(SIM)" = "1" ]; then METRO_NETWORK="--localhost"; \
+		else METRO_NETWORK="--lan"; fi; \
+		echo "→ Metro only ($$METRO_NETWORK); existing development build will Fast Refresh"; \
+		EXPO_PUBLIC_PIN_API_URL="$$TARGET" npm run start --workspace=@pin-ai/mobile -- --dev-client $$METRO_NETWORK; \
+	elif [ "$(SIM)" = "1" ]; then \
 		EXPO_PUBLIC_PIN_API_URL="$$TARGET" npm run ios --workspace=@pin-ai/mobile; \
 	else \
 		UDID=$$(xcrun xctrace list devices 2>/dev/null \

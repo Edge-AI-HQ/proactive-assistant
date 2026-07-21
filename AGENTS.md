@@ -213,12 +213,20 @@ iOS（RN，apps/mobile）多环境与签名硬规则：
 - **禁止为绕过问题临时换 id**：不要为了绕过签名失败、权限/能力不满足、验证报错而新增或改 bundle id / 包名 / scheme / target。signing/profile 不满足时停下来报告真实 blocker，不要换 id 绕过。
 - 同一环境内的安装是用该环境原 bundle id 覆盖更新，不要为并存再造这两个之外的第三个 id。
 
+Expo RN 日常两层开发与真机验证规则：
+- **默认走 Debug，不用 Release 做日常开发**。Release 只用于 TestFlight、正式交付或明确要求验证“脱离 Metro 可独立启动”；`DEV=1` / `PROD=1` 只选择后端环境，不改变 Debug/Release 构建类型。
+- **快速层（纯 JS bundle 改动）**：真机已有 Development Build 时，改 TS/TSX/JS、样式、文案或共享包纯 TS 逻辑，运行 `make rn-start DEV=1` 只启动 Metro，保存即 Fast Refresh；需要重跑初始化时在 Metro 按 `r` 或重启 App，均不重新编译或安装。
+- **原生层**：改 `apps/mobile/modules/*/ios/*.swift`、原生依赖、Pod、Expo Module 配置、权限、scheme、background modes、`app.config.js` 或 Expo SDK 时，运行 `make rn DEV=1` 做 Debug 增量编译并覆盖安装。涉及 app config/config plugin/原生依赖图时，先在 `apps/mobile` 执行 `npx expo prebuild --platform ios --clean`，再回根目录执行 `make rn DEV=1`。
+- `TUNNEL=1` 只解决 Metro 公网访问，不改变 API 地址；手机与 Mac 不同网时用 `make rn-start DEV=1 TUNNEL=1` 或 `make rn DEV=1 TUNNEL=1`。
+- **iOS 真机 UI 闭环默认用 `agent-device`**：首次先运行 `agent-device doctor` 和 `agent-device help workflow`，并以已安装 CLI help 为命令真源；依次 discover/open → `snapshot -i` → screenshot → press/fill/scroll（可用的变更动作都带 `--settle`）→ 验证 settled diff → screenshot → close。动作后旧 ref 失效；只有 settled diff 不足以提供下一目标时才重新 `snapshot -i`。保留 App 数据，除非用户明确要求，不用 `reinstall`。XCTest runner 的签名/profile 阻塞必须修根因；签名已正确但 `agent-device` 自身兼容/session 仍失败时，再用 Appium 官方 `xcuitest-real-device-config` / `appium-troubleshooting` 排障。Expo MCP、`ios-debugger-agent` 和 XcodeBuildMCP 的 UI 自动化仅用于 Simulator，不能替代真机验收。
+
 桌面（Electron，apps/desktop）与 RN（Expo，apps/mobile）本地构建：
 ```bash
 make macos                 # Electron 桌面壳（renderer 复用 apps/web）连本 worktree 后端；DEV=1 fly dev、PROD=1 fly prod
-make rn                    # Expo RN 装真机 iPhone；SIM=1 模拟器、DEV=1 fly dev、PROD=1 fly prod、TUNNEL=1 Metro 走 ngrok
+make rn-start DEV=1        # 已装 Development Build：只起 Metro + Fast Refresh，不编译/重装
+make rn DEV=1              # Debug 编译 + 覆盖安装 + Metro；SIM=1 模拟器、TUNNEL=1 Metro 走 ngrok
 ```
-`make macos` = `npm run dev --workspace=@pin-ai/desktop`（electron-vite，`/api` 同源 proxy 到 api，与 web dev 同构零 CORS）。`make rn` 先 `expo prebuild` 生成 `ios/`（gitignore 产物）再 `expo run:ios`，把 `VITE_*` 映射成 `EXPO_PUBLIC_*`。**apps/mobile 已接管 iOS 交付**（dev/prod TestFlight 均已验证）；apps/desktop 仅本地运行，打包（`npm run package --workspace=@pin-ai/desktop` 出 dmg）的签名/公证未配。
+`make macos` = `npm run dev --workspace=@pin-ai/desktop`（electron-vite，`/api` 同源 proxy 到 api，与 web dev 同构零 CORS）。`make rn-start` 只起 `expo start --dev-client`；`make rn` 走 `expo run:ios` 的 Debug build/install。`ios/` 不存在时 Expo 才自动 prebuild；已存在时配置变化必须显式 `expo prebuild --clean`。两条命令都会把 `VITE_*` 映射成 `EXPO_PUBLIC_*`。**apps/mobile 已接管 iOS 交付**（dev/prod TestFlight 均已验证）；apps/desktop 仅本地运行，打包（`npm run package --workspace=@pin-ai/desktop` 出 dmg）的签名/公证未配。
 
 验证：
 ```bash
