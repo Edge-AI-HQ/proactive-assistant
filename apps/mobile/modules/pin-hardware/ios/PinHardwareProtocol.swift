@@ -37,6 +37,8 @@ enum PinHardwareMR20Protocol {
     static let firmwareCommand = "edge_BLE&FW"
     static let realtimeStartCommand = "BLE&STA"
     static let realtimeStopCommand = "BLE&STO"
+    static let documentedStartCommand = "edge_BLE&STA"
+    static let documentedStopCommand = "edge_BLE&STO"
 
     static func parseDeviceMessage(_ text: String) -> PinHardwareMR20Event {
         let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)

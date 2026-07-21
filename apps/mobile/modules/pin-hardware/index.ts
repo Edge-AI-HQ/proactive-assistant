@@ -27,6 +27,16 @@ export interface PinHardwareState {
   batteryPercent?: number;
   firmwareVersion?: string;
   status: string;
+  /** Tencent WebSocket lifecycle, independent from the BLE capture state. */
+  asrState?: "idle" | "connecting" | "ready" | "error";
+  /** Total MP3 bytes received from the recorder in the current capture. */
+  audioBytesReceived?: number;
+  /** Epoch milliseconds for the latest BLE audio packet. */
+  lastAudioAt?: number;
+  /** Epoch milliseconds for the latest non-empty transcript result. */
+  lastTranscriptAt?: number;
+  /** Tencent's 24-hour context for keeping anonymous speaker ids stable. */
+  speakerContextId?: string;
   devices?: PinHardwareDevice[];
   timestamp: number;
   /**
@@ -40,10 +50,13 @@ export interface PinHardwareState {
 }
 
 export interface PinHardwareTranscriptSegment {
+  sentenceId?: number;
   speakerId?: string;
   speakerLabel?: string;
   text: string;
   isFinal: boolean;
+  startMs?: number;
+  endMs?: number;
 }
 
 export interface PinHardwareTranscriptEvent {
@@ -63,6 +76,7 @@ export interface PinHardwareTranscriptEvent {
   /** Tencent per-ASR-session id — sliceIndex restarts per session, so
    *  consumers must namespace line ids by voiceId to survive restartAsr. */
   voiceId?: string;
+  speakerContextId?: string;
   startMs?: number;
   endMs?: number;
 }
@@ -70,10 +84,10 @@ export interface PinHardwareTranscriptEvent {
 export interface PinHardwareStartCaptureOptions {
   /**
    * Signed WSS URL minted server-side by `/api/voice/hardware/tencent-token`.
-   * When omitted the module still drives the BLE session but discards audio
-   * bytes — graceful fallback when the mint endpoint is unavailable.
+   * Required before capture starts. The caller should fall back to the phone
+   * microphone when the mint endpoint is unavailable.
    */
-  asrUrl?: string;
+  asrUrl: string;
 }
 
 type PinHardwareEventName = "pinHardwareState" | "pinHardwareTranscript";
@@ -88,8 +102,10 @@ interface PinHardwareModuleType {
   stopScan(): Promise<void>;
   connect(options: { deviceId: string }): Promise<void>;
   disconnect(): Promise<void>;
-  startCapture(options?: PinHardwareStartCaptureOptions): Promise<void>;
+  startCapture(options: PinHardwareStartCaptureOptions): Promise<void>;
   stopCapture(): Promise<void>;
+  /** Clear provider speaker continuity when the signed-in account changes. */
+  resetSpeakerContext(): Promise<void>;
   /**
    * Toggle the default-device behavior. Enabling adopts the currently
    * connected device as the remembered default; disabling forgets it and
@@ -98,8 +114,9 @@ interface PinHardwareModuleType {
   setAutoReconnect(options: { enabled: boolean }): Promise<void>;
   /**
    * Re-open the ASR stream with a freshly minted signed URL after a drop
-   * (status `asr_error`), without touching the BLE capture session.
-   * Rejects when no capture session is active.
+   * (status `asr_error`). The native side preserves the BLE connection but
+   * restarts device recording after provider readiness so the new socket
+   * receives a clean MP3 stream. Rejects when no capture session is active.
    */
   restartAsr(options: { asrUrl: string }): Promise<void>;
   addListener(eventName: PinHardwareEventName, listener: (event: never) => void): EventSubscription;

@@ -169,7 +169,17 @@
     "transcriptTitle": "Realtime transcript",
     "live": "Live",
     "standby": "Standby",
+    "recordingNow": "Recording",
+    "jumpToLatest": "Jump to latest",
+    "selfSpeaker": "Me",
+    "speakerLabel": "Speaker {{number}}",
+    "speakerUnknown": "Identifying speaker…",
+    "usePinDevice": "Use PIN device",
+    "deviceDetailsTitle": "Device details",
+    "close": "Close",
     "emptyTranscript": "Speaker turns will appear here after the device is connected and transcription starts.",
+    "waitingAudio": "Transcription is connected and waiting for audio from the device.",
+    "recognizingAudio": "Device audio received. Recognizing speech now.",
     "emptyTranscriptPhoneDisabled": "Phone microphone recording is off. Turn it on in Ambient sources to see live transcript here.",
     "phoneIdlePinActive": "PIN hardware is recording right now — the phone microphone is idle.",
     "viewPinDevice": "View PIN device",
@@ -187,8 +197,8 @@
       "syncPending": "Pending"
     },
     "settings": {
-      "defaultDevice": "Use as default recording device",
-      "defaultDeviceDesc": "Automatically record with this device when connected",
+      "defaultDevice": "Reconnect this device automatically",
+      "defaultDeviceDesc": "Reconnect next time the device is available; recording does not start automatically",
       "speakerRecognition": "Speaker recognition",
       "speakerRecognitionDesc": "Device capture keeps speaker turns more stable",
       "deviceName": "Device name",
@@ -196,7 +206,7 @@
       "currentVersion": "Current version {{version}}",
       "latest": "Up to date",
       "unreported": "Not reported",
-      "disconnectDesc": "After disconnecting, phone recording remains available"
+      "disconnectDesc": "Disconnect Bluetooth and continue with phone recording"
     },
     "source": {
       "phone": "Phone",
@@ -210,6 +220,14 @@
     "educationTitle": "No device? Phone recording still works",
     "educationDesc": "PINAI hardware only replaces the phone microphone after it connects. Existing recording still works without it.",
     "phoneCaptureCta": "Keep using phone recording",
+    "deviceStatus": {
+      "capturing": "PIN device recording{{meta}}",
+      "connected": "PIN device connected{{meta}}",
+      "scanning": "Scanning for PIN device…",
+      "connecting": "Connecting PIN device…",
+      "reconnecting": "Reconnecting PIN device…",
+      "disconnected": "PIN device not connected"
+    },
     "status": {
       "notConfigured": "Not configured",
       "loading": "Loading",
@@ -219,6 +237,10 @@
       "connecting": "Connecting",
       "connected": "Connected",
       "captureStarting": "Starting",
+      "captureStartFailed": "Start failed",
+      "asrConnecting": "Connecting transcription",
+      "waitingAudio": "Waiting for device audio",
+      "recognizing": "Recognizing",
       "connectFailed": "Connection failed",
       "connectRetrying": "Retrying connection",
       "asrError": "Reconnecting transcript",
@@ -235,6 +257,8 @@
       "connecting": "Connecting to {{name}} and checking the hardware protocol.",
       "connected": "{{name}} is connected. You can start realtime transcription.",
       "captureStarting": "Starting realtime transcription on the connected hardware.",
+      "captureStartFailed": "The device did not confirm recording. Please try again.",
+      "asrConnecting": "Connecting to Tencent realtime transcription.",
       "connectFailed": "The phone could not connect to this device. Try scanning again.",
       "connectRetrying": "The first attempt didn't take — retrying automatically.",
       "asrError": "Cloud transcription dropped — reconnecting automatically.",

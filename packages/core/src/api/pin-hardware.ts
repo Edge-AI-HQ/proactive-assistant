@@ -8,6 +8,12 @@ export interface PinHardwareAsrToken {
   engineModelType: string;
   voiceFormat: string;
   sampleRateHz: number;
+  speakerDiarization: boolean;
+}
+
+export interface PinHardwareAsrTokenOptions {
+  /** Tencent context returned by the previous socket, used to keep A/B stable. */
+  speakerContextId?: string;
 }
 
 /** Server declines because Tencent ASR credentials are unset in this env. */
@@ -25,6 +31,7 @@ interface RawTencentMintResponse {
   engine_model_type: string;
   voice_format: string;
   sample_rate_hz: number;
+  speaker_diarization: boolean;
 }
 
 /**
@@ -39,8 +46,12 @@ interface RawTencentMintResponse {
  * be treated as "not configured": the caller reacts by silently flipping
  * user consent, which should never happen on a transient outage.
  */
-export async function mintPinHardwareAsrToken(): Promise<PinHardwareAsrToken> {
-  const res = await proxyPost("/voice/hardware/tencent-token", {});
+export async function mintPinHardwareAsrToken(
+  options: PinHardwareAsrTokenOptions = {},
+): Promise<PinHardwareAsrToken> {
+  const res = await proxyPost("/voice/hardware/tencent-token", {
+    ...(options.speakerContextId ? { speaker_context_id: options.speakerContextId } : {}),
+  });
   if (res.status === 503) {
     const detail = await res
       .clone()
@@ -62,5 +73,6 @@ export async function mintPinHardwareAsrToken(): Promise<PinHardwareAsrToken> {
     engineModelType: json.engine_model_type,
     voiceFormat: json.voice_format,
     sampleRateHz: json.sample_rate_hz,
+    speakerDiarization: json.speaker_diarization,
   };
 }

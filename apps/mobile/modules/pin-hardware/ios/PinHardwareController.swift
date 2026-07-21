@@ -43,7 +43,11 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
     // to the UI so a flaky handshake doesn't force the user to hit rescan.
     private var lastConnectFailurePeripheralId: UUID?
     private var connectRetryScheduled = false
+    private var stuckConnectRetryWorkItem: DispatchWorkItem?
+    private var restoredConnectionSetupWorkItem: DispatchWorkItem?
     private static let connectRetryDelay: TimeInterval = 1.5
+    private static let stuckConnectRetryDelay: TimeInterval = 0.8
+    private static let restoredConnectionSetupTimeout: TimeInterval = 2.5
 
     // ── Preferred device (默认设备) ──
     // The last successfully paired recorder is remembered in UserDefaults so
@@ -108,32 +112,51 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
     // ── Tencent RTASR streaming ──
     // The JS layer mints a short-lived signed URL via
     // POST /api/voice/hardware/tencent-token, then hands it to `startCapture`.
-    // We buffer BLE audio notifies into ~20ms PCM chunks before sending so we
-    // don't spam the WS with ~120-byte MTU frames. If `asrUrl` is nil,
-    // capture still runs (BLE bytes are discarded) so a signing outage
-    // degrades to "hardware connected but no transcript" rather than a
-    // full failure.
-    //
-    // NOTE: assumed audio frame format is 16 kHz mono 16-bit LE PCM (matches
-    // Tencent `engine_model_type=16k_zh`, `voice_format=1`). The plugin logs
-    // the first N frame sizes so real-device testing will surface a mismatch
-    // immediately; adjust `pcmChunkBytes` / model params if the MR20 spec
-    // differs.
+    // The MR20 emits a paced 16 kHz, 32 kbps MP3 byte stream. A new ASR socket
+    // must not join that stream mid-frame: after Tencent accepts each socket,
+    // we stop/start device recording before forwarding audio so the encoder
+    // begins a clean MP3 stream for `voice_format=8`.
     private var asrClient: TencentAsrClient?
     private var asrUrl: URL?
-    // Bumped on every openAsrClient(). Callbacks from a superseded client
-    // (its async close/error lands after a restart already swapped in a new
-    // one) must not touch current state — see the generation guards below.
+    // Bumped whenever the current client is closed or replaced. Callbacks from
+    // a superseded client must not touch current state.
     private var asrClientGeneration = 0
-    private var pcmBuffer = Data()
-    private static let pcmChunkBytes = 640  // 20ms @ 16kHz mono 16-bit
+    private var asrState = "idle"
+    private var audioBytesReceived = 0
+    private var lastAudioAtMs: Int?
+    private var lastTranscriptAtMs: Int?
+    private var speakerContextId: String?
+    private var lastAudioStateEmitAtMs = 0
     private var audioFrameDiagnosticCount = 0
     private static let audioFrameDiagnosticLimit = 3
     private var lastTranscriptDeviceName: String?
-    // Interim segment de-dup: Tencent v2 re-sends the same slice_type=0/1
-    // frame as text grows. Emit only when the text actually changes to
-    // avoid flooding the JS side.
-    private var lastInterimTextByIndex: [Int: String] = [:]
+    // Interim segment de-dup: speaker mode may revise speaker_id without
+    // changing text, so the fingerprint must include attribution as well.
+    private var lastInterimFingerprintByIndex: [Int: String] = [:]
+    // Device recording is started only after the ASR socket is ready. A
+    // generation guard makes every delayed BLE command lose to a later
+    // stop/disconnect, so an old restart cannot turn recording back on.
+    private var captureCommandGeneration = 0
+    private enum CaptureStartPhase {
+        case idle
+        case stopping
+        case waitingToStart
+        case starting
+        case fallbackStarting
+    }
+
+    private var captureStartPhase = CaptureStartPhase.idle
+    private var documentedStopFallbackSent = false
+    private var awaitingStopAck = false
+    private var lastSentCommand: String?
+    private var captureRestartWorkItem: DispatchWorkItem?
+    private var captureStartFallbackWorkItem: DispatchWorkItem?
+    private var captureConfirmationWorkItem: DispatchWorkItem?
+    private var captureStopFallbackWorkItem: DispatchWorkItem?
+    private static let captureRestartDelay: TimeInterval = 0.35
+    private static let captureAckDelay: TimeInterval = 0.8
+    private static let captureConfirmationDelay: TimeInterval = 1.0
+    private static let captureStopFallbackDelay: TimeInterval = 0.7
     // ISO8601DateFormatter 构造昂贵且线程安全——转录热路径(每秒多次 interim)
     // 复用单例。
     private static let isoFormatter = ISO8601DateFormatter()
@@ -162,14 +185,27 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         ensureCentral(showPowerAlert: true)
         if central?.state != .poweredOn {
             status = "waiting_for_bluetooth"
-        } else if connectedPeripheral == nil, !isScanning {
+        } else if let peripheral = connectedPeripheral,
+                  peripheral.state == .connected,
+                  writeCharacteristic == nil {
+            // CoreBluetooth restoration can report a transport connection
+            // while the characteristic handles needed by the app are gone.
+            // Re-discover them, but never let this half-connected state block
+            // scanning forever.
+            status = "discovering_services"
+            peripheral.delegate = self
+            peripheral.discoverServices([serviceUUID])
+            scheduleRestoredConnectionSetupTimeout(for: peripheral)
+        } else if connectedPeripheral?.state != .connected {
             // Symmetric with stopMonitoring's stopScanInternal(). Without
             // this the UI has to know to call startScan separately to make
-            // discovery actually happen. A remembered default device gets a
-            // direct reconnect attempt first; fall back to scanning.
-            if !attemptPreferredReconnect() {
-                startScanInternal()
+            // discovery actually happen. Keep scanning until CoreBluetooth
+            // confirms a connection, including while a remembered peripheral
+            // is reconnecting from the system cache.
+            if connectedPeripheral == nil {
+                attemptPreferredReconnect()
             }
+            startScanInternal()
         }
         emitState()
     }
@@ -182,6 +218,24 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
 
     func startScan() {
         ensureCentral(showPowerAlert: true)
+        NSLog(
+            "[pin-hardware] scan requested bluetooth=%@ peripheral=%@",
+            bluetoothStateName(central?.state),
+            peripheralStateName(connectedPeripheral?.state)
+        )
+        // A cached peripheral is assigned before CoreBluetooth confirms the
+        // connection. Only an actual transport connection should stop scan.
+        if let peripheral = connectedPeripheral,
+           peripheral.state == .connected,
+           writeCharacteristic == nil {
+            discardUnusableRestoredConnection(peripheral)
+            return
+        }
+        guard connectedPeripheral?.state != .connected else {
+            stopScanInternal()
+            emitState()
+            return
+        }
         startScanInternal()
     }
 
@@ -191,6 +245,7 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
     }
 
     struct DeviceNotFoundError: Error {}
+    struct ConnectionInProgressError: Error {}
     struct AsrUrlRequiredError: Error {}
     struct NotCapturingError: Error {}
 
@@ -200,10 +255,29 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         else {
             throw DeviceNotFoundError()
         }
+        if let activePeripheral = connectedPeripheral,
+           activePeripheral.identifier != uuid,
+           activePeripheral.state != .disconnected {
+            throw ConnectionInProgressError()
+        }
+        if let activePeripheral = connectedPeripheral,
+           activePeripheral.identifier == uuid,
+           activePeripheral.state == .connecting {
+            restartStuckConnection(activePeripheral)
+            return
+        }
         connect(peripheral)
     }
 
     func disconnect() {
+        invalidatePendingCaptureCommands()
+        stuckConnectRetryWorkItem?.cancel()
+        stuckConnectRetryWorkItem = nil
+        restoredConnectionSetupWorkItem?.cancel()
+        restoredConnectionSetupWorkItem = nil
+        closeAsrClientIfOpen()
+        asrUrl = nil
+        asrState = "idle"
         if let peripheral = connectedPeripheral {
             central?.cancelPeripheralConnection(peripheral)
         }
@@ -218,25 +292,30 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         emitState()
     }
 
-    func startCapture(asrUrl rawAsrUrl: String?) {
+    func startCapture(asrUrl rawAsrUrl: String?) throws {
+        guard let raw = rawAsrUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty,
+              let parsed = URL(string: raw)
+        else {
+            status = "asr_unavailable"
+            asrState = "error"
+            emitState()
+            throw AsrUrlRequiredError()
+        }
+        invalidatePendingCaptureCommands()
         captureRequested = true
         updateSessionActiveFlag()
-        // Optional Tencent RTASR signed URL. When missing, the device still
-        // captures over BLE but no transcript is produced — the JS caller
-        // will typically retry the mint call before starting again, or the
-        // user is falling back to phone-mic in the management page.
-        if let raw = rawAsrUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !raw.isEmpty,
-           let parsed = URL(string: raw) {
-            asrUrl = parsed
-            openAsrClient()
-        } else {
-            asrUrl = nil
-            closeAsrClientIfOpen()
-        }
+        audioBytesReceived = 0
+        lastAudioAtMs = nil
+        lastTranscriptAtMs = nil
+        lastAudioStateEmitAtMs = 0
+        // Gate the old device stream until Tencent accepts the new socket and
+        // beginDeviceCaptureAfterAsrReady() has reset the MR20 encoder.
+        captureRunning = false
+        asrUrl = parsed
+        openAsrClient()
         if writeCharacteristic != nil {
-            sendCommand(PinHardwareMR20Protocol.realtimeStartCommand)
-            status = "capture_starting"
+            status = "asr_connecting"
         } else {
             status = "waiting_for_device"
             startScanInternal()
@@ -245,27 +324,28 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
     }
 
     func stopCapture() {
+        invalidatePendingCaptureCommands()
         captureRequested = false
         updateSessionActiveFlag()
         if writeCharacteristic != nil {
+            awaitingStopAck = true
             sendCommand(PinHardwareMR20Protocol.realtimeStopCommand)
+            scheduleStopFallback(generation: captureCommandGeneration)
         }
         captureRunning = false
-        flushPcmBuffer(force: true)
         asrClient?.sendEndOfStream()
         closeAsrClientIfOpen()
         asrUrl = nil
-        pcmBuffer.removeAll(keepingCapacity: false)
-        lastInterimTextByIndex.removeAll()
+        asrState = "idle"
+        lastInterimFingerprintByIndex.removeAll()
         audioFrameDiagnosticCount = 0
         status = connectedPeripheral == nil ? "idle" : "connected"
         emitState()
     }
 
-    /// Swap in a freshly minted signed URL after an ASR stream drop, without
-    /// touching the BLE session. The JS side owns minting (needs the user's
-    /// auth token), the native side owns the socket — this is the seam
-    /// between the two for the self-heal loop.
+    /// Swap in a freshly minted signed URL after an ASR stream drop. The BLE
+    /// connection stays up, but device recording is restarted after provider
+    /// readiness so the replacement decoder receives a clean MP3 stream.
     func restartAsr(asrUrl rawAsrUrl: String) throws {
         let raw = rawAsrUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty, let parsed = URL(string: raw) else {
@@ -275,9 +355,13 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
             throw NotCapturingError()
         }
         NSLog("[pin-hardware] restarting asr stream")
+        invalidatePendingCaptureCommands()
+        // Do not feed the replacement socket from the middle of the current
+        // MP3 stream. The provider-ready callback performs BLE&STO → BLE&STA.
+        captureRunning = false
         asrUrl = parsed
         openAsrClient()
-        status = captureRunning ? "capturing" : "capture_starting"
+        status = "asr_connecting"
         emitState()
     }
 
@@ -295,12 +379,21 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         emitState()
     }
 
+    func resetSpeakerContext() {
+        speakerContextId = nil
+        emitState()
+    }
+
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
         if central.state == .poweredOn, captureRequested || isMonitoring {
-            if connectedPeripheral == nil, !attemptPreferredReconnect() {
+            if connectedPeripheral?.state != .connected {
+                if connectedPeripheral == nil {
+                    attemptPreferredReconnect()
+                }
                 startScanInternal()
             }
         } else if central.state != .poweredOn {
+            invalidatePendingCaptureCommands()
             stopScanInternal()
             status = "waiting_for_bluetooth"
             emitState()
@@ -323,9 +416,20 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
             advertisedServiceUUIDs: Self.serviceUUIDStrings(from: advertisementData)
         )
         guard device.isLikelyRecorder else { return }
+        NSLog(
+            "[pin-hardware] discovered recorder name=%@ id=%@ rssi=%d",
+            device.name,
+            device.id.uuidString,
+            device.rssi
+        )
         discoveredDevices[device.id] = device
         discoveredPeripherals[device.id] = peripheral
-        status = "scanning"
+        // A queued discovery callback can arrive after didConnect stopped the
+        // scan. Do not let a second nearby recorder overwrite the active
+        // peripheral's connection/initialization state.
+        if connectedPeripheral == nil {
+            status = "scanning"
+        }
         emitState()
 
         if connectedPeripheral == nil,
@@ -336,8 +440,15 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
     }
 
     public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        connectedPeripheral = peripheral
+        guard connectedPeripheral?.identifier == peripheral.identifier else {
+            central.cancelPeripheralConnection(peripheral)
+            return
+        }
         peripheral.delegate = self
+        stuckConnectRetryWorkItem?.cancel()
+        stuckConnectRetryWorkItem = nil
+        restoredConnectionSetupWorkItem?.cancel()
+        restoredConnectionSetupWorkItem = nil
         lastConnectFailurePeripheralId = nil
         updateSessionActiveFlag()
         status = "discovering_services"
@@ -347,9 +458,13 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
     }
 
     public func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        if connectedPeripheral?.identifier == peripheral.identifier {
-            connectedPeripheral = nil
-        }
+        guard connectedPeripheral?.identifier == peripheral.identifier else { return }
+        invalidatePendingCaptureCommands()
+        stuckConnectRetryWorkItem?.cancel()
+        stuckConnectRetryWorkItem = nil
+        restoredConnectionSetupWorkItem?.cancel()
+        restoredConnectionSetupWorkItem = nil
+        connectedPeripheral = nil
         writeCharacteristic = nil
         captureRunning = false
         updateSessionActiveFlag()
@@ -379,12 +494,17 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         lastConnectFailurePeripheralId = nil
         status = "connect_failed"
         emitState()
+        if isMonitoring || captureRequested {
+            startScanInternal()
+        }
     }
 
     public func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        if connectedPeripheral?.identifier == peripheral.identifier {
-            connectedPeripheral = nil
-        }
+        guard connectedPeripheral?.identifier == peripheral.identifier else { return }
+        invalidatePendingCaptureCommands()
+        restoredConnectionSetupWorkItem?.cancel()
+        restoredConnectionSetupWorkItem = nil
+        connectedPeripheral = nil
         writeCharacteristic = nil
         captureRunning = false
         updateSessionActiveFlag()
@@ -396,15 +516,14 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        guard connectedPeripheral?.identifier == peripheral.identifier else { return }
         guard error == nil else {
-            status = "service_discovery_failed"
-            emitState()
+            recoverFromConnectionSetupFailure("service_discovery_failed", peripheral: peripheral)
             return
         }
         let services = peripheral.services ?? []
         guard services.isEmpty == false else {
-            status = "service_not_found"
-            emitState()
+            recoverFromConnectionSetupFailure("service_not_found", peripheral: peripheral)
             return
         }
         services.forEach { service in
@@ -413,9 +532,9 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        guard connectedPeripheral?.identifier == peripheral.identifier else { return }
         guard error == nil else {
-            status = "characteristic_discovery_failed"
-            emitState()
+            recoverFromConnectionSetupFailure("characteristic_discovery_failed", peripheral: peripheral)
             return
         }
         service.characteristics?.forEach { characteristic in
@@ -428,6 +547,8 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         }
 
         if writeCharacteristic != nil {
+            restoredConnectionSetupWorkItem?.cancel()
+            restoredConnectionSetupWorkItem = nil
             status = "connected"
             // Only a fully usable connection (write characteristic found)
             // earns "default device" status — a random BLE unit that failed
@@ -435,18 +556,32 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
             if autoReconnectEnabled {
                 rememberPreferredDevice(peripheral)
             }
-            sendCommand(PinHardwareMR20Protocol.statusCommand)
+            // A status reply can describe the pre-reset recording state. Do
+            // not let that stale `active=true` race the STOP -> START sequence.
+            if !captureRequested {
+                sendCommand(PinHardwareMR20Protocol.statusCommand)
+            }
             sendCommand(PinHardwareMR20Protocol.batteryCommand)
             sendCommand(PinHardwareMR20Protocol.firmwareCommand)
             if captureRequested {
-                sendCommand(PinHardwareMR20Protocol.realtimeStartCommand)
-                status = "capture_starting"
+                if asrState == "ready", !captureRunning {
+                    beginDeviceCaptureAfterAsrReady()
+                } else if asrState == "error" || asrClient == nil {
+                    // The ASR socket may have failed while BLE was offline.
+                    // Preserve the error after reconnect so the JS owner can
+                    // mint a fresh URL and call restartAsr.
+                    asrState = "error"
+                    status = "asr_error"
+                } else {
+                    status = "asr_connecting"
+                }
             }
         }
         emitState()
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        guard connectedPeripheral?.identifier == peripheral.identifier else { return }
         // Data 是 COW 值类型,直接绑定即可——音频路径 ~250 notify/s,
         // 逐帧显式拷贝纯属浪费。
         guard error == nil, let data = characteristic.value else {
@@ -458,10 +593,16 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
             handleCommandNotify(String(data: data, encoding: .utf8) ?? "")
         } else if characteristic.uuid == audioNotifyUUID, captureRunning {
             handleAudioNotify(data)
-            if status != "capturing" {
-                status = "capturing"
-                emitState()
-            }
+        }
+    }
+
+    public func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
+        guard connectedPeripheral?.identifier == peripheral.identifier else { return }
+        guard characteristic.uuid == writeUUID else { return }
+        if let error {
+            NSLog("[pin-hardware] command write failed command=%@ error=%@", lastSentCommand ?? "unknown", "\(error)")
+        } else {
+            NSLog("[pin-hardware] command write acknowledged command=%@", lastSentCommand ?? "unknown")
         }
     }
 
@@ -484,12 +625,53 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         for peripheral in restored {
             peripheral.delegate = self
             discoveredPeripherals[peripheral.identifier] = peripheral
-            if peripheral.state == .connected || peripheral.state == .connecting {
+            if peripheral.state == .connected {
                 connectedPeripheral = peripheral
+                // State restoration may preserve the subscribed
+                // characteristics even when no new discovery callback is
+                // delivered. Re-adopt those handles immediately so a real
+                // restored connection does not look disconnected in the UI.
+                for service in peripheral.services ?? [] {
+                    for characteristic in service.characteristics ?? [] {
+                        if characteristic.uuid == writeUUID {
+                            writeCharacteristic = characteristic
+                        }
+                        if characteristic.uuid == commandNotifyUUID
+                            || characteristic.uuid == audioNotifyUUID {
+                            peripheral.setNotifyValue(true, for: characteristic)
+                        }
+                    }
+                }
+                if writeCharacteristic != nil {
+                    NSLog(
+                        "[pin-hardware] restored usable connection id=%@",
+                        peripheral.identifier.uuidString
+                    )
+                    status = "connected"
+                    if autoReconnectEnabled {
+                        rememberPreferredDevice(peripheral)
+                    }
+                    sendCommand(PinHardwareMR20Protocol.statusCommand)
+                    sendCommand(PinHardwareMR20Protocol.batteryCommand)
+                    sendCommand(PinHardwareMR20Protocol.firmwareCommand)
+                } else {
+                    scheduleRestoredConnectionSetupTimeout(for: peripheral)
+                }
+            } else if peripheral.state == .connecting {
+                // CoreBluetooth can restore a connection attempt that no
+                // longer has a completion callback after an app reinstall or
+                // relaunch. Adopting it makes every later Connect tap a no-op.
+                // Cancel it and let the foreground scan produce a fresh
+                // peripheral/connection attempt instead.
+                NSLog(
+                    "[pin-hardware] cancelling stale restored connection id=%@",
+                    peripheral.identifier.uuidString
+                )
+                central.cancelPeripheralConnection(peripheral)
             }
         }
         guard let peripheral = connectedPeripheral else { return }
-        if peripheral.state == .connected {
+        if peripheral.state == .connected, writeCharacteristic == nil {
             // Notify subscriptions survive restoration but our cached
             // characteristic handles don't — rediscover to repopulate them.
             // didDiscoverCharacteristicsFor re-issues the status command, so
@@ -500,10 +682,52 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         emitState()
     }
 
+    private func scheduleRestoredConnectionSetupTimeout(for peripheral: CBPeripheral) {
+        restoredConnectionSetupWorkItem?.cancel()
+        let peripheralId = peripheral.identifier
+        let timeout = DispatchWorkItem { [weak self, weak peripheral] in
+            guard let self,
+                  let peripheral,
+                  self.connectedPeripheral?.identifier == peripheralId,
+                  self.writeCharacteristic == nil
+            else { return }
+            self.restoredConnectionSetupWorkItem = nil
+            NSLog(
+                "[pin-hardware] restored connection setup timed out id=%@",
+                peripheralId.uuidString
+            )
+            self.discardUnusableRestoredConnection(peripheral)
+        }
+        restoredConnectionSetupWorkItem = timeout
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.restoredConnectionSetupTimeout,
+            execute: timeout
+        )
+    }
+
+    private func discardUnusableRestoredConnection(_ peripheral: CBPeripheral) {
+        restoredConnectionSetupWorkItem?.cancel()
+        restoredConnectionSetupWorkItem = nil
+        central?.cancelPeripheralConnection(peripheral)
+        connectedPeripheral = nil
+        writeCharacteristic = nil
+        captureRunning = false
+        updateSessionActiveFlag()
+        status = "disconnected"
+        emitState()
+        if isMonitoring || captureRequested {
+            startScanInternal()
+        }
+    }
+
     private func startScanInternal() {
         ensureCentral(showPowerAlert: true)
         guard central?.state == .poweredOn else {
             status = "waiting_for_bluetooth"
+            emitState()
+            return
+        }
+        guard !isScanning else {
             emitState()
             return
         }
@@ -522,6 +746,7 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         )
         isScanning = true
         status = "scanning"
+        NSLog("[pin-hardware] scan started")
         emitState()
     }
 
@@ -531,12 +756,66 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
     }
 
     private func connect(_ peripheral: CBPeripheral) {
-        stopScanInternal()
+        if let activePeripheral = connectedPeripheral {
+            guard activePeripheral.identifier == peripheral.identifier else { return }
+            guard activePeripheral.state == .disconnected else {
+                emitState()
+                return
+            }
+        }
         connectedPeripheral = peripheral
         status = "connecting"
         updateSessionActiveFlag()
         central?.connect(peripheral, options: [CBConnectPeripheralOptionNotifyOnDisconnectionKey: true])
         emitState()
+    }
+
+    private func restartStuckConnection(_ peripheral: CBPeripheral) {
+        stuckConnectRetryWorkItem?.cancel()
+        NSLog(
+            "[pin-hardware] restarting stuck connection id=%@",
+            peripheral.identifier.uuidString
+        )
+        central?.cancelPeripheralConnection(peripheral)
+        connectedPeripheral = nil
+        writeCharacteristic = nil
+        status = "connect_retrying"
+        updateSessionActiveFlag()
+        emitState()
+
+        let retry = DispatchWorkItem { [weak self, weak peripheral] in
+            guard let self,
+                  let peripheral,
+                  self.isMonitoring || self.captureRequested
+            else { return }
+            self.stuckConnectRetryWorkItem = nil
+            self.discoveredPeripherals[peripheral.identifier] = peripheral
+            self.connect(peripheral)
+        }
+        stuckConnectRetryWorkItem = retry
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.stuckConnectRetryDelay,
+            execute: retry
+        )
+    }
+
+    private func recoverFromConnectionSetupFailure(_ failureStatus: String, peripheral: CBPeripheral) {
+        guard connectedPeripheral?.identifier == peripheral.identifier else { return }
+        invalidatePendingCaptureCommands()
+        writeCharacteristic = nil
+        captureRunning = false
+        if connectedPeripheral?.identifier == peripheral.identifier {
+            connectedPeripheral = nil
+        }
+        updateSessionActiveFlag()
+        status = failureStatus
+        emitState()
+        if peripheral.state != .disconnected {
+            central?.cancelPeripheralConnection(peripheral)
+        }
+        if isMonitoring || captureRequested {
+            startScanInternal()
+        }
     }
 
     private func rememberPreferredDevice(_ peripheral: CBPeripheral) {
@@ -567,6 +846,161 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         return true
     }
 
+    private func invalidatePendingCaptureCommands() {
+        captureCommandGeneration += 1
+        captureRestartWorkItem?.cancel()
+        captureStartFallbackWorkItem?.cancel()
+        captureConfirmationWorkItem?.cancel()
+        captureStopFallbackWorkItem?.cancel()
+        captureRestartWorkItem = nil
+        captureStartFallbackWorkItem = nil
+        captureConfirmationWorkItem = nil
+        captureStopFallbackWorkItem = nil
+        captureStartPhase = .idle
+        documentedStopFallbackSent = false
+        awaitingStopAck = false
+    }
+
+    private func cancelPendingCaptureStartCommands() {
+        captureRestartWorkItem?.cancel()
+        captureStartFallbackWorkItem?.cancel()
+        captureConfirmationWorkItem?.cancel()
+        captureRestartWorkItem = nil
+        captureStartFallbackWorkItem = nil
+        captureConfirmationWorkItem = nil
+        captureStartPhase = .idle
+    }
+
+    private func beginDeviceCaptureAfterAsrReady() {
+        guard captureRequested,
+              !captureRunning,
+              asrState == "ready",
+              writeCharacteristic != nil,
+              captureStartPhase == .idle
+        else { return }
+
+        invalidatePendingCaptureCommands()
+        let generation = captureCommandGeneration
+        captureStartPhase = .stopping
+        status = "capture_starting"
+        NSLog("[pin-hardware] resetting device recording before realtime capture")
+        sendCommand(PinHardwareMR20Protocol.realtimeStopCommand)
+        emitState()
+
+        scheduleResetStopFallback(generation: generation)
+    }
+
+    private func scheduleResetStopFallback(generation: Int) {
+        let fallback = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.captureCommandGeneration == generation,
+                  self.captureRequested,
+                  !self.captureRunning,
+                  self.asrState == "ready",
+                  self.writeCharacteristic != nil,
+                  self.captureStartPhase == .stopping
+            else { return }
+            NSLog("[pin-hardware] retrying capture reset with documented stop command")
+            self.sendCommand(PinHardwareMR20Protocol.documentedStopCommand)
+            self.scheduleDeviceCaptureStart(generation: generation)
+        }
+        captureRestartWorkItem = fallback
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.captureStopFallbackDelay,
+            execute: fallback
+        )
+    }
+
+    private func scheduleDeviceCaptureStart(generation: Int) {
+        guard captureCommandGeneration == generation,
+              captureRequested,
+              !captureRunning,
+              asrState == "ready",
+              writeCharacteristic != nil,
+              captureStartPhase == .stopping
+        else { return }
+
+        captureRestartWorkItem?.cancel()
+        captureStartPhase = .waitingToStart
+
+        let restart = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.captureCommandGeneration == generation,
+                  self.captureRequested,
+                  !self.captureRunning,
+                  self.asrState == "ready",
+                  self.writeCharacteristic != nil,
+                  self.captureStartPhase == .waitingToStart
+            else { return }
+            NSLog("[pin-hardware] starting device realtime recording after reset")
+            self.captureStartPhase = .starting
+            self.sendCommand(PinHardwareMR20Protocol.realtimeStartCommand)
+            self.scheduleCaptureStartFallback(generation: generation)
+        }
+        captureRestartWorkItem = restart
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.captureRestartDelay, execute: restart)
+    }
+
+    private func scheduleCaptureStartFallback(generation: Int) {
+        let fallback = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.captureCommandGeneration == generation,
+                  self.captureRequested,
+                  !self.captureRunning,
+                  self.captureStartPhase == .starting
+            else { return }
+            self.sendDocumentedStartFallback(generation: generation)
+        }
+        captureStartFallbackWorkItem = fallback
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.captureAckDelay, execute: fallback)
+    }
+
+    private func sendDocumentedStartFallback(generation: Int) {
+        guard captureStartPhase == .starting else { return }
+        captureStartPhase = .fallbackStarting
+        captureStartFallbackWorkItem?.cancel()
+        captureStartFallbackWorkItem = nil
+        NSLog("[pin-hardware] retrying realtime start with documented command")
+        sendCommand(PinHardwareMR20Protocol.documentedStartCommand)
+
+        let confirmation = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.captureCommandGeneration == generation,
+                  self.captureRequested,
+                  !self.captureRunning,
+                  self.captureStartPhase == .fallbackStarting
+            else { return }
+            NSLog("[pin-hardware] device did not confirm realtime recording")
+            self.captureStartPhase = .idle
+            self.status = "capture_start_failed"
+            self.emitState()
+        }
+        captureConfirmationWorkItem = confirmation
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.captureConfirmationDelay, execute: confirmation)
+    }
+
+    private func scheduleStopFallback(generation: Int) {
+        let fallback = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.captureCommandGeneration == generation,
+                  !self.captureRequested,
+                  self.awaitingStopAck
+            else { return }
+            self.sendDocumentedStopFallback()
+        }
+        captureStopFallbackWorkItem = fallback
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.captureStopFallbackDelay, execute: fallback)
+    }
+
+    private func sendDocumentedStopFallback() {
+        guard !documentedStopFallbackSent else { return }
+        documentedStopFallbackSent = true
+        captureStopFallbackWorkItem?.cancel()
+        captureStopFallbackWorkItem = nil
+        NSLog("[pin-hardware] retrying realtime stop with documented command")
+        sendCommand(PinHardwareMR20Protocol.documentedStopCommand)
+    }
+
     private func sendCommand(_ command: String) {
         guard let peripheral = connectedPeripheral,
               let writeCharacteristic,
@@ -577,18 +1011,65 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         let writeType: CBCharacteristicWriteType = writeCharacteristic.properties.contains(.write)
             ? .withResponse
             : .withoutResponse
+        lastSentCommand = command
+        NSLog("[pin-hardware] write command %@", command)
         peripheral.writeValue(data, for: writeCharacteristic, type: writeType)
     }
 
     private func handleCommandNotify(_ text: String) {
+        NSLog("[pin-hardware] device response %@", text)
         switch PinHardwareMR20Protocol.parseDeviceMessage(text) {
         case .battery(let percent):
             batteryPercent = percent
         case .firmware(let version):
             firmwareVersion = version
         case .recording(let active):
-            captureRunning = active
-            status = active ? "capturing" : "connected"
+            if active {
+                guard captureRequested else {
+                    captureRunning = false
+                    if awaitingStopAck {
+                        status = connectedPeripheral == nil ? "idle" : "connected"
+                        sendDocumentedStopFallback()
+                    } else {
+                        // A physical-device STA is an explicit user intent to
+                        // start transcription. JS owns token minting and will
+                        // call startCapture before audio is sent to Tencent.
+                        status = "device_capture_requested"
+                    }
+                    emitState()
+                    return
+                }
+                if captureStartPhase == .stopping || captureStartPhase == .waitingToStart {
+                    // This can be a delayed status response describing the
+                    // encoder before our reset. Only a response after START
+                    // may confirm the new clean MP3 stream.
+                    captureRunning = false
+                    status = "capture_starting"
+                    emitState()
+                    return
+                }
+                captureRunning = true
+                cancelPendingCaptureStartCommands()
+                status = asrState == "ready" ? "capturing" : "asr_connecting"
+                if asrClient == nil || asrUrl == nil {
+                    asrState = "error"
+                    status = "asr_error"
+                }
+            } else {
+                captureRunning = false
+                if captureRequested, captureStartPhase == .stopping {
+                    scheduleDeviceCaptureStart(generation: captureCommandGeneration)
+                    status = asrState == "ready" ? "capture_starting" : "asr_connecting"
+                } else if captureRequested, captureStartPhase != .idle {
+                    status = asrState == "ready" ? "capture_starting" : "asr_connecting"
+                } else {
+                    awaitingStopAck = false
+                    documentedStopFallbackSent = false
+                    captureStopFallbackWorkItem?.cancel()
+                    captureStopFallbackWorkItem = nil
+                    status = "connected"
+                }
+            }
         case .raw:
             break
         }
@@ -610,26 +1091,32 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
                 prefix
             )
         }
-        guard asrClient != nil, asrUrl != nil else { return }
-        pcmBuffer.append(data)
-        flushPcmBuffer(force: false)
-    }
-
-    private func flushPcmBuffer(force: Bool) {
-        guard let client = asrClient else {
-            if force { pcmBuffer.removeAll(keepingCapacity: false) }
+        let nowMs = Int(Date().timeIntervalSince1970 * 1000)
+        audioBytesReceived += data.count
+        lastAudioAtMs = nowMs
+        // Audio can keep arriving while a replacement WebSocket is opening or
+        // after it failed. Count it for diagnostics, but never queue it into a
+        // socket until Tencent has explicitly accepted the connection.
+        guard asrState == "ready" else {
+            if nowMs - lastAudioStateEmitAtMs >= 1_000 {
+                lastAudioStateEmitAtMs = nowMs
+                emitState()
+            }
             return
         }
-        let chunk = Self.pcmChunkBytes
-        while pcmBuffer.count >= chunk {
-            let out = pcmBuffer.prefix(chunk)
-            pcmBuffer.removeSubrange(pcmBuffer.startIndex ..< pcmBuffer.startIndex.advanced(by: chunk))
-            client.sendAudio(Data(out))
+        guard let client = asrClient, asrUrl != nil else {
+            asrState = "error"
+            status = "asr_error"
+            if nowMs - lastAudioStateEmitAtMs >= 1_000 {
+                lastAudioStateEmitAtMs = nowMs
+                emitState()
+            }
+            return
         }
-        if force, !pcmBuffer.isEmpty {
-            let tail = pcmBuffer
-            pcmBuffer.removeAll(keepingCapacity: false)
-            client.sendAudio(tail)
+        client.sendAudio(data)
+        if nowMs - lastAudioStateEmitAtMs >= 1_000 {
+            lastAudioStateEmitAtMs = nowMs
+            emitState()
         }
     }
 
@@ -638,14 +1125,37 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         guard let url = asrUrl else { return }
         lastTranscriptDeviceName = connectedPeripheral?.name
             ?? discoveredDevices[connectedPeripheral?.identifier ?? UUID()]?.name
-        lastInterimTextByIndex.removeAll()
+        lastInterimFingerprintByIndex.removeAll()
         let deviceId = connectedPeripheral?.identifier.uuidString
         let deviceName = lastTranscriptDeviceName
-        asrClientGeneration += 1
         let generation = asrClientGeneration
         let client = TencentAsrClient(
             url: url,
             callbacks: TencentAsrClient.Callbacks(
+                onOpen: { [weak self] in
+                    DispatchQueue.main.async {
+                        guard let self, self.asrClientGeneration == generation else { return }
+                        NSLog("[pin-hardware] tencent asr provider ready")
+                        self.asrState = "ready"
+                        if self.captureRequested, self.writeCharacteristic != nil {
+                            // Always restart the encoder for a new ASR
+                            // generation. A WebSocket cannot safely attach to
+                            // an already-running Layer III stream mid-frame.
+                            self.captureRunning = false
+                            self.beginDeviceCaptureAfterAsrReady()
+                        } else {
+                            self.status = self.captureRequested ? "waiting_for_device" : "connected"
+                            self.emitState()
+                        }
+                    }
+                },
+                onSpeakerContext: { [weak self] contextId in
+                    DispatchQueue.main.async {
+                        guard let self, self.asrClientGeneration == generation else { return }
+                        self.speakerContextId = contextId
+                        self.emitState()
+                    }
+                },
                 onResult: { [weak self] result in
                     DispatchQueue.main.async {
                         guard let self, self.asrClientGeneration == generation else { return }
@@ -655,7 +1165,14 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
                 onError: { [weak self] error in
                     DispatchQueue.main.async {
                         guard let self, self.asrClientGeneration == generation else { return }
-                        NSLog("[pin-hardware] asr error: %@", "\(error)")
+                        let nsError = error as NSError
+                        NSLog(
+                            "[pin-hardware] asr error domain=%@ code=%d description=%@",
+                            nsError.domain,
+                            nsError.code,
+                            nsError.localizedDescription
+                        )
+                        self.asrState = "error"
                         self.status = "asr_error"
                         self.emitState()
                     }
@@ -664,12 +1181,12 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
                     DispatchQueue.main.async {
                         guard let self, self.asrClientGeneration == generation else { return }
                         self.asrClient = nil
-                        // A clean server-side close mid-capture (60s URL TTL,
-                        // session cutoff without an error frame) still kills
-                        // the transcript stream — surface asr_error so the JS
-                        // healer re-mints. stopCapture clears asrUrl first, so
-                        // intentional teardown doesn't trip this.
-                        if self.captureRunning, self.asrUrl != nil, self.status == "capturing" {
+                        // A server-side close without an error frame still
+                        // kills the transcript stream. Surface asr_error so
+                        // the JS healer re-mints. stopCapture clears asrUrl
+                        // first, so intentional teardown doesn't trip this.
+                        if self.captureRequested, self.asrUrl != nil, self.asrState != "error" {
+                            self.asrState = "error"
                             self.status = "asr_error"
                             self.emitState()
                         }
@@ -678,12 +1195,18 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
             )
         )
         asrClient = client
+        asrState = "connecting"
         client.open()
     }
 
     private func closeAsrClientIfOpen() {
-        asrClient?.close()
+        // Invalidate callbacks before close can enqueue error/close events.
+        // This also prevents a user-initiated stop from being overwritten by
+        // an already queued error from the old socket.
+        asrClientGeneration += 1
+        let client = asrClient
         asrClient = nil
+        client?.close()
     }
 
     private func handleAsrResult(_ result: TencentAsrClient.RecognitionResult,
@@ -691,11 +1214,20 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
                                  deviceName: String?) {
         let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        lastTranscriptAtMs = Int(Date().timeIntervalSince1970 * 1000)
+        if let contextId = result.speakerContextId, !contextId.isEmpty {
+            speakerContextId = contextId
+        }
+        let fingerprint = result.segments.isEmpty
+            ? text
+            : result.segments.map {
+                "\($0.sentenceId):\($0.speakerId ?? ""):\($0.isFinal):\($0.text)"
+            }.joined(separator: "|")
         if !result.isFinal {
-            if lastInterimTextByIndex[result.sliceIndex] == text { return }
-            lastInterimTextByIndex[result.sliceIndex] = text
+            if lastInterimFingerprintByIndex[result.sliceIndex] == fingerprint { return }
+            lastInterimFingerprintByIndex[result.sliceIndex] = fingerprint
         } else {
-            lastInterimTextByIndex.removeValue(forKey: result.sliceIndex)
+            lastInterimFingerprintByIndex.removeValue(forKey: result.sliceIndex)
         }
         var payload: [String: Any] = [
             "text": text,
@@ -709,21 +1241,38 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         if let deviceName { payload["deviceName"] = deviceName }
         if let start = result.startMs { payload["startMs"] = start }
         if let end = result.endMs { payload["endMs"] = end }
-        payload["segments"] = [[
-            "text": text,
-            "isFinal": result.isFinal,
-        ]]
+        if let speakerContextId { payload["speakerContextId"] = speakerContextId }
+        if result.segments.isEmpty {
+            payload["segments"] = [[
+                "text": text,
+                "isFinal": result.isFinal,
+            ]]
+        } else {
+            payload["segments"] = result.segments.map { segment in
+                var item: [String: Any] = [
+                    "sentenceId": segment.sentenceId,
+                    "text": segment.text,
+                    "isFinal": segment.isFinal,
+                ]
+                if let speakerId = segment.speakerId { item["speakerId"] = speakerId }
+                if let startMs = segment.startMs { item["startMs"] = startMs }
+                if let endMs = segment.endMs { item["endMs"] = endMs }
+                return item
+            }
+        }
         callbacks.emitEvent("pinHardwareTranscript", payload)
     }
 
     private func statePayload() -> [String: Any] {
         var payload: [String: Any] = [
             "supported": true,
-            "connected": writeCharacteristic != nil,
+            "connected": writeCharacteristic != nil && connectedPeripheral?.state == .connected,
             "scanning": isScanning,
             "captureRunning": captureRunning,
             "bluetoothState": bluetoothStateName(central?.state),
             "status": status,
+            "asrState": asrState,
+            "audioBytesReceived": audioBytesReceived,
             "devices": discoveredDevices.values
                 .sorted { lhs, rhs in
                     if lhs.isLikelyRecorder != rhs.isLikelyRecorder {
@@ -751,6 +1300,15 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         if let firmwareVersion {
             payload["firmwareVersion"] = firmwareVersion
         }
+        if let lastAudioAtMs {
+            payload["lastAudioAt"] = lastAudioAtMs
+        }
+        if let lastTranscriptAtMs {
+            payload["lastTranscriptAt"] = lastTranscriptAtMs
+        }
+        if let speakerContextId {
+            payload["speakerContextId"] = speakerContextId
+        }
         return payload
     }
 
@@ -759,8 +1317,26 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
             "id": device.id.uuidString,
             "name": device.name,
             "rssi": device.rssi,
-            "connected": connectedPeripheral?.identifier == device.id,
+            "connected": connectedPeripheral?.identifier == device.id
+                && connectedPeripheral?.state == .connected,
         ]
+    }
+
+    private func peripheralStateName(_ state: CBPeripheralState?) -> String {
+        switch state {
+        case .disconnected:
+            return "disconnected"
+        case .connecting:
+            return "connecting"
+        case .connected:
+            return "connected"
+        case .disconnecting:
+            return "disconnecting"
+        case nil:
+            return "none"
+        @unknown default:
+            return "unknown"
+        }
     }
 
     private func bluetoothPermissionState() -> String {
