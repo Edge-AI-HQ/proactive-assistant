@@ -17,11 +17,14 @@ const mocks = vi.hoisted(() => {
     startMonitoring: vi.fn(async () => {}),
     stopMonitoring: vi.fn(async () => {}),
     stopCapture: vi.fn(async () => {}),
+    startCapture: vi.fn(async () => {}),
     getState: vi.fn(async () => ({
       supported: true,
       connected: true,
       scanning: false,
       captureRunning: false,
+      captureDesired: false,
+      asrState: "idle" as const,
       status: "connected",
       timestamp: Date.now(),
     })),
@@ -62,6 +65,17 @@ describe("createPinHardwareSource", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    mocks.hardware.getState.mockResolvedValue({
+      supported: true,
+      connected: true,
+      scanning: false,
+      captureRunning: false,
+      captureDesired: false,
+      asrState: "idle",
+      status: "connected",
+      timestamp: Date.now(),
+    });
+    mocks.mintToken.mockResolvedValue({ url: "wss://example.test/asr" });
     mocks.listeners.clear();
     mocks.removedListeners.length = 0;
   });
@@ -78,6 +92,15 @@ describe("createPinHardwareSource", () => {
 
     expect(source.isStarted()).toBe(false);
     expect(mocks.removedListeners).toEqual(["pinHardwareState", "pinHardwareTranscript"]);
+    expect(mocks.hardware.stopMonitoring).toHaveBeenCalledOnce();
+  });
+
+  test("clears restored native capture intent even before the source starts", async () => {
+    const source = createPinHardwareSource({ push: vi.fn(), onEvent: vi.fn() });
+
+    await source.stop();
+
+    expect(mocks.hardware.stopCapture).toHaveBeenCalledOnce();
     expect(mocks.hardware.stopMonitoring).toHaveBeenCalledOnce();
   });
 
@@ -105,6 +128,80 @@ describe("createPinHardwareSource", () => {
     await Promise.resolve();
 
     expect(mocks.hardware.restartAsr).not.toHaveBeenCalled();
+  });
+
+  test("resumes persisted capture after a restored BLE connection", async () => {
+    mocks.hardware.getState.mockResolvedValue({
+      supported: true,
+      connected: true,
+      scanning: false,
+      captureRunning: false,
+      captureDesired: true,
+      asrState: "idle",
+      status: "connected",
+      timestamp: Date.now(),
+    });
+    const onEvent = vi.fn();
+    const source = createPinHardwareSource({ push: vi.fn(), onEvent });
+
+    await source.start();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mocks.mintToken).toHaveBeenCalledOnce();
+    expect(mocks.hardware.startCapture).toHaveBeenCalledWith({ asrUrl: "wss://example.test/asr" });
+    expect(onEvent).toHaveBeenCalledWith("pin_hardware", "PIN hardware capture resumed (attempt 1)");
+  });
+
+  test("keeps retrying a restored capture when token minting is temporarily unavailable", async () => {
+    mocks.hardware.getState.mockResolvedValue({
+      supported: true,
+      connected: true,
+      scanning: false,
+      captureRunning: false,
+      captureDesired: true,
+      asrState: "idle",
+      status: "connected",
+      timestamp: Date.now(),
+    });
+    mocks.mintToken
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({ url: "wss://example.test/recovered" });
+    const onEvent = vi.fn();
+    const source = createPinHardwareSource({ push: vi.fn(), onEvent });
+
+    await source.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.hardware.startCapture).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(mocks.mintToken).toHaveBeenCalledTimes(2);
+    expect(mocks.hardware.startCapture).toHaveBeenCalledWith({
+      asrUrl: "wss://example.test/recovered",
+    });
+    expect(onEvent).toHaveBeenCalledWith(
+      "pin_hardware",
+      "PIN hardware capture resume failed; retrying",
+    );
+  });
+
+  test("checks restored capture immediately when the app refreshes sources", async () => {
+    const source = createPinHardwareSource({ push: vi.fn(), onEvent: vi.fn() });
+    await source.start();
+    mocks.hardware.getState.mockResolvedValue({
+      supported: true,
+      connected: true,
+      scanning: false,
+      captureRunning: false,
+      captureDesired: true,
+      asrState: "idle",
+      status: "connected",
+      timestamp: Date.now(),
+    });
+
+    await source.refresh?.();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mocks.hardware.startCapture).toHaveBeenCalledWith({ asrUrl: "wss://example.test/asr" });
   });
 
   test("reuses Tencent speaker context when healing the ASR socket", async () => {
@@ -163,7 +260,7 @@ describe("createPinHardwareSource", () => {
     expect(mocks.mintToken).toHaveBeenCalledWith({ speakerContextId: undefined });
   });
 
-  test("backs off consecutive ASR failures and stops after three attempts", async () => {
+  test("backs off consecutive ASR failures without exhausting recovery", async () => {
     const onEvent = vi.fn();
     const source = createPinHardwareSource({ push: vi.fn(), onEvent });
     await source.start();
@@ -191,11 +288,15 @@ describe("createPinHardwareSource", () => {
     expect(mocks.hardware.restartAsr).toHaveBeenCalledTimes(3);
 
     emitAsrError();
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(mocks.hardware.restartAsr).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(mocks.hardware.restartAsr).toHaveBeenCalledTimes(4);
+    emitAsrError();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(mocks.hardware.restartAsr).toHaveBeenCalledTimes(5);
     expect(onEvent).toHaveBeenCalledWith("pin_hardware", "PIN hardware ASR stream restarted (attempt 1)");
     expect(onEvent).toHaveBeenCalledWith("pin_hardware", "PIN hardware ASR stream restarted (attempt 2)");
     expect(onEvent).toHaveBeenCalledWith("pin_hardware", "PIN hardware ASR stream restarted (attempt 3)");
+    expect(onEvent).toHaveBeenCalledWith("pin_hardware", "PIN hardware ASR stream restarted (attempt 5)");
   });
 
   test("updates the shared transcript store for interim and final events", async () => {
