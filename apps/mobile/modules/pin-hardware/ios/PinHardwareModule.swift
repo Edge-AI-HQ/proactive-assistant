@@ -81,8 +81,10 @@ public final class PinHardwareModule: Module {
         do {
           try self.controller.connect(deviceId: deviceId)
           promise.resolve()
+        } catch is PinHardwareController.DeviceNotFoundError {
+          promise.reject(PinHardwareException("PIN hardware device is no longer available. Scan again."))
         } catch {
-          promise.reject(PinHardwareException("PIN hardware device is not available"))
+          promise.reject(PinHardwareException("Unable to connect to PIN hardware"))
         }
       }
     }

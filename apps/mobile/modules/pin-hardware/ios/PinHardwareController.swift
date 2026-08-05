@@ -261,28 +261,40 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
     }
 
     struct DeviceNotFoundError: Error {}
-    struct ConnectionInProgressError: Error {}
     struct AsrUrlRequiredError: Error {}
     struct NotCapturingError: Error {}
 
     func connect(deviceId: String) throws {
-        guard let uuid = UUID(uuidString: deviceId),
-              let peripheral = discoveredPeripherals[uuid]
-        else {
+        guard let uuid = UUID(uuidString: deviceId) else {
             throw DeviceNotFoundError()
         }
-        if let activePeripheral = connectedPeripheral,
-           activePeripheral.identifier != uuid,
-           activePeripheral.state != .disconnected {
-            throw ConnectionInProgressError()
+        let peripheral = discoveredPeripherals[uuid]
+            ?? central?.retrievePeripherals(withIdentifiers: [uuid]).first
+        guard let peripheral else {
+            throw DeviceNotFoundError()
         }
-        if let activePeripheral = connectedPeripheral,
-           activePeripheral.identifier == uuid,
-           activePeripheral.state == .connecting {
+
+        // An explicit user selection supersedes any delayed retry for the
+        // previously active recorder.
+        lastConnectFailurePeripheralId = nil
+        connectRetryScheduled = false
+        discoveredPeripherals[uuid] = peripheral
+        let activePeripheral = connectedPeripheral
+        let action = pinHardwareConnectionSelectionAction(
+            selectedId: uuid,
+            activeId: activePeripheral?.identifier,
+            activeIsConnecting: activePeripheral?.state == .connecting
+        )
+        switch action {
+        case .restart:
+            guard let activePeripheral else { return }
             restartStuckConnection(activePeripheral)
-            return
+        case .replace:
+            guard let activePeripheral else { return }
+            replaceActivePeripheral(activePeripheral, with: peripheral)
+        case .connect:
+            connect(peripheral)
         }
-        connect(peripheral)
     }
 
     func disconnect() {
@@ -500,6 +512,7 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
             emitState()
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.connectRetryDelay) { [weak self] in
                 guard let self else { return }
+                guard self.lastConnectFailurePeripheralId == peripheral.identifier else { return }
                 self.connectRetryScheduled = false
                 guard self.captureDesired || self.isMonitoring else { return }
                 if let cached = self.discoveredPeripherals[peripheral.identifier] {
@@ -787,6 +800,26 @@ public final class PinHardwareController: NSObject, CBCentralManagerDelegate, CB
         updateSessionActiveFlag()
         central?.connect(peripheral, options: [CBConnectPeripheralOptionNotifyOnDisconnectionKey: true])
         emitState()
+    }
+
+    private func replaceActivePeripheral(_ activePeripheral: CBPeripheral, with peripheral: CBPeripheral) {
+        NSLog(
+            "[pin-hardware] replacing active peripheral old=%@ state=%@ selected=%@",
+            activePeripheral.identifier.uuidString,
+            peripheralStateName(activePeripheral.state),
+            peripheral.identifier.uuidString
+        )
+        invalidatePendingCaptureCommands()
+        stuckConnectRetryWorkItem?.cancel()
+        stuckConnectRetryWorkItem = nil
+        restoredConnectionSetupWorkItem?.cancel()
+        restoredConnectionSetupWorkItem = nil
+        central?.cancelPeripheralConnection(activePeripheral)
+        connectedPeripheral = nil
+        writeCharacteristic = nil
+        captureRunning = false
+        updateSessionActiveFlag()
+        connect(peripheral)
     }
 
     private func restartStuckConnection(_ peripheral: CBPeripheral) {
