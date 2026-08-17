@@ -14,7 +14,7 @@ services:
     # pgvector/pgvector ships pgvector preinstalled. Supabase prod has the
     # extension built-in, so dev mirrors prod here. Keeping pg15 to match
     # the previous image's major version (no schema migration needed).
-    image: pgvector/pgvector:pg15
+    image: ${PINAI_PGVECTOR_IMAGE:-pgvector/pgvector:pg15}
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
@@ -36,7 +36,7 @@ services:
   # (history truth is pai_chat_messages), so NO volume — a restart loses only
   # in-flight stream tails, which a client reconnect rebuilds from history.
   redis:
-    image: redis:7-alpine
+    image: ${PINAI_REDIS_IMAGE:-redis:7-alpine}
     restart: unless-stopped
     ports:
       - "6379"
@@ -106,6 +106,10 @@ services:
       dockerfile: Dockerfile
       args:
         DEPLOY_ENV: dev
+        PYTHON_BASE_IMAGE: ${PINAI_PYTHON_BASE_IMAGE:-python:3.12-slim}
+        UV_BASE_IMAGE: ${PINAI_UV_BASE_IMAGE:-ghcr.io/astral-sh/uv:0.11.21}
+        PINAI_DEV_REGION: ${PINAI_DEV_REGION:-us}
+        UV_DEFAULT_INDEX: ${PINAI_UV_DEFAULT_INDEX:-https://pypi.org/simple}
     image: backend:latest
     depends_on:
       postgres:
@@ -298,6 +302,9 @@ services:
       dockerfile: ./apps/web/Dockerfile
       args:
         WORKDIR: apps/web
+        NODE_BASE_IMAGE: ${PINAI_NODE_BASE_IMAGE:-node:20-slim}
+        NGINX_BASE_IMAGE: ${PINAI_NGINX_BASE_IMAGE:-nginx:1.27-alpine}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
         VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
         VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY:-}
     image: proactive-ai-web:latest

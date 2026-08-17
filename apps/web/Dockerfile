@@ -9,10 +9,14 @@
 # --dockerfile apps/web/Dockerfile --build-arg WORKDIR=apps/web`）——packages/
 # 共用层（core/state/ui-kit/design）要随 context 进来。
 
-FROM node:20-slim AS builder
+ARG NODE_BASE_IMAGE=node:20-slim
+ARG NGINX_BASE_IMAGE=nginx:1.27-alpine
+
+FROM ${NODE_BASE_IMAGE} AS builder
 WORKDIR /app
 
 ARG WORKDIR=.
+ARG NPM_REGISTRY=https://registry.npmjs.org
 ARG VITE_SUPABASE_URL
 ARG VITE_SUPABASE_PUBLISHABLE_KEY
 
@@ -20,7 +24,7 @@ ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL \
     VITE_SUPABASE_PUBLISHABLE_KEY=$VITE_SUPABASE_PUBLISHABLE_KEY
 
 COPY ${WORKDIR}/package.json ./
-RUN npm install --no-audit --no-fund --legacy-peer-deps --ignore-scripts
+RUN npm install --registry="$NPM_REGISTRY" --no-audit --no-fund --legacy-peer-deps --ignore-scripts
 
 COPY ${WORKDIR}/ .
 # 共用层源码直引：vite alias 把 @pin-ai/core|state|ui-kit 指到
@@ -34,7 +38,7 @@ RUN ln -s /app/node_modules /node_modules
 RUN npm run build
 
 # ── Stage 2: runtime ──
-FROM nginx:1.27-alpine
+FROM ${NGINX_BASE_IMAGE}
 
 # SPA at the root path (vite `base: "/"`).
 #   /                  → index.html

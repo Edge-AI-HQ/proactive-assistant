@@ -3,10 +3,23 @@
 # Mirrors the apis/Dockerfile pattern (multi-stage + dotenvx for runtime secrets).
 
 # ── Stage 1: install deps via uv ──
-FROM python:3.12-slim AS builder
+ARG PYTHON_BASE_IMAGE=python:3.12-slim
+ARG UV_BASE_IMAGE=ghcr.io/astral-sh/uv:0.11.21
 
-# uv: fast Python package manager (https://docs.astral.sh/uv/)
-COPY --from=ghcr.io/astral-sh/uv:0.5.4 /uv /uvx /bin/
+FROM ${UV_BASE_IMAGE} AS uv-bin
+FROM ${PYTHON_BASE_IMAGE} AS builder
+
+# Keep the container CLI aligned with the version used to maintain uv.lock.
+# uv 0.11+ also supports export from this pure workspace root.
+COPY --from=uv-bin /uv /uvx /bin/
+
+# Local CN builds export the canonical lock to fully pinned, hash-checked
+# requirements, then fetch those exact artifacts from the selected mirror.
+# The checked-in uv.lock remains canonical PyPI and is never rewritten.
+# CI/Fly omit these args and retain the normal frozen-lock path.
+ARG PINAI_DEV_REGION=us
+ARG UV_DEFAULT_INDEX=https://pypi.org/simple
+ENV UV_DEFAULT_INDEX=${UV_DEFAULT_INDEX}
 
 WORKDIR /app
 
@@ -21,7 +34,16 @@ COPY services/api/pyproject.toml ./services/api/pyproject.toml
 COPY services/agent-engine/pyproject.toml ./services/agent-engine/pyproject.toml
 COPY services/reward-dashboard/pyproject.toml ./services/reward-dashboard/pyproject.toml
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev || uv sync --no-install-project --no-dev
+    if [ "$PINAI_DEV_REGION" = "cn" ]; then \
+        uv --quiet export --frozen --all-packages --no-dev --no-emit-workspace \
+            --output-file /tmp/requirements-cn.txt; \
+        uv venv .venv; \
+        uv pip sync --python .venv/bin/python --require-hashes \
+            /tmp/requirements-cn.txt; \
+    else \
+        uv sync --frozen --no-install-project --no-dev \
+        || uv sync --no-install-project --no-dev; \
+    fi
 
 # Single image — process groups select the entrypoint (api + agent-engine on
 # this fly app; reward-dashboard is its own deploy). --all-packages installs
@@ -30,10 +52,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # own pinai_*.asgi module.
 COPY services ./services
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --all-packages || uv sync --no-dev --all-packages
+    uv sync --frozen --no-dev --all-packages \
+    || uv sync --no-dev --all-packages
 
 # ── Stage 2: runtime ──
-FROM python:3.12-slim
+FROM ${PYTHON_BASE_IMAGE}
 
 WORKDIR /app
 

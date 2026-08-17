@@ -131,6 +131,36 @@ make restart          # 重建 api + agent-engine
 make restart-web      # 重建 apps/web 容器版
 ```
 
+### 中美开发依赖切换
+
+个人开发机用两份脚本切换依赖下载端点；地区配置写到用户目录
+`~/.config/pinai/`，不进入仓库，且对本机所有 worktree 生效：
+
+```bash
+source scripts/dev-env-cn.sh  # npmmirror + TUNA + DaoCloud Docker bases
+source scripts/dev-env-us.sh  # npm/PyPI/Homebrew/Electron 官方端点
+make dev-env-status
+```
+
+直接执行 `./scripts/dev-env-cn.sh` / `./scripts/dev-env-us.sh` 也会持久化，
+但受 shell 父子进程边界限制，当前终端要立即生效仍需 `source`；新终端无需再操作。
+`make up` 会把同一份地区配置传入 web 的 npm build 和 backend 的 uv build。
+CN profile 把本地 Compose 用到的 Python、Node、nginx、Redis、pgvector 和 uv 基础镜像
+显式切到 DaoCloud；US profile 恢复 Docker Hub/GHCR。`ngrok/ngrok` 和 LiteLLM 的独立
+registry 不经过该镜像，仍由 VPN 处理。CI/Fly 不加载用户 profile，继续使用官方地址。
+CN backend build 从 canonical `uv.lock` 导出精确版本与 hashes，再从清华镜像下载，
+避免重解析出不同版本，也避免把清华镜像 URL 写回仓库；
+`make local` 首次运行会用相同办法执行 `make backend-install` 后再启动 host hot reload；
+host 上直接运行 `uv sync` 仍使用提交的 canonical PyPI lock URL。Git、GitHub、VPN、
+Docker daemon 不由脚本修改；DaoCloud 映射只用于本地开发。生产/CI 不依赖免费公共
+加速器，团队建立 ACR/TCR/Harbor 后再把允许的镜像按 digest 显式接入。
+CN profile 会把 `*.tsinghua.edu.cn` / `*.npmmirror.com` / `*.daocloud.io` 加入
+`NO_PROXY`；若 VPN 使用
+TUN/全局路由，仍须在 VPN 客户端把这三个 domain suffix 设为 `DIRECT`，否则国内镜像会
+先出境再绕回国内；JAM 可在 Settings → Routing 开启 specified regions direct，Regions
+保留 China，并把 `npmmirror.com`、`tsinghua.edu.cn`、`daocloud.io` 设为 domain suffix
+Direct。不要把 `docker.io` 设为 Direct；未命中镜像的海外拉取应继续走 VPN。
+
 轻量模式常用命令:
 
 ```bash
