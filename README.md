@@ -23,12 +23,8 @@
 PIN AI is an open-source personal AI that works for you in the background. It connects to the apps and devices you already use, builds a long-term memory of your life, and turns what it learns into **proactive cards**: short, actionable suggestions that show up before you think to ask. When you want something done, its agent can search your memory, browse the web, run code and use your connected apps, with you in the loop for anything that can't be undone.
 
 <p align="center">
-  <img src=".github/assets/screenshot-web-now.jpg" alt="PIN AI web app showing the proactive card feed" width="100%">
-</p>
-<p align="center">
-  <img src=".github/assets/screenshot-web-card.jpg" alt="A card opened in the web app, with why-now context, sources and the agent's reasoning" height="400">
-  &nbsp;
-  <img src=".github/assets/screenshot-ios-now.jpg" alt="PIN AI iOS app showing the proactive card feed" height="400">
+  <img src=".github/assets/screenshot-desktop.png" alt="PIN AI on the desktop: a proactive card opened with why-now context, sources and the agent's reasoning" height="400">
+  <img src=".github/assets/screenshot-ios.png" alt="PIN AI iOS app showing the proactive card feed" height="400">
 </p>
 
 ## Features
