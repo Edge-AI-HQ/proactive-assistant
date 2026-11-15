@@ -1,0 +1,92 @@
+name: Public mirror
+
+# Publishes main and v* tags to the public mirror Edge-AI-HQ/proactive-assistant.
+# Development stays in this private repository; PRs and other branches are
+# never pushed. Before pushing, git filter-repo drops every dotenvx-encrypted
+# env file from the whole history, so no ciphertext (current or historical)
+# reaches the public repository. The rewrite is deterministic for a pinned
+# filter-repo version: the same input history always yields the same commit
+# IDs, so each sync only appends new commits on the mirror.
+#
+# Auth: a deploy key with write access on the mirror only; its private half is
+# the PUBLIC_MIRROR_DEPLOY_KEY secret of this repository.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-mirror
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    # The workflow file is mirrored too; never run it from the mirror.
+    if: github.repository == 'Edge-AI-HQ/PIN-AI-ASSISTANT'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone main and v* tags
+        env:
+          TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          git clone --bare --no-tags --single-branch --branch main \
+            "https://x-access-token:${TOKEN}@github.com/${REPO}.git" src.git
+          git -C src.git fetch --no-tags origin '+refs/tags/v*:refs/tags/v*'
+          git -C src.git remote remove origin
+
+      - name: Drop encrypted env files from the whole history
+        run: |
+          pip install --quiet git-filter-repo==2.47.0
+          cat > exclude.txt <<'EOF'
+          .env.dev
+          backend/.env.dev
+          backend/.env.test
+          backend/.env.production
+          ops/litellm/.env.dev
+          ops/litellm/.env.test
+          ops/litellm/.env.production
+          apis/.env.dev
+          apis/.env.production
+          pinai-agents/.env.dev
+          pinai-agents/.env.test
+          pinai-agents/.env.production
+          EOF
+          sed -i 's/^ *//' exclude.txt
+          cd src.git
+          # Keep commits that only touched env files (they become empty) so the
+          # mirror has every commit of the private history.
+          git filter-repo --force --invert-paths --paths-from-file ../exclude.txt \
+            --prune-empty never --prune-degenerate never
+
+      - name: Refuse to publish if any dotenvx file is left
+        working-directory: src.git
+        run: |
+          # Fail closed: a newly added encrypted env file under a path not in
+          # exclude.txt must stop the sync instead of being published.
+          found=$(git rev-list --objects --all | cut -d' ' -f1 \
+            | git cat-file --batch-check='%(objecttype) %(objectname)' \
+            | awk '$1 == "blob" { print $2 }' \
+            | git cat-file --batch | grep -c '^DOTENV_PUBLIC_KEY' || true)
+          if [ "$found" != "0" ]; then
+            echo "::error::$found dotenvx-encrypted blob(s) left after filtering; add their paths to exclude.txt"
+            exit 1
+          fi
+
+      - name: Push to the public mirror
+        env:
+          DEPLOY_KEY: ${{ secrets.PUBLIC_MIRROR_DEPLOY_KEY }}
+        working-directory: src.git
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/mirror_key && chmod 600 ~/.ssh/mirror_key
+          # GitHub's published ed25519 host key (pinned instead of ssh-keyscan).
+          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/mirror_key -o IdentitiesOnly=yes"
+          git push --force git@github.com:Edge-AI-HQ/proactive-assistant.git \
+            'refs/heads/main:refs/heads/main' 'refs/tags/v*:refs/tags/v*'
