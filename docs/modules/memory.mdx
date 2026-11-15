@@ -1,25 +1,25 @@
 ---
 title: "Memory"
-description: "三层记忆架构 L0 pai_raw_apps/device / L1 pai_events / L2 pai_user_strings 的当前事实。"
+description: "Current facts for the three-layer memory architecture L0 pai_raw_apps/device / L1 pai_events / L2 pai_user_strings."
 ---
 
 # Memory
 
-## 结论
+## Summary
 
-Memory 模块把用户的 digital + physical + interaction context 收敛成**三层**:
+The Memory module consolidates the user's digital + physical + interaction context into **three layers**:
 
-- **L0 · Raw**(`pai_raw_apps` + `pai_raw_device` + `pai_chat_messages` + `pai_world_signals`)—— 原始日志,append-only,需追溯的大内容。
-- **L1 · Events**(`pai_events`)—— 不可变 bi-temporal 语义事件流(修正 = append + supersede 修订链),是 agent 检索的唯一入口。
-- **L2 · Profile**(`pai_user_strings`)—— 常驻 markdown 画像(5 slot + AGENTS 代码常量),agent 经 `memory_edit` 自维护(用户只读、经对话表达意图),注入 system prompt 让 agent「懂你」。
+- **L0 · Raw** (`pai_raw_apps` + `pai_raw_device` + `pai_chat_messages` + `pai_world_signals`) — raw logs, append-only, large content that must stay traceable.
+- **L1 · Events** (`pai_events`) — an immutable bi-temporal semantic event stream (correction = append + supersede revision chain); the single entry point for agent retrieval.
+- **L2 · Profile** (`pai_user_strings`) — an always-resident markdown portrait (5 slots + the AGENTS code constant), self-maintained by the agent via `memory_edit` (read-only for the user, who expresses intent through conversation), injected into the system prompt so the agent "knows you".
 
-写入两个延迟档:**projector**(即时,无 LLM,把 L0 投影成 L1 事件,`curated_at` NULL 排进 evolve 待整理队列——**不影响可检索性**)+ **evolve**(异步 LLM,整理队列 + 蒸馏画像)。读取一个入口:`events_search`(L1)+ 常驻注入(L2)。所有表都在 Postgres 同一 DB 的 public schema(前缀 `pai_*`);LangGraph chat checkpointer 独占 `langgraph` schema。
+Writes have two latency tiers: **projector** (immediate, no LLM; projects L0 into L1 events, and `curated_at` NULL puts them in the evolve curation queue — **this does not affect searchability**) + **evolve** (async LLM; works through the queue + distils the portrait). Reads have one entry point: `events_search` (L1) + always-on injection (L2). All tables live in the public schema of the same Postgres DB (prefix `pai_*`); the LangGraph chat checkpointer has the `langgraph` schema to itself.
 
-agent 工具从老的 21 个收敛到 **4 个**:`events_search`(检索 L1,hybrid + 时间窗)/ `event_source`(按 event 下钻 L0 原文,supersede 链自动 resolve)/ `event_append`(追加 L1)/ `memory_edit`(改 L2 画像,服务端同事务把画像变更写回 L1)。
+Agent tools were consolidated from the old 21 down to **4**: `events_search` (search L1, hybrid + time window) / `event_source` (drill down from an event to the L0 original, supersede chain resolved automatically) / `event_append` (append to L1) / `memory_edit` (edit the L2 portrait; the server writes the portrait change back to L1 in the same transaction).
 
-> **退役**:老的 `pai_memory` / `pai_personal_signals` / `pai_profile` / `pai_goals` / `pai_preference_records` 五张表已在 migration `114_drop_legacy_memory.sql` 里 **DROP**;`pai_timeline_events` 死表在 `111` 里 drop。代码里不要再 grep 这些表。设计 SSOT 见 [Lifelong Memory 系统重构](../plans/2026-06-23-lifelong-memory-system)。
+> **Retired**: the five old tables `pai_memory` / `pai_personal_signals` / `pai_profile` / `pai_goals` / `pai_preference_records` were **DROPped** in migration `114_drop_legacy_memory.sql`; the dead table `pai_timeline_events` was dropped in `111`. Don't grep for these tables in code anymore. Design SSOT: [Lifelong Memory system rebuild](../plans/2026-06-23-lifelong-memory-system).
 
-上游接入看 [Data Connectors](./data-connectors)。
+For upstream ingestion see [Data Connectors](./data-connectors).
 
 ```mermaid
 flowchart LR
@@ -27,203 +27,203 @@ flowchart LR
     Apps["pai_raw_apps (Composio/connector)"]
     Device["pai_raw_device (device)"]
     Chat["pai_chat_messages"]
-    WS["pai_world_signals (全局)"]
+    WS["pai_world_signals (global)"]
   end
-  subgraph L1["L1 Events (bi-temporal, 可检索)"]
+  subgraph L1["L1 Events (bi-temporal, searchable)"]
     Ev["pai_events"]
   end
-  subgraph L2["L2 Profile (常驻注入)"]
+  subgraph L2["L2 Profile (always injected)"]
     US["pai_user_strings (5 slot)"]
-    AG["AGENTS (代码常量)"]
+    AG["AGENTS (code constant)"]
   end
-  Apps -- projector(即时) --> Ev
-  Device -- projector(即时) --> Ev
+  Apps -- projector(immediate) --> Ev
+  Device -- projector(immediate) --> Ev
   Chat -. interaction .-> Ev
   WS -- "world_scoring (salience→world_news)" --> Ev
-  Ev -- "evolve curate (curated_at 盖章)" --> Ev
-  Ev -- "evolve 蒸馏 (单向 L1→L2)" --> US
+  Ev -- "evolve curate (stamps curated_at)" --> Ev
+  Ev -- "evolve distil (one-way L1→L2)" --> US
   Ev -- events_search --> Agent["chat / generation / proactive"]
   US --> Agent
   AG --> Agent
   Ev -. embedding queue .-> Vec[("pgvector")]
 ```
 
-## 边界
+## Boundaries
 
-包含:
+Includes:
 
-- **L0** 按域分两张表(`119` 拆分):`pai_raw_apps`(Composio/connector 域,`toolkit` + `entity_type` 判别)+ `pai_raw_device`(device 域,`kind` 判别、无 toolkit、`external_id`=device_id)。两表共用 envelope(`payload JSONB`/`occurred_at`/`expires_at` reference-aware TTL/reference 三元组)。
-- **L1** `pai_events`(`111`,`117` 收口)的 schema、bi-temporal 双时间轴(`occurred_at` / `recorded_at`)、`curated_at` 待整理队列、append + supersede 修订链(含生产者:内容变更重投影 + cancelled tombstone)、hybrid 检索(HNSW 语义 + tsvector 关键词 RRF)。
-- **L2** `pai_user_strings`(`112`,`115` 删 MEMORY)5 slot 画像、hermes MemoryStore 编辑算法(乐观锁 + char_budget 防截断 + 威胁扫描)、`memory_edit` 服务端原子双写(画像变更 → L1 `agent_decision` 事件)、`AGENTS` 代码常量、PortraitMiddleware 注入。
-- `pai_world_signals`(全局共享 L0,无 user_id)→ `world_scoring` 按 salience 投成 `pai_events` 的 `world_news` 事件(per-user view 已 `121` DROP,world 不再是独立检索 source)。
-- `pai_skill_index`(body inline)。
-- `pai_evolution_runs` 的 `trigger_kind` + status 生命周期(evolve 审计 + provenance)。
-- pgvector embedding 队列(`pai_embedding_queue`,allowlist = `pai_events` only)。
-- `/api/events` / `/api/user-strings`(UI 面)+ `/api/agent/events`(search / append / curate / `{id}/source`)/ `/api/agent/user-strings`(agent 面)路由。
-- agent-engine 的 **evolve**(on_event per-user coalesce / periodic 每 4h)+ **rollup_semantic**(firehose→episode,periodic 先行)的写入语义。
-- RLS(`SET LOCAL app.user_id` + `SET LOCAL ROLE pai_app`)的多租户隔离。
+- **L0** split into two tables by domain (split in `119`): `pai_raw_apps` (Composio/connector domain, discriminated by `toolkit` + `entity_type`) + `pai_raw_device` (device domain, discriminated by `kind`, no toolkit, `external_id`=device_id). Both tables share an envelope (`payload JSONB`/`occurred_at`/`expires_at` reference-aware TTL/reference triple).
+- **L1** `pai_events` (`111`, narrowed in `117`): schema, bi-temporal dual time axes (`occurred_at` / `recorded_at`), the `curated_at` curation queue, the append + supersede revision chain (including its producers: re-projection on content change + cancelled tombstones), hybrid retrieval (HNSW semantic + tsvector keyword RRF).
+- **L2** `pai_user_strings` (`112`; `115` deleted MEMORY): the 5-slot portrait, the hermes MemoryStore edit algorithm (optimistic lock + char_budget truncation guard + threat scanning), the `memory_edit` server-side atomic dual write (portrait change → L1 `agent_decision` event), the `AGENTS` code constant, PortraitMiddleware injection.
+- `pai_world_signals` (globally shared L0, no user_id) → `world_scoring` projects signals by salience into `world_news` events in `pai_events` (the per-user view was DROPped in `121`; world is no longer a separate retrieval source).
+- `pai_skill_index` (body inline).
+- The `trigger_kind` + status lifecycle of `pai_evolution_runs` (evolve audit + provenance).
+- The pgvector embedding queue (`pai_embedding_queue`, allowlist = `pai_events` only).
+- Routes `/api/events` / `/api/user-strings` (UI surface) + `/api/agent/events` (search / append / curate / `{id}/source`) / `/api/agent/user-strings` (agent surface).
+- Write semantics of agent-engine's **evolve** (on_event per-user coalesce / periodic every 4h) + **rollup_semantic** (firehose→episode, runs first in periodic).
+- Multi-tenant isolation via RLS (`SET LOCAL app.user_id` + `SET LOCAL ROLE pai_app`).
 
-不包含:
+Excludes:
 
-- 数据怎么进来(Composio / device ingest),看 [Data Connectors](./data-connectors)。
-- 卡片 pipeline 怎么读 events / portrait,看 [Generation](./generation)。
-- 反馈事件如何生成,看 [Feedback](./feedback)。
-- scheduler 怎么派 `auto.dreaming`(periodic evolve 的 legacy kind 名)/ `connector.evolve`,看 [Background Tasks](./background-tasks)。
+- How data comes in (Composio / device ingest): see [Data Connectors](./data-connectors).
+- How the card pipeline reads events / portrait: see [Generation](./generation).
+- How feedback events are produced: see [Feedback](./feedback).
+- How the scheduler dispatches `auto.dreaming` (the legacy kind name for periodic evolve) / `connector.evolve`: see [Background Tasks](./background-tasks).
 
-## 三层结构
+## Three-layer structure
 
-| 层 | 表 | 可变性 | 谁写 |
+| Layer | Tables | Mutability | Who writes |
 |---|---|---|---|
-| **L0 · Raw** | `pai_raw_apps`(Composio/connector)+ `pai_raw_device`(device)+ `pai_chat_messages`(对话)+ `pai_world_signals`(全局)| **append-only + TTL** | 系统 ingest |
-| **L1 · Events** | `pai_events` | **append-only**(修正 = append supersede)| projector(系统)+ `event_append`(agent 纯追加)|
-| **L2 · Profile** | `pai_user_strings`(markdown 5 slot)+ `AGENTS`(代码常量)| **mutable**(原地改;每次变更同事务写回 L1 不可变流)| agent `memory_edit`(hot=chat / bg=evolve;用户经对话表达意图)|
+| **L0 · Raw** | `pai_raw_apps` (Composio/connector) + `pai_raw_device` (device) + `pai_chat_messages` (conversations) + `pai_world_signals` (global) | **append-only + TTL** | system ingest |
+| **L1 · Events** | `pai_events` | **append-only** (correction = append supersede) | projector (system) + `event_append` (agent, append-only) |
+| **L2 · Profile** | `pai_user_strings` (markdown, 5 slots) + `AGENTS` (code constant) | **mutable** (edited in place; every change is written back to the immutable L1 stream in the same transaction) | agent `memory_edit` (hot=chat / bg=evolve; the user expresses intent through conversation) |
 
-> **核心对称:历史(L0/L1)不可变,当前(L2)可变。** event-sourcing 内核——事件流记「发生了什么」(只能 append),投影出「现在是什么样」(随便改)。想「edit 一条 event」时,落在 L2 画像,不是事件层。
+> **Core symmetry: history (L0/L1) is immutable, the present (L2) is mutable.** An event-sourcing core — the event stream records "what happened" (append-only), and the projection gives "what things look like now" (freely editable). When you want to "edit an event", the change belongs in the L2 portrait, not in the event layer.
 
-### L0 · `pai_raw_apps` / `pai_raw_device`(`119`)
+### L0 · `pai_raw_apps` / `pai_raw_device` (`119`)
 
-L0 按**域**分两张表(`119` 把早先的单一 `pai_raw` 拆开——统一发生在投影管线 + source→table registry,不在物理表)。两表共用同一套 envelope:`(user_id, id)` PK / `external_id` / `occurred_at` / `ingested_at` / `expires_at`(reference-aware TTL)/ `title` / `snippet`(可选展示投影)/ `payload JSONB`(source-specific 全字段)/ `dedupe_key` + reference 三元组——只判别列不同:
+L0 is split into two tables by **domain** (`119` split the earlier single `pai_raw` — unification happens in the projection pipeline + the source→table registry, not in the physical table). Both tables share the same envelope: `(user_id, id)` PK / `external_id` / `occurred_at` / `ingested_at` / `expires_at` (reference-aware TTL) / `title` / `snippet` (optional display projection) / `payload JSONB` (all source-specific fields) / `dedupe_key` + reference triple — only the discriminator columns differ:
 
-| 表 | 域 | 判别列 | 唯一键 |
+| Table | Domain | Discriminator columns | Unique key |
 |---|---|---|---|
-| `pai_raw_apps` | Composio app / 通用 connector | `toolkit` + `entity_type` | `(user_id, toolkit, entity_type, dedupe_key)` |
-| `pai_raw_device` | 设备(snapshot + ambient) | `kind`(无 toolkit;`external_id`=device_id) | `(user_id, kind, dedupe_key)` |
+| `pai_raw_apps` | Composio apps / generic connectors | `toolkit` + `entity_type` | `(user_id, toolkit, entity_type, dedupe_key)` |
+| `pai_raw_device` | device (snapshot + ambient) | `kind` (no toolkit; `external_id`=device_id) | `(user_id, kind, dedupe_key)` |
 
-**写入路径**:
-- **Composio connector ingest** → `connector_ingest` → `generic_ingest.upsert_generic` → `pai_raw_apps`(toolkit 来自 task,entity_type 来自 `db/ingest_recipes/<toolkit>.yaml`)。
-- **device ingest** → `raw_device.py` → `pai_raw_device`:snapshot 的 `raw_only`/`dual` kind(apps/contacts/health)+ ambient 的 `signal_only` kind(utterance/visit/motion 等 context event)都写这一张表,没有 typed 分流。`external_id`=device_id 让 full-sync replace 把 DELETE 限定到单台设备。
+**Write paths**:
+- **Composio connector ingest** → `connector_ingest` → `generic_ingest.upsert_generic` → `pai_raw_apps` (toolkit comes from the task, entity_type from `db/ingest_recipes/<toolkit>.yaml`).
+- **device ingest** → `raw_device.py` → `pai_raw_device`: snapshot `raw_only`/`dual` kinds (apps/contacts/health) + ambient `signal_only` kinds (context events such as utterance/visit/motion) all write to this one table; there is no typed split. `external_id`=device_id scopes the DELETE in a full-sync replace to a single device.
 
-> projector(`event_projector.py` 的 `project_unprojected`)读 **`pai_raw_apps` + `pai_raw_device` 两表 UNION** 投成 pending 事件:apps 行带真实 toolkit、device 行以 `toolkit='device'` / `entity=kind` 归一,`(toolkit, entity)` 经 `_EVENT_TYPE_MAP` 映射出 event_type。device 只跳过 `transcript_window` firehose(由 evolve rollup 合成 episode;utterance / session_summary 已改 1→1 实时投影)+ apps/contacts(state 非事件)。
+> The projector (`project_unprojected` in `event_projector.py`) reads a **UNION of the two tables `pai_raw_apps` + `pai_raw_device`** and projects it into pending events: apps rows carry the real toolkit, device rows are normalized to `toolkit='device'` / `entity=kind`, and `(toolkit, entity)` is mapped to an event_type through `_EVENT_TYPE_MAP`. For device, only the `transcript_window` firehose (rolled up into episodes by evolve rollup; utterance / session_summary now use 1→1 real-time projection) + apps/contacts (state, not events) are skipped.
 
-### L1 · `pai_events`(`111`)
+### L1 · `pai_events` (`111`)
 
-一行 = 一个**语义事件**(发生的事 + 用户反馈)。核心字段:
+One row = one **semantic event** (something that happened + user feedback). Core fields:
 
-| 字段 | 含义 |
+| Field | Meaning |
 |---|---|
-| `(user_id, id)` | 主键(`id` TEXT,per-user 唯一)|
-| `source` | 来源**类别**:`composio` / `device` / `ambient` / `pinai_chat` / `pinai_feedback` / `agent_action` / `world` / `predicted.*`。agent 可写值由服务端白名单强制(仅 `pinai_chat`/`agent_action`/`device` + `predicted.*` 前缀),actor 由 JWT server-stamp 进 `structured` |
-| `event_type` | 语义大类:`communication` / `meeting` / `utterance` / `movement` / `transaction` / `interaction` / `agent_decision` / `preference` / `world_news`;兼作检索排序的结构性先验 |
-| `occurred_at` / `end_at` | **事件发生时刻**(过去/未来同轴)+ 区间事件的结束 |
-| `recorded_at` | **系统写入时刻**(事务时间;bi-temporal 另一轴,backfill 旧邮件=今天)|
-| `title` / `body` | 一句话摘要 + 可选长文 |
-| `structured JSONB` | 结构化字段(participants/location;preference 的 `{scope,polarity,weight,confidence,durability,expires_at}`)|
-| `source_ref` | 指回 L0 raw 的 id(projector 幂等依据;`event_source` 按 event 的 `source` 经 registry 路由域表取原文)|
-| `curated_at` | NULL = evolve 待整理队列(`117` 把四态 `curation_status` 压成这个 flag,`importance` 列同批删除——重要性检索时客观算,不存 LLM 分);agent/feedback/hot 写入直接盖章 |
-| `supersedes_id` / `superseded_by_id` | append-as-correction 链 |
-| `dedupe_key` | 幂等键(`UNIQUE (user_id, dedupe_key)`)|
-| `embedding` | `vector(1536)` HNSW cosine,复用 `pai_embedding_queue` |
-| `reference_count` / `last_referenced_at` / `referenced_by_runs` | 客观质量信号:agent 检索命中即 bump(带 run_id 才 bump、per-run 去重、SAVEPOINT 隔离失败),喂检索排序 + formation + forgetting |
+| `(user_id, id)` | primary key (`id` TEXT, unique per user) |
+| `source` | source **category**: `composio` / `device` / `ambient` / `pinai_chat` / `pinai_feedback` / `agent_action` / `world` / `predicted.*`. The values an agent may write are enforced by a server-side allowlist (only `pinai_chat`/`agent_action`/`device` + the `predicted.*` prefix); the actor is server-stamped from the JWT into `structured` |
+| `event_type` | semantic category: `communication` / `meeting` / `utterance` / `movement` / `transaction` / `interaction` / `agent_decision` / `preference` / `world_news`; also serves as a structural prior for retrieval ranking |
+| `occurred_at` / `end_at` | **when the event happened** (past and future on the same axis) + end of interval events |
+| `recorded_at` | **when the system wrote it** (transaction time; the other bi-temporal axis; a backfilled old email = today) |
+| `title` / `body` | one-line summary + optional long text |
+| `structured JSONB` | structured fields (participants/location; for preference, `{scope,polarity,weight,confidence,durability,expires_at}`) |
+| `source_ref` | id pointing back to the L0 raw row (basis for projector idempotency; `event_source` routes by the event's `source` through the registry to the domain table to fetch the original) |
+| `curated_at` | NULL = in the evolve curation queue (`117` compressed the four-state `curation_status` into this flag and dropped the `importance` column in the same batch — importance is computed objectively at retrieval time, no LLM score is stored); agent/feedback/hot writes are stamped directly |
+| `supersedes_id` / `superseded_by_id` | append-as-correction chain |
+| `dedupe_key` | idempotency key (`UNIQUE (user_id, dedupe_key)`) |
+| `embedding` | `vector(1536)` HNSW cosine, reuses `pai_embedding_queue` |
+| `reference_count` / `last_referenced_at` / `referenced_by_runs` | objective quality signals: bumped whenever an agent retrieval hits the row (only bumped when a run_id is present, deduplicated per run, failures isolated by SAVEPOINT); feeds retrieval ranking + formation + forgetting |
 
-**bi-temporal**:`occurred_at`(何时发生)+ `recorded_at`(何时记下),学 Graphiti。「我去年这时在忙什么」= 查 `occurred_at` 落在去年的事件(append-only 全保留)。不再有第三个 `valid_from/valid_to` 时间轴(fact 走 L2 markdown)。
+**bi-temporal**: `occurred_at` (when it happened) + `recorded_at` (when it was recorded), borrowed from Graphiti. "What was I busy with this time last year" = query events whose `occurred_at` falls in last year (append-only keeps everything). There is no longer a third `valid_from/valid_to` time axis (facts go to L2 markdown).
 
-**修正 = append + supersede(生产者已接)**:「删除/更新」不物理改行,append 新修订 + 关旧版本链。生产者 = projector 的 supersede pass:raw 重 ingest 时 `content_updated_at` 只在 payload 真变时 touch(`124`),projector 对「已投影但内容已变」的行 append 新修订(revision dedupe = 基础键 + 变更时刻 µs)并 supersede 旧 event——**改期的会议、编辑过的内容在 L1 成链**;cancelled(gcal `showDeleted:true` 拉进的取消信号)成 `[cancelled]` tombstone 修订,已 cancelled 的新 raw 永不首投。**读侧链是内部机制**:检索只回链头(`superseded_by_id IS NULL`),`event_source` 对旧版 id 自动 resolve 到当前修订(WITH RECURSIVE + `resolvedTo` 提示)。**agent 的 `event_append` 纯追加,碰不到改写历史**。
+**Correction = append + supersede (producer wired up)**: "delete/update" does not physically modify rows; a new revision is appended + the old version is closed off in the chain. The producer = the projector's supersede pass: on raw re-ingest, `content_updated_at` is only touched when the payload actually changed (`124`), and for rows that "were already projected but whose content has changed" the projector appends a new revision (revision dedupe = base key + change time in µs) and supersedes the old event — **rescheduled meetings and edited content form chains in L1**; cancelled items (cancellation signals pulled in via gcal `showDeleted:true`) become `[cancelled]` tombstone revisions, and a new raw row that is already cancelled is never projected in the first place. **The chain is an internal mechanism on the read side**: retrieval returns only chain heads (`superseded_by_id IS NULL`), and `event_source` automatically resolves an old version id to the current revision (WITH RECURSIVE + a `resolvedTo` hint). **The agent's `event_append` is append-only and cannot rewrite history**.
 
-**fact / preference 归属**:durable fact / 画像型偏好("住上海"、"喜欢简洁")→ **L2 USER markdown**。硬约束 / 负向偏好指令("别再推 crypto"、dismiss)→ **L1 `event_type=preference` 事件**(`structured` 带 `polarity/weight/scope/expires`,给 generation 当硬约束)。供给端两个:用户显式(chat `event_append`)+ **evolve 负信号蒸馏**(反复 dismiss/忽略/失败由 evolve 归纳成 standing preference 事件)。独立 preferences 路由已随 Block2 删除——preference 就是普通 event,经 `event_append`/`events_search` 读写。
+**fact / preference placement**: durable facts / portrait-style preferences ("lives in Shanghai", "likes things concise") → **L2 USER markdown**. Hard constraints / negative preference instructions ("stop recommending crypto", dismiss) → **L1 `event_type=preference` events** (`structured` carries `polarity/weight/scope/expires`, used by generation as hard constraints). There are two supply sides: explicit from the user (chat `event_append`) + **evolve negative-signal distillation** (repeated dismiss/ignore/failure is summarized by evolve into a standing preference event). The separate preferences route was deleted with Block2 — a preference is just a normal event, read and written via `event_append`/`events_search`.
 
-### L2 · `pai_user_strings`(`112`)+ AGENTS
+### L2 · `pai_user_strings` (`112`) + AGENTS
 
-5 slot markdown 画像(`115` 删了 MEMORY——它和 USER/events 定位重叠、是 drift 雷区),`(user_id, slot)` PK,`content TEXT`(`§` 分隔 entry)+ `version INT`(乐观锁)+ `char_budget INT` + `updated_at`。`AGENTS` 是 agent-engine 代码常量(`agents/prompts/portrait.py`),**不落盘**——agent/用户工具都够不着。
+5-slot markdown portrait (`115` deleted MEMORY — it overlapped with USER/events in purpose and was a drift hazard), `(user_id, slot)` PK, `content TEXT` (entries separated by `§`) + `version INT` (optimistic lock) + `char_budget INT` + `updated_at`. `AGENTS` is an agent-engine code constant (`agents/prompts/portrait.py`), **not persisted** — neither agent nor user tools can reach it.
 
-**全部 5 slot 都由 agent 经 `memory_edit` 维护,用户只读**(Mirror 页;想改就和 agent 说——没有"设置 UI 直接改 markdown"这条路),区别在触发来源:
+**All 5 slots are maintained by the agent via `memory_edit` and read-only for the user** (the Mirror page; to change something, tell the agent — there is no "edit the markdown directly in a settings UI" path); they differ in what triggers the writes:
 
-| slot | 职责 | 写入触发 |
+| slot | Responsibility | Write trigger |
 |---|---|---|
-| **AGENTS** | 行为规范 + 安全强约束 | 开发者(代码常量,谁都不能改)|
-| **IDENTITY / SOUL** | agent 是谁 / 人设(voice)| 用户对话明确要求改人设;新用户默认 persona seed(`portrait/seed.py`)|
-| **TOOLS** | 用户对 agent 用工具的要求 + agent 学到的 durable 具体情况(账户/渠道;**不是**用户自用 app 清单——那是 USER fact)| 用户明说 tool-use 要求 / agent 学到具体情况(hot)|
-| **USER** | 用户 durable facts + 画像型偏好 + 负向信号教训 | 用户指令(hot)+ evolve 学(bg)|
-| **GOALS** | 长期目标(90+ 天)| evolve(≥3 事件持续证据)+ 新用户 starter seed(`portrait/seed.py`)|
+| **AGENTS** | behavior rules + hard safety constraints | developers (code constant, nobody can change it) |
+| **IDENTITY / SOUL** | who the agent is / persona (voice) | the user explicitly asks in conversation to change the persona; default persona seed for new users (`portrait/seed.py`) |
+| **TOOLS** | the user's requirements for how the agent uses tools + durable specifics the agent has learned (accounts/channels; **not** a list of apps the user uses — that is a USER fact) | the user states a tool-use requirement / the agent learns a specific detail (hot) |
+| **USER** | durable user facts + portrait-style preferences + lessons from negative signals | user instructions (hot) + evolve learning (bg) |
+| **GOALS** | long-term goals (90+ days) | evolve (sustained evidence from ≥3 events) + new-user starter seed (`portrait/seed.py`) |
 
-新用户 seed 只播 IDENTITY/SOUL(默认 persona baseline,让「把你设得更正式」有基线可改)+ GOALS(starter);**USER/TOOLS 有意不 seed**——它们装的是 agent 对这个具体用户学到的东西,首触没有可写的真话,空槽由注入侧占位说明兜底(见下)。
+The new-user seed only seeds IDENTITY/SOUL (default persona baseline, so that "make yourself more formal" has a baseline to change) + GOALS (starter); **USER/TOOLS are intentionally not seeded** — they hold what the agent learns about this specific user, there is nothing true to write on first contact, and empty slots fall back to a placeholder note on the injection side (see below).
 
-**编辑算法 = adapt hermes MemoryStore**(`UserStringsRepository.edit`):entry add/replace/remove + batch;乐观锁 `version`(并发 edit → WHERE version 失败 → no-op 逼 re-read);**超 char_budget 的 add 失败 → 回吐全部 entry 逼 agent 整合**(hermes 防截断,绝不静默 drop);**batch 只校验最终预算**;成功只返回新 version 不回吐 entry(防 thrash);**威胁扫描**(伪造 `<agent_safety>`/`<portrait>` 边界、NUL 拒写,在 api 信任侧做)。
+**Edit algorithm = adapted hermes MemoryStore** (`UserStringsRepository.edit`): entry add/replace/remove + batch; optimistic lock `version` (concurrent edits → WHERE version fails → no-op forces a re-read); **an add that exceeds char_budget fails → all entries are returned to force the agent to consolidate** (hermes truncation guard, never a silent drop); **batch only validates the final budget**; success returns only the new version, not the entries (avoids thrash); **threat scanning** (rejects forged `<agent_safety>`/`<portrait>` boundaries and NUL; done on the api trusted side).
 
-**原子双写(画像变更进事件流)**:`/api/agent/user-strings/edit` 成功后**同事务** append 一条 `agent_decision` 变更事件进 L1(`structured:{slot, ops, evidence_event_ids?}`,dedupe = `user_strings:{slot}:v{version}`)——L2 随便改,改动历史永远可追;失败(version_conflict/over_budget/threat)零写入。
+**Atomic dual write (portrait changes enter the event stream)**: after `/api/agent/user-strings/edit` succeeds, it appends an `agent_decision` change event to L1 **in the same transaction** (`structured:{slot, ops, evidence_event_ids?}`, dedupe = `user_strings:{slot}:v{version}`) — L2 can change freely, and the change history is always traceable; failures (version_conflict/over_budget/threat) write nothing.
 
-**注入(单层信任模型)**:`PortraitMiddleware`(`harness/middleware.py`)每个 agent instance fetch 一次 `/api/agent/user-strings/`,`build_portrait(slots)` 组装 `AGENTS` + 5 slot,prepend 成 transient SystemMessage(不落 checkpoint,放最前保 cache 稳定)。每段 header 带一行语义标注(`_SLOT_NOTES` 代码常量,和 `memory_edit` slot schema 的写侧语义呼应,agent 改不掉);fetch 成功时五段**全渲染**,空槽给占位说明(让 agent 知道该维度存在、有地方可写);fetch 失败(`slots={}`)降级成只注入 AGENTS——不渲染任何段,避免把「拉取失败」谎报成「画像为空」,不杀对话轮。读侧**不再** `<untrusted-text>` 逐段包裹——唯一写口在 api 信任侧且有威胁扫描,AGENTS 常量注入最前 outrank 一切段落(残余风险 = 间接注入,读时包裹留作事故升级位;设计取舍见 plan §七安全)。
+**Injection (single-layer trust model)**: `PortraitMiddleware` (`harness/middleware.py`) fetches `/api/agent/user-strings/` once per agent instance; `build_portrait(slots)` assembles `AGENTS` + the 5 slots and prepends them as a transient SystemMessage (not stored in the checkpoint; placed first to keep the cache stable). Each section header carries a one-line semantic note (`_SLOT_NOTES` code constant, matching the write-side semantics of the `memory_edit` slot schema; the agent cannot change it); when the fetch succeeds all five sections are **always rendered**, with placeholder notes for empty slots (so the agent knows the dimension exists and has a place to write); when the fetch fails (`slots={}`) it degrades to injecting only AGENTS — no sections are rendered, to avoid misreporting "fetch failed" as "portrait is empty", and the conversation turn is not killed. The read side **no longer** wraps each section in `<untrusted-text>` — the only write path is on the api trusted side with threat scanning, and the AGENTS constant injected first outranks every section (residual risk = indirect injection; read-time wrapping is kept in reserve as an incident escalation step; for the design trade-off see plan §7 Security).
 
-## `curated_at` 队列(projector→evolve 交接,不是检索 gate)
+## `curated_at` queue (projector→evolve handoff, not a retrieval gate)
 
-`117` 把四态 `curation_status` 压成单一 `curated_at` flag:
+`117` compressed the four-state `curation_status` into a single `curated_at` flag:
 
-- **NULL** = projector 刚投影,排在 evolve 待整理队列(`idx_pai_events_uncurated` partial index);
-- **NOT NULL** = evolve 处理过,或写入时就不需要 evolve 判断的事件直接盖章(agent `event_append` / feedback / memory_edit 双写)。
+- **NULL** = just projected by the projector, waiting in the evolve curation queue (`idx_pai_events_uncurated` partial index);
+- **NOT NULL** = processed by evolve, or stamped directly at write time for events that need no evolve judgment (agent `event_append` / feedback / memory_edit dual write).
 
-> **⚠️ 事实纠正(老文档的反坑)**:`curated_at` **不影响可检索性**——检索(三条路)只过滤 `superseded_by_id IS NULL`,pending 事件**立即可见**。「connector ingest 后搜不到要等 evolve」的老 gate 已随 `117` 移除:噪声靠客观排序沉底(reference × recency × event_type 先验),不靠拦截;`filtered_out` 不存在(投影期跳过的如 device apps/contacts 根本不进 L1),`archived` 由 supersede 链表达。evolve 挂了只影响画像蒸馏的新鲜度,不影响检索。
+> **⚠️ Fact correction (the old docs got this wrong)**: `curated_at` **does not affect searchability** — retrieval (all three paths) only filters on `superseded_by_id IS NULL`, so pending events are **visible immediately**. The old gate of "after connector ingest you can't find it until evolve runs" was removed with `117`: noise sinks through objective ranking (reference × recency × event_type prior), not through filtering; `filtered_out` does not exist (things skipped at projection time, such as device apps/contacts, never enter L1), and `archived` is expressed by the supersede chain. If evolve is down, only the freshness of portrait distillation suffers, not retrieval.
 
-## evolve(两触发)+ rollup_semantic
+## evolve (two triggers) + rollup_semantic
 
-**evolve = 原 evolve/dream 合并、crystallize 删除**(`agents/evolve.py`,Code Mode sandbox agent):对话蒸馏由 hot path(chat agent 即时 `memory_edit`)+ periodic evolve 覆盖,单 session 蒸馏两头不靠。一个 agent、两种 trigger、统一两个 job:
+**evolve = the former evolve/dream merged, crystallize deleted** (`agents/evolve.py`, Code Mode sandbox agent): conversation distillation is covered by the hot path (the chat agent calls `memory_edit` in real time) + periodic evolve; per-session distillation falls between the two and is not needed. One agent, two triggers, two unified jobs:
 
-1. **CURATE L1**:读 `client.events.search(status="pending")`,逐条 `client.events.curate(id)` 盖 `curated_at` 离队——**没有 status/importance 可打**(重要性检索时客观算,噪声排序沉底)。
-2. **DISTIL L2**:从事件(正向 + 负向)单向蒸馏画像进 USER / GOALS(`client.user_strings.edit`;formation 门槛全客观:反复引用 ∨ 用户显式 ∨ durable pattern ≥3;forgetting = evict 不硬删 + 保护名单),硬约束偏好顺手 `client.events.append(event_type="preference")`。**单向 L1→L2、画像是 events 的派生**——防双真源漂移。
+1. **CURATE L1**: read `client.events.search(status="pending")`, then call `client.events.curate(id)` on each item to stamp `curated_at` and take it off the queue — **there is no status/importance to assign** (importance is computed objectively at retrieval time; noise sinks in ranking).
+2. **DISTIL L2**: distil the portrait one way from events (positive + negative) into USER / GOALS (`client.user_strings.edit`; formation thresholds are all objective: repeated references ∨ explicit from the user ∨ durable pattern ≥3; forgetting = evict, not hard delete + a protected list), and along the way write hard-constraint preferences via `client.events.append(event_type="preference")`. **One-way L1→L2; the portrait is derived from events** — this prevents drift between two sources of truth.
 
-两种 trigger:
+Two triggers:
 
-| trigger_kind | 触发源 | scope |
+| trigger_kind | Trigger source | scope |
 |---|---|---|
-| `on_event` | scheduler kind `connector.evolve` —— **per-user 单例任务 `"evolve"`**:所有 connector 的触发合并(`connectors`/`rawSources` 并集),sync 触发带 **~2min debounce**(同拍 sync 折叠成一轮,合并保留更早到期),init 冷启动 / 手动刷新 immediate | 该批 connectors 的新事件 + 蒸馏 |
-| `daily`(常量 `TRIGGER_DAILY`,语义=periodic sweep) | scheduler kind `auto.dreaming`(legacy 命名;**每 4 小时**,用户时区整点边界,cron `0 */4 * * *`)| 全待整理队列;forget + 刷新画像 |
+| `on_event` | scheduler kind `connector.evolve` — **per-user singleton task `"evolve"`**: triggers from all connectors are merged (union of `connectors`/`rawSources`); sync triggers have a **~2min debounce** (syncs in the same beat fold into one run; merging keeps the earlier due time); init cold start / manual refresh run immediately | new events from that batch of connectors + distillation |
+| `daily` (constant `TRIGGER_DAILY`, semantics = periodic sweep) | scheduler kind `auto.dreaming` (legacy name; **every 4 hours**, on hour boundaries in the user's time zone, cron `0 */4 * * *`) | the whole curation queue; forget + refresh the portrait |
 
-**periodic 编排顺序(load-bearing)**:`/agent/run/dream` 先跑 **`rollup_semantic`**(独立 agent:把上个周期的 ambient firehose——transcript_window——卷成 episode 事件落 L1)、**再**跑 evolve;顺序反了本周期 firehose 进不了画像。episode dedupe 让 4h 高频重跑天然幂等。
+**periodic orchestration order (load-bearing)**: `/agent/run/dream` first runs **`rollup_semantic`** (a separate agent: rolls the previous period's ambient firehose — transcript_window — into episode events written to L1), **then** runs evolve; in the reverse order this period's firehose would not reach the portrait. Episode dedupe makes the high-frequency 4h reruns naturally idempotent.
 
-**HTTP 端点**:`/agent/run/dream`(periodic:rollup_semantic + evolve)+ `/agent/run/evolve`(on_event);`/agent/run/crystallize` 已删。`auto.dreaming` 的 `pai_evolution_runs` lifecycle 包在 api 侧 `dispatcher._dispatch_dream`(agent-engine OOM 也能翻 `failed`)。
+**HTTP endpoints**: `/agent/run/dream` (periodic: rollup_semantic + evolve) + `/agent/run/evolve` (on_event); `/agent/run/crystallize` was deleted. The `pai_evolution_runs` lifecycle for `auto.dreaming` is wrapped on the api side in `dispatcher._dispatch_dream` (so it can still flip to `failed` even if agent-engine OOMs).
 
-**provenance**:evolve 每次蒸馏在 `pai_evolution_runs` 记 `refs_consumed` / `refs_produced`;画像的每次变更另有 L1 `agent_decision` 事件(memory_edit 双写)可程序化追溯。
+**provenance**: each evolve distillation records `refs_consumed` / `refs_produced` in `pai_evolution_runs`; each portrait change additionally has an L1 `agent_decision` event (memory_edit dual write) that can be traced programmatically.
 
-## pgvector 与 embedding
+## pgvector and embedding
 
-`pai_events.embedding vector(1536)`(`111`)+ HNSW cosine 索引(`WHERE embedding IS NOT NULL`),model pin `text-embedding-3-small`(`platform/embeddings.py`)。
+`pai_events.embedding vector(1536)` (`111`) + HNSW cosine index (`WHERE embedding IS NOT NULL`), model pinned to `text-embedding-3-small` (`platform/embeddings.py`).
 
-异步队列 `pai_embedding_queue`(`(user_id, table_name, row_id)` PK,`status` ∈ `pending/running/done/failed`):
+Async queue `pai_embedding_queue` (`(user_id, table_name, row_id)` PK, `status` ∈ `pending/running/done/failed`):
 
-- **allowlist = `pai_events` only**(`122` 把 `pai_world_signals` 移出——world 迁进 events 后它自己的 embedding/FTS 列已没有检索消费者,连列带索引带队列项一并删)。
-- 写入侧:`EventsRepository.append` 在同一事务里 `enqueue(conn, user_id, "pai_events", row_id, title+body)`(仅新插入时)。
-- 消费侧:`orchestration/tick_loop.py` 每轮 `drain_queue()`(batch 调 LiteLLM `/embeddings`,写回 `pai_events.embedding`)。每条事件按该用户 virtual key 计费;keyless 用户的行留 pending,等 onboarding 配 key 后补算(个人数据从不计到 master)。
+- **allowlist = `pai_events` only** (`122` removed `pai_world_signals` — after world moved into events, its own embedding/FTS columns had no retrieval consumer, so the columns, indexes and queue entries were all deleted together).
+- Write side: `EventsRepository.append` calls `enqueue(conn, user_id, "pai_events", row_id, title+body)` in the same transaction (only on new inserts).
+- Consume side: `orchestration/tick_loop.py` calls `drain_queue()` every round (batch calls to LiteLLM `/embeddings`, writes back `pai_events.embedding`). Each event is billed to that user's virtual key; rows of keyless users stay pending and are backfilled after onboarding sets up a key (personal data is never billed to master).
 
 ## world signals
 
-`pai_world_signals`(全局共享 L0,无 user_id,`020`)是唯一保留的 world 表:`world_ingest` 拉 RSS 写这里(RLS 公开 SELECT + service-role-only INSERT,`normalized_url` 去重)。**world IS an event**——`world_scoring` 给每个活跃用户按 salience(≥阈值)+ top-K 把信号投成 `pai_events` 的 `world_news` 事件(`source='world'`,salience 在 `structured`),agent 经 `events_search(event_type="world_news")` 读,和任何 event 一样。per-user `pai_world_signal_user_view` 已 `121` DROP;world 不再 LEFT JOIN、不再有 `world_recent` / `world_search` 工具或 `/api/world` / `/api/agent/world` 路由(W5/W6 退役)。
+`pai_world_signals` (globally shared L0, no user_id, `020`) is the only remaining world table: `world_ingest` pulls RSS into it (RLS public SELECT + service-role-only INSERT, deduplicated by `normalized_url`). **world IS an event** — `world_scoring` projects signals for each active user by salience (≥ threshold) + top-K into `world_news` events in `pai_events` (`source='world'`, salience in `structured`); the agent reads them via `events_search(event_type="world_news")`, like any other event. The per-user `pai_world_signal_user_view` was DROPped in `121`; world no longer uses a LEFT JOIN, and there are no more `world_recent` / `world_search` tools or `/api/world` / `/api/agent/world` routes (retired in W5/W6).
 
-## HTTP 路由
+## HTTP routes
 
-### UI 面(`/api/*`,Supabase JWT)
+### UI surface (`/api/*`, Supabase JWT)
 
-| Prefix | 作用 |
+| Prefix | Purpose |
 |---|---|
-| `/api/events` | list(active 事件时间线,Ambient / Mirror 渲染,只读;响应带计算字段 `importance` = visual_importance(event_type, reference_count),非存储列)|
-| `/api/events/stream` | SSE 信号面:`pai_events` 有写入时推一帧 `{"type":"changed"}`(不带数据,前端收到后 invalidate + refetch list)。发布端收口在 `EventsRepository.append` 的 `pg_notify`(COMMIT 才投递、同事务去重),每台 api 实例一条 LISTEN 连接分发(`events/notify.py`);掉信号退化为前端兜底 poll。消费端:`useEventsLiveRefresh`(state)+ zebra web Events 面板 |
-| `/api/user-strings` | get(5 slot 画像 markdown,Mirror 渲染,无 UI 写路径)|
-| `/api/settings` | get / patch(含 timezone)|
-| `/api/evolution` | 列 evolution_runs 给 dreaming panel |
+| `/api/events` | list (timeline of active events, rendered by Ambient / Mirror, read-only; the response carries a computed field `importance` = visual_importance(event_type, reference_count), not a stored column) |
+| `/api/events/stream` | SSE signal surface: pushes one `{"type":"changed"}` frame whenever `pai_events` is written (no data; on receipt the frontend invalidates + refetches the list). Publishing is centralized in the `pg_notify` inside `EventsRepository.append` (delivered only on COMMIT, deduplicated within a transaction); each api instance fans out over one LISTEN connection (`events/notify.py`); if signals are lost, the frontend falls back to polling. Consumers: `useEventsLiveRefresh` (state) + the zebra web Events panel |
+| `/api/user-strings` | get (5-slot portrait markdown, rendered by Mirror, no UI write path) |
+| `/api/settings` | get / patch (including timezone) |
+| `/api/evolution` | lists evolution_runs for the dreaming panel |
 | `/api/skills` | list / get / patch / disable |
 
-### Agent 面(`/api/agent/*`,EdDSA agent-run JWT)
+### Agent surface (`/api/agent/*`, EdDSA agent-run JWT)
 
-| Prefix | 作用 |
+| Prefix | Purpose |
 |---|---|
-| `/api/agent/events` | `search`(hybrid/recency + `since`/`until` 时间窗;`recordedSince`+`recordedUntil` 切 **arrival 轴**——按 recorded_at 的到达流、含 superseded,generator 的 cache-stable log 源)/ `append`(纯追加,source 白名单)/ `curate`(evolve 盖章)/ **`{id}/source`**(L0 原文下钻,supersede 链自动 resolve)|
-| `/api/agent/user-strings` | `/`(读 5 slot 画像)/ `edit`(memory_edit;全 5 slot;成功同事务双写 L1 变更事件)|
-| `/api/agent/settings` | get / patch(含 timezone,`settings_agent.py`)|
+| `/api/agent/events` | `search` (hybrid/recency + `since`/`until` time window; `recordedSince`+`recordedUntil` switch to the **arrival axis** — the arrival stream by recorded_at, including superseded rows; the generator's cache-stable log source) / `append` (append-only, source allowlist) / `curate` (evolve stamping) / **`{id}/source`** (L0 original drill-down, supersede chain resolved automatically) |
+| `/api/agent/user-strings` | `/` (read the 5-slot portrait) / `edit` (memory_edit; all 5 slots; on success dual-writes an L1 change event in the same transaction) |
+| `/api/agent/settings` | get / patch (including timezone, `settings_agent.py`) |
 | `/api/agent/skills` | list / get / add |
 | `/api/agent/evolution` | create / list / get / complete / fail |
-| `/api/agent/raw` | list / get(按域路由:device→`pai_raw_device` by kind,其余→`pai_raw_apps` by toolkit+entity)|
+| `/api/agent/raw` | list / get (routed by domain: device→`pai_raw_device` by kind, everything else→`pai_raw_apps` by toolkit+entity) |
 
-## agent 工具(21 → 4)
+## Agent tools (21 → 4)
 
-| 工具 | 替代掉 | 落点 |
+| Tool | Replaces | Lands on |
 |---|---|---|
-| **`events_search`**(检索)| memory_search / signals_recent / raw_list / world reads | `/api/agent/events/search`(query?/event_type?/**since/until**/limit;返回 200 字符 snippet + `hasSource` 可下钻标记)|
-| **`event_source`**(下钻 L0 原文)| 老 raw 读工具 | `/api/agent/events/{id}/source`(source→table registry 路由域表;旧版 id 自动 resolve 到当前修订,`status`/`revisionNote` 透出;无档案/已 TTL 优雅降级)|
-| **`event_append`**(纯追加一条事件)| (新增)| `/api/agent/events/append`(写入即盖 curated;source 白名单)|
-| **`memory_edit`**(改 L2 画像 add/replace/remove/batch,可带 `evidence_event_ids` 证据锚)| memory_add / profile_upsert / goal_upsert / preference_add | `/api/agent/user-strings/edit`(全 5 slot;服务端同事务双写 L1 变更事件)|
+| **`events_search`** (search) | memory_search / signals_recent / raw_list / world reads | `/api/agent/events/search` (query?/event_type?/**since/until**/limit; returns a 200-character snippet + a `hasSource` drill-down marker) |
+| **`event_source`** (drill down to the L0 original) | old raw read tools | `/api/agent/events/{id}/source` (the source→table registry routes to the domain table; old version ids are automatically resolved to the current revision, with `status`/`revisionNote` passed through; degrades gracefully when there is no record / it has expired by TTL) |
+| **`event_append`** (append one event) | (new) | `/api/agent/events/append` (stamped curated on write; source allowlist) |
+| **`memory_edit`** (edit the L2 portrait add/replace/remove/batch, optionally with `evidence_event_ids` evidence anchors) | memory_add / profile_upsert / goal_upsert / preference_add | `/api/agent/user-strings/edit` (all 5 slots; the server dual-writes an L1 change event in the same transaction) |
 
-> 对应三层可变性:events 工具是检索 + 下钻 + 纯追加(**没有 edit/delete,历史不可改**);画像工具 `memory_edit` 有 add/replace/remove(当前状态会变)。四个职责一眼可分:找 / 看原文 / 记 / 画像。chat agent 的工具集真源在 `agent-engine/.../tools/direct/__init__.py` 的 `ALL_TOOLS`;`memory_edit` + `event_append` 是频繁自治写,**故意不进 HITL gate**(否则 approval 刷屏)。
+> This matches the mutability of the three layers: the events tools are search + drill-down + append-only (**no edit/delete; history cannot be changed**); the portrait tool `memory_edit` has add/replace/remove (the current state changes). The four responsibilities are easy to tell apart: find / read the original / record / portrait. The source of truth for the chat agent's tool set is `ALL_TOOLS` in `agent-engine/.../tools/direct/__init__.py`; `memory_edit` + `event_append` are frequent autonomous writes and are **intentionally not behind the HITL gate** (otherwise approval prompts would flood the screen).
 
-## RLS 多租户
+## RLS multi-tenancy
 
-新三层表(`pai_raw_apps` / `pai_raw_device` / `pai_events` / `pai_user_strings`)沿用 `user_scoped_tx`(`libs/db/src/pinai_db/rls.py`):`SET LOCAL ROLE pai_app`(非-BYPASSRLS)+ `SET LOCAL app.user_id`,双 policy(`user_scope` PUBLIC + `service_role` fallback)+ `FORCE ROW LEVEL SECURITY`。RLS 现已真激活(PR #200-204,之前「superuser bypass、名存实亡」已修)。
+The new three-layer tables (`pai_raw_apps` / `pai_raw_device` / `pai_events` / `pai_user_strings`) follow `user_scoped_tx` (`libs/db/src/pinai_db/rls.py`): `SET LOCAL ROLE pai_app` (non-BYPASSRLS) + `SET LOCAL app.user_id`, two policies (`user_scope` PUBLIC + `service_role` fallback) + `FORCE ROW LEVEL SECURITY`. RLS is now actually active (PR #200-204; the earlier "superuser bypass, RLS in name only" problem has been fixed).
 
 ```python
 async with user_scoped_tx(pool, user_id) as conn:
@@ -231,101 +231,101 @@ async with user_scoped_tx(pool, user_id) as conn:
     rows = await repo.search_structured(status="active", limit=20)
 ```
 
-`service_tx(pool)`(不带 user)用于 scheduler / world_ingest / migration batch job(policy 有空 `app.user_id` fallback)。`pai_world_signals` 无 user_id,policy 单独写。
+`service_tx(pool)` (no user) is used for scheduler / world_ingest / migration batch jobs (the policy has a fallback for an empty `app.user_id`). `pai_world_signals` has no user_id; its policy is written separately.
 
-## 开发入口
+## Development entry points
 
-| 改动 | 先看 |
+| Change | Look at first |
 |---|---|
-| Schema 改 / 加表 | `backend/db/migrations/`(`110`-`114` 是本次 sunset;NNN 顺序只向前,RLS policy 同款双 policy + FORCE)|
-| **模块地图** | `pinai_api/domains/memory/` 四子包(events/projection/portrait/curation),目录=模块=设计节,依赖方向 import-linter 锁(5 条契约);地图见 plan §十一 |
-| L1 events repository(③)| `pinai_api/domains/memory/events/repository.py`(`append` / `search_semantic` / `search_hybrid` / `search_structured` / `list_arrivals` / `resolve_head` / `fetch_source_content` / `mark_curated` / `supersede`)|
-| L0→L1 projector(②)| `pinai_api/domains/memory/projection/projector.py`(`raw_to_event_input` 纯函数 + `project_unprojected` 含 supersede pass;`_EVENT_TYPE_MAP`/`_TOMBSTONE_MAP` 是 domain 知识)+ `window.py`(health 按天聚合)+ `pinai_contracts.rollup_policy`(三档声明)|
-| L2 画像 repository(⑤)| `pinai_api/domains/memory/portrait/repository.py`(hermes `edit`:乐观锁 + char_budget + 威胁扫描)+ `seed.py`(新用户 IDENTITY/SOUL persona + GOALS starter)|
-| Evolution 审计(④)| `pinai_api/domains/memory/curation/runs.py` |
-| timezone / settings | `pinai_api/domains/user_model/settings.py`(`pai_user_settings.timezone`,`113` 从退役的 `pai_profile` 迁来)|
-| World signals / 全局 ingest | `pinai_api/domains/connector/world/world_signals.py`、`world_ingest.py`、`world_scoring.py`(salience fan-out 投影)|
-| Skills repository | `pinai_api/domains/user_model/skills.py`(`body` inline TEXT)|
-| UI 路由 | `memory/{events,portrait,curation}/ui.py` + `user_model/{settings_ui,skills_ui}.py` |
-| Agent 路由 | `memory/{events,portrait,curation}/agent.py` + `user_model/{settings_agent,skills_agent}.py` |
-| evolve agent(LLM)| `backend/services/agent-engine/src/agent_engine/agents/evolve.py` + `rollup_semantic.py` |
-| evolve 调度 | `pinai_api/orchestration/dispatcher.py`(`_dispatch_dream` + `connector.evolve`)+ `connector_ingest.enqueue_user_evolve`(per-user coalesce + debounce)|
-| AGENTS 常量 + 画像组装 | `agent-engine/.../agents/prompts/portrait.py`(`AGENTS` + `build_portrait`)|
-| 画像注入 middleware | `agent-engine/.../harness/middleware.py`(`PortraitMiddleware`)|
-| chat 工具集 | `agent-engine/.../tools/direct/__init__.py`(`ALL_TOOLS`)、`tools/direct/{events,user_strings}.py` |
-| pgvector embedding | `pinai_api/platform/embeddings.py`、`pai_embedding_queue`(`029` + `111`/`122` 收窄 allowlist 到 `pai_events` only)|
+| Schema change / new table | `backend/db/migrations/` (`110`-`114` are this sunset; NNN order only moves forward; RLS policies use the same dual policy + FORCE) |
+| **Module map** | the four subpackages of `pinai_api/domains/memory/` (events/projection/portrait/curation); directory = module = design section; dependency direction locked by import-linter (5 contracts); map in plan §11 |
+| L1 events repository (③) | `pinai_api/domains/memory/events/repository.py` (`append` / `search_semantic` / `search_hybrid` / `search_structured` / `list_arrivals` / `resolve_head` / `fetch_source_content` / `mark_curated` / `supersede`) |
+| L0→L1 projector (②) | `pinai_api/domains/memory/projection/projector.py` (`raw_to_event_input` pure function + `project_unprojected` including the supersede pass; `_EVENT_TYPE_MAP`/`_TOMBSTONE_MAP` are domain knowledge) + `window.py` (health aggregated per day) + `pinai_contracts.rollup_policy` (three-tier declaration) |
+| L2 portrait repository (⑤) | `pinai_api/domains/memory/portrait/repository.py` (hermes `edit`: optimistic lock + char_budget + threat scanning) + `seed.py` (new-user IDENTITY/SOUL persona + GOALS starter) |
+| Evolution audit (④) | `pinai_api/domains/memory/curation/runs.py` |
+| timezone / settings | `pinai_api/domains/user_model/settings.py` (`pai_user_settings.timezone`, migrated by `113` from the retired `pai_profile`) |
+| World signals / global ingest | `pinai_api/domains/connector/world/world_signals.py`, `world_ingest.py`, `world_scoring.py` (salience fan-out projection) |
+| Skills repository | `pinai_api/domains/user_model/skills.py` (`body` inline TEXT) |
+| UI routes | `memory/{events,portrait,curation}/ui.py` + `user_model/{settings_ui,skills_ui}.py` |
+| Agent routes | `memory/{events,portrait,curation}/agent.py` + `user_model/{settings_agent,skills_agent}.py` |
+| evolve agent (LLM) | `backend/services/agent-engine/src/agent_engine/agents/evolve.py` + `rollup_semantic.py` |
+| evolve scheduling | `pinai_api/orchestration/dispatcher.py` (`_dispatch_dream` + `connector.evolve`) + `connector_ingest.enqueue_user_evolve` (per-user coalesce + debounce) |
+| AGENTS constant + portrait assembly | `agent-engine/.../agents/prompts/portrait.py` (`AGENTS` + `build_portrait`) |
+| Portrait injection middleware | `agent-engine/.../harness/middleware.py` (`PortraitMiddleware`) |
+| chat tool set | `agent-engine/.../tools/direct/__init__.py` (`ALL_TOOLS`), `tools/direct/{events,user_strings}.py` |
+| pgvector embedding | `pinai_api/platform/embeddings.py`, `pai_embedding_queue` (`029` + `111`/`122` narrowed the allowlist to `pai_events` only) |
 | RLS helper | `backend/libs/db/src/pinai_db/rls.py` |
 
-## 验证方式
+## How to verify
 
 ```bash
-# Repository 单测
-cd backend && uv run pytest tests/web/db/                       # 全 repository 套件
+# Repository unit tests
+cd backend && uv run pytest tests/web/db/                       # full repository suite
 
-# Agent / UI 路由集成
+# Agent / UI route integration
 cd backend && uv run pytest tests/web/routes/
 
 # agent-engine evolve agent
 cd backend && uv run pytest tests/chat/agents/
 
-# 类型 + lint
+# types + lint
 cd backend && uv run ruff check .
 cd backend && uv run lint-imports
 cd backend && uv run mypy services libs
 ```
 
-手工 SQL(本地 compose Postgres):
+Manual SQL (local compose Postgres):
 
 ```sql
--- 事件流概览(待整理 vs 已整理)
+-- event stream overview (uncurated vs curated)
 SELECT (curated_at IS NULL) AS uncurated, count(*) FROM pai_events
 WHERE user_id = $1 GROUP BY 1;
 
--- evolve 待整理队列
+-- evolve curation queue
 SELECT id, event_type, occurred_at, title FROM pai_events
 WHERE user_id = $1 AND curated_at IS NULL AND superseded_by_id IS NULL
 ORDER BY occurred_at DESC LIMIT 20;
 
--- supersede 修订链
+-- supersede revision chain
 SELECT id, title, supersedes_id, superseded_by_id FROM pai_events
 WHERE user_id = $1 AND event_type = $2 ORDER BY recorded_at;
 
--- L2 画像 5 slot
+-- L2 portrait, 5 slots
 SELECT slot, length(content) AS chars, version, updated_at FROM pai_user_strings
 WHERE user_id = $1 ORDER BY slot;
 
--- 最近 evolution runs
+-- recent evolution runs
 SELECT id, trigger_kind, status, started_at, skills_added, profile_updated
 FROM pai_evolution_runs WHERE user_id = $1 ORDER BY started_at DESC LIMIT 10;
 
--- embedding queue 状态
+-- embedding queue status
 SELECT table_name, status, count(*) FROM pai_embedding_queue GROUP BY table_name, status;
 ```
 
-## 踩坑
+## Gotchas
 
-- **不要按老文档找「检索 quality gate」**:`curated_at`(`117`)只是 evolve 的待整理队列旗,**不影响可检索性**——检索只滤 `superseded_by_id IS NULL`,新投影的事件立即可搜。connector ingest 后搜不到 → 查 projector 有没有跑 / embedding queue(语义路径要向量),不是 evolve。
-- **L0 raw 是两张域表,不是 generic 单表也不是 typed 多表**:`119` 把早先的单一 `pai_raw` 拆成 `pai_raw_apps`(Composio)+ `pai_raw_device`(device)并 DROP 了 `pai_raw`;backend DB 里 raw 只有这两张,代码零 typed 表写入。apis 时代的 typed raw 表不在 backend migration 管辖,别照旧文档/旧注释以为还有 generic `pai_raw` 或 `pai_raw_device_*`。
-- **事件不按内容去重**:同一动作不同时刻是 N 行(频率本身是 evolve 蒸馏画像的信号);`dedupe_key` 只防同一事件被写两次(backfill + webhook 撞一封邮件)。
-- **`pai_events.embedding` 是异步队列写的**:INSERT 后不要立刻 vector 搜,给至少一轮 tick(默认 3s)让 `drain_queue` 跑;没 embedding 的行 `search_semantic` 直接跳过,要 recency 用 `search_structured`。
-- **画像 edit 超预算不是静默截断**:`memory_edit` over_budget 会回吐全部 entry 逼 agent 整合后重发(hermes 防失明);乐观锁 `version` 冲突会 no-op,agent 要 re-read 重试。
-- **AGENTS 不落盘**:安全强约束是 `agents/prompts/portrait.py` 的代码常量,agent/用户工具够不着。注入是**单层信任模型**(不再 `<untrusted-text>` 逐段包裹;写口威胁扫描 + AGENTS outrank),改注入顺序要同步测试;别按老文档把包裹加回来——那是被有意移除的设计(见 plan §七安全)。
-- **evolve 两端点、一个 agent**:`/agent/run/dream`(periodic = rollup_semantic → evolve 编排)与 `/agent/run/evolve`(on_event)都进 `run_evolve(trigger_kind)`;`crystallize` 路由/agent 已删。改 consolidation 逻辑动 `evolve.py`,改 firehose 卷动 `rollup_semantic.py`,**别把两者的职责混回去**(L0→L1 卷 vs L1→L2 蒸馏是两层)。
-- **`pai_world_signals` 没 `user_id`**:RLS policy 跟 per-user 表不一样,不要套 `user_scoped_tx`,用 `service_tx`。world 的 per-user 落点是 `pai_events` 的 `world_news` 事件(`world_scoring` 投),不是 view——`pai_world_signal_user_view` 已 `121` DROP。
-- **timezone 在 `pai_user_settings` 不在 `pai_profile`**:`pai_profile` 已 DROP(`114`);timezone 是它唯一有运行时消费者的字段,已迁 `pai_user_settings`(`113`),`locale` / `display_name` 无消费者随表删。
-- **退役表别再 grep**:`pai_memory` / `pai_personal_signals` / `pai_profile` / `pai_goals` / `pai_preference_records` / `pai_timeline_events` 全 DROP;旧的 `superseded_by` 链 / 三桶 JSONB profile / signals 队列语义都没了。
-- **LangGraph checkpointer 在 `langgraph` schema**,跟 `pai_chat_threads`(memory 关心的)是两个东西;清 chat 状态时不要误删 metadata 行。
-- **带 `q` 的检索三条 lane 都吃 `since`/`until`**:曾经 q 路径的 `until` 全链静默失效(repo 没参数、route 收了不传),已修;改检索 SQL 时 semantic candidates / keyword 两条 lane 的时间条件要对称维护。
+- **Don't look for a "retrieval quality gate" based on old docs**: `curated_at` (`117`) is only the evolve curation-queue flag and **does not affect searchability** — retrieval only filters on `superseded_by_id IS NULL`, so newly projected events are searchable immediately. If something can't be found after connector ingest → check whether the projector ran / the embedding queue (the semantic path needs vectors), not evolve.
+- **L0 raw is two domain tables, neither a single generic table nor many typed tables**: `119` split the earlier single `pai_raw` into `pai_raw_apps` (Composio) + `pai_raw_device` (device) and DROPped `pai_raw`; the backend DB has only these two raw tables, and the code writes to zero typed tables. The typed raw tables from the apis era are not managed by backend migrations; don't follow old docs/old comments and assume there is still a generic `pai_raw` or `pai_raw_device_*`.
+- **Events are not deduplicated by content**: the same action at different moments is N rows (the frequency itself is a signal for evolve to distil into the portrait); `dedupe_key` only prevents the same event from being written twice (backfill + webhook hitting the same email).
+- **`pai_events.embedding` is written by an async queue**: don't run a vector search right after INSERT; give `drain_queue` at least one tick (3s by default) to run; rows without an embedding are simply skipped by `search_semantic`; for recency use `search_structured`.
+- **Portrait edits over budget are not silently truncated**: `memory_edit` over_budget returns all entries to force the agent to consolidate and resend (the hermes pattern that keeps the agent from editing blind); an optimistic-lock `version` conflict is a no-op, and the agent must re-read and retry.
+- **AGENTS is not persisted**: the hard safety constraints are a code constant in `agents/prompts/portrait.py`, out of reach of agent/user tools. Injection uses a **single-layer trust model** (no more per-section `<untrusted-text>` wrapping; write-path threat scanning + AGENTS outranks); changes to injection order must update the tests too; don't add the wrapping back based on old docs — it was intentionally removed by design (see plan §7 Security).
+- **Two evolve endpoints, one agent**: `/agent/run/dream` (periodic = rollup_semantic → evolve orchestration) and `/agent/run/evolve` (on_event) both go into `run_evolve(trigger_kind)`; the `crystallize` route/agent was deleted. Change consolidation logic in `evolve.py` and firehose rollup in `rollup_semantic.py`; **don't merge the two responsibilities back together** (L0→L1 rollup vs L1→L2 distillation are two layers).
+- **`pai_world_signals` has no `user_id`**: its RLS policy differs from the per-user tables; don't wrap it in `user_scoped_tx`, use `service_tx`. The per-user landing point for world is `world_news` events in `pai_events` (projected by `world_scoring`), not a view — `pai_world_signal_user_view` was DROPped in `121`.
+- **timezone is in `pai_user_settings`, not `pai_profile`**: `pai_profile` was DROPped (`114`); timezone was its only field with a runtime consumer and was migrated to `pai_user_settings` (`113`); `locale` / `display_name` had no consumers and were dropped with the table.
+- **Don't grep for retired tables**: `pai_memory` / `pai_personal_signals` / `pai_profile` / `pai_goals` / `pai_preference_records` / `pai_timeline_events` are all DROPped; the old `superseded_by` chain / three-bucket JSONB profile / signals queue semantics are all gone.
+- **The LangGraph checkpointer is in the `langgraph` schema**, a different thing from `pai_chat_threads` (which memory cares about); when clearing chat state, don't delete metadata rows by mistake.
+- **All three retrieval lanes with `q` honor `since`/`until`**: the q path's `until` once silently failed end to end (the repo had no parameter; the route accepted it but didn't pass it on); this has been fixed. When changing retrieval SQL, keep the time conditions of the semantic candidates / keyword lanes symmetric.
 
-## 相关模块
+## Related modules
 
-- [Data Connectors](./data-connectors):raw 怎么写进来(Composio init/sync、device ingest)+ projector 投影 L1。
-- [Generation](./generation):卡片生成怎么读 events / portrait / preference。
-- [Background Tasks](./background-tasks):`auto.dreaming`(periodic evolve,每 4h)/ `connector.evolve`(on_event,per-user coalesce)的派发框架。
-- [Execution](./execution):chat agent 的 memory 工具面(events_search / event_source / event_append / memory_edit)+ portrait 注入。
-- [Runtime & Deployment](./runtime-deployment):RLS / Postgres pool / yoyo migration 通用基建。
+- [Data Connectors](./data-connectors): how raw data gets written (Composio init/sync, device ingest) + projector projection into L1.
+- [Generation](./generation): how card generation reads events / portrait / preference.
+- [Background Tasks](./background-tasks): the dispatch framework for `auto.dreaming` (periodic evolve, every 4h) / `connector.evolve` (on_event, per-user coalesce).
+- [Execution](./execution): the chat agent's memory tool surface (events_search / event_source / event_append / memory_edit) + portrait injection.
+- [Runtime & Deployment](./runtime-deployment): shared infrastructure for RLS / Postgres pool / yoyo migrations.
 
-## 相关 AI Plans
+## Related AI Plans
 
-- [Lifelong Memory 系统设计](../plans/2026-06-23-lifelong-memory-system):三层架构 + 六模块地图 + 工具收敛 + evolve 的设计 SSOT(章节即模块)。
-- [Proactive + 卡片生成](../plans/2026-06-23-proactive-card-generation):本 memory 的消费侧(卡片生成 agentic 单 run)。
+- [Lifelong Memory system design](../plans/2026-06-23-lifelong-memory-system): design SSOT for the three-layer architecture + six-module map + tool consolidation + evolve (chapters = modules).
+- [Proactive + card generation](../plans/2026-06-23-proactive-card-generation): the consumer side of this memory (card generation as a single agentic run).

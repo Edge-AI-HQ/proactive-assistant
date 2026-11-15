@@ -1,27 +1,27 @@
 ---
 title: "Internal Reward Dashboard"
-description: "内部卡片 reward review 工具的当前事实。"
+description: "Current facts about the internal card reward review tool."
 ---
 
 # Internal Reward Dashboard
 
-## 结论
+## Summary
 
-`internal-reward-dashboard/` 是 repo 顶层独立 Vite React app,用于内部 review 主动生成的卡片 + 维护**认知范式库 (pattern library)**。它不是主产品前端,也不参与 `proactive-ai-frontend` 的用户体验。
+`internal-reward-dashboard/` is a standalone Vite React app at the top level of the repo, used for internal review of proactively generated cards + maintaining the **cognitive pattern library**. It is not the main product frontend and does not take part in the user experience of `proactive-ai-frontend`.
 
-核心链路:
+Core flow:
 
 `proactive-ai-frontend card open → /api/reward-dashboard/cards/{cardId}/score → pai_card_reward_events`
 
 `internal-reward-dashboard → /api/reward-dashboard/* → pai_pipeline_runs + pai_card_evaluations + pai_card_reward_events + pai_card_casebook + pai_trace_artifacts + pai_card_patterns + pai_card_pattern_demos + pai_card_pattern_hits + pai_user_pattern_pref + pai_user_intent_pref`
 
-Pattern 子链路(matcher → generator → fingerprint 回流):
+Pattern sub-flow (matcher → generator → fingerprint write-back):
 
 `dispatcher → match_patterns(phase1, fingerprint) → agent-engine /agent/generate → persist_generator_run → pai_card_pattern_hits`
 
-`pai_card_reward_events / pai_feedback_events 写入 → fingerprint fan-out → pai_user_pattern_pref + pai_user_intent_pref`
+`pai_card_reward_events / pai_feedback_events write → fingerprint fan-out → pai_user_pattern_pref + pai_user_intent_pref`
 
-`daily pattern_health job → 阈值触发 → pai_card_patterns.status = retired`
+`daily pattern_health job → threshold triggered → pai_card_patterns.status = retired`
 
 ```mermaid
 flowchart LR
@@ -46,140 +46,142 @@ flowchart LR
   HealthJob["pattern_health daily job"] --> Patterns
 ```
 
-## 边界
+## Boundaries
 
-包含:
+Includes:
 
-- 内部 review 页面:`/runs`、`/runs/:runId`、`/cards/:cardId`、`/casebook`、`/traces/:runId`、`/personal-data`。
-- Pattern Studio 页面:`/patterns`、`/patterns/:patternId`、`/patterns/pending`、`/patterns/health`、`/patterns/retired`。
-- 后端 `/api/reward-dashboard/*` 面向内部 dashboard 的读写 API。
-- 用户打开卡片的轻量 reward ledger 事件(`card_open`)。
-- reviewer 1-10 打分、好/坏案例库、LangSmith trace artifact、personal data snapshot。
-- 共享认知 pattern 库 (`pai_card_patterns`) + demo 卡 (`pai_card_pattern_demos`) + 每次 generation 的命中记录 (`pai_card_pattern_hits`)。
-- 每用户的 pattern / intent 行为指纹 (`pai_user_pattern_pref`、`pai_user_intent_pref`),由 reward / feedback 事件 fan-out 自动维护。
-- 每日 pattern health 任务:hit_rate / dismiss_rate / 评估-人工分差,触发阈值自动 retire。
-- AI 抽取的候选 pattern 走 `status = 'pending_review'` 队列,reviewer 在 `/patterns/pending` 审批通过/拒绝。
+- Internal review pages: `/runs`, `/runs/:runId`, `/cards/:cardId`, `/casebook`, `/traces/:runId`, `/personal-data`.
+- Pattern Studio pages: `/patterns`, `/patterns/:patternId`, `/patterns/pending`, `/patterns/health`, `/patterns/retired`.
+- The backend `/api/reward-dashboard/*` read/write API serving the internal dashboard.
+- The lightweight reward ledger event emitted when a user opens a card (`card_open`).
+- Reviewer 1-10 scoring, the good/bad casebook, LangSmith trace artifact, personal data snapshot.
+- The shared cognitive pattern library (`pai_card_patterns`) + demo cards (`pai_card_pattern_demos`) + the hit records of each generation (`pai_card_pattern_hits`).
+- Per-user pattern / intent behavioral fingerprints (`pai_user_pattern_pref`, `pai_user_intent_pref`), maintained automatically by reward / feedback event fan-out.
+- The daily pattern health job: hit_rate / dismiss_rate / evaluator-vs-human score gap; patterns that cross a threshold are retired automatically.
+- AI-extracted candidate patterns go into the `status = 'pending_review'` queue, and reviewers approve/reject them at `/patterns/pending`.
 
-不包含:
+Excludes:
 
-- 主产品 Now Feed、card chat、用户反馈体验,看 [Execution](./execution) 和 [Feedback](./feedback)。
-- generator 如何产卡、如何自评,看 [Generation](./generation)。
-- scheduler 框架本身,看 [Background Tasks](./background-tasks)。
-- memory/raw/signals schema 的业务语义,看 [Memory](./memory)。
+- The main product Now Feed, card chat, and user feedback experience: see [Execution](./execution) and [Feedback](./feedback).
+- How the generator produces cards and self-evaluates: see [Generation](./generation).
+- The scheduler framework itself: see [Background Tasks](./background-tasks).
+- The business semantics of the memory/raw/signals schema: see [Memory](./memory).
 
-## 当前设计
+## Current Design
 
-| 维度 | 当前事实 |
+| Dimension | Current facts |
 |---|---|
-| 前端位置 | `internal-reward-dashboard/` 是独立 Vite app,端口 `3004`,包名 `@pin-ai/internal-reward-dashboard`。不要混进主产品前端(`apps/*` / `packages/*`),也不要默认加入 root npm workspace。 |
-| 登录 | 复用 Supabase Google OAuth,读取 `../backend/.env` 里的 `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY`。 |
-| API 代理 | 本地开发时走 same-origin `/api/*`,Vite 按前缀分流：`/api/reward-dashboard/*` 默认转到 `http://127.0.0.1:8002`，其余 `/api/*` 默认转到 `http://127.0.0.1:8000`。可分别用 `VITE_REWARD_PROXY_TARGET` / `VITE_PIN_API_PROXY_TARGET` 覆盖。 |
-| Fly dev | 独立 Fly app `proactive-ai-reward-dashboard-dev`,默认 URL `https://proactive-ai-reward-dashboard-dev.fly.dev`。**当前 `internal-reward-dashboard/fly.toml` 仍把 `NGINX_UPSTREAM_URL` 和 `NGINX_REWARD_UPSTREAM_URL` 都指到 `https://proactive-ai-agents-dev.fly.dev`**；也就是说本地开发已是双 upstream，Fly dev 静态站点还没切到 `proactive-ai-api-dev` + `proactive-ai-reward-dev`。 |
-| 后端 service | reward 后端是**独立 service** `pinai_reward_dashboard`(`backend/services/reward-dashboard/`),只读产品 DB、零产品代码依赖、不持 master credentials。route 在 `pinai_reward_dashboard/routes.py`,prefix `/api/reward-dashboard`。 |
-| Repository | `backend/services/reward-dashboard/src/pinai_reward_dashboard/reward.py`(`RewardRepository`),必须在 `user_scoped_tx` 内构造,所有查询按 `user_id` scope。 |
-| Reward ledger | `pai_card_reward_events` 是 append-only ledger。`card_open` / `user_score` 来源是 `user`,`reviewer_score` 来源是 `reviewer`,`imported_feedback` 来源是 `system`。 |
-| Casebook | `pai_card_casebook` 存 reviewer 选出的好/坏/惊喜/重复/幻觉/弱来源等案例,用于后续人工分析,不直接改 generation 主链路。 |
-| Trace artifact | `TraceArtifactService` 用 LangSmith metadata `pinai_run_id` 定位 generator root trace,生成可重复渲染的 `trace_tree` / `summary` / SVG。 |
-| Personal data | `/personal-data` 是给 reviewer 查 generator 可见上下文的只读 snapshot,不作为 agent runtime 依赖。 |
-| Pattern library SSOT | `docs/data/patterns.yaml`(157 条 abstract pattern)+ `docs/data/demo_cards.yaml`(157 张 demo)是 checkin 真源;由 `backend/scripts/seed_patterns.py` upsert 到 `pai_card_patterns` / `pai_card_pattern_demos`。每条 pattern 必须带 `human_insight` 和 `title_strategy`;每张 demo 必须带 `card.title` 和具体 `source_data`。新增 / 修改 pattern 改这两个 YAML,跑 seed 即可。 |
-| Pattern 定位(卡片生成 v2 后) | **runtime pattern matcher / phase1 seed / hit 持久化已随 agentic 单 run 重构(PR#228)整体退役**——`pattern_matcher.py` / `phase1_seed.py` / `_persist_pattern_hits` / sandbox `matched_patterns.json` 注入都不存在了。pattern 库重定位为**冷启动 seed / 人工分析语料**;`pai_card_pattern_hits` 表保留(expand-contract),reward-dashboard 只读,新卡不再产 hit。 |
-| Per-user fingerprint | `pai_user_pattern_pref` / `pai_user_intent_pref`,`UserFingerprintRepository.record_open` / `record_dismiss` 由 reward / feedback 事件自动调用;`score_for(pattern, base)` 用 hit_rate × recency_decay 做 per-user 排序,3 次连续 dismiss 触发 `suppress_until`。 |
-| Pattern health | `backend/services/reward-dashboard/src/pinai_reward_dashboard/pattern_health.py`:`hit_rate_7d < 0.15` / `dismiss_rate_30d > 0.6` / `evaluator_human_gap > 3` / 30d 趋势 < -0.5 任一触发就把 active pattern 切 retired。每次跑也会刷新 `base_hit_rate`。 |
-| Pattern 候选抽取 | `POST /api/reward-dashboard/patterns/extract`(`pattern_extractor.py`):AI 从案例抽 pattern 候选,落 `status='pending_review'`。 |
-| Pending review | reviewer 在 `/patterns/pending` 审批 AI 抽取的候选(`status = 'pending_review'`);approve → `active`,reject → 删除。从详情页不能直接 flip pending,会被 UI 拒掉并提示走 pending 流程。 |
+| Frontend location | `internal-reward-dashboard/` is a standalone Vite app, port `3004`, package name `@pin-ai/internal-reward-dashboard`. Don't mix it into the main product frontend (`apps/*` / `packages/*`), and don't add it to the root npm workspace by default. |
+| Login | Reuses Supabase Google OAuth and reads `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY` from `../backend/.env`. |
+| API proxy | In local development requests go through same-origin `/api/*`, and Vite splits traffic by prefix: `/api/reward-dashboard/*` goes to `http://127.0.0.1:8002` by default, all other `/api/*` goes to `http://127.0.0.1:8000` by default. Override them with `VITE_REWARD_PROXY_TARGET` / `VITE_PIN_API_PROXY_TARGET` respectively. |
+| Fly dev | Standalone Fly app `proactive-ai-reward-dashboard-dev`, default URL `https://proactive-ai-reward-dashboard-dev.fly.dev`. **The current `internal-reward-dashboard/fly.toml` still points both `NGINX_UPSTREAM_URL` and `NGINX_REWARD_UPSTREAM_URL` at `https://proactive-ai-agents-dev.fly.dev`**; in other words, local development already uses two upstreams, but the Fly dev static site has not yet been switched to `proactive-ai-api-dev` + `proactive-ai-reward-dev`. |
+| Backend service | The reward backend is a **separate service** `pinai_reward_dashboard` (`backend/services/reward-dashboard/`): read-only product DB, zero dependency on product code, holds no master credentials. Routes are in `pinai_reward_dashboard/routes.py`, prefix `/api/reward-dashboard`. |
+| Repository | `backend/services/reward-dashboard/src/pinai_reward_dashboard/reward.py` (`RewardRepository`); must be constructed inside `user_scoped_tx`, and every query is scoped by `user_id`. |
+| Reward ledger | `pai_card_reward_events` is an append-only ledger. `card_open` / `user_score` have source `user`, `reviewer_score` has source `reviewer`, `imported_feedback` has source `system`. |
+| Casebook | `pai_card_casebook` stores cases that reviewers pick out as good/bad/surprising/duplicate/hallucinated/weak-source, etc., for later manual analysis; it does not directly change the generation main flow. |
+| Trace artifact | `TraceArtifactService` uses the LangSmith metadata `pinai_run_id` to locate the generator root trace and produces a reproducibly renderable `trace_tree` / `summary` / SVG. |
+| Personal data | `/personal-data` is a read-only snapshot for reviewers to inspect the context visible to the generator; it is not an agent runtime dependency. |
+| Pattern library SSOT | `docs/data/patterns.yaml` (157 abstract patterns) + `docs/data/demo_cards.yaml` (157 demos) are the checked-in source of truth; `backend/scripts/seed_patterns.py` upserts them into `pai_card_patterns` / `pai_card_pattern_demos`. Every pattern must have `human_insight` and `title_strategy`; every demo must have `card.title` and concrete `source_data`. To add / modify a pattern, edit these two YAML files and run the seed. |
+| Pattern role (after card generation v2) | **The runtime pattern matcher / phase1 seed / hit persistence were retired as a whole with the agentic single-run refactor (PR#228)**: `pattern_matcher.py` / `phase1_seed.py` / `_persist_pattern_hits` / the sandbox `matched_patterns.json` injection no longer exist. The pattern library is repositioned as a **cold-start seed / manual analysis corpus**; the `pai_card_pattern_hits` table is kept (expand-contract), reward-dashboard only reads it, and new cards no longer produce hits. |
+| Per-user fingerprint | `pai_user_pattern_pref` / `pai_user_intent_pref`; `UserFingerprintRepository.record_open` / `record_dismiss` are called automatically by reward / feedback events; `score_for(pattern, base)` uses hit_rate × recency_decay for per-user ranking, and 3 consecutive dismisses trigger `suppress_until`. |
+| Pattern health | `backend/services/reward-dashboard/src/pinai_reward_dashboard/pattern_health.py`: if any of `hit_rate_7d < 0.15` / `dismiss_rate_30d > 0.6` / `evaluator_human_gap > 3` / 30d trend < -0.5 fires, the active pattern is switched to retired. Each run also refreshes `base_hit_rate`. |
+| Pattern candidate extraction | `POST /api/reward-dashboard/patterns/extract` (`pattern_extractor.py`): AI extracts pattern candidates from cases and stores them with `status='pending_review'`. |
+| Pending review | Reviewers approve AI-extracted candidates (`status = 'pending_review'`) at `/patterns/pending`; approve → `active`, reject → delete. Pending can't be flipped directly from the detail page; the UI rejects it and prompts the reviewer to use the pending flow. |
 
-## 页面工作流
+## Page Workflows
 
-| 页面 | 当前职责 |
+> The dashboard UI strings are in Chinese. Button labels and display strings quoted in this doc (such as `Edit`, `Promote to Golden`, `Sensitive value hidden`, `Not saved`) are English translations; search the source for the Chinese originals.
+
+| Page | Current responsibility |
 |---|---|
-| `/runs` | 入口工作台。顶部 metrics strip 看总体规模和风险；主体是可筛选 run table，不再渲染独立的摘要区块。触发生成和 active generation 状态刷新失败只显示局部错误，不阻断历史批次列表，也不清空已有生成中行；历史批次首次加载失败但 active generation 已返回时，也必须继续展示生成中行。active generation 行必须显示 attempts/maxAttempts 和 lastError，不能只给“查看任务日志”这种没有入口的空提示。批次时间字段来自后端时必须容错，坏时间显示 `-`，不能让入口页白屏；日期筛选只接受合法 `YYYY-MM-DD`，坏值按未设置处理。未落库的 active placeholder 不能放行到批次/链路详情，真实落库的空结果或失败批次仍然可以打开详情和 trace。同一筛选条件下的 run 列表刷新失败会保留上一次成功加载的数据并显示局部错误；筛选条件已变化时保留控制区但隐藏旧批次。正常工作台必须提供手动刷新当前批次视图的入口。初始加载失败且没有任何可展示行时，必须保留重新加载、样本库、上下文入口。 |
-| `/runs/:runId` | 逐张评一批卡。展示生成过程摘要、输入来源、四阶段链路说明、卡片正文、证据、用户反馈/reward 数量、evaluator feedback、1-10 reviewer score、casebook editor,并支持复制批次复盘摘要。正常详情页必须提供手动刷新当前批次的入口，尤其用于 score / casebook 保存后刷新失败的恢复。批次时间字段必须容错，坏时间显示 `-` 或“未完成”。初始加载失败时必须保留返回批次列表、查看生成链路、重新加载入口。 |
-| `/cards/:cardId` | 深挖单卡。顶部显示人工判断、评估分差、反馈事件、证据/样本状态;展示卡片正文、写卡依据、为什么现在、建议动作、评估器维度、批次/链路/样本库/上下文复盘动作、可复制的单卡复盘摘要、reward history、产品反馈事件、同 intent 历史卡。正常详情页必须提供手动刷新当前卡片的入口，尤其用于 score / casebook 保存后刷新失败的恢复。奖励事件、反馈事件、相关卡片时间字段必须容错，坏时间显示 `-` 或回退到 run id。初始加载失败时必须保留返回批次列表、样本库、重新加载入口。 |
-| `/traces/:runId` | 看生成链路。展示 LangSmith 绑定、白话摘要、artifact/LangSmith/SVG/阶段完整性检查、批次/首卡/样本库/上下文复盘动作、可复制的链路复盘摘要、四阶段 story、输入和决策、trace SVG;trace missing / failed 时必须显示明确原因。正常链路页必须提供手动刷新入口；已有 trace artifact 后刷新失败时保留旧 trace 并显示局部错误。读取 trace artifact 首次失败时保留返回批次、重新加载、重建链路记录入口,不能只给整页死错误。 |
-| `/casebook` | 样本库。按 label、分数、basket、intent、evaluator gap、时间过滤;顶部显示当前页样本数、正负样本、保存分均值、平均绝对评估分差;支持展开或复制带卡片/批次/链路路径和证据引用的当前页 markdown。移除样本走二次确认，删除失败显示局部错误，不清空当前表格。样本更新时间字段必须容错，坏时间显示 `-`，不能让样本库白屏。同一筛选/分页条件下的刷新失败保留上一次成功加载的数据但禁用复制和导出；筛选或分页已变化时保留控制区但隐藏旧样本。正常样本库页必须提供手动刷新当前页样本的入口。初始加载失败时必须保留返回批次列表、重新加载入口。 |
-| `/personal-data` | 只读 inspect surface。顶部显示总上下文、当前视图、筛选命中和时间范围,提供回评审、样本库、刷新上下文和复制当前视图入口;按 category / 时间 / query 浏览 generator 可见的 profile、memory、signals、raw、devices、connectors 等上下文。概况 overview 刷新失败只降级成局部提示，当前 category 数据能加载时继续显示主表；query / 时间变更时先隐藏旧 overview 计数。上下文时间字段必须容错，坏时间显示 `-`。同一 category / 时间 / query / 分页条件下的刷新失败保留上一次成功加载的数据但禁用复制；筛选或分页已变化时保留控制区但隐藏旧数据。初始加载失败时必须保留返回批次列表、样本库、重新加载入口。 |
-| `/patterns` | Pattern library 入口。按 category / status / surprise / tier / intent 五个 select 过滤;列表首列展示 demo card title,后面紧跟 `human_insight` 和来源数据摘要,宽表必须支持横向滚动;表头右侧 nav 直达 `/patterns/pending`、`/patterns/health`、`/patterns/retired`。点行进 pattern 详情。 |
-| `/patterns/:patternId` | 单 pattern 详情。展示 schema(category / status / tier / intent / surprise / practical / source / base_hit_rate 等 chip) + `human_insight` + Signals required + Trigger DSL + Card Skeleton(含 `title_strategy`) + Specializations + Health 块 (hit_rate_7d / 30d / trend / dismiss_rate / eval-human gap / 7d&30d hits + 退役建议) + Recent Matched Cards (user / card / subtype / opened / reviewer / evaluator / gap / grounding / at,点行进 card 详情) + Demo Cards(展示 `card.title` 和 `source_data`)。`编辑` 按钮把 abstract + human insight + trigger DSL + card skeleton 切成 textarea(JSON 解析失败时本地报错,不发请求);`退役` / `复活` 按钮做 status 切换,**pending_review 状态会被禁用并提示去 `/patterns/pending` 审批**;`晋升 Golden` 从 Recent Matched Cards 里挑最近一次被打开的真实卡(没打开过就挑最新一行),拉 `RewardRepository.get_card_detail` 拿快照后写 `pai_card_pattern_demos(source='golden', redacted=true)`,没有真实命中卡时按钮禁用。 |
-| `/patterns/pending` | 列 `status='pending_review'` 候选 pattern,每行有 `通过 → active` / `拒绝并删除` 按钮。AI 抽取出来的 candidate 默认进 pending_review,reviewer 在这一页过审。 |
-| `/patterns/health` | 全库健康监控。表格按 `should_retire` 升序排,触发阈值的 pattern 显示退役建议 chip(`hit_rate_7d<0.15` / `dismiss_rate>0.6` / `eval-human gap>3` / `declining_trend`)。顶部 `立即运行健康任务` 触发 `POST /patterns/health/run`(刷新 `base_hit_rate` + 自动 retire),完成后显示处理 / 更新 / 退役条数。点行进 pattern 详情。 |
-| `/patterns/retired` | 列 `status='retired'` pattern + 退役时间;`复活 → active` 按钮把 status 切回。 |
-| `/preferences` | 偏好检查页(`PreferencesView`):reviewer 查看选定用户的 preference 事件面。 |
+| `/runs` | Entry workbench. The metrics strip at the top shows overall volume and risk; the body is a filterable run table, and no separate summary block is rendered anymore. Failures to trigger generation or to refresh active generation status only show a local error; they don't block the historical batch list or clear existing in-progress rows; when the first load of historical batches fails but active generation has returned, the in-progress rows must still be shown. Active generation rows must show attempts/maxAttempts and lastError, not just an empty hint like "check the task logs" with no entry point behind it. Batch time fields coming from the backend must be fault-tolerant: bad times show `-` and must not white-screen the entry page; the date filter only accepts a valid `YYYY-MM-DD`, and bad values are treated as unset. Active placeholders that have not been persisted must not be let through to batch/trace detail; batches that were actually persisted with an empty result or a failure can still open detail and trace. When a run list refresh fails under the same filters, the last successfully loaded data is kept and a local error is shown; when the filters have changed, the control area is kept but the old batches are hidden. The normal workbench must provide an entry point to manually refresh the current batch view. When the initial load fails and there are no rows to show, the reload, casebook, and context entry points must be kept. |
+| `/runs/:runId` | Score a batch card by card. Shows the generation process summary, input sources, the four-stage pipeline explanation, card body, evidence, user feedback/reward counts, evaluator feedback, 1-10 reviewer score, casebook editor, and supports copying a batch retrospective summary. The normal detail page must provide an entry point to manually refresh the current batch, especially for recovering when the refresh after a score / casebook save fails. Batch time fields must be fault-tolerant; bad times show `-` or "not finished". When the initial load fails, the back-to-batch-list, view-generation-trace, and reload entry points must be kept. |
+| `/cards/:cardId` | Deep dive into a single card. The top shows the human judgment, evaluator score gap, feedback events, and evidence/casebook-sample status; the page shows the card body, the basis for writing the card, why now, the suggested action, evaluator dimensions, batch/trace/casebook/context retrospective actions, a copyable single-card retrospective summary, reward history, product feedback events, and historical cards with the same intent. The normal detail page must provide an entry point to manually refresh the current card, especially for recovering when the refresh after a score / casebook save fails. Time fields of reward events, feedback events, and related cards must be fault-tolerant; bad times show `-` or fall back to the run id. When the initial load fails, the back-to-batch-list, casebook, and reload entry points must be kept. |
+| `/traces/:runId` | View the generation trace. Shows the LangSmith binding, a plain-language summary, artifact/LangSmith/SVG/stage completeness checks, batch/first-card/casebook/context retrospective actions, a copyable trace retrospective summary, the four-stage story, inputs and decisions, and the trace SVG; when the trace is missing / failed, a clear reason must be shown. The normal trace page must provide a manual refresh entry point; when a refresh fails after a trace artifact already exists, the old trace is kept and a local error is shown. When reading the trace artifact fails the first time, the back-to-batch, reload, and rebuild-trace-record entry points are kept; it must not show only a dead full-page error. |
+| `/casebook` | Casebook. Filter by label, score, basket, intent, evaluator gap, and time; the top shows the number of samples on the current page, positive and negative samples, the mean saved score, and the mean absolute evaluator score gap; supports expanding or copying the current page as markdown with card/batch/trace paths and evidence references. Removing a sample requires a second confirmation; a deletion failure shows a local error and does not clear the current table. Sample update time fields must be fault-tolerant; bad times show `-` and must not white-screen the casebook. When a refresh fails under the same filters/pagination, the last successfully loaded data is kept but copy and export are disabled; when the filters or pagination have changed, the control area is kept but the old samples are hidden. The normal casebook page must provide an entry point to manually refresh the samples on the current page. When the initial load fails, the back-to-batch-list and reload entry points must be kept. |
+| `/personal-data` | Read-only inspect surface. The top shows the total context, current view, filter matches, and time range, with entry points to go back to review, open the casebook, refresh the context, and copy the current view; browse the context visible to the generator, such as profile, memory, signals, raw, devices, connectors, by category / time / query. A failed overview refresh only degrades to a local notice, and when the current category data loads, the main table keeps showing; when query / time changes, the old overview counts are hidden first. Context time fields must be fault-tolerant; bad times show `-`. When a refresh fails under the same category / time / query / pagination, the last successfully loaded data is kept but copy is disabled; when the filters or pagination have changed, the control area is kept but the old data is hidden. When the initial load fails, the back-to-batch-list, casebook, and reload entry points must be kept. |
+| `/patterns` | Pattern library entry. Filter with five selects: category / status / surprise / tier / intent; the first column of the list shows the demo card title, followed by `human_insight` and a summary of the source data, and the wide table must support horizontal scrolling; the nav on the right of the header links directly to `/patterns/pending`, `/patterns/health`, `/patterns/retired`. Click a row to open the pattern detail. |
+| `/patterns/:patternId` | Single pattern detail. Shows the schema (category / status / tier / intent / surprise / practical / source / base_hit_rate and other chips) + `human_insight` + Signals required + Trigger DSL + Card Skeleton (including `title_strategy`) + Specializations + Health block (hit_rate_7d / 30d / trend / dismiss_rate / eval-human gap / 7d&30d hits + retire suggestion) + Recent Matched Cards (user / card / subtype / opened / reviewer / evaluator / gap / grounding / at; click a row to open the card detail) + Demo Cards (showing `card.title` and `source_data`). The `Edit` button turns abstract + human insight + trigger DSL + card skeleton into textareas (when JSON parsing fails it reports a local error and sends no request); the `Retire` / `Revive` buttons toggle status, and **are disabled in the pending_review state with a prompt to approve at `/patterns/pending`**; `Promote to Golden` picks the most recently opened real card from Recent Matched Cards (if none was ever opened, it picks the newest row), pulls a snapshot via `RewardRepository.get_card_detail`, and writes `pai_card_pattern_demos(source='golden', redacted=true)`; the button is disabled when there is no real matched card. |
+| `/patterns/pending` | Lists candidate patterns with `status='pending_review'`; each row has `Approve → active` / `Reject and delete` buttons. AI-extracted candidates go into pending_review by default, and reviewers review them on this page. |
+| `/patterns/health` | Library-wide health monitoring. The table is sorted by `should_retire` ascending; patterns that cross a threshold show a retire-suggestion chip (`hit_rate_7d<0.15` / `dismiss_rate>0.6` / `eval-human gap>3` / `declining_trend`). `Run health job now` at the top triggers `POST /patterns/health/run` (refreshes `base_hit_rate` + auto retire), and when it finishes shows the processed / updated / retired counts. Click a row to open the pattern detail. |
+| `/patterns/retired` | Lists `status='retired'` patterns + retire time; the `Revive → active` button switches the status back. |
+| `/preferences` | Preference inspection page (`PreferencesView`): reviewers view the preference event surface of a selected user. |
 
-`/personal-data` 后端 snapshot 和前端展示/复制都必须递归脱敏 secret-like payload key,包括 `token`、`accessToken`、`refresh_token`、`secret`、`clientSecret`、`api_key`、`apiKey`、`password`、`private_key`、`authorization`、`cookie`、`session`、`credential` 等。`app_state` 的敏感含义可能在 KV 的 `key` 里,后端和前端都必须在 `key` 命中这些模式时脱敏 `value`,并且摘要只能来自脱敏后的结构化 payload 或固定提示。脱敏值显示为 `已隐藏敏感值`,保留字段存在但不能把真实值发到页面或 markdown。
+Both the `/personal-data` backend snapshot and the frontend display/copy must recursively redact secret-like payload keys, including `token`, `accessToken`, `refresh_token`, `secret`, `clientSecret`, `api_key`, `apiKey`, `password`, `private_key`, `authorization`, `cookie`, `session`, `credential`, etc. The sensitive meaning of `app_state` may live in the KV's `key`, so both the backend and the frontend must redact `value` when `key` matches these patterns, and summaries may only come from the redacted structured payload or a fixed notice. Redacted values display as `Sensitive value hidden`; the field's presence is kept, but the real value must never be sent to the page or into markdown.
 
-Card / run / trace 页面里的 raw JSON debug 面板也视为不可信展示边界,必须先走前端共享脱敏 helper 再渲染,不能直接把 API payload `JSON.stringify` 到页面。这里是后端 snapshot 脱敏之外的第二道防线,用于兜住 trace summary、card snapshot 或第三方 metadata 里漏出的 secret-like key。
+Raw JSON debug panels on card / run / trace pages are also treated as an untrusted display boundary: they must go through the shared frontend redaction helper before rendering, and must not `JSON.stringify` the API payload straight onto the page. This is a second line of defense beyond the backend snapshot redaction, a fallback that catches secret-like keys leaking out of trace summary, card snapshot, or third-party metadata.
 
-API client 组 query string 时只允许有限数字和白名单 enum。`NaN` / `Infinity` / 非正 limit / 负 offset 这类异常值必须在本地忽略;run quality、casebook label、personal-data category 这类 enum 即使 TypeScript 类型被绕过,运行时也必须按白名单过滤;casebook score / evaluator gap 筛选只能是 `0..10`,且最低分不能大于最高分。日期区间开始日期不能晚于结束日期。页面上出现越界或矛盾输入时必须显示本地错误并停止请求,不能静默按未筛选加载;metrics 窗口只能是 `1..90` 的整数。分页条数只能使用页面白名单值。手动触发生成的 `cardsToGenerate` 只能是 `1..10` 的整数,异常值回退到后端默认的 `8`。
+When the API client builds a query string, it only allows finite numbers and whitelisted enums. Abnormal values such as `NaN` / `Infinity` / a non-positive limit / a negative offset must be ignored locally; enums such as run quality, casebook label, and personal-data category must be filtered against a whitelist at runtime even if the TypeScript types are bypassed; casebook score / evaluator gap filters can only be `0..10`, and the minimum score can't be greater than the maximum score. The start date of a date range can't be later than the end date. When out-of-range or contradictory input appears on the page, a local error must be shown and the request stopped; it must not silently load as unfiltered; the metrics window can only be an integer in `1..90`. Page sizes may only use the page's whitelisted values. The `cardsToGenerate` of a manually triggered generation can only be an integer in `1..10`; abnormal values fall back to the backend default of `8`.
 
-后端返回的 `total` / 分类计数也按不可信边界处理。页面展示和分页计算只接受有限非负整数,异常值显示为 `0` 或按当前页条目数兜底,不能出现 `NaN` / `Infinity` 或 `1 / NaN` 分页。
+The `total` / category counts returned by the backend are also treated as an untrusted boundary. Page display and pagination math only accept finite non-negative integers; abnormal values display as `0` or fall back to the number of items on the current page; `NaN` / `Infinity` or `1 / NaN` pagination must never appear.
 
-人工评分写入必须是 `1..10` 的有限数字。前端 API client 必须在发请求前拒绝 `NaN` / `Infinity` / 0 / >10;后端 `/cards/{card_id}/score` 对 `user_score` / `reviewer_score` 也必须要求 score 存在且在 `1..10`,并显式拒绝 boolean score,不能让 JSON `true` 被 Python 当成 `1`。只有 `card_open` 可以不传 score 并由后端固定写 `1.0`。
+Human score writes must be finite numbers in `1..10`. The frontend API client must reject `NaN` / `Infinity` / 0 / >10 before sending the request; the backend `/cards/{card_id}/score` must also require the score to be present and in `1..10` for `user_score` / `reviewer_score`, and explicitly reject boolean scores, so that JSON `true` is not treated as `1` by Python. Only `card_open` may omit the score, in which case the backend writes a fixed `1.0`.
 
-复制出的复盘 markdown 必须只写真实可打开的卡片/批次/链路路径。后端返回空 ID 或坏 ID 时,页面路由可以安全回到 `/runs`,但复制文本里要显示 `未保存`,不能把兜底路由当成详情链接。页面里的卡片/批次/链路操作按钮也必须在缺少目标 ID 时禁用,不能让 reviewer 点到兜底页。打分、样本库保存/移除这类写操作缺少卡片 ID 时必须禁用或在 API client 边界拒绝,不能发出坏请求。LangSmith 外链也必须复用 `safeExternalHref`,只接受 `http/https`。
+Copied retrospective markdown must only contain card/batch/trace paths that can actually be opened. When the backend returns an empty or bad ID, the page route may safely fall back to `/runs`, but the copied text must show `Not saved` and must not present the fallback route as a detail link. Card/batch/trace action buttons on the page must also be disabled when the target ID is missing, so reviewers can't land on the fallback page. Write operations such as scoring and casebook save/remove must be disabled, or rejected at the API client boundary, when the card ID is missing; they must not send bad requests. LangSmith external links must also reuse `safeExternalHref`, which accepts only `http/https`.
 
-## API 表面
+## API Surface
 
-| Endpoint | 用途 |
+| Endpoint | Purpose |
 |---|---|
-| `GET /api/reward-dashboard/runs` | run 列表、review 状态、reward/evaluator 汇总、trace 状态。 |
-| `GET /api/reward-dashboard/runs/{run_id}` | 单次 generation 的卡片、evaluation、reward history、casebook、trace。 |
-| `GET /api/reward-dashboard/cards/{card_id}` | 单卡详情、相关历史卡、反馈、trace。 |
-| `POST /api/reward-dashboard/cards/{card_id}/score` | 追加 `card_open` / `user_score` / `reviewer_score` 等 reward event。 |
-| `POST /api/reward-dashboard/cards/{card_id}/casebook` | upsert reviewer casebook entry。 |
-| `DELETE /api/reward-dashboard/cards/{card_id}/casebook` | 删除 casebook entry。 |
-| `GET /api/reward-dashboard/casebook` | 按 label、score、basket、intent、evaluator gap、时间筛 casebook。 |
-| `GET /api/reward-dashboard/runs/{run_id}/trace` | 读取已有 trace artifact;不存在时返回 explicit missing。 |
-| `POST /api/reward-dashboard/runs/{run_id}/trace` | 按需从 LangSmith 生成/刷新 trace artifact。 |
-| `GET /api/reward-dashboard/metrics` | dashboard 时间序列指标。 |
-| `GET /api/reward-dashboard/personal-data` | reviewer inspect 用的 snapshot(`personal_data_snapshot.py`)。reviewer-facing category 名不变,底层已切新架构:profile→`pai_user_settings`+`pai_user_strings`(USER) / goals→`pai_user_strings`(GOALS) / memory + signals→`pai_events` / skills→`pai_skill_index` / world→`pai_world_signal_user_view` / raw→`pai_raw*` / device / connector。 |
-| `GET /api/reward-dashboard/patterns` | 列 pattern,可按 category / status / surprise / tier / intent 筛;`facets` 字段返回分类 + intent 的 distinct 列表给前端 select。 |
-| `GET /api/reward-dashboard/patterns/{pattern_id}` | 单 pattern 详情 + `demos` + `recentHits`(最近 25 行命中)+ `health`(只算这一行,不扫全库)。 |
-| `POST /api/reward-dashboard/patterns/{pattern_id}` | upsert pattern 字段(abstract / human_insight / category / intent / tier / surprise_init / practical_init / signals_required / trigger_dsl / card_skeleton / specializations)。None 字段保持原值。 |
-| `POST /api/reward-dashboard/patterns/{pattern_id}/status` | 切 `active` / `retired`;`retired_at` 自动写 / 清。 |
-| `POST /api/reward-dashboard/patterns/{pattern_id}/demos` | 把一张真实卡(传 `cardId` 让后端拉 `RewardRepository.get_card_detail` 或直接 inline `card` 对象)挂成 pattern 的 demo,`source` 必须是 `golden` / `anti` / `seed`,`redacted` 默认 true。 |
-| `POST /api/reward-dashboard/patterns/extract` | AI 从案例抽取 pattern 候选 → `pending_review`(`pattern_extractor.py`)。 |
-| `GET /api/reward-dashboard/patterns/pending` | 列 `status='pending_review'` 候选。 |
-| `POST /api/reward-dashboard/patterns/pending/{pattern_id}/approve` | pending → active,409 拒绝非 pending 状态。 |
-| `POST /api/reward-dashboard/patterns/pending/{pattern_id}/reject` | pending → 删除(级联删除其 demos),409 拒绝非 pending 状态。 |
-| `GET /api/reward-dashboard/patterns/health` | 全库 health 快照,只读。 |
-| `POST /api/reward-dashboard/patterns/health/run` | 跑一次 daily health 任务(刷 `base_hit_rate` + 自动 retire),返回 `{updates, retires, total}`。 |
+| `GET /api/reward-dashboard/runs` | Run list, review status, reward/evaluator rollups, trace status. |
+| `GET /api/reward-dashboard/runs/{run_id}` | Cards, evaluations, reward history, casebook, and trace of a single generation. |
+| `GET /api/reward-dashboard/cards/{card_id}` | Single card detail, related historical cards, feedback, trace. |
+| `POST /api/reward-dashboard/cards/{card_id}/score` | Append a reward event such as `card_open` / `user_score` / `reviewer_score`. |
+| `POST /api/reward-dashboard/cards/{card_id}/casebook` | Upsert a reviewer casebook entry. |
+| `DELETE /api/reward-dashboard/cards/{card_id}/casebook` | Delete a casebook entry. |
+| `GET /api/reward-dashboard/casebook` | Filter the casebook by label, score, basket, intent, evaluator gap, and time. |
+| `GET /api/reward-dashboard/runs/{run_id}/trace` | Read the existing trace artifact; returns explicit missing when it doesn't exist. |
+| `POST /api/reward-dashboard/runs/{run_id}/trace` | Generate/refresh the trace artifact from LangSmith on demand. |
+| `GET /api/reward-dashboard/metrics` | Dashboard time-series metrics. |
+| `GET /api/reward-dashboard/personal-data` | Snapshot for reviewer inspection (`personal_data_snapshot.py`). The reviewer-facing category names are unchanged, but the underlying sources have been switched to the new architecture: profile→`pai_user_settings`+`pai_user_strings`(USER) / goals→`pai_user_strings`(GOALS) / memory + signals→`pai_events` / skills→`pai_skill_index` / world→`pai_world_signal_user_view` / raw→`pai_raw*` / device / connector. |
+| `GET /api/reward-dashboard/patterns` | List patterns, filterable by category / status / surprise / tier / intent; the `facets` field returns the distinct lists of categories + intents for the frontend selects. |
+| `GET /api/reward-dashboard/patterns/{pattern_id}` | Single pattern detail + `demos` + `recentHits` (the latest 25 hit rows) + `health` (computed for this row only, without scanning the whole library). |
+| `POST /api/reward-dashboard/patterns/{pattern_id}` | Upsert pattern fields (abstract / human_insight / category / intent / tier / surprise_init / practical_init / signals_required / trigger_dsl / card_skeleton / specializations). None fields keep their original values. |
+| `POST /api/reward-dashboard/patterns/{pattern_id}/status` | Switch between `active` / `retired`; `retired_at` is written / cleared automatically. |
+| `POST /api/reward-dashboard/patterns/{pattern_id}/demos` | Attach a real card (pass `cardId` to have the backend pull `RewardRepository.get_card_detail`, or pass an inline `card` object directly) as a demo of the pattern; `source` must be `golden` / `anti` / `seed`, and `redacted` defaults to true. |
+| `POST /api/reward-dashboard/patterns/extract` | AI extracts pattern candidates from cases → `pending_review` (`pattern_extractor.py`). |
+| `GET /api/reward-dashboard/patterns/pending` | List candidates with `status='pending_review'`. |
+| `POST /api/reward-dashboard/patterns/pending/{pattern_id}/approve` | pending → active; returns 409 for non-pending states. |
+| `POST /api/reward-dashboard/patterns/pending/{pattern_id}/reject` | pending → delete (cascade-deletes its demos); returns 409 for non-pending states. |
+| `GET /api/reward-dashboard/patterns/health` | Library-wide health snapshot, read-only. |
+| `POST /api/reward-dashboard/patterns/health/run` | Run the daily health job once (refresh `base_hit_rate` + auto retire); returns `{updates, retires, total}`. |
 
-## 开发入口
+## Development Entry Points
 
-| 改动 | 先看 |
+| Change | Look at first |
 |---|---|
-| dashboard shell / routes | `internal-reward-dashboard/src/app/App.tsx`、`src/routes/*.tsx` |
+| dashboard shell / routes | `internal-reward-dashboard/src/app/App.tsx`, `src/routes/*.tsx` |
 | dashboard API client / types | `internal-reward-dashboard/src/api/reward.ts` |
 | dashboard auth | `internal-reward-dashboard/src/auth/supabase.ts` |
-| shared trace 文本摘要 | `internal-reward-dashboard/src/lib/traceText.ts` |
-| review components | `internal-reward-dashboard/src/components/CasebookEditor.tsx`、`ScoreControl.tsx`、`MetricStrip.tsx` |
+| shared trace text summary | `internal-reward-dashboard/src/lib/traceText.ts` |
+| review components | `internal-reward-dashboard/src/components/CasebookEditor.tsx`, `ScoreControl.tsx`, `MetricStrip.tsx` |
 | backend route | `backend/services/reward-dashboard/src/pinai_reward_dashboard/routes.py` |
 | reward SQL/read model | `backend/services/reward-dashboard/src/pinai_reward_dashboard/reward.py` |
 | personal-data snapshot | `backend/services/reward-dashboard/src/pinai_reward_dashboard/personal_data_snapshot.py` |
 | LangSmith trace artifact | `backend/services/reward-dashboard/src/pinai_reward_dashboard/trace_artifacts.py` |
 | schema (reward) | `backend/db/migrations/042_pai_card_reward_infra.sql` |
 | schema (pattern) | `backend/db/migrations/043_pai_card_patterns.sql` + `046_pai_card_patterns_human_insight.sql` |
-| 用户侧 card open 打点 | 原 Capacitor 前端的 `recordCardOpen` 已随 proactive-ai-frontend 删除(2026-07-09);后端 `/api/reward-dashboard/score`(`card_open`)仍在,新前端(apps/web / apps/mobile)的打点恢复待确认 |
-| Pattern Studio shell | `internal-reward-dashboard/src/routes/PatternsView.tsx`、`PatternDetailView.tsx`、`PatternsPendingView.tsx`、`PatternsHealthView.tsx`、`PatternsRetiredView.tsx` |
-| Pattern SSOT YAML | `docs/data/patterns.yaml`、`docs/data/demo_cards.yaml`(都 checkin) |
-| Pattern seed 脚本 | `backend/scripts/seed_patterns.py` |
-| Pattern repository | `backend/libs/db/src/pinai_db/repositories/patterns.py`(跨 service 共享纯 SQL repo,generation 与 reward-dashboard 共用) |
-| Pattern 候选抽取 | `backend/services/reward-dashboard/src/pinai_reward_dashboard/pattern_extractor.py`(`POST /api/reward-dashboard/patterns/extract`) |
-| Pattern health 服务 | `backend/services/reward-dashboard/src/pinai_reward_dashboard/pattern_health.py` |
-| 行为指纹 | `backend/libs/db/src/pinai_db/repositories/user_fingerprint.py`（跨 service 共享） |
-| Run 持久化(写口) | `backend/services/api/src/pinai_api/domains/generation/pipeline_persistence.py`(matcher/hit/evaluator 逻辑已退役,`final_cards` 是 dashboard 读的主载荷) |
-| Dev auth 旁路 | `backend/services/reward-dashboard/src/pinai_reward_dashboard/auth.py`(reward service 自己的 `current_user`:DEPLOY_ENV=dev + `X-Dev-Auth: pinai-dev-reviewer` header → reviewer 用户 `…d0d1`,本地 reviewer 测 dashboard 用,prod 上死路) + `internal-reward-dashboard/src/api/reward.ts` 自动带 header(DEV build + `localStorage.__devAuthBypass='1'` 或 URL query `?__devAuthBypass=1`)。 |
+| User-side card open tracking | The original Capacitor frontend's `recordCardOpen` was deleted along with proactive-ai-frontend (2026-07-09); the backend `/api/reward-dashboard/score` (`card_open`) still exists; whether the new frontends (apps/web / apps/mobile) will restore the tracking is to be confirmed |
+| Pattern Studio shell | `internal-reward-dashboard/src/routes/PatternsView.tsx`, `PatternDetailView.tsx`, `PatternsPendingView.tsx`, `PatternsHealthView.tsx`, `PatternsRetiredView.tsx` |
+| Pattern SSOT YAML | `docs/data/patterns.yaml`, `docs/data/demo_cards.yaml` (both checked in) |
+| Pattern seed script | `backend/scripts/seed_patterns.py` |
+| Pattern repository | `backend/libs/db/src/pinai_db/repositories/patterns.py` (cross-service shared pure-SQL repo, used by both generation and reward-dashboard) |
+| Pattern candidate extraction | `backend/services/reward-dashboard/src/pinai_reward_dashboard/pattern_extractor.py` (`POST /api/reward-dashboard/patterns/extract`) |
+| Pattern health service | `backend/services/reward-dashboard/src/pinai_reward_dashboard/pattern_health.py` |
+| Behavioral fingerprint | `backend/libs/db/src/pinai_db/repositories/user_fingerprint.py` (shared across services) |
+| Run persistence (write path) | `backend/services/api/src/pinai_api/domains/generation/pipeline_persistence.py` (the matcher/hit/evaluator logic has been retired; `final_cards` is the main payload the dashboard reads) |
+| Dev auth bypass | `backend/services/reward-dashboard/src/pinai_reward_dashboard/auth.py` (the reward service's own `current_user`: DEPLOY_ENV=dev + `X-Dev-Auth: pinai-dev-reviewer` header → reviewer user `…d0d1`, used by local reviewers to test the dashboard, a dead path on prod) + `internal-reward-dashboard/src/api/reward.ts` attaches the header automatically (DEV build + `localStorage.__devAuthBypass='1'` or URL query `?__devAuthBypass=1`). |
 
-## 本地运行
+## Local Run
 
-后端至少要起 `api` 和 `reward-dashboard`。最省事直接:
+The backend needs at least `api` and `reward-dashboard` running. The simplest way:
 
 ```bash
 make up
 make urls
 ```
 
-轻量模式则分开起两个 service:
+In lightweight mode, start the two services separately:
 
 ```bash
 cd backend && uv run uvicorn pinai_api.asgi:app --reload --port 8000
@@ -194,65 +196,65 @@ npm install
 npm run dev -- --host 127.0.0.1 --port 3004
 ```
 
-打开 `http://127.0.0.1:3004/runs`。本地 API 请求走 Vite prefix proxy：`/api/reward-dashboard/*` → `reward-dashboard:8002`，其余 `/api/*` → `api:8000`，浏览器里不需要额外 CORS 配置。
+Open `http://127.0.0.1:3004/runs`. Local API requests go through the Vite prefix proxy: `/api/reward-dashboard/*` → `reward-dashboard:8002`, all other `/api/*` → `api:8000`; no extra CORS configuration is needed in the browser.
 
-不想走 Google OAuth 时(本地 review pattern Studio 用),浏览器 console 跑:
+If you don't want to go through Google OAuth (for reviewing Pattern Studio locally), run this in the browser console:
 
 ```js
 localStorage.setItem('__devAuthBypass', '1');
 location.reload();
 ```
 
-dashboard 会用一个假 Session 跳过 login,API client 自动带 `X-Dev-Auth: pinai-dev-reviewer` header。后端 `current_user` 在 `DEPLOY_ENV=dev` 时认这个 header,落到 deterministic reviewer 用户 `00000000-0000-0000-0000-00000000d0d1`。主产品 Local Hot 模式使用另一个 header (`pinai-local-dev-user`) 和用户 `00000000-0000-0000-0000-00000000d0d0`,两者不要混用。**不要在 prod / test 环境用,后端会直接 401。**
+The dashboard uses a fake Session to skip login, and the API client automatically attaches the `X-Dev-Auth: pinai-dev-reviewer` header. The backend `current_user` accepts this header when `DEPLOY_ENV=dev` and resolves it to the deterministic reviewer user `00000000-0000-0000-0000-00000000d0d1`. The main product's Local Hot mode uses a different header (`pinai-local-dev-user`) and user `00000000-0000-0000-0000-00000000d0d0`; don't mix the two. **Don't use it in prod / test environments; the backend returns 401 directly.**
 
-## Pattern library 工作流
+## Pattern Library Workflow
 
-新增 / 修改 pattern:
+Add / modify a pattern:
 
 ```bash
-# 1. 改 YAML SSOT
+# 1. Edit the YAML SSOT
 vim docs/data/patterns.yaml
 vim docs/data/demo_cards.yaml
 
-# 2. 本地 dry-run 确认 YAML 解析没问题
+# 2. Local dry-run to confirm the YAML parses correctly
 cd backend
 uv run python -m scripts.seed_patterns --dry-run
 
-# 3. upsert 到本地 DB(idempotent,重跑无副作用)
+# 3. upsert into the local DB (idempotent, safe to rerun)
 DATABASE_URL='postgresql://postgres:postgres@localhost:54322/postgres' \
   uv run python -m scripts.seed_patterns
 
-# 4. 校验
+# 4. Verify
 docker compose exec postgres psql -U postgres -d postgres \
   -c "SELECT count(*) FROM pai_card_patterns;"
 ```
 
-生产环境:`seed_patterns.py` 没挂到 fly `release_command`。要往 prod 灌新 pattern,**首选**写一个 SQL migration(`backend/db/migrations/NNN_pattern_<topic>.sql`,用 `INSERT ... ON CONFLICT (id) DO UPDATE`),走 yoyo 自动应用。**禁止**手动连 prod DB 跑 SQL。
+Production: `seed_patterns.py` is not hooked into the fly `release_command`. To load new patterns into prod, the **preferred** way is to write a SQL migration (`backend/db/migrations/NNN_pattern_<topic>.sql`, using `INSERT ... ON CONFLICT (id) DO UPDATE`), which yoyo applies automatically. Connecting to the prod DB manually to run SQL is **forbidden**.
 
-reviewer 日常动作:
+Reviewer daily actions:
 
-| 想做的事 | 走哪儿 |
+| What you want to do | Where to go |
 |---|---|
-| 改某条 pattern 的 abstract / human insight / trigger / card_skeleton | `/patterns/:patternId` → 编辑 → 保存(JSON 解析失败时本地报错,不发请求)。 |
-| 退役一条 pattern | `/patterns/:patternId` → 退役。pending_review 状态不能从这里切。 |
-| 审批 AI 抽出来的候选 pattern | `/patterns/pending` → `通过` / `拒绝并删除`。通过即进 active,下次 generate 立刻可被 matcher 选中。 |
-| 看哪些 pattern 在退化 | `/patterns/health`,顶部 `立即运行健康任务` 触发服务跑一次。 |
-| 把退役 pattern 复活 | `/patterns/retired` → `复活 → active`,或者去详情页 `复活`。 |
-| 把一张真实卡片晋升成 golden demo | `/patterns/:patternId` → `晋升 Golden`,从 Recent Matched Cards 里挑最近被打开的真实卡,后端 `RewardRepository.get_card_detail` 拿快照写 `pai_card_pattern_demos(source='golden', redacted=true)`。 |
+| Edit a pattern's abstract / human insight / trigger / card_skeleton | `/patterns/:patternId` → Edit → Save (when JSON parsing fails it reports a local error and sends no request). |
+| Retire a pattern | `/patterns/:patternId` → Retire. The pending_review state can't be switched from here. |
+| Approve AI-extracted candidate patterns | `/patterns/pending` → `Approve` / `Reject and delete`. Approved patterns go straight to active and can be selected by the matcher on the very next generate. |
+| See which patterns are degrading | `/patterns/health`; `Run health job now` at the top triggers one run of the service. |
+| Revive a retired pattern | `/patterns/retired` → `Revive → active`, or go to the detail page and click `Revive`. |
+| Promote a real card to a golden demo | `/patterns/:patternId` → `Promote to Golden`, which picks the most recently opened real card from Recent Matched Cards; the backend takes a snapshot via `RewardRepository.get_card_detail` and writes `pai_card_pattern_demos(source='golden', redacted=true)`. |
 
-## 部署
+## Deployment
 
-dev 环境是独立 Fly 静态站点:
+The dev environment is a standalone Fly static site:
 
 ```bash
 make deploy-reward-dashboard-dev
 ```
 
-CI/CD 入口是独立 workflow `.github/workflows/internal-reward-dashboard-dev.yml`:PR 只跑 `type-check` / `test` / `build`;push 到 `main` 时,只要 `internal-reward-dashboard/**` 变化,就会从 `backend/.env.dev` 解出 `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY` 作为 build args,再执行 `flyctl deploy --config internal-reward-dashboard/fly.toml --remote-only`。部署后的默认地址是 `https://proactive-ai-reward-dashboard-dev.fly.dev`。注意：**当前 fly.toml 还没把 `/api/reward-dashboard/*` 的 upstream 切到 `proactive-ai-reward-dev`**，如果要让 dev 静态站点真正走拆分后的 reward service，还要补这一步。
+The CI/CD entry point is the standalone workflow `.github/workflows/internal-reward-dashboard-dev.yml`: PRs only run `type-check` / `test` / `build`; on push to `main`, whenever `internal-reward-dashboard/**` changes, it decrypts `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY` from `backend/.env.dev` as build args, then runs `flyctl deploy --config internal-reward-dashboard/fly.toml --remote-only`. The default deployed URL is `https://proactive-ai-reward-dashboard-dev.fly.dev`. Note: **the current fly.toml has not yet switched the upstream of `/api/reward-dashboard/*` to `proactive-ai-reward-dev`**; to make the dev static site actually use the split-out reward service, this step still has to be done.
 
-这个 app 不使用自定义域名,也不复用主产品前端镜像。`internal-reward-dashboard/Dockerfile` 只构建 dashboard 静态产物,运行时 nginx 负责 SPA fallback 和 `/api/*` same-origin proxy。
+This app doesn't use a custom domain and doesn't reuse the main product frontend image. `internal-reward-dashboard/Dockerfile` only builds the dashboard static assets; at runtime nginx handles the SPA fallback and the `/api/*` same-origin proxy.
 
-## 验证方式
+## How to Verify
 
 ```bash
 # dashboard
@@ -272,37 +274,37 @@ cd backend && uv run pytest tests/web/services/test_fingerprint_matching.py
 
 ```
 
-手工验证:
+Manual verification:
 
-- `POST /api/reward-dashboard/score`(`event_type='card_open'`)应写入 `pai_card_reward_events(source='user', score=1)`(原 Capacitor 前端的自动打点已随退役删除,新前端恢复前用 API 直打验证)。
-- 登录 `http://127.0.0.1:3004/runs`,run 列表应能看到真实 generation runs、trace 状态和 evaluator gap。
-- 在 `/runs/:runId` 或 `/cards/:cardId` 打 reviewer score / casebook,刷新后 reward history 和 casebook 状态应保留。
-- 在 `/traces/:runId` 触发 trace 生成;没有 `LANGSMITH_API_KEY` 时应显示 explicit missing,不是空白页。
+- `POST /api/reward-dashboard/score` (`event_type='card_open'`) should write `pai_card_reward_events(source='user', score=1)` (the original Capacitor frontend's automatic tracking was deleted with its retirement; until the new frontends restore it, verify by calling the API directly).
+- Log in to `http://127.0.0.1:3004/runs`; the run list should show real generation runs, trace status, and evaluator gap.
+- Submit a reviewer score / casebook entry on `/runs/:runId` or `/cards/:cardId`; after a refresh, the reward history and casebook state should persist.
+- Trigger trace generation on `/traces/:runId`; without `LANGSMITH_API_KEY` it should show explicit missing, not a blank page.
 
-## 踩坑
+## Gotchas
 
-- 这个 app 是独立 Fly app,不是 `proactive-ai-frontend` 的一个路由。改 dashboard 后看 `.github/workflows/internal-reward-dashboard-dev.yml`,不要去改主前端部署路径。
-- 不要把 `/api/reward-dashboard/*` 当普通用户产品 API 扩散。它走 Supabase JWT,但语义是内部 review/read model。
-- `card_open` 只表示用户打开卡片,默认 score=1;confirm / dismiss / snooze / text feedback 仍写 `pai_feedback_events`,不要复制进 reward ledger。
-- trace 绑定必须靠 generator LangSmith metadata `pinai_run_id`,不要按最近时间窗口猜 trace。
-- personal-data snapshot 是 reviewer inspection surface,不要让 chat/generator runtime 依赖它。
-- reward event 的 `source/event_type` 配对要保持严格,否则 dashboard 指标会混掉用户信号和 reviewer 信号。
-- Pattern 库的真源是 `docs/data/patterns.yaml` + `docs/data/demo_cards.yaml`。直接改 DB 不算数,下次有人重跑 `seed_patterns.py` 会被覆盖。要改 pattern 一律先改 YAML、再跑 seed,或者在 reviewer dashboard 上改后**同步回写 YAML**(目前是手动同步,后续可以加 export 按钮)。这两个 YAML 必须保留 `human_insight`、`title_strategy`、demo `card.title` 和 `source_data`,否则 3004 列表会退回到抽象调试视图。
-- **runtime pattern 链路已随卡片生成 v2 退役**(matcher / phase1_seed / hit 持久化 / sandbox 注入全删):pattern 库现在是冷启动 seed / 人工分析语料,不再驱动生成。pattern repo 本身在 `pinai_db.repositories.patterns`(generation 与 reward-dashboard 共用),trust boundary 不变(agent-engine 不 import `pinai_api`,import-linter + banned-api + `scripts/check_trust_boundary.sh` 兜底)。
-- `pai_card_pattern_hits` 是 user-scoped(RLS),`pai_card_patterns` / `pai_card_pattern_demos` 是全用户共享(无 RLS)。hits 表已停写(只剩历史行),query 时不要把全用户 pattern 行误当成单用户 hit。
-- `pai_pipeline_runs` 的 INSERT 必须带 `ON CONFLICT (user_id, id) DO UPDATE`,否则 dispatcher 重试同一 run_id 会撞主键 → 一直失败。
-- pending_review pattern 不能从详情页直接 flip status,UI 已经禁用按钮并提示去 `/patterns/pending`。如果有脚本绕过 UI 直接 SQL flip,审批审计会丢。
-- 编辑 pattern 时 reviewer 输入的 trigger DSL / card_skeleton 是 JSON,前端在提交前先 `JSON.parse` 校验。如果文档需要新增字段,得同步前端 textarea + 后端 `_opt_json_*` 校验。
+- This app is a standalone Fly app, not a route of `proactive-ai-frontend`. After changing the dashboard, look at `.github/workflows/internal-reward-dashboard-dev.yml`; don't change the main frontend's deployment path.
+- Don't spread `/api/reward-dashboard/*` as if it were a regular user-facing product API. It uses Supabase JWT, but its semantics are an internal review/read model.
+- `card_open` only means the user opened a card, with a default score=1; confirm / dismiss / snooze / text feedback still writes to `pai_feedback_events`; don't copy them into the reward ledger.
+- Trace binding must rely on the generator's LangSmith metadata `pinai_run_id`; don't guess the trace from a recent time window.
+- The personal-data snapshot is a reviewer inspection surface; don't let the chat/generator runtime depend on it.
+- Keep the `source/event_type` pairing of reward events strict, otherwise dashboard metrics will mix user signals with reviewer signals.
+- The source of truth for the pattern library is `docs/data/patterns.yaml` + `docs/data/demo_cards.yaml`. Changing the DB directly doesn't count; it will be overwritten the next time someone reruns `seed_patterns.py`. To change a pattern, always edit the YAML first and then run the seed, or edit it in the reviewer dashboard and then **write it back to the YAML** (currently a manual sync; an export button may be added later). These two YAML files must keep `human_insight`, `title_strategy`, demo `card.title` and `source_data`, otherwise the 3004 list falls back to the abstract debug view.
+- **The runtime pattern flow was retired with card generation v2** (matcher / phase1_seed / hit persistence / sandbox injection all deleted): the pattern library is now a cold-start seed / manual analysis corpus and no longer drives generation. The pattern repo itself lives in `pinai_db.repositories.patterns` (used by both generation and reward-dashboard), and the trust boundary is unchanged (agent-engine does not import `pinai_api`, with import-linter + banned-api + `scripts/check_trust_boundary.sh` as the fallback).
+- `pai_card_pattern_hits` is user-scoped (RLS), while `pai_card_patterns` / `pai_card_pattern_demos` are shared across all users (no RLS). The hits table is no longer written to (only historical rows remain); when querying, don't mistake all-user pattern rows for single-user hits.
+- INSERTs into `pai_pipeline_runs` must include `ON CONFLICT (user_id, id) DO UPDATE`, otherwise a dispatcher retry of the same run_id hits the primary key → fails forever.
+- A pending_review pattern can't have its status flipped directly from the detail page; the UI already disables the button and prompts the reviewer to go to `/patterns/pending`. If a script bypasses the UI and flips it directly with SQL, the approval audit is lost.
+- When editing a pattern, the trigger DSL / card_skeleton the reviewer enters is JSON, and the frontend validates it with `JSON.parse` before submitting. If the document needs a new field, the frontend textarea + the backend `_opt_json_*` validation must be updated together.
 
-## 相关模块
+## Related Modules
 
-- [Generation](./generation):`pai_pipeline_runs`、`pai_card_evaluations`、LangSmith metadata 的来源。
-- [Feedback](./feedback):用户 feedback 和 reward ledger 的边界。
-- [Background Tasks](./background-tasks):`generator.manual` / `generator.auto` 任务状态来源。
-- [Runtime & Deployment](./runtime-deployment):本地启动、api 进程和环境变量。
+- [Generation](./generation): source of `pai_pipeline_runs`, `pai_card_evaluations`, and the LangSmith metadata.
+- [Feedback](./feedback): the boundary between user feedback and the reward ledger.
+- [Background Tasks](./background-tasks): source of the `generator.manual` / `generator.auto` task status.
+- [Runtime & Deployment](./runtime-deployment): local startup, the api process, and environment variables.
 
-## 相关 AI Plans
+## Related AI Plans
 
-- [Card Reward Infra + Internal Dashboard](../plans/2026-05-13-card-reward-infra):reward ledger、casebook、trace artifact 和内部评分网页的设计计划。
-- [反馈并入 Main Chat + 高权重偏好](../plans/2026-05-24-feedback-into-main-chat-preferences):dashboard 复用同一个 main chat,让内部人员选定目标用户后以 `internal_operator` 身份补偏好,写进 `pai_preference_records`,来源可见;1-10 reviewer score / casebook 保留但不作为主流程。
-- [Pattern-Driven Card Generation](../plans/2026-05-15-pattern-driven-card-generation):把 dashboard 升级为 Pattern Studio(`/patterns`、`/patterns/:patternId`、`/patterns/pending`、`/patterns/retired`、`/patterns/health` 五个新页面 + run / card detail 加 pattern 信息)。Seed 数据在 `docs/data/patterns.yaml` 和 `docs/data/demo_cards.yaml`。
+- [Card Reward Infra + Internal Dashboard](../plans/2026-05-13-card-reward-infra): design plan for the reward ledger, casebook, trace artifact, and the internal scoring web page.
+- [Feedback Merged into Main Chat + High-Weight Preferences](../plans/2026-05-24-feedback-into-main-chat-preferences): the dashboard reuses the same main chat, letting internal staff pick a target user and add preferences as `internal_operator`, written to `pai_preference_records` with a visible source; the 1-10 reviewer score / casebook are kept but are not part of the main flow.
+- [Pattern-Driven Card Generation](../plans/2026-05-15-pattern-driven-card-generation): upgrades the dashboard to Pattern Studio (five new pages `/patterns`, `/patterns/:patternId`, `/patterns/pending`, `/patterns/retired`, `/patterns/health` + pattern info added to run / card detail). Seed data is in `docs/data/patterns.yaml` and `docs/data/demo_cards.yaml`.

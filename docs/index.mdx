@@ -1,15 +1,15 @@
 ---
-title: "PIN AI 开发文档"
-description: "团队开发和 AI agent 查询的统一入口。"
+title: "PIN AI Developer Docs"
+description: "Single entry point for team development and AI agent lookups."
 ---
 
-# PIN AI 开发文档
+# PIN AI Developer Docs
 
-## 结论
+## Summary
 
-`docs/modules/` 是当前团队开发事实的唯一入口。每个模块只维护一篇当前事实文档，回答三件事：系统现在怎么工作、改代码先看哪里、改完怎么验证。
+`docs/modules/` is the single entry point for the team's current development facts. Each module maintains exactly one current-facts doc, which answers three questions: how the system works now, where to look first before changing code, and how to verify after the change.
 
-`docs/plans/` 只放仍然有用的 AI 设计计划。它不进主导航，只在模块文档底部通过 `相关 AI Plans` 渐进式引用。
+`docs/plans/` holds only AI design plans that are still useful. It is not in the main navigation; plans are referenced progressively only from the `Related AI Plans` section at the bottom of module docs.
 
 ```mermaid
 flowchart LR
@@ -33,25 +33,25 @@ flowchart LR
   Plans -.-> Feedback
 ```
 
-## 当前事实文档
+## Current-Facts Docs
 
-| 文档 | 什么时候看 |
+| Doc | When to read it |
 |---|---|
-| [Data Connectors](./modules/data-connectors) | Composio、device registry、device ingest、connector.init/sync、toolkit 矩阵。 |
-| [Memory](./modules/memory) | `pai_raw_*`、personal/world signals、memory、profile、skill、evolution、pgvector、pinai_sdk。 |
-| [Generation](./modules/generation) | `POST /api/generate`、generator scheduler kind、4 subagent pipeline、evaluator、card persistence、auto-generate。 |
-| [Execution](./modules/execution) | chat-stream、card chat、main_chat / card_execution agent、native tool、Daytona python_exec、browser、Composio side-effect gate。 |
-| [Feedback](./modules/feedback) | `pai_feedback_events`、card action、chat-feedback、intent state、planner 偏置回流。 |
-| [Internal Reward Dashboard](./modules/internal-reward-dashboard) | 内部卡片 review Vite app、reward ledger、reviewer score、casebook、LangSmith trace artifact。 |
-| [Dev Pipeline](./modules/dev-pipeline) | Linear 接需求 → plan → 委派 Codex → scope-aware Fly preview（A 档 cluster）→ 拆;`@部署`/`@拆`、时延、成本、踩坑。 |
-| [Background Tasks](./modules/background-tasks) | `pai_scheduled_tasks` + `pai_scheduled_task_runs`、tick loop、dispatcher kind、lease/heartbeat/retry。 |
-| [Runtime & Deployment](./modules/runtime-deployment) | 本地启动、api/agent-engine/reward-dashboard 三 service、信任边界、Daytona、yoyo migration、LiteLLM、dotenvx、CI/CD、生产规则。 |
+| [Data Connectors](./modules/data-connectors) | Composio, device registry, device ingest, connector.init/sync, toolkit matrix. |
+| [Memory](./modules/memory) | `pai_raw_*`, personal/world signals, memory, profile, skill, evolution, pgvector, pinai_sdk. |
+| [Generation](./modules/generation) | `POST /api/generate`, generator scheduler kind, 4 subagent pipeline, evaluator, card persistence, auto-generate. |
+| [Execution](./modules/execution) | chat-stream, card chat, main_chat / card_execution agent, native tool, Daytona python_exec, browser, Composio side-effect gate. |
+| [Feedback](./modules/feedback) | `pai_feedback_events`, card action, chat-feedback, intent state, feeding biases back into the planner. |
+| [Internal Reward Dashboard](./modules/internal-reward-dashboard) | Internal card review Vite app, reward ledger, reviewer score, casebook, LangSmith trace artifact. |
+| [Dev Pipeline](./modules/dev-pipeline) | Linear intake → plan → delegate to Codex → scope-aware Fly preview (tier A cluster) → teardown; `@deploy`/`@teardown`, latency, cost, gotchas. |
+| [Background Tasks](./modules/background-tasks) | `pai_scheduled_tasks` + `pai_scheduled_task_runs`, tick loop, dispatcher kind, lease/heartbeat/retry. |
+| [Runtime & Deployment](./modules/runtime-deployment) | Local startup, the three services api/agent-engine/reward-dashboard, trust boundary, Daytona, yoyo migration, LiteLLM, dotenvx, CI/CD, production rules. |
 
-## 维护规则
+## Maintenance Rules
 
-- `docs/modules/*.mdx` 是当前事实；`docs/plans/*.mdx` 是可引用的 AI 设计计划。
-- 侧边栏只放 `index` + `modules/*` + `plans/README`(AI Plans 索引页);具体 plan 不进侧边栏,通过索引页或模块文档底部 `相关 AI Plans` 进入。
-- plan 推荐被模块文档的 `相关 AI Plans` 引用;brainstorm 草稿可以先只挂在 `plans/README`。
-- 改模块核心链路时，同步更新对应模块文档。
-- 文档要服务开发：优先写数据流、代码入口、验证命令、踩坑。
-- Mintlify Dashboard 只做发布、搜索和浏览；Git 里的 `docs/` 是唯一真源。
+- `docs/modules/*.mdx` are the current facts; `docs/plans/*.mdx` are referenceable AI design plans.
+- The sidebar contains only `index` + `modules/*` + `plans/README` (the AI Plans index page); individual plans are not in the sidebar and are reached via the index page or the `Related AI Plans` section at the bottom of a module doc.
+- Plans should preferably be referenced from a module doc's `Related AI Plans`; brainstorm drafts may be listed only in `plans/README` at first.
+- When you change a module's core flow, update the corresponding module doc at the same time.
+- Docs exist to serve development: prioritize data flow, code entry points, verification commands, and gotchas.
+- The Mintlify Dashboard is only for publishing, search, and browsing; `docs/` in Git is the single source of truth.
