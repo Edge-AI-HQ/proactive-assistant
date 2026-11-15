@@ -1,8 +1,8 @@
 # Split-app variant of fly.prod.toml's `chat` process group: the UNTRUSTED LLM
 # loop. Holds NO master credentials.
 # Copied from fly.engine.dev.toml; differences: app name (-prod), all URLs
-# (-prod), DEPLOY_ENV='production', Daytona snapshot tag. VM size = 2gb,
-# matching fly.prod.toml's `chat` group.
+# (-prod), DEPLOY_ENV='production', Daytona snapshot tag. VM size = 1gb / 1 cpu,
+# same as fly.engine.test.toml (minimum-cost prod since the 2026-11 rebuild).
 app = 'proactive-ai-engine-prod'
 primary_region = 'iad'
 
@@ -47,6 +47,6 @@ primary_region = 'iad'
 # the api app owns migrations.
 
 [[vm]]
-  memory = '2gb'
+  memory = '1gb'
   cpu_kind = 'shared'
-  cpus = 2
+  cpus = 1
