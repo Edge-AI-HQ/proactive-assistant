@@ -269,6 +269,8 @@ ByteDance / Volcengine ASR 是直接 provider 调用,不进入 LiteLLM token 账
 
 primary region `iad`(部分 dev/test 跨到 `ord`)。Daytona sandbox 不是 fly app。原 proactive-ai-frontend 的三个网页 app(`proactive-ai-frontend-{dev,test,prod}`)已于 2026-07-09 挂起(machines=0 留壳,观察期后销毁);旧单 app `proactive-ai-agents-{dev,prod}` 已停,仅留作回滚。
 
+> **2026-11 现状**:`pin-ai` fly 组织账单逾期,组织下 dev/test/prod 的 app 已全部被删(上表 dev/test 目前不存在)。prod 以同名 app 重建在维护者的 **personal 组织**,Redis 是 personal 下的 `proactive-ai-redis-prod-personal`;CI 用 GitHub **production 环境级** secret `FLY_API_TOKEN`(personal 组织 token,覆盖 repo 级的 pin-ai token)。personal 组织不能加成员,其他人看不到日志;pin-ai 账单处理后可用 `fly apps move` 迁回(Redis 需重建)。
+
 GitHub Actions 入口在 `.github/workflows/`:
 
 | Workflow                            | 触发                             | 做什么                                                                                                       |
