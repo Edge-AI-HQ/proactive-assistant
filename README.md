@@ -128,7 +128,7 @@ docs/                        module docs and design plans
 
 ## Contributing
 
-Issues and pull requests are welcome. This repository is a public mirror of the maintainers' development repository, so accepted pull requests are applied there and arrive here with the next sync; see [CONTRIBUTING.md](CONTRIBUTING.md). Commit messages and PR descriptions are written in English and follow [Conventional Commits](https://www.conventionalcommits.org/). To report a security issue, follow [SECURITY.md](SECURITY.md) instead of opening a public issue.
+This repository is a read-only public mirror of the maintainers' development repository, so pull requests are turned off here. Bug reports and feature requests are welcome as [issues](https://github.com/Edge-AI-HQ/proactive-assistant/issues); see [CONTRIBUTING.md](CONTRIBUTING.md). To report a security issue, follow [SECURITY.md](SECURITY.md) instead of opening a public issue.
 
 ## License
 
