@@ -2,6 +2,10 @@
 
 Thanks for your interest in PIN AI. This guide covers the essentials; [AGENTS.md](AGENTS.md) is the single source of truth for architecture rules, hard constraints and the full command reference.
 
+## How this repository works
+
+This repository is a read-only public mirror. Development happens in the maintainers' private repository, and `main` plus release tags are synced here automatically. Pull requests are still welcome: when a maintainer accepts one, the change is applied in the private repository, shows up here with the next sync, and the pull request is closed with a link to the synced commit. Nothing is merged directly into this repository.
+
 ## Before you start
 
 - For bugs, open an issue with steps to reproduce. For larger changes, open an issue first so we can agree on the approach before you write code.
@@ -10,7 +14,7 @@ Thanks for your interest in PIN AI. This guide covers the essentials; [AGENTS.md
 
 ## Development setup
 
-Follow [Quick start](README.md#quick-start) in the README. [AGENTS.md › Local Development](AGENTS.md#local-development) explains the full Docker stack, running services without Docker, parallel worktrees, and the desktop and iOS builds.
+Follow [Quick start](README.md#quick-start) in the README; it starts from the `.env.example` files, since the maintainers' encrypted env files are not published. [AGENTS.md › Local Development](AGENTS.md#local-development) explains the full Docker stack, running services without Docker, parallel worktrees, and the desktop and iOS builds.
 
 ## Making a change
 
