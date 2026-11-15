@@ -58,7 +58,7 @@ describe("App auth gate", () => {
     useAuthMock.mockReturnValue({
       loading: false,
       session: {},
-      user: { email: "dev@pinai.io", user_metadata: { full_name: "Dev User" } },
+      user: { email: "dev@example.com", user_metadata: { full_name: "Dev User" } },
       signInWithGoogle: vi.fn(),
       signOut: vi.fn(),
     });
@@ -79,7 +79,7 @@ describe("App auth gate", () => {
     useAuthMock.mockReturnValue({
       loading: false,
       session: {},
-      user: { email: "dev@pinai.io", user_metadata: { full_name: "Dev User" } },
+      user: { email: "dev@example.com", user_metadata: { full_name: "Dev User" } },
       signInWithGoogle: vi.fn(),
       signOut: vi.fn(),
     });

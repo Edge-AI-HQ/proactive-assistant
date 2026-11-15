@@ -269,7 +269,7 @@ awaiting_human ──人批准──> merged → preview_down → done
 
 **AWS**（preview 算力）：账号 `832253125089`、region `us-east-1`，经 `aws login` 拿临时凭证、EC2 权限实测可用。⚠️ 临时凭证会过期 + 是 root 账号 key——**整晚跑那晚先 `aws login` 刷新**，后续换 IAM user。
 
-**Linear**：org `Edge AI HQ`（urlKey `edge-ai-hq`）、team key **`EDG`**（issue 编号 `EDG-123`、GitHub magic word 用它）、账号 `smile@pinai.io`。
+**Linear**：org `Edge AI HQ`（urlKey `edge-ai-hq`）、team key **`EDG`**（issue 编号 `EDG-123`、GitHub magic word 用它）。
 - 密钥（在 `.env`）：`LINEAR_API_KEY`（personal）、OAuth app `proactive-ai-dev` 的 `LINEAR_OAUTH_CLIENT_ID` / `LINEAR_OAUTH_CLIENT_SECRET` / `LINEAR_WEBHOOK_SECRET`。
 - **回调/ webhook URL 配置**：`oauthApplicationUpdate` 的 input 支持 `redirectUris` / `webhookUrl` / `webhookEnabled` / `webhookResourceTypes`（已 introspect 验证）。**但** personal API key 缺 `oauth:create` scope，实测 `oauthApplications` 查询返回 403 —— 所以自助配置需要一个带 oauth scope 的 token；否则走 Linear UI 手动粘两个字段。`scripts/wire_linear.py` 做成双模式：有 scope 自动调 API，没有就打印要粘的精确值。详见 `ops/dev-pipeline/MORNING.md`。
 

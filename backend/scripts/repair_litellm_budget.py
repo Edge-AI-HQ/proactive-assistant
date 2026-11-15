@@ -5,7 +5,7 @@ trial budget never refreshed, plan_code out of sync with LiteLLM key).
 
 Usage (inside the api container):
     docker compose exec api uv run python -m scripts.repair_litellm_budget \
-        --email liam.yu0301@gmail.com --plan free
+        --email user@example.com --plan free
 
     # or by supabase UUID (preferred for cross-env stability):
     docker compose exec api uv run python -m scripts.repair_litellm_budget \

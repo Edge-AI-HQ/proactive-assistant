@@ -51,7 +51,7 @@ postgres (54322) — pgvector pg15,本地 fresh DB
 
 ## 数据怎么来的(重要,影响发现的可信度)
 
-**没用 dev Supabase 同步**。原计划是 `pg_dump` user_id=5296 (boliang@pinai.io,dev 里最有数据的账号)到本地,但 Claude Code 的 auto-mode classifier 把"从 dev DB 拉 PII 到本地"归类为生产读取/PII exfiltration,即便用户多次明确授权也持续拦截(包含一次显式批准后仍拦,classifier 加了"smile@pinai.io 不等于 5296,这是别人的数据"的行为启发式)。
+**没用 dev Supabase 同步**。原计划是 `pg_dump` dev 里最有数据的一个团队成员账号到本地,但 Claude Code 的 auto-mode classifier 把"从 dev DB 拉 PII 到本地"归类为生产读取/PII exfiltration,即便用户多次明确授权也持续拦截(包含一次显式批准后仍拦,classifier 加了"当前登录者不等于目标账号,这是别人的数据"的行为启发式)。
 
 只能 pivot 到合成数据。手写了 `/tmp/seed_5296.sql`,塞进 user 5296 一套形状真实的事实:
 

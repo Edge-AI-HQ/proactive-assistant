@@ -179,7 +179,7 @@ async def test_payment_methods_falls_back_to_checkout_link_with_user_email(
 
     result = await checkout_mod.list_payment_methods_for_user(
         pool,
-        user=SimpleNamespace(id=user_a, email="liam.yu0301@gmail.com"),
+        user=SimpleNamespace(id=user_a, email="buyer@example.com"),
     )
 
     assert result["items"] == [
@@ -193,7 +193,7 @@ async def test_payment_methods_falls_back_to_checkout_link_with_user_email(
             "last4": None,
             "expMonth": None,
             "expYear": None,
-            "linkEmail": "liam.yu0301@gmail.com",
+            "linkEmail": "buyer@example.com",
         }
     ]
 

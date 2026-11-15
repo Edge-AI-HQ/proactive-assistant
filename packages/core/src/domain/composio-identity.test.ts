@@ -13,10 +13,10 @@ describe("composio display identity", () => {
   test("extracts Gmail profile emailAddress", () => {
     expect(
       extractComposioDisplayIdentity({
-        emailAddress: "smile@pinai.io",
+        emailAddress: "sam@example.com",
         historyId: "833407",
       }),
-    ).toBe("smile@pinai.io");
+    ).toBe("sam@example.com");
   });
 
   test("reuses Gmail identity for Google-family connectors with empty userInfo", () => {
@@ -25,7 +25,7 @@ describe("composio display identity", () => {
         toolkit: "gmail",
         status: "ACTIVE",
         connectedAccountId: "gmail-1",
-        userInfo: { emailAddress: "smile@pinai.io" },
+        userInfo: { emailAddress: "sam@example.com" },
       },
       {
         toolkit: "googlecalendar",
@@ -35,7 +35,7 @@ describe("composio display identity", () => {
       },
     ];
 
-    expect(resolveComposioConnectionIdentity(connections[1]!, connections)).toBe("smile@pinai.io");
+    expect(resolveComposioConnectionIdentity(connections[1]!, connections)).toBe("sam@example.com");
   });
 
   test("does not expose connected account ids as fallback identity", () => {
