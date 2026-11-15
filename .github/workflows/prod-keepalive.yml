@@ -1,0 +1,23 @@
+name: Prod keepalive
+
+# Daily GET of the prod api /health, which runs `SELECT 1` against the DB.
+#  - keepalive: prod Supabase is on the Free plan, which pauses a project after
+#    7 days without database activity. While the api is up its worker/scheduler
+#    loops already query the DB every few seconds; this is the backstop.
+#  - uptime alert: the run fails (GitHub emails the workflow owner) when the api
+#    is down or /health reports db != ok.
+
+on:
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: GET /health and require db ok
+        run: |
+          body=$(curl -fsS --retry 3 --retry-delay 20 --max-time 30 https://proactive-ai-api-prod.fly.dev/health)
+          echo "$body"
+          grep -q '"db":"ok"' <<<"$body"

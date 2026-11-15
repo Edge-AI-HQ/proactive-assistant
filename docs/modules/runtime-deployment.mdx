@@ -243,6 +243,7 @@ ByteDance / Volcengine ASR 是直接 provider 调用,不进入 LiteLLM token 账
 ## 数据库与迁移
 
 - Postgres,本地 compose 用 `pgvector/pgvector:pg15`,prod 用 Supabase。
+- prod Supabase 自 2026-11 重建起用 **Free 计划**(500MB 库、无备份、连续 7 天无数据库活动会暂停)。api 的 worker / scheduler 每几秒查一次库,api 在跑就不会被判不活跃;`.github/workflows/prod-keepalive.yml` 每天 GET 一次 prod `/health`(内含 `SELECT 1`)兜底,同时在 api 挂掉或 `db != ok` 时让 workflow 失败、GitHub 发邮件。prod fly 规格同步降到 test 规格(api 2gb、engine 1gb/1cpu、reward 与 web `min_machines_running = 0`)。
 - 命名前缀:`pai_*`(用户表 + 业务表,public schema)、LangGraph checkpointer 独占 `langgraph` schema。
 - yoyo migration 配置:`backend/yoyo.ini`(`sources = db/migrations`,`migration_table = pai_yoyo_migration_log`)。
 - 迁移目录:`backend/db/migrations/`,命名 `NNN_<topic>.sql`(触碰 pai schema 的表习惯加 `pai_` 前缀),**只向前,不回滚**。最新 migration 以目录里的最新文件为准,不要依赖本文里写死的旧编号。
@@ -267,6 +268,8 @@ ByteDance / Volcengine ASR 是直接 provider 调用,不进入 LiteLLM token 账
 | LiteLLM                                        | `proactive-ai-litellm-dev`                       | `proactive-ai-litellm-test`                        | `proactive-ai-litellm-prod`                        |
 
 primary region `iad`(部分 dev/test 跨到 `ord`)。Daytona sandbox 不是 fly app。原 proactive-ai-frontend 的三个网页 app(`proactive-ai-frontend-{dev,test,prod}`)已于 2026-07-09 挂起(machines=0 留壳,观察期后销毁);旧单 app `proactive-ai-agents-{dev,prod}` 已停,仅留作回滚。
+
+> **2026-11 现状**:`pin-ai` fly 组织账单逾期,组织下 dev/test/prod 的 app 已全部被删(上表 dev/test 目前不存在)。prod 以同名 app 重建在维护者的 **personal 组织**,Redis 是 personal 下的 `proactive-ai-redis-prod-personal`;CI 用 GitHub **production 环境级** secret `FLY_API_TOKEN`(personal 组织 token,覆盖 repo 级的 pin-ai token)。personal 组织不能加成员,其他人看不到日志;pin-ai 账单处理后可用 `fly apps move` 迁回(Redis 需重建)。
 
 GitHub Actions 入口在 `.github/workflows/`:
 

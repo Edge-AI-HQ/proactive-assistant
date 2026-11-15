@@ -236,7 +236,7 @@ single-app `deploy-agents` job runs and `deploy-agents-split` is skipped.
 `app` → `…-{prod,test}`, all `…-dev` URLs → the env's, `DEPLOY_ENV`
 (`production` / `test`), `PINAI_DAYTONA_SNAPSHOT`
 (`pinai-sandbox:{production,test}`), and VM sizes aligned to the single-app
-`fly.{prod,test}.toml` (prod api = 4gb / engine = 2gb / reward = 1gb; test api =
+`fly.{prod,test}.toml` (prod since the 2026-11 rebuild = test sizes: api = 2gb / engine = 1gb / reward = 1gb, reward + web min 0; test api =
 2gb / engine = 1gb / reward = 1gb). Both envs are activated (test 2026-07-02,
 prod 2026-07-07) — the apps, IPs (api public, engine/reward private v6) and
 scoped-role DSNs (`{ENGINE,REWARD}_DATABASE_URL` in the dotenvx env files)

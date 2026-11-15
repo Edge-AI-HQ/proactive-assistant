@@ -2,7 +2,7 @@
 # (holds master credentials).
 # Copied from fly.api.dev.toml; differences: app name (-prod), all URLs (-prod),
 # DEPLOY_ENV='production', Daytona snapshot tag, and VM size aligned to
-# fly.prod.toml (api = 4gb).
+# fly.api.test.toml (2gb) — prod runs minimum-cost sizing since the 2026-11 rebuild.
 app = 'proactive-ai-api-prod'
 primary_region = 'iad'
 
@@ -55,6 +55,6 @@ primary_region = 'iad'
   strategy = 'rolling'
 
 [[vm]]
-  memory = '4gb'
+  memory = '2gb'
   cpu_kind = 'shared'
   cpus = 2
