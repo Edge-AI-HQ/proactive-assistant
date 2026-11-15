@@ -14,6 +14,7 @@
 </p>
 
 <p align="center">
+  <a href="https://proactive-ai-web-prod.fly.dev"><b>Web app</b></a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="docs/index.mdx">Docs</a> ·
