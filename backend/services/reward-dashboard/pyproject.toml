@@ -2,6 +2,7 @@
 name = "pinai-reward-dashboard"
 version = "0.1.0"
 requires-python = ">=3.12"
+license = "MIT"
 # Internal card-review tool. Trust: it can read the product `pai_*` schema
 # but holds NO master credential (no Supabase secret key / JWT signing /
 # Composio / Stripe / LiteLLM master). It depends only on the shared db leaf

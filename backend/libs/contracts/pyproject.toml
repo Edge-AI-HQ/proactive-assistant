@@ -2,6 +2,7 @@
 name = "pinai-contracts"
 version = "0.1.0"
 requires-python = ">=3.12"
+license = "MIT"
 dependencies = ["pydantic>=2.9.0"]
 
 [build-system]
