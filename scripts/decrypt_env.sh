@@ -26,7 +26,13 @@ dst="$dir/.env"
 tmp="$dir/.env.tmp"
 err="$dir/.env.err"
 
-[ -f "$src" ] || { echo "decrypt_env: $src not found" >&2; exit 1; }
+# No encrypted file (e.g. a clone of the public mirror): use a hand-written .env.
+if [ ! -f "$src" ]; then
+  [ -s "$dst" ] && exit 0
+  echo "decrypt_env: neither $src nor $dst found." >&2
+  echo "  Copy $dir/.env.example to $dst and fill in your own values." >&2
+  exit 1
+fi
 
 # Up to date already? (.env exists, non-empty, at least as new as .env.dev)
 if [ -s "$dst" ] && [ ! "$src" -nt "$dst" ]; then
