@@ -1,9 +1,16 @@
+# dotenvx (runtime secret decryption) is fetched in a throwaway stage. The
+# litellm base is a pinned Wolfi snapshot on a rolling apk repo, so `apk add
+# curl` inside it drifts into package conflicts (2026-11: openssl-4 libcrypto
+# vs the image's openssl-3 owning /etc/ssl/openssl.cnf). The installer pulls the
+# same linux release binary either way.
+FROM alpine:3.20 AS dotenvx
+RUN apk add --no-cache curl && curl -sfS https://dotenvx.sh/install.sh | sh
+
 FROM docker.litellm.ai/berriai/litellm:v1.86.2
 WORKDIR /app
 
-# Install dotenvx for runtime secret decryption
-# LiteLLM base image is Alpine-based, use apk
-RUN apk add --no-cache curl && curl -sfS https://dotenvx.sh/install.sh | sh && apk del curl
+COPY --from=dotenvx /usr/local/bin/dotenvx /usr/local/bin/dotenvx
+RUN dotenvx --version
 
 COPY litellm_config.yaml config.yaml
 
