@@ -30,7 +30,7 @@ async def test_voice_stream_dev_auth_does_not_require_db_pool(monkeypatch):
     monkeypatch.setattr(
         voice_routes,
         "get_web_settings",
-        lambda: SimpleNamespace(deploy_env="dev"),
+        lambda: SimpleNamespace(deploy_env="dev", dev_auth_bypass=True),
     )
     websocket = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
 

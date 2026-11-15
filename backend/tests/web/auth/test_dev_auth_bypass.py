@@ -9,6 +9,7 @@ from pinai_api.platform.auth.user_service import User
 @pytest.fixture(autouse=True)
 def _settings(monkeypatch):
     monkeypatch.setenv("DEPLOY_ENV", "dev")
+    monkeypatch.setenv("DEV_AUTH_BYPASS", "1")
     from pinai_api import config
 
     config.get_web_settings.cache_clear()
@@ -73,6 +74,26 @@ async def test_dev_header_is_ignored_outside_dev(monkeypatch, captured_upserts):
         await deps.current_user(
             authorization=None,
             x_dev_auth="pinai-local-dev-user",
+            pool=object(),
+        )
+
+    assert exc.value.status_code == 401
+    assert captured_upserts == []
+
+
+@pytest.mark.asyncio
+async def test_dev_header_is_ignored_without_explicit_flag(monkeypatch, captured_upserts):
+    # fly dev runs DEPLOY_ENV=dev on a public URL; without the local-only
+    # flag the fixed marker must not authenticate.
+    monkeypatch.delenv("DEV_AUTH_BYPASS")
+    from pinai_api import config
+
+    config.get_web_settings.cache_clear()
+
+    with pytest.raises(HTTPException) as exc:
+        await deps.current_user(
+            authorization=None,
+            x_dev_auth="pinai-dev-reviewer",
             pool=object(),
         )
 

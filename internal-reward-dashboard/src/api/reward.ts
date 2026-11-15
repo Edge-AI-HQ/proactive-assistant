@@ -325,10 +325,10 @@ export function apiErrorMessage(status: number, bodyText: string): string {
   }
 }
 
-// Dev-only marker recognized by the backend `current_user` dep when
-// DEPLOY_ENV=dev. Mirrors `_DEV_AUTH_BYPASS_HEADER_VALUE` in
-// backend/.../web/auth/deps.py. Inert outside DEV builds + outside
-// DEPLOY_ENV=dev backends.
+// Dev-only marker recognized by the backend `current_user` dep only when the
+// local launcher sets DEV_AUTH_BYPASS=1 (plus DEPLOY_ENV=dev). Mirrors
+// `_DEV_AUTH_BYPASS_HEADER_VALUE` in backend/.../platform/auth/deps.py.
+// Inert outside DEV builds and against any deployed backend.
 const DEV_AUTH_BYPASS_VALUE = "pinai-dev-reviewer";
 
 function devAuthBypassActive(): boolean {

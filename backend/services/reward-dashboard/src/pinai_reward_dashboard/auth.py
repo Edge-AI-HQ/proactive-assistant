@@ -15,10 +15,10 @@ process's auth layer, it carries its own self-contained verification:
     product-onboarding concern owned by the api process); the reviewer's
     row is expected to already exist, and a first-touch insert just
     materializes the BIGINT id so the dashboard's user-scoped queries work.
-  * dev-only bypass — under `DEPLOY_ENV=dev`, a fixed `X-Dev-Auth` marker
-    returns a deterministic reviewer identity without a Supabase round-trip
-    (so the dashboard can be exercised locally in a browser). Inert outside
-    dev.
+  * local-only bypass — with `DEV_AUTH_BYPASS` set and `DEPLOY_ENV=dev`, a
+    fixed `X-Dev-Auth` marker returns a deterministic reviewer identity
+    without a Supabase round-trip (so the dashboard can be exercised locally
+    in a browser). Inert unless both are set.
 
 The dashboard's routes scope every query to the resolved `user.id` inside
 `user_scoped_tx`, exactly like the api's UI routes.
@@ -266,12 +266,13 @@ def get_pool(request: Request) -> AsyncConnectionPool:
     return pool
 
 
-# Dev-only short-circuit. Active ONLY when DEPLOY_ENV=dev AND the request
-# carries the fixed reviewer marker header. Lets the internal-reward-dashboard
-# be verified end-to-end in a browser without Supabase OAuth round-trips. The
-# marker is a fixed string rather than a secret because the bypass only fires
-# under DEPLOY_ENV=dev (never on prod/test/fly) and the local dev Postgres is
-# not a production credential surface. Inert in any non-dev environment.
+# Local-only short-circuit. Active ONLY when DEV_AUTH_BYPASS is set AND
+# DEPLOY_ENV=dev AND the request carries the fixed reviewer marker header.
+# Lets the internal-reward-dashboard be verified end-to-end in a browser
+# without Supabase OAuth round-trips. The marker is a fixed string in this
+# public source, so the explicit flag is the real gate: only docker-compose.yml
+# sets it. DEPLOY_ENV=dev alone is NOT enough — fly dev runs DEPLOY_ENV=dev on
+# a public URL and must never honor the header.
 _DEV_AUTH_REVIEWER_HEADER_VALUE = "pinai-dev-reviewer"
 _DEV_AUTH_REVIEWER_EMAIL = "dev-reviewer@local.invalid"
 _DEV_AUTH_REVIEWER_SUB = "00000000-0000-0000-0000-00000000d0d1"
@@ -287,13 +288,15 @@ async def current_user(
     On miss: 401. The upsert is idempotent — first touch creates the row,
     subsequent calls fetch the existing one.
 
-    Dev-only bypass: when DEPLOY_ENV=dev AND the request carries the known
-    `X-Dev-Auth: pinai-dev-reviewer` marker, return a deterministic reviewer
-    without touching Supabase. Inert outside DEPLOY_ENV=dev."""
+    Local-only bypass: when DEV_AUTH_BYPASS is set AND DEPLOY_ENV=dev AND the
+    request carries the known `X-Dev-Auth: pinai-dev-reviewer` marker, return
+    a deterministic reviewer without touching Supabase. Inert unless both are
+    set."""
     settings = get_settings()
     marker = x_dev_auth.strip() if x_dev_auth else None
-    if settings.deploy_env == "dev" and marker == _DEV_AUTH_REVIEWER_HEADER_VALUE:
-        logger.info("dev auth bypass active (DEPLOY_ENV=dev, reviewer)")
+    bypass_enabled = settings.dev_auth_bypass and settings.deploy_env == "dev"
+    if bypass_enabled and marker == _DEV_AUTH_REVIEWER_HEADER_VALUE:
+        logger.info("dev auth bypass active (DEV_AUTH_BYPASS, reviewer)")
         return await _upsert_user_by_supabase_id(
             pool,
             supabase_user_id=_DEV_AUTH_REVIEWER_SUB,

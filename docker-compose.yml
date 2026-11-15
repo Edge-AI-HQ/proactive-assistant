@@ -184,6 +184,9 @@ services:
       # 本 worktree 的 git 分支名（Makefile export）→ /health dev_label，
       # DebugPanel 的 Connected backend 卡靠它分辨手机连的是哪个 worktree。
       PINAI_DEV_LABEL: ${PINAI_DEV_LABEL:-}
+      # Local-only: honor X-Dev-Auth marker headers (platform/auth/deps.py).
+      # Never set in backend/.env.* — those also feed fly secrets.
+      DEV_AUTH_BYPASS: "1"
     ports:
       - "8000"
     healthcheck:
@@ -283,6 +286,8 @@ services:
       # Local superuser DSN; the scoped read-only role is a deploy-time TODO
       # (backend/deploy/fly-split/README.md § DB roles).
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
+      # Local-only: honor the X-Dev-Auth reviewer marker (auth.py).
+      DEV_AUTH_BYPASS: "1"
     ports:
       - "8002"
     healthcheck:

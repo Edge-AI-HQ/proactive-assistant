@@ -35,6 +35,9 @@ class RewardDashboardSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=None, extra="ignore")
 
     deploy_env: str = "dev"
+    # Local-only `X-Dev-Auth` reviewer bypass (auth.py). Honored only with
+    # DEPLOY_ENV=dev; set only by docker-compose.yml, never on fly.
+    dev_auth_bypass: bool = False
 
     # ── DB ──
     # Same `pai_*` schema the api process writes; the dashboard reads it

@@ -170,7 +170,7 @@ Copied retrospective markdown must only contain card/batch/trace paths that can 
 | Pattern health service | `backend/services/reward-dashboard/src/pinai_reward_dashboard/pattern_health.py` |
 | Behavioral fingerprint | `backend/libs/db/src/pinai_db/repositories/user_fingerprint.py` (shared across services) |
 | Run persistence (write path) | `backend/services/api/src/pinai_api/domains/generation/pipeline_persistence.py` (the matcher/hit/evaluator logic has been retired; `final_cards` is the main payload the dashboard reads) |
-| Dev auth bypass | `backend/services/reward-dashboard/src/pinai_reward_dashboard/auth.py` (the reward service's own `current_user`: DEPLOY_ENV=dev + `X-Dev-Auth: pinai-dev-reviewer` header → reviewer user `…d0d1`, used by local reviewers to test the dashboard, a dead path on prod) + `internal-reward-dashboard/src/api/reward.ts` attaches the header automatically (DEV build + `localStorage.__devAuthBypass='1'` or URL query `?__devAuthBypass=1`). |
+| Dev auth bypass | `backend/services/reward-dashboard/src/pinai_reward_dashboard/auth.py` (the reward service's own `current_user`: `DEV_AUTH_BYPASS=1` + `DEPLOY_ENV=dev` + `X-Dev-Auth: pinai-dev-reviewer` header → reviewer user `…d0d1`, used by local reviewers to test the dashboard; only the local docker compose sets the flag, so it is a dead path on every fly environment, including dev) + `internal-reward-dashboard/src/api/reward.ts` attaches the header automatically (DEV build + `localStorage.__devAuthBypass='1'` or URL query `?__devAuthBypass=1`). |
 
 ## Local Run
 
@@ -205,7 +205,7 @@ localStorage.setItem('__devAuthBypass', '1');
 location.reload();
 ```
 
-The dashboard uses a fake Session to skip login, and the API client automatically attaches the `X-Dev-Auth: pinai-dev-reviewer` header. The backend `current_user` accepts this header when `DEPLOY_ENV=dev` and resolves it to the deterministic reviewer user `00000000-0000-0000-0000-00000000d0d1`. The main product's Local Hot mode uses a different header (`pinai-local-dev-user`) and user `00000000-0000-0000-0000-00000000d0d0`; don't mix the two. **Don't use it in prod / test environments; the backend returns 401 directly.**
+The dashboard uses a fake Session to skip login, and the API client automatically attaches the `X-Dev-Auth: pinai-dev-reviewer` header. The backend `current_user` accepts this header only when `DEV_AUTH_BYPASS=1` and `DEPLOY_ENV=dev` (set by `docker-compose.yml` / `scripts/local_dev.sh`, never on fly) and resolves it to the deterministic reviewer user `00000000-0000-0000-0000-00000000d0d1`. The main product's Local Hot mode uses a different header (`pinai-local-dev-user`) and user `00000000-0000-0000-0000-00000000d0d0`; don't mix the two. **It only works against a local backend; every fly environment (dev included) returns 401.**
 
 ## Pattern Library Workflow
 
