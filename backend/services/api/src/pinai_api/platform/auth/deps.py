@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from fastapi import Depends, Header, HTTPException, Request, status
 from psycopg_pool import AsyncConnectionPool
@@ -22,6 +23,9 @@ from psycopg_pool import AsyncConnectionPool
 from .agent_jwt import AgentJWTError, verify_agent_run_jwt
 from .supabase_jwt import JWTVerifyError, verify_supabase_jwt
 from .user_service import User, upsert_user_by_supabase_id
+
+if TYPE_CHECKING:
+    from pinai_api.config import WebSettings
 
 logger = logging.getLogger(__name__)
 
@@ -96,14 +100,14 @@ def get_pool(request: Request) -> AsyncConnectionPool:
     return pool
 
 
-# Dev-only short-circuit. Active ONLY when DEPLOY_ENV=dev AND the request
-# carries an opaque marker header. Lets local product development and the
-# internal-reward-dashboard be verified end-to-end in a browser without
-# Supabase OAuth round-trips. The markers are fixed strings rather than
-# secrets because:
-#   * the bypass only fires under DEPLOY_ENV=dev, never on prod/test/fly
-#   * the local dev Postgres is not exposed as a production credential surface
-# In any non-dev environment the header is ignored entirely.
+# Local-only short-circuit. Active ONLY when DEV_AUTH_BYPASS is set AND
+# DEPLOY_ENV=dev AND the request carries an opaque marker header. Lets local
+# product development and the internal-reward-dashboard be verified
+# end-to-end in a browser without Supabase OAuth round-trips. The markers are
+# fixed strings (they are in this public source), so the explicit flag is the
+# real gate: only the local launchers set it (docker-compose.yml,
+# scripts/local_dev.sh). DEPLOY_ENV=dev alone is NOT enough — fly dev runs
+# DEPLOY_ENV=dev on a public URL and must never honor these headers.
 _DEV_AUTH_LOCAL_USER_HEADER_VALUE = "pinai-local-dev-user"
 _DEV_AUTH_LOCAL_USER_EMAIL = "dev-user@local.invalid"
 _DEV_AUTH_LOCAL_USER_SUB = "00000000-0000-0000-0000-00000000d0d0"
@@ -125,6 +129,10 @@ class _DevAuthIdentity:
     role: str
     supabase_user_id: str
     email: str
+
+
+def _dev_auth_bypass_enabled(settings: WebSettings) -> bool:
+    return settings.dev_auth_bypass and settings.deploy_env == "dev"
 
 
 def _maybe_dev_bypass_marker(value: str | None) -> str | None:
@@ -159,10 +167,10 @@ async def current_user(
     On miss: 401. The user upsert is idempotent — first time a user hits
     this dep we create the row; subsequent calls fetch existing.
 
-    Dev-only bypass: when DEPLOY_ENV=dev AND the request carries a known
-    `X-Dev-Auth` marker, return a deterministic test user without touching
-    Supabase. Used by local product development and the
-    internal-reward-dashboard. Inert outside DEPLOY_ENV=dev.
+    Local-only bypass: when DEV_AUTH_BYPASS is set AND DEPLOY_ENV=dev AND
+    the request carries a known `X-Dev-Auth` marker, return a deterministic
+    test user without touching Supabase. Used by local product development
+    and the internal-reward-dashboard. Inert unless both are set.
     """
     # NOTE: defer the settings import to avoid widening the module-load
     # surface; this keeps the bypass strictly opt-in per request.
@@ -171,8 +179,8 @@ async def current_user(
     settings = get_web_settings()
     bypass_marker = _maybe_dev_bypass_marker(x_dev_auth)
     identity = _dev_auth_identity(bypass_marker)
-    if settings.deploy_env == "dev" and identity is not None:
-        logger.info("dev auth bypass active (DEPLOY_ENV=dev, role=%s)", identity.role)
+    if _dev_auth_bypass_enabled(settings) and identity is not None:
+        logger.info("dev auth bypass active (DEV_AUTH_BYPASS, role=%s)", identity.role)
         return await upsert_user_by_supabase_id(
             pool,
             supabase_user_id=identity.supabase_user_id,

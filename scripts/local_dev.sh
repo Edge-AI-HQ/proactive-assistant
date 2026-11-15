@@ -128,6 +128,7 @@ start_host_processes() {
     . "$ROOT_DIR/backend/.env"
     set +a
     export DEPLOY_ENV=dev
+    export DEV_AUTH_BYPASS=1
     export DATABASE_URL="$PINAI_LOCAL_DATABASE_URL"
     export LITELLM_BASE_URL="$PINAI_LOCAL_LITELLM_BASE_URL"
     export CHAT_INTERNAL_URL="$PINAI_LOCAL_CHAT_URL"

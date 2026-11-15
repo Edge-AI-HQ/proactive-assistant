@@ -14,6 +14,7 @@ from pinai_api.config import get_web_settings
 
 from ...platform.auth.deps import (
     User,
+    _dev_auth_bypass_enabled,
     _dev_auth_identity,
     _maybe_dev_bypass_marker,
     current_user,
@@ -430,7 +431,7 @@ async def _current_user_for_voice_websocket(
 ) -> User:
     settings = get_web_settings()
     identity = _dev_auth_identity(_maybe_dev_bypass_marker(dev_auth))
-    if settings.deploy_env == "dev" and identity is not None:
+    if _dev_auth_bypass_enabled(settings) and identity is not None:
         logger.info("dev auth bypass active for voice stream role=%s", identity.role)
         pool = getattr(websocket.app.state, "pool", None)
         if pool is None:

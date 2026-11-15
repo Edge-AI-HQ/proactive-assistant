@@ -27,6 +27,7 @@ from ...platform.auth.agent_jwt import sign_agent_run_jwt
 from ...platform.auth.deps import (
     _DEV_AUTH_BYPASS_SUB,
     User,
+    _dev_auth_bypass_enabled,
     current_user,
     get_pool,
 )
@@ -44,9 +45,10 @@ router = APIRouter(prefix="/api/operator", tags=["operator"])
 def _is_internal_operator(operator: User) -> bool:
     """True iff this caller may impersonate. Allowlist is comma-separated
     Supabase UUIDs (`INTERNAL_OPERATOR_SUBS`); empty = fail-closed. The
-    dev-bypass reviewer is allowed only under DEPLOY_ENV=dev."""
+    dev-bypass reviewer is allowed only while the local dev auth bypass is
+    enabled (DEV_AUTH_BYPASS + DEPLOY_ENV=dev)."""
     settings = get_web_settings()
-    if settings.deploy_env == "dev" and operator.supabase_user_id == _DEV_AUTH_BYPASS_SUB:
+    if _dev_auth_bypass_enabled(settings) and operator.supabase_user_id == _DEV_AUTH_BYPASS_SUB:
         return True
     allowed = {s.strip() for s in settings.internal_operator_subs.split(",") if s.strip()}
     return operator.supabase_user_id in allowed

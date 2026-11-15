@@ -517,7 +517,7 @@ describe("DataConnections", () => {
             toolkit: "gmail",
             status: "ACTIVE",
             connectedAccountId: "gmail-account",
-            label: "smile@pinai.io",
+            label: "sam@example.com",
             userInfo: null,
           },
         ]}

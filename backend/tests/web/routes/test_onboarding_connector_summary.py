@@ -101,7 +101,7 @@ def test_connector_summary_context_uses_distilled_signal_pack():
             source="gmail",
             occurredAt=f"2026-06-12T10:{idx:02d}:00+00:00",
             title="PR review for Edge-AI-HQ/PIN-AI-ASSISTANT",
-            text="Boliang <boliang@pinai.io> requested review on connector onboarding and CI.",
+            text="Alex <alex@example.com> requested review on connector onboarding and CI.",
         )
         for idx in range(20)
     ]
@@ -111,7 +111,7 @@ def test_connector_summary_context_uses_distilled_signal_pack():
     assert context.item_count == 20
     assert len(context.items) == onboarding_routes.MAX_CONNECTOR_SUMMARY_CONTEXT_ITEMS
     assert context.source_counts == {"gmail": 20}
-    assert "Boliang <boliang@pinai.io>" in context.top_contacts
+    assert "Alex <alex@example.com>" in context.top_contacts
     assert "Edge-AI-HQ/PIN-AI-ASSISTANT" in context.top_contacts
 
 
@@ -121,18 +121,18 @@ def test_connector_summary_context_prioritizes_gmail_participants():
             "id": "gmail-1",
             "source": "gmail",
             "occurred_at": "2026-06-12T10:00:00+00:00",
-            "from_addr": '"Ben Wu (via Google Docs)" <drive-shares-dm-noreply@google.com>',
-            "to_addrs": ["smile@pinai.io"],
+            "from_addr": '"Casey Park (via Google Docs)" <drive-shares-dm-noreply@google.com>',
+            "to_addrs": ["sam@example.com"],
             "cc_addrs": [],
             "subject": "Roadmap doc shared with you",
-            "snippet": "Ben shared the connector roadmap document.",
+            "snippet": "Casey shared the connector roadmap document.",
         },
         {
             "id": "gmail-2",
             "source": "gmail",
             "occurred_at": "2026-06-12T09:00:00+00:00",
-            "from_addr": "Boliang Zhang <boliang@pinai.io>",
-            "to_addrs": ["smile@pinai.io"],
+            "from_addr": "Alex Chen <alex@example.com>",
+            "to_addrs": ["sam@example.com"],
             "cc_addrs": ["read/revise"],
             "subject": "PR review follow-up",
             "snippet": "Discussed PIN AI onboarding review.",
@@ -144,20 +144,20 @@ def test_connector_summary_context_prioritizes_gmail_participants():
         toolkit="gmail",
         items=[item for item in items if item is not None],
         identity=onboarding_routes.ConnectorSummaryIdentity(
-            displayName="Smile",
-            email="smile@pinai.io",
+            displayName="Sam",
+            email="sam@example.com",
         ),
     )
 
-    assert context.top_contacts[:2] == ["Ben Wu", "Boliang Zhang <boliang@pinai.io>"]
-    assert "smile@pinai.io" not in context.top_contacts
+    assert context.top_contacts[:2] == ["Casey Park", "Alex Chen <alex@example.com>"]
+    assert "sam@example.com" not in context.top_contacts
     assert "read/revise" not in context.top_contacts
-    assert "Ben Wu" in context.items[0].participants
+    assert "Casey Park" in context.items[0].participants
 
 
 def test_connector_summary_pins_people_contacts_into_first_section():
     summary = onboarding_routes.OnboardingConnectorSummary(
-        displayName="Smile",
+        displayName="Sam",
         headline="Active work signals.",
         sections=[
             onboarding_routes.OnboardingConnectorSummarySection(
@@ -177,10 +177,10 @@ def test_connector_summary_pins_people_contacts_into_first_section():
 
     updated = onboarding_routes._pin_people_contacts_into_summary(
         summary,
-        ["Kun Peng", "Boliang", "Steven Willinger", "Edge-AI-HQ/PIN-AI-ASSISTANT"],
+        ["Jordan Lee", "Alex", "Taylor Kim", "Edge-AI-HQ/PIN-AI-ASSISTANT"],
     )
 
-    assert updated.sections[0].bullets[0] == "Recent people: Kun Peng, Boliang, Steven Willinger."
+    assert updated.sections[0].bullets[0] == "Recent people: Jordan Lee, Alex, Taylor Kim."
     assert updated.sections[0].bullets[1] == "Top account: Edge-AI-HQ/PIN-AI-ASSISTANT."
 
 
@@ -193,19 +193,19 @@ def test_connector_summary_context_carries_identity_hints():
                 source="gmail",
                 occurredAt="2026-06-12T10:00:00+00:00",
                 title="Welcome",
-                text="Hi Smile, here are the onboarding notes.",
+                text="Hi Sam, here are the onboarding notes.",
             )
         ],
         identity=onboarding_routes.ConnectorSummaryIdentity(
-            displayName="Smile",
-            email="smile@pinai.io",
-            label="smile@pinai.io",
+            displayName="Sam",
+            email="sam@example.com",
+            label="sam@example.com",
         ),
     )
 
-    assert context.identity.display_name == "Smile"
-    assert context.identity.email == "smile@pinai.io"
-    assert context.identity.label == "smile@pinai.io"
+    assert context.identity.display_name == "Sam"
+    assert context.identity.email == "sam@example.com"
+    assert context.identity.label == "sam@example.com"
 
 
 def test_connector_summary_applies_identity_display_name_fallback():
@@ -223,10 +223,10 @@ def test_connector_summary_applies_identity_display_name_fallback():
 
     hydrated = onboarding_routes._apply_identity_fallback(
         summary,
-        onboarding_routes.ConnectorSummaryIdentity(displayName="Smile"),
+        onboarding_routes.ConnectorSummaryIdentity(displayName="Sam"),
     )
 
-    assert hydrated.display_name == "Smile"
+    assert hydrated.display_name == "Sam"
     assert hydrated.headline == summary.headline
 
 
@@ -253,7 +253,7 @@ async def test_connector_summary_uses_gpt5_completion_budget(monkeypatch):
                         {
                             "message": {
                                 "content": (
-                                    '{"displayName":"Smile","headline":"PIN AI found useful work context.",'
+                                    '{"displayName":"Sam","headline":"PIN AI found useful work context.",'
                                     '"sections":[{"title":"Professional Identity","bullets":["Works on connector onboarding."]}],'
                                     '"note":null}'
                                 )
@@ -321,7 +321,7 @@ async def test_connector_summary_posts_recent_items_to_litellm(monkeypatch):
     async def fake_generate(**kwargs):
         captured.update(kwargs)
         return onboarding_routes.OnboardingConnectorSummary(
-            displayName="Boliang Zhang",
+            displayName="Alex Chen",
             headline="PIN AI found early work context from your Gmail.",
             sections=[
                 onboarding_routes.OnboardingConnectorSummarySection(

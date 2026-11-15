@@ -4,7 +4,7 @@ Schema: pai_connector_labels (migration 040).
 PK: (user_id, connected_account_id).
 
 Stores the human-readable label resolved from each connected Composio
-account (e.g. "boliang@pinai.io" for a Gmail connection). Lifecycle:
+account (e.g. "alice@example.com" for a Gmail connection). Lifecycle:
 
   * Resolved + upserted by /api/composio/wait on first ACTIVE transition.
   * Re-resolved by /api/composio/reconnect (user_info can shift).

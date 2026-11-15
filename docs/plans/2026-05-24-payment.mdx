@@ -373,8 +373,8 @@ stripe trigger invoice.paid
 
 | 项 | 处理时机 | 谁做 |
 |---|---|---|
-| Stripe 账号 owner = `regan@pinai.io`(离职) | live mode 上线前 | 团队 admin 在 Stripe Dashboard 操作,或走 Stripe support 改 owner email |
-| 把 `mengli@pinai.io` 加进 Stripe team (Administrator role) | 现在,5 分钟,不 block 开发 | 有 admin 权限的同事 |
+| Stripe 账号 owner 是已离职成员的邮箱 | live mode 上线前 | 团队 admin 在 Stripe Dashboard 操作,或走 Stripe support 改 owner email |
+| 把当前负责支付的同事加进 Stripe team (Administrator role) | 现在,5 分钟,不 block 开发 | 有 admin 权限的同事 |
 | live mode 切换 + 新 webhook endpoint + live key 同步 | prod 部署前 | 实施 prod 部署的人 |
 | iOS Apple External Link Account Entitlement 申请 | App Store 提审时 | mobile team |
 | `web/litellm/client.py` 的实际 API 命名(`update_key` / `reset_key_spend` 是否存在) | 实施 Goal 3 时 verify | 实施者 |

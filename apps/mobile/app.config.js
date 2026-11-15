@@ -66,7 +66,9 @@ module.exports = {
       // focus-status entitlement 2026-07-08 拍板放弃(App ID 不登记该能力,分发
       // 签名会拒;信号价值不抵证书维护成本)。要恢复:App ID 勾 Focus Status +
       // 重发 profile + 此处加回 entitlements["com.apple.developer.focus-status"]=true。
-      appleTeamId: "58AXBDC7K4",
+      // 本地真机签名用自己的 Apple team:在 shell 里 export APPLE_TEAM_ID=<你的TEAMID>
+      // (prebuild 写进 Xcode 工程)。CI 不读这里,build-rn-ios.yml 直接给 xcodebuild 传 DEVELOPMENT_TEAM。
+      appleTeamId: process.env.APPLE_TEAM_ID,
     },
     platforms: ["ios", "web"],
     experiments: {

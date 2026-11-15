@@ -158,9 +158,17 @@ class WebSettings(_BaseAppSettings):
     # impersonation route lives in the shared web process, so `current_user`
     # alone would let any authenticated product user impersonate anyone —
     # this allowlist is the actual gate. Empty = no one may impersonate
-    # (fail-closed), EXCEPT the dev-auth-bypass reviewer under DEPLOY_ENV=dev
-    # so local verification still works.
+    # (fail-closed), EXCEPT the dev-auth-bypass reviewer when the local
+    # bypass below is enabled, so local verification still works.
     internal_operator_subs: str = ""
+
+    # ── Local dev auth bypass ──
+    # Lets fixed `X-Dev-Auth` marker headers stand in for a Supabase JWT
+    # (platform/auth/deps.py). Honored only together with DEPLOY_ENV=dev.
+    # Set ONLY by the local launchers (docker-compose.yml,
+    # scripts/local_dev.sh) — never in .env.* or fly toml: fly dev runs
+    # DEPLOY_ENV=dev on a public URL and the marker values are in the source.
+    dev_auth_bypass: bool = False
 
     # ── CORS ──
     # Comma-separated list of origins allowed to call /api/* + /api/agent/*.

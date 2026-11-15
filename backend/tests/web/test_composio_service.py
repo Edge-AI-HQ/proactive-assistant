@@ -147,9 +147,9 @@ async def test_list_connections_no_identity_call(mock_sdk):
 @pytest.mark.parametrize(
     ("toolkit", "raw", "expected"),
     [
-        ("gmail", {"emailAddress": "boliang@pinai.io"}, "boliang@pinai.io"),
+        ("gmail", {"emailAddress": "alice@example.com"}, "alice@example.com"),
         ("gmail", {"email": "fallback@x.com"}, "fallback@x.com"),
-        ("github", {"login": "boliangzhang"}, "boliangzhang"),
+        ("github", {"login": "octocat"}, "octocat"),
         (
             "calendly",
             {"resource": {"email": "user@example.com", "name": "User"}},
@@ -161,14 +161,14 @@ async def test_list_connections_no_identity_call(mock_sdk):
             {"user": {"emailAddress": "g@drive.com", "displayName": "G"}},
             "g@drive.com",
         ),
-        ("googlecalendar", {"id": "boliang@gmail.com", "summary": "boliang"}, "boliang@gmail.com"),
+        ("googlecalendar", {"id": "alice@example.com", "summary": "alice"}, "alice@example.com"),
         (
             "youtube",
             {"items": [{"snippet": {"title": "MyChannel", "customUrl": "@mych"}}]},
             "@mych",
         ),
         ("youtube", {"items": [{"snippet": {"title": "MyChannel"}}]}, "MyChannel"),
-        ("linkedin", {"name": {"first_name": "Boliang", "last_name": "Zhang"}}, "Boliang Zhang"),
+        ("linkedin", {"name": {"first_name": "Alice", "last_name": "Smith"}}, "Alice Smith"),
     ],
 )
 def test_label_extractors(toolkit, raw, expected):
