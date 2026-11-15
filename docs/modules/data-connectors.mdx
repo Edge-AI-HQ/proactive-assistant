@@ -1,16 +1,16 @@
 ---
 title: "Data Connectors"
-description: "Composio、device 注册、mobile ingest 与 connector.preview/init/sync 后台拉取的当前事实。"
+description: "Current facts on Composio, device registration, mobile ingest, and connector.preview/init/sync background fetches."
 ---
 
 # Data Connectors
 
-## 结论
+## Summary
 
-Data Connectors 负责"数据源怎么接进来",不负责后续记忆提炼。两条主链路:
+Data Connectors owns "how data sources get connected in", not the downstream memory distillation. Two main paths:
 
-- **Composio**:用户在前端 OAuth 连 SaaS 账号 → `/api/composio/connect` 立即入队 `connector.preview`(onboarding 快速反馈,后台等 ACTIVE 后只拉最多 50 条并生成 summary cache)→ preview 完成后再入队 `connector.init` → scheduler 派给 `domains/connector/apps/connector_ingest.py` in-process handler → handler 从 Composio 拉一批数据写到 **L0 apps 域表 `pai_raw_apps`**(`119` 按域拆分;所有 toolkit 走 generic upserter,`_resolve_upserter` 恒返回 `generic_ingest.upsert_generic`;typed `pai_raw_<toolkit>` 表已 `118` 全删)→ 调 `project_unprojected` 把新 raw 投影成 L1 `pai_events`(`pending`)→ 同时入一次 once-shot `connector.evolve`(LLM curate 事件 + 蒸馏画像)和一行 recurring `connector.sync`(高频 toolkit cron `*/30 * * * *`,其余按 recipe interval)。`connector.sync` 用 `pai_connector_sync_cursors.last_synced_at` 当 since 下界做增量。
-- **Device / mobile**:用户在前端注册设备拿一次性 token(bcrypt 存 `pai_user_devices`),后续走 `POST /api/devices/ingest`(`X-Device-Id` + `X-Device-Token` 鉴权)。落点由 `domains/connector/device/device_ingest/recipes.py:DEVICE_RECIPES` 决定(P2 recipe 化,typed 时代的 `DEVICE_INGEST_POLICIES`/typed 表已删):所有 kind 统一写单表 `pai_raw_device`(`kind` + `platform` 判别,`124` 前的 `123` 加 platform 列),经 `project_unprojected` 投影成 L1 `pai_events`(location/visit/motion→movement、session_summary→utterance;transcript_window 走 rollup_semantic 卷 episode;apps/contacts 状态类不投影)。
+- **Composio**: the user connects a SaaS account via OAuth in the frontend → `/api/composio/connect` immediately enqueues `connector.preview` (fast onboarding feedback; in the background it waits for ACTIVE, then fetches at most 50 items and builds the summary cache) → after preview finishes it enqueues `connector.init` → the scheduler dispatches it to the in-process handler `domains/connector/apps/connector_ingest.py` → the handler pulls a batch of data from Composio and writes it to the **L0 apps domain table `pai_raw_apps`** (split by domain in `119`; all toolkits go through the generic upserter, `_resolve_upserter` always returns `generic_ingest.upsert_generic`; the typed `pai_raw_<toolkit>` tables were all deleted in `118`) → calls `project_unprojected` to project the new raw rows into L1 `pai_events` (`pending`) → at the same time enqueues one once-shot `connector.evolve` (LLM curates events + distills the portrait) and one recurring `connector.sync` row (high-frequency toolkits use cron `*/30 * * * *`, the rest follow the recipe interval). `connector.sync` uses `pai_connector_sync_cursors.last_synced_at` as the since lower bound for incremental fetches.
+- **Device / mobile**: the user registers a device in the frontend and gets a one-time token (stored bcrypt-hashed in `pai_user_devices`), then uses `POST /api/devices/ingest` (authenticated with `X-Device-Id` + `X-Device-Token`). Where data lands is decided by `domains/connector/device/device_ingest/recipes.py:DEVICE_RECIPES` (recipe-ified in P2; the typed-era `DEVICE_INGEST_POLICIES`/typed tables are deleted): every kind writes to the single table `pai_raw_device` (discriminated by `kind` + `platform`; `123`, before `124`, added the platform column), and is projected via `project_unprojected` into L1 `pai_events` (location/visit/motion→movement, session_summary→utterance; transcript_window is rolled into episodes by rollup_semantic; state-type apps/contacts are not projected).
 
 ```mermaid
 flowchart LR
@@ -23,7 +23,7 @@ flowchart LR
   Wait --> Q
   Q --> Sched["api tick_loop"]
   Sched --> InitH["connector_ingest.run (_run_init)"]
-  InitH --> Raw[("pai_raw_apps (L0 apps 域)")]
+  InitH --> Raw[("pai_raw_apps (L0 apps domain)")]
   Raw --> Proj["project_unprojected"]
   Proj --> Events[("pai_events (L1, pending)")]
   InitH --> Q2[("connector.evolve once + connector.sync schedule")]
@@ -35,69 +35,69 @@ flowchart LR
   Reg --> Devices[("pai_user_devices (bcrypt)")]
   Mobile --> Ingest["/api/devices/ingest"]
   Ingest --> Recipes["resolve_recipe (DEVICE_RECIPES)"]
-  Recipes --> RawDev[("pai_raw_device (L0 device 域)")]
+  Recipes --> RawDev[("pai_raw_device (L0 device domain)")]
   RawDev --> Proj
 ```
 
-## 边界
+## Boundaries
 
-包含:
+In scope:
 
-- Composio API key 状态、连接、断开、reconnect、`/composio/connect` onboarding preview 入队、`/composio/wait` ACTIVE 入队。
-- `connector.preview` / `connector.init` / `connector.sync` 三个 handler 的拉数据→写 raw / signal → 入 evolve / sync schedule 链路。
-- `pai_connector_sync_cursors` 游标推进语义。
-- `domains/connector/apps/ingest_runner.py` + `db/ingest_recipes/*.yaml` 的 recipe 机制。
-- 当前真正能 ingest 的 toolkit 矩阵。
-- `pai_user_devices` 注册、token 轮换、撤销、bcrypt 校验。
-- `domains/connector/device/device_ingest/recipes.py` 的 DEVICE_RECIPES 落点(entity_type / snapshot)和 `sync_mode=full|incremental` 行为。
-- 前端(RN)`apps/mobile/src/components/connect/DataConnections.tsx` / `DeviceConnections.tsx` 及 `apps/mobile/src/lib/devices.ts`。
+- Composio API key status, connect, disconnect, reconnect, the `/composio/connect` onboarding preview enqueue, the `/composio/wait` ACTIVE enqueue.
+- The fetch data → write raw / signal → enqueue evolve / sync schedule chain of the three handlers `connector.preview` / `connector.init` / `connector.sync`.
+- Cursor advance semantics of `pai_connector_sync_cursors`.
+- The recipe mechanism of `domains/connector/apps/ingest_runner.py` + `db/ingest_recipes/*.yaml`.
+- The matrix of toolkits that can actually ingest today.
+- `pai_user_devices` registration, token rotation, revocation, bcrypt verification.
+- The DEVICE_RECIPES landing targets (entity_type / snapshot) in `domains/connector/device/device_ingest/recipes.py` and the `sync_mode=full|incremental` behavior.
+- The frontend (RN) `apps/mobile/src/components/connect/DataConnections.tsx` / `DeviceConnections.tsx` and `apps/mobile/src/lib/devices.ts`.
 
-不包含:
+Out of scope:
 
-- evolve agent 怎么把 `pai_evolution_runs.refs_consumed` 沉淀成 memory / skill,看 [Memory](./memory)。
-- 卡片生成、反馈回流,看 [Generation](./generation) / [Feedback](./feedback)。
-- scheduler 框架本身、`pai_scheduled_tasks` schema,看 [Background Tasks](./background-tasks)。
-- 容器 / 部署 / dotenvx,看 [Runtime & Deployment](./runtime-deployment)。
+- How the evolve agent turns `pai_evolution_runs.refs_consumed` into memory / skill: see [Memory](./memory).
+- Card generation and the feedback return path: see [Generation](./generation) / [Feedback](./feedback).
+- The scheduler framework itself and the `pai_scheduled_tasks` schema: see [Background Tasks](./background-tasks).
+- Containers / deployment / dotenvx: see [Runtime & Deployment](./runtime-deployment).
 
-## 当前连接源
+## Current connection sources
 
-| 来源 | 当前作用 | 代码入口 | 数据落点 |
+| Source | Current role | Code entry point | Where data lands |
 |---|---|---|---|
-| Composio(`/api/composio/*`) | OAuth、ACTIVE 状态、label 展示、入队 connector.preview / connector.init | `domains/connector/apps/composio_ui.py`、`domains/connector/apps/composio_service.py`、`useComposio.ts` | 状态来自 Composio API;label 持久化在 `pai_connector_labels`(eager resolve on /wait,lazy retry on /connections);`/connect` 入队 `connector.preview`;preview 完成后入队 `connector.init`;旧连接 / 无 preview 时 `/wait` 仍会 ACTIVE 入队 init;支持多账号(`allow_multiple=True`) |
-| `connector.preview` handler | onboarding 独立快速反馈 | `domains/connector/apps/connector_ingest.py:_run_preview` | 后台等 ACTIVE,只拉 summary source 最多 50 条,写 raw 后生成 `pai_onboarding_connector_summary_cache`;同时保证 `connector.init` 入队 |
-| `connector.init` handler | ACTIVE 后首次拉一批 | `domains/connector/apps/connector_ingest.py:_run_init` | `pai_raw_apps` → `project_unprojected` 投影 `pai_events`(pending) + 入 `connector.evolve` + 建立 `connector.sync` schedule |
-| `connector.sync` handler | 周期增量拉取(cron `*/30 * * * *`) | `domains/connector/apps/connector_ingest.py:_run_sync` | 同上 raw → projector → events;成功才前推 `pai_connector_sync_cursors.last_synced_at` |
-| Device registry | 给 web / iOS / Android / wearable 等设备发 token | `domains/connector/device/devices_ui.py`、`platform/db/repositories/devices.py` | `pai_user_devices`(`device_token_hash` 是 bcrypt rounds=10) |
-| Device ingest | 接收端侧整理后的 item / snapshot / health observation | `domains/connector/device/devices_ui.py:POST /ingest`、`domains/connector/device/device_ingest/recipes.py`、`domains/connector/device/device_ingest/health.py` | 由 `resolve_recipe(kind)` 决定 entity_type / snapshot 语义,**全部落单表 `pai_raw_device`**(`kind`+`platform` 判别);经 projector 投影 `pai_events`(state 类 apps/contacts 与 transcript_window firehose 除外) |
-| PIN 硬件(MR20 BLE 录音器) | 专属实时转写设备:BLE 音频 → 腾讯 RTASR → 转写入信号流 | `apps/mobile/modules/pin-hardware/`(Expo module)、`apps/mobile/src/ambient/sources/pin-hardware.ts`、`domains/voice/tencent_realtime_asr.py` | `device.pin_hardware_transcript` → recipe `utterance`(与手机语音同待遇进 L1),`device.pin_hardware_state` → `context`;同走 `/api/devices/ingest` 落 `pai_raw_device` |
+| Composio (`/api/composio/*`) | OAuth, ACTIVE status, label display, enqueue connector.preview / connector.init | `domains/connector/apps/composio_ui.py`, `domains/connector/apps/composio_service.py`, `useComposio.ts` | Status comes from the Composio API; labels are persisted in `pai_connector_labels` (eager resolve on /wait, lazy retry on /connections); `/connect` enqueues `connector.preview`; after preview finishes it enqueues `connector.init`; for old connections / no preview, `/wait` still enqueues init on ACTIVE; multiple accounts supported (`allow_multiple=True`) |
+| `connector.preview` handler | standalone fast onboarding feedback | `domains/connector/apps/connector_ingest.py:_run_preview` | Waits for ACTIVE in the background, fetches at most 50 items from the summary source only, writes raw, then generates `pai_onboarding_connector_summary_cache`; also guarantees `connector.init` is enqueued |
+| `connector.init` handler | first batch fetch after ACTIVE | `domains/connector/apps/connector_ingest.py:_run_init` | `pai_raw_apps` → `project_unprojected` projects to `pai_events` (pending) + enqueue `connector.evolve` + create the `connector.sync` schedule |
+| `connector.sync` handler | periodic incremental fetch (cron `*/30 * * * *`) | `domains/connector/apps/connector_ingest.py:_run_sync` | Same as above: raw → projector → events; advances `pai_connector_sync_cursors.last_synced_at` only on success |
+| Device registry | issues tokens to web / iOS / Android / wearable and other devices | `domains/connector/device/devices_ui.py`, `platform/db/repositories/devices.py` | `pai_user_devices` (`device_token_hash` is bcrypt rounds=10) |
+| Device ingest | receives items / snapshots / health observations prepared on-device | `domains/connector/device/devices_ui.py:POST /ingest`, `domains/connector/device/device_ingest/recipes.py`, `domains/connector/device/device_ingest/health.py` | `resolve_recipe(kind)` decides entity_type / snapshot semantics; **everything lands in the single table `pai_raw_device`** (discriminated by `kind`+`platform`); projected via the projector into `pai_events` (except state-type apps/contacts and the transcript_window firehose) |
+| PIN hardware (MR20 BLE recorder) | dedicated real-time transcription device: BLE audio → Tencent RTASR → transcripts into the signal stream | `apps/mobile/modules/pin-hardware/` (Expo module), `apps/mobile/src/ambient/sources/pin-hardware.ts`, `domains/voice/tencent_realtime_asr.py` | `device.pin_hardware_transcript` → recipe `utterance` (enters L1 the same way as phone voice), `device.pin_hardware_state` → `context`; also goes through `/api/devices/ingest` into `pai_raw_device` |
 
-## 当前 Composio toolkit 状态
+## Current Composio toolkit status
 
-**typed 表时代已终结**(`118_drop_typed_raw.sql` 删光 `pai_raw_<toolkit>_<entity>` 与 `_upsert_<tk>` mapper):所有 toolkit 统一经 generic upserter 落 **`pai_raw_apps`**,action / 参数以 `backend/db/ingest_recipes/*.yaml` 为准。存量 recipe 覆盖:gmail / googlecalendar / googledrive / googledocs / googlesheets / slack / github / calendly / linkedin / notion / stripe / youtube + `googlesuper`(fanout 一键连);其余 1000+ toolkit 靠 `recipe_infer` 推断或 connect-only。前端 DataConnections 只把产品主推源列在首屏,全量目录走 catalog。
+**The typed-table era is over** (`118_drop_typed_raw.sql` dropped all `pai_raw_<toolkit>_<entity>` tables and `_upsert_<tk>` mappers): all toolkits go through the generic upserter into **`pai_raw_apps`**; actions / parameters are defined by `backend/db/ingest_recipes/*.yaml`. Existing recipes cover: gmail / googlecalendar / googledrive / googledocs / googlesheets / slack / github / calendly / linkedin / notion / stripe / youtube + `googlesuper` (one-click fanout connect); the remaining 1000+ toolkits rely on `recipe_infer` inference or are connect-only. The frontend DataConnections lists only the product's featured sources on the first screen; the full directory goes through the catalog.
 
-老"9 个主推 toolkit"现在只剩**一个**特殊性:在 `connector_ingest._FAST_CADENCE_TOOLKITS` 名单里,sync 用 `*/30 * * * *` 高频 cron;名单外按 recipe `sync_interval_hours`(默认 12h)。存储、mapper、读取路径与长尾 toolkit 完全一致,没有 typed/generic 之分。
+The old "9 featured toolkits" now have only **one** special property: they are in the `connector_ingest._FAST_CADENCE_TOOLKITS` list, so sync uses the high-frequency cron `*/30 * * * *`; toolkits outside the list follow the recipe's `sync_interval_hours` (default 12h). Storage, mapper, and read path are identical to long-tail toolkits; there is no typed/generic distinction.
 
-## Generic 存储与全量 connector(2026-06)
+## Generic storage and the full connector catalog (2026-06)
 
-所有 Composio connector(主推 + 全量目录 + 自定义)落 **`pai_raw_apps`**(演进:`090` 建 generic `pai_raw_events` → `118` 删 typed 表 → `119` 按域拆成 `pai_raw_apps` / `pai_raw_device` 两张):统一信封列(`user_id/id/toolkit/entity_type/external_id/occurred_at/ingested_at/dedupe_key` + reference 三元组)+ 可选展示列 `title`/`snippet` + 原始 item 全量 `payload JSONB`,`UNIQUE(user_id, toolkit, entity_type, dedupe_key)`。要点:
+All Composio connectors (featured + full directory + custom) land in **`pai_raw_apps`** (evolution: `090` created the generic `pai_raw_events` → `118` deleted the typed tables → `119` split by domain into two tables, `pai_raw_apps` / `pai_raw_device`): unified envelope columns (`user_id/id/toolkit/entity_type/external_id/occurred_at/ingested_at/dedupe_key` + the reference triple) + optional display columns `title`/`snippet` + the full original item in `payload JSONB`, `UNIQUE(user_id, toolkit, entity_type, dedupe_key)`. Key points:
 
-- **通用 mapper/upserter**:`domains/connector/apps/generic_ingest.py`。dedupe_key = `<toolkit>:<entity>:<external_id>`(recipe `id_field`),无 id 时退化 payload sha256;`ON CONFLICT DO UPDATE` 刷新 payload(长尾多为可变实体);无 `timestamp_path` 的行 occurred_at 落 NOW() 且冲突更新时**不**前推(防止永远占住生成窗口)。`content_updated_at`(`124`)只在 payload 真变时 touch——projector 靠它对"已投影但内容已变"的行做 supersede 重投影(改期/编辑在 L1 成链)。
-- **接入点**:`connector_ingest._resolve_upserter` 恒返回 generic(typed `_UPSERTERS` 已删)。init/sync 主体、cursor、evolve 入队全复用。
-- **sync 节奏**:`_FAST_CADENCE_TOOLKITS` 走 `*/30` cron;其余按 recipe `sync_interval_hours` 派生(默认 12h,`_cron_for_interval`),防全量目录打爆 Composio 配额。
-- **读取按域路由**:`domains/connector/apps/raw_agent.py:list_raw` — `raw_sources.py` registry 是 path→(toolkit, entity, domain) 的 SSOT:device 域查 `pai_raw_device`(by kind),其余查 `pai_raw_apps`(by toolkit+entity),信封同形,evolve(Code Mode 读 `client.raw.<tk>.<entity>`)与 generation 零感知。SDK `Raw.list` 对未知 toolkit 透传(服务端 enforcer);自定义 MCP connector(`custom_mcp.py`,`/connect` 带自建 authConfig)也作为 raw 源经 `is_custom_mcp_active` 参与 list。
-- **raw 源发现**:`/api/agent/composio/connections` 每项带 `rawSources`(api 进程读 recipe 算出,fanout 展开),agent-engine 的 `generation_context` 优先消费、静态 map 兜底——不破 api/agent-engine trust boundary。
-- **recipe 推断**:`domains/connector/apps/recipe_infer.py`。无 yaml 的 toolkit 在首次 `connector.init` 时从 Composio tool schema 推断(挑无副作用 list action、推 result_path/id_field/timestamp_path),置信度 high(直接跑)/ mid(dedupe 退化 hash,标记补 yaml)/ 无可读 action → connect_only 降级。手写 yaml 永远优先;进程内缓存,sync 不重复打 meta API。
-- **googlesuper 一键连**:`db/ingest_recipes/googlesuper.yaml` 声明 `fanout: [gmail, googlecalendar, googledrive, googledocs, googlesheets]`——一次 OAuth、一个 cid,init/sync 内部扇出跑五个 sub recipe,五个 sub 全落 `pai_raw_apps`;cursor 按 **sub** toolkit 各自推进,sync schedule 只有一条 `sync.googlesuper.<cid>`,单 sub 失败不拖垮其余。identity 复用 `GMAIL_GET_PROFILE`。与单独连 sub-toolkit 共存,dedupe 天然去重。Slides 目前通过 Drive 文件元数据覆盖,因为 Composio Google Slides 没有批量 list/search action。
-- **全量目录 + 自定义 auth**:`GET /api/composio/catalog`(分页浏览 1000+ toolkit;`connect` 本来就接受任意 slug);`POST /connect` 带 `authConfig: {authScheme, credentials}` 走 `use_custom_auth`(用户自带 OAuth client / API key)。
-- **命令行验收**:`backend/scripts/collector_cli.py` — `catalog`/`infer`/`connect`/`connections`/`ingest`(伪造 task 直调 `connector_ingest.run()`,绕过 scheduler)/`raw`/`evolve`(入队+轮询)/`signals`/`memory`/`pipeline`(一条龙)。后台链路全程不依赖前端;`signals`/`memory` 子命令已改查 `pai_events`(老 `pai_personal_signals`/`pai_memory` 表 `114` DROP 后同步过)。
+- **Generic mapper/upserter**: `domains/connector/apps/generic_ingest.py`. dedupe_key = `<toolkit>:<entity>:<external_id>` (recipe `id_field`), falling back to the payload sha256 when there is no id; `ON CONFLICT DO UPDATE` refreshes the payload (long-tail entities are mostly mutable); rows without `timestamp_path` get occurred_at = NOW(), and it is **not** advanced on conflict update (so they don't occupy the generation window forever). `content_updated_at` (`124`) is touched only when the payload actually changes; the projector uses it to supersede and re-project rows that "were already projected but whose content changed" (reschedules/edits form a chain in L1).
+- **Integration point**: `connector_ingest._resolve_upserter` always returns generic (typed `_UPSERTERS` is deleted). The init/sync body, cursor, and evolve enqueue are all reused.
+- **sync cadence**: `_FAST_CADENCE_TOOLKITS` use the `*/30` cron; the rest derive from recipe `sync_interval_hours` (default 12h, `_cron_for_interval`), to keep the full directory from exhausting the Composio quota.
+- **Reads routed by domain**: `domains/connector/apps/raw_agent.py:list_raw` — the `raw_sources.py` registry is the SSOT for path→(toolkit, entity, domain): the device domain queries `pai_raw_device` (by kind), the rest query `pai_raw_apps` (by toolkit+entity), with the same envelope shape, so evolve (Code Mode reads `client.raw.<tk>.<entity>`) and generation see no difference. SDK `Raw.list` passes unknown toolkits through (server-side enforcer); custom MCP connectors (`custom_mcp.py`, `/connect` with a self-built authConfig) also take part in list as raw sources via `is_custom_mcp_active`.
+- **raw source discovery**: each item from `/api/agent/composio/connections` carries `rawSources` (computed by the api process from recipes, with fanout expanded); agent-engine's `generation_context` consumes it first, with a static map as fallback — this doesn't break the api/agent-engine trust boundary.
+- **recipe inference**: `domains/connector/apps/recipe_infer.py`. Toolkits without a yaml are inferred from the Composio tool schema on the first `connector.init` (pick a side-effect-free list action, infer result_path/id_field/timestamp_path), with confidence high (run directly) / mid (dedupe falls back to hash, flagged for a yaml) / no readable action → downgrade to connect_only. A hand-written yaml always wins; results are cached in-process, so sync doesn't hit the meta API repeatedly.
+- **googlesuper one-click connect**: `db/ingest_recipes/googlesuper.yaml` declares `fanout: [gmail, googlecalendar, googledrive, googledocs, googlesheets]` — one OAuth, one cid; init/sync fan out internally to run five sub recipes, and all five subs land in `pai_raw_apps`; cursors advance per **sub** toolkit, there is only one sync schedule `sync.googlesuper.<cid>`, and a single sub failing doesn't take down the others. identity reuses `GMAIL_GET_PROFILE`. It coexists with connecting sub-toolkits individually; dedupe removes duplicates naturally. Slides is currently covered through Drive file metadata, because Composio Google Slides has no bulk list/search action.
+- **Full directory + custom auth**: `GET /api/composio/catalog` (paginated browsing of 1000+ toolkits; `connect` already accepts any slug); `POST /connect` with `authConfig: {authScheme, credentials}` goes through `use_custom_auth` (the user brings their own OAuth client / API key).
+- **Command-line acceptance**: `backend/scripts/collector_cli.py` — `catalog`/`infer`/`connect`/`connections`/`ingest` (forges a task and calls `connector_ingest.run()` directly, bypassing the scheduler)/`raw`/`evolve` (enqueue + poll)/`signals`/`memory`/`pipeline` (end to end). The backend chain never depends on the frontend; the `signals`/`memory` subcommands now query `pai_events` (updated after the old `pai_personal_signals`/`pai_memory` tables were DROPped in `114`).
 
-migration 历史(raw 存储演进):
-- `036_drop_unused_raw_tables.sql` / `045_drop_twitter_discord_artifacts.sql`:typed 时代清理不在主线的 raw 表与 twitter/discord 残留(Twitter 因 Composio 2026-02 停自有 OAuth credential 下线,Discord 因 server-scoped API 给不出 cross-server 信号)。
-- `090_pai_raw_events.sql` 建 generic 单表 → `118_drop_typed_raw.sql` 把存量 typed 表数据迁入后**全部 DROP**(含 `pai_raw_linkedin_*`)→ `119_split_raw_domain.sql` 按域拆成 `pai_raw_apps` / `pai_raw_device` → `123` 加 device platform 列、`124` 加 apps `content_updated_at`。
+Migration history (raw storage evolution):
+- `036_drop_unused_raw_tables.sql` / `045_drop_twitter_discord_artifacts.sql`: typed-era cleanup of raw tables off the main line and twitter/discord leftovers (Twitter went offline because Composio stopped its own OAuth credential in 2026-02; Discord because the server-scoped API can't provide cross-server signals).
+- `090_pai_raw_events.sql` created the generic single table → `118_drop_typed_raw.sql` migrated the existing typed-table data and then **DROPped all of them** (including `pai_raw_linkedin_*`) → `119_split_raw_domain.sql` split by domain into `pai_raw_apps` / `pai_raw_device` → `123` added the device platform column, `124` added apps `content_updated_at`.
 
-## 核心链路
+## Core flows
 
-### Composio OAuth + 后台 preview/init
+### Composio OAuth + background preview/init
 
 ```mermaid
 sequenceDiagram
@@ -126,21 +126,21 @@ sequenceDiagram
   H-->>Sched: succeeded
 ```
 
-前端连接后不再等待 `/composio/wait` 的返回才继续;popup 关闭后 UI 先回到 onboarding,后台 wait 成功后刷新连接列表。进度轮询用确定性 `preview.<toolkit-lower>.<cid>` / `init.<toolkit-lower>.<cid>` 重建 taskId,reload 也能继续轮询。
+After connecting, the frontend no longer waits for `/composio/wait` to return before continuing; after the popup closes, the UI first returns to onboarding, and the connection list refreshes once the background wait succeeds. Progress polling rebuilds the taskId deterministically from `preview.<toolkit-lower>.<cid>` / `init.<toolkit-lower>.<cid>`, so polling can continue after a reload.
 
-### Onboarding 即时总结
+### Onboarding instant summary
 
-Onboarding 会先进入 Connect data,并在 `/api/composio/connect` 返回时立刻排一个独立 `connector.preview` once task。这个任务后台等 Composio ACTIVE,然后只拉 summary source 的最近最多 50 条,写 raw 后直接生成 `pai_onboarding_connector_summary_cache`;前端 watcher 看到新鲜 `connector.preview` 成功后调用 `POST /api/onboarding/connector-summary`,通常命中 cache。api 进程从 `pai_raw_apps` 读取当前用户最近最多 50 条可读记录,同时带上 connector label / userInfo / 登录邮箱整理出的 identity hints,先蒸馏成一个小的 signal pack(`identity` / `sourceCounts` / `topContacts` / `topTerms` / `dateRange` + 10 条样例),再用 LiteLLM `gpt-5-nano` 生成结构化的 "Here's what we know about you" 页面。Gmail 的 `topContacts` 会显式读取 `from_addr` / `to_addrs` / `cc_addrs`,过滤 self、noreply、bot、mailing-list、路径噪声,并把真实人名 pin 到第一段第一条,避免模型只讲 repo 或 workflow。summary 固定三段:先展示 `Key People & Accounts`,再展示 `Professional Identity`,最后展示 `Communication Style`,每段 2 条,优先把用户最容易感知的人、团队、账号放到最前。`googlesuper`(Google Workspace) 是例外:preview 和 summary 有效数据源固定归一到 `gmail`,其他 Calendar / Drive / Docs / Sheets 仍由后续 `connector.init` fanout 自己拉,不会阻塞 summary。
+Onboarding first enters Connect data, and when `/api/composio/connect` returns it immediately schedules a standalone `connector.preview` once task. This task waits for Composio ACTIVE in the background, then fetches only the most recent items (at most 50) from the summary source, writes raw, and directly generates `pai_onboarding_connector_summary_cache`; when the frontend watcher sees a fresh successful `connector.preview`, it calls `POST /api/onboarding/connector-summary`, which usually hits the cache. The api process reads the current user's most recent readable records (at most 50) from `pai_raw_apps`, together with identity hints assembled from the connector label / userInfo / login email, first distills them into a small signal pack (`identity` / `sourceCounts` / `topContacts` / `topTerms` / `dateRange` + 10 samples), then uses LiteLLM `gpt-5-nano` to generate a structured "Here's what we know about you" page. Gmail's `topContacts` explicitly reads `from_addr` / `to_addrs` / `cc_addrs`, filters out self, noreply, bot, mailing-list, and path noise, and pins real person names to the first item of the first section, so the model doesn't only talk about repos or workflows. The summary has three fixed sections: first `Key People & Accounts`, then `Professional Identity`, and finally `Communication Style`, 2 items each, putting the people, teams, and accounts the user most readily recognizes first. `googlesuper` (Google Workspace) is the exception: the effective data source for preview and summary is always normalized to `gmail`; the other Calendar / Drive / Docs / Sheets are still fetched by the later `connector.init` fanout and don't block the summary.
 
-展示时机是**中间不打断,结束前拦一下**:用户连完 connector 后可以继续 Ambient / 本地模型步骤;summary 在后台生成。用户点最后 Done 时,如果 summary 已生成,先展示结果页;如果还没生成,留在 onboarding 的等待页("PIN AI is learning your context")直到结果回来。用户看完结果页点 Enter PIN AI 后,才调用 `onComplete` 进入主页面。
+The display timing is **no interruption in the middle, one stop before the end**: after connecting a connector the user can continue with the Ambient / local model steps; the summary is generated in the background. When the user taps the final Done, if the summary is ready, the result page is shown first; if not, the user stays on the onboarding wait page ("PIN AI is learning your context") until the result arrives. Only after the user views the result page and taps Enter PIN AI is `onComplete` called to enter the main page.
 
-展示规则是**一次连接动作只打断一次**:前端会先收集当前 ACTIVE connector 的 preview task 状态,再选一个 insight 展示;没有 preview 的旧连接才 fallback 到新鲜 init task。`googlesuper` 作为 Google Workspace 整体优先展示,不会因为 Gmail / Calendar / Drive / Docs / Sheets fanout 跳出多张页面;真正生成 summary 时服务端只读 Gmail raw rows,返回 source 也标记为 `gmail`。如果用户很快连了多个 connector,也只进入一个 insight 页面。
+The display rule is **one interruption per connect action**: the frontend first collects the preview task status of the currently ACTIVE connectors, then picks one insight to show; only old connections without a preview fall back to a fresh init task. `googlesuper` is shown with priority as Google Workspace as a whole, and won't pop up multiple pages because of the Gmail / Calendar / Drive / Docs / Sheets fanout; when actually generating the summary, the server reads only Gmail raw rows and also marks the returned source as `gmail`. If the user connects several connectors in quick succession, they still enter only one insight page.
 
-服务端有一层 summary cache:cache key = `schema version + model + toolkit + connected_account_id + raw fingerprint`。同一批 raw 数据重复进入 onboarding / 刷新 / 前端重复触发时,直接返回 `pai_onboarding_connector_summary_cache.summary`,不再打 LLM。每次请求都会写 `pai_onboarding_connector_summary_runs`,记录 `item_count / collect_ms / llm_ms / total_ms / status(empty|cached|succeeded|failed)` 便于持续观察首轮生成是否能压到 5-6 秒。
+The server has a summary cache layer: cache key = `schema version + model + toolkit + connected_account_id + raw fingerprint`. When the same batch of raw data re-enters onboarding / is refreshed / is triggered repeatedly by the frontend, it returns `pai_onboarding_connector_summary_cache.summary` directly without calling the LLM again. Every request writes to `pai_onboarding_connector_summary_runs`, recording `item_count / collect_ms / llm_ms / total_ms / status(empty|cached|succeeded|failed)`, to keep observing whether first-run generation can be brought down to 5-6 seconds.
 
-这条链路只负责**用户可见的 onboarding 反馈**:不 curate 事件、不写 L2 画像 / skill,也不替代后台 `connector.evolve`。长期沉淀(L1 事件 curate + L2 画像蒸馏)仍由 `connector.init` 入队的 `connector.evolve` 完成。
+This chain is only responsible for **user-visible onboarding feedback**: it doesn't curate events, doesn't write the L2 portrait / skill, and doesn't replace the background `connector.evolve`. Long-term accumulation (L1 event curation + L2 portrait distillation) is still done by the `connector.evolve` enqueued by `connector.init`.
 
-### `connector.sync` 增量
+### `connector.sync` incremental
 
 ```mermaid
 sequenceDiagram
@@ -151,9 +151,9 @@ sequenceDiagram
 
   Sched->>H: dispatch (kind=connector.sync)
   H->>Cur: get cursor (toolkit, cid)
-  alt cursor 存在
+  alt cursor exists
     H->>H: since = cursor.last_synced_at
-  else 首次
+  else first run
     H->>H: since = now - 24h (bootstrap lookback)
   end
   H->>Composio: ingest_runner.run_fetch(..., since)
@@ -163,18 +163,18 @@ sequenceDiagram
     H->>Q: enqueue connector.evolve once
   else inserted == 0
     H->>Cur: upsert last_synced_at = started_at
-    Note right of H: 空 sync 不入 evolve
+    Note right of H: empty sync does not enqueue evolve
   end
 ```
 
-关键点:
+Key points:
 
-- **schedule**:`connector.init` 跑成功才 INSERT ON CONFLICT DO NOTHING 一条 sync 行,`cron '*/30 * * * *'`,`status='active'`。
-- **Cursor**:成功才前推;失败保留旧值,下次 sync 重拉同一窗口(raw 表 `UNIQUE(user_id, dedupe_key)` 自然吸收重复)。
-- **Bootstrap**:首次 sync 没 cursor,回看 24h 补 init 到首次 sync 之间漏的内容。
-- **Per-toolkit since**:由 recipe 的 `since_param` + `since_format` 决定。Gmail 用 `query: after:<unix>`,GCal 用 `time_min: <iso>`,Slack 用 `query: after:YYYY-MM-DD`,GitHub 用 `since=<iso>`,Calendly 用 `min_start_time=<iso>`。在 `ingest_runner.py:_format_since` 集中实现。
+- **schedule**: only when `connector.init` succeeds does it INSERT ON CONFLICT DO NOTHING one sync row, `cron '*/30 * * * *'`, `status='active'`.
+- **Cursor**: advanced only on success; on failure the old value is kept and the next sync re-fetches the same window (the raw table's `UNIQUE(user_id, dedupe_key)` absorbs duplicates naturally).
+- **Bootstrap**: the first sync has no cursor, so it looks back 24h to fill in content missed between init and the first sync.
+- **Per-toolkit since**: decided by the recipe's `since_param` + `since_format`. Gmail uses `query: after:<unix>`, GCal uses `time_min: <iso>`, Slack uses `query: after:YYYY-MM-DD`, GitHub uses `since=<iso>`, Calendly uses `min_start_time=<iso>`. Implemented centrally in `ingest_runner.py:_format_since`.
 
-### Device 注册 + ingest
+### Device registration + ingest
 
 ```mermaid
 sequenceDiagram
@@ -186,59 +186,59 @@ sequenceDiagram
 
   FE->>Reg: {deviceId, platform, deviceFingerprint?, ...}
   Reg->>DB: bcrypt rounds=10 + insert (active)
-  Reg-->>FE: plaintext token (一次性)
+  Reg-->>FE: plaintext token (one-time)
   FE->>Ing: items[] + X-Device-Id + X-Device-Token
   Ing->>DB: bcrypt.compare validate
   Ing->>Recipes: resolve_recipe(kind) → entity_type / snapshot
-  Recipes->>DB: write pai_raw_device(单表, kind 判别) → projector → pai_events
+  Recipes->>DB: write pai_raw_device(single table, kind discriminator) → projector → pai_events
   Ing-->>FE: { results: [...] }
 ```
 
-`X-Device-Token` 服务端只存 bcrypt hash,明文只在 register / rotate 时返回一次。`device_fingerprint_hash`(sha256 of platform + 客户端 fingerprint)用来识别"换 deviceId 但实际同一台逻辑设备";fingerprint 命中时复用原 server `device_id`,只刷新 token/metadata,不能把 registry 改到客户端新 UUID,否则旧 raw/signal evidence 会从可见设备下脱落。Native 前端(apps/mobile,Expo RN)用平台稳定 identifier 做 fingerprint,同时把稳定的 `hardware_signature` 写进 metadata(不包含用户可改的设备名);`/api/devices/list` 会用 hardware signature 和 legacy iOS generic rows 做显示层收敛,避免同一台 iPhone 因 canonical/dev app 或旧无 fingerprint 记录显示成多台设备。
+For `X-Device-Token` the server stores only the bcrypt hash; the plaintext is returned only once, at register / rotate. `device_fingerprint_hash` (sha256 of platform + client fingerprint) identifies "a different deviceId but actually the same logical device"; on a fingerprint hit the original server `device_id` is reused and only token/metadata are refreshed — the registry must not be switched to the client's new UUID, otherwise old raw/signal evidence would detach from the visible device. The native frontend (apps/mobile, Expo RN) uses a platform-stable identifier as the fingerprint and also writes a stable `hardware_signature` into metadata (excluding the user-editable device name); `/api/devices/list` uses the hardware signature and legacy iOS generic rows to merge entries at the display layer, so the same iPhone doesn't show up as multiple devices because of canonical/dev apps or old records without a fingerprint.
 
-### Ingest per-item status(5 态契约)
+### Ingest per-item status (5-state contract)
 
-`POST /api/devices/ingest` 对每条 item 在 `results[i].status` 里返回 5 个值之一。前端 outbox(RN:`apps/mobile/src/ambient/ingest.ts` + `runtime.ts` 的 durable sqlite outbox)按此分流;契约 SSOT 在 `docs/plans/2026-05-12-v2-to-v3-migration.mdx#D-3`。
+`POST /api/devices/ingest` returns one of 5 values in `results[i].status` for each item. The frontend outbox (RN: `apps/mobile/src/ambient/ingest.ts` + the durable sqlite outbox in `runtime.ts`) branches on it; the contract SSOT is `docs/plans/2026-05-12-v2-to-v3-migration.mdx#D-3`.
 
-| status | 含义 | outbox 行为 |
+| status | Meaning | outbox behavior |
 |---|---|---|
-| `inserted` | raw / signal 实际写入了一行 | 移除,记为成功 |
-| `duplicate` | ON CONFLICT 触发(raw_only 路径才会出现的真 idempotent no-op) | 移除,记为成功 |
-| `rejected` | 确定性 client-side bug:缺 `kind` / cross-device dispatch / unsupported_full_sync 等。重传不会变好 | 永久移除,记 warning log,不 retry |
-| `parse_failed` | `IngestItemIn.model_validate` 抛异常那条 item。client schema 错位 | 永久移除,记 warning log,不 retry |
-| `retryable_failed` | 服务端写入抛异常被 catch(DB blip / Supabase 抖 / repository bug)。本质 transient | **保留**在 outbox,按指数退避 retry |
+| `inserted` | raw / signal actually wrote a row | remove, count as success |
+| `duplicate` | ON CONFLICT triggered (a true idempotent no-op that only occurs on the raw_only path) | remove, count as success |
+| `rejected` | deterministic client-side bug: missing `kind` / cross-device dispatch / unsupported_full_sync, etc. Retrying won't help | remove permanently, write a warning log, no retry |
+| `parse_failed` | the item for which `IngestItemIn.model_validate` threw. client schema mismatch | remove permanently, write a warning log, no retry |
+| `retryable_failed` | a server-side write exception was caught (DB blip / Supabase hiccup / repository bug). Transient by nature | **keep** in the outbox, retry with exponential backoff |
 
-服务端写入异常**禁止**折叠成 `rejected` — 那会让一次 DB 抽风把用户事件永久删掉而 client 完全无感(200 OK + outbox 移除)。`domains/connector/device/devices_ui.py:_ingest_for_device` 的 `try / except` 必须把异常 reason 写进 result 的 `reason` 字段并设 `retryable_failed`,不能再用 `logger.warning` 吞掉。
+Server-side write exceptions **must not** be folded into `rejected` — that would let one DB glitch permanently delete user events with the client completely unaware (200 OK + outbox removal). The `try / except` in `domains/connector/device/devices_ui.py:_ingest_for_device` must write the exception reason into the result's `reason` field and set `retryable_failed`; it must not swallow it with `logger.warning` anymore.
 
-### Health observation 全替换 scope
+### Health observation full-replace scope
 
-`domains/connector/device/device_ingest/health.py:health_full_replace_scope` 返回 `(device_id, local_date, metric?)` 三元组。当 envelope 携带 `payload.metric` 或所有 observations 共享同一 `metric` 时,DELETE 限定到该 metric,避免一次 steps push 把同日的 `heart_rate` 行抹掉(V2 commit `089e1f94` 的高优修)。当 envelope 主动是多 metric 的 end-of-day 批量,scope 回退到 date-only。
+`domains/connector/device/device_ingest/health.py:health_full_replace_scope` returns a `(device_id, local_date, metric?)` triple. When the envelope carries `payload.metric` or all observations share the same `metric`, the DELETE is limited to that metric, so one steps push doesn't wipe the same day's `heart_rate` rows (a high-priority fix from V2 commit `089e1f94`). When the envelope is deliberately a multi-metric end-of-day batch, the scope falls back to date-only.
 
-`domains/connector/device/raw_device.py:replace_health` 的 DELETE 永远带 `AND reference_count = 0`,被 memory / evolution_run 引用过的 raw evidence 行不会被 full-sync 删掉(V2 `raw-db.ts:1934` 的设计)。V3 当前还没有任何代码会把 `reference_count` 增到 > 0,这条是前置防御,等 raw 引用机制上线时不需要再回头改 SQL。
+The DELETE in `domains/connector/device/raw_device.py:replace_health` always includes `AND reference_count = 0`, so raw evidence rows referenced by memory / evolution_run won't be deleted by full-sync (the design from V2 `raw-db.ts:1934`). No V3 code currently increments `reference_count` above 0; this is a preemptive defense, so the SQL won't need revisiting once the raw reference mechanism goes live.
 
-### Mobile ambient capture(opt-in,apps/mobile RN)
+### Mobile ambient capture (opt-in, apps/mobile RN)
 
-- 采集端是 **apps/mobile(Expo RN)**:native 模块在 `apps/mobile/modules/`(`ambient-audio` / `ambient-visit` / `ambient-models` 等),JS 侧 source 实现在 `apps/mobile/src/ambient/sources/*`,事件经 `apps/mobile/src/ambient/runtime.ts` 进 durable sqlite outbox,上传到 `/api/devices/ingest`。原 Capacitor 插件 `@pin/capacitor-ambient-ai`(capacitor-plugins/)已随前端退役删除(2026-07-09)。
-- **方案 A(2026-07-01):手机是哑采集器**——各 source 原始信号直接进 outbox 并**事件级实时上传**(入队后立即 drain,周期 drain 只作断网兜底),不做本地聚合 candidate_window / 本地 LLM summary。聚合/去噪/摘要全部下沉后端:kind → `device_ingest/recipes.py` → `pai_raw_device` → projector 实时投 `pai_events`。RN 2026-07-07 已对齐同款直传(此前 RN 只上传本地蒸馏产物,原始 ambient 数据进不了 `pai_raw_device`/`pai_events`)。
-- **隐私不变量**:登录本身**绝不**启动任何 source。只有用户在 `pai_user_settings.ambient_sources`(migration `041_pai_user_settings_ambient_sources.sql`)里显式 opt-in 的 source 会被启动;app 状态变化只触发 outbox drain(flush 已队列事件),不会引起任何新采集。
-- 用户 UI:`apps/mobile/src/components/ambient/AmbientSourceControlsPanel.tsx` + `useAmbientToggle.ts`,toggle 一旦 flip 既 PATCH 到 server 又同步启停本地 source,做到 UI 立即反映 + server 是持久真源。
-- Voice Identity 开启时,Ambient 云转录先走 `/api/voice/transcribe-diarized` + `gpt-4o-transcribe-diarize` 保留 `self` / speaker labels,再用 `gpt-5-nano` 对每个 diarized segment 的 `text` 做后处理纠错。speaker / start / end 结构只由代码保留和拼回,后处理 prompt 只允许改文本,热词在 `backend/services/api/src/pinai_api/domains/voice/voice_transcription.py` 的 `TRANSCRIPTION_POSTPROCESS_TERMS`。
-- 改 ambient source 列表 / lifecycle 行为 / `pai_user_settings.ambient_sources` schema 前必读 [Ambient AI Plugin](../plans/2026-05-10-ambient-ai-plugin) + [V2 → V3 功能迁移计划 D-5](../plans/2026-05-12-v2-to-v3-migration)。
+- The capture side is **apps/mobile (Expo RN)**: native modules are in `apps/mobile/modules/` (`ambient-audio` / `ambient-visit` / `ambient-models`, etc.), JS-side source implementations are in `apps/mobile/src/ambient/sources/*`, and events go through `apps/mobile/src/ambient/runtime.ts` into the durable sqlite outbox and are uploaded to `/api/devices/ingest`. The original Capacitor plugin `@pin/capacitor-ambient-ai` (capacitor-plugins/) was deleted along with the frontend retirement (2026-07-09).
+- **Option A (2026-07-01): the phone is a dumb collector** — each source's raw signals go straight into the outbox and are **uploaded in real time per event** (drained immediately after enqueue; the periodic drain is only an offline fallback), with no local aggregation candidate_window / local LLM summary. Aggregation/denoising/summarization all move to the backend: kind → `device_ingest/recipes.py` → `pai_raw_device` → the projector projects into `pai_events` in real time. RN aligned to the same direct upload on 2026-07-07 (before that, RN uploaded only locally distilled output, and raw ambient data never reached `pai_raw_device`/`pai_events`).
+- **Privacy invariant**: login itself **never** starts any source. Only sources the user has explicitly opted into in `pai_user_settings.ambient_sources` (migration `041_pai_user_settings_ambient_sources.sql`) are started; app state changes only trigger an outbox drain (flushing already-queued events) and never cause any new capture.
+- User UI: `apps/mobile/src/components/ambient/AmbientSourceControlsPanel.tsx` + `useAmbientToggle.ts`; once a toggle flips, it both PATCHes the server and starts/stops the local source, so the UI reflects it immediately and the server is the persistent source of truth.
+- When Voice Identity is on, Ambient cloud transcription first goes through `/api/voice/transcribe-diarized` + `gpt-4o-transcribe-diarize` to keep `self` / speaker labels, then uses `gpt-5-nano` to post-process and correct the `text` of each diarized segment. The speaker / start / end structure is kept and stitched back only by code; the post-processing prompt may only change the text; hot words are in `TRANSCRIPTION_POSTPROCESS_TERMS` in `backend/services/api/src/pinai_api/domains/voice/voice_transcription.py`.
+- Before changing the ambient source list / lifecycle behavior / the `pai_user_settings.ambient_sources` schema, read [Ambient AI Plugin](../plans/2026-05-10-ambient-ai-plugin) + [V2 → V3 Feature Migration Plan D-5](../plans/2026-05-12-v2-to-v3-migration).
 
-### PIN 硬件实时转写(MR20 BLE 录音器,2026-07)
+### PIN hardware real-time transcription (MR20 BLE recorder, 2026-07)
 
-- **链路**:MR20 经 BLE 推连续 16 kHz / 32 kbps MP3 字节流 → `apps/mobile/modules/pin-hardware/`(Expo module,Swift 核心自退役 Capacitor 插件迁移)按设备节奏转发 → **手机直连腾讯 RTASR WebSocket v2** 流式转写。签名 URL 由 api 进程 `POST /api/voice/hardware/tencent-token` 签发(60s TTL,`Depends(current_user)`);`TENCENT_ASR_SECRET_KEY` 是 master credential(在 `FORBIDDEN_ENVS`,engine 拿不到),**永不出 api 进程**——客户端只拿签好名的 URL,音频不过我们的服务器。外发腾讯的参数不含用户标识(`voice_id` 为随机 hex)。实时引擎固定 `16k_zh_en_speaker` + `speaker_diarization=1`;DEV 腾讯账号未开通 `16k_zh_en_speaker_2.0`,使用 2.0 会在 WebSocket 握手时返回 4001。返回的匿名 `speaker_id` 在前端按 0→A、1→B 显示;阶段 I 不把任何 ID 猜成 Self。
-- **consent 语义(与其他 ambient source 的三个差异)**:① `pin_hardware` 在 `AMBIENT_SOURCE_KEYS` 里(consent reconcile/watchdog 可启停)但**不在** `AMBIENT_BULK_SOURCE_KEYS`——master 总开关开**不**带它(避免无设备用户弹蓝牙权限框),关(隐私总开关)连它一起关;② 与手机收录(`sound_classifier`)**互斥**,开任一方的 consent patch 会在同一 patch 里关另一方;③ 启停入口在 **Connect > Devices 的管理页**:连接后自动开始设备转录;点“停止转录”会停止设备采集、保留 BLE 连接并切到手机收录,用户可从小入口重新使用设备;真正断开收在设备信息 sheet。不在 ambient 设置面板(面板计数/一键全开都排除它)。
-- **管理页 UI 状态**:扫描/连接/设备收录期间只显示 PIN 设备流程,顶部用一行紧凑状态展示扫描动画、电量和固件,主体空间全部给实时转录;只有停止设备转录并切到手机来源后,才出现重新使用 PIN 设备的上下文入口。
-- **设备启停协议**:实时链路主命令是 NotePal/MR20 probe 已验证的 `BLE&STA` / `BLE&STO`;点开始后先等腾讯 WebSocket ready,再按 `BLE&STO` → 350ms → `BLE&STA` 重置设备录音。设备自身上报 `STA` 也视为用户明确开始转录的意图,JS 会立即 mint 腾讯 URL 并启动同一链路,不能因 app 尚未置 `captureRequested` 而忽略。RESET STOP 未确认时先回退 `edge_BLE&STO`,并从该回退命令重新计算 350ms 窗口;START 未确认时再回退 `edge_BLE&STA`。兼容回退只由录音状态和独立 timer 驱动,不拿全局“上一条命令”猜异步 `UNKNOWN` 属于谁;stop/disconnect 会取消全部延迟任务,避免旧任务在用户停止后重新开录。
-- **JS source**(`apps/mobile/src/ambient/sources/pin-hardware.ts`):状态快照 + final 转写推 `device.pin_hardware_state` / `device.pin_hardware_transcript` 信号(recipes 映射见上表,transcript 与手机语音同待遇投 utterance);所有 interim/final 同时写页面无关的 PIN 硬件转录 store。speaker 模式的 `sentences.sentence_list` 是修正快照,必须按 `voice_id + sentence_id` 原位合并,不能整表替换或反复追加;只有首次变成 final 的句子入信号流。final 按用户在 AsyncStorage 保留 7 天(最多 120 条),因此 stop/start、断开重连或管理页重挂不会清空旧文字。**ASR 断流自愈**也在 source 里(腾讯/网络断流 → `asr_error` → 1s/3s/8s/15s/30s 退避,之后每 30s 持续重新 mint + `restartAsr`,不再耗尽三次预算);`restartAsr` resolve 只代表发起异步握手,必须等真实 transcript 流入才重置重试预算。source 每 30s 主动读取一次 native state,补偿 JS 后台挂起期间漏掉的事件;App 回到前台和 runtime watchdog 的 `refresh()` 也会立即检查,不必等下一轮。每个新 socket 收到腾讯 `code=0` 后,原生层都会重跑 `BLE&STO` → `BLE&STA`,防止把连续 MP3 的半帧送给新解码器。客户端持久化腾讯返回的 `speaker_context_id`,登出清理,禁止跨账号复用说话人聚类。
-- **iOS 后台与恢复**:app 声明 `bluetooth-central` UIBackgroundModes(锁屏 BLE 不断流) + CoreBluetooth state restoration(restore identifier + `sessionActive` UserDefaults 标记);默认设备记在 UserDefaults,`retrievePeripherals` 自动重连。原生层另持久化 `captureDesired`(只保存“用户仍希望转录”的意图,不保存 60s 短效签名 URL);BLE 冷恢复到可写状态后,全局 JS source 重新 mint URL 并 `startCapture`,不依赖管理页是否挂载。显式停止/断开/登出会清除意图。用户从多任务界面强制划掉 App 后,iOS 不允许后台重启,只能在下次主动打开 App 时恢复。
-- **环境**:腾讯三键(`TENCENT_ASR_SECRET_ID/KEY/APP_ID`)目前只配了 dev;test/prod 未配时 mint 返回 `503 detail=pin_hardware_asr_not_configured`,客户端按设计回退手机收录(裸 503——如 Fly 部署抖动——不会触发回退)。
-- **音频格式**:MR20 的 BLE notify 是连续的 16 kHz / 32 kbps MP3 字节流(包边界不等于 MP3 帧边界);iOS 在每个新 ASR socket ready 后先重启设备编码器,再原样、按设备节奏推给腾讯 RTASR,签名参数固定 `voice_format=8`。禁止让新 socket 从旧流中途接管,也禁止按 PCM(`voice_format=1`)解释或按 640 bytes 重切,否则会出现“设备在收录但一直没有文字”。
+- **Pipeline**: the MR20 pushes a continuous 16 kHz / 32 kbps MP3 byte stream over BLE → `apps/mobile/modules/pin-hardware/` (Expo module; the Swift core was migrated from the retired Capacitor plugin) forwards it at the device's pace → **the phone connects directly to the Tencent RTASR WebSocket v2** for streaming transcription. The signed URL is issued by the api process via `POST /api/voice/hardware/tencent-token` (60s TTL, `Depends(current_user)`); `TENCENT_ASR_SECRET_KEY` is a master credential (in `FORBIDDEN_ENVS`, engine can't get it) and **never leaves the api process** — the client only gets the signed URL, and audio doesn't pass through our servers. Parameters sent to Tencent contain no user identifier (`voice_id` is random hex). The real-time engine is fixed at `16k_zh_en_speaker` + `speaker_diarization=1`; the DEV Tencent account doesn't have `16k_zh_en_speaker_2.0` enabled, and using 2.0 returns 4001 during the WebSocket handshake. The anonymous `speaker_id` returned is displayed in the frontend as 0→A, 1→B; phase I doesn't guess any ID to be Self.
+- **consent semantics (three differences from other ambient sources)**: (1) `pin_hardware` is in `AMBIENT_SOURCE_KEYS` (consent reconcile/watchdog can start/stop it) but **not** in `AMBIENT_BULK_SOURCE_KEYS` — turning the master switch on does **not** include it (to avoid a Bluetooth permission prompt for users without the device), while turning it off (the privacy master switch) turns it off too; (2) **mutually exclusive** with phone capture (`sound_classifier`): a consent patch that turns either one on turns the other off in the same patch; (3) the start/stop entry is on **the management page under Connect > Devices**: device transcription starts automatically after connecting; tapping "Stop transcription" stops device capture, keeps the BLE connection, and switches to phone capture, and the user can go back to using the device from a small entry; actual disconnect lives in the device info sheet. It is not in the ambient settings panel (the panel's count / one-tap enable-all both exclude it).
+- **Management page UI states**: during scanning/connecting/device capture, only the PIN device flow is shown; a compact one-line status at the top shows the scanning animation, battery, and firmware, and the main area is given entirely to the live transcript; only after device transcription is stopped and the source is switched to the phone does the contextual entry to reuse the PIN device appear.
+- **Device start/stop protocol**: the main commands of the real-time pipeline are `BLE&STA` / `BLE&STO`, verified by the NotePal/MR20 probe; after tapping start, first wait for the Tencent WebSocket to be ready, then reset device recording with `BLE&STO` → 350ms → `BLE&STA`. A `STA` reported by the device itself is also treated as the user's explicit intent to start transcription; JS immediately mints a Tencent URL and starts the same pipeline, and must not ignore it just because the app hasn't set `captureRequested` yet. If RESET STOP is unconfirmed, first fall back to `edge_BLE&STO` and recompute the 350ms window from that fallback command; if START is unconfirmed, then fall back to `edge_BLE&STA`. The compatibility fallback is driven only by recording state and independent timers; it does not guess from a global "last command" which command an async `UNKNOWN` belongs to; stop/disconnect cancels all delayed tasks, so old tasks don't restart recording after the user stops.
+- **JS source** (`apps/mobile/src/ambient/sources/pin-hardware.ts`): state snapshots + final transcripts are pushed as `device.pin_hardware_state` / `device.pin_hardware_transcript` signals (recipe mapping in the table above; transcripts are projected as utterance the same way as phone voice); all interim/final results are also written to a page-independent PIN hardware transcript store. In speaker mode, `sentences.sentence_list` is a correction snapshot and must be merged in place by `voice_id + sentence_id`, not replaced wholesale or repeatedly appended; only sentences that become final for the first time enter the signal stream. Finals are kept per user in AsyncStorage for 7 days (at most 120 entries), so stop/start, disconnect-and-reconnect, or remounting the management page won't clear older text. **ASR stream-drop self-healing** is also in the source (Tencent/network drop → `asr_error` → 1s/3s/8s/15s/30s backoff, then keep re-minting + `restartAsr` every 30s, no longer exhausting a three-attempt budget); `restartAsr` resolving only means the async handshake was initiated, and the retry budget must be reset only after real transcripts flow in. The source actively reads native state every 30s to make up for events missed while JS was suspended in the background; the app returning to the foreground and the runtime watchdog's `refresh()` also check immediately, without waiting for the next round. After each new socket receives Tencent's `code=0`, the native layer reruns `BLE&STO` → `BLE&STA`, to avoid feeding half a frame of the continuous MP3 stream to a new decoder. The client persists the `speaker_context_id` returned by Tencent and clears it on sign-out; reusing speaker clustering across accounts is forbidden.
+- **iOS background and recovery**: the app declares the `bluetooth-central` UIBackgroundModes (BLE doesn't drop while locked) + CoreBluetooth state restoration (restore identifier + a `sessionActive` UserDefaults flag); the default device is stored in UserDefaults, and `retrievePeripherals` reconnects automatically. The native layer also persists `captureDesired` (it stores only the intent "the user still wants transcription", not the 60s short-lived signed URL); after a BLE cold restore reaches a writable state, the global JS source re-mints the URL and calls `startCapture`, independent of whether the management page is mounted. Explicit stop/disconnect/sign-out clears the intent. After the user force-swipes the app away from the app switcher, iOS doesn't allow a background relaunch; recovery can only happen the next time the user opens the app.
+- **Environments**: the three Tencent keys (`TENCENT_ASR_SECRET_ID/KEY/APP_ID`) are currently configured only for dev; when test/prod aren't configured, mint returns `503 detail=pin_hardware_asr_not_configured`, and the client falls back to phone capture by design (a bare 503 — e.g. a Fly deploy hiccup — does not trigger the fallback).
+- **Audio format**: the MR20's BLE notify is a continuous 16 kHz / 32 kbps MP3 byte stream (packet boundaries are not MP3 frame boundaries); after each new ASR socket is ready, iOS first restarts the device encoder, then pushes the bytes to Tencent RTASR unchanged at the device's pace, with the signature parameter fixed at `voice_format=8`. Never let a new socket take over midway through an old stream, and never interpret it as PCM (`voice_format=1`) or re-chunk it into 640 bytes, otherwise you get "the device is capturing but no text ever appears".
 
-### 设备统一时间线
+### Unified device timeline
 
-`GET /api/devices/{deviceId}/timeline`(`devices_ui.py:get_device_timeline`)自 lifelong-memory L0 统一后**只查 `pai_raw_device`**(`external_id = device_id`)——该设备的所有 source(health observation、apps/contacts snapshot、ambient/device context event)都落在这张单表,`kind` 当 `type` 区分 source,按 `occurred_at DESC` 排序 + 单一 keyset cursor。返回 envelope:
+`GET /api/devices/{deviceId}/timeline` (`devices_ui.py:get_device_timeline`) **queries only `pai_raw_device`** (`external_id = device_id`) since the lifelong-memory L0 unification — all of the device's sources (health observations, apps/contacts snapshots, ambient/device context events) land in this single table, with `kind` used as `type` to distinguish sources, ordered by `occurred_at DESC` + a single keyset cursor. Returned envelope:
 
 ```json
 {
@@ -251,21 +251,21 @@ sequenceDiagram
 }
 ```
 
-health 走 recipe 的 `snapshot='health'` 语义(频率高,逐 observation 留 L0 档案、不进 L1 retrieval;老 `_HEALTH_POLICY` 已随 policies→recipes 收敛删除)。前端 `apps/mobile/src/components/connect/DeviceTimeline.tsx` 用 `fetchDeviceTimeline` 一次拉合并流,按 `type` 分流渲染,不做 client-side k-way merge。
+health uses the recipe's `snapshot='health'` semantics (high frequency; each observation is kept as an L0 record and doesn't enter L1 retrieval; the old `_HEALTH_POLICY` was deleted when policies were consolidated into recipes). The frontend `apps/mobile/src/components/connect/DeviceTimeline.tsx` uses `fetchDeviceTimeline` to fetch the merged stream in one call and renders by `type`, without a client-side k-way merge.
 
-## 当前设计
+## Current design
 
-### Composio 服务层
+### Composio service layer
 
-- `domains/connector/apps/composio_service.py` 是单一真源:
-  - SDK 直调(connection 生命周期、tool discovery、execute)→ 给 ingest_runner 用。
-  - 每用户 `ToolRouterSession` LRU + 1h idle TTL → 给 agent-engine 端 meta-tool 用(`/api/agent/composio/meta/*`)。
-  - **Label / identity 解析**:`_IDENTITY_SPECS` 给 8 个 toolkit 各登记一个 "get me" action + extractor(gmail → GMAIL_GET_PROFILE → emailAddress;googlecalendar → GOOGLECALENDAR_GET_CALENDAR(`primary`) → id;youtube → YOUTUBE_GET_CHANNEL_STATISTICS(`mine=true`) → snippet.title 等)。`/api/composio/wait` 命中 ACTIVE 时 eager-resolve 一次,结果写 `pai_connector_labels`(PK = `user_id, connected_account_id`)。`/api/composio/connections` 直接 join 这张表,~0 延迟。失败行带 `resolve_attempts / last_attempt_error`,下次 `/connections` lazy-retry。Stripe 没有 identity action,fallback 到 `fallback_label("stripe", cid)`。
-- Composio master key 从 env `COMPOSIO_API_KEY`(只在 api 进程,FORBIDDEN_ENVS 名单内,agent-engine 看不到)。
-- 同一 `(user_id, toolkit)` 支持多账号(`connected_accounts.link(allow_multiple=True)`)。前端 `+add` 按钮触发后端新建独立 `connected_account_id`,所有 per-account 状态(label / sync cursor / `init.{toolkit}.{cid}` 任务)按 cid 区分。
-- `/api/agent/composio/*` 是 sandbox 内 `pinai_sdk.composio` 的对端,执行有 allowlist 守门。
+- `domains/connector/apps/composio_service.py` is the single source of truth:
+  - Direct SDK calls (connection lifecycle, tool discovery, execute) → used by ingest_runner.
+  - Per-user `ToolRouterSession` LRU + 1h idle TTL → used by the agent-engine-side meta-tools (`/api/agent/composio/meta/*`).
+  - **Label / identity resolution**: `_IDENTITY_SPECS` registers one "get me" action + extractor for each of 8 toolkits (gmail → GMAIL_GET_PROFILE → emailAddress; googlecalendar → GOOGLECALENDAR_GET_CALENDAR(`primary`) → id; youtube → YOUTUBE_GET_CHANNEL_STATISTICS(`mine=true`) → snippet.title, etc.). When `/api/composio/wait` hits ACTIVE it eager-resolves once and writes the result to `pai_connector_labels` (PK = `user_id, connected_account_id`). `/api/composio/connections` joins this table directly, ~0 latency. Failed rows carry `resolve_attempts / last_attempt_error`, and the next `/connections` lazy-retries. Stripe has no identity action and falls back to `fallback_label("stripe", cid)`.
+- The Composio master key comes from env `COMPOSIO_API_KEY` (only in the api process, on the FORBIDDEN_ENVS list, invisible to agent-engine).
+- The same `(user_id, toolkit)` supports multiple accounts (`connected_accounts.link(allow_multiple=True)`). The frontend `+add` button makes the backend create a separate `connected_account_id`; all per-account state (label / sync cursor / `init.{toolkit}.{cid}` task) is keyed by cid.
+- `/api/agent/composio/*` is the counterpart of `pinai_sdk.composio` inside the sandbox; execution is gated by an allowlist.
 
-### Ingest recipe 机制
+### Ingest recipe mechanism
 
 `backend/db/ingest_recipes/<toolkit>.yaml`:
 
@@ -282,59 +282,59 @@ result_path: [messages]
 id_field: id
 ```
 
-`domains/connector/apps/ingest_runner.py:Recipe.load_recipe()` 读、`run_fetch(user_id, toolkit, cid, limit, since)` 执行。校验脚本:`backend/scripts/validate_ingest_recipe.py`。
+`domains/connector/apps/ingest_runner.py:Recipe.load_recipe()` reads it, and `run_fetch(user_id, toolkit, cid, limit, since)` executes it. Validation script: `backend/scripts/validate_ingest_recipe.py`.
 
-加新 toolkit 步骤(generic 路径,当前默认):
-1. 加 `db/ingest_recipes/<toolkit>.yaml`,声明 `entity_type` + `id_field` + `timestamp_path`(可选 `title_path`/`snippet_path`)。没有 yaml 也能跑——首次 init 会走 `recipe_infer` 自动推断,yaml 是推断不准时的覆盖手段(`collector_cli infer <tk> --dump-yaml` 可生成草稿)。
-2. 用 `collector_cli pipeline <tk> --cid <cid>` 命令行验收(连接→ingest→raw→evolve→signals)。
-3. 不写 mapper/upserter、不建表、不注册 dict——数据落 `pai_raw_apps`。
+Steps to add a new toolkit (generic path, the current default):
+1. Add `db/ingest_recipes/<toolkit>.yaml`, declaring `entity_type` + `id_field` + `timestamp_path` (optionally `title_path`/`snippet_path`). It also runs without a yaml — the first init uses `recipe_infer` to infer automatically, and the yaml is the override when inference is wrong (`collector_cli infer <tk> --dump-yaml` can generate a draft).
+2. Verify from the command line with `collector_cli pipeline <tk> --cid <cid>` (connect→ingest→raw→evolve→signals).
+3. No mapper/upserter, no new table, no dict registration — data lands in `pai_raw_apps`.
 
-### Raw 表共用结构(两张域表)
+### Shared raw table structure (two domain tables)
 
-L0 只有两张域表(`119_split_raw_domain.sql`),共用统一信封:
+L0 has only two domain tables (`119_split_raw_domain.sql`), sharing a unified envelope:
 
-- **`pai_raw_apps`**(Composio / 自定义 connector):`user_id/id/toolkit/entity_type/external_id` + `occurred_at`(事件时间)/`ingested_at`(写入时间)/`content_updated_at`(`124`,payload 真变才 touch,驱动 supersede 重投影)+ `title`/`snippet` 展示列 + `payload JSONB` 全量 + `dedupe_key`(`UNIQUE(user_id, toolkit, entity_type, dedupe_key)`)+ reference 三元组(`reference_count`/`last_referenced_at`/`referenced_by_runs`)。
-- **`pai_raw_device`**(设备):同信封,判别列是 `kind`(+ `platform`,`123`),`external_id` = device_id(让 full-sync replace 的 DELETE 限定到单台设备),`snapshot_id`/`local_date` 类端侧 scope 字段进 payload/专列。
+- **`pai_raw_apps`** (Composio / custom connectors): `user_id/id/toolkit/entity_type/external_id` + `occurred_at` (event time)/`ingested_at` (write time)/`content_updated_at` (`124`, touched only when the payload actually changes, drives supersede re-projection) + `title`/`snippet` display columns + full `payload JSONB` + `dedupe_key` (`UNIQUE(user_id, toolkit, entity_type, dedupe_key)`) + the reference triple (`reference_count`/`last_referenced_at`/`referenced_by_runs`).
+- **`pai_raw_device`** (devices): same envelope; the discriminator column is `kind` (+ `platform`, `123`), `external_id` = device_id (so the full-sync replace DELETE is limited to a single device), and on-device scope fields like `snapshot_id`/`local_date` go into payload/dedicated columns.
 
-typed 时代的 `pai_raw_<toolkit>_<entity>` 多表已 `118` 全删。reference 三元组保证被 evolve / generate 引用过的行在 full-sync replace 时不被删(证据不断链)。
+The typed-era multiple `pai_raw_<toolkit>_<entity>` tables were all deleted in `118`. The reference triple ensures rows referenced by evolve / generate aren't deleted during a full-sync replace (the evidence chain stays intact).
 
 ### Device ingest recipes
 
-`domains/connector/device/device_ingest/recipes.py:DEVICE_RECIPES`(open 字典,加新 kind 直接挂;typed 时代的 `DEVICE_INGEST_POLICIES` 四模式已删):
+`domains/connector/device/device_ingest/recipes.py:DEVICE_RECIPES` (an open dict; to add a new kind, just register it; the four typed-era `DEVICE_INGEST_POLICIES` modes are deleted):
 
-| Kind | recipe 语义 | 落点 |
+| Kind | recipe semantics | Where it lands |
 |---|---|---|
-| `app_inventory*` / `contact_directory*` 等 snapshot 类 | `snapshot`(全替换语义) | `pai_raw_device`(state 类不投 L1) |
-| `health.observation` | `snapshot='health'`(`health.py:parse_health_observations` 解析,per-metric scope 替换) | `pai_raw_device`(留 L0 档案,不投 L1 retrieval) |
-| ambient(`ambient.utterance` / `ambient.visit` / `device.motion_segment` 等)/ 未知 kind | 事件类(fallback 带 `ingest_fallback_reason`) | `pai_raw_device` → projector 投 L1 `pai_events`(`source='device'`) |
+| `app_inventory*` / `contact_directory*` and other snapshot types | `snapshot` (full-replace semantics) | `pai_raw_device` (state types aren't projected to L1) |
+| `health.observation` | `snapshot='health'` (parsed by `health.py:parse_health_observations`, per-metric scope replace) | `pai_raw_device` (kept as an L0 record, not projected into L1 retrieval) |
+| ambient (`ambient.utterance` / `ambient.visit` / `device.motion_segment`, etc.) / unknown kind | event type (fallback carries `ingest_fallback_reason`) | `pai_raw_device` → projector projects to L1 `pai_events` (`source='device'`) |
 
-> device 各 kind 统一写单表 `pai_raw_device`,经 `project_unprojected` 投影成 L1 `pai_events`,不再写退役的 `pai_personal_signals`;`transcript_window` firehose 不直投,由 rollup_semantic 卷成 episode。
+> All device kinds write to the single table `pai_raw_device` and are projected via `project_unprojected` into L1 `pai_events`, no longer writing to the retired `pai_personal_signals`; the `transcript_window` firehose isn't projected directly but is rolled into episodes by rollup_semantic.
 
-`sync_mode`(item envelope 字段):
+`sync_mode` (item envelope field):
 
-- `incremental`(默认):只 INSERT,raw 表 `dedupe_key UNIQUE` 自然吸收重复。
-- `full`:替换语义。
-  - app/contact:替换该 device 全部 snapshot 行(端侧 snapshot 视图是 ephemeral,可以全删)。
-  - health:**只**替换 scope 内未被引用的旧行 — scope = `(device_id, local_date)`,且 `reference_count = 0` 的才删,已被 evolution / memory 引用的 raw 行保留(避免断证据)。多个 local_date 或 ambiguous scope 时 fallback 回 incremental,signal 带 `ingest_fallback_reason='unsafe_full_scope'`。
+- `incremental` (default): INSERT only; the raw table's `dedupe_key UNIQUE` absorbs duplicates naturally.
+- `full`: replace semantics.
+  - app/contact: replace all snapshot rows for that device (the on-device snapshot view is ephemeral and can be fully deleted).
+  - health: replace **only** unreferenced old rows within the scope — scope = `(device_id, local_date)`, and only rows with `reference_count = 0` are deleted; raw rows already referenced by evolution / memory are kept (to avoid breaking evidence). With multiple local_dates or an ambiguous scope, it falls back to incremental, and the signal carries `ingest_fallback_reason='unsafe_full_scope'`.
 
-## 开发入口
+## Development entry points
 
-| 改动 | 先看 |
+| Change | Look at first |
 |---|---|
-| Composio UI 按钮 / OAuth / init chip | `apps/mobile/src/components/connect/DataConnections.tsx`(RN)、`apps/web/src/ui-web/connect/`(web)、`apps/mobile/src/lib/card-connector-oauth.ts` |
-| Composio api 路由 + `/wait` 入队钩子 | `backend/services/api/src/pinai_api/domains/connector/apps/composio_ui.py` |
-| Composio sandbox 路由 | `domains/connector/apps/composio_agent.py` |
+| Composio UI buttons / OAuth / init chip | `apps/mobile/src/components/connect/DataConnections.tsx` (RN), `apps/web/src/ui-web/connect/` (web), `apps/mobile/src/lib/card-connector-oauth.ts` |
+| Composio api routes + `/wait` enqueue hook | `backend/services/api/src/pinai_api/domains/connector/apps/composio_ui.py` |
+| Composio sandbox routes | `domains/connector/apps/composio_agent.py` |
 | Composio SDK / session pool / label resolution (`_IDENTITY_SPECS`) | `domains/connector/apps/composio_service.py` |
-| `pai_connector_labels` 持久化 | `domains/connector/apps/connector_labels.py`, migration `040_pai_connector_labels.sql` |
-| 加新 toolkit 到 ingest | 只需 `db/ingest_recipes/<tk>.yaml`(或靠 `recipe_infer` 推断);无 mapper / 无建表(全落 `pai_raw_apps`) |
-| Recipe schema / since 格式化 | `domains/connector/apps/ingest_runner.py`、`scripts/validate_ingest_recipe.py` |
-| Cursor 推进 | `domains/connector/apps/connectors.py`(`pai_connector_sync_cursors` 读写) |
-| Device 注册 / token / rotate | `domains/connector/device/devices_ui.py`、`platform/db/repositories/devices.py` |
-| Device ingest recipes / health 解析 | `domains/connector/device/device_ingest/recipes.py`、`domains/connector/device/device_ingest/health.py` |
-| Raw schema | `backend/db/migrations/090_pai_raw_events.sql`(前身)、`118_drop_typed_raw.sql`、`119_split_raw_domain.sql`、`123_pai_raw_device_platform.sql`、`124_pai_raw_apps_content_updated.sql` |
-| 前端设备列表 / 注册 UI | `apps/mobile/src/components/connect/DeviceConnections.tsx`、`apps/mobile/src/lib/devices.ts` |
+| `pai_connector_labels` persistence | `domains/connector/apps/connector_labels.py`, migration `040_pai_connector_labels.sql` |
+| Add a new toolkit to ingest | Only `db/ingest_recipes/<tk>.yaml` is needed (or rely on `recipe_infer` inference); no mapper / no new table (everything lands in `pai_raw_apps`) |
+| Recipe schema / since formatting | `domains/connector/apps/ingest_runner.py`, `scripts/validate_ingest_recipe.py` |
+| Cursor advance | `domains/connector/apps/connectors.py` (`pai_connector_sync_cursors` read/write) |
+| Device registration / token / rotate | `domains/connector/device/devices_ui.py`, `platform/db/repositories/devices.py` |
+| Device ingest recipes / health parsing | `domains/connector/device/device_ingest/recipes.py`, `domains/connector/device/device_ingest/health.py` |
+| Raw schema | `backend/db/migrations/090_pai_raw_events.sql` (predecessor), `118_drop_typed_raw.sql`, `119_split_raw_domain.sql`, `123_pai_raw_device_platform.sql`, `124_pai_raw_apps_content_updated.sql` |
+| Frontend device list / registration UI | `apps/mobile/src/components/connect/DeviceConnections.tsx`, `apps/mobile/src/lib/devices.ts` |
 
-## 验证方式
+## How to verify
 
 ```bash
 cd backend && uv run pytest tests/web/services/test_connector_ingest.py
@@ -349,68 +349,68 @@ cd backend && uv run pytest tests/web/services/test_connector_youtube.py
 cd backend && uv run pytest tests/web/test_composio_service.py            # SDK wrapper / label extractors
 cd backend && uv run pytest tests/web/devices                              # token + ingest policies
 cd backend && uv run pytest tests/web/db/repositories/test_connectors_repo.py
-cd backend && uv run pytest tests/web/routes/                              # 路由集成
+cd backend && uv run pytest tests/web/routes/                              # route integration
 cd apps/mobile && npm run type-check
 ```
 
-手工查 DB(本地 compose Postgres `localhost:54322` postgres/postgres):
+Manual DB queries (local compose Postgres `localhost:54322` postgres/postgres):
 
 ```sql
--- Composio 任务历史
+-- Composio task history
 SELECT id, kind, status, attempts, last_run_status, last_error
 FROM pai_scheduled_tasks
 WHERE kind LIKE 'connector.%' AND user_id = $1
 ORDER BY updated_at DESC LIMIT 20;
 
--- 单 toolkit 的 raw 行(Composio 落 pai_raw_apps)
+-- raw rows for a single toolkit (Composio writes to pai_raw_apps)
 SELECT count(*), max(occurred_at) FROM pai_raw_apps WHERE user_id = $1 AND toolkit = 'gmail';
--- 投影出的 L1 事件(取代退役的 pai_personal_signals)
+-- projected L1 events (replacing the retired pai_personal_signals)
 SELECT (curated_at IS NULL) AS uncurated, count(*) FROM pai_events WHERE user_id = $1 GROUP BY 1;
 
--- Cursor 状态
+-- Cursor state
 SELECT * FROM pai_connector_sync_cursors WHERE user_id = $1;
 
--- Device 注册
+-- Device registration
 SELECT id, device_id, platform, status, last_seen_at
 FROM pai_user_devices WHERE user_id = $1;
 ```
 
-容器日志:
+Container logs:
 
 ```bash
 make logs-api | grep -E "connector\.|composio|/devices/ingest"
 ```
 
-## 踩坑
+## Gotchas
 
-- Composio API key 是 master credential,只能在 api 进程读;agent-engine 进程通过 `/api/agent/composio/meta/*` 间接调,不会拿到 key。
-- typed `_UPSERTERS` / `unsupported_v0` 跳过路径已随 generic 统一删除——所有 toolkit 都会真跑;新坑变成 **recipe 推断置信度**:mid 置信时 dedupe 退化 payload hash(要补 yaml),无可读 action 时降级 connect_only(数据不进来但连接显示正常)。
-- `connector.sync` 高频名单写死在 `connector_ingest._FAST_CADENCE_TOOLKITS`(cron `*/30`),名单外按 recipe `sync_interval_hours`;改频率改这两处,不在 env。
-- generic dedupe_key = `<toolkit>:<entity>:<external_id>`(**不含** connectedAccountId)——多账号同 external_id 会合并成一行,依赖 provider id 全局唯一;改 dedupe 公式前想清楚多账号语义。
-- Composio Gmail 大响应 413 的修法是 `include_payload=false`(`verbose` 保持 `true`);改 recipe 别把 include_payload 改回 true。
-- Composio 在大响应里偶尔塞未转义 `\n` / `\r` / `\x00-\x1F`,标准 JSON.parse 会拒;`ingest_runner` fetcher 内置 sanitize-and-retry。
-- Composio 返回字段名经常和原生 API 不一致(Gmail `to` 是 string 而非 array、Notion 是 slim shape `{id,title,type}`),写新 mapper 前先 probe 一下真实形状。
-- GitHub slug 是 `GITHUB_LIST_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER`,没 `LIST_` 的版本 404。
-- Device token 不能写日志、不能存明文,bcrypt 校验失败一律 401 不带 detail。
-- `pai_user_devices.device_fingerprint_hash` 不能放 raw fingerprint,只能放 sha256 hash;app 端 fingerprint 用 secure storage 持久化,换 device_id 时复用同一逻辑设备。
-- `sync_mode=full` 对 health 是 `(device_id, local_date)` scope 替换,且只删 `reference_count=0` 的;多 date payload 自动 fallback incremental,不要靠它做"今天数据整体覆盖"。
-- 旧的 `apis/src/domain/proactive/mobile_proxy.ts` 和 `MOBILE_SYNC_TARGET_USER_ID` 默认容器兜底全部退役,mobile 数据现在唯一入口是 `/api/devices/ingest`,由 api 进程直接处理,不再经独立 proxy 服务。
-- `/api/composio/wait` 入队失败不影响 ACTIVE 状态(只 log warning),前端 chip 拿不到 `initTaskId` 时不渲染,等 reconciler 兜底 — 但当前 backend 还没有专门的 reconciler 服务,失败的 OAuth-but-no-init 暂时需要手动 reconnect。
+- The Composio API key is a master credential and may only be read in the api process; the agent-engine process calls indirectly through `/api/agent/composio/meta/*` and never gets the key.
+- The typed `_UPSERTERS` / `unsupported_v0` skip path was deleted with the generic unification — every toolkit now actually runs; the new gotcha is **recipe inference confidence**: at mid confidence, dedupe falls back to the payload hash (needs a yaml), and with no readable action it downgrades to connect_only (no data comes in, but the connection shows as normal).
+- The `connector.sync` high-frequency list is hardcoded in `connector_ingest._FAST_CADENCE_TOOLKITS` (cron `*/30`); toolkits outside it follow recipe `sync_interval_hours`; to change frequency, change these two places, not env.
+- generic dedupe_key = `<toolkit>:<entity>:<external_id>` (**does not include** connectedAccountId) — multiple accounts with the same external_id merge into one row, relying on provider ids being globally unique; think through multi-account semantics before changing the dedupe formula.
+- The fix for Composio Gmail 413 on large responses is `include_payload=false` (keep `verbose` at `true`); when editing the recipe, don't change include_payload back to true.
+- Composio occasionally puts unescaped `\n` / `\r` / `\x00-\x1F` in large responses, which standard JSON.parse rejects; the `ingest_runner` fetcher has built-in sanitize-and-retry.
+- Field names returned by Composio often differ from the native API (Gmail `to` is a string, not an array; Notion is a slim shape `{id,title,type}`); probe the real shape before writing a new mapper.
+- The GitHub slug is `GITHUB_LIST_ISSUES_ASSIGNED_TO_THE_AUTHENTICATED_USER`; the version without `LIST_` returns 404.
+- Device tokens must not be logged or stored in plaintext; bcrypt verification failures always return 401 with no detail.
+- `pai_user_devices.device_fingerprint_hash` must not hold the raw fingerprint, only the sha256 hash; the app persists its fingerprint in secure storage and reuses the same logical device when device_id changes.
+- `sync_mode=full` for health is a `(device_id, local_date)` scope replace, and only deletes rows with `reference_count=0`; multi-date payloads automatically fall back to incremental, so don't rely on it to "overwrite today's data wholesale".
+- The old `apis/src/domain/proactive/mobile_proxy.ts` and the `MOBILE_SYNC_TARGET_USER_ID` default-container fallback are all retired; the only entry point for mobile data is now `/api/devices/ingest`, handled directly by the api process, no longer through a separate proxy service.
+- A failed enqueue in `/api/composio/wait` doesn't affect the ACTIVE status (it only logs a warning); when the frontend chip doesn't get an `initTaskId` it doesn't render and waits for the reconciler as a fallback — but the backend currently has no dedicated reconciler service, so a failed OAuth-but-no-init currently requires a manual reconnect.
 
-## 相关模块
+## Related modules
 
-- [Memory](./memory):evolve agent 把 `pai_evolution_runs.refs_consumed` 沉淀成 memory / skill 的下游链路。
-- [Background Tasks](./background-tasks):`connector.init` / `connector.sync` / `connector.evolve` 在 scheduler 上的派发。
-- [Generation](./generation):卡片生成读 L1 `pai_events`(`events_search`)+ `pai_world_signals` + L2 portrait。
-- [Runtime & Deployment](./runtime-deployment):api/agent-engine 信任边界、Composio master key、device token bcrypt。
+- [Memory](./memory): the downstream chain where the evolve agent turns `pai_evolution_runs.refs_consumed` into memory / skill.
+- [Background Tasks](./background-tasks): dispatch of `connector.init` / `connector.sync` / `connector.evolve` on the scheduler.
+- [Generation](./generation): card generation reads L1 `pai_events` (`events_search`) + `pai_world_signals` + the L2 portrait.
+- [Runtime & Deployment](./runtime-deployment): the api/agent-engine trust boundary, the Composio master key, device token bcrypt.
 
-## 相关 AI Plans
+## Related AI Plans
 
-- [Web Cloud Data Self-Sufficient Plan](../plans/2026-05-17-web-cloud-data-self-sufficient):Web 端围绕已上传 device/mobile 数据做 summary、all-device cloud timeline、freshness 和页面展示时必读。
-- [Ambient AI-visible Records SSOT 重构](../plans/2026-05-17-ambient-ai-visible-records-ssot):改 native Ambient 本地 ledger、outbox、上传记录可见性时必读。
-- [Transcript Window Upsert + 存量清理](../plans/2026-05-18-transcript-window-upsert-storage-cleanup):改 transcript_session window、ambient outbox 去重、`pai_personal_signals` upsert、或 local/cloud 存量重复合并时必读。
-- [Ambient Live Freshness + Persistent Transcript Queue](../plans/2026-05-18-ambient-live-freshness-persistent-transcript-queue):改 Live 转录显示、iOS native transcript/capture 持久队列、后台转录恢复、或 Ambient timeline backlog 分批补齐时必读。
-- [Ambient Lock-Screen Audio + Live Session Fix](../plans/2026-06-05-ambient-lock-screen-audio-live-session-fix):改熄屏录音、后台 WAV capture、captureSessionId 旋转、Live 当前/历史分区显示时必读。
-- [iOS Place Visits Durable Capture](../plans/2026-05-20-ios-place-visits-durable-capture):改 iOS CLVisit / Place Visits 采集、后台 visit 持久队列、Always 权限诊断、visit drain 入 Ambient timeline、或 Ambient settings source 启停判断时必读。
-- [Ambient Voice Identity + Speaker Diarization](../plans/2026-05-27-ambient-voice-identity-diarization):改 Setting > Ambient 本人声音录入、OpenAI diarized transcription、speaker segments payload、或 Ambient 转录里 `self` / `speaker_1` 等说话人标注时必读。
-- [Ambient 中英混合转录质量优化](../plans/2026-06-09-ambient-mixed-language-transcription-quality):改 Ambient live transcript / timeline 的中英混说转录质量、WAV burst 切片参数、OpenAI transcription language hint、或普通 `gpt-4o-transcribe` prompt/术语表时必读。
+- [Web Cloud Data Self-Sufficient Plan](../plans/2026-05-17-web-cloud-data-self-sufficient): required reading when building summaries, the all-device cloud timeline, freshness, and page display on the web side around uploaded device/mobile data.
+- [Ambient AI-visible Records SSOT Refactor](../plans/2026-05-17-ambient-ai-visible-records-ssot): required reading when changing the native Ambient local ledger, outbox, or upload record visibility.
+- [Transcript Window Upsert + Existing Data Cleanup](../plans/2026-05-18-transcript-window-upsert-storage-cleanup): required reading when changing the transcript_session window, ambient outbox dedupe, `pai_personal_signals` upsert, or merging existing local/cloud duplicates.
+- [Ambient Live Freshness + Persistent Transcript Queue](../plans/2026-05-18-ambient-live-freshness-persistent-transcript-queue): required reading when changing the Live transcript display, the iOS native transcript/capture persistent queue, background transcription recovery, or batched backfill of the Ambient timeline backlog.
+- [Ambient Lock-Screen Audio + Live Session Fix](../plans/2026-06-05-ambient-lock-screen-audio-live-session-fix): required reading when changing screen-off recording, background WAV capture, captureSessionId rotation, or the Live current/history section display.
+- [iOS Place Visits Durable Capture](../plans/2026-05-20-ios-place-visits-durable-capture): required reading when changing iOS CLVisit / Place Visits capture, the background visit persistent queue, Always permission diagnostics, visit drain into the Ambient timeline, or Ambient settings source start/stop decisions.
+- [Ambient Voice Identity + Speaker Diarization](../plans/2026-05-27-ambient-voice-identity-diarization): required reading when changing Setting > Ambient own-voice enrollment, OpenAI diarized transcription, the speaker segments payload, or speaker labels like `self` / `speaker_1` in Ambient transcripts.
+- [Ambient Mixed Chinese-English Transcription Quality](../plans/2026-06-09-ambient-mixed-language-transcription-quality): required reading when changing the mixed Chinese-English transcription quality of the Ambient live transcript / timeline, WAV burst slicing parameters, the OpenAI transcription language hint, or the plain `gpt-4o-transcribe` prompt/glossary.

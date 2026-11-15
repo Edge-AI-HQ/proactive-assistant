@@ -1,17 +1,17 @@
 ---
 title: "Feedback"
-description: "反馈事件和学习回流的当前事实。"
+description: "Current facts about feedback events and the learning feedback loop."
 ---
 
 # Feedback
 
-## 结论
+## Summary
 
-Feedback 现在分三层生效：
+Feedback currently takes effect in three layers:
 
-- **事件层**：所有用户操作先写 `pai_feedback_events`，用于审计、`/api/cards.latestOutcome` 冷启动恢复、chat / card_execution agent 的 `feedback_list` 工具读取。
-- **指纹层**：卡片级正负操作同步 fan-out 到 `pai_user_intent_pref`，让同 intent / basket 的偏好权重能逐步变化。
-- **即时偏好层**：用户明确说“以后不要/少推某类卡”时，除了写 feedback event，还会写一条 active `event_type=preference` 的 `pai_events`（lifelong-memory sunset 后 `pai_preference_records` 表已退役，偏好回到 L1 事件流），下一轮 generator 在双向 events 窗口 / L2 画像里看到它并按高权重约束避开。
+- **Event layer**: every user action is first written to `pai_feedback_events`, which is used for auditing, cold-start recovery of `/api/cards.latestOutcome`, and reads by the `feedback_list` tool of the chat / card_execution agents.
+- **Fingerprint layer**: card-level positive/negative actions fan out synchronously to `pai_user_intent_pref`, so the preference weight of the same intent / basket can change gradually.
+- **Immediate preference layer**: when the user explicitly says "don't show / show fewer of this kind of card from now on", besides writing a feedback event, an active `event_type=preference` row is also written to `pai_events` (after the lifelong-memory sunset the `pai_preference_records` table was retired and preferences went back to the L1 event stream); the next generator round sees it in the bidirectional events window / L2 portrait and avoids it as a high-weight constraint.
 
 ```mermaid
 flowchart LR
@@ -21,93 +21,93 @@ flowchart LR
   Feedback --> Prefs[("pai_events (event_type=preference)")]
   Agent["chat / card_execution agent"] --> AgentFeedback["GET /api/agent/feedback/list"]
   Events --> AgentFeedback
-  Prefs --> Gen["generator（双向 events 窗口 + L2 画像注入）"]
+  Prefs --> Gen["generator (bidirectional events window + L2 portrait injection)"]
 ```
 
-## 边界
+## Boundaries
 
-包含：
+Includes:
 
-- `POST /api/feedback`、`GET /api/feedback`、`GET /api/feedback/dismissed`、`GET /api/feedback/completed`。
-- `pai_feedback_events` 的写入语义和 `latestOutcome` 推导。
-- card action 到 `pai_user_intent_pref` 的正负指纹 fan-out。
-- future-negative 文本反馈到 `event_type=preference` 事件（`pai_events`）的即时偏好写入。
-- main chat assistant thumbs up / down 到统一 feedback event 的写入。
-- agent 侧 `feedback_list` 工具面；偏好如何经 events 窗口 / L2 画像进入 generation。
+- `POST /api/feedback`, `GET /api/feedback`, `GET /api/feedback/dismissed`, `GET /api/feedback/completed`.
+- Write semantics of `pai_feedback_events` and how `latestOutcome` is derived.
+- Positive/negative fingerprint fan-out from card actions to `pai_user_intent_pref`.
+- Immediate preference writes from future-negative text feedback to `event_type=preference` events (`pai_events`).
+- Writes from main chat assistant thumbs up / down to the unified feedback event.
+- The agent-side `feedback_list` tool surface; how preferences enter generation through the events window / L2 portrait.
 
-不包含：
+Excludes:
 
-- 卡片怎么生成，看 [Generation](./generation)。
-- 长期画像（L2）/ skill 怎么沉淀，看 [Memory](./memory)。
-- conversation SSE / 卡内对话执行，看 [Execution](./execution)。
-- reward dashboard 的人工评分、casebook、trace artifact，看 [Internal Reward Dashboard](./internal-reward-dashboard)。
-- 用户要求“加按钮 / 改 UI / 加功能 / 改产品流程”等产品开发建议，看下方“开发建议分界”。
+- How cards are generated: see [Generation](./generation).
+- How the long-term portrait (L2) / skills are built up: see [Memory](./memory).
+- conversation SSE / in-card conversation execution: see [Execution](./execution).
+- Manual scoring, casebook, and trace artifacts of the reward dashboard: see [Internal Reward Dashboard](./internal-reward-dashboard).
+- Product development suggestions such as user requests to "add a button / change the UI / add a feature / change a product flow": see "Development Suggestion Boundary" below.
 
-## 表结构
+## Table Schemas
 
-`pai_feedback_events`（migration `011_pai_memory_signals.sql`）：
+`pai_feedback_events` (migration `011_pai_memory_signals.sql`):
 
-| 列 | 含义 |
+| Column | Meaning |
 |---|---|
-| `user_id`、`id` | 复合 PK；repository 用 `fb_...` 生成，不吃前端传入的行 id。 |
-| `kind` | 反馈类型，如 `card_action`、`text_feedback`、`chat_message_feedback`；兼容老前端直接传 `dismiss` / `snooze` kind。 |
-| `action` | `confirm` / `modify` / `dismiss` / `snooze` / `complete` / `thumbs_up` / `thumbs_down` 等。 |
-| `push_id`、`intent_card_id`、`intent_key`、`basket` | 反向定位被反馈的卡和 intent。 |
-| `source` | 用户直写默认 `user_direct`；agent route 默认 `agent`；文本偏好写入时接受 `user` / `user_direct`。 |
-| `value`、`text` | 数值反馈和自由文本反馈正文。 |
-| `metadata` | JSONB；repository 接受 object 或 JSON string，非法 string 会存为 `{ raw }`。 |
-| `conversation_id`、`message_id`、`channel` | 链回 chat / message，例如 main chat thumbs 写 `message_id` + `channel='main_chat'`。 |
-| `created_at` | 写入时间。 |
+| `user_id`, `id` | Composite PK; the repository generates `fb_...` ids and does not accept a row id passed in by the frontend. |
+| `kind` | Feedback type, e.g. `card_action`, `text_feedback`, `chat_message_feedback`; for compatibility, old frontends may pass `dismiss` / `snooze` directly as the kind. |
+| `action` | `confirm` / `modify` / `dismiss` / `snooze` / `complete` / `thumbs_up` / `thumbs_down`, etc. |
+| `push_id`, `intent_card_id`, `intent_key`, `basket` | Locate the card and intent that received the feedback. |
+| `source` | Direct user writes default to `user_direct`; the agent route defaults to `agent`; text preference writes accept `user` / `user_direct`. |
+| `value`, `text` | Numeric feedback and the body of free-text feedback. |
+| `metadata` | JSONB; the repository accepts an object or a JSON string; an invalid string is stored as `{ raw }`. |
+| `conversation_id`, `message_id`, `channel` | Link back to the chat / message, e.g. main chat thumbs write `message_id` + `channel='main_chat'`. |
+| `created_at` | Write time. |
 
-`pai_user_intent_pref`（migration `043_pai_card_patterns.sql`）：
+`pai_user_intent_pref` (migration `043_pai_card_patterns.sql`):
 
-| 列 | 含义 |
+| Column | Meaning |
 |---|---|
-| `(user_id, intent, basket)` | 单用户 intent / basket 指纹。 |
-| `ctr_7d`、`ctr_30d` | 简化偏好强度；正反馈上调，负反馈下调。 |
-| `last_open_at`、`last_dismiss_at` | 最近正/负操作时间。 |
+| `(user_id, intent, basket)` | Per-user intent / basket fingerprint. |
+| `ctr_7d`, `ctr_30d` | Simplified preference strength; positive feedback raises it, negative feedback lowers it. |
+| `last_open_at`, `last_dismiss_at` | Time of the most recent positive/negative action. |
 
-**偏好事件**（`pai_events` 的 `event_type='preference'` 行；`pai_preference_records` 表已在 `114_drop_legacy_memory.sql` DROP，历史 migration `056_pai_preference_records.sql` + `057_pai_preference_lifetime.sql` 保留作记录）。偏好字段直接落 `pai_events` 本体 + `structured` JSONB：
+**Preference events** (`pai_events` rows with `event_type='preference'`; the `pai_preference_records` table was DROPped in `114_drop_legacy_memory.sql`, and the historical migrations `056_pai_preference_records.sql` + `057_pai_preference_lifetime.sql` are kept as a record). Preference fields are stored directly on the `pai_events` row itself + the `structured` JSONB:
 
-| 字段 | 落点 | 含义 |
+| Field | Stored in | Meaning |
 |---|---|---|
-| `statement` | `pai_events.title` | 用户明确表达的生成偏好/禁忌。 |
-| `scope` | `structured.scope` | `topic` / `source` / `timing` / `format` / `global`。 |
-| `polarity` | `structured.polarity` | `positive` / `negative`。 |
-| `durability`、`expires_at` | `structured.{durability,expires_at}` | `temporary` 有过期时间；`persistent` 长期有效（`list(active)` 隐藏过期行）。 |
-| `weight`、`confidence` | `structured.{weight,confidence}` + `pai_events.importance` | 用户明确表达默认高权重。 |
-| `source`、`status` | `pai_events.source`（feedback 域写入 = `pinai_feedback`,actor 经 JWT server-stamp 进 `structured`）+ supersede 链（`superseded_by_id IS NULL` = 当前版） | 来源与当前/被替代状态。 |
+| `statement` | `pai_events.title` | A generation preference or prohibition explicitly stated by the user. |
+| `scope` | `structured.scope` | `topic` / `source` / `timing` / `format` / `global`. |
+| `polarity` | `structured.polarity` | `positive` / `negative`. |
+| `durability`, `expires_at` | `structured.{durability,expires_at}` | `temporary` has an expiry time; `persistent` stays valid long-term (`list(active)` hides expired rows). |
+| `weight`, `confidence` | `structured.{weight,confidence}` + `pai_events.importance` | Explicit user statements default to high weight. |
+| `source`, `status` | `pai_events.source` (feedback-domain writes = `pinai_feedback`, the actor is server-stamped into `structured` via the JWT) + supersede chain (`superseded_by_id IS NULL` = current version) | Source and current/superseded status. |
 
-`pai_intent_card_state` / `pai_intent_thread_state` 已由 migration `051_drop_intent_state_tables.sql` 删除。当前卡片 outcome 从 `pai_feedback_events` 推导，不再维护独立 intent state 表。
+`pai_intent_card_state` / `pai_intent_thread_state` were deleted by migration `051_drop_intent_state_tables.sql`. The current card outcome is derived from `pai_feedback_events`; a separate intent state table is no longer maintained.
 
-## 用户操作映射
+## User Action Mapping
 
-| 输入 | 写入 | 立即效果 |
+| Input | Writes | Immediate effect |
 |---|---|---|
-| `card_action: confirm` | `pai_feedback_events` + `pai_user_intent_pref` 正向 fan-out | `/api/cards.latestOutcome=confirm`；同 intent / basket 权重上调。 |
-| `card_action: complete` | `pai_feedback_events` + `pai_user_intent_pref` 正向 fan-out | `/api/cards.latestOutcome=complete`；刷新后 completed card 不回到 sphere。 |
-| `card_action: dismiss` 或 `kind=dismiss` | `pai_feedback_events` + `pai_user_intent_pref` 负向 fan-out | `/api/feedback/dismissed` 返回该卡；同 intent / basket 权重下调。 |
-| `card_action: snooze` 或 `kind=snooze` | 同 dismiss | `/api/feedback/dismissed` 返回该卡；下一批视为短期冷信号。 |
-| `card_action: modify` | `pai_feedback_events` | `/api/cards.latestOutcome=modify`；不更新 fingerprint。 |
-| `text_feedback` | `pai_feedback_events` | `feedback_list` 能读到原文。 |
-| future-negative `text_feedback` | `pai_feedback_events` + active `event_type=preference` 事件（`pai_events`） | 偏好事件进 L1（固定 `scope=topic` / `polarity=negative` / `durability=persistent`，按 `dedupe_key=pref:<fid>` 幂等），generator 经双向 events 窗口 / L2 画像看到并按高权重约束避开。 |
-| main chat thumbs up/down | `pai_feedback_events(kind=chat_message_feedback, action=thumbs_up/thumbs_down)` | 统一进入 feedback log；当前不更新 card fingerprint。 |
+| `card_action: confirm` | `pai_feedback_events` + positive fan-out to `pai_user_intent_pref` | `/api/cards.latestOutcome=confirm`; the weight of the same intent / basket goes up. |
+| `card_action: complete` | `pai_feedback_events` + positive fan-out to `pai_user_intent_pref` | `/api/cards.latestOutcome=complete`; after a refresh, the completed card does not return to the sphere. |
+| `card_action: dismiss` or `kind=dismiss` | `pai_feedback_events` + negative fan-out to `pai_user_intent_pref` | `/api/feedback/dismissed` returns the card; the weight of the same intent / basket goes down. |
+| `card_action: snooze` or `kind=snooze` | Same as dismiss | `/api/feedback/dismissed` returns the card; the next batch treats it as a short-term cold signal. |
+| `card_action: modify` | `pai_feedback_events` | `/api/cards.latestOutcome=modify`; the fingerprint is not updated. |
+| `text_feedback` | `pai_feedback_events` | `feedback_list` can read the original text. |
+| future-negative `text_feedback` | `pai_feedback_events` + active `event_type=preference` event (`pai_events`) | The preference event enters L1 (fixed `scope=topic` / `polarity=negative` / `durability=persistent`, idempotent by `dedupe_key=pref:<fid>`); the generator sees it through the bidirectional events window / L2 portrait and avoids it as a high-weight constraint. |
+| main chat thumbs up/down | `pai_feedback_events(kind=chat_message_feedback, action=thumbs_up/thumbs_down)` | Goes into the unified feedback log; currently does not update the card fingerprint. |
 
-future-negative 的确定性识别只覆盖明确未来禁忌表达，例如 `stop showing`、`do not show`、`don't show`、`no more`、`less of`、`不要再`、`不用再`、`别再`、`少推`、`屏蔽`、`停止`。这是小而保守的规则：先保证“用户明确说不要”的场景真实生效，避免把普通吐槽误写成长期偏好。
+Deterministic future-negative detection only covers explicit statements that rule something out for the future, e.g. `stop showing`, `do not show`, `don't show`, `no more`, `less of`, plus six Chinese phrases meaning "don't ... again" (two variants), "no need to ... again", "push fewer", "block", and "stop" (exact list: `_FUTURE_NEGATIVE_TEXT_RE` in `domains/feedback/repository.py`). This is a small, conservative rule: first make sure the case where "the user explicitly says no" really takes effect, and avoid misrecording ordinary complaints as long-term preferences.
 
-## 开发建议分界
+## Development Suggestion Boundary
 
-用户在 Main Chat 里提出产品功能、界面、流程改进诉求时，不写 `pai_feedback_events` / preference 事件，而是走独立 `pai_development_feedback`。
+When the user raises requests for product features, UI, or flow improvements in Main Chat, nothing is written to `pai_feedback_events` / preference events; they go to the separate `pai_development_feedback` instead.
 
-例子：
+Examples:
 
-- “能不能加一个导出按钮？”
-- “这个页面手机上太难点了。”
-- “希望设置里能关掉这个功能。”
+- "Can you add an export button?"
+- "This page is too hard to tap on a phone."
+- "I'd like a setting to turn this feature off."
 
-这类诉求是产品团队 triage 数据，不是用户个性化信号。唯一写入路径是 agent 的 `development_feedback_log` 工具（`POST /api/agent/development-feedback/log`）——agent-engine 层没有 keyword fast path，普通聊天消息永远原样进入 agent（有测试锁这一点）。回执必须诚实：已记录给团队评估，不能假装已经实现。
+These requests are triage data for the product team, not personalization signals about the user. The only write path is the agent's `development_feedback_log` tool (`POST /api/agent/development-feedback/log`) — the agent-engine layer has no keyword fast path, and ordinary chat messages always reach the agent unchanged (a test locks this in). The acknowledgment must be honest: the request has been recorded for the team to evaluate; it must not pretend the change is already implemented.
 
-## 核心链路
+## Core Flow
 
 ```mermaid
 sequenceDiagram
@@ -132,44 +132,44 @@ sequenceDiagram
   R-->>UI: { received: true, id }
   Events->>Cards: latest event per intent_card_id
   Cards-->>UI: latestOutcome / outcomeAt
-  Gen->>Prefs: 双向 events 窗口 / L2 画像里读到 preference 事件
+  Gen->>Prefs: reads preference events in the bidirectional events window / L2 portrait
 ```
 
-## 当前设计
+## Current Design
 
-| 维度 | 当前事实 |
+| Aspect | Current facts |
 |---|---|
-| UI 路由 | `backend/services/api/src/pinai_api/domains/feedback/ui.py` 暴露 `POST /api/feedback`、`GET /api/feedback`、`GET /api/feedback/dismissed`、`GET /api/feedback/completed`。 |
-| 鉴权 | Supabase JWT（`current_user`）+ `user_scoped_tx`。 |
-| Repository | `FeedbackRepository.log()` 先写 `pai_feedback_events`，再按输入类型决定是否 fan-out 到 fingerprint / preference。 |
-| `/api/cards` | generation 域的 runs/cards UI 路由从最新 feedback event 推导每张卡的 `latestOutcome` / `outcomeAt`；不依赖 intent state 表。 |
-| Agent feedback | `GET /api/agent/feedback/list` 给 `feedback_list` native tool 读取；`POST /api/agent/feedback/log` 保留 agent-originated feedback 写入，默认 `source='agent'`。 |
-| Preference 写入 | 常规 chat agent 经 `event_append`（`event_type=preference` + `structured{polarity,weight,scope,expires}`；独立 preferences 路由已随 Block2 删除）；future-negative card text feedback 在 feedback repository 内直接 append 一条 `source='pinai_feedback'` 的 preference 事件（写入即盖 `curated_at`）。evolve 还会把反复 dismiss 蒸馏成 standing preference 事件。 |
-| Generation 使用 | generator（`agent_engine/agents/generator.py`）**不直接拉** feedback / preference list——它只带 events_search / event_source / tavily / submit_card 工具；偏好经 L1 preference 事件（确定性 events 日志窗口）+ L2 画像注入生效。`feedback_list` 是 chat / card_execution agent 的工具。 |
-| 开发建议 | `pai_development_feedback` 独立记录产品/UI/功能诉求；唯一写入方是 agent 的 `development_feedback_log` 工具；generation 不读取这张表。 |
-| `metadata` | object / JSON string 都接；非法 string 存 `{ raw: <原文> }`，避免打断 feedback 写入。 |
-| `intentKey` / `basket` | route 不做补齐；前端需要尽量传齐。缺字段时 event 仍写入，但 fingerprint 只能更新已有的 intent / basket 维度。 |
-| Reward ledger 分界 | 用户 open card 仍走 reward dashboard score 事件；confirm / dismiss / snooze / complete / text feedback 不复制进 reward ledger。 |
+| UI routes | `backend/services/api/src/pinai_api/domains/feedback/ui.py` exposes `POST /api/feedback`, `GET /api/feedback`, `GET /api/feedback/dismissed`, `GET /api/feedback/completed`. |
+| Auth | Supabase JWT (`current_user`) + `user_scoped_tx`. |
+| Repository | `FeedbackRepository.log()` writes `pai_feedback_events` first, then decides based on the input type whether to fan out to fingerprint / preference. |
+| `/api/cards` | The runs/cards UI routes of the generation domain derive each card's `latestOutcome` / `outcomeAt` from the latest feedback event; they do not depend on intent state tables. |
+| Agent feedback | `GET /api/agent/feedback/list` is read by the `feedback_list` native tool; `POST /api/agent/feedback/log` keeps agent-originated feedback writes, defaulting to `source='agent'`. |
+| Preference writes | Regular chat agents go through `event_append` (`event_type=preference` + `structured{polarity,weight,scope,expires}`; the separate preferences route was deleted with Block2); future-negative card text feedback appends a `source='pinai_feedback'` preference event directly inside the feedback repository (stamped with `curated_at` on write). evolve also distills repeated dismisses into standing preference events. |
+| Generation usage | The generator (`agent_engine/agents/generator.py`) **does not pull** the feedback / preference list directly — it only has the events_search / event_source / tavily / submit_card tools; preferences take effect through L1 preference events (the deterministic events log window) + L2 portrait injection. `feedback_list` is a tool of the chat / card_execution agents. |
+| Development suggestions | `pai_development_feedback` records product/UI/feature requests separately; the only writer is the agent's `development_feedback_log` tool; generation does not read this table. |
+| `metadata` | Accepts both object and JSON string; an invalid string is stored as `{ raw: <original text> }` so the feedback write is not interrupted. |
+| `intentKey` / `basket` | The route does not fill them in; the frontend should pass them as completely as possible. When fields are missing the event is still written, but the fingerprint can only update the intent / basket dimensions that are present. |
+| Reward ledger boundary | User card opens still go through reward dashboard score events; confirm / dismiss / snooze / complete / text feedback are not copied into the reward ledger. |
 
-## 开发入口
+## Development Entry Points
 
-| 改动 | 先看 |
+| Change | Look at first |
 |---|---|
 | Feedback UI route | `backend/services/api/src/pinai_api/domains/feedback/ui.py` |
 | Agent feedback route | `backend/services/api/src/pinai_api/domains/feedback/agent.py` |
 | Repository / SQL | `backend/services/api/src/pinai_api/domains/feedback/repository.py` |
-| Preference 写入 | `backend/services/api/src/pinai_api/domains/feedback/repository.py`（future-negative append preference 事件）；chat agent 走 `event_append`（`domains/memory/events/agent.py`）。独立 preference repo / route 已随 lifelong-memory sunset 删除 |
+| Preference writes | `backend/services/api/src/pinai_api/domains/feedback/repository.py` (future-negative appends a preference event); the chat agent goes through `event_append` (`domains/memory/events/agent.py`). The separate preference repo / route was deleted with the lifelong-memory sunset |
 | Fingerprint repository | `backend/libs/db/src/pinai_db/repositories/user_fingerprint.py` |
-| Card latestOutcome 推导 | `backend/services/api/src/pinai_api/domains/generation/runs_and_cards.py` |
-| Schema | `011_pai_memory_signals.sql`、`043_pai_card_patterns.sql`、`056_pai_preference_records.sql`、`057_pai_preference_lifetime.sql`、`051_drop_intent_state_tables.sql`、`114_drop_legacy_memory.sql`（DROP `pai_preference_records`，偏好回 `pai_events`）、`111_pai_events.sql` |
-| Generation 端使用 | `backend/services/agent-engine/src/agent_engine/agents/generator.py` |
+| Card latestOutcome derivation | `backend/services/api/src/pinai_api/domains/generation/runs_and_cards.py` |
+| Schema | `011_pai_memory_signals.sql`, `043_pai_card_patterns.sql`, `056_pai_preference_records.sql`, `057_pai_preference_lifetime.sql`, `051_drop_intent_state_tables.sql`, `114_drop_legacy_memory.sql` (DROPs `pai_preference_records`, preferences go back to `pai_events`), `111_pai_events.sql` |
+| Generation-side usage | `backend/services/agent-engine/src/agent_engine/agents/generator.py` |
 | Native feedback tool | `backend/services/agent-engine/src/agent_engine/tools/direct/feedback.py` |
-| Native preference tool | `backend/services/agent-engine/src/agent_engine/tools/direct/preferences.py`（现在只有 `set_generation_language` 输出语言开关；内容偏好走 `tools/direct/events.py:event_append` 写 `event_type=preference` 事件；老 `profile.py` 画像工具已退役，画像走 `tools/direct/user_strings.py:memory_edit`） |
-| 前端卡片反馈 UI | `apps/web/src/ui-web/card/useCardActions.ts`（web 共享）、`apps/web` 卡片详情面板、`apps/mobile/src/components/now/CardDetailSheet.tsx`（RN） |
-| 前端 main chat thumbs | `apps/web/src/ui-web/chat/conversation/CardResultFeedbackBar.tsx`、`packages/core/src/domain/chat-feedback.ts`、`apps/mobile/src/components/chat/MessageActions.tsx` |
-| 开发建议收集 | `backend/services/agent-engine/src/agent_engine/transport/routes/chat.py`、`backend/services/api/src/pinai_api/domains/feedback/dev_agent.py`、`backend/services/agent-engine/src/agent_engine/tools/direct/development_feedback.py`、`backend/services/agent-engine/src/agent_engine/agents/main_chat.py` |
+| Native preference tool | `backend/services/agent-engine/src/agent_engine/tools/direct/preferences.py` (now only the `set_generation_language` output-language switch; content preferences go through `tools/direct/events.py:event_append`, which writes `event_type=preference` events; the old `profile.py` portrait tool is retired, and the portrait goes through `tools/direct/user_strings.py:memory_edit`) |
+| Frontend card feedback UI | `apps/web/src/ui-web/card/useCardActions.ts` (shared on web), the `apps/web` card detail panel, `apps/mobile/src/components/now/CardDetailSheet.tsx` (RN) |
+| Frontend main chat thumbs | `apps/web/src/ui-web/chat/conversation/CardResultFeedbackBar.tsx`, `packages/core/src/domain/chat-feedback.ts`, `apps/mobile/src/components/chat/MessageActions.tsx` |
+| Development suggestion collection | `backend/services/agent-engine/src/agent_engine/transport/routes/chat.py`, `backend/services/api/src/pinai_api/domains/feedback/dev_agent.py`, `backend/services/agent-engine/src/agent_engine/tools/direct/development_feedback.py`, `backend/services/agent-engine/src/agent_engine/agents/main_chat.py` |
 
-## 验证方式
+## How to Verify
 
 ```bash
 # Repository + end-to-end route flow
@@ -185,18 +185,18 @@ cd backend && uv run pytest tests/web/routes/test_cards_route.py tests/chat/test
 cd backend && uv run ruff check .
 cd backend && uv run mypy services libs
 
-# Frontend feedback helpers and card feedback state（在 packages 共享层）
-npm run check:packages    # 覆盖 apps/web/src/ui-web/card/useCardActions.test.tsx、packages/core/src/domain/chat-feedback.test.ts 等
+# Frontend feedback helpers and card feedback state (in the packages shared layer)
+npm run check:packages    # covers apps/web/src/ui-web/card/useCardActions.test.tsx, packages/core/src/domain/chat-feedback.test.ts, etc.
 ```
 
-手工验证：
+Manual verification:
 
-- 对一张卡 dismiss / snooze，`GET /api/feedback/dismissed` 应返回该 `intentCardId`，刷新后卡不回到 sphere。
-- 对一张卡 Done / complete，`GET /api/feedback/completed` 应返回该 `intentCardId`，`/api/cards` 应返回 `latestOutcome='complete'`。
-- 对一张未来卡提交明确 negative 文本，例如 “Stop showing me VC funding rumor cards again”，`/api/agent/feedback/list` 应能读到原文，`pai_events` 应出现对应 `event_type='preference'` 的 negative 行（用下方 DB 速查确认）。
-- 对 main chat assistant message 点 thumbs up/down，`pai_feedback_events` 应出现 `kind='chat_message_feedback'`、`message_id`、`channel='main_chat'`。
+- Dismiss / snooze a card: `GET /api/feedback/dismissed` should return that `intentCardId`, and after a refresh the card does not return to the sphere.
+- Mark a card Done / complete: `GET /api/feedback/completed` should return that `intentCardId`, and `/api/cards` should return `latestOutcome='complete'`.
+- Submit explicit negative text on a future card, e.g. "Stop showing me VC funding rumor cards again": `/api/agent/feedback/list` should be able to read the original text, and `pai_events` should contain a corresponding negative row with `event_type='preference'` (confirm with the DB quick reference below).
+- Click thumbs up/down on a main chat assistant message: `pai_feedback_events` should contain `kind='chat_message_feedback'`, `message_id`, `channel='main_chat'`.
 
-DB 速查：
+DB quick reference:
 
 ```sql
 SELECT kind, action, source, count(*)
@@ -211,7 +211,7 @@ WHERE user_id = $1
 ORDER BY updated_at DESC
 LIMIT 20;
 
--- 偏好现在是 pai_events 的 event_type='preference' 行（pai_preference_records 已退役）
+-- Preferences are now pai_events rows with event_type='preference' (pai_preference_records is retired)
 SELECT title AS statement,
        structured->>'scope'  AS scope,
        structured->>'polarity' AS polarity,
@@ -223,25 +223,25 @@ ORDER BY recorded_at DESC
 LIMIT 20;
 ```
 
-## 踩坑
+## Gotchas
 
-- `metadata` 前端最好传 object；string 只是兼容路径。
-- `intentKey` / `basket` 不会在 route 自动补齐。卡片操作要传齐，否则 fingerprint 的 intent / basket 维度会缺失。
-- `kind=dismiss` / `kind=snooze` 是老前端兼容路径；新代码优先传 `kind='card_action'` + `action`。
-- `complete` 是正反馈，不是单纯 UI 关闭；它会更新 fingerprint。
-- future-negative 文本写 preference 是保守规则，不做复杂自然语言分类。语义不明确的反馈只进 `pai_feedback_events`。
-- preference 事件只是即时偏好层。长期画像仍要靠 L2 USER / MEMORY 画像（agent `memory_edit` + evolve 蒸馏）沉淀，不要把所有 feedback 都硬塞进画像。
-- `pai_card_evaluations` 是 generator 自评，不是用户反馈；不要和 `pai_feedback_events` 混用。
+- For `metadata`, the frontend should preferably pass an object; string is only a compatibility path.
+- `intentKey` / `basket` are not filled in automatically by the route. Card actions must pass them in full, otherwise the intent / basket dimensions of the fingerprint will be missing.
+- `kind=dismiss` / `kind=snooze` are compatibility paths for old frontends; new code should prefer `kind='card_action'` + `action`.
+- `complete` is positive feedback, not just a UI close; it updates the fingerprint.
+- Writing a preference from future-negative text is a conservative rule; it does no complex natural language classification. Feedback with unclear meaning only goes into `pai_feedback_events`.
+- Preference events are only the immediate preference layer. The long-term portrait still has to be built up through the L2 USER / MEMORY portrait (agent `memory_edit` + evolve distillation); don't force all feedback into the portrait.
+- `pai_card_evaluations` is the generator's self-evaluation, not user feedback; don't mix it up with `pai_feedback_events`.
 
-## 相关模块
+## Related Modules
 
-- [Generation](./generation)：feedback / preferences 怎么进入 planner 输入。
-- [Execution](./execution)：chat 事件和 main chat UI 的执行链路。
-- [Memory](./memory)：长期沉淀走 L2 画像（USER / MEMORY / GOALS）/ skill。
-- [Internal Reward Dashboard](./internal-reward-dashboard)：reward ledger、reviewer score、casebook、trace artifact。
+- [Generation](./generation): how feedback / preferences enter the planner input.
+- [Execution](./execution): the execution path of chat events and the main chat UI.
+- [Memory](./memory): long-term accumulation goes through the L2 portrait (USER / MEMORY / GOALS) / skills.
+- [Internal Reward Dashboard](./internal-reward-dashboard): reward ledger, reviewer score, casebook, trace artifact.
 
-## 相关 AI Plans
+## Related AI Plans
 
-- [Card Reward Infra + Internal Dashboard](../plans/2026-05-13-card-reward-infra)：用户 open reward、reviewer score、casebook 和 trace artifact。
-- [反馈并入 Main Chat + 高权重偏好](../plans/2026-05-24-feedback-into-main-chat-preferences)：反馈不再独立成 Feedback Agent，而是走 main chat；plan 里的 `pai_preference_records` 表后随 lifelong-memory sunset 退役，偏好现落 `pai_events`。
-- [Development Feedback Collection](../plans/2026-06-04-development-feedback-collection)：Main Chat 里“加按钮 / 改 UI / 加功能”等不可即时执行诉求走独立开发建议链路，避免污染现有 feedback / preference 学习路径。
+- [Card Reward Infra + Internal Dashboard](../plans/2026-05-13-card-reward-infra): user open reward, reviewer score, casebook, and trace artifact.
+- [Feedback Merged into Main Chat + High-Weight Preferences](../plans/2026-05-24-feedback-into-main-chat-preferences): feedback is no longer a separate Feedback Agent but goes through main chat; the `pai_preference_records` table in the plan was later retired with the lifelong-memory sunset, and preferences now live in `pai_events`.
+- [Development Feedback Collection](../plans/2026-06-04-development-feedback-collection): requests in Main Chat that cannot be executed immediately, such as "add a button / change the UI / add a feature", go through a separate development suggestion path, to avoid polluting the existing feedback / preference learning path.

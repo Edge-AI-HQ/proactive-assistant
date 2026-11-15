@@ -14,13 +14,13 @@
   "navigation": {
     "languages": [
       {
-        "language": "zh",
+        "language": "en",
         "tabs": [
           {
-            "tab": "开发文档",
+            "tab": "Developer Docs",
             "groups": [
               {
-                "group": "当前事实",
+                "group": "Current Facts",
                 "pages": [
                   "index",
                   "modules/data-connectors",

@@ -18,10 +18,10 @@
 ## 维护规则
 
 - `docs/modules/*.mdx` 是当前依据。
-- `docs/plans/*.mdx` 只有被模块文档 `相关 AI Plans` 引用时才保留。
+- `docs/plans/*.mdx` 只有被模块文档 `Related AI Plans` 引用时才保留。
 - 改模块核心链路时，同步更新对应模块文档。
 - `AGENTS.md` 保留 AI coding 规则和硬约束；模块设计不要继续堆进去。
 
-## 相关 AI Plans
+## Related AI Plans
 
 - [Memory Architecture](plans/memory-architecture.mdx)：Memory / Profile / Skill v3 的详细设计补充。新开发优先看 `modules/memory.mdx`，需要追 schema 和迁移细节时再看它。

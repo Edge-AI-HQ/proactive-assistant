@@ -1,17 +1,17 @@
 ---
 title: "Generation"
-description: "卡片生成(agentic 单 run)的当前事实。"
+description: "Current facts about card generation (single agentic run)."
 ---
 
 # Generation
 
-## 结论
+## Summary
 
-卡片生成全链路异步,生成本体是**一次多轮 agent run**(设计 SSOT:[卡片生成(Lifelong Memory 消费侧)](../plans/2026-06-23-proactive-card-generation)):
+Card generation is asynchronous end to end, and the generation itself is **one multi-turn agent run** (design SSOT: [Card Generation (Lifelong Memory Consumer Side)](../plans/2026-06-23-proactive-card-generation)):
 
-`POST /api/generate → enqueue_once(kind=generator.manual) → pai_scheduled_tasks → api tick_loop → dispatcher._run_generator → HTTP POST agent-engine /agent/generate → 确定性上下文日志(到达轴增量 + 未来窗口) → 多轮 agent run(events_search / event_source / tavily / submit_card) → 0..N 张卡 → 返回 JSON → api persist_generator_run → pai_pipeline_runs + 每卡一条 L1 agent_decision`
+`POST /api/generate → enqueue_once(kind=generator.manual) → pai_scheduled_tasks → api tick_loop → dispatcher._run_generator → HTTP POST agent-engine /agent/generate → deterministic context log (arrival-axis increment + future window) → multi-turn agent run (events_search / event_source / tavily / submit_card) → 0..N cards → return JSON → api persist_generator_run → pai_pipeline_runs + one L1 agent_decision per card`
 
-**0 张是正常结果**(宁缺毋滥,不是错误);`cards_to_generate` 是上限 cap 不是目标数。旧 batch pipeline(planner → writer×12 → evaluator×12 → top-up → final_selection,26–48 次 LLM)与 pattern matcher / phase1_seed 已整体退役。
+**0 cards is a normal result** (better no card than a bad card; it is not an error); `cards_to_generate` is an upper cap, not a target count. The old batch pipeline (planner → writer×12 → evaluator×12 → top-up → final_selection, 26–48 LLM calls) and pattern matcher / phase1_seed have been retired entirely.
 
 ```mermaid
 flowchart LR
@@ -20,33 +20,33 @@ flowchart LR
   Q --> Sched["api tick_loop"]
   Sched --> Disp["dispatcher._run_generator"]
   Disp --> Chat["POST agent-engine /agent/generate"]
-  Chat --> Agent["run_generator (一次多轮 agent run)"]
-  Agent --> Resp["GenerateResponse JSON (0..N 卡)"]
+  Chat --> Agent["run_generator (one multi-turn agent run)"]
+  Agent --> Resp["GenerateResponse JSON (0..N cards)"]
   Resp --> Persist["api.persist_generator_run"]
   Persist --> PR[("pai_pipeline_runs")]
-  Persist --> EV[("pai_events (agent_decision, 每卡一条)")]
+  Persist --> EV[("pai_events (agent_decision, one per card)")]
   UI -. polling .-> Runs["/api/agent-runs/active"]
   UI -. polling .-> Cards["/api/cards"]
 ```
 
-## 边界
+## Boundaries
 
-包含:
+Includes:
 
-- `/api/generate` 入队、dedup、virtual_key lazy provisioning。
-- `pai_pipeline_runs` 持久化 + **出卡写回 L1 `agent_decision`**(消费侧唯一 L1 写入)。
-- agent-engine 端 agentic generator(种子窗口 + 工具 + `submit_card`)。
-- 卡 schema(`GeneratedCard`)、citation → `sourceApps` 派生、card id 重写。
-- chat agent 的 scheduled 任务快照注入(prospective memory)。
-- 前端 `usePipeline` / `useActiveAgentRuns` 轮询模型（`packages/state/src/queries/`）。
+- `/api/generate` enqueue, dedup, virtual_key lazy provisioning.
+- `pai_pipeline_runs` persistence + **writing emitted cards back to L1 as `agent_decision`** (the only L1 write on the consumer side).
+- The agentic generator on the agent-engine side (seed window + tools + `submit_card`).
+- Card schema (`GeneratedCard`), citation → `sourceApps` derivation, card id rewriting.
+- Injection of the scheduled task snapshot into the chat agent (prospective memory).
+- The frontend `usePipeline` / `useActiveAgentRuns` polling model (`packages/state/src/queries/`).
 
-不包含:
+Excludes:
 
-- scheduler 框架(tick / claim / lease / retry),看 [Background Tasks](./background-tasks)。
-- `pai_events` / portrait 本身(generator 的输入),看 [Memory](./memory)。
-- 用户点开卡片的下游 chat / 工具执行,看 [Execution](./execution)。
+- The scheduler framework (tick / claim / lease / retry): see [Background Tasks](./background-tasks).
+- `pai_events` / portrait themselves (the generator's input): see [Memory](./memory).
+- Downstream chat / tool execution after the user opens a card: see [Execution](./execution).
 
-## 核心链路
+## Core Flow
 
 ```mermaid
 sequenceDiagram
@@ -60,113 +60,113 @@ sequenceDiagram
 
   FE->>Web: POST /api/generate
   Web->>DB: _find_active_generator_task(user_id)
-  alt 已有 active
+  alt active task exists
     Web-->>FE: { taskId, deduped: true }
-  else 没有
+  else none
     Web->>DB: enqueue_once(kind='generator.manual', payload)
     Web-->>FE: { taskId, runId=taskId, status:'queued' }
   end
   Sched->>DB: claim
   Sched->>Chat: POST /agent/generate (EdDSA agent-run JWT, run_id)
-  Chat->>Agent: build_tick_context(确定性日志:到达轴增量 + 未来 7d 窗口)
-  Agent->>Agent: 多轮:events_search / event_source / tavily 补充核实(去重对照日志里既有 proposal)
-  Agent->>Agent: submit_card × 0..N(工具层校验 schema/cap/重复)
+  Chat->>Agent: build_tick_context(deterministic log: arrival-axis increment + future 7d window)
+  Agent->>Agent: multi-turn: events_search / event_source / tavily for extra verification (dedupe against existing proposals in the log)
+  Agent->>Agent: submit_card × 0..N (tool layer validates schema/cap/duplicates)
   Chat-->>Sched: GenerateResponse { cards, evaluations:[], reasoning }
   Sched->>Save: persist_generator_run(...)
-  Save->>DB: pai_pipeline_runs + 每卡一条 pai_events(agent_decision)
+  Save->>DB: pai_pipeline_runs + one pai_events(agent_decision) row per card
   FE->>Web: poll /api/agent-runs/active + /api/cards
 ```
 
-## 当前设计
+## Current Design
 
-| 环节 | 当前事实 |
+| Stage | Current facts |
 |---|---|
-| 入口 | `domains/generation/generate_ui.py:POST /api/generate`。`_find_active_generator_task` 按 `kind='generator.manual'` + active + user 去重;有就返回 `{deduped:true, taskId}`。 |
-| 入队 | `enqueue_once(kind='generator.manual', payload={cards_to_generate, output_language, trigger})`。`cards_to_generate` 语义 = **上限 cap**(≤8),不是目标数。 |
-| Virtual key | `_ensure_virtual_key` / dispatcher 侧 `ensure_user_litellm_key` lazy-recover;失败 502/run failed。 |
-| 输出语言 | 读 user_settings 的 `generation_language`,payload 传给 engine。 |
-| **上下文日志** | `generation_context.build_tick_context`:**确定性上下文日志 + 未来窗口**。过去侧按**到达轴**增量续写日志——首建 3d lookback,之后从 growth anchor→now 拉新到达事件(`recordedSince/Until + arrivalsLimit + newestFirst`);日志超 token 预算(80k)原地 reset,effective anchor 由 api 侧持久化。未来 7d 窗口经 `/api/agent/events/search`(L1-only,status=active,limit 100,按 occurredAt 升序)。日志作为 prompt-caching cache_control 块注入(ttl 5m/1h 由 api 按用户决定)。portrait(USER/GOALS,含蒸馏偏好)走 `PortraitMiddleware` 注入,不进日志。**没有 raw 直读 / world 单查 / feedback / connections 预拉**。 |
-| 派发 | dispatcher `generator.manual`/`generator.chat`/`generator.scheduled` 走 `_run_generator`;超时预算 600s。**pattern matcher / phase1_seed 已删**(pattern 定位冷启动先验,后续迭代)。`generator.auto` kind 在路由表里但无 producer(死代码)。 |
-| 持久化 | `persist_generator_run` → `persist_pipeline_run_strict`:`pai_pipeline_runs` 一行(`id=run_id` 两列同值、`final_cards JSONB`)+ **同事务每卡一条 L1 `agent_decision` event**(`source=agent_action`、`structured={kind:"proactive_proposal", card_id, run_id, related_event_ids}`,`dedupe_key=card_decision:{card_id}` 幂等,curated 直接盖章)。**静默 run(0 卡)L1 零写入**。reminder.card 传 `record_decisions=False`(用户自设 nudge 不是 AI 提议)。`pai_card_evaluations` 写口保留但主路径恒空(evaluator 退役)。 |
-| Reward review | `/api/reward-dashboard/*` 由独立 reward-dashboard service(`pinai_reward_dashboard`)提供,只读 `pai_pipeline_runs.final_cards`(+历史 `pai_card_evaluations`);新卡无 eval 行。 |
-| 前端轮询 | `usePipeline`(`packages/state/src/queries/pipeline.ts`,/status 检查已内联进它)+ `useActiveAgentRuns`;成功后 `useCardsQuery` 拉 `/api/cards`。注意 **0 卡也是 completed**——产品层按"本轮没有值得说的"呈现,不是失败。 |
-| Prospective 注入 | `ScheduledTasksMiddleware`(harness/middleware.py):main_chat + card_execution 每 run 注入自己 scheduled_generator 任务的有界快照(≤8 条一行一条),agent 可回答/修改/去重自己排的 cron。generator 不注入。 |
+| Entry | `domains/generation/generate_ui.py:POST /api/generate`. `_find_active_generator_task` dedupes by `kind='generator.manual'` + active + user; if one exists it returns `{deduped:true, taskId}`. |
+| Enqueue | `enqueue_once(kind='generator.manual', payload={cards_to_generate, output_language, trigger})`. `cards_to_generate` means **an upper cap** (≤8), not a target count. |
+| Virtual key | `_ensure_virtual_key` / dispatcher-side `ensure_user_litellm_key` lazy-recover; on failure 502/run failed. |
+| Output language | Reads `generation_language` from user_settings and passes it to the engine in the payload. |
+| **Context log** | `generation_context.build_tick_context`: **deterministic context log + future window**. On the past side the log is extended incrementally along the **arrival axis** — the first build uses a 3d lookback, after which newly arrived events are pulled from the growth anchor→now (`recordedSince/Until + arrivalsLimit + newestFirst`); when the log exceeds its token budget (80k) it is reset in place, and the effective anchor is persisted on the api side. The future 7d window goes through `/api/agent/events/search` (L1-only, status=active, limit 100, ascending by occurredAt). The log is injected as a prompt-caching cache_control block (ttl 5m/1h decided per user by api). The portrait (USER/GOALS, including distilled preferences) is injected via `PortraitMiddleware`, not into the log. **No direct raw reads / single world query / feedback / connections prefetch**. |
+| Dispatch | dispatcher routes `generator.manual`/`generator.chat`/`generator.scheduled` to `_run_generator`; timeout budget 600s. **pattern matcher / phase1_seed have been deleted** (patterns are positioned as a cold-start prior, a later iteration). The `generator.auto` kind is in the routing table but has no producer (dead code). |
+| Persistence | `persist_generator_run` → `persist_pipeline_run_strict`: one `pai_pipeline_runs` row (`id=run_id`, the two columns hold the same value; `final_cards JSONB`) + **one L1 `agent_decision` event per card in the same transaction** (`source=agent_action`, `structured={kind:"proactive_proposal", card_id, run_id, related_event_ids}`, idempotent via `dedupe_key=card_decision:{card_id}`, stamped curated directly). **A silent run (0 cards) writes nothing to L1**. reminder.card passes `record_decisions=False` (a user-set nudge is not an AI proposal). The `pai_card_evaluations` write path is kept but is always empty on the main path (evaluator retired). |
+| Reward review | `/api/reward-dashboard/*` is served by the separate reward-dashboard service (`pinai_reward_dashboard`), which only reads `pai_pipeline_runs.final_cards` (+ historical `pai_card_evaluations`); new cards have no eval rows. |
+| Frontend polling | `usePipeline` (`packages/state/src/queries/pipeline.ts`, the /status check has been inlined into it) + `useActiveAgentRuns`; on success, `useCardsQuery` fetches `/api/cards`. Note that **0 cards is also completed** — the product layer presents it as "nothing worth saying this round", not as a failure. |
+| Prospective injection | `ScheduledTasksMiddleware` (harness/middleware.py): main_chat + card_execution inject, on every run, a bounded snapshot of their own scheduled_generator tasks (≤8 entries, one per line), so the agent can answer about / modify / dedupe the crons it scheduled itself. Not injected for the generator. |
 
-## agent-engine 端 generator(一次多轮 agent run)
+## Generator on the agent-engine Side (One Multi-Turn Agent Run)
 
-`transport/routes/generate.py` → `agents/generator.py:run_generator()`。
+`transport/routes/generate.py` → `agents/generator.py:run_generator()`.
 
-- **形态**:`build_agent`(deepagents)+ `LazyThreadSandbox`(prompt 禁 file/exec 工具 → **永不 provision Daytona**)+ `with_portrait=True`;`recursion_limit=80`;单 run 由 route 的 `asyncio.timeout(600s)` 兜底。
-- **工具五个**:`events_search`(日志外补充检索 / 核实 event 是当前版本——supersede 链保证改期/取消可见)、`event_source`(钻取 L0 verbatim,body 投影限 280 字符)、`tavily_search` / `tavily_extract`(world / 新闻类核实)、`submit_card`(run-scoped:args_schema=GeneratedCard,Pydantic 校验失败回可读错误让 agent 修正重交;cap 满 / intent_key 重复直接拒绝)。**去重基准在上下文日志里**:既有 agent_decision(kind=proactive_proposal)折进确定性日志,prompt 指示 agent 丢弃重叠——不靠工具自觉。`cards_recent` 工具与 `/api/agent/cards/recent` 端点已删。
-- **验证内建于生成**:决定出卡时 sources 已经工具核实过——**没有独立 evaluator / final_selection / top-up**。`GeneratorOutput.evaluations` 恒空。
-- **0..N 语义**:每个值得说的点一张,没有就 0 张(prompt 写死宁缺毋滥:一张烂卡比十张漏掉的好卡代价更高)。
-- **上下文消息**:系统段带 `<current_date>` / `<context_map>`;确定性日志以 cache_control 块注入,每轮 `_tick_message` 追加日志尾部增量 + future_view;chat 触发的 focus / scheduled 的 generation_request 一并进上下文(无 `<seed_json>` 标签)。
+- **Shape**: `build_agent` (deepagents) + `LazyThreadSandbox` (the prompt forbids file/exec tools → **never provisions Daytona**) + `with_portrait=True`; `recursion_limit=80`; a single run is bounded by the route's `asyncio.timeout(600s)` as a fallback.
+- **Five tools**: `events_search` (supplementary retrieval outside the log / verifying that an event is the current version — the supersede chain guarantees reschedules/cancellations are visible), `event_source` (drill down to L0 verbatim, body projection capped at 280 characters), `tavily_search` / `tavily_extract` (world / news verification), `submit_card` (run-scoped: args_schema=GeneratedCard; on Pydantic validation failure it returns a readable error so the agent can fix and resubmit; rejects outright when the cap is full / the intent_key is a duplicate). **The dedupe baseline is in the context log**: existing agent_decision (kind=proactive_proposal) entries are folded into the deterministic log, and the prompt instructs the agent to drop overlaps — it does not rely on the agent choosing to call a tool. The `cards_recent` tool and the `/api/agent/cards/recent` endpoint have been deleted.
+- **Verification is built into generation**: by the time it decides to emit a card, the sources have already been verified with tools — **there is no separate evaluator / final_selection / top-up**. `GeneratorOutput.evaluations` is always empty.
+- **0..N semantics**: one card per point worth raising; if there is none, 0 cards (the prompt hard-codes "better no card than a bad card": one bad card costs more than ten good cards that were missed).
+- **Context messages**: the system section carries `<current_date>` / `<context_map>`; the deterministic log is injected as a cache_control block, and each round's `_tick_message` appends the log-tail increment + future_view; chat-triggered focus / scheduled generation_request also go into the context (no `<seed_json>` tag).
 
-### 卡面字段
+### Card Fields
 
-| 字段 | 当前事实 |
+| Field | Current facts |
 |---|---|
-| `title` | 动作先行公式(≤70 字符,verb+object + " — " + 具体触发),GOOD/BAD 对照例在 `<card_rules>`;fact-first 禁止。 |
-| `sources[]` | **引用 L1 event**:`{toolkit} event id={event id}, title={title}`,toolkit 取 event 的 `structured.toolkit`(connector 事件)或 event source(world/device/ambient)。schema `min_length=1` 强制 grounding。 |
-| `sourceApps` | Python 确定性派生(`derive_source_apps`,citation 首词 → app slug:gmail→gmail、googlecalendar→gcal、world→web、未知 toolkit 透传),route `_serialize_cards` 注入,LLM 不参与。 |
-| `reasoningSteps` | 2-4 步(observed→cross_referenced→decided),detail 只指向 sources 已引数据。 |
-| `primary_action.agent_prompt` | 确认后 Card Execution agent 执行的完整任务规格(具体交付物 + 本卡关键参数)。 |
-| card id | route 侧重写 `f"{run_id}_card_{i:02d}"`(`_serialize_cards`,同处注入 sourceApps)。 |
+| `title` | Action-first formula (≤70 characters, verb+object + " — " + concrete trigger), GOOD/BAD contrast examples in `<card_rules>`; fact-first is forbidden. |
+| `sources[]` | **Cite L1 events**: `{toolkit} event id={event id}, title={title}`, where toolkit is the event's `structured.toolkit` (connector events) or the event source (world/device/ambient). The schema's `min_length=1` enforces grounding. |
+| `sourceApps` | Derived deterministically in Python (`derive_source_apps`, first word of the citation → app slug: gmail→gmail, googlecalendar→gcal, world→web, unknown toolkits pass through), injected by the route's `_serialize_cards`; the LLM is not involved. |
+| `reasoningSteps` | 2-4 steps (observed→cross_referenced→decided); detail only points at data already cited in sources. |
+| `primary_action.agent_prompt` | The full task spec the Card Execution agent runs after confirmation (concrete deliverable + this card's key parameters). |
+| card id | Rewritten on the route side to `f"{run_id}_card_{i:02d}"` (`_serialize_cards`, which also injects sourceApps). |
 
-## 开发入口
+## Development Entry Points
 
-| 改动 | 先看 |
+| Change | Look at first |
 |---|---|
-| 生成 HTTP 入口 / dedupe / lazy virtual key | `backend/services/api/src/pinai_api/domains/generation/generate_ui.py` |
-| Scheduler dispatcher generator handler | `backend/services/api/src/pinai_api/orchestration/dispatcher.py`(`_run_generator`)+ `control/chat_proxy.py`(`call_generate`) |
+| Generation HTTP entry / dedupe / lazy virtual key | `backend/services/api/src/pinai_api/domains/generation/generate_ui.py` |
+| Scheduler dispatcher generator handler | `backend/services/api/src/pinai_api/orchestration/dispatcher.py` (`_run_generator`) + `control/chat_proxy.py` (`call_generate`) |
 | **agentic generator + prompt + submit_card** | `backend/services/agent-engine/src/agent_engine/agents/generator.py` |
-| **上下文日志(到达轴 + 未来窗口)** | `backend/services/agent-engine/src/agent_engine/agents/generation_context.py`(`build_tick_context`) |
-| agent-engine HTTP route(0 卡合法 / cap / id 重写) | `backend/services/agent-engine/src/agent_engine/transport/routes/generate.py` |
-| 持久化 + **L1 决策写回** | `backend/services/api/src/pinai_api/domains/generation/pipeline_persistence.py` |
-| 卡 schema | `backend/libs/contracts/src/pinai_contracts/api_models.py`(`GeneratedCard` / `GeneratorOutput`) |
-| Prospective 快照注入 | `backend/services/agent-engine/src/agent_engine/harness/middleware.py`(`ScheduledTasksMiddleware` / `render_scheduled_tasks`) |
-| 前端 pipeline hook | `packages/state/src/queries/pipeline.ts`(`usePipeline`)、`packages/state/src/queries/agent-runs.ts`(`useActiveAgentRuns`) |
+| **Context log (arrival axis + future window)** | `backend/services/agent-engine/src/agent_engine/agents/generation_context.py` (`build_tick_context`) |
+| agent-engine HTTP route (0 cards is valid / cap / id rewrite) | `backend/services/agent-engine/src/agent_engine/transport/routes/generate.py` |
+| Persistence + **L1 decision write-back** | `backend/services/api/src/pinai_api/domains/generation/pipeline_persistence.py` |
+| Card schema | `backend/libs/contracts/src/pinai_contracts/api_models.py` (`GeneratedCard` / `GeneratorOutput`) |
+| Prospective snapshot injection | `backend/services/agent-engine/src/agent_engine/harness/middleware.py` (`ScheduledTasksMiddleware` / `render_scheduled_tasks`) |
+| Frontend pipeline hook | `packages/state/src/queries/pipeline.ts` (`usePipeline`), `packages/state/src/queries/agent-runs.ts` (`useActiveAgentRuns`) |
 
-## 验证方式
+## How to Verify
 
 ```bash
-# engine 侧:agent 工具 / 种子窗口 / route
+# engine side: agent tools / seed window / route
 cd backend && uv run pytest tests/chat/agents/test_generator_agent.py \
   tests/chat/agents/test_generation_context.py tests/chat/agents/test_source_apps.py \
   tests/chat/routes/test_generate.py tests/chat/routes/test_source_apps_injection.py
 
-# api 侧:持久化 + L1 决策写回(需 pgvector DB)
+# api side: persistence + L1 decision write-back (needs a pgvector DB)
 cd backend && uv run pytest tests/web/routes/test_generate_persist.py
 
-# 全套
+# full suite
 cd backend && uv run ruff check && uv run lint-imports && uv run mypy services libs
 ```
 
-手工验证:前端点 Generate → `POST /api/generate` 200 `{taskId}` → 轮询到 success → `/api/cards` 拿新卡;DB 里 `pai_pipeline_runs.final_cards` + `pai_events` 应有对应 `agent_decision` 行(`structured->>'kind'='proactive_proposal'`);0 卡 run 只有 run 行、无 event。LangSmith:每 run 一条 trace(多轮工具调用可见,替代旧的 per-stage metadata)。
+Manual verification: click Generate in the frontend → `POST /api/generate` 200 `{taskId}` → poll until success → `/api/cards` returns the new cards; in the DB, `pai_pipeline_runs.final_cards` + `pai_events` should have the corresponding `agent_decision` rows (`structured->>'kind'='proactive_proposal'`); a 0-card run has only the run row and no event. LangSmith: one trace per run (the multi-turn tool calls are visible, replacing the old per-stage metadata).
 
-## 踩坑
+## Gotchas
 
-- `/api/generate` 是异步 enqueue,**总是**返回 `{ taskId, runId }` 然后前端轮询;同一用户同时只跑一个 `generator.manual`(duplicate 返回 `{deduped:true}`)。
-- **0 卡是 completed 不是失败**——旧管线"generator returned no cards → 502"的语义已删;产品层不要把空结果当错误重试。
-- `cards_to_generate` 是 cap 不是目标:agent 判断值得才出,没有 top-up 凑数。
-- **generator 不再碰 Daytona**:backend 是 `LazyThreadSandbox` 且 prompt 禁 file/exec,纯对话式工具 run。旧 `PINAI_LOCAL_SANDBOX=1` 对 generator 无意义(chat 仍适用)。
-- 卡 `sources[]` 引用的是 **L1 event id**(`evt_*`),不再是 raw/signal/world id;`related_event_ids` 由 persistence 从引文正则回收进 agent_decision。改 citation 形状要同步 `derive_source_apps` 词表 + `_EVENT_ID_RE`。
-- `pai_pipeline_runs.id` 与 `run_id` 同值;客户端按 `runId` 轮询,别按时间戳猜最新行。
-- `persist_generator_run` 失败只 log 不阻断(卡已返回客户端)——失败主动查 `pai_scheduled_task_runs.error`;L1 决策写回在同一事务里,persistence 失败则决策事件也不会写(一致)。
-- 生成后 card fanout(预热前 2 张卡的执行线程)不变,在 dispatcher 持久化之后 best-effort 触发。
-- `output_language` 走 user_settings,不是请求体覆盖。
-- `pai_card_evaluations` / `pai_card_pattern_hits` 停写但表保留(expand-contract);reward-dashboard 读它们的功能对新卡显示为空。
+- `/api/generate` is an async enqueue; it **always** returns `{ taskId, runId }` and then the frontend polls; only one `generator.manual` runs per user at a time (a duplicate returns `{deduped:true}`).
+- **0 cards is completed, not a failure** — the old pipeline semantics of "generator returned no cards → 502" have been removed; the product layer must not treat an empty result as an error and retry.
+- `cards_to_generate` is a cap, not a target: the agent only emits a card when it judges it worthwhile; there is no top-up to fill the count.
+- **The generator no longer touches Daytona**: the backend is `LazyThreadSandbox` and the prompt forbids file/exec, so it is a purely conversational tool run. The old `PINAI_LOCAL_SANDBOX=1` has no effect on the generator (it still applies to chat).
+- Card `sources[]` cite **L1 event ids** (`evt_*`), no longer raw/signal/world ids; persistence recovers `related_event_ids` from the citations by regex into the agent_decision. When changing the citation shape, update the `derive_source_apps` vocabulary + `_EVENT_ID_RE` together.
+- `pai_pipeline_runs.id` and `run_id` have the same value; clients poll by `runId`, so don't guess the latest row by timestamp.
+- A `persist_generator_run` failure is only logged and does not block (the cards have already been returned to the client) — on failure, check `pai_scheduled_task_runs.error` yourself; the L1 decision write-back is in the same transaction, so if persistence fails the decision events are not written either (consistent).
+- Post-generation card fanout (pre-warming the execution threads of the first 2 cards) is unchanged; it is triggered best-effort after the dispatcher persists the run.
+- `output_language` comes from user_settings, not from an override in the request body.
+- `pai_card_evaluations` / `pai_card_pattern_hits` are no longer written, but the tables are kept (expand-contract); reward-dashboard features that read them show empty for new cards.
 
-## 相关模块
+## Related Modules
 
-- [Background Tasks](./background-tasks):scheduler tick / dispatcher / lease / generator kind 路由。
-- [Memory](./memory):`pai_events` 双向窗口 + portrait——generator 的全部输入。
-- [Feedback](./feedback):用户 confirm/dismiss 反馈(回流到生成是后续迭代)。
-- [Execution](./execution):用户在生成卡上点开做 chat / 调工具的下游链路。
-- [Internal Reward Dashboard](./internal-reward-dashboard):内部 review 读取 generation run。
+- [Background Tasks](./background-tasks): scheduler tick / dispatcher / lease / generator kind routing.
+- [Memory](./memory): `pai_events` bidirectional window + portrait — the generator's entire input.
+- [Feedback](./feedback): user confirm/dismiss feedback (feeding it back into generation is a later iteration).
+- [Execution](./execution): the downstream path when the user opens a generated card to chat / call tools.
+- [Internal Reward Dashboard](./internal-reward-dashboard): internal review reads generation runs.
 
-## 相关 AI Plans
+## Related AI Plans
 
-- [卡片生成(Lifelong Memory 消费侧)](../plans/2026-06-23-proactive-card-generation):本模块的设计 SSOT(触发保留现状、单 run 多轮 agent、0..N、后续迭代清单)。
-- [Lifelong Memory 系统设计](../plans/2026-06-23-lifelong-memory-system):`pai_events` / `events_search` / portrait / supersede——generator 的数据地基。
-- [Card Reward Infra + Internal Dashboard](../plans/2026-05-13-card-reward-infra):reward ledger 与内部评分(回流到生成属后续迭代)。
+- [Card Generation (Lifelong Memory Consumer Side)](../plans/2026-06-23-proactive-card-generation): the design SSOT of this module (keep the current triggers, single-run multi-turn agent, 0..N, list of later iterations).
+- [Lifelong Memory System Design](../plans/2026-06-23-lifelong-memory-system): `pai_events` / `events_search` / portrait / supersede — the data foundation of the generator.
+- [Card Reward Infra + Internal Dashboard](../plans/2026-05-13-card-reward-infra): reward ledger and internal scoring (feeding it back into generation is a later iteration).
