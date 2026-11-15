@@ -125,7 +125,7 @@ docs/                        module docs and design plans
 
 ## Documentation
 
-- [`docs/`](docs/index.mdx) has one document per module (connectors, memory, generation, execution, feedback, background tasks, runtime and deployment) plus design plans. Most of it is still in Chinese; English translations are in progress.
+- [`docs/`](docs/index.mdx) has one document per module (connectors, memory, generation, execution, feedback, background tasks, runtime and deployment) plus design plans. The module docs are in English; the design plans under `docs/plans/` are still in Chinese.
 - [`AGENTS.md`](AGENTS.md) is the single source of truth for architecture rules, hard constraints and coding conventions. It is written for both human contributors and AI coding agents.
 
 ## Contributing
