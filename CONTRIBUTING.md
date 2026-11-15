@@ -4,11 +4,15 @@ Thanks for your interest in PIN AI. This guide covers the essentials; [AGENTS.md
 
 ## How this repository works
 
-This repository is a read-only public mirror. Development happens in the maintainers' private repository, and `main` plus release tags are synced here automatically. Pull requests are still welcome: when a maintainer accepts one, the change is applied in the private repository, shows up here with the next sync, and the pull request is closed with a link to the synced commit. Nothing is merged directly into this repository.
+This repository is a read-only public mirror. Development happens in the maintainers' private repository, and `main` plus release tags are synced here automatically. Pull requests are turned off here, and nothing is merged directly into this repository.
+
+The best way to contribute is an issue: report a bug with steps to reproduce, or describe a feature or change you would like. If you have a patch in mind, describe it in the issue (a diff in the issue body is fine); a maintainer will apply accepted changes in the development repository and they will show up here with the next sync.
+
+The rest of this guide describes how the maintainers work in the development repository, which is useful context if you want to run, read or patch the code.
 
 ## Before you start
 
-- For bugs, open an issue with steps to reproduce. For larger changes, open an issue first so we can agree on the approach before you write code.
+- For bugs, open an issue with steps to reproduce. For larger changes, open an issue first so we can agree on the approach.
 - Security issues go through [SECURITY.md](SECURITY.md), never a public issue.
 - Be kind and constructive. This project follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
