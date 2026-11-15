@@ -7,7 +7,6 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-d35ce8"></a>
-  <a href="https://github.com/Edge-AI-HQ/PIN-AI-ASSISTANT/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Edge-AI-HQ/PIN-AI-ASSISTANT/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-3776ab">
   <img alt="TypeScript" src="https://img.shields.io/badge/typescript-strict-3178c6">
   <img alt="Platforms: web, macOS, iOS" src="https://img.shields.io/badge/platforms-web%20%7C%20macOS%20%7C%20iOS-555">
@@ -70,16 +69,18 @@ All model calls go through [LiteLLM](https://github.com/BerriAI/litellm), so pro
 **Prerequisites:** Docker Desktop, Node.js 20+, Python 3.12+ with [uv](https://docs.astral.sh/uv/), and Xcode if you want to build the iOS app.
 
 ```bash
-git clone https://github.com/Edge-AI-HQ/PIN-AI-ASSISTANT.git
-cd PIN-AI-ASSISTANT
+git clone https://github.com/Edge-AI-HQ/proactive-assistant.git
+cd proactive-assistant
 (cd backend && uv sync)
 npm install
+cp backend/.env.example backend/.env           # then fill in your own values
+cp ops/litellm/.env.example ops/litellm/.env
 make up      # build and start postgres, redis, litellm, api, agent-engine, reward-dashboard and the web app
 make urls    # print the local ports of this checkout's stack
 ```
 
 > [!NOTE]
-> Configuration lives in [dotenvx](https://dotenvx.com/)-encrypted env files (`backend/.env.dev`, `ops/litellm/.env.dev`, ...). Maintainers decrypt them with a team key in `DOTENV_PRIVATE_KEY_DEV`. A self-hosting template that lets you plug in your own Supabase project, LLM keys and connector credentials is in progress.
+> The `.env.example` files list every variable the stack reads, with empty values. Fill in the ones you need (for example your own Supabase project and LLM provider keys) and leave integrations you don't use empty. The maintainers' encrypted env files are not part of this public repository.
 
 To work on a single piece without Docker:
 
@@ -127,7 +128,7 @@ docs/                        module docs and design plans
 
 ## Contributing
 
-Issues and pull requests are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) first. Commit messages and PR descriptions are written in English and follow [Conventional Commits](https://www.conventionalcommits.org/). To report a security issue, follow [SECURITY.md](SECURITY.md) instead of opening a public issue.
+Issues and pull requests are welcome. This repository is a public mirror of the maintainers' development repository, so accepted pull requests are applied there and arrive here with the next sync; see [CONTRIBUTING.md](CONTRIBUTING.md). Commit messages and PR descriptions are written in English and follow [Conventional Commits](https://www.conventionalcommits.org/). To report a security issue, follow [SECURITY.md](SECURITY.md) instead of opening a public issue.
 
 ## License
 
