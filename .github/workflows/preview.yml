@@ -37,6 +37,19 @@ jobs:
       backend: ${{ steps.scope.outputs.backend }}
       migration: ${{ steps.scope.outputs.migration }}
     steps:
+      # 后续 job 会带着 DOTENV_PRIVATE_KEY_DEV / FLY_API_TOKEN 执行并部署 PR 里的代码，
+      # 来自 fork 的 PR 绝不能走到那一步（仓库公开后任何人都能提 fork PR）。
+      - name: Refuse fork PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ inputs.pr }}
+        run: |
+          [[ "$PR" =~ ^[0-9]+$ ]] || { echo "::error::pr must be a number"; exit 1; }
+          cross=$(gh pr view "$PR" --repo "${{ github.repository }}" --json isCrossRepository -q .isCrossRepository)
+          if [ "$cross" != "false" ]; then
+            echo "::error::PR #$PR is from a fork; preview runs PR code with dev secrets, refusing."
+            exit 1
+          fi
       - uses: actions/checkout@v4
       - name: Classify changed paths
         id: scope
@@ -215,7 +228,7 @@ jobs:
   # ── 4. 回贴 PR：列出这次起了哪些副本 + 各自 URL ──────────────────────────
   comment:
     needs: [detect, backend, frontend]
-    if: always()
+    if: always() && needs.detect.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Comment preview URLs on PR
