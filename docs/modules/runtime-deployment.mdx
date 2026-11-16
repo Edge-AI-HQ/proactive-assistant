@@ -281,8 +281,6 @@ GitHub Actions entry points are in `.github/workflows/`:
 | `deploy-test.yml`                   | Manual                             | Deploys the test three-app backend + LiteLLM from any branch (web skipped); the Daytona snapshot is refreshed with the deploy.                     |
 | `deploy-prod.yml`                   | `v*` tag automatically / manual             | Deploys the prod three-app backend + web + LiteLLM; the release entry point is `scripts/release.sh vX.Y.Z`, which creates the tag.                     |
 | `build-rn-ios.yml`                  | Push to main (when apps/mobile or packages change) automatically / manual | RN iOS: dev builds automatically → TestFlight, prod only by manual dispatch; with a rolling ccache.                                 |
-| `preview.yml`                       | Manual (enter the PR number)                   | Spins up a temporary preview app `pinai-pr-<N>[-api]` based on what the PR changes (plus a separate db machine if migrations are touched).                       |
-| `preview-down.yml` / `preview-cleanup.yml` | Manual / PR closed             | Tears down the PR's preview environment.                                                                                  |
 
 Local deployment fallback (when CI is unavailable):
 
@@ -386,4 +384,3 @@ Deployment can only be verified through GitHub Actions; local `make deploy-*` is
 - [Execution](./execution): conversation path / browser tool / sandbox tool decisions.
 - [Generation](./generation): how `POST /api/generate` enters the scheduler, how chat runs the generator agent.
 - [Internal Reward Dashboard](./internal-reward-dashboard): internal review app, reward ledger, casebook and trace artifacts.
-- [Dev Pipeline](./dev-pipeline): the internal dev pipeline Linear → Codex → Fly PR preview (context for the preview workflows).
