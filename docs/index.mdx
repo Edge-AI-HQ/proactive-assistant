@@ -43,7 +43,6 @@ flowchart LR
 | [Execution](./modules/execution) | chat-stream, card chat, main_chat / card_execution agent, native tool, Daytona python_exec, browser, Composio side-effect gate. |
 | [Feedback](./modules/feedback) | `pai_feedback_events`, card action, chat-feedback, intent state, feeding biases back into the planner. |
 | [Internal Reward Dashboard](./modules/internal-reward-dashboard) | Internal card review Vite app, reward ledger, reviewer score, casebook, LangSmith trace artifact. |
-| [Dev Pipeline](./modules/dev-pipeline) | Linear intake → plan → delegate to Codex → scope-aware Fly preview (tier A cluster) → teardown; `@deploy`/`@teardown`, latency, cost, gotchas. |
 | [Background Tasks](./modules/background-tasks) | `pai_scheduled_tasks` + `pai_scheduled_task_runs`, tick loop, dispatcher kind, lease/heartbeat/retry. |
 | [Runtime & Deployment](./modules/runtime-deployment) | Local startup, the three services api/agent-engine/reward-dashboard, trust boundary, Daytona, yoyo migration, LiteLLM, dotenvx, CI/CD, production rules. |
 

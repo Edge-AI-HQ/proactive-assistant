@@ -48,7 +48,7 @@ The three legacy repo directories `apis/` (Node backend + container orchestratio
 - LLM paths (chat / generate / evolve agents + Daytona sandbox tools) → **agent-engine process** (`agent_engine`).
 - Internal reward review backend (reward ledger / casebook / trace / pattern curate / data snapshot) → **reward-dashboard process** (`pinai_reward_dashboard`), read-only product DB.
 - The per-user OpenClaw containers and the gateway proxy are fully retired; the frontend calls `pinai_api` HTTP/SSE directly.
-- **Current fly deployment**: **all three environments are split into three separate fly apps** — `proactive-ai-{api,engine,reward}-{dev,test,prod}` (api = trusted edge holding master credentials / engine = untrusted LLM loop with scoped secrets / reward = read-only review backend). Configs are in `backend/deploy/fly-split/fly.{api,engine,reward}.{dev,test,prod}.toml`; CI activates them via `agents_split: true` in `deploy-{dev,test,prod}.yml`, which runs `deploy-agents-split` in `_deploy.yml` (per-app scoped secrets + deploy). The old single apps are kept for rollback: `proactive-ai-agents-dev` is stopped (machine=0, cut over 2026-06-22), `proactive-ai-agents-prod` was stopped after the cutover was verified (cut over 2026-07-07); test never had a single app (built directly as three apps on 2026-07-02). Inside the fly private network, api→engine uses **6PN service discovery** (`proactive-ai-engine-<env>.internal:8001`, **not flycast** — see Gotchas §9).
+- **Current fly deployment**: **all three environments are split into three separate fly apps** — `proactive-ai-{api,engine,reward}-{dev,test,prod}` (api = trusted edge holding master credentials / engine = untrusted LLM loop with scoped secrets / reward = read-only review backend). Configs are in `backend/deploy/fly-split/fly.{api,engine,reward}.{dev,test,prod}.toml`; CI deploys them via `deploy-agents-split` in `_deploy.yml` (per-app scoped secrets + deploy). The old single-app setup (`proactive-ai-agents-{dev,prod}`) is retired; its tomls and CI job are gone. Inside the fly private network, api→engine uses **6PN service discovery** (`proactive-ai-engine-<env>.internal:8001`, **not flycast** — see Gotchas §9).
 
 ## Process Trust Boundary (api vs agent-engine)
 
@@ -124,8 +124,6 @@ backend/.env / backend/.env.chat / ops/litellm/.env / ./.env  # local plaintext,
 - `research/2026-06-10-frontend-layering.mdx`: frontend layering SSOT (three layers core/state/apps; three platforms web/Electron/RN).
 - `internal-reward-dashboard/src/`: internal reward review app (`/runs`, `/cards/:cardId`, `/casebook`, `/traces/:runId`, `/personal-data`), local port `3004`; don't mix it into the main product frontend.
 - `ops/litellm/`: LiteLLM config + fly toml + deploy scripts.
-- `ops/dev-pipeline/`: internal dev pipeline service (Linear intake → plan → delegate to Codex → Fly PR preview). A standalone uv project running as a local long-lived process; not part of the product code. Only its 3 preview workflows live in `.github/workflows/`. See [`docs/modules/dev-pipeline.mdx`](docs/modules/dev-pipeline.mdx).
-- `loops/`: monitoring prompts for `/loop` (`ops-monitor.md`: read-only ops check every 4h that opens issues / `architecture-review.md`: rotating per-module architecture audit).
 
 ## Docs Reading Rules (required for AI)
 `docs/` is the shared context for team development and AI agent lookups. Read it progressively, in this order:
@@ -154,7 +152,6 @@ backend/.env / backend/.env.chat / ops/litellm/.env / ./.env  # local plaintext,
 - [`docs/modules/execution.mdx`](docs/modules/execution.mdx) — chat-stream, card chat, agent prompt + memory tool surface (events_search/event_source/event_append/memory_edit + portrait injection), browser tool, control mode. **Must read before changing code related to `agent_engine/transport` / `agent_engine/agents` / `agent_engine/tools/browser` / `pinai_api/control` / the frontend MainChatView**.
 - [`docs/modules/feedback.mdx`](docs/modules/feedback.mdx) — feedback events, card action, card chat feedback, intent state, learning feedback loop.
 - [`docs/modules/internal-reward-dashboard.mdx`](docs/modules/internal-reward-dashboard.mdx) — internal card review Vite app, reward ledger, reviewer score, casebook, LangSmith trace artifacts. **Must read before changing `internal-reward-dashboard/`, `/api/reward-dashboard/*`, `pai_card_reward_events` / `pai_card_casebook` / `pai_trace_artifacts`**.
-- [`docs/modules/dev-pipeline.mdx`](docs/modules/dev-pipeline.mdx) — internal dev pipeline (Linear intake → plan → delegate to Codex → Fly PR preview). Service code is in `ops/dev-pipeline/`; for preview workflows see "Changes & Deployment".
 - [`docs/modules/background-tasks.mdx`](docs/modules/background-tasks.mdx) — `background_tasks` queue, scheduler tick, reconciler, connector init/sync/evolve (per-user coalesce), auto evolution (periodic sweep; the kind is still named `auto.dreaming`).
 - [`docs/modules/runtime-deployment.mdx`](docs/modules/runtime-deployment.mdx) — local startup, runtime topology, deployment, security, billing overview (aligned on 2026-07-10 with the state after the three-app split + Capacitor frontend retirement).
 
@@ -322,7 +319,7 @@ Snapshot build scripts are in `backend/infra/daytona/`; CI (the `build-daytona-s
 
 ### Dev environment
 After a push to `main`, deployment runs automatically based on what changed (CI workflow: `.github/workflows/deploy-dev.yml` → reuses `_deploy.yml`):
-- Changed `backend/` → deploy the backend. **The dev backend uses three apps**: `deploy-dev.yml` passes `agents_split: true`, CI runs `deploy-agents-split`, which syncs per-app scoped secrets and deploys `proactive-ai-{api,engine,reward}-dev` separately (the old single app `agents-dev` is no longer deployed); to switch back to a single app, just remove that group of split inputs in `deploy-dev.yml`.
+- Changed `backend/` → deploy the backend. **The dev backend uses three apps**: CI runs `_deploy.yml`'s `deploy-agents-split`, which syncs per-app scoped secrets and deploys `proactive-ai-{api,engine,reward}-dev` separately.
 - Changed `apps/web/` or `packages/` (shared layer) → deploy apps/web (zebra); changes to `packages/` also trigger a frontend redeploy
 - Changed `ops/litellm/` → deploy LiteLLM
 - The Daytona snapshot is refreshed along with backend deploys
@@ -332,9 +329,6 @@ After a push to `main`, deployment runs automatically based on what changed (CI 
 **apps/desktop (Electron) only runs CI type-check and has no automated deployment** — local `make macos` only; electron-builder packaging/signing/notarization is still to do. **iOS TestFlight builds have moved to RN (apps/mobile)**: `build-rn-ios.yml` builds dev → TestFlight automatically on push to main (when `apps/mobile/` / `packages/` change); prod is dispatched manually (bundle id dev=`ai.pin.proactive.development`, prod=`ai.pin.proactive`, reusing the same pair of TestFlight app records from the Capacitor era; build numbers are 1000+run#, higher than the old track). Final entitlement state (2026-07-08): focus-status was dropped (the declaration was removed from `apps/mobile/app.config.js`; see the comments in that file for how to restore it); healthkit.background-delivery needs no action in the Apple developer portal — the HealthKit capability toggle there grants all three entitlement keys together, and the existing profiles were verified to cover it (CI builds were signed and uploaded). The workflow keeps only `Normalize entitlements` (normalizes aps-environment to production). Builds use a rolling ccache (check `clear_cache` on dispatch = clear the cache and rebuild): warm cache measured at ~10min (100% hits), cold cache ~30min (first run / cleared cache / Xcode upgrade); caches are isolated per branch. The Capacitor `build-ios.yml` was deleted along with the proactive-ai-frontend directory (2026-07-09); emergency rollback = dig the code out of git history.
 
 `internal-reward-dashboard/` uses its own workflow `.github/workflows/internal-reward-dashboard-dev.yml`: PRs only run type-check / test / build; on push to `main` with changes in that directory, it deploys to the Fly dev app `proactive-ai-reward-dashboard-dev` (default URL `https://proactive-ai-reward-dashboard-dev.fly.dev`).
-
-### PR preview environments (temporary, on demand)
-Manually trigger **PR Preview** in GitHub Actions (`preview.yml`, enter the PR number); it spins up temporary Fly apps based on what the PR changes: frontend only → just `pinai-pr-<N>` (pointing at the shared dev backend); backend touched → also `pinai-pr-<N>-api` (web+chat, sharing the dev DB); `db/migrations/` touched → the backend app also gets a separate pgvector machine (separate DB, zero impact on dev). Auth always reuses the shared dev Supabase. `preview-down.yml` tears it down manually; `preview-cleanup.yml` tears it down automatically when the PR closes. Usually driven by dev-pipeline commands in Linear (reply "deploy" or "teardown"); details in [`docs/modules/dev-pipeline.mdx`](docs/modules/dev-pipeline.mdx).
 
 ### Test environment
 Manually trigger **Deploy Test** (`deploy-test.yml`) from the GitHub Actions page. It can deploy from any branch, and is used to run the full flow on fly before merging.
@@ -347,7 +341,7 @@ To release, use `scripts/release.sh v0.1.0`: after checking that you're on main,
 ### Local deployment (fallback)
 When CI/CD is unavailable, use the Makefile:
 ```bash
-make deploy-pinai-dev       # ⚠️ legacy single-app dev fallback (fly.dev.toml), not the current three-app setup
+make deploy-pinai-dev       # backend three apps (api → engine → reward deployed in order) → dev
 make deploy-pinai-prod      # backend three apps (api → engine → reward deployed in order) → prod
 make deploy-reward-dashboard-dev  # internal reward dashboard → dev
 make deploy-web-dev         # apps/web (zebra) → dev

@@ -1,4 +1,4 @@
-# Split-app variant of fly.dev.toml's `web` process group: the trusted API edge
+# api app: the trusted API edge
 # (holds master credentials).
 app = 'proactive-ai-api-dev'
 primary_region = 'iad'

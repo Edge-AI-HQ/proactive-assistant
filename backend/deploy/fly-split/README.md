@@ -7,7 +7,7 @@ into independent fly apps so the trust boundary becomes physical at the deploy
 layer too — the engine app simply never receives master credentials.
 
 > **Status: ACTIVE on all three envs — dev 2026-06-22, test 2026-07-02,
-> prod 2026-07-07 (`deploy-{dev,test,prod}.yml` pass `agents_split: true`).**
+> prod 2026-07-07. The split is now the only backend deploy path.**
 > The runbook below is kept as the activation reference (it has now run
 > end-to-end on every env). One correction learned on dev: api→engine goes
 > over **6PN `.internal:8001`**, NOT flycast — flycast exposes the
@@ -16,8 +16,9 @@ layer too — the engine app simply never receives master credentials.
 >
 > What ships in this directory + repo:
 > - `fly.{api,engine,reward}.{dev,prod,test}.toml` — all three apps × three envs.
-> - `_deploy.yml` `deploy-agents-split` job — gated `if: inputs.agents_split`
->   (default false ⇒ skipped ⇒ current single-app `deploy-agents` runs unchanged).
+> - `_deploy.yml` `deploy-agents-split` job — the only backend deploy path (the
+>   single-app job and `backend/fly.{dev,test,prod}.toml` were removed once all
+>   three envs ran on the split).
 > - `backend/db/migrations/107_pai_reward_role.sql` — the `pai_reward` scoped
 >   role (additive; creating an unused role is harmless).
 > - `internal-reward-dashboard` nginx `/api/reward-dashboard/*` prefix split,
@@ -150,13 +151,10 @@ re-done). Run for one env (`dev` first) end-to-end before the next.
    grants; it runs automatically with the api app's first deploy `release_command`
    (step 6). Nothing to do here — listed so the order is explicit (the role must
    exist before reward connects).
-5. **[ops]** Activate the split CI job. The single-app `deploy-agents` is gated
-   `!inputs.agents_split`; the split `deploy-agents-split` is gated
-   `inputs.agents_split`. Flip it by passing `agents_split: true` + the six split
-   inputs to `_deploy.yml` from the env's caller (`deploy-<env>.yml`), e.g.:
+5. **[done]** CI deploys the split apps. Each env's caller (`deploy-<env>.yml`)
+   passes the six split inputs to `_deploy.yml`:
    ```yaml
    with:
-     agents_split: true
      api_app:    proactive-ai-api-<env>
      engine_app: proactive-ai-engine-<env>
      reward_app: proactive-ai-reward-<env>
@@ -204,14 +202,9 @@ re-done). Run for one env (`dev` first) end-to-end before the next.
    # confirm a non-granted table (e.g. pai_jti_revocations) is permission-denied
    # but pai_card_casebook is reachable.
    ```
-9. **[ops]** Retire the single app once the split is healthy:
-   `flyctl apps destroy proactive-ai-agents-<env>` (after confirming no traffic
-   and snapshots/secrets are no longer needed). Revert is just flipping
-   `agents_split` back to false and redeploying the single app — keep
-   `fly.<env>.toml` until you're confident.
-
-Until step 5 flips `agents_split`, **CI is byte-for-byte unchanged**: the
-single-app `deploy-agents` job runs and `deploy-agents-split` is skipped.
+9. **[done]** The single apps were retired, and their tomls plus the single-app
+   CI job were removed. If a `proactive-ai-agents-<env>` app still exists, destroy
+   it with `flyctl apps destroy`.
 
 ### Landmines (check on first dev deploy)
 

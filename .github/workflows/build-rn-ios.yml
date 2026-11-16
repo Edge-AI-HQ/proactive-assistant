@@ -45,6 +45,8 @@ concurrency:
 
 jobs:
   build:
+    # Private repo only: public-mirror.yml copies this file to the public mirror.
+    if: github.repository == 'Edge-AI-HQ/PIN-AI-ASSISTANT'
     # macos-26:唯一带 Xcode 26.6 的镜像(见下 Select Xcode)
     runs-on: macos-26
     # RN 0.85 必须从源码编译(见下 RCT_USE_PREBUILT_RNCORE),冷启 archive 明显慢于 Capacitor

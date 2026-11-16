@@ -18,25 +18,20 @@ concurrency:
 
 jobs:
   deploy:
+    # Private repo only: public-mirror.yml copies this file to the public mirror.
+    if: github.repository == 'Edge-AI-HQ/PIN-AI-ASSISTANT'
     uses: ./.github/workflows/_deploy.yml
     secrets: inherit
     with:
       env_file: .env.test
       dotenv_key_name: DOTENV_PRIVATE_KEY_TEST
-      # test 走三-app 拆分（api/engine/reward），从未有过单 app 部署——
-      # proactive-ai-agents-test 这个 app 不存在，test 直接按终态建。
-      # agents_app/agents_toml 是 _deploy.yml 的 required input，但
-      # agents_split=true 时单 app job 被跳过，这两个值不会被使用。
-      agents_split: true
       api_app: proactive-ai-api-test
       engine_app: proactive-ai-engine-test
       reward_app: proactive-ai-reward-test
       api_toml: deploy/fly-split/fly.api.test.toml
       engine_toml: deploy/fly-split/fly.engine.test.toml
       reward_toml: deploy/fly-split/fly.reward.test.toml
-      agents_app: proactive-ai-agents-test
       litellm_app: proactive-ai-litellm-test
-      agents_toml: fly.test.toml
       litellm_toml: fly.litellm-test.toml
       daytona_version: test
       run_filter: false

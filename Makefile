@@ -331,19 +331,22 @@ reset: ## Stop everything, delete volumes, rebuild and start fresh (incl. ngrok 
 	fi
 
 # ── Deploy (Fly.io) ──
-# backend has two process groups (web + chat) that share one fly
-# app via [processes] in fly.dev.toml / fly.prod.toml. Internal reward
-# dashboard is a separate static SPA fly app. LiteLLM is its own fly app
-# under ops/litellm.
+# backend is three fly apps per env (api / engine / reward), configs in
+# backend/deploy/fly-split/. Internal reward dashboard is a separate static
+# SPA fly app. LiteLLM is its own fly app under ops/litellm.
 
 define extract_reward_dashboard_vite_args
 $(shell $(DOTENVX) get -f backend/.env.$(1) --format json 2>/dev/null \
 	| python3 -c 'import json,sys;d=json.load(sys.stdin);[print("--build-arg "+k+"="+v) for k,v in d.items() if k in {"VITE_SUPABASE_URL","VITE_SUPABASE_PUBLISHABLE_KEY"}]')
 endef
 
-deploy-pinai-dev: ## Deploy backend (web + chat) to dev
-	cd backend && env -u all_proxy -u http_proxy -u https_proxy \
-		flyctl deploy --config fly.dev.toml --remote-only
+# api first — its release_command runs migrations; engine/reward have none.
+# Secrets are NOT synced here (CI does that via sync_fly_secrets.py).
+deploy-pinai-dev: ## Deploy backend (api + engine + reward) to dev
+	cd backend && env -u all_proxy -u http_proxy -u https_proxy sh -c '\
+		flyctl deploy --config deploy/fly-split/fly.api.dev.toml --remote-only && \
+		flyctl deploy --config deploy/fly-split/fly.engine.dev.toml --remote-only && \
+		flyctl deploy --config deploy/fly-split/fly.reward.dev.toml --remote-only'
 
 # api first — its release_command runs migrations; engine/reward have none.
 # Secrets are NOT synced here (CI does that via sync_fly_secrets.py); after

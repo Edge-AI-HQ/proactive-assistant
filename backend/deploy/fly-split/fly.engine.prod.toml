@@ -1,4 +1,4 @@
-# Split-app variant of fly.prod.toml's `chat` process group: the UNTRUSTED LLM
+# engine app: the UNTRUSTED LLM
 # loop. Holds NO master credentials.
 # Copied from fly.engine.dev.toml; differences: app name (-prod), all URLs
 # (-prod), DEPLOY_ENV='production', Daytona snapshot tag. VM size = 1gb / 1 cpu,

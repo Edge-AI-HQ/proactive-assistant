@@ -88,7 +88,7 @@ docs/*
 # Pattern library SSOT — seeded into pai_card_patterns by scripts/seed_patterns.py.
 !docs/data/
 !docs/data/**
-# RN 前端迁移台账（A-RN-frontend skill 的入口；逐屏进度 + SSOT plan 索引）
+# Frontend troubleshooting notes (RN / iOS build pitfalls)
 !docs/frontend/
 !docs/frontend/**
 
@@ -115,5 +115,3 @@ xcuserdata/
 # Daytona local snapshot marker (scripts/ensure_daytona_snapshot.sh, per-worktree)
 .daytona-snapshot-local.hash
 
-# Architecture-review loop runtime state (regenerated each run, per-dev — prompt itself stays tracked)
-loops/*.state.json

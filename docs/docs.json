@@ -29,7 +29,6 @@
                   "modules/execution",
                   "modules/feedback",
                   "modules/internal-reward-dashboard",
-                  "modules/dev-pipeline",
                   "modules/background-tasks",
                   "modules/runtime-deployment"
                 ]

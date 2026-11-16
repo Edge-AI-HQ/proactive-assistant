@@ -276,18 +276,16 @@ GitHub Actions entry points are in `.github/workflows/`:
 | Workflow                            | Trigger                             | What it does                                                                                                       |
 | ----------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `ci.yml`                            | PR                               | `pinai-agents-checks` (ruff check/format + mypy + migration/seed + pytest with a pgvector DB) + `frontend-check` (type-check for all three platforms + packages boundaries + apps/web image build); both are required checks in the main ruleset. |
-| `deploy-dev.yml`                    | Push to `main` or manual            | Deploys dev by path filter; `agents_split: true` uses the three-app setup (`deploy-agents-split` in `_deploy.yml`).              |
+| `deploy-dev.yml`                    | Push to `main` or manual            | Deploys dev by path filter; the backend goes out as three apps (`deploy-agents-split` in `_deploy.yml`).                       |
 | `internal-reward-dashboard-dev.yml` | PR / push to `main` / manual       | Separately verifies and deploys the internal reward dashboard to Fly dev.                                                             |
 | `deploy-test.yml`                   | Manual                             | Deploys the test three-app backend + LiteLLM from any branch (web skipped); the Daytona snapshot is refreshed with the deploy.                     |
 | `deploy-prod.yml`                   | `v*` tag automatically / manual             | Deploys the prod three-app backend + web + LiteLLM; the release entry point is `scripts/release.sh vX.Y.Z`, which creates the tag.                     |
 | `build-rn-ios.yml`                  | Push to main (when apps/mobile or packages change) automatically / manual | RN iOS: dev builds automatically → TestFlight, prod only by manual dispatch; with a rolling ccache.                                 |
-| `preview.yml`                       | Manual (enter the PR number)                   | Spins up a temporary preview app `pinai-pr-<N>[-api]` based on what the PR changes (plus a separate db machine if migrations are touched).                       |
-| `preview-down.yml` / `preview-cleanup.yml` | Manual / PR closed             | Tears down the PR's preview environment.                                                                                  |
 
 Local deployment fallback (when CI is unavailable):
 
 ```bash
-make deploy-pinai-dev       # ⚠️ legacy single-app dev fallback (fly.dev.toml), not the current three-app setup
+make deploy-pinai-dev       # backend three apps (api → engine → reward deployed in order) → dev
 make deploy-pinai-prod      # prod three apps (api → engine → reward deployed in order)
 make deploy-reward-dashboard-dev
 make deploy-web-dev
@@ -386,4 +384,3 @@ Deployment can only be verified through GitHub Actions; local `make deploy-*` is
 - [Execution](./execution): conversation path / browser tool / sandbox tool decisions.
 - [Generation](./generation): how `POST /api/generate` enters the scheduler, how chat runs the generator agent.
 - [Internal Reward Dashboard](./internal-reward-dashboard): internal review app, reward ledger, casebook and trace artifacts.
-- [Dev Pipeline](./dev-pipeline): the internal dev pipeline Linear → Codex → Fly PR preview (context for the preview workflows).

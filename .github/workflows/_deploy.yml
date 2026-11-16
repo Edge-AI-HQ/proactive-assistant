@@ -40,45 +40,29 @@ on:
         description: Name of the DOTENV_PRIVATE_KEY_* secret LiteLLM's container needs
         type: string
         required: true
-      agents_app:
-        type: string
-        required: true
       litellm_app:
         type: string
         required: true
-      agents_toml:
-        type: string
-        required: true
-      # ── fly three-app split (P0-1, ready-inactive) ──
-      # When agents_split is false (the default), deploy-agents runs unchanged
-      # (single app). When a caller passes agents_split=true, deploy-agents is
-      # skipped and deploy-agents-split runs the three per-app sync + deploy
-      # (api / engine / reward). The split inputs below are only read by that
-      # job; callers that don't opt in leave them empty. Activating the split is
-      # an ops decision (see backend/deploy/fly-split/README.md). dev and test
-      # pass agents_split=true (three-app); prod still deploys the single app.
-      agents_split:
-        description: Deploy the three split apps (api/engine/reward) instead of the single app
-        type: boolean
-        default: false
+      # ── backend: three fly apps (api / engine / reward) ──
+      # See backend/deploy/fly-split/README.md.
       api_app:
         type: string
-        default: ''
+        required: true
       engine_app:
         type: string
-        default: ''
+        required: true
       reward_app:
         type: string
-        default: ''
+        required: true
       api_toml:
         type: string
-        default: ''
+        required: true
       engine_toml:
         type: string
-        default: ''
+        required: true
       reward_toml:
         type: string
-        default: ''
+        required: true
       litellm_toml:
         type: string
         required: true
@@ -157,47 +141,11 @@ jobs:
           uv sync --no-dev
           uv run python infra/daytona/build_snapshot.py --version ${{ inputs.daytona_version }} --recreate
 
-  deploy-agents:
-    # Single-app path (default). Skipped when agents_split=true — the split
-    # path below takes over. The added `!inputs.agents_split` guard is the only
-    # change to this job; with the default agents_split=false it is a no-op and
-    # this job runs exactly as before.
-    needs: [changes, build-daytona-snapshot]
-    if: ${{ always() && !inputs.agents_split && (!inputs.run_filter || needs.changes.outputs.agents == 'true') && needs.build-daytona-snapshot.result == 'success' }}
-    runs-on: ubuntu-latest
-    environment: ${{ inputs.environment != '' && inputs.environment || null }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      - uses: superfly/flyctl-actions/setup-flyctl@v1
-
-      - name: Sync fly secrets from ${{ inputs.env_file }}
-        working-directory: backend
-        env:
-          DOTENV_PRIVATE_KEY_DEV: ${{ secrets.DOTENV_PRIVATE_KEY_DEV }}
-          DOTENV_PRIVATE_KEY_TEST: ${{ secrets.DOTENV_PRIVATE_KEY_TEST }}
-          DOTENV_PRIVATE_KEY_PRODUCTION: ${{ secrets.DOTENV_PRIVATE_KEY_PRODUCTION }}
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: |
-          python3 scripts/sync_fly_secrets.py \
-            --app ${{ inputs.agents_app }} \
-            --env-file ${{ inputs.env_file }}
-
-      - name: Deploy backend to ${{ inputs.daytona_version }}
-        working-directory: backend
-        run: flyctl deploy --config ${{ inputs.agents_toml }} --remote-only
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-
   deploy-agents-split:
-    # Three-app split path (P0-1, ready-inactive). Runs ONLY when a caller
-    # passes agents_split=true; with the default false this whole job is
-    # skipped and current deploys are unaffected. See
-    # backend/deploy/fly-split/README.md for the activation runbook + the
-    # one-time ops prerequisites (apps created, IPs allocated, scoped DSNs in
-    # the dotenvx env file as ENGINE_DATABASE_URL / REWARD_DATABASE_URL).
+    # Backend deploy: three fly apps (api / engine / reward). See
+    # backend/deploy/fly-split/README.md for the one-time ops prerequisites
+    # (apps created, IPs allocated, scoped DSNs in the dotenvx env file as
+    # ENGINE_DATABASE_URL / REWARD_DATABASE_URL).
     #
     # Trust scoping per app (sync_fly_secrets.py):
     #   * api    — full secret set (trusted edge). No flags.
@@ -208,7 +156,7 @@ jobs:
     # Deploy order: api FIRST (its release_command runs yoyo migrations), then
     # engine + reward (no release_command — scoped DSNs can't migrate).
     needs: [changes, build-daytona-snapshot]
-    if: ${{ always() && inputs.agents_split && (!inputs.run_filter || needs.changes.outputs.agents == 'true') && needs.build-daytona-snapshot.result == 'success' }}
+    if: ${{ always() && (!inputs.run_filter || needs.changes.outputs.agents == 'true') && needs.build-daytona-snapshot.result == 'success' }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment != '' && inputs.environment || null }}
     steps:

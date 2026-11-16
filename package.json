@@ -15,7 +15,6 @@
     "lint:packages": "eslint packages",
     "check:packages": "npm run lint:packages && npm run type-check --workspace=@pin-ai/core --workspace=@pin-ai/state --workspace=@pin-ai/ui-kit && npm test --workspace=@pin-ai/core --workspace=@pin-ai/state --workspace=@pin-ai/ui-kit",
     "build": "npm run build --workspace=@pin-ai/web",
-    "mobile-sync:ngrok": "node scripts/mobile-sync-ngrok.mjs",
     "litellm:up": "bash ops/litellm/litellm.sh up",
     "litellm:restart": "bash ops/litellm/litellm.sh restart",
     "litellm:logs": "bash ops/litellm/litellm.sh logs",
