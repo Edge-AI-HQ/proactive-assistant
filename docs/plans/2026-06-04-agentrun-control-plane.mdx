@@ -9,7 +9,7 @@ description: "把 7 个 agent 统一成 actor 模型内核:会话=actor(Session)
 >
 > **一句话**:7 个 agent(main_chat / card_execution / proactive / generator / dream / evolve / crystallize)各有一条手写执行链路。Agent Core 统一成 **actor 模型**:会话=actor(`Session`),mailbox(`Message` 队列),per-session 串行,一次 `Run` 醒来合并消费 mailbox、跑一轮,输出经 `FrameBus` live streaming。**控制平面在 web(账本/worker/bus,碰 DB),执行在 chat(LLM loop,不碰 DB),协议在 shared**——与现有 web/chat 信任边界重合。
 >
-> **定位**:[2026-06-01](./2026-06-01-agent-architecture-redesign) §8 四层 + [2026-06-02](./2026-06-02-agent-directory-and-tool-paradigm) 目录解决"单 agent 怎么组织代码";本文解决"跨 agent 怎么统一编排执行"。执行器=06-01 的 `harness/`;`RunProfile`(web)与 `AgentSpec`(chat)互补。
+> **定位**:`2026-06-01-agent-architecture-redesign.mdx` §8 四层 + `2026-06-02-agent-directory-and-tool-paradigm.mdx` 目录解决"单 agent 怎么组织代码";本文解决"跨 agent 怎么统一编排执行"。执行器=06-01 的 `harness/`;`RunProfile`(web)与 `AgentSpec`(chat)互补。
 >
 > **对标**:**actor 模型**(Erlang/Akka mailbox、Cloudflare Durable Objects)、**Claude Managed Agents**(stop_reason 挂起态 / events / multiagent threads)、**LangGraph Platform**(Runs / `multitask_strategy` / `interrupt`+`Command(resume)`)、**Claude Code** `Task.ts`、**Temporal/Restate**(durable + per-key 串行)。
 >
@@ -542,6 +542,6 @@ RC-1~5 完成后整体 review,命名/目录/死代码收敛。**纯清理,无设
 
 ## 相关
 
-- [2026-06-01 agent 架构重构](./2026-06-01-agent-architecture-redesign) · [2026-06-02 目录+工具范式](./2026-06-02-agent-directory-and-tool-paradigm)
+- `2026-06-01-agent-architecture-redesign.mdx` · `2026-06-02-agent-directory-and-tool-paradigm.mdx`
 - 模块:[`execution.mdx`](../modules/execution) · [`background-tasks.mdx`](../modules/background-tasks) · [`runtime-deployment.mdx`](../modules/runtime-deployment)(信任边界)
 - 对标:Claude Managed Agents(stop_reason/events/multiagent)· LangGraph Platform(Runs/multitask_strategy/interrupt+resume)· Claude Code Task.ts · actor 模型 · Temporal/Restate

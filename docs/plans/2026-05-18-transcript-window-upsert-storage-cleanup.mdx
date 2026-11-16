@@ -701,5 +701,5 @@ ORDER BY row_count DESC, max_raw_ref_count DESC;
 ## 与其它 plan 的关系
 
 - [Ambient AI-visible Records SSOT 重构](./2026-05-17-ambient-ai-visible-records-ssot)：定义 Ambient UI/outbox/cloud 应读写同一批 AI-visible records。本 plan 是其 transcript window 去重和 cleanup 的补充，不替代它。
-- [Device Ingest Policy + Health Raw](./2026-04-30-device-ingest-policy-and-health-raw)：定义 `/api/devices/ingest` 的 policy 边界。本 plan 只改 `ambient.candidate_window` 的 transcript upsert 语义，不改变 health raw-only 规则。
+- `2026-04-30-device-ingest-policy-and-health-raw.mdx`：定义 `/api/devices/ingest` 的 policy 边界。本 plan 只改 `ambient.candidate_window` 的 transcript upsert 语义，不改变 health raw-only 规则。
 - [Web Cloud Data Self-Sufficient Plan](./2026-05-17-web-cloud-data-self-sufficient)：要求 Web 端能只靠 cloud uploaded data 自洽。本 plan 确保 cloud transcript window 不是重复快照堆，而是一条最新事实。

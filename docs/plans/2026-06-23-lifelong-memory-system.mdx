@@ -6,7 +6,7 @@ description: "把用户的 digital + physical + interaction context 收敛成三
 # Lifelong Memory 系统设计
 
 > **状态**:设计定稿(2026-06-21 起多轮 socratic + 代码核实;2026-07-01 吸收实现期决策修订)。**这是一份 design doc:只描述系统终态设计与依据,不跟踪执行进度**——实现状态以代码为准。本份 = memory 基础设施;消费侧(proactive + 卡片生成)见 [Proactive + 卡片生成](./2026-06-23-proactive-card-generation)。
-> **依据**:[Lifelong Memory 调研](../research/2026-06-10-lifelong-memory-architecture.mdx)、openclaw/hermes 源码逆向、重构前系统代码核实(第二节)。
+> **依据**:Lifelong Memory 调研(`docs/research/2026-06-10-lifelong-memory-architecture.mdx`,未入库)、openclaw/hermes 源码逆向、重构前系统代码核实(第二节)。
 
 ---
 
@@ -500,6 +500,6 @@ memory 是 api 进程内的 **modular monolith**:模块 = 目录边界 + 窄腰�
 ## 相关
 
 - **消费侧**:[Proactive + 卡片生成(基于本 memory)](./2026-06-23-proactive-card-generation)。
-- **依据**:[Lifelong Memory 调研](../research/2026-06-10-lifelong-memory-architecture.mdx)、openclaw/hermes 源码逆向、[后端重构 #197](./2026-06-21-backend-rearchitecture)。
-- **相邻**:`064_pai_timeline_events`(已 drop,复用 schema)、[RLS role 模型](./2026-06-08-rls-role-model)(已被 #200-204 解决)、[隐私加密](./2026-06-02-user-data-encryption-and-isolation)(独立 plan)。
+- **依据**:Lifelong Memory 调研(`docs/research/2026-06-10-lifelong-memory-architecture.mdx`,未入库)、openclaw/hermes 源码逆向、[后端重构 #197](./2026-06-21-backend-rearchitecture)。
+- **相邻**:`064_pai_timeline_events`(已 drop,复用 schema)、[RLS role 模型](./2026-06-08-rls-role-model)(已被 #200-204 解决)、隐私加密(`2026-06-02-user-data-encryption-and-isolation.mdx`,已删除)(独立 plan)。
 - **模块**:[Memory](../modules/memory)、[Data Connectors](../modules/data-connectors)、[Background Tasks](../modules/background-tasks)。
