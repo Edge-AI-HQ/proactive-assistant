@@ -29,20 +29,13 @@ jobs:
     with:
       env_file: .env.dev
       dotenv_key_name: DOTENV_PRIVATE_KEY_DEV
-      # dev 已切到三-app 拆分（api/engine/reward）。agents_split=true 让 _deploy.yml
-      # 跑 deploy-agents-split（per-app scoped secrets + deploy）、跳过单 app
-      # deploy-agents。单 app agents-dev 已停（machine=0）保留作回滚——切回单 app
-      # 只需删掉下面这组 split inputs（agents_split 默认 false）。
-      agents_split: true
       api_app: proactive-ai-api-dev
       engine_app: proactive-ai-engine-dev
       reward_app: proactive-ai-reward-dev
       api_toml: deploy/fly-split/fly.api.dev.toml
       engine_toml: deploy/fly-split/fly.engine.dev.toml
       reward_toml: deploy/fly-split/fly.reward.dev.toml
-      agents_app: proactive-ai-agents-dev
       litellm_app: proactive-ai-litellm-dev
-      agents_toml: fly.dev.toml
       litellm_toml: fly.litellm-dev.toml
       web_toml: apps/web/fly.toml
       daytona_version: dev

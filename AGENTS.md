@@ -48,7 +48,7 @@ The three legacy repo directories `apis/` (Node backend + container orchestratio
 - LLM paths (chat / generate / evolve agents + Daytona sandbox tools) → **agent-engine process** (`agent_engine`).
 - Internal reward review backend (reward ledger / casebook / trace / pattern curate / data snapshot) → **reward-dashboard process** (`pinai_reward_dashboard`), read-only product DB.
 - The per-user OpenClaw containers and the gateway proxy are fully retired; the frontend calls `pinai_api` HTTP/SSE directly.
-- **Current fly deployment**: **all three environments are split into three separate fly apps** — `proactive-ai-{api,engine,reward}-{dev,test,prod}` (api = trusted edge holding master credentials / engine = untrusted LLM loop with scoped secrets / reward = read-only review backend). Configs are in `backend/deploy/fly-split/fly.{api,engine,reward}.{dev,test,prod}.toml`; CI activates them via `agents_split: true` in `deploy-{dev,test,prod}.yml`, which runs `deploy-agents-split` in `_deploy.yml` (per-app scoped secrets + deploy). The old single apps are kept for rollback: `proactive-ai-agents-dev` is stopped (machine=0, cut over 2026-06-22), `proactive-ai-agents-prod` was stopped after the cutover was verified (cut over 2026-07-07); test never had a single app (built directly as three apps on 2026-07-02). Inside the fly private network, api→engine uses **6PN service discovery** (`proactive-ai-engine-<env>.internal:8001`, **not flycast** — see Gotchas §9).
+- **Current fly deployment**: **all three environments are split into three separate fly apps** — `proactive-ai-{api,engine,reward}-{dev,test,prod}` (api = trusted edge holding master credentials / engine = untrusted LLM loop with scoped secrets / reward = read-only review backend). Configs are in `backend/deploy/fly-split/fly.{api,engine,reward}.{dev,test,prod}.toml`; CI deploys them via `deploy-agents-split` in `_deploy.yml` (per-app scoped secrets + deploy). The old single-app setup (`proactive-ai-agents-{dev,prod}`) is retired; its tomls and CI job are gone. Inside the fly private network, api→engine uses **6PN service discovery** (`proactive-ai-engine-<env>.internal:8001`, **not flycast** — see Gotchas §9).
 
 ## Process Trust Boundary (api vs agent-engine)
 
@@ -319,7 +319,7 @@ Snapshot build scripts are in `backend/infra/daytona/`; CI (the `build-daytona-s
 
 ### Dev environment
 After a push to `main`, deployment runs automatically based on what changed (CI workflow: `.github/workflows/deploy-dev.yml` → reuses `_deploy.yml`):
-- Changed `backend/` → deploy the backend. **The dev backend uses three apps**: `deploy-dev.yml` passes `agents_split: true`, CI runs `deploy-agents-split`, which syncs per-app scoped secrets and deploys `proactive-ai-{api,engine,reward}-dev` separately (the old single app `agents-dev` is no longer deployed); to switch back to a single app, just remove that group of split inputs in `deploy-dev.yml`.
+- Changed `backend/` → deploy the backend. **The dev backend uses three apps**: CI runs `_deploy.yml`'s `deploy-agents-split`, which syncs per-app scoped secrets and deploys `proactive-ai-{api,engine,reward}-dev` separately.
 - Changed `apps/web/` or `packages/` (shared layer) → deploy apps/web (zebra); changes to `packages/` also trigger a frontend redeploy
 - Changed `ops/litellm/` → deploy LiteLLM
 - The Daytona snapshot is refreshed along with backend deploys
@@ -341,7 +341,7 @@ To release, use `scripts/release.sh v0.1.0`: after checking that you're on main,
 ### Local deployment (fallback)
 When CI/CD is unavailable, use the Makefile:
 ```bash
-make deploy-pinai-dev       # ⚠️ legacy single-app dev fallback (fly.dev.toml), not the current three-app setup
+make deploy-pinai-dev       # backend three apps (api → engine → reward deployed in order) → dev
 make deploy-pinai-prod      # backend three apps (api → engine → reward deployed in order) → prod
 make deploy-reward-dashboard-dev  # internal reward dashboard → dev
 make deploy-web-dev         # apps/web (zebra) → dev

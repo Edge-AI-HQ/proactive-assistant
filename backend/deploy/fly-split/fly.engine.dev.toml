@@ -1,4 +1,4 @@
-# Split-app variant of fly.dev.toml's `chat` process group: the UNTRUSTED LLM
+# engine app: the UNTRUSTED LLM
 # loop. Holds NO master credentials.
 app = 'proactive-ai-engine-dev'
 primary_region = 'iad'

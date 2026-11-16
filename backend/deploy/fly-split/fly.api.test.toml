@@ -1,8 +1,8 @@
-# Split-app variant of fly.test.toml's `web` process group: the trusted API edge
+# api app: the trusted API edge
 # (holds master credentials).
 # Copied from fly.api.dev.toml; differences: app name (-test), all URLs (-test),
 # DEPLOY_ENV='test', Daytona snapshot tag, and auto_stop_machines=false +
-# VM size (2gb) matching the single-app fly.test.toml `web` group.
+# VM size (2gb).
 app = 'proactive-ai-api-test'
 primary_region = 'iad'
 
@@ -31,7 +31,7 @@ primary_region = 'iad'
 [http_service]
   internal_port = 8000
   force_https = true
-  # test env mirrors fly.test.toml: keep the machine up (no suspend) so the
+  # test env: keep the machine up (no suspend) so the
   # full-link manual deploys hit a warm app.
   auto_stop_machines = false
   auto_start_machines = true

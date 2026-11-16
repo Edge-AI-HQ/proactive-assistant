@@ -141,7 +141,7 @@ def _flyctl_import(app: str, kvs: dict[str, str], *, stage: bool) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--app", required=True, help="Fly app name, e.g. proactive-ai-agents-test")
+    parser.add_argument("--app", required=True, help="Fly app name, e.g. proactive-ai-api-test")
     parser.add_argument(
         "--env-file", required=True, help="dotenvx-encrypted file path, e.g. .env.test"
     )

@@ -1,4 +1,4 @@
-# Split-app variant of fly.prod.toml's `web` process group: the trusted API edge
+# api app: the trusted API edge
 # (holds master credentials).
 # Copied from fly.api.dev.toml; differences: app name (-prod), all URLs (-prod),
 # DEPLOY_ENV='production', Daytona snapshot tag, and VM size aligned to
