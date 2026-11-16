@@ -18,6 +18,8 @@ concurrency:
 
 jobs:
   deploy:
+    # Private repo only: public-mirror.yml copies this file to the public mirror.
+    if: github.repository == 'Edge-AI-HQ/PIN-AI-ASSISTANT'
     uses: ./.github/workflows/_deploy.yml
     secrets: inherit
     with:

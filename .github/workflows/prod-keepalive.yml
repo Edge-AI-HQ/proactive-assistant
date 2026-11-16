@@ -14,6 +14,8 @@ on:
 
 jobs:
   ping:
+    # Private repo only: public-mirror.yml copies this file to the public mirror.
+    if: github.repository == 'Edge-AI-HQ/PIN-AI-ASSISTANT'
     runs-on: ubuntu-latest
     steps:
       - name: GET /health and require db ok
